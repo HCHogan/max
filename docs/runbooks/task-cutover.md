@@ -56,10 +56,13 @@ git diff --check
 
 `Max.DB.TaskSpec` exercises admission, provenance, capability profiles, CAS,
 durable inbox races, cancellation, ancestor reservations, lease recovery,
-resource ownership, frontend/output fences, obligation settlement and monitor
+frontend/output fences, obligation settlement and monitor
 overlap. Monitor regressions cover changes back to earlier values, periodic
 failure notices, cron advancement after overflow and unowned legacy controls.
 Agent loop tests verify immediate frontend yield and terminal returns.
+`Max.SandboxRegistrySpec` verifies concurrent use within a conversation, rejection
+of another conversation's sandbox id, distinct command outputs, and lifecycle
+draining. Sandboxes are no longer exclusively reserved by a durable task.
 Existing database tests continue covering real outbox/dispatch races and monitor recovery. The upgrade script creates its own
 isolated database and verifies preservation of active Tasks alongside archived
 Plan work (the test role needs CREATEDB). Provider admission tests exercise
