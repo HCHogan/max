@@ -52,6 +52,8 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Text.Encoding.Error (lenientDecode)
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUID
 import Max.Runtime.Protocol (sandboxPolicyVersion)
 import System.Directory (getTemporaryDirectory, removeFile)
 import System.Exit (ExitCode (..))
@@ -285,8 +287,8 @@ runExec ::
   IO ExecResult
 runExec container networkMode cmd timeoutSecs = do
   started <- getPOSIXTime
-  let stamp = (show :: Int -> String) (round (started * 1000000))
-      marker = "/tmp/max-observe-" <> T.pack stamp
+  stamp <- UUID.toString <$> UUID.nextRandom
+  let marker = "/tmp/max-observe-" <> T.pack stamp
   _ <-
     try @IOException $
       readProcessWithExitCode

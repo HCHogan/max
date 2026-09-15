@@ -113,6 +113,29 @@ pkgs.testers.runNixOSTest {
         machine.succeed("chmod 600 /run/max-runtime/control.sock")
         machine.fail(cli + "create ../../etc nixos-sandbox-v1 ../../etc-data max-sandbox")
 
+    with subtest("commands overlap and cancelling one leaves its sibling running"):
+        survivor = "touch /work/parallel-ready; while ! test -e /work/parallel-release; do sleep 0.1; done; echo survivor"
+        machine.succeed(execute + "sh -c " + shlex.quote(survivor) + " >/tmp/max-survivor.log 2>&1 &")
+        machine.wait_until_succeeds(execute + "test -e /work/parallel-ready", timeout=20)
+        machine.fail("timeout 1 " + execute + "sh -c 'sleep 5; touch /work/cancel-failed'")
+        machine.succeed(execute + "touch /work/parallel-release")
+        machine.wait_until_succeeds("grep -Fx survivor /tmp/max-survivor.log", timeout=20)
+        machine.sleep(6)
+        machine.fail(execute + "test -e /work/cancel-failed")
+
+    with subtest("lifecycle removal drains an active command without losing its output"):
+        waiting = "touch /work/drain-ready; while ! test -e /work/drain-release; do sleep 0.1; done; echo drained"
+        machine.succeed(execute + "sh -c " + shlex.quote(waiting) + " >/tmp/max-drain.log 2>&1 &")
+        machine.wait_until_succeeds(execute + "test -e /work/drain-ready", timeout=20)
+        machine.succeed("(" + cli + f"remove {name}" + " && touch /tmp/max-drain-removed) >/tmp/max-drain-remove.log 2>&1 &")
+        machine.sleep(1)
+        machine.fail("test -e /tmp/max-drain-removed")
+        machine.succeed(f"touch /var/lib/max/runtime/volumes/{name}-data/work/drain-release")
+        machine.wait_until_succeeds("test -e /tmp/max-drain-removed", timeout=20)
+        machine.succeed("grep -Fx drained /tmp/max-drain.log")
+        machine.succeed(cli + create)
+        machine.succeed(execute + "cat /work/keep | grep durable")
+
     with subtest("client disconnect cancels the guest unit"):
         machine.fail("timeout 1 " + execute + "sh -c 'sleep 5; touch /work/cancel-failed'")
         machine.sleep(6)

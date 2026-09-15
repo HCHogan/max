@@ -70,7 +70,9 @@ Max startup; operations report runtime/network errors.
 Stopping local SSH does not guarantee remote work stopped. Use a named remote
 systemd job for a long build or activation and retain its host, unit, logs and
 result. Reconnect to inspect uncertain work before retrying it. Remote jobs are
-not members of the initiating host's `max-stack.target`.
+not members of the initiating host's `max-stack.target`. Independent SSH commands
+can execute concurrently in one sandbox, even across tasks. Coordinate shared
+paths and deployments of the same host; no task owns the whole sandbox.
 
 ## Service-account cutover
 

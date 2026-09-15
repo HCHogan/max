@@ -1,6 +1,7 @@
 module Max.Execution.ToolsSpec (spec) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
+import Control.Concurrent.STM (atomically, check, modifyTVar', newTVarIO, readTVar)
 import Control.Monad (forM_)
 import Data.Aeson (Value, object, (.=))
 import Data.IORef (modifyIORef', newIORef, readIORef)
@@ -21,6 +22,7 @@ import Max.Execution.Types (JournalStart (..))
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (LoopControl (..))
+import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: Spec
@@ -37,6 +39,26 @@ spec = describe "shared host tool execution" $ do
       pure (native, guest)
     map (outcomeName . (.tiOutcome)) native.tbInvocations `shouldBe` ["rejected", "succeeded", "rejected"]
     map (.ccOutcome) guest.cmCalls `shouldBe` ["rejected", "succeeded", "rejected"]
+
+  it "overlaps explicitly independent writes without changing their effect or retry classification" $ do
+    entered <- newTVarIO (0 :: Int)
+    let definition = echoDefinition {tdEffects = Set.singleton (EffectWrite "sandbox.fs"), tdParallelism = ParallelIndependent, tdRetryClass = RetryUnsafe}
+        runner =
+          echoTool
+            { toolRun = \value -> do
+                liftIO $ atomically (modifyTVar' entered (+ 1))
+                liftIO $ atomically (readTVar entered >>= check . (== 2))
+                pure (Right value)
+            }
+    registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
+    result <- timeout 2000000 $ runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      executeToolBatch session noJournal (views registry) [ToolRequest "one" "echo" args, ToolRequest "two" "echo" args]
+    fmap (map (outcomeName . (.tiOutcome)) . (.tbInvocations)) result `shouldBe` Just ["committed", "committed"]
+    forM_ [definition {tdRetryClass = RetrySafe}, definition {tdCallMode = FinishCall}, definition {tdEffects = Set.singleton EffectReflect}] $ \invalid ->
+      case buildToolRegistry [invalid] [runner] of
+        Left _ -> pure ()
+        Right _ -> expectationFailure "invalid independent-call metadata was accepted"
 
   it "lets native and Wasm contend for one final leaf reservation" $ do
     binary <- guestCalls [request "echo" args] ""

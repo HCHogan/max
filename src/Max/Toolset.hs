@@ -67,7 +67,7 @@ import Max.Platform.Types (noAdvertisedCaps)
 import Max.Sandbox.Runtime (networkForGroup)
 import Max.Skill.ToolRuntime (skillAuthoringToolsWithDatabase)
 import Max.Skill.Workflow (bindWorkflowContracts)
-import Max.Task.ToolRuntime (guardTaskResource, taskToolsWithDatabase)
+import Max.Task.ToolRuntime (taskToolsWithDatabase)
 import Max.Tool.Bundles (toolBundle, toolVisible)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Types (ToolCallMode (..))
@@ -127,7 +127,7 @@ resolvedToolsFor ::
   BotEnv ->
   ToolContext ->
   ([ToolDefinition], [Tool es])
-resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filter allowedRunner runners0))
+resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
   where
     dispatchEnv = maybe env (`applyRuntimeSnapshot` env) (toolRuntimeSnapshot dc)
     authorized = toolDefinitionsFor dispatchEnv (toolGroupId dc) (toolCapabilities dc)
@@ -318,7 +318,7 @@ toolInventory =
     -- is the runtime's and not the command's. It sits above the turn watchdog on
     -- purpose — for a front-model turn that watchdog fires first, and this is
     -- here for the plan executor, which has no such thing over it.
-    always (withDeadline 660 (writeTool "sandbox_exec" ["sandbox.process", "sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"])),
+    always (withDeadline 660 ((writeTool "sandbox_exec" ["sandbox.process", "sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]) {tdParallelism = ParallelIndependent})),
     -- Host package search has its own 120s bound; allow transport slack here.
     always (withDeadline 180 (statefulReadTool "nix_search" ["sandbox.process", "network.nix"] [CurrentConversation, ProcessResource "sandbox"])),
     always (statefulReadTool "sandbox_list" ["sandbox.registry"] [CurrentConversation, ProcessResource "sandbox"]),

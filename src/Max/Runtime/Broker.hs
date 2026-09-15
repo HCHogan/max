@@ -30,6 +30,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import GHC.Generics (Generic)
 import GHC.IO.Handle (hDuplicate)
+import Max.Concurrent.Lock (LockMap, SharedLock, newLockMap, newSharedLock, withExclusiveLock, withKeyLock, withSharedLock)
 import Max.Runtime.Protocol
 import Max.Util (trySyncIO)
 import Network.Socket qualified as Socket
@@ -76,7 +77,8 @@ data Metadata = Metadata
 data Broker = Broker
   { configuration :: Configuration,
     uid :: UserID,
-    locks :: MVar (Map.Map Text (Int, MVar ())),
+    locks :: MVar (Map.Map Text (Int, SharedLock)),
+    packages :: LockMap Text,
     addresses :: MVar ()
   }
 
@@ -99,9 +101,15 @@ checkedName expected value = do
 -- Bounded, reference-counted locks: unrelated conversations may start together;
 -- only address reservation briefly takes the broker-wide allocation lock.
 withInstance :: Broker -> InstanceName -> IO a -> IO a
-withInstance broker name action = mask $ \restore -> do
+withInstance broker name = withInstanceAccess withExclusiveLock broker name
+
+withInstanceUse :: Broker -> InstanceName -> IO a -> IO a
+withInstanceUse = withInstanceAccess withSharedLock
+
+withInstanceAccess :: (SharedLock -> IO a -> IO a) -> Broker -> InstanceName -> IO a -> IO a
+withInstanceAccess access broker name action = mask $ \restore -> do
   lock <- modifyMVar broker.locks $ \locks -> do
-    (count, lock) <- maybe ((0,) <$> newMVar ()) pure (Map.lookup name.fullName locks)
+    (count, lock) <- maybe ((0,) <$> newSharedLock) pure (Map.lookup name.fullName locks)
     pure (Map.insert name.fullName (count + 1, lock) locks, lock)
   let release =
         modifyMVar_ broker.locks $
@@ -109,7 +117,7 @@ withInstance broker name action = mask $ \restore -> do
             . Map.update
               (\(count, value) -> if count == 1 then Nothing else Just (count - 1, value))
               name.fullName
-  restore (withMVar lock (const action)) `finally` release
+  restore (access lock action) `finally` release
 
 tool :: Broker -> Text -> FilePath
 tool broker name = fromMaybe (error "validated broker command missing") (Map.lookup name broker.configuration.commands)
@@ -519,12 +527,12 @@ handleRequest broker socket handles@(_, output, _) request = do
       put ((if current then sandboxPolicyVersion else "old") <> " " <> instanceNetwork broker name <> " 1")
       pure 0
     BrowserEndpoint value -> browser value >>= browserPort broker >>= put . T.pack . show >> pure 0
-    RunCommand value arguments -> sandbox value >>= \name -> guestExec broker name arguments socket handles
+    RunCommand value arguments -> sandbox value >>= \name -> withInstanceUse broker name (guestExec broker name arguments socket handles)
     PreparePackages value seconds attributes -> do
       name <- sandbox value
       require (seconds >= 1 && seconds <= 3600) "invalid package build deadline"
       expression <- either (failure 64) pure (packageExpression broker.configuration.nixpkgs broker.configuration.system attributes)
-      withInstance broker name $ do
+      withInstanceUse broker name $ withKeyLock broker.packages (name.fullName <> ":" <> T.pack (digest expression)) $ do
         void (metadata broker name)
         let roots = broker.configuration.gcRootsDirectory </> T.unpack name.fullName
         createDirectoryIfMissing True roots
@@ -613,8 +621,9 @@ runRuntimeBroker path = do
     require (maybe False (T.isPrefixOf "/nix/store/" . T.pack) (Map.lookup command configuration.commands)) "broker executables must be store paths"
   peer <- userID <$> getUserEntryForName configuration.user
   locks <- newMVar Map.empty
+  packages <- newLockMap
   addresses <- newMVar ()
-  let broker = Broker configuration peer locks addresses
+  let broker = Broker configuration peer locks packages addresses
   forM_ ["instances", "roots", "volumes"] $ \directory -> do
     let target = configuration.stateDirectory </> directory
     createDirectoryIfMissing True target

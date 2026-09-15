@@ -5,14 +5,11 @@ module Max.DB.Task.Authorization
     ExecutionStep (..),
     authorizeWithin,
     authorizeCallerWithin,
-    reserveResourceWithin,
   )
 where
 
 import Control.Monad (void)
-import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
-import Data.Text (Text)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
@@ -91,42 +88,6 @@ authorizeWithin turn step = do
     available CheckOnly _ = True
     available ReserveCall task = task.calls < task.maxCalls
     available ReserveRound task = task.rounds < task.maxRounds
-
--- | Sandbox affinity is a scoped reservation, retained for unknown effects
--- after terminal work. The resource row never grants execution authority.
-reserveResourceWithin :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Text -> Eff es Bool
-reserveResourceWithin turn resource = do
-  authorized <- authorizeWithin turn ExecutionCheckpoint
-  present <-
-    query
-      "SELECT EXISTS(SELECT 1 FROM sandboxes sandbox JOIN agent_turns turn USING(conversation_id)\
-      \ WHERE turn.turn_id=? AND sandbox.sandbox_handle=? AND sandbox.status<>'destroyed')"
-      (turn, resource)
-  if not authorized || present /= [Only True]
-    then pure False
-    else do
-      attempt <- loadAttempt turn
-      (_ :: [Only Int]) <-
-        query
-          "SELECT 1::integer FROM (SELECT pg_advisory_xact_lock(hashtextextended('task-resource:'||?::text,0))) reservation"
-          (Only resource)
-      void $
-        execute
-          "DELETE FROM task_resource_owners owner USING durable_tasks work WHERE owner.task_id=work.task_id\
-          \ AND owner.resource=? AND work.status NOT IN ('running','queued','waiting','retrying')\
-          \ AND NOT EXISTS(SELECT 1 FROM task_attempts execution JOIN execution_journal journal USING(turn_id)\
-          \ WHERE execution.task_id=owner.task_id AND journal.state IN ('started','outcome-unknown') AND journal.normalized_input->>'sandbox_id'=?)"
-          (resource, resource)
-      owners <- query "SELECT task_id FROM task_resource_owners WHERE resource=?" (Only resource)
-      let identifier = (.taskId) <$> attempt
-      case owners :: [Only Int64] of
-        [Only current] -> pure (Just current == identifier)
-        [] -> do
-          case identifier of
-            Just task -> void $ execute "INSERT INTO task_resource_owners(resource,task_id) VALUES(?,?)" (resource, task)
-            Nothing -> pure ()
-          pure True
-        _ -> error "resource uniqueness violated"
 
 -- | Reuse the locked execution check without accepting a caller-selected actor
 -- or conversation. Callers keep this inside the mutation's pinned transaction.

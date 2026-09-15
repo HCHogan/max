@@ -74,15 +74,22 @@ validateDefinition definition
   | definition.tdRef == ToolRef "run_code" = bad "run_code is reserved for the orchestration adapter; it cannot own the leaf scheduling gate"
   | definition.tdSchemaVersion.unSchemaVersion <= 0 = bad "schema version must be positive"
   | definition.tdDeadline.toolDeadlineSeconds <= 0 = bad "start-to-close deadline must be positive"
-  | definition.tdCallMode /= WorkCall && definition.tdParallelism == ParallelSafe =
+  | definition.tdCallMode /= WorkCall && definition.tdParallelism /= SequentialOnly =
       bad "execution checkpoint and finish calls must be sequential"
   | definition.tdParallelism == ParallelSafe && any isMutating definition.tdEffects =
       bad "mutating, sending, LLM, or reflective tools cannot declare ParallelSafe"
+  | definition.tdParallelism == ParallelIndependent && any isControlEffect definition.tdEffects =
+      bad "sending, LLM, or reflective tools cannot declare ParallelIndependent"
   | definition.tdRetryClass == RetrySafe && any isMutating definition.tdEffects =
       bad "mutating, sending, LLM, or reflective tools cannot declare RetrySafe"
   | otherwise = Right ()
   where
     bad = Left . InvalidToolMetadata definition.tdRef
+
+isControlEffect :: ToolEffect -> Bool
+isControlEffect EffectRead {} = False
+isControlEffect EffectWrite {} = False
+isControlEffect _ = True
 
 isMutating :: ToolEffect -> Bool
 isMutating EffectRead {} = False

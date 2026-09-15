@@ -1896,7 +1896,7 @@ dispatchLLMWith allowInput existingTurn recoveryView monitorView effectCeiling o
                       "进展用 task_progress，系统会持久化并合并，前台根据会话判断是否需要转述，不保证每条进度都发群。结束必须 task_finish：summary、evidence、unresolved。暂时故障 failed 可标 failure_kind=transient 以退避重试；未知外部效果必须先核对。change_only monitor 完成时 observation 必须为非空对象，沿用显式输入 previous_observation 的键与类型；排除叙述、时间、job ID。相同状态直接复用相同值，证据放 evidence。只有确实完成才报 succeeded；不确定就 partial/failed/waiting。",
                       "你说的普通文本不会发到群里。不要重复 outcome-unknown 的外部效果，先核实历史证据。",
                       "工具预留与模型请求预算在树内共享，重启不重置。tokens/cost 是观测值，缺失的 usage 不等于零。",
-                      "共享 sandbox 使用任务级占用，不可抢占其他任务的资源。浏览器工作区属于当前 task，子任务及 monitor 每次触发独立；重试可热接管，执行权属于当前 attempt。冷恢复必须重新 navigate/snapshot，不能复用旧选择器或重放点击/提交。未知效果先核对，再请发起者 !browser reset task#N；登录复用只能由发起者显式 !browser 授权。"
+                      "同一 sandbox 可供多个任务并发执行独立命令，各自保留超时和输出；共享路径、端口及同一主机的部署须自行协调，不能把工作区的全部变化归因于当前命令。浏览器工作区属于当前 task，子任务及 monitor 每次触发独立；重试可热接管，执行权属于当前 attempt。冷恢复必须重新 navigate/snapshot，不能复用旧选择器或重放点击/提交。未知效果先核对，再请发起者 !browser reset task#N；登录复用只能由发起者显式 !browser 授权。"
                     ]
                 ),
               MsgUser

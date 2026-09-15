@@ -19,10 +19,9 @@
 --
 -- The tool descriptions warn the model that sandboxes are shared
 -- within the group's session — multiple parallel dispatches can
--- target the same sandbox.  Per-sandbox 'execInSandbox' serialization
--- protects against concurrent shell invocations corrupting each
--- other; same-file writes are still a coordination problem the
--- model must reason about.
+-- target the same sandbox. Independent command units run concurrently; lifecycle
+-- changes wait for active commands. Callers coordinate shared paths and ports,
+-- and filesystem observations can include a sibling command's changes.
 module Max.Tools.Sandbox
   ( sandboxToolsFor,
   )
@@ -121,7 +120,7 @@ execTool gid reg =
       toolDescription =
         T.unwords
           [ "Run a shell command in a sandbox (verbatim 'sh -c', wallclock",
-            "timeout, exit_code 0 = success).  Output capped ~16 KiB per",
+            "timeout, exit_code 0 = success). Independent commands may run concurrently in the same sandbox; coordinate shared paths and ports. Output capped ~16 KiB per",
             "stream; when 'truncated' is true a bounded output spill is saved",
             "to 'full_output_file'.  'spill_truncated' says whether that file",
             "also reached its safety cap — inspect it instead of re-running.",

@@ -58,6 +58,8 @@ data ToolCallMode = WorkCall | CheckpointCall | FinishCall deriving stock (Show,
 
 data ToolParallelism
   = ParallelSafe
+  | -- | Audited independent calls may write; callers order shared resources.
+    ParallelIndependent
   | SequentialOnly
   deriving stock (Show, Eq, Ord)
 

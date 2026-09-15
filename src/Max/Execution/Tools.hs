@@ -136,7 +136,7 @@ executeBatch independent invoke session hooks catalog requests =
         suppressed request = not (null finishes) && (length finishes /= 1 || mode request /= FinishCall)
         cost request = if mode request == WorkCall then 1 else 0
         total = sum [cost request | request <- requests, not (suppressed request)]
-        canParallel request = maybe False ((== ParallelSafe) . (.ctDefinition.tdParallelism)) (view request)
+        canParallel request = maybe False ((`elem` [ParallelSafe, ParallelIndependent]) . (.ctDefinition.tdParallelism)) (view request)
     reserved <- liftIO . atomically $ do
       budget <- readTVar session.remaining
       case budget of

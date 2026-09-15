@@ -13,7 +13,11 @@ the broker rejects other descriptor types, including Unix sockets.
 from `nix/sandbox-guest.nix` with systemd-nspawn. A corresponding
 `max-sandbox-<conversation>-s<number>` appears in `machinectl`. User namespaces
 map the guest away from host root; commands run as sandbox uid 1000 in bounded
-transient guest units. Disconnecting a client stops its guest command unit.
+transient guest units. Each command gets its own transient unit, timeout and output streams. Independent
+commands and tasks can share one sandbox concurrently; disconnecting one client
+stops only its own guest command unit. Deletion and policy replacement close
+admission and wait for active users. Callers coordinate shared files and ports;
+a workspace observation can include concurrent changes, not only that call's effects.
 
 `max-browser@<conversation>.service` is an ordinary service with a dynamic user,
 resource limits, a private temporary directory and per-instance state. Its Nix

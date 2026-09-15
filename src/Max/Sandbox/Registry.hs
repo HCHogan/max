@@ -6,17 +6,10 @@
 --
 -- == Concurrency
 --
--- Multiple agent dispatches in the same session can hit the same
--- sandbox in parallel.  Each 'SandboxEntry' carries a 'TMVar' exec
--- lock so 'execInSandbox' serializes against itself; guest command execution
--- still spawns independent processes inside the container, so we
--- pick the lock granularity to be the natural one: "one shell at a
--- time per sandbox".
---
--- File-system races (same path written by two parallel calls) are
--- outside the lock's scope — that's a user-level coordination
--- problem.  Tool descriptions advertise this so the model knows
--- sandboxes are shared within a group.
+-- Commands and file operations share access to a sandbox. Lifecycle changes
+-- close admission and drain active users before rebuilding or deleting it.
+-- Filesystem observations describe shared workspace state; callers coordinate
+-- writes to the same paths and ports themselves.
 module Max.Sandbox.Registry
   ( -- * Registry
     SandboxRegistry,
@@ -47,7 +40,7 @@ module Max.Sandbox.Registry
 where
 
 import Control.Concurrent.STM
-import Control.Monad (unless, void, when)
+import Control.Monad (void, when)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Foldable (for_)
 import Data.Int (Int64)
@@ -60,7 +53,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), execute, query, withTransaction)
-import Max.Concurrent.Lock (withLock)
+import Max.Concurrent.Lock (SharedLock, newSharedLock, withExclusiveLock, withLock, withSharedLock)
 import Max.DB.Connection (DbPool, withConn)
 import Max.Sandbox.Runtime
   ( ExecResult (..),
@@ -102,8 +95,10 @@ data SandboxEntry = SandboxEntry
     seImage :: !Text,
     seNetwork :: !Text,
     seCreatedAt :: !UTCTime,
-    -- | Serializes 'execInSandbox' on this sandbox.
-    seExecLock :: !(TMVar ())
+    -- | Shared command access and exclusive lifecycle transitions.
+    seAccess :: !SharedLock,
+    -- | Short readiness checks; never held while executing the user command.
+    sePrepareLock :: !(TMVar ())
   }
 
 data SandboxRegistry = SandboxRegistry
@@ -146,7 +141,7 @@ reconcileSandboxes reg = do
   for_ rows $ \row ->
     if row.psExpiresAt <= now
       then void (destroyPersisted reg row)
-      else do
+      else withPersistedAccess reg row $ do
         -- Namespace listings are only an orphan-cleanup optimization.  A
         -- persisted row is destroyed only after a per-resource inspection
         -- positively reports absence; daemon/CLI failure is not absence.
@@ -173,6 +168,15 @@ reconcileSandboxes reg = do
   for_ (Set.toList (containers `Set.difference` knownContainers)) runRm
   for_ (Set.toList (volumes `Set.difference` knownVolumes)) runVolumeRm
 
+-- The cached gate survives adoption and coordinates hourly reconciliation
+-- with tool calls. On boot no commands can reference uncached entries yet.
+withPersistedAccess :: SandboxRegistry -> PersistedSandbox -> IO a -> IO a
+withPersistedAccess reg row action = do
+  entries <- readTVarIO reg.srEntries
+  case Map.lookup (SandboxId row.psHandle) entries of
+    Nothing -> action
+    Just entry -> withExclusiveLock entry.seAccess action
+
 gcExpiredSandboxes :: SandboxRegistry -> IO Int
 gcExpiredSandboxes reg = do
   let pool = reg.srDbPool
@@ -184,8 +188,8 @@ gcExpiredSandboxes reg = do
 adoptPersisted :: SandboxRegistry -> DbPool -> PersistedSandbox -> IO ()
 adoptPersisted reg pool row = do
   entry <- entryFromPersisted row
-  -- Hourly reconciliation must not replace the per-sandbox lock while an
-  -- exec is holding it.  Keep the live cache entry when present; a fresh one
+  -- Hourly reconciliation must not replace the per-sandbox access gate while
+  -- commands are using it.  Keep the live cache entry when present; a fresh one
   -- is needed only on boot or after this process has evicted the sandbox.
   atomically (modifyTVar' reg.srEntries (Map.insertWith (\new old -> old {seNetwork = new.seNetwork, seImage = new.seImage}) entry.seId entry))
   markSandboxActive pool row.psId
@@ -245,7 +249,8 @@ createWithNetwork reg gid opts network = do
   let securedOpts = opts {scoImage = defaultCreateOpts.scoImage, scoNetwork = network}
   allocated <- allocateSandbox reg gid securedOpts now
   let (dbId, sid, container, volume) = allocated
-  lock <- newTMVarIO ()
+  lock <- newSharedLock
+  prepare <- newTMVarIO ()
   let entry =
         SandboxEntry
           { seId = sid,
@@ -255,7 +260,8 @@ createWithNetwork reg gid opts network = do
             seImage = securedOpts.scoImage,
             seNetwork = securedOpts.scoNetwork,
             seCreatedAt = now,
-            seExecLock = lock
+            seAccess = lock,
+            sePrepareLock = prepare
           }
   launched <- runRun container securedOpts.scoImage volume securedOpts.scoNetwork
   case launched of
@@ -302,9 +308,8 @@ listSandbox reg gid sid = do
 --------------------------------------------------------------------------------
 -- Exec.
 
--- | Run a shell command in a group's sandbox.  Serialised per
--- sandbox via 'seExecLock'; concurrent calls queue up.  Wrong-group
--- ids return 'Left'.
+-- | Run independent commands concurrently; only policy repair is exclusive.
+-- Wrong-group and already-destroyed ids return Left.
 execInSandbox ::
   SandboxRegistry ->
   GroupId ->
@@ -326,34 +331,43 @@ execInSandbox reg gid sid packages cmd timeoutSecs = do
       mEntry <- listSandbox reg gid sid
       case mEntry of
         Nothing -> pure (Left "sandbox not found")
-        Just e ->
-          withLock
-            e.seExecLock
-            ( do
-                selected <- networkForGroup (let GroupId raw = gid in fromIntegral raw)
-                network <- either (ioError . userError . T.unpack) pure selected
-                current <- inspectContainerPolicy e.seContainer network
-                unless current $ do
-                  launched <- runRun e.seContainer e.seImage e.seVolume network
-                  either (ioError . userError . T.unpack) (const (pure ())) launched
-                let updated = e {seNetwork = network}
-                atomically $ modifyTVar' reg.srEntries (Map.insert sid updated)
-                withConn reg.srDbPool $ \conn -> void $ execute conn "UPDATE sandboxes SET network_mode = ? WHERE sandbox_handle = ?" (network, sid.unSandboxId)
-                prepared <- runPreparePackages e.seContainer packages timeoutSecs
-                case prepared of
-                  Left detail -> pure (Left detail)
-                  Right storePaths -> do
-                    result <- runExec e.seContainer network (wrapPackages storePaths cmd) timeoutSecs
-                    -- @-1@ is reserved for failure to invoke the runtime client.  For a
-                    -- write-capable tool this must travel as Left so the tool kernel
-                    -- records outcome-unknown, never as a seemingly committed shell
-                    -- exit code.  Ordinary in-container non-zero exits remain rich
-                    -- committed results because the command may have mutated state.
-                    pure $
-                      if result.erExitCode == -1
-                        then Left result.erStderr
-                        else Right result
-            )
+        Just e -> useEntry e
+    useEntry e = do
+      ready <- withLock e.sePrepareLock $ do
+        selected <- networkForGroup (let GroupId raw = gid in fromIntegral raw)
+        case selected of
+          Left detail -> pure (Left detail)
+          Right network -> do
+            current <- inspectContainerPolicy e.seContainer network
+            if current
+              then pure (Right network)
+              else withExclusiveLock e.seAccess $ do
+                present <- Map.member sid <$> readTVarIO reg.srEntries
+                if not present
+                  then pure (Left "sandbox not found")
+                  else do
+                    launched <- runRun e.seContainer e.seImage e.seVolume network
+                    case launched of
+                      Left detail -> pure (Left detail)
+                      Right _ -> do
+                        atomically $ modifyTVar' reg.srEntries (Map.adjust (\entry -> entry {seNetwork = network}) sid)
+                        withConn reg.srDbPool $ \conn -> void $ execute conn "UPDATE sandboxes SET network_mode = ? WHERE sandbox_handle = ?" (network, sid.unSandboxId)
+                        pure (Right network)
+      case ready of
+        Left detail -> pure (Left detail)
+        Right network -> withSharedLock e.seAccess $ do
+          present <- Map.member sid <$> readTVarIO reg.srEntries
+          if not present
+            then pure (Left "sandbox not found")
+            else do
+              prepared <- runPreparePackages e.seContainer packages timeoutSecs
+              case prepared of
+                Left detail -> pure (Left detail)
+                Right storePaths -> do
+                  executed <- runExec e.seContainer network (wrapPackages storePaths cmd) timeoutSecs
+                  -- Invocation failure leaves the write's outcome unknown.
+                  -- A real nonzero shell exit remains a committed result.
+                  pure $ if executed.erExitCode == -1 then Left executed.erStderr else Right executed
 
 maxPackageAttributes :: Int
 maxPackageAttributes = 32
@@ -383,9 +397,9 @@ readSandboxFile reg gid sid path maxBytes = do
   case mEntry of
     Nothing -> pure (Left "sandbox not found")
     Just e ->
-      withLock
-        e.seExecLock
-        (runRead e.seContainer path maxBytes)
+      withSharedLock e.seAccess $ do
+        present <- Map.member sid <$> readTVarIO reg.srEntries
+        if present then runRead e.seContainer path maxBytes else pure (Left "sandbox not found")
 
 writeSandboxFile ::
   SandboxRegistry ->
@@ -399,9 +413,9 @@ writeSandboxFile reg gid sid path content = do
   case mEntry of
     Nothing -> pure (Left "sandbox not found")
     Just e ->
-      withLock
-        e.seExecLock
-        (runWrite e.seContainer path content)
+      withSharedLock e.seAccess $ do
+        present <- Map.member sid <$> readTVarIO reg.srEntries
+        if present then runWrite e.seContainer path content else pure (Left "sandbox not found")
 
 --------------------------------------------------------------------------------
 -- Destroy.
@@ -425,12 +439,12 @@ destroySandboxesForGroup reg gid = do
   results <- traverse (releaseSandbox reg) entries
   pure (length [() | Right () <- results])
 
--- The exec lock keeps destruction from racing an in-container operation.
+-- Exclusive lifecycle access drains every active command before destruction.
 -- Once destruction begins, the cache entry is removed even if the runtime becomes
 -- unavailable; the durable row remains outcome-unknown for reconciliation.
 releaseSandbox :: SandboxRegistry -> SandboxEntry -> IO (Either Text ())
 releaseSandbox reg entry =
-  withLock entry.seExecLock $
+  withExclusiveLock entry.seAccess $
     do
       markSandboxDestroying reg.srDbPool entry.seId
       cleaned <- cleanupSandbox entry
@@ -508,7 +522,8 @@ loadPersisted pool = withConn pool $ \conn -> do
 
 entryFromPersisted :: PersistedSandbox -> IO SandboxEntry
 entryFromPersisted row = do
-  lock <- newTMVarIO ()
+  lock <- newSharedLock
+  prepare <- newTMVarIO ()
   pure
     SandboxEntry
       { seId = SandboxId row.psHandle,
@@ -518,7 +533,8 @@ entryFromPersisted row = do
         seImage = row.psImage,
         seNetwork = row.psNetwork,
         seCreatedAt = row.psCreatedAt,
-        seExecLock = lock
+        seAccess = lock,
+        sePrepareLock = prepare
       }
 
 persistedPolicyCurrent :: PersistedSandbox -> Bool
@@ -615,7 +631,7 @@ destroyPersisted reg row = do
         case Map.lookup sid entries of
           Nothing -> action
           Just entry ->
-            withLock
-              entry.seExecLock
+            withExclusiveLock
+              entry.seAccess
               action
   withEntryLock (cleanup reg.srDbPool)

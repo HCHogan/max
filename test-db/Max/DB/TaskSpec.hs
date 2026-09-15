@@ -581,26 +581,6 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
     status pool identifier `shouldReturn` "failed"
 
-  it "serializes shared sandbox ownership by task rather than conversation" $ do
-    first <- seed pool 900 1
-    second <- seed pool 900 2
-    _ <- admit pool first "resource-a"
-    _ <- admit pool second "resource-b"
-    left <- claimOne pool
-    right <- claimOne pool
-    void $
-      withDb pool $
-        execute
-          "INSERT INTO sandboxes(conversation_id,sandbox_handle,container_name,volume_name,image,network_mode,status)\
-          \ SELECT conversation_id,handle,handle,handle,'test-image','none','active' FROM conversations CROSS JOIN (VALUES ('s1'),('s2')) handles(handle) WHERE legacy_group_id=900"
-          ()
-    withDb pool (taskResource left.atrTurnId "s1") `shouldReturn` True
-    withDb pool (taskResource right.atrTurnId "s1") `shouldReturn` False
-    withDb pool (taskResource right.atrTurnId "s2") `shouldReturn` True
-    withDb pool (taskResource right.atrTurnId "s999") `shouldReturn` False
-    withDb pool (finishAgentTurn left TurnFailed 0 (Just "stopped") Nothing)
-    withDb pool (taskResource right.atrTurnId "s1") `shouldReturn` True
-
   it "keeps result notification admission unique and stale generations unpublishable" $ do
     source@(_, _, actor) <- seed pool 900 1
     identifier <- admit pool source "notification"

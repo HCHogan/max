@@ -332,6 +332,21 @@ the in-memory handles are read caches and wakeup bells, never the record.
 Effect stack at the top of `runApp`:
 `IOE → Concurrent → Log → Http → BlobHost → Blob → WithConnection → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → PlatformAccount → PlatformInteraction → PlatformQuery → Embedding → Agent`.
 
+### Sandbox concurrency
+
+Independent `sandbox_exec` calls can run in parallel, including from different
+tasks in one conversation. There is no task-wide sandbox reservation; legacy
+`task_resource_owners` rows are retained as unused schema history and do not
+grant or deny access. Tool admission still checks the current task and group,
+and the registry still rejects a sandbox owned by another conversation.
+
+Shared access gates in the registry and root broker protect command lifetimes.
+Lifecycle writers close admission and drain all users before rebuilding or
+removing an instance. Package roots are serialized only for the same instance
+and package expression. Guest commands use distinct systemd units; observation
+markers and output spills use unique IDs. Cancellation releases only that
+command's access, and filesystem observations describe the shared workspace.
+
 ### Skill visibility and SSH operations
 
 ADR-010 separates the authorized tool ceiling from the current model catalog.
@@ -584,8 +599,10 @@ Handler
 
 Catalog construction rejects duplicate names, malformed schemas, and
 definition/runner drift before the LLM sees the tool list. Calls in one model
-round run concurrently only when every definition declares `ParallelSafe`;
-write/send/LLM/reflective calls serialize. Results are normalized as rejected,
+round run concurrently only when every definition declares `ParallelSafe` or
+`ParallelIndependent`. The latter explicitly permits independent sandbox writes;
+other write/send/LLM/reflective calls serialize. Parallelism does not make a write
+safe to retry. Results are normalized as rejected,
 failed-before-effect, succeeded, committed, or outcome-unknown, while keeping
 the existing model-facing error strings. `!version` counts the same gated
 inventory used to build the live catalog.

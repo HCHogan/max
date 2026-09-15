@@ -53,6 +53,7 @@ import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
 import Max.PublicationSpec qualified as PublicationSpec
 import Max.RecallSpec qualified as RecallSpec
 import Max.ResourceCapabilitiesSpec qualified as ResourceCapabilitiesSpec
+import Max.SandboxRegistrySpec qualified as SandboxRegistrySpec
 import Max.SkillAuthoringSpec qualified as SkillAuthoringSpec
 import Max.SkillWorkflowSpec qualified as SkillWorkflowSpec
 import Max.TaskExperienceSpec qualified as TaskExperienceSpec
@@ -96,6 +97,7 @@ main = do
         ContextAdminSpec.spec pool
         ConversationCapabilitiesSpec.spec pool
         ResourceCapabilitiesSpec.spec pool
+        SandboxRegistrySpec.spec pool
         EpisodeStoreSpec.spec pool
         HistorianSpec.spec pool
         HistorySpec.spec pool

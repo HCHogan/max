@@ -1,4 +1,4 @@
-module Max.Concurrent.Lock (withLock, LockMap, newLockMap, withKeyLock, tryWithKeyLock) where
+module Max.Concurrent.Lock (withLock, LockMap, newLockMap, withKeyLock, tryWithKeyLock, SharedLock, newSharedLock, withSharedLock, withExclusiveLock) where
 
 import Control.Concurrent.STM
 import Control.Exception (bracket, bracket_)
@@ -13,6 +13,25 @@ newLockMap = LockMap <$> newTVarIO Map.empty
 -- | One cancellation-safe mutex scope, shared by keyed and entry-owned locks.
 withLock :: TMVar () -> IO value -> IO value
 withLock lock = bracket_ (atomically (takeTMVar lock)) (atomically (putTMVar lock ()))
+
+-- Commands share access; lifecycle changes close admission and drain users.
+-- Holding the gate while draining also prevents new readers starving a writer.
+data SharedLock = SharedLock (TMVar ()) (TVar Int)
+
+newSharedLock :: IO SharedLock
+newSharedLock = SharedLock <$> newTMVarIO () <*> newTVarIO 0
+
+withSharedLock :: SharedLock -> IO value -> IO value
+withSharedLock (SharedLock gate users) =
+  bracket_
+    (atomically (readTMVar gate >> modifyTVar' users (+ 1)))
+    (atomically (modifyTVar' users (subtract 1)))
+
+withExclusiveLock :: SharedLock -> IO value -> IO value
+withExclusiveLock (SharedLock gate users) action =
+  withLock gate $ do
+    atomically (readTVar users >>= check . (== 0))
+    action
 
 withKeyLock :: (Ord key) => LockMap key -> key -> IO value -> IO value
 withKeyLock registry key action =

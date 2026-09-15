@@ -24,7 +24,6 @@ module Max.DB.Task
     taskTurnRef,
     taskForReply,
     admitMonitorTask,
-    taskResource,
     steerChildTyped,
     durableWorkOverview,
   )
@@ -338,8 +337,7 @@ monitorAdmissionErrorText = \case
   MonitorAdmission.MonitorHourlyBudget -> "monitor hourly admission budget"
   MonitorAdmission.InvalidDefinitionSnapshot -> "invalid monitor definition snapshot"
 
-taskResource :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Text -> Eff es Bool
-taskResource turn resource = withTransaction $ Authorization.reserveResourceWithin turn resource
+
 
 steerChildTyped :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Int64 -> Text -> Eff es (Either State.TaskControlError State.TaskControlReceipt)
 steerChildTyped turn identifier note = withTransaction $ do
