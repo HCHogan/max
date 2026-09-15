@@ -75,7 +75,9 @@ avoids database renames and preserves ownership of existing tables.
 Before the first activation on an existing installation:
 
 1. Build the new system and retain its store path plus the current generation.
-2. Stop `max-stack.target` and confirm the service UID has no remaining processes.
+2. Run `systemctl stop max-stack.target max.service max-runtime.service max-runtime.socket`
+   and confirm the service UID has no remaining processes. Stopping only the target
+   can return while its members are still draining.
 3. Run `<new-system>/sw/bin/max-migrate-service-account --check`, then `--migrate`.
 4. Activate the new system. The fleet `max` login account is created separately.
 5. Verify Max, broker access, database authentication, file ownership, and SSH/sudo.

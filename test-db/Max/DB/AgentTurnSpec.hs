@@ -380,6 +380,15 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
         KeyMap.lookup "packages" fields `shouldBe` Just (Array mempty)
       other -> expectationFailure ("expected enriched object, got " <> show other)
 
+    forM_ ["maxops", "max-sandbox"] $ \network -> do
+      changed <- withConn pool $ \connection ->
+        execute connection "UPDATE sandboxes SET network_mode = ? WHERE sandbox_handle = 's77'" (Only (network :: Text))
+      changed `shouldBe` 1
+      adopted <- withDb pool (enrichSandboxJournalStart fixture.fxGroup forged)
+      case adopted.jsInput of
+        Object fields -> KeyMap.lookup "_max_host_network_mode" fields `shouldBe` Just (String network)
+        other -> expectationFailure ("expected adopted network, got " <> show other)
+
   it "restores only successful host skill receipts from the same execution" $ do
     fixture <- createFixture pool 42 1001
     independent <- createFixture pool 42 1002
