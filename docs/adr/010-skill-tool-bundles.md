@@ -53,8 +53,8 @@ it cannot change the policy or supply a new credential.
 
 task_start and monitors derive their authority from the allowed ceiling, not the
 currently visible subset. A child profile only narrows that ceiling, and the
-child loads its own skills. Research has no shell grant. Operations and sandbox
-profiles share the shell subset, so an enabled group's sandbox can use full-sudo
+child loads its own skills. Research has no shell grant. Shell and SSH tasks use the sandbox profile,
+so an enabled group's sandbox can use full-sudo
 SSH; the profile name is not a separate read-only boundary. Group restrictions,
 policy changes and unavailable capabilities remain effective.
 

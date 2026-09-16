@@ -4,6 +4,7 @@ module Max.Task.Delegation
   ( AgentRequest (..),
     parseAgentRequest,
     agentCallKey,
+    agentCallKeys,
     agentReport,
     validateAgentPayload,
   )
@@ -54,6 +55,16 @@ parseAgentRequest raw = do
 -- the call identity, so a package update invalidates that reuse.
 agentCallKey :: Value -> AgentRequest -> Text
 agentCallKey receipts request = "agent:" <> fingerprint (object ["receipts" .= receipts, "request" .= request])
+
+-- Reuse pre-unification operations children instead of starting their effects
+-- again. Both names now execute as Sandbox; only new steps use the canonical key.
+agentCallKeys :: Value -> AgentRequest -> [Text]
+agentCallKeys receipts request =
+  agentCallKey receipts request
+    : [ "agent:" <> fingerprint (object ["receipts" .= receipts, "request" .= Object (KM.insert "profile" (String "operations") fields)])
+      | request.profile == Sandbox,
+        Object fields <- [toJSON request]
+      ]
 
 validateAgentPayload :: Maybe Value -> TaskReport -> Either Text ()
 validateAgentPayload Nothing _ = Right ()

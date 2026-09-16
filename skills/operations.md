@@ -2,7 +2,7 @@
 
 # 连接与权限
 
-加载本技能会同时加载 sandbox。先 sandbox_list，复用本群工作区；没有则 sandbox_create。
+本技能自动加载 sandbox；工作区、装包、文件和命令执行的通用用法见 sandbox。
 本群的 sandbox 已接入 Max 专用 Tailscale 内网，直接使用 `ssh hostname`。
 SSH 默认登录 `max`，有完整免密 sudo；群内成员均可发起运维。
 传输文件与代码使用普通 scp、rsync、Git。若内网/DNS 不可用，报告实际错误。
@@ -12,7 +12,7 @@ SSH 默认登录 `max`，有完整免密 sudo；群内成员均可发起运维�
 
 # 工作方式
 
-先核对主机、服务状态、配置与相关日志，再执行修改。长流程使用 operations 后台任务。
+先核对主机、服务状态、配置与相关日志，再执行修改。长流程使用 profile=sandbox 的后台任务，在子任务中加载 operations 技能。
 源码使用任务独立的 Git checkout/worktree，遵守仓库 AGENTS.md；Nix 配置优先使用原生模块与 systemd。
 先 fetch 检查远端更新与工作区差异，记录修改的 commit、构建产物与激活前 generation。
 保留的 /work 可能是旧版本。查看 Max 当前实现用 self-knowledge / inspect_source；

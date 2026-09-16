@@ -1,6 +1,7 @@
 module Max.Task.Types
   ( TaskProfile (..),
     profileName,
+    taskProfileNames,
     parseProfile,
     taskGrants,
     taskHandle,
@@ -15,20 +16,24 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Text.Read (readMaybe)
 
-data TaskProfile = Research | Browser | Sandbox | Operations
+data TaskProfile = Research | Browser | Sandbox
   deriving stock (Eq, Show)
 
 profileName :: TaskProfile -> Text
 profileName Research = "research"
 profileName Browser = "browser"
 profileName Sandbox = "sandbox"
-profileName Operations = "operations"
+
+taskProfileNames :: [Text]
+taskProfileNames = map profileName [Research, Browser, Sandbox]
 
 parseProfile :: Text -> Maybe TaskProfile
 parseProfile "research" = Just Research
 parseProfile "browser" = Just Browser
 parseProfile "sandbox" = Just Sandbox
-parseProfile "operations" = Just Operations
+-- Stored tasks, monitor snapshots and old workflow programs retain this name.
+-- Decode it into the one shell profile; new writes always use "sandbox".
+parseProfile "operations" = Just Sandbox
 parseProfile _ = Nothing
 
 taskGrants :: TaskProfile -> Map Text Text -> Map Text Text
@@ -53,7 +58,6 @@ taskGrants profile parent = Map.filterWithKey (\name _ -> name `elem` allowed) p
       ]
         <> case profile of
           Research -> []
-          Operations -> Map.keys (taskGrants Sandbox parent)
           Browser ->
             ["browser", "view_zhihu"]
           Sandbox ->

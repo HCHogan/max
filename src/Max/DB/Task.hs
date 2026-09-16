@@ -43,7 +43,7 @@ import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
-import Max.DB.Codec (jsonField)
+import Max.DB.Codec (enumField, jsonField)
 import Max.DB.Monitor.Admission qualified as MonitorAdmission
 import Max.DB.Task.Admission qualified as Admission
 import Max.DB.Task.Authorization qualified as Authorization
@@ -61,7 +61,7 @@ import Max.Monitor.Types (MonitorFireId (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Task.Admission (AdmissionError, TaskAdmissionReceipt (..))
 import Max.Task.State qualified as State
-import Max.Task.Types (TaskProfile (..), parseProfile)
+import Max.Task.Types (TaskProfile (..), parseProfile, profileName)
 import Max.Task.View
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..))
 import OneBot.Types (GroupId (..))
@@ -140,7 +140,7 @@ instance FromRow ExecutionRow where
               <*> (PrincipalId <$> field)
               <*> (CanonicalMessageId <$> field)
               <*> field
-              <*> field
+              <*> (profileName <$> enumField parseProfile)
               <*> jsonField
               <*> jsonField
               <*> field
@@ -336,8 +336,6 @@ monitorAdmissionErrorText = \case
   MonitorAdmission.MonitorAuthorityWidened -> "monitor authority widened"
   MonitorAdmission.MonitorHourlyBudget -> "monitor hourly admission budget"
   MonitorAdmission.InvalidDefinitionSnapshot -> "invalid monitor definition snapshot"
-
-
 
 steerChildTyped :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Int64 -> Text -> Eff es (Either State.TaskControlError State.TaskControlReceipt)
 steerChildTyped turn identifier note = withTransaction $ do

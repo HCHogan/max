@@ -17,7 +17,7 @@ sandbox_create 没有参数。NixOS 系统和网络是宿主策略，不交给�
 有 CPU/内存/PID 上限；根文件系统只读，只有 /work 和有大小上限的临时目录可写。
 普通群的 max-sandbox 网络允许访问公网 IPv4，可以 curl、git clone、调用公开 API、
 下载项目依赖；普通群无法访问宿主机、内网、链路本地、Tailscale 地址和其他沙箱，IPv6 关闭。
-已开启运维功能的群使用共享 maxops 内网，加载 operations 技能后直接使用 ssh hostname。
+已开启运维功能的群使用共享 maxops 内网；SSH、fleet 和部署方法见 operations 技能。
 查看 sandbox_create/list 返回的 network_mode 确认当前网络；共享网络中的临时服务使用动态端口。
 加载技能只提供说明和工具，不改变群的网络策略。/work 中的代码和文件跨升级保留，
 读取旧 checkout 前先核对版本，不能拿它推断当前 Max 的能力。

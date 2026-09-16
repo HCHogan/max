@@ -26,7 +26,7 @@ import Max.Monitor.Schedule (TimePolicy (..), resolveTimeSpec)
 import Max.Monitor.Types
 import Max.Monitor.View (ArmedMonitor (..))
 import Max.Platform.Types (PrincipalId (..))
-import Max.Task.Types (parseProfile)
+import Max.Task.Types (parseProfile, taskProfileNames)
 import Max.Time (fmtDateHM)
 import Max.Tools.Schema (boolParam, boundedIntegerParam, enumParam, integerParam, noArguments, stringParam, toolObject)
 
@@ -226,7 +226,7 @@ configureMonitorTool =
             ("overlap", enumParam ["coalesce", "queue"] "重叠策略"),
             ("queue_limit", boundedIntegerParam 1 160 40),
             ("pending_policy", enumParam ["retain", "cancel"] "旧版本未受理事件的处置"),
-            ("profile", enumParam ["research", "browser", "sandbox", "operations"] "后台能力；operations 可继承 SSH 管理能力；始终与触发时授权取交集"),
+            ("profile", enumParam taskProfileNames "后台能力；shell/SSH 检查使用 sandbox，运维方法加载 operations 技能；始终与触发时授权取交集"),
             ("change_only", boolParam "仅稳定 observation 改变时报告")
           ]
           ["handle", "revision", "goal", "overlap", "pending_policy", "profile", "change_only"],

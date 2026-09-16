@@ -49,7 +49,7 @@ taskToolsFor context =
             toolObject
               [ ("key", stringParam "本回合内稳定的幂等键；同一工作重试必须复用。"),
                 ("objective", stringParam "自包含目标、约束和期望证据，不依赖整段聊天记录。"),
-                ("profile", enumParam ["research", "browser", "sandbox", "operations"] "research 默认只读；browser/sandbox 增加对应权限；operations 使用 shell/SSH 运维。"),
+                ("profile", enumParam taskProfileNames "research 默认只读；browser 使用浏览器；sandbox 执行命令，包括 SSH 运维。运维方法加载 operations 技能。"),
                 ("context", stringParam "显式传给子任务的上下文，最多 60000 字符。"),
                 ("resources", stringArrayParam "可选的本会话 t#N:rM 结果句柄，最多 40 个；在 admission 时解析并冻结。")
               ]
@@ -70,7 +70,7 @@ taskToolsFor context =
                     let grants = taskGrants profile (toolCatalogGrants context)
                     if Nothing `elem` resolved
                       then pure (Left "某个输入句柄无效、超出会话或已清除边界")
-                      else case lookup profile [(Browser, "browser"), (Sandbox, "sandbox_exec"), (Operations, "sandbox_exec")] of
+                      else case lookup profile [(Browser, "browser"), (Sandbox, "sandbox_exec")] of
                         Just required | not (Map.member required grants) -> pure (Left ("当前权限没有 " <> required <> "，不能启动 " <> profileName profile <> " 任务"))
                         _ -> do
                           admitted <- startTask key objective profile (object ["context" .= explicitContext, "resources" .= Map.fromList (zip resources resolved)])

@@ -372,26 +372,51 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     rejected <- withDb pool . ExecutionCapability.runTaskExecution Nothing $ ExecutionCapability.reportProgress "no owner"
     rejected `shouldBe` Left ExecutionContextMissing
 
-  it "persists an operations profile with the caller's existing SSH sandbox grants" $ do
+  it "persists SSH work under the sandbox profile with the caller's existing grants" $ do
     (turn, message, actor) <- seed pool 900 1
     let grants = Map.fromList [("sandbox_exec", "sandbox-grant")]
         scope = ControlCapability.TaskControlScope (GroupId 900) (Just turn) message actor grants False
     admitted <-
       withDb pool . ControlCapability.runTaskControl scope $
-        ControlCapability.startTask "fleet-operation" "diagnose and verify" Operations (object [])
+        ControlCapability.startTask "fleet-operation" "diagnose and verify" Sandbox (object [])
     case admitted of
       Right (receipt :: Admission.TaskAdmissionReceipt) -> do
         receipt.grants `shouldBe` grants
         rows <- withDb pool $ query "SELECT profile FROM durable_tasks WHERE task_id=?" (Only receipt.taskId)
-        rows `shouldBe` [Only ("operations" :: Text)]
+        rows `shouldBe` [Only ("sandbox" :: Text)]
       Left failure -> expectationFailure (show failure)
 
-  it "prevents a research parent from manufacturing management authority through an operations child" $ do
+  it "prevents a research parent from manufacturing management authority through a sandbox child" $ do
     source@(_, message, actor) <- seed pool 900 1
     _ <- admit pool source "research-parent"
     parent <- claimOne pool
-    rejected <- withDb pool (admitTaskReceipt parent message actor "forged-operation" "restart" Operations (object []) (Map.singleton "sandbox_exec" "invented"))
+    rejected <- withDb pool (admitTaskReceipt parent message actor "forged-operation" "restart" Sandbox (object []) (Map.singleton "sandbox_exec" "invented"))
     rejected `shouldBe` Left AdmissionWidenedAuthority
+
+  it "resumes a stored operations task through sandbox without rewriting its history" $ do
+    (turn, message, actor) <- seed pool 900 1
+    let grants = Map.singleton "sandbox_exec" "frozen-shell"
+    Right receipt <- withDb pool (admitTaskReceipt turn message actor "legacy-ssh" "SSH audit" Sandbox (object []) grants)
+    void $ withDb pool $ execute "UPDATE durable_tasks SET profile='operations' WHERE task_id=?" (Only receipt.taskId)
+    execution <- claimOne pool
+    Just restored <- withDb pool (loadTaskExecution execution.atrTurnId)
+    restored.teProfile `shouldBe` "sandbox"
+    restored.teGrants `shouldBe` grants
+    withDb pool (query "SELECT profile FROM durable_tasks WHERE task_id=?" (Only receipt.taskId)) `shouldReturn` [Only ("operations" :: Text)]
+
+  it "admits old operations monitor snapshots as sandbox with frozen grants" $ do
+    (turn, message, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    let grants = Map.singleton "sandbox_exec" "frozen-shell"
+    Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "SSH audit" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 grants)
+    void $ withDb pool $ execute "UPDATE monitors SET task_profile='operations' WHERE monitor_id=?" (Only monitor.mrMonitorId)
+    insertOccurrence pool monitor "legacy-operations"
+    void $ withDb pool $ execute "UPDATE monitor_fires SET definition_snapshot=jsonb_set(definition_snapshot,'{profile}','\"operations\"') WHERE monitor_id=?" (Only monitor.mrMonitorId)
+    [fire] <- withDb pool (claimElaboratedMonitorFires "monitor-test" now 60 10)
+    withDb pool (monitorTaskProfile fire.emfFireId) `shouldReturn` Sandbox
+    accepted <- withDb pool (admitMonitorTask "monitor-test" fire.emfFireId Nothing grants message)
+    hasError accepted `shouldBe` False
+    withDb pool (query "SELECT profile,grants FROM durable_tasks WHERE monitor_fire_id=?" (Only fire.emfFireId)) `shouldReturn` [("sandbox" :: Text, toJSON grants)]
 
   it "enforces the profile grant ceiling at task admission even without a parent" $ do
     (turn, message, actor) <- seed pool 900 1

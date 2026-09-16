@@ -313,7 +313,7 @@ No deployment, destructive cleanup, or Git commit is implied by implementation.
 | Budgets and scheduling | Tree-wide reservations: 200 tools, 400 agent-model rounds, six-hour admission deadline (children inherit the parent's remaining deadline); 40 active background tasks globally, ten per conversation/principal, fair principal ordering, depth parameter 15 and at most 40 attempts. Reservations survive crashes and replacement. Token/cost usage is observational, not an enforced spend ceiling; helper-model calls are not agent rounds. |
 | Frontend | One database-fenced activation per canonical conversation, 600 inline tools and a six-hour activation deadline, with a further 150 seconds of ownership for terminal checkpointing (`Max.Task.Policy`). Model calls default to 30 minutes per HTTP attempt; the four-hour phase watchdog accommodates the initial attempt, all five retries and backoff. Successful delegation yields immediately. New same-author questions are not absorbed. Addressed controls bypass the LLM. |
 | Output | Background attempts cannot insert conversation output. Root reports get separate frontend activations; nested reports wake their parent. Root progress and final results use a buffered, tool-free frontend review with an explicit publish/skip decision; a skipped notice produces no message. A pending explicit source request requires publication. Stale task revisions/attempts/progress versions and expired frontend ownership cannot publish. Failed reviews remain retryable; no raw-report fallback publishes around a skip or failed review. Committed publication is acknowledged even after a crashed checkpoint. |
-| Monitors | New elaborated fires atomically link to tasks, retaining legacy admitted-turn readers. New monitors default to research; `configure_monitor` atomically selects research/browser/sandbox/operations and change-only policy under CAS. Existing occurrences keep their frozen profile/policy. Versioned snapshots, single-flight, coalescing or bounded queues, explicit old-pending policy, separate cancellation of admitted work, change-only notifications based on a required nonempty `observation` object plus status, with the previous same-revision object included in task inputs and bounded repeated failure notices. Canned reminders keep their existing outboxes. |
+| Monitors | New elaborated fires atomically link to tasks, retaining legacy admitted-turn readers. New monitors default to research; `configure_monitor` atomically selects research/browser/sandbox and change-only policy under CAS. Existing occurrences keep their frozen profile/policy. Versioned snapshots, single-flight, coalescing or bounded queues, explicit old-pending policy, separate cancellation of admitted work, change-only notifications based on a required nonempty `observation` object plus status, with the previous same-revision object included in task inputs and bounded repeated failure notices. Canned reminders keep their existing outboxes. |
 | Operator visibility | `task_status`, `monitor_history`, `configure_monitor`, `!task`, and the admin durable-work view expose state, provenance, outstanding requests, overlap and failures. |
 
 The Plan parser, validator, executor, worker, database API, authoring tools,
@@ -522,15 +522,19 @@ actual answers and responsiveness; they must be measured rather than assumed.
   History, active work, and ambiguous effects are migration obligations, not
   expendable implementation details.
 
-### SSH operations profile (2026-09-15)
+### Shell tasks and operations skill (2026-09-16)
 
-The `operations` profile intersects the parent's grants with the same research
-and shell tool subset as `sandbox` (`Max.Task.Types.taskGrants`). Load the
-`operations` skill to obtain the complete sandbox dependency and SSH workflow.
+Shell and SSH work share the `sandbox` profile. The `operations` skill depends
+on `sandbox` and adds fleet/SSH/deployment guidance without another tool grant.
+The old duplicate `operations` profile is no longer offered. Persisted task and
+monitor values and old workflow programs decode it as `sandbox`; new task and
+monitor writes use the canonical name. Stored rows, frozen snapshots and journals
+are not rewritten. Workflow child reuse also checks the legacy profile's call
+key so an upgrade cannot duplicate unchanged child work through this rename.
+
 The broker independently selects networking from the canonical conversation;
-profiles and skill loading cannot grant tailnet access. Within an enabled
-group, shell access can use the fleet's full-sudo `max` account, so choosing
-`sandbox` instead of `operations` does not impose read-only SSH authority.
+profiles and skill loading cannot grant tailnet access. Within an enabled group,
+shell access can use the fleet's full-sudo `max` account.
 
 Commands use ordinary SSH. Long-running builds and activations use named remote
 systemd jobs, with host, unit, baseline generation and result retained as evidence.

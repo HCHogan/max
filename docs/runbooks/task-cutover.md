@@ -7,7 +7,7 @@ migration 091; production behavioral acceptance is separate from automated gates
 ## User surface
 
 - Long work uses `task_start` with an idempotency key, explicit objective/context
-  and `research`, `browser`, `sandbox` or `operations` profile. It returns a stable `task#N`.
+  and `research`, `browser` or `sandbox` profile. It returns a stable `task#N`.
 - `task_status` and `task_list` inspect work; completion normally wakes the
   frontend without polling. `task_finish` and `task_progress` are private to background execution.
 - Root progress is reviewed by the conversation frontend model with no executable

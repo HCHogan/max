@@ -36,6 +36,7 @@ import Max.Platform.Types
 import Max.Task.Admission qualified as Admission
 import Max.Task.Delegation
 import Max.Task.Execution (ExecutionFailure (..))
+import Max.Task.Experience (fingerprint)
 import Max.Task.State
 import Max.Task.Types
 import Max.Task.WorkflowRuntime
@@ -51,7 +52,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR015 workflow children" $ d
   it "admits intersected research authority and rejects a wider requested profile before creating a child" $ do
     (_, parent) <- root pool
     entry <- journal pool parent "one"
-    withDb pool (beginAgentStep parent.atrTurnId grants Null request {profile = Operations} entry.jeJournalId) `shouldReturn` Left "requested profile exceeds the parent capability ceiling"
+    withDb pool (beginAgentStep parent.atrTurnId grants Null request {profile = Sandbox} entry.jeJournalId) `shouldReturn` Left "requested profile exceeds the parent capability ceiling"
     Right step <- withDb pool (beginAgentStep parent.atrTurnId grants Null request entry.jeJournalId)
     rows <- withDb pool (query "SELECT grants FROM durable_tasks WHERE task_id=?" (Only step.childId))
     rows `shouldBe` [Only (toJSON grants)]
@@ -70,14 +71,38 @@ spec pool = before_ (truncateAll pool) $ describe "ADR015 workflow children" $ d
   it "admits the SSH shell grant only when its current contract matches the parent" $ do
     (front, message, actor) <- seed pool 900 1
     let shellGrants = Map.insert "sandbox_exec" "sandbox/v1" grants
-    Right _ <- withDb pool (admitTaskReceipt front message actor "operations-root" "SSH audit" Operations (object []) shellGrants)
+    Right _ <- withDb pool (admitTaskReceipt front message actor "operations-root" "SSH audit" Sandbox (object []) shellGrants)
     parent <- claimOne pool
     entry <- journal pool parent "operations-child"
     forM_ [grants, Map.insert "sandbox_exec" "changed-contract" grants] $ \current ->
-      withDb pool (beginAgentStep parent.atrTurnId current Null request {profile = Operations} entry.jeJournalId) `shouldReturn` Left "requested profile exceeds the parent capability ceiling"
+      withDb pool (beginAgentStep parent.atrTurnId current Null request {profile = Sandbox} entry.jeJournalId) `shouldReturn` Left "requested profile exceeds the parent capability ceiling"
     withDb pool (query "SELECT count(*) FROM durable_tasks WHERE parent_task_id IS NOT NULL" ()) `shouldReturn` [Only (0 :: Int64)]
-    Right step <- withDb pool (beginAgentStep parent.atrTurnId shellGrants Null request {profile = Operations} entry.jeJournalId)
+    Right step <- withDb pool (beginAgentStep parent.atrTurnId shellGrants Null request {profile = Sandbox} entry.jeJournalId)
     withDb pool (query "SELECT grants FROM durable_tasks WHERE task_id=?" (Only step.childId)) `shouldReturn` [Only (toJSON shellGrants)]
+  it "reuses a legacy operations child and refuses ambiguous profile aliases without creating work" $ do
+    (front, message, actor) <- seed pool 900 1
+    let shellGrants = Map.insert "sandbox_exec" "sandbox/v1" grants
+        shellRequest = request {profile = Sandbox}
+        identity = object ["receipts" .= Null, "grants" .= shellGrants]
+        oldRequest = object ["objective" .= request.objective, "inputs" .= request.inputs, "profile" .= ("operations" :: Text), "output_contract" .= request.outputContract]
+        oldKey = "agent:" <> fingerprint (object ["receipts" .= identity, "request" .= oldRequest])
+    Right _ <- withDb pool (admitTaskReceipt front message actor "shell-root" "SSH audit" Sandbox (object []) shellGrants)
+    parent <- claimOne pool
+    entry <- journal pool parent "legacy-child"
+    Right original <- withDb pool (beginAgentStep parent.atrTurnId shellGrants Null shellRequest entry.jeJournalId)
+    void $ withDb pool $ execute "UPDATE workflow_agent_steps SET call_key=? WHERE child_task_id=?" (oldKey, original.childId)
+    void $ withDb pool $ execute "UPDATE durable_tasks SET profile='operations',admission_key=? WHERE task_id=?" (oldKey, original.childId)
+    Right decoded <- pure (parseAgentRequest oldRequest)
+    forM_ [shellRequest, decoded] $ \normalized -> do
+      Right reused <- withDb pool (beginAgentStep parent.atrTurnId shellGrants Null normalized entry.jeJournalId)
+      reused.childId `shouldBe` original.childId
+      reused.originalJournal `shouldBe` original.originalJournal
+    withDb pool (query "SELECT count(*) FROM durable_tasks WHERE parent_task_id IS NOT NULL" ()) `shouldReturn` [Only (1 :: Int64)]
+    Right other <- withDb pool (beginAgentStep parent.atrTurnId shellGrants Null shellRequest {inputs = String "other"} entry.jeJournalId)
+    void $ withDb pool $ execute "UPDATE workflow_agent_steps SET call_key=? WHERE child_task_id=?" (agentCallKey identity shellRequest, other.childId)
+    withDb pool (beginAgentStep parent.atrTurnId shellGrants Null shellRequest entry.jeJournalId) `shouldReturn` Left "both sandbox and legacy operations children exist; inspect their effects before choosing a new request"
+    withDb pool (query "SELECT count(*) FROM durable_tasks WHERE parent_task_id IS NOT NULL" ()) `shouldReturn` [Only (2 :: Int64)]
+
   it "validates payload shape independently of claimed success, then reuses an unchanged settled child" $ do
     (_, parent) <- root pool
     entry <- journal pool parent "first"

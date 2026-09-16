@@ -4,7 +4,7 @@
 namespace to the native Max runtime. Enabled conversations use ordinary sandbox
 shell commands, including `ssh hostname`; load the `operations` skill for the
 workflow. All members of an enabled QQ conversation may operate. Background
-`operations` tasks inherit the parent's sandbox grants. The legacy Hub API tools,
+SSH tasks use `profile=sandbox` and load the `operations` skill. The legacy Hub API tools,
 job adapters and notification receiver have been removed.
 
 ## Configuration
@@ -36,8 +36,8 @@ retain public-only networking.
 
 Skill visibility is not network authorization. The broker selects `maxops` for
 all sandboxes owned by an enabled conversation, even before `operations` is
-loaded. Operations and sandbox task profiles inherit the same shell subset;
-neither is a read-only SSH boundary. Shared namespaces also share localhost and
+loaded. Shell and SSH work both use the sandbox task profile; it is not a
+read-only SSH boundary. Shared namespaces also share localhost and
 ports, so local services should bind dynamic ports. Work directories stay separate.
 
 ## Native lifecycle

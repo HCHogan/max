@@ -361,10 +361,16 @@ The `operations` skill loads sandbox tools after the broker confirms the group
 has the dedicated Tailscale network. Commands use ordinary SSH, and background
 operations inherit the parent shell grants. Remote systemd jobs retain long-running
 work across SSH disconnects; see [SSH operations](runbooks/ssh-operations.md).
-The `operations` and `sandbox` task profiles currently inherit the same shell
-tool subset. Neither a task profile nor skill loading changes network access:
+Task profiles select tools (`research`, `browser`, `sandbox`); skills describe
+methods (`sandbox` for shell mechanics, `operations` for fleet work); conversation
+configuration selects networking. Neither a task profile nor skill loading changes network access:
 the broker selects it from the canonical conversation and configured group list.
 There is no separate read-only SSH grant within an enabled operations network.
+
+Legacy `operations` task/monitor profiles and frozen snapshots decode as `sandbox`;
+new writes use `sandbox`. Original rows and journals remain unchanged. Workflow
+child reuse checks both the canonical key and the old operations key before
+admission, and refuses ambiguous matches rather than repeating effects.
 
 `max.service` and the broker client use `max-service`; the broker runs as root.
 The dedicated client and network belong to `max-stack.target` and `max.slice`.

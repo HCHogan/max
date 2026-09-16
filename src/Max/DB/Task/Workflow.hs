@@ -17,7 +17,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isNothing)
 import Data.Text (Text)
-import Database.PostgreSQL.Simple.Types (Only (..))
+import Database.PostgreSQL.Simple.Types (In (..), Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Task.Admission (admitTaskWithin)
@@ -72,15 +72,16 @@ beginAgentStep turn currentGrants receipts request journal = withTransaction $ d
       let same name contract = Map.lookup name task.grants == Just contract
           authority = Map.filterWithKey same currentGrants
           grants = taskGrants request.profile authority
-          required = case request.profile of Research -> Nothing; Browser -> Just "browser"; Sandbox -> Just "sandbox_exec"; Operations -> Just "sandbox_exec"
-          key = agentCallKey (object ["receipts" .= receipts, "grants" .= grants]) request
+          required = case request.profile of Research -> Nothing; Browser -> Just "browser"; Sandbox -> Just "sandbox_exec"
+          identity = object ["receipts" .= receipts, "grants" .= grants]
+          key = agentCallKey identity request
       if maybe False (\name -> not (Map.member name grants)) required
         then pure (Left "requested profile exceeds the parent capability ceiling")
         else do
           previous <-
             query
-              "SELECT child_task_id,child_revision,COALESCE(settled_journal_id,first_journal_id),result FROM workflow_agent_steps WHERE parent_task_id=? AND parent_revision=? AND call_key=?"
-              (task.taskId, task.revision, key)
+              "SELECT child_task_id,child_revision,COALESCE(settled_journal_id,first_journal_id),result FROM workflow_agent_steps WHERE parent_task_id=? AND parent_revision=? AND call_key IN ?"
+              (task.taskId, task.revision, In (agentCallKeys identity request))
           case previous of
             [(child, revision, original, result)] -> do
               work <- loadTask child
@@ -101,7 +102,7 @@ beginAgentStep turn currentGrants receipts request journal = withTransaction $ d
                       (task.taskId, task.revision, key, child.taskId, child.revision, journal)
                   markWait child.taskId
                   pure (Right (AgentStep child.taskId child.revision journal Nothing))
-            _ -> error "workflow step identity is not unique"
+            _ -> pure (Left "both sandbox and legacy operations children exist; inspect their effects before choosing a new request")
     _ -> pure (Left (if pending then "workflow_steering_pending" else "agent() requires a live root task with delegation authority"))
   where
     markWait child = void $ execute "INSERT INTO workflow_agent_waits(turn_id,child_task_id) VALUES(?,?) ON CONFLICT DO NOTHING" (turn, child)
