@@ -31,6 +31,7 @@ import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.ToolControl (activateSkills, runToolControl)
 import Max.Effects.Tools
 import Max.Execution.Tools
+import Max.Skill.Contract (Contract, parseContract)
 import Max.Skill.Package
 import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Task.State (FailureKind (Transient))
@@ -91,7 +92,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     (_, turn) <- fixture
     count <- newIORef (0 :: Int)
     let definition = echoDefinition {tdEffects = Set.singleton (EffectWrite "test"), tdRetryClass = RetryUnsafe, tdParallelism = SequentialOnly, tdFailuresPrecedeEffects = False}
-        runner = echoTool {toolRun = \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}
+        runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
     result <- withHost pool . runTools registry $ do
       session <- newExecutionSession Nothing
@@ -106,7 +107,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     (_, turn) <- fixture
     entered <- newEmptyMVar
     blocked <- newEmptyMVar
-    let runner = echoTool {toolRun = \value -> liftIO (putMVar entered () >> takeMVar blocked) >> pure (Right value)}
+    let runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (putMVar entered () >> takeMVar blocked) >> pure (Right value)}
         definition = echoDefinition {tdParallelism = SequentialOnly}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
     worker <- Async.async . withHost pool . runTools registry $ do
@@ -120,9 +121,9 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
 
   it "records identical leaf outcomes, schemas, input and results through both adapters" $ do
     (_, turn) <- fixture
-    let readFail = echoTool {toolName = "read_fail", toolRun = \_ -> pure (Left "read failed")}
+    let readFail = echoTool {toolName = "read_fail", toolRunner = LegacyRunner $ \_ -> pure (Left "read failed")}
         write = echoTool {toolName = "write"}
-        unknown = echoTool {toolName = "unknown", toolRun = \_ -> pure (Left "ambiguous effect")}
+        unknown = echoTool {toolName = "unknown", toolRunner = LegacyRunner $ \_ -> pure (Left "ambiguous effect")}
         readDefinition = echoDefinition {tdRef = ToolRef "read_fail"}
         writeDefinition name = echoDefinition {tdRef = ToolRef name, tdEffects = Set.singleton (EffectWrite "test"), tdRetryClass = RetryUnsafe, tdParallelism = SequentialOnly, tdFailuresPrecedeEffects = False}
         calls = [("echo", args), ("echo", object []), ("hidden", args), ("read_fail", args), ("write", args), ("unknown", args)]
@@ -143,7 +144,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
   it "persists trusted skill controls from either path even when the guest later traps" $ do
     (_, turn) <- fixture
     let load = SkillLoad "web" (skillLoadVersion "trusted skill") "trusted skill" Nothing Nothing
-        runner = echoTool {toolName = "use_skill", toolRun = \value -> activateSkills [load] >> pure (Right value)}
+        runner = echoTool {toolName = "use_skill", toolRunner = LegacyRunner $ \value -> activateSkills [load] >> pure (Right value)}
         definition = echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
     binary <- guestCalls [request "use_skill" args, request "hidden" args] "unreachable"
@@ -157,14 +158,14 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
 
   it "recovers an exact saved workflow and journals its version and output contract failure" $ do
     (_, turn) <- fixture
-    let contract = object ["type" .= ("object" :: Text), "additionalProperties" .= True]
+    let contract = checkedContract $ object ["type" .= ("object" :: Text), "additionalProperties" .= True]
         workflow = Workflow "saved" "tools.echo(args); return 'wrong shape';" contract contract ["echo"]
         package = SkillPackage [] (Map.singleton "run" workflow)
         raw = SkillLoad "saved" "" "saved instructions" Nothing (Just (PinnedPackage 1 package Map.empty Nothing TrustedSkill))
         writeDefinition = echoDefinition {tdEffects = Set.singleton (EffectWrite "test"), tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
     effectRegistry <- either (fail . show) pure (buildToolRegistry [writeDefinition] [echoTool])
     [pinned] <- either (fail . show) pure (bindWorkflowContracts javaScriptRuntimeVersion Map.empty (views effectRegistry) [raw])
-    let loader = echoTool {toolName = "use_skill", toolRun = \value -> activateSkills [pinned] >> pure (Right value)}
+    let loader = echoTool {toolName = "use_skill", toolRunner = LegacyRunner $ \value -> activateSkills [pinned] >> pure (Right value)}
         definition = echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [loader])
     _ <- withHost pool . runToolsWithControl runToolControl registry $ do
@@ -210,7 +211,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     (_, turn) <- fixture
     effects <- newIORef (0 :: Int)
     let definition = echoDefinition {tdEffects = Set.singleton (EffectWrite "test"), tdRetryClass = RetryUnsafe, tdParallelism = SequentialOnly, tdFailuresPrecedeEffects = False}
-        runner = echoTool {toolRun = \value -> liftIO (modifyIORef' effects (+ 1)) >> pure (Right value)}
+        runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' effects (+ 1)) >> pure (Right value)}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
     binary <- guestCalls [request "echo" args] "unreachable"
     result <- withHost pool . runTools registry $ do
@@ -233,7 +234,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
           (_, turn) <- fixture
           entered <- newEmptyMVar
           blocked <- newEmptyMVar
-          let runner = echoTool {toolRun = \value -> liftIO (putMVar entered () >> takeMVar blocked) >> pure (Right value)}
+          let runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (putMVar entered () >> takeMVar blocked) >> pure (Right value)}
               definition = echoDefinition {tdParallelism = SequentialOnly}
           registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
           binary <- guestCalls [request "echo" args, request "echo" args] ""
@@ -290,3 +291,6 @@ views = catalogTools . registryCatalog
 
 request :: Text -> Value -> Value
 request name args = object ["tool" .= name, "args" .= args]
+
+checkedContract :: Value -> Contract
+checkedContract = either (error . show) id . parseContract

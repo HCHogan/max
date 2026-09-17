@@ -16,14 +16,18 @@ import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Task.Authorization
-import Max.DB.Task.FrontendInput (closeInputWithin, unseenInputWithin)
+import Max.DB.Task.FrontendInput
+  ( closeInputWithin,
+    unseenInputWithin,
+  )
 import Max.DB.Task.Record
+import Max.DB.Transaction (InTransaction)
 import Max.Task.Admission (AdmissionError (..))
 import Max.Task.Policy (taskDeadlineSeconds)
 import Max.Task.Types (TaskProfile, profileName, taskGrants)
 import Max.Turn.Types (AgentTurnId)
 
-admitTaskWithin :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Maybe Int64 -> Int64 -> Text -> Text -> TaskProfile -> Value -> Map Text Text -> Eff es (Either AdmissionError TaskRecord)
+admitTaskWithin :: (InTransaction :> es, WithConnection :> es, IOE :> es) => AgentTurnId -> Maybe Int64 -> Int64 -> Text -> Text -> TaskProfile -> Value -> Map Text Text -> Eff es (Either AdmissionError TaskRecord)
 admitTaskWithin turn message actor key objective profile inputs grants = do
   authorized <- authorizeWithin turn (ExecutionWork CheckOnly)
   pending <- unseenInputWithin turn

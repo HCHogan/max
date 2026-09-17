@@ -25,8 +25,12 @@ import Effectful.Exception (IOException, try)
 import Effectful.Log
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.MediaQuery (MediaQuery, readImages)
-import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.ToolOutput
+  ( InlineMedia (..),
+    ToolOutput,
+    queueInlineMedia,
+  )
+import Max.Effects.Tools (Tool (..), ToolRunner (..))
 import Max.History.Types (HistoryItem (..), bestName)
 import Max.Media.Types (StoredImage (..))
 import Max.Time (fmtHM)
@@ -58,7 +62,7 @@ viewImageTool tz prepare =
     { toolName = viewImageSpec.specName,
       toolDescription = viewImageSpec.specDescription,
       toolSchema = viewImageSpec.specSchema,
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid, seg) -> do
           (message, rows) <- readImages mid seg

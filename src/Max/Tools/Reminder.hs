@@ -23,13 +23,27 @@ import Effectful.Reader.Static (Reader, ask)
 import Max.Effects.MonitorControl (MonitorControl, armMonitor)
 import Max.Effects.MonitorControl qualified as Control
 import Max.Effects.MonitorQuery (MonitorQuery, listReminders)
-import Max.Effects.Tools (Tool (..))
-import Max.Monitor.Control (MonitorCommand (CancelMonitor), armErrorText, monitorControlErrorText)
+import Max.Effects.Tools (Tool (..), ToolRunner (..))
+import Max.Monitor.Control
+  ( MonitorCommand (CancelMonitor),
+    armErrorText,
+    monitorControlErrorText,
+  )
 import Max.Monitor.Schedule (TimePolicy (..), resolveTimeSpec)
-import Max.Monitor.Types (MonitorRef (..), monitorHandleText, parseMonitorHandle)
+import Max.Monitor.Types
+  ( MonitorRef (..),
+    monitorHandleText,
+    parseMonitorHandle,
+  )
 import Max.Monitor.View (TimeMonitor (..))
 import Max.Time (fmtDateHM)
-import Max.Tools.Schema (integerParam, noArguments, stringParam, toolObject)
+import Max.Tool.Protocol (committedResult)
+import Max.Tools.Schema
+  ( integerParam,
+    noArguments,
+    stringParam,
+    toolObject,
+  )
 
 reminderToolsFor ::
   (MonitorQuery :> es, MonitorControl :> es, Reader UTCTime :> es) =>
@@ -78,7 +92,7 @@ setReminderTool tz =
             )
           ]
           ["text"],
-      toolRun = \args -> case parseEither (withObject "args" parseSet) args of
+      toolRunner = OutcomeRunner $ \args -> fmap committedResult $ case parseEither (withObject "args" parseSet) args of
         Left err -> pure $ Left ("bad args: " <> T.pack err)
         Right setArgs
           | T.null (T.strip setArgs.saText) -> pure (Left "text 不能为空")
@@ -152,7 +166,7 @@ listRemindersTool tz =
     { toolName = "list_reminders",
       toolDescription = "列出本会话所有还没触发的提醒（含投递重试或已暂停状态）。",
       toolSchema = noArguments,
-      toolRun = \_ -> Right . toJSON . map summarize <$> listReminders
+      toolRunner = LegacyRunner $ \_ -> Right . toJSON . map summarize <$> listReminders
     }
   where
     summarize monitor =
@@ -180,7 +194,7 @@ cancelReminderTool =
     { toolName = "cancel_reminder",
       toolDescription = "按 handle 取消一个未触发的提醒（循环提醒会就此停止）。handle 从 list_reminders 或 set_reminder 的返回里拿。",
       toolSchema = toolObject [("handle", stringParam "要取消的提醒句柄，例如 m#3。")] ["handle"],
-      toolRun = \args -> case parseEither (withObject "args" (.: "handle")) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" (.: "handle")) args of
         Left err -> pure $ Left ("bad args: " <> T.pack err)
         Right rawHandle -> case parseMonitorHandle rawHandle of
           Nothing -> pure (Left "handle 格式无效，应为 m#<正整数>")

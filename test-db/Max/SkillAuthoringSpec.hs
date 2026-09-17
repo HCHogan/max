@@ -25,15 +25,15 @@ import Max.Effects.Tools
 import Max.Execution.Tools
 import Max.Platform.Types (noAdvertisedCaps)
 import Max.Skill.Authoring
+import Max.Skill.Contract (Contract, parseContract)
 import Max.Skill.Package
-import Max.Skill.ToolRuntime (skillAuthoringToolsWithDatabase)
+import Max.Skill.ToolRuntime (skillAuthoringToolsWithDatabase, skillToolsWithRuntime)
 import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Skills
 import Max.Tool.Bundles (toolVisible)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (controlSkillLoads)
 import Max.ToolContext
-import Max.Tools.Skills (skillToolsFor)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec hiding (context)
@@ -53,15 +53,15 @@ spec pool = before_ (truncateAll pool) $ describe "model skill authoring lifecyc
     published.skillRevision `shouldBe` 1
     published.skillEvidence `shouldSatisfy` \case ValidatedSkill _ -> True; _ -> False
     _ <- load restarted context draft.dcName
-    [loader] <- pure (skillToolsFor restarted context (const (pure (Right Nothing))) (bindWorkflowContracts "changed-runtime" (toolSkillLoads context) []))
-    (rejected, control) <- runEff (runToolControl (loader.toolRun (object ["name" .= draft.dcName])))
+    [loader] <- pure (skillToolsWithRuntime restarted context (const (pure (Right Nothing))) (bindWorkflowContracts "changed-runtime" (toolSkillLoads context) []))
+    (rejected, control) <- runEff (runToolControl (toolRun loader (object ["name" .= draft.dcName])))
     rejected `shouldSatisfy` isLeft
     controlSkillLoads control `shouldBe` []
     -- Admin changes preserve the certificate, including across cache reload.
     Right _ <- withDb pool (updateSkill restarted published.skillId (\s -> s {skillBody = "changed instructions"}))
     _ <- withDb pool (loadSkills restarted)
-    [changed] <- pure (skillToolsFor restarted context (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion (toolSkillLoads context) []))
-    (stale, activation) <- runEff (runToolControl (changed.toolRun (object ["name" .= draft.dcName])))
+    [changed] <- pure (skillToolsWithRuntime restarted context (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion (toolSkillLoads context) []))
+    (stale, activation) <- runEff (runToolControl (toolRun changed (object ["name" .= draft.dcName])))
     stale `shouldSatisfy` isLeft
     controlSkillLoads activation `shouldBe` []
 
@@ -150,7 +150,7 @@ spec pool = before_ (truncateAll pool) $ describe "model skill authoring lifecyc
     let withEcho = draft {dcPackage = draft.dcPackage {spWorkflows = Map.map (\w -> w {wfSource = "return tools.echo(args);", wfTools = ["echo"]}) draft.dcPackage.spWorkflows}, dcFixtures = [Fixture "run" (object ["value" .= (3 :: Int)]) [FixtureCall "echo" (object ["value" .= (3 :: Int)]) (Right (object ["value" .= (6 :: Int)]))] (object ["value" .= (6 :: Int)])]}
         catalog = either (error . show) (catalogTools . registryCatalog) (buildToolRegistry [echoDefinition] [echoTool])
         invoke current name args = case find ((== name) . (.toolName)) (skillAuthoringToolsWithDatabase registry context (Right current)) of
-          Just runner -> withDb pool (runner.toolRun args)
+          Just runner -> withDb pool (toolRun runner args)
           Nothing -> fail "missing tool"
     Right _ <- call pool registry context "skill_save" (saveArgs withEcho 1)
     Right report <- invoke catalog "skill_validate" (reference 2)
@@ -172,7 +172,7 @@ spec pool = before_ (truncateAll pool) $ describe "model skill authoring lifecyc
     Right _ <- call pool registry context "skill_save" (saveArgs draft 0)
     proof <- validate pool registry context
     runner <- maybe (fail "missing publication tool") pure (find ((== "skill_publish") . (.toolName)) (skillAuthoringToolsWithDatabase registry context (Right [])))
-    withDb pool (withTransaction (runner.toolRun (publishArgs proof 0))) `shouldThrow` anyException
+    withDb pool (withTransaction (toolRun runner (publishArgs proof 0))) `shouldThrow` anyException
     lookupSkill registry (GroupId 900) "double-value" `shouldReturn` Nothing
 
 setup :: DbPool -> IO (SkillRegistry, ToolContext)
@@ -189,9 +189,9 @@ setupAt pool group = do
   pure (registry, loaded)
 
 load :: SkillRegistry -> ToolContext -> Text -> IO ToolContext
-load registry context name = case skillToolsFor registry context (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion (toolSkillLoads context) []) of
+load registry context name = case skillToolsWithRuntime registry context (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion (toolSkillLoads context) []) of
   [runner] -> do
-    (result, control) <- runEff (runToolControl (runner.toolRun (object ["name" .= name])))
+    (result, control) <- runEff (runToolControl (toolRun runner (object ["name" .= name])))
     result `shouldSatisfy` isRight
     pure (withToolSkillLoads (controlSkillLoads control) context)
   _ -> fail "missing loader"
@@ -199,7 +199,7 @@ load registry context name = case skillToolsFor registry context (const (pure (R
 call :: DbPool -> SkillRegistry -> ToolContext -> Text -> Value -> IO (Either Text Value)
 call pool registry context name args = case find ((== name) . (.toolName)) (skillAuthoringToolsWithDatabase registry context (Right [])) of
   Nothing -> fail "missing authoring tool"
-  Just runner -> withDb pool (runner.toolRun args)
+  Just runner -> withDb pool (toolRun runner args)
 
 validate :: DbPool -> SkillRegistry -> ToolContext -> IO Value
 validate pool registry context = do
@@ -223,5 +223,8 @@ field _ _ = Null
 draft :: DraftContent
 draft = DraftContent "double-value" "double an integer" "run double-value/run with value" (SkillPackage [] (Map.singleton "run" (Workflow "double" "return {value:args.value*2};" contract contract []))) [Fixture "run" (object ["value" .= (3 :: Int)]) [] (object ["value" .= (6 :: Int)])]
 
-contract :: Value
-contract = object ["type" .= ("object" :: Text), "properties" .= object ["value" .= object ["type" .= ("integer" :: Text)]], "required" .= (["value"] :: [Text]), "additionalProperties" .= False]
+contract :: Contract
+contract = checkedContract $ object ["type" .= ("object" :: Text), "properties" .= object ["value" .= object ["type" .= ("integer" :: Text)]], "required" .= (["value"] :: [Text]), "additionalProperties" .= False]
+
+checkedContract :: Value -> Contract
+checkedContract = either (error . show) id . parseContract

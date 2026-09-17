@@ -14,16 +14,35 @@ import Effectful.Exception (onException)
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.Browser.Error (renderBrowserError)
 import Max.Browser.Registry
-import Max.Browser.State (WorkspaceState (..), renderWorkspaceError)
+import Max.Browser.State
+  ( WorkspaceState (..),
+    renderWorkspaceError,
+  )
 import Max.Browser.Vault (openBrowserState, sealBrowserState)
-import Max.Browser.View (BrowserBudget (..), boundedBrowserText, browserBudget)
+import Max.Browser.View
+  ( BrowserBudget (..),
+    boundedBrowserText,
+    browserBudget,
+  )
 import Max.DB.Browser
 import Max.DB.Task (authorizeTaskStep)
-import Max.Effects.Tools (Tool (..))
-import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
+import Max.Effects.Tools (Tool (..), ToolRunner (..), toolRun)
+import Max.Execution.Types
+  ( ExecutionStep (..),
+    StepReservation (..),
+  )
 import Max.Platform.Types (PrincipalId)
-import Max.ToolContext (ToolContext, toolCanonicalId, toolGroupId, toolTurnOutputContext)
-import Max.Turn.Types (AgentTurnId, AgentTurnRef (..), turnOutputAgentTurn)
+import Max.ToolContext
+  ( ToolContext,
+    toolCanonicalId,
+    toolGroupId,
+    toolTurnOutputContext,
+  )
+import Max.Turn.Types
+  ( AgentTurnId,
+    AgentTurnRef (..),
+    turnOutputAgentTurn,
+  )
 import OneBot.Types (GroupId)
 import System.Timeout (timeout)
 
@@ -44,14 +63,14 @@ managedBrowserTools context registry build = map wrap (build fallback)
     fallback = maybe (browserScopeForDispatch group (toolCanonicalId context)) (browserScopeForTurn group) durable
     wrap original =
       original
-        { toolRun = \arguments -> case durable of
-            Nothing -> original.toolRun arguments
+        { toolRunner = LegacyRunner $ \arguments -> case durable of
+            Nothing -> toolRun original arguments
             Just turn -> do
               identity <- taskBrowserIdentity turn group
               case identity of
                 Nothing -> do
                   allowed <- authorizeTaskStep turn (ExecutionWork CheckOnly)
-                  if allowed then original.toolRun arguments else pure (Left "browser execution was fenced")
+                  if allowed then toolRun original arguments else pure (Left "browser execution was fenced")
                 Just identifier -> withSeqEffToIO $ \unlift ->
                   liftIO $ withBrowserWorkspace registry identifier $ unlift $ do
                     acquired <- acquireBrowserWorkspace turn (browserRuntimeId registry)
@@ -78,7 +97,7 @@ managedBrowserTools context registry build = map wrap (build fallback)
                                     then pure (Left "browser execution was fenced before operation")
                                     else do
                                       let run = case [tool | tool <- build scope, tool.toolName == original.toolName] of
-                                            [tool] -> tool.toolRun arguments
+                                            [tool] -> toolRun tool arguments
                                             _ -> pure (Left "browser tool unavailable")
                                           interrupted = void (finishBrowserOperation turn workspace.bwEpoch Nothing False)
                                       ( do

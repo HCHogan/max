@@ -5,6 +5,9 @@
 module Max.Effects.Tools
   ( Tools,
     Tool (..),
+    ToolRunner (..),
+    legacyTool,
+    toolRun,
     hoistTool,
     ToolRegistry,
     buildToolRegistry,
@@ -34,7 +37,12 @@ import Effectful.Concurrent (Concurrent, threadDelay)
 import Effectful.Concurrent.Async (race)
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Max.Tool.Bundles (SkillLoad (..), skillReceiptVersion)
-import Max.Tool.Catalog (ToolCatalog, buildToolCatalog, lookupCatalogTool, validateArguments)
+import Max.Tool.Catalog
+  ( ToolCatalog,
+    buildToolCatalog,
+    lookupCatalogTool,
+    validateArguments,
+  )
 import Max.Tool.Control (LoopControl (..), mapControlText)
 import Max.Tool.Types
 import Max.Util (trySync)
@@ -43,15 +51,33 @@ data Tool es = Tool
   { toolName :: !Text,
     toolDescription :: !Text,
     toolSchema :: !Value,
-    toolRun :: Value -> Eff es (Either Text Value)
+    toolRunner :: !(ToolRunner es)
   }
 
+-- | Unclassified adapters cannot claim a failure preceded effects. Typed
+-- domain runners report the stage at the point where the result is known.
+data ToolRunner es
+  = LegacyRunner (Value -> Eff es (Either Text Value))
+  | OutcomeRunner (Value -> Eff es ToolOutcome)
+
+legacyTool :: Text -> Text -> Value -> (Value -> Eff es (Either Text Value)) -> Tool es
+legacyTool name description schema run = Tool name description schema (LegacyRunner run)
+
+-- | Compatibility projection for direct callers. The execution kernel retains
+-- the richer result and never uses this lossy view to make recovery decisions.
+toolRun :: Tool es -> Value -> Eff es (Either Text Value)
+toolRun tool args = case tool.toolRunner of
+  LegacyRunner run -> run args
+  OutcomeRunner run -> outcomeResult <$> run args
+
 hoistTool :: (forall x. Eff source x -> Eff target x) -> Tool source -> Tool target
-hoistTool lower tool = Tool tool.toolName tool.toolDescription tool.toolSchema (lower . tool.toolRun)
+hoistTool lower tool = Tool tool.toolName tool.toolDescription tool.toolSchema $ case tool.toolRunner of
+  LegacyRunner run -> LegacyRunner (lower . run)
+  OutcomeRunner run -> OutcomeRunner (lower . run)
 
 data RegisteredTool es = RegisteredTool
   { rtView :: !CatalogTool,
-    rtRun :: Value -> Eff es (Either Text Value)
+    rtRun :: Value -> Eff es ToolOutcome
   }
 
 data ToolRegistry es = ToolRegistry
@@ -71,7 +97,10 @@ buildToolRegistry definitions runners = do
     register catalog runner = do
       let ref = ToolRef runner.toolName
       view <- maybe (Left (MissingToolDefinition ref)) Right (lookupCatalogTool ref catalog)
-      pure (ref, RegisteredTool view runner.toolRun)
+      let run args = case runner.toolRunner of
+            OutcomeRunner action -> action args
+            LegacyRunner action -> either (legacyFailure view.ctDefinition) (success view.ctDefinition) <$> action args
+      pure (ref, RegisteredTool view run)
 
 data Tools :: Effect where
   InvokeTool :: Maybe Text -> Text -> Value -> Tools m ToolInvocation
@@ -131,33 +160,35 @@ runToolsWithInvocationDynamic lower currentRegistry = interpret $ \_ -> \case
     execute args registered = do
       attempted <- trySync (race (threadDelay deadlineMicros) (lower (registered.rtRun args)))
       pure $ case attempted of
-        -- A thrown exception is never covered by the pre-effect promise: the
-        -- tool did not choose to stop, so it may have died between issuing a
-        -- write and hearing back about it.
-        Left exception -> failure False "exception" (T.pack (show exception))
-        -- Neither is running out of time, and for the same reason twice over:
-        -- the tool did not choose to stop, and it was cut off at a moment
-        -- nobody picked.  Even a tool that has been audited as failing before
-        -- its effects gets no credit here, because this is not one of its
-        -- failure paths.
+        -- An exception or timeout cannot carry a runner's explicit outcome:
+        -- it may have interrupted a write before acknowledgement arrived.
+        Left exception -> failure "exception" (T.pack (show exception))
         Right (Left ()) ->
-          failure False "timeout" ("工具执行超时（" <> T.pack (show seconds) <> " 秒）")
-        Right (Right (Left message, _)) ->
-          failure definition.tdFailuresPrecedeEffects "tool_error" message
-        Right (Right (Right value, control))
-          | permitsControl definition control ->
-              ToolInvocation (if hasCommitEffects definition then ToolCommitted value else ToolSucceeded value) control
-          | otherwise ->
-              ordinary (ToolOutcomeUnknown (ToolFault "invalid_host_control" "runner control conflicts with its declared execution mode" RetryUnsafe))
+          failure "timeout" ("工具执行超时（" <> T.pack (show seconds) <> " 秒）")
+        Right (Right (outcome, control)) -> case outcome of
+          ToolSucceeded _ -> completed outcome control
+          ToolCommitted _ -> completed outcome control
+          _ -> ordinary outcome
       where
+        completed outcome control
+          | permitsControl definition control = ToolInvocation outcome control
+          | otherwise = ordinary (ToolOutcomeUnknown (ToolFault "invalid_host_control" "runner control conflicts with its declared execution mode" RetryUnsafe))
         definition = registered.rtView.ctDefinition
         seconds = definition.tdDeadline.toolDeadlineSeconds
         deadlineMicros = seconds * 1_000_000
-        failure precedesEffects code message =
+        failure code message =
           let fault = ToolFault code message definition.tdRetryClass
-           in if hasCommitEffects definition && not precedesEffects
+           in if hasCommitEffects definition
                 then ordinary (ToolOutcomeUnknown fault)
                 else ordinary (ToolFailedBeforeEffect fault)
+
+legacyFailure :: ToolDefinition -> Text -> ToolOutcome
+legacyFailure definition message =
+  (if hasCommitEffects definition then ToolOutcomeUnknown else ToolFailedBeforeEffect)
+    (ToolFault "tool_error" message definition.tdRetryClass)
+
+success :: ToolDefinition -> Value -> ToolOutcome
+success definition = if hasCommitEffects definition then ToolCommitted else ToolSucceeded
 
 -- A runner can stop the loop only within its host-declared execution mode.
 permitsControl :: ToolDefinition -> LoopControl -> Bool

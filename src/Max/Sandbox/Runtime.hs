@@ -41,8 +41,18 @@ module Max.Sandbox.Runtime
   )
 where
 
-import Control.Concurrent (forkFinally, newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (IOException, SomeException, bracket, try)
+import Control.Concurrent
+  ( forkFinally,
+    newEmptyMVar,
+    putMVar,
+    takeMVar,
+  )
+import Control.Exception
+  ( IOException,
+    SomeException,
+    bracket,
+    try,
+  )
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
@@ -55,9 +65,20 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Max.Runtime.Protocol (sandboxPolicyVersion)
+import Max.Sandbox.Types
+  ( ExecResult (..),
+    SandboxManifest (..),
+    maxOutputBytes,
+  )
 import System.Directory (getTemporaryDirectory, removeFile)
 import System.Exit (ExitCode (..))
-import System.IO (Handle, hClose, hFlush, hSetBinaryMode, openBinaryTempFile)
+import System.IO
+  ( Handle,
+    hClose,
+    hFlush,
+    hSetBinaryMode,
+    openBinaryTempFile,
+  )
 import System.Process
   ( CreateProcess (..),
     StdStream (..),
@@ -72,9 +93,6 @@ import Text.Read (readMaybe)
 
 -- | Per-call stdout/stderr cap (bytes).  Anything past this is
 -- dropped; the caller sees a 'truncated' flag.
-maxOutputBytes :: Int
-maxOutputBytes = 16 * 1024
-
 -- | Per-stream spill cap.  The reader continues draining and hashing after
 -- this point, but does not retain any more bytes on the host.  This keeps both
 -- memory and temporary-disk use finite even for an adversarial command.
@@ -87,42 +105,6 @@ sandboxNetwork :: Text
 sandboxNetwork = "max-sandbox"
 
 -- | Result of one in-container exec.
-data ExecResult = ExecResult
-  { erExitCode :: !Int,
-    erStdout :: !Text,
-    erStderr :: !Text,
-    erTruncated :: !Bool,
-    -- | When truncated: container-side path holding the full
-    -- stdout+stderr up to 'maxSpillBytes' per stream, for the model to
-    -- grep/head on demand.
-    erSpillPath :: !(Maybe Text),
-    -- | True when output exceeded the bounded spill as well as the preview.
-    erSpillTruncated :: !Bool,
-    erDurationMillis :: !Int,
-    erActualCommand :: !Text,
-    erNetworkMode :: !Text,
-    erStdoutSha256 :: !Text,
-    erStdoutBytes :: !Int,
-    erStderrSha256 :: !Text,
-    erStderrBytes :: !Int,
-    -- | Post-effect observation of /work.  This is journal evidence, not a
-    -- reconstruction mechanism; the named volume remains the durable state.
-    erObservedManifest :: !(Maybe SandboxManifest)
-  }
-  deriving stock (Show)
-
-data SandboxManifest = SandboxManifest
-  { smSha256 :: !Text,
-    smFileCount :: !Int,
-    smPreview :: !Text,
-    smTruncated :: !Bool,
-    smChangedPaths :: ![Text],
-    smChangedPathsTruncated :: !Bool,
-    smContainerDiff :: ![Text],
-    smContainerDiffTruncated :: !Bool
-  }
-  deriving stock (Show)
-
 -- | A negative runtime inspection is useful only when the broker positively
 -- reports that the resource is absent.  Treating CLI/daemon failure as
 -- absence would let a transient outage turn durable metadata into data loss.

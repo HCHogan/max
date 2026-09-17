@@ -46,9 +46,10 @@ import Max.Platform.QQ (ensureQQEndpointFor)
 import Max.Platform.Store
 import Max.Platform.Types
 import Max.Skill.Authoring
+import Max.Skill.Contract (parseContract)
 import Max.Skill.Package
 import Max.Skill.Store (AuthoringScope (..), saveDraft)
-import Max.Skill.ToolRuntime (skillAuthoringToolsWithDatabase)
+import Max.Skill.ToolRuntime (skillAuthoringToolsWithDatabase, skillToolsWithRuntime)
 import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Skills
 import Max.Tasks (beginDurableTurnRuntime, finishTurnRuntime, newTaskRegistry)
@@ -56,7 +57,6 @@ import Max.Tool.Bundles (toolVisible)
 import Max.Tool.Catalog (catalogTools)
 import Max.ToolContext
 import Max.Tools.Schema (stringParam, toolObject)
-import Max.Tools.Skills (skillToolsFor)
 import Max.Toolset (skillToolDefinitions)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..), UserId (..))
@@ -161,11 +161,11 @@ silentSink (AgentToolDebug _) = pure ()
 
 factory :: (WithConnection :> es, IOE :> es, ToolControl :> es) => SkillRegistry -> Scenario -> ToolContext -> Either ToolCatalogError (ToolRegistry es)
 factory registry scenario context = do
-  let leaf = Tool "eval_read" "读取一个命名资源。参数 key；返回结构由本次工作流任务说明给定；offline 返回工具失败。" (toolObject [("key", stringParam "主机或查询名")] ["key"]) (pure . (either (Left . T.pack) scenario.readValue . parseEither (withObject "args" (.: "key"))))
+  let leaf = legacyTool "eval_read" "读取一个命名资源。参数 key；返回结构由本次工作流任务说明给定；offline 返回工具失败。" (toolObject [("key", stringParam "主机或查询名")] ["key"]) (pure . (either (Left . T.pack) scenario.readValue . parseEither (withObject "args" (.: "key"))))
       leafDefinition = ToolDefinition (ToolRef "eval_read") (SchemaVersion 1) (Set.singleton (EffectRead "eval.data")) ParallelSafe RetrySafe (Set.singleton CurrentConversation) (ToolDeadline 30) True WorkCall
   leaves <- buildToolRegistry [leafDefinition] [leaf]
   let catalog = catalogTools (registryCatalog leaves)
-      runners = leaf : (skillToolsFor registry context (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion (toolSkillLoads context) catalog) <> skillAuthoringToolsWithDatabase registry context (Right catalog))
+      runners = leaf : (skillToolsWithRuntime registry context (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion (toolSkillLoads context) catalog) <> skillAuthoringToolsWithDatabase registry context (Right catalog))
       visible name = toolVisible (toolSkillLoads context) name
   buildToolRegistry (leafDefinition : filter (visible . (.tdRef.unToolRef)) skillToolDefinitions) (filter (visible . (.toolName)) runners)
 
@@ -233,4 +233,4 @@ brokenSort =
     (SkillPackage [] (Map.singleton "run" (Workflow "Sort integers" "return {values:[...new Set(args.values)].sort()};" contract contract [])))
     [Fixture "run" (object ["values" .= ([10, 2, 2] :: [Int])]) [] (object ["values" .= ([2, 10] :: [Int])])]
   where
-    contract = object ["type" .= ("object" :: Text), "properties" .= object ["values" .= object ["type" .= ("array" :: Text), "items" .= object ["type" .= ("integer" :: Text)]]], "required" .= (["values"] :: [Text]), "additionalProperties" .= False]
+    contract = either (error . show) id . parseContract $ object ["type" .= ("object" :: Text), "properties" .= object ["values" .= object ["type" .= ("array" :: Text), "items" .= object ["type" .= ("integer" :: Text)]]], "required" .= (["values"] :: [Text]), "additionalProperties" .= False]

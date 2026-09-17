@@ -2,12 +2,6 @@ module Max.Browser.RegistrySpec (spec) where
 
 import Control.Concurrent (forkIO, killThread, threadDelay)
 import Control.Concurrent.MVar
-  ( modifyMVar_,
-    newEmptyMVar,
-    newMVar,
-    putMVar,
-    takeMVar,
-  )
 import Control.Exception (finally)
 import Control.Monad (forM, forM_, replicateM, when)
 import Data.Aeson (encode, object, (.=))
@@ -16,11 +10,13 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.Text qualified as T
 import Effectful (runEff)
+import Max.Browser.Client (runBrowserWithRegistry)
 import Max.Browser.Registry (BrowserRegistry, browserScopeForTask, browserScopeForTurn, callBrowserTool, getCamoSession, newBrowserRegistry, newBrowserRegistryWithHost, releaseBrowserScope, retryBrowserReleases, setCamoSession, tryWithBrowserWorkspace, withBrowserSession, withBrowserWorkspace)
+import Max.Browser.ToolRuntime (browserToolsAt)
+import Max.Effects.Browser (SessionMethod (..), sessionRequest)
 import Max.Effects.ToolOutput (newToolOutputQueue, runToolOutput)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.Tools (toolRun)
 import Max.HttpRuntime (httpRuntimeFromManagers, newHttpRuntime)
-import Max.Tools.Browser (browserToolsAt)
 import Max.Turn.Types (AgentTurnId (..))
 import Network.HTTP.Client (ManagerSettings (..), defaultManagerSettings, makeConnection, newManager)
 import OneBot.Types (GroupId (..))
@@ -60,7 +56,7 @@ spec = describe "withBrowserSession" $ do
       [] -> fail "missing browser runner"
     let invoke action fields = runEff $ do
           queue <- newToolOutputQueue 0
-          runToolOutput queue (browser.toolRun (object (("action" .= (action :: String)) : fields)))
+          runToolOutput queue (toolRun browser (object (("action" .= (action :: String)) : fields)))
         succeeded = either (const False) (const True)
     invoke "open" ["url" .= ("https://example.test/" :: String)] >>= (`shouldSatisfy` succeeded)
     getCamoSession registry scope `shouldReturn` Just "old-page"
@@ -79,6 +75,34 @@ spec = describe "withBrowserSession" $ do
     requestAt 10 `shouldSatisfy` BS8.isInfixOf "new-page"
     BS8.concat [bytes | (index, bytes) <- requests, index > 5]
       `shouldSatisfy` (not . BS8.isInfixOf "browse_session_action")
+
+  it "binds session identity and checks the effective action after duplicate fields" $ do
+    let group = GroupId 1
+        scope = browserScopeForTurn group (AgentTurnId 1)
+        body = "{\"jsonrpc\":\"2.0\",\"result\":{\"ok\":true}}"
+    writes <- newIORef []
+    manager <-
+      newManager
+        defaultManagerSettings
+          { managerIdleConnectionCount = 0,
+            managerRawConnection = pure $ \_ _ _ -> do
+              chunks <- newIORef ["HTTP/1.1 200 OK\r\nMcp-Session-Id: fixture\r\nContent-Length: " <> BS8.pack (show (BS8.length body)) <> "\r\n\r\n" <> body]
+              makeConnection
+                (atomicModifyIORef' chunks $ \case [] -> ([], BS8.empty); chunk : rest -> (rest, chunk))
+                (\bytes -> modifyIORef' writes (<> [bytes]))
+                (pure ())
+          }
+    registry <- newBrowserRegistryWithHost (httpRuntimeFromManagers manager manager manager) group "http://example.test/mcp" "localhost:8931"
+    setCamoSession registry scope (Just "owned-page")
+    let request method fields = runEff $ runBrowserWithRegistry scope registry Nothing (sessionRequest method fields)
+    request SessionSnapshot ["sessionId" .= ("foreign-page" :: String)] >>= (`shouldSatisfy` either (const False) (const True))
+    sent <- BS8.concat <$> readIORef writes
+    sent `shouldSatisfy` BS8.isInfixOf "owned-page"
+    sent `shouldSatisfy` (not . BS8.isInfixOf "foreign-page")
+    let action kind = "action" .= object ["type" .= (kind :: String)]
+    request SessionAction [action "click", action "evaluate"]
+      `shouldReturn` Left "evaluate requires a browser task; use task_start profile=browser"
+    BS8.concat <$> readIORef writes `shouldReturn` sent
 
   it "keeps failed foreground cleanup fenced and retries closure without replaying tools" $ do
     let success = "{\"jsonrpc\":\"2.0\",\"result\":{\"ok\":true}}"

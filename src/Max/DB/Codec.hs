@@ -1,14 +1,23 @@
--- | Typed decoding at the SQL boundary. JSON columns are selected as text;
--- malformed durable values are conversion failures, never default authority.
-module Max.DB.Codec (jsonField, enumField, integralField, queryRows) where
+-- | Typed decoding for text and native JSON columns at the SQL boundary.
+-- Malformed durable values are conversion failures, never default authority.
+module Max.DB.Codec (jsonField, jsonbField, nullableJsonbField, enumField, integralField, queryRows) where
 
-import Data.Aeson (FromJSON, eitherDecodeStrict')
+import Data.Aeson
+  ( FromJSON,
+    Result (..),
+    eitherDecodeStrict',
+    fromJSON,
+  )
 import Data.Scientific (Scientific, floatingOrInteger)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
 import Data.Typeable (Typeable)
 import Database.PostgreSQL.Simple qualified as SQL
-import Database.PostgreSQL.Simple.FromField (ResultError (ConversionFailed), fromField, returnError)
+import Database.PostgreSQL.Simple.FromField
+  ( ResultError (ConversionFailed),
+    fromField,
+    returnError,
+  )
 import Database.PostgreSQL.Simple.FromRow (RowParser, fieldWith)
 import Database.PostgreSQL.Simple.ToRow (ToRow)
 import Database.PostgreSQL.Simple.Types (Query)
@@ -37,3 +46,21 @@ integralField = fieldWith $ \column bytes -> do
 -- | Explicit row parsers keep SQL instances out of domain presentation types.
 queryRows :: (WithConnection :> es, IOE :> es, ToRow parameters) => RowParser a -> Query -> parameters -> Eff es [a]
 queryRows parser sql parameters = withConnection $ \connection -> liftIO (SQL.queryWith parser connection sql parameters)
+
+-- | Native JSON/JSONB columns, including nullable outer-join columns. Keep
+-- decoding inside RowParser so malformed durable data reports ConversionFailed.
+jsonbField :: (FromJSON a, Typeable a) => RowParser a
+jsonbField = fieldWith $ \column bytes -> do
+  value <- fromField column bytes
+  case fromJSON value of
+    Error message -> returnError ConversionFailed column message
+    Success decoded -> pure decoded
+
+nullableJsonbField :: (FromJSON a, Typeable a) => RowParser (Maybe a)
+nullableJsonbField = fieldWith $ \column bytes -> case bytes of
+  Nothing -> pure Nothing
+  Just _ -> do
+    value <- fromField column bytes
+    case fromJSON value of
+      Error message -> returnError ConversionFailed column message
+      Success decoded -> pure (Just decoded)

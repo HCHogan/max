@@ -21,13 +21,13 @@ import Max.Execution.Tools
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
 import Max.Skill.Contract
 import Max.Skill.Package
+import Max.Skill.ToolRuntime (skillToolsWithRuntime)
 import Max.Skill.Workflow
 import Max.Skills
 import Max.Tool.Bundles
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (controlSkillLoads)
 import Max.ToolContext
-import Max.Tools.Skills (skillToolsFor)
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec hiding (context)
 
@@ -67,11 +67,11 @@ spec = describe "saved skill workflows" $ do
 
   it "validates nested contracts and rejects unsupported schema semantics" $ do
     let schema = object ["type" .= ("array" :: Text), "items" .= inputContract, "maxItems" .= (2 :: Int)]
-    validateContract schema `shouldBe` Right ()
-    validateValue schema (toJSON [object ["value" .= (3 :: Int)]]) `shouldBe` Right ()
+    Right parsed <- pure (parseContract schema)
+    validateValue parsed (toJSON [object ["value" .= (3 :: Int)]]) `shouldBe` Right ()
     forM_ [toJSON [object ["value" .= ("wrong" :: Text)]], toJSON [object ["value" .= (3 :: Int), "extra" .= True]], toJSON (replicate 3 (object ["value" .= (1 :: Int)]))] $ \args ->
-      validateValue schema args `shouldSatisfy` isLeft
-    validateContract (object ["type" .= ("string" :: Text), "pattern" .= (".*" :: Text)]) `shouldSatisfy` isLeft
+      validateValue parsed args `shouldSatisfy` isLeft
+    parseContract (object ["type" .= ("string" :: Text), "pattern" .= (".*" :: Text)]) `shouldSatisfy` isLeft
 
   it "pins source and the host contract, rejecting changed or unavailable tools" $ do
     registry <- checked [echoDefinition] [echoTool]
@@ -98,7 +98,7 @@ spec = describe "saved skill workflows" $ do
 
   it "rejects invalid saved arguments before any invocation" $ do
     count <- newIORef (0 :: Int)
-    registry <- checked [echoDefinition] [echoTool {toolRun = \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}]
+    registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}]
     loads <- pin (views registry) baseWorkflow
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
@@ -108,7 +108,7 @@ spec = describe "saved skill workflows" $ do
 
   it "passes JSON arguments as data including __proto__ and source-like strings" $ do
     registry <- checked [] []
-    let arbitraryObject = object ["type" .= ("object" :: Text), "additionalProperties" .= True]
+    let arbitraryObject = checkedContract $ object ["type" .= ("object" :: Text), "additionalProperties" .= True]
         workflow = baseWorkflow {wfTools = [], wfSource = "return args;", wfInput = arbitraryObject, wfOutput = arbitraryObject}
         args = object ["__proto__" .= object ["polluted" .= True], "text" .= ("\"); tools.echo({value:9}); // 中文" :: Text)]
     loads <- pin [] workflow
@@ -119,7 +119,7 @@ spec = describe "saved skill workflows" $ do
 
   it "enforces the selected catalog on the host even when guest SDK checks are bypassed" $ do
     count <- newIORef (0 :: Int)
-    registry <- checked [echoDefinition] [echoTool {toolRun = \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}]
+    registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}]
     binary <- guestCalls [object ["tool" .= ("echo" :: Text), "args" .= arguments]] ""
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
@@ -130,7 +130,7 @@ spec = describe "saved skill workflows" $ do
   it "keeps committed leaves when a saved output violates its contract" $ do
     count <- newIORef (0 :: Int)
     let definition = echoDefinition {tdEffects = Set.singleton (EffectWrite "test"), tdRetryClass = RetryUnsafe, tdParallelism = SequentialOnly}
-    registry <- checked [definition] [echoTool {toolRun = \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}]
+    registry <- checked [definition] [echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}]
     loads <- pin (views registry) baseWorkflow {wfSource = "tools.echo(args); return 'invalid';"}
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
@@ -141,8 +141,8 @@ spec = describe "saved skill workflows" $ do
   it "loads complete workflow dependencies and contracts without exposing source" $ do
     reg <- newSkillRegistry
     registry <- checked [echoDefinition {tdRef = ToolRef "web_search"}] [echoTool {toolName = "web_search"}]
-    let load catalog = case skillToolsFor reg context (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion Map.empty catalog) of
-          [runner] -> runEff (runToolControl (runner.toolRun (object ["name" .= ("batch-search" :: Text)])))
+    let load catalog = case skillToolsWithRuntime reg context (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion Map.empty catalog) of
+          [runner] -> runEff (runToolControl (toolRun runner (object ["name" .= ("batch-search" :: Text)])))
           _ -> fail "missing loader"
     (value, control) <- load (views registry)
     let loads = controlSkillLoads control
@@ -159,7 +159,7 @@ spec = describe "saved skill workflows" $ do
   it "executes the embedded batch search and retains failed queries" $ do
     reg <- newSkillRegistry
     Just skill <- lookupSkill reg (GroupId 7777) "batch-search"
-    let runner = echoTool {toolName = "web_search", toolSchema = object ["type" .= ("object" :: Text)], toolRun = \value -> pure $ if field "query" value == Just (String "bad") then Left "search unavailable" else Right (object ["results" .= [object ["title" .= ("source" :: Text), "url" .= ("https://example.test" :: Text), "snippet" .= ("evidence" :: Text)]]])}
+    let runner = echoTool {toolName = "web_search", toolSchema = object ["type" .= ("object" :: Text)], toolRunner = LegacyRunner $ \value -> pure $ if field "query" value == Just (String "bad") then Left "search unavailable" else Right (object ["results" .= [object ["title" .= ("source" :: Text), "url" .= ("https://example.test" :: Text), "snippet" .= ("evidence" :: Text)]]])}
     registry <- checked [echoDefinition {tdRef = ToolRef "web_search"}] [runner]
     let workflow = skill.skillPackage.spWorkflows Map.! "search"
     result <- runEff . runConcurrent . runTools registry $ do
@@ -170,8 +170,8 @@ spec = describe "saved skill workflows" $ do
       Just (Array rows) -> map (field "outcome") (foldr (:) [] rows) `shouldBe` [Just (String "succeeded"), Just (String "failed-before-effect")]
       other -> expectationFailure (show other)
 
-inputContract :: Value
-inputContract = object ["type" .= ("object" :: Text), "properties" .= object ["value" .= object ["type" .= ("integer" :: Text)]], "required" .= (["value"] :: [Text]), "additionalProperties" .= False]
+inputContract :: Contract
+inputContract = checkedContract $ object ["type" .= ("object" :: Text), "properties" .= object ["value" .= object ["type" .= ("integer" :: Text)]], "required" .= (["value"] :: [Text]), "additionalProperties" .= False]
 
 arguments :: Value
 arguments = object ["value" .= (7 :: Int)]
@@ -209,3 +209,6 @@ context =
   mkToolContext
     (TurnIdentity (GroupId 7777) (CanonicalMessageId 1) (UserId 2) (UserId 3) (PrincipalId 2) Nothing Nothing)
     (TurnCapabilities False False True noAdvertisedCaps False Map.empty Nothing False)
+
+checkedContract :: Value -> Contract
+checkedContract = either (error . show) id . parseContract

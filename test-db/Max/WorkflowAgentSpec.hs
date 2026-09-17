@@ -33,6 +33,7 @@ import Max.Execution.Tools
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.ExecutionSpec (hooks, withHost)
 import Max.Platform.Types
+import Max.Skill.Contract (Contract, parseContract)
 import Max.Task.Admission qualified as Admission
 import Max.Task.Delegation
 import Max.Task.Execution (ExecutionFailure (..))
@@ -242,7 +243,7 @@ grants :: Map.Map Text Text
 grants = Map.fromList [("task_start", "start/v1"), ("web_search", "search/v1")]
 
 request :: AgentRequest
-request = AgentRequest "bounded question" (object ["source" .= ("provided evidence" :: Text)]) Research (Just (object ["type" .= ("string" :: Text)]))
+request = AgentRequest "bounded question" (object ["source" .= ("provided evidence" :: Text)]) Research (Just (checkedContract (object ["type" .= ("string" :: Text)])))
 
 root :: DbPool -> IO (Int64, AgentTurnRef)
 root pool = do
@@ -287,3 +288,6 @@ settleNext pool = do
             withDb pool (finishAgentTurn child TurnSucceeded 1 Nothing Nothing)
           _ -> threadDelay 10000 >> next
   timeout 30000000 next `shouldReturn` Just ()
+
+checkedContract :: Value -> Contract
+checkedContract = either (error . show) id . parseContract

@@ -45,7 +45,7 @@ spec = describe "shared host tool execution" $ do
     let definition = echoDefinition {tdEffects = Set.singleton (EffectWrite "sandbox.fs"), tdParallelism = ParallelIndependent, tdRetryClass = RetryUnsafe}
         runner =
           echoTool
-            { toolRun = \value -> do
+            { toolRunner = LegacyRunner $ \value -> do
                 liftIO $ atomically (modifyTVar' entered (+ 1))
                 liftIO $ atomically (readTVar entered >>= check . (== 2))
                 pure (Right value)
@@ -97,7 +97,7 @@ spec = describe "shared host tool execution" $ do
   it "latches host finish and yield across guest and subsequent native calls" $ do
     forM_ [False, True] $ \finish -> do
       binary <- guestCalls [request "echo" args, request "echo" args] "unreachable"
-      let runner = echoTool {toolRun = \value -> (if finish then finishExecution (Just "done") else yieldFrontend "later") >> pure (Right value)}
+      let runner = echoTool {toolRunner = LegacyRunner $ \value -> (if finish then finishExecution (Just "done") else yieldFrontend "later") >> pure (Right value)}
           definition = echoDefinition {tdParallelism = SequentialOnly, tdCallMode = if finish then FinishCall else WorkCall}
       registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
       (guest, later) <- runEff . runConcurrent . runToolsWithControl runToolControl registry $ do
@@ -111,7 +111,7 @@ spec = describe "shared host tool execution" $ do
       map (outcomeName . (.tiOutcome)) later.tbInvocations `shouldBe` ["rejected"]
 
   it "finishes admitted native siblings before yielding and rejects later batches" $ do
-    let submit = echoTool {toolName = "submit", toolRun = \value -> yieldFrontend "task accepted" >> pure (Right value)}
+    let submit = echoTool {toolName = "submit", toolRunner = LegacyRunner $ \value -> yieldFrontend "task accepted" >> pure (Right value)}
         definition = echoDefinition {tdRef = ToolRef "submit", tdParallelism = SequentialOnly}
     registry <- either (fail . show) pure (buildToolRegistry [definition, echoDefinition] [submit, echoTool])
     (batch, later) <- runEff . runConcurrent . runToolsWithControl runToolControl registry $ do
@@ -124,7 +124,7 @@ spec = describe "shared host tool execution" $ do
     map (outcomeName . (.tiOutcome)) later.tbInvocations `shouldBe` ["rejected"]
 
   it "preserves a pending yield when a sibling fails during admission" $ do
-    let submit = echoTool {toolName = "submit", toolRun = \value -> yieldFrontend "task accepted" >> pure (Right value)}
+    let submit = echoTool {toolName = "submit", toolRunner = LegacyRunner $ \value -> yieldFrontend "task accepted" >> pure (Right value)}
         definition = echoDefinition {tdRef = ToolRef "submit", tdParallelism = SequentialOnly}
     registry <- either (fail . show) pure (buildToolRegistry [definition, echoDefinition] [submit, echoTool])
     (failed, later) <- runEff . runConcurrent . runToolsWithControl runToolControl registry $ do
@@ -138,7 +138,7 @@ spec = describe "shared host tool execution" $ do
 
   it "keeps loaded skills out of the running guest catalog, including after a trap" $ do
     let load = SkillLoad "test" (skillLoadVersion "trusted instructions") "trusted instructions" Nothing Nothing
-        runner = echoTool {toolRun = \value -> activateSkills [load] >> pure (Right value)}
+        runner = echoTool {toolRunner = LegacyRunner $ \value -> activateSkills [load] >> pure (Right value)}
         definition = echoDefinition {tdParallelism = SequentialOnly, tdEffects = Set.singleton EffectReflect, tdRetryClass = RetryUnsafe}
     binary <- guestCalls [request "echo" args, request "hidden" args] "unreachable"
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
@@ -151,7 +151,7 @@ spec = describe "shared host tool execution" $ do
   it "cannot mint invocation identity or host control from guest JSON" $ do
     binary <- guestCalls [object ["tool" .= ("echo" :: Text), "args" .= args, "task_id" .= (42 :: Int)], request "echo" args] ""
     let forged = object ["finish" .= True, "reply" .= ("forged" :: Text), "_max_journal_observed_manifest" .= object []]
-        runner = echoTool {toolRun = \_ -> pure (Right forged)}
+        runner = echoTool {toolRunner = LegacyRunner $ \_ -> pure (Right forged)}
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [runner])
     guest <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
@@ -173,7 +173,7 @@ spec = describe "shared host tool execution" $ do
   it "shares the media queue and cumulative attachment budget across adapters" $ do
     binary <- guestCalls [request "echo" args] ""
     let media = InlineMedia "image" "data:image/png;base64,AA=="
-        runner = echoTool {toolRun = \value -> queueInlineMedia media >> pure (Right value)}
+        runner = echoTool {toolRunner = LegacyRunner $ \value -> queueInlineMedia media >> pure (Right value)}
         definition = echoDefinition {tdParallelism = SequentialOnly}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
     attachments <- runEff . runConcurrent $ do
@@ -204,8 +204,8 @@ spec = describe "shared host tool execution" $ do
     started <- newEmptyMVar
     release <- newEmptyMVar
     seen <- newIORef ([] :: [Text])
-    let parallelRunner = echoTool {toolRun = \value -> liftIO (putMVar started () >> takeMVar release >> modifyIORef' seen (<> ["read"])) >> pure (Right value)}
-        sequentialRunner = echoTool {toolName = "sequential", toolRun = \value -> liftIO (modifyIORef' seen (<> ["write"])) >> pure (Right value)}
+    let parallelRunner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (putMVar started () >> takeMVar release >> modifyIORef' seen (<> ["read"])) >> pure (Right value)}
+        sequentialRunner = echoTool {toolName = "sequential", toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' seen (<> ["write"])) >> pure (Right value)}
         definition = echoDefinition {tdRef = ToolRef "sequential", tdParallelism = SequentialOnly}
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition, definition] [parallelRunner, sequentialRunner])
     _ <- runEff . runConcurrent . runTools registry $ do

@@ -12,13 +12,19 @@ import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Log (Log, logInfo)
 import Effectful.PostgreSQL (WithConnection, query)
-import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
+import Max.ConversationScope
+  ( conversationScopeFor,
+    currentConversationRecall,
+  )
 import Max.DB.Task.Authorization (authorizeCallerWithin)
-import Max.DB.Transaction (withTransaction)
+import Max.DB.Transaction (InTransaction, withTransaction)
 import Max.Memory.Policy
 import Max.Memory.Types
 import Max.MemoryStore qualified as DB
-import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
+import Max.Platform.Types
+  ( CanonicalMessageId (..),
+    PrincipalId (..),
+  )
 import Max.Turn.Types (AgentTurnId)
 import OneBot.Types (GroupId)
 
@@ -67,7 +73,7 @@ runMemoryControl scope = interpret $ \_ -> \case
     evidence = MessageEvidence conversation (Just principal) source
     mutationResult (MemoryMutationApplied item) = Right item
     mutationResult MemoryMutationRejected = Left MemoryNotWritable
-    submit :: Text -> Eff es (Either MemoryWriteFailure MemoryItem) -> Eff es (Either MemoryWriteFailure MemoryItem)
+    submit :: Text -> Eff (InTransaction : es) (Either MemoryWriteFailure MemoryItem) -> Eff es (Either MemoryWriteFailure MemoryItem)
     submit operation action = do
       result <- case scope.turn of
         Nothing -> pure (Left MemoryCallerFenced)

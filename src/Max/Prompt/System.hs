@@ -8,7 +8,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Max.Faces (curatedFaceGroups)
 import Max.Platform.Types (AdvertisedCaps (..))
-import Max.Util (tshow)
+import Max.Text (tshow)
 
 -- | Assemble the system prompt: the @persona@ (from session override
 -- or AppConfig default), a scene block saying whether this is a

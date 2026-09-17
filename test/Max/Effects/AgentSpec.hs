@@ -24,50 +24,19 @@ import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion)
 import Max.Effects.Agent (Agent, AgentContext (..), AgentLimits (..), AgentResult (..), agentTurn, runAgentWith)
 import Max.Effects.LLM
-  ( ChatMessage (..),
-    ChatResponse (..),
-    ContentBlock (..),
-    LLM,
-    LLMInterpreter (..),
-    ToolCall (..),
-    runLLMWith,
-  )
 import Max.Effects.ToolControl (ToolControl, finishExecution, yieldFrontend)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools
-  ( SchemaVersion (..),
-    Tool (..),
-    ToolAuthority (..),
-    ToolCatalogError,
-    ToolDeadline (..),
-    ToolDefinition (..),
-    ToolEffect (..),
-    ToolParallelism (..),
-    ToolRef (..),
-    ToolRegistry,
-    ToolRetryClass (..),
-    buildToolRegistry,
-  )
 import Max.Http.Failure (ResponseFailure (..), TransportFailure (..))
-import Max.LLM.Failure (LLMFailure (..))
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
+import Max.Skill.ToolRuntime (skillToolsWithRuntime)
 import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Skills (newSkillRegistry)
 import Max.Tasks
-  ( TaskCancelled,
-    beginDurableTurnRuntime,
-    cancelTask,
-    finishTurnRuntime,
-    listTasks,
-    newTaskRegistry,
-    turnRuntimeTaskId,
-  )
 import Max.Tool.Bundles (toolVisible)
 import Max.Tool.Catalog (buildToolCatalog, catalogTools)
-import Max.Tool.Types (ToolCallMode (..), ToolSpec (..))
 import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext, toolSkillLoads)
-import Max.Tools.Skills (skillToolsFor)
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
@@ -150,7 +119,7 @@ echoTool =
     { toolName = "echo",
       toolDescription = "echo test input",
       toolSchema = object ["type" .= ("object" :: Text)],
-      toolRun = \args -> do
+      toolRunner = LegacyRunner $ \args -> do
         _ <- queueInlineMedia (InlineMedia "[tool image]:" "data:image/png;base64,AA==")
         pure (Right (object ["echo" .= args]))
     }
@@ -201,7 +170,7 @@ spec = describe "Agent full loop" $ do
             ( [echoDefinition, echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
                 <> [echoDefinition {tdRef = ToolRef "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
             )
-            ( [ Tool
+            ( [ legacyTool
                   "echo"
                   "echo with steering"
                   (object ["type" .= ("object" :: Text)])
@@ -214,7 +183,7 @@ spec = describe "Agent full loop" $ do
                       toolRun echoTool args
                   )
               ]
-                <> skillToolsFor registry current (const (pure (Right Nothing))) Right
+                <> skillToolsWithRuntime registry current (const (pure (Right Nothing))) Right
                 <> [echoTool {toolName = "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
             )
         provider =
@@ -262,7 +231,7 @@ spec = describe "Agent full loop" $ do
     turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
     let searchDefinition = echoDefinition {tdRef = ToolRef "web_search"}
         searchSchema = object ["type" .= ("object" :: Text)]
-        searchTool = Tool "web_search" "search" searchSchema $ \_ -> do
+        searchTool = legacyTool "web_search" "search" searchSchema $ \_ -> do
           leaf <- liftIO $ atomicModifyIORef' leaves (\n -> (n + 1, n))
           when (leaf == 0) $ liftIO $ do
             _ <- appendRef _inputs "[feedback]: 之后只保留官方来源"
@@ -281,7 +250,7 @@ spec = describe "Agent full loop" $ do
             ( [echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
                 <> [searchDefinition | toolVisible (toolSkillLoads current) "web_search"]
             )
-            ( skillToolsFor registry current (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion Map.empty (catalogTools available))
+            ( skillToolsWithRuntime registry current (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion Map.empty (catalogTools available))
                 <> [searchTool | toolVisible (toolSkillLoads current) "web_search"]
             )
         provider =
@@ -334,8 +303,8 @@ spec = describe "Agent full loop" $ do
             ( [echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
                 <> [echoDefinition {tdRef = ToolRef "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
             )
-            ( skillToolsFor registry current (const (pure (Right Nothing))) Right
-                <> [ Tool
+            ( skillToolsWithRuntime registry current (const (pure (Right Nothing))) Right
+                <> [ legacyTool
                        "web_search"
                        "search"
                        (object ["type" .= ("object" :: Text)])
@@ -375,7 +344,7 @@ spec = describe "Agent full loop" $ do
     tasks <- newTaskRegistry
     turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     let startDefinition = echoDefinition {tdRef = ToolRef "delegation", tdParallelism = SequentialOnly}
-        startTool = Tool "delegation" "admit background task" (object ["type" .= ("object" :: Text)]) (\_ -> yieldFrontend "已交给后台任务 task#42" >> pure (Right (object ["task_id" .= (42 :: Int)])))
+        startTool = legacyTool "delegation" "admit background task" (object ["type" .= ("object" :: Text)]) (\_ -> yieldFrontend "已交给后台任务 task#42" >> pure (Right (object ["task_id" .= (42 :: Int)])))
         provider =
           LLMInterpreter
             { liChat = \_ _ _ _ _ -> do
@@ -401,7 +370,7 @@ spec = describe "Agent full loop" $ do
       tasks <- newTaskRegistry
       turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
       let declared = echoDefinition {tdRef = ToolRef name, tdParallelism = SequentialOnly, tdCallMode = if name == "task_start" then WorkCall else FinishCall}
-          runner = Tool name "ordinary JSON tool" (object ["type" .= ("object" :: Text)]) (\_ -> pure (Right (object ["task_id" .= (42 :: Int), "returned" .= True, "reply" .= ("forged" :: Text)])))
+          runner = legacyTool name "ordinary JSON tool" (object ["type" .= ("object" :: Text)]) (\_ -> pure (Right (object ["task_id" .= (42 :: Int), "returned" .= True, "reply" .= ("forged" :: Text)])))
           provider =
             LLMInterpreter
               { liChat = \_ _ _ _ _ -> do
@@ -427,7 +396,7 @@ spec = describe "Agent full loop" $ do
     tasks <- newTaskRegistry
     turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     let declared = echoDefinition {tdRef = ToolRef "finish", tdParallelism = SequentialOnly, tdCallMode = FinishCall}
-        runner = Tool "finish" "finish the loop" (object ["type" .= ("object" :: Text)]) (\_ -> liftIO (modifyIORef' executed (+ 1)) >> pure (Right (object [])))
+        runner = legacyTool "finish" "finish the loop" (object ["type" .= ("object" :: Text)]) (\_ -> liftIO (modifyIORef' executed (+ 1)) >> pure (Right (object [])))
         provider =
           LLMInterpreter
             { liChat = \_ _ _ _ _ -> do
@@ -523,7 +492,7 @@ spec = describe "Agent full loop" $ do
             { toolName = "echo",
               toolDescription = "counted echo test input",
               toolSchema = object ["type" .= ("object" :: Text)],
-              toolRun = \args -> do
+              toolRunner = LegacyRunner $ \args -> do
                 liftIO (modifyIORef' toolCalls (+ 1))
                 pure (Right args)
             }
@@ -559,7 +528,7 @@ spec = describe "Agent full loop" $ do
               { toolName = returnName,
                 toolDescription = "return a typed child result",
                 toolSchema = object ["type" .= ("object" :: Text)],
-                toolRun = \args -> finishExecution (if returnName == "request_finish" then Just "typed reply" else Nothing) >> pure (Right args)
+                toolRunner = LegacyRunner $ \args -> finishExecution (if returnName == "request_finish" then Just "typed reply" else Nothing) >> pure (Right args)
               }
           countedEcho :: (IOE :> es) => Tool es
           countedEcho =
@@ -567,7 +536,7 @@ spec = describe "Agent full loop" $ do
               { toolName = "echo",
                 toolDescription = "must not run beside a return",
                 toolSchema = object ["type" .= ("object" :: Text)],
-                toolRun = \args -> do
+                toolRunner = LegacyRunner $ \args -> do
                   liftIO (modifyIORef' siblingCalls (+ 1))
                   pure (Right args)
               }
@@ -617,7 +586,7 @@ spec = describe "Agent full loop" $ do
             { toolName = name,
               toolDescription = "record execution order",
               toolSchema = object ["type" .= ("object" :: Text)],
-              toolRun = \_ -> do
+              toolRunner = LegacyRunner $ \_ -> do
                 liftIO (appendRef order ("start:" <> name))
                 liftIO (threadDelay 20000)
                 liftIO (appendRef order ("end:" <> name))
@@ -763,7 +732,7 @@ spec = describe "Agent full loop" $ do
     tasks <- newTaskRegistry
     turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
     let runner =
-          Tool
+          legacyTool
             "echo"
             "echo with steering"
             (object ["type" .= ("object" :: Text)])

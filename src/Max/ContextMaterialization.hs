@@ -30,53 +30,19 @@ import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (In (..), Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
-import Max.ConversationScope (ConversationScope, conversationStorageId)
+import Max.Context.Materialization
+  ( ContextMaterialization (..),
+    MaterializationDraft (..),
+    MaterializedCompartment (..),
+  )
+import Max.ConversationScope
+  ( ConversationScope,
+    conversationStorageId,
+  )
 import Max.DB.History (MessageCursor (..))
 import Max.DB.Transaction (withTransaction)
 import Max.EpisodeStore (CompartmentId (..))
 import Max.Util (encodeText)
-
-data MaterializedCompartment = MaterializedCompartment
-  { mcCompartmentId :: !CompartmentId,
-    mcProjectionVersion :: !Int64,
-    mcTier :: !Text
-  }
-  deriving stock (Show, Eq)
-
-instance ToJSON MaterializedCompartment where
-  toJSON item =
-    object
-      [ "compartment_id" .= item.mcCompartmentId,
-        "projection_version" .= item.mcProjectionVersion,
-        "tier" .= item.mcTier
-      ]
-
-instance FromJSON MaterializedCompartment where
-  parseJSON = withObject "materialized_compartment" $ \o ->
-    MaterializedCompartment
-      <$> o .: "compartment_id"
-      <*> o .: "projection_version"
-      <*> o .: "tier"
-
-data ContextMaterialization = ContextMaterialization
-  { cmConversationId :: !Int64,
-    cmRevision :: !Int64,
-    cmEndCursor :: !MessageCursor,
-    cmPolicyVersion :: !Text,
-    cmSourceFingerprint :: !Text,
-    cmItems :: ![MaterializedCompartment],
-    cmReason :: !Text,
-    cmUpdatedAt :: !UTCTime
-  }
-  deriving stock (Show, Eq)
-
-data MaterializationDraft = MaterializationDraft
-  { mdEndCursor :: !MessageCursor,
-    mdPolicyVersion :: !Text,
-    mdItems :: ![MaterializedCompartment],
-    mdReason :: !Text
-  }
-  deriving stock (Show, Eq)
 
 loadContextMaterialization ::
   (WithConnection :> es, IOE :> es) =>

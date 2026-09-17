@@ -15,14 +15,20 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Task.Control (controlTask)
 import Max.DB.Task.Record (lockConversation)
+import Max.DB.Transaction (InTransaction)
 import Max.Monitor.Control
 import Max.Monitor.Policy (overlapPolicyText)
-import Max.Task.State (TaskOperation (Cancel))
+import Max.Platform.Types (PrincipalId (..))
+import Max.Task.State
+  ( DurableTaskId (..),
+    TaskCommand (CancelTask),
+  )
 import Max.Task.Types (profileName)
+import OneBot.Types (GroupId (..))
 
 -- | Runs within the caller's pinned transaction. Configuration
 -- policy is typed at the caller boundary and checked with the locked revision.
-controlMonitor :: (WithConnection :> es, IOE :> es) => Int64 -> Int64 -> Bool -> Int64 -> MonitorCommand -> Bool -> Eff es (Either MonitorControlError MonitorControlReceipt)
+controlMonitor :: (InTransaction :> es, WithConnection :> es, IOE :> es) => Int64 -> Int64 -> Bool -> Int64 -> MonitorCommand -> Bool -> Eff es (Either MonitorControlError MonitorControlReceipt)
 controlMonitor group actor administrator ordinal command cancelTasks = do
   _ <- lockConversation group
   definitions <-
@@ -76,7 +82,7 @@ controlMonitor group actor administrator ordinal command cancelTasks = do
                   \ WHERE fire.monitor_id=? AND work.status IN ('queued','running','waiting','retrying') ORDER BY work.task_id"
                   (Only identifier)
               forM_ (tasks :: [Only Int64]) $ \(Only task) -> do
-                result <- controlTask group actor True task Cancel Nothing Nothing "monitor controller explicitly cancelled admitted work"
+                result <- controlTask (GroupId group) (PrincipalId actor) True (DurableTaskId task) (CancelTask "monitor controller explicitly cancelled admitted work") Nothing
                 -- The definition owner has been checked under the same lock.
                 -- Failing to cancel any child rolls back the definition too.
                 either (error . ("monitor task cancellation invariant: " <>) . show) (const (pure ())) result

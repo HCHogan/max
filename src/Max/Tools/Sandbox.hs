@@ -35,22 +35,48 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone)
 import Effectful
-import Max.Effects.Tools (Tool (..))
-import Max.Sandbox.Registry
-  ( SandboxCreateOpts (..),
-    SandboxEntry (..),
-    SandboxId (..),
-    SandboxRegistry,
+import Max.Effects.Sandbox
+  ( Sandbox,
     createSandbox,
-    defaultCreateOpts,
     destroySandbox,
     execInSandbox,
-    listSandbox,
-    listSandboxesForGroup,
+    listSandboxes,
     readSandboxFile,
+    searchPackages,
     writeSandboxFile,
   )
-import Max.Sandbox.Runtime (ExecResult (..), SandboxManifest (..), maxOutputBytes, runSearch)
+import Max.Effects.Tools (Tool (..), ToolRunner (..))
+import Max.Sandbox.Types
+  ( ExecResult
+      ( erActualCommand,
+        erDurationMillis,
+        erExitCode,
+        erNetworkMode,
+        erObservedManifest,
+        erSpillPath,
+        erSpillTruncated,
+        erStderr,
+        erStderrBytes,
+        erStderrSha256,
+        erStdout,
+        erStdoutBytes,
+        erStdoutSha256,
+        erTruncated
+      ),
+    SandboxId (SandboxId, unSandboxId),
+    SandboxInfo (seContainer, seCreatedAt, seId, seImage),
+    SandboxManifest
+      ( smChangedPaths,
+        smChangedPathsTruncated,
+        smContainerDiff,
+        smContainerDiffTruncated,
+        smFileCount,
+        smPreview,
+        smSha256,
+        smTruncated
+      ),
+    maxOutputBytes,
+  )
 import Max.Time (fmtDateHMS)
 import Max.Tools.Schema
   ( integerParam,
@@ -60,24 +86,23 @@ import Max.Tools.Schema
     toolObject,
     withKeys,
   )
-import OneBot.Types (GroupId)
 
-sandboxToolsFor :: (IOE :> es) => TimeZone -> GroupId -> SandboxRegistry -> [Tool es]
-sandboxToolsFor tz gid reg =
-  [ createTool gid reg,
-    execTool gid reg,
-    nixSearchTool gid reg,
-    listTool tz gid reg,
-    destroyTool gid reg,
-    readFileTool gid reg,
-    writeFileTool gid reg
+sandboxToolsFor :: (Sandbox :> es) => TimeZone -> [Tool es]
+sandboxToolsFor tz =
+  [ createTool,
+    execTool,
+    nixSearchTool,
+    listTool tz,
+    destroyTool,
+    readFileTool,
+    writeFileTool
   ]
 
 --------------------------------------------------------------------------------
 -- sandbox_create
 
-createTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
-createTool gid reg =
+createTool :: (Sandbox :> es) => Tool es
+createTool =
   Tool
     { toolName = "sandbox_create",
       toolDescription =
@@ -90,11 +115,11 @@ createTool gid reg =
             "开工前先 use_skill 取 sandbox 手册。"
           ],
       toolSchema = noArguments,
-      toolRun = \args ->
+      toolRunner = LegacyRunner $ \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
-          Right opts -> do
-            res <- liftIO (createSandbox reg gid opts)
+          Right () -> do
+            res <- createSandbox
             pure $ case res of
               Left err -> Left err
               Right e ->
@@ -107,14 +132,14 @@ createTool gid reg =
                     ]
     }
   where
-    parseArgs :: Object -> Parser SandboxCreateOpts
-    parseArgs _ = pure defaultCreateOpts
+    parseArgs :: Object -> Parser ()
+    parseArgs _ = pure ()
 
 --------------------------------------------------------------------------------
 -- sandbox_exec
 
-execTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
-execTool gid reg =
+execTool :: (Sandbox :> es) => Tool es
+execTool =
   Tool
     { toolName = "sandbox_exec",
       toolDescription =
@@ -142,11 +167,11 @@ execTool gid reg =
             )
           ]
           ["sandbox_id", "command"],
-      toolRun = \args ->
+      toolRunner = LegacyRunner $ \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
           Right (sid, cmd, pkgs, t) -> do
-            res <- liftIO (execInSandbox reg gid (SandboxId sid) pkgs cmd (clamp (1, 600) t))
+            res <- execInSandbox (SandboxId sid) pkgs cmd (clamp (1, 600) t)
             pure $ case res of
               Left err -> Left err
               Right er ->
@@ -207,8 +232,8 @@ journalObservation er =
 -- nix_search
 
 -- | Search the host-owned package pin after checking sandbox ownership.
-nixSearchTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
-nixSearchTool gid reg =
+nixSearchTool :: (Sandbox :> es) => Tool es
+nixSearchTool =
   Tool
     { toolName = "nix_search",
       toolDescription =
@@ -224,14 +249,11 @@ nixSearchTool gid reg =
             ("query", stringParam "Regex matched against package names and descriptions.")
           ]
           ["sandbox_id", "query"],
-      toolRun = \args ->
+      toolRunner = LegacyRunner $ \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
           Right (sid, query) -> do
-            entry <- liftIO (listSandbox reg gid (SandboxId sid))
-            res <- case entry of
-              Nothing -> pure (Left "sandbox not found")
-              Just sandbox -> liftIO (runSearch sandbox.seContainer query)
+            res <- searchPackages (SandboxId sid) query
             pure $ case res of
               Left err -> Left err
               Right results
@@ -247,19 +269,14 @@ nixSearchTool gid reg =
 --------------------------------------------------------------------------------
 -- sandbox_list
 
-listTool :: (IOE :> es) => TimeZone -> GroupId -> SandboxRegistry -> Tool es
-listTool tz gid reg =
+listTool :: (Sandbox :> es) => TimeZone -> Tool es
+listTool tz =
   Tool
     { toolName = "sandbox_list",
       toolDescription =
         "List sandboxes available in this group's session (created by you or by other parallel dispatches).",
       toolSchema = noArguments,
-      toolRun = \_args -> do
-        entries <- liftIO (listSandboxesForGroup reg gid)
-        pure $
-          Right $
-            toJSON $
-              map summarize entries
+      toolRunner = LegacyRunner $ \_args -> Right . toJSON . map summarize <$> listSandboxes
     }
   where
     summarize e =
@@ -272,19 +289,19 @@ listTool tz gid reg =
 --------------------------------------------------------------------------------
 -- sandbox_destroy
 
-destroyTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
-destroyTool gid reg =
+destroyTool :: (Sandbox :> es) => Tool es
+destroyTool =
   Tool
     { toolName = "sandbox_destroy",
       toolDescription =
         "Permanently destroy a sandbox and its /work data (downloaded packages \
         \survive in the shared store).  Use when done, to free resources.",
       toolSchema = toolObject [("sandbox_id", stringParam "Sandbox id to destroy.")] ["sandbox_id"],
-      toolRun = \args ->
+      toolRunner = LegacyRunner $ \args ->
         case parseEither (withObject "args" (\o -> o .: "sandbox_id")) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
           Right (sid :: Text) -> do
-            res <- liftIO (destroySandbox reg gid (SandboxId sid))
+            res <- destroySandbox (SandboxId sid)
             pure $ case res of
               Left err -> Left err
               Right () -> Right (object ["ok" .= True])
@@ -293,8 +310,8 @@ destroyTool gid reg =
 --------------------------------------------------------------------------------
 -- sandbox_read_file
 
-readFileTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
-readFileTool gid reg =
+readFileTool :: (Sandbox :> es) => Tool es
+readFileTool =
   Tool
     { toolName = "sandbox_read_file",
       toolDescription =
@@ -309,11 +326,11 @@ readFileTool gid reg =
             )
           ]
           ["sandbox_id", "path"],
-      toolRun = \args ->
+      toolRunner = LegacyRunner $ \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
           Right (sid, path, mx) -> do
-            res <- liftIO (readSandboxFile reg gid (SandboxId sid) path (clamp (1, 65536) mx))
+            res <- readSandboxFile (SandboxId sid) path (clamp (1, 65536) mx)
             pure $ case res of
               Left err -> Left err
               Right content ->
@@ -334,8 +351,8 @@ readFileTool gid reg =
 --------------------------------------------------------------------------------
 -- sandbox_write_file
 
-writeFileTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
-writeFileTool gid reg =
+writeFileTool :: (Sandbox :> es) => Tool es
+writeFileTool =
   Tool
     { toolName = "sandbox_write_file",
       toolDescription =
@@ -348,11 +365,11 @@ writeFileTool gid reg =
             ("content", stringParam "File content (UTF-8 text).")
           ]
           ["sandbox_id", "path", "content"],
-      toolRun = \args ->
+      toolRunner = LegacyRunner $ \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
           Right (sid, path, content) -> do
-            res <- liftIO (writeSandboxFile reg gid (SandboxId sid) path content)
+            res <- writeSandboxFile (SandboxId sid) path content
             pure $ case res of
               Left err -> Left err
               Right () -> Right (object ["ok" .= True, "bytes" .= T.length content])

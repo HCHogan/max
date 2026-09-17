@@ -21,14 +21,28 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log
-import Max.Conversation.Roster (ConversationRoster (..), RosterIdentity (..))
-import Max.Effects.ConversationQuery (ConversationQuery, readRoster)
+import Max.Conversation.Roster
+  ( ConversationRoster (..),
+    RosterIdentity (..),
+  )
+import Max.Effects.ConversationQuery
+  ( ConversationQuery,
+    readRoster,
+  )
 import Max.Effects.Http (Http, getQQMedia, renderDownloadError)
 import Max.Effects.PlatformQuery (PlatformQuery)
-import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.ToolOutput
+  ( InlineMedia (..),
+    ToolOutput,
+    queueInlineMedia,
+  )
+import Max.Effects.Tools (Tool (..), ToolRunner (..))
 import Max.IR (sniffMediaMime)
-import Max.Platform.Types (Platform (..), PrincipalId (..), renderPlatform)
+import Max.Platform.Types
+  ( Platform (..),
+    PrincipalId (..),
+    renderPlatform,
+  )
 import Max.Roster
   ( GroupMember (..),
     GroupMeta (..),
@@ -39,7 +53,12 @@ import Max.Roster
     userAvatarUrl,
   )
 import Max.ToolContext (ToolContext, toolGroupId, toolMultimodal)
-import Max.Tools.Schema (boolParam, integerParam, stringParam, toolObject)
+import Max.Tools.Schema
+  ( boolParam,
+    integerParam,
+    stringParam,
+    toolObject,
+  )
 import Max.Util (tshow)
 import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 
@@ -90,7 +109,7 @@ membersTool gid =
             ("offset", integerParam "跳过前多少个匹配结果，翻页用（默认 0）")
           ]
           [],
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mQuery, offset) -> do
           -- The ledger answers on every platform; a QQ member list is an
@@ -237,7 +256,7 @@ avatarTool dc =
             ("group", boolParam "true = 看群头像（与 qq 二选一）")
           ]
           [],
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (Nothing, False) -> pure $ Left "要么传 qq，要么传 group=true"
         Right (_, True)

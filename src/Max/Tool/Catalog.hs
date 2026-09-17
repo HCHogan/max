@@ -10,19 +10,22 @@ module Max.Tool.Catalog
 where
 
 import Crypto.Hash.SHA256 qualified as SHA256
-import Data.Aeson (Object, Value (..), encode)
-import Data.Aeson.Key qualified as Key
+import Data.Aeson (Value (..), encode)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
-import Data.Foldable (foldlM, toList, traverse_)
-import Data.List (find)
+import Data.Foldable (foldlM, traverse_)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Max.Schema
+  ( SchemaDialect (ToolSchema),
+    parseSchema,
+    schemaValue,
+    validateSchemaValue,
+  )
 import Max.Tool.Types
 
 newtype ToolCatalog = ToolCatalog (Map ToolRef CatalogTool)
@@ -32,7 +35,7 @@ catalogTools :: ToolCatalog -> [CatalogTool]
 catalogTools (ToolCatalog tools) = Map.elems tools
 
 catalogSpecs :: ToolCatalog -> [ToolSpec]
-catalogSpecs = map (\view -> ToolSpec view.ctDefinition.tdRef.unToolRef view.ctDescription view.ctSchema) . catalogTools
+catalogSpecs = map (\view -> ToolSpec view.ctDefinition.tdRef.unToolRef view.ctDescription (schemaValue view.ctSchema)) . catalogTools
 
 lookupCatalogTool :: ToolRef -> ToolCatalog -> Maybe CatalogTool
 lookupCatalogTool ref (ToolCatalog tools) = Map.lookup ref tools
@@ -54,8 +57,11 @@ buildToolCatalog definitions specs = do
       if T.null (T.strip spec.specDescription)
         then Left (EmptyToolDescription ref)
         else do
-          validateSchema ref spec.specSchema
-          pure (CatalogTool definition spec.specDescription spec.specSchema (schemaHash spec.specSchema))
+          case spec.specSchema of
+            Object fields | KeyMap.lookup "type" fields == Just (String "object") -> pure ()
+            _ -> Left (InvalidToolSchema ref "root type must be object")
+          schema <- either (Left . InvalidToolSchema ref) Right (parseSchema ToolSchema spec.specSchema)
+          pure (CatalogTool definition spec.specDescription schema (schemaHash spec.specSchema))
     requireSpec specsByRef ref =
       if Map.member ref specsByRef then Right () else Left (MissingToolRunner ref)
     requireDefinition definitionsByRef ref =
@@ -104,127 +110,8 @@ schemaHash =
     . LBS.toStrict
     . encode
 
-validateSchema :: ToolRef -> Value -> Either ToolCatalogError ()
-validateSchema ref = \case
-  Object schema -> do
-    case KeyMap.lookup "type" schema of
-      Just (String "object") -> Right ()
-      _ -> invalid "root type must be object"
-    properties <- case KeyMap.lookup "properties" schema of
-      Nothing -> Right KeyMap.empty
-      Just (Object p) -> Right p
-      Just _ -> invalid "properties must be an object"
-    required <- case KeyMap.lookup "required" schema of
-      Nothing -> Right []
-      Just (Array xs) -> traverse requiredName (toList xs)
-      Just _ -> invalid "required must be an array of strings"
-    traverse_ (validatePropertySchema ref) (KeyMap.toList properties)
-    case find (not . (`KeyMap.member` properties) . Key.fromText) required of
-      Nothing -> Right ()
-      Just name -> invalid ("required property has no schema: " <> name)
-  _ -> invalid "schema must be a JSON object"
-  where
-    invalid :: Text -> Either ToolCatalogError a
-    invalid = Left . InvalidToolSchema ref
-    requiredName (String name) = Right name
-    requiredName _ = invalid "required must contain only strings"
-
-validatePropertySchema :: ToolRef -> (Key.Key, Value) -> Either ToolCatalogError ()
-validatePropertySchema ref (name, Object propertySchema) =
-  case KeyMap.lookup "type" propertySchema of
-    Nothing -> Right ()
-    Just (String kind)
-      | kind `elem` supportedTypes -> Right ()
-      | otherwise -> invalid ("unsupported type for " <> key <> ": " <> kind)
-    Just (Array kinds)
-      | not (null kinds) && all (\case String kind -> kind `elem` supportedTypes; _ -> False) kinds -> Right ()
-    Just _ -> invalid ("type for " <> key <> " must be a string")
-  where
-    key = Key.toText name
-    invalid = Left . InvalidToolSchema ref
-    supportedTypes = ["string", "integer", "number", "boolean", "object", "array", "null"]
-validatePropertySchema ref (name, _) =
-  Left (InvalidToolSchema ref ("property schema must be an object: " <> Key.toText name))
-
 validateArguments :: CatalogTool -> Value -> Either ToolFault ()
-validateArguments view = \case
-  Object args -> do
-    let schema = case view.ctSchema of
-          Object o -> o
-          _ -> KeyMap.empty -- impossible after catalog validation
-        properties = case KeyMap.lookup "properties" schema of
-          Just (Object p) -> p
-          _ -> KeyMap.empty
-        required = case KeyMap.lookup "required" schema of
-          Just (Array xs) -> [name | String name <- toList xs]
-          _ -> []
-    case find (not . (`KeyMap.member` args) . Key.fromText) required of
-      Just name -> Left (rejectedFault view ("missing required property: " <> name))
-      Nothing -> do
-        case KeyMap.lookup "additionalProperties" schema of
-          Just (Bool False)
-            | Just name <- find (not . (`KeyMap.member` properties)) (KeyMap.keys args) ->
-                Left (rejectedFault view ("unknown property: " <> Key.toText name))
-          _ -> Right ()
-        traverse_ (validatePresent args view) (KeyMap.toList properties)
-  _ -> Left (rejectedFault view "arguments must be a JSON object")
-
-validatePresent :: Object -> CatalogTool -> (Key.Key, Value) -> Either ToolFault ()
-validatePresent args view (name, Object propertySchema) = case KeyMap.lookup name args of
-  Nothing -> Right ()
-  Just value -> do
-    case KeyMap.lookup "type" propertySchema of
-      Nothing -> Right ()
-      Just (String kind)
-        | valueHasType kind value -> Right ()
-        | otherwise -> Left (rejectedFault view (Key.toText name <> " must be " <> kind))
-      Just (Array kinds)
-        | any (\case String kind -> valueHasType kind value; _ -> False) kinds -> Right ()
-        | otherwise -> Left (rejectedFault view (Key.toText name <> " has no permitted type"))
-      _ -> Right ()
-    validateEnum value
-    validateBounds value
-  where
-    validateEnum value = case KeyMap.lookup "enum" propertySchema of
-      Just (Array allowed)
-        | value `notElem` allowed ->
-            Left (rejectedFault view (Key.toText name <> " is not an allowed value"))
-      _ -> Right ()
-
-    validateBounds (Number n) = do
-      case KeyMap.lookup "minimum" propertySchema of
-        Just (Number minimumValue)
-          | n < minimumValue -> Left (rejectedFault view (Key.toText name <> " is below minimum"))
-        _ -> Right ()
-      case KeyMap.lookup "maximum" propertySchema of
-        Just (Number maximumValue)
-          | n > maximumValue -> Left (rejectedFault view (Key.toText name <> " is above maximum"))
-        _ -> Right ()
-    validateBounds (String text) = do
-      let size = fromIntegral (T.length text)
-      case KeyMap.lookup "minLength" propertySchema of
-        Just (Number minimumValue)
-          | size < minimumValue -> Left (rejectedFault view (Key.toText name <> " is shorter than minLength"))
-        _ -> Right ()
-      case KeyMap.lookup "maxLength" propertySchema of
-        Just (Number maximumValue)
-          | size > maximumValue -> Left (rejectedFault view (Key.toText name <> " is longer than maxLength"))
-        _ -> Right ()
-    validateBounds _ = Right ()
-validatePresent _ view (name, _) =
-  Left (rejectedFault view ("invalid registered schema for " <> Key.toText name))
-
-valueHasType :: Text -> Value -> Bool
-valueHasType "string" String {} = True
-valueHasType "integer" (Number n) = case floatingOrInteger @Double @Integer n of
-  Right _ -> True
-  Left _ -> False
-valueHasType "number" Number {} = True
-valueHasType "boolean" Bool {} = True
-valueHasType "object" Object {} = True
-valueHasType "array" Array {} = True
-valueHasType "null" Null = True
-valueHasType _ _ = False
+validateArguments view = either (Left . rejectedFault view) Right . validateSchemaValue view.ctSchema
 
 rejectedFault :: CatalogTool -> Text -> ToolFault
 rejectedFault view message =

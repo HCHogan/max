@@ -24,6 +24,7 @@ import Max.DB.Task.Admission (admitTaskWithin)
 import Max.DB.Task.Authorization
 import Max.DB.Task.Record
 import Max.DB.Transaction (withTransaction)
+import Max.Skill.Contract (Contract)
 import Max.Task.Admission (admissionErrorText)
 import Max.Task.Delegation
 import Max.Task.State
@@ -109,7 +110,7 @@ beginAgentStep turn currentGrants receipts request journal = withTransaction $ d
 
 -- Nothing means the child is still executing; a returned report is data.
 -- Read and settle under the same parent-generation lock as cancellation.
-pollAgentStep :: (WithConnection :> es, IOE :> es) => AgentTurnId -> AgentStep -> Maybe Value -> Int64 -> Eff es (Either Text (Maybe Value))
+pollAgentStep :: (WithConnection :> es, IOE :> es) => AgentTurnId -> AgentStep -> Maybe Contract -> Int64 -> Eff es (Either Text (Maybe Value))
 pollAgentStep turn step contract journal = withTransaction $ do
   allowed <- authorizeWithin turn (ExecutionWork CheckOnly)
   child <- if allowed then loadTask step.childId else pure Nothing

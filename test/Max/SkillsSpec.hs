@@ -6,13 +6,13 @@ import Data.Text qualified as T
 import Effectful (runEff)
 import Max.Command.Version (buildIdentityLines)
 import Max.Effects.ToolControl (runToolControl)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.Tools (toolRun)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
+import Max.Skill.ToolRuntime (skillToolsWithRuntime)
 import Max.Skills (Skill (..), lookupSkill, newSkillRegistry, skillsForGroup)
 import Max.Tool.Bundles (SkillLoad (..), toolVisible)
 import Max.Tool.Control (controlSkillLoads)
 import Max.ToolContext
-import Max.Tools.Skills (skillToolsFor)
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
@@ -28,8 +28,8 @@ spec = describe "Max.Skills builtins" $ do
           mkToolContext
             (TurnIdentity (GroupId 7777) (CanonicalMessageId 1) (UserId 2) (UserId 3) (PrincipalId 2) Nothing Nothing)
             (TurnCapabilities False False True noAdvertisedCaps False Map.empty Nothing False)
-        load current = case skillToolsFor registry current (const (pure (Right Nothing))) Right of
-          [runner] -> runEff (runToolControl (runner.toolRun (object ["name" .= ("office" :: T.Text)])))
+        load current = case skillToolsWithRuntime registry current (const (pure (Right Nothing))) Right of
+          [runner] -> runEff (runToolControl (toolRun runner (object ["name" .= ("office" :: T.Text)])))
           _ -> fail "missing skill loader"
     (_, first) <- load executionContext
     let receipts = controlSkillLoads first

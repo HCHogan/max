@@ -7,25 +7,49 @@ import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
-import Max.Effects.TaskControl (TaskControl, controlTask, startTask)
-import Max.Effects.TaskExecution (TaskExecution, reportProgress, reportRequestWithInputs, reportTask)
+import Max.Effects.TaskControl
+  ( TaskControl,
+    controlTask,
+    startTask,
+  )
+import Max.Effects.TaskExecution
+  ( TaskExecution,
+    reportProgress,
+    reportRequestWithInputs,
+    reportTask,
+  )
 import Max.Effects.TaskQuery (TaskQuery, listTasks, readTask)
-import Max.Effects.ToolControl (ToolControl, finishExecution, yieldFrontend)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.ToolControl
+  ( ToolControl,
+    finishExecution,
+    yieldFrontend,
+  )
+import Max.Effects.Tools (Tool (..), ToolRunner (..), legacyTool)
 import Max.Effects.TurnQuery (TurnQuery, resolveTurnResult)
-import Max.Task.Admission (TaskAdmissionReceipt (..), admissionErrorText)
+import Max.Task.Admission
+  ( TaskAdmissionReceipt (..),
+    admissionErrorText,
+  )
 import Max.Task.Execution (renderExecutionFailure)
 import Max.Task.State qualified as State
 import Max.Task.Types
+import Max.Tool.Protocol (committedResult)
 import Max.ToolContext
-import Max.Tools.Schema (enumParam, integerParam, noArguments, stringArrayParam, stringParam, toolObject)
+import Max.Tools.Schema
+  ( enumParam,
+    integerParam,
+    noArguments,
+    stringArrayParam,
+    stringParam,
+    toolObject,
+  )
 import Max.Turn.Types (turnOutputAgentTurn)
 
 taskToolsFor :: (ToolControl :> es, TaskQuery :> es, TaskControl :> es, TaskExecution :> es, TurnQuery :> es) => ToolContext -> [Tool es]
 taskToolsFor context =
   [ startTool,
-    Tool "task_list" "列出本会话的持久化后台任务；完成后会主动通知，不需要轮询。" noArguments (\_ -> Right . toJSON <$> listTasks),
-    Tool
+    legacyTool "task_list" "列出本会话的持久化后台任务；完成后会主动通知，不需要轮询。" noArguments (\_ -> Right . toJSON <$> listTasks),
+    legacyTool
       "task_status"
       "查看指定任务的状态、证据、预算和未处理事件。"
       handleSchema
@@ -54,15 +78,16 @@ taskToolsFor context =
                 ("resources", stringArrayParam "可选的本会话 t#N:rM 结果句柄，最多 40 个；在 admission 时解析并冻结。")
               ]
               ["key", "objective", "profile"],
-          toolRun = parseArgs
-            ( withObject "task_start" $ \fields ->
-                (,,,,)
-                  <$> fields .: "key"
-                  <*> fields .: "objective"
-                  <*> fields .: "profile"
-                  <*> fields .:? "context" .!= ""
-                  <*> fields .:? "resources" .!= []
-            )
+          toolRunner = LegacyRunner
+            $ parseArgs
+              ( withObject "task_start" $ \fields ->
+                  (,,,,)
+                    <$> fields .: "key"
+                    <*> fields .: "objective"
+                    <*> fields .: "profile"
+                    <*> fields .:? "context" .!= ""
+                    <*> fields .:? "resources" .!= []
+              )
             $ \(key, objective, requested, explicitContext, resources) -> case (durable, parseProfile requested) of
               (Just _, Just profile)
                 | T.length explicitContext <= 60000 && length resources <= 40 -> do
@@ -92,9 +117,12 @@ taskToolsFor context =
             toolObject
               [("task", stringParam "task# 标识"), ("note", stringParam "建议、替换目标或取消原因"), ("revision", integerParam "replace 必填的当前 revision")]
               (["task", "note"] <> ["revision" | operation == State.Replace]),
-          toolRun = parseArgs (withObject "task control" $ \fields -> (,,) <$> fields .: "task" <*> fields .: "note" <*> fields .:? "revision") $
-            \(handle, note, revision) -> withHandle handle $ \identifier ->
-              either (Left . State.renderTaskControlError) (Right . toJSON) <$> controlTask identifier operation revision note
+          toolRunner = LegacyRunner $
+            parseArgs (withObject "task control" $ \fields -> (,,) <$> fields .: "task" <*> fields .: "note" <*> fields .:? "revision") $
+              \(handle, note, revision) -> withHandle handle $ \identifier ->
+                case State.taskCommand operation revision note of
+                  Left failure -> pure (Left (State.renderTaskControlError failure))
+                  Right command -> either (Left . State.renderTaskControlError) (Right . toJSON) <$> controlTask (State.DurableTaskId identifier) command
         }
     finishTool =
       Tool
@@ -111,7 +139,7 @@ taskToolsFor context =
                 ("payload", object ["description" .= ("委派输入指定 output_contract 时，succeeded 必须在此返回遵循该契约的 JSON；形状正确不代表目标已经完成，仍需 summary、evidence、unresolved。" :: Text)])
               ]
               ["status", "summary", "evidence", "unresolved"],
-          toolRun = \raw -> case State.parseTaskReport raw of
+          toolRunner = LegacyRunner $ \raw -> case State.parseTaskReport raw of
             Left detail -> pure (Left detail)
             Right report ->
               reportTask report >>= \case
@@ -120,13 +148,14 @@ taskToolsFor context =
         }
 
     progressTool =
-      Tool
+      legacyTool
         "task_progress"
         "记录持久化进度；重复状态去重，待评估进度合并。子任务交给父任务；根任务由会话前台判断是否需要转述，不保证每条进度都发群。"
         (toolObject [("summary", stringParam "当前进度、阻碍或正在验证的证据，最多 40000 字符。")] ["summary"])
         (parseArgs (withObject "task progress" (.: "summary")) (fmap (either (Left . renderExecutionFailure) (const (Right (object ["recorded" .= True])))) . reportProgress))
+    outcomeTool name description schema run = Tool name description schema (OutcomeRunner run)
     requestFinishTool =
-      Tool
+      outcomeTool
         "request_finish"
         "明确结束前台请求：answered 已回答，waiting 正在向用户询问缺失信息，declined 明确拒绝。系统会把 reply 发给用户；最终内容只写在 reply，调用本工具的这一轮正文留空，不加旁白，也不要先在正文或其他发送工具里重复发送。"
         ( toolObject
@@ -146,10 +175,14 @@ taskToolsFor context =
             ]
             ["disposition", "reply"]
         )
-        ( parseArgs (withObject "request_finish" $ \fields -> (,,) <$> fields .: "disposition" <*> fields .: "reply" <*> fields .:? "inputs" .!= []) $ \(disposition, reply, inputs) -> case State.parseDisposition disposition of
-            Nothing -> pure (Left "无效请求处置")
-            Just typed ->
-              reportRequestWithInputs typed reply inputs >>= \case
-                Left failure -> pure (Left (renderExecutionFailure failure))
-                Right () -> finishExecution (Just (T.strip reply)) >> pure (Right (object ["returned" .= True, "reply" .= T.strip reply]))
+        ( fmap committedResult
+            . parseArgs
+              (withObject "request_finish" $ \fields -> (,,) <$> fields .: "disposition" <*> fields .: "reply" <*> fields .:? "inputs" .!= [])
+              ( \(disposition, reply, inputs) -> case State.parseDisposition disposition of
+                  Nothing -> pure (Left "无效请求处置")
+                  Just typed ->
+                    reportRequestWithInputs typed reply inputs >>= \case
+                      Left failure -> pure (Left (renderExecutionFailure failure))
+                      Right () -> finishExecution (Just (T.strip reply)) >> pure (Right (object ["returned" .= True, "reply" .= T.strip reply]))
+              )
         )

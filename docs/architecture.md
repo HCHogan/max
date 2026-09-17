@@ -235,7 +235,12 @@ is rendered once for the final exact budget and trace observation.
 `SelectedContext` different pipeline values, while `Max.Prompt.System` owns the
 stable system prefix. `collectContextPreview` is the read-only collection path
 for admin/evaluation: it can be planned and rendered without publishing a
-materialization revision or context-plan trace.
+materialization revision or context-plan trace. Its consumer receives only
+`ContextQuery`; `Prompt.Runtime` installs the read-only interpreter.
+`Prompt.Collect` and `Prompt.History` load snapshots, `Prompt.Render` contains
+pure planning/rendering/cost accounting, and `Prompt.Materialize` alone owns
+materialization publication. The ordinary prompt facade assembles those phases;
+preview does not select a write path through a runtime boolean.
 At Historian startup, exact oldest-first backfill jobs fill any raw gaps at or
 before migration 041's deployment baseline. Each token-sized range stops before
 the next active owner, publishes under the ordinary source-hash/exclusion
@@ -393,6 +398,12 @@ uses that same connection. This is required because effectful-postgresql
 body operations may otherwise reacquire another. The local wrapper makes
 rollback, row locks, advisory transaction locks, and commit visibility real.
 Nested operations use savepoints and cannot commit their caller's transaction.
+The wrapper introduces an opaque `InTransaction` effect. Authorization and
+mutation helpers that depend on row locks require this evidence, so an ordinary
+`WithConnection` caller cannot invoke them outside a transaction. Standalone
+cache publication still requires a completed outermost commit. Dispatch and
+delivery reservations decode typed canonical bodies before committing; corrupt
+JSON raises `ConversionFailed` and rolls back the reservation.
 Agent admission reserves a model round with its turn counter, or a tool call
 with its started journal row, in one transaction. Database tests inject failures
 at the second write and prove the budget reservation rolls back too.
@@ -433,10 +444,14 @@ PinControl allows pin/unpin only; its authorization runs after
 the local Session mutex and database row lock, immediately before the update
 in the same transaction. Session cache publication follows COMMIT and rejects
 nested transactions that could later roll back.
-Image preparation is a host callback owning ffmpeg; canonical caption resolution
-is assembled outside the runtime file adapter. Browser workspace ownership is
-established in Browser.ToolRuntime before native MCP tools run. These resource
-adapters retain explicit host IO without receiving database capabilities.
+Image preparation is a host callback owning ffmpeg. Browser workspace ownership
+is established in Browser.ToolRuntime before native MCP tools run. The domain
+browser and file tools receive scoped `Browser` and `FileTransfer` operations. Their host interpreters own MCP sessions, output allocation,
+canonical caption resolution and persistence. `Sandbox` binds a group without
+exposing its registry or mutable entries; `Search` and `SkillLoading` similarly
+hide network credentials and skill registry mechanics from their consumers.
+Compile-negative architecture fixtures verify that each capability, including
+`ContextQuery`, cannot be used to perform arbitrary IO.
 
 The Agent loop receives separate admission, journal and inbox contracts from
 `Agent.Runtime`; it imports no database implementation. Tool call modes in the
@@ -612,6 +627,27 @@ safe to retry. Results are normalized as rejected,
 failed-before-effect, succeeded, committed, or outcome-unknown, while keeping
 the existing model-facing error strings. `!version` counts the same gated
 inventory used to build the live catalog.
+
+`Max.Schema` parses tool schemas and workflow `Contract`s into a shared typed
+validation tree, retaining the original JSON for provider requests and hashes.
+The workflow dialect remains stricter. `Max.Tool.Arguments` combines an
+applicative argument parser with schema generation; skills, search, pins and
+skill-authoring tools use it so their fields have one definition. Other legacy
+tool schemas are parsed and checked at catalog construction.
+
+`OutcomeRunner` reports `ToolOutcome` directly, and hoisting preserves it.
+A mutating `LegacyRunner` returning `Left` remains outcome-unknown; the kernel
+never derives a pre-effect guarantee from catalog metadata. The historical
+`tdFailuresPrecedeEffects` field exists only to preserve durable catalog/grant
+fingerprints. Exceptions and timeouts remain conservative for both runner forms.
+Shared invocation labels and budgets use `Concurrent` MVars/TVars, including
+under timeout races; they are not thread-local state.
+
+`Turn.Start` represents new, resumed, task and monitor starts as constructors
+instead of independent booleans and optional values. `TaskCommand` requires a
+`TaskRevision` for replacement, while its mutation boundary distinguishes
+`DurableTaskId`, `GroupId` and `PrincipalId`. `Dispatch.Lease` owns dispatch lease
+settlement, and `Turn.ReplayRuntime` loads recovery views outside Handler.
 
 `ToolContext` is opaque and is minted once from the already-authorized inbound
 turn identity. It carries current-conversation authority alongside capability

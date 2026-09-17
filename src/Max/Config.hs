@@ -335,8 +335,21 @@ validateConfig cfg =
     validateAdmin adminCfg =
       invalid "admin.host" (T.null (T.strip adminCfg.acHost))
         <> invalid "admin.port" (adminCfg.acPort <= 0 || adminCfg.acPort > 65535)
-    validateMatrix matrixCfg = invalid "matrix.sync_timeout_ms" (matrixCfg.syncTimeoutMs < 1000)
-    validateIMessage imessageCfg = invalid "imessage.poll_interval_ms" (imessageCfg.pollIntervalMs < 100)
+    nonempty field text = invalid field (T.null (T.strip text))
+    validateMatrix matrixCfg =
+      nonempty "matrix.homeserver" matrixCfg.homeserver
+        <> nonempty "matrix.access_token" matrixCfg.accessToken
+        <> nonempty "matrix.user_id" matrixCfg.userId
+        <> nonempty "matrix.room_id" matrixCfg.roomId
+        <> invalid "matrix.sync_timeout_ms" (matrixCfg.syncTimeoutMs < 1000)
+    validateIMessage imessageCfg =
+      nonempty "imessage.bridge_url" imessageCfg.bridgeUrl
+        <> nonempty "imessage.bridge_token" imessageCfg.bridgeToken
+        <> nonempty "imessage.account_key" imessageCfg.accountKey
+        <> nonempty "imessage.chat_guid" imessageCfg.chatGuid
+        <> nonempty "imessage.bot_name" imessageCfg.botName
+        <> invalid "imessage.mention_handles" (null imessageCfg.mentionHandles || any (T.null . T.strip) imessageCfg.mentionHandles)
+        <> invalid "imessage.poll_interval_ms" (imessageCfg.pollIntervalMs < 100)
     validateWechatHook hookCfg =
       invalid "wechathook.listen_host" (T.null (T.strip hookCfg.whListenHost))
         <> invalid "wechathook.listen_port" (hookCfg.whListenPort <= 0 || hookCfg.whListenPort > 65535)
@@ -947,13 +960,7 @@ matrixParser = do
         metavar "MS",
         value 30000
       ]
-  pure $ case mHomeserver of
-    Nothing -> Nothing
-    Just homeserver
-      | any (T.null . T.strip) [homeserver, accessToken, userId, roomId] ->
-          error "matrix: homeserver, access_token, user_id and room_id must all be non-empty"
-      | syncTimeoutMs < 1000 -> error "matrix: sync_timeout_ms must be at least 1000"
-      | otherwise -> Just MatrixConfig {..}
+  pure (fmap (\homeserver -> MatrixConfig {..}) mHomeserver)
 
 iMessageParser :: Parser (Maybe IMessageConfig)
 iMessageParser = do
@@ -1045,15 +1052,7 @@ iMessageParser = do
         metavar "MS",
         value 1000
       ]
-  pure $ case mBridgeUrl of
-    Nothing -> Nothing
-    Just bridgeUrl
-      | any (T.null . T.strip) [bridgeUrl, bridgeToken, accountKey, chatGuid, botName] ->
-          error "imessage: bridge_url, bridge_token, account_key, chat_guid and bot_name must all be non-empty"
-      | null mentionHandles || any (T.null . T.strip) mentionHandles ->
-          error "imessage: mention_handles must contain at least one non-empty Apple handle"
-      | pollIntervalMs < 100 -> error "imessage: poll_interval_ms must be at least 100"
-      | otherwise -> Just IMessageConfig {..}
+  pure (fmap (\bridgeUrl -> IMessageConfig {..}) mBridgeUrl)
 
 -- | Enabled iff @intent.profile@ names an LLM profile; the numeric
 -- knobs have defaults so a one-line config turns the feature on.

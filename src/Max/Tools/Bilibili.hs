@@ -23,12 +23,25 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
 import Effectful.Log
 import Max.Bilibili
-import Max.Effects.Http (Http, getBilibiliMedia, renderDownloadError)
-import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.Http
+  ( Http,
+    getBilibiliMedia,
+    renderDownloadError,
+  )
+import Max.Effects.ToolOutput
+  ( InlineMedia (..),
+    ToolOutput,
+    queueInlineMedia,
+  )
+import Max.Effects.Tools (Tool (..), ToolRunner (..))
 import Max.Time (fmtDateHM)
 import Max.ToolContext (ToolContext, toolMultimodal)
-import Max.Tools.Schema (boolParam, stringParam, toolObject, withKeys)
+import Max.Tools.Schema
+  ( boolParam,
+    stringParam,
+    toolObject,
+    withKeys,
+  )
 
 bilibiliToolsFor ::
   (Http :> es, Log :> es, ToolOutput :> es) =>
@@ -69,7 +82,7 @@ viewBilibiliTool tz dc =
             )
           ]
           ["url"],
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (rawUrl, withVideo) ->
           case findBiliRef rawUrl of

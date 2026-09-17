@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE TypeFamilies #-}
 
 -- | Transactions that remain on one physical PostgreSQL connection.
 --
@@ -6,7 +7,7 @@
 -- 'withConnection', but its pooled interpreter lets operations in the body
 -- acquire fresh connections. Interposing 'WithConnection' while the body runs
 -- makes the transaction boundary real rather than merely syntactic.
-module Max.DB.Transaction (withTransaction, withCommittedTransaction, withReadSnapshot, withPinnedConnection) where
+module Max.DB.Transaction (InTransaction, requireTransaction, withTransaction, withCommittedTransaction, withReadSnapshot, withPinnedConnection) where
 
 import Database.PostgreSQL.LibPQ qualified as PQ
 import Database.PostgreSQL.Simple qualified as PostgreSQL
@@ -14,28 +15,48 @@ import Database.PostgreSQL.Simple.Internal qualified as PostgreSQLInternal
 import Database.PostgreSQL.Simple.Transaction qualified as Transaction
 import Effectful
 import Effectful.Dispatch.Dynamic (interpose, localSeqUnlift)
-import Effectful.PostgreSQL.Connection (WithConnection (..), withConnection)
+import Effectful.Dispatch.Static
+  ( SideEffects (NoSideEffects),
+    StaticRep,
+    evalStaticRep,
+    getStaticRep,
+  )
+import Effectful.PostgreSQL.Connection
+  ( WithConnection (..),
+    withConnection,
+  )
+
+-- | Evidence that the body owns a pinned transaction. The representation and
+-- interpreter are private: ordinary database access cannot manufacture it.
+data InTransaction :: Effect
+
+type instance DispatchOf InTransaction = Static NoSideEffects
+
+data instance StaticRep InTransaction = InTransaction
+
+requireTransaction :: (InTransaction :> es) => Eff es ()
+requireTransaction = getStaticRep @InTransaction >> pure ()
 
 withTransaction ::
   (WithConnection :> es, IOE :> es) =>
-  Eff es a ->
+  Eff (InTransaction : es) a ->
   Eff es a
-withTransaction = withTransactionMode Transaction.defaultTransactionMode
+withTransaction = withTransactionMode Transaction.defaultTransactionMode . evalStaticRep InTransaction
 
 -- | For write-through caches: returning must mean COMMIT has completed, so a
 -- caller cannot publish state that an enclosing transaction may roll back.
-withCommittedTransaction :: (WithConnection :> es, IOE :> es) => Eff es a -> Eff es a
+withCommittedTransaction :: (WithConnection :> es, IOE :> es) => Eff (InTransaction : es) a -> Eff es a
 withCommittedTransaction action = withConnection $ \connection ->
   withSeqEffToIO $ \unlift -> liftIO $ do
     status <- PostgreSQLInternal.withConnection connection PQ.transactionStatus
     case status of
-      PQ.TransIdle -> Transaction.withTransaction connection (unlift (withPinnedConnection connection action))
+      PQ.TransIdle -> Transaction.withTransaction connection (unlift (withPinnedConnection connection (evalStaticRep InTransaction action)))
       _ -> ioError (userError "write-through cache mutation requires its own transaction")
 
 -- | A standalone read uses one repeatable, read-only snapshot. Nested reads
 -- share the caller's transaction/isolation and cannot commit it.
-withReadSnapshot :: (WithConnection :> es, IOE :> es) => Eff es a -> Eff es a
-withReadSnapshot = withTransactionMode (Transaction.TransactionMode Transaction.RepeatableRead Transaction.ReadOnly)
+withReadSnapshot :: (WithConnection :> es, IOE :> es) => Eff (InTransaction : es) a -> Eff es a
+withReadSnapshot = withTransactionMode (Transaction.TransactionMode Transaction.RepeatableRead Transaction.ReadOnly) . evalStaticRep InTransaction
 
 withTransactionMode :: (WithConnection :> es, IOE :> es) => Transaction.TransactionMode -> Eff es a -> Eff es a
 withTransactionMode mode action =

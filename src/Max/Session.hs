@@ -46,6 +46,7 @@ where
 import Control.Concurrent.MVar (MVar, newMVar, putMVar, takeMVar)
 import Control.Concurrent.STM
 import Control.Exception (Exception)
+import Control.Exception qualified as Exception
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -53,10 +54,13 @@ import Data.Text (Text)
 import Data.Time (UTCTime)
 import Data.Void (absurd)
 import Effectful
-import Effectful.Exception (bracket, mask, throwIO)
+import Effectful.Exception (bracket, throwIO)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Session qualified as DB
-import Max.DB.Transaction (withCommittedTransaction)
+import Max.DB.Transaction
+  ( InTransaction,
+    withCommittedTransaction,
+  )
 import Max.Session.Types (Session (..))
 import OneBot.Types (GroupId)
 
@@ -131,7 +135,7 @@ updateSessionGuarded ::
   forall es rejection a.
   (WithConnection :> es, IOE :> es) =>
   SessionHandle ->
-  Eff es (Either rejection ()) ->
+  Eff (InTransaction : es) (Either rejection ()) ->
   (Session -> Either rejection (Session, a)) ->
   Eff es (Either rejection a)
 updateSessionGuarded handle guard f =
@@ -139,11 +143,18 @@ updateSessionGuarded handle guard f =
     (liftIO (takeMVar handle.mutationLock))
     (const (liftIO (putMVar handle.mutationLock ())))
     ( const $
-        mask $
-          \restore -> retryCAS restore maxSessionCASRetries
+        withSeqEffToIO $ \unlift -> liftIO $
+          Exception.mask $ \restore ->
+            unlift (retryCAS (restoreEffects restore) maxSessionCASRetries)
     )
   where
-    retryCAS :: (forall x. Eff es x -> Eff es x) -> Int -> Eff es (Either rejection a)
+    -- IO's restore is independent of the effect stack, so the same masking
+    -- boundary survives introduction of the transaction marker. Restore only
+    -- the body: COMMIT and cache publication stay masked together.
+    restoreEffects :: (IOE :> xs) => (forall x. IO x -> IO x) -> Eff xs b -> Eff xs b
+    restoreEffects restore action = withSeqEffToIO $ \unlift -> liftIO (restore (unlift action))
+
+    retryCAS :: (forall xs x. (IOE :> xs) => Eff xs x -> Eff xs x) -> Int -> Eff es (Either rejection a)
     retryCAS restore retriesLeft = do
       oldRecord <- liftIO (readTVarIO handle.state)
       committed <- withCommittedTransaction $ restore $ do

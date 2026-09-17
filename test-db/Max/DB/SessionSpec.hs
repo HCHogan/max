@@ -1,9 +1,12 @@
 module Max.DB.SessionSpec (spec) where
 
-import Control.Concurrent.Async (concurrently)
-import Control.Exception (SomeException, bracket_, try)
+import Control.Concurrent.Async (cancel, concurrently, withAsync)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (MaskingState (Unmasked), SomeException, bracket_, getMaskingState, try)
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Database.PostgreSQL.Simple (execute_)
+import Effectful (liftIO)
+import Effectful.PostgreSQL qualified as DB
 import Helpers (truncateAll, withDb)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.Session
@@ -18,8 +21,10 @@ import Max.Session
     newSessionRegistry,
     readSession,
     updateSession,
+    updateSessionGuarded,
   )
 import OneBot.Types (GroupId (..))
+import System.Timeout (timeout)
 import Test.Hspec
 
 testGroup :: GroupId
@@ -109,6 +114,29 @@ spec pool = before_ (truncateAll pool) $
         reloaded <- readSession handle
         reloaded.persona `shouldBe` Just "winner"
         reloaded.pinned `shouldBe` [7]
+
+      it "cancels an unmasked transaction body without publishing or retaining its lock" $ do
+        registry <- newSessionRegistry
+        handle <- withDb pool $ loadSession registry "deepseek-flash" testGroup
+        entered <- newEmptyMVar
+        blocked <- newEmptyMVar
+        let guard = do
+              _ <- DB.execute "UPDATE sessions SET persona='uncommitted' WHERE group_id=42" ()
+              liftIO $ getMaskingState >>= putMVar entered
+              () <- liftIO (takeMVar blocked)
+              pure (Right () :: Either () ())
+            change session = Right (session {persona = Just "committed"}, ())
+        withAsync (withDb pool (updateSessionGuarded handle guard change)) $ \worker -> do
+          timeout 2_000_000 (takeMVar entered) `shouldReturn` Just Unmasked
+          cancel worker
+        cached <- readSession handle
+        stored <- withDb pool $ fetchOrInit testGroup "deepseek-flash"
+        cached.persona `shouldBe` Nothing
+        stored.persona `shouldBe` Nothing
+        -- Cancellation rolled back and released both transaction and mutex.
+        withDb pool $ updateSession handle (\session -> (session {persona = Just "recovered"}, ()))
+        recovered <- readSession handle
+        recovered.persona `shouldBe` Just "recovered"
 
       it "does not publish an in-memory mutation when persistence fails" $ do
         registry <- newSessionRegistry

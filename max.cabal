@@ -221,9 +221,13 @@ library
         Max.Blob.Reference
         Max.File.Types
         Max.File.ToolRuntime
+        Max.File.TransferRuntime
+        Max.Effects.FileTransfer
         Max.Conversation.Roster
         Max.Media.ToolRuntime
         Max.Browser.ToolRuntime
+        Max.Browser.Client
+        Max.Effects.Browser
         Max.Reply.Caption
         Max.Effects.MediaQuery
         Max.Effects.PinControl
@@ -312,6 +316,15 @@ library
         Max.Platform.Store
         Max.Platform.QQ
         Max.Prompt
+        Max.Prompt.Render
+        Max.Prompt.Request
+        Max.Prompt.Collect
+        Max.Prompt.Runtime
+        Max.Effects.ContextQuery
+        Max.Prompt.History
+        Max.Prompt.Materialize
+        Max.Context.Materialization
+        Max.Text
         Max.Prompt.System
         Max.Recall
         Max.Monitor
@@ -358,6 +371,9 @@ library
         Max.Roster
         Max.Sandbox.Runtime
         Max.Sandbox.Registry
+        Max.Sandbox.Types
+        Max.Sandbox.ToolRuntime
+        Max.Effects.Sandbox
         Max.Session
         Max.Session.Types
         Max.SelfSource
@@ -370,10 +386,14 @@ library
         Max.Skill.Validation
         Max.Skill.ToolRuntime
         Max.Effects.SkillDraft
+        Max.Effects.Search
+        Max.Search.Runtime
+        Max.Effects.SkillLoading
         Max.Effects.SkillQuery
         Max.Effects.SkillValidation
         Max.Effects.SkillPublication
         Max.Tools.SkillAuthoring
+        Max.Schema
         Max.Skill.Contract
         Max.Skill.Package
         Max.Skill.Workflow
@@ -381,6 +401,9 @@ library
         Max.Stickers
         Max.Tasks
         Max.Turn.Types
+        Max.Turn.Start
+        Max.Turn.ReplayRuntime
+        Max.Dispatch.Lease
         Max.Turn.Continuity
         Max.Turn.Replay
         Max.Time
@@ -389,6 +412,8 @@ library
         Max.Tool.Control
         Max.Effects.ToolControl
         Max.Tool.Types
+        Max.Tool.Arguments
+        Max.Tool.Protocol
         Max.ToolContext
         Max.Tools
         Max.Tools.Bilibili
@@ -463,6 +488,7 @@ library
         , resource-pool       >= 0.4  && < 0.6
         , scientific          >= 0.3  && < 0.4
         , stm                 >= 2.5  && < 2.6
+        , transformers        >= 0.6 && < 0.7
         , template-haskell    >= 2.22 && < 2.24
         , text                >= 2.1  && < 2.2
         , time                >= 1.12 && < 1.17
@@ -685,6 +711,7 @@ test-suite max-test
         Max.Command.ParserSpec
         Max.Command.PermissionSpec
         Max.ConfigReloadSpec
+        Max.SchemaSpec
         Max.ConversationScopeSpec
         Max.DB.CallsSpec
         Max.DispatchFixture
@@ -763,6 +790,7 @@ test-suite max-test
         Max.Worker.GenerationSpec
         Max.Http.JsonSpec
     build-depends:
+        , QuickCheck      >= 2.14 && < 2.19
         , aeson           >= 2.2  && < 2.4
         , async           >= 2.2  && < 2.3
         , base            >= 4.20 && < 5

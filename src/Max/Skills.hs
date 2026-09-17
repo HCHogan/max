@@ -69,7 +69,13 @@ where
 import Control.Concurrent.MVar (MVar, newMVar, putMVar, takeMVar)
 import Control.Concurrent.STM
 import Control.Monad (when)
-import Data.Aeson (Result (..), Value, eitherDecodeStrict', fromJSON, toJSON)
+import Data.Aeson
+  ( Result (..),
+    Value,
+    eitherDecodeStrict',
+    fromJSON,
+    toJSON,
+  )
 import Data.ByteString (ByteString)
 import Data.FileEmbed (embedDir)
 import Data.Int (Int64)
@@ -80,15 +86,33 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, getCurrentTime)
-import Database.PostgreSQL.Simple (Only (..), SqlError (..), (:.) (..))
+import Database.PostgreSQL.Simple
+  ( Only (..),
+    SqlError (..),
+    (:.) (..),
+  )
 import Effectful
 import Effectful.Exception (bracket_, mask_, throwIO, try)
-import Effectful.PostgreSQL (WithConnection, execute, query, query_)
+import Effectful.PostgreSQL
+  ( WithConnection,
+    execute,
+    query,
+    query_,
+  )
 import Max.Command.Help (helpText)
 import Max.Command.Version (buildIdentityLines, readOsPretty)
-import Max.DB.Transaction (withCommittedTransaction)
+import Max.DB.Transaction
+  ( InTransaction,
+    withCommittedTransaction,
+  )
 import Max.Skill.Metadata (validateSkillText)
-import Max.Skill.Package (SkillEvidence (..), SkillPackage, emptyPackage, validatePackage, validatePackageName)
+import Max.Skill.Package
+  ( SkillEvidence (..),
+    SkillPackage,
+    emptyPackage,
+    validatePackage,
+    validatePackageName,
+  )
 import OneBot.Types (GroupId (..))
 import System.FilePath (dropExtension, takeExtension)
 
@@ -348,7 +372,7 @@ publish t = \case
 -- | Trusted publication adapter: serialize the standalone SQL commit and cache
 -- update together. The supplied operation must return the exact committed row.
 -- Public tool effects never receive this callback or the registry capability.
-publishSkillTransaction :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Eff es (Either Text Int64) -> Eff es (Either Text Skill)
+publishSkillTransaction :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Eff (InTransaction : es) (Either Text Int64) -> Eff es (Either Text Skill)
 publishSkillTransaction reg@(SkillRegistry cache _) action = withMutation reg $ do
   result <- try @SqlError . withCommittedTransaction $ do
     changed <- action

@@ -23,6 +23,7 @@ import Control.Exception (Exception)
 import Data.Aeson (Value)
 import Data.Set (Set)
 import Data.Text (Text)
+import Max.Schema (Schema)
 import Max.Tool.Control (LoopControl)
 
 -- | Model-facing tool description and JSON argument schema.
@@ -105,20 +106,9 @@ data ToolDefinition = ToolDefinition
     tdAuthorities :: !(Set ToolAuthority),
     -- | How long this tool may run before the kernel stops waiting.
     tdDeadline :: !ToolDeadline,
-    -- | An audited promise that this tool performs no effect on any path that
-    -- returns an error — argument checks, permission checks and lookups all
-    -- happen before the first write or send.
-    --
-    -- It exists because the default is necessarily pessimistic.  A tool that
-    -- writes or sends and then fails may have already done half of it, so its
-    -- failure is reported as outcome-unknown, and the host prompt tells the
-    -- model not to retry an outcome-unknown call.  That is right for a failure
-    -- mid-effect and badly wrong for a rejected argument: the model cannot
-    -- correct its own mistake, because it has been told it does not know
-    -- whether the mistake took effect.
-    --
-    -- 'False' is the safe answer and the default.  Set it only after reading
-    -- the tool and confirming every error path precedes every effect.
+    -- | Historical catalog fingerprint field. Retained so grants and pinned
+    -- workflows keep their identity; execution classification comes exclusively
+    -- from ToolRunner results and never trusts this compatibility bit.
     tdFailuresPrecedeEffects :: !Bool,
     tdCallMode :: !ToolCallMode
   }
@@ -130,7 +120,7 @@ data ToolDefinition = ToolDefinition
 data CatalogTool = CatalogTool
   { ctDefinition :: !ToolDefinition,
     ctDescription :: !Text,
-    ctSchema :: !Value,
+    ctSchema :: !Schema,
     ctSchemaHash :: !SchemaHash
   }
   deriving stock (Show, Eq)

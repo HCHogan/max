@@ -14,14 +14,15 @@ import Helpers (truncateAll, withDb)
 import Max.DB.Connection (DbPool)
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.ToolControl (runToolControl)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.Tools (toolRun)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
+import Max.Skill.Contract (Contract, parseContract)
 import Max.Skill.Package
+import Max.Skill.ToolRuntime (skillToolsWithRuntime)
 import Max.Skills
 import Max.Tool.Bundles (SkillLoad (..))
 import Max.Tool.Control (LoopControl, controlSkillLoads)
 import Max.ToolContext
-import Max.Tools.Skills (skillToolsFor)
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec hiding (context)
 
@@ -29,7 +30,7 @@ spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "versioned skill persistence and loading" $ do
   it "round trips packages and appends old content without changing a loaded revision" $ do
     registry <- newSkillRegistry
-    let contract = object ["type" .= ("object" :: Text), "additionalProperties" .= True]
+    let contract = checkedContract $ object ["type" .= ("object" :: Text), "additionalProperties" .= True]
         workflow = Workflow "compute" "return args;" contract contract []
         package = SkillPackage [] (Map.singleton "compute" workflow)
     Right first <- withDb pool (createSkill registry (new "saved" []) {nsPackage = package})
@@ -118,6 +119,9 @@ context =
     (TurnCapabilities False False True noAdvertisedCaps False Map.empty Nothing False)
 
 load :: SkillRegistry -> ToolContext -> Text -> IO (Either Text Value, LoopControl)
-load registry current name = case skillToolsFor registry current (const (pure (Right Nothing))) Right of
-  [runner] -> runEff (runToolControl (runner.toolRun (object ["name" .= (name :: Text)])))
+load registry current name = case skillToolsWithRuntime registry current (const (pure (Right Nothing))) Right of
+  [runner] -> runEff (runToolControl (toolRun runner (object ["name" .= (name :: Text)])))
   _ -> fail "missing loader"
+
+checkedContract :: Value -> Contract
+checkedContract = either (error . show) id . parseContract

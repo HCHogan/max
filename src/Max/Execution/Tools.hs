@@ -18,8 +18,6 @@ module Max.Execution.Tools
   )
 where
 
-import Control.Concurrent.MVar (MVar, newMVar, putMVar, takeMVar)
-import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVar, readTVarIO, writeTVar)
 import Control.Monad (unless, when)
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -33,13 +31,44 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
-import Effectful.Exception (SomeException, bracket_, catch, finally, mask, throwIO)
+import Effectful.Concurrent.MVar
+  ( MVar,
+    newMVar,
+    putMVar,
+    takeMVar,
+  )
+import Effectful.Concurrent.STM
+  ( TVar,
+    atomically,
+    modifyTVar',
+    newTVarIO,
+    readTVar,
+    readTVarIO,
+    writeTVar,
+  )
+import Effectful.Exception
+  ( SomeException,
+    bracket_,
+    catch,
+    finally,
+    mask,
+    throwIO,
+  )
 import Max.Agent.Execution
 import Max.Effects.Tools (Tools, invokeToolWithIdentity)
 import Max.Execution.Types
 import Max.Execution.Workflow
-import Max.Tasks (TaskCancelled (..), TurnRuntime, checkTurnCancellation, turnRuntimeAgentTurn)
-import Max.Tool.Control (LoopControl (..), controlReply, controlSkillLoads)
+import Max.Tasks
+  ( TaskCancelled (..),
+    TurnRuntime,
+    checkTurnCancellation,
+    turnRuntimeAgentTurn,
+  )
+import Max.Tool.Control
+  ( LoopControl (..),
+    controlReply,
+    controlSkillLoads,
+  )
 import Max.Tool.Types
 import OneBot.Types (GroupId)
 
@@ -90,14 +119,13 @@ data ExecutionSession = ExecutionSession
     batchLock :: !(MVar ())
   }
 
-newExecutionSession :: (IOE :> es) => Maybe Int -> Eff es ExecutionSession
+newExecutionSession :: (Concurrent :> es) => Maybe Int -> Eff es ExecutionSession
 newExecutionSession limit =
-  liftIO $
-    ExecutionSession <$> newTVarIO (max 0 <$> limit) <*> newTVarIO False <*> newTVarIO 0 <*> newMVar ()
+  ExecutionSession <$> newTVarIO (max 0 <$> limit) <*> newTVarIO False <*> newTVarIO 0 <*> newMVar ()
 
 -- | Labels are allocated by the host; durable identity is the journal row ID.
-freshExecutionLabel :: (IOE :> es) => ExecutionSession -> Text -> Eff es Text
-freshExecutionLabel session prefix = liftIO . atomically $ do
+freshExecutionLabel :: (Concurrent :> es) => ExecutionSession -> Text -> Eff es Text
+freshExecutionLabel session prefix = atomically $ do
   n <- readTVar session.sequenceNumber
   writeTVar session.sequenceNumber (n + 1)
   pure (prefix <> ":" <> T.pack (show n))
@@ -110,7 +138,7 @@ data ToolBatch = ToolBatch
 
 -- | A batch owns the scheduling gate, including settlement. Its unused local
 -- reservations are released even when admission or a sibling is interrupted.
-executeToolBatch :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
+executeToolBatch :: (Tools :> es, Concurrent :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
 executeToolBatch session hooks catalog = executeBatch False invoke session hooks catalog
   where
     invoke row request = invokeToolWithIdentity ((\entry -> "max:j" <> T.pack (show entry.jeJournalId)) <$> row) request.trName request.trArguments
@@ -119,16 +147,16 @@ executeToolBatch session hooks catalog = executeBatch False invoke session hooks
 -- database lock. Their waits may overlap; actual child work is still scheduled
 -- by the task scheduler. They share all local reservations and journal handling
 -- below with normal leaves, which retain their catalog parallelism policy.
-executeHostBatch :: (Tools :> es, Concurrent :> es, IOE :> es) => Bool -> Map Text (Maybe JournalExecution -> Value -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
+executeHostBatch :: (Tools :> es, Concurrent :> es) => Bool -> Map Text (Maybe JournalExecution -> Value -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
 executeHostBatch independent handlers = executeBatch independent invoke
   where
     invoke row request = case Map.lookup request.trName handlers of
       Just handler -> handler row request.trArguments
       Nothing -> invokeToolWithIdentity ((\entry -> "max:j" <> T.pack (show entry.jeJournalId)) <$> row) request.trName request.trArguments
 
-executeBatch :: (Concurrent :> es, IOE :> es) => Bool -> (Maybe JournalExecution -> ToolRequest -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
+executeBatch :: (Concurrent :> es) => Bool -> (Maybe JournalExecution -> ToolRequest -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
 executeBatch independent invoke session hooks catalog requests =
-  bracket_ (liftIO (takeMVar session.batchLock)) (liftIO (putMVar session.batchLock ())) $ mask $ \restoreBatch -> do
+  bracket_ (takeMVar session.batchLock) (putMVar session.batchLock ()) $ mask $ \restoreBatch -> do
     hooks.ehCheck
     let view request = find ((== ToolRef request.trName) . (.ctDefinition.tdRef)) catalog
         mode request = maybe WorkCall (.ctDefinition.tdCallMode) (view request)
@@ -137,7 +165,7 @@ executeBatch independent invoke session hooks catalog requests =
         cost request = if mode request == WorkCall then 1 else 0
         total = sum [cost request | request <- requests, not (suppressed request)]
         canParallel request = maybe False ((`elem` [ParallelSafe, ParallelIndependent]) . (.ctDefinition.tdParallelism)) (view request)
-    reserved <- liftIO . atomically $ do
+    reserved <- atomically $ do
       budget <- readTVar session.remaining
       case budget of
         Just available | total > available -> pure False
@@ -145,9 +173,9 @@ executeBatch independent invoke session hooks catalog requests =
     if not reserved
       then pure (ToolBatch (map (const (rejected "call_budget_exhausted" "这个子任务的工具调用额度已经用满，不能再执行这个调用")) requests) True)
       else do
-        unused <- liftIO (newTVarIO total)
-        yielded <- liftIO (newTVarIO False)
-        let release = liftIO . atomically $ do
+        unused <- newTVarIO total
+        yielded <- newTVarIO False
+        let release = atomically $ do
               refund <- readTVar unused
               modifyTVar' session.remaining (fmap (+ refund))
               pending <- readTVar yielded
@@ -155,7 +183,7 @@ executeBatch independent invoke session hooks catalog requests =
             execute request
               | suppressed request = pure (rejected "finish_batch_conflict" "结束回合的操作必须单独提交；同一轮的其他工具调用已拒绝")
               | otherwise = do
-                  stopped <- liftIO (readTVarIO session.terminal)
+                  stopped <- readTVarIO session.terminal
                   if stopped
                     then pure (rejected "execution_stopped" "execution has already yielded or finished")
                     else do
@@ -165,7 +193,7 @@ executeBatch independent invoke session hooks catalog requests =
                             hooks
                               { ehStart = \reservation entry -> do
                                   row <- hooks.ehStart reservation entry
-                                  liftIO . atomically $ modifyTVar' unused (subtract (cost request))
+                                  atomically $ modifyTVar' unused (subtract (cost request))
                                   pure row
                               }
                       (_, invocation) <- withExecutionRecord admitting step start $ \row -> mask $ \restore -> do
@@ -176,7 +204,7 @@ executeBatch independent invoke session hooks catalog requests =
                         -- remains immediate. The finally action also preserves
                         -- a yield when a later sibling is interrupted.
                         when (isJust (controlReply result.tiControl)) $
-                          liftIO . atomically $
+                          atomically $
                             case result.tiControl of
                               YieldLoop {} -> writeTVar yielded True
                               _ -> writeTVar session.terminal True

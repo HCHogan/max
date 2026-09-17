@@ -1,6 +1,6 @@
 -- | Scope and lower four authoring capabilities. Validation gets only catalog
 -- metadata and immutable data; publication owns the commit/cache boundary.
-module Max.Skill.ToolRuntime (skillAuthoringToolsWithDatabase) where
+module Max.Skill.ToolRuntime (skillToolsWithRuntime, skillAuthoringToolsWithDatabase) where
 
 import Data.Aeson
 import Data.Map.Strict qualified as Map
@@ -12,23 +12,38 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection)
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion)
 import Max.Effects.SkillDraft
+import Max.Effects.SkillLoading (runSkillLoading)
 import Max.Effects.SkillPublication
 import Max.Effects.SkillQuery
 import Max.Effects.SkillValidation
+import Max.Effects.ToolControl (ToolControl)
 import Max.Effects.Tools (Tool, hoistTool)
 import Max.Skill.Authoring
 import Max.Skill.Load (resolveSkillLoads)
 import Max.Skill.Package (SkillEvidence (..))
 import Max.Skill.Store
 import Max.Skill.Validation (validateFixtures)
-import Max.Skill.Workflow (bindWorkflowContracts, publicationContract)
+import Max.Skill.Workflow
+  ( bindWorkflowContracts,
+    publicationContract,
+  )
 import Max.Skills
 import Max.Tool.Bundles (SkillLoad (..), checkSkillLoadBudget)
 import Max.Tool.Types
 import Max.ToolContext
 import Max.Tools.SkillAuthoring (skillAuthoringTools)
+import Max.Tools.Skills (skillToolsFor)
 import Max.Turn.Types (AgentTurnRef (..), turnOutputAgentTurn)
 import OneBot.Types (GroupId (..))
+
+-- | Bind the current conversation and catalog before handing a loader to tools.
+skillToolsWithRuntime :: (IOE :> es, ToolControl :> es) => SkillRegistry -> ToolContext -> (Text -> IO (Either Text (Maybe Value))) -> ([SkillLoad] -> Either Text [SkillLoad]) -> [Tool es]
+skillToolsWithRuntime registry context prepare bind = map (hoistTool (runSkillLoading resolve)) (skillToolsFor context)
+  where
+    resolve name = do
+      snapshot <- liftIO (skillsForGroup registry (toolGroupId context))
+      loaded <- liftIO (resolveSkillLoads (Map.fromList [(s.skillName, s) | s <- snapshot]) (toolSkillLoads context) prepare name)
+      pure (loaded >>= bind >>= checkSkillLoadBudget (toolSkillLoads context))
 
 skillAuthoringToolsWithDatabase :: forall es. (WithConnection :> es, IOE :> es) => SkillRegistry -> ToolContext -> Either Text [CatalogTool] -> [Tool es]
 skillAuthoringToolsWithDatabase registry context catalog = map (hoistTool lower) skillAuthoringTools
@@ -97,7 +112,7 @@ skillAuthoringToolsWithDatabase registry context catalog = map (hoistTool lower)
         case found of
           Left err -> pure (Left err)
           Right draft -> do
-            prepared <- prepare draft
+            prepared <- raise (prepare draft)
             case prepared of
               Left err -> pure (Left err)
               Right (frozen, _) -> promoteDraftWithin scope draft proof expected frozen

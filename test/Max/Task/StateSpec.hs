@@ -44,19 +44,19 @@ spec = describe "typed task settlement" $ do
 
   it "allows attributed steering without transferring owner control" $ do
     let peer = TaskControlFacts Running 3 False True False
-    decideTaskControl Steer Nothing "suggestion" peer `shouldBe` Right ApplyControl
-    decideTaskControl Cancel Nothing "stop" peer `shouldBe` Left TaskOwnerRequired
-    decideTaskControl Replace (Just 3) "different objective" peer `shouldBe` Left TaskOwnerRequired
+    decideTaskControl (SteerTask "suggestion") peer `shouldBe` Right ApplyControl
+    decideTaskControl (CancelTask "stop") peer `shouldBe` Left TaskOwnerRequired
+    decideTaskControl (ReplaceTask (TaskRevision 3) "different objective") peer `shouldBe` Left TaskOwnerRequired
   it "requires fresh provenance even for a repeated control event" $ do
-    decideTaskControl Cancel Nothing "stop" (TaskControlFacts Running 3 True False True)
+    decideTaskControl (CancelTask "stop") (TaskControlFacts Running 3 True False True)
       `shouldBe` Left InvalidEventProvenance
   it "acknowledges a repeated authorized event without reapplying its old revision" $ do
-    decideTaskControl Replace (Just 2) "updated goal" (TaskControlFacts Running 3 True True True)
+    decideTaskControl (ReplaceTask (TaskRevision 2) "updated goal") (TaskControlFacts Running 3 True True True)
       `shouldBe` Right ReplayControl
   it "requires owner authority to resume waiting work and rejects closed work" $ do
-    decideTaskControl Steer Nothing "continue" (TaskControlFacts Waiting 3 False True False)
+    decideTaskControl (SteerTask "continue") (TaskControlFacts Waiting 3 False True False)
       `shouldBe` Left TaskResumeOwnerRequired
-    decideTaskControl Steer Nothing "continue" (TaskControlFacts Cancelled 3 True True False)
+    decideTaskControl (SteerTask "continue") (TaskControlFacts Cancelled 3 True True False)
       `shouldBe` Left TaskClosed
 
 testNow :: UTCTime

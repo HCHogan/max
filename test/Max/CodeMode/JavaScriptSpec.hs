@@ -84,7 +84,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
   it "pages large Unicode results without a second effect or budget charge" $ do
     count <- newIORef (0 :: Int)
     let payload = T.replicate 20000 "中文😀\"\\\n"
-        runner = echoTool {toolRun = \_ -> liftIO (modifyIORef' count (+ 1)) >> pure (Right (object ["text" .= payload]))}
+        runner = echoTool {toolRunner = LegacyRunner $ \_ -> liftIO (modifyIORef' count (+ 1)) >> pure (Right (object ["text" .= payload]))}
     registry <- checked [echoDefinition] [runner]
     (result, following) <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession (Just 1)
@@ -102,7 +102,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     second <- newEmptyMVar
     let runner =
           echoTool
-            { toolRun = \value -> do
+            { toolRunner = LegacyRunner $ \value -> do
                 liftIO $
                   if value == object ["value" .= (1 :: Int)]
                     then putMVar first () >> takeMVar second
@@ -139,7 +139,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
   it "keeps committed receipts when later JavaScript throws" $ do
     count <- newIORef (0 :: Int)
     let definition = echoDefinition {tdEffects = Set.singleton (EffectWrite "test"), tdRetryClass = RetryUnsafe, tdParallelism = SequentialOnly, tdFailuresPrecedeEffects = False}
-        runner = echoTool {toolRun = \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}
+        runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}
     registry <- checked [definition] [runner]
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
@@ -151,9 +151,9 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
 
   it "stops at host finish and suppresses conflicting batch work" $ do
     count <- newIORef (0 :: Int)
-    let done = echoTool {toolName = "done", toolRun = \args -> finishExecution (Just "finished") >> pure (Right args)}
+    let done = echoTool {toolName = "done", toolRunner = LegacyRunner $ \args -> finishExecution (Just "finished") >> pure (Right args)}
         finish = echoDefinition {tdRef = ToolRef "done", tdCallMode = FinishCall, tdParallelism = SequentialOnly}
-        runner = echoTool {toolRun = \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}
+        runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}
     registry <- checked [echoDefinition, finish] [runner, done]
     result <- runEff . runConcurrent . runToolsWithControl runToolControl registry $ do
       session <- newExecutionSession Nothing
@@ -206,7 +206,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
 
   it "does not call an interrupted host effect safe merely because its receipt is missing" $ do
     blocked <- newEmptyMVar
-    registry <- checked [echoDefinition] [echoTool {toolRun = \value -> liftIO (takeMVar blocked) >> pure (Right value)}]
+    registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner $ \value -> liftIO (takeMVar blocked) >> pure (Right value)}]
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
       runWasmProgram
@@ -222,7 +222,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
 
   it "rejects hidden, mixed and oversized model submissions before any effect" $ do
     count <- newIORef (0 :: Int)
-    registry <- checked [echoDefinition] [echoTool {toolRun = \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}]
+    registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}]
     forM_
       [ (False, [code "return 1"]),
         (True, [code "return 1", ToolRequest "leaf" "echo" (object ["value" .= (1 :: Int)])]),

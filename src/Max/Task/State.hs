@@ -19,6 +19,12 @@ module Max.Task.State
     TaskSettlement (..),
     decideSettlement,
     retryDelaySeconds,
+    DurableTaskId (..),
+    TaskRevision (..),
+    TaskCommand (..),
+    taskCommand,
+    commandOperation,
+    commandNote,
     TaskOperation (..),
     parseTaskOperation,
     taskOperationText,
@@ -270,8 +276,39 @@ decideSettlement facts
 retryDelaySeconds :: Int -> Int
 retryDelaySeconds retries = min 300 (5 * 2 ^ min 6 (max 0 retries))
 
--- | Parsed once at the external command boundary; arbitrary tool JSON cannot
--- invent a new state transition.
+-- | Durable work identities are distinct from message/principal ids and the
+-- process-local task registry. Unwrap only at the SQL/protocol boundary.
+newtype DurableTaskId = DurableTaskId {unDurableTaskId :: Int64}
+  deriving stock (Eq, Ord, Show)
+  deriving newtype (FromJSON, ToJSON)
+
+newtype TaskRevision = TaskRevision {unTaskRevision :: Int}
+  deriving stock (Eq, Ord, Show)
+  deriving newtype (FromJSON, ToJSON)
+
+data TaskCommand
+  = SteerTask !Text
+  | ReplaceTask !TaskRevision !Text
+  | CancelTask !Text
+  deriving stock (Eq, Show)
+
+-- | Decode the legacy wire shape once. A replacement inside the domain always
+-- carries its compare-and-set revision; other commands cannot carry one.
+taskCommand :: TaskOperation -> Maybe Int -> Text -> Either TaskControlError TaskCommand
+taskCommand Steer _ note = Right (SteerTask note)
+taskCommand Cancel _ reason = Right (CancelTask reason)
+taskCommand Replace revision objective = maybe (Left TaskRevisionRequired) (Right . (\r -> ReplaceTask (TaskRevision r) objective)) revision
+
+commandOperation :: TaskCommand -> TaskOperation
+commandOperation SteerTask {} = Steer
+commandOperation ReplaceTask {} = Replace
+commandOperation CancelTask {} = Cancel
+
+commandNote :: TaskCommand -> Text
+commandNote (SteerTask note) = note
+commandNote (ReplaceTask _ objective) = objective
+commandNote (CancelTask reason) = reason
+
 data TaskOperation = Steer | Replace | Cancel deriving stock (Eq, Show)
 
 parseTaskOperation :: Text -> Maybe TaskOperation
@@ -292,6 +329,7 @@ data TaskControlError
   | InvalidEventProvenance
   | InvalidTaskNote
   | TaskOwnerRequired
+  | TaskRevisionRequired
   | TaskRevisionConflict !Int
   | TaskResumeOwnerRequired
   | TaskClosed
@@ -305,6 +343,7 @@ renderTaskControlError = \case
   InvalidEventProvenance -> "invalid event provenance"
   InvalidTaskNote -> "note must contain 1..40000 characters"
   TaskOwnerRequired -> "only the initiator or an administrator can change this task"
+  TaskRevisionRequired -> "replace requires the current revision"
   TaskRevisionConflict _ -> "revision conflict"
   TaskResumeOwnerRequired -> "only the initiator or an administrator can resume completed work"
   TaskClosed -> "task is closed; start a new authorized task"
@@ -338,15 +377,16 @@ data TaskControlFacts = TaskControlFacts
 
 data TaskControlDecision = ReplayControl | ApplyControl deriving stock (Eq, Show)
 
-decideTaskControl :: TaskOperation -> Maybe Int -> Text -> TaskControlFacts -> Either TaskControlError TaskControlDecision
-decideTaskControl operation revision note facts
+decideTaskControl :: TaskCommand -> TaskControlFacts -> Either TaskControlError TaskControlDecision
+decideTaskControl command facts
   | not facts.validProvenance = Left InvalidEventProvenance
   | T.null trimmed || T.length trimmed > 40000 = Left InvalidTaskNote
   | operation /= Steer && not facts.controlsOwner = Left TaskOwnerRequired
   | facts.repeatedEvent = Right ReplayControl
-  | operation == Replace && revision /= Just facts.controlRevision = Left (TaskRevisionConflict facts.controlRevision)
+  | ReplaceTask expected _ <- command, expected /= TaskRevision facts.controlRevision = Left (TaskRevisionConflict facts.controlRevision)
   | operation == Steer && facts.controlStatus `notElem` [Queued, Running, Retrying] && not facts.controlsOwner = Left TaskResumeOwnerRequired
   | operation == Steer && facts.controlStatus `elem` [Cancelled, BudgetExhausted] = Left TaskClosed
   | otherwise = Right ApplyControl
   where
-    trimmed = T.strip note
+    trimmed = T.strip (commandNote command)
+    operation = commandOperation command

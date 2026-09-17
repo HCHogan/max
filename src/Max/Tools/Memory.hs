@@ -33,12 +33,29 @@ import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
-import Max.Effects.MemoryControl (MemoryControl, forgetMemory, saveMemory, updateMemory)
+import Max.Effects.MemoryControl
+  ( MemoryControl,
+    forgetMemory,
+    saveMemory,
+    updateMemory,
+  )
 import Max.Effects.MemoryQuery (MemoryQuery, listMemories)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.Tools (Tool (..), ToolRunner (..))
 import Max.Memory.Policy
-import Max.Memory.Types (ExpectedVersion (..), MemoryId, MemoryItem (..), MemoryScope (..), MemoryVersion, parseScope)
-import Max.Tools.Schema (enumParam, integerParam, stringParam, toolObject)
+import Max.Memory.Types
+  ( ExpectedVersion (..),
+    MemoryId,
+    MemoryItem (..),
+    MemoryScope (..),
+    MemoryVersion,
+    parseScope,
+  )
+import Max.Tools.Schema
+  ( enumParam,
+    integerParam,
+    stringParam,
+    toolObject,
+  )
 import Max.Util (tshow)
 
 memoryToolsFor ::
@@ -76,7 +93,7 @@ saveTool =
             ("user_id", integerParam "scope=user 时记忆归属的人物 principal ID（来自 [@#principal]）；缺省为当前发言者。")
           ]
           ["scope", "content"],
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (scopeRaw, content, mUid) -> case parseSubject scopeRaw mUid of
           Left failure -> pure (Left failure)
@@ -107,7 +124,7 @@ updateTool =
             ("content", stringParam ("替换后的完整内容（≤" <> tshow maxMemoryChars <> " 字）。"))
           ]
           ["id", "version", "content"],
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid, version, content) -> either (Left . memoryWriteFailureText) (Right . mutationSummary) <$> updateMemory mid (ExpectedVersion version) content
     }
@@ -135,7 +152,7 @@ forgetTool =
             ("version", integerParam "当前版本号。")
           ]
           ["id", "version"],
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid, version) -> do
           result <- forgetMemory mid (ExpectedVersion version)
@@ -167,7 +184,7 @@ listTool =
             ("user_id", integerParam "scope=user 时的人物 principal ID（来自 [@#principal]）；缺省为当前发言者。group 始终是本会话。")
           ]
           ["scope"],
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (scopeRaw, mSid) -> case parseSubject scopeRaw mSid of
           Left failure -> pure (Left failure)

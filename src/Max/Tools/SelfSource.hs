@@ -10,9 +10,15 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.BuildInfo (gitRev)
-import Max.Effects.Tools (Tool (..))
-import Max.Tools.Schema (boundedIntegerParam, paramOfType, stringParam, toolObject, withKeys)
+import Max.Effects.Tools (Tool (..), ToolRunner (..))
 import Max.SelfSource
+import Max.Tools.Schema
+  ( boundedIntegerParam,
+    paramOfType,
+    stringParam,
+    toolObject,
+    withKeys,
+  )
 
 selfSourceTools :: [Tool es]
 selfSourceTools = [inspectSourceTool]
@@ -39,7 +45,7 @@ inspectSourceTool =
             ("limit", boundedIntegerParam 1 300 20)
           ]
           ["action"],
-      toolRun = \args -> case parseEither (withObject "inspect_source args" parseRequest) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "inspect_source args" parseRequest) args of
         Left err -> pure (Left ("bad args: " <> T.pack err))
         Right request -> pure (runRequest request)
     }

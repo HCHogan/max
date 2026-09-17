@@ -15,12 +15,24 @@ import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.Browser.Registry
-import Max.Browser.Runtime (profileIdentity, resetTaskBrowser, workspaceIdentity)
+import Max.Browser.Runtime
+  ( profileIdentity,
+    resetTaskBrowser,
+    workspaceIdentity,
+  )
 import Max.Browser.Vault (openBrowserState, sealBrowserState)
-import Max.DB.Browser (browserCommandOwner, browserWorkspace, resetBrowserWorkspace, revokeProfileWorkspaces)
+import Max.DB.Browser
+  ( browserCommandOwner,
+    browserWorkspace,
+    resetBrowserWorkspace,
+    revokeProfileWorkspaces,
+  )
 import Max.DB.Transaction (withTransaction)
 import Max.Monitor.Types (MonitorOrdinal (..), parseMonitorHandle)
-import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
+import Max.Platform.Types
+  ( CanonicalMessageId (..),
+    PrincipalId (..),
+  )
 import Max.Task.Types (parseTaskHandle)
 import Network.URI (URI (..), URIAuth (..), parseURI)
 import OneBot.Types (GroupId (..))
@@ -84,7 +96,7 @@ browserCommand registry group@(GroupId groupId) actor@(PrincipalId principal) pi
       ["save", handle, name, origin]
         | Just identifier <- parseTaskHandle handle,
           validName name -> owned identifier $ withTransaction $ do
-            lockConversation
+            raise lockConversation
             rows <- query "SELECT checkpoint FROM browser_workspaces WHERE task_id=? AND state IN ('hot','cold') AND checkpoint IS NOT NULL" (Only identifier)
             case rows of
               [Only encrypted] -> case openBrowserState (browserVault registry) (workspaceIdentity identifier) encrypted >>= filterProfileState origin of
@@ -108,8 +120,8 @@ browserCommand registry group@(GroupId groupId) actor@(PrincipalId principal) pi
         if not stopped
           then pure (Left "old browser did not confirm closure; profile change refused")
           else withTransaction $ do
-            lockConversation
-            profiles <- lookupProfile name
+            raise lockConversation
+            profiles <- raise (lookupProfile name)
             case profiles of
               [(profile, version)] -> do
                 void $ execute "INSERT INTO browser_workspaces(task_id,revision) SELECT task_id,revision FROM durable_tasks WHERE task_id=? ON CONFLICT DO NOTHING" (Only identifier)
@@ -118,12 +130,12 @@ browserCommand registry group@(GroupId groupId) actor@(PrincipalId principal) pi
                 pure (Right (object ["task" .= identifier, "profile" .= name]))
               _ -> pure (Left "active profile not found for this owner and conversation")
       ["delete", name] -> withTransaction $ do
-        lockConversation
+        raise lockConversation
         changed <- query "UPDATE browser_profiles SET revoked=true,checkpoint=NULL,version=version+1,updated_at=clock_timestamp() WHERE principal_id=? AND name=? AND conversation_id=(SELECT conversation_id FROM conversations WHERE legacy_group_id=?) RETURNING profile_id" (principal, name, groupId)
         forM_ (changed :: [Only Int64]) $ \(Only profile) -> revokeProfileWorkspaces profile
         pure (Right (object ["revoked" .= length changed]))
       ["unmonitor", handle] | Just ordinal <- parseMonitorHandle handle -> withTransaction $ do
-        lockConversation
+        raise lockConversation
         removed <- query "DELETE FROM browser_monitor_profiles binding USING monitors,conversations WHERE binding.monitor_id=monitors.monitor_id AND monitors.conversation_id=conversations.conversation_id AND legacy_group_id=? AND armed_by_principal_id=? AND monitor_ordinal=? RETURNING binding.monitor_id" (groupId, principal, ordinal.unMonitorOrdinal)
         case removed of
           [Only (monitor :: Int64)] -> do
@@ -131,9 +143,9 @@ browserCommand registry group@(GroupId groupId) actor@(PrincipalId principal) pi
             pure (Right (object ["monitor" .= handle, "profile_detached" .= True]))
           _ -> pure (Left "owned monitor profile binding not found")
       ["monitor", handle, name] | Just ordinal <- parseMonitorHandle handle -> withTransaction $ do
-        lockConversation
+        raise lockConversation
         monitors <- query "SELECT monitor_id FROM monitors JOIN conversations USING(conversation_id) WHERE legacy_group_id=? AND armed_by_principal_id=? AND monitor_ordinal=? AND task_profile='browser' AND continuation_kind='elaborated' AND status='armed' FOR UPDATE OF monitors" (groupId, principal, ordinal.unMonitorOrdinal)
-        profiles <- lookupProfile name
+        profiles <- raise (lookupProfile name)
         case (monitors, profiles) of
           ([Only (monitor :: Int64)], [(profile, version)]) -> do
             void $ execute "INSERT INTO browser_monitor_profiles(monitor_id,profile_id,profile_version) VALUES(?,?,?) ON CONFLICT(monitor_id) DO UPDATE SET profile_id=EXCLUDED.profile_id,profile_version=EXCLUDED.profile_version" (monitor, profile, version)

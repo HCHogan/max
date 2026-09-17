@@ -29,7 +29,7 @@ import Max.DB.Monitor (armLedgerMatchMonitor)
 import Max.DB.Task
 import Max.DB.TaskSpec (admit, claimOne, insertOccurrence, report, seed)
 import Max.Effects.ToolOutput (newToolOutputQueue, runToolOutput)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.Tools (Tool (..), toolRun)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Monitor.Types
 import Max.Platform.Types (PrincipalId (..), noAdvertisedCaps)
@@ -76,7 +76,7 @@ spec pool = before_ (truncateAll pool) $ describe "task browser workspaces" $ do
             withDb pool $ case [tool | tool <- browserToolsFor browserContext registry Nothing, tool.toolName == "browser"] of
               [tool] -> do
                 queue <- newToolOutputQueue 0
-                runToolOutput queue (tool.toolRun arguments)
+                runToolOutput queue (toolRun tool arguments)
               _ -> error "missing browser tool"
       registry <- makeRegistry
       navigated <- run registry first "open"

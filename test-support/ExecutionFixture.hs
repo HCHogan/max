@@ -37,7 +37,7 @@ echoDefinition :: ToolDefinition
 echoDefinition = ToolDefinition (ToolRef "echo") (SchemaVersion 1) (Set.singleton (EffectRead "test")) ParallelSafe RetrySafe (Set.singleton CurrentConversation) (ToolDeadline 30) True WorkCall
 
 echoTool :: Tool es
-echoTool = Tool "echo" "echo" (object ["type" .= ("object" :: Text), "required" .= (["value"] :: [Text]), "properties" .= object ["value" .= object ["type" .= ("integer" :: Text)]]]) (pure . Right)
+echoTool = legacyTool "echo" "echo" (object ["type" .= ("object" :: Text), "required" .= (["value"] :: [Text]), "properties" .= object ["value" .= object ["type" .= ("integer" :: Text)]]]) (pure . Right)
 
 noJournal :: ExecutionHooks es
 noJournal = ExecutionHooks (pure ()) (\_ _ -> pure Nothing) (\_ _ -> pure ()) (\_ _ -> pure ()) Nothing

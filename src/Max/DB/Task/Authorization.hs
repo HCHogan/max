@@ -14,7 +14,11 @@ import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Task.Record
-import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
+import Max.DB.Transaction (InTransaction, requireTransaction)
+import Max.Execution.Types
+  ( ExecutionStep (..),
+    StepReservation (..),
+  )
 import Max.Platform.Types (PrincipalId (..))
 import Max.Task.State
 import Max.Turn.Types (AgentTurnId)
@@ -22,8 +26,9 @@ import OneBot.Types (GroupId (..))
 
 -- | The caller owns a pinned transaction. Re-read turn state after acquiring
 -- its conversation lock; a pre-lock snapshot is never sufficient authority.
-authorizeWithin :: (WithConnection :> es, IOE :> es) => AgentTurnId -> ExecutionStep -> Eff es Bool
+authorizeWithin :: (InTransaction :> es, WithConnection :> es, IOE :> es) => AgentTurnId -> ExecutionStep -> Eff es Bool
 authorizeWithin turn step = do
+  requireTransaction
   locked <- lockTurnConversation turn
   active <-
     if locked
@@ -91,7 +96,7 @@ authorizeWithin turn step = do
 
 -- | Reuse the locked execution check without accepting a caller-selected actor
 -- or conversation. Callers keep this inside the mutation's pinned transaction.
-authorizeCallerWithin :: (WithConnection :> es, IOE :> es) => AgentTurnId -> GroupId -> PrincipalId -> Eff es Bool
+authorizeCallerWithin :: (InTransaction :> es, WithConnection :> es, IOE :> es) => AgentTurnId -> GroupId -> PrincipalId -> Eff es Bool
 authorizeCallerWithin turn (GroupId group) (PrincipalId actor) = do
   authorized <- authorizeWithin turn (ExecutionWork CheckOnly)
   identity <- query "SELECT EXISTS(SELECT 1 FROM agent_turns JOIN conversations USING(conversation_id) WHERE turn_id=? AND initiator_principal_id=? AND legacy_group_id=?)" (turn, actor, group)

@@ -67,7 +67,12 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
-import Database.PostgreSQL.Simple (FromRow, In (..), Only (..), Query)
+import Database.PostgreSQL.Simple
+  ( FromRow,
+    In (..),
+    Only (..),
+    Query,
+  )
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Database.PostgreSQL.Simple.ToField (ToField)
@@ -81,12 +86,25 @@ import Max.ConversationScope
     currentConversationRecall,
     recallConversationScope,
   )
-import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
+import Max.DB.ConversationCursor
+  ( advanceCursor,
+    historianCursor,
+    loadCursor,
+  )
 import Max.DB.ConversationLock (lockConversation)
-import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..), historyColumns, transcriptEligibleExpr)
+import Max.DB.History
+  ( HistoryItem (..),
+    LedgerItem (..),
+    MessageCursor (..),
+    historyColumns,
+    transcriptEligibleExpr,
+  )
 import Max.DB.Transaction (withTransaction)
 import Max.Episode.Types
-import Max.Memory.Policy (DuplicatePolicy (RejectExactDuplicates), MemoryAdmissionFailure (..))
+import Max.Memory.Policy
+  ( DuplicatePolicy (RejectExactDuplicates),
+    MemoryAdmissionFailure (..),
+  )
 import Max.MemoryStore
   ( ExpectedVersion (..),
     MemoryActor (..),
@@ -112,10 +130,6 @@ import Max.MemoryStore
 import Max.Util (encodeText, tshow)
 
 newtype CaptureRunId = CaptureRunId {unCaptureRunId :: Int64}
-  deriving stock (Show, Eq, Ord)
-  deriving newtype (FromField, ToField, FromJSON, ToJSON)
-
-newtype CompartmentId = CompartmentId {unCompartmentId :: Int64}
   deriving stock (Show, Eq, Ord)
   deriving newtype (FromField, ToField, FromJSON, ToJSON)
 
@@ -1224,12 +1238,15 @@ reviewRejectedMemoryProposal scope captureId index actor reason proposed = withT
     publicationFailure "memory review requires an actor and evidence-based reason"
   locked <- lockConversation (conversationStorageId scope)
   unless locked (publicationFailure "memory review conversation no longer exists")
-  available <- query
-    "SELECT count(*) FROM episode_memory_review_queue WHERE capture_run_id=? AND proposal_index=? AND conversation_id=?"
-    (captureId,index,conversationStorageId scope)
+  available <-
+    query
+      "SELECT count(*) FROM episode_memory_review_queue WHERE capture_run_id=? AND proposal_index=? AND conversation_id=?"
+      (captureId, index, conversationStorageId scope)
   unless (available == [Only (1 :: Int)]) $ publicationFailure "proposal is outside scope or already reviewed"
-  runs <- query (fromTextQuery ("SELECT " <> captureRunColumns <> " FROM episode_capture_runs WHERE id=? AND conversation_id=? AND status='published' FOR UPDATE"))
-    (captureId,conversationStorageId scope)
+  runs <-
+    query
+      (fromTextQuery ("SELECT " <> captureRunColumns <> " FROM episode_capture_runs WHERE id=? AND conversation_id=? AND status='published' FOR UPDATE"))
+      (captureId, conversationStorageId scope)
   run <- case runs of
     [value] -> pure value
     _ -> publicationFailure "memory review requires a published capture"
@@ -1239,17 +1256,18 @@ reviewRejectedMemoryProposal scope captureId index actor reason proposed = withT
     _ -> publicationFailure "published capture has no compartment"
   source <- loadCaptureSource run
   when (isJust proposed) $ verifyCaptureSource scope run
-  let eligible = Map.fromList [(entry.history.canonicalId,entry.history.authorPrincipalId) | entry <- source,entry.transcriptEligible]
-  (status,detail,memory) <- case proposed of
-    Nothing -> pure ("dismissed",Nothing,Nothing)
+  let eligible = Map.fromList [(entry.history.canonicalId, entry.history.authorPrincipalId) | entry <- source, entry.transcriptEligible]
+  (status, detail, memory) <- case proposed of
+    Nothing -> pure ("dismissed", Nothing, Nothing)
     Just proposal -> case validateProposal eligible index proposal of
-      Left invalid -> pure ("rejected_validation",Just (T.intercalate "; " (map (.validationMessage) invalid.rejectedErrors)),Nothing)
+      Left invalid -> pure ("rejected_validation", Just (T.intercalate "; " (map (.validationMessage) invalid.rejectedErrors)), Nothing)
       Right valid -> do
         result <- applyMemoryProposal scope run compartment valid
-        pure (result.outcomeStatus,result.outcomeReason,result.outcomeMemory)
-  _ <- execute
-    "INSERT INTO episode_memory_reviews(capture_run_id,proposal_index,proposal,outcome,outcome_reason,memory_id,memory_version,actor,reason) VALUES (?,?,?::jsonb,?,?,?,?,?,?)"
-    (captureId,index,encodeText <$> proposed,status,detail,(.memId) <$> memory,(.memVersion) <$> memory,actor,reason)
+        pure (result.outcomeStatus, result.outcomeReason, result.outcomeMemory)
+  _ <-
+    execute
+      "INSERT INTO episode_memory_reviews(capture_run_id,proposal_index,proposal,outcome,outcome_reason,memory_id,memory_version,actor,reason) VALUES (?,?,?::jsonb,?,?,?,?,?,?)"
+      (captureId, index, encodeText <$> proposed, status, detail, (.memId) <$> memory, (.memVersion) <$> memory, actor, reason)
   pure status
 
 insertProposalOutcome ::
@@ -1312,47 +1330,6 @@ activateCompartment run compartment = do
       \ WHERE id = ? AND state = 'staged'"
       (Only compartment)
   unless (changed == 1) (publicationFailure "failed to activate staged compartment")
-
-data ActiveCompartment = ActiveCompartment
-  { activeCompartmentId :: !CompartmentId,
-    activeExpandHandle :: !EpisodeHandle,
-    activeRange :: !SourceRange,
-    activeStartedAt :: !UTCTime,
-    activeEndedAt :: !UTCTime,
-    -- | True when raw rows for this conversation exist between the previous
-    -- active compartment and this one.  The prompt collector uses the newest
-    -- gap-free suffix, so a partial historical backfill can never masquerade
-    -- as complete chronological coverage.
-    activeGapBefore :: !Bool,
-    activeSummaryP1 :: !Text,
-    activeSummaryP2 :: !Text,
-    activeSummaryP3 :: !Text,
-    activeKind :: !Text,
-    activeImportance :: !Double,
-    activeConfidence :: !Double,
-    activeMaterializationVersion :: !Int64
-  }
-  deriving stock (Show, Eq)
-
--- | One policy-checked page of the immutable source range behind a summary.
--- Pages contain ledger rows, not re-summarized text, including rows that were
--- deliberately excluded from the normal prompt transcript.
-instance FromRow ActiveCompartment where
-  fromRow =
-    ActiveCompartment
-      <$> field
-      <*> field
-      <*> (SourceRange . MessageCursor <$> field <*> (MessageCursor <$> field) <*> field <*> field)
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
 
 listActiveCompartments ::
   (WithConnection :> es, IOE :> es) =>

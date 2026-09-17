@@ -52,6 +52,20 @@ spec = describe "reload candidate configuration" $ do
         Left err -> err `shouldBe` ConfigValidationFailed 1
         Right _ -> expectationFailure "invalid candidate was accepted"
 
+  it "reports incomplete Matrix settings through structured validation" $
+    withArgs ["--llm-api-key", "test-key", "--matrix-homeserver", "https://matrix.example.test"] $ do
+      result <- loadConfigCandidate
+      case result of
+        Left (ConfigValidationFailed count) -> count `shouldSatisfy` (> 0)
+        _ -> expectationFailure "expected structured Matrix validation failure"
+
+  it "reports incomplete iMessage settings through structured validation" $
+    withArgs ["--llm-api-key", "test-key", "--imessage-bridge-url", "http://127.0.0.1:12345"] $ do
+      result <- loadConfigCandidate
+      case result of
+        Left (ConfigValidationFailed count) -> count `shouldSatisfy` (> 0)
+        _ -> expectationFailure "expected structured iMessage validation failure"
+
   it "returns a structured load failure for a missing explicit file" $
     withArgs ["--llm-api-key", "test-key", "--config-file", "/definitely/missing/max.yaml"] $ do
       loadConfigCandidate >>= (`shouldSatisfy` isLeft)

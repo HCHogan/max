@@ -48,7 +48,10 @@ import Max.DB.Monitor.Admission qualified as MonitorAdmission
 import Max.DB.Task.Admission qualified as Admission
 import Max.DB.Task.Authorization qualified as Authorization
 import Max.DB.Task.Control qualified as Control
-import Max.DB.Task.Frontend (claimFrontend, frontendWorkWaitingWithin)
+import Max.DB.Task.Frontend
+  ( claimFrontend,
+    frontendWorkWaitingWithin,
+  )
 import Max.DB.Task.Overview qualified as Overview
 import Max.DB.Task.Query qualified as Query
 import Max.DB.Task.Record qualified as Record
@@ -58,10 +61,20 @@ import Max.DB.Task.Settlement (settleNotification)
 import Max.DB.Transaction (withTransaction)
 import Max.Execution.Types (ExecutionStep)
 import Max.Monitor.Types (MonitorFireId (..))
-import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
-import Max.Task.Admission (AdmissionError, TaskAdmissionReceipt (..))
+import Max.Platform.Types
+  ( CanonicalMessageId (..),
+    PrincipalId (..),
+  )
+import Max.Task.Admission
+  ( AdmissionError,
+    TaskAdmissionReceipt (..),
+  )
 import Max.Task.State qualified as State
-import Max.Task.Types (TaskProfile (..), parseProfile, profileName)
+import Max.Task.Types
+  ( TaskProfile (..),
+    parseProfile,
+    profileName,
+  )
 import Max.Task.View
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..))
 import OneBot.Types (GroupId (..))
@@ -92,10 +105,12 @@ admitTaskReceipt turn (CanonicalMessageId message) (PrincipalId principal) key o
     receipt (task :: Record.TaskRecord) = TaskAdmissionReceipt task.taskId task.revision task.status task.profile task.deadline task.maxCalls task.maxRounds task.grants
 
 taskControl :: (WithConnection :> es, IOE :> es) => GroupId -> PrincipalId -> Bool -> Int64 -> Text -> Maybe Int -> Maybe CanonicalMessageId -> Text -> Eff es Value
-taskControl (GroupId group) (PrincipalId principal) administrator identifier operation revision source note = withTransaction $
+taskControl group principal administrator identifier operation revision source note = withTransaction $
   case State.parseTaskOperation operation of
     Nothing -> pure (object ["error" .= ("invalid task operation" :: Text)])
-    Just command -> renderControl <$> Control.controlTask group principal administrator identifier command revision ((.unCanonicalMessageId) <$> source) note
+    Just operation' -> case State.taskCommand operation' revision note of
+      Left failure -> pure (renderControl (Left failure))
+      Right command -> renderControl <$> Control.controlTask group principal administrator (State.DurableTaskId identifier) command source
 
 renderControl :: Either State.TaskControlError State.TaskControlReceipt -> Value
 renderControl = \case
@@ -346,7 +361,7 @@ steerChildTyped turn identifier note = withTransaction $ do
       "SELECT source.initiator_principal_id,conversation.legacy_group_id FROM durable_tasks child JOIN task_attempts parent ON child.parent_task_id=parent.task_id AND child.parent_revision=parent.revision JOIN agent_turns source USING(turn_id) JOIN conversations conversation ON conversation.conversation_id=source.conversation_id WHERE parent.turn_id=? AND child.task_id=?"
       (turn, identifier)
   case parents of
-    [(actor, group)] | authorized -> Control.controlTask group actor False identifier State.Steer Nothing Nothing note
+    [(actor, group)] | authorized -> Control.controlTask (GroupId group) (PrincipalId actor) False (State.DurableTaskId identifier) (State.SteerTask note) Nothing
     _ -> pure (Left (if authorized then State.TaskChildScopeRequired else State.TaskCallerFenced))
 
 durableWorkOverview :: (WithConnection :> es, IOE :> es) => Eff es Value

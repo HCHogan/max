@@ -51,9 +51,25 @@ import Data.Maybe (listToMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, addUTCTime, getCurrentTime)
-import Database.PostgreSQL.Simple (Only (..), execute, query, withTransaction)
-import Max.Concurrent.Lock (SharedLock, newSharedLock, withExclusiveLock, withLock, withSharedLock)
+import Data.Time
+  ( NominalDiffTime,
+    UTCTime,
+    addUTCTime,
+    getCurrentTime,
+  )
+import Database.PostgreSQL.Simple
+  ( Only (..),
+    execute,
+    query,
+    withTransaction,
+  )
+import Max.Concurrent.Lock
+  ( SharedLock,
+    newSharedLock,
+    withExclusiveLock,
+    withLock,
+    withSharedLock,
+  )
 import Max.DB.Connection (DbPool, withConn)
 import Max.Sandbox.Runtime
   ( ExecResult (..),
@@ -75,6 +91,7 @@ import Max.Sandbox.Runtime
     sandboxNetwork,
     wrapPackages,
   )
+import Max.Sandbox.Types (SandboxId (..))
 import OneBot.Types (GroupId (..))
 
 -- | All container/volume names start here; we own the namespace,
@@ -84,9 +101,6 @@ namePrefix :: Text
 namePrefix = "max-sb-"
 
 -- | Short, human-typeable id like @s7@.  Allocated by the durable database sequence.
-newtype SandboxId = SandboxId {unSandboxId :: Text}
-  deriving stock (Show, Eq, Ord)
-
 data SandboxEntry = SandboxEntry
   { seId :: !SandboxId,
     seGroup :: !GroupId,

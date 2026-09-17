@@ -26,6 +26,7 @@ import Max.CodeMode.Execution
 import Max.CodeMode.Wasm (WasmLimits (..), defaultWasmLimits)
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools (ExecutionHooks, ExecutionSession)
+import Max.Skill.Contract (Contract)
 import Max.Skill.Package (Workflow (..))
 import Max.Task.Policy (taskDeadlineSeconds)
 import Max.Tool.Types
@@ -70,7 +71,7 @@ workflowProgram catalog reference version workflow args =
     (Just workflow.wfOutput)
     (Just (object ["reference" .= reference, "version" .= version, "args" .= args]))
 
-programWithInput :: [CatalogTool] -> Text -> Maybe Value -> Maybe Value -> Maybe Value -> WasmProgram
+programWithInput :: [CatalogTool] -> Text -> Maybe Value -> Maybe Contract -> Maybe Value -> WasmProgram
 programWithInput catalog source args contract workflow =
   WasmProgram
     javaScriptRuntime

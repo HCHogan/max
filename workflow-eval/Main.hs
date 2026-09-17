@@ -130,7 +130,7 @@ runCase cfg opts pool sources group parallel = do
       requests = [object ["objective" .= question, "profile" .= ("research" :: Text), "inputs" .= object ["files" .= files], "output_contract" .= contract] | (question, files) <- questions]
       script = "max.phase('source audit'); const requests=" <> json requests <> "; return " <> (if parallel then "max.batch(requests.map(agent=>({agent}))).map(max.value)" else "requests.map(agent)") <> ";"
       hooks = ExecutionHooks (pure ()) (durableExecutionAdmission.eaStartTool (GroupId group) parent) finishJournalExecution markJournalOutcomeUnknown (Just (taskWorkflowHost context parent))
-      registry = either (error . show) id (buildToolRegistry (filter ((/= ToolRef "web_search") . (.tdRef)) definitions) [Tool name "host task marker" (toolObject [] []) (const (pure (Left "use the host primitive"))) | name <- ["task_start", "task_finish", "task_progress"]])
+      registry = either (error . show) id (buildToolRegistry (filter ((/= ToolRef "web_search") . (.tdRef)) definitions) [legacyTool name "host task marker" (toolObject [] []) (const (pure (Left "use the host primitive"))) | name <- ["task_start", "task_finish", "task_progress"]])
   calls <- newIORef []
   workers <- newIORef []
   let workerLoop = forever $ do
@@ -224,7 +224,7 @@ runChild cfg opts pool sources identifier records = do
 factory :: (WithConnection :> es, Blob :> es, IOE :> es, ToolControl :> es) => Map.Map Text Text -> ToolContext -> Either ToolCatalogError (ToolRegistry es)
 factory sources context = buildToolRegistry definitions (readerTool : filter (\tool -> tool.toolName `elem` ["task_start", "task_finish", "task_progress"]) (taskToolsWithDatabase context))
   where
-    readerTool = Tool "web_search" "Read frozen repository source. query must equal an input file path." (toolObject [("query", stringParam "Exact file path")] ["query"]) $ \args -> pure $ do
+    readerTool = legacyTool "web_search" "Read frozen repository source. query must equal an input file path." (toolObject [("query", stringParam "Exact file path")] ["query"]) $ \args -> pure $ do
       path <- either (Left . T.pack) Right (parseEither (withObject "source read" (.: "query")) args)
       body <- maybe (Left "file outside the frozen evidence set") Right (Map.lookup path sources)
       Right (object ["source" .= ("source:" <> path), "body" .= body, "fingerprint" .= fingerprint (String body)])

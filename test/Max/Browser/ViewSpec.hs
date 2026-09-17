@@ -7,14 +7,14 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Effectful (runEff)
 import Max.Browser.Registry (browserScopeForTurn, newBrowserRegistry)
+import Max.Browser.ToolRuntime (browserToolsAt)
 import Max.Browser.View
 import Max.Effects.Agent (toolResultMessage)
 import Max.Effects.LLM (ChatMessage (..), ToolCall (..))
 import Max.Effects.ToolOutput (newToolOutputQueue, runToolOutput)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.Tools (Tool (..), toolRun)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Task.Types (TaskProfile (..), taskGrants)
-import Max.Tools.Browser (browserToolsAt)
 import Max.Turn.Types (AgentTurnId (..))
 import OneBot.Types (GroupId (..))
 import Test.Hspec
@@ -100,6 +100,6 @@ spec = describe "browser view and surface" $ do
     taskGrants Research candidates `shouldBe` Map.empty
     case runners of
       browser : _ ->
-        runEff (do queue <- newToolOutputQueue 0; runToolOutput queue (browser.toolRun (object ["action" .= ("evaluate" :: String), "expression" .= ("1+1" :: String)])))
+        runEff (do queue <- newToolOutputQueue 0; runToolOutput queue (toolRun browser (object ["action" .= ("evaluate" :: String), "expression" .= ("1+1" :: String)])))
           >>= (`shouldSatisfy` either (T.isInfixOf "requires a browser task") (const False))
       [] -> expectationFailure "missing browser runner"

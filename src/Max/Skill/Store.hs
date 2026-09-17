@@ -19,8 +19,15 @@ import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Task.Authorization (authorizeCallerWithin)
-import Max.DB.Transaction (withReadSnapshot, withTransaction)
-import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
+import Max.DB.Transaction
+  ( InTransaction,
+    withReadSnapshot,
+    withTransaction,
+  )
+import Max.Platform.Types
+  ( CanonicalMessageId (..),
+    PrincipalId (..),
+  )
 import Max.Skill.Authoring
 import Max.Skill.Package (SkillEvidence (..))
 import Max.Turn.Types (AgentTurnId)
@@ -33,7 +40,7 @@ data AuthoringScope = AuthoringScope
     asTurn :: !(Maybe AgentTurnId)
   }
 
-authorized :: (WithConnection :> es, IOE :> es) => AuthoringScope -> Eff es Bool
+authorized :: (InTransaction :> es, WithConnection :> es, IOE :> es) => AuthoringScope -> Eff es Bool
 authorized scope = case scope.asTurn of
   Nothing -> pure False
   Just turn -> do
@@ -122,7 +129,7 @@ recordValidation scope name revision context report = withTransaction $ do
 
 -- Caller owns the registry gate and standalone commit boundary. No cache update
 -- occurs in this function; no validation code executes under this transaction.
-promoteDraftWithin :: (WithConnection :> es, IOE :> es) => AuthoringScope -> DraftVersion -> Integer -> Integer -> Value -> Eff es (Either Text Int64)
+promoteDraftWithin :: (InTransaction :> es, WithConnection :> es, IOE :> es) => AuthoringScope -> DraftVersion -> Integer -> Integer -> Value -> Eff es (Either Text Int64)
 promoteDraftWithin scope draft validation expected context = do
   allowed <- authorized scope
   if not allowed

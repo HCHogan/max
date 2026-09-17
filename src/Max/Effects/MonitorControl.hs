@@ -14,9 +14,13 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Monitor qualified as DB
 import Max.DB.Task.Authorization (authorizeCallerWithin)
 import Max.DB.Task.MonitorControl qualified as Control
-import Max.DB.Transaction (withTransaction)
+import Max.DB.Transaction (InTransaction, withTransaction)
 import Max.Monitor.Control
-import Max.Monitor.Types (LedgerMatchSpec, MonitorOrdinal (..), MonitorRef)
+import Max.Monitor.Types
+  ( LedgerMatchSpec,
+    MonitorOrdinal (..),
+    MonitorRef,
+  )
 import Max.Platform.Types (PrincipalId (..))
 import Max.Turn.Types (AgentTurnRef (..))
 import OneBot.Types (GroupId (..))
@@ -59,7 +63,7 @@ runMonitorControl scope = interpret $ \_ -> \case
     let GroupId group = scope.group; PrincipalId actor = scope.principal
      in Control.controlMonitor group actor scope.armingAllowed ordinal.unMonitorOrdinal command cancelTasks
   where
-    withCaller :: forall failure result. failure -> (AgentTurnRef -> Eff es (Either failure result)) -> Eff es (Either failure result)
+    withCaller :: forall failure result. failure -> (AgentTurnRef -> Eff (InTransaction : es) (Either failure result)) -> Eff es (Either failure result)
     withCaller failure action = case scope.turn of
       Nothing -> pure (Left failure)
       Just turn -> withTransaction $ do

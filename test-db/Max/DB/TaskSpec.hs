@@ -40,7 +40,7 @@ import Max.Effects.MonitorQuery qualified as MonitorQueryCapability
 import Max.Effects.TaskControl qualified as ControlCapability
 import Max.Effects.TaskExecution qualified as ExecutionCapability
 import Max.Effects.ToolControl (runToolControl)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.Tools (Tool (..), toolRun)
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.IR (Body (..), Node (NText))
 import Max.Monitor.Control qualified as MonitorControl
@@ -56,7 +56,7 @@ import Max.Task.Notice (NoticeDecision (PublishNotice), NoticeReview (..))
 import Max.Task.Overview qualified as WorkView
 import Max.Task.Policy (frontendDeadlineSeconds)
 import Max.Task.Query qualified as QueryView
-import Max.Task.State (FailureKind (..), TaskControlError (TaskCallerFenced, TaskNotFound), TaskOperation (Cancel, Steer))
+import Max.Task.State (FailureKind (..), TaskControlError (TaskCallerFenced, TaskNotFound))
 import Max.Task.State qualified as TaskState
 import Max.Task.ToolRuntime (taskToolsWithDatabase)
 import Max.Task.Types (TaskProfile (..), taskHandle)
@@ -333,7 +333,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     source@(turn, message, actor) <- seed pool 900 1
     identifier <- admit pool source "caller-fence"
     let scope = ControlCapability.TaskControlScope (GroupId 900) (Just turn) message actor Map.empty False
-        control note = withDb pool . ControlCapability.runTaskControl scope $ ControlCapability.controlTask identifier Steer Nothing note
+        control note = withDb pool . ControlCapability.runTaskControl scope $ ControlCapability.controlTask (TaskState.DurableTaskId identifier) (TaskState.SteerTask note)
     accepted <- control "before caller finishes"
     accepted `shouldSatisfy` either (const False) (const True)
     withDb pool (finishAgentTurn turn TurnSucceeded 0 Nothing Nothing)
@@ -346,7 +346,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     foreignSource <- seed pool 901 1
     identifier <- admit pool foreignSource "other-conversation"
     let scope = ControlCapability.TaskControlScope (GroupId 900) (Just turn) message actor Map.empty False
-    rejected <- withDb pool . ControlCapability.runTaskControl scope $ ControlCapability.controlTask identifier Steer Nothing "guessed handle"
+    rejected <- withDb pool . ControlCapability.runTaskControl scope $ ControlCapability.controlTask (TaskState.DurableTaskId identifier) (TaskState.SteerTask "guessed handle")
     rejected `shouldBe` Left TaskNotFound
 
   it "rechecks the bound caller identity against its current turn" $ do
@@ -354,7 +354,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     ownerSource@(_, _, owner) <- seed pool 900 2
     identifier <- admit pool ownerSource "other-owner"
     let forgedScope = ControlCapability.TaskControlScope (GroupId 900) (Just turn) message owner Map.empty False
-    rejected <- withDb pool . ControlCapability.runTaskControl forgedScope $ ControlCapability.controlTask identifier Cancel Nothing "wrong caller"
+    rejected <- withDb pool . ControlCapability.runTaskControl forgedScope $ ControlCapability.controlTask (TaskState.DurableTaskId identifier) (TaskState.CancelTask "wrong caller")
     rejected `shouldBe` Left TaskCallerFenced
 
   it "takes admission authority from the bound scope rather than input JSON" $ do
@@ -448,7 +448,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
                   (TurnIdentity (GroupId 900) message (UserId 1) (UserId 99) actor Nothing (Just output))
                   (TurnCapabilities True False False noAdvertisedCaps False grants Nothing False)
           withDbLog pool $ fmap fst . runToolControl $ case [tool | tool <- taskToolsWithDatabase toolContext, tool.toolName == "task_start"] of
-            [tool] -> tool.toolRun (object ["key" .= profile, "objective" .= ("bounded work" :: Text), "profile" .= profile])
+            [tool] -> toolRun tool (object ["key" .= profile, "objective" .= ("bounded work" :: Text), "profile" .= profile])
             _ -> error "task_start missing"
     denied <- invokeWith Map.empty ("browser" :: Text)
     denied `shouldSatisfy` either (const True) (const False)

@@ -17,8 +17,12 @@ import Effectful
 import Effectful.Reader.Static (Reader, ask)
 import Max.Effects.MonitorControl (MonitorControl, armMonitor)
 import Max.Effects.MonitorControl qualified as Control
-import Max.Effects.MonitorQuery (MonitorQuery, listMonitors, readMonitorHistory)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.MonitorQuery
+  ( MonitorQuery,
+    listMonitors,
+    readMonitorHistory,
+  )
+import Max.Effects.Tools (Tool (..), ToolRunner (..), legacyTool)
 import Max.IR (MediaKind (..))
 import Max.Monitor.Control
 import Max.Monitor.Policy (parseOverlapPolicy)
@@ -28,7 +32,15 @@ import Max.Monitor.View (ArmedMonitor (..))
 import Max.Platform.Types (PrincipalId (..))
 import Max.Task.Types (parseProfile, taskProfileNames)
 import Max.Time (fmtDateHM)
-import Max.Tools.Schema (boolParam, boundedIntegerParam, enumParam, integerParam, noArguments, stringParam, toolObject)
+import Max.Tools.Schema
+  ( boolParam,
+    boundedIntegerParam,
+    enumParam,
+    integerParam,
+    noArguments,
+    stringParam,
+    toolObject,
+  )
 
 monitorToolsFor ::
   (MonitorQuery :> es, MonitorControl :> es, Reader UTCTime :> es) =>
@@ -77,7 +89,7 @@ armMonitorTool tz =
             ("max_fires", boundedIntegerParam 1 100 100)
           ]
           ["goal", "trigger"],
-      toolRun = \raw -> case parseEither (withObject "args" parseArm) raw of
+      toolRunner = LegacyRunner $ \raw -> case parseEither (withObject "args" parseArm) raw of
         Left err -> pure (Left ("bad args: " <> T.pack err))
         Right args
           | T.null (T.strip args.aaGoal) -> pure (Left "goal 不能为空")
@@ -183,7 +195,7 @@ listMonitorsTool tz =
     { toolName = "list_monitors",
       toolDescription = "列出当前会话全部 armed monitor；用返回的 m# handle 取消。",
       toolSchema = noArguments,
-      toolRun = \_ -> Right . toJSON . map summarize <$> listMonitors
+      toolRunner = LegacyRunner $ \_ -> Right . toJSON . map summarize <$> listMonitors
     }
   where
     summarize monitor =
@@ -206,7 +218,7 @@ cancelMonitorTool =
     { toolName = "cancel_monitor",
       toolDescription = "停止 monitor 的未来触发和未受理 occurrence；默认不取消已经受理的任务。cancel_tasks=true 才额外取消在途任务。仅发起者/管理员可用。",
       toolSchema = toolObject [("handle", stringParam "例如 m#3。"), ("cancel_tasks", boolParam "是否同时取消已受理任务，默认 false。")] ["handle"],
-      toolRun = \raw -> case parseEither (withObject "args" $ \fields -> (,) <$> fields .: "handle" <*> fields .:? "cancel_tasks" .!= False) raw of
+      toolRunner = LegacyRunner $ \raw -> case parseEither (withObject "args" $ \fields -> (,) <$> fields .: "handle" <*> fields .:? "cancel_tasks" .!= False) raw of
         Left err -> pure (Left ("bad args: " <> T.pack err))
         Right (handle, cancelTasks) -> case parseMonitorHandle handle of
           Nothing -> pure (Left "handle 格式无效，应为 m#<正整数>")
@@ -230,7 +242,7 @@ configureMonitorTool =
             ("change_only", boolParam "仅稳定 observation 改变时报告")
           ]
           ["handle", "revision", "goal", "overlap", "pending_policy", "profile", "change_only"],
-      toolRun = \raw -> case parseEither
+      toolRunner = LegacyRunner $ \raw -> case parseEither
         ( withObject "configure monitor" $ \fields ->
             (,,,,,,,)
               <$> fields .: "handle"
@@ -266,7 +278,7 @@ configureMonitorTool =
 
 monitorHistoryTool :: (MonitorQuery :> es) => Tool es
 monitorHistoryTool =
-  Tool
+  legacyTool
     "monitor_history"
     "查看 monitor 状态、revision、下次触发和最近 150 次 fire：任务链接、合并、溢出及失败原因。"
     (toolObject [("handle", stringParam "m# 标识")] ["handle"])

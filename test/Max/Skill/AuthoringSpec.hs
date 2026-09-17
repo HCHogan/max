@@ -9,6 +9,7 @@ import Data.Text (Text)
 import ExecutionFixture
 import Max.Effects.Tools
 import Max.Skill.Authoring
+import Max.Skill.Contract (Contract, parseContract)
 import Max.Skill.Package
 import Max.Skill.Validation
 import Max.Tool.Catalog (catalogTools)
@@ -21,7 +22,7 @@ spec = describe "isolated skill fixture validation" $ do
   it "validates phase and agent fixtures without any live child or database runner" $ do
     let child = object ["objective" .= ("bounded research" :: Text), "profile" .= ("research" :: Text)]
         result = object ["findings" .= ("verified" :: Text)]
-        workflow = Workflow "delegate" "max.phase('research'); return agent({objective:'bounded research',profile:'research'});" contract (object ["type" .= ("object" :: Text), "additionalProperties" .= True]) ["task_start", "task_progress"]
+        workflow = Workflow "delegate" "max.phase('research'); return agent({objective:'bounded research',profile:'research'});" contract (checkedContract (object ["type" .= ("object" :: Text), "additionalProperties" .= True])) ["task_start", "task_progress"]
         content = draft.dvContent {dcPackage = SkillPackage [] (Map.singleton "run" workflow), dcFixtures = [Fixture "run" args [FixtureCall "phase" (String "research") (Right Null), FixtureCall "agent" child (Right result)] result]}
         available = [entry {ctDefinition = entry.ctDefinition {tdRef = ToolRef name}} | entry <- catalog, name <- ["task_start", "task_progress"]]
     validateFixtures available (DraftVersion 1 content) `shouldReturn` ValidationReport []
@@ -66,8 +67,8 @@ catalog = either (error . show) (catalogTools . registryCatalog) (buildToolRegis
 args :: Value
 args = object ["value" .= (3 :: Int)]
 
-contract :: Value
-contract = object ["type" .= ("object" :: Text), "properties" .= object ["value" .= object ["type" .= ("integer" :: Text)]], "required" .= (["value"] :: [Text]), "additionalProperties" .= False]
+contract :: Contract
+contract = checkedContract $ object ["type" .= ("object" :: Text), "properties" .= object ["value" .= object ["type" .= ("integer" :: Text)]], "required" .= (["value"] :: [Text]), "additionalProperties" .= False]
 
 fixture :: Fixture
 fixture = Fixture "run" args [FixtureCall "echo" args (Right args)] args
@@ -77,3 +78,6 @@ draft = DraftVersion 1 (DraftContent "demo" "description" "instructions" (SkillP
 
 change :: Text -> DraftVersion -> DraftVersion
 change source d = d {dvContent = d.dvContent {dcPackage = d.dvContent.dcPackage {spWorkflows = Map.map (\w -> w {wfSource = source}) d.dvContent.dcPackage.spWorkflows}}}
+
+checkedContract :: Value -> Contract
+checkedContract = either (error . show) id . parseContract

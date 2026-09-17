@@ -31,7 +31,10 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Max.Browser.ToolRuntime (browserToolsFor)
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion)
-import Max.Conversation.ToolRuntime (builtinsWithDatabase, groupToolsWithDatabase)
+import Max.Conversation.ToolRuntime
+  ( builtinsWithDatabase,
+    groupToolsWithDatabase,
+  )
 import Max.Effects.Blob (Blob)
 import Max.Effects.BlobHost (BlobHost)
 import Max.Effects.Embedding (Embedding)
@@ -59,23 +62,42 @@ import Max.Effects.Tools
 import Max.Env (BotEnv (..), applyRuntimeSnapshot)
 import Max.File.ToolRuntime (fileToolsWithDatabase)
 import Max.HttpRuntime (HttpRuntime)
-import Max.Media.ToolRuntime (imageToolsWithDatabase, stickerToolsWithDatabase, videoToolsWithDatabase)
+import Max.Media.ToolRuntime
+  ( imageToolsWithDatabase,
+    stickerToolsWithDatabase,
+    videoToolsWithDatabase,
+  )
 import Max.Memory.ToolRuntime (memoryToolsWithDatabase)
-import Max.Monitor.ToolRuntime (monitorToolsWithDatabase, reminderToolsWithDatabase)
+import Max.Monitor.ToolRuntime
+  ( monitorToolsWithDatabase,
+    reminderToolsWithDatabase,
+  )
 import Max.Pin.ToolRuntime (pinToolsWithDatabase)
 import Max.Platform.Types (noAdvertisedCaps)
 import Max.Sandbox.Runtime (networkForGroup)
-import Max.Skill.ToolRuntime (skillAuthoringToolsWithDatabase)
+import Max.Sandbox.ToolRuntime (sandboxToolsWithRuntime)
+import Max.Search.Runtime (searchToolsWithRuntime)
+import Max.Skill.ToolRuntime
+  ( skillAuthoringToolsWithDatabase,
+    skillToolsWithRuntime,
+  )
 import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Task.ToolRuntime (taskToolsWithDatabase)
 import Max.Tool.Bundles (toolBundle, toolVisible)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Types (ToolCallMode (..))
-import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolRuntimeSnapshot, toolSkillLoads, toolStickers, withToolSkillLoads)
+import Max.ToolContext
+  ( ToolContext,
+    TurnCapabilities (..),
+    toolCapabilities,
+    toolGroupId,
+    toolMultimodal,
+    toolRuntimeSnapshot,
+    toolSkillLoads,
+    toolStickers,
+    withToolSkillLoads,
+  )
 import Max.Tools.Bilibili (bilibiliToolsFor)
-import Max.Tools.Sandbox (sandboxToolsFor)
-import Max.Tools.Search (searchToolsFor)
-import Max.Tools.Skills (skillToolsFor)
 import Max.Turn.Continuity (toolCatalogFingerprint)
 import OneBot.Types (GroupId (..), isPrivateChat)
 
@@ -177,13 +199,13 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
         <> memoryToolsWithDatabase dc
         <> pinToolsWithDatabase dispatchEnv.beSessions dispatchEnv.beDefaultModel dc
         <> taskToolsWithDatabase dc
-        <> skillToolsFor dispatchEnv.beSkills dc prepareSkill bindPackages
+        <> skillToolsWithRuntime dispatchEnv.beSkills dc prepareSkill bindPackages
         <> skillAuthoringToolsWithDatabase dispatchEnv.beSkills dc authoringCatalog
         <> bilibiliToolsFor dispatchEnv.beTimeZone dc
-        <> sandboxToolsFor dispatchEnv.beTimeZone (toolGroupId dc) dispatchEnv.beSandboxes
+        <> sandboxToolsWithRuntime dispatchEnv.beTimeZone (toolGroupId dc) dispatchEnv.beSandboxes
         <> fileToolsWithDatabase dispatchEnv.beTimeZone dc dispatchEnv.beSandboxes
         <> [t | toolStickers dc && dispatchEnv.beEmbeddingEnabled, t <- stickerToolsWithDatabase]
-        <> maybe [] (searchToolsFor runtime) dispatchEnv.beSearch
+        <> maybe [] (searchToolsWithRuntime runtime) dispatchEnv.beSearch
         <> [t | toolMultimodal dc, t <- browserToolsFor dc dispatchEnv.beBrowsers dispatchEnv.beBrowserProxy]
         <> [t | toolMultimodal dc, t <- videoToolsWithDatabase dc]
 
@@ -271,7 +293,7 @@ toolInventory =
     -- carries the role gate (ADR 006 "quietness is structural").
     -- Audited: bad args, empty text and every resolveWhen rejection all return
     -- before armCannedTimeMonitor is reached.
-    always (failsBeforeEffects (writeToolV 2 "set_reminder" ["monitor.db"] [CurrentConversation])),
+    always (legacyFailureFingerprint (writeToolV 2 "set_reminder" ["monitor.db"] [CurrentConversation])),
     always (readToolV 2 "list_reminders" ["monitor.db"] [CurrentConversation]),
     always (writeToolV 2 "cancel_reminder" ["monitor.db"] [CurrentConversation]),
     gated MonitorArmOnly (writeToolV 1 "arm_monitor" ["monitor.db"] [CurrentConversation]),
@@ -289,10 +311,10 @@ toolInventory =
     always (writeTool "pin_message" ["session.db"] [CurrentConversation]),
     always (writeTool "unpin_message" ["session.db"] [CurrentConversation]),
     gated SkillsOnly (reflectTool "use_skill"),
-    gated SkillsOnly (failsBeforeEffects (writeTool "skill_save" ["skill.drafts"] [CurrentConversation])),
+    gated SkillsOnly (legacyFailureFingerprint (writeTool "skill_save" ["skill.drafts"] [CurrentConversation])),
     gated SkillsOnly (readTool "skill_inspect" ["skill.drafts", "skill.publications"] [CurrentConversation]),
-    gated SkillsOnly (withDeadline 120 (failsBeforeEffects (writeTool "skill_validate" ["skill.validations"] [CurrentConversation]))),
-    gated SkillsOnly (failsBeforeEffects (writeTool "skill_publish" ["skill.publications"] [CurrentConversation])),
+    gated SkillsOnly (withDeadline 120 (legacyFailureFingerprint (writeTool "skill_validate" ["skill.validations"] [CurrentConversation]))),
+    gated SkillsOnly (legacyFailureFingerprint (writeTool "skill_publish" ["skill.publications"] [CurrentConversation])),
     always (writeTool "task_start" ["task.db"] [CurrentConversation]),
     always (readTool "task_list" ["task.db"] [CurrentConversation]),
     always (readTool "task_status" ["task.db"] [CurrentConversation]),
@@ -303,7 +325,7 @@ toolInventory =
     gated BackgroundOnly ((writeTool "task_progress" ["task.db"] [CurrentConversation]) {tdCallMode = CheckpointCall}),
     -- Returned request validation/ownership errors precede every write in
     -- submitRequestWithInputs. Exceptions and timeouts remain outcome-unknown.
-    gated FrontendOnly ((failsBeforeEffects (writeToolV 2 "request_finish" ["task.db"] [CurrentConversation])) {tdCallMode = FinishCall}),
+    gated FrontendOnly ((legacyFailureFingerprint (writeToolV 2 "request_finish" ["task.db"] [CurrentConversation])) {tdCallMode = FinishCall}),
     -- Queues turn-scoped inline video as well as reading the network.  Keep it
     -- sequential inside one agent round so concurrent calls cannot race the
     -- shared attachment order/budget; independent turns have independent
@@ -373,14 +395,10 @@ defaultToolDeadline = ToolDeadline 120
 withDeadline :: Int -> ToolDefinition -> ToolDefinition
 withDeadline seconds definition' = definition' {tdDeadline = ToolDeadline seconds}
 
--- | Record that a tool has been read and every error path in it precedes every
--- effect, so a rejection can be reported as a plain failure the model may fix
--- and retry rather than as an outcome it must not assume anything about.
---
--- Per-tool and opt-in on purpose: it is a claim about one implementation, and
--- it stops being true the moment someone moves a write above a validation.
-failsBeforeEffects :: ToolDefinition -> ToolDefinition
-failsBeforeEffects definition' = definition' {tdFailuresPrecedeEffects = True}
+-- | Preserve historical catalog/grant hashes. Execution ignores this bit;
+-- new runners report failure knowledge through ToolOutcome.
+legacyFailureFingerprint :: ToolDefinition -> ToolDefinition
+legacyFailureFingerprint definition' = definition' {tdFailuresPrecedeEffects = True}
 
 readTool :: Text -> [Text] -> [ToolAuthority] -> ToolDefinition
 readTool name domains =

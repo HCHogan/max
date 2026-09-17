@@ -24,8 +24,12 @@ import Effectful.Exception (IOException, try)
 import Effectful.Log
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.MediaQuery (MediaQuery, readVideo)
-import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.ToolOutput
+  ( InlineMedia (..),
+    ToolOutput,
+    queueInlineMedia,
+  )
+import Max.Effects.Tools (Tool (..), ToolRunner (..))
 import Max.Media.Types (StoredVideo (..))
 import Max.Time (fmtDurationSec)
 import Max.Tool.Types (ToolSpec (..))
@@ -44,7 +48,7 @@ viewVideoTool =
     { toolName = viewVideoSpec.specName,
       toolDescription = viewVideoSpec.specDescription,
       toolSchema = viewVideoSpec.specSchema,
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid, seg) -> do
           mVideo <- readVideo mid seg

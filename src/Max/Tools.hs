@@ -27,21 +27,53 @@ import Data.Time (TimeZone)
 import Effectful
 import Effectful.Log
 import Max.Context.Media (tagMediaMarkers)
-import Max.Effects.ConversationQuery (ConversationQuery, expandEpisode, readForward, readMessage, searchConversation)
-import Max.Effects.Embedding (Embedding, embedBatch, renderEmbeddingFault)
-import Max.Effects.PlatformInteraction (PlatformInteraction, pokeUser)
-import Max.Effects.Tools (Tool (..))
-import Max.Effects.TurnQuery (TurnQuery, expandTurnResult, expandTurnTrace)
+import Max.Effects.ConversationQuery
+  ( ConversationQuery,
+    expandEpisode,
+    readForward,
+    readMessage,
+    searchConversation,
+  )
+import Max.Effects.Embedding
+  ( Embedding,
+    embedBatch,
+    renderEmbeddingFault,
+  )
+import Max.Effects.PlatformInteraction
+  ( PlatformInteraction,
+    pokeUser,
+  )
+import Max.Effects.Tools (Tool (..), ToolRunner (..))
+import Max.Effects.TurnQuery
+  ( TurnQuery,
+    expandTurnResult,
+    expandTurnTrace,
+  )
 import Max.Embedding (EmbeddingRecord)
-import Max.Episode.Types (EpisodeExpansion (..), SourceRange (..), episodeHandleText, parseEpisodeHandle)
-import Max.History.Types (HistoryItem (..), LedgerItem (..), MessageCursor (..), bestName)
+import Max.Episode.Types
+  ( EpisodeExpansion (..),
+    SourceRange (..),
+    episodeHandleText,
+    parseEpisodeHandle,
+  )
+import Max.History.Types
+  ( HistoryItem (..),
+    LedgerItem (..),
+    MessageCursor (..),
+    bestName,
+  )
 import Max.Media.Types (MessageMedia)
 import Max.Platform.Failure (renderPlatformFailure)
 import Max.Recall.Types (RecallHit (..))
 import Max.Time (fmtDateHM)
 import Max.Time.Parse (parseTimeArg)
 import Max.ToolContext (ToolContext, toolGroupId)
-import Max.Tools.Schema (boundedIntegerParam, integerParam, stringParam, toolObject)
+import Max.Tools.Schema
+  ( boundedIntegerParam,
+    integerParam,
+    stringParam,
+    toolObject,
+  )
 import Max.Tools.SelfSource (selfSourceTools)
 import Max.Turn.Types (ParsedTurnHandle (..), parseTurnHandle)
 import OneBot.Types (UserId (..))
@@ -79,7 +111,7 @@ getMessageByIdTool tz =
             "库里没有这条就返回 null。"
           ],
       toolSchema = toolObject [("message_id", integerParam "上下文里 #<id> / [reply#<id>] 的那个数字")] ["message_id"],
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
           message <- readMessage mid
@@ -110,7 +142,7 @@ contextSearchTool tz =
             ("limit", boundedIntegerParam 1 30 10)
           ]
           ["query"],
-      toolRun = \args -> case parseEither (withObject "args" parseRecallArgs) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseRecallArgs) args of
         Left err -> pure $ Left ("bad args: " <> T.pack err)
         Right (rawQuery, limit)
           | T.null (T.strip rawQuery) -> pure (Left "bad args: query cannot be blank")
@@ -198,7 +230,7 @@ contextExpandTool tz =
             ("limit", boundedIntegerParam 1 12000 40)
           ]
           ["handle"],
-      toolRun = \args -> case parseEither (withObject "args" parseExpandArgs) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseExpandArgs) args of
         Left err -> pure $ Left ("bad args: " <> T.pack err)
         Right (rawHandle, callId, after, limit) -> case (parseEpisodeHandle rawHandle, parseTurnHandle rawHandle) of
           (Just handle, _) | isNothing callId -> do
@@ -271,7 +303,7 @@ viewForwardTool tz =
             "返回里面的每条消息。嵌套的转发同样以 [forward#<id>] 出现，可以继续展开。"
           ],
       toolSchema = toolObject [("message_id", integerParam "[forward#<id>] 标记里的 id（可能是负数）")] ["message_id"],
-      toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "message_id")) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" (\o -> o .: "message_id")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid :: Int64) -> do
           kids <- readForward mid maxForwardChildren
@@ -297,7 +329,7 @@ pokeTool dc =
             "一次任务最多戳一下，别对同一个人连戳。"
           ],
       toolSchema = toolObject [("qq", integerParam "要戳的人的 QQ号")] ["qq"],
-      toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "qq")) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" (\o -> o .: "qq")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (qq :: Int64) -> do
           eres <- pokeUser (toolGroupId dc) (UserId qq)

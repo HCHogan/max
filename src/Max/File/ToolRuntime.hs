@@ -10,12 +10,11 @@ import Max.Effects.BlobHost (BlobHost)
 import Max.Effects.MediaQuery (runMediaQuery)
 import Max.Effects.Outbound (Outbound)
 import Max.Effects.Tools (Tool, hoistTool)
-import Max.Reply.Caption (captionBody)
+import Max.File.TransferRuntime (runFileTransferWithDatabase)
 import Max.Sandbox.Registry (SandboxRegistry)
-import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolOutputCapabilities)
+import Max.ToolContext (ToolContext (toolConversationScope))
 import Max.Tools.Files (fileToolsFor)
 
 fileToolsWithDatabase :: (BlobHost :> es, Blob :> es, Outbound :> es, Log :> es, WithConnection :> es, IOE :> es) => TimeZone -> ToolContext -> SandboxRegistry -> [Tool es]
 fileToolsWithDatabase tz context sandboxes =
-  map (hoistTool (runMediaQuery (toolConversationScope context))) $
-    fileToolsFor tz context (captionBody (toolOutputCapabilities context) (toolGroupId context)) sandboxes
+  map (hoistTool (runMediaQuery (toolConversationScope context) . runFileTransferWithDatabase context sandboxes)) (fileToolsFor tz)

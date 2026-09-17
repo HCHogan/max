@@ -7,6 +7,7 @@ import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple.Types (Only (..))
+import Effectful (raise)
 import Effectful.PostgreSQL (execute, query)
 import Helpers (truncateAll, withDb, withDbLog)
 import Max.ConversationScope (conversationScopeFor)
@@ -58,7 +59,7 @@ spec pool = before_ (truncateAll pool) $ describe "scoped memory capabilities" $
         actor = MemoryActor ActorHistorian Nothing Nothing
         draft = MemoryDraft "same fact" MemoryActive Nothing (MessageEvidence conversation (Just principal) message)
         admit = Store.admitMemory RejectExactDuplicates actor namespace draft
-    withDb pool (withTransaction (admit >> void (execute "SELECT 1/0" ()))) `shouldThrow` anyException
+    withDb pool (withTransaction (raise admit >> void (execute "SELECT 1/0" ()))) `shouldThrow` anyException
     withDb pool (Store.countMemories namespace) `shouldReturn` 0
     outcomes <- mapConcurrently (const (withDb pool admit)) [1 .. 8 :: Int]
     length (filter isRight outcomes) `shouldBe` 1

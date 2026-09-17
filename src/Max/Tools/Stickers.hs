@@ -31,9 +31,13 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Log
-import Max.Effects.Embedding (Embedding, embedBatch, renderEmbeddingFault)
+import Max.Effects.Embedding
+  ( Embedding,
+    embedBatch,
+    renderEmbeddingFault,
+  )
 import Max.Effects.StickerQuery (StickerQuery, searchStickers)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.Tools (Tool (..), ToolRunner (..))
 import Max.Tools.Schema (stringParam, toolObject)
 
 stickerToolsFor ::
@@ -67,7 +71,7 @@ findStickersTool =
             "挑中后在回复里把 [sticker#<id>] 用 [split] 单独隔成一条就会发出去（本工具只搜不发）。"
           ],
       toolSchema = toolObject [("query", stringParam "想表达的情绪/内容，中文短语")] ["query"],
-      toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "query")) args of
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" (\o -> o .: "query")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (q :: Text) -> run q
     }

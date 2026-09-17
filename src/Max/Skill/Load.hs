@@ -2,6 +2,11 @@
 module Max.Skill.Load (resolveSkillLoads) where
 
 import Control.Monad (foldM)
+import Control.Monad.Trans.Except
+  ( ExceptT (..),
+    runExceptT,
+    throwE,
+  )
 import Data.Aeson (Value)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -10,33 +15,22 @@ import Max.Skill.Package
 import Max.Skills (Skill (..))
 import Max.Tool.Bundles
 
-resolveSkillLoads :: Map Text Skill -> Map Text SkillLoad -> (Text -> IO (Either Text (Maybe Value))) -> Text -> IO (Either Text [SkillLoad])
-resolveSkillLoads snapshot loaded prepare = resolve snapshot [] []
+resolveSkillLoads :: (Monad m) => Map Text Skill -> Map Text SkillLoad -> (Text -> m (Either Text (Maybe Value))) -> Text -> m (Either Text [SkillLoad])
+resolveSkillLoads snapshot loaded prepare name = runExceptT (resolve [] [] name)
   where
-    resolve available seen acc name
-      | Map.member name loaded || any ((== name) . (.slName)) acc = pure (Right acc)
-      | name `elem` seen = pure (Left "技能依赖存在循环")
-      | length seen >= 16 || length acc >= 32 = pure (Left "技能依赖超过深度或数量上限")
-      | otherwise = case Map.lookup name available of
-          Nothing -> pure (Left ("技能或固定依赖不可用：" <> name))
-          Just s -> do
-            nested <-
-              foldM
-                ( \result dependency -> case result of
-                    Left err -> pure (Left err)
-                    Right earlier -> resolve available (name : seen) earlier dependency
-                )
-                (Right acc)
-                (skillDependencies name <> packageDependencies s.skillPackage)
-            case nested of
-              Left err -> pure (Left err)
-              Right earlier -> do
-                metadata <- prepare name
-                pure $ do
-                  extra <- metadata
-                  let instructions = frame s <> packageInstructions name s.skillPackage
-                      load = SkillLoad name "" instructions extra (if s.skillPackage == emptyPackage && s.skillEvidence == TrustedSkill then Nothing else Just (PinnedPackage s.skillRevision s.skillPackage Map.empty Nothing s.skillEvidence))
-                  Right (earlier <> [load {slVersion = skillReceiptVersion load}])
+    resolve seen acc selected
+      | Map.member selected loaded || any ((== selected) . (.slName)) acc = pure acc
+      | selected `elem` seen = throwE "技能依赖存在循环"
+      | length seen >= 16 || length acc >= 32 = throwE "技能依赖超过深度或数量上限"
+      | otherwise = case Map.lookup selected snapshot of
+          Nothing -> throwE ("技能或固定依赖不可用：" <> selected)
+          Just skill -> do
+            earlier <- foldM (resolve (selected : seen)) acc (skillDependencies selected <> packageDependencies skill.skillPackage)
+            extra <- ExceptT (prepare selected)
+            let instructions = frame skill <> packageInstructions selected skill.skillPackage
+                package = if skill.skillPackage == emptyPackage && skill.skillEvidence == TrustedSkill then Nothing else Just (PinnedPackage skill.skillRevision skill.skillPackage Map.empty Nothing skill.skillEvidence)
+                receipt = SkillLoad selected "" instructions extra package
+            pure (earlier <> [receipt {slVersion = skillReceiptVersion receipt}])
 
 -- | The framing line matters: the body is configuration, and without
 -- it a body written in the imperative reads like a message someone

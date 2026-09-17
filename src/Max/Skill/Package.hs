@@ -26,13 +26,13 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Max.Skill.Contract (validateContract)
+import Max.Skill.Contract (Contract)
 
 data Workflow = Workflow
   { wfDescription :: !Text,
     wfSource :: !Text,
-    wfInput :: !Value,
-    wfOutput :: !Value,
+    wfInput :: !Contract,
+    wfOutput :: !Contract,
     wfTools :: ![Text]
   }
   deriving stock (Show, Eq)
@@ -122,8 +122,6 @@ validatePackage p = do
       when (T.null (T.strip w.wfSource) || LBS.length (LBS.fromStrict (TE.encodeUtf8 w.wfSource)) > 65536) (Left "workflow source must contain 1..65536 UTF-8 bytes")
       when (length w.wfTools > 64 || nub w.wfTools /= w.wfTools) (Left "workflow tool requirements must be unique, at most 64")
       traverse_ (\name' -> when (T.null name' || T.length name' > 256 || name' == "run_code") (Left "invalid workflow tool requirement")) w.wfTools
-      validateContract w.wfInput
-      validateContract w.wfOutput
 
 packageDependencies :: SkillPackage -> [Text]
 packageDependencies p = nub (p.spDependencies <> ["codemode" | not (Map.null p.spWorkflows)])

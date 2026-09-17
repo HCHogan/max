@@ -15,9 +15,13 @@ import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Task.Authorization
-import Max.DB.Task.FrontendInput (closeInputWithin, unseenInputWithin)
+import Max.DB.Task.FrontendInput
+  ( closeInputWithin,
+    unseenInputWithin,
+  )
 import Max.DB.Task.Record
-import Max.DB.Transaction (withTransaction)
+import Max.DB.Transaction (InTransaction, withTransaction)
+import Max.Skill.Contract (parseContract)
 import Max.Task.Delegation (validateAgentPayload)
 import Max.Task.Execution (ExecutionFailure (..))
 import Max.Task.State
@@ -48,7 +52,7 @@ submitReportChecked turn report = withAuthorizedOr (Left ExecutionReportRejected
       "SELECT EXISTS(SELECT 1 FROM durable_tasks child JOIN task_attempts parent ON child.parent_task_id=parent.task_id\
       \ AND child.parent_revision=parent.revision WHERE parent.turn_id=? AND child.status IN ('queued','running','waiting','retrying'))"
       (Only turn)
-  case validateAgentPayload contract report of
+  case traverse parseContract contract >>= (\parsed -> validateAgentPayload parsed report) of
     Left detail -> pure (Left (ExecutionInvalidPayload detail))
     Right () ->
       if (observationRequired && not validObservation) || (report.status == ReportSucceeded && children == [Only True])
@@ -201,10 +205,10 @@ submitRequestWithInputs turn disposition reply inputs
                       closeInputWithin turn
                       pure (Right ())
 
-withAuthorized :: (WithConnection :> es, IOE :> es) => AgentTurnId -> (TaskRecord -> Eff es Bool) -> Eff es Bool
+withAuthorized :: (WithConnection :> es, IOE :> es) => AgentTurnId -> (TaskRecord -> Eff (InTransaction : es) Bool) -> Eff es Bool
 withAuthorized = withAuthorizedOr False
 
-withAuthorizedOr :: (WithConnection :> es, IOE :> es) => a -> AgentTurnId -> (TaskRecord -> Eff es a) -> Eff es a
+withAuthorizedOr :: (WithConnection :> es, IOE :> es) => a -> AgentTurnId -> (TaskRecord -> Eff (InTransaction : es) a) -> Eff es a
 withAuthorizedOr fallback turn action = withTransaction $ do
   _ <- lockTurnConversation turn
   allowed <- authorizeWithin turn ExecutionCheckpoint

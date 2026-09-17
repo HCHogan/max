@@ -18,7 +18,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (traverse_)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Max.Skill.Contract (validateContract, validateValue)
+import Max.Skill.Contract (Contract, validateValue)
 import Max.Task.Experience (fingerprint)
 import Max.Task.State
 import Max.Task.Types
@@ -27,7 +27,7 @@ data AgentRequest = AgentRequest
   { objective :: !Text,
     inputs :: !Value,
     profile :: !TaskProfile,
-    outputContract :: !(Maybe Value)
+    outputContract :: !(Maybe Contract)
   }
   deriving stock (Eq, Show)
 
@@ -47,7 +47,6 @@ parseAgentRequest raw = do
         )
         raw
   unless (not (T.null request.objective) && T.length request.objective <= 40000 && LBS.length (encode raw) <= 65536) (Left "agent objective/input exceeds its bound")
-  traverse_ validateContract request.outputContract
   pure request
 
 -- Source edits create new journal steps. Unchanged semantic calls can still
@@ -66,13 +65,13 @@ agentCallKeys receipts request =
         Object fields <- [toJSON request]
       ]
 
-validateAgentPayload :: Maybe Value -> TaskReport -> Either Text ()
+validateAgentPayload :: Maybe Contract -> TaskReport -> Either Text ()
 validateAgentPayload Nothing _ = Right ()
 validateAgentPayload (Just contract) report
   | report.status == ReportSucceeded = maybe (Left "succeeded requires payload for the requested output_contract") (validateValue contract) report.payload
   | otherwise = traverse_ (validateValue contract) report.payload
 
-agentReport :: TaskStatus -> TaskReport -> Maybe Value -> Value
+agentReport :: TaskStatus -> TaskReport -> Maybe Contract -> Value
 agentReport status report contract =
   object
     [ "status" .= status,

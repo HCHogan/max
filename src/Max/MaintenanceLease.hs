@@ -162,4 +162,4 @@ withMaintenanceFence lease action = withTransaction $ do
       (maintenanceDomainText lease.mlDomain, lease.mlOwner, lease.mlFencingToken)
   case held :: [Only Int] of
     [] -> pure Nothing
-    _ -> Just <$> action
+    _ -> Just <$> raise action

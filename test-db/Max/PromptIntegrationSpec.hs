@@ -28,6 +28,7 @@ import Max.IR (Body (..), MentionTarget (MentionIdentity), Node (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..))
 import Max.Prompt (ContextReadMode (..), HistoryTokenWatermarks (..), PromptRequest (..), buildContext, collectContextPreview, materializeTieredHistory, planContext, renderContextPlan)
+import Max.Prompt.Runtime (runContextQueryWithDatabase)
 import Max.Session (Session (..))
 import OneBot.Types (GroupId (..), UserId (..))
 import PromptFixture (promptRequest)
@@ -293,7 +294,7 @@ spec pool = before_ (truncateAll pool) $
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       snapshot <-
         withDbLog pool $
-          collectContextPreview (promptRequest s trigger)
+          runContextQueryWithDatabase (collectContextPreview (promptRequest s trigger))
       let rendered = renderContextPlan (planContext defaultContextLimits snapshot)
       userBodyOf rendered `shouldSatisfy` ("preview summary" `T.isInfixOf`)
       [Only materializations] <- withDb pool $ query "SELECT count(*) FROM context_materializations" ()

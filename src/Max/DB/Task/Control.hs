@@ -1,21 +1,29 @@
 module Max.DB.Task.Control (controlTask) where
 
 import Control.Monad (void, when)
-import Data.Int (Int64)
 import Data.Maybe (isJust)
-import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Task.Record
 import Max.DB.Task.Settlement
+import Max.DB.Transaction (InTransaction, requireTransaction)
+import Max.Platform.Types
+  ( CanonicalMessageId (..),
+    PrincipalId (..),
+  )
 import Max.Task.State
+import OneBot.Types (GroupId (..))
 
 -- | The caller owns the transaction. The conversation lock serializes CAS,
 -- provenance, child cancellation, browser revocation and request transfer.
-controlTask :: (WithConnection :> es, IOE :> es) => Int64 -> Int64 -> Bool -> Int64 -> TaskOperation -> Maybe Int -> Maybe Int64 -> Text -> Eff es (Either TaskControlError TaskControlReceipt)
-controlTask group actor administrator identifier operation revision source note = do
+controlTask :: (InTransaction :> es, WithConnection :> es, IOE :> es) => GroupId -> PrincipalId -> Bool -> DurableTaskId -> TaskCommand -> Maybe CanonicalMessageId -> Eff es (Either TaskControlError TaskControlReceipt)
+controlTask (GroupId group) (PrincipalId actor) administrator (DurableTaskId identifier) command sourceMessage = do
+  let operation = commandOperation command
+      note = commandNote command
+      source = (.unCanonicalMessageId) <$> sourceMessage
+  requireTransaction
   locked <- lockConversation group
   tasks <-
     if locked
@@ -40,7 +48,7 @@ controlTask group actor administrator identifier operation revision source note 
       let receipt = TaskControlReceipt identifier task.revision
           trimmed = T.strip note
           facts = TaskControlFacts task.status task.revision (administrator || actor == task.owner) provenance (isJust source && duplicate == [Only True])
-      case decideTaskControl operation revision note facts of
+      case decideTaskControl command facts of
         Left failure -> pure (Left failure)
         Right ReplayControl -> pure (Right receipt)
         Right ApplyControl -> do

@@ -17,6 +17,7 @@ import Max.CodeMode.Wasm
 import Max.Effects.Tools
 import Max.Execution.Tools
 import Max.Execution.Workflow
+import Max.Schema (schemaValue)
 import Max.Skill.Authoring
 import Max.Skill.Package
 import Max.Task.Delegation (parseAgentRequest)
@@ -48,7 +49,7 @@ runFixture available draft fixture = case Map.lookup fixture.fxEntry draft.dvCon
             _ -> do
               modifyTVar' mismatches ("unexpected fixture call or arguments" :)
               pure (Left "fixture call does not match")
-        runner entry = Tool entry.ctDefinition.tdRef.unToolRef entry.ctDescription entry.ctSchema (consume entry.ctDefinition.tdRef.unToolRef)
+        runner entry = legacyTool entry.ctDefinition.tdRef.unToolRef entry.ctDescription (schemaValue entry.ctSchema) (consume entry.ctDefinition.tdRef.unToolRef)
         invocation result = ToolInvocation (either (\detail -> ToolFailedBeforeEffect (ToolFault "fixture_error" detail RetrySafe)) ToolCommitted result) ContinueLoop
         fixtureHost = WorkflowHost (pure True) (\args _ -> invocation <$> consume "agent" args) (\label -> invocation <$> consume "phase" (String label)) False
         fixtureHooks = noJournal {ehWorkflow = Just fixtureHost}

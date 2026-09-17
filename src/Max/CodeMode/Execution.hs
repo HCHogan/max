@@ -10,9 +10,22 @@ module Max.CodeMode.Execution
 where
 
 import Control.Applicative ((<|>))
-import Control.Concurrent.STM (atomically, modifyTVar', newTVarIO, readTVarIO, writeTVar)
+import Control.Concurrent.STM
+  ( atomically,
+    modifyTVar',
+    newTVarIO,
+    readTVarIO,
+    writeTVar,
+  )
 import Crypto.Hash.SHA256 qualified as SHA256
-import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, toJSON, (.=))
+import Data.Aeson
+  ( Value (..),
+    eitherDecodeStrict',
+    encode,
+    object,
+    toJSON,
+    (.=),
+  )
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseJSON, parseMaybe)
 import Data.ByteString (ByteString)
@@ -34,8 +47,13 @@ import Max.Effects.Tools (Tools)
 import Max.Execution.Tools
 import Max.Execution.Types
 import Max.Execution.Workflow
-import Max.Skill.Contract (validateValue)
-import Max.Tool.Control (LoopControl (..), controlReply, mergeControls)
+import Max.Schema (unconstrainedSchema)
+import Max.Skill.Contract (Contract, validateValue)
+import Max.Tool.Control
+  ( LoopControl (..),
+    controlReply,
+    mergeControls,
+  )
 import Max.Tool.Types
 
 -- | Bounded receipts; full leaf results remain in the journal/artifact store.
@@ -63,7 +81,7 @@ data WasmProgram = WasmProgram
   { wpModule :: !ByteString,
     wpInput :: !(Maybe ByteString),
     wpEvidence :: !Value,
-    wpOutputContract :: !(Maybe Value),
+    wpOutputContract :: !(Maybe Contract),
     wpWorkflow :: !(Maybe Value)
   }
 
@@ -182,7 +200,7 @@ phaseName = "host:workflow_phase/v1"
 -- writes keep the existing SequentialOnly policy.
 hostCatalog :: [CatalogTool]
 hostCatalog =
-  [ CatalogTool (ToolDefinition (ToolRef name) (SchemaVersion 1) (Set.singleton (EffectWrite "task")) SequentialOnly RetryIdempotent (Set.singleton CurrentConversation) (ToolDeadline 21600) False mode) "workflow host primitive" (object []) (SchemaHash name)
+  [ CatalogTool (ToolDefinition (ToolRef name) (SchemaVersion 1) (Set.singleton (EffectWrite "task")) SequentialOnly RetryIdempotent (Set.singleton CurrentConversation) (ToolDeadline 21600) False mode) "workflow host primitive" unconstrainedSchema (SchemaHash name)
   | (name, mode) <- [(agentName, WorkCall), (phaseName, CheckpointCall)]
   ]
 

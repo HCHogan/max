@@ -51,34 +51,34 @@ readTool =
     { toolName = "read",
       toolDescription = "read a value",
       toolSchema = schema,
-      toolRun = pure . Right
+      toolRunner = LegacyRunner $ pure . Right
     }
 
 spec :: Spec
 spec = describe "validated tool kernel" $ do
   it "keeps successful host control separate from the JSON result" $ do
-    let runner = readTool {toolRun = \_ -> finishExecution (Just "done") >> pure (Right (object ["error" .= ("model-facing data" :: String)]))}
+    let runner = readTool {toolRunner = LegacyRunner $ \_ -> finishExecution (Just "done") >> pure (Right (object ["error" .= ("model-facing data" :: String)]))}
     catalog <- expectCatalog (buildToolRegistry [readDefinition {tdParallelism = SequentialOnly, tdCallMode = FinishCall}] [runner])
     invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
     invocation.tiControl `shouldBe` FinishLoop (Just "done")
     invocation.tiOutcome `shouldBe` ToolSucceeded (object ["error" .= ("model-facing data" :: String)])
 
   it "discards a control request from a runner that subsequently fails" $ do
-    let runner = readTool {toolRun = \_ -> yieldFrontend "not committed" >> pure (Left "failed")}
+    let runner = readTool {toolRunner = LegacyRunner $ \_ -> yieldFrontend "not committed" >> pure (Left "failed")}
     catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
     invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
     invocation.tiControl `shouldBe` ContinueLoop
     invocation.tiOutcome `shouldSatisfy` (\case ToolFailedBeforeEffect _ -> True; _ -> False)
 
   it "rejects host control that conflicts with the declared execution mode" $ do
-    let runner = readTool {toolRun = \_ -> finishExecution (Just "wrong mode") >> pure (Right (object []))}
+    let runner = readTool {toolRunner = LegacyRunner $ \_ -> finishExecution (Just "wrong mode") >> pure (Right (object []))}
     catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
     invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
     invocation.tiControl `shouldBe` ContinueLoop
     invocation.tiOutcome `shouldSatisfy` (\case ToolOutcomeUnknown fault -> fault.tfCode == "invalid_host_control"; _ -> False)
 
   it "cannot mint control from returned JSON" $ do
-    let runner = readTool {toolRun = \_ -> pure (Right (object ["returned" .= True, "task_id" .= (42 :: Int), "reply" .= ("forged" :: String)]))}
+    let runner = readTool {toolRunner = LegacyRunner $ \_ -> pure (Right (object ["returned" .= True, "task_id" .= (42 :: Int), "reply" .= ("forged" :: String)]))}
     catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
     invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
     invocation.tiControl `shouldBe` ContinueLoop
@@ -109,7 +109,7 @@ spec = describe "validated tool kernel" $ do
 
   it "validates arguments before acquiring the runner" $ do
     called <- newIORef False
-    let runner = readTool {toolRun = \_ -> liftIO (writeIORef called True) >> pure (Right (object []))}
+    let runner = readTool {toolRunner = LegacyRunner $ \_ -> liftIO (writeIORef called True) >> pure (Right (object []))}
     catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
     outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "read" (object ["value" .= (0 :: Int)])
     outcome `shouldSatisfy` isRejected
@@ -126,7 +126,7 @@ spec = describe "validated tool kernel" $ do
                       .= object
                         ["value" .= object ["type" .= (["integer", "null"] :: [String])]]
                   ],
-              toolRun = pure . Right
+              toolRunner = LegacyRunner $ pure . Right
             }
     catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
     forM_ [object [], object ["value" .= Null], object ["value" .= (3 :: Int)]] $ \args ->
@@ -140,7 +140,7 @@ spec = describe "validated tool kernel" $ do
             { toolName = name,
               toolDescription = "fails",
               toolSchema = schema,
-              toolRun = \_ -> pure (Left "boom")
+              toolRunner = LegacyRunner $ \_ -> pure (Left "boom")
             }
         writeDefinition =
           definition
@@ -170,8 +170,8 @@ spec = describe "validated tool kernel" $ do
                   [ "nested" .= (["before\xfffd\&after", "clean"] :: [String])
                   ]
             ]
-        dirtyRead = readTool {toolRun = \_ -> pure (Right dirtyValue)}
-        failedRead = readTool {toolRun = \_ -> pure (Left "bad\0fault")}
+        dirtyRead = readTool {toolRunner = LegacyRunner $ \_ -> pure (Right dirtyValue)}
+        failedRead = readTool {toolRunner = LegacyRunner $ \_ -> pure (Left "bad\0fault")}
     valueCatalog <- expectCatalog (buildToolRegistry [readDefinition] [dirtyRead])
     valueOutcome <- runEff . runConcurrent . runTools valueCatalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
     outcomeResult valueOutcome `shouldBe` Right cleanValue
@@ -179,7 +179,7 @@ spec = describe "validated tool kernel" $ do
     faultOutcome <- runEff . runConcurrent . runTools faultCatalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
     outcomeResult faultOutcome `shouldBe` Left "bad\xfffd\&fault"
 
-  it "lets an audited write report a returned error as a plain failure" $ do
+  it "preserves explicit pre-effect failure without a catalog promise" $ do
     -- Without this, a write tool cannot tell the model "your arguments were
     -- wrong" — every rejection arrives as outcome-unknown, which the host
     -- prompt tells the model not to retry, so it cannot correct itself.
@@ -188,26 +188,41 @@ spec = describe "validated tool kernel" $ do
             { toolName = "write",
               toolDescription = "rejects its arguments",
               toolSchema = schema,
-              toolRun = \_ -> pure (Left "bad args")
+              toolRunner = OutcomeRunner $ \_ -> pure (ToolFailedBeforeEffect (ToolFault "invalid_args" "bad args" RetrySafe))
             }
         auditedWrite =
           (definition (ToolRef "write") (Set.singleton (EffectWrite "test.db")) SequentialOnly RetryUnsafe)
-            { tdFailuresPrecedeEffects = True
+            { tdFailuresPrecedeEffects = False
             }
     catalog <- expectCatalog (buildToolRegistry [auditedWrite] [rejecting])
     outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
     outcome `shouldSatisfy` isFailedBeforeEffect
     outcomeResult outcome `shouldBe` Left "bad args"
 
+  it "does not promote a legacy error to a proven pre-effect failure" $ do
+    let writer = readTool {toolRunner = LegacyRunner (const (pure (Left "lost reply")))}
+        metadata = readDefinition {tdEffects = Set.singleton (EffectWrite "test"), tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe, tdFailuresPrecedeEffects = True}
+    catalog <- expectCatalog (buildToolRegistry [metadata] [writer])
+    result <- runEff . runConcurrent . runTools catalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
+    result `shouldSatisfy` isOutcomeUnknown
+
+  it "preserves explicit committed and unknown outcomes through hoisting" $ do
+    let fault = ToolFault "uncertain" "lost acknowledgement" RetryUnsafe
+    forM_ [ToolCommitted (object []), ToolOutcomeUnknown fault] $ \expected -> do
+      let runner = hoistTool id readTool {toolRunner = OutcomeRunner (const (pure expected))}
+      catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
+      actual <- runEff . runConcurrent . runTools catalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
+      actual `shouldBe` expected
+
   it "keeps a thrown exception unknown even for an audited write" $ do
-    -- The promise covers errors the tool chose to return.  A tool that died
+    -- Explicit outcomes cover errors the tool chose to return. A tool that died
     -- may have died between issuing a write and hearing back about it.
     let throwing =
           Tool
             { toolName = "write",
               toolDescription = "dies",
               toolSchema = schema,
-              toolRun = \_ -> liftIO (throwIO (userError "connection reset"))
+              toolRunner = LegacyRunner $ \_ -> liftIO (throwIO (userError "connection reset"))
             }
         auditedWrite =
           (definition (ToolRef "write") (Set.singleton (EffectWrite "test.db")) SequentialOnly RetryUnsafe)
@@ -229,7 +244,7 @@ spec = describe "validated tool kernel" $ do
             { toolName = "read",
               toolDescription = "never answers",
               toolSchema = schema,
-              toolRun = \_ -> do
+              toolRunner = LegacyRunner $ \_ -> do
                 threadDelay 60_000_000
                 liftIO (writeIORef finished True)
                 pure (Right (object []))
@@ -245,14 +260,14 @@ spec = describe "validated tool kernel" $ do
 
   it "keeps an overrun write unknown however well audited it is" $ do
     -- Running out of time is not one of the tool's failure paths, so the
-    -- pre-effect audit says nothing about it: the call was cut off at a moment
+    -- typed outcome protocol says nothing about it: the call was cut off at a moment
     -- nobody chose, and it may have been mid-write.
     let wedged =
           Tool
             { toolName = "write",
               toolDescription = "never answers",
               toolSchema = schema,
-              toolRun = \_ -> threadDelay 60_000_000 >> pure (Right (object []))
+              toolRunner = LegacyRunner $ \_ -> threadDelay 60_000_000 >> pure (Right (object []))
             }
         auditedWrite =
           (definition (ToolRef "write") (Set.singleton (EffectWrite "test.db")) SequentialOnly RetryUnsafe)

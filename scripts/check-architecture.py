@@ -24,6 +24,10 @@ PURE = {
     "Max.LLM.Stream",
     "Max.ModelCatalog.Internal",
     "Max.Tool.Types",
+    "Max.Schema",
+    "Max.Text",
+    "Max.Tool.Arguments",
+    "Max.Tools.Schema",
     "Max.Tool.Bundles",
     "Max.Skill.Authoring",
     "Max.Skill.Metadata",
@@ -63,7 +67,7 @@ def check_imports():
         for dependency in IMPORT.findall(source):
             pure_external = dependency.startswith(("Data.", "Crypto.Hash.")) or dependency in {"Text.Read", "Control.Applicative", "Control.Monad", "Network.HTTP.Types.Header"}
             # Exception is a typeclass declaration; no exception-throwing IO.
-            exception_type = dependency == "Control.Exception" and "import Control.Exception (Exception)" in source
+            exception_type = dependency == "Control.Exception" and re.search(r"^import Control\.Exception\s+\(\s*Exception\s*\)", source, re.MULTILINE)
             if dependency not in PURE and not pure_external and not exception_type:
                 errors.append(f"{module}: impure or unreviewed dependency {dependency}")
         if re.search(r"\b(IOE|liftIO|unsafePerformIO|unsafeCoerce)\b", source):
@@ -108,6 +112,9 @@ def check_imports():
         "Max.Recall.Types": {"Max.Episode.Types", "Max.Memory.Types"},
         "Max.Context.Types": {"Max.Context", "Max.Dispatch", "Max.File.Types", "Max.History.Types", "Max.Episode.Types", "Max.LLM.Types", "Max.Memory.Types", "Max.Platform.Types", "Max.Session.Types"},
         "Max.Context.Policy": {"Max.Context", "Max.Context.Types", "Max.History.Types", "Max.Memory.Types"},
+        "Max.Context.Materialization": {"Max.History.Types", "Max.Episode.Types"},
+        "Max.Prompt.Request": {"Max.Context.Types", "Max.Dispatch", "Max.ModelCatalog.Internal", "Max.Platform.Types", "Max.Session.Types"},
+        "Max.Sandbox.Types": set(),
         "Max.Context.Media": {"Max.History.Types", "Max.Media.Types", "Max.Time"},
     }
     codecs = {"Database.PostgreSQL.Simple.FromField", "Database.PostgreSQL.Simple.ToField", "Database.PostgreSQL.Simple.FromRow"}
@@ -118,6 +125,18 @@ def check_imports():
                 errors.append(f"{module}: executable dependency {dependency}")
         if re.search(r"\b(IOE|liftIO|unsafePerformIO|unsafeCoerce)\b", source):
             errors.append(f"{module}: execution escape")
+
+    renderer = (ROOT / "src/Max/Prompt/Render.hs").read_text()
+    for dependency in IMPORT.findall(renderer):
+        if dependency.startswith(("Effectful", "Max.DB.", "System.")) or dependency.endswith("Store") or dependency in {"Max.Env", "Max.Util", "Max.ContextMaterialization"}:
+            errors.append(f"Prompt rendering acquired execution dependency: {dependency}")
+    for module in ["Max.Prompt.Collect", "Max.Prompt.History", "Max.Prompt.Runtime"]:
+        source = (ROOT / "src" / (module.replace(".", "/") + ".hs")).read_text()
+        if set(IMPORT.findall(source)) & {"Max.Prompt.Materialize", "Max.ContextMaterialization", "Max.ContextTraceStore"}:
+            errors.append(f"{module}: preview adapter acquired publication")
+    tools = (ROOT / "src/Max/Effects/Tools.hs").read_text()
+    if "tdFailuresPrecedeEffects" in tools:
+        errors.append("Tool runner reconstructed failure proof from historical metadata")
 
     source = (ROOT / "src/Max/Effects/ToolDirectory.hs").read_text()
     allowed = {"Effectful", "Effectful.Dispatch.Dynamic", "Max.Tool.Catalog", "Max.Tool.Types"}
@@ -150,7 +169,7 @@ def check_imports():
         dependencies = set(IMPORT.findall(source))
         if relative != "src/Max/MemoryStore.hs" and re.search(r"\bcreateMemory\b", source):
             errors.append(f"{relative}: memory creation bypasses shared admission")
-        domain_tools = {"src/Max/Tools/SkillAuthoring.hs", "src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Reminder.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Pins.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs"}
+        domain_tools = {"src/Max/Tools/Skills.hs", "src/Max/Tools/Search.hs", "src/Max/Tools/Sandbox.hs", "src/Max/Tools/Browser.hs", "src/Max/Tools/Files.hs", "src/Max/Tools/SkillAuthoring.hs", "src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Reminder.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Pins.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs"}
         resource_tools = {"src/Max/Tools/Files.hs", "src/Max/Tools/Browser.hs"}
         if relative in domain_tools | resource_tools:
             if any(dependency.startswith("Max.DB.") for dependency in dependencies) or dependencies & {"Effectful.PostgreSQL", "Max.Platform.Store", "Max.Session", "Max.Reply.Resolve", "Max.Reply.Caption", "Max.Task.ToolRuntime", "Max.Monitor.ToolRuntime", "Max.Memory.ToolRuntime", "Max.MemoryStore", "Max.EpisodeStore", "Max.Recall", "Max.Prompt", "Max.Conversation.ToolRuntime", "Max.Monitor", "Max.Tools"}:
@@ -169,13 +188,14 @@ def check_imports():
             errors.append(f"{relative}: platform writes in a read-only consumer")
         if "Max.Effects.ToolControl" in dependencies and relative not in {
             "src/Max/Tools/Task.hs", "src/Max/Task/ToolRuntime.hs", "src/Max/Toolset.hs", "src/Max/Agent/Runtime.hs", "src/Max/Effects/Agent.hs",
+            "src/Max/Skill/ToolRuntime.hs",
             "src/Max/Tools/Skills.hs",  # Publishes host-validated skill activation receipts.
         }:
             errors.append(f"{relative}: host loop control outside trusted task runners/assembly")
         if relative.startswith("src/Max/Tools") and "Max.Effects.PlatformAccount" in dependencies:
             errors.append(f"{relative}: account administration exposed to tools")
         if "Max.Effects.BlobHost" in IMPORT.findall(source) and relative not in {
-            "src/Max/MediaCaption.hs", "src/Max/Tools/Files.hs", "src/Max/Toolset.hs", "src/Max/File/ToolRuntime.hs"
+            "src/Max/MediaCaption.hs", "src/Max/File/TransferRuntime.hs", "src/Max/Toolset.hs", "src/Max/File/ToolRuntime.hs"
         }:
             errors.append(f"{relative}: host paths outside approved ffmpeg/docker adapters and assembly")
         if relative.startswith("src/Max/Tools/") and re.search(r"\b(ToolOutputRead|drainInlineMedia|runToolOutputRead|newToolOutputQueue)\b", source):
@@ -190,6 +210,17 @@ import Data.Aeson (Value (Null), Result, fromJSON)
 import Effectful
 import Max.Effects.Blob
 import Max.Effects.BlobHost
+import Max.Effects.ContextQuery (ContextQuery)
+import Max.Effects.SkillLoading (SkillLoading, loadSkill)
+import Max.Effects.Search (Search, searchWeb)
+import Max.Effects.Sandbox (Sandbox, listSandboxes)
+import Max.Effects.Browser (Browser, readZhihu)
+import Max.Effects.FileTransfer (FileTransfer, sendSandboxFile)
+import Effectful.PostgreSQL (WithConnection)
+import Max.DB.Transaction (InTransaction, withTransaction)
+import Max.DB.Task.Authorization (authorizeWithin)
+import Max.Execution.Types (ExecutionStep (ExecutionCheckpoint))
+import Max.Turn.Types (AgentTurnId (..))
 import Max.Effects.ToolControl
 import Max.Tool.Control
 import Max.Skill.Package (SkillPackage)
@@ -229,6 +260,19 @@ import OneBot.Types (GroupId (..), UserId (..))
 """
 
 POSITIVE = """
+transaction :: (WithConnection :> es, IOE :> es) => Eff es Bool
+transaction = withTransaction (authorizeWithin (AgentTurnId 1) ExecutionCheckpoint)
+skillLoading :: SkillLoading :> es => Eff es ()
+skillLoading = () <$ loadSkill "demo"
+searching :: Search :> es => Eff es ()
+searching = () <$ searchWeb "query" 1
+sandboxing :: Sandbox :> es => Eff es ()
+sandboxing = () <$ listSandboxes
+browserReading :: Browser :> es => Eff es ()
+browserReading = () <$ readZhihu "https://zhihu.com/"
+fileTransfer :: FileTransfer :> es => Eff es ()
+fileTransfer = () <$ sendSandboxFile "sandbox" "result.csv" Nothing
+
 draftSkill :: SkillDraft :> es => DraftContent -> Eff es ()
 draftSkill content = () <$ saveSkillDraft content 0
 inspectDraft :: SkillQuery :> es => Eff es ()
@@ -286,6 +330,14 @@ publish request = () <$ sendRecorded request
 """
 
 NEGATIVE = {
+    "authorization requires a transaction": ("InTransaction", "bad :: (WithConnection :> es, IOE :> es) => Eff es Bool\nbad = authorizeWithin (AgentTurnId 1) ExecutionCheckpoint"),
+    "ContextQuery cannot use arbitrary IO": ("IOE", "bad :: ContextQuery :> es => Eff es ()\nbad = liftIO (pure ())"),
+    "SkillLoading cannot use arbitrary IO": ("IOE", "bad :: SkillLoading :> es => Eff es ()\nbad = liftIO (pure ())"),
+    "Search cannot use arbitrary IO": ("IOE", "bad :: Search :> es => Eff es ()\nbad = liftIO (pure ())"),
+    "Sandbox cannot use arbitrary IO": ("IOE", "bad :: Sandbox :> es => Eff es ()\nbad = liftIO (pure ())"),
+    "Browser cannot use arbitrary IO": ("IOE", "bad :: Browser :> es => Eff es ()\nbad = liftIO (pure ())"),
+    "FileTransfer cannot use arbitrary IO": ("IOE", "bad :: FileTransfer :> es => Eff es ()\nbad = liftIO (pure ())"),
+
     "conversation query cannot control tasks": ("TaskControl", 'bad :: ConversationQuery :> es => Eff es ()\nbad = () <$ startTask "key" "goal" Research Null'),
     "conversation query cannot publish": ("Outbound", 'bad :: ConversationQuery :> es => OutboundRequest -> Eff es ()\nbad request = () <$ sendRecorded request'),
     "media query cannot publish": ("Outbound", "bad :: MediaQuery :> es => OutboundRequest -> Eff es ()\nbad request = () <$ sendRecorded request"),

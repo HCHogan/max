@@ -10,6 +10,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), execute, query)
+import Database.PostgreSQL.Simple.FromField (ResultError (..))
 import Helpers (resultId, truncateAll, withDb)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
@@ -556,6 +557,28 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     withDb pool (confirmUnconfirmedDelivery claim.deliveryId (NativeEventId "native-confirm"))
       `shouldReturn` True
     withDb pool (listUnconfirmedDeliveries PlatformMatrix 10) `shouldReturn` []
+
+  it "rejects corrupt durable bodies and rolls back dispatch and delivery reservations" $ do
+    (_, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    result <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "corrupt-body" "dispatch me"))
+    let cid = (resultId result).unCanonicalMessageId
+        status = withConn pool $ \connection -> query connection "SELECT status FROM message_dispatches WHERE canonical_message_id=?" (Only cid)
+    statusBefore <- status :: IO [Only Text]
+    _ <- withConn pool $ \connection -> execute connection "UPDATE messages SET canonical_content=jsonb_set(canonical_content,'{nodes}','[{\"type\":\"invalid-node\"}]'::jsonb) WHERE canonical_message_id=?" (Only cid)
+    withDb pool (claimDispatch "corrupt-reader" (CanonicalMessageId cid) 30) `shouldThrow` (\case ConversionFailed {} -> True; _ -> False)
+    statusAfter <- status
+    statusAfter `shouldBe` statusBefore
+    let deliveryStatus = withConn pool $ \connection -> query connection "SELECT status FROM message_deliveries WHERE canonical_message_id=?" (Only cid)
+    deliveryBefore <- deliveryStatus :: IO [Only Text]
+    deliveryBefore `shouldSatisfy` (not . null)
+    withDb pool (claimDeliveries "corrupt-reader" 10 30) `shouldThrow` (\case ConversionFailed {} -> True; _ -> False)
+    deliveryStatus `shouldReturn` deliveryBefore
+    _ <- withConn pool $ \connection -> execute connection "UPDATE messages SET canonical_content=jsonb_set(canonical_content,'{nodes}','[]'::jsonb) WHERE canonical_message_id=?" (Only cid)
+    repaired <- withDb pool (claimDispatch "repaired-reader" (CanonicalMessageId cid) 30)
+    fmap (.canonicalMessageId) repaired `shouldBe` Just (CanonicalMessageId cid)
+    deliveries <- withDb pool (claimDeliveries "repaired-reader" 10 30)
+    fmap (.canonicalMessageId) deliveries `shouldBe` [CanonicalMessageId cid]
 
   it "leases dispatch eligibility once and recovers only after its lease" $ do
     (_, matrix) <- mirrorPair pool
