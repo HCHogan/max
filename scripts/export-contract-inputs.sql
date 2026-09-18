@@ -6,7 +6,7 @@ WITH ranked AS (
       ('task-notice-review','task-progress-review') THEN 'task-notice' ELSE source END
       ORDER BY id DESC) AS ordinal
   FROM llm_calls
-  WHERE source IN ('historian','task-experience','memory-maintenance','intent',
+  WHERE source IN ('historian','memory-maintenance','intent',
                    'task-notice-review','task-progress-review')
     AND at > now() - interval '7 days'
 )

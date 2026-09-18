@@ -256,6 +256,7 @@ library
         Max.Files
         Max.Forward
         Max.Handler
+        Max.Hash
         Max.Historian
         Max.Http.Failure
         Max.Http.Json
@@ -355,10 +356,8 @@ library
         Max.DB.Task.Overview
         Max.DB.Task.Query
         Max.Task.State
-        Max.Task.Experience
         Max.Task.Delegation
         Max.Task.WorkflowRuntime
-        Max.DB.Task.Experience
         Max.DB.Task.Workflow
         Max.Task.View
         Max.Render
@@ -777,7 +776,6 @@ test-suite max-test
         Max.RecallSpec
         Max.Context.WorkingSpec
         Max.Task.DelegationSpec
-        Max.Task.ExperienceSpec
         Max.ReminderArgsSpec
         Max.Concurrent.LockSpec
         Max.Sandbox.RuntimeSpec
@@ -855,7 +853,6 @@ test-suite max-test-db
         Max.MemoryStoreSpec
         Max.MemoryCapabilitiesSpec
         Max.MemoryMaintenanceSpec
-        Max.TaskExperienceSpec
         Max.WorkflowAgentSpec
         Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec

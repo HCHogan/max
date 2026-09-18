@@ -28,12 +28,12 @@ import Effectful.Log (LogLevel (LogAttention), runLog)
 import Max.Config (AppConfig (..), appConfigParser)
 import Max.Effects.LLM
 import Max.EpisodeStore (parseEpisodeCapture)
+import Max.Hash (jsonHash)
 import Max.Historian (historianSystem)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Intent (classifierSystem, parseVerdict)
 import Max.Log (withCompactLogger)
 import Max.Memory.Maintenance (MaintenanceProposal, maintenanceSystem)
-import Max.Task.Experience (experienceSystem, fingerprint, parseExperienceResponse, validateCapsule)
 import Max.Task.Notice (noticeReviewPrompt, parseNoticeDecision)
 import OptEnvConf (Parser, help, long, metavar, option, optional, reader, runParser, setting, str)
 import System.Environment (getEnvironment)
@@ -65,8 +65,6 @@ sourceBytes :: [(Text, ByteString)]
 sourceBytes =
   [ ("src/Max/Historian.hs", $(embedFile "src/Max/Historian.hs")),
     ("src/Max/EpisodeStore.hs", $(embedFile "src/Max/EpisodeStore.hs")),
-    ("src/Max/Task/Experience.hs", $(embedFile "src/Max/Task/Experience.hs")),
-    ("src/Max/DB/Task/Experience.hs", $(embedFile "src/Max/DB/Task/Experience.hs")),
     ("src/Max/Memory/Maintenance.hs", $(embedFile "src/Max/Memory/Maintenance.hs")),
     ("src/Max/Intent.hs", $(embedFile "src/Max/Intent.hs")),
     ("src/Max/Task/Notice.hs", $(embedFile "src/Max/Task/Notice.hs")),
@@ -127,17 +125,17 @@ main = do
         result =
           object
             [ "contract" .= contract row,
-              "source_ref" .= fingerprint (toJSON row.sourceCall),
+              "source_ref" .= jsonHash (toJSON row.sourceCall),
               "source_at" .= row.sourceAt,
-              "input_fingerprint" .= fingerprint (toJSON messages),
-              "prompt_fingerprint" .= fingerprint (toJSON [text | MsgSystem text <- messages]),
+              "input_fingerprint" .= jsonHash (toJSON messages),
+              "prompt_fingerprint" .= jsonHash (toJSON [text | MsgSystem text <- messages]),
               "profile" .= row.profile,
               "expected_model" .= row.model,
               "actual_models" .= actual,
               "model_matches" .= (actual == [row.model]),
               "outcome" .= outcome,
               "semantic" .= fromRight Null decoded,
-              "response_fingerprint" .= fmap (fingerprint . String) raw,
+              "response_fingerprint" .= fmap (jsonHash . String) raw,
               "duration_ms" .= sum (map (.crDurationMs) records),
               "model_calls" .= length records,
               "usage" .= [object ["prompt_tokens" .= usage.usagePrompt, "completion_tokens" .= usage.usageCompletion, "cached_prompt_tokens" .= usage.usageCachedPrompt] | call <- records, Just usage <- [call.crUsage]]
@@ -173,7 +171,6 @@ currentMessages cfg row = do
     _ -> Left "request is not an object"
   let prompt = case contract row of
         "historian" -> historianSystem
-        "task-experience" -> experienceSystem
         "memory-maintenance" -> maintenanceSystem
         "intent" -> classifierSystem cfg.persona
         "task-notice" -> noticeReviewPrompt
@@ -188,11 +185,6 @@ currentMessages cfg row = do
 decodeContract :: Text -> Text -> Either Text Value
 decodeContract name raw = case name of
   "historian" -> either (Left . T.pack) (const (Right Null)) (parseEpisodeCapture raw)
-  "task-experience" -> do
-    candidate <- parseExperienceResponse raw
-    pure $ case candidate of
-      Nothing -> object ["abstained" .= True]
-      Just capsule -> object ["abstained" .= False, "capsule_valid" .= either (const False) (const True) (validateCapsule capsule)]
   "memory-maintenance" -> either (Left . T.pack) (Right . toJSON . length) (eitherDecodeStrict' @[MaintenanceProposal] (TE.encodeUtf8 (T.strip raw)))
   "intent" -> maybe (Left "invalid intent verdict") (const (Right Null)) (parseVerdict raw)
   "task-notice" -> Null <$ parseNoticeDecision raw

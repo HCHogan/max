@@ -56,7 +56,6 @@ import Max.ResourceCapabilitiesSpec qualified as ResourceCapabilitiesSpec
 import Max.SandboxRegistrySpec qualified as SandboxRegistrySpec
 import Max.SkillAuthoringSpec qualified as SkillAuthoringSpec
 import Max.SkillWorkflowSpec qualified as SkillWorkflowSpec
-import Max.TaskExperienceSpec qualified as TaskExperienceSpec
 import Max.WorkflowAgentSpec qualified as WorkflowAgentSpec
 import System.Environment (lookupEnv)
 import System.Exit (die)
@@ -105,7 +104,6 @@ main = do
         MemoryCapabilitiesSpec.spec pool
         MemoryStoreSpec.spec pool
         MemoryMaintenanceSpec.spec pool
-        TaskExperienceSpec.spec pool
         MediaSpec.spec pool
         FetchQueueSpec.spec pool
         MonitorSpec.spec pool

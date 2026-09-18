@@ -32,12 +32,12 @@ import Max.Effects.Tools
 import Max.Execution.Tools
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.ExecutionSpec (hooks, withHost)
+import Max.Hash (jsonHash)
 import Max.Platform.Types
 import Max.Skill.Contract (Contract, parseContract)
 import Max.Task.Admission qualified as Admission
 import Max.Task.Delegation
 import Max.Task.Execution (ExecutionFailure (..))
-import Max.Task.Experience (fingerprint)
 import Max.Task.State
 import Max.Task.Types
 import Max.Task.WorkflowRuntime
@@ -86,7 +86,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR015 workflow children" $ d
         shellRequest = request {profile = Sandbox}
         identity = object ["receipts" .= Null, "grants" .= shellGrants]
         oldRequest = object ["objective" .= request.objective, "inputs" .= request.inputs, "profile" .= ("operations" :: Text), "output_contract" .= request.outputContract]
-        oldKey = "agent:" <> fingerprint (object ["receipts" .= identity, "request" .= oldRequest])
+        oldKey = "agent:" <> jsonHash (object ["receipts" .= identity, "request" .= oldRequest])
     Right _ <- withDb pool (admitTaskReceipt front message actor "shell-root" "SSH audit" Sandbox (object []) shellGrants)
     parent <- claimOne pool
     entry <- journal pool parent "legacy-child"

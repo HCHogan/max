@@ -9,7 +9,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful (runEff)
-import Effectful.PostgreSQL (query)
+import Effectful.PostgreSQL (execute, query)
 import Helpers (truncateAll, withDb)
 import Max.DB.Connection (DbPool)
 import Max.DB.Transaction (withTransaction)
@@ -28,6 +28,19 @@ import Test.Hspec hiding (context)
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "versioned skill persistence and loading" $ do
+  it "keeps retired learned skills as data without loading them as instructions" $ do
+    registry <- newSkillRegistry
+    Right manual <- withDb pool (createSkill registry (new "manual" []))
+    Right learned <- withDb pool (createSkill registry (new "retired" []))
+    _ <- withDb pool $ execute "UPDATE skills SET name='learned-task-1' WHERE id=?" (Only learned.skillId)
+    restarted <- newSkillRegistry
+    _ <- withDb pool (loadSkills restarted)
+    lookupSkill restarted (GroupId 7777) "learned-task-1" `shouldReturn` Nothing
+    retained <- lookupSkill restarted (GroupId 7777) "manual"
+    fmap (.skillId) retained `shouldBe` Just manual.skillId
+    rows <- withDb pool $ query "SELECT body FROM skills WHERE id=?" (Only learned.skillId)
+    rows `shouldBe` [Only learned.skillBody]
+
   it "round trips packages and appends old content without changing a loaded revision" $ do
     registry <- newSkillRegistry
     let contract = checkedContract $ object ["type" .= ("object" :: Text), "additionalProperties" .= True]

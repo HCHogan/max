@@ -1,3 +1,7 @@
+> Historical design: task-experience generation, replay and publication were
+> removed during the September 19 simplification. The commands below no longer
+> exist. Old candidate and learned-skill rows remain as archived data.
+
 # 上下文与记忆 P1 / P2：本地实现与验收
 
 > Historical evidence below retains the tool names used at the time. The legacy

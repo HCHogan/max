@@ -18,8 +18,8 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (traverse_)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Max.Hash (jsonHash)
 import Max.Skill.Contract (Contract, validateValue)
-import Max.Task.Experience (fingerprint)
 import Max.Task.State
 import Max.Task.Types
 
@@ -53,14 +53,14 @@ parseAgentRequest raw = do
 -- reuse their child in the same parent revision. Loaded receipts are part of
 -- the call identity, so a package update invalidates that reuse.
 agentCallKey :: Value -> AgentRequest -> Text
-agentCallKey receipts request = "agent:" <> fingerprint (object ["receipts" .= receipts, "request" .= request])
+agentCallKey receipts request = "agent:" <> jsonHash (object ["receipts" .= receipts, "request" .= request])
 
 -- Reuse pre-unification operations children instead of starting their effects
 -- again. Both names now execute as Sandbox; only new steps use the canonical key.
 agentCallKeys :: Value -> AgentRequest -> [Text]
 agentCallKeys receipts request =
   agentCallKey receipts request
-    : [ "agent:" <> fingerprint (object ["receipts" .= receipts, "request" .= Object (KM.insert "profile" (String "operations") fields)])
+    : [ "agent:" <> jsonHash (object ["receipts" .= receipts, "request" .= Object (KM.insert "profile" (String "operations") fields)])
       | request.profile == Sandbox,
         Object fields <- [toJSON request]
       ]

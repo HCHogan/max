@@ -13,7 +13,6 @@ module Max.Skills
     SkillRegistry,
     newSkillRegistry,
     loadSkills,
-    refreshExperienceSkills,
     skillsForGroup,
     lookupSkill,
     listAllSkills,
@@ -159,7 +158,7 @@ loadSkills reg@(SkillRegistry t _) = withMutation reg $ do
   rows <-
     query_
       "SELECT id, name, group_id, description, body, enabled, created_by, updated_at, revision, package, evidence \
-      \  FROM skills ORDER BY id"
+      \  FROM skills WHERE name NOT LIKE 'learned-task-%' ORDER BY id"
   skills <- traverse skillFromRow rows
   liftIO . atomically $ do
     m <- readTVar t
@@ -186,17 +185,6 @@ skillFromRow ((i, n, g, d, b, e) :. (cb, up, revision, raw :: Value, evidence)) 
         skillPackage = package,
         skillEvidence = case fromJSON evidence of Success value -> value; Error _ -> UnvalidatedSkill
       }
-
--- Only this reserved namespace is refreshed by experience maintenance. Ordinary
--- admin skill mutations remain write-through and cannot race a full reload.
-refreshExperienceSkills :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Eff es ()
-refreshExperienceSkills reg@(SkillRegistry registry _) = withMutation reg $ do
-  rows <-
-    query_
-      "SELECT id,name,group_id,description,body,enabled,created_by,updated_at,revision,package,evidence FROM skills WHERE name LIKE 'learned-task-%'"
-  learned <- traverse skillFromRow rows
-  liftIO . atomically $ modifyTVar' registry $ \current ->
-    Map.fromList [(skill.skillId, skill) | skill <- learned] <> Map.filter (not . T.isPrefixOf "learned-task-" . (.skillName)) current
 
 -- | What one group's dispatches see: enabled skills, global + this
 -- group's own, sorted by name (determinism keeps the rendered index
@@ -288,7 +276,6 @@ updateSkillAtRevision reg@(SkillRegistry t _) sid expected edit
       case current of
         Nothing -> pure (Left "not found")
         Just old
-          | "learned-task-" `T.isPrefixOf` old.skillName -> pure (Left "任务经验需重新回放审核，禁用请使用 experience invalidate")
           | maybe False (/= old.skillRevision) expected -> pure (Left "skill revision conflict")
           | otherwise -> do
               let changed = edit old

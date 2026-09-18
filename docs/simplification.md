@@ -49,7 +49,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [x] Count a clean snapshot: src + app = 52,627 effective Haskell code lines.
 - [x] Clean prose comments and correct stale descriptions without changing code.
 - [ ] Keep representative behavioral fixtures and define the core file manifest.
-- [ ] Remove whole-source-hash model certificates as generic CI blockers while
+- [x] Remove whole-source-hash model certificates as generic CI blockers while
       retaining relevant deterministic and model-level evaluation.
 
 ### B. Foreground conversation
@@ -87,7 +87,8 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 
 ### E. Context and optional machinery
 
-- [ ] Delete task-experience generation and replay.
+- [x] Delete task-experience generation, replay, publication and maintenance
+      commands. Retain old rows as data without loading learned instructions.
 - [ ] Delete the online skill factory and certificates; retain static lazy skills.
 - [ ] Keep useful raw code mode on the shared tool boundary, without durable
       workflow state or a second authorization/execution path.
@@ -166,3 +167,11 @@ maintained implementation record.
   callback asserts publication before returning the final response and checks
   that repeated cumulative text does not republish the accepted prefix. This
   does not yet establish live QQ first-visible latency.
+- Task-experience removal: all Cabal targets build; 1,105 unit examples pass.
+  The DB run passed 402 of 403 cases; its new preservation fixture used the
+  wrong conversation ID. After correcting that fixture, all 28 matched
+  persistence cases pass. Offline context checks pass (9 Historian, 7 recall).
+  Architecture checks, HLint and `cabal check` pass.
+- CI validates stored model reports without treating current whole-file hashes
+  as release certificates. Existing reports pass; a deliberately failed sample
+  is still rejected. Historical source/model identities remain in reports.

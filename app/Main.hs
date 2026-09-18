@@ -35,7 +35,6 @@ import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
 import Max.DB.Monitor (reclaimExpiredMonitorFireClaims)
-import Max.DB.Task.Experience (experienceWorker)
 import Max.DB.TurnContinuity (pruneTurnArchiveReferences)
 import Max.DB.Usage (insertUsage)
 import Max.Effects.Agent (Agent, defaultLimits)
@@ -385,9 +384,6 @@ runApp httpRuntime cfg activeConfig runtimeStore prepareResources controlPath ap
                          RestartableWorker
                          (historianWorker profile candidate.historianTimeoutSeconds candidate.llm candidate.timezone workerEnv.beTasks (defaultModelName candidate.llm) scheduler)
                      | (profile, scheduler) <- maybeToList ((,) <$> candidate.memoryExtractProfile <*> workerEnv.beEpisodeScheduler)
-                     ]
-                  <> [ worker "task-experience" RestartableWorker (experienceWorker (ownerFor snapshot "task-experience") profile workerEnv.beSkills (maintenanceInputBudget candidate.llm profile))
-                     | profile <- maybeToList candidate.memoryExtractProfile
                      ]
                   <> [ worker "memory-dream" RestartableWorker (memoryMaintenanceWorker (ownerFor snapshot "memory-dream") profile candidate.timezone (maintenanceInputBudget candidate.llm profile))
                      | profile <- maybeToList candidate.memoryExtractProfile

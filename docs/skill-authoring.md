@@ -37,7 +37,8 @@ failed validation, cross-group references and publication conflicts. Publication
 writes the existing `skills` head, immutable `skill_versions` snapshot and a
 provenance receipt in one transaction; cache publication occurs only after commit.
 It can update only skills previously published by this authoring path. Admin
-skills, builtins and experience capsules remain under their existing writers.
+skills and builtins remain under their existing writers. Retired experience
+capsules are kept as database records and are not loaded as instructions.
 Existing loaded receipts remain pinned. Later use_skill still enforces caller
 capabilities; publication never persists the author's authority for reuse.
 

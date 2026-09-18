@@ -1,20 +1,20 @@
-# Structured-output release gate
+# Structured-output evaluation
 
 Issue #22 requires twenty real production inputs per structured-output contract,
 with zero first-response decode failures. `max-contract-eval` calls the configured
 production model using the current production prompt and decoder. It installs no
 tool runners and connects to no database. It does not repair failed answers or
-resample failures. Provider failures also fail the gate; an abstention (`null` for
-experience, `[]` for maintenance) is decoded data, not proof of useful output.
+resample failures. Provider failures also fail the gate; an abstention (`[]` for maintenance) is decoded data, not proof of useful output.
 
 `contracts.json` inventories all current non-tool JSON generation paths:
-Historian (including memory proposals), task experience, memory maintenance,
+Historian (including memory proposals), memory maintenance,
 intent classification, and task notice/progress review (one shared contract).
 Captioning returns prose. Native agent tool arguments use the tool catalog and
 execution admission rather than a separately requested JSON answer. User-defined
 workflow output contracts still require their own fixture and live acceptance.
-Adding a JSON generation path must add its production prompt/decoder, source
-dependencies, and twenty-sample report here before release.
+Changes to a generation path should update its fixtures and run the relevant
+model evaluation. Source hashes identify the measured revision; they are not
+a certificate for later source or model versions.
 
 Export real requests to a private local directory using
 `scripts/export-contract-inputs.sql` with `psql -X -qAt -v ON_ERROR_STOP=1` against
@@ -29,9 +29,9 @@ From the repository root, for each contract name in `contracts.json`:
 cabal run max-contract-eval -- \
   --config-file /private/path/production-config.json \
   --contract-fixture /private/path/production-calls.jsonl \
-  --contract task-experience \
-  --contract-report /private/path/task-experience.json \
-  --contract-raw-report /private/path/task-experience-raw.jsonl
+  --contract historian \
+  --contract-report /private/path/historian.json \
+  --contract-raw-report /private/path/historian-raw.jsonl
 ```
 
 The public report records source/prompt/input/output hashes, actual model,
@@ -50,6 +50,8 @@ public reports to `docs/research/structured-contracts/<contract>.json`, then run
 python3 scripts/check-structured-contracts.py
 ```
 
-CI repeats this offline certificate check on every change. A missing report,
-source change, insufficient sample count, model drift, incomplete batch, or any
-first-response failure rejects release until a fresh real-model gate is recorded.
+CI checks the internal consistency of the stored reports. It does not compare
+whole-file hashes against the current checkout or require paid model calls
+for comment-only or unrelated changes. A passing check describes the recorded
+sample; it does not establish current model quality. Prompt and decoder changes
+still need relevant deterministic fixtures and model-level evaluation.

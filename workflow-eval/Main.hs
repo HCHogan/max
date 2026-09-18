@@ -45,6 +45,7 @@ import Max.Effects.LLM
 import Max.Effects.ToolControl (ToolControl)
 import Max.Effects.Tools
 import Max.Execution.Tools
+import Max.Hash (jsonHash)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.IR (Body (..), Node (NText))
 import Max.Log (withCompactLogger)
@@ -53,7 +54,6 @@ import Max.Platform.QQ (ensureQQEndpointFor)
 import Max.Platform.Store hiding (capabilities, fingerprint)
 import Max.Platform.Types
 import Max.Task.Admission qualified as Admission
-import Max.Task.Experience (fingerprint)
 import Max.Task.State qualified as State
 import Max.Task.ToolRuntime (taskToolsWithDatabase)
 import Max.Task.Types
@@ -99,7 +99,7 @@ main = do
       value <- eitherDecodeFileStrict path >>= either die pure
       either die pure (parseEither (withObject "source snapshot" (.: "source_snapshot")) value)
   results <- newIORef []
-  let save complete = readIORef results >>= \rows -> encodeFile opts.report (object ["complete" .= complete, "profile" .= opts.profile, "runtime" .= javaScriptRuntimeVersion, "deadline_seconds" .= opts.seconds, "controlled_read_tools" .= True, "historical_load_reproduced" .= False, "source_snapshot" .= sources, "parent_orchestration" .= (if opts.mode == "ordinary" then "ordinary_model_loop" else "host_authored_scripts" :: Text), "source_hashes" .= Map.map (fingerprint . String) sources, "cases" .= rows])
+  let save complete = readIORef results >>= \rows -> encodeFile opts.report (object ["complete" .= complete, "profile" .= opts.profile, "runtime" .= javaScriptRuntimeVersion, "deadline_seconds" .= opts.seconds, "controlled_read_tools" .= True, "historical_load_reproduced" .= False, "source_snapshot" .= sources, "parent_orchestration" .= (if opts.mode == "ordinary" then "ordinary_model_loop" else "host_authored_scripts" :: Text), "source_hashes" .= Map.map (jsonHash . String) sources, "cases" .= rows])
   save False
   bracket (newDbPool cfg.db) closeDbPool $ \pool -> do
     [Only database :: Only Text] <- withDb pool (query "SELECT current_database()" ())
@@ -166,7 +166,7 @@ runCase cfg opts pool sources group parallel = do
   if complete
     then do
       void (withDb pool (taskInbox parentId))
-      accepted <- withDb pool (taskReportTyped parentId (State.TaskReport State.ReportSucceeded "All independent source audits completed" ["workflow:" <> fingerprint (String script)] [] Nothing Nothing Nothing))
+      accepted <- withDb pool (taskReportTyped parentId (State.TaskReport State.ReportSucceeded "All independent source audits completed" ["workflow:" <> jsonHash (String script)] [] Nothing Nothing Nothing))
       unless accepted (die "completed parent report rejected")
       withDb pool (finishAgentTurn parent TurnSucceeded 0 Nothing Nothing)
       [Only settled :: Only Text] <- withDb pool (query "SELECT status FROM durable_tasks WHERE task_id=?" (Only (Admission.taskId root)))
@@ -227,7 +227,7 @@ factory sources context = buildToolRegistry definitions (readerTool : filter (\t
     readerTool = legacyTool "web_search" "Read frozen repository source. query must equal an input file path." (toolObject [("query", stringParam "Exact file path")] ["query"]) $ \args -> pure $ do
       path <- either (Left . T.pack) Right (parseEither (withObject "source read" (.: "query")) args)
       body <- maybe (Left "file outside the frozen evidence set") Right (Map.lookup path sources)
-      Right (object ["source" .= ("source:" <> path), "body" .= body, "fingerprint" .= fingerprint (String body)])
+      Right (object ["source" .= ("source:" <> path), "body" .= body, "fingerprint" .= jsonHash (String body)])
 
 definitions :: [ToolDefinition]
 definitions = [ToolDefinition (ToolRef name) (SchemaVersion 1) (Set.singleton (if name == "web_search" then EffectRead "source" else EffectWrite "task.db")) SequentialOnly (if name == "web_search" then RetrySafe else RetryUnsafe) (Set.singleton CurrentConversation) (ToolDeadline 30) True mode | (name, mode) <- [("web_search", WorkCall), ("task_start", WorkCall), ("task_finish", FinishCall), ("task_progress", CheckpointCall)]]
