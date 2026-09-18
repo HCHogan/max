@@ -148,13 +148,6 @@ spec = do
                      [ReplyTo (NativeEventId "1234567890123456789")]
                    )
 
-    -- <type> occurs on both sides of <refermsg> and means different things:
-    -- 57 outside marks the quote, the inner one describes what was quoted.
-    -- Reading the inner one would classify a quoted text message as not a
-    -- quote at all.
-    it "reads the outer subtype, not the quoted message's own type" $
-      (qTargetId <$> parseQuote quoteXml) `shouldBe` Just "1234567890123456789"
-
     -- Files and links share type 49.  Anything without a quote payload must
     -- land on the unsupported path it took before, never vanish.
     it "leaves a non-quote app message on the unsupported path" $ do

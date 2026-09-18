@@ -75,10 +75,7 @@ spec = do
         Right (MsgAssistant t) -> t `shouldBe` "hi back"
         other -> expectationFailure $ "bad round-trip: " <> show other
 
-    -- ADR 005 archives a turn's appended messages as this encoding and reads
-    -- them back to replay them.  A constructor that encodes but does not decode
-    -- makes the whole archive unreadable, which silently costs the verbatim
-    -- tier for every turn that ever showed the model an image.
+    -- Contract evaluation decodes recorded requests, including multimodal input.
     it "MsgUserBlocks" $ do
       let m = MsgUserBlocks [TextBlock "look", ImageDataUrl "data:image/png;base64,AAAA"]
       case roundTrip m of
@@ -488,9 +485,7 @@ streamingSpec = do
         ContentResp t -> t `shouldBe` "上升沿圆角"
         other -> expectationFailure ("expected content: " <> show other)
 
-    -- The reconstructed message has to parse back as the same thing,
-    -- because that is literally what happens: it is appended to the
-    -- conversation and re-sent.
+    -- Recorded-request evaluation must also accept reconstructed tool messages.
     it "round-trips through the ChatMessage parser" $ do
       let acc =
             streamAcc

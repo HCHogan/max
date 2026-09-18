@@ -22,6 +22,8 @@ complete the plan.
 - Configuration changes take effect on restart. Keep a bounded shutdown drain.
 - Preserve platform adapters, media, search, browser/sandbox isolation, scoped
   authorization, native identities/references and inbound deduplication.
+- Retire tests for removed implementations and consolidate duplicate coverage.
+  Keep distinct behavioral cases and upgrade checks; test counts are not a goal.
 - Keep PostgreSQL and the existing transport implementations. No permanent
   durable/non-durable modes or replacement workflow framework.
 
@@ -251,3 +253,11 @@ maintained implementation record.
   protocol, identity, cancellation and authorization constraints. All Cabal
   targets build and HLint passes. The line-count aspiration is explicitly
   subordinate to preserving major features and readability.
+
+- Test cleanup: consolidated token round-trip examples and browser concurrency
+  setup while retaining each input and ownership scenario. Removed a duplicate
+  WeChat quote assertion and the fixed tool-limit constant assertion; deadline
+  relationships remain checked with startup configuration. JSON codec tests
+  remain because recorded-request evaluation uses them. All Cabal targets build;
+  1,058 unit examples, capability checks, HLint and package checks pass.
+  Source counting now also handles deleted, unstaged files.

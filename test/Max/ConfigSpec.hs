@@ -2,7 +2,7 @@ module Max.ConfigSpec (spec) where
 
 import Max.Config
 import Max.Http.Json (replyRetryDelaysSecs)
-import Max.Task.Policy (frontendDeadlineSeconds, taskDeadlineSeconds)
+import Max.Task.Policy (frontendDeadlineSeconds, frontendLeaseSeconds, taskDeadlineSeconds)
 import System.Environment (withArgs)
 import System.IO (hClose, hPutStr)
 import System.IO.Temp (withSystemTempFile)
@@ -18,6 +18,7 @@ spec = describe "startup configuration" $ do
       let retryBudget = 1800 * (1 + length replyRetryDelaysSecs) + sum replyRetryDelaysSecs
       config.turnSilenceSeconds `shouldSatisfy` (> retryBudget)
       frontendDeadlineSeconds `shouldSatisfy` (> config.turnSilenceSeconds)
+      frontendLeaseSeconds `shouldSatisfy` (> frontendDeadlineSeconds)
       taskDeadlineSeconds `shouldSatisfy` (> config.turnSilenceSeconds)
   it "preserves explicit model and watchdog timeouts" $
     withSystemTempFile "max-timeouts.yaml" $ \path handle -> do

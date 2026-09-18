@@ -1,4 +1,4 @@
--- | Pure completion messages, responses, usage and archive codecs.
+-- | Completion messages and JSON codecs, also used by recorded-request evaluation.
 module Max.LLM.Types (ContentBlock (..), ChatMessage (..), ToolCall (..), ChatResponse (..), TokenUsage (..), parseToolCall) where
 
 import Control.Applicative ((<|>))

@@ -35,7 +35,11 @@ def measure(paths):
 
 def main():
     manifest = json.loads((ROOT / "docs/code-scope.json").read_text())
-    tracked = set(command("git", "ls-files", "--cached", "--others", "--exclude-standard").splitlines())
+    tracked = {
+        path
+        for path in command("git", "ls-files", "--cached", "--others", "--exclude-standard").splitlines()
+        if (ROOT / path).is_file()
+    }
     production_haskell = {path for path in tracked if path.endswith(".hs") and path.startswith(("src/", "app/"))}
     owners = {}
     for group, paths in manifest["groups"].items():

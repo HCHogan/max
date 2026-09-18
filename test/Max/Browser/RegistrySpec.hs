@@ -1,9 +1,10 @@
 module Max.Browser.RegistrySpec (spec) where
 
 import Control.Concurrent (forkIO, killThread, threadDelay)
+import Control.Concurrent.Async (mapConcurrently_, wait, withAsync)
 import Control.Concurrent.MVar
 import Control.Exception (finally)
-import Control.Monad (forM, forM_, replicateM, when)
+import Control.Monad (forM_, replicateM, when)
 import Data.Aeson (encode, object, (.=))
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
@@ -160,57 +161,25 @@ spec = describe "withBrowserSession" $ do
     (_, peak) <- takeMVar counters
     peak `shouldBe` 1
 
-  it "allows sibling turns in the same group to operate concurrently" $ do
-    reg <- testRegistry
-    entered <- newIORef (0 :: Int)
-    bothEntered <- newEmptyMVar
-    release <- newEmptyMVar
-    done <- forM [AgentTurnId 1, AgentTurnId 2] $ \turn -> do
-      finished <- newEmptyMVar
-      _ <-
-        forkIO $
-          withBrowserSession
-            reg
-            (browserScopeForTurn (GroupId 1) turn)
-            ( do
-                n <- atomicModifyIORef' entered (\x -> let next = x + 1 in (next, next))
-                when (n == 2) (putMVar bothEntered ())
-                takeMVar release
-            )
-            `finally` putMVar finished ()
-      pure finished
-
-    timeout 1_000_000 (takeMVar bothEntered) `shouldReturn` Just ()
-    putMVar release ()
-    putMVar release ()
-    forM_ done takeMVar
-    readIORef entered `shouldReturn` 2
-
-  it "allows different groups to operate concurrently" $ do
-    reg <- testRegistry
-    entered <- newIORef (0 :: Int)
-    bothEntered <- newEmptyMVar
-    release <- newEmptyMVar
-    done <- forM [GroupId 1, GroupId 2] $ \gid -> do
-      finished <- newEmptyMVar
-      _ <-
-        forkIO $
-          withBrowserSession
-            reg
-            (browserScopeForTurn gid (AgentTurnId 1))
-            ( do
-                n <- atomicModifyIORef' entered (\x -> let next = x + 1 in (next, next))
-                when (n == 2) (putMVar bothEntered ())
-                takeMVar release
-            )
-            `finally` putMVar finished ()
-      pure finished
-
-    timeout 1_000_000 (takeMVar bothEntered) `shouldReturn` Just ()
-    putMVar release ()
-    putMVar release ()
-    forM_ done takeMVar
-    readIORef entered `shouldReturn` 2
+  forM_
+    [ ("sibling turns in the same group", [(GroupId 1, AgentTurnId 1), (GroupId 1, AgentTurnId 2)]),
+      ("different groups", [(GroupId 1, AgentTurnId 1), (GroupId 2, AgentTurnId 1)])
+    ]
+    $ \(label, owners) -> it ("allows " <> label <> " to operate concurrently") $ do
+      reg <- testRegistry
+      entered <- newIORef (0 :: Int)
+      bothEntered <- newEmptyMVar
+      release <- newEmptyMVar
+      let operate (group, turn) =
+            withBrowserSession reg (browserScopeForTurn group turn) $ do
+              n <- atomicModifyIORef' entered (\x -> let next = x + 1 in (next, next))
+              when (n == 2) (putMVar bothEntered ())
+              takeMVar release
+      withAsync (mapConcurrently_ operate owners) $ \worker -> do
+        timeout 1_000_000 (takeMVar bothEntered) `shouldReturn` Just ()
+        forM_ owners (const (putMVar release ()))
+        wait worker
+      readIORef entered `shouldReturn` 2
 
   it "releases a turn lock when its owner is cancelled" $ do
     reg <- testRegistry

@@ -699,7 +699,6 @@ test-suite max-test
         Max.SkillsSpec
         Max.Skill.WorkflowSpec
         Max.Agent.FailureSpec
-        Max.Task.PolicySpec
         Max.Task.ProgressSpec
         Max.Task.StateSpec
         Max.Monitor.PolicySpec

@@ -1,6 +1,5 @@
 module Max.IR.PromptSpec (spec) where
 
-import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -43,7 +42,6 @@ spec :: Spec
 spec = do
   mentionSpec
   tokenSpec
-  roundTripSpec
   systemEventSpec
 
 -- | A meta event has no content nodes, so this is the whole of what the
@@ -172,25 +170,6 @@ tokenSpec = describe "placeholder tokens" $ do
   it "leaves non-token brackets literal" $
     parse "[not a token] hi"
       `shouldBe` (Nothing, Body [NText "[not a token] hi"])
-
-roundTripSpec :: Spec
-roundTripSpec = describe "round trip" $ do
-  it "parse . emit ≡ id on parser output (the persisted-history contract)" $ do
-    let inputs =
-          [ "[mention#123] 你好",
-            "@张三 你好",
-            "喊 [mention#987] 来看[sticker#42]",
-            "[reply#98765] 说得对 [face#5]",
-            "[reply#-42] [image#7407] 再看一遍",
-            "看这张 [image#7407.2] 就够了",
-            "[sticker#柴犬瘫地]",
-            "plain text, no tokens 中文",
-            "a@123456.com stays [not a token]"
-          ]
-    for_ inputs $ \input -> do
-      let parsed = parse input
-          emitted = uncurry emitModelChunk parsed
-      (input, parse emitted) `shouldBe` (input, parsed)
 
   it "emits the documented normal form" $
     emitModelChunk (Just 5) (Body [mentionNode 123, NText " 好"])

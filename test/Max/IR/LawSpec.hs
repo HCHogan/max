@@ -1,30 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The two invariants ADR 003's five consumers share, stated as laws.
---
--- They are the comonad laws, transplanted.  A comonad is "a value together
--- with the context it sits in": @extract@ reads the value at the focus and
--- @duplicate@ replaces every position with that position's whole context.
--- Two of its laws say something max needs and never wrote down:
---
--- * @extract . duplicate = id@ — annotating does not move the focus.  Here:
---   projecting a body out to text and reading it back returns the same body.
---   Tested on the model-facing phase, which is the only one with an inverse.
---
--- * @fmap extract . duplicate = id@ — every position keeps its own identity.
---   Here: a projection may drop content, but a node that carries a canonical
---   identity must still name /that/ identity, in /that/ position, on the far
---   side.  Tested on the stored phase, where there is no inverse and content
---   genuinely is dropped — a card flattens, a forward becomes a marker, a
---   blob reference disappears — so identity preservation is the whole of what
---   survives, and is exactly ADR 004's claim that the model reads back the
---   handle vocabulary it writes.
---
--- Neither law is a new requirement.  Both were load-bearing already and
--- checked only by example: 'Max.IR.PromptSpec' pins nine round trips by hand.
--- The corpus below enumerates every sequence of token atoms up to length
--- three, so adjacency, merging and trimming are covered by construction
--- rather than by whichever cases somebody thought of.
+-- | Enumerated token round-trips and canonical identity preservation (ADR 004).
 module Max.IR.LawSpec (spec) where
 
 import Data.Aeson (Value, object, (.=))
@@ -34,13 +10,13 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.IR
-import Max.IR.Prompt (emitModelChunk, parseModelChunk, promptCanonicalText, MentionRoster (..))
+import Max.IR.Prompt (MentionRoster (..), emitModelChunk, parseModelChunk, promptCanonicalText)
 import Max.Platform.Types (CanonicalMessageId (..), Platform (..), PrincipalId (..), PrincipalIdentityId (..))
 import Test.Hspec
 
 spec :: Spec
 spec = do
-  focusLaw
+  roundTripLaw
   identityLaw
 
 -- | The roster names one display so @\@张三@ rescue is exercised, and
@@ -49,10 +25,6 @@ spec = do
 -- the documented behaviour.  Self-mention dropping is 'Max.IR.PromptSpec's.
 roster :: MentionRoster
 roster = MentionRoster {names = [("张三", PrincipalId 123)], selfPrincipal = Nothing}
-
--- ---------------------------------------------------------------------------
--- extract . duplicate = id
--- ---------------------------------------------------------------------------
 
 -- | Every token the model may author, plus the text that surrounds them.
 -- Sequences of these are what the parser can actually reach, which is the
@@ -84,15 +56,25 @@ atoms =
     "]"
   ]
 
--- | All sequences of length 1..3, space-joined, plus the same sequences with
--- no separator so that adjacency is covered too.
+-- | Existing regression examples plus length-1..3 token sequences, both spaced
+-- and adjacent. One round-trip check covers both sets.
 corpus :: [Text]
 corpus =
-  [ joiner pieces
-  | n <- [1 .. 3 :: Int],
-    pieces <- sequencesOf n,
-    joiner <- [T.unwords, T.concat]
+  [ "[mention#123] 你好",
+    "@张三 你好",
+    "喊 [mention#987] 来看[sticker#42]",
+    "[reply#98765] 说得对 [face#5]",
+    "[reply#-42] [image#7407] 再看一遍",
+    "看这张 [image#7407.2] 就够了",
+    "[sticker#柴犬瘫地]",
+    "plain text, no tokens 中文",
+    "a@123456.com stays [not a token]"
   ]
+    <> [ joiner pieces
+       | n <- [1 .. 3 :: Int],
+         pieces <- sequencesOf n,
+         joiner <- [T.unwords, T.concat]
+       ]
   where
     sequencesOf 0 = [[]]
     sequencesOf n = [a : rest | a <- atoms, rest <- sequencesOf (n - 1)]
@@ -102,9 +84,9 @@ corpus =
 replyTargets :: [Maybe Int64]
 replyTargets = [Nothing, Just 98765, Just (-42)]
 
-focusLaw :: Spec
-focusLaw = describe "extract . duplicate = id (projection preserves content)" $
-  it "parse . emit is the identity on every parser-reachable body" $
+roundTripLaw :: Spec
+roundTripLaw = describe "model token round-trip" $
+  it "preserves enumerated token sequences and regression examples" $
     for_ corpus $ \source ->
       for_ replyTargets $ \target -> do
         let (_, body) = parseModelChunk roster source
@@ -113,10 +95,6 @@ focusLaw = describe "extract . duplicate = id (projection preserves content)" $
             -- that produced the body rather than only the body.
             label = (source, target)
         (label, parseModelChunk roster emitted) `shouldBe` (label, (target, body))
-
--- ---------------------------------------------------------------------------
--- fmap extract . duplicate = id
--- ---------------------------------------------------------------------------
 
 -- | What a node names, as opposed to what it says.  Text, cards, forwards and
 -- unsupported nodes name nothing and are exempt: the law constrains positions
@@ -195,7 +173,7 @@ principals :: Map.Map PrincipalIdentityId PrincipalId
 principals = Map.fromList [(PrincipalIdentityId 11, PrincipalId 123)]
 
 identityLaw :: Spec
-identityLaw = describe "fmap extract . duplicate = id (projection preserves identity)" $
+identityLaw = describe "canonical handle preservation" $
   it "every stored identity survives the prompt projection, in order" $
     for_ canonicalCorpus $ \(body, expected) -> do
       let projected = promptCanonicalText principals body
