@@ -72,7 +72,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
       Keep structured results only when a caller explicitly requires a contract.
 - [ ] Remove restart turn recovery, execution admission journals and durable joins.
 - [ ] Remove task browser checkpoint/restore; retain explicitly saved profiles.
-- [ ] Remove configuration generations/hot reload; simplify startup and shutdown.
+- [x] Remove configuration generations/hot reload; simplify startup and shutdown.
 - [ ] Route reminders through Jobs and preserve minimal trigger deduplication.
 
 ### D. Publication and maintenance
@@ -202,3 +202,10 @@ maintained implementation record.
 - Intermediate source count: src + app = 50,330 effective Haskell lines, down
   2,297 from the baseline. This excludes comment-only savings and is a total
   source count, not a claim that the core target has been reached.
+
+- Static process configuration: all Cabal targets build; 1,058 unit and 372 DB
+  integration examples pass. Removed configuration generations, leases, the
+  reload socket/CLI and worker handoff. Tools receive context limits rather than
+  a model catalog; log filtering uses the normal effect interpreter. Capability
+  checks, HLint and package checks pass. Nix syntax and the configuration-restart
+  VM derivation evaluate successfully; the VM has not been run on this macOS host.

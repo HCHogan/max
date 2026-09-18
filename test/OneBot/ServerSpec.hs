@@ -2,7 +2,7 @@ module OneBot.ServerSpec (spec) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async, cancel)
-import Control.Concurrent.STM (atomically, isEmptyTQueue, newTQueueIO, newTVarIO, readTQueue, readTVar, readTVarIO, writeTVar)
+import Control.Concurrent.STM (atomically, isEmptyTQueue, newTQueueIO, newTVarIO, readTQueue, readTVar, readTVarIO)
 import Control.Exception (bracket)
 import Control.Monad (replicateM)
 import Data.Aeson (Value, encode, object, (.=))
@@ -38,32 +38,27 @@ spec = describe "OneBot client publication" $ do
       (EvConnectionReady 7 observedAt, Just (7, _)) -> observedAt `shouldBe` connectedAt
       other -> expectationFailure ("barrier and client generation diverged: " <> showBarrier other)
 
-  it "keeps one websocket generation and admits frames exactly once across reload publication" $ do
+  it "orders the connection barrier and frames from one websocket" $ do
     port <- unusedPort
     eventQueue <- newTQueueIO
     clientRef <- newTVarIO Nothing
-    runtimeGeneration <- newTVarIO (1 :: Int)
     let cfg = ServerConfig "127.0.0.1" port "/onebot" Nothing
     withCompactLogger ColorNever Nothing $ \logger -> do
       server <-
         async
-          ( runEff . runLog "onebot-reload-test" logger LogAttention $
+          ( runEff . runLog "onebot-queue-test" logger LogAttention $
               withUnliftStrategy (ConcUnlift Persistent Unlimited) (runServer cfg eventQueue clientRef)
           )
       threadDelay 30_000
       events <-
         WS.runClient "127.0.0.1" port "/onebot" $ \connection -> do
           WS.sendTextData connection (encode (messageEvent 9001))
-          -- This is the only operation ordinary Max reload performs at the
-          -- OneBot boundary: publish another runtime generation elsewhere.
-          atomically (writeTVar runtimeGeneration 2)
           WS.sendTextData connection (encode (messageEvent 9002))
           WS.sendTextData connection (encode (messageEvent 9003))
           observed <- replicateM 4 (atomically (readTQueue eventQueue))
           readTVarIO clientRef >>= \case
             Just (connectionGeneration, _) -> connectionGeneration `shouldBe` 1
-            Nothing -> expectationFailure "websocket disappeared during runtime publication"
-          readTVarIO runtimeGeneration `shouldReturn` 2
+            Nothing -> expectationFailure "websocket disappeared during ingest"
           pure observed
       cancel server
       [generation | EvConnectionReady generation _ <- events] `shouldBe` [1]

@@ -133,7 +133,7 @@ cabal run max-prompt-flow -- --check
 nix build .#packages.x86_64-linux.max-browser
 scripts/test-browser-workspaces.sh "$(readlink -f result)"
 nix build .#checks.x86_64-linux.sandbox-network
-nix build .#checks.x86_64-linux.nixos-reload
+nix build .#checks.x86_64-linux.nixos-restart
 nix build .#checks.x86_64-linux.state-migration
 nix build .#checks.x86_64-linux.operations
 ```

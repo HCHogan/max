@@ -8,15 +8,8 @@
 -- a profile named "default" when no YAML configuration exists.
 module Max.Config
   ( AppConfig (..),
-    ConfigLoadError (..),
-    ConfigChangeClass (..),
-    ConfigChange (..),
     loadConfig,
-    loadConfigCandidate,
     validateConfig,
-    configChanges,
-    restartRequiredChanges,
-    runtimeValuesFromConfig,
     -- | Exposed so auxiliary executables (@max-intent-eval@) can
     -- compose their own flags on top of the full app config.
     appConfigParser,
@@ -38,10 +31,9 @@ import Autodocodec
 import Control.Monad (when)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
-import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone, minutesToTimeZone)
@@ -55,21 +47,15 @@ import Max.Intent (IntentConfig (..))
 import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Matrix (MatrixConfig (..))
 import Max.ModelCatalog (ContextLimits (..), ModelCatalog, defaultContextLimits, modelProfileNames)
-import Max.ModelCatalog qualified as ModelCatalog
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), mkModelCatalogFromProfiles, parseProtocol)
-import Max.RuntimeConfig (RuntimeValues (..))
 import Max.Tools.Search (SearchConfig (..))
-import Max.Util (trySyncIO)
 import Max.WechatHook (WechatHookConfig (..))
 import OneBot.Server (ServerConfig (..))
 import OptEnvConf
-import OptEnvConf.Args qualified as Args
-import OptEnvConf.EnvMap qualified as EnvMap
 import Path (Abs, File, Path, toFilePath)
 import Path.IO (resolveFile')
 import Paths_max (version)
 import System.Directory (doesFileExist)
-import System.Environment (getArgs, getEnvironment)
 
 -- | Final, fully-resolved application config.
 data AppConfig = AppConfig
@@ -174,28 +160,6 @@ data AppConfig = AppConfig
 -- | Reload parsing never owns process termination.  The public error carries
 -- only a category/count: parser errors can contain raw argument or secret
 -- values, which must not cross the local control protocol or enter logs.
-data ConfigLoadError
-  = ConfigParseFailed !Int
-  | ConfigValidationFailed !Int
-  | ConfigLoadFailed
-  deriving stock (Show, Eq)
-
-data ConfigChangeClass
-  = DispatchHot
-  | WorkerHandoff
-  | RestartRequired
-  deriving stock (Show, Eq, Ord)
-
-data ConfigChange = ConfigChange
-  { changeField :: !Text,
-    changeClass :: !ConfigChangeClass
-  }
-  deriving stock (Show, Eq)
-
--- | Default persona used when neither config nor session supplies one.
--- Deliberately scene-neutral: whether this is a group chat or a
--- private chat is injected by "Max.Prompt" as a platform-neutral 对话场景 block, so
--- personas (including user-configured ones) don't have to care.
 defaultPersona :: Text
 defaultPersona =
   "你是 Max，一个银白头发、蓝色挑染、别着鲨鱼发夹的鲨鱼女孩——\
@@ -244,31 +208,7 @@ loadConfig = do
       ioError . userError . T.unpack $
         "invalid configuration fields: " <> T.intercalate ", " failures
 
--- | Re-run the exact startup parser without allowing a bad candidate to end
--- the process.  The current argv and environment are intentional: a reload
--- changes the YAML behind the stable configured path; process environment is
--- immutable and changes to it remain restart-only.
-loadConfigCandidate :: IO (Either ConfigLoadError AppConfig)
-loadConfigCandidate = do
-  args <- Args.parseArgs <$> getArgs
-  environment <- EnvMap.parse <$> getEnvironment
-  usedRef <- newIORef Nothing
-  attempted <-
-    trySyncIO $
-      runParserOn allCapabilities Nothing (appConfigParser usedRef) args environment Nothing
-  case attempted of
-    Left _ -> pure (Left ConfigLoadFailed)
-    Right (Left errors) -> pure (Left (ConfigParseFailed (NE.length errors)))
-    Right (Right cfg) -> do
-      used <- readIORef usedRef
-      let resolved = cfg {configFileUsed = used}
-      pure $ case validateConfig resolved of
-        [] -> Right resolved
-        failures -> Left (ConfigValidationFailed (length failures))
-
--- | Cross-field/range validation shared by startup and reload. Diagnostics
--- contain field names only; candidate values (including URLs and tokens) must
--- never cross the reload protocol or enter its logs.
+-- | Validate ranges and references without printing configuration secrets.
 validateConfig :: AppConfig -> [Text]
 validateConfig cfg =
   concat
@@ -327,77 +267,6 @@ validateConfig cfg =
           invalid "intent.max_per_hour" (intentCfg.icMaxPerHour <= 0),
           invalid "intent.context_lines" (intentCfg.icContextLines <= 0)
         ]
-
--- | Explicit reload ownership for every top-level setting.  Values are never
--- rendered: diagnostics name fields and classes only.
-configChanges :: AppConfig -> AppConfig -> [ConfigChange]
-configChanges old new =
-  concat
-    [ changed "server.host" RestartRequired old.server.host new.server.host,
-      changed "server.port" RestartRequired old.server.port new.server.port,
-      changed "server.path" RestartRequired old.server.path new.server.path,
-      changed "server.access_token" RestartRequired old.server.accessToken new.server.accessToken,
-      changed "db.url" RestartRequired old.db.url new.db.url,
-      changed "db.max_conns" RestartRequired old.db.maxConns new.db.maxConns,
-      changed "migrations_dir" RestartRequired old.migrationsDir new.migrationsDir,
-      changed "images_dir" RestartRequired old.imagesDir new.imagesDir,
-      changed "image_workers" WorkerHandoff old.imageWorkers new.imageWorkers,
-      changed "shutdown_drain_seconds" WorkerHandoff old.shutdownDrainSeconds new.shutdownDrainSeconds,
-      changed "turn_silence_seconds" DispatchHot old.turnSilenceSeconds new.turnSilenceSeconds,
-      changed "llm" DispatchHot old.llm new.llm,
-      changed "context.force_raw_fallback" DispatchHot old.forceRawContext new.forceRawContext,
-      changed "timezone_minutes" DispatchHot old.timezone new.timezone,
-      changed "persona" DispatchHot old.persona new.persona,
-      changed "search" DispatchHot old.search new.search,
-      changed "cliproxy" DispatchHot old.cliproxy new.cliproxy,
-      changed "browser.proxy" WorkerHandoff old.browserProxy new.browserProxy,
-      changed "browser.state_key_file" RestartRequired old.browserStateKeyFile new.browserStateKeyFile,
-      changed "browser.idle_seconds" RestartRequired old.browserIdleSeconds new.browserIdleSeconds,
-      changed "browser.grace_seconds" RestartRequired old.browserGraceSeconds new.browserGraceSeconds,
-      changed "memory.extract_profile" WorkerHandoff old.memoryExtractProfile new.memoryExtractProfile,
-      changed "memory.timeout_seconds" WorkerHandoff old.historianTimeoutSeconds new.historianTimeoutSeconds,
-      changed "stickers.caption_profile" WorkerHandoff old.stickerCaptionProfile new.stickerCaptionProfile,
-      changed "stickers.enabled" DispatchHot old.stickersEnabled new.stickersEnabled,
-      changed "owners" DispatchHot old.owners new.owners,
-      changed "matrix" WorkerHandoff old.matrix new.matrix,
-      changed "imessage" WorkerHandoff old.imessage new.imessage,
-      changed "wechathook" WorkerHandoff old.wechathook new.wechathook,
-      changed "intent" WorkerHandoff old.intent new.intent,
-      changed "admin" WorkerHandoff old.admin new.admin,
-      changed "admin_call_retention_days" WorkerHandoff old.adminCallRetentionDays new.adminCallRetentionDays,
-      changed "embedding" WorkerHandoff old.embedding new.embedding,
-      changed "debug" DispatchHot old.debug new.debug,
-      changed "log_level" DispatchHot old.logLevel new.logLevel,
-      changed "log_color" RestartRequired old.logColor new.logColor
-    ]
-  where
-    changed field klass before after
-      | before == after = []
-      | otherwise = [ConfigChange field klass]
-
-restartRequiredChanges :: [ConfigChange] -> [ConfigChange]
-restartRequiredChanges = filter ((== RestartRequired) . (.changeClass))
-
-runtimeValuesFromConfig :: AppConfig -> RuntimeValues
-runtimeValuesFromConfig cfg =
-  RuntimeValues
-    { rvPersona = cfg.persona,
-      rvForceRawContext = cfg.forceRawContext,
-      rvDebugDefault = cfg.debug,
-      rvStickerDefault = cfg.stickersEnabled,
-      rvDefaultModel = ModelCatalog.defaultModelName cfg.llm,
-      rvTimeZone = cfg.timezone,
-      rvTurnSilenceSeconds = cfg.turnSilenceSeconds,
-      rvOwners = cfg.owners,
-      rvSearch = cfg.search,
-      rvCliProxy = cfg.cliproxy,
-      rvBrowserProxy = cfg.browserProxy,
-      rvMemoryExtract = cfg.memoryExtractProfile,
-      rvIntent = cfg.intent,
-      rvEmbeddingEnabled = isJust cfg.embedding,
-      rvModelCatalog = cfg.llm,
-      rvLogLevel = cfg.logLevel
-    }
 
 appConfigParser :: IORef (Maybe FilePath) -> Parser AppConfig
 appConfigParser usedRef =

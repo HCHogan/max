@@ -286,10 +286,7 @@ in
     users.groups.max-service = { };
     users.groups.max-outbox = { };
 
-    # The process always re-reads this stable name. For rendered/Nix-owned
-    # configuration, activation updates the symlink before systemd invokes the
-    # reload trigger; package and unit changes still alter ExecStart and cause
-    # a restart.
+    # Configuration is loaded once; changes restart the service.
     environment.etc."max/config.json".source = effectiveConfigFile;
 
     services.postgresql = lib.mkIf cfg.postgres.enable {
@@ -318,7 +315,7 @@ in
 
     systemd.services.max = {
       description = "max — QQ group-chat agent";
-      reloadTriggers = [ effectiveConfigFile ];
+      restartTriggers = [ effectiveConfigFile ];
       after = [
         "network-online.target"
         "max-storage.service"
@@ -371,7 +368,6 @@ in
         # against its cwd; keep everything under the state dir.
         WorkingDirectory = stateDir;
         ExecStart = "${cfg.package}/bin/max --config-file /etc/max/config.json";
-        ExecReload = "${cfg.package}/bin/maxctl reload --socket /run/max/control.sock";
         EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
         Restart = "on-failure";
         RestartSec = 5;

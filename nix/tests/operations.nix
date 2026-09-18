@@ -15,7 +15,6 @@ let
   testPackage = pkgs.runCommand "max-operations-test-client" { } ''
     mkdir -p $out/bin
     ln -s ${maxPackage}/bin/max-runtime $out/bin/max-runtime
-    ln -s ${pkgs.coreutils}/bin/sleep $out/bin/maxctl
     printf '#!${pkgs.runtimeShell}\nexec ${pkgs.coreutils}/bin/sleep infinity\n' > $out/bin/max
     chmod +x $out/bin/max
   '';

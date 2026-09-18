@@ -6,7 +6,6 @@ import Data.Aeson (Value)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Max.LLM.Types (TokenUsage)
-import Max.RuntimeConfig (ConfigGeneration)
 import Max.Turn.Types (AgentTurnId)
 
 -- | Who a chat call is for, threaded through every 'Chat' /
@@ -15,7 +14,7 @@ import Max.Turn.Types (AgentTurnId)
 -- declares its source and optional durable ownership.
 data ChatCtx = ChatCtx
   { -- | Which subsystem is spending: @turn@ \/ @wrapup@ \/ @intent@ \/
-    -- @supplement@ \/ @historian@ \/ @memory-dream@ \/ @caption@.
+    -- @supplement@ \/ @historian@ \/ @caption@.
     ccSource :: !Text,
     -- | The group the call serves; 'Nothing' for groupless work
     -- (caption workers run against a shared library).
@@ -37,10 +36,7 @@ data ChatCtx = ChatCtx
     ccBufferedRetryDelaysSeconds :: !(Maybe [Int]),
     -- | Durable agent attribution.  Background/model-router calls leave it
     -- empty; every call inside a production turn carries it.
-    ccAgentTurnId :: !(Maybe AgentTurnId),
-    -- | Immutable runtime generation held by an agent dispatch. Background
-    -- calls use 'Nothing' and resolve the current generation at call start.
-    ccConfigGeneration :: !(Maybe ConfigGeneration)
+    ccAgentTurnId :: !(Maybe AgentTurnId)
   }
   deriving stock (Show, Eq)
 

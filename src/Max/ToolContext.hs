@@ -7,7 +7,7 @@ module Max.ToolContext
     TurnCapabilities (..),
     ToolContext,
     mkToolContext,
-    mkToolContextAt,
+    mkToolContextWithLimits,
     toolCapabilities,
     toolConversationScope,
     toolGroupId,
@@ -22,7 +22,7 @@ module Max.ToolContext
     toolMonitorArmingAllowed,
     toolCatalogGrants,
     toolEffectCeiling,
-    toolRuntimeSnapshot,
+    toolContextLimits,
     toolSkillLoads,
     withToolSkillLoads,
     toolInvocationIdentity,
@@ -35,8 +35,8 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
+import Max.ModelCatalog (ContextLimits, defaultContextLimits)
 import Max.Platform.Types (AdvertisedCaps, CanonicalMessageId, PrincipalId)
-import Max.RuntimeConfig (RuntimeSnapshot)
 import Max.Tool.Bundles (SkillLoad, mergeSkillLoads)
 import Max.Turn.Types (TurnOutputContext)
 import OneBot.Types (GroupId, UserId)
@@ -82,7 +82,7 @@ data ToolContext = ToolContext
   { toolIdentity :: !TurnIdentity,
     toolCapabilities :: !TurnCapabilities,
     toolConversationScope :: !ConversationScope,
-    toolRuntimeSnapshot :: !(Maybe RuntimeSnapshot),
+    toolContextLimits :: !ContextLimits,
     toolInvocationIdentity :: !(Maybe Text),
     toolSkillLoads :: !(Map Text SkillLoad)
   }
@@ -95,14 +95,14 @@ mkToolContext identity capabilities =
     { toolIdentity = identity,
       toolCapabilities = capabilities,
       toolConversationScope = conversationScopeFor identity.tiGroupId,
-      toolRuntimeSnapshot = Nothing,
+      toolContextLimits = defaultContextLimits,
       toolSkillLoads = Map.empty,
       toolInvocationIdentity = Nothing
     }
 
-mkToolContextAt :: RuntimeSnapshot -> TurnIdentity -> TurnCapabilities -> ToolContext
-mkToolContextAt snapshot identity capabilities =
-  (mkToolContext identity capabilities) {toolRuntimeSnapshot = Just snapshot}
+mkToolContextWithLimits :: ContextLimits -> TurnIdentity -> TurnCapabilities -> ToolContext
+mkToolContextWithLimits limits identity capabilities =
+  (mkToolContext identity capabilities) {toolContextLimits = limits}
 
 withToolInvocationIdentity :: Maybe Text -> ToolContext -> ToolContext
 withToolInvocationIdentity identity context = context {toolInvocationIdentity = identity}

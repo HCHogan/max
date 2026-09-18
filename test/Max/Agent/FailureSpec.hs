@@ -22,7 +22,7 @@ spec = describe "agent retry classification" $ do
     retryableAgentFailure (AgentStreamInterrupted (ResponseTransport ResponseTimeoutFailure)) `shouldBe` False
     retryableAgentFailure (AgentStreamInterrupted (ResponseTransport (ConnectionFailed "reset"))) `shouldBe` False
   it "does not retry configuration, decoding or local budget failures" $ do
-    for_ [AgentRoundLimit, AgentModelFailure LLMReleasedConfiguration, AgentModelFailure (LLMUnknownProfile "timeout"), AgentModelFailure (LLMResponseFailure (ResponseDecode "HTTP 503 timeout"))] $ \failure ->
+    for_ [AgentRoundLimit, AgentModelFailure (LLMUnknownProfile "timeout"), AgentModelFailure (LLMResponseFailure (ResponseDecode "HTTP 503 timeout"))] $ \failure ->
       retryableAgentFailure failure `shouldBe` False
   it "does not retry invalid requests, oversized responses or invalid TLS" $ do
     for_ [RequestConstructionFailure "timeout", ResponseBodyLimitExceeded 3, TlsFailed "certificate expired"] $ \failure ->

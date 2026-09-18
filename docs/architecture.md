@@ -19,12 +19,9 @@ Layout, runtime data flow, effect stack, and phase status. For behaviour see
 [development.md](development.md), and for transport cutover/repair see
 [platforms.md](platforms.md).
 
-Configuration reload is a process-owned control plane: a local Unix socket
-publishes immutable value/resource generations and hands long-lived workers to
-a reconfigurable supervisor, while the OneBot listener and accepted reverse
-WebSocket remain outside that boundary. See
-[`runbooks/config-reload.md`](runbooks/config-reload.md) for the field matrix and
-operational contract.
+Configuration is read once at startup. One supervised worker group owns the
+process resources; changes take effect after a bounded shutdown and restart.
+See [`runbooks/config-restart.md`](runbooks/config-restart.md).
 
 ## Layout
 
@@ -104,7 +101,7 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    placeholders, sending, persistence — shared by final,
                    streamed, and progress text), Render, Roster, Shutdown (graceful
                    drain), Tasks, Worker (required/optional/restartable
-                   supervision), Reload/RuntimeConfig (immutable generations),
+                   supervision),
                    Tools, BuildInfo (compile-time git rev), Admin (JSON API +
                    panel and operational health counters), Util
 app/Main.hs        wires effects + workers + server
@@ -522,7 +519,7 @@ payloads. `PlatformInteraction` permits poke; `PlatformAccount` permits respondi
 to friend requests and is only required at ingress. Roster and permission readers
 do not receive either write capability. Each interpreter routes through the same
 canonical endpoint ownership check; a missing foreign backend cannot fall back to
-QQ. The runtime resolver reads the caller's immutable configuration generation.
+QQ. The platform backends are fixed at startup.
 Raw `OneBot.Action` and response envelopes stay in the platform adapters and
 interpreters. Content and recorded reactions continue through `Outbound`.
 
@@ -691,7 +688,7 @@ ordinary constructor makes them identical. A separate opaque proof can express
 only an explicitly host-authorized group source projected into a direct-message
 turn; reversed DM-to-group and same-kind projections cannot be constructed.
 
-Workers are assembled per immutable runtime-config generation and supervised
+Workers are assembled once at startup and supervised
 through `withWorkers`. Required queue owners (fetch, monitor, dispatch, plan,
 delivery) turn either an exception or a normal return into process failure.
 Config-disabled workers are omitted. Enabled optional edges (embedding,
@@ -699,8 +696,7 @@ Historian, intent, admin, WeChat, Matrix, iMessage) are `RestartableWorker`s:
 synchronous failures stay inside that edge and retry with bounded exponential
 backoff, while asynchronous shutdown still propagates. The bounded
 shutdown-drain action is the only `OptionalWorker` whose normal return is part
-of its contract. OneBot listener ownership remains outside reloadable worker
-generations so a hot reload cannot create a second reverse-WebSocket owner.
+of its contract. The process owns one OneBot listener and client slot.
 
 ## Phase status
 
@@ -721,7 +717,7 @@ generations so a hot reload cannot create a second reverse-WebSocket owner.
 | 15 | Canonical message IR, identities, per-endpoint capability lowering, QQ/Matrix/iMessage/WeChat ingress and mirror delivery | ✅ |
 | 16 | Durable turns/journal replay, typed monitors, reconnect QQ history audit | ✅, with QQ coverage explicitly best-effort |
 | 17 | Historical Plan DSL and fork/checkpoint orchestration | Retired by ADR 008; execution journal and turn runtime retained |
-| 18 | Atomic configuration generations, worker handoff, admin timeline and routine database/operational health gate | ⚠️ implemented; live gate is red pending projection repair and terminal-state reconciliation |
+| 18 | Configuration lifetime, admin timeline and operational health | Configuration generations retired; changes now restart the service. Live health acceptance remains pending. |
 | 19 | ADR 008 durable task interface, monitor-to-task admission, durable inboxes and conversation frontend | Initial cutover reported complete by operator; follow-up adds fivefold quotas, provider admission, progress/retries and Plan retirement (migration 088) |
 
 Remaining work is intentionally narrower than these completed phases:

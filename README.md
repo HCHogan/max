@@ -107,8 +107,8 @@ managed separately from either shell activation mechanism.
 `python3 scripts/check-devenv-pins.py`. CI checks the resolved input graphs.
 
 `nix build .#max` produces the runtime package: `max`, `max-runtime`,
-`maxctl`, and `max-adr003-maintenance`. The command
-`nix build .#max-tools --out-link result-tools` produces `max-prompt-flow` and the intent, context, and skill
+and `max-adr003-maintenance`. The command
+`nix build .#max-tools --out-link result-tools` produces `max-prompt-flow` and the intent, context, contract, and workflow
 evaluation executables in `result-tools/bin`. Each package builds only its own
 executable group. Local Cabal builds include both groups by default, including
 `cabal run max-prompt-flow` before every commit.

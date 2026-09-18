@@ -17,7 +17,7 @@ captionImage profile system lead mime bytes = do
   let dataUrl = "data:" <> mime <> ";base64," <> TE.decodeUtf8 (B64.encode bytes)
   result <-
     chat
-      (ChatCtx "caption" Nothing Nothing Nothing Nothing Nothing Nothing)
+      (ChatCtx "caption" Nothing Nothing Nothing Nothing Nothing)
       profile
       [MsgSystem system, MsgUserBlocks [TextBlock lead, ImageDataUrl dataUrl]]
       []

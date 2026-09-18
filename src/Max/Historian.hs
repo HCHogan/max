@@ -547,7 +547,6 @@ generateHistorianCapture timeoutSeconds profile conversationId messages = do
         (Just (max 1 timeoutSeconds))
         (Just [])
         Nothing
-        Nothing
     decodeResponse = \case
       Left err -> Left ("", "provider: " <> renderLLMFailure err, False)
       Right (InterruptedResp raw err) -> Left (raw, "provider interrupted: " <> renderResponseFailure err, False)

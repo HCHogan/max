@@ -163,7 +163,7 @@ spec = describe "LLM transport and call observation" $ do
     completed _ = False
 
 callContext :: ChatCtx
-callContext = ChatCtx "turn" Nothing Nothing (Just 5) (Just []) Nothing Nothing
+callContext = ChatCtx "turn" Nothing Nothing (Just 5) (Just []) Nothing
 
 withFixture :: String -> Bool -> (AppConfig -> IO a) -> IO a
 withFixture protocol streaming action = withSystemTempFile "max-llm-wire.yaml" $ \path handle -> do

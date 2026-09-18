@@ -58,7 +58,7 @@ import Effectful.Exception
   )
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Effectful.Reader.Dynamic (Reader, ask, local)
+import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Agent.Failure
   ( renderAgentFailure,
     retryableAgentFailure,
@@ -154,7 +154,7 @@ import Max.Effects.PlatformAccount
     respondToFriendRequest,
   )
 import Max.Effects.PlatformQuery (PlatformQuery)
-import Max.Env (BotEnv (..), applyRuntimeSnapshot)
+import Max.Env (BotEnv (..))
 import Max.EpisodeScheduler (armEpisode, bumpEpisode)
 import Max.Faces (faceIdByName)
 import Max.FetchQueue (FetchSignal, notifyFetch)
@@ -308,15 +308,8 @@ import Max.Roster
     memberName,
     renderGroupBrief,
   )
-import Max.RuntimeConfig
-  ( RuntimeSnapshot (..),
-    RuntimeValues (..),
-    acquireRuntimeConfigSTM,
-    leasedRuntimeSnapshot,
-    releaseRuntimeConfigSTM,
-  )
 import Max.Session (Session (..), loadSession, readSession)
-import Max.Shutdown (enterDispatchWith, leaveDispatchWith)
+import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Skills (Skill (..), skillsForGroup)
 import Max.Task.Notice (renderNotice)
 import Max.Task.Policy
@@ -347,7 +340,7 @@ import Max.Tool.Types (ToolDefinition (..), ToolRef (..))
 import Max.ToolContext
   ( TurnCapabilities (..),
     TurnIdentity (..),
-    mkToolContextAt,
+    mkToolContextWithLimits,
   )
 import Max.Toolset (toolDefinitionsFor)
 import Max.Turn.Continuity
@@ -359,12 +352,12 @@ import Max.Turn.Failure (handleTurnFailures)
 import Max.Turn.Start
   ( InputAdmission (AdmitFrontendInput, StartSeparateTurn),
     TurnStart (..),
+    injectRecoveryView,
     startAllowsInput,
     startEffectCeiling,
     startHostView,
     startRecoveryView,
     startTurn,
-    injectRecoveryView,
   )
 import Max.Turn.Types
   ( AgentTurnId (..),
@@ -477,18 +470,10 @@ handleEvents q fetchSig mIntent clientRef = loop
   where
     loop = do
       ev <- liftIO (atomically (readTQueue q))
-      baseEnv <- ask @BotEnv
-      lease <- liftIO (atomically (acquireRuntimeConfigSTM baseEnv.beConfigStore))
-      let snapshot = leasedRuntimeSnapshot lease
-      let eventEnv = applyRuntimeSnapshot snapshot baseEnv
-          activeIntent = mIntent >>= \intentState -> intentState <$ eventEnv.beIntent
-      (local (const eventEnv) . local (const snapshot.rsValues.rvModelCatalog) $ handle activeIntent ev)
-        `finally` liftIO (atomically (releaseRuntimeConfigSTM lease))
+      env <- ask @BotEnv
+      handle (mIntent >>= \intentState -> intentState <$ env.beIntent) ev
       loop
 
-    -- Each dequeued event observes one published generation. Inbound frames
-    -- continue to queue while reload prepares; the OneBot reader and client
-    -- slot are process-owned and never participate in this handoff.
     handle activeIntent ev =
       case ev of
         EvConnectionReady generation connectedAt ->
@@ -1726,12 +1711,10 @@ dispatchLLMWith start owner mIntent origin gm = do
   -- the drain check. The slot covers setup, context collection and execution;
   -- Handler also registers the TurnRuntime before launching the child.
   launched <- mask $ \restore -> do
-    acquired <- liftIO (enterDispatchWith env.beShutdown (acquireRuntimeConfigSTM env.beConfigStore))
+    acquired <- liftIO (enterDispatch env.beShutdown)
     case acquired of
-      Nothing -> pure False
-      Just configLease -> do
-        let snapshot = leasedRuntimeSnapshot configLease
-            dispatchEnv = applyRuntimeSnapshot snapshot env
+      False -> pure False
+      True -> do
         -- Register before context collection so concurrent triggers, !ps and
         -- !kill can see the turn before the Agent loop starts.
         durable <-
@@ -1741,23 +1724,23 @@ dispatchLLMWith start owner mIntent origin gm = do
                 pure
                 existingTurn
             )
-            `onException` liftIO (leaveDispatchWith env.beShutdown (releaseRuntimeConfigSTM configLease))
+            `onException` liftIO (leaveDispatch env.beShutdown)
         let runtimeFailed = do
               ensureAgentTurnRecoveryPending durable "dispatch cancelled before the in-memory turn runtime was published"
                 `catchSync` \e ->
                   logAttention "durable turn prologue cleanup failed" $
                     object ["error" .= T.pack (show (e :: SomeException))]
-              liftIO (leaveDispatchWith env.beShutdown (releaseRuntimeConfigSTM configLease))
+              liftIO (leaveDispatch env.beShutdown)
         turn <-
           ( ( case existingTurn of
                 Nothing ->
                   -- This constructor only allocates process-local state.  It
                   -- runs masked so cancellation cannot land after registry
                   -- insertion but before the caller receives its owner token.
-                  liftIO (beginDurableTurnRuntime dispatchEnv.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
+                  liftIO (beginDurableTurnRuntime env.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
                 Just _ -> do
                   firstChunk <- restore (nextAgentTurnOutputChunk durable.atrTurnId)
-                  liftIO (beginDurableTurnRuntimeAt dispatchEnv.beTasks durable firstChunk gm.groupId gm.userId (Just gm.canonicalId))
+                  liftIO (beginDurableTurnRuntimeAt env.beTasks durable firstChunk gm.groupId gm.userId (Just gm.canonicalId))
             )
               `catchSync` \e -> do
                 ensureAgentTurnCrashed durable "failed to create the in-memory turn runtime"
@@ -1770,10 +1753,10 @@ dispatchLLMWith start owner mIntent origin gm = do
                   logAttention "durable turn launch cleanup failed" $
                     object ["error" .= T.pack (show (e :: SomeException))]
               liftIO $ do
-                leaveDispatchWith dispatchEnv.beShutdown (releaseRuntimeConfigSTM configLease)
-                void (finishTurnRuntime dispatchEnv.beTasks turn)
-              releaseTurnBrowser dispatchEnv durable
-        launchTurn dispatchEnv configLease outputCaps ident gidRaw restore turn durable
+                leaveDispatch env.beShutdown
+                void (finishTurnRuntime env.beTasks turn)
+              releaseTurnBrowser env durable
+        launchTurn env outputCaps ident gidRaw restore turn durable
           `onException` launchFailed
         pure True
   unless launched $ do
@@ -1798,8 +1781,8 @@ dispatchLLMWith start owner mIntent origin gm = do
     -- normal cancellation state for all real work.  This is the ownership
     -- handoff: before 'async' succeeds the caller owns every resource; after
     -- it succeeds this finalizer owns all of them.
-    launchTurn env configLease outputCaps ident gidRaw restore turn durable =
-      void . async . restore . local (const env) . local (const env.beRuntimeSnapshot.rsValues.rvModelCatalog) $
+    launchTurn env outputCaps ident gidRaw restore turn durable =
+      void . async . restore $
         ( localDomain "llm" . holdingDispatchLease owner $ do
             logInfo "llm dispatch" ident
             -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
@@ -1844,7 +1827,7 @@ dispatchLLMWith start owner mIntent origin gm = do
                 logAttention "dispatch settle failed" $
                   object ["error" .= T.pack (show (e :: SomeException))]
             liftIO $ do
-              leaveDispatchWith env.beShutdown (releaseRuntimeConfigSTM configLease)
+              leaveDispatch env.beShutdown
               finishTurnRuntime env.beTasks turn
             releaseTurnBrowser env durable
 
@@ -1933,14 +1916,16 @@ dispatchLLMWith start owner mIntent origin gm = do
     dispatchTask turn durable env session execution = do
       catalog :: ModelCatalog <- ask
       skills <- liftIO (skillsForGroup env.beSkills gm.groupId)
-      let multimodal = maybe False supportsMultimodal (lookupModelCapabilities session.model catalog)
+      let capabilities = lookupModelCapabilities session.model catalog
+          multimodal = maybe False supportsMultimodal capabilities
+          limits = maybe defaultContextLimits (.contextLimits) capabilities
           initialCaps = TurnCapabilities multimodal False (not (null skills)) noAdvertisedCaps False Map.empty (Just execution.teGrants) True
           definitions = toolDefinitionsFor env gm.groupId initialCaps
           grants = Map.fromList [(definition.tdRef.unToolRef, toolCatalogFingerprint [definition]) | definition <- definitions]
           caps = initialCaps {tcCatalogGrants = grants}
           toolCtx =
-            mkToolContextAt
-              env.beRuntimeSnapshot
+            mkToolContextWithLimits
+              limits
               (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId execution.tePrincipal session.clearedAt (turnRuntimeOutputContext turn))
               caps
           messages =
@@ -2089,8 +2074,8 @@ dispatchLLMWith start owner mIntent origin gm = do
             _ -> ctx
           recoveredCtx = maybe frontendCtx (`injectRecoveryView` frontendCtx) recoveryView
           toolCtx =
-            mkToolContextAt
-              env.beRuntimeSnapshot
+            mkToolContextWithLimits
+              limits
               (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId gm.authorPrincipalId s.clearedAt (turnRuntimeOutputContext turn))
               turnCapabilities
           agentCtx = AgentContext toolCtx s.effortOverride (Just frontendToolLimit)

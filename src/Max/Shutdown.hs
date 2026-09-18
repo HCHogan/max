@@ -11,8 +11,6 @@ module Max.Shutdown
     -- * Dispatch side
     enterDispatch,
     leaveDispatch,
-    enterDispatchWith,
-    leaveDispatchWith,
 
     -- * Shutdown side
     beginDrain,
@@ -25,8 +23,7 @@ where
 
 import Control.Concurrent (ThreadId)
 import Control.Concurrent.STM
-  ( STM,
-    TVar,
+  ( TVar,
     atomically,
     modifyTVar',
     newTVarIO,
@@ -38,7 +35,6 @@ import Control.Concurrent.STM
   )
 import Control.Exception (AsyncException (UserInterrupt), throwTo)
 import Control.Monad (unless)
-import Data.Maybe (isJust)
 import Data.Ord (clamp)
 import Effectful
 import Effectful.Log
@@ -61,33 +57,19 @@ newShutdownState = ShutdownState <$> newTVarIO False <*> newTVarIO 0
 -- transaction, so a dispatch can never slip past the gate and then be
 -- missed by 'awaitQuiescent'.
 enterDispatch :: ShutdownState -> IO Bool
-enterDispatch st = isJust <$> enterDispatchWith st (pure ())
-
--- | Atomically claim a dispatch slot and acquire another process-local
--- resource, such as the current configuration generation.  Keeping these in
--- one transaction gives reload and shutdown one precise admission boundary.
-enterDispatchWith :: ShutdownState -> STM a -> IO (Maybe a)
-enterDispatchWith st acquire = atomically $ do
+enterDispatch st = atomically $ do
   draining <- readTVar st.ssDraining
   if draining
-    then pure Nothing
+    then pure False
     else do
-      value <- acquire
       modifyTVar' st.ssInflight (+ 1)
-      pure (Just value)
+      pure True
 
 -- | Release a slot claimed by 'enterDispatch'.  Belongs in a @finally@
 -- — a dispatch that died without releasing would hold shutdown
 -- hostage until the drain deadline.
 leaveDispatch :: ShutdownState -> IO ()
-leaveDispatch st = leaveDispatchWith st (pure ())
-
--- | Release an associated resource and the shutdown slot in the same STM
--- transaction.  The caller still owns the usual outer @finally@ obligation.
-leaveDispatchWith :: ShutdownState -> STM () -> IO ()
-leaveDispatchWith st release = atomically $ do
-  release
-  modifyTVar' st.ssInflight (subtract 1)
+leaveDispatch st = atomically (modifyTVar' st.ssInflight (subtract 1))
 
 --------------------------------------------------------------------------------
 -- Shutdown side

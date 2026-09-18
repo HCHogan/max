@@ -139,7 +139,7 @@ def check_imports():
         errors.append("ToolDirectory: execution capability in read-only directory")
 
     embedding = (ROOT / "src/Max/Effects/Embedding.hs").read_text()
-    if set(IMPORT.findall(embedding)) & {"Max.Env", "Max.RuntimeConfig", "Effectful.Reader.Dynamic"}:
+    if set(IMPORT.findall(embedding)) & {"Max.Env", "Effectful.Reader.Dynamic"}:
         errors.append("Embedding: application environment leaked into the client contract")
 
     agent = (ROOT / "src/Max/Effects/Agent.hs").read_text()

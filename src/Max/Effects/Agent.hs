@@ -40,7 +40,6 @@ import Max.Agent.Execution
 import Max.Agent.Failure (AgentFailure (..))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.CodeMode.Model (codeModeSpecs, executeModelBatch)
-import Max.Execution.Workflow (WorkflowHost)
 import Max.Context.Working
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), ToolSpec, chatMeasured)
 import Max.Effects.ToolControl (ToolControl, runToolControl)
@@ -56,9 +55,8 @@ import Max.Effects.Tools
     runToolsWithInvocationDynamic,
   )
 import Max.Execution.Tools
-import Max.ModelCatalog (ModelCapabilities (..), defaultContextLimits, lookupModelCapabilities)
+import Max.Execution.Workflow (WorkflowHost)
 import Max.Reply (readyPrefix)
-import Max.RuntimeConfig (RuntimeSnapshot (..), RuntimeValues (..))
 import Max.Tasks
   ( TaskCancelled (..),
     TurnRuntime,
@@ -69,7 +67,7 @@ import Max.Tasks
   )
 import Max.Tool.Bundles (SkillLoad (..))
 import Max.Tool.Control (LoopControl (..), controlReply, controlSkillLoads, mergeControls)
-import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolRuntimeSnapshot, toolSkillLoads, toolTurnOutputContext, withToolInvocationIdentity, withToolSkillLoads)
+import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolContextLimits, toolGroupId, toolSkillLoads, toolTurnOutputContext, withToolInvocationIdentity, withToolSkillLoads)
 import Max.Turn.Types (AgentTurnRef (..), turnHandleText, turnOutputAgentTurn)
 import OneBot.Types (GroupId (..))
 
@@ -90,8 +88,7 @@ turnCtx :: AgentContext -> Text -> ChatCtx
 turnCtx ctx source =
   let GroupId gid = toolGroupId ctx.acTools
       durable = (.atrTurnId) . turnOutputAgentTurn <$> toolTurnOutputContext ctx.acTools
-      generation = (.rsGeneration) <$> toolRuntimeSnapshot ctx.acTools
-   in ChatCtx (if (toolCapabilities ctx.acTools).tcBackground then "task/" <> source else source) (Just gid) ctx.acEffort Nothing Nothing durable generation
+   in ChatCtx (if (toolCapabilities ctx.acTools).tcBackground then "task/" <> source else source) (Just gid) ctx.acEffort Nothing Nothing durable
 
 -- | Caps on a single agent invocation.  Per-tool and per-call HTTP
 -- timeouts are configured at the 'LLM' layer; these are loop-level.
@@ -366,10 +363,8 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
       Eff (Tools : ToolDirectory : ToolOutputRead : es) ([ChatMessage], Either AgentFailure ChatResponse)
     budgetedCall workingRef ctx turn profile source messages specs sink = do
       (anchor, previous) <- liftIO (readTVarIO workingRef)
-      let snapshot = toolRuntimeSnapshot ctx.acTools
-          capabilities = snapshot >>= \snap -> lookupModelCapabilities profile snap.rsValues.rvModelCatalog
-          limits = maybe defaultContextLimits (.contextLimits) capabilities
-          identity = workingIdentity profile (T.pack (show ((.rsGeneration) <$> snapshot))) limits specs
+      let limits = toolContextLimits ctx.acTools
+          identity = workingIdentity profile "process" limits specs
           handle = maybe "unavailable" (turnHandleText . (.atrTurnOrdinal)) (turnRuntimeAgentTurn turn)
           -- Native use_skill results are protected by the working planner.
           -- Only restore instructions absent there (nested codemode/restart),

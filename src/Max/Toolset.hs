@@ -48,7 +48,7 @@ import Max.Effects.Tools
     buildToolRegistry,
     registryCatalog,
   )
-import Max.Env (BotEnv (..), applyRuntimeSnapshot)
+import Max.Env (BotEnv (..))
 import Max.File.ToolRuntime (fileToolsWithDatabase)
 import Max.HttpRuntime (HttpRuntime)
 import Max.Media.ToolRuntime
@@ -78,7 +78,6 @@ import Max.ToolContext
     toolCapabilities,
     toolGroupId,
     toolMultimodal,
-    toolRuntimeSnapshot,
     toolSkillLoads,
     toolStickers,
     withToolSkillLoads,
@@ -137,8 +136,7 @@ resolvedToolsFor ::
   ([ToolDefinition], [Tool es])
 resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
   where
-    dispatchEnv = maybe env (`applyRuntimeSnapshot` env) (toolRuntimeSnapshot dc)
-    authorized = toolDefinitionsFor dispatchEnv (toolGroupId dc) (toolCapabilities dc)
+    authorized = toolDefinitionsFor env (toolGroupId dc) (toolCapabilities dc)
     definitions = filter (\definition' -> toolVisible (toolSkillLoads dc) definition'.tdRef.unToolRef) authorized
     allowedRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- authorized]
     visibleRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- definitions]
@@ -174,21 +172,21 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
       registry <- either (Left . T.pack . show) Right (allToolsFor runtime env (withToolSkillLoads loads dc) :: Either ToolCatalogError (ToolRegistry es))
       bindWorkflowContracts javaScriptRuntimeVersion (catalogTools (registryCatalog registry)) loads
     runners0 =
-      builtinsWithDatabase dispatchEnv.beTimeZone dc
-        <> reminderToolsWithDatabase dispatchEnv.beTimeZone dc
-        <> monitorToolsWithDatabase dispatchEnv.beTimeZone dc
+      builtinsWithDatabase env.beTimeZone dc
+        <> reminderToolsWithDatabase env.beTimeZone dc
+        <> monitorToolsWithDatabase env.beTimeZone dc
         <> groupToolsWithDatabase dc
-        <> imageToolsWithDatabase dispatchEnv.beTimeZone dc
+        <> imageToolsWithDatabase env.beTimeZone dc
         <> memoryToolsWithDatabase dc
-        <> pinToolsWithDatabase dispatchEnv.beSessions dispatchEnv.beDefaultModel dc
+        <> pinToolsWithDatabase env.beSessions env.beDefaultModel dc
         <> taskToolsWithDatabase dc
-        <> skillToolsWithRuntime dispatchEnv.beSkills dc prepareSkill bindPackages
-        <> bilibiliToolsFor dispatchEnv.beTimeZone dc
-        <> sandboxToolsWithRuntime dispatchEnv.beTimeZone (toolGroupId dc) dispatchEnv.beSandboxes
-        <> fileToolsWithDatabase dispatchEnv.beTimeZone dc dispatchEnv.beSandboxes
-        <> [t | toolStickers dc && dispatchEnv.beEmbeddingEnabled, t <- stickerToolsWithDatabase]
-        <> maybe [] (searchToolsWithRuntime runtime) dispatchEnv.beSearch
-        <> [t | toolMultimodal dc, t <- browserToolsFor dc dispatchEnv.beBrowsers dispatchEnv.beBrowserProxy]
+        <> skillToolsWithRuntime env.beSkills dc prepareSkill bindPackages
+        <> bilibiliToolsFor env.beTimeZone dc
+        <> sandboxToolsWithRuntime env.beTimeZone (toolGroupId dc) env.beSandboxes
+        <> fileToolsWithDatabase env.beTimeZone dc env.beSandboxes
+        <> [t | toolStickers dc && env.beEmbeddingEnabled, t <- stickerToolsWithDatabase]
+        <> maybe [] (searchToolsWithRuntime runtime) env.beSearch
+        <> [t | toolMultimodal dc, t <- browserToolsFor dc env.beBrowsers env.beBrowserProxy]
         <> [t | toolMultimodal dc, t <- videoToolsWithDatabase dc]
 
 -- | How many tools a dispatch with these gates would get — the

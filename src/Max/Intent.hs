@@ -452,7 +452,7 @@ classifyOnce mGid profile persona ctxLines newLines = do
             <> (if null ctxLines then ["(无)"] else ctxLines)
             <> ["", "[new messages]"]
             <> (if null newLines then ["(见上下文末尾)"] else newLines)
-  r <- chat (ChatCtx "intent" mGid Nothing Nothing Nothing Nothing Nothing) profile [MsgSystem (classifierSystem persona), MsgUser userBody] []
+  r <- chat (ChatCtx "intent" mGid Nothing Nothing Nothing Nothing) profile [MsgSystem (classifierSystem persona), MsgUser userBody] []
   case r of
     Left err -> do
       logAttention "intent: classify failed" $ object ["error" .= err]

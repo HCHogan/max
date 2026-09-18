@@ -5,7 +5,6 @@
 module Max.Log
   ( ColorMode (..),
     withCompactLogger,
-    withCompactLoggerDynamic,
     formatLogMessage,
     parseColorMode,
     parseLogLevel,
@@ -14,7 +13,6 @@ module Max.Log
 where
 
 import Control.Exception (bracket)
-import Control.Monad (when)
 import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
@@ -73,32 +71,16 @@ renderLogLevel = \case
 -- The optional tee runs inline on the logger thread and must be fast and
 -- non-throwing; it supplies the admin log buffer.
 withCompactLogger :: ColorMode -> Maybe (LogMessage -> IO ()) -> (Logger -> IO a) -> IO a
-withCompactLogger mode = withCompactLoggerDynamic mode (pure LogTrace)
-
--- | Long-lived-service variant. 'runLog' admits every level and the renderer
--- consults the current generation for each message.
-withCompactLoggerDynamic :: ColorMode -> IO LogLevel -> Maybe (LogMessage -> IO ()) -> (Logger -> IO a) -> IO a
-withCompactLoggerDynamic mode currentLevel tee act = do
+withCompactLogger mode tee act = do
   colored <- resolveColor mode
   bracket (mkLogger "compact" (emit colored)) waitForLogger act
   where
-    -- Per message rather than resolved once: a process that stays up
-    -- for months would otherwise keep a zone that a DST change had
-    -- moved.  glibc caches the parsed tzfile, so this costs nothing at
-    -- the rate a bot logs.
     emit colored msg = do
-      floorLevel <- currentLevel
-      when (levelRank msg.lmLevel >= levelRank floorLevel) $ do
-        tz <- getCurrentTimeZone
-        TIO.putStrLn (formatLogMessage tz colored msg)
-        hFlush stdout
-        maybe (pure ()) ($ msg) tee
-
-levelRank :: LogLevel -> Int
-levelRank = \case
-  LogTrace -> 0
-  LogInfo -> 1
-  LogAttention -> 2
+      -- Resolve per message so a long-running process observes DST changes.
+      tz <- getCurrentTimeZone
+      TIO.putStrLn (formatLogMessage tz colored msg)
+      hFlush stdout
+      maybe (pure ()) ($ msg) tee
 
 resolveColor :: ColorMode -> IO Bool
 resolveColor = \case

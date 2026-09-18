@@ -21,7 +21,6 @@ let
   testPackage = pkgs.runCommand "max-native-test-client" { } ''
     mkdir -p $out/bin
     ln -s ${maxPackage}/bin/max-runtime $out/bin/max-runtime
-    ln -s ${maxPackage}/bin/maxctl $out/bin/maxctl
     cat > $out/bin/max <<'SCRIPT'
     #!${pkgs.runtimeShell}
     exec ${pkgs.coreutils}/bin/sleep infinity

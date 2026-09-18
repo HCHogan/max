@@ -135,7 +135,7 @@
         {
           package-contents = pkgs.runCommand "max-package-contents" { } ''
             ls -1 ${self.packages.${system}.max}/bin | sort > runtime.actual
-            printf '%s\n' max max-adr003-maintenance max-runtime maxctl | sort > runtime.expected
+            printf '%s\n' max max-adr003-maintenance max-runtime | sort > runtime.expected
             diff -u runtime.expected runtime.actual
             ls -1 ${self.packages.${system}.max-tools}/bin | sort > tools.actual
             printf '%s\n' max-context-eval max-contract-eval max-intent-eval max-prompt-flow max-workflow-eval | sort > tools.expected
@@ -148,7 +148,7 @@
             inherit nixpkgs system;
             maxModule = self.nixosModules.max;
           };
-          nixos-reload = import ./nix/tests/reload.nix {
+          nixos-restart = import ./nix/tests/restart.nix {
             inherit nixpkgs system;
             maxModule = self.nixosModules.max;
           };

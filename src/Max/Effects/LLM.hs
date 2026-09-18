@@ -31,8 +31,6 @@ module Max.Effects.LLM
 
     -- * Effect operations
     runLLM,
-    runRuntimeLLM,
-    withLLMConfigGeneration,
     LLMInterpreter (..),
     runLLMWith,
     chat,
@@ -55,14 +53,14 @@ where
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Effectful
-import Effectful.Dispatch.Dynamic (interpose, interpret, localSeqUnlift, send)
+import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
 import Effectful.Log
 import GHC.Clock (getMonotonicTimeNSec)
 import Max.Http.Json (defaultRetryDelaysSecs, replyRetryDelaysSecs)
 import Max.HttpRuntime (HttpRuntime)
 import Max.LLM.Admission (Admission, newAdmission, priorityForSource, withAdmission)
 import Max.LLM.CallContext
-import Max.LLM.Configuration (configureCallProfile, resolveCallCatalog)
+import Max.LLM.Configuration (configureCallProfile)
 import Max.LLM.Failure
 import Max.LLM.Observability (logChatRequest, recordChatResult)
 import Max.LLM.Protocol
@@ -70,7 +68,6 @@ import Max.LLM.Transport (callChat, callChatStream, interruptionMarker)
 import Max.LLM.Types
 import Max.ModelCatalog (ModelCatalog)
 import Max.ModelCatalog.Internal (LLMProfile (..))
-import Max.RuntimeConfig (ConfigGeneration, RuntimeConfigStore)
 import Max.Tool.Types (ToolSpec (..))
 
 data LLM :: Effect where
@@ -135,85 +132,21 @@ runLLM ::
   ModelCatalog ->
   Eff (LLM : es) a ->
   Eff es a
-runLLM runtime usageWriter callWriter reg = runLLMResolving runtime usageWriter callWriter (const (pure (Right reg)))
-
--- | Production interpreter: an agent call resolves the generation leased by
--- its dispatch, while a background call resolves the current generation at
--- call start.  A leased generation remains in the store until the turn's outer
--- finalizer releases it.
-runRuntimeLLM ::
-  (Log :> es, IOE :> es) =>
-  HttpRuntime ->
-  UsageWriter ->
-  CallWriter ->
-  RuntimeConfigStore ->
-  Eff (LLM : es) a ->
-  Eff es a
-runRuntimeLLM runtime usageWriter callWriter store =
-  runLLMResolving runtime usageWriter callWriter (resolveCallCatalog store)
-
--- | Supply one worker generation to background calls which do not already
--- carry a dispatch lease.  Explicit turn generations always win.  This
--- interposer sits inside the generation worker scope, preventing an old worker
--- in the retirement overlap from combining its old inputs with the newly
--- published model catalog.
-withLLMConfigGeneration ::
-  (LLM :> es) =>
-  ConfigGeneration ->
-  Eff es a ->
-  Eff es a
-withLLMConfigGeneration generation = interpose $ \localEnv -> \case
-  ChatMeasured ctx profile messages tools sink ->
-    localSeqUnlift localEnv $ \unlift ->
-      send (ChatMeasured (stamp ctx) profile messages tools (fmap (unlift .) sink))
-  Chat ctx profile messages tools ->
-    send (Chat (stamp ctx) profile messages tools)
-  ChatStreaming ctx profile messages tools sink ->
-    localSeqUnlift localEnv $ \unlift ->
-      send (ChatStreaming (stamp ctx) profile messages tools (unlift . sink))
-  where
-    stamp ctx =
-      ctx
-        { ccConfigGeneration =
-            case ctx.ccConfigGeneration of
-              Just existing -> Just existing
-              Nothing -> Just generation
-        }
-
-runLLMResolving ::
-  (Log :> es, IOE :> es) =>
-  HttpRuntime ->
-  UsageWriter ->
-  CallWriter ->
-  (ChatCtx -> IO (Either LLMFailure ModelCatalog)) ->
-  Eff (LLM : es) a ->
-  Eff es a
-runLLMResolving runtime usageWriter callWriter resolve action = do
+runLLM runtime usageWriter callWriter catalog action = do
   admission <- liftIO (newAdmission 50 10)
   interpret
     ( \localEnv -> \case
         ChatMeasured ctx name msgs tools sink ->
-          localSeqUnlift localEnv $ \unlift -> do
-            reg <- liftIO (resolve ctx)
-            either (pure . Left) (\catalog -> runOneChat admission runtime usageWriter callWriter catalog ctx name msgs tools (fmap (unlift .) sink)) reg
-        Chat ctx name msgs tools -> do
-          reg <- liftIO (resolve ctx)
-          either (pure . Left) (\catalog -> fmap fst <$> runOneChat admission runtime usageWriter callWriter catalog ctx name msgs tools Nothing) reg
+          localSeqUnlift localEnv $ \unlift ->
+            runOneChat admission runtime usageWriter callWriter catalog ctx name msgs tools (fmap (unlift .) sink)
+        Chat ctx name msgs tools ->
+          fmap fst <$> runOneChat admission runtime usageWriter callWriter catalog ctx name msgs tools Nothing
         ChatStreaming ctx name msgs tools sink ->
-          -- The sink sends messages, so it is 'Eff', not IO; unlifting it
-          -- here is what lets the transport call back into the caller's
-          -- effect stack.  Sequential unlift is right: the read loop is
-          -- single-threaded and calls the sink one frame at a time.
-          localSeqUnlift localEnv $ \unlift -> do
-            reg <- liftIO (resolve ctx)
-            either (pure . Left) (\catalog -> fmap fst <$> runOneChat admission runtime usageWriter callWriter catalog ctx name msgs tools (Just (unlift . sink))) reg
+          localSeqUnlift localEnv $ \unlift ->
+            fmap fst <$> runOneChat admission runtime usageWriter callWriter catalog ctx name msgs tools (Just (unlift . sink))
     )
     action
 
--- | One chat call, shared by the streaming and non-streaming
--- operations.  A 'Just' sink means \"stream if the profile allows it\";
--- 'Nothing', or a profile with @stream = false@, takes the ordinary
--- request-response path.
 runOneChat ::
   (Log :> es, IOE :> es) =>
   Admission ->

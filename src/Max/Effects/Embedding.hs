@@ -52,9 +52,7 @@ data Embedding :: Effect where
 
 type instance DispatchOf Embedding = Dynamic
 
--- | Assembly supplies a client resolver evaluated once per operation, so a
--- dispatch can retain its leased generation while the effect knows only the
--- embedding client. Do not capture a process-start snapshot for live reload.
+-- | The host supplies the configured client without exposing its environment.
 runRuntimeEmbedding ::
   (IOE :> es) =>
   Eff es (Maybe EmbedClient) ->

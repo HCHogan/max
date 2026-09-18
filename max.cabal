@@ -360,13 +360,10 @@ library
         Max.DB.Task.Workflow
         Max.Task.View
         Max.Render
-        Max.Reload
-        Max.Reload.Prepare
         Max.Reply
         Max.ReplySend
         Max.Reply.Resolve
         Max.Resource
-        Max.RuntimeConfig
         Max.Roster
         Max.Sandbox.Runtime
         Max.Sandbox.Registry
@@ -429,7 +426,6 @@ library
         Max.Runtime.Client
         Max.Runtime.Protocol
         Max.Worker
-        Max.Worker.Generation
     other-modules:
         Max.LLM.Configuration
       Max.LLM.Observability
@@ -520,17 +516,6 @@ executable max-runtime
         , max
         , text >= 2.1 && < 2.2
     ghc-options:      -threaded -rtsopts
-
-executable maxctl
-    import:           warnings, lang
-    if !flag(runtime-tools)
-        buildable: False
-    hs-source-dirs:   maxctl
-    main-is:          Main.hs
-    build-depends:
-        , base       >= 4.20 && < 5
-        , max
-        , text       >= 2.1  && < 2.2
 
 -- Deterministic renderer for docs/prompt-flow.md.  It exercises the pure
 -- seams between the Prompt, Agent and LLM effects; no DB or network needed.
@@ -678,7 +663,7 @@ test-suite max-test
         Max.Browser.ProfileSpec
         Max.Command.ParserSpec
         Max.Command.PermissionSpec
-        Max.ConfigReloadSpec
+        Max.ConfigSpec
         Max.SchemaSpec
         Max.ConversationScopeSpec
         Max.DB.CallsSpec
@@ -708,8 +693,6 @@ test-suite max-test
         Max.ReplySendSpec
         Max.Concurrent.LeaseSpec
         Max.ResourceSpec
-        Max.ReloadSpec
-        Max.RuntimeConfigSpec
         Max.SelfSourceSpec
         Max.SessionSpec
         Max.ShutdownSpec
@@ -752,7 +735,6 @@ test-suite max-test
         Max.Turn.TypesSpec
         Max.UtilSpec
         Max.WorkerSpec
-        Max.Worker.GenerationSpec
         Max.Http.JsonSpec
     build-depends:
         , QuickCheck      >= 2.14 && < 2.19
