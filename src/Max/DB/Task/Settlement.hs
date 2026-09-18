@@ -14,14 +14,13 @@ where
 import Control.Monad (forM_, unless, void, when)
 import Data.Aeson (Value)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
-import Max.DB.Task.FrontendInput (settleInputsWithin)
 import Max.DB.Task.Record
 import Max.Task.State
 import Max.Task.Types (taskHandle)
@@ -32,10 +31,9 @@ data SettlementOutcome = SettlementSucceeded | SettlementFailed | SettlementCanc
 
 -- | Called only after the caller successfully changed the turn from live to
 -- terminal. Repeated terminal writes must not settle the same attempt twice.
-settleTurn :: (WithConnection :> es, IOE :> es) => AgentTurnId -> SettlementOutcome -> Maybe Text -> Bool -> Eff es ()
-settleTurn turn outcomeKind abortReason frontendManaged = do
-  let successful = outcomeKind == SettlementSucceeded
-      cancelled = outcomeKind == SettlementCancelled
+settleTurn :: (WithConnection :> es, IOE :> es) => AgentTurnId -> SettlementOutcome -> Maybe Text -> Eff es ()
+settleTurn turn outcomeKind abortReason = do
+  let cancelled = outcomeKind == SettlementCancelled
   attempt <- loadAttempt turn
   forM_ attempt $ \execution -> do
     current <- loadTask execution.taskId
@@ -89,27 +87,6 @@ settleTurn turn outcomeKind abortReason frontendManaged = do
               "INSERT INTO task_events(task_id,revision,kind,body) VALUES(?,?,'retry_scheduled',?)"
               (task.taskId, task.revision, T.take 60000 (jsonText decision.report))
   settleNotification turn abortReason
-  when frontendManaged $ do
-    receipts <- query "SELECT EXISTS(SELECT 1 FROM messages WHERE agent_turn_id=? AND kind='chat')" (Only turn)
-    let disposition
-          | cancelled = RequestCancelled
-          | successful && receipts == [Only True] = RequestAnswered
-          | otherwise = RequestFailed
-        reason = T.take 5000 (fromMaybe "Turn ended" abortReason)
-    void $
-      execute
-        "UPDATE conversation_requests SET disposition=?,reason=?,updated_at=now() WHERE turn_id=? AND disposition<>'delegated'"
-        (dispositionText disposition, reason, turn)
-    -- A delegated request retains its disposition, but still gets the
-    -- frontend's explanatory checkpoint, as did the former settlement.
-    void $
-      execute
-        "UPDATE conversation_requests SET reason=?,updated_at=now() WHERE turn_id=? AND disposition='delegated'"
-        (reason, turn)
-    settleInputsWithin turn (successful && receipts == [Only True]) cancelled reason
-    void $ execute "DELETE FROM conversation_frontends WHERE turn_id=?" (Only turn)
-    void $ execute "NOTIFY max_dispatch_work, '1'" ()
-    void $ execute "NOTIFY max_task_work, '1'" ()
 
 settleNotification :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Maybe Text -> Eff es ()
 settleNotification turn abortReason = do
@@ -133,26 +110,6 @@ settleNotification turn abortReason = do
           fromMaybe "notification ended without an output receipt" abortReason,
           identifier
         )
-  delivered <-
-    query
-      "SELECT work.task_id FROM task_notifications notice JOIN durable_tasks work USING(task_id)\
-      \ WHERE notice.turn_id=? AND notice.delivered_at IS NOT NULL AND notice.kind='result'\
-      \ AND notice.superseded_at IS NULL AND notice.revision=work.revision AND notice.attempt=work.attempt AND work.monitor_fire_id IS NULL"
-      (Only turn)
-  forM_ (delivered :: [Only Int64]) $ \(Only identifier) -> do
-    task <- loadTask identifier
-    forM_ task $ \work -> do
-      let disposition = case work.status of
-            Succeeded -> RequestAnswered
-            Partial -> RequestWaiting
-            Waiting -> RequestWaiting
-            _ -> RequestFailed
-      void $
-        execute
-          "UPDATE conversation_requests request SET disposition=?,reason=?,updated_at=now()\
-          \ WHERE (request.message_id=? OR EXISTS(SELECT 1 FROM task_events WHERE task_id=? AND source_message_id=request.message_id))\
-          \ AND NOT EXISTS(SELECT 1 FROM durable_tasks other WHERE other.source_message_id=request.message_id AND other.status IN ('queued','running','waiting','retrying'))"
-          (dispositionText disposition, T.take 5000 . (.summary) <$> work.result, work.sourceMessage, work.taskId)
 
 completeTask :: (WithConnection :> es, IOE :> es) => TaskRecord -> TaskStatus -> Maybe TaskReport -> Eff es ()
 completeTask previous status report = do
@@ -217,12 +174,6 @@ routeCompletion task = case task.parent of
       query
         "SELECT EXISTS(SELECT 1 FROM durable_tasks WHERE parent_task_id=? AND status IN ('queued','running','waiting','retrying'))"
         (Only task.taskId)
-    when (task.status == Cancelled && isNothing task.monitorFire) $
-      void $
-        execute
-          "UPDATE conversation_requests SET disposition='cancelled',reason='task cancelled',updated_at=now()\
-          \ WHERE message_id=? AND NOT EXISTS(SELECT 1 FROM durable_tasks WHERE source_message_id=? AND status IN ('queued','running','waiting','retrying'))"
-          (task.sourceMessage, task.sourceMessage)
     quiet <- if task.status == Waiting && children == [Only True] then pure True else suppressMonitorNotice task
     unless quiet $ do
       let body = fromMaybe (TaskReport (terminalReport task.status) (taskStatusText task.status) [] [] Nothing Nothing Nothing) task.result

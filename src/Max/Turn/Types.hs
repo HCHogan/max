@@ -9,7 +9,6 @@ module Max.Turn.Types
     TurnOutputLink (..),
     TurnOutputContext,
     newTurnOutputContext,
-    newTurnOutputContextAt,
     nextTurnOutputLink,
     turnOutputAgentTurn,
     turnHandleText,
@@ -65,14 +64,7 @@ instance Eq TurnOutputContext where
   left == right = left.tocTurnRef == right.tocTurnRef && left.tocNextChunk == right.tocNextChunk
 
 newTurnOutputContext :: AgentTurnRef -> IO TurnOutputContext
-newTurnOutputContext ref = newTurnOutputContextAt ref 0
-
--- | Re-open an existing turn after restart at the first chunk not already
--- committed to the canonical ledger.  The seed is host-derived from the
--- ledger; model input can never choose it.
-newTurnOutputContextAt :: AgentTurnRef -> Int -> IO TurnOutputContext
-newTurnOutputContextAt ref firstChunk =
-  TurnOutputContext ref <$> newTVarIO (max 0 firstChunk)
+newTurnOutputContext ref = TurnOutputContext ref <$> newTVarIO 0
 
 -- | Allocate before publication.  A failed publication leaves a gap, which is
 -- preferable to reusing an identity whose external outcome may be unknown.

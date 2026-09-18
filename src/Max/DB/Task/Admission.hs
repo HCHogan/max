@@ -2,7 +2,7 @@
 -- one transaction. PostgreSQL owns uniqueness; Haskell owns the policy.
 module Max.DB.Task.Admission (AdmissionError (..), admitTaskWithin) where
 
-import Control.Monad (void, when)
+import Control.Monad (void)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
@@ -16,10 +16,6 @@ import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Task.Authorization
-import Max.DB.Task.FrontendInput
-  ( closeInputWithin,
-    unseenInputWithin,
-  )
 import Max.DB.Task.Record
 import Max.DB.Transaction (InTransaction)
 import Max.Task.Admission (AdmissionError (..))
@@ -30,10 +26,8 @@ import Max.Turn.Types (AgentTurnId)
 admitTaskWithin :: (InTransaction :> es, WithConnection :> es, IOE :> es) => AgentTurnId -> Maybe Int64 -> Int64 -> Text -> Text -> TaskProfile -> Value -> Map Text Text -> Eff es (Either AdmissionError TaskRecord)
 admitTaskWithin turn message actor key objective profile inputs grants = do
   authorized <- authorizeWithin turn (ExecutionWork CheckOnly)
-  pending <- unseenInputWithin turn
   sources <- query "SELECT conversation_id,initiator_principal_id FROM agent_turns WHERE turn_id=?" (Only turn)
   case sources :: [(Int64, Maybe Int64)] of
-    [(_, Just _)] | authorized && pending -> pure (Left AdmissionInputPending)
     [(conversation, Just initiator)] | authorized -> do
       repeated <-
         query
@@ -113,14 +107,7 @@ admitTaskWithin turn message actor key objective profile inputs grants = do
                                         )
                                     case inserted of
                                       [Only identifier] -> do
-                                        when (isNothing parent) (closeInputWithin turn)
                                         void $ execute "INSERT INTO task_revisions(task_id,revision,objective,author_principal_id) VALUES(?,1,?,?)" (identifier, T.strip objective, actor)
-                                        when (isJust message && isNothing parent) $
-                                          void $
-                                            execute
-                                              "INSERT INTO conversation_requests(message_id,turn_id,disposition) VALUES(?,?,'delegated')\
-                                              \ ON CONFLICT(message_id) DO UPDATE SET disposition='delegated',updated_at=now()"
-                                              (message, turn)
                                         requiredTask identifier
                                       _ -> error "task admission did not create a task"
           _ -> error "task admission key is not unique"

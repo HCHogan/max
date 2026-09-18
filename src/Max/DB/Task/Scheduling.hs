@@ -52,9 +52,9 @@ claimTask owner = withTransaction $ do
             expired <-
               query
                 "UPDATE agent_turns SET status='crashed',finished_at=now(),abort_reason='task execution lease expired'\
-                \ WHERE status IN ('starting','running','recovery-pending') AND turn_id IN (SELECT turn_id FROM task_attempts WHERE task_id=?) RETURNING turn_id,frontend_managed"
+                \ WHERE status IN ('starting','running','recovery-pending') AND turn_id IN (SELECT turn_id FROM task_attempts WHERE task_id=?) RETURNING turn_id"
                 (Only task.taskId)
-            forM_ expired $ \(turn, managed) -> settleTurn turn SettlementFailed (Just "task execution lease expired") managed
+            forM_ expired $ \(Only turn) -> settleTurn turn SettlementFailed (Just "task execution lease expired")
           turns <-
             query
               "INSERT INTO agent_turns(conversation_id,turn_ordinal,trigger_canonical_message_id,initiator_principal_id,status)\

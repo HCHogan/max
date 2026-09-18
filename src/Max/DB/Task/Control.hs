@@ -56,11 +56,6 @@ controlTask (GroupId group) (PrincipalId actor) administrator (DurableTaskId ide
             execute
               "INSERT INTO task_events(task_id,revision,kind,author_principal_id,source_message_id,body) VALUES(?,?,?,?,?,?)"
               (identifier, task.revision, taskOperationText operation, actor, source, trimmed)
-          when (isJust source) $
-            void $
-              execute
-                "INSERT INTO conversation_requests(message_id,disposition) VALUES(?,?) ON CONFLICT(message_id) DO NOTHING"
-                (source, dispositionText (if operation == Cancel then RequestCancelled else RequestDelegated))
           case operation of
             Replace -> do
               void $

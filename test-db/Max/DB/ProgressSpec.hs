@@ -17,7 +17,6 @@ import Max.DB.Task.Notice
 import Max.DB.Task.Query qualified as Query
 import Max.DB.TaskSpec (admit, claimOne, draft, report, seed)
 import Max.Effects.Outbound (runOutbound)
-import Max.Execution.Types (ExecutionStep (ExecutionCheckpoint))
 import Max.IR (Body (..), Node (NMention, NText), Phase (Canonical))
 import Max.Platform.Store (OutboundDraft (..), enqueueOutbound)
 import Max.Platform.Types (PrincipalId (..))
@@ -25,8 +24,9 @@ import Max.ReplySend
 import Max.Task.Notice
 import Max.Task.Query qualified as TaskView
 import Max.Task.State qualified as TaskState
+import Max.Tasks (beginDurableTurnRuntime, newTaskRegistry)
 import Max.Turn.Types
-import OneBot.Types (GroupId (..))
+import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
 spec :: DbPool -> Spec
@@ -43,7 +43,6 @@ spec pool = before_ (truncateAll pool) $ describe "direct task publication" $ do
     detail <- withDb pool (Query.readTask (GroupId 900) task) >>= requireJust "task detail"
     progressView <- requireJust "progress" detail.progress
     progressView.body `shouldBe` object ["status" .= ("running" :: Text), "summary" .= ("first evidence" :: Text)]
-    withDb pool (query "SELECT disposition FROM conversation_requests" ()) `shouldReturn` [Only ("delegated" :: Text)]
 
   it "returns the final report directly without recording a model decision" $ do
     (task, front) <- readyResult pool
@@ -51,39 +50,12 @@ spec pool = before_ (truncateAll pool) $ describe "direct task publication" $ do
     void $ withDb pool (enqueueOutbound (draft front))
     withDb pool (finishAgentTurn front TurnSucceeded 0 Nothing)
     withDb pool (query "SELECT review_decision IS NULL,delivered_at IS NOT NULL FROM task_notifications" ()) `shouldReturn` [(True, True)]
-    withDb pool (query "SELECT disposition FROM conversation_requests" ()) `shouldReturn` [Only ("answered" :: Text)]
 
   it "fences an old progress snapshot after new evidence arrives" $ do
     (_, execution, front) <- ready pool
     progress pool execution "newer snapshot"
     withDb pool (loadNotice front.atrTurnId) `shouldReturn` Nothing
     withDb pool (enqueueOutbound (draft front)) `shouldThrow` anyException
-
-  it "allows a real foreground request to preempt a task notice and fences its late response" $ do
-    (task, _, front) <- ready pool
-    (userTurn, _, _) <- seed pool 900 2
-    withDb pool (claimFrontend userTurn) `shouldReturn` True
-    withDb pool (loadNotice front.atrTurnId) `shouldReturn` Nothing
-    withDb pool (enqueueOutbound (draft front)) `shouldThrow` anyException
-    withDb pool (finishAgentTurn front TurnAborted 0 (Just "yielded"))
-    withDb pool (authorizeTaskStep userTurn.atrTurnId ExecutionCheckpoint) `shouldReturn` True
-    withDb pool admitTaskNotification `shouldReturn` []
-    withDb pool (finishAgentTurn userTurn TurnSucceeded 1 Nothing)
-    due pool
-    [next] <- withDb pool admitTaskNotification
-    Just nextFront <- withDb pool (taskTurnRef next)
-    withDb pool (claimFrontend nextFront) `shouldReturn` True
-    snapshot <- withDb pool (loadNotice next) >>= requireJust "current notice"
-    snapshot `shouldBe` TaskProgress task "first evidence"
-
-  it "does not admit progress ahead of already-waiting foreground work" $ do
-    source <- seed pool 900 1
-    _ <- admit pool source "priority"
-    execution <- claimOne pool
-    progress pool execution "working"
-    (userTurn, _, _) <- seed pool 900 2
-    withDb pool admitTaskNotification `shouldReturn` []
-    withDb pool (claimFrontend userTurn) `shouldReturn` True
 
   it "acknowledges one committed progress output after a failed terminal checkpoint without republishing" $ do
     (task, execution, front) <- ready pool
@@ -98,8 +70,6 @@ spec pool = before_ (truncateAll pool) $ describe "direct task publication" $ do
     progress pool execution "another useful update"
     due pool
     [next] <- withDb pool admitTaskNotification
-    Just nextFront <- withDb pool (taskTurnRef next)
-    withDb pool (claimFrontend nextFront) `shouldReturn` True
     snapshot <- withDb pool (loadNotice next) >>= requireJust "notice after publication"
     snapshot `shouldBe` TaskProgress task "another useful update"
 
@@ -109,7 +79,6 @@ spec pool = before_ (truncateAll pool) $ describe "direct task publication" $ do
     void $ withDb pool (enqueueOutbound (draft front))
     withDb pool (noticePublished front.atrTurnId) `shouldReturn` True
     void $ withDb pool $ execute "UPDATE agent_turns SET status='crashed' WHERE turn_id=?" (Only front.atrTurnId)
-    void $ withDb pool $ execute "DELETE FROM conversation_frontends WHERE turn_id=?" (Only front.atrTurnId)
     withDb pool admitTaskNotification `shouldReturn` []
     rows <- withDb pool $ query "SELECT attempts,delivered_at IS NOT NULL FROM task_notifications" ()
     rows `shouldBe` [(1 :: Int, True)]
@@ -131,7 +100,9 @@ spec pool = before_ (truncateAll pool) $ describe "direct task publication" $ do
     output <- newTurnOutputContext front
     let text = "[reply#" <> T.pack (show (source :: Int64)) <> "] [mention#" <> T.pack (show (principal :: Int64)) <> ": Alice] 新证据\n\n正在验证"
         target = ReplyTarget (GroupId 900) [] Nothing False True True False False (Just output)
-    published <- withDbLog pool $ runOutbound $ sendAndPersistReply target (freshBudget {sbChunksLeft = 1}) text
+    registry <- newTaskRegistry
+    _ <- beginDurableTurnRuntime registry front (GroupId 900) (UserId 1) Nothing
+    published <- withDbLog pool $ runOutbound registry $ sendAndPersistReply target (freshBudget {sbChunksLeft = 1}) text
     length published.committed `shouldBe` 1
     published.failure `shouldBe` Nothing
     rows <- withDb pool $ queryRows ((,) <$> jsonField <*> field) "SELECT canonical_content::text,reply_to_canonical_message_id FROM messages WHERE agent_turn_id=?" (Only front.atrTurnId)
@@ -160,7 +131,6 @@ ready pool = do
   progress pool execution "first evidence"
   [notice] <- withDb pool admitTaskNotification
   Just front <- withDb pool (taskTurnRef notice)
-  withDb pool (claimFrontend front) `shouldReturn` True
   pure (task, execution, front)
 
 progress :: DbPool -> AgentTurnRef -> Text -> IO ()
@@ -178,5 +148,4 @@ readyResult pool = do
   withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing)
   [notice] <- withDb pool admitTaskNotification
   Just front <- withDb pool (taskTurnRef notice)
-  withDb pool (claimFrontend front) `shouldReturn` True
   pure (task, front)

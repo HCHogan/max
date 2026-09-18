@@ -28,6 +28,7 @@ import Max.Browser.Registry
 import Max.Browser.Runtime (browserMaintenance)
 import Max.Browser.Vault (loadBrowserVault)
 import Max.Config (AppConfig (..), loadConfig)
+import Max.Conversation (newConversations)
 import Max.DB.AgentTurn (ReclaimedTurns (..), addAgentTurnUsage, reclaimInterruptedTurns)
 import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
@@ -51,7 +52,7 @@ import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
-import Max.Handler (dispatchMonitorFire, dispatchPendingWorker, dispatchProactive, durableTaskWorker, handleEvents, resumeInterruptedTurn)
+import Max.Handler (dispatchMonitorFire, dispatchPendingWorker, dispatchProactive, durableTaskWorker, handleEvents)
 import Max.Historian (historianWorker)
 import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
 import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
@@ -126,6 +127,7 @@ main = do
           adminTargets <- newTVarIO (mempty :: Map.Map Int64 Int64)
           episodeScheduler <- newEpisodeScheduler
           intentState <- newIntentState
+          conversations <- newConversations
           embeddingLock <- newEmbeddingLock
           startedAt <- getCurrentTime
           let qqEdge = qqBackend clientRef
@@ -153,6 +155,7 @@ main = do
                     beOwners = cfg.owners,
                     beAdminTarget = adminTargets,
                     beTasks = tasks,
+                    beConversations = conversations,
                     beShutdown = shutdown,
                     beSandboxes = sandboxes,
                     beBrowsers = browsers,
@@ -172,7 +175,7 @@ main = do
             . runBlobHost cfg.imagesDir
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
-            . runOutbound
+            . runOutbound tasks
             -- Token accounting goes through its own pooled connection
             -- (a plain IO writer): the LLM interpreter sits outside
             -- the WithConnection effect and the eval harness has no
@@ -210,7 +213,7 @@ main = do
             . runReader env
             . runPlatforms qqEdge foreignEdges
             . runRuntimeEmbedding (pure (newEmbedClient httpRuntime <$> cfg.embedding))
-            . runDurableAgent defaultLimits (allToolsFor httpRuntime env)
+            . runDurableAgent conversations defaultLimits (allToolsFor httpRuntime env)
             $ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState logBuf clientRef mainTid
       )
       `finally` destroyAllBrowsers browsers
@@ -285,16 +288,15 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
         object ["files" .= applied]
     env :: BotEnv <- ask
     let maintenanceOwner = "max/" <> T.pack (show env.beStartedAt) <> "/" <> T.pack (show mainTid)
-    reclaimed <- reclaimInterruptedTurns (maintenanceOwner <> "/turn-recovery")
+    reclaimed <- reclaimInterruptedTurns
     reclaimedMonitorFires <- reclaimExpiredMonitorFireClaims
     when (reclaimedMonitorFires > 0) $
       logAttention "monitor scheduler: expired claims reclaimed" $
         object ["fires" .= reclaimedMonitorFires]
-    when (reclaimed.rrTurnsPendingResume > 0 || reclaimed.rrTurnsCrashed > 0 || reclaimed.rrExecutionsUnknown > 0) $
-      logAttention "durable turn recovery: reclaimed interrupted work" $
+    when (reclaimed.rrTurnsCrashed > 0 || reclaimed.rrExecutionsUnknown > 0) $
+      logAttention "interrupted foreground turns ended; uncertain effects retained" $
         object
-          [ "turns_pending_resume" .= reclaimed.rrTurnsPendingResume,
-            "turns_crashed" .= reclaimed.rrTurnsCrashed,
+          [ "turns_crashed" .= reclaimed.rrTurnsCrashed,
             "executions_outcome_unknown" .= reclaimed.rrExecutionsUnknown
           ]
     -- The skill cache is authoritative once loaded (write-through, same
@@ -302,7 +304,6 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
     -- the admin server can consult it.
     nSkills <- loadSkills env.beSkills
     logInfo "skills loaded" $ object ["count" .= nSkills]
-    for_ reclaimed.rrRecoveries resumeInterruptedTurn
     let ownerFor suffix = maintenanceOwner <> "/" <> suffix
         requiredWorkers =
           [ worker "image-fetch" RequiredWorker (imageWorker cfg.imageWorkers fetchSig),

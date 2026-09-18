@@ -34,12 +34,11 @@ authorizeWithin turn step = do
     if locked
       then
         query
-          "SELECT frontend_managed FROM agent_turns WHERE turn_id=? AND status IN ('starting','running','recovery-pending') FOR UPDATE"
+          "SELECT true FROM agent_turns WHERE turn_id=? AND status IN ('starting','running','recovery-pending') FOR UPDATE"
           (Only turn)
       else pure []
   case active of
-    [Only managed] -> do
-      frontend <- query "SELECT EXISTS(SELECT 1 FROM conversation_frontends WHERE turn_id=? AND lease_until>clock_timestamp())" (Only turn)
+    [Only True] -> do
       stale <-
         query
           "SELECT EXISTS(SELECT 1 FROM task_notifications notice JOIN durable_tasks work USING(task_id) LEFT JOIN task_progress progress USING(task_id)\
@@ -47,7 +46,7 @@ authorizeWithin turn step = do
           \ OR notice.body->>'status' IS DISTINCT FROM work.status OR work.status='cancelled' OR notice.superseded_at IS NOT NULL\
           \ OR (notice.kind='progress' AND notice.progress_version IS DISTINCT FROM progress.version)))"
           (Only turn)
-      if (managed && frontend /= [Only True]) || stale == [Only True]
+      if stale == [Only True]
         then pure False
         else do
           attempt <- loadAttempt turn

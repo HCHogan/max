@@ -15,10 +15,10 @@ import GHC.Conc (BlockReason (BlockedOnMVar), ThreadStatus (ThreadBlocked), thre
 import Helpers (insertRawMessage, testTime, truncateAll, withDb, withDbLog)
 import Max.Conversation.Roster (ConversationRoster (..), RosterIdentity (..))
 import Max.ConversationScope (conversationScopeFor)
+import Max.DB.AgentTurn (AgentTurnTerminal (TurnCancelled), finishAgentTurn)
 import Max.DB.Connection (DbPool)
 import Max.DB.Files qualified as Files
 import Max.DB.Session qualified as SessionDB
-import Max.DB.Task (claimFrontend)
 import Max.DB.TaskSpec (seed)
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.ConversationQuery qualified as Conversation
@@ -98,7 +98,6 @@ spec pool = before_ (truncateAll pool) $ describe "scoped resource capabilities"
   it "fences forged and expired pin callers and preserves the shared capacity under contention" $ do
     (turn, CanonicalMessageId message, actor) <- seed pool 900 1
     (_, CanonicalMessageId otherMessage, otherActor) <- seed pool 901 2
-    withDb pool (claimFrontend turn) `shouldReturn` True
     sessions <- Session.newSessionRegistry
     let scope = Pin.PinControlScope (GroupId 900) (Just turn.atrTurnId) actor
         run = withDbLog pool . Pin.runPinControl scope sessions "test"
@@ -113,16 +112,15 @@ spec pool = before_ (truncateAll pool) $ describe "scoped resource capabilities"
     length cachedBefore.pinned `shouldBe` 12
     existing : _ <- pure cachedBefore.pinned
     run (Pin.pinMessage existing) `shouldReturn` Right 12
-    void $ withDb pool (execute "UPDATE conversation_frontends SET lease_until=clock_timestamp()-interval '1 second' WHERE turn_id=?" (Only turn.atrTurnId))
+    withDb pool (finishAgentTurn turn TurnCancelled 0 (Just "cancelled"))
     run (Pin.unpinMessage existing) `shouldReturn` Left PinCallerFenced
     cachedAfter <- Session.readSession handle
     cachedAfter.pinned `shouldBe` cachedBefore.pinned
     persisted <- withDb pool (SessionDB.fetchOrInit (GroupId 900) "test")
     persisted.pinned `shouldBe` cachedBefore.pinned
 
-  it "rechecks a pin lease after waiting for the local session writer" $ do
+  it "rechecks a pin authority after waiting for the local session writer" $ do
     (turn, CanonicalMessageId message, actor) <- seed pool 900 1
-    withDb pool (claimFrontend turn) `shouldReturn` True
     sessions <- Session.newSessionRegistry
     handle <- withDb pool (Session.loadSession sessions "test" (GroupId 900))
     entered <- newEmptyMVar
@@ -139,7 +137,7 @@ spec pool = before_ (truncateAll pool) $ describe "scoped resource capabilities"
                 ThreadBlocked BlockedOnMVar -> pure ()
                 _ -> threadDelay 1000 >> awaitBlocked
         timeout 2000000 awaitBlocked `shouldReturn` Just ()
-        void $ withDb pool (execute "UPDATE conversation_frontends SET lease_until=clock_timestamp()-interval '1 second' WHERE turn_id=?" (Only turn.atrTurnId))
+        withDb pool (finishAgentTurn turn TurnCancelled 0 (Just "cancelled"))
         putMVar release ()
         wait writer `shouldReturn` Right ()
         wait waiting `shouldReturn` Left PinCallerFenced

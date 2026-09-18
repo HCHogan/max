@@ -4,7 +4,6 @@ module Max.Handler
     dispatchProactive,
     dispatchMonitorFire,
     durableTaskWorker,
-    resumeInterruptedTurn,
     recordAs,
     IngestOutcome (..),
     ingestAllowsDownstream,
@@ -37,6 +36,7 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe
   ( fromMaybe,
     isJust,
+    isNothing,
     listToMaybe,
     mapMaybe,
     maybeToList,
@@ -77,23 +77,19 @@ import Max.Command.Permission
   )
 import Max.Command.Types (Command (..))
 import Max.Concurrent.Lease (renewUntilLost)
+import Max.Conversation qualified as Conversation
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn
-  ( AgentTurnRecovery (..),
-    AgentTurnTerminal (..),
+  ( AgentTurnTerminal (..),
     ensureAgentTurnCrashed,
-    ensureAgentTurnRecoveryPending,
     finishAgentTurn,
     markAgentTurnRunning,
-    nextAgentTurnOutputChunk,
-    recoveryViewForTurn,
     startAgentTurn,
   )
-import Max.DB.History (HistoryItem (fromBot), fetchMessageInScope)
+import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchMessageWithCursorInScope)
 import Max.DB.Monitor
   ( ElaboratedMonitorFire (..),
     expireElaboratedMonitorFire,
-    loadAdmittedMonitorFire,
   )
 import Max.DB.Notify
   ( WorkChannel (DispatchWork, TaskWork),
@@ -109,8 +105,6 @@ import Max.DB.QQBackfill
   )
 import Max.DB.Task (TaskExecution (..))
 import Max.DB.Task qualified as DurableTask
-import Max.DB.Task.Frontend qualified as Frontend
-import Max.DB.Task.FrontendInput qualified as FrontendInput
 import Max.DB.Task.Notice qualified as NoticeStore
 import Max.DB.TurnContinuity
   ( ReplyTurnTarget (rttTurn),
@@ -123,14 +117,12 @@ import Max.DB.TurnContinuity
 import Max.Dispatch
   ( DispatchMessage (..),
     dispatchMentionsSelf,
-    dispatchMentionsSelfDirectly,
     dispatchTextWithoutSelf,
     stripDispatchVerb,
   )
 import Max.Dispatch.Lease
   ( DispatchOwner (DispatchOwner),
     dispatchLeaseSeconds,
-    holdingDispatchLease,
     settleDispatchOwner,
   )
 import Max.Effects.Agent
@@ -214,7 +206,7 @@ import Max.Platform.Store
       ),
     DispatchCompletion
       ( DispatchCompleted,
-        DispatchDeferred,
+        DispatchIgnored,
         DispatchRetry
       ),
     IngestOptions
@@ -255,7 +247,6 @@ import Max.Platform.Store
     loadDispatchClaim,
     mentionPrincipalsFor,
     recordInternalMessage,
-    releaseDeferredDispatches,
     rememberConversationTitle,
     resolveMentionIdentities,
     startDispatch,
@@ -311,6 +302,7 @@ import Max.Roster
 import Max.Session (Session (..), loadSession, readSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Skills (Skill (..), skillsForGroup)
+import Max.Task.FrontendInput (FrontendInputView (..))
 import Max.Task.Notice (renderNotice)
 import Max.Task.Policy
   ( frontendDeadlineSeconds,
@@ -329,7 +321,6 @@ import Max.Tasks
     activateTurnRuntime,
     awaitTurnSilence,
     beginDurableTurnRuntime,
-    beginDurableTurnRuntimeAt,
     cancelAgentTurnTask,
     finishTurnRuntime,
     inFlightTriggers,
@@ -352,11 +343,9 @@ import Max.Turn.Failure (handleTurnFailures)
 import Max.Turn.Start
   ( InputAdmission (AdmitFrontendInput, StartSeparateTurn),
     TurnStart (..),
-    injectRecoveryView,
     startAllowsInput,
     startEffectCeiling,
     startHostView,
-    startRecoveryView,
     startTurn,
   )
 import Max.Turn.Types
@@ -963,9 +952,9 @@ runDispatchClaim workerId fetchSig mIntent claim =
             onDispatchMessage (Just owner) mIntent message
         )
         >>= \case
-          -- An asynchronous turn owns settlement until it finishes or defers.
+          -- Queued turns have already settled their short ingress claim.
           Right ClaimSettledHere -> void (completeDispatch workerId claim.canonicalMessageId claim.attemptCount DispatchCompleted)
-          Right ClaimHandedToTurn -> pure ()
+          Right ClaimQueued -> pure ()
           Left e -> failClaim (T.pack (show (e :: SomeException)))
   where
     owner = DispatchOwner workerId claim.canonicalMessageId claim.attemptCount
@@ -1022,14 +1011,8 @@ onDispatchMessage ::
   DispatchMessage ->
   Eff es ClaimDisposition
 onDispatchMessage owner mIntent gm = do
-  pending <- FrontendInput.pendingRequest gm.canonicalId.unCanonicalMessageId
-  if pending
-    then do
-      dispatchLLM owner mIntent OriginDirect gm
-      pure ClaimHandedToTurn
-    else do
-      routed <- routeTaskInput gm
-      if routed then pure ClaimSettledHere else onConversationMessage owner mIntent gm
+  routed <- routeTaskInput gm
+  if routed then pure ClaimSettledHere else onConversationMessage owner mIntent gm
 
 routeTaskInput ::
   (Log :> es, WithConnection :> es, PlatformQuery :> es, Outbound :> es, Reader BotEnv :> es, IOE :> es) =>
@@ -1128,15 +1111,14 @@ onConversationMessage owner mIntent gm = do
         not (T.null (T.strip question)) -> do
           noteActivity
           dispatchLLMWith (NewTurn StartSeparateTurn) owner mIntent OriginDirect (stripDispatchVerb gm)
-          pure ClaimHandedToTurn
+          pure ClaimQueued
       | otherwise -> settledHere (noteActivity >> dispatchCommand mIntent gm body)
     TriggerCommandError err -> settledHere (replyText gm ("命令解析失败:\n" <> err))
-    -- The one path that outlives this call: the turn it starts owns the row
-    -- from here, and settles it when it knows what happened.
+    -- The queue retains eligibility and the original trigger until execution.
     TriggerLLM _ -> do
       noteActivity
       dispatchLLM owner mIntent OriginDirect gm
-      pure ClaimHandedToTurn
+      pure ClaimQueued
   where
     settledHere act = act >> pure ClaimSettledHere
 
@@ -1488,57 +1470,6 @@ launchTaskWork identifier = do
           dispatchLLMWith (TaskTurn turn view grants) Nothing Nothing OriginTask trigger
         _ -> ensureAgentTurnCrashed turn "task source provenance unavailable"
 
-renderMonitorFireView :: ElaboratedMonitorFire -> T.Text
-renderMonitorFireView fire =
-  T.intercalate
-    "\n"
-    [ "[monitor fire — " <> monitorHandleText fire.emfMonitor.mrMonitorOrdinal <> "]",
-      "goal: " <> T.take 4000 fire.emfGoal,
-      "trigger: " <> fire.emfTriggerKind <> " at " <> tshow fire.emfScheduledAt,
-      "evidence: " <> T.take 1600 fire.emfTriggerEvidence
-    ]
-
-launchMonitorTurn ::
-  ( Blob :> es,
-    Log :> es,
-    WithConnection :> es,
-    PlatformQuery :> es,
-    Outbound :> es,
-    Agent :> es,
-    Concurrent :> es,
-    Reader BotEnv :> es,
-    Reader ModelCatalog :> es,
-    IOE :> es
-  ) =>
-  Maybe T.Text ->
-  AgentTurnRef ->
-  ElaboratedMonitorFire ->
-  Eff es ()
-launchMonitorTurn recoveryView turn fire = do
-  seedClaim <- maybe (pure Nothing) loadDispatchClaim fire.emfSeedCanonicalMessage
-  case seedClaim of
-    Nothing -> ensureAgentTurnCrashed turn "monitor arming principal seed is missing"
-    Just claim -> do
-      principals <- mentionPrincipalsFor (mentionIdentities claim.body)
-      let seed = dispatchMessage principals claim
-      if seed.groupId /= GroupId fire.emfGroupId || seed.authorPrincipalId /= fire.emfArmedByPrincipal
-        then ensureAgentTurnCrashed turn "monitor arming principal seed changed scope"
-        else do
-          let triggerId = fromMaybe (CanonicalMessageId 0) fire.emfTriggerCanonicalMessage
-              trigger =
-                seed
-                  { canonicalId = triggerId,
-                    body = Body [],
-                    replyTo = Nothing,
-                    mentionPrincipals = Map.empty
-                  }
-          dispatchLLMWith
-            (MonitorTurn turn recoveryView (renderMonitorFireView fire) fire.emfEffectToolGrants)
-            Nothing
-            Nothing
-            OriginMonitor
-            trigger
-
 --------------------------------------------------------------------------------
 taskProgressEvent :: (WithConnection :> es, IOE :> es) => AgentTurnId -> AgentEvent value -> Eff es value
 taskProgressEvent identifier = \case
@@ -1546,16 +1477,11 @@ taskProgressEvent identifier = \case
   AgentToolDebug _ -> pure ()
   AgentFinalStreamText _ -> pure False
 
--- | Whether the claim loop or an asynchronous turn owns dispatch settlement.
+-- | Ingress settles here or has already transferred to the process queue.
 data ClaimDisposition
   = ClaimSettledHere
-  | ClaimHandedToTurn
+  | ClaimQueued
   deriving stock (Eq, Show)
-
--- | Fallback delay for deferred messages. Turn completion normally releases
--- them immediately; this covers deferrals that race with that release.
-deferredRetrySeconds :: NominalDiffTime
-deferredRetrySeconds = 30
 
 dispatchLLM ::
   ( Blob :> es,
@@ -1581,64 +1507,6 @@ dispatchLLM owner intent origin message =
         _ -> True
    in dispatchLLMWith (NewTurn (if allowInput then AdmitFrontendInput else StartSeparateTurn)) owner intent origin message
 
--- | Resume one boot-claimed turn with the immutable original trigger and a
--- bounded host-rendered journal view.  Missing or cross-conversation trigger
--- state fails closed and terminally; it never admits a replacement turn.
-resumeInterruptedTurn ::
-  ( Blob :> es,
-    Log :> es,
-    WithConnection :> es,
-    PlatformQuery :> es,
-    Outbound :> es,
-    Agent :> es,
-    Concurrent :> es,
-    Reader BotEnv :> es,
-    Reader ModelCatalog :> es,
-    IOE :> es
-  ) =>
-  AgentTurnRecovery ->
-  Eff es ()
-resumeInterruptedTurn recovery = do
-  notification <- DurableTask.notificationKind recovery.atrRecoveryTurn.atrTurnId
-  case notification of
-    Just _ -> launchTaskWork recovery.atrRecoveryTurn.atrTurnId
-    Nothing -> resumeLegacy
-  where
-    resumeLegacy = do
-      case recovery.atrRecoveryMonitorFire of
-        Just fireId -> do
-          mFire <- loadAdmittedMonitorFire fireId
-          case mFire of
-            Just fire
-              | fire.emfAdmittedTurn == Just recovery.atrRecoveryTurn,
-                GroupId fire.emfGroupId == recovery.atrRecoveryGroupId -> do
-                  view <- recoveryViewForTurn recovery.atrRecoveryTurn
-                  launchMonitorTurn (Just view) recovery.atrRecoveryTurn fire
-            _ -> ensureAgentTurnCrashed recovery.atrRecoveryTurn "restart recovery monitor fire is missing or changed scope"
-        Nothing -> case recovery.atrRecoveryTrigger of
-          Nothing -> ensureAgentTurnCrashed recovery.atrRecoveryTurn "restart recovery trigger is missing"
-          Just trigger -> do
-            mClaim <- loadDispatchClaim trigger
-            case mClaim of
-              Nothing ->
-                ensureAgentTurnCrashed recovery.atrRecoveryTurn "restart recovery trigger is missing"
-              Just claim
-                | GroupId claim.compatibilityConversationId /= recovery.atrRecoveryGroupId ->
-                    ensureAgentTurnCrashed recovery.atrRecoveryTurn "restart recovery trigger changed conversation"
-                | otherwise -> do
-                    principals <- mentionPrincipalsFor (mentionIdentities claim.body)
-                    view <- recoveryViewForTurn recovery.atrRecoveryTurn
-                    let message = dispatchMessage principals claim
-                        origin
-                          | isPrivateChat message.groupId || dispatchMentionsSelf message = OriginDirect
-                          | otherwise = OriginProactive
-                    dispatchLLMWith
-                      (ResumeTurn recovery.atrRecoveryTurn view)
-                      Nothing
-                      Nothing
-                      origin
-                      message
-
 dispatchLLMWith ::
   ( Blob :> es,
     Log :> es,
@@ -1652,10 +1520,7 @@ dispatchLLMWith ::
     IOE :> es
   ) =>
   TurnStart ->
-  -- | The dispatch row this turn is answering for, when there is one.  The
-  -- turn settles it rather than the claim loop, so a message is only marked
-  -- answered once something actually answered it (issue #17.D).  Proactive,
-  -- poke, monitor and plan-child dispatches carry Nothing: no row exists.
+  -- | Ingress custody ends when the process queue accepts the turn.
   Maybe DispatchOwner ->
   Maybe IntentState ->
   TriggerOrigin ->
@@ -1672,7 +1537,7 @@ dispatchLLMWith start owner mIntent origin gm = do
             "user_id" .= fromRaw,
             "message_id" .= midRaw,
             "origin" .= T.pack (show origin),
-            "recovered" .= isJust existingTurn
+            "existing_turn" .= isJust existingTurn
           ]
   outputCaps <- conversationAdvertisedCaps gidRaw (if midRaw > 0 then Just midRaw else Nothing)
   -- Acquire shutdown admission before spawning, in the same transaction as
@@ -1693,65 +1558,76 @@ dispatchLLMWith start owner mIntent origin gm = do
                 existingTurn
             )
             `onException` liftIO (leaveDispatch env.beShutdown)
-        let runtimeFailed = do
-              ensureAgentTurnRecoveryPending durable "dispatch cancelled before the in-memory turn runtime was published"
-                `catchSync` \e ->
-                  logAttention "durable turn prologue cleanup failed" $
-                    object ["error" .= T.pack (show (e :: SomeException))]
-              liftIO (leaveDispatch env.beShutdown)
+        let runtimeFailed =
+              ( ensureAgentTurnCrashed durable "dispatch cancelled before runtime registration"
+                  `catchSync` \e -> logAttention "turn setup cleanup failed" (object ["error" .= T.pack (show (e :: SomeException))])
+              )
+                `finally` liftIO (leaveDispatch env.beShutdown)
         turn <-
-          ( ( case existingTurn of
-                Nothing ->
-                  -- This constructor only allocates process-local state.  It
-                  -- runs masked so cancellation cannot land after registry
-                  -- insertion but before the caller receives its owner token.
-                  liftIO (beginDurableTurnRuntime env.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
-                Just _ -> do
-                  firstChunk <- restore (nextAgentTurnOutputChunk durable.atrTurnId)
-                  liftIO (beginDurableTurnRuntimeAt env.beTasks durable firstChunk gm.groupId gm.userId (Just gm.canonicalId))
-            )
+          ( liftIO (beginDurableTurnRuntime env.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
               `catchSync` \e -> do
                 ensureAgentTurnCrashed durable "failed to create the in-memory turn runtime"
                 liftIO (Exception.throwIO (e :: SomeException))
           )
             `onException` runtimeFailed
-        let launchFailed = do
-              ensureAgentTurnRecoveryPending durable "dispatch cancelled before its worker was published"
-                `catchSync` \e ->
-                  logAttention "durable turn launch cleanup failed" $
-                    object ["error" .= T.pack (show (e :: SomeException))]
-              liftIO $ do
-                leaveDispatch env.beShutdown
-                void (finishTurnRuntime env.beTasks turn)
-              releaseTurnBrowser env durable
-        launchTurn env outputCaps ident gidRaw restore turn durable
-          `onException` launchFailed
+        let launchFailed =
+              ( ensureAgentTurnCrashed durable "dispatch cancelled before worker launch"
+                  `catchSync` \e -> logAttention "turn launch cleanup failed" (object ["error" .= T.pack (show (e :: SomeException))])
+              )
+                `finally` do
+                  liftIO $ do
+                    leaveDispatch env.beShutdown
+                    finishTurnRuntime env.beTasks turn
+                  releaseTurnBrowser env durable
+        background <- restore (DurableTask.isTaskTurn durable.atrTurnId) `onException` launchFailed
+        ticket <- (if background then pure Nothing else admitConversation env durable) `onException` launchFailed
+        if not background && isNothing ticket
+          then do
+            finishAgentTurn durable TurnAborted 0 (Just "conversation queue full") `finally` launchFailed
+            when (origin == OriginDirect) (replyText gm "当前处理队列已满，请稍后重试。")
+            settleOwner DispatchCompleted
+          else
+            (settleOwner DispatchCompleted >> launchTurn env outputCaps ident gidRaw restore turn durable ticket)
+              `onException` (for_ ticket (liftIO . Conversation.release env.beConversations) >> launchFailed)
         pure True
   unless launched $ do
     for_ existingTurn $ \durable ->
-      ensureAgentTurnCrashed durable "restart recovery declined during shutdown drain"
+      ensureAgentTurnCrashed durable "turn declined during shutdown drain"
     logInfo "llm dispatch declined: draining" ident
     -- Signal declined direct triggers with a reaction during drain.
     when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
       queueQQReaction gm.groupId gm.canonicalId failureFaceId True
-    -- No async will run, so nothing downstream will settle this row.  A
-    -- drain is a restart, and the next boot should answer the question
-    -- rather than find it marked done — so it is deferred, not completed.
-    declinedAt <- addUTCTime deferredRetrySeconds <$> liftIO getCurrentTime
-    settleOwner (DispatchDeferred declinedAt)
+    settleOwner DispatchIgnored
   where
     allowInput = startAllowsInput start
     existingTurn = startTurn start
-    recoveryView = startRecoveryView start
     monitorView = startHostView start
     effectCeiling = startEffectCeiling start
-    -- Publish the child while the caller is masked, then restore the child's
-    -- normal cancellation state for all real work.  This is the ownership
-    -- handoff: before 'async' succeeds the caller owns every resource; after
-    -- it succeeds this finalizer owns all of them.
-    launchTurn env outputCaps ident gidRaw restore turn durable =
+    admitConversation env durable = do
+      source <- fetchMessageWithCursorInScope (conversationScopeFor gm.groupId) gm.canonicalId.unCanonicalMessageId
+      let sourceOrder = fst <$> source
+          feedback = case (parseCommand (dispatchTextWithoutSelf gm), source) of
+            (Right (Just (Feedback _)), Just (_, history))
+              | PrincipalId history.authorPrincipalId == gm.authorPrincipalId ->
+                  Just (FrontendInputView history.canonicalId "steering" history.authorPrincipalId history.senderNickname history.receivedAt history.replyTo history.renderedText)
+            _ -> Nothing
+      notice <- isJust <$> DurableTask.notificationKind durable.atrTurnId
+      liftIO $
+        Conversation.enqueue
+          env.beConversations
+          Conversation.TurnInput
+            { group = gm.groupId,
+              turn = durable.atrTurnId,
+              principal = gm.authorPrincipalId,
+              sourceOrder,
+              feedback = if allowInput then feedback else Nothing,
+              acceptsFeedback = allowInput && not notice,
+              notice
+            }
+
+    launchTurn env outputCaps ident gidRaw restore turn durable ticket =
       void . async . restore $
-        ( localDomain "llm" . holdingDispatchLease owner $ do
+        ( localDomain "llm" $ do
             logInfo "llm dispatch" ident
             -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
             -- (and every trySyncIO on the way up) — the outer 'catch' is the
@@ -1773,28 +1649,24 @@ dispatchLLMWith start owner mIntent origin gm = do
               )
               ( do
                   worker <- liftIO Thread.myThreadId
-                  preKilled <- liftIO (activateTurnRuntime turn "starting" (Thread.throwTo worker TaskCancelled))
+                  preKilled <- liftIO (activateTurnRuntime turn "queued" (Thread.throwTo worker TaskCancelled))
                   when preKilled (liftIO (Exception.throwIO TaskCancelled))
-                  work outputCaps turn durable
+                  running <- maybe (pure True) (liftIO . Conversation.awaitTurn) ticket
+                  if running
+                    then work outputCaps turn durable
+                    else finishAgentTurn durable TurnAborted 0 (Just "feedback consumed by the active conversation turn")
               )
         )
           `finally` do
-            -- Until restart recovery is removed, unexpected exits leave unfinished
-            -- turns reclaimable. This is a no-op for already terminal turns.
-            ensureAgentTurnRecoveryPending durable "dispatch unwound before a terminal checkpoint"
-              `catchSync` \e ->
-                logAttention "durable turn finalizer failed" $
-                  object ["error" .= T.pack (show (e :: SomeException))]
-            -- Settle after execution, not at spawn. The ownership guard leaves
-            -- deferred or reclaimed rows untouched.
-            settleOwner DispatchCompleted
-              `catchSync` \e ->
-                logAttention "dispatch settle failed" $
-                  object ["error" .= T.pack (show (e :: SomeException))]
-            liftIO $ do
-              leaveDispatch env.beShutdown
-              finishTurnRuntime env.beTasks turn
-            releaseTurnBrowser env durable
+            ( ensureAgentTurnCrashed durable "dispatch unwound before a terminal checkpoint"
+                `catchSync` \e -> logAttention "turn finalizer failed" (object ["error" .= T.pack (show (e :: SomeException))])
+              )
+              `finally` do
+                for_ ticket (liftIO . Conversation.release env.beConversations)
+                liftIO $ do
+                  leaveDispatch env.beShutdown
+                  finishTurnRuntime env.beTasks turn
+                releaseTurnBrowser env durable
 
     -- Browser teardown is subordinate to turn ownership cleanup.  A wedged or
     -- already-destroyed browser must not prevent the task entry, shutdown slot from reaching their final state.
@@ -1804,10 +1676,11 @@ dispatchLLMWith start owner mIntent origin gm = do
           logAttention "browser scope finalizer failed" $
             object ["error" .= T.pack (show (e :: SomeException))]
 
-    -- Owner and attempt guards make deferral and final settlement idempotent.
+    -- Ingress settlement is guarded by owner and claim attempt.
     settleOwner = settleDispatchOwner owner
 
     work outputCaps turn durable = do
+      liftIO (setTurnPhase turn "starting")
       env :: BotEnv <- ask
       sessionVar <- loadSession env.beSessions env.beDefaultModel gm.groupId
       session <- liftIO (readSession sessionVar)
@@ -1818,52 +1691,36 @@ dispatchLLMWith start owner mIntent origin gm = do
         Just execution -> dispatchTask turn durable env session execution
         _ | background -> finishAgentTurn durable TurnAborted 0 (Just "task execution was fenced before dispatch")
         _ -> do
-          let input
-                | Right (Just (Feedback _)) <- parseCommand (dispatchTextWithoutSelf gm) = Frontend.FeedbackInput
-                | dispatchMentionsSelfDirectly gm = Frontend.MentionInput
-                | otherwise = Frontend.MessageInput
-          admitted <- Frontend.admitFrontend durable (if allowInput then Just input else Nothing)
-          case admitted of
-            Frontend.FrontendInputQueued -> do
-              logInfo "frontend input queued" $ object ["message_id" .= gm.canonicalId]
-            Frontend.FrontendBusy -> do
-              deferAt <- addUTCTime deferredRetrySeconds <$> liftIO getCurrentTime
-              when (origin == OriginDirect || origin == OriginProactive) $
-                FrontendInput.deferRequest durable.atrTurnId deferAt
-              settleOwner (DispatchDeferred deferAt)
-              finishAgentTurn durable TurnAborted 0 (Just "conversation frontend busy; request remains queued")
-            Frontend.FrontendClaimed -> do
-              for_ mIntent $ \intent -> liftIO (clearPendingIntent intent gm.groupId)
-              replyTarget <- case gm.replyTo of
-                Nothing -> pure Nothing
-                Just target -> resolveReplyTurn (conversationScopeFor gm.groupId) session.clearedAt target
-              raced <-
-                race
-                  ( withProcessingReaction outputCaps $ do
-                      kind <- DurableTask.notificationKind durable.atrTurnId
-                      if isJust kind
-                        then dispatchNotice outputCaps turn durable
-                        else dispatchOrdinary outputCaps turn durable env session (replyTarget >>= finishedTarget)
-                  )
-                  (threadDelay (frontendDeadlineSeconds * 1_000_000))
-              case raced of
-                Left () -> pure ()
-                Right () -> do
-                  when (origin == OriginDirect) $ do
-                    link <- traverse (liftIO . nextTurnOutputLink) (turnRuntimeOutputContext turn)
-                    void $
-                      sendRecorded
-                        OutboundRequest
-                          { orKind = KindChat,
-                            orGroupId = gm.groupId,
-                            orBody = Body [NText "这次前台处理超时了，请求没有当作完成。长任务需要交给后台；可以重试或明确让我启动后台任务。"],
-                            orReplyTo = Just gm.canonicalId,
-                            orDeliveryScope = DeliverSourceEndpoint gm.canonicalId,
-                            orTurnOutput = link,
-                            orMonitorFireId = Nothing
-                          }
-                  finishAgentTurn durable TurnFailed 0 (Just ("frontend " <> tshow frontendDeadlineSeconds <> "-second deadline; request unresolved"))
-              void (releaseDeferredDispatches (let GroupId group = gm.groupId in group))
+          for_ mIntent $ \intent -> liftIO (clearPendingIntent intent gm.groupId)
+          replyTarget <- case gm.replyTo of
+            Nothing -> pure Nothing
+            Just target -> resolveReplyTurn (conversationScopeFor gm.groupId) session.clearedAt target
+          raced <-
+            race
+              ( withProcessingReaction outputCaps $ do
+                  kind <- DurableTask.notificationKind durable.atrTurnId
+                  if isJust kind
+                    then dispatchNotice outputCaps turn durable
+                    else dispatchOrdinary outputCaps turn durable env session (replyTarget >>= finishedTarget)
+              )
+              (threadDelay (frontendDeadlineSeconds * 1_000_000))
+          case raced of
+            Left () -> pure ()
+            Right () -> do
+              when (origin == OriginDirect) $ do
+                link <- traverse (liftIO . nextTurnOutputLink) (turnRuntimeOutputContext turn)
+                void $
+                  sendRecorded
+                    OutboundRequest
+                      { orKind = KindChat,
+                        orGroupId = gm.groupId,
+                        orBody = Body [NText "这次前台处理超时了，请求没有当作完成。长任务需要交给后台；可以重试或明确让我启动后台任务。"],
+                        orReplyTo = Just gm.canonicalId,
+                        orDeliveryScope = DeliverSourceEndpoint gm.canonicalId,
+                        orTurnOutput = link,
+                        orMonitorFireId = Nothing
+                      }
+              finishAgentTurn durable TurnFailed 0 (Just ("frontend " <> tshow frontendDeadlineSeconds <> "-second deadline; request unresolved"))
       where
         finishedTarget target
           | replyTurnIsFinished target = Just target
@@ -1946,7 +1803,7 @@ dispatchLLMWith start owner mIntent origin gm = do
           liftIO (setTurnPhase turn "publishing task notice")
           notice <- NoticeStore.loadNotice durable.atrTurnId
           case notice of
-            Nothing -> finishAgentTurn durable TurnAborted 0 (Just "task notice superseded or foreground work is waiting")
+            Nothing -> finishAgentTurn durable TurnAborted 0 (Just "task notice is no longer current")
             Just current -> do
               let target = sendTarget outputCaps gm [] False (turnRuntimeOutputContext turn)
               result <- sendAndPersistReply target (freshBudget {sbChunksLeft = 1}) (renderNotice current)
@@ -2037,7 +1894,6 @@ dispatchLLMWith start owner mIntent origin gm = do
           frontendCtx = case ctx of
             MsgSystem system : rest -> MsgSystem (system <> taskContract) : rest
             _ -> ctx
-          recoveredCtx = maybe frontendCtx (`injectRecoveryView` frontendCtx) recoveryView
           toolCtx =
             mkToolContextWithLimits
               limits
@@ -2064,7 +1920,7 @@ dispatchLLMWith start owner mIntent origin gm = do
       -- no AgentResult; settle the turn through the failure path.
       raced <-
         race
-          (agentTurn turn agentCtx s.model recoveredCtx (handleAgentEvent output))
+          (agentTurn turn agentCtx s.model frontendCtx (handleAgentEvent output))
           (liftIO (awaitTurnSilence turn (env.beTurnSilenceSeconds * 1_000_000)))
       case raced of
         Right () -> do

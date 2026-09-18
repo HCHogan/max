@@ -37,8 +37,6 @@ module Max.Platform.Store
     startDispatch,
     loadDispatchClaim,
     completeDispatch,
-    renewDispatchLease,
-    releaseDeferredDispatches,
     OutboundDraft (..),
     EnqueuedOutbound (..),
     enqueueOutbound,
@@ -334,13 +332,6 @@ data DispatchCompletion
   = DispatchCompleted
   | DispatchIgnored
   | DispatchRetry !Text !UTCTime
-  | -- | Not now: the conversation already had a turn running and this message
-    -- was not about it (issue #17.C).  Distinct from 'DispatchRetry' because
-    -- nothing went wrong — an operator reading @failed@ rows should not have
-    -- to sort out which of them were merely waiting — and distinct from
-    -- leaving the row pending with a future attempt time because the reason is
-    -- what 'releaseDeferredDispatches' matches on.
-    DispatchDeferred !UTCTime
   deriving stock (Eq, Show, Generic)
 
 data OutboundDraft = OutboundDraft
@@ -1914,7 +1905,6 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
         \   AND md.next_attempt_at <= now() \
         \   AND max_lease_free(md.lease_owner, md.lease_expires_at) \
         \   AND (?::bigint IS NULL OR md.canonical_message_id = ?) \
-        \   AND NOT EXISTS(SELECT 1 FROM frontend_inputs input WHERE input.message_id=md.canonical_message_id AND input.released_at IS NULL) \
         \ ORDER BY md.next_attempt_at, md.canonical_message_id \
         \ FOR UPDATE OF md SKIP LOCKED LIMIT ? \
         \), claimed AS ( \
@@ -1987,7 +1977,6 @@ completeDispatch workerId (CanonicalMessageId canonical) attempt completion = do
     DispatchCompleted -> finish "completed" Nothing Nothing True
     DispatchIgnored -> finish "ignored" Nothing Nothing True
     DispatchRetry err next -> finish "failed" (Just err) (Just next) False
-    DispatchDeferred next -> finish "deferred" Nothing (Just next) False
   pure (changed == 1)
   where
     finish status lastError next completed =
@@ -1999,46 +1988,6 @@ completeDispatch workerId (CanonicalMessageId canonical) attempt completion = do
         \ WHERE canonical_message_id = ? AND status = 'claimed' \
         \   AND lease_owner = ? AND attempt_count = ?"
         (status :: Text, lastError, next, completed, canonical, workerId, attempt)
-
--- | Extend the lease while its turn runs; the silence watchdog handles stalls.
--- Owner and attempt guards prevent renewing a reclaimed row. False means this
--- claim no longer owns the row, not that its external effects were undone.
-renewDispatchLease ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  CanonicalMessageId ->
-  -- | The claim's attempt.  Fenced for the same reason the settle is: a
-  -- heartbeat must not hold a lease open on a claim that is no longer its own.
-  Int ->
-  NominalDiffTime ->
-  Eff es Bool
-renewDispatchLease workerId (CanonicalMessageId canonical) attempt leaseDuration = do
-  changed <-
-    execute
-      "UPDATE message_dispatches \
-      \ SET lease_expires_at = max_lease_until(?), updated_at = now() \
-      \ WHERE canonical_message_id = ? AND status = 'claimed' \
-      \   AND lease_owner = ? AND attempt_count = ?"
-      (realToFrac leaseDuration :: Double, canonical, workerId, attempt)
-  pure (changed == 1)
-
--- | Requeue deferred inputs when a turn ends. The pending-state trigger wakes
--- dispatch workers; the returned count is logged to detect repeated deferrals.
-releaseDeferredDispatches ::
-  (WithConnection :> es, IOE :> es) =>
-  -- | Legacy group id, the same column the dispatch claim reads.  Int64 rather
-  -- than 'GroupId' because this module deliberately holds no OneBot vocabulary.
-  Int64 ->
-  Eff es Int
-releaseDeferredDispatches gid =
-  fromIntegral
-    <$> execute
-      "UPDATE message_dispatches md \
-      \ SET status = 'pending', next_attempt_at = now(), updated_at = now() \
-      \ FROM messages m \
-      \ WHERE m.canonical_message_id = md.canonical_message_id \
-      \   AND m.group_id = ? AND md.status = 'deferred'"
-      (Only gid)
 
 -- | Separate platform lanes isolate stalled transports. FIFO is per endpoint,
 -- and each endpoint belongs to exactly one lane.

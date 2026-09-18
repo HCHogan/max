@@ -9,9 +9,10 @@ import Effectful.Exception (throwIO)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Max.Agent.Execution
+import Max.Conversation (Conversations)
+import Max.Conversation qualified as Conversation
 import Max.DB.AgentTurn (enrichSandboxJournalStart, finishJournalExecution, markJournalOutcomeUnknown, readSkillLoads, readWorkingContext, recordAgentTurnLlmRound, recordModelNote, startJournalExecution, writeWorkingContext)
 import Max.DB.Task qualified as Task
-import Max.DB.Task.FrontendInput qualified as FrontendInput
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.Agent (Agent, AgentLimits, runAgentWith)
 import Max.Effects.Blob (Blob)
@@ -20,22 +21,23 @@ import Max.Effects.ToolControl (ToolControl)
 import Max.Effects.ToolOutput (ToolOutput)
 import Max.Effects.Tools (ToolCatalogError, ToolRegistry)
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
-import Max.Tasks (TaskCancelled (..))
 import Max.Task.WorkflowRuntime (taskWorkflowHost)
+import Max.Tasks (TaskCancelled (..))
 import Max.ToolContext (ToolContext)
 import Max.Turn.Types (AgentTurnRef (..))
 
 runDurableAgent ::
   (LLM :> es, Concurrent :> es, Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  Conversations ->
   AgentLimits ->
   (ToolContext -> Either ToolCatalogError (ToolRegistry (ToolOutput : ToolControl : es))) ->
   Eff (Agent : es) a ->
   Eff es a
-runDurableAgent =
+runDurableAgent conversations =
   runAgentWith
     durableExecutionAdmission
     (ExecutionJournal recordModelNote finishJournalExecution markJournalOutcomeUnknown readSkillLoads readWorkingContext saveWorking)
-    (ExecutionInbox (\turn -> (<>) <$> Task.taskInbox turn.atrTurnId <*> FrontendInput.readInputs turn.atrTurnId))
+    (ExecutionInbox (\turn -> (<>) <$> Task.taskInbox turn.atrTurnId <*> liftIO (Conversation.readFeedback conversations turn.atrTurnId)))
     (Just taskWorkflowHost)
   where
     saveWorking turn summary tokens limit = withTransaction $ do

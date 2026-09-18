@@ -111,7 +111,7 @@ spec pool = before_ (truncateAll pool) $
               . runWithConnectionPool pool
               . runBlob "var/images"
               . runLLM runtime (\_ _ _ -> pure ()) (\_ -> pure ()) config.llm
-              . runOutbound
+              . runOutbound tasks
               . runAgentWith admission journal (ExecutionInbox (const (pure ""))) Nothing (AgentLimits 2) (const (buildToolRegistry [] []))
               $ withAsync (deliveryWorker "stream-fixture" [transport])
               $ \sender -> do

@@ -17,7 +17,6 @@ module Max.DB.Task
     recordTaskFailure,
     notificationKind,
     monitorTaskProfile,
-    claimFrontend,
     admitTaskNotification,
     loadTaskNotification,
     taskTurnRef,
@@ -37,7 +36,7 @@ import Data.Map.Strict (Map)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
@@ -47,10 +46,6 @@ import Max.DB.Monitor.Admission qualified as MonitorAdmission
 import Max.DB.Task.Admission qualified as Admission
 import Max.DB.Task.Authorization qualified as Authorization
 import Max.DB.Task.Control qualified as Control
-import Max.DB.Task.Frontend
-  ( claimFrontend,
-    frontendWorkWaitingWithin,
-  )
 import Max.DB.Task.Overview qualified as Overview
 import Max.DB.Task.Query qualified as Query
 import Max.DB.Task.Record qualified as Record
@@ -252,7 +247,6 @@ admitTaskNotification = withTransaction $ do
       \ FROM task_notifications notice JOIN durable_tasks work USING(task_id) LEFT JOIN agent_turns turn ON turn.turn_id=notice.turn_id\
       \ WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.next_attempt_at<=clock_timestamp() AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled' AND notice.attempts<15\
       \ AND (notice.turn_id IS NULL OR turn.status IN ('failed','aborted','crashed','silence','succeeded'))\
-      \ AND NOT EXISTS (SELECT 1 FROM conversation_frontends frontend WHERE frontend.conversation_id=work.conversation_id AND frontend.lease_until>clock_timestamp())\
       \ ORDER BY (notice.kind='progress'),notice.notification_id LIMIT 1"
       ()
   case rows :: [(Int64, Int64, Int64, Maybe Int64, Text)] of
@@ -268,7 +262,6 @@ admitTaskNotification = withTransaction $ do
           \ AND notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.next_attempt_at<=clock_timestamp() AND notice.revision=work.revision AND notice.attempt=work.attempt\
           \ AND notice.body->>'status'=work.status AND work.status<>'cancelled' AND notice.attempts<15\
           \ AND (notice.turn_id IS NULL OR turn.status IN ('failed','aborted','crashed','silence','succeeded'))\
-          \ AND NOT EXISTS (SELECT 1 FROM conversation_frontends frontend WHERE frontend.conversation_id=work.conversation_id AND frontend.lease_until>clock_timestamp())\
           \ FOR UPDATE OF notice"
           (Only notification)
       if null (available :: [Only Int64])
@@ -278,16 +271,9 @@ admitTaskNotification = withTransaction $ do
             query
               "SELECT n.turn_id FROM task_notifications n WHERE n.notification_id=? AND EXISTS(SELECT 1 FROM messages m WHERE m.agent_turn_id=n.turn_id)"
               (Only notification)
-          waiting <- frontendWorkWaitingWithin conversation Nothing
           case published of
             [Only priorTurn] -> settleNotification priorTurn Nothing >> pure []
-            _ ->
-              if waiting
-                then do
-                  now <- Record.databaseNow
-                  void $ execute "UPDATE task_notifications SET next_attempt_at=? WHERE notification_id=?" (addUTCTime 30 now, notification)
-                  pure []
-                else admitNotification notification conversation principal source
+            _ -> admitNotification notification conversation principal source
     _ -> pure []
   where
     admitNotification notification conversation principal source = do

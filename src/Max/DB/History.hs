@@ -16,6 +16,7 @@ module Max.DB.History
     pageEndCursor,
     hasMessagesAfter,
     fetchMessageInScope,
+    fetchMessageWithCursorInScope,
     fetchMessagesByIdsInScope,
     fetchForwardChildrenInScope,
     messageStatsDaily,
@@ -363,3 +364,11 @@ messageStatsDaily tzMinutes days =
     \ GROUP BY 1, 2, 3 \
     \ ORDER BY 1 DESC, 2, 3"
     (tzMinutes, days)
+
+-- | Preserve ingestion order and canonical provenance for live feedback.
+fetchMessageWithCursorInScope :: (WithConnection :> es, IOE :> es) => ConversationScope -> Int64 -> Eff es (Maybe (Int64, HistoryItem))
+fetchMessageWithCursorInScope scope message = do
+  rows <- query ("SELECT ingest_seq," <> historyColumns <> " FROM messages WHERE group_id=? AND canonical_message_id=?") (conversationStorageId scope, message)
+  pure $ case rows of
+    [Only cursor :. history] -> Just (cursor, history)
+    _ -> Nothing

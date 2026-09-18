@@ -164,21 +164,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     execution <-
       withDb pool $
         startJournalExecution fixture.fxTurn (journalStart "call-crash" "send_file_from_sandbox")
-    first <- withDb pool (reclaimInterruptedTurns "boot-1")
-    first
-      `shouldBe` ReclaimedTurns
-        { rrTurnsPendingResume = 1,
-          rrTurnsCrashed = 0,
-          rrExecutionsUnknown = 1,
-          rrRecoveries =
-            [ AgentTurnRecovery
-                fixture.fxTurn
-                fixture.fxGroup
-                (Just fixture.fxTrigger)
-                Nothing
-            ]
-        }
-    second <- withDb pool (reclaimInterruptedTurns "boot-1")
+    first <- withDb pool reclaimInterruptedTurns
+    first `shouldBe` ReclaimedTurns 1 1
+    second <- withDb pool reclaimInterruptedTurns
     second `shouldBe` noReclaimedTurns
     rows <- withConn pool $ \connection ->
       query
@@ -188,14 +176,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
         \ WHERE j.journal_id = ?"
         (Only execution.jeJournalId)
     (rows :: [(Text, Text, Maybe Text)])
-      `shouldBe` [("recovery-pending", "outcome-unknown", Just "process_restart")]
-    view <- withDb pool (recoveryViewForTurn fixture.fxTurn)
-    view `shouldSatisfy` T.isInfixOf "[工具执行状态未知：服务重启]"
-    view `shouldSatisfy` T.isInfixOf "send_file_from_sandbox"
-    -- A genuinely new boot owner can reclaim a turn whose previous recovery
-    -- process died before it reopened the LLM round.
-    nextBoot <- withDb pool (reclaimInterruptedTurns "boot-2")
-    nextBoot.rrTurnsPendingResume `shouldBe` 1
+      `shouldBe` [("crashed", "outcome-unknown", Just "process_restart")]
+    withDb pool reclaimInterruptedTurns `shouldReturn` noReclaimedTurns
 
   it "closes a dangling started effect atomically with a terminal turn" $ do
     fixture <- createFixture pool 42 1001
@@ -213,16 +195,16 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
         (Only execution.jeJournalId)
     (rows :: [(Text, Text, Maybe Text)])
       `shouldBe` [("aborted", "outcome-unknown", Just "turn_terminal")]
-    withDb pool (reclaimInterruptedTurns "boot-terminal")
+    withDb pool reclaimInterruptedTurns
       `shouldReturn` noReclaimedTurns
 
-  it "keeps an asynchronously suspended turn reclaimable for the next boot" $ do
+  it "ends an asynchronously interrupted turn without restarting it" $ do
     fixture <- createFixture pool 42 1001
     execution <-
       withDb pool $
         startJournalExecution fixture.fxTurn (journalStart "call-shutdown" "sandbox_exec")
     withDb pool $
-      ensureAgentTurnRecoveryPending fixture.fxTurn "shutdown drain timed out"
+      ensureAgentTurnCrashed fixture.fxTurn "shutdown drain timed out"
     suspended <- withConn pool $ \connection ->
       query
         connection
@@ -231,14 +213,13 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
         \ WHERE j.journal_id = ?"
         (Only execution.jeJournalId)
     (suspended :: [(Text, Text, Maybe Text)])
-      `shouldBe` [("recovery-pending", "outcome-unknown", Just "turn_suspended")]
-    reclaimed <- withDb pool (reclaimInterruptedTurns "next-process")
-    reclaimed.rrRecoveries
-      `shouldBe` [AgentTurnRecovery fixture.fxTurn fixture.fxGroup (Just fixture.fxTrigger) Nothing]
+      `shouldBe` [("crashed", "outcome-unknown", Just "turn_terminal")]
+    reclaimed <- withDb pool reclaimInterruptedTurns
+    reclaimed `shouldBe` noReclaimedTurns
     withDb pool (markAgentTurnRunning fixture.fxTurn "test-profile")
     status <- withConn pool $ \connection ->
       query connection "SELECT status FROM agent_turns WHERE turn_id = ?" (Only fixture.fxTurn.atrTurnId)
-    (status :: [Only Text]) `shouldBe` [Only "running"]
+    (status :: [Only Text]) `shouldBe` [Only "crashed"]
 
   it "does not duplicate a canonical send already committed before restart" $ do
     fixture <- createFixture pool 42 1001
@@ -260,9 +241,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
               )
           )
 
-    reclaimed <- withDb pool (reclaimInterruptedTurns "boot-send")
-    reclaimed.rrTurnsPendingResume `shouldBe` 1
-    reclaimed.rrTurnsCrashed `shouldBe` 0
+    reclaimed <- withDb pool reclaimInterruptedTurns
+    reclaimed.rrTurnsCrashed `shouldBe` 1
     reclaimed.rrExecutionsUnknown `shouldBe` 0
     rows <- withConn pool $ \connection ->
       query
@@ -279,15 +259,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
         (Only execution.jeJournalId)
     (journalRows :: [(Text, Maybe Int64)])
       `shouldBe` [("committed", Just sent.canonicalMessageId.unCanonicalMessageId)]
-
-    recoveryView <- withDb pool (recoveryViewForTurn fixture.fxTurn)
-    recoveryView `shouldSatisfy` T.isInfixOf "已提交可见输出 chunk=0"
-
-    nextChunk <- withDb pool (nextAgentTurnOutputChunk fixture.fxTurn.atrTurnId)
-    nextChunk `shouldBe` 1
-    recoveredOutput <- newTurnOutputContextAt fixture.fxTurn nextChunk
-    nextTurnOutputLink recoveredOutput
-      `shouldReturn` TurnOutputLink fixture.fxTurn.atrTurnId 1
 
     duplicate <- try @SqlError (withDb pool (enqueueOutbound draft))
     duplicate `shouldSatisfy` isLeft
@@ -414,9 +385,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
           execution.jeExecutionOrdinal
     fmap (.jreInlineValue) envelope
       `shouldBe` Just (Just (object ["ok" .= True]))
-    view <- withDb pool (recoveryViewForTurn fixture.fxTurn)
-    view `shouldSatisfy` T.isInfixOf "observation="
-    view `shouldSatisfy` T.isInfixOf "file_count"
 
   it "projects worked turns, expands t# in scope, and obeys !clear" $ do
     fixture <- createFixture pool 42 1001
@@ -525,7 +493,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     rendered `shouldSatisfy` T.isInfixOf "工具目录 无变化"
     rendered `shouldSatisfy` T.isInfixOf "same timestamp ambient"
 
-
 createSeed :: DbPool -> Int64 -> Int64 -> IO Fixture
 createSeed pool group messageId = do
   canonical <-
@@ -605,10 +572,4 @@ isLeft = \case
   Right _ -> False
 
 noReclaimedTurns :: ReclaimedTurns
-noReclaimedTurns =
-  ReclaimedTurns
-    { rrTurnsPendingResume = 0,
-      rrTurnsCrashed = 0,
-      rrExecutionsUnknown = 0,
-      rrRecoveries = []
-    }
+noReclaimedTurns = ReclaimedTurns 0 0

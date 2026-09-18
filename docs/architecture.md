@@ -95,7 +95,7 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    Embedding + Embedder
                    (vector worker), Forward/Image/File workers, FetchQueue (their
                    shared claim loop), MediaCaption + Stickers (caption workers),
-                   Turn + Task (durable execution/recovery), Monitor
+                   Conversation (local queue), Turn + Task, Monitor
                    (typed trigger scheduler), Reminder, Reply (planning),
                    ReplySend (planning made real:
                    placeholders, sending, persistence — shared by final,
@@ -316,7 +316,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Monitors and reminders | `monitors` and `monitor_fires` hold TimeCron/LedgerMatch state, retry, provenance, caps and durable turn admission; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll messages, memories, active episode summaries, stickers, and media for missing/incompatible derived data, so any gap or model change backfills itself |
 | Embedding ownership | one process-local lock serializes the worker and explicit reindex; conditional writes reject changed source content and memory versions |
-| Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` commits `started` before a tool and its terminal state afterward. Boot marks any still-started effect `outcome-unknown`, claims the same turn for recovery, injects its committed sends/results/unknowns into a fresh LLM round, and never silently retries it; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
+| Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` commits `started` before a tool and its terminal state afterward. Boot marks any still-started effect `outcome-unknown` and ends interrupted foreground turns as crashed; it never reopens their model loop; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
 | Durable tasks and child work | `durable_tasks`, task inputs/events and notifications retain goals, ownership, budgets and results; each attempt uses the existing agent runtime. Migration 088 retired the Plan tables. Child grants remain bounded by their parent |
 | Sandbox workspaces | `sandboxes` persists lifecycle metadata and the root-owned runtime work directory holds current state. Boot adopts only a running container carrying the current broker generation and matching systemd invocation; otherwise it rebuilds a non-root, capability-free, resource-capped, read-only shell around the surviving volume. NixOS owns network provisioning and host/private/peer filtering; Haskell owns instance reconciliation and the privileged broker API. Only a positively absent volume marks the workspace destroyed, and 14-day sliding TTL GC replaces shutdown/boot reaping |
 
@@ -377,10 +377,18 @@ Fleet SSH targets authenticate `max`, a separate full-sudo operator account.
 Persisted skill receipts and `/work` checkouts can predate a release; deployment
 does not rewrite old task goals, monitors, DB skill overrides or workspace files.
 
-`!kill` has its own typed terminal settlement: request cancellation and frontend
-release commit together, and killed background attempts cannot auto-retry.
-Cancellation encloses normal work and publication failure cleanup at the dispatch
-root; shutdown interruptions remain eligible for recovery.
+`Conversation` serializes foreground work per conversation using STM tickets.
+There are at most 256 tickets per conversation and 1,024 across the process.
+Waiting turns retain their original dispatch context; they are not reclassified.
+Only explicit feedback from the active initiator enters its inbox, in canonical
+ingestion order. Unread feedback becomes an independent turn when the owner exits.
+Queued foreground requests precede queued task notices. Commands remain responsive.
+
+`!kill` revokes process-local publication authority before signalling the worker.
+The dispatch finalizer releases its queue ticket even if database cleanup fails.
+Interrupted foreground turns end without restart continuation; published prefixes
+remain recorded. Background task leases and the transport outbox remain pending
+replacement in the [simplification plan](simplification.md).
 
 ### PostgreSQL transaction ownership
 
@@ -637,11 +645,11 @@ fingerprints. Exceptions and timeouts remain conservative for both runner forms.
 Shared invocation labels and budgets use `Concurrent` MVars/TVars, including
 under timeout races; they are not thread-local state.
 
-`Turn.Start` represents new, resumed, task and monitor starts as constructors
-instead of independent booleans and optional values. `TaskCommand` requires a
+`Turn.Start` distinguishes new foreground requests from task execution/notices. `TaskCommand` requires a
 `TaskRevision` for replacement, while its mutation boundary distinguishes
-`DurableTaskId`, `GroupId` and `PrincipalId`. `Dispatch.Lease` owns dispatch lease
-settlement, and `Turn.ReplayRuntime` loads recovery views outside Handler.
+`DurableTaskId`, `GroupId` and `PrincipalId`. `Dispatch.Lease` settles the short
+ingress claim when the process queue accepts it. No lease renewal runs during
+the foreground model loop.
 
 `ToolContext` is opaque and is minted once from the already-authorized inbound
 turn identity. It carries current-conversation authority alongside capability

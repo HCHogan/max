@@ -1,16 +1,11 @@
--- | E0's shared durability substrate: durable turn identity, the horizon-1
--- execution journal, scoped result envelopes, and restart
--- reconciliation.
---
--- This module deliberately exposes no ADR 005 continuation/read-side UI.
--- E0 records facts without changing model-visible behaviour.
+-- | Turn identities, effect diagnostics and scoped results. Restart ends
+-- interrupted foreground work and preserves uncertain effects for inspection.
 module Max.DB.AgentTurn
   ( AgentTurnTerminal (..),
     JournalStart (..),
     JournalExecution (..),
     JournalFinish (..),
     JournalResultEnvelope (..),
-    AgentTurnRecovery (..),
     ReclaimedTurns (..),
     startAgentTurn,
     markAgentTurnRunning,
@@ -18,13 +13,10 @@ module Max.DB.AgentTurn
     addAgentTurnUsage,
     finishAgentTurn,
     ensureAgentTurnCrashed,
-    ensureAgentTurnRecoveryPending,
     reclaimInterruptedTurns,
-    recoveryViewForTurn,
     readSkillLoads,
     readWorkingContext,
     writeWorkingContext,
-    nextAgentTurnOutputChunk,
     enrichSandboxJournalStart,
     startJournalExecution,
     recordModelNote,
@@ -53,12 +45,10 @@ import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
-import Max.DB.Task.Record (lockTurnConversation)
 import Max.DB.Task.Settlement (SettlementOutcome (..), settleTurn)
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
 import Max.Execution.Types (JournalExecution (..), JournalFinish (..), JournalStart (..))
-import Max.Monitor.Types (MonitorFireId (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Tool.Bundles (SkillLoad)
 import Max.Turn.Types
@@ -103,18 +93,8 @@ data JournalResultEnvelope = JournalResultEnvelope
   deriving stock (Show, Eq)
 
 data ReclaimedTurns = ReclaimedTurns
-  { rrTurnsPendingResume :: !Int64,
-    rrTurnsCrashed :: !Int64,
-    rrExecutionsUnknown :: !Int64,
-    rrRecoveries :: ![AgentTurnRecovery]
-  }
-  deriving stock (Show, Eq)
-
-data AgentTurnRecovery = AgentTurnRecovery
-  { atrRecoveryTurn :: !AgentTurnRef,
-    atrRecoveryGroupId :: !GroupId,
-    atrRecoveryTrigger :: !(Maybe CanonicalMessageId),
-    atrRecoveryMonitorFire :: !(Maybe MonitorFireId)
+  { rrTurnsCrashed :: !Int64,
+    rrExecutionsUnknown :: !Int64
   }
   deriving stock (Show, Eq)
 
@@ -227,7 +207,7 @@ finishAgentTurn ref terminal llmTurns abortReason = do
         \ SET status = ?, finished_at = now(), \
         \     finished_ingest_seq = COALESCE((SELECT max(m.ingest_seq) FROM messages m WHERE m.conversation_id=t.conversation_id), 0), \
         \     llm_turns = GREATEST(llm_turns, ?), abort_reason = ? \
-        \ WHERE turn_id = ? AND status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text]) RETURNING frontend_managed"
+        \ WHERE turn_id = ? AND status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text]) RETURNING turn_id"
         ( terminalText terminal,
           max 0 llmTurns,
           T.take 4000 <$> abortReason,
@@ -238,7 +218,7 @@ finishAgentTurn ref terminal llmTurns abortReason = do
           TurnSilence -> SettlementSucceeded
           TurnCancelled -> SettlementCancelled
           _ -> SettlementFailed
-    forM_ (settled :: [Only Bool]) $ \(Only managed) -> settleTurn ref.atrTurnId outcome abortReason managed
+    forM_ (settled :: [Only AgentTurnId]) $ \(Only turn) -> settleTurn turn outcome abortReason
 
 ensureAgentTurnCrashed ::
   (WithConnection :> es, IOE :> es) =>
@@ -248,44 +228,13 @@ ensureAgentTurnCrashed ::
 ensureAgentTurnCrashed ref reason =
   finishAgentTurn ref TurnCrashed 0 (Just reason)
 
--- | Preserve an asynchronously unwound turn for the next boot.  Normal,
--- killed, and synchronously failed paths have already published a terminal
--- status, so this conditional update is a no-op for them.
-ensureAgentTurnRecoveryPending ::
-  (WithConnection :> es, IOE :> es) =>
-  AgentTurnRef ->
-  Text ->
-  Eff es ()
-ensureAgentTurnRecoveryPending ref reason = withTransaction $ do
-  _ <- lockTurnConversation ref.atrTurnId
-  _ <-
-    execute
-      "UPDATE execution_journal j \
-      \ SET state = 'outcome-unknown', finished_at = now(), \
-      \     failure_code = COALESCE(failure_code, 'turn_suspended'), \
-      \     failure_detail = COALESCE(failure_detail, 'turn suspended before the effect outcome was durably recorded') \
-      \ FROM agent_turns t \
-      \ WHERE j.turn_id = t.turn_id AND j.turn_id = ? AND j.state = 'started' \
-      \   AND t.status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text])"
-      (Only ref.atrTurnId)
-  _ <-
-    execute
-      "UPDATE agent_turns \
-      \ SET status = 'recovery-pending', recovery_owner = NULL, recovery_claimed_at = NULL, \
-      \     abort_reason = ? \
-      \ WHERE turn_id = ? \
-      \   AND status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text])"
-      (T.take 4000 reason, ref.atrTurnId)
-  pure ()
-
 -- | Conservatively reclaim rows left in-flight by a prior process.  A started
 -- effect may have crossed its external boundary, so it becomes
 -- outcome-unknown and is never silently invoked again.
 reclaimInterruptedTurns ::
   (WithConnection :> es, IOE :> es) =>
-  Text ->
   Eff es ReclaimedTurns
-reclaimInterruptedTurns recoveryOwner = withTransaction $ do
+reclaimInterruptedTurns = withTransaction $ do
   -- Recovery uses the same conversation-before-turn/journal order as normal
   -- settlement. Lock only conversations with recoverable or unknown work.
   (_ :: [Only Int64]) <-
@@ -302,57 +251,20 @@ reclaimInterruptedTurns recoveryOwner = withTransaction $ do
       \     failure_detail = COALESCE(failure_detail, '工具执行状态未知：服务重启') \
       \ WHERE state = 'started'"
       ()
-  recoveryRows <-
-    query
-      "UPDATE agent_turns t \
-      \ SET status = 'recovery-pending', recovery_owner = ?, recovery_claimed_at = now() \
-      \ FROM conversations c \
-      \ WHERE t.conversation_id = c.conversation_id \
-      \   AND NOT EXISTS (SELECT 1 FROM task_attempts task WHERE task.turn_id=t.turn_id) \
-      \   AND (t.trigger_canonical_message_id IS NOT NULL OR EXISTS ( \
-      \     SELECT 1 FROM monitor_fires f WHERE f.admitted_turn_id=t.turn_id)) \
-      \   AND (t.status = ANY (ARRAY['starting'::text, 'running'::text]) \
-      \        OR (t.status = 'recovery-pending' AND t.recovery_owner IS DISTINCT FROM ?)) \
-      \ RETURNING t.turn_id, t.turn_ordinal, c.legacy_group_id, t.trigger_canonical_message_id, \
-      \   (SELECT f.fire_id FROM monitor_fires f WHERE f.admitted_turn_id=t.turn_id)"
-      (recoveryOwner, recoveryOwner)
-  let recoveries =
-        [ AgentTurnRecovery
-            { atrRecoveryTurn = AgentTurnRef turnId (TurnOrdinal ordinal),
-              atrRecoveryGroupId = GroupId groupId,
-              atrRecoveryTrigger = CanonicalMessageId <$> trigger,
-              atrRecoveryMonitorFire = MonitorFireId <$> monitorFire
-            }
-        | (turnId, ordinal, groupId, trigger, monitorFire) <-
-            (recoveryRows :: [(AgentTurnId, Int64, Int64, Maybe Int64, Maybe Int64)])
-        ]
   crashed <-
     query
       "UPDATE agent_turns t \
       \ SET status = 'crashed', finished_at = now(), \
       \     finished_ingest_seq = COALESCE((SELECT max(m.ingest_seq) FROM messages m WHERE m.conversation_id=t.conversation_id), 0), \
       \     abort_reason = COALESCE(abort_reason, 'process restarted while turn was in flight') \
-      \ WHERE trigger_canonical_message_id IS NULL \
+      \ WHERE true \
       \   AND NOT EXISTS (SELECT 1 FROM task_attempts task WHERE task.turn_id=t.turn_id) \
-      \   AND NOT EXISTS (SELECT 1 FROM monitor_fires f WHERE f.admitted_turn_id=t.turn_id) \
-      \   AND (status = ANY (ARRAY['starting'::text, 'running'::text]) \
-      \        OR (status = 'recovery-pending' AND recovery_owner IS DISTINCT FROM ?)) RETURNING turn_id,abort_reason,frontend_managed"
-      (Only recoveryOwner)
-  forM_ (crashed :: [(AgentTurnId, Maybe Text, Bool)]) $ \(turn, reason, managed) -> settleTurn turn SettlementFailed reason managed
-  pure
-    ReclaimedTurns
-      { rrTurnsPendingResume = fromIntegral (length recoveries),
-        rrTurnsCrashed = fromIntegral (length crashed),
-        rrExecutionsUnknown = executions,
-        rrRecoveries = recoveries
-      }
+      \   AND status IN ('starting','running','recovery-pending') RETURNING turn_id,abort_reason"
+      ()
+  forM_ (crashed :: [(AgentTurnId, Maybe Text)]) $ \(turn, reason) -> settleTurn turn SettlementFailed reason
+  pure (ReclaimedTurns (fromIntegral (length crashed)) executions)
 
--- | Deterministic, bounded facts injected into the fresh LLM round after a
--- process restart.  This is a horizon-1 hole view, not ADR 005's general
--- continuity read side: it is host-selected for exactly the turn being
--- recovered and exposes no blob addresses or ambient handles.
--- Successful host control receipts, including earlier attempts of this exact
--- task revision. Ordinary tool text and another task's receipts cannot load tools.
+-- | Successful skill loads remain available to the current task attempt.
 readSkillLoads :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> Eff es [SkillLoad]
 readSkillLoads turn = do
   rows <-
@@ -368,91 +280,6 @@ readSkillLoads turn = do
   concat <$> traverse decode (rows :: [Only Text])
   where
     decode (Only value) = either (error . ("invalid durable skill receipt: " <>)) pure (eitherDecodeStrict' (TE.encodeUtf8 value))
-
-recoveryViewForTurn ::
-  (WithConnection :> es, IOE :> es) =>
-  AgentTurnRef ->
-  Eff es Text
-recoveryViewForTurn turn = do
-  journalRows <-
-    query
-      "SELECT execution_ordinal, event_kind, state, tool_ref, \
-      \       left(COALESCE(normalized_input::text, ''), 1200), \
-      \       left(COALESCE(result_preview, ''), 1200), \
-      \       left(COALESCE(observed_manifest::text, ''), 1200), \
-      \       left(COALESCE(failure_detail, ''), 1200) \
-      \ FROM execution_journal WHERE turn_id = ? \
-      \ ORDER BY execution_ordinal LIMIT 200"
-      (Only turn.atrTurnId)
-  outputRows <-
-    query
-      "SELECT turn_chunk_index, canonical_message_id, left(rendered_text, 1200) \
-      \ FROM messages WHERE agent_turn_id = ? \
-      \ ORDER BY turn_chunk_index LIMIT 100"
-      (Only turn.atrTurnId)
-  let header =
-        [ "[服务重启恢复视图]",
-          "以下是本 turn 已经持久化的事实。继续原任务，但不要自动重复已提交发送或状态未知的副作用。"
-        ]
-      outputs =
-        [ "- 已提交可见输出 chunk=" <> tshow chunk <> " message=#" <> tshow message <> summary text
-        | (chunk, message, text) <- (outputRows :: [(Int, Int64, Text)])
-        ]
-      events = map renderRecoveryEvent (journalRows :: [(Int64, Text, Text, Maybe Text, Text, Text, Text, Text)])
-      footer =
-        [ "- 对 outcome-unknown：不要假定失败，也不要静默重试；先读取当前状态、采用幂等检查，或明确询问用户。",
-          "[恢复视图结束]"
-        ]
-  pure (T.take 24000 (T.unlines (header <> outputs <> events <> footer)))
-  where
-    summary text
-      | T.null (T.strip text) = ""
-      | otherwise = " preview=" <> quoted text
-
--- | The canonical ledger is the source of truth for already-published turn
--- output.  Recovery seeds its process-local allocator after the greatest
--- committed chunk so it can neither reuse nor collide with an old identity.
-nextAgentTurnOutputChunk ::
-  (WithConnection :> es, IOE :> es) =>
-  AgentTurnId ->
-  Eff es Int
-nextAgentTurnOutputChunk turnId = do
-  rows <-
-    query
-      "SELECT COALESCE(max(m.turn_chunk_index)::bigint, -1) + 1 \
-      \ FROM agent_turns t \
-      \ LEFT JOIN messages m ON m.agent_turn_id = t.turn_id \
-      \ WHERE t.turn_id = ? GROUP BY t.turn_id"
-      (Only turnId)
-  let next = exactlyOne "nextAgentTurnOutputChunk" (rows :: [Only Int64])
-  if next <= fromIntegral (maxBound :: Int)
-    then pure (fromIntegral next)
-    else error "nextAgentTurnOutputChunk: chunk index overflow"
-
-renderRecoveryEvent :: (Int64, Text, Text, Maybe Text, Text, Text, Text, Text) -> Text
-renderRecoveryEvent (ordinal, eventKind, state, toolRef, input, result, observation, failure) =
-  "- execution="
-    <> tshow ordinal
-    <> " kind="
-    <> eventKind
-    <> maybe "" (" tool=" <>) toolRef
-    <> " state="
-    <> state
-    <> field " input=" input
-    <> field " result=" result
-    <> field " observation=" observation
-    <> field " failure=" failure
-    <> if state == "outcome-unknown" then " [工具执行状态未知：服务重启]" else ""
-  where
-    field label value
-      | T.null (T.strip value) = ""
-      | otherwise = label <> quoted value
-
-quoted :: Text -> Text
-quoted = ("「" <>) . (<> "」") . T.unwords . T.words
-
-tshow :: (Show a) => a -> Text
-tshow = T.pack . show
 
 -- | Add host-observed sandbox network mode to the immutable started row.  The
 -- model chooses a sandbox handle but cannot choose or forge this value.

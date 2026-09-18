@@ -62,21 +62,9 @@ operationalChecks =
       False,
       "SELECT count(*) FROM durable_tasks WHERE status='retrying'"
     ),
-    ( "frontend_expired_lease",
-      True,
-      "SELECT count(*) FROM conversation_frontends front JOIN agent_turns turn USING(turn_id) WHERE front.lease_until<=now() AND turn.status IN ('starting','running','recovery-pending')"
-    ),
     ( "task_notification_exhausted",
       True,
       "SELECT count(*) FROM task_notifications notice JOIN durable_tasks work USING(task_id) WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.attempts>=15 AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled'"
-    ),
-    ( "request_pending",
-      False,
-      "SELECT count(*) FROM conversation_requests WHERE disposition IN ('pending','delegated','waiting')"
-    ),
-    ( "request_failed",
-      True,
-      "SELECT count(*) FROM conversation_requests WHERE disposition='failed'"
     ),
     ( "journal_unresolved_outcome_unknown",
       True,

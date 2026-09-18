@@ -52,7 +52,6 @@ import Max.Task.Admission (AdmissionError (..))
 import Max.Task.Admission qualified as Admission
 import Max.Task.Execution (ExecutionFailure (..))
 import Max.Task.Overview qualified as WorkView
-import Max.Task.Policy (frontendDeadlineSeconds)
 import Max.Task.Query qualified as QueryView
 import Max.Task.State (FailureKind (..), TaskControlError (TaskCallerFenced, TaskNotFound))
 import Max.Task.State qualified as TaskState
@@ -99,37 +98,27 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     withDb pool (readSkillLoads third) `shouldReturn` []
     withDb pool (readWorkingContext third) `shouldReturn` ""
 
-  it "settles kill before recovery cleanup and immediately admits the next frontend" $ do
-    (front, CanonicalMessageId message, _) <- seed pool 650536599 1
-    withDb pool (claimFrontend front) `shouldReturn` True
+  it "settles kill before the final cleanup" $ do
+    (front, _, _) <- seed pool 650536599 1
     withDb pool $
       handleTurnFailures
         (\_ -> liftIO (expectationFailure "kill reached crash handler"))
         (\_ -> liftIO (expectationFailure "kill reached publication handler"))
         (finishAgentTurn front TurnCancelled 0 (Just "cancelled by !kill"))
         (throwIO TaskCancelled)
-    withDb pool (ensureAgentTurnRecoveryPending front "finally")
+    withDb pool (ensureAgentTurnCrashed front "finally")
     states <- withDb pool $ query "SELECT status FROM agent_turns WHERE turn_id=?" (Only front.atrTurnId)
     (states :: [Only Text]) `shouldBe` [Only "aborted"]
-    requests <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message)
-    (requests :: [Only Text]) `shouldBe` [Only "cancelled"]
-    ownership <- withDb pool $ query "SELECT count(*) FROM conversation_frontends WHERE turn_id=?" (Only front.atrTurnId)
-    (ownership :: [Only Int]) `shouldBe` [Only 0]
-    (next, _, _) <- seed pool 650536599 2
-    withDb pool (claimFrontend next) `shouldReturn` True
-
   it "settles a kill that interrupts publication failure cleanup" $ do
     (front, _, _) <- seed pool 650536599 1
-    withDb pool (claimFrontend front) `shouldReturn` True
     withDb pool $
       handleTurnFailures
         (\_ -> liftIO (expectationFailure "publication was treated as synchronous"))
         (\_ -> throwIO TaskCancelled)
         (finishAgentTurn front TurnCancelled 0 (Just "cancelled during failure cleanup"))
         (throwIO (ReplyPublicationException "fixture send failure"))
-    withDb pool (ensureAgentTurnRecoveryPending front "finally")
-    (next, _, _) <- seed pool 650536599 2
-    withDb pool (claimFrontend next) `shouldReturn` True
+    withDb pool (ensureAgentTurnCrashed front "finally")
+    withDb pool (authorizeTaskStep front.atrTurnId ExecutionCheckpoint) `shouldReturn` False
 
   it "cancels a killed durable task instead of reviving a retryable attempt" $ do
     source <- seed pool 900 1
@@ -137,7 +126,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     execution <- claimOne pool
     void $ withDb pool (recordTaskFailure execution.atrTurnId "transient prior failure" Transient)
     withDb pool (finishAgentTurn execution TurnCancelled 0 (Just "cancelled by !kill"))
-    withDb pool (ensureAgentTurnRecoveryPending execution "finally")
+    withDb pool (ensureAgentTurnCrashed execution "finally")
     status pool identifier `shouldReturn` "cancelled"
 
   it "uses explicit Haskell settlement without business cascade triggers" $ do
@@ -265,25 +254,14 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
       rows `shouldBe` [Only (0 :: Int64)]
       label `shouldNotBe` "plan_expired_wake_claim"
 
-  it "detects expired task/frontend ownership and distinguishes pending requests" $ do
+  it "detects expired task ownership and deadlines" $ do
     source <- seed pool 900 1
     _ <- admit pool source "health"
     _ <- claimOne pool
-    (front, _, _) <- seed pool 901 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    [Only remaining] <- withDb pool $ query "SELECT extract(epoch FROM lease_until-clock_timestamp())::double precision FROM conversation_frontends WHERE turn_id=?" (Only front.atrTurnId)
-    (remaining :: Double) `shouldSatisfy` (> fromIntegral frontendDeadlineSeconds)
     void $ withDb pool $ execute "UPDATE task_attempts SET lease_until=now()-interval '1 second'" ()
     void $ withDb pool $ execute "UPDATE durable_tasks SET deadline=now()-interval '1 second'" ()
-    void $ withDb pool $ execute "UPDATE conversation_frontends SET lease_until=now()-interval '1 second'" ()
     healthCount pool "task_expired_attempt" `shouldReturn` 1
     healthCount pool "task_overdue_deadline" `shouldReturn` 1
-    healthCount pool "frontend_expired_lease" `shouldReturn` 1
-    healthCount pool "request_pending" `shouldReturn` 2
-    withDb pool (finishAgentTurn front TurnFailed 0 (Just "interrupted"))
-    healthCount pool "request_failed" `shouldReturn` 1
-    healthCount pool "frontend_expired_lease" `shouldReturn` 0
-    [critical | ("request_pending", critical, _) <- operationalChecks] `shouldBe` [False]
 
   it "only fails notification health for an exhausted current obligation" $ do
     source <- seed pool 900 1
@@ -303,20 +281,20 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     denied <- withDb pool (admitTaskReceipt turn message other "private-key" "guess" Research (object []) Map.empty)
     denied `shouldSatisfy` isLeft
 
-  it "admits once per source key and transfers the source obligation atomically" $ do
+  it "admits once per source key" $ do
     source@(turn, _, _) <- seed pool 900 1
     (left, right) <- concurrently (admit pool source "same") (admit pool source "same")
     left `shouldBe` right
-    rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE turn_id=?" (Only turn.atrTurnId)
-    rows `shouldBe` [Only ("delegated" :: Text)]
+    rows <- withDb pool $ query "SELECT count(*) FROM durable_tasks WHERE source_turn_id=?" (Only turn.atrTurnId)
+    rows `shouldBe` [Only (1 :: Int64)]
 
-  it "keeps same-author new questions as separate durable obligations" $ do
+  it "keeps same-author background jobs separate" $ do
     first <- seed pool 900 1
     second <- seed pool 900 1
     left <- admit pool first "first"
     right <- admit pool second "second"
     left `shouldNotBe` right
-    rows <- withDb pool $ query "SELECT count(*) FROM conversation_requests WHERE disposition='delegated'" ()
+    rows <- withDb pool $ query "SELECT count(*) FROM durable_tasks" ()
     rows `shouldBe` [Only (2 :: Int64)]
 
   it "does not expose or mutate guessed cross-conversation handles" $ do
@@ -466,26 +444,6 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     replaced <- withDb pool (taskControl (GroupId 900) other False identifier "replace" (Just 1) Nothing "changed")
     hasError replaced `shouldBe` True
 
-  it "runs background work without holding the one frontend activation" $ do
-    source@(front, _, _) <- seed pool 900 1
-    _ <- admit pool source "background"
-    background <- claimOne pool
-    withDb pool (claimFrontend front) `shouldReturn` True
-    withDb pool (authorizeTaskStep background.atrTurnId (ExecutionWork ReserveCall)) `shouldReturn` True
-    (other, _, _) <- seed pool 900 2
-    withDb pool (claimFrontend other) `shouldReturn` False
-    withDb pool (finishAgentTurn front TurnSucceeded 0 Nothing)
-    withDb pool (claimFrontend other) `shouldReturn` True
-
-  it "fences a frontend after lease takeover, including late publication authority" $ do
-    (first, _, _) <- seed pool 900 1
-    (second, _, _) <- seed pool 900 2
-    withDb pool (claimFrontend first) `shouldReturn` True
-    void $ withDb pool $ execute "UPDATE conversation_frontends SET lease_until=now()-interval '1 second'" ()
-    withDb pool (claimFrontend second) `shouldReturn` True
-    withDb pool (authorizeTaskStep first.atrTurnId ExecutionCheckpoint) `shouldReturn` False
-    withDb pool (enqueueOutbound (draft first)) `shouldThrow` anyException
-
   it "blocks direct background publication at the canonical outbox boundary" $ do
     source <- seed pool 900 1
     _ <- admit pool source "no-independent-mouth"
@@ -617,26 +575,9 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     length (firstClaim <> secondClaim) `shouldBe` 1
     withDb pool admitTaskNotification `shouldReturn` []
     Just frontend <- withDb pool (taskTurnRef notification)
-    withDb pool (claimFrontend frontend) `shouldReturn` True
     _ <- withDb pool (taskControl (GroupId 900) actor False identifier "replace" (Just 1) Nothing "new specification")
     withDb pool (authorizeTaskStep notification ExecutionCheckpoint) `shouldReturn` False
     withDb pool (enqueueOutbound (draft frontend)) `shouldThrow` anyException
-
-  it "resolves the source obligation only after the coordinated report is recorded" $ do
-    source@(_, message, _) <- seed pool 900 1
-    _ <- admit pool source "publication-obligation"
-    execution <- claimOne pool
-    withDb pool (taskReportTyped execution.atrTurnId success) `shouldReturn` True
-    withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing)
-    [notification] <- withDb pool admitTaskNotification
-    Just frontend <- withDb pool (taskTurnRef notification)
-    withDb pool (claimFrontend frontend) `shouldReturn` True
-    beforePublication <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
-    beforePublication `shouldBe` [Only ("delegated" :: Text)]
-    void $ withDb pool (enqueueOutbound (draft frontend))
-    withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing)
-    afterPublication <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
-    afterPublication `shouldBe` [Only ("answered" :: Text)]
 
   it "retains task reply provenance without retrying a published notification after a failed checkpoint" $ do
     source <- seed pool 900 1
@@ -646,7 +587,6 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing)
     [notification] <- withDb pool admitTaskNotification
     Just frontend <- withDb pool (taskTurnRef notification)
-    withDb pool (claimFrontend frontend) `shouldReturn` True
     publication <- withDb pool (enqueueOutbound (draft frontend))
     withDb pool (finishAgentTurn frontend TurnFailed 0 Nothing)
     withDb pool admitTaskNotification `shouldReturn` []
@@ -654,14 +594,13 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     withDb pool admitTaskNotification `shouldReturn` []
     withDb pool (taskForReply (GroupId 900) publication.canonicalMessageId) `shouldReturn` Just identifier
 
-  it "fences monitor mutations when the bound frontend lease expires" $ do
+  it "fences monitor mutations after the bound turn ends" $ do
     (turn, _, actor) <- seed pool 900 1
-    withDb pool (claimFrontend turn) `shouldReturn` True
     now <- getCurrentTime
     let scope = MonitorCapability.MonitorControlScope (GroupId 900) (Just turn) actor Map.empty False
         reminder = MonitorCapability.armMonitor (MonitorCapability.CannedReminder "reminder" Nothing (addUTCTime 60 now))
     Right monitor <- withDb pool (MonitorCapability.runMonitorControl scope reminder)
-    void $ withDb pool (execute "UPDATE conversation_frontends SET lease_until=now()-interval '1 second' WHERE turn_id=?" (Only turn.atrTurnId))
+    withDb pool (finishAgentTurn turn TurnCancelled 0 (Just "cancelled"))
     withDb pool (MonitorCapability.runMonitorControl scope reminder) `shouldReturn` Left MonitorControl.ArmingCallerFenced
     withDb pool (MonitorCapability.runMonitorControl scope (MonitorCapability.controlMonitor monitor.mrMonitorOrdinal MonitorControl.CancelMonitor False)) `shouldReturn` Left MonitorControl.MonitorCallerFenced
     rows <- withDb pool (query "SELECT status FROM monitors" ())
@@ -670,7 +609,6 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
   it "binds monitor identity, role and query scope outside tool arguments" $ do
     (turn, _, actor) <- seed pool 900 1
     (_, _, otherActor) <- seed pool 901 2
-    withDb pool (claimFrontend turn) `shouldReturn` True
     now <- getCurrentTime
     let scope = MonitorCapability.MonitorControlScope (GroupId 900) (Just turn) actor (Map.singleton "context_search" "frozen") False
         reminder = MonitorCapability.armMonitor (MonitorCapability.CannedReminder "reminder" Nothing (addUTCTime 60 now))
@@ -714,7 +652,6 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     overview <- withDb pool WorkQuery.readWorkOverview
     length overview.tasks `shouldBe` 1
     length overview.monitors `shouldBe` 1
-    overview.unresolvedRequests `shouldBe` 0
     [task] <- pure overview.tasks
     [view] <- pure overview.monitors
     task.groupId `shouldBe` 900
@@ -923,8 +860,6 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     rows <- withDb pool $ query "SELECT version,body->>'summary',(SELECT count(*) FROM task_notifications WHERE task_id=progress.task_id) FROM task_progress progress WHERE task_id=?" (Only identifier)
     rows `shouldBe` [(2 :: Int64, "second" :: Text, 1 :: Int64)]
     [notification] <- withDb pool admitTaskNotification
-    Just frontend <- withDb pool (taskTurnRef notification)
-    withDb pool (claimFrontend frontend) `shouldReturn` True
     void $ withDb pool (taskControl (GroupId 900) actor False identifier "replace" (Just 1) Nothing "new objective")
     withDb pool (recordTaskProgress execution.atrTurnId (progress "too late")) `shouldReturn` False
     withDb pool (authorizeTaskStep notification (ExecutionWork CheckOnly)) `shouldReturn` False
@@ -956,20 +891,12 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     events `shouldSatisfy` elem (Only ("child_progress" :: Text))
     withDb pool admitTaskNotification `shouldReturn` []
 
-  it "does not count a successful turn without an output receipt as an answered request" $ do
-    (frontend, message, _) <- seed pool 900 1
-    withDb pool (claimFrontend frontend) `shouldReturn` True
-    withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing)
-    rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
-    rows `shouldBe` [Only ("failed" :: Text)]
-
   it "ends an ordinary reply without a model-authored request outcome" $ do
-    (frontend, message, _) <- seed pool 900 1
-    withDb pool (claimFrontend frontend) `shouldReturn` True
+    (frontend, _, _) <- seed pool 900 1
     void $ withDb pool (enqueueOutbound (draft frontend))
     withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing)
-    rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
-    rows `shouldBe` [Only ("answered" :: Text)]
+    rows <- withDb pool $ query "SELECT status FROM agent_turns WHERE turn_id=?" (Only frontend.atrTurnId)
+    rows `shouldBe` [Only ("succeeded" :: Text)]
 
   it "snapshots monitor profiles and change policy under the definition CAS" $ do
     (turn, _, actor) <- seed pool 900 1
@@ -1010,18 +937,15 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     rows <- withDb pool $ query "SELECT count(*) FROM task_notifications WHERE kind='result'" ()
     rows `shouldBe` [Only (2 :: Int64)]
 
-  it "keeps progress publication separate from the source obligation" $ do
-    source@(_, message, _) <- seed pool 900 1
+  it "keeps progress publication and task scheduling separate" $ do
+    source <- seed pool 900 1
     _ <- admit pool source "visible-progress"
     execution <- claimOne pool
     withDb pool (recordTaskProgress execution.atrTurnId (object ["summary" .= ("working" :: Text)])) `shouldReturn` True
     [notification] <- withDb pool admitTaskNotification
     Just frontend <- withDb pool (taskTurnRef notification)
-    withDb pool (claimFrontend frontend) `shouldReturn` True
     void $ withDb pool (enqueueOutbound (draft frontend))
     withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing)
-    rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
-    rows `shouldBe` [Only ("delegated" :: Text)]
     withDb pool (recordTaskProgress execution.atrTurnId (object ["summary" .= ("next step" :: Text)])) `shouldReturn` True
     withDb pool admitTaskNotification `shouldReturn` []
     wakeMicros <- withDb pool nextTaskWakeMicros

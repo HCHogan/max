@@ -31,11 +31,3 @@ spec = describe "Max.Turn.Types" $ do
       sort links
         `shouldBe` [TurnOutputLink (AgentTurnId 42) chunk | chunk <- [0 .. 99]]
       turnOutputAgentTurn outputContext `shouldBe` ref
-
-    it "continues after a host-derived recovery seed" $ do
-      let ref = AgentTurnRef (AgentTurnId 42) (TurnOrdinal 3)
-      outputContext <- newTurnOutputContextAt ref 7
-      first <- nextTurnOutputLink outputContext
-      second <- nextTurnOutputLink outputContext
-      [first, second]
-        `shouldBe` [TurnOutputLink (AgentTurnId 42) 7, TurnOutputLink (AgentTurnId 42) 8]

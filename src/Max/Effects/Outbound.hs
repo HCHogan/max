@@ -27,7 +27,8 @@ import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Monitor.Types (MonitorFireId)
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
 import Max.Platform.Types (CanonicalMessageId (..))
-import Max.Turn.Types (TurnOutputLink)
+import Max.Tasks (TaskRegistry, authorizeTurnOutput)
+import Max.Turn.Types (TurnOutputLink (..))
 import Max.Util (trySync)
 import OneBot.Types (GroupId (..))
 
@@ -80,12 +81,17 @@ type instance DispatchOf Outbound = Dynamic
 runOutbound ::
   forall es a.
   (WithConnection :> es, Log :> es, IOE :> es) =>
+  TaskRegistry ->
   Eff (Outbound : es) a ->
   Eff es a
-runOutbound = runOutboundWith deliver
+runOutbound tasks = runOutboundWith deliver
   where
     deliver :: OutboundRequest -> Eff es PublicationResult
     deliver req = do
+      allowed <- maybe (pure True) (liftIO . authorizeTurnOutput tasks req.orGroupId . (.tolTurnId)) req.orTurnOutput
+      if allowed then publish req else failed req "turn publication was cancelled or its runtime ended"
+
+    publish req = do
       let GroupId group = req.orGroupId
           draft =
             OutboundDraft

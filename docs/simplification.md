@@ -63,13 +63,13 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 ### B. Foreground conversation
 
 - [x] Remove model-facing `request_finish` and per-input dispositions.
-- [ ] Remove frontend request ledgers.
-- [ ] Replace frontend SQL ownership/leases with a bounded conversation queue.
+- [x] Remove frontend request ledgers.
+- [x] Replace frontend SQL ownership/leases with a bounded conversation queue.
 - [x] Normal text ends the loop; failures/truncation/cancellation remain distinct.
 - [x] Publish paragraphs and plain-prose fragments incrementally.
 - [x] Bound retained stream buffers and validate publication through the full
       SSE/transport path before EOS.
-- [ ] Update prompts, tools, handlers, output accounting and fixtures together.
+- [x] Update prompts, tools, handlers, output accounting and fixtures together.
 - [x] Preserve live provider tool-call/reasoning state within a model loop.
 
 ### C. Jobs and application lifetime
@@ -261,3 +261,24 @@ maintained implementation record.
   remain because recorded-request evaluation uses them. All Cabal targets build;
   1,058 unit examples, capability checks, HLint and package checks pass.
   Source counting now also handles deleted, unstaged files.
+
+- Foreground ownership now uses a bounded STM queue: 256 tickets per conversation,
+  1,024 per process. Ordinary inputs retain their admitted eligibility and run
+  separately; owner feedback preserves canonical author, reply and ingestion
+  order. Unread feedback becomes a later turn at the completion boundary.
+  Foreground requests precede queued notices; commands bypass the queue.
+- Removed production use of frontend leases, request ledgers, SQL inboxes and
+  foreground restart continuation. Historical tables stay intact; migration 115
+  preserves the output scope, terminal-state and task-notice guards. Cancellation
+  revokes local publication authority before signalling the worker. Short ingress
+  claims settle at queue admission, without a model-length lease heartbeat.
+  Background task and transport persistence are still pending their own cutover.
+- Foreground validation: all Cabal targets build; 1,066 unit examples and 349
+  PostgreSQL integration examples pass. Queue fixtures cover canonical feedback
+  provenance/order, cancellation, capacity, notice priority and 100 concurrent
+  finish/admission races. Publication fixtures retain a committed prefix while
+  rejecting sends after cancellation or runtime removal. Migration upgrade,
+  architecture capability, HLint and package checks pass.
+  The intermediate src + app count is 48,656 effective Haskell lines (602 fewer
+  in this step, 3,971 below baseline); core Haskell is 35,493, with active SQL
+  still additional. This is a staged implementation, not final plan acceptance.

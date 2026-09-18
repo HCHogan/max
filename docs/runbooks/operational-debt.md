@@ -25,7 +25,8 @@ max-adr003-maintenance debt export delivery_outcome_unknown all \
 
 Supported kinds: `delivery_outcome_unknown`, `delivery_permanent_failure`,
 `dispatch_outcome_unknown`, `media_parked`, `monitor_fire_parked`,
-`request_failed`, `sandbox_outcome_unknown`, `task_notification_exhausted`.
+`sandbox_outcome_unknown` and `task_notification_exhausted`. Retired request
+ledger rows do not participate in current health checks.
 Scope must be explicit: `conversation:123` uses a **canonical conversation ID**,
 `global` selects records without a conversation (currently media fetch jobs),
 and `all` selects every conversation. The cutoff and 10,000-item limit bound a

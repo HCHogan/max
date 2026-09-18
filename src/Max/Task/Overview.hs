@@ -210,8 +210,7 @@ activeTasksText tasks = Just (T.intercalate ", " [taskHandle task.taskId <> " " 
 
 data WorkOverview = WorkOverview
   { tasks :: ![TaskOverview],
-    monitors :: ![MonitorOverview],
-    unresolvedRequests :: !Int64
+    monitors :: ![MonitorOverview]
   }
   deriving stock (Eq, Show)
 
@@ -219,6 +218,5 @@ instance ToJSON WorkOverview where
   toJSON view =
     object
       [ "tasks" .= view.tasks,
-        "monitors" .= view.monitors,
-        "unresolved_requests" .= view.unresolvedRequests
+        "monitors" .= view.monitors
       ]

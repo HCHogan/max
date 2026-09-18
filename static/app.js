@@ -68,7 +68,7 @@ function admin() {
     groups: [],
     memories: [],
     tasks: [],
-    durableWork: { tasks: [], monitors: [], unresolved_requests: 0 },
+    durableWork: { tasks: [], monitors: [] },
     quota: null,
     quotaErr: '',
     endpoints: [],

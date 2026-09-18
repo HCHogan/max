@@ -1,5 +1,12 @@
 # ADR008: one coordinated task cutover
 
+> Historical cutover record. The current runtime uses normal final replies,
+> direct task notices and a bounded process-local foreground queue. Foreground
+> leases, request ledgers and foreground restart continuation have been retired.
+> Follow [the maintained simplification plan](../simplification.md) for the
+> remaining background task and transport cutover; old quotas and recovery
+> instructions below describe the earlier release.
+
 Status: read-only inspection on 2026-09-06 confirmed migrations 087–089 and
 revision `4e9f934` on h610. This release adds the P0 follow-up and frontend-limit
 migration 091; production behavioral acceptance is separate from automated gates.

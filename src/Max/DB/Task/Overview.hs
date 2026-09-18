@@ -7,7 +7,7 @@ import Data.Map.Strict qualified as Map
 import Database.PostgreSQL.Simple.FromRow (RowParser, field)
 import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
 import Effectful
-import Effectful.PostgreSQL (WithConnection, query)
+import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Codec (enumField, queryRows)
 import Max.DB.Transaction (withReadSnapshot)
 import Max.Monitor.Policy (parseOccurrenceDisposition, parseOverlapPolicy)
@@ -67,12 +67,9 @@ readWorkOverview = withReadSnapshot $ do
         "SELECT fire.monitor_id,work.task_id,work.status FROM monitor_fires fire JOIN durable_tasks work ON work.task_id=fire.task_id\
         \ WHERE fire.monitor_id=ANY(?) AND work.status IN ('queued','running','waiting','retrying') ORDER BY work.task_id"
         (Only (PGArray (map fst monitors)))
-  requests <- query "SELECT count(*) FROM conversation_requests WHERE disposition IN ('pending','delegated','waiting','failed')" ()
   let byMonitor = foldr (\(identifier, task) -> Map.insertWith (<>) identifier [task]) Map.empty active
       views = [monitor {activeTasks = Map.findWithDefault [] identifier byMonitor} | (identifier :: Int64, monitor) <- monitors]
-  case requests of
-    [Only count] -> pure (WorkOverview tasks views count)
-    _ -> error "durable work request aggregate missing"
+  pure (WorkOverview tasks views)
 
 taskRow :: RowParser TaskOverview
 taskRow = TaskOverview <$> field <*> field <*> field <*> field <*> enumField parseTaskStatus <*> enumField parseProfile <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field

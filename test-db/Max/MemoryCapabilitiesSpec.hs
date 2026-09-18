@@ -11,8 +11,8 @@ import Effectful (raise)
 import Effectful.PostgreSQL (execute, query)
 import Helpers (truncateAll, withDb, withDbLog)
 import Max.ConversationScope (conversationScopeFor)
+import Max.DB.AgentTurn (AgentTurnTerminal (TurnCancelled), finishAgentTurn)
 import Max.DB.Connection (DbPool)
-import Max.DB.Task (claimFrontend)
 import Max.DB.TaskSpec (seed)
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.MemoryControl qualified as Control
@@ -65,10 +65,9 @@ spec pool = before_ (truncateAll pool) $ describe "scoped memory capabilities" $
     length (filter isRight outcomes) `shouldBe` 1
     length [() | Left ExactMemoryAlreadyExists <- outcomes] `shouldBe` 7
 
-  it "binds writes to current identity, source and lease while preserving CAS and audit" $ do
+  it "binds writes to current identity, source and turn lifetime while preserving CAS and audit" $ do
     (turn, message, actor) <- seed pool 900 1
     (_, otherMessage, otherActor) <- seed pool 901 2
-    withDb pool (claimFrontend turn) `shouldReturn` True
     let scope = Control.MemoryControlScope (GroupId 900) (Just turn.atrTurnId) actor message
         save = Control.saveMemory ConversationMemory "explicit fact"
         run = withDbLog pool . Control.runMemoryControl scope
@@ -83,7 +82,7 @@ spec pool = before_ (truncateAll pool) $ describe "scoped memory capabilities" $
     withDb pool (Query.runMemoryQuery (conversationScopeFor (GroupId 901)) otherActor (Query.listMemories ConversationMemory)) `shouldReturn` []
     evidence <- withDb pool (query "SELECT source_principal_id,source_canonical_message_id FROM memory_evidence WHERE memory_id=? ORDER BY memory_version" (Only item.memId))
     evidence `shouldBe` replicate 2 (Just actor.unPrincipalId, Just message.unCanonicalMessageId)
-    void $ withDb pool (execute "UPDATE conversation_frontends SET lease_until=now()-interval '1 second' WHERE turn_id=?" (Only turn.atrTurnId))
+    withDb pool (finishAgentTurn turn TurnCancelled 0 (Just "cancelled"))
     run (Control.forgetMemory item.memId (ExpectedVersion updated.memVersion)) `shouldReturn` Left MemoryCallerFenced
     rows <- withDb pool (query "SELECT lifecycle,version FROM memories WHERE id=?" (Only item.memId))
     rows `shouldBe` [("permanent" :: Text, updated.memVersion)]
@@ -92,7 +91,6 @@ spec pool = before_ (truncateAll pool) $ describe "scoped memory capabilities" $
     (turn, message, actor) <- seed pool 900 2783846439
     (_, _, colleague) <- seed pool 900 3526452465
     (_, _, stranger) <- seed pool 901 777777777
-    withDb pool (claimFrontend turn) `shouldReturn` True
     let scope = Control.MemoryControlScope (GroupId 900) (Just turn.atrTurnId) actor message
         save subject = withDbLog pool (Control.runMemoryControl scope (Control.saveMemory subject "explicit personal fact"))
         rejected = Left (MemoryAdmissionRejected MemorySubjectNotVisible)

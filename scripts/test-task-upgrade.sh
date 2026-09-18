@@ -30,6 +30,8 @@ for migration in migrations/*.sql; do
       psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/progress-review-upgrade.sql
     elif [[ "$name" == "114_direct_task_notices.sql" ]]; then
       psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/direct-notices-upgrade.sql
+    elif [[ "$name" == "115_local_conversations.sql" ]]; then
+      psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/local-conversations-upgrade.sql
     else
       psql -X -v ON_ERROR_STOP=1 -1 -d "$database" -f "$migration" >/dev/null
     fi

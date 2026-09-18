@@ -11,9 +11,6 @@ module Max.Task.State
     TaskReport (..),
     parseTaskReport,
     reportTaskStatus,
-    RequestDisposition (..),
-    dispositionText,
-    parseDisposition,
     SettlementFacts (..),
     TaskSettlement (..),
     decideSettlement,
@@ -178,30 +175,6 @@ reportTaskStatus = \case
   ReportFailed -> Failed
   ReportBudgetExhausted -> BudgetExhausted
   ReportCancelled -> Cancelled
-
-data RequestDisposition = RequestPending | RequestDelegated | RequestAnswered | RequestWaiting | RequestDeclined | RequestFailed | RequestCancelled
-  deriving stock (Eq, Show)
-
-dispositionText :: RequestDisposition -> Text
-dispositionText = \case
-  RequestPending -> "pending"
-  RequestDelegated -> "delegated"
-  RequestAnswered -> "answered"
-  RequestWaiting -> "waiting"
-  RequestDeclined -> "declined"
-  RequestFailed -> "failed"
-  RequestCancelled -> "cancelled"
-
-parseDisposition :: Text -> Maybe RequestDisposition
-parseDisposition = \case
-  "pending" -> Just RequestPending
-  "delegated" -> Just RequestDelegated
-  "answered" -> Just RequestAnswered
-  "waiting" -> Just RequestWaiting
-  "declined" -> Just RequestDeclined
-  "failed" -> Just RequestFailed
-  "cancelled" -> Just RequestCancelled
-  _ -> Nothing
 
 -- | Facts read under the settlement transaction's ownership locks. The
 -- caller checks revision/attempt/lease before applying the decision.

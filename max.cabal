@@ -188,6 +188,7 @@ library
         Max.Recall.Types
         Max.Context.Media
         Max.Effects.ConversationQuery
+        Max.Conversation
         Max.Conversation.ToolRuntime
         Max.DB.History.Media
         Max.DB.Media
@@ -202,8 +203,6 @@ library
         Max.DB.Task.Authorization
         Max.DB.Task.Admission
         Max.DB.Task.Reporting
-        Max.DB.Task.Frontend
-        Max.DB.Task.FrontendInput
         Max.DB.Task.Notice
         Max.DB.Task.Settlement
         Max.DB.Task.Control
@@ -703,6 +702,7 @@ test-suite max-test
         Max.Task.StateSpec
         Max.Monitor.PolicySpec
         Max.TasksSpec
+        Max.ConversationSpec
         Max.Effects.AgentSpec
         Max.Effects.BlobSpec
         Max.Effects.EmbeddingSpec
@@ -801,7 +801,6 @@ test-suite max-test-db
         Max.WorkflowAgentSpec
         Max.DB.MonitorSpec
         Max.DB.TaskSpec
-        Max.DB.FrontendInputSpec
         Max.DB.ProgressSpec
         Max.DB.BrowserSpec
         Max.DB.QQBackfillSpec

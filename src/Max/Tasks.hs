@@ -1,5 +1,4 @@
--- | Process-local visibility, cancellation and heartbeat for active durable
--- work. Input ownership and recovery belong to the database execution inbox.
+-- | Process-local visibility, cancellation and heartbeat for active work.
 module Max.Tasks
   ( -- * Registry
     TaskRegistry,
@@ -10,7 +9,6 @@ module Max.Tasks
     TurnRuntime,
     beginTurnRuntime,
     beginDurableTurnRuntime,
-    beginDurableTurnRuntimeAt,
     activateTurnRuntime,
     finishTurnRuntime,
     turnRuntimeTaskId,
@@ -19,6 +17,7 @@ module Max.Tasks
     setTurnPhase,
     awaitTurnSilence,
     checkTurnCancellation,
+    authorizeTurnOutput,
 
     -- * Operations
     TaskInfo (..),
@@ -48,7 +47,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Max.Platform.Types (CanonicalMessageId (..))
-import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOutputContext, newTurnOutputContext, newTurnOutputContextAt)
+import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOutputContext, newTurnOutputContext)
 import OneBot.Types (GroupId (..), UserId (..))
 
 -- | Short, human-typeable id like @t17@ — easy to !kill from the
@@ -151,21 +150,6 @@ beginDurableTurnRuntime ::
   IO TurnRuntime
 beginDurableTurnRuntime reg durable gid uid mTrigger = do
   output <- newTurnOutputContext durable
-  beginTurnRuntimeWith reg (Just durable) (Just output) gid uid mTrigger
-
--- | Recovery constructor.  Visible-output indices already committed before
--- process death remain occupied; continuation starts after the ledger's
--- current maximum rather than resetting the process-local allocator to zero.
-beginDurableTurnRuntimeAt ::
-  TaskRegistry ->
-  AgentTurnRef ->
-  Int ->
-  GroupId ->
-  UserId ->
-  Maybe CanonicalMessageId ->
-  IO TurnRuntime
-beginDurableTurnRuntimeAt reg durable firstChunk gid uid mTrigger = do
-  output <- newTurnOutputContextAt durable firstChunk
   beginTurnRuntimeWith reg (Just durable) (Just output) gid uid mTrigger
 
 beginTurnRuntimeWith ::
@@ -364,3 +348,11 @@ cancelAllTasks reg = do
       (Map.elems m)
   sequence_ (catMaybes acts)
   pure (length acts)
+
+-- | Revocation precedes the cancellation signal, including if a worker masks it.
+authorizeTurnOutput :: TaskRegistry -> GroupId -> AgentTurnId -> IO Bool
+authorizeTurnOutput registry group turn = atomically $ do
+  (_, entries) <- readTVar registry.trState
+  case [entry | entry <- Map.elems entries, entry.teGroup == group, fmap (.atrTurnId) entry.teAgentTurn == Just turn] of
+    [entry] -> not <$> readTVar entry.teKilled
+    _ -> pure False

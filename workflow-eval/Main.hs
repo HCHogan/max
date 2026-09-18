@@ -35,6 +35,7 @@ import Max.CodeMode.Execution
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion, runJavaScript)
 import Max.CodeMode.Wasm (WasmExit (..))
 import Max.Config (AppConfig (..), appConfigParser)
+import Max.Conversation (newConversations)
 import Max.DB.AgentTurn
 import Max.DB.Connection
 import Max.DB.Migrations (runMigrations)
@@ -210,6 +211,7 @@ runOrdinary cfg opts pool sources group = do
 
 runChild :: AppConfig -> Options -> DbPool -> Map.Map Text Text -> AgentTurnId -> IORef [CallRecord] -> IO ()
 runChild cfg opts pool sources identifier records = do
+  conversations <- newConversations
   Just task <- withDb pool (loadTaskExecution identifier)
   output <- newTurnOutputContext task.teTurn
   tasks <- newTaskRegistry
@@ -217,7 +219,7 @@ runChild cfg opts pool sources identifier records = do
   runtime <- newHttpRuntime
   let context = mkToolContext (TurnIdentity task.teGroup task.teSeed (UserId 1) (UserId 3) task.tePrincipal Nothing (Just output)) capabilities {tcEffectCeiling = Just task.teGrants}
       messages = [MsgSystem "You are Max's bounded research child. Read every provided file using web_search(query=exact file path); this tool returns a frozen real repository source, with source:path as its citation. Analyze the objective using those reads. Return task_finish with status, summary, evidence, unresolved, and payload as a native JSON object (never a JSON-encoded string) matching output_contract: claims contains concrete findings about implementation, sources contains every source:path read. Never delegate or run_code. Shape does not establish correctness; report partial if evidence is insufficient. Do not claim a production deployment or performance benefit.", MsgUser (task.teObjective <> "\n" <> json task.teInputs)]
-  result <- withCompactLogger cfg.logColor Nothing $ \logger -> runEff . runConcurrent . runLog "max-workflow-eval" logger LogAttention . runWithConnectionPool pool . runBlob "/tmp/max-workflow-eval-blobs" . runLLM runtime (\_ _ _ -> pure ()) (\call -> atomicModifyIORef' records (\xs -> (call : xs, ()))) cfg.llm . runDurableAgent (AgentLimits 12) (factory sources) $ agentTurn turn (AgentContext context Nothing (Just 24)) opts.profile messages silentSink
+  result <- withCompactLogger cfg.logColor Nothing $ \logger -> runEff . runConcurrent . runLog "max-workflow-eval" logger LogAttention . runWithConnectionPool pool . runBlob "/tmp/max-workflow-eval-blobs" . runLLM runtime (\_ _ _ -> pure ()) (\call -> atomicModifyIORef' records (\xs -> (call : xs, ()))) cfg.llm . runDurableAgent conversations (AgentLimits 12) (factory sources) $ agentTurn turn (AgentContext context Nothing (Just 24)) opts.profile messages silentSink
   void (finishTurnRuntime tasks turn)
   withDb pool (finishAgentTurn task.teTurn (if isNothing result.aborted then TurnSucceeded else TurnFailed) result.turnsUsed Nothing)
 
