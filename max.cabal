@@ -30,6 +30,7 @@ extra-source-files:
     test-db/fixtures/task-authority-upgrade.sql
     test-db/fixtures/task-upgrade-after.sql
     test-db/fixtures/frontend-limits-upgrade.sql
+    test-db/fixtures/direct-notices-upgrade.sql
     test-db/fixtures/browser-upgrade-after.sql
     assets/codesnap/*.tmTheme
     browser-image/*.patch
@@ -178,7 +179,6 @@ library
         Max.DB.FetchQueue
         Max.DB.Files
         Max.DB.Health
-        Max.DB.Debt
         Max.DB.Projection
         Max.DB.History
         Max.History.Types
@@ -341,7 +341,6 @@ library
         Max.Effects.MonitorControl
         Max.Task.Policy
         Max.Task.Notice
-        Max.Task.NoticeReview
         Max.Task.Types
         Max.Task.Admission
         Max.Task.Execution
@@ -816,7 +815,6 @@ test-suite max-test-db
         Max.EpisodeStoreSpec
         Max.HistorianSpec
         Max.DB.HistorySpec
-        Max.DB.DebtSpec
         Max.DB.ProjectionSpec
         Max.DB.MediaSpec
         Max.MemoryStoreSpec

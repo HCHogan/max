@@ -19,7 +19,6 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Max.Browser.State (WorkspaceState, workspaceStateText)
-import Max.Task.Notice (NoticeDecision)
 import Max.Task.State (TaskStatus)
 import Max.Task.Types (TaskProfile, profileName, taskHandle)
 
@@ -89,9 +88,7 @@ data ProgressView = ProgressView
     attempt :: !Int,
     version :: !Int64,
     body :: !Value,
-    updatedAt :: !UTCTime,
-    reviewDecision :: !(Maybe NoticeDecision),
-    reviewedAt :: !(Maybe UTCTime)
+    updatedAt :: !UTCTime
   }
   deriving stock (Eq, Show)
 
@@ -102,9 +99,7 @@ instance ToJSON ProgressView where
         "attempt" .= view.attempt,
         "version" .= view.version,
         "body" .= view.body,
-        "updated_at" .= view.updatedAt,
-        "review_decision" .= view.reviewDecision,
-        "reviewed_at" .= view.reviewedAt
+        "updated_at" .= view.updatedAt
       ]
 
 data EventView = EventView

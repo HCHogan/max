@@ -82,7 +82,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
       conservative handling of uncertain sends.
 - [ ] Replace media/embedding/Historian maintenance leases with local scheduling
       and missing-data scans; preserve short transactional publication.
-- [ ] Delete notification LLM review pipelines and operational debt review.
+- [x] Delete notification LLM review pipelines and operational debt review.
 - [ ] Separate connection retries, individual task failures and fatal core errors.
 
 ### E. Context and optional machinery
@@ -186,3 +186,11 @@ maintained implementation record.
   are excluded from loading; static skill workflows still use current tool
   contracts and the shared executor. Architecture checks, HLint, Cabal package
   checks and Nix syntax validation pass.
+- Direct task notices: 1,092 unit and 376 DB integration examples pass, as
+  do the task-upgrade fixture and capability checks. Progress and results now
+  publish through the existing resolver without a second model or JSON review.
+  Current-version, cancellation, foreground-priority and duplicate-output
+  guards remain. Old skipped notices stay ineligible after migration 114.
+- Operational debt export/review was removed. Health reports raw terminal
+  failure counts; historical acknowledgements no longer suppress failures.
+  Old audit data is retained. Full in-process runtime cutover is still pending.

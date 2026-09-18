@@ -3,18 +3,16 @@
 -- | Offline release gate for ADR 003's atomic schema/content cutover.
 --
 -- This executable is deliberately not linked into the serving entry point.
--- Only gate/migrate/reproject require stopped writers. Verify, health and debt
--- export are read-only and support live traffic; review appends audit records.
+-- Gate/migrate/reproject require stopped writers; verify and health are read-only.
 module Main (main) where
 
 import Control.Exception (bracket)
 import Control.Monad (forM, unless, when)
-import Data.Aeson (Value, eitherDecodeFileStrict, encodeFile)
+import Data.Aeson (Value, eitherDecodeFileStrict)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple
   ( Connection,
     Only (..),
@@ -28,7 +26,6 @@ import Effectful (runEff)
 import Effectful.PostgreSQL.Connection (runWithConnection)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbConfig (..), DbPool, closeDbPool, newDbPool, withConn)
-import Max.DB.Debt qualified as Debt
 import Max.DB.Health (operationalChecks)
 import Max.DB.Migrations (runMigrations)
 import Max.DB.Projection (ProjectionRow (..), expectedProjection, projectionRows)
@@ -46,8 +43,6 @@ data Command
   | Verify
   | Health
   | Gate
-  | DebtExport Debt.DebtKind Debt.DebtScope UTCTime FilePath
-  | DebtReview FilePath
   | MemoryReview Int64 Int64 Int Text Text FilePath
   | MemoryReviewQueue
   | MemoryRepairSubject Int64 Int64 Int64 Int64 Text
@@ -69,14 +64,6 @@ run command migrationsDir pool = case command of
   Reproject -> withConn pool reproject
   Verify -> withConn pool (verify False)
   Health -> withConn pool operationalHealth
-  DebtExport kind scope cutoff path -> withConn pool $ \connection -> do
-    plan <- Debt.exportDebt connection kind scope cutoff
-    encodeFile path plan
-    putStrLn ("debt: exported " <> show (length plan.items) <> " exact observations to " <> path)
-  DebtReview path -> do
-    plan <- eitherDecodeFileStrict path >>= either die pure
-    changed <- withConn pool (`Debt.reviewDebt` plan)
-    putStrLn ("debt: appended " <> show changed <> " review events; source effects were not replayed")
   MemoryReviewQueue -> withConn pool $ \connection -> do
     rows <- query_ connection "SELECT jsonb_build_object('capture_run_id',capture_run_id,'proposal_index',proposal_index,'conversation_id',conversation_id,'outcome_reason',outcome_reason,'review_state',review_state) FROM episode_memory_review_queue ORDER BY capture_run_id,proposal_index" :: IO [Only Value]
     mapM_ (print . fromOnly) rows
@@ -428,11 +415,6 @@ parseCommand = \case
   ["verify"] -> pure Verify
   ["health"] -> pure Health
   ["gate"] -> pure Gate
-  ["debt", "export", kind, scope, cutoff, path] ->
-    case (Debt.parseDebtKind (T.pack kind), Debt.parseDebtScope (T.pack scope), readMaybe cutoff) of
-      (Just parsedKind, Just parsedScope, Just parsedCutoff) -> pure (DebtExport parsedKind parsedScope parsedCutoff path)
-      _ -> die "invalid debt kind/scope/cutoff; timestamp example: 2026-09-09 05:00:00 UTC"
-  ["debt", "review", path] -> pure (DebtReview path)
   ["memory", "reviews"] -> pure MemoryReviewQueue
   ["memory", "repair-subject", group, memory, version, principal, reason] -> case (readMaybe group, readMaybe memory, readMaybe version, readMaybe principal) of
     (Just g, Just m, Just v, Just p) -> pure (MemoryRepairSubject g m v p (T.pack reason))
@@ -444,8 +426,6 @@ parseCommand = \case
     die
       "usage: cabal run max-adr003-maintenance -- \
       \(migrate|reproject|verify|health|gate)\n\
-      \  debt export KIND (all|global|conversation:ID) 'YYYY-MM-DD HH:MM:SS UTC' FILE\n\
-      \  debt review FILE\n\
       \  memory reviews\n\
       \  memory repair-subject LEGACY_GROUP MEMORY EXPECTED_VERSION PRINCIPAL REASON\n\
       \  memory review LEGACY_GROUP CAPTURE INDEX ACTOR REASON PROPOSAL_JSON_FILE\n\

@@ -77,11 +77,7 @@ import Max.Command.Permission
     tierSatisfied,
   )
 import Max.Command.Types (Command (..))
-import Max.Concurrent.Lease
-  ( LeaseRun (..),
-    renewUntilLost,
-    withOwnedLease,
-  )
+import Max.Concurrent.Lease (renewUntilLost)
 import Max.Context.Types (digestOnlyContinuation, noContinuation)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn
@@ -146,11 +142,7 @@ import Max.Effects.Agent
     agentTurn,
   )
 import Max.Effects.Blob (Blob, BlobRef (blobRefSha256), putBlob)
-import Max.Effects.LLM
-  ( ChatCtx (ChatCtx),
-    ChatMessage (MsgSystem, MsgUser),
-    LLM,
-  )
+import Max.Effects.LLM (ChatMessage (MsgSystem, MsgUser))
 import Max.Effects.Outbound
   ( Outbound,
     OutboundDeliveryScope (..),
@@ -328,9 +320,7 @@ import Max.RuntimeConfig
 import Max.Session (Session (..), loadSession, readSession)
 import Max.Shutdown (enterDispatchWith, leaveDispatchWith)
 import Max.Skills (Skill (..), skillsForGroup)
-import Max.Task.Notice (NoticeDecision (..), noticeReviewEvidence)
-import Max.Task.Notice qualified as Notice
-import Max.Task.NoticeReview (reviewNotice)
+import Max.Task.Notice (renderNotice)
 import Max.Task.Policy
   ( frontendDeadlineSeconds,
     frontendToolLimit,
@@ -488,7 +478,6 @@ handleEvents ::
     PlatformQuery :> es,
     PlatformAccount :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -939,7 +928,6 @@ dispatchPendingWorker ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -965,7 +953,6 @@ processCanonicalDispatch ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -986,7 +973,6 @@ runDispatchClaim ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -1065,7 +1051,6 @@ onDispatchMessage ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -1144,7 +1129,6 @@ onConversationMessage ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -1229,7 +1213,6 @@ onPoke ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -1309,7 +1292,6 @@ dispatchCommand ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -1435,7 +1417,6 @@ dispatchProactive ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -1511,7 +1492,6 @@ durableTaskWorker ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -1538,7 +1518,6 @@ launchTaskWork ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -1586,7 +1565,6 @@ launchMonitorTurn ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -1650,7 +1628,6 @@ dispatchLLM ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -1678,7 +1655,6 @@ resumeInterruptedTurn ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -1734,7 +1710,6 @@ dispatchLLMWith ::
     WithConnection :> es,
     PlatformQuery :> es,
     Outbound :> es,
-    LLM :> es,
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
@@ -1937,7 +1912,7 @@ dispatchLLMWith start owner mIntent origin gm = do
                   ( withProcessingReaction outputCaps $ do
                       kind <- DurableTask.notificationKind durable.atrTurnId
                       if isJust kind
-                        then dispatchNotice outputCaps turn durable env session
+                        then dispatchNotice outputCaps turn durable
                         else dispatchOrdinary outputCaps turn durable env session (replyTarget >>= finishedTarget)
                   )
                   (threadDelay (frontendDeadlineSeconds * 1_000_000))
@@ -1994,7 +1969,7 @@ dispatchLLMWith start owner mIntent origin gm = do
                       "历史任务、技能说明或保留 checkout 中的接口可能已经退役；按当前工具目录和技能索引执行原目标，先核对源码版本与实际状态。SSH 运维加载 operations，通过 sandbox 执行 ssh hostname。",
                       "普通工具调用即可，不要写 Plan DSL。需要委派时用 task_start；子任务结果进收件箱，等待时 task_finish waiting。",
                       "根任务要并行等待独立子任务时，先 use_skill codemode，再用 run_code 的 agent/max.batch；阶段用 max.phase。若显式输入有 output_contract，succeeded 的 task_finish 必须含符合该契约的 payload；其他状态如有 payload 也须符合契约。被工作流委派的子任务只能运行普通 agent loop，不可 run_code。",
-                      "进展用 task_progress，系统会持久化并合并，前台根据会话判断是否需要转述，不保证每条进度都发群。结束必须 task_finish：summary、evidence、unresolved。暂时故障 failed 可标 failure_kind=transient 以退避重试；未知外部效果必须先核对。change_only monitor 完成时 observation 必须为非空对象，沿用显式输入 previous_observation 的键与类型；排除叙述、时间、job ID。相同状态直接复用相同值，证据放 evidence。只有确实完成才报 succeeded；不确定就 partial/failed/waiting。",
+                      "进展用 task_progress，系统会持久化并合并，根任务的最新进度与最终报告由系统直接发送，请写成用户能读懂的正文。结束必须 task_finish：summary、evidence、unresolved。暂时故障 failed 可标 failure_kind=transient 以退避重试；未知外部效果必须先核对。change_only monitor 完成时 observation 必须为非空对象，沿用显式输入 previous_observation 的键与类型；排除叙述、时间、job ID。相同状态直接复用相同值，证据放 evidence。只有确实完成才报 succeeded；不确定就 partial/failed/waiting。",
                       "你说的普通文本不会发到群里。不要重复 outcome-unknown 的外部效果，先核实历史证据。",
                       "工具预留与模型请求预算在树内共享，重启不重置。tokens/cost 是观测值，缺失的 usage 不等于零。",
                       "同一 sandbox 可供多个任务并发执行独立命令，各自保留超时和输出；共享路径、端口及同一主机的部署须自行协调，不能把工作区的全部变化归因于当前命令。浏览器工作区属于当前 task，子任务及 monitor 每次触发独立；重试可热接管，执行权属于当前 attempt。冷恢复必须重新 navigate/snapshot，不能复用旧选择器或重放点击/提交。未知效果先核对，再请发起者 !browser reset task#N；登录复用只能由发起者显式 !browser 授权。"
@@ -2032,74 +2007,24 @@ dispatchLLMWith start owner mIntent origin gm = do
           `catchSync` \exception -> logAttention "browser lease refresh failed" (object ["error" .= T.pack (show (exception :: SomeException))])
       pure renewed
 
-    dispatchNotice outputCaps turn durable env session = do
-      handled <- NoticeStore.noticeReviewHandled durable.atrTurnId
-      if handled
+    dispatchNotice outputCaps turn durable = do
+      published <- NoticeStore.noticePublished durable.atrTurnId
+      if published
         then finishAgentTurn durable TurnSucceeded 0 Nothing Nothing
         else do
-          preKilled <- liftIO $ do
-            worker <- Thread.myThreadId
-            activateTurnRuntime turn "notice-review" (Thread.throwTo worker TaskCancelled)
-          when preKilled (liftIO (Exception.throwIO TaskCancelled))
-          outcome <- withOwnedLease (1 * 1_000_000) (NoticeStore.noticeReviewCurrent durable.atrTurnId) $ do
-            snapshot <- NoticeStore.loadNoticeReview durable.atrTurnId
-            case snapshot of
-              Nothing -> pure (Left "notice review is no longer current or foreground work is waiting")
-              Just review -> do
-                catalog :: ModelCatalog <- ask
-                let capabilities = lookupModelCapabilities session.model catalog
-                    multimodal = maybe False supportsMultimodal capabilities
-                    historyTurns = maybe False usesHistoryTurns capabilities
-                    limits = maybe defaultContextLimits (.contextLimits) capabilities
-                liftIO (setTurnPhase turn "notice-review")
-                setAgentTurnEnvironment durable currentPromptMajor (toolCatalogFingerprint [])
-                brief <- fetchGroupBrief outputCaps gm.groupId
-                (context, roster) <-
-                  buildContext
-                    PromptRequest
-                      { prContinuation = digestOnlyContinuation (Just (noticeReviewEvidence review)),
-                        prLimits = limits,
-                        prReadMode = if env.beForceRawContext then RawLedgerEmergency else TieredContext,
-                        prOutputCaps = outputCaps,
-                        prPersona = env.bePersona,
-                        prMultimodal = multimodal,
-                        prHistoryTurns = historyTurns,
-                        prOrigin = origin,
-                        prTimeZone = env.beTimeZone,
-                        prGroupBrief = brief,
-                        prSkills = [],
-                        prInFlight = Set.empty,
-                        prSession = session,
-                        prTrigger = gm
-                      }
-                decision <- case review.decision of
-                  Just stored -> pure (Right stored)
-                  Nothing ->
-                    reviewNotice
-                      (ChatCtx "task-notice-review" (Just (let GroupId group = gm.groupId in group)) session.effortOverride Nothing (Just []) (Just durable.atrTurnId) (Just env.beRuntimeSnapshot.rsGeneration))
-                      session.model
-                      context
-                pure $ (review.version,,roster) <$> decision
-          case outcome of
-            LeaseLost -> finishAgentTurn durable TurnAborted 0 (Just "notice review yielded its foreground lease or became stale") Nothing
-            LeaseCompleted (Left detail) -> finishAgentTurn durable TurnFailed 1 (Just detail) Nothing
-            LeaseCompleted (Right (version, decision, roster)) -> do
-              recorded <- NoticeStore.recordNoticeDecision durable.atrTurnId version decision
-              if not recorded
-                then finishAgentTurn durable TurnAborted 1 (Just "notice decision was fenced before commit") Nothing
-                else case decision of
-                  SkipNotice _ -> finishAgentTurn durable TurnSucceeded 1 Nothing Nothing
-                  PublishNotice reply _ -> do
-                    let target = sendTarget outputCaps gm [(name, PrincipalId principal) | (principal, name) <- roster] False (turnRuntimeOutputContext turn)
-                    -- One canonical output makes a committed notice safe
-                    -- to acknowledge even if the process dies before settlement.
-                    published <- sendAndPersistReply target (freshBudget {sbChunksLeft = 1}) reply
-                    finishAgentTurn
-                      durable
-                      (if null published.committed then TurnFailed else TurnSucceeded)
-                      1
-                      published.failure
-                      Nothing
+          liftIO (setTurnPhase turn "publishing task notice")
+          notice <- NoticeStore.loadNotice durable.atrTurnId
+          case notice of
+            Nothing -> finishAgentTurn durable TurnAborted 0 (Just "task notice superseded or foreground work is waiting") Nothing
+            Just current -> do
+              let target = sendTarget outputCaps gm [] False (turnRuntimeOutputContext turn)
+              result <- sendAndPersistReply target (freshBudget {sbChunksLeft = 1}) (renderNotice current)
+              finishAgentTurn
+                durable
+                (if null result.committed then TurnFailed else TurnSucceeded)
+                0
+                result.failure
+                Nothing
 
     dispatchOrdinary outputCaps turn durable env s continuationTarget = do
       catalog :: ModelCatalog <- ask

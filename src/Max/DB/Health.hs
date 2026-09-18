@@ -1,26 +1,11 @@
 module Max.DB.Health (operationalChecks) where
 
 import Database.PostgreSQL.Simple (Query)
-import Data.String (fromString)
 
--- The boolean says whether a non-zero count is a failed health gate.  Pending
--- and retryable work is expected while traffic is flowing; expired ownership,
--- ambiguous effects, parked work, and deterministic poison are not.
+-- A non-zero failing count needs investigation. Terminal failures remain facts;
+-- operator acknowledgements no longer alter the health result.
 operationalChecks :: [(String, Bool, Query)]
-operationalChecks = concatMap withReview terminalAndQueueChecks <>
-  [("debt_review_events", False, "SELECT count(*) FROM operational_debt_reviews"),
-   ("debt_accepted_current", False, "SELECT count(*) FROM operational_debt_status WHERE disposition='accepted'")]
-  where
-    withReview original@(label, _, sql)
-      | label `elem` reviewable =
-          [ (label, False, sql),
-            (label <> "_unreviewed", True, fromString ("SELECT count(*) FROM operational_debt_status WHERE kind='" <> label <> "' AND disposition<>'accepted'"))
-          ]
-      | otherwise = [original]
-    reviewable = ["delivery_permanent_failure", "delivery_outcome_unknown", "dispatch_outcome_unknown", "media_parked", "monitor_fire_parked", "task_notification_exhausted", "request_failed", "sandbox_outcome_unknown"]
-
-terminalAndQueueChecks :: [(String, Bool, Query)]
-terminalAndQueueChecks =
+operationalChecks =
   [ ( "delivery_retryable",
       False,
       "SELECT count(*) FROM message_deliveries WHERE status = 'failed'"
@@ -83,7 +68,7 @@ terminalAndQueueChecks =
     ),
     ( "task_notification_exhausted",
       True,
-      "SELECT count(*) FROM task_notifications notice JOIN durable_tasks work USING(task_id) WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.review_decision->>'action' IS DISTINCT FROM 'skip' AND notice.attempts>=15 AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled'"
+      "SELECT count(*) FROM task_notifications notice JOIN durable_tasks work USING(task_id) WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.attempts>=15 AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled'"
     ),
     ( "request_pending",
       False,

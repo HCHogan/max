@@ -7,7 +7,7 @@ tool runners and connects to no database. It does not repair failed answers or
 resample failures. Provider failures also fail the gate; successful decoding is not proof of useful output.
 
 `contracts.json` inventories all current non-tool JSON generation paths:
-Historian (including memory proposals), intent classification, and task notice/progress review (one shared contract).
+Historian (including memory proposals) and intent classification.
 Captioning returns prose. Native agent tool arguments use the tool catalog and
 execution admission rather than a separately requested JSON answer. User-defined
 workflow output contracts still require their own fixture and live acceptance.

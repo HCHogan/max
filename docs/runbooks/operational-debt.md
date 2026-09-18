@@ -1,3 +1,7 @@
+> Historical runbook. Operational debt export/review commands were retired by
+> the September 2026 simplification. Health reports raw failures; old audit
+> rows remain readable but do not suppress them.
+
 # Operational debt review and live acceptance
 
 `max-adr003-maintenance health` reports raw terminal counts alongside

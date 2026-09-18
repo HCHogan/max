@@ -30,7 +30,6 @@ import Max.DB.Monitor
 import Max.DB.Monitor.Occurrence (OccurrenceDraft (..), recordOccurrence)
 import Max.DB.Task
 import Max.DB.Task.MonitorControl qualified as MonitorDB
-import Max.DB.Task.Notice (loadNoticeReview, recordNoticeDecision)
 import Max.DB.Task.Overview qualified as WorkQuery
 import Max.DB.Task.Query qualified as TaskQuery
 import Max.DB.Task.Record (databaseNow)
@@ -52,7 +51,6 @@ import Max.ReplySend (ReplyPublicationException (..))
 import Max.Task.Admission (AdmissionError (..))
 import Max.Task.Admission qualified as Admission
 import Max.Task.Execution (ExecutionFailure (..))
-import Max.Task.Notice (NoticeDecision (PublishNotice), NoticeReview (..))
 import Max.Task.Overview qualified as WorkView
 import Max.Task.Policy (frontendDeadlineSeconds)
 import Max.Task.Query qualified as QueryView
@@ -635,8 +633,6 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     withDb pool (claimFrontend frontend) `shouldReturn` True
     beforePublication <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
     beforePublication `shouldBe` [Only ("delegated" :: Text)]
-    Just review <- withDb pool (loadNoticeReview notification)
-    withDb pool (recordNoticeDecision notification review.version (PublishNotice "task report" "completed findings")) `shouldReturn` True
     void $ withDb pool (enqueueOutbound (draft frontend))
     withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing Nothing)
     afterPublication <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
@@ -651,8 +647,6 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     [notification] <- withDb pool admitTaskNotification
     Just frontend <- withDb pool (taskTurnRef notification)
     withDb pool (claimFrontend frontend) `shouldReturn` True
-    Just review <- withDb pool (loadNoticeReview notification)
-    withDb pool (recordNoticeDecision notification review.version (PublishNotice "task report" "completed findings")) `shouldReturn` True
     publication <- withDb pool (enqueueOutbound (draft frontend))
     withDb pool (finishAgentTurn frontend TurnFailed 0 Nothing Nothing)
     withDb pool admitTaskNotification `shouldReturn` []
@@ -1024,7 +1018,6 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     [notification] <- withDb pool admitTaskNotification
     Just frontend <- withDb pool (taskTurnRef notification)
     withDb pool (claimFrontend frontend) `shouldReturn` True
-    withDb pool (recordNoticeDecision notification 1 (PublishNotice "task report" "useful progress")) `shouldReturn` True
     void $ withDb pool (enqueueOutbound (draft frontend))
     withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing Nothing)
     rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)

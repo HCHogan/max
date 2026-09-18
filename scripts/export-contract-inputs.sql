@@ -2,12 +2,10 @@
 -- the production request and profile, including unsuccessful model responses.
 BEGIN READ ONLY;
 WITH ranked AS (
-  SELECT *, row_number() OVER (PARTITION BY CASE WHEN source IN
-      ('task-notice-review','task-progress-review') THEN 'task-notice' ELSE source END
+  SELECT *, row_number() OVER (PARTITION BY source
       ORDER BY id DESC) AS ordinal
   FROM llm_calls
-  WHERE source IN ('historian','intent',
-                   'task-notice-review','task-progress-review')
+  WHERE source IN ('historian','intent')
     AND at > now() - interval '7 days'
 )
 SELECT jsonb_build_object('source',source,'profile',profile,'model',model,

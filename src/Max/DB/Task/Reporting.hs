@@ -97,19 +97,16 @@ submitProgress turn summary
 
 routeProgress :: (WithConnection :> es, IOE :> es) => TaskRecord -> Int64 -> Value -> Eff es ()
 routeProgress task version progress = do
-  -- Claimed snapshots are immutable. A newer version revokes an in-flight
-  -- review; its lease watcher cancels the model and the output guard rejects
-  -- any response that raced the update.
+  -- A newer progress version fences publication of the older snapshot.
   void $
     execute
       "UPDATE task_notifications SET superseded_at=clock_timestamp() WHERE task_id=? AND kind='progress'\
-      \ AND turn_id IS NOT NULL AND delivered_at IS NULL AND superseded_at IS NULL\
-      \ AND review_decision->>'action' IS DISTINCT FROM 'skip'"
+      \ AND turn_id IS NOT NULL AND delivered_at IS NULL AND superseded_at IS NULL"
       (Only task.taskId)
   pending <-
     query
       "SELECT notification_id FROM task_notifications WHERE task_id=? AND kind='progress' AND turn_id IS NULL\
-      \ AND delivered_at IS NULL AND superseded_at IS NULL AND review_decision->>'action' IS DISTINCT FROM 'skip'\
+      \ AND delivered_at IS NULL AND superseded_at IS NULL\
       \ ORDER BY notification_id DESC LIMIT 1 FOR UPDATE"
       (Only task.taskId)
   case pending :: [Only Int64] of

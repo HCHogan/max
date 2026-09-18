@@ -33,7 +33,6 @@ import Max.Historian (historianSystem)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Intent (classifierSystem, parseVerdict)
 import Max.Log (withCompactLogger)
-import Max.Task.Notice (noticeReviewPrompt, parseNoticeDecision)
 import OptEnvConf (Parser, help, long, metavar, option, optional, reader, runParser, setting, str)
 import System.Environment (getEnvironment)
 import System.Exit (die, exitFailure)
@@ -55,7 +54,6 @@ instance FromJSON Input where
   parseJSON = withObject "production request" $ \o -> Input <$> o .: "source" <*> o .: "profile" <*> o .: "model" <*> o .: "source_call_id" <*> o .: "source_at" <*> o .: "request"
 
 contract :: Input -> Text
-contract row | row.source `elem` ["task-notice-review", "task-progress-review"] = "task-notice"
 contract row = row.source
 
 -- Compile these bytes into the evaluator so an old executable cannot certify
@@ -64,9 +62,7 @@ sourceBytes :: [(Text, ByteString)]
 sourceBytes =
   [ ("src/Max/Historian.hs", $(embedFile "src/Max/Historian.hs")),
     ("src/Max/EpisodeStore.hs", $(embedFile "src/Max/EpisodeStore.hs")),
-    ("src/Max/Intent.hs", $(embedFile "src/Max/Intent.hs")),
-    ("src/Max/Task/Notice.hs", $(embedFile "src/Max/Task/Notice.hs")),
-    ("src/Max/Task/NoticeReview.hs", $(embedFile "src/Max/Task/NoticeReview.hs"))
+    ("src/Max/Intent.hs", $(embedFile "src/Max/Intent.hs"))
   ]
 
 inventory :: Map.Map Text [Text]
@@ -151,7 +147,7 @@ field key (Object fields) = fromMaybe Null (KM.lookup key fields)
 field _ _ = Null
 
 -- Replace only the contract system message, preserving real user/assistant
--- inputs and the surrounding notice-review context. No hand-written fixtures.
+-- inputs. No hand-written fixtures.
 currentMessages :: AppConfig -> Input -> Either Text [ChatMessage]
 currentMessages cfg row = do
   original <- case row.request of
@@ -170,18 +166,14 @@ currentMessages cfg row = do
   let prompt = case contract row of
         "historian" -> historianSystem
         "intent" -> classifierSystem cfg.persona
-        "task-notice" -> noticeReviewPrompt
         _ -> ""
       replaceFirst [] = Left "request has no contract system message"
       replaceFirst (MsgSystem _ : rest) = Right (MsgSystem prompt : rest)
       replaceFirst (message : rest) = (message :) <$> replaceFirst rest
-  if contract row == "task-notice"
-    then reverse <$> replaceFirst (reverse original)
-    else replaceFirst original
+  replaceFirst original
 
 decodeContract :: Text -> Text -> Either Text Value
 decodeContract name raw = case name of
   "historian" -> either (Left . T.pack) (const (Right Null)) (parseEpisodeCapture raw)
   "intent" -> maybe (Left "invalid intent verdict") (const (Right Null)) (parseVerdict raw)
-  "task-notice" -> Null <$ parseNoticeDecision raw
   _ -> Left "unknown contract"

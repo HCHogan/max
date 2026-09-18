@@ -117,12 +117,12 @@ settleNotification turn abortReason = do
   when (receipts == [Only True]) $
     void $
       execute
-        "UPDATE task_notifications SET delivered_at=now() WHERE turn_id=? AND (superseded_at IS NULL OR review_decision->>'action'='publish') AND delivered_at IS NULL"
+        "UPDATE task_notifications SET delivered_at=now() WHERE turn_id=? AND delivered_at IS NULL"
         (Only turn)
   pending <-
     query
       "SELECT notification_id,attempts FROM task_notifications WHERE turn_id=? AND delivered_at IS NULL AND superseded_at IS NULL\
-      \ AND review_decision->>'action' IS DISTINCT FROM 'skip' FOR UPDATE"
+      \ FOR UPDATE"
       (Only turn)
   now <- databaseNow
   forM_ (pending :: [(Int64, Int)]) $ \(identifier, attempts) ->

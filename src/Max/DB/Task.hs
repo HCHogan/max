@@ -250,7 +250,7 @@ admitTaskNotification = withTransaction $ do
     query
       "SELECT notice.notification_id,work.conversation_id,work.owner_principal_id,work.source_message_id,notice.kind\
       \ FROM task_notifications notice JOIN durable_tasks work USING(task_id) LEFT JOIN agent_turns turn ON turn.turn_id=notice.turn_id\
-      \ WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.review_decision->>'action' IS DISTINCT FROM 'skip' AND notice.next_attempt_at<=clock_timestamp() AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled' AND notice.attempts<15\
+      \ WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.next_attempt_at<=clock_timestamp() AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled' AND notice.attempts<15\
       \ AND (notice.turn_id IS NULL OR turn.status IN ('failed','aborted','crashed','silence','succeeded'))\
       \ AND NOT EXISTS (SELECT 1 FROM conversation_frontends frontend WHERE frontend.conversation_id=work.conversation_id AND frontend.lease_until>clock_timestamp())\
       \ ORDER BY (notice.kind='progress'),notice.notification_id LIMIT 1"
@@ -265,7 +265,7 @@ admitTaskNotification = withTransaction $ do
         query
           "SELECT notice.notification_id FROM task_notifications notice JOIN durable_tasks work USING(task_id)\
           \ LEFT JOIN agent_turns turn ON turn.turn_id=notice.turn_id WHERE notice.notification_id=?\
-          \ AND notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.review_decision->>'action' IS DISTINCT FROM 'skip' AND notice.next_attempt_at<=clock_timestamp() AND notice.revision=work.revision AND notice.attempt=work.attempt\
+          \ AND notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.next_attempt_at<=clock_timestamp() AND notice.revision=work.revision AND notice.attempt=work.attempt\
           \ AND notice.body->>'status'=work.status AND work.status<>'cancelled' AND notice.attempts<15\
           \ AND (notice.turn_id IS NULL OR turn.status IN ('failed','aborted','crashed','silence','succeeded'))\
           \ AND NOT EXISTS (SELECT 1 FROM conversation_frontends frontend WHERE frontend.conversation_id=work.conversation_id AND frontend.lease_until>clock_timestamp())\
@@ -298,7 +298,7 @@ admitTaskNotification = withTransaction $ do
           (conversation, source, principal, conversation)
       case admitted of
         [Only turn] -> do
-          void (execute "UPDATE task_notifications SET turn_id=?,attempts=attempts+1,review_decision=NULL,reviewed_at=NULL WHERE notification_id=?" (turn, notification))
+          void (execute "UPDATE task_notifications SET turn_id=?,attempts=attempts+1 WHERE notification_id=?" (turn, notification))
           void (execute "INSERT INTO task_output_turns(task_id,turn_id,revision,attempt) SELECT task_id,turn_id,revision,attempt FROM task_notifications WHERE notification_id=?" (Only notification))
           pure [turn]
         _ -> error "admitTaskNotification: no turn"
@@ -391,7 +391,7 @@ nextTaskWakeMicros = do
       "SELECT LEAST(30000000,GREATEST(50000,COALESCE(ceil(extract(epoch FROM min(wake_at)-clock_timestamp())*1000000),30000000)))::integer\
       \ FROM (SELECT next_attempt_at AS wake_at FROM durable_tasks WHERE status='retrying' AND next_attempt_at>clock_timestamp()\
       \ UNION ALL SELECT notice.next_attempt_at FROM task_notifications notice JOIN durable_tasks work USING(task_id)\
-      \ WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.review_decision->>'action' IS DISTINCT FROM 'skip' AND notice.attempts<15\
+      \ WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.attempts<15\
       \ AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status\
       \ AND notice.next_attempt_at>clock_timestamp()\
       \ UNION ALL SELECT deadline FROM durable_tasks WHERE status IN ('queued','running','waiting','retrying') AND deadline>clock_timestamp()\

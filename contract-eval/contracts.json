@@ -5,9 +5,5 @@
   ],
   "intent": [
     "src/Max/Intent.hs"
-  ],
-  "task-notice": [
-    "src/Max/Task/Notice.hs",
-    "src/Max/Task/NoticeReview.hs"
   ]
 }
