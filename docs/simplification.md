@@ -48,7 +48,9 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [x] Audit the current source and publish the full simplification design.
 - [x] Count a clean snapshot: src + app = 52,627 effective Haskell code lines.
 - [x] Clean prose comments and correct stale descriptions without changing code.
-- [ ] Keep representative behavioral fixtures and define the core file manifest.
+- [x] Keep representative behavioral fixtures and define the Haskell core file
+      manifest in `docs/code-scope.json`; validate it with `scripts/count-code.py`.
+- [ ] Add active SQL/schema and prompt-size accounting to final measurements.
 - [x] Remove whole-source-hash model certificates as generic CI blockers while
       retaining relevant deterministic and model-level evaluation.
 
@@ -231,3 +233,9 @@ maintained implementation record.
   pass. Historical lease tables remain unused rather than deleting old data.
 - Intermediate src + app count is now 49,258 effective Haskell lines, 3,369
   below baseline. The core manifest and sub-10,000 target are still outstanding.
+
+- Responsibility accounting now covers every src/app Haskell file explicitly.
+  The current core Haskell component is 36,083 lines; active SQL is additional.
+  The report in `docs/code-size.md` keeps adapters, concrete tools, isolation,
+  admin, other production code, tests, developer tools and migration history
+  visible separately. The core target remains unmet.
