@@ -1,33 +1,7 @@
--- |
--- One log line per event, meant to be read by a person.
---
--- The default @log-base@ stdout backend emits pretty-printed JSON, so
--- a single dispatch spans a dozen lines and a field's value sits
--- nowhere near its event.  That is fine for a machine and miserable at
--- a terminal — and it also breaks the obvious @grep -A@ / @grep -B@
--- reflexes, because "the next line" is a brace rather than the next
--- event.
---
--- This renders instead:
---
--- > 14:32:07 INFO  llm      llm dispatch  group_id=7777 user_id=2001 origin=OriginDirect
--- > 14:32:09 WARN  llm      tool failed  name=web_search error="timeout after 15s"
---
--- Fixed-width time and level so the eye can track a column; the domain
--- next, dim, because it is the usual filter; then the message; then the
--- structured data as @key=value@.  Everything on one line, always —
--- newlines inside a value collapse to @⏎@, the same marker the prompt
--- renderer uses for the same reason.
---
--- == Levels
---
--- @log-base@ has exactly three ('LogTrace', 'LogInfo', 'LogAttention')
--- and this maps them one-to-one onto @TRACE@ \/ @INFO@ \/ @WARN@.
--- There is no fourth to give: the codebase uses 'logAttention' for both
--- recoverable warnings and outright failures, and splitting them would
--- mean auditing every call site rather than guessing here.  A heuristic
--- (say, "has an @error@ field") looks principled and isn't — half the
--- real failures, @llm dispatch failed@ among them, carry no such field.
+-- | Compact stdout logging: host-local time, level, domain, message and
+-- key=value fields on one line. Embedded newlines become @⏎@.
+-- LogTrace/LogInfo/LogAttention map directly to TRACE/INFO/WARN; no severity
+-- is inferred from field names.
 module Max.Log
   ( ColorMode (..),
     withCompactLogger,
@@ -95,16 +69,9 @@ renderLogLevel = \case
   LogInfo -> "info"
   LogAttention -> "warn"
 
--- | Run an action with a logger writing compact lines to stdout.
---
--- Mirrors @Log.Backend.StandardOutput.withStdOutLogger@'s contract:
--- the logger is flushed and shut down on the way out, so nothing
--- buffered is lost when the process exits.
---
--- @tee@ sees every message that reaches stdout, in addition to it —
--- that is how "Max.LogBuffer" fills the admin panel's log view.  It
--- runs inline on the logger's own thread, so it must be cheap and
--- must not throw; a tee that fails would take the line down with it.
+-- | Run with a compact stdout logger, flushing and closing it on exit.
+-- The optional tee runs inline on the logger thread and must be fast and
+-- non-throwing; it supplies the admin log buffer.
 withCompactLogger :: ColorMode -> Maybe (LogMessage -> IO ()) -> (Logger -> IO a) -> IO a
 withCompactLogger mode = withCompactLoggerDynamic mode (pure LogTrace)
 
@@ -169,23 +136,8 @@ formatLogMessage tz colored msg =
       | T.null msg.lmMessage = T.unwords fields
       | otherwise = msg.lmMessage <> "  " <> T.unwords fields
 
--- | Wall-clock in the /host's/ timezone — not UTC, and not the config's
--- @timezone_minutes@.
---
--- Those are two clocks for two readers and it is worth keeping them
--- apart.  @timezone_minutes@ is what the group and the model see; this
--- line is read on the machine, next to @systemctl status@ and
--- journald's own prefix, so it follows the machine.  The two coincide
--- on a host serving its local groups and come apart the moment one
--- group is somewhere else.
---
--- It used to be UTC with no date, on the grounds that journald stamps
--- both in production.  It does — but only in the output formats that
--- strip ANSI escapes.  @journalctl -o cat@ is the one format that keeps
--- colour, and it prints no prefix at all, so the reading path this
--- logger exists for is exactly the one where nothing else supplies a
--- clock.  Still no date: a log being read live is today's, and anyone
--- who needs one can drop the flag.
+-- | Display host-local time, matching the machine's logs. The configured
+-- conversation timezone is separate; journalctl -o cat adds no timestamp.
 fmtClock :: TimeZone -> UTCTime -> Text
 fmtClock tz = T.pack . formatTime defaultTimeLocale "%H:%M:%S" . utcToLocalTime tz
 

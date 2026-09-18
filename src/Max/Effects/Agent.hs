@@ -1,55 +1,12 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- |
--- The 'Agent' effect drives a multi-turn LLM loop with tool calls.
--- 'LLM' and 'Max.Effects.Tools.Tools' stay raw; this effect's
--- interpreter sits on top of both and discharges them locally so
--- callers of 'agentTurn' only need @Agent :> es@ in their constraints.
---
--- == Loop shape
---
--- Each iteration:
---
---   1. Drain pending feedback notes from the task's inbox; if any,
---      append a synthetic @MsgUser "[feedback]: …"@ before the next
---      chat call so the model sees the side-channel input immediately.
---   2. @chatStreaming(profile, msgs, specs, sink)@.  On a profile with
---      @stream: false@ this is an ordinary blocking call and the sink is
---      never used.
---   3. 'ContentResp' → return text.  'ToolCallsResp' → run each tool
---      via 'Tools', append assistant-with-tool-calls + tool-result
---      messages, re-enter.
---
--- After 'maxTurns' the loop stops with @aborted = Just AgentRoundLimit@
--- and a fallback reply.  Hard cap to keep cost bounded.
---
--- == Streaming
---
--- When the profile streams, the loop watches the text arrive and emits each
--- finished paragraph as an 'Max.AgentEvent.AgentFinalStreamText'.  It then
--- reports how much was accepted as 'sentPrefix' so the caller sends only the
--- rest.  The
--- bookkeeping resets per chat call, because one call is one utterance: a
--- progress narration, or the final answer.  Deciding /when/ a paragraph
--- is done belongs here; deciding how any event is rendered or delivered
--- belongs to the typed event sink — see 'AgentTurn'.
---
--- == Task lifecycle
---
--- 'Max.Handler' creates one 'Max.Tasks.TurnRuntime' when the dispatch is
--- admitted, before context collection.  'AgentTurn' receives that exact
--- object, installs the worker cancellation action, checks cancellation between
--- executable nodes, and drains its feedback inbox.  Handler remains the sole
--- lifecycle finalizer; no trigger-id lookup/adoption protocol sits between the
--- two layers.
---
--- == Per-group tools
---
--- The interpreter is parameterised by a @ToolContext -> [Tool es]@
--- factory.  When 'AgentTurn' fires, the factory produces the right
--- tool list for that turn; the interpreter spins up scoped 'ToolOutput'
--- and 'Tools' interpreters just for that call.
+-- | Multi-turn LLM loop with scoped tools and typed output events.
+-- Each round reads pending input, calls the model, and either executes tools
+-- or handles a content response under the turn's completion policy.
+-- Streaming emits safe paragraphs and tracks the accepted prefix per call.
+-- Handler owns the TurnRuntime and its cleanup; this interpreter installs
+-- cancellation, checks it between steps, and consumes the execution inbox.
 module Max.Effects.Agent
   ( Agent,
     AgentLimits (..),
@@ -168,17 +125,9 @@ data AgentResult = AgentResult
     -- | 'Just' iff the loop ended for a reason other than the model
     -- producing a content response (e.g. hit 'maxTurns', LLM error).
     aborted :: !(Maybe AgentFailure),
-    -- | The leading slice of 'reply' that the streaming sink already
-    -- sent, verbatim.  Empty for a non-streamed turn, which is every
-    -- turn on a profile with @stream = false@.
-    --
-    -- The caller sends @T.drop (T.length sentPrefix) reply@.  Matching
-    -- by /prefix/ rather than by chunk count is deliberate:
-    -- 'Max.Reply.readyPrefix' guarantees the two halves concatenate
-    -- back to the input and only ever cuts at a blank line, so the
-    -- streamed prefix and the remainder split identically under
-    -- 'Max.Reply.planReply'.  Counting chunks instead would rely on
-    -- two code paths happening to agree.
+    -- | Verbatim prefix already accepted by the streaming sink; empty if none.
+    -- The caller sends only @T.drop (T.length sentPrefix) reply@. 'readyPrefix'
+    -- cuts at safe paragraph boundaries, so this preserves the unsent tail.
     sentPrefix :: !Text
   }
   deriving stock (Show)
@@ -187,14 +136,8 @@ data AgentResult = AgentResult
 -- Effect.
 
 data Agent :: Effect where
-  -- | Run a full agent loop for the given dispatch.  Returns when the
-  -- model emits a content response, hits 'maxTurns', or the LLM errors.
-  --
-  -- The last argument is a typed event sink.  Progress narration, tool
-  -- debug facts, and streamed final paragraphs are distinct constructors,
-  -- so the output boundary can apply the right visibility, reply budget,
-  -- rendering, and persistence policy without the loop importing any of
-  -- those mechanisms.
+  -- | Run until completion, a loop limit, or failure. The typed sink separates
+  -- progress, debug facts and final text; rendering and delivery belong to it.
   AgentTurn ::
     TurnRuntime ->
     AgentContext ->
@@ -205,14 +148,8 @@ data Agent :: Effect where
 
 type instance DispatchOf Agent = Dynamic
 
--- | Install the agent loop on top of a stack that already has 'LLM'
--- (and 'Log', 'IOE').  Output leaves only through the typed event sink;
--- this interpreter has no platform, segment, or persistence dependency.
--- On each 'AgentTurn' it:
---
---   * Activates the explicit 'TurnRuntime' created by Handler.
---   * Spins up a 'Tools' scope built from the per-group factory.
---   * Drives the loop, draining the task's inbox between turns.
+-- | Install scoped tools and drive the loop using the supplied admission,
+-- journal and inbox interfaces. Visible output goes through the event sink.
 runAgentWith ::
   forall es a.
   (LLM :> es, Concurrent :> es, Log :> es, IOE :> es) =>
@@ -512,19 +449,10 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
             sentPrefix = ""
           }
 
-    -- Hand the caller every paragraph that is safe to send, and
-    -- remember how much of the text that accounted for.
-    --
-    -- Called with the assistant text /so far/, once per frame that
-    -- extended it.  'readyPrefix' holds back the trailing paragraph
-    -- (it may still grow) and refuses to cut inside a code fence, so
-    -- most calls release nothing — and a single-paragraph reply, which
-    -- is most replies, releases nothing at all.  That bound is the
-    -- honest limit of what streaming buys here.
-    --
-    -- Transport timeouts run on the reader thread. They cannot interrupt this
-    -- callback after publication but before its acknowledgement; cancellation
-    -- of the caller propagates instead of entering the final-tail send path.
+    -- Publish newly completed paragraphs; hold the trailing paragraph and code
+    -- fences. A single-paragraph response is therefore held until completion.
+    -- Transport timeouts cannot interrupt publication before acknowledgement;
+    -- caller cancellation propagates without entering final-tail publication.
     releaseParagraphs ::
       AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
       TVar Text ->

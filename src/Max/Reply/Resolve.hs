@@ -150,22 +150,9 @@ dedupeModelImages seen0 body =
 cleanModelText :: T.Text -> T.Text
 cleanModelText = T.strip . stripBareMarkers . stripStickerText . stripHallucinatedTokens . stripThinkSpans
 
--- | Drop inline reasoning.  Models that inline their chain of thought
--- (MiniMax, GLM, …) open with @\<think\>@ instead of filling a reasoning
--- field; 'Max.Effects.LLM.stripLeadingThink' removes it at the source.
---
--- This is here /as well/ because the source-side strip was present, deployed
--- and passing its own tests when production leaked a full monologue to a group
--- twice — 2026-08-13 and 2026-08-15, both minimax-m3, both streamed, four
--- paragraphs of reasoning sent as chat while the block was still open.  The
--- interior was audited line by line and the leak was not found in it.  So the
--- guarantee is moved to where it cannot be bypassed: this function is the last
--- thing model text passes through before it becomes a message, and its own
--- contract already says so.
---
--- An unclosed block takes everything after it.  A half-arrived monologue is
--- never the answer, and the two failure directions are not symmetric: holding
--- text costs latency, releasing it cannot be undone.
+-- | Strip inline think blocks at the final publication boundary, including
+-- everything after an unclosed block. Partial reasoning must remain hidden even
+-- if provider-side filtering has not seen the closing tag yet.
 stripThinkSpans :: T.Text -> T.Text
 stripThinkSpans t = case T.breakOn opener t of
   (_, rest) | T.null rest -> t

@@ -1,18 +1,6 @@
--- |
--- Background sticker captioning: polls @stickers@ rows whose
--- @description@ is NULL, loads the image bytes from the blob store,
--- and asks a vision-capable LLM profile for a retrieval-friendly
--- caption (what's in it, any text, the emotion, when you'd send it).
--- The embed worker then vectorises the caption for send_sticker's
--- semantic search.
---
--- Same polling shape as "Max.Embedder": no write-path plumbing, free
--- backfill of everything the ingest layer recorded before this
--- worker existed.  A row that keeps failing stops being retried
--- after 'maxCaptionAttempts' — one poison GIF must not wedge the
--- queue.  The model can also answer SKIP to flag content that has
--- no business being resent (real-people photos, screenshots with
--- personal info); those rows get banned instead of captioned.
+-- | Caption uncaptained stickers for embedding-based retrieval.
+-- Stop retrying after maxCaptionAttempts; a SKIP verdict bans the row instead
+-- of adding a caption.
 module Max.Stickers
   ( stickerCaptionWorker,
   )

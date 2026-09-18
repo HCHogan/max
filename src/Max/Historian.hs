@@ -1,16 +1,7 @@
--- |
--- Historian v2: one durable episode capture produces a rebuildable
--- chronological compartment and scoped semantic-memory proposals.
---
--- Quiet-period scheduling is intentionally in-memory; exact ranges, source
--- hashes, leases, retries, model output, validation, publication, and cursor
--- advancement are durable in 'Max.EpisodeStore'.  A restart therefore replays
--- the same range or recovers it from the historian cursor without skipping raw
--- messages.  Coverage below the cursor is self-healing while the process
--- runs: every publication and every quiet round enqueue the oldest uncovered
--- island ('healOldestCoverageGap'), so a message whose insert committed after
--- the cursor passed its ingest_seq waits for the next conversation event, not
--- the next restart.
+-- | Durable episode capture into chronological summaries and scoped memory.
+-- Quiet timers are in memory; EpisodeStore persists ranges, retries and atomic
+-- publication. Quiet rounds and publications heal the oldest coverage gap so
+-- late commits below the historian cursor are not permanently skipped.
 module Max.Historian
   ( historianWorker,
     historianPromptVersion,

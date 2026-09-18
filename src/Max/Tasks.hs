@@ -85,18 +85,9 @@ data TaskEntry = TaskEntry
     teStartedAt :: !UTCTime,
     -- | Label shown in @!ps@: @"starting"@ until the loop attaches.
     teKind :: !(TVar Text),
-    -- | When the phase last changed — this turn's heartbeat (issue #17).
-    --
-    -- 'setTurnPhase' fires at every round boundary in "Max.Effects.Agent", so
-    -- a turn that is making rounds keeps stamping and one wedged inside a
-    -- single tool call stops.  The granularity is therefore the /round/, not
-    -- the tool call: a round carrying three slow tools stamps once, at its
-    -- start.  That is the right coarseness for "is anybody home?" and the
-    -- wrong one for pricing an individual tool, which is a separate ceiling.
-    --
-    -- Distinct from 'teStartedAt' for the reason a watchdog exists at all: age
-    -- says how long a turn has been running, which a legitimately long turn
-    -- also reports, and only silence distinguishes the two.
+    -- | Last phase change, used by the silence watchdog rather than total age.
+    -- Updates occur at round boundaries; a slow multi-tool round has one heartbeat.
+    -- Individual tool deadlines are enforced separately.
     teProgressAt :: !(TVar UTCTime),
     -- | What to run when @!kill@ targets this task.  'Nothing' until
     -- 'activateTurnRuntime' supplies it.

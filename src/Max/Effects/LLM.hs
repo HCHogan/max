@@ -1,30 +1,10 @@
 {-# LANGUAGE TypeFamilies #-}
 
--- |
--- Multi-profile OpenAI-compatible chat client.  Callers pick a profile name
--- per completion; the production interpreter resolves its private transport
--- configuration through 'ModelCatalog'.  Public profile discovery and
--- capability queries live in "Max.ModelCatalog", outside this effect.
---
--- The 'LLM' effect is intentionally raw: one HTTP request in, one
--- response out, no looping.  The agent loop lives in
--- "Max.Effects.Agent".
---
--- == Streaming
---
--- 'chatStreaming' is the same call with a sink for the assistant text as
--- it arrives.  Whether it actually streams is a per-profile switch: with
--- it off the sink is never called and the call behaves exactly like
--- 'chat', so callers need no branch.  The SSE framing and delta
--- reducers live in "Max.LLM.Stream" (pure, tested against recorded wire
--- bytes) and the incremental POST in "Max.Http.Stream".
---
--- == Tools
---
--- 'chat' accepts a list of 'ToolSpec's (name + JSON schema + free-text
--- description).  When non-empty the request adds @tools@ and
--- @tool_choice: "auto"@; the model can then return either text
--- ('ContentResp') or function calls ('ToolCallsResp').
+-- | One model completion per call; the Agent interpreter owns the loop.
+-- ModelCatalog resolves named profiles and exposes their public capabilities.
+-- chatStreaming supplies accumulated assistant text when the profile enables
+-- streaming, otherwise behaves as chat without calling the sink. Pure codecs
+-- live in Max.LLM.Stream; HTTP streaming lives in Max.Http.Stream.
 module Max.Effects.LLM
   ( LLM,
 
@@ -95,16 +75,9 @@ import Max.Tool.Types (ToolSpec (..))
 
 data LLM :: Effect where
   Chat :: ChatCtx -> Text -> [ChatMessage] -> [ToolSpec] -> LLM m (Either LLMFailure ChatResponse)
-  -- | 'Chat', but the assistant text is handed over as it arrives.
-  --
-  -- The sink receives the text /so far/, not the delta: the accumulator
-  -- already holds the whole thing, and a caller deciding \"is a
-  -- paragraph finished\" has to look at the accumulation anyway.  It
-  -- runs outside the network timeout, with a bounded queue backpressuring the socket
-  -- — which is what we want, since it is sending QQ messages.
-  --
-  -- Falls back to a plain 'Chat' when the profile has streaming off;
-  -- the sink is then simply never called, so callers need no branch.
+  -- | Chat with accumulated assistant text delivered to the sink.
+  -- The sink runs outside the network timeout; a bounded queue backpressures the
+  -- socket. Profiles with streaming disabled do not invoke the sink.
   ChatStreaming ::
     ChatCtx ->
     Text ->

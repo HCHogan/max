@@ -1,13 +1,6 @@
--- |
--- Bilibili adapter: link recognition, the public (login-free) APIs
--- for video metadata / top comments / a progressive low-quality
--- stream URL, and the headers bilibili's origin insists on.
---
--- The stream side deliberately requests @platform=html5@: those
--- quality tiers (≤720p) come as a single progressive MP4 — no DASH
--- audio/video muxing — and work without a login cookie.  If bilibili
--- starts 403-ing the anonymous APIs, the place to add a cookie is
--- 'biliHeaders'.
+-- | Anonymous Bilibili metadata, comments and progressive video lookup.
+-- Request platform=html5 for a single low-quality MP4 without DASH muxing.
+-- Origin-required headers are centralized in biliHeaders.
 module Max.Bilibili
   ( BiliRef (..),
     findBiliRef,

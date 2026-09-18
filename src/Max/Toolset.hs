@@ -1,15 +1,5 @@
--- |
--- Everything the agent can do, assembled in one place.
---
--- The list lives here rather than in @Main@ because "what tools does
--- this bot have" is a question about the bot, not about process
--- startup; reading it should not mean reading past a DB pool and a
--- signal handler.  It takes 'BotEnv' rather than a dozen loose handles
--- for the same reason — the registries and config it needs are already
--- what every other layer reaches for.
---
--- Not in "Max.Tools": that module is imported by "Max.Tools.Reminder",
--- so assembling the full set there would close a cycle.
+-- | Assemble the full tool catalog from BotEnv. Kept separate from Max.Tools
+-- because feature modules already import it; assembly there would create a cycle.
 module Max.Toolset
   ( allToolsFor,
     toolCountFor,

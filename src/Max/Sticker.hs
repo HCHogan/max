@@ -1,12 +1,5 @@
--- |
--- Outbound sticker resolution: turn a @stickers.id@ (the handle the
--- model writes as @[sticker#\<id\>]@ in its reply) into the OneBot
--- segments that resend that sticker.  This is the send half of the
--- library that "Max.DB.Stickers" ingests and "Max.Stickers" captions;
--- it used to live inside a @send_sticker@ tool, but sending is now an
--- inline placeholder the reply post-processor resolves (see
--- 'Max.Handler.sendAndPersistReply'), so the logic moved here to be
--- shared.
+-- | Resolve sticker IDs into outgoing OneBot segments for Max.ReplySend.
+-- Max.DB.Stickers stores the library; Max.Stickers supplies its captions.
 module Max.Sticker
   ( ResolvedSticker (..),
     resolveSticker,

@@ -1,15 +1,6 @@
--- |
--- @web_search@ tool, backed by Tavily and the shared outbound HTTP runtime.
---
--- The tool is registered into the agent's tool factory only when an
--- API key is configured ('Max.Config.AppConfig.search' is @Just@) —
--- otherwise it doesn't exist as far as the model is concerned, so we
--- never have to invent a "search unavailable" failure mode.
---
--- Response is compacted before being returned to the model: keep
--- @title@ / @url@ / @snippet@ for each result, plus Tavily's
--- synthesised @answer@ when present.  Drop @score@, @raw_content@,
--- and @images@ to keep prompt tokens down.
+-- | Tavily search through the shared HTTP runtime, enabled when configured.
+-- Return title/URL/snippet and an optional answer; omit bulky raw content,
+-- images and ranking metadata from the model-facing result.
 module Max.Tools.Search
   ( SearchConfig (..),
     searchToolsFor,

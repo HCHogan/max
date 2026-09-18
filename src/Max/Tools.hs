@@ -1,13 +1,5 @@
--- |
--- Builtin tools the agent loop exposes to the LLM.  Tools are
--- per-dispatch: 'builtinsFor' builds a tool list scoped to one group,
--- since the model shouldn't have to pass @group_id@ explicitly — it's
--- implicit in the conversation it's serving.
---
--- Historical recall is deliberately exposed through one unified tool:
--- @context_search@.  Keeping legacy corpus-specific search names visible made
--- tool selection ambiguous and let model-supplied placeholder filters bypass
--- unified recall entirely.
+-- | Builtin tools scoped to the current conversation. Historical retrieval
+-- uses context_search rather than separate corpus-specific entry points.
 module Max.Tools
   ( builtinsFor,
     contextSearchSummary,

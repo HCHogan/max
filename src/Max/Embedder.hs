@@ -1,15 +1,6 @@
--- |
--- Background embedding worker: polls for rows whose @embedding@ is
--- still NULL (new group messages, new/edited memories, active episode
--- summaries, freshly captioned stickers), embeds them in batches through
--- "Max.Embedding", and writes the vectors back.
---
--- Polling instead of write-path hooks on purpose: memories are
--- written from three places (agent tools, the extractor, @!memory@)
--- and messages from the event loop — one poller means zero plumbing
--- at every write site, and boot-time backfill of the pre-existing
--- corpus falls out for free.  Rows that fail to embed stay NULL and
--- are retried on a later tick.
+-- | Batch embeddings for messages, memories, summaries and sticker captions.
+-- Scanning stored rows covers both new writes and backfill without write-path
+-- hooks. Failed embeddings remain eligible for a later tick.
 module Max.Embedder
   ( embedWorker,
   )
@@ -82,14 +73,9 @@ embedWorker owner = forever $ do
             MaintenanceLeaseLost ->
               logAttention "embed: maintenance lease lost; cancelled tick" (object [])
 
-    -- Two questions with very different costs, joined by an OR that made
-    -- both pay the expensive one.  It was redundant as well: a row with no
-    -- embedding has no embedding_model either (the
-    -- messages_embedding_metadata_consistent CHECK enforces it), so
-    -- @embedding IS NULL@ was already contained in @embedding_model IS
-    -- DISTINCT FROM ?@.  The disjunction bought nothing and cost the index —
-    -- a parallel sequential scan of the whole table, 14,754 times in eleven
-    -- days, to answer "nothing to do".
+    -- The metadata consistency constraint makes an absent embedding imply an
+    -- absent model. The model-mismatch predicate covers both without an OR that
+    -- would prevent the intended index scan.
     pendingMessages modelId = do
       fresh <-
         query

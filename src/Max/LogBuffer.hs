@@ -1,17 +1,5 @@
--- |
--- A bounded in-memory tail of the log, so the admin panel can show
--- what the bot is doing without shelling out to journalctl.
---
--- __Why not a table.__  systemd already keeps the durable copy, with
--- rotation, compression and indexing that a hand-rolled @logs@ table
--- would only approximate.  Writing every line to Postgres as well is
--- pure write amplification for data that is already safe.  What the
--- journal cannot do is be read from a phone over the tailnet, and
--- that is the whole gap this closes — so the buffer holds the recent
--- past only, and says so.
---
--- Lost on restart by design.  A line that matters after a restart is
--- a line for @journalctl@.
+-- | Bounded in-memory log tail for the admin panel. Lost on restart;
+-- journald remains the durable log store.
 module Max.LogBuffer
   ( LogBuffer,
     LogEntry (..),

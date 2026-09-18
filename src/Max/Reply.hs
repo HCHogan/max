@@ -1,22 +1,6 @@
--- |
--- Reply post-processing: turn the LLM's final markdown-ish reply into
--- a plan of outgoing messages.  QQ renders none of markdown — chats
--- read as multiple short plain-text messages — so the pipeline:
---
---   1. carves out markdown tables ('TableChunk', rendered to an image
---      by the caller; plain-text tables are unreadable in a
---      proportional font),
---   2. rewrites LaTeX math into best-effort unicode (QQ can't render
---      formulas at all),
---   3. splits the remaining text into messages at blank lines and
---      explicit @[split]@ markers (code fences never split).
---
--- No cap on chunk count: the system prompt already pushes for short
--- multi-chunk replies, and every chunk carries its own optional
--- [reply#<id>] quote — folding tails together broke those.
---
--- Everything here is pure; the effectful part (typst rendering,
--- sending) lives with the caller.
+-- | Pure reply planning: extract tables, convert LaTeX to Unicode, and split
+-- at blank lines or [split] outside code fences. Rendering and sending belong
+-- to the caller; the sender applies maxChunks across the logical reply.
 module Max.Reply
   ( Chunk (..),
     CodeBlock (..),
@@ -75,21 +59,8 @@ chunkSource = \case
   TableChunk t -> t
   CodeChunk cb -> cb.cbSource
 
--- | Plan one blob of model-authored text into outgoing messages.
---
--- __Empty when nothing survives planning__ — a blank body, or one that
--- was nothing but @[split]@ markers.  The second case is not
--- hypothetical: streaming releases up to the last blank line, so a
--- reply or narration ending in @"…\\n\\n[split]"@ hands the sender
--- exactly @"[split]"@ as its remainder.  This used to fall back to
--- @[TextChunk (T.strip body)]@ for an empty plan, which resurrected
--- that marker verbatim and put it in the group as a message reading
--- @[split]@ and nothing else — production did this seven times in the
--- two days after v0.9.1 taught 'Max.Effects.Agent.sendNarration' to
--- plan, because the planner it was pointed at handed the marker back.
---
--- "Nothing to send" is a real answer, and both callers already read
--- @[]@ that way.
+-- | Plan outgoing chunks. Blank or [split]-only input produces no chunks;
+-- do not restore the raw input when planning returns an empty list.
 planReply :: Text -> [Chunk]
 planReply body = capChunks (concatMap explode (splitBlocks body))
   where
@@ -99,32 +70,13 @@ planReply body = capChunks (concatMap explode (splitBlocks body))
     explode c@(CodeChunk _) = [c]
     explode (TextChunk t) = map TextChunk (splitChunks (latexToUnicode t))
 
--- | Ceiling on how many messages one reply may become.
---
--- 'splitChunks' breaks on every blank line and has no natural bound, so
--- one runaway generation becomes that many QQ messages — and the sender
--- paces them ~2s apart, so it is also that many seconds of the bot
--- talking over everybody.  A model that echoed its own context back
--- once turned into 26 messages spread over 54 seconds.
---
--- __Deliberately far above ordinary use.__  A 5-chunk cap existed once
--- and was removed in v0.2.7 for a good reason: folding the tail
--- together breaks per-chunk @[reply#id]@ quotes, since 'parseReplyTokens'
--- keeps only the first quote in a chunk and strips the rest.  That
--- tradeoff is still real, so the ceiling sits where only pathological
--- output reaches it rather than where deliberate multi-part replies do
--- — this is a safety bound on how long the bot may monopolise a group,
--- not a formatting rule.  Normal replies run one to three chunks; a
--- model using @[split]@ on purpose does not approach ten.
+-- | Maximum messages per logical reply. Excess chunks merge into the last
+-- message; that merge retains only the first reply target in the tail.
 maxChunks :: Int
 maxChunks = 10
 
--- | Merge everything past the cap into the last message rather than
--- dropping it — loud but bounded beats truncated, and the bot's own
--- history still records what it said.  A table caught in the tail
--- degrades to its markdown source, the same fallback a failed render
--- already takes; a second @[reply#id]@ in the tail is lost, which is the
--- cost 'maxChunks' documents.
+-- | Merge excess chunks into the final message. Tables in the tail become
+-- markdown; only its first reply target survives placeholder parsing.
 capChunks :: [Chunk] -> [Chunk]
 capChunks cs
   | length cs <= maxChunks = cs
@@ -156,23 +108,10 @@ data ReplyPiece
     PieceFace !Int
   deriving stock (Show, Eq)
 
--- | Pull the reply/sticker/image placeholders out of one planned text
--- chunk.
---
---   * @[reply#\<id\>]@ — a quote.  The first one becomes the chunk's reply
---     target ('fst' of the result); every @[reply#…]@ token is stripped
---     from the text regardless of position.
---   * @[sticker#\<id\>]@ — a sticker, becomes a 'PieceSticker'.  The
---     inbound display form @[sticker#\<id\>: …]@ is accepted too (the
---     trailing caption is ignored) so echoing what was seen still sends.
---   * @[image#\<id\>]@ / @[image#\<id\>.\<seg\>]@ — resend a stored group
---     image, becomes a 'PieceImage' (the same handle the model reads
---     inbound).
---   * @[face#\<id\>]@ — a QQ built-in face, becomes a 'PieceFace'.
---
--- Anything that isn't a well-formed token stays literal 'PieceText'.
--- Pure by design: the sticker/image ids are turned into segments by the
--- effectful caller (see 'Max.Handler.sendAndPersistReply').
+-- | Parse reply, sticker, image and face placeholders in one chunk.
+-- The first reply token selects the target; all reply tokens are removed.
+-- Sticker captions are accepted but ignored; image handles may select a segment.
+-- Malformed tokens remain text. Max.ReplySend resolves IDs to outbound content.
 parseReplyTokens :: Text -> (Maybe Int64, [ReplyPiece])
 parseReplyTokens = go
   where
@@ -282,24 +221,9 @@ matchToken t =
       Just (':', r') -> case T.breakOn "]" r' of
         (_, close) | not (T.null close) -> Just (T.drop 1 close)
         _ -> Nothing
-      -- Running out of text closes the token.  Streamed replies lose that
-      -- last character often enough to matter, and 'Max.Handler.parseSilence'
-      -- already repairs it for the opt-out marker ('0cd74bb'); that commit
-      -- left the send tokens alone because "a bare token mid-prose can be
-      -- deliberate in a way a bare silence marker cannot".  It can — which is
-      -- why this is only the end of the text, where there is no prose for it
-      -- to be deliberate in.  Every production case had that shape: four in
-      -- thirty days, two of them a whole message that was nothing but a
-      -- broken token, and the id was complete in all four.
-      --
-      -- Nothing arrives after this to change the reading.  A chunk mid-stream
-      -- ends at a blank line by construction ('readyPrefix' emits only up to
-      -- one), so a token still being streamed is in the held remainder rather
-      -- than at this boundary, and cannot be closed early on a partial id.
-      --
-      -- Deliberately not extended to 'descClose': the id slot holding prose
-      -- is the one variant where the closing bracket is doing real work, and
-      -- there is no evidence of it losing one.
+      -- Accept EOF as the close of a complete numeric token. Streaming retains
+      -- unfinished paragraphs, so an in-flight partial ID cannot reach this branch.
+      -- Description tokens still require an explicit closing bracket.
       Nothing -> Just ""
       _ -> Nothing
     -- Caption text in the id slot: short, single-line, no nested
@@ -358,15 +282,9 @@ stripHallucinatedTokens body = T.intercalate "\n" (go False (T.lines body))
             && maybe False (isSpace . fst) (T.uncons r)
             && T.any (\ch -> ch `elem` ("=\"“”" :: String)) c
 
--- | Drop duplicate @[image#\<id\>]@ resend tokens, keeping the first.
--- Echoing the markers of a multi-image message verbatim would otherwise
--- send the same picture twice.  The seen-set threads across chunks so a
--- duplicate in a later paragraph is dropped too.
---
--- A bare @[image#\<id\>]@ resends every image on that message, so it also
--- subsumes any later @[image#\<id\>.\<seg\>]@ of the same message — that
--- picture has already gone out.  The reverse is not true: naming seg 0
--- says nothing about seg 1.
+-- | Deduplicate image tokens across chunks using the returned seen-set.
+-- A whole-message image token subsumes later segment tokens for that message;
+-- a segment token does not subsume other segments or the whole message.
 dedupeImagePieces :: Set (Int64, Maybe Int) -> [ReplyPiece] -> (Set (Int64, Maybe Int), [ReplyPiece])
 dedupeImagePieces = go
   where
@@ -383,18 +301,9 @@ dedupeImagePieces = go
 --------------------------------------------------------------------------------
 -- Stage 1: carve out markdown tables and fenced code.
 
--- | Split on GFM tables and ``` fences: a line starting with @|@
--- immediately followed by a separator row (only @| - : space@, at least
--- one dash), plus any following @|@-lines.  Conservative on purpose —
--- a lone @|@-prefixed line stays text.  Table syntax inside a fence is
--- code, not a table.
---
--- An /unterminated/ fence stays text, fences and all.  Streaming releases
--- a reply up to its last blank line, so a half-written block reaches here
--- routinely and its closing fence is simply still being generated; the
--- rest of it is not lost, it just has not arrived.  Rendering that as an
--- image would publish half a snippet as a picture nobody can complete,
--- and the text form remains legible when the tail lands in a later chunk.
+-- | Split fenced code and GFM tables. Tables require a header and separator;
+-- table-like lines inside fences remain code. Unterminated fences stay text so
+-- an incomplete streamed block is not published as a finished image.
 splitBlocks :: Text -> [Chunk]
 splitBlocks body = go [] (T.lines body)
   where
@@ -731,25 +640,9 @@ symbols =
       ("quad", " "), ("qquad", "  "), ("displaystyle", ""), ("limits", "")
     ]
 
--- | Split accumulated streaming text into the part that is safe to
--- send now and the part that must keep growing.
---
--- @fst <> snd == input@ exactly, so the caller can send the prefix and
--- hand the rest to 'planReply' at the end without the two disagreeing
--- about where a chunk began.
---
--- Safe means "no later byte can change how this splits":
---
---   * only up to the last blank line — the trailing paragraph may
---     still grow, and a single-paragraph reply therefore never emits
---     early.  That is also what keeps @[silence]@ from being sent
---     before we know the reply was only that;
---   * nothing while a code fence is open, since a blank line inside
---     one is not a chunk boundary.
---
--- Both failure directions are deliberate: not splitting costs latency,
--- splitting wrongly sends a fragment that can't be recalled.  Anything
--- uncertain therefore holds.
+-- | Return a safe streaming prefix and remainder, preserving their exact
+-- concatenation with the input. Cut only at a blank line outside code fences;
+-- hold the trailing paragraph, including a possible standalone silence marker.
 readyPrefix :: Text -> (Text, Text)
 readyPrefix acc
   | T.null safe = ("", acc)

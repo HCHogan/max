@@ -1,11 +1,6 @@
--- |
--- Durable high/low prompt materialization state.
---
--- Historian publication and prompt materialization are intentionally
--- separate: new projections can be prepared in the background while the
--- prompt keeps one byte-stable compartment prefix.  A CAS publication records
--- the exact active compartment ids/projection versions and their selected
--- tiers, then advances the raw-tail boundary in one known cache bust.
+-- | Durable prompt materialization, separate from Historian publication.
+-- CAS publishes compartment IDs, projection versions and tiers together with
+-- the raw-tail boundary, keeping the active prefix stable between publications.
 module Max.ContextMaterialization
   ( MaterializedCompartment (..),
     ContextMaterialization (..),

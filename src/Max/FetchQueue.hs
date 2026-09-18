@@ -1,23 +1,6 @@
--- |
--- The in-memory half of the media fetch queue: a wakeup bell and the
--- loop all three media workers run.  The @fetch_jobs@ table
--- ("Max.DB.FetchQueue") is authoritative; this module holds no job
--- state at all, exactly like 'Max.Monitor.MonitorScheduler' next to
--- the @monitors@ / @monitor_fires@ tables.
---
--- __Why a signal and not a poll.__  Media has to land fast — the
--- prompt builder blocks on the trigger's own images
--- ('Max.Prompt.waitForTriggerImages'), so a poll interval would show
--- up directly as latency before every picture reply.  Enqueueing bumps
--- the signal and the sleeping worker wakes at once.
---
--- __Why the sleep is still bounded.__  One thing genuinely has no
--- event to fire: a lease expiring.  If a process dies mid-fetch the
--- job stays claimed until its lease runs out, and nothing bumps the
--- signal at that moment.  Restarts are covered anyway (the first claim
--- runs before any sleep), so the cap only matters for a fetch that
--- outlives its own lease — rare enough that a lazy re-check is the
--- right price.
+-- | Wakeup signal and shared loop for the durable media fetch queue.
+-- Jobs live in Max.DB.FetchQueue; enqueueing signals workers immediately.
+-- Waits are bounded so expired leases are rechecked without an enqueue event.
 module Max.FetchQueue
   ( FetchSignal,
     newFetchSignal,
@@ -75,14 +58,9 @@ notifyFetch s = atomically (modifyTVar' s.fsTick (+ 1))
 recheckMicros :: Int
 recheckMicros = 60 * 1000000
 
--- | Claim, process, repeat; sleep on the signal when the queue runs
--- dry.  Shared by the image pool, the forward worker and the file
--- worker — they differ only in what @process@ does.
---
--- The callback reports a retryable failure as @Left@; a thrown
--- synchronous exception is treated the same way.  Either way
--- 'Max.DB.FetchQueue.failJob' decides whether the job goes back in the
--- pool or parks.
+-- | Claim and process jobs, waiting on the signal when none are ready.
+-- Both Left results and synchronous exceptions go through failJob, which
+-- decides whether to retry or park the job.
 runFetchLoop ::
   (Concurrent :> es, WithConnection :> es, Log :> es, IOE :> es, FromJSON a) =>
   FetchSignal ->

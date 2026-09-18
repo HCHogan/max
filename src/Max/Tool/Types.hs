@@ -70,20 +70,8 @@ data ToolRetryClass
   | RetryUnsafe
   deriving stock (Show, Eq, Ord)
 
--- | Start-to-close: how long one call of this tool may run before the kernel
--- stops waiting for it.
---
--- Declared per tool because there is no one number.  Production spans four
--- orders of magnitude in the same catalog — @set_reminder@ finishes in
--- milliseconds, @sandbox_exec@ is allowed to ask for ten minutes — so a single
--- global bound would either be under the legitimate maximum or so far above it
--- that it bounds nothing.
---
--- Temporal's word for this is start-to-close, and its reasoning applies
--- unchanged: the layer above cannot detect a silently wedged worker, so it
--- depends on this to force the call to end.  The turn's silence watchdog is
--- the layer above here, and it can only kill the whole turn; this ends one
--- call and hands the model something it can act on.
+-- | Per-call execution deadline in seconds. A timeout ends one tool call;
+-- the turn's separate silence watchdog cancels the entire turn.
 newtype ToolDeadline = ToolDeadline {toolDeadlineSeconds :: Int}
   deriving stock (Show, Eq, Ord)
 

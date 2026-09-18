@@ -1,25 +1,9 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- |
--- The admin JSON API: a warp server inside the bot process, because
--- half of what it manages only exists inside the process.  Sessions
--- are a revisioned write-through cache ('Max.Session.updateSession' persists
--- CAS before publishing the TVar; a row edited behind the registry's back is
--- refreshed on the next conflicting mutation),
--- running turns live in the task registry, and the LLM usage table is
--- written by this process.  A frontend reads and mutates through
--- here; what shape that frontend takes is deliberately not this
--- module's problem.
---
--- Exposure model: binds @127.0.0.1@ unless told otherwise and does no
--- authentication beyond an optional bearer token — TLS, SSO and the
--- public internet are the reverse proxy's job (cloudflared/Zitadel or
--- an ssh forward).  Absent config section = server never starts.
---
--- Mutations deliberately mirror the command DSL's semantics (the
--- rows, session overrides, task kills) rather than growing their own:
--- the API caller is the owner tier by definition — whoever can reach
--- this port can also edit max.yaml.
+-- | In-process admin API for sessions, tasks and usage. Mutations use the
+-- same application operations as commands and grant owner-level access.
+-- Disabled without config; defaults to loopback with an optional bearer token.
+-- Public exposure requires authentication and TLS at the reverse proxy.
 module Max.Admin
   ( AdminConfig (..),
     adminServer,

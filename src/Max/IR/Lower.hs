@@ -1,19 +1,7 @@
--- | Capability-tiered lowering (ADR 003): the single place degradation
--- happens.
---
--- @'lower'@ folds every node the destination endpoint cannot carry
--- natively into the shared text vocabulary ('Max.IR.fallbackText'), so an
--- adapter's transport is emit-only: if a node reaches it, the endpoint
--- declared it native.  Attribution prefixes, reply quoting, media budgets
--- and 'maxTextBytes' chunking are all decided here, once — never in an
--- adapter, and chunking replaces the old permanent-failure on oversized
--- text.
---
--- Capabilities are data with three explicit tiers per content feature.
--- 'TierDrop' is a deliberate, declared choice; a missing or malformed
--- declaration falls back to 'TierText', which is always achievable because
--- every node carries its own fallback.  The atomic cutover migration rewrites
--- old boolean manifests; runtime has exactly this one v2 decoder.
+-- | Capability-based IR lowering (ADR 003). Resolve attribution, quoting,
+-- media budgets and text chunking before handing native nodes to adapters.
+-- Unsupported content uses fallbackText. Missing/invalid capability declarations
+-- default to TierText; dropping requires an explicit TierDrop.
 module Max.IR.Lower
   ( Tier (..),
     OutboundCaps (..),
@@ -334,19 +322,8 @@ mediaTier caps = \case
   MAudio -> caps.audio
   MFile -> caps.file
 
--- | A folded remote attachment keeps its URL — readable AND clickable;
--- blob references are internal and never leak.
--- | What a picture becomes on an endpoint that will not carry it.
---
--- A media node max /generated/ from text — a rendered table or code block —
--- knows the text it was made from and says so in @fold_text@.  Folding that
--- to @[图片: code.png]@ throws the content away at the last step, and it is
--- reachable without any text-only endpoint in the room: the WeChat hook still
--- advertises @max_native_media: 1@, and Matrix/iMessage cap one canonical
--- delivery at eight before their adapters fan those media out to wire events.
---
--- Only for nodes that carry the key.  A picture that arrived as a picture has
--- no text form, and inventing one is worse than naming it.
+-- | Prefer a generated image's fold_text so tables/code survive text lowering.
+-- Otherwise describe the media, retaining remote URLs but hiding blob paths.
 mediaFoldText :: Maybe MediaRef -> MediaMeta -> Text
 mediaFoldText src meta = case rawFoldText meta.raw of
   Just text -> text

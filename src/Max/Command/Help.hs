@@ -1,11 +1,5 @@
--- |
--- The @!help@ text, in a leaf module so it can be spliced into the
--- @self-knowledge@ builtin skill at registry init ("Max.Skills"
--- replaces @{{commands}}@ with it).  One source of truth: what the
--- bot tells users and what it tells itself about its own commands
--- can't drift apart.  Deliberately imports nothing but text —
--- "Max.Skills" sits below "Max.Env" in the import graph, so anything
--- heavier here risks a cycle.
+-- | Shared !help text, also embedded in self-knowledge via {{commands}}.
+-- Keep dependencies below Max.Skills to avoid an import cycle.
 module Max.Command.Help
   ( helpText,
   )

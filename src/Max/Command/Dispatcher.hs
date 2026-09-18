@@ -66,15 +66,9 @@ import Max.Toolset (toolCountFor)
 import Max.Util (tshow)
 import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 
--- | What the caller should do after dispatching a command.
---
--- Most commands collapse to 'ReplyText' (just say something back).
--- 'SideQuestion' carries !btw: the caller should spawn an ordinary LLM
--- dispatch with the carried text as the user prompt, marked so the
--- supplement classifier can't fold it into a running turn.  Wiring it
--- as a result rather than a direct call keeps Dispatcher free of the
--- Agent/platform-write/Concurrent constraints; 'FeedbackNote' is deferred to
--- the caller for the same reason.
+-- | Command result interpreted by Handler. SideQuestion requests a separate
+-- LLM turn; FeedbackNote targets running work. Keeping these as data avoids
+-- Agent, platform-write and concurrency dependencies in this dispatcher.
 data DispatchResult
   = ReplyText !Text
   | -- | Pure acknowledgement — the caller reacts an OK face onto the
@@ -117,16 +111,8 @@ execute t gid uid senderPrincipal replyTarget cmd = do
   catalog :: ModelCatalog <- ask
   let conversation = conversationScopeFor gid
   case cmd of
-    -- Claude Code's btw: a quick side question that deliberately leaves
-    -- the current work alone.  Always its own turn, never an injection —
-    -- !feedback is the command for feeding a running turn.  The caller
-    -- (Handler.dispatchCommand) spawns a dispatch marked NeverAbsorb, so
-    -- the supplement classifier can't overrule the user and fold it into
-    -- the running turn after all.  Otherwise it is an ordinary turn:
-    -- reply persisted, memory live.  It used to be non-persisting, which
-    -- belonged to the old meaning of !btw ("ask without polluting
-    -- history") and left the question in the transcript with its answer
-    -- deleted — a permanently unanswered-looking line.
+    -- Request a separate, persisted turn for !btw; !feedback is the command
+    -- for injecting input into existing work.
     Btw note -> case T.strip note of
       "" -> reply "用法：!btw <要另外问的内容>（另起一轮，不打扰在跑的任务）"
       q -> pure (SideQuestion q)

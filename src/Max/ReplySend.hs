@@ -1,41 +1,8 @@
--- |
--- Turning one blob of model-authored text into the messages the group
--- actually sees: split into chunks, resolve outgoing placeholders,
--- send, and write each sent chunk back into @messages@.
---
--- == Why this is a module and not a function in "Max.Handler"
---
--- There are now two callers.  The handler sends the final reply; the
--- typed sink in "Max.AgentOutput" sends streamed paragraphs and progress
--- narration.  Every previous attempt to
--- give one of those its own copy of \"turn model text into messages\"
--- produced the same bug twice in one day (@a0faa5b@, @d7f8177@):
--- narration had a private copy, so it missed 'parseReplyTokens' and
--- then trimmed segment edges, and a literal @[reply#111091811]@ went out as
--- visible text.  One implementation, two callers.
---
--- == Splitting a reply across calls
---
--- Streaming means one logical reply arrives as several calls here, and
--- two of the guarantees a single call used to give for free are
--- per-reply, not per-call:
---
---   * 'Max.Reply.maxChunks' bounds how long the bot may monopolise a
---     group.  Applied per call, a reply split in three could send three
---     times the cap.
---   * 'dedupeImagePieces' stops a repeated @[image#\<id\>]@ from
---     resending the same picture.  Its @seen@ set has to survive the
---     split or the dedupe only works within a fragment.
---
--- So both ride in a 'SendBudget' the caller threads through.  A caller
--- that sends a whole reply in one go just passes 'freshBudget' and
--- discards the result.
---
--- This module deliberately does __not__ import
--- 'Max.ToolContext.ToolContext': the agent loop imports this one,
--- and taking the context back would close the cycle.  Hence
--- 'ReplyTarget', which is the handful of fields both callers already
--- have.
+-- | Shared publication path for final replies, streamed text and progress.
+-- Resolve placeholders, publish chunks in order and persist their visible form.
+-- SendBudget carries the chunk limit and image deduplication across calls;
+-- whole-reply callers start with freshBudget. ReplyTarget keeps this boundary
+-- independent of ToolContext.
 module Max.ReplySend
   ( ReplyTarget (..),
     SendBudget (..),
@@ -158,57 +125,17 @@ instance Exception ReplyPublicationException where
   toException = asyncExceptionToException
   fromException = asyncExceptionFromException
 
--- | May a streaming sink still send, or must it hold what it has for
--- the final send?
---
--- The last slot is reserved on purpose.  'sendAndPersistReply' folds an
--- over-budget reply into one last message rather than dropping its tail
--- — right for a call that sends a whole reply, and a hole when a reply
--- arrives as N calls, because each one then gets that fold for free and
--- the ceiling stops existing.  Production found it immediately: a
--- 12-paragraph answer went out as 12 messages against a cap of 10, with
--- the fold landing in the /middle/ of the reply.
---
--- Stopping at one leaves exactly the room 'Max.Reply.capChunks' would
--- have used, so a streamed reply and an unstreamed one produce the same
--- number of messages, and anything the sink declines accumulates into
--- that final merged message where it belongs.
+-- | Reserve the last send slot for the merged final tail. Streaming stops
+-- before using it so repeated calls cannot bypass the per-reply chunk limit.
 canStream :: SendBudget -> Bool
 canStream b = b.sbChunksLeft > 1
 
--- | Send the model's text as planned by 'planReply' — one message per
--- blank-line paragraph, markdown tables rendered to a PNG via typst
--- (falling back to the markdown source when rendering fails) — and
--- persist each sent chunk into the messages table (so future dispatches
--- read this back as the bot's own turn, and a reply to /any/ chunk
--- resolves as reply-to-bot).
---
--- Outgoing placeholders are resolved per chunk ('parseReplyTokens'),
--- which is what lets the model quote a different message from each
--- paragraph and drop a sticker inline:
---
---   * a leading @[reply#\<id\>]@ becomes the chunk's 'SegReply' quote —
---     nothing is auto-quoted, the model decides;
---   * @[sticker#\<id\>]@ becomes a sticker segment ('resolveSticker'),
---     an unknown id is dropped rather than failing the reply;
---   * @[image#\<id\>(.\<seg\>)?]@ resends that message's stored images, or
---     the one picture named; duplicates are dropped across the whole reply;
---   * @[face#\<id\>]@ becomes a QQ built-in face segment;
---   * @[\@#\<principal_id\>]@ becomes a real mention when that person has an
---     account in this conversation, and folds to @\@name@ text when they do
---     not — which is also what a principal id the model invented does.
---
--- A chunk that resolves to no content (a lone @[reply#id]@, or only a bad
--- sticker token) is skipped.  Each chunk persists with its /resolved/
--- surface form as @rendered_text@ (sticker tokens normalised to
--- @[sticker#\<id\>: \<caption\>]@, image tokens keeping their
--- @[image#\<id\>]@ form, the reply token dropped — it lives in the
--- @reply_to_message_id@ column), so what the model reads back next turn
--- matches what it wrote.  A table chunk persists with its markdown
--- source.
---
--- Chunks publish in order. Only committed chunks consume the send budget;
+-- | Plan, resolve and publish chunks in order. Tables render as images with
+-- markdown fallback; empty resolved chunks are skipped. Persist the resolved
+-- surface form, or the source markdown for tables, for subsequent context.
+-- Image deduplication spans the SendBudget. Only committed chunks spend it;
 -- the first failure stops publication and returns the committed prefix.
+-- See parseReplyTokens for placeholder syntax.
 sendAndPersistReply ::
   (Blob :> es, Outbound :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   ReplyTarget -> SendBudget -> T.Text -> Eff es ReplyPublication

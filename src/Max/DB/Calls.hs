@@ -145,17 +145,9 @@ pruneCalls days =
 
 --------------------------------------------------------------------------------
 
--- | Replace inline base64 media anywhere in a JSON value with a
--- placeholder naming its mime type and size.  Covers both shapes the LLM
--- layer emits: OpenAI/Responses data URLs, and Anthropic's
--- @{type:"base64", media_type:"image/…", data:"…"}@ source object.
---
--- This is what keeps the table small enough to be worth having: one
--- multimodal turn carries images at a megabyte apiece, and none of
--- those bytes answer the question the table exists for.  The shape of
--- the message is preserved exactly — the block is still an image
--- block at the same position, it just says how big the picture was
--- instead of being it.
+-- | Replace inline media with MIME/size placeholders in logged JSON.
+-- Handles data URLs and Anthropic base64 source objects, retaining message
+-- structure without storing the large media payloads again.
 redactDataUrls :: Value -> Value
 redactDataUrls = go
   where

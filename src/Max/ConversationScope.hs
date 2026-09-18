@@ -1,16 +1,6 @@
--- |
--- The authorization context for conversation-owned data.
---
--- Max still stores both QQ groups and private chats in the historical
--- @group_id@ column (private chats use a collision-free pseudo-group id),
--- but callers should not pass that storage key around as an untyped
--- capability. A 'ConversationScope' can only be obtained from the
--- conversation attached to the current turn (or an explicitly authorized
--- command target), and every model-facing store operation takes one.
---
--- This is deliberately small. Future multi-platform identity and the
--- optional group-to-member-DM projection can grow behind this boundary
--- without reopening bare-id reads throughout the codebase.
+-- | Authorization scope for conversation-owned data, including private chats.
+-- Derive it from the current turn or an authorized command target; model-facing
+-- stores require this scope rather than accepting arbitrary storage IDs.
 module Max.ConversationScope
   ( ConversationScope,
     conversationScopeFor,

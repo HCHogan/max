@@ -1,24 +1,7 @@
--- |
--- The @fetch_jobs@ work list: what inbound media we still owe
--- ourselves.  Backs the image, forward and file workers, which before
--- this queued into plain 'Control.Concurrent.STM.TQueue's and so lost
--- everything pending whenever the process went down.
---
--- __Claim, don't hold a transaction.__  A fetch can take 30s (or
--- longer for a 200 MiB file), and @SELECT … FOR UPDATE@ held across it
--- would pin a pool connection for the duration.  Instead a claim is a
--- short transaction that stamps a lease on the row and returns; the
--- @FOR UPDATE SKIP LOCKED@ inside it is only there so the image
--- worker's pool can claim concurrently without colliding.  A process
--- that dies mid-fetch leaves its lease to expire, which is why boot
--- needs no explicit recovery step.
---
--- __At least once, not exactly once.__  A crash between \"bytes
--- stored\" and 'completeJob' re-runs the fetch.  That is fine here and
--- deliberately not worked around: every write the workers do is
--- idempotent (blobs are content-addressed, the @images@ / @videos@ /
--- @message_images@ inserts are all @ON CONFLICT DO NOTHING@), so the
--- redo costs one wasted download and nothing else.
+-- | Durable media fetch jobs. Claims use short transactions and expiring
+-- leases; downloads must not hold a pool connection or row lock.
+-- Execution is at least once: a crash before completion can repeat a fetch,
+-- so workers must keep blob and media-index writes idempotent.
 module Max.DB.FetchQueue
   ( JobKind (..),
     ClaimedJob (..),

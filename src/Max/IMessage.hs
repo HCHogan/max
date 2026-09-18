@@ -243,19 +243,10 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
         "mode" .= maybe ("standalone" :: Text) (const "mirror") cfg.mirrorQQGroup,
         "native_replies" .= health.nativeReplies
       ]
-  -- What the endpoint advertises is the carried state: a bridge that failed one
-  -- cycle has not changed whether this Mac can send native replies, and
-  -- re-probing for that on every blip is what the old hand-written loop was
-  -- avoiding.
+  -- Preserve the advertised capabilities across a failed polling cycle.
   retryingWith "imessage cycle" health.nativeReplies (runCycle registered)
   where
-    -- The startup probe is the one bridge call that runs before the retry
-    -- above, and therefore outside it.  A Mac asleep behind the bridge is an
-    -- ordinary fact about an optional platform, but as a fatal error it
-    -- reached the linked thread and took QQ, Matrix, the historian and every
-    -- other worker down with it — then again ninety seconds later, for as
-    -- long as the bridge stayed away.  Waiting is what every other adapter
-    -- does when its edge is unreachable.
+    -- Startup precedes retryingWith; retry bridge unavailability here too.
     awaitBridgeHealth =
       liftIO (fetchBridgeHealth runtime cfg) >>= \case
         Right health -> pure health
@@ -772,21 +763,9 @@ messageContent runtime cfg suppressTransportMention message = do
             raw = Nothing
           }
 
--- Messages stores attributed-string ranges in UTF-16 code units.  Preserve
--- those exact ranges as semantic mentions; malformed or stale metadata is
--- ignored without sacrificing the authoritative plain text.
---
--- The bridge in front of this module does not decode @attributedBody@, so it
--- has never sent those ranges: it reports @mentioned_handles@, which says who
--- was mentioned and nothing about where.  A mention that arrives as plain text
--- is not a mention — 'Max.Dispatch.dispatchMentionsSelf' reads nodes — so
--- every @ on iMessage read as unaddressed.  'iMessageIsAddressed' already knew
--- better and had no caller; it is the gate here, which also covers the
--- manually typed @\@Maxwell it recognises in text.
---
--- Only the bot's own mention is recoverable: a display name is needed to
--- anchor the node, and config names exactly one.  Other participants' mentions
--- stay as text, which is what they already were.
+-- Preserve explicit UTF-16 mention ranges, ignoring malformed metadata.
+-- Without ranges, iMessageIsAddressed can recover only the configured bot's
+-- mention from bridge handles or text; other participants remain plain text.
 iMessageTextNodes :: IMessageConfig -> IMessageMessage -> [Node 'Ingest]
 iMessageTextNodes cfg = iMessageTextNodesWithTransportReply cfg False
 

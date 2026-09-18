@@ -449,21 +449,9 @@ data Trigger
     TriggerCommandError !T.Text
   deriving stock (Show)
 
--- | How a freshly received message is recorded: its kind, and a
--- rewritten @rendered_text@ when the stored form should differ from
--- what was literally typed.
---
--- Most commands are the UI used to operate the bot, and the model has
--- no business reading them back.  @!btw@ and @!feedback@ are the
--- exception — their bodies are things somebody said *to* the bot, and
--- the bot answers them.  They are conversation wearing a command
--- prefix, so they record as 'KindChat' with the verb stripped, landing
--- in the transcript exactly where the implicit supplement path already
--- puts the same words.  An empty body isn't conversation, it's a
--- mistyped command, and stays 'KindCommand'.
---
--- QQ segments remain raw provenance either way; only the IR body used for
--- the prompt projection is rewritten.
+-- | Classify stored messages. Non-empty !btw/!feedback bodies become chat
+-- with the command verb removed; other commands remain command records.
+-- Only the prompt-facing IR changes; raw QQ provenance is retained.
 recordAs :: GroupMessage -> (MessageKind, Maybe T.Text)
 recordAs gm =
   case parseCommand stripped of
@@ -1641,15 +1629,6 @@ taskProgressEvent identifier = \case
   AgentToolDebug _ -> pure ()
   AgentFinalStreamText _ -> pure False
 
--- The 'TriggerOrigin' says what woke the bot — see
--- 'Max.Prompt.PromptInputs.origin'.
---
--- This is the process's only asynchronous agent-turn path (commands run
--- inline on the event loop; Historian is a supervised background worker), so
--- it is also where graceful shutdown gates: once draining,
--- new triggers are logged and dropped rather than started.  See
--- "Max.Shutdown".
-
 -- | Who is responsible for the dispatch row once 'onDispatchMessage' returns.
 --
 -- Only the LLM path hands it on: everything else — a command, a pong, a
@@ -1660,28 +1639,8 @@ data ClaimDisposition
   | ClaimHandedToTurn
   deriving stock (Eq, Show)
 
--- | The durable dispatch row a turn is answering for, the worker identity that
--- holds its lease, and which claim of that row this is.
---
--- All three are needed to settle it.  Owner alone is not enough, because a
--- worker identity is per process and per subsystem — one string for the whole
--- life of the dispatch loop — so a row this process claimed, gave up, and
--- claimed again is owned by the same name both times.  The gap is real and
--- narrow: a message deferred behind a busy conversation writes @deferred@ from
--- inside its own turn's body, and the turn ahead can release it and this
--- worker re-claim it before that first turn's epilogue unwinds.  Its
--- unconditional @DispatchCompleted@ would then land on the /new/ claim and
--- mark a question answered that nothing had yet answered — precisely the bug
--- issue #17.D set out to fix.
---
--- 'attemptCount' is the fencing token, and it costs nothing: the claim already
--- increments it and already hands it back.
--- | How long a deferred message waits if nothing releases it.
---
--- A bound, not a schedule.  The turn ahead releases its deferred rows when it
--- ends, which is the precise wakeup; this only catches the row that deferred
--- itself in the window between that release and the turn leaving the registry,
--- so it wants to be short enough not to be felt and long enough not to spin.
+-- | Fallback delay for deferred messages. Turn completion normally releases
+-- them immediately; this covers deferrals that race with that release.
 deferredRetrySeconds :: NominalDiffTime
 deferredRetrySeconds = 30
 
@@ -1806,13 +1765,9 @@ dispatchLLMWith start owner mIntent origin gm = do
             "recovered" .= isJust existingTurn
           ]
   outputCaps <- conversationAdvertisedCaps gidRaw (if midRaw > 0 then Just midRaw else Nothing)
-  -- Claim the shutdown slot out here rather than inside the async:
-  -- 'Max.Effects.Agent.agentTurn' doesn't reach its 'registerTask'
-  -- until after 'Max.Prompt.buildContext', which on its own can spend
-  -- 30s waiting for the trigger's images, so a drain watching only the
-  -- task registry would walk straight past a dispatch sitting in that
-  -- gap.  Claiming before the spawn also closes the race the other
-  -- way: 'enterDispatch' and the drain flag share one transaction.
+  -- Acquire shutdown admission before spawning, in the same transaction as
+  -- the drain check. The slot covers setup, context collection and execution;
+  -- Handler also registers the TurnRuntime before launching the child.
   launched <- mask $ \restore -> do
     acquired <- liftIO (enterDispatchWith env.beShutdown (acquireRuntimeConfigSTM env.beConfigStore))
     case acquired of
@@ -1820,10 +1775,8 @@ dispatchLLMWith start owner mIntent origin gm = do
       Just configLease -> do
         let snapshot = leasedRuntimeSnapshot configLease
             dispatchEnv = applyRuntimeSnapshot snapshot env
-        -- Same reason the shutdown slot is claimed here: the agent loop is
-        -- tens of seconds away, and until it attaches, a concurrent trigger
-        -- has to be able to see this question is already taken — as do !ps
-        -- and !kill.  The registry entry opens now and the loop adopts it.
+        -- Register before context collection so concurrent triggers, !ps and
+        -- !kill can see the turn before the Agent loop starts.
         durable <-
           restore
             ( maybe
@@ -1870,13 +1823,7 @@ dispatchLLMWith start owner mIntent origin gm = do
     for_ existingTurn $ \durable ->
       ensureAgentTurnCrashed durable "restart recovery declined during shutdown drain"
     logInfo "llm dispatch declined: draining" ident
-    -- The drain can run for a couple of minutes behind a long turn,
-    -- and every @ landing in that window would otherwise get total
-    -- silence — the one failure mode worth being loud about.  A face
-    -- says "seen, not doing it" without a line of chat noise, same
-    -- as the crash and denied-command paths.  Direct triggers only:
-    -- proactive turns stay traceless and a poke has no message to
-    -- react to.
+    -- Signal declined direct triggers with a reaction during drain.
     when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
       queueQQReaction gm.groupId gm.canonicalId failureFaceId True
     -- No async will run, so nothing downstream will settle this row.  A
@@ -1933,12 +1880,8 @@ dispatchLLMWith start owner mIntent origin gm = do
               `catchSync` \e ->
                 logAttention "durable turn finalizer failed" $
                   object ["error" .= T.pack (show (e :: SomeException))]
-            -- The dispatch row is settled here rather than by the claim loop,
-            -- which used to mark it answered the instant this async was
-            -- forked — before a token had been spent, so a turn that then
-            -- crashed took the question with it (issue #17.D).  Every exit
-            -- reaches this finally, and a row already written as deferred is
-            -- left alone by the owner guard.
+            -- Settle after execution, not at spawn. The ownership guard leaves
+            -- deferred or reclaimed rows untouched.
             settleOwner DispatchCompleted
               `catchSync` \e ->
                 logAttention "dispatch settle failed" $
@@ -1956,11 +1899,7 @@ dispatchLLMWith start owner mIntent origin gm = do
           logAttention "browser scope finalizer failed" $
             object ["error" .= T.pack (show (e :: SomeException))]
 
-    -- Settling is idempotent by the same guard that makes it safe: the row has
-    -- to still be claimed by this worker, so whichever of these runs first
-    -- decides and the rest are no-ops.  That is what lets the deferral be
-    -- written where it is known and the completion unconditionally in the
-    -- finally, without either having to know about the other.
+    -- Owner and attempt guards make deferral and final settlement idempotent.
     settleOwner = settleDispatchOwner owner
 
     work outputCaps turn durable = do
@@ -2025,14 +1964,9 @@ dispatchLLMWith start owner mIntent origin gm = do
           | replyTurnIsFinished target = Just target
           | otherwise = Nothing
 
-    -- React [托腮] on the trigger while the dispatch runs — a quiet
-    -- "seen, working on it" — and clear it once the reply (or
-    -- silence / crash / !kill) lands.  Fire-and-forget both ways: a
-    -- failed reaction must never affect the dispatch.  Proactive
-    -- turns show it too (the bot IS working; a busy pause with no
-    -- tell reads as ignoring the group) — but their [silence] leaves
-    -- no other trace: the 托腮 just vanishes, no reason face.  Pokes
-    -- have no message to react to.
+    -- Show the processing reaction while the turn runs and clear it on exit.
+    -- Pokes, monitors and background tasks have no processing reaction here;
+    -- reaction failures must not fail the turn.
     withProcessingReaction outputCaps act
       | origin `elem` [OriginPoke, OriginMonitor, OriginTask] || not (outputCaps.canReaction && outputCaps.canFace) = act
       | otherwise =
@@ -2297,16 +2231,9 @@ dispatchLLMWith start owner mIntent origin gm = do
       -- bounded together (see "Max.ReplySend").
       streamBudget <- liftIO (newTVarIO freshBudget)
       let output = AgentOutputContext target gm.canonicalId debugEff streamBudget
-      -- In addition to the activation's total deadline, detect a stalled
-      -- round. Healthy round transitions reset this silence watchdog; a tool
-      -- that never returns must still be cancelled before a round boundary.
-      --
-      -- Racing rather than a deadline checked at round boundaries, because the
-      -- failure this exists for is a tool call that never returns — a boundary
-      -- check is never reached from inside one.  The cost is that the loop's
-      -- own bookkeeping is lost, which is why the timeout branch settles the
-      -- turn the same way the no-reply branch does rather than pretending to
-      -- have an 'AgentResult'.
+      -- Race the silence watchdog against the running turn so a stuck tool can
+      -- be cancelled without reaching another round boundary. On timeout there is
+      -- no AgentResult; settle the turn through the failure path.
       raced <-
         race
           (agentTurn turn agentCtx s.model recoveredCtx (handleAgentEvent output))
@@ -2351,18 +2278,9 @@ dispatchLLMWith start owner mIntent origin gm = do
       finishAgentTurn durable (if isJust result.aborted then TurnFailed else terminal) result.turnsUsed (renderAgentFailure <$> result.aborted) archive
 
     handleReply outputCaps env s target streamBudget result replyRaw = do
-      -- Real stickers/images are the [sticker#<id>] / [image#<id>]
-      -- tokens, resolved when the reply is sent.  The captionless
-      -- "[表情包: …]" and bare "[image]"/"[动画表情]"/"[face]"/…
-      -- forms are hallucinations — a weaker model imitating the
-      -- display style of something it saw — so strip those as a
-      -- backstop while leaving the id-carrying send tokens intact
-      -- (see 'Max.ReplySend.cleanModelText').
-      -- Whatever streaming already put in the group is gone from here:
-      -- what's left to send is the tail.  'Max.Reply.readyPrefix' only
-      -- ever cuts at a blank line, so dropping the prefix cannot split
-      -- a paragraph — the remainder plans into chunks exactly as it
-      -- would have on its own.
+      -- Drop the already-published prefix and clean hallucinated media markers.
+      -- readyPrefix cuts at paragraph boundaries, leaving a complete unsent tail;
+      -- valid ID-bearing send tokens remain for placeholder resolution.
       let remaining = T.drop (T.length result.sentPrefix) replyRaw
           stickersEff = fromMaybe env.beStickerDefault s.stickerOverride && outputCaps.canMedia
           stripped = cleanModelText remaining
@@ -2375,21 +2293,9 @@ dispatchLLMWith start owner mIntent origin gm = do
       -- happens to sit at the end.
       case if T.null result.sentPrefix then parseSilence stripped else Nothing of
         Just mFace -> do
-          -- The model opted out of replying (see 'parseSilence') —
-          -- the escape hatch for turns that need no response, most
-          -- importantly another bot @-ing us: answering would
-          -- re-trigger it and ping-pong forever.  Nothing is sent;
-          -- btw notes are NOT drained (they wait for a turn that
-          -- actually delivers them); no episode timer is armed (a turn judged
-          -- not worth answering is noise).  The silence itself
-          -- IS persisted, as an internal canonical IR row — without it the
-          -- declined question reads as still pending in the next
-          -- chronological context and gets answered a turn late.
-          --
-          -- On a direct trigger the silence still shows: the named
-          -- reason face (闭嘴 as the bare-[silence] fallback) is
-          -- reacted onto the trigger message.  Proactive turns stay
-          -- traceless, and a poke has no message to react to.
+          -- Persist silence internally so the declined question is not answered
+          -- again from history. Do not publish text or arm the episode timer.
+          -- Direct triggers may receive a reason reaction; proactive turns stay quiet.
           logInfo "llm chose silence" $
             object
               [ "to" .= (let UserId u = gm.userId in u),
@@ -2399,11 +2305,8 @@ dispatchLLMWith start owner mIntent origin gm = do
               ]
           let GroupId group = gm.groupId
               CanonicalMessageId triggerMessage = gm.canonicalId
-              -- The quote is consumed, not stored: 'replyToCanonicalMessageId'
-              -- already says what this declines, and leaving the token in the
-              -- body too made the next turn's transcript line carry two of
-              -- them — the rendered one and the literal one, naming different
-              -- messages.
+              -- Store the target in replyToCanonicalMessageId, not again as
+              -- a literal quote token in the body.
               (quoted, marker) = splitQuoteHandles stripped
               silenceText = if T.null marker then "[silence]" else marker
               sourceMessage = if triggerMessage == 0 then Nothing else Just triggerMessage
@@ -2507,17 +2410,6 @@ dispatchLLMWith start owner mIntent origin gm = do
               addUTCTime (14 * 24 * 60 * 60) now
             )
 
--- | Try ADR 005's verbatim tier for one resolved continuation target, and
--- return the digest-only input unchanged when anything about the chain says
--- no.  Replay is a cache over the digest floor: every failure here is a
--- cheaper prompt, never a wrong one, so the whole path is wrapped against
--- exceptions as well.
---
--- Per-provider filtering is deliberately absent: the segments are ordinary
--- 'ChatMessage' values spliced into the same list an in-dispatch round trip
--- builds, so whatever each protocol strips or round-trips it does to replayed
--- items by exactly the same code — no second rule set to keep honest.
-
 --------------------------------------------------------------------------------
 -- Reply helper.
 
@@ -2545,17 +2437,8 @@ sendTarget outputCaps gm rosterNames stickersOn turnOutput =
       rtTurnOutputContext = turnOutput
     }
 
--- | Send a message and write it down, so the messages table mirrors
--- what the conversation actually saw.
---
--- Recording requires the round-trip: @message_id@ is assigned by QQ
--- and only comes back in the send response, and it is the table's
--- primary key — the id every @[reply#id]@ quote and reply link resolves
--- against.  Fire-and-forget cannot record anything.
---
--- Every failure only logs.  A message that went out but couldn't be
--- written down leaves the record incomplete, which is bad; failing the
--- dispatch over it is worse.
+-- | Publish command or other non-turn output through the canonical outbound
+-- boundary, preserving its delivery scope and optional reply target.
 sendAndRecord ::
   (Outbound :> es) =>
   MessageKind ->
@@ -2589,16 +2472,8 @@ replyText ::
 replyText gm body =
   sendAndRecord KindCommand (DeliverSourceEndpoint gm.canonicalId) gm.groupId (Body [NText body]) Nothing
 
--- | One roster fetch serving two prompt-side consumers: the member id
--- set for outbound @-mention validation ('Nothing' when there is no
--- meaningful list — private chat or NapCat failure — so conversion
--- falls back to syntax-only matching and a flaky API never mutes
--- legitimate @s), and the rendered 群信息 lines for the system
--- prompt's [environment] block (empty on the same failures — the model
--- just doesn't get the block).
--- | The group's own description lines for the environment block.  QQ-only,
--- and no longer a source of identity: the roster the model reads and the
--- names the send path accepts both come from the ledger now.
+-- | Fetch QQ group-description lines for the environment block.
+-- Roster identities and outbound mention names come from the ledger.
 fetchGroupBrief ::
   (PlatformQuery :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   AdvertisedCaps ->
@@ -2757,20 +2632,9 @@ failureFaceId = 357
 defaultSilenceFace :: Int
 defaultSilenceFace = 7
 
--- | Did the model opt out of replying?  The format guide tells it to
--- answer with a lone @[silence]@ — or @[silence:表情名]@ to say why —
--- when a turn calls for no response, e.g. another bot mechanically
--- @-ing us, where any answer would re-trigger it in an endless loop.
--- Expects pre-stripped input; an empty reply counts as silence too.
---
--- Returns 'Nothing' when the reply is a real answer; @Just mFace@
--- when it is silence, with the reason face (if a known one was
--- named).  Only an exact match qualifies: a reply that merely
--- *contains* the marker still goes out, so the model can't
--- accidentally mute a real answer.  Leading quote handles are the one
--- exception — the guide drills "回谁就引谁" so hard that the model
--- writes @[↩#id] [silence]@, and that used to fail the exact match
--- and send the marker as literal text.
+-- | Recognise an empty reply or an exact [silence]/[silence:reason] marker
+-- after leading quote handles. Embedded markers do not silence real prose.
+-- Nothing means a normal reply; Just contains the optional reason face.
 parseSilence :: T.Text -> Maybe (Maybe Int)
 parseSilence t0
   | T.null t || closed == "[silence]" || closed == "[沉默]" = Just Nothing
@@ -2778,24 +2642,8 @@ parseSilence t0
   | otherwise = Nothing
   where
     t = dropQuoteHandles t0
-    -- A reply that is a marker missing its closing bracket is repaired before
-    -- it is read.  Streamed replies lose that last character often enough to
-    -- matter: eleven production replies in three days ended in an unclosed
-    -- token, and every one of them came back from the same profile.  What made
-    -- it worth handling here rather than shrugging at the provider is the
-    -- direction the near-miss falls — an opt-out that does not quite parse is
-    -- not treated as a malformed opt-out, it is treated as ordinary text, so
-    -- the bot answers a message it had decided to stay out of by shouting
-    -- "[silence" at the group.
-    --
-    -- The repair applies only when there is no @]@ anywhere, which is both the
-    -- narrow rule and the true one: a marker that lost its bracket has no
-    -- bracket left to find.  Anything carrying one is read exactly as before,
-    -- so @[silence:吃瓜] 再说一句@ stays a reply with a marker in it rather than
-    -- becoming a silence with an unreadable reason, and prose that mentions
-    -- [silence] in passing still fails every comparison below.  That property
-    -- is what the exact match was protecting and is worth keeping: max has
-    -- already sent a good message joking about how it sends three in a row.
+    -- Repair a missing closing bracket only when the entire input has no ']'.
+    -- Exact matching below still rejects prose containing a silence marker.
     closed
       | T.any (== ']') t = t
       | otherwise = T.stripEnd t <> "]"

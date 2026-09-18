@@ -1,20 +1,6 @@
--- |
--- The @!version@ card, in a leaf module for the same reason
--- "Max.Command.Help" is one: the @self-knowledge@ builtin skill
--- splices part of it at registry init ("Max.Skills" replaces
--- @{{version}}@), so what the bot tells a group about its build and
--- what it tells itself can't drift apart.
---
--- The card is split along the only line that matters for splicing:
--- 'buildIdentityLines' is fixed for the process's lifetime (version,
--- revision, OS, arch, toolchain) and is therefore safe to bake into a
--- skill body at boot, while uptime and the per-group tool/skill counts
--- are live status — they belong to the command, which reads them per
--- invocation.  Splicing those would hand the model a boot-time
--- snapshot it would still be quoting days later.
---
--- Imports stay light: "Max.Skills" sits below "Max.Env" in the import
--- graph, and this module has to sit below "Max.Skills".
+-- | Version card and shared build identity for self-knowledge's {{version}}.
+-- Only buildIdentityLines is process-constant; uptime and group counts are read
+-- for each command. Keep dependencies below Max.Skills to avoid a cycle.
 module Max.Command.Version
   ( buildIdentityLines,
     versionCard,

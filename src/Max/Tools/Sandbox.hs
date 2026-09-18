@@ -1,27 +1,7 @@
--- |
--- Sandbox tools exposed to the agent: create / exec / list /
--- destroy / read_file / write_file / nix_search.  All scoped to the
--- calling group's session.
---
--- == What the model sees
---
--- A small JSON-schema'd toolkit for "run stuff in a Linux box".
--- The box is a prebuilt NixOS system (declared in @nix/sandbox-guest.nix@, nixpkgs
--- pinned to 26.05, host /nix/store mounted read-only): instead of
--- apt-installing, the model passes @packages@ to @sandbox_exec@ and
--- the host broker builds them and adds their store paths to PATH, so models that
--- don't know nix never have to write a nix command; @nix_search@
--- covers discovery.  The sandbox survives across @-mention
--- dispatches; the model is told this so it can reuse one between
--- turns instead of recreating.
---
--- == Concurrency disclosure
---
--- The tool descriptions warn the model that sandboxes are shared
--- within the group's session — multiple parallel dispatches can
--- target the same sandbox. Independent command units run concurrently; lifecycle
--- changes wait for active commands. Callers coordinate shared paths and ports,
--- and filesystem observations can include a sibling command's changes.
+-- | Group-scoped sandbox lifecycle, commands, files and Nix package lookup.
+-- The host broker resolves requested packages into the guest's PATH. Sandboxes
+-- persist across turns and are shared within a group: independent commands may
+-- run concurrently, lifecycle changes wait, and callers coordinate paths/ports.
 module Max.Tools.Sandbox
   ( sandboxToolsFor,
   )

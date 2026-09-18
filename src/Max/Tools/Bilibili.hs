@@ -1,11 +1,5 @@
--- |
--- @view_bilibili@: turn a B站 link (BV号 / 完整链接 / b23.tv 短链 /
--- 分享卡片里的 URL) into something the model can reason about.
--- Metadata mode is cheap and text-only — title, uploader, stats, top
--- comments — and answers most "这视频怎么样" questions without ever
--- touching the stream.  @with_video@ additionally downloads the
--- low-quality progressive MP4 and attaches it whole through the same
--- channel QQ videos use (multimodal profiles only).
+-- | Bilibili metadata lookup from IDs, links or share cards. with_video also
+-- downloads a progressive MP4 and attaches it for multimodal profiles.
 module Max.Tools.Bilibili
   ( bilibiliToolsFor,
   )

@@ -1,21 +1,6 @@
--- |
--- A minimal Model Context Protocol client over the **Streamable HTTP**
--- transport, enough to drive an MCP server that exposes tools:
--- @initialize@ → @notifications/initialized@ → @tools/call@.
---
--- We talk plain HTTP to @127.0.0.1:<port>/mcp@ (a container on the
--- loopback, no TLS) through the shared "Max.HttpRuntime".  The client
--- remains a plain-IO handle; callers 'liftIO' into it.
---
--- == Response shape
---
--- Streamable HTTP lets the server answer a POST either as a single
--- @application/json@ body or as a short @text/event-stream@ (one or
--- more @data:@ lines) that it closes once the response is delivered.
--- 'decodeRpcBody' accepts both: it tries whole-body JSON first, then
--- falls back to concatenating @data:@ lines.  We never hold a
--- streaming connection open, so no special streaming machinery is
--- needed for request/response tool calls.
+-- | MCP Streamable HTTP client over the shared HttpRuntime.
+-- Initialize, acknowledge initialization, then call tools. decodeRpcBody accepts
+-- JSON or finite SSE responses; this client buffers each response to completion.
 module Max.MCP.Client
   ( McpClient,
     McpError (..),

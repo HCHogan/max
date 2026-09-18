@@ -1,15 +1,7 @@
--- |
--- Browser registry: one camoufox-MCP /host service/ per 'GroupId', with an
--- isolated MCP client and browse session per task workspace or foreground turn. Services
--- are created lazily and reused across turns, then torn down on @!clear --all@
--- or bot exit.  Mirrors
--- "Max.Sandbox.Registry"; we reuse its runtime helpers for teardown
--- and boot-time reaping of the @max-br-@ namespace.
---
--- A 'BrowserScope' names one physical workspace generation or foreground turn.  Stateful operations are serialized only
--- inside that scope; sibling fork children get distinct scopes, MCP clients and
--- browse sessions, so they can navigate concurrently without changing each
--- other's page.  Browser service creation is serialized per group, never globally.
+-- | One lazy camoufox-MCP host per group, with isolated clients and sessions
+-- per workspace generation or foreground turn. Operations serialize per scope;
+-- host creation serializes per group. Clear/exit tears down services, and boot
+-- reaps orphaned max-br- resources through the shared runtime helpers.
 module Max.Browser.Registry
   ( BrowserScope,
     browserScopeIsTask,

@@ -772,20 +772,8 @@ compartmentTierFromStorageText = \case
   "p4" -> Just TierP4
   _ -> Nothing
 
--- | Drop the messages another turn is already answering.
---
--- Their real reply hasn't been written yet, so each would sit in the
--- context as a question with nothing after it — indistinguishable from
--- one the bot ignored, and the model duly answers it on top of the one
--- it was actually asked.  Both people then get the same answer, one of
--- them twice.
---
--- Hiding rather than annotating: an explanation of why a line should
--- be skipped is one more string in the prompt that the model has to
--- correctly read as not-speech, and the annotation that used to live
--- here failed exactly that way — it came back as the bot's reply.
--- Bot rows are never dropped; nothing puts the bot's own id in flight,
--- but losing its side of the conversation would be the worse failure.
+-- | Hide questions being answered by other turns to prevent duplicate replies.
+-- Keep bot rows; do not replace hidden questions with model-visible annotations.
 dropInFlight :: Set Int64 -> [HistoryItem] -> [HistoryItem]
 dropInFlight inFlight =
   filter (\h -> h.fromBot || h.canonicalId `Set.notMember` inFlight)
@@ -802,22 +790,10 @@ dropReplayCovered covered
   | Set.null covered = id
   | otherwise = filter (\h -> h.canonicalId `Set.notMember` covered)
 
--- | History as real @user@\/@assistant@ turns
--- ('PromptInputs.historyTurns').
---
--- Runs of consecutive same-side rows collapse into one message: the
--- group's chatter is mostly not the bot, so without this a group
--- transcript becomes a long run of consecutive @user@ messages, which
--- strict providers reject.  Non-bot rows keep the same
--- @[HH:MM \<name\> #\<id\>]:@ label the flat shape uses — the role says
--- only \"not the bot\", so in a group with N speakers the label is
--- still doing all the work of saying who spoke.
---
--- Bot rows go in verbatim, deliberately unlabelled: a
--- @[HH:MM Max #id]@ prefix in the assistant slot is the one thing most
--- likely to teach the model to open its own replies that way.  The
--- cost is that the bot's own messages have no quotable id in this
--- shape — the flat transcript is the only one where they do.
+-- | Render history as alternating user/assistant turns, merging consecutive
+-- same-role rows for strict providers. User text retains speaker/time/ID labels.
+-- Assistant text is unlabelled to avoid teaching the model to emit those labels;
+-- only the flat transcript exposes IDs for quoting the bot's messages.
 historyTurnMessages :: TimeZone -> [HistoryItem] -> [ChatMessage]
 historyTurnMessages tz' =
   map render . groupBy ((==) `on` isBot)

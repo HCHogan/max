@@ -1,31 +1,9 @@
--- | The model-token codec (ADR 003 §4): the LLM prompt is the N+1th
--- platform, and this is its parse direction — model-authored text into
--- @'Body' \''ModelParsed'@ plus the chunk's reply target.
---
--- ADR 004 fixed the vocabulary this module speaks.  Every handle names a
--- canonical key verbatim, with no mapping table on either side:
---
---   * @[mention#\<principal_id\>]@ — a person, not an account.  Which account
---     carries the mention is the send path's problem.
---   * @[reply#\<canonical_message_id\>]@ — a quote.
---   * @[image#\<canonical_message_id\>(.\<seg\>)?]@ — a message's images,
---     or one of them; @(canonical_message_id, seg_index)@ is the primary
---     key of @message_images@.
---   * @[sticker#\<stickers.id\>]@, @[face#\<qq face id\>]@ — different
---     namespaces, unchanged: neither names a message or a person.
---
--- Before ADR 004 this module borrowed 'OneBot.Segment.segmentMentions',
--- whose bare @\@\<5-11 digits\>@ form is QQ's wire spelling of a mention.
--- Principal ids are not QQ numbers, so that form is gone and the mention
--- grammar lives here, platform-neutral like everything else the model
--- reads.  The reply/sticker/image token grammar still comes from
--- 'Max.Reply.parseReplyTokens' — that one was never platform-shaped.
---
--- Parsing normalises: adjacent text runs merge, edges trim (the seam left
--- by a stripped reply token), and exactly one space follows a converted
--- mention.  'emitModelChunk' is the inverse on that normal form —
--- @parse . emit ≡ id@ on parser output, which is the round-trip the
--- persisted-history contract needs.
+-- | Parse model text into ModelParsed IR and a reply target (ADR 003/004).
+-- Mentions name principals; replies and images name canonical messages, with
+-- optional image segment indices. Stickers and QQ faces have separate ID spaces.
+-- Reply/sticker/image parsing is shared with Max.Reply.parseReplyTokens.
+-- Normalize text runs, edges and mention spacing; parse . emit is identity on
+-- parser output, preserving the stored-history round trip.
 module Max.IR.Prompt
   ( MentionRoster (..),
     parseModelChunk,

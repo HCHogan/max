@@ -469,18 +469,9 @@ journalValue turnOrdinal row =
       "finished_at" .= row.jtrFinishedAt
     ]
 
--- | The fork-from chain behind a continuation target, newest first.
---
--- The walk is a recursive CTE over 'turn_edges' bounded by @depth@, and every
--- hop stays inside the caller's 'ConversationScope' — the seed is scoped and
--- the edge table's composite foreign keys make a cross-conversation hop
--- unrepresentable, so a chain can never smuggle another group's archive into
--- this prompt.  Only durable environment facts are returned; whether they
--- permit replay is "Max.Turn.Replay"'s pure decision.
---
--- 'rcTriggerLine' is left empty here.  Rendering it needs the prompt's
--- transcript grammar, so the caller fills it from the same scoped history
--- rows the digest tier reads.
+-- | Load the fork-from chain newest-first, bounded by depth and conversation
+-- scope at every hop. Return facts for Max.Turn.Replay to evaluate; the caller
+-- fills rcTriggerLine from scoped history using the prompt's transcript format.
 replayChain ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->

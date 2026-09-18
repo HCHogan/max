@@ -1,16 +1,6 @@
--- |
--- The curated QQ built-in face (小黄脸) roster — the single source of
--- truth for which faces the model may use.  "Max.Prompt" renders it
--- into the system-prompt对照表 so the model can pick ids for
--- @[face#\<id\>]@ sends, and "Max.Handler" resolves the names the model
--- writes in @[silence:\<名\>]@ reactions against the same list.
---
--- Ids are QSid values verified against NapCat's @face_config.json@;
--- the selection deliberately skips hidden (@QHide@), deprecated and
--- seasonal entries so the model never sends something modern clients
--- render badly.  Keep the groups small and expressive — this table is
--- part of the static prompt prefix, so every entry costs tokens on
--- every dispatch (cached, but not free).
+-- | Curated QQ face IDs for outgoing tokens and named silence reactions.
+-- QSid values come from NapCat face_config.json; omit hidden, deprecated and
+-- seasonal entries. Keep the roster small because it enters the static prompt.
 module Max.Faces
   ( curatedFaceGroups,
     curatedFaces,

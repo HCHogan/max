@@ -842,19 +842,9 @@ recordMonitorFireFailure owner fireId err retryAt = do
       (retryAt, err, retryAt, fireId, owner)
   pure (changed == 1)
 
--- | Boot reconciliation is intentionally conservative: only expired claims
--- are released.  A still-live lease remains the durable ownership fact and
--- naturally wakes at its expiry through 'nextMonitorDeadline'.
---
--- On the server's clock, like every other reader of these two columns (issue
--- #17.A).  It used to take the booting process's @now@, which is the one clock
--- with no relationship to the one the claims were written against — a node
--- starting up with a fast clock would take back leases that had not run out.
---
--- Deliberately /not/ 'max_lease_free', despite testing the same columns: that
--- predicate counts a row nobody holds as free, and this statement's return
--- value is a count of claims actually taken away from somebody, which is what
--- makes it worth logging at boot.
+-- | Release expired, owned claims using the database clock. Live leases
+-- remain valid until nextMonitorDeadline. Do not use max_lease_free here:
+-- the return count must exclude rows that had no owner to reclaim.
 reclaimExpiredMonitorFireClaims ::
   (WithConnection :> es, IOE :> es) =>
   Eff es Int64

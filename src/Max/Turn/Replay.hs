@@ -1,18 +1,6 @@
--- | Pure policy for ADR 005's verbatim replay tier.
---
--- The digest tier is the floor and is always correct; replay is a cache on
--- top of it.  Everything here therefore answers one question — may these
--- archived wire bytes be resent, and how far back — and answers it
--- conservatively: any doubt degrades to digest rather than risking a
--- provider rejection or a resurrected stale environment.
---
--- Two invariants shape the module:
---
---   * __An archive is never truth.__  Rejecting one costs a cheaper prompt,
---     never correctness, so every check fails closed.
---   * __Admission is a contiguous suffix.__  A chain is replayed newest-first
---     and stops at the first candidate that fails any check, because a hole
---     in the middle of a reasoning chain is worse than a shorter chain.
+-- | Conservative admission for archived turn replay (ADR 005).
+-- Rejecting an archive falls back to digests. Admit only a contiguous suffix,
+-- walking newest-first and stopping at the first failed check.
 module Max.Turn.Replay
   ( ReplayCandidate (..),
     TurnArchive (..),
@@ -176,19 +164,9 @@ candidateRejection env candidate
     beyondProviderWindow created =
       addUTCTime (fromIntegral providerValidityDays * 86400) created <= env.reNow
 
--- | Admit a contiguous verbatim suffix.
---
--- Candidates arrive newest-first (the continuation target, then its
--- ancestors).  The walk stops at the first rejection, so the result is always
--- a suffix of the chain and never interleaves digest and verbatim.  The
--- returned segments are reversed to oldest-first, which is the order they are
--- spliced into the request.
---
--- The caller supplies each candidate's decoded archive — the items that turn
--- /appended/ — and this function completes the segment by opening it with the
--- turn's own trigger, because an archive alone would start on an assistant
--- message answering nothing.  A candidate whose archive failed to load is
--- passed in as 'Left', which stops the walk exactly like any other rejection.
+-- | Admit a contiguous suffix from newest-first candidates, stopping at the
+-- first rejection or archive-load failure. Return segments oldest-first, each
+-- prefixed by its trigger so assistant output has its originating user input.
 planReplay ::
   ReplayEnvironment ->
   [(ReplayCandidate, Either ReplayReject [ChatMessage])] ->

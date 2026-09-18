@@ -1,16 +1,7 @@
--- | Race-free LISTEN/NOTIFY wakeups for durable work queues.
---
--- The listener subscribes before rechecking the queue.  A transaction that
--- publishes work either becomes visible to that recheck or leaves a pending
--- notification, so workers cannot sleep through the commit window.  The
--- bounded timeout is only for expired leases and delayed retries, which do not
--- themselves change a row when they become eligible.
---
--- Every waiter holds exactly one pooled connection: the recheck runs on the
--- pinned listener connection rather than asking the pool for a second one.
--- Otherwise a waiter that already owns a connection blocks — with no timeout —
--- on acquiring another, and enough concurrent waiters (two work channels plus
--- admin long-polls) deadlock the pool against itself.
+-- | LISTEN before rechecking the queue to avoid missing a concurrent commit.
+-- Bounded waits also cover lease expiry and delayed retries without notifications.
+-- Run the recheck on the pinned listener connection: acquiring a second pooled
+-- connection while each waiter holds one can deadlock the pool.
 module Max.DB.Notify
   ( WorkChannel (..),
     claimOrWait,

@@ -172,19 +172,9 @@ data RegisteredEndpoint = RegisteredEndpoint
   }
   deriving stock (Eq, Show, Generic)
 
--- | The ledger's answer to "who is in this room", as /people/.
---
--- Available on every platform, because it is assembled from what the
--- conversation's endpoints have already seen rather than from a member-list
--- API only QQ implements.  The trade runs the other way: it knows everyone
--- who has spoken or been addressed here and nobody else, so a platform that
--- can enumerate silent members should union its own answer on top rather
--- than replace this one — which is why the native id comes back too, as the
--- only key such a union can join on.
---
--- 'crPlatforms' is separate because a conversation has endpoints whether or
--- not anyone has spoken on them, and a caller deciding whether to ask QQ for
--- a member list needs that answer before it has any identities.
+-- | Roster from identities seen in the conversation's endpoints. Native
+-- rosters may add silent members, joining by native ID rather than replacing
+-- these identities. crPlatforms also includes endpoints with no speakers yet.
 conversationRoster ::
   (WithConnection :> es, IOE :> es) =>
   Int64 ->
@@ -2032,24 +2022,9 @@ completeDispatch workerId (CanonicalMessageId canonical) attempt completion = do
         \   AND lease_owner = ? AND attempt_count = ?"
         (status :: Text, lastError, next, completed, canonical, workerId, attempt)
 
--- | Push this row's lease out, because the turn holding it is still alive.
---
--- Since issue #17.D the claim is handed to the turn and settled when the turn
--- ends, which made the lease measure the wrong thing: it was sized for the few
--- milliseconds the old code needed to fork an async, and a turn outlives that
--- by minutes.  Left alone, 'expiredClaimedDispatchSql' quarantines a perfectly
--- healthy turn's row as @outcome_unknown@ and the settle at the end of the
--- turn silently matches nothing.
---
--- Renewing splits the two failures the lease was being asked to detect at
--- once.  A process that dies still stops renewing, so the row is still
--- quarantined — that is what the lease is for.  A turn that merely /wedges/ is
--- not this column's business: 'Max.Tasks.awaitTurnSilence' ends it, and its
--- ordinary exit settles the row like any other.
---
--- 'False' means the row is no longer ours to hold, which the caller cannot fix
--- and must not treat as a reason to end the turn — whatever has been said to
--- the user has already been said.
+-- | Extend the lease while its turn runs; the silence watchdog handles stalls.
+-- Owner and attempt guards prevent renewing a reclaimed row. False means this
+-- claim no longer owns the row, not that its external effects were undone.
 renewDispatchLease ::
   (WithConnection :> es, IOE :> es) =>
   Text ->
@@ -2156,18 +2131,8 @@ expiredReservedDispatchSql =
   \ WHERE status = 'reserved' \
   \   AND (lease_expires_at IS NULL OR lease_expires_at < now())"
 
--- | The dispatch half of 'expiredSendingDeliverySql'.  A worker can disappear
--- after durably claiming a message but before recording that it finished, and
--- an abandoned @claimed@ row is worse off than an abandoned @sending@ one: the
--- claim query filters on @status IN ('pending', 'failed')@, so its lease
--- expiry test never reaches this row and nothing retires it.
---
--- Quarantine rather than retry, for the reason the delivery side does.  A
--- re-run costs another model turn and the abandoned attempt may already have
--- answered; a duplicate reply in a group is worse than a missing one and
--- cannot be withdrawn.  Deciding per row whether the reply actually happened
--- needs the durable checkpoint ADR 002 is designing — until then this state
--- exists so the rows can be counted rather than silently lost.
+-- | Mark expired claimed dispatches outcome-unknown. They may already have
+-- produced a reply, so expiry alone must not make them eligible for retry.
 expiredClaimedDispatchSql :: Query
 expiredClaimedDispatchSql =
   "UPDATE message_dispatches \
@@ -2895,20 +2860,9 @@ ensureEndpointPrincipals endpointId natives
       endpoint <- fetchEndpoint endpointId
       Map.map (PrincipalId . snd) <$> ensureIdentityBatch endpoint natives
 
--- | The send-side half of ADR 004's identity rule: the model addressed
--- /people/, and publication stores /accounts/, so every principal it wrote
--- resolves here to an account that can actually carry the mention.
---
--- Preference is the account this conversation's messages primarily go out
--- on (the same ordering 'enqueueOutbound' picks its primary endpoint by),
--- falling back to any other account the conversation has an endpoint for —
--- which is what makes a mirrored room work: the model addresses someone who
--- only has a Matrix account, the node names their Matrix identity, Matrix
--- delivery produces a native mention, and QQ delivery folds it to @name.
---
--- Scoping to the conversation's own endpoints is deliberate.  A principal id
--- that resolves nowhere in this room does not resolve at all, so a number a
--- model invented can neither mint an identity nor address a stranger.
+-- | Resolve principals only through this conversation's endpoint accounts.
+-- Prefer its primary delivery account, then other available accounts. Unresolved
+-- principals cannot create identities or address people outside the conversation.
 resolveMentionIdentities ::
   (WithConnection :> es, IOE :> es) =>
   Int64 -> -- legacy conversation id

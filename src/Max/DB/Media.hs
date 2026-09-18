@@ -67,19 +67,9 @@ fetchMessageVideoInScope scope canonical seg = do
       (conversationStorageId scope, canonical, seg, seg)
   pure (listToMaybe rows)
 
--- | Every addressable picture and clip on the given messages.
---
--- Stickers are excluded from the image list: their markers are substituted
--- with captions before media handles are tagged, so counting them here would
--- offset every later handle by one.
---
--- This is what turns the bare @[image]@ markers stored in @rendered_text@
--- into the @[image#\<id\>.\<seg\>]@ handles ADR 004 hands the model.  The
--- markers cannot carry the id at write time — it is assigned by the insert
--- that stores the text — so the pairing is positional, and a message whose
--- download failed simply has fewer segments than markers and keeps the bare
--- marker for the tail.  That is the honest answer: an image with no row is
--- one @view_image@ could not return either.
+-- | Addressable media in message/segment order. Exclude stickers because
+-- their captions already replace their markers. Pair remaining bare markers
+-- positionally; missing media rows leave their markers unresolved.
 fetchMediaSegments ::
   (WithConnection :> es, IOE :> es) =>
   [Int64] ->

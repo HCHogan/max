@@ -1,15 +1,7 @@
--- |
--- Process-wide dispatch environment, carried through the stack as
--- @Reader BotEnv@ (see "Effectful.Reader.Dynamic").  Collapses the
--- config values and registry handles that every dispatch needs —
--- previously threaded as nine positional parameters through
--- 'Max.Handler' and "Max.Command.Dispatcher" — into one record built
--- once in @app/Main.hs@.
---
--- Nothing here is per-dispatch state: these are process-lifetime
--- handles and config defaults.  Per-dispatch data (group, sender,
--- trigger message) keeps travelling as explicit arguments /
--- 'Max.ToolContext.ToolContext'.
+-- | Shared resources and dispatch-scoped configuration in Reader BotEnv.
+-- Main builds the base environment; applyRuntimeSnapshot replaces configuration
+-- projections for a dispatch. Message identity remains in explicit arguments
+-- and ToolContext.
 module Max.Env
   ( BotEnv (..),
     applyRuntimeSnapshot,

@@ -1,16 +1,5 @@
--- |
--- File interaction tools: pull files from the group's catalog into
--- a sandbox; push artifacts (images, files) back out to the group.
---
--- == Inbound
---
--- The 'Max.Files' worker downloads incoming files to the blob store
--- and rows them in 'group_files'.  These tools read that catalog and
--- copy bytes from the host blob path into a sandbox via the runtime client.
---
--- == Outbound
--- Both images and files publish blob-backed canonical messages. The endpoint
--- delivery worker owns platform emission, receipts and recovery.
+-- | Import catalogued group files into sandboxes and publish blob-backed
+-- images/files. The delivery worker owns platform sends and receipts.
 module Max.Tools.Files
   ( fileToolsFor,
   )

@@ -1,22 +1,6 @@
--- |
--- Background captioning of ordinary chat media, the sibling of
--- "Max.Stickers": polls @images@ / @videos@ rows whose @description@
--- is NULL, loads the bytes from the blob store, and asks the vision
--- profile for a short description.  "Max.Prompt" then renders the
--- markers as @[image#\<id\>: \<简介\>]@ / @[video#\<id\>: \<简介\>]@ —
--- one vision call per blob (content-addressed, so a reposted picture
--- is captioned once), instead of the model re-viewing the same image
--- every dispatch through @view_image@.
---
--- Same polling shape as "Max.Stickers" / "Max.Embedder": no
--- write-path plumbing, attempts-capped so a poison row can't wedge
--- the queue.  Only media first seen in the last 'recencyDays' is
--- considered — captioning years of backlog would be pure spend, the
--- prompt window only ever shows recent history.
---
--- Sticker shas are excluded (their captions live on @stickers@ and
--- feed retrieval, not just display).  Videos are captioned from
--- their first frame (ffmpeg), so an image-only vision profile works.
+-- | Caption recent, uncaptained image/video blobs with bounded retries.
+-- Content-addressed storage shares captions across reposts. Exclude sticker
+-- blobs, which use their own caption worker; videos use their first frame.
 module Max.MediaCaption
   ( mediaCaptionWorker,
   )

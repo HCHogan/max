@@ -1,52 +1,13 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- |
--- Skills: named instruction packs the model pulls into context on
--- demand — progressive disclosure in the Claude Code sense, sized for
--- a chat bot.  The system prompt carries only a byte-stable index
--- (name + one-line description per skill, rendered by
--- 'Max.Prompt.systemPrompt'); the full body enters the conversation
--- as a @use_skill@ tool result, so it costs tokens only in the
--- dispatches that need it and never destabilises the provider prefix
--- cache.
---
--- Mirrors "Max.Session"'s write-through shape: an in-process cache
--- backed by the @skills@ table, where the cache is authoritative once
--- loaded and every mutation writes through to Postgres before
--- returning.  A row edited behind the registry's back is a skill the
--- bot never sees — the admin API mutates through here, same rule as
--- sessions.  Unlike sessions the whole table rides in one TVar:
--- skills are few, small, and read whole on every dispatch.
---
--- Scoping: @skillGroup Nothing@ is global (every group sees it),
--- @Just g@ confines the skill to one group and shadows a global skill
--- of the same name — a group can specialise a shared recipe without
--- touching it.
---
--- == Builtin skills
---
--- Files under @skills\/@ (self-knowledge, sandbox, web, office, operations, codemode)
--- are baked into the binary (file-embed, same deployment
--- story as the admin panel's assets) and seeded into the registry
--- with negative ids.  They exist for content that is coupled
--- to the code it ships with — @self-knowledge@ is THIS binary's
--- self-inspection entry point: a navigation map over the embedded
--- source snapshot, plus the live command help and this build's
--- identity spliced in at registry init.  Behaviour, design and
--- architecture questions are answered from the snapshot via
--- @inspect_source@, never from doc copies that would go stale a
--- little more every release.  Builtins are immutable through the API;
--- to hot-fix one without a release, create a DB skill with the same
--- name — shadowing prefers group over DB-global over builtin.
---
--- File format: the first line is the description (the index line),
--- everything after the first blank line is the body.  The name is the
--- filename minus @.md@.
---
--- Caveat: 'embedDir' registers only the files it saw as compile
--- dependencies, so ADDING a file under @skills\/@ does not recompile
--- this module on its own (and @touch@ doesn't either — cabal tracks
--- content hashes).  Make any byte-level change here when adding one.
+-- | On-demand instruction packs backed by a write-through registry.
+-- The prompt contains an index; use_skill loads the body. Mutations must go
+-- through this registry because direct DB edits do not refresh its cache.
+-- Precedence is group skill > DB-global skill > immutable embedded builtin.
+-- Builtin files use the filename as name, first line as description, and text
+-- after the first blank line as body; self-knowledge embeds help and version.
+-- Adding an embedded file also requires a byte change here: embedDir tracks
+-- existing file contents, not directory membership.
 module Max.Skills
   ( Skill (..),
     SkillRegistry,
@@ -146,18 +107,9 @@ data SkillRegistry = SkillRegistry (TVar (Map Int64 Skill)) (MVar ())
 builtinSkillFiles :: [(FilePath, ByteString)]
 builtinSkillFiles = $(embedDir "skills")
 
--- | Parse one embedded file: first line = description, everything
--- after the first blank line = body.  Files that don't parse are a
--- programming error in the repo, but a broken one shipping should
--- degrade to "skill missing", not "bot won't boot" — hence Maybe.
---
--- Two placeholders splice the pieces of self-knowledge that are
--- runtime-generated rather than readable from the source snapshot, so
--- neither can drift from what the bot actually ships: @{{commands}}@
--- takes the live @!help@ text, @{{version}}@ the build-identity half
--- of the @!version@ card (the half that is fixed for this process —
--- uptime and per-group counts stay with the command, which reads them
--- per invocation).
+-- | Parse an embedded skill, omitting malformed files. Replace {{commands}}
+-- with live command help and {{version}} with this process's build identity;
+-- dynamic uptime and group counts remain part of the version command.
 parseBuiltin :: UTCTime -> Text -> Int64 -> (FilePath, ByteString) -> Maybe Skill
 parseBuiltin bootTime osName sid (path, bytes)
   | takeExtension path /= ".md" = Nothing

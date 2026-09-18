@@ -47,20 +47,9 @@ streamFieldsOpenAI =
     "stream_options" .= object ["include_usage" .= True]
   ]
 
--- | Rebuild an OpenAI assistant message from the accumulator.
---
--- 'ToolCallsResp' normally carries the provider's message byte-for-byte
--- so its reasoning fields round-trip (DeepSeek 400s when
--- @reasoning_content@ goes missing).  A stream never sends that message
--- — it sends deltas — so "Max.LLM.Stream" merges them back into one,
--- and this reads the result rather than re-deriving a message from the
--- few fields we happen to model.
---
--- @tool_calls@ is the exception: it comes from 'parsedCalls', not from
--- the merged message.  A call whose arguments never finished arriving
--- is dropped, and replaying a call we never executed would leave the
--- provider waiting for a tool result that can't exist.  What we send
--- back must match what we answer.
+-- | Rebuild the streamed assistant message, retaining provider fields such as
+-- reasoning_content. Replace tool_calls with parsedCalls so incomplete calls
+-- are absent from both execution and the next request's expected tool results.
 rebuildOpenAI :: StreamAcc -> ChatResponse
 rebuildOpenAI acc = case parsedCalls acc of
   [] -> ContentResp (stripLeadingThink acc.saText)
@@ -87,19 +76,9 @@ rebuildOpenAI acc = case parsedCalls acc of
               ]
         ]
 
--- | Rebuild an Anthropic assistant turn from the accumulated content
--- blocks, in wire order and in the shape the provider opened them with.
---
--- @thinking@ blocks replay intact: the API streams a @signature_delta@
--- just before the block closes precisely so a client can rebuild one,
--- and a thinking block without its signature is rejected.  Blocks of a
--- type we don't model survive too, because they are carried rather than
--- paraphrased.
---
--- @tool_use@ blocks take their @input@ from 'parsedCalls' — the deltas
--- carry it as partial JSON text, and a call that never finished
--- arriving is dropped from both the replay and the execution list, for
--- the reason 'rebuildOpenAI' gives.
+-- | Rebuild Anthropic blocks in wire order, preserving unknown fields and
+-- thinking signatures. Use parsedCalls for tool inputs; incomplete calls must
+-- be absent from both replay and execution.
 rebuildAnthropic :: StreamAcc -> ChatResponse
 rebuildAnthropic acc = case parsedCalls acc of
   [] -> ContentResp (stripLeadingThink acc.saText)

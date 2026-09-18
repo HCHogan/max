@@ -1,11 +1,5 @@
--- | The log projection (ADR 003 §5): bounded, pointers not payloads, and
--- the only phase-polymorphic consumer of the IR.
---
--- Ingest logs the 'Canonical' digest, delivery logs the 'Lowered' digest
--- (exactly what went to the wire), ReplySend logs 'ModelParsed'.  Full
--- content always lives in the database; a log line carries shapes, sizes
--- and references — @text(42B)+mention(pid:7)+image(blob:ab12ef34…,182.0KB)@
--- — with stable keys for journalctl grep.
+-- | Bounded log projection for every IR phase (ADR 003).
+-- Include shapes, sizes and references; full message content remains in storage.
 module Max.IR.Digest
   ( LogDecor (..),
     digest,

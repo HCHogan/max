@@ -1,19 +1,7 @@
--- | Durable per-endpoint delivery workers and emit-only transport seam.
---
--- Delivery runs one lane per platform, concurrently.  A lane is sequential
--- within itself, which is what preserves per-endpoint order; what it must
--- not do is make one platform's order depend on another's progress.  A
--- single shared worker did exactly that: it claimed a mixed batch and walked
--- it in order, so one edge blocking on its transport stalled every other
--- platform queued behind it.  An unreachable iMessage bridge timing out at
--- 90s per attempt paced the whole process at one batch per 90s and put that
--- delay in front of every QQ and Matrix reply.
---
--- A claim contains only the stored canonical IR and endpoint facts.  The
--- worker resolves destination identities and media, calls the one shared
--- capability-driven lowering function, persists its audit notes, and hands
--- the resulting 'LoweredMessage' to an adapter.  Adapters may encode native
--- nodes; they never read prompt projections or choose degradation policy.
+-- | Durable delivery with one sequential lane per platform. Lanes run
+-- concurrently so a slow transport does not block another platform.
+-- Resolve identities/media and lower canonical IR before invoking adapters;
+-- adapters encode native nodes and do not choose degradation policy.
 module Max.Platform.Delivery
   ( DeliveryAttempt (..),
     DeliveryOperation (..),

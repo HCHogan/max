@@ -1,13 +1,5 @@
--- |
--- Minimal OpenAI-compatible embeddings client (@POST {base}/embeddings@).
--- Plain-IO handle in the style of "Max.MCP.Client": the worker and the
--- search tools call it via 'liftIO'; request execution is injected from
--- "Max.HttpRuntime", with no extra effect wrapper or private manager.
---
--- Works against any endpoint speaking the OpenAI embeddings shape —
--- cloud (OpenAI, siliconflow, jina) or local (Ollama's @/v1@ compat
--- layer, LM Studio, llama.cpp server).  @api_key@ is optional because
--- local servers don't check one.
+-- | OpenAI-compatible embeddings client using the shared HttpRuntime.
+-- The IO handle accepts an optional API key for endpoints that require one.
 module Max.Embedding
   ( EmbeddingConfig (..),
     EmbedClient,

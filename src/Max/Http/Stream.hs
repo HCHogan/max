@@ -1,23 +1,7 @@
--- |
--- The transport half of streaming completions: POST a request and read
--- the response body as it arrives, folding SSE frames into a
--- 'StreamAcc' and calling back whenever the assistant text grows.
---
--- Request execution and response lifetime come from "Max.HttpRuntime";
--- this module owns only SSE folding and the domain-specific retry boundary.
---
--- == Retries are not free here
---
--- 'Max.Http.Json.postAndParseRetrying' can replay any failed POST because
--- nothing was observable until it succeeded.  A streamed call has
--- already sent messages to the group by the time it fails, and
--- replaying would say them twice.  So 'streamPost' retries only while
--- nothing has arrived — once there is any assistant text the failure is
--- returned with whatever was accumulated, and the caller decides what
--- to do with a half-written reply.
---
--- Retries are based on structured transport failures and HTTP statuses.
--- Once text or tool calls arrive, no automatic replay is permitted.
+-- | HTTP SSE transport using the shared HttpRuntime for response lifetime.
+-- Fold frames and emit growing assistant text. Retry eligible transport/status
+-- failures only before text or tool calls arrive; after that, return the partial
+-- result without replaying already-observable work.
 module Max.Http.Stream
   ( streamPost,
     StreamOutcome (..),

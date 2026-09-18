@@ -1,23 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- |
--- What the proxy in front of the subscription knows about it.
---
--- max reaches the GPT-5.x models through CLIProxyAPI, which holds the
--- ChatGPT OAuth credentials and rotates a pool of them.  That puts the
--- only copy of "is the subscription still serving" on the far side of
--- a socket: max sees a 503 and a retry storm, the proxy sees which
--- account burned out and when it comes back.  This is a read-only
--- client for the proxy's management API, so that question has an
--- answer that doesn't require an ssh session.
---
--- What this deliberately does not claim to know is how much of the
--- ChatGPT 5-hour and weekly windows is left.  Codex reports that on
--- every response, but CLIProxyAPI neither reads those headers nor
--- forwards them downstream — it learns a credential is spent by being
--- told @usage_limit_reached@, after the fact.  So 'crUnavailable' plus
--- 'crNextRetryAfter' is the honest reading of what comes back: a
--- warning light, not a fuel gauge.
+-- | Read-only CLIProxyAPI management client for credential availability and
+-- retry timing. It reports exhausted credentials, not remaining subscription
+-- quota; the management response does not provide that usage meter.
 module Max.CliProxy
   ( CliProxyConfig (..),
     Credential (..),

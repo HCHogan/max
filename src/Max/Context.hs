@@ -1,11 +1,5 @@
--- |
--- Deterministic token accounting and decision traces shared by context
--- collection, policy, rendering, and future episode materialization.
---
--- The estimator is intentionally conservative and provider-neutral.  It is a
--- safety/planning boundary, not an attempt to reproduce every proprietary
--- tokenizer.  Provider-reported usage can later calibrate it without changing
--- the pure planning interface.
+-- | Pure token estimates and decision traces for context planning.
+-- Estimates are conservative and provider-neutral, not exact tokenization.
 module Max.Context
   ( ContextBudget (..),
     ContextDecision (..),

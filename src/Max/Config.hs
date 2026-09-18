@@ -1,38 +1,11 @@
 {-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE RecordWildCards #-}
 
--- |
--- Layered config via opt-env-conf: command line > environment > YAML
--- file > built-in defaults.  Each field is declared once, with its
--- CLI flag, env var, config key, and default all in one 'setting';
--- @--help@ / man page / shell completion come for free.
---
--- YAML file is looked up in this order, first hit wins:
---   * explicit @--config-file PATH@ (or @MAX_CONFIG=PATH@)
---   * @./max.yaml@ in the current working directory
---   * @$XDG_CONFIG_HOME/max/config.yaml@ (defaulting to @~/.config@)
---
--- == LLM profiles
---
--- The bot can be wired to several OpenAI-compatible endpoints at
--- once.  Profiles live in the YAML as a map:
---
--- > llm:
--- >   default: main
--- >   profiles:
--- >     main:
--- >       api_key: sk-...
--- >       model: deepseek-chat
--- >       max_input_tokens: 114688
--- >     local:
--- >       base_url: http://localhost:8080/v1
--- >       model: qwen2.5:7b
--- >       api_key: any
---
--- The env/CLI single-profile flags (@MAX_LLM_API_KEY@, @--llm-model@,
--- ...) overlay onto the default profile.  If no YAML exists and only
--- env is set, the bot synthesises a single profile named @"default"@
--- from those values.
+-- | Configuration precedence: CLI > environment > YAML > defaults.
+-- An explicit --config-file/MAX_CONFIG must exist; otherwise search ./max.yaml,
+-- then $XDG_CONFIG_HOME/max/config.yaml. See max.yaml.example for profile syntax.
+-- Single-profile CLI/env settings override the default YAML profile, or create
+-- a profile named "default" when no YAML configuration exists.
 module Max.Config
   ( AppConfig (..),
     ConfigLoadError (..),
@@ -115,16 +88,9 @@ data AppConfig = AppConfig
     -- sit comfortably under systemd's @TimeoutStopSec@, or systemd
     -- SIGKILLs us mid-drain and the wait bought nothing.
     shutdownDrainSeconds :: !Int,
-    -- | How long a front-model turn may go without changing phase before it
-    -- is cut off (issue #17).  Silence rather than total age, so a turn doing
-    -- honest multi-round work is never killed for taking a while — only one
-    -- that has stopped moving is.
-    --
-    -- The floor is set by the longest legitimate single phase, which is a
-    -- tool round: @sandbox_exec@ accepts up to 300s of its own, and an LLM
-    -- call up to 300s on the slower profiles.  Anything under that would
-    -- reap working turns.  Tightening it means stamping the heartbeat per
-    -- tool call rather than per round, which is a separate change.
+    -- | Maximum time without a phase change, independent of total turn age.
+    -- Must accommodate the longest tool round or LLM call: the heartbeat currently
+    -- advances per round, not per individual tool call.
     turnSilenceSeconds :: !Int,
     llm :: !ModelCatalog,
     -- | Global release escape hatch: bypass compartments/materialization and
@@ -660,22 +626,8 @@ appConfigParser usedRef =
     let configFileUsed = Nothing
     pure AppConfig {..}
 
--- | Which YAML file to read.
---
--- An explicitly named file must exist.  The library's own
--- 'withFirstYamlConfig' treats @--config-file@ as merely the first
--- /candidate/, so a typo'd path silently fell through to @./max.yaml@
--- and then to the built-in defaults — the run looked completely
--- normal while reading a different file, or none.  Naming a file is a
--- statement that it is the one to use, so a missing one is an error
--- rather than a hint.
---
--- Without an explicit path the old search order stands, first hit
--- wins: @./max.yaml@ > @$XDG_CONFIG_HOME/max/config.yaml@.
---
--- @MAX_CONFIG@ is the env spelling of the same setting, which is what
--- this module's header always claimed; it used to be a separate
--- candidate while @--config-file@ answered to @CONFIG_FILE@.
+-- | Resolve --config-file/MAX_CONFIG, failing if the explicit path is absent.
+-- Without one, search ./max.yaml then $XDG_CONFIG_HOME/max/config.yaml.
 resolveConfigFile :: IORef (Maybe FilePath) -> Parser (Maybe (Path Abs File))
 resolveConfigFile usedRef =
   checkMapIO pick $
@@ -1054,18 +1006,9 @@ iMessageParser = do
       ]
   pure (fmap (\bridgeUrl -> IMessageConfig {..}) mBridgeUrl)
 
--- | Enabled iff @intent.profile@ names an LLM profile; the numeric
--- knobs have defaults so a one-line config turns the feature on.
--- | @wechathook@ block: presence of @api_url@ enables the WeChat backend over
--- a hooked Windows PC client.
---
--- Two settings are security-relevant rather than cosmetic.  The callback the
--- hook posts is unsigned and unauthenticated, so @listen_host@ must stay on a
--- private interface and @callback_path@ must carry an unguessable segment —
--- together they are the only thing keeping a forged @sender@ out of max's
--- authorization layer.
---
--- 已知风险：DLL 注入 + 内存偏移写死在特定微信版本，客户端升级即失效；封号自担（跑小号）。
+-- | Enable WeChat when @api_url@ is configured. Callbacks are unsigned:
+-- bind a private interface and use an unguessable @callback_path@ to prevent
+-- forged sender identities. The hook depends on a specific client version.
 wechatHookParser :: Parser (Maybe WechatHookConfig)
 wechatHookParser = do
   mUrl <-

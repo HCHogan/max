@@ -1,24 +1,6 @@
--- |
--- Long-term memory tools (Letta-style self-editing, ChatGPT-style
--- full injection).  The agent decides what to remember via explicit
--- CRUD; everything remembered is injected wholesale into the system
--- prompt (see "Max.Prompt"), so there is no retrieval step and no
--- vector store.
---
--- == Keeping memory in its place
---
--- The failure mode to guard against is not "forgets to save" — it's
--- the opposite: models pattern-match on having a memory tool and
--- start hoarding trivia, or worse, keep steering conversation back
--- to whatever the memory block says.  Three lines of defence:
---
---   * tool descriptions frame saving as the exception, not the rule
---     ("大多数对话不需要保存任何记忆");
---   * a hard per-scope cap ('maxMemoriesPerScope') with a
---     consolidate-first error, so hoarding stops paying off
---     (ChatGPT's "Memory Full" mechanism);
---   * the injection block in "Max.Prompt" is framed as 背景参考
---     with explicit 不要复述 guidance.
+-- | Scoped memory CRUD with a per-scope cap and consolidate-first errors.
+-- Tool descriptions discourage saving routine conversation; context selection
+-- and rendering belong to the prompt pipeline.
 module Max.Tools.Memory
   ( memoryToolsFor,
     maxMemoriesPerScope,

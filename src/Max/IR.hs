@@ -1,21 +1,10 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
--- | The canonical message IR (ADR 003).
---
--- One closed, phase-indexed tree expresses every conversation's content.
--- The shape is identical across phases; only the decorations at four slots
--- change, and two constructors are uninhabited outside 'Canonical'.  The
--- tree is deliberately closed: platform-private content is a value-level
--- 'NUnsupported' with a mandatory human-readable description, never a
--- type-level extension — that is what keeps 'fallbackText' total and the
--- stored format a single versioned schema.
---
--- Phase transitions are the pipeline: model output parses to 'ModelParsed'
--- and resolves to 'Canonical' (Max.Reply.Resolve); 'Max.IR.Lower' degrades
--- 'Canonical' per endpoint capability; the admin surface hydrates it.
--- Only @'Body' \''Canonical'@ has JSON instances — the stored codec is
--- pinned to exactly one phase, encoded as @{"v":2,"nodes":[...]}@.
+-- | Closed, phase-indexed message IR (ADR 003). Unknown platform content uses
+-- NUnsupported with a fallback, keeping lowering total and the schema uniform.
+-- ModelParsed resolves to Canonical, then lowers per endpoint. Only Canonical
+-- has JSON instances, encoded as {"v":2,"nodes":[...]}.
 module Max.IR
   ( -- * The tree
     Phase (..),

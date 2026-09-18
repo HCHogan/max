@@ -52,14 +52,9 @@ data DispatchMessage = DispatchMessage
 dispatchText :: DispatchMessage -> Text
 dispatchText message = promptCanonicalText message.mentionPrincipals message.body
 
--- | The same text with the bot's own mentions removed — what the command
--- parser and the current-message line want, since @\@max help@ is a request
--- for help, not for "@max help".
---
--- Structural by necessity: deleting the /rendered/ token only ever worked on
--- QQ, where the mention used to render as the bot's compatibility id.  A
--- Matrix mention rendered as @\@max:server@ and an iMessage one as a handle,
--- so the node is the only thing every platform agrees on.
+-- | Remove self-mentions structurally before rendering command/prompt text.
+-- Native mention spellings differ across platforms; rendered-text replacement
+-- would not consistently identify the bot.
 dispatchTextWithoutSelf :: DispatchMessage -> Text
 dispatchTextWithoutSelf message =
   promptCanonicalText

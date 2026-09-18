@@ -1,19 +1,8 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- |
--- The git revision baked into the binary at compile time, shown by
--- @!version@ and the admin overview.  Two sources, tried in order:
---
--- 1. @MAX_GIT_REV@ in the build environment — the flake sets it from
---    @self.shortRev@, because the nix source tree is cleaned of
---    @.git@ and the fallback below would find nothing there.
--- 2. @git rev-parse --short HEAD@ in the working tree (dev cabal
---    builds), with a @-dirty@ suffix when the tree has local changes.
---
--- Dev-build staleness: GHC re-runs the splice only when this module
--- recompiles, so @.git\/HEAD@ is registered as a dependency — a new
--- commit or branch switch triggers the rebuild.  Edits without a
--- commit stay invisible to the hash, which is what @-dirty@ is for.
+-- | Compile-time revision for !version and admin: prefer MAX_GIT_REV for Nix
+-- builds, otherwise git rev-parse with a -dirty suffix for local changes.
+-- The splice tracks Git HEAD; its result refreshes only when GHC recompiles it.
 module Max.BuildInfo
   ( gitRev,
   )

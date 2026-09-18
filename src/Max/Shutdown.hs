@@ -1,32 +1,9 @@
--- |
--- Graceful shutdown: on SIGTERM, stop starting new agent dispatches,
--- let the ones already running finish, /then/ die.
---
--- __Why a counter and not the task registry.__  "Max.Tasks" only sees
--- a dispatch once 'Max.Effects.Agent.agentTurn' brackets it, and
--- 'Max.Handler.dispatchLLM' does a lot before reaching that point —
--- session load, the supplement classifier's own LLM round-trip, and
--- 'Max.Prompt.buildContext', which by itself waits up to 30s for the
--- trigger's images to land.  Draining on @listTasks@ would walk right
--- past a dispatch sitting in that window.  So the slot is claimed at
--- dispatch /entry/ instead, and released by a @finally@ wrapping the
--- whole async.
---
--- __Why only agent dispatches.__  Everything else an abrupt exit could
--- interrupt is already DB-authoritative and picks itself back up:
--- inbound media ("Max.DB.FetchQueue"), embeddings ("Max.Embedder"),
--- captions, reminders.  Commands run inline on the event loop and are
--- bounded.  That leaves the agent loop as the only thing worth
--- waiting for.
---
--- __What still gets dropped.__  A trigger arriving mid-drain is persisted but
--- not dispatched (logged with its message_id).  NapCat dials in over reverse
--- WS and does not provide a durable cursor while we're down.  Reconnect now
--- performs a bounded, deduplicated message-history backfill for known QQ
--- endpoints before admitting that generation's live frames, but it cannot
--- prove an offline-complete interval or reconstruct absent notices.  Reactions,
--- recalls and messages outside the returned windows therefore remain possible
--- gaps, recorded as best-effort recovery rather than exactly-once continuity.
+-- | Bounded graceful shutdown for agent dispatches. Admission and the drain
+-- flag share an STM transaction; each dispatch holds a slot from entry through
+-- context collection, execution and finalization. Other background queues use
+-- their existing persistent recovery paths.
+-- QQ reconnect backfill is bounded and deduplicated, not a complete offline
+-- cursor: messages outside its windows, reactions and recalls may be missed.
 module Max.Shutdown
   ( ShutdownState,
     newShutdownState,
@@ -161,19 +138,9 @@ delayMicros s = clamp (0, 3600) s * 1_000_000
 --------------------------------------------------------------------------------
 -- Supervisor
 
--- | Long-lived sibling of the other workers: sleeps until the signal
--- handler calls 'beginDrain', waits out the in-flight dispatches, then
--- raises 'UserInterrupt' on the main thread.
---
--- The handler itself only flips the flag — keeping the waiting and the
--- reporting here means shutdown gets logged through the normal effect
--- stack instead of a bare @hPutStrLn stderr@, and the handler stays
--- non-blocking.
---
--- 'UserInterrupt' specifically, because that is what Ctrl+C raises:
--- every @bracket@ in @main@ (DB pool, sandbox and browser teardown)
--- already unwinds correctly for it, so graceful and interactive exit
--- follow one code path.
+-- | Wait for beginDrain, then for dispatch completion or the drain deadline.
+-- Raise UserInterrupt on the main thread so its brackets release resources.
+-- The signal handler only changes state; waiting and logging happen here.
 drainWorker ::
   (Log :> es, IOE :> es) =>
   -- | How long to wait for in-flight dispatches ('AppConfig.shutdownDrainSeconds').

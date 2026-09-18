@@ -1,24 +1,6 @@
--- |
--- Sticker retrieval tool for the agent, over the library the bot
--- accumulates by watching the group (see "Max.DB.Stickers" /
--- "Max.Stickers").
---
---   * @find_stickers@ — the model gives a free-text mood/content query;
---     we embed it, cosine-search the captioned library, and return the
---     closest matches as a numbered list of @{id, desc}@.  Nothing is
---     sent.
---
--- Sending is no longer a tool: the model writes @[sticker#\<id\>]@ inline
--- in its reply and the reply post-processor turns that into a real
--- sticker segment ('Max.Sticker.resolveSticker', called from
--- 'Max.Handler.sendAndPersistReply').  Inbound history renders stickers
--- as @[sticker#\<id\>: …]@, so the id the model reads is the same handle
--- it writes back — one form in and out.  An explicit integer handle
--- keeps sending unambiguous (the old free-text auto-send made the model
--- learn to just *type* captions).
---
--- Only registered when an embedding client is configured: without
--- vectors there is no retrieval.
+-- | Find captioned stickers by embedding similarity; requires embeddings.
+-- Return IDs/descriptions without sending. Replies use [sticker#id], resolved
+-- by Max.Sticker through the shared publication path.
 module Max.Tools.Stickers
   ( stickerToolsFor,
   )

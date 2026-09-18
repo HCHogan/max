@@ -1,29 +1,8 @@
--- |
--- Server-sent events, and the two ways a completion arrives over them.
---
--- Kept pure and separate from the HTTP call so the fiddly part — the
--- part where a wrong guess silently truncates somebody's reply — is
--- testable against recorded wire bytes instead of a live provider.
---
--- == Framing
---
--- 'sseFrames' is incremental: bytes arrive in whatever sizes the socket
--- hands over, so it returns the frames it could complete plus the
--- leftover to prepend next time.  Per the SSE spec a frame ends at a
--- blank line, repeated @data:@ lines within one frame concatenate with
--- newlines, and one optional space after the colon is not part of the
--- value.  @event:@ lines are read but unused: Anthropic repeats the
--- event name inside the payload's @type@ field, and dispatching on the
--- payload means one less thing that has to agree.
---
--- == Assembly
---
--- Both protocols deliver a tool call in pieces — the name and id in one
--- frame, then its arguments as JSON *text fragments* across many more
--- (@{\"lo@, @cation\\\": \\\"Bei@, …).  So arguments accumulate as text
--- and are parsed once at the end; a fragment is not valid JSON and
--- parsing eagerly would throw away every call with a non-trivial
--- argument.
+-- | Pure incremental SSE framing and completion assembly.
+-- Frames end at a blank line; data lines join with newlines and discard one
+-- optional space after ':'. Return incomplete bytes for the next read.
+-- Tool arguments accumulate as text fragments and parse only at completion;
+-- individual fragments need not be valid JSON.
 module Max.LLM.Stream
   ( -- * Framing
     sseFrames,
@@ -109,20 +88,9 @@ data PartialCall = PartialCall
   }
   deriving stock (Show, Eq)
 
--- | What the stream has produced so far.
---
--- Three views of the same message, kept apart because they answer
--- different questions and only one of them may be lossy:
---
---   * 'saText' — what to show the group.
---   * 'saCalls' — what to execute.
---   * 'saMessage' \/ 'saBlocks' — what to send /back/ on the next
---     request.  The assistant turn has to replay whole or providers
---     reject it (DeepSeek 400s without its @reasoning_content@,
---     Anthropic rejects a @thinking@ block whose signature went
---     missing), and a streamed call can only replay what it kept.  So
---     these keep every field the wire carried, not the handful we
---     model.
+-- | Stream views: saText for publication, saCalls for execution, and
+-- saMessage/saBlocks for the next model request. Preserve provider fields in
+-- the latter, including reasoning content and signed thinking blocks.
 data StreamAcc = StreamAcc
   { -- | Assistant text, in order.
     saText :: !Text,
@@ -213,19 +181,9 @@ stepOpenAI payload acc
                 <|>? a.saCachedTokens
           }
 
--- | Keys whose values arrive in fragments and therefore concatenate.
---
--- Everything else is an identifier or an enum that arrives whole, and
--- gateways that repeat one would turn @call_a@ into @call_acall_a@ —
--- so the default is last-writer-wins and this is the exception list.
---
--- It is a list rather than a rule because the wire format doesn't
--- define a generic merge: the official SDK accumulators
--- (@ChatCompletionStreamState@ and friends) special-case exactly these
--- fields too.  An unmodelled field that /did/ stream in fragments would
--- keep only its last piece — a truncation, which beats the corruption
--- the other default risks, and beats today's behaviour of dropping it
--- outright.
+-- | Fields whose text fragments concatenate. Other fields use the latest
+-- value so repeated identifiers are not duplicated. Add new fragmented fields
+-- explicitly; unknown fields retain only their last value.
 streamedTextKeys :: [Key]
 streamedTextKeys =
   ["content", "reasoning_content", "reasoning", "arguments", "refusal"]

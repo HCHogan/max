@@ -1,15 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- |
--- megaparsec-based parser for the @!cmd@ DSL.  The grammar is in
--- "Max.Command.Types".  Entry point is 'parseCommand'.
---
--- Returns @Right Nothing@ for messages that don't look like a command
--- at all (so the caller can pass them through to the LLM path).
--- Returns @Right (Just cmd)@ for a parsed command.  Returns @Left err@
--- when the message starts with @!@ followed by an identifier but
--- something further on is malformed — that's a real syntax error
--- we want to report back to the user.
+-- | Command parser; grammar is in Max.Command.Types.
+-- Right Nothing means ordinary text, Right (Just cmd) a valid command, and
+-- Left a syntax error after a recognized command prefix.
 module Max.Command.Parser
   ( parseCommand,
     effortLevels,
@@ -142,16 +135,9 @@ valueP = lexeme (dquoted <|> squoted <|> bareword)
           '\'' <$ char '\''
         ]
 
--- | A flag token: a long @--flag@ / @--flag=value@ (one entry), or a
--- short cluster @-a@ / @-dg@ where each letter is expanded to its long
--- name via 'shortFlagAlias' (short flags are boolean-only — bare
--- @--flag@ and every short flag store 'Nothing').  Returns a list so a
--- bundled short cluster becomes several flags.
---
--- A short cluster only parses when /every/ letter is a known alias;
--- otherwise it fails and 'argP' backtracks, so a negative id like @-1@
--- or free text like @-cool@ stays a positional value rather than being
--- silently eaten as flags.
+-- | Parse long flags or expand known boolean short-flag aliases.
+-- A short cluster requires every letter to be known; otherwise argP treats it
+-- as positional text, preserving negative IDs and values such as -cool.
 flagP :: Parser [(Text, Maybe Text)]
 flagP = longFlag <|> shortCluster
   where

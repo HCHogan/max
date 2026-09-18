@@ -1,52 +1,13 @@
--- |
--- WeChat backend over an @aixed/WeChat-Hook@ DLL injected into a Windows PC
--- WeChat client.  Inbound frames enter the same canonical envelope pipeline as
--- every other adapter; outbound receives only text nodes already lowered for
--- this endpoint's honest text-only caps.
---
--- Protocol (verified by running it against WeChat 4.1.10.27, 2026-08-07):
---
---   * outbound: POST @{base}\/SendTextMsg@ with
---     @{"wxidorgid":…,"msg":…}@; @ret == 0@ means the hook accepted it.
---   * inbound: the DLL POSTs each message to a callback URL registered
---     through @{base}\/set_callback@.  One JSON object per message:
---     @{event_type:1001, msgid, type, timestamp, wxid, sender, roomid,
---     content}@.  @roomid@ is non-empty exactly for chatroom messages and
---     @sender@ is a first-class field, so there is no sender folded into
---     the content to unpick.
---
--- Three facts about this transport shape the module:
---
---   1. __max's own sends never come back.__  A message sent through
---      @\/SendTextMsg@ produces no callback, and the send response carries no
---      identifier.  So there is no echo to reconcile a delivery against and
---      no risk of minting a second copy of a message max authored — the
---      'selfEventsAreEchoes' machinery an echoing transport would need has
---      no counterpart here.  The cost is that a delivery parks at
---      accepted-unconfirmed permanently; that is the honest state, because
---      nothing downstream of the send ever confirms it.
---      Messages a /human/ types from the bot's own account on a phone /do/
---      arrive, and they are genuine events rather than echoes; whether max
---      answers one is the dispatch kernel's principal comparison to make,
---      not this adapter's.
---
---   2. __The callback is unauthenticated and unsigned.__  Anyone who can
---      reach the listener can forge a @sender@ and impersonate a group member
---      straight into max's authorization layer.  The listener therefore binds
---      a caller-chosen host (keep it on the private interface) and matches an
---      unguessable path; both are config, and both are load-bearing.
---
---   3. __@\/QueryDB\/*@ is dead on WeChat 4.x.__  It reports @IsLogin: 0@
---      while plainly logged in, enumerates no databases, and cannot open one
---      by name — the DLL's database module still assumes the 3.9 storage
---      layout.  Two consequences: display names come from a hand-maintained
---      config map rather than the contact table, and login state cannot be
---      probed.  'wechatHookWorker' substitutes an active probe (re-asserting
---      the callback registration, which also makes the binding self-healing
---      across a WeChat restart) plus a silence watchdog.
---
--- 已知风险：DLL 注入 + 内存偏移写死在 WeChat 4.1.10.27，客户端一升级即失效；
--- 封号风险自担（跑小号）。
+-- | WeChat adapter for the aixed/WeChat-Hook Windows client hook.
+-- SendTextMsg accepts {wxidorgid,msg}; ret=0 acknowledges injection but supplies
+-- no native ID or echo, so sends remain accepted-unconfirmed. Human messages
+-- from the bot's account are independent inbound events.
+-- set_callback delivers event_type=1001 objects with msgid, type, timestamp,
+-- wxid, sender, roomid and content. Callbacks are unsigned: use a private
+-- listener and an unguessable path to protect sender identity.
+-- Verified against WeChat 4.1.10.27 (2026-08-07); QueryDB/login probes fail there.
+-- Names come from config; callback re-registration and a silence watchdog
+-- monitor connectivity. Client upgrades can break the version-specific hook.
 module Max.WechatHook
   ( WechatHookConfig (..),
     wechatHookBackend,
@@ -148,14 +109,9 @@ import OneBot.Types (GroupId (..), UserId (..))
 platformName :: Text
 platformName = "wechathook"
 
--- | Images are native only when the bridge is deployed, because that is
--- exactly when they are possible: the hook sends an image by reading a path on
--- the Windows host's disk, which max has no way to write to on its own.
--- Advertising the capability without the bridge would promise a send that
--- always fails, where folding to text at least says something true.
---
--- Everything else stays text: the send API takes a target and a string, so
--- there is no mention, no quote, no reaction and no recall to advertise.
+-- | Advertise images only with the Windows bridge that stages their files.
+-- Other unsupported capabilities (mentions, quotes, reactions, recalls) remain
+-- disabled and use text lowering where available.
 wechatHookCapabilities :: WechatHookConfig -> OutboundCaps
 wechatHookCapabilities cfg
   | bridgeConfigured cfg = textOnlyCaps {image = TierNative}
@@ -225,14 +181,8 @@ wechatHookBackend runtime runDb cfg =
               Response
                 { status = "ok",
                   retcode = 0,
-                  -- @ret: 0@ says the hook injected the call, and nothing
-                  -- afterwards ever names the message: this transport has no
-                  -- echo and no send receipt.  Reporting no @message_id@ is
-                  -- the only honest answer.  A synthesised one would be
-                  -- indistinguishable from a real native id to every reply
-                  -- and reaction that later resolves a target, and derived
-                  -- from the text it would collide across identical
-                  -- messages.  The delivery stays accepted-unconfirmed.
+                  -- ret=0 acknowledges injection without a native ID or echo. Do not invent
+                  -- an ID: delivery remains accepted-unconfirmed and cannot be a native target.
                   payload = object [],
                   echo = ""
                 }
@@ -328,22 +278,9 @@ postJson runtime url payload =
                 HTTP.requestBody = HTTP.RequestBodyLBS (encode payload),
                 HTTP.requestHeaders =
                   [ ("Content-Type", "application/json"),
-                    -- The DLL's embedded HTTP server abandons pooled
-                    -- connections: a request written onto one it has already
-                    -- closed comes back as NoResponseDataReceived.  Six
-                    -- minutes of live traffic produced three, two of them on
-                    -- sends — and a send that fails this way parks at
-                    -- outcome_unknown precisely because the message most
-                    -- likely did arrive; only the response was lost.
-                    --
-                    -- Taking a fresh connection per request is the fix that
-                    -- stays honest.  The tempting alternative — letting
-                    -- http-client retry a request that failed on a reused
-                    -- connection — is disabled process-wide on purpose
-                    -- ('noImplicitRetryTlsSettings'), and re-enabling it for
-                    -- this backend would risk posting a message twice for
-                    -- exactly the failure that cannot be told from success.
-                    -- Connection setup is free at this traffic level.
+                    -- The hook closes pooled connections without reliably notifying clients.
+                    -- Use a fresh connection; retrying an ambiguous send on a stale one could
+                    -- duplicate a message whose acknowledgement was lost.
                     ("Connection", "close")
                   ]
               }
@@ -777,19 +714,9 @@ wechatHookInboundBody selfWxid botName msgType content
               }
         ]
 
--- | Content and relations for one callback.
---
--- A quote-reply is the one non-text kind this transport describes well enough
--- to recover: WeChat carries it as an ordinary app message whose payload names
--- both what the sender typed and which message they were answering.  Without
--- this, the most conversational thing anyone does in a group reaches max as
--- @[微信分享或文件消息]@ — the reply text lost entirely.
---
--- The reply relation resolves only when max ingested the quoted message, which
--- means quoting a person works and quoting max's own message does not: this
--- transport never reports the id of a message max sent, so there is nothing on
--- record to point at.  The text is recovered either way, which is the part
--- that carries the meaning.
+-- | Recover content and quote relations from callbacks. A relation resolves
+-- only if the quoted native ID was ingested; outgoing hook sends have no such
+-- ID. Preserve the reply text even when its target cannot be resolved.
 wechatHookContent :: Text -> Text -> Int -> Text -> (Body 'Ingest, [MessageRelation])
 wechatHookContent selfWxid botName msgType content
   | msgType == appMessageType,
@@ -807,18 +734,9 @@ data Quote = Quote
   }
   deriving stock (Eq, Show)
 
--- | Recognise a quote-reply inside a type-49 app message.
---
--- Deliberately not a general XML parser, and no new dependency for one: the
--- payload is machine-written by WeChat, and exactly three fields are wanted
--- from it.  Every failure returns 'Nothing', which lands the message on the
--- unsupported path it would have taken anyway — a shape this does not
--- recognise degrades, it never disappears.
---
--- The document is split at @refermsg@ before anything is read, because
--- @\<type\>@ appears on both sides and means different things: 57 on the outer
--- app message is what makes this a quote, while the inner one describes the
--- message being quoted.
+-- | Parse the quote fields of a type-49 app message, returning Nothing for
+-- unsupported shapes. Split at refermsg first: outer type=57 identifies the
+-- quote, while the inner type describes its target.
 parseQuote :: Text -> Maybe Quote
 parseQuote xml = do
   let (outer, refer) = T.breakOn "<refermsg>" xml

@@ -1,16 +1,5 @@
--- | The process's Postgres connection pool.
---
--- __Acquiring is bounded__ (issue #17).  'Data.Pool.withResource' waits for a
--- free connection with no deadline, which made pool exhaustion the one
--- unbounded wait in max: not a slow turn but a permanently stopped one, and
--- process-wide rather than confined to the conversation that caused it.  Every
--- other ceiling in the system — the LLM call, a turn's silence, a fork child's
--- budget — sat above a wait that could outlast all of them.
---
--- Failing to get a connection is now an exception, which is the honest answer:
--- something is holding more of the pool than it should, and a caller that
--- learns this can crash its turn, log, and let the next one through, while a
--- caller that waits forever teaches nobody anything.
+-- | PostgreSQL pool with bounded connection acquisition. Pool exhaustion
+-- raises an exception instead of leaving a caller waiting indefinitely.
 module Max.DB.Connection
   ( DbConfig (..),
     DbPool,
@@ -71,14 +60,9 @@ instance Exception PoolTimeout where
 acquireTimeoutSeconds :: Int
 acquireTimeoutSeconds = 30
 
--- | 'Data.Pool.withResource' with a deadline on the acquire and none on the
--- work, which is the split that matters: bounding the whole thing would kill
--- legitimately slow queries, and bounding neither is what this replaces.
---
--- Interrupting the wait is safe by the library's own construction —
--- @waitForResource@ installs an @onException@ that de-registers the waiter and
--- hands on any resource that arrived while it was unwinding — so a timed-out
--- caller cannot strand a connection.
+-- | Bound connection acquisition, not the work performed with it.
+-- Data.Pool cleans up interrupted waiters and returns any concurrently acquired
+-- resource, so an acquisition timeout cannot strand a connection.
 withConn :: DbPool -> (Connection -> IO a) -> IO a
 withConn = withConnTimeout acquireTimeoutSeconds
 

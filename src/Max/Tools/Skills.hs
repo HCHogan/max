@@ -1,13 +1,5 @@
--- |
--- @use_skill@: turn a 技能对照表 entry into its full instructions.
--- The index the model reads is rendered into the system prompt from
--- the same registry this tool queries, so a listed name always
--- resolves — a miss means the model invented one, and the error
--- carries the valid names to steer it back.
---
--- Registration is gated on the dispatch actually having skills
--- visible ('Max.ToolContext.toolSkills'): a group with none pays no
--- schema tokens for a tool that could only fail.
+-- | Load full instructions from the visible skill registry. Unknown names
+-- return the available names; groups without skills do not register this tool.
 module Max.Tools.Skills
   ( skillToolsFor,
   )

@@ -1,36 +1,7 @@
--- |
--- Proactive-trigger intent classification: a cheap dedicated model
--- watches group chatter that neither @-mentions nor quotes the bot and
--- decides whether the bot should join in anyway — someone calling it
--- by name without an @, a follow-up to something it just said, or a
--- topic it can genuinely help with.  Directly-addressed messages skip
--- this entirely ("Max.Handler" dispatches those before we ever see
--- them).
---
--- __One question, and it is a gate rather than a route.__  This module used to
--- own a second classifier as well — @classifySupplement@, deciding whether a
--- message belonged to a turn already running.  ADR 007 §8 deleted it: "should
--- the expensive model see this at all" is answerable from cheap signals and
--- belongs here, whereas "which of the bot's activities is this about" is a
--- question about what somebody meant, and the model holding the conversation
--- answers it far better than four rendered history lines ever could.  Whatever
--- arrives while a turn is running now simply reaches that turn.
---
--- Shape: per-group pending buffers + one worker.  Messages accumulate
--- while the worker is busy (or during the debounce pause), so a burst
--- of chatter costs one classification and at most one reply — like a
--- person reading a run of messages before deciding to speak.  The
--- verdict is a hint, not a command: the main model keeps its @[silence]@
--- escape, so a false positive costs one dispatch, never a bad message.
---
--- Guard rails: per-group @!proactive@ toggle first, then the
--- classifier, then a throttle on its verdict.  The throttle is
--- kind-aware — the cooldown applies only to 'KindTopic' (the bot
--- inviting itself into a topic); 'KindCalled' and 'KindFollowup'
--- bypass it, because going deaf for the cooldown window right after
--- engaging someone is worse than chattiness ("干嘛" … user answers …
--- silence).  The hourly cap still applies to every kind — that is
--- the backstop against bot-to-bot loops.
+-- | Proactive-trigger classifier for messages not directly addressed to Max.
+-- Per-group buffers debounce chatter into one classification. The main model
+-- can still decline with [silence]. Group toggles and an hourly cap gate all
+-- triggers; the topic cooldown excludes called and follow-up verdicts.
 module Max.Intent
   ( IntentConfig (..),
     IntentState,
@@ -126,21 +97,9 @@ newIntentState =
     <*> newTVarIO Map.empty
     <*> newTVarIO Map.empty
 
---------------------------------------------------------------------------------
--- Heuristic gate: don't pay an LLM call for every batch of chatter.
---
--- Tuned against one week of production logs (2026-07-21/22, ~7500
--- unaddressed messages, 77 real triggers): 96% of classifier calls
--- returned "no trigger", and almost all recall lived in two cheap
--- signals — the bot's name in the text, and proximity to the bot's
--- own recent activity (followups virtually always arrive within
--- three minutes of an interaction).  Topic-kind triggers have no
--- cheap signal, so plain chatter gets a budgeted lane instead of a
--- blanket skip: at most one classification per group per
--- 'chatterCooldownSecs' — the bot checks the room every quarter hour
--- rather than reading every message, which is plenty for a kind
--- that's already cooldown- and cap-throttled.  Net effect in
--- simulation: ~4x fewer classifier calls.
+-- Heuristic gate: names and recent bot activity qualify immediately.
+-- Other chatter uses a cooldown-limited lane so topic discovery remains
+-- possible without classifying every message.
 
 -- | Substrings (lowercased match) that read as someone talking about
 -- or to the bot.
@@ -321,14 +280,9 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
       s <- liftIO (readSession t)
       now <- liftIO getCurrentTime
       throttle <- liftIO (Map.lookup gid <$> readTVarIO st.isThrottle)
-      -- Classify unless the feature is off for the group or even the
-      -- least-throttled kind couldn't fire (hourly cap exhausted) —
-      -- the kind-specific check happens on the verdict below.  The
-      -- cap-block logs: it is rare, temporary, and looks exactly like
-      -- a dead classifier from the outside (a production debugging
-      -- session started from this very silence).  The feature-off and
-      -- chatter-lane drops stay silent — those fire constantly and
-      -- are working as configured.
+      -- Check the group toggle and hourly cap before classification; apply the
+      -- kind-specific cooldown to its verdict. Log cap exhaustion, but not ordinary
+      -- feature-off or chatter-cooldown skips.
       let enabled = fromMaybe True s.proactiveOverride
           capped = not (throttleAllows cfg now KindCalled throttle)
       gated <-

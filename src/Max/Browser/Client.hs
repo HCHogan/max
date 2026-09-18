@@ -156,14 +156,8 @@ navigateUrlWith reg scope proxy url fields =
 --------------------------------------------------------------------------------
 -- view_zhihu
 
--- | One-call Zhihu reader for share cards.  Plain HTTP gets a 403
--- from Zhihu's edge, and even camoufox eats a challenge page on the
--- first visit of a fresh session — but the challenge sets cookies,
--- and reloading the same URL in the same session goes through
--- (verified: question / answer / zhuanlan pages all render).  So:
--- navigate, and when the response smells like the challenge
--- (non-200, or the slogan-only interstitial), wait and renavigate,
--- up to 'zhihuRetries' times.
+-- | Read Zhihu in one browser session. Challenge pages may set cookies;
+-- wait and renavigate on a non-200 or slogan-only response, up to zhihuRetries.
 readZhihuWith :: BrowserRegistry -> BrowserScope -> Maybe Text -> Text -> IO (Either Text Value)
 readZhihuWith reg scope proxy = go zhihuRetries
   where

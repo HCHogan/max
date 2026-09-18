@@ -1,15 +1,5 @@
--- |
--- Downscale oversized images before they go to a vision model.
--- Providers downscale big images server-side anyway (and bill the
--- base64 of whatever we send, at 4/3 the raw size), so shipping a
--- multi-MB original is pure waste.  Anything over
--- 'compressThresholdBytes' gets re-encoded via ffmpeg to JPEG with
--- the long edge capped at 'maxLongEdge' — roughly the resolution
--- vision endpoints normalise to.
---
--- Best-effort by design: any ffmpeg failure (or a "compressed"
--- result that isn't actually smaller) falls back to the original
--- bytes, so callers never lose an image to this step.
+-- | Downscale oversized vision inputs to JPEG with ffmpeg.
+-- Keep the original bytes if conversion fails or does not reduce their size.
 module Max.ImagePrep
   ( prepareImageForLLM,
     compressThresholdBytes,

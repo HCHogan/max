@@ -81,20 +81,9 @@ data PromptInputs = PromptInputs
     -- from the ordinary window so one utterance never appears twice in two
     -- registers — the same reasoning as 'inFlight', a different cause.
     replayCovered :: !(Set Int64),
-    -- | One chronological transcript of the conversation: ambient
-    -- group chatter and the bot's own thread with people, interleaved
-    -- and deduped by message id.
-    --
-    -- One list rather than two, and plain text rather than
-    -- @user@\/@assistant@ turns, because a group has N speakers and
-    -- neither wire format can say so — @user@ conflates everybody, and
-    -- @assistant@ drops who the bot was talking to.  A line that names
-    -- its speaker, its time and its id carries strictly more than the
-    -- roles did, and every model reads it, because it is just text.
-    -- (The Chat Completions @name@ field exists for exactly this and is
-    -- the wrong bet: the Responses API dropped it outright, Anthropic
-    -- never had it, and it has no documented validation, so what an
-    -- OpenAI-compatible provider does with it is anyone's guess.)
+    -- | Chronological transcript, interleaved and deduplicated by message ID.
+    -- Text labels retain speaker, time and ID across providers; user/assistant
+    -- roles alone cannot distinguish the members of a group.
     transcript :: ![HistoryItem],
     -- | Settled chronological history preceding 'transcript'.  Each item
     -- carries all precomputed fidelity levels; ContextPolicy chooses one
@@ -106,16 +95,8 @@ data PromptInputs = PromptInputs
     -- compared on the live bot rather than argued about; see that
     -- field for the trade.
     historyTurns :: !Bool,
-    -- | Message ids in 'transcript' that another dispatch is answering
-    -- right now.  Their replies aren't in the messages table yet, so
-    -- they would render as questions the bot still owes an answer to
-    -- and the model helpfully answers them alongside ours — the group
-    -- then gets the same question answered twice.  Dropped from the
-    -- prompt outright: the model can't double-answer what it can't
-    -- see, and unlike an explanatory annotation, an absent line is
-    -- nothing for the model to mistake for something it should say.
-    -- (That is not hypothetical — the annotation this replaced got
-    -- emitted verbatim as a reply.)
+    -- | Messages currently answered by another dispatch. Exclude them from the
+    -- prompt to avoid duplicate answers before those turns publish their replies.
     inFlight :: !(Set Int64),
     -- | Resolved pin list (preserves the user's pin order).
     pinnedItems :: ![HistoryItem],
