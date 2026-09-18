@@ -28,13 +28,16 @@ import Test.Hspec hiding (context)
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "versioned skill persistence and loading" $ do
-  it "keeps retired learned skills as data without loading them as instructions" $ do
+  it "keeps retired generated skills as data without loading them as instructions" $ do
     registry <- newSkillRegistry
     Right manual <- withDb pool (createSkill registry (new "manual" []))
     Right learned <- withDb pool (createSkill registry (new "retired" []))
     _ <- withDb pool $ execute "UPDATE skills SET name='learned-task-1' WHERE id=?" (Only learned.skillId)
+    Right authored <- withDb pool (createSkill registry (new "published" []))
+    _ <- withDb pool $ execute "UPDATE skills SET evidence='{\"certificate\":{}}'::jsonb WHERE id=?" (Only authored.skillId)
     restarted <- newSkillRegistry
     _ <- withDb pool (loadSkills restarted)
+    lookupSkill restarted (GroupId 7777) "published" `shouldReturn` Nothing
     lookupSkill restarted (GroupId 7777) "learned-task-1" `shouldReturn` Nothing
     retained <- lookupSkill restarted (GroupId 7777) "manual"
     fmap (.skillId) retained `shouldBe` Just manual.skillId

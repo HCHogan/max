@@ -1,3 +1,6 @@
+> Historical design: online skill authoring and publication were removed in
+> the September 19 simplification. These commands and certificates are retired.
+
 # Skill contract continuity and live model acceptance
 
 ## Contract continuity

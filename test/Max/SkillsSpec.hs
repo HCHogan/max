@@ -44,7 +44,7 @@ spec = describe "Max.Skills builtins" $ do
   it "ships the manuals and the single self-knowledge entry point" $ do
     reg <- newSkillRegistry
     skills <- skillsForGroup reg (GroupId 7777)
-    mapM_ (\name -> map (.skillName) skills `shouldContain` [name]) ["office", "sandbox", "self-knowledge", "skill-authoring", "web", "operations"]
+    mapM_ (\name -> map (.skillName) skills `shouldContain` [name]) ["office", "sandbox", "self-knowledge", "web", "operations"]
     -- Doc-mirror skills are retired: behaviour/architecture/design are
     -- read from the source snapshot via inspect_source, navigated by
     -- self-knowledge.

@@ -98,7 +98,7 @@ checkpoint, nested workflow execution or background resumption is added.
 
 ## Model authoring
 
-Load `skill-authoring` to create group-local draft packages, validate against
-fixture tools and publish a checked revision. See [the authoring contract](skill-authoring.md).
+Skills are installed by the operator. Models load them with `use_skill`;
+online draft creation, fixture certification and publication have been removed.
 Admin package editing remains a separate privileged path; model publication cannot
 overwrite an admin-authored or subsequently admin-edited head.

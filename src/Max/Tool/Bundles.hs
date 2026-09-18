@@ -50,7 +50,6 @@ skillDependencies _ = []
 
 toolBundle :: Text -> Maybe Text
 toolBundle name
-  | name `elem` ["skill_save", "skill_validate", "skill_inspect", "skill_publish"] = Just "skill-authoring"
   | name == "inspect_source" = Just "self-knowledge"
   | name `elem` ["web_search", "browser", "view_zhihu", "view_bilibili"] = Just "web"
   | "sandbox_" `T.isPrefixOf` name || name `elem` ["nix_search", "list_recent_files", "import_file_to_sandbox", "send_image_from_sandbox", "send_file_from_sandbox"] = Just "sandbox"

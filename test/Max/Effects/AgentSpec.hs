@@ -250,7 +250,7 @@ spec = describe "Agent full loop" $ do
             ( [echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
                 <> [searchDefinition | toolVisible (toolSkillLoads current) "web_search"]
             )
-            ( skillToolsWithRuntime registry current (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion Map.empty (catalogTools available))
+            ( skillToolsWithRuntime registry current (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion (catalogTools available))
                 <> [searchTool | toolVisible (toolSkillLoads current) "web_search"]
             )
         provider =

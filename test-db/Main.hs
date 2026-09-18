@@ -54,7 +54,6 @@ import Max.PublicationSpec qualified as PublicationSpec
 import Max.RecallSpec qualified as RecallSpec
 import Max.ResourceCapabilitiesSpec qualified as ResourceCapabilitiesSpec
 import Max.SandboxRegistrySpec qualified as SandboxRegistrySpec
-import Max.SkillAuthoringSpec qualified as SkillAuthoringSpec
 import Max.SkillWorkflowSpec qualified as SkillWorkflowSpec
 import Max.WorkflowAgentSpec qualified as WorkflowAgentSpec
 import System.Environment (lookupEnv)
@@ -76,7 +75,6 @@ main = do
         xs -> putStrLn $ "migrations: applied " <> show (length xs) <> " — " <> show xs
       hspec $ do
         WorkflowAgentSpec.spec pool
-        SkillAuthoringSpec.spec pool
         SkillWorkflowSpec.spec pool
         ExecutionSpec.spec pool
         AdminTimelineSpec.spec pool

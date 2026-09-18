@@ -4,7 +4,6 @@ module Max.Skill.Package
     Workflow (..),
     PinnedPackage (..),
     SkillEvidence (..),
-    PublicationContract (..),
     emptyPackage,
     validatePackage,
     validatePackageName,
@@ -53,32 +52,17 @@ data PinnedPackage = PinnedPackage
   }
   deriving stock (Show, Eq)
 
-data SkillEvidence = TrustedSkill | UnvalidatedSkill | ValidatedSkill !PublicationContract
+data SkillEvidence = TrustedSkill | UnvalidatedSkill
   deriving stock (Show, Eq)
-
-data PublicationContract = PublicationContract
-  { pcRuntime :: !Text,
-    pcContent :: !Text,
-    pcDependencies :: !(Map Text Text),
-    pcTools :: !(Map Text Text)
-  }
-  deriving stock (Show, Eq)
-
-instance ToJSON PublicationContract where
-  toJSON p = object ["runtime" .= p.pcRuntime, "content" .= p.pcContent, "dependencies" .= p.pcDependencies, "tools" .= p.pcTools]
-
-instance FromJSON PublicationContract where
-  parseJSON = withObject "publication contract" $ \o -> PublicationContract <$> o .: "runtime" <*> o .: "content" <*> o .: "dependencies" <*> o .: "tools"
 
 instance ToJSON SkillEvidence where
   toJSON TrustedSkill = String "trusted"
   toJSON UnvalidatedSkill = String "requires-validation"
-  toJSON (ValidatedSkill p) = object ["certificate" .= p]
 
 instance FromJSON SkillEvidence where
   parseJSON (String "trusted") = pure TrustedSkill
   parseJSON (String "requires-validation") = pure UnvalidatedSkill
-  parseJSON value = withObject "skill evidence" (\o -> ValidatedSkill <$> o .: "certificate") value
+  parseJSON value = withObject "retired skill certificate" (const (pure UnvalidatedSkill)) value
 
 emptyPackage :: SkillPackage
 emptyPackage = SkillPackage [] Map.empty

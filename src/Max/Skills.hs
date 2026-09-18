@@ -21,7 +21,6 @@ module Max.Skills
     updateSkill,
     updateSkillAtRevision,
     deleteSkill,
-    publishSkillTransaction,
     validateSkill,
   )
 where
@@ -52,7 +51,7 @@ import Database.PostgreSQL.Simple
     (:.) (..),
   )
 import Effectful
-import Effectful.Exception (bracket_, mask_, throwIO, try)
+import Effectful.Exception (bracket_, mask_, try)
 import Effectful.PostgreSQL
   ( WithConnection,
     execute,
@@ -61,10 +60,7 @@ import Effectful.PostgreSQL
   )
 import Max.Command.Help (helpText)
 import Max.Command.Version (buildIdentityLines, readOsPretty)
-import Max.DB.Transaction
-  ( InTransaction,
-    withCommittedTransaction,
-  )
+import Max.DB.Transaction (withCommittedTransaction)
 import Max.Skill.Metadata (validateSkillText)
 import Max.Skill.Package
   ( SkillEvidence (..),
@@ -158,7 +154,7 @@ loadSkills reg@(SkillRegistry t _) = withMutation reg $ do
   rows <-
     query_
       "SELECT id, name, group_id, description, body, enabled, created_by, updated_at, revision, package, evidence \
-      \  FROM skills WHERE name NOT LIKE 'learned-task-%' ORDER BY id"
+      \  FROM skills WHERE name NOT LIKE 'learned-task-%' AND jsonb_typeof(evidence)<>'object' ORDER BY id"
   skills <- traverse skillFromRow rows
   liftIO . atomically $ do
     m <- readTVar t
@@ -307,27 +303,6 @@ publish t = \case
   Right (Right skill) -> do
     liftIO . atomically $ modifyTVar' t (Map.insert skill.skillId skill)
     pure (Right skill)
-
--- | Trusted publication adapter: serialize the standalone SQL commit and cache
--- update together. The supplied operation must return the exact committed row.
--- Public tool effects never receive this callback or the registry capability.
-publishSkillTransaction :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Eff (InTransaction : es) (Either Text Int64) -> Eff es (Either Text Skill)
-publishSkillTransaction reg@(SkillRegistry cache _) action = withMutation reg $ do
-  result <- try @SqlError . withCommittedTransaction $ do
-    changed <- action
-    case changed of
-      Left err -> pure (Left err)
-      Right sid -> do
-        rows <- query "SELECT id,name,group_id,description,body,enabled,created_by,updated_at,revision,package,evidence FROM skills WHERE id=?" (Only sid)
-        case rows of
-          [row] -> Right <$> skillFromRow row
-          _ -> liftIO (ioError (userError "published skill row is missing"))
-  case result of
-    -- A lost COMMIT acknowledgement must stay an exception so the tool kernel
-    -- records outcome-unknown. Only a definite uniqueness rollback is a normal
-    -- before-effect rejection.
-    Left failure | sqlState failure /= "23505" -> throwIO failure
-    _ -> publish cache result
 
 -- Serialize DB commits and cache publication; cancellation cannot land in the
 -- commit-to-cache gap. SQL still uses CAS across independent registry instances.

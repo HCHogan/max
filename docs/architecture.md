@@ -633,8 +633,8 @@ inventory used to build the live catalog.
 `Max.Schema` parses tool schemas and workflow `Contract`s into a shared typed
 validation tree, retaining the original JSON for provider requests and hashes.
 The workflow dialect remains stricter. `Max.Tool.Arguments` combines an
-applicative argument parser with schema generation; skills, search, pins and
-skill-authoring tools use it so their fields have one definition. Other legacy
+applicative argument parser with schema generation; skill loading, search and
+pins use it so their fields have one definition. Other legacy
 tool schemas are parsed and checked at catalog construction.
 
 `OutcomeRunner` reports `ToolOutcome` directly, and hoisting preserves it.

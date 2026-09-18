@@ -1,3 +1,6 @@
+> Historical design: online skill authoring and publication were removed in
+> the September 19 simplification. These commands and certificates are retired.
+
 # Model-authored skill publication (ADR 014, second batch)
 
 Status: implemented locally, 2026-09-10. Deployment remains separate.

@@ -164,7 +164,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
         raw = SkillLoad "saved" "" "saved instructions" Nothing (Just (PinnedPackage 1 package Map.empty Nothing TrustedSkill))
         writeDefinition = echoDefinition {tdEffects = Set.singleton (EffectWrite "test"), tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
     effectRegistry <- either (fail . show) pure (buildToolRegistry [writeDefinition] [echoTool])
-    [pinned] <- either (fail . show) pure (bindWorkflowContracts javaScriptRuntimeVersion Map.empty (views effectRegistry) [raw])
+    [pinned] <- either (fail . show) pure (bindWorkflowContracts javaScriptRuntimeVersion (views effectRegistry) [raw])
     let loader = echoTool {toolName = "use_skill", toolRunner = LegacyRunner $ \value -> activateSkills [pinned] >> pure (Right value)}
         definition = echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [loader])

@@ -89,7 +89,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 
 - [x] Delete task-experience generation, replay, publication and maintenance
       commands. Retain old rows as data without loading learned instructions.
-- [ ] Delete the online skill factory and certificates; retain static lazy skills.
+- [x] Delete the online skill factory and certificates; retain static lazy skills.
 - [ ] Keep useful raw code mode on the shared tool boundary, without durable
       workflow state or a second authorization/execution path.
 - [x] Delete model-driven memory dreaming; retain deterministic processing of
@@ -181,3 +181,8 @@ maintained implementation record.
   integration examples pass. Expiry coverage retains future dates, checks
   version/citation changes, rejects permanent-memory expiry and applies due
   records once. No model calls or persistent execution leases are involved.
+- Online skill-factory removal: all Cabal targets build; 1,095 unit and 388 DB
+  integration examples pass. Retired generated instructions stay in storage and
+  are excluded from loading; static skill workflows still use current tool
+  contracts and the shared executor. Architecture checks, HLint, Cabal package
+  checks and Nix syntax validation pass.

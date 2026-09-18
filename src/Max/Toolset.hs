@@ -4,7 +4,6 @@ module Max.Toolset
   ( allToolsFor,
     toolCountFor,
     toolDefinitionsFor,
-    skillToolDefinitions,
     toolAllowedByEffectCeiling,
     defaultToolDeadline,
   )
@@ -67,10 +66,7 @@ import Max.Platform.Types (noAdvertisedCaps)
 import Max.Sandbox.Runtime (networkForGroup)
 import Max.Sandbox.ToolRuntime (sandboxToolsWithRuntime)
 import Max.Search.Runtime (searchToolsWithRuntime)
-import Max.Skill.ToolRuntime
-  ( skillAuthoringToolsWithDatabase,
-    skillToolsWithRuntime,
-  )
+import Max.Skill.ToolRuntime (skillToolsWithRuntime)
 import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Task.ToolRuntime (taskToolsWithDatabase)
 import Max.Tool.Bundles (toolBundle, toolVisible)
@@ -174,12 +170,9 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
                 )
             )
         )
-    authoringCatalog = do
-      registry <- either (Left . T.pack . show) Right (allToolsFor runtime env dc :: Either ToolCatalogError (ToolRegistry es))
-      Right (catalogTools (registryCatalog registry))
     bindPackages loads = do
       registry <- either (Left . T.pack . show) Right (allToolsFor runtime env (withToolSkillLoads loads dc) :: Either ToolCatalogError (ToolRegistry es))
-      bindWorkflowContracts javaScriptRuntimeVersion (toolSkillLoads dc) (catalogTools (registryCatalog registry)) loads
+      bindWorkflowContracts javaScriptRuntimeVersion (catalogTools (registryCatalog registry)) loads
     runners0 =
       builtinsWithDatabase dispatchEnv.beTimeZone dc
         <> reminderToolsWithDatabase dispatchEnv.beTimeZone dc
@@ -190,7 +183,6 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
         <> pinToolsWithDatabase dispatchEnv.beSessions dispatchEnv.beDefaultModel dc
         <> taskToolsWithDatabase dc
         <> skillToolsWithRuntime dispatchEnv.beSkills dc prepareSkill bindPackages
-        <> skillAuthoringToolsWithDatabase dispatchEnv.beSkills dc authoringCatalog
         <> bilibiliToolsFor dispatchEnv.beTimeZone dc
         <> sandboxToolsWithRuntime dispatchEnv.beTimeZone (toolGroupId dc) dispatchEnv.beSandboxes
         <> fileToolsWithDatabase dispatchEnv.beTimeZone dc dispatchEnv.beSandboxes
@@ -262,11 +254,6 @@ data ToolInventoryItem = ToolInventoryItem
     tiDefinition :: !ToolDefinition
   }
 
--- | Metadata only, shared by isolated skill acceptance and the serving catalog.
--- Runners and the current caller's authorization remain separate.
-skillToolDefinitions :: [ToolDefinition]
-skillToolDefinitions = [item.tiDefinition | item <- toolInventory, item.tiDefinition.tdRef.unToolRef `elem` ["use_skill", "skill_save", "skill_inspect", "skill_validate", "skill_publish"]]
-
 toolInventory :: [ToolInventoryItem]
 toolInventory =
   [ always (readTool "inspect_source" ["self.source"] [ProcessResource "self-source"]),
@@ -299,10 +286,6 @@ toolInventory =
     always (writeTool "pin_message" ["session.db"] [CurrentConversation]),
     always (writeTool "unpin_message" ["session.db"] [CurrentConversation]),
     gated SkillsOnly (reflectTool "use_skill"),
-    gated SkillsOnly (legacyFailureFingerprint (writeTool "skill_save" ["skill.drafts"] [CurrentConversation])),
-    gated SkillsOnly (readTool "skill_inspect" ["skill.drafts", "skill.publications"] [CurrentConversation]),
-    gated SkillsOnly (withDeadline 120 (legacyFailureFingerprint (writeTool "skill_validate" ["skill.validations"] [CurrentConversation]))),
-    gated SkillsOnly (legacyFailureFingerprint (writeTool "skill_publish" ["skill.publications"] [CurrentConversation])),
     always (writeTool "task_start" ["task.db"] [CurrentConversation]),
     always (readTool "task_list" ["task.db"] [CurrentConversation]),
     always (readTool "task_status" ["task.db"] [CurrentConversation]),
