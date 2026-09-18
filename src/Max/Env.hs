@@ -11,6 +11,7 @@ import Data.Text (Text)
 import Data.Time (TimeZone, UTCTime)
 import Max.Browser.Registry (BrowserRegistry)
 import Max.CliProxy (CliProxyConfig)
+import Max.Embedding.Maintenance (EmbeddingLock)
 import Max.EpisodeScheduler (EpisodeScheduler)
 import Max.Intent.Types (IntentConfig)
 import Max.Sandbox.Registry (SandboxRegistry)
@@ -81,5 +82,6 @@ data BotEnv = BotEnv
     beIntent :: !(Maybe IntentConfig),
     -- | Capability flag used only for product gating/status.  Embedding calls
     -- themselves go through 'Max.Effects.Embedding'.
-    beEmbeddingEnabled :: !Bool
+    beEmbeddingEnabled :: !Bool,
+    beEmbeddingLock :: !EmbeddingLock
   }

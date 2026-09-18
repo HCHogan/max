@@ -7,7 +7,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
-import Helpers (insertRawMessage, testTime, truncateAll, withDb, withDbConcurrent)
+import Helpers (insertRawMessage, testTime, truncateAll, withDb)
 import Max.Context (ContextDecision (..), ContextTrace (..), contextBudget)
 import Max.ContextAdmin
 import Max.ContextTraceStore (ContextPlanTraceRow (..), listContextPlanTraces, recordContextPlanTrace)
@@ -15,6 +15,7 @@ import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
 import Max.DB.History (MessageCursor (..))
+import Max.Embedding.Maintenance (newEmbeddingLock, tryWithEmbeddingLock)
 import Max.MemoryStore
 import Max.ModelCatalog (defaultContextLimits)
 import OneBot.Types (GroupId (..))
@@ -81,7 +82,10 @@ spec pool = before_ (truncateAll pool) $ describe "Max.ContextAdmin" $ do
           \ embedding_updated_at = now()"
           ()
       pure ()
-    invalidated <- withDbConcurrent pool $ invalidateEmbeddingsAdmin groupId ["message"]
+    lock <- newEmbeddingLock
+    busy <- withDb pool $ tryWithEmbeddingLock lock (invalidateEmbeddingsAdmin lock groupId ["message"])
+    busy `shouldSatisfy` \case Just (Left _) -> True; _ -> False
+    invalidated <- withDb pool $ invalidateEmbeddingsAdmin lock groupId ["message"]
     invalidated `shouldSatisfy` \case Right _ -> True; Left _ -> False
     rows <-
       withDb pool $

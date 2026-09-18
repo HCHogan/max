@@ -7,35 +7,28 @@ module Max.Embedder
 where
 
 import Control.Concurrent (threadDelay)
-import Control.Monad (forever, unless)
+import Control.Monad (forever)
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Query)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful
-import Effectful.Concurrent (Concurrent)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.History (notForwardChild)
 import Max.Effects.Embedding (Embedding, EmbeddingSpace (..), embedBatch, embeddingSpace, renderEmbeddingFault)
 import Max.Embedding (EmbeddingRecord (..))
-import Max.MaintenanceLease
-  ( MaintenanceDomain (EmbeddingMaintenance),
-    MaintenanceLease (..),
-    MaintenanceRun (..),
-    maintenanceDomainText,
-    withMaintenanceLease,
-  )
+import Max.Embedding.Maintenance (EmbeddingLock, tryWithEmbeddingLock)
 import Max.MemoryStore
   ( PendingMemoryEmbedding (..),
     listPendingMemoryEmbeddings,
-    markPendingMemoryEmbeddedFenced,
+    markPendingMemoryEmbedded,
   )
 import Max.Util (catchSync)
 
--- | Batch size per tick; embedding APIs are happy with this, and it
--- bounds request size for long messages.
+-- | Maximum rows per corpus in one batch.
 batchSize :: Int
 batchSize = 64
 
@@ -53,25 +46,22 @@ errorMicros = 60_000_000
 
 embedWorker ::
   forall es.
-  (Embedding :> es, Concurrent :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  Text ->
+  (Embedding :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  EmbeddingLock ->
   Eff es ()
-embedWorker owner = forever $ do
-  runLeasedTick `catchSync` \e -> do
-    logAttention "embed: tick crashed" $ object ["error" .= T.pack (show e)]
-    liftIO (threadDelay errorMicros)
+embedWorker lock = forever $ do
+  delay <-
+    runTick `catchSync` \e -> do
+      logAttention "embed: tick crashed" $ object ["error" .= T.pack (show e)]
+      pure errorMicros
+  liftIO (threadDelay delay)
   where
-    runLeasedTick =
+    runTick =
       embeddingSpace >>= \case
         Nothing -> do
           logAttention "embed: effect has no configured space" (object [])
-          liftIO (threadDelay errorMicros)
-        Just space ->
-          withMaintenanceLease EmbeddingMaintenance owner embeddingLeaseSeconds (tick space) >>= \case
-            MaintenanceUnavailable -> liftIO (threadDelay idleMicros)
-            MaintenanceCompleted () -> pure ()
-            MaintenanceLeaseLost ->
-              logAttention "embed: maintenance lease lost; cancelled tick" (object [])
+          pure errorMicros
+        Just space -> fromMaybe idleMicros <$> tryWithEmbeddingLock lock (tick space)
 
     -- The metadata consistency constraint makes an absent embedding imply an
     -- absent model. The model-mismatch predicate covers both without an OR that
@@ -109,7 +99,7 @@ embedWorker owner = forever $ do
                 )
                 [modelId]
 
-    tick space lease = do
+    tick space = do
       -- Recent-first so fresh messages become searchable immediately
       -- while the historical backfill trickles along behind.
       let modelId = space.esModelId
@@ -135,45 +125,35 @@ embedWorker owner = forever $ do
         && null mems
         && null (episodes :: [(Int64, Text)])
         && null (stickers :: [(Text, Text)])
-        then liftIO (threadDelay idleMicros)
+        then pure idleMicros
         else do
           okM <-
             embedInto
               "UPDATE messages SET embedding = ?::vector, embedding_model = ?, \
               \ embedding_dimensions = ?, embedding_content_hash = ?, embedding_updated_at = now() \
-              \ WHERE message_id = ? AND rendered_text = ? \
-              \   AND EXISTS (SELECT 1 FROM maintenance_leases ml \
-              \     WHERE ml.domain = ? AND ml.owner = ? AND ml.fencing_token = ? AND ml.expires_at > now())"
-              lease
+              \ WHERE message_id = ? AND rendered_text = ?"
               msgs
-          okR <- embedMemories lease mems
+          okR <- embedMemories mems
           okE <-
             embedInto
               "UPDATE conversation_compartments SET embedding = ?::vector, embedding_model = ?, \
               \ embedding_dimensions = ?, embedding_content_hash = ?, embedding_updated_at = now() \
-              \ WHERE id = ? AND summary_p1 = ? AND state = 'active' \
-              \   AND EXISTS (SELECT 1 FROM maintenance_leases ml \
-              \     WHERE ml.domain = ? AND ml.owner = ? AND ml.fencing_token = ? AND ml.expires_at > now())"
-              lease
+              \ WHERE id = ? AND summary_p1 = ? AND state = 'active'"
               episodes
           okS <-
             embedInto
               "UPDATE stickers SET embedding = ?::vector, embedding_model = ?, \
               \ embedding_dimensions = ?, embedding_content_hash = ?, embedding_updated_at = now() \
-              \ WHERE sha256 = ? AND description = ? \
-              \   AND EXISTS (SELECT 1 FROM maintenance_leases ml \
-              \     WHERE ml.domain = ? AND ml.owner = ? AND ml.fencing_token = ? AND ml.expires_at > now())"
-              lease
+              \ WHERE sha256 = ? AND description = ?"
               stickers
-          unless (okM && okR && okE && okS) $ liftIO (threadDelay errorMicros)
-          liftIO (threadDelay busyMicros)
+          pure (if okM && okR && okE && okS then busyMicros else errorMicros)
 
     -- Embed one batch and write vectors back; False on API failure
     -- (rows stay NULL for retry).  Polymorphic in the key column
     -- (messages/memories use bigint ids, stickers their sha256 text).
-    embedInto :: (ToField i) => Query -> MaintenanceLease -> [(i, Text)] -> Eff es Bool
-    embedInto _ _ [] = pure True
-    embedInto sql lease rows = do
+    embedInto :: (ToField i) => Query -> [(i, Text)] -> Eff es Bool
+    embedInto _ [] = pure True
+    embedInto sql rows = do
       let (ids, texts) = unzip (take batchSize rows)
       eres <- embedBatch (map (T.take 2000) texts)
       case eres of
@@ -192,10 +172,7 @@ embedWorker owner = forever $ do
                       record.erDimensions,
                       record.erContentHash,
                       i,
-                      source,
-                      maintenanceDomainText lease.mlDomain,
-                      lease.mlOwner,
-                      lease.mlFencingToken
+                      source
                     )
               )
               (zip3 ids texts records)
@@ -204,9 +181,9 @@ embedWorker owner = forever $ do
             object ["rows" .= length ids, "stored" .= stored, "stale" .= (fromIntegral (length ids) - stored)]
           pure True
 
-    embedMemories :: MaintenanceLease -> [PendingMemoryEmbedding] -> Eff es Bool
-    embedMemories _ [] = pure True
-    embedMemories lease pending = do
+    embedMemories :: [PendingMemoryEmbedding] -> Eff es Bool
+    embedMemories [] = pure True
+    embedMemories pending = do
       let rows = take batchSize pending
           texts = map (.pendingMemoryContent) rows
       eres <- embedBatch (map (T.take 2000) texts)
@@ -216,11 +193,8 @@ embedWorker owner = forever $ do
             object ["error" .= renderEmbeddingFault fault, "rows" .= length rows]
           pure False
         Right records -> do
-          written <- traverse (uncurry (markPendingMemoryEmbeddedFenced lease)) (zip rows records)
+          written <- traverse (uncurry markPendingMemoryEmbedded) (zip rows records)
           let stored = length (filter id written)
           logInfo "embed: memory batch done" $
             object ["rows" .= length rows, "stored" .= stored, "stale" .= (length rows - stored)]
           pure True
-
-embeddingLeaseSeconds :: Int
-embeddingLeaseSeconds = 300

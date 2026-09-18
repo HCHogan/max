@@ -24,11 +24,12 @@ import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
-import Effectful.Concurrent (Concurrent)
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ContextTraceStore (ContextPlanTraceRow (..), listContextPlanTraces)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (notForwardChild)
+import Max.DB.Transaction (withTransaction)
+import Max.Embedding.Maintenance (EmbeddingLock, tryWithEmbeddingLock)
 import Max.EpisodeStore
   ( ActiveCompartment (..),
     CaptureReason (CaptureRebuild),
@@ -39,12 +40,6 @@ import Max.EpisodeStore
     listActiveCompartments,
   )
 import Max.Historian (historianPromptVersion, historianSchemaVersion)
-import Max.MaintenanceLease
-  ( MaintenanceDomain (EmbeddingMaintenance),
-    MaintenanceRun (..),
-    withMaintenanceFence,
-    withMaintenanceLease,
-  )
 import Max.MemoryStore (MemoryId (..), invalidateMemoryEmbeddingsInConversation)
 import OneBot.Types (GroupId (..))
 
@@ -177,11 +172,6 @@ loadContextStatus selectedConversation = do
       \ WHERE (?::bigint IS NULL OR conversations.conversation_id = ?) \
       \ ORDER BY conversations.conversation_id"
       (selectedConversation, selectedConversation)
-  leases <-
-    query
-      "SELECT domain, owner, fencing_token, acquired_at, heartbeat_at, expires_at, expires_at > now() \
-      \ FROM maintenance_leases ORDER BY domain"
-      ()
   captureLeases <-
     query
       "SELECT lease_owner, count(*), min(lease_expires_at), max(lease_expires_at) \
@@ -211,18 +201,6 @@ loadContextStatus selectedConversation = do
               "with_issues" .= unhealthy
             ],
         "conversations" .= statuses,
-        "maintenance_leases"
-          .= [ object
-                 [ "domain" .= domain,
-                   "owner" .= owner,
-                   "fencing_token" .= token,
-                   "acquired_at" .= acquired,
-                   "heartbeat_at" .= heartbeat,
-                   "expires_at" .= expires,
-                   "active" .= activeLease
-                 ]
-             | (domain, owner, token, acquired, heartbeat, expires, activeLease) <- leases :: [(Text, Text, Int64, UTCTime, UTCTime, UTCTime, Bool)]
-             ],
         "capture_workers"
           .= [ object
                  [ "owner" .= owner,
@@ -769,26 +747,16 @@ enqueueContextRebuildAdmin conversationId selectedCompartment profile operationK
       selected
 
 invalidateEmbeddingsAdmin ::
-  (Concurrent :> es, WithConnection :> es, IOE :> es) =>
+  (WithConnection :> es, IOE :> es) =>
+  EmbeddingLock ->
   Int64 ->
   [Text] ->
   Eff es (Either Text Value)
-invalidateEmbeddingsAdmin conversationId requestedCorpora =
-  withMaintenanceLease
-    EmbeddingMaintenance
-    ("admin-reindex:" <> T.pack (show conversationId))
-    60
-    invalidate
-    >>= \case
-      MaintenanceUnavailable -> pure (Left "embedding maintenance is busy; retry after the current worker batch")
-      MaintenanceLeaseLost -> pure (Left "embedding maintenance lease was lost; the transaction was cancelled")
-      MaintenanceCompleted result -> pure result
+invalidateEmbeddingsAdmin lock conversationId requestedCorpora =
+  tryWithEmbeddingLock lock (withTransaction invalidateHeld) >>= \case
+    Nothing -> pure (Left "embedding maintenance is busy; retry after the current worker batch")
+    Just result -> pure result
   where
-    invalidate lease =
-      withMaintenanceFence lease invalidateHeld >>= \case
-        Nothing -> pure (Left "embedding maintenance lease expired before invalidation began")
-        Just result -> pure result
-
     invalidateHeld = do
       let corpora = if null requestedCorpora then ["memory"] else requestedCorpora
           invalid = filter (`notElem` ["message", "memory", "episode"]) corpora

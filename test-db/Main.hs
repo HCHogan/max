@@ -42,7 +42,6 @@ import Max.DB.TransactionSpec qualified as TransactionSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
 import Max.ExecutionSpec qualified as ExecutionSpec
 import Max.HistorianSpec qualified as HistorianSpec
-import Max.MaintenanceLeaseSpec qualified as MaintenanceLeaseSpec
 import Max.MemoryCapabilitiesSpec qualified as MemoryCapabilitiesSpec
 import Max.MemoryExpirySpec qualified as MemoryExpirySpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
@@ -78,7 +77,6 @@ main = do
         SkillWorkflowSpec.spec pool
         ExecutionSpec.spec pool
         AdminTimelineSpec.spec pool
-        MaintenanceLeaseSpec.spec pool
         SessionSpec.spec pool
         TransactionSpec.spec pool
         AgentTurnSpec.spec pool

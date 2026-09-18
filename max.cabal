@@ -292,7 +292,7 @@ library
         Max.Log
         Max.LogBuffer
         Max.MediaCaption
-        Max.MaintenanceLease
+        Max.Embedding.Maintenance
         Max.Matrix
         Max.MessageKind
         Max.Memory.Expiry
@@ -800,7 +800,6 @@ test-suite max-test-db
         Max.MemoryCapabilitiesSpec
         Max.MemoryExpirySpec
         Max.WorkflowAgentSpec
-        Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec
         Max.DB.TaskSpec
         Max.DB.FrontendInputSpec

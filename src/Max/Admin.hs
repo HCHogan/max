@@ -37,7 +37,6 @@ import Data.Text.Read qualified as TR
 import Data.Time (diffUTCTime, getCurrentTime, timeZoneMinutes)
 import Data.Version (showVersion)
 import Effectful
-import Effectful.Concurrent (Concurrent)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.AdminTimeline (loadAdminTimeline, waitAdminTimeline)
@@ -247,7 +246,7 @@ needsAuth = \case
 
 -- | App-lived worker: serve the admin API until the process dies.
 adminServer ::
-  (Embedding :> es, Http :> es, Blob :> es, Concurrent :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Embedding :> es, Http :> es, Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   AdminConfig ->
   BotEnv ->
   -- | Configured LLM profile names, for validating a model PATCH.
@@ -345,7 +344,7 @@ staticResponse segs = case lookup key staticAssets of
 -- Handlers.
 
 handle ::
-  (Embedding :> es, Http :> es, Blob :> es, Concurrent :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Embedding :> es, Http :> es, Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   BotEnv ->
   [Text] ->
   LogBuffer ->
@@ -672,7 +671,7 @@ handle env profiles logBuf r params body = case r of
         | any (`notElem` ["message", "memory", "episode"]) request.pciCorpora ->
             pure (bad "corpora must contain only message, memory, or episode")
         | otherwise ->
-            invalidateEmbeddingsAdmin request.pciConversationId request.pciCorpora >>= \case
+            invalidateEmbeddingsAdmin env.beEmbeddingLock request.pciConversationId request.pciCorpora >>= \case
               Left err -> pure (jsonResponse status409 (object ["error" .= err]))
               Right result -> pure (ok result)
   -- Answered by 'staticResponse' before the effectful handler is

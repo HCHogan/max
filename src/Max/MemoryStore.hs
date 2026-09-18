@@ -54,7 +54,6 @@ module Max.MemoryStore
     markMemoryEmbedded,
     listPendingMemoryEmbeddings,
     markPendingMemoryEmbedded,
-    markPendingMemoryEmbeddedFenced,
     findExactMemory,
     findNearestMemory,
     searchVisibleMemories,
@@ -82,7 +81,6 @@ import Max.ConversationScope
 import Max.DB.ConversationLock (lockConversation)
 import Max.DB.Transaction (withTransaction)
 import Max.Embedding (EmbeddingRecord (..))
-import Max.MaintenanceLease (MaintenanceLease (..), maintenanceDomainText)
 import Max.Memory.Policy (DuplicatePolicy (..), MemoryAdmissionFailure (..), maxMemoriesPerScope)
 import Max.Memory.Types
 
@@ -716,30 +714,6 @@ markPendingMemoryEmbedded pending record =
     [ PG.toField pending.pendingMemoryId,
       PG.toField pending.pendingMemoryVersion,
       PG.toField pending.pendingMemoryContent
-    ]
-    record
-
--- | Embedding-worker variant whose projection write is fenced by the durable
--- maintenance lease in the same SQL statement.  A cancelled old worker cannot
--- repopulate vectors after an administrator acquired the successor token and
--- invalidated them.
-markPendingMemoryEmbeddedFenced ::
-  (WithConnection :> es, IOE :> es) =>
-  MaintenanceLease ->
-  PendingMemoryEmbedding ->
-  EmbeddingRecord ->
-  Eff es Bool
-markPendingMemoryEmbeddedFenced lease pending record =
-  markEmbeddingWhere
-    "id = ? AND version = ? AND content = ? AND lifecycle IN ('active', 'permanent') \
-    \ AND EXISTS (SELECT 1 FROM maintenance_leases ml \
-    \   WHERE ml.domain = ? AND ml.owner = ? AND ml.fencing_token = ? AND ml.expires_at > now())"
-    [ PG.toField pending.pendingMemoryId,
-      PG.toField pending.pendingMemoryVersion,
-      PG.toField pending.pendingMemoryContent,
-      PG.toField (maintenanceDomainText lease.mlDomain),
-      PG.toField lease.mlOwner,
-      PG.toField lease.mlFencingToken
     ]
     record
 

@@ -292,6 +292,20 @@ spec pool = do
       (rows :: [(Bool, Bool, Bool, Bool, Bool)])
         `shouldBe` [(True, True, True, True, True)]
 
+    it "rejects a pending vector after source revision or lifecycle changes" $ do
+      item <- withDb pool $ createMemory extractor nsA (activeDraft evidenceA "old content")
+      let captured = PendingMemoryEmbedding item.memId item.memVersion item.memContent
+      withDb pool (markPendingMemoryEmbedded captured threeDimensionalEmbedding) `shouldReturn` True
+      applied <- withDb pool $ updateMemory extractor nsA item.memId (ExpectedVersion item.memVersion) (MemoryUpdate "new content" (RangeEvidence scopeA 20 30))
+      current <- case applied of
+        MemoryMutationApplied value -> pure value
+        MemoryMutationRejected -> fail "memory update rejected"
+      withDb pool (markPendingMemoryEmbedded captured threeDimensionalEmbedding) `shouldReturn` False
+      let updated = PendingMemoryEmbedding current.memId current.memVersion current.memContent
+      withDb pool (markPendingMemoryEmbedded updated threeDimensionalEmbedding) `shouldReturn` True
+      _ <- withDb pool $ archiveMemory extractor nsA current.memId (ExpectedVersion current.memVersion)
+      withDb pool (markPendingMemoryEmbedded updated threeDimensionalEmbedding) `shouldReturn` False
+
     it "queues model changes and isolates mixed dimensions" $ do
       first <- withDb pool $ createMemory extractor nsA (activeDraft evidenceA "three dimensions")
       second <- withDb pool $ createMemory extractor nsA (activeDraft evidenceA "two dimensions")

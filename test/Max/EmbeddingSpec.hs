@@ -1,7 +1,9 @@
 module Max.EmbeddingSpec (spec) where
 
+import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
+import Control.Concurrent.Async (cancel, withAsync)
 import Data.Aeson (Value, decode, object, (.=))
-import Effectful (runEff)
+import Effectful (liftIO, runEff)
 import Effectful.Reader.Dynamic (ask, local, runReader)
 import Max.Effects.Embedding (EmbeddingSpace (..), embeddingSpace, runRuntimeEmbedding)
 import Max.Embedding
@@ -12,6 +14,7 @@ import Max.Embedding
     makeEmbeddingRecord,
     newEmbedClient,
   )
+import Max.Embedding.Maintenance (newEmbeddingLock, tryWithEmbeddingLock)
 import Max.HttpRuntime (newHttpRuntime)
 import Network.HTTP.Client (Request (..), RequestBody (..))
 import Test.Hspec
@@ -65,6 +68,15 @@ spec = describe "embeddingRequest" $ do
       restored <- embeddingSpace
       pure (initial, disabled, restored)
     spaces `shouldBe` (Just (EmbeddingSpace "test-model"), Nothing, Just (EmbeddingSpace "test-model"))
+  it "releases the maintenance lock on cancellation and rejects overlapping work" $ do
+    lock <- newEmbeddingLock
+    entered <- newEmptyMVar
+    blocked <- newEmptyMVar @()
+    withAsync (runEff $ tryWithEmbeddingLock lock (liftIO (putMVar entered () >> takeMVar blocked))) $ \worker -> do
+      takeMVar entered
+      runEff (tryWithEmbeddingLock lock (pure ("overlap" :: String))) `shouldReturn` Nothing
+      cancel worker
+    runEff (tryWithEmbeddingLock lock (pure ("next" :: String))) `shouldReturn` Just "next"
   where
     config =
       EmbeddingConfig

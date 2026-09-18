@@ -80,8 +80,10 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [ ] Replace durable dispatch/outbox execution with bounded local queues.
 - [ ] Keep platform receipts, reference mappings, current-run deduplication and
       conservative handling of uncertain sends.
-- [ ] Replace media/embedding/Historian maintenance leases with local scheduling
-      and missing-data scans; preserve short transactional publication.
+- [x] Replace embedding maintenance leases with a process-local lock and
+      missing-data scans; keep source/version-conditional writes.
+- [ ] Replace media/Historian maintenance leases with local scheduling and
+      missing-data scans; preserve short transactional publication.
 - [x] Delete notification LLM review pipelines and operational debt review.
 - [ ] Separate connection retries, individual task failures and fatal core errors.
 
@@ -219,3 +221,13 @@ maintained implementation record.
   acceptance, not a measurement of live QQ latency.
   Regression: 1,060 unit examples and 373 PostgreSQL integration examples pass;
   the bounded-stream cases also verify socket closure and no automatic retry.
+
+- Embedding maintenance: removed persistent leases, heartbeat/fencing queries
+  and their admin status view. One cancellation-safe process lock coordinates
+  batches and explicit reindexing; sleeps do not hold it. Missing-data scans,
+  scoped invalidation and source/version checks remain. All Cabal targets build;
+  1,061 unit and 370 DB examples pass, including cancellation, overlapping
+  reindex, stale content and archived-memory writes. Capability checks and HLint
+  pass. Historical lease tables remain unused rather than deleting old data.
+- Intermediate src + app count is now 49,258 effective Haskell lines, 3,369
+  below baseline. The core manifest and sub-10,000 target are still outstanding.

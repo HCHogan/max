@@ -45,6 +45,7 @@ import Max.Effects.PlatformAccount (PlatformAccount)
 import Max.Effects.PlatformQuery (PlatformQuery)
 import Max.Embedder (embedWorker)
 import Max.Embedding (newEmbedClient)
+import Max.Embedding.Maintenance (newEmbeddingLock)
 import Max.Env (BotEnv (..))
 import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
@@ -125,6 +126,7 @@ main = do
           adminTargets <- newTVarIO (mempty :: Map.Map Int64 Int64)
           episodeScheduler <- newEpisodeScheduler
           intentState <- newIntentState
+          embeddingLock <- newEmbeddingLock
           startedAt <- getCurrentTime
           let qqEdge = qqBackend clientRef
               foreignEdges =
@@ -160,7 +162,8 @@ main = do
                     beMemoryExtract = cfg.memoryExtractProfile,
                     beEpisodeScheduler = Just episodeScheduler,
                     beIntent = cfg.intent,
-                    beEmbeddingEnabled = isJust cfg.embedding
+                    beEmbeddingEnabled = isJust cfg.embedding,
+                    beEmbeddingLock = embeddingLock
                   }
           runEff
             . runConcurrent
@@ -320,7 +323,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
         optionalWorkers =
           [ worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown)
           ]
-            <> [ worker "embeddings" RestartableWorker (embedWorker (ownerFor "embedding"))
+            <> [ worker "embeddings" RestartableWorker (embedWorker env.beEmbeddingLock)
                | env.beEmbeddingEnabled
                ]
             <> [ worker

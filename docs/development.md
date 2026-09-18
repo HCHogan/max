@@ -131,10 +131,9 @@ Pure logic in `test/` mirroring the library layout:
   rejection at the prompt cache-bust boundary
 - `Max.EpisodeStoreSpec` — strict capture schema, evidence validation,
   source-hash/CAS rollback, leases, rebuild/backfill, and proposal isolation
-- `Max.MemoryExtractSpec` — nightly-maintenance op JSON plus quiet-scheduler
-  retry/race behavior
-- `Max.MaintenanceLeaseSpec` (DB) — same-domain serialization, independent
-  maintenance domains, expiry takeover, and fencing against stale owners
+- `Max.EpisodeSchedulerSpec` — quiet-period scheduling, retry and input races
+- `Max.EmbeddingSpec` and `Max.ContextAdminSpec` — process-local maintenance
+  exclusion, cancellation cleanup and conversation-scoped reindexing.
 - `Max.PlatformSpec` — platform-id mapping
 - `Max.Platform.DeliverySpec` — canonical inline/blob/base64 media resolution
   and bounded delivery projection
@@ -200,10 +199,7 @@ gap annotations for partial backfill, and exercise the all-conversation
 compartment-to-raw-tail reader end to end. EpisodeStore cases additionally
 page opaque `context_expand` handles over the exact raw range, deny the same
 handle from another conversation, and verify that a superseded projection's
-handle remains expandable. `Max.ContextMaterializationMigrationSpec` runs 043
-over a pre-existing development revision, checking that current-state naming
-and UUID handles backfill without mutating the append-only revision ledger.
-`Max.RecallSpec` builds memory, episode, raw, pin, and caption candidates in a
+handle remains expandable. `Max.RecallSpec` builds memory, episode, raw, pin, and caption candidates in a
 real conversation, checks lexical and compatible-pgvector fusion, exercises
 provenance/message dedup and source quotas, and probes the same queries from a
 foreign conversation. The pure Recall spec separately fixes quota, overflow,
@@ -268,7 +264,7 @@ Prompt traces retain only budget decisions and source names, never a second
 copy of the prompt body, and are capped at 200 per conversation. Rebuild is
 staged and CAS-published; repeated clicks cannot enqueue two open replacements
 for the same compartment. Reindex is a recoverable derived-data operation and
-returns `409` while the embedding worker owns its maintenance lease.
+returns `409` while the embedding worker is processing a batch.
 
 ### Platform release gate
 
