@@ -298,14 +298,7 @@ toolInventory =
     -- ToolOutput interpreters and still run concurrently.
     always (statefulReadTool "view_bilibili" ["network.bilibili", "tool.media"] [CurrentConversation]),
     always (writeTool "sandbox_create" ["sandbox.lifecycle"] [CurrentConversation, ProcessResource "sandbox"]),
-    -- The model picks this one's timeout itself, clamped to ten minutes, and
-    -- 'timeout --preserve-status' enforces it inside the container.  What that
-    -- cannot bound is the host side: a wedged runtime client leaves the call
-    -- hanging with the command already finished or never started.  So this is
-    -- the container's own ceiling plus enough slack to be sure the difference
-    -- is the runtime's and not the command's. It sits above the turn watchdog on
-    -- purpose — for a front-model turn that watchdog fires first, and this is
-    -- here for the plan executor, which has no such thing over it.
+    -- Allow the container's 600s command timeout plus 60s for the runtime client.
     always (withDeadline 660 ((writeTool "sandbox_exec" ["sandbox.process", "sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]) {tdParallelism = ParallelIndependent})),
     -- Host package search has its own 120s bound; allow transport slack here.
     always (withDeadline 180 (statefulReadTool "nix_search" ["sandbox.process", "network.nix"] [CurrentConversation, ProcessResource "sandbox"])),
@@ -344,16 +337,8 @@ definition name effects parallelism retry authorities =
       tdCallMode = WorkCall
     }
 
--- | What a tool gets unless it says otherwise.
---
--- Sized off what the catalog actually does rather than off a round number.
--- Over thirty days of production every tool but three finished inside ten
--- seconds at its worst; the three that did not say so below.  So this is not
--- a performance budget — it is the point past which a tool is not slow, it is
--- stuck, and the alternatives to noticing that are all worse: the caller waits
--- on the unbounded HTTP paths (browser RPC, and the byte fetches behind
--- @view_image@ and friends) until the turn's own watchdog kills the whole
--- turn, several minutes later, with nothing to show the model.
+-- | Bound individual calls so a stalled tool returns before the turn watchdog.
+-- Long-running tools override this deadline explicitly.
 defaultToolDeadline :: ToolDeadline
 defaultToolDeadline = ToolDeadline 120
 

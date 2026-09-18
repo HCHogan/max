@@ -1,7 +1,9 @@
 # Code size and responsibility
 
 This records the Haskell responsibility boundary before the main conversation,
-Jobs and context replacement. It is not a completed size target.
+Jobs and context replacement. Counts help identify complexity; they do not
+justify deleting major features. Preserving functionality and readability takes
+priority over reaching a particular number.
 
 Run `python3 scripts/count-code.py > /tmp/max-code-size.json` from the checkout.
 The script uses tokei and validates every non-ignored `src`/`app` Haskell file
@@ -24,9 +26,10 @@ Snapshot after `6f64255`, measured with tokei 14.0.0:
 | Vendored code | 8 | 3 | 0 |
 
 The core Haskell component is **36,083 lines**. Active SQL schema and database
-functions must be added before final acceptance. The sub-10,000 core goal is
-therefore still far away. `src + app` totals 49,258 effective Haskell lines;
-additional owned production code brings the measured production subtotal to
+functions must be added before final acceptance. The sub-10,000 core aspiration
+is therefore still far away and is not an acceptance gate. `src + app` totals
+49,258 effective Haskell lines; additional owned production code brings the
+measured production subtotal to
 56,724 lines, excluding active SQL, historical migrations, tests and developer
 tools. Patch files, prompt/configuration documents and binary assets are not
 source LOC in this report and remain separate maintenance costs.

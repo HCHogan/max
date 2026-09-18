@@ -50,15 +50,8 @@ data ChatMessage
     -- needed in subsequent turns when no tool call happened.
     MsgAssistant !Text
   | -- | Assistant chose to call one or more tools.  Carries the
-    -- provider's assistant message verbatim (the raw 'Value' exactly
-    -- as received), because thinking output must round-trip to the
-    -- API in the *next* request within the same agent dispatch in
-    -- whatever field/structure the provider used
-    -- (@reasoning_content@, @reasoning_details@, thinking blocks, …)
-    -- — DeepSeek returns 400 when it's missing.  The '[ToolCall]'
-    -- list is our parsed view of the same message, used to execute
-    -- the calls.  Protocol-consistent within one dispatch: the raw
-    -- shape matches the profile that produced it.
+    -- raw provider message, including opaque reasoning, unchanged into the next
+    -- tool round. The parsed calls are used for execution only.
     MsgAssistantToolCalls !Value ![ToolCall]
   | -- | Tool result reply: @{ role: "tool", tool_call_id: ..., content: ... }@.
     -- 'content' is freeform text (typically a JSON-encoded result).
@@ -82,15 +75,8 @@ data ChatResponse
   | -- | Usable partial text, with an explicit transport failure. Never success.
     InterruptedResp !Text !ResponseFailure
   | -- | The model wants to call one or more tools.  Caller executes
-    -- them and re-invokes 'chat' with the results appended.  The
-    -- first field is the provider's assistant message verbatim; build
-    -- the follow-up 'MsgAssistantToolCalls' from it so any thinking
-    -- output replays to the API exactly as it came in (providers 400
-    -- when their reasoning fields go missing or change shape).
-    -- The 'Text' is whatever the model said alongside the calls —
-    -- both protocols allow text and tool calls in one assistant
-    -- message, and Claude narrates that way constantly.  Empty when
-    -- the model went straight to the call.
+    -- them, then appends results to the next request. Preserve the raw 'Value'
+    -- in 'MsgAssistantToolCalls'; 'Text' contains any accompanying narration.
     ToolCallsResp !Value !Text ![ToolCall]
   deriving stock (Show)
 

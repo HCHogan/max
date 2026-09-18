@@ -384,14 +384,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
 logBufferLines :: Int
 logBufferLines = 2000
 
--- | Roll the @llm_calls@ bodies off on a schedule.
---
--- Once an hour rather than on a timer tied to the retention window:
--- the deletion is a single indexed range delete, and running it often
--- keeps each one small instead of letting a day's worth pile up for
--- one long transaction.  Runs once at startup too, so a bot that was
--- down over the weekend cleans up as soon as it is back rather than
--- an hour later.
+-- | Prune expired call bodies at startup and hourly to keep deletes small.
 callPruner :: (WithConnection :> es, Log :> es, Concurrent :> es, IOE :> es) => Int -> Eff es ()
 callPruner days = localDomain "calls" . forever $ do
   r <- trySync (pruneCalls days)

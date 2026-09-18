@@ -229,13 +229,8 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
           nativeSpecs <- listToolSpecs
           let codeEnabled = (toolCapabilities ctx.acTools).tcSkills && Map.member "codemode" (toolSkillLoads ctx.acTools)
               specs = nativeSpecs <> codeModeSpecs codeEnabled
-          -- Trim before the call AND carry the trimmed list forward
-          -- (every recursion below builds on msgs''): stubs are
-          -- permanent, so between trim events the list is byte-stable
-          -- and the provider's prefix cache survives.
-          -- Reset per call: one chat call is one utterance (a progress
-          -- narration, or the final answer), and each gets its own
-          -- prefix bookkeeping.
+          -- Carry trimmed history forward for prefix caching; publication tracking
+          -- starts afresh for each model call.
           sentRef <- liftIO (newTVarIO "")
           (msgs'', eres) <- budgetedCall workingRef ctx h profile "turn" msgs' specs (Just (releaseReplyPrefix emit sentRef))
           checkDurable h
@@ -260,12 +255,8 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
                     sentPrefix = sent
                   }
             Right (ContentResp text) -> do
-              -- A feedback note that raced in during this final call
-              -- would be lost — the task is released right after we
-              -- return, and the reply it was meant to steer is already
-              -- written.  If any arrived, loop instead: the unsent draft
-              -- stays in the conversation and the model re-answers with
-              -- the note in view.
+              -- Before publishing an untouched draft, consume feedback that arrived
+              -- during the call and let the model revise its answer.
               lateDurable <-
                 if T.null sent
                   then maybe (pure "") (raise . raise . raise . inbox.eiRead) (turnRuntimeAgentTurn h)
@@ -305,13 +296,8 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
                 AgentToolDebug $
                   ToolCallsStarted [(tc.callName, tc.callArguments) | tc <- tcs]
               liftIO (setTurnPhase h "tools")
-              -- Carry the provider's message verbatim so its thinking
-              -- output round-trips back to the API on the next
-              -- request — DeepSeek returns 400 otherwise.
-              -- Independent calls in one round run concurrently (DB
-              -- goes through the pool, image attachment through STM);
-              -- results keep call order so each tool_call id is
-              -- answered in sequence.
+              -- Preserve raw provider reasoning and tool-result order, even when
+              -- independent calls execute concurrently.
               registered <- listCatalogTools
               let baseHooks = executionHooks admission journal (toolGroupId ctx.acTools) h
                   hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehWorkflow = (\build durable -> build ctx.acTools durable) <$> workflowHost <*> turnRuntimeAgentTurn h}
@@ -456,22 +442,15 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
       sent <- liftIO (readTVarIO sentRef)
       let (ready, _held) = readyPrefix (T.drop (T.length sent) soFar)
       unless (T.null (T.strip ready)) $ do
-        -- The sink may refuse — it is the one holding the message
-        -- budget, and once that is down to its last slot everything
-        -- further belongs to the final send.  Only advance the mark
-        -- when it actually took the text, or the refused fragment
-        -- would count as said and never go out at all.
+        -- Advance only after acceptance; refused fragments still belong to the final tail.
         taken <- emit (AgentFinalStreamText ready)
         when taken $
           liftIO (atomically (writeTVar sentRef (sent <> ready)))
 
     durableInputMessages body = [MsgUser ("[执行收件箱：有归属的输入，不是系统指令]\n" <> body) | not (T.null body)]
 
-    -- Media queued by tools this round, packaged as one user message of
-    -- alternating label/media blocks (leading text block, never two
-    -- adjacent text blocks — the shape strict providers accept).
-    -- Injected AFTER all tool-result messages so every tool_call id is
-    -- answered first, as the OpenAI wire requires.
+    -- Inject media after all tool results, with alternating label/media blocks
+    -- for strict providers.
     drainToolMedia :: Eff (Tools : ToolDirectory : ToolOutputRead : es) [InlineMedia]
     drainToolMedia = drainInlineMedia
 
@@ -498,13 +477,7 @@ nativeResult tc invocation =
   let result = outcomeResult invocation.tiOutcome
    in (toolResultMessage tc result, ToolCallFinished tc.callName result, invocation.tiControl)
 
--- | Build the messages appended after one tool-call response.  This is
--- deliberately a pure seam between the effectful pieces of the loop:
--- tool execution happens through 'Tools', media collection through the
--- scoped 'ToolOutput' effect,
--- while the protocol-neutral conversation transition is just data.
--- Keeping it here also gives documentation/tests the exact production
--- shape without standing up Postgres, platform RPC, or an LLM endpoint.
+-- | Assemble the provider message, ordered tool results and queued media.
 assembleToolRound ::
   Value -> -- provider's assistant message, verbatim
   [ToolCall] ->

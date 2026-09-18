@@ -276,15 +276,8 @@ data ResolvedMedia
   | ResolvedUrl !Text
   deriving stock (Eq, Show)
 
--- | Model-authored media references, mirroring the reply-token grammar.
---
--- 'RefImage' carries a canonical message id and, when the model addressed
--- one picture rather than the message, its @seg_index@ — together the
--- primary key of @message_images@ (ADR 004).  'Nothing' means every image
--- on that message, which is what a bare @[image#\<id\>]@ has always meant.
---
--- Sticker ids are a different namespace entirely: @stickers.id@ names a
--- library entry, not a message, so it stays a bare 'Int64'.
+-- | Images use canonical message/segment IDs; 'Nothing' selects all images on
+-- the message. Sticker IDs instead name library entries in @stickers.id@ (ADR 004).
 data OutboundMediaRef
   = RefSticker !Int64
   | RefStickerDesc !Text

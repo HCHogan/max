@@ -1,14 +1,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- |
--- The public source snapshot that shipped inside this binary.
---
--- This is deliberately not a host-filesystem reader.  Agent tools can inspect
--- only the fixed roots and named, compile-time text below, so a source question
--- can never turn into a read of local @max.yaml@, @/var/lib/max-bot@, or another
--- runtime path.  The bundle hash is
--- over path + exact UTF-8 contents and identifies the snapshot independently of
--- the friendly git revision.
+-- | Inspect only the public source embedded at compile time, never runtime files.
+-- The bundle hash covers paths and exact UTF-8 contents independently of the git revision.
 module Max.SelfSource
   ( SourceMatch (..),
     SourceSlice (..),
@@ -58,8 +51,6 @@ data SourceSlice = SourceSlice
 -- file-embed tracks existing files rather than directory membership, so adding
 -- an eligible file under one of these roots must accompany a byte change here;
 -- the source-bundle tests then prove that the new file shipped.
--- Includes workflow joins, contract certificates, measured delegation evidence
--- and the two corresponding evaluator programs.
 embeddedFiles :: [(FilePath, BS.ByteString)]
 embeddedFiles =
   prefixDirectory "src" $(embedDir "src")

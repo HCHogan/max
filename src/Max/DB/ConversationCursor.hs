@@ -1,11 +1,5 @@
--- |
--- Durable, conversation-scoped progress for background consumers of the
--- immutable message ledger.
---
--- Cursor names are host-owned capabilities.  Callers cannot construct an
--- arbitrary name from model input, and every read/update is partitioned by the
--- current 'ConversationScope'.  Advancement uses compare-and-swap so a stale
--- worker can never move progress backwards or overwrite a newer publication.
+-- | Conversation-scoped ledger cursors with host-owned names. Compare-and-swap
+-- advancement prevents stale workers from overwriting newer progress.
 module Max.DB.ConversationCursor
   ( CursorKind,
     historianCursor,

@@ -1,11 +1,6 @@
--- |
--- Scoped, versioned semantic-memory storage.
---
--- @memories@ is the current projection for efficient prompt/retrieval reads;
--- every semantic or lifecycle mutation appends a @memory_versions@ snapshot
--- and @memory_mutations@ audit row in the same SQL statement.  Evidence is
--- append-only and carries the source conversation independently from the
--- subject namespace.  No caller receives an unscoped UPDATE primitive.
+-- | Scoped memory writes update the current row, version snapshot and audit row
+-- atomically. Append-only evidence retains its source conversation separately
+-- from the memory's subject namespace.
 module Max.MemoryStore
   ( MemoryScope (..),
     MemoryNamespace,

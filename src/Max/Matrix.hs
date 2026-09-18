@@ -275,16 +275,9 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
           logInfo "matrix self echo matched no delivery" $
             object ["event_id" .= event.eventId]
 
--- | Matrix includes the replied-to event's transport sender in @m.mentions@
--- so clients can notify them.  In a mirrored room every QQ event is delivered
--- by Max's Matrix account, even though its semantic author is a QQ user.  That
--- implicit notification must not become a synthetic @Max trigger: canonical
--- reply resolution below will independently wake Max only when the target was
--- actually bot-authored.
---
--- A mention on a non-reply is direct.  On a reply we require evidence in the
--- visible body outside the optional @mx-reply@ fallback, preserving an
--- explicit Matrix permalink mention without trusting the notification set.
+-- | Replies implicitly mention the transport sender, which may be Max mirroring
+-- a human. Require a visible mention outside @mx-reply@ to count it as direct;
+-- canonical reply resolution separately detects replies to bot-authored messages.
 matrixSelfMentionIsDirect :: NativeUserId -> MatrixEvent -> Bool
 matrixSelfMentionIsDirect self event =
   self `elem` event.mentionedUsers

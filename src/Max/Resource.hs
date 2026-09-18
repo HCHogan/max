@@ -1,9 +1,4 @@
--- |
--- Small ownership transitions for resources whose physical lifetime lives
--- outside this process (containers today).  The registry is the source of
--- truth for cleanup, so acquisition commits the registry entry while async
--- exceptions are masked, and release removes it only after physical cleanup
--- has completed.
+-- | Cancellation-safe registration and cleanup of external resources.
 module Max.Resource
   ( acquireRegistered,
     releaseRegistered,
@@ -12,15 +7,9 @@ where
 
 import Control.Exception (mask, onException)
 
--- | Acquire an external resource and atomically transfer its ownership to a
--- registry.  @rollback@ must be idempotent: it also runs when acquisition
--- reports 'Left', because an external command may have created part of the
--- resource before reporting failure.
---
--- The potentially blocking acquisition runs at the caller's masking state.
--- Once it returns successfully, registration is the masked commit point.  If
--- cancellation or a synchronous exception lands before that point, rollback
--- owns the external resource instead.
+-- | Acquire at the caller's masking state, then register with exceptions masked.
+-- Idempotent rollback handles 'Left' and exceptions before registration completes:
+-- even failed acquisition may have created part of the external resource.
 acquireRegistered ::
   IO (Either e resource) ->
   IO () ->

@@ -120,14 +120,8 @@ newtype TaskRegistry = TaskRegistry
 newTaskRegistry :: IO TaskRegistry
 newTaskRegistry = TaskRegistry <$> newTVarIO (0, Map.empty)
 
--- | Custom exception so we can distinguish a user-initiated @!kill@
--- from generic 'ThreadKilled' / shutdown.  Tagged as asynchronous
--- ('asyncExceptionToException') because it is delivered via @throwTo@:
--- 'catchSync' / 'trySyncIO' rethrow it, so it punches through the
--- log-and-continue handlers and error-to-Left wrappers on the worker
--- (we want @!kill@ to actually kill the task, wherever it is — mid
--- HTTP call included).  The agent's @bracket@ still releases on the
--- way out; the dispatch root catches it for the quiet log.
+-- | User cancellation is asynchronous so 'catchSync' cannot swallow it.
+-- Resource brackets still run; the dispatch root handles the final exception.
 data TaskCancelled = TaskCancelled
   deriving stock (Show)
 
@@ -254,17 +248,8 @@ writePhase entry now phase = do
   writeTVar entry.teKind phase
   writeTVar entry.teProgressAt now
 
--- | Block until this turn has gone @limit@ microseconds without changing
--- phase, then return.  Never returns while the turn is still moving.
---
--- Event-driven rather than a poll, which is also what makes it exact: the
--- heartbeat itself restarts the wait, so a turn that keeps working keeps
--- pushing its deadline out for free, and a turn that stops is noticed once, at
--- the deadline, rather than up to one poll interval late.
---
--- What it measures is silence, not age (issue #17).  A turn legitimately
--- spending ten minutes across many rounds resets this on every one of them;
--- only a turn wedged inside a single round runs it down.
+-- | Wait for @limitMicros@ without a progress update. Each update resets the
+-- timer, so this bounds silence rather than total turn age.
 awaitTurnSilence :: TurnRuntime -> Int -> IO ()
 awaitTurnSilence turn limitMicros = go
   where

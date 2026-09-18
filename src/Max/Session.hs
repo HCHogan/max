@@ -1,18 +1,6 @@
--- |
--- Per-group bot session state.  Group-wide shared: anyone in a group
--- can flip the bot's model, persona, clear history, etc.  Persisted to
--- the @sessions@ table so it survives restarts.
---
--- == Mutability
---
--- The in-memory shape is @TVar (Map GroupId SessionHandle)@: the outer map is
--- locked only while we add a new group.  Each handle owns a TVar plus a
--- mutation lock, so concurrent groups never contend and one group's DB writes
--- cannot finish out of order.
---
--- Every mutation goes through 'updateSession'.  It persists with revision CAS
--- before publishing the committed value to the TVar; a DB failure therefore
--- leaves the visible cache unchanged.  Reads remain cache-only once loaded.
+-- | Persistent per-group settings with a shared cache. Mutations serialize per
+-- group and commit with revision CAS before updating the cache, so failed
+-- writes leave cached state unchanged. Command permissions are checked by callers.
 module Max.Session
   ( -- * Re-exported record
     Session (..),

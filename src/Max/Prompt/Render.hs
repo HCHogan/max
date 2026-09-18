@@ -213,21 +213,11 @@ contextRoster pi' =
   let PrincipalId selfPrincipal = pi'.triggerMessage.selfPrincipalId
       PrincipalId senderPrincipal = pi'.triggerMessage.authorPrincipalId
    in dedupeRoster $
-        -- A bare name, never an annotated one.  This table is dual-purpose:
-        -- the prompt reads it, and 'Max.IR.Prompt.parseModelChunk' reads it
-        -- back to resolve the display of any [@#id] the model writes.  So
-        -- anything decorative here becomes a mention's display name and then
-        -- user-visible text — "Max（你自己）" shipped to a WeChat group as
-        -- "@Max（你自己）".  The "you" annotation belongs to the rendered
-        -- roster line alone; see 'selfRosterLabel'.
+        -- These names also render outbound mentions. Keep annotations such as
+        -- "you" in 'selfRosterLabel' so they cannot leak into sent display names.
         (selfPrincipal, "Max")
           : (senderPrincipal, triggerSenderName pi'.triggerMessage)
-          -- Newest line first, because a speaker's name is whatever they are
-          -- called *now*: a row carries the name captured when it was
-          -- written, so the oldest line in a window is the stalest answer.
-          -- Production called a Matrix member by their mxid for as long as
-          -- one pre-rename line stayed in context.  The bot and the trigger's
-          -- sender still lead, so their two deliberate names win.
+          -- Prefer recent names, after the explicit bot and trigger-sender entries.
           : reverse
             [ (h.authorPrincipalId, bestName h)
             | h <-
@@ -275,16 +265,8 @@ applyStickerCaptions caps h = case Map.lookup h.canonicalId caps of
   Nothing -> h
   Just ds -> h {renderedText = replaceStickerMarkers ds h.renderedText}
 
--- | Swap opaque sticker markers for "[sticker#\<id\>: \<caption\>]".  The
--- @\#\<id\>@ is @stickers.id@ — the same handle the model writes back
--- to *send* that sticker, so what it reads inbound and what it emits
--- outbound share one form.
---
--- Only sticker-specific markers are eligible when the text has any:
--- a photo's @[image]@ in a mixed photo+sticker message must not
--- swallow the sticker's caption.  Rows persisted before sub_type
--- survived parsing rendered stickers as @[image]@ too, so when no
--- sticker-specific marker exists we fall back to consuming those.
+-- | Render sticker-library handles and captions. Prefer sticker markers so a
+-- photo cannot consume a sticker caption; fall back to image markers for old rows.
 replaceStickerMarkers :: [(Int64, Text)] -> Text -> Text
 replaceStickerMarkers ds0 t0 = go ds0 t0
   where
@@ -315,15 +297,7 @@ dedupById = go Set.empty
       | h.canonicalId `Set.member` seen = go seen rest
       | otherwise = h : go (Set.insert h.canonicalId seen) rest
 
--- | Pure transformation from fetched inputs to the chat-message list
--- the LLM sees.
---
--- Structure:
---
---   * @system@ message: persona + format guide.
---   * One chronological stream of compartments plus raw messages.
---   * One final @user@ message containing that stream, the reply chain,
---     pinned messages, and the current trigger.
+-- | Render fetched context and the current trigger into model messages.
 renderContext :: PromptInputs -> [ChatMessage]
 renderContext pi' =
   let GroupId gidRaw = pi'.triggerMessage.groupId
@@ -357,10 +331,7 @@ renderContext pi' =
                      ]
                | pi'.outputCapabilities.canMention
                ]
-      -- Questions somebody else's turn is already handling never reach
-      -- the model, whichever shape we build.  Rows a replayed segment
-      -- already carries verbatim drop for a different reason: they are
-      -- about to be shown, once, in their original wire form.
+      -- Exclude triggers already owned by another active turn.
       visible = dropInFlight pi'.inFlight pi'.transcript
       -- Flat: everything goes in the user body.  Turns: everything up
       -- to the bot's last message becomes turns, the rest rejoins the
@@ -386,17 +357,8 @@ renderContext pi' =
           pi'.pinnedItems
           pi'.triggerForward
           pi'.triggerMessage
-      -- If we have inline image bytes, attach them as a multimodal
-      -- content-block message, each prefixed with a label naming its
-      -- source message; otherwise fall back to plain text (which
-      -- still has @[image]@ markers in the body).
-      --
-      -- Block layout: the first label is folded into the body text
-      -- and every other label sits between two images, so no two
-      -- text blocks are ever adjacent — the most conservative shape
-      -- for strict OpenAI-compatible providers.
-      -- The data URL's mime prefix decides the wire block type —
-      -- pointed-at videos ride the same attachment list as images.
+      -- Interleave source labels and media; merge the first label into the body
+      -- to avoid adjacent text blocks on strict providers. MIME distinguishes video.
       mediaBlock u
         | "data:video/" `T.isPrefixOf` u = VideoDataUrl u
         | otherwise = ImageDataUrl u
@@ -407,12 +369,6 @@ renderContext pi' =
             TextBlock (userBody <> "\n\n" <> i0.piLabel)
               : mediaBlock i0.piDataUrl
               : concat [[TextBlock i.piLabel, mediaBlock i.piDataUrl] | i <- rest]
-      -- Default: system prompt then one user message, nothing else.
-      -- Prior bot replies live in the transcript as ordinary lines
-      -- rather than 'MsgAssistant' turns — see 'PromptInputs.transcript'
-      -- for why the roles were a lie in a group, and note that this
-      -- also removes the last way two consecutive same-role messages
-      -- could reach a strict provider: there is exactly one of each.
       messages =
         [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) pi'.outputCapabilities effectivePersona pi'.skills)]
           <> historyTurnMessages pi'.tz turnRows
@@ -609,11 +565,7 @@ replyContextTokens = \case
 memoryInjectCap :: Int
 memoryInjectCap = 12
 
--- | The injected memory block, or 'Nothing' when there is nothing
--- remembered (no block at all beats an empty header — zero tokens,
--- and nothing for the model to fixate on).  The framing line matters
--- as much as the content: memories are 背景备忘 the model may
--- silently draw on, not a topic list to bring up.
+-- | Render memories as background notes; omit the block when empty.
 renderMemories :: TimeZone -> Bool -> Text -> [MemoryItem] -> [MemoryItem] -> Maybe Text
 renderMemories tz' private senderName groupMems userMems
   | null groupMems && null userMems = Nothing
@@ -783,14 +735,7 @@ historyTurnMessages tz' =
       | all isBot hs = MsgAssistant (T.intercalate "\n\n" (map (.renderedText) hs))
       | otherwise = MsgUser (T.intercalate "\n" (map (renderHistoryLine tz') hs))
 
--- | Split the transcript so the turn list ends on an assistant turn:
--- any non-bot rows trailing the bot's last message go back into the
--- final user message, which is itself a user turn.
---
--- Without this the handover from history to now is two consecutive
--- user messages — precisely the thing this shape exists to avoid, and
--- it happens on every turn where the last thing said wasn't said by
--- the bot, which in a group is most of them.
+-- | Fold trailing user rows into the final user message to avoid adjacent user turns.
 splitTrailingUser :: [HistoryItem] -> ([HistoryItem], [HistoryItem])
 splitTrailingUser hs =
   let (revTail, revHead) = break (.fromBot) (reverse hs)
@@ -837,11 +782,7 @@ renderUser tz' now' origin' compartments' recentTurns' continuationView' mTransc
           Nothing -> []
           Just [] -> ["[recent messages]", "(无历史消息)"]
           Just hs -> "[recent messages]" : map (renderHistoryLine tz') hs,
-        -- Everything above this line is meant to be byte-stable across
-        -- dispatches so a provider's prefix cache can cover it; the
-        -- clock and the per-turn roster necessarily aren't, so they go
-        -- below.  Placing them next to the message they describe reads
-        -- better anyway than a clock buried in the system prompt.
+        -- Keep changing time/roster data after the cacheable transcript prefix.
         ["", envText],
         maybe [] (\b -> ["", b]) mMemBlock,
         [""],
@@ -984,14 +925,8 @@ renderReplyFiles xs =
     sizePart (Just n) = ", bytes=" <> T.pack (show n)
     tquote t = "\"" <> t <> "\""
 
--- | The live message, rendered in exactly the shape 'renderHistoryLine'
--- uses.  One format for "a message in this conversation", whether it
--- arrived a minute ago or just now — the format guide documents that
--- one shape, and a second shape for the current line was a small lie
--- the model had to work around.
---
--- Takes the clock because a dispatch message carries no timestamp: it is
--- the message being handled right now, so "now" is its time.
+-- | Use the history-line format for the trigger. Dispatch messages have no
+-- timestamp, so the caller supplies the current time.
 renderCurrentLine :: TimeZone -> UTCTime -> DispatchMessage -> Text
 renderCurrentLine tz' now' gm =
   let txt = dispatchTextWithoutSelf gm

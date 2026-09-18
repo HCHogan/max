@@ -158,11 +158,7 @@ collectContextSnapshot request now' history = do
   recentTurns' <- map (renderRecentTurn tz') <$> recentTurnDigests scope s.clearedAt now'
   let HistorySelection compartments' transcript' materializationVersion materializationReason = history
   pinnedItems' <- fetchMessagesByIdsInScope scope s.pinned
-  -- Injection is capped to the freshest entries per scope: the block
-  -- is in the volatile tail, re-tokenised at full price every
-  -- dispatch, and a scope at the 30-entry cap was costing thousands
-  -- of uncached tokens.  The long tail stays reachable through
-  -- memory_list / context_search.
+  -- Bound the uncached memory block; older entries remain searchable.
   groupMems <- listRecentMemories (groupMemoryNamespace scope) memoryInjectCap
   userMems <- listRecentMemories (userMemoryNamespace scope senderPrincipal) memoryInjectCap
   replyCtx0 <- case (\(CanonicalMessageId target) -> target) <$> gm.replyTo of
@@ -188,22 +184,14 @@ collectContextSnapshot request now' history = do
             <> pinnedItems'
             <> maybe [] (\(r, _, kids) -> r : kids) replyCtx0
   capMap <- stickerCaptionsFor ctxIds
-  -- Same idea for ordinary photos and videos (Max.MediaCaption):
-  -- described media renders as [image#<id>.<seg>: <简介>] /
-  -- [video#<id>.<seg>: <简介>], so the model knows what's behind a
-  -- marker without spending a view_image/view_video call on it — and
-  -- can point at one picture of a message carrying several.
+  -- Media captions retain canonical handles for later tool lookup.
   mediaSegs <- fetchMediaSegments ctxIds
   let enrich = tagMediaMarkers mediaSegs . applyStickerCaptions capMap
       transcript'' = map enrich transcript'
       pinnedItems'' = map enrich pinnedItems'
       replyCtx' = fmap (\(r, f, kids) -> (enrich r, f, map enrich kids)) replyCtx0
       replyItems = maybe [] (\(r, _, kids) -> r : kids) replyCtx'
-  -- Unrelated pictures in the ambient chatter are attention magnets:
-  -- only images the user is plausibly pointing at (reply target, the
-  -- trigger itself, pins) go inline.  Everything else keeps a text
-  -- marker, upgraded to an [image#<id>.<seg>] handle so the model can
-  -- pull it via the view_image tool when it actually matters.
+  -- Inline trigger, reply-target and pinned images; ambient images remain handles.
   let transcriptCtx
         | multimodal' =
             let inlineIds =
@@ -212,11 +200,7 @@ collectContextSnapshot request now' history = do
                 | h <- transcript''
                 ]
         | otherwise = transcript''
-  -- The trigger itself may BE a 转发聊天记录 (typical in private
-  -- chat, where any message dispatches).  Its children are being
-  -- fetched by the forward worker right now — wait for them, then
-  -- expand inline under the current message like the quoted-reply
-  -- path does.
+  -- Forwarded triggers may still be downloading; wait before expanding children.
   triggerKids <-
     if any isForwardNode gm.body.nodes
       then do
@@ -229,11 +213,7 @@ collectContextSnapshot request now' history = do
   images' <-
     if multimodal'
       then do
-        -- The trigger's images were enqueued moments ago and may
-        -- still be downloading — hold the turn until they land so
-        -- the model actually sees them.  (Older context images are
-        -- either long since fetched or permanently failed; no point
-        -- waiting on those.)
+        -- Wait only for newly queued trigger images, not older context downloads.
         let expected = downloadableImageCount gm.body
         when (expected > 0) $ waitForTriggerImages mid expected
         -- Budget priority: the reply target is what the user is
@@ -246,12 +226,8 @@ collectContextSnapshot request now' history = do
           (Set.fromList (map (.canonicalId) replyItems))
           (dedupById (replyItems <> pinnedItems''))
       else pure []
-  -- Videos the user is pointing at (the trigger itself, or the quoted
-  -- message) attach whole — same policy as images.  Ambient videos
-  -- keep their [video#<id>] marker for view_video.  The video worker
-  -- (same pool as images) downloads them into the blob store at
-  -- receive time; the trigger's own video may still be in flight, so
-  -- wait for it like we do for images.
+  -- Attach trigger/reply videos, waiting for the trigger download if needed.
+  -- Ambient videos remain handles for view_video.
   videos' <-
     if multimodal'
       then do
@@ -297,12 +273,8 @@ collectContextSnapshot request now' history = do
         csMaterializationReason = materializationReason
       }
 
--- | Poll until the image worker has recorded all of the trigger's
--- downloadable images ('message_images' rows are inserted only after
--- a download completes), so the prompt doesn't race the fetch and
--- silently drop the picture the user is asking about.  Bounded: a
--- failed download never inserts its row, so we give up after
--- 'waitImagesMaxMs' and build the prompt with whatever landed.
+-- | Wait for downloaded trigger-image rows, up to 'waitImagesMaxMs'. Failed
+-- downloads create no row, so timeout continues with whichever images arrived.
 waitForTriggerImages ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   Int64 -> -- trigger message_id
@@ -404,11 +376,8 @@ loadMessageVideos (mid, label) = do
                   ("data:" <> mime <> ";base64," <> TE.decodeUtf8 (B64.encode bytes))
               ]
 
--- | Poll until the forward worker has landed at least one child row
--- for the trigger's 转发聊天记录 (the whole chain arrives in one
--- @get_forward_msg@ round-trip, so "any child" means "all of them").
--- Bounded: a failed fetch never inserts rows, so give up after
--- 'waitForwardMaxMs' and let the prompt show the bare marker.
+-- | Wait up to 'waitForwardMaxMs' for forwarded children; otherwise retain the
+-- bare marker. Children from one fetch are committed together.
 waitForTriggerForward ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   Int64 -> -- trigger message_id
@@ -436,15 +405,7 @@ waitForTriggerForward mid = go 0
               liftIO (threadDelay (stepMs * 1000))
               go (elapsed + stepMs)
 
--- | Everyone appearing in this turn's context, principal ↔ display name.
---
--- Rendered text shows mentions as @[\@#\<principal_id\>]@ tokens (ADR 004),
--- so without this table the model cannot tell who @[\@#123]@ is — including
--- itself.  It is also the vocabulary the send path rescues @\@显示名@
--- against, so the names the model may write are exactly the names it read.
--- | The roster /line/ is where the model is told which id is its own.  The
--- roster /table/ must stay undecorated, because the same entries resolve the
--- display of a mention the model writes, and a display is shipped content.
+-- | Unbanned sticker handles and captions, in segment order for each message.
 stickerCaptionsFor ::
   (WithConnection :> es, IOE :> es) =>
   [Int64] ->
@@ -462,26 +423,17 @@ stickerCaptionsFor ids = do
       (Only (In ids))
   pure (Map.fromListWith (flip (<>)) [(m, [(sid, d)]) | (m, sid, d) <- rows :: [(Int64, Int64, Text)]])
 
--- | Total images attached to one prompt.  Keeps worst-case context
--- growth bounded (8 × ~1 MiB of base64) while covering the common
--- "look at these screenshots" flows.
+-- | Maximum attachments per prompt, with the trigger taking priority.
 maxPromptImages :: Int
 maxPromptImages = 8
 
--- | Per-image byte cap; anything larger is skipped (stays a text
--- marker) rather than blowing up the request body.  NB: some
--- endpoints cap lower than this (e.g. Anthropic at 5 MB/image) and
--- will reject the request themselves.
+-- | Skip larger image files, retaining their text markers. Providers may impose
+-- a lower limit; this is the local file-size bound before base64 encoding.
 maxImageBytes :: Int
 maxImageBytes = 20 * 1024 * 1024
 
--- | Load up to 'maxPromptImages' images for the trigger + context
--- messages via one 'message_images' join.  The trigger's images
--- claim the budget first, then @candidates@ in the given priority
--- order.  Selected context images are re-sorted chronologically for
--- display and the trigger's go last, closest to the question.
--- Images whose local file is missing (worker hasn't caught up) or
--- oversized are skipped.
+-- | Allocate image slots to the trigger first, then candidates in priority order.
+-- Display context chronologically with the trigger last; skip missing/oversized files.
 loadPromptImages ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   TimeZone -> -- display timezone for the image labels' HH:MM

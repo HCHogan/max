@@ -82,16 +82,8 @@ runCodesnap lang code = do
               <> ": "
               <> T.pack (take 500 (err <> out))
 
--- | Appearance lives in the config file the deployment supplies through
--- @MAX_CODESNAP_CONFIG@ — theme, palette, background, window, font — because
--- the ocean theme has to be registered there anyway: a @.tmTheme@ is only
--- found if the config names the folder holding it (@themes_folders@), and
--- there is no flag for that.  So the visual settings all live in one file
--- rather than half in a file and half in this list.
---
--- Unset is a working configuration, not a broken one: codesnap falls back to
--- its own defaults, which is what a dev machine without the nix module gets.
--- Only what the config cannot express stays here.
+-- | Appearance comes from @MAX_CODESNAP_CONFIG@; absent config uses codesnap's
+-- defaults. Custom theme folders require the file rather than CLI flags.
 codesnapArgs :: Maybe FilePath -> Maybe Text -> FilePath -> FilePath -> [String]
 codesnapArgs mConfig lang inPath outPath =
   [ "--from-file",

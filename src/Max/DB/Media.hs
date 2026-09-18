@@ -1,11 +1,6 @@
--- | Conversation-scoped lookup of media attached to persisted messages.
--- Blob workers may write by their trusted queue ids, but anything reachable
--- from a model-authored handle must pass through these joins.
---
--- ADR 004: media is addressed by @(canonical_message_id, seg_index)@ — the
--- primary key of @message_images@ / @message_videos@, and exactly what the
--- model reads as @[image#\<id\>.\<seg\>]@.  A 'Nothing' segment means the
--- whole message, which is what the bare handle has always meant.
+-- | Model-authored media handles must use these conversation-scoped joins.
+-- Handles name @(canonical_message_id, seg_index)@; omitting the segment selects
+-- the whole message (ADR 004). Blob workers separately use trusted queue IDs.
 module Max.DB.Media
   ( StoredImage (..),
     StoredVideo (..),

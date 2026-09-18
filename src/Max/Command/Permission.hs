@@ -1,19 +1,6 @@
--- |
--- Pure permission policy for the @!@-command DSL (0.3).  Resolution
--- order, high to low — first hit wins:
---
---   1. owner       — QQ id in 'AppConfig.owners'
---   2. explicit    — a @permissions@ row (grant or deny; group scope
---                    beats global — "Max.DB.Permissions")
---   3. role        — 群主\/管理员 (NapCat role), which satisfies
---                    'TierGroupAdmin'; in a private chat the sender
---                    is admin of their own session by definition
---   4. member      — everyone else
---
--- Queries (shows/lists/help) are unrestricted: only state-changing
--- verbs carry a capability.  The effectful resolver lives in
--- "Max.Handler"; this module is the pure policy table so it can be
--- unit-tested exhaustively.
+-- | Default command capabilities and tiers. "Max.Handler" resolves access:
+-- owner > explicit grant/deny (group before global) > role > member.
+-- Private-chat senders have the group-admin tier for their own session.
 module Max.Command.Permission
   ( PermTier (..),
     requiredCapability,

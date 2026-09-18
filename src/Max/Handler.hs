@@ -547,12 +547,8 @@ handleEvents q fetchSig mIntent clientRef = loop
           logInfo "friend request: auto-approving" $ object ["user_id" .= uidRaw]
           respondToFriendRequest flag AcceptFriend >>= either (logAttention_ . renderPlatformFailure) pure
 
--- | Persistence runs before any dispatch decision, so it re-derives
--- "is this a command" from the same parser 'classify' uses rather than
--- waiting for the trigger — the DB lookup 'classify' needs for
--- reply-to-bot has nothing to do with it.  A malformed command counts:
--- it still looks like one to the reader, and it gets an error reply
--- rather than an answer.
+-- | Classify command syntax before persistence, including malformed commands.
+-- Reply-to-bot lookup and other dispatch decisions happen later.
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => T.Text -> Value -> GroupMessage -> Eff es IngestOutcome
 persist source raw gm =
   trySync persistOne >>= \case
@@ -967,11 +963,7 @@ runDispatchClaim workerId fetchSig mIntent claim =
             onDispatchMessage (Just owner) mIntent message
         )
         >>= \case
-          -- Only the paths that finished the work here settle the row.  A turn
-          -- takes the row with it (issue #17.D): this used to mark the message
-          -- answered the moment the dispatch async was forked, so a turn that
-          -- crashed, was killed, or lost a drain took the question with it, and a
-          -- message deferred behind a running turn had nowhere to be recorded.
+          -- An asynchronous turn owns settlement until it finishes or defers.
           Right ClaimSettledHere -> void (completeDispatch workerId claim.canonicalMessageId claim.attemptCount DispatchCompleted)
           Right ClaimHandedToTurn -> pure ()
           Left e -> failClaim (T.pack (show (e :: SomeException)))
@@ -1123,13 +1115,8 @@ onConversationMessage owner mIntent gm = do
             Just quoted | quoted.fromBot -> classifyDispatch True gm
             _ -> TriggerNone
     t -> pure t
-  -- Any addressed trigger stamps the gate's followup hot window.  The
-  -- pending intent buffer is NOT cleared here: that happens inside
-  -- 'dispatchLLM' at the moment a turn commits to building context —
-  -- only then do the buffered messages actually reach a model as
-  -- ambient text.  Clearing on every command was a hole: a pending
-  -- "max帮我看看" (no @) was silently swallowed by an unrelated
-  -- @!status@, which feeds no model at all.
+  -- Refresh the followup window, but retain buffered intent until LLM context
+  -- consumes it. A command such as !status must not discard pending conversation.
   let noteActivity = for_ mIntent $ \st -> liftIO (noteBotActivity st gm.groupId)
   case trig of
     -- Not addressed: hand the message to the intent classifier —
@@ -1169,11 +1156,8 @@ classifyDispatch repliesToBot gm =
               "ping" -> TriggerPong
               _ -> TriggerLLM stripped
 
--- | A 戳一戳 aimed at the bot: a contentless direct wake, the soft
--- version of an @. It enters the normal conversation frontend dispatch with 'OriginPoke' so the prompt says
--- honestly who poked (and that there is no message).  Pokes between
--- other members, and echoes of the bot's own outbound pokes, are
--- ignored.
+-- | Dispatch a poke aimed at the bot as 'OriginPoke', without inventing a message.
+-- Ignore pokes between other members and echoes of the bot's own pokes.
 onPoke ::
   ( Blob :> es,
     Log :> es,
@@ -1229,11 +1213,8 @@ onPoke mIntent pk
           logAttention "poke: could not resolve principals" $
             object ["group_id" .= gidRaw, "user_id" .= pokerRaw]
 
--- | Synthesize the platform-neutral trigger for a poke dispatch. There
--- is no real message: id 0 is the "no trigger message" sentinel —
--- nothing quotes or reacts to it, and 'Max.Tasks.beginTurnRuntime' reads
--- it as no trigger rather than as an id every poke shares — and the
--- body is empty ('OriginPoke' rendering never shows it).
+-- | Pokes have no message: ID 0 is a sentinel excluded from quoting, reactions
+-- and in-flight trigger tracking. 'OriginPoke' renders the empty body specially.
 pokeTrigger :: PokeEvent -> PrincipalId -> PrincipalId -> Maybe T.Text -> DispatchMessage
 pokeTrigger pk selfPrincipal senderPrincipal mName =
   DispatchMessage
@@ -1299,11 +1280,8 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
       let replyTarget = (\(CanonicalMessageId target) -> target) <$> gm.replyTo
       result <- CmdDispatch.execute t targetGid gm.userId gm.authorPrincipalId replyTarget cmd
       case result of
-        -- In a group, textual command output (queries, error texts)
-        -- goes to the sender's DMs — the group only sees an OK
-        -- reaction.  Private chats reply inline as before.  When the
-        -- DM can't be delivered (not friends; QQ throttles temp
-        -- sessions), fall back to the group with a befriend hint.
+        -- QQ group commands reply by DM, falling back to the group on failure.
+        -- Private chats and other platforms reply inline.
         ReplyText reply
           | isPrivateChat gm.groupId || isForeignSource sourcePlatform -> replyText gm reply
           | otherwise -> deliverPrivate reply
@@ -1317,13 +1295,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
         SideQuestion askBody -> do
           logInfo "btw: side question" $
             object ["len" .= T.length askBody]
-          -- Dispatch the message itself with only the !btw verb
-          -- stripped — the same form 'recordAs' persisted.  Keeping
-          -- the original segments is the point: a @!btw@ typed as a
-          -- reply keeps its quote (buildContext reads the reply
-          -- target out of the segments), and attached images keep
-          -- their markers.  An earlier version rebuilt the segment
-          -- list from the parsed body and silently dropped both.
+          -- Strip only the command verb, preserving reply relations and attachments.
           dispatchLLMWith (NewTurn StartSeparateTurn) Nothing mIntent OriginDirect (stripDispatchVerb gm)
         FeedbackNote _ ->
           dispatchLLM Nothing mIntent OriginDirect gm
@@ -1574,11 +1546,7 @@ taskProgressEvent identifier = \case
   AgentToolDebug _ -> pure ()
   AgentFinalStreamText _ -> pure False
 
--- | Who is responsible for the dispatch row once 'onDispatchMessage' returns.
---
--- Only the LLM path hands it on: everything else — a command, a pong, a
--- message the classifier merely buffered — finished its work inside the call,
--- so the claim loop settles it there and then.
+-- | Whether the claim loop or an asynchronous turn owns dispatch settlement.
 data ClaimDisposition
   = ClaimSettledHere
   | ClaimHandedToTurn
@@ -1811,11 +1779,8 @@ dispatchLLMWith start owner mIntent origin gm = do
               )
         )
           `finally` do
-            -- Any asynchronous exit other than !kill, including forced
-            -- shutdown after the drain deadline, reaches here.  Keep a
-            -- non-terminal row reclaimable for the next boot; normal, killed,
-            -- and synchronously failed rows are already terminal and this is
-            -- therefore a no-op.
+            -- Until restart recovery is removed, unexpected exits leave unfinished
+            -- turns reclaimable. This is a no-op for already terminal turns.
             ensureAgentTurnRecoveryPending durable "dispatch unwound before a terminal checkpoint"
               `catchSync` \e ->
                 logAttention "durable turn finalizer failed" $
@@ -2079,10 +2044,7 @@ dispatchLLMWith start owner mIntent origin gm = do
               (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId gm.authorPrincipalId s.clearedAt (turnRuntimeOutputContext turn))
               turnCapabilities
           agentCtx = AgentContext toolCtx s.effortOverride (Just frontendToolLimit)
-          -- The name→principal map the send path rescues "@显示名" against is
-          -- the roster the prompt just showed the model, so the names it may
-          -- write are exactly the names it read.  Before ADR 004 this was a
-          -- separate QQ member-list fetch, in a different id space.
+          -- Resolve outbound names against the same principal roster shown in the prompt.
           rosterNames = [(name, PrincipalId principal) | (principal, name) <- roster]
           target =
             sendTarget
@@ -2123,11 +2085,7 @@ dispatchLLMWith start owner mIntent origin gm = do
 
     settleTurn outputCaps env s target streamBudget durable result = do
       terminal <- case result.reply of
-        -- The loop produced no model-authored reply — upstream API
-        -- down, or the turn-cap fallback call failed too.  Error text
-        -- in the group would just be noise; swap the processing
-        -- reaction for a NO (face 123) so the trigger visibly failed.
-        -- Nothing is drained or persisted, same as a silent turn.
+        -- No final reply is available; indicate failure through the trigger reaction.
         Nothing -> do
           logAttention "llm dispatch failed" $
             object
@@ -2204,13 +2162,7 @@ dispatchLLMWith start owner mIntent origin gm = do
               True
           pure TurnSilence
         Nothing -> do
-          -- Outbound gets the platform message_id and persists this
-          -- message into the messages table.  That's where
-          -- subsequent dispatches will read this turn's assistant reply
-          -- back from the chronological ledger.
-          -- The same budget the streaming sink spent from: one reply
-          -- split across two senders still gets one message ceiling and
-          -- one image-dedupe set (see "Max.ReplySend").
+          -- The final tail shares the stream's message budget and image-dedupe set.
           budget <- liftIO (readTVarIO streamBudget)
           publication <-
             sendAndPersistReply
@@ -2326,13 +2278,8 @@ stripMentions (UserId u) t =
   where
     uid = T.pack (show u)
 
--- | The group a private-chat command actually operates on: the
--- @!use@ target when one is set (and the sender is entitled to it),
--- else the chat's own (pseudo) group.  The !use family itself never
--- redirects — it manages the selection.  Entitlement: owners aim
--- anywhere; anyone else must be a member of the target group, which
--- also closes the "!use someone else's group and read its !status"
--- hole.
+-- | Private commands use the selected @!use@ group, except @!use@ itself.
+-- Owners may select any group; other callers must belong to the target group.
 resolveAdminTarget ::
   (PlatformQuery :> es, Log :> es, IOE :> es) =>
   BotEnv ->
@@ -2475,13 +2422,8 @@ parseSilence t0
       (T.stripPrefix "[silence:" closed <|> T.stripPrefix "[silence：" closed)
         >>= T.stripSuffix "]"
 
--- | Leading @[reply#id]@ handles and the text after them.  Only the prefix:
--- a quote in the middle of real text is content.  Both openers are read for
--- the same reason 'Max.Reply.matchToken' reads both — a model quoting a
--- pre-rename line writes what that line spells.
---
--- The ids come back because a silence quotes what it is declining, and that
--- is a more useful reaction target than whatever woke max.
+-- | Parse leading reply handles (including legacy spelling) for silence reactions.
+-- Handles within ordinary text remain content.
 splitQuoteHandles :: T.Text -> ([Int64], T.Text)
 splitQuoteHandles = go []
   where

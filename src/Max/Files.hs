@@ -1,11 +1,4 @@
--- |
--- Inbound non-image file worker.  Mirrors the shape of 'Max.Images'
--- but for 'SegFile' segments: each file goes through DB row insert
--- → @get_group_file_url@ RPC (if URL not already inline) → HTTP
--- fetch via the 'Http' effect → blob store → DB row update.
---
--- One worker is enough for now since file traffic is much lower
--- than image traffic; bump to a pool if it backs up.
+-- | Fetch inbound files into the blob store and record their metadata.
 module Max.Files
   ( enqueueFiles,
     fileWorker,

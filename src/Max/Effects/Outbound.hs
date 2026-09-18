@@ -1,14 +1,7 @@
 {-# LANGUAGE TypeFamilies #-}
 
--- |
--- The application boundary for a visible outbound chat message.
---
--- Canonical publication is the commit point.  Per-endpoint delivery is durable
--- outbox work performed afterwards, so no transport can expose a message that
--- the conversation ledger forgot.
---
--- 'Published' acknowledges the canonical transaction, never physical delivery.
--- Platform receipts belong to the durable delivery worker.
+-- | 'Published' acknowledges the canonical transaction, not physical delivery.
+-- Endpoint workers deliver the committed outbox and record platform receipts.
 module Max.Effects.Outbound
   ( Outbound,
     OutboundRequest (..),

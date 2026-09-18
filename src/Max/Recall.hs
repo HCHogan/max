@@ -1,11 +1,6 @@
--- |
--- Conversation-scoped unified recall.
---
--- Candidate generation is deliberately split into lexical and compatible
--- embedding queries, but policy, ranking, quotas, and deduplication are shared.
--- Visibility is applied in SQL before any candidate can be scored.  The pure
--- selector prevents one corpus from monopolising the result set and collapses
--- the raw/pinned/caption forms of one source message.
+-- | Lexical and embedding recall share ranking, quotas and source deduplication.
+-- SQL applies conversation visibility before scoring; quotas prevent one corpus
+-- from consuming the entire result set.
 module Max.Recall
   ( RecallCorpus (..),
     AutoRecallEligibility (..),

@@ -1,12 +1,4 @@
--- |
--- Group metadata and member roster via NapCat: who's in the group,
--- who runs it, what it's called.  One member-list fetch feeds three
--- consumers: outbound @-mention validation (the member id set), the
--- system prompt's 群信息 lines (name / owner / admins), and the
--- @group_members@ tool (full roster on demand).
---
--- Avatars need no NapCat call at all — QQ serves them from public,
--- predictable URLs ('userAvatarUrl' / 'groupAvatarUrl').
+-- | QQ group metadata and members via NapCat; avatar URLs need no RPC.
 module Max.Roster
   ( GroupMeta (..),
     GroupMember (..),

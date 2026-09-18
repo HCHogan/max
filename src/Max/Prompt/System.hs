@@ -10,17 +10,8 @@ import Max.Faces (curatedFaceGroups)
 import Max.Platform.Types (AdvertisedCaps (..))
 import Max.Text (tshow)
 
--- | Assemble the system prompt: the @persona@ (from session override
--- or AppConfig default), a scene block saying whether this is a
--- group or a one-on-one chat (kept out of the persona so configured
--- personas stay scene-agnostic), a fixed format guide, then the
--- volatile tail — the environment block (current time, roster) and
--- the long-term memory block (if any).  Ordering is deliberate
--- twice over: everything before the environment is byte-identical
--- across dispatches, so provider prefix caches survive between
--- turns of a busy group; and end-of-prompt placement keeps memories
--- low-salience relative to the persona and the live conversation —
--- background, not agenda.
+-- | Render the stable prefix: persona, scene, format rules and skill index.
+-- "Max.Prompt.Render" renders time, roster and memories separately.
 systemPrompt ::
   Bool -> -- multimodal
   Bool -> -- private chat

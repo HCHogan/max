@@ -15,14 +15,8 @@ import Max.IR (nonBlank)
 newtype MessageCursor = MessageCursor {ingestSeq :: Int64}
   deriving stock (Show, Eq, Ord)
 
--- | The fields needed to render a message as a line of prompt context.
---
--- Every identifier here is the canonical one (ADR 004): 'canonicalId' is
--- what the model reads as @#\<id\>@ and passes back to every tool, and
--- 'authorPrincipalId' is what it reads as @[\@#\<id\>]@.  The
--- compatibility bigints are not projected at all — they exist for the
--- session/command/admin plumbing, and nothing that renders to a model or a
--- human needs them.
+-- | Prompt history uses canonical message and principal IDs (ADR 004),
+-- never the compatibility IDs used by session and command plumbing.
 data HistoryItem = HistoryItem
   { canonicalId :: !Int64,
     authorPrincipalId :: !Int64,
@@ -82,17 +76,8 @@ data HistoryPage = HistoryPage
   }
   deriving stock (Show)
 
--- | How a speaker is named in every transcript: what the other members see —
--- 群名片 first, then nickname, then the bare principal id when the platform
--- gave us neither (QQ sends @\"\"@ for an unset card, so blanks count as
--- absent).
---
--- Deliberately no platform label.  Which transport carried a message is
--- routing metadata: the delivery layer needs it to pick capabilities and to
--- attribute a mirrored copy, the model does not.  Naming it here did two
--- things wrong — it made the unlabelled platform the transcript's implicit
--- home, and it split one principal into "QQ · 张三" and "Matrix · 张三",
--- which is precisely what principal identities exist to prevent.
+-- | Prefer a nonblank group card, then nickname, then principal ID.
+-- Omit platform labels so mirrored accounts share the same speaker identity.
 bestName :: HistoryItem -> Text
 bestName h =
   fromMaybe (T.pack (show h.authorPrincipalId)) (blankless h.senderCard <|> blankless h.senderNickname)

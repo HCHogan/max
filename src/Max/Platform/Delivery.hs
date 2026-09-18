@@ -380,14 +380,9 @@ deliveryWorker workerId transports = localDomain "delivery" $ do
             )
         Right attempt -> pure attempt
 
--- | ADR 003 §7's attempt budget.  A rejection by a live edge is
--- retryable-shaped forever, and every retry re-blocks the endpoint's ordered
--- lane behind one row that will never land.  A rejection is only reported
--- once the transport has proved no message was emitted, so ending it is a
--- deterministic poison, not an undecidable outcome: the copy is permanently
--- failed and the lane releases.  Attempts that could have taken effect are
--- already terminal as @outcome_unknown@ on their first occurrence, and an
--- unreachable edge is deliberately unbounded — see 'AttemptRetryable'.
+-- | Bound confirmed rejections so one undeliverable message cannot block the lane.
+-- Ambiguous sends stop immediately as @outcome_unknown@; unreachable transports
+-- use the separate 'AttemptRetryable' policy (ADR 003 §7).
 toCompletion :: Int -> UTCTime -> DeliveryAttempt -> DeliveryCompletion
 toCompletion attempts now = \case
   AttemptConfirmed native -> DeliveryConfirmedAs native

@@ -1,14 +1,6 @@
--- | The fully normalized input presented to the shared ingest kernel.
---
--- Content is an ADR 003 IR body in the 'Ingest' phase: everything an
--- adapter can build without database access.  Mentions still carry their
--- origin-native user id; 'Max.Platform.Store.ingestEnvelope' resolves them
--- to principal identities inside the ingest transaction and stores the
--- 'Canonical' phase.
---
--- @rawPayload@ is diagnostic evidence only; the store applies its
--- configured byte limit before persistence and it must never participate
--- in routing or authorization.
+-- | Adapter input with native mention IDs. The ingest transaction resolves
+-- principal identities and persists the canonical body (ADR 003).
+-- @rawPayload@ is size-limited diagnostic data, never routing or authorization input.
 module Max.Platform.Envelope
   ( IngestClass (..),
     InboundEnvelope (..),

@@ -267,19 +267,9 @@ data IngestOptions = IngestOptions
     -- every other platform leaves @messages.segments@ as the frozen empty
     -- array and uses canonical content exclusively.
     qqProvenanceSegments :: !(Maybe Value),
-    -- | On this endpoint, an event max's own account authored is only ever
-    -- evidence about an outstanding delivery.  A match confirms that delivery
-    -- exactly as an ordinary echo does; no match stores nothing at all and
-    -- answers 'EchoUnmatched'.  Events from anyone else are unaffected.
-    --
-    -- Adapters whose own sends come back on the inbound stream set this to
-    -- prove a non-idempotent send landed without minting a second copy of a
-    -- message max already authored.  Two things make the copy's rendering
-    -- differ from the canonical body it should have matched, so the copy is
-    -- not hypothetical: a mirror copy carries an attribution prefix, and the
-    -- echo can arrive before the send response that names its native id.
-    -- The trade is that a human typing from the bot's own account is read as
-    -- an echo too; a bot account exists to be a bot.
+    -- | Treat own-account events only as delivery echoes, including manual sends.
+    -- Matches confirm delivery; unmatched events are discarded as 'EchoUnmatched'.
+    -- This avoids duplicate ingestion when an echo arrives before the send receipt.
     selfEventsAreEchoes :: !Bool
   }
   deriving stock (Eq, Show, Generic)
@@ -624,14 +614,8 @@ compatibilityMessageIdForCanonical (CanonicalMessageId canonical) = do
   rows <- query "SELECT message_id FROM messages WHERE canonical_message_id = ?" (Only canonical)
   pure (exactlyOne "compatibilityMessageIdForCanonical" rows)
 
--- | The native event id a stored message was ingested under.
---
--- A relation names its target natively — 'resolveNativeTarget' looks the id up
--- in @platform_events@ — so anything holding only a canonical id has to come
--- back through here before it can point at that message.  Writing the
--- canonical id into the native column instead silently produces an unresolved
--- relation: the row exists, @target_canonical_message_id@ stays null, and
--- every reader that joins on it sees nothing.
+-- | Resolve the ingestion-native ID for a relation target. Storing a canonical
+-- ID in the native column would leave the relation unresolved.
 nativeEventIdForCanonical ::
   (WithConnection :> es, IOE :> es) =>
   CanonicalMessageId ->
@@ -814,14 +798,8 @@ ensureConfiguredEndpoint platform nativeAccount nativeConversation kind mode mLe
         \ WHERE platform_account_id = ? AND native_conversation_id = ? FOR UPDATE"
         (account, conversationNative)
     (endpoint, conversation) <- case existing :: [(Int64, Int64)] of
-      -- "A mirror binds to the explicitly named legacy conversation" has to
-      -- hold for an endpoint that already exists, not only for one being
-      -- created: an endpoint that ran standalone first and is named as a
-      -- mirror later would otherwise keep its own conversation forever, and
-      -- the fan-out — which pairs endpoints by conversation — would never see
-      -- a peer.  Rebinding moves the endpoint, not its history: past messages
-      -- are keyed by @group_id@ and stay in the conversation that received
-      -- them.
+      -- Rebind existing standalone endpoints when configured as mirrors.
+      -- Their past messages remain in the original conversation.
       [(endpointId', conversationId')] -> case mLegacy of
         Nothing -> pure (endpointId', conversationId')
         Just legacy -> do
@@ -2044,16 +2022,8 @@ renewDispatchLease workerId (CanonicalMessageId canonical) attempt leaseDuration
       (realToFrac leaseDuration :: Double, canonical, workerId, attempt)
   pure (changed == 1)
 
--- | Re-offer every message this conversation deferred while it was busy.
---
--- Called when a turn ends, which is the moment the reason for deferring
--- stopped being true.  Writing the row back to @pending@ is what fires
--- @max_notify_dispatch_work@, so the waiting worker is woken precisely rather
--- than discovering the change on its next fallback scan.
---
--- Returns how many were released, for the log: a conversation that keeps
--- releasing the same count is one where deferral is not converging, which is
--- the failure mode worth seeing.
+-- | Requeue deferred inputs when a turn ends. The pending-state trigger wakes
+-- dispatch workers; the returned count is logged to detect repeated deferrals.
 releaseDeferredDispatches ::
   (WithConnection :> es, IOE :> es) =>
   -- | Legacy group id, the same column the dispatch claim reads.  Int64 rather
@@ -2070,14 +2040,8 @@ releaseDeferredDispatches gid =
       \   AND m.group_id = ? AND md.status = 'deferred'"
       (Only gid)
 
--- | Which endpoints one delivery lane will claim.
---
--- Delivery runs a lane per platform so a wedged edge cannot hold the others
--- hostage.  Splitting is safe for ordering because the FIFO guard in
--- 'claimDeliveriesWhere' only ever compares deliveries sharing an
--- @endpoint_id@, and an endpoint belongs to exactly one platform account,
--- hence exactly one platform: no ordering constraint has ever spanned a
--- platform boundary, so no lane can be missing a row it had to wait behind.
+-- | Separate platform lanes isolate stalled transports. FIFO is per endpoint,
+-- and each endpoint belongs to exactly one lane.
 data DeliveryLane
   = -- | One platform's endpoints, served by that platform's transport.
     LanePlatform !Platform
@@ -2607,15 +2571,7 @@ listConversations =
     \ ORDER BY m.last_message_at DESC NULLS LAST, c.conversation_id"
     ()
 
--- | Write through the name a platform just told us for a room.
---
--- The bot fetches group metadata every turn to build the prompt's
--- 群信息 lines, and until now that name died with the turn: the
--- ledger's @title@ column was written by nothing, so every consumer
--- (the admin panel, any future export) had only a numeric id to show.
--- Keyed by legacy group id because that is the identifier the QQ
--- roster path holds; the @IS DISTINCT FROM@ guard keeps a renamed
--- group to one write instead of one per turn.
+-- | Persist the roster's room title for admin/history display, writing only changes.
 rememberConversationTitle ::
   (WithConnection :> es, IOE :> es) =>
   Int64 ->
@@ -2802,17 +2758,8 @@ ensureIdentityBatch endpoint natives = do
         (endpoint.erEndpointId, PGArray (map fst (Map.elems identities)))
   pure identities
 
--- | The mention resolution the canonical prompt projection needs, read back
--- from the identity batch this transaction already ensured.
---
--- The prompt names /people/ (ADR 004), so this is the identity → principal
--- join, produced for free by the batch rather than queried again.
---
--- Every writer renders @rendered_text@ from the /resolved/ canonical body,
--- never from the pre-identity ingest body: the two disagree exactly where
--- 'resolveBodyMentions' enriched a bare native id into a stored display name,
--- and @maintenance verify@/@reproject@ recompute from the canonical body.
--- Rendering from the ingest body is what made a correct row look stale.
+-- | Reuse resolved identities for prompt rendering. Render the canonical body
+-- after mention resolution so stored text agrees with verification/reprojection.
 identityPrincipals :: Map NativeUserId (Int64, Int64) -> Map PrincipalIdentityId PrincipalId
 identityPrincipals identities =
   Map.fromList

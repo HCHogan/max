@@ -92,15 +92,9 @@ fetchRecentInGroup gid excludeId since n = do
         <> notForwardChild "messages"
         <> " AND NOT is_synthetic AND kind IN ('chat', 'system')"
 
--- | Every prompt-eligible chat row after an exact conversation cursor,
--- ordered by the database ingestion sequence.  This complete-range helper is
--- retained for exact diagnostics/tests; production prompt collection uses
--- 'fetchNewestPromptPageBefore' so an arbitrarily long ledger is never loaded
--- merely to be trimmed by the pure token policy.
---
--- The current trigger is excluded because it is rendered separately.  A
--- user's @!clear@ watermark remains a prompt-visibility boundary even though
--- the immutable source ledger and its compartments are retained.
+-- | Complete-range diagnostic read in ingestion order, respecting @!clear@ and
+-- excluding the separately rendered trigger. Production prompts use the bounded
+-- 'fetchNewestPromptPageBefore' instead.
 fetchTranscriptAfter ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->

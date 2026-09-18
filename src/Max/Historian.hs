@@ -342,14 +342,9 @@ scanEpisodeWindowBounded tz scope initial through tokenLimit = go initial 0 Noth
             | otherwise ->
                 pure (Just (EpisodeWindow end (used + selectedTokens) page.hasMore))
 
--- | One event-driven coverage-heal step: enqueue the oldest raw island at or
--- below the live historian cursor as a durable backfill run.  Boot uses it
--- for history predating enrollment; every publication and every quiet round
--- reuse it so a commit-order skip (an insert whose ingest_seq committed after
--- the cursor passed it) or an interrupted backfill chain is repaired on the
--- next conversation event instead of the next restart.  Publication of the
--- enqueued run still validates source hash and active non-overlap, and never
--- moves the live cursor.
+-- | Backfill the oldest uncovered range below the live cursor, including late
+-- commits whose ingestion sequence the cursor already passed. Publication checks
+-- source hash and non-overlap without moving the live cursor.
 healOldestCoverageGap ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   TimeZone ->

@@ -122,15 +122,7 @@ setReminderTool tz =
         <*> (dropFiller <$> objectValue .:? "at")
         <*> (dropFiller <$> objectValue .:? "cron")
 
--- | Read a placeholder as the absence it means.
---
--- Models routinely fill an unused optional parameter instead of omitting it —
--- @"."@, an empty string, @0@.  None of those is a time or a cron expression,
--- so reading one as "the user asked for this specifier" turns a perfectly
--- well-formed request into a mutual-exclusion error.  That error is then
--- unrecoverable in practice: the tool writes, so a failure is reported to the
--- model as outcome-unknown, which the host prompt tells it not to retry — and
--- it re-sends the identical arguments until the turn burns out.
+-- | Treat model-supplied placeholders as absent before checking mutual exclusion.
 dropFiller :: Maybe Text -> Maybe Text
 dropFiller raw = do
   value <- T.strip <$> raw

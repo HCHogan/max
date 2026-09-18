@@ -313,14 +313,8 @@ rebuildResponses acc =
     Just (resp, _) -> resp
     Nothing -> ContentResp acc.saText
 
--- | Pull @choices[0].message@ off an OpenAI-style chat response.
--- For responses with tool_calls, the raw message object rides along
--- verbatim in the 'ToolCallsResp' so the agent loop can replay it
--- unchanged in the next request — thinking output must go back in
--- whatever field/structure the provider used (DeepSeek 400s when
--- its @reasoning_content@ goes missing).
--- Usage extraction is lenient: a missing or mangled @usage@ block
--- must never fail an otherwise-good response.
+-- | Parse @choices[0].message@, preserving raw tool-call reasoning for the next
+-- request. Invalid usage metadata must not fail an otherwise valid response.
 parseResponseOpenAI :: Value -> Parser (ChatResponse, Maybe TokenUsage)
 parseResponseOpenAI = withObject "ChatResponse" $ \o -> do
   choices <- o .: "choices"
@@ -468,18 +462,8 @@ splitDataUrl url = do
   b64 <- T.stripPrefix ";base64," after
   if T.null mime then Nothing else Just (mime, b64)
 
--- | Convert our 'ChatMessage' sequence to (system-prompt, message-list)
--- in Anthropic shape:
---
---   * All 'MsgSystem' texts are joined and pulled into the top-level
---     @system@ field (Anthropic doesn't accept @role: system@ inside
---     the messages array).
---   * Consecutive 'MsgTool' messages are coalesced into a single
---     @role: user@ message with multiple @tool_result@ blocks — that
---     matches how Claude expects to see tool results after a single
---     assistant turn with multiple @tool_use@ blocks.
---   * 'MsgAssistantToolCalls' becomes an assistant message whose
---     content is an array of @tool_use@ blocks.
+-- | Extract the top-level system prompt and coalesce consecutive tool results
+-- into one user message, as required by Anthropic's message format.
 toAnthropicMessages :: [ChatMessage] -> (Maybe Text, [AnthropicMsg])
 toAnthropicMessages msgs = (systemPrompt, go nonSystems)
   where

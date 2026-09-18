@@ -817,16 +817,8 @@ stripAnsi = T.filter keep . T.pack . go . T.unpack
     dropOsc ('\ESC' : '\\' : cs) = cs
     dropOsc (_ : cs) = dropOsc cs
 
--- | Put already-realised Nix store paths on PATH for one command.  Nothing is
--- installed into the sandbox itself.  Empty list = run the command as-is.
---
--- Package realisation is performed separately by 'runPreparePackages', in a
--- fixed helper with narrowly scoped package authority.  The unprivileged,
--- non-root sandbox therefore never needs write access to the shared Nix DB.
--- A bare @python3Packages.*@ derivation does not alter Python's import path, so
--- The broker collects those attributes into one
--- @python3.withPackages@ environment.  Every attribute segment is quoted and
--- validated by the registry before this expression is built.
+-- | Add already-realised store paths to one command's PATH. 'runPreparePackages'
+-- handles installation separately, keeping the sandbox's shared Nix DB read-only.
 wrapPackages :: [Text] -> Text -> Text
 wrapPackages [] cmd = cmd
 wrapPackages storePaths cmd =

@@ -12,19 +12,9 @@ import Max.Time (fmtDurationSec)
 tshow :: (Show a) => a -> Text
 tshow = T.pack . show
 
--- | Upgrade bare opaque-media display markers to the canonical handles the
--- model can pass to a tool (ADR 004):
---
---   * @[forward]@ → @[forward#\<id\>]@, naming the container message, which
---     is what the child rows are keyed under;
---   * @[video]@ → @[video#\<id\>.\<seg\>: \<简介\>](\<时长\>)@, naming one
---     clip, because @(canonical_message_id, seg_index)@ is the primary key
---     of @message_videos@.
---
--- Markers are consumed left to right against the segments in @seg_index@
--- order: both orders come from the canonical node list, so they agree.  A
--- marker with no segment left (the download failed, so no row exists) keeps
--- its bare form — @view_video@ could not have returned it either.
+-- | Replace forward markers with container IDs and video markers with message/segment
+-- handles (ADR 004). Match videos left to right in canonical segment order;
+-- keep bare markers when no stored segment is available.
 tagMediaMarkers :: Map.Map Int64 MessageMedia -> HistoryItem -> HistoryItem
 tagMediaMarkers segments h =
   h {renderedText = tagVideos (T.replace "[forward]" forwardHandle h.renderedText)}

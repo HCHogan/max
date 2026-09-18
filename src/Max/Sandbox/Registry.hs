@@ -1,15 +1,6 @@
--- |
--- Durable sandbox registry.  PostgreSQL owns lifecycle metadata and each
--- durable work directory owns the live filesystem; the STM map is only a cache
--- and per-sandbox lock table.  Production boot reconciles rows with the runtime broker,
--- adopting a live container or rebuilding it around a surviving volume.
---
--- == Concurrency
---
--- Commands and file operations share access to a sandbox. Lifecycle changes
--- close admission and drain active users before rebuilding or deleting it.
--- Filesystem observations describe shared workspace state; callers coordinate
--- writes to the same paths and ports themselves.
+-- | Persist sandbox metadata and work directories; cache handles and locks in STM.
+-- Boot adopts live containers or rebuilds them around retained volumes. Lifecycle
+-- changes stop admission and drain users; callers coordinate concurrent file/port use.
 module Max.Sandbox.Registry
   ( -- * Registry
     SandboxRegistry,

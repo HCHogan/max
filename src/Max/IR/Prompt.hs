@@ -37,14 +37,8 @@ import Max.Platform.Types
 import Max.Reply (ReplyPiece (..), parseReplyTokens)
 import Max.Util (readIntegral, tshow)
 
--- | Display-name → principal, for the rescue pass that turns @\@显示名@
--- into the canonical token.  Small models @ people by name instead of by
--- id, and that would otherwise send as dead text.
---
--- There is no membership predicate any more: a principal the model made up
--- simply fails to resolve to an account at send time and the mention folds
--- back to @\@name@ text, which is the same answer the old whitelist gave
--- and one fewer thing to keep in sync with the platform.
+-- | Resolve display-name mentions to principals. At send time, mentions without
+-- a destination account fall back to plain @\@name@ text.
 data MentionRoster = MentionRoster
   { names :: [(Text, PrincipalId)],
     -- | The bot's own principal, when the caller knows it.  A model that has
@@ -212,16 +206,8 @@ promptText = renderPromptBody (\_ display -> mentionToken display)
 promptCanonicalText :: Map PrincipalIdentityId PrincipalId -> Body 'Canonical -> Text
 promptCanonicalText principals = renderPromptBody (canonicalMention principals)
 
--- | The transcript body of a row the room /watched/ rather than heard: a
--- 撤回, a 贴表情, an edit.  A meta event carries no content nodes at all —
--- its entire meaning is the relation it points at — so without this its
--- rendered projection is the empty string, which is exactly why these rows
--- could only ever be classified as debug.
---
--- The target is named as @#\<canonical id\>@ because that is already the
--- handle the model uses for every other cross-reference (ADR 004): it can
--- match the line against the message above it, or expand it with
--- @get_message_by_id@, without a second vocabulary.
+-- | Render relation-only events (edits, reactions and redactions) with canonical
+-- target handles; their content nodes alone would produce empty transcript lines.
 systemEventText :: EventKind -> Maybe Int64 -> Maybe Text -> Bool -> Text
 systemEventText kind target reactionKey added = case kind of
   EventMessage -> ""

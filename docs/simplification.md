@@ -6,6 +6,10 @@ complete the plan.
 
 ## Product contract
 
+- Preserve major user-facing features. The line-count goal never justifies
+  removing platforms, background jobs, reminders, memory/search, media/files,
+  browser/sandbox, static skills or raw code mode. Replace their implementation
+  where useful; retain the feature and its authorization boundaries.
 - A normal final assistant response ends a turn. Tool calls continue the loop.
   Remove model-authored finish, disposition, revision and recovery protocols.
 - Publish safe text fragments before the model finishes. Retain a published
@@ -124,12 +128,13 @@ policy, business queries and active schema, shared HTTP/SSE/model handling,
 publication, reminder scheduling and application assembly. Moving business
 decisions into adapters does not remove them from the core.
 
-Design budget: types 450; conversation/Agent 1,450; Jobs 650; tool policy 700;
+Exploratory budget: types 450; conversation/Agent 1,450; Jobs 650; tool policy 700;
 context/memory 1,600; business storage/schema 1,300; shared model/HTTP 950;
 publication 700; reminders 350; startup/config/logging 600. Total 8,750, with a
-strict core target below 10,000. This is an implementation target, not a claimed
-result. Platform/provider wire adapters, concrete tools, isolation runtimes,
-bridges and UI remain separately reported maintenance costs. Report tests,
+core aspiration below 10,000. This is neither an acceptance gate nor a reason
+to remove useful features. If preserving them needs more code, report that
+result and keep the features. Platform/provider wire adapters, concrete tools,
+isolation runtimes, bridges and UI remain separately reported maintenance costs. Report tests,
 historical migrations and prompt size separately; deleting comments does not
 reduce effective code lines.
 
@@ -232,10 +237,17 @@ maintained implementation record.
   reindex, stale content and archived-memory writes. Capability checks and HLint
   pass. Historical lease tables remain unused rather than deleting old data.
 - Intermediate src + app count is now 49,258 effective Haskell lines, 3,369
-  below baseline. The core manifest and sub-10,000 target are still outstanding.
+  below baseline. The core manifest was added in the following step.
 
 - Responsibility accounting now covers every src/app Haskell file explicitly.
   The current core Haskell component is 36,083 lines; active SQL is additional.
   The report in `docs/code-size.md` keeps adapters, concrete tools, isolation,
   admin, other production code, tests, developer tools and migration history
   visible separately. The core target remains unmet.
+
+- Comment follow-up: 36 Haskell modules have 531 fewer full-line comments.
+  Non-comment source text is unchanged. Removed stale replay descriptions,
+  misplaced roster documentation and obsolete incident narratives; retained
+  protocol, identity, cancellation and authorization constraints. All Cabal
+  targets build and HLint passes. The line-count aspiration is explicitly
+  subordinate to preserving major features and readability.
