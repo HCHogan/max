@@ -299,13 +299,15 @@ about the shipped binary, not the deployment's effective configuration or
 database state.
 
 Unless a profile sets `stream: false` the LLM box reads the completion over SSE
-instead of waiting for a whole body. Paragraphs the model has finished with go
+instead of waiting for a whole body. Safe fragments go
 out mid-generation as typed `AgentFinalStreamText` events; tool narration and
 debug facts use distinct event constructors. `Max.AgentEvent` interprets all
 model-authored text through `ReplySend`, while the loop only reports how much
 was accepted as `AgentResult.sentPrefix` and the handler sends the rest.
-`readyPrefix` will not release a trailing paragraph — it may still grow — so a
-one-paragraph reply, which is most of them, still arrives all at once.
+`readyPrefix` releases completed paragraphs, or plain-text sentences after
+at least 48 characters. At 240 characters it also allows word/CJK boundaries.
+It holds markup and incomplete tokens. The sender reserves its last message
+slot for the final tail, and only acknowledged fragments advance `sentPrefix`.
 
 ## Durability
 

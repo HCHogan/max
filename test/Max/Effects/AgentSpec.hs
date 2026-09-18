@@ -414,6 +414,34 @@ spec = describe "Agent full loop" $ do
     readIORef executed `shouldReturn` 0
     result.reply `shouldBe` Just "corrected answer"
 
+  it "publishes single-paragraph text before the model returns and acknowledges each prefix once" $ do
+    events <- newIORef []
+    inputs <- newIORef []
+    tasks <- newTaskRegistry
+    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    let prefix = T.replicate 48 "文" <> "。"
+        response = prefix <> "剩下的回答"
+        streaming =
+          LLMInterpreter
+            { liChat = \_ _ _ _ sink -> do
+                for_ sink ($ (prefix <> "剩下"))
+                liftIO $ readIORef events `shouldReturn` [SeenFinalStream prefix]
+                for_ sink ($ response)
+                liftIO $ readIORef events `shouldReturn` [SeenFinalStream prefix]
+                pure (Right (ContentResp response))
+            }
+    result <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff
+        . runConcurrent
+        . runLog "agent-test" logger LogAttention
+        . runLLMWith streaming
+        . runTestAgent inputs (AgentLimits 4) (const (buildToolRegistry [] []))
+        $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+    result.sentPrefix `shouldBe` prefix
+    result.reply `shouldBe` Just response
+    result.aborted `shouldBe` Nothing
+
   it "preserves a streamed prefix while returning an explicit interruption" $ do
     events <- newIORef []
     _inputs <- newIORef []

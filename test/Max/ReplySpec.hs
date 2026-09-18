@@ -447,11 +447,30 @@ spec = do
           "```\ncode\n\nmore\n```\n\n尾巴"
         ]
 
-    -- The common case, and the reason single-paragraph replies get no
-    -- benefit from streaming at all: nothing is safe until a second
-    -- paragraph starts.
-    it "holds a lone paragraph" $
+    it "holds a short unfinished sentence" $
       readyPrefix "还在写这一段" `shouldBe` ("", "还在写这一段")
+
+    it "releases a sufficiently long sentence before its paragraph ends" $ do
+      let sentence = T.replicate 48 "文" <> "。"
+      readyPrefix (sentence <> "还在继续") `shouldBe` (sentence, "还在继续")
+      let english = T.replicate 12 "word " <> "done."
+      readyPrefix (english <> " More follows") `shouldBe` (english, " More follows")
+
+    it "does not split a decimal point or a still incomplete final sentence" $ do
+      let unfinished = T.replicate 48 "a" <> "3.14159"
+      readyPrefix unfinished `shouldBe` ("", unfinished)
+      let sentence = T.replicate 48 "文" <> "。"
+      readyPrefix sentence `shouldBe` ("", sentence)
+
+    it "allows large plain fragments at word and CJK boundaries" $ do
+      let english = T.replicate 50 "word " <> "tail"
+      readyPrefix english `shouldBe` (T.replicate 50 "word ", "tail")
+      readyPrefix (T.replicate 241 "文") `shouldBe` (T.replicate 240 "文", "文")
+
+    it "holds unfinished markup even when it contains sentence punctuation" $
+      mapM_
+        (\opener -> let body = opener <> T.replicate 48 "文" <> "。还有内容" in readyPrefix body `shouldBe` ("", body))
+        ["[sticker#", "[image#", "[silence:", "`", "```\n", "| 标题 |\n", "$", "[label](", "“"]
 
     it "releases every paragraph but the last" $
       readyPrefix "第一段\n\n第二段\n\n第三段还没写完"

@@ -4,7 +4,7 @@
 -- | Multi-turn LLM loop with scoped tools and typed output events.
 -- Each round reads pending input, calls the model, and either executes tools
 -- or handles a content response under the turn's completion policy.
--- Streaming emits safe paragraphs and tracks the accepted prefix per call.
+-- Streaming emits safe fragments and tracks the accepted prefix per call.
 -- Handler owns the TurnRuntime and its cleanup; this interpreter installs
 -- cancellation, checks it between steps, and consumes the execution inbox.
 module Max.Effects.Agent
@@ -127,7 +127,7 @@ data AgentResult = AgentResult
     aborted :: !(Maybe AgentFailure),
     -- | Verbatim prefix already accepted by the streaming sink; empty if none.
     -- The caller sends only @T.drop (T.length sentPrefix) reply@. 'readyPrefix'
-    -- cuts at safe paragraph boundaries, so this preserves the unsent tail.
+    -- cuts at safe text boundaries, so this preserves the unsent tail.
     sentPrefix :: !Text
   }
   deriving stock (Show)
@@ -240,7 +240,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
           -- narration, or the final answer), and each gets its own
           -- prefix bookkeeping.
           sentRef <- liftIO (newTVarIO "")
-          (msgs'', eres) <- budgetedCall workingRef ctx h profile "turn" msgs' specs (Just (releaseParagraphs emit sentRef))
+          (msgs'', eres) <- budgetedCall workingRef ctx h profile "turn" msgs' specs (Just (releaseReplyPrefix emit sentRef))
           checkDurable h
           sent <- liftIO (readTVarIO sentRef)
           case eres of
@@ -449,23 +449,22 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
             sentPrefix = ""
           }
 
-    -- Publish newly completed paragraphs; hold the trailing paragraph and code
-    -- fences. A single-paragraph response is therefore held until completion.
+    -- Publish safe fragments, advancing only after the sender accepts them.
     -- Transport timeouts cannot interrupt publication before acknowledgement;
     -- caller cancellation propagates without entering final-tail publication.
-    releaseParagraphs ::
+    releaseReplyPrefix ::
       AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
       TVar Text ->
       Text ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) ()
-    releaseParagraphs emit sentRef soFar = do
+    releaseReplyPrefix emit sentRef soFar = do
       sent <- liftIO (readTVarIO sentRef)
       let (ready, _held) = readyPrefix (T.drop (T.length sent) soFar)
       unless (T.null (T.strip ready)) $ do
         -- The sink may refuse — it is the one holding the message
         -- budget, and once that is down to its last slot everything
         -- further belongs to the final send.  Only advance the mark
-        -- when it actually took the text, or the refused paragraph
+        -- when it actually took the text, or the refused fragment
         -- would count as said and never go out at all.
         taken <- emit (AgentFinalStreamText ready)
         when taken $

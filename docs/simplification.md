@@ -58,7 +58,9 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [ ] Remove frontend request ledgers.
 - [ ] Replace frontend SQL ownership/leases with a bounded conversation queue.
 - [x] Normal text ends the loop; failures/truncation/cancellation remain distinct.
-- [ ] Publish paragraphs or other safe bounded text fragments incrementally.
+- [x] Publish paragraphs and plain-prose fragments incrementally.
+- [ ] Bound retained stream buffers and validate publication through the full
+      SSE/transport path before EOS.
 - [ ] Update prompts, tools, handlers, output accounting and fixtures together.
 - [ ] Preserve live provider tool-call/reasoning state within a model loop.
 
@@ -160,3 +162,7 @@ maintained implementation record.
   integration examples passed. Architecture capability checks passed. The
   integration cases include final-publication/input races, independent-input
   separation, feedback provenance, cancellation and publication failure.
+- Streaming validation: 1,110 unit examples passed. A controlled model
+  callback asserts publication before returning the final response and checks
+  that repeated cumulative text does not republish the accepted prefix. This
+  does not yet establish live QQ first-visible latency.

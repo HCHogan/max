@@ -18,7 +18,7 @@ where
 
 import Control.Applicative ((<|>))
 import Data.Char (isAlpha, isAscii, isDigit, isSpace)
-import Data.List (dropWhileEnd, unsnoc)
+import Data.List (dropWhileEnd, foldl', unsnoc)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -222,7 +222,7 @@ matchToken t =
         (_, close) | not (T.null close) -> Just (T.drop 1 close)
         _ -> Nothing
       -- Accept EOF as the close of a complete numeric token. Streaming retains
-      -- unfinished paragraphs, so an in-flight partial ID cannot reach this branch.
+      -- unfinished placeholders, so an in-flight partial ID cannot reach this branch.
       -- Description tokens still require an explicit closing bracket.
       Nothing -> Just ""
       _ -> Nothing
@@ -640,15 +640,30 @@ symbols =
       ("quad", " "), ("qquad", "  "), ("displaystyle", ""), ("limits", "")
     ]
 
--- | Return a safe streaming prefix and remainder, preserving their exact
--- concatenation with the input. Cut only at a blank line outside code fences;
--- hold the trailing paragraph, including a possible standalone silence marker.
+-- | Preserve the exact input while releasing completed paragraphs or plain
+-- prose sentences. Keep markup intact and avoid sending each short sentence
+-- as a separate message; the sender also enforces the whole-reply chunk limit.
 readyPrefix :: Text -> (Text, Text)
 readyPrefix acc
-  | T.null safe = ("", acc)
+  | T.null safe = T.splitAt (proseBoundary acc) acc
   | odd (length (filter isFence (T.lines safe))) = ("", acc)
   | otherwise = (safe, held)
   where
     -- breakOnEnd keeps the separator on the left, so the boundary
     -- lands after the blank line rather than before it.
     (safe, held) = T.breakOnEnd "\n\n" acc
+
+proseBoundary :: Text -> Int
+proseBoundary text
+  | T.any (`elem` ("\n`~[](){}<>|$\\/*_#=“”‘’「」『』\"" :: String)) text = 0
+  | otherwise = foldl' boundary 0 (zip3 [1 ..] chars (drop 1 chars))
+  where
+    chars = T.unpack text
+    boundary previous (offset, current, next)
+      | offset >= 48 && sentenceEnd current next = offset
+      | offset >= 240 && (isSpace current || (cjk current && cjk next)) = offset
+      | otherwise = previous
+    sentenceEnd current next =
+      current `elem` ("。！？" :: String)
+        || (current `elem` (".!?" :: String) && isSpace next)
+    cjk c = c >= '\x3400' && c <= '\x9fff'
