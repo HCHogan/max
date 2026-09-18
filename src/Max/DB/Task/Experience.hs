@@ -48,7 +48,7 @@ taskExperienceSnapshot scope task = do
       \ 'receipt_hash',md5(COALESCE(journal.result_inline::text,journal.result_blob_sha256,''))) ORDER BY attempt.attempt,journal.execution_ordinal) \
       \ FROM task_attempts attempt JOIN agent_turns turn ON turn.turn_id=attempt.turn_id JOIN execution_journal journal ON journal.turn_id=turn.turn_id \
       \ WHERE attempt.task_id=work.task_id AND attempt.revision=work.revision AND journal.event_kind='tool_call' \
-      \ AND journal.state IN ('succeeded','committed') AND journal.tool_ref NOT IN ('task_report','task_finish','task_progress','request_finish'))) \
+      \ AND journal.state IN ('succeeded','committed') AND journal.tool_ref NOT IN ('task_report','task_finish','task_progress'))) \
       \ FROM durable_tasks work JOIN conversations conversation USING(conversation_id) \
       \ WHERE work.task_id=? AND conversation.legacy_group_id=? AND work.status='succeeded' \
       \ AND work.result->>'status'='succeeded' AND work.result->'unresolved'='[]'::jsonb \

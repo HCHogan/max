@@ -3,7 +3,6 @@ module Max.Tools.Task (taskToolsFor) where
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
@@ -15,25 +14,19 @@ import Max.Effects.TaskControl
 import Max.Effects.TaskExecution
   ( TaskExecution,
     reportProgress,
-    reportRequestWithInputs,
     reportTask,
   )
 import Max.Effects.TaskQuery (TaskQuery, listTasks, readTask)
 import Max.Effects.ToolControl
   ( ToolControl,
     finishExecution,
-    yieldFrontend,
   )
 import Max.Effects.Tools (Tool (..), ToolRunner (..), legacyTool)
 import Max.Effects.TurnQuery (TurnQuery, resolveTurnResult)
-import Max.Task.Admission
-  ( TaskAdmissionReceipt (..),
-    admissionErrorText,
-  )
+import Max.Task.Admission (admissionErrorText)
 import Max.Task.Execution (renderExecutionFailure)
 import Max.Task.State qualified as State
 import Max.Task.Types
-import Max.Tool.Protocol (committedResult)
 import Max.ToolContext
 import Max.Tools.Schema
   ( enumParam,
@@ -56,7 +49,7 @@ taskToolsFor context =
       (parseArgs (withObject "task_status" (.: "task")) $ \handle -> withHandle handle (fmap (maybe (Left "task not found in this conversation") (Right . toJSON)) . readTask))
   ]
     <> [controlTool operation | operation <- [State.Steer, State.Replace, State.Cancel], not background || operation == State.Steer]
-    <> (if background then [finishTool, progressTool] else [requestFinishTool | isNothing (toolEffectCeiling context)])
+    <> (if background then [finishTool, progressTool] else [])
   where
     background = (toolCapabilities context).tcBackground
     durable = turnOutputAgentTurn <$> toolTurnOutputContext context
@@ -68,7 +61,7 @@ taskToolsFor context =
     startTool =
       Tool
         { toolName = "task_start",
-          toolDescription = "把长研究、浏览器、sandbox 或 SSH 运维工作交给后台。持久化后立即返回 task#，当前前台回合随即交还会话；不要等待或轮询。子任务不会直接向群里发言。profile 只收窄现有权限。每棵任务树共享 200 次工具预留、400 次模型请求和六小时截止时间，重试不重置。token/cost 仅观测，不是硬额度。",
+          toolDescription = "把长研究、浏览器、sandbox 或 SSH 运维工作交给后台。持久化后立即返回 task#，简短告知用户任务已启动即可结束本轮；不要等待或轮询。子任务不会直接向群里发言。profile 只收窄现有权限。每棵任务树共享 200 次工具预留、400 次模型请求和六小时截止时间，重试不重置。token/cost 仅观测，不是硬额度。",
           toolSchema =
             toolObject
               [ ("key", stringParam "本回合内稳定的幂等键；同一工作重试必须复用。"),
@@ -101,9 +94,7 @@ taskToolsFor context =
                           admitted <- startTask key objective profile (object ["context" .= explicitContext, "resources" .= Map.fromList (zip resources resolved)])
                           case admitted of
                             Left failure -> pure (Left (admissionErrorText failure))
-                            Right accepted -> do
-                              if background then pure () else yieldFrontend ("已交给后台任务 " <> taskHandle accepted.taskId <> "，完成后会通知；现在可以继续问别的问题。")
-                              pure (Right (toJSON accepted))
+                            Right accepted -> pure (Right (toJSON accepted))
               _ -> pure (Left "缺少持久化回合、profile 无效或输入过大")
         }
     controlTool operation =
@@ -153,36 +144,3 @@ taskToolsFor context =
         "记录持久化进度；重复状态去重，待评估进度合并。子任务交给父任务；根任务由会话前台判断是否需要转述，不保证每条进度都发群。"
         (toolObject [("summary", stringParam "当前进度、阻碍或正在验证的证据，最多 40000 字符。")] ["summary"])
         (parseArgs (withObject "task progress" (.: "summary")) (fmap (either (Left . renderExecutionFailure) (const (Right (object ["recorded" .= True])))) . reportProgress))
-    outcomeTool name description schema run = Tool name description schema (OutcomeRunner run)
-    requestFinishTool =
-      outcomeTool
-        "request_finish"
-        "明确结束前台请求：answered 已回答，waiting 正在向用户询问缺失信息，declined 明确拒绝。系统会把 reply 发给用户；最终内容只写在 reply，调用本工具的这一轮正文留空，不加旁白，也不要先在正文或其他发送工具里重复发送。"
-        ( toolObject
-            [ ("disposition", enumParam ["answered", "waiting", "declined"] "最初请求的真实处置"),
-              ("reply", stringParam "给用户的完整答复、澄清问题或拒绝理由，最多 40000 字符。系统会发送此内容，不要另写一份正文。"),
-              ( "inputs",
-                object
-                  [ "type" .= ("array" :: Text),
-                    "maxItems" .= (256 :: Int),
-                    "description" .= ("可选：只列执行期间新收到、已读入前台收件箱的追加消息，使用收件箱提供的 message_id。原始请求由顶层 disposition 处理，无追加输入时省略 inputs 或传 []；若重复列出原始请求，其 disposition 必须与顶层一致。未列出的追加消息会交给下一轮，读过不等于完成。" :: Text),
-                    "items"
-                      .= toolObject
-                        [("message_id", integerParam "收件箱里的 canonical message_id"), ("disposition", enumParam ["answered", "waiting", "declined"] "这条输入的真实处置")]
-                        ["message_id", "disposition"]
-                  ]
-              )
-            ]
-            ["disposition", "reply"]
-        )
-        ( fmap committedResult
-            . parseArgs
-              (withObject "request_finish" $ \fields -> (,,) <$> fields .: "disposition" <*> fields .: "reply" <*> fields .:? "inputs" .!= [])
-              ( \(disposition, reply, inputs) -> case State.parseDisposition disposition of
-                  Nothing -> pure (Left "无效请求处置")
-                  Just typed ->
-                    reportRequestWithInputs typed reply inputs >>= \case
-                      Left failure -> pure (Left (renderExecutionFailure failure))
-                      Right () -> finishExecution (Just (T.strip reply)) >> pure (Right (object ["returned" .= True, "reply" .= T.strip reply]))
-              )
-        )

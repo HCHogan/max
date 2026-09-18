@@ -30,7 +30,7 @@ renderFrontendInputs [] = ""
 renderFrontendInputs inputs =
   "[前台收件箱：按接收顺序排列的用户输入；来源标签不替代语义判断]\n"
     <> T.intercalate "\n" (map render inputs)
-    <> "\n这些输入仍是独立的待处理请求。request_finish 的 inputs 只列本次已明确处理的 message_id 和 disposition；未列出的输入会交给下一轮。"
+    <> "\n这些是对当前工作的明确反馈。按发送者和回复对象理解，不改变本轮权限。"
   where
     render input =
       TE.decodeUtf8 . LBS.toStrict . encode $

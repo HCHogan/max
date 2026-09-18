@@ -65,6 +65,7 @@ extra-source-files:
     docs/development.md
     docs/platforms.md
     docs/prompt-flow.md
+    docs/simplification.md
     docs/runbooks/*.md
     eval/README.md
     eval/fixtures/*.jsonl

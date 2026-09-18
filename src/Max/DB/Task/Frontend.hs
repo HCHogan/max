@@ -69,7 +69,7 @@ admitFrontend turn input = withTransaction $ do
           "SELECT turn_id FROM conversation_frontends WHERE conversation_id=? AND turn_id<>? AND lease_until>clock_timestamp()"
           (conversation, turn.atrTurnId)
       queued <- case (input, occupied) of
-        (Just kind, [Only target]) -> queueInputWithin turn.atrTurnId target kind
+        (Just FeedbackInput, [Only target]) -> queueInputWithin turn.atrTurnId target FeedbackInput
         _ -> pure False
       if queued
         then do
@@ -90,9 +90,8 @@ admitFrontend turn input = withTransaction $ do
               void $
                 execute
                   "UPDATE conversation_frontends SET accepting_input=false WHERE turn_id=?\
-                  \ AND (EXISTS(SELECT 1 FROM request_outcomes WHERE turn_id=?)\
-                  \ OR EXISTS(SELECT 1 FROM durable_tasks WHERE source_turn_id=? AND parent_task_id IS NULL))"
-                  (turn.atrTurnId, turn.atrTurnId, turn.atrTurnId)
+                  \ AND EXISTS(SELECT 1 FROM durable_tasks WHERE source_turn_id=? AND parent_task_id IS NULL)"
+                  (turn.atrTurnId, turn.atrTurnId)
               -- Recovery reconstructs the model context. A prior observation was
               -- not a durable model response, so the same owner must see inputs again.
               void $ execute "UPDATE frontend_inputs SET seen_at=NULL WHERE turn_id=? AND released_at IS NULL" (Only turn.atrTurnId)

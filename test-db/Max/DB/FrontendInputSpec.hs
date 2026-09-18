@@ -16,13 +16,10 @@ import Max.DB.Connection (DbPool)
 import Max.DB.Task (admitTaskReceipt)
 import Max.DB.Task.Frontend
 import Max.DB.Task.FrontendInput (deferRequest, pendingRequest, readInputs)
-import Max.DB.Task.Reporting (submitRequestWithInputs)
 import Max.DB.TaskSpec (draft, seed)
 import Max.Platform.Store (DispatchClaim (..), DispatchCompletion (..), OutboundDraft (..), claimDispatch, completeDispatch, enqueueOutbound, startDispatch)
-import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
+import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Task.Admission (AdmissionError (..))
-import Max.Task.Execution (ExecutionFailure (..))
-import Max.Task.State
 import Max.Task.Types (TaskProfile (Research))
 import Max.Turn.Types
 import OneBot.Types (GroupId (..))
@@ -52,23 +49,6 @@ spec pool = before_ (truncateAll pool) $ describe "frontend steering" $ do
     withDb pool (admitFrontend separate Nothing) `shouldReturn` FrontendBusy
     withDb pool (readInputs front.atrTurnId) `shouldReturn` ""
 
-  it "admits another participant's mention while preserving authorship and explicit settlement" $ do
-    (front, _, owner) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    (incoming, message, actor) <- seed pool 900 2
-    withDb pool (admitFrontend incoming (Just MentionInput)) `shouldReturn` FrontendInputQueued
-    principals <- withDb pool $ query "SELECT initiator_principal_id FROM agent_turns WHERE turn_id=?" (Only front.atrTurnId)
-    principals `shouldBe` [Only owner.unPrincipalId]
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" []) `shouldReturn` Left ExecutionInputPending
-    body <- withDb pool (readInputs front.atrTurnId)
-    body `shouldSatisfy` T.isInfixOf "\"kind\":\"steering\""
-    assignments <- withDb pool $ query "SELECT message.author_principal_id,input.kind FROM frontend_inputs input JOIN messages message ON message.canonical_message_id=input.message_id WHERE input.turn_id=?" (Only front.atrTurnId)
-    assignments `shouldBe` [(actor.unPrincipalId, "steering" :: Text)]
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [RequestInputOutcome message.unCanonicalMessageId RequestAnswered]) `shouldReturn` Right ()
-    void $ withDb pool (enqueueOutbound (draft front))
-    withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing)
-    dispositions pool front `shouldReturn` ["answered", "answered"]
-
   it "keeps a mention in another conversation on its own frontend" $ do
     (front, _, _) <- seed pool 900 1
     withDb pool (claimFrontend front) `shouldReturn` True
@@ -83,14 +63,14 @@ spec pool = before_ (truncateAll pool) $ describe "frontend steering" $ do
     (second, secondMessage, _) <- seed pool 900 1
     void $ withDb pool $ execute "UPDATE messages SET rendered_text='first input' WHERE canonical_message_id=?" (Only firstMessage.unCanonicalMessageId)
     void $ withDb pool $ execute "UPDATE messages SET rendered_text='second input',reply_to_canonical_message_id=? WHERE canonical_message_id=?" (trigger.unCanonicalMessageId, secondMessage.unCanonicalMessageId)
-    withDb pool (admitFrontend second (Just MessageInput)) `shouldReturn` FrontendInputQueued
-    withDb pool (admitFrontend first (Just MessageInput)) `shouldReturn` FrontendInputQueued
+    withDb pool (admitFrontend second (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
+    withDb pool (admitFrontend first (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
     body <- withDb pool (readInputs front.atrTurnId)
     let entries = filter (T.isPrefixOf "{") (T.lines body)
     case entries of
       [firstEntry, secondEntry] -> do
         firstEntry `shouldSatisfy` T.isInfixOf "first input"
-        firstEntry `shouldSatisfy` T.isInfixOf "\"kind\":\"message\""
+        firstEntry `shouldSatisfy` T.isInfixOf "\"kind\":\"steering\""
         secondEntry `shouldSatisfy` T.isInfixOf "second input"
         secondEntry `shouldSatisfy` T.isInfixOf "\"kind\":\"steering\""
       _ -> expectationFailure (show entries)
@@ -107,150 +87,25 @@ spec pool = before_ (truncateAll pool) $ describe "frontend steering" $ do
     count <- withDb pool $ query "SELECT count(*) FROM frontend_inputs WHERE message_id=?" (Only message.unCanonicalMessageId)
     count `shouldBe` [Only (1 :: Int64)]
 
-  it "rejects an unseen input before finish and only settles explicitly named inputs after publication" $ do
-    (front, _, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    (incoming, message, _) <- seed pool 900 1
-    withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" []) `shouldReturn` Left ExecutionInputPending
-    _ <- withDb pool (readInputs front.atrTurnId)
-    let inputs = [RequestInputOutcome message.unCanonicalMessageId RequestWaiting]
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" inputs) `shouldReturn` Right ()
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" inputs) `shouldReturn` Right ()
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" []) `shouldReturn` Left ExecutionRequestConflict
-    dispositions pool front `shouldReturn` ["pending", "pending"]
-    void $ withDb pool (enqueueOutbound (draft front))
-    withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing)
-    dispositions pool front `shouldReturn` ["answered", "waiting"]
-
-  it "accepts the incident's redundant original request without inventing an inbox input" $ do
-    (front, message, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    let ownTrigger = RequestInputOutcome message.unCanonicalMessageId RequestAnswered
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [ownTrigger]) `shouldReturn` Right ()
-    -- Equivalent retries normalize before checking the immutable outcome.
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" []) `shouldReturn` Right ()
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [ownTrigger]) `shouldReturn` Right ()
-    inbox <- withDb pool $ query "SELECT count(*) FROM frontend_inputs WHERE turn_id=?" (Only front.atrTurnId)
-    inbox `shouldBe` [Only (0 :: Int64)]
-    reports <- withDb pool $ query "SELECT count(*) FROM request_outcomes WHERE turn_id=?" (Only front.atrTurnId)
-    reports `shouldBe` [Only (1 :: Int64)]
-    void $ withDb pool (enqueueOutbound (draft front))
-    withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing)
-    dispositions pool front `shouldReturn` ["answered"]
-
-  it "normalizes the original request while preserving additional input dispositions" $ do
-    (front, message, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    (incoming, inputMessage, _) <- seed pool 900 1
-    withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
-    let original = RequestInputOutcome message.unCanonicalMessageId RequestAnswered
-        additional = RequestInputOutcome inputMessage.unCanonicalMessageId RequestWaiting
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [original, additional]) `shouldReturn` Left ExecutionInputPending
-    _ <- withDb pool (readInputs front.atrTurnId)
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [additional, original]) `shouldReturn` Right ()
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [additional]) `shouldReturn` Right ()
-    void $ withDb pool (enqueueOutbound (draft front))
-    withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing)
-    dispositions pool front `shouldReturn` ["answered", "waiting"]
-
-  it "rejects a conflicting original disposition without closing input or writing an outcome" $ do
-    (front, message, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    let conflicting = RequestInputOutcome message.unCanonicalMessageId RequestWaiting
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [conflicting]) `shouldReturn` Left ExecutionTriggerConflict
-    reports <- withDb pool $ query "SELECT count(*) FROM request_outcomes WHERE turn_id=?" (Only front.atrTurnId)
-    reports `shouldBe` [Only (0 :: Int64)]
-    (incoming, _, _) <- seed pool 900 1
-    withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
-
-  it "rejects other messages from the conversation and other conversations as unowned inputs" $ do
-    (front, _, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    (_, unrelated, _) <- seed pool 900 2
-    (_, outside, _) <- seed pool 901 1
-    let ids = [unrelated.unCanonicalMessageId, outside.unCanonicalMessageId]
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [RequestInputOutcome identifier RequestAnswered | identifier <- ids])
-      `shouldReturn` Left (ExecutionInputUnowned ids)
-    -- The model can correct the arguments after a definite rejection.
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" []) `shouldReturn` Right ()
-
-  it "rejects duplicate input dispositions before mutation" $ do
-    (front, message, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    let original = RequestInputOutcome message.unCanonicalMessageId RequestAnswered
-        duplicate = Left (ExecutionInvalidRequest "inputs 的 message_id 不能重复。")
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [original, original]) `shouldReturn` duplicate
-    (incoming, inputMessage, _) <- seed pool 900 1
-    withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
-    _ <- withDb pool (readInputs front.atrTurnId)
-    let input = RequestInputOutcome inputMessage.unCanonicalMessageId RequestAnswered
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [input, input]) `shouldReturn` duplicate
-
-  it "keeps an already recorded request outcome immutable" $ do
-    (front, message, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" []) `shouldReturn` Right ()
-    let original = RequestInputOutcome message.unCanonicalMessageId RequestWaiting
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestWaiting "different reply" [original]) `shouldReturn` Left ExecutionRequestConflict
-    outcomes <- withDb pool $ query "SELECT disposition,reply FROM request_outcomes WHERE turn_id=?" (Only front.atrTurnId)
-    outcomes `shouldBe` [("answered" :: Text, "reply" :: Text)]
-
-  it "distinguishes expired ownership from input errors even with a redundant original request" $ do
-    (front, message, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    void $ withDb pool $ execute "UPDATE conversation_frontends SET lease_until=clock_timestamp()-interval '1 second' WHERE turn_id=?" (Only front.atrTurnId)
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [RequestInputOutcome message.unCanonicalMessageId RequestAnswered]) `shouldReturn` Left ExecutionOwnershipLost
-    reports <- withDb pool $ query "SELECT count(*) FROM request_outcomes WHERE turn_id=?" (Only front.atrTurnId)
-    reports `shouldBe` [Only (0 :: Int64)]
-
   it "does not count debug output as a request reply" $ do
     (front, _, _) <- seed pool 900 1
     withDb pool (claimFrontend front) `shouldReturn` True
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" []) `shouldReturn` Right ()
     void $ withDb pool (enqueueOutbound ((draft front) {transcriptKind = "debug"}))
     withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing)
     dispositions pool front `shouldReturn` ["failed"]
 
-  it "keeps unserved steering pending after a rejected finish and an ordinary prose reply" $ do
-    (front, message, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    (incoming, inputMessage, _) <- seed pool 900 1
-    withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
-    _ <- withDb pool (readInputs front.atrTurnId)
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [RequestInputOutcome message.unCanonicalMessageId RequestWaiting]) `shouldReturn` Left ExecutionTriggerConflict
-    void $ withDb pool (enqueueOutbound (draft front))
-    withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing)
-    dispositions pool front `shouldReturn` ["failed", "pending"]
-    withDb pool (pendingRequest inputMessage.unCanonicalMessageId) `shouldReturn` True
-
-  it "hands unlisted observed inputs back to dispatch after a successful reply" $ do
+  it "returns observed feedback to dispatch when reply publication fails" $ do
     (front, _, _) <- seed pool 900 1
     withDb pool (claimFrontend front) `shouldReturn` True
-    (incoming, message, _) <- seed pool 900 1
-    withDb pool (admitFrontend incoming (Just MessageInput)) `shouldReturn` FrontendInputQueued
-    _ <- withDb pool (readInputs front.atrTurnId)
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" []) `shouldReturn` Right ()
-    void $ withDb pool (enqueueOutbound (draft front))
-    withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing)
-    dispositions pool front `shouldReturn` ["answered", "pending"]
-    state <- withDb pool $ query "SELECT status FROM message_dispatches WHERE canonical_message_id=?" (Only message.unCanonicalMessageId)
-    state `shouldBe` [Only ("pending" :: Text)]
-
-  it "returns named inputs to dispatch when reply publication fails" $ do
-    (front, _, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    (incoming, message, _) <- seed pool 900 1
+    (incoming, _, _) <- seed pool 900 1
     withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
     _ <- withDb pool (readInputs front.atrTurnId)
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [RequestInputOutcome message.unCanonicalMessageId RequestAnswered]) `shouldReturn` Right ()
     withDb pool (finishAgentTurn front TurnFailed 1 (Just "publication failed") Nothing)
     dispositions pool front `shouldReturn` ["failed", "pending"]
 
   it "retains eligibility for a deferred intent trigger without an active dispatch owner" $ do
     (front, _, _) <- seed pool 900 1
     withDb pool (claimFrontend front) `shouldReturn` True
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" []) `shouldReturn` Right ()
     (incoming, message, _) <- seed pool 900 1
     withDb pool (admitFrontend incoming (Just MessageInput)) `shouldReturn` FrontendBusy
     now <- getCurrentTime
@@ -279,58 +134,6 @@ spec pool = before_ (truncateAll pool) $ describe "frontend steering" $ do
     state <- withDb pool $ query "SELECT status,lease_owner FROM message_dispatches WHERE canonical_message_id=?" (Only message.unCanonicalMessageId)
     state `shouldBe` [("claimed" :: Text, Just ("retry" :: Text))]
 
-  it "does not let a duplicate deferred source resurrect an already assigned input" $ do
-    (front, _, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    (incoming, message, actor) <- seed pool 900 1
-    withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
-    _ <- withDb pool (readInputs front.atrTurnId)
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" [RequestInputOutcome message.unCanonicalMessageId RequestAnswered]) `shouldReturn` Right ()
-    duplicate <- withDb pool (startAgentTurn (GroupId 900) message actor)
-    withDb pool (admitFrontend duplicate (Just FeedbackInput)) `shouldReturn` FrontendBusy
-    now <- getCurrentTime
-    withDb pool (deferRequest duplicate.atrTurnId now)
-    void $ withDb pool (enqueueOutbound (draft front))
-    withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing)
-    state <- withDb pool $ query "SELECT status FROM message_dispatches WHERE canonical_message_id=?" (Only message.unCanonicalMessageId)
-    state `shouldBe` [Only ("completed" :: Text)]
-
-  it "closes input admission after finish, so a later message retains its own turn" $ do
-    (front, _, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" []) `shouldReturn` Right ()
-    (incoming, _, _) <- seed pool 900 1
-    withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendBusy
-
-  it "serializes input admission against terminal intent without losing either side of the race" $ do
-    (front, _, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    (incoming, _, _) <- seed pool 900 1
-    result <-
-      concurrently
-        (withDb pool (admitFrontend incoming (Just FeedbackInput)))
-        (withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" []))
-    result `shouldSatisfy` (`elem` [(FrontendInputQueued, Left ExecutionInputPending), (FrontendBusy, Right ())])
-
-  it "replays observed inputs when the same durable frontend recovers" $ do
-    (front, _, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    (incoming, _, _) <- seed pool 900 1
-    withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
-    original <- withDb pool (readInputs front.atrTurnId)
-    withDb pool (ensureAgentTurnRecoveryPending front "restart")
-    withDb pool (claimFrontend front) `shouldReturn` True
-    withDb pool (readInputs front.atrTurnId) `shouldReturn` original
-
-  it "keeps terminal input admission closed across recovery" $ do
-    (front, _, _) <- seed pool 900 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    withDb pool (submitRequestWithInputs front.atrTurnId RequestAnswered "reply" []) `shouldReturn` Right ()
-    withDb pool (ensureAgentTurnRecoveryPending front "restart")
-    withDb pool (claimFrontend front) `shouldReturn` True
-    (incoming, _, _) <- seed pool 900 1
-    withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendBusy
-
   it "cancels assigned inputs without resurrecting their dispatches" $ do
     (front, _, _) <- seed pool 900 1
     withDb pool (claimFrontend front) `shouldReturn` True
@@ -353,6 +156,44 @@ spec pool = before_ (truncateAll pool) $ describe "frontend steering" $ do
     accepted `shouldSatisfy` either (const False) (const True)
     (later, _, _) <- seed pool 900 1
     withDb pool (admitFrontend later (Just FeedbackInput)) `shouldReturn` FrontendBusy
+  it "queues independent questions and mentions even from the current author" $ do
+    (front, _, _) <- seed pool 900 1
+    withDb pool (claimFrontend front) `shouldReturn` True
+    (same, _, _) <- seed pool 900 1
+    (other, _, _) <- seed pool 900 2
+    withDb pool (admitFrontend same (Just MessageInput)) `shouldReturn` FrontendBusy
+    withDb pool (admitFrontend same (Just MentionInput)) `shouldReturn` FrontendBusy
+    withDb pool (admitFrontend other (Just MentionInput)) `shouldReturn` FrontendBusy
+    withDb pool (readInputs front.atrTurnId) `shouldReturn` ""
+
+  it "settles observed feedback with the ordinary reply and queues unseen feedback" $ do
+    (front, _, _) <- seed pool 900 1
+    withDb pool (claimFrontend front) `shouldReturn` True
+    (observed, _, _) <- seed pool 900 1
+    withDb pool (admitFrontend observed (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
+    _ <- withDb pool (readInputs front.atrTurnId)
+    (unseen, message, _) <- seed pool 900 1
+    withDb pool (admitFrontend unseen (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
+    void $ withDb pool (enqueueOutbound (draft front))
+    withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing)
+    dispositions pool front `shouldReturn` ["answered", "answered", "pending"]
+    withDb pool (pendingRequest message.unCanonicalMessageId) `shouldReturn` True
+    rows <- withDb pool $ query "SELECT status FROM message_dispatches WHERE canonical_message_id=?" (Only message.unCanonicalMessageId)
+    rows `shouldBe` [Only ("pending" :: Text)]
+
+  it "never loses feedback racing with final publication" $ do
+    (front, _, _) <- seed pool 900 1
+    withDb pool (claimFrontend front) `shouldReturn` True
+    (incoming, message, _) <- seed pool 900 1
+    void $ withDb pool (enqueueOutbound (draft front))
+    (admitted, ()) <-
+      concurrently
+        (withDb pool (admitFrontend incoming (Just FeedbackInput)))
+        (withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing))
+    case admitted of
+      FrontendInputQueued -> withDb pool (pendingRequest message.unCanonicalMessageId) `shouldReturn` True
+      FrontendClaimed -> withDb pool (claimFrontend incoming) `shouldReturn` True
+      FrontendBusy -> expectationFailure "released frontend should admit the next turn"
 
 dispositions :: DbPool -> AgentTurnRef -> IO [Text]
 dispositions pool turn = do

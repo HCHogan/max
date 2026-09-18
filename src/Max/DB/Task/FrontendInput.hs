@@ -14,7 +14,6 @@ where
 
 import Control.Monad (forM_, void, when)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple.Types (Only (..))
@@ -141,19 +140,18 @@ unseenInputWithin turn = do
 closeInputWithin :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Eff es ()
 closeInputWithin turn = void $ execute "UPDATE conversation_frontends SET accepting_input=false WHERE turn_id=?" (Only turn)
 
--- | A final reply covers only the explicitly named, observed inputs. All
--- other inputs return to durable dispatch, including ones lost to a crash or
--- a streamed draft. Claim-attempt fencing makes a late source finalizer inert.
+-- | Observed feedback is covered by a published reply. Unseen feedback
+-- returns to dispatch, including feedback received during streamed output.
 settleInputsWithin :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Bool -> Bool -> Text -> Eff es ()
 settleInputsWithin turn published cancelled reason = do
   rows <-
     query
-      "SELECT message_id,disposition FROM frontend_inputs WHERE turn_id=? AND released_at IS NULL ORDER BY input_id"
+      "SELECT message_id,seen_at IS NOT NULL FROM frontend_inputs WHERE turn_id=? AND released_at IS NULL ORDER BY input_id"
       (Only turn)
-  forM_ (rows :: [(Int64, Maybe Text)]) $ \(message, decision) -> do
+  forM_ (rows :: [(Int64, Bool)]) $ \(message, observed) -> do
     let disposition
           | cancelled = dispositionText RequestCancelled
-          | published = fromMaybe "pending" decision
+          | published && observed = "answered"
           | otherwise = "pending"
     void $
       execute

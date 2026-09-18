@@ -39,7 +39,7 @@ example 不能证明生产正在使用该值——当前生效配置只能靠运
   003 消息 IR 与能力降级、004 canonical 句柄、005 turn 连续性、006 typed
   monitor；002/007 的 Plan DSL 与编排路线已由 008 取代，但共享可靠运行时保留。
   迁移 088 归档旧 Plan 数据并移除执行设施，不自动重放。008 已实现
-  task_start/status/list/steer/replace/cancel、task_progress、request_finish、
+  task_start/status/list/steer/replace/cancel、task_progress、
   持久退避重试、provider 前台预留、monitor profile/observation 和单前台/多后台协调；查看 `docs/runbooks/task-cutover.md`
   区分本地实现与生产切换状态。001/003 末尾附与 AstrBot、
   NekroAgent 的对比调研

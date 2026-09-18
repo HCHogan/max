@@ -14,7 +14,6 @@ module Max.DB.Task
     taskInbox,
     taskReportTyped,
     recordTaskProgress,
-    finishRequestTyped,
     recordTaskFailure,
     notificationKind,
     monitorTaskProfile,
@@ -371,9 +370,6 @@ recordTaskProgress :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Value 
 recordTaskProgress turn progress = case parseEither (withObject "task progress" (.: "summary")) progress of
   Left _ -> pure False
   Right summary -> Reporting.submitProgress turn summary
-
-finishRequestTyped :: (WithConnection :> es, IOE :> es) => AgentTurnId -> State.RequestDisposition -> Text -> Eff es Bool
-finishRequestTyped = Reporting.submitRequest
 
 recordTaskFailure :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Text -> State.FailureKind -> Eff es Bool
 recordTaskFailure = Reporting.submitFailure

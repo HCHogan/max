@@ -12,7 +12,7 @@ where
 
 import Data.Aeson (object, (.=))
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust, isNothing)
+import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -233,7 +233,6 @@ toolDefinitionsFor env gid caps =
       SearchOnly -> isJust env.beSearch
       MonitorArmOnly -> caps.tcMonitorArming
       BackgroundOnly -> caps.tcBackground
-      FrontendOnly -> not caps.tcBackground && isNothing caps.tcEffectCeiling
     ceilingOpen definition' =
       (caps.tcBackground && definition'.tdRef `elem` [ToolRef "task_finish", ToolRef "task_progress"])
         || toolAllowedByEffectCeiling caps.tcEffectCeiling definition'
@@ -256,7 +255,6 @@ data ToolGate
   | SkillsOnly
   | SearchOnly
   | MonitorArmOnly
-  | FrontendOnly
   | BackgroundOnly
 
 data ToolInventoryItem = ToolInventoryItem
@@ -313,9 +311,6 @@ toolInventory =
     always (writeTool "task_cancel" ["task.db"] [CurrentConversation]),
     gated BackgroundOnly ((writeToolV 3 "task_finish" ["task.db"] [CurrentConversation]) {tdCallMode = FinishCall}),
     gated BackgroundOnly ((writeTool "task_progress" ["task.db"] [CurrentConversation]) {tdCallMode = CheckpointCall}),
-    -- Returned request validation/ownership errors precede every write in
-    -- submitRequestWithInputs. Exceptions and timeouts remain outcome-unknown.
-    gated FrontendOnly ((legacyFailureFingerprint (writeToolV 2 "request_finish" ["task.db"] [CurrentConversation])) {tdCallMode = FinishCall}),
     -- Queues turn-scoped inline video as well as reading the network.  Keep it
     -- sequential inside one agent round so concurrent calls cannot race the
     -- shared attachment order/budget; independent turns have independent

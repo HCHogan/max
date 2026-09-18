@@ -91,18 +91,11 @@ settleTurn turn outcomeKind abortReason frontendManaged = do
   settleNotification turn abortReason
   when frontendManaged $ do
     receipts <- query "SELECT EXISTS(SELECT 1 FROM messages WHERE agent_turn_id=? AND kind='chat')" (Only turn)
-    outcomes <- query "SELECT disposition,reply FROM request_outcomes WHERE turn_id=?" (Only turn)
-    let outcome = case outcomes :: [(Text, Text)] of
-          [(decision, reply)] -> (fromMaybe RequestWaiting (parseDisposition decision), Just reply)
-          -- Prose or debug output is not an explicit request outcome. Mark
-          -- the missing checkpoint as a visible failure, not a fake question
-          -- waiting for the user. Never infer answered from published text.
-          _ -> (RequestFailed, Nothing)
-        disposition
+    let disposition
           | cancelled = RequestCancelled
-          | successful && receipts == [Only True] = fst outcome
+          | successful && receipts == [Only True] = RequestAnswered
           | otherwise = RequestFailed
-        reason = T.take 5000 (fromMaybe (fromMaybe "No explicit request disposition was recorded" abortReason) (snd outcome))
+        reason = T.take 5000 (fromMaybe "Turn ended" abortReason)
     void $
       execute
         "UPDATE conversation_requests SET disposition=?,reason=?,updated_at=now() WHERE turn_id=? AND disposition<>'delegated'"

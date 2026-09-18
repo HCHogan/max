@@ -362,7 +362,7 @@ spec = describe "Agent full loop" $ do
     readIORef calls `shouldReturn` 1
     result.reply `shouldSatisfy` maybe False (T.isInfixOf "task#42")
 
-  for_ ["task_start", "task_finish", "request_finish"] $ \name ->
+  for_ ["task_start", "task_finish", "finish_with_reply"] $ \name ->
     it ("does not interpret " <> T.unpack name <> " JSON as a loop control receipt") $ do
       events <- newIORef []
       calls <- newIORef (0 :: Int)
@@ -514,7 +514,7 @@ spec = describe "Agent full loop" $ do
             _ -> False
         )
 
-  for_ ["task_finish", "request_finish"] $ \returnName ->
+  for_ ["task_finish", "finish_with_reply"] $ \returnName ->
     it ("treats " <> T.unpack returnName <> " as a terminal round and suppresses sibling calls") $ do
       events <- newIORef []
       siblingCalls <- newIORef (0 :: Int)
@@ -528,7 +528,7 @@ spec = describe "Agent full loop" $ do
               { toolName = returnName,
                 toolDescription = "return a typed child result",
                 toolSchema = object ["type" .= ("object" :: Text)],
-                toolRunner = LegacyRunner $ \args -> finishExecution (if returnName == "request_finish" then Just "typed reply" else Nothing) >> pure (Right args)
+                toolRunner = LegacyRunner $ \args -> finishExecution (if returnName == "finish_with_reply" then Just "typed reply" else Nothing) >> pure (Right args)
               }
           countedEcho :: (IOE :> es) => Tool es
           countedEcho =
@@ -566,7 +566,7 @@ spec = describe "Agent full loop" $ do
       readIORef siblingCalls `shouldReturn` 0
       result.turnsUsed `shouldBe` 1
       result.aborted `shouldBe` Nothing
-      when (returnName == "request_finish") (result.reply `shouldBe` Just "typed reply")
+      when (returnName == "finish_with_reply") (result.reply `shouldBe` Just "typed reply")
       result.appended
         `shouldSatisfy` any
           ( \case

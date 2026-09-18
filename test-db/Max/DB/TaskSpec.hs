@@ -962,31 +962,20 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     events `shouldSatisfy` elem (Only ("child_progress" :: Text))
     withDb pool admitTaskNotification `shouldReturn` []
 
-  for_ [TaskState.RequestAnswered, TaskState.RequestWaiting, TaskState.RequestDeclined] $ \disposition ->
-    it ("records explicit frontend disposition only after output: " <> show disposition) $ do
-      (frontend, message, _) <- seed pool 900 1
-      withDb pool (claimFrontend frontend) `shouldReturn` True
-      withDb pool (finishRequestTyped frontend.atrTurnId disposition "visible reply") `shouldReturn` True
-      void $ withDb pool (enqueueOutbound (draft frontend))
-      withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing Nothing)
-      rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
-      rows `shouldBe` [Only (TaskState.dispositionText disposition)]
-
   it "does not count a successful turn without an output receipt as an answered request" $ do
     (frontend, message, _) <- seed pool 900 1
     withDb pool (claimFrontend frontend) `shouldReturn` True
-    withDb pool (finishRequestTyped frontend.atrTurnId TaskState.RequestAnswered "not sent") `shouldReturn` True
     withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing Nothing)
     rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
     rows `shouldBe` [Only ("failed" :: Text)]
 
-  it "marks prose without an explicit request outcome failed instead of pretending to wait for the user" $ do
+  it "ends an ordinary reply without a model-authored request outcome" $ do
     (frontend, message, _) <- seed pool 900 1
     withDb pool (claimFrontend frontend) `shouldReturn` True
     void $ withDb pool (enqueueOutbound (draft frontend))
     withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing Nothing)
     rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
-    rows `shouldBe` [Only ("failed" :: Text)]
+    rows `shouldBe` [Only ("answered" :: Text)]
 
   it "snapshots monitor profiles and change policy under the definition CAS" $ do
     (turn, _, actor) <- seed pool 900 1
