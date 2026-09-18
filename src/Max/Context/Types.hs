@@ -4,9 +4,6 @@
 -- handles, so every pipeline stage can be invoked and tested independently.
 module Max.Context.Types
   ( PromptInputs (..),
-    ContinuationInput (..),
-    noContinuation,
-    digestOnlyContinuation,
     ContextCandidates (..),
     SelectedContext (..),
     TriggerOrigin (..),
@@ -24,7 +21,6 @@ where
 
 import Data.Int (Int64)
 import Data.Set (Set)
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Time (TimeZone, UTCTime)
 import Max.Context (ContextBudget, ContextTrace)
@@ -32,28 +28,9 @@ import Max.Dispatch (DispatchMessage)
 import Max.Episode.Types (EpisodeHandle)
 import Max.File.Types (FileRecord)
 import Max.History.Types (HistoryItem)
-import Max.LLM.Types (ChatMessage)
 import Max.Memory.Types (MemoryItem)
 import Max.Platform.Types (AdvertisedCaps)
 import Max.Session.Types (Session)
-
--- | What one continuation contributes to a prompt.  The digest view is the
--- always-available floor; segments and their covered ids are present only
--- when the replay tier's validity predicate admitted them, so a caller that
--- cannot replay simply passes 'digestOnlyContinuation'.
-data ContinuationInput = ContinuationInput
-  { ciView :: !(Maybe Text),
-    ciSegments :: ![ChatMessage],
-    ciCovered :: !(Set Int64)
-  }
-
--- | No continuation at all — an ordinary turn.
-noContinuation :: ContinuationInput
-noContinuation = ContinuationInput Nothing [] Set.empty
-
--- | A resolved continuation that stayed at the digest tier.
-digestOnlyContinuation :: Maybe Text -> ContinuationInput
-digestOnlyContinuation view = ContinuationInput view [] Set.empty
 
 -- | Everything 'renderContext' needs in one record.  Splitting the
 -- pipeline into 'PromptInputs' + 'renderContext' lets us unit-test the
@@ -73,14 +50,6 @@ data PromptInputs = PromptInputs
     -- the selected prompt (rather than appended afterward) so token planning
     -- and diagnostics account for it.
     continuationView :: !(Maybe Text),
-    -- | ADR 005 replay tier: archived wire items from the fork-from chain,
-    -- oldest first, spliced between the current system prompt and the
-    -- conversation window.  Empty at the digest tier, which is the floor.
-    replaySegments :: ![ChatMessage],
-    -- | Ledger rows the segments above already show verbatim.  They are cut
-    -- from the ordinary window so one utterance never appears twice in two
-    -- registers — the same reasoning as 'inFlight', a different cause.
-    replayCovered :: !(Set Int64),
     -- | Chronological transcript, interleaved and deduplicated by message ID.
     -- Text labels retain speaker, time and ID across providers; user/assistant
     -- roles alone cannot distinguish the members of a group.

@@ -1,3 +1,7 @@
+> Cross-turn provider-wire replay and archive capture were retired in the
+> September 2026 simplification. Reply continuations use readable scoped digests;
+> live tool-call/reasoning state remains within the current Agent loop.
+
 # ADR 005: Turn Continuity — Journal Projections and Verbatim Replay
 
 - Status: Implemented through slice 4: durable turns/journal archives, `t#`

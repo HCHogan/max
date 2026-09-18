@@ -83,7 +83,7 @@ spec pool = before_ (truncateAll pool) $ describe "task browser workspaces" $ do
       navigated `shouldSatisfy` not . isLeft
       show navigated `shouldNotContain` "fixture-auth-cookie"
       void $ withDb pool (taskReportTyped first.atrTurnId (report TaskState.ReportWaiting))
-      withDb pool (finishAgentTurn first TurnSucceeded 1 Nothing Nothing)
+      withDb pool (finishAgentTurn first TurnSucceeded 1 Nothing)
       withDb pool (releaseBrowserTurn registry (GroupId 900) first.atrTurnId)
       void $ withDb pool (taskControl (GroupId 900) actor False identifier "steer" Nothing Nothing "continue")
       second <- claimOne pool
@@ -138,7 +138,7 @@ spec pool = before_ (truncateAll pool) $ describe "task browser workspaces" $ do
     withDb pool (beginBrowserOperation first.atrTurnId original.bwEpoch) `shouldReturn` True
     withDb pool (finishBrowserOperation first.atrTurnId original.bwEpoch (Just "sealed-fixture") True) `shouldReturn` True
     withDb pool (taskReportTyped first.atrTurnId (report TaskState.ReportWaiting)) `shouldReturn` True
-    withDb pool (finishAgentTurn first TurnSucceeded 1 Nothing Nothing)
+    withDb pool (finishAgentTurn first TurnSucceeded 1 Nothing)
     void $ withDb pool (taskControl (GroupId 900) actor False identifier "steer" Nothing Nothing "continue")
     second <- claimOne pool
     Right resumed <- withDb pool (acquireBrowserWorkspace second.atrTurnId "runtime")
@@ -219,7 +219,7 @@ spec pool = before_ (truncateAll pool) $ describe "task browser workspaces" $ do
     void $ withDb pool (beginBrowserOperation turn.atrTurnId workspace.bwEpoch)
     void $ withDb pool (finishBrowserOperation turn.atrTurnId workspace.bwEpoch (Just "encrypted") True)
     void $ withDb pool (taskReportTyped turn.atrTurnId (report TaskState.ReportWaiting))
-    withDb pool (finishAgentTurn turn TurnSucceeded 1 Nothing Nothing)
+    withDb pool (finishAgentTurn turn TurnSucceeded 1 Nothing)
     withDb pool (browserGcCandidates 1800 300) `shouldReturn` []
     void $ withDb pool $ execute "UPDATE browser_workspaces SET last_used_at=now()-interval '31 minutes' WHERE task_id=?" (Only identifier)
     registry <- newHttpRuntime >>= newBrowserRegistry

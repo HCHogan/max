@@ -62,7 +62,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [ ] Bound retained stream buffers and validate publication through the full
       SSE/transport path before EOS.
 - [ ] Update prompts, tools, handlers, output accounting and fixtures together.
-- [ ] Preserve live provider tool-call/reasoning state within a model loop.
+- [x] Preserve live provider tool-call/reasoning state within a model loop.
 
 ### C. Jobs and application lifetime
 
@@ -94,7 +94,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
       workflow state or a second authorization/execution path.
 - [x] Delete model-driven memory dreaming; retain deterministic processing of
       recorded expiry dates without leases.
-- [ ] Delete cross-turn raw wire archive replay.
+- [x] Delete cross-turn raw wire archive replay.
 - [ ] Simplify context to recent messages, one sourced summary representation
       and relevant scoped memory; retain history search/expansion and token limits.
 - [ ] Replace persistent materialization/CAS traces with derived in-memory state
@@ -194,3 +194,11 @@ maintained implementation record.
 - Operational debt export/review was removed. Health reports raw terminal
   failure counts; historical acknowledgements no longer suppress failures.
   Old audit data is retained. Full in-process runtime cutover is still pending.
+- Cross-turn replay removal: all Cabal targets build; 1,075 unit and 372 DB
+  examples pass, as do architecture checks and offline context fixtures
+  (9 Historian, 7 recall). The Agent fixture asserts that opaque provider
+  reasoning survives into the next tool round unchanged. Reply continuations
+  still resolve scoped digests; completed turns no longer capture wire blobs.
+- Intermediate source count: src + app = 50,330 effective Haskell lines, down
+  2,297 from the baseline. This excludes comment-only savings and is a total
+  source count, not a claim that the core target has been reached.

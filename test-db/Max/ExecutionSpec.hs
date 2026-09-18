@@ -223,7 +223,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     readIORef effects `shouldReturn` 1
     callCount turn `shouldReturn` 1
     withDb pool (recordTaskFailure turn.atrTurnId "guest trapped" Transient) `shouldReturn` True
-    withDb pool (finishAgentTurn turn TurnFailed 0 Nothing Nothing)
+    withDb pool (finishAgentTurn turn TurnFailed 0 Nothing)
     withDb pool (claimTask "must-not-replay-script") `shouldReturn` []
 
   it "settles cancellation during a host call and leaves later calls unstarted" $ do

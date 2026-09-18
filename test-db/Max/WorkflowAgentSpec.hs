@@ -114,7 +114,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR015 workflow children" $ d
     withDb pool (taskReportTyped child.atrTurnId (Fixture.report ReportSucceeded) {payload = Just (Number 1)}) `shouldReturn` False
     withDb pool (submitReportChecked child.atrTurnId (Fixture.report ReportSucceeded) {payload = Just (Number 1)}) >>= (`shouldSatisfy` (\case Left (ExecutionInvalidPayload _) -> True; _ -> False))
     withDb pool (taskReportTyped child.atrTurnId (Fixture.report ReportSucceeded) {payload = Just (String "verified")}) `shouldReturn` True
-    withDb pool (finishAgentTurn child TurnSucceeded 1 Nothing Nothing)
+    withDb pool (finishAgentTurn child TurnSucceeded 1 Nothing)
     Right (Just result) <- withDb pool (pollAgentStep parent.atrTurnId step request.outputContract entry.jeJournalId)
     withDb pool (endAgentWait parent.atrTurnId step)
     withDbLog pool (finishJournalExecution entry (JournalCommitted result))
@@ -231,7 +231,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR015 workflow children" $ d
     Right step <- withDb pool (beginAgentStep parent.atrTurnId grants Null request entry.jeJournalId)
     child <- claimOne pool
     withDb pool (taskReportTyped child.atrTurnId (Fixture.report ReportSucceeded) {payload = Just (String "verified")}) `shouldReturn` True
-    withDb pool (finishAgentTurn child TurnSucceeded 1 Nothing Nothing)
+    withDb pool (finishAgentTurn child TurnSucceeded 1 Nothing)
     Right result <- withDb pool (pollAgentStep parent.atrTurnId step request.outputContract entry.jeJournalId)
     result `shouldSatisfy` isJust
     void $ withDb pool (execute "UPDATE durable_tasks SET revision=revision+1 WHERE task_id=?" (Only step.childId))
@@ -285,7 +285,7 @@ settleNext pool = do
           [identifier] -> do
             Just child <- withDb pool (taskTurnRef identifier)
             withDb pool (taskReportTyped child.atrTurnId (Fixture.report ReportSucceeded)) `shouldReturn` True
-            withDb pool (finishAgentTurn child TurnSucceeded 1 Nothing Nothing)
+            withDb pool (finishAgentTurn child TurnSucceeded 1 Nothing)
           _ -> threadDelay 10000 >> next
   timeout 30000000 next `shouldReturn` Just ()
 

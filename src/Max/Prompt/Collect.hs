@@ -28,7 +28,6 @@ import Max.Context.Media (tagMediaMarkers)
 import Max.Context.Types
   ( ContextCandidates (ContextCandidates),
     ContextSnapshot (..),
-    ContinuationInput (ciCovered, ciSegments, ciView),
     PromptImage (PromptImage),
     PromptInputs
       ( PromptInputs,
@@ -46,8 +45,6 @@ import Max.Context.Types
         outputCapabilities,
         pinnedItems,
         recentTurns,
-        replayCovered,
-        replaySegments,
         replyCtx,
         session,
         skills,
@@ -277,9 +274,7 @@ collectContextSnapshot request now' history = do
                 session = s,
                 triggerMessage = gm,
                 recentTurns = recentTurns',
-                continuationView = continuation'.ciView,
-                replaySegments = continuation'.ciSegments,
-                replayCovered = continuation'.ciCovered,
+                continuationView = continuation',
                 transcript = transcriptCtx,
                 compartments = compartments',
                 historyTurns = historyTurns',

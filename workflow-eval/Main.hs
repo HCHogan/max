@@ -168,12 +168,12 @@ runCase cfg opts pool sources group parallel = do
       void (withDb pool (taskInbox parentId))
       accepted <- withDb pool (taskReportTyped parentId (State.TaskReport State.ReportSucceeded "All independent source audits completed" ["workflow:" <> jsonHash (String script)] [] Nothing Nothing Nothing))
       unless accepted (die "completed parent report rejected")
-      withDb pool (finishAgentTurn parent TurnSucceeded 0 Nothing Nothing)
+      withDb pool (finishAgentTurn parent TurnSucceeded 0 Nothing)
       [Only settled :: Only Text] <- withDb pool (query "SELECT status FROM durable_tasks WHERE task_id=?" (Only (Admission.taskId root)))
       unless (settled == "succeeded") (die "parent did not settle as succeeded")
     else do
       _ <- withDb pool (taskControl (GroupId group) actor False (Admission.taskId root) "cancel" Nothing (Just message) "evaluation deadline or incomplete workflow")
-      withDb pool (finishAgentTurn parent TurnAborted 0 (Just "evaluation deadline or incomplete workflow") Nothing)
+      withDb pool (finishAgentTurn parent TurnAborted 0 (Just "evaluation deadline or incomplete workflow"))
   [Only sourceReads :: Only Int] <- withDb pool (query "SELECT count(*) FROM execution_journal journal JOIN task_attempts attempt USING(turn_id) JOIN durable_tasks work USING(task_id) WHERE work.parent_task_id=? AND journal.tool_ref='web_search' AND journal.state='succeeded'" (Only (Admission.taskId root)))
   [(settledStatus, roundsReserved)] <- withDb pool (query "SELECT status,rounds_reserved FROM durable_tasks WHERE task_id=?" (Only (Admission.taskId root)))
   settledChildren <- withDb pool (query "SELECT status FROM durable_tasks WHERE parent_task_id=? ORDER BY task_id" (Only (Admission.taskId root)))
@@ -219,7 +219,7 @@ runChild cfg opts pool sources identifier records = do
       messages = [MsgSystem "You are Max's bounded research child. Read every provided file using web_search(query=exact file path); this tool returns a frozen real repository source, with source:path as its citation. Analyze the objective using those reads. Return task_finish with status, summary, evidence, unresolved, and payload as a native JSON object (never a JSON-encoded string) matching output_contract: claims contains concrete findings about implementation, sources contains every source:path read. Never delegate or run_code. Shape does not establish correctness; report partial if evidence is insufficient. Do not claim a production deployment or performance benefit.", MsgUser (task.teObjective <> "\n" <> json task.teInputs)]
   result <- withCompactLogger cfg.logColor Nothing $ \logger -> runEff . runConcurrent . runLog "max-workflow-eval" logger LogAttention . runWithConnectionPool pool . runBlob "/tmp/max-workflow-eval-blobs" . runLLM runtime (\_ _ _ -> pure ()) (\call -> atomicModifyIORef' records (\xs -> (call : xs, ()))) cfg.llm . runDurableAgent (AgentLimits 12) (factory sources) $ agentTurn turn (AgentContext context Nothing (Just 24)) opts.profile messages silentSink
   void (finishTurnRuntime tasks turn)
-  withDb pool (finishAgentTurn task.teTurn (if isNothing result.aborted then TurnSucceeded else TurnFailed) result.turnsUsed Nothing Nothing)
+  withDb pool (finishAgentTurn task.teTurn (if isNothing result.aborted then TurnSucceeded else TurnFailed) result.turnsUsed Nothing)
 
 factory :: (WithConnection :> es, Blob :> es, IOE :> es, ToolControl :> es) => Map.Map Text Text -> ToolContext -> Either ToolCatalogError (ToolRegistry es)
 factory sources context = buildToolRegistry definitions (readerTool : filter (\tool -> tool.toolName `elem` ["task_start", "task_finish", "task_progress"]) (taskToolsWithDatabase context))

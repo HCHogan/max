@@ -4,6 +4,7 @@ module Max.Turn.Start
   ( TurnStart (..),
     InputAdmission (..),
     startTurn,
+    injectRecoveryView,
     startAllowsInput,
     startRecoveryView,
     startHostView,
@@ -11,8 +12,10 @@ module Max.Turn.Start
   )
 where
 
+import Data.List (unsnoc)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
+import Max.LLM.Types (ChatMessage (..), ContentBlock (..))
 import Max.Turn.Types (AgentTurnRef)
 
 data InputAdmission = AdmitFrontendInput | StartSeparateTurn deriving stock (Eq, Show)
@@ -48,3 +51,10 @@ startEffectCeiling :: TurnStart -> Maybe (Map Text Text)
 startEffectCeiling (TaskTurn _ _ grants) = Just grants
 startEffectCeiling (MonitorTurn _ _ _ grants) = Just grants
 startEffectCeiling _ = Nothing
+
+injectRecoveryView :: Text -> [ChatMessage] -> [ChatMessage]
+injectRecoveryView view messages = case unsnoc messages of
+  Just (prefix, MsgUser body) -> prefix <> [MsgUser (body <> "\n\n" <> view)]
+  Just (prefix, MsgUserBlocks blocks) ->
+    prefix <> [MsgUserBlocks (blocks <> [TextBlock ("\n\n" <> view)])]
+  _ -> messages <> [MsgUser view]

@@ -336,7 +336,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
               3
               (Map.fromList [("inspect_source", "grant-a"), ("context_search", "grant-b")])
           )
-    withDb pool (finishAgentTurn armingTurn TurnSucceeded 1 Nothing Nothing)
+    withDb pool (finishAgentTurn armingTurn TurnSucceeded 1 Nothing)
 
     backfillCanonical <-
       insertRawMessageWithClass pool Backfill 6002 61 701 99 now Nothing "LAUNCH imported history"
@@ -403,7 +403,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
               20
               (Map.singleton "context_search" "grant-a")
           )
-    withDb pool (finishAgentTurn armingTurn TurnSucceeded 1 Nothing Nothing)
+    withDb pool (finishAgentTurn armingTurn TurnSucceeded 1 Nothing)
 
     _ <-
       concurrently
@@ -504,7 +504,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
               100
               (Map.singleton "context_search" "grant-a")
           )
-    withDb pool (finishAgentTurn budgetArming TurnSucceeded 1 Nothing Nothing)
+    withDb pool (finishAgentTurn budgetArming TurnSucceeded 1 Nothing)
     _ <- withDb pool (execute "UPDATE monitors SET overlap_policy='queue',queue_limit=40 WHERE monitor_id=?" (Only budgetMonitor.mrMonitorId))
     forM_ [6302 .. 6322] $ \messageId ->
       insertRawMessage pool messageId 65 705 99 now Nothing "budget-hit"

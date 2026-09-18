@@ -166,14 +166,9 @@ attempts while its immutable source remains available for later retry.
 Commands/synthetic/forward rows remain in range coverage before transcript
 filtering, and active ranges have a database non-overlap constraint. The
 pre-cutover deployment boundary is backfilled automatically, oldest gap first
-and without rewinding the live cursor. A nightly dream pass (4am local) remains
-a separate semantic-memory maintenance lifecycle. It reads the current version
-together with its source evidence, requires a concrete evidence/date reason for
-every change, updates a chosen keeper before superseding duplicates, and
-archives only clearly expired
-facts without a replacement. Every operation is a scoped MemoryStore CAS that
-appends a version, maintenance evidence, and audit record; automatic actors
-cannot mutate permanent memory.
+and without rewinding the live cursor. Recorded memory expiry dates are processed without a model or execution lease.
+Version and source changes reject stale expiry, and permanent memories stay
+protected. The model-driven dream pass has been retired.
 
 A model response that cannot satisfy the strict `EpisodeCapture` JSON schema
 receives one bounded repair turn with explicit field and numeric-id rules. The

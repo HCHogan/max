@@ -6,7 +6,6 @@ import Data.Text (Text)
 import Data.Time (TimeZone)
 import Max.Context.Types
   ( ContextReadMode,
-    ContinuationInput,
     TriggerOrigin,
   )
 import Max.Dispatch (DispatchMessage)
@@ -15,7 +14,7 @@ import Max.Platform.Types (AdvertisedCaps)
 import Max.Session.Types (Session)
 
 data PromptRequest = PromptRequest
-  { prContinuation :: !ContinuationInput,
+  { prContinuation :: !(Maybe Text),
     prLimits :: !ContextLimits,
     prReadMode :: !ContextReadMode,
     prOutputCaps :: !AdvertisedCaps,

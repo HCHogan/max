@@ -95,23 +95,27 @@ lateFeedbackSink _inputs injected events event = do
 fakeLLM :: (IOE :> es) => IORef Int -> LLMInterpreter es
 fakeLLM calls =
   LLMInterpreter
-    { liChat = \_ctx _profile _messages _tools mSink -> do
+    { liChat = \_ctx _profile messages _tools mSink -> do
         callNo <- liftIO $ atomicModifyIORef' calls (\n -> (n + 1, n))
         case callNo of
           0 ->
             pure $
               Right $
                 ToolCallsResp
-                  (object ["role" .= ("assistant" :: Text)])
+                  providerMessage
                   "我先查一下"
                   [ToolCall "call-1" "echo" (object ["value" .= (7 :: Int)])]
           1 -> do
+            liftIO $ [raw | MsgAssistantToolCalls raw _ <- messages] `shouldBe` [providerMessage]
             for_ mSink $ \sink -> do
               sink "第一段"
               sink "第一段\n\n第二段"
             pure (Right (ContentResp "第一段\n\n第二段"))
           _ -> pure (Left (LLMUnknownProfile "unexpected extra LLM call"))
     }
+
+providerMessage :: Value
+providerMessage = object ["role" .= ("assistant" :: Text), "reasoning_content" .= ("opaque provider state" :: Text)]
 
 echoTool :: (ToolOutput :> es) => Tool es
 echoTool =

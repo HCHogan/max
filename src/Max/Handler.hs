@@ -25,9 +25,8 @@ import Control.Concurrent.STM
     readTVarIO,
   )
 import Control.Exception qualified as Exception
-import Control.Monad (forM_, unless, void, when)
+import Control.Monad (forM_, join, unless, void, when)
 import Data.Aeson (ToJSON (toJSON), Value, encode)
-import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit, isSpace)
 import Data.Either (rights)
@@ -78,7 +77,6 @@ import Max.Command.Permission
   )
 import Max.Command.Types (Command (..))
 import Max.Concurrent.Lease (renewUntilLost)
-import Max.Context.Types (digestOnlyContinuation, noContinuation)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn
   ( AgentTurnRecovery (..),
@@ -141,7 +139,7 @@ import Max.Effects.Agent
     AgentResult (..),
     agentTurn,
   )
-import Max.Effects.Blob (Blob, BlobRef (blobRefSha256), putBlob)
+import Max.Effects.Blob (Blob)
 import Max.Effects.LLM (ChatMessage (MsgSystem, MsgUser))
 import Max.Effects.Outbound
   ( Outbound,
@@ -355,25 +353,9 @@ import Max.Toolset (toolDefinitionsFor)
 import Max.Turn.Continuity
   ( currentPromptMajor,
     renderContinuationDigest,
-    renderReplayDelta,
     toolCatalogFingerprint,
   )
 import Max.Turn.Failure (handleTurnFailures)
-import Max.Turn.Replay
-  ( ReplayEnvironment
-      ( ReplayEnvironment,
-        reCatalogFingerprint,
-        reChainTokenBudget,
-        reNow,
-        reProfile,
-        rePromptMajor
-      ),
-    defaultChainTokenBudget,
-  )
-import Max.Turn.ReplayRuntime
-  ( injectRecoveryView,
-    replayContinuation,
-  )
 import Max.Turn.Start
   ( InputAdmission (AdmitFrontendInput, StartSeparateTurn),
     TurnStart (..),
@@ -382,11 +364,11 @@ import Max.Turn.Start
     startHostView,
     startRecoveryView,
     startTurn,
+    injectRecoveryView,
   )
 import Max.Turn.Types
   ( AgentTurnId (..),
     AgentTurnRef (..),
-    TurnOrdinal (..),
     TurnOutputContext,
     nextTurnOutputLink,
   )
@@ -1825,17 +1807,17 @@ dispatchLLMWith start owner mIntent origin gm = do
             -- one place a user-initiated @!kill@ comes to rest.
             handleTurnFailures
               ( \e -> do
-                  finishAgentTurn durable TurnCrashed 0 (Just (T.pack (show e))) Nothing
+                  finishAgentTurn durable TurnCrashed 0 (Just (T.pack (show e)))
                   logAttention "llm dispatch crashed" $ object ["error" .= T.pack (show e)]
                   when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
                     queueQQReaction gm.groupId gm.canonicalId failureFaceId True
               )
               ( \err -> do
-                  finishAgentTurn durable TurnFailed 0 (Just ("reply publication failed: " <> err)) Nothing
+                  finishAgentTurn durable TurnFailed 0 (Just ("reply publication failed: " <> err))
                   logAttention "stream publication failed; committed prefix retained" $ object ["error" .= err]
               )
               ( do
-                  finishAgentTurn durable TurnCancelled 0 (Just "cancelled by !kill") Nothing
+                  finishAgentTurn durable TurnCancelled 0 (Just "cancelled by !kill")
                   logInfo "llm dispatch cancelled" $ object ["group_id" .= gidRaw]
               )
               ( do
@@ -1886,7 +1868,7 @@ dispatchLLMWith start owner mIntent origin gm = do
       background <- DurableTask.isTaskTurn durable.atrTurnId
       case task of
         Just execution -> dispatchTask turn durable env session execution
-        _ | background -> finishAgentTurn durable TurnAborted 0 (Just "task execution was fenced before dispatch") Nothing
+        _ | background -> finishAgentTurn durable TurnAborted 0 (Just "task execution was fenced before dispatch")
         _ -> do
           let input
                 | Right (Just (Feedback _)) <- parseCommand (dispatchTextWithoutSelf gm) = Frontend.FeedbackInput
@@ -1901,7 +1883,7 @@ dispatchLLMWith start owner mIntent origin gm = do
               when (origin == OriginDirect || origin == OriginProactive) $
                 FrontendInput.deferRequest durable.atrTurnId deferAt
               settleOwner (DispatchDeferred deferAt)
-              finishAgentTurn durable TurnAborted 0 (Just "conversation frontend busy; request remains queued") Nothing
+              finishAgentTurn durable TurnAborted 0 (Just "conversation frontend busy; request remains queued")
             Frontend.FrontendClaimed -> do
               for_ mIntent $ \intent -> liftIO (clearPendingIntent intent gm.groupId)
               replyTarget <- case gm.replyTo of
@@ -1932,7 +1914,7 @@ dispatchLLMWith start owner mIntent origin gm = do
                             orTurnOutput = link,
                             orMonitorFireId = Nothing
                           }
-                  finishAgentTurn durable TurnFailed 0 (Just ("frontend " <> tshow frontendDeadlineSeconds <> "-second deadline; request unresolved")) Nothing
+                  finishAgentTurn durable TurnFailed 0 (Just ("frontend " <> tshow frontendDeadlineSeconds <> "-second deadline; request unresolved"))
               void (releaseDeferredDispatches (let GroupId group = gm.groupId in group))
       where
         finishedTarget target
@@ -1993,11 +1975,10 @@ dispatchLLMWith start owner mIntent origin gm = do
           (agentTurn turn (AgentContext toolCtx session.effortOverride Nothing) session.model messages (taskProgressEvent durable.atrTurnId))
           (taskHeartbeat durable)
       case raced of
-        Right () -> finishAgentTurn durable TurnFailed 0 (Just "task lease, cancellation or deadline stopped execution") Nothing
+        Right () -> finishAgentTurn durable TurnFailed 0 (Just "task lease, cancellation or deadline stopped execution")
         Left result -> do
           for_ result.aborted $ \detail -> void (DurableTask.recordTaskFailure durable.atrTurnId (renderAgentFailure detail) (if retryableAgentFailure detail then Transient else Permanent))
-          archive <- captureTurnArchive durable session.model result
-          finishAgentTurn durable (if isJust result.aborted then TurnFailed else TurnSucceeded) result.turnsUsed (renderAgentFailure <$> result.aborted) archive
+          finishAgentTurn durable (if isJust result.aborted then TurnFailed else TurnSucceeded) result.turnsUsed (renderAgentFailure <$> result.aborted)
 
     taskHeartbeat durable = renewUntilLost (10 * 1_000_000) $ do
       renewed <- DurableTask.renewTask durable.atrTurnId
@@ -2010,12 +1991,12 @@ dispatchLLMWith start owner mIntent origin gm = do
     dispatchNotice outputCaps turn durable = do
       published <- NoticeStore.noticePublished durable.atrTurnId
       if published
-        then finishAgentTurn durable TurnSucceeded 0 Nothing Nothing
+        then finishAgentTurn durable TurnSucceeded 0 Nothing
         else do
           liftIO (setTurnPhase turn "publishing task notice")
           notice <- NoticeStore.loadNotice durable.atrTurnId
           case notice of
-            Nothing -> finishAgentTurn durable TurnAborted 0 (Just "task notice superseded or foreground work is waiting") Nothing
+            Nothing -> finishAgentTurn durable TurnAborted 0 (Just "task notice superseded or foreground work is waiting")
             Just current -> do
               let target = sendTarget outputCaps gm [] False (turnRuntimeOutputContext turn)
               result <- sendAndPersistReply target (freshBudget {sbChunksLeft = 1}) (renderNotice current)
@@ -2024,7 +2005,6 @@ dispatchLLMWith start owner mIntent origin gm = do
                 (if null result.committed then TurnFailed else TurnSucceeded)
                 0
                 result.failure
-                Nothing
 
     dispatchOrdinary outputCaps turn durable env s continuationTarget = do
       catalog :: ModelCatalog <- ask
@@ -2065,7 +2045,7 @@ dispatchLLMWith start owner mIntent origin gm = do
           turnCapabilities = baseCapabilities {tcCatalogGrants = catalogGrants}
           catalogFingerprint = toolCatalogFingerprint currentDefinitions
       setAgentTurnEnvironment durable currentPromptMajor catalogFingerprint
-      replyContinuation <- for continuationTarget $ \target -> do
+      replyContinuation <- fmap join . for continuationTarget $ \target -> do
         _ <-
           recordForkFrom
             (conversationScopeFor gm.groupId)
@@ -2082,33 +2062,9 @@ dispatchLLMWith start owner mIntent origin gm = do
             currentPromptMajor
             catalogFingerprint
             target
-        -- The digest is computed first and unconditionally: it is the floor
-        -- the replay tier degrades to, so a validity failure costs nothing
-        -- already spent.  If replay does succeed it swaps the whole record
-        -- for the drift note alone — the record is about to be shown
-        -- verbatim, and stating it twice is what dedup exists to avoid.
-        let digestOnly = digestOnlyContinuation (renderContinuationDigest env.beTimeZone <$> digestView)
-            replayDelta = digestOnlyContinuation (renderReplayDelta env.beTimeZone <$> digestView)
-        replayContinuation
-          env.beTimeZone
-          (conversationScopeFor gm.groupId)
-          ReplayEnvironment
-            { reNow = now,
-              reProfile = s.model,
-              rePromptMajor = currentPromptMajor,
-              reCatalogFingerprint = catalogFingerprint,
-              reChainTokenBudget = defaultChainTokenBudget
-            }
-          target.rttTurn
-          digestOnly
-          replayDelta
+        pure (renderContinuationDigest env.beTimeZone <$> digestView)
       liftIO (setTurnPhase turn "context")
-      let continuation = case monitorView of
-            -- A monitor fire is a world event, not a continuation of an
-            -- earlier turn: its host-authored view replaces the reply
-            -- continuation rather than joining it.
-            Just view -> digestOnlyContinuation (Just view)
-            Nothing -> fromMaybe noContinuation replyContinuation
+      let continuation = monitorView <|> replyContinuation
       (ctx, roster) <-
         buildContext
           PromptRequest
@@ -2177,7 +2133,7 @@ dispatchLLMWith start owner mIntent origin gm = do
           when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $ do
             queueQQReaction gm.groupId gm.canonicalId processingFaceId False
             queueQQReaction gm.groupId gm.canonicalId failureFaceId True
-          finishAgentTurn durable TurnFailed 0 (Just "turn stopped making progress") Nothing
+          finishAgentTurn durable TurnFailed 0 (Just "turn stopped making progress")
         Left result -> settleTurn outputCaps env s target streamBudget durable result
 
     settleTurn outputCaps env s target streamBudget durable result = do
@@ -2199,8 +2155,7 @@ dispatchLLMWith start owner mIntent origin gm = do
             queueQQReaction gm.groupId gm.canonicalId failureFaceId True
           pure TurnFailed
         Just replyRaw -> handleReply outputCaps env s target streamBudget result replyRaw
-      archive <- captureTurnArchive durable s.model result
-      finishAgentTurn durable (if isJust result.aborted then TurnFailed else terminal) result.turnsUsed (renderAgentFailure <$> result.aborted) archive
+      finishAgentTurn durable (if isJust result.aborted then TurnFailed else terminal) result.turnsUsed (renderAgentFailure <$> result.aborted)
 
     handleReply outputCaps env s target streamBudget result replyRaw = do
       -- Drop the already-published prefix and clean hallucinated media markers.
@@ -2293,47 +2248,6 @@ dispatchLLMWith start owner mIntent origin gm = do
           pure $ case publication.failure of
             Nothing -> TurnSucceeded
             Just _ -> TurnFailed
-
-    captureTurnArchive durable profile result = do
-      captureTurnArchiveFields durable profile result.appended result.turnsUsed (renderAgentFailure <$> result.aborted)
-
-    captureTurnArchiveFields durable profile appended turnsUsed aborted = do
-      (Just <$> writeArchive)
-        `catchSync` \e -> do
-          -- The wire archive is disposable replay cache, never turn truth.
-          -- A cache write failure after a visible reply must not turn that
-          -- successfully completed reply into a user-visible crash.
-          logAttention "turn trace archive capture failed" $
-            object
-              [ "turn_id" .= durable.atrTurnId.unAgentTurnId,
-                "error" .= T.pack (show (e :: SomeException))
-              ]
-          pure Nothing
-      where
-        writeArchive = do
-          now <- liftIO getCurrentTime
-          let payload =
-                object
-                  [ "version" .= (1 :: Int),
-                    "turn_id" .= durable.atrTurnId.unAgentTurnId,
-                    "turn_ordinal" .= durable.atrTurnOrdinal.unTurnOrdinal,
-                    "profile" .= profile,
-                    "trigger"
-                      .= object
-                        [ "canonical_message_id" .= gm.canonicalId,
-                          "body" .= gm.body
-                        ],
-                    "appended" .= appended,
-                    "turns_used" .= turnsUsed,
-                    "aborted" .= aborted
-                  ]
-              bytes = LBS.toStrict (encode payload)
-          blob <- putBlob bytes
-          pure
-            ( blobRefSha256 blob,
-              fromIntegral (BS.length bytes),
-              addUTCTime (14 * 24 * 60 * 60) now
-            )
 
 --------------------------------------------------------------------------------
 -- Reply helper.

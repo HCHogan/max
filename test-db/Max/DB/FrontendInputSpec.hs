@@ -91,7 +91,7 @@ spec pool = before_ (truncateAll pool) $ describe "frontend steering" $ do
     (front, _, _) <- seed pool 900 1
     withDb pool (claimFrontend front) `shouldReturn` True
     void $ withDb pool (enqueueOutbound ((draft front) {transcriptKind = "debug"}))
-    withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing)
+    withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing)
     dispositions pool front `shouldReturn` ["failed"]
 
   it "returns observed feedback to dispatch when reply publication fails" $ do
@@ -100,7 +100,7 @@ spec pool = before_ (truncateAll pool) $ describe "frontend steering" $ do
     (incoming, _, _) <- seed pool 900 1
     withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
     _ <- withDb pool (readInputs front.atrTurnId)
-    withDb pool (finishAgentTurn front TurnFailed 1 (Just "publication failed") Nothing)
+    withDb pool (finishAgentTurn front TurnFailed 1 (Just "publication failed"))
     dispositions pool front `shouldReturn` ["failed", "pending"]
 
   it "retains eligibility for a deferred intent trigger without an active dispatch owner" $ do
@@ -110,7 +110,7 @@ spec pool = before_ (truncateAll pool) $ describe "frontend steering" $ do
     withDb pool (admitFrontend incoming (Just MessageInput)) `shouldReturn` FrontendBusy
     now <- getCurrentTime
     withDb pool (deferRequest incoming.atrTurnId now)
-    withDb pool (finishAgentTurn incoming TurnAborted 0 Nothing Nothing)
+    withDb pool (finishAgentTurn incoming TurnAborted 0 Nothing)
     withDb pool (pendingRequest message.unCanonicalMessageId) `shouldReturn` True
     state <- withDb pool $ query "SELECT status FROM message_dispatches WHERE canonical_message_id=?" (Only message.unCanonicalMessageId)
     state `shouldBe` [Only ("deferred" :: Text)]
@@ -127,7 +127,7 @@ spec pool = before_ (truncateAll pool) $ describe "frontend steering" $ do
     withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
     duplicateClaim <- withDb pool (claimDispatch "duplicate" message 120)
     fmap (.canonicalMessageId) duplicateClaim `shouldBe` Nothing
-    withDb pool (finishAgentTurn front TurnFailed 1 Nothing Nothing)
+    withDb pool (finishAgentTurn front TurnFailed 1 Nothing)
     Just retryClaim <- withDb pool (claimDispatch "retry" message 120)
     withDb pool (startDispatch "retry" message retryClaim.attemptCount 120) `shouldReturn` True
     withDb pool (completeDispatch "original" message claim.attemptCount DispatchCompleted) `shouldReturn` False
@@ -139,7 +139,7 @@ spec pool = before_ (truncateAll pool) $ describe "frontend steering" $ do
     withDb pool (claimFrontend front) `shouldReturn` True
     (incoming, message, _) <- seed pool 900 1
     withDb pool (admitFrontend incoming (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
-    withDb pool (finishAgentTurn front TurnCancelled 1 (Just "kill") Nothing)
+    withDb pool (finishAgentTurn front TurnCancelled 1 (Just "kill"))
     dispositions pool front `shouldReturn` ["cancelled", "cancelled"]
     state <- withDb pool $ query "SELECT status FROM message_dispatches WHERE canonical_message_id=?" (Only message.unCanonicalMessageId)
     state `shouldBe` [Only ("completed" :: Text)]
@@ -175,7 +175,7 @@ spec pool = before_ (truncateAll pool) $ describe "frontend steering" $ do
     (unseen, message, _) <- seed pool 900 1
     withDb pool (admitFrontend unseen (Just FeedbackInput)) `shouldReturn` FrontendInputQueued
     void $ withDb pool (enqueueOutbound (draft front))
-    withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing)
+    withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing)
     dispositions pool front `shouldReturn` ["answered", "answered", "pending"]
     withDb pool (pendingRequest message.unCanonicalMessageId) `shouldReturn` True
     rows <- withDb pool $ query "SELECT status FROM message_dispatches WHERE canonical_message_id=?" (Only message.unCanonicalMessageId)
@@ -189,7 +189,7 @@ spec pool = before_ (truncateAll pool) $ describe "frontend steering" $ do
     (admitted, ()) <-
       concurrently
         (withDb pool (admitFrontend incoming (Just FeedbackInput)))
-        (withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing Nothing))
+        (withDb pool (finishAgentTurn front TurnSucceeded 1 Nothing))
     case admitted of
       FrontendInputQueued -> withDb pool (pendingRequest message.unCanonicalMessageId) `shouldReturn` True
       FrontendClaimed -> withDb pool (claimFrontend incoming) `shouldReturn` True

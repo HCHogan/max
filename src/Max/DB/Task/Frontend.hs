@@ -75,7 +75,7 @@ admitFrontend turn input = withTransaction $ do
         then do
           -- A crash between input assignment and source cleanup must not recover
           -- a second frontend for the same input. Both commit together.
-          finishAgentTurn turn TurnAborted 0 (Just "input assigned to the active conversation frontend") Nothing
+          finishAgentTurn turn TurnAborted 0 (Just "input assigned to the active conversation frontend")
           pure FrontendInputQueued
         else
           if waiting || not (null occupied)

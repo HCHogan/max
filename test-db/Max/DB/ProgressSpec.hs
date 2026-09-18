@@ -37,7 +37,7 @@ spec pool = before_ (truncateAll pool) $ describe "direct task publication" $ do
     withDb pool (noticePublished front.atrTurnId) `shouldReturn` False
     void $ withDb pool (enqueueOutbound (draft front))
     withDb pool (noticePublished front.atrTurnId) `shouldReturn` True
-    withDb pool (finishAgentTurn front TurnSucceeded 0 Nothing Nothing)
+    withDb pool (finishAgentTurn front TurnSucceeded 0 Nothing)
     due pool
     withDb pool admitTaskNotification `shouldReturn` []
     detail <- withDb pool (Query.readTask (GroupId 900) task) >>= requireJust "task detail"
@@ -49,7 +49,7 @@ spec pool = before_ (truncateAll pool) $ describe "direct task publication" $ do
     (task, front) <- readyResult pool
     withDb pool (loadNotice front.atrTurnId) `shouldReturn` Just (TaskResult task (report TaskState.ReportSucceeded))
     void $ withDb pool (enqueueOutbound (draft front))
-    withDb pool (finishAgentTurn front TurnSucceeded 0 Nothing Nothing)
+    withDb pool (finishAgentTurn front TurnSucceeded 0 Nothing)
     withDb pool (query "SELECT review_decision IS NULL,delivered_at IS NOT NULL FROM task_notifications" ()) `shouldReturn` [(True, True)]
     withDb pool (query "SELECT disposition FROM conversation_requests" ()) `shouldReturn` [Only ("answered" :: Text)]
 
@@ -65,10 +65,10 @@ spec pool = before_ (truncateAll pool) $ describe "direct task publication" $ do
     withDb pool (claimFrontend userTurn) `shouldReturn` True
     withDb pool (loadNotice front.atrTurnId) `shouldReturn` Nothing
     withDb pool (enqueueOutbound (draft front)) `shouldThrow` anyException
-    withDb pool (finishAgentTurn front TurnAborted 0 (Just "yielded") Nothing)
+    withDb pool (finishAgentTurn front TurnAborted 0 (Just "yielded"))
     withDb pool (authorizeTaskStep userTurn.atrTurnId ExecutionCheckpoint) `shouldReturn` True
     withDb pool admitTaskNotification `shouldReturn` []
-    withDb pool (finishAgentTurn userTurn TurnSucceeded 1 Nothing Nothing)
+    withDb pool (finishAgentTurn userTurn TurnSucceeded 1 Nothing)
     due pool
     [next] <- withDb pool admitTaskNotification
     Just nextFront <- withDb pool (taskTurnRef next)
@@ -90,7 +90,7 @@ spec pool = before_ (truncateAll pool) $ describe "direct task publication" $ do
     void $ withDb pool (enqueueOutbound (draft front))
     withDb pool (enqueueOutbound ((draft front) {turnOutputLink = Just (TurnOutputLink front.atrTurnId 1)})) `shouldThrow` anyException
     withDb pool (loadNotice front.atrTurnId) `shouldReturn` Nothing
-    withDb pool (finishAgentTurn front TurnCrashed 0 (Just "died after publication") Nothing)
+    withDb pool (finishAgentTurn front TurnCrashed 0 (Just "died after publication"))
     due pool
     withDb pool admitTaskNotification `shouldReturn` []
     receipts <- withDb pool $ query "SELECT delivered_at IS NOT NULL FROM task_notifications" ()
@@ -118,9 +118,9 @@ spec pool = before_ (truncateAll pool) $ describe "direct task publication" $ do
   it "supersedes an unpublished progress notification when the task finishes, preserving the result path" $ do
     (_, execution, front) <- ready pool
     withDb pool (taskReportTyped execution.atrTurnId (report TaskState.ReportSucceeded)) `shouldReturn` True
-    withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
+    withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing)
     withDb pool (enqueueOutbound (draft front)) `shouldThrow` anyException
-    withDb pool (finishAgentTurn front TurnAborted 0 Nothing Nothing)
+    withDb pool (finishAgentTurn front TurnAborted 0 Nothing)
     [result] <- withDb pool admitTaskNotification
     withDb pool (notificationKind result) `shouldReturn` Just "result"
 
@@ -175,7 +175,7 @@ readyResult pool = do
   task <- admit pool source "result-notice"
   execution <- claimOne pool
   withDb pool (taskReportTyped execution.atrTurnId (report TaskState.ReportSucceeded)) `shouldReturn` True
-  withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
+  withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing)
   [notice] <- withDb pool admitTaskNotification
   Just front <- withDb pool (taskTurnRef notice)
   withDb pool (claimFrontend front) `shouldReturn` True

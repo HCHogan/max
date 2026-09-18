@@ -123,12 +123,6 @@ instance ToJSON ContentBlock where
           "image_url" .= object ["url" .= url]
         ]
 
--- | The inverse of the encoder above.
---
--- It exists because ADR 005 archives a turn's messages with 'ToJSON' and reads
--- them back with 'FromJSON'; a constructor that only encodes makes the whole
--- archive undecodable, and the verbatim replay tier silently degrades to
--- digest for every turn that ever showed the model an image.
 instance FromJSON ContentBlock where
   parseJSON = withObject "ContentBlock" $ \o ->
     o .: "type" >>= \case

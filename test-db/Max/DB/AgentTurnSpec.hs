@@ -2,12 +2,12 @@ module Max.DB.AgentTurnSpec (spec) where
 
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (bracket, try)
-import Control.Monad (forM, forM_, replicateM)
+import Control.Monad (forM_)
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Int (Int64)
 import Data.List (sort)
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime, utc)
@@ -20,13 +20,12 @@ import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.TurnContinuity
-import Max.Effects.Blob (Blob, blobRefSha256, putBlob, runBlob)
+import Max.Effects.Blob (Blob, runBlob)
 import Max.IR (Body (..), Node (NText))
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
-import Max.Turn.Continuity (TurnDigest (..), currentPromptMajor, renderContinuationDigest, renderReplayDelta)
-import Max.Turn.Replay (ReplayCandidate (..))
+import Max.Turn.Continuity (TurnDigest (..), currentPromptMajor, renderContinuationDigest)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..))
 import System.Directory
@@ -204,7 +203,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
       withDb pool $
         startJournalExecution fixture.fxTurn (journalStart "call-cancel" "sandbox_exec")
     withDb pool $
-      finishAgentTurn fixture.fxTurn TurnAborted 1 (Just "cancelled") Nothing
+      finishAgentTurn fixture.fxTurn TurnAborted 1 (Just "cancelled")
     rows <- withConn pool $ \connection ->
       query
         connection
@@ -296,40 +295,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
       query connection "SELECT count(*) FROM messages WHERE agent_turn_id = ?" (Only fixture.fxTurn.atrTurnId)
     (afterDuplicate :: [Only Int64]) `shouldBe` [Only 1]
 
-  it "reclaims the archive-write-before-checkpoint crash window" $ do
+  it "publishes usage and terminal status idempotently without a wire archive" $ do
     fixture <- createFixture pool 42 1001
-    withTemporaryBlobRoot $ \blobRoot -> do
-      blob <- withDbBlob pool blobRoot (putBlob "wire-segment-before-checkpoint")
-      archiveBefore <- withConn pool $ \connection ->
-        query
-          connection
-          "SELECT trace_archive_sha256 FROM agent_turns WHERE turn_id = ?"
-          (Only fixture.fxTurn.atrTurnId)
-      (archiveBefore :: [Only (Maybe Text)]) `shouldBe` [Only Nothing]
-
-      reclaimed <- withDb pool (reclaimInterruptedTurns "boot-after-archive-write")
-      reclaimed.rrRecoveries
-        `shouldBe` [AgentTurnRecovery fixture.fxTurn fixture.fxGroup (Just fixture.fxTrigger) Nothing]
-
-      now <- getCurrentTime
-      withDb pool $
-        finishAgentTurn
-          fixture.fxTurn
-          TurnSucceeded
-          2
-          Nothing
-          (Just (blobRefSha256 blob, 30, addUTCTime 3600 now))
-      archiveAfter <- withConn pool $ \connection ->
-        query
-          connection
-          "SELECT status, trace_archive_sha256 FROM agent_turns WHERE turn_id = ?"
-          (Only fixture.fxTurn.atrTurnId)
-      (archiveAfter :: [(Text, Maybe Text)])
-        `shouldBe` [("succeeded", Just (blobRefSha256 blob))]
-
-  it "publishes usage, terminal status, and trace archive metadata idempotently" $ do
-    fixture <- createFixture pool 42 1001
-    now <- getCurrentTime
     withDb pool $ do
       _ <- recordAgentTurnLlmRound fixture.fxTurn.atrTurnId
       _ <- recordAgentTurnLlmRound fixture.fxTurn.atrTurnId
@@ -340,7 +307,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
         TurnSucceeded
         1
         Nothing
-        (Just (T.replicate 64 "a", 1234, addUTCTime 3600 now))
       ensureAgentTurnCrashed fixture.fxTurn "late finalizer"
     rows <- withConn pool $ \connection ->
       query
@@ -350,7 +316,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
         \ FROM agent_turns WHERE turn_id = ?"
         (Only fixture.fxTurn.atrTurnId)
     (rows :: [(Text, Int, Int64, Int64, Int64, Maybe Text, Maybe Int64, Maybe Text)])
-      `shouldBe` [("succeeded", 2, 125, 25, 40, Just (T.replicate 64 "a"), Just 1234, Nothing)]
+      `shouldBe` [("succeeded", 2, 125, 25, 40, Nothing, Nothing, Nothing)]
 
   it "host-enriches sandbox started input with durable network mode and defaults" $ do
     fixture <- createFixture pool 42 1001
@@ -463,7 +429,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     sent <- withDb pool (enqueueOutbound (outbound fixture (TurnOutputLink fixture.fxTurn.atrTurnId 0) "画了销量周环比图\n已保存"))
     withDb pool $ do
       setAgentTurnEnvironment fixture.fxTurn currentPromptMajor (T.replicate 64 "c")
-      finishAgentTurn fixture.fxTurn TurnSucceeded 2 Nothing Nothing
+      finishAgentTurn fixture.fxTurn TurnSucceeded 2 Nothing
     now <- getCurrentTime
     recent <- withDb pool (recentTurnDigests (conversationScopeFor fixture.fxGroup) Nothing now)
     map (.tdTurnOrdinal) recent `shouldBe` [fixture.fxTurn.atrTurnOrdinal]
@@ -501,7 +467,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     sent <- withDb pool (enqueueOutbound (outbound source (TurnOutputLink source.fxTurn.atrTurnId 0) "初版完成"))
     withDb pool $ do
       setAgentTurnEnvironment source.fxTurn currentPromptMajor (T.replicate 64 "d")
-      finishAgentTurn source.fxTurn TurnSucceeded 1 Nothing Nothing
+      finishAgentTurn source.fxTurn TurnSucceeded 1 Nothing
 
     currentAt <- getCurrentTime
     -- Both rows deliberately share a timestamp.  received_at bounds used to
@@ -559,115 +525,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     rendered `shouldSatisfy` T.isInfixOf "工具目录 无变化"
     rendered `shouldSatisfy` T.isInfixOf "same timestamp ambient"
 
-    -- One projection, two windows.  The replay tier keeps the drift note and
-    -- drops the record, because the wire items above it already are the
-    -- record; restating the journal there would show the same work twice.
-    let replayNote = maybe "" (renderReplayDelta utc) digestView
-    replayNote `shouldSatisfy` T.isInfixOf "工具目录 无变化"
-    replayNote `shouldSatisfy` T.isInfixOf "原样保留"
-    replayNote `shouldNotSatisfy` T.isInfixOf "sandbox_exec"
-    replayNote `shouldNotSatisfy` T.isInfixOf "之前的规范化执行记录"
-
-  it "logically evicts expired archives and enforces the per-conversation LRU cap" $ do
-    seed <- createSeed pool 42 1001
-    turns <-
-      replicateM (52 :: Int) (withDb pool (startAgentTurn seed.fxGroup seed.fxTrigger seed.fxPrincipal))
-    let base = testTime
-        pruneAt = addUTCTime 1000 base
-    forM_ (zip [1 ..] turns) $ \(index :: Int, turn) -> do
-      let created = addUTCTime (fromIntegral index) base
-          expires
-            | index == 52 = addUTCTime (-1) pruneAt
-            | otherwise = addUTCTime (30 * 86400) pruneAt
-      _ <- withConn pool $ \connection ->
-        execute
-          connection
-          "UPDATE agent_turns SET trace_archive_sha256=?, trace_archive_size_bytes=1, \
-          \ trace_archive_created_at=?, trace_archive_expires_at=? WHERE turn_id=?"
-          (T.replicate 64 "e", created, expires, turn.atrTurnId)
-      pure ()
-    pruned <- withDb pool (pruneTurnArchiveReferences pruneAt)
-    remaining <- withConn pool $ \connection ->
-      query connection "SELECT count(*) FROM agent_turns WHERE trace_archive_sha256 IS NOT NULL" ()
-    pruned `shouldBe` 2
-    (remaining :: [Only Int64]) `shouldBe` [Only 50]
-
-  it "enforces the live archive cap as terminal checkpoints commit" $ do
-    seed <- createSeed pool 42 1001
-    turns <-
-      replicateM (51 :: Int) (withDb pool (startAgentTurn seed.fxGroup seed.fxTrigger seed.fxPrincipal))
-    now <- getCurrentTime
-    _ <-
-      mapConcurrently
-        ( \turn ->
-            withDb pool $
-              finishAgentTurn
-                turn
-                TurnSucceeded
-                1
-                Nothing
-                (Just (T.replicate 64 "f", 1, addUTCTime (14 * 86400) now))
-        )
-        turns
-    remaining <- withConn pool $ \connection ->
-      query connection "SELECT count(*) FROM agent_turns WHERE trace_archive_sha256 IS NOT NULL" ()
-    (remaining :: [Only Int64]) `shouldBe` [Only 50]
-
-  it "walks the fork chain newest first, in scope, bounded by depth" $ do
-    now <- getCurrentTime
-    -- t#1 ← t#2 ← t#3: each forked from the one before it, so the chain read
-    -- from t#3 must come back [t#3, t#2, t#1].
-    seed <- createSeed pool 44 4001
-    chainTurns <- forM [1 .. 3 :: Int] $ \index -> do
-      turn <- withDb pool (startAgentTurn seed.fxGroup seed.fxTrigger seed.fxPrincipal)
-      withDb pool $ do
-        markAgentTurnRunning turn "test-profile"
-        setAgentTurnEnvironment turn currentPromptMajor (T.replicate 64 "c")
-        finishAgentTurn
-          turn
-          TurnSucceeded
-          1
-          Nothing
-          (Just (T.replicate 64 "a", 10, addUTCTime (14 * 86400) now))
-      pure (index, turn)
-    let byIndex = [(index, turn) | (index, turn) <- chainTurns]
-        turnAt index =
-          fromMaybe (error ("no turn at index " <> show index)) (lookup index byIndex)
-    forM_ [(2, 1), (3, 2)] $ \(child, parent) -> do
-      linked <-
-        withDb pool $
-          recordForkFrom
-            (conversationScopeFor seed.fxGroup)
-            (turnAt child)
-            (turnAt parent)
-            seed.fxPrincipal
-      linked `shouldBe` True
-
-    chain <- withDb pool (replayChain (conversationScopeFor seed.fxGroup) (turnAt 3) 8)
-    map (.rcTurn) chain `shouldBe` [turnAt 3, turnAt 2, turnAt 1]
-    map (.rcProfile) chain `shouldBe` replicate 3 (Just ("test-profile" :: Text))
-    map (.rcPromptMajor) chain `shouldBe` replicate 3 currentPromptMajor
-    map (.rcCatalogFingerprint) chain `shouldBe` replicate 3 (Just (T.replicate 64 "c"))
-    map (.rcArchiveSha) chain `shouldBe` replicate 3 (Just (T.replicate 64 "a"))
-    map (.rcTriggerCanonicalId) chain
-      `shouldBe` replicate 3 (Just seed.fxTrigger.unCanonicalMessageId)
-
-    -- Depth is a fuse: the suffix nearest the target survives, the rest is
-    -- digest by construction.
-    shallow <- withDb pool (replayChain (conversationScopeFor seed.fxGroup) (turnAt 3) 2)
-    map (.rcTurn) shallow `shouldBe` [turnAt 3, turnAt 2]
-
-    -- Eviction is what the validity predicate reads, so it must show through.
-    evicted <- withDb pool (pruneTurnArchiveReferences (addUTCTime (30 * 86400) now))
-    evicted `shouldSatisfy` (>= 3)
-    afterPrune <- withDb pool (replayChain (conversationScopeFor seed.fxGroup) (turnAt 3) 8)
-    map (.rcArchiveSha) afterPrune `shouldBe` replicate 3 Nothing
-
-    -- Another conversation's turn is not addressable through this scope even
-    -- with a valid turn id in hand.
-    other <- createFixture pool 45 4501
-    denied <- withDb pool (replayChain (conversationScopeFor seed.fxGroup) other.fxTurn 8)
-    denied `shouldBe` []
 
 createSeed :: DbPool -> Int64 -> Int64 -> IO Fixture
 createSeed pool group messageId = do

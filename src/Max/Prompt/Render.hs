@@ -19,7 +19,6 @@ import Data.Set qualified as Set
     insert,
     member,
     notMember,
-    null,
   )
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -102,8 +101,6 @@ import Max.Context.Types
         outputCapabilities,
         pinnedItems,
         recentTurns,
-        replayCovered,
-        replaySegments,
         replyCtx,
         session,
         skills,
@@ -364,7 +361,7 @@ renderContext pi' =
       -- the model, whichever shape we build.  Rows a replayed segment
       -- already carries verbatim drop for a different reason: they are
       -- about to be shown, once, in their original wire form.
-      visible = dropReplayCovered pi'.replayCovered (dropInFlight pi'.inFlight pi'.transcript)
+      visible = dropInFlight pi'.inFlight pi'.transcript
       -- Flat: everything goes in the user body.  Turns: everything up
       -- to the bot's last message becomes turns, the rest rejoins the
       -- user body so the turn list ends on an assistant.
@@ -416,13 +413,8 @@ renderContext pi' =
       -- for why the roles were a lie in a group, and note that this
       -- also removes the last way two consecutive same-role messages
       -- could reach a strict provider: there is exactly one of each.
-      -- ADR 005's request shape: the *current* system prompt (never the
-      -- archived one), then the fork-chain's verbatim segments oldest first,
-      -- then the ordinary window, and finally the user message carrying the
-      -- ambient delta and this turn's trigger.
       messages =
         [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) pi'.outputCapabilities effectivePersona pi'.skills)]
-          <> pi'.replaySegments
           <> historyTurnMessages pi'.tz turnRows
           <> [userMessage]
    in messages
@@ -777,18 +769,6 @@ compartmentTierFromStorageText = \case
 dropInFlight :: Set Int64 -> [HistoryItem] -> [HistoryItem]
 dropInFlight inFlight =
   filter (\h -> h.fromBot || h.canonicalId `Set.notMember` inFlight)
-
--- | Cut rows a replayed verbatim segment already carries.
---
--- Unlike 'dropInFlight' this must drop the bot's own rows too — the old
--- trigger and the old replies are exactly what the archive holds, and leaving
--- them in the window would show the model the same exchange twice, once as
--- wire messages and once as transcript lines.  An empty covered set (the
--- digest tier, and every ordinary turn) leaves the window untouched.
-dropReplayCovered :: Set Int64 -> [HistoryItem] -> [HistoryItem]
-dropReplayCovered covered
-  | Set.null covered = id
-  | otherwise = filter (\h -> h.canonicalId `Set.notMember` covered)
 
 -- | Render history as alternating user/assistant turns, merging consecutive
 -- same-role rows for strict providers. User text retains speaker/time/ID labels.
