@@ -5,13 +5,14 @@
 module Max.Http.Stream
   ( streamPost,
     StreamOutcome (..),
+    maxStreamBytes,
   )
 where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (waitSTM, withAsync)
 import Control.Concurrent.STM (atomically, newTBQueueIO, orElse, readTBQueue, writeTBQueue)
-import Control.Monad (when)
+import Control.Monad (join, when)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.IORef (newIORef, readIORef, writeIORef)
@@ -102,18 +103,19 @@ streamPost runtime delays secs hdrs url body step onGrow = go delays
               parseRequestEither url >>= \case
                 Left failure -> pure (Left failure)
                 Right request0 ->
-                  withStreamingResponse
-                    runtime
-                    StandardPool
-                    statusPreviewBytes
-                    request0
-                      { HTTP.method = "POST",
-                        HTTP.requestHeaders = hdrs,
-                        HTTP.requestBody = HTTP.RequestBodyBS body,
-                        HTTP.responseTimeout =
-                          HTTP.responseTimeoutMicro (secs * 1_000_000)
-                      }
-                    (\_ -> readLoop updates progress)
+                  join
+                    <$> withStreamingResponse
+                      runtime
+                      StandardPool
+                      statusPreviewBytes
+                      request0
+                        { HTTP.method = "POST",
+                          HTTP.requestHeaders = hdrs,
+                          HTTP.requestBody = HTTP.RequestBodyBS body,
+                          HTTP.responseTimeout =
+                            HTTP.responseTimeoutMicro (secs * 1_000_000)
+                        }
+                      (\_ -> readLoop updates progress)
         withAsync receive $ \reader -> do
           let drain = do
                 next <-
@@ -141,21 +143,27 @@ streamPost runtime delays secs hdrs url body step onGrow = go delays
       | T.null acc.saText && null acc.saCalls = (StreamFailed err, retryableResponseFailure err)
       | otherwise = (StreamTruncated acc err, False)
 
-    readLoop updates progress bodyReader = loop "" emptyAcc
+    readLoop updates progress bodyReader = loop maxStreamBytes "" emptyAcc
       where
-        loop buf acc = do
+        loop remaining buf acc = do
           chunk <- HTTP.brRead bodyReader
           if BS.null chunk
-            then pure acc
-            else do
-              let (frames, rest) = sseFrames (buf <> chunk)
-                  acc' = foldl (flip step) acc frames
-              writeIORef progress acc'
-              when (acc'.saText /= acc.saText) (atomically (writeTBQueue updates acc'))
-              -- OpenAI usage may follow finish_reason in a later body chunk.
-              -- Continue collecting it; a timeout after a terminal frame still
-              -- returns the completed message via 'stalled'.
-              loop rest acc'
+            then pure (Right acc)
+            else
+              if BS.length chunk > remaining
+                then pure (Left (ResponseBodyLimitExceeded maxStreamBytes))
+                else do
+                  let (frames, rest) = sseFrames (buf <> chunk)
+                      acc' = foldl' (flip step) acc frames
+                  writeIORef progress acc'
+                  when (acc'.saText /= acc.saText) (atomically (writeTBQueue updates acc'))
+                  -- Usage may follow the terminal frame in another body chunk.
+                  loop (remaining - BS.length chunk) rest acc'
+
+-- | Cap all received SSE bytes, including unfinished frames, reasoning and
+-- tool arguments. This bounds the cumulative provider state and queued views.
+maxStreamBytes :: Int
+maxStreamBytes = 16 * 1024 * 1024
 
 statusPreviewBytes :: Int
 statusPreviewBytes = 2000

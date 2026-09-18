@@ -54,6 +54,7 @@ import Max.RecallSpec qualified as RecallSpec
 import Max.ResourceCapabilitiesSpec qualified as ResourceCapabilitiesSpec
 import Max.SandboxRegistrySpec qualified as SandboxRegistrySpec
 import Max.SkillWorkflowSpec qualified as SkillWorkflowSpec
+import Max.StreamingSpec qualified as StreamingSpec
 import Max.WorkflowAgentSpec qualified as WorkflowAgentSpec
 import System.Environment (lookupEnv)
 import System.Exit (die)
@@ -109,6 +110,7 @@ main = do
         PlatformCapabilitiesSpec.spec pool
         PlatformStoreSpec.spec pool
         PublicationSpec.spec pool
+        StreamingSpec.spec pool
       -- Final wipe so a developer running tests against the dev DB
       -- doesn't leave random fixture rows behind.
       truncateAll pool

@@ -13,7 +13,7 @@ import Effectful.Log (runLog)
 import Log (LogLevel (LogAttention))
 import Max.Effects.Http qualified as Download
 import Max.Http.Failure (ResponseFailure (..))
-import Max.Http.Stream (StreamOutcome (..), streamPost)
+import Max.Http.Stream (StreamOutcome (..), maxStreamBytes, streamPost)
 import Max.HttpRuntime
 import Max.LLM.Stream (StreamAcc (..), stepOpenAI)
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
@@ -167,6 +167,38 @@ spec = do
       readIORef closes `shouldReturn` 1
 
   describe "stream publication" $ do
+    mapM_
+      ( \partial -> it ("bounds an unfinished SSE frame and never retries it; partial=" <> show partial) $ do
+          closed <- newEmptyMVar
+          opens <- newIORef (0 :: Int)
+          manager <-
+            newManager
+              defaultManagerSettings
+                { managerRawConnection = pure $ \_ _ _ -> do
+                    modifyIORef' opens (+ 1)
+                    let initial = [textFrame | partial]
+                        padding = replicate 17 (BS.replicate (1024 * 1024) 120)
+                    readChunk <- chunkReader ("HTTP/1.1 200 OK\r\nContent-Length: 99999999\r\n\r\n" : initial <> padding)
+                    makeConnection readChunk (const (pure ())) (void (tryPutMVar closed ())),
+                  managerRetryableException = const False
+                }
+          let runtime = httpRuntimeFromManagers manager manager manager
+          result <- withCompactLogger ColorNever Nothing $ \logger ->
+            runEff $
+              runLog "bounded-stream" logger LogAttention $
+                streamPost runtime [0] 5 [] "http://example.test/" "{}" stepOpenAI (const (pure ()))
+          let limitFailure = ResponseTransport (ResponseBodyLimitExceeded maxStreamBytes)
+          case result of
+            StreamTruncated acc failure | partial -> do
+              acc.saText `shouldBe` "first paragraph"
+              failure `shouldBe` limitFailure
+            StreamFailed failure | not partial -> failure `shouldBe` limitFailure
+            _ -> expectationFailure ("unexpected result: " <> show result)
+          readIORef opens `shouldReturn` 1
+          Timeout.timeout 1_000_000 (readMVar closed) `shouldReturn` Just ()
+      )
+      [False, True]
+
     it "finishes publication acknowledgement even when the network times out after commit" $ do
       closed <- newEmptyMVar
       committed <- newIORef []

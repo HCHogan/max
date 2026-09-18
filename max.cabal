@@ -811,6 +811,7 @@ test-suite max-test-db
         Max.PlatformCapabilitiesSpec
         Max.PlatformStoreSpec
         Max.PublicationSpec
+        Max.StreamingSpec
         Max.RecallSpec
     build-depends:
         , aeson                >= 2.2  && < 2.4

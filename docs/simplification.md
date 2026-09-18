@@ -59,7 +59,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [ ] Replace frontend SQL ownership/leases with a bounded conversation queue.
 - [x] Normal text ends the loop; failures/truncation/cancellation remain distinct.
 - [x] Publish paragraphs and plain-prose fragments incrementally.
-- [ ] Bound retained stream buffers and validate publication through the full
+- [x] Bound retained stream buffers and validate publication through the full
       SSE/transport path before EOS.
 - [ ] Update prompts, tools, handlers, output accounting and fixtures together.
 - [x] Preserve live provider tool-call/reasoning state within a model loop.
@@ -209,3 +209,13 @@ maintained implementation record.
   a model catalog; log filtering uses the normal effect interpreter. Capability
   checks, HLint and package checks pass. Nix syntax and the configuration-restart
   VM derivation evaluate successfully; the VM has not been run on this macOS host.
+
+- Streaming reception now caps the entire SSE response at 16 MiB, including
+  incomplete frames and opaque provider state. Oversized responses are never
+  retried; a received prefix remains available as interrupted output. A gated
+  provider fixture runs through HTTP/SSE, Agent, canonical publication, the
+  delivery worker and the QQ adapter: its first native send happens before
+  provider EOS, and the final tail is sent once. This is local transport
+  acceptance, not a measurement of live QQ latency.
+  Regression: 1,060 unit examples and 373 PostgreSQL integration examples pass;
+  the bounded-stream cases also verify socket closure and no automatic retry.
