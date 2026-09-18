@@ -115,14 +115,14 @@ spec pool = do
       automaticUpdate <-
         withDb pool $
           updateMemory
-            dreamer
+            maintenance
             nsA
             item.memId
             (ExpectedVersion item.memVersion)
             (MemoryUpdate "dream rewrite" (MaintenanceEvidence scopeA "nightly"))
       automaticArchive <-
         withDb pool $
-          archiveMemory dreamer nsA item.memId (ExpectedVersion item.memVersion)
+          archiveMemory maintenance nsA item.memId (ExpectedVersion item.memVersion)
       automaticUpdate `shouldBe` MemoryMutationRejected
       automaticArchive `shouldBe` MemoryMutationRejected
 
@@ -160,24 +160,15 @@ spec pool = do
             (Only old.memId)
       (target :: [Only MemoryId]) `shouldBe` [Only replacement.memId]
 
-    it "presents current evidence to maintenance and records lifecycle reasons on the new version" $ do
+    it "records lifecycle evidence and reasons on the new version" $ do
       old <- withDb pool $ createMemory extractor nsA (activeDraft evidenceA "old preference")
       replacement <-
         withDb pool $
           createMemory extractor nsA (activeDraft (MessageEvidence scopeA (Just subject) 9002) "new preference")
-      entries <- withDb pool $ listMemoryMaintenanceEntries nsA
-      let oldEntry = filter ((== old.memId) . (.mmeMemory.memId)) entries
-      oldEntry `shouldSatisfy` \case
-        [entry] ->
-          entry.mmeEvidenceKind == Just "message"
-            && entry.mmeSourceConversationId == Just 100
-            && entry.mmeSourceMessageId == Just 9001
-        _ -> False
-
       result <-
         withDb pool $
           supersedeMemoryWithEvidence
-            dreamer
+            maintenance
             nsA
             old.memId
             (ExpectedVersion old.memVersion)
@@ -205,7 +196,7 @@ spec pool = do
             \ WHERE memory_id = ? AND to_version = 2"
             (Only old.memId)
       (audit :: [(Text, Text, Maybe Text)])
-        `shouldBe` [("supersede", "dreamer", Just "integration test")]
+        `shouldBe` [("supersede", "maintenance", Just "integration test")]
 
     it "rejects evidence whose origin does not match the authorized namespace" $ do
       let foreignEvidence = MessageEvidence scopeB (Just subject) 9002
@@ -346,8 +337,8 @@ activeDraft evidence content =
 extractor :: MemoryActor
 extractor = MemoryActor ActorExtractor Nothing (Just "integration test")
 
-dreamer :: MemoryActor
-dreamer = MemoryActor ActorDreamer Nothing (Just "integration test")
+maintenance :: MemoryActor
+maintenance = MemoryActor ActorMaintenance Nothing (Just "integration test")
 
 toolActor :: Int64 -> MemoryActor
 toolActor principal = MemoryActor ActorAgentTool (Just principal) (Just "explicit request")

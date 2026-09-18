@@ -33,7 +33,6 @@ import Max.Historian (historianSystem)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Intent (classifierSystem, parseVerdict)
 import Max.Log (withCompactLogger)
-import Max.Memory.Maintenance (MaintenanceProposal, maintenanceSystem)
 import Max.Task.Notice (noticeReviewPrompt, parseNoticeDecision)
 import OptEnvConf (Parser, help, long, metavar, option, optional, reader, runParser, setting, str)
 import System.Environment (getEnvironment)
@@ -65,7 +64,6 @@ sourceBytes :: [(Text, ByteString)]
 sourceBytes =
   [ ("src/Max/Historian.hs", $(embedFile "src/Max/Historian.hs")),
     ("src/Max/EpisodeStore.hs", $(embedFile "src/Max/EpisodeStore.hs")),
-    ("src/Max/Memory/Maintenance.hs", $(embedFile "src/Max/Memory/Maintenance.hs")),
     ("src/Max/Intent.hs", $(embedFile "src/Max/Intent.hs")),
     ("src/Max/Task/Notice.hs", $(embedFile "src/Max/Task/Notice.hs")),
     ("src/Max/Task/NoticeReview.hs", $(embedFile "src/Max/Task/NoticeReview.hs"))
@@ -171,7 +169,6 @@ currentMessages cfg row = do
     _ -> Left "request is not an object"
   let prompt = case contract row of
         "historian" -> historianSystem
-        "memory-maintenance" -> maintenanceSystem
         "intent" -> classifierSystem cfg.persona
         "task-notice" -> noticeReviewPrompt
         _ -> ""
@@ -185,7 +182,6 @@ currentMessages cfg row = do
 decodeContract :: Text -> Text -> Either Text Value
 decodeContract name raw = case name of
   "historian" -> either (Left . T.pack) (const (Right Null)) (parseEpisodeCapture raw)
-  "memory-maintenance" -> either (Left . T.pack) (Right . toJSON . length) (eitherDecodeStrict' @[MaintenanceProposal] (TE.encodeUtf8 (T.strip raw)))
   "intent" -> maybe (Left "invalid intent verdict") (const (Right Null)) (parseVerdict raw)
   "task-notice" -> Null <$ parseNoticeDecision raw
   _ -> Left "unknown contract"

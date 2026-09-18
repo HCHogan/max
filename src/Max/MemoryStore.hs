@@ -21,8 +21,6 @@ module Max.MemoryStore
     MemoryUpdate (..),
     MemoryMutationResult (..),
     MemoryItem (..),
-    MemoryMaintenanceEntry (..),
-    MemoryMaintenanceCandidate (..),
     PendingMemoryEmbedding (..),
     scopeText,
     parseScope,
@@ -60,8 +58,6 @@ module Max.MemoryStore
     findExactMemory,
     findNearestMemory,
     searchVisibleMemories,
-    listMemoryMaintenanceCandidates,
-    listMemoryMaintenanceEntries,
   )
 where
 
@@ -72,7 +68,6 @@ import Data.Maybe (listToMaybe)
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), Query, (:.) (..))
 import Database.PostgreSQL.Simple.FromRow (FromRow, field, fromRow)
 import Database.PostgreSQL.Simple.ToField qualified as PG
@@ -90,55 +85,6 @@ import Max.Embedding (EmbeddingRecord (..))
 import Max.MaintenanceLease (MaintenanceLease (..), maintenanceDomainText)
 import Max.Memory.Policy (DuplicatePolicy (..), MemoryAdmissionFailure (..), maxMemoriesPerScope)
 import Max.Memory.Types
-
-data MemoryMaintenanceCandidate = MemoryMaintenanceCandidate
-  { maintenanceScope :: !Text,
-    maintenanceSubjectId :: !Int64,
-    maintenanceConversationId :: !Int64,
-    maintenanceCount :: !Int
-  }
-  deriving stock (Show, Eq)
-
--- | One current memory projection plus the newest evidence attached to that
--- exact version.  Dreamer decisions are made from this shape rather than from
--- content/date alone, so provenance is present both before and after a
--- maintenance mutation.
-data MemoryMaintenanceEntry = MemoryMaintenanceEntry
-  { mmeMemory :: !MemoryItem,
-    mmeEvidenceKind :: !(Maybe Text),
-    mmeSourceConversationId :: !(Maybe Int64),
-    mmeSourcePrincipalId :: !(Maybe Int64),
-    mmeSourceMessageId :: !(Maybe Int64),
-    mmeSourceStartIngestSeq :: !(Maybe Int64),
-    mmeSourceEndIngestSeq :: !(Maybe Int64),
-    mmeSourceEpisodeId :: !(Maybe Int64),
-    mmeEvidenceNote :: !(Maybe Text),
-    mmeEvidenceAt :: !(Maybe UTCTime)
-  }
-  deriving stock (Show, Eq)
-
-instance FromRow MemoryMaintenanceEntry where
-  fromRow =
-    MemoryMaintenanceEntry
-      <$> ( MemoryItem
-              <$> field
-              <*> field
-              <*> field
-              <*> field
-              <*> field
-              <*> field
-              <*> field
-              <*> field
-          )
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
 
 data PendingMemoryEmbedding = PendingMemoryEmbedding
   { pendingMemoryId :: !MemoryId,
@@ -874,49 +820,6 @@ searchVisibleMemories policy record limit = do
     \ SELECT id, version, scope, scope_id, content, lifecycle, category, updated_at \
     \ FROM compatible ORDER BY embedding <=> ?::vector LIMIT ?"
     (gid, gid, record.erModelId, record.erDimensions, record.erVector, limit)
-
-listMemoryMaintenanceCandidates ::
-  (WithConnection :> es, IOE :> es) =>
-  Int ->
-  Eff es [MemoryMaintenanceCandidate]
-listMemoryMaintenanceCandidates minimumEntries = do
-  rows <-
-    query
-      "SELECT scope, scope_id, COALESCE(source_group_id, scope_id), count(*)::int \
-      \ FROM memories \
-      \ WHERE lifecycle = 'active' \
-      \ GROUP BY scope, scope_id, COALESCE(source_group_id, scope_id) \
-      \ HAVING count(*) >= ? AND max(updated_at) > now() - interval '49 hours'"
-      (Only minimumEntries)
-  pure [MemoryMaintenanceCandidate scope sid gid count | (scope, sid, gid, count) <- rows]
-
-listMemoryMaintenanceEntries ::
-  (WithConnection :> es, IOE :> es) =>
-  MemoryNamespace ->
-  Eff es [MemoryMaintenanceEntry]
-listMemoryMaintenanceEntries ns = do
-  let (scope, sid, gid) = namespaceParts ns
-  query
-    "SELECT memory.id, memory.version, memory.scope, memory.scope_id, \
-    \       memory.content, memory.lifecycle, memory.category, memory.updated_at, \
-    \       evidence.evidence_kind, evidence.source_conversation_id, \
-    \       evidence.source_principal_id, evidence.source_canonical_message_id, \
-    \       evidence.source_start_ingest_seq, evidence.source_end_ingest_seq, \
-    \       evidence.source_episode_id, evidence.note, evidence.created_at \
-    \ FROM memories AS memory \
-    \ LEFT JOIN LATERAL ( \
-    \   SELECT evidence_kind, source_conversation_id, source_principal_id, \
-    \          source_canonical_message_id, source_start_ingest_seq, source_end_ingest_seq, \
-    \          source_episode_id, note, created_at \
-    \   FROM memory_evidence \
-    \   WHERE memory_id = memory.id AND memory_version = memory.version \
-    \   ORDER BY id DESC LIMIT 1 \
-    \ ) AS evidence ON true \
-    \ WHERE memory.scope = ? AND memory.scope_id = ? \
-    \   AND (memory.scope = 'group' OR memory.source_group_id = ?) \
-    \   AND memory.lifecycle IN ('active', 'permanent') \
-    \ ORDER BY memory.updated_at, memory.id"
-    (scope, sid, gid)
 
 data EvidenceParts = EvidenceParts
   { evidenceKind :: !Text,

@@ -3,9 +3,6 @@
     "src/Max/Historian.hs",
     "src/Max/EpisodeStore.hs"
   ],
-  "memory-maintenance": [
-    "src/Max/Memory/Maintenance.hs"
-  ],
   "intent": [
     "src/Max/Intent.hs"
   ],

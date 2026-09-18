@@ -78,7 +78,7 @@ data MemoryCategory
 data MemoryActorKind
   = ActorAgentTool
   | ActorExtractor
-  | ActorDreamer
+  | ActorMaintenance
   | ActorCommand
   | ActorAdmin
   | ActorHistorian
@@ -196,7 +196,7 @@ parseCategory = \case
 actorText :: MemoryActorKind -> Text
 actorText ActorAgentTool = "agent_tool"
 actorText ActorExtractor = "extractor"
-actorText ActorDreamer = "dreamer"
+actorText ActorMaintenance = "maintenance"
 actorText ActorCommand = "command"
 actorText ActorAdmin = "admin"
 actorText ActorHistorian = "historian"

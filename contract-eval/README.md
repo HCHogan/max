@@ -4,11 +4,10 @@ Issue #22 requires twenty real production inputs per structured-output contract,
 with zero first-response decode failures. `max-contract-eval` calls the configured
 production model using the current production prompt and decoder. It installs no
 tool runners and connects to no database. It does not repair failed answers or
-resample failures. Provider failures also fail the gate; an abstention (`[]` for maintenance) is decoded data, not proof of useful output.
+resample failures. Provider failures also fail the gate; successful decoding is not proof of useful output.
 
 `contracts.json` inventories all current non-tool JSON generation paths:
-Historian (including memory proposals), memory maintenance,
-intent classification, and task notice/progress review (one shared contract).
+Historian (including memory proposals), intent classification, and task notice/progress review (one shared contract).
 Captioning returns prose. Native agent tool arguments use the tool catalog and
 execution admission rather than a separately requested JSON answer. User-defined
 workflow output contracts still require their own fixture and live acceptance.

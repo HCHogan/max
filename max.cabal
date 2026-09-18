@@ -295,7 +295,7 @@ library
         Max.MaintenanceLease
         Max.Matrix
         Max.MessageKind
-        Max.Memory.Maintenance
+        Max.Memory.Expiry
         Max.MemoryStore
         Max.Memory.Types
         Max.Memory.Policy
@@ -852,7 +852,7 @@ test-suite max-test-db
         Max.DB.MediaSpec
         Max.MemoryStoreSpec
         Max.MemoryCapabilitiesSpec
-        Max.MemoryMaintenanceSpec
+        Max.MemoryExpirySpec
         Max.WorkflowAgentSpec
         Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec

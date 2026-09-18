@@ -92,7 +92,9 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [ ] Delete the online skill factory and certificates; retain static lazy skills.
 - [ ] Keep useful raw code mode on the shared tool boundary, without durable
       workflow state or a second authorization/execution path.
-- [ ] Delete memory dreaming and cross-turn raw wire archive replay.
+- [x] Delete model-driven memory dreaming; retain deterministic processing of
+      recorded expiry dates without leases.
+- [ ] Delete cross-turn raw wire archive replay.
 - [ ] Simplify context to recent messages, one sourced summary representation
       and relevant scoped memory; retain history search/expansion and token limits.
 - [ ] Replace persistent materialization/CAS traces with derived in-memory state
@@ -175,3 +177,7 @@ maintained implementation record.
 - CI validates stored model reports without treating current whole-file hashes
   as release certificates. Existing reports pass; a deliberately failed sample
   is still rejected. Historical source/model identities remain in reports.
+- Memory-dream removal: all Cabal targets build; 1,105 unit and 398 DB
+  integration examples pass. Expiry coverage retains future dates, checks
+  version/citation changes, rejects permanent-memory expiry and applies due
+  records once. No model calls or persistent execution leases are involved.

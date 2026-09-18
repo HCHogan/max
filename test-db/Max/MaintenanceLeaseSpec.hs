@@ -12,10 +12,10 @@ import Test.Hspec
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "Max.MaintenanceLease" $ do
   it "serializes one domain while allowing independent maintenance domains" $ do
-    dream <- withDb pool $ claimMaintenanceLease MemoryDreamMaintenance "worker-a" 60
-    dream `shouldSatisfy` (/= Nothing)
+    contextLease <- withDb pool $ claimMaintenanceLease ContextRebuildMaintenance "worker-a" 60
+    contextLease `shouldSatisfy` (/= Nothing)
 
-    withDb pool (claimMaintenanceLease MemoryDreamMaintenance "worker-b" 60)
+    withDb pool (claimMaintenanceLease ContextRebuildMaintenance "worker-b" 60)
       `shouldReturn` Nothing
 
     embedding <- withDb pool $ claimMaintenanceLease EmbeddingMaintenance "worker-b" 60

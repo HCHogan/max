@@ -63,8 +63,8 @@ import Max.Log (withCompactLoggerDynamic)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
 import Max.Matrix (matrixDeliveryTransport, matrixWorker)
 import Max.MediaCaption (mediaCaptionWorker)
-import Max.Memory.Maintenance (memoryMaintenanceWorker)
-import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, contextInputBudget, defaultContextLimits, defaultModelName, lookupModelCapabilities, modelProfileNames)
+import Max.Memory.Expiry (expiryWorker)
+import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
 import Max.Monitor (monitorWorker)
 import Max.Platform.Delivery (deliveryWorker, oneBotDeliveryTransport)
 import Max.Platform.Runtime (qqBackend, runRuntimePlatforms)
@@ -385,9 +385,7 @@ runApp httpRuntime cfg activeConfig runtimeStore prepareResources controlPath ap
                          (historianWorker profile candidate.historianTimeoutSeconds candidate.llm candidate.timezone workerEnv.beTasks (defaultModelName candidate.llm) scheduler)
                      | (profile, scheduler) <- maybeToList ((,) <$> candidate.memoryExtractProfile <*> workerEnv.beEpisodeScheduler)
                      ]
-                  <> [ worker "memory-dream" RestartableWorker (memoryMaintenanceWorker (ownerFor snapshot "memory-dream") profile candidate.timezone (maintenanceInputBudget candidate.llm profile))
-                     | profile <- maybeToList candidate.memoryExtractProfile
-                     ]
+                  <> [worker "memory-expiry" RestartableWorker expiryWorker]
                   <> [ worker
                          "intent"
                          RestartableWorker
@@ -592,7 +590,3 @@ callPruner days = localDomain "calls" . forever $ do
     Right n ->
       logInfo "calls: pruned" $ object ["rows" .= n, "older_than_days" .= days]
   threadDelay (3600 * 1_000_000)
-
--- Pin maintenance budgets to the same catalog generation as their LLM calls.
-maintenanceInputBudget :: ModelCatalog -> T.Text -> Int
-maintenanceInputBudget catalog profile = contextInputBudget (maybe defaultContextLimits (.contextLimits) (lookupModelCapabilities profile catalog)) False
