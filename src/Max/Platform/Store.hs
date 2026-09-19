@@ -819,6 +819,17 @@ ensureConfiguredEndpoint ::
   Eff es RegisteredEndpoint
 ensureConfiguredEndpoint platform nativeAccount nativeConversation kind mode mLegacy capabilities =
   withTransaction $ do
+    -- Match legacy registration and ingest: conversation before timeline
+    -- notifications, including the account metadata update below.
+    targetConversation <- forM mLegacy $ \legacy -> do
+      rows <-
+        query
+          "INSERT INTO conversations (conversation_kind, legacy_group_id) VALUES (?, ?) \
+          \ ON CONFLICT (legacy_group_id) DO UPDATE \
+          \ SET conversation_kind = EXCLUDED.conversation_kind \
+          \ RETURNING conversation_id"
+          (renderConversationKind kind, legacy)
+      pure (exactlyOne "ensureConfiguredEndpoint target" rows)
     let platformName = renderPlatform platform
         NativeAccountId accountNative = nativeAccount
         NativeConversationId conversationNative = nativeConversation
@@ -840,17 +851,9 @@ ensureConfiguredEndpoint platform nativeAccount nativeConversation kind mode mLe
     (endpoint, conversation) <- case existing :: [(Int64, Int64)] of
       -- Rebind existing standalone endpoints when configured as mirrors.
       -- Their past messages remain in the original conversation.
-      [(endpointId', conversationId')] -> case mLegacy of
+      [(endpointId', conversationId')] -> case targetConversation of
         Nothing -> pure (endpointId', conversationId')
-        Just legacy -> do
-          targetRows <-
-            query
-              "INSERT INTO conversations (conversation_kind, legacy_group_id) VALUES (?, ?) \
-              \ ON CONFLICT (legacy_group_id) DO UPDATE \
-              \ SET conversation_kind = EXCLUDED.conversation_kind \
-              \ RETURNING conversation_id"
-              (renderConversationKind kind, legacy)
-          let target = exactlyOne "ensureConfiguredEndpoint rebind" targetRows
+        Just target -> do
           when (target /= conversationId') $
             void $
               execute
@@ -859,19 +862,11 @@ ensureConfiguredEndpoint platform nativeAccount nativeConversation kind mode mLe
                 (target, endpointId')
           pure (endpointId', target)
       [] -> do
-        conversationRows <- case mLegacy of
-          Just legacy ->
-            query
-              "INSERT INTO conversations (conversation_kind, legacy_group_id) VALUES (?, ?) \
-              \ ON CONFLICT (legacy_group_id) DO UPDATE \
-              \ SET conversation_kind = EXCLUDED.conversation_kind \
-              \ RETURNING conversation_id"
-              (renderConversationKind kind, legacy)
-          Nothing ->
-            query
-              "INSERT INTO conversations (conversation_kind) VALUES (?) RETURNING conversation_id"
-              (Only (renderConversationKind kind))
-        let conversationId' = exactlyOne "ensureConfiguredEndpoint conversation" conversationRows
+        conversationId' <- case targetConversation of
+          Just target -> pure target
+          Nothing -> do
+            rows <- query "INSERT INTO conversations (conversation_kind) VALUES (?) RETURNING conversation_id" (Only (renderConversationKind kind))
+            pure (exactlyOne "ensureConfiguredEndpoint conversation" rows)
         -- Standalone conversations still need an opaque compatibility key for
         -- unchanged context/session readers.  It is not routing authority.
         case mLegacy of
@@ -976,6 +971,9 @@ ingestEnvelope ::
   Eff es IngestResult
 ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
   endpoint <- fetchEndpoint envelope.endpointId
+  -- Registration/publication lock the conversation before notifying the
+  -- timeline. Taking this only during monitor admission reverses that order.
+  (_ :: [Only Int64]) <- query "SELECT conversation_id FROM conversations WHERE conversation_id=? FOR UPDATE" (Only endpoint.erConversationId)
   -- Sender and mention identities lock in one ascending batch so two
   -- concurrent ingests can never take identity row locks in opposite
   -- orders.
@@ -1008,8 +1006,8 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
   -- The platform-event row is initially a reservation and receives its
   -- canonical_message_id later in this transaction. Serialize only identical
   -- native events so a duplicate delivery cannot observe or try to repair
-  -- that deliberately intermediate state. Different events remain fully
-  -- concurrent, including events on the same endpoint.
+  -- that deliberately intermediate state. The conversation lock also orders
+  -- transcript writes and monitor admission against endpoint changes.
   lockRows <-
     query
       "SELECT pg_advisory_xact_lock(hashtextextended(?::text, 0)) IS NULL"

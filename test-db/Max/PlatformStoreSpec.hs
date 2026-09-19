@@ -1,7 +1,8 @@
 module Max.PlatformStoreSpec (spec) where
 
-import Control.Concurrent.Async (concurrently, link, withAsync)
-import Control.Concurrent.MVar (newEmptyMVar, takeMVar, tryPutMVar)
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (concurrently, link, wait, withAsync)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar, tryPutMVar)
 import Control.Monad (forM, forM_, void)
 import Data.Aeson (Value (..), decode, encode, object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -12,6 +13,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), execute, query)
+import Database.PostgreSQL.Simple qualified as PostgreSQL
 import Database.PostgreSQL.Simple.FromField (ResultError (..))
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Helpers (resultId, truncateAll, withDb, withDbLog)
@@ -139,6 +141,26 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-after-matrix" "relay me"))
     claims <- startPendingDeliveries pool
     fmap (.endpointId) claims `shouldBe` [matrix.endpointId]
+
+  it "locks conversation before message notifications when endpoint metadata changes concurrently" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    begin <- newEmptyMVar
+    withConn pool $ \holder ->
+      withAsync (takeMVar begin >> withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "lock-order" "hello"))) $ \ingester -> do
+        PostgreSQL.withTransaction holder $ do
+          (_ :: [Only Int64]) <- query holder "SELECT conversation_id FROM conversations WHERE conversation_id=? FOR NO KEY UPDATE" (Only qq.conversationId.unConversationId)
+          putMVar begin ()
+          let awaitBlocked = do
+                (_ :: [Only Bool]) <- query holder "SELECT pg_stat_clear_snapshot() IS NULL" ()
+                [Only blocked] <- query holder "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pg_backend_pid()=ANY(pg_blocking_pids(pid)))" ()
+                if blocked then pure () else threadDelay 1000 >> awaitBlocked
+          timeout 5_000_000 awaitBlocked `shouldReturn` Just ()
+          -- Registration owns the conversation before it publishes the same
+          -- timeline notification as ingest. The opposite order deadlocks.
+          void $ execute holder "UPDATE platform_accounts SET updated_at=now() WHERE platform_account_id=?" (Only qq.platformAccountId.unPlatformAccountId)
+        result <- wait ingester
+        result `shouldSatisfy` isNew
 
   it "deduplicates concurrent native events and atomically creates mirror delivery" $ do
     (qq, matrix) <- mirrorPair pool

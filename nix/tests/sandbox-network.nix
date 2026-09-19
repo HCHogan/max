@@ -208,7 +208,11 @@ pkgs.testers.runNixOSTest {
     with subtest("native browser workspaces retain lease and cleanup semantics"):
         machine.succeed(cli + "browser-create max-br--100")
         port = machine.succeed(cli + "browser-port max-br--100").strip()
-        machine.succeed(f"MAX_BROWSER_ENDPOINT=http://127.0.0.1:{port}/mcp max-browser-workspace-test", timeout=300)
+        try:
+            machine.succeed(f"MAX_BROWSER_ENDPOINT=http://127.0.0.1:{port}/mcp max-browser-workspace-test", timeout=300)
+        except Exception:
+            print(machine.succeed("journalctl -u max-browser@-100 --no-pager -n 120"))
+            raise
         machine.succeed("systemctl is-active --quiet max-browser@-100.service")
         machine.fail("journalctl -u max-browser@-100 --no-pager | grep -F 'Main process exited'")
         machine.fail("journalctl -u max-browser@-100 --no-pager | grep -E 'fixture_auth|fixture_identity|workspace-one'")

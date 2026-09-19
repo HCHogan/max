@@ -29,25 +29,25 @@ Measured with tokei 14.0.0 and PostgreSQL 17.11:
 
 | Responsibility | Effective code lines |
 |---|---:|
-| Core Haskell | 31,985 |
+| Core Haskell | 31,978 |
 | Platform/provider adapters | 4,192 |
 | Concrete tools/media | 3,401 |
 | Isolation/runtime adapters | 3,420 |
 | Optional admin Haskell | 1,815 |
 | Additional owned production code | 7,361 |
-| Tests | 20,523 |
+| Tests | 20,542 |
 | Development/evaluation tools | 3,250 |
 | Historical migration files | 4,275 |
 | Vendored code | 8 |
 
-`src + app` is **44,813 effective Haskell lines**, down 7,814 from the initial
-52,627 baseline. Owned production source totals **52,174** before installed SQL.
+`src + app` is **44,806 effective Haskell lines**, down 7,821 from the initial
+52,627 baseline. Owned production source totals **52,167** before installed SQL.
 Tests, developer tools, migration history and vendored code are reported
 separately. Patch files, configuration, data and binary assets are excluded from
 source LOC; they remain maintenance costs, not deleted features.
 
 Compared with the clean pre-change `15316a9` checkpoint, core including SQL is
-33,842 → **33,732** (−110); `src + app` is 44,908 → **44,813** (−95).
+33,842 → **33,725** (−117); `src + app` is 44,908 → **44,806** (−102).
 Named capability records and SQL decoders intentionally take more lines. The
 reduction comes from deleted runtime protocols, not removed product features
 or changed counting scope. Historical SQL falls separately when obsolete debt
@@ -68,8 +68,8 @@ The archival category retains old execution, materialization and review history;
 it does not erase rows or remove their integrity constraints. Historical migration
 files describe the upgrade path and are not counted a second time as active SQL.
 
-The measured core is therefore **33,732 lines including active SQL**. Owned
-production source plus active SQL is **53,921 lines**; retained archival schema
+The measured core is therefore **33,725 lines including active SQL**. Owned
+production source plus active SQL is **53,914 lines**; retained archival schema
 adds another 678. The aspiration of a core below 10,000 has not been reached.
 Moving business policy into adapters or hiding SQL would not change that fact.
 
@@ -77,12 +77,12 @@ Largest core Haskell files:
 
 | File | Effective code lines |
 |---|---:|
-| `src/Max/Platform/Store.hs` | 2,555 |
+| `src/Max/Platform/Store.hs` | 2,549 |
 | `src/Max/Handler.hs` | 1,955 |
 | `src/Max/Config.hs` | 1,374 |
 | `src/Max/EpisodeStore.hs` | 1,043 |
 | `src/Max/MemoryStore.hs` | 835 |
-| `src/Max/DB/Monitor.hs` | 683 |
+| `src/Max/DB/Monitor.hs` | 682 |
 | `src/Max/Prompt/Render.hs` | 689 |
 | `src/Max/Recall.hs` | 558 |
 | `src/Max/Command/Dispatcher.hs` | 538 |

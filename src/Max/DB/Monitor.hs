@@ -498,7 +498,8 @@ admitDueTimeMonitors now = withTransaction $ do
 -- | Evaluate one exact canonical ingest row.  The caller invokes this only
 -- for a host-authenticated LiveDelivery inbound message, from inside the same
 -- transaction that inserted that row.  Candidate monitor rows are locked in
--- stable id order; cooldown advancement and the unique edge fire therefore
+-- stable id order; the caller already owns the conversation lock. Cooldown
+-- advancement and the unique edge fire therefore
 -- commit atomically with canonical ingest.
 evaluateLedgerMatches ::
   (WithConnection :> es, IOE :> es) =>
@@ -513,7 +514,6 @@ evaluateLedgerMatches ::
   UTCTime ->
   Eff es Int64
 evaluateLedgerMatches conversation ingestSeq canonical sender self mentionPrincipals rendered body observedAt = do
-  (_ :: [Only Int64]) <- query "SELECT conversation_id FROM conversations WHERE conversation_id=? FOR UPDATE" (Only conversation)
   -- A max-count expiry still allows the already-admitted last fire to cross
   -- into its turn; TTL expiry cancels every pending occurrence quietly.
   ttlRows <-
