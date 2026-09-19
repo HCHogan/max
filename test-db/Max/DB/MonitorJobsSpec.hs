@@ -165,7 +165,8 @@ spec pool = before_ (truncateAll pool) $ describe "reminder Jobs and retained bu
 
   it "advances cron after overflow without creating extra Jobs" $ do
     (turn, message, actor) <- seed pool 900 1
-    now <- getCurrentTime
+    -- Compare at PostgreSQL timestamp precision, independent of the host clock.
+    [Only now] <- withDb pool (query "SELECT now()" ())
     Right monitor <- withDb pool (armElaboratedTimeMonitor (GroupId 900) actor turn "watch" (Just "* * * * *") now Map.empty)
     Right _ <- withDb pool (withTransaction (MonitorDB.controlMonitor 900 actor.unPrincipalId False monitor.mrMonitorOrdinal.unMonitorOrdinal (MonitorControl.ConfigureMonitor 1 "watch" QueueOccurrences 1 MonitorControl.RetainPending Nothing) False))
     insertOccurrence pool monitor "first"

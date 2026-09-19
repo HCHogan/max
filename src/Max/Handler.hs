@@ -294,6 +294,7 @@ import Max.Tasks
     finishTurnRuntime,
     inFlightTriggers,
     setTurnPhase,
+    turnRuntimeAgentTurn,
     turnRuntimeOutputContext,
   )
 import Max.Tool.Types (ToolDefinition (..), ToolRef (..))
@@ -1395,27 +1396,15 @@ dispatchLLMWith start mIntent origin gm = do
             (startAgentTurn gm.groupId gm.canonicalId gm.authorPrincipalId)
             `onException` liftIO (leaveDispatch env.beShutdown)
         let runtimeFailed =
-              ( ensureAgentTurnCrashed durable "dispatch cancelled before runtime registration"
-                  `catchSync` \e -> logAttention "turn setup cleanup failed" (object ["error" .= T.pack (show (e :: SomeException))])
-              )
+              ensureTerminal durable "dispatch failed before runtime registration"
                 `finally` liftIO (leaveDispatch env.beShutdown)
         turn <-
-          ( liftIO (beginTurnRuntime env.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
-              `catchSync` \e -> do
-                ensureAgentTurnCrashed durable "failed to create the in-memory turn runtime"
-                liftIO (Exception.throwIO (e :: SomeException))
-          )
+          liftIO (beginTurnRuntime env.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
             `onException` runtimeFailed
         let launchFailed =
-              ( ensureAgentTurnCrashed durable "dispatch cancelled before worker launch"
-                  `catchSync` \e -> logAttention "turn launch cleanup failed" (object ["error" .= T.pack (show (e :: SomeException))])
-              )
+              ensureTerminal durable "dispatch failed before worker launch"
                 `finally` do
-                  liftIO $ do
-                    leaveDispatch env.beShutdown
-                    finishTurnRuntime env.beTasks turn
-                  releaseTurnBrowser env durable
-                  liftIO (Jobs.detachJobNotice env.beJobs durable.atrTurnId)
+                  releaseTurnScope env turn
                   for_ backgroundJob $ \job -> liftIO (Jobs.detachJobTurn env.beJobs job.run)
         case start of
           JobTurn job -> do
@@ -1498,27 +1487,31 @@ dispatchLLMWith start mIntent origin gm = do
               )
         )
           `finally` do
-            ( ensureAgentTurnCrashed durable "dispatch unwound before a terminal checkpoint"
-                `catchSync` \e -> logAttention "turn finalizer failed" (object ["error" .= T.pack (show (e :: SomeException))])
-              )
+            ensureTerminal durable "dispatch unwound before a terminal checkpoint"
               `finally` do
                 for_ ticket (liftIO . Conversation.release env.beConversations)
-                liftIO $ do
-                  leaveDispatch env.beShutdown
-                  finishTurnRuntime env.beTasks turn
-                releaseTurnBrowser env durable
-                liftIO (Jobs.detachJobNotice env.beJobs durable.atrTurnId)
+                releaseTurnScope env turn
                 for_ backgroundJob $ \job -> liftIO $ do
                   Jobs.completeJob env.beJobs job.run JobState.Failed (JobResult "任务中断；已发生的外部操作不会重试。" Nothing)
                   Jobs.detachJobTurn env.beJobs job.run
 
-    -- Browser teardown is subordinate to turn ownership cleanup.  A wedged or
-    -- already-destroyed browser must not prevent the task entry, shutdown slot from reaching their final state.
-    releaseTurnBrowser env durable =
-      releaseBrowserTurn env.beJobs env.beBrowsers gm.groupId durable.atrTurnId
+    ensureTerminal ref reason =
+      ensureAgentTurnCrashed ref reason
+        `catchSync` \e ->
+          logAttention "turn terminal cleanup failed" $
+            object ["turn_id" .= ref.atrTurnId.unAgentTurnId, "reason" .= reason, "error" .= T.pack (show (e :: SomeException))]
+
+    -- Release local ownership before browser teardown, which may block or fail.
+    releaseTurnScope env turn = do
+      let ref = turnRuntimeAgentTurn turn
+      liftIO $ do
+        leaveDispatch env.beShutdown
+        finishTurnRuntime env.beTasks turn
+      releaseBrowserTurn env.beJobs env.beBrowsers gm.groupId ref.atrTurnId
         `catchSync` \e ->
           logAttention "browser scope finalizer failed" $
             object ["error" .= T.pack (show (e :: SomeException))]
+      liftIO (Jobs.detachJobNotice env.beJobs ref.atrTurnId)
 
     work outputCaps turn durable = do
       liftIO (setTurnPhase turn "starting")

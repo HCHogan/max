@@ -2,9 +2,9 @@
 
 module Max.HandlerSpec (spec) where
 
-import Max.MessageKind (MessageKind (..))
 import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, recordAs, splitQuoteHandles)
 import Max.IR.Prompt (promptText)
+import Max.MessageKind (MessageKind (..))
 import Max.Platform.QQ (qqIngestBody)
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.ReplySend (cleanModelText, stripBareMarkers, stripStickerText, stripThinkSpans)
@@ -42,10 +42,7 @@ spec = do
       parseSilence "[silence:量子纠缠]" `shouldBe` Just Nothing
 
     it "reads a marker that lost its closing bracket" $ do
-      -- Taken from production: eleven replies in three days ended in an
-      -- unclosed token, eight of them exactly this.  Every one was sent to the
-      -- group as chat, because a near-miss opt-out was not a malformed opt-out
-      -- — it was ordinary text.
+      -- Production models sometimes omit the closing bracket.
       parseSilence "[silence" `shouldBe` Just Nothing
       parseSilence "[沉默" `shouldBe` Just Nothing
       parseSilence "[silence:NO" `shouldBe` Just (Just 123)
@@ -54,19 +51,13 @@ spec = do
 
     it "does not mute a reply that merely contains the marker" $ do
       parseSilence "[silence] 算了还是说一句" `shouldBe` Nothing
-      -- The repair must not widen this: the exact-match property is what lets
-      -- max talk *about* the marker, which it has really done.
+      -- Mentioning a marker in ordinary text must not silence the reply.
       parseSilence "连发三条 [silence] 都是有节奏的。" `shouldBe` Nothing
       parseSilence "[silence 算了还是说一句" `shouldBe` Nothing
-      -- The repair keys on there being no bracket anywhere, so a reply that
-      -- has one is read exactly as it was before.
-      parseSilence "[silence:吃瓜] 再说一句" `shouldBe` Nothing
       parseSilence "[silence:吃瓜] 再说一句" `shouldBe` Nothing
       isSilentReply "我为什么要回 [silence]" `shouldBe` False
 
-    -- The format guide drills "回谁就引谁", so the model quotes the
-    -- message it is declining; that must not turn the marker into a
-    -- literal message (production: [reply#id] [silence] went out as text).
+    -- A leading quote does not turn silence into visible text.
     it "sees through leading quote handles" $ do
       parseSilence "[reply#7413] [silence]" `shouldBe` Just Nothing
       parseSilence "[reply#7413][silence:吃瓜]" `shouldBe` Just (Just 271)
@@ -76,9 +67,7 @@ spec = do
     it "does not mute ordinary replies" $
       isSilentReply "今天天气不错" `shouldBe` False
 
-  -- The quote is what the silence declines, so it decides both the stored
-  -- reply link and where the face lands — the trigger is only the answer
-  -- when the model named nothing.
+  -- Silence targets the explicit quote, falling back to the trigger.
   describe "splitQuoteHandles" $ do
     it "returns the quoted ids and the marker separately" $ do
       splitQuoteHandles "[reply#7413] [silence]" `shouldBe` ([7413], "[silence]")

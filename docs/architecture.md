@@ -687,10 +687,12 @@ phase, heartbeat and cancellation state; `Conversation` owns the feedback inbox.
 There is no identity-free production/test mode or trigger-id adoption path.
 Failed message persistence suppresses media jobs, agent dispatch and proactive
 work while the event loop remains alive.
-The shutdown slot, durable turn, in-memory runtime, and child async are handed
-off under asynchronous-exception masking; before publication the caller owns
-rollback, and after publication the child finalizer owns every resource. The
-child body itself is restored to the normal cancellable state.
+The shutdown slot, recorded turn, runtime and child async are handed off under
+asynchronous-exception masking. Before the child starts, the dispatcher owns
+cleanup; after launch, the child finalizer owns it. Both paths use
+`releaseTurnScope` to release local ownership before browser teardown.
+`ensureTerminal` records any missing terminal state without allowing a failed
+diagnostic write to skip local cleanup. The child body remains cancellable.
 Agent regression tests exercise feedback before an LLM node, asynchronous
 `!kill`, late feedback racing streamed output, and root-owned cleanup through
 this same runtime seam.

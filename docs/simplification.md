@@ -116,14 +116,14 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 
 ### F. Removal and acceptance
 
-- [ ] Delete unused modules, effects, configuration, SQL, admin surfaces and
+- [x] Delete unused modules, effects, configuration, SQL, admin surfaces and
       tests belonging to removed behavior. Preserve historical migrations.
-- [ ] Stop using old execution tables before archiving/dropping them; retain
+- [x] Stop using old execution tables before archiving/dropping them; retain
       business history and provide an upgrade path from the existing database.
-- [ ] Make ordinary chat/tool/cancellation paths directly readable. Use named
+- [x] Make ordinary chat/tool/cancellation paths directly readable. Use named
       fields, explicit results and locally understandable resource ownership.
-- [ ] Update architecture, feature, operations and generated prompt documentation.
-- [ ] Publish final core and total-owned-code measurements with a file manifest.
+- [x] Update architecture, feature, operations and generated prompt documentation.
+- [x] Publish final core and total-owned-code measurements with a file manifest.
 - [ ] Complete local gates, upgrade checks, release and operational acceptance.
 
 ## Size accounting
@@ -477,3 +477,19 @@ maintained implementation record.
   dispatch leases, durable inboxes or tests. The measured source/SQL/prompt
   checkpoint is updated in `docs/code-size.md`. Final lifecycle readability
   review, live-model comparison and operational acceptance remain pending.
+
+- Final removal/readability audit: all source modules are reachable from a
+  production or evaluation entry point. The 33 archived relations have no
+  runtime/maintenance SQL callers (remaining textual matches name the public
+  `task_progress` tool). Historical migrations and user data remain intact;
+  the populated upgrade fixture passes. Handler now shares named terminal and
+  resource cleanup paths across launch failure and child exit, removing a
+  duplicate terminal write on runtime-construction failure. Ownership handoff
+  stays masked, and the child remains cancellable.
+  Full local regression after this cleanup: 1,056 unit and 256 DB examples pass.
+  Linux CI on `5a09858` exposed a test comparing nanosecond host time with a
+  microsecond PostgreSQL timestamp; the cron-overflow case now takes its test
+  clock from PostgreSQL, retaining exact equality and both admission assertions.
+  Current source, active/archival SQL and prompt counts are in `docs/code-size.md`.
+  Release CI, representative live-model comparison and operational acceptance
+  remain required; no production deployment is claimed.
