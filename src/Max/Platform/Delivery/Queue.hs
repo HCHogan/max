@@ -80,7 +80,10 @@ nextDelivery (DeliveryQueue _ state) serves = loop
       case selection of
         Right entry -> pure entry
         Left (deadline, observed) -> do
-          timer <- registerDelay (max 0 (min 60_000_000 (ceiling (diffUTCTime deadline now * 1_000_000))))
+          -- The STM wait may have outlived the sampled time; idle time is not
+          -- a retry delay for work that just arrived.
+          current <- getCurrentTime
+          timer <- registerDelay (max 0 (min 60_000_000 (ceiling (diffUTCTime deadline current * 1_000_000))))
           atomically $ (readTVar timer >>= check) `orElse` (readTVar state >>= check . (/= observed))
           loop
 

@@ -39,6 +39,15 @@ import Test.Hspec
 spec :: Spec
 spec = do
   describe "process delivery queue" $ do
+    it "sends new work promptly after waiting on an empty queue" $ do
+      queue <- newDeliveryQueue (DeliveryId 0)
+      let target = DeliveryTarget (DeliveryId 1) (EndpointId 10) PlatformQQ
+      withAsync (nextDelivery queue (== PlatformQQ)) $ \consumer -> do
+        timeout 1_000_000 (wait consumer) `shouldReturn` Nothing
+        queueDeliveries queue [target]
+        delivered <- timeout 250_000 (wait consumer)
+        fmap (.target) delivered `shouldBe` Just target
+
     it "owns each endpoint head once and isolates served and unrouted lanes" $ do
       queue <- newDeliveryQueue (DeliveryId 0)
       let first = DeliveryTarget (DeliveryId 1) (EndpointId 10) PlatformQQ
