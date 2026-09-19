@@ -27,8 +27,9 @@ cabal run max-context-eval -- --eval-profile historian-candidate \
   --runs 3 --min-pass-rate 1
 ```
 
-Every Historian case labels required/forbidden summary terms, summary evidence, and
-expected semantic-memory proposals. Additional proposals fail by default:
+Every Historian case labels required P1 terms and evidence, forbidden terms in
+all three tiers, and expected semantic-memory proposals. The strict validator
+checks each tier's length and source citations independently. Additional proposals fail by default:
 omission is safer than turning ambient banter into durable fact. Reports show
 estimated prompt size, provider-reported prompt/completion/cache tokens, and
 request latency. Missing provider usage is a gate failure because cost cannot

@@ -38,6 +38,7 @@ import Data.Time
 import Data.Vector qualified as V
 import Max.Config qualified as Config
 import Max.Context (estimateMessagesTokens)
+import Max.Context.Types (CompartmentTier (..))
 import Max.Context.Working (estimateToolTokens)
 import Max.DB.Calls (redactDataUrls)
 import Max.DB.Files (FileRecord (..))
@@ -417,25 +418,33 @@ fixtureCompartments =
       "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
       (dayAt 2026 3 2 19 20)
       (dayAt 2026 3 2 20 6)
+      "STM32L4 气象站；原理图复核、低功耗和 LoRa 唤醒待验证。"
       "群里比较 STM32L4 和 ESP32-S3 后，决定气象站主控继续使用 STM32L4；老张负责原理图复核，阿飞先验证低功耗和 LoRa 唤醒链路。",
     compartment
       "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
       (dayAt 2026 6 5 21 10)
       (dayAt 2026 6 5 22 3)
+      "LoRa 节点五分钟上报；sequence 去重，重连不重放旧采样。"
       "阿飞完成 LoRa 气象站首版通信协议；节点每五分钟上报温湿度和电池电压，网关按 sequence 去重。老张要求掉线重连不得重放旧采样，Max 给出状态机测试清单。",
     compartment
       "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
       (dayAt 2026 7 20 22 14)
       (dayAt 2026 7 20 22 42)
+      "DMA 回调 HardFault：等待 map 文件和最小复现。"
       "阿飞的新固件在复位后持续进入 HardFault，串口 PC 指向 DMA 完成回调。老张怀疑 buffer 生命周期，Max 建议先保留 fault frame、反汇编 PC 并检查链接脚本；阿飞承诺补 map 文件和最小复现。"
   ]
   where
-    compartment handle started ended summary =
+    compartment handle started ended anchor summary =
       ContextCompartment
         { contextExpandHandle = fixtureHandle handle,
           contextStartedAt = started,
           contextEndedAt = ended,
-          contextSummary = summary
+          contextSummaryP1 = summary,
+          contextSummaryP2 = Just anchor,
+          contextSummaryP3 = Just anchor,
+          contextImportance = 0.5,
+          contextConfidence = 0.8,
+          contextTier = TierP1
         }
 
 archivedSummary :: Text

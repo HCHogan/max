@@ -140,7 +140,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [x] Delete model-driven memory dreaming; retain deterministic processing of
       recorded expiry dates without leases.
 - [x] Delete cross-turn raw wire archive replay.
-- [x] Simplify context to recent messages, one sourced summary representation
+- [x] Simplify context to recent messages, layered sourced summaries
       and relevant scoped memory; retain history search/expansion and token limits.
 - [x] Replace persistent materialization/CAS traces with derived in-memory state
       and optional sampled diagnostics.
@@ -519,7 +519,8 @@ maintained implementation record.
   44,871 lines (799 fewer); core Haskell is 32,047. Three-level summaries, remaining
   worker failure handling and final operational acceptance are still pending.
 
-- Historian now emits one summary with one citation list. Removed P1/P2/P3/P4
+- Historical intermediate step (superseded by layered-summary restoration):
+  Historian emitted one summary with one citation list. Removed P1/P2/P3/P4
   fields and age/importance-based fidelity transitions from prompt assembly.
   The planner keeps a chronological summary suffix within one quarter of its
   prompt budget (at most 8,192 estimated tokens), then applies the existing
@@ -619,3 +620,12 @@ maintained implementation record.
   and native sandbox probes passed. Historical delivery/sandbox uncertainty and
   existing context source mismatches remain visible; strict health is not green.
   The user separately requested pausing iMessage and WeChat integrations.
+
+### Layered-summary restoration
+
+- Restore P1/P2/P3 capture, per-tier evidence, and pure age/importance/budget
+  selection. Keep the process-owned Historian scheduler and single context
+  snapshot; no persistent planner or execution recovery is reintroduced.
+- Read the retained tier columns directly. Captures from the single-summary
+  period remain usable at full detail. Search still reads the distinct union of
+  all summary texts and citations; existing vectors and raw messages are untouched.

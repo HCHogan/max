@@ -8,6 +8,10 @@ module Max.Context.Types
     TriggerOrigin (..),
     ContextReadMode (..),
     ContextCompartment (..),
+    CompartmentTier (..),
+    compartmentSummaryAt,
+    selectedCompartmentSummary,
+    compartmentTierText,
     PromptImage (..),
     ContextSnapshot (..),
     ContextPlan (..),
@@ -16,6 +20,7 @@ module Max.Context.Types
 where
 
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Text (Text)
 import Data.Time (TimeZone, UTCTime)
@@ -39,7 +44,7 @@ data PromptInputs = PromptInputs
     session :: !Session,
     -- | The @\@-bot@ message that triggered this turn.
     triggerMessage :: !DispatchMessage,
-    -- | Recent tool-using durable turns, newest first.  Lines carry scoped
+    -- | Recent tool-using turns, newest first.  Lines carry scoped
     -- t# handles and are independently removable by ContextPolicy.
     recentTurns :: ![Text],
     -- | Host-authored digest for an exact reply continuation.  It is part of
@@ -145,9 +150,33 @@ data ContextCompartment = ContextCompartment
   { contextExpandHandle :: !EpisodeHandle,
     contextStartedAt :: !UTCTime,
     contextEndedAt :: !UTCTime,
-    contextSummary :: !Text
+    contextSummaryP1 :: !Text,
+    contextSummaryP2 :: !(Maybe Text),
+    contextSummaryP3 :: !(Maybe Text),
+    contextImportance :: !Double,
+    contextConfidence :: !Double,
+    contextTier :: !CompartmentTier
   }
   deriving stock (Show, Eq)
+
+data CompartmentTier = TierP1 | TierP2 | TierP3
+  deriving stock (Show, Eq, Ord, Enum, Bounded)
+
+compartmentTierText :: CompartmentTier -> Text
+compartmentTierText = \case
+  TierP1 -> "p1"
+  TierP2 -> "p2"
+  TierP3 -> "p3"
+
+compartmentSummaryAt :: CompartmentTier -> ContextCompartment -> Maybe Text
+compartmentSummaryAt tier compartment = case tier of
+  TierP1 -> Just compartment.contextSummaryP1
+  TierP2 -> compartment.contextSummaryP2
+  TierP3 -> compartment.contextSummaryP3
+
+selectedCompartmentSummary :: ContextCompartment -> Text
+selectedCompartmentSummary compartment =
+  fromMaybe compartment.contextSummaryP1 (compartmentSummaryAt compartment.contextTier compartment)
 
 -- | One inline image for the final user message: a data URL plus a
 -- text label naming the source message (\"[HH:MM \<name\>] 消息里的

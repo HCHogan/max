@@ -108,13 +108,21 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     botPrincipal <- principalFor pool botId
     run <- prepareFixtureRun pool
     source <- withDb pool $ loadCaptureSource run
-    let capture = validCapture [m1, m2, m3] [ProposalAdd "user" (Just memberPrincipal) "Alice prefers tea" (Just "preference") [m1]]
+    let capture =
+          (validCapture [m1, m2, m3] [ProposalAdd "user" (Just memberPrincipal) "Alice prefers tea" (Just "preference") [m1]])
+            { captureSummaryP2 = CitedSummary "key facts" [m2],
+              captureSummaryP3 = CitedSummary "anchor" [m3]
+            }
     validated <- requireValid run source capture
     compartment <- withDb pool $ publishCaptureRun scopeA run "fixture response" validated
 
     active <- withDb pool $ listActiveCompartments scopeA
     map (.activeCompartmentId) active `shouldBe` [compartment]
     map ((.srMessageCount) . (.activeRange)) active `shouldBe` [3]
+    map (\row -> (row.activeSummaryP1, row.activeSummaryP2, row.activeSummaryP3)) active
+      `shouldBe` [("full summary", Just "key facts", Just "anchor")]
+    searchText <- withDb pool $ query "SELECT summary FROM conversation_compartments WHERE id = ?" (Only compartment)
+    (searchText :: [Only Text]) `shouldBe` [Only "full summary\nkey facts\nanchor"]
     withDb pool (loadCursor scopeA historianCursor)
       `shouldReturn` run.crRange.srEnd
 
@@ -125,7 +133,12 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
           \ FROM compartment_evidence ORDER BY summary_tier, source_canonical_message_id"
           ()
     (citations :: [(Text, Int64, Int64)])
-      `shouldBe` [ ("summary", m1, memberPrincipal),
+      `shouldBe` [ ("p1", m1, memberPrincipal),
+                   ("p1", m2, memberPrincipal),
+                   ("p1", m3, botPrincipal),
+                   ("p2", m2, memberPrincipal),
+                   ("p3", m3, botPrincipal),
+                   ("summary", m1, memberPrincipal),
                    ("summary", m2, memberPrincipal),
                    ("summary", m3, botPrincipal)
                  ]
@@ -295,6 +308,22 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     counts <- withDb pool $ query "SELECT count(*) FROM memories" ()
     (counts :: [Only Int64]) `shouldBe` [Only 0]
 
+  it "reads single-summary captures alongside layered captures without rewriting data" $ do
+    (m1, m2, m3) <- seedConversation pool
+    run <- prepareFixtureRun pool
+    source <- withDb pool $ loadCaptureSource run
+    validated <- requireValid run source (validCapture [m1, m2, m3] [])
+    compartment <- withDb pool $ publishCaptureRun scopeA run "fixture" validated
+    _ <- withConn pool $ \conn ->
+      execute
+        conn
+        "UPDATE conversation_compartments SET summary_p1 = NULL, summary_p2 = NULL, summary_p3 = NULL WHERE id = ?"
+        (Only compartment)
+    active <- withDb pool $ listActiveCompartments scopeA
+    map (\row -> (row.activeSummaryP1, row.activeSummaryP2, row.activeSummaryP3)) active
+      `shouldBe` [("full summary", Nothing, Nothing)]
+    withDb pool (loadCursor scopeA historianCursor) `shouldReturn` run.crRange.srEnd
+
   it "keeps the old active compartment live until a rebuild publishes" $ do
     (m1, m2, m3) <- seedConversation pool
     firstRun <- prepareFixtureRun pool
@@ -315,7 +344,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
       `shouldReturn` [old]
 
     rebuildSource <- withDb pool $ loadCaptureSource rebuildRun
-    let rebuiltCapture = (validCapture [m1, m2, m3] []) {captureSummary = CitedSummary "rebuilt anchor" [m3]}
+    let rebuiltCapture = (validCapture [m1, m2, m3] []) {captureSummaryP1 = CitedSummary "rebuilt anchor" [m3]}
     rebuiltValidated <- requireValid rebuildRun rebuildSource rebuiltCapture
     new <- withDb pool $ publishCaptureRun scopeA rebuildRun "fixture response" rebuiltValidated
     new `shouldNotBe` old
@@ -457,7 +486,9 @@ cursorFor pool messageId = do
 validCapture :: [Int64] -> [EpisodeMemoryProposal] -> EpisodeCapture
 validCapture ids proposals =
   EpisodeCapture
-    { captureSummary = CitedSummary "full summary" ids,
+    { captureSummaryP1 = CitedSummary "full summary" ids,
+      captureSummaryP2 = CitedSummary "full summary" ids,
+      captureSummaryP3 = CitedSummary "full summary" ids,
       captureImportance = 0.8,
       captureConfidence = 0.9,
       captureEpisodeKind = Mixed,

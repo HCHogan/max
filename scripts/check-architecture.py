@@ -101,7 +101,7 @@ def check_imports():
         "Max.Episode.Types": {"Max.History.Types"},
         "Max.Recall.Types": {"Max.Episode.Types", "Max.Memory.Types"},
         "Max.Context.Types": {"Max.Context", "Max.Dispatch", "Max.File.Types", "Max.History.Types", "Max.Episode.Types", "Max.LLM.Types", "Max.Memory.Types", "Max.Platform.Types", "Max.Session.Types"},
-        "Max.Context.Policy": {"Max.Context", "Max.Context.Types", "Max.History.Types", "Max.Memory.Types"},
+        "Max.Context.Policy": {"Max.Context", "Max.Context.Types", "Max.Episode.Types", "Max.History.Types", "Max.Memory.Types"},
         "Max.Prompt.Request": {"Max.Context.Types", "Max.Dispatch", "Max.ModelCatalog.Internal", "Max.Platform.Types", "Max.Session.Types"},
         "Max.Sandbox.Types": set(),
         "Max.Context.Media": {"Max.History.Types", "Max.Media.Types", "Max.Time"},

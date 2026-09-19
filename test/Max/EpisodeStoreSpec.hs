@@ -29,9 +29,17 @@ spec = describe "EpisodeCapture validation" $ do
   it "rejects summaries that cite filtered or out-of-range messages" $ do
     let bad =
           validCapture
-            { captureSummary = CitedSummary "bad citation" [11, 12, 99]
+            { captureSummaryP1 = CitedSummary "bad citation" [11, 12, 99]
             }
-    expectValidationPath "summary.evidence_message_ids" (validateEpisodeCapture captureRun source bad)
+    expectValidationPath "summary_p1.evidence_message_ids" (validateEpisodeCapture captureRun source bad)
+
+  it "checks each compact tier's own citations and size limit" $ do
+    let badP2 = validCapture {captureSummaryP2 = CitedSummary (T.replicate 2001 "x") [12]}
+        badP3 = validCapture {captureSummaryP3 = CitedSummary (T.replicate 501 "x") [99]}
+    expectValidationPath "summary_p2.text" (validateEpisodeCapture captureRun source badP2)
+    expectValidationPath "summary_p2.evidence_message_ids" (validateEpisodeCapture captureRun source badP2)
+    expectValidationPath "summary_p3.text" (validateEpisodeCapture captureRun source badP3)
+    expectValidationPath "summary_p3.evidence_message_ids" (validateEpisodeCapture captureRun source badP3)
 
   it "rejects a source page that is not the run's exact range" $ do
     expectValidationPath "source_range" (validateEpisodeCapture captureRun (take 1 source) validCapture)
@@ -94,7 +102,9 @@ ledger seqNo message speaker eligible body =
 validCapture :: EpisodeCapture
 validCapture =
   EpisodeCapture
-    { captureSummary = CitedSummary "full" [11],
+    { captureSummaryP1 = CitedSummary "full" [11],
+      captureSummaryP2 = CitedSummary "full" [11],
+      captureSummaryP3 = CitedSummary "full" [11],
       captureImportance = 0.7,
       captureConfidence = 0.8,
       captureEpisodeKind = Ambient,
@@ -103,7 +113,7 @@ validCapture =
 
 fencedCapture :: Text
 fencedCapture =
-  "```json\n{\"summary\":{\"text\":\"full\",\"evidence_message_ids\":[11]},\"importance\":0.7,\"confidence\":0.8,\"episode_kind\":\"ambient\",\"memory_proposals\":[]}\n```"
+  "```json\n{\"summary_p1\":{\"text\":\"full\",\"evidence_message_ids\":[11]},\"summary_p2\":{\"text\":\"full\",\"evidence_message_ids\":[11]},\"summary_p3\":{\"text\":\"full\",\"evidence_message_ids\":[11]},\"importance\":0.7,\"confidence\":0.8,\"episode_kind\":\"ambient\",\"memory_proposals\":[]}\n```"
 
 expectValidationPath :: Text -> Either [CaptureValidationError] a -> Expectation
 expectValidationPath path = \case

@@ -56,11 +56,13 @@ import Max.Context.Media (consumeMarkers)
 import Max.Context.Policy
   ( ContextCostModel (..),
     PolicyDrop (pdSource, pdTokens),
+    applyBaseCompartmentTiers,
     limitSummaryTokens,
     selectContextTo,
   )
 import Max.Context.Types
-  ( ContextCompartment (..),
+  ( CompartmentTier (..),
+    ContextCompartment (..),
     ContextPlan (..),
     ContextSnapshot (ContextSnapshot, csInputs),
     PromptImage (piDataUrl, piLabel),
@@ -90,7 +92,9 @@ import Max.Context.Types
       ),
     SelectedContext (selectedInputs),
     TriggerOrigin (..),
+    compartmentTierText,
     cpInputs,
+    selectedCompartmentSummary,
   )
 import Max.Dispatch
   ( DispatchMessage
@@ -104,7 +108,7 @@ import Max.Dispatch
     dispatchTextWithoutSelf,
   )
 import Max.Episode.Types
-  ( ActiveCompartment (activeEndedAt, activeExpandHandle, activeGapBefore, activeStartedAt, activeSummary),
+  ( ActiveCompartment (..),
     episodeHandleText,
   )
 import Max.File.Types
@@ -336,7 +340,9 @@ renderContext pi' =
 planContext :: ContextLimits -> ContextSnapshot -> ContextPlan
 planContext limits snapshot =
   let budget = contextBudget limits (not (null (csInputs snapshot).images))
-      (candidates, summaryDrops) = limitSummaryTokens (min 8192 (budget.cbPromptTokenLimit `div` 4)) snapshot
+      inputs = snapshot.csInputs
+      tiered = ContextSnapshot (inputs {compartments = applyBaseCompartmentTiers inputs.now inputs.compartments})
+      (candidates, summaryDrops) = limitSummaryTokens (min 8192 (budget.cbPromptTokenLimit `div` 4)) tiered
       initial = candidates.csInputs
       initialMessages = renderContext initial
       initialTokens = estimateMessagesTokens initialMessages
@@ -409,7 +415,7 @@ contextTrace budget inputs messages drops withinBudget =
       "history.summary"
       (sum (map compartmentSelectedTokens inputs.compartments))
       ContextIncluded
-      "selected chronological summaries with source handles",
+      "selected chronological summaries: p1 detailed, p2 key facts, p3 retrieval anchors",
     ContextTrace
       "turn.recent"
       (sum (map estimateTextTokens inputs.recentTurns))
@@ -469,12 +475,15 @@ contextTrace budget inputs messages drops withinBudget =
       ContextReserved
       "profile completion limit tracked separately from the input ceiling"
   ]
+    <> [ ContextTrace ("history.summary." <> compartmentTierText tier) (sum [compartmentSelectedTokens row | row <- inputs.compartments, row.contextTier == tier]) ContextIncluded "selected summary detail"
+       | tier <- [TierP1 .. TierP3]
+       ]
     <> [ ContextTrace source tokens ContextDropped "removed deterministically under token pressure"
        | (source, tokens) <- Map.toAscList (Map.fromListWith (+) [(drop'.pdSource, drop'.pdTokens) | drop' <- drops])
        ]
 
 compartmentSelectedTokens :: ContextCompartment -> Int
-compartmentSelectedTokens = estimateTextTokens . (.contextSummary)
+compartmentSelectedTokens = estimateTextTokens . selectedCompartmentSummary
 
 systemTokens :: [ChatMessage] -> Int
 systemTokens = \case
@@ -547,11 +556,16 @@ contextCompartmentFromActive active =
     { contextExpandHandle = active.activeExpandHandle,
       contextStartedAt = active.activeStartedAt,
       contextEndedAt = active.activeEndedAt,
-      contextSummary = active.activeSummary
+      contextSummaryP1 = active.activeSummaryP1,
+      contextSummaryP2 = active.activeSummaryP2,
+      contextSummaryP3 = active.activeSummaryP3,
+      contextImportance = active.activeImportance,
+      contextConfidence = active.activeConfidence,
+      contextTier = TierP1
     }
 
 contextPolicyVersion :: Text
-contextPolicyVersion = "context-policy/v6"
+contextPolicyVersion = "context-policy/v7"
 
 rawTailTokens :: [LedgerItem] -> Int
 rawTailTokens =
@@ -684,7 +698,7 @@ renderUser tz' now' origin' compartments' recentTurns' continuationView' mTransc
 renderCompartments :: TimeZone -> [ContextCompartment] -> [Text]
 renderCompartments _ [] = []
 renderCompartments tz' compartments' =
-  ["[earlier conversation — sourced summaries]"]
+  ["[earlier conversation — layered summaries]"]
     <> map renderOne compartments'
     <> [""]
   where
@@ -695,8 +709,10 @@ renderCompartments tz' compartments' =
         <> fmtDate tz' compartment.contextStartedAt
         <> ".."
         <> fmtDate tz' compartment.contextEndedAt
+        <> " "
+        <> compartmentTierText compartment.contextTier
         <> "]: "
-        <> oneLine compartment.contextSummary
+        <> oneLine (selectedCompartmentSummary compartment)
 
 renderHistoryLine :: TimeZone -> HistoryItem -> Text
 renderHistoryLine tz' h =

@@ -68,7 +68,11 @@ data ActiveCompartment = ActiveCompartment
     -- gap-free suffix, so a partial historical backfill can never masquerade
     -- as complete chronological coverage.
     activeGapBefore :: !Bool,
-    activeSummary :: !Text
+    activeSummaryP1 :: !Text,
+    activeSummaryP2 :: !(Maybe Text),
+    activeSummaryP3 :: !(Maybe Text),
+    activeImportance :: !Double,
+    activeConfidence :: !Double
   }
   deriving stock (Show, Eq)
 
@@ -78,6 +82,10 @@ instance FromRow ActiveCompartment where
       <$> field
       <*> field
       <*> (SourceRange . MessageCursor <$> field <*> (MessageCursor <$> field) <*> field <*> field)
+      <*> field
+      <*> field
+      <*> field
+      <*> field
       <*> field
       <*> field
       <*> field

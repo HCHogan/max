@@ -161,7 +161,9 @@ publishRange pool scope expected end evidence = do
 rangeCapture :: [Int64] -> EpisodeCapture
 rangeCapture ids =
   EpisodeCapture
-    { captureSummary = CitedSummary "full summary" ids,
+    { captureSummaryP1 = CitedSummary "full summary" ids,
+      captureSummaryP2 = CitedSummary "full summary" ids,
+      captureSummaryP3 = CitedSummary "full summary" ids,
       captureImportance = 0.5,
       captureConfidence = 0.9,
       captureEpisodeKind = Ambient,
@@ -207,7 +209,7 @@ latestCursor pool = do
 -- principal that spoke a cited message.
 rawCapture :: Int64 -> Text
 rawCapture memberPrincipal =
-  "{\"summary\":{\"text\":\"Alice said she likes green tea; Max acknowledged it.\",\"evidence_message_ids\":[1001,1002]},\"importance\":0.7,\"confidence\":0.95,\"episode_kind\":\"max_interaction\",\"memory_proposals\":[{\"action\":\"add\",\"scope\":\"user\",\"user_id\":"
+  "{\"summary_p1\":{\"text\":\"Alice said she likes green tea; Max acknowledged it.\",\"evidence_message_ids\":[1001,1002]},\"summary_p2\":{\"text\":\"Alice said she likes green tea; Max acknowledged it.\",\"evidence_message_ids\":[1001,1002]},\"summary_p3\":{\"text\":\"Alice said she likes green tea; Max acknowledged it.\",\"evidence_message_ids\":[1001,1002]},\"importance\":0.7,\"confidence\":0.95,\"episode_kind\":\"max_interaction\",\"memory_proposals\":[{\"action\":\"add\",\"scope\":\"user\",\"user_id\":"
     <> tshow memberPrincipal
     <> ",\"content\":\"Alice likes green tea.\",\"category\":\"preference\",\"evidence_message_ids\":[1001]}]}"
 

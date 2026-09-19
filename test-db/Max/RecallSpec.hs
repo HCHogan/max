@@ -147,7 +147,9 @@ seedRecallFixture pool = do
   source <- withDb pool $ loadCaptureSource run
   let capture =
         EpisodeCapture
-          { captureSummary = CitedSummary "tea episode full" [1001, 1002, 1003],
+          { captureSummaryP1 = CitedSummary "tea episode full" [1001, 1002, 1003],
+            captureSummaryP2 = CitedSummary "tea episode full" [1001, 1002, 1003],
+            captureSummaryP3 = CitedSummary "tea episode full" [1001, 1002, 1003],
             captureImportance = 0.8,
             captureConfidence = 0.9,
             captureEpisodeKind = Mixed,

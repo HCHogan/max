@@ -6,8 +6,10 @@ import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), fromGregorian, minutesToTimeZone, secondsToDiffTime, utc)
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian, minutesToTimeZone, secondsToDiffTime, utc)
 import Max.Context (ContextDecision (..), ContextTrace (..))
+import Max.Context.Policy (applyBaseCompartmentTiers, limitSummaryTokens)
+import Max.Context.Types (CompartmentTier (..))
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.DB.History qualified as History
@@ -906,7 +908,7 @@ spec = do
       (cpInputs pressured).compartments `shouldBe` []
       pressured.cpWithinBudget `shouldBe` True
       pressured.cpTrace
-        `shouldSatisfy` any (\trace -> trace.ctSource == "history.summary" && trace.ctDecision == ContextDropped)
+        `shouldSatisfy` any (\trace -> "history.summary." `T.isPrefixOf` trace.ctSource && trace.ctDecision == ContextDropped)
 
     it "bounds summaries separately and retains the newest suffix without displacing memory" $ do
       let summaries = [compartmentAt cid (timeAt (fromIntegral cid)) (T.replicate 3000 "旧") | cid <- [1 .. 4]]
@@ -917,13 +919,55 @@ spec = do
       map (.memId) (cpInputs plan).groupMemories `shouldBe` [memory.memId]
       plan.cpWithinBudget `shouldBe` True
 
+    it "chooses detail by recency and importance, keeping single-summary rows usable" $ do
+      let ago days = addUTCTime (negate (days * 86400)) baseInputs.now
+          old = (layered 1 (ago 400)) {contextImportance = 0.1}
+          important = (layered 2 (ago 400)) {contextImportance = 0.8}
+          ordinary = layered 3 (ago 200)
+          recent = layered 4 (ago 1)
+          legacy = compartmentAt 5 (ago 1) "legacy summary"
+          selected = applyBaseCompartmentTiers baseInputs.now [old, important, ordinary, recent, legacy]
+      map (\row -> (row.contextExpandHandle, row.contextTier)) selected
+        `shouldBe` [(episodeHandleAt 2, TierP2), (episodeHandleAt 3, TierP3), (episodeHandleAt 4, TierP1), (episodeHandleAt 5, TierP1)]
+
+    it "compresses less important summaries before omitting them or touching memory" $ do
+      let ordinary = (layered 1 (timeAt 9)) {contextImportance = 0.2}
+          important = (compartmentAt 2 (timeAt 10) "critical decision") {contextImportance = 0.9}
+          choose budget = (fst (limitSummaryTokens budget (snapshot baseInputs {compartments = [ordinary, important]}))).csInputs.compartments
+      map (.contextTier) (choose 300) `shouldBe` [TierP2, TierP1]
+      map (.contextTier) (choose 160) `shouldBe` [TierP3, TierP1]
+      map (.contextExpandHandle) (choose 100) `shouldBe` [episodeHandleAt 2]
+
+    it "skips missing or larger tiers and terminates under a zero summary budget" $ do
+      let row = (layered 1 (timeAt 10)) {contextSummaryP1 = "full", contextSummaryP2 = Nothing, contextSummaryP3 = Just (T.replicate 50 "long")}
+          (selected, _) = limitSummaryTokens 0 (snapshot baseInputs {compartments = [row]})
+      selected.csInputs.compartments `shouldBe` []
+
+    it "renders the selected tier without exposing the other detail levels" $ do
+      let row = (layered 1 (timeAt 10)) {contextTier = TierP3}
+          (_, body) = splitMessages (renderContext baseInputs {compartments = [row]})
+      body `shouldSatisfy` ("p3]: anchor" `T.isInfixOf`)
+      body `shouldNotSatisfy` (T.replicate 100 "长" `T.isInfixOf`)
+
+layered :: Int64 -> UTCTime -> ContextCompartment
+layered cid at =
+  (compartmentAt cid at (T.replicate 1000 "长"))
+    { contextSummaryP2 = Just (T.replicate 100 "长"),
+      contextSummaryP3 = Just "anchor"
+    }
+
 compartmentAt :: Int64 -> UTCTime -> Text -> ContextCompartment
 compartmentAt cid ended summary =
   ContextCompartment
     { contextExpandHandle = episodeHandleAt cid,
       contextStartedAt = ended,
       contextEndedAt = ended,
-      contextSummary = summary
+      contextSummaryP1 = summary,
+      contextSummaryP2 = Nothing,
+      contextSummaryP3 = Nothing,
+      contextImportance = 0.5,
+      contextConfidence = 0.8,
+      contextTier = TierP1
     }
 
 episodeHandleAt :: Int64 -> EpisodeHandle

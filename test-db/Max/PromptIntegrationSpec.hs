@@ -152,7 +152,9 @@ spec pool = before_ (truncateAll pool) $
       source <- withDb pool $ loadCaptureSource run
       let capture =
             EpisodeCapture
-              { captureSummary = CitedSummary "settled full summary" [1001, 1002],
+              { captureSummaryP1 = CitedSummary "settled full summary" [1001, 1002],
+                captureSummaryP2 = CitedSummary "settled full summary" [1001, 1002],
+                captureSummaryP3 = CitedSummary "settled full summary" [1001, 1002],
                 captureImportance = 0.8,
                 captureConfidence = 1,
                 captureEpisodeKind = MaxInteraction,
@@ -330,7 +332,9 @@ publishNextCompartment pool expected evidence summary = do
   source <- withDb pool $ loadCaptureSource run
   let capture =
         EpisodeCapture
-          { captureSummary = CitedSummary summary evidence,
+          { captureSummaryP1 = CitedSummary summary evidence,
+            captureSummaryP2 = CitedSummary summary evidence,
+            captureSummaryP3 = CitedSummary summary evidence,
             captureImportance = 0.8,
             captureConfidence = 1,
             captureEpisodeKind = Mixed,

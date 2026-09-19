@@ -47,7 +47,7 @@ canonical message ledger ────┬──▶ mirror deliveries: native wher
   remain unknown unless a platform receipt resolves them. Graceful shutdown
   drains output within its deadline; a crash does not replay unsent copies.
 - **Context as a database, not a window.** Raw messages are immutable;
-  quiet-period episodes carry sourced summaries with exact, hash-checked
+  quiet-period episodes carry layered, sourced summaries with exact, hash-checked
   source coverage; prompts are token-planned projections that degrade
   deterministically under budget and expand back to raw text on demand.
   ([ADR 001](docs/adr/001-context-memory-foundations.md))

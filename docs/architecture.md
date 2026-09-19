@@ -179,7 +179,7 @@ Historian is episode-scoped. After ten quiet minutes it reads an oldest-first
 raw-ledger prefix within the configured model's token budget. The exact range,
 source hash and retry deadline stay in process memory. One structured LLM call
 emits one cited summary plus scoped memory proposals. Publication rechecks the
-source and cursor, then atomically records the response, citations, summary and
+source and cursor, then atomically records the response, citations, layered summaries and
 accepted memory mutations. A failed attempt records diagnostics and advances
 nothing. Startup discovers uncovered source history; it never resumes old calls.
 
@@ -220,16 +220,17 @@ uncovered raw rows, then pages backward over prompt-eligible messages after the
 suffix's exact end cursor until the model-derived token target is covered.
 Partial older
 backfills stay out of the stable prefix when a raw gap separates them. The pure
-`Max.Context.Policy` retains the newest chronological summary suffix within
-one quarter of the prompt window, capped at 8,192 estimated tokens including
-source-label overhead. Omitted episodes remain searchable and expandable.
+`Max.Context.Policy` selects summary detail by age, importance, and budget
+while retaining chronological order. Its summary allowance is one quarter of
+the prompt window, capped at 8,192 estimated tokens including source-label
+overhead. Omitted episodes remain searchable and expandable.
 Every turn derives its prefix from those active
 summaries; no prompt revision, CAS publication, high/low-water transition or
 append-only planning trace is stored. New Historian publications become visible
 on the next collection. The raw fetch target is 40% of the available prompt
 window, bounded to 1,024–16,384 estimated tokens. Under token pressure active
-memory is removed first, then recent turn digests and the oldest summaries, and only
-then is the oldest raw tail trimmed. Without an active compartment, the same
+memory is removed first, then recent turn digests; summaries are compressed or
+omitted by importance and age before the oldest raw tail is trimmed. Without an active compartment, the same
 bounded reader pages backward over the ledger and retains its newest eligible
 rows. Truncation reports the summary boundary and oldest retained raw cursor.
 The global `context.force_raw_fallback` release switch bypasses projection reads
@@ -238,7 +239,8 @@ deletes projections nor stops Historian, so disabling it restores summary reads.
 Planning measures the complete candidate prompt once, then applies
 deterministic block-local cost deltas while degrading it; the selection loop no
 longer invokes the full renderer for every discarded item. The selected result
-is rendered once for the final exact budget and trace observation.
+is rendered again to verify the complete estimate; any remaining excess repeats
+selection until it fits or only protected sources remain.
 `Max.Context.Types` makes unselected `ContextSnapshot` and selected
 `SelectedContext` different pipeline values, while `Max.Prompt.System` owns the
 stable system prefix. Ordinary prompts and diagnostic previews share the same
@@ -248,8 +250,20 @@ collector in a read-only database transaction.
 Body-free plan decisions are sampled at trace log level (canonical trigger IDs
 divisible by 16); over-budget plans always emit attention logs. Migration 122 combines distinct legacy summary texts and their citation union,
 retains their original columns, and invalidates vectors only when their text
-changes. New captures write a single summary and citation list. Historical
-materialization and trace tables remain untouched and are no longer read.
+changes. New captures write P1 (detailed), P2 (key facts), and P3 (retrieval anchor),
+each with independently checked source citations. The existing `summary` column
+keeps their distinct texts and citation union for lexical/vector recall. Old
+three-level captures remain usable; single-summary captures fall back to their
+full text without inventing shorter versions. No database migration is needed.
+
+The pure planner starts recent, confident episodes at P1 and older episodes at
+P2 or P3 according to age and importance. Very old, low-importance episodes stay
+searchable but leave the prompt. Under the summary budget (one quarter of the
+input ceiling, at most 8,192 estimated tokens), lower-importance, older episodes
+are compressed before being omitted. Missing or non-shorter tiers are skipped.
+The complete rendered prompt is then checked against the model budget, retaining
+protected pins, replies, the trigger, and media. Historical materialization and
+trace tables remain untouched and are no longer read.
 At Historian startup, exact oldest-first backfill jobs fill any raw gaps at or
 before migration 041's deployment baseline. Each token-sized range stops before
 the next active owner, publishes under the ordinary source-hash/exclusion

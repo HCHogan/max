@@ -407,17 +407,18 @@ evaluateCapture fixture run source capture =
     warningErrors = case validateEpisodeCapture run source capture of
       Left _ -> []
       Right validated -> map (("proposal validation: " <>) . renderValidation) (captureValidationWarnings validated)
-    summary = T.toCaseFold capture.captureSummary.summaryText
+    summary = T.toCaseFold capture.captureSummaryP1.summaryText
+    summaries = [("p1", capture.captureSummaryP1), ("p2", capture.captureSummaryP2), ("p3", capture.captureSummaryP3)]
     expectations = fixture.hfExpect
     summaryErrors =
       [ "summary missing one of: " <> T.intercalate " | " alternatives
       | alternatives <- expectations.heSummaryTermGroups,
         not (any ((`T.isInfixOf` summary) . T.toCaseFold) alternatives)
       ]
-        <> ["summary contains forbidden term: " <> term | term <- expectations.heForbiddenSummaryTerms, T.toCaseFold term `T.isInfixOf` summary]
+        <> [tier <> " contains forbidden term: " <> term | (tier, cited) <- summaries, term <- expectations.heForbiddenSummaryTerms, T.toCaseFold term `T.isInfixOf` T.toCaseFold cited.summaryText]
         <> [ "summary evidence missing message " <> tshow messageId
            | messageId <- expectations.heSummaryEvidenceIds,
-             messageId `notElem` capture.captureSummary.evidenceMessageIds
+             messageId `notElem` capture.captureSummaryP1.evidenceMessageIds
            ]
     actual = capture.captureMemoryProposals
     expected = expectations.heProposals

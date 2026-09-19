@@ -74,4 +74,4 @@ testTime = read "2026-08-02 12:00:00 UTC"
 
 validRawCapture :: Text
 validRawCapture =
-  "{\"summary\":{\"text\":\"full\",\"evidence_message_ids\":[11]},\"importance\":0.7,\"confidence\":0.8,\"episode_kind\":\"ambient\",\"memory_proposals\":[]}"
+  "{\"summary_p1\":{\"text\":\"full\",\"evidence_message_ids\":[11]},\"summary_p2\":{\"text\":\"full\",\"evidence_message_ids\":[11]},\"summary_p3\":{\"text\":\"full\",\"evidence_message_ids\":[11]},\"importance\":0.7,\"confidence\":0.8,\"episode_kind\":\"ambient\",\"memory_proposals\":[]}"
