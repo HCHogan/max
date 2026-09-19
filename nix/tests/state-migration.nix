@@ -74,6 +74,7 @@ pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("max.service", timeout=60)
     machine.wait_for_unit("postgresql.service")
+    machine.wait_for_unit("postgresql-setup.service")
     machine.succeed("install -d -m700 -o max-bot -g max-bot /var/lib/max-bot /var/lib/max-bot/images /var/lib/max-bot/napcat")
     machine.succeed("install -d -m700 -o max-napcat -g max-napcat /var/lib/max-bot/napcat/QQ /var/lib/max-bot/napcat/config")
     machine.succeed("install -d -m700 /var/lib/max-runtime/{roots,instances,migration-backups,volumes/max-sb-1-s1-data/work}")

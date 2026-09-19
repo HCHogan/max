@@ -80,6 +80,10 @@ spec pool = before_ (truncateAll pool) $ describe "HTTP monitors" $ do
       status <$> post token "{\"message\":\"an event\"}" `shouldReturn` 202
       status <$> post token "{ \"message\": \"an event\" }" `shouldReturn` 202
       countFires pool `shouldReturn` 1
+      void $ withDb pool (execute "UPDATE monitors SET cooldown_until=now()+interval '1 minute' WHERE monitor_id=?" (Only hook.monitor.mrMonitorId))
+      busy <- post token "{\"message\":\"another event\"}"
+      status busy `shouldBe` 429
+      lookup "Retry-After" (HTTP.responseHeaders busy) `shouldBe` Just "60"
       void $ withDb pool (execute "UPDATE monitors SET status='cancelled',cancelled_at=now() WHERE monitor_id=?" (Only hook.monitor.mrMonitorId))
       status <$> post token "{\"message\":\"another event\"}" `shouldReturn` 410
       countFires pool `shouldReturn` 1

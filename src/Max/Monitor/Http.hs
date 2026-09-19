@@ -47,7 +47,7 @@ handleHttpMonitor hook request =
                     HttpDuplicate -> reply status202 "duplicate"
                     HttpUnauthorized -> reply status401 "unauthorized"
                     HttpGone -> reply status410 "monitor is cancelled or expired"
-                    HttpBusy -> responseLBS status429 [(hContentType, "application/json"), (hRetryAfter, "60")] (encode (object ["error" .= String "monitor is busy; retry later"]))
+                    HttpBusy -> responseLBS status429 [(hContentType, "application/json"), ("Retry-After", "60")] (encode (object ["error" .= String "monitor is busy; retry later"]))
       _ -> pure (reply status400 "invalid header encoding")
   where
     readBody remaining chunks = do

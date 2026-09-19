@@ -231,7 +231,7 @@ jobs:
       - uses: cachix/install-nix-action@v31
 
       - name: Build and verify runtime and developer packages
-        run: nix build .#max .#max-tools .#checks.x86_64-linux.package-contents --print-out-paths
+        run: nix build -L .#max .#max-tools .#checks.x86_64-linux.package-contents --print-out-paths
 
   sandbox-network-test:
     name: runtime-${{ matrix.check }}
@@ -245,4 +245,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
       - name: Test native runtime
-        run: nix build .#checks.x86_64-linux.${{ matrix.check }} --print-out-paths
+        run: nix build -L .#checks.x86_64-linux.${{ matrix.check }} --print-out-paths
