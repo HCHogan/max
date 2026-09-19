@@ -9,12 +9,10 @@ module Max.Monitor.Policy
     parseOccurrenceDisposition,
     decideOverlap,
     DefinitionSnapshot (..),
-    restoreSnapshot,
   )
 where
 
 import Data.Aeson
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
@@ -98,14 +96,3 @@ instance FromJSON DefinitionSnapshot where
       <*> fields .: "queue_limit"
       <*> fields .:? "browser_profile_id"
       <*> fields .:? "browser_profile_version"
-
--- | Pre-ADR008 occurrences can lack fields introduced by later migrations.
--- Only absent fields inherit the same definition fallback used by the old
--- reader; present malformed data fails closed instead of granting authority.
-restoreSnapshot :: DefinitionSnapshot -> Value -> Maybe DefinitionSnapshot
-restoreSnapshot fallback (Object fields) = case toJSON fallback of
-  Object defaults -> case fromJSON (Object (KeyMap.union fields defaults)) of
-    Success snapshot -> Just snapshot
-    Error _ -> Nothing
-  _ -> Nothing
-restoreSnapshot _ _ = Nothing

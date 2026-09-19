@@ -18,15 +18,9 @@ operationalChecks =
       True,
       "SELECT count(*) FROM message_deliveries WHERE status = 'outcome_unknown'"
     ),
-    ( "monitor_fire_parked",
+    ( "monitor_publication_failure",
       True,
-      "SELECT count(*) FROM monitor_fires WHERE parked_at IS NOT NULL"
-    ),
-    ( "monitor_fire_expired_claim",
-      True,
-      "SELECT count(*) FROM monitor_fires \
-      \WHERE admission_state = 'pending' AND cancelled_at IS NULL \
-      \  AND parked_at IS NULL AND claim_expires_at <= now()"
+      "SELECT count(*) FROM monitor_fires f JOIN monitors m USING(monitor_id) WHERE m.continuation_kind='canned' AND f.finished_at IS NOT NULL AND f.cancelled_at IS NULL AND f.last_error IS NOT NULL"
     ),
     ( "journal_unresolved_outcome_unknown",
       True,

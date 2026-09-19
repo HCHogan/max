@@ -1,3 +1,8 @@
+> The September 2026 simplification retires this ADR's worker leases, durable
+> delivery retries and crash replay. Current time, ledger and HTTP monitors use
+> one scheduler and process-local Jobs. Definitions, deduplication, frozen
+> authority and result history remain; see [current architecture](../architecture.md).
+
 # ADR 006: Monitors — Typed Triggers and the Unified Scheduler
 
 - Status: Partially implemented through slice 4. Reminders now use the

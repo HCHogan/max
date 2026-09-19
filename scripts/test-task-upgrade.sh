@@ -46,6 +46,8 @@ for migration in migrations/*.sql; do
       psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/local-historian-upgrade.sql
     elif [[ "$name" == "122_single_summary.sql" ]]; then
       psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/single-summary-upgrade.sql
+    elif [[ "$name" == "124_monitor_trigger_markers.sql" ]]; then
+      psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/monitor-markers-upgrade.sql
     else
       psql -X -v ON_ERROR_STOP=1 -1 -d "$database" -f "$migration" >/dev/null
     fi

@@ -10,7 +10,7 @@ import Data.Map.Strict qualified as Map
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (addUTCTime, getCurrentTime, utc)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL (execute, query)
 import Helpers (truncateAll, withDb)
@@ -86,6 +86,21 @@ spec pool = before_ (truncateAll pool) $ describe "reminder Jobs and retained bu
     withDb pool (WorkQuery.readMonitorHistory (GroupId 901) monitor.mrMonitorOrdinal.unMonitorOrdinal) `shouldReturn` Nothing
     toJSON history `shouldSatisfy` (\case Object fields -> KeyMap.lookup "handle" fields == Just (String "m#1"); _ -> False)
 
+  it "interrupts both queued and admitted Jobs on restart and accepts future events" $ do
+    (turn, message, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
+    insertOccurrence pool monitor "running"
+    [fire] <- withDb pool (pendingElaboratedMonitorFires now 10)
+    Right (MonitorTaskAdmitted _ _) <- withDb pool (withTransaction (admitMonitorTaskWithin fire.emfFireId Nothing Map.empty message.unCanonicalMessageId))
+    withDb pool (markMonitorJobStarted fire.emfFireId)
+    insertOccurrence pool monitor "queued"
+    withDb pool (interruptMonitorFires utc now) `shouldReturn` 2
+    withDb pool (pendingElaboratedMonitorFires now 10) `shouldReturn` []
+    withDb pool (query "SELECT count(*) FROM monitor_fires WHERE finished_at IS NULL" ()) `shouldReturn` [Only (0 :: Int)]
+    insertOccurrence pool monitor "after restart"
+    length <$> withDb pool (pendingElaboratedMonitorFires now 10) `shouldReturn` 1
+
   it "preserves monitor snapshots across revision changes and explicit pending retention" $ do
     (turn, _, actor) <- seed pool 900 1
     now <- getCurrentTime
@@ -156,8 +171,8 @@ spec pool = before_ (truncateAll pool) $ describe "reminder Jobs and retained bu
     finish "later" `shouldReturn` True
     insertOccurrence pool monitor "old pending"
     Right _ <- withDb pool (withTransaction (MonitorDB.controlMonitor 900 actor.unPrincipalId False monitor.mrMonitorOrdinal.unMonitorOrdinal (MonitorControl.ConfigureMonitor 1 "new" Coalesce 40 MonitorControl.RetainPending (Just (Research, False))) False))
-    [fire] <- withDb pool (claimElaboratedMonitorFires "jobs-test" now 60 10)
-    Right (MonitorTaskAdmitted _ job) <- withDb pool (withTransaction (admitMonitorTaskWithin "jobs-test" fire.emfFireId Nothing Map.empty message.unCanonicalMessageId))
+    [fire] <- withDb pool (pendingElaboratedMonitorFires now 10)
+    Right (MonitorTaskAdmitted _ job) <- withDb pool (withTransaction (admitMonitorTaskWithin fire.emfFireId Nothing Map.empty message.unCanonicalMessageId))
     job.contract `shouldSatisfy` (/= Nothing)
     withDb pool (recordMonitorResult fire.emfFireId Failed (JobResult "failure" Nothing)) `shouldReturn` False
     finish "new first" `shouldReturn` True
@@ -171,9 +186,9 @@ spec pool = before_ (truncateAll pool) $ describe "reminder Jobs and retained bu
     Right _ <- withDb pool (withTransaction (MonitorDB.controlMonitor 900 actor.unPrincipalId False monitor.mrMonitorOrdinal.unMonitorOrdinal (MonitorControl.ConfigureMonitor 1 "watch" QueueOccurrences 1 MonitorControl.RetainPending Nothing) False))
     insertOccurrence pool monitor "first"
     insertOccurrence pool monitor "overflow"
-    fires <- withDb pool (claimElaboratedMonitorFires "jobs-test" now 60 10)
+    fires <- withDb pool (pendingElaboratedMonitorFires now 10)
     let next = addUTCTime 60 now
-    outcomes <- forM fires $ \fire -> withDb pool (withTransaction (admitMonitorTaskWithin "jobs-test" fire.emfFireId (Just next) Map.empty message.unCanonicalMessageId))
+    outcomes <- forM fires $ \fire -> withDb pool (withTransaction (admitMonitorTaskWithin fire.emfFireId (Just next) Map.empty message.unCanonicalMessageId))
     length [() | Right MonitorTaskAdmitted {} <- outcomes] `shouldBe` 1
     length [() | Right MonitorOverflow <- outcomes] `shouldBe` 1
     withDb pool (query "SELECT next_fire_at FROM monitors" ()) `shouldReturn` [Only (Just next)]
@@ -184,8 +199,8 @@ spec pool = before_ (truncateAll pool) $ describe "reminder Jobs and retained bu
     now <- getCurrentTime
     Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
     insertOccurrence pool monitor "first"
-    [fire] <- withDb pool (claimElaboratedMonitorFires "jobs-test" now 60 10)
-    Right (MonitorTaskAdmitted identifier job) <- withDb pool (withTransaction (admitMonitorTaskWithin "jobs-test" fire.emfFireId Nothing Map.empty message.unCanonicalMessageId))
+    [fire] <- withDb pool (pendingElaboratedMonitorFires now 10)
+    Right (MonitorTaskAdmitted identifier job) <- withDb pool (withTransaction (admitMonitorTaskWithin fire.emfFireId Nothing Map.empty message.unCanonicalMessageId))
     Right _ <- Jobs.admitJob jobs Nothing identifier job
     Object overview <- withDb pool (WorkQuery.readWorkOverview jobs)
     KeyMap.lookup "tasks" overview `shouldSatisfy` (\case Just (Array rows) -> length rows == 1; _ -> False)
@@ -200,8 +215,8 @@ admitOccurrence :: DbPool -> MonitorRef -> CanonicalMessageId -> Text -> IO (Mon
 admitOccurrence pool monitor message label = do
   insertOccurrence pool monitor label
   now <- getCurrentTime
-  [fire] <- withDb pool (claimElaboratedMonitorFires "jobs-test" now 60 10)
-  Right (MonitorTaskAdmitted _ job) <- withDb pool (withTransaction (admitMonitorTaskWithin "jobs-test" fire.emfFireId Nothing Map.empty message.unCanonicalMessageId))
+  [fire] <- withDb pool (pendingElaboratedMonitorFires now 10)
+  Right (MonitorTaskAdmitted _ job) <- withDb pool (withTransaction (admitMonitorTaskWithin fire.emfFireId Nothing Map.empty message.unCanonicalMessageId))
   pure (fire.emfFireId, job)
 
 whenPrevious :: JobSpec -> Text -> Expectation

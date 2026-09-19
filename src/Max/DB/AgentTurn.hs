@@ -194,7 +194,6 @@ reclaimInterruptedTurns = withTransaction $ do
       \ WHERE true \
       \   AND status IN ('starting','running','recovery-pending') RETURNING turn_id"
       ()
-  void $ execute "UPDATE monitor_fires SET result=jsonb_build_object('status','cancelled','summary','process restarted before completion'),finished_at=now() WHERE task_id IS NOT NULL AND finished_at IS NULL" ()
   pure (fromIntegral (length (crashed :: [Only AgentTurnId])))
 
 -- | Capture sandbox configuration before invocation for diagnostic provenance.

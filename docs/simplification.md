@@ -7,8 +7,8 @@ unfinished design and acceptance goals.
 
 ## Status against the original numbered plan
 
-Reviewed at `f9d7ae1`; the HTTP monitor work in progress is separate. Deployment
-claims refer to the recorded `db80b66` acceptance, not a fresh production check.
+Sections 7–8 now include the monitor cutover below; section 13 is being
+implemented separately. Earlier deployment evidence remains historical.
 
 | Plan section | Status | Remaining work or limit |
 |---|---|---|
@@ -18,12 +18,12 @@ claims refer to the recorded `db80b66` acceptance, not a fresh production check.
 | 4. Model responsibilities | Partial | Finish/disposition protocols are gone; prompt reduction and monitor observation contracts still need review. |
 | 5. Runtime path | Main path implemented | Conversation, Agent and Jobs own live execution; further orchestration cleanup belongs to section 13. |
 | 6. Runtime boundaries | Implemented with regression coverage | Streaming, cancellation, provider state and resource boundaries have tests; live acceptance does not cover every case. |
-| 7. Persistence scope | Partial | Monitor occurrence claims, leases and definition snapshots remain active control machinery. |
-| 8. Removal candidates | Mostly implemented | The reminder ledger is not yet reduced to definitions and minimal trigger markers; remaining compatibility surfaces need case-by-case review. |
+| 7. Persistence scope | Implemented | Definitions and trigger facts remain; worker leases, retry state and crash replay are gone. Frozen definitions preserve pending-retention and authority semantics. |
+| 8. Removal candidates | Implemented | Reminder triggers feed ordinary Jobs; old runtime tables have no serving-code consumers. Obsolete debt views and lease helpers are removed. |
 | 9. Core responsibility budgets | Not reached | Core Haskell is 31,785 lines, plus 1,755 active SQL lines. Preserve major features when pursuing further reductions. |
 | 10. Migration sequence | Runtime cutover shipped; phase F partial | Cleanup and budget/readability goals remain after the deployed A–E changes. |
 | 11. Acceptance | Substantial but incomplete | Build, regression, upgrade and selected live checks passed. Model comparison was small; real-chat Jobs/reminder cases were not all exercised and strict historical health remains non-green. |
-| 12. Worker architecture | Main changes implemented | Scoped service supervision, local Jobs and queues replace the old execution recovery machinery; monitor scheduling retains the section 7 exception. |
+| 12. Worker architecture | Main changes implemented | Scoped service supervision, local Jobs and queues replace the old execution recovery machinery; monitor scheduling now uses the same no-replay restart contract. |
 | 13. Readability | Partial | Handler orchestration, Agent state/results, positional capability construction and tool-interpreter forwarding still need work. |
 
 The next simplification work should address the remaining monitor protocol and
@@ -157,6 +157,22 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [x] Complete local gates, upgrade checks, release and the recorded operational probes.
 - [ ] Complete the remaining representative model and real-conversation
       acceptance cases; retain historical health failures as evidence.
+
+## Monitor persistence boundary
+
+One required scheduler reads new trigger markers. SQL keeps their deduplication,
+calendar position, input payload, authority and result; it does not elect workers
+or retry deliveries. Startup ends unfinished triggers before accepting ingress.
+A canned reminder consumes its calendar edge before publication, so a crash can
+lose that occurrence but cannot resend it. Recurring definitions retain their
+next date. Role checks, overlap bounds, HTTP idempotency and cancellation remain.
+
+Frozen definitions are business inputs: `configure_monitor` can retain already
+accepted triggers, which must keep their original goal, profile and grants.
+The old partial-snapshot restoration path is removed. Migration 124 removes
+lease/retry columns and obsolete debt views without rewriting definitions,
+messages or trigger evidence. Historical execution tables remain archived data;
+a source audit finds no runtime SQL reading them.
 
 ## Size accounting
 

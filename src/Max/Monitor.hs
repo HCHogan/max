@@ -1,56 +1,23 @@
--- | Event-driven ADR 006 monitor scheduler. Schedule and ledger observations
--- admit durable fires; leased workers either publish canned text or admit one
--- fresh ordinary elaborated turn with restart-safe provenance.
-module Max.Monitor
-  ( monitorWorker,
-    nextCronFire,
-    CannedRetry (..),
-    maxCannedAttempts,
-    cannedRetryDecision,
-    deliveryBody,
-  )
-where
+-- | A single scheduler consumes trigger markers and starts ordinary Jobs.
+-- Startup interrupts unfinished triggers; there is no lease or replay worker.
+module Max.Monitor (monitorWorker, nextCronFire, deliveryBody) where
 
 import Control.Monad (when)
 import Data.Aeson (object, (.=))
-import Data.Maybe (isJust, isNothing)
-import Data.Ord (clamp)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time
-  ( TimeZone,
-    UTCTime,
-    addUTCTime,
-    diffUTCTime,
-    getCurrentTime,
-  )
+import Data.Time (TimeZone, UTCTime, diffUTCTime, getCurrentTime)
 import Effectful
-import Effectful.Log (Log, logAttention, logInfo)
+import Effectful.Log (Log, logAttention)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Monitor
-  ( CannedMonitorFire (..),
-    ElaboratedMonitorFire (..),
-    admitDueTimeMonitors,
-    claimCannedMonitorFires,
-    claimElaboratedMonitorFires,
-    completeCannedMonitorFire,
-    lookupMonitorFireOutput,
-    nextMonitorDeadline,
-    recordMonitorFireFailure,
-  )
-import Max.DB.Notify (WorkChannel (MonitorWork), claimOrWaitUntil)
+import Max.DB.Notify (WorkChannel (MonitorWork), waitForWorkUntil)
 import Max.Effects.Blob (Blob)
-import Max.Effects.Outbound
-  ( Outbound,
-    OutboundDeliveryScope (..),
-    OutboundRequest (..),
-    PublicationResult (..),
-    sendRecorded,
-  )
+import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), PublicationResult (..), sendRecorded)
 import Max.IR (Body (..), Phase (Canonical))
 import Max.MessageKind (MessageKind (KindChat))
 import Max.Monitor.Schedule (nextCronFire)
-import Max.Monitor.Types (MonitorFireId (..), MonitorId (..), MonitorRef (..))
+import Max.Monitor.Types (MonitorFireId (..))
 import Max.Platform.Store (ConversationRoster (..), RosterIdentity (..), conversationAdvertisedCaps, conversationRoster)
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId)
 import Max.Reply (Chunk (TextChunk))
@@ -59,170 +26,66 @@ import Max.Util (catchSync)
 import OneBot.Types (GroupId (..))
 import System.Cron.Parser (parseCronSchedule)
 
--- | The next UTC instant strictly after the supplied time whose wall clock in
--- the configured display timezone matches the cron schedule.
-capMicros :: Int
-capMicros = 3600 * 1000000
-
--- | The floor is load-bearing, not politeness.  'nextMonitorDeadline' and the
--- claim queries are separate SQL: any row the first considers due and the
--- second declines to hand out would otherwise spin this loop at zero delay
--- against PostgreSQL.  Waiting only happens when nothing was claimable, so
--- the floor costs no latency on the work path.
+-- A small floor prevents busy looping when cancellation or a budget check
+-- invalidates work between the deadline query and dispatch.
 delayMicrosFor :: UTCTime -> UTCTime -> Int
-delayMicrosFor now deadline =
-  let micros = realToFrac (diffUTCTime deadline now) * 1e6 :: Double
-   in round (clamp (fromIntegral floorMicros, fromIntegral capMicros) micros)
-
-floorMicros :: Int
-floorMicros = 50 * 1000
-
-maxCannedAttempts :: Int
-maxCannedAttempts = 5
-
-data CannedRetry
-  = RetryCannedAt !UTCTime
-  | ParkCanned
-  deriving stock (Show, Eq)
-
-cannedRetryDecision :: UTCTime -> Int -> CannedRetry
-cannedRetryDecision now failedAttempt
-  | failedAttempt >= maxCannedAttempts = ParkCanned
-  | otherwise = RetryCannedAt (addUTCTime (fromIntegral delaySecs) now)
-  where
-    delaySecs :: Int
-    delaySecs = case failedAttempt of
-      1 -> 30
-      2 -> 120
-      3 -> 600
-      _ -> 1800
-
-claimLeaseSeconds :: Int
-claimLeaseSeconds = 60
-
-claimBatchSize :: Int
-claimBatchSize = 50
+delayMicrosFor now deadline = max 50000 (min 3600000000 (round (diffUTCTime deadline now * 1000000)))
 
 monitorWorker ::
   (Blob :> es, WithConnection :> es, Outbound :> es, Log :> es, IOE :> es) =>
-  TimeZone ->
-  Text ->
-  (ElaboratedMonitorFire -> Eff es ()) ->
-  Eff es ()
-monitorWorker tz owner dispatchElaborated = loop
+  TimeZone -> (ElaboratedMonitorFire -> Eff es ()) -> Eff es ()
+monitorWorker tz dispatchElaborated = loop
   where
     loop = do
       now <- liftIO getCurrentTime
       deadline <- nextMonitorDeadline now
-      let waitMicros = maybe capMicros (delayMicrosFor now) deadline
-      work <- claimOrWaitUntil waitMicros MonitorWork claimWork
+      work <- waitForWorkUntil (maybe 3600000000 (delayMicrosFor now) deadline) MonitorWork readyWork
       mapM_ processWork work
       loop
 
-    claimWork = do
-      observedAt <- liftIO getCurrentTime
-      _ <- admitDueTimeMonitors observedAt
-      let leaseSeconds = fromIntegral claimLeaseSeconds :: Double
-      canned <- claimCannedMonitorFires owner observedAt leaseSeconds claimBatchSize
-      elaborated <- claimElaboratedMonitorFires owner observedAt leaseSeconds claimBatchSize
-      pure (map WorkCanned canned <> map WorkElaborated elaborated)
+    readyWork = do
+      now <- liftIO getCurrentTime
+      _ <- admitDueTimeMonitors now
+      canned <- pendingCannedMonitorFires 50
+      elaborated <- pendingElaboratedMonitorFires now 50
+      pure (map Left canned <> map Right elaborated)
 
     processWork = \case
-      WorkCanned fire -> process fire
-      WorkElaborated fire ->
-        dispatchElaborated fire `catchSync` \e ->
-          logAttention "monitor: elaborated dispatch failed before turn admission" $
-            object
-              [ "fire_id" .= fire.emfFireId.unMonitorFireId,
-                "error" .= T.pack (show e)
-              ]
-
-    process fire = do
-      -- This lookup is the crash boundary. If canonical publication committed
-      -- but acknowledgement did not, resume by acknowledging that same row.
-      lookupMonitorFireOutput fire.cmfFireId >>= \case
-        Just canonical -> advance fire (Just canonical)
-        Nothing -> do
-          outcome <-
-            catchSync (deliver fire) $ \e ->
-              pure (PublicationFailed (T.pack (show e)))
-          case outcome of
-            Published canonical -> advance fire (Just canonical)
+      Right fire ->
+        dispatchElaborated fire `catchSync` \err -> do
+          _ <- expireElaboratedMonitorFire fire.emfFireId (T.pack (show err))
+          logAttention "monitor dispatch failed; trigger not retried" (object ["fire_id" .= fire.emfFireId.unMonitorFireId, "error" .= show err])
+      Left fire -> do
+        now <- liftIO getCurrentTime
+        let next = fire.cmfCron >>= either (const Nothing) (\schedule -> nextCronFire tz schedule now) . parseCronSchedule
+        started <- beginCannedMonitorFire fire.cmfFireId next
+        when started $ do
+          outcome <- deliver fire `catchSync` (pure . PublicationFailed . T.pack . show)
+          result <- case outcome of
+            Published canonical -> pure (Right canonical)
             PublicationFailed err -> do
-              -- Covers an ambiguous/concurrent publish: the unique provenance
-              -- may have committed even when this caller observed an error.
-              lookupMonitorFireOutput fire.cmfFireId >>= \case
-                Just canonical -> advance fire (Just canonical)
-                Nothing -> failDelivery fire err
-
-    advance fire canonical = do
-      completedAt <- liftIO getCurrentTime
-      nextAt <- case fire.cmfCron of
-        Nothing -> pure Nothing
-        Just expression -> case parseCronSchedule expression of
-          Right schedule -> pure (nextCronFire tz schedule completedAt)
-          Left _ -> pure Nothing
-      when (isJust fire.cmfCron && isNothing nextAt) $
-        logAttention "monitor: cannot advance cron; closing" $
-          object
-            [ "fire_id" .= fire.cmfFireId.unMonitorFireId,
-              "monitor" .= fire.cmfMonitor.mrMonitorId.unMonitorId,
-              "cron" .= fire.cmfCron
-            ]
-      accepted <- completeCannedMonitorFire owner fire.cmfFireId canonical nextAt
-      if accepted
-        then
-          logInfo "monitor: canned fire dispatched" $
-            object
-              [ "fire_id" .= fire.cmfFireId.unMonitorFireId,
-                "monitor" .= fire.cmfMonitor.mrMonitorId.unMonitorId,
-                "recurring" .= isJust fire.cmfCron
-              ]
-        else
-          logAttention "monitor: fire acknowledgement lost claim" $
-            object ["fire_id" .= fire.cmfFireId.unMonitorFireId]
-
-    failDelivery fire err = do
-      now <- liftIO getCurrentTime
-      let failedAttempt = fire.cmfDeliveryAttempts + 1
-      case cannedRetryDecision now failedAttempt of
-        RetryCannedAt retryAt -> do
-          accepted <- recordMonitorFireFailure owner fire.cmfFireId err (Just retryAt)
-          when accepted $
-            logAttention "monitor: canned delivery retry scheduled" $
-              object
-                [ "fire_id" .= fire.cmfFireId.unMonitorFireId,
-                  "attempt" .= failedAttempt,
-                  "retry_at" .= retryAt,
-                  "error" .= err
-                ]
-        ParkCanned -> do
-          accepted <- recordMonitorFireFailure owner fire.cmfFireId err Nothing
-          when accepted $
-            logAttention "monitor: canned delivery parked" $
-              object
-                [ "fire_id" .= fire.cmfFireId.unMonitorFireId,
-                  "attempts" .= failedAttempt,
-                  "error" .= err
-                ]
+              -- A canonical commit can succeed before its caller sees an error.
+              -- Record that fact without repeating the external send.
+              committed <- lookupMonitorFireOutput fire.cmfFireId
+              pure (maybe (Left err) Right committed)
+          finishCannedMonitorFire fire.cmfFireId result
+          case result of
+            Left err -> logAttention "reminder publication failed; not retried" (object ["fire_id" .= fire.cmfFireId.unMonitorFireId, "error" .= err])
+            Right _ -> pure ()
 
     deliver fire = do
-      let groupId = GroupId fire.cmfGroupId
-      (body, replyTo) <- deliveryBody groupId fire.cmfText
+      let group = GroupId fire.cmfGroupId
+      (body, replyTo) <- deliveryBody group fire.cmfText
       sendRecorded
         OutboundRequest
           { orKind = KindChat,
-            orGroupId = groupId,
+            orGroupId = group,
             orBody = body,
             orReplyTo = replyTo,
             orDeliveryScope = DeliverConversation,
             orTurnOutput = Nothing,
             orMonitorFireId = Just fire.cmfFireId
           }
-
-data MonitorWorkItem
-  = WorkCanned !CannedMonitorFire
-  | WorkElaborated !ElaboratedMonitorFire
 
 -- | A reminder's body owns its mentions. Never add an extra mention of the
 -- initiator; resolve the stored placeholders exactly as ordinary model text.

@@ -6,10 +6,9 @@ import Control.Monad (forM, forM_, (>=>))
 import Data.Either (isRight, rights)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, diffUTCTime, getCurrentTime, utc)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.PostgreSQL (WithConnection, execute, query)
@@ -30,26 +29,25 @@ import Max.DB.Monitor
     armCannedTimeMonitor,
     armElaboratedTimeMonitor,
     armLedgerMatchMonitor,
-    claimCannedMonitorFires,
-    claimElaboratedMonitorFires,
-    completeCannedMonitorFire,
+    beginCannedMonitorFire,
+    finishCannedMonitorFire,
+    interruptMonitorFires,
     listArmedMonitors,
     listCannedTimeMonitors,
     lookupMonitorFireOutput,
     nextMonitorDeadline,
-    reclaimExpiredMonitorFireClaims,
-    recordMonitorFireFailure,
+    pendingCannedMonitorFires,
+    pendingElaboratedMonitorFires,
   )
 import Max.DB.Monitor.Admission
 import Max.DB.Monitor.Control qualified as Control
-import Max.DB.Notify (WorkChannel (MonitorWork), claimOrWaitUntil)
+import Max.DB.Notify (WorkChannel (MonitorWork), waitForWorkUntil)
 import Max.DB.Transaction (withTransaction)
 import Max.IR (Body (..), Node (NMention, NText))
 import Max.Monitor (deliveryBody)
 import Max.Monitor.Control qualified as ControlTypes
 import Max.Monitor.Types
   ( LedgerMatchSpec (..),
-    MonitorFireId,
     MonitorOrdinal (..),
     MonitorRef (..),
   )
@@ -80,14 +78,14 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     (plain, _) <- withDbLog pool $ deliveryBody (GroupId 900) "喝水"
     plain `shouldBe` Body [NText "⏰ 提醒：喝水"]
 
-  it "wakes the cross-process scheduler from durable PostgreSQL work notification" $ do
+  it "wakes the scheduler when a definition changes" $ do
     truncateAll pool
     principal <- seedConversation pool 4901 41 6
     subscribed <- newEmptyMVar
     waiter <-
       async $
         withDb pool $
-          claimOrWaitUntil 2_000_000 MonitorWork $ do
+          waitForWorkUntil 2_000_000 MonitorWork $ do
             _ <- liftIO (tryPutMVar subscribed ())
             query
               "SELECT m.monitor_id FROM monitors m JOIN conversations c USING (conversation_id) \
@@ -137,24 +135,16 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
           (Only raced.mrMonitorId)
     (active :: [Only Int64]) `shouldBe` [Only 0]
 
-  it "survives every pre-ack crash boundary without publishing a duplicate" $ do
+  it "consumes a calendar trigger before publication and never replays it on restart" $ do
     truncateAll pool
     asker <- seedConversation pool 5101 42 7
-    observedAt <- getCurrentTime
-    monitor <- withDb pool (arm asker 42 "喝水" (addUTCTime (-1) observedAt))
-
-    -- observation -> pending: repeated evaluation admits one occurrence.
-    withDb pool (admitDueTimeMonitors observedAt) `shouldReturn` 1
-    withDb pool (admitDueTimeMonitors observedAt) `shouldReturn` 0
-    claimAt <- getCurrentTime
-    [claimed] <-
-      withDb pool $
-        claimCannedMonitorFires "scheduler-a" claimAt 60 10
-    claimed.cmfMonitor `shouldBe` monitor
-    withDb pool (lookupMonitorFireOutput claimed.cmfFireId) `shouldReturn` Nothing
-
-    -- claim -> canonical dispatch: publication commits fire provenance and a
-    -- durable platform-delivery intent in the same transaction.
+    now <- getCurrentTime
+    _ <- withDb pool (arm asker 42 "喝水" (addUTCTime (-1) now))
+    withDb pool (admitDueTimeMonitors now) `shouldReturn` 1
+    withDb pool (admitDueTimeMonitors now) `shouldReturn` 0
+    [fire] <- withDb pool (pendingCannedMonitorFires 10)
+    withDb pool (beginCannedMonitorFire fire.cmfFireId Nothing) `shouldReturn` True
+    withDb pool (beginCannedMonitorFire fire.cmfFireId Nothing) `shouldReturn` False
     queued <-
       withDb pool $
         enqueueOutbound
@@ -165,156 +155,70 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
               canonicalBody = Body [NText "⏰ 提醒：喝水"],
               replyToCanonicalMessageId = Nothing,
               turnOutputLink = Nothing,
-              monitorFireId = Just claimed.cmfFireId
+              monitorFireId = Just fire.cmfFireId
             }
-    withDb pool (lookupMonitorFireOutput claimed.cmfFireId)
-      `shouldReturn` Just queued.canonicalMessageId
-    deliveryCount <-
-      withDb pool $
-        query
-          "SELECT count(*) FROM message_deliveries WHERE canonical_message_id=? AND status='pending'"
-          (Only queued.canonicalMessageId.unCanonicalMessageId)
-    (deliveryCount :: [Only Int64]) `shouldBe` [Only 1]
+    withDb pool (interruptMonitorFires utc now) `shouldReturn` 1
+    withDb pool (interruptMonitorFires utc now) `shouldReturn` 0
+    withDb pool (pendingCannedMonitorFires 10) `shouldReturn` []
+    withDb pool (admitDueTimeMonitors now) `shouldReturn` 0
+    withDb pool (lookupMonitorFireOutput fire.cmfFireId) `shouldReturn` Just queued.canonicalMessageId
 
-    -- Simulate process death before fire ack. A live lease blocks takeover;
-    -- boot after expiry releases it and a new owner rediscovers the same row.
-    withDb pool (claimCannedMonitorFires "scheduler-b" claimAt 60 10)
-      `shouldReturn` []
-    -- The lease is aged in the row rather than by handing the sweep a future
-    -- instant: since issue #17.A both ends read the server's clock, so a
-    -- caller's idea of "later" is no longer something either end will believe.
-    _ <-
-      withDb pool $
-        execute
-          "UPDATE monitor_fires SET claim_expires_at = now() - interval '1 second' \
-          \ WHERE fire_id = ?"
-          (Only claimed.cmfFireId)
-    let restartedAt = addUTCTime 61 claimAt
-    withDb pool reclaimExpiredMonitorFireClaims `shouldReturn` 1
-    [resumed] <-
-      withDb pool $
-        claimCannedMonitorFires "scheduler-b" restartedAt 60 10
-    resumed.cmfFireId `shouldBe` claimed.cmfFireId
-    withDb
-      pool
-      ( completeCannedMonitorFire
-          "scheduler-b"
-          resumed.cmfFireId
-          (Just queued.canonicalMessageId)
-          Nothing
-      )
-      `shouldReturn` True
-
-    published <-
-      withDb pool $
-        query "SELECT count(*) FROM messages WHERE monitor_fire_id=?" (Only resumed.cmfFireId)
-    (published :: [Only Int64]) `shouldBe` [Only 1]
-    state <-
-      withDb pool $
-        query
-          "SELECT f.admission_state, m.status, m.fire_count \
-          \ FROM monitor_fires f JOIN monitors m USING (monitor_id) WHERE f.fire_id=?"
-          (Only resumed.cmfFireId)
-    (state :: [(Text, Text, Int64)]) `shouldBe` [("dispatched", "fired", 1)]
-    withDb pool (listCannedTimeMonitors (conversationScopeFor (GroupId 42)))
-      `shouldReturn` []
-
-  it "persists bounded retry/backoff and leaves an exhausted fire visible and cancellable" $ do
+  it "ends unstarted triggers on restart while retaining the next recurring schedule" $ do
     truncateAll pool
     asker <- seedConversation pool 5201 42 7
-    observedAt <- getCurrentTime
-    monitor <- withDb pool (arm asker 42 "喝水" (addUTCTime (-1) observedAt))
-    _ <- withDb pool (admitDueTimeMonitors observedAt)
-    claimAt <- getCurrentTime
-    [first] <- withDb pool (claimAtTime "retry-worker" claimAt)
-    parkThroughFive pool "retry-worker" first.cmfFireId claimAt 1
+    now <- getCurrentTime
+    _ <- withDb pool (arm asker 42 "one-shot" (addUTCTime (-1) now))
+    recurring <- withDb pool (armCannedTimeMonitor (GroupId 42) (PrincipalId asker) Nothing "recurring" (Just "0 * * * *") (addUTCTime (-1) now))
+    withDb pool (admitDueTimeMonitors now) `shouldReturn` 2
+    withDb pool (interruptMonitorFires utc now) `shouldReturn` 2
+    withDb pool (pendingCannedMonitorFires 10) `shouldReturn` []
+    [scheduled] <- withDb pool (listCannedTimeMonitors (conversationScopeFor (GroupId 42)))
+    scheduled.tmRef `shouldBe` recurring
+    scheduled.tmNextFireAt `shouldSatisfy` (> now)
+    withDb pool (admitDueTimeMonitors scheduled.tmNextFireAt) `shouldReturn` 1
+    [next] <- withDb pool (pendingCannedMonitorFires 10)
+    next.cmfMonitor `shouldBe` recurring
 
-    claims <- withDb pool (claimAtTime "another-worker" (addUTCTime 3600 claimAt))
-    claims `shouldBe` []
-    [parked] <- withDb pool (listCannedTimeMonitors (conversationScopeFor (GroupId 42)))
-    parked.tmRef `shouldBe` monitor
-    parked.tmDeliveryAttempts `shouldBe` 5
-    parked.tmParkedAt `shouldSatisfy` isJust
-    parked.tmLastError `shouldBe` Just "failure 5"
-    withDb pool (withTransaction (Control.controlMonitor 42 asker False monitor.mrMonitorOrdinal.unMonitorOrdinal Control.CancelMonitor False))
-      `shouldReturn` Right (ControlTypes.MonitorControlReceipt 1 False True, [])
-
-  it "reconciles a published but unacknowledged occurrence when cancel wins" $ do
+  it "cancels a consumed trigger before publication" $ do
     truncateAll pool
     asker <- seedConversation pool 5251 42 7
-    observedAt <- getCurrentTime
-    monitor <- withDb pool (arm asker 42 "已经发布" (addUTCTime (-1) observedAt))
-    _ <- withDb pool (admitDueTimeMonitors observedAt)
-    claimAt <- getCurrentTime
-    [claimed] <- withDb pool (claimAtTime "cancel-race-worker" claimAt)
-    queued <-
-      withDb pool $
-        enqueueOutbound
+    now <- getCurrentTime
+    monitor <- withDb pool (arm asker 42 "reminder" (addUTCTime (-1) now))
+    _ <- withDb pool (admitDueTimeMonitors now)
+    [fire] <- withDb pool (pendingCannedMonitorFires 10)
+    withDb pool (beginCannedMonitorFire fire.cmfFireId Nothing) `shouldReturn` True
+    withDb pool (withTransaction (Control.controlMonitor 42 asker False monitor.mrMonitorOrdinal.unMonitorOrdinal Control.CancelMonitor False))
+      `shouldReturn` Right (ControlTypes.MonitorControlReceipt 1 False True, [])
+    withDb
+      pool
+      ( enqueueOutbound
           OutboundDraft
             { legacyConversationId = 42,
               transcriptKind = "chat",
               sourceCanonicalMessageId = Nothing,
-              canonicalBody = Body [NText "⏰ 提醒：已经发布"],
+              canonicalBody = Body [NText "late"],
               replyToCanonicalMessageId = Nothing,
               turnOutputLink = Nothing,
-              monitorFireId = Just claimed.cmfFireId
+              monitorFireId = Just fire.cmfFireId
             }
-    withDb pool (withTransaction (Control.controlMonitor 42 asker False monitor.mrMonitorOrdinal.unMonitorOrdinal Control.CancelMonitor False))
-      `shouldReturn` Right (ControlTypes.MonitorControlReceipt 1 False True, [])
-    withDb
-      pool
-      ( completeCannedMonitorFire
-          "cancel-race-worker"
-          claimed.cmfFireId
-          (Just queued.canonicalMessageId)
-          Nothing
       )
-      `shouldReturn` False
-    state <-
-      withDb pool $
-        query
-          "SELECT f.admission_state, f.outbound_canonical_message_id, m.status, m.fire_count \
-          \ FROM monitor_fires f JOIN monitors m USING (monitor_id) WHERE f.fire_id=?"
-          (Only claimed.cmfFireId)
-    (state :: [(Text, Maybe Int64, Text, Int64)])
-      `shouldBe` [("dispatched", Just queued.canonicalMessageId.unCanonicalMessageId, "cancelled", 1)]
+      `shouldThrow` anyErrorCall
 
-  it "acknowledges a recurring occurrence and rearms the same monitor cleanly" $ do
+  it "records a publication failure without scheduling another delivery" $ do
     truncateAll pool
     asker <- seedConversation pool 5301 42 7
-    observedAt <- getCurrentTime
-    monitor <-
-      withDb pool $
-        armCannedTimeMonitor
-          (GroupId 42)
-          (PrincipalId asker)
-          Nothing
-          "站起来"
-          (Just "0 * * * *")
-          (addUTCTime (-1) observedAt)
-    _ <- withDb pool (admitDueTimeMonitors observedAt)
-    claimAt <- getCurrentTime
-    [first] <- withDb pool (claimAtTime "recurring-worker" claimAt)
-    withDb
-      pool
-      (recordMonitorFireFailure "recurring-worker" first.cmfFireId "temporary" (Just claimAt))
-      `shouldReturn` True
-    [retry] <- withDb pool (claimAtTime "recurring-worker" (addUTCTime 1 claimAt))
-    retry.cmfDeliveryAttempts `shouldBe` 1
-    let nextFire = addUTCTime 3600 claimAt
-    withDb
-      pool
-      (completeCannedMonitorFire "recurring-worker" retry.cmfFireId Nothing (Just nextFire))
-      `shouldReturn` True
-
-    [rearmed] <- withDb pool (listCannedTimeMonitors (conversationScopeFor (GroupId 42)))
-    rearmed.tmRef `shouldBe` monitor
-    rearmed.tmFireCount `shouldBe` 1
-    rearmed.tmNextFireAt `shouldBeWithinMicros` nextFire
-    rearmed.tmDeliveryAttempts `shouldBe` 0
-    rearmed.tmNextAttemptAt `shouldBe` Nothing
-    rearmed.tmLastError `shouldBe` Nothing
-    rearmed.tmParkedAt `shouldBe` Nothing
+    now <- getCurrentTime
+    monitor <- withDb pool (armCannedTimeMonitor (GroupId 42) (PrincipalId asker) Nothing "recurring" (Just "0 * * * *") (addUTCTime (-1) now))
+    _ <- withDb pool (admitDueTimeMonitors now)
+    [fire] <- withDb pool (pendingCannedMonitorFires 10)
+    let next = addUTCTime 3600 now
+    withDb pool (beginCannedMonitorFire fire.cmfFireId (Just next)) `shouldReturn` True
+    withDb pool (finishCannedMonitorFire fire.cmfFireId (Left "send outcome uncertain"))
+    withDb pool (pendingCannedMonitorFires 10) `shouldReturn` []
+    [scheduled] <- withDb pool (listCannedTimeMonitors (conversationScopeFor (GroupId 42)))
+    scheduled.tmRef `shouldBe` monitor
+    scheduled.tmNextFireAt `shouldBeWithinMicros` next
+    withDb pool (query "SELECT last_error FROM monitor_fires WHERE fire_id=?" (Only fire.cmfFireId)) `shouldReturn` [Only ("send outcome uncertain" :: Text)]
 
   it "persists trusted ingest provenance and lets only a new live inbound row admit one LedgerMatch edge" $ do
     truncateAll pool
@@ -377,7 +281,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
 
     [claimed] <-
       withDb pool $
-        claimElaboratedMonitorFires "ledger-worker" now 60 10
+        pendingElaboratedMonitorFires now 10
     claimed.emfTriggerCanonicalMessage `shouldBe` Just (CanonicalMessageId liveCanonical)
     claimed.emfTriggerEvidence `shouldSatisfy` T.isInfixOf "LAUNCH is ready"
     claimed.emfEffectToolGrants
@@ -412,11 +316,9 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     fireCount pool monitor `shouldReturn` 1
     [claimed] <-
       withDb pool $
-        claimElaboratedMonitorFires "admitter-a" now 60 10
-    withDb pool (claimElaboratedMonitorFires "admitter-b" now 60 10)
-      `shouldReturn` []
-    MonitorTaskAdmitted identifier job <- requireRight "admitted monitor job" =<< withDb pool (admitFire "admitter-a" claimed Nothing)
-    withDb pool (admitFire "admitter-a" claimed Nothing) `shouldReturn` Right MonitorAlreadyDispatched
+        pendingElaboratedMonitorFires now 10
+    MonitorTaskAdmitted identifier job <- requireRight "admitted monitor job" =<< withDb pool (admitFire claimed Nothing)
+    withDb pool (admitFire claimed Nothing) `shouldReturn` Right MonitorAlreadyDispatched
     job.group `shouldBe` GroupId 62
     job.principal `shouldBe` PrincipalId principal
     job.grants `shouldBe` Map.empty
@@ -492,16 +394,16 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     forM_ [6302 .. 6322] $ \messageId ->
       insertRawMessage pool messageId 65 705 99 now Nothing "budget-hit"
     fireCount pool budgetMonitor `shouldReturn` 21
-    claimed <- withDb pool (claimElaboratedMonitorFires "budget-worker" now 60 50)
-    admitted <- rights <$> mapM (\fire -> withDb pool (admitFire "budget-worker" fire Nothing)) claimed
+    claimed <- withDb pool (pendingElaboratedMonitorFires now 50)
+    admitted <- rights <$> mapM (\fire -> withDb pool (admitFire fire Nothing)) claimed
     length admitted `shouldBe` 20
     budgetStates pool budgetMonitor `shouldReturn` [(20, 1)]
 
     oneShot <- requireRight "arm one-shot" =<< armTimeFor pool budgetPrincipal budgetArming now
     withDb pool (admitDueTimeMonitors now) `shouldReturn` 1
-    [clockFire] <- withDb pool (claimElaboratedMonitorFires "clock-worker" now 60 10)
+    [clockFire] <- withDb pool (pendingElaboratedMonitorFires now 10)
     clockFire.emfMonitor `shouldBe` oneShot
-    clockTurn <- withDb pool (admitFire "clock-worker" clockFire Nothing)
+    clockTurn <- withDb pool (admitFire clockFire Nothing)
     clockTurn `shouldSatisfy` isRight
     monitorState pool oneShot `shouldReturn` [("fired", 1)]
 
@@ -511,8 +413,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
           "UPDATE monitor_fires SET dispatched_at=now() - interval '61 minutes' \
           \ WHERE monitor_id=? AND admission_state='dispatched'"
           (Only budgetMonitor.mrMonitorId)
-    [released] <- withDb pool (claimElaboratedMonitorFires "budget-worker-2" now 60 10)
-    finalTurn <- withDb pool (admitFire "budget-worker-2" released Nothing)
+    [released] <- withDb pool (pendingElaboratedMonitorFires now 10)
+    finalTurn <- withDb pool (admitFire released Nothing)
     finalTurn `shouldSatisfy` isRight
     budgetStates pool budgetMonitor `shouldReturn` [(21, 0)]
 
@@ -538,7 +440,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
           )
     _ <- insertRawMessage pool 6402 66 706 99 now Nothing "one-hit"
     monitorReason pool maxOne `shouldReturn` [("expired", Just "max_fire_count", 1)]
-    length <$> withDb pool (claimElaboratedMonitorFires "max-one-worker" now 60 10)
+    length <$> withDb pool (pendingElaboratedMonitorFires now 10)
       `shouldReturn` 1
 
     ttlMonitor <-
@@ -587,24 +489,6 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
         body
         Nothing
         fireAt
-
-    claimAtTime owner now =
-      claimCannedMonitorFires owner now 60 10
-
-parkThroughFive :: DbPool -> Text -> MonitorFireId -> UTCTime -> Int -> IO ()
-parkThroughFive pool owner fireId now failedAttempt = do
-  let retryAt = if failedAttempt >= 5 then Nothing else Just now
-  withDb pool (recordMonitorFireFailure owner fireId ("failure " <> showText failedAttempt) retryAt)
-    `shouldReturn` True
-  if failedAttempt >= 5
-    then pure ()
-    else do
-      let next = addUTCTime 1 now
-      [claimed] <-
-        withDb pool $
-          claimCannedMonitorFires owner next 60 10
-      claimed.cmfDeliveryAttempts `shouldBe` failedAttempt
-      parkThroughFive pool owner fireId next (failedAttempt + 1)
 
 seedConversation :: DbPool -> Int64 -> Int64 -> Int64 -> IO Int64
 seedConversation pool messageId groupId userId = do
@@ -693,11 +577,10 @@ armTimeFor pool principal armingTurn now =
 
 -- The current admission boundary validates the claimed fire's seed and frozen
 -- authority, and allocates a non-reusable job handle.
-admitFire :: (WithConnection :> es, IOE :> es) => Text -> ElaboratedMonitorFire -> Maybe UTCTime -> Eff es (Either MonitorAdmissionError MonitorAdmission)
-admitFire owner fire next =
+admitFire :: (WithConnection :> es, IOE :> es) => ElaboratedMonitorFire -> Maybe UTCTime -> Eff es (Either MonitorAdmissionError MonitorAdmission)
+admitFire fire next =
   withTransaction $
     admitMonitorTaskWithin
-      owner
       fire.emfFireId
       next
       Map.empty

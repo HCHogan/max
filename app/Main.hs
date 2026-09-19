@@ -33,7 +33,7 @@ import Max.DB.AgentTurn (addAgentTurnUsage, reclaimInterruptedTurns)
 import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
-import Max.DB.Monitor (reclaimExpiredMonitorFireClaims)
+import Max.DB.Monitor (interruptMonitorFires)
 import Max.DB.Usage (insertUsage)
 import Max.Effects.Agent (Agent, defaultLimits)
 import Max.Effects.Blob (Blob, runBlob)
@@ -298,12 +298,10 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
       logInfo "migrations applied" $
         object ["files" .= applied]
     env :: BotEnv <- ask
-    let maintenanceOwner = "max/" <> T.pack (show env.beStartedAt) <> "/" <> T.pack (show mainTid)
     reclaimed <- reclaimInterruptedTurns
-    reclaimedMonitorFires <- reclaimExpiredMonitorFireClaims
-    when (reclaimedMonitorFires > 0) $
-      logAttention "monitor scheduler: expired claims reclaimed" $
-        object ["fires" .= reclaimedMonitorFires]
+    interrupted <- interruptMonitorFires cfg.timezone env.beStartedAt
+    when (interrupted > 0) $
+      logAttention "unfinished monitor triggers interrupted" (object ["fires" .= interrupted])
     when (reclaimed > 0) $
       logAttention "interrupted turns ended" (object ["turns_crashed" .= reclaimed])
     -- The skill cache is authoritative once loaded (write-through, same
@@ -311,15 +309,14 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
     -- the admin server can consult it.
     nSkills <- loadSkills env.beSkills
     logInfo "skills loaded" $ object ["count" .= nSkills]
-    let ownerFor suffix = maintenanceOwner <> "/" <> suffix
-        permanentWorkers =
+    let permanentWorkers =
           [ worker "image-fetch" RequiredWorker (imageWorker cfg.imageWorkers fetchSig),
             worker "forward-fetch" RequiredWorker (forwardWorker fetchSig),
             worker "file-fetch" RequiredWorker (fileWorker fetchSig),
             worker
               "monitor-scheduler"
               RequiredWorker
-              (monitorWorker cfg.timezone (ownerFor "monitors") dispatchMonitorFire),
+              (monitorWorker cfg.timezone dispatchMonitorFire),
             worker "media-discovery" RequiredWorker (mediaDiscoveryWorker fetchSig),
             worker "canonical-dispatch" RequiredWorker (ingressWorker fetchSig (intentState <$ env.beIntent)),
             worker "jobs" RequiredWorker jobsWorker,

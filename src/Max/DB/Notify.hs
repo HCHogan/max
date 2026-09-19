@@ -1,11 +1,10 @@
 -- | LISTEN before rechecking the queue to avoid missing a concurrent commit.
--- Bounded waits also cover lease expiry and delayed retries without notifications.
+-- Bounded waits also cover calendar deadlines without notifications.
 -- Run the recheck on the pinned listener connection: acquiring a second pooled
 -- connection while each waiter holds one can deadlock the pool.
 module Max.DB.Notify
   ( WorkChannel (..),
-    claimOrWait,
-    claimOrWaitUntil,
+    waitForWorkUntil,
     waitForTimeline,
   )
 where
@@ -25,32 +24,24 @@ import System.Timeout (timeout)
 data WorkChannel = MonitorWork
   deriving stock (Eq, Show)
 
-claimOrWait ::
-  (WithConnection :> es, IOE :> es) =>
-  WorkChannel ->
-  Eff es [a] ->
-  Eff es [a]
-claimOrWait channel claim =
-  claimOrWaitUntil notificationFallbackMicros channel claim
-
-claimOrWaitUntil ::
+waitForWorkUntil ::
   (WithConnection :> es, IOE :> es) =>
   Int ->
   WorkChannel ->
   Eff es [a] ->
   Eff es [a]
-claimOrWaitUntil waitMicros channel claim =
+waitForWorkUntil waitMicros channel ready =
   withConnection $ \listener ->
     bracket_
       (liftIO (void (PostgreSQL.execute_ listener (listenQuery channel))))
       (liftIO (void (PostgreSQL.execute_ listener (unlistenQuery channel))))
       ( do
-          ready <- withPinnedConnection listener claim
-          if null ready
+          work <- withPinnedConnection listener ready
+          if null work
             then do
               _ <- liftIO (timeout (max 0 waitMicros) (getNotification listener))
-              withPinnedConnection listener claim
-            else pure ready
+              withPinnedConnection listener ready
+            else pure work
       )
 
 listenQuery :: WorkChannel -> Query
@@ -60,9 +51,6 @@ listenQuery = \case
 unlistenQuery :: WorkChannel -> Query
 unlistenQuery = \case
   MonitorWork -> "UNLISTEN max_monitor_work"
-
-notificationFallbackMicros :: Int
-notificationFallbackMicros = 30 * 1_000_000
 
 -- | Race-free live-tail wait for the admin ledger. The caller supplies the
 -- durable sequence recheck: subscribe first, recheck second, then wait only

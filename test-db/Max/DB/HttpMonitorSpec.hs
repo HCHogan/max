@@ -108,7 +108,7 @@ spec pool = before_ (truncateAll pool) $ describe "HTTP monitors" $ do
     receive pool limited (Just "last") event `shouldReturn` HttpAccepted
     receive pool limited (Just "last") event `shouldReturn` HttpDuplicate
     receive pool limited (Just "later") event `shouldReturn` HttpGone
-    fires <- withDb pool (claimElaboratedMonitorFires "test" now 60 10)
+    fires <- withDb pool (pendingElaboratedMonitorFires now 10)
     length fires `shouldBe` 1
 
   it "retries cooldown and full queues without consuming the event id or fire budget" $ do
@@ -131,8 +131,8 @@ spec pool = before_ (truncateAll pool) $ describe "HTTP monitors" $ do
     receive pool hook (Just "first") first `shouldReturn` HttpAccepted
     receive pool hook (Just "second") second `shouldReturn` HttpAccepted
     now <- getCurrentTime
-    [fire] <- withDb pool (claimElaboratedMonitorFires "test" now 60 10)
-    Right (MonitorTaskAdmitted _ job) <- withDb pool (withTransaction (admitMonitorTaskWithin "test" fire.emfFireId Nothing grants message.unCanonicalMessageId))
+    [fire] <- withDb pool (pendingElaboratedMonitorFires now 10)
+    Right (MonitorTaskAdmitted _ job) <- withDb pool (withTransaction (admitMonitorTaskWithin fire.emfFireId Nothing grants message.unCanonicalMessageId))
     job.objective `shouldBe` defaultSpec.goal
     job.group `shouldBe` GroupId 900
     job.grants `shouldBe` grants

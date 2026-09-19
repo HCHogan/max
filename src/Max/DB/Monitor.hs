@@ -1,13 +1,11 @@
--- | Durable ADR 006 monitor state. Evaluators commit a pending fire before
--- any continuation work; a leased worker can then resume that fire after a
--- crash without admitting a second occurrence or turn.
+-- | Monitor definitions and trigger facts. One scheduler dispatches each
+-- occurrence; startup interrupts unfinished occurrences instead of replaying them.
 module Max.DB.Monitor
   ( TimeMonitor (..),
     CannedMonitorFire (..),
     ElaboratedMonitorFire (..),
     ArmedMonitor (..),
     MonitorArmError (..),
-    monitorDueAt,
     armCannedTimeMonitor,
     armElaboratedTimeMonitor,
     armLedgerMatchMonitor,
@@ -17,28 +15,27 @@ module Max.DB.Monitor
     nextMonitorDeadline,
     admitDueTimeMonitors,
     evaluateLedgerMatches,
-    claimCannedMonitorFires,
-    claimElaboratedMonitorFires,
+    pendingCannedMonitorFires,
+    pendingElaboratedMonitorFires,
     expireElaboratedMonitorFire,
-    loadAdmittedMonitorFire,
     lookupMonitorFireOutput,
-    completeCannedMonitorFire,
-    recordMonitorFireFailure,
-    reclaimExpiredMonitorFireClaims,
+    beginCannedMonitorFire,
+    finishCannedMonitorFire,
+    interruptMonitorFires,
   )
 where
 
-import Control.Monad (forM, unless, when)
+import Control.Monad (forM, forM_, unless, void, when)
 import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
 import Data.Either (fromRight)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (UTCTime)
+import Data.Time (TimeZone, UTCTime)
 import Database.PostgreSQL.Simple (Only (..), Query)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..), RowParser, field)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
@@ -51,11 +48,13 @@ import Max.DB.Monitor.Occurrence qualified as Occurrence
 import Max.DB.Transaction (withTransaction)
 import Max.IR (Body, Phase (Canonical))
 import Max.Monitor.Control (MonitorArmError (..))
+import Max.Monitor.Schedule (nextCronFire)
 import Max.Monitor.Types
 import Max.Monitor.View (ArmedMonitor (..), TimeMonitor (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), PrincipalIdentityId)
 import Max.Turn.Types (AgentTurnRef (..))
 import OneBot.Types (GroupId (..))
+import System.Cron.Parser (parseCronSchedule)
 
 newtype Jsonb = Jsonb Value
 
@@ -92,9 +91,7 @@ data ElaboratedMonitorFire = ElaboratedMonitorFire
     emfTriggerCanonicalMessage :: !(Maybe CanonicalMessageId),
     emfTriggerEvidence :: !Text,
     emfEffectToolGrants :: !(Map Text Text),
-    emfRequiredRole :: !Text,
-    emfClaimOwner :: !(Maybe Text),
-    emfAdmittedTurn :: !(Maybe AgentTurnRef)
+    emfRequiredRole :: !Text
   }
   deriving stock (Show, Eq)
 
@@ -115,9 +112,6 @@ instance FromRow ElaboratedMonitorFire where
     evidence <- field
     encodedToolGrants <- field
     requiredRole <- field
-    claimOwner <- field
-    admittedTurnId <- field
-    admittedTurnOrdinal <- field
     pure
       ElaboratedMonitorFire
         { emfFireId = fireId,
@@ -134,9 +128,7 @@ instance FromRow ElaboratedMonitorFire where
           emfTriggerEvidence = evidence,
           emfEffectToolGrants =
             fromRight Map.empty (eitherDecodeStrict' (TE.encodeUtf8 encodedToolGrants)),
-          emfRequiredRole = requiredRole,
-          emfClaimOwner = claimOwner,
-          emfAdmittedTurn = AgentTurnRef <$> admittedTurnId <*> admittedTurnOrdinal
+          emfRequiredRole = requiredRole
         }
 
 timeMonitorRow :: RowParser TimeMonitor
@@ -152,10 +144,6 @@ timeMonitorRow = do
   nextFire <- field
   created <- field
   fireCount <- field
-  attempts <- field
-  nextAttempt <- field
-  lastError <- field
-  parked <- field
   pure
     TimeMonitor
       { tmRef = MonitorRef monitorId ordinal,
@@ -166,17 +154,8 @@ timeMonitorRow = do
         tmCron = cron,
         tmNextFireAt = nextFire,
         tmCreatedAt = created,
-        tmFireCount = fireCount,
-        tmDeliveryAttempts = attempts,
-        tmNextAttemptAt = nextAttempt,
-        tmLastError = lastError,
-        tmParkedAt = parked
+        tmFireCount = fireCount
       }
-
--- | Effective user-visible deadline: an occurrence in retry/backoff wins over
--- the unchanged schedule time, matching the legacy reminder contract.
-monitorDueAt :: TimeMonitor -> UTCTime
-monitorDueAt monitor = fromMaybe monitor.tmNextFireAt monitor.tmNextAttemptAt
 
 data CannedMonitorFire = CannedMonitorFire
   { cmfFireId :: !MonitorFireId,
@@ -185,24 +164,20 @@ data CannedMonitorFire = CannedMonitorFire
     cmfAuthorPrincipalId :: !(Maybe Int64),
     cmfText :: !Text,
     cmfCron :: !(Maybe Text),
-    cmfScheduledAt :: !UTCTime,
-    cmfDeliveryAttempts :: !Int,
-    cmfClaimOwner :: !Text
+    cmfScheduledAt :: !UTCTime
   }
   deriving stock (Show, Eq)
 
 instance FromRow CannedMonitorFire where
-  fromRow =
-    CannedMonitorFire
-      <$> field
-      <*> (MonitorRef <$> field <*> field)
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
+  fromRow = do
+    fire <- field
+    monitor <- MonitorRef <$> field <*> field
+    group <- field
+    author <- field
+    body <- field
+    cron <- field
+    scheduled <- field
+    pure CannedMonitorFire {cmfFireId = fire, cmfMonitor = monitor, cmfGroupId = group, cmfAuthorPrincipalId = author, cmfText = body, cmfCron = cron, cmfScheduledAt = scheduled}
 
 -- | Allocate m# under a conversation-row lock, the same durable alternate-key
 -- pattern used for t#.  The optional arming turn is host-derived provenance.
@@ -395,20 +370,12 @@ listCannedTimeMonitors scope =
     timeMonitorRow
     "SELECT m.monitor_id, m.monitor_ordinal, c.legacy_group_id, m.armed_by_principal_id, \
     \       m.arming_turn_id, arming.turn_ordinal, m.goal_text, m.schedule_cron, \
-    \       m.next_fire_at, m.created_at, m.fire_count, \
-    \       COALESCE(active.delivery_attempts, 0), active.next_attempt_at, \
-    \       active.last_error, active.parked_at \
+    \       m.next_fire_at, m.created_at, m.fire_count \
     \FROM conversations c JOIN monitors m USING (conversation_id) \
     \LEFT JOIN agent_turns arming ON arming.turn_id=m.arming_turn_id AND arming.conversation_id=m.conversation_id \
-    \LEFT JOIN LATERAL ( \
-    \  SELECT f.delivery_attempts, f.next_attempt_at, f.last_error, f.parked_at \
-    \  FROM monitor_fires f WHERE f.monitor_id=m.monitor_id \
-    \    AND f.admission_state='pending' AND f.cancelled_at IS NULL \
-    \  ORDER BY f.created_at DESC, f.fire_id DESC LIMIT 1 \
-    \) active ON true \
     \WHERE c.legacy_group_id=? AND m.status='armed' AND m.trigger_kind='time_cron' \
     \  AND m.continuation_kind='canned' \
-    \ORDER BY COALESCE(active.next_attempt_at, m.next_fire_at), m.monitor_ordinal"
+    \ORDER BY m.next_fire_at, m.monitor_ordinal"
     (Only (conversationStorageId scope))
 
 listArmedMonitors ::
@@ -426,8 +393,7 @@ listArmedMonitors scope =
     \ORDER BY m.monitor_ordinal"
     (Only (conversationStorageId scope))
 
--- | Earliest evaluator, retry, or expired-lease wakeup.  This is a deadline,
--- not polling: the in-memory scheduler sleeps until it or a write-through bell.
+-- | Wake for a calendar deadline, expiry, or the hourly budget opening.
 nextMonitorDeadline ::
   (WithConnection :> es, IOE :> es) =>
   UTCTime ->
@@ -444,12 +410,10 @@ nextMonitorDeadline now = do
       \  SELECT m.expires_at FROM monitors m \
       \  WHERE m.status='armed' AND m.expires_at IS NOT NULL \
       \  UNION ALL \
-      \  SELECT CASE WHEN f.claim_expires_at>? THEN f.claim_expires_at \
-      \              ELSE COALESCE(f.next_attempt_at, f.created_at) END \
+      \  SELECT f.created_at \
       \  FROM monitor_fires f JOIN monitors m USING (monitor_id) \
       \  WHERE (m.status='armed' OR (m.status='expired' AND m.status_reason='max_fire_count')) \
       \    AND f.admission_state='pending' AND f.cancelled_at IS NULL \
-      \    AND f.parked_at IS NULL \
       \    AND (m.continuation_kind='canned' \
       \      OR (m.continuation_kind='elaborated' AND m.trigger_kind='time_cron' AND m.schedule_cron IS NULL) \
       \      OR (m.continuation_kind='elaborated' AND ( \
@@ -467,14 +431,12 @@ nextMonitorDeadline now = do
       \    AND NOT (rm.trigger_kind='time_cron' AND rm.schedule_cron IS NULL) \
       \    AND recent.dispatched_at>(?::timestamptz - interval '1 hour') \
       \) deadlines"
-      (now, now, now)
+      (now, now)
   pure $ case rows :: [Only (Maybe UTCTime)] of
     [Only deadline] -> deadline
     _ -> Nothing
 
--- | Edge-trigger the due schedule into durable pending rows.  Repeating this
--- after a crash is harmless: the active-fire and scheduled-at unique keys are
--- both hard database guards.
+-- | Record each due calendar edge once. Startup retires any unfinished edge.
 admitDueTimeMonitors ::
   (WithConnection :> es, IOE :> es) =>
   UTCTime ->
@@ -506,7 +468,7 @@ admitDueTimeMonitors now = withTransaction $ do
   unless (null expiredIds) $ do
     _ <-
       execute
-        "UPDATE monitor_fires SET cancelled_at=now(), claim_owner=NULL, claim_expires_at=NULL \
+        "UPDATE monitor_fires SET cancelled_at=now() \
         \ WHERE monitor_id=ANY(?) AND admission_state='pending' AND cancelled_at IS NULL"
         (Only (PGArray expiredIds))
     pure ()
@@ -564,7 +526,7 @@ evaluateLedgerMatches conversation ingestSeq canonical sender self mentionPrinci
   unless (null ttlIds) $ do
     _ <-
       execute
-        "UPDATE monitor_fires SET cancelled_at=now(), claim_owner=NULL, claim_expires_at=NULL \
+        "UPDATE monitor_fires SET cancelled_at=now() \
         \ WHERE monitor_id=ANY(?) AND admission_state='pending' AND cancelled_at IS NULL"
         (Only (PGArray ttlIds))
     pure ()
@@ -632,89 +594,33 @@ evaluateLedgerMatches conversation ingestSeq canonical sender self mentionPrinci
               _ -> error "evaluateLedgerMatches: duplicate monitor update"
   pure (sum admitted)
 
-claimCannedMonitorFires ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  UTCTime ->
-  -- | How long the claim should last, in seconds; the deadline itself is the
-  -- database's (issue #17.A).  A worker whose clock ran slow used to write a
-  -- lease that had already expired, freeing the fire it had just taken.
-  Double ->
-  Int ->
-  Eff es [CannedMonitorFire]
-claimCannedMonitorFires owner now leaseSeconds limit =
+-- The application runs exactly one monitor scheduler. These are trigger
+-- markers, not worker claims; dispatch never transfers to another process.
+pendingCannedMonitorFires :: (WithConnection :> es, IOE :> es) => Int -> Eff es [CannedMonitorFire]
+pendingCannedMonitorFires limit =
   query
-    "WITH candidates AS ( \
-    \  SELECT f.fire_id FROM monitor_fires f JOIN monitors m USING (monitor_id) \
-    \  WHERE m.status='armed' AND m.continuation_kind='canned' \
-    \    AND f.admission_state='pending' AND f.cancelled_at IS NULL \
-    \    AND f.parked_at IS NULL \
-    \    AND COALESCE(f.next_attempt_at, f.created_at)<=? \
-    \    AND max_lease_free(f.claim_owner, f.claim_expires_at) \
-    \  ORDER BY COALESCE(f.next_attempt_at, f.created_at), f.fire_id \
-    \  FOR UPDATE OF f SKIP LOCKED LIMIT ? \
-    \), claimed AS ( \
-    \  UPDATE monitor_fires f SET claim_owner=?, claim_expires_at=max_lease_until(?) \
-    \  FROM candidates c WHERE f.fire_id=c.fire_id \
-    \  RETURNING f.fire_id, f.monitor_id, f.scheduled_at, f.delivery_attempts, f.claim_owner \
-    \) \
-    \SELECT claimed.fire_id, m.monitor_id, m.monitor_ordinal, c.legacy_group_id, \
-    \       m.armed_by_principal_id, m.goal_text, m.schedule_cron, \
-    \       claimed.scheduled_at, claimed.delivery_attempts, claimed.claim_owner \
-    \FROM claimed JOIN monitors m USING (monitor_id) JOIN conversations c USING (conversation_id) \
-    \ORDER BY claimed.scheduled_at, claimed.fire_id"
-    (now, max 1 (min 100 limit), owner, leaseSeconds)
+    "SELECT f.fire_id,m.monitor_id,m.monitor_ordinal,c.legacy_group_id,m.armed_by_principal_id,m.goal_text,m.schedule_cron,f.scheduled_at\
+    \ FROM monitor_fires f JOIN monitors m USING(monitor_id) JOIN conversations c ON c.conversation_id=m.conversation_id\
+    \ WHERE m.status='armed' AND m.continuation_kind='canned' AND f.admission_state='pending' AND f.cancelled_at IS NULL\
+    \ ORDER BY f.fire_id LIMIT ?"
+    (Only (max 1 (min 100 limit)))
 
-claimElaboratedMonitorFires ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  UTCTime ->
-  -- | Lease length in seconds; see 'claimCannedMonitorFires'.
-  Double ->
-  Int ->
-  Eff es [ElaboratedMonitorFire]
-claimElaboratedMonitorFires owner now leaseSeconds limit =
+pendingElaboratedMonitorFires :: (WithConnection :> es, IOE :> es) => UTCTime -> Int -> Eff es [ElaboratedMonitorFire]
+pendingElaboratedMonitorFires now limit =
   query
-    ( "WITH candidates AS ( \
-      \  SELECT f.fire_id FROM monitor_fires f \
-      \  JOIN monitors m USING (monitor_id) \
-      \  WHERE m.continuation_kind='elaborated' \
-      \    AND m.armed_by_principal_id IS NOT NULL \
-      \    AND (m.status='armed' OR (m.status='expired' AND m.status_reason='max_fire_count')) \
-      \    AND f.admission_state='pending' AND f.cancelled_at IS NULL \
-      \    AND max_lease_free(f.claim_owner, f.claim_expires_at) \
-      \    AND ( \
-      \      (m.trigger_kind='time_cron' AND m.schedule_cron IS NULL) OR \
-      \      (SELECT count(*) FROM monitor_fires recent \
-      \       JOIN monitors rm ON rm.monitor_id=recent.monitor_id \
-      \       WHERE rm.conversation_id=m.conversation_id \
-      \         AND rm.continuation_kind='elaborated' \
-      \         AND NOT (rm.trigger_kind='time_cron' AND rm.schedule_cron IS NULL) \
-      \         AND recent.admission_state='dispatched' AND recent.disposition NOT IN ('coalesced','overflow') \
-      \         AND recent.dispatched_at>(?::timestamptz - interval '1 hour')) < 20 \
-      \    ) \
-      \  ORDER BY f.created_at, f.fire_id \
-      \  FOR UPDATE OF f SKIP LOCKED LIMIT ? \
-      \), claimed AS ( \
-      \  UPDATE monitor_fires f SET claim_owner=?, claim_expires_at=max_lease_until(?) \
-      \  FROM candidates c WHERE f.fire_id=c.fire_id \
-      \  RETURNING f.fire_id \
-      \) "
-        <> elaboratedFireSelect
-        <> " JOIN claimed ON claimed.fire_id=f.fire_id ORDER BY f.created_at, f.fire_id"
+    ( elaboratedFireSelect
+        <> " WHERE m.continuation_kind='elaborated' AND m.armed_by_principal_id IS NOT NULL\
+           \ AND (m.status='armed' OR (m.status='expired' AND m.status_reason='max_fire_count'))\
+           \ AND f.admission_state='pending' AND f.cancelled_at IS NULL\
+           \ AND ((m.trigger_kind='time_cron' AND m.schedule_cron IS NULL) OR\
+           \ (SELECT count(*) FROM monitor_fires recent JOIN monitors rm USING(monitor_id)\
+           \ WHERE rm.conversation_id=m.conversation_id AND rm.continuation_kind='elaborated'\
+           \ AND NOT (rm.trigger_kind='time_cron' AND rm.schedule_cron IS NULL)\
+           \ AND recent.admission_state='dispatched' AND recent.disposition NOT IN ('coalesced','overflow')\
+           \ AND recent.dispatched_at>(?::timestamptz - interval '1 hour'))<20)\
+           \ ORDER BY f.fire_id LIMIT ?"
     )
-    (now, max 1 (min 100 limit), owner, leaseSeconds)
-
-loadAdmittedMonitorFire ::
-  (WithConnection :> es, IOE :> es) =>
-  MonitorFireId ->
-  Eff es (Maybe ElaboratedMonitorFire)
-loadAdmittedMonitorFire fireId = do
-  rows <-
-    query
-      (elaboratedFireSelect <> " WHERE f.fire_id=? AND f.admission_state='dispatched' AND f.admitted_turn_id IS NOT NULL")
-      (Only fireId)
-  pure (listToMaybe rows)
+    (now, max 1 (min 100 limit))
 
 elaboratedFireSelect :: Query
 elaboratedFireSelect =
@@ -723,12 +629,11 @@ elaboratedFireSelect =
   \       seed.canonical_message_id, COALESCE(f.definition_snapshot->>'goal',m.goal_text), m.trigger_kind, m.schedule_cron, \
   \       f.scheduled_at, f.trigger_canonical_message_id, f.trigger_evidence, \
   \       COALESCE(f.definition_snapshot->'grants'->'tool_grants',m.effect_ceiling->'tool_grants', '{}'::jsonb)::text, \
-  \       COALESCE(f.definition_snapshot->>'required_role',m.required_role), f.claim_owner, f.admitted_turn_id, admitted.turn_ordinal \
+  \       COALESCE(f.definition_snapshot->>'required_role',m.required_role) \
   \FROM monitor_fires f \
   \JOIN monitors m USING (monitor_id) \
   \JOIN conversations c ON c.conversation_id=m.conversation_id \
   \LEFT JOIN agent_turns arming ON arming.turn_id=m.arming_turn_id \
-  \LEFT JOIN agent_turns admitted ON admitted.turn_id=f.admitted_turn_id \
   \LEFT JOIN LATERAL ( \
   \  SELECT source.canonical_message_id FROM messages source \
   \  WHERE source.conversation_id=m.conversation_id \
@@ -741,17 +646,16 @@ elaboratedFireSelect =
 
 expireElaboratedMonitorFire ::
   (WithConnection :> es, IOE :> es) =>
-  Text ->
   MonitorFireId ->
   Text ->
   Eff es Bool
-expireElaboratedMonitorFire owner fireId reason = withTransaction $ do
+expireElaboratedMonitorFire fireId reason = withTransaction $ do
   rows <-
     query
       "SELECT m.monitor_id FROM monitor_fires f JOIN monitors m USING (monitor_id) \
       \ WHERE f.fire_id=? AND f.admission_state='pending' AND f.cancelled_at IS NULL \
-      \   AND f.claim_owner=? FOR UPDATE OF m, f"
-      (fireId, owner)
+      \   FOR UPDATE OF m, f"
+      (Only fireId)
   case rows :: [Only MonitorId] of
     [] -> pure False
     [Only monitorId] -> do
@@ -762,7 +666,7 @@ expireElaboratedMonitorFire owner fireId reason = withTransaction $ do
           (T.take 500 reason, monitorId)
       _ <-
         execute
-          "UPDATE monitor_fires SET cancelled_at=now(), claim_owner=NULL, claim_expires_at=NULL \
+          "UPDATE monitor_fires SET cancelled_at=now() \
           \ WHERE monitor_id=? AND admission_state='pending' AND cancelled_at IS NULL"
           (Only monitorId)
       pure True
@@ -779,82 +683,48 @@ lookupMonitorFireOutput fireId = do
       (Only fireId)
   pure $ CanonicalMessageId <$> listToMaybe [messageId | Only messageId <- (rows :: [Only Int64])]
 
--- | Ack the durable fire and advance its schedule in one transaction.  If a
--- crash happened after canonical publication, the worker first rediscovers
--- that message and calls this same CAS; no second outbound row is created.
-completeCannedMonitorFire ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  MonitorFireId ->
-  Maybe CanonicalMessageId ->
-  Maybe UTCTime ->
-  Eff es Bool
-completeCannedMonitorFire owner fireId canonical nextFire = withTransaction $ do
-  let canonicalId = fmap (.unCanonicalMessageId) canonical
-  monitorRows <-
+-- | Consume the calendar edge before publication. A crash can lose this
+-- occurrence, but cannot repeat its external effect on restart.
+beginCannedMonitorFire :: (WithConnection :> es, IOE :> es) => MonitorFireId -> Maybe UTCTime -> Eff es Bool
+beginCannedMonitorFire fire next = withTransaction $ do
+  rows <-
     query
-      "SELECT m.monitor_id FROM monitor_fires f JOIN monitors m USING (monitor_id) \
-      \ WHERE f.fire_id=? AND f.admission_state='pending' AND f.cancelled_at IS NULL \
-      \   AND f.claim_owner=? AND m.status='armed' FOR UPDATE OF m"
-      (fireId, owner)
-  case monitorRows :: [Only MonitorId] of
-    [] -> pure False
-    [Only monitorId] -> do
-      rows <-
-        query
-          "UPDATE monitor_fires f SET admission_state='dispatched', dispatched_at=now(), \
-          \ outbound_canonical_message_id=?, claim_owner=NULL, claim_expires_at=NULL, \
-          \ next_attempt_at=NULL, last_error=NULL, parked_at=NULL \
-          \ WHERE f.fire_id=? AND f.admission_state='pending' AND f.cancelled_at IS NULL \
-          \   AND f.claim_owner=? \
-          \   AND (?::bigint IS NULL OR EXISTS (SELECT 1 FROM messages msg \
-          \     WHERE msg.canonical_message_id=? AND msg.monitor_fire_id=f.fire_id)) \
-          \ RETURNING f.monitor_id"
-          (canonicalId, fireId, owner, canonicalId, canonicalId)
-      case rows :: [Only MonitorId] of
-        [] -> pure False
-        [Only lockedMonitorId]
-          | lockedMonitorId == monitorId -> do
-              changed <-
-                execute
-                  "UPDATE monitors SET status=CASE WHEN ?::timestamptz IS NULL THEN 'fired' ELSE 'armed' END, \
-                  \ next_fire_at=?, fire_count=fire_count+1, updated_at=now() \
-                  \ WHERE monitor_id=? AND status='armed'"
-                  (nextFire, nextFire, monitorId)
-              pure (changed == 1)
-        _ -> error "completeCannedMonitorFire: duplicate fire"
-    _ -> error "completeCannedMonitorFire: duplicate fire"
+      "SELECT m.monitor_id FROM monitor_fires f JOIN monitors m USING(monitor_id) WHERE f.fire_id=?\
+      \ AND f.admission_state='pending' AND f.cancelled_at IS NULL AND m.status='armed' FOR UPDATE OF m,f"
+      (Only fire)
+  case rows :: [Only MonitorId] of
+    [Only monitor] -> do
+      void $ execute "UPDATE monitor_fires SET admission_state='dispatched',dispatched_at=now() WHERE fire_id=?" (Only fire)
+      void $ execute "UPDATE monitors SET next_fire_at=?,status=CASE WHEN ?::timestamptz IS NULL THEN 'fired' ELSE 'armed' END,fire_count=fire_count+1,updated_at=now() WHERE monitor_id=?" (next, next, monitor)
+      pure True
+    _ -> pure False
 
-recordMonitorFireFailure ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  MonitorFireId ->
-  Text ->
-  Maybe UTCTime ->
-  Eff es Bool
-recordMonitorFireFailure owner fireId err retryAt = do
-  changed <-
+-- | Publication is already final; this write only records its outcome.
+finishCannedMonitorFire :: (WithConnection :> es, IOE :> es) => MonitorFireId -> Either Text CanonicalMessageId -> Eff es ()
+finishCannedMonitorFire fire outcome =
+  void $
     execute
-      "UPDATE monitor_fires SET delivery_attempts=delivery_attempts+1, \
-      \ next_attempt_at=?, last_error=?, \
-      \ parked_at=CASE WHEN ?::timestamptz IS NULL THEN now() ELSE NULL END, \
-      \ claim_owner=NULL, claim_expires_at=NULL \
-      \ WHERE fire_id=? AND admission_state='pending' AND cancelled_at IS NULL \
-      \   AND claim_owner=?"
-      (retryAt, err, retryAt, fireId, owner)
-  pure (changed == 1)
+      "UPDATE monitor_fires SET outbound_canonical_message_id=?,last_error=?,finished_at=now() WHERE fire_id=?"
+      (either (const Nothing) (Just . (.unCanonicalMessageId)) outcome, either Just (const Nothing) outcome, fire)
 
--- | Release expired, owned claims using the database clock. Live leases
--- remain valid until nextMonitorDeadline. Do not use max_lease_free here:
--- the return count must exclude rows that had no owner to reclaim.
-reclaimExpiredMonitorFireClaims ::
-  (WithConnection :> es, IOE :> es) =>
-  Eff es Int64
-reclaimExpiredMonitorFireClaims =
+-- | Run once before ingress starts. Definitions survive; unfinished triggers
+-- end here, including any canonical output whose acknowledgement was lost.
+interruptMonitorFires :: (WithConnection :> es, IOE :> es) => TimeZone -> UTCTime -> Eff es Int64
+interruptMonitorFires tz now = withTransaction $ do
+  schedules <-
+    query
+      "SELECT m.monitor_id,m.schedule_cron FROM monitors m WHERE m.status='armed' AND m.trigger_kind='time_cron'\
+      \ AND EXISTS(SELECT 1 FROM monitor_fires f WHERE f.monitor_id=m.monitor_id AND f.admission_state='pending' AND f.cancelled_at IS NULL)"
+      ()
+  forM_ (schedules :: [(MonitorId, Maybe Text)]) $ \(monitor, cron) -> do
+    let next = cron >>= either (const Nothing) (\schedule -> nextCronFire tz schedule now) . parseCronSchedule
+    void $ execute "UPDATE monitors SET next_fire_at=?,status=CASE WHEN ?::timestamptz IS NULL THEN 'fired' ELSE 'armed' END,updated_at=now() WHERE monitor_id=?" (next, next, monitor)
   execute
-    "UPDATE monitor_fires SET claim_owner=NULL, claim_expires_at=NULL \
-    \ WHERE admission_state='pending' \
-    \   AND claim_owner IS NOT NULL AND claim_expires_at <= now()"
+    "UPDATE monitor_fires SET cancelled_at=COALESCE(cancelled_at,now()),finished_at=now(),\
+    \ disposition=CASE WHEN admission_state='pending' THEN 'cancelled' ELSE disposition END,\
+    \ last_error=COALESCE(last_error,'process restarted before completion'),\
+    \ result=COALESCE(result,jsonb_build_object('status','cancelled','summary','process restarted before completion'))\
+    \ WHERE finished_at IS NULL AND cancelled_at IS NULL"
     ()
 
 exactlyOne :: Text -> [Only a] -> a

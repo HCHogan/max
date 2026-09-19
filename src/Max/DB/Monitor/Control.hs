@@ -52,22 +52,10 @@ controlMonitor group actor administrator ordinal command cancelTasks = do
                       "UPDATE monitors SET task_profile=?,change_only=? WHERE monitor_id=?"
                       (profileName capability, changeOnly, identifier)
             when cancelPending $ do
-              -- Publication and control share the monitor lock. Preserve an
-              -- output that committed before cancellation, even if its worker
-              -- died before acknowledging the occurrence.
-              published <-
-                execute
-                  "UPDATE monitor_fires f SET admission_state='dispatched',dispatched_at=now(), \
-                  \ outbound_canonical_message_id=msg.canonical_message_id, \
-                  \ claim_owner=NULL,claim_expires_at=NULL,next_attempt_at=NULL,last_error=NULL,parked_at=NULL \
-                  \ FROM messages msg WHERE f.monitor_id=? AND f.admission_state='pending' \
-                  \ AND f.cancelled_at IS NULL AND msg.monitor_fire_id=f.fire_id"
-                  (Only identifier)
-              void $ execute "UPDATE monitors SET fire_count=fire_count+? WHERE monitor_id=?" (published, identifier)
               void $
                 execute
-                  "UPDATE monitor_fires SET cancelled_at=now(),disposition='cancelled',claim_owner=NULL,claim_expires_at=NULL\
-                  \ WHERE monitor_id=? AND admission_state='pending' AND cancelled_at IS NULL"
+                  "UPDATE monitor_fires SET cancelled_at=now(),disposition='cancelled'\
+                  \ WHERE monitor_id=? AND task_id IS NULL AND finished_at IS NULL AND cancelled_at IS NULL"
                   (Only identifier)
             tasks <-
               if cancelTasks

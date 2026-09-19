@@ -37,7 +37,7 @@ Job's inputs have already been captured. `configure_monitor` can select a
 bounded queue instead.
 
 `monitor_history` and ordinary Job results expose execution outcomes. Restart
-does not resume admitted Jobs or replay their effects. Monitor definitions and
+interrupts queued triggers and admitted Jobs; it never replays their effects. Monitor definitions and
 credentials persist; 202 is an admission acknowledgement, not a crash-durable
 delivery contract. Fleet-specific addresses and Alertmanager instructions live
 in the operations skill.

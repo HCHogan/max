@@ -1340,8 +1340,8 @@ enqueueOutboundInTransaction draft = do
     scoped <-
       query
         "SELECT 1 FROM monitor_fires f JOIN monitors m USING (monitor_id) \
-        \ WHERE f.fire_id=? AND m.conversation_id=? AND m.status='armed' \
-        \   AND f.admission_state='pending' AND f.cancelled_at IS NULL \
+        \ WHERE f.fire_id=? AND m.conversation_id=? AND m.status IN ('armed','fired') \
+        \   AND f.admission_state='dispatched' AND f.finished_at IS NULL AND f.cancelled_at IS NULL \
         \ FOR UPDATE OF m"
         (fireId, conversation)
     case scoped :: [Only Int] of

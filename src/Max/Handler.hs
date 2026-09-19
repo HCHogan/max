@@ -1228,45 +1228,44 @@ dispatchMonitorFire ::
   ) =>
   ElaboratedMonitorFire ->
   Eff es ()
-dispatchMonitorFire fire = case fire.emfClaimOwner of
-  Nothing -> pure ()
-  Just owner -> do
-    seedClaim <- maybe (pure Nothing) loadDispatchMessage fire.emfSeedCanonicalMessage
-    case seedClaim of
-      Nothing -> expire owner "arming principal no longer has an inbound dispatch seed"
-      Just seed -> do
-        if seed.groupId /= GroupId fire.emfGroupId || seed.authorPrincipalId /= fire.emfArmedByPrincipal
-          then expire owner "arming principal provenance no longer resolves in this conversation"
-          else do
-            env :: BotEnv <- ask
-            tier <- effectiveTier env seed.groupId seed
-            if not (roleStillAllows fire.emfRequiredRole tier)
-              then expire owner "arming principal role no longer permits monitors"
-              else do
-                now <- liftIO getCurrentTime
-                nextAt <- case fire.emfCron of
-                  Nothing -> pure (Right Nothing)
-                  Just expression -> case parseCronSchedule expression of
-                    Left err -> pure (Left ("invalid persisted cron: " <> T.pack err))
-                    Right schedule -> pure (Right (nextCronFire env.beTimeZone schedule now))
-                case nextAt of
-                  Left err -> expire owner err
-                  Right maybeNext -> do
-                    profile <- MonitorJob.monitorTaskProfile fire.emfFireId
-                    let caps = TurnCapabilities True False True noAdvertisedCaps False Map.empty (Just fire.emfEffectToolGrants) False
-                        current = Map.fromList [(definition.tdRef.unToolRef, toolCatalogFingerprint [definition]) | definition <- toolDefinitionsFor env seed.groupId caps]
-                    admitted <- withTransaction (MonitorJob.admitMonitorTaskWithin owner fire.emfFireId maybeNext (taskGrants profile current) seed.canonicalId.unCanonicalMessageId)
-                    case admitted of
-                      Right (MonitorJob.MonitorTaskAdmitted identifier spec) -> do
-                        result <- liftIO (Jobs.admitJob env.beJobs Nothing identifier spec)
-                        for_ (either Just (const Nothing) result) $ \detail -> do
-                          void (MonitorJob.recordMonitorResult fire.emfFireId JobState.Failed (JobResult detail Nothing))
-                          logAttention "monitor job rejected" (object ["error" .= detail])
-                      Left detail -> logAttention "monitor admission rejected" (object ["error" .= show detail])
-                      _ -> pure ()
+dispatchMonitorFire fire = do
+  seedClaim <- maybe (pure Nothing) loadDispatchMessage fire.emfSeedCanonicalMessage
+  case seedClaim of
+    Nothing -> expire "arming principal no longer has an inbound dispatch seed"
+    Just seed -> do
+      if seed.groupId /= GroupId fire.emfGroupId || seed.authorPrincipalId /= fire.emfArmedByPrincipal
+        then expire "arming principal provenance no longer resolves in this conversation"
+        else do
+          env :: BotEnv <- ask
+          tier <- effectiveTier env seed.groupId seed
+          if not (roleStillAllows fire.emfRequiredRole tier)
+            then expire "arming principal role no longer permits monitors"
+            else do
+              now <- liftIO getCurrentTime
+              nextAt <- case fire.emfCron of
+                Nothing -> pure (Right Nothing)
+                Just expression -> case parseCronSchedule expression of
+                  Left err -> pure (Left ("invalid persisted cron: " <> T.pack err))
+                  Right schedule -> pure (Right (nextCronFire env.beTimeZone schedule now))
+              case nextAt of
+                Left err -> expire err
+                Right maybeNext -> do
+                  profile <- MonitorJob.monitorTaskProfile fire.emfFireId
+                  let caps = TurnCapabilities True False True noAdvertisedCaps False Map.empty (Just fire.emfEffectToolGrants) False
+                      current = Map.fromList [(definition.tdRef.unToolRef, toolCatalogFingerprint [definition]) | definition <- toolDefinitionsFor env seed.groupId caps]
+                  admitted <- withTransaction (MonitorJob.admitMonitorTaskWithin fire.emfFireId maybeNext (taskGrants profile current) seed.canonicalId.unCanonicalMessageId)
+                  case admitted of
+                    Right (MonitorJob.MonitorTaskAdmitted identifier spec) -> do
+                      result <- liftIO (Jobs.admitJob env.beJobs Nothing identifier spec)
+                      for_ (either Just (const Nothing) result) $ \detail -> do
+                        void (MonitorJob.recordMonitorResult fire.emfFireId JobState.Failed (JobResult detail Nothing))
+                        logAttention "monitor job rejected" (object ["error" .= detail])
+                    Left MonitorJob.MonitorHourlyBudget -> pure ()
+                    Left detail -> expire (T.pack (show detail))
+                    _ -> pure ()
   where
-    expire owner reason = do
-      expired <- expireElaboratedMonitorFire owner fire.emfFireId reason
+    expire reason = do
+      expired <- expireElaboratedMonitorFire fire.emfFireId reason
       when expired $
         logAttention "monitor: elaborated fire expired at revalidation" $
           object

@@ -156,7 +156,7 @@ listRemindersTool :: (MonitorQuery :> es) => TimeZone -> Tool es
 listRemindersTool tz =
   Tool
     { toolName = "list_reminders",
-      toolDescription = "列出本会话所有还没触发的提醒（含投递重试或已暂停状态）。",
+      toolDescription = "列出本会话所有还没触发的提醒。",
       toolSchema = noArguments,
       toolRunner = LegacyRunner $ \_ -> Right . toJSON . map summarize <$> listReminders
     }
@@ -165,18 +165,10 @@ listRemindersTool tz =
       object
         [ "handle" .= monitorHandleText monitor.tmRef.mrMonitorOrdinal,
           "next_fire" .= fmtDateHM tz monitor.tmNextFireAt,
-          "status" .= status monitor,
-          "next_attempt" .= fmap (fmtDateHM tz) monitor.tmNextAttemptAt,
-          "delivery_attempts" .= monitor.tmDeliveryAttempts,
-          "last_error" .= monitor.tmLastError,
           "text" .= monitor.tmText,
           "cron" .= monitor.tmCron,
           "fire_count" .= monitor.tmFireCount
         ]
-    status monitor
-      | isJust monitor.tmParkedAt = "parked" :: Text
-      | isJust monitor.tmNextAttemptAt = "retrying"
-      | otherwise = "scheduled"
 
 cancelReminderTool ::
   (MonitorControl :> es) =>

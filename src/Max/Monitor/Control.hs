@@ -74,7 +74,7 @@ monitorControlErrorText = \case
   MonitorOwnerRequired -> "monitor owner or administrator required"
   MonitorRevisionConflict -> "revision conflict"
   InvalidMonitorDefinition -> "invalid monitor definition"
-  MonitorCallerFenced -> "monitor caller identity or execution lease is no longer valid"
+  MonitorCallerFenced -> "monitor caller identity or running turn is no longer valid"
 
 armErrorText :: MonitorArmError -> Text
 armErrorText = \case
@@ -82,5 +82,5 @@ armErrorText = \case
   ConditionMonitorCapReached -> "本会话已达到 25 个 condition monitor 上限"
   ArmingTurnOutsideConversation -> "arming turn 不属于当前会话"
   MonitorArmingForbidden -> "当前角色无权武装会主动发起回合的 monitor"
-  ArmingCallerFenced -> "当前回合身份或执行租约已失效，不能创建提醒或 monitor"
+  ArmingCallerFenced -> "当前回合身份或运行状态已失效，不能创建提醒或 monitor"
   HttpMonitorsUnavailable -> "HTTP monitor 未启用：需要配置 admin.webhook_base_url"

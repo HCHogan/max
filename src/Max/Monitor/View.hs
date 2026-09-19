@@ -187,10 +187,6 @@ data TimeMonitor = TimeMonitor
     tmCron :: !(Maybe Text),
     tmNextFireAt :: !UTCTime,
     tmCreatedAt :: !UTCTime,
-    tmFireCount :: !Int64,
-    tmDeliveryAttempts :: !Int,
-    tmNextAttemptAt :: !(Maybe UTCTime),
-    tmLastError :: !(Maybe Text),
-    tmParkedAt :: !(Maybe UTCTime)
+    tmFireCount :: !Int64
   }
   deriving stock (Show, Eq)

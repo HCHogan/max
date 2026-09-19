@@ -20,7 +20,7 @@ import Max.Browser.Registry
 import Max.Browser.Runtime (browserMaintenance, releaseBrowserTurn)
 import Max.Browser.ToolRuntime (browserToolsFor)
 import Max.DB.Connection (DbPool)
-import Max.DB.Monitor (ElaboratedMonitorFire (..), armLedgerMatchMonitor, claimElaboratedMonitorFires)
+import Max.DB.Monitor (ElaboratedMonitorFire (..), armLedgerMatchMonitor, pendingElaboratedMonitorFires)
 import Max.DB.Monitor.Admission
 import Max.DB.Monitor.Control qualified as MonitorControl
 import Max.DB.Transaction (withTransaction)
@@ -66,8 +66,8 @@ spec pool = before_ (truncateAll pool) $ describe "process-owned browser workspa
       Right _ <- withDb pool (withTransaction (MonitorControl.controlMonitor 900 actor.unPrincipalId False monitor.mrMonitorOrdinal.unMonitorOrdinal (MonitorControl.ConfigureMonitor 1 "browser watch" QueueOccurrences 10 RetainPending (Just (Browser, True))) False))
       let handle = monitorHandleText monitor.mrMonitorOrdinal
           admit = do
-            [fire] <- withDb pool (claimElaboratedMonitorFires "browser-monitor" now 60 10)
-            Right (MonitorTaskAdmitted _ job) <- withDb pool (withTransaction (admitMonitorTaskWithin "browser-monitor" fire.emfFireId Nothing Map.empty running.job.spec.source.unCanonicalMessageId))
+            [fire] <- withDb pool (pendingElaboratedMonitorFires now 10)
+            Right (MonitorTaskAdmitted _ job) <- withDb pool (withTransaction (admitMonitorTaskWithin fire.emfFireId Nothing Map.empty running.job.spec.source.unCanonicalMessageId))
             pure job
       command pool running registry ["monitor", handle, "login"] >>= (`shouldSatisfy` not . isLeft)
       insertOccurrence pool monitor "bound"
