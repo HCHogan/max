@@ -6,6 +6,9 @@ with `e99a0a3`. Both used the running service's default profile,
 This identifies the configured/requested model, not the gateway's internal
 checkpoint.
 
+The subsequent [h610 deployment report](simplification-release-20260919.md)
+records real QQ receipts, migration preservation and operational limitations.
+
 The [experiment record](simplification-20260919.json) contains the predeclared
 order, exact runner and frontend-contract source, outputs, events, tool names,
 usage and request/response fingerprints. Credentials and production messages are

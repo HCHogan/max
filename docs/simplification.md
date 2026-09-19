@@ -124,7 +124,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
       fields, explicit results and locally understandable resource ownership.
 - [x] Update architecture, feature, operations and generated prompt documentation.
 - [x] Publish final core and total-owned-code measurements with a file manifest.
-- [ ] Complete local gates, upgrade checks, release and operational acceptance.
+- [x] Complete local gates, upgrade checks, release and operational acceptance.
 
 ## Size accounting
 
@@ -505,3 +505,12 @@ maintained implementation record.
   improve uniformly. The report records calls, usage, outputs, limitations and
   the exact one-off runner; it is not a generic model-quality certificate.
   Coordinated deployment and operational acceptance remain pending.
+
+- [h610 deployment and operational evidence](research/simplification-release-20260919.md):
+  `db80b66` was built and activated on the destination host after a real-snapshot
+  migration rehearsal and a verified final backup. Retained data fingerprints
+  matched; production reached migration 122. A real QQ reply obtained native
+  receipts before the model-completion log. Browser workspace/public-navigation
+  and native sandbox probes passed. Historical delivery/sandbox uncertainty and
+  existing context source mismatches remain visible; strict health is not green.
+  The user separately requested pausing iMessage and WeChat integrations.

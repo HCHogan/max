@@ -2,7 +2,8 @@
 
 Counts expose maintenance cost; they do not justify deleting major features.
 This checkpoint follows worker simplification, unused-module removal and
-unification of turn identity. It is not final operational acceptance.
+unification of turn identity. See the separate
+[deployment observations and limits](research/simplification-release-20260919.md).
 
 ## Reproduce
 
