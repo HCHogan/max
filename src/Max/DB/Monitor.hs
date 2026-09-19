@@ -599,7 +599,7 @@ evaluateLedgerMatches conversation ingestSeq canonical sender self mentionPrinci
 pendingCannedMonitorFires :: (WithConnection :> es, IOE :> es) => Int -> Eff es [CannedMonitorFire]
 pendingCannedMonitorFires limit =
   query
-    "SELECT f.fire_id,m.monitor_id,m.monitor_ordinal,c.legacy_group_id,m.armed_by_principal_id,m.goal_text,m.schedule_cron,f.scheduled_at\
+    "SELECT f.fire_id,m.monitor_id,m.monitor_ordinal,c.legacy_group_id,m.armed_by_principal_id,f.definition_snapshot->>'goal',m.schedule_cron,f.scheduled_at\
     \ FROM monitor_fires f JOIN monitors m USING(monitor_id) JOIN conversations c ON c.conversation_id=m.conversation_id\
     \ WHERE m.status='armed' AND m.continuation_kind='canned' AND f.admission_state='pending' AND f.cancelled_at IS NULL\
     \ ORDER BY f.fire_id LIMIT ?"
@@ -694,7 +694,7 @@ beginCannedMonitorFire fire next = withTransaction $ do
       (Only fire)
   case rows :: [Only MonitorId] of
     [Only monitor] -> do
-      void $ execute "UPDATE monitor_fires SET admission_state='dispatched',dispatched_at=now() WHERE fire_id=?" (Only fire)
+      void $ execute "UPDATE monitor_fires SET admission_state='dispatched',dispatched_at=now(),started_at=now() WHERE fire_id=?" (Only fire)
       void $ execute "UPDATE monitors SET next_fire_at=?,status=CASE WHEN ?::timestamptz IS NULL THEN 'fired' ELSE 'armed' END,fire_count=fire_count+1,updated_at=now() WHERE monitor_id=?" (next, next, monitor)
       pure True
     _ -> pure False
@@ -709,6 +709,8 @@ finishCannedMonitorFire fire outcome =
 
 -- | Run once before ingress starts. Definitions survive; unfinished triggers
 -- end here, including any canonical output whose acknowledgement was lost.
+-- Old canned history has no started_at; some migrated rows also lack receipts.
+-- Only the new publisher sets started_at before an external send.
 interruptMonitorFires :: (WithConnection :> es, IOE :> es) => TimeZone -> UTCTime -> Eff es Int64
 interruptMonitorFires tz now = withTransaction $ do
   schedules <-
@@ -720,11 +722,13 @@ interruptMonitorFires tz now = withTransaction $ do
     let next = cron >>= either (const Nothing) (\schedule -> nextCronFire tz schedule now) . parseCronSchedule
     void $ execute "UPDATE monitors SET next_fire_at=?,status=CASE WHEN ?::timestamptz IS NULL THEN 'fired' ELSE 'armed' END,updated_at=now() WHERE monitor_id=?" (next, next, monitor)
   execute
-    "UPDATE monitor_fires SET cancelled_at=COALESCE(cancelled_at,now()),finished_at=now(),\
+    "UPDATE monitor_fires f SET cancelled_at=COALESCE(cancelled_at,now()),finished_at=now(),\
     \ disposition=CASE WHEN admission_state='pending' THEN 'cancelled' ELSE disposition END,\
     \ last_error=COALESCE(last_error,'process restarted before completion'),\
     \ result=COALESCE(result,jsonb_build_object('status','cancelled','summary','process restarted before completion'))\
-    \ WHERE finished_at IS NULL AND cancelled_at IS NULL"
+    \ WHERE finished_at IS NULL AND cancelled_at IS NULL AND (admission_state='pending' OR task_id IS NOT NULL\
+    \ OR (outbound_canonical_message_id IS NULL AND started_at IS NOT NULL\
+    \ AND EXISTS(SELECT 1 FROM monitors m WHERE m.monitor_id=f.monitor_id AND m.continuation_kind='canned')))"
     ()
 
 exactlyOne :: Text -> [Only a] -> a

@@ -46,6 +46,7 @@ import Max.DB.Transaction (withTransaction)
 import Max.IR (Body (..), Node (NMention, NText))
 import Max.Monitor (deliveryBody)
 import Max.Monitor.Control qualified as ControlTypes
+import Max.Monitor.Policy (OverlapPolicy (Coalesce))
 import Max.Monitor.Types
   ( LedgerMatchSpec (..),
     MonitorOrdinal (..),
@@ -163,6 +164,35 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     withDb pool (admitDueTimeMonitors now) `shouldReturn` 0
     withDb pool (lookupMonitorFireOutput fire.cmfFireId) `shouldReturn` Just queued.canonicalMessageId
 
+  it "does not relabel successful pre-cutover canned history at startup" $ do
+    truncateAll pool
+    asker <- seedConversation pool 5151 42 7
+    now <- getCurrentTime
+    _ <- withDb pool (arm asker 42 "already sent" (addUTCTime (-1) now))
+    _ <- withDb pool (admitDueTimeMonitors now)
+    [fire] <- withDb pool (pendingCannedMonitorFires 10)
+    withDb pool (beginCannedMonitorFire fire.cmfFireId Nothing) `shouldReturn` True
+    queued <-
+      withDb pool $
+        enqueueOutbound
+          OutboundDraft
+            { legacyConversationId = 42,
+              transcriptKind = "chat",
+              sourceCanonicalMessageId = Nothing,
+              canonicalBody = Body [NText "already sent"],
+              replyToCanonicalMessageId = Nothing,
+              turnOutputLink = Nothing,
+              monitorFireId = Just fire.cmfFireId
+            }
+    withDb pool (finishCannedMonitorFire fire.cmfFireId (Right queued.canonicalMessageId))
+    _ <- withDb pool (execute "UPDATE monitor_fires SET finished_at=NULL,started_at=NULL WHERE fire_id=?" (Only fire.cmfFireId))
+    withDb pool (interruptMonitorFires utc now) `shouldReturn` 0
+    withDb pool (query "SELECT cancelled_at IS NULL AND last_error IS NULL AND result IS NULL FROM monitor_fires WHERE fire_id=?" (Only fire.cmfFireId)) `shouldReturn` [Only True]
+    withDb pool (lookupMonitorFireOutput fire.cmfFireId) `shouldReturn` Just queued.canonicalMessageId
+    _ <- withDb pool (execute "UPDATE monitor_fires SET outbound_canonical_message_id=NULL WHERE fire_id=?" (Only fire.cmfFireId))
+    withDb pool (interruptMonitorFires utc now) `shouldReturn` 0
+    withDb pool (query "SELECT cancelled_at IS NULL AND result IS NULL FROM monitor_fires WHERE fire_id=?" (Only fire.cmfFireId)) `shouldReturn` [Only True]
+
   it "ends unstarted triggers on restart while retaining the next recurring schedule" $ do
     truncateAll pool
     asker <- seedConversation pool 5201 42 7
@@ -203,6 +233,22 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
             }
       )
       `shouldThrow` anyErrorCall
+
+  it "retains accepted canned text when the next definition changes" $ do
+    truncateAll pool
+    asker <- seedConversation pool 5291 42 7
+    now <- getCurrentTime
+    monitor <- withDb pool (armCannedTimeMonitor (GroupId 42) (PrincipalId asker) Nothing "old text" (Just "* * * * *") (addUTCTime (-1) now))
+    withDb pool (admitDueTimeMonitors now) `shouldReturn` 1
+    changed <- withDb pool (withTransaction (Control.controlMonitor 42 asker False monitor.mrMonitorOrdinal.unMonitorOrdinal (Control.ConfigureMonitor 1 "new text" Coalesce 40 ControlTypes.RetainPending Nothing) False))
+    changed `shouldSatisfy` isRight
+    [accepted] <- withDb pool (pendingCannedMonitorFires 10)
+    accepted.cmfText `shouldBe` "old text"
+    let next = addUTCTime 60 now
+    withDb pool (beginCannedMonitorFire accepted.cmfFireId (Just next)) `shouldReturn` True
+    withDb pool (admitDueTimeMonitors next) `shouldReturn` 1
+    [future] <- withDb pool (pendingCannedMonitorFires 10)
+    future.cmfText `shouldBe` "new text"
 
   it "records a publication failure without scheduling another delivery" $ do
     truncateAll pool
