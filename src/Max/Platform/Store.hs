@@ -6,8 +6,8 @@
 --
 -- Adapters normalize protocol traffic into 'InboundEnvelope'.  This module is
 -- the only place that turns it into durable conversation state: native-event
--- dedupe, canonical message insertion, source confirmation, mirror outbox and
--- dispatch publication commit together.
+-- dedupe, canonical message insertion, source confirmation and mirror outbox
+-- commit together. Fresh-message eligibility is returned to the process queue.
 module Max.Platform.Store
   ( EndpointRegistration (..),
     RegisteredEndpoint (..),
@@ -30,13 +30,7 @@ module Max.Platform.Store
     IngestResult (..),
     NewIngest (..),
     ingestEnvelope,
-    DispatchClaim (..),
-    DispatchCompletion (..),
-    claimDispatches,
-    claimDispatch,
-    startDispatch,
-    loadDispatchClaim,
-    completeDispatch,
+    loadDispatchMessage,
     OutboundDraft (..),
     EnqueuedOutbound (..),
     enqueueOutbound,
@@ -122,6 +116,7 @@ import Max.Conversation.Roster
 import Max.DB.Codec (enumField, jsonbField, nullableJsonbField)
 import Max.DB.Monitor (evaluateLedgerMatches)
 import Max.DB.Transaction (withTransaction)
+import Max.Dispatch (DispatchMessage (..))
 import Max.IR
 import Max.IR.Lower
   ( Attribution (..),
@@ -142,6 +137,7 @@ import Max.Platform.Envelope
   )
 import Max.Platform.Types
 import Max.Turn.Types (AgentTurnId (..), TurnOutputLink (..))
+import OneBot.Types (GroupId (..), UserId (..))
 import Text.Read (readMaybe)
 
 newtype Jsonb = Jsonb Value
@@ -298,40 +294,9 @@ data NewIngest = NewIngest
     -- lets adapter-edge observability log a bounded digest without decoding
     -- the row again or retaining the inbound representation.
     canonicalBody :: !(Body 'Canonical),
-    dispatchCreated :: !Bool,
+    dispatchEligible :: !Bool,
     mirrorDeliveriesCreated :: !Int64
   }
-  deriving stock (Eq, Show, Generic)
-
--- | One durable eligibility decision waiting to cross into the live runtime.
--- Content and provenance are canonical; numeric ids remain only as temporary
--- keys for the unchanged session/command runtime, never as content authority.
-data DispatchClaim = DispatchClaim
-  { canonicalMessageId :: !CanonicalMessageId,
-    compatibilityMessageId :: !Int64,
-    compatibilityConversationId :: !Int64,
-    compatibilityUserId :: !Int64,
-    compatibilitySelfId :: !Int64,
-    -- | The sender and the bot as /people/ (ADR 004).  Deciding "was I
-    -- addressed" by comparing principals is what makes the answer the same
-    -- on every platform: an account id only ever agreed with the
-    -- compatibility self id on QQ, and every @ elsewhere silently read as
-    -- "not addressed".
-    authorPrincipalId :: !PrincipalId,
-    selfPrincipalId :: !PrincipalId,
-    body :: !(Body 'Canonical),
-    originEndpointId :: !EndpointId,
-    replyToCanonicalMessageId :: !(Maybe Int64),
-    sourcePlatform :: !Platform,
-    senderDisplayName :: !(Maybe Text),
-    attemptCount :: !Int
-  }
-  deriving stock (Eq, Show, Generic)
-
-data DispatchCompletion
-  = DispatchCompleted
-  | DispatchIgnored
-  | DispatchRetry !Text !UTCTime
   deriving stock (Eq, Show, Generic)
 
 data OutboundDraft = OutboundDraft
@@ -517,38 +482,21 @@ instance FromRow DeliveryClaimRow where
   fromRow =
     DeliveryClaimRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> jsonbField <*> enumField parseEventKind <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> nullableJsonbField <*> field <*> field <*> field <*> field <*> field <*> field
 
-data DispatchClaimRow = DispatchClaimRow
-  { dcrCanonicalMessageId :: !Int64,
-    dcrMessageId :: !Int64,
-    dcrGroupId :: !Int64,
-    dcrUserId :: !Int64,
-    dcrSelfId :: !Int64,
-    dcrAuthorPrincipalId :: !Int64,
-    dcrSelfPrincipalId :: !Int64,
-    dcrContent :: !(Body 'Canonical),
-    dcrOriginEndpointId :: !Int64,
-    dcrReplyToCanonicalMessageId :: !(Maybe Int64),
-    dcrSourcePlatform :: !Text,
-    dcrSenderDisplayName :: !(Maybe Text),
-    dcrAttemptCount :: !Int
+data DispatchRow = DispatchRow
+  { drCanonical :: !Int64,
+    drGroup :: !Int64,
+    drUser :: !Int64,
+    drSelf :: !Int64,
+    drAuthor :: !Int64,
+    drSelfPrincipal :: !Int64,
+    drBody :: !(Body 'Canonical),
+    drReply :: !(Maybe Int64),
+    drPlatform :: !Text,
+    drName :: !(Maybe Text)
   }
 
-instance FromRow DispatchClaimRow where
-  fromRow =
-    DispatchClaimRow
-      <$> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> jsonbField
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
+instance FromRow DispatchRow where
+  fromRow = DispatchRow <$> field <*> field <*> field <*> field <*> field <*> field <*> jsonbField <*> field <*> field <*> field
 
 createConversation ::
   (WithConnection :> es, IOE :> es) =>
@@ -1202,13 +1150,7 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
           \ (canonical_message_id, endpoint_id, status, native_event_id, idempotency_key, confirmed_at) \
           \ VALUES (?, ?, 'confirmed', ?, 'source:' || ?, ?)"
           (cid, envelope.endpointId.unEndpointId, nativeEvent, nativeEvent, envelope.receivedAt)
-      let dispatchable = envelope.eventKind == EventMessage && options.createDispatch
-      _ <-
-        execute
-          "INSERT INTO message_dispatches \
-          \ (canonical_message_id, status, completed_at) \
-          \ VALUES (?, ?, CASE WHEN ?::boolean THEN NULL ELSE now() END)"
-          (cid, if dispatchable then ("pending" :: Text) else "ignored", dispatchable)
+      let dispatchable = envelope.ingestClass == LiveDelivery && envelope.eventKind == EventMessage && options.createDispatch
       forM_ envelope.relations (insertRelation cid envelope.endpointId)
       -- The identity batch above always carries both the sender and Max's own
       -- account, so the lookups hold; resolving them totally keeps a monitor
@@ -1254,7 +1196,7 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
             NewIngest
               { canonicalMessageId = CanonicalMessageId cid,
                 canonicalBody = resolvedBody,
-                dispatchCreated = dispatchable,
+                dispatchEligible = dispatchable,
                 mirrorDeliveriesCreated = mirrorCount
               }
         )
@@ -1467,11 +1409,6 @@ enqueueOutboundInTransaction draft = do
         \ VALUES (?, 'reply', ?) ON CONFLICT DO NOTHING"
         (canonical, target)
     pure ()
-  _ <-
-    execute
-      "INSERT INTO message_dispatches (canonical_message_id, status, completed_at) \
-      \ VALUES (?, 'ignored', now())"
-      (Only canonical)
   deliveryCount <-
     execute
       "INSERT INTO message_deliveries \
@@ -1612,11 +1549,6 @@ recordInternalMessage draft = withTransaction $ do
             \ VALUES (?, 'reply', ?) ON CONFLICT DO NOTHING"
             (canonical, target)
         pure ()
-      _ <-
-        execute
-          "INSERT INTO message_dispatches (canonical_message_id, status, completed_at) \
-          \ VALUES (?, 'ignored', now())"
-          (Only canonical)
       pure (CanonicalMessageId canonical)
     _ -> error "recordInternalMessage: duplicate source key invariant violated"
 
@@ -1753,11 +1685,6 @@ enqueueReaction draft = withTransaction $ do
               \ (canonical_message_id, relation_kind, target_canonical_message_id, reaction_key, reaction_added) \
               \ VALUES (?, 'reaction', ?, ?, ?)"
               (canonical, targetCanonical, draft.reactionKey, reactionAdded)
-          _ <-
-            execute
-              "INSERT INTO message_dispatches (canonical_message_id, status, completed_at) \
-              \ VALUES (?, 'ignored', now())"
-              (Only canonical)
           deliveryCount <-
             execute
               "INSERT INTO message_deliveries \
@@ -1829,165 +1756,39 @@ advanceIngestCursorCAS (PlatformAccountId accountId) streamKey expected (Platfor
     [(value, fingerprint', revision')] -> Just (CursorRecord (PlatformCursor value) fingerprint' revision')
     _ -> Nothing
 
-claimDispatches ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  Int ->
-  NominalDiffTime ->
-  Eff es [DispatchClaim]
-claimDispatches workerId limit leaseDuration =
-  claimDispatchWhere workerId Nothing limit leaseDuration
-
--- | Claim one known message immediately after ingest.  If another runtime won
--- the lease, or this event was already evaluated, return 'Nothing'.
-claimDispatch ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  CanonicalMessageId ->
-  NominalDiffTime ->
-  Eff es (Maybe DispatchClaim)
-claimDispatch workerId (CanonicalMessageId canonical) leaseDuration = do
-  claims <-
-    claimDispatchWhere workerId (Just canonical) 1 leaseDuration
-  pure (listToMaybe claims)
-
--- | Rehydrate the immutable canonical trigger for an already-admitted durable
--- agent turn.  This does not touch message_dispatches: the original dispatch
--- eligibility was committed before the turn began, and restart recovery owns
--- the existing turn rather than admitting the message a second time.
-loadDispatchClaim ::
-  (WithConnection :> es, IOE :> es) =>
-  CanonicalMessageId ->
-  Eff es (Maybe DispatchClaim)
-loadDispatchClaim (CanonicalMessageId canonical) = do
+-- | Read a canonical message for live ingress or an explicit job/reminder.
+-- This query has no ownership or restart-continuation semantics.
+loadDispatchMessage :: (WithConnection :> es, IOE :> es) => CanonicalMessageId -> Eff es (Maybe DispatchMessage)
+loadDispatchMessage (CanonicalMessageId canonical) = do
   rows <-
     query
-      "SELECT m.canonical_message_id, m.message_id, m.group_id, m.user_id, m.self_id, \
-      \       m.author_principal_id, self_identity.principal_id, \
-      \       m.canonical_content, m.origin_endpoint_id, m.reply_to_canonical_message_id, \
-      \       m.source_platform, m.sender_nickname, 0 \
+      "SELECT m.canonical_message_id, m.group_id, m.user_id, m.self_id, \
+      \       m.author_principal_id, self_identity.principal_id, m.canonical_content, \
+      \       m.reply_to_canonical_message_id, m.source_platform, m.sender_nickname \
       \ FROM messages m \
-      \ JOIN conversation_endpoints origin_endpoint \
-      \   ON origin_endpoint.endpoint_id = m.origin_endpoint_id \
-      \ JOIN platform_accounts origin_account \
-      \   ON origin_account.platform_account_id = origin_endpoint.platform_account_id \
+      \ JOIN conversation_endpoints origin_endpoint ON origin_endpoint.endpoint_id = m.origin_endpoint_id \
+      \ JOIN platform_accounts origin_account USING (platform_account_id) \
       \ JOIN principal_identities self_identity \
       \   ON self_identity.platform_account_id = origin_endpoint.platform_account_id \
       \  AND self_identity.native_user_id = origin_account.native_account_id \
       \ WHERE m.canonical_message_id = ?"
       (Only canonical)
-  pure (toDispatchClaim <$> listToMaybe (rows :: [DispatchClaimRow]))
-
-claimDispatchWhere ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  Maybe Int64 ->
-  Int ->
-  NominalDiffTime ->
-  Eff es [DispatchClaim]
-claimDispatchWhere workerId mCanonical limit leaseDuration = do
-  -- Before claiming, retire anything a dead worker still owns.  The lease
-  -- expiry test below cannot do it: it only ever sees 'pending' and 'failed',
-  -- so a row abandoned in 'claimed' is outside the candidate set no matter how
-  -- long ago its lease ran out.  Separate statement rather than another CTE,
-  -- for the reason the delivery sweep is one: data-modifying CTEs share a
-  -- snapshot, and the quarantined row would still read as 'claimed' here.
-  _ <- execute expiredReservedDispatchSql ()
-  _ <- execute expiredClaimedDispatchSql ()
-  -- Decode while the reservation is still rollbackable. Autocommit would
-  -- retain the lease if a persisted body failed its typed row decoder.
-  rows <-
-    withTransaction $
-      query
-        "WITH candidates AS ( \
-        \ SELECT md.canonical_message_id FROM message_dispatches md \
-        \ WHERE md.status IN ('pending', 'failed', 'deferred') \
-        \   AND md.next_attempt_at <= now() \
-        \   AND max_lease_free(md.lease_owner, md.lease_expires_at) \
-        \   AND (?::bigint IS NULL OR md.canonical_message_id = ?) \
-        \ ORDER BY md.next_attempt_at, md.canonical_message_id \
-        \ FOR UPDATE OF md SKIP LOCKED LIMIT ? \
-        \), claimed AS ( \
-        \ UPDATE message_dispatches md \
-        \ SET status = 'reserved', lease_owner = ?, \
-        \     lease_expires_at = max_lease_until(?), updated_at = now() \
-        \ FROM candidates c WHERE md.canonical_message_id = c.canonical_message_id \
-        \ RETURNING md.canonical_message_id, md.attempt_count + 1 AS attempt_count \
-        \) \
-        \SELECT c.canonical_message_id, m.message_id, m.group_id, m.user_id, m.self_id, \
-        \       m.author_principal_id, self_identity.principal_id, \
-        \       m.canonical_content, m.origin_endpoint_id, m.reply_to_canonical_message_id, \
-        \       m.source_platform, m.sender_nickname, c.attempt_count \
-        \FROM claimed c \
-        \JOIN messages m USING (canonical_message_id) \
-        \JOIN conversation_endpoints origin_endpoint \
-        \  ON origin_endpoint.endpoint_id = m.origin_endpoint_id \
-        \JOIN platform_accounts origin_account \
-        \  ON origin_account.platform_account_id = origin_endpoint.platform_account_id \
-        \JOIN principal_identities self_identity \
-        \  ON self_identity.platform_account_id = origin_endpoint.platform_account_id \
-        \ AND self_identity.native_user_id = origin_account.native_account_id \
-        \ORDER BY c.canonical_message_id"
-        ( mCanonical,
-          mCanonical,
-          limit,
-          workerId,
-          realToFrac leaseDuration :: Double
-        )
-  pure (toDispatchClaim <$> (rows :: [DispatchClaimRow]))
-
--- | Move one reservation into the effectful dispatch phase.  The attempt is
--- counted, and its lease begins again, only here: a batch tail that never
--- reaches this transition was never attempted and is safe to re-offer.
-startDispatch ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  CanonicalMessageId ->
-  Int ->
-  NominalDiffTime ->
-  Eff es Bool
-startDispatch workerId (CanonicalMessageId canonical) attempt leaseDuration = do
-  changed <-
-    execute
-      "UPDATE message_dispatches \
-      \ SET status = 'claimed', attempt_count = attempt_count + 1, \
-      \     last_attempt_at = now(), lease_expires_at = max_lease_until(?), updated_at = now() \
-      \ WHERE canonical_message_id = ? AND status = 'reserved' \
-      \   AND lease_owner = ? AND attempt_count + 1 = ?"
-      (realToFrac leaseDuration :: Double, canonical, workerId, attempt)
-  pure (changed == 1)
-
--- | Settle a claimed row, if this is still the claim that owns it.
---
--- Fenced on 'attemptCount', the value the claim returned.  A worker identity
--- is per process, not per claim, so owner alone cannot tell one of this
--- worker's claims of a row from the next one — and the two can overlap, since
--- a turn's epilogue settles unconditionally and may unwind after the row has
--- been deferred, released, and taken again.  The attempt does tell them apart.
-completeDispatch ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  CanonicalMessageId ->
-  -- | The claim's attempt, as returned by 'claimDispatch'.
-  Int ->
-  DispatchCompletion ->
-  Eff es Bool
-completeDispatch workerId (CanonicalMessageId canonical) attempt completion = do
-  changed <- case completion of
-    DispatchCompleted -> finish "completed" Nothing Nothing True
-    DispatchIgnored -> finish "ignored" Nothing Nothing True
-    DispatchRetry err next -> finish "failed" (Just err) (Just next) False
-  pure (changed == 1)
-  where
-    finish status lastError next completed =
-      execute
-        "UPDATE message_dispatches \
-        \ SET status = ?, last_error = ?, next_attempt_at = COALESCE(?, next_attempt_at), \
-        \     completed_at = CASE WHEN ? THEN now() ELSE completed_at END, \
-        \     lease_owner = NULL, lease_expires_at = NULL, updated_at = now() \
-        \ WHERE canonical_message_id = ? AND status = 'claimed' \
-        \   AND lease_owner = ? AND attempt_count = ?"
-        (status :: Text, lastError, next, completed, canonical, workerId, attempt)
+  forM (listToMaybe (rows :: [DispatchRow])) $ \row -> do
+    principals <- mentionPrincipalsFor (mentionIdentities row.drBody)
+    pure
+      DispatchMessage
+        { canonicalId = CanonicalMessageId row.drCanonical,
+          groupId = GroupId row.drGroup,
+          userId = UserId row.drUser,
+          selfId = UserId row.drSelf,
+          authorPrincipalId = PrincipalId row.drAuthor,
+          selfPrincipalId = PrincipalId row.drSelfPrincipal,
+          body = row.drBody,
+          replyTo = CanonicalMessageId <$> row.drReply,
+          sourcePlatform = parsePlatform row.drPlatform,
+          senderDisplayName = row.drName,
+          mentionPrincipals = principals
+        }
 
 -- | Separate platform lanes isolate stalled transports. FIFO is per endpoint,
 -- and each endpoint belongs to exactly one lane.
@@ -2032,30 +1833,6 @@ claimDelivery ::
 claimDelivery workerId (DeliveryId delivery) leaseDuration = do
   claims <- claimDeliveriesWhere workerId (Just delivery) Nothing 1 leaseDuration
   pure (listToMaybe claims)
-
--- | A reservation has not crossed the effect boundary.  If its owner died
--- before starting it, re-offering is always safe and must not manufacture an
--- outcome-unknown attempt.
-expiredReservedDispatchSql :: Query
-expiredReservedDispatchSql =
-  "UPDATE message_dispatches \
-  \ SET status = 'pending', lease_owner = NULL, lease_expires_at = NULL, \
-  \     updated_at = now() \
-  \ WHERE status = 'reserved' \
-  \   AND (lease_expires_at IS NULL OR lease_expires_at < now())"
-
--- | Mark expired claimed dispatches outcome-unknown. They may already have
--- produced a reply, so expiry alone must not make them eligible for retry.
-expiredClaimedDispatchSql :: Query
-expiredClaimedDispatchSql =
-  "UPDATE message_dispatches \
-  \ SET status = 'outcome_unknown', \
-  \     lease_owner = NULL, lease_expires_at = NULL, \
-  \     last_error = COALESCE(last_error, \
-  \       'dispatch lease expired before the turn recorded an outcome'), \
-  \     updated_at = now() \
-  \ WHERE status = 'claimed' \
-  \   AND (lease_expires_at IS NULL OR lease_expires_at < now())"
 
 -- | A worker can disappear after durably claiming a non-idempotent send but
 -- before recording the transport outcome.  Retrying that row could duplicate
@@ -3066,24 +2843,6 @@ toClaim row =
           attemptCount = row.dcAttemptCount,
           capabilities = outboundCapsFromValue row.dcCapabilities
         }
-
-toDispatchClaim :: DispatchClaimRow -> DispatchClaim
-toDispatchClaim row =
-  DispatchClaim
-    { canonicalMessageId = CanonicalMessageId row.dcrCanonicalMessageId,
-      compatibilityMessageId = row.dcrMessageId,
-      compatibilityConversationId = row.dcrGroupId,
-      compatibilityUserId = row.dcrUserId,
-      compatibilitySelfId = row.dcrSelfId,
-      authorPrincipalId = PrincipalId row.dcrAuthorPrincipalId,
-      selfPrincipalId = PrincipalId row.dcrSelfPrincipalId,
-      body = row.dcrContent,
-      originEndpointId = EndpointId row.dcrOriginEndpointId,
-      replyToCanonicalMessageId = row.dcrReplyToCanonicalMessageId,
-      sourcePlatform = parsePlatform row.dcrSourcePlatform,
-      senderDisplayName = row.dcrSenderDisplayName,
-      attemptCount = row.dcrAttemptCount
-    }
 
 renderConversationKind :: ConversationKind -> Text
 renderConversationKind = \case

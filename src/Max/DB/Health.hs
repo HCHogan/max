@@ -23,19 +23,6 @@ operationalChecks =
       "SELECT count(*) FROM message_deliveries \
       \WHERE status IN ('reserved', 'sending') AND lease_expires_at <= now()"
     ),
-    ( "dispatch_retryable",
-      False,
-      "SELECT count(*) FROM message_dispatches WHERE status = 'failed'"
-    ),
-    ( "dispatch_outcome_unknown",
-      True,
-      "SELECT count(*) FROM message_dispatches WHERE status = 'outcome_unknown'"
-    ),
-    ( "dispatch_expired_lease",
-      True,
-      "SELECT count(*) FROM message_dispatches \
-      \WHERE status IN ('reserved', 'claimed') AND lease_expires_at <= now()"
-    ),
     ( "media_parked",
       True,
       "SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL"

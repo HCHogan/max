@@ -1,6 +1,6 @@
 module Max.Handler
   ( handleEvents,
-    dispatchPendingWorker,
+    ingressWorker,
     dispatchProactive,
     dispatchMonitorFire,
     jobsWorker,
@@ -90,10 +90,6 @@ import Max.DB.Monitor
     expireElaboratedMonitorFire,
   )
 import Max.DB.Monitor.Admission qualified as MonitorJob
-import Max.DB.Notify
-  ( WorkChannel (DispatchWork),
-    claimOrWait,
-  )
 import Max.DB.QQBackfill
   ( QQBackfillEndpoint (..),
     QQBackfillResult (..),
@@ -115,11 +111,6 @@ import Max.Dispatch
     dispatchMentionsSelf,
     dispatchTextWithoutSelf,
     stripDispatchVerb,
-  )
-import Max.Dispatch.Lease
-  ( DispatchOwner (DispatchOwner),
-    dispatchLeaseSeconds,
-    settleDispatchOwner,
   )
 import Max.Effects.Agent
   ( Agent,
@@ -175,6 +166,7 @@ import Max.Platform.Failure
   ( PlatformFailure (..),
     renderPlatformFailure,
   )
+import Max.Platform.Ingress (Ingress, nextIngress, queueIngest)
 import Max.Platform.QQ
   ( ensureQQEndpoint,
     ensureQQEndpointFor,
@@ -188,25 +180,7 @@ import Max.Platform.QQHistory
     readQQHistoryPage,
   )
 import Max.Platform.Store
-  ( DispatchClaim
-      ( attemptCount,
-        authorPrincipalId,
-        body,
-        canonicalMessageId,
-        compatibilityConversationId,
-        compatibilitySelfId,
-        compatibilityUserId,
-        replyToCanonicalMessageId,
-        selfPrincipalId,
-        senderDisplayName,
-        sourcePlatform
-      ),
-    DispatchCompletion
-      ( DispatchCompleted,
-        DispatchIgnored,
-        DispatchRetry
-      ),
-    IngestOptions
+  ( IngestOptions
       ( createDispatch,
         createMirrorDeliveries,
         qqProvenanceSegments,
@@ -233,20 +207,15 @@ import Max.Platform.Store
         targetCanonicalMessageId
       ),
     RegisteredEndpoint (compatibilityConversationId, endpointId),
-    claimDispatch,
-    claimDispatches,
-    completeDispatch,
     conversationAdvertisedCaps,
     defaultIngestOptions,
     enqueueReaction,
     ensureEndpointPrincipals,
     ingestEnvelope,
-    loadDispatchClaim,
-    mentionPrincipalsFor,
+    loadDispatchMessage,
     recordInternalMessage,
     rememberConversationTitle,
     resolveMentionIdentities,
-    startDispatch,
   )
 import Max.Platform.Types
   ( AdvertisedCaps (..),
@@ -254,7 +223,6 @@ import Max.Platform.Types
     NativeUserId (..),
     Platform (PlatformQQ),
     PrincipalId (..),
-    PrincipalIdentityId,
     ReactionAction (..),
     noAdvertisedCaps,
   )
@@ -485,10 +453,9 @@ handleEvents q fetchSig mIntent clientRef = loop
           -- and fold the just-arrived live-tail message.
           env :: BotEnv <- ask
           for_ env.beEpisodeScheduler $ \scheduler -> liftIO (bumpEpisode scheduler gm.groupId)
-          persisted <- persist source raw gm
+          persisted <- persist env.beIngress source raw gm
           case persisted of
-            IngestDurable canonical ->
-              processCanonicalDispatch "event-handler" fetchSig activeIntent canonical
+            IngestDurable _ -> pure ()
             IngestDuplicate -> do
               let MessageId messageId = gm.messageId
               logTrace "ingest: duplicate source event ignored" $
@@ -534,8 +501,8 @@ handleEvents q fetchSig mIntent clientRef = loop
 
 -- | Classify command syntax before persistence, including malformed commands.
 -- Reply-to-bot lookup and other dispatch decisions happen later.
-persist :: (Log :> es, WithConnection :> es, IOE :> es) => T.Text -> Value -> GroupMessage -> Eff es IngestOutcome
-persist source raw gm =
+persist :: (Log :> es, WithConnection :> es, IOE :> es) => Ingress -> T.Text -> Value -> GroupMessage -> Eff es IngestOutcome
+persist ingress source raw gm =
   trySync persistOne >>= \case
     Right outcome -> pure outcome
     Left e -> do
@@ -565,6 +532,7 @@ persist source raw gm =
                   [ "canonical_message_id" .= fresh.canonicalMessageId,
                     "content" .= digest fresh.canonicalBody
                   ]
+              liftIO (queueIngest ingress (Ingested fresh))
               pure (IngestDurable fresh.canonicalMessageId)
             AlreadyIngested _ -> pure IngestDuplicate
             DeliveryEcho _ -> pure IngestDuplicate
@@ -866,11 +834,9 @@ nonEmptyError :: [T.Text] -> Maybe T.Text
 nonEmptyError [] = Nothing
 nonEmptyError errors = Just (T.take 4000 (T.intercalate "; " errors))
 
--- | Recover the commit-to-runtime crash window.  The source adapter may call
--- 'processCanonicalDispatch' immediately, but this worker is the authority:
--- every pending row remains discoverable after process death and one lease
--- winner evaluates its trigger eligibility.
-dispatchPendingWorker ::
+-- | A dispatch failure is local to that message. It may already have run a
+-- command, so leave the history for inspection and never replay it automatically.
+ingressWorker ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
@@ -882,112 +848,23 @@ dispatchPendingWorker ::
     Reader ModelCatalog :> es,
     IOE :> es
   ) =>
-  T.Text ->
   FetchSignal ->
   Maybe IntentState ->
   Eff es ()
-dispatchPendingWorker workerId fetchSig mIntent = localDomain "dispatch" loop
+ingressWorker fetchSig mIntent = localDomain "dispatch" $ forever $ do
+  env :: BotEnv <- ask
+  canonical <- liftIO (nextIngress env.beIngress)
+  (loadDispatchMessage canonical >>= mapM_ dispatch)
+    `catchSync` \err ->
+      logAttention
+        "message dispatch failed; not replayed"
+        (object ["canonical_message_id" .= canonical, "error" .= show err])
   where
-    loop = do
-      claims <-
-        claimOrWait DispatchWork $
-          claimDispatches workerId dispatchBatchSize dispatchLeaseSeconds
-      forM_ claims (runDispatchClaim workerId fetchSig mIntent)
-      loop
-
-processCanonicalDispatch ::
-  ( Blob :> es,
-    Log :> es,
-    WithConnection :> es,
-    PlatformQuery :> es,
-    Outbound :> es,
-    Agent :> es,
-    Concurrent :> es,
-    Reader BotEnv :> es,
-    Reader ModelCatalog :> es,
-    IOE :> es
-  ) =>
-  T.Text ->
-  FetchSignal ->
-  Maybe IntentState ->
-  CanonicalMessageId ->
-  Eff es ()
-processCanonicalDispatch workerId fetchSig mIntent canonical =
-  claimDispatch workerId canonical dispatchLeaseSeconds >>= mapM_ (runDispatchClaim workerId fetchSig mIntent)
-
-runDispatchClaim ::
-  ( Blob :> es,
-    Log :> es,
-    WithConnection :> es,
-    PlatformQuery :> es,
-    Outbound :> es,
-    Agent :> es,
-    Concurrent :> es,
-    Reader BotEnv :> es,
-    Reader ModelCatalog :> es,
-    IOE :> es
-  ) =>
-  T.Text ->
-  FetchSignal ->
-  Maybe IntentState ->
-  DispatchClaim ->
-  Eff es ()
-runDispatchClaim workerId fetchSig mIntent claim =
-  startDispatch workerId claim.canonicalMessageId claim.attemptCount dispatchLeaseSeconds >>= \case
-    False ->
-      logInfo "canonical dispatch reservation was no longer owned" $
-        object ["canonical_message_id" .= claim.canonicalMessageId, "worker" .= workerId]
-    True ->
-      trySync
-        ( do
-            mentionPrincipals <- mentionPrincipalsFor (mentionIdentities claim.body)
-            let message = dispatchMessage mentionPrincipals claim
-            enqueueImages fetchSig message
-            enqueueForwards fetchSig message
-            enqueueFiles fetchSig message
-            onDispatchMessage (Just owner) mIntent message
-        )
-        >>= \case
-          -- Queued turns have already settled their short ingress claim.
-          Right ClaimSettledHere -> void (completeDispatch workerId claim.canonicalMessageId claim.attemptCount DispatchCompleted)
-          Right ClaimQueued -> pure ()
-          Left e -> failClaim (T.pack (show (e :: SomeException)))
-  where
-    owner = DispatchOwner workerId claim.canonicalMessageId claim.attemptCount
-    failClaim err = do
-      now <- liftIO getCurrentTime
-      let retryAt = addUTCTime (dispatchRetrySeconds claim.attemptCount) now
-      logAttention "canonical dispatch failed" $
-        object
-          [ "canonical_message_id" .= claim.canonicalMessageId,
-            "attempt" .= claim.attemptCount,
-            "error" .= err
-          ]
-      void (completeDispatch workerId claim.canonicalMessageId claim.attemptCount (DispatchRetry err retryAt))
-
--- | Runtime view of the canonical claim. No transport event or legacy
--- segment projection exists beyond the QQ ingress boundary.
-dispatchMessage :: Map.Map PrincipalIdentityId PrincipalId -> DispatchClaim -> DispatchMessage
-dispatchMessage mentionPrincipals claim =
-  DispatchMessage
-    { selfId = UserId claim.compatibilitySelfId,
-      groupId = GroupId claim.compatibilityConversationId,
-      userId = UserId claim.compatibilityUserId,
-      selfPrincipalId = claim.selfPrincipalId,
-      authorPrincipalId = claim.authorPrincipalId,
-      canonicalId = claim.canonicalMessageId,
-      body = claim.body,
-      replyTo = CanonicalMessageId <$> claim.replyToCanonicalMessageId,
-      senderDisplayName = claim.senderDisplayName,
-      sourcePlatform = claim.sourcePlatform,
-      mentionPrincipals
-    }
-
-dispatchBatchSize :: Int
-dispatchBatchSize = 32
-
-dispatchRetrySeconds :: Int -> NominalDiffTime
-dispatchRetrySeconds attempts = fromIntegral (min (300 :: Int) (2 ^ min 8 (max 0 attempts)))
+    dispatch message = do
+      enqueueImages fetchSig message
+      enqueueForwards fetchSig message
+      enqueueFiles fetchSig message
+      onDispatchMessage mIntent message
 
 onDispatchMessage ::
   ( Blob :> es,
@@ -1001,14 +878,12 @@ onDispatchMessage ::
     Reader ModelCatalog :> es,
     IOE :> es
   ) =>
-  -- | The dispatch row behind this message, when the caller holds its claim.
-  Maybe DispatchOwner ->
   Maybe IntentState ->
   DispatchMessage ->
-  Eff es ClaimDisposition
-onDispatchMessage owner mIntent gm = do
+  Eff es ()
+onDispatchMessage mIntent gm = do
   routed <- routeTaskInput gm
-  if routed then pure ClaimSettledHere else onConversationMessage owner mIntent gm
+  unless routed (onConversationMessage mIntent gm)
 
 routeTaskInput ::
   (Log :> es, WithConnection :> es, PlatformQuery :> es, Outbound :> es, Reader BotEnv :> es, IOE :> es) =>
@@ -1071,8 +946,8 @@ onConversationMessage ::
     Reader ModelCatalog :> es,
     IOE :> es
   ) =>
-  Maybe DispatchOwner -> Maybe IntentState -> DispatchMessage -> Eff es ClaimDisposition
-onConversationMessage owner mIntent gm = do
+  Maybe IntentState -> DispatchMessage -> Eff es ()
+onConversationMessage mIntent gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
   logInfo "group message" $
@@ -1098,23 +973,19 @@ onConversationMessage owner mIntent gm = do
   case trig of
     -- Not addressed: hand the message to the intent classifier —
     -- maybe the bot wants to join in anyway.
-    TriggerNone -> settledHere (for_ mIntent $ \st -> liftIO (enqueueIntent st gm))
-    TriggerPong -> settledHere (noteActivity >> sendPong gm)
+    TriggerNone -> for_ mIntent $ \st -> liftIO (enqueueIntent st gm)
+    TriggerPong -> noteActivity >> sendPong gm
     TriggerCommand body
       | Right (Just (Btw question)) <- parseCommand body,
         not (T.null (T.strip question)) -> do
           noteActivity
-          dispatchLLMWith (NewTurn StartSeparateTurn) owner mIntent OriginDirect (stripDispatchVerb gm)
-          pure ClaimQueued
-      | otherwise -> settledHere (noteActivity >> dispatchCommand mIntent gm body)
-    TriggerCommandError err -> settledHere (replyText gm ("命令解析失败:\n" <> err))
+          dispatchLLMWith (NewTurn StartSeparateTurn) mIntent OriginDirect (stripDispatchVerb gm)
+      | otherwise -> noteActivity >> dispatchCommand mIntent gm body
+    TriggerCommandError err -> replyText gm ("命令解析失败:\n" <> err)
     -- The queue retains eligibility and the original trigger until execution.
     TriggerLLM _ -> do
       noteActivity
-      dispatchLLM owner mIntent OriginDirect gm
-      pure ClaimQueued
-  where
-    settledHere act = act >> pure ClaimSettledHere
+      dispatchLLM mIntent OriginDirect gm
 
 classifyDispatch :: Bool -> DispatchMessage -> Trigger
 classifyDispatch repliesToBot gm =
@@ -1183,7 +1054,7 @@ onPoke mIntent pk
              Map.lookup (NativeUserId (tshow pokerRaw)) principals
            ) of
         (Just selfPrincipal, Just pokerPrincipal) ->
-          dispatchLLM Nothing mIntent OriginPoke $
+          dispatchLLM mIntent OriginPoke $
             pokeTrigger pk selfPrincipal pokerPrincipal mName
         _ ->
           logAttention "poke: could not resolve principals" $
@@ -1272,9 +1143,9 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
           logInfo "btw: side question" $
             object ["len" .= T.length askBody]
           -- Strip only the command verb, preserving reply relations and attachments.
-          dispatchLLMWith (NewTurn StartSeparateTurn) Nothing mIntent OriginDirect (stripDispatchVerb gm)
+          dispatchLLMWith (NewTurn StartSeparateTurn) mIntent OriginDirect (stripDispatchVerb gm)
         FeedbackNote _ ->
-          dispatchLLM Nothing mIntent OriginDirect gm
+          dispatchLLM mIntent OriginDirect gm
 
     -- Recorded against the DM's pseudo-group rather than the group the
     -- command came from: that is the conversation it actually appeared
@@ -1344,7 +1215,7 @@ dispatchProactive ::
 dispatchProactive mIntent batch = case unsnoc batch of
   Nothing -> pure ()
   Just (_, trigger) ->
-    dispatchLLM Nothing mIntent OriginProactive trigger
+    dispatchLLM mIntent OriginProactive trigger
 
 dispatchMonitorFire ::
   ( Log :> es,
@@ -1358,12 +1229,10 @@ dispatchMonitorFire ::
 dispatchMonitorFire fire = case fire.emfClaimOwner of
   Nothing -> pure ()
   Just owner -> do
-    seedClaim <- maybe (pure Nothing) loadDispatchClaim fire.emfSeedCanonicalMessage
+    seedClaim <- maybe (pure Nothing) loadDispatchMessage fire.emfSeedCanonicalMessage
     case seedClaim of
       Nothing -> expire owner "arming principal no longer has an inbound dispatch seed"
-      Just claim -> do
-        principals <- mentionPrincipalsFor (mentionIdentities claim.body)
-        let seed = dispatchMessage principals claim
+      Just seed -> do
         if seed.groupId /= GroupId fire.emfGroupId || seed.authorPrincipalId /= fire.emfArmedByPrincipal
           then expire owner "arming principal provenance no longer resolves in this conversation"
           else do
@@ -1442,13 +1311,12 @@ jobsWorker = do
           when publish (liftIO (Jobs.queueJobResultNotice env.beJobs value.run))
           liftIO (Jobs.releaseJobNotice env.beJobs value.run)
         _ -> do
-          source <- loadDispatchClaim job.spec.source
-          case source of
-            Just claim | GroupId claim.compatibilityConversationId == job.spec.group -> do
-              principals <- mentionPrincipalsFor (mentionIdentities claim.body)
-              let trigger = (dispatchMessage principals claim) {body = Body [], replyTo = Nothing, mentionPrincipals = Map.empty}
+          sourceMessage <- loadDispatchMessage job.spec.source
+          case sourceMessage of
+            Just source | source.groupId == job.spec.group -> do
+              let trigger = source {body = Body [], replyTo = Nothing, mentionPrincipals = Map.empty}
               for_ job.spec.monitor $ \monitor -> when backgroundWork (MonitorJob.markMonitorJobStarted monitor.fireId)
-              dispatchLLMWith start Nothing Nothing OriginTask trigger
+              dispatchLLMWith start Nothing OriginTask trigger
             _ -> failed "task source provenance unavailable"
       )
       `catchSync` \exception -> failed (T.pack (show (exception :: SomeException)))
@@ -1458,12 +1326,6 @@ taskProgressEvent jobs identifier = \case
   AgentProgressText body -> void (liftIO (Jobs.reportJobProgress jobs identifier (T.take 40000 body)))
   AgentToolDebug _ -> pure ()
   AgentFinalStreamText _ -> pure False
-
--- | Ingress settles here or has already transferred to the process queue.
-data ClaimDisposition
-  = ClaimSettledHere
-  | ClaimQueued
-  deriving stock (Eq, Show)
 
 dispatchLLM ::
   ( Blob :> es,
@@ -1477,17 +1339,15 @@ dispatchLLM ::
     Reader ModelCatalog :> es,
     IOE :> es
   ) =>
-  -- | The dispatch row being answered, when the caller holds one.
-  Maybe DispatchOwner ->
   Maybe IntentState ->
   TriggerOrigin ->
   DispatchMessage ->
   Eff es ()
-dispatchLLM owner intent origin message =
+dispatchLLM intent origin message =
   let allowInput = case parseCommand (dispatchTextWithoutSelf message) of
         Right (Just (Btw _)) -> False
         _ -> True
-   in dispatchLLMWith (NewTurn (if allowInput then AdmitFrontendInput else StartSeparateTurn)) owner intent origin message
+   in dispatchLLMWith (NewTurn (if allowInput then AdmitFrontendInput else StartSeparateTurn)) intent origin message
 
 dispatchLLMWith ::
   ( Blob :> es,
@@ -1502,13 +1362,11 @@ dispatchLLMWith ::
     IOE :> es
   ) =>
   TurnStart ->
-  -- | Ingress custody ends when the process queue accepts the turn.
-  Maybe DispatchOwner ->
   Maybe IntentState ->
   TriggerOrigin ->
   DispatchMessage ->
   Eff es ()
-dispatchLLMWith start owner mIntent origin gm = do
+dispatchLLMWith start mIntent origin gm = do
   env :: BotEnv <- ask
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
@@ -1569,9 +1427,8 @@ dispatchLLMWith start owner mIntent origin gm = do
           then do
             finishAgentTurn durable TurnAborted 0 (Just "conversation queue full") `finally` launchFailed
             when (origin == OriginDirect) (replyText gm "当前处理队列已满，请稍后重试。")
-            settleOwner DispatchCompleted
           else
-            (settleOwner DispatchCompleted >> launchTurn env outputCaps ident gidRaw restore turn durable ticket)
+            launchTurn env outputCaps ident gidRaw restore turn durable ticket
               `onException` (for_ ticket (liftIO . Conversation.release env.beConversations) >> launchFailed)
         pure True
   unless launched $ do
@@ -1580,7 +1437,6 @@ dispatchLLMWith start owner mIntent origin gm = do
     -- Signal declined direct triggers with a reaction during drain.
     when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
       queueQQReaction gm.groupId gm.canonicalId failureFaceId True
-    settleOwner DispatchIgnored
   where
     allowInput = startAllowsInput start
     backgroundJob = case start of JobTurn job -> Just job; _ -> Nothing
@@ -1662,9 +1518,6 @@ dispatchLLMWith start owner mIntent origin gm = do
         `catchSync` \e ->
           logAttention "browser scope finalizer failed" $
             object ["error" .= T.pack (show (e :: SomeException))]
-
-    -- Ingress settlement is guarded by owner and claim attempt.
-    settleOwner = settleDispatchOwner owner
 
     work outputCaps turn durable = do
       liftIO (setTurnPhase turn "starting")

@@ -1,10 +1,5 @@
--- | Platform-neutral runtime view of a canonical dispatch claim.
---
--- This is deliberately not a transport event. It carries the stored IR, the
--- semantic reply relation, and the canonical identities everything
--- model-facing is named by. The compatibility ids that remain
--- ('selfId', 'groupId', 'userId') are the session/command/admin plumbing ADR
--- 003 deliberately left alone; nothing rendered to a model reads them.
+-- | Canonical content and principal identities used by commands and Agent.
+-- Platform wire formats remain in their adapters.
 module Max.Dispatch
   ( DispatchMessage (..),
     dispatchText,

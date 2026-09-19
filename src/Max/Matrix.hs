@@ -73,6 +73,7 @@ import Max.Platform.Delivery
   )
 import Max.Platform.Delivery.Parts
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
+import Max.Platform.Ingress (Ingress, queueIngest)
 import Max.Platform.Store
   ( CursorRecord (..),
     DeliveryClaim (..),
@@ -164,8 +165,9 @@ matrixWorker ::
   HttpRuntime ->
   MatrixConfig ->
   Maybe EpisodeScheduler ->
+  Ingress ->
   Eff es ()
-matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
+matrixWorker runtime cfg episodeScheduler ingress = localDomain "matrix" $ do
   registered <-
     ensureConfiguredEndpoint
       PlatformMatrix
@@ -257,6 +259,7 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
                 rawPayload = Just event.raw
               }
       result <- ingestEnvelope options envelope
+      liftIO (queueIngest ingress result)
       case result of
         Ingested fresh ->
           logInfo "matrix event ingested" $

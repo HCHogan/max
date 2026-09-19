@@ -138,7 +138,7 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.PlatformSpec` — platform-id mapping
 - `Max.Platform.DeliverySpec` — canonical inline/blob/base64 media resolution
   and bounded delivery projection
-- `Max.PlatformStoreSpec` (DB) — native-event dedupe, cursor CAS, dispatch and
+- `Max.PlatformStoreSpec` (DB) — native-event dedupe, process ingress, cursor CAS and
   delivery leases, mirror fan-out, outcome-unknown parking, echo/status
   reconciliation, and endpoint diagnostics
 - `Max.PromptSpec` — `renderContext`: the flat transcript and the

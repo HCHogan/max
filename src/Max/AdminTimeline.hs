@@ -180,13 +180,9 @@ workSummaryValue conversation = do
       \                         JOIN messages message USING (canonical_message_id) \
       \                         WHERE message.conversation_id = ? \
       \                           AND delivery.status = 'suppressed'), \
-      \ 'dispatch_active', (SELECT count(*) FROM message_dispatches dispatch \
-      \                     JOIN messages message USING (canonical_message_id) \
-      \                     WHERE message.conversation_id = ? \
-      \                       AND dispatch.status IN ('pending', 'reserved', 'claimed', 'failed', 'deferred')), \
       \ 'media_pending_global', (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NULL), \
       \ 'media_parked_global', (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL))"
-      (conversation, conversation, conversation, conversation, conversation)
+      (conversation, conversation, conversation, conversation)
   case rows :: [Only Value] of
     [Only summary] -> pure summary
     _ -> error "workSummaryValue: query returned an unexpected shape"

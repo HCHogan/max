@@ -89,15 +89,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.AdminTimeline" $ do
         conn
         "UPDATE message_deliveries SET status = 'reserved' WHERE canonical_message_id = ?"
         (Only messageId)
-    _ <- withConn pool $ \conn ->
-      execute
-        conn
-        "UPDATE message_dispatches SET status = 'deferred' WHERE canonical_message_id = ?"
-        (Only messageId)
     timeline <- withDb pool (loadAdminTimeline 45 Nothing 10)
     let rendered = maybe "" (TE.decodeUtf8 . LBS.toStrict . encode) timeline
     rendered `shouldSatisfy` T.isInfixOf "\"delivery_active\":1"
-    rendered `shouldSatisfy` T.isInfixOf "\"dispatch_active\":1"
 
   it "hydrates identities, authenticated blobs, forward children, raw unsupported data, and delivery audit" $ do
     endpoint <-

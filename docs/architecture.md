@@ -78,7 +78,7 @@ src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory
                    of the allowlisted compile-time source snapshot)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    Platform.Types/Store/Delivery (canonical conversations,
-                   identities, native provenance, cursor/dispatch/delivery
+                   identities, native provenance, cursor/delivery
                    leases), QQ normalization, Matrix and iMessage adapters,
                    AgentEvent (typed progress/debug/final-stream port and its
                    ReplySend/Outbound interpreter),
@@ -114,10 +114,10 @@ app/Main.hs        wires effects + workers + server
  Matrix ────┼─ normalize ─▶ canonical event/message transaction
  iMessage ──┘                 ├─ source provenance + source delivery
                               ├─ mirror endpoint delivery jobs
-                              └─ durable dispatch eligibility
+                              └─ fresh live event → bounded STM queue
                                            │
        ┌──────────────────────── handleEvents ───────────────────────────┐
-       │ claim one canonical dispatch after durable ingest              │
+       │ read one committed message from the process queue              │
        │   1. enqueueImages / enqueueForwards / enqueueFiles → fetch_jobs│
        │   2. classify (@bot / reply-to-bot / private / !cmd) →          │
        │        none / ping / !cmd / agent-turn                          │
@@ -141,7 +141,9 @@ app/Main.hs        wires effects + workers + server
 
 QQ, Matrix, and a configured iMessage chat may be endpoints of the same
 canonical conversation; an iMessage endpoint may also remain standalone.
-Required dispatch and delivery workers close both post-commit crash windows.
+The ingress queue belongs to the running process. Restart preserves messages but
+never reconstructs old dispatch work. Outbound delivery still uses its SQL queue
+until the publication cutover.
 Matrix retries reuse deterministic transaction IDs. Non-idempotent
 QQ/iMessage ambiguity is parked until echo/status reconciliation, never placed
 back on the retry queue by a timeout. Context, Historian, and memory therefore
@@ -569,9 +571,11 @@ BlobHost
 message, its reply relation, and per-endpoint delivery jobs first; leased
 workers reserve a batch but cross each row into `sending` only immediately
 before processing it. An expired unstarted reservation is safely re-offered;
-only a started send can become `outcome_unknown`. Dispatch admission uses the
-same `reserved → claimed` split, so a dead process cannot quarantine the
-untouched tail of a 32-row batch. Before the turn, `Handler` reads
+only a started send can become `outcome_unknown`. Inbound dispatch instead uses
+a bounded STM queue of newly committed message IDs. The common handler reads
+canonical content and identities, handles commands, and hands model work to the
+conversation queue. A failed dispatch is logged and never automatically rerun.
+Before the turn, `Handler` reads
 the conversation's semantic output capabilities. Content with a total lower
 path remains available across mixed endpoints; native encoding is decided per
 endpoint. QQ faces and reactions require an enabled QQ endpoint, and reaction
@@ -597,7 +601,7 @@ parts with stable transaction keys; QQ/iMessage require proof of no effect
 before retrying an uncertain part.
 
 `Max.Concurrent.Lease` scopes renewal and cancellation around delivery, fetch
-and maintenance work, while task/dispatch loops share its renewal primitive
+and maintenance work, while delivery and media loops share its renewal primitive
 with explicit domain policy. Delivery renewal covers media preparation through
 completion, and each part checks ownership before sending. Fetch settlement
 uses an attempt token so stale workers cannot clear or delete a successor's
@@ -709,7 +713,7 @@ only an explicitly host-authorized group source projected into a direct-message
 turn; reversed DM-to-group and same-kind projections cannot be constructed.
 
 Workers are assembled once at startup and supervised
-through `withWorkers`. Required queue owners (fetch, monitor, dispatch, plan,
+through `withWorkers`. Required queue owners (fetch, monitor, dispatch, Jobs,
 delivery) turn either an exception or a normal return into process failure.
 Config-disabled workers are omitted. Enabled optional edges (embedding,
 Historian, intent, admin, WeChat, Matrix, iMessage) are `RestartableWorker`s:

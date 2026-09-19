@@ -86,7 +86,8 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 
 ### D. Publication and maintenance
 
-- [ ] Replace durable dispatch/outbox execution with bounded local queues.
+- [x] Replace durable inbound dispatch execution with a bounded local queue.
+- [ ] Replace durable outbox execution with bounded local queues.
 - [ ] Keep platform receipts, reference mappings, current-run deduplication and
       conservative handling of uncertain sends.
 - [x] Replace embedding maintenance leases with a process-local lock and
@@ -330,3 +331,16 @@ maintained implementation record.
   and HLint checks pass. Retired the old started-row recovery/settlement cases.
   Effective src/app Haskell is 46,560 lines; core Haskell is 33,428. Publication,
   maintenance and context work remain before final acceptance.
+
+- Inbound dispatch now uses one bounded STM queue shared by QQ, Matrix, iMessage
+  and WeChat. Only freshly committed live messages enter it; source-native dedupe,
+  history backfill, principal attribution and reply provenance remain in the store.
+  Removed dispatch claims, retries, lease ownership, handoff dispositions and the
+  duplicate canonical-message projection. Jobs and reminders use the same typed
+  source reader. Migration 118 retires old pending work while preserving messages,
+  terminal history and unknown effects; startup never scans historical dispatches.
+  All Cabal targets build; 1,050 unit and 269 PostgreSQL examples pass. Replaced
+  three dispatch lease/reclaim tests with fresh-only queue and restart behavior;
+  retained source deduplication, corrupt-body, provenance and platform cases.
+  Upgrade, capability and HLint checks pass. Effective src/app Haskell is 46,224
+  lines; core Haskell is 33,098. Outbound and maintenance queues remain pending.

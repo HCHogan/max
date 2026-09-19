@@ -34,6 +34,7 @@ extra-source-files:
     test-db/fixtures/local-conversations-upgrade.sql
     test-db/fixtures/local-jobs-upgrade.sql
     test-db/fixtures/diagnostic-results-upgrade.sql
+    test-db/fixtures/local-ingress-upgrade.sql
     test-db/fixtures/browser-upgrade-after.sql
     assets/codesnap/*.tmTheme
     browser-image/*.patch
@@ -310,6 +311,7 @@ library
         Max.Platform.Delivery.Store
         Max.Platform.Types
         Max.Platform.Store
+        Max.Platform.Ingress
         Max.Platform.QQ
         Max.Prompt
         Max.Prompt.Render
@@ -376,7 +378,6 @@ library
         Max.Jobs
         Max.Turn.Types
         Max.Turn.Start
-        Max.Dispatch.Lease
         Max.Turn.Continuity
         Max.Time
         Max.Toolset

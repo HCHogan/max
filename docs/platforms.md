@@ -9,12 +9,14 @@ Omit it and the endpoint stands alone.
 ## Runtime invariants
 
 - Native inbound events deduplicate on `(endpoint_id, native_event_id)`.
-- Source event, canonical message, source delivery, mirror deliveries, and
-  dispatch eligibility commit in one transaction.
+- Source event, canonical message, source delivery and mirror deliveries commit
+  in one transaction. Fresh live-message eligibility is returned to the adapter.
 - Context, Historian, memory, `!clear`, and turn coordination read the
   canonical conversation ledger. Transport echoes never become a second row.
-- Agent dispatch and outbound deliveries use durable leases. A process crash
-  between commit and in-memory work is recovered by the required workers.
+- Fresh live messages enter a bounded process queue after commit. Repeated native
+  events and history backfill never enter it. Restart does not resume dispatches;
+  recorded history remains readable. Outbound delivery leases are still pending
+  conversion to process-local queues.
 - Matrix retries reuse the delivery idempotency key as the transaction ID.
 - QQ and iMessage park ambiguous sends. They resume only after an echo or
   authoritative status proves the prior attempt's outcome.

@@ -76,6 +76,7 @@ import Max.IR.Digest (digest)
 import Max.IR.Lower (OutboundCaps (..), Tier (TierNative), textOnlyCaps)
 import Max.Platform (PlatformBackend (..))
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
+import Max.Platform.Ingress (Ingress, queueIngest)
 import Max.Platform.Store
   ( IngestResult (..),
     NewIngest (..),
@@ -400,8 +401,8 @@ data Health = Health
   }
 
 -- | Long-lived callback listener.  Every allowlisted room is registered as a
--- canonical endpoint before ingress opens; frames publish an 'InboundEnvelope'
--- and atomically create dispatch/mirror work in 'ingestEnvelope'.
+-- canonical endpoint before ingress opens. Commit each normalized event and its
+-- media metadata, then queue its live dispatch in memory.
 --
 -- The watchdog runs alongside the listener rather than as its own worker
 -- because it exists only to describe this listener's health.
@@ -409,8 +410,9 @@ wechatHookWorker ::
   (WithConnection :> es, Blob :> es, Log :> es, Concurrent :> es, IOE :> es) =>
   HttpRuntime ->
   WechatHookConfig ->
+  Ingress ->
   Eff es ()
-wechatHookWorker runtime cfg = localDomain "wechathook" $ do
+wechatHookWorker runtime cfg ingress = localDomain "wechathook" $ do
   logInfo "wechathook worker started" $
     object
       [ "chatrooms" .= cfg.whChatrooms,
@@ -534,6 +536,7 @@ wechatHookWorker runtime cfg = localDomain "wechathook" $ do
               -- body and in the store, and 'view_image' still cannot find it:
               -- that tool reads @message_images@, not the canonical body.
               for_ pendingImage (recordInboundImage fresh.canonicalMessageId)
+              liftIO (queueIngest ingress (Ingested fresh))
               logInfo "wechat event ingested" $
                 object
                   [ "native_event_id" .= nativeEvent,

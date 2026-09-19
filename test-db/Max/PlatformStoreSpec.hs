@@ -15,6 +15,7 @@ import Helpers (resultId, truncateAll, withDb)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.History (HistoryItem (..), fetchForwardChildrenInScope)
+import Max.Dispatch (DispatchMessage (canonicalId))
 import Max.HttpRuntime (httpRuntimeFromManagers)
 import Max.IR
 import Max.IR.Lower
@@ -23,7 +24,8 @@ import Max.Platform (PlatformBackend (..))
 import Max.Platform.Delivery (DeliveryOperation (..), DeliveryTransport (..), oneBotDeliveryTransport)
 import Max.Platform.Delivery.Parts
 import Max.Platform.Delivery.Store
-import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
+import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (Backfill, LiveDelivery))
+import Max.Platform.Ingress (newIngress, nextIngress, queueIngest)
 import Max.Platform.Store
 import Max.Platform.Store qualified as PlatformStore
 import Max.Platform.Types
@@ -32,6 +34,7 @@ import Network.HTTP.Client qualified as HTTP
 import OneBot.Action (Action (..), Response (..))
 import OneBot.Types (GroupId (..))
 import System.Directory (doesFileExist)
+import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: DbPool -> Spec
@@ -145,11 +148,14 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     [left, right] `shouldSatisfy` any isNew
     [left, right] `shouldSatisfy` any isDuplicate
 
-    (messages, events, pendingDispatches, sourceConfirmed, mirrorPending) <-
+    (messages, events, sourceConfirmed, mirrorPending) <-
       ledgerCounts pool matrix.endpointId qq.endpointId
     messages `shouldBe` 1
     events `shouldBe` 1
-    pendingDispatches `shouldBe` 1
+    ingress <- newIngress
+    mapM_ (queueIngest ingress) [left, right]
+    nextIngress ingress `shouldReturn` resultId left
+    timeout 10000 (nextIngress ingress) `shouldReturn` Nothing
     sourceConfirmed `shouldBe` 1
     mirrorPending `shouldBe` 1
 
@@ -558,95 +564,40 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
       `shouldReturn` True
     withDb pool (listUnconfirmedDeliveries PlatformMatrix 10) `shouldReturn` []
 
-  it "rejects corrupt durable bodies and rolls back dispatch and delivery reservations" $ do
+  it "rejects corrupt canonical bodies and rolls back delivery reservations" $ do
     (_, matrix) <- mirrorPair pool
     now <- getCurrentTime
     result <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "corrupt-body" "dispatch me"))
     let cid = (resultId result).unCanonicalMessageId
-        status = withConn pool $ \connection -> query connection "SELECT status FROM message_dispatches WHERE canonical_message_id=?" (Only cid)
-    statusBefore <- status :: IO [Only Text]
     _ <- withConn pool $ \connection -> execute connection "UPDATE messages SET canonical_content=jsonb_set(canonical_content,'{nodes}','[{\"type\":\"invalid-node\"}]'::jsonb) WHERE canonical_message_id=?" (Only cid)
-    withDb pool (claimDispatch "corrupt-reader" (CanonicalMessageId cid) 30) `shouldThrow` (\case ConversionFailed {} -> True; _ -> False)
-    statusAfter <- status
-    statusAfter `shouldBe` statusBefore
+    withDb pool (loadDispatchMessage (CanonicalMessageId cid)) `shouldThrow` (\case ConversionFailed {} -> True; _ -> False)
     let deliveryStatus = withConn pool $ \connection -> query connection "SELECT status FROM message_deliveries WHERE canonical_message_id=?" (Only cid)
     deliveryBefore <- deliveryStatus :: IO [Only Text]
     deliveryBefore `shouldSatisfy` (not . null)
     withDb pool (claimDeliveries "corrupt-reader" 10 30) `shouldThrow` (\case ConversionFailed {} -> True; _ -> False)
     deliveryStatus `shouldReturn` deliveryBefore
     _ <- withConn pool $ \connection -> execute connection "UPDATE messages SET canonical_content=jsonb_set(canonical_content,'{nodes}','[]'::jsonb) WHERE canonical_message_id=?" (Only cid)
-    repaired <- withDb pool (claimDispatch "repaired-reader" (CanonicalMessageId cid) 30)
-    fmap (.canonicalMessageId) repaired `shouldBe` Just (CanonicalMessageId cid)
+    repaired <- withDb pool (loadDispatchMessage (CanonicalMessageId cid))
+    fmap (.canonicalId) repaired `shouldBe` Just (CanonicalMessageId cid)
     deliveries <- withDb pool (claimDeliveries "repaired-reader" 10 30)
     fmap (.canonicalMessageId) deliveries `shouldBe` [CanonicalMessageId cid]
 
-  it "leases dispatch eligibility once and recovers only after its lease" $ do
+  it "queues only new live messages and never reconstructs dispatches on restart" $ do
     (_, matrix) <- mirrorPair pool
     now <- getCurrentTime
-    result <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-dispatch" "dispatch me"))
-    let cid = resultId result
-    first <- claimStartedDispatch pool "runtime-a" cid 30
-    fmap (.canonicalMessageId) first `shouldBe` Just cid
-    claimStartedDispatch pool "runtime-b" cid 30 `shouldReturn` Nothing
-    case first of
-      Nothing -> expectationFailure "expected dispatch claim"
-      Just claim -> do
-        completed <- withDb pool (completeDispatch "runtime-a" cid claim.attemptCount DispatchCompleted)
-        completed `shouldBe` True
-        claimStartedDispatch pool "runtime-b" cid 30 `shouldReturn` Nothing
-
-  it "re-offers an expired dispatch reservation without counting an attempt" $ do
-    (_, matrix) <- mirrorPair pool
-    now <- getCurrentTime
-    result <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-dispatch-reserved" "not started yet"))
-    let cid = resultId result
-    reserved <- withDb pool (claimDispatch "runtime-gone" cid 30)
-    fmap (.attemptCount) reserved `shouldBe` Just 1
-    _ <- withConn pool $ \conn ->
-      execute
-        conn
-        "UPDATE message_dispatches SET lease_expires_at = now() - interval '1 minute' \
-        \ WHERE canonical_message_id = ?"
-        (Only cid.unCanonicalMessageId)
-
-    reclaimed <- withDb pool (claimDispatch "runtime-next" cid 30)
-    fmap (.canonicalMessageId) reclaimed `shouldBe` Just cid
-    fmap (.attemptCount) reclaimed `shouldBe` Just 1
-    forM_ reclaimed $ \claim ->
-      withDb pool (startDispatch "runtime-next" cid claim.attemptCount 30)
-        `shouldReturn` True
-
-  -- The claim query only ever selects 'pending' and 'failed', so its lease
-  -- expiry test cannot reach a row abandoned in 'claimed' — that row is
-  -- outside the candidate set however long ago the lease ran out.  Nothing
-  -- else looked at it either, which is how one sat stranded in production for
-  -- three days.  Quarantine, not retry: the abandoned turn may already have
-  -- replied, and a duplicate reply cannot be withdrawn.
-  it "quarantines an abandoned dispatch claim instead of stranding or retrying it" $ do
-    (_, matrix) <- mirrorPair pool
-    now <- getCurrentTime
-    result <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-abandoned" "answer me"))
-    let cid = resultId result
-    claimed <- claimStartedDispatch pool "runtime-doomed" cid 30
-    fmap (.canonicalMessageId) claimed `shouldBe` Just cid
-
-    -- The worker dies here: the lease lapses with the row still 'claimed'.
-    _ <- withConn pool $ \conn ->
-      execute
-        conn
-        "UPDATE message_dispatches SET lease_expires_at = now() - interval '1 minute' \
-        \ WHERE canonical_message_id = ?"
-        (Only cid.unCanonicalMessageId)
-
-    -- Any later claim attempt sweeps it, and does not hand it back out.
-    claimStartedDispatch pool "runtime-next" cid 30 `shouldReturn` Nothing
-    status <- withConn pool $ \conn ->
-      query
-        conn
-        "SELECT status, lease_owner IS NULL, last_error IS NOT NULL \
-        \ FROM message_dispatches WHERE canonical_message_id = ?"
-        (Only cid.unCanonicalMessageId)
-    status `shouldBe` [("outcome_unknown" :: Text, True, True)]
+    ingress <- newIngress
+    let live = inbound matrix.endpointId now "live" "new question"
+    first <- withDb pool (ingestEnvelope defaultIngestOptions live)
+    duplicate <- withDb pool (ingestEnvelope defaultIngestOptions live)
+    backfill <- withDb pool (ingestEnvelope defaultIngestOptions ((inbound matrix.endpointId now "old" "history") {ingestClass = Backfill}))
+    suppressed <- withDb pool (ingestEnvelope defaultIngestOptions {createDispatch = False} (inbound matrix.endpointId now "disabled" "history only"))
+    mapM_ (queueIngest ingress) [first, duplicate, backfill, suppressed]
+    nextIngress ingress `shouldReturn` resultId first
+    timeout 10000 (nextIngress ingress) `shouldReturn` Nothing
+    restarted <- newIngress
+    timeout 10000 (nextIngress restarted) `shouldReturn` Nothing
+    restored <- withDb pool (loadDispatchMessage (resultId first))
+    fmap (.canonicalId) restored `shouldBe` Just (resultId first)
 
   it "maps every wire part echo and reply without prematurely settling the parent" $ do
     (qq, matrix) <- mirrorPair pool
@@ -840,15 +791,14 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     ledger <- withConn pool $ \conn ->
       query
         conn
-        "SELECT m.message_origin, md.status, count(pe.platform_event_id), count(d.delivery_id) \
+        "SELECT m.message_origin, count(pe.platform_event_id), count(d.delivery_id) \
         \ FROM messages m \
-        \ JOIN message_dispatches md USING (canonical_message_id) \
         \ LEFT JOIN platform_events pe USING (canonical_message_id) \
         \ LEFT JOIN message_deliveries d USING (canonical_message_id) \
         \ WHERE m.canonical_message_id = ? \
-        \ GROUP BY m.message_origin, md.status"
+        \ GROUP BY m.message_origin"
         (Only queued.canonicalMessageId.unCanonicalMessageId)
-    (ledger :: [(Text, Text, Int64, Int64)]) `shouldBe` [("outbound", "ignored", 0, 2)]
+    (ledger :: [(Text, Int64, Int64)]) `shouldBe` [("outbound", 0, 2)]
 
   it "publishes outbound reply relations and resolves the target native id" $ do
     conversation <- withDb pool (createConversation ConversationGroup (Just "Matrix only"))
@@ -1564,14 +1514,6 @@ claimStartedDeliveries pool owner limit lease = do
       `shouldReturn` True
   pure claims
 
-claimStartedDispatch :: DbPool -> Text -> CanonicalMessageId -> NominalDiffTime -> IO (Maybe DispatchClaim)
-claimStartedDispatch pool owner message lease = do
-  claimed <- withDb pool (claimDispatch owner message lease)
-  forM_ claimed $ \claim ->
-    withDb pool (startDispatch owner message claim.attemptCount lease)
-      `shouldReturn` True
-  pure claimed
-
 tuple8ToList :: (a, a, a, a, a, a, a, a) -> [a]
 tuple8ToList (a, b, c, d, e, f, g, h) = [a, b, c, d, e, f, g, h]
 
@@ -1585,7 +1527,7 @@ deliveriesFor pool (EndpointId endpoint) =
       \ WHERE endpoint_id = ? ORDER BY delivery_id"
       (Only endpoint)
 
-ledgerCounts :: DbPool -> EndpointId -> EndpointId -> IO (Int64, Int64, Int64, Int64, Int64)
+ledgerCounts :: DbPool -> EndpointId -> EndpointId -> IO (Int64, Int64, Int64, Int64)
 ledgerCounts pool (EndpointId source) (EndpointId target) = withConn pool $ \conn -> do
   rows <-
     query
@@ -1593,7 +1535,6 @@ ledgerCounts pool (EndpointId source) (EndpointId target) = withConn pool $ \con
       "SELECT \
       \ (SELECT count(*) FROM messages), \
       \ (SELECT count(*) FROM platform_events), \
-      \ (SELECT count(*) FROM message_dispatches WHERE status = 'pending'), \
       \ (SELECT count(*) FROM message_deliveries WHERE endpoint_id = ? AND status = 'confirmed'), \
       \ (SELECT count(*) FROM message_deliveries WHERE endpoint_id = ? AND status = 'pending')"
       (source, target)

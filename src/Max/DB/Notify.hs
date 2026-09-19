@@ -22,7 +22,7 @@ import Effectful.PostgreSQL.Connection (WithConnection, withConnection)
 import Max.DB.Transaction (withPinnedConnection)
 import System.Timeout (timeout)
 
-data WorkChannel = DispatchWork | DeliveryWork | MonitorWork
+data WorkChannel = DeliveryWork | MonitorWork
   deriving stock (Eq, Show)
 
 claimOrWait ::
@@ -55,13 +55,11 @@ claimOrWaitUntil waitMicros channel claim =
 
 listenQuery :: WorkChannel -> Query
 listenQuery = \case
-  DispatchWork -> "LISTEN max_dispatch_work"
   DeliveryWork -> "LISTEN max_delivery_work"
   MonitorWork -> "LISTEN max_monitor_work"
 
 unlistenQuery :: WorkChannel -> Query
 unlistenQuery = \case
-  DispatchWork -> "UNLISTEN max_dispatch_work"
   DeliveryWork -> "UNLISTEN max_delivery_work"
   MonitorWork -> "UNLISTEN max_monitor_work"
 

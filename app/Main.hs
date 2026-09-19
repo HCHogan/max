@@ -52,7 +52,7 @@ import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
-import Max.Handler (dispatchMonitorFire, dispatchPendingWorker, dispatchProactive, handleEvents, jobsWorker)
+import Max.Handler (dispatchMonitorFire, dispatchProactive, handleEvents, ingressWorker, jobsWorker)
 import Max.Historian (historianWorker)
 import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
 import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
@@ -67,6 +67,7 @@ import Max.Memory.Expiry (expiryWorker)
 import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
 import Max.Monitor (monitorWorker)
 import Max.Platform.Delivery (DeliveryTransport, deliveryWorker, oneBotDeliveryTransport)
+import Max.Platform.Ingress (newIngress)
 import Max.Platform.Runtime (qqBackend, runPlatforms)
 import Max.Platform.Types (Platform (..))
 import Max.Sandbox.Registry
@@ -130,6 +131,7 @@ main = do
           episodeScheduler <- newEpisodeScheduler
           intentState <- newIntentState
           conversations <- newConversations
+          ingress <- newIngress
           embeddingLock <- newEmbeddingLock
           startedAt <- getCurrentTime
           let qqEdge = qqBackend clientRef
@@ -158,6 +160,7 @@ main = do
                     beAdminTarget = adminTargets,
                     beTasks = tasks,
                     beConversations = conversations,
+                    beIngress = ingress,
                     beJobs = jobs,
                     beShutdown = shutdown,
                     beSandboxes = sandboxes,
@@ -312,7 +315,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
               "monitor-scheduler"
               RequiredWorker
               (monitorWorker cfg.timezone (ownerFor "monitors") dispatchMonitorFire),
-            worker "canonical-dispatch" RequiredWorker (dispatchPendingWorker (ownerFor "dispatch") fetchSig (intentState <$ env.beIntent)),
+            worker "canonical-dispatch" RequiredWorker (ingressWorker fetchSig (intentState <$ env.beIntent)),
             worker "jobs" RequiredWorker jobsWorker,
             worker "browser-workspaces" RestartableWorker (forever (browserMaintenance env.beBrowsers >> threadDelay 15_000_000)),
             worker
@@ -351,13 +354,13 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
             <> [ worker "call-pruner" RestartableWorker (callPruner cfg.adminCallRetentionDays)
                | _ <- maybeToList cfg.admin
                ]
-            <> [ worker "wechathook" RestartableWorker (wechatHookWorker httpRuntime wh)
+            <> [ worker "wechathook" RestartableWorker (wechatHookWorker httpRuntime wh env.beIngress)
                | wh <- maybeToList cfg.wechathook
                ]
-            <> [ worker "matrix" RestartableWorker (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler)
+            <> [ worker "matrix" RestartableWorker (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler env.beIngress)
                | matrixCfg <- maybeToList cfg.matrix
                ]
-            <> [ worker "imessage" RestartableWorker (iMessageWorker httpRuntime iMessageCfg env.beEpisodeScheduler)
+            <> [ worker "imessage" RestartableWorker (iMessageWorker httpRuntime iMessageCfg env.beEpisodeScheduler env.beIngress)
                | iMessageCfg <- maybeToList cfg.imessage
                ]
 

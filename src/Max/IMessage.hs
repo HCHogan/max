@@ -79,6 +79,7 @@ import Max.Platform.Delivery
   )
 import Max.Platform.Delivery.Parts
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
+import Max.Platform.Ingress (Ingress, queueIngest)
 import Max.Platform.Store
   ( CursorRecord (..),
     IngestOptions (..),
@@ -224,8 +225,9 @@ iMessageWorker ::
   HttpRuntime ->
   IMessageConfig ->
   Maybe EpisodeScheduler ->
+  Ingress ->
   Eff es ()
-iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
+iMessageWorker runtime cfg episodeScheduler ingress = localDomain "imessage" $ do
   health <- awaitBridgeHealth
   registered <-
     ensureConfiguredEndpoint
@@ -367,6 +369,7 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
                 rawPayload = Just message.raw
               }
       result <- ingestEnvelope options envelope
+      liftIO (queueIngest ingress result)
       case result of
         Ingested fresh ->
           logInfo "imessage event ingested" $
@@ -472,9 +475,10 @@ iMessageDeliveryTransport runtime cfg =
   DeliveryTransport
     { platform = PlatformIMessage,
       deliver = \journal _claim -> \case
-        DeliverMessage lowered -> iMessageDeliveryPreflight
-          (fmap (either (Left . bridgeFailureText) (const (Right ()))) (fetchBridgeHealth runtime cfg))
-          (sendChunks journal lowered)
+        DeliverMessage lowered ->
+          iMessageDeliveryPreflight
+            (fmap (either (Left . bridgeFailureText) (const (Right ()))) (fetchBridgeHealth runtime cfg))
+            (sendChunks journal lowered)
         DeliverEdit {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised edit without an emitter")
         DeliverReaction {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised reaction without an emitter")
         DeliverRedaction {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised redaction without an emitter")
@@ -889,9 +893,10 @@ watchOnce runtime cfg chatId since = do
 -- Keep post-send failures conservative: the probe cannot guarantee liveness
 -- for the following RPC, and never authorizes replay of an uncertain part.
 iMessageDeliveryPreflight :: IO (Either Text ()) -> IO DeliveryAttempt -> IO DeliveryAttempt
-iMessageDeliveryPreflight probe send = probe >>= \case
-  Left failure -> pure (AttemptRetryable ("iMessage bridge preflight: " <> failure))
-  Right () -> send
+iMessageDeliveryPreflight probe send =
+  probe >>= \case
+    Left failure -> pure (AttemptRetryable ("iMessage bridge preflight: " <> failure))
+    Right () -> send
 
 bridgeRpc :: HttpRuntime -> IMessageConfig -> Text -> Value -> IO (Either BridgeFailure Value)
 bridgeRpc runtime cfg method params =
