@@ -32,6 +32,7 @@ import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.ModelCatalog (defaultModelName)
 import Max.Platform (PlatformBackend (..))
 import Max.Platform.Delivery (deliveryWorker, oneBotDeliveryTransport)
+import Max.Platform.Delivery.Queue (newDeliveryQueue)
 import Max.Platform.Types
 import Max.ReplySend
 import Max.Tasks
@@ -61,6 +62,7 @@ spec pool = before_ (truncateAll pool) $
         sendCount <- newIORef (0 :: Int)
         tasks <- newTaskRegistry
         jobs <- newJobs tasks
+        deliveries <- newDeliveryQueue (DeliveryId 0)
         turn <- beginTurnRuntime tasks (GroupId 900) (UserId 123) (Just source)
         budget <- newTVarIO freshBudget
         let first = "This is a deliberately long first sentence sent while the model is still generating."
@@ -113,9 +115,9 @@ spec pool = before_ (truncateAll pool) $
               . runWithConnectionPool pool
               . runBlob "var/images"
               . runLLM runtime (\_ _ _ -> pure ()) (\_ -> pure ()) config.llm
-              . runOutbound tasks jobs
+              . runOutbound tasks jobs deliveries
               . runAgentWith admission journal (ExecutionInbox (const (pure ""))) Nothing (AgentLimits 2) (const (buildToolRegistry [] []))
-              $ withAsync (deliveryWorker "stream-fixture" [transport])
+              $ withAsync (deliveryWorker deliveries [transport])
               $ \sender -> do
                 link sender
                 withAsync (agentTurn turn agentContext (defaultModelName config.llm) [MsgUser "question"] (handleAgentEvent output)) $ \agent -> do

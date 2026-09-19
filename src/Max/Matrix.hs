@@ -76,7 +76,7 @@ import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
 import Max.Platform.Ingress (Ingress, queueIngest)
 import Max.Platform.Store
   ( CursorRecord (..),
-    DeliveryClaim (..),
+    DeliveryRequest (..),
     IngestOptions (..),
     IngestResult (..),
     NewIngest (..),
@@ -495,11 +495,11 @@ matrixMsgType = \case
     | "audio/" `T.isPrefixOf` mime -> "m.audio"
   _ -> "m.file"
 
-sendMatrixDelivery :: HttpRuntime -> MatrixConfig -> DeliveryClaim -> Int -> Value -> IO (Either Text NativeEventId)
+sendMatrixDelivery :: HttpRuntime -> MatrixConfig -> DeliveryRequest -> Int -> Value -> IO (Either Text NativeEventId)
 sendMatrixDelivery runtime cfg claim chunkIndex payload = do
   sendMatrixEvent runtime cfg claim (T.pack (show chunkIndex)) "m.room.message" payload
 
-sendMatrixEvent :: HttpRuntime -> MatrixConfig -> DeliveryClaim -> Text -> Text -> Value -> IO (Either Text NativeEventId)
+sendMatrixEvent :: HttpRuntime -> MatrixConfig -> DeliveryRequest -> Text -> Text -> Value -> IO (Either Text NativeEventId)
 sendMatrixEvent runtime cfg claim suffix eventType payload = do
   let path =
         "/_matrix/client/v3/rooms/"
@@ -514,7 +514,7 @@ sendMatrixEvent runtime cfg claim suffix eventType payload = do
       Left err -> pure (Left ("matrix send response: " <> T.pack err))
       Right event -> pure (Right (NativeEventId event))
 
-sendMatrixRedaction :: HttpRuntime -> MatrixConfig -> DeliveryClaim -> Text -> NativeEventId -> IO (Either Text NativeEventId)
+sendMatrixRedaction :: HttpRuntime -> MatrixConfig -> DeliveryRequest -> Text -> NativeEventId -> IO (Either Text NativeEventId)
 sendMatrixRedaction runtime cfg claim suffix (NativeEventId target) = do
   let path = matrixRedactionPath cfg.roomId claim.idempotencyKey suffix (NativeEventId target)
   matrixRequest runtime cfg "PUT" path [] (Just (object [])) >>= \case

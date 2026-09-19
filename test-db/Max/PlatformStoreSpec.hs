@@ -1,16 +1,17 @@
 module Max.PlatformStoreSpec (spec) where
 
 import Control.Concurrent.Async (concurrently)
-import Control.Monad (forM_)
+import Control.Monad (forM, forM_)
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.ByteString.Char8 qualified as BS
 import Data.IORef
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, addUTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), execute, query)
 import Database.PostgreSQL.Simple.FromField (ResultError (..))
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Helpers (resultId, truncateAll, withDb)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
@@ -23,6 +24,7 @@ import Max.Matrix (MatrixConfig (..), matrixDeliveryTransport)
 import Max.Platform (PlatformBackend (..))
 import Max.Platform.Delivery (DeliveryOperation (..), DeliveryTransport (..), oneBotDeliveryTransport)
 import Max.Platform.Delivery.Parts
+import Max.Platform.Delivery.Queue
 import Max.Platform.Delivery.Store
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (Backfill, LiveDelivery))
 import Max.Platform.Ingress (newIngress, nextIngress, queueIngest)
@@ -61,7 +63,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
           textCapabilities
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-existing-qq" "relay me"))
-    claims <- claimStartedDeliveries pool "mirror-cutover" 10 30
+    claims <- startPendingDeliveries pool
     fmap (.endpointId) claims `shouldBe` [qq.endpointId]
 
   -- Both cases above configure the mirror at first registration.  An endpoint
@@ -104,7 +106,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     rebound.endpointId `shouldBe` standalone.endpointId
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound rebound.endpointId now "imsg-after-rebind" "relay me"))
-    claims <- claimStartedDeliveries pool "mirror-cutover" 10 30
+    claims <- startPendingDeliveries pool
     fmap (.endpointId) claims `shouldBe` [qq.endpointId]
 
   it "promotes a QQ endpoint first observed after its Matrix mirror" $ do
@@ -129,7 +131,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
           textCapabilities
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-after-matrix" "relay me"))
-    claims <- claimStartedDeliveries pool "mirror-cutover" 10 30
+    claims <- startPendingDeliveries pool
     fmap (.endpointId) claims `shouldBe` [matrix.endpointId]
 
   it "deduplicates concurrent native events and atomically creates mirror delivery" $ do
@@ -152,10 +154,14 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
       ledgerCounts pool matrix.endpointId qq.endpointId
     messages `shouldBe` 1
     events `shouldBe` 1
-    ingress <- newIngress
+    outgoing <- newDeliveryQueue (DeliveryId 0)
+    ingress <- newIngress outgoing
     mapM_ (queueIngest ingress) [left, right]
     nextIngress ingress `shouldReturn` resultId left
     timeout 10000 (nextIngress ingress) `shouldReturn` Nothing
+    mirrored <- nextDelivery outgoing (const True)
+    mirrored.target.endpointId `shouldBe` qq.endpointId
+    timeout 10000 (nextDelivery outgoing (const True)) `shouldReturn` Nothing
     sourceConfirmed `shouldBe` 1
     mirrorPending `shouldBe` 1
 
@@ -204,13 +210,11 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-source" "mirror me"))
-    [claim] <- claimStartedDeliveries pool "imessage-reply-proof" 10 30
+    [claim] <- startPendingDeliveries pool
     withDb
       pool
       ( completeDelivery
-          "imessage-reply-proof"
           claim.deliveryId
-          claim.attemptCount
           []
           (DeliveryAccepted (Just (NativeEventId "imessage-copy")))
       )
@@ -281,9 +285,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
       withDb pool $
         advanceIngestCursorCAS matrix.platformAccountId "sync" Nothing (PlatformCursor (String "s1")) (Just "server-a")
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-status" "status"))
-    [claim] <- claimStartedDeliveries pool "worker-a" 10 30
+    [claim] <- startPendingDeliveries pool
     claim.endpointId `shouldBe` qq.endpointId
-    _ <- withDb pool (completeDelivery "worker-a" claim.deliveryId claim.attemptCount [] (DeliveryUnknown "timeout" now))
+    _ <- withDb pool (completeDelivery claim.deliveryId [] (DeliveryUnknown "timeout" now))
     statuses <- withDb pool listPlatformStatus
     case [status | status <- statuses, status.endpointId == qq.endpointId] of
       [status] -> status.outcomeUnknownDeliveries `shouldBe` 1
@@ -294,129 +298,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         show status.cursors `shouldContain` "s1"
       _ -> expectationFailure "missing Matrix endpoint status"
 
-  it "leases each delivery once and rejects completion by a non-owner" $ do
-    (qq, matrix) <- mirrorPair pool
-    now <- getCurrentTime
-    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-event-2" "deliver me"))
-    claims <- claimStartedDeliveries pool "worker-a" 10 30
-    claims `shouldSatisfy` \case
-      [claim] -> claim.endpointId == qq.endpointId && claim.attemptCount == 1
-      _ -> False
-    again <- claimStartedDeliveries pool "worker-b" 10 30
-    again `shouldBe` []
-    claim <- case claims of
-      [onlyClaim] -> pure onlyClaim
-      _ -> expectationFailure "expected one leased delivery" >> fail "unreachable"
-    stolen <-
-      withDb pool $
-        completeDelivery
-          "worker-b"
-          claim.deliveryId
-          claim.attemptCount
-          []
-          (DeliveryConfirmedAs (Just (NativeEventId "qq-echo")))
-    stolen `shouldBe` False
-    completed <-
-      withDb pool $
-        completeDelivery
-          "worker-a"
-          claim.deliveryId
-          claim.attemptCount
-          []
-          (DeliveryConfirmedAs (Just (NativeEventId "qq-echo")))
-    completed `shouldBe` True
-
-  it "re-offers an expired delivery reservation without counting an attempt" $ do
-    (_, matrix) <- mirrorPair pool
-    now <- getCurrentTime
-    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-reserved" "not started yet"))
-    [reserved] <- withDb pool (claimDeliveries "worker-gone" 10 30)
-    reserved.attemptCount `shouldBe` 1
-    _ <- withConn pool $ \conn ->
-      execute
-        conn
-        "UPDATE message_deliveries SET lease_expires_at = now() - interval '1 second' WHERE delivery_id = ?"
-        (Only reserved.deliveryId.unDeliveryId)
-
-    [reclaimed] <- withDb pool (claimDeliveries "worker-next" 10 30)
-    reclaimed.deliveryId `shouldBe` reserved.deliveryId
-    reclaimed.attemptCount `shouldBe` 1
-    withDb pool (startDelivery "worker-next" reclaimed.deliveryId reclaimed.attemptCount 30)
-      `shouldReturn` True
-
-  -- Delivery runs one lane per platform so a wedged edge cannot pace the
-  -- others: an unreachable iMessage bridge timing out at 90s per attempt used
-  -- to sit in a shared batch and put that delay in front of every QQ reply
-  -- behind it.  That only works if the lanes partition the queue, so pin both
-  -- halves of the partition here.
-  it "gives each platform lane its own endpoints and nothing else" $ do
-    (qq, matrix) <- mirrorPair pool
-    now <- getCurrentTime
-    -- One message each way, so both platforms have a delivery outstanding at
-    -- the same time — the case a single shared worker used to serialise.
-    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-lane" "from matrix"))
-    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId (addUTCTime 1 now) "qq-lane" "from qq"))
-
-    qqLane <- withDb pool (claimDeliveriesForLane "lane-qq" (LanePlatform PlatformQQ) 10 30)
-    fmap (.platform) qqLane `shouldBe` [PlatformQQ]
-    fmap (.endpointId) qqLane `shouldBe` [qq.endpointId]
-
-    -- Claimed while the QQ row is already reserved by the lane above: the
-    -- Matrix lane must not be waiting on it.
-    matrixLane <- withDb pool (claimDeliveriesForLane "lane-matrix" (LanePlatform PlatformMatrix) 10 30)
-    fmap (.platform) matrixLane `shouldBe` [PlatformMatrix]
-    fmap (.endpointId) matrixLane `shouldBe` [matrix.endpointId]
-
-  it "leaves the platform lanes' complement to the unrouted lane" $ do
-    (qq, matrix) <- mirrorPair pool
-    now <- getCurrentTime
-    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-unrouted" "from matrix"))
-    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId (addUTCTime 1 now) "qq-unrouted" "from qq"))
-
-    -- A process holding transports for both platforms has no residual work,
-    -- so the extra lane costs a poll and claims nothing.
-    covered <- withDb pool (claimDeliveriesForLane "lane-none" (LaneUnrouted [PlatformQQ, PlatformMatrix]) 10 30)
-    fmap (.platform) covered `shouldBe` []
-
-    -- Drop QQ from the served set, as a process with no QQ transport has it:
-    -- the QQ delivery is then exactly the unrouted lane's job.  Without that
-    -- lane nobody claims it and it stays pending forever instead of failing.
-    unrouted <- withDb pool (claimDeliveriesForLane "lane-unrouted" (LaneUnrouted [PlatformMatrix]) 10 30)
-    fmap (.platform) unrouted `shouldBe` [PlatformQQ]
-    fmap (.endpointId) unrouted `shouldBe` [qq.endpointId]
-
-  it "quarantines an expired sending lease without retrying it or blocking the endpoint" $ do
-    (qq, matrix) <- mirrorPair pool
-    now <- getCurrentTime
-    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-expired-1" "maybe sent"))
-    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId (addUTCTime 1 now) "mx-expired-2" "send after it"))
-    [abandoned] <- claimStartedDeliveries pool "worker-gone" 10 30
-    abandoned.endpointId `shouldBe` qq.endpointId
-    _ <- withConn pool $ \conn ->
-      execute
-        conn
-        "UPDATE message_deliveries SET lease_expires_at = now() - interval '1 second' WHERE delivery_id = ?"
-        (Only abandoned.deliveryId.unDeliveryId)
-
-    [next] <- claimStartedDeliveries pool "worker-next" 10 30
-    next.endpointId `shouldBe` qq.endpointId
-    next.body `shouldBe` Body [NText "send after it"]
-    next.deliveryId `shouldNotBe` abandoned.deliveryId
-    withDb
-      pool
-      (completeDelivery "worker-gone" abandoned.deliveryId abandoned.attemptCount [] (DeliveryConfirmedAs (Just (NativeEventId "late-receipt"))))
-      `shouldReturn` False
-
-    rows <- withConn pool $ \conn ->
-      query
-        conn
-        "SELECT status, lease_owner, lease_expires_at, last_error FROM message_deliveries WHERE delivery_id = ?"
-        (Only abandoned.deliveryId.unDeliveryId)
-    (rows :: [(Text, Maybe Text, Maybe UTCTime, Maybe Text)])
-      `shouldSatisfy` \case
-        [("outcome_unknown", Nothing, Nothing, Just err)] -> "lease expired" `T.isInfixOf` err
-        _ -> False
-
   -- The retry budget in Max.Platform.Delivery converts an exhausted retryable
   -- attempt into a permanent failure precisely so the endpoint's ordered lane
   -- stops waiting on a copy that can never land.  That only works if a terminal
@@ -426,16 +307,16 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-poison" "risk controlled"))
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId (addUTCTime 1 now) "mx-after" "queued behind it"))
-    [poisoned] <- claimStartedDeliveries pool "worker-a" 10 30
+    [poisoned] <- startPendingDeliveries pool
     poisoned.endpointId `shouldBe` qq.endpointId
     -- Its successor stays blocked while the head is retryable.
-    withDb pool (completeDelivery "worker-a" poisoned.deliveryId poisoned.attemptCount [] (DeliveryRetry "retcode 1200" now))
+    withDb pool (completeDelivery poisoned.deliveryId [] (DeliveryRetry "retcode 1200" now))
       `shouldReturn` True
-    [retried] <- claimStartedDeliveries pool "worker-b" 10 30
+    [retried] <- startPendingDeliveries pool
     retried.deliveryId `shouldBe` poisoned.deliveryId
     withDb
       pool
-      (completeDelivery "worker-b" retried.deliveryId retried.attemptCount [] (DeliveryPermanentlyFailed "retry budget exhausted after 16 attempts: retcode 1200"))
+      (completeDelivery retried.deliveryId [] (DeliveryPermanentlyFailed "retry budget exhausted after 16 attempts: retcode 1200"))
       `shouldReturn` True
     rows <- withConn pool $ \conn ->
       query
@@ -443,7 +324,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         "SELECT status FROM message_deliveries WHERE delivery_id = ?"
         (Only retried.deliveryId.unDeliveryId)
     (rows :: [Only Text]) `shouldBe` [Only "permanent_failure"]
-    released <- claimStartedDeliveries pool "worker-c" 10 30
+    released <- startPendingDeliveries pool
     fmap (.canonicalMessageId) released `shouldSatisfy` ((== 1) . length)
     released `shouldSatisfy` all ((/= poisoned.deliveryId) . (.deliveryId))
 
@@ -451,16 +332,16 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-permanent" "poison"))
-    [poisoned] <- claimStartedDeliveries pool "worker-a" 10 30
+    [poisoned] <- startPendingDeliveries pool
     withDb
       pool
-      (completeDelivery "worker-a" poisoned.deliveryId poisoned.attemptCount [] (DeliveryPermanentlyFailed "invalid target"))
+      (completeDelivery poisoned.deliveryId [] (DeliveryPermanentlyFailed "invalid target"))
       `shouldReturn` True
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId (addUTCTime 1 now) "mx-suppressed" "policy"))
-    [suppressed] <- claimStartedDeliveries pool "worker-b" 10 30
+    [suppressed] <- startPendingDeliveries pool
     withDb
       pool
-      (completeDelivery "worker-b" suppressed.deliveryId suppressed.attemptCount [] (DeliverySuppressedAs "reaction unsupported"))
+      (completeDelivery suppressed.deliveryId [] (DeliverySuppressedAs "reaction unsupported"))
       `shouldReturn` True
     rows <- withConn pool $ \conn ->
       query
@@ -479,9 +360,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-lower-notes" "hello"))
-    [claim] <- claimStartedDeliveries pool "worker-a" 10 30
+    [claim] <- startPendingDeliveries pool
     let notes = [LowerNote "mention" NoteFolded (Just "no identity on endpoint")]
-    withDb pool (completeDelivery "worker-a" claim.deliveryId claim.attemptCount notes (DeliveryConfirmedAs Nothing))
+    withDb pool (completeDelivery claim.deliveryId notes (DeliveryConfirmedAs Nothing))
       `shouldReturn` True
     rows <- withConn pool $ \conn ->
       query
@@ -496,22 +377,22 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-reused-1" "first"))
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-reused-2" "second"))
-    firstClaims <- claimStartedDeliveries pool "worker-a" 10 30
+    firstClaims <- startPendingDeliveries pool
     firstClaims `shouldSatisfy` \case
       [claim] -> claim.endpointId == qq.endpointId && claim.body == Body [NText "first"]
       _ -> False
     case firstClaims of
       [firstClaim] -> do
-        withDb pool (completeDelivery "worker-a" firstClaim.deliveryId firstClaim.attemptCount [] (DeliveryAccepted (Just (NativeEventId "reused-native"))))
+        withDb pool (completeDelivery firstClaim.deliveryId [] (DeliveryAccepted (Just (NativeEventId "reused-native"))))
           `shouldReturn` True
-        secondClaims <- claimStartedDeliveries pool "worker-a" 10 30
+        secondClaims <- startPendingDeliveries pool
         secondClaims `shouldSatisfy` \case
           [claim] -> claim.endpointId == qq.endpointId && claim.body == Body [NText "second"]
           _ -> False
         secondClaim <- case secondClaims of
           [claim] -> pure claim
           _ -> expectationFailure "expected the second ordered delivery" >> fail "unreachable"
-        withDb pool (completeDelivery "worker-a" secondClaim.deliveryId secondClaim.attemptCount [] (DeliveryAccepted (Just (NativeEventId "reused-native"))))
+        withDb pool (completeDelivery secondClaim.deliveryId [] (DeliveryAccepted (Just (NativeEventId "reused-native"))))
           `shouldReturn` True
         deliveries <- withConn pool $ \conn ->
           query
@@ -526,45 +407,45 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-unknown" "maybe sent"))
-    [claim] <- claimStartedDeliveries pool "worker-a" 10 30
+    [claim] <- startPendingDeliveries pool
     claim.endpointId `shouldBe` qq.endpointId
     unknown <-
       withDb pool $
-        completeDelivery "worker-a" claim.deliveryId claim.attemptCount [] (DeliveryUnknown "timeout after write" (addUTCTime (-1) now))
+        completeDelivery claim.deliveryId [] (DeliveryUnknown "timeout after write" (addUTCTime (-1) now))
     unknown `shouldBe` True
-    claimStartedDeliveries pool "worker-b" 10 30 `shouldReturn` []
+    startPendingDeliveries pool `shouldReturn` []
 
   it "requeues an accepted send only after explicit provider failure evidence" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-reconcile" "status me"))
-    [claim] <- claimStartedDeliveries pool "worker-a" 10 30
+    [claim] <- startPendingDeliveries pool
     claim.endpointId `shouldBe` matrix.endpointId
     accepted <-
       withDb pool $
-        completeDelivery "worker-a" claim.deliveryId claim.attemptCount [] (DeliveryAccepted (Just (NativeEventId "native-out")))
+        completeDelivery claim.deliveryId [] (DeliveryAccepted (Just (NativeEventId "native-out")))
     accepted `shouldBe` True
-    claimStartedDeliveries pool "worker-b" 10 30 `shouldReturn` []
+    startPendingDeliveries pool `shouldReturn` []
     unconfirmed <- withDb pool (listUnconfirmedDeliveries PlatformMatrix 10)
     fmap (.deliveryId) unconfirmed `shouldBe` [claim.deliveryId]
     withDb pool (confirmUnconfirmedDelivery claim.deliveryId (NativeEventId "wrong")) `shouldReturn` False
     withDb pool (retryUnconfirmedDelivery claim.deliveryId (NativeEventId "native-out") "provider failed")
       `shouldReturn` True
-    retried <- claimStartedDeliveries pool "worker-b" 10 30
+    retried <- startPendingDeliveries pool
     fmap (.deliveryId) retried `shouldBe` [claim.deliveryId]
 
   it "confirms an accepted send through a status reconciliation CAS" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-confirm" "confirm me"))
-    [claim] <- claimStartedDeliveries pool "worker-a" 10 30
+    [claim] <- startPendingDeliveries pool
     claim.endpointId `shouldBe` matrix.endpointId
-    _ <- withDb pool (completeDelivery "worker-a" claim.deliveryId claim.attemptCount [] (DeliveryAccepted (Just (NativeEventId "native-confirm"))))
+    _ <- withDb pool (completeDelivery claim.deliveryId [] (DeliveryAccepted (Just (NativeEventId "native-confirm"))))
     withDb pool (confirmUnconfirmedDelivery claim.deliveryId (NativeEventId "native-confirm"))
       `shouldReturn` True
     withDb pool (listUnconfirmedDeliveries PlatformMatrix 10) `shouldReturn` []
 
-  it "rejects corrupt canonical bodies and rolls back delivery reservations" $ do
+  it "rejects corrupt canonical bodies without changing delivery history" $ do
     (_, matrix) <- mirrorPair pool
     now <- getCurrentTime
     result <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "corrupt-body" "dispatch me"))
@@ -574,18 +455,19 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     let deliveryStatus = withConn pool $ \connection -> query connection "SELECT status FROM message_deliveries WHERE canonical_message_id=?" (Only cid)
     deliveryBefore <- deliveryStatus :: IO [Only Text]
     deliveryBefore `shouldSatisfy` (not . null)
-    withDb pool (claimDeliveries "corrupt-reader" 10 30) `shouldThrow` (\case ConversionFailed {} -> True; _ -> False)
+    [target] <- withDb pool (deliveryTargets (resultId result))
+    withDb pool (loadDelivery target.deliveryId) `shouldThrow` (\case ConversionFailed {} -> True; _ -> False)
     deliveryStatus `shouldReturn` deliveryBefore
     _ <- withConn pool $ \connection -> execute connection "UPDATE messages SET canonical_content=jsonb_set(canonical_content,'{nodes}','[]'::jsonb) WHERE canonical_message_id=?" (Only cid)
     repaired <- withDb pool (loadDispatchMessage (CanonicalMessageId cid))
     fmap (.canonicalId) repaired `shouldBe` Just (CanonicalMessageId cid)
-    deliveries <- withDb pool (claimDeliveries "repaired-reader" 10 30)
-    fmap (.canonicalMessageId) deliveries `shouldBe` [CanonicalMessageId cid]
+    delivery <- withDb pool (loadDelivery target.deliveryId)
+    fmap (.canonicalMessageId) delivery `shouldBe` Just (CanonicalMessageId cid)
 
   it "queues only new live messages and never reconstructs dispatches on restart" $ do
     (_, matrix) <- mirrorPair pool
     now <- getCurrentTime
-    ingress <- newIngress
+    ingress <- newIngress =<< newDeliveryQueue (DeliveryId 0)
     let live = inbound matrix.endpointId now "live" "new question"
     first <- withDb pool (ingestEnvelope defaultIngestOptions live)
     duplicate <- withDb pool (ingestEnvelope defaultIngestOptions live)
@@ -594,29 +476,63 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     mapM_ (queueIngest ingress) [first, duplicate, backfill, suppressed]
     nextIngress ingress `shouldReturn` resultId first
     timeout 10000 (nextIngress ingress) `shouldReturn` Nothing
-    restarted <- newIngress
+    restarted <- newIngress =<< newDeliveryQueue (DeliveryId 0)
     timeout 10000 (nextIngress restarted) `shouldReturn` Nothing
     restored <- withDb pool (loadDispatchMessage (resultId first))
     fmap (.canonicalId) restored `shouldBe` Just (resultId first)
+
+  it "closes unfinished receipts on restart without resuming their sends" $ do
+    (_, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    first <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "interrupted" "two parts"))
+    [target] <- withDb pool (deliveryTargets (resultId first))
+    Just stored <- withDb pool (loadDelivery target.deliveryId)
+    let request = stored {attemptCount = 1}
+    withDb pool (startDelivery target.deliveryId 1) `shouldReturn` True
+    _ <- withDb pool (planDeliveryParts request ["accepted", "unknown"])
+    _ <- withDb pool (beginDeliveryPart request NonIdempotentParts 0)
+    _ <- withDb pool (finishDeliveryPart request 0 (AttemptAccepted (Just (NativeEventId "retained"))))
+    _ <- withDb pool (beginDeliveryPart request NonIdempotentParts 1)
+    unsent <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "not-started" "pending"))
+    boundary <- withDb pool deliveryProcessBoundary
+    states <- withConn pool $ \connection ->
+      query
+        connection
+        "SELECT status,native_event_id FROM message_delivery_parts WHERE delivery_id=? ORDER BY part_index"
+        (Only target.deliveryId.unDeliveryId)
+    states `shouldBe` [("accepted_unconfirmed" :: Text, Just ("retained" :: Text)), ("outcome_unknown", Nothing)]
+    parents <- withConn pool $ \connection ->
+      query
+        connection
+        "SELECT status FROM message_deliveries WHERE canonical_message_id=ANY(?) AND idempotency_key NOT LIKE 'source:%' ORDER BY delivery_id"
+        (Only (PGArray [(resultId first).unCanonicalMessageId, (resultId unsent).unCanonicalMessageId]))
+    parents `shouldBe` [Only ("outcome_unknown" :: Text), Only "suppressed"]
+    restarted <- newDeliveryQueue boundary
+    queueDeliveryRetry restarted target 1
+    timeout 10_000 (nextDelivery restarted (const True)) `shouldReturn` Nothing
+    Ingested fresh <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "after-restart" "new"))
+    queueDeliveries restarted fresh.mirrorDeliveries
+    next <- nextDelivery restarted (const True)
+    map (.deliveryId) fresh.mirrorDeliveries `shouldBe` [next.target.deliveryId]
+    withDb pool (loadDispatchMessage (resultId first)) >>= ((`shouldBe` Just (resultId first)) . fmap (.canonicalId))
 
   it "maps every wire part echo and reply without prematurely settling the parent" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
     original <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "split-original" "onetwo"))
-    [claim] <- claimStartedDeliveries pool "parts" 10 120
-    withDb pool (planDeliveryParts "parts" claim ["one", "two"]) `shouldReturn` True
-    withDb pool (beginDeliveryPart "parts" claim NonIdempotentParts 0) `shouldReturn` PartSend
-    withDb pool (finishDeliveryPart "parts" claim 0 (AttemptAccepted (Just (NativeEventId "part-one")))) `shouldReturn` True
+    [claim] <- startPendingDeliveries pool
+    withDb pool (planDeliveryParts claim ["one", "two"]) `shouldReturn` True
+    withDb pool (beginDeliveryPart claim NonIdempotentParts 0) `shouldReturn` PartSend
+    withDb pool (finishDeliveryPart claim 0 (AttemptAccepted (Just (NativeEventId "part-one")))) `shouldReturn` True
     let echo native text = (inbound qq.endpointId now native text) {senderNativeId = NativeUserId "9"}
     withDb pool (ingestEnvelope defaultIngestOptions (echo "part-one" "one")) `shouldReturn` DeliveryEcho (resultId original)
-    withDb pool (renewDelivery "parts" claim 120) `shouldReturn` True
-    withDb pool (beginDeliveryPart "parts" claim NonIdempotentParts 1) `shouldReturn` PartSend
-    withDb pool (finishDeliveryPart "parts" claim 1 (AttemptAccepted (Just (NativeEventId "part-two")))) `shouldReturn` True
+    withDb pool (beginDeliveryPart claim NonIdempotentParts 1) `shouldReturn` PartSend
+    withDb pool (finishDeliveryPart claim 1 (AttemptAccepted (Just (NativeEventId "part-two")))) `shouldReturn` True
     -- A reply may arrive before the platform echoes the part.
     reply <- withDb pool (ingestEnvelope defaultIngestOptions ((inbound qq.endpointId now "reply-second" "question") {relations = [ReplyTo (NativeEventId "part-two")]}))
     linked <- withConn pool $ \conn -> query conn "SELECT target_canonical_message_id FROM message_relations WHERE canonical_message_id=? AND relation_kind='reply'" (Only (resultId reply).unCanonicalMessageId)
     (linked :: [Only Int64]) `shouldBe` [Only (resultId original).unCanonicalMessageId]
-    withDb pool (completeDelivery "parts" claim.deliveryId claim.attemptCount [] (DeliveryAccepted (Just (NativeEventId "part-one")))) `shouldReturn` True
+    withDb pool (completeDelivery claim.deliveryId [] (DeliveryAccepted (Just (NativeEventId "part-one")))) `shouldReturn` True
     withDb pool (ingestEnvelope defaultIngestOptions (echo "part-two" "two")) `shouldReturn` DeliveryEcho (resultId original)
     states <- withConn pool $ \conn -> query conn "SELECT status FROM message_deliveries WHERE delivery_id=?" (Only claim.deliveryId.unDeliveryId)
     (states :: [Only Text]) `shouldBe` [Only "confirmed"]
@@ -624,55 +540,76 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     _ <- withConn pool $ \conn -> execute conn "UPDATE message_relations SET target_native_event_id='part-two' WHERE canonical_message_id=? AND relation_kind='reply'" (Only followup.canonicalMessageId.unCanonicalMessageId)
     -- Make a different chunk the newest echo: explicit part identity wins.
     _ <- withConn pool $ \conn -> execute conn "UPDATE platform_events SET occurred_at=now()+interval '1 minute' WHERE native_event_id='part-one'" ()
-    Just quotedPart <- withDb pool (claimDelivery "quote-part" followup.primaryDeliveryId 120)
+    Just quotedPart <- withDb pool (loadDelivery followup.primaryDeliveryId)
     (quotedPart.replyContext >>= (.nativeId)) `shouldBe` Just (NativeEventId "part-two")
 
   it "reconciles provider status per part and retries only an explicitly failed part" $ do
     (_, matrix) <- mirrorPair pool
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "status-original" "onetwo"))
-    [claim] <- claimStartedDeliveries pool "parts" 10 120
-    _ <- withDb pool (planDeliveryParts "parts" claim ["one", "two"])
+    [claim] <- startPendingDeliveries pool
+    _ <- withDb pool (planDeliveryParts claim ["one", "two"])
     forM_ [(0, "one"), (1, "two")] $ \(index, native) -> do
-      _ <- withDb pool (beginDeliveryPart "parts" claim NonIdempotentParts index)
-      _ <- withDb pool (finishDeliveryPart "parts" claim index (AttemptAccepted (Just (NativeEventId native))))
+      _ <- withDb pool (beginDeliveryPart claim NonIdempotentParts index)
+      _ <- withDb pool (finishDeliveryPart claim index (AttemptAccepted (Just (NativeEventId native))))
       pure ()
-    _ <- withDb pool (completeDelivery "parts" claim.deliveryId claim.attemptCount [] (DeliveryAccepted (Just (NativeEventId "one"))))
+    _ <- withDb pool (completeDelivery claim.deliveryId [] (DeliveryAccepted (Just (NativeEventId "one"))))
     unconfirmedParts <- withDb pool (listUnconfirmedDeliveries PlatformQQ 10)
     length unconfirmedParts `shouldBe` 2
     withDb pool (confirmUnconfirmedDelivery claim.deliveryId (NativeEventId "one")) `shouldReturn` True
     remaining <- withDb pool (listUnconfirmedDeliveries PlatformQQ 10)
     map (.nativeEventId) remaining `shouldBe` [NativeEventId "two"]
     withDb pool (retryUnconfirmedDelivery claim.deliveryId (NativeEventId "two") "provider explicitly failed") `shouldReturn` True
-    [retry] <- claimStartedDeliveries pool "retry" 10 120
-    withDb pool (beginDeliveryPart "retry" retry NonIdempotentParts 0)
+    [retry] <- startPendingDeliveries pool
+    withDb pool (beginDeliveryPart retry NonIdempotentParts 0)
       `shouldReturn` PartRecorded (AttemptConfirmed (Just (NativeEventId "one")))
-    withDb pool (beginDeliveryPart "retry" retry NonIdempotentParts 1) `shouldReturn` PartSend
+    withDb pool (beginDeliveryPart retry NonIdempotentParts 1) `shouldReturn` PartSend
+
+  it "keeps a second proven part failure that arrives during the first retry" $ do
+    (_, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "status-race" "two parts"))
+    [request] <- startPendingDeliveries pool
+    _ <- withDb pool (planDeliveryParts request ["first", "second"])
+    forM_ [(0, "first"), (1, "second")] $ \(index, native) -> do
+      _ <- withDb pool (beginDeliveryPart request NonIdempotentParts index)
+      _ <- withDb pool (finishDeliveryPart request index (AttemptAccepted (Just (NativeEventId native))))
+      pure ()
+    _ <- withDb pool (completeDelivery request.deliveryId [] (DeliveryAccepted (Just (NativeEventId "first"))))
+    withDb pool (retryUnconfirmedDelivery request.deliveryId (NativeEventId "first") "failed first") `shouldReturn` True
+    [retried] <- startPendingDeliveries pool
+    withDb pool (retryUnconfirmedDelivery request.deliveryId (NativeEventId "second") "failed second") `shouldReturn` True
+    _ <- withDb pool (beginDeliveryPart retried NonIdempotentParts 0)
+    _ <- withDb pool (finishDeliveryPart retried 0 (AttemptAccepted (Just (NativeEventId "replacement"))))
+    _ <- withDb pool (completeDelivery request.deliveryId [] (DeliveryAccepted (Just (NativeEventId "replacement"))))
+    [again] <- startPendingDeliveries pool
+    withDb pool (beginDeliveryPart again NonIdempotentParts 0) `shouldReturn` PartRecorded (AttemptAccepted (Just (NativeEventId "replacement")))
+    withDb pool (beginDeliveryPart again NonIdempotentParts 1) `shouldReturn` PartSend
 
   it "resumes only the remaining wire part and rejects a changed retry plan" $ do
     (_, matrix) <- mirrorPair pool
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "retry-original" "onetwo"))
-    [claim] <- claimStartedDeliveries pool "parts" 10 120
-    withDb pool (planDeliveryParts "parts" claim ["one", "two"]) `shouldReturn` True
-    _ <- withDb pool (beginDeliveryPart "parts" claim IdempotentParts 0)
-    _ <- withDb pool (finishDeliveryPart "parts" claim 0 (AttemptConfirmed (Just (NativeEventId "one"))))
-    _ <- withDb pool (beginDeliveryPart "parts" claim IdempotentParts 1)
-    _ <- withDb pool (finishDeliveryPart "parts" claim 1 (AttemptRetryable "503"))
-    _ <- withDb pool (completeDelivery "parts" claim.deliveryId claim.attemptCount [] (DeliveryRetry "503" now))
-    [retry] <- claimStartedDeliveries pool "parts-next" 10 120
-    withDb pool (planDeliveryParts "parts-next" retry ["changed"]) `shouldReturn` False
-    withDb pool (planDeliveryParts "parts-next" retry ["one", "two"]) `shouldReturn` True
-    withDb pool (beginDeliveryPart "parts-next" retry IdempotentParts 0)
+    [claim] <- startPendingDeliveries pool
+    withDb pool (planDeliveryParts claim ["one", "two"]) `shouldReturn` True
+    _ <- withDb pool (beginDeliveryPart claim IdempotentParts 0)
+    _ <- withDb pool (finishDeliveryPart claim 0 (AttemptConfirmed (Just (NativeEventId "one"))))
+    _ <- withDb pool (beginDeliveryPart claim IdempotentParts 1)
+    _ <- withDb pool (finishDeliveryPart claim 1 (AttemptRetryable "503"))
+    _ <- withDb pool (completeDelivery claim.deliveryId [] (DeliveryRetry "503" now))
+    [retry] <- startPendingDeliveries pool
+    withDb pool (planDeliveryParts retry ["changed"]) `shouldReturn` False
+    withDb pool (planDeliveryParts retry ["one", "two"]) `shouldReturn` True
+    withDb pool (beginDeliveryPart retry IdempotentParts 0)
       `shouldReturn` PartRecorded (AttemptConfirmed (Just (NativeEventId "one")))
-    withDb pool (beginDeliveryPart "parts-next" retry IdempotentParts 1) `shouldReturn` PartSend
-    withDb pool (finishDeliveryPart "parts" claim 1 (AttemptConfirmed (Just (NativeEventId "stale")))) `shouldReturn` False
+    withDb pool (beginDeliveryPart retry IdempotentParts 1) `shouldReturn` PartSend
+    withDb pool (finishDeliveryPart claim 1 (AttemptConfirmed (Just (NativeEventId "stale")))) `shouldReturn` False
 
   it "retries a Matrix second-part 503 with the same transaction and without resending the first" $ do
     (qq, _) <- mirrorPair pool
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "matrix-retry" "onetwo"))
-    [claim] <- claimStartedDeliveries pool "matrix-parts" 10 120
+    [claim] <- startPendingDeliveries pool
     responses <- newIORef [(200 :: Int, "{\"event_id\":\"$one\"}"), (503, "{\"errcode\":\"M_UNKNOWN\"}"), (200, "{\"event_id\":\"$two\"}")]
     count <- newIORef (0 :: Int)
     manager <-
@@ -694,20 +631,20 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
           matrixDeliveryTransport
             (httpRuntimeFromManagers manager manager manager)
             (MatrixConfig "http://matrix.test" "test-only" "@max:test" "!room:test" Nothing 1000)
-        journal worker current =
+        journal current =
           PartJournal
-            { plan = withDb pool . planDeliveryParts worker current,
-              begin = \safety index -> withDb pool (beginDeliveryPart worker current safety index),
-              finish = \index result -> withDb pool (finishDeliveryPart worker current index result)
+            { plan = withDb pool . planDeliveryParts current,
+              begin = \safety index -> withDb pool (beginDeliveryPart current safety index),
+              finish = \index result -> withDb pool (finishDeliveryPart current index result)
             }
         operation = DeliverMessage (LoweredMessage Nothing [[NText "one"], [NText "two"]] [])
-    first <- transport.deliver (journal "matrix-parts" claim) claim operation
+    first <- transport.deliver (journal claim) claim operation
     case first of
       AttemptRetryable _ -> pure ()
       other -> expectationFailure (show other)
-    _ <- withDb pool (completeDelivery "matrix-parts" claim.deliveryId claim.attemptCount [] (DeliveryRetry "503" now))
-    [retry] <- claimStartedDeliveries pool "matrix-next" 10 120
-    transport.deliver (journal "matrix-next" retry) retry operation
+    _ <- withDb pool (completeDelivery claim.deliveryId [] (DeliveryRetry "503" now))
+    [retry] <- startPendingDeliveries pool
+    transport.deliver (journal retry) retry operation
       `shouldReturn` AttemptConfirmed (Just (NativeEventId "$one"))
     readIORef count `shouldReturn` 3
     keys <- withConn pool $ \conn -> query conn "SELECT idempotency_key,status FROM message_delivery_parts WHERE delivery_id=? ORDER BY part_index" (Only claim.deliveryId.unDeliveryId)
@@ -717,7 +654,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     (_, matrix) <- mirrorPair pool
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "file-original" "file"))
-    [claim] <- claimStartedDeliveries pool "file-worker" 10 120
+    [claim] <- startPendingDeliveries pool
     staged <- newIORef []
     let backend = PlatformBackend "qq" "fake" (const (pure (Right ()))) $ \action _ -> case action of
           UploadGroupFile _ path name -> do
@@ -729,9 +666,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
           other -> expectationFailure (show other) >> pure (Left "unexpected action")
         journal =
           PartJournal
-            { plan = withDb pool . planDeliveryParts "file-worker" claim,
-              begin = \safety index -> withDb pool (beginDeliveryPart "file-worker" claim safety index),
-              finish = \index result -> withDb pool (finishDeliveryPart "file-worker" claim index result)
+            { plan = withDb pool . planDeliveryParts claim,
+              begin = \safety index -> withDb pool (beginDeliveryPart claim safety index),
+              finish = \index result -> withDb pool (finishDeliveryPart claim index result)
             }
     manager <- HTTP.newManager HTTP.defaultManagerSettings
     let transport = oneBotDeliveryTransport (httpRuntimeFromManagers manager manager manager) PlatformQQ backend
@@ -742,25 +679,12 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     length paths `shouldBe` 1
     mapM doesFileExist paths `shouldReturn` [False]
 
-  it "stops parts after lease loss and fences a late completion" $ do
-    (_, matrix) <- mirrorPair pool
-    now <- getCurrentTime
-    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "expired-original" "body"))
-    [claim] <- claimStartedDeliveries pool "parts" 10 120
-    withDb pool (planDeliveryParts "parts" claim ["body"]) `shouldReturn` True
-    _ <- withConn pool $ \conn -> execute conn "UPDATE message_deliveries SET lease_expires_at=now()-interval '1 second' WHERE delivery_id=?" (Only claim.deliveryId.unDeliveryId)
-    withDb pool (renewDelivery "parts" claim 120) `shouldReturn` False
-    withDb pool (completeDelivery "parts" claim.deliveryId claim.attemptCount [] (DeliveryAccepted (Just (NativeEventId "expired-success")))) `shouldReturn` False
-    withDb pool (beginDeliveryPart "parts" claim NonIdempotentParts 0) `shouldReturn` PartRefused "delivery lease lost before part send"
-    _ <- withDb pool (claimDeliveriesForLane "unrelated" (LaneUnrouted [PlatformQQ]) 1 120)
-    withDb pool (completeDelivery "parts" claim.deliveryId claim.attemptCount [] (DeliveryAccepted (Just (NativeEventId "late")))) `shouldReturn` False
-
   it "turns a unique self echo into delivery confirmation, not a second message" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
     original <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-relay" "same body"))
-    [claim] <- claimStartedDeliveries pool "worker-a" 10 30
-    _ <- withDb pool (completeDelivery "worker-a" claim.deliveryId claim.attemptCount [] (DeliveryUnknown "response lost" now))
+    [claim] <- startPendingDeliveries pool
+    _ <- withDb pool (completeDelivery claim.deliveryId [] (DeliveryUnknown "response lost" now))
     let echo =
           (inbound qq.endpointId (addUTCTime 1 now) "qq-echo" "same body")
             { senderNativeId = NativeUserId "9"
@@ -785,8 +709,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               turnOutputLink = Nothing,
               monitorFireId = Nothing
             }
-    queued.deliveriesCreated `shouldBe` 2
-    claims <- claimStartedDeliveries pool "delivery-worker" 10 30
+    length queued.deliveries `shouldBe` 2
+    claims <- startPendingDeliveries pool
     fmap (.endpointId) claims `shouldMatchList` [qq.endpointId, matrix.endpointId]
     ledger <- withConn pool $ \conn ->
       query
@@ -843,7 +767,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         "SELECT target_canonical_message_id FROM message_relations WHERE canonical_message_id = ? AND relation_kind = 'reply'"
         (Only queued.canonicalMessageId.unCanonicalMessageId)
     (relations :: [Only Int64]) `shouldBe` [Only (resultId target).unCanonicalMessageId]
-    claims <- claimStartedDeliveries pool "native-reply" 10 30
+    claims <- startPendingDeliveries pool
     fmap (\delivery -> delivery.replyContext >>= (.nativeId)) claims
       `shouldBe` [Just (NativeEventId "matrix-target")]
 
@@ -853,11 +777,11 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     metaTarget <-
       withDb pool $
         ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-meta-target" "before")
-    [targetCopy] <- claimStartedDeliveries pool "meta-target" 10 30
+    [targetCopy] <- startPendingDeliveries pool
     targetCopy.endpointId `shouldBe` matrix.endpointId
     withDb
       pool
-      (completeDelivery "meta-target" targetCopy.deliveryId targetCopy.attemptCount [] (DeliveryConfirmedAs (Just (NativeEventId "matrix-meta-target"))))
+      (completeDelivery targetCopy.deliveryId [] (DeliveryConfirmedAs (Just (NativeEventId "matrix-meta-target"))))
       `shouldReturn` True
 
     let editEnvelope =
@@ -867,14 +791,14 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             }
     edit <- withDb pool (ingestEnvelope defaultIngestOptions editEnvelope)
     case edit of
-      Ingested fresh -> fresh.mirrorDeliveriesCreated `shouldBe` 1
+      Ingested fresh -> length fresh.mirrorDeliveries `shouldBe` 1
       other -> expectationFailure ("expected new edit: " <> show other)
-    [editClaim] <- claimStartedDeliveries pool "meta-edit" 10 30
+    [editClaim] <- startPendingDeliveries pool
     editClaim.eventKind `shouldBe` EventEdit
     editClaim.endpointId `shouldBe` matrix.endpointId
     editClaim.actionTarget `shouldBe` Just (NativeEventId "matrix-meta-target")
     editClaim.body `shouldBe` Body [NText "after"]
-    withDb pool (completeDelivery "meta-edit" editClaim.deliveryId editClaim.attemptCount [] (DeliveryConfirmedAs (Just (NativeEventId "matrix-edit"))))
+    withDb pool (completeDelivery editClaim.deliveryId [] (DeliveryConfirmedAs (Just (NativeEventId "matrix-edit"))))
       `shouldReturn` True
 
     let reactionEnvelope =
@@ -884,15 +808,15 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             }
     reaction <- withDb pool (ingestEnvelope defaultIngestOptions reactionEnvelope)
     case reaction of
-      Ingested fresh -> fresh.mirrorDeliveriesCreated `shouldBe` 1
+      Ingested fresh -> length fresh.mirrorDeliveries `shouldBe` 1
       other -> expectationFailure ("expected new reaction: " <> show other)
-    [reactionClaim] <- claimStartedDeliveries pool "meta-reaction" 10 30
+    [reactionClaim] <- startPendingDeliveries pool
     reactionClaim.eventKind `shouldBe` EventReaction
     reactionClaim.endpointId `shouldBe` qq.endpointId
     reactionClaim.actionTarget `shouldBe` Just (NativeEventId "qq-meta-target")
     reactionClaim.reactionKey `shouldBe` Just "212"
     reactionClaim.reactionAction `shouldBe` ReactionAdd
-    withDb pool (completeDelivery "meta-reaction" reactionClaim.deliveryId reactionClaim.attemptCount [] (DeliveryConfirmedAs Nothing))
+    withDb pool (completeDelivery reactionClaim.deliveryId [] (DeliveryConfirmedAs Nothing))
       `shouldReturn` True
 
     let redactionEnvelope =
@@ -902,9 +826,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             }
     redaction <- withDb pool (ingestEnvelope defaultIngestOptions redactionEnvelope)
     case redaction of
-      Ingested fresh -> fresh.mirrorDeliveriesCreated `shouldBe` 1
+      Ingested fresh -> length fresh.mirrorDeliveries `shouldBe` 1
       other -> expectationFailure ("expected new redaction: " <> show other)
-    [redactionClaim] <- claimStartedDeliveries pool "meta-redaction" 10 30
+    [redactionClaim] <- startPendingDeliveries pool
     redactionClaim.eventKind `shouldBe` EventRedaction
     redactionClaim.endpointId `shouldBe` matrix.endpointId
     redactionClaim.actionTarget `shouldBe` Just (NativeEventId "matrix-meta-target")
@@ -932,10 +856,10 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     _ <-
       withDb pool $
         ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-meta-malformed-target" "before")
-    [targetCopy] <- claimStartedDeliveries pool "meta-malformed-target" 10 30
+    [targetCopy] <- startPendingDeliveries pool
     withDb
       pool
-      (completeDelivery "meta-malformed-target" targetCopy.deliveryId targetCopy.attemptCount [] (DeliveryConfirmedAs (Just (NativeEventId "matrix-meta-malformed-target"))))
+      (completeDelivery targetCopy.deliveryId [] (DeliveryConfirmedAs (Just (NativeEventId "matrix-meta-malformed-target"))))
       `shouldReturn` True
     _ <- withConn pool $ \conn ->
       execute
@@ -949,9 +873,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             }
     edit <- withDb pool (ingestEnvelope defaultIngestOptions editEnvelope)
     case edit of
-      Ingested fresh -> fresh.mirrorDeliveriesCreated `shouldBe` 0
+      Ingested fresh -> length fresh.mirrorDeliveries `shouldBe` 0
       other -> expectationFailure ("expected new edit: " <> show other)
-    claimStartedDeliveries pool "meta-malformed-edit" 10 30 `shouldReturn` []
+    startPendingDeliveries pool `shouldReturn` []
 
   it "publishes bot QQ reactions idempotently and reconciles their notice echo" $ do
     (qq, _) <- mirrorPair pool
@@ -975,13 +899,15 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               requiredPlatform = Just PlatformQQ
             }
     Just queued <- withDb pool (enqueueReaction draft)
-    queued.deliveriesCreated `shouldBe` 1
-    withDb pool (enqueueReaction draft) `shouldReturn` Just queued
-    [claim] <- claimStartedDeliveries pool "bot-reaction" 10 30
+    length queued.deliveries `shouldBe` 1
+    Just duplicate <- withDb pool (enqueueReaction draft)
+    duplicate.canonicalMessageId `shouldBe` queued.canonicalMessageId
+    duplicate.deliveries `shouldBe` []
+    [claim] <- startPendingDeliveries pool
     claim.eventKind `shouldBe` EventReaction
     claim.endpointId `shouldBe` qq.endpointId
     claim.actionTarget `shouldBe` Just (NativeEventId "qq-reaction-target")
-    withDb pool (completeDelivery "bot-reaction" claim.deliveryId claim.attemptCount [] (DeliveryConfirmedAs Nothing))
+    withDb pool (completeDelivery claim.deliveryId [] (DeliveryConfirmedAs Nothing))
       `shouldReturn` True
     let echo =
           (inboundBody qq.endpointId (addUTCTime 1 now) "qq-reaction-notice" (Body []))
@@ -1052,8 +978,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               turnOutputLink = Nothing,
               monitorFireId = Nothing
             }
-    queued.deliveriesCreated `shouldBe` 1
-    claims <- claimStartedDeliveries pool "local-command" 10 30
+    length queued.deliveries `shouldBe` 1
+    claims <- startPendingDeliveries pool
     fmap (.endpointId) claims `shouldBe` [matrix.endpointId]
     fmap (.endpointId) claims `shouldNotContain` [qq.endpointId]
 
@@ -1395,8 +1321,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               turnOutputLink = Nothing,
               monitorFireId = Nothing
             }
-    [claim] <- claimStartedDeliveries pool "wechat-worker" 10 30
-    withDb pool (completeDelivery "wechat-worker" claim.deliveryId claim.attemptCount [] (DeliveryAccepted Nothing))
+    [claim] <- startPendingDeliveries pool
+    withDb pool (completeDelivery claim.deliveryId [] (DeliveryAccepted Nothing))
       `shouldReturn` True
     let echo eventId body =
           (inboundBody endpoint.endpointId (addUTCTime 1 now) eventId (Body [NText body]))
@@ -1502,17 +1428,20 @@ isDuplicate :: IngestResult -> Bool
 isDuplicate (AlreadyIngested _) = True
 isDuplicate _ = False
 
--- | Most delivery tests exercise the pre-reservation contract: once a claim
--- was returned it was already in the non-idempotent sending phase.  Keep those
--- assertions explicit while production now reserves a batch and starts each
--- member just in time.
-claimStartedDeliveries :: DbPool -> Text -> Int -> NominalDiffTime -> IO [DeliveryClaim]
-claimStartedDeliveries pool owner limit lease = do
-  claims <- withDb pool (claimDeliveries owner limit lease)
-  forM_ claims $ \claim ->
-    withDb pool (startDelivery owner claim.deliveryId claim.attemptCount lease)
-      `shouldReturn` True
-  pure claims
+-- | Select fixture receipts for store tests. Runtime ordering, ownership and
+-- retry scheduling are exercised by the process queue tests.
+startPendingDeliveries :: DbPool -> IO [DeliveryRequest]
+startPendingDeliveries pool = do
+  identifiers <- withConn pool $ \connection ->
+    query
+      connection
+      "SELECT DISTINCT ON (endpoint_id) delivery_id FROM message_deliveries WHERE status IN ('pending','failed') AND next_attempt_at <= now() ORDER BY endpoint_id,delivery_id"
+      ()
+  forM identifiers $ \(Only identifier) -> do
+    Just stored <- withDb pool (loadDelivery (DeliveryId identifier))
+    let request = stored {attemptCount = stored.attemptCount + 1}
+    withDb pool (startDelivery request.deliveryId request.attemptCount) `shouldReturn` True
+    pure request
 
 tuple8ToList :: (a, a, a, a, a, a, a, a) -> [a]
 tuple8ToList (a, b, c, d, e, f, g, h) = [a, b, c, d, e, f, g, h]

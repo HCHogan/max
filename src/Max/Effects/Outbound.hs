@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeFamilies #-}
 
 -- | 'Published' acknowledges the canonical transaction, not physical delivery.
--- Endpoint workers deliver the committed outbox and record platform receipts.
+-- Process-local workers send the queued copies and record platform receipts.
 module Max.Effects.Outbound
   ( Outbound,
     OutboundRequest (..),
@@ -27,6 +27,7 @@ import Max.IR
 import Max.Jobs qualified as Jobs
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Monitor.Types (MonitorFireId)
+import Max.Platform.Delivery.Queue (DeliveryQueue, queueDeliveries)
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Tasks (TaskRegistry, authorizeTurnOutput)
@@ -76,18 +77,17 @@ data Outbound :: Effect where
 
 type instance DispatchOf Outbound = Dynamic
 
--- | Production interpreter: publish the canonical bot message and every
--- endpoint delivery before any transport worker can send it.  A platform
--- outage therefore leaves durable backlog instead of an unrecorded visible
--- message; 'Published' now means the canonical send intent is committed.
+-- | Commit canonical history before queueing copies in the running process.
+-- Restart preserves publication history and never resends its pending copies.
 runOutbound ::
   forall es a.
   (WithConnection :> es, Log :> es, IOE :> es) =>
   TaskRegistry ->
   Jobs.Jobs ->
+  DeliveryQueue ->
   Eff (Outbound : es) a ->
   Eff es a
-runOutbound tasks jobs = runOutboundWith deliver
+runOutbound tasks jobs deliveries = runOutboundWith deliver
   where
     deliver :: OutboundRequest -> Eff es PublicationResult
     deliver req = do
@@ -113,6 +113,7 @@ runOutbound tasks jobs = runOutboundWith deliver
       trySync (enqueueOutbound draft) >>= \case
         Left e -> failed req ("canonical publish failed: " <> T.pack (show (e :: SomeException)))
         Right queued -> do
+          liftIO (queueDeliveries deliveries queued.deliveries)
           forM_ req.orTurnOutput $ \link -> liftIO (Jobs.recordJobPublication jobs link.tolTurnId queued.canonicalMessageId)
           pure (Published queued.canonicalMessageId)
 

@@ -6,7 +6,7 @@
 --
 -- Adapters normalize protocol traffic into 'InboundEnvelope'.  This module is
 -- the only place that turns it into durable conversation state: native-event
--- dedupe, canonical message insertion, source confirmation and mirror outbox
+-- dedupe, canonical message insertion, source confirmation and mirror receipts
 -- commit together. Fresh-message eligibility is returned to the process queue.
 module Max.Platform.Store
   ( EndpointRegistration (..),
@@ -42,17 +42,16 @@ module Max.Platform.Store
     CursorRecord (..),
     readIngestCursor,
     advanceIngestCursorCAS,
-    DeliveryClaim (..),
+    DeliveryRequest (..),
     deliveryMentionNatives,
     resolveMentionIdentities,
     resolveNativeTarget,
     ensureEndpointPrincipals,
     mentionPrincipalsFor,
-    expiredSendingDeliverySql,
-    claimDeliveries,
-    DeliveryLane (..),
-    claimDeliveriesForLane,
-    claimDelivery,
+    DeliveryTarget (..),
+    deliveryProcessBoundary,
+    deliveryTargets,
+    loadDelivery,
     startDelivery,
     DeliveryCompletion (..),
     completeDelivery,
@@ -98,8 +97,8 @@ import Data.Maybe
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (NominalDiffTime, UTCTime)
-import Database.PostgreSQL.Simple (Query, (:.) (..))
+import Data.Time (UTCTime)
+import Database.PostgreSQL.Simple ((:.) (..))
 import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.ToField
   ( ToField (..),
@@ -295,7 +294,7 @@ data NewIngest = NewIngest
     -- the row again or retaining the inbound representation.
     canonicalBody :: !(Body 'Canonical),
     dispatchEligible :: !Bool,
-    mirrorDeliveriesCreated :: !Int64
+    mirrorDeliveries :: ![DeliveryTarget]
   }
   deriving stock (Eq, Show, Generic)
 
@@ -321,7 +320,7 @@ data EnqueuedOutbound = EnqueuedOutbound
   { canonicalMessageId :: !CanonicalMessageId,
     compatibilityMessageId :: !Int64,
     primaryDeliveryId :: !DeliveryId,
-    deliveriesCreated :: !Int64
+    deliveries :: ![DeliveryTarget]
   }
   deriving stock (Eq, Show, Generic)
 
@@ -340,7 +339,7 @@ data ReactionDraft = ReactionDraft
 
 data EnqueuedReaction = EnqueuedReaction
   { canonicalMessageId :: !CanonicalMessageId,
-    deliveriesCreated :: !Int64
+    deliveries :: ![DeliveryTarget]
   }
   deriving stock (Eq, Show, Generic)
 
@@ -351,7 +350,7 @@ data CursorRecord = CursorRecord
   }
   deriving stock (Eq, Show, Generic)
 
-data DeliveryClaim = DeliveryClaim
+data DeliveryRequest = DeliveryRequest
   { deliveryId :: !DeliveryId,
     canonicalMessageId :: !CanonicalMessageId,
     endpointId :: !EndpointId,
@@ -385,7 +384,7 @@ data DeliveryCompletion
 
 -- | A non-idempotent send accepted by the edge but not yet proven by an echo
 -- or provider status.  These rows are intentionally absent from the delivery
--- claim queue: only reconciliation may move them again.
+-- send queue: only reconciliation may move them again.
 data UnconfirmedDelivery = UnconfirmedDelivery
   { deliveryId :: !DeliveryId,
     nativeEventId :: !NativeEventId,
@@ -452,7 +451,7 @@ data EndpointRow = EndpointRow
 instance FromRow EndpointRow where
   fromRow = EndpointRow <$> field <*> field <*> field <*> field <*> field <*> field
 
-data DeliveryClaimRow = DeliveryClaimRow
+data DeliveryRequestRow = DeliveryRequestRow
   { dcDeliveryId :: !Int64,
     dcCanonicalMessageId :: !Int64,
     dcEndpointId :: !Int64,
@@ -478,9 +477,9 @@ data DeliveryClaimRow = DeliveryClaimRow
     dcCapabilities :: !Value
   }
 
-instance FromRow DeliveryClaimRow where
+instance FromRow DeliveryRequestRow where
   fromRow =
-    DeliveryClaimRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> jsonbField <*> enumField parseEventKind <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> nullableJsonbField <*> field <*> field <*> field <*> field <*> field <*> field
+    DeliveryRequestRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> jsonbField <*> enumField parseEventKind <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> nullableJsonbField <*> field <*> field <*> field <*> field <*> field <*> field
 
 data DispatchRow = DispatchRow
   { drCanonical :: !Int64,
@@ -1174,7 +1173,7 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
               resolvedBody
               envelope.receivedAt
           pure ()
-      mirrorCount <-
+      _ <-
         if not options.createMirrorDeliveries
           then pure 0
           else case envelope.eventKind of
@@ -1191,13 +1190,14 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
             EventReaction -> insertMetaMirrors cid envelope.endpointId ("reaction" :: Text) ("reaction" :: Text)
             EventRedaction -> insertMetaMirrors cid envelope.endpointId ("redacts" :: Text) ("redact" :: Text)
             EventMembership -> pure 0
+      mirrors <- deliveryTargets (CanonicalMessageId cid)
       pure
         ( Ingested
             NewIngest
               { canonicalMessageId = CanonicalMessageId cid,
                 canonicalBody = resolvedBody,
                 dispatchEligible = dispatchable,
-                mirrorDeliveriesCreated = mirrorCount
+                mirrorDeliveries = mirrors
               }
         )
 
@@ -1409,7 +1409,7 @@ enqueueOutboundInTransaction draft = do
         \ VALUES (?, 'reply', ?) ON CONFLICT DO NOTHING"
         (canonical, target)
     pure ()
-  deliveryCount <-
+  _ <-
     execute
       "INSERT INTO message_deliveries \
       \ (canonical_message_id, endpoint_id, status, idempotency_key) \
@@ -1420,17 +1420,16 @@ enqueueOutboundInTransaction draft = do
       \   AND (?::boolean OR e.endpoint_id = ?) \
       \ ON CONFLICT (canonical_message_id, endpoint_id) DO NOTHING"
       (canonical, canonical, conversation, isNothing draft.sourceCanonicalMessageId, primaryEndpoint)
-  primaryDeliveryRows <-
-    query
-      "SELECT delivery_id FROM message_deliveries \
-      \ WHERE canonical_message_id = ? AND endpoint_id = ?"
-      (canonical, primaryEndpoint)
+  targets <- deliveryTargets (CanonicalMessageId canonical)
+  let primary = case [target.deliveryId | target <- targets, target.endpointId == EndpointId primaryEndpoint] of
+        [identifier] -> identifier
+        _ -> error "enqueueOutbound: expected one primary copy"
   pure
     EnqueuedOutbound
       { canonicalMessageId = CanonicalMessageId canonical,
         compatibilityMessageId = compatibilityMessage,
-        primaryDeliveryId = DeliveryId (exactlyOne "enqueueOutbound primary delivery" primaryDeliveryRows),
-        deliveriesCreated = deliveryCount
+        primaryDeliveryId = primary,
+        deliveries = targets
       }
 
 -- | Record a bot-authored semantic decision that must be visible to future
@@ -1593,16 +1592,13 @@ enqueueReaction draft = withTransaction $ do
         _ -> error "enqueueReaction: advisory lock did not return one row"
       existing <-
         query
-          "SELECT m.canonical_message_id, count(d.delivery_id) \
-          \ FROM messages m \
-          \ LEFT JOIN message_deliveries d USING (canonical_message_id) \
+          "SELECT m.canonical_message_id FROM messages m \
           \ WHERE m.conversation_id = ? AND m.message_origin = 'internal' \
-          \   AND m.event_kind = 'reaction' AND m.source_native_event_id = ? \
-          \ GROUP BY m.canonical_message_id"
+          \   AND m.event_kind = 'reaction' AND m.source_native_event_id = ?"
           (conversation, sourceKey)
-      case existing :: [(Int64, Int64)] of
-        [(canonical, count)] ->
-          pure (Just EnqueuedReaction {canonicalMessageId = CanonicalMessageId canonical, deliveriesCreated = count})
+      case existing :: [Only Int64] of
+        [Only canonical] ->
+          pure (Just EnqueuedReaction {canonicalMessageId = CanonicalMessageId canonical, deliveries = []})
         [] -> publish targetCanonical conversation sourceKey requiredName
         _ -> error "enqueueReaction: duplicate internal action invariant violated"
     _ -> error "enqueueReaction: duplicate compatibility target invariant violated"
@@ -1685,7 +1681,7 @@ enqueueReaction draft = withTransaction $ do
               \ (canonical_message_id, relation_kind, target_canonical_message_id, reaction_key, reaction_added) \
               \ VALUES (?, 'reaction', ?, ?, ?)"
               (canonical, targetCanonical, draft.reactionKey, reactionAdded)
-          deliveryCount <-
+          _ <-
             execute
               "INSERT INTO message_deliveries \
               \ (canonical_message_id, endpoint_id, status, idempotency_key) \
@@ -1694,11 +1690,12 @@ enqueueReaction draft = withTransaction $ do
               \ FROM conversation_endpoints WHERE endpoint_id = ANY(?) \
               \ ON CONFLICT (canonical_message_id, endpoint_id) DO NOTHING"
               (canonical, canonical, endpointIds)
+          targets <- deliveryTargets (CanonicalMessageId canonical)
           pure
             ( Just
                 EnqueuedReaction
                   { canonicalMessageId = CanonicalMessageId canonical,
-                    deliveriesCreated = deliveryCount
+                    deliveries = targets
                   }
             )
 
@@ -1790,82 +1787,30 @@ loadDispatchMessage (CanonicalMessageId canonical) = do
           mentionPrincipals = principals
         }
 
--- | Separate platform lanes isolate stalled transports. FIFO is per endpoint,
--- and each endpoint belongs to exactly one lane.
-data DeliveryLane
-  = -- | One platform's endpoints, served by that platform's transport.
-    LanePlatform !Platform
-  | -- | Everything the given platforms do not cover.  Deliveries addressed
-    -- to a platform with no registered transport must still be claimed by
-    -- somebody or they sit pending forever; this lane claims them so they
-    -- fail permanently exactly as they did under a single shared worker.
-    LaneUnrouted ![Platform]
+-- | The queue stores only routing identity; load content and native references
+-- immediately before an attempt so earlier sends can supply reply targets.
+data DeliveryTarget = DeliveryTarget
+  { deliveryId :: !DeliveryId,
+    endpointId :: !EndpointId,
+    platform :: !Platform
+  }
   deriving stock (Eq, Show)
 
-claimDeliveries ::
-  (WithConnection :> es, IOE :> es) =>
-  -- | stable worker id
-  Text ->
-  Int ->
-  NominalDiffTime ->
-  Eff es [DeliveryClaim]
-claimDeliveries workerId limit leaseDuration = do
-  claimDeliveriesWhere workerId Nothing Nothing limit leaseDuration
+-- | Reserve a sequence boundary before ingress starts. Receipt reconciliation
+-- may schedule only this process's publications, never an old accepted send.
+deliveryProcessBoundary :: (WithConnection :> es, IOE :> es) => Eff es DeliveryId
+deliveryProcessBoundary = withTransaction $ do
+  rows <- query "SELECT nextval('message_deliveries_delivery_id_seq')" ()
+  let boundary = exactlyOne "delivery process boundary" rows
+  _ <- execute "UPDATE message_delivery_parts SET status='outcome_unknown',last_error=COALESCE(last_error,'process ended before receipt'),updated_at=now() WHERE delivery_id<? AND status='sending'" (Only boundary)
+  _ <- execute "UPDATE message_deliveries SET status=CASE WHEN status='sending' THEN 'outcome_unknown' ELSE 'suppressed' END,last_error=COALESCE(last_error,'process ended; not replayed'),lease_owner=NULL,lease_expires_at=NULL,updated_at=now() WHERE delivery_id<? AND status IN ('pending','reserved','sending','failed')" (Only boundary)
+  pure (DeliveryId boundary)
 
--- | Claim only the deliveries belonging to one lane.
-claimDeliveriesForLane ::
-  (WithConnection :> es, IOE :> es) =>
-  -- | stable worker id, distinct per lane so leases never collide
-  Text ->
-  DeliveryLane ->
-  Int ->
-  NominalDiffTime ->
-  Eff es [DeliveryClaim]
-claimDeliveriesForLane workerId lane limit leaseDuration = do
-  claimDeliveriesWhere workerId Nothing (Just lane) limit leaseDuration
+deliveryTargets :: (WithConnection :> es, IOE :> es) => CanonicalMessageId -> Eff es [DeliveryTarget]
+deliveryTargets (CanonicalMessageId canonical) = do
+  rows <- query "SELECT d.delivery_id,d.endpoint_id,a.platform FROM message_deliveries d JOIN conversation_endpoints e USING(endpoint_id) JOIN platform_accounts a USING(platform_account_id) WHERE d.canonical_message_id=? AND d.status='pending' ORDER BY d.delivery_id" (Only canonical)
+  pure [DeliveryTarget (DeliveryId delivery) (EndpointId endpoint) (parsePlatform platform) | (delivery, endpoint, platform) <- rows]
 
-claimDelivery ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  DeliveryId ->
-  NominalDiffTime ->
-  Eff es (Maybe DeliveryClaim)
-claimDelivery workerId (DeliveryId delivery) leaseDuration = do
-  claims <- claimDeliveriesWhere workerId (Just delivery) Nothing 1 leaseDuration
-  pure (listToMaybe claims)
-
--- | A worker can disappear after durably claiming a non-idempotent send but
--- before recording the transport outcome.  Retrying that row could duplicate
--- a message, while leaving it as @sending@ forever blocks every later ordered
--- delivery on the endpoint.  Once the ownership lease expires, quarantine it
--- as outcome-unknown: visible to operators and echo reconciliation, excluded
--- from automatic retry.
-expiredSendingDeliverySql :: Query
-expiredSendingDeliverySql =
-  "UPDATE message_deliveries \
-  \ SET status = 'outcome_unknown', \
-  \     lease_owner = NULL, lease_expires_at = NULL, \
-  \     last_error = COALESCE(last_error, \
-  \       'delivery lease expired before the transport outcome was recorded'), \
-  \     updated_at = now() \
-  \ WHERE status = 'sending' \
-  \   AND (lease_expires_at IS NULL OR lease_expires_at < now())"
-
-expiredReservedDeliverySql :: Query
-expiredReservedDeliverySql =
-  "UPDATE message_deliveries \
-  \ SET status = 'pending', lease_owner = NULL, lease_expires_at = NULL, \
-  \     updated_at = now() \
-  \ WHERE status = 'reserved' \
-  \   AND (lease_expires_at IS NULL OR lease_expires_at < now())"
-
--- | Resolve canonical mention identities to native ids on the destination
--- endpoint.  The result is captured before calling the pure lowering
--- function; transports never perform identity lookups or guess from origin
--- ids.  A principal with multiple identities on one account resolves to the
--- mentioned identity itself when it lives on this account, and otherwise to
--- the most recently updated one deterministically — so a copy delivered back
--- to the origin endpoint reproduces the id the author actually wrote.
 deliveryMentionNatives ::
   (WithConnection :> es, IOE :> es) =>
   EndpointId ->
@@ -1893,223 +1838,153 @@ deliveryMentionNatives (EndpointId endpoint) identities = do
     | (identity, native) <- (rows :: [(Int64, Text)])
     ]
 
-claimDeliveriesWhere ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  Maybe Int64 ->
-  Maybe DeliveryLane ->
-  Int ->
-  NominalDiffTime ->
-  Eff es [DeliveryClaim]
-claimDeliveriesWhere workerId mDelivery mLane limit leaseDuration = do
-  -- Both are NULL for an unfiltered claim, so the predicates below collapse
-  -- to TRUE and the plan is the one every existing caller already had.  An
-  -- empty 'LaneUnrouted' list is a real case, not a degenerate one: with no
-  -- transports registered @<> ALL ('{}')@ is vacuously true and the lane
-  -- claims everything, which is what a transport-less process should do.
-  let mOnlyPlatform = case mLane of
-        Just (LanePlatform platform) -> Just (renderPlatform platform)
-        _ -> Nothing
-      mExceptPlatforms = case mLane of
-        Just (LaneUnrouted served) -> Just (PGArray (renderPlatform <$> served))
-        _ -> Nothing
-  -- This sweep is deliberately separate from the claim statement: sibling
-  -- data-modifying CTEs share a snapshot and would leave the quarantined row
-  -- visible as @sending@ to the ordering predicate until the next poll.
-  _ <- execute expiredReservedDeliverySql ()
-  _ <- execute expiredSendingDeliverySql ()
-  -- Decode while the reservation is still rollbackable. Autocommit would
-  -- retain the lease if a persisted body failed its typed row decoder.
+loadDelivery :: (WithConnection :> es, IOE :> es) => DeliveryId -> Eff es (Maybe DeliveryRequest)
+loadDelivery (DeliveryId delivery) = do
   rows <-
-    withTransaction $
-      query
-        "WITH candidates AS ( \
-        \ SELECT d.delivery_id FROM message_deliveries d \
-        \ JOIN conversation_endpoints e ON e.endpoint_id = d.endpoint_id AND e.enabled \
-        \ JOIN platform_accounts a ON a.platform_account_id = e.platform_account_id AND a.enabled \
-        \ JOIN messages candidate_message ON candidate_message.canonical_message_id = d.canonical_message_id \
-        \ WHERE d.status IN ('pending', 'failed') \
-        \   AND d.next_attempt_at <= now() \
-        \   AND max_lease_free(d.lease_owner, d.lease_expires_at) \
-        \   AND (?::bigint IS NULL OR d.delivery_id = ?) \
-        \   AND (?::text IS NULL OR a.platform = ?) \
-        \   AND (?::text[] IS NULL OR a.platform <> ALL (?)) \
-        \   AND NOT EXISTS ( \
-        \     SELECT 1 FROM message_deliveries earlier \
-        \     JOIN messages earlier_message ON earlier_message.canonical_message_id = earlier.canonical_message_id \
-        \     WHERE earlier.endpoint_id = d.endpoint_id \
-        \       AND earlier.delivery_id <> d.delivery_id \
-        \       AND earlier.status IN ('pending', 'failed', 'reserved', 'sending') \
-        \       AND (earlier_message.conversation_seq, earlier.delivery_id) \
-        \           < (candidate_message.conversation_seq, d.delivery_id) \
-        \   ) \
-        \ ORDER BY candidate_message.conversation_seq, d.delivery_id \
-        \ FOR UPDATE OF d SKIP LOCKED LIMIT ? \
-        \), claimed AS ( \
-        \ UPDATE message_deliveries d \
-        \ SET status = 'reserved', lease_owner = ?, \
-        \     lease_expires_at = max_lease_until(?), updated_at = now() \
-        \ FROM candidates c WHERE d.delivery_id = c.delivery_id \
-        \ RETURNING d.*, d.attempt_count + 1 AS next_attempt_count \
-        \) \
-        \ SELECT c.delivery_id, c.canonical_message_id, c.endpoint_id, a.platform_account_id, a.platform, \
-        \        a.native_account_id, e.native_conversation_id, m.canonical_content, \
-        \        m.event_kind, action_copy.native_event_id, action_relation.reaction_key, \
-        \        COALESCE(action_relation.reaction_added, true), previous_reaction.native_event_id, \
-        \        m.group_id, \
-        \        reply_copy.native_event_id, \
-        \        COALESCE(reply_message.sender_card, reply_message.sender_nickname), \
-        \        reply_message.canonical_content, \
-        \        origin_account.platform, COALESCE(m.sender_card, m.sender_nickname), m.message_origin, \
-        \        c.idempotency_key, c.next_attempt_count, \
-        \        CASE WHEN e.capabilities = '{}'::jsonb THEN a.capabilities ELSE e.capabilities END \
-        \ FROM claimed c \
-        \ JOIN conversation_endpoints e ON e.endpoint_id = c.endpoint_id \
-        \ JOIN platform_accounts a ON a.platform_account_id = e.platform_account_id \
-        \ JOIN messages m ON m.canonical_message_id = c.canonical_message_id \
-        \ JOIN conversation_endpoints origin_endpoint ON origin_endpoint.endpoint_id = m.origin_endpoint_id \
-        \ JOIN platform_accounts origin_account ON origin_account.platform_account_id = origin_endpoint.platform_account_id \
-        \ LEFT JOIN LATERAL ( \
-        \   SELECT relation.target_canonical_message_id, relation.target_native_event_id, \
-        \          relation.reaction_key, relation.reaction_added \
-        \   FROM message_relations relation \
-        \   WHERE relation.canonical_message_id = c.canonical_message_id \
-        \     AND relation.relation_kind = CASE m.event_kind \
-        \       WHEN 'edit' THEN 'replace' WHEN 'reaction' THEN 'reaction' \
-        \       WHEN 'redaction' THEN 'redacts' ELSE '__none__' END \
-        \   ORDER BY relation.created_at DESC, relation.relation_id DESC LIMIT 1 \
-        \ ) action_relation ON true \
-        \ LEFT JOIN LATERAL ( \
-        \   SELECT copies.native_event_id FROM ( \
-        \     SELECT pe.native_event_id, 0 AS source_rank, pe.occurred_at AS copied_at, \
-        \            pe.platform_event_id AS copy_id \
-        \     FROM platform_events pe \
-        \     WHERE pe.endpoint_id = c.endpoint_id \
-        \       AND (pe.canonical_message_id = action_relation.target_canonical_message_id \
-        \            OR (action_relation.target_canonical_message_id IS NULL \
-        \                AND pe.native_event_id = action_relation.target_native_event_id)) \
-        \     UNION ALL \
-        \     SELECT target_delivery.native_event_id, 1 AS source_rank, target_delivery.updated_at AS copied_at, \
-        \            target_delivery.delivery_id AS copy_id \
-        \     FROM message_delivery_copies target_delivery \
-        \     WHERE target_delivery.endpoint_id = c.endpoint_id \
-        \       AND target_delivery.native_event_id IS NOT NULL \
-        \       AND (target_delivery.canonical_message_id = action_relation.target_canonical_message_id \
-        \            OR (action_relation.target_canonical_message_id IS NULL \
-        \                AND target_delivery.native_event_id = action_relation.target_native_event_id)) \
-        \   ) copies \
-        \   ORDER BY CASE WHEN copies.native_event_id = action_relation.target_native_event_id THEN 0 ELSE 1 END, copies.source_rank, copies.copied_at DESC, copies.copy_id DESC LIMIT 1 \
-        \ ) action_copy ON true \
-        \ LEFT JOIN LATERAL ( \
-        \   SELECT copies.native_event_id FROM ( \
-        \     SELECT pe.native_event_id, 0 AS source_rank, pe.occurred_at AS copied_at, \
-        \            pe.platform_event_id AS copy_id, prior_message.conversation_seq \
-        \     FROM message_relations prior_relation \
-        \     JOIN messages prior_message \
-        \       ON prior_message.canonical_message_id = prior_relation.canonical_message_id \
-        \     JOIN platform_events pe \
-        \       ON pe.endpoint_id = c.endpoint_id \
-        \      AND pe.canonical_message_id = prior_relation.canonical_message_id \
-        \     WHERE m.event_kind = 'reaction' AND NOT action_relation.reaction_added \
-        \       AND prior_relation.relation_kind = 'reaction' AND prior_relation.reaction_added \
-        \       AND prior_relation.target_canonical_message_id \
-        \           IS NOT DISTINCT FROM action_relation.target_canonical_message_id \
-        \       AND prior_relation.reaction_key IS NOT DISTINCT FROM action_relation.reaction_key \
-        \       AND prior_message.conversation_seq < m.conversation_seq \
-        \     UNION ALL \
-        \     SELECT prior_delivery.native_event_id, 1 AS source_rank, prior_delivery.updated_at AS copied_at, \
-        \            prior_delivery.delivery_id AS copy_id, prior_message.conversation_seq \
-        \     FROM message_relations prior_relation \
-        \     JOIN messages prior_message \
-        \       ON prior_message.canonical_message_id = prior_relation.canonical_message_id \
-        \     JOIN message_delivery_copies prior_delivery \
-        \       ON prior_delivery.endpoint_id = c.endpoint_id \
-        \      AND prior_delivery.canonical_message_id = prior_relation.canonical_message_id \
-        \      AND prior_delivery.native_event_id IS NOT NULL \
-        \     WHERE m.event_kind = 'reaction' AND NOT action_relation.reaction_added \
-        \       AND prior_relation.relation_kind = 'reaction' AND prior_relation.reaction_added \
-        \       AND prior_relation.target_canonical_message_id \
-        \           IS NOT DISTINCT FROM action_relation.target_canonical_message_id \
-        \       AND prior_relation.reaction_key IS NOT DISTINCT FROM action_relation.reaction_key \
-        \       AND prior_message.conversation_seq < m.conversation_seq \
-        \   ) copies \
-        \   ORDER BY copies.conversation_seq DESC, copies.source_rank, copies.copied_at DESC, copies.copy_id DESC \
-        \   LIMIT 1 \
-        \ ) previous_reaction ON true \
-        \ LEFT JOIN LATERAL ( \
-        \   SELECT relation.target_canonical_message_id, relation.target_native_event_id \
-        \   FROM message_relations relation \
-        \   WHERE relation.canonical_message_id = c.canonical_message_id \
-        \     AND relation.relation_kind = 'reply' \
-        \   ORDER BY relation.created_at DESC, relation.relation_id DESC LIMIT 1 \
-        \ ) reply_relation ON true \
-        \ LEFT JOIN messages reply_message \
-        \   ON reply_message.canonical_message_id = reply_relation.target_canonical_message_id \
-        \ LEFT JOIN LATERAL ( \
-        \   SELECT copies.native_event_id FROM ( \
-        \     SELECT pe.native_event_id, 0 AS source_rank, pe.occurred_at AS copied_at, pe.platform_event_id AS copy_id \
-        \     FROM platform_events pe \
-        \     WHERE pe.endpoint_id = c.endpoint_id \
-        \       AND (pe.canonical_message_id = reply_relation.target_canonical_message_id \
-        \            OR pe.native_event_id = reply_relation.target_native_event_id) \
-        \     UNION ALL \
-        \     SELECT target_delivery.native_event_id, 1 AS source_rank, target_delivery.updated_at AS copied_at, \
-        \            target_delivery.delivery_id AS copy_id \
-        \     FROM message_delivery_copies target_delivery \
-        \     WHERE target_delivery.endpoint_id = c.endpoint_id \
-        \       AND target_delivery.native_event_id IS NOT NULL \
-        \       AND (target_delivery.canonical_message_id = reply_relation.target_canonical_message_id \
-        \            OR target_delivery.native_event_id = reply_relation.target_native_event_id) \
-        \   ) copies \
-        \   ORDER BY CASE WHEN copies.native_event_id = reply_relation.target_native_event_id THEN 0 ELSE 1 END, copies.source_rank, copies.copied_at DESC, copies.copy_id DESC LIMIT 1 \
-        \ ) reply_copy ON true \
-        \ ORDER BY c.delivery_id"
-        ( (mDelivery, mDelivery, mOnlyPlatform, mOnlyPlatform, mExceptPlatforms)
-            :. (mExceptPlatforms, limit, workerId, realToFrac leaseDuration :: Double)
-        )
-  pure (toClaim <$> (rows :: [DeliveryClaimRow]))
+    query
+      "SELECT c.delivery_id, c.canonical_message_id, c.endpoint_id, a.platform_account_id, a.platform, \
+      \        a.native_account_id, e.native_conversation_id, m.canonical_content, \
+      \        m.event_kind, action_copy.native_event_id, action_relation.reaction_key, \
+      \        COALESCE(action_relation.reaction_added, true), previous_reaction.native_event_id, \
+      \        m.group_id, \
+      \        reply_copy.native_event_id, \
+      \        COALESCE(reply_message.sender_card, reply_message.sender_nickname), \
+      \        reply_message.canonical_content, \
+      \        origin_account.platform, COALESCE(m.sender_card, m.sender_nickname), m.message_origin, \
+      \        c.idempotency_key, c.attempt_count, \
+      \        CASE WHEN e.capabilities = '{}'::jsonb THEN a.capabilities ELSE e.capabilities END \
+      \ FROM message_deliveries c \
+      \ JOIN conversation_endpoints e ON e.endpoint_id = c.endpoint_id \
+      \ JOIN platform_accounts a ON a.platform_account_id = e.platform_account_id \
+      \ JOIN messages m ON m.canonical_message_id = c.canonical_message_id \
+      \ JOIN conversation_endpoints origin_endpoint ON origin_endpoint.endpoint_id = m.origin_endpoint_id \
+      \ JOIN platform_accounts origin_account ON origin_account.platform_account_id = origin_endpoint.platform_account_id \
+      \ LEFT JOIN LATERAL ( \
+      \   SELECT relation.target_canonical_message_id, relation.target_native_event_id, \
+      \          relation.reaction_key, relation.reaction_added \
+      \   FROM message_relations relation \
+      \   WHERE relation.canonical_message_id = c.canonical_message_id \
+      \     AND relation.relation_kind = CASE m.event_kind \
+      \       WHEN 'edit' THEN 'replace' WHEN 'reaction' THEN 'reaction' \
+      \       WHEN 'redaction' THEN 'redacts' ELSE '__none__' END \
+      \   ORDER BY relation.created_at DESC, relation.relation_id DESC LIMIT 1 \
+      \ ) action_relation ON true \
+      \ LEFT JOIN LATERAL ( \
+      \   SELECT copies.native_event_id FROM ( \
+      \     SELECT pe.native_event_id, 0 AS source_rank, pe.occurred_at AS copied_at, \
+      \            pe.platform_event_id AS copy_id \
+      \     FROM platform_events pe \
+      \     WHERE pe.endpoint_id = c.endpoint_id \
+      \       AND (pe.canonical_message_id = action_relation.target_canonical_message_id \
+      \            OR (action_relation.target_canonical_message_id IS NULL \
+      \                AND pe.native_event_id = action_relation.target_native_event_id)) \
+      \     UNION ALL \
+      \     SELECT target_delivery.native_event_id, 1 AS source_rank, target_delivery.updated_at AS copied_at, \
+      \            target_delivery.delivery_id AS copy_id \
+      \     FROM message_delivery_copies target_delivery \
+      \     WHERE target_delivery.endpoint_id = c.endpoint_id \
+      \       AND target_delivery.native_event_id IS NOT NULL \
+      \       AND (target_delivery.canonical_message_id = action_relation.target_canonical_message_id \
+      \            OR (action_relation.target_canonical_message_id IS NULL \
+      \                AND target_delivery.native_event_id = action_relation.target_native_event_id)) \
+      \   ) copies \
+      \   ORDER BY CASE WHEN copies.native_event_id = action_relation.target_native_event_id THEN 0 ELSE 1 END, copies.source_rank, copies.copied_at DESC, copies.copy_id DESC LIMIT 1 \
+      \ ) action_copy ON true \
+      \ LEFT JOIN LATERAL ( \
+      \   SELECT copies.native_event_id FROM ( \
+      \     SELECT pe.native_event_id, 0 AS source_rank, pe.occurred_at AS copied_at, \
+      \            pe.platform_event_id AS copy_id, prior_message.conversation_seq \
+      \     FROM message_relations prior_relation \
+      \     JOIN messages prior_message \
+      \       ON prior_message.canonical_message_id = prior_relation.canonical_message_id \
+      \     JOIN platform_events pe \
+      \       ON pe.endpoint_id = c.endpoint_id \
+      \      AND pe.canonical_message_id = prior_relation.canonical_message_id \
+      \     WHERE m.event_kind = 'reaction' AND NOT action_relation.reaction_added \
+      \       AND prior_relation.relation_kind = 'reaction' AND prior_relation.reaction_added \
+      \       AND prior_relation.target_canonical_message_id \
+      \           IS NOT DISTINCT FROM action_relation.target_canonical_message_id \
+      \       AND prior_relation.reaction_key IS NOT DISTINCT FROM action_relation.reaction_key \
+      \       AND prior_message.conversation_seq < m.conversation_seq \
+      \     UNION ALL \
+      \     SELECT prior_delivery.native_event_id, 1 AS source_rank, prior_delivery.updated_at AS copied_at, \
+      \            prior_delivery.delivery_id AS copy_id, prior_message.conversation_seq \
+      \     FROM message_relations prior_relation \
+      \     JOIN messages prior_message \
+      \       ON prior_message.canonical_message_id = prior_relation.canonical_message_id \
+      \     JOIN message_delivery_copies prior_delivery \
+      \       ON prior_delivery.endpoint_id = c.endpoint_id \
+      \      AND prior_delivery.canonical_message_id = prior_relation.canonical_message_id \
+      \      AND prior_delivery.native_event_id IS NOT NULL \
+      \     WHERE m.event_kind = 'reaction' AND NOT action_relation.reaction_added \
+      \       AND prior_relation.relation_kind = 'reaction' AND prior_relation.reaction_added \
+      \       AND prior_relation.target_canonical_message_id \
+      \           IS NOT DISTINCT FROM action_relation.target_canonical_message_id \
+      \       AND prior_relation.reaction_key IS NOT DISTINCT FROM action_relation.reaction_key \
+      \       AND prior_message.conversation_seq < m.conversation_seq \
+      \   ) copies \
+      \   ORDER BY copies.conversation_seq DESC, copies.source_rank, copies.copied_at DESC, copies.copy_id DESC \
+      \   LIMIT 1 \
+      \ ) previous_reaction ON true \
+      \ LEFT JOIN LATERAL ( \
+      \   SELECT relation.target_canonical_message_id, relation.target_native_event_id \
+      \   FROM message_relations relation \
+      \   WHERE relation.canonical_message_id = c.canonical_message_id \
+      \     AND relation.relation_kind = 'reply' \
+      \   ORDER BY relation.created_at DESC, relation.relation_id DESC LIMIT 1 \
+      \ ) reply_relation ON true \
+      \ LEFT JOIN messages reply_message \
+      \   ON reply_message.canonical_message_id = reply_relation.target_canonical_message_id \
+      \ LEFT JOIN LATERAL ( \
+      \   SELECT copies.native_event_id FROM ( \
+      \     SELECT pe.native_event_id, 0 AS source_rank, pe.occurred_at AS copied_at, pe.platform_event_id AS copy_id \
+      \     FROM platform_events pe \
+      \     WHERE pe.endpoint_id = c.endpoint_id \
+      \       AND (pe.canonical_message_id = reply_relation.target_canonical_message_id \
+      \            OR pe.native_event_id = reply_relation.target_native_event_id) \
+      \     UNION ALL \
+      \     SELECT target_delivery.native_event_id, 1 AS source_rank, target_delivery.updated_at AS copied_at, \
+      \            target_delivery.delivery_id AS copy_id \
+      \     FROM message_delivery_copies target_delivery \
+      \     WHERE target_delivery.endpoint_id = c.endpoint_id \
+      \       AND target_delivery.native_event_id IS NOT NULL \
+      \       AND (target_delivery.canonical_message_id = reply_relation.target_canonical_message_id \
+      \            OR target_delivery.native_event_id = reply_relation.target_native_event_id) \
+      \   ) copies \
+      \   ORDER BY CASE WHEN copies.native_event_id = reply_relation.target_native_event_id THEN 0 ELSE 1 END, copies.source_rank, copies.copied_at DESC, copies.copy_id DESC LIMIT 1 \
+      \ ) reply_copy ON true \
+      \ WHERE c.delivery_id = ? AND e.enabled AND a.enabled"
+      (Only delivery)
+  pure (toDeliveryRequest <$> listToMaybe (rows :: [DeliveryRequestRow]))
 
--- | Cross a delivery reservation into the non-idempotent transport phase.
--- Refreshing the lease here prevents time spent behind earlier batch members
--- from consuming the actual send attempt's ambiguity window.
-startDelivery ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  DeliveryId ->
-  Int ->
-  NominalDiffTime ->
-  Eff es Bool
-startDelivery workerId (DeliveryId delivery) attempt leaseDuration = do
+-- | Record the transport phase for echoes and inspection. Ownership and retry
+-- scheduling belong to the process queue, not this diagnostic row.
+startDelivery :: (WithConnection :> es, IOE :> es) => DeliveryId -> Int -> Eff es Bool
+startDelivery (DeliveryId delivery) attempt = do
   changed <-
     execute
-      "UPDATE message_deliveries \
-      \ SET status = 'sending', attempt_count = attempt_count + 1, \
-      \     last_attempt_at = now(), lease_expires_at = max_lease_until(?), updated_at = now() \
-      \ WHERE delivery_id = ? AND status = 'reserved' \
-      \   AND lease_owner = ? AND attempt_count + 1 = ?"
-      (realToFrac leaseDuration :: Double, delivery, workerId, attempt)
+      "UPDATE message_deliveries SET status='sending',attempt_count=?,last_attempt_at=now(),updated_at=now() WHERE delivery_id=? AND status IN ('pending','failed')"
+      (attempt, delivery)
   pure (changed == 1)
 
 completeDelivery ::
   (WithConnection :> es, IOE :> es) =>
-  Text ->
   DeliveryId ->
-  -- | Attempt token returned by the reservation and committed by
-  -- 'startDelivery'.
-  Int ->
   [LowerNote] ->
   DeliveryCompletion ->
   Eff es Bool
-completeDelivery workerId (DeliveryId delivery) attempt lowerNotes completion = do
+completeDelivery (DeliveryId delivery) lowerNotes completion = do
   withTransaction $ do
+    lockDeliveryParent delivery
     safeCompletion <- discardOwnedNativeEvent completion
     changed <- case safeCompletion of
       DeliveryConfirmedAs native ->
         finish ("confirmed" :: Text) native Nothing Nothing True
       DeliveryAccepted native -> do
-        rows <- query "SELECT EXISTS (SELECT 1 FROM message_delivery_parts WHERE delivery_id=?) AND NOT EXISTS (SELECT 1 FROM message_delivery_parts WHERE delivery_id=? AND status<>'confirmed')" (delivery, delivery)
-        let confirmed = rows == [Only True]
-        finish (if confirmed then "confirmed" else "accepted_unconfirmed") native Nothing Nothing confirmed
+        rows <- query "SELECT EXISTS (SELECT 1 FROM message_delivery_parts WHERE delivery_id=?) AND NOT EXISTS (SELECT 1 FROM message_delivery_parts WHERE delivery_id=? AND status<>'confirmed'), EXISTS (SELECT 1 FROM message_delivery_parts WHERE delivery_id=? AND status='retry')" (delivery, delivery, delivery)
+        let (confirmed, retry) = case rows of [flags] -> flags; _ -> (False, False)
+            status | retry = "failed" | confirmed = "confirmed" | otherwise = "accepted_unconfirmed"
+        finish status native (if retry then Just "provider rejected a part during delivery" else Nothing) Nothing confirmed
       DeliveryRetry err next ->
         finish "failed" Nothing (Just err) (Just next) False
       DeliveryUnknown err next ->
@@ -2150,17 +2025,14 @@ completeDelivery workerId (DeliveryId delivery) attempt lowerNotes completion = 
         \     last_error = ?, next_attempt_at = COALESCE(?, next_attempt_at), \
         \     confirmed_at = CASE WHEN ? THEN now() ELSE confirmed_at END, \
         \     lease_owner = NULL, lease_expires_at = NULL, updated_at = now() \
-        \ WHERE delivery_id = ? AND status = 'sending' AND lease_owner = ? \
-        \   AND attempt_count = ? AND lease_expires_at > clock_timestamp()"
+        \ WHERE delivery_id = ? AND status IN ('pending','failed','sending')"
         ( status,
           unNativeEventId <$> native,
           Jsonb (toJSON lowerNotes),
           lastError,
           next,
           confirmed,
-          delivery,
-          workerId,
-          attempt
+          delivery
         )
 
 listUnconfirmedDeliveries ::
@@ -2194,9 +2066,9 @@ retryUnconfirmedDelivery (DeliveryId delivery) (NativeEventId native) reason = w
   parts <- execute "UPDATE message_delivery_parts SET status='retry',native_event_id=NULL,last_error=?,updated_at=now() WHERE delivery_id=? AND native_event_id=? AND status='accepted_unconfirmed'" (reason, delivery, native)
   changed <-
     execute
-      "UPDATE message_deliveries d SET status='failed',next_attempt_at=now(),last_error=?,updated_at=now(),native_event_id=CASE WHEN native_event_id=? THEN NULL ELSE native_event_id END WHERE delivery_id=? AND status='accepted_unconfirmed' AND (? OR (native_event_id=? AND NOT EXISTS (SELECT 1 FROM message_delivery_parts p WHERE p.delivery_id=d.delivery_id)))"
+      "UPDATE message_deliveries d SET status=CASE WHEN status='sending' THEN 'sending' ELSE 'failed' END,next_attempt_at=now(),last_error=?,updated_at=now(),native_event_id=CASE WHEN native_event_id=? THEN NULL ELSE native_event_id END WHERE delivery_id=? AND status IN ('accepted_unconfirmed','sending') AND (? OR (native_event_id=? AND NOT EXISTS (SELECT 1 FROM message_delivery_parts p WHERE p.delivery_id=d.delivery_id)))"
       (reason, native, delivery, parts > 0, native)
-  pure (changed > 0)
+  pure (parts > 0 || changed > 0)
 
 lockDeliveryParent :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es ()
 lockDeliveryParent delivery = do
@@ -2800,8 +2672,8 @@ exactlyOne :: String -> [Only a] -> a
 exactlyOne _ [Only value] = value
 exactlyOne label _ = error (label <> ": expected exactly one row")
 
-toClaim :: DeliveryClaimRow -> DeliveryClaim
-toClaim row =
+toDeliveryRequest :: DeliveryRequestRow -> DeliveryRequest
+toDeliveryRequest row =
   let destination = parsePlatform row.dcPlatform
       origin = parsePlatform row.dcOriginPlatform
       replyBody = row.dcReplyContent
@@ -2822,7 +2694,7 @@ toClaim row =
                   sender = row.dcSenderDisplayName
                 }
         | otherwise = Nothing
-   in DeliveryClaim
+   in DeliveryRequest
         { deliveryId = DeliveryId row.dcDeliveryId,
           canonicalMessageId = CanonicalMessageId row.dcCanonicalMessageId,
           endpointId = EndpointId row.dcEndpointId,

@@ -158,6 +158,7 @@ import Max.ModelCatalog
   )
 import Max.Monitor (nextCronFire)
 import Max.Monitor.Types (MonitorRef (..), monitorHandleText)
+import Max.Platform.Delivery.Queue (queueDeliveries)
 import Max.Platform.Envelope
   ( InboundEnvelope (..),
     IngestClass (Backfill),
@@ -180,7 +181,8 @@ import Max.Platform.QQHistory
     readQQHistoryPage,
   )
 import Max.Platform.Store
-  ( IngestOptions
+  ( EnqueuedReaction (..),
+    IngestOptions
       ( createDispatch,
         createMirrorDeliveries,
         qqProvenanceSegments,
@@ -2031,10 +2033,10 @@ actorTier gid uid
 
 -- | Reactions are lightweight canonical meta-events.  Publishing them is the
 -- only side effect on the dispatch path; the capability-aware delivery worker
--- resolves the target's QQ copy and performs the native action durably.
+-- resolves the target's QQ copy and records the native action's receipt.
 -- Missing/unsupported targets are quiet by design.
 queueQQReaction ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (Reader BotEnv :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   GroupId ->
   CanonicalMessageId ->
   Int ->
@@ -2052,9 +2054,11 @@ queueQQReaction (GroupId group) (CanonicalMessageId message) faceId added =
           }
     )
     >>= \case
-      Right _ -> pure ()
+      Right result -> do
+        env :: BotEnv <- ask
+        for_ result (liftIO . queueDeliveries env.beDeliveries . (.deliveries))
       Left e ->
-        logAttention "reaction outbox publish failed" $
+        logAttention "reaction publication failed" $
           object
             [ "group_id" .= group,
               "message_id" .= message,

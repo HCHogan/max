@@ -78,8 +78,7 @@ src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory
                    of the allowlisted compile-time source snapshot)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    Platform.Types/Store/Delivery (canonical conversations,
-                   identities, native provenance, cursor/delivery
-                   leases), QQ normalization, Matrix and iMessage adapters,
+                   identities, native provenance, ingest cursors and receipts), QQ normalization, Matrix and iMessage adapters,
                    AgentEvent (typed progress/debug/final-stream port and its
                    ReplySend/Outbound interpreter),
                    ToolContext (neutral per-turn identity/capabilities),
@@ -142,8 +141,8 @@ app/Main.hs        wires effects + workers + server
 QQ, Matrix, and a configured iMessage chat may be endpoints of the same
 canonical conversation; an iMessage endpoint may also remain standalone.
 The ingress queue belongs to the running process. Restart preserves messages but
-never reconstructs old dispatch work. Outbound delivery still uses its SQL queue
-until the publication cutover.
+never reconstructs old dispatch or delivery work. Per-platform senders serialize
+each destination and keep retry schedules in memory.
 Matrix retries reuse deterministic transaction IDs. Non-idempotent
 QQ/iMessage ambiguity is parked until echo/status reconciliation, never placed
 back on the retry queue by a timeout. Context, Historian, and memory therefore
@@ -392,8 +391,7 @@ remain recorded. Jobs own detached work, child results and feedback in STM. A
 parent awaiting children holds no worker slot. Each root shares 200 tool calls
 and 400 model rounds; children inherit its deadline and grant fingerprints.
 Cancellation and replacement fence the old generation before signalling it.
-The transport outbox remains pending replacement in the
-[simplification plan](simplification.md).
+Outbound copies belong to bounded process queues; restart never reconstructs them.
 
 ### PostgreSQL transaction ownership
 
@@ -409,12 +407,12 @@ The wrapper introduces an opaque `InTransaction` effect. Authorization and
 mutation helpers that depend on row locks require this evidence, so an ordinary
 `WithConnection` caller cannot invoke them outside a transaction. Standalone
 cache publication still requires a completed outermost commit. Dispatch and
-delivery reservations decode typed canonical bodies before committing; corrupt
-JSON raises `ConversionFailed` and rolls back the reservation.
-Jobs reserve calls and model rounds atomically in STM before execution. The
-turn counter and journal remain diagnostics in PostgreSQL. A failed diagnostic
-write prevents execution and conservatively retains the local reservation;
-no reservation is refunded or replayed after an uncertain effect.
+delivery readers decode typed canonical bodies; corrupt JSON raises
+`ConversionFailed` before transport execution.
+Jobs reserve calls and model rounds atomically in STM before execution. Completed
+tool results remain queryable in PostgreSQL; diagnostic write failures are logged
+without changing a completed outcome. Uncertain effects are never replayed or
+used to refund a reservation.
 
 Task tools are assembled with bound conversation, caller and execution scopes.
 Their code holds TaskQuery/TaskControl/TaskExecution and TurnQuery capabilities,
@@ -567,14 +565,13 @@ BlobHost
 `sha256` and `local_path` values for schema compatibility, but readers recover a
 `BlobRef` from the digest and do not treat the persisted path as authority.
 
-`Outbound` owns canonical publication, not transport IO. It commits one bot
-message, its reply relation, and per-endpoint delivery jobs first; leased
-workers reserve a batch but cross each row into `sending` only immediately
-before processing it. An expired unstarted reservation is safely re-offered;
-only a started send can become `outcome_unknown`. Inbound dispatch instead uses
-a bounded STM queue of newly committed message IDs. The common handler reads
-canonical content and identities, handles commands, and hands model work to the
-conversation queue. A failed dispatch is logged and never automatically rerun.
+`Outbound` commits a bot message, reply relation and endpoint copies, then queues
+those copies in memory. The bounded queue owns ordering and retries; database
+rows retain native receipts and diagnostics. Each platform has one sender, and
+a delayed retry blocks only later copies to that destination. Restart closes
+unfinished rows without resending them. Inbound dispatch also uses a bounded
+queue of freshly committed messages; the handler hands model work to the
+conversation queue and never reruns a failed command automatically.
 Before the turn, `Handler` reads
 the conversation's semantic output capabilities. Content with a total lower
 path remains available across mixed endpoints; native encoding is decided per
@@ -600,12 +597,11 @@ the same wire plan and skips successful parts. Matrix may replay uncertain
 parts with stable transaction keys; QQ/iMessage require proof of no effect
 before retrying an uncertain part.
 
-`Max.Concurrent.Lease` scopes renewal and cancellation around delivery, fetch
-and maintenance work, while delivery and media loops share its renewal primitive
-with explicit domain policy. Delivery renewal covers media preparation through
-completion, and each part checks ownership before sending. Fetch settlement
-uses an attempt token so stale workers cannot clear or delete a successor's
-claim. `Max.Concurrent.Lock` supplies both keyed locks and entry-owned mutexes.
+`Max.Concurrent.Lease` remains around fetch and maintenance work pending their
+cutover. `Max.Concurrent.Lock` supplies keyed locks and entry-owned mutexes.
+Delivery has no lease heartbeat or SQL claim. Receipt reconciliation can confirm
+historical sends, but its retry admission is restricted to IDs allocated after
+this process started.
 
 The Mac-side iMessage bridge derives native-reply capability from a live
 `imsg status` probe instead of configuration. Max records capability changes on

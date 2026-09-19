@@ -31,7 +31,6 @@ import Max.DB.Migrations (runMigrations)
 import Max.DB.Projection (ProjectionRow (..), expectedProjection, projectionRows)
 import Max.EpisodeStore (CaptureRunId (..), reviewRejectedMemoryProposal)
 import Max.MemoryStore qualified as Memory
-import Max.Platform.Store (expiredSendingDeliverySql)
 import OneBot.Types (GroupId (..))
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (die)
@@ -92,23 +91,9 @@ run command migrationsDir pool = case command of
       reproject connection
       verify True connection
 
--- | Quarantine abandoned delivery claims, then refuse to cross the
--- irreversible schema boundary with any genuinely active work.  An expired
--- @sending@ lease has already lost its owner; outcome-unknown is the only safe
--- terminal classification because retrying could duplicate a send.  Older
--- pre-049 databases legitimately lack the canonical outbox tables, so every
--- operation is discovered before its SQL is prepared.
+-- | Check the old writer queues before crossing the schema boundary.
 preflightDrained :: Connection -> IO ()
 preflightDrained connection = do
-  deliveriesExist <- tableExists connection "message_deliveries"
-  when deliveriesExist $ do
-    quarantined <- execute connection expiredSendingDeliverySql ()
-    when (quarantined /= 0) $
-      putStrLn
-        ( "preflight: quarantined "
-            <> show quarantined
-            <> " expired sending delivery lease(s) as outcome_unknown"
-        )
   problems <- fmap concat . forM preflightChecks $ \(table, label, sql) -> do
     exists <- tableExists connection table
     if not exists
@@ -357,32 +342,14 @@ schemaChecks =
 
 drainChecks :: [(String, Query)]
 drainChecks =
-  [ ( "active delivery rows",
-      "SELECT count(*) FROM message_deliveries \
-      \WHERE status IN ('pending', 'reserved', 'sending', 'failed')"
-    ),
-    ( "active dispatch rows",
-      "SELECT count(*) FROM message_dispatches \
-      \WHERE status IN ('pending', 'reserved', 'claimed', 'failed', 'deferred')"
-    ),
-    ( "unprocessed durable media jobs",
+  [ ( "unprocessed durable media jobs",
       "SELECT count(*) FROM fetch_jobs WHERE parked_at IS NULL"
     )
   ]
 
 preflightChecks :: [(Text, String, Query)]
 preflightChecks =
-  [ ( "message_deliveries",
-      "active delivery rows before migration",
-      "SELECT count(*) FROM message_deliveries \
-      \WHERE status IN ('pending', 'reserved', 'sending', 'failed')"
-    ),
-    ( "message_dispatches",
-      "active dispatch rows before migration",
-      "SELECT count(*) FROM message_dispatches \
-      \WHERE status IN ('pending', 'reserved', 'claimed', 'failed', 'deferred')"
-    ),
-    ( "fetch_jobs",
+  [ ( "fetch_jobs",
       "unprocessed durable media jobs before migration",
       "SELECT count(*) FROM fetch_jobs WHERE parked_at IS NULL"
     )

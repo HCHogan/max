@@ -139,7 +139,7 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.Platform.DeliverySpec` — canonical inline/blob/base64 media resolution
   and bounded delivery projection
 - `Max.PlatformStoreSpec` (DB) — native-event dedupe, process ingress, cursor CAS and
-  delivery leases, mirror fan-out, outcome-unknown parking, echo/status
+  delivery queues, mirror fan-out, outcome-unknown parking, echo/status
   reconciliation, and endpoint diagnostics
 - `Max.PromptSpec` — `renderContext`: the flat transcript and the
   `history_as_turns` shape (including that neither can produce two consecutive

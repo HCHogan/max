@@ -18,11 +18,6 @@ operationalChecks =
       True,
       "SELECT count(*) FROM message_deliveries WHERE status = 'outcome_unknown'"
     ),
-    ( "delivery_expired_lease",
-      True,
-      "SELECT count(*) FROM message_deliveries \
-      \WHERE status IN ('reserved', 'sending') AND lease_expires_at <= now()"
-    ),
     ( "media_parked",
       True,
       "SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL"

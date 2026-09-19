@@ -19,6 +19,7 @@ import Max.Effects.Outbound
 import Max.IR
 import Max.Jobs (newJobs)
 import Max.MessageKind (MessageKind (KindChat))
+import Max.Platform.Delivery.Queue (newDeliveryQueue)
 import Max.Platform.Types
 import Max.Reply.Caption (captionBody)
 import Max.ReplySend
@@ -35,12 +36,13 @@ spec pool = before_ (truncateAll pool) $ describe "canonical publication boundar
     durable <- withDb pool (startAgentTurn (GroupId 900) (CanonicalMessageId source) (PrincipalId principal))
     registry <- newTaskRegistry
     jobs <- newJobs registry
+    deliveries <- newDeliveryQueue (DeliveryId 0)
     turn <- beginDurableTurnRuntime registry durable (GroupId 900) (UserId 123) (Just (CanonicalMessageId source))
     Just output <- pure (turnRuntimeOutputContext turn)
     let publish = do
           link <- nextTurnOutputLink output
           withDbLog pool $
-            runOutbound registry jobs $
+            runOutbound registry jobs deliveries $
               sendRecorded
                 (OutboundRequest KindChat (GroupId 900) (Body [NText "prefix"]) Nothing DeliverConversation (Just link) Nothing)
     first <- publish

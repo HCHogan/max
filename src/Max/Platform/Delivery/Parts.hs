@@ -64,7 +64,7 @@ runDeliveryParts ::
 runDeliveryParts journal safety complete fingerprints payloads send = do
   planned <- journal.plan fingerprints
   if length fingerprints /= length payloads || not planned
-    then pure (AttemptOutcomeUnknown "delivery ownership lost or wire plan changed")
+    then pure (AttemptOutcomeUnknown "delivery wire plan changed")
     else go 0 Nothing payloads
   where
     go _ native [] = pure (complete native)
@@ -84,7 +84,7 @@ runDeliveryParts journal safety complete fingerprints payloads send = do
           recorded <- journal.finish index settled
           if recorded
             then continue index native rest settled
-            else pure (AttemptOutcomeUnknown "delivery ownership lost before part receipt was recorded")
+            else pure (AttemptOutcomeUnknown "delivery part receipt was not recorded")
     continue index native rest = \case
       AttemptConfirmed value -> go (index + 1) (native <|> value) rest
       AttemptAccepted value -> go (index + 1) (native <|> value) rest

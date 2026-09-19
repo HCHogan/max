@@ -3,18 +3,22 @@
 module Max.Platform.Ingress (Ingress, newIngress, queueIngest, nextIngress) where
 
 import Control.Concurrent.STM
+import Control.Monad (when)
+import Max.Platform.Delivery.Queue (DeliveryQueue, queueDeliveries)
 import Max.Platform.Store (IngestResult (..), NewIngest (..))
 import Max.Platform.Types (CanonicalMessageId)
 
-newtype Ingress = Ingress (TBQueue CanonicalMessageId)
+data Ingress = Ingress (TBQueue CanonicalMessageId) DeliveryQueue
 
-newIngress :: IO Ingress
-newIngress = Ingress <$> newTBQueueIO 1024
+newIngress :: DeliveryQueue -> IO Ingress
+newIngress deliveries = (`Ingress` deliveries) <$> newTBQueueIO 1024
 
 queueIngest :: Ingress -> IngestResult -> IO ()
-queueIngest (Ingress queue) = \case
-  Ingested event | event.dispatchEligible -> atomically (writeTBQueue queue event.canonicalMessageId)
+queueIngest (Ingress queue deliveries) = \case
+  Ingested event -> do
+    queueDeliveries deliveries event.mirrorDeliveries
+    when event.dispatchEligible (atomically (writeTBQueue queue event.canonicalMessageId))
   _ -> pure ()
 
 nextIngress :: Ingress -> IO CanonicalMessageId
-nextIngress (Ingress queue) = atomically (readTBQueue queue)
+nextIngress (Ingress queue _) = atomically (readTBQueue queue)

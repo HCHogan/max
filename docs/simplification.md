@@ -87,8 +87,8 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 ### D. Publication and maintenance
 
 - [x] Replace durable inbound dispatch execution with a bounded local queue.
-- [ ] Replace durable outbox execution with bounded local queues.
-- [ ] Keep platform receipts, reference mappings, current-run deduplication and
+- [x] Replace durable outbox execution with bounded local queues.
+- [x] Keep platform receipts, reference mappings, current-run deduplication and
       conservative handling of uncertain sends.
 - [x] Replace embedding maintenance leases with a process-local lock and
       missing-data scans; keep source/version-conditional writes.
@@ -344,3 +344,19 @@ maintained implementation record.
   retained source deduplication, corrupt-body, provenance and platform cases.
   Upgrade, capability and HLint checks pass. Effective src/app Haskell is 46,224
   lines; core Haskell is 33,098. Outbound and maintenance queues remain pending.
+
+- Outbound copies now enter a bounded process queue after canonical commit.
+  Per-platform workers serialize destination heads; delayed retries leave other
+  destinations available. Removed SQL claims, reservations, lease renewal and
+  worker wakeup triggers. Native reply/action lookup, part fingerprints, stable
+  Matrix transactions, echo/status reconciliation and current-run part receipts
+  remain. Provider failure may retry only output created in this process; startup
+  closes old pending rows and retains uncertain sends without replaying them.
+  Migration 119 preserves canonical history and confirmed part receipts.
+  Retired six lease/SQL-lane tests, added four process-queue cases, an actual
+  restart-boundary case and a provider-failure/settlement race. Native collision,
+  media, platform and streaming cases remain. All targets build; 1,054 unit and
+  265 DB examples pass, as do upgrade, capability and HLint checks. Obsolete
+  dispatch/delivery drain gates no longer block the stopped-process migration.
+  Effective src/app Haskell is 46,195 lines; core Haskell is 33,065. Media,
+  Historian, context and final operational acceptance remain.

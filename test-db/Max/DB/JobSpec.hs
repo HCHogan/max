@@ -21,6 +21,8 @@ import Max.Effects.TaskQuery qualified as Query
 import Max.IR (Body (..), Node (NText))
 import Max.Jobs qualified as Jobs
 import Max.MessageKind (MessageKind (KindChat))
+import Max.Platform.Delivery.Queue (newDeliveryQueue)
+import Max.Platform.Types (DeliveryId (..))
 import Max.Task.Types
 import Max.Tasks (beginDurableTurnRuntime, cancelAgentTurnTask, newTaskRegistry)
 import Max.Turn.Types
@@ -72,8 +74,9 @@ spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ d
 
   it "blocks background output and revokes a stale progress notice at the shared publisher" $ do
     running <- runningJob pool Research Map.empty
+    deliveries <- newDeliveryQueue (DeliveryId 0)
     let request turn = OutboundRequest KindChat (GroupId 900) (Body [NText "output"]) Nothing DeliverConversation (Just (TurnOutputLink turn.atrTurnId 0)) Nothing
-        publish turn = withDbLog pool . runOutbound running.tasks running.jobs $ sendRecorded (request turn)
+        publish turn = withDbLog pool . runOutbound running.tasks running.jobs deliveries $ sendRecorded (request turn)
     publish running.turn >>= (`shouldSatisfy` publicationFailed)
     Jobs.reportJobProgress running.jobs running.turn.atrTurnId "progress" `shouldReturn` True
     Jobs.PublishJobNotice job version _ <- Jobs.takeJobWork running.jobs

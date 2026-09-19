@@ -78,10 +78,13 @@ import Max.Platform.Delivery
     resolveDeliveryMedia,
   )
 import Max.Platform.Delivery.Parts
+import Max.Platform.Delivery.Queue (DeliveryQueue, queueDeliveryRetry)
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
 import Max.Platform.Ingress (Ingress, queueIngest)
 import Max.Platform.Store
   ( CursorRecord (..),
+    DeliveryRequest (..),
+    DeliveryTarget (..),
     IngestOptions (..),
     IngestResult (..),
     NewIngest (..),
@@ -93,6 +96,7 @@ import Max.Platform.Store
     ensureConfiguredEndpoint,
     ingestEnvelope,
     listUnconfirmedDeliveries,
+    loadDelivery,
     nativeEventWasDeliveredTo,
     readIngestCursor,
     retryUnconfirmedDelivery,
@@ -226,8 +230,9 @@ iMessageWorker ::
   IMessageConfig ->
   Maybe EpisodeScheduler ->
   Ingress ->
+  DeliveryQueue ->
   Eff es ()
-iMessageWorker runtime cfg episodeScheduler ingress = localDomain "imessage" $ do
+iMessageWorker runtime cfg episodeScheduler ingress deliveries = localDomain "imessage" $ do
   health <- awaitBridgeHealth
   registered <-
     ensureConfiguredEndpoint
@@ -404,8 +409,12 @@ iMessageWorker runtime cfg episodeScheduler ingress = localDomain "imessage" $ d
               Right IMessageSendSent -> confirm delivery
               Right IMessageSendDelivered -> confirm delivery
               Right IMessageSendFailed -> do
-                _ <- retryUnconfirmedDelivery delivery.deliveryId delivery.nativeEventId "imsg reports send_state=failed"
-                pure ()
+                changed <- retryUnconfirmedDelivery delivery.deliveryId delivery.nativeEventId "imsg reports send_state=failed"
+                when changed $ do
+                  request <- loadDelivery delivery.deliveryId
+                  forM_ request $ \deliveryRequest ->
+                    liftIO $
+                      queueDeliveryRetry deliveries (DeliveryTarget deliveryRequest.deliveryId deliveryRequest.endpointId deliveryRequest.platform) deliveryRequest.attemptCount
       where
         confirm delivery = do
           _ <- confirmUnconfirmedDelivery delivery.deliveryId delivery.nativeEventId

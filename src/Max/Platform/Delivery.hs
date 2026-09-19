@@ -1,4 +1,4 @@
--- | Durable delivery with one sequential lane per platform. Lanes run
+-- | Current-process delivery with one sequential lane per platform. Lanes run
 -- concurrently so a slow transport does not block another platform.
 -- Resolve identities/media and lower canonical IR before invoking adapters;
 -- adapters encode native nodes and do not choose degradation policy.
@@ -22,7 +22,7 @@ module Max.Platform.Delivery
   )
 where
 
-import Control.Monad (forM_)
+import Control.Monad (forever)
 import Data.Aeson (Result (..), fromJSON, toJSON)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
@@ -40,8 +40,6 @@ import Effectful.Concurrent.Async (Concurrent, forConcurrently_)
 import Effectful.Exception (SomeException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Max.Concurrent.Lease
-import Max.DB.Notify (WorkChannel (DeliveryWork), claimOrWait)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.HttpRuntime
   ( BufferedResponse (body),
@@ -57,14 +55,15 @@ import Max.IR.Digest (digest)
 import Max.IR.Lower
 import Max.Platform (PlatformBackend (..))
 import Max.Platform.Delivery.Parts
+import Max.Platform.Delivery.Queue
 import Max.Platform.Delivery.Store
 import Max.Platform.Store
-  ( DeliveryClaim (..),
-    DeliveryCompletion (..),
-    DeliveryLane (..),
-    claimDeliveriesForLane,
+  ( DeliveryCompletion (..),
+    DeliveryRequest (..),
+    DeliveryTarget (..),
     completeDelivery,
     deliveryMentionNatives,
+    loadDelivery,
     startDelivery,
   )
 import Max.Platform.Types
@@ -75,14 +74,14 @@ import Max.Platform.Types
     ReactionAction (..),
     renderPlatform,
   )
-import Max.Util (readIntegral, trySync, trySyncIO, withBinaryTempFile)
+import Max.Util (catchSync, readIntegral, trySync, trySyncIO, withBinaryTempFile)
 import OneBot.Action (Action (SetMsgEmojiLike, UploadGroupFile, UploadPrivateFile), Response (..), extractOutMid, sendChatMsg)
 import OneBot.Segment (Segment (..), imageSeg, stickerSeg)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat, privateChatUserId)
 import System.Directory (createDirectoryIfMissing)
-import System.Posix.Files (setFileMode)
 import System.FilePath (takeFileName)
 import System.IO (hClose)
+import System.Posix.Files (setFileMode)
 
 data DeliveryOperation
   = DeliverMessage !LoweredMessage
@@ -93,7 +92,7 @@ data DeliveryOperation
 
 data DeliveryTransport = DeliveryTransport
   { platform :: !Platform,
-    deliver :: !(PartJournal -> DeliveryClaim -> DeliveryOperation -> IO DeliveryAttempt)
+    deliver :: !(PartJournal -> DeliveryRequest -> DeliveryOperation -> IO DeliveryAttempt)
   }
 
 -- | What the native media tier resolved to, plus the audit trail for what it
@@ -201,136 +200,108 @@ resolveDeliveryMedia runtime maxBytes previewBytes (ResolvedUrl sourceUrl) decla
 
 deliveryWorker ::
   (Blob :> es, WithConnection :> es, Log :> es, Concurrent :> es, IOE :> es) =>
-  Text ->
-  [DeliveryTransport] ->
-  Eff es ()
-deliveryWorker workerId transports = localDomain "delivery" $ do
-  logInfo "delivery lanes started" $
-    object
-      [ "platforms" .= (renderPlatform <$> servedPlatforms),
-        "lanes" .= length lanes
-      ]
-  forConcurrently_ lanes runLane
+  DeliveryQueue -> [DeliveryTransport] -> Eff es ()
+deliveryWorker queue transports = localDomain "delivery" $
+  forConcurrently_ lanes $ \(name, serves) -> localData [("lane", toJSON name)] $ forever $ do
+    work <- liftIO (nextDelivery queue serves)
+    deliverQueued work `catchSync` \err -> do
+      now <- liftIO getCurrentTime
+      let completion = DeliveryUnknown (T.pack (show err)) now
+      _ <- trySync (completeDelivery work.target.deliveryId [] completion)
+      liftIO (settleDelivery queue work.target.deliveryId completion)
+      logAttention "delivery failed; not replayed" (object ["delivery_id" .= work.target.deliveryId, "error" .= show err])
   where
-    servedPlatforms = nub [transport.platform | transport <- transports]
-
-    -- A lane per served platform, plus the residual one.  Every delivery
-    -- matches exactly one lane: the platform lanes partition what is served
-    -- and 'LaneUnrouted' takes the complement, so nothing is claimed twice
-    -- and nothing is stranded.  Each lane carries its own worker id because
-    -- leases are keyed by owner.
+    served = nub [transport.platform | transport <- transports]
     lanes =
-      [(LanePlatform platform, renderPlatform platform) | platform <- servedPlatforms]
-        <> [(LaneUnrouted servedPlatforms, "unrouted")]
+      [(renderPlatform platform, (== platform)) | platform <- served]
+        <> [("unrouted", (`notElem` served))]
 
-    -- Every lane holds a LISTEN connection for as long as it is idle, so the
-    -- lane count is a floor on the pool (see @db.max_conns@).
-    runLane (lane, laneName) =
-      localData [("lane", toJSON laneName)] $
-        loop (workerId <> "/" <> laneName) lane
-
-    loop laneWorkerId lane = do
-      claims <-
-        claimOrWait DeliveryWork $
-          claimDeliveriesForLane laneWorkerId lane deliveryBatchSize deliveryLeaseSeconds
-      forM_ claims (deliverClaim laneWorkerId)
-      loop laneWorkerId lane
-
-    deliverClaim laneWorkerId claim = do
-      started <- startDelivery laneWorkerId claim.deliveryId claim.attemptCount deliveryLeaseSeconds
-      if not started
-        then
-          logInfo "delivery reservation was no longer owned" $
-            object ["delivery_id" .= claim.deliveryId, "worker" .= laneWorkerId]
-        else do
-          result <- withOwnedLease
-            (floor deliveryLeaseSeconds * 1_000_000 `div` 3)
-            (renewDelivery laneWorkerId claim (floor deliveryLeaseSeconds))
-            $ do
+    deliverQueued work = do
+      loaded <- loadDelivery work.target.deliveryId
+      case loaded of
+        Nothing -> do
+          let completion = DeliverySuppressedAs "endpoint unavailable"
+          _ <- completeDelivery work.target.deliveryId [] completion
+          liftIO (settleDelivery queue work.target.deliveryId completion)
+        Just stored -> do
+          let request = stored {attemptCount = work.attempt}
+          started <- startDelivery request.deliveryId request.attemptCount
+          if not started
+            then liftIO (settleDelivery queue request.deliveryId (DeliverySuppressedAs "receipt already settled"))
+            else do
               (completion, lowerNotes) <- withEffToIO (ConcUnlift Ephemeral Unlimited) $ \run ->
                 let journal =
                       PartJournal
-                        { plan = run . planDeliveryParts laneWorkerId claim,
-                          begin = \safety index -> run (beginDeliveryPart laneWorkerId claim safety index),
-                          finish = \index attempt -> run (finishDeliveryPart laneWorkerId claim index attempt)
+                        { plan = run . planDeliveryParts request,
+                          begin = \safety index -> run (beginDeliveryPart request safety index),
+                          finish = \index attempt -> run (finishDeliveryPart request index attempt)
                         }
-                 in run (liftIO getCurrentTime >>= \now -> routeClaim journal now claim)
-              completed <- completeDelivery laneWorkerId claim.deliveryId claim.attemptCount lowerNotes completion
+                 in run (liftIO getCurrentTime >>= \now -> routeDelivery journal now request)
+              recorded <- completeDelivery request.deliveryId lowerNotes completion
+              liftIO (settleDelivery queue request.deliveryId completion)
               logInfo "delivery settled" $
                 object
-                  [ "delivery_id" .= claim.deliveryId,
-                    "recorded" .= completed,
+                  [ "delivery_id" .= request.deliveryId,
+                    "recorded" .= recorded,
                     "outcome" .= completionName completion,
                     "lower_notes" .= toJSON lowerNotes
                   ]
-          case result of
-            LeaseCompleted () -> pure ()
-            LeaseLost -> do
-              now <- liftIO getCurrentTime
-              _ <-
-                completeDelivery
-                  laneWorkerId
-                  claim.deliveryId
-                  claim.attemptCount
-                  []
-                  (DeliveryUnknown "delivery lease lost during transport" now)
-              logAttention "delivery lease lost; remaining parts cancelled" $ object ["delivery_id" .= claim.deliveryId]
 
-    routeClaim journal now claim = case claim.eventKind of
-      EventMessage -> withTransport claim $ \transport -> deliverContent journal now claim transport DeliverMessage
+    routeDelivery journal now request = case request.eventKind of
+      EventMessage -> withTransport request $ \transport -> deliverContent journal now request transport DeliverMessage
       EventEdit
-        | not claim.capabilities.edit -> pure (DeliverySuppressedAs "edit unsupported", [])
-        | Just target <- claim.actionTarget ->
-            withTransport claim $ \transport ->
-              deliverContent journal now claim transport (DeliverEdit target)
+        | not request.capabilities.edit -> pure (DeliverySuppressedAs "edit unsupported", [])
+        | Just target <- request.actionTarget ->
+            withTransport request $ \transport ->
+              deliverContent journal now request transport (DeliverEdit target)
         | otherwise -> pure (DeliveryPermanentlyFailed "edit target has no native copy", [])
       EventReaction
-        | not claim.capabilities.reaction -> pure (DeliverySuppressedAs "reaction unsupported", [])
-        | Just target <- claim.actionTarget,
-          Just key <- claim.reactionKey ->
-            withTransport claim $ \transport -> do
+        | not request.capabilities.reaction -> pure (DeliverySuppressedAs "reaction unsupported", [])
+        | Just target <- request.actionTarget,
+          Just key <- request.reactionKey ->
+            withTransport request $ \transport -> do
               attempt <-
                 runTransport
                   journal
                   transport
-                  claim
-                  (DeliverReaction target key claim.reactionAction claim.previousReactionNative)
-              pure (toCompletion claim.attemptCount now attempt, [])
+                  request
+                  (DeliverReaction target key request.reactionAction request.previousReactionNative)
+              pure (toCompletion request.attemptCount now attempt, [])
         | otherwise -> pure (DeliveryPermanentlyFailed "reaction target or key is missing", [])
       EventRedaction
-        | not claim.capabilities.redact -> pure (DeliverySuppressedAs "redaction unsupported", [])
-        | Just target <- claim.actionTarget ->
-            withTransport claim $ \transport -> do
-              attempt <- runTransport journal transport claim (DeliverRedaction target)
-              pure (toCompletion claim.attemptCount now attempt, [])
+        | not request.capabilities.redact -> pure (DeliverySuppressedAs "redaction unsupported", [])
+        | Just target <- request.actionTarget ->
+            withTransport request $ \transport -> do
+              attempt <- runTransport journal transport request (DeliverRedaction target)
+              pure (toCompletion request.attemptCount now attempt, [])
         | otherwise -> pure (DeliveryPermanentlyFailed "redaction target has no native copy", [])
       EventMembership -> pure (DeliverySuppressedAs "membership events are not delivered", [])
 
-    withTransport claim act = case find ((== claim.platform) . (.platform)) transports of
+    withTransport request act = case find ((== request.platform) . (.platform)) transports of
       Nothing ->
         pure
-          ( DeliveryPermanentlyFailed ("no transport registered for " <> renderPlatform claim.platform),
+          ( DeliveryPermanentlyFailed ("no transport registered for " <> renderPlatform request.platform),
             []
           )
       Just transport -> act transport
 
-    deliverContent journal now claim transport operation = do
+    deliverContent journal now request transport operation = do
       nativeMentions <-
-        deliveryMentionNatives claim.endpointId (mentionIdentities claim.body)
-      mediaResult <- trySync (loadDeliveryMedia claim.capabilities claim.body)
+        deliveryMentionNatives request.endpointId (mentionIdentities request.body)
+      mediaResult <- trySync (loadDeliveryMedia request.capabilities request.body)
       let media = fromRight DeliveryMedia {resolved = [], notes = []} mediaResult
           lowerWith caps resolved =
             lower
               LowerEnv
-                { platform = claim.platform,
+                { platform = request.platform,
                   caps,
-                  attribution = claim.attribution,
+                  attribution = request.attribution,
                   mentionNative = (`Map.lookup` nativeMentions),
                   mediaResolve = (`lookup` resolved),
-                  replyTarget = if claim.eventKind == EventMessage then claim.replyContext else Nothing
+                  replyTarget = if request.eventKind == EventMessage then request.replyContext else Nothing
                 }
-              claim.body
-          lowered = lowerWith claim.capabilities media.resolved
+              request.body
+          lowered = lowerWith request.capabilities media.resolved
           loweredNotes = lowered.notes <> media.notes
       case mediaResult of
         Left e ->
@@ -342,37 +313,37 @@ deliveryWorker workerId transports = localDomain "delivery" $ do
         Right _
           | null lowered.chunks -> pure (DeliverySuppressedAs "lowering produced no output", loweredNotes)
           | otherwise -> do
-              attempt <- runTransport journal transport claim (operation lowered)
+              attempt <- runTransport journal transport request (operation lowered)
               case attempt of
                 AttemptMediaFallback err -> do
-                  let relowered = lowerWith (mediaTextCaps claim.capabilities) []
+                  let relowered = lowerWith (mediaTextCaps request.capabilities) []
                       fallbackNote = LowerNote "media_emit" NoteFolded (Just err)
                       fallbackNotes = relowered.notes <> media.notes <> [fallbackNote]
                   if null relowered.chunks
                     then pure (DeliverySuppressedAs "media fallback produced no output", fallbackNotes)
                     else do
-                      logLowered claim "delivery lowered after media failure" relowered fallbackNotes
-                      secondAttempt <- runTransport journal transport claim (operation relowered)
+                      logLowered request "delivery lowered after media failure" relowered fallbackNotes
+                      secondAttempt <- runTransport journal transport request (operation relowered)
                       let completion' = case secondAttempt of
                             AttemptMediaFallback err' -> DeliveryPermanentlyFailed ("media fallback loop: " <> err')
-                            other -> toCompletion claim.attemptCount now other
+                            other -> toCompletion request.attemptCount now other
                       pure (completion', fallbackNotes)
                 other -> do
-                  logLowered claim "delivery lowered" lowered loweredNotes
-                  pure (toCompletion claim.attemptCount now other, loweredNotes)
+                  logLowered request "delivery lowered" lowered loweredNotes
+                  pure (toCompletion request.attemptCount now other, loweredNotes)
 
-    logLowered claim message lowered notes =
+    logLowered request message lowered notes =
       logInfo message $
         object
-          [ "delivery_id" .= claim.deliveryId,
-            "canonical_message_id" .= claim.canonicalMessageId,
-            "platform" .= renderPlatform claim.platform,
+          [ "delivery_id" .= request.deliveryId,
+            "canonical_message_id" .= request.canonicalMessageId,
+            "platform" .= renderPlatform request.platform,
             "chunks" .= map (digest . Body) lowered.chunks,
             "lower_notes" .= toJSON notes
           ]
 
-    runTransport journal transport claim operation =
-      liftIO (trySyncIO (transport.deliver journal claim operation)) >>= \case
+    runTransport journal transport request operation =
+      liftIO (trySyncIO (transport.deliver journal request operation)) >>= \case
         Left e ->
           pure
             ( AttemptOutcomeUnknown
@@ -588,7 +559,7 @@ failedBeforeEffect err =
 retryDelay :: Int -> NominalDiffTime
 retryDelay attempts = fromIntegral (min (300 :: Int) (2 ^ min 8 (max 0 attempts)))
 
--- | How many claimed attempts one /rejected/ delivery may spend before its
+-- | How many attempts one /rejected/ delivery may spend before its
 -- endpoint's ordered lane matters more than this copy.  With 'retryDelay'
 -- that is 2+4+…+256 then 256s per attempt: roughly 45 minutes, long enough
 -- for a transient refusal to clear and short enough that one poisoned row
@@ -596,12 +567,6 @@ retryDelay attempts = fromIntegral (min (300 :: Int) (2 ^ min 8 (max 0 attempts)
 -- at all, so this never truncates an outage backlog.
 deliveryAttemptBudget :: Int
 deliveryAttemptBudget = 16
-
-deliveryBatchSize :: Int
-deliveryBatchSize = 32
-
-deliveryLeaseSeconds :: NominalDiffTime
-deliveryLeaseSeconds = 120
 
 oneBotTimeoutMs :: Int
 oneBotTimeoutMs = 30000

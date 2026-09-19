@@ -158,6 +158,7 @@
       "src/Max/Platform.hs",
       "src/Max/Platform/Delivery.hs",
       "src/Max/Platform/Delivery/Parts.hs",
+      "src/Max/Platform/Delivery/Queue.hs",
       "src/Max/Platform/Delivery/Store.hs",
       "src/Max/Platform/Envelope.hs",
       "src/Max/Platform/Failure.hs",

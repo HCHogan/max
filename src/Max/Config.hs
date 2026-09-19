@@ -610,7 +610,7 @@ dbParser = do
         -- At the old default of 8 that left four for every turn, worker and
         -- query in the process, and 'Data.Pool' blocks on acquire with no
         -- timeout: exhaustion does not error, it hangs the bot.
-        help "Connection-pool size.  LISTEN waiters hold three plus one per delivery lane",
+        help "Connection-pool size for workers and queries",
         reader auto,
         option,
         long "db-max-conns",

@@ -15,11 +15,12 @@ Omit it and the endpoint stands alone.
   canonical conversation ledger. Transport echoes never become a second row.
 - Fresh live messages enter a bounded process queue after commit. Repeated native
   events and history backfill never enter it. Restart does not resume dispatches;
-  recorded history remains readable. Outbound delivery leases are still pending
-  conversion to process-local queues.
+  recorded history remains readable. New outbound copies enter a bounded local
+  queue; a delayed retry blocks only its destination within the platform lane.
 - Matrix retries reuse the delivery idempotency key as the transaction ID.
-- QQ and iMessage park ambiguous sends. They resume only after an echo or
-  authoritative status proves the prior attempt's outcome.
+- QQ and iMessage never retry an ambiguous send. Echoes and status probes may
+  confirm historical receipts; only explicit provider failure of a current-process
+  send permits retrying its failed part. Restart never resumes old output.
 - Platform roles and native IDs are provenance, never Max authorization.
 - The live prompt generally advertises the intersection of every enabled
   endpoint's output capabilities. Semantic mentions are the deliberate
@@ -56,7 +57,7 @@ into BlobStore before canonical publication and never rest in the ledger.
 `rendered_text` is the prompt projection produced by `Max.IR.Prompt`, whose
 vocabulary reproduces the segment renderer token for token.
 
-QQ image segments survive the durable-dispatch JSON round trip: inbound
+QQ image segments survive the canonical-history JSON round trip: inbound
 `data.url` and the outbound-compatible `data.file` encoding decode to the same
 media source. Blank NapCat summaries become explicit `[image]` or `[sticker]`
 markers, never empty transcript rows. Migration 053 repairs affected canonical

@@ -67,8 +67,10 @@ import Max.Memory.Expiry (expiryWorker)
 import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
 import Max.Monitor (monitorWorker)
 import Max.Platform.Delivery (DeliveryTransport, deliveryWorker, oneBotDeliveryTransport)
+import Max.Platform.Delivery.Queue (newDeliveryQueue)
 import Max.Platform.Ingress (newIngress)
 import Max.Platform.Runtime (qqBackend, runPlatforms)
+import Max.Platform.Store (deliveryProcessBoundary)
 import Max.Platform.Types (Platform (..))
 import Max.Sandbox.Registry
   ( gcExpiredSandboxes,
@@ -131,7 +133,9 @@ main = do
           episodeScheduler <- newEpisodeScheduler
           intentState <- newIntentState
           conversations <- newConversations
-          ingress <- newIngress
+          boundary <- runEff . runWithConnectionPool pool $ deliveryProcessBoundary
+          deliveries <- newDeliveryQueue boundary
+          ingress <- newIngress deliveries
           embeddingLock <- newEmbeddingLock
           startedAt <- getCurrentTime
           let qqEdge = qqBackend clientRef
@@ -161,6 +165,7 @@ main = do
                     beTasks = tasks,
                     beConversations = conversations,
                     beIngress = ingress,
+                    beDeliveries = deliveries,
                     beJobs = jobs,
                     beShutdown = shutdown,
                     beSandboxes = sandboxes,
@@ -181,7 +186,7 @@ main = do
             . runBlobHost cfg.imagesDir
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
-            . runOutbound tasks jobs
+            . runOutbound tasks jobs deliveries
             -- Token accounting goes through its own pooled connection
             -- (a plain IO writer): the LLM interpreter sits outside
             -- the WithConnection effect and the eval harness has no
@@ -321,7 +326,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
             worker
               "platform-delivery"
               RequiredWorker
-              (deliveryWorker (ownerFor "delivery") deliveryTransports)
+              (deliveryWorker env.beDeliveries deliveryTransports)
           ]
         optionalWorkers =
           [ worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown)
@@ -360,7 +365,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
             <> [ worker "matrix" RestartableWorker (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler env.beIngress)
                | matrixCfg <- maybeToList cfg.matrix
                ]
-            <> [ worker "imessage" RestartableWorker (iMessageWorker httpRuntime iMessageCfg env.beEpisodeScheduler env.beIngress)
+            <> [ worker "imessage" RestartableWorker (iMessageWorker httpRuntime iMessageCfg env.beEpisodeScheduler env.beIngress env.beDeliveries)
                | iMessageCfg <- maybeToList cfg.imessage
                ]
 

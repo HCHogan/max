@@ -1,5 +1,6 @@
 module Max.Platform.DeliverySpec (spec) where
 
+import Control.Concurrent.Async (wait, withAsync)
 import Control.Exception (SomeException, throwIO, try)
 import Data.Aeson (toJSON)
 import Data.ByteString (ByteString)
@@ -8,7 +9,7 @@ import Data.Either (isLeft)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.Maybe (fromJust, isNothing)
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful (runEff)
 import Max.Effects.Blob (blobRefSha256, putBlob, runBlob)
@@ -16,9 +17,10 @@ import Max.HttpRuntime (httpRuntimeFromManagers)
 import Max.IR
 import Max.IR.Lower
 import Max.Platform.Delivery
+import Max.Platform.Delivery.Queue
 import Max.Platform.QQ (qqCapabilities)
-import Max.Platform.Store (DeliveryCompletion (..))
-import Max.Platform.Types (NativeEventId (..), NativeUserId (..), Platform (..), ReactionAction (..))
+import Max.Platform.Store (DeliveryCompletion (..), DeliveryTarget (..))
+import Max.Platform.Types (DeliveryId (..), EndpointId (..), NativeEventId (..), NativeUserId (..), Platform (..), ReactionAction (..))
 import Max.Util (withTempDirectory)
 import Network.HTTP.Client
   ( Manager,
@@ -31,10 +33,70 @@ import Network.TLS qualified as TLS
 import OneBot.Action (Action (..))
 import OneBot.Segment (CardInfo (..), Segment (..))
 import OneBot.Types (MessageId (..), UserId (..))
+import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: Spec
 spec = do
+  describe "process delivery queue" $ do
+    it "owns each endpoint head once and isolates served and unrouted lanes" $ do
+      queue <- newDeliveryQueue (DeliveryId 0)
+      let first = DeliveryTarget (DeliveryId 1) (EndpointId 10) PlatformQQ
+          second = first {deliveryId = DeliveryId 2}
+          foreignTarget = DeliveryTarget (DeliveryId 3) (EndpointId 20) PlatformIMessage
+          custom = DeliveryTarget (DeliveryId 4) (EndpointId 30) (PlatformCustom "fixture")
+      queueDeliveries queue [first, second, foreignTarget, custom]
+      queueDeliveries queue [first]
+      (.target) <$> nextDelivery queue (== PlatformQQ) `shouldReturn` first
+      timeout 10_000 (nextDelivery queue (== PlatformQQ)) `shouldReturn` Nothing
+      (.target) <$> nextDelivery queue (== PlatformIMessage) `shouldReturn` foreignTarget
+      (.target) <$> nextDelivery queue (`notElem` [PlatformQQ, PlatformIMessage]) `shouldReturn` custom
+      now <- getCurrentTime
+      settleDelivery queue first.deliveryId (DeliveryUnknown "lost response" now)
+      (.target) <$> nextDelivery queue (== PlatformQQ) `shouldReturn` second
+
+    it "keeps retry order at one destination while another destination progresses" $ do
+      queue <- newDeliveryQueue (DeliveryId 0)
+      let first = DeliveryTarget (DeliveryId 1) (EndpointId 10) PlatformQQ
+          second = first {deliveryId = DeliveryId 2}
+          other = DeliveryTarget (DeliveryId 3) (EndpointId 20) PlatformQQ
+      queueDeliveries queue [first, second, other]
+      _ <- nextDelivery queue (const True)
+      now <- getCurrentTime
+      settleDelivery queue first.deliveryId (DeliveryRetry "offline" (addUTCTime 60 now))
+      (.target) <$> nextDelivery queue (const True) `shouldReturn` other
+      timeout 10_000 (nextDelivery queue (const True)) `shouldReturn` Nothing
+      settleDelivery queue first.deliveryId (DeliveryPermanentlyFailed "rejected")
+      (.target) <$> nextDelivery queue (const True) `shouldReturn` second
+
+    it "retains a receipt retry racing settlement but excludes prior-process sends" $ do
+      queue <- newDeliveryQueue (DeliveryId 100)
+      let old = DeliveryTarget (DeliveryId 99) (EndpointId 10) PlatformIMessage
+          current = old {deliveryId = DeliveryId 101}
+      queueDeliveryRetry queue old 2
+      timeout 10_000 (nextDelivery queue (const True)) `shouldReturn` Nothing
+      queueDeliveries queue [current]
+      _ <- nextDelivery queue (const True)
+      queueDeliveryRetry queue current 1
+      settleDelivery queue current.deliveryId (DeliveryAccepted Nothing)
+      retried <- nextDelivery queue (const True)
+      retried.target `shouldBe` current
+      retried.attempt `shouldBe` 2
+      restarted <- newDeliveryQueue current.deliveryId
+      queueDeliveryRetry restarted current retried.attempt
+      timeout 10_000 (nextDelivery restarted (const True)) `shouldReturn` Nothing
+
+    it "applies backpressure until a running entry settles" $ do
+      queue <- newDeliveryQueue (DeliveryId 0)
+      let target n = DeliveryTarget (DeliveryId n) (EndpointId n) PlatformQQ
+      queueDeliveries queue (map target [1 .. 1024])
+      withAsync (queueDeliveries queue [target 1025]) $ \publisher -> do
+        timeout 10_000 (wait publisher) `shouldReturn` Nothing
+        first <- nextDelivery queue (const True)
+        timeout 10_000 (wait publisher) `shouldReturn` Nothing
+        settleDelivery queue first.target.deliveryId (DeliveryConfirmedAs Nothing)
+        timeout 1_000_000 (wait publisher) `shouldReturn` Just ()
+
   describe "fanOutMediaChunks" $ do
     it "keeps order and emits at most one native attachment per wire chunk" $ do
       let first = NMedia (ResolvedUrl "https://cdn.test/1") (MediaMeta MImage Nothing Nothing Nothing Nothing Nothing)
