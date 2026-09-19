@@ -37,6 +37,8 @@ where
 import Control.Applicative ((<|>))
 import Control.Concurrent qualified as Concurrent
 import Control.Monad (forM, forM_, unless, void, when)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Except (ExceptT (..), runExceptT, throwE)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
@@ -102,7 +104,7 @@ import Max.Platform.Store
     retryUnconfirmedDelivery,
   )
 import Max.Platform.Types
-import Max.Worker (retryingWith)
+import Max.Worker (retrying)
 import Network.HTTP.Client qualified as HTTP
 import OneBot.Types (GroupId (..))
 
@@ -233,7 +235,7 @@ iMessageWorker ::
   DeliveryQueue ->
   Eff es ()
 iMessageWorker runtime cfg episodeScheduler ingress deliveries = localDomain "imessage" $ do
-  health <- awaitBridgeHealth
+  health <- retrying "imessage health" (runExceptT (readBridge (fetchBridgeHealth runtime cfg)))
   registered <-
     ensureConfiguredEndpoint
       PlatformIMessage
@@ -250,24 +252,14 @@ iMessageWorker runtime cfg episodeScheduler ingress deliveries = localDomain "im
         "mode" .= maybe ("standalone" :: Text) (const "mirror") cfg.mirrorQQGroup,
         "native_replies" .= health.nativeReplies
       ]
-  -- Preserve the advertised capabilities across a failed polling cycle.
-  retryingWith "imessage cycle" health.nativeReplies (runCycle registered)
+  let loop nativeReplies = retrying "imessage cycle" (runExceptT (runCycle registered nativeReplies)) >>= loop
+  loop health.nativeReplies
   where
-    -- Startup precedes retryingWith; retry bridge unavailability here too.
-    awaitBridgeHealth =
-      liftIO (fetchBridgeHealth runtime cfg) >>= \case
-        Right health -> pure health
-        Left failure -> do
-          logAttention "iMessage bridge unreachable; waiting rather than ending the process" $
-            object ["error" .= bridgeFailureText failure]
-          liftIO (Concurrent.threadDelay (cfg.pollIntervalMs * 1000))
-          awaitBridgeHealth
+    readBridge action = ExceptT (first bridgeFailureText <$> liftIO action)
 
     runCycle registered advertisedNativeReplies = do
-      health <-
-        liftIO (fetchBridgeHealth runtime cfg)
-          >>= either (error . T.unpack . bridgeFailureText) pure
-      when (health.nativeReplies /= advertisedNativeReplies) $ do
+      health <- readBridge (fetchBridgeHealth runtime cfg)
+      when (health.nativeReplies /= advertisedNativeReplies) . lift $ do
         _ <-
           ensureConfiguredEndpoint
             PlatformIMessage
@@ -279,48 +271,49 @@ iMessageWorker runtime cfg episodeScheduler ingress deliveries = localDomain "im
             (iMessageCapabilitiesFor health.nativeReplies)
         logAttention "iMessage native reply capability changed" $
           object ["native_replies" .= health.nativeReplies]
-      reconcileSends
+      lift reconcileSends
       (chatId, cursor) <- catchUp registered health.sourceFingerprint
       -- Watch is a wake-up hint.  The bridge bounds a quiet stream; either a
       -- notification or EOF returns here and the next cycle pages the
       -- authoritative physical ROWID cursor again.
-      liftIO (watchOnce runtime cfg chatId cursor) >>= \case
-        Left err -> do
-          logInfo "iMessage watch ended" $ object ["reason" .= err]
-          liftIO (Concurrent.threadDelay (cfg.pollIntervalMs * 1000))
-        Right () -> pure ()
+      lift $
+        liftIO (watchOnce runtime cfg chatId cursor) >>= \case
+          Left err -> do
+            logInfo "iMessage watch ended" $ object ["reason" .= err]
+            liftIO (Concurrent.threadDelay (cfg.pollIntervalMs * 1000))
+          Right () -> pure ()
       pure health.nativeReplies
 
     catchUp registered fingerprint = do
-      chatId <- liftIO (resolveChat runtime cfg) >>= either (error . T.unpack . bridgeFailureText) pure
-      current <- readIngestCursor registered.platformAccountId iMessageStreamKey
+      chatId <- readBridge (resolveChat runtime cfg)
+      current <- lift (readIngestCursor registered.platformAccountId iMessageStreamKey)
       let sourceReset = maybe False ((/= Just fingerprint) . (.fingerprint)) current
           bootstrap = isNothing current || sourceReset
           since = if bootstrap then 0 else maybe 0 cursorRowId current
-      when sourceReset $
+      when sourceReset . lift $
         logAttention "iMessage source database changed; rescanning allowlisted chat by GUID" $
           object ["chat_guid" .= cfg.chatGuid, "source_fingerprint" .= fingerprint]
       pageFrom registered chatId fingerprint bootstrap current since
 
     pageFrom registered chatId fingerprint bootstrap current since = do
-      page <-
-        liftIO (fetchAfter runtime cfg chatId since) >>= either (error . T.unpack . bridgeFailureText) pure
+      page <- readBridge (fetchAfter runtime cfg chatId since)
       when (page.nextRowId < since) $
-        error "iMessage: source returned a ROWID behind the committed cursor"
-      forM_ page.messages (ingestIMessage registered bootstrap page.nextRowId)
-      published <-
-        advanceIngestCursorCAS
-          registered.platformAccountId
-          iMessageStreamKey
-          ((.revision) <$> current)
-          (PlatformCursor (Number (fromIntegral page.nextRowId)))
-          (Just fingerprint)
-      nextRecord <- case published of
-        Nothing -> do
-          logInfo "iMessage cursor CAS lost; page will deduplicate on replay" $
-            object ["next_rowid" .= page.nextRowId]
-          readIngestCursor registered.platformAccountId iMessageStreamKey >>= maybe (error "iMessage: cursor disappeared") pure
-        Just record -> pure record
+        throwE "iMessage: source returned a ROWID behind the committed cursor"
+      nextRecord <- lift $ do
+        forM_ page.messages (ingestIMessage registered bootstrap page.nextRowId)
+        published <-
+          advanceIngestCursorCAS
+            registered.platformAccountId
+            iMessageStreamKey
+            ((.revision) <$> current)
+            (PlatformCursor (Number (fromIntegral page.nextRowId)))
+            (Just fingerprint)
+        case published of
+          Nothing -> do
+            logInfo "iMessage cursor CAS lost; page will deduplicate on replay" $
+              object ["next_rowid" .= page.nextRowId]
+            readIngestCursor registered.platformAccountId iMessageStreamKey >>= maybe (error "iMessage: cursor disappeared") pure
+          Just record -> pure record
       if page.hasMore
         then pageFrom registered chatId fingerprint bootstrap (Just nextRecord) page.nextRowId
         else pure (chatId, page.nextRowId)

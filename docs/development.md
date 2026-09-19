@@ -158,6 +158,8 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.Sandbox.RuntimeSpec` — package wrapping and exec argv
 - `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, …)
 - `Max.ShutdownSpec` — drain flag / in-flight counter transitions
+- `Max.WorkerSpec` — scoped failure propagation, sibling cleanup and explicit
+  connection retries without swallowing exceptions or cancellation
 - `Max.SelfSourceSpec` — the allowlisted compile-time bundle, stable identity,
   literal search, bounded numbered reads, and host-path rejection
 - `Max.SkillsSpec` — builtin skills parsed from `skills/`, including the live

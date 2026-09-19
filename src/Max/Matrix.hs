@@ -89,7 +89,7 @@ import Max.Platform.Store
     readIngestCursor,
   )
 import Max.Platform.Types
-import Max.Worker (retryingWith)
+import Max.Worker (retrying)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types.URI (urlDecode, urlEncode)
 import OneBot.Types (GroupId (..))
@@ -190,23 +190,24 @@ matrixWorker runtime cfg episodeScheduler ingress = localDomain "matrix" $ do
         object ["error" .= err]
     Right members ->
       logInfo "matrix roster loaded" $ object ["members" .= Map.size members]
-  -- The roster is the carried state, and carrying it is the whole reason this
-  -- is a retry rather than a worker restart: a homeserver that refused one
-  -- connection has not invalidated who is in the room.  The cursor is durable
-  -- either way, which is what the old log line here was promising.
-  retryingWith "matrix sync" (fromRight Map.empty seed) (syncOnce registered)
+  let loop members = syncOnce registered members >>= loop
+  loop (fromRight Map.empty seed)
   where
     syncOnce registered members = do
       current <- readIngestCursor registered.platformAccountId matrixStreamKey
-      page <- liftIO (fetchSync runtime cfg (cursorText =<< current)) >>= either (error . T.unpack) pure
       boundary <- latestNativeEventId registered.endpointId
-      gap <-
-        if page.limited && isJust current
-          then case (boundary, page.prevBatch) of
-            (Just eventBoundary, Just token) ->
-              liftIO (fillGap runtime cfg eventBoundary token) >>= either (error . T.unpack) pure
-            _ -> error "matrix: limited timeline has no recoverable boundary"
-          else pure []
+      (page, gap) <-
+        retrying "matrix sync" $
+          liftIO (fetchSync runtime cfg (cursorText =<< current)) >>= \case
+            Left err -> pure (Left err)
+            Right page -> do
+              gap <-
+                if page.limited && isJust current
+                  then case (boundary, page.prevBatch) of
+                    (Just eventBoundary, Just token) -> liftIO (fillGap runtime cfg eventBoundary token)
+                    _ -> pure (Left "matrix: limited timeline has no recoverable boundary")
+                  else pure (Right [])
+              pure ((page,) <$> gap)
       let live = isJust current
           known = page.memberNames <> members
       forM_ (gap <> page.events) (ingestMatrixEvent live registered known page.nextBatch)

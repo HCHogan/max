@@ -311,7 +311,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
     nSkills <- loadSkills env.beSkills
     logInfo "skills loaded" $ object ["count" .= nSkills]
     let ownerFor suffix = maintenanceOwner <> "/" <> suffix
-        requiredWorkers =
+        permanentWorkers =
           [ worker "image-fetch" RequiredWorker (imageWorker cfg.imageWorkers fetchSig),
             worker "forward-fetch" RequiredWorker (forwardWorker fetchSig),
             worker "file-fetch" RequiredWorker (fileWorker fetchSig),
@@ -322,50 +322,50 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
             worker "media-discovery" RequiredWorker (mediaDiscoveryWorker fetchSig),
             worker "canonical-dispatch" RequiredWorker (ingressWorker fetchSig (intentState <$ env.beIntent)),
             worker "jobs" RequiredWorker jobsWorker,
-            worker "browser-workspaces" RestartableWorker (forever (browserMaintenance env.beBrowsers >> threadDelay 15_000_000)),
+            worker "browser-workspaces" RequiredWorker (forever (browserMaintenance env.beBrowsers >> threadDelay 15_000_000)),
             worker
               "platform-delivery"
               RequiredWorker
               (deliveryWorker env.beDeliveries deliveryTransports)
           ]
-        optionalWorkers =
+        configuredWorkers =
           [ worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown)
           ]
-            <> [ worker "embeddings" RestartableWorker (embedWorker env.beEmbeddingLock)
+            <> [ worker "embeddings" RequiredWorker (embedWorker env.beEmbeddingLock)
                | env.beEmbeddingEnabled
                ]
             <> [ worker
                    "media-captions"
-                   RestartableWorker
+                   RequiredWorker
                    (concurrently_ (stickerCaptionWorker profile) (mediaCaptionWorker profile))
                | profile <- maybeToList cfg.stickerCaptionProfile
                ]
             <> [ worker
                    "historian"
-                   RestartableWorker
+                   RequiredWorker
                    (historianWorker profile cfg.historianTimeoutSeconds cfg.llm cfg.timezone env.beTasks (defaultModelName cfg.llm) scheduler)
                | (profile, scheduler) <- maybeToList ((,) <$> cfg.memoryExtractProfile <*> env.beEpisodeScheduler)
                ]
-            <> [worker "memory-expiry" RestartableWorker expiryWorker]
+            <> [worker "memory-expiry" RequiredWorker expiryWorker]
             <> [ worker
                    "intent"
-                   RestartableWorker
+                   RequiredWorker
                    (intentWorker intentCfg cfg.persona (defaultModelName cfg.llm) cfg.timezone env.beSessions (dispatchProactive (Just intentState)) intentState)
                | intentCfg <- maybeToList cfg.intent
                ]
-            <> [ worker "admin-server" RestartableWorker (adminServer adminCfg env (modelProfileNames cfg.llm) logBuf)
+            <> [ worker "admin-server" RequiredWorker (adminServer adminCfg env (modelProfileNames cfg.llm) logBuf)
                | adminCfg <- maybeToList cfg.admin
                ]
-            <> [ worker "call-pruner" RestartableWorker (callPruner cfg.adminCallRetentionDays)
+            <> [ worker "call-pruner" RequiredWorker (callPruner cfg.adminCallRetentionDays)
                | _ <- maybeToList cfg.admin
                ]
-            <> [ worker "wechathook" RestartableWorker (wechatHookWorker httpRuntime wh env.beIngress)
+            <> [ worker "wechathook" RequiredWorker (wechatHookWorker httpRuntime wh env.beIngress)
                | wh <- maybeToList cfg.wechathook
                ]
-            <> [ worker "matrix" RestartableWorker (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler env.beIngress)
+            <> [ worker "matrix" RequiredWorker (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler env.beIngress)
                | matrixCfg <- maybeToList cfg.matrix
                ]
-            <> [ worker "imessage" RestartableWorker (iMessageWorker httpRuntime iMessageCfg env.beEpisodeScheduler env.beIngress env.beDeliveries)
+            <> [ worker "imessage" RequiredWorker (iMessageWorker httpRuntime iMessageCfg env.beEpisodeScheduler env.beIngress env.beDeliveries)
                | iMessageCfg <- maybeToList cfg.imessage
                ]
 
@@ -377,10 +377,10 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
             logInfo "sandbox TTL GC" (object ["removed" .= removed])
 
     withWorkers
-      ( requiredWorkers
-          <> optionalWorkers
+      ( permanentWorkers
+          <> configuredWorkers
           <> [ worker "event-handler" RequiredWorker (handleEvents eventQ fetchSig (Just intentState) clientRef),
-               worker "sandbox-gc" RestartableWorker sandboxGc
+               worker "sandbox-gc" RequiredWorker sandboxGc
              ]
       )
       (runServer cfg.server eventQ clientRef)

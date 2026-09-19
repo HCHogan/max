@@ -1,8 +1,10 @@
 module Max.PlatformStoreSpec (spec) where
 
-import Control.Concurrent.Async (concurrently)
-import Control.Monad (forM, forM_)
-import Data.Aeson (Value (..), object, toJSON, (.=))
+import Control.Concurrent.Async (concurrently, link, withAsync)
+import Control.Concurrent.MVar (newEmptyMVar, takeMVar, tryPutMVar)
+import Control.Monad (forM, forM_, void)
+import Data.Aeson (Value (..), decode, encode, object, toJSON, (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Char8 qualified as BS
 import Data.IORef
 import Data.Int (Int64)
@@ -12,12 +14,13 @@ import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), execute, query)
 import Database.PostgreSQL.Simple.FromField (ResultError (..))
 import Database.PostgreSQL.Simple.Types (PGArray (..))
-import Helpers (resultId, truncateAll, withDb)
+import Helpers (resultId, truncateAll, withDb, withDbLog)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.History (HistoryItem (..), fetchForwardChildrenInScope)
 import Max.Dispatch (DispatchMessage (canonicalId))
-import Max.HttpRuntime (httpRuntimeFromManagers)
+import Max.HttpRuntime (httpRuntimeFromManagers, newHttpRuntime)
+import Max.IMessage (IMessageConfig (..), iMessageWorker)
 import Max.IR
 import Max.IR.Lower
 import Max.Matrix (MatrixConfig (..), matrixDeliveryTransport)
@@ -33,6 +36,9 @@ import Max.Platform.Store qualified as PlatformStore
 import Max.Platform.Types
 import Max.Util (tshow)
 import Network.HTTP.Client qualified as HTTP
+import Network.HTTP.Types (status200, status503)
+import Network.Wai qualified as Wai
+import Network.Wai.Handler.Warp qualified as Warp
 import OneBot.Action (Action (..), Response (..))
 import OneBot.Types (GroupId (..))
 import System.Directory (doesFileExist)
@@ -604,6 +610,43 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
       `shouldReturn` PartRecorded (AttemptConfirmed (Just (NativeEventId "one")))
     withDb pool (beginDeliveryPart retry IdempotentParts 1) `shouldReturn` PartSend
     withDb pool (finishDeliveryPart claim 1 (AttemptConfirmed (Just (NativeEventId "stale")))) `shouldReturn` False
+
+  it "rechecks the iMessage source after a failed page without restarting the worker" $ do
+    let health source = object ["source_fingerprint" .= (source :: Text)]
+        chats = object ["chats" .= [object ["id" .= (1 :: Int), "guid" .= ("test-chat" :: Text)]]]
+        page cursor more = object ["next_rowid" .= (cursor :: Int), "has_more" .= more]
+    responses <- newIORef [health "old", health "old", chats, page 100 True, page 5 False, health "new", chats, page 5 False]
+    requests <- newIORef []
+    caughtUp <- newEmptyMVar
+    let bridge req respond = do
+          body <- Wai.strictRequestBody req
+          forM_ (decode body) $ \request -> modifyIORef' requests (<> [request])
+          payload <- atomicModifyIORef' responses $ \case
+            [] -> ([], Nothing)
+            value : rest -> (rest, Just value)
+          case payload of
+            Just value -> respond (Wai.responseLBS status200 [] (encode value))
+            Nothing -> do
+              void (tryPutMVar caughtUp ())
+              respond (Wai.responseLBS status503 [] "{}")
+    Warp.testWithApplication (pure bridge) $ \port -> do
+      runtime <- newHttpRuntime
+      deliveries <- newDeliveryQueue =<< withDb pool deliveryProcessBoundary
+      ingress <- newIngress deliveries
+      let cfg = IMessageConfig ("http://127.0.0.1:" <> T.pack (show port)) "test-only" "test-account" "test-chat" [] "Max" Nothing 10_000
+      withAsync (withDbLog pool (iMessageWorker runtime cfg Nothing ingress deliveries)) $ \task -> do
+        link task
+        timeout 5_000_000 (takeMVar caughtUp) `shouldReturn` Just ()
+        rows <- withConn pool $ \conn -> query conn "SELECT cursor,source_fingerprint FROM platform_ingest_cursors" ()
+        (rows :: [(Value, Text)]) `shouldBe` [(Number 5, "new")]
+        sent <- readIORef requests
+        let cursors =
+              [ KeyMap.lookup "since_rowid" params
+              | Object request <- sent,
+                KeyMap.lookup "method" request == Just (String "messages.after"),
+                Just (Object params) <- [KeyMap.lookup "params" request]
+              ]
+        cursors `shouldBe` map (Just . Number) [0, 100, 0]
 
   it "retries a Matrix second-part 503 with the same transaction and without resending the first" $ do
     (qq, _) <- mirrorPair pool

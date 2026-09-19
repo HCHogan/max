@@ -697,15 +697,20 @@ ordinary constructor makes them identical. A separate opaque proof can express
 only an explicitly host-authorized group source projected into a direct-message
 turn; reversed DM-to-group and same-kind projections cannot be constructed.
 
-Workers are assembled once at startup and supervised
-through `withWorkers`. Required queue owners (fetch, monitor, dispatch, Jobs,
-delivery) turn either an exception or a normal return into process failure.
-Config-disabled workers are omitted. Enabled optional edges (embedding,
-Historian, intent, admin, WeChat, Matrix, iMessage) are `RestartableWorker`s:
-synchronous failures stay inside that edge and retry with bounded exponential
-backoff, while asynchronous shutdown still propagates. The bounded
-shutdown-drain action is the only `OptionalWorker` whose normal return is part
-of its contract. The process owns one OneBot listener and client slot.
+Workers are assembled once at startup and linked through `withWorkers`.
+Every enabled permanent service must keep running: an unhandled exception or
+normal return fails the process and cancels its siblings. Configuration-disabled
+workers are omitted; only shutdown drain may finish normally. Supervision has
+no restart policy and needs only the `Concurrent` effect.
+
+Matrix and iMessage retry explicit failed reads with capped exponential backoff,
+keeping their cursor, roster and advertised capabilities in the running loop.
+Transport/protocol errors are values; exceptions are not converted into retries.
+Per-item boundaries isolate failed turns, deliveries, downloads, captures and
+maintenance passes. Their owners decide whether a later attempt is safe;
+ambiguous external effects are never replayed by supervision. Listener setup,
+queue ownership and unhandled database/invariant failures terminate the process.
+The process owns one OneBot listener and client slot.
 
 ## Phase status
 

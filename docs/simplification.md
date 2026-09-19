@@ -97,7 +97,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [x] Replace Historian maintenance leases with local scheduling and
       missing-data scans; preserve short transactional publication.
 - [x] Delete notification LLM review pipelines and operational debt review.
-- [ ] Separate connection retries, individual task failures and fatal core errors.
+- [x] Separate connection retries, individual task failures and fatal core errors.
 
 ### E. Context and optional machinery
 
@@ -432,3 +432,18 @@ maintained implementation record.
   Haskell is 44,733 lines; core Haskell is 31,909. Worker error classification,
   remaining removal/readability work, measurements and operational acceptance
   remain before full plan completion.
+
+- Worker supervision now only links scoped lifetimes: enabled permanent workers
+  must not return, and unhandled failures cancel siblings and fail the process.
+  Removed the catch-all restart policy and duplicate outer backoff; `withWorkers`
+  needs only `Concurrent`. Matrix and iMessage retry explicit transport/protocol
+  failures, preserving ingestion state. iMessage rechecks source identity after
+  a failed page so a replaced bridge database can bootstrap safely. Individual
+  turns, sends, captures and maintenance passes retain their own failure policy;
+  supervision never replays an external operation. Retired restart-policy and
+  redundant retry-counter tests; replacements verify failure propagation, sibling
+  cleanup and cancellation. A real-DB/HTTP case covers source reset during paging.
+  All targets build; 1,062 unit and 256 DB examples pass, along with capability
+  and HLint checks. Effective src/app Haskell is 44,698 lines; core Haskell is
+  31,874. Remaining removal/readability work, final measurements and operational
+  acceptance are still pending. No production deployment is claimed.
