@@ -1,11 +1,13 @@
 module Max.DB.JobSpec (Max.DB.JobSpec.spec) where
 
+import Control.Concurrent.STM (atomically)
 import Control.Monad (forM_, void)
 import Data.Aeson (Value (Null), object, (.=))
 import Data.Either (isLeft)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
+import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL (query)
 import Helpers (truncateAll, withDb, withDbLog)
@@ -18,11 +20,12 @@ import Max.Effects.Outbound
 import Max.Effects.TaskControl qualified as Control
 import Max.Effects.TaskExecution qualified as Progress
 import Max.Effects.TaskQuery qualified as Query
+import Max.Handler (shutdownJobs)
 import Max.IR (Body (..), Node (NText))
 import Max.Jobs qualified as Jobs
 import Max.MessageKind (MessageKind (KindChat))
-import Max.Platform.Delivery.Queue (newDeliveryQueue)
-import Max.Platform.Types (DeliveryId (..))
+import Max.Platform.Delivery.Queue (newDeliveryQueue, pendingDeliveryCount)
+import Max.Platform.Types (CanonicalMessageId (..), DeliveryId (..))
 import Max.Task.Types
 import Max.Tasks (beginTurnRuntime, cancelAgentTurnTask, newTaskRegistry)
 import Max.Turn.Types
@@ -31,6 +34,20 @@ import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ do
+  it "publishes a root interruption notice directly and retains it for delivery drain" $ do
+    running <- runningJob pool Research Map.empty
+    deliveries <- newDeliveryQueue (DeliveryId 0)
+    withDbLog pool . runOutbound running.tasks running.jobs deliveries $ shutdownJobs running.jobs
+    rows <- withDb pool (query "SELECT rendered_text,reply_to_canonical_message_id FROM messages WHERE message_origin='outbound'" ())
+    case rows of
+      [(body, source)] -> do
+        (body :: Text) `shouldSatisfy` T.isInfixOf "服务重启"
+        CanonicalMessageId source `shouldBe` running.job.spec.source
+      _ -> expectationFailure "expected one shutdown notice"
+    atomically (pendingDeliveryCount deliveries) `shouldReturn` 1
+    withDbLog pool . runOutbound running.tasks running.jobs deliveries $ shutdownJobs running.jobs
+    atomically (pendingDeliveryCount deliveries) `shouldReturn` 1
+
   it "retains non-reusable public identities without storing execution rows" $ do
     first <- withDb pool allocateJobId
     tasks <- newTaskRegistry

@@ -18,7 +18,7 @@ import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Bifunctor (first)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
-import Data.FileEmbed (embedDir, embedFile)
+import Data.FileEmbed (embedFile)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -26,6 +26,7 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Max.SelfSource.Embed (embedPublicDir)
 import Max.Util (tshow)
 import System.FilePath (isPathSeparator, takeExtension, takeFileName, (</>))
 
@@ -51,28 +52,28 @@ data SourceSlice = SourceSlice
 -- when adding files. Bundle tests include the archived live-comparison artifacts.
 embeddedFiles :: [(FilePath, BS.ByteString)]
 embeddedFiles =
-  prefixDirectory "src" $(embedDir "src")
-    <> prefixDirectory "app" $(embedDir "app")
-    <> prefixDirectory "runtime-cli" $(embedDir "runtime-cli")
-    <> prefixDirectory "test" $(embedDir "test")
-    <> prefixDirectory "test-db" $(embedDir "test-db")
-    <> prefixDirectory "test-support" $(embedDir "test-support")
-    <> prefixDirectory "migrations" $(embedDir "migrations")
-    <> prefixDirectory "docs" $(embedDir "docs")
-    <> prefixDirectory "skills" $(embedDir "skills")
-    <> prefixDirectory "codemode" $(embedDir "codemode")
-    <> prefixDirectory "cbits" $(embedDir "cbits")
-    <> prefixDirectory "static" $(embedDir "static")
-    <> prefixDirectory "nix" $(embedDir "nix")
-    <> prefixDirectory "context-eval" $(embedDir "context-eval")
-    <> prefixDirectory "contract-eval" $(embedDir "contract-eval")
-    <> prefixDirectory "workflow-eval" $(embedDir "workflow-eval")
-    <> prefixDirectory "eval" $(embedDir "eval")
-    <> prefixDirectory "prompt-flow" $(embedDir "prompt-flow")
-    <> prefixDirectory "scripts" $(embedDir "scripts")
-    <> prefixDirectory "browser-image" $(embedDir "browser-image")
-    <> prefixDirectory "bridge" $(embedDir "bridge")
-    <> prefixDirectory ".github/workflows" $(embedDir ".github/workflows")
+  prefixDirectory "src" $(embedPublicDir "src")
+    <> prefixDirectory "app" $(embedPublicDir "app")
+    <> prefixDirectory "runtime-cli" $(embedPublicDir "runtime-cli")
+    <> prefixDirectory "test" $(embedPublicDir "test")
+    <> prefixDirectory "test-db" $(embedPublicDir "test-db")
+    <> prefixDirectory "test-support" $(embedPublicDir "test-support")
+    <> prefixDirectory "migrations" $(embedPublicDir "migrations")
+    <> prefixDirectory "docs" $(embedPublicDir "docs")
+    <> prefixDirectory "skills" $(embedPublicDir "skills")
+    <> prefixDirectory "codemode" $(embedPublicDir "codemode")
+    <> prefixDirectory "cbits" $(embedPublicDir "cbits")
+    <> prefixDirectory "static" $(embedPublicDir "static")
+    <> prefixDirectory "nix" $(embedPublicDir "nix")
+    <> prefixDirectory "context-eval" $(embedPublicDir "context-eval")
+    <> prefixDirectory "contract-eval" $(embedPublicDir "contract-eval")
+    <> prefixDirectory "workflow-eval" $(embedPublicDir "workflow-eval")
+    <> prefixDirectory "eval" $(embedPublicDir "eval")
+    <> prefixDirectory "prompt-flow" $(embedPublicDir "prompt-flow")
+    <> prefixDirectory "scripts" $(embedPublicDir "scripts")
+    <> prefixDirectory "browser-image" $(embedPublicDir "browser-image")
+    <> prefixDirectory "bridge" $(embedPublicDir "bridge")
+    <> prefixDirectory ".github/workflows" $(embedPublicDir ".github/workflows")
     <> [ (".env.example", $(embedFile ".env.example")),
          ("LICENSE", $(embedFile "LICENSE")),
          ("README.md", $(embedFile "README.md")),

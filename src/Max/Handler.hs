@@ -4,6 +4,7 @@ module Max.Handler
     dispatchProactive,
     dispatchMonitorFire,
     jobsWorker,
+    shutdownJobs,
     recordAs,
     IngestOutcome (..),
     ingestAllowsDownstream,
@@ -162,7 +163,7 @@ import Max.ModelCatalog
     lookupModelCapabilities,
   )
 import Max.Monitor (nextCronFire)
-import Max.Monitor.Types (MonitorRef (..), monitorHandleText)
+import Max.Monitor.Types (MonitorDispatchResult (..), MonitorRef (..), monitorHandleText)
 import Max.Platform.Delivery.Queue (queueDeliveries)
 import Max.Platform.Envelope
   ( InboundEnvelope (..),
@@ -1233,7 +1234,7 @@ dispatchMonitorFire ::
     IOE :> es
   ) =>
   ElaboratedMonitorFire ->
-  Eff es ()
+  Eff es MonitorDispatchResult
 dispatchMonitorFire fire = do
   seedClaim <- maybe (pure Nothing) loadDispatchMessage fire.emfSeedCanonicalMessage
   case seedClaim of
@@ -1246,8 +1247,8 @@ dispatchMonitorFire fire = do
           tier <- effectiveTierKnown env seed.groupId seed
           case tier of
             -- A disconnected platform is not evidence of revoked authority.
-            -- Leave the trigger pending; bound read-only rechecks locally.
-            Nothing -> liftIO (Thread.threadDelay 5_000_000)
+            -- The scheduler defers this trigger without blocking other work.
+            Nothing -> pure MonitorRecheck
             Just actual
               | not (roleStillAllows fire.emfRequiredRole actual) ->
                   expire "arming principal role no longer permits monitors"
@@ -1282,8 +1283,9 @@ dispatchMonitorFire fire = do
                         void (MonitorJob.recordMonitorResult fire.emfFireId JobState.Failed (JobResult detail Nothing))
                         logAttention "monitor job rejected" (object ["error" .= detail])
                     Left MonitorJob.MonitorHourlyBudget -> pure ()
-                    Left detail -> expire (T.pack (show detail))
+                    Left detail -> void (expire (T.pack (show detail)))
                     _ -> pure ()
+                  pure MonitorHandled
   where
     expire reason = do
       expired <- expireElaboratedMonitorFire fire.emfFireId reason
@@ -1293,12 +1295,37 @@ dispatchMonitorFire fire = do
             [ "monitor" .= monitorHandleText fire.emfMonitor.mrMonitorOrdinal,
               "reason" .= reason
             ]
+      pure MonitorHandled
 
 roleStillAllows :: T.Text -> PermTier -> Bool
 roleStillAllows required actual = case required of
   "owner" -> tierSatisfied TierOwner actual
   "group_admin" -> tierSatisfied TierGroupAdmin actual
   _ -> False
+
+shutdownJobs :: (WithConnection :> es, Outbound :> es, Log :> es, IOE :> es) => Jobs.Jobs -> Eff es ()
+shutdownJobs registry = do
+  jobs <- liftIO (Jobs.closeJobs registry)
+  for_ jobs $ \job ->
+    ( for_ job.result $ \result -> do
+        publish <- case job.spec.monitor of
+          Nothing -> pure True
+          Just monitor -> MonitorJob.recordMonitorResult monitor.fireId job.status result
+        when publish $
+          void $
+            sendRecorded
+              OutboundRequest
+                { orKind = KindChat,
+                  orGroupId = job.spec.group,
+                  orBody = Body [NText (taskHandle job.run.jobId <> " · " <> JobState.taskStatusText job.status <> "\n" <> result.text)],
+                  orReplyTo = Just job.spec.source,
+                  orDeliveryScope = DeliverConversation,
+                  orTurnOutput = Nothing,
+                  orMonitorFireId = Nothing
+                }
+    )
+      `catchSync` \err ->
+        logAttention "job shutdown notice failed" (object ["job" .= taskHandle job.run.jobId, "error" .= show err])
 
 jobsWorker ::
   ( Blob :> es,

@@ -734,11 +734,14 @@ no restart policy and needs only the `Concurrent` effect.
 
 Matrix and iMessage retry explicit failed reads with capped exponential backoff,
 keeping their cursor, roster and advertised capabilities in the running loop.
-Transport/protocol errors are values; exceptions are not converted into retries.
-Per-item boundaries isolate failed turns, deliveries, downloads, captures and
-maintenance passes. Their owners decide whether a later attempt is safe;
-ambiguous external effects are never replayed by supervision. Listener setup,
-queue ownership and unhandled database/invariant failures terminate the process.
+Transport/protocol errors are values. Selected maintenance cycles (monitor
+scheduling, media discovery, browser maintenance and sandbox GC) also recover
+synchronous exceptions with capped backoff. Admin and optional platform ingress
+services have local recovery boundaries. Per-item boundaries isolate failed
+turns, deliveries, downloads and captures; asynchronous cancellation escapes.
+These owners decide whether another attempt is safe. Core queue ownership and
+unhandled invariant failures still fail the process, and ambiguous external
+effects are never replayed by supervision.
 The process owns one OneBot listener and client slot.
 
 ## Implementation status

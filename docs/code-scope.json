@@ -255,6 +255,7 @@
       "src/Max/Render.hs",
       "src/Max/Search/Runtime.hs",
       "src/Max/SelfSource.hs",
+      "src/Max/SelfSource/Embed.hs",
       "src/Max/Sticker.hs",
       "src/Max/Stickers.hs",
       "src/Max/Tools/Bilibili.hs",

@@ -89,12 +89,12 @@ are capped at 512 KiB, 120,000 instruction characters and 32 skills; dependency
 depth is capped at 16. The usual codemode memory, fuel, output and tool limits
 remain in force. Limits reject explicitly and do not silently truncate packages.
 
-Results include `run_ref` (a journal reference for durable executions), workflow
+Results include `run_ref` (a diagnostic execution-journal reference), workflow
 reference/version/arguments and bounded leaf receipts. The existing execution
 journal retains exact source and tool evidence. No whole-program retry, guest
 checkpoint, nested workflow execution or background resumption is added.
-`Finish`/`Yield` stops the entire program; a tool handoff does not suspend an
-`await` until deployment finishes. Steering arrives after the complete run.
+A program returns its result normally. There is no Finish/Yield protocol or
+suspended execution across deployments. Steering arrives after the complete run.
 
 ## Model authoring
 

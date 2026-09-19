@@ -11,7 +11,7 @@ import Effectful.Concurrent (Concurrent, runConcurrent, threadDelay)
 import Effectful.Exception (finally)
 import Effectful.Log (Log, LogLevel (LogAttention), runLog)
 import Max.Log (ColorMode (..), withCompactLogger)
-import Max.Worker (WorkerCriticality (..), retrying, withWorkers, worker)
+import Max.Worker (WorkerCriticality (..), recovering, retrying, withWorkers, worker)
 import Test.Hspec
 
 supervised :: Eff '[Log, Concurrent, IOE] a -> IO a
@@ -59,6 +59,28 @@ spec = describe "worker supervision" $ do
       takeMVar stopped `shouldReturn` ()
 
   describe "explicit connection retries" $ do
+    it "recovers a maintenance exception without cancelling an unrelated worker" $ do
+      attempts <- newIORef (0 :: Int)
+      finished <- newEmptyMVar
+      supervised $
+        withWorkers
+          [ worker "core" RequiredWorker (threadDelay 5_000_000),
+            worker "maintenance" OptionalWorker $ do
+              recovering "maintenance read" $ liftIO $ do
+                n <- atomicModifyIORef' attempts (\count -> (count + 1, count + 1))
+                if n == 1 then throwIO (userError "database connection reset") else putMVar finished ()
+          ]
+          (liftIO (takeMVar finished))
+      readIORef attempts `shouldReturn` 2
+
+    it "does not turn maintenance cancellation into a retry" $ do
+      attempts <- newIORef (0 :: Int)
+      result <- try @SomeException . supervised . recovering "maintenance read" $ liftIO $ do
+        atomicModifyIORef' attempts (\count -> (count + 1, ()))
+        throwIO ThreadKilled :: IO ()
+      result `shouldSatisfy` either (isInfixOf "thread killed" . displayException) (const False)
+      readIORef attempts `shouldReturn` 1
+
     it "retries a recoverable read and returns its result" $ do
       attempts <- newIORef (0 :: Int)
       result <- supervised . retrying "bridge read" $ do

@@ -5,7 +5,8 @@
 > with process-owned Jobs. See [current job operations](../runbooks/jobs.md).
 
 
-Status: Implemented; isolated real Camoufox/MCP acceptance passed on h610 on 2026-09-05.
+Status: Historical; superseded by [process-owned Jobs and explicit browser profiles](../runbooks/jobs.md).
+The implementation and September 5 acceptance below describe the previous runtime.
 
 ## Decision
 

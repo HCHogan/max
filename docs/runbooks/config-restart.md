@@ -8,8 +8,11 @@ systemctl is-active max
 journalctl -u max -o cat --since -5m
 ```
 
-Shutdown stops admitting agent turns, allows a bounded drain, then terminates
-remaining workers. Restart reconnects platform clients, including the NapCat
+Shutdown stops admitting agent turns and Jobs, cancels background Jobs with an
+interruption notice, and waits for foreground turns and all queued platform
+copies to settle. Notices, turns and delivery share `shutdownDrainSeconds`;
+reaching that deadline terminates remaining workers. A hard crash bypasses
+this drain and does not replay pending output. Restart reconnects platform clients, including the NapCat
 reverse WebSocket. There is no hot-reload socket or `maxctl` command.
 
 The NixOS module uses `/etc/max/config.yaml` and puts the effective configuration

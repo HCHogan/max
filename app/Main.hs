@@ -52,7 +52,7 @@ import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
-import Max.Handler (dispatchMonitorFire, dispatchProactive, handleEvents, ingressWorker, jobsWorker)
+import Max.Handler (dispatchMonitorFire, dispatchProactive, handleEvents, ingressWorker, jobsWorker, shutdownJobs)
 import Max.Historian (historianWorker)
 import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
 import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
@@ -86,7 +86,7 @@ import Max.Tasks (newTaskRegistry)
 import Max.Toolset (allToolsFor)
 import Max.Util (trySync)
 import Max.WechatHook (wechatHookBackend, wechatHookWorker)
-import Max.Worker (WorkerCriticality (..), withWorkers, worker)
+import Max.Worker (WorkerCriticality (..), recovering, withWorkers, worker)
 import OneBot.Event (Event)
 import OneBot.Server (ClientSlot, ServerConfig (..), runServer)
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stderr, stdout)
@@ -315,14 +315,14 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
             worker "media-discovery" RequiredWorker (mediaDiscoveryWorker fetchSig),
             worker "canonical-dispatch" RequiredWorker (ingressWorker fetchSig (intentState <$ env.beIntent)),
             worker "jobs" RequiredWorker jobsWorker,
-            worker "browser-workspaces" RequiredWorker (forever (browserMaintenance env.beBrowsers >> threadDelay 15_000_000)),
+            worker "browser-workspaces" RequiredWorker (forever (recovering "browser maintenance" (browserMaintenance env.beBrowsers) >> threadDelay 15_000_000)),
             worker
               "platform-delivery"
               RequiredWorker
               (deliveryWorker env.beDeliveries deliveryTransports)
           ]
         configuredWorkers =
-          [ worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown)
+          [ worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown env.beDeliveries (shutdownJobs env.beJobs))
           ]
             <> [ worker "embeddings" RequiredWorker (embedWorker env.beEmbeddingLock)
                | env.beEmbeddingEnabled
@@ -346,28 +346,29 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
                    (intentWorker intentCfg cfg.persona (defaultModelName cfg.llm) cfg.timezone env.beSessions (dispatchProactive (Just intentState)) intentState)
                | intentCfg <- maybeToList cfg.intent
                ]
-            <> [ worker "admin-server" RequiredWorker (adminServer adminCfg env (modelProfileNames cfg.llm) logBuf)
+            <> [ worker "admin-server" RequiredWorker (recovering "admin server" (adminServer adminCfg env (modelProfileNames cfg.llm) logBuf))
                | adminCfg <- maybeToList cfg.admin
                ]
             <> [ worker "call-pruner" RequiredWorker (callPruner cfg.adminCallRetentionDays)
                | _ <- maybeToList cfg.admin
                ]
-            <> [ worker "wechathook" RequiredWorker (wechatHookWorker httpRuntime wh env.beIngress)
+            <> [ worker "wechathook" RequiredWorker (recovering "wechat ingress" (wechatHookWorker httpRuntime wh env.beIngress))
                | wh <- maybeToList cfg.wechathook
                ]
-            <> [ worker "matrix" RequiredWorker (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler env.beIngress)
+            <> [ worker "matrix" RequiredWorker (recovering "matrix ingress" (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler env.beIngress))
                | matrixCfg <- maybeToList cfg.matrix
                ]
-            <> [ worker "imessage" RequiredWorker (iMessageWorker httpRuntime iMessageCfg env.beEpisodeScheduler env.beIngress env.beDeliveries)
+            <> [ worker "imessage" RequiredWorker (recovering "imessage ingress" (iMessageWorker httpRuntime iMessageCfg env.beEpisodeScheduler env.beIngress env.beDeliveries))
                | iMessageCfg <- maybeToList cfg.imessage
                ]
 
         sandboxGc = forever $ do
           threadDelay (60 * 60 * 1_000_000)
-          liftIO (reconcileSandboxes env.beSandboxes)
-          removed <- liftIO (gcExpiredSandboxes env.beSandboxes)
-          when (removed > 0) $
-            logInfo "sandbox TTL GC" (object ["removed" .= removed])
+          recovering "sandbox GC" $ do
+            liftIO (reconcileSandboxes env.beSandboxes)
+            removed <- liftIO (gcExpiredSandboxes env.beSandboxes)
+            when (removed > 0) $
+              logInfo "sandbox TTL GC" (object ["removed" .= removed])
 
     withWorkers
       ( permanentWorkers

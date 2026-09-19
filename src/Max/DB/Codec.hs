@@ -1,6 +1,6 @@
 -- | Typed decoding for text and native JSON columns at the SQL boundary.
 -- Malformed durable values are conversion failures, never default authority.
-module Max.DB.Codec (jsonField, jsonbField, nullableJsonbField, enumField, integralField, queryRows, databaseNow, jsonText) where
+module Max.DB.Codec (jsonField, jsonbField, nullableJsonbField, enumField, queryRows, databaseNow, jsonText) where
 
 import Data.Aeson
   ( FromJSON,
@@ -11,7 +11,6 @@ import Data.Aeson
     fromJSON,
   )
 import Data.ByteString.Lazy qualified as LBS
-import Data.Scientific (Scientific, floatingOrInteger)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
@@ -37,15 +36,6 @@ enumField :: (Typeable a) => (Text -> Maybe a) -> RowParser a
 enumField parse = fieldWith $ \column bytes -> do
   value <- fromField column bytes
   maybe (returnError ConversionFailed column "unknown domain value") pure (parse value)
-
--- | PostgreSQL SUM(bigint) returns arbitrary-precision numeric. Preserve its
--- integral range instead of coercing it to machine Int or a floating value.
-integralField :: RowParser Integer
-integralField = fieldWith $ \column bytes -> do
-  value <- fromField column bytes
-  case floatingOrInteger (value :: Scientific) of
-    Right integer -> pure integer
-    Left (_ :: Double) -> returnError ConversionFailed column "expected integral numeric"
 
 -- | Explicit row parsers keep SQL instances out of domain presentation types.
 queryRows :: (WithConnection :> es, IOE :> es, ToRow parameters) => RowParser a -> Query -> parameters -> Eff es [a]

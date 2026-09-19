@@ -66,7 +66,7 @@ spec pool = before_ (truncateAll pool) $ describe "process-owned browser workspa
       Right _ <- withDb pool (withTransaction (MonitorControl.controlMonitor 900 actor.unPrincipalId False monitor.mrMonitorOrdinal.unMonitorOrdinal (MonitorControl.ConfigureMonitor 1 "browser watch" QueueOccurrences 10 RetainPending (Just (Browser, True))) False))
       let handle = monitorHandleText monitor.mrMonitorOrdinal
           admit = do
-            [fire] <- withDb pool (pendingElaboratedMonitorFires now 10)
+            [fire] <- withDb pool (pendingElaboratedMonitorFires now [] (MonitorFireId 0) 10)
             Right (MonitorTaskAdmitted _ job) <- withDb pool (withTransaction (admitMonitorTaskWithin fire.emfFireId Nothing Map.empty running.job.spec.source.unCanonicalMessageId))
             pure job
       command pool running registry ["monitor", handle, "login"] >>= (`shouldSatisfy` not . isLeft)

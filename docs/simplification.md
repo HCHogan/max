@@ -112,7 +112,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [x] Remove task browser checkpoint/restore; retain explicitly saved profiles.
 - [x] Remove configuration generations/hot reload; simplify startup and shutdown.
 - [x] Route reminders through Jobs and preserve minimal trigger deduplication.
-- [ ] Reduce the remaining monitor claim/lease and definition protocol to the
+- [x] Reduce the remaining monitor claim/lease and definition protocol to the
       business state needed for scheduling, deduplication and frozen authority.
 
 ### D. Publication and maintenance
@@ -239,13 +239,31 @@ maintained implementation record.
 
 ## Implementation evidence
 
+- Post-release review corrections: graceful shutdown includes queued and active
+  deliveries, mirror copies and deterministic Job interruption notices in one
+  drain deadline. Cancellation fences stale Job publishers; there is still no
+  crash continuation or post-crash notification guarantee. Selected maintenance
+  and optional ingress services recover synchronous failures with local backoff;
+  core supervision and asynchronous cancellation retain fail-fast behaviour.
+  README, platform/workflow docs and superseded ADR statuses now describe these
+  boundaries. Local source embedding respects Git exclusions, including
+  `.git/info/exclude`. Removed unused helpers after checking function callers.
+  Tests cover more than one page of unavailable monitor checks, a later reminder,
+  shutdown during active mirrored delivery, Job notice ownership races, and
+  maintenance recovery without cancelling a sibling. Production acceptance of
+  these review corrections is recorded separately from their local tests.
+
 - Sections 7–8: `58523f4` removes monitor leases, persistent delivery retries,
   replay acknowledgement, partial-snapshot restoration and obsolete debt views.
   Populated migration 124 preserves definitions, messages and trigger facts.
 - Live startup exposed a pre-existing role-check bug: unavailable platform
   metadata was treated as confirmed loss of administrator authority. Monitor
-  revalidation now retains the pending trigger and bounds read-only retries in
-  the running process; only a known insufficient role expires the definition.
+  revalidation retains the pending trigger and defers read-only checks in the
+  running process. Deferred IDs are excluded before the batch limit, and
+  circular pagination prevents unavailable older triggers starving newer ones.
+  Rechecks wait at least five seconds locally, without sleeping in dispatch;
+  there is no total attempt cap while a definition remains valid. Only a known
+  insufficient role expires the definition.
   Ordinary permission checks still deny access when the role is unavailable.
 - Section 13: all Cabal components build; 1,043 unit and 267 PostgreSQL examples
   pass; HLint and architecture capability checks pass. The removed 14 examples

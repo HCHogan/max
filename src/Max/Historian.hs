@@ -84,6 +84,7 @@ import Max.Session.Types (Session (..))
 import Max.Tasks (TaskRegistry, inFlightTriggers)
 import Max.Time (fmtDateHM, fmtEnvStamp)
 import Max.Util (catchSync, trySync, tshow)
+import Max.Worker (recovering)
 import OneBot.Types (GroupId (..))
 
 historianPromptVersion :: Text
@@ -108,17 +109,18 @@ historianWorker ::
   EpisodeScheduler ->
   Eff es ()
 historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler = localDomain "historian" $ do
-  sessions <- listSessions defaultModel
-  for_ sessions $ \session -> do
-    let gid = session.groupId
-        scope = conversationScopeFor gid
-    gap <- findOldestBackfillGap scope
-    case gap of
-      Just _ -> liftIO (getCurrentTime >>= continueEpisodeAt scheduler gid)
-      Nothing -> do
-        cursor <- loadCursor scope historianCursor
-        pending <- hasMessagesAfter scope cursor
-        when pending (liftIO (armEpisode scheduler gid))
+  recovering "historian discovery" $ do
+    sessions <- listSessions defaultModel
+    for_ sessions $ \session -> do
+      let gid = session.groupId
+          scope = conversationScopeFor gid
+      gap <- findOldestBackfillGap scope
+      case gap of
+        Just _ -> liftIO (getCurrentTime >>= continueEpisodeAt scheduler gid)
+        Nothing -> do
+          cursor <- loadCursor scope historianCursor
+          pending <- hasMessagesAfter scope cursor
+          when pending (liftIO (armEpisode scheduler gid))
   forever $
     bracket
       (liftIO (awaitDueEpisode scheduler))

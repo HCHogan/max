@@ -4,9 +4,13 @@ module Max.Monitor (monitorWorker, nextCronFire, deliveryBody) where
 
 import Control.Monad (when)
 import Data.Aeson (object, (.=))
+import Data.Either (rights)
+import Data.List (unsnoc)
+import Data.Map.Strict qualified as Map
+import Data.Maybe (catMaybes, maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (TimeZone, UTCTime, diffUTCTime, getCurrentTime)
+import Data.Time (TimeZone, UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
 import Effectful
 import Effectful.Log (Log, logAttention)
 import Effectful.PostgreSQL (WithConnection)
@@ -17,12 +21,13 @@ import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundReque
 import Max.IR (Body (..), Phase (Canonical))
 import Max.MessageKind (MessageKind (KindChat))
 import Max.Monitor.Schedule (nextCronFire)
-import Max.Monitor.Types (MonitorFireId (..))
+import Max.Monitor.Types (MonitorDispatchResult (..), MonitorFireId (..))
 import Max.Platform.Store (ConversationRoster (..), RosterIdentity (..), conversationAdvertisedCaps, conversationRoster)
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId)
 import Max.Reply (Chunk (TextChunk))
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, prepareReplyChunk)
 import Max.Util (catchSync)
+import Max.Worker (recovering)
 import OneBot.Types (GroupId (..))
 import System.Cron.Parser (parseCronSchedule)
 
@@ -33,28 +38,37 @@ delayMicrosFor now deadline = max 50000 (min 3600000000 (round (diffUTCTime dead
 
 monitorWorker ::
   (Blob :> es, WithConnection :> es, Outbound :> es, Log :> es, IOE :> es) =>
-  TimeZone -> (ElaboratedMonitorFire -> Eff es ()) -> Eff es ()
-monitorWorker tz dispatchElaborated = loop
+  TimeZone -> (ElaboratedMonitorFire -> Eff es MonitorDispatchResult) -> Eff es ()
+monitorWorker tz dispatchElaborated = loop Map.empty (MonitorFireId 0)
   where
-    loop = do
-      now <- liftIO getCurrentTime
-      deadline <- nextMonitorDeadline now
-      work <- waitForWorkUntil (maybe 3600000000 (delayMicrosFor now) deadline) MonitorWork readyWork
-      mapM_ processWork work
-      loop
+    loop deferred cursor = recovering "monitor scheduling" (tick deferred cursor) >>= uncurry loop
 
-    readyWork = do
+    tick deferred cursor = do
+      now <- liftIO getCurrentTime
+      let waiting = Map.filter (> now) deferred
+      calendar <- nextMonitorDeadline now (Map.keys waiting)
+      let deadlines = maybeToList calendar <> Map.elems waiting
+          delay = if null deadlines then 3600000000 else delayMicrosFor now (minimum deadlines)
+      work <- waitForWorkUntil delay MonitorWork (readyWork (Map.keys waiting) cursor)
+      rechecks <- catMaybes <$> traverse processWork work
+      completed <- liftIO getCurrentTime
+      let pending = Map.fromList [(fire, addUTCTime 5 completed) | fire <- rechecks] <> waiting
+          nextCursor = maybe cursor ((.emfFireId) . snd) (unsnoc (rights work))
+      pure (pending, nextCursor)
+
+    readyWork deferred cursor = do
       now <- liftIO getCurrentTime
       _ <- admitDueTimeMonitors now
       canned <- pendingCannedMonitorFires 50
-      elaborated <- pendingElaboratedMonitorFires now 50
+      elaborated <- pendingElaboratedMonitorFires now deferred cursor 50
       pure (map Left canned <> map Right elaborated)
 
     processWork = \case
       Right fire ->
-        dispatchElaborated fire `catchSync` \err -> do
-          _ <- expireElaboratedMonitorFire fire.emfFireId (T.pack (show err))
-          logAttention "monitor dispatch failed; trigger not retried" (object ["fire_id" .= fire.emfFireId.unMonitorFireId, "error" .= show err])
+        (dispatchElaborated fire >>= \case MonitorHandled -> pure Nothing; MonitorRecheck -> pure (Just fire.emfFireId))
+          `catchSync` \err -> do
+            logAttention "monitor check failed; deferred locally" (object ["fire_id" .= fire.emfFireId.unMonitorFireId, "error" .= show err])
+            pure (Just fire.emfFireId)
       Left fire -> do
         now <- liftIO getCurrentTime
         let next = fire.cmfCron >>= either (const Nothing) (\schedule -> nextCronFire tz schedule now) . parseCronSchedule
@@ -72,6 +86,7 @@ monitorWorker tz dispatchElaborated = loop
           case result of
             Left err -> logAttention "reminder publication failed; not retried" (object ["fire_id" .= fire.cmfFireId.unMonitorFireId, "error" .= err])
             Right _ -> pure ()
+        pure Nothing
 
     deliver fire = do
       let group = GroupId fire.cmfGroupId

@@ -41,17 +41,14 @@ module Max.MemoryStore
     archiveMemoryWithEvidence,
     archiveVisibleMemory,
     archiveMemoryAdmin,
-    makeMemoryPermanent,
     supersedeMemory,
     supersedeMemoryWithEvidence,
-    evictOldest,
     invalidateMemoryEmbeddingsInConversation,
     markMemoryEmbedded,
     listPendingMemoryEmbeddings,
     markPendingMemoryEmbedded,
     findExactMemory,
     findNearestMemory,
-    searchVisibleMemories,
   )
 where
 
@@ -223,15 +220,16 @@ memorySubjectVisible :: (WithConnection :> es, IOE :> es) => MemoryNamespace -> 
 memorySubjectVisible namespace = case namespaceParts namespace of
   ("group", _, _) -> pure True
   (_, subject, conversation) -> do
-    rows <- query
-      "SELECT EXISTS (SELECT 1 FROM principals person WHERE person.principal_id = ? AND ( \
-      \ EXISTS (SELECT 1 FROM messages message WHERE message.group_id = ? AND message.author_principal_id = person.principal_id) \
-      \ OR EXISTS (SELECT 1 FROM conversations c JOIN conversation_endpoints endpoint USING (conversation_id) \
-      \ JOIN endpoint_known_identities known USING (endpoint_id) \
-      \ JOIN principal_identities identity USING (principal_identity_id) \
-      \ WHERE c.legacy_group_id = ? AND identity.platform_account_id = endpoint.platform_account_id \
-      \ AND identity.principal_id = person.principal_id)))"
-      (subject, conversation, conversation)
+    rows <-
+      query
+        "SELECT EXISTS (SELECT 1 FROM principals person WHERE person.principal_id = ? AND ( \
+        \ EXISTS (SELECT 1 FROM messages message WHERE message.group_id = ? AND message.author_principal_id = person.principal_id) \
+        \ OR EXISTS (SELECT 1 FROM conversations c JOIN conversation_endpoints endpoint USING (conversation_id) \
+        \ JOIN endpoint_known_identities known USING (endpoint_id) \
+        \ JOIN principal_identities identity USING (principal_identity_id) \
+        \ WHERE c.legacy_group_id = ? AND identity.platform_account_id = endpoint.platform_account_id \
+        \ AND identity.principal_id = person.principal_id)))"
+        (subject, conversation, conversation)
     pure (rows == [Only True])
 
 -- | Repair a proven orphan native-id namespace without changing its fact or
@@ -250,32 +248,42 @@ repairMemorySubjectAdmin scope mid expected principal reason = withTransaction $
   if not visible || count >= maxMemoriesPerScope
     then pure MemoryMutationRejected
     else do
-      rows <- query
-        "WITH original AS MATERIALIZED (SELECT id,scope_id FROM memories WHERE id=? FOR UPDATE), repaired AS ( \
-        \ UPDATE memories memory SET scope_id=?,version=version+1,updated_at=now() \
-        \ FROM original WHERE memory.id=original.id AND memory.id=? AND version=? AND scope='user' AND source_group_id=? \
-        \ AND lifecycle IN ('active','permanent') \
-        \ AND NOT EXISTS (SELECT 1 FROM principals WHERE principal_id=memory.scope_id) \
-        \ AND (SELECT array_agg(DISTINCT identity.principal_id) FROM principal_identities identity \
-        \ JOIN conversation_endpoints endpoint USING(platform_account_id) JOIN conversations conversation USING(conversation_id) \
-        \ WHERE identity.native_user_id=memory.scope_id::text AND conversation.legacy_group_id=memory.source_group_id)=ARRAY[?::bigint] \
-        \ AND EXISTS (SELECT 1 FROM memory_evidence evidence JOIN messages message ON message.canonical_message_id=evidence.source_canonical_message_id \
-        \ WHERE evidence.memory_id=memory.id AND evidence.memory_version=memory.version \
-        \ AND evidence.source_conversation_id=memory.source_group_id AND message.group_id=memory.source_group_id \
-        \ AND evidence.source_principal_id=? AND message.author_principal_id=?) \
-        \ AND NOT EXISTS (SELECT 1 FROM memories other WHERE other.scope='user' AND other.scope_id=? \
-        \ AND other.source_group_id=memory.source_group_id AND other.lifecycle IN ('active','permanent') AND other.content=memory.content) \
-        \ RETURNING memory.*,original.scope_id AS old_scope_id \
-        \), versioned AS (INSERT INTO memory_versions(memory_id,version,content,lifecycle,category,superseded_by,created_at) \
-        \ SELECT id,version,content,lifecycle,category,superseded_by,updated_at FROM repaired), \
-        \ evidenced AS (INSERT INTO memory_evidence(memory_id,memory_version,evidence_kind,source_conversation_id,source_principal_id,note) \
-        \ SELECT id,version,'admin',source_group_id,scope_id,'subject '||old_scope_id||' -> '||scope_id||'; '||? FROM repaired), \
-        \ audited AS (INSERT INTO memory_mutations(memory_id,from_version,to_version,operation,actor_kind,conversation_id,reason) \
-        \ SELECT id,version-1,version,'backfill','admin',source_group_id,'subject '||old_scope_id||' -> '||scope_id||'; '||? FROM repaired) \
-        \ SELECT id,version,scope,scope_id,content,lifecycle,category,updated_at FROM repaired"
-        [ PG.toField mid, PG.toField principal, PG.toField mid, PG.toField expected.unExpectedVersion, PG.toField group,
-          PG.toField principal, PG.toField principal, PG.toField principal, PG.toField principal,
-          PG.toField reason, PG.toField reason ]
+      rows <-
+        query
+          "WITH original AS MATERIALIZED (SELECT id,scope_id FROM memories WHERE id=? FOR UPDATE), repaired AS ( \
+          \ UPDATE memories memory SET scope_id=?,version=version+1,updated_at=now() \
+          \ FROM original WHERE memory.id=original.id AND memory.id=? AND version=? AND scope='user' AND source_group_id=? \
+          \ AND lifecycle IN ('active','permanent') \
+          \ AND NOT EXISTS (SELECT 1 FROM principals WHERE principal_id=memory.scope_id) \
+          \ AND (SELECT array_agg(DISTINCT identity.principal_id) FROM principal_identities identity \
+          \ JOIN conversation_endpoints endpoint USING(platform_account_id) JOIN conversations conversation USING(conversation_id) \
+          \ WHERE identity.native_user_id=memory.scope_id::text AND conversation.legacy_group_id=memory.source_group_id)=ARRAY[?::bigint] \
+          \ AND EXISTS (SELECT 1 FROM memory_evidence evidence JOIN messages message ON message.canonical_message_id=evidence.source_canonical_message_id \
+          \ WHERE evidence.memory_id=memory.id AND evidence.memory_version=memory.version \
+          \ AND evidence.source_conversation_id=memory.source_group_id AND message.group_id=memory.source_group_id \
+          \ AND evidence.source_principal_id=? AND message.author_principal_id=?) \
+          \ AND NOT EXISTS (SELECT 1 FROM memories other WHERE other.scope='user' AND other.scope_id=? \
+          \ AND other.source_group_id=memory.source_group_id AND other.lifecycle IN ('active','permanent') AND other.content=memory.content) \
+          \ RETURNING memory.*,original.scope_id AS old_scope_id \
+          \), versioned AS (INSERT INTO memory_versions(memory_id,version,content,lifecycle,category,superseded_by,created_at) \
+          \ SELECT id,version,content,lifecycle,category,superseded_by,updated_at FROM repaired), \
+          \ evidenced AS (INSERT INTO memory_evidence(memory_id,memory_version,evidence_kind,source_conversation_id,source_principal_id,note) \
+          \ SELECT id,version,'admin',source_group_id,scope_id,'subject '||old_scope_id||' -> '||scope_id||'; '||? FROM repaired), \
+          \ audited AS (INSERT INTO memory_mutations(memory_id,from_version,to_version,operation,actor_kind,conversation_id,reason) \
+          \ SELECT id,version-1,version,'backfill','admin',source_group_id,'subject '||old_scope_id||' -> '||scope_id||'; '||? FROM repaired) \
+          \ SELECT id,version,scope,scope_id,content,lifecycle,category,updated_at FROM repaired"
+          [ PG.toField mid,
+            PG.toField principal,
+            PG.toField mid,
+            PG.toField expected.unExpectedVersion,
+            PG.toField group,
+            PG.toField principal,
+            PG.toField principal,
+            PG.toField principal,
+            PG.toField principal,
+            PG.toField reason,
+            PG.toField reason
+          ]
       case rows of
         [memory] -> pure (MemoryMutationApplied memory)
         [] -> pure MemoryMutationRejected
@@ -485,19 +493,6 @@ archiveMemoryAdmin ::
 archiveMemoryAdmin actor mid expected =
   runLifecycleMutation actor "archive" MemoryArchived Nothing (AdminTarget mid expected)
 
-makeMemoryPermanent ::
-  (WithConnection :> es, IOE :> es) =>
-  MemoryActor ->
-  MemoryNamespace ->
-  MemoryId ->
-  ExpectedVersion ->
-  Eff es MemoryMutationResult
-makeMemoryPermanent actor ns mid expected = do
-  let (scope, sid, gid) = namespaceParts ns
-  if actorMayMutatePermanent actor
-    then runLifecycleMutation actor "make_permanent" MemoryPermanent Nothing (NamespaceTarget mid expected scope sid gid)
-    else pure MemoryMutationRejected
-
 supersedeMemory ::
   (WithConnection :> es, IOE :> es) =>
   MemoryActor ->
@@ -627,29 +622,6 @@ replacementPredicate target (Just replacement) = case target of
       [PG.toField replacement]
     )
 
-evictOldest ::
-  (WithConnection :> es, IOE :> es) =>
-  MemoryActor ->
-  MemoryNamespace ->
-  Eff es (Maybe MemoryItem)
-evictOldest actor ns = do
-  let (scope, sid, gid) = namespaceParts ns
-  rows <-
-    query
-      "SELECT id, version, scope, scope_id, content, lifecycle, category, updated_at \
-      \ FROM memories \
-      \ WHERE scope = ? AND scope_id = ? \
-      \   AND (scope = 'group' OR source_group_id = ?) \
-      \   AND lifecycle = 'active' \
-      \ ORDER BY updated_at ASC, id ASC LIMIT 1"
-      (scope, sid, gid)
-  case (rows :: [MemoryItem]) of
-    [] -> pure Nothing
-    candidate : _ ->
-      archiveMemory actor ns candidate.memId (ExpectedVersion candidate.memVersion) >>= \case
-        MemoryMutationApplied archived -> pure (Just archived)
-        MemoryMutationRejected -> pure Nothing
-
 markMemoryEmbedded ::
   (WithConnection :> es, IOE :> es) =>
   MemoryNamespace ->
@@ -768,27 +740,6 @@ findNearestMemory ns record = do
       \ ORDER BY distance LIMIT 1"
       (scope, sid, gid, record.erModelId, record.erDimensions, record.erVector)
   pure (listToMaybe rows)
-
-searchVisibleMemories ::
-  (WithConnection :> es, IOE :> es) =>
-  RecallPolicy ->
-  EmbeddingRecord ->
-  Int ->
-  Eff es [MemoryItem]
-searchVisibleMemories policy record limit = do
-  let gid = conversationStorageId (recallConversationScope policy)
-  query
-    "WITH compatible AS MATERIALIZED ( \
-    \  SELECT id, version, scope, scope_id, content, lifecycle, category, updated_at, embedding \
-    \  FROM memories \
-    \  WHERE ((scope = 'group' AND scope_id = ?) \
-    \      OR (scope = 'user' AND source_group_id = ?)) \
-    \    AND lifecycle IN ('active', 'permanent') \
-    \    AND embedding_model = ? AND embedding_dimensions = ? \
-    \) \
-    \ SELECT id, version, scope, scope_id, content, lifecycle, category, updated_at \
-    \ FROM compatible ORDER BY embedding <=> ?::vector LIMIT ?"
-    (gid, gid, record.erModelId, record.erDimensions, record.erVector, limit)
 
 data EvidenceParts = EvidenceParts
   { evidenceKind :: !Text,

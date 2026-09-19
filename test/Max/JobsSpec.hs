@@ -22,6 +22,44 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "process-owned Jobs" $ do
+  it "fences new work and returns one shutdown notice per interrupted root" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    _ <- launch tasks jobs 2 (request {parent = Just root.run})
+    _ <- admitJob jobs Nothing 3 request
+    notices <- closeJobs jobs
+    map (.run.jobId) notices `shouldBe` [1, 3]
+    map (.status) notices `shouldBe` [Cancelled, Cancelled]
+    map (.spec.source) notices `shouldBe` replicate 2 request.source
+    authorizeJobStep jobs (AgentTurnId 1) ExecutionCheckpoint `shouldReturn` False
+    authorizeJobStep jobs (AgentTurnId 2) ExecutionCheckpoint `shouldReturn` False
+    admitJob jobs Nothing 4 request >>= (`shouldSatisfy` isLeft)
+    timeout 20_000 (takeJobWork jobs) `shouldReturn` Nothing
+    closeJobs jobs `shouldReturn` []
+
+  it "includes an unclaimed final result but does not replay a notice already publishing" $ do
+    (tasks, jobs, request) <- fixture
+    (first, _) <- launch tasks jobs 1 request
+    (second, _) <- launch tasks jobs 2 request
+    completeJob jobs first.run Succeeded (JobResult "first result" Nothing)
+    PublishJobNotice sending version _ <- takeJobWork jobs
+    bindJobNotice jobs (AgentTurnId 10) sending.run version
+    completeJob jobs second.run Succeeded (JobResult "second result" Nothing)
+    notices <- closeJobs jobs
+    map (.run.jobId) notices `shouldBe` [2]
+    map (.result) notices `shouldBe` [Just (JobResult "second result" Nothing)]
+    authorizeJobPublication jobs (AgentTurnId 10) `shouldReturn` True
+
+  it "takes over a final notice claimed just before shutdown admission closes" $ do
+    (tasks, jobs, request) <- fixture
+    (job, _) <- launch tasks jobs 1 request
+    completeJob jobs job.run Succeeded (JobResult "result" Nothing)
+    PublishJobNotice sending version _ <- takeJobWork jobs
+    notices <- closeJobs jobs
+    map (.run.jobId) notices `shouldBe` [1]
+    bindJobNotice jobs (AgentTurnId 10) sending.run version
+    authorizeJobPublication jobs (AgentTurnId 10) `shouldReturn` False
+
   it "keeps detached jobs after their initiating reply and binds status to a conversation" $ do
     (tasks, jobs, request) <- fixture
     source <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing

@@ -6,6 +6,7 @@ module Max.Monitor.Types
     MonitorOrdinal (..),
     MonitorRef (..),
     MonitorFireId (..),
+    MonitorDispatchResult (..),
     monitorHandleText,
     parseMonitorHandle,
     LedgerMatchSpec (..),
@@ -48,6 +49,9 @@ data MonitorRef = MonitorRef
 newtype MonitorFireId = MonitorFireId {unMonitorFireId :: Int64}
   deriving stock (Show, Eq, Ord)
   deriving newtype (FromField, ToField)
+
+data MonitorDispatchResult = MonitorHandled | MonitorRecheck
+  deriving stock (Show, Eq)
 
 data HttpMonitorRegistration = HttpMonitorRegistration
   { monitor :: !MonitorRef,

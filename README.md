@@ -15,8 +15,8 @@
 Max treats a chat bot as a correctness problem. Every message, whichever
 platform it arrives on, lands in one immutable canonical ledger with a
 single typed message IR; deliveries — including mirroring one conversation
-across platforms — go through a durable outbox that degrades content
-deliberately instead of dropping it; and the LLM's context is a
+across platforms — use bounded process-local queues with persistent receipts
+and explicit capability fallbacks; and the LLM's context is a
 rebuildable, integrity-checked projection of that ledger, not a sliding
 window. The interesting decisions are written down in the ADRs.
 
@@ -26,7 +26,7 @@ chat platforms
       ▼
 canonical message ledger ────┬──▶ mirror deliveries: native where a 
 (one phase-indexed IR,       │     platform can, readable text where
- PostgreSQL, durable outbox, │     it can't - never silently dropped
+ PostgreSQL, delivery receipts, │     it cannot; outcomes stay inspectable
  echo reconciliation)        ├──▶ agent turns: LLM, tools, sandbox,
                              │     browser, files, media
                              └──▶ context projections: episodes,
@@ -43,17 +43,17 @@ canonical message ledger ────┬──▶ mirror deliveries: native wher
   as an auditable note.
   ([ADR 003](docs/adr/003-message-ir-capability-rendering.md))
 - **Mirrors that don't lie.** One canonical row per semantic message,
-  per-endpoint durable deliveries with leases and idempotency keys, and
-  ambiguous sends parked until an echo proves the outcome — a mirrored
-  conversation neither drops nor duplicates.
+  per-endpoint delivery receipts and current-process ordering. Ambiguous sends
+  remain unknown unless a platform receipt resolves them. Graceful shutdown
+  drains output within its deadline; a crash does not replay unsent copies.
 - **Context as a database, not a window.** Raw messages are immutable;
-  quiet-period episodes carry tiered summaries with exact, hash-checked
+  quiet-period episodes carry sourced summaries with exact, hash-checked
   source coverage; prompts are token-planned projections that degrade
   deterministically under budget and expand back to raw text on demand.
   ([ADR 001](docs/adr/001-context-memory-foundations.md))
 - **Memory with an audit trail.** Conversation-scoped memories are
-  versioned CAS records with evidence links and actor permissions — even
-  the nightly consolidation pass must justify every change. Unified
+  versioned CAS records with evidence links and actor permissions. Historian
+  proposes updates from conversation evidence; expiry follows recorded dates. Unified
   recall spans memories, episodes, raw history, pins, and media captions,
   lexical and semantic, with embedding provenance checked in SQL.
 - **It reads its own source.** An allowlisted snapshot of this repository
@@ -65,8 +65,8 @@ canonical message ledger ────┬──▶ mirror deliveries: native wher
   [Configuration and lifecycle](docs/runbooks/ssh-operations.md).
 - Plus the table stakes: concurrent turns with streaming, cancellation,
   and mid-turn feedback; multimodal input; persistent per-group sandboxes
-  and browser automation; skills, typed monitors, durable background
-  tasks, proactive participation, and an authenticated local admin panel.
+  and browser automation; skills, typed monitors, process-owned background
+  Jobs, proactive participation, and an authenticated local admin panel.
 
 ## Quick start
 
@@ -152,13 +152,13 @@ cabal build all
 | [database health](docs/runbooks/database-health.md) | retained failures, memory corrections and release acceptance |
 | [platforms.md](docs/platforms.md) | platform operations, mirroring, and cutover invariants |
 | [ADR 001](docs/adr/001-context-memory-foundations.md) | context/memory invariants and privacy boundaries |
-| [ADR 002](docs/adr/002-partial-plans-adaptive-elaboration.md) | historical partial-plan design; runtime contracts retained by ADR 008 |
+| [ADR 002](docs/adr/002-partial-plans-adaptive-elaboration.md) | historical partial-plan design; see current architecture and Jobs runbook |
 | [ADR 003](docs/adr/003-message-ir-capability-rendering.md) | the message IR, capability-tiered lowering, and prior-art survey |
 | [ADR 004](docs/adr/004-canonical-handles-for-the-model.md) | canonical handles for the model, and the identity it addresses |
-| [ADR 005](docs/adr/005-turn-continuity.md) | turn continuity: durable traces, journal projections, verbatim replay |
+| [ADR 005](docs/adr/005-turn-continuity.md) | historical replay design; readable scoped digests remain |
 | [ADR 006](docs/adr/006-monitors-typed-triggers.md) | typed durable monitors and the unified scheduler |
-| [ADR 007](docs/adr/007-plans-as-orchestration.md) | existing durable fork/join plans; authoring direction superseded by ADR 008 |
-| [ADR 008](docs/adr/008-durable-tasks-conversation-coordination.md) | durable tasks, monitor admission, and conversation coordination; local cutover candidate |
+| [ADR 007](docs/adr/007-plans-as-orchestration.md) | historical durable fork/join plans; replaced by process-owned Jobs |
+| [ADR 008](docs/adr/008-durable-tasks-conversation-coordination.md) | historical durable-task design; superseded by runtime simplification |
 | [development.md](docs/development.md) | tests, evaluation, versioning, and debugging |
 | [prompt-flow.md](docs/prompt-flow.md) | generated prompt and tool-round wire examples |
 

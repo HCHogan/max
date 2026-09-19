@@ -418,6 +418,7 @@ library
         Max.Runtime.Protocol
         Max.Worker
     other-modules:
+        Max.SelfSource.Embed
         Max.LLM.Configuration
       Max.LLM.Observability
       Max.LLM.Transport

@@ -12,7 +12,6 @@ module Max.Tool.Arguments
     integer,
     boolean,
     strings,
-    decodedObject,
     argumentsSchema,
     parseArguments,
   )
@@ -88,10 +87,6 @@ boolean description = Parameter (boolParam description) parseJSON
 
 strings :: Text -> Parameter [Text]
 strings description = Parameter (stringArrayParam description) parseJSON
-
--- | Structured domain documents retain their own FromJSON invariant checks.
-decodedObject :: (FromJSON a) => Text -> Parameter a
-decodedObject description = Parameter (object ["type" .= ("object" :: Text), "description" .= description]) (withObject "object" (parseJSON . Object))
 
 argumentsSchema :: Arguments a -> Value
 argumentsSchema (Arguments fields needed _) = toolObject fields needed

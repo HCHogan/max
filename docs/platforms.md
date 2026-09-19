@@ -130,7 +130,7 @@ the optional SIP-disabled IMCore helper. The bridge probes `imsg status` on
 every health check and native reply, and Max writes a changed reply capability
 back to the endpoint. With the helper live, canonical reply relations are sent
 as `reply_to`; if it disappears, the bridge fails closed and the delivery stays
-on Max's durable retry path. Ordinary sends explicitly remain on AppleScript.
+on Max's current-process retry path only when failure before sending is known. Ordinary sends explicitly remain on AppleScript.
 For a native reply, IMCore's immediate `lastSentMessage` GUID is non-authoritative
 and discarded; the later `messages.after` echo supplies the real GUID and
 confirms the delivery. Like Matrix, one outbound delivery accepts up to eight
@@ -202,6 +202,7 @@ window.
 
 Disabling an adapter means removing its config section and restarting. Durable
 endpoint rows, cursors, source events, and delivery evidence remain intact;
-do not delete them to clear a transport incident. Pending work resumes when the
-same endpoint is enabled again. An older Max binary must not be started after
-migrations 049/050; normal migration-version fencing rejects that downgrade.
+do not delete them to clear a transport incident. Re-enabling an endpoint accepts
+new work. Startup records old unsent copies as suppressed and ambiguous in-flight
+sends as unknown; it does not resume them. An older Max binary must not be started
+after migrations 049/050; normal migration-version fencing rejects that downgrade.

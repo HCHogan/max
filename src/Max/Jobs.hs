@@ -34,6 +34,7 @@ module Max.Jobs
     taskForReply,
     queueJobResultNotice,
     allJobs,
+    closeJobs,
     setJobBrowserAccess,
   )
 where
@@ -85,11 +86,12 @@ data Jobs = Jobs
   { entries :: !(TVar (Map Int64 Entry)),
     notices :: !(TVar (Map AgentTurnId (JobRun, Int))),
     publications :: !(TVar (Map CanonicalMessageId JobRun)),
+    closed :: !(TVar Bool),
     tasks :: !TaskRegistry
   }
 
 newJobs :: TaskRegistry -> IO Jobs
-newJobs tasks = Jobs <$> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> pure tasks
+newJobs tasks = Jobs <$> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO False <*> pure tasks
 
 -- | IDs come from the retained task identity sequence, never from model input.
 -- Terminal entries can be discarded only after their live parent releases them.
@@ -97,6 +99,7 @@ admitJob :: Jobs -> Maybe AgentTurnId -> Int64 -> JobSpec -> IO (Either Text Job
 admitJob jobs caller identifier requested = do
   now <- getCurrentTime
   atomically $ do
+    closing <- readTVar jobs.closed
     allowed <- maybe (pure True) (turnIsLive jobs.tasks) caller
     current <- readTVar jobs.entries
     let retained job = taskIsLive job.view.status || isJust job.runtime || job.pendingMonitor || job.noticeInFlight || isJust job.pendingNotice || maybe False (liveRun current) job.view.spec.parent
@@ -111,7 +114,7 @@ admitJob jobs caller identifier requested = do
         view = JobView run spec Queued Nothing Nothing 0 0 now True
         newEntry = Entry view root Nothing Set.empty Set.empty Seq.empty 0 Nothing False False False
         invalid detail = pure (Left detail)
-    if not allowed || Map.member identifier current
+    if closing || not allowed || Map.member identifier current
       then invalid "job caller ended or identity already exists"
       else
         if identifier <= 0 || T.null spec.objective || T.length spec.objective > 40000 || LBS.length (encode spec.inputs) > 262144
@@ -141,6 +144,7 @@ admitJob jobs caller identifier requested = do
 -- cannot accumulate an unbounded queue of obsolete events.
 takeJobWork :: Jobs -> IO JobWork
 takeJobWork jobs = atomically $ do
+  readTVar jobs.closed >>= check . not
   entries <- readTVar jobs.entries
   case find (.pendingMonitor) (Map.elems entries) of
     Just entry -> do
@@ -451,6 +455,29 @@ queueJobResultNotice jobs run = atomically $ do
 
 allJobs :: Jobs -> IO [JobView]
 allJobs jobs = map (.view) . Map.elems <$> readTVarIO jobs.entries
+
+-- | Fence admission before cancelling work. Return root notices that have not
+-- entered publication; already-running terminal notices keep their ownership.
+closeJobs :: Jobs -> IO [JobView]
+closeJobs jobs = do
+  (notices, turns) <- atomically $ do
+    closing <- readTVar jobs.closed
+    if closing
+      then pure ([], [])
+      else do
+        writeTVar jobs.closed True
+        entries <- readTVar jobs.entries
+        publishing <- Set.fromList . map fst . Map.elems <$> readTVar jobs.notices
+        let live = Set.fromList [entry.view.run | entry <- Map.elems entries, taskIsLive entry.view.status]
+            (stopped, turns) = stopChildren entries live "服务重启，任务已中断；已发生的操作不会自动重试。"
+            unbound entry = entry.noticeInFlight && Set.notMember entry.view.run publishing
+            needsNotice entry = isNothing entry.view.spec.parent && (Set.member entry.view.run live || isJust entry.pendingNotice || entry.pendingMonitor || unbound entry)
+            notices = [updated.view | entry <- Map.elems entries, needsNotice entry, Just updated <- [lookupRun stopped entry.view.run]]
+            fence entry = entry {pendingNotice = Nothing, pendingMonitor = False, noticeVersion = entry.noticeVersion + if unbound entry then 1 else 0}
+        writeTVar jobs.entries (fmap fence stopped)
+        pure (notices, turns)
+  stopTurns jobs turns
+  pure notices
 
 setJobBrowserAccess :: Jobs -> JobRun -> Bool -> IO ()
 setJobBrowserAccess jobs run allowed = atomically $ do

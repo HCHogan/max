@@ -1,6 +1,8 @@
 # ADR 013: Frontend steering at model boundaries
 
-Status: Accepted
+Status: Historical; superseded by [runtime simplification](../simplification.md).
+Current steering uses explicit owner feedback in process; independent requests
+queue for their own turns. The durable inbox rules below describe the old design.
 
 ## Decision
 

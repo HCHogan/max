@@ -397,8 +397,9 @@ listArmedMonitors scope =
 nextMonitorDeadline ::
   (WithConnection :> es, IOE :> es) =>
   UTCTime ->
+  [MonitorFireId] ->
   Eff es (Maybe UTCTime)
-nextMonitorDeadline now = do
+nextMonitorDeadline now deferred = do
   rows <-
     query
       "SELECT min(deadline) FROM ( \
@@ -414,7 +415,7 @@ nextMonitorDeadline now = do
       \  FROM monitor_fires f JOIN monitors m USING (monitor_id) \
       \  WHERE (m.status='armed' OR (m.status='expired' AND m.status_reason='max_fire_count')) \
       \    AND f.admission_state='pending' AND f.cancelled_at IS NULL \
-      \    AND (m.continuation_kind='canned' \
+      \    AND NOT (f.fire_id=ANY(?::bigint[])) AND (m.continuation_kind='canned' \
       \      OR (m.continuation_kind='elaborated' AND m.trigger_kind='time_cron' AND m.schedule_cron IS NULL) \
       \      OR (m.continuation_kind='elaborated' AND ( \
       \        SELECT count(*) FROM monitor_fires recent \
@@ -431,7 +432,7 @@ nextMonitorDeadline now = do
       \    AND NOT (rm.trigger_kind='time_cron' AND rm.schedule_cron IS NULL) \
       \    AND recent.dispatched_at>(?::timestamptz - interval '1 hour') \
       \) deadlines"
-      (now, now)
+      (PGArray deferred, now, now)
   pure $ case rows :: [Only (Maybe UTCTime)] of
     [Only deadline] -> deadline
     _ -> Nothing
@@ -605,11 +606,11 @@ pendingCannedMonitorFires limit =
     \ ORDER BY f.fire_id LIMIT ?"
     (Only (max 1 (min 100 limit)))
 
-pendingElaboratedMonitorFires :: (WithConnection :> es, IOE :> es) => UTCTime -> Int -> Eff es [ElaboratedMonitorFire]
-pendingElaboratedMonitorFires now limit =
+pendingElaboratedMonitorFires :: (WithConnection :> es, IOE :> es) => UTCTime -> [MonitorFireId] -> MonitorFireId -> Int -> Eff es [ElaboratedMonitorFire]
+pendingElaboratedMonitorFires now deferred after limit =
   query
     ( elaboratedFireSelect
-        <> " WHERE m.continuation_kind='elaborated' AND m.armed_by_principal_id IS NOT NULL\
+        <> " WHERE NOT (f.fire_id=ANY(?::bigint[])) AND m.continuation_kind='elaborated' AND m.armed_by_principal_id IS NOT NULL\
            \ AND (m.status='armed' OR (m.status='expired' AND m.status_reason='max_fire_count'))\
            \ AND f.admission_state='pending' AND f.cancelled_at IS NULL\
            \ AND ((m.trigger_kind='time_cron' AND m.schedule_cron IS NULL) OR\
@@ -618,9 +619,9 @@ pendingElaboratedMonitorFires now limit =
            \ AND NOT (rm.trigger_kind='time_cron' AND rm.schedule_cron IS NULL)\
            \ AND recent.admission_state='dispatched' AND recent.disposition NOT IN ('coalesced','overflow')\
            \ AND recent.dispatched_at>(?::timestamptz - interval '1 hour'))<20)\
-           \ ORDER BY f.fire_id LIMIT ?"
+           \ ORDER BY (f.fire_id<=?),f.fire_id LIMIT ?"
     )
-    (now, max 1 (min 100 limit))
+    (PGArray deferred, now, after, max 1 (min 100 limit))
 
 elaboratedFireSelect :: Query
 elaboratedFireSelect =

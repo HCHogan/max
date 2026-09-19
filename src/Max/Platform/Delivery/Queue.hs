@@ -8,6 +8,7 @@ module Max.Platform.Delivery.Queue
     queueDeliveryRetry,
     nextDelivery,
     settleDelivery,
+    pendingDeliveryCount,
   )
 where
 
@@ -32,6 +33,10 @@ data QueuedDelivery = QueuedDelivery
 
 data DeliveryPhase = Waiting !UTCTime | Sending | RetryAfterSend
   deriving stock (Eq, Show)
+
+-- Includes active sends and delayed retries, not just work waiting for a worker.
+pendingDeliveryCount :: DeliveryQueue -> STM Int
+pendingDeliveryCount (DeliveryQueue _ state) = Map.size <$> readTVar state
 
 newDeliveryQueue :: DeliveryId -> IO DeliveryQueue
 newDeliveryQueue boundary = DeliveryQueue boundary <$> newTVarIO Map.empty

@@ -14,13 +14,14 @@ import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Platform.Store (loadDispatchMessage)
 import Max.Util (catchSync)
+import Max.Worker (recovering)
 
 mediaDiscoveryWorker :: (Log :> es, WithConnection :> es, IOE :> es) => FetchSignal -> Eff es ()
 mediaDiscoveryWorker signal = do
   started <- liftIO getCurrentTime
   discover (0, addUTCTime 300 started)
   where
-    discover state = scan state >>= discover
+    discover state = recovering "media discovery" (scan state) >>= discover
     scan (cursor, rescanAt) = do
       now <- liftIO getCurrentTime
       tick <- liftIO (fetchTick signal)

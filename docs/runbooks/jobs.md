@@ -14,8 +14,12 @@ Background jobs may steer and await their own children with `task_wait`.
 
 The initiating foreground reply does not own a detached job's lifetime. A job
 owns its children and cancels them on exit. State, waits and browser sessions are
-bounded and process-local. Restart interrupts work; it does not resume it or
-retry uncertain actions. Job IDs are never reused. Historical task rows remain
+bounded and process-local. Graceful restart closes admission, cancels live Jobs,
+and publishes an interruption notice for each root Job within the shared drain
+deadline. Unpublished terminal results are also included. A hard crash or an
+exhausted drain deadline can lose these notices; there is no post-crash Job
+recovery or replay of uncertain actions. After restart, process-local Job handles
+are no longer queryable. Job IDs are never reused. Historical task rows remain
 available as evidence but are not used by scheduling.
 
 Reminders retain definitions, frozen occurrence policy, provenance and minimal

@@ -21,7 +21,6 @@ module Max.ToolContext
     toolClearedAt,
     toolMonitorArmingAllowed,
     toolCatalogGrants,
-    toolEffectCeiling,
     toolContextLimits,
     toolSkillLoads,
     withToolSkillLoads,
@@ -135,6 +134,3 @@ toolMonitorArmingAllowed = (.toolCapabilities.tcMonitorArming)
 
 toolCatalogGrants :: ToolContext -> Map Text Text
 toolCatalogGrants = (.toolCapabilities.tcCatalogGrants)
-
-toolEffectCeiling :: ToolContext -> Maybe (Map Text Text)
-toolEffectCeiling = (.toolCapabilities.tcEffectCeiling)

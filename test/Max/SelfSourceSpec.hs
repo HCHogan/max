@@ -14,6 +14,7 @@ spec = describe "deployed self-source snapshot" $ do
     paths `shouldContain` ["test/Max/EpisodeSchedulerSpec.hs"]
     paths `shouldContain` ["test-support/PromptFixture.hs"]
     paths `shouldSatisfy` notElem "docs/runbooks/operational-debt.md"
+    paths `shouldSatisfy` notElem "docs/research/max-ssh-operations-plan.md"
     paths `shouldContain` ["docs/runbooks/database-health.md"]
     paths `shouldContain` ["docs/schema-scope.json"]
     paths `shouldContain` ["docs/research/simplification-evaluation.md"]

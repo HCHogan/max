@@ -6,6 +6,7 @@ module Max.Worker
     worker,
     withWorkers,
     retrying,
+    recovering,
   )
 where
 
@@ -21,6 +22,7 @@ import Effectful.Concurrent (Concurrent)
 import Effectful.Concurrent.Async (link, withAsync)
 import Effectful.Exception (throwIO)
 import Effectful.Log (Log, logAttention, logInfo)
+import Max.Util (trySync)
 
 data WorkerCriticality
   = -- | A permanent service: returning means the process is degraded.
@@ -85,3 +87,8 @@ retrying label action = go (0 :: Int) 1
                 ]
           liftIO (Concurrent.threadDelay (delay * 1_000_000))
           go n (min 60 (delay * 2))
+
+-- | A caller-selected read, idempotent maintenance cycle, or ingress server.
+-- Never wrap an ambiguous external send. Asynchronous cancellation still escapes.
+recovering :: (Log :> es, IOE :> es) => Text -> Eff es a -> Eff es a
+recovering label action = retrying label $ either (Left . T.pack . show) Right <$> trySync action

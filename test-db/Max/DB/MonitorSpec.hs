@@ -1,8 +1,8 @@
 module Max.DB.MonitorSpec (spec) where
 
 import Control.Concurrent (newEmptyMVar, takeMVar, tryPutMVar)
-import Control.Concurrent.Async (async, concurrently, wait)
-import Control.Monad (forM, forM_, (>=>))
+import Control.Concurrent.Async (async, concurrently, wait, withAsync)
+import Control.Monad (forM, forM_, void, when, (>=>))
 import Data.Either (isRight, rights)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
@@ -43,12 +43,15 @@ import Max.DB.Monitor.Admission
 import Max.DB.Monitor.Control qualified as Control
 import Max.DB.Notify (WorkChannel (MonitorWork), waitForWorkUntil)
 import Max.DB.Transaction (withTransaction)
+import Max.Effects.Outbound (OutboundRequest (..), PublicationResult (..), runOutboundWith)
 import Max.IR (Body (..), Node (NMention, NText))
-import Max.Monitor (deliveryBody)
+import Max.Monitor (deliveryBody, monitorWorker)
 import Max.Monitor.Control qualified as ControlTypes
 import Max.Monitor.Policy (OverlapPolicy (Coalesce))
 import Max.Monitor.Types
   ( LedgerMatchSpec (..),
+    MonitorDispatchResult (..),
+    MonitorFireId (..),
     MonitorOrdinal (..),
     MonitorRef (..),
   )
@@ -68,6 +71,49 @@ import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
+  it "excludes deferred checks before pagination and rotates past a full retry page" $ do
+    truncateAll pool
+    principal <- seedConversation pool 4801 40 5
+    turn <- withDb pool (startAgentTurn (GroupId 40) (CanonicalMessageId 1) (PrincipalId principal))
+    now <- getCurrentTime
+    forM_ [1 .. 61 :: Int] $ \index ->
+      withDb pool (armElaboratedTimeMonitor (GroupId 40) (PrincipalId principal) turn (showText index) Nothing (addUTCTime (-1) now) Map.empty)
+        >>= requireRight "arm time"
+    withDb pool (admitDueTimeMonitors now) `shouldReturn` 61
+    first <- withDb pool (pendingElaboratedMonitorFires now [] (MonitorFireId 0) 50)
+    length first `shouldBe` 50
+    let deferred = map (.emfFireId) first
+    rest <- withDb pool (pendingElaboratedMonitorFires now deferred (MonitorFireId 0) 50)
+    length rest `shouldBe` 11
+    let allFires = deferred <> map (.emfFireId) rest
+    withDb pool (pendingElaboratedMonitorFires now allFires (MonitorFireId 0) 50) `shouldReturn` []
+    withDb pool (nextMonitorDeadline now allFires) `shouldReturn` Nothing
+    rotated <- withDb pool (pendingElaboratedMonitorFires now [] (last deferred) 50)
+    map (.emfFireId) rotated `shouldBe` map (.emfFireId) rest <> take 39 deferred
+
+    -- Exercise the actual scheduler: fifty unavailable role checks must not
+    -- hold a later monitor or a newly armed ordinary reminder behind sleeps.
+    checked <- newEmptyMVar
+    dispatched <- newEmptyMVar
+    delivered <- newEmptyMVar
+    let dispatch fire
+          | fire.emfFireId `elem` deferred = do
+              when (fire.emfFireId == last deferred) (void . liftIO $ tryPutMVar checked ())
+              pure MonitorRecheck
+          | otherwise = do
+              _ <- admitFire fire Nothing
+              void . liftIO $ tryPutMVar dispatched ()
+              pure MonitorHandled
+        publish req = do
+          queued <- enqueueOutbound (OutboundDraft 40 "chat" Nothing req.orBody Nothing Nothing req.orMonitorFireId)
+          void . liftIO $ tryPutMVar delivered ()
+          pure (Published queued.canonicalMessageId)
+    withAsync (withDbLog pool (runOutboundWith publish (monitorWorker utc dispatch))) $ \_ -> do
+      System.Timeout.timeout 2_000_000 (takeMVar checked) `shouldReturn` Just ()
+      System.Timeout.timeout 2_000_000 (takeMVar dispatched) `shouldReturn` Just ()
+      _ <- withDb pool (armCannedTimeMonitor (GroupId 40) (PrincipalId principal) Nothing "ordinary reminder" Nothing now)
+      System.Timeout.timeout 2_000_000 (takeMVar delivered) `shouldReturn` Just ()
+
   it "resolves mentions in reminder text without adding an initiator mention" $ do
     truncateAll pool
     _ <- insertRawMessage pool 9001 900 1 42 testTime (Just "requester") "hello"
@@ -108,7 +154,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
         (withDb pool (arm asker 42 "right" (addUTCTime 120 now)))
     map (.mrMonitorOrdinal) [left, right]
       `shouldMatchList` [MonitorOrdinal 1, MonitorOrdinal 2]
-    deadline <- requireJustIO "monitor deadline" =<< withDb pool (nextMonitorDeadline now)
+    deadline <- requireJustIO "monitor deadline" =<< withDb pool (nextMonitorDeadline now [])
     deadline `shouldBeWithinMicros` addUTCTime 60 now
 
     otherAsker <- seedConversation pool 5002 43 8
@@ -327,7 +373,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
 
     [claimed] <-
       withDb pool $
-        pendingElaboratedMonitorFires now 10
+        pendingElaboratedMonitorFires now [] (MonitorFireId 0) 10
     claimed.emfTriggerCanonicalMessage `shouldBe` Just (CanonicalMessageId liveCanonical)
     claimed.emfTriggerEvidence `shouldSatisfy` T.isInfixOf "LAUNCH is ready"
     claimed.emfEffectToolGrants
@@ -362,7 +408,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     fireCount pool monitor `shouldReturn` 1
     [claimed] <-
       withDb pool $
-        pendingElaboratedMonitorFires now 10
+        pendingElaboratedMonitorFires now [] (MonitorFireId 0) 10
     MonitorTaskAdmitted identifier job <- requireRight "admitted monitor job" =<< withDb pool (admitFire claimed Nothing)
     withDb pool (admitFire claimed Nothing) `shouldReturn` Right MonitorAlreadyDispatched
     job.group `shouldBe` GroupId 62
@@ -440,14 +486,14 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     forM_ [6302 .. 6322] $ \messageId ->
       insertRawMessage pool messageId 65 705 99 now Nothing "budget-hit"
     fireCount pool budgetMonitor `shouldReturn` 21
-    claimed <- withDb pool (pendingElaboratedMonitorFires now 50)
+    claimed <- withDb pool (pendingElaboratedMonitorFires now [] (MonitorFireId 0) 50)
     admitted <- rights <$> mapM (\fire -> withDb pool (admitFire fire Nothing)) claimed
     length admitted `shouldBe` 20
     budgetStates pool budgetMonitor `shouldReturn` [(20, 1)]
 
     oneShot <- requireRight "arm one-shot" =<< armTimeFor pool budgetPrincipal budgetArming now
     withDb pool (admitDueTimeMonitors now) `shouldReturn` 1
-    [clockFire] <- withDb pool (pendingElaboratedMonitorFires now 10)
+    [clockFire] <- withDb pool (pendingElaboratedMonitorFires now [] (MonitorFireId 0) 10)
     clockFire.emfMonitor `shouldBe` oneShot
     clockTurn <- withDb pool (admitFire clockFire Nothing)
     clockTurn `shouldSatisfy` isRight
@@ -459,7 +505,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
           "UPDATE monitor_fires SET dispatched_at=now() - interval '61 minutes' \
           \ WHERE monitor_id=? AND admission_state='dispatched'"
           (Only budgetMonitor.mrMonitorId)
-    [released] <- withDb pool (pendingElaboratedMonitorFires now 10)
+    [released] <- withDb pool (pendingElaboratedMonitorFires now [] (MonitorFireId 0) 10)
     finalTurn <- withDb pool (admitFire released Nothing)
     finalTurn `shouldSatisfy` isRight
     budgetStates pool budgetMonitor `shouldReturn` [(21, 0)]
@@ -486,7 +532,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
           )
     _ <- insertRawMessage pool 6402 66 706 99 now Nothing "one-hit"
     monitorReason pool maxOne `shouldReturn` [("expired", Just "max_fire_count", 1)]
-    length <$> withDb pool (pendingElaboratedMonitorFires now 10)
+    length <$> withDb pool (pendingElaboratedMonitorFires now [] (MonitorFireId 0) 10)
       `shouldReturn` 1
 
     ttlMonitor <-

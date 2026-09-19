@@ -18,16 +18,13 @@ module Max.Browser.Registry
     newBrowserRegistry,
     newBrowserRegistryWithHost,
     configureBrowserRegistry,
-    browserRuntimeId,
     browserVault,
     browserRetention,
     withBrowserWorkspace,
     tryWithBrowserWorkspace,
     bindBrowserLease,
-    renewBrowserLease,
     prepareBrowserRestore,
     takeBrowserRestore,
-    liveTaskBrowsers,
     withBrowserSession,
     reapStaleBrowsers,
     callBrowserTool,
@@ -197,9 +194,6 @@ newBrowserRegistryWithHost runtime group endpoint hostHeader = do
   atomically $ modifyTVar' registry.brEntries (Map.insert group entry)
   pure registry
 
-browserRuntimeId :: BrowserRegistry -> Text
-browserRuntimeId = (.brRuntimeId)
-
 browserVault :: BrowserRegistry -> BrowserVault
 browserVault = (.brVault)
 
@@ -221,14 +215,6 @@ bindBrowserLease registry scope epoch untilTime = do
     Left _ -> pure ()
   pure result
 
-renewBrowserLease :: BrowserRegistry -> BrowserScope -> Int64 -> UTCTime -> IO ()
-renewBrowserLease registry scope epoch untilTime = do
-  instances <- readTVarIO registry.brInstances
-  leases <- readTVarIO registry.brLeases
-  case (Map.lookup scope instances, Map.lookup scope leases) of
-    (Just owned, Just _) -> void $ timeout 5_000_000 $ mcpCallTool owned.biClient "max_workspace_renew" (object ["epoch" .= epoch, "until" .= untilTime])
-    _ -> pure ()
-
 prepareBrowserRestore :: BrowserRegistry -> BrowserScope -> Value -> IO ()
 prepareBrowserRestore registry scope value = atomically $ modifyTVar' registry.brRestores (Map.insert scope value)
 
@@ -237,11 +223,6 @@ takeBrowserRestore registry scope = atomically $ do
   restores <- readTVar registry.brRestores
   modifyTVar' registry.brRestores (Map.delete scope)
   pure (Map.lookup scope restores)
-
-liveTaskBrowsers :: BrowserRegistry -> IO [(GroupId, Int64, Int64)]
-liveTaskBrowsers registry = do
-  instances <- readTVarIO registry.brInstances
-  pure [(group, task, generation) | BrowserTaskScope group task generation <- Map.keys instances]
 
 -- | Serialize stateful camoufox operations for one turn.  Different turns,
 -- including sibling fork children in the same conversation, never share this
