@@ -24,7 +24,7 @@ spec = describe "deployed self-source snapshot" $ do
     paths `shouldContain` [".env.example"]
 
   it "searches literal source with path and line provenance" $ do
-    matches <- requireRight (searchSource "historianRetryDelaySeconds" (Just "src/") 10)
+    matches <- requireRight (searchSource "module Max.Historian" (Just "src/") 10)
     matches `shouldSatisfy` any (\match -> match.smPath == "src/Max/Historian.hs" && match.smLine > 0)
 
   it "reads bounded numbered lines from the embedded ADR" $ do

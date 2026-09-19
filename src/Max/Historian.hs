@@ -1,17 +1,14 @@
--- | Durable episode capture into chronological summaries and scoped memory.
--- Quiet timers are in memory; EpisodeStore persists ranges, retries and atomic
--- publication. Quiet rounds and publications heal the oldest coverage gap so
--- late commits below the historian cursor are not permanently skipped.
+-- | Quiet-period capture into sourced summaries and scoped memory.
+-- Scheduling stays local; publication rechecks the source and cursor atomically.
 module Max.Historian
   ( historianWorker,
     historianPromptVersion,
     historianSchemaVersion,
     CaptureProcessResult (..),
-    processCaptureLease,
-    healOldestCoverageGap,
+    processCaptureRun,
+    prepareOldestCoverageGap,
 
     -- * Pure policy exposed for tests
-    historianRetryDelaySeconds,
     takeEpisodeByToken,
     renderHistorianSourceLine,
     renderHistorianMessages,
@@ -20,8 +17,7 @@ module Max.Historian
   )
 where
 
-import Control.Concurrent (threadDelay)
-import Control.Monad (forever, unless, void, when)
+import Control.Monad (forever, when)
 import Data.Aeson (encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
@@ -33,9 +29,9 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (TimeZone, getCurrentTime)
+import Data.Time (TimeZone, addUTCTime, getCurrentTime)
 import Effectful
-import Effectful.Exception (finally)
+import Effectful.Exception (bracket)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.Context (estimateMessagesTokens, estimateTextTokens)
@@ -54,10 +50,14 @@ import Max.DB.History
 import Max.DB.Session (listSessions)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
 import Max.EpisodeScheduler
-  ( EpisodeScheduler,
+  ( EpisodeRequest (..),
+    EpisodeScheduler,
+    EpisodeWork (..),
     armEpisode,
     awaitDueEpisode,
     continueEpisodeAt,
+    deferEpisodeAt,
+    episodeGroup,
     episodePendingDeadline,
     releaseEpisodeClaim,
     retryEpisodeAt,
@@ -92,25 +92,6 @@ historianPromptVersion = "historian/v5"
 historianSchemaVersion :: Int
 historianSchemaVersion = 2
 
--- | A lease must cover the initial generation, the one allowed structured
--- response repair, and publication.  Provider/transport failures do not run a
--- synchronous retry inside either call, so this is the actual worst case.
-historianLeaseSeconds :: Int -> Int
-historianLeaseSeconds timeoutSeconds = max 600 (2 * max 1 timeoutSeconds + 120)
-
-historianProtectedRetrySeconds :: Int
-historianProtectedRetrySeconds = 60
-
--- | Durable retry backoff.  The source range stays exact and retryable, but a
--- poison model response cannot consume every worker turn forever.
-historianRetryDelaySeconds :: Int -> Int
-historianRetryDelaySeconds attempt
-  | attempt <= 1 = 60
-  | attempt == 2 = 300
-  | attempt == 3 = 900
-  | attempt == 4 = 3600
-  | otherwise = 21600
-
 -- | Internal SQL pagination is not an episode-size policy.  Pages are joined
 -- until the deterministic token boundary is reached.
 ledgerPageSize :: Int
@@ -127,159 +108,84 @@ historianWorker ::
   EpisodeScheduler ->
   Eff es ()
 historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler = localDomain "historian" $ do
-  -- Persistent jobs win at boot.  The scheduler can disappear; leases and
-  -- exact source ranges cannot.
-  drainAvailableRuns
-  recoverHistoricalConversations
-  drainAvailableRuns
-  recoverPendingConversations
-  forever $ do
-    gid <- liftIO (awaitDueEpisode scheduler)
-    finally
-      ( (enqueueSettledConversation gid >> drainAvailableRuns)
-          `catchSync` \err -> do
-            retryConversation gid
-            logAttention "historian: scheduling round crashed" $
-              object ["group_id" .= unGroupId gid, "error" .= tshow err]
-      )
-      (liftIO (releaseEpisodeClaim scheduler gid))
-  where
-    inputBudget = historianInputBudget profile catalog
-    -- A larger model window should improve headroom, not silently turn one
-    -- noisy episode into an unreviewable 100K-message projection.  64K of raw
-    -- source is already ample for a settled group-chat episode; larger gaps
-    -- continue as exact adjacent capture runs.
-    sourceBudget = min 65536 (max 512 (inputBudget * 2 `div` 3))
-
-    recoverPendingConversations = do
-      sessions <- listSessions defaultModel
-      for_ sessions $ \session -> do
-        let scope = conversationScopeFor session.groupId
+  sessions <- listSessions defaultModel
+  for_ sessions $ \session -> do
+    let gid = session.groupId
+        scope = conversationScopeFor gid
+    gap <- findOldestBackfillGap scope
+    case gap of
+      Just _ -> liftIO (getCurrentTime >>= continueEpisodeAt scheduler gid)
+      Nothing -> do
         cursor <- loadCursor scope historianCursor
         pending <- hasMessagesAfter scope cursor
-        when pending $ do
-          liftIO (armEpisode scheduler session.groupId)
-          logInfo "historian: recovered pending conversation" $
-            object ["group_id" .= unGroupId session.groupId, "cursor" .= cursor.ingestSeq]
+        when pending (liftIO (armEpisode scheduler gid))
+  forever $
+    bracket
+      (liftIO (awaitDueEpisode scheduler))
+      (liftIO . releaseEpisodeClaim scheduler)
+      ( \work ->
+          runWork work `catchSync` \err -> do
+            liftIO (getCurrentTime >>= retryEpisodeAt scheduler work)
+            logAttention "historian: capture failed" (object ["group_id" .= unGroupId (episodeGroup work.request), "error" .= tshow err])
+      )
+  where
+    inputBudget = historianInputBudget profile catalog
+    sourceBudget = min 65536 (max 512 (inputBudget * 2 `div` 3))
+    request reason model = CaptureRequest reason model historianPromptVersion historianSchemaVersion
 
-    recoverHistoricalConversations = do
-      sessions <- listSessions defaultModel
-      for_ sessions (healCoverage . (.groupId))
-
-    healCoverage gid =
-      void (healOldestCoverageGap tz profile sourceBudget (conversationScopeFor gid))
-
-    enqueueSettledConversation gid@(GroupId rawGroupId) = do
-      rescheduled <- liftIO (episodePendingDeadline scheduler gid)
-      protected <- liftIO (inFlightTriggers tasks gid)
-      case (rescheduled, Set.null protected) of
-        (Just _, _) ->
-          logInfo "historian: new traffic moved the quiet boundary" $
-            object ["group_id" .= rawGroupId]
-        (Nothing, False) -> do
-          retryConversation gid
-          logInfo "historian: protected live turn deferred" $
-            object ["group_id" .= rawGroupId, "in_flight" .= Set.toList protected]
-        (Nothing, True) -> do
-          let scope = conversationScopeFor gid
-          cursor <- loadCursor scope historianCursor
-          scanEpisodeWindow tz scope cursor sourceBudget >>= \case
-            Nothing ->
-              -- A quiet round with nothing pending above the cursor is exactly
-              -- the wake-up a commit-order skip gets: the late row's handler
-              -- armed this round, but its ingest_seq already sits at or below
-              -- the cursor, so only the coverage query can see it.
-              healCoverage gid
-            Just window -> do
-              movedDuringScan <- liftIO (episodePendingDeadline scheduler gid)
-              case movedDuringScan of
-                Just _ ->
-                  logInfo "historian: scan discarded after new traffic" $
-                    object ["group_id" .= rawGroupId]
-                Nothing -> do
-                  let reason = if window.hitTokenBoundary then CaptureTokenPressure else CaptureIdle
-                      request =
-                        CaptureRequest
-                          { requestReason = reason,
-                            requestHistorianProfile = profile,
-                            requestPromptVersion = historianPromptVersion,
-                            requestSchemaVersion = historianSchemaVersion
-                          }
-                  enqueueCaptureRun scope cursor window.endCursor request >>= \case
-                    Nothing -> pure ()
-                    Just run ->
-                      logInfo "historian: durable capture enqueued" $
-                        object
-                          [ "group_id" .= rawGroupId,
-                            "capture_run_id" .= run.crId,
-                            "start_ingest_seq" .= run.crRange.srStart.ingestSeq,
-                            "end_ingest_seq" .= run.crRange.srEnd.ingestSeq,
-                            "source_messages" .= run.crRange.srMessageCount,
-                            "source_tokens" .= window.estimatedTokens,
-                            "reason" .= run.crReason
-                          ]
-
-    drainAvailableRuns =
-      claimCaptureRun "historian-v2" (historianLeaseSeconds timeoutSeconds) >>= \case
-        Nothing -> pure ()
-        Just lease -> do
-          let runInputBudget = historianInputBudget lease.leaseRun.crHistorianProfile catalog
-          result <- trySync (processCaptureLease runInputBudget timeoutSeconds tz tasks lease)
-          case result of
-            Right (CapturePublished compartment) -> do
-              let run = lease.leaseRun
-                  gid = GroupId run.crConversationId
-                  scope = conversationScopeFor gid
-              logInfo "historian: capture published" $
-                object
-                  [ "group_id" .= run.crConversationId,
-                    "capture_run_id" .= run.crId,
-                    "compartment_id" .= compartment
-                  ]
-              liveCursor <- loadCursor scope historianCursor
-              pending <- hasMessagesAfter scope liveCursor
-              when pending $ do
-                now <- liftIO getCurrentTime
-                if run.crReason == "token_pressure"
-                  then liftIO (continueEpisodeAt scheduler gid now)
-                  else liftIO (armEpisode scheduler gid)
-              -- Backfill chains pace themselves so bulk catch-up cannot
-              -- tight-loop the provider (all conversations enqueued their
-              -- first gaps together at boot).  A settled publication heals
-              -- immediately: the cursor advance it just performed is the only
-              -- step that can strand a late-committed row below coverage.
-              when (run.crReason == "backfill") $ liftIO (threadDelay 1_000_000)
-              healCoverage gid
-            Right CaptureRetryScheduled -> retryConversation (GroupId lease.leaseRun.crConversationId)
-            Right CaptureAbandoned -> retryConversation (GroupId lease.leaseRun.crConversationId)
-            Left err -> recoverLeaseFailure lease (tshow err)
-          drainAvailableRuns
-
-    recoverLeaseFailure lease err = do
-      let gid = GroupId lease.leaseRun.crConversationId
+    runWork work = do
+      let gid = episodeGroup work.request
           scope = conversationScopeFor gid
-      sourceCurrent <- captureRunSourceMatches scope lease.leaseRun `catchSync` \_ -> pure True
-      if sourceCurrent
-        then do
-          let retrySeconds = historianRetryDelaySeconds lease.leaseRun.crAttempt
-          _ <- failCaptureRun lease retrySeconds err []
-          retryConversation gid
-          logAttention "historian: capture retry scheduled" $
-            object
-              [ "capture_run_id" .= lease.leaseRun.crId,
-                "attempt" .= lease.leaseRun.crAttempt,
-                "retry_seconds" .= retrySeconds,
-                "error" .= err
-              ]
-        else do
-          _ <- abandonCaptureRun lease ("stale source or cursor: " <> err) []
-          retryConversation gid
-          logAttention "historian: stale capture abandoned" $
-            object ["capture_run_id" .= lease.leaseRun.crId, "error" .= err]
-
-    retryConversation gid = do
-      now <- liftIO getCurrentTime
-      liftIO (retryEpisodeAt scheduler gid now)
+      prepared <- case work.request of
+        RebuildEpisode _ compartment model -> prepareRebuildRun scope compartment (request CaptureRebuild model)
+        SettledConversation _ -> do
+          moved <- liftIO (episodePendingDeadline scheduler gid)
+          protected <- liftIO (inFlightTriggers tasks gid)
+          case (moved, Set.null protected) of
+            (Just _, _) -> pure Nothing
+            (_, False) -> liftIO (getCurrentTime >>= deferEpisodeAt scheduler work) >> pure Nothing
+            (Nothing, True) -> do
+              gap <- prepareOldestCoverageGap tz profile sourceBudget scope
+              case gap of
+                Just run -> pure (Just run)
+                Nothing -> do
+                  cursor <- loadCursor scope historianCursor
+                  window <- scanEpisodeWindow tz scope cursor sourceBudget
+                  movedDuringScan <- liftIO (episodePendingDeadline scheduler gid)
+                  case (window, movedDuringScan) of
+                    (Just selected, Nothing) ->
+                      prepareCaptureRun
+                        scope
+                        cursor
+                        selected.endCursor
+                        (request (if selected.hitTokenBoundary then CaptureTokenPressure else CaptureIdle) profile)
+                    _ -> pure Nothing
+      for_ prepared $ \run -> do
+        outcome <- trySync (processCaptureRun (historianInputBudget run.crHistorianProfile catalog) timeoutSeconds tz tasks run)
+        result <- case outcome of
+          Right result -> pure result
+          Left err -> do
+            recordCaptureFailure run (tshow err) Nothing [] `catchSync` \writeError ->
+              logAttention "historian: failure diagnostic unavailable" (object ["error" .= tshow writeError])
+            logAttention "historian: generation or publication failed" (object ["capture_run_id" .= run.crId, "error" .= tshow err])
+            pure CaptureFailed
+        now <- liftIO getCurrentTime
+        case result of
+          CapturePublished compartment -> do
+            logInfo "historian: capture published" (object ["group_id" .= run.crConversationId, "capture_run_id" .= run.crId, "compartment_id" .= compartment])
+            gap <- findOldestBackfillGap scope
+            cursor <- loadCursor scope historianCursor
+            pending <- hasMessagesAfter scope cursor
+            case gap of
+              Just _ -> liftIO (continueEpisodeAt scheduler gid (addUTCTime 1 now))
+              Nothing
+                | pending ->
+                    liftIO $
+                      if run.crReason == "token_pressure" then continueEpisodeAt scheduler gid now else armEpisode scheduler gid
+              Nothing -> pure ()
+          CaptureFailed -> liftIO (retryEpisodeAt scheduler work now)
+          CaptureDeferred -> liftIO (deferEpisodeAt scheduler work now)
+          CaptureAbandoned -> liftIO (deferEpisodeAt scheduler work now)
 
 data EpisodeWindow = EpisodeWindow
   { endCursor :: !MessageCursor,
@@ -345,14 +251,14 @@ scanEpisodeWindowBounded tz scope initial through tokenLimit = go initial 0 Noth
 -- | Backfill the oldest uncovered range below the live cursor, including late
 -- commits whose ingestion sequence the cursor already passed. Publication checks
 -- source hash and non-overlap without moving the live cursor.
-healOldestCoverageGap ::
+prepareOldestCoverageGap ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   TimeZone ->
   Text ->
   Int ->
   ConversationScope ->
   Eff es (Maybe CaptureRun)
-healOldestCoverageGap tz profile sourceBudget scope = do
+prepareOldestCoverageGap tz profile sourceBudget scope = do
   findOldestBackfillGap scope >>= \case
     Nothing -> pure Nothing
     Just gap ->
@@ -366,9 +272,9 @@ healOldestCoverageGap tz profile sourceBudget scope = do
                     requestPromptVersion = historianPromptVersion,
                     requestSchemaVersion = historianSchemaVersion
                   }
-          enqueued <- enqueueBackfillRun scope gap.backfillExpected window.endCursor request
-          for_ enqueued $ \run ->
-            logInfo "historian: coverage backfill enqueued" $
+          prepared <- prepareBackfillRun scope gap.backfillExpected window.endCursor request
+          for_ prepared $ \run ->
+            logInfo "historian: coverage backfill prepared" $
               object
                 [ "group_id" .= conversationStorageId scope,
                   "capture_run_id" .= run.crId,
@@ -377,7 +283,7 @@ healOldestCoverageGap tz profile sourceBudget scope = do
                   "gap_end_ingest_seq" .= gap.backfillThrough.ingestSeq,
                   "source_tokens" .= window.estimatedTokens
                 ]
-          pure enqueued
+          pure prepared
 
 -- | Select a non-empty prefix by conservative token cost.  Message count is
 -- deliberately absent from the policy: a 200-line emoji exchange and a
@@ -400,79 +306,38 @@ ledgerTokenCost tz entry
 
 data CaptureProcessResult
   = CapturePublished !CompartmentId
-  | CaptureRetryScheduled
+  | CaptureFailed
+  | CaptureDeferred
   | CaptureAbandoned
   deriving stock (Show, Eq)
 
-processCaptureLease ::
-  (LLM :> es, WithConnection :> es, IOE :> es) =>
-  Int ->
-  Int ->
-  TimeZone ->
-  TaskRegistry ->
-  CaptureLease ->
-  Eff es CaptureProcessResult
-processCaptureLease inputBudget timeoutSeconds tz tasks lease = do
-  let run = lease.leaseRun
-      gid = GroupId run.crConversationId
+processCaptureRun :: (LLM :> es, WithConnection :> es, IOE :> es) => Int -> Int -> TimeZone -> TaskRegistry -> CaptureRun -> Eff es CaptureProcessResult
+processCaptureRun inputBudget timeoutSeconds tz tasks run = do
+  let gid = GroupId run.crConversationId
       scope = conversationScopeFor gid
-  if run.crPromptVersion /= historianPromptVersion || run.crSchemaVersion /= historianSchemaVersion
-    then do
-      _ <- abandonCaptureRun lease "capture run uses an unsupported historian prompt/schema version" []
-      pure CaptureAbandoned
+  current <- captureRunSourceMatches scope run
+  if not current || run.crPromptVersion /= historianPromptVersion || run.crSchemaVersion /= historianSchemaVersion
+    then pure CaptureAbandoned
     else do
-      current <- captureRunSourceMatches scope run
-      if not current
-        then do
-          _ <- abandonCaptureRun lease "source hash or historian cursor changed before generation" []
-          pure CaptureAbandoned
+      source <- loadCaptureSource run
+      protected <- liftIO (inFlightTriggers tasks gid)
+      let sourceMessageIds = Set.fromList [entry.history.canonicalId | entry <- source]
+      if not (Set.null (Set.intersection protected sourceMessageIds))
+        then pure CaptureDeferred
         else do
-          source <- loadCaptureSource run
-          protected <- liftIO (inFlightTriggers tasks gid)
-          let sourceMessageIds = Set.fromList [entry.history.canonicalId | entry <- source]
-              protectedInRange = Set.intersection protected sourceMessageIds
-          if not (Set.null protectedInRange)
-            then do
-              _ <- failCaptureRun lease historianProtectedRetrySeconds "source range contains an in-flight turn" []
-              pure CaptureRetryScheduled
-            else do
-              captureResult <-
-                if null [() | entry <- source, entry.transcriptEligible]
-                  then
-                    let capture = deterministicFilteredCapture source
-                     in pure (Right (captureJsonText capture, capture))
-                  else generateCapture inputBudget timeoutSeconds tz run.crHistorianProfile scope run source
-              case captureResult of
-                Left (raw, errors) -> do
-                  stored <-
-                    recordCaptureRejected
-                      lease
-                      (historianRetryDelaySeconds run.crAttempt)
-                      (T.intercalate "; " (map (.validationMessage) errors))
-                      raw
-                      errors
-                  unless stored (error "historian rejection lease expired before retry was recorded")
-                  pure CaptureRetryScheduled
-                Right (raw, capture) -> case validateEpisodeCapture run source capture of
-                  Left errors -> do
-                    stored <-
-                      recordCaptureRejected
-                        lease
-                        (historianRetryDelaySeconds run.crAttempt)
-                        "episode capture failed semantic validation"
-                        raw
-                        errors
-                    unless stored (error "historian validation lease expired before retry was recorded")
-                    pure CaptureRetryScheduled
-                  Right validated -> do
-                    stored <-
-                      recordCaptureGenerated
-                        lease
-                        raw
-                        capture
-                        (captureValidationWarnings validated)
-                    unless stored (error "historian generation lease expired before publication")
-                    CapturePublished <$> publishCaptureRun scope lease validated
+          generated <-
+            if any (.transcriptEligible) source
+              then generateCapture inputBudget timeoutSeconds tz run.crHistorianProfile scope run source
+              else let capture = deterministicFilteredCapture source in pure (Right (captureJsonText capture, capture))
+          case generated of
+            Left (raw, errors) -> failed raw errors
+            Right (raw, capture) -> case validateEpisodeCapture run source capture of
+              Left errors -> failed raw errors
+              Right validated -> CapturePublished <$> publishCaptureRun scope run raw validated
+  where
+    failed raw errors = do
+      recordCaptureFailure run (T.intercalate "; " (map (.validationMessage) errors)) (Just raw) errors
+      pure CaptureFailed
 
 generateCapture ::
   (LLM :> es, WithConnection :> es, IOE :> es) =>
@@ -500,11 +365,8 @@ generateCapture inputBudget timeoutSeconds tz profile scope run source = do
           )
     else generateHistorianCapture timeoutSeconds profile run.crConversationId messages
 
--- | Execute the exact model-facing Historian generation policy.  A malformed
--- JSON/schema response receives one bounded repair turn containing the raw
--- answer and a precise wire contract.  Provider failures and semantic
--- validation failures are not retried here: the durable capture-run retry
--- policy owns those, and omission must never be hidden by repeated sampling.
+-- | Repair malformed JSON once. Provider and semantic failures use the local
+-- scheduler's backoff; they do not trigger repeated sampling within this call.
 generateHistorianCapture ::
   (LLM :> es) =>
   Int ->
@@ -531,9 +393,7 @@ generateHistorianCapture timeoutSeconds profile conversationId messages = do
     Left (raw, responseError, False) ->
       pure (Left (raw, [CaptureValidationError "response" responseError]))
   where
-    -- This durable job gets one long transport attempt.  The capture-run
-    -- queue owns retries across attempts, which keeps their timing visible and
-    -- lets pending work pass a failed range.
+    -- Transport retries belong to the scheduler.
     historianCtx =
       ChatCtx
         "historian"

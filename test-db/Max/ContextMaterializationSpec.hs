@@ -60,7 +60,7 @@ publishFixtureCompartment pool = do
   run <-
     withDb
       pool
-      ( enqueueCaptureRun
+      ( prepareCaptureRun
           scope
           (MessageCursor 0)
           end
@@ -72,7 +72,7 @@ publishFixtureCompartment pool = do
             }
       )
       >>= requireJust "capture run"
-  lease <- withDb pool (claimCaptureRun "materialization-test" 60) >>= requireJust "capture lease"
+
   source <- withDb pool $ loadCaptureSource run
   let capture =
         EpisodeCapture
@@ -85,8 +85,7 @@ publishFixtureCompartment pool = do
             captureMemoryProposals = []
           }
   validated <- requireValid run source capture
-  _ <- withDb pool $ recordCaptureGenerated lease "raw" capture []
-  withDb pool $ publishCaptureRun scope lease validated
+  withDb pool $ publishCaptureRun scope run "fixture response" validated
 
 latestCursor :: DbPool -> IO MessageCursor
 latestCursor pool = do

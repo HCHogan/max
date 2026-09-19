@@ -87,7 +87,7 @@ function admin() {
     timelineAbort: null,
     ctx: {
       loaded: false,
-      status: { summary: {}, conversations: [], capture_workers: [] },
+      status: { summary: {}, conversations: [] },
       captures: [],
       compartments: [],
       plans: [],

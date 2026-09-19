@@ -8,7 +8,7 @@ import Data.Time (TimeZone, UTCTime, minutesToTimeZone)
 import Effectful (liftIO, runEff)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..))
 import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), LLMInterpreter (..), runLLMWith)
-import Max.Historian (generateHistorianCapture, historianRetryDelaySeconds, renderHistorianSourceLine, takeEpisodeByToken)
+import Max.Historian (generateHistorianCapture, renderHistorianSourceLine, takeEpisodeByToken)
 import Test.Hspec
 
 spec :: Spec
@@ -31,10 +31,6 @@ spec = describe "Historian token and identity policy" $ do
           ]
     map (.cursor) (takeEpisodeByToken timezone 1 rows)
       `shouldBe` [MessageCursor 1]
-
-  it "backs durable failures off without ever dropping their exact range" $ do
-    map historianRetryDelaySeconds [1 .. 8]
-      `shouldBe` [60, 300, 900, 3600, 21600, 21600, 21600, 21600]
 
   it "renders explicit principal, message, time, and reply provenance" $ do
     renderHistorianSourceLine

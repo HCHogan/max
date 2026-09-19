@@ -1,14 +1,17 @@
 module Max.HistorianSpec (spec) where
 
+import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
+import Control.Concurrent.Async (withAsync)
 import Data.Int (Int64)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (minutesToTimeZone)
+import Data.Time (getCurrentTime, minutesToTimeZone)
 import Database.PostgreSQL.Simple (Only (..))
-import Effectful (IOE, liftIO, runEff)
+import Effectful (IOE, liftIO, (:>))
 import Effectful.PostgreSQL (WithConnection, query)
-import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Helpers (insertMessageWithCanonicalId, insertRawMessageAtSeq, requireJust, testTime, truncateAll, withDb, withDbLog)
+import Max.ContextAdmin (enqueueContextRebuildAdmin)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Connection (DbPool)
 import Max.DB.ConversationCursor (historianCursor, loadCursor)
@@ -20,17 +23,19 @@ import Max.Effects.LLM
     LLMInterpreter (..),
     runLLMWith,
   )
+import Max.EpisodeScheduler (continueEpisodeAt, newEpisodeScheduler)
 import Max.EpisodeStore
 import Max.Historian
-  ( CaptureProcessResult (..),
-    healOldestCoverageGap,
-    historianPromptVersion,
+  ( historianPromptVersion,
     historianSchemaVersion,
-    processCaptureLease,
+    historianWorker,
+    prepareOldestCoverageGap,
   )
+import Max.ModelCatalog (ModelCapabilities (..), defaultContextLimits, mkModelCatalog)
 import Max.Tasks (newTaskRegistry)
 import Max.Util (tshow)
 import OneBot.Types (GroupId (..))
+import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: DbPool -> Spec
@@ -41,23 +46,17 @@ spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ d
     memberPrincipal <- principalFor pool member
     end <- latestCursor pool
     let scope = conversationScopeFor (GroupId groupId)
-        request =
-          CaptureRequest
-            { requestReason = CaptureIdle,
-              requestHistorianProfile = "historian-test",
-              requestPromptVersion = historianPromptVersion,
-              requestSchemaVersion = historianSchemaVersion
-            }
-    _ <- withDb pool $ enqueueCaptureRun scope (MessageCursor 0) end request
-    lease <- withDb pool (claimCaptureRun "test-worker" 600) >>= requireJust "capture lease"
     tasks <- newTaskRegistry
-
-    result <-
-      runEff
-        . runWithConnectionPool pool
-        . runLLMWith (fakeHistorian memberPrincipal (rawCapture memberPrincipal))
-        $ processCaptureLease 16_000 600 (minutesToTimeZone 480) tasks lease
-    result `shouldSatisfy` \case CapturePublished _ -> True; _ -> False
+    scheduler <- newEpisodeScheduler
+    catalog <- either (fail . show) pure (mkModelCatalog "historian-test" (Map.singleton "historian-test" (ModelCapabilities False False Nothing defaultContextLimits)))
+    now <- getCurrentTime
+    continueEpisodeAt scheduler (GroupId groupId) now
+    withAsync
+      ( withDbLog pool . runLLMWith (fakeHistorian memberPrincipal (rawCapture memberPrincipal)) $
+          historianWorker "historian-test" 600 catalog (minutesToTimeZone 480) tasks "historian-test" scheduler
+      )
+      $ \_ ->
+        timeout 3_000_000 (waitUntil $ (== end) <$> withDb pool (loadCursor scope historianCursor)) `shouldReturn` Just ()
 
     rows <-
       withDb pool $
@@ -93,35 +92,56 @@ spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ d
       `shouldReturn` Just (BackfillGap end2 (MessageCursor 3))
 
     healed <-
-      withDbLog pool (healOldestCoverageGap (minutesToTimeZone 480) "historian-test" 16_000 scope)
+      withDbLog pool (prepareOldestCoverageGap (minutesToTimeZone 480) "historian-test" 16_000 scope)
         >>= requireJust "coverage heal run"
     healed.crReason `shouldBe` "backfill"
     healed.crExpectedCursor `shouldBe` end2
     healed.crRange.srStart `shouldBe` MessageCursor 3
     healed.crRange.srEnd `shouldBe` MessageCursor 3
-    -- Idempotent: a second heal round returns the same durable run.
-    again <-
-      withDbLog pool (healOldestCoverageGap (minutesToTimeZone 480) "historian-test" 16_000 scope)
-        >>= requireJust "repeat heal run"
-    again.crId `shouldBe` healed.crId
+    -- Each attempt reads current sources; only completed captures become rows.
 
-    -- Publishing the healed island completes coverage; the live cursor and
-    -- the neighbouring compartments stay untouched.
-    lease <- withDb pool (claimCaptureRun "heal-worker" 600) >>= requireJust "heal lease"
-    lease.leaseRun.crId `shouldBe` healed.crId
     source <- withDb pool $ loadCaptureSource healed
     validated <- requireValid healed source (rangeCapture [1003])
-    _ <- withDb pool $ recordCaptureGenerated lease "raw heal capture" (rangeCapture [1003]) []
-    _ <- withDb pool $ publishCaptureRun scope lease validated
+    _ <- withDb pool $ publishCaptureRun scope healed "fixture response" validated
     withDb pool (loadCursor scope historianCursor) `shouldReturn` MessageCursor 4
     withDb pool (findOldestBackfillGap scope) `shouldReturn` Nothing
-    withDbLog pool (healOldestCoverageGap (minutesToTimeZone 480) "historian-test" 16_000 scope)
+    withDbLog pool (prepareOldestCoverageGap (minutesToTimeZone 480) "historian-test" 16_000 scope)
       `shouldReturn` Nothing
     ranges <- withDb pool $ query "SELECT start_ingest_seq, end_ingest_seq FROM conversation_compartments WHERE state = 'active' ORDER BY start_ingest_seq" ()
     (ranges :: [(Int64, Int64)]) `shouldBe` [(1, 2), (3, 3), (4, 4)]
 
--- | Direct capture publication without a model call: enqueue, claim,
--- validate a canned capture over @evidence@, publish.
+  it "runs an admin rebuild locally while retaining the old summary during generation" $ do
+    insertMessageWithCanonicalId pool 1001 groupId member botId testTime Nothing "Alice likes green tea"
+    insertMessageWithCanonicalId pool 1002 groupId botId botId testTime Nothing "Max acknowledges"
+    let scope = conversationScopeFor (GroupId groupId)
+    end <- latestCursor pool
+    publishRange pool scope (MessageCursor 0) end [1001, 1002]
+    [old] <- map (.activeCompartmentId) <$> withDb pool (listActiveCompartments scope)
+    scheduler <- newEpisodeScheduler
+    withDb pool (enqueueContextRebuildAdmin scheduler groupId (Just old) "historian-test") `shouldReturn` Right [old]
+    withDb pool (query "SELECT count(*) FROM episode_capture_runs" ()) `shouldReturn` [Only (1 :: Int)]
+    tasks <- newTaskRegistry
+    principal <- principalFor pool member
+    catalog <- either (fail . show) pure (mkModelCatalog "historian-test" (Map.singleton "historian-test" (ModelCapabilities False False Nothing defaultContextLimits)))
+    started <- newEmptyMVar
+    release <- newEmptyMVar
+    let model = fakeHistorian principal (rawCapture principal)
+        gated = LLMInterpreter $ \ctx profile messages tools sink -> do
+          liftIO (putMVar started ())
+          liftIO (takeMVar release)
+          model.liChat ctx profile messages tools sink
+    withAsync
+      ( withDbLog pool . runLLMWith gated $
+          historianWorker "historian-test" 600 catalog (minutesToTimeZone 480) tasks "historian-test" scheduler
+      )
+      $ \_ -> do
+        timeout 3_000_000 (takeMVar started) `shouldReturn` Just ()
+        map (.activeCompartmentId) <$> withDb pool (listActiveCompartments scope) `shouldReturn` [old]
+        putMVar release ()
+        timeout 3_000_000 (waitUntil $ (/= [old]) . map (.activeCompartmentId) <$> withDb pool (listActiveCompartments scope)) `shouldReturn` Just ()
+    withDb pool (loadCursor scope historianCursor) `shouldReturn` end
+
+-- | Publish a validated fixture without a model call.
 publishRange :: DbPool -> ConversationScope -> MessageCursor -> MessageCursor -> [Int64] -> IO ()
 publishRange pool scope expected end evidence = do
   let request =
@@ -131,13 +151,11 @@ publishRange pool scope expected end evidence = do
             requestPromptVersion = historianPromptVersion,
             requestSchemaVersion = historianSchemaVersion
           }
-  run <- withDb pool (enqueueCaptureRun scope expected end request) >>= requireJust "capture run"
-  lease <- withDb pool (claimCaptureRun "range-worker" 600) >>= requireJust "range lease"
-  lease.leaseRun.crId `shouldBe` run.crId
+  run <- withDb pool (prepareCaptureRun scope expected end request) >>= requireJust "capture run"
+
   source <- withDb pool $ loadCaptureSource run
   validated <- requireValid run source (rangeCapture evidence)
-  _ <- withDb pool $ recordCaptureGenerated lease "raw range capture" (rangeCapture evidence) []
-  _ <- withDb pool $ publishCaptureRun scope lease validated
+  _ <- withDb pool $ publishCaptureRun scope run "fixture response" validated
   pure ()
 
 rangeCapture :: [Int64] -> EpisodeCapture
@@ -157,11 +175,13 @@ requireValid run source capture = case validateEpisodeCapture run source capture
   Right validated -> pure validated
   Left errors -> expectationFailure (show errors) >> error "invalid capture"
 
-fakeHistorian :: Int64 -> Text -> LLMInterpreter '[WithConnection, IOE]
+fakeHistorian :: (WithConnection :> es, IOE :> es) => Int64 -> Text -> LLMInterpreter es
 fakeHistorian memberPrincipal raw =
   LLMInterpreter
     { liChat = \ctx profile messages tools sink -> do
+        rows <- query "SELECT count(*) FROM episode_capture_runs WHERE status IN ('pending','leased','generated')" ()
         liftIO $ do
+          (rows :: [Only Int]) `shouldBe` [Only 0]
           ctx.ccSource `shouldBe` "historian"
           ctx.ccGroup `shouldBe` Just groupId
           ctx.ccTimeoutSeconds `shouldBe` Just 600
@@ -207,3 +227,6 @@ principalFor pool native = do
   case rows :: [Only Int64] of
     Only principal : _ -> pure principal
     [] -> expectationFailure ("no principal for native " <> show native) >> pure 0
+
+waitUntil :: IO Bool -> IO ()
+waitUntil action = action >>= \done -> if done then pure () else threadDelay 10_000 >> waitUntil action

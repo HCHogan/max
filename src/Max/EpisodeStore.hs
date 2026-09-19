@@ -1,10 +1,5 @@
--- |
--- Durable shadow-writing store for exact-range historian capture.
---
--- Capture jobs, chronological compartments, citations, semantic-memory
--- proposal outcomes, and the historian cursor share one transaction at
--- publication time.  Raw messages remain the source of truth and their
--- canonical range hash is re-checked immediately before publication.
+-- | Source-checked publication of summaries, citations and scoped memory.
+-- Capture execution stays in memory; completed results commit atomically.
 module Max.EpisodeStore
   ( CaptureRunId (..),
     CompartmentId (..),
@@ -15,7 +10,6 @@ module Max.EpisodeStore
     CaptureRun (..),
     CaptureRequest (..),
     BackfillGap (..),
-    CaptureLease (..),
     SourceRange (..),
     EpisodeKind (..),
     CitedSummary (..),
@@ -28,17 +22,13 @@ module Max.EpisodeStore
     parseEpisodeCapture,
     validateEpisodeCapture,
     captureValidationWarnings,
-    enqueueCaptureRun,
+    prepareCaptureRun,
     findOldestBackfillGap,
-    enqueueBackfillRun,
-    enqueueRebuildRun,
-    claimCaptureRun,
+    prepareBackfillRun,
+    prepareRebuildRun,
     loadCaptureSource,
+    recordCaptureFailure,
     reviewRejectedMemoryProposal,
-    recordCaptureGenerated,
-    recordCaptureRejected,
-    failCaptureRun,
-    abandonCaptureRun,
     captureRunSourceMatches,
     publishCaptureRun,
     listActiveCompartments,
@@ -48,12 +38,10 @@ where
 
 import Control.Exception (throwIO)
 import Control.Monad (forM, unless, when)
-import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
-import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Either (partitionEithers)
 import Data.Int (Int64)
@@ -66,7 +54,6 @@ import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple
   ( FromRow,
     In (..),
@@ -155,10 +142,6 @@ data CaptureRun = CaptureRun
     crExpectedCursor :: !MessageCursor,
     crRange :: !SourceRange,
     crReason :: !Text,
-    crStatus :: !Text,
-    crAttempt :: !Int,
-    crLeaseOwner :: !(Maybe Text),
-    crLeaseExpiresAt :: !(Maybe UTCTime),
     crHistorianProfile :: !Text,
     crPromptVersion :: !Text,
     crSchemaVersion :: !Int,
@@ -173,10 +156,6 @@ instance FromRow CaptureRun where
       <*> field
       <*> (MessageCursor <$> field)
       <*> (SourceRange . MessageCursor <$> field <*> (MessageCursor <$> field) <*> field <*> field)
-      <*> field
-      <*> field
-      <*> field
-      <*> field
       <*> field
       <*> field
       <*> field
@@ -198,12 +177,6 @@ data CaptureRequest = CaptureRequest
 data BackfillGap = BackfillGap
   { backfillExpected :: !MessageCursor,
     backfillThrough :: !MessageCursor
-  }
-  deriving stock (Show, Eq)
-
-data CaptureLease = CaptureLease
-  { leaseRun :: !CaptureRun,
-    leaseOwner :: !Text
   }
   deriving stock (Show, Eq)
 
@@ -575,86 +548,33 @@ evidenceErrors source path evidence =
 captureRunColumns :: Text
 captureRunColumns =
   "id, conversation_id, expected_cursor_seq, start_ingest_seq, end_ingest_seq, \
-  \source_hash, source_message_count, scheduling_reason, status, attempt, \
-  \lease_owner, lease_expires_at, historian_profile, prompt_version, \
-  \schema_version, replaces_compartment_id"
+  \source_hash, source_message_count, scheduling_reason, historian_profile, \
+  \prompt_version, schema_version, replaces_compartment_id"
 
-qualifiedCaptureRunColumns :: Text -> Text
-qualifiedCaptureRunColumns qualifier =
-  T.intercalate
-    ", "
-    [ qualifier <> ".id",
-      qualifier <> ".conversation_id",
-      qualifier <> ".expected_cursor_seq",
-      qualifier <> ".start_ingest_seq",
-      qualifier <> ".end_ingest_seq",
-      qualifier <> ".source_hash",
-      qualifier <> ".source_message_count",
-      qualifier <> ".scheduling_reason",
-      qualifier <> ".status",
-      qualifier <> ".attempt",
-      qualifier <> ".lease_owner",
-      qualifier <> ".lease_expires_at",
-      qualifier <> ".historian_profile",
-      qualifier <> ".prompt_version",
-      qualifier <> ".schema_version",
-      qualifier <> ".replaces_compartment_id"
-    ]
-
-enqueueCaptureRun ::
-  (WithConnection :> es, IOE :> es) =>
-  ConversationScope ->
-  MessageCursor ->
-  MessageCursor ->
-  CaptureRequest ->
-  Eff es (Maybe CaptureRun)
-enqueueCaptureRun scope expected end request = do
+prepareCaptureRun :: (WithConnection :> es, IOE :> es) => ConversationScope -> MessageCursor -> MessageCursor -> CaptureRequest -> Eff es (Maybe CaptureRun)
+prepareCaptureRun scope expected end request = do
   source <- captureSourceRange scope expected end
-  case source of
-    Nothing -> pure Nothing
-    Just range -> do
-      let key =
-            idempotencyKey
-              [ tshow (conversationStorageId scope),
-                tshow expected.ingestSeq,
-                tshow range.srStart.ingestSeq,
-                tshow range.srEnd.ingestSeq,
-                range.srHash,
-                request.requestHistorianProfile,
-                request.requestPromptVersion,
-                tshow request.requestSchemaVersion
-              ]
-          sql =
-            "WITH inserted AS ( \
-            \ INSERT INTO episode_capture_runs \
-            \   (conversation_id, expected_cursor_seq, start_ingest_seq, end_ingest_seq, \
-            \    source_hash, source_message_count, scheduling_reason, historian_profile, \
-            \    prompt_version, schema_version, idempotency_key) \
-            \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-            \ ON CONFLICT (idempotency_key) DO NOTHING \
-            \ RETURNING "
-              <> captureRunColumns
-              <> ") SELECT * FROM inserted \
-                 \ UNION ALL SELECT "
-              <> captureRunColumns
-              <> " FROM episode_capture_runs WHERE idempotency_key = ? LIMIT 1"
-      rows <-
-        query
-          (fromTextQuery sql)
-          ( conversationStorageId scope,
-            expected.ingestSeq,
-            range.srStart.ingestSeq,
-            range.srEnd.ingestSeq,
-            range.srHash,
-            range.srMessageCount,
-            captureReasonText request.requestReason,
-            request.requestHistorianProfile,
-            request.requestPromptVersion,
-            request.requestSchemaVersion,
-            key,
-            key
-          )
-      pure (case rows of run : _ -> Just run; [] -> Nothing)
+  traverse (newCaptureRun scope expected request Nothing) source
+
+-- Only the public result ID is allocated before generation; no execution row exists.
+newCaptureRun :: (WithConnection :> es, IOE :> es) => ConversationScope -> MessageCursor -> CaptureRequest -> Maybe CompartmentId -> SourceRange -> Eff es CaptureRun
+newCaptureRun scope expected request replaced range = do
+  ids <- query "SELECT nextval('episode_capture_runs_id_seq')" ()
+  case ids of
+    [Only runId] ->
+      pure
+        CaptureRun
+          { crId = runId,
+            crConversationId = conversationStorageId scope,
+            crExpectedCursor = expected,
+            crRange = range,
+            crReason = captureReasonText request.requestReason,
+            crHistorianProfile = request.requestHistorianProfile,
+            crPromptVersion = request.requestPromptVersion,
+            crSchemaVersion = request.requestSchemaVersion,
+            crReplacesCompartment = replaced
+          }
+    _ -> publicationFailure "failed to allocate capture result ID"
 
 -- | Find the oldest exact historical hole without crossing the live cursor or
 -- an existing active compartment.  Concurrent publishers may make the answer
@@ -710,90 +630,40 @@ findOldestBackfillGap scope = do
 -- historian cursor.  Publication still enforces the source hash and active
 -- non-overlap constraint.  This is the controlled path for history predating
 -- migration 041's deployment baseline.
-enqueueBackfillRun ::
+prepareBackfillRun ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->
   MessageCursor ->
   MessageCursor ->
   CaptureRequest ->
   Eff es (Maybe CaptureRun)
-enqueueBackfillRun scope expected end request =
-  enqueueCaptureRun
+prepareBackfillRun scope expected end request =
+  prepareCaptureRun
     scope
     expected
     end
     request {requestReason = CaptureBackfill}
 
--- | Schedule a replacement for one exact active range.  The old compartment
--- remains active while this run is pending/generated; publication stages the
--- replacement and flips both states in one transaction.
-enqueueRebuildRun ::
-  (WithConnection :> es, IOE :> es) =>
-  ConversationScope ->
-  CompartmentId ->
-  Text ->
-  CaptureRequest ->
-  Eff es (Maybe CaptureRun)
-enqueueRebuildRun scope replaced rebuildKey request = do
+-- | Prepare a replacement while the old summary remains active.
+prepareRebuildRun :: (WithConnection :> es, IOE :> es) => ConversationScope -> CompartmentId -> CaptureRequest -> Eff es (Maybe CaptureRun)
+prepareRebuildRun scope replaced request = do
   ranges <-
     query
       "SELECT start_ingest_seq, end_ingest_seq, source_hash, source_message_count \
-      \ FROM conversation_compartments \
-      \ WHERE id = ? AND conversation_id = ? AND state = 'active'"
+      \ FROM conversation_compartments WHERE id=? AND conversation_id=? AND state='active'"
       (replaced, conversationStorageId scope)
   case (ranges :: [SourceRange]) of
     [] -> pure Nothing
     range : _ -> do
       predecessors <-
         query
-          "SELECT COALESCE(max(ingest_seq), 0) FROM messages \
-          \ WHERE group_id = ? AND ingest_seq < ?"
+          "SELECT COALESCE(max(ingest_seq),0) FROM messages WHERE group_id=? AND ingest_seq<?"
           (conversationStorageId scope, range.srStart.ingestSeq)
-      let expected = case (predecessors :: [Only Int64]) of
-            Only cursor : _ -> MessageCursor cursor
-            [] -> MessageCursor 0
-          key =
-            idempotencyKey
-              [ "rebuild",
-                tshow (conversationStorageId scope),
-                tshow replaced.unCompartmentId,
-                range.srHash,
-                request.requestHistorianProfile,
-                request.requestPromptVersion,
-                tshow request.requestSchemaVersion,
-                rebuildKey
-              ]
-          sql =
-            "WITH inserted AS ( \
-            \ INSERT INTO episode_capture_runs \
-            \   (conversation_id, expected_cursor_seq, start_ingest_seq, end_ingest_seq, \
-            \    source_hash, source_message_count, scheduling_reason, historian_profile, \
-            \    prompt_version, schema_version, idempotency_key, replaces_compartment_id) \
-            \ VALUES (?, ?, ?, ?, ?, ?, 'rebuild', ?, ?, ?, ?, ?) \
-            \ ON CONFLICT DO NOTHING \
-            \ RETURNING "
-              <> captureRunColumns
-              <> ") SELECT * FROM inserted \
-                 \ UNION ALL SELECT "
-              <> captureRunColumns
-              <> " FROM episode_capture_runs WHERE idempotency_key = ? LIMIT 1"
-      rows <-
-        query
-          (fromTextQuery sql)
-          ( conversationStorageId scope,
-            expected.ingestSeq,
-            range.srStart.ingestSeq,
-            range.srEnd.ingestSeq,
-            range.srHash,
-            range.srMessageCount,
-            request.requestHistorianProfile,
-            request.requestPromptVersion,
-            request.requestSchemaVersion,
-            key,
-            replaced,
-            key
-          )
-      pure (case (rows :: [CaptureRun]) of run : _ -> Just run; [] -> Nothing)
+      case predecessors of
+        [Only previous] -> do
+          fresh <- captureSourceRange scope (MessageCursor previous) range.srEnd
+          traverse (newCaptureRun scope (MessageCursor previous) request {requestReason = CaptureRebuild} (Just replaced)) fresh
+        _ -> publicationFailure "failed to read predecessor of rebuild range"
 
 captureSourceRange ::
   (WithConnection :> es, IOE :> es) =>
@@ -813,40 +683,6 @@ captureSourceRange scope (MessageCursor expected) (MessageCursor end) = do
       (conversationStorageId scope, expected, end, conversationStorageId scope, end)
   pure (case rows of range : _ -> Just range; [] -> Nothing)
 
-idempotencyKey :: [Text] -> Text
-idempotencyKey parts =
-  TE.decodeUtf8 . B16.encode . SHA256.hash . TE.encodeUtf8 $
-    T.intercalate "\x1f" parts
-
-claimCaptureRun ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  Int ->
-  Eff es (Maybe CaptureLease)
-claimCaptureRun owner leaseSeconds = do
-  let sql =
-        "WITH candidate AS ( \
-        \ SELECT id FROM episode_capture_runs \
-        \ WHERE (status = 'pending') \
-        \    OR (status = 'failed' AND COALESCE(next_retry_at, '-infinity') <= now()) \
-        \    OR (status IN ('leased', 'generated') AND lease_expires_at <= now()) \
-        \ ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, \
-        \          attempt, COALESCE(next_retry_at, created_at), id \
-        \ FOR UPDATE SKIP LOCKED LIMIT 1 \
-        \), claimed AS ( \
-        \ UPDATE episode_capture_runs AS run \
-        \ SET status = 'leased', attempt = attempt + 1, lease_owner = ?, \
-        \     lease_expires_at = now() + make_interval(secs => ?), \
-        \     next_retry_at = NULL, last_error = NULL, updated_at = now() \
-        \ FROM candidate WHERE run.id = candidate.id \
-        \ RETURNING "
-          <> qualifiedCaptureRunColumns "run"
-          <> ") SELECT * FROM claimed"
-  rows <- query (fromTextQuery sql) (owner, max 1 leaseSeconds)
-  pure $ case rows of
-    run : _ -> Just (CaptureLease run owner)
-    [] -> Nothing
-
 loadCaptureSource ::
   (WithConnection :> es, IOE :> es) =>
   CaptureRun ->
@@ -863,113 +699,39 @@ loadCaptureSource run =
     )
     (run.crConversationId, run.crRange.srStart.ingestSeq, run.crRange.srEnd.ingestSeq)
 
-recordCaptureGenerated ::
-  (WithConnection :> es, IOE :> es) =>
-  CaptureLease ->
-  Text ->
-  EpisodeCapture ->
-  [CaptureValidationError] ->
-  Eff es Bool
-recordCaptureGenerated lease raw capture validationErrors = do
-  changed <-
-    execute
-      "UPDATE episode_capture_runs \
-      \ SET status = 'generated', raw_output = ?, parsed_output = ?::jsonb, \
-      \     validation_errors = ?::jsonb, updated_at = now() \
-      \ WHERE id = ? AND status = 'leased' AND lease_owner = ? AND attempt = ? \
-      \   AND lease_expires_at > now()"
-      ( raw,
-        encodeText capture,
-        encodeText validationErrors,
-        lease.leaseRun.crId,
-        lease.leaseOwner,
-        lease.leaseRun.crAttempt
-      )
-  pure (changed == 1)
+recordCaptureFailure :: (WithConnection :> es, IOE :> es) => CaptureRun -> Text -> Maybe Text -> [CaptureValidationError] -> Eff es ()
+recordCaptureFailure run err raw errors = insertCaptureResult run "failed" (Just err) raw Nothing errors
 
--- | Persist an unusable model response and make the exact run retryable.  Raw
--- output belongs in the durable run even when it could not be parsed.
-recordCaptureRejected ::
-  (WithConnection :> es, IOE :> es) =>
-  CaptureLease ->
-  Int ->
-  Text ->
-  Text ->
-  [CaptureValidationError] ->
-  Eff es Bool
-recordCaptureRejected lease retrySeconds err raw validationErrors = do
-  changed <-
+insertCaptureResult :: (WithConnection :> es, IOE :> es) => CaptureRun -> Text -> Maybe Text -> Maybe Text -> Maybe EpisodeCapture -> [CaptureValidationError] -> Eff es ()
+insertCaptureResult run status err raw capture errors = do
+  _ <-
     execute
-      "UPDATE episode_capture_runs \
-      \ SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL, \
-      \     next_retry_at = now() + make_interval(secs => ?), last_error = ?, \
-      \     raw_output = ?, parsed_output = NULL, validation_errors = ?::jsonb, \
-      \     updated_at = now() \
-      \ WHERE id = ? AND status = 'leased' AND lease_owner = ? AND attempt = ?"
-      ( max 1 retrySeconds,
+      "INSERT INTO episode_capture_runs \
+      \ (id,conversation_id,expected_cursor_seq,start_ingest_seq,end_ingest_seq,source_hash, \
+      \  source_message_count,scheduling_reason,historian_profile,prompt_version,schema_version, \
+      \  replaces_compartment_id,status,last_error,raw_output,parsed_output,validation_errors) \
+      \ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?::jsonb)"
+      ( run.crId,
+        run.crConversationId,
+        run.crExpectedCursor.ingestSeq,
+        run.crRange.srStart.ingestSeq,
+        run.crRange.srEnd.ingestSeq,
+        run.crRange.srHash,
+        run.crRange.srMessageCount,
+        run.crReason,
+        run.crHistorianProfile,
+        run.crPromptVersion,
+        run.crSchemaVersion,
+        run.crReplacesCompartment,
+        status,
         err,
         raw,
-        encodeText validationErrors,
-        lease.leaseRun.crId,
-        lease.leaseOwner,
-        lease.leaseRun.crAttempt
+        encodeText <$> capture,
+        encodeText errors
       )
-  pure (changed == 1)
+  pure ()
 
-failCaptureRun ::
-  (WithConnection :> es, IOE :> es) =>
-  CaptureLease ->
-  Int ->
-  Text ->
-  [CaptureValidationError] ->
-  Eff es Bool
-failCaptureRun lease retrySeconds err validationErrors = do
-  changed <-
-    execute
-      "UPDATE episode_capture_runs \
-      \ SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL, \
-      \     next_retry_at = now() + make_interval(secs => ?), last_error = ?, \
-      \     validation_errors = ?::jsonb, updated_at = now() \
-      \ WHERE id = ? AND status IN ('leased', 'generated') \
-      \   AND lease_owner = ? AND attempt = ?"
-      ( max 1 retrySeconds,
-        err,
-        encodeText validationErrors,
-        lease.leaseRun.crId,
-        lease.leaseOwner,
-        lease.leaseRun.crAttempt
-      )
-  pure (changed == 1)
-
--- | Permanently retire a run whose immutable source/cursor precondition can
--- never become true again.  A newly hashed run may then proceed instead of an
--- old retry starving the claim queue forever.
-abandonCaptureRun ::
-  (WithConnection :> es, IOE :> es) =>
-  CaptureLease ->
-  Text ->
-  [CaptureValidationError] ->
-  Eff es Bool
-abandonCaptureRun lease reason validationErrors = do
-  changed <-
-    execute
-      "UPDATE episode_capture_runs \
-      \ SET status = 'abandoned', lease_owner = NULL, lease_expires_at = NULL, \
-      \     next_retry_at = NULL, last_error = ?, validation_errors = ?::jsonb, \
-      \     updated_at = now() \
-      \ WHERE id = ? AND status IN ('leased', 'generated') \
-      \   AND lease_owner = ? AND attempt = ?"
-      ( reason,
-        encodeText validationErrors,
-        lease.leaseRun.crId,
-        lease.leaseOwner,
-        lease.leaseRun.crAttempt
-      )
-  pure (changed == 1)
-
--- | Read-only preflight used before paying for a historian call and after a
--- failed publication to distinguish a retryable provider error from a stale
--- source/cursor run.
+-- | Check the source and cursor before spending a model call.
 captureRunSourceMatches ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->
@@ -982,17 +744,13 @@ captureRunSourceMatches scope run = do
     (not (runRequiresLiveCursor run) || current == run.crExpectedCursor)
       && source == Just run.crRange
 
-publishCaptureRun ::
-  (WithConnection :> es, IOE :> es) =>
-  ConversationScope ->
-  CaptureLease ->
-  ValidatedEpisodeCapture ->
-  Eff es CompartmentId
-publishCaptureRun scope lease validated = withTransaction $ do
+publishCaptureRun :: (WithConnection :> es, IOE :> es) => ConversationScope -> CaptureRun -> Text -> ValidatedEpisodeCapture -> Eff es CompartmentId
+publishCaptureRun scope run raw validated = withTransaction $ do
+  unless (conversationStorageId scope == run.crConversationId) (publicationFailure "capture conversation mismatch")
   locked <- lockConversation (conversationStorageId scope)
   unless locked (publicationFailure "capture conversation no longer exists")
-  run <- lockGeneratedRun scope lease
   verifyRunSource scope run
+  insertCaptureResult run "published" Nothing (Just raw) (Just validated.validatedCapture) (captureValidationWarnings validated)
   compartment <- insertStagedCompartment run validated.validatedCapture
   insertSummaryEvidence run compartment validated.validatedCapture
   insertRejectedProposals run validated.rejectedProposals
@@ -1001,36 +759,11 @@ publishCaptureRun scope lease validated = withTransaction $ do
   when (runRequiresLiveCursor run) $ do
     advanced <- advanceCursor scope historianCursor run.crExpectedCursor run.crRange.srEnd
     unless advanced (publicationFailure "historian cursor compare-and-swap conflict")
-  changed <-
+  _ <-
     execute
-      "UPDATE episode_capture_runs \
-      \ SET status = 'published', published_compartment_id = ?, published_at = now(), \
-      \     lease_owner = NULL, lease_expires_at = NULL, next_retry_at = NULL, updated_at = now() \
-      \ WHERE id = ? AND status = 'generated' AND lease_owner = ? AND attempt = ?"
-      (compartment, run.crId, lease.leaseOwner, run.crAttempt)
-  unless (changed == 1) (publicationFailure "capture run lost its publication lease")
+      "UPDATE episode_capture_runs SET published_compartment_id=?, published_at=now(), updated_at=now() WHERE id=?"
+      (compartment, run.crId)
   pure compartment
-
-lockGeneratedRun ::
-  (WithConnection :> es, IOE :> es) =>
-  ConversationScope ->
-  CaptureLease ->
-  Eff es CaptureRun
-lockGeneratedRun scope lease = do
-  let sql =
-        "SELECT "
-          <> captureRunColumns
-          <> " FROM episode_capture_runs \
-             \ WHERE id = ? AND conversation_id = ? AND status = 'generated' \
-             \   AND lease_owner = ? AND attempt = ? AND lease_expires_at > now() \
-             \ FOR UPDATE"
-  rows <-
-    query
-      (fromTextQuery sql)
-      (lease.leaseRun.crId, conversationStorageId scope, lease.leaseOwner, lease.leaseRun.crAttempt)
-  case rows of
-    run : _ -> pure run
-    [] -> publicationFailure "capture run is not publishable by this lease"
 
 verifyRunSource ::
   (WithConnection :> es, IOE :> es) =>

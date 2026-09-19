@@ -30,16 +30,8 @@ import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (notForwardChild)
 import Max.DB.Transaction (withTransaction)
 import Max.Embedding.Maintenance (EmbeddingLock, tryWithEmbeddingLock)
-import Max.EpisodeStore
-  ( ActiveCompartment (..),
-    CaptureReason (CaptureRebuild),
-    CaptureRequest (..),
-    CaptureRun (..),
-    CompartmentId (..),
-    enqueueRebuildRun,
-    listActiveCompartments,
-  )
-import Max.Historian (historianPromptVersion, historianSchemaVersion)
+import Max.EpisodeScheduler (EpisodeScheduler, queueEpisodeRebuilds)
+import Max.EpisodeStore (ActiveCompartment (..), CompartmentId (..), listActiveCompartments)
 import Max.MemoryStore (MemoryId (..), invalidateMemoryEmbeddingsInConversation)
 import OneBot.Types (GroupId (..))
 
@@ -172,13 +164,6 @@ loadContextStatus selectedConversation = do
       \ WHERE (?::bigint IS NULL OR conversations.conversation_id = ?) \
       \ ORDER BY conversations.conversation_id"
       (selectedConversation, selectedConversation)
-  captureLeases <-
-    query
-      "SELECT lease_owner, count(*), min(lease_expires_at), max(lease_expires_at) \
-      \ FROM episode_capture_runs \
-      \ WHERE status IN ('leased', 'generated') AND lease_owner IS NOT NULL \
-      \ GROUP BY lease_owner ORDER BY lease_owner"
-      ()
   legacyArtifacts <-
     query
       "SELECT \
@@ -201,15 +186,6 @@ loadContextStatus selectedConversation = do
               "with_issues" .= unhealthy
             ],
         "conversations" .= statuses,
-        "capture_workers"
-          .= [ object
-                 [ "owner" .= owner,
-                   "leased_runs" .= count,
-                   "first_expiry" .= firstExpiry,
-                   "last_expiry" .= lastExpiry
-                 ]
-             | (owner, count, firstExpiry, lastExpiry) <- captureLeases :: [(Text, Int64, Maybe UTCTime, Maybe UTCTime)]
-             ],
         "cutover"
           .= object
             [ "context_protocol_version" .= ("unbounded-context/v1" :: Text),
@@ -271,10 +247,6 @@ data CaptureAdminRow = CaptureAdminRow
     captureAdminMessageCount :: !Int,
     captureAdminReason :: !Text,
     captureAdminStatus :: !Text,
-    captureAdminAttempt :: !Int,
-    captureAdminLeaseOwner :: !(Maybe Text),
-    captureAdminLeaseExpiresAt :: !(Maybe UTCTime),
-    captureAdminNextRetryAt :: !(Maybe UTCTime),
     captureAdminLastError :: !(Maybe Text),
     captureAdminProfile :: !Text,
     captureAdminPromptVersion :: !Text,
@@ -288,30 +260,7 @@ data CaptureAdminRow = CaptureAdminRow
   }
 
 instance FromRow CaptureAdminRow where
-  fromRow =
-    CaptureAdminRow
-      <$> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
+  fromRow = CaptureAdminRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field
 
 listCaptureRunsAdmin ::
   (WithConnection :> es, IOE :> es) =>
@@ -322,8 +271,8 @@ listCaptureRunsAdmin conversationId requestedLimit = do
   rows <-
     query
       "SELECT id, conversation_id, expected_cursor_seq, start_ingest_seq, end_ingest_seq, \
-      \       source_message_count, scheduling_reason, status, attempt, lease_owner, lease_expires_at, \
-      \       next_retry_at, last_error, historian_profile, prompt_version, schema_version, \
+      \       source_message_count, scheduling_reason, status, \
+      \       last_error, historian_profile, prompt_version, schema_version, \
       \       validation_errors::text, replaces_compartment_id, published_compartment_id, \
       \       created_at, updated_at, published_at \
       \ FROM episode_capture_runs \
@@ -345,10 +294,6 @@ captureJson row = do
         "source_message_count" .= row.captureAdminMessageCount,
         "reason" .= row.captureAdminReason,
         "status" .= row.captureAdminStatus,
-        "attempt" .= row.captureAdminAttempt,
-        "lease_owner" .= row.captureAdminLeaseOwner,
-        "lease_expires_at" .= row.captureAdminLeaseExpiresAt,
-        "next_retry_at" .= row.captureAdminNextRetryAt,
         "last_error" .= row.captureAdminLastError,
         "historian_profile" .= row.captureAdminProfile,
         "prompt_version" .= row.captureAdminPromptVersion,
@@ -721,30 +666,13 @@ runContextIntegrityCheck conversationId = do
         "memory_current_projection_mismatches" .= memoryMismatch
       ]
 
-enqueueContextRebuildAdmin ::
-  (WithConnection :> es, IOE :> es) =>
-  Int64 ->
-  Maybe CompartmentId ->
-  Text ->
-  Text ->
-  Eff es [CaptureRun]
-enqueueContextRebuildAdmin conversationId selectedCompartment profile operationKey = do
-  let scope = conversationScopeFor (GroupId conversationId)
-      request =
-        CaptureRequest
-          { requestReason = CaptureRebuild,
-            requestHistorianProfile = profile,
-            requestPromptVersion = historianPromptVersion,
-            requestSchemaVersion = historianSchemaVersion
-          }
-  active <- listActiveCompartments scope
-  let selected = case selectedCompartment of
-        Nothing -> active
-        Just wanted -> filter ((== wanted) . (.activeCompartmentId)) active
-  catMaybes
-    <$> traverse
-      (\compartment -> enqueueRebuildRun scope compartment.activeCompartmentId operationKey request)
-      selected
+enqueueContextRebuildAdmin :: (WithConnection :> es, IOE :> es) => EpisodeScheduler -> Int64 -> Maybe CompartmentId -> Text -> Eff es (Either Text [CompartmentId])
+enqueueContextRebuildAdmin scheduler conversationId selectedCompartment profile = do
+  let gid = GroupId conversationId
+  active <- listActiveCompartments (conversationScopeFor gid)
+  let selected = [item.activeCompartmentId | item <- active, maybe True (== item.activeCompartmentId) selectedCompartment]
+  admitted <- liftIO (queueEpisodeRebuilds scheduler gid selected profile)
+  pure (if admitted then Right selected else Left "Historian rebuild queue is full")
 
 invalidateEmbeddingsAdmin ::
   (WithConnection :> es, IOE :> es) =>

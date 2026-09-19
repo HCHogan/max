@@ -1,13 +1,10 @@
 module Max.RecallSpec (spec) where
 
-import Data.Aeson (encode)
-import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.List (nub, sort)
 import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
-import Data.Text.Encoding qualified as TE
 import Database.PostgreSQL.Simple (Only (..), execute_)
 import Effectful.PostgreSQL (query)
 import Helpers (insertMessageWithCanonicalId, insertRawKind, requireJust, testTime, truncateAll, withDb)
@@ -144,9 +141,9 @@ seedRecallFixture pool = do
 
   end <- latestCursor pool
   run <-
-    withDb pool (enqueueCaptureRun scopeA (MessageCursor 0) end request)
+    withDb pool (prepareCaptureRun scopeA (MessageCursor 0) end request)
       >>= requireJust "capture run"
-  lease <- withDb pool (claimCaptureRun "recall-test" 60) >>= requireJust "capture lease"
+
   source <- withDb pool $ loadCaptureSource run
   let capture =
         EpisodeCapture
@@ -161,8 +158,7 @@ seedRecallFixture pool = do
   validated <- case validateEpisodeCapture run source capture of
     Right value -> pure value
     Left errors -> expectationFailure (show errors) >> error "invalid recall capture"
-  withDb pool (recordCaptureGenerated lease (captureJson capture) capture []) `shouldReturn` True
-  _ <- withDb pool $ publishCaptureRun scopeA lease validated
+  _ <- withDb pool $ publishCaptureRun scopeA run "fixture response" validated
   pure ()
 
 installCompatibleVectors :: DbPool -> IO ()
@@ -202,9 +198,6 @@ request =
       requestPromptVersion = "historian/v1",
       requestSchemaVersion = 1
     }
-
-captureJson :: EpisodeCapture -> Text
-captureJson = TE.decodeUtf8 . LBS.toStrict . encode
 
 replicateText :: Int -> Text -> Text
 replicateText count = mconcat . replicate count

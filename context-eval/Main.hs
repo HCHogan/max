@@ -520,10 +520,6 @@ fixtureRun fixture source profile =
             srMessageCount = length source
           },
       crReason = "offline_eval",
-      crStatus = "leased",
-      crAttempt = 1,
-      crLeaseOwner = Just "offline-eval",
-      crLeaseExpiresAt = Nothing,
       crHistorianProfile = profile,
       crPromptVersion = historianPromptVersion,
       crSchemaVersion = historianSchemaVersion,

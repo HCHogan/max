@@ -1,14 +1,11 @@
 module Max.EpisodeStoreSpec (spec) where
 
 import Control.Exception (SomeException)
-import Data.Aeson (encode)
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful.PostgreSQL (query)
@@ -69,7 +66,7 @@ request reason =
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
-  it "enqueues one idempotent exact range including non-transcript ledger rows" $ do
+  it "prepares exact source ranges without persisting execution state" $ do
     _ <- insertRawMessage pool 1001 groupA member botId testTime Nothing "hello"
     _ <- insertRawKind pool "command" 1002 groupA member botId testTime Nothing "!status"
     _ <- insertRawMessage pool 1003 groupA botId botId testTime Nothing "answer"
@@ -78,62 +75,24 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
       pure ()
     end <- latestCursor pool
 
-    first <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
-    replay <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
+    first <- withDb pool $ prepareCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
+    replay <- withDb pool $ prepareCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
     first `shouldSatisfy` (/= Nothing)
-    fmap (.crId) replay `shouldBe` fmap (.crId) first
+    fmap (.crId) replay `shouldNotBe` fmap (.crId) first
+    withDb pool (query "SELECT count(*) FROM episode_capture_runs" ()) `shouldReturn` [Only (0 :: Int)]
     fmap ((.srMessageCount) . (.crRange)) first `shouldBe` Just 3
 
     run <- requireJust "capture run" first
     source <- withDb pool $ loadCaptureSource run
     map (.transcriptEligible) source `shouldBe` [True, False, True]
 
-  it "leases with attempts and does not reclaim a failed run before its retry deadline" $ do
+  it "retains invalid model output as a diagnostic without scheduling SQL retries" $ do
     _ <- insertRawMessage pool 1001 groupA member botId testTime Nothing "hello"
     end <- latestCursor pool
-    _ <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
-    first <- withDb pool (claimCaptureRun "worker-a" 60) >>= requireJust "first lease"
-    first.leaseRun.crAttempt `shouldBe` 1
-    withDb pool (failCaptureRun first 60 "provider unavailable" []) `shouldReturn` True
-    withDb pool (claimCaptureRun "worker-b" 60) `shouldReturn` Nothing
-
-    withConn pool $ \conn -> do
-      _ <- execute conn "UPDATE episode_capture_runs SET next_retry_at = now()" ()
-      pure ()
-    second <- withDb pool (claimCaptureRun "worker-b" 60) >>= requireJust "retry lease"
-    second.leaseRun.crAttempt `shouldBe` 2
-    second.leaseOwner `shouldBe` "worker-b"
-    withDb pool (abandonCaptureRun second "source changed" []) `shouldReturn` True
-    withDb pool (claimCaptureRun "worker-c" 60) `shouldReturn` Nothing
-    statuses <- withDb pool $ query "SELECT status, last_error FROM episode_capture_runs" ()
-    (statuses :: [(Text, Maybe Text)]) `shouldBe` [("abandoned", Just "source changed")]
-
-  it "claims new pending work before an overdue poison retry" $ do
-    _ <- insertRawMessage pool 1001 groupA member botId testTime Nothing "poison"
-    endA <- latestCursor pool
-    _ <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) endA (request CaptureIdle)
-    poison <- withDb pool (claimCaptureRun "worker-a" 60) >>= requireJust "poison lease"
-    withDb pool (failCaptureRun poison 1 "provider unavailable" []) `shouldReturn` True
-    withConn pool $ \conn -> do
-      _ <- execute conn "UPDATE episode_capture_runs SET next_retry_at = now() WHERE conversation_id = ?" (Only groupA)
-      pure ()
-
-    _ <- insertRawMessage pool 2001 groupB member botId testTime Nothing "fresh"
-    endB <- cursorFor pool 2001
-    _ <- withDb pool $ enqueueCaptureRun scopeB (MessageCursor 0) endB (request CaptureIdle)
-
-    fresh <- withDb pool (claimCaptureRun "worker-b" 60) >>= requireJust "fresh pending lease"
-    fresh.leaseRun.crConversationId `shouldBe` groupB
-    fresh.leaseRun.crAttempt `shouldBe` 1
-
-  it "persists an invalid raw model response for delayed retry" $ do
-    _ <- insertRawMessage pool 1001 groupA member botId testTime Nothing "hello"
-    end <- latestCursor pool
-    _ <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
-    lease <- withDb pool (claimCaptureRun "worker" 60) >>= requireJust "capture lease"
+    run <- withDb pool (prepareCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)) >>= requireJust "capture source"
     let errors = [CaptureValidationError "response" "invalid JSON"]
-    withDb pool (recordCaptureRejected lease 60 "parse failed" "not json" errors)
-      `shouldReturn` True
+    withDb pool (recordCaptureFailure run "parse failed" (Just "not json") errors)
+      `shouldReturn` ()
     rows <-
       withDb pool $
         query
@@ -147,18 +106,17 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     (m1, m2, m3) <- seedConversation pool
     memberPrincipal <- principalFor pool member
     botPrincipal <- principalFor pool botId
-    lease <- prepareLease pool
-    source <- withDb pool $ loadCaptureSource lease.leaseRun
+    run <- prepareFixtureRun pool
+    source <- withDb pool $ loadCaptureSource run
     let capture = validCapture [m1, m2, m3] [ProposalAdd "user" (Just memberPrincipal) "Alice prefers tea" (Just "preference") [m1]]
-    validated <- requireValid lease.leaseRun source capture
-    withDb pool (recordCaptureGenerated lease (captureJson capture) capture []) `shouldReturn` True
-    compartment <- withDb pool $ publishCaptureRun scopeA lease validated
+    validated <- requireValid run source capture
+    compartment <- withDb pool $ publishCaptureRun scopeA run "fixture response" validated
 
     active <- withDb pool $ listActiveCompartments scopeA
     map (.activeCompartmentId) active `shouldBe` [compartment]
     map ((.srMessageCount) . (.activeRange)) active `shouldBe` [3]
     withDb pool (loadCursor scopeA historianCursor)
-      `shouldReturn` lease.leaseRun.crRange.srEnd
+      `shouldReturn` run.crRange.srEnd
 
     citations <-
       withDb pool $
@@ -217,18 +175,16 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
   it "publishes valid history while recording invalid memory proposals" $ do
     (m1, m2, m3) <- seedConversation pool
     memberPrincipal <- principalFor pool member
-    lease <- prepareLease pool
-    source <- withDb pool $ loadCaptureSource lease.leaseRun
+    run <- prepareFixtureRun pool
+    source <- withDb pool $ loadCaptureSource run
     let capture =
           validCapture
             [m1, m2, m3]
             [ ProposalAdd "group" Nothing "valid group fact" (Just "group_convention") [m1],
               ProposalAdd "user" (Just memberPrincipal) "unsafe inferred relationship" (Just "relationship_context") [m1]
             ]
-    validated <- requireValid lease.leaseRun source capture
-    withDb pool (recordCaptureGenerated lease (captureJson capture) capture (captureValidationWarnings validated))
-      `shouldReturn` True
-    _ <- withDb pool $ publishCaptureRun scopeA lease validated
+    validated <- requireValid run source capture
+    _ <- withDb pool $ publishCaptureRun scopeA run "fixture response" validated
 
     outcomes <-
       withDb pool $
@@ -244,37 +200,49 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
   it "applies observed-version corrections once while fencing stale, future and permanent proposals" $ do
     (m1, m2, m3) <- seedConversation pool
     let actor = Memory.MemoryActor Memory.ActorAgentTool Nothing Nothing
-        create lifecycle content = withDb pool $ Memory.createMemory actor (Memory.groupMemoryNamespace scopeA)
-          (Memory.MemoryDraft content lifecycle Nothing (Memory.MessageEvidence scopeA Nothing m1))
+        create lifecycle content =
+          withDb pool $
+            Memory.createMemory
+              actor
+              (Memory.groupMemoryNamespace scopeA)
+              (Memory.MemoryDraft content lifecycle Nothing (Memory.MessageEvidence scopeA Nothing m1))
     active <- create Memory.MemoryActive "old fact"
     permanent <- create Memory.MemoryPermanent "explicit fact"
-    lease <- prepareLease pool
-    source <- withDb pool $ loadCaptureSource lease.leaseRun
-    let capture = validCapture [m1,m2,m3]
-          [ ProposalUpdate active.memId (Memory.MemoryVersion 2) "future version must fail" [m1],
-            ProposalUpdate active.memId active.memVersion "corrected fact" [m1],
-            ProposalUpdate active.memId active.memVersion "stale write must fail" [m1],
-            ProposalUpdate permanent.memId permanent.memVersion "automatic overwrite must fail" [m1]
-          ]
-    validated <- requireValid lease.leaseRun source capture
-    withDb pool (recordCaptureGenerated lease (captureJson capture) capture []) `shouldReturn` True
-    _ <- withDb pool $ publishCaptureRun scopeA lease validated
+    run <- prepareFixtureRun pool
+    source <- withDb pool $ loadCaptureSource run
+    let capture =
+          validCapture
+            [m1, m2, m3]
+            [ ProposalUpdate active.memId (Memory.MemoryVersion 2) "future version must fail" [m1],
+              ProposalUpdate active.memId active.memVersion "corrected fact" [m1],
+              ProposalUpdate active.memId active.memVersion "stale write must fail" [m1],
+              ProposalUpdate permanent.memId permanent.memVersion "automatic overwrite must fail" [m1]
+            ]
+    validated <- requireValid run source capture
+    _ <- withDb pool $ publishCaptureRun scopeA run "fixture response" validated
     outcomes <- withDb pool $ query "SELECT outcome FROM episode_memory_proposals ORDER BY proposal_index" ()
-    (outcomes :: [Only Text]) `shouldBe` map Only ["rejected_store","applied","rejected_store","rejected_store"]
+    (outcomes :: [Only Text]) `shouldBe` map Only ["rejected_store", "applied", "rejected_store", "rejected_store"]
     rows <- withDb pool $ query "SELECT content,version FROM memories WHERE id=?" (Only active.memId)
-    (rows :: [(Text,MemoryVersion)]) `shouldBe` [("corrected fact", Memory.MemoryVersion 2)]
-    withDb pool (loadCursor scopeA historianCursor) `shouldReturn` lease.leaseRun.crRange.srEnd
-    let review scope version = withDb pool $ reviewRejectedMemoryProposal scope lease.leaseRun.crId 0 "operator" "re-read the correction and current memory"
-          (Just (ProposalUpdate active.memId version "reviewed correction" [m1]))
+    (rows :: [(Text, MemoryVersion)]) `shouldBe` [("corrected fact", Memory.MemoryVersion 2)]
+    withDb pool (loadCursor scopeA historianCursor) `shouldReturn` run.crRange.srEnd
+    let review scope version =
+          withDb pool $
+            reviewRejectedMemoryProposal
+              scope
+              run.crId
+              0
+              "operator"
+              "re-read the correction and current memory"
+              (Just (ProposalUpdate active.memId version "reviewed correction" [m1]))
     review scopeB (Memory.MemoryVersion 2) `shouldThrow` anyException
     review scopeA (Memory.MemoryVersion 1) `shouldReturn` "rejected_store"
     review scopeA (Memory.MemoryVersion 2) `shouldReturn` "applied"
     review scopeA (Memory.MemoryVersion 3) `shouldThrow` anyException
     reviewed <- withDb pool $ query "SELECT outcome FROM episode_memory_reviews ORDER BY review_id" ()
-    (reviewed :: [Only Text]) `shouldBe` map Only ["rejected_store","applied"]
+    (reviewed :: [Only Text]) `shouldBe` map Only ["rejected_store", "applied"]
     original <- withDb pool $ query "SELECT outcome FROM episode_memory_proposals WHERE proposal_index=0" ()
     (original :: [Only Text]) `shouldBe` [Only "rejected_store"]
-    withDb pool (loadCursor scopeA historianCursor) `shouldReturn` lease.leaseRun.crRange.srEnd
+    withDb pool (loadCursor scopeA historianCursor) `shouldReturn` run.crRange.srEnd
 
   -- Migration 062 changed conversation_source_hash and the ledger columns it
   -- reads, so every hash stamped before the ADR 003 cutover describes an input
@@ -282,12 +250,11 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
   -- history as bad_source_ranges.  065 re-stamps them.
   it "re-stamps a stale compartment source hash without churning fresh ones" $ do
     (m1, m2, m3) <- seedConversation pool
-    lease <- prepareLease pool
-    source <- withDb pool $ loadCaptureSource lease.leaseRun
+    run <- prepareFixtureRun pool
+    source <- withDb pool $ loadCaptureSource run
     let capture = validCapture [m1, m2, m3] []
-    validated <- requireValid lease.leaseRun source capture
-    withDb pool (recordCaptureGenerated lease (captureJson capture) capture []) `shouldReturn` True
-    _ <- withDb pool $ publishCaptureRun scopeA lease validated
+    validated <- requireValid run source capture
+    _ <- withDb pool $ publishCaptureRun scopeA run "fixture response" validated
 
     let matching =
           withDb pool $
@@ -309,11 +276,10 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
 
   it "rolls the whole publication back when the source hash changes" $ do
     (m1, m2, m3) <- seedConversation pool
-    lease <- prepareLease pool
-    source <- withDb pool $ loadCaptureSource lease.leaseRun
+    run <- prepareFixtureRun pool
+    source <- withDb pool $ loadCaptureSource run
     let capture = validCapture [m1, m2, m3] [ProposalAdd "group" Nothing "a fact" Nothing [m1]]
-    validated <- requireValid lease.leaseRun source capture
-    withDb pool (recordCaptureGenerated lease (captureJson capture) capture []) `shouldReturn` True
+    validated <- requireValid run source capture
     withConn pool $ \conn -> do
       _ <-
         execute
@@ -325,7 +291,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
           ()
       pure ()
 
-    withDb pool (publishCaptureRun scopeA lease validated)
+    withDb pool (publishCaptureRun scopeA run "fixture response" validated)
       `shouldThrow` (\(_ :: SomeException) -> True)
     withDb pool (listActiveCompartments scopeA) `shouldReturn` []
     withDb pool (loadCursor scopeA historianCursor) `shouldReturn` MessageCursor 0
@@ -334,32 +300,27 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
 
   it "keeps the old active compartment live until a rebuild publishes" $ do
     (m1, m2, m3) <- seedConversation pool
-    firstLease <- prepareLease pool
-    firstSource <- withDb pool $ loadCaptureSource firstLease.leaseRun
+    firstRun <- prepareFixtureRun pool
+    firstSource <- withDb pool $ loadCaptureSource firstRun
     let firstCapture = validCapture [m1, m2, m3] []
-    firstValidated <- requireValid firstLease.leaseRun firstSource firstCapture
-    _ <- withDb pool $ recordCaptureGenerated firstLease (captureJson firstCapture) firstCapture []
-    old <- withDb pool $ publishCaptureRun scopeA firstLease firstValidated
+    firstValidated <- requireValid firstRun firstSource firstCapture
+    old <- withDb pool $ publishCaptureRun scopeA firstRun "fixture response" firstValidated
     oldHandle <-
       withDb pool (listActiveCompartments scopeA) >>= \case
         compartment' : _ -> pure compartment'.activeExpandHandle
         [] -> expectationFailure "expected old active compartment" >> error "missing compartment"
 
     rebuildRun <-
-      withDb pool (enqueueRebuildRun scopeA old "manual-rebuild-1" (request CaptureRebuild))
+      withDb pool (prepareRebuildRun scopeA old (request CaptureRebuild))
         >>= requireJust "rebuild run"
-    withDb pool (enqueueRebuildRun scopeA old "manual-rebuild-duplicate" (request CaptureRebuild))
-      `shouldReturn` Nothing
-    rebuildLease <- withDb pool (claimCaptureRun "rebuild-worker" 60) >>= requireJust "rebuild lease"
-    rebuildLease.leaseRun.crId `shouldBe` rebuildRun.crId
+
     map (.activeCompartmentId) <$> withDb pool (listActiveCompartments scopeA)
       `shouldReturn` [old]
 
-    rebuildSource <- withDb pool $ loadCaptureSource rebuildLease.leaseRun
+    rebuildSource <- withDb pool $ loadCaptureSource rebuildRun
     let rebuiltCapture = (validCapture [m1, m2, m3] []) {captureSummaryP3 = CitedSummary "rebuilt anchor" [m3]}
-    rebuiltValidated <- requireValid rebuildLease.leaseRun rebuildSource rebuiltCapture
-    _ <- withDb pool $ recordCaptureGenerated rebuildLease (captureJson rebuiltCapture) rebuiltCapture []
-    new <- withDb pool $ publishCaptureRun scopeA rebuildLease rebuiltValidated
+    rebuiltValidated <- requireValid rebuildRun rebuildSource rebuiltCapture
+    new <- withDb pool $ publishCaptureRun scopeA rebuildRun "fixture response" rebuiltValidated
     new `shouldNotBe` old
     map (.activeCompartmentId) <$> withDb pool (listActiveCompartments scopeA)
       `shouldReturn` [new]
@@ -385,15 +346,13 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     withDb pool (advanceCursor scopeA historianCursor (MessageCursor 0) end)
       `shouldReturn` True
     run <-
-      withDb pool (enqueueBackfillRun scopeA (MessageCursor 0) end (request CaptureBackfill))
+      withDb pool (prepareBackfillRun scopeA (MessageCursor 0) end (request CaptureBackfill))
         >>= requireJust "backfill run"
-    lease <- withDb pool (claimCaptureRun "backfill-worker" 60) >>= requireJust "backfill lease"
-    lease.leaseRun.crId `shouldBe` run.crId
+
     source <- withDb pool $ loadCaptureSource run
     let capture = validCapture [m1, m2, m3] []
     validated <- requireValid run source capture
-    _ <- withDb pool $ recordCaptureGenerated lease (captureJson capture) capture []
-    _ <- withDb pool $ publishCaptureRun scopeA lease validated
+    _ <- withDb pool $ publishCaptureRun scopeA run "fixture response" validated
 
     withDb pool (loadCursor scopeA historianCursor) `shouldReturn` end
     map (.activeRange) <$> withDb pool (listActiveCompartments scopeA)
@@ -411,25 +370,23 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
       `shouldReturn` True
 
     newer <-
-      withDb pool (enqueueBackfillRun scopeA cursor3 end5 (request CaptureBackfill))
+      withDb pool (prepareBackfillRun scopeA cursor3 end5 (request CaptureBackfill))
         >>= requireJust "newer backfill"
-    newerLease <- withDb pool (claimCaptureRun "newer-backfill" 60) >>= requireJust "newer lease"
+
     newerSource <- withDb pool $ loadCaptureSource newer
     newerValidated <- requireValid newer newerSource (validCapture [c4, c5] [])
-    _ <- withDb pool $ recordCaptureGenerated newerLease (captureJson (validCapture [c4, c5] [])) (validCapture [c4, c5] []) []
-    _ <- withDb pool $ publishCaptureRun scopeA newerLease newerValidated
+    _ <- withDb pool $ publishCaptureRun scopeA newer "fixture response" newerValidated
 
     withDb pool (findOldestBackfillGap scopeA)
       `shouldReturn` Just (BackfillGap (MessageCursor 0) cursor3)
 
     older <-
-      withDb pool (enqueueBackfillRun scopeA (MessageCursor 0) cursor3 (request CaptureBackfill))
+      withDb pool (prepareBackfillRun scopeA (MessageCursor 0) cursor3 (request CaptureBackfill))
         >>= requireJust "older backfill"
-    olderLease <- withDb pool (claimCaptureRun "older-backfill" 60) >>= requireJust "older lease"
+
     olderSource <- withDb pool $ loadCaptureSource older
     olderValidated <- requireValid older olderSource (validCapture [c1, c2, c3] [])
-    _ <- withDb pool $ recordCaptureGenerated olderLease (captureJson (validCapture [c1, c2, c3] [])) (validCapture [c1, c2, c3] []) []
-    _ <- withDb pool $ publishCaptureRun scopeA olderLease olderValidated
+    _ <- withDb pool $ publishCaptureRun scopeA older "fixture response" olderValidated
 
     withDb pool (findOldestBackfillGap scopeA) `shouldReturn` Nothing
 
@@ -443,22 +400,20 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     [c1, c2, _, c4, c5] <- mapM (canonicalFor pool) [1001 .. 1005]
 
     firstRun <-
-      withDb pool (enqueueBackfillRun scopeA (MessageCursor 0) end2 (request CaptureBackfill))
+      withDb pool (prepareBackfillRun scopeA (MessageCursor 0) end2 (request CaptureBackfill))
         >>= requireJust "first backfill"
-    firstLease <- withDb pool (claimCaptureRun "backfill-1" 60) >>= requireJust "first backfill lease"
+
     firstSource <- withDb pool $ loadCaptureSource firstRun
     firstValidated <- requireValid firstRun firstSource (validCapture [c1, c2] [])
-    _ <- withDb pool $ recordCaptureGenerated firstLease (captureJson (validCapture [c1, c2] [])) (validCapture [c1, c2] []) []
-    _ <- withDb pool $ publishCaptureRun scopeA firstLease firstValidated
+    _ <- withDb pool $ publishCaptureRun scopeA firstRun "fixture response" firstValidated
 
     secondRun <-
-      withDb pool (enqueueBackfillRun scopeA cursor3 end5 (request CaptureBackfill))
+      withDb pool (prepareBackfillRun scopeA cursor3 end5 (request CaptureBackfill))
         >>= requireJust "second backfill"
-    secondLease <- withDb pool (claimCaptureRun "backfill-2" 60) >>= requireJust "second backfill lease"
+
     secondSource <- withDb pool $ loadCaptureSource secondRun
     secondValidated <- requireValid secondRun secondSource (validCapture [c4, c5] [])
-    _ <- withDb pool $ recordCaptureGenerated secondLease (captureJson (validCapture [c4, c5] [])) (validCapture [c4, c5] []) []
-    _ <- withDb pool $ publishCaptureRun scopeA secondLease secondValidated
+    _ <- withDb pool $ publishCaptureRun scopeA secondRun "fixture response" secondValidated
 
     active <- withDb pool $ listActiveCompartments scopeA
     map (.activeGapBefore) active `shouldBe` [False, True]
@@ -496,11 +451,10 @@ seedConversation pool = do
   c <- insertRawMessage pool 1003 groupA botId botId testTime Nothing "Max acknowledges"
   pure (a, b, c)
 
-prepareLease :: DbPool -> IO CaptureLease
-prepareLease pool = do
+prepareFixtureRun :: DbPool -> IO CaptureRun
+prepareFixtureRun pool = do
   end <- latestCursor pool
-  _ <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
-  withDb pool (claimCaptureRun "worker" 120) >>= requireJust "capture lease"
+  withDb pool (prepareCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)) >>= requireJust "capture source"
 
 latestCursor :: DbPool -> IO MessageCursor
 latestCursor pool = do
@@ -527,9 +481,6 @@ validCapture ids proposals =
       captureEpisodeKind = Mixed,
       captureMemoryProposals = proposals
     }
-
-captureJson :: EpisodeCapture -> Text
-captureJson = TE.decodeUtf8 . LBS.toStrict . encode
 
 requireValid :: CaptureRun -> [LedgerItem] -> EpisodeCapture -> IO ValidatedEpisodeCapture
 requireValid run source capture = case validateEpisodeCapture run source capture of

@@ -131,7 +131,7 @@ Pure logic in `test/` mirroring the library layout:
   optimistic revision publication, append-only versions, and stale-source
   rejection at the prompt cache-bust boundary
 - `Max.EpisodeStoreSpec` — strict capture schema, evidence validation,
-  source-hash/CAS rollback, leases, rebuild/backfill, and proposal isolation
+  source-hash/CAS rollback, rebuild/backfill, and proposal isolation
 - `Max.EpisodeSchedulerSpec` — quiet-period scheduling, retry and input races
 - `Max.EmbeddingSpec` and `Max.ContextAdminSpec` — process-local maintenance
   exclusion, cancellation cleanup and conversation-scoped reindexing.
@@ -392,14 +392,15 @@ structured data as `key=value`. Multi-line values collapse to one line with `⏎
 so `grep -A` / `grep -B` count events rather than JSON braces.
 
 Useful domain filters: `conn-N`, `image-worker`, `forward-worker`, `llm`, `cmd`,
-`historian` (episode capture), `memory-dream` (memory maintenance), `intent`
+`historian` (episode capture), `memory-expiry` (recorded expiration), `intent`
 (proactive-trigger classification), `shutdown` (graceful drain).
 
 Historian dispatch logs include `timeout_seconds` and `transport_retries=0`.
-Capture rows retain attempt, lease, `next_retry_at`, validation output, and the
-exact source range; use the admin context console to distinguish a long call
-from durable backoff. The worker claims fresh pending ranges before overdue
-retries, so a repeatedly bad range should not stop newer first attempts.
+Capture rows retain completed responses, validation failures and exact source
+ranges. The scheduler owns retry deadlines and manual rebuild requests in
+memory. Failure logs and the admin capture history explain unsuccessful work;
+the capture badge counts local requests waiting for retry. There is no SQL
+claim queue or execution continuation after restart.
 
 `log-base` has three levels and they map straight across: `TRACE` / `INFO` /
 `WARN`. There is no separate error tier — `logAttention` carries both recoverable

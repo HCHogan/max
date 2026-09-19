@@ -94,7 +94,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
       missing-data scans; keep source/version-conditional writes.
 - [x] Replace media leases and serialized jobs with bounded local queues and
       missing-data scans; preserve canonical attachments and forward expansion.
-- [ ] Replace Historian maintenance leases with local scheduling and
+- [x] Replace Historian maintenance leases with local scheduling and
       missing-data scans; preserve short transactional publication.
 - [x] Delete notification LLM review pipelines and operational debt review.
 - [ ] Separate connection retries, individual task failures and fatal core errors.
@@ -379,3 +379,22 @@ maintained implementation record.
   capability checks. Effective src/app Haskell is 46,080 lines; core is 33,080
   (shared media types moved into the core queue module). Historian, context and
   final operational acceptance remain. No production deployment is claimed.
+
+- Historian now reads a source range, generates once (plus the existing bounded
+  schema repair), and publishes results in one source-checked transaction.
+  Removed persistent enqueue/claim/lease/generated/retry transitions. Capture
+  rows contain completed diagnostics, summaries and memory
+  proposal outcomes; preparation only allocates a result ID. Local quiet timers
+  retain bounded backoff, per-conversation ownership and token-sized catch-up.
+  Capture badges count local retry waits; historical diagnostics remain readable.
+  Manual rebuild requests share this scheduler; the old summary stays readable
+  until replacement commits, and restart drops pending requests.
+  Migration 121 retires interrupted captures while retaining source history and
+  completed evidence. Retired two SQL claim/retry cases, moved delay policy
+  coverage into the scheduler, and added bounded rebuild admission, deduplication,
+  ownership and cross-conversation progress cases. Worker integration covers
+  scheduled publication and admin rebuilds during a blocked model call.
+  All targets build; 1,061 unit and 259 DB examples pass, as do upgrade,
+  capability, HLint and offline checks (9 Historian, 7 recall fixtures).
+  Effective src/app Haskell is 45,670 lines; core Haskell is 32,759. Context
+  representation/materialization and final operational acceptance remain.

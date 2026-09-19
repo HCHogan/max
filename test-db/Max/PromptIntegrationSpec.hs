@@ -135,7 +135,7 @@ spec pool = before_ (truncateAll pool) $
       run <-
         withDb
           pool
-          ( enqueueCaptureRun
+          ( prepareCaptureRun
               scope
               (MessageCursor 0)
               end
@@ -147,7 +147,7 @@ spec pool = before_ (truncateAll pool) $
                 }
           )
           >>= requireJust "capture run"
-      lease <- withDb pool (claimCaptureRun "prompt-test" 60) >>= requireJust "capture lease"
+
       source <- withDb pool $ loadCaptureSource run
       let capture =
             EpisodeCapture
@@ -162,8 +162,7 @@ spec pool = before_ (truncateAll pool) $
       validated <- case validateEpisodeCapture run source capture of
         Right value -> pure value
         Left errors -> expectationFailure (show errors) >> error "invalid capture"
-      _ <- withDb pool $ recordCaptureGenerated lease "exact raw historian response" capture []
-      _ <- withDb pool $ publishCaptureRun scope lease validated
+      _ <- withDb pool $ publishCaptureRun scope run "fixture response" validated
       insertMessageWithCanonicalId pool 1003 groupRaw otherMemberRaw botRaw (timeAt 11) (Just "Bob") "ambient raw tail"
 
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
@@ -352,7 +351,7 @@ publishNextCompartment pool expected evidence summary = do
   run <-
     withDb
       pool
-      ( enqueueCaptureRun
+      ( prepareCaptureRun
           scope
           expected
           end
@@ -364,7 +363,7 @@ publishNextCompartment pool expected evidence summary = do
             }
       )
       >>= requireJust "capture run"
-  lease <- withDb pool (claimCaptureRun "prompt-materialization-test" 60) >>= requireJust "capture lease"
+
   source <- withDb pool $ loadCaptureSource run
   let capture =
         EpisodeCapture
@@ -379,6 +378,5 @@ publishNextCompartment pool expected evidence summary = do
   validated <- case validateEpisodeCapture run source capture of
     Right value -> pure value
     Left errors -> expectationFailure (show errors) >> error "invalid capture"
-  _ <- withDb pool $ recordCaptureGenerated lease "raw" capture []
-  compartment <- withDb pool $ publishCaptureRun scope lease validated
+  compartment <- withDb pool $ publishCaptureRun scope run "fixture response" validated
   pure (compartment, end)

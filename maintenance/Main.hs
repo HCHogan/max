@@ -18,7 +18,6 @@ import Database.PostgreSQL.Simple
     Only (..),
     Query,
     execute,
-    query,
     query_,
     withTransaction,
   )

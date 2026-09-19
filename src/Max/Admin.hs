@@ -56,7 +56,7 @@ import Max.ContextAdmin
   )
 import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
 import Max.DB.Calls (CallDetail (..), CallRow (..), fetchCall, listCalls)
-import Max.DB.History (MessageCursor (..), messageStatsDaily)
+import Max.DB.History (messageStatsDaily)
 import Max.DB.Monitor.Overview (readWorkOverview)
 import Max.DB.Session (listSessions)
 import Max.DB.Usage (UsageDay (..), usageDaily)
@@ -65,7 +65,8 @@ import Max.Effects.Embedding (Embedding, EmbeddingSpace (..), embedBatch, embedd
 import Max.Effects.Http (Http)
 import Max.Embedding (EmbeddingRecord)
 import Max.Env (BotEnv (..))
-import Max.EpisodeStore (CaptureRun (..), CompartmentId (..), SourceRange (..), episodeHandleText)
+import Max.EpisodeScheduler (EpisodeScheduler, episodeRetryCount)
+import Max.EpisodeStore (CompartmentId (..), episodeHandleText)
 import Max.FetchQueue (FetchSignal, fetchCounts)
 import Max.Log (parseLogLevel, renderLogLevel)
 import Max.LogBuffer (LogBuffer, LogEntry (..), LogQuery (..), queryLogs)
@@ -359,7 +360,7 @@ handle env profiles logBuf r params body = case r of
     tasks <- liftIO (listTasks env.beTasks Nothing)
     sessions <- listSessions env.beDefaultModel
     accounts <- botAccounts
-    health <- healthCounters env.beFetch
+    health <- healthCounters env.beFetch env.beEpisodeScheduler
     warned <- liftIO (LogBuffer.countAtLeast logBuf LogAttention)
     pure . ok $
       object
@@ -639,32 +640,14 @@ handle env profiles logBuf r params body = case r of
   RContextRebuild ->
     case A.eitherDecode body :: Either String PostContextRebuild of
       Left err -> pure (bad ("invalid json: " <> T.pack err))
-      Right request -> case env.beMemoryExtract of
-        Nothing -> pure (bad "Historian is disabled; configure memory.extract_profile first")
-        Just profile -> do
-          now <- liftIO getCurrentTime
-          runs <-
-            enqueueContextRebuildAdmin
-              request.pcrConversationId
-              (CompartmentId <$> request.pcrCompartmentId)
-              profile
-              ("admin:" <> T.pack (show now))
-          if null runs
-            then pure notFound
-            else
-              pure . ok $
-                object
-                  [ "enqueued"
-                      .= [ object
-                             [ "capture_run_id" .= run.crId,
-                               "conversation_id" .= run.crConversationId,
-                               "start_ingest_seq" .= run.crRange.srStart.ingestSeq,
-                               "end_ingest_seq" .= run.crRange.srEnd.ingestSeq,
-                               "replaces_compartment_id" .= run.crReplacesCompartment
-                             ]
-                         | run <- runs
-                         ]
-                  ]
+      Right request -> case (env.beMemoryExtract, env.beEpisodeScheduler) of
+        (Just profile, Just scheduler) -> do
+          result <- enqueueContextRebuildAdmin scheduler request.pcrConversationId (CompartmentId <$> request.pcrCompartmentId) profile
+          pure $ case result of
+            Left err -> jsonResponse status409 (object ["error" .= err])
+            Right [] -> notFound
+            Right compartments -> ok (object ["enqueued" .= compartments])
+        _ -> pure (bad "Historian is disabled; configure memory.extract_profile first")
   RContextReindex ->
     case A.eitherDecode body :: Either String PostContextReindex of
       Left err -> pure (bad ("invalid json: " <> T.pack err))
@@ -712,21 +695,20 @@ botAccounts = do
         rows :: [(Text, Text, Maybe Text, Bool)]
     ]
 
--- | The counters worth a badge: work that is stuck rather than work
--- that is merely queued.  One round trip, four index-backed counts.
-healthCounters :: (WithConnection :> es, IOE :> es) => FetchSignal -> Eff es Value
-healthCounters signal = do
+-- | Delivery outcomes and failures still pending in this process.
+healthCounters :: (WithConnection :> es, IOE :> es) => FetchSignal -> Maybe EpisodeScheduler -> Eff es Value
+healthCounters signal episodes = do
+  captures <- liftIO (maybe (pure 0) episodeRetryCount episodes)
   (pending, failedMedia) <- liftIO (fetchCounts signal)
   rows <-
     query
       "SELECT \
       \  (SELECT count(*) FROM message_deliveries WHERE status = 'failed'), \
       \  (SELECT count(*) FROM message_deliveries WHERE status = 'outcome_unknown'), \
-      \  (SELECT count(*) FROM message_deliveries WHERE status = 'permanent_failure'), \
-      \  (SELECT count(*) FROM episode_capture_runs WHERE status = 'failed')"
+      \  (SELECT count(*) FROM message_deliveries WHERE status = 'permanent_failure')"
       ()
-  pure $ case rows :: [(Int64, Int64, Int64, Int64)] of
-    [(failed, unknown, permanentFailures, captures)] ->
+  pure $ case rows :: [(Int64, Int64, Int64)] of
+    [(failed, unknown, permanentFailures)] ->
       object
         [ "failed_deliveries" .= failed,
           "unknown_deliveries" .= unknown,

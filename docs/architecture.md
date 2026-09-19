@@ -87,7 +87,7 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    builtins baked from skills/ + docs/, DB rows shadowing them),
                    SelfSource (public text snapshot + deterministic bundle hash),
                    EpisodeScheduler (protected quiet-tail timing), Historian +
-                   EpisodeStore (durable exact-range P1/P2/P3 capture and scoped
+                   EpisodeStore (atomic exact-range P1/P2/P3 capture and scoped
                    memory proposals), Prompt context pipeline (materialized
                    compartment generations + token-sized protected raw tail),
                    MemoryExtract (nightly memory maintenance),
@@ -148,19 +148,18 @@ QQ/iMessage ambiguity is parked until echo/status reconciliation, never placed
 back on the retry queue by a timeout. Context, Historian, and memory therefore
 see one semantic row regardless of how many transport copies exist.
 
-Historian v2 is episode-scoped rather than per-dispatch. After ten quiet
-minutes it selects an oldest-first raw-ledger prefix by the configured model's
-token budget (SQL pages are only an implementation detail), then persists an
-exact source range/hash as a leased capture job. One structured LLM call emits
-P1/P2/P3 chronological summaries plus scoped memory proposals. Publication
-atomically validates citations and scope, writes the compartment and proposal
-outcomes, applies accepted MemoryStore mutations, and CAS-advances the
-historian cursor. A failure advances nothing; restart reclaims the durable job.
-Historian completions use the independent `memory.timeout_seconds` (600 seconds
-by default) and make one transport attempt per generation/repair call; the
-durable queue retries after 1m/5m/15m/1h/6h. New pending ranges
-are claimed before overdue retries, so one poison range cannot starve first
-attempts while its immutable source remains available for later retry.
+Historian is episode-scoped. After ten quiet minutes it reads an oldest-first
+raw-ledger prefix within the configured model's token budget. The exact range,
+source hash and retry deadline stay in process memory. One structured LLM call
+emits P1/P2/P3 summaries plus scoped memory proposals. Publication rechecks the
+source and cursor, then atomically records the response, citations, summary and
+accepted memory mutations. A failed attempt records diagnostics and advances
+nothing. Startup discovers uncovered source history; it never resumes old calls.
+
+The independent `memory.timeout_seconds` defaults to 600 seconds. Each generation
+or repair makes one transport attempt. Local retries back off by 1m/5m/15m/1h/6h;
+other conversations remain schedulable while a retry waits. Rebuild requests use
+the same scheduler, are deduplicated and admit at most 1,024 pending requests.
 Commands/synthetic/forward rows remain in range coverage before transcript
 filtering, and active ranges have a database non-overlap constraint. The
 pre-cutover deployment boundary is backfilled automatically, oldest gap first
@@ -170,9 +169,8 @@ protected. The model-driven dream pass has been retired.
 
 A model response that cannot satisfy the strict `EpisodeCapture` JSON schema
 receives one bounded repair turn with explicit field and numeric-id rules. The
-repair uses the same capture lease and its extra token/latency cost remains
-visible; provider failures and semantic omissions still fall through to the
-durable run retry instead of being resampled until they look acceptable.
+repair belongs to the same local attempt and its token/latency cost remains
+visible. Provider failures and semantic omissions use the scheduled backoff.
 `max-context-eval` replays hand-labelled, synthetic multi-speaker fixtures
 through this exact production request path, requires valid provenance and
 memory precision, and reports calls, repairs, provider tokens, cache hits, and
@@ -181,13 +179,13 @@ strong-signal policy which intentionally has no production prompt caller.
 
 The authenticated admin context console is the operational boundary for this
 projection lifecycle. It reports exact cursor/coverage lag, range gaps and
-overlaps, capture leases/retries/validation, materialization revisions,
+overlaps, completed captures and validation failures, materialization revisions,
 body-free prompt budget/tier decisions, memory versions/evidence/audit,
 embedding spaces and backlog, and a policy-scoped retrieval trace. Full or
-single-compartment rebuilds enqueue ordinary durable Historian runs: the old
+single-compartment rebuilds enqueue local requests: the old
 active compartment remains live until replacement publication succeeds.
 Reindex clears only selected derived vectors while holding the embedding
-maintenance lease, then the normal worker backfills them. Integrity checks are
+maintenance lock, then the normal worker backfills them. Integrity checks are
 read-only and recompute source hashes, ownership, materialization references,
 cursor bounds, and the memory current/version projection.
 
@@ -311,7 +309,7 @@ Jobs belong to the process; a restart does not resume them.
 |---|---|
 | Messages, sessions, memories, stickers, permissions, skills | written through on every mutation; Session persists revision CAS before publishing its TVar (builtin skills re-seed from the binary) |
 | Media sources and completed attachments | Canonical messages retain URLs/native references; startup and periodic scans discover missing images/videos/files/forward content. Typed bounded queues execute reads locally, prioritizing live ingress. `forward_expansions` distinguishes an empty completed expansion from partial import; old `fetch_jobs` are archived diagnostics |
-| Pending historian capture | leased `episode_capture_runs` rows plus the conversation-scoped historian cursor; boot drains jobs, then re-arms any conversation with newer raw rows |
+| Historian results and coverage | `episode_capture_runs` stores completed results; summaries, citations, memory proposals and the conversation cursor publish in one transaction. Quiet timers, attempts and manual rebuild requests are local; startup derives fresh work from source gaps |
 | Tiered prompt prefix | current `context_materializations` revision plus append-only versions; active compartment ids/versions, tiers, end cursor, policy, fingerprint, and cache-bust reason are durable |
 | Episode expansion handles | random UUID on the immutable compartment; scoped lookup recovers the exact raw ingest range, including after supersession |
 | Monitors and reminders | `monitors` and `monitor_fires` hold TimeCron/LedgerMatch state, retry, provenance, caps and one-time Jobs admission; the scheduler handle is only a wakeup bell |
