@@ -9,6 +9,12 @@ module Max.Browser.Registry
     browserScopeForDispatch,
     browserScopeForTask,
     BrowserRegistry,
+    JobBrowser (..),
+    jobBrowser,
+    jobBrowsers,
+    putJobBrowser,
+    forgetJobBrowser,
+    ensureJobBrowserLease,
     newBrowserRegistry,
     newBrowserRegistryWithHost,
     configureBrowserRegistry,
@@ -78,6 +84,7 @@ import Max.MCP.Client
 import Max.Platform.Types (CanonicalMessageId)
 import Max.Resource (acquireRegistered, releaseRegistered)
 import Max.Sandbox.Runtime (listContainersByPrefix, runRm)
+import Max.Task.Types (JobRun)
 import Max.Turn.Types (AgentTurnId)
 import OneBot.Types (GroupId (..))
 import System.Timeout (timeout)
@@ -124,6 +131,17 @@ data BrowserInstance = BrowserInstance
     biHostCreatedAt :: !UTCTime
   }
 
+data JobBrowser = JobBrowser
+  { jbRun :: !JobRun,
+    jbScope :: !BrowserScope,
+    jbGeneration :: !Int64,
+    jbProfile :: !(Maybe (Int64, Int64)),
+    jbUncertain :: !Bool,
+    jbLastUsed :: !UTCTime,
+    jbFinished :: !(Maybe UTCTime)
+  }
+  deriving stock (Show, Eq)
+
 data BrowserRegistry = BrowserRegistry
   { brHttp :: !HttpRuntime,
     -- | Container creation locks are per conversation.  Two unrelated groups,
@@ -138,6 +156,7 @@ data BrowserRegistry = BrowserRegistry
     -- | Reference-counted operation locks include holders and waiting callers.
     brSessionLocks :: !(LockMap BrowserScope),
     brWorkspaceLocks :: !(LockMap Int64),
+    brJobs :: !(TVar (Map Int64 JobBrowser)),
     brLeases :: !(TVar (Map BrowserScope Value)),
     brRestores :: !(TVar (Map BrowserScope Value)),
     brPendingReleases :: !(TVar (Set BrowserScope)),
@@ -158,6 +177,7 @@ newBrowserRegistry runtime = do
     <*> newTVarIO Map.empty
     <*> newLockMap
     <*> newLockMap
+    <*> newTVarIO Map.empty
     <*> newTVarIO Map.empty
     <*> newTVarIO Map.empty
     <*> newTVarIO Set.empty
@@ -489,3 +509,21 @@ releaseBrowser reg entry =
   releaseRegistered
     (runRm entry.beContainer)
     (atomically $ modifyTVar' reg.brEntries (Map.delete entry.beGroup))
+
+jobBrowser :: BrowserRegistry -> Int64 -> IO (Maybe JobBrowser)
+jobBrowser registry identifier = Map.lookup identifier <$> readTVarIO registry.brJobs
+
+jobBrowsers :: BrowserRegistry -> IO [(Int64, JobBrowser)]
+jobBrowsers registry = Map.toList <$> readTVarIO registry.brJobs
+
+-- Callers hold withBrowserWorkspace for this identity.
+putJobBrowser :: BrowserRegistry -> Int64 -> JobBrowser -> IO ()
+putJobBrowser registry identifier workspace = atomically $ modifyTVar' registry.brJobs (Map.insert identifier workspace)
+
+forgetJobBrowser :: BrowserRegistry -> Int64 -> IO ()
+forgetJobBrowser registry identifier = atomically $ modifyTVar' registry.brJobs (Map.delete identifier)
+
+ensureJobBrowserLease :: BrowserRegistry -> BrowserScope -> UTCTime -> IO (Either BrowserError Value)
+ensureJobBrowserLease registry scope deadline = do
+  bound <- Map.member scope <$> readTVarIO registry.brLeases
+  if bound then pure (Right Null) else bindBrowserLease registry scope 1 deadline

@@ -50,22 +50,6 @@ operationalChecks =
       \WHERE admission_state = 'pending' AND cancelled_at IS NULL \
       \  AND parked_at IS NULL AND claim_expires_at <= now()"
     ),
-    ( "task_expired_attempt",
-      True,
-      "SELECT count(*) FROM durable_tasks work LEFT JOIN task_attempts execution ON execution.task_id=work.task_id AND execution.attempt=work.attempt AND execution.revision=work.revision WHERE work.status='running' AND (execution.turn_id IS NULL OR execution.lease_until<=now())"
-    ),
-    ( "task_overdue_deadline",
-      True,
-      "SELECT count(*) FROM durable_tasks WHERE status IN ('queued','running','waiting','retrying') AND deadline<=now()"
-    ),
-    ( "task_retrying",
-      False,
-      "SELECT count(*) FROM durable_tasks WHERE status='retrying'"
-    ),
-    ( "task_notification_exhausted",
-      True,
-      "SELECT count(*) FROM task_notifications notice JOIN durable_tasks work USING(task_id) WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.attempts>=15 AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled'"
-    ),
     ( "journal_unresolved_outcome_unknown",
       True,
       "SELECT count(*) FROM execution_journal journal \

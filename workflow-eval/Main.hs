@@ -1,11 +1,10 @@
 -- | Matched live-model serial/fan-out comparison using real source files,
--- ordinary durable child loops, the production scheduler and journal. The
+-- process-owned child loops and shared execution boundary. The
 -- read tool is frozen; this does not replay a historical production load.
 module Main (main) where
 
-import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async qualified as Async
-import Control.Exception (SomeException, bracket, finally, try)
+import Control.Exception (SomeException, bracket, finally, mask_, try)
 import Control.Monad (forM, forM_, forever, unless, void)
 import Data.Aeson hiding (Options)
 import Data.Aeson.Types (parseEither)
@@ -20,16 +19,16 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Text.IO qualified as TIO
-import Data.Time (diffUTCTime, getCurrentTime)
+import Data.Time (addUTCTime, diffUTCTime, getCurrentTime)
 import Data.Version (makeVersion)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Log (LogLevel (LogAttention), runLog)
-import Effectful.PostgreSQL (WithConnection, execute, query)
+import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Max.Agent.Execution
-import Max.Agent.Runtime (durableExecutionAdmission, runDurableAgent)
+import Max.Agent.Runtime (executionAdmission, runAgentRuntime)
 import Max.AgentEvent
 import Max.CodeMode.Execution
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion, runJavaScript)
@@ -38,28 +37,29 @@ import Max.Config (AppConfig (..), appConfigParser)
 import Max.Conversation (newConversations)
 import Max.DB.AgentTurn
 import Max.DB.Connection
+import Max.DB.Job (allocateJobId)
 import Max.DB.Migrations (runMigrations)
-import Max.DB.Task
 import Max.Effects.Agent
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.LLM
-import Max.Effects.ToolControl (ToolControl)
 import Max.Effects.Tools
 import Max.Execution.Tools
 import Max.Hash (jsonHash)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.IR (Body (..), Node (NText))
+import Max.Jobs qualified as Jobs
 import Max.Log (withCompactLogger)
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
 import Max.Platform.QQ (ensureQQEndpointFor)
 import Max.Platform.Store hiding (capabilities, fingerprint)
 import Max.Platform.Types
-import Max.Task.Admission qualified as Admission
+import Max.Skill.Contract (parseContract)
+import Max.Task.Delegation (parseJobResult)
 import Max.Task.State qualified as State
-import Max.Task.ToolRuntime (taskToolsWithDatabase)
+import Max.Task.ToolRuntime (taskTools)
 import Max.Task.Types
 import Max.Task.WorkflowRuntime (taskWorkflowHost)
-import Max.Tasks (beginDurableTurnRuntime, finishTurnRuntime, newTaskRegistry)
+import Max.Tasks (TaskRegistry, TurnRuntime, beginDurableTurnRuntime, finishTurnRuntime, newTaskRegistry)
 import Max.Tool.Catalog (catalogTools)
 import Max.ToolContext
 import Max.Tools.Schema (stringParam, toolObject)
@@ -118,113 +118,120 @@ main = do
 withDb :: DbPool -> Eff '[WithConnection, IOE] a -> IO a
 withDb pool = runEff . runWithConnectionPool pool
 
+newRoot :: DbPool -> Options -> Int64 -> Text -> Value -> Bool -> IO (TaskRegistry, Jobs.Jobs, JobView)
+newRoot pool opts group objective inputs structured = do
+  (front, message, actor) <- seed pool group
+  withDb pool (finishAgentTurn front TurnSucceeded 0 Nothing)
+  tasks <- newTaskRegistry
+  jobs <- Jobs.newJobs tasks
+  identifier <- withDb pool allocateJobId
+  now <- getCurrentTime
+  let outputContract = if structured then Just (either (error . T.unpack) id (parseContract outputSchema)) else Nothing
+      spec = JobSpec (GroupId group) actor message objective Research (taskGrants Research evalGrants) inputs Nothing outputContract False Nothing Nothing (addUTCTime (fromIntegral opts.seconds) now)
+  Right _ <- Jobs.admitJob jobs Nothing identifier spec
+  Jobs.LaunchJob root <- Jobs.takeJobWork jobs
+  pure (tasks, jobs, root)
+
+attach :: DbPool -> TaskRegistry -> Jobs.Jobs -> JobView -> IO (AgentTurnRef, TurnRuntime)
+attach pool tasks jobs job = do
+  turn <- withDb pool (startAgentTurn job.spec.group job.spec.source job.spec.principal)
+  runtime <- beginDurableTurnRuntime tasks turn job.spec.group (UserId 1) (Just job.spec.source)
+  attached <- Jobs.attachJobTurn jobs job.run turn
+  unless attached (die "evaluation job ended before launch")
+  pure (turn, runtime)
+
+release :: TaskRegistry -> Jobs.Jobs -> JobView -> TurnRuntime -> IO ()
+release tasks jobs job runtime = do
+  void (finishTurnRuntime tasks runtime)
+  Jobs.detachJobTurn jobs job.run
+
 runCase :: AppConfig -> Options -> DbPool -> Map.Map Text Text -> Int64 -> Bool -> IO Value
 runCase cfg opts pool sources group parallel = do
-  (front, message, actor) <- seed pool group
-  admission <- withDb pool (admitTaskReceipt front message actor "root" "Audit delegated-agent authority, budget and resume boundaries" Research Null (taskGrants Research grants))
-  root <- either (die . T.unpack . Admission.admissionErrorText) pure admission
-  void $ withDb pool (execute "UPDATE durable_tasks SET deadline=clock_timestamp()+?*interval '1 second' WHERE task_id=?" (opts.seconds, Admission.taskId root))
-  [parentId] <- withDb pool (claimTask "workflow-eval")
-  Just parent <- withDb pool (taskTurnRef parentId)
+  (tasks, jobs, root) <- newRoot pool opts group "Audit delegated-agent authority, budget and steering boundaries" Null False
+  (parent, parentRuntime) <- attach pool tasks jobs root
   output <- newTurnOutputContext parent
-  let context = mkToolContext (TurnIdentity (GroupId group) message (UserId 1) (UserId 3) actor Nothing (Just output)) capabilities
-      requests = [object ["objective" .= question, "profile" .= ("research" :: Text), "inputs" .= object ["files" .= files], "output_contract" .= contract] | (question, files) <- questions]
+  let context = mkToolContext (TurnIdentity root.spec.group root.spec.source (UserId 1) (UserId 3) root.spec.principal Nothing (Just output)) capabilities
+      requests = [object ["objective" .= question, "profile" .= ("research" :: Text), "inputs" .= object ["files" .= files], "output_contract" .= outputSchema] | (question, files) <- questions]
       script = "max.phase('source audit'); const requests=" <> json requests <> "; return " <> (if parallel then "max.batch(requests.map(agent=>({agent}))).map(max.value)" else "requests.map(agent)") <> ";"
-      hooks = ExecutionHooks (pure ()) (durableExecutionAdmission.eaStartTool (GroupId group) parent) finishJournalExecution markJournalOutcomeUnknown (Just (taskWorkflowHost context parent))
-      registry = either (error . show) id (buildToolRegistry (filter ((/= ToolRef "web_search") . (.tdRef)) definitions) [legacyTool name "host task marker" (toolObject [] []) (const (pure (Left "use the host primitive"))) | name <- ["task_start", "task_finish", "task_progress"]])
+      hooks = ExecutionHooks (pure ()) ((executionAdmission jobs).eaStartTool root.spec.group parent) finishJournalExecution markJournalOutcomeUnknown (Just (taskWorkflowHost jobs context parent))
+      registry = either (error . show) id (buildToolRegistry (filter ((/= ToolRef "web_search") . (.tdRef)) definitions) [legacyTool name "host task marker" (toolObject [] []) (const (pure (Left "use the host primitive"))) | name <- ["task_start", "task_progress"]])
   calls <- newIORef []
   workers <- newIORef []
-  let workerLoop = forever $ do
-        claimed <- withDb pool (claimTask "workflow-eval-child")
-        forM_ claimed $ \identifier -> do
-          worker <- Async.async (runChild cfg opts pool sources identifier calls)
-          modifyIORef' workers (worker :)
-        threadDelay 20000
-      renew = forever $ do
-        turns <- withDb pool (query "SELECT turn_id FROM task_attempts JOIN durable_tasks USING(task_id) WHERE status='running' AND conversation_id=(SELECT conversation_id FROM durable_tasks WHERE task_id=?)" (Only (Admission.taskId root)))
-        forM_ (turns :: [Only AgentTurnId]) (\(Only turn) -> void (withDb pool (renewTask turn)))
-        threadDelay 1000000
+  let workerLoop =
+        forever $
+          mask_ $
+            Jobs.takeJobWork jobs >>= \case
+              Jobs.LaunchJob child -> do
+                worker <- Async.asyncWithUnmask (\unmask -> unmask (runChild cfg opts pool sources tasks jobs child calls))
+                modifyIORef' workers (worker :)
+              Jobs.PublishJobNotice job _ _ -> Jobs.releaseJobNotice jobs job.run
+              Jobs.RecordMonitorResult _ -> die "unexpected reminder in source audit"
       cleanup = readIORef workers >>= mapM_ Async.cancel
   started <- getCurrentTime
   attempted <-
     try @SomeException $
       Async.withAsync
         workerLoop
-        ( \_ -> Async.withAsync renew $ \_ ->
-            timeout
-              (opts.seconds * 1000000)
-              ( runEff . runConcurrent . runWithConnectionPool pool . runBlob "/tmp/max-workflow-eval-blobs" . runTools registry $ do
-                  session <- newExecutionSession (Just 200)
-                  runJavaScript session (hoistExecutionHooks raise hooks) (catalogTools (registryCatalog registry)) script
-              )
+        ( \_ -> timeout (opts.seconds * 1000000) $
+            runEff . runConcurrent . runWithConnectionPool pool . runBlob "/tmp/max-workflow-eval-blobs" . runTools registry $ do
+              session <- newExecutionSession (Just 200)
+              runJavaScript session (hoistExecutionHooks raise hooks) (catalogTools (registryCatalog registry)) script
         )
         `finally` cleanup
-  let outcome = fromRight Nothing attempted
   finished <- getCurrentTime
-  rows <- withDb pool (query "SELECT status,result FROM durable_tasks WHERE parent_task_id=? ORDER BY task_id" (Only (Admission.taskId root)))
-  let children = rows :: [(Text, Maybe Value)]
-      complete = maybe False ((== WasmCompleted) . (.cmExit)) outcome && length children == length questions && all ((== "succeeded") . fst) children
-  if complete
-    then do
-      void (withDb pool (taskInbox parentId))
-      accepted <- withDb pool (taskReportTyped parentId (State.TaskReport State.ReportSucceeded "All independent source audits completed" ["workflow:" <> jsonHash (String script)] [] Nothing Nothing Nothing))
-      unless accepted (die "completed parent report rejected")
-      withDb pool (finishAgentTurn parent TurnSucceeded 0 Nothing)
-      [Only settled :: Only Text] <- withDb pool (query "SELECT status FROM durable_tasks WHERE task_id=?" (Only (Admission.taskId root)))
-      unless (settled == "succeeded") (die "parent did not settle as succeeded")
-    else do
-      _ <- withDb pool (taskControl (GroupId group) actor False (Admission.taskId root) "cancel" Nothing (Just message) "evaluation deadline or incomplete workflow")
-      withDb pool (finishAgentTurn parent TurnAborted 0 (Just "evaluation deadline or incomplete workflow"))
-  [Only sourceReads :: Only Int] <- withDb pool (query "SELECT count(*) FROM execution_journal journal JOIN task_attempts attempt USING(turn_id) JOIN durable_tasks work USING(task_id) WHERE work.parent_task_id=? AND journal.tool_ref='web_search' AND journal.state='succeeded'" (Only (Admission.taskId root)))
-  [(settledStatus, roundsReserved)] <- withDb pool (query "SELECT status,rounds_reserved FROM durable_tasks WHERE task_id=?" (Only (Admission.taskId root)))
-  settledChildren <- withDb pool (query "SELECT status FROM durable_tasks WHERE parent_task_id=? ORDER BY task_id" (Only (Admission.taskId root)))
+  children <- filter ((== Just root.run) . (.spec.parent)) <$> Jobs.listJobs jobs root.spec.group
+  let outcome = fromRight Nothing attempted
+      complete = maybe False ((== WasmCompleted) . (.cmExit)) outcome && length children == length questions && all ((== State.Succeeded) . (.status)) children
+  Jobs.completeJob jobs root.run (if complete then State.Succeeded else State.Failed) (JobResult (if complete then "All independent source audits completed" else "evaluation deadline or incomplete workflow") Nothing)
+  withDb pool (finishAgentTurn parent (if complete then TurnSucceeded else TurnFailed) 0 Nothing)
+  release tasks jobs root parentRuntime
+  Just settled <- Jobs.lookupJob jobs root.spec.group root.run.jobId
+  [Only sourceReads :: Only Int] <- withDb pool (query "SELECT count(*) FROM execution_journal journal JOIN agent_turns turn USING(turn_id) JOIN conversations USING(conversation_id) WHERE legacy_group_id=? AND journal.tool_ref='web_search' AND journal.state='succeeded'" (Only group))
   records <- reverse <$> readIORef calls
   let usages = [usage | c <- records, Just usage <- [c.crUsage]]
   putStrLn ((if parallel then "parallel" else "serial") <> ": " <> show complete <> ", " <> show (diffUTCTime finished started))
-  pure (object ["mode" .= (if parallel then "parallel" else "serial" :: Text), "completed" .= complete, "started_at" .= started, "seconds" .= (realToFrac (diffUTCTime finished started) :: Double), "model_calls" .= length records, "model_rounds_reserved" .= (roundsReserved :: Int), "usage_complete" .= (length usages == roundsReserved), "settled_parent_status" .= (settledStatus :: Text), "settled_child_statuses" .= [status | Only (status :: Text) <- settledChildren], "actual_models" .= Set.toList (Set.fromList (map (.crModel) records)), "usage_records" .= length usages, "prompt_tokens" .= sum (map (.usagePrompt) usages), "completion_tokens" .= sum (map (.usageCompletion) usages), "children" .= [object ["status" .= status, "report" .= result] | (status, result) <- children], "workflow_output" .= (outcome >>= (.cmOutput)), "source_reads" .= sourceReads])
+  pure (object ["mode" .= (if parallel then "parallel" else "serial" :: Text), "completed" .= complete, "started_at" .= started, "seconds" .= (realToFrac (diffUTCTime finished started) :: Double), "model_calls" .= length records, "model_rounds_reserved" .= settled.rounds, "usage_complete" .= (length usages == settled.rounds), "settled_parent_status" .= settled.status, "settled_child_statuses" .= map (.status) children, "actual_models" .= Set.toList (Set.fromList (map (.crModel) records)), "usage_records" .= length usages, "prompt_tokens" .= sum (map (.usagePrompt) usages), "completion_tokens" .= sum (map (.usageCompletion) usages), "children" .= children, "workflow_output" .= (outcome >>= (.cmOutput)), "source_reads" .= sourceReads])
 
--- One ordinary model loop over the full same objective is a stronger baseline
--- than serial delegation. It must be measured, not inferred from script timing.
 runOrdinary :: AppConfig -> Options -> DbPool -> Map.Map Text Text -> Int64 -> IO Value
 runOrdinary cfg opts pool sources group = do
-  (front, message, actor) <- seed pool group
-  let inputs = object ["files" .= Map.keys sources, "output_contract" .= contract]
-  admission <- withDb pool (admitTaskReceipt front message actor "ordinary" (T.intercalate "\n" (map fst questions)) Research inputs (taskGrants Research grants))
-  root <- either (die . T.unpack . Admission.admissionErrorText) pure admission
-  void $ withDb pool (execute "UPDATE durable_tasks SET deadline=clock_timestamp()+?*interval '1 second' WHERE task_id=?" (opts.seconds, Admission.taskId root))
-  [identifier] <- withDb pool (claimTask "ordinary-eval")
+  (tasks, jobs, root) <- newRoot pool opts group (T.intercalate "\n" (map fst questions)) (object ["files" .= Map.keys sources]) True
   records <- newIORef []
   started <- getCurrentTime
-  let renew = forever (void (withDb pool (renewTask identifier)) >> threadDelay 1000000)
-  _ <- try @SomeException (Async.withAsync renew (\_ -> timeout (opts.seconds * 1000000) (runChild cfg opts pool sources identifier records)))
+  _ <- try @SomeException (timeout (opts.seconds * 1000000) (runChild cfg opts pool sources tasks jobs root records))
   finished <- getCurrentTime
-  [(status, result, roundsReserved)] <- withDb pool (query "SELECT status,result,rounds_reserved FROM durable_tasks WHERE task_id=?" (Only (Admission.taskId root)))
-  let complete = (status :: Text) == "succeeded"
-  unless complete $ void $ withDb pool (taskControl (GroupId group) actor False (Admission.taskId root) "cancel" Nothing (Just message) "ordinary evaluation ended")
-  [Only settledStatus :: Only Text] <- withDb pool (query "SELECT status FROM durable_tasks WHERE task_id=?" (Only (Admission.taskId root)))
+  Just settled <- Jobs.lookupJob jobs root.spec.group root.run.jobId
+  let complete = settled.status == State.Succeeded
   calls <- readIORef records
-  [Only sourceReads :: Only Int] <- withDb pool (query "SELECT count(*) FROM execution_journal WHERE turn_id=? AND tool_ref='web_search' AND state='succeeded'" (Only identifier))
+  [Only sourceReads :: Only Int] <- withDb pool (query "SELECT count(*) FROM execution_journal journal JOIN agent_turns turn USING(turn_id) JOIN conversations USING(conversation_id) WHERE legacy_group_id=? AND journal.tool_ref='web_search' AND journal.state='succeeded'" (Only group))
   let usages = [usage | call <- calls, Just usage <- [call.crUsage]]
       elapsed = realToFrac (diffUTCTime finished started) :: Double
   putStrLn ("ordinary: " <> show complete <> ", " <> show elapsed)
-  pure (object ["mode" .= ("ordinary" :: Text), "completed" .= complete, "seconds" .= elapsed, "started_at" .= started, "result" .= (result :: Maybe Value), "model_calls" .= length calls, "model_rounds_reserved" .= (roundsReserved :: Int), "usage_complete" .= (length usages == roundsReserved), "settled_parent_status" .= settledStatus, "source_reads" .= sourceReads, "actual_models" .= Set.toList (Set.fromList (map (.crModel) calls)), "prompt_tokens" .= sum (map (.usagePrompt) usages), "completion_tokens" .= sum (map (.usageCompletion) usages), "usage_records" .= length usages])
+  pure (object ["mode" .= ("ordinary" :: Text), "completed" .= complete, "seconds" .= elapsed, "started_at" .= started, "result" .= settled.result, "model_calls" .= length calls, "model_rounds_reserved" .= settled.rounds, "usage_complete" .= (length usages == settled.rounds), "settled_parent_status" .= settled.status, "source_reads" .= sourceReads, "actual_models" .= Set.toList (Set.fromList (map (.crModel) calls)), "prompt_tokens" .= sum (map (.usagePrompt) usages), "completion_tokens" .= sum (map (.usageCompletion) usages), "usage_records" .= length usages])
 
-runChild :: AppConfig -> Options -> DbPool -> Map.Map Text Text -> AgentTurnId -> IORef [CallRecord] -> IO ()
-runChild cfg opts pool sources identifier records = do
-  conversations <- newConversations
-  Just task <- withDb pool (loadTaskExecution identifier)
-  output <- newTurnOutputContext task.teTurn
-  tasks <- newTaskRegistry
-  turn <- beginDurableTurnRuntime tasks task.teTurn task.teGroup (UserId 1) (Just task.teSeed)
-  runtime <- newHttpRuntime
-  let context = mkToolContext (TurnIdentity task.teGroup task.teSeed (UserId 1) (UserId 3) task.tePrincipal Nothing (Just output)) capabilities {tcEffectCeiling = Just task.teGrants}
-      messages = [MsgSystem "You are Max's bounded research child. Read every provided file using web_search(query=exact file path); this tool returns a frozen real repository source, with source:path as its citation. Analyze the objective using those reads. Return task_finish with status, summary, evidence, unresolved, and payload as a native JSON object (never a JSON-encoded string) matching output_contract: claims contains concrete findings about implementation, sources contains every source:path read. Never delegate or run_code. Shape does not establish correctness; report partial if evidence is insufficient. Do not claim a production deployment or performance benefit.", MsgUser (task.teObjective <> "\n" <> json task.teInputs)]
-  result <- withCompactLogger cfg.logColor Nothing $ \logger -> runEff . runConcurrent . runLog "max-workflow-eval" logger LogAttention . runWithConnectionPool pool . runBlob "/tmp/max-workflow-eval-blobs" . runLLM runtime (\_ _ _ -> pure ()) (\call -> atomicModifyIORef' records (\xs -> (call : xs, ()))) cfg.llm . runDurableAgent conversations (AgentLimits 12) (factory sources) $ agentTurn turn (AgentContext context Nothing (Just 24)) opts.profile messages silentSink
-  void (finishTurnRuntime tasks turn)
-  withDb pool (finishAgentTurn task.teTurn (if isNothing result.aborted then TurnSucceeded else TurnFailed) result.turnsUsed Nothing)
+runChild :: AppConfig -> Options -> DbPool -> Map.Map Text Text -> TaskRegistry -> Jobs.Jobs -> JobView -> IORef [CallRecord] -> IO ()
+runChild cfg opts pool sources tasks jobs job records =
+  bracket (attach pool tasks jobs job) cleanup $ \(turn, taskRuntime) -> do
+    conversations <- newConversations
+    output <- newTurnOutputContext turn
+    runtime <- newHttpRuntime
+    let context = mkToolContext (TurnIdentity job.spec.group job.spec.source (UserId 1) (UserId 3) job.spec.principal Nothing (Just output)) capabilities {tcEffectCeiling = Just job.spec.grants}
+        messages = [MsgSystem "Read every provided file using web_search(query=exact file path). It returns frozen repository source with source:path as its citation. Analyze the objective using those reads. End with one JSON value matching output_contract: claims contains concrete findings, sources contains every source:path read. Never delegate or run_code. Shape does not establish correctness; acknowledge insufficient evidence in the claims. Do not claim deployment or measured performance benefits.", MsgUser (job.spec.objective <> "\n" <> json job.spec.inputs <> "\noutput_contract: " <> json job.spec.contract)]
+    result <- withCompactLogger cfg.logColor Nothing $ \logger -> runEff . runConcurrent . runLog "max-workflow-eval" logger LogAttention . runWithConnectionPool pool . runBlob "/tmp/max-workflow-eval-blobs" . runLLM runtime (\_ _ _ -> pure ()) (\call -> atomicModifyIORef' records (\xs -> (call : xs, ()))) cfg.llm . runAgentRuntime jobs conversations (AgentLimits 12) (factory jobs sources) $ agentTurn taskRuntime (AgentContext context Nothing (Just 24)) opts.profile messages silentSink
+    let answer = if isNothing result.aborted then maybe (Left "empty response") (parseJobResult job.spec) result.reply else Left "agent aborted"
+    case answer of
+      Right value -> Jobs.completeJob jobs job.run State.Succeeded value
+      Left detail -> Jobs.completeJob jobs job.run State.Failed (JobResult detail Nothing)
+    withDb pool (finishAgentTurn turn (either (const TurnFailed) (const TurnSucceeded) answer) result.turnsUsed Nothing)
+  where
+    cleanup (turn, taskRuntime) =
+      ( do
+          Jobs.completeJob jobs job.run State.Failed (JobResult "evaluation interrupted" Nothing)
+          withDb pool (finishAgentTurn turn TurnCancelled 0 (Just "evaluation ended"))
+      )
+        `finally` release tasks jobs job taskRuntime
 
-factory :: (WithConnection :> es, Blob :> es, IOE :> es, ToolControl :> es) => Map.Map Text Text -> ToolContext -> Either ToolCatalogError (ToolRegistry es)
-factory sources context = buildToolRegistry definitions (readerTool : filter (\tool -> tool.toolName `elem` ["task_start", "task_finish", "task_progress"]) (taskToolsWithDatabase context))
+factory :: (WithConnection :> es, Blob :> es, IOE :> es) => Jobs.Jobs -> Map.Map Text Text -> ToolContext -> Either ToolCatalogError (ToolRegistry es)
+factory jobs sources context = buildToolRegistry definitions (readerTool : filter (\tool -> tool.toolName `elem` ["task_start", "task_progress"]) (taskTools jobs context))
   where
     readerTool = legacyTool "web_search" "Read frozen repository source. query must equal an input file path." (toolObject [("query", stringParam "Exact file path")] ["query"]) $ \args -> pure $ do
       path <- either (Left . T.pack) Right (parseEither (withObject "source read" (.: "query")) args)
@@ -232,24 +239,24 @@ factory sources context = buildToolRegistry definitions (readerTool : filter (\t
       Right (object ["source" .= ("source:" <> path), "body" .= body, "fingerprint" .= jsonHash (String body)])
 
 definitions :: [ToolDefinition]
-definitions = [ToolDefinition (ToolRef name) (SchemaVersion 1) (Set.singleton (if name == "web_search" then EffectRead "source" else EffectWrite "task.db")) SequentialOnly (if name == "web_search" then RetrySafe else RetryUnsafe) (Set.singleton CurrentConversation) (ToolDeadline 30) True mode | (name, mode) <- [("web_search", WorkCall), ("task_start", WorkCall), ("task_finish", FinishCall), ("task_progress", CheckpointCall)]]
+definitions = [ToolDefinition (ToolRef name) (SchemaVersion 1) (Set.singleton (if name == "web_search" then EffectRead "source" else EffectWrite "task.db")) SequentialOnly (if name == "web_search" then RetrySafe else RetryUnsafe) (Set.singleton CurrentConversation) (ToolDeadline 30) True mode | (name, mode) <- [("web_search", WorkCall), ("task_start", WorkCall), ("task_progress", CheckpointCall)]]
 
-grants :: Map.Map Text Text
-grants = Map.fromList [(entry.tdRef.unToolRef, toolCatalogFingerprint [entry]) | entry <- definitions]
+evalGrants :: Map.Map Text Text
+evalGrants = Map.fromList [(entry.tdRef.unToolRef, toolCatalogFingerprint [entry]) | entry <- definitions]
 
 capabilities :: TurnCapabilities
-capabilities = TurnCapabilities False False False noAdvertisedCaps False grants (Just grants) True
+capabilities = TurnCapabilities False False False noAdvertisedCaps False evalGrants (Just evalGrants) True
 
-contract :: Value
-contract = object ["type" .= ("object" :: Text), "properties" .= object ["claims" .= strings, "sources" .= strings], "required" .= (["claims", "sources"] :: [Text]), "additionalProperties" .= False]
+outputSchema :: Value
+outputSchema = object ["type" .= ("object" :: Text), "properties" .= object ["claims" .= strings, "sources" .= strings], "required" .= (["claims", "sources"] :: [Text]), "additionalProperties" .= False]
   where
     strings = object ["type" .= ("array" :: Text), "items" .= object ["type" .= ("string" :: Text), "minLength" .= (1 :: Int)], "minItems" .= (1 :: Int)]
 
 questions :: [(Text, [Text])]
 questions =
-  [ ("Audit whether agent() can widen its parent's authority. Identify the actual rejection and intersection points and any limits of the evidence.", ["src/Max/DB/Task/Workflow.hs", "src/Max/Task/Types.hs"]),
-    ("Audit whether two awaited siblings can overspend the shared call/round budget and whether waiting parents can deadlock task capacity. Cite actual locks and counters.", ["src/Max/DB/Task/Authorization.hs", "src/Max/DB/Task/Scheduling.hs", "src/Max/DB/Task/Record.hs", "src/Max/DB/Task/Admission.hs", "src/Max/DB/ConversationLock.hs"]),
-    ("Audit cache reuse, invalidation and steering boundaries. Explain what editing a source step reuses, and identify any cancellation or provenance gaps.", ["src/Max/Task/WorkflowRuntime.hs", "src/Max/CodeMode/Execution.hs", "src/Max/DB/Task/Workflow.hs", "src/Max/Task/Delegation.hs"])
+  [ ("Audit whether agent() can widen its parent's authority. Identify the actual rejection and intersection points and any limits of the evidence.", ["src/Max/Task/WorkflowRuntime.hs", "src/Max/Task/Types.hs"]),
+    ("Audit whether two awaited siblings can overspend the shared call/round budget and whether waiting parents can deadlock task capacity. Cite actual STM transactions and counters.", ["src/Max/Jobs.hs", "src/Max/DB/Job.hs"]),
+    ("Audit steering and cancellation boundaries. Explain whether explicitly rerunning a script creates new work and identify provenance gaps.", ["src/Max/Task/WorkflowRuntime.hs", "src/Max/CodeMode/Execution.hs", "src/Max/Task/Delegation.hs"])
   ]
 
 silentSink :: (Applicative m) => AgentEventSink m

@@ -21,9 +21,9 @@
 - `agent({objective, inputs, profile, output_contract?})`（也可写 `max.agent`）：
   在根后台任务中启动普通子任务并等待报告。profile 为 research/browser/sandbox，
   只收窄父任务当前权限；SSH 运维使用 sandbox 并加载 operations 技能；inputs 是最多 64 KiB 请求内的显式 JSON 数据。
-  返回 `{task,status,findings,evidence,unresolved,payload,payload_valid,reused,original_execution}`。
-  output_contract 使用技能的闭合 JSON Schema 子集；子任务通过 task_finish.payload
-  返回结构化结果。形状正确不会把 partial/failed 变成 succeeded。
+  返回 `{task,status,text,payload}`。未指定 output_contract 时，子任务直接回答即可。
+  指定时使用技能的闭合 JSON Schema 子集；子任务以符合契约的 JSON 作为最终答案，
+  宿主验证后放入 payload。契约只验证形状，不证明内容正确。
 - `max.batch([{agent:{objective,inputs,profile,output_contract?}}, ...])`：表达独立子任务。
   宿主决定并发，按原顺序返回 outcome。与工具混合的 batch 顺序执行。
   `Promise.all([agent(...),agent(...)])` 不会并发；请使用 max.batch。
@@ -49,7 +49,7 @@ JSON 和 Promise。没有 Node、浏览器 API、import/require、console、计�
 
 所有叶子调用沿用原生工具的权限、调用额度和持久化 journal。代码不获得新
 权限，不能递归 run_code。在代码里加载技能只对下一模型回合生效，当前程序
-仍使用启动时的工具集合。结束/让出回合由宿主立即终止程序，之后代码不执行。
+仍使用启动时的工具集合。取消或收到待处理反馈时，宿主可以终止程序，之后代码不执行。
 
 失败不会回滚先前的效果。工具和整段代码都不会自动重试；遇到 committed 或
 outcome-unknown 时先查明现状，不能直接重跑整段程序。宿主返回部分调用回执，
@@ -65,9 +65,7 @@ outcome-unknown 时先查明现状，不能直接重跑整段程序。宿主返�
 二选一。保存流程只能调用其声明且当前仍获授权的工具；契约变化会在执行前拒绝。
 结果包含 run_ref 和工作流版本。输出契约错误也不会撤销已完成的工具效果。
 
-子任务复用：同一父任务 revision 内，未改变的 agent 参数与已加载技能 receipt
-复用已结算子任务报告；修改一个调用只新建那个子任务。源码修改有新的 step_key，
-复用会记录原 journal 引用；它不重放普通 tools 调用的副作用。取消、替换父任务或
-改变已加载技能版本都会禁止旧报告复用。子任务不能再执行 run_code/agent。
+每次显式调用 agent 都创建新子任务，包括重跑同一段程序。子任务不能再执行
+run_code/agent。任务和等待只在当前进程内存在；重启不会续跑或重放。
 收到 steering 时宿主在 agent 边界停止程序，由父任务下一模型回合读取收件箱；
-已有子任务保留身份，不会因停止等待而自动重复执行。
+已启动的子任务继续运行。可以通过 task_status/task_wait 收集它们，避免重复启动。

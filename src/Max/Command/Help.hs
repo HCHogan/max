@@ -30,7 +30,7 @@ helpText Nothing =
       "  !unpin [id|all]          移除 pin（同上语法 + all 清空）",
       "  !pins                    列出当前 pin 的消息",
       "  !btw <text>              另起一个问题，不打扰在跑的任务",
-      "  !task list/status/steer/cancel/replace  操作持久化 task#；replace 需要 revision",
+      "  !task list/status/steer/cancel/replace  操作当前进程的 task#；replace 直接提供新目标",
       "  !feedback <text>        补充当前自己的前台请求（别名 !fb）；没有前台时作为新请求",
       "  !feedback task#N <text>  给指定后台任务补一句，也可回复任务关联消息",
       "  !memory                  看本群的长期记忆",

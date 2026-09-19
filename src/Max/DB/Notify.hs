@@ -22,7 +22,7 @@ import Effectful.PostgreSQL.Connection (WithConnection, withConnection)
 import Max.DB.Transaction (withPinnedConnection)
 import System.Timeout (timeout)
 
-data WorkChannel = DispatchWork | DeliveryWork | MonitorWork | TaskWork
+data WorkChannel = DispatchWork | DeliveryWork | MonitorWork
   deriving stock (Eq, Show)
 
 claimOrWait ::
@@ -58,14 +58,12 @@ listenQuery = \case
   DispatchWork -> "LISTEN max_dispatch_work"
   DeliveryWork -> "LISTEN max_delivery_work"
   MonitorWork -> "LISTEN max_monitor_work"
-  TaskWork -> "LISTEN max_task_work"
 
 unlistenQuery :: WorkChannel -> Query
 unlistenQuery = \case
   DispatchWork -> "UNLISTEN max_dispatch_work"
   DeliveryWork -> "UNLISTEN max_delivery_work"
   MonitorWork -> "UNLISTEN max_monitor_work"
-  TaskWork -> "UNLISTEN max_task_work"
 
 notificationFallbackMicros :: Int
 notificationFallbackMicros = 30 * 1_000_000

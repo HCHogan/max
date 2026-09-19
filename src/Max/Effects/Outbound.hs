@@ -14,6 +14,7 @@ module Max.Effects.Outbound
   )
 where
 
+import Control.Monad (forM_)
 import Data.Aeson (object, (.=))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -23,6 +24,7 @@ import Effectful.Exception (SomeException)
 import Effectful.Log (Log, logAttention)
 import Effectful.PostgreSQL (WithConnection)
 import Max.IR
+import Max.Jobs qualified as Jobs
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Monitor.Types (MonitorFireId)
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
@@ -82,13 +84,16 @@ runOutbound ::
   forall es a.
   (WithConnection :> es, Log :> es, IOE :> es) =>
   TaskRegistry ->
+  Jobs.Jobs ->
   Eff (Outbound : es) a ->
   Eff es a
-runOutbound tasks = runOutboundWith deliver
+runOutbound tasks jobs = runOutboundWith deliver
   where
     deliver :: OutboundRequest -> Eff es PublicationResult
     deliver req = do
-      allowed <- maybe (pure True) (liftIO . authorizeTurnOutput tasks req.orGroupId . (.tolTurnId)) req.orTurnOutput
+      allowed <- case req.orTurnOutput of
+        Nothing -> pure True
+        Just link -> liftIO $ (&&) <$> authorizeTurnOutput tasks req.orGroupId link.tolTurnId <*> Jobs.authorizeJobPublication jobs link.tolTurnId
       if allowed then publish req else failed req "turn publication was cancelled or its runtime ended"
 
     publish req = do
@@ -107,7 +112,9 @@ runOutbound tasks = runOutboundWith deliver
               }
       trySync (enqueueOutbound draft) >>= \case
         Left e -> failed req ("canonical publish failed: " <> T.pack (show (e :: SomeException)))
-        Right queued -> pure (Published queued.canonicalMessageId)
+        Right queued -> do
+          forM_ req.orTurnOutput $ \link -> liftIO (Jobs.recordJobPublication jobs link.tolTurnId queued.canonicalMessageId)
+          pure (Published queued.canonicalMessageId)
 
     failed :: OutboundRequest -> Text -> Eff es PublicationResult
     failed req reason = do

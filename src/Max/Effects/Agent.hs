@@ -66,7 +66,7 @@ import Max.Tasks
     turnRuntimeAgentTurn,
   )
 import Max.Tool.Bundles (SkillLoad (..))
-import Max.Tool.Control (LoopControl (..), controlReply, controlSkillLoads, mergeControls)
+import Max.Tool.Control (LoopControl, controlSkillLoads)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolContextLimits, toolGroupId, toolSkillLoads, toolTurnOutputContext, withToolInvocationIdentity, withToolSkillLoads)
 import Max.Turn.Types (AgentTurnRef (..), turnHandleText, turnOutputAgentTurn)
 import OneBot.Types (GroupId (..))
@@ -319,23 +319,10 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
               let toolMsgs = [message | (message, _, _) <- executed]
               imgs <- drainToolMedia
               let newMsgs = assembleToolRound raw tcs toolMsgs imgs
-                  control = mergeControls [decision | (_, _, decision) <- executed]
                   nextContext = ctx {acTools = withToolSkillLoads (concatMap (\(_, _, decision) -> controlSkillLoads decision) executed) ctx.acTools}
-              case controlReply control of
-                Just finalReply ->
-                  pure
-                    AgentResult
-                      { reply = finalReply,
-                        appended = appended' <> newMsgs,
-                        turnsUsed = n + 1,
-                        aborted = Nothing,
-                        sentPrefix = sent
-                      }
-                Nothing ->
-                  if overBudget
-                    then finalAnswer workingRef ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
-                    else
-                      go workingRef session catalogRef emit nextContext h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+              if overBudget
+                then finalAnswer workingRef ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                else go workingRef session catalogRef emit nextContext h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
 
     budgetedCall ::
       TVar (Maybe UsageAnchor, Text) ->

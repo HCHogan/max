@@ -8,9 +8,10 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Effectful (liftIO, runEff, runPureEff)
 import Effectful.Concurrent (runConcurrent, threadDelay)
-import Max.Effects.ToolControl (finishExecution, runToolControl, yieldFrontend)
+import Max.Effects.ToolControl (activateSkills, runToolControl)
 import Max.Effects.ToolDirectory (listCatalogTools, listToolSpecs, runToolDirectory)
 import Max.Effects.Tools
+import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Tool.Control (LoopControl (..))
 import Max.Toolset (toolAllowedByEffectCeiling)
 import Max.Turn.Continuity (toolCatalogFingerprint)
@@ -54,24 +55,27 @@ readTool =
       toolRunner = LegacyRunner $ pure . Right
     }
 
+skill :: SkillLoad
+skill = SkillLoad "test" (skillLoadVersion "trusted instructions") "trusted instructions" Nothing Nothing
+
 spec :: Spec
 spec = describe "validated tool kernel" $ do
   it "keeps successful host control separate from the JSON result" $ do
-    let runner = readTool {toolRunner = LegacyRunner $ \_ -> finishExecution (Just "done") >> pure (Right (object ["error" .= ("model-facing data" :: String)]))}
-    catalog <- expectCatalog (buildToolRegistry [readDefinition {tdParallelism = SequentialOnly, tdCallMode = FinishCall}] [runner])
+    let runner = readTool {toolRunner = LegacyRunner $ \_ -> activateSkills [skill] >> pure (Right (object ["error" .= ("model-facing data" :: String)]))}
+    catalog <- expectCatalog (buildToolRegistry [readDefinition {tdParallelism = SequentialOnly, tdEffects = Set.singleton EffectReflect, tdRetryClass = RetryUnsafe}] [runner])
     invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
-    invocation.tiControl `shouldBe` FinishLoop (Just "done")
+    invocation.tiControl `shouldBe` LoadSkills [skill]
     invocation.tiOutcome `shouldBe` ToolSucceeded (object ["error" .= ("model-facing data" :: String)])
 
   it "discards a control request from a runner that subsequently fails" $ do
-    let runner = readTool {toolRunner = LegacyRunner $ \_ -> yieldFrontend "not committed" >> pure (Left "failed")}
+    let runner = readTool {toolRunner = LegacyRunner $ \_ -> activateSkills [skill] >> pure (Left "failed")}
     catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
     invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
     invocation.tiControl `shouldBe` ContinueLoop
     invocation.tiOutcome `shouldSatisfy` (\case ToolFailedBeforeEffect _ -> True; _ -> False)
 
   it "rejects host control that conflicts with the declared execution mode" $ do
-    let runner = readTool {toolRunner = LegacyRunner $ \_ -> finishExecution (Just "wrong mode") >> pure (Right (object []))}
+    let runner = readTool {toolRunner = LegacyRunner $ \_ -> activateSkills [skill] >> pure (Right (object []))}
     catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
     invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
     invocation.tiControl `shouldBe` ContinueLoop
@@ -83,8 +87,7 @@ spec = describe "validated tool kernel" $ do
     invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
     invocation.tiControl `shouldBe` ContinueLoop
 
-  it "requires checkpoint and finish metadata to be sequential" $ do
-    buildToolRegistry [readDefinition {tdCallMode = FinishCall}] [readTool] `shouldSatisfy` isInvalidMetadata
+  it "requires checkpoint metadata to be sequential" $ do
     buildToolRegistry [readDefinition {tdCallMode = CheckpointCall}] [readTool] `shouldSatisfy` isInvalidMetadata
 
   it "rejects duplicate definitions and runners" $ do

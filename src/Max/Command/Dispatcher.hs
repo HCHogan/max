@@ -11,6 +11,7 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
+import Control.Monad (forM_)
 import Data.Int (Int64)
 import Data.List (sort)
 import Data.Map.Strict qualified as Map
@@ -28,11 +29,11 @@ import Max.Command.Help (helpText)
 import Max.Command.Types
 import Max.Command.Version (readHostUptime, readOsPretty, versionCard)
 import Max.ConversationScope (conversationScopeFor)
-import Max.DB.Browser (revokeConversationBrowsers)
 import Max.DB.History (HistoryItem (..), bestName, fetchMessageInScope, fetchMessagesByIdsInScope)
 import Max.DB.Stickers qualified as Stickers
 import Max.Env (BotEnv (..))
 import Max.Intent (IntentConfig (..))
+import Max.Jobs qualified as Jobs
 import Max.MemoryStore
   ( ExpectedVersion (..),
     MemoryActor (..),
@@ -55,6 +56,7 @@ import Max.Sandbox.Runtime (ExecResult (..))
 import Max.Session (Session (..), SessionHandle, updateSession)
 import Max.Session qualified as Session
 import Max.Skills (skillsForGroup)
+import Max.Task.Types (JobView (..))
 import Max.Tasks
   ( TaskId (..),
     TaskInfo (..),
@@ -192,7 +194,8 @@ execute t gid uid senderPrincipal replyTarget cmd = do
       now <- liftIO getCurrentTime
       updateSession t (\s -> (Session.clearAll now s, ()))
       n <- liftIO (destroySandboxesForGroup env.beSandboxes gid)
-      revokeConversationBrowsers gid
+      jobs <- liftIO (Jobs.listJobs env.beJobs gid)
+      forM_ jobs $ \job -> liftIO (Jobs.setJobBrowserAccess env.beJobs job.run False)
       nb <- liftIO (destroyBrowsersForGroup env.beBrowsers gid)
       logInfo "session: clear --all" $
         object ["sandboxes_destroyed" .= n, "browsers_destroyed" .= nb]

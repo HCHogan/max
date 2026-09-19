@@ -3,10 +3,7 @@
 module Max.Task.Delegation
   ( AgentRequest (..),
     parseAgentRequest,
-    agentCallKey,
-    agentCallKeys,
-    agentReport,
-    validateAgentPayload,
+    parseJobResult,
   )
 where
 
@@ -15,12 +12,10 @@ import Data.Aeson
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (parseEither)
 import Data.ByteString.Lazy qualified as LBS
-import Data.Foldable (traverse_)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Max.Hash (jsonHash)
+import Data.Text.Encoding qualified as TE
 import Max.Skill.Contract (Contract, validateValue)
-import Max.Task.State
 import Max.Task.Types
 
 data AgentRequest = AgentRequest
@@ -49,35 +44,19 @@ parseAgentRequest raw = do
   unless (not (T.null request.objective) && T.length request.objective <= 40000 && LBS.length (encode raw) <= 65536) (Left "agent objective/input exceeds its bound")
   pure request
 
--- Source edits create new journal steps. Unchanged semantic calls can still
--- reuse their child in the same parent revision. Loaded receipts are part of
--- the call identity, so a package update invalidates that reuse.
-agentCallKey :: Value -> AgentRequest -> Text
-agentCallKey receipts request = "agent:" <> jsonHash (object ["receipts" .= receipts, "request" .= request])
-
--- Reuse pre-unification operations children instead of starting their effects
--- again. Both names now execute as Sandbox; only new steps use the canonical key.
-agentCallKeys :: Value -> AgentRequest -> [Text]
-agentCallKeys receipts request =
-  agentCallKey receipts request
-    : [ "agent:" <> jsonHash (object ["receipts" .= receipts, "request" .= Object (KM.insert "profile" (String "operations") fields)])
-      | request.profile == Sandbox,
-        Object fields <- [toJSON request]
-      ]
-
-validateAgentPayload :: Maybe Contract -> TaskReport -> Either Text ()
-validateAgentPayload Nothing _ = Right ()
-validateAgentPayload (Just contract) report
-  | report.status == ReportSucceeded = maybe (Left "succeeded requires payload for the requested output_contract") (validateValue contract) report.payload
-  | otherwise = traverse_ (validateValue contract) report.payload
-
-agentReport :: TaskStatus -> TaskReport -> Maybe Contract -> Value
-agentReport status report contract =
-  object
-    [ "status" .= status,
-      "findings" .= report.summary,
-      "evidence" .= report.evidence,
-      "unresolved" .= report.unresolved,
-      "payload" .= (if validateAgentPayload contract report == Right () then report.payload else Nothing),
-      "payload_valid" .= either (const False) (const True) (validateAgentPayload contract report)
-    ]
+parseJobResult :: JobSpec -> Text -> Either Text JobResult
+parseJobResult spec body = do
+  unless (not (T.null (T.strip body)) && T.length body <= 40000) (Left "job response is empty or exceeds its bound")
+  case spec.contract of
+    Nothing -> Right (JobResult body Nothing)
+    Just contract -> do
+      payload <- either (Left . T.pack) Right (eitherDecodeStrict' (TE.encodeUtf8 body))
+      validateValue contract payload
+      summary <- case spec.monitor of
+        Nothing -> Right body
+        Just _ -> do
+          (summary, observation) <- either (Left . T.pack) Right $ parseEither (withObject "monitor result" $ \fields -> (,) <$> fields .: "summary" <*> fields .: "observation") payload
+          case observation of
+            Object fields | not (KM.null fields) && not (T.null (T.strip summary)) -> Right summary
+            _ -> Left "change-only reminder requires a nonempty observation and summary"
+      Right (JobResult summary (Just payload))

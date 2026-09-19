@@ -29,14 +29,15 @@ import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
 import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.FilesSpec qualified as FilesSpec
 import Max.DB.HistorySpec qualified as HistorySpec
+import Max.DB.JobSpec qualified as JobSpec
 import Max.DB.MediaSpec qualified as MediaSpec
 import Max.DB.Migrations (runMigrations)
+import Max.DB.MonitorJobsSpec qualified as MonitorJobsSpec
 import Max.DB.MonitorSpec qualified as MonitorSpec
 import Max.DB.ProgressSpec qualified as ProgressSpec
 import Max.DB.ProjectionSpec qualified as ProjectionSpec
 import Max.DB.QQBackfillSpec qualified as QQBackfillSpec
 import Max.DB.SessionSpec qualified as SessionSpec
-import Max.DB.TaskSpec qualified as TaskSpec
 import Max.DB.TransactionSpec qualified as TransactionSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
 import Max.ExecutionSpec qualified as ExecutionSpec
@@ -79,7 +80,7 @@ main = do
         SessionSpec.spec pool
         TransactionSpec.spec pool
         AgentTurnSpec.spec pool
-        TaskSpec.spec pool
+        JobSpec.spec pool
         ProgressSpec.spec pool
         BrowserSpec.spec pool
         ConnectionSpec.spec pool
@@ -100,6 +101,7 @@ main = do
         MediaSpec.spec pool
         FetchQueueSpec.spec pool
         MonitorSpec.spec pool
+        MonitorJobsSpec.spec pool
         QQBackfillSpec.spec pool
         RecallSpec.spec pool
         PromptIntegrationSpec.spec pool

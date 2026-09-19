@@ -1,5 +1,10 @@
 # ADR008: one coordinated task cutover
 
+> Historical design. The September 19 [simplification](../simplification.md)
+> replaces task leases, restart continuation and automatic browser checkpoints
+> with process-owned Jobs. See [current job operations](../runbooks/jobs.md).
+
+
 > Historical cutover record. The current runtime uses normal final replies,
 > direct task notices and a bounded process-local foreground queue. Foreground
 > leases, request ledgers and foreground restart continuation have been retired.

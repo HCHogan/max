@@ -27,6 +27,7 @@ import Max.Effects.LLM
 import Max.Effects.Outbound (runOutbound)
 import Max.Effects.Tools (buildToolRegistry)
 import Max.HttpRuntime (httpRuntimeFromManagers)
+import Max.Jobs (newJobs)
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.ModelCatalog (defaultModelName)
 import Max.Platform (PlatformBackend (..))
@@ -59,6 +60,7 @@ spec pool = before_ (truncateAll pool) $
         providerEnded <- newIORef False
         sendCount <- newIORef (0 :: Int)
         tasks <- newTaskRegistry
+        jobs <- newJobs tasks
         turn <- beginTurnRuntime tasks (GroupId 900) (UserId 123) (Just source)
         budget <- newTVarIO freshBudget
         let first = "This is a deliberately long first sentence sent while the model is still generating."
@@ -111,7 +113,7 @@ spec pool = before_ (truncateAll pool) $
               . runWithConnectionPool pool
               . runBlob "var/images"
               . runLLM runtime (\_ _ _ -> pure ()) (\_ -> pure ()) config.llm
-              . runOutbound tasks
+              . runOutbound tasks jobs
               . runAgentWith admission journal (ExecutionInbox (const (pure ""))) Nothing (AgentLimits 2) (const (buildToolRegistry [] []))
               $ withAsync (deliveryWorker "stream-fixture" [transport])
               $ \sender -> do

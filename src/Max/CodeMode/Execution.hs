@@ -51,7 +51,6 @@ import Max.Schema (unconstrainedSchema)
 import Max.Skill.Contract (Contract, validateValue)
 import Max.Tool.Control
   ( LoopControl (..),
-    controlReply,
     mergeControls,
   )
 import Max.Tool.Types
@@ -145,8 +144,8 @@ runWasmProgram session hooks catalog limits program = do
         liftIO . atomically $ modifyTVar' submitted (+ length requests)
         let hasHost = any ((`elem` [agentName, phaseName]) . (.trName)) requests
             sourceFingerprint = digest (wire program.wpEvidence)
-            boundHooks = hooks {ehStart = \step entry -> hooks.ehStart step (if entry.jsToolRef == agentName then entry {jsInput = object ["args" .= entry.jsInput, "source_fingerprint" .= sourceFingerprint, "step_key" .= digest (wire (object ["source" .= sourceFingerprint, "args" .= entry.jsInput])), "workflow" .= program.wpWorkflow]} else entry)}
-            missing = pure (ToolInvocation (ToolRejected (ToolFault "agent_requires_durable_task" "agent and phase require a durable task host" RetrySafe)) ContinueLoop)
+            boundHooks = hooks {ehStart = \step entry -> hooks.ehStart step (if entry.jsToolRef == agentName then entry {jsInput = object ["args" .= entry.jsInput, "source_fingerprint" .= sourceFingerprint, "workflow" .= program.wpWorkflow]} else entry)}
+            missing = pure (ToolInvocation (ToolRejected (ToolFault "agent_requires_job" "agent and phase require a job host" RetrySafe)) ContinueLoop)
             handlers =
               Map.fromList
                 [ (agentName, \row args -> if any ((== ToolRef "task_start") . (.ctDefinition.tdRef)) catalog then maybe missing (\host -> host.whAgent args row) hooks.ehWorkflow else missing),
@@ -162,13 +161,11 @@ runWasmProgram session hooks catalog limits program = do
           then do
             liftIO . atomically $ writeTVar interrupted (Just (toJSON (map (outcomeEnvelope . (.tiOutcome)) batch.tbInvocations)))
             pure Nothing
-          else
-            if any (isJust . controlReply . (.tiControl)) batch.tbInvocations
-              then pure Nothing
-              else case (many, batch.tbInvocations) of
-                (False, [invocation]) -> reply (outcomeEnvelope invocation.tiOutcome)
-                (True, invocations) -> reply (toJSON (map (outcomeEnvelope . (.tiOutcome)) invocations))
-                _ -> error "executeToolBatch violated result cardinality"
+          else case (many, batch.tbInvocations) of
+            (False, [invocation]) -> reply (outcomeEnvelope invocation.tiOutcome)
+            (True, invocations) -> reply (toJSON (map (outcomeEnvelope . (.tiOutcome)) invocations))
+            _ -> error "executeToolBatch violated result cardinality"
+
   (result, _) <- withExecutionRecord hooks ExecutionCheckpoint start $ \row -> do
     (exit, rawOutput) <- runWasmWithInput limits program.wpModule program.wpInput dispatch
     calls <- reverse <$> liftIO (readTVarIO receipts)
@@ -178,7 +175,7 @@ runWasmProgram session hooks catalog limits program = do
     boundary <- liftIO (readTVarIO interrupted)
     let parsed = traverse (eitherDecodeStrict' @Value) rawOutput
         finalExit
-          | isJust (controlReply control) || isJust boundary = WasmHostStopped
+          | isJust boundary = WasmHostStopped
           | Left _ <- parsed = WasmTrapped "guest output is not JSON"
           | exit == WasmCompleted,
             Just contract <- program.wpOutputContract,

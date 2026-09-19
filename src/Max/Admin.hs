@@ -57,8 +57,8 @@ import Max.ContextAdmin
 import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
 import Max.DB.Calls (CallDetail (..), CallRow (..), fetchCall, listCalls)
 import Max.DB.History (MessageCursor (..), messageStatsDaily)
+import Max.DB.Monitor.Overview (readWorkOverview)
 import Max.DB.Session (listSessions)
-import Max.DB.Task (durableWorkOverview)
 import Max.DB.Usage (UsageDay (..), usageDaily)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.Embedding (Embedding, EmbeddingSpace (..), embedBatch, embeddingSpace, renderEmbeddingFault)
@@ -450,7 +450,7 @@ handle env profiles logBuf r params body = case r of
         logInfo "admin: skill deleted" $ object ["id" .= sid]
         pure deleted
       else pure notFound
-  RDurableWork -> ok <$> durableWorkOverview
+  RDurableWork -> ok <$> readWorkOverview env.beJobs
   RTasksList -> do
     tasks <- liftIO (listTasks env.beTasks Nothing)
     pure (ok (map taskJson tasks))

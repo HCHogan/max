@@ -52,7 +52,7 @@ src/Max/Effects/   effectful 2.5 effects: Http, Blob, Embedding (injectable vali
                    ToolControl, TaskQuery/TaskControl/TaskExecution, TurnQuery,
                    Agent (DB effect from upstream effectful-postgresql)
 src/Max/Tool/      pure tool catalog, schemas, host metadata and loop control
-src/Max/Agent/     separate admission/journal/inbox contracts and durable assembly
+src/Max/Agent/     shared admission/journal/inbox contracts and Jobs assembly
 src/Max/Execution/ shared pre-effect steps and journal facts
 src/Max/LLM/       Types/Protocol/Stream: pure codecs and stream reconstruction;
                    Configuration/Admission/Transport/Observability: call components
@@ -313,11 +313,11 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Pending historian capture | leased `episode_capture_runs` rows plus the conversation-scoped historian cursor; boot drains jobs, then re-arms any conversation with newer raw rows |
 | Tiered prompt prefix | current `context_materializations` revision plus append-only versions; active compartment ids/versions, tiers, end cursor, policy, fingerprint, and cache-bust reason are durable |
 | Episode expansion handles | random UUID on the immutable compartment; scoped lookup recovers the exact raw ingest range, including after supersession |
-| Monitors and reminders | `monitors` and `monitor_fires` hold TimeCron/LedgerMatch state, retry, provenance, caps and durable turn admission; the scheduler handle is only a wakeup bell |
+| Monitors and reminders | `monitors` and `monitor_fires` hold TimeCron/LedgerMatch state, retry, provenance, caps and one-time Jobs admission; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll messages, memories, active episode summaries, stickers, and media for missing/incompatible derived data, so any gap or model change backfills itself |
 | Embedding ownership | one process-local lock serializes the worker and explicit reindex; conditional writes reject changed source content and memory versions |
 | Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` commits `started` before a tool and its terminal state afterward. Boot marks any still-started effect `outcome-unknown` and ends interrupted foreground turns as crashed; it never reopens their model loop; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
-| Durable tasks and child work | `durable_tasks`, task inputs/events and notifications retain goals, ownership, budgets and results; each attempt uses the existing agent runtime. Migration 088 retired the Plan tables. Child grants remain bounded by their parent |
+| Background Jobs and child work | Bounded STM state holds goals, ownership, budgets, results, feedback and joins. Workers use the ordinary agent runtime and stop on restart. The public ID sequence is retained; old task tables are historical only. Child grants remain bounded by their parent |
 | Sandbox workspaces | `sandboxes` persists lifecycle metadata and the root-owned runtime work directory holds current state. Boot adopts only a running container carrying the current broker generation and matching systemd invocation; otherwise it rebuilds a non-root, capability-free, resource-capped, read-only shell around the surviving volume. NixOS owns network provisioning and host/private/peer filtering; Haskell owns instance reconciliation and the privileged broker API. Only a positively absent volume marks the workspace destroyed, and 14-day sliding TTL GC replaces shutdown/boot reaping |
 
 | Lost on restart | Why |
@@ -351,7 +351,7 @@ command's access, and filesystem observations describe the shared workspace.
 ADR-010 separates the authorized tool ceiling from the current model catalog.
 `use_skill` emits typed `LoadSkills` control; the agent updates its local visibility
 snapshot between rounds. Full instructions and fixed dependencies load together.
-Successful host receipts recover the same task revision's bundles; a new request
+Successful host receipts retain the current turn's loaded bundles; a new turn
 starts with base tools. Catalog and invocation admission share the snapshot, so
 same-batch calls cannot use a just-loaded capability early. Loaded manuals and
 the latest tool results survive normal result trimming.
@@ -367,9 +367,8 @@ the broker selects it from the canonical conversation and configured group list.
 There is no separate read-only SSH grant within an enabled operations network.
 
 Legacy `operations` task/monitor profiles and frozen snapshots decode as `sandbox`;
-new writes use `sandbox`. Original rows and journals remain unchanged. Workflow
-child reuse checks both the canonical key and the old operations key before
-admission, and refuses ambiguous matches rather than repeating effects.
+new writes use `sandbox`. Original rows and journals remain unchanged. Each explicit workflow child call
+creates new work; there is no cross-call result reuse or restart continuation.
 
 `max.service` and the broker client use `max-service`; the broker runs as root.
 The dedicated client and network belong to `max-stack.target` and `max.slice`.
@@ -387,8 +386,12 @@ Queued foreground requests precede queued task notices. Commands remain responsi
 `!kill` revokes process-local publication authority before signalling the worker.
 The dispatch finalizer releases its queue ticket even if database cleanup fails.
 Interrupted foreground turns end without restart continuation; published prefixes
-remain recorded. Background task leases and the transport outbox remain pending
-replacement in the [simplification plan](simplification.md).
+remain recorded. Jobs own detached work, child results and feedback in STM. A
+parent awaiting children holds no worker slot. Each root shares 200 tool calls
+and 400 model rounds; children inherit its deadline and grant fingerprints.
+Cancellation and replacement fence the old generation before signalling it.
+The transport outbox remains pending replacement in the
+[simplification plan](simplification.md).
 
 ### PostgreSQL transaction ownership
 
@@ -406,22 +409,23 @@ mutation helpers that depend on row locks require this evidence, so an ordinary
 cache publication still requires a completed outermost commit. Dispatch and
 delivery reservations decode typed canonical bodies before committing; corrupt
 JSON raises `ConversionFailed` and rolls back the reservation.
-Agent admission reserves a model round with its turn counter, or a tool call
-with its started journal row, in one transaction. Database tests inject failures
-at the second write and prove the budget reservation rolls back too.
+Jobs reserve calls and model rounds atomically in STM before execution. The
+turn counter and journal remain diagnostics in PostgreSQL. A failed diagnostic
+write prevents execution and conservatively retains the local reservation;
+no reservation is refunded or replayed after an uncertain effect.
 
 Task tools are assembled with bound conversation, caller and execution scopes.
 Their code holds TaskQuery/TaskControl/TaskExecution and TurnQuery capabilities,
-without raw SQL, Blob or IO access. Task control rechecks the caller inside the
-mutation transaction; administrative authority is absent from that interface.
+without raw SQL, Blob or IO access. Task control checks local liveness and rechecks the bound caller under a
+conversation transaction; administrative authority is absent from that interface.
 Monitor and reminder tools similarly receive MonitorQuery/MonitorControl;
 list/history readers have no control capability. Host assembly supplies one
 clock value per invocation. The write interpreter rechecks the bound actor,
-conversation and execution lease in the definition transaction; elaborated
+conversation and live turn in the definition transaction; elaborated
 arming also requires the host role, and the frozen grants come from assembly.
 Task, monitor and memory control use the same caller-authorization primitive.
 Memory tools hold MemoryQuery/MemoryControl. Their actor, evidence and permanent
-lifecycle come from the interpreter; source identity and the current lease are
+lifecycle come from the interpreter; source identity and live turn are
 rechecked with the write. Explicit saves and Historian proposals share locked
 admission for the 30-item namespace capacity; Historian also rejects exact
 duplicates within that transaction. Publication takes the conversation lock
@@ -457,7 +461,7 @@ Compile-negative architecture fixtures verify that each capability, including
 
 The Agent loop receives separate admission, journal and inbox contracts from
 `Agent.Runtime`; it imports no database implementation. Tool call modes in the
-host catalog determine checkpoint budget and terminal exclusivity. Accepted
+host catalog determine checkpoint budgets. Accepted
 task runners emit `LoopControl` through a per-invocation `ToolControl` scope;
 the tool kernel verifies the declared mode and discards control on failure.
 The loop consumes continue/yield/finish values without recognizing tool names
@@ -507,7 +511,13 @@ adapters must do the same. Any long-lived WebSocket transport remains a
 platform-edge resource.
 
 The browser registry shares only a ordinary systemd browser service per conversation.
-Each durable agent turn—including every background task attempt—owns a separate MCP client,
+Task browser sessions have no automatic checkpoint/restore. Only an explicit
+`!browser save` exports an encrypted, origin-filtered profile; an owner can use
+that retained profile in a later job. Ambiguous actions block further use until
+explicit reset confirms closure. Cancellation and `!clear --all` revoke access
+before the next action, including jobs that have not opened a browser yet.
+
+Foreground turns and process-owned background Jobs each own a separate MCP client,
 Streamable-HTTP session, camoufox browse session, and operation lock. Sibling
 turns in one group therefore navigate concurrently without page-state or MCP
 request-id interference; calls inside one stateful page remain ordered. Turn

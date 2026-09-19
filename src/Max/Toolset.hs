@@ -68,7 +68,7 @@ import Max.Sandbox.ToolRuntime (sandboxToolsWithRuntime)
 import Max.Search.Runtime (searchToolsWithRuntime)
 import Max.Skill.ToolRuntime (skillToolsWithRuntime)
 import Max.Skill.Workflow (bindWorkflowContracts)
-import Max.Task.ToolRuntime (taskToolsWithDatabase)
+import Max.Task.ToolRuntime (taskTools)
 import Max.Tool.Bundles (toolBundle, toolVisible)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Types (ToolCallMode (..))
@@ -173,20 +173,20 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
       bindWorkflowContracts javaScriptRuntimeVersion (catalogTools (registryCatalog registry)) loads
     runners0 =
       builtinsWithDatabase env.beTimeZone dc
-        <> reminderToolsWithDatabase env.beTimeZone dc
-        <> monitorToolsWithDatabase env.beTimeZone dc
+        <> reminderToolsWithDatabase env.beJobs env.beTimeZone dc
+        <> monitorToolsWithDatabase env.beJobs env.beTimeZone dc
         <> groupToolsWithDatabase dc
         <> imageToolsWithDatabase env.beTimeZone dc
         <> memoryToolsWithDatabase dc
         <> pinToolsWithDatabase env.beSessions env.beDefaultModel dc
-        <> taskToolsWithDatabase dc
+        <> taskTools env.beJobs dc
         <> skillToolsWithRuntime env.beSkills dc prepareSkill bindPackages
         <> bilibiliToolsFor env.beTimeZone dc
         <> sandboxToolsWithRuntime env.beTimeZone (toolGroupId dc) env.beSandboxes
         <> fileToolsWithDatabase env.beTimeZone dc env.beSandboxes
         <> [t | toolStickers dc && env.beEmbeddingEnabled, t <- stickerToolsWithDatabase]
         <> maybe [] (searchToolsWithRuntime runtime) env.beSearch
-        <> [t | toolMultimodal dc, t <- browserToolsFor dc env.beBrowsers env.beBrowserProxy]
+        <> [t | toolMultimodal dc, t <- browserToolsFor env.beJobs dc env.beBrowsers env.beBrowserProxy]
         <> [t | toolMultimodal dc, t <- videoToolsWithDatabase dc]
 
 -- | How many tools a dispatch with these gates would get — the
@@ -224,7 +224,7 @@ toolDefinitionsFor env gid caps =
       MonitorArmOnly -> caps.tcMonitorArming
       BackgroundOnly -> caps.tcBackground
     ceilingOpen definition' =
-      (caps.tcBackground && definition'.tdRef `elem` [ToolRef "task_finish", ToolRef "task_progress"])
+      (caps.tcBackground && definition'.tdRef `elem` [ToolRef "task_wait", ToolRef "task_progress"])
         || toolAllowedByEffectCeiling caps.tcEffectCeiling definition'
 
 -- | Exact grant intersection for a standing continuation. A matching name is
@@ -284,13 +284,13 @@ toolInventory =
     always (writeTool "pin_message" ["session.db"] [CurrentConversation]),
     always (writeTool "unpin_message" ["session.db"] [CurrentConversation]),
     gated SkillsOnly (reflectTool "use_skill"),
-    always (writeTool "task_start" ["task.db"] [CurrentConversation]),
+    always (writeToolV 2 "task_start" ["task.db"] [CurrentConversation]),
     always (readTool "task_list" ["task.db"] [CurrentConversation]),
     always (readTool "task_status" ["task.db"] [CurrentConversation]),
     always (writeTool "task_steer" ["task.db"] [CurrentConversation]),
-    always (writeTool "task_replace" ["task.db"] [CurrentConversation]),
+    always (writeToolV 2 "task_replace" ["task.db"] [CurrentConversation]),
     always (writeTool "task_cancel" ["task.db"] [CurrentConversation]),
-    gated BackgroundOnly ((writeToolV 3 "task_finish" ["task.db"] [CurrentConversation]) {tdCallMode = FinishCall}),
+    gated BackgroundOnly (withDeadline 21600 (readTool "task_wait" ["task.state"] [CurrentConversation])),
     gated BackgroundOnly ((writeTool "task_progress" ["task.db"] [CurrentConversation]) {tdCallMode = CheckpointCall}),
     -- Queues turn-scoped inline video as well as reading the network.  Keep it
     -- sequential inside one agent round so concurrent calls cannot race the

@@ -18,6 +18,7 @@ module Max.Tasks
     awaitTurnSilence,
     checkTurnCancellation,
     authorizeTurnOutput,
+    turnIsLive,
 
     -- * Operations
     TaskInfo (..),
@@ -318,12 +319,7 @@ cancelTask reg tid = do
     Nothing -> pure False
     Just act -> sequence_ act >> pure True
 
--- | Stop the turn carrying this durable identity, if it is running here.
---
--- The reconciler's side of ADR 007: a plan that was steered no longer wants
--- some child, and the way to stop a turn is the way @!kill@ already stops one.
--- 'False' means no live turn in this process is that one — it finished, or it
--- is running on another node — and the caller can only say so.
+-- | Revoke and signal the runtime carrying this turn identity, if still present.
 cancelAgentTurnTask :: TaskRegistry -> AgentTurnId -> IO Bool
 cancelAgentTurnTask reg turnId = do
   (_, entries) <- readTVarIO reg.trState
@@ -348,6 +344,14 @@ cancelAllTasks reg = do
       (Map.elems m)
   sequence_ (catMaybes acts)
   pure (length acts)
+
+-- | Read in the same STM transaction as job admission and budget reservation.
+turnIsLive :: TaskRegistry -> AgentTurnId -> STM Bool
+turnIsLive registry turn = do
+  (_, entries) <- readTVar registry.trState
+  case [entry | entry <- Map.elems entries, fmap (.atrTurnId) entry.teAgentTurn == Just turn] of
+    [entry] -> not <$> readTVar entry.teKilled
+    _ -> pure False
 
 -- | Revocation precedes the cancellation signal, including if a worker masks it.
 authorizeTurnOutput :: TaskRegistry -> GroupId -> AgentTurnId -> IO Bool

@@ -1,5 +1,10 @@
 # ADR-009: Task browser workspaces, execution leases and explicit identities
 
+> Historical design. The September 19 [simplification](../simplification.md)
+> replaces task leases, restart continuation and automatic browser checkpoints
+> with process-owned Jobs. See [current job operations](../runbooks/jobs.md).
+
+
 Status: Implemented; isolated real Camoufox/MCP acceptance passed on h610 on 2026-09-05.
 
 ## Decision

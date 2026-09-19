@@ -37,16 +37,13 @@ PURE = {
     "Max.Tool.Control",
     "Max.Tool.Catalog",
     "Max.Task.Types",
+    "Max.Monitor.Types",
+    "Max.Platform.Types",
+    "Max.IR",
+    "OneBot.Types",
     "Max.Task.State",
     "Max.Task.Delegation",
-    "Max.Task.Execution",
     "Max.Task.FrontendInput",
-    "Max.Task.Notice",
-    "Max.Task.Query",
-    "Max.Task.Overview",
-    "Max.Task.Admission",
-    "Max.Task.View",
-    "Max.Browser.State",
     "Max.Platform.Failure",
     "Max.Monitor.Policy",
     "Max.Monitor.Control",
@@ -64,10 +61,11 @@ def check_imports():
         path = ROOT / "src" / (module.replace(".", "/") + ".hs")
         source = path.read_text()
         for dependency in IMPORT.findall(source):
-            pure_external = dependency.startswith(("Data.", "Crypto.Hash.")) or dependency in {"Text.Read", "Control.Applicative", "Control.Monad", "Network.HTTP.Types.Header"}
+            pure_external = dependency.startswith(("Data.", "Crypto.Hash.")) or dependency in {"Text.Read", "Control.Applicative", "Control.Monad", "Network.HTTP.Types.Header", "GHC.Generics", "Text.Printf"}
             # Exception is a typeclass declaration; no exception-throwing IO.
             exception_type = dependency == "Control.Exception" and re.search(r"^import Control\.Exception\s+\(\s*Exception\s*\)", source, re.MULTILINE)
-            if dependency not in PURE and not pure_external and not exception_type:
+            identity_codec = module == "Max.Monitor.Types" and dependency in {"Database.PostgreSQL.Simple.FromField", "Database.PostgreSQL.Simple.ToField"}
+            if dependency not in PURE and not pure_external and not exception_type and not identity_codec:
                 errors.append(f"{module}: impure or unreviewed dependency {dependency}")
         if re.search(r"\b(IOE|liftIO|unsafePerformIO|unsafeCoerce)\b", source):
             errors.append(f"{module}: implementation escape in pure domain module")
@@ -210,7 +208,9 @@ import Max.Effects.Browser (Browser, readZhihu)
 import Max.Effects.FileTransfer (FileTransfer, sendSandboxFile)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Transaction (InTransaction, withTransaction)
-import Max.DB.Task.Authorization (authorizeWithin)
+import Max.DB.Authority (authorizeCallerWithin)
+import Max.Platform.Types (PrincipalId (..))
+import OneBot.Types (GroupId (..))
 import Max.Execution.Types (ExecutionStep (ExecutionCheckpoint))
 import Max.Turn.Types (AgentTurnId (..))
 import Max.Effects.ToolControl
@@ -248,7 +248,7 @@ import OneBot.Types (GroupId (..), UserId (..))
 
 POSITIVE = """
 transaction :: (WithConnection :> es, IOE :> es) => Eff es Bool
-transaction = withTransaction (authorizeWithin (AgentTurnId 1) ExecutionCheckpoint)
+transaction = withTransaction (authorizeCallerWithin (AgentTurnId 1) (GroupId 1) (PrincipalId 1))
 skillLoading :: SkillLoading :> es => Eff es ()
 skillLoading = () <$ loadSkill "demo"
 searching :: Search :> es => Eff es ()
@@ -283,7 +283,7 @@ directory = listCatalogTools
 execute :: Tools :> es => Eff es ToolOutcome
 execute = invokeTool "read" Null
 control :: ToolControl :> es => Eff es ()
-control = finishExecution Nothing
+control = activateSkills []
 loadSkills :: ToolControl :> es => Eff es ()
 loadSkills = activateSkills []
 readMedia :: MediaQuery :> es => Eff es ()
@@ -293,7 +293,7 @@ editPins = () <$ pinMessage 1
 readTasks :: TaskQuery :> es => Eff es ()
 readTasks = () <$ TaskQuery.listTasks
 startOwnedTask :: TaskControl :> es => Eff es ()
-startOwnedTask = () <$ startTask "key" "goal" Research Null
+startOwnedTask = () <$ startTask "goal" Research Null
 reportOwnedTask :: TaskExecution :> es => Eff es ()
 reportOwnedTask = () <$ reportProgress "progress"
 readOwnedResult :: TurnQuery :> es => Eff es ()
@@ -309,7 +309,7 @@ publish request = () <$ sendRecorded request
 """
 
 NEGATIVE = {
-    "authorization requires a transaction": ("InTransaction", "bad :: (WithConnection :> es, IOE :> es) => Eff es Bool\nbad = authorizeWithin (AgentTurnId 1) ExecutionCheckpoint"),
+    "authorization requires a transaction": ("InTransaction", "bad :: (WithConnection :> es, IOE :> es) => Eff es Bool\nbad = authorizeCallerWithin (AgentTurnId 1) (GroupId 1) (PrincipalId 1)"),
     "ContextQuery cannot use arbitrary IO": ("IOE", "bad :: ContextQuery :> es => Eff es ()\nbad = liftIO (pure ())"),
     "SkillLoading cannot use arbitrary IO": ("IOE", "bad :: SkillLoading :> es => Eff es ()\nbad = liftIO (pure ())"),
     "Search cannot use arbitrary IO": ("IOE", "bad :: Search :> es => Eff es ()\nbad = liftIO (pure ())"),
@@ -317,7 +317,7 @@ NEGATIVE = {
     "Browser cannot use arbitrary IO": ("IOE", "bad :: Browser :> es => Eff es ()\nbad = liftIO (pure ())"),
     "FileTransfer cannot use arbitrary IO": ("IOE", "bad :: FileTransfer :> es => Eff es ()\nbad = liftIO (pure ())"),
 
-    "conversation query cannot control tasks": ("TaskControl", 'bad :: ConversationQuery :> es => Eff es ()\nbad = () <$ startTask "key" "goal" Research Null'),
+    "conversation query cannot control tasks": ("TaskControl", 'bad :: ConversationQuery :> es => Eff es ()\nbad = () <$ startTask "goal" Research Null'),
     "conversation query cannot publish": ("Outbound", 'bad :: ConversationQuery :> es => OutboundRequest -> Eff es ()\nbad request = () <$ sendRecorded request'),
     "media query cannot publish": ("Outbound", "bad :: MediaQuery :> es => OutboundRequest -> Eff es ()\nbad request = () <$ sendRecorded request"),
     "media query cannot resolve host paths": ("BlobHost", "bad :: MediaQuery :> es => BlobRef -> Eff es FilePath\nbad = resolveBlobHostPath"),
@@ -332,11 +332,10 @@ NEGATIVE = {
     "monitor query cannot control a monitor": ("MonitorControl", 'bad :: MonitorQuery :> es => Eff es ()\nbad = () <$ controlMonitor (MonitorOrdinal 1) CancelMonitor False'),
     "monitor query cannot use arbitrary IO": ("IOE", 'bad :: MonitorQuery :> es => Eff es ()\nbad = liftIO (pure ())'),
     "monitor control cannot read other conversations": ("MonitorQuery", 'bad :: MonitorControl :> es => Eff es ()\nbad = () <$ listMonitors'),
-    "task query cannot control tasks": ("TaskControl", 'bad :: TaskQuery :> es => Eff es ()\nbad = () <$ startTask "key" "goal" Research Null'),
+    "task query cannot control tasks": ("TaskControl", 'bad :: TaskQuery :> es => Eff es ()\nbad = () <$ startTask "goal" Research Null'),
     "task query cannot submit execution reports": ("TaskExecution", 'bad :: TaskQuery :> es => Eff es ()\nbad = () <$ reportProgress "done"'),
     "task query cannot use arbitrary IO": ("IOE", 'bad :: TaskQuery :> es => Eff es ()\nbad = liftIO (pure ())'),
-    "turn result reader cannot control tasks": ("TaskControl", 'bad :: TurnQuery :> es => Eff es ()\nbad = () <$ startTask "key" "goal" Research Null'),
-    "directory cannot stop an agent loop": ("ToolControl", 'bad :: ToolDirectory :> es => Eff es ()\nbad = finishExecution Nothing'),
+    "turn result reader cannot control tasks": ("TaskControl", 'bad :: TurnQuery :> es => Eff es ()\nbad = () <$ startTask "goal" Research Null'),
     "directory cannot activate skills": ("ToolControl", 'bad :: ToolDirectory :> es => Eff es ()\nbad = activateSkills []'),
     "loop control cannot be decoded from JSON": ("LoopControl", 'bad :: Value -> Result LoopControl\nbad = fromJSON'),
     "platform query cannot poke": ("PlatformInteraction", "bad :: PlatformQuery :> es => Eff es (Either PlatformFailure ())\nbad = pokeUser (GroupId 1) (UserId 2)"),

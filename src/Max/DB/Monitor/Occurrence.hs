@@ -16,8 +16,7 @@ import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
-import Max.DB.Codec (enumField, jsonField)
-import Max.DB.Task.Record (databaseNow, jsonText)
+import Max.DB.Codec (databaseNow, enumField, jsonField, jsonText)
 import Max.DB.Transaction (withTransaction)
 import Max.Monitor.Policy
 import Max.Monitor.Types (MonitorFireId, MonitorId (..))
@@ -81,9 +80,9 @@ insertOccurrenceWithin definition draft = do
   -- queued work in that revision; completed history does not consume capacity.
   queued <-
     query
-      "SELECT count(*)::integer,min(fire_id) FROM monitor_fires fire LEFT JOIN durable_tasks work ON work.task_id=fire.task_id\
+      "SELECT count(*)::integer,min(fire_id) FROM monitor_fires fire\
       \ WHERE fire.monitor_id=? AND fire.cancelled_at IS NULL AND fire.definition_revision=?\
-      \ AND (fire.admission_state='pending' OR work.status='queued')"
+      \ AND (fire.admission_state='pending' OR (fire.task_id IS NOT NULL AND fire.started_at IS NULL AND fire.finished_at IS NULL))"
       (definition.monitorId, definition.revision)
   let (count, pending) = case queued :: [(Int, Maybe Int64)] of [row] -> row; _ -> (0, Nothing)
       disposition = if definition.elaborated then decideOverlap definition.snapshot.overlap definition.snapshot.capacity count else PendingOccurrence

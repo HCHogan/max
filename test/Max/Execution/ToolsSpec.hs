@@ -14,11 +14,10 @@ import Effectful.Exception (SomeException, throwIO, try)
 import ExecutionFixture
 import Max.CodeMode.Execution
 import Max.CodeMode.Wasm
-import Max.Effects.ToolControl (activateSkills, finishExecution, runToolControl, yieldFrontend)
+import Max.Effects.ToolControl (activateSkills, runToolControl)
 import Max.Effects.ToolOutput (InlineMedia (..), canQueueInlineMediaOnce, drainInlineMedia, newToolOutputQueue, queueInlineMedia, queueInlineMediaOnce, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
 import Max.Execution.Tools
-import Max.Execution.Types (JournalStart (..))
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (LoopControl (..))
@@ -55,7 +54,7 @@ spec = describe "shared host tool execution" $ do
       session <- newExecutionSession Nothing
       executeToolBatch session noJournal (views registry) [ToolRequest "one" "echo" args, ToolRequest "two" "echo" args]
     fmap (map (outcomeName . (.tiOutcome)) . (.tbInvocations)) result `shouldBe` Just ["committed", "committed"]
-    forM_ [definition {tdRetryClass = RetrySafe}, definition {tdCallMode = FinishCall}, definition {tdEffects = Set.singleton EffectReflect}] $ \invalid ->
+    forM_ [definition {tdRetryClass = RetrySafe}, definition {tdEffects = Set.singleton EffectReflect}] $ \invalid ->
       case buildToolRegistry [invalid] [runner] of
         Left _ -> pure ()
         Right _ -> expectationFailure "invalid independent-call metadata was accepted"
@@ -82,59 +81,6 @@ spec = describe "shared host tool execution" $ do
       pure (native, guest)
     map (outcomeName . (.tiOutcome)) native.tbInvocations `shouldBe` ["rejected", "rejected"]
     map (.ccOutcome) guest.cmCalls `shouldBe` ["rejected", "rejected"]
-
-  it "suppresses conflicting finish batches before journal admission" $ do
-    seen <- newIORef (0 :: Int)
-    let finish = echoDefinition {tdCallMode = FinishCall, tdParallelism = SequentialOnly}
-    registry <- either (fail . show) pure (buildToolRegistry [finish] [echoTool])
-    result <- runEff . runConcurrent . runTools registry $ do
-      session <- newExecutionSession Nothing
-      let hooks = noJournal {ehStart = \_ _ -> liftIO (modifyIORef' seen (+ 1)) >> pure Nothing}
-      executeToolBatch session hooks (views registry) [ToolRequest "1" "echo" args, ToolRequest "2" "echo" args]
-    map (outcomeName . (.tiOutcome)) result.tbInvocations `shouldBe` ["rejected", "rejected"]
-    readIORef seen `shouldReturn` 0
-
-  it "latches host finish and yield across guest and subsequent native calls" $ do
-    forM_ [False, True] $ \finish -> do
-      binary <- guestCalls [request "echo" args, request "echo" args] "unreachable"
-      let runner = echoTool {toolRunner = LegacyRunner $ \value -> (if finish then finishExecution (Just "done") else yieldFrontend "later") >> pure (Right value)}
-          definition = echoDefinition {tdParallelism = SequentialOnly, tdCallMode = if finish then FinishCall else WorkCall}
-      registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
-      (guest, later) <- runEff . runConcurrent . runToolsWithControl runToolControl registry $ do
-        session <- newExecutionSession Nothing
-        guest <- runWasmTools session noJournal (views registry) defaultWasmLimits binary
-        later <- executeToolBatch session noJournal (views registry) [ToolRequest "later" "echo" args]
-        pure (guest, later)
-      guest.cmExit `shouldBe` WasmHostStopped
-      length guest.cmCalls `shouldBe` 1
-      guest.cmControl `shouldBe` if finish then FinishLoop (Just "done") else YieldLoop "later"
-      map (outcomeName . (.tiOutcome)) later.tbInvocations `shouldBe` ["rejected"]
-
-  it "finishes admitted native siblings before yielding and rejects later batches" $ do
-    let submit = echoTool {toolName = "submit", toolRunner = LegacyRunner $ \value -> yieldFrontend "task accepted" >> pure (Right value)}
-        definition = echoDefinition {tdRef = ToolRef "submit", tdParallelism = SequentialOnly}
-    registry <- either (fail . show) pure (buildToolRegistry [definition, echoDefinition] [submit, echoTool])
-    (batch, later) <- runEff . runConcurrent . runToolsWithControl runToolControl registry $ do
-      session <- newExecutionSession Nothing
-      batch <- executeToolBatch session noJournal (views registry) [ToolRequest "submit" "submit" args, ToolRequest "status" "echo" args]
-      later <- executeToolBatch session noJournal (views registry) [ToolRequest "later" "echo" args]
-      pure (batch, later)
-    map (outcomeName . (.tiOutcome)) batch.tbInvocations `shouldBe` ["succeeded", "succeeded"]
-    map (.tiControl) batch.tbInvocations `shouldBe` [YieldLoop "task accepted", ContinueLoop]
-    map (outcomeName . (.tiOutcome)) later.tbInvocations `shouldBe` ["rejected"]
-
-  it "preserves a pending yield when a sibling fails during admission" $ do
-    let submit = echoTool {toolName = "submit", toolRunner = LegacyRunner $ \value -> yieldFrontend "task accepted" >> pure (Right value)}
-        definition = echoDefinition {tdRef = ToolRef "submit", tdParallelism = SequentialOnly}
-    registry <- either (fail . show) pure (buildToolRegistry [definition, echoDefinition] [submit, echoTool])
-    (failed, later) <- runEff . runConcurrent . runToolsWithControl runToolControl registry $ do
-      session <- newExecutionSession Nothing
-      let hooks = noJournal {ehStart = \_ start -> if start.jsToolRef == "echo" then throwIO (userError "admission failed") else pure Nothing}
-      failed <- try @SomeException (executeToolBatch session hooks (views registry) [ToolRequest "submit" "submit" args, ToolRequest "status" "echo" args])
-      later <- executeToolBatch session noJournal (views registry) [ToolRequest "later" "echo" args]
-      pure (failed, later)
-    failed `shouldSatisfy` (\case Left _ -> True; _ -> False)
-    map (outcomeName . (.tiOutcome)) later.tbInvocations `shouldBe` ["rejected"]
 
   it "keeps loaded skills out of the running guest catalog, including after a trap" $ do
     let load = SkillLoad "test" (skillLoadVersion "trusted instructions") "trusted instructions" Nothing Nothing

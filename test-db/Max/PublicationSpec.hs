@@ -17,6 +17,7 @@ import Max.DB.Connection (DbPool)
 import Max.DB.History (HistoryItem (..), fetchMessageWithCursorInScope)
 import Max.Effects.Outbound
 import Max.IR
+import Max.Jobs (newJobs)
 import Max.MessageKind (MessageKind (KindChat))
 import Max.Platform.Types
 import Max.Reply.Caption (captionBody)
@@ -33,12 +34,13 @@ spec pool = before_ (truncateAll pool) $ describe "canonical publication boundar
     [Only principal] <- withDb pool $ query "SELECT author_principal_id FROM messages WHERE canonical_message_id=?" (Only source)
     durable <- withDb pool (startAgentTurn (GroupId 900) (CanonicalMessageId source) (PrincipalId principal))
     registry <- newTaskRegistry
+    jobs <- newJobs registry
     turn <- beginDurableTurnRuntime registry durable (GroupId 900) (UserId 123) (Just (CanonicalMessageId source))
     Just output <- pure (turnRuntimeOutputContext turn)
     let publish = do
           link <- nextTurnOutputLink output
           withDbLog pool $
-            runOutbound registry $
+            runOutbound registry jobs $
               sendRecorded
                 (OutboundRequest KindChat (GroupId 900) (Body [NText "prefix"]) Nothing DeliverConversation (Just link) Nothing)
     first <- publish

@@ -15,19 +15,10 @@ import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.Browser.Registry
-import Max.Browser.Runtime
-  ( profileIdentity,
-    resetTaskBrowser,
-    workspaceIdentity,
-  )
-import Max.Browser.Vault (openBrowserState, sealBrowserState)
-import Max.DB.Browser
-  ( browserCommandOwner,
-    browserWorkspace,
-    resetBrowserWorkspace,
-    revokeProfileWorkspaces,
-  )
+import Max.Browser.Runtime (exportJobBrowser, ownedJobBrowser, profileIdentity, resetTaskBrowser, revokeProfileBrowsers)
+import Max.Browser.Vault (sealBrowserState)
 import Max.DB.Transaction (withTransaction)
+import Max.Jobs (Jobs)
 import Max.Monitor.Types (MonitorOrdinal (..), parseMonitorHandle)
 import Max.Platform.Types
   ( CanonicalMessageId (..),
@@ -37,12 +28,12 @@ import Max.Task.Types (parseTaskHandle)
 import Network.URI (URI (..), URIAuth (..), parseURI)
 import OneBot.Types (GroupId (..))
 
-browserCommandOnce :: (WithConnection :> es, IOE :> es) => BrowserRegistry -> GroupId -> PrincipalId -> CanonicalMessageId -> [Text] -> Eff es Value
-browserCommandOnce registry group@(GroupId groupId) actor@(PrincipalId principal) (CanonicalMessageId message) pieces = do
+browserCommandOnce :: (WithConnection :> es, IOE :> es) => Jobs -> BrowserRegistry -> GroupId -> PrincipalId -> CanonicalMessageId -> [Text] -> Eff es Value
+browserCommandOnce jobs registry group@(GroupId groupId) actor@(PrincipalId principal) (CanonicalMessageId message) pieces = do
   claimed <- execute "INSERT INTO browser_command_receipts(message_id) SELECT canonical_message_id FROM messages JOIN conversations USING(conversation_id) WHERE canonical_message_id=? AND author_principal_id=? AND legacy_group_id=? ON CONFLICT DO NOTHING" (message, principal, groupId)
   if claimed == 1
     then do
-      outcome <- browserCommand registry group actor pieces
+      outcome <- browserCommand jobs registry group actor pieces
       let result = either (\detail -> object ["error" .= detail]) id outcome
       void $ execute "UPDATE browser_command_receipts SET result=?::jsonb WHERE message_id=?" (TE.decodeUtf8 (LBS.toStrict (encode result)), message)
       pure result
@@ -78,8 +69,8 @@ filterProfileState origin payload = do
           originForSite _ = False
       pure (object ["storage" .= object ["cookies" .= Vector.mapMaybe cookieForSite cookies, "origins" .= Vector.filter originForSite origins]])
 
-browserCommand :: forall es. (WithConnection :> es, IOE :> es) => BrowserRegistry -> GroupId -> PrincipalId -> [Text] -> Eff es (Either Text Value)
-browserCommand registry group@(GroupId groupId) actor@(PrincipalId principal) pieces = do
+browserCommand :: forall es. (WithConnection :> es, IOE :> es) => Jobs -> BrowserRegistry -> GroupId -> PrincipalId -> [Text] -> Eff es (Either Text Value)
+browserCommand jobs registry group@(GroupId groupId) actor@(PrincipalId principal) pieces = do
   result <- runCommand
   case (result, pieces) of
     (Right _, operation : remaining) -> do
@@ -89,50 +80,44 @@ browserCommand registry group@(GroupId groupId) actor@(PrincipalId principal) pi
   pure result
   where
     runCommand = case pieces of
-      ["reset", handle] | Just identifier <- parseTaskHandle handle -> resetTaskBrowser registry group actor identifier
+      ["reset", handle] | Just identifier <- parseTaskHandle handle -> resetTaskBrowser jobs registry group actor identifier Nothing
       ["profiles"] -> do
         rows <- query "SELECT name,origin,version,revoked FROM browser_profiles JOIN conversations USING(conversation_id) WHERE legacy_group_id=? AND principal_id=? ORDER BY name" (groupId, principal)
         pure (Right (toJSON [object ["name" .= (name :: Text), "origin" .= (origin :: Text), "version" .= (version :: Int64), "revoked" .= (revoked :: Bool)] | (name, origin, version, revoked) <- rows]))
       ["save", handle, name, origin]
         | Just identifier <- parseTaskHandle handle,
-          validName name -> owned identifier $ withTransaction $ do
-            raise lockConversation
-            rows <- query "SELECT checkpoint FROM browser_workspaces WHERE task_id=? AND state IN ('hot','cold') AND checkpoint IS NOT NULL" (Only identifier)
-            case rows of
-              [Only encrypted] -> case openBrowserState (browserVault registry) (workspaceIdentity identifier) encrypted >>= filterProfileState origin of
+          validName name -> do
+            saved <- ownedJobBrowser jobs registry group actor identifier $ \_ -> do
+              exported <- exportJobBrowser registry identifier
+              case exported >>= filterProfileState origin of
                 Left detail -> pure (Left detail)
-                Right state -> do
+                Right state -> withTransaction $ do
+                  raise lockConversation
                   profiles <-
                     query
-                      "INSERT INTO browser_profiles(conversation_id,principal_id,name,origin) SELECT conversation_id,?,?,? FROM conversations WHERE legacy_group_id=?\
-                      \ ON CONFLICT(conversation_id,principal_id,name) DO UPDATE SET origin=EXCLUDED.origin,version=browser_profiles.version+1,revoked=false,updated_at=clock_timestamp() RETURNING profile_id"
+                      "INSERT INTO browser_profiles(conversation_id,principal_id,name,origin) SELECT conversation_id,?,?,? FROM conversations WHERE legacy_group_id=? ON CONFLICT(conversation_id,principal_id,name) DO UPDATE SET origin=EXCLUDED.origin,version=browser_profiles.version+1,revoked=false,updated_at=clock_timestamp() RETURNING profile_id"
                       (principal, name, origin, groupId)
                   case profiles of
                     [Only profile] -> do
-                      revokeProfileWorkspaces profile
-                      saved <- liftIO (sealBrowserState (browserVault registry) (profileIdentity profile) state)
-                      void $ execute "UPDATE browser_profiles SET checkpoint=? WHERE profile_id=?" (saved, profile)
-                      pure (Right (object ["saved" .= name, "origin" .= origin]))
+                      encrypted <- liftIO (sealBrowserState (browserVault registry) (profileIdentity profile) state)
+                      void $ execute "UPDATE browser_profiles SET checkpoint=? WHERE profile_id=?" (encrypted, profile)
+                      pure (Right profile)
                     _ -> pure (Left "profile save failed")
-              _ -> pure (Left "no safe checkpoint is available for this task")
-      ["use", handle, name] | Just identifier <- parseTaskHandle handle -> owned identifier $ do
-        stopped <- stopTask identifier
-        if not stopped
-          then pure (Left "old browser did not confirm closure; profile change refused")
-          else withTransaction $ do
-            raise lockConversation
-            profiles <- raise (lookupProfile name)
-            case profiles of
-              [(profile, version)] -> do
-                void $ execute "INSERT INTO browser_workspaces(task_id,revision) SELECT task_id,revision FROM durable_tasks WHERE task_id=? ON CONFLICT DO NOTHING" (Only identifier)
-                resetBrowserWorkspace identifier
-                void $ execute "UPDATE browser_workspaces SET profile_id=?,profile_version=? WHERE task_id=?" (profile, version, identifier)
-                pure (Right (object ["task" .= identifier, "profile" .= name]))
-              _ -> pure (Left "active profile not found for this owner and conversation")
-      ["delete", name] -> withTransaction $ do
-        raise lockConversation
-        changed <- query "UPDATE browser_profiles SET revoked=true,checkpoint=NULL,version=version+1,updated_at=clock_timestamp() WHERE principal_id=? AND name=? AND conversation_id=(SELECT conversation_id FROM conversations WHERE legacy_group_id=?) RETURNING profile_id" (principal, name, groupId)
-        forM_ (changed :: [Only Int64]) $ \(Only profile) -> revokeProfileWorkspaces profile
+            case saved of
+              Left detail -> pure (Left detail)
+              Right profile -> do
+                liftIO (revokeProfileBrowsers registry profile)
+                pure (Right (object ["saved" .= name, "origin" .= origin]))
+      ["use", handle, name] | Just identifier <- parseTaskHandle handle -> do
+        profiles <- lookupProfile name
+        case profiles of
+          [binding] -> resetTaskBrowser jobs registry group actor identifier (Just binding)
+          _ -> pure (Left "active profile not found for this owner and conversation")
+      ["delete", name] -> do
+        changed <- withTransaction $ do
+          raise lockConversation
+          query "UPDATE browser_profiles SET revoked=true,checkpoint=NULL,version=version+1,updated_at=clock_timestamp() WHERE principal_id=? AND name=? AND conversation_id=(SELECT conversation_id FROM conversations WHERE legacy_group_id=?) RETURNING profile_id" (principal, name, groupId)
+        forM_ (changed :: [Only Int64]) $ \(Only profile) -> liftIO (revokeProfileBrowsers registry profile)
         pure (Right (object ["revoked" .= length changed]))
       ["unmonitor", handle] | Just ordinal <- parseMonitorHandle handle -> withTransaction $ do
         raise lockConversation
@@ -154,14 +139,6 @@ browserCommand registry group@(GroupId groupId) actor@(PrincipalId principal) pi
           _ -> pure (Left "owned browser monitor or active profile not found")
       _ -> pure (Left "用法：!browser profiles | reset task#N | save task#N 名称 https://站点 | use task#N 名称 | delete 名称 | monitor m#N 名称 | unmonitor m#N。reset/use 确认不重放旧操作；仅任务发起者可用。")
     validName name = not (T.null name) && T.length name <= 80
-    owned identifier action = withSeqEffToIO $ \unlift -> liftIO $ withBrowserWorkspace registry identifier $ unlift $ do
-      allowed <- browserCommandOwner group actor identifier
-      if allowed then action else pure (Left "task not found or browser owner permission required")
-    stopTask identifier = do
-      rows <- browserWorkspace identifier
-      case rows of
-        [(generation, _, _, _)] -> liftIO (stopBrowserScope registry (browserScopeForTask group identifier generation))
-        _ -> pure True
     lookupProfile :: Text -> Eff es [(Int64, Int64)]
     lookupProfile name =
       query

@@ -13,13 +13,13 @@ import Effectful (liftIO)
 import Effectful.PostgreSQL (execute, query)
 import GHC.Conc (BlockReason (BlockedOnMVar), ThreadStatus (ThreadBlocked), threadStatus)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb, withDbLog)
+import JobFixture (seed)
 import Max.Conversation.Roster (ConversationRoster (..), RosterIdentity (..))
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn (AgentTurnTerminal (TurnCancelled), finishAgentTurn)
 import Max.DB.Connection (DbPool)
 import Max.DB.Files qualified as Files
 import Max.DB.Session qualified as SessionDB
-import Max.DB.TaskSpec (seed)
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.ConversationQuery qualified as Conversation
 import Max.Effects.MediaQuery qualified as Media

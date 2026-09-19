@@ -1,16 +1,20 @@
 -- | Typed decoding for text and native JSON columns at the SQL boundary.
 -- Malformed durable values are conversion failures, never default authority.
-module Max.DB.Codec (jsonField, jsonbField, nullableJsonbField, enumField, integralField, queryRows) where
+module Max.DB.Codec (jsonField, jsonbField, nullableJsonbField, enumField, integralField, queryRows, databaseNow, jsonText) where
 
 import Data.Aeson
   ( FromJSON,
     Result (..),
+    ToJSON,
     eitherDecodeStrict',
+    encode,
     fromJSON,
   )
+import Data.ByteString.Lazy qualified as LBS
 import Data.Scientific (Scientific, floatingOrInteger)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
+import Data.Time (UTCTime)
 import Data.Typeable (Typeable)
 import Database.PostgreSQL.Simple qualified as SQL
 import Database.PostgreSQL.Simple.FromField
@@ -20,9 +24,9 @@ import Database.PostgreSQL.Simple.FromField
   )
 import Database.PostgreSQL.Simple.FromRow (RowParser, fieldWith)
 import Database.PostgreSQL.Simple.ToRow (ToRow)
-import Database.PostgreSQL.Simple.Types (Query)
+import Database.PostgreSQL.Simple.Types (Only (..), Query)
 import Effectful
-import Effectful.PostgreSQL (WithConnection, withConnection)
+import Effectful.PostgreSQL (WithConnection, query, withConnection)
 
 jsonField :: (FromJSON a, Typeable a) => RowParser a
 jsonField = fieldWith $ \column bytes -> do
@@ -64,3 +68,11 @@ nullableJsonbField = fieldWith $ \column bytes -> case bytes of
     case fromJSON value of
       Error message -> returnError ConversionFailed column message
       Success decoded -> pure (Just decoded)
+
+databaseNow :: (WithConnection :> es, IOE :> es) => Eff es UTCTime
+databaseNow = do
+  rows <- query "SELECT clock_timestamp()" ()
+  case rows of [Only now] -> pure now; _ -> error "database clock missing"
+
+jsonText :: (ToJSON a) => a -> Text
+jsonText = TE.decodeUtf8 . LBS.toStrict . encode

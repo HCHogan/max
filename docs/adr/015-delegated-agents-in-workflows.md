@@ -1,5 +1,10 @@
 # ADR-015: Delegated agents inside workflows
 
+> Historical design. The September 19 [simplification](../simplification.md)
+> replaces task leases, restart continuation and automatic browser checkpoints
+> with process-owned Jobs. See [current job operations](../runbooks/jobs.md).
+
+
 > Historical evidence below retains the tool names used at the time. The legacy
 > MaxOps API and observer tasks were retired on 2026-09-15; current operations
 > use [SSH through the sandbox](../runbooks/ssh-operations.md).

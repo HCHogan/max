@@ -15,6 +15,7 @@ import Max.Conversation (Conversations)
 import Max.Embedding.Maintenance (EmbeddingLock)
 import Max.EpisodeScheduler (EpisodeScheduler)
 import Max.Intent.Types (IntentConfig)
+import Max.Jobs (Jobs)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
 import Max.Shutdown (ShutdownState)
@@ -49,6 +50,7 @@ data BotEnv = BotEnv
     beSkills :: !SkillRegistry,
     beTasks :: !TaskRegistry,
     beConversations :: !Conversations,
+    beJobs :: !Jobs,
     -- | Graceful-shutdown gate: 'Max.Handler.dispatchLLM' claims a slot
     -- here so SIGTERM can wait out the dispatches already running, and
     -- declines to start once draining.  See "Max.Shutdown".

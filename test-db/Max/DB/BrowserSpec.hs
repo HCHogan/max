@@ -1,6 +1,5 @@
-module Max.DB.BrowserSpec (spec) where
+module Max.DB.BrowserSpec (Max.DB.BrowserSpec.spec) where
 
-import Control.Concurrent.Async (concurrently)
 import Control.Monad (void)
 import Data.Aeson
 import Data.Aeson.Types (parseMaybe)
@@ -9,275 +8,176 @@ import Data.Either (fromRight, isLeft)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL (execute, query)
 import Helpers (truncateAll, withDb)
+import JobFixture
 import Max.Browser.Profile (browserCommand, browserCommandOnce)
-import Max.Browser.Registry (browserRuntimeId, browserVault, configureBrowserRegistry, newBrowserRegistry, newBrowserRegistryWithHost)
-import Max.Browser.Runtime (browserMaintenance, releaseBrowserTurn, workspaceIdentity)
-import Max.Browser.State (WorkspaceState (..))
+import Max.Browser.Registry
+import Max.Browser.Runtime (browserMaintenance, releaseBrowserTurn)
 import Max.Browser.ToolRuntime (browserToolsFor)
-import Max.Browser.Vault (sealBrowserState)
-import Max.DB.AgentTurn (AgentTurnTerminal (TurnSucceeded), finishAgentTurn)
-import Max.DB.Browser
 import Max.DB.Connection (DbPool)
-import Max.DB.Monitor (armLedgerMatchMonitor)
-import Max.DB.Task
-import Max.DB.TaskSpec (admit, claimOne, insertOccurrence, report, seed)
+import Max.DB.Monitor (ElaboratedMonitorFire (..), armLedgerMatchMonitor, claimElaboratedMonitorFires)
+import Max.DB.Monitor.Admission
+import Max.DB.Monitor.Control qualified as MonitorControl
+import Max.DB.Transaction (withTransaction)
 import Max.Effects.ToolOutput (newToolOutputQueue, runToolOutput)
 import Max.Effects.Tools (Tool (..), toolRun)
 import Max.HttpRuntime (newHttpRuntime)
+import Max.Jobs qualified as Jobs
+import Max.Monitor.Control (PendingPolicy (RetainPending))
+import Max.Monitor.Policy (OverlapPolicy (QueueOccurrences))
 import Max.Monitor.Types
-import Max.Platform.Types (PrincipalId (..), noAdvertisedCaps)
-import Max.Task.State qualified as TaskState
+import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
+import Max.Task.State (TaskStatus (Succeeded))
+import Max.Task.Types
 import Max.ToolContext
 import Max.Turn.Types
 import Network.HTTP.Types (status200, status202, status404)
 import Network.Wai (Application, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp (testWithApplication)
 import OneBot.Types (GroupId (..), UserId (..))
-import Test.Hspec
+import Test.Hspec hiding (context)
 
 spec :: DbPool -> Spec
-spec pool = before_ (truncateAll pool) $ describe "task browser workspaces" $ do
-  it "deduplicates browser commands and never replays an interrupted command" $ do
-    (_, message, actor) <- seed pool 900 1
+spec pool = before_ (truncateAll pool) $ describe "process-owned browser workspaces" $ do
+  it "deduplicates explicit profile commands without replaying interrupted commands" $ do
+    running <- runningJob pool Browser Map.empty
     registry <- newHttpRuntime >>= newBrowserRegistry
-    first <- withDb pool (browserCommandOnce registry (GroupId 900) actor message ["profiles"])
-    second <- withDb pool (browserCommandOnce registry (GroupId 900) actor message ["profiles"])
-    second `shouldBe` first
-    rows <- withDb pool $ query "SELECT count(*) FROM browser_command_events" ()
-    rows `shouldBe` [Only (1 :: Int64)]
+    let invoke = withDb pool (browserCommandOnce running.jobs registry (GroupId 900) running.job.spec.principal running.job.spec.source ["profiles"])
+    first <- invoke
+    invoke `shouldReturn` first
+    withDb pool (query "SELECT count(*) FROM browser_command_events" ()) `shouldReturn` [Only (1 :: Int64)]
     void $ withDb pool $ execute "UPDATE browser_command_receipts SET result=NULL" ()
-    interrupted <- withDb pool (browserCommandOnce registry (GroupId 900) actor message ["profiles"])
+    interrupted <- invoke
     show interrupted `shouldContain` "not replayed"
-    later <- withDb pool $ query "SELECT count(*) FROM browser_command_events" ()
-    later `shouldBe` rows
 
-  it "hot-resumes and cold-restores through the MCP protocol without exposing authentication storage" $ do
-    calls <- newIORef []
-    failure <- newIORef ""
-    serial <- newIORef (0 :: Int)
-    testWithApplication (pure (browserFixture calls failure serial)) $ \port -> do
-      source@(_, message, actor) <- seed pool 900 1
-      identifier <- admit pool source "protocol"
-      first <- claimOne pool
-      http <- newHttpRuntime
-      let endpoint = "http://127.0.0.1:" <> show port <> "/mcp"
-          makeRegistry = newBrowserRegistryWithHost http (GroupId 900) endpoint "localhost"
-          run registry turn action = do
-            output <- newTurnOutputContext turn
-            let browserContext = mkToolContext (TurnIdentity (GroupId 900) message (UserId 1) (UserId 99) actor Nothing (Just output)) (TurnCapabilities True False False noAdvertisedCaps False Map.empty Nothing True)
-                arguments = object ["action" .= (action :: Text), "url" .= ("https://example.com" :: Text), "selector" .= ("#button" :: Text)]
-            withDb pool $ case [tool | tool <- browserToolsFor browserContext registry Nothing, tool.toolName == "browser"] of
-              [tool] -> do
-                queue <- newToolOutputQueue 0
-                runToolOutput queue (toolRun tool arguments)
-              _ -> error "missing browser tool"
-      registry <- makeRegistry
-      navigated <- run registry first "open"
-      navigated `shouldSatisfy` not . isLeft
-      show navigated `shouldNotContain` "fixture-auth-cookie"
-      void $ withDb pool (taskReportTyped first.atrTurnId (report TaskState.ReportWaiting))
-      withDb pool (finishAgentTurn first TurnSucceeded 1 Nothing)
-      withDb pool (releaseBrowserTurn registry (GroupId 900) first.atrTurnId)
-      void $ withDb pool (taskControl (GroupId 900) actor False identifier "steer" Nothing Nothing "continue")
-      second <- claimOne pool
-      run registry second "snapshot" >>= (`shouldSatisfy` not . isLeft)
+  it "freezes explicit browser profile bindings for reminder occurrences" $
+    withBrowser $ \registry _ _ -> do
+      running <- runningJob pool Browser Map.empty
+      runBrowser pool running registry "open" >>= (`shouldSatisfy` not . isLeft)
+      command pool running registry ["save", taskHandle running.job.run.jobId, "login", "https://example.com"] >>= (`shouldSatisfy` not . isLeft)
+      now <- getCurrentTime
+      let actor = running.job.spec.principal
+      Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor running.turn "browser watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
+      Right _ <- withDb pool (withTransaction (MonitorControl.controlMonitor 900 actor.unPrincipalId False monitor.mrMonitorOrdinal.unMonitorOrdinal (MonitorControl.ConfigureMonitor 1 "browser watch" QueueOccurrences 10 RetainPending (Just (Browser, True))) False))
+      let handle = monitorHandleText monitor.mrMonitorOrdinal
+          admit = do
+            [fire] <- withDb pool (claimElaboratedMonitorFires "browser-monitor" now 60 10)
+            Right (MonitorTaskAdmitted _ job) <- withDb pool (withTransaction (admitMonitorTaskWithin "browser-monitor" fire.emfFireId Nothing Map.empty running.job.spec.source.unCanonicalMessageId))
+            pure job
+      command pool running registry ["monitor", handle, "login"] >>= (`shouldSatisfy` not . isLeft)
+      insertOccurrence pool monitor "bound"
+      command pool running registry ["unmonitor", handle] >>= (`shouldSatisfy` not . isLeft)
+      [binding] <- withDb pool (query "SELECT profile_id,version FROM browser_profiles" ())
+      old <- admit
+      old.browserProfile `shouldBe` Just binding
+      insertOccurrence pool monitor "unbound"
+      new <- admit
+      new.browserProfile `shouldBe` Nothing
+
+  it "keeps a live workspace, saves only on explicit request, and restores only an authorized profile" $
+    withBrowser $ \registry calls _ -> do
+      running <- runningJob pool Browser Map.empty
+      runBrowser pool running registry "open" >>= (`shouldSatisfy` not . isLeft)
+      runBrowser pool running registry "snapshot" >>= (`shouldSatisfy` not . isLeft)
       observed <- readIORef calls
-      length (filter ((== "browse_session_start") . fst) observed) `shouldBe` 1
-      run registry first "click" >>= (`shouldSatisfy` isLeft)
-      readIORef calls `shouldReturn` observed
-      restarted <- configureBrowserRegistry (browserVault registry) 1800 300 <$> makeRegistry
-      run restarted second "click" >>= (`shouldSatisfy` isLeft)
-      run restarted second "open" >>= (`shouldSatisfy` not . isLeft)
-      restored <- readIORef calls
-      let starts = [arguments | (name, arguments) <- reverse restored, name == "browse_session_start"]
-      length starts `shouldBe` 2
-      show (last starts) `shouldContain` "fixture-auth-cookie"
-      beforeDrop <- readIORef serial
+      count "browse_session_start" observed `shouldBe` 1
+      count "max_workspace_checkpoint" observed `shouldBe` 0
+      saved <- command pool running registry ["save", taskHandle running.job.run.jobId, "login", "https://example.com"]
+      saved `shouldSatisfy` not . isLeft
+      raw <- withDb pool (query "SELECT checkpoint FROM browser_profiles" ())
+      show (raw :: [Only Text]) `shouldNotContain` "fixture-auth-cookie"
+      restored <- command pool running registry ["use", taskHandle running.job.run.jobId, "login"]
+      restored `shouldSatisfy` not . isLeft
+      result <- runBrowser pool running registry "open"
+      result `shouldSatisfy` not . isLeft
+      show result `shouldNotContain` "fixture-auth-cookie"
+      callsAfter <- readIORef calls
+      count "max_workspace_checkpoint" callsAfter `shouldBe` 1
+      show [args | (name, args) <- callsAfter, name == "browse_session_start"] `shouldContain` "fixture-auth-cookie"
+      withDb pool (query "SELECT count(*) FROM browser_workspaces" ()) `shouldReturn` [Only (0 :: Int64)]
+
+  it "never replays an uncertain action and requires confirmed closure before reset" $
+    withBrowser $ \registry calls failure -> do
+      running <- runningJob pool Browser Map.empty
+      runBrowser pool running registry "open" >>= (`shouldSatisfy` not . isLeft)
       writeIORef failure "transport:browse_session_action"
-      lost <- run restarted second "click"
-      show lost `shouldContain` "not replayed"
-      readIORef serial `shouldReturn` (beforeDrop + 1)
-      afterDrop <- readIORef calls
-      run restarted second "snapshot" >>= (`shouldSatisfy` isLeft)
-      readIORef calls `shouldReturn` afterDrop
-      run restarted second "open" >>= (`shouldSatisfy` not . isLeft)
-      -- Reuse the registry's fresh handshake; cold recovery must not create
-      -- a second MCP process or replay the uncertain interaction.
-      readIORef serial `shouldReturn` (beforeDrop + 1)
-      reopened <- readIORef calls
-      length (filter ((== "browse_session_action") . fst) reopened) `shouldBe` 1
-      beforeCheckpointLoss <- readIORef serial
-      writeIORef failure "transport:max_workspace_checkpoint"
-      checkpointLost <- run restarted second "snapshot"
-      checkpointLost `shouldSatisfy` not . isLeft
-      show checkpointLost `shouldContain` "checkpoint transport lost"
-      run restarted second "open" >>= (`shouldSatisfy` not . isLeft)
-      readIORef serial `shouldReturn` (beforeCheckpointLoss + 1)
-      writeIORef failure "browse_session_action"
-      run restarted second "click" >>= (`shouldSatisfy` isLeft)
+      runBrowser pool running registry "click" >>= (`shouldSatisfy` isLeft)
       afterFailure <- readIORef calls
-      run restarted second "click" >>= (`shouldSatisfy` isLeft)
+      runBrowser pool running registry "click" >>= (`shouldSatisfy` isLeft)
+      runBrowser pool running registry "open" >>= (`shouldSatisfy` isLeft)
       readIORef calls `shouldReturn` afterFailure
       writeIORef failure "max_workspace_revoke"
-      withDb pool (browserCommand restarted (GroupId 900) actor ["reset", "task#1"]) >>= (`shouldSatisfy` isLeft)
+      command pool running registry ["reset", taskHandle running.job.run.jobId] >>= (`shouldSatisfy` isLeft)
       writeIORef failure ""
-      withDb pool (browserCommand restarted (GroupId 900) actor ["reset", "task#1"]) >>= (`shouldSatisfy` not . isLeft)
+      command pool running registry ["reset", taskHandle running.job.run.jobId] >>= (`shouldSatisfy` not . isLeft)
+      runBrowser pool running registry "open" >>= (`shouldSatisfy` not . isLeft)
+      count "browse_session_action" <$> readIORef calls `shouldReturn` 1
 
-  it "uses one workspace across attempts, but fences the previous owner" $ do
-    source@(_, _, actor) <- seed pool 900 1
-    identifier <- admit pool source "browser"
-    first <- claimOne pool
-    Right original <- withDb pool (acquireBrowserWorkspace first.atrTurnId "runtime")
-    withDb pool (beginBrowserOperation first.atrTurnId original.bwEpoch) `shouldReturn` True
-    withDb pool (finishBrowserOperation first.atrTurnId original.bwEpoch (Just "sealed-fixture") True) `shouldReturn` True
-    withDb pool (taskReportTyped first.atrTurnId (report TaskState.ReportWaiting)) `shouldReturn` True
-    withDb pool (finishAgentTurn first TurnSucceeded 1 Nothing)
-    void $ withDb pool (taskControl (GroupId 900) actor False identifier "steer" Nothing Nothing "continue")
-    second <- claimOne pool
-    Right resumed <- withDb pool (acquireBrowserWorkspace second.atrTurnId "runtime")
-    resumed.bwGeneration `shouldBe` original.bwGeneration
-    resumed.bwCheckpoint `shouldBe` Just "sealed-fixture"
-    resumed.bwEpoch `shouldSatisfy` (> original.bwEpoch)
-    withDb pool (beginBrowserOperation first.atrTurnId original.bwEpoch) `shouldReturn` False
-    withDb pool (finishBrowserOperation first.atrTurnId original.bwEpoch (Just "late-write") True) `shouldReturn` False
+  it "binds profile access to owner and conversation, and checks revocation before further actions" $
+    withBrowser $ \registry calls _ -> do
+      running <- runningJob pool Browser Map.empty
+      runBrowser pool running registry "open" >>= (`shouldSatisfy` not . isLeft)
+      command pool running registry ["save", taskHandle running.job.run.jobId, "login", "https://example.com"] >>= (`shouldSatisfy` not . isLeft)
+      let use group actor = withDb pool (browserCommand running.jobs registry group actor ["use", taskHandle running.job.run.jobId, "login"])
+      use (GroupId 901) running.job.spec.principal >>= (`shouldSatisfy` isLeft)
+      use (GroupId 900) (PrincipalId 999999) >>= (`shouldSatisfy` isLeft)
+      use (GroupId 900) running.job.spec.principal >>= (`shouldSatisfy` not . isLeft)
+      runBrowser pool running registry "open" >>= (`shouldSatisfy` not . isLeft)
+      command pool running registry ["delete", "login"] >>= (`shouldSatisfy` not . isLeft)
+      observed <- readIORef calls
+      runBrowser pool running registry "open" >>= (`shouldSatisfy` isLeft)
+      readIORef calls `shouldReturn` observed
 
-  it "reserves at most one operation for an epoch" $ do
-    source <- seed pool 900 1
-    _ <- admit pool source "browser"
-    turn <- claimOne pool
-    Right workspace <- withDb pool (acquireBrowserWorkspace turn.atrTurnId "runtime")
-    results <- concurrently (withDb pool (beginBrowserOperation turn.atrTurnId workspace.bwEpoch)) (withDb pool (beginBrowserOperation turn.atrTurnId workspace.bwEpoch))
-    results `shouldSatisfy` uncurry (/=)
+  it "revokes unopened jobs on clear and permits only an explicit owner reset" $
+    withBrowser $ \registry calls _ -> do
+      running <- runningJob pool Browser Map.empty
+      Jobs.setJobBrowserAccess running.jobs running.job.run False
+      runBrowser pool running registry "open" >>= (`shouldSatisfy` isLeft)
+      readIORef calls `shouldReturn` []
+      command pool running registry ["reset", taskHandle running.job.run.jobId] >>= (`shouldSatisfy` not . isLeft)
+      runBrowser pool running registry "open" >>= (`shouldSatisfy` not . isLeft)
 
-  it "cold-recovers a clean restart without replaying an operation" $ do
-    source <- seed pool 900 1
-    _ <- admit pool source "browser"
-    turn <- claimOne pool
-    Right original <- withDb pool (acquireBrowserWorkspace turn.atrTurnId "old-runtime")
-    withDb pool (beginBrowserOperation turn.atrTurnId original.bwEpoch) `shouldReturn` True
-    withDb pool (finishBrowserOperation turn.atrTurnId original.bwEpoch (Just "encrypted") True) `shouldReturn` True
-    Right cold <- withDb pool (acquireBrowserWorkspace turn.atrTurnId "new-runtime")
-    cold.bwGeneration `shouldSatisfy` (> original.bwGeneration)
-    cold.bwState `shouldBe` Cold
-    cold.bwCheckpoint `shouldBe` Just "encrypted"
+  it "retains a finished session for explicit save, then releases it after the grace period" $
+    withBrowser $ \registry _ _ -> do
+      running <- runningJob pool Browser Map.empty
+      runBrowser pool running registry "open" >>= (`shouldSatisfy` not . isLeft)
+      Jobs.completeJob running.jobs running.job.run Succeeded (JobResult "finished" Nothing)
+      withDb pool (releaseBrowserTurn running.jobs registry (GroupId 900) running.turn.atrTurnId)
+      command pool running registry ["save", taskHandle running.job.run.jobId, "login", "https://example.com"] >>= (`shouldSatisfy` not . isLeft)
+      withDb pool (browserMaintenance (configureBrowserRegistry (browserVault registry) 1800 0 registry))
+      jobBrowser registry running.job.run.jobId `shouldReturn` Nothing
 
-  it "does not automatically resume an interrupted operation, including after restart" $ do
-    source <- seed pool 900 1
-    _ <- admit pool source "browser"
-    turn <- claimOne pool
-    Right workspace <- withDb pool (acquireBrowserWorkspace turn.atrTurnId "old-runtime")
-    withDb pool (beginBrowserOperation turn.atrTurnId workspace.bwEpoch) `shouldReturn` True
-    resumed <- withDb pool (acquireBrowserWorkspace turn.atrTurnId "new-runtime")
-    resumed `shouldSatisfy` isLeft
-    withDb pool (beginBrowserOperation turn.atrTurnId workspace.bwEpoch) `shouldReturn` False
+withBrowser :: (BrowserRegistry -> IORef [(Text, Value)] -> IORef Text -> IO ()) -> IO ()
+withBrowser action = do
+  calls <- newIORef []
+  failure <- newIORef ""
+  serial <- newIORef 0
+  testWithApplication (pure (browserFixture calls failure serial)) $ \port -> do
+    http <- newHttpRuntime
+    registry <- newBrowserRegistryWithHost http (GroupId 900) ("http://127.0.0.1:" <> show port <> "/mcp") "localhost"
+    action registry calls failure
 
-  it "reclaims cancellation and replacement, and never reuses the replaced generation" $ do
-    source@(_, _, actor) <- seed pool 900 1
-    identifier <- admit pool source "browser"
-    turn <- claimOne pool
-    Right original <- withDb pool (acquireBrowserWorkspace turn.atrTurnId "runtime")
-    void $ withDb pool (taskControl (GroupId 900) actor False identifier "replace" (Just 1) Nothing "new goal")
-    withDb pool (beginBrowserOperation turn.atrTurnId original.bwEpoch) `shouldReturn` False
-    registry <- newHttpRuntime >>= newBrowserRegistry
-    withDb pool (browserMaintenance registry)
-    next <- claimOne pool
-    Right replaced <- withDb pool (acquireBrowserWorkspace next.atrTurnId (browserRuntimeId registry))
-    replaced.bwGeneration `shouldSatisfy` (> original.bwGeneration)
-    replaced.bwCheckpoint `shouldBe` Nothing
-    void $ withDb pool (taskControl (GroupId 900) actor False identifier "cancel" Nothing Nothing "stop")
-    withDb pool (beginBrowserOperation next.atrTurnId replaced.bwEpoch) `shouldReturn` False
-    withDb pool (browserMaintenance registry)
-    rows <- withDb pool (browserWorkspace identifier)
-    rows `shouldSatisfy` (\values -> all (\(_, _, state, runtime) -> state == "revoked" && isNothing runtime) values)
+runBrowser :: DbPool -> RunningJob -> BrowserRegistry -> Text -> IO (Either Text Value)
+runBrowser pool running registry action = do
+  output <- newTurnOutputContext running.turn
+  let context = mkToolContext (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 99) running.job.spec.principal Nothing (Just output)) (TurnCapabilities True False False noAdvertisedCaps False Map.empty Nothing True)
+      arguments = object ["action" .= action, "url" .= ("https://example.com" :: Text), "selector" .= ("#button" :: Text)]
+  withDb pool $ case [tool | tool <- browserToolsFor running.jobs context registry Nothing, tool.toolName == "browser"] of
+    [tool] -> do
+      queue <- newToolOutputQueue 0
+      runToolOutput queue (toolRun tool arguments)
+    _ -> error "browser tool missing"
 
-  it "clear-all revokes even tasks that have not opened a browser yet" $ do
-    source <- seed pool 900 1
-    _ <- admit pool source "not-open"
-    turn <- claimOne pool
-    withDb pool (revokeConversationBrowsers (GroupId 900))
-    withDb pool (acquireBrowserWorkspace turn.atrTurnId "runtime") >>= (`shouldSatisfy` isLeft)
+command :: DbPool -> RunningJob -> BrowserRegistry -> [Text] -> IO (Either Text Value)
+command pool running registry pieces = withDb pool (browserCommand running.jobs registry (GroupId 900) running.job.spec.principal pieces)
 
-  it "orders clear-all against first browser admission without a lock inversion" $ do
-    source <- seed pool 900 1
-    _ <- admit pool source "clear-race"
-    turn <- claimOne pool
-    _ <- concurrently (withDb pool (acquireBrowserWorkspace turn.atrTurnId "runtime")) (withDb pool (revokeConversationBrowsers (GroupId 900)))
-    withDb pool (acquireBrowserWorkspace turn.atrTurnId "runtime") >>= (`shouldSatisfy` isLeft)
-
-  it "keeps waiting workspaces only until their idle TTL and wipes checkpoints at deadline" $ do
-    source <- seed pool 900 1
-    identifier <- admit pool source "idle"
-    turn <- claimOne pool
-    Right workspace <- withDb pool (acquireBrowserWorkspace turn.atrTurnId "runtime")
-    void $ withDb pool (beginBrowserOperation turn.atrTurnId workspace.bwEpoch)
-    void $ withDb pool (finishBrowserOperation turn.atrTurnId workspace.bwEpoch (Just "encrypted") True)
-    void $ withDb pool (taskReportTyped turn.atrTurnId (report TaskState.ReportWaiting))
-    withDb pool (finishAgentTurn turn TurnSucceeded 1 Nothing)
-    withDb pool (browserGcCandidates 1800 300) `shouldReturn` []
-    void $ withDb pool $ execute "UPDATE browser_workspaces SET last_used_at=now()-interval '31 minutes' WHERE task_id=?" (Only identifier)
-    registry <- newHttpRuntime >>= newBrowserRegistry
-    withDb pool (browserMaintenance registry)
-    saved <- withDb pool $ query "SELECT state,checkpoint,runtime_id FROM browser_workspaces" ()
-    saved `shouldBe` [("cold" :: Text, Just ("encrypted" :: Text), Nothing :: Maybe Text)]
-    void $ withDb pool $ execute "UPDATE durable_tasks SET deadline=now()-interval '1 second' WHERE task_id=?" (Only identifier)
-    withDb pool (browserMaintenance registry)
-    erased <- withDb pool $ query "SELECT checkpoint FROM browser_workspaces" ()
-    erased `shouldBe` [Only (Nothing :: Maybe Text)]
-
-  it "turn finalization releases control without destroying the task workspace" $ do
-    source <- seed pool 900 1
-    identifier <- admit pool source "release"
-    turn <- claimOne pool
-    registry <- newHttpRuntime >>= newBrowserRegistry
-    Right workspace <- withDb pool (acquireBrowserWorkspace turn.atrTurnId (browserRuntimeId registry))
-    withDb pool (releaseBrowserTurn registry (GroupId 900) turn.atrTurnId)
-    rows <- withDb pool $ query "SELECT generation,owner_turn_id,state FROM browser_workspaces WHERE task_id=?" (Only identifier)
-    rows `shouldBe` [(workspace.bwGeneration, Nothing :: Maybe Int64, "cold" :: Text)]
-
-  it "isolates profiles by owner and conversation, and fences every bound workspace on revocation" $ do
-    source@(_, _, actor) <- seed pool 900 1
-    (_, _, other) <- seed pool 900 2
-    identifier <- admit pool source "profile-source"
-    turn <- claimOne pool
-    registry <- newHttpRuntime >>= newBrowserRegistry
-    Right workspace <- withDb pool (acquireBrowserWorkspace turn.atrTurnId (browserRuntimeId registry))
-    encrypted <- sealBrowserState (browserVault registry) (workspaceIdentity identifier) emptyStorage
-    void $ withDb pool (beginBrowserOperation turn.atrTurnId workspace.bwEpoch)
-    void $ withDb pool (finishBrowserOperation turn.atrTurnId workspace.bwEpoch (Just encrypted) True)
-    let command principal group args = withDb pool (browserCommand registry (GroupId group) principal args)
-    command other 900 ["save", "task#1", "account", "https://example.com"] >>= (`shouldSatisfy` isLeft)
-    command actor 901 ["save", "task#1", "account", "https://example.com"] >>= (`shouldSatisfy` isLeft)
-    command actor 900 ["save", "task#1", "account", "https://example.com"] >>= (`shouldSatisfy` not . isLeft)
-    command other 900 ["profiles"] `shouldReturn` Right (toJSON ([] :: [Value]))
-    command actor 900 ["use", "task#1", "account"] >>= (`shouldSatisfy` not . isLeft)
-    Right bound <- withDb pool (acquireBrowserWorkspace turn.atrTurnId (browserRuntimeId registry))
-    bound.bwProfile `shouldBe` Just 1
-    command actor 900 ["delete", "account"] >>= (`shouldSatisfy` not . isLeft)
-    withDb pool (beginBrowserOperation turn.atrTurnId bound.bwEpoch) `shouldReturn` False
-    withDb pool (acquireBrowserWorkspace turn.atrTurnId (browserRuntimeId registry)) >>= (`shouldSatisfy` isLeft)
-
-  it "freezes monitor profile authorization in each occurrence, without sharing its workspace" $ do
-    (turn, _, actor@(PrincipalId principal)) <- seed pool 900 1
-    now <- getCurrentTime
-    Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
-    void $ withDb pool $ execute "INSERT INTO browser_profiles(conversation_id,principal_id,name,origin,checkpoint) SELECT conversation_id,?,'account','https://example.com','encrypted' FROM monitors WHERE monitor_id=?" (principal, monitor.mrMonitorId)
-    void $ withDb pool $ execute "INSERT INTO browser_monitor_profiles(monitor_id,profile_id,profile_version) VALUES(?,1,1)" (Only monitor.mrMonitorId)
-    insertOccurrence pool monitor "first"
-    void $ withDb pool $ execute "UPDATE browser_profiles SET version=2 WHERE profile_id=1" ()
-    void $ withDb pool $ execute "UPDATE browser_monitor_profiles SET profile_version=2" ()
-    insertOccurrence pool monitor "second"
-    rows <- withDb pool $ query "SELECT (definition_snapshot->>'browser_profile_version')::bigint FROM monitor_fires ORDER BY fire_id" ()
-    rows `shouldBe` [Only (1 :: Int64), Only 2]
-
-emptyStorage :: Value
-emptyStorage = object ["storage" .= object ["cookies" .= ([] :: [Value]), "origins" .= ([] :: [Value])]]
+count :: Text -> [(Text, Value)] -> Int
+count name = length . filter ((== name) . fst)
 
 browserFixture :: IORef [(Text, Value)] -> IORef Text -> IORef Int -> Application
 browserFixture calls failure serial request respond = do

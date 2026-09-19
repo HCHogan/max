@@ -15,7 +15,6 @@ import Max.CodeMode.Execution
 import Max.CodeMode.JavaScript
 import Max.CodeMode.Model (executeModelBatch)
 import Max.CodeMode.Wasm
-import Max.Effects.ToolControl (finishExecution, runToolControl)
 import Max.Effects.Tools
 import Max.Execution.Tools
 import Max.Execution.Workflow
@@ -148,20 +147,6 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     map (.ccOutcome) result.cmCalls `shouldBe` ["committed"]
     result.cmOutput `shouldBe` Just (object ["error" .= ("Error: after commit" :: Text)])
     readIORef count `shouldReturn` 1
-
-  it "stops at host finish and suppresses conflicting batch work" $ do
-    count <- newIORef (0 :: Int)
-    let done = echoTool {toolName = "done", toolRunner = LegacyRunner $ \args -> finishExecution (Just "finished") >> pure (Right args)}
-        finish = echoDefinition {tdRef = ToolRef "done", tdCallMode = FinishCall, tdParallelism = SequentialOnly}
-        runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}
-    registry <- checked [echoDefinition, finish] [runner, done]
-    result <- runEff . runConcurrent . runToolsWithControl runToolControl registry $ do
-      session <- newExecutionSession Nothing
-      runJavaScript session noJournal (views registry) "max.batch([{tool:'echo',args:{value:1}},{tool:'done',args:{value:2}}]); tools.echo({value:3}); throw new Error('unreachable');"
-    result.cmExit `shouldBe` WasmHostStopped
-    result.cmControl `shouldBe` FinishLoop (Just "finished")
-    map (.ccOutcome) result.cmCalls `shouldBe` ["rejected", "succeeded"]
-    readIORef count `shouldReturn` 0
 
   it "has no ambient APIs or raw bridge, and cannot call hidden or recursive tools" $ do
     result <- simple "return ['fetch','require','process','console','setTimeout','Date','__maxCall'].map(x => typeof globalThis[x]).concat(typeof Math.random);"

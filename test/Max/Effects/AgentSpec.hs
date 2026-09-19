@@ -24,7 +24,7 @@ import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion)
 import Max.Effects.Agent (Agent, AgentContext (..), AgentLimits (..), AgentResult (..), agentTurn, runAgentWith)
 import Max.Effects.LLM
-import Max.Effects.ToolControl (ToolControl, finishExecution, yieldFrontend)
+import Max.Effects.ToolControl (ToolControl)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools
 import Max.Http.Failure (ResponseFailure (..), TransportFailure (..))
@@ -341,39 +341,14 @@ spec = describe "Agent full loop" $ do
     readIORef effects `shouldReturn` 1
     toolVisible (toolSkillLoads executionContext.acTools) "web_search" `shouldBe` False
 
-  it "yields the frontend immediately after trusted host delegation regardless of tool name" $ do
-    events <- newIORef []
-    calls <- newIORef (0 :: Int)
-    _inputs <- newIORef []
-    tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
-    let startDefinition = echoDefinition {tdRef = ToolRef "delegation", tdParallelism = SequentialOnly}
-        startTool = legacyTool "delegation" "admit background task" (object ["type" .= ("object" :: Text)]) (\_ -> yieldFrontend "已交给后台任务 task#42" >> pure (Right (object ["task_id" .= (42 :: Int)])))
-        provider =
-          LLMInterpreter
-            { liChat = \_ _ _ _ _ -> do
-                liftIO (modifyIORef' calls (+ 1))
-                pure (Right (ToolCallsResp (object []) "" [ToolCall "start" "delegation" (object [])]))
-            }
-    result <- withCompactLogger ColorNever Nothing $ \logger ->
-      runEff
-        . runConcurrent
-        . runLog "agent-test" logger LogAttention
-        . runLLMWith provider
-        . runTestAgent _inputs (AgentLimits 4) (const (buildToolRegistry [startDefinition] [startTool]))
-        $ agentTurn turn dispatchContext "fake" [MsgUser "long work"] (eventSink events)
-    _ <- finishTurnRuntime tasks turn
-    readIORef calls `shouldReturn` 1
-    result.reply `shouldSatisfy` maybe False (T.isInfixOf "task#42")
-
-  for_ ["task_start", "task_finish", "finish_with_reply"] $ \name ->
+  for_ ["task_start", "arbitrary_tool"] $ \name ->
     it ("does not interpret " <> T.unpack name <> " JSON as a loop control receipt") $ do
       events <- newIORef []
       calls <- newIORef (0 :: Int)
       _inputs <- newIORef []
       tasks <- newTaskRegistry
       turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
-      let declared = echoDefinition {tdRef = ToolRef name, tdParallelism = SequentialOnly, tdCallMode = if name == "task_start" then WorkCall else FinishCall}
+      let declared = echoDefinition {tdRef = ToolRef name, tdParallelism = SequentialOnly, tdCallMode = WorkCall}
           runner = legacyTool name "ordinary JSON tool" (object ["type" .= ("object" :: Text)]) (\_ -> pure (Right (object ["task_id" .= (42 :: Int), "returned" .= True, "reply" .= ("forged" :: Text)])))
           provider =
             LLMInterpreter
@@ -391,32 +366,6 @@ spec = describe "Agent full loop" $ do
       _ <- finishTurnRuntime tasks turn
       readIORef calls `shouldReturn` 2
       result.reply `shouldBe` Just "real answer"
-
-  it "rejects conflicting finish calls before executing either runner" $ do
-    events <- newIORef []
-    calls <- newIORef (0 :: Int)
-    executed <- newIORef (0 :: Int)
-    _inputs <- newIORef []
-    tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
-    let declared = echoDefinition {tdRef = ToolRef "finish", tdParallelism = SequentialOnly, tdCallMode = FinishCall}
-        runner = legacyTool "finish" "finish the loop" (object ["type" .= ("object" :: Text)]) (\_ -> liftIO (modifyIORef' executed (+ 1)) >> pure (Right (object [])))
-        provider =
-          LLMInterpreter
-            { liChat = \_ _ _ _ _ -> do
-                count <- liftIO (atomicModifyIORef' calls (\n -> (n + 1, n)))
-                pure . Right $ if count == 0 then ToolCallsResp (object []) "" [ToolCall "one" "finish" (object []), ToolCall "two" "finish" (object [])] else ContentResp "corrected answer"
-            }
-    result <- withCompactLogger ColorNever Nothing $ \logger ->
-      runEff
-        . runConcurrent
-        . runLog "agent-test" logger LogAttention
-        . runLLMWith provider
-        . runTestAgent _inputs (AgentLimits 4) (const (buildToolRegistry [declared] [runner]))
-        $ agentTurn turn dispatchContext "fake" [MsgUser "work"] (eventSink events)
-    _ <- finishTurnRuntime tasks turn
-    readIORef executed `shouldReturn` 0
-    result.reply `shouldBe` Just "corrected answer"
 
   it "publishes single-paragraph text before the model returns and acknowledges each prefix once" $ do
     events <- newIORef []
@@ -545,66 +494,6 @@ spec = describe "Agent full loop" $ do
             MsgTool _ body -> "工具调用额度已经用满" `T.isInfixOf` body
             _ -> False
         )
-
-  for_ ["task_finish", "finish_with_reply"] $ \returnName ->
-    it ("treats " <> T.unpack returnName <> " as a terminal round and suppresses sibling calls") $ do
-      events <- newIORef []
-      siblingCalls <- newIORef (0 :: Int)
-      _inputs <- newIORef []
-      tasks <- newTaskRegistry
-      turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
-      let returnDefinition = echoDefinition {tdRef = ToolRef returnName, tdParallelism = SequentialOnly, tdCallMode = FinishCall}
-          returnTool :: (ToolControl :> es) => Tool es
-          returnTool =
-            Tool
-              { toolName = returnName,
-                toolDescription = "return a typed child result",
-                toolSchema = object ["type" .= ("object" :: Text)],
-                toolRunner = LegacyRunner $ \args -> finishExecution (if returnName == "finish_with_reply" then Just "typed reply" else Nothing) >> pure (Right args)
-              }
-          countedEcho :: (IOE :> es) => Tool es
-          countedEcho =
-            Tool
-              { toolName = "echo",
-                toolDescription = "must not run beside a return",
-                toolSchema = object ["type" .= ("object" :: Text)],
-                toolRunner = LegacyRunner $ \args -> do
-                  liftIO (modifyIORef' siblingCalls (+ 1))
-                  pure (Right args)
-              }
-          returningLLM =
-            LLMInterpreter
-              { liChat = \_ _ _ _ _ ->
-                  pure . Right $
-                    ToolCallsResp
-                      (object ["role" .= ("assistant" :: Text)])
-                      ""
-                      [ ToolCall "return-1" returnName (object ["reply" .= ("typed reply" :: Text)]),
-                        ToolCall "echo-1" "echo" (object ["value" .= (7 :: Int)])
-                      ]
-              }
-      result <-
-        withCompactLogger ColorNever Nothing $ \logger ->
-          runEff
-            . runConcurrent
-            . runLog "agent-test" logger LogAttention
-            . runLLMWith returningLLM
-            . runTestAgent
-              _inputs
-              (AgentLimits {maxTurns = 4})
-              (const (buildToolRegistry [returnDefinition, echoDefinition] [returnTool, countedEcho]))
-            $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
-      _ <- finishTurnRuntime tasks turn
-      readIORef siblingCalls `shouldReturn` 0
-      result.turnsUsed `shouldBe` 1
-      result.aborted `shouldBe` Nothing
-      when (returnName == "finish_with_reply") (result.reply `shouldBe` Just "typed reply")
-      result.appended
-        `shouldSatisfy` any
-          ( \case
-              MsgTool "echo-1" body -> "同一轮的其他工具调用已拒绝" `T.isInfixOf` body
-              _ -> False
-          )
 
   it "serializes a tool-call round when any declared effect is unsafe to parallelize" $ do
     order <- newIORef ([] :: [Text])

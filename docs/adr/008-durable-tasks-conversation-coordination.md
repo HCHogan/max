@@ -1,5 +1,10 @@
 # ADR 008: Durable Tasks and Conversation Coordination
 
+> Historical design. The September 19 [simplification](../simplification.md)
+> replaces task leases, restart continuation and automatic browser checkpoints
+> with process-owned Jobs. See [current job operations](../runbooks/jobs.md).
+
+
 > 2026-09-15: The legacy maxops integration described here has been removed.
 > Current operations use [SSH and the sandbox runtime](../runbooks/ssh-operations.md).
 

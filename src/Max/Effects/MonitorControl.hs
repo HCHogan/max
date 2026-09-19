@@ -4,6 +4,7 @@
 -- rechecks the caller under the same transaction that changes the definition.
 module Max.Effects.MonitorControl (MonitorControl, MonitorControlScope (..), MonitorArm (..), armMonitor, controlMonitor, runMonitorControl) where
 
+import Control.Monad (forM_, void)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
@@ -11,10 +12,11 @@ import Data.Time (UTCTime)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.PostgreSQL (WithConnection)
+import Max.DB.Authority (authorizeCallerWithin)
 import Max.DB.Monitor qualified as DB
-import Max.DB.Task.Authorization (authorizeCallerWithin)
-import Max.DB.Task.MonitorControl qualified as Control
+import Max.DB.Monitor.Control qualified as Control
 import Max.DB.Transaction (InTransaction, withTransaction)
+import Max.Jobs qualified as Jobs
 import Max.Monitor.Control
 import Max.Monitor.Types
   ( LedgerMatchSpec,
@@ -51,17 +53,23 @@ armMonitor = send . ArmMonitor
 controlMonitor :: (MonitorControl :> es) => MonitorOrdinal -> MonitorCommand -> Bool -> Eff es (Either MonitorControlError MonitorControlReceipt)
 controlMonitor ordinal command cancelTasks = send (ControlMonitor ordinal command cancelTasks)
 
-runMonitorControl :: forall es a. (WithConnection :> es, IOE :> es) => MonitorControlScope -> Eff (MonitorControl : es) a -> Eff es a
-runMonitorControl scope = interpret $ \_ -> \case
+runMonitorControl :: forall es a. (WithConnection :> es, IOE :> es) => Jobs.Jobs -> MonitorControlScope -> Eff (MonitorControl : es) a -> Eff es a
+runMonitorControl jobs scope = interpret $ \_ -> \case
   ArmMonitor request -> withCaller ArmingCallerFenced $ \turn ->
     case request of
       CannedReminder body cron at -> Right <$> DB.armCannedTimeMonitor scope.group scope.principal (Just turn) body cron at
       _ | not scope.armingAllowed -> pure (Left MonitorArmingForbidden)
       TimeMonitor goal cron at -> DB.armElaboratedTimeMonitor scope.group scope.principal turn goal cron at scope.grants
       LedgerMonitor goal predicate cooldown expires maxFires -> DB.armLedgerMatchMonitor scope.group scope.principal turn goal predicate cooldown expires maxFires scope.grants
-  ControlMonitor ordinal command cancelTasks -> withCaller MonitorCallerFenced $ \_ ->
-    let GroupId group = scope.group; PrincipalId actor = scope.principal
-     in Control.controlMonitor group actor scope.armingAllowed ordinal.unMonitorOrdinal command cancelTasks
+  ControlMonitor ordinal command cancelTasks -> do
+    result <- withCaller MonitorCallerFenced $ \_ ->
+      let GroupId group = scope.group; PrincipalId actor = scope.principal
+       in Control.controlMonitor group actor scope.armingAllowed ordinal.unMonitorOrdinal command cancelTasks
+    case result of
+      Left failure -> pure (Left failure)
+      Right (receipt, handles) -> do
+        forM_ handles $ \identifier -> liftIO $ void (Jobs.cancelJob jobs scope.group scope.principal True identifier "monitor controller cancelled admitted work")
+        pure (Right receipt)
   where
     withCaller :: forall failure result. failure -> (AgentTurnRef -> Eff (InTransaction : es) (Either failure result)) -> Eff es (Either failure result)
     withCaller failure action = case scope.turn of

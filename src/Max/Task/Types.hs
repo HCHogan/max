@@ -1,5 +1,12 @@
 module Max.Task.Types
-  ( TaskProfile (..),
+  ( JobRun (..),
+    JobSpec (..),
+    JobMonitor (..),
+    JobView (..),
+    JobResult (..),
+    JobWait (..),
+    JobCommand (..),
+    TaskProfile (..),
     profileName,
     taskProfileNames,
     parseProfile,
@@ -9,11 +16,18 @@ module Max.Task.Types
   )
 where
 
+import Data.Aeson (ToJSON (..), Value, object, (.=))
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Max.Monitor.Types (MonitorFireId, MonitorId)
+import Max.Platform.Types (CanonicalMessageId, PrincipalId)
+import Max.Skill.Contract (Contract)
+import Max.Task.State (TaskStatus)
+import OneBot.Types (GroupId)
 import Text.Read (readMaybe)
 
 data TaskProfile = Research | Browser | Sandbox
@@ -54,7 +68,8 @@ taskGrants profile parent = Map.filterWithKey (\name _ -> name `elem` allowed) p
         "task_start",
         "task_status",
         "task_list",
-        "task_steer"
+        "task_steer",
+        "task_wait"
       ]
         <> case profile of
           Research -> []
@@ -82,3 +97,69 @@ parseTaskHandle raw = do
     else do
       identifier <- readMaybe (T.unpack digits)
       if identifier > 0 then Just identifier else Nothing
+
+-- | A replacement keeps the public handle; old workers retain an obsolete run.
+data JobRun = JobRun {jobId :: !Int64, generation :: !Int}
+  deriving stock (Eq, Ord, Show)
+
+data JobMonitor = JobMonitor {definitionId :: !MonitorId, fireId :: !MonitorFireId}
+  deriving stock (Eq, Show)
+
+data JobSpec = JobSpec
+  { group :: !GroupId,
+    principal :: !PrincipalId,
+    source :: !CanonicalMessageId,
+    objective :: !Text,
+    profile :: !TaskProfile,
+    grants :: !(Map Text Text),
+    inputs :: !Value,
+    parent :: !(Maybe JobRun),
+    contract :: !(Maybe Contract),
+    delegated :: !Bool,
+    monitor :: !(Maybe JobMonitor),
+    browserProfile :: !(Maybe (Int64, Int64)),
+    deadline :: !UTCTime
+  }
+  deriving stock (Eq, Show)
+
+data JobResult = JobResult {text :: !Text, payload :: !(Maybe Value)}
+  deriving stock (Eq, Show)
+
+instance ToJSON JobResult where
+  toJSON result = object ["text" .= result.text, "payload" .= result.payload]
+
+data JobView = JobView
+  { run :: !JobRun,
+    spec :: !JobSpec,
+    status :: !TaskStatus,
+    progress :: !(Maybe Text),
+    result :: !(Maybe JobResult),
+    calls :: !Int,
+    rounds :: !Int,
+    created :: !UTCTime,
+    browserAllowed :: !Bool
+  }
+  deriving stock (Eq, Show)
+
+instance ToJSON JobView where
+  toJSON job =
+    object
+      [ "task" .= taskHandle job.run.jobId,
+        "objective" .= job.spec.objective,
+        "profile" .= profileName job.spec.profile,
+        "owner" .= job.spec.principal,
+        "group_id" .= job.spec.group,
+        "parent" .= (taskHandle . (.jobId) <$> job.spec.parent),
+        "status" .= job.status,
+        "progress" .= job.progress,
+        "result" .= job.result,
+        "calls" .= job.calls,
+        "model_rounds" .= job.rounds,
+        "deadline" .= job.spec.deadline
+      ]
+
+data JobWait = ChildrenFinished ![JobView] | FeedbackPending
+  deriving stock (Eq, Show)
+
+data JobCommand = SteerJob !Text | ReplaceJob !Text | CancelJob !Text
+  deriving stock (Eq, Show)

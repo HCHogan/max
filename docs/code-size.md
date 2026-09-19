@@ -64,3 +64,12 @@ Largest core files in this snapshot:
 These measurements prioritize replacing durable task/conversation control,
 publication state and context materialization. Removing comments, hiding SQL
 in migration files or relabeling policy modules does not advance the core goal.
+
+## Jobs checkpoint
+
+Working tree following `7835971`, measured with the same manifest and tokei:
+core Haskell **33,596**; src/app Haskell **46,728**. This is 1,928 fewer src/app
+lines than the foreground checkpoint and 5,899 below the initial 52,627 baseline.
+Tests now have 20,330 effective code lines. Obsolete execution-protocol tests were
+retired; current behavior and upgrade coverage remain. Active SQL accounting and
+the remaining simplification stages are still pending.

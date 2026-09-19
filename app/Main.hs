@@ -18,7 +18,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Effectful.Reader.Dynamic (Reader, ask, runReader)
 import Max.Admin (adminServer)
-import Max.Agent.Runtime (runDurableAgent)
+import Max.Agent.Runtime (runAgentRuntime)
 import Max.Browser.Registry
   ( configureBrowserRegistry,
     destroyAllBrowsers,
@@ -52,12 +52,13 @@ import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
-import Max.Handler (dispatchMonitorFire, dispatchPendingWorker, dispatchProactive, durableTaskWorker, handleEvents)
+import Max.Handler (dispatchMonitorFire, dispatchPendingWorker, dispatchProactive, handleEvents, jobsWorker)
 import Max.Historian (historianWorker)
 import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
 import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
 import Max.Images (imageWorker)
 import Max.Intent (IntentState, intentWorker, newIntentState)
+import Max.Jobs (newJobs)
 import Max.Log (withCompactLogger)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
 import Max.Matrix (matrixDeliveryTransport, matrixWorker)
@@ -123,6 +124,7 @@ main = do
           sessions <- newSessionRegistry
           skillReg <- newSkillRegistry
           tasks <- newTaskRegistry
+          jobs <- newJobs tasks
           clientRef <- newTVarIO (Nothing :: ClientSlot)
           adminTargets <- newTVarIO (mempty :: Map.Map Int64 Int64)
           episodeScheduler <- newEpisodeScheduler
@@ -156,6 +158,7 @@ main = do
                     beAdminTarget = adminTargets,
                     beTasks = tasks,
                     beConversations = conversations,
+                    beJobs = jobs,
                     beShutdown = shutdown,
                     beSandboxes = sandboxes,
                     beBrowsers = browsers,
@@ -175,7 +178,7 @@ main = do
             . runBlobHost cfg.imagesDir
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
-            . runOutbound tasks
+            . runOutbound tasks jobs
             -- Token accounting goes through its own pooled connection
             -- (a plain IO writer): the LLM interpreter sits outside
             -- the WithConnection effect and the eval harness has no
@@ -213,7 +216,7 @@ main = do
             . runReader env
             . runPlatforms qqEdge foreignEdges
             . runRuntimeEmbedding (pure (newEmbedClient httpRuntime <$> cfg.embedding))
-            . runDurableAgent conversations defaultLimits (allToolsFor httpRuntime env)
+            . runAgentRuntime jobs conversations defaultLimits (allToolsFor httpRuntime env)
             $ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState logBuf clientRef mainTid
       )
       `finally` destroyAllBrowsers browsers
@@ -314,7 +317,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
               RequiredWorker
               (monitorWorker cfg.timezone (ownerFor "monitors") dispatchMonitorFire),
             worker "canonical-dispatch" RequiredWorker (dispatchPendingWorker (ownerFor "dispatch") fetchSig (intentState <$ env.beIntent)),
-            worker "durable-tasks" RequiredWorker (durableTaskWorker (ownerFor "tasks")),
+            worker "jobs" RequiredWorker jobsWorker,
             worker "browser-workspaces" RestartableWorker (forever (browserMaintenance env.beBrowsers >> threadDelay 15_000_000)),
             worker
               "platform-delivery"

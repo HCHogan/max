@@ -41,9 +41,8 @@ import Max.DB.Monitor
     recordMonitorFireFailure,
   )
 import Max.DB.Monitor.Admission
+import Max.DB.Monitor.Control qualified as Control
 import Max.DB.Notify (WorkChannel (MonitorWork), claimOrWaitUntil)
-import Max.DB.Task qualified as Task
-import Max.DB.Task.MonitorControl qualified as Control
 import Max.DB.Transaction (withTransaction)
 import Max.IR (Body (..), Node (NMention, NText))
 import Max.Monitor (deliveryBody)
@@ -62,6 +61,7 @@ import Max.Platform.Store
     recordInternalMessage,
   )
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
+import Max.Task.Types qualified as Job
 import Max.Turn.Types (AgentTurnRef (..))
 import OneBot.Types (GroupId (..))
 import System.Timeout qualified
@@ -118,7 +118,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     withDb pool (withTransaction (Control.controlMonitor 43 otherAsker False 2 Control.CancelMonitor False))
       `shouldReturn` Left ControlTypes.MonitorNotFound
     withDb pool (withTransaction (Control.controlMonitor 42 asker False 2 Control.CancelMonitor False))
-      `shouldReturn` Right (ControlTypes.MonitorControlReceipt 1 False True)
+      `shouldReturn` Right (ControlTypes.MonitorControlReceipt 1 False True, [])
 
     -- Admission and cancellation serialize on the monitor row. Whichever
     -- wins, cancellation cannot leave a live fire behind.
@@ -128,7 +128,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
       concurrently
         (withDb pool (admitDueTimeMonitors now))
         (withDb pool (withTransaction (Control.controlMonitor 44 racedAsker False raced.mrMonitorOrdinal.unMonitorOrdinal Control.CancelMonitor False)))
-    cancelled `shouldBe` Right (ControlTypes.MonitorControlReceipt 1 False True)
+    cancelled `shouldBe` Right (ControlTypes.MonitorControlReceipt 1 False True, [])
     active <-
       withDb pool $
         query
@@ -237,7 +237,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     parked.tmParkedAt `shouldSatisfy` isJust
     parked.tmLastError `shouldBe` Just "failure 5"
     withDb pool (withTransaction (Control.controlMonitor 42 asker False monitor.mrMonitorOrdinal.unMonitorOrdinal Control.CancelMonitor False))
-      `shouldReturn` Right (ControlTypes.MonitorControlReceipt 1 False True)
+      `shouldReturn` Right (ControlTypes.MonitorControlReceipt 1 False True, [])
 
   it "reconciles a published but unacknowledged occurrence when cancel wins" $ do
     truncateAll pool
@@ -260,7 +260,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
               monitorFireId = Just claimed.cmfFireId
             }
     withDb pool (withTransaction (Control.controlMonitor 42 asker False monitor.mrMonitorOrdinal.unMonitorOrdinal Control.CancelMonitor False))
-      `shouldReturn` Right (ControlTypes.MonitorControlReceipt 1 False True)
+      `shouldReturn` Right (ControlTypes.MonitorControlReceipt 1 False True, [])
     withDb
       pool
       ( completeCannedMonitorFire
@@ -383,7 +383,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     claimed.emfEffectToolGrants
       `shouldBe` Map.fromList [("inspect_source", "grant-a"), ("context_search", "grant-b")]
 
-  it "serializes cooldown and admits/reclaims exactly one ordinary turn for a committed fire" $ do
+  it "serializes cooldown and admits a committed fire only once without restart continuation" $ do
     truncateAll pool
     principal <- seedConversation pool 6101 62 702
     armingTurn <- withDb pool (startAgentTurn (GroupId 62) (CanonicalMessageId 1) (PrincipalId principal))
@@ -415,33 +415,16 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
         claimElaboratedMonitorFires "admitter-a" now 60 10
     withDb pool (claimElaboratedMonitorFires "admitter-b" now 60 10)
       `shouldReturn` []
-    admitted@(MonitorTaskAdmitted identifier) <- requireRight "admitted monitor task" =<< withDb pool (admitFire "admitter-a" claimed Nothing)
-    withDb pool (admitFire "admitter-a" claimed Nothing) `shouldReturn` Right admitted
-    -- Admission persists work and its provenance before allocating a worker.
-    provenance <-
-      withDb pool $
-        query
-          "SELECT source_turn_id,monitor_fire_id FROM durable_tasks WHERE task_id=?"
-          (Only identifier)
-    provenance `shouldBe` [(armingTurn.atrTurnId, claimed.emfFireId)]
+    MonitorTaskAdmitted identifier job <- requireRight "admitted monitor job" =<< withDb pool (admitFire "admitter-a" claimed Nothing)
+    withDb pool (admitFire "admitter-a" claimed Nothing) `shouldReturn` Right MonitorAlreadyDispatched
+    job.group `shouldBe` GroupId 62
+    job.principal `shouldBe` PrincipalId principal
+    job.grants `shouldBe` Map.empty
+    job.monitor `shouldBe` Just (Job.JobMonitor monitor.mrMonitorId claimed.emfFireId)
+    withDb pool (query "SELECT task_id FROM monitor_fires WHERE fire_id=?" (Only claimed.emfFireId))
+      `shouldReturn` [Only identifier]
+    withDb pool (query "SELECT count(*) FROM durable_tasks" ()) `shouldReturn` [Only (0 :: Int64)]
     turnCount pool 62 `shouldReturn` 1
-    [first] <- withDb pool (Task.claimTask "monitor-worker-a")
-    Just execution <- withDb pool (Task.loadTaskExecution first)
-    execution.teTaskId `shouldBe` identifier
-    withDb pool (Task.claimTask "monitor-worker-b") `shouldReturn` []
-    _ <- withDb pool $ execute "UPDATE task_attempts SET lease_until=now()-interval '1 second' WHERE turn_id=?" (Only first)
-    [resumed] <- withDb pool (Task.claimTask "monitor-worker-b")
-    resumed `shouldNotBe` first
-    Just recovered <- withDb pool (Task.loadTaskExecution resumed)
-    recovered.teTaskId `shouldBe` identifier
-    withDb pool (admitFire "admitter-a" claimed Nothing) `shouldReturn` Right admitted
-
-    otherPrincipal <- seedConversation pool 6104 63 703
-    otherTurn <- withDb pool (startAgentTurn (GroupId 63) (CanonicalMessageId 4) (PrincipalId otherPrincipal))
-    withDb
-      pool
-      (execute "UPDATE monitor_fires SET admitted_turn_id=? WHERE fire_id=?" (otherTurn.atrTurnId, claimed.emfFireId))
-      `shouldThrow` anyException
 
   it "enforces condition/total caps, a durable hourly budget, and the one-shot TimeCron bypass" $ do
     truncateAll pool
@@ -709,7 +692,7 @@ armTimeFor pool principal armingTurn now =
     )
 
 -- The current admission boundary validates the claimed fire's seed and frozen
--- authority, and allocates a durable task rather than a frontend turn.
+-- authority, and allocates a non-reusable job handle.
 admitFire :: (WithConnection :> es, IOE :> es) => Text -> ElaboratedMonitorFire -> Maybe UTCTime -> Eff es (Either MonitorAdmissionError MonitorAdmission)
 admitFire owner fire next =
   withTransaction $

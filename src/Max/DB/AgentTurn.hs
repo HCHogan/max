@@ -28,7 +28,7 @@ module Max.DB.AgentTurn
   )
 where
 
-import Control.Monad (forM_, when)
+import Control.Monad (void, when)
 import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
@@ -45,7 +45,6 @@ import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
-import Max.DB.Task.Settlement (SettlementOutcome (..), settleTurn)
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
 import Max.Execution.Types (JournalExecution (..), JournalFinish (..), JournalStart (..))
@@ -201,24 +200,18 @@ finishAgentTurn ref terminal llmTurns abortReason = do
         \ WHERE j.turn_id = t.turn_id AND j.turn_id = ? AND j.state = 'started' \
         \   AND t.status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text])"
         (Only ref.atrTurnId)
-    settled <-
-      query
+    void $
+      execute
         "UPDATE agent_turns t \
         \ SET status = ?, finished_at = now(), \
         \     finished_ingest_seq = COALESCE((SELECT max(m.ingest_seq) FROM messages m WHERE m.conversation_id=t.conversation_id), 0), \
         \     llm_turns = GREATEST(llm_turns, ?), abort_reason = ? \
-        \ WHERE turn_id = ? AND status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text]) RETURNING turn_id"
+        \ WHERE turn_id = ? AND status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text]) "
         ( terminalText terminal,
           max 0 llmTurns,
           T.take 4000 <$> abortReason,
           ref.atrTurnId
         )
-    let outcome = case terminal of
-          TurnSucceeded -> SettlementSucceeded
-          TurnSilence -> SettlementSucceeded
-          TurnCancelled -> SettlementCancelled
-          _ -> SettlementFailed
-    forM_ (settled :: [Only AgentTurnId]) $ \(Only turn) -> settleTurn turn outcome abortReason
 
 ensureAgentTurnCrashed ::
   (WithConnection :> es, IOE :> es) =>
@@ -258,11 +251,10 @@ reclaimInterruptedTurns = withTransaction $ do
       \     finished_ingest_seq = COALESCE((SELECT max(m.ingest_seq) FROM messages m WHERE m.conversation_id=t.conversation_id), 0), \
       \     abort_reason = COALESCE(abort_reason, 'process restarted while turn was in flight') \
       \ WHERE true \
-      \   AND NOT EXISTS (SELECT 1 FROM task_attempts task WHERE task.turn_id=t.turn_id) \
-      \   AND status IN ('starting','running','recovery-pending') RETURNING turn_id,abort_reason"
+      \   AND status IN ('starting','running','recovery-pending') RETURNING turn_id"
       ()
-  forM_ (crashed :: [(AgentTurnId, Maybe Text)]) $ \(turn, reason) -> settleTurn turn SettlementFailed reason
-  pure (ReclaimedTurns (fromIntegral (length crashed)) executions)
+  void $ execute "UPDATE monitor_fires SET result=jsonb_build_object('status','cancelled','summary','process restarted before completion'),finished_at=now() WHERE task_id IS NOT NULL AND finished_at IS NULL" ()
+  pure (ReclaimedTurns (fromIntegral (length (crashed :: [Only AgentTurnId]))) executions)
 
 -- | Successful skill loads remain available to the current task attempt.
 readSkillLoads :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> Eff es [SkillLoad]
@@ -272,11 +264,8 @@ readSkillLoads turn = do
       "SELECT (j.observed_manifest->'skill_loads')::text FROM execution_journal j \
       \ WHERE j.tool_ref='use_skill' AND j.state IN ('succeeded','committed') \
       \ AND jsonb_typeof(j.observed_manifest->'skill_loads')='array' AND \
-      \ (j.turn_id=? OR j.turn_id IN (SELECT previous.turn_id FROM task_attempts previous \
-      \ JOIN task_attempts current ON previous.task_id=current.task_id AND previous.revision=current.revision \
-      \ WHERE current.turn_id=? AND previous.attempt<=current.attempt)) \
-      \ ORDER BY j.turn_id,j.execution_ordinal"
-      (turn.atrTurnId, turn.atrTurnId)
+      \ j.turn_id=? ORDER BY j.execution_ordinal"
+      (Only turn.atrTurnId)
   concat <$> traverse decode (rows :: [Only Text])
   where
     decode (Only value) = either (error . ("invalid durable skill receipt: " <>)) pure (eitherDecodeStrict' (TE.encodeUtf8 value))
@@ -573,11 +562,8 @@ readWorkingContext :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> Eff e
 readWorkingContext turn = do
   rows <-
     query
-      "SELECT w.summary FROM turn_working_context w WHERE w.turn_id=? OR w.turn_id IN \
-      \(SELECT previous.turn_id FROM task_attempts previous JOIN task_attempts current \
-      \ ON previous.task_id=current.task_id AND previous.revision=current.revision \
-      \ WHERE current.turn_id=? AND previous.attempt<=current.attempt) ORDER BY w.checkpoint_id DESC LIMIT 1"
-      (turn.atrTurnId, turn.atrTurnId)
+      "SELECT summary FROM turn_working_context WHERE turn_id=? ORDER BY checkpoint_id DESC LIMIT 1"
+      (Only turn.atrTurnId)
   pure $ case rows of [Only summary] -> summary; _ -> ""
 
 -- | Recover one journal result without publishing blob paths or replaying an

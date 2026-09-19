@@ -1,30 +1,28 @@
 {-# LANGUAGE TypeFamilies #-}
 
--- | Read task facts within one conversation. Callers cannot choose another
--- scope and never receive a database connection.
+-- | Read jobs in the bound conversation without exposing their runtime.
 module Max.Effects.TaskQuery (TaskQuery, listTasks, readTask, runTaskQuery) where
 
 import Data.Int (Int64)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
-import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Task.Query qualified as DB
-import Max.Task.Query (TaskDetails, TaskSummary)
+import Max.Jobs qualified as Jobs
+import Max.Task.Types (JobView)
 import OneBot.Types (GroupId)
 
 data TaskQuery :: Effect where
-  ListTasks :: TaskQuery m [TaskSummary]
-  ReadTask :: Int64 -> TaskQuery m (Maybe TaskDetails)
+  ListTasks :: TaskQuery m [JobView]
+  ReadTask :: Int64 -> TaskQuery m (Maybe JobView)
 
 type instance DispatchOf TaskQuery = Dynamic
 
-listTasks :: (TaskQuery :> es) => Eff es [TaskSummary]
+listTasks :: (TaskQuery :> es) => Eff es [JobView]
 listTasks = send ListTasks
 
-readTask :: (TaskQuery :> es) => Int64 -> Eff es (Maybe TaskDetails)
+readTask :: (TaskQuery :> es) => Int64 -> Eff es (Maybe JobView)
 readTask = send . ReadTask
 
-runTaskQuery :: (WithConnection :> es, IOE :> es) => GroupId -> Eff (TaskQuery : es) a -> Eff es a
-runTaskQuery group = interpret $ \_ -> \case
-  ListTasks -> DB.listTasks group
-  ReadTask identifier -> DB.readTask group identifier
+runTaskQuery :: (IOE :> es) => Jobs.Jobs -> GroupId -> Eff (TaskQuery : es) a -> Eff es a
+runTaskQuery jobs group = interpret $ \_ -> \case
+  ListTasks -> liftIO (Jobs.listJobs jobs group)
+  ReadTask identifier -> liftIO (Jobs.lookupJob jobs group identifier)

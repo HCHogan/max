@@ -9,9 +9,9 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Effectful.PostgreSQL (execute)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb, withDbLog)
+import JobFixture (seed)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool)
-import Max.DB.TaskSpec (seed)
 import Max.Effects.ConversationQuery qualified as Query
 import Max.Effects.TurnQuery qualified as Turn
 import Max.History.Types (HistoryItem (..))

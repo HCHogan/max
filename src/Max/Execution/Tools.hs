@@ -18,14 +18,13 @@ module Max.Execution.Tools
   )
 where
 
-import Control.Monad (unless, when)
+import Control.Monad (unless)
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Foldable (for_)
 import Data.List (find)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -43,7 +42,6 @@ import Effectful.Concurrent.STM
     modifyTVar',
     newTVarIO,
     readTVar,
-    readTVarIO,
     writeTVar,
   )
 import Effectful.Exception
@@ -66,7 +64,6 @@ import Max.Tasks
   )
 import Max.Tool.Control
   ( LoopControl (..),
-    controlReply,
     controlSkillLoads,
   )
 import Max.Tool.Types
@@ -114,14 +111,13 @@ hoistExecutionHooks lower hooks =
 
 data ExecutionSession = ExecutionSession
   { remaining :: !(TVar (Maybe Int)),
-    terminal :: !(TVar Bool),
     sequenceNumber :: !(TVar Integer),
     batchLock :: !(MVar ())
   }
 
 newExecutionSession :: (Concurrent :> es) => Maybe Int -> Eff es ExecutionSession
 newExecutionSession limit =
-  ExecutionSession <$> newTVarIO (max 0 <$> limit) <*> newTVarIO False <*> newTVarIO 0 <*> newMVar ()
+  ExecutionSession <$> newTVarIO (max 0 <$> limit) <*> newTVarIO 0 <*> newMVar ()
 
 -- | Labels are allocated by the host; durable identity is the journal row ID.
 freshExecutionLabel :: (Concurrent :> es) => ExecutionSession -> Text -> Eff es Text
@@ -160,10 +156,8 @@ executeBatch independent invoke session hooks catalog requests =
     hooks.ehCheck
     let view request = find ((== ToolRef request.trName) . (.ctDefinition.tdRef)) catalog
         mode request = maybe WorkCall (.ctDefinition.tdCallMode) (view request)
-        finishes = filter ((== FinishCall) . mode) requests
-        suppressed request = not (null finishes) && (length finishes /= 1 || mode request /= FinishCall)
         cost request = if mode request == WorkCall then 1 else 0
-        total = sum [cost request | request <- requests, not (suppressed request)]
+        total = sum [cost request | request <- requests]
         canParallel request = maybe False ((`elem` [ParallelSafe, ParallelIndependent]) . (.ctDefinition.tdParallelism)) (view request)
     reserved <- atomically $ do
       budget <- readTVar session.remaining
@@ -174,42 +168,25 @@ executeBatch independent invoke session hooks catalog requests =
       then pure (ToolBatch (map (const (rejected "call_budget_exhausted" "这个子任务的工具调用额度已经用满，不能再执行这个调用")) requests) True)
       else do
         unused <- newTVarIO total
-        yielded <- newTVarIO False
         let release = atomically $ do
               refund <- readTVar unused
               modifyTVar' session.remaining (fmap (+ refund))
-              pending <- readTVar yielded
-              when pending (writeTVar session.terminal True)
-            execute request
-              | suppressed request = pure (rejected "finish_batch_conflict" "结束回合的操作必须单独提交；同一轮的其他工具调用已拒绝")
-              | otherwise = do
-                  stopped <- readTVarIO session.terminal
-                  if stopped
-                    then pure (rejected "execution_stopped" "execution has already yielded or finished")
-                    else do
-                      let start = maybe (unknownJournalStart request) (catalogJournalStart request) (view request)
-                          step = if cost request == 0 then ExecutionCheckpoint else ExecutionWork ReserveCall
-                          admitting =
-                            hooks
-                              { ehStart = \reservation entry -> do
-                                  row <- hooks.ehStart reservation entry
-                                  atomically $ modifyTVar' unused (subtract (cost request))
-                                  pure row
-                              }
-                      (_, invocation) <- withExecutionRecord admitting step start $ \row -> mask $ \restore -> do
-                        result <- case view request of
-                          Nothing -> pure (rejected "unknown_tool" ("tool is outside the execution catalog: " <> request.trName))
-                          Just _ -> restore (invoke row request)
-                        -- A yield hands off after this admitted batch. Finish
-                        -- remains immediate. The finally action also preserves
-                        -- a yield when a later sibling is interrupted.
-                        when (isJust (controlReply result.tiControl)) $
-                          atomically $
-                            case result.tiControl of
-                              YieldLoop {} -> writeTVar yielded True
-                              _ -> writeTVar session.terminal True
-                        pure ((), result)
-                      pure invocation
+            execute request = do
+              let start = maybe (unknownJournalStart request) (catalogJournalStart request) (view request)
+                  step = if cost request == 0 then ExecutionCheckpoint else ExecutionWork ReserveCall
+                  admitting =
+                    hooks
+                      { ehStart = \reservation entry -> do
+                          row <- hooks.ehStart reservation entry
+                          atomically $ modifyTVar' unused (subtract (cost request))
+                          pure row
+                      }
+              (_, invocation) <- withExecutionRecord admitting step start $ \row -> do
+                result <- case view request of
+                  Nothing -> pure (rejected "unknown_tool" ("tool is outside the execution catalog: " <> request.trName))
+                  Just _ -> invoke row request
+                pure ((), result)
+              pure invocation
         invocations <- restoreBatch (if independent || all canParallel requests then mapConcurrently execute requests else traverse execute requests) `finally` release
         pure (ToolBatch invocations False)
 

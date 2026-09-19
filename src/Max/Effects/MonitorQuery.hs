@@ -8,10 +8,9 @@ import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.DB.Monitor qualified as DB
-import Max.DB.Task.Overview qualified as Overview
+import Max.DB.Monitor.Overview qualified as Overview
 import Max.Monitor.Types (MonitorOrdinal (..))
-import Max.Monitor.View (ArmedMonitor, TimeMonitor)
-import Max.Task.Overview (MonitorHistory)
+import Max.Monitor.View (ArmedMonitor, MonitorHistory, TimeMonitor)
 import OneBot.Types (GroupId (..))
 
 data MonitorQuery :: Effect where

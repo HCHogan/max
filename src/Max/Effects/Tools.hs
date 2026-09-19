@@ -43,7 +43,7 @@ import Max.Tool.Catalog
     lookupCatalogTool,
     validateArguments,
   )
-import Max.Tool.Control (LoopControl (..), mapControlText)
+import Max.Tool.Control (LoopControl (..))
 import Max.Tool.Types
 import Max.Util (trySync)
 
@@ -190,11 +190,9 @@ legacyFailure definition message =
 success :: ToolDefinition -> Value -> ToolOutcome
 success definition = if hasCommitEffects definition then ToolCommitted else ToolSucceeded
 
--- A runner can stop the loop only within its host-declared execution mode.
+-- Skill activation requires a sequential reflection tool.
 permitsControl :: ToolDefinition -> LoopControl -> Bool
 permitsControl _ ContinueLoop = True
-permitsControl definition (YieldLoop _) = definition.tdCallMode == WorkCall && definition.tdParallelism == SequentialOnly
-permitsControl definition (FinishLoop _) = definition.tdCallMode == FinishCall
 permitsControl definition (LoadSkills _) = definition.tdParallelism == SequentialOnly && EffectReflect `elem` definition.tdEffects
 
 ordinary :: ToolOutcome -> ToolInvocation
@@ -209,7 +207,7 @@ sanitizeInvocation invocation = ToolInvocation (sanitizeToolOutcome invocation.t
         | load <- loads,
           let updated = load {slInstructions = sanitizeToolText load.slInstructions, slMetadata = sanitizeToolValue <$> load.slMetadata}
         ]
-    sanitizeControl control = mapControlText sanitizeToolText control
+    sanitizeControl ContinueLoop = ContinueLoop
 
 -- PostgreSQL JSONB cannot represent U+0000, while external tools and scraped
 -- web snippets can.  Normalise once at the tool kernel boundary so the durable

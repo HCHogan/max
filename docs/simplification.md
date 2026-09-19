@@ -74,14 +74,15 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 
 ### C. Jobs and application lifetime
 
-- [ ] Replace durable tasks/attempts/revisions/leases with scoped in-process Jobs.
-- [ ] Keep start/status/list/cancel/feedback, budgets and child result collection.
-- [ ] Remove model-supplied idempotency keys and ordinary task-finish reports.
+- [x] Replace durable tasks/attempts/revisions/leases with scoped in-process Jobs.
+- [x] Keep start/status/list/cancel/feedback, budgets and child result collection.
+- [x] Remove model-supplied idempotency keys and ordinary task-finish reports.
       Keep structured results only when a caller explicitly requires a contract.
-- [ ] Remove restart turn recovery, execution admission journals and durable joins.
-- [ ] Remove task browser checkpoint/restore; retain explicitly saved profiles.
+- [x] Remove restart turn recovery and durable joins.
+- [ ] Remove execution admission journals; retain bounded diagnostic results.
+- [x] Remove task browser checkpoint/restore; retain explicitly saved profiles.
 - [x] Remove configuration generations/hot reload; simplify startup and shutdown.
-- [ ] Route reminders through Jobs and preserve minimal trigger deduplication.
+- [x] Route reminders through Jobs and preserve minimal trigger deduplication.
 
 ### D. Publication and maintenance
 
@@ -100,7 +101,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [x] Delete task-experience generation, replay, publication and maintenance
       commands. Retain old rows as data without loading learned instructions.
 - [x] Delete the online skill factory and certificates; retain static lazy skills.
-- [ ] Keep useful raw code mode on the shared tool boundary, without durable
+- [x] Keep useful raw code mode on the shared tool boundary, without durable
       workflow state or a second authorization/execution path.
 - [x] Delete model-driven memory dreaming; retain deterministic processing of
       recorded expiry dates without leases.
@@ -282,3 +283,27 @@ maintained implementation record.
   The intermediate src + app count is 48,656 effective Haskell lines (602 fewer
   in this step, 3,971 below baseline); core Haskell is 35,493, with active SQL
   still additional. This is a staged implementation, not final plan acceptance.
+
+- Jobs now owns detached work, generations, feedback, child joins and shared root
+  budgets in STM. Normal final text completes work; only explicit caller contracts
+  require structured JSON. Removed the unused finish/yield tool-control protocol
+  and its exclusive-batch machinery. Current-turn skill activation remains typed.
+- Reminder definitions and occurrence snapshots remain persistent. Admission is
+  once per occurrence, without task attempts or restart replay. Stable observations,
+  failure-notice throttling, coalescing, cron advancement and explicit cancellation
+  of admitted Jobs retain dedicated integration coverage.
+- Browser sessions are process-local. Automatic task checkpoint/restore is gone;
+  explicit owner-scoped encrypted profiles, frozen monitor bindings, uncertain
+  action fencing, confirmed reset and clear-all revocation remain covered through
+  the real MCP transport fixture. Migration 116 retires live historical execution
+  and preserves user data and non-reusable public IDs.
+- Jobs validation: all Cabal targets build; 1,050 unit examples and 274 PostgreSQL
+  examples pass. Removed obsolete recovery/lease/report tests while retaining
+  native/Wasm/JavaScript admission, cancellation, provenance and effect-boundary
+  cases. The live-model comparison executable builds on Jobs, but no new live-model
+  quality or performance result is claimed. Architecture, upgrade and HLint checks
+  pass. Prompt/package gates are run before the commit.
+- This intermediate step leaves 46,728 effective src/app Haskell lines (1,928
+  fewer than the conversation checkpoint), with core Haskell at 33,596. Execution
+  journals, publication/outbox queues, maintenance and context simplification
+  remain; this is not completion of the full plan.

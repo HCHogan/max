@@ -10,10 +10,10 @@ import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful (raise)
 import Effectful.PostgreSQL (execute, query)
 import Helpers (truncateAll, withDb, withDbLog)
+import JobFixture (seed)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn (AgentTurnTerminal (TurnCancelled), finishAgentTurn)
 import Max.DB.Connection (DbPool)
-import Max.DB.TaskSpec (seed)
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.MemoryControl qualified as Control
 import Max.Effects.MemoryQuery qualified as Query

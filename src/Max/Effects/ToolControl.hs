@@ -3,27 +3,18 @@
 -- | A per-invocation host control channel. Only domain control runners receive
 -- this capability; ordinary JSON tool results cannot populate it. The Tools
 -- interpreter releases a decision only when the runner succeeds.
-module Max.Effects.ToolControl (ToolControl, yieldFrontend, finishExecution, activateSkills, runToolControl) where
+module Max.Effects.ToolControl (ToolControl, activateSkills, runToolControl) where
 
 import Control.Concurrent.STM (atomically, modifyTVar', newTVarIO, readTVarIO)
-import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Max.Tool.Bundles (SkillLoad)
 import Max.Tool.Control
 
 data ToolControl :: Effect where
-  YieldFrontend :: Text -> ToolControl m ()
-  FinishExecution :: Maybe Text -> ToolControl m ()
   ActivateSkills :: [SkillLoad] -> ToolControl m ()
 
 type instance DispatchOf ToolControl = Dynamic
-
-yieldFrontend :: (ToolControl :> es) => Text -> Eff es ()
-yieldFrontend = send . YieldFrontend
-
-finishExecution :: (ToolControl :> es) => Maybe Text -> Eff es ()
-finishExecution = send . FinishExecution
 
 activateSkills :: (ToolControl :> es) => [SkillLoad] -> Eff es ()
 activateSkills = send . ActivateSkills
@@ -35,8 +26,6 @@ runToolControl action = do
   result <-
     interpret
       ( \_ -> \case
-          YieldFrontend reply -> liftIO (record (YieldLoop reply))
-          FinishExecution reply -> liftIO (record (FinishLoop reply))
           ActivateSkills loads -> liftIO (record (LoadSkills loads))
       )
       action

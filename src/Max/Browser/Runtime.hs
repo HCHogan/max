@@ -1,53 +1,40 @@
-module Max.Browser.Runtime (managedBrowserTools, browserMaintenance, releaseBrowserTurn, renewBrowserTurn, resetTaskBrowser, workspaceIdentity, profileIdentity, checkpointPayload) where
+module Max.Browser.Runtime
+  ( managedBrowserTools,
+    browserMaintenance,
+    releaseBrowserTurn,
+    resetTaskBrowser,
+    ownedJobBrowser,
+    stopJobBrowser,
+    revokeProfileBrowsers,
+    exportJobBrowser,
+    profileIdentity,
+    checkpointPayload,
+  )
+where
 
 import Control.Monad (forM_, void, when)
 import Data.Aeson
 import Data.Aeson.Types (parseMaybe)
-import Data.Either (fromRight)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (isJust, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (diffUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Exception (onException)
-import Effectful.PostgreSQL (WithConnection, execute, query)
+import Effectful.PostgreSQL (WithConnection, query)
 import Max.Browser.Error (renderBrowserError)
 import Max.Browser.Registry
-import Max.Browser.State
-  ( WorkspaceState (..),
-    renderWorkspaceError,
-  )
-import Max.Browser.Vault (openBrowserState, sealBrowserState)
-import Max.Browser.View
-  ( BrowserBudget (..),
-    boundedBrowserText,
-    browserBudget,
-  )
-import Max.DB.Browser
-import Max.DB.Task (authorizeTaskStep)
+import Max.Browser.Vault (openBrowserState)
 import Max.Effects.Tools (Tool (..), ToolRunner (..), toolRun)
-import Max.Execution.Types
-  ( ExecutionStep (..),
-    StepReservation (..),
-  )
+import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
+import Max.Jobs qualified as Jobs
 import Max.Platform.Types (PrincipalId)
+import Max.Task.Types (JobRun (..), JobSpec (..), JobView (..))
 import Max.ToolContext
-  ( ToolContext,
-    toolCanonicalId,
-    toolGroupId,
-    toolTurnOutputContext,
-  )
-import Max.Turn.Types
-  ( AgentTurnId,
-    AgentTurnRef (..),
-    turnOutputAgentTurn,
-  )
+import Max.Turn.Types (AgentTurnId, AgentTurnRef (..), turnOutputAgentTurn)
 import OneBot.Types (GroupId)
-import System.Timeout (timeout)
-
-workspaceIdentity :: Int64 -> Text
-workspaceIdentity identifier = "browser/task/" <> T.pack (show identifier)
 
 profileIdentity :: Int64 -> Text
 profileIdentity identifier = "browser/profile/" <> T.pack (show identifier)
@@ -55,163 +42,160 @@ profileIdentity identifier = "browser/profile/" <> T.pack (show identifier)
 checkpointPayload :: Value -> Maybe Value
 checkpointPayload = parseMaybe (withObject "MCP checkpoint" (.: "structuredContent"))
 
-managedBrowserTools :: (WithConnection :> es, IOE :> es) => ToolContext -> BrowserRegistry -> (BrowserScope -> [Tool es]) -> [Tool es]
-managedBrowserTools context registry build = map wrap (build fallback)
+managedBrowserTools :: (WithConnection :> es, IOE :> es) => Jobs.Jobs -> ToolContext -> BrowserRegistry -> (BrowserScope -> [Tool es]) -> [Tool es]
+managedBrowserTools jobs context registry build = map wrap (build fallback)
   where
     group = toolGroupId context
-    durable = (.atrTurnId) . turnOutputAgentTurn <$> toolTurnOutputContext context
-    fallback = maybe (browserScopeForDispatch group (toolCanonicalId context)) (browserScopeForTurn group) durable
+    owner = (.atrTurnId) . turnOutputAgentTurn <$> toolTurnOutputContext context
+    fallback = maybe (browserScopeForDispatch group (toolCanonicalId context)) (browserScopeForTurn group) owner
     wrap original =
       original
-        { toolRunner = LegacyRunner $ \arguments -> case durable of
+        { toolRunner = LegacyRunner $ \arguments -> case owner of
             Nothing -> toolRun original arguments
             Just turn -> do
-              identity <- taskBrowserIdentity turn group
-              case identity of
+              job <- liftIO (Jobs.jobForTurn jobs turn)
+              case job of
                 Nothing -> do
-                  allowed <- authorizeTaskStep turn (ExecutionWork CheckOnly)
-                  if allowed then toolRun original arguments else pure (Left "browser execution was fenced")
-                Just identifier -> withSeqEffToIO $ \unlift ->
-                  liftIO $ withBrowserWorkspace registry identifier $ unlift $ do
-                    acquired <- acquireBrowserWorkspace turn (browserRuntimeId registry)
-                    case acquired of
-                      Left detail -> pure (Left (renderWorkspaceError detail))
-                      Right workspace -> do
-                        let scope = browserScopeForTask group identifier workspace.bwGeneration
-                        session <- liftIO (getCamoSession registry scope)
-                        let cold = workspace.bwState == Cold || isNothing session
-                        let action = parseMaybe (withObject "browser arguments" (.: "action")) arguments
-                            canOpen = original.toolName == "view_zhihu" || (original.toolName == "browser" && action == Just ("open" :: Text))
-                        if cold && not canOpen
-                          then pure (Left "browser workspace is cold; call browser action=open and obtain a fresh snapshot. DOM, JS state and previous selectors were not restored; never replay uncertain actions")
-                          else case restoreWorkspace workspace of
+                  allowed <- liftIO (Jobs.authorizeJobStep jobs turn (ExecutionWork CheckOnly))
+                  if allowed then toolRun original arguments else pure (Left "browser turn ended")
+                Just task -> withSeqEffToIO $ \unlift -> liftIO $ withBrowserWorkspace registry task.run.jobId $ unlift $ do
+                  allowed <- liftIO (Jobs.authorizeJobStep jobs turn (ExecutionWork CheckOnly))
+                  current <- liftIO (Jobs.jobForTurn jobs turn)
+                  if not allowed || maybe True (not . (.browserAllowed)) current
+                    then pure (Left "browser job ended or browser access was revoked")
+                    else do
+                      prepared <- liftIO (prepareWorkspace registry task)
+                      case prepared of
+                        Left detail -> pure (Left detail)
+                        Right workspace | workspace.jbUncertain -> pure (Left "browser outcome is uncertain; inspect the site and ask the owner to !browser reset before further actions")
+                        Right workspace -> do
+                          profile <- loadProfile registry workspace.jbProfile
+                          case profile of
                             Left detail -> pure (Left detail)
-                            Right restored -> do
-                              lease <- liftIO (bindBrowserLease registry scope workspace.bwEpoch workspace.bwLeaseUntil)
-                              case lease of
-                                Left _ -> pure (Left "browser lease binding failed; no action was replayed")
-                                Right _ -> do
-                                  when cold $ forM_ restored (liftIO . prepareBrowserRestore registry scope)
-                                  allowed <- beginBrowserOperation turn workspace.bwEpoch
-                                  if not allowed
-                                    then pure (Left "browser execution was fenced before operation")
-                                    else do
-                                      let run = case [tool | tool <- build scope, tool.toolName == original.toolName] of
+                            Right saved -> do
+                              session <- liftIO (getCamoSession registry workspace.jbScope)
+                              let cold = isNothing session
+                                  action = parseMaybe (withObject "browser arguments" (.: "action")) arguments
+                                  canOpen = original.toolName == "view_zhihu" || action == Just ("open" :: Text)
+                              if cold && not canOpen
+                                then pure (Left "browser session closed; open the page and obtain fresh selectors. Never replay an uncertain action")
+                                else do
+                                  bound <- liftIO (ensureJobBrowserLease registry workspace.jbScope task.spec.deadline)
+                                  case bound of
+                                    Left _ -> pure (Left "browser workspace binding failed; no action was replayed")
+                                    Right _ -> do
+                                      when cold $ forM_ saved (liftIO . prepareBrowserRestore registry workspace.jbScope)
+                                      let uncertain = liftIO (putJobBrowser registry task.run.jobId (workspace {jbUncertain = True}))
+                                          run = case [tool | tool <- build workspace.jbScope, tool.toolName == original.toolName] of
                                             [tool] -> toolRun tool arguments
                                             _ -> pure (Left "browser tool unavailable")
-                                          interrupted = void (finishBrowserOperation turn workspace.bwEpoch Nothing False)
-                                      ( do
-                                          result <- run
-                                          saved <- saveCheckpoint registry scope identifier
-                                          live <- liftIO (getCamoSession registry scope)
-                                          let readOnlyFailure = original.toolName == "view_zhihu" || action `elem` map Just ["open", "snapshot", "scroll", "wait_for", "read", "find", "links", "forms", "screenshot", "collect"]
-                                              -- A lost session can reopen, but its failed operation is
-                                              -- still reported as uncertain and is never replayed.
-                                              healthy = isNothing live || ((readOnlyFailure || either (const False) (const True) result) && either (const False) (const True) saved)
-                                              returned = case (saved, live, result) of
-                                                (Left _, Nothing, Right value) -> Right (addNote arguments "checkpoint transport lost; open again, without repeating the completed action" value)
-                                                _ -> result
-                                          accepted <- finishBrowserOperation turn workspace.bwEpoch (fromRight Nothing saved) healthy
-                                          if not accepted
-                                            then pure (Left "browser execution was fenced after operation; its external outcome may already have occurred")
-                                            else
-                                              if not healthy
-                                                then pure (Left "browser operation or checkpoint failed; outcome may be unknown. Do not repeat it; inspect the external site and use !browser reset task#N before continuing")
-                                                else pure (fmap (addRecovery arguments cold) returned)
-                                        )
-                                        `onException` interrupted
+                                      result <- run `onException` uncertain
+                                      now <- liftIO getCurrentTime
+                                      let readOnly = original.toolName == "view_zhihu" || action `elem` map Just ["open", "snapshot", "scroll", "wait_for", "read", "find", "links", "forms", "screenshot", "collect"]
+                                          ambiguous = not readOnly && either (const True) (const False) result
+                                      liftIO (putJobBrowser registry task.run.jobId (workspace {jbLastUsed = now, jbUncertain = ambiguous}))
+                                      pure result
         }
-    addRecovery _ False value = value
-    addRecovery arguments True value = addNote arguments "cold restore; use fresh selectors" value
-    addNote arguments note (String value) =
-      let action = fromMaybe "open" (parseMaybe (withObject "browser arguments" (.: "action")) arguments)
-          budget = browserBudget action arguments
-       in String (boundedBrowserText budget.maxChars (T.replace "Content:\n" ("Note: " <> note <> "\nContent:\n") value))
-    addNote _ _ value = value
-    restoreWorkspace workspace = case workspace.bwCheckpoint of
-      Just saved -> Just <$> openBrowserState (browserVault registry) (workspaceIdentity workspace.bwTask) saved
-      Nothing -> case (workspace.bwProfile, workspace.bwProfileCheckpoint) of
-        (Just profile, Just saved) -> Just <$> openBrowserState (browserVault registry) (profileIdentity profile) saved
-        _ -> Right Nothing
 
--- A cleared page reopens on the registry's already-reinitialized transport.
--- Runtime/revision changes still advance the generation in DB acquisition;
--- retiring here would create a second transport after a single drop.
+-- Profile storage is explicit user data. No task state is checkpointed here.
+loadProfile :: (WithConnection :> es, IOE :> es) => BrowserRegistry -> Maybe (Int64, Int64) -> Eff es (Either Text (Maybe Value))
+loadProfile _ Nothing = pure (Right Nothing)
+loadProfile registry (Just (profile, version)) = do
+  rows <- query "SELECT checkpoint FROM browser_profiles WHERE profile_id=? AND version=? AND NOT revoked AND checkpoint IS NOT NULL" (profile, version)
+  pure $ case rows of
+    [Only encrypted] -> Just <$> openBrowserState (browserVault registry) (profileIdentity profile) encrypted
+    _ -> Left "browser profile was changed or revoked; owner must explicitly attach a current profile"
 
-saveCheckpoint :: (IOE :> es) => BrowserRegistry -> BrowserScope -> Int64 -> Eff es (Either Text (Maybe Text))
-saveCheckpoint registry scope identifier = liftIO $ do
-  session <- getCamoSession registry scope
-  case session of
-    Nothing -> pure (Right Nothing)
-    Just sessionId -> do
-      result <- callBrowserTool registry scope "max_workspace_checkpoint" (object ["sessionId" .= sessionId])
-      case result of
-        Left detail -> pure (Left (renderBrowserError detail))
-        Right value -> case checkpointPayload value of
-          Nothing -> pure (Left "invalid browser checkpoint")
-          Just payload -> Right . Just <$> sealBrowserState (browserVault registry) (workspaceIdentity identifier) payload
+prepareWorkspace :: BrowserRegistry -> JobView -> IO (Either Text JobBrowser)
+prepareWorkspace registry job = do
+  previous <- jobBrowser registry job.run.jobId
+  case previous of
+    Just current | current.jbRun == job.run -> pure (Right current)
+    _ -> do
+      stopped <- maybe (pure True) (stopBrowserScope registry . (.jbScope)) previous
+      if not stopped
+        then pure (Left "old browser did not confirm closure")
+        else do
+          now <- getCurrentTime
+          let generation = maybe 1 ((+ 1) . (.jbGeneration)) previous
+              created = JobBrowser job.run (browserScopeForTask job.spec.group job.run.jobId generation) generation job.spec.browserProfile False now Nothing
+          putJobBrowser registry job.run.jobId created
+          pure (Right created)
 
-browserMaintenance :: (WithConnection :> es, IOE :> es) => BrowserRegistry -> Eff es ()
-browserMaintenance registry = do
-  liftIO (retryBrowserReleases registry)
+ownedJobBrowser :: (IOE :> es) => Jobs.Jobs -> BrowserRegistry -> GroupId -> PrincipalId -> Int64 -> (JobView -> Eff es (Either Text value)) -> Eff es (Either Text value)
+ownedJobBrowser jobs registry group actor identifier action = withSeqEffToIO $ \unlift -> liftIO $ withBrowserWorkspace registry identifier $ unlift $ do
+  job <- liftIO (Jobs.lookupJob jobs group identifier)
+  case job of
+    Just task | task.spec.principal == actor -> action task
+    _ -> pure (Left "task not found or browser owner permission required")
+
+stopJobBrowser :: BrowserRegistry -> Int64 -> IO Bool
+stopJobBrowser registry identifier = do
+  workspace <- jobBrowser registry identifier
+  maybe (pure True) (stopBrowserScope registry . (.jbScope)) workspace
+
+resetTaskBrowser :: (IOE :> es) => Jobs.Jobs -> BrowserRegistry -> GroupId -> PrincipalId -> Int64 -> Maybe (Int64, Int64) -> Eff es (Either Text Value)
+resetTaskBrowser jobs registry group actor identifier profile = ownedJobBrowser jobs registry group actor identifier $ \job -> do
+  stopped <- liftIO (stopJobBrowser registry identifier)
+  if not stopped
+    then pure (Left "old browser did not confirm closure; reset refused")
+    else do
+      liftIO (Jobs.setJobBrowserAccess jobs job.run True)
+      previous <- liftIO (jobBrowser registry identifier)
+      now <- liftIO getCurrentTime
+      let generation = maybe 1 ((+ 1) . (.jbGeneration)) previous
+      liftIO (putJobBrowser registry identifier (JobBrowser job.run (browserScopeForTask group identifier generation) generation profile False now Nothing))
+      pure (Right (object ["reset" .= True, "task" .= identifier]))
+
+exportJobBrowser :: (IOE :> es) => BrowserRegistry -> Int64 -> Eff es (Either Text Value)
+exportJobBrowser registry identifier = liftIO $ do
+  workspace <- jobBrowser registry identifier
+  case workspace of
+    Just current | not current.jbUncertain -> do
+      session <- getCamoSession registry current.jbScope
+      case session of
+        Nothing -> pure (Left "browser has no live session to save")
+        Just sessionId -> do
+          result <- callBrowserTool registry current.jbScope "max_workspace_checkpoint" (object ["sessionId" .= sessionId])
+          pure $ case result of
+            Left err -> Left (renderBrowserError err)
+            Right value -> maybe (Left "invalid browser profile export") Right (checkpointPayload value)
+    _ -> pure (Left "no safe live browser is available for this task")
+
+revokeProfileBrowsers :: BrowserRegistry -> Int64 -> IO ()
+revokeProfileBrowsers registry profile = do
+  workspaces <- jobBrowsers registry
+  forM_ workspaces $ \(identifier, _) -> withBrowserWorkspace registry identifier $ do
+    current <- jobBrowser registry identifier
+    forM_ current $ \workspace -> when (fmap fst workspace.jbProfile == Just profile) $ void (stopBrowserScope registry workspace.jbScope)
+
+browserMaintenance :: (IOE :> es) => BrowserRegistry -> Eff es ()
+browserMaintenance registry = liftIO $ do
+  retryBrowserReleases registry
+  now <- getCurrentTime
   let (idle, grace) = browserRetention registry
-  candidates <- browserGcCandidates idle grace
-  forM_ candidates $ \(group, identifier, generation, _) -> withSeqEffToIO $ \unlift ->
-    liftIO $ void $ tryWithBrowserWorkspace registry identifier $ unlift $ do
-      current <- browserGcCandidates idle grace
-      when (any (\(_, task, version, _) -> task == identifier && version == generation) current) $ do
-        stopped <- liftIO (stopBrowserScope registry (browserScopeForTask group identifier generation))
-        when stopped (retireBrowserWorkspace identifier generation)
-  live <- liftIO (liveTaskBrowsers registry)
-  forM_ live $ \(group, identifier, generation) -> withSeqEffToIO $ \unlift ->
-    liftIO $ void $ tryWithBrowserWorkspace registry identifier $ unlift $ do
-      rows <- browserWorkspace identifier
-      let scope = browserScopeForTask group identifier generation
-      case rows of
-        [(current, _, state, Just runtime)]
-          | current == generation && runtime == browserRuntimeId registry && state `elem` ["hot", "cold", "busy"] -> do
-              session <- liftIO (getCamoSession registry scope)
-              forM_ session $ \sessionId ->
-                liftIO $
-                  void $
-                    callBrowserTool registry scope "max_workspace_keepalive" (object ["sessionId" .= sessionId])
-        _ -> liftIO (void (stopBrowserScope registry scope))
+  workspaces <- jobBrowsers registry
+  forM_ workspaces $ \(identifier, _) -> void $ tryWithBrowserWorkspace registry identifier $ do
+    current <- jobBrowser registry identifier
+    forM_ current $ \workspace -> do
+      let expired = case workspace.jbFinished of
+            Just finished -> diffUTCTime now finished >= fromIntegral grace
+            Nothing -> diffUTCTime now workspace.jbLastUsed >= fromIntegral idle
+      if expired
+        then do
+          stopped <- stopBrowserScope registry workspace.jbScope
+          when (stopped && isJust workspace.jbFinished) (forgetJobBrowser registry identifier)
+        else do
+          session <- getCamoSession registry workspace.jbScope
+          forM_ session $ \sessionId -> void (callBrowserTool registry workspace.jbScope "max_workspace_keepalive" (object ["sessionId" .= sessionId]))
 
-resetTaskBrowser :: (WithConnection :> es, IOE :> es) => BrowserRegistry -> GroupId -> PrincipalId -> Int64 -> Eff es (Either Text Value)
-resetTaskBrowser registry group actor identifier = withSeqEffToIO $ \unlift ->
-  liftIO $ withBrowserWorkspace registry identifier $ unlift $ do
-    allowed <- browserCommandOwner group actor identifier
-    if not allowed
-      then pure (Left "task not found or browser owner permission required")
-      else do
-        rows <- browserWorkspace identifier
-        stopped <- case rows of
-          [(generation, _, _, _)] -> liftIO (stopBrowserScope registry (browserScopeForTask group identifier generation))
-          _ -> pure True
-        if not stopped
-          then pure (Left "old browser did not confirm closure; reset refused")
-          else do
-            resetBrowserWorkspace identifier
-            pure (Right (object ["reset" .= True, "task" .= identifier]))
-
-releaseBrowserTurn :: (WithConnection :> es, IOE :> es) => BrowserRegistry -> GroupId -> AgentTurnId -> Eff es ()
-releaseBrowserTurn registry group turn = do
-  identity <- taskBrowserIdentity turn group
-  case identity of
-    Nothing -> liftIO (releaseBrowserScope registry (browserScopeForTurn group turn))
-    Just identifier -> withSeqEffToIO $ \unlift -> liftIO $ withBrowserWorkspace registry identifier $ unlift $ do
-      rows <- query "SELECT generation FROM browser_workspaces WHERE task_id=? AND owner_turn_id=?" (identifier, turn)
-      forM_ rows $ \(Only generation) -> do
-        let scope = browserScopeForTask group identifier generation
-        session <- liftIO (getCamoSession registry scope)
-        forM_ session $ \_ -> liftIO $ void (timeout 5_000_000 (callBrowserTool registry scope "max_workspace_unbind" (object [])))
-        void $ execute "UPDATE browser_workspaces SET owner_turn_id=NULL,epoch=epoch+1,state=CASE WHEN state='busy' THEN 'uncertain' ELSE state END WHERE task_id=? AND owner_turn_id=?" (identifier, turn)
-
-renewBrowserTurn :: (WithConnection :> es, IOE :> es) => BrowserRegistry -> GroupId -> AgentTurnId -> Eff es ()
-renewBrowserTurn registry group turn = do
-  allowed <- authorizeTaskStep turn (ExecutionWork CheckOnly)
-  when allowed $ do
-    rows <- query "SELECT space.task_id,space.generation,space.epoch,attempt.lease_until FROM browser_workspaces space JOIN task_attempts attempt ON attempt.turn_id=space.owner_turn_id WHERE space.owner_turn_id=? AND space.runtime_id=? AND space.state IN ('cold','hot','busy')" (turn, browserRuntimeId registry)
-    forM_ rows $ \(identifier, generation, epoch, untilTime) ->
-      liftIO $
-        renewBrowserLease registry (browserScopeForTask group identifier generation) epoch untilTime
+releaseBrowserTurn :: (IOE :> es) => Jobs.Jobs -> BrowserRegistry -> GroupId -> AgentTurnId -> Eff es ()
+releaseBrowserTurn jobs registry group turn = liftIO $ do
+  job <- Jobs.jobForTurn jobs turn
+  case job of
+    Nothing -> releaseBrowserScope registry (browserScopeForTurn group turn)
+    Just task -> withBrowserWorkspace registry task.run.jobId $ do
+      workspace <- jobBrowser registry task.run.jobId
+      forM_ workspace $ \current -> when (current.jbRun == task.run) $ do
+        now <- getCurrentTime
+        putJobBrowser registry task.run.jobId (current {jbFinished = Just now})

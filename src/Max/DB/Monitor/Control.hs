@@ -1,5 +1,5 @@
 -- | Monitor definition control and explicit cancellation of admitted work.
-module Max.DB.Task.MonitorControl
+module Max.DB.Monitor.Control
   ( MonitorCommand (..),
     MonitorControlError (..),
     MonitorControlReceipt (..),
@@ -13,23 +13,17 @@ import Data.Text qualified as T
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
-import Max.DB.Task.Control (controlTask)
-import Max.DB.Task.Record (lockConversation)
-import Max.DB.Transaction (InTransaction)
+import Max.DB.ConversationLock (lockConversation)
+import Max.DB.Transaction (InTransaction, requireTransaction)
 import Max.Monitor.Control
 import Max.Monitor.Policy (overlapPolicyText)
-import Max.Platform.Types (PrincipalId (..))
-import Max.Task.State
-  ( DurableTaskId (..),
-    TaskCommand (CancelTask),
-  )
 import Max.Task.Types (profileName)
-import OneBot.Types (GroupId (..))
 
 -- | Runs within the caller's pinned transaction. Configuration
 -- policy is typed at the caller boundary and checked with the locked revision.
-controlMonitor :: (InTransaction :> es, WithConnection :> es, IOE :> es) => Int64 -> Int64 -> Bool -> Int64 -> MonitorCommand -> Bool -> Eff es (Either MonitorControlError MonitorControlReceipt)
+controlMonitor :: (InTransaction :> es, WithConnection :> es, IOE :> es) => Int64 -> Int64 -> Bool -> Int64 -> MonitorCommand -> Bool -> Eff es (Either MonitorControlError (MonitorControlReceipt, [Int64]))
 controlMonitor group actor administrator ordinal command cancelTasks = do
+  requireTransaction
   _ <- lockConversation group
   definitions <-
     query
@@ -75,18 +69,11 @@ controlMonitor group actor administrator ordinal command cancelTasks = do
                   "UPDATE monitor_fires SET cancelled_at=now(),disposition='cancelled',claim_owner=NULL,claim_expires_at=NULL\
                   \ WHERE monitor_id=? AND admission_state='pending' AND cancelled_at IS NULL"
                   (Only identifier)
-            when cancelTasks $ do
-              tasks <-
-                query
-                  "SELECT work.task_id FROM durable_tasks work JOIN monitor_fires fire ON fire.fire_id=work.monitor_fire_id\
-                  \ WHERE fire.monitor_id=? AND work.status IN ('queued','running','waiting','retrying') ORDER BY work.task_id"
-                  (Only identifier)
-              forM_ (tasks :: [Only Int64]) $ \(Only task) -> do
-                result <- controlTask (GroupId group) (PrincipalId actor) True (DurableTaskId task) (CancelTask "monitor controller explicitly cancelled admitted work") Nothing
-                -- The definition owner has been checked under the same lock.
-                -- Failing to cancel any child rolls back the definition too.
-                either (error . ("monitor task cancellation invariant: " <>) . show) (const (pure ())) result
-            pure (Right (MonitorControlReceipt nextRevision cancelTasks cancelPending))
+            tasks <-
+              if cancelTasks
+                then query "SELECT task_id FROM monitor_fires WHERE monitor_id=? AND task_id IS NOT NULL AND finished_at IS NULL" (Only identifier)
+                else pure []
+            pure (Right (MonitorControlReceipt nextRevision cancelTasks cancelPending, [task | Only task <- tasks]))
       | otherwise -> pure (Left MonitorOwnerRequired)
     _ -> pure (Left MonitorNotFound)
   where

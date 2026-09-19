@@ -31,6 +31,8 @@ extra-source-files:
     test-db/fixtures/task-upgrade-after.sql
     test-db/fixtures/frontend-limits-upgrade.sql
     test-db/fixtures/direct-notices-upgrade.sql
+    test-db/fixtures/local-conversations-upgrade.sql
+    test-db/fixtures/local-jobs-upgrade.sql
     test-db/fixtures/browser-upgrade-after.sql
     assets/codesnap/*.tmTheme
     browser-image/*.patch
@@ -147,7 +149,6 @@ library
         Max.Browser.Service
         Max.Browser.Error
         Max.Browser.View
-        Max.Browser.State
         Max.Browser.Registry
         Max.Concurrent.Lock
         Max.Browser.Vault
@@ -198,17 +199,10 @@ library
         Max.DB.Monitor
         Max.DB.Monitor.Occurrence
         Max.DB.Monitor.Admission
-        Max.DB.Task
-        Max.DB.Task.Record
-        Max.DB.Task.Authorization
-        Max.DB.Task.Admission
-        Max.DB.Task.Reporting
-        Max.DB.Task.Notice
-        Max.DB.Task.Settlement
-        Max.DB.Task.Control
-        Max.DB.Task.Scheduling
-        Max.DB.Task.MonitorControl
-        Max.DB.Browser
+        Max.DB.Job
+        Max.DB.Authority
+        Max.DB.Monitor.Control
+        Max.DB.Monitor.Overview
         Max.DB.QQBackfill
         Max.DB.Session
         Max.DB.Stickers
@@ -339,25 +333,16 @@ library
         Max.Effects.MonitorQuery
         Max.Effects.MonitorControl
         Max.Task.Policy
-        Max.Task.Notice
         Max.Task.Types
-        Max.Task.Admission
-        Max.Task.Execution
         Max.Task.FrontendInput
         Max.Task.ToolRuntime
         Max.Effects.TaskQuery
         Max.Effects.TaskControl
         Max.Effects.TaskExecution
         Max.Effects.TurnQuery
-        Max.Task.Query
-        Max.Task.Overview
-        Max.DB.Task.Overview
-        Max.DB.Task.Query
         Max.Task.State
         Max.Task.Delegation
         Max.Task.WorkflowRuntime
-        Max.DB.Task.Workflow
-        Max.Task.View
         Max.Render
         Max.Reply
         Max.ReplySend
@@ -387,6 +372,7 @@ library
         Max.Sticker
         Max.Stickers
         Max.Tasks
+        Max.Jobs
         Max.Turn.Types
         Max.Turn.Start
         Max.Dispatch.Lease
@@ -656,7 +642,6 @@ test-suite max-test
         Max.BilibiliSpec
         Max.Browser.ErrorSpec
         Max.Browser.ViewSpec
-        Max.Browser.StateSpec
         Max.Browser.RegistrySpec
         Max.Browser.VaultSpec
         Max.Browser.ProfileSpec
@@ -698,11 +683,10 @@ test-suite max-test
         Max.SkillsSpec
         Max.Skill.WorkflowSpec
         Max.Agent.FailureSpec
-        Max.Task.ProgressSpec
-        Max.Task.StateSpec
         Max.Monitor.PolicySpec
         Max.TasksSpec
         Max.ConversationSpec
+        Max.JobsSpec
         Max.Effects.AgentSpec
         Max.Effects.BlobSpec
         Max.Effects.EmbeddingSpec
@@ -773,6 +757,7 @@ test-suite max-test-db
     main-is:            Main.hs
     other-modules:
         Helpers
+        JobFixture
         PromptFixture
         ExecutionFixture
         Max.ExecutionSpec
@@ -780,6 +765,7 @@ test-suite max-test-db
         Max.AdminTimelineSpec
         Max.DB.ConnectionSpec
         Max.DB.ConversationCursorSpec
+        Max.DB.JobSpec
         Max.DB.AgentTurnSpec
         Max.DB.FilesSpec
         Max.DB.FetchQueueSpec
@@ -800,7 +786,7 @@ test-suite max-test-db
         Max.MemoryExpirySpec
         Max.WorkflowAgentSpec
         Max.DB.MonitorSpec
-        Max.DB.TaskSpec
+        Max.DB.MonitorJobsSpec
         Max.DB.ProgressSpec
         Max.DB.BrowserSpec
         Max.DB.QQBackfillSpec

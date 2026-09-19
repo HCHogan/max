@@ -1,7 +1,8 @@
 -- | Durable work projections use typed columns in one stable read snapshot.
 -- Limits and set filtering stay in SQL; presentation belongs to domain views.
-module Max.DB.Task.Overview (readMonitorHistory, readWorkOverview) where
+module Max.DB.Monitor.Overview (readMonitorHistory, readWorkOverview) where
 
+import Data.Aeson (Value, object, (.=))
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Database.PostgreSQL.Simple.FromRow (RowParser, field)
@@ -10,10 +11,11 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Codec (enumField, queryRows)
 import Max.DB.Transaction (withReadSnapshot)
+import Max.Jobs qualified as Jobs
 import Max.Monitor.Policy (parseOccurrenceDisposition, parseOverlapPolicy)
-import Max.Task.Overview
-import Max.Task.State (parseTaskStatus)
-import Max.Task.Types (parseProfile)
+import Max.Monitor.View
+import Max.Task.State (taskIsLive)
+import Max.Task.Types (JobMonitor (..), JobRun (..), JobSpec (..), JobView (..), parseProfile)
 import OneBot.Types (GroupId (..))
 
 readMonitorHistory :: (WithConnection :> es, IOE :> es) => GroupId -> Int64 -> Eff es (Maybe MonitorHistory)
@@ -38,18 +40,9 @@ readMonitorHistory (GroupId group) ordinal = withReadSnapshot $ do
     definitionRow = MonitorDefinition <$> field <*> field <*> field <*> enumField parseProfile <*> enumField parseMonitorStatus <*> enumField parseOverlapPolicy <*> field <*> field <*> field
     occurrenceRow = MonitorOccurrence <$> field <*> field <*> field <*> enumField parseOccurrenceDisposition <*> field <*> field <*> enumField parseAdmissionState <*> field <*> field
 
-readWorkOverview :: (WithConnection :> es, IOE :> es) => Eff es WorkOverview
-readWorkOverview = withReadSnapshot $ do
-  tasks <-
-    queryRows
-      taskRow
-      "SELECT task_id,legacy_group_id,owner_principal_id,revision,status,profile,left(objective,1500),\
-      \ calls_reserved,max_calls,rounds_reserved,max_rounds,deadline,retry_count,next_attempt_at,last_error,\
-      \ (SELECT body->>'summary' FROM task_progress WHERE task_id=work.task_id AND revision=work.revision),\
-      \ (SELECT count(*) FROM task_notifications WHERE task_id=work.task_id AND revision=work.revision AND attempt=work.attempt\
-      \ AND superseded_at IS NULL AND delivered_at IS NULL AND attempts>=15),left(result::text,10000)\
-      \ FROM durable_tasks work JOIN conversations USING(conversation_id) ORDER BY task_id DESC LIMIT 500"
-      ()
+readWorkOverview :: (WithConnection :> es, IOE :> es) => Jobs.Jobs -> Eff es Value
+readWorkOverview jobs = withReadSnapshot $ do
+  tasks <- liftIO (Jobs.allJobs jobs)
   monitors <-
     queryRows
       ((,) <$> field <*> monitorRow)
@@ -59,20 +52,13 @@ readWorkOverview = withReadSnapshot $ do
       \ (SELECT last_error FROM monitor_fires WHERE monitor_id=definition.monitor_id ORDER BY fire_id DESC LIMIT 1)\
       \ FROM monitors definition JOIN conversations USING(conversation_id) ORDER BY monitor_id DESC LIMIT 500"
       ()
-  active <- case monitors of
+  active <- case [fire.fireId | job <- tasks, taskIsLive job.status, Just fire <- [job.spec.monitor]] of
     [] -> pure []
-    _ ->
-      queryRows
-        ((,) <$> field <*> (ActiveTask <$> field <*> enumField parseTaskStatus))
-        "SELECT fire.monitor_id,work.task_id,work.status FROM monitor_fires fire JOIN durable_tasks work ON work.task_id=fire.task_id\
-        \ WHERE fire.monitor_id=ANY(?) AND work.status IN ('queued','running','waiting','retrying') ORDER BY work.task_id"
-        (Only (PGArray (map fst monitors)))
-  let byMonitor = foldr (\(identifier, task) -> Map.insertWith (<>) identifier [task]) Map.empty active
+    fires -> queryRows ((,) <$> field <*> field) "SELECT fire_id,monitor_id FROM monitor_fires WHERE fire_id=ANY(?)" (Only (PGArray fires))
+  let monitorFor = Map.fromList active
+      byMonitor = Map.fromListWith (<>) [(identifier, [ActiveTask job.run.jobId job.status]) | job <- tasks, taskIsLive job.status, Just fire <- [job.spec.monitor], Just identifier <- [Map.lookup fire.fireId monitorFor]]
       views = [monitor {activeTasks = Map.findWithDefault [] identifier byMonitor} | (identifier :: Int64, monitor) <- monitors]
-  pure (WorkOverview tasks views)
-
-taskRow :: RowParser TaskOverview
-taskRow = TaskOverview <$> field <*> field <*> field <*> field <*> enumField parseTaskStatus <*> enumField parseProfile <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field
+  pure (object ["tasks" .= tasks, "monitors" .= views])
 
 monitorRow :: RowParser MonitorOverview
 monitorRow = MonitorOverview <$> field <*> field <*> field <*> enumField parseMonitorStatus <*> enumField parseProfile <*> field <*> enumField parseOverlapPolicy <*> field <*> field <*> field <*> field <*> field <*> pure []

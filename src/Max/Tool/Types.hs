@@ -55,7 +55,7 @@ data ToolEffect
   deriving stock (Show, Eq, Ord)
 
 -- | Checkpoints do not spend work budget; finish calls are exclusive in a round.
-data ToolCallMode = WorkCall | CheckpointCall | FinishCall deriving stock (Show, Eq, Ord)
+data ToolCallMode = WorkCall | CheckpointCall deriving stock (Show, Eq, Ord)
 
 data ToolParallelism
   = ParallelSafe

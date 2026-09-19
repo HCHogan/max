@@ -16,7 +16,7 @@ import Max.ConversationScope
   ( conversationScopeFor,
     currentConversationRecall,
   )
-import Max.DB.Task.Authorization (authorizeCallerWithin)
+import Max.DB.Authority (authorizeCallerWithin)
 import Max.DB.Transaction (InTransaction, withTransaction)
 import Max.Memory.Policy
 import Max.Memory.Types
