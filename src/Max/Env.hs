@@ -69,6 +69,7 @@ data BotEnv = BotEnv
     -- the target instead of the DM pseudo-group.  In-memory by
     -- design (restart forgets; just @!use@ again).
     beAdminTarget :: !(TVar (Map Int64 Int64)),
+    beWebhookBaseUrl :: !(Maybe Text),
     beSandboxes :: !SandboxRegistry,
     beBrowsers :: !BrowserRegistry,
     -- | Web-search backend when configured ('Nothing' = the

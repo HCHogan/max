@@ -204,6 +204,7 @@ library
         Max.DB.PlatformIds
         Max.DB.Migrations
         Max.DB.Monitor
+        Max.DB.Monitor.Http
         Max.DB.Monitor.Occurrence
         Max.DB.Monitor.Admission
         Max.DB.Job
@@ -329,6 +330,7 @@ library
         Max.Recall
         Max.Monitor
         Max.Monitor.Types
+        Max.Monitor.Http
         Max.Monitor.Policy
         Max.Monitor.Control
         Max.Monitor.View
@@ -789,6 +791,7 @@ test-suite max-test-db
         Max.MemoryExpirySpec
         Max.WorkflowAgentSpec
         Max.DB.MonitorSpec
+        Max.DB.HttpMonitorSpec
         Max.DB.MonitorJobsSpec
         Max.DB.ProgressSpec
         Max.DB.BrowserSpec

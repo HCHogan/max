@@ -1,5 +1,6 @@
 module Max.ConfigSpec (spec) where
 
+import Max.Admin (AdminConfig (..))
 import Max.Config
 import Max.Http.Json (replyRetryDelaysSecs)
 import Max.Task.Policy (frontendDeadlineSeconds, taskDeadlineSeconds)
@@ -10,6 +11,11 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "startup configuration" $ do
+  it "loads the optional webhook base and rejects embedded credentials" $ do
+    config <- withArgs ["--llm-api-key", "test-key", "--admin-port", "7700", "--webhook-base-url", "https://max.example/"] loadConfig
+    fmap (.acWebhookBaseUrl) config.admin `shouldBe` Just (Just "https://max.example")
+    withArgs ["--llm-api-key", "test-key", "--admin-port", "7700", "--webhook-base-url", "https://user:secret@max.example"] loadConfig
+      `shouldThrow` anyIOException
   it "leaves room for slow-model attempts inside phase and task deadlines" $
     withArgs ["--llm-api-key", "test-key"] $ do
       config <- loadConfig

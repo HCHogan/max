@@ -48,6 +48,7 @@ data FireRecord = FireRecord
     revision :: !Int,
     scheduled :: !UTCTime,
     evidence :: !Text,
+    payload :: !Value,
     counted :: !Bool
   }
   deriving stock (Show)
@@ -68,6 +69,7 @@ instance FromRow FireRecord where
       <*> field
       <*> field
       <*> field
+      <*> jsonField
       <*> field
 
 admitMonitorTaskWithin :: (WithConnection :> es, IOE :> es) => Text -> MonitorFireId -> Maybe UTCTime -> Map Text Text -> Int64 -> Eff es (Either MonitorAdmissionError MonitorAdmission)
@@ -75,7 +77,7 @@ admitMonitorTaskWithin owner occurrence next grants seed = do
   (_ :: [Only Int64]) <- query "SELECT c.conversation_id FROM conversations c JOIN monitor_fires f USING(conversation_id) WHERE f.fire_id=? FOR UPDATE OF c" (Only occurrence)
   rows <-
     query
-      "SELECT monitor_id,conversation_id,task_id,admission_state='pending',cancelled_at IS NOT NULL,claim_owner,claim_expires_at,disposition,coalesced_into,definition_snapshot::text,definition_revision,scheduled_at,trigger_evidence,counted_at_admission\
+      "SELECT monitor_id,conversation_id,task_id,admission_state='pending',cancelled_at IS NOT NULL,claim_owner,claim_expires_at,disposition,coalesced_into,definition_snapshot::text,definition_revision,scheduled_at,trigger_evidence,COALESCE(trigger_payload,'null'::jsonb)::text,counted_at_admission\
       \ FROM monitor_fires WHERE fire_id=? FOR UPDATE"
       (Only occurrence)
   now <- databaseNow
@@ -110,16 +112,17 @@ admitMonitorTaskWithin owner occurrence next grants seed = do
                         void $ execute "UPDATE monitor_fires SET claim_owner=NULL,claim_expires_at=NULL WHERE fire_id=?" (Only occurrence)
                         pure (Left MonitorHourlyBudget)
                       else do
-                        observations <- query "SELECT fire_id,trigger_evidence FROM monitor_fires WHERE coalesced_into=? ORDER BY fire_id DESC LIMIT 80" (Only occurrence)
+                        observations <- query "SELECT fire_id,trigger_evidence,COALESCE(trigger_payload,'null'::jsonb) FROM monitor_fires WHERE coalesced_into=? ORDER BY fire_id DESC LIMIT 80" (Only occurrence)
                         previous <-
                           query
                             "SELECT result->'observation' FROM monitor_fires WHERE monitor_id=? AND definition_revision=? AND fire_id<>? AND result->>'status'='succeeded' AND jsonb_typeof(result->'observation')='object' ORDER BY scheduled_at DESC,fire_id DESC LIMIT 1"
                             (fire.monitor, fire.revision, occurrence)
                         let baseline = listToMaybe [value | Only value <- previous :: [Only Value]]
-                            evidence = [object ["fire" .= (identifier :: Int64), "evidence" .= T.take 5000 detail] | (identifier, detail) <- observations]
+                            evidence = [object ["fire" .= (identifier :: Int64), "evidence" .= T.take 5000 detail, "payload" .= (payload :: Value)] | (identifier, detail, payload) <- observations]
                             inputs =
                               object
                                 [ "trigger" .= fire.evidence,
+                                  "payload" .= fire.payload,
                                   "scheduled_at" .= fire.scheduled,
                                   "definition_revision" .= fire.revision,
                                   "change_only" .= snapshot.changeOnly,

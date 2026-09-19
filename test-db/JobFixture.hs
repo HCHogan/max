@@ -56,7 +56,7 @@ launchNext pool tasks jobs = do
 insertOccurrence :: DbPool -> MonitorRef -> Text -> IO ()
 insertOccurrence pool monitor key = void $ withDb pool $ do
   now <- databaseNow
-  recordOccurrence monitor.mrMonitorId (OccurrenceDraft key now Nothing "" False)
+  recordOccurrence monitor.mrMonitorId (OccurrenceDraft key now Nothing "" Nothing False)
 
 draft :: AgentTurnRef -> OutboundDraft
 draft turn = OutboundDraft {legacyConversationId = 900, transcriptKind = "chat", sourceCanonicalMessageId = Nothing, canonicalBody = Body [NText "task report"], replyToCanonicalMessageId = Nothing, turnOutputLink = Just (TurnOutputLink turn.atrTurnId 0), monitorFireId = Nothing}

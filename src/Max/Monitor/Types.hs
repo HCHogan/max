@@ -12,15 +12,17 @@ module Max.Monitor.Types
     ledgerMatchSpecValue,
     parseLedgerMatchSpec,
     ledgerSpecMatches,
+    HttpMonitorRegistration (..),
+    HttpMonitorResult (..),
   )
 where
 
 import Data.Aeson (Value, object, withObject, (.:?), (.=))
 import Data.Aeson.Types (parseEither)
-import Data.Maybe (fromMaybe, isNothing)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -46,6 +48,16 @@ data MonitorRef = MonitorRef
 newtype MonitorFireId = MonitorFireId {unMonitorFireId :: Int64}
   deriving stock (Show, Eq, Ord)
   deriving newtype (FromField, ToField)
+
+data HttpMonitorRegistration = HttpMonitorRegistration
+  { monitor :: !MonitorRef,
+    path :: !Text,
+    token :: !Text
+  }
+  deriving stock (Eq, Show)
+
+data HttpMonitorResult = HttpAccepted | HttpDuplicate | HttpUnauthorized | HttpGone | HttpBusy
+  deriving stock (Eq, Show)
 
 monitorHandleText :: MonitorOrdinal -> Text
 monitorHandleText ordinal = "m#" <> T.pack (show ordinal.unMonitorOrdinal)

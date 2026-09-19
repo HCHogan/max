@@ -1,10 +1,21 @@
 module Max.AdminSpec (spec) where
 
 import Max.Admin (Route (..), authOk, needsAuth, route)
+import Max.Monitor.Http (validWebhookBaseUrl)
 import Test.Hspec
 
 spec :: Spec
 spec = describe "Max.Admin" $ do
+  describe "HTTP monitor endpoint" $ do
+    it "uses its own credential route and requires POST" $ do
+      route "POST" ["hooks", "hook-id"] `shouldBe` Just (RHttpMonitor "hook-id")
+      route "GET" ["hooks", "hook-id"] `shouldBe` Nothing
+      needsAuth (RHttpMonitor "hook-id") `shouldBe` False
+    it "requires an absolute HTTP base without embedded credentials or query data" $ do
+      map validWebhookBaseUrl ["https://max.example", "http://localhost:7700", "https://max.example/max"]
+        `shouldBe` replicate 3 True
+      map validWebhookBaseUrl ["/hooks", "ftp://max.example", "https://user:password@max.example", "https://max.example/?token=x", "https://max.example/#hook"]
+        `shouldBe` replicate 5 False
   describe "route" $ do
     it "maps the read endpoints" $ do
       route "GET" ["api", "overview"] `shouldBe` Just ROverview

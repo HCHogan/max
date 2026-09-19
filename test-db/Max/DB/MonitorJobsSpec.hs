@@ -44,7 +44,7 @@ spec pool = before_ (truncateAll pool) $ describe "reminder Jobs and retained bu
     jobs <- newTaskRegistry >>= Jobs.newJobs
     (turn, _, actor) <- seed pool 900 1
     now <- getCurrentTime
-    let scope = MonitorCapability.MonitorControlScope (GroupId 900) (Just turn) actor Map.empty False
+    let scope = MonitorCapability.MonitorControlScope (GroupId 900) (Just turn) actor Map.empty False Nothing
         reminder = MonitorCapability.armMonitor (MonitorCapability.CannedReminder "reminder" Nothing (addUTCTime 60 now))
     Right monitor <- withDb pool (MonitorCapability.runMonitorControl jobs scope reminder)
     withDb pool (finishAgentTurn turn TurnCancelled 0 (Just "cancelled"))
@@ -58,7 +58,7 @@ spec pool = before_ (truncateAll pool) $ describe "reminder Jobs and retained bu
     (turn, _, actor) <- seed pool 900 1
     (_, _, otherActor) <- seed pool 901 2
     now <- getCurrentTime
-    let scope = MonitorCapability.MonitorControlScope (GroupId 900) (Just turn) actor (Map.singleton "context_search" "frozen") False
+    let scope = MonitorCapability.MonitorControlScope (GroupId 900) (Just turn) actor (Map.singleton "context_search" "frozen") False Nothing
         reminder = MonitorCapability.armMonitor (MonitorCapability.CannedReminder "reminder" Nothing (addUTCTime 60 now))
         elaborated = MonitorCapability.armMonitor (MonitorCapability.TimeMonitor "watch" Nothing (addUTCTime 60 now))
     withDb pool (MonitorCapability.runMonitorControl jobs (scope {MonitorCapability.principal = otherActor}) reminder) `shouldReturn` Left MonitorControl.ArmingCallerFenced
@@ -189,7 +189,7 @@ spec pool = before_ (truncateAll pool) $ describe "reminder Jobs and retained bu
     Right _ <- Jobs.admitJob jobs Nothing identifier job
     Object overview <- withDb pool (WorkQuery.readWorkOverview jobs)
     KeyMap.lookup "tasks" overview `shouldSatisfy` (\case Just (Array rows) -> length rows == 1; _ -> False)
-    let scope = MonitorCapability.MonitorControlScope (GroupId 900) (Just turn) actor Map.empty False
+    let scope = MonitorCapability.MonitorControlScope (GroupId 900) (Just turn) actor Map.empty False Nothing
         cancel work = withDb pool (MonitorCapability.runMonitorControl jobs scope (MonitorCapability.controlMonitor monitor.mrMonitorOrdinal MonitorControl.CancelMonitor work))
     cancel False >>= (`shouldSatisfy` isRight)
     fmap (fmap (.status)) (Jobs.lookupJob jobs (GroupId 900) identifier) `shouldReturn` Just Queued

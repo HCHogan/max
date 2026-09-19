@@ -17,7 +17,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Effectful.Reader.Dynamic (Reader, ask, runReader)
-import Max.Admin (adminServer)
+import Max.Admin (AdminConfig (..), adminServer)
 import Max.Agent.Runtime (runAgentRuntime)
 import Max.Browser.Registry
   ( configureBrowserRegistry,
@@ -160,6 +160,7 @@ main = do
                     beSkills = skillReg,
                     beOwners = cfg.owners,
                     beAdminTarget = adminTargets,
+                    beWebhookBaseUrl = cfg.admin >>= (.acWebhookBaseUrl),
                     beTasks = tasks,
                     beConversations = conversations,
                     beIngress = ingress,

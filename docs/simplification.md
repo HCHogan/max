@@ -1,8 +1,36 @@
 # Runtime simplification
 
 Implementation of the agreed September 19 plan. Baseline: `b9d3e34`.
-This checklist tracks the full scope; a passing intermediate change does not
-complete the plan.
+The runtime migration has shipped, but the full plan is not complete. The
+checklist records delivered changes; the numbered status below also tracks
+unfinished design and acceptance goals.
+
+## Status against the original numbered plan
+
+Reviewed at `f9d7ae1`; the HTTP monitor work in progress is separate. Deployment
+claims refer to the recorded `db80b66` acceptance, not a fresh production check.
+
+| Plan section | Status | Remaining work or limit |
+|---|---|---|
+| 1. Core-size goal | Measurement established; target unmet | The measured core is 33,540 effective lines including active SQL. |
+| 2. Product contract | Main runtime contract implemented | Major features and conservative handling of uncertain effects remain. |
+| 3. Responsibility boundary | Implemented | File and schema manifests expose core and total maintenance cost. |
+| 4. Model responsibilities | Partial | Finish/disposition protocols are gone; prompt reduction and monitor observation contracts still need review. |
+| 5. Runtime path | Main path implemented | Conversation, Agent and Jobs own live execution; further orchestration cleanup belongs to section 13. |
+| 6. Runtime boundaries | Implemented with regression coverage | Streaming, cancellation, provider state and resource boundaries have tests; live acceptance does not cover every case. |
+| 7. Persistence scope | Partial | Monitor occurrence claims, leases and definition snapshots remain active control machinery. |
+| 8. Removal candidates | Mostly implemented | The reminder ledger is not yet reduced to definitions and minimal trigger markers; remaining compatibility surfaces need case-by-case review. |
+| 9. Core responsibility budgets | Not reached | Core Haskell is 31,785 lines, plus 1,755 active SQL lines. Preserve major features when pursuing further reductions. |
+| 10. Migration sequence | Runtime cutover shipped; phase F partial | Cleanup and budget/readability goals remain after the deployed A–E changes. |
+| 11. Acceptance | Substantial but incomplete | Build, regression, upgrade and selected live checks passed. Model comparison was small; real-chat Jobs/reminder cases were not all exercised and strict historical health remains non-green. |
+| 12. Worker architecture | Main changes implemented | Scoped service supervision, local Jobs and queues replace the old execution recovery machinery; monitor scheduling retains the section 7 exception. |
+| 13. Readability | Partial | Handler orchestration, Agent state/results, positional capability construction and tool-interpreter forwarding still need work. |
+
+The next simplification work should address the remaining monitor protocol and
+the concrete readability issues above. It must not remove major features merely
+to reach the line-count target. Counts and evidence are in
+[code-size.md](code-size.md) and the
+[deployment report](research/simplification-release-20260919.md).
 
 ## Product contract
 
@@ -83,6 +111,8 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [x] Remove task browser checkpoint/restore; retain explicitly saved profiles.
 - [x] Remove configuration generations/hot reload; simplify startup and shutdown.
 - [x] Route reminders through Jobs and preserve minimal trigger deduplication.
+- [ ] Reduce the remaining monitor claim/lease and definition protocol to the
+      business state needed for scheduling, deduplication and frozen authority.
 
 ### D. Publication and maintenance
 
@@ -120,11 +150,13 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
       tests belonging to removed behavior. Preserve historical migrations.
 - [x] Stop using old execution tables before archiving/dropping them; retain
       business history and provide an upgrade path from the existing database.
-- [x] Make ordinary chat/tool/cancellation paths directly readable. Use named
+- [ ] Make ordinary chat/tool/cancellation paths directly readable. Use named
       fields, explicit results and locally understandable resource ownership.
 - [x] Update architecture, feature, operations and generated prompt documentation.
-- [x] Publish final core and total-owned-code measurements with a file manifest.
-- [x] Complete local gates, upgrade checks, release and operational acceptance.
+- [x] Publish the release's core and total-owned-code measurements with a file manifest.
+- [x] Complete local gates, upgrade checks, release and the recorded operational probes.
+- [ ] Complete the remaining representative model and real-conversation
+      acceptance cases; retain historical health failures as evidence.
 
 ## Size accounting
 

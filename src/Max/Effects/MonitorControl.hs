@@ -2,7 +2,7 @@
 
 -- | Monitor writes carry host-bound identity, role and grants. Every mutation
 -- rechecks the caller under the same transaction that changes the definition.
-module Max.Effects.MonitorControl (MonitorControl, MonitorControlScope (..), MonitorArm (..), armMonitor, controlMonitor, runMonitorControl) where
+module Max.Effects.MonitorControl (MonitorControl, MonitorControlScope (..), MonitorArm (..), armMonitor, armHttpMonitor, controlMonitor, runMonitorControl) where
 
 import Control.Monad (forM_, void)
 import Data.Int (Int64)
@@ -15,11 +15,13 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Authority (authorizeCallerWithin)
 import Max.DB.Monitor qualified as DB
 import Max.DB.Monitor.Control qualified as Control
+import Max.DB.Monitor.Http qualified as HttpDB
 import Max.DB.Transaction (InTransaction, withTransaction)
 import Max.Jobs qualified as Jobs
 import Max.Monitor.Control
 import Max.Monitor.Types
-  ( LedgerMatchSpec,
+  ( HttpMonitorRegistration (..),
+    LedgerMatchSpec,
     MonitorOrdinal (..),
     MonitorRef,
   )
@@ -32,7 +34,8 @@ data MonitorControlScope = MonitorControlScope
     turn :: !(Maybe AgentTurnRef),
     principal :: !PrincipalId,
     grants :: !(Map Text Text),
-    armingAllowed :: !Bool
+    armingAllowed :: !Bool,
+    httpBaseUrl :: !(Maybe Text)
   }
 
 data MonitorArm
@@ -43,6 +46,7 @@ data MonitorArm
 
 data MonitorControl :: Effect where
   ArmMonitor :: MonitorArm -> MonitorControl m (Either MonitorArmError MonitorRef)
+  ArmHttpMonitor :: HttpMonitorSpec -> MonitorControl m (Either MonitorArmError HttpMonitorRegistration)
   ControlMonitor :: MonitorOrdinal -> MonitorCommand -> Bool -> MonitorControl m (Either MonitorControlError MonitorControlReceipt)
 
 type instance DispatchOf MonitorControl = Dynamic
@@ -50,11 +54,20 @@ type instance DispatchOf MonitorControl = Dynamic
 armMonitor :: (MonitorControl :> es) => MonitorArm -> Eff es (Either MonitorArmError MonitorRef)
 armMonitor = send . ArmMonitor
 
+armHttpMonitor :: (MonitorControl :> es) => HttpMonitorSpec -> Eff es (Either MonitorArmError HttpMonitorRegistration)
+armHttpMonitor = send . ArmHttpMonitor
+
 controlMonitor :: (MonitorControl :> es) => MonitorOrdinal -> MonitorCommand -> Bool -> Eff es (Either MonitorControlError MonitorControlReceipt)
 controlMonitor ordinal command cancelTasks = send (ControlMonitor ordinal command cancelTasks)
 
 runMonitorControl :: forall es a. (WithConnection :> es, IOE :> es) => Jobs.Jobs -> MonitorControlScope -> Eff (MonitorControl : es) a -> Eff es a
 runMonitorControl jobs scope = interpret $ \_ -> \case
+  ArmHttpMonitor spec -> withCaller ArmingCallerFenced $ \turn ->
+    if not scope.armingAllowed
+      then pure (Left MonitorArmingForbidden)
+      else case scope.httpBaseUrl of
+        Nothing -> pure (Left HttpMonitorsUnavailable)
+        Just base -> fmap (\registration -> registration {path = base <> registration.path}) <$> HttpDB.armHttpMonitor scope.group scope.principal turn scope.grants spec
   ArmMonitor request -> withCaller ArmingCallerFenced $ \turn ->
     case request of
       CannedReminder body cron at -> Right <$> DB.armCannedTimeMonitor scope.group scope.principal (Just turn) body cron at

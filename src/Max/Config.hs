@@ -48,6 +48,7 @@ import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Matrix (MatrixConfig (..))
 import Max.ModelCatalog (ContextLimits (..), ModelCatalog, defaultContextLimits, modelProfileNames)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), mkModelCatalogFromProfiles, parseProtocol)
+import Max.Monitor.Http (validWebhookBaseUrl)
 import Max.Tools.Search (SearchConfig (..))
 import Max.WechatHook (WechatHookConfig (..))
 import OneBot.Server (ServerConfig (..))
@@ -241,6 +242,7 @@ validateConfig cfg =
     validateAdmin adminCfg =
       invalid "admin.host" (T.null (T.strip adminCfg.acHost))
         <> invalid "admin.port" (adminCfg.acPort <= 0 || adminCfg.acPort > 65535)
+        <> invalid "admin.webhook_base_url" (maybe False (not . validWebhookBaseUrl) adminCfg.acWebhookBaseUrl)
     nonempty field text = invalid field (T.null (T.strip text))
     validateMatrix matrixCfg =
       nonempty "matrix.homeserver" matrixCfg.homeserver
@@ -1127,8 +1129,19 @@ adminParser = do
           conf "token",
           metavar "TOKEN"
         ]
+  webhookBase <-
+    optional $
+      setting
+        [ help "External HTTP(S) base URL for per-monitor webhooks; enables trigger=http",
+          reader str,
+          option,
+          long "webhook-base-url",
+          env "MAX_WEBHOOK_BASE_URL",
+          conf "webhook_base_url",
+          metavar "URL"
+        ]
   pure $ case mPort of
-    Just p -> Just AdminConfig {acHost = host, acPort = p, acToken = token}
+    Just p -> Just AdminConfig {acHost = host, acPort = p, acToken = token, acWebhookBaseUrl = T.dropWhileEnd (== '/') <$> webhookBase}
     Nothing -> Nothing
 
 --------------------------------------------------------------------------------

@@ -11,6 +11,7 @@ module Max.DB.Monitor
     armCannedTimeMonitor,
     armElaboratedTimeMonitor,
     armLedgerMatchMonitor,
+    armElaboratedMonitor,
     listCannedTimeMonitors,
     listArmedMonitors,
     nextMonitorDeadline,
@@ -526,6 +527,7 @@ admitDueTimeMonitors now = withTransaction $ do
                 scheduled
                 Nothing
                 ("TimeCron reached " <> T.pack (show scheduled))
+                Nothing
                 False
         occurrence <- Occurrence.insertOccurrenceWithin current draft
         pure $ maybe 0 (const 1) occurrence
@@ -617,7 +619,7 @@ evaluateLedgerMatches conversation ingestSeq canonical sender self mentionPrinci
                   Just current ->
                     Occurrence.insertOccurrenceWithin
                       current
-                      (Occurrence.OccurrenceDraft ("ledger:" <> T.pack (show monitorId.unMonitorId) <> ":" <> T.pack (show messageId)) observedAt (Just messageId) evidence True)
+                      (Occurrence.OccurrenceDraft ("ledger:" <> T.pack (show monitorId.unMonitorId) <> ":" <> T.pack (show messageId)) observedAt (Just messageId) evidence Nothing True)
                 let inserted = maybe 0 (const 1) occurrence
                 when (inserted == 1 && maybe False (newCount >=) maxCount) $ do
                   _ <-

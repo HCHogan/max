@@ -38,6 +38,7 @@
     "message_videos",
     "messages",
     "monitor_fires",
+    "monitor_http_hooks",
     "monitors",
     "platform_accounts",
     "platform_events",

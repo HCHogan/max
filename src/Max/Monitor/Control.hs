@@ -4,6 +4,7 @@ module Max.Monitor.Control
     MonitorControlError (..),
     MonitorControlReceipt (..),
     MonitorArmError (..),
+    HttpMonitorSpec (..),
     PendingPolicy (..),
     parsePendingPolicy,
     monitorControlErrorText,
@@ -12,9 +13,20 @@ module Max.Monitor.Control
 where
 
 import Data.Aeson (ToJSON (..), object, (.=))
+import Data.Int (Int64)
 import Data.Text (Text)
+import Data.Time (UTCTime)
 import Max.Monitor.Policy (OverlapPolicy)
 import Max.Task.Types (TaskProfile)
+
+data HttpMonitorSpec = HttpMonitorSpec
+  { goal :: !Text,
+    profile :: !TaskProfile,
+    cooldownSeconds :: !Int,
+    expiresAt :: !(Maybe UTCTime),
+    maxFires :: !(Maybe Int64)
+  }
+  deriving stock (Eq, Show)
 
 data MonitorArmError
   = ArmedMonitorCapReached
@@ -22,6 +34,7 @@ data MonitorArmError
   | ArmingTurnOutsideConversation
   | MonitorArmingForbidden
   | ArmingCallerFenced
+  | HttpMonitorsUnavailable
   deriving stock (Show, Eq)
 
 data MonitorCommand
@@ -70,3 +83,4 @@ armErrorText = \case
   ArmingTurnOutsideConversation -> "arming turn 不属于当前会话"
   MonitorArmingForbidden -> "当前角色无权武装会主动发起回合的 monitor"
   ArmingCallerFenced -> "当前回合身份或执行租约已失效，不能创建提醒或 monitor"
+  HttpMonitorsUnavailable -> "HTTP monitor 未启用：需要配置 admin.webhook_base_url"

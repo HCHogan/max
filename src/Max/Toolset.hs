@@ -174,7 +174,7 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
     runners0 =
       builtinsWithDatabase env.beTimeZone dc
         <> reminderToolsWithDatabase env.beJobs env.beTimeZone dc
-        <> monitorToolsWithDatabase env.beJobs env.beTimeZone dc
+        <> monitorToolsWithDatabase env.beJobs env.beTimeZone env.beWebhookBaseUrl dc
         <> groupToolsWithDatabase dc
         <> imageToolsWithDatabase env.beTimeZone dc
         <> memoryToolsWithDatabase dc

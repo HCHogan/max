@@ -27,6 +27,7 @@ import Max.DB.ConnectionSpec qualified as ConnectionSpec
 import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
 import Max.DB.FilesSpec qualified as FilesSpec
 import Max.DB.HistorySpec qualified as HistorySpec
+import Max.DB.HttpMonitorSpec qualified as HttpMonitorSpec
 import Max.DB.JobSpec qualified as JobSpec
 import Max.DB.MediaMissingSpec qualified as MediaMissingSpec
 import Max.DB.MediaSpec qualified as MediaSpec
@@ -99,6 +100,7 @@ main = do
         MediaSpec.spec pool
         MediaMissingSpec.spec pool
         MonitorSpec.spec pool
+        HttpMonitorSpec.spec pool
         MonitorJobsSpec.spec pool
         QQBackfillSpec.spec pool
         RecallSpec.spec pool

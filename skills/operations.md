@@ -10,6 +10,28 @@ SSH 默认登录 `max`，有完整免密 sudo；群内成员均可发起运维�
 当前运维入口是本技能和 shell/SSH。历史里的 maxops 技能、Hub API、远端 job 句柄均已退役，
 不能当成当前工具或待重放命令；旧任务继续按原目标，通过实际主机、服务和日志取证。
 
+# 告警与巡检
+
+fleet 的 Alertmanager 在 h610 和 tank，本机 HTTP 端口都是 9093；通过 SSH 查询，例如：
+
+```sh
+ssh h610 'curl -fsS http://127.0.0.1:9093/api/v2/status'
+ssh h610 'curl -fsS "http://127.0.0.1:9093/api/v2/alerts?active=true&silenced=true&inhibited=true"'
+```
+
+Alertmanager 使用 REST API v2；旧 `/api/v1/alerts` 返回 410，不代表告警服务停止。
+v2 alerts 直接返回数组；结合 labels、annotations、startsAt、endsAt 和 status 判断，
+被静默或抑制不等于恢复。HTTP/SSH/解析失败必须报告查询失败，不能当作零告警。
+两台实例可能持有同一组告警，核对 cluster 状态并按 fingerprint 去重；
+Prometheus 的查询接口仍是 `/api/v1/query`，不要一并改成 v2。
+
+需要接收推送时，使用通用 `arm_monitor(trigger="http", profile="sandbox")`，
+在 goal 中说明收到告警后核查主机、服务和日志的任务；由用户在群内决定是否创建。
+工具返回独立 URL 和 bearer_token，供 Alertmanager 的 webhook receiver 配置使用，
+凭据写入受限的配置/凭据文件，不在群回复中展示。发送端配置和当前端口以
+nix-config 的监控模块及目标机有效配置为准；修改接收路由前核对现有 receiver，
+保留其他通知渠道。webhook 的 JSON 版本与 REST API v2 是不同概念。
+
 # 工作方式
 
 先核对主机、服务状态、配置与相关日志，再执行修改。长流程使用 profile=sandbox 的后台任务，在子任务中加载 operations 技能。

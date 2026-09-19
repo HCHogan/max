@@ -83,6 +83,7 @@ import Max.MemoryStore
     listMemories,
     listUserMemoriesEverywhereAdmin,
   )
+import Max.Monitor.Http (handleHttpMonitor)
 import Max.Platform.Store (ConversationSummary (..), listConversations, listPlatformStatus)
 import Max.Recall
   ( RecallCandidate (..),
@@ -112,7 +113,8 @@ data AdminConfig = AdminConfig
     -- | Bearer token required on every request when set.  Optional
     -- because a loopback bind behind an authenticating proxy needs
     -- none.
-    acToken :: !(Maybe Text)
+    acToken :: !(Maybe Text),
+    acWebhookBaseUrl :: !(Maybe Text)
   }
   deriving stock (Show, Eq)
 
@@ -123,6 +125,7 @@ data AdminConfig = AdminConfig
 -- handler's business; this is just method + path shape.
 data Route
   = ROverview
+  | RHttpMonitor !Text
   | -- | Every conversation the ledger knows, for the panel's picker.
     RConversations
   | RGroups
@@ -211,6 +214,7 @@ route m path
       ["api", "tasks", t] | not (T.null t) -> Just (RTaskKill t)
       _ -> Nothing
   | m == methodPost = case path of
+      ["hooks", identifier] | not (T.null identifier) -> Just (RHttpMonitor identifier)
       ["api", "skills"] -> Just RSkillCreate
       ["api", "context", "rebuild"] -> Just RContextRebuild
       ["api", "context", "reindex"] -> Just RContextReindex
@@ -238,6 +242,7 @@ authOk (Just _) Nothing = False
 needsAuth :: Route -> Bool
 needsAuth = \case
   RStatic _ -> False
+  RHttpMonitor _ -> False -- This route checks its own per-monitor bearer token.
   _ -> True
 
 --------------------------------------------------------------------------------
@@ -266,6 +271,10 @@ adminServer cfg env profiles logBuf = localDomain "admin" $ do
             not (authOk cfg.acToken (lookup hAuthorization (requestHeaders req))) ->
               pure (jsonResponse status401 (object ["error" .= ("unauthorized" :: Text)]))
         Just (RStatic p) -> pure (staticResponse p)
+        Just r@(RHttpMonitor hook) ->
+          case cfg.acWebhookBaseUrl of
+            Nothing -> pure (jsonResponse status404 (object ["error" .= ("not found" :: Text)]))
+            Just _ -> run (guarded r (handleHttpMonitor hook req))
         Just r -> do
           body <- strictRequestBody req
           run (guarded r (handle env profiles logBuf r (queryPairs req) body))
@@ -352,6 +361,7 @@ handle ::
   LBS.ByteString ->
   Eff es Response
 handle env profiles logBuf r params body = case r of
+  RHttpMonitor _ -> pure notFound
   ROverview -> do
     now <- liftIO getCurrentTime
     tasks <- liftIO (listTasks env.beTasks Nothing)

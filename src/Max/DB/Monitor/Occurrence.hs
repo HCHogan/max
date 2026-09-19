@@ -9,6 +9,7 @@ module Max.DB.Monitor.Occurrence
   )
 where
 
+import Data.Aeson (Value)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Time (UTCTime)
@@ -70,6 +71,7 @@ data OccurrenceDraft = OccurrenceDraft
     scheduled :: !UTCTime,
     sourceMessage :: !(Maybe Int64),
     evidence :: !Text,
+    payload :: !(Maybe Value),
     counted :: !Bool
   }
   deriving stock (Eq, Show)
@@ -92,14 +94,15 @@ insertOccurrenceWithin definition draft = do
   inserted <-
     query
       "INSERT INTO monitor_fires(monitor_id,conversation_id,idempotency_key,scheduled_at,trigger_canonical_message_id,\
-      \ trigger_evidence,counted_at_admission,definition_revision,definition_snapshot,disposition,coalesced_into,cancelled_at,last_error)\
-      \ VALUES(?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?) ON CONFLICT DO NOTHING RETURNING fire_id"
+      \ trigger_evidence,trigger_payload,counted_at_admission,definition_revision,definition_snapshot,disposition,coalesced_into,cancelled_at,last_error)\
+      \ VALUES(?,?,?,?,?,?,?::jsonb,?,?,?::jsonb,?,?,?,?) ON CONFLICT DO NOTHING RETURNING fire_id"
       ( definition.monitorId,
         definition.conversation,
         draft.key,
         draft.scheduled,
         draft.sourceMessage,
         draft.evidence,
+        fmap jsonText draft.payload,
         draft.counted,
         definition.revision,
         jsonText definition.snapshot,

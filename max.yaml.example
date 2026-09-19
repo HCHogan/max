@@ -350,6 +350,7 @@ llm:
 # admin:
 #   port: 7700
 #   host: 127.0.0.1           # default; think twice before widening
+#   webhook_base_url: https://max.example # optional; enables HTTP monitors
 #   token: change-me          # prefer MAX_ADMIN_TOKEN — under the NixOS
 #                             # module this file is world-readable in the
 #                             # nix store, so a token here is public
