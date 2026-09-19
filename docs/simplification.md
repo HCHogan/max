@@ -13,7 +13,7 @@ deployment evidence remains historical.
 
 | Plan section | Status | Remaining work or limit |
 |---|---|---|
-| 1. Core-size goal | Measurement established; target unmet | The measured core is 33,726 effective lines including active SQL. |
+| 1. Core-size goal | Measurement established; target unmet | The measured core is 33,732 effective lines including active SQL. |
 | 2. Product contract | Main runtime contract implemented | Major features and conservative handling of uncertain effects remain. |
 | 3. Responsibility boundary | Implemented | File and schema manifests expose core and total maintenance cost. |
 | 4. Model responsibilities | Partial | Finish/disposition protocols are gone; prompt reduction and monitor observation contracts still need review. |
@@ -21,7 +21,7 @@ deployment evidence remains historical.
 | 6. Runtime boundaries | Implemented with regression coverage | Streaming, cancellation, provider state and resource boundaries have tests; live acceptance does not cover every case. |
 | 7. Persistence scope | Implemented | Definitions and trigger facts remain; worker leases, retry state and crash replay are gone. Frozen definitions preserve pending-retention and authority semantics. |
 | 8. Removal candidates | Implemented | Reminder triggers feed ordinary Jobs; old runtime tables have no serving-code consumers. Obsolete debt views and lease helpers are removed. |
-| 9. Core responsibility budgets | Not reached | Core Haskell is 31,979 lines, plus 1,747 active SQL lines. Preserve major features when pursuing further reductions. |
+| 9. Core responsibility budgets | Not reached | Core Haskell is 31,985 lines, plus 1,747 active SQL lines. Preserve major features when pursuing further reductions. |
 | 10. Migration sequence | Runtime cutover shipped; phase F partial | Cleanup and budget/readability goals remain after the deployed A–E changes. |
 | 11. Acceptance | Substantial but incomplete | Build, regression, upgrade and selected live checks passed. Model comparison was small; real-chat Jobs/reminder cases were not all exercised and strict historical health remains non-green. |
 | 12. Worker architecture | Main changes implemented | Scoped service supervision, local Jobs and queues replace the old execution recovery machinery; monitor scheduling now uses the same no-replay restart contract. |
@@ -242,10 +242,15 @@ maintained implementation record.
 - Sections 7–8: `58523f4` removes monitor leases, persistent delivery retries,
   replay acknowledgement, partial-snapshot restoration and obsolete debt views.
   Populated migration 124 preserves definitions, messages and trigger facts.
-- Section 13: all Cabal components build; 1,041 unit and 266 PostgreSQL examples
+- Live startup exposed a pre-existing role-check bug: unavailable platform
+  metadata was treated as confirmed loss of administrator authority. Monitor
+  revalidation now retains the pending trigger and bounds read-only retries in
+  the running process; only a known insufficient role expires the definition.
+  Ordinary permission checks still deny access when the role is unavailable.
+- Section 13: all Cabal components build; 1,043 unit and 266 PostgreSQL examples
   pass; HLint and architecture capability checks pass. The removed 14 examples
   tested an Agent retry classifier with no production caller. Current source
-  and active SQL total 33,726 core lines. This is local validation; production
+  and active SQL total 33,732 core lines. This is local validation; production
   acceptance is recorded separately after the release.
 
 

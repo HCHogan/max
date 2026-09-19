@@ -10,6 +10,7 @@ module Max.Handler
     isSilentReply,
     parseSilence,
     splitQuoteHandles,
+    rosterTier,
   )
 where
 
@@ -1242,10 +1243,15 @@ dispatchMonitorFire fire = do
         then expire "arming principal provenance no longer resolves in this conversation"
         else do
           env :: BotEnv <- ask
-          tier <- effectiveTier env seed.groupId seed
-          if not (roleStillAllows fire.emfRequiredRole tier)
-            then expire "arming principal role no longer permits monitors"
-            else do
+          tier <- effectiveTierKnown env seed.groupId seed
+          case tier of
+            -- A disconnected platform is not evidence of revoked authority.
+            -- Leave the trigger pending; bound read-only rechecks locally.
+            Nothing -> liftIO (Thread.threadDelay 5_000_000)
+            Just actual
+              | not (roleStillAllows fire.emfRequiredRole actual) ->
+                  expire "arming principal role no longer permits monitors"
+            Just _ -> do
               now <- liftIO getCurrentTime
               nextAt <- case fire.emfCron of
                 Nothing -> pure (Right Nothing)
@@ -2052,8 +2058,11 @@ resolveAdminTarget env gm cmd
 -- list first, then the NapCat role there.  Resolved once per command
 -- and threaded into both the permission check and 'CmdDispatch.execute'.
 effectiveTier :: (PlatformQuery :> es, Log :> es) => BotEnv -> GroupId -> DispatchMessage -> Eff es PermTier
-effectiveTier env targetGid gm
-  | let UserId uid = gm.userId, uid `elem` env.beOwners = pure TierOwner
+effectiveTier env targetGid gm = fromMaybe TierMember <$> effectiveTierKnown env targetGid gm
+
+effectiveTierKnown :: (PlatformQuery :> es, Log :> es) => BotEnv -> GroupId -> DispatchMessage -> Eff es (Maybe PermTier)
+effectiveTierKnown env targetGid gm
+  | let UserId uid = gm.userId, uid `elem` env.beOwners = pure (Just TierOwner)
   | otherwise = actorTier targetGid gm.userId
 
 -- | May the sender run this command against the target group?  The tier the
@@ -2067,15 +2076,16 @@ checkCmdPermission effTier cmd = case requiredCapability cmd of
 -- | The sender's role tier in a group.  A private pseudo-group means
 -- the sender administers their own session by definition; owner tier
 -- is config-only and resolved by the caller.
-actorTier :: (PlatformQuery :> es, Log :> es) => GroupId -> UserId -> Eff es PermTier
+actorTier :: (PlatformQuery :> es, Log :> es) => GroupId -> UserId -> Eff es (Maybe PermTier)
 actorTier gid uid
-  | isPrivateChat gid = pure TierGroupAdmin
-  | otherwise = do
-      members <- fetchGroupMembers gid
-      let role = [m.mRole | m <- fromMaybe [] members, m.mUserId == uid]
-      pure $ case role of
-        (r : _) | r `elem` ["owner", "admin"] -> TierGroupAdmin
-        _ -> TierMember
+  | isPrivateChat gid = pure (Just TierGroupAdmin)
+  | otherwise = rosterTier uid <$> fetchGroupMembers gid
+
+rosterTier :: UserId -> Maybe [GroupMember] -> Maybe PermTier
+rosterTier uid = fmap $ \members ->
+  case [member.mRole | member <- members, member.mUserId == uid] of
+    (role : _) | role `elem` ["owner", "admin"] -> TierGroupAdmin
+    _ -> TierMember
 
 -- | Reactions are lightweight canonical meta-events.  Publishing them is the
 -- only side effect on the dispatch path; the capability-aware delivery worker

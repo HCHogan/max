@@ -2,10 +2,12 @@
 
 module Max.HandlerSpec (spec) where
 
-import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, recordAs, splitQuoteHandles)
+import Max.Command.Permission (PermTier (..))
+import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, recordAs, rosterTier, splitQuoteHandles)
 import Max.IR.Prompt (promptText)
 import Max.MessageKind (MessageKind (..))
 import Max.Platform.QQ (qqIngestBody)
+import Max.Platform.Roster (GroupMember (..))
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.ReplySend (cleanModelText, stripBareMarkers, stripStickerText, stripThinkSpans)
 import OneBot.Event (GroupMessage (..), Sender (..))
@@ -15,6 +17,15 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
+  describe "monitor role revalidation" $ do
+    it "keeps an unavailable roster distinct from a confirmed ordinary member" $ do
+      rosterTier (UserId 7) Nothing `shouldBe` Nothing
+      rosterTier (UserId 7) (Just []) `shouldBe` Just TierMember
+      rosterTier (UserId 7) (Just [GroupMember (UserId 7) Nothing Nothing "member" Nothing]) `shouldBe` Just TierMember
+    it "recognizes restored administrator authority without borrowing another member's role" $ do
+      rosterTier (UserId 7) (Just [GroupMember (UserId 7) Nothing Nothing "admin" Nothing]) `shouldBe` Just TierGroupAdmin
+      rosterTier (UserId 7) (Just [GroupMember (UserId 8) Nothing Nothing "owner" Nothing]) `shouldBe` Just TierMember
+
   describe "durable ingest policy" $ do
     it "allows media/dispatch work only after the immutable ledger is durable" $ do
       ingestAllowsDownstream (IngestDurable (CanonicalMessageId 1)) `shouldBe` True
