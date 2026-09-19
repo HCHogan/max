@@ -34,6 +34,8 @@ for migration in migrations/*.sql; do
       psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/local-conversations-upgrade.sql
     elif [[ "$name" == "116_local_jobs.sql" ]]; then
       psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/local-jobs-upgrade.sql
+    elif [[ "$name" == "117_diagnostic_results.sql" ]]; then
+      psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/diagnostic-results-upgrade.sql
     else
       psql -X -v ON_ERROR_STOP=1 -1 -d "$database" -f "$migration" >/dev/null
     fi

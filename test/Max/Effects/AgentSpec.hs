@@ -50,8 +50,8 @@ runTestAgent ::
   Eff es a
 runTestAgent inputs =
   runAgentWith
-    (ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ _ _ -> pure Nothing))
-    (ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ _ _ -> pure ()))
+    (ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ -> pure True))
+    (ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ()))
     (ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inputs (\notes -> ([], T.intercalate "\n" notes))))
     Nothing
 
@@ -700,8 +700,8 @@ spec = describe "Agent full loop" $ do
                       other -> expectationFailure ("missing late correction: " <> show other)
                     pure (Right (ContentResp "corrected"))
             )
-        admission = ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ _ _ -> pure Nothing)
-        journal = ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ _ _ -> pure ())
+        admission = ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ -> pure True)
+        journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
         inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inbox ("",))
     result <- withCompactLogger ColorNever Nothing $ \logger ->
       runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 3) (const (buildToolRegistry [] [])) $

@@ -28,6 +28,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
 import Effectful.Concurrent.MVar
@@ -60,6 +61,7 @@ import Max.Tasks
   ( TaskCancelled (..),
     TurnRuntime,
     checkTurnCancellation,
+    nextExecutionOrdinal,
     turnRuntimeAgentTurn,
   )
 import Max.Tool.Control
@@ -81,7 +83,6 @@ data ExecutionHooks es = ExecutionHooks
   { ehCheck :: Eff es (),
     ehStart :: ExecutionStep -> JournalStart -> Eff es (Maybe JournalExecution),
     ehFinish :: JournalExecution -> JournalFinish -> Eff es (),
-    ehUnknown :: JournalExecution -> Text -> Eff es (),
     ehWorkflow :: Maybe (WorkflowHost es)
   }
 
@@ -93,9 +94,16 @@ executionHooks admission journal group turn =
         for_ (turnRuntimeAgentTurn turn) $ \durable -> do
           active <- admission.eaCheck durable
           unless active (throwIO TaskCancelled),
-      ehStart = \step start -> maybe (pure Nothing) (\durable -> admission.eaStartTool group durable step start) (turnRuntimeAgentTurn turn),
+      ehStart = \step start -> case turnRuntimeAgentTurn turn of
+        Nothing -> pure Nothing
+        Just ref -> do
+          prepared <- journal.ejPrepare group start
+          allowed <- admission.eaAdmitTool ref step
+          unless allowed (throwIO TaskCancelled)
+          ordinal <- liftIO (nextExecutionOrdinal turn)
+          now <- liftIO getCurrentTime
+          pure (Just (JournalExecution ref ordinal prepared now)),
       ehFinish = journal.ejFinish,
-      ehUnknown = journal.ejUnknown,
       ehWorkflow = Nothing
     }
 
@@ -105,7 +113,6 @@ hoistExecutionHooks lower hooks =
     { ehCheck = lower hooks.ehCheck,
       ehStart = \step -> lower . hooks.ehStart step,
       ehFinish = \row -> lower . hooks.ehFinish row,
-      ehUnknown = \row -> lower . hooks.ehUnknown row,
       ehWorkflow = hoistWorkflowHost lower <$> hooks.ehWorkflow
     }
 
@@ -119,7 +126,7 @@ newExecutionSession :: (Concurrent :> es) => Maybe Int -> Eff es ExecutionSessio
 newExecutionSession limit =
   ExecutionSession <$> newTVarIO (max 0 <$> limit) <*> newTVarIO 0 <*> newMVar ()
 
--- | Labels are allocated by the host; durable identity is the journal row ID.
+-- | Labels are local to this session; result ordinals belong to the turn.
 freshExecutionLabel :: (Concurrent :> es) => ExecutionSession -> Text -> Eff es Text
 freshExecutionLabel session prefix = atomically $ do
   n <- readTVar session.sequenceNumber
@@ -188,21 +195,19 @@ executeBatch independent invoke session hooks catalog requests =
         invocations <- restoreBatch (if independent || all canParallel requests then mapConcurrently execute requests else traverse execute requests) `finally` release
         pure (ToolBatch invocations False)
 
--- | Mask the admission-to-handler gap. The body is cancellable, and every
--- exception after admission (including failed settlement) leaves conservative
--- evidence. Completed journal rows are never overwritten by the unknown path.
+-- | Admission is local. Record the outcome after the cancellable body; a
+-- diagnostic failure must not reclassify a completed external effect.
 withExecutionRecord :: ExecutionHooks es -> ExecutionStep -> JournalStart -> (Maybe JournalExecution -> Eff es (a, ToolInvocation)) -> Eff es (a, ToolInvocation)
 withExecutionRecord hooks step start body = mask $ \restore -> do
   hooks.ehCheck
   row <- hooks.ehStart step start
-  ( do
-      (value, invocation) <- restore (body row)
-      for_ row $ \entry -> hooks.ehFinish entry (journalFinish (journalControl invocation))
-      pure (value, invocation {tiOutcome = stripJournalMetadata invocation.tiOutcome})
-    )
-    `catch` \(exception :: SomeException) -> do
-      for_ row $ \entry -> hooks.ehUnknown entry (T.pack (show exception))
-      throwIO exception
+  (value, invocation) <-
+    restore (body row)
+      `catch` \(exception :: SomeException) -> do
+        for_ row $ \entry -> hooks.ehFinish entry (JournalOutcomeUnknown "interrupted" (T.pack (show exception)))
+        throwIO exception
+  for_ row $ \entry -> hooks.ehFinish entry (journalFinish (journalControl invocation))
+  pure (value, invocation {tiOutcome = stripJournalMetadata invocation.tiOutcome})
 
 rejected :: Text -> Text -> ToolInvocation
 rejected code message = ToolInvocation (ToolRejected (ToolFault code message RetrySafe)) ContinueLoop
@@ -229,8 +234,7 @@ outcomeName = \case
   ToolCommitted {} -> "committed"
   ToolOutcomeUnknown {} -> "outcome-unknown"
 
--- Durable activation evidence comes only from the typed host channel. The
--- private manifest is stored atomically with the successful tool result.
+-- Activation evidence comes only from the typed host channel.
 journalControl :: ToolInvocation -> ToolOutcome
 journalControl invocation = case controlSkillLoads invocation.tiControl of
   [] -> invocation.tiOutcome
@@ -246,7 +250,7 @@ catalogJournalStart tc view =
       jsToolRef = tc.trName,
       jsSchemaVersion = view.ctDefinition.tdSchemaVersion.unSchemaVersion,
       jsSchemaHash = view.ctSchemaHash.unSchemaHash,
-      jsInput = tc.trArguments,
+      jsInput = case tc.trArguments of Object fields -> Object (KeyMap.delete "_max_host_network_mode" fields); value -> value,
       jsEffectLabels = toJSON (map effectLabel (Set.toList view.ctDefinition.tdEffects)),
       jsRetryClass = retryClassText view.ctDefinition.tdRetryClass
     }

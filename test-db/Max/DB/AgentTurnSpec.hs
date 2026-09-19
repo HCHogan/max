@@ -63,20 +63,15 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     fixture <- createFixture pool 42 1001
     other <- createFixture pool 43 1002
     withTemporaryBlobRoot $ \blobRoot -> do
-      noteAndFirst <- withDb pool $ do
-        recordModelNote fixture.fxTurn "先检查现状"
-        startJournalExecution fixture.fxTurn (journalStart "call-1" "sandbox_exec")
-      noteAndFirst.jeExecutionOrdinal `shouldBe` ExecutionOrdinal 2
-      second <-
-        withDb pool $
-          startJournalExecution fixture.fxTurn (journalStart "call-2" "fetch_url")
-      second.jeExecutionOrdinal `shouldBe` ExecutionOrdinal 3
+      withDb pool (recordModelNote fixture.fxTurn (ExecutionOrdinal 1) "先检查现状")
+      noteAndFirst <- recordFor fixture.fxTurn (ExecutionOrdinal 2) (journalStart "call-1" "sandbox_exec")
+      second <- recordFor fixture.fxTurn (ExecutionOrdinal 3) (journalStart "call-2" "fetch_url")
 
       let largeValue = String (T.replicate 20000 "x")
       withDbBlob pool blobRoot $
-        finishJournalExecution noteAndFirst (JournalCommitted largeValue)
+        recordJournalExecution second (JournalSucceeded (object ["ok" .= True]))
       withDbBlob pool blobRoot $
-        finishJournalExecution second (JournalSucceeded (object ["ok" .= True]))
+        recordJournalExecution noteAndFirst (JournalCommitted largeValue)
 
       largeEnvelope <-
         withDb pool $
@@ -129,15 +124,15 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
         query
           connection
           "SELECT result_inline IS NULL, result_blob_sha256 IS NOT NULL \
-          \ FROM execution_journal WHERE journal_id = ?"
-          (Only noteAndFirst.jeJournalId)
+          \ FROM execution_journal WHERE turn_id = ? AND execution_ordinal = ?"
+          (noteAndFirst.jeTurn.atrTurnId, noteAndFirst.jeExecutionOrdinal)
       (storageRows :: [(Bool, Bool)]) `shouldBe` [(True, True)]
 
   it "expands spilled results by local call id with bounded pages and scope/clear guards" $ do
     fixture <- createFixture pool 42 1001
     withTemporaryBlobRoot $ \root -> do
-      execution <- withDb pool (startJournalExecution fixture.fxTurn (journalStart "original" "read"))
-      withDbBlob pool root (finishJournalExecution execution (JournalSucceeded (String (T.replicate 20000 "汉"))))
+      execution <- recordFor fixture.fxTurn (ExecutionOrdinal 1) (journalStart "original" "read")
+      withDbBlob pool root (recordJournalExecution execution (JournalSucceeded (String (T.replicate 20000 "汉"))))
       let readPage scope cleared = expandJournalResult scope cleared "t#1" (Just "original") Nothing 500
       Just (Object page) <- withDbBlob pool root (readPage (conversationScopeFor fixture.fxGroup) Nothing)
       KeyMap.lookup "has_more" page `shouldBe` Just (Bool True)
@@ -145,82 +140,28 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
       withDbBlob pool root (readPage (conversationScopeFor (GroupId 43)) Nothing) `shouldReturn` Nothing
       cleared <- getCurrentTime
       withDbBlob pool root (readPage (conversationScopeFor fixture.fxGroup) (Just cleared)) `shouldReturn` Nothing
-      _ <- withDb pool (startJournalExecution fixture.fxTurn (journalStart "original" "read"))
+      duplicate <- recordFor fixture.fxTurn (ExecutionOrdinal 2) (journalStart "original" "read")
+      withDbBlob pool root (recordJournalExecution duplicate (JournalSucceeded (String "same call id")))
       withDbBlob pool root (readPage (conversationScopeFor fixture.fxGroup) Nothing) `shouldReturn` Nothing
 
-  it "reclaims an interrupted effect exactly once without treating it as retryable" $ do
+  it "ends interrupted turns once without generating resumable execution state" $ do
     fixture <- createFixture pool 42 1001
-    execution <-
-      withDb pool $
-        startJournalExecution fixture.fxTurn (journalStart "call-crash" "send_file_from_sandbox")
-    first <- withDb pool reclaimInterruptedTurns
-    first `shouldBe` ReclaimedTurns 1 1
-    second <- withDb pool reclaimInterruptedTurns
-    second `shouldBe` noReclaimedTurns
-    rows <- withConn pool $ \connection ->
-      query
-        connection
-        "SELECT t.status, j.state, j.failure_code \
-        \ FROM agent_turns t JOIN execution_journal j USING (turn_id) \
-        \ WHERE j.journal_id = ?"
-        (Only execution.jeJournalId)
-    (rows :: [(Text, Text, Maybe Text)])
-      `shouldBe` [("crashed", "outcome-unknown", Just "process_restart")]
-    withDb pool reclaimInterruptedTurns `shouldReturn` noReclaimedTurns
-
-  it "closes a dangling started effect atomically with a terminal turn" $ do
-    fixture <- createFixture pool 42 1001
-    execution <-
-      withDb pool $
-        startJournalExecution fixture.fxTurn (journalStart "call-cancel" "sandbox_exec")
-    withDb pool $
-      finishAgentTurn fixture.fxTurn TurnAborted 1 (Just "cancelled")
-    rows <- withConn pool $ \connection ->
-      query
-        connection
-        "SELECT t.status, j.state, j.failure_code \
-        \ FROM agent_turns t JOIN execution_journal j USING (turn_id) \
-        \ WHERE j.journal_id = ?"
-        (Only execution.jeJournalId)
-    (rows :: [(Text, Text, Maybe Text)])
-      `shouldBe` [("aborted", "outcome-unknown", Just "turn_terminal")]
-    withDb pool reclaimInterruptedTurns
-      `shouldReturn` noReclaimedTurns
-
-  it "ends an asynchronously interrupted turn without restarting it" $ do
-    fixture <- createFixture pool 42 1001
-    execution <-
-      withDb pool $
-        startJournalExecution fixture.fxTurn (journalStart "call-shutdown" "sandbox_exec")
-    withDb pool $
-      ensureAgentTurnCrashed fixture.fxTurn "shutdown drain timed out"
-    suspended <- withConn pool $ \connection ->
-      query
-        connection
-        "SELECT t.status, j.state, j.failure_code \
-        \ FROM agent_turns t JOIN execution_journal j USING (turn_id) \
-        \ WHERE j.journal_id = ?"
-        (Only execution.jeJournalId)
-    (suspended :: [(Text, Text, Maybe Text)])
-      `shouldBe` [("crashed", "outcome-unknown", Just "turn_terminal")]
-    reclaimed <- withDb pool reclaimInterruptedTurns
-    reclaimed `shouldBe` noReclaimedTurns
+    withDb pool reclaimInterruptedTurns `shouldReturn` 1
+    withDb pool reclaimInterruptedTurns `shouldReturn` 0
     withDb pool (markAgentTurnRunning fixture.fxTurn "test-profile")
-    status <- withConn pool $ \connection ->
+    rows <- withConn pool $ \connection ->
       query connection "SELECT status FROM agent_turns WHERE turn_id = ?" (Only fixture.fxTurn.atrTurnId)
-    (status :: [Only Text]) `shouldBe` [Only "crashed"]
+    (rows :: [Only Text]) `shouldBe` [Only "crashed"]
 
   it "does not duplicate a canonical send already committed before restart" $ do
     fixture <- createFixture pool 42 1001
-    execution <-
-      withDb pool $
-        startJournalExecution fixture.fxTurn (journalStart "call-send" "send_message")
+    execution <- recordFor fixture.fxTurn (ExecutionOrdinal 1) (journalStart "call-send" "send_message")
     let link = TurnOutputLink fixture.fxTurn.atrTurnId 0
         draft = outbound fixture link "已提交回复"
     sent <- withDb pool (enqueueOutbound draft)
     withTemporaryBlobRoot $ \blobRoot ->
       withDbBlob pool blobRoot $
-        finishJournalExecution
+        recordJournalExecution
           execution
           ( JournalCommitted
               ( object
@@ -231,8 +172,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
           )
 
     reclaimed <- withDb pool reclaimInterruptedTurns
-    reclaimed.rrTurnsCrashed `shouldBe` 1
-    reclaimed.rrExecutionsUnknown `shouldBe` 0
+    reclaimed `shouldBe` 1
     rows <- withConn pool $ \connection ->
       query
         connection
@@ -244,8 +184,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     journalRows <- withConn pool $ \connection ->
       query
         connection
-        "SELECT state, output_canonical_message_id FROM execution_journal WHERE journal_id = ?"
-        (Only execution.jeJournalId)
+        "SELECT state, output_canonical_message_id FROM execution_journal WHERE turn_id = ? AND execution_ordinal = ?"
+        (execution.jeTurn.atrTurnId, execution.jeExecutionOrdinal)
     (journalRows :: [(Text, Maybe Int64)])
       `shouldBe` [("committed", Just sent.canonicalMessageId.unCanonicalMessageId)]
 
@@ -258,14 +198,12 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
   it "publishes usage and terminal status idempotently without a wire archive" $ do
     fixture <- createFixture pool 42 1001
     withDb pool $ do
-      _ <- recordAgentTurnLlmRound fixture.fxTurn.atrTurnId
-      _ <- recordAgentTurnLlmRound fixture.fxTurn.atrTurnId
       addAgentTurnUsage fixture.fxTurn.atrTurnId 100 20 (Just 40)
       addAgentTurnUsage fixture.fxTurn.atrTurnId 25 5 Nothing
       finishAgentTurn
         fixture.fxTurn
         TurnSucceeded
-        1
+        2
         Nothing
       ensureAgentTurnCrashed fixture.fxTurn "late finalizer"
     rows <- withConn pool $ \connection ->
@@ -278,7 +216,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     (rows :: [(Text, Int, Int64, Int64, Int64, Maybe Text, Maybe Int64, Maybe Text)])
       `shouldBe` [("succeeded", 2, 125, 25, 40, Nothing, Nothing, Nothing)]
 
-  it "host-enriches sandbox started input with durable network mode and defaults" $ do
+  it "host-enriches sandbox diagnostics with current network mode and defaults" $ do
     fixture <- createFixture pool 42 1001
     _ <- withConn pool $ \connection ->
       execute
@@ -317,9 +255,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
 
   it "stores host-observed sandbox evidence separately from the tool result" $ do
     fixture <- createFixture pool 42 1001
-    execution <-
-      withDb pool $
-        startJournalExecution fixture.fxTurn (journalStart "call-observed" "sandbox_exec")
+    execution <- recordFor fixture.fxTurn (ExecutionOrdinal 1) (journalStart "call-observed" "sandbox_exec")
     let observation =
           object
             [ "command" .= ("printf done" :: Text),
@@ -328,7 +264,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
             ]
     withTemporaryBlobRoot $ \blobRoot ->
       withDbBlob pool blobRoot $
-        finishJournalExecution
+        recordJournalExecution
           execution
           ( JournalCommitted
               ( object
@@ -340,8 +276,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     rows <- withConn pool $ \connection ->
       query
         connection
-        "SELECT result_inline, observed_manifest FROM execution_journal WHERE journal_id = ?"
-        (Only execution.jeJournalId)
+        "SELECT result_inline, observed_manifest FROM execution_journal WHERE turn_id = ? AND execution_ordinal = ?"
+        (execution.jeTurn.atrTurnId, execution.jeExecutionOrdinal)
     (rows :: [(Maybe Value, Maybe Value)])
       `shouldBe` [(Just (object ["ok" .= True]), Just observation)]
 
@@ -356,12 +292,10 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
 
   it "projects worked turns, expands t# in scope, and obeys !clear" $ do
     fixture <- createFixture pool 42 1001
-    execution <-
-      withDb pool $
-        startJournalExecution fixture.fxTurn (journalStart "call-expand" "sandbox_exec")
+    execution <- recordFor fixture.fxTurn (ExecutionOrdinal 1) (journalStart "call-expand" "sandbox_exec")
     withTemporaryBlobRoot $ \blobRoot ->
       withDbBlob pool blobRoot $
-        finishJournalExecution execution (JournalCommitted (object ["ok" .= True, "path" .= ("/work/out.png" :: Text)]))
+        recordJournalExecution execution (JournalCommitted (object ["ok" .= True, "path" .= ("/work/out.png" :: Text)]))
     sent <- withDb pool (enqueueOutbound (outbound fixture (TurnOutputLink fixture.fxTurn.atrTurnId 0) "画了销量周环比图\n已保存"))
     withDb pool $ do
       setAgentTurnEnvironment fixture.fxTurn currentPromptMajor (T.replicate 64 "c")
@@ -394,12 +328,10 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
 
   it "resolves reply linkage, writes scoped U -> T provenance, and builds a deterministic digest delta" $ do
     source <- createFixture pool 42 1001
-    execution <-
-      withDb pool $
-        startJournalExecution source.fxTurn (journalStart "call-source" "sandbox_exec")
+    execution <- recordFor source.fxTurn (ExecutionOrdinal 1) (journalStart "call-source" "sandbox_exec")
     withTemporaryBlobRoot $ \blobRoot ->
       withDbBlob pool blobRoot $
-        finishJournalExecution execution (JournalCommitted (object ["ok" .= True]))
+        recordJournalExecution execution (JournalCommitted (object ["ok" .= True]))
     sent <- withDb pool (enqueueOutbound (outbound source (TurnOutputLink source.fxTurn.atrTurnId 0) "初版完成"))
     withDb pool $ do
       setAgentTurnEnvironment source.fxTurn currentPromptMajor (T.replicate 64 "d")
@@ -539,5 +471,5 @@ isLeft = \case
   Left _ -> True
   Right _ -> False
 
-noReclaimedTurns :: ReclaimedTurns
-noReclaimedTurns = ReclaimedTurns 0 0
+recordFor :: AgentTurnRef -> ExecutionOrdinal -> JournalStart -> IO JournalExecution
+recordFor turn ordinal start = JournalExecution turn ordinal start <$> getCurrentTime

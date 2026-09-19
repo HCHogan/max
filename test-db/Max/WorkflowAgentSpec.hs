@@ -121,7 +121,7 @@ toolContext running current = do
 runScript :: DbPool -> RunningJob -> Maybe Int -> Text -> IO CodeModeResult
 runScript pool running budget source = do
   context <- toolContext running workflowGrants
-  let bound = (hooks running.jobs running.turn) {ehWorkflow = Just (taskWorkflowHost running.jobs context running.turn)}
+  let bound = (hooks running.jobs running.runtime) {ehWorkflow = Just (taskWorkflowHost running.jobs context running.turn)}
       definitions = [echoDefinition {tdRef = ToolRef name} | name <- ["task_start", "task_progress"]]
       runners = [echoTool {toolName = name} | name <- ["task_start", "task_progress"]]
   registry <- either (fail . show) pure (buildToolRegistry definitions runners)

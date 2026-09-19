@@ -69,7 +69,8 @@ callback; file captions use the shared canonical resolver from assembly. Browser
 and Runtime tools retain explicit resource IO but cannot import raw stores.
 Compiler fixtures also deny publication, host paths and raw IO to read clients.
 Agent cannot import database implementations: execution
-admission, journal facts and inbox reads have separate interpreter contracts.
+local admission, diagnostic results and inbox reads have separate interpreter
+contracts. Diagnostic storage failures cannot reclassify or replay completed tools.
 Tool control is collected per invocation and released only after success;
 control names and model JSON are never interpreted by the loop.
 

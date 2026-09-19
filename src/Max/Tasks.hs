@@ -14,6 +14,7 @@ module Max.Tasks
     turnRuntimeTaskId,
     turnRuntimeAgentTurn,
     turnRuntimeOutputContext,
+    nextExecutionOrdinal,
     setTurnPhase,
     awaitTurnSilence,
     checkTurnCancellation,
@@ -48,7 +49,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Max.Platform.Types (CanonicalMessageId (..))
-import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOutputContext, newTurnOutputContext)
+import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), ExecutionOrdinal (..), TurnOutputContext, newTurnOutputContext)
 import OneBot.Types (GroupId (..), UserId (..))
 
 -- | Short, human-typeable id like @t17@ — easy to !kill from the
@@ -63,7 +64,8 @@ newtype TaskId = TaskId {unTaskId :: Text}
 data TurnRuntime = TurnRuntime
   { trEntry :: !TaskEntry,
     trAgentTurn :: !(Maybe AgentTurnRef),
-    trOutputContext :: !(Maybe TurnOutputContext)
+    trOutputContext :: !(Maybe TurnOutputContext),
+    trExecutionOrdinal :: !(TVar Int64)
   }
 
 -- | The one registry entry.  Fields the agent loop supplies are 'TVar's
@@ -170,6 +172,7 @@ beginTurnRuntimeWith reg durable output gid uid mTrigger = do
   progressAt <- newTVarIO now
   cancel <- newTVarIO Nothing
   killed <- newTVarIO False
+  executionOrdinal <- newTVarIO 0
   atomically $ do
     (n, m) <- readTVar reg.trState
     let tid = TaskId ("t" <> T.pack (show (n + 1)))
@@ -191,7 +194,8 @@ beginTurnRuntimeWith reg durable output gid uid mTrigger = do
       TurnRuntime
         { trEntry = entry,
           trAgentTurn = durable,
-          trOutputContext = output
+          trOutputContext = output,
+          trExecutionOrdinal = executionOrdinal
         }
   where
     realTrigger = \case
@@ -206,6 +210,12 @@ turnRuntimeAgentTurn = (.trAgentTurn)
 
 turnRuntimeOutputContext :: TurnRuntime -> Maybe TurnOutputContext
 turnRuntimeOutputContext = (.trOutputContext)
+
+nextExecutionOrdinal :: TurnRuntime -> IO ExecutionOrdinal
+nextExecutionOrdinal turn = atomically $ do
+  n <- readTVar turn.trExecutionOrdinal
+  writeTVar turn.trExecutionOrdinal (n + 1)
+  pure (ExecutionOrdinal (n + 1))
 
 -- | Attach the worker's cancellation action and enter its first executable
 -- phase.  A kill accepted during context collection is returned explicitly so

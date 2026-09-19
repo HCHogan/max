@@ -62,6 +62,7 @@ import Max.Tasks
     TurnRuntime,
     activateTurnRuntime,
     checkTurnCancellation,
+    nextExecutionOrdinal,
     setTurnPhase,
     turnRuntimeAgentTurn,
   )
@@ -281,8 +282,9 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
               -- Whatever streaming already released of this narration is
               -- in the group; only the tail is left to post.  Rendering and
               -- visibility are output-boundary decisions.
-              for_ (turnRuntimeAgentTurn h) $ \durable ->
-                raise (raise (raise (journal.ejRecordNote durable narration)))
+              for_ (turnRuntimeAgentTurn h) $ \durable -> unless (T.null (T.strip narration)) $ do
+                ordinal <- liftIO (nextExecutionOrdinal h)
+                raise (raise (raise (journal.ejRecordNote durable ordinal narration)))
               emit (AgentProgressText (T.drop (T.length sent) narration))
               emit $
                 AgentToolDebug $
@@ -332,7 +334,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
           identity = workingIdentity profile "process" limits specs
           handle = maybe "unavailable" (turnHandleText . (.atrTurnOrdinal)) (turnRuntimeAgentTurn turn)
           -- Native use_skill results are protected by the working planner.
-          -- Only restore instructions absent there (nested codemode/restart),
+          -- Only restore instructions absent there (nested code mode),
           -- avoiding a second full copy of every directly loaded skill.
           visibleInstructions = nativeSkillInstructions messages
           missingInstructions = [load.slInstructions | load <- Map.elems (toolSkillLoads ctx.acTools), not (any (load.slInstructions `T.isInfixOf`) visibleInstructions)]
@@ -360,7 +362,6 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
           for_ (turnRuntimeAgentTurn turn) $ \durable -> do
             active <- raise (raise (raise (admission.eaReserveRound durable)))
             unless active (throwIO TaskCancelled)
-            when plan.wpCompacted $ raise (raise (raise (journal.ejWriteWorking durable plan.wpSummary plan.wpEstimatedTokens plan.wpLimit)))
           when plan.wpCompacted $
             logInfo "agent: working context compacted" $
               object ["estimated_tokens" .= plan.wpEstimatedTokens, "input_limit" .= plan.wpLimit, "turn" .= handle]

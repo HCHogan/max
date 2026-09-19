@@ -6,20 +6,15 @@ module Max.DB.AgentTurn
     JournalExecution (..),
     JournalFinish (..),
     JournalResultEnvelope (..),
-    ReclaimedTurns (..),
     startAgentTurn,
     markAgentTurnRunning,
-    recordAgentTurnLlmRound,
     addAgentTurnUsage,
     finishAgentTurn,
     ensureAgentTurnCrashed,
     reclaimInterruptedTurns,
-    writeWorkingContext,
     enrichSandboxJournalStart,
-    startJournalExecution,
     recordModelNote,
-    finishJournalExecution,
-    markJournalOutcomeUnknown,
+    recordJournalExecution,
     lookupJournalResultEnvelope,
     resolveJournalResultValue,
     expandJournalResult,
@@ -39,6 +34,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
+import Database.PostgreSQL.Simple.ToRow (toRow)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
@@ -85,12 +81,6 @@ data JournalResultEnvelope = JournalResultEnvelope
     jreSizeBytes :: !Int64,
     jrePreview :: !(Maybe Text),
     jreArtifactSpilled :: !Bool
-  }
-  deriving stock (Show, Eq)
-
-data ReclaimedTurns = ReclaimedTurns
-  { rrTurnsCrashed :: !Int64,
-    rrExecutionsUnknown :: !Int64
   }
   deriving stock (Show, Eq)
 
@@ -141,19 +131,6 @@ markAgentTurnRunning ref profile = do
 -- boundary.  Unlike token usage (known only from a response), this survives a
 -- process death during the request and lets one recovered durable turn retain
 -- the work count from every process incarnation.
-recordAgentTurnLlmRound ::
-  (WithConnection :> es, IOE :> es) =>
-  AgentTurnId ->
-  Eff es Bool
-recordAgentTurnLlmRound turnId = do
-  moved <-
-    execute
-      "UPDATE agent_turns SET llm_turns = llm_turns + 1 \
-      \ WHERE turn_id = ? \
-      \   AND status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text])"
-      (Only turnId)
-  pure (moved > 0)
-
 addAgentTurnUsage ::
   (WithConnection :> es, IOE :> es) =>
   AgentTurnId ->
@@ -165,14 +142,14 @@ addAgentTurnUsage turnId prompt completion cached = do
   _ <-
     execute
       "UPDATE agent_turns \
-      \ SET prompt_tokens = prompt_tokens + ?, \
+      \ SET llm_turns = llm_turns + 1, prompt_tokens = prompt_tokens + ?, \
       \     completion_tokens = completion_tokens + ?, \
       \     cached_prompt_tokens = cached_prompt_tokens + ? \
       \ WHERE turn_id = ?"
       (max 0 prompt, max 0 completion, max 0 (fromMaybe 0 cached), turnId)
   pure ()
 
--- | Record completion and settle task/publication state in one transaction.
+-- | Store terminal history under the same conversation lock as publication.
 finishAgentTurn ::
   (WithConnection :> es, IOE :> es) =>
   AgentTurnRef ->
@@ -184,19 +161,6 @@ finishAgentTurn ref terminal llmTurns abortReason = do
   withTransaction $ do
     locked <- query "SELECT c.conversation_id FROM conversations c JOIN agent_turns t USING(conversation_id) WHERE t.turn_id=? FOR UPDATE OF c" (Only ref.atrTurnId)
     when (null (locked :: [Only Int64])) (error "finishAgentTurn: conversation missing")
-    -- A cancellation can land after an effect returned but before its result
-    -- update committed.  Close any such row in the same transaction as the
-    -- terminal checkpoint so an aborted turn never strands state='started'.
-    _ <-
-      execute
-        "UPDATE execution_journal j \
-        \ SET state = 'outcome-unknown', finished_at = now(), \
-        \     failure_code = COALESCE(failure_code, 'turn_terminal'), \
-        \     failure_detail = COALESCE(failure_detail, 'turn ended before the effect outcome was durably recorded') \
-        \ FROM agent_turns t \
-        \ WHERE j.turn_id = t.turn_id AND j.turn_id = ? AND j.state = 'started' \
-        \   AND t.status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text])"
-        (Only ref.atrTurnId)
     void $
       execute
         "UPDATE agent_turns t \
@@ -218,29 +182,9 @@ ensureAgentTurnCrashed ::
 ensureAgentTurnCrashed ref reason =
   finishAgentTurn ref TurnCrashed 0 (Just reason)
 
--- | Conservatively reclaim rows left in-flight by a prior process.  A started
--- effect may have crossed its external boundary, so it becomes
--- outcome-unknown and is never silently invoked again.
-reclaimInterruptedTurns ::
-  (WithConnection :> es, IOE :> es) =>
-  Eff es ReclaimedTurns
+-- | Restart ends prior turns; no execution is resumed or replayed.
+reclaimInterruptedTurns :: (WithConnection :> es, IOE :> es) => Eff es Int64
 reclaimInterruptedTurns = withTransaction $ do
-  -- Recovery uses the same conversation-before-turn/journal order as normal
-  -- settlement. Lock only conversations with recoverable or unknown work.
-  (_ :: [Only Int64]) <-
-    query
-      "SELECT c.conversation_id FROM conversations c WHERE EXISTS(SELECT 1 FROM agent_turns t WHERE t.conversation_id=c.conversation_id AND t.status IN ('starting','running','recovery-pending'))\
-      \ OR EXISTS(SELECT 1 FROM agent_turns t JOIN execution_journal j USING(turn_id) WHERE t.conversation_id=c.conversation_id AND j.state='started')\
-      \ ORDER BY c.conversation_id FOR UPDATE"
-      ()
-  executions <-
-    execute
-      "UPDATE execution_journal \
-      \ SET state = 'outcome-unknown', finished_at = now(), \
-      \     failure_code = COALESCE(failure_code, 'process_restart'), \
-      \     failure_detail = COALESCE(failure_detail, '工具执行状态未知：服务重启') \
-      \ WHERE state = 'started'"
-      ()
   crashed <-
     query
       "UPDATE agent_turns t \
@@ -251,10 +195,9 @@ reclaimInterruptedTurns = withTransaction $ do
       \   AND status IN ('starting','running','recovery-pending') RETURNING turn_id"
       ()
   void $ execute "UPDATE monitor_fires SET result=jsonb_build_object('status','cancelled','summary','process restarted before completion'),finished_at=now() WHERE task_id IS NOT NULL AND finished_at IS NULL" ()
-  pure (ReclaimedTurns (fromIntegral (length (crashed :: [Only AgentTurnId]))) executions)
+  pure (fromIntegral (length (crashed :: [Only AgentTurnId])))
 
--- | Add host-observed sandbox network mode to the immutable started row.  The
--- model chooses a sandbox handle but cannot choose or forge this value.
+-- | Capture sandbox configuration before invocation for diagnostic provenance.
 enrichSandboxJournalStart ::
   (WithConnection :> es, IOE :> es) =>
   GroupId ->
@@ -271,7 +214,7 @@ enrichSandboxJournalStart (GroupId groupId) start
               ( KeyMap.insert
                   "timeout_seconds"
                   (fromMaybe (Number 30) (KeyMap.lookup "timeout_seconds" fields))
-                  fields
+                  (KeyMap.delete "_max_host_network_mode" fields)
               )
       rows <-
         query
@@ -288,89 +231,22 @@ enrichSandboxJournalStart (GroupId groupId) start
         _ -> start {jsInput = Object normalized}
   | otherwise = pure start
 
-startJournalExecution ::
-  (WithConnection :> es, IOE :> es) =>
-  AgentTurnRef ->
-  JournalStart ->
-  Eff es JournalExecution
-startJournalExecution turn start = withTransaction $ do
-  locked <- query "SELECT turn_id FROM agent_turns WHERE turn_id = ? FOR UPDATE" (Only turn.atrTurnId)
-  case locked :: [Only AgentTurnId] of
-    [_] -> pure ()
-    _ -> error "startJournalExecution: turn not found"
-  ordinalRows <-
-    query
-      "SELECT COALESCE(max(execution_ordinal), 0) + 1 FROM execution_journal WHERE turn_id = ?"
-      (Only turn.atrTurnId)
-  let ordinal = exactlyOne "startJournalExecution ordinal" (ordinalRows :: [Only Int64])
-  let executionOrdinal = ExecutionOrdinal ordinal
-      AgentTurnId turnIdRaw = turn.atrTurnId
-      nodeId = "turn:" <> T.pack (show turnIdRaw) <> ":" <> T.pack (show ordinal)
-  inserted <-
-    query
+-- | Host-allocated ordinals preserve invocation order even when calls finish
+-- concurrently. Narration carries no execution authority or resumable state.
+recordModelNote :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> ExecutionOrdinal -> Text -> Eff es ()
+recordModelNote turn ordinal note = do
+  let bounded = T.take 8000 (T.strip note)
+      size = BS.length (TE.encodeUtf8 bounded)
+  void $
+    execute
       "INSERT INTO execution_journal \
-      \ (turn_id, execution_ordinal, node_id, event_kind, state, call_id, tool_ref, \
-      \  schema_version, schema_hash, normalized_input, effect_labels, retry_class) \
-      \ VALUES (?, ?, ?, 'tool_call', 'started', ?, ?, ?, ?, ?, ?, ?) \
-      \ RETURNING journal_id"
-      ( turn.atrTurnId,
-        ordinal,
-        nodeId,
-        start.jsCallId,
-        start.jsToolRef,
-        start.jsSchemaVersion,
-        start.jsSchemaHash,
-        Jsonb start.jsInput,
-        Jsonb start.jsEffectLabels,
-        start.jsRetryClass
-      )
-  let journalId = exactlyOne "startJournalExecution id" (inserted :: [Only Int64])
-  pure
-    JournalExecution
-      { jeJournalId = journalId,
-        jeTurn = turn,
-        jeExecutionOrdinal = executionOrdinal,
-        jeNodeId = nodeId
-      }
+      \ (turn_id, execution_ordinal, node_id, event_kind, state, result_inline, result_size_bytes, result_preview, finished_at) \
+      \ VALUES (?, ?, ?, 'model_note', 'succeeded', ?, ?, ?, now())"
+      (turn.atrTurnId, ordinal, resultHandleText turn.atrTurnOrdinal ordinal, Jsonb (String bounded), size, bounded)
 
--- | Plain-text in-band narration is a zero-authority fact row.  It has an
--- ordinal for total ordering but no result handle.
-recordModelNote ::
-  (WithConnection :> es, IOE :> es) =>
-  AgentTurnRef ->
-  Text ->
-  Eff es ()
-recordModelNote turn note
-  | T.null (T.strip note) = pure ()
-  | otherwise = withTransaction $ do
-      locked <- query "SELECT turn_id FROM agent_turns WHERE turn_id = ? FOR UPDATE" (Only turn.atrTurnId)
-      case locked :: [Only AgentTurnId] of
-        [_] -> pure ()
-        _ -> error "recordModelNote: turn not found"
-      ordinalRows <-
-        query
-          "SELECT COALESCE(max(execution_ordinal), 0) + 1 FROM execution_journal WHERE turn_id = ?"
-          (Only turn.atrTurnId)
-      let ordinal = exactlyOne "recordModelNote ordinal" (ordinalRows :: [Only Int64])
-      let AgentTurnId turnIdRaw = turn.atrTurnId
-          nodeId = "turn:" <> T.pack (show turnIdRaw) <> ":" <> T.pack (show ordinal)
-          bounded = T.take 8000 (T.strip note)
-          size = fromIntegral (BS.length (TE.encodeUtf8 bounded)) :: Int64
-      count <-
-        execute
-          "INSERT INTO execution_journal \
-          \ (turn_id, execution_ordinal, node_id, event_kind, state, effect_labels, \
-          \  result_inline, result_size_bytes, result_preview, finished_at) \
-          \ VALUES (?, ?, ?, 'model_note', 'succeeded', '[]'::jsonb, ?, ?, ?, now())"
-          (turn.atrTurnId, ordinal, nodeId, Jsonb (String bounded), size, bounded)
-      when (count /= 1) (error "recordModelNote: insert did not affect one row")
-
-finishJournalExecution ::
-  (Blob :> es, WithConnection :> es, IOE :> es) =>
-  JournalExecution ->
-  JournalFinish ->
-  Eff es ()
-finishJournalExecution execution finish = do
+-- | Append a completed diagnostic result. This never admits or retries work.
+recordJournalExecution :: (Blob :> es, WithConnection :> es, IOE :> es) => JournalExecution -> JournalFinish -> Eff es ()
+recordJournalExecution execution finish = do
   storage <- case stripJournalPrivateMetadata <$> finishValue finish of
     Nothing -> pure (Nothing, Nothing, Nothing, Nothing)
     Just value -> do
@@ -384,43 +260,38 @@ finishJournalExecution execution finish = do
           pure (Nothing, Just (blobRefSha256 blob), Just size, Just preview)
   let (inlineValue, blobSha, resultSize, resultPreview) = storage
       (state, failureCode, failureDetail) = finishFault finish
-      outputCanonical = finishOutputCanonical finish
-      observedManifest = finishObservedManifest finish
-  changed <-
+      start = execution.jeStart
+  void $
     execute
-      "UPDATE execution_journal \
-      \ SET state = ?, failure_code = ?, failure_detail = ?, result_inline = ?, \
-      \     result_blob_sha256 = ?, result_size_bytes = ?, result_preview = ?, \
-      \     observed_manifest = ?, output_canonical_message_id = ?, finished_at = now() \
-      \ WHERE journal_id = ? AND turn_id = ? AND state = 'started'"
-      ( state,
-        failureCode,
-        T.take 4000 <$> failureDetail,
-        inlineValue,
-        blobSha,
-        resultSize,
-        resultPreview,
-        Jsonb <$> observedManifest,
-        outputCanonical,
-        execution.jeJournalId,
-        execution.jeTurn.atrTurnId
+      "INSERT INTO execution_journal \
+      \ (turn_id, execution_ordinal, node_id, event_kind, state, call_id, tool_ref, schema_version, schema_hash, normalized_input, effect_labels, retry_class, \
+      \ failure_code, failure_detail, result_inline, result_blob_sha256, result_size_bytes, result_preview, observed_manifest, output_canonical_message_id, started_at, finished_at) \
+      \ VALUES (?, ?, ?, 'tool_call', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())"
+      ( toRow
+          ( execution.jeTurn.atrTurnId,
+            execution.jeExecutionOrdinal,
+            resultHandleText execution.jeTurn.atrTurnOrdinal execution.jeExecutionOrdinal,
+            state,
+            start.jsCallId,
+            start.jsToolRef,
+            start.jsSchemaVersion,
+            start.jsSchemaHash,
+            Jsonb start.jsInput,
+            Jsonb start.jsEffectLabels
+          )
+          <> toRow
+            ( start.jsRetryClass,
+              failureCode,
+              T.take 4000 <$> failureDetail,
+              inlineValue,
+              blobSha,
+              resultSize,
+              resultPreview,
+              Jsonb <$> finishObservedManifest finish,
+              finishOutputCanonical finish,
+              execution.jeStartedAt
+            )
       )
-  when (changed /= 1) (error "finishJournalExecution: journal row was not started")
-
-markJournalOutcomeUnknown ::
-  (WithConnection :> es, IOE :> es) =>
-  JournalExecution ->
-  Text ->
-  Eff es ()
-markJournalOutcomeUnknown execution detail = do
-  _ <-
-    execute
-      "UPDATE execution_journal \
-      \ SET state = 'outcome-unknown', failure_code = 'interrupted', \
-      \     failure_detail = ?, finished_at = now() \
-      \ WHERE journal_id = ? AND turn_id = ? AND state = 'started'"
-      (T.take 4000 detail, execution.jeJournalId, execution.jeTurn.atrTurnId)
-  pure ()
 
 finishValue :: JournalFinish -> Maybe Value
 finishValue = \case
@@ -532,18 +403,6 @@ exactlyOne :: Text -> [Only a] -> a
 exactlyOne _ [Only value] = value
 exactlyOne label rows = error (T.unpack label <> ": expected one row, got " <> show (length rows))
 
--- The assembly's admission fence and this insert share one transaction.
-writeWorkingContext :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> Text -> Int -> Int -> Eff es ()
-writeWorkingContext turn summary tokens limit = do
-  _ <-
-    execute
-      "INSERT INTO turn_working_context(turn_id,summary,input_tokens,input_limit) VALUES (?,?,?,?)"
-      (turn.atrTurnId, T.take 8000 summary, max 0 tokens, max 0 limit)
-  pure ()
-
--- | Recover one journal result without publishing blob paths or replaying an
--- effect. Provider call ids are local to a turn; ambiguous ids fail closed.
--- Character pagination also bounds large inline and spilled JSON results.
 expandJournalResult ::
   (WithConnection :> es, Blob :> es, IOE :> es) =>
   ConversationScope -> Maybe UTCTime -> Text -> Maybe Text -> Maybe Int64 -> Int -> Eff es (Maybe Value)

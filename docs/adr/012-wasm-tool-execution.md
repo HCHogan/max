@@ -1,6 +1,10 @@
 # ADR-012: One host execution boundary for native calls and Wasm
 
-Status: accepted; host execution and JavaScript/model-entry batches implemented (2026-09-07).
+Status: shared host boundary retained; lifecycle details below describe the
+2026-09-07 implementation. The September 19 simplification replaces durable
+admission and restart recovery with local Jobs/STM. Tool outcomes are appended
+after execution, and final text ends the model loop without finish/yield controls.
+See [current architecture](../architecture.md) for the active contract.
 
 ## Context
 

@@ -29,7 +29,7 @@ import Max.Browser.Runtime (browserMaintenance)
 import Max.Browser.Vault (loadBrowserVault)
 import Max.Config (AppConfig (..), loadConfig)
 import Max.Conversation (newConversations)
-import Max.DB.AgentTurn (ReclaimedTurns (..), addAgentTurnUsage, reclaimInterruptedTurns)
+import Max.DB.AgentTurn (addAgentTurnUsage, reclaimInterruptedTurns)
 import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
@@ -296,12 +296,8 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
     when (reclaimedMonitorFires > 0) $
       logAttention "monitor scheduler: expired claims reclaimed" $
         object ["fires" .= reclaimedMonitorFires]
-    when (reclaimed.rrTurnsCrashed > 0 || reclaimed.rrExecutionsUnknown > 0) $
-      logAttention "interrupted foreground turns ended; uncertain effects retained" $
-        object
-          [ "turns_crashed" .= reclaimed.rrTurnsCrashed,
-            "executions_outcome_unknown" .= reclaimed.rrExecutionsUnknown
-          ]
+    when (reclaimed > 0) $
+      logAttention "interrupted turns ended" (object ["turns_crashed" .= reclaimed])
     -- The skill cache is authoritative once loaded (write-through, same
     -- rule as sessions), so it has to fill before the first dispatch or
     -- the admin server can consult it.

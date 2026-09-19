@@ -54,6 +54,7 @@ import Max.Tool.Control
     mergeControls,
   )
 import Max.Tool.Types
+import Max.Turn.Types (AgentTurnRef (..), resultHandleText)
 
 -- | Bounded receipts; full leaf results remain in the journal/artifact store.
 data CodeModeCall = CodeModeCall
@@ -182,7 +183,7 @@ runWasmProgram session hooks catalog limits program = do
             Left err <- validateValue contract (fromMaybe Null (fromRight Nothing parsed)) =
               WasmTrapped ("workflow output contract: " <> err)
           | otherwise = exit
-        result = CodeModeResult finalExit calls control (boundary <|> fromRight Nothing parsed) submittedCalls overBudget (maybe label (("journal#" <>) . T.pack . show . (.jeJournalId)) row) program.wpWorkflow
+        result = CodeModeResult finalExit calls control (boundary <|> fromRight Nothing parsed) submittedCalls overBudget (maybe label (\entry -> resultHandleText entry.jeTurn.atrTurnOrdinal entry.jeExecutionOrdinal) row) program.wpWorkflow
     pure (result, codeModeInvocation result)
   pure result
   where

@@ -105,11 +105,11 @@ spec = describe "shared host tool execution" $ do
     length guest.cmCalls `shouldBe` 1
     guest.cmControl `shouldBe` ContinueLoop
 
-  it "refunds local reservations when durable admission fails before a journal row" $ do
+  it "refunds local reservations when admission denies a call" $ do
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [echoTool])
     (failed, next) <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession (Just 1)
-      let failingHooks = noJournal {ehStart = \_ _ -> throwIO (userError "admission transaction rolled back")}
+      let failingHooks = noJournal {ehStart = \_ _ -> throwIO (userError "admission denied")}
       failed <- try @SomeException (executeToolBatch session failingHooks (views registry) [ToolRequest "failed" "echo" args])
       next <- executeToolBatch session noJournal (views registry) [ToolRequest "next" "echo" args]
       pure (failed, next)

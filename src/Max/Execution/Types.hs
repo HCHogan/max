@@ -2,8 +2,8 @@
 module Max.Execution.Types (StepReservation (..), ExecutionStep (..), JournalStart (..), JournalExecution (..), JournalFinish (..)) where
 
 import Data.Aeson (Value)
-import Data.Int (Int64)
 import Data.Text (Text)
+import Data.Time (UTCTime)
 import Max.Turn.Types (AgentTurnRef, ExecutionOrdinal)
 
 data StepReservation = CheckOnly | ReserveCall | ReserveRound deriving stock (Eq, Show)
@@ -22,10 +22,10 @@ data JournalStart = JournalStart
   deriving stock (Show, Eq)
 
 data JournalExecution = JournalExecution
-  { jeJournalId :: !Int64,
-    jeTurn :: !AgentTurnRef,
+  { jeTurn :: !AgentTurnRef,
     jeExecutionOrdinal :: !ExecutionOrdinal,
-    jeNodeId :: !Text
+    jeStart :: !JournalStart,
+    jeStartedAt :: !UTCTime
   }
   deriving stock (Show, Eq)
 

@@ -153,7 +153,7 @@ runCase cfg opts pool sources group parallel = do
   let context = mkToolContext (TurnIdentity root.spec.group root.spec.source (UserId 1) (UserId 3) root.spec.principal Nothing (Just output)) capabilities
       requests = [object ["objective" .= question, "profile" .= ("research" :: Text), "inputs" .= object ["files" .= files], "output_contract" .= outputSchema] | (question, files) <- questions]
       script = "max.phase('source audit'); const requests=" <> json requests <> "; return " <> (if parallel then "max.batch(requests.map(agent=>({agent}))).map(max.value)" else "requests.map(agent)") <> ";"
-      hooks = ExecutionHooks (pure ()) ((executionAdmission jobs).eaStartTool root.spec.group parent) finishJournalExecution markJournalOutcomeUnknown (Just (taskWorkflowHost jobs context parent))
+      hooks = (executionHooks (executionAdmission jobs) (ExecutionJournal recordModelNote enrichSandboxJournalStart recordJournalExecution) root.spec.group parentRuntime) {ehWorkflow = Just (taskWorkflowHost jobs context parent)}
       registry = either (error . show) id (buildToolRegistry (filter ((/= ToolRef "web_search") . (.tdRef)) definitions) [legacyTool name "host task marker" (toolObject [] []) (const (pure (Left "use the host primitive"))) | name <- ["task_start", "task_progress"]])
   calls <- newIORef []
   workers <- newIORef []

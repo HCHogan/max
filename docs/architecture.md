@@ -52,8 +52,8 @@ src/Max/Effects/   effectful 2.5 effects: Http, Blob, Embedding (injectable vali
                    ToolControl, TaskQuery/TaskControl/TaskExecution, TurnQuery,
                    Agent (DB effect from upstream effectful-postgresql)
 src/Max/Tool/      pure tool catalog, schemas, host metadata and loop control
-src/Max/Agent/     shared admission/journal/inbox contracts and Jobs assembly
-src/Max/Execution/ shared pre-effect steps and journal facts
+src/Max/Agent/     local admission, diagnostic storage, inbox contracts and Jobs assembly
+src/Max/Execution/ shared tool budgets, invocation and outcome recording
 src/Max/LLM/       Types/Protocol/Stream: pure codecs and stream reconstruction;
                    Configuration/Admission/Transport/Observability: call components
 src/Max/Http/      Json: bounded buffered POST + domain retries; Stream: SSE folding;
@@ -316,7 +316,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Monitors and reminders | `monitors` and `monitor_fires` hold TimeCron/LedgerMatch state, retry, provenance, caps and one-time Jobs admission; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll messages, memories, active episode summaries, stickers, and media for missing/incompatible derived data, so any gap or model change backfills itself |
 | Embedding ownership | one process-local lock serializes the worker and explicit reindex; conditional writes reject changed source content and memory versions |
-| Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` commits `started` before a tool and its terminal state afterward. Boot marks any still-started effect `outcome-unknown` and ends interrupted foreground turns as crashed; it never reopens their model loop; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
+| Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` stores completed diagnostics with locally allocated result ordinals. Diagnostic write failure is logged without changing a completed outcome. Boot ends interrupted turns as crashed; it never reopens their model loop; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
 | Background Jobs and child work | Bounded STM state holds goals, ownership, budgets, results, feedback and joins. Workers use the ordinary agent runtime and stop on restart. The public ID sequence is retained; old task tables are historical only. Child grants remain bounded by their parent |
 | Sandbox workspaces | `sandboxes` persists lifecycle metadata and the root-owned runtime work directory holds current state. Boot adopts only a running container carrying the current broker generation and matching systemd invocation; otherwise it rebuilds a non-root, capability-free, resource-capped, read-only shell around the surviving volume. NixOS owns network provisioning and host/private/peer filtering; Haskell owns instance reconciliation and the privileged broker API. Only a positively absent volume marks the workspace destroyed, and 14-day sliding TTL GC replaces shutdown/boot reaping |
 
@@ -459,13 +459,15 @@ hide network credentials and skill registry mechanics from their consumers.
 Compile-negative architecture fixtures verify that each capability, including
 `ContextQuery`, cannot be used to perform arbitrary IO.
 
-The Agent loop receives separate admission, journal and inbox contracts from
-`Agent.Runtime`; it imports no database implementation. Tool call modes in the
-host catalog determine checkpoint budgets. Accepted
-task runners emit `LoopControl` through a per-invocation `ToolControl` scope;
-the tool kernel verifies the declared mode and discards control on failure.
-The loop consumes continue/yield/finish values without recognizing tool names
-or decoding control from model-facing JSON.
+The Agent loop receives separate local admission, diagnostic storage and inbox
+contracts from `Agent.Runtime`; it imports no database implementation. Jobs
+reserve shared budgets in STM. Tool invocation does not depend on a pre-effect
+database write. Outcomes and large result artifacts remain queryable through
+scoped `t#…:r…` references; cancellation records an unknown outcome when possible.
+A process crash can leave the last result absent, and never causes replay.
+Successful skill loaders emit typed `LoadSkills` controls through a per-invocation
+`ToolControl` scope. They take effect in the next model round. Normal final text
+ends the loop, with no finish or yield tool protocol.
 
 ### Outbound HTTP ownership
 

@@ -79,7 +79,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [x] Remove model-supplied idempotency keys and ordinary task-finish reports.
       Keep structured results only when a caller explicitly requires a contract.
 - [x] Remove restart turn recovery and durable joins.
-- [ ] Remove execution admission journals; retain bounded diagnostic results.
+- [x] Remove execution admission journals; retain bounded diagnostic results.
 - [x] Remove task browser checkpoint/restore; retain explicitly saved profiles.
 - [x] Remove configuration generations/hot reload; simplify startup and shutdown.
 - [x] Route reminders through Jobs and preserve minimal trigger deduplication.
@@ -315,3 +315,18 @@ maintained implementation record.
   receipt. Historical result handles and diagnostic manifests remain available.
   All targets build; 1,050 unit and 272 DB examples pass after retiring the two
   restoration tests. Capability checks pass.
+
+- Execution admission now reserves Jobs budgets in memory. Result ordinals belong
+  to the active turn; no `started` row, row lock or SQL maximum is required before
+  invoking a tool. Completed results, scoped handles, artifact spill and trusted
+  manifests remain. Diagnostic storage errors are logged without changing a
+  completed outcome; interruptions record unknown outcomes when possible.
+  Working summaries stay in the active loop; their unused SQL write path is gone.
+  Migration 117 preserves unfinished historical effects as unknown and forbids
+  new pre-effect rows. It does not resume or replay them.
+  All Cabal targets build; 1,050 unit and 271 PostgreSQL examples pass, including
+  cancellation with no pre-effect rows, native/Wasm result-write failure, parallel
+  result identity, scoped result lookup and real workflow calls. Upgrade, capability
+  and HLint checks pass. Retired the old started-row recovery/settlement cases.
+  Effective src/app Haskell is 46,560 lines; core Haskell is 33,428. Publication,
+  maintenance and context work remain before final acceptance.

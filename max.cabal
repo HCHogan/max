@@ -33,6 +33,7 @@ extra-source-files:
     test-db/fixtures/direct-notices-upgrade.sql
     test-db/fixtures/local-conversations-upgrade.sql
     test-db/fixtures/local-jobs-upgrade.sql
+    test-db/fixtures/diagnostic-results-upgrade.sql
     test-db/fixtures/browser-upgrade-after.sql
     assets/codesnap/*.tmTheme
     browser-image/*.patch
