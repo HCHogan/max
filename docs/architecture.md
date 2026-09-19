@@ -1,9 +1,40 @@
 # Architecture
 
-Historical decisions and feature contracts are recorded in these ADRs.
-The [simplification plan](simplification.md) supersedes their execution-recovery
-mechanisms; the runtime described below owns running work in process.
+The serving process owns all running turns, Jobs and outbound queues. PostgreSQL
+keeps user data, trigger facts and diagnostic results. A restart interrupts work;
+it does not reconstruct an execution from those records.
 
+## Reading the runtime
+
+| Path to review | Entry and order | Owner |
+|---|---|---|
+| Ordinary answer | [`Handler.dispatchLLMWith`](../src/Max/Handler.hs) → `forkDispatch` → `runDispatch`; chat uses `prepareReply` → `runReply` → `publishReply` | `forkDispatch` registers before context collection and releases the shutdown slot, conversation ticket, runtime and browser scope in its finalizer |
+| Model/tool loop | [`Effects.Agent.runAgentWith`](../src/Max/Effects/Agent.hs); `LoopState` names the changing context, history, appended messages and round | The enclosing run owns its model, event sink, working-context cache and execution session |
+| Tool invocation | [`Effects.Tools.runToolsWith`](../src/Max/Effects/Tools.hs) plus [`Execution.Tools`](../src/Max/Execution/Tools.hs) | Assembly installs narrow runner effects; native calls and code mode share authorization, budgets and outcomes |
+| Visible output | [`AgentOutput.handleAgentEvent`](../src/Max/AgentOutput.hs) → [`ReplySend.sendAndPersistReply`](../src/Max/ReplySend.hs) → [`Effects.Outbound`](../src/Max/Effects/Outbound.hs) | The output scope shares one stream/tail budget; `AgentReply.publishedPrefix` prevents repeating accepted text |
+| Cancellation | [`Tasks`](../src/Max/Tasks.hs), [`Conversation`](../src/Max/Conversation.hs), [`Jobs`](../src/Max/Jobs.hs) | Revoke local publication authority before cancelling the worker; the dispatch finalizer closes resources |
+| Reminder | [`Monitor.monitorWorker`](../src/Max/Monitor.hs) → [`Handler.dispatchMonitorFire`](../src/Max/Handler.hs) → ordinary Jobs | One scheduler, no lease or retry owner. Startup ends unfinished triggers |
+| Startup and configuration | [`Main`](../app/Main.hs), [`Env`](../src/Max/Env.hs), [`Worker`](../src/Max/Worker.hs) | Main projects configuration once and allocates process resources; supervised workers share their lifetime |
+
+`AgentOutcome` distinguishes a complete answer, an interruption carrying a
+partial answer, and failure without a final draft. Partial publication remains
+visible in all three cases. Only an `Answered` Job can complete successfully.
+
+Behavioural examples live in `test/Max/Effects/AgentSpec.hs` and
+`test-db/Max/StreamingSpec.hs` (completion, tools, early output and retained
+prefixes), `test/Max/ConversationSpec.hs`, `test/Max/JobsSpec.hs` and
+`test/Max/WorkerSpec.hs` (ownership/cancellation), and the DB monitor specs
+(trigger bounds, authority, restart and publication races).
+
+For feature contracts see [features.md](features.md), for validation see
+[development.md](development.md), and for rollout evidence and remaining goals
+see [simplification.md](simplification.md). Configuration changes take effect
+after a bounded shutdown and restart; see [the runbook](runbooks/config-restart.md).
+
+## Historical decisions
+
+These ADRs preserve design history. Their retired execution mechanisms are not
+parallel serving paths.
 
 - [`ADR 001: Context and Memory Foundations`](adr/001-context-memory-foundations.md)
 - [`ADR 002: Partial Plans and Adaptive Elaboration`](adr/002-partial-plans-adaptive-elaboration.md)
@@ -11,20 +42,13 @@ mechanisms; the runtime described below owns running work in process.
 - [`ADR 003: Message IR and Capability-Tiered Rendering`](adr/003-message-ir-capability-rendering.md)
 - [`ADR 004: Canonical Handles and the Identity the Model Addresses`](adr/004-canonical-handles-for-the-model.md)
 - [`ADR 005: Turn Continuity — Journal Projections and Verbatim Replay`](adr/005-turn-continuity.md)
+  — cross-turn wire replay and crash recovery retired; readable scoped continuations remain
 - [`ADR 006: Monitors — Typed Triggers and the Unified Scheduler`](adr/006-monitors-typed-triggers.md)
+  — typed triggers remain; leases, delivery retries and restart replay retired
 - [`ADR 007: Plans as Orchestration — Fork, Steering, and What the Kernel Is Actually For`](adr/007-plans-as-orchestration.md)
   — retired planning implementation
 - [`ADR 008: Durable Tasks and Conversation Coordination`](adr/008-durable-tasks-conversation-coordination.md)
   — durable execution superseded by process-local Jobs and conversation queues
-
-Layout, runtime data flow and effect stack. For behaviour see
-[features.md](features.md); for tests and debugging see
-[development.md](development.md), and for transport cutover/repair see
-[platforms.md](platforms.md).
-
-Configuration is read once at startup. One supervised worker group owns the
-process resources; changes take effect after a bounded shutdown and restart.
-See [`runbooks/config-restart.md`](runbooks/config-restart.md).
 
 ## Layout
 
@@ -292,7 +316,7 @@ was accepted as `AgentResult.sentPrefix` and the handler sends the rest.
 `readyPrefix` releases completed paragraphs, or plain-text sentences after
 at least 48 characters. At 240 characters it also allows word/CJK boundaries.
 It holds markup and incomplete tokens. The sender reserves its last message
-slot for the final tail, and only acknowledged fragments advance `sentPrefix`.
+slot for the final tail, and only acknowledged fragments advance `publishedPrefix`.
 
 ## Durability
 

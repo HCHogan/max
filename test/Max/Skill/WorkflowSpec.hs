@@ -189,7 +189,17 @@ context :: ToolContext
 context =
   mkToolContext
     (TurnIdentity (GroupId 7777) (CanonicalMessageId 1) (UserId 2) (UserId 3) (PrincipalId 2) Nothing Nothing)
-    (TurnCapabilities False False True noAdvertisedCaps False Map.empty Nothing False)
+    ( TurnCapabilities
+        { tcMultimodal = False,
+          tcStickers = False,
+          tcSkills = True,
+          tcOutput = noAdvertisedCaps,
+          tcMonitorArming = False,
+          tcCatalogGrants = Map.empty,
+          tcEffectCeiling = Nothing,
+          tcBackground = False
+        }
+    )
 
 checkedContract :: Value -> Contract
 checkedContract = either (error . show) id . parseContract

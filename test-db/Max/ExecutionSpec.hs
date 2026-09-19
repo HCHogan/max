@@ -149,7 +149,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
         definition = echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
     binary <- guestCalls [request "use_skill" args, request "hidden" args] "unreachable"
-    result <- withHost pool . runToolsWithControl runToolControl registry $ do
+    result <- withHost pool . runToolsWith runToolControl (pure registry) $ do
       session <- newExecutionSession Nothing
       _ <- executeToolBatch session (hostHooks jobs runtime) (views registry) [ToolRequest "native" "use_skill" args]
       runWasmTools session (hostHooks jobs runtime) (views registry) defaultWasmLimits binary
@@ -169,7 +169,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     let loader = echoTool {toolName = "use_skill", toolRunner = LegacyRunner $ \value -> activateSkills [pinned] >> pure (Right value)}
         definition = echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [loader])
-    loaded <- withHost pool . runToolsWithControl runToolControl registry $ do
+    loaded <- withHost pool . runToolsWith runToolControl (pure registry) $ do
       session <- newExecutionSession Nothing
       executeToolBatch session (hostHooks jobs runtime) (views registry) [ToolRequest "load" "use_skill" args]
     let active = concatMap (controlSkillLoads . (.tiControl)) loaded.tbInvocations

@@ -11,6 +11,10 @@ module Max.Effects.Agent
   ( Agent,
     AgentLimits (..),
     AgentResult (..),
+    AgentOutcome (..),
+    AgentReply (..),
+    agentFailure,
+    replyRemainder,
     AgentContext (..),
     assembleToolRound,
     toolResultMessage,
@@ -52,7 +56,7 @@ import Max.Effects.Tools
     Tools,
     outcomeResult,
     registryCatalog,
-    runToolsWithControlDynamic,
+    runToolsWith,
   )
 import Max.Execution.Tools
 import Max.Execution.Workflow (WorkflowHost)
@@ -100,38 +104,47 @@ data AgentLimits = AgentLimits
   }
   deriving stock (Show)
 
--- | Sane starting point: 1000 turns covers long multi-round sandbox
--- sessions with @say@ status updates interleaved, while still capping
--- runaway loops.  Hard cap to keep cost bounded.
+-- | Outer cap; frontend and Job budgets usually stop a run earlier.
 defaultLimits :: AgentLimits
 defaultLimits = AgentLimits {maxTurns = 1000}
 
--- | What one agent run produced.
+-- | The accepted prefix is already visible; publication sends only the tail.
+data AgentReply = AgentReply
+  { body :: !Text,
+    publishedPrefix :: !Text
+  }
+  deriving stock (Eq, Show)
+
+data AgentOutcome
+  = Answered !AgentReply
+  | Interrupted !AgentFailure !AgentReply
+  | Failed !AgentFailure !Text -- Already published text; no final draft exists.
+  deriving stock (Eq, Show)
+
 data AgentResult = AgentResult
-  { -- | Final assistant text to show the user.  'Nothing' when the
-    -- loop produced no model-authored reply (LLM error, or the
-    -- turn-cap fallback call failed too) — the caller signals failure
-    -- out-of-band (reaction swap) instead of posting synthetic error
-    -- text into the chat; the reason is in 'aborted'.
-    reply :: !(Maybe Text),
-    -- | Every message added to the conversation during this run —
-    -- feedback injections, assistant tool-call rounds, tool results,
-    -- final assistant text.  Does NOT include the initial messages
-    -- the caller passed in.
+  { outcome :: !AgentOutcome,
     appended :: ![ChatMessage],
-    turnsUsed :: !Int,
-    -- | 'Just' iff the loop ended for a reason other than the model
-    -- producing a content response (e.g. hit 'maxTurns', LLM error).
-    aborted :: !(Maybe AgentFailure),
-    -- | Verbatim prefix already accepted by the streaming sink; empty if none.
-    -- The caller sends only @T.drop (T.length sentPrefix) reply@. 'readyPrefix'
-    -- cuts at safe text boundaries, so this preserves the unsent tail.
-    sentPrefix :: !Text
+    turnsUsed :: !Int
   }
   deriving stock (Show)
 
---------------------------------------------------------------------------------
--- Effect.
+agentFailure :: AgentOutcome -> Maybe AgentFailure
+agentFailure = \case
+  Answered _ -> Nothing
+  Interrupted reason _ -> Just reason
+  Failed reason _ -> Just reason
+
+replyRemainder :: AgentReply -> Text
+replyRemainder reply = T.drop (T.length reply.publishedPrefix) reply.body
+
+-- Only these values change between model rounds. The runtime, model, event
+-- sink, tool session and working-context cache belong to the enclosing run.
+data LoopState = LoopState
+  { context :: !AgentContext,
+    roundNumber :: !Int,
+    history :: ![ChatMessage],
+    appended :: ![ChatMessage]
+  }
 
 data Agent :: Effect where
   -- | Run until completion, a loop limit, or failure. The typed sink separates
@@ -177,7 +190,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
     outputQueue <- newToolOutputQueue defaultInlineMediaLimit
     runToolOutputRead outputQueue $
       runToolDirectoryDynamic (registryCatalog <$> liftIO (readTVarIO catalogRef)) $
-        runToolsWithControlDynamic
+        runToolsWith
           (raise . raise . runToolControl . runToolOutput outputQueue)
           (liftIO (readTVarIO catalogRef))
           (loop workingRef session catalogRef emit context turn profile msgs)
@@ -192,131 +205,120 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
       Text ->
       [ChatMessage] ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
-    loop workingRef session catalogRef emit ctx h profile = go workingRef session catalogRef emit ctx h 0 [] profile
-
-    go ::
-      TVar (Maybe UsageAnchor, Text) ->
-      ExecutionSession ->
-      TVar (ToolRegistry (ToolOutput : ToolControl : es)) ->
-      AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
-      AgentContext ->
-      TurnRuntime ->
-      Int ->
-      [ChatMessage] ->
-      Text ->
-      [ChatMessage] ->
-      Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
-    go workingRef session catalogRef emit ctx h n appended profile msgs = do
-      catalog <- either throwIO pure (toolFactory ctx.acTools)
-      liftIO (atomically (writeTVar catalogRef catalog))
-      -- Drain any feedback notes that arrived since the previous turn.
-      liftIO (checkTurnCancellation h)
-      feedback <- raise (raise (raise (inbox.eiRead (turnRuntimeAgentTurn h))))
-      let newNotes = inputMessages feedback
-          msgs' = msgs <> newNotes
-          appended' = appended <> newNotes
-      if n >= lims.maxTurns
-        then finalAnswer workingRef ctx h n appended' profile msgs'
-        else do
-          liftIO (setTurnPhase h "llm")
-          nativeSpecs <- listToolSpecs
-          let codeEnabled = (toolCapabilities ctx.acTools).tcSkills && Map.member "codemode" (toolSkillLoads ctx.acTools)
-              specs = nativeSpecs <> codeModeSpecs codeEnabled
-          -- Carry trimmed history forward for prefix caching; publication tracking
-          -- starts afresh for each model call.
-          sentRef <- liftIO (newTVarIO "")
-          (msgs'', eres) <- budgetedCall workingRef ctx h profile "turn" msgs' specs (Just (releaseReplyPrefix emit sentRef))
-          checkAdmission h
-          sent <- liftIO (readTVarIO sentRef)
-          case eres of
-            Left err ->
-              pure
-                AgentResult
-                  { reply = Nothing,
-                    appended = appended',
-                    turnsUsed = n + 1,
-                    aborted = Just err,
-                    sentPrefix = sent
-                  }
-            Right (InterruptedResp text reason) ->
-              pure
-                AgentResult
-                  { reply = Just text,
-                    appended = appended' <> [MsgAssistant text],
-                    turnsUsed = n + 1,
-                    aborted = Just (AgentStreamInterrupted reason),
-                    sentPrefix = sent
-                  }
-            Right (ContentResp text) -> do
-              -- Before publishing an untouched draft, consume feedback that arrived
-              -- during the call and let the model revise its answer.
-              lateFeedback <-
-                if T.null sent
-                  then raise (raise (raise (inbox.eiRead (turnRuntimeAgentTurn h))))
-                  else pure ""
-              let lateMessages = inputMessages lateFeedback
-              let done =
-                    pure
-                      AgentResult
-                        { reply = Just text,
-                          appended = appended' <> [MsgAssistant text],
-                          turnsUsed = n + 1,
-                          aborted = Nothing,
-                          sentPrefix = sent
-                        }
-              case lateMessages of
-                [] -> done
-                xs -> do
-                  logInfo "agent: feedback arrived during final answer, continuing" $
-                    object ["count" .= length xs]
-                  let newMsgs = MsgAssistant text : xs
-                  go workingRef session catalogRef emit ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
-            Right (ToolCallsResp raw narration tcs) -> do
-              logInfo "agent: tool calls" $
-                object
-                  [ "turn" .= n,
-                    "count" .= length tcs,
-                    "names" .= map (.callName) tcs,
-                    "narration" .= T.length narration
-                  ]
-              -- Whatever streaming already released of this narration is
-              -- in the group; only the tail is left to post.  Rendering and
-              -- visibility are output-boundary decisions.
-              unless (T.null (T.strip narration)) $ do
-                ordinal <- liftIO (nextExecutionOrdinal h)
-                raise (raise (raise (journal.ejRecordNote (turnRuntimeAgentTurn h) ordinal narration)))
-              emit (AgentProgressText (T.drop (T.length sent) narration))
-              emit $
-                AgentToolDebug $
-                  ToolCallsStarted [(tc.callName, tc.callArguments) | tc <- tcs]
-              liftIO (setTurnPhase h "tools")
-              -- Preserve raw provider reasoning and tool-result order, even when
-              -- independent calls execute concurrently.
-              registered <- listCatalogTools
-              let baseHooks = executionHooks admission journal (toolGroupId ctx.acTools) h
-                  hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehWorkflow = (\build -> build ctx.acTools (turnRuntimeAgentTurn h)) <$> workflowHost}
-                  requests = [ToolRequest tc.callId tc.callName tc.callArguments | tc <- tcs]
-              for_ tcs $ \tc ->
-                logInfo "agent: tool call" $ object ["id" .= tc.callId, "name" .= tc.callName, "args" .= previewJson 200 tc.callArguments]
-              batch <- executeModelBatch codeEnabled (toolSkillLoads ctx.acTools) session hooks registered requests
-              for_ (zip tcs batch.tbInvocations) $ \(tc, invocation) ->
-                case outcomeResult invocation.tiOutcome of
-                  Right value -> logInfo "agent: tool result" $ object ["id" .= tc.callId, "name" .= tc.callName, "outcome" .= outcomeName invocation.tiOutcome, "result" .= previewJson 400 value, "full_len" .= LBS.length (encode value)]
-                  Left err -> logAttention "agent: tool failed" $ object ["id" .= tc.callId, "name" .= tc.callName, "outcome" .= outcomeName invocation.tiOutcome, "error" .= err]
-              liftIO (checkTurnCancellation h)
-              let executed = zipWith nativeResult tcs batch.tbInvocations
-                  overBudget = batch.tbOverBudget
-              -- Emit result facts after the concurrent round rejoins.  This
-              -- keeps the higher-rank callback on its sequential unlift and
-              -- gives debug output a deterministic call order.
-              for_ executed $ \(_, event, _) -> emit (AgentToolDebug event)
-              let toolMsgs = [message | (message, _, _) <- executed]
-              imgs <- drainToolMedia
-              let newMsgs = assembleToolRound raw tcs toolMsgs imgs
-                  nextContext = ctx {acTools = withToolSkillLoads (concatMap (\(_, _, decision) -> controlSkillLoads decision) executed) ctx.acTools}
-              if overBudget
-                then finalAnswer workingRef ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
-                else go workingRef session catalogRef emit nextContext h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+    loop workingRef session catalogRef emit initialContext turn profile messages =
+      go LoopState {context = initialContext, roundNumber = 0, history = messages, appended = []}
+      where
+        go :: LoopState -> Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
+        go state = do
+          let ctx = state.context
+              n = state.roundNumber
+              msgs = state.history
+              appended = state.appended
+              h = turn
+          catalog <- either throwIO pure (toolFactory ctx.acTools)
+          liftIO (atomically (writeTVar catalogRef catalog))
+          -- Drain any feedback notes that arrived since the previous turn.
+          liftIO (checkTurnCancellation h)
+          feedback <- raise (raise (raise (inbox.eiRead (turnRuntimeAgentTurn h))))
+          let newNotes = inputMessages feedback
+              msgs' = msgs <> newNotes
+              appended' = appended <> newNotes
+          if n >= lims.maxTurns
+            then finalAnswer workingRef ctx h n appended' profile msgs'
+            else do
+              liftIO (setTurnPhase h "llm")
+              nativeSpecs <- listToolSpecs
+              let codeEnabled = (toolCapabilities ctx.acTools).tcSkills && Map.member "codemode" (toolSkillLoads ctx.acTools)
+                  specs = nativeSpecs <> codeModeSpecs codeEnabled
+              -- Carry trimmed history forward for prefix caching; publication tracking
+              -- starts afresh for each model call.
+              sentRef <- liftIO (newTVarIO "")
+              (msgs'', eres) <- budgetedCall workingRef ctx h profile "turn" msgs' specs (Just (releaseReplyPrefix emit sentRef))
+              checkAdmission h
+              sent <- liftIO (readTVarIO sentRef)
+              case eres of
+                Left err ->
+                  pure
+                    AgentResult
+                      { outcome = Failed err sent,
+                        appended = appended',
+                        turnsUsed = n + 1
+                      }
+                Right (InterruptedResp text reason) ->
+                  pure
+                    AgentResult
+                      { outcome = Interrupted (AgentStreamInterrupted reason) (AgentReply text sent),
+                        appended = appended' <> [MsgAssistant text],
+                        turnsUsed = n + 1
+                      }
+                Right (ContentResp text) -> do
+                  -- Before publishing an untouched draft, consume feedback that arrived
+                  -- during the call and let the model revise its answer.
+                  lateFeedback <-
+                    if T.null sent
+                      then raise (raise (raise (inbox.eiRead (turnRuntimeAgentTurn h))))
+                      else pure ""
+                  let lateMessages = inputMessages lateFeedback
+                  let done =
+                        pure
+                          AgentResult
+                            { outcome = Answered (AgentReply text sent),
+                              appended = appended' <> [MsgAssistant text],
+                              turnsUsed = n + 1
+                            }
+                  case lateMessages of
+                    [] -> done
+                    xs -> do
+                      logInfo "agent: feedback arrived during final answer, continuing" $
+                        object ["count" .= length xs]
+                      let newMsgs = MsgAssistant text : xs
+                      go state {roundNumber = n + 1, appended = appended' <> newMsgs, history = msgs'' <> newMsgs}
+                Right (ToolCallsResp raw narration tcs) -> do
+                  logInfo "agent: tool calls" $
+                    object
+                      [ "turn" .= n,
+                        "count" .= length tcs,
+                        "names" .= map (.callName) tcs,
+                        "narration" .= T.length narration
+                      ]
+                  -- Whatever streaming already released of this narration is
+                  -- in the group; only the tail is left to post.  Rendering and
+                  -- visibility are output-boundary decisions.
+                  unless (T.null (T.strip narration)) $ do
+                    ordinal <- liftIO (nextExecutionOrdinal h)
+                    raise (raise (raise (journal.ejRecordNote (turnRuntimeAgentTurn h) ordinal narration)))
+                  emit (AgentProgressText (T.drop (T.length sent) narration))
+                  emit $
+                    AgentToolDebug $
+                      ToolCallsStarted [(tc.callName, tc.callArguments) | tc <- tcs]
+                  liftIO (setTurnPhase h "tools")
+                  -- Preserve raw provider reasoning and tool-result order, even when
+                  -- independent calls execute concurrently.
+                  registered <- listCatalogTools
+                  let baseHooks = executionHooks admission journal (toolGroupId ctx.acTools) h
+                      hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehWorkflow = (\build -> build ctx.acTools (turnRuntimeAgentTurn h)) <$> workflowHost}
+                      requests = [ToolRequest tc.callId tc.callName tc.callArguments | tc <- tcs]
+                  for_ tcs $ \tc ->
+                    logInfo "agent: tool call" $ object ["id" .= tc.callId, "name" .= tc.callName, "args" .= previewJson 200 tc.callArguments]
+                  batch <- executeModelBatch codeEnabled (toolSkillLoads ctx.acTools) session hooks registered requests
+                  for_ (zip tcs batch.tbInvocations) $ \(tc, invocation) ->
+                    case outcomeResult invocation.tiOutcome of
+                      Right value -> logInfo "agent: tool result" $ object ["id" .= tc.callId, "name" .= tc.callName, "outcome" .= outcomeName invocation.tiOutcome, "result" .= previewJson 400 value, "full_len" .= LBS.length (encode value)]
+                      Left err -> logAttention "agent: tool failed" $ object ["id" .= tc.callId, "name" .= tc.callName, "outcome" .= outcomeName invocation.tiOutcome, "error" .= err]
+                  liftIO (checkTurnCancellation h)
+                  let executed = zipWith nativeResult tcs batch.tbInvocations
+                      overBudget = batch.tbOverBudget
+                  -- Emit result facts after the concurrent round rejoins.  This
+                  -- keeps the higher-rank callback on its sequential unlift and
+                  -- gives debug output a deterministic call order.
+                  for_ executed $ \(_, event, _) -> emit (AgentToolDebug event)
+                  let toolMsgs = [message | (message, _, _) <- executed]
+                  imgs <- drainToolMedia
+                  let newMsgs = assembleToolRound raw tcs toolMsgs imgs
+                      nextContext = ctx {acTools = withToolSkillLoads (concatMap (\(_, _, decision) -> controlSkillLoads decision) executed) ctx.acTools}
+                  if overBudget
+                    then finalAnswer workingRef ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                    else go state {context = nextContext, roundNumber = n + 1, appended = appended' <> newMsgs, history = msgs'' <> newMsgs}
 
     budgetedCall ::
       TVar (Maybe UsageAnchor, Text) ->
@@ -364,10 +366,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
           liftIO (atomically (writeTVar workingRef (nextAnchor, plan.wpSummary)))
           pure (plan.wpMessages, either (Left . AgentModelFailure) (Right . fst) result)
 
-    -- Hit the turn cap: make one final tool-free chat call so the user
-    -- gets a real answer built from whatever the loop already gathered,
-    -- rather than a bare "max turns" error.  Empty tool specs force a
-    -- content response; a synthetic note tells the model to wrap up.
+    -- Salvage a tool-free partial answer at the cap; it still counts as interrupted.
     finalAnswer ::
       TVar (Maybe UsageAnchor, Text) ->
       AgentContext ->
@@ -386,21 +385,14 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
               "[system] 工具调用轮次已用满，别再调用任何工具了。\
               \直接根据目前已经掌握的信息，给用户一个最终回复。"
       (_, eres) <- budgetedCall workingRef ctx h profile "wrapup" (msgs <> [capNote]) [] Nothing
-      let (mText, ab) = case eres of
-            Right (ContentResp t) | not (T.null (T.strip t)) -> (Just t, Just AgentRoundLimit)
-            Right _ -> (Nothing, Just AgentRoundLimit)
-            Left err -> (Nothing, Just err)
-      pure
-        AgentResult
-          { reply = mText,
-            appended = appended <> [capNote] <> [MsgAssistant t | Just t <- [mText]],
-            turnsUsed = n + 1,
-            aborted = ab,
-            -- The wrap-up call is not streamed: it exists to salvage
-            -- a turn that already went wrong, and one more moving part
-            -- is the last thing that path needs.
-            sentPrefix = ""
-          }
+      let outcome = case eres of
+            Right (ContentResp text) | not (T.null (T.strip text)) -> Interrupted AgentRoundLimit (AgentReply text "")
+            Right _ -> Failed AgentRoundLimit ""
+            Left err -> Failed err ""
+          finalMessages = case outcome of
+            Interrupted _ reply -> [MsgAssistant reply.body]
+            _ -> []
+      pure AgentResult {outcome, appended = appended <> [capNote] <> finalMessages, turnsUsed = n + 1}
 
     -- Publish safe fragments, advancing only after the sender accepts them.
     -- Transport timeouts cannot interrupt publication before acknowledgement;

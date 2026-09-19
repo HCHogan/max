@@ -1,8 +1,8 @@
 # Code size and responsibility
 
 Counts expose maintenance cost; they do not justify deleting major features.
-This checkpoint follows worker simplification, unused-module removal and
-unification of turn identity. See the separate
+This checkpoint includes sections 7–8 and 13: monitor lease/replay removal,
+explicit Agent outcomes, named loop state and dispatch ownership. See the separate
 [deployment observations and limits](research/simplification-release-20260919.md).
 
 ## Reproduce
@@ -29,53 +29,60 @@ Measured with tokei 14.0.0 and PostgreSQL 17.11:
 
 | Responsibility | Effective code lines |
 |---|---:|
-| Core Haskell | 31,785 |
+| Core Haskell | 31,977 |
 | Platform/provider adapters | 4,192 |
 | Concrete tools/media | 3,401 |
 | Isolation/runtime adapters | 3,420 |
-| Optional admin Haskell | 1,811 |
+| Optional admin Haskell | 1,815 |
 | Additional owned production code | 7,361 |
-| Tests | 20,298 |
-| Development/evaluation tools | 3,236 |
-| Historical migration files | 4,248 |
+| Tests | 20,469 |
+| Development/evaluation tools | 3,250 |
+| Historical migration files | 4,275 |
 | Vendored code | 8 |
 
-`src + app` is **44,609 effective Haskell lines**, down 8,018 from the initial
-52,627 baseline. Owned production source totals **51,970** before installed SQL.
+`src + app` is **44,805 effective Haskell lines**, down 7,822 from the initial
+52,627 baseline. Owned production source totals **52,166** before installed SQL.
 Tests, developer tools, migration history and vendored code are reported
 separately. Patch files, configuration, data and binary assets are excluded from
 source LOC; they remain maintenance costs, not deleted features.
+
+Compared with the clean pre-change `15316a9` checkpoint, core including SQL is
+33,842 → **33,724** (−118); `src + app` is 44,908 → **44,805** (−103).
+Named capability records and SQL decoders intentionally take more lines. The
+reduction comes from deleted runtime protocols, not removed product features
+or changed counting scope. Historical SQL falls separately when obsolete debt
+views are removed; old evidence tables remain.
 
 ## Installed SQL
 
 | Installed schema | Effective SQL lines |
 |---|---:|
-| Active relations and shared functions | 1,755 |
-| Retained archival structures | 764 |
-| Complete public schema | 2,519 |
+| Active relations and shared functions | 1,747 |
+| Retained archival structures | 678 |
+| Complete public schema | 2,425 |
 
-There are 52 active tables/views and 33 archival tables/views. Sequences follow
+There are 53 active tables/views and 31 archival tables/views. Sequences follow
 their owning table; unowned sequences (including public Job IDs) remain active.
 All installed functions and legacy columns on active tables are counted in full.
 The archival category retains old execution, materialization and review history;
 it does not erase rows or remove their integrity constraints. Historical migration
 files describe the upgrade path and are not counted a second time as active SQL.
 
-The measured core is therefore **33,540 lines including active SQL**. Owned
-production source plus active SQL is **53,725 lines**; retained archival schema
-adds another 764. The aspiration of a core below 10,000 has not been reached.
+The measured core is therefore **33,724 lines including active SQL**. Owned
+production source plus active SQL is **53,913 lines**; retained archival schema
+adds another 678. The aspiration of a core below 10,000 has not been reached.
 Moving business policy into adapters or hiding SQL would not change that fact.
 
 Largest core Haskell files:
 
 | File | Effective code lines |
 |---|---:|
-| `src/Max/Platform/Store.hs` | 2,438 |
-| `src/Max/Handler.hs` | 1,878 |
-| `src/Max/Config.hs` | 1,361 |
+| `src/Max/Platform/Store.hs` | 2,555 |
+| `src/Max/Handler.hs` | 1,949 |
+| `src/Max/Config.hs` | 1,374 |
 | `src/Max/EpisodeStore.hs` | 1,043 |
 | `src/Max/MemoryStore.hs` | 835 |
-| `src/Max/DB/Monitor.hs` | 798 |
+| `src/Max/DB/Monitor.hs` | 681 |
 | `src/Max/Prompt/Render.hs` | 689 |
 | `src/Max/Recall.hs` | 558 |
 | `src/Max/Command/Dispatcher.hs` | 538 |

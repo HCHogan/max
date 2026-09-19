@@ -25,7 +25,17 @@ toolContext :: ToolContext
 toolContext =
   mkToolContext
     (TurnIdentity (GroupId 123) (CanonicalMessageId 456) (UserId 789) (UserId 999) (PrincipalId 789) Nothing Nothing)
-    (TurnCapabilities False False False qqAdvertisedCaps True Map.empty Nothing False)
+    ( TurnCapabilities
+        { tcMultimodal = False,
+          tcStickers = False,
+          tcSkills = False,
+          tcOutput = qqAdvertisedCaps,
+          tcMonitorArming = True,
+          tcCatalogGrants = Map.empty,
+          tcEffectCeiling = Nothing,
+          tcBackground = False
+        }
+    )
 
 spec :: Spec
 spec = describe "model-visible builtins" $ do

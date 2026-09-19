@@ -1,13 +1,8 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 
--- | Transactional canonical ingest, cursor and delivery kernel shared by all
--- platform adapters.
---
--- Adapters normalize protocol traffic into 'InboundEnvelope'.  This module is
--- the only place that turns it into durable conversation state: native-event
--- dedupe, canonical message insertion, source confirmation and mirror receipts
--- commit together. Fresh-message eligibility is returned to the process queue.
+-- | Native-event dedupe, canonical messages and delivery receipts commit
+-- together. Fresh-message eligibility is returned to the process queue.
 module Max.Platform.Store
   ( EndpointRegistration (..),
     RegisteredEndpoint (..),
@@ -417,27 +412,48 @@ data PlatformEndpointStatus = PlatformEndpointStatus
   deriving anyclass (ToJSON)
 
 instance FromRow PlatformEndpointStatus where
-  fromRow =
-    PlatformEndpointStatus . EndpointId
-      <$> field
-      <*> (ConversationId <$> field)
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
+  fromRow = do
+    endpointId <- EndpointId <$> field
+    conversationId <- ConversationId <$> field
+    legacyConversationId <- field
+    platform <- field
+    nativeAccountId <- field
+    nativeConversationId <- field
+    endpointMode <- field
+    enabled <- field
+    capabilities <- field
+    cursors <- field
+    lastInboundAt <- field
+    pendingDeliveries <- field
+    failedDeliveries <- field
+    acceptedUnconfirmedDeliveries <- field
+    outcomeUnknownDeliveries <- field
+    permanentFailureDeliveries <- field
+    suppressedDeliveries <- field
+    oldestPendingAt <- field
+    lastDeliveryAt <- field
+    pure
+      PlatformEndpointStatus
+        { endpointId,
+          conversationId,
+          legacyConversationId,
+          platform,
+          nativeAccountId,
+          nativeConversationId,
+          endpointMode,
+          enabled,
+          capabilities,
+          cursors,
+          lastInboundAt,
+          pendingDeliveries,
+          failedDeliveries,
+          acceptedUnconfirmedDeliveries,
+          outcomeUnknownDeliveries,
+          permanentFailureDeliveries,
+          suppressedDeliveries,
+          oldestPendingAt,
+          lastDeliveryAt
+        }
 
 data EndpointRow = EndpointRow
   { erEndpointId :: !Int64,
@@ -449,7 +465,22 @@ data EndpointRow = EndpointRow
   }
 
 instance FromRow EndpointRow where
-  fromRow = EndpointRow <$> field <*> field <*> field <*> field <*> field <*> field
+  fromRow = do
+    erEndpointId <- field
+    erConversationId <- field
+    erPlatformAccountId <- field
+    erPlatform <- field
+    erNativeAccountId <- field
+    erLegacyGroupId <- field
+    pure
+      EndpointRow
+        { erEndpointId,
+          erConversationId,
+          erPlatformAccountId,
+          erPlatform,
+          erNativeAccountId,
+          erLegacyGroupId
+        }
 
 data DeliveryRequestRow = DeliveryRequestRow
   { dcDeliveryId :: !Int64,
@@ -478,8 +509,56 @@ data DeliveryRequestRow = DeliveryRequestRow
   }
 
 instance FromRow DeliveryRequestRow where
-  fromRow =
-    DeliveryRequestRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> jsonbField <*> enumField parseEventKind <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> nullableJsonbField <*> field <*> field <*> field <*> field <*> field <*> field
+  fromRow = do
+    dcDeliveryId <- field
+    dcCanonicalMessageId <- field
+    dcEndpointId <- field
+    dcPlatformAccountId <- field
+    dcPlatform <- field
+    dcNativeAccountId <- field
+    dcNativeConversationId <- field
+    dcContent <- jsonbField
+    dcEventKind <- enumField parseEventKind
+    dcActionTarget <- field
+    dcReactionKey <- field
+    dcReactionAdded <- field
+    dcPreviousReactionNative <- field
+    dcCompatibilityConversationId <- field
+    dcReplyNativeEventId <- field
+    dcReplyAuthor <- field
+    dcReplyContent <- nullableJsonbField
+    dcOriginPlatform <- field
+    dcSenderDisplayName <- field
+    dcMessageOrigin <- field
+    dcIdempotencyKey <- field
+    dcAttemptCount <- field
+    dcCapabilities <- field
+    pure
+      DeliveryRequestRow
+        { dcDeliveryId,
+          dcCanonicalMessageId,
+          dcEndpointId,
+          dcPlatformAccountId,
+          dcPlatform,
+          dcNativeAccountId,
+          dcNativeConversationId,
+          dcContent,
+          dcEventKind,
+          dcActionTarget,
+          dcReactionKey,
+          dcReactionAdded,
+          dcPreviousReactionNative,
+          dcCompatibilityConversationId,
+          dcReplyNativeEventId,
+          dcReplyAuthor,
+          dcReplyContent,
+          dcOriginPlatform,
+          dcSenderDisplayName,
+          dcMessageOrigin,
+          dcIdempotencyKey,
+          dcAttemptCount,
+          dcCapabilities
+        }
 
 data DispatchRow = DispatchRow
   { drCanonical :: !Int64,
@@ -495,7 +574,30 @@ data DispatchRow = DispatchRow
   }
 
 instance FromRow DispatchRow where
-  fromRow = DispatchRow <$> field <*> field <*> field <*> field <*> field <*> field <*> jsonbField <*> field <*> field <*> field
+  fromRow = do
+    drCanonical <- field
+    drGroup <- field
+    drUser <- field
+    drSelf <- field
+    drAuthor <- field
+    drSelfPrincipal <- field
+    drBody <- jsonbField
+    drReply <- field
+    drPlatform <- field
+    drName <- field
+    pure
+      DispatchRow
+        { drCanonical,
+          drGroup,
+          drUser,
+          drSelf,
+          drAuthor,
+          drSelfPrincipal,
+          drBody,
+          drReply,
+          drPlatform,
+          drName
+        }
 
 createConversation ::
   (WithConnection :> es, IOE :> es) =>
@@ -2128,16 +2230,26 @@ data ConversationSummary = ConversationSummary
   deriving stock (Eq, Show)
 
 instance FromRow ConversationSummary where
-  fromRow =
-    ConversationSummary
-      <$> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
+  fromRow = do
+    csConversationId <- field
+    csLegacyGroupId <- field
+    csKind <- field
+    csTitle <- field
+    csPlatforms <- field
+    csEndpoints <- field
+    csMessageCount <- field
+    csLastMessageAt <- field
+    pure
+      ConversationSummary
+        { csConversationId,
+          csLegacyGroupId,
+          csKind,
+          csTitle,
+          csPlatforms,
+          csEndpoints,
+          csMessageCount,
+          csLastMessageAt
+        }
 
 -- | Every conversation the ledger knows, newest activity first.
 --

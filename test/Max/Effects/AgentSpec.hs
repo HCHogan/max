@@ -22,7 +22,7 @@ import Max.Agent.Execution (ExecutionAdmission (..), ExecutionInbox (..), Execut
 import Max.Agent.Failure (AgentFailure (..))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion)
-import Max.Effects.Agent (Agent, AgentContext (..), AgentLimits (..), AgentResult (..), agentTurn, runAgentWith)
+import Max.Effects.Agent (Agent, AgentContext (..), AgentLimits (..), AgentOutcome (..), AgentReply (..), AgentResult (..), agentTurn, runAgentWith)
 import Max.Effects.LLM
 import Max.Effects.ToolControl (ToolControl)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
@@ -147,7 +147,17 @@ dispatchContext =
   AgentContext
     ( mkToolContext
         (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001) Nothing Nothing)
-        (TurnCapabilities False True False qqAdvertisedCaps True Map.empty Nothing False)
+        ( TurnCapabilities
+            { tcMultimodal = False,
+              tcStickers = True,
+              tcSkills = False,
+              tcOutput = qqAdvertisedCaps,
+              tcMonitorArming = True,
+              tcCatalogGrants = Map.empty,
+              tcEffectCeiling = Nothing,
+              tcBackground = False
+            }
+        )
     )
     Nothing
     Nothing
@@ -167,7 +177,17 @@ spec = describe "Agent full loop" $ do
             { acTools =
                 mkToolContext
                   (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001) Nothing Nothing)
-                  (TurnCapabilities False False True qqAdvertisedCaps True Map.empty Nothing False)
+                  ( TurnCapabilities
+                      { tcMultimodal = False,
+                        tcStickers = False,
+                        tcSkills = True,
+                        tcOutput = qqAdvertisedCaps,
+                        tcMonitorArming = True,
+                        tcCatalogGrants = Map.empty,
+                        tcEffectCeiling = Nothing,
+                        tcBackground = False
+                      }
+                  )
             }
         factory current =
           buildToolRegistry
@@ -222,7 +242,7 @@ spec = describe "Agent full loop" $ do
       runEff . runConcurrent . runLog "codemode-model-test" logger LogAttention . runLLMWith provider . runTestAgent _inputs (AgentLimits 4) factory $
         agentTurn turn executionContext "fake" [MsgUser "compose"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
-    result.reply `shouldBe` Just "done"
+    result.outcome `shouldBe` Answered (AgentReply "done" "")
     readIORef calls `shouldReturn` 3
 
   it "loads and runs a saved workflow through the model loop on the next round" $ do
@@ -246,7 +266,17 @@ spec = describe "Agent full loop" $ do
             { acTools =
                 mkToolContext
                   (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001) Nothing Nothing)
-                  (TurnCapabilities False False True qqAdvertisedCaps True Map.empty Nothing False)
+                  ( TurnCapabilities
+                      { tcMultimodal = False,
+                        tcStickers = False,
+                        tcSkills = True,
+                        tcOutput = qqAdvertisedCaps,
+                        tcMonitorArming = True,
+                        tcCatalogGrants = Map.empty,
+                        tcEffectCeiling = Nothing,
+                        tcBackground = False
+                      }
+                  )
             }
     available <- either (fail . show) pure (buildToolCatalog [searchDefinition] [ToolSpec "web_search" "search" searchSchema])
     let factory current =
@@ -284,7 +314,7 @@ spec = describe "Agent full loop" $ do
       runEff . runConcurrent . runLog "saved-workflow-model" logger LogAttention . runLLMWith provider . runTestAgent _inputs (AgentLimits 4) factory $
         agentTurn turn executionContext "fake" [MsgUser "batch search"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
-    result.reply `shouldBe` Just "done"
+    result.outcome `shouldBe` Answered (AgentReply "done" "")
     readIORef rounds `shouldReturn` 3
 
   it "loads a complete skill next round, rejects same-batch hidden calls, and isolates requests" $ do
@@ -300,7 +330,17 @@ spec = describe "Agent full loop" $ do
             { acTools =
                 mkToolContext
                   (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001) Nothing Nothing)
-                  (TurnCapabilities False False True qqAdvertisedCaps True Map.empty Nothing False)
+                  ( TurnCapabilities
+                      { tcMultimodal = False,
+                        tcStickers = False,
+                        tcSkills = True,
+                        tcOutput = qqAdvertisedCaps,
+                        tcMonitorArming = True,
+                        tcCatalogGrants = Map.empty,
+                        tcEffectCeiling = Nothing,
+                        tcBackground = False
+                      }
+                  )
             }
         factory current =
           buildToolRegistry
@@ -365,7 +405,7 @@ spec = describe "Agent full loop" $ do
           $ agentTurn turn dispatchContext "fake" [MsgUser "work"] (eventSink events)
       _ <- finishTurnRuntime tasks turn
       readIORef calls `shouldReturn` 2
-      result.reply `shouldBe` Just "real answer"
+      result.outcome `shouldBe` Answered (AgentReply "real answer" "")
 
   it "publishes single-paragraph text before the model returns and acknowledges each prefix once" $ do
     events <- newIORef []
@@ -391,9 +431,7 @@ spec = describe "Agent full loop" $ do
         . runTestAgent inputs (AgentLimits 4) (const (buildToolRegistry [] []))
         $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
-    result.sentPrefix `shouldBe` prefix
-    result.reply `shouldBe` Just response
-    result.aborted `shouldBe` Nothing
+    result.outcome `shouldBe` Answered (AgentReply response prefix)
 
   it "preserves a streamed prefix while returning an explicit interruption" $ do
     events <- newIORef []
@@ -414,9 +452,7 @@ spec = describe "Agent full loop" $ do
         . runTestAgent _inputs (AgentLimits {maxTurns = 4}) (const (buildToolRegistry [] []))
         $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
-    result.sentPrefix `shouldBe` "第一段\n\n"
-    result.reply `shouldBe` Just "第一段\n\n第二段没写完"
-    result.aborted `shouldBe` Just (AgentStreamInterrupted (ResponseTransport ResponseTimeoutFailure))
+    result.outcome `shouldBe` Interrupted (AgentStreamInterrupted (ResponseTransport ResponseTimeoutFailure)) (AgentReply "第一段\n\n第二段没写完" "第一段\n\n")
     readIORef events `shouldReturn` [SeenFinalStream "第一段\n\n"]
 
   it "runs fake LLM + tool rounds and emits typed output events in memory" $ do
@@ -435,10 +471,8 @@ spec = describe "Agent full loop" $ do
           $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
 
-    result.reply `shouldBe` Just "第一段\n\n第二段"
-    result.sentPrefix `shouldBe` "第一段\n\n"
+    result.outcome `shouldBe` Answered (AgentReply "第一段\n\n第二段" "第一段\n\n")
     result.turnsUsed `shouldBe` 2
-    result.aborted `shouldBe` Nothing
     case result.appended of
       [ MsgAssistantToolCalls _ [tc],
         MsgTool callId payload,
@@ -647,7 +681,7 @@ spec = describe "Agent full loop" $ do
       runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 3) (const (buildToolRegistry [] [])) $
         agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
-    result.reply `shouldBe` Just "corrected"
+    result.outcome `shouldBe` Answered (AgentReply "corrected" "")
 
   it "propagates !kill as asynchronous cancellation and still permits root cleanup" $ do
     entered <- newEmptyMVar
@@ -704,6 +738,7 @@ spec = describe "Agent full loop" $ do
           $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (lateFeedbackSink _inputs injected events)
     finishTurnRuntime tasks turn
 
-    result.sentPrefix `shouldBe` "第一段\n\n"
+    Answered reply <- pure result.outcome
+    reply.publishedPrefix `shouldBe` "第一段\n\n"
     readIORef _inputs `shouldReturn` ["[feedback]: 流式期间补充"]
     (null <$> listTasks tasks (Just (GroupId 7777))) `shouldReturn` True

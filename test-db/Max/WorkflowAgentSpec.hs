@@ -116,7 +116,21 @@ workflowGrants = Map.fromList [("task_start", "v1"), ("web_search", "v1")]
 toolContext :: RunningJob -> Map.Map Text Text -> IO ToolContext
 toolContext running current = do
   output <- newTurnOutputContext running.turn
-  pure (mkToolContext (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 3) running.job.spec.principal Nothing (Just output)) (TurnCapabilities False False True noAdvertisedCaps False current (Just current) True))
+  pure
+    ( mkToolContext
+        (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 3) running.job.spec.principal Nothing (Just output))
+        ( TurnCapabilities
+            { tcMultimodal = False,
+              tcStickers = False,
+              tcSkills = True,
+              tcOutput = noAdvertisedCaps,
+              tcMonitorArming = False,
+              tcCatalogGrants = current,
+              tcEffectCeiling = Just current,
+              tcBackground = True
+            }
+        )
+    )
 
 runScript :: DbPool -> RunningJob -> Maybe Int -> Text -> IO CodeModeResult
 runScript pool running budget source = do

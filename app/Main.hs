@@ -270,13 +270,8 @@ runApp ::
   ThreadId ->
   Eff es ()
 runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState logBuf clientRef mainTid =
-  -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
-  -- websockets, which fires that callback in a fresh thread. The 'run'
-  -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
-  -- websockets silently closes the connection (NapCat sees "socket hang
-  -- up"). We could set this only around the runServer call, but setting
-  -- globally is harmless and avoids surprise for any future cross-thread
-  -- `withRunInIO` usage.
+  -- WebSocket callbacks run on new threads; their effect unlift must support
+  -- cross-thread use throughout the process lifetime.
   withUnliftStrategy (ConcUnlift Persistent Unlimited) $ do
     let s = cfg.server
     logInfo "max-bot starting" $

@@ -7,28 +7,29 @@ unfinished design and acceptance goals.
 
 ## Status against the original numbered plan
 
-Sections 7–8 now include the monitor cutover below; section 13 is being
-implemented separately. Earlier deployment evidence remains historical.
+Sections 7–8 include the monitor cutover below. Section 13 separates resource
+ownership from dispatch work and makes loop state/outcomes explicit. Earlier
+deployment evidence remains historical.
 
 | Plan section | Status | Remaining work or limit |
 |---|---|---|
-| 1. Core-size goal | Measurement established; target unmet | The measured core is 33,540 effective lines including active SQL. |
+| 1. Core-size goal | Measurement established; target unmet | The measured core is 33,724 effective lines including active SQL. |
 | 2. Product contract | Main runtime contract implemented | Major features and conservative handling of uncertain effects remain. |
 | 3. Responsibility boundary | Implemented | File and schema manifests expose core and total maintenance cost. |
 | 4. Model responsibilities | Partial | Finish/disposition protocols are gone; prompt reduction and monitor observation contracts still need review. |
-| 5. Runtime path | Main path implemented | Conversation, Agent and Jobs own live execution; further orchestration cleanup belongs to section 13. |
+| 5. Runtime path | Implemented | Conversation, Agent and Jobs own live execution; dispatch preparation, execution and publication are named steps. |
 | 6. Runtime boundaries | Implemented with regression coverage | Streaming, cancellation, provider state and resource boundaries have tests; live acceptance does not cover every case. |
 | 7. Persistence scope | Implemented | Definitions and trigger facts remain; worker leases, retry state and crash replay are gone. Frozen definitions preserve pending-retention and authority semantics. |
 | 8. Removal candidates | Implemented | Reminder triggers feed ordinary Jobs; old runtime tables have no serving-code consumers. Obsolete debt views and lease helpers are removed. |
-| 9. Core responsibility budgets | Not reached | Core Haskell is 31,785 lines, plus 1,755 active SQL lines. Preserve major features when pursuing further reductions. |
+| 9. Core responsibility budgets | Not reached | Core Haskell is 31,977 lines, plus 1,747 active SQL lines. Preserve major features when pursuing further reductions. |
 | 10. Migration sequence | Runtime cutover shipped; phase F partial | Cleanup and budget/readability goals remain after the deployed A–E changes. |
 | 11. Acceptance | Substantial but incomplete | Build, regression, upgrade and selected live checks passed. Model comparison was small; real-chat Jobs/reminder cases were not all exercised and strict historical health remains non-green. |
 | 12. Worker architecture | Main changes implemented | Scoped service supervision, local Jobs and queues replace the old execution recovery machinery; monitor scheduling now uses the same no-replay restart contract. |
-| 13. Readability | Partial | Handler orchestration, Agent state/results, positional capability construction and tool-interpreter forwarding still need work. |
+| 13. Readability | Implemented | Named LoopState/capabilities/SQL decoding, explicit outcomes, one production tool interpreter and separate dispatch ownership. |
 
-The next simplification work should address the remaining monitor protocol and
-the concrete readability issues above. It must not remove major features merely
-to reach the line-count target. Counts and evidence are in
+Further size or prompt work must preserve major features. The remaining budget
+and broader model/real-conversation acceptance goals are separate from this
+monitor and readability cutover. Counts and evidence are in
 [code-size.md](code-size.md) and the
 [deployment report](research/simplification-release-20260919.md).
 
@@ -150,7 +151,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
       tests belonging to removed behavior. Preserve historical migrations.
 - [x] Stop using old execution tables before archiving/dropping them; retain
       business history and provide an upgrade path from the existing database.
-- [ ] Make ordinary chat/tool/cancellation paths directly readable. Use named
+- [x] Make ordinary chat/tool/cancellation paths directly readable. Use named
       fields, explicit results and locally understandable resource ownership.
 - [x] Update architecture, feature, operations and generated prompt documentation.
 - [x] Publish the release's core and total-owned-code measurements with a file manifest.
@@ -173,6 +174,25 @@ The old partial-snapshot restoration path is removed. Migration 124 removes
 lease/retry columns and obsolete debt views without rewriting definitions,
 messages or trigger evidence. Historical execution tables remain archived data;
 a source audit finds no runtime SQL reading them.
+
+## Readability boundary
+
+`forkDispatch` owns registration and cleanup; `runDispatch` handles chat, Jobs
+and notices. Chat is `prepareReply → runReply → publishReply`. These are local
+steps, without a new workflow abstraction. `LoopState` contains only changing
+round data; immutable dependencies stay in the enclosing run. `AgentOutcome`
+makes complete, interrupted and failed runs distinct, including already
+published text. Jobs accept only complete answers; foreground interruption
+publishes the remaining partial text and retains failure status.
+
+Capability constructors name every switch and authority ceiling. `runToolsWith`
+is the sole production interpreter; `runTools` is the plain static test assembly.
+Long platform row decoders name each SQL field, including typed JSON readers.
+BotEnv groups immutable startup settings and process resources; it has no second
+mutable configuration snapshot. Runtime comments state current invariants;
+architecture.md begins with entry points and ownership. Obsolete automatic
+Agent-retry classification and its tests are removed; streaming, shared tool
+execution, cancellation and database behavior fixtures remain.
 
 ## Size accounting
 
@@ -217,6 +237,16 @@ Source audit and detailed design were originally recorded in
 maintained implementation record.
 
 ## Implementation evidence
+
+- Sections 7–8: `58523f4` removes monitor leases, persistent delivery retries,
+  replay acknowledgement, partial-snapshot restoration and obsolete debt views.
+  Populated migration 124 preserves definitions, messages and trigger facts.
+- Section 13: all Cabal components build; 1,041 unit and 264 PostgreSQL examples
+  pass; HLint and architecture capability checks pass. The removed 14 examples
+  tested an Agent retry classifier with no production caller. Current source
+  and active SQL total 33,724 core lines. This is local validation; production
+  acceptance is recorded separately after the release.
+
 
 - `eb90b84`: comment-only cleanup across 70 modules; 1,586 fewer full-line
   comments. Raw and formatted executable text match the baseline; library

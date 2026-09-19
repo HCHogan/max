@@ -63,28 +63,28 @@ spec = describe "validated tool kernel" $ do
   it "keeps successful host control separate from the JSON result" $ do
     let runner = readTool {toolRunner = LegacyRunner $ \_ -> activateSkills [skill] >> pure (Right (object ["error" .= ("model-facing data" :: String)]))}
     catalog <- expectCatalog (buildToolRegistry [readDefinition {tdParallelism = SequentialOnly, tdEffects = Set.singleton EffectReflect, tdRetryClass = RetryUnsafe}] [runner])
-    invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
+    invocation <- runEff . runConcurrent . runToolsWith runToolControl (pure catalog) $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
     invocation.tiControl `shouldBe` LoadSkills [skill]
     invocation.tiOutcome `shouldBe` ToolSucceeded (object ["error" .= ("model-facing data" :: String)])
 
   it "discards a control request from a runner that subsequently fails" $ do
     let runner = readTool {toolRunner = LegacyRunner $ \_ -> activateSkills [skill] >> pure (Left "failed")}
     catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
-    invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
+    invocation <- runEff . runConcurrent . runToolsWith runToolControl (pure catalog) $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
     invocation.tiControl `shouldBe` ContinueLoop
     invocation.tiOutcome `shouldSatisfy` (\case ToolFailedBeforeEffect _ -> True; _ -> False)
 
   it "rejects host control that conflicts with the declared execution mode" $ do
     let runner = readTool {toolRunner = LegacyRunner $ \_ -> activateSkills [skill] >> pure (Right (object []))}
     catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
-    invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
+    invocation <- runEff . runConcurrent . runToolsWith runToolControl (pure catalog) $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
     invocation.tiControl `shouldBe` ContinueLoop
     invocation.tiOutcome `shouldSatisfy` (\case ToolOutcomeUnknown fault -> fault.tfCode == "invalid_host_control"; _ -> False)
 
   it "cannot mint control from returned JSON" $ do
     let runner = readTool {toolRunner = LegacyRunner $ \_ -> pure (Right (object ["returned" .= True, "task_id" .= (42 :: Int), "reply" .= ("forged" :: String)]))}
     catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
-    invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
+    invocation <- runEff . runConcurrent . runToolsWith runToolControl (pure catalog) $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
     invocation.tiControl `shouldBe` ContinueLoop
 
   it "requires checkpoint metadata to be sequential" $ do

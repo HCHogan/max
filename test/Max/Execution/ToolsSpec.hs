@@ -88,7 +88,7 @@ spec = describe "shared host tool execution" $ do
         definition = echoDefinition {tdParallelism = SequentialOnly, tdEffects = Set.singleton EffectReflect, tdRetryClass = RetryUnsafe}
     binary <- guestCalls [request "echo" args, request "hidden" args] "unreachable"
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
-    guest <- runEff . runConcurrent . runToolsWithControl runToolControl registry $ do
+    guest <- runEff . runConcurrent . runToolsWith runToolControl (pure registry) $ do
       session <- newExecutionSession Nothing
       runWasmTools session noJournal (views registry) defaultWasmLimits binary
     map (.ccOutcome) guest.cmCalls `shouldBe` ["succeeded", "rejected"]
@@ -124,7 +124,7 @@ spec = describe "shared host tool execution" $ do
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
     attachments <- runEff . runConcurrent $ do
       queue <- newToolOutputQueue 1
-      runToolOutputRead queue . runToolsWith (runToolOutput queue) registry $ do
+      runToolOutputRead queue . runToolsWith (fmap (,ContinueLoop) . runToolOutput queue) (pure registry) $ do
         session <- newExecutionSession Nothing
         _ <- executeToolBatch session noJournal (views registry) [ToolRequest "native" "echo" args]
         native <- drainInlineMedia

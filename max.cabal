@@ -687,7 +687,6 @@ test-suite max-test
         Max.ShutdownSpec
         Max.SkillsSpec
         Max.Skill.WorkflowSpec
-        Max.Agent.FailureSpec
         Max.Monitor.PolicySpec
         Max.TasksSpec
         Max.ConversationSpec

@@ -115,8 +115,12 @@ import Max.Dispatch
 import Max.Effects.Agent
   ( Agent,
     AgentContext (..),
+    AgentOutcome (..),
+    AgentReply (..),
     AgentResult (..),
+    agentFailure,
     agentTurn,
+    replyRemainder,
   )
 import Max.Effects.Blob (Blob)
 import Max.Effects.LLM (ChatMessage (MsgSystem, MsgUser))
@@ -288,6 +292,7 @@ import Max.Task.Types
   )
 import Max.Tasks
   ( TaskCancelled (..),
+    TurnRuntime,
     activateTurnRuntime,
     awaitTurnSilence,
     beginTurnRuntime,
@@ -1251,7 +1256,17 @@ dispatchMonitorFire fire = do
                 Left err -> expire err
                 Right maybeNext -> do
                   profile <- MonitorJob.monitorTaskProfile fire.emfFireId
-                  let caps = TurnCapabilities True False True noAdvertisedCaps False Map.empty (Just fire.emfEffectToolGrants) False
+                  let caps =
+                        TurnCapabilities
+                          { tcMultimodal = True,
+                            tcStickers = False,
+                            tcSkills = True,
+                            tcOutput = noAdvertisedCaps,
+                            tcMonitorArming = False,
+                            tcCatalogGrants = Map.empty,
+                            tcEffectCeiling = Just fire.emfEffectToolGrants,
+                            tcBackground = False
+                          }
                       current = Map.fromList [(definition.tdRef.unToolRef, toolCatalogFingerprint [definition]) | definition <- toolDefinitionsFor env seed.groupId caps]
                   admitted <- withTransaction (MonitorJob.admitMonitorTaskWithin fire.emfFireId maybeNext (taskGrants profile current) seed.canonicalId.unCanonicalMessageId)
                   case admitted of
@@ -1367,7 +1382,25 @@ dispatchLLMWith ::
   TriggerOrigin ->
   DispatchMessage ->
   Eff es ()
-dispatchLLMWith start mIntent origin gm = do
+dispatchLLMWith start intent origin message =
+  forkDispatch start origin message (runDispatch start intent origin message)
+
+-- Owns the shutdown slot, registered runtime, conversation ticket and browser
+-- scope from before context collection until the child terminates.
+forkDispatch ::
+  ( Log :> es,
+    WithConnection :> es,
+    Outbound :> es,
+    Concurrent :> es,
+    Reader BotEnv :> es,
+    IOE :> es
+  ) =>
+  TurnStart ->
+  TriggerOrigin ->
+  DispatchMessage ->
+  (AdvertisedCaps -> TurnRuntime -> AgentTurnRef -> Eff es ()) ->
+  Eff es ()
+forkDispatch start origin gm work = do
   env :: BotEnv <- ask
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
@@ -1456,9 +1489,7 @@ dispatchLLMWith start mIntent origin gm = do
       void . async . restore $
         ( localDomain "llm" $ do
             logInfo "llm dispatch" ident
-            -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
-            -- (and every trySyncIO on the way up) — the outer 'catch' is the
-            -- one place a user-initiated @!kill@ comes to rest.
+            -- Cancellation reaches this owner; tool error handlers do not swallow it.
             handleTurnFailures
               ( \e -> do
                   finishAgentTurn durable TurnCrashed 0 (Just (T.pack (show e)))
@@ -1512,65 +1543,104 @@ dispatchLLMWith start mIntent origin gm = do
             object ["error" .= T.pack (show (e :: SomeException))]
       liftIO (Jobs.detachJobNotice env.beJobs ref.atrTurnId)
 
-    work outputCaps turn durable = do
-      liftIO (setTurnPhase turn "starting")
-      env :: BotEnv <- ask
-      sessionVar <- loadSession env.beSessions env.beDefaultModel gm.groupId
-      session <- liftIO (readSession sessionVar)
-      markAgentTurnRunning durable session.model
-      case backgroundJob of
-        Just execution -> dispatchTask turn durable env session execution
-        Nothing -> do
-          for_ mIntent $ \intent -> liftIO (clearPendingIntent intent gm.groupId)
-          replyTarget <- case gm.replyTo of
-            Nothing -> pure Nothing
-            Just target -> resolveReplyTurn (conversationScopeFor gm.groupId) session.clearedAt target
-          raced <-
-            race
-              ( withProcessingReaction outputCaps $ do
-                  if notice
-                    then dispatchNotice outputCaps turn durable
-                    else dispatchOrdinary outputCaps turn durable env session (replyTarget >>= finishedTarget)
-              )
-              (threadDelay (frontendDeadlineSeconds * 1_000_000))
-          case raced of
-            Left () -> pure ()
-            Right () -> do
-              when (origin == OriginDirect) $ do
-                link <- liftIO (nextTurnOutputLink (turnRuntimeOutputContext turn))
-                void $
-                  sendRecorded
-                    OutboundRequest
-                      { orKind = KindChat,
-                        orGroupId = gm.groupId,
-                        orBody = Body [NText "这次前台处理超时了，请求没有当作完成。长任务需要交给后台；可以重试或明确让我启动后台任务。"],
-                        orReplyTo = Just gm.canonicalId,
-                        orDeliveryScope = DeliverSourceEndpoint gm.canonicalId,
-                        orTurnOutput = Just link,
-                        orMonitorFireId = Nothing
-                      }
-              finishAgentTurn durable TurnFailed 0 (Just ("frontend " <> tshow frontendDeadlineSeconds <> "-second deadline; request unresolved"))
-      where
-        finishedTarget target
-          | replyTurnIsFinished target = Just target
-          | otherwise = Nothing
+data PreparedReply = PreparedReply
+  { agent :: !AgentContext,
+    prompt :: ![ChatMessage],
+    target :: !ReplyTarget,
+    debug :: !Bool
+  }
+
+runDispatch ::
+  ( Blob :> es,
+    Log :> es,
+    WithConnection :> es,
+    PlatformQuery :> es,
+    Outbound :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
+    IOE :> es
+  ) =>
+  TurnStart ->
+  Maybe IntentState ->
+  TriggerOrigin ->
+  DispatchMessage ->
+  AdvertisedCaps ->
+  TurnRuntime ->
+  AgentTurnRef ->
+  Eff es ()
+runDispatch start mIntent origin gm outputCaps turn durable = do
+  liftIO (setTurnPhase turn "starting")
+  env :: BotEnv <- ask
+  sessionVar <- loadSession env.beSessions env.beDefaultModel gm.groupId
+  session <- liftIO (readSession sessionVar)
+  markAgentTurnRunning durable session.model
+  case backgroundJob of
+    Just execution -> dispatchTask env session execution
+    Nothing -> do
+      for_ mIntent $ \intent -> liftIO (clearPendingIntent intent gm.groupId)
+      replyTarget <- case gm.replyTo of
+        Nothing -> pure Nothing
+        Just target -> resolveReplyTurn (conversationScopeFor gm.groupId) session.clearedAt target
+      raced <-
+        race
+          ( withProcessingReaction $ do
+              if notice
+                then dispatchNotice
+                else dispatchOrdinary env session (replyTarget >>= finishedTarget)
+          )
+          (threadDelay (frontendDeadlineSeconds * 1_000_000))
+      case raced of
+        Left () -> pure ()
+        Right () -> do
+          when (origin == OriginDirect) $ do
+            link <- liftIO (nextTurnOutputLink (turnRuntimeOutputContext turn))
+            void $
+              sendRecorded
+                OutboundRequest
+                  { orKind = KindChat,
+                    orGroupId = gm.groupId,
+                    orBody = Body [NText "这次前台处理超时了，请求没有当作完成。长任务需要交给后台；可以重试或明确让我启动后台任务。"],
+                    orReplyTo = Just gm.canonicalId,
+                    orDeliveryScope = DeliverSourceEndpoint gm.canonicalId,
+                    orTurnOutput = Just link,
+                    orMonitorFireId = Nothing
+                  }
+          finishAgentTurn durable TurnFailed 0 (Just ("frontend " <> tshow frontendDeadlineSeconds <> "-second deadline; request unresolved"))
+  where
+    backgroundJob = case start of JobTurn job -> Just job; _ -> Nothing
+    notice = case start of JobNotice {} -> True; _ -> False
+    finishedTarget target
+      | replyTurnIsFinished target = Just target
+      | otherwise = Nothing
 
     -- Show the processing reaction while the turn runs and clear it on exit.
     -- Pokes, monitors and background tasks have no processing reaction here;
     -- reaction failures must not fail the turn.
-    withProcessingReaction outputCaps act
+    withProcessingReaction act
       | origin `elem` [OriginPoke, OriginMonitor, OriginTask] || not (outputCaps.canReaction && outputCaps.canFace) = act
       | otherwise =
           (queueQQReaction gm.groupId gm.canonicalId processingFaceId True >> act)
             `finally` queueQQReaction gm.groupId gm.canonicalId processingFaceId False
 
-    dispatchTask turn durable env session execution = do
+    dispatchTask env session execution = do
       catalog :: ModelCatalog <- ask
       skills <- liftIO (skillsForGroup env.beSkills gm.groupId)
       let capabilities = lookupModelCapabilities session.model catalog
           multimodal = maybe False supportsMultimodal capabilities
           limits = maybe defaultContextLimits (.contextLimits) capabilities
-          initialCaps = TurnCapabilities multimodal False (not (null skills)) noAdvertisedCaps False Map.empty (Just execution.spec.grants) True
+          initialCaps =
+            TurnCapabilities
+              { tcMultimodal = multimodal,
+                tcStickers = False,
+                tcSkills = not (null skills),
+                tcOutput = noAdvertisedCaps,
+                tcMonitorArming = False,
+                tcCatalogGrants = Map.empty,
+                tcEffectCeiling = Just execution.spec.grants,
+                tcBackground = True
+              }
           definitions = toolDefinitionsFor env gm.groupId initialCaps
           grants = Map.fromList [(definition.tdRef.unToolRef, toolCatalogFingerprint [definition]) | definition <- definitions]
           caps = initialCaps {tcCatalogGrants = grants}
@@ -1612,11 +1682,10 @@ dispatchLLMWith start mIntent origin gm = do
           liftIO (Jobs.completeJob env.beJobs execution.run JobState.Failed (JobResult "任务超过截止时间；已发生的操作不会自动重试。" Nothing))
           finishAgentTurn durable TurnFailed 0 (Just "job deadline")
         Left result -> do
-          let outcome = case result.aborted of
-                Just detail -> Left (renderAgentFailure detail)
-                Nothing -> case result.reply of
-                  Nothing -> Left "任务没有返回结果。"
-                  Just body -> parseJobResult execution.spec body
+          let outcome = case result.outcome of
+                Answered reply -> parseJobResult execution.spec reply.body
+                Interrupted reason _ -> Left (renderAgentFailure reason)
+                Failed reason _ -> Left (renderAgentFailure reason)
           case outcome of
             Left detail -> do
               liftIO (Jobs.completeJob env.beJobs execution.run JobState.Failed (JobResult detail Nothing))
@@ -1625,7 +1694,7 @@ dispatchLLMWith start mIntent origin gm = do
               liftIO (Jobs.completeJob env.beJobs execution.run JobState.Succeeded answer)
               finishAgentTurn durable TurnSucceeded result.turnsUsed Nothing
 
-    dispatchNotice outputCaps turn durable = case start of
+    dispatchNotice = case start of
       JobNotice job version body -> do
         env :: BotEnv <- ask
         current <- liftIO (Jobs.noticeIsCurrent env.beJobs job.run version)
@@ -1639,20 +1708,21 @@ dispatchLLMWith start mIntent origin gm = do
             finishAgentTurn durable (if null result.committed then TurnFailed else TurnSucceeded) 0 result.failure
       _ -> finishAgentTurn durable TurnAborted 0 (Just "missing job notice")
 
-    dispatchOrdinary outputCaps turn durable env s continuationTarget = do
+    dispatchOrdinary env session continuation = do
+      prepared <- prepareReply env session continuation
+      runReply env session prepared
+
+    prepareReply env s continuationTarget = do
       catalog :: ModelCatalog <- ask
       let capabilities = lookupModelCapabilities s.model catalog
           multimodal = maybe False supportsMultimodal capabilities
           historyTurns = maybe False usesHistoryTurns capabilities
           limits = maybe defaultContextLimits (.contextLimits) capabilities
       brief <- fetchGroupBrief outputCaps gm.groupId
-      -- Questions another turn is already working on.  Ours is in there
-      -- too (claimed just above) — drop it, it isn't history yet.
+      -- Exclude this turn and other in-flight requests from answerable history.
       let CanonicalMessageId ownMid = gm.canonicalId
       inFlight <- Set.delete ownMid <$> liftIO (inFlightTriggers env.beTasks gm.groupId)
-      -- One registry snapshot serves both halves of the disclosure:
-      -- the index rendered into the system prompt and the tool-capability
-      -- gate that registers the use_skill tool reading the bodies.
+      -- The prompt and tool gate use the same skill snapshot.
       skills <- liftIO (skillsForGroup env.beSkills gm.groupId)
       tier <- effectiveTier env gm.groupId gm
       let skillIndex = [(sk.skillName, sk.skillDescription) | sk <- skills]
@@ -1661,14 +1731,15 @@ dispatchLLMWith start mIntent origin gm = do
           platformStickers = stickersEff && outputCaps.canMedia
           baseCapabilities =
             TurnCapabilities
-              multimodal
-              platformStickers
-              (not (null skills))
-              outputCaps
-              (tierSatisfied TierGroupAdmin tier)
-              Map.empty
-              Nothing
-              False
+              { tcMultimodal = multimodal,
+                tcStickers = platformStickers,
+                tcSkills = not (null skills),
+                tcOutput = outputCaps,
+                tcMonitorArming = tierSatisfied TierGroupAdmin tier,
+                tcCatalogGrants = Map.empty,
+                tcEffectCeiling = Nothing,
+                tcBackground = False
+              }
           currentDefinitions = toolDefinitionsFor env gm.groupId baseCapabilities
           catalogGrants =
             Map.fromList
@@ -1735,18 +1806,17 @@ dispatchLLMWith start mIntent origin gm = do
               rosterNames
               platformStickers
               (Just (turnRuntimeOutputContext turn))
-      -- The streaming sink.  It sends whole paragraphs the model has
-      -- finished with, down the same path the final reply takes — the
-      -- budget TVar is what keeps the two halves of one split reply
-      -- bounded together (see "Max.ReplySend").
+      pure PreparedReply {agent = agentCtx, prompt = frontendCtx, target, debug = debugEff}
+
+    runReply env s prepared = do
       streamBudget <- liftIO (newTVarIO freshBudget)
-      let output = AgentOutputContext target gm.canonicalId debugEff streamBudget
+      let output = AgentOutputContext prepared.target gm.canonicalId prepared.debug streamBudget
       -- Race the silence watchdog against the running turn so a stuck tool can
       -- be cancelled without reaching another round boundary. On timeout there is
       -- no AgentResult; settle the turn through the failure path.
       raced <-
         race
-          (agentTurn turn agentCtx s.model frontendCtx (handleAgentEvent output))
+          (agentTurn turn prepared.agent s.model prepared.prompt (handleAgentEvent output))
           (liftIO (awaitTurnSilence turn (env.beTurnSilenceSeconds * 1_000_000)))
       case raced of
         Right () -> do
@@ -1755,48 +1825,38 @@ dispatchLLMWith start mIntent origin gm = do
               [ "to" .= (let UserId u = gm.userId in u),
                 "silent_seconds" .= env.beTurnSilenceSeconds
               ]
-          -- Whatever streamed already reached the group as it was written, so
-          -- the room sees a truncated answer; the face is what tells them it
-          -- was cut off rather than finished.  Nothing is drained: the btw
-          -- notes and the inbox belong to a turn that delivers.
+          -- Keep the published prefix; signal interruption without repeating it.
           when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $ do
             queueQQReaction gm.groupId gm.canonicalId processingFaceId False
             queueQQReaction gm.groupId gm.canonicalId failureFaceId True
           finishAgentTurn durable TurnFailed 0 (Just "turn stopped making progress")
-        Left result -> settleTurn outputCaps env s target streamBudget durable result
+        Left result -> publishReply env s prepared.target streamBudget result
 
-    settleTurn outputCaps env s target streamBudget durable result = do
-      terminal <- case result.reply of
-        -- No final reply is available; indicate failure through the trigger reaction.
-        Nothing -> do
+    publishReply env session target streamBudget result = do
+      terminal <- case result.outcome of
+        Answered reply -> publish reply
+        Interrupted _ partial -> publish partial >> pure TurnFailed
+        Failed reason _ -> do
           logAttention "llm dispatch failed" $
-            object
-              [ "to" .= (let UserId u = gm.userId in u),
-                "turns" .= result.turnsUsed,
-                "aborted" .= result.aborted
-              ]
+            object ["to" .= gm.userId, "turns" .= result.turnsUsed, "aborted" .= reason]
           when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $ do
             queueQQReaction gm.groupId gm.canonicalId processingFaceId False
             queueQQReaction gm.groupId gm.canonicalId failureFaceId True
           pure TurnFailed
-        Just replyRaw -> handleReply outputCaps env s target streamBudget result replyRaw
-      finishAgentTurn durable (if isJust result.aborted then TurnFailed else terminal) result.turnsUsed (renderAgentFailure <$> result.aborted)
+      finishAgentTurn durable terminal result.turnsUsed (renderAgentFailure <$> agentFailure result.outcome)
+      where
+        publish = handleReply env session target streamBudget result
 
-    handleReply outputCaps env s target streamBudget result replyRaw = do
-      -- Drop the already-published prefix and clean hallucinated media markers.
-      -- readyPrefix cuts at paragraph boundaries, leaving a complete unsent tail;
-      -- valid ID-bearing send tokens remain for placeholder resolution.
-      let remaining = T.drop (T.length result.sentPrefix) replyRaw
+    handleReply env s target streamBudget result reply = do
+      -- Publish only the unsent tail, retaining valid media/reference tokens.
+      let remaining = replyRemainder reply
           stickersEff = fromMaybe env.beStickerDefault s.stickerOverride && outputCaps.canMedia
           stripped = cleanModelText remaining
       when (stripped /= T.strip remaining) $
         logAttention "reply: hallucinated model markers stripped" $
           object ["dropped_chars" .= (T.length remaining - T.length stripped)]
-      -- A non-empty prefix means this reply already ran to at least two
-      -- paragraphs, and the opt-out is never more than one — so it can
-      -- only be the tail of a real answer, never a silence marker that
-      -- happens to sit at the end.
-      case if T.null result.sentPrefix then parseSilence stripped else Nothing of
+      -- An answer that already published text cannot become a silence marker.
+      case if T.null reply.publishedPrefix then parseSilence stripped else Nothing of
         Just mFace -> do
           -- Persist silence internally so the declined question is not answered
           -- again from history. Do not publish text or arm the episode timer.
@@ -1806,7 +1866,7 @@ dispatchLLMWith start mIntent origin gm = do
               [ "to" .= (let UserId u = gm.userId in u),
                 "turns" .= result.turnsUsed,
                 "face" .= mFace,
-                "aborted" .= result.aborted
+                "aborted" .= agentFailure result.outcome
               ]
           let GroupId group = gm.groupId
               CanonicalMessageId triggerMessage = gm.canonicalId
@@ -1832,10 +1892,7 @@ dispatchLLMWith start mIntent origin gm = do
                   turnOutputLink = turnOutput,
                   monitorFireId = Nothing
                 }
-          -- On the message being declined, which is only the trigger when the
-          -- model did not say otherwise.  The two differ whenever it answers
-          -- an earlier message in the thread, and the face belongs on the one
-          -- it named.
+          -- React to the referenced question, falling back to the trigger.
           when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
             queueQQReaction
               gm.groupId
@@ -1855,14 +1912,12 @@ dispatchLLMWith start mIntent origin gm = do
             object
               [ "to" .= (let UserId u = gm.userId in u),
                 "len" .= T.length stripped,
-                "streamed" .= T.length result.sentPrefix,
+                "streamed" .= T.length reply.publishedPrefix,
                 "turns" .= result.turnsUsed,
                 "appended" .= length result.appended,
-                "aborted" .= result.aborted
+                "aborted" .= agentFailure result.outcome
               ]
-          -- Post-reply: arm Historian v2's protected quiet-tail timer.  One
-          -- settled capture later produces both chronological summaries and
-          -- scoped memory proposals from the same exact source range.
+          -- Start the quiet period for a sourced summary and memory extraction.
           for_ env.beEpisodeScheduler $ \scheduler -> liftIO (armEpisode scheduler gm.groupId)
           pure $ case publication.failure of
             Nothing -> TurnSucceeded

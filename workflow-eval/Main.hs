@@ -13,7 +13,6 @@ import Data.Either (fromRight)
 import Data.IORef
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isNothing)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -217,7 +216,10 @@ runChild cfg opts pool sources tasks jobs job records =
     let context = mkToolContext (TurnIdentity job.spec.group job.spec.source (UserId 1) (UserId 3) job.spec.principal Nothing (Just output)) capabilities {tcEffectCeiling = Just job.spec.grants}
         messages = [MsgSystem "Read every provided file using web_search(query=exact file path). It returns frozen repository source with source:path as its citation. Analyze the objective using those reads. End with one JSON value matching output_contract: claims contains concrete findings, sources contains every source:path read. Never delegate or run_code. Shape does not establish correctness; acknowledge insufficient evidence in the claims. Do not claim deployment or measured performance benefits.", MsgUser (job.spec.objective <> "\n" <> json job.spec.inputs <> "\noutput_contract: " <> json job.spec.contract)]
     result <- withCompactLogger cfg.logColor Nothing $ \logger -> runEff . runConcurrent . runLog "max-workflow-eval" logger LogAttention . runWithConnectionPool pool . runBlob "/tmp/max-workflow-eval-blobs" . runLLM runtime (\_ _ _ -> pure ()) (\call -> atomicModifyIORef' records (\xs -> (call : xs, ()))) cfg.llm . runAgentRuntime jobs conversations (AgentLimits 12) (factory jobs sources) $ agentTurn taskRuntime (AgentContext context Nothing (Just 24)) opts.profile messages silentSink
-    let answer = if isNothing result.aborted then maybe (Left "empty response") (parseJobResult job.spec) result.reply else Left "agent aborted"
+    let answer = case result.outcome of
+          Answered reply -> parseJobResult job.spec reply.body
+          Interrupted _ _ -> Left "agent interrupted"
+          Failed _ _ -> Left "agent failed"
     case answer of
       Right value -> Jobs.completeJob jobs job.run State.Succeeded value
       Left detail -> Jobs.completeJob jobs job.run State.Failed (JobResult detail Nothing)
@@ -245,7 +247,17 @@ evalGrants :: Map.Map Text Text
 evalGrants = Map.fromList [(entry.tdRef.unToolRef, toolCatalogFingerprint [entry]) | entry <- definitions]
 
 capabilities :: TurnCapabilities
-capabilities = TurnCapabilities False False False noAdvertisedCaps False evalGrants (Just evalGrants) True
+capabilities =
+  TurnCapabilities
+    { tcMultimodal = False,
+      tcStickers = False,
+      tcSkills = False,
+      tcOutput = noAdvertisedCaps,
+      tcMonitorArming = False,
+      tcCatalogGrants = evalGrants,
+      tcEffectCeiling = Just evalGrants,
+      tcBackground = True
+    }
 
 outputSchema :: Value
 outputSchema = object ["type" .= ("object" :: Text), "properties" .= object ["claims" .= strings, "sources" .= strings], "required" .= (["claims", "sources"] :: [Text]), "additionalProperties" .= False]

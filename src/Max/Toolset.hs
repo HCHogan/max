@@ -201,7 +201,25 @@ toolCountFor ::
   Bool -> -- skills visible
   Int
 toolCountFor env gid multimodal stickers skills =
-  length (filter (toolVisible Map.empty . (.tdRef.unToolRef)) (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills noAdvertisedCaps True Map.empty Nothing False)))
+  length
+    ( filter
+        (toolVisible Map.empty . (.tdRef.unToolRef))
+        ( toolDefinitionsFor
+            env
+            gid
+            ( TurnCapabilities
+                { tcMultimodal = multimodal,
+                  tcStickers = stickers,
+                  tcSkills = skills,
+                  tcOutput = noAdvertisedCaps,
+                  tcMonitorArming = True,
+                  tcCatalogGrants = Map.empty,
+                  tcEffectCeiling = Nothing,
+                  tcBackground = False
+                }
+            )
+        )
+    )
 
 -- | Product-level visibility and effect metadata live in one inventory.  The
 -- actual runners assembled above must match this filtered set exactly or

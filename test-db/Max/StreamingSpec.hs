@@ -9,7 +9,6 @@ import Data.ByteString.Char8 qualified as B8
 import Data.ByteString.Lazy qualified as LBS
 import Data.IORef
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Only (..))
@@ -103,7 +102,17 @@ spec pool = before_ (truncateAll pool) $
               AgentContext
                 ( mkToolContext
                     (TurnIdentity (GroupId 900) source (UserId 123) (UserId 9) (PrincipalId principal) Nothing (Just (turnRuntimeOutputContext turn)))
-                    (TurnCapabilities False False False qqAdvertisedCaps False Map.empty Nothing False)
+                    ( TurnCapabilities
+                        { tcMultimodal = False,
+                          tcStickers = False,
+                          tcSkills = False,
+                          tcOutput = qqAdvertisedCaps,
+                          tcMonitorArming = False,
+                          tcCatalogGrants = Map.empty,
+                          tcEffectCeiling = Nothing,
+                          tcBackground = False
+                        }
+                    )
                 )
                 Nothing
                 Nothing
@@ -129,12 +138,12 @@ spec pool = before_ (truncateAll pool) $
                   liftIO $ atomically (readTQueue received) `shouldReturn` (first, False)
                   liftIO (putMVar finishProvider ())
                   result <- wait agent
-                  liftIO $ do
-                    result.reply `shouldBe` Just (first <> tailText)
-                    result.sentPrefix `shouldBe` first
-                    result.aborted `shouldBe` Nothing
+                  liftIO $ result.outcome `shouldBe` Answered (AgentReply (first <> tailText) first)
+                  let reply = case result.outcome of
+                        Answered value -> value
+                        _ -> error "streaming fixture did not complete"
                   remainingBudget <- liftIO (readTVarIO budget)
-                  publication <- sendAndPersistReply target remainingBudget (T.drop (T.length result.sentPrefix) (fromMaybe "" result.reply))
+                  publication <- sendAndPersistReply target remainingBudget (replyRemainder reply)
                   liftIO $ do
                     publication.failure `shouldBe` Nothing
                     atomically (readTQueue received) `shouldReturn` (T.strip tailText, True)

@@ -14,8 +14,6 @@ module Max.Effects.Tools
     registryCatalog,
     runTools,
     runToolsWith,
-    runToolsWithControl,
-    runToolsWithControlDynamic,
     invokeTool,
     invokeToolWithControl,
     outcomeResult,
@@ -106,37 +104,18 @@ data Tools :: Effect where
 type instance DispatchOf Tools = Dynamic
 
 runTools :: (Concurrent :> es) => ToolRegistry es -> Eff (Tools : es) a -> Eff es a
-runTools = runToolsWith id
+runTools registry = runToolsWith (fmap (,ContinueLoop)) (pure registry)
 
--- | Install runner capabilities in the assembly layer. The agent does not
--- inherit the effects used by a runner (in particular, media production).
+-- | Install runner capabilities at assembly; business tools keep their narrow
+-- effects. The registry is refreshed only between model rounds.
 runToolsWith ::
-  forall es toolEs a.
-  (Concurrent :> es) =>
-  (forall x. Eff toolEs x -> Eff es x) ->
-  ToolRegistry toolEs ->
-  Eff (Tools : es) a ->
-  Eff es a
-runToolsWith lower = runToolsWithControl (fmap (,ContinueLoop) . lower)
-
-runToolsWithControl ::
-  forall es toolEs a.
-  (Concurrent :> es) =>
-  (forall x. Eff toolEs x -> Eff es (x, LoopControl)) ->
-  ToolRegistry toolEs ->
-  Eff (Tools : es) a ->
-  Eff es a
-runToolsWithControl lower registry = runToolsWithControlDynamic lower (pure registry)
-
--- The assembly layer advances this snapshot only between model rounds.
-runToolsWithControlDynamic ::
   forall es toolEs a.
   (Concurrent :> es) =>
   (forall x. Eff toolEs x -> Eff es (x, LoopControl)) ->
   Eff es (ToolRegistry toolEs) ->
   Eff (Tools : es) a ->
   Eff es a
-runToolsWithControlDynamic lower currentRegistry = interpret $ \_ -> \case
+runToolsWith lower currentRegistry = interpret $ \_ -> \case
   InvokeTool name args -> do
     registry <- currentRegistry
     sanitizeInvocation <$> case Map.lookup (ToolRef name) registry.registryRunners of

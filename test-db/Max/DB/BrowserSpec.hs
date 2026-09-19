@@ -165,7 +165,20 @@ withBrowser action = do
 runBrowser :: DbPool -> RunningJob -> BrowserRegistry -> Text -> IO (Either Text Value)
 runBrowser pool running registry action = do
   output <- newTurnOutputContext running.turn
-  let context = mkToolContext (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 99) running.job.spec.principal Nothing (Just output)) (TurnCapabilities True False False noAdvertisedCaps False Map.empty Nothing True)
+  let context =
+        mkToolContext
+          (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 99) running.job.spec.principal Nothing (Just output))
+          ( TurnCapabilities
+              { tcMultimodal = True,
+                tcStickers = False,
+                tcSkills = False,
+                tcOutput = noAdvertisedCaps,
+                tcMonitorArming = False,
+                tcCatalogGrants = Map.empty,
+                tcEffectCeiling = Nothing,
+                tcBackground = True
+              }
+          )
       arguments = object ["action" .= action, "url" .= ("https://example.com" :: Text), "selector" .= ("#button" :: Text)]
   withDb pool $ case [tool | tool <- browserToolsFor running.jobs context registry Nothing, tool.toolName == "browser"] of
     [tool] -> do

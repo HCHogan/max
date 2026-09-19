@@ -1,10 +1,10 @@
 -- | Reasons a model/tool loop stops without completing normally.
-module Max.Agent.Failure (AgentFailure (..), renderAgentFailure, retryableAgentFailure) where
+module Max.Agent.Failure (AgentFailure (..), renderAgentFailure) where
 
 import Data.Aeson (ToJSON (..), object, (.=))
 import Data.Text (Text)
 import Max.Http.Failure (ResponseFailure, renderResponseFailure)
-import Max.LLM.Failure (LLMFailure, renderLLMFailure, retryableLLMFailure)
+import Max.LLM.Failure (LLMFailure, renderLLMFailure)
 
 data AgentFailure
   = AgentModelFailure !LLMFailure
@@ -19,15 +19,6 @@ renderAgentFailure = \case
   AgentStreamInterrupted failure -> "LLM stream interrupted: " <> renderResponseFailure failure
   AgentContextBudget detail -> "context budget: " <> detail
   AgentRoundLimit -> "max-turns"
-
-retryableAgentFailure :: AgentFailure -> Bool
-retryableAgentFailure = \case
-  AgentModelFailure failure -> retryableLLMFailure failure
-  -- Some text or tool-call bytes already arrived. Retrying a durable task
-  -- after a partial response must not replay its externally visible prefix.
-  AgentStreamInterrupted _ -> False
-  AgentContextBudget _ -> False
-  AgentRoundLimit -> False
 
 instance ToJSON AgentFailure where
   toJSON failure = object ["kind" .= kind, "detail" .= renderAgentFailure failure]
