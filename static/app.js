@@ -269,7 +269,7 @@ function admin() {
               (h.failed_deliveries || 0) +
               (h.permanent_failure_deliveries || 0) +
               (h.unknown_deliveries || 0) +
-              (h.media_parked || 0),
+              (h.media_failed || 0),
             tone: 'bad',
           };
         case 'context':
@@ -1080,7 +1080,7 @@ function admin() {
         (h.failed_deliveries || 0) +
         (h.permanent_failure_deliveries || 0) +
         (h.unknown_deliveries || 0) +
-        (h.media_parked || 0) +
+        (h.media_failed || 0) +
         (h.failed_captures || 0);
 
       return [
@@ -1124,7 +1124,7 @@ function admin() {
           up: null,
           foot1: stuck
             ? '投递 ' + (h.failed_deliveries || 0) +
-              ' · 媒体 ' + (h.media_parked || 0) +
+              ' · 媒体 ' + (h.media_failed || 0) +
               ' · capture ' + (h.failed_captures || 0)
             : '没有卡住的工作',
           foot2: (h.warn_logs || 0) + ' 条 warn 在缓冲区',

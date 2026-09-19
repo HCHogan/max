@@ -2,28 +2,14 @@ module Max.Images
   ( ImageJob (..),
     MediaKind (..),
     enqueueImages,
-    enqueueImagesFromNode,
     downloadableImageCount,
     downloadableVideoCount,
     imageWorker,
   )
 where
 
-import Control.Applicative ((<|>))
 import Control.Exception (IOException, try)
-import Data.Aeson
-  ( FromJSON (..),
-    Result (..),
-    ToJSON (..),
-    Value (Object, String),
-    fromJSON,
-    withObject,
-    withText,
-    (.:),
-    (.:?),
-  )
-import Data.Aeson.Key qualified as K
-import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson (Result (..), fromJSON, toJSON)
 import Data.ByteString qualified as BS
 import Data.Foldable (for_, traverse_)
 import Data.Int (Int64)
@@ -34,97 +20,44 @@ import Effectful
 import Effectful.Concurrent.Async (Concurrent, forConcurrently_)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute)
-import Max.DB.FetchQueue (JobKind (JobImage), enqueueJob)
-import Max.DB.Stickers (StickerMeta, recordSticker, stickerMeta)
+import Max.DB.MediaMissing (storedMedia)
+import Max.DB.Stickers (recordSticker, stickerMeta)
+import Max.DB.Transaction (withTransaction)
 import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.Blob (Blob, blobRefSha256, blobRefStoredPath, putBlob)
 import Max.Effects.Http (Http, getQQMedia, renderDownloadError)
-import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
+import Max.FetchQueue (FetchPriority (..), FetchSignal, ImageJob (..), JobKind (JobImage), MediaKind (..), enqueueFetch, notifyFetch, runFetchLoop)
 import Max.IR qualified as IR
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Util (withTempDirectory)
-import OneBot.Segment (ImageSegInfo (..), Segment (..), VideoSegInfo (..))
 import OneBot.Types (GroupId (..))
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
 import Text.Read (readMaybe)
 
--- | What a queued download is.  Videos ride the same worker pool but
--- land in their own tables ('videos' / 'message_videos') with a
--- bigger size cap.
-data MediaKind = MediaImage | MediaVideo
-  deriving stock (Show, Eq)
-
--- | One image / mface / video waiting to be fetched and recorded.
--- 'sticker' carries the sticker metadata when the segment was a
--- 动画表情/商城表情, so the worker can register it in the sticker
--- library once the bytes (and thus the sha) are known.
-data ImageJob = ImageJob
-  { canonicalMessageId :: !Int64,
-    segIndex :: !Int,
-    url :: !Text,
-    groupId :: !(Maybe Int64),
-    sticker :: !(Maybe StickerMeta),
-    kind :: !MediaKind
-  }
-  deriving stock (Show)
-
--- The JSON below is a persisted format, not a wire detail: rows can
--- outlive a deploy, so fields are named (never positional) and
--- decoding stays tolerant of ones we no longer write.
-
-instance ToJSON MediaKind where
-  toJSON MediaImage = String "image"
-  toJSON MediaVideo = String "video"
-
-instance FromJSON MediaKind where
-  parseJSON = withText "MediaKind" $ \case
-    "image" -> pure MediaImage
-    "video" -> pure MediaVideo
-    other -> fail ("unknown media kind: " <> T.unpack other)
-
-instance ToJSON ImageJob where
-  toJSON j =
-    object
-      [ "canonical_message_id" .= j.canonicalMessageId,
-        "seg_index" .= j.segIndex,
-        "url" .= j.url,
-        "group_id" .= j.groupId,
-        "sticker" .= j.sticker,
-        "kind" .= j.kind
-      ]
-
-instance FromJSON ImageJob where
-  parseJSON = withObject "ImageJob" $ \o ->
-    ImageJob
-      <$> o .: "canonical_message_id"
-      <*> o .: "seg_index"
-      <*> o .: "url"
-      <*> o .:? "group_id"
-      <*> o .:? "sticker"
-      <*> o .: "kind"
-
 -- | Walk canonical media nodes and enqueue every directly downloadable image,
 -- sticker, or video. The dispatch path never reconstructs OneBot segments.
 enqueueImages ::
-  (WithConnection :> es, IOE :> es) =>
+  (IOE :> es) =>
+  FetchPriority ->
   FetchSignal ->
   DispatchMessage ->
   Eff es ()
-enqueueImages sig gm =
+enqueueImages priority sig gm =
   let CanonicalMessageId mid = gm.canonicalId
       GroupId gid = gm.groupId
-   in enqueueCanonicalMedia sig mid (Just gid) gm.body
+   in enqueueCanonicalMedia priority sig mid (Just gid) gm.body
 
 enqueueCanonicalMedia ::
-  (WithConnection :> es, IOE :> es) =>
+  (IOE :> es) =>
+  FetchPriority ->
   FetchSignal ->
   Int64 ->
   Maybe Int64 ->
   IR.Body 'IR.Canonical ->
   Eff es ()
-enqueueCanonicalMedia sig mid gid body = do
+enqueueCanonicalMedia priority sig mid gid body = do
   traverse_ enqueueOne (mapMaybe pick (zip [0 ..] body.nodes))
   liftIO (notifyFetch sig)
   where
@@ -147,29 +80,7 @@ enqueueCanonicalMedia sig mid gid body = do
       Error _ -> Nothing
 
     enqueueOne job =
-      enqueueJob JobImage (T.pack (show job.canonicalMessageId <> ":" <> show job.segIndex)) job
-
--- | Enqueue a forwarded node's images using its canonical ID. The compatibility
--- ID is not valid for the @message_images@ foreign key.
-enqueueImagesFromNode ::
-  (WithConnection :> es, IOE :> es) =>
-  FetchSignal ->
-  CanonicalMessageId ->
-  Maybe Int64 ->
-  [Segment] ->
-  Eff es ()
-enqueueImagesFromNode sig (CanonicalMessageId mid) gid segs = do
-  let jobs = mapMaybe pick (zip [0 ..] segs)
-      pick (i, s) = case imageUrl s of
-        Just u -> Just (ImageJob mid i u gid (stickerMeta s) MediaImage)
-        Nothing -> (\u -> ImageJob mid i u gid Nothing MediaVideo) <$> videoUrl s
-  traverse_ enqueueOne jobs
-  liftIO (notifyFetch sig)
-  where
-    -- One segment holds at most one downloadable thing, so its index
-    -- within the message is the whole natural key.
-    enqueueOne j =
-      enqueueJob JobImage (T.pack (show j.canonicalMessageId <> ":" <> show j.segIndex)) j
+      enqueueFetch sig priority JobImage (T.pack (show job.canonicalMessageId <> ":" <> show job.segIndex)) job
 
 -- | How many of a message's segments the worker will try to fetch —
 -- i.e. how many 'message_images' rows will eventually exist for it
@@ -193,35 +104,6 @@ downloadableVideoCount = length . mapMaybe videoNodeUrl . (.nodes)
         if "http" `T.isPrefixOf` T.toLower url then Just url else Nothing
       _ -> Nothing
 
-imageUrl :: Segment -> Maybe Text
-imageUrl = \case
-  SegImage info -> info.isiUrl
-  SegOther "mface" (Object o) -> lookupString "url" o
-  SegOther "image" (Object o) -> lookupString "url" o <|> lookupString "file" o
-  _ -> Nothing
-
--- | NapCat's container-local-path fallback isn't fetchable by us —
--- only real http(s) URLs enqueue.
-videoUrl :: Segment -> Maybe Text
-videoUrl = \case
-  SegVideo v | Just u <- v.vsiUrl, "http" `T.isPrefixOf` u -> Just u
-  _ -> Nothing
-
-lookupString :: Text -> KM.KeyMap Value -> Maybe Text
-lookupString k o = case KM.lookup (K.fromText k) o of
-  Just (String s) | not (T.null s) -> Just s
-  _ -> Nothing
-
--- | Lease per download.  Generous: the cap is 70 MiB over QQ's CDN,
--- and over-waiting only delays a retry, while under-waiting lets a
--- second worker start the same fetch.
-imageLeaseSeconds :: Int
-imageLeaseSeconds = 600
-
--- | Pool of @poolSize@ workers over the shared @fetch_jobs@ queue. HTTP
--- fetch, blob store, and DB writes all go through their respective
--- effects.  One job claimed at a time per worker: a download is slow
--- enough that batching would just hold leases on work nobody is doing.
 imageWorker ::
   (Log :> es, Http :> es, Blob :> es, WithConnection :> es, Concurrent :> es, IOE :> es) =>
   Int ->
@@ -231,13 +113,20 @@ imageWorker poolSize sig = localDomain "image-worker" $ do
   logInfo "image worker pool started" $ object ["workers" .= poolSize]
   forConcurrently_ [1 .. poolSize] $ \wid ->
     localData [("w", toJSON (wid :: Int))] $
-      runFetchLoop sig JobImage imageLeaseSeconds 1 processOne
+      runFetchLoop sig JobImage processOne
 
 processOne ::
   (Log :> es, Http :> es, Blob :> es, WithConnection :> es, IOE :> es) =>
   ImageJob ->
   Eff es (Either Text ())
 processOne job = do
+  existing <- storedMedia job.kind job.canonicalMessageId job.segIndex
+  case existing of
+    Just _ -> pure (Right ())
+    Nothing -> downloadMedia job
+
+downloadMedia :: (Log :> es, Http :> es, Blob :> es, WithConnection :> es, IOE :> es) => ImageJob -> Eff es (Either Text ())
+downloadMedia job = do
   logInfo "image downloading" $
     object
       [ "url" .= job.url,
@@ -255,7 +144,7 @@ processOne job = do
       let sha = blobRefSha256 ref
           rel = blobRefStoredPath ref
       case job.kind of
-        MediaImage -> do
+        MediaImage -> withTransaction $ do
           recordImage sha mime (BS.length bytes) rel job
           for_ job.sticker (recordSticker sha job.groupId)
         MediaVideo -> do
@@ -265,7 +154,7 @@ processOne job = do
           dur <- liftIO (probeVideoDuration bytes)
           -- QQ's CDN is sloppy about video content types; normalise
           -- anything that isn't video/* to mp4 (what QQ serves).
-          recordVideo sha (if "video/" `T.isPrefixOf` mime then mime else "video/mp4") (BS.length bytes) rel dur job
+          withTransaction $ recordVideo sha (if "video/" `T.isPrefixOf` mime then mime else "video/mp4") (BS.length bytes) rel dur job
       logInfo "media stored" $
         object
           [ "sha256_short" .= T.take 8 sha,

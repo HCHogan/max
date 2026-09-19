@@ -18,10 +18,6 @@ operationalChecks =
       True,
       "SELECT count(*) FROM message_deliveries WHERE status = 'outcome_unknown'"
     ),
-    ( "media_parked",
-      True,
-      "SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL"
-    ),
     ( "monitor_fire_parked",
       True,
       "SELECT count(*) FROM monitor_fires WHERE parked_at IS NOT NULL"

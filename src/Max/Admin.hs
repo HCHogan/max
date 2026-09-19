@@ -66,6 +66,7 @@ import Max.Effects.Http (Http)
 import Max.Embedding (EmbeddingRecord)
 import Max.Env (BotEnv (..))
 import Max.EpisodeStore (CaptureRun (..), CompartmentId (..), SourceRange (..), episodeHandleText)
+import Max.FetchQueue (FetchSignal, fetchCounts)
 import Max.Log (parseLogLevel, renderLogLevel)
 import Max.LogBuffer (LogBuffer, LogEntry (..), LogQuery (..), queryLogs)
 import Max.LogBuffer qualified as LogBuffer
@@ -358,7 +359,7 @@ handle env profiles logBuf r params body = case r of
     tasks <- liftIO (listTasks env.beTasks Nothing)
     sessions <- listSessions env.beDefaultModel
     accounts <- botAccounts
-    health <- healthCounters
+    health <- healthCounters env.beFetch
     warned <- liftIO (LogBuffer.countAtLeast logBuf LogAttention)
     pure . ok $
       object
@@ -713,27 +714,26 @@ botAccounts = do
 
 -- | The counters worth a badge: work that is stuck rather than work
 -- that is merely queued.  One round trip, four index-backed counts.
-healthCounters :: (WithConnection :> es, IOE :> es) => Eff es Value
-healthCounters = do
+healthCounters :: (WithConnection :> es, IOE :> es) => FetchSignal -> Eff es Value
+healthCounters signal = do
+  (pending, failedMedia) <- liftIO (fetchCounts signal)
   rows <-
     query
       "SELECT \
       \  (SELECT count(*) FROM message_deliveries WHERE status = 'failed'), \
       \  (SELECT count(*) FROM message_deliveries WHERE status = 'outcome_unknown'), \
       \  (SELECT count(*) FROM message_deliveries WHERE status = 'permanent_failure'), \
-      \  (SELECT count(*) FROM episode_capture_runs WHERE status = 'failed'), \
-      \  (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NULL), \
-      \  (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL)"
+      \  (SELECT count(*) FROM episode_capture_runs WHERE status = 'failed')"
       ()
-  pure $ case rows :: [(Int64, Int64, Int64, Int64, Int64, Int64)] of
-    [(failed, unknown, permanentFailures, captures, pending, parked)] ->
+  pure $ case rows :: [(Int64, Int64, Int64, Int64)] of
+    [(failed, unknown, permanentFailures, captures)] ->
       object
         [ "failed_deliveries" .= failed,
           "unknown_deliveries" .= unknown,
           "permanent_failure_deliveries" .= permanentFailures,
           "failed_captures" .= captures,
           "media_pending" .= pending,
-          "media_parked" .= parked
+          "media_failed" .= failedMedia
         ]
     _ -> object []
 

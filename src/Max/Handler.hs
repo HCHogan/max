@@ -136,7 +136,7 @@ import Max.Effects.PlatformQuery (PlatformQuery)
 import Max.Env (BotEnv (..))
 import Max.EpisodeScheduler (armEpisode, bumpEpisode)
 import Max.Faces (faceIdByName)
-import Max.FetchQueue (FetchSignal, notifyFetch)
+import Max.FetchQueue (FetchPriority (LiveFetch), FetchSignal, notifyFetch)
 import Max.Files (enqueueFiles)
 import Max.Forward (enqueueForwards)
 import Max.IR
@@ -415,8 +415,7 @@ handleEvents ::
     IOE :> es
   ) =>
   TQueue Event ->
-  -- | Wakes the media workers after each ingest; the jobs themselves
-  -- go to @fetch_jobs@ (see "Max.FetchQueue").
+  -- | Process-local media queues and discovery wakeup.
   FetchSignal ->
   Maybe IntentState -> -- proactive-trigger buffers ('Nothing' = feature off)
   TVar ClientSlot ->
@@ -863,9 +862,9 @@ ingressWorker fetchSig mIntent = localDomain "dispatch" $ forever $ do
         (object ["canonical_message_id" .= canonical, "error" .= show err])
   where
     dispatch message = do
-      enqueueImages fetchSig message
-      enqueueForwards fetchSig message
-      enqueueFiles fetchSig message
+      enqueueImages LiveFetch fetchSig message
+      enqueueForwards LiveFetch fetchSig message
+      enqueueFiles LiveFetch fetchSig message
       onDispatchMessage mIntent message
 
 onDispatchMessage ::

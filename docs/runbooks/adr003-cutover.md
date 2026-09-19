@@ -112,14 +112,10 @@ deployment automation that could restart or replace `max` during the window.
 2. Gracefully stop `max` (`systemctl stop max` on the NixOS deployment). Wait
    for the shutdown/drain log to finish. Confirm there is no `max` process and
    no other role writing the database.
-3. Check the durable work state. Pending/failed dispatches, deliveries, or
-   unparked `fetch_jobs` mean the old workers did not drain; restart the old
-   release with ingress still closed, let it drain, stop it, and check again.
-   An expired `sending` delivery is different: its worker disappeared after
-   claiming a potentially non-idempotent send, so retrying could duplicate it.
-   The final gate atomically classifies such abandoned leases as
-   `outcome_unknown` and reports the count; it never resends them. A live
-   (unexpired) `sending` lease still blocks the gate.
+3. Inspect outstanding work before the upgrade. Current releases use local
+   ingress, delivery and media queues. Migrations retire old execution rows;
+   interrupted sends remain uncertain and must not be automatically replayed.
+   Media sources remain in history and missing derived content is rediscovered.
 4. Snapshot the database and verify it by restoring to a newly created,
    isolated database. Compare schema migration, message, relation, delivery,
    and event counts with production. Drop only that explicitly named
@@ -194,10 +190,10 @@ SELECT endpoint_id, count(*)
 FROM message_deliveries
 WHERE status IN ('failed', 'outcome_unknown', 'permanent_failure', 'suppressed')
 GROUP BY endpoint_id ORDER BY endpoint_id;
-SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL;
 ```
 
-Investigate growing failed queues, every permanent failure, parked media,
+Check the admin media counters and media failure logs. Investigate delivery
+failures, every permanent failure,
 unexpected suppressions, or non-monotone per-endpoint native events before
 ending the observation window. `permanent_failure` is deterministic poison;
 `suppressed` is deliberate capability/policy behavior. Migration 086 cannot

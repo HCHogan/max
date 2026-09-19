@@ -61,7 +61,7 @@ run :: Command -> FilePath -> DbPool -> IO ()
 run command migrationsDir pool = case command of
   Migrate -> migrate pool migrationsDir
   Reproject -> withConn pool reproject
-  Verify -> withConn pool (verify False)
+  Verify -> withConn pool verify
   Health -> withConn pool operationalHealth
   MemoryReviewQueue -> withConn pool $ \connection -> do
     rows <- query_ connection "SELECT jsonb_build_object('capture_run_id',capture_run_id,'proposal_index',proposal_index,'conversation_id',conversation_id,'outcome_reason',outcome_reason,'review_state',review_state) FROM episode_memory_review_queue ORDER BY capture_run_id,proposal_index" :: IO [Only Value]
@@ -85,34 +85,10 @@ run command migrationsDir pool = case command of
       Memory.MemoryMutationApplied item -> putStrLn ("memory subject repaired: id=" <> show item.memId <> " version=" <> show item.memVersion)
       Memory.MemoryMutationRejected -> die "subject repair rejected: identity/evidence/scope/version/duplicate guard did not match"
   Gate -> do
-    withConn pool preflightDrained
     migrate pool migrationsDir
     withConn pool $ \connection -> do
       reproject connection
-      verify True connection
-
--- | Check the old writer queues before crossing the schema boundary.
-preflightDrained :: Connection -> IO ()
-preflightDrained connection = do
-  problems <- fmap concat . forM preflightChecks $ \(table, label, sql) -> do
-    exists <- tableExists connection table
-    if not exists
-      then pure []
-      else do
-        outstanding <- scalarCount connection sql
-        pure [label <> ": " <> show outstanding | outstanding /= 0]
-  unless (null problems) $ do
-    putStrLn "ADR 003 pre-migration drain check FAILED:"
-    mapM_ (putStrLn . ("  - " <>)) problems
-    die "drain the old workers before applying ADR 003 migrations"
-  putStrLn "preflight: old writer queues are drained"
-
-tableExists :: Connection -> Text -> IO Bool
-tableExists connection table = do
-  rows <- query connection "SELECT to_regclass(?) IS NOT NULL" (Only table)
-  case rows of
-    [Only exists] -> pure exists
-    _ -> die "release-gate table discovery returned an unexpected shape"
+      verify connection
 
 migrate :: DbPool -> FilePath -> IO ()
 migrate pool migrationsDir = do
@@ -148,36 +124,22 @@ reproject connection = withTransaction connection $ do
         <> show changed
     )
 
-verify :: Bool -> Connection -> IO ()
-verify requireDrained connection = do
+verify :: Connection -> IO ()
+verify connection = do
   schemaProblems <- fmap concat . forM schemaChecks $ \(label, sql) -> do
     violations <- scalarCount connection sql
     pure [label <> ": " <> show violations | violations /= 0]
   projectionProblems <- verifyProjections connection
   counts <- ledgerCounts connection
   putStrLn ("ledger: " <> counts)
-  drainProblems <-
-    if requireDrained
-      then fmap concat . forM drainChecks $ \(label, sql) -> do
-        outstanding <- scalarCount connection sql
-        pure [label <> ": " <> show outstanding | outstanding /= 0]
-      else pure []
-  let problems = schemaProblems <> projectionProblems <> drainProblems
+  let problems = schemaProblems <> projectionProblems
   unless (null problems) $ do
     putStrLn "ADR 003 release gate FAILED:"
     mapM_ (putStrLn . ("  - " <>)) (take 50 problems)
     when (length problems > 50) $ putStrLn ("  - ... and " <> show (length problems - 50) <> " more")
-    die
-      ( if requireDrained
-          then "database is not safe to start with the final ADR 003 binary"
-          else "database integrity verification failed"
-      )
+    die "database integrity verification failed"
   operationalHealth connection
-  putStrLn
-    ( if requireDrained
-        then "ADR 003 release gate PASSED (schema, IR, projections, ledger, and queues)"
-        else "ADR 003 verification PASSED (schema, IR, projections, and ledger)"
-    )
+  putStrLn "verification PASSED (schema, IR, projections, and ledger)"
 
 -- | Fast, read-only operational gate.  Retryable queues are reported because
 -- they are useful during an incident, but only states that have lost automatic
@@ -337,21 +299,6 @@ schemaChecks =
       \WHERE table_schema = current_schema() AND table_name = 'messages' \
       \  AND column_name IN ('forwarded_in_message_id', 'forward_position', \
       \                      'original_message_id', 'original_sent_at')"
-    )
-  ]
-
-drainChecks :: [(String, Query)]
-drainChecks =
-  [ ( "unprocessed durable media jobs",
-      "SELECT count(*) FROM fetch_jobs WHERE parked_at IS NULL"
-    )
-  ]
-
-preflightChecks :: [(Text, String, Query)]
-preflightChecks =
-  [ ( "fetch_jobs",
-      "unprocessed durable media jobs before migration",
-      "SELECT count(*) FROM fetch_jobs WHERE parked_at IS NULL"
     )
   ]
 

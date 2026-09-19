@@ -179,9 +179,7 @@ workSummaryValue conversation = do
       \ 'delivery_suppressed', (SELECT count(*) FROM message_deliveries delivery \
       \                         JOIN messages message USING (canonical_message_id) \
       \                         WHERE message.conversation_id = ? \
-      \                           AND delivery.status = 'suppressed'), \
-      \ 'media_pending_global', (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NULL), \
-      \ 'media_parked_global', (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL))"
+      \                           AND delivery.status = 'suppressed'))"
       (conversation, conversation, conversation, conversation)
   case rows :: [Only Value] of
     [Only summary] -> pure summary

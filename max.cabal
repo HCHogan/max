@@ -36,6 +36,7 @@ extra-source-files:
     test-db/fixtures/diagnostic-results-upgrade.sql
     test-db/fixtures/local-ingress-upgrade.sql
     test-db/fixtures/local-delivery-upgrade.sql
+    test-db/fixtures/local-media-upgrade.sql
     test-db/fixtures/browser-upgrade-after.sql
     assets/codesnap/*.tmTheme
     browser-image/*.patch
@@ -180,7 +181,7 @@ library
         Max.DB.Connection
         Max.DB.Codec
         Max.DB.ConversationCursor
-        Max.DB.FetchQueue
+        Max.DB.MediaMissing
         Max.DB.Files
         Max.DB.Health
         Max.DB.Projection
@@ -249,6 +250,7 @@ library
         Max.Env
         Max.Faces
         Max.FetchQueue
+        Max.Media
         Max.Files
         Max.Forward
         Max.Handler
@@ -722,6 +724,7 @@ test-suite max-test
         Max.Turn.TypesSpec
         Max.UtilSpec
         Max.WorkerSpec
+        Max.FetchQueueSpec
         Max.Http.JsonSpec
     build-depends:
         , QuickCheck      >= 2.14 && < 2.19
@@ -772,7 +775,6 @@ test-suite max-test-db
         Max.DB.JobSpec
         Max.DB.AgentTurnSpec
         Max.DB.FilesSpec
-        Max.DB.FetchQueueSpec
         Max.DB.SessionSpec
         Max.DB.TransactionSpec
         Max.ContextMaterializationSpec
@@ -785,6 +787,7 @@ test-suite max-test-db
         Max.DB.HistorySpec
         Max.DB.ProjectionSpec
         Max.DB.MediaSpec
+        Max.DB.MediaMissingSpec
         Max.MemoryStoreSpec
         Max.MemoryCapabilitiesSpec
         Max.MemoryExpirySpec

@@ -153,7 +153,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.AdminTimeline" $ do
     rendered `shouldSatisfy` T.isInfixOf "capabilities"
     rendered `shouldSatisfy` T.isInfixOf "work_summary"
     rendered `shouldSatisfy` T.isInfixOf "delivery_permanent_failure"
-    rendered `shouldSatisfy` T.isInfixOf "media_parked_global"
 
 baseEnvelope :: EndpointId -> UTCTime -> Text -> InboundEnvelope
 baseEnvelope endpoint now native =

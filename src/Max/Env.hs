@@ -14,6 +14,7 @@ import Max.CliProxy (CliProxyConfig)
 import Max.Conversation (Conversations)
 import Max.Embedding.Maintenance (EmbeddingLock)
 import Max.EpisodeScheduler (EpisodeScheduler)
+import Max.FetchQueue (FetchSignal)
 import Max.Intent.Types (IntentConfig)
 import Max.Jobs (Jobs)
 import Max.Platform.Delivery.Queue (DeliveryQueue)
@@ -54,6 +55,7 @@ data BotEnv = BotEnv
     beConversations :: !Conversations,
     beJobs :: !Jobs,
     beIngress :: !Ingress,
+    beFetch :: !FetchSignal,
     beDeliveries :: !DeliveryQueue,
     -- | Graceful-shutdown gate: 'Max.Handler.dispatchLLM' claims a slot
     -- here so SIGTERM can wait out the dispatches already running, and

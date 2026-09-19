@@ -92,7 +92,9 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
       conservative handling of uncertain sends.
 - [x] Replace embedding maintenance leases with a process-local lock and
       missing-data scans; keep source/version-conditional writes.
-- [ ] Replace media/Historian maintenance leases with local scheduling and
+- [x] Replace media leases and serialized jobs with bounded local queues and
+      missing-data scans; preserve canonical attachments and forward expansion.
+- [ ] Replace Historian maintenance leases with local scheduling and
       missing-data scans; preserve short transactional publication.
 - [x] Delete notification LLM review pipelines and operational debt review.
 - [ ] Separate connection retries, individual task failures and fatal core errors.
@@ -360,3 +362,20 @@ maintained implementation record.
   dispatch/delivery drain gates no longer block the stopped-process migration.
   Effective src/app Haskell is 46,195 lines; core Haskell is 33,065. Media,
   Historian, context and final operational acceptance remain.
+
+- Media downloads and forward expansion now use typed, bounded process queues.
+  Removed SQL claims, lease renewal, serialized job codecs and obsolete queue
+  drain gates. Live work takes priority over historical discovery; five local
+  attempts and bounded deduplication keep failed sources from spinning. Startup
+  and periodic scans derive missing work from canonical history and revisit late
+  commits. Image/video/file metadata and completed forward expansions remain
+  persistent; empty and partial forward responses stay distinguishable.
+  Forwarded images now use canonical node positions, and image/sticker writes
+  commit together. Admin media counters describe the current process.
+  Migration 120 archives old job diagnostics without replaying their payloads.
+  Retired ten lease/batch/restart tests, added four queue and five media cases;
+  attachment isolation, HTTP downloads and empty-forward behavior are covered.
+  All targets build; 1,058 unit and 260 DB examples pass, as do upgrade and
+  capability checks. Effective src/app Haskell is 46,080 lines; core is 33,080
+  (shared media types moved into the core queue module). Historian, context and
+  final operational acceptance remain. No production deployment is claimed.

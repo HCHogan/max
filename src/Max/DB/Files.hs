@@ -6,6 +6,7 @@ module Max.DB.Files
   ( FileRecord (..),
     insertSeen,
     markStored,
+    fileStored,
     fetchByFileIdInScope,
     fetchFilesForMessageInScope,
     listRecentInGroup,
@@ -15,6 +16,7 @@ where
 import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
+import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.Blob.Reference (BlobRef, blobRefSha256, blobRefStoredPath)
@@ -111,3 +113,8 @@ listRecentInGroup gid lim = do
     \  ORDER BY received_at DESC \
     \  LIMIT ?"
     (gid, lim)
+
+fileStored :: (WithConnection :> es, IOE :> es) => Text -> Eff es Bool
+fileStored fileId = do
+  rows <- query "SELECT 1 FROM group_files WHERE file_id=? AND sha256 IS NOT NULL" (Only fileId)
+  pure (not (null (rows :: [Only Int])))

@@ -436,16 +436,16 @@ systemd.services.max.environment.MAX_LOG_COLOR = "always";
 
 `!debug on` mirrors tool calls *and their results* into the chat itself.
 
-Media that never arrived: a pending fetch is a row now, so ask the database
-rather than grepping logs.
+Media fetches use bounded process-local queues. The admin overview exposes
+`media_pending` and `media_failed` for this process; `media fetch failed` logs
+include the kind, source key, attempt and error. Each read gets at most five
+attempts per admission. Missing-data scans revisit canonical history, including
+late commits, with a bounded cache suppressing recently processed keys.
 
-```sql
-SELECT kind, dedupe_key, attempts, parked_at, last_error FROM fetch_jobs;
-```
-
-Rows still present are in flight, waiting, or — with `parked_at` set — gave up
-after `Max.DB.FetchQueue.maxAttempts` tries. Nothing there means the download
-succeeded and the row was dropped.
+Inspect `message_images`, `message_videos`, `group_files` and
+`forward_expansions` for completed results. A forward completion with zero
+children is valid. Historical `fetch_jobs` are archived diagnostics and are
+never used for new execution.
 
 ## Embedded Wasm execution
 

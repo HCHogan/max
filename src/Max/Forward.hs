@@ -7,7 +7,7 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Monad (unless)
-import Data.Aeson (FromJSON (..), ToJSON (..), Value (Array, Object, String))
+import Data.Aeson (ToJSON (..), Value (Array, Object, String))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Object, Parser, parseEither, withObject, (.:), (.:?))
@@ -20,16 +20,15 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
-import Effectful.Concurrent (Concurrent)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.FetchQueue (JobKind (JobForward), enqueueJob)
+import Max.DB.MediaMissing (forwardExpanded, recordForwardExpansion)
 import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.PlatformQuery (PlatformQuery, queryForward)
-import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
+import Max.FetchQueue (FetchPriority (..), FetchSignal, ForwardJob (..), JobKind (JobForward), enqueueFetch, notifyFetch, runFetchLoop)
 import Max.IR (Body (..), ForwardRef (..), Node (NForward))
 import Max.IR.Digest (digest)
-import Max.Images (enqueueImagesFromNode)
+import Max.Images (enqueueImages)
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (Backfill))
 import Max.Platform.Failure (renderPlatformFailure)
 import Max.Platform.QQ (ensureQQEndpointFor, qqIngestBody)
@@ -41,6 +40,7 @@ import Max.Platform.Store
     compatibilityMessageIdForCanonical,
     defaultIngestOptions,
     ingestEnvelope,
+    loadDispatchMessage,
     nativeEventIdForCanonical,
   )
 import Max.Platform.Types
@@ -59,43 +59,16 @@ import OneBot.Types (GroupId (..), UserId (..), parseIntId)
 maxDepth :: Int
 maxDepth = 6
 
-data ForwardJob = ForwardJob
-  { containerMessageId :: !Int64,
-    forwardId :: !Text,
-    groupId :: !Int64,
-    selfId :: !Int64
-  }
-  deriving stock (Show)
-
--- Persisted in @fetch_jobs@, so this is a stored format rather than a
--- wire one: named fields, decodable by a binary that no longer writes
--- them the same way.
-instance ToJSON ForwardJob where
-  toJSON j =
-    object
-      [ "container_message_id" .= j.containerMessageId,
-        "forward_id" .= j.forwardId,
-        "group_id" .= j.groupId,
-        "self_id" .= j.selfId
-      ]
-
-instance FromJSON ForwardJob where
-  parseJSON = withObject "ForwardJob" $ \o ->
-    ForwardJob
-      <$> o .: "container_message_id"
-      <*> o .: "forward_id"
-      <*> o .: "group_id"
-      <*> o .: "self_id"
-
 -- | Enqueue every top-level canonical forward chain.
 -- Nested forwards arrive inlined inside the @get_forward_msg@ response,
 -- so we never enqueue more jobs from inside the worker.
 enqueueForwards ::
-  (WithConnection :> es, IOE :> es) =>
+  (IOE :> es) =>
+  FetchPriority ->
   FetchSignal ->
   DispatchMessage ->
   Eff es ()
-enqueueForwards sig gm = do
+enqueueForwards priority sig gm = do
   let CanonicalMessageId mid = gm.canonicalId
       GroupId gid = gm.groupId
       UserId sid = gm.selfId
@@ -109,20 +82,15 @@ enqueueForwards sig gm = do
     -- The same chain can be forwarded into several messages, so the
     -- container is part of the key: each lands its own set of nodes.
     enqueueOne j =
-      enqueueJob JobForward (tshow j.containerMessageId <> ":" <> j.forwardId) j
-
--- | One expansion is a single RPC plus a burst of inserts, so a batch
--- of a few keeps the round-trips down without holding leases long.
-forwardLeaseSeconds :: Int
-forwardLeaseSeconds = 300
+      enqueueFetch sig priority JobForward (tshow j.containerMessageId <> ":" <> j.forwardId) j
 
 forwardWorker ::
-  (Concurrent :> es, Log :> es, PlatformQuery :> es, WithConnection :> es, IOE :> es) =>
+  (Log :> es, PlatformQuery :> es, WithConnection :> es, IOE :> es) =>
   FetchSignal ->
   Eff es ()
 forwardWorker sig = localDomain "forward-worker" $ do
   logInfo_ "forward worker started"
-  runFetchLoop sig JobForward forwardLeaseSeconds 4 (processJob sig)
+  runFetchLoop sig JobForward (processJob sig)
 
 processJob ::
   (Log :> es, PlatformQuery :> es, WithConnection :> es, IOE :> es) =>
@@ -130,6 +98,11 @@ processJob ::
   ForwardJob ->
   Eff es (Either Text ())
 processJob sig job = do
+  done <- forwardExpanded job
+  if done then pure (Right ()) else expandForward sig job
+
+expandForward :: (Log :> es, PlatformQuery :> es, WithConnection :> es, IOE :> es) => FetchSignal -> ForwardJob -> Eff es (Either Text ())
+expandForward sig job = do
   logInfo "forward expanding" $
     object
       [ "forward_id" .= job.forwardId,
@@ -146,7 +119,9 @@ processJob sig job = do
         Right nodes -> do
           endpoint <- ensureQQEndpointFor (UserId job.selfId) (GroupId job.groupId)
           received <- liftIO getCurrentTime
-          Right <$> ingestNodes sig endpoint received job nodes
+          ingestNodes sig endpoint received job nodes
+          recordForwardExpansion job (length nodes)
+          pure (Right ())
 
 ingestNodes ::
   (Log :> es, WithConnection :> es, IOE :> es) =>
@@ -157,13 +132,7 @@ ingestNodes ::
   [ForwardNode] ->
   Eff es ()
 ingestNodes sig endpoint received job nodes = do
-  -- A @contained_in@ relation names its parent /natively/, and the job carries
-  -- the container only as a canonical id.  Passing that canonical id straight
-  -- through spelled a native event id that matches nothing, so every
-  -- depth-1 relation stayed unresolved and the container read as an
-  -- unexpanded forward however many children had landed under it.  Deeper
-  -- levels were never affected: they parent onto 'childNative', which is
-  -- exactly the id their node was ingested under.
+  -- Relations use native IDs; the queue identifies the canonical container.
   NativeEventId containerNative <- nativeEventIdForCanonical (CanonicalMessageId job.containerMessageId)
   for_ (zip [0 ..] nodes) $ \(i, node) ->
     ingestNode sig endpoint received job containerNative 1 [i] i node
@@ -224,12 +193,9 @@ ingestNode sig endpoint received job parentNative depth path pos node = do
   ingestResult <- ingestEnvelope options envelope
   let canonical = canonicalFromResult ingestResult
   compatibilityId <- compatibilityMessageIdForCanonical canonical
-  -- Canonical, not the compatibility projection sitting right next to it:
-  -- 'message_images' keys on @messages.canonical_message_id@ and has the
-  -- foreign key to prove it.  A forward node's compatibility id is a negative
-  -- synthetic one, so handing that over failed the constraint on every single
-  -- picture inside a forward, retried, and parked the job.
-  enqueueImagesFromNode sig canonical (Just job.groupId) node.segments
+  -- Use canonical node positions for media attachment keys.
+  message <- loadDispatchMessage canonical
+  for_ message (enqueueImages LiveFetch sig)
   let inlineChildren = concatMap extractInlineNodes node.segments
   case ingestResult of
     Ingested fresh ->

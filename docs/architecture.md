@@ -63,7 +63,7 @@ src/Max/HttpRuntime process-wide http-client managers, bounded response scopes,
 src/Max/DB/        postgresql-simple queries: Connection, pinned Transaction,
                    Migrations, Message, Forward,
                    History, ConversationCursor, Session, Files, Memory, Permissions,
-                   PlatformIds, Reminder, Stickers, FetchQueue (media work list),
+                   PlatformIds, Reminder, Stickers, MediaMissing (derived media),
                    Calls, Usage
 src/Max/Command/   !cmd DSL: Types, Parser (megaparsec), Dispatcher, Help (the
                    !help text — a leaf module so the self-knowledge skill can
@@ -93,7 +93,7 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    MemoryExtract (nightly memory maintenance),
                    Embedding + Embedder
                    (vector worker), Forward/Image/File workers, FetchQueue (their
-                   shared claim loop), MediaCaption + Stickers (caption workers),
+                   typed local queues), Media (missing-source scan), MediaCaption + Stickers (caption workers),
                    Conversation (local queue), Turn + Task, Monitor
                    (typed trigger scheduler), Reminder, Reply (planning),
                    ReplySend (planning made real:
@@ -117,7 +117,7 @@ app/Main.hs        wires effects + workers + server
                                            │
        ┌──────────────────────── handleEvents ───────────────────────────┐
        │ read one committed message from the process queue              │
-       │   1. enqueueImages / enqueueForwards / enqueueFiles → fetch_jobs│
+       │   1. enqueueImages / enqueueForwards / enqueueFiles → local queues│
        │   2. classify (@bot / reply-to-bot / private / !cmd) →          │
        │        none / ping / !cmd / agent-turn                          │
        └──────┬──────────┬──────────┬──────────────┬─────────────────────┘
@@ -304,13 +304,13 @@ slot for the final tail, and only acknowledged fragments advance `sentPrefix`.
 
 ## Durability
 
-What a restart keeps and what it drops. Postgres is authoritative throughout;
-the in-memory handles are read caches and wakeup bells, never the record.
+Postgres retains user data and completed results. Execution queues and running
+Jobs belong to the process; a restart does not resume them.
 
 | Survives a restart | How |
 |---|---|
 | Messages, sessions, memories, stickers, permissions, skills | written through on every mutation; Session persists revision CAS before publishing its TVar (builtin skills re-seed from the binary) |
-| Pending image / video / forward / file fetches | `fetch_jobs` rows claimed under a lease — a dead process's lease expires and the next claim picks the job back up |
+| Media sources and completed attachments | Canonical messages retain URLs/native references; startup and periodic scans discover missing images/videos/files/forward content. Typed bounded queues execute reads locally, prioritizing live ingress. `forward_expansions` distinguishes an empty completed expansion from partial import; old `fetch_jobs` are archived diagnostics |
 | Pending historian capture | leased `episode_capture_runs` rows plus the conversation-scoped historian cursor; boot drains jobs, then re-arms any conversation with newer raw rows |
 | Tiered prompt prefix | current `context_materializations` revision plus append-only versions; active compartment ids/versions, tiers, end cursor, policy, fingerprint, and cache-bust reason are durable |
 | Episode expansion handles | random UUID on the immutable compartment; scoped lookup recovers the exact raw ingest range, including after supersession |
@@ -323,7 +323,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 
 | Lost on restart | Why |
 |---|---|
-| Exact in-memory instruction pointer/provider call of an in-flight agent turn | `Max.Tasks` and the provider call stack are process-local. SIGTERM drains first; after a crash Max resumes at turn granularity with a fresh model round over the persisted hole view, not by replaying the interrupted model call or tool instruction |
+| In-flight agent turns and tool calls | Local tasks and provider calls stop with the process. Completed diagnostics remain available; interrupted model rounds and uncertain external effects are not automatically replayed |
 | Triggers arriving mid-drain | persisted to `messages` and logged, but not dispatched |
 | QQ events unavailable from NapCat's bounded history actions | Reconnect atomically queues a recovery barrier before live frames, then pulls latest and last-seen-sequence pages for known enabled group/friend endpoints. Rows older than the reconnect second enter as non-dispatching, non-mirroring `Backfill` and native event identity removes overlap. `qq_backfill_runs` records counts and stop reasons. NapCat still exposes no durable cursor or offline-complete notices, so reactions, recalls, malformed rows and messages outside the bounded windows remain possible source gaps |
 | `!use` admin targets | deliberate — just `!use` again |

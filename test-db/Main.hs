@@ -26,10 +26,10 @@ import Max.DB.BrowserSpec qualified as BrowserSpec
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.ConnectionSpec qualified as ConnectionSpec
 import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
-import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.FilesSpec qualified as FilesSpec
 import Max.DB.HistorySpec qualified as HistorySpec
 import Max.DB.JobSpec qualified as JobSpec
+import Max.DB.MediaMissingSpec qualified as MediaMissingSpec
 import Max.DB.MediaSpec qualified as MediaSpec
 import Max.DB.Migrations (runMigrations)
 import Max.DB.MonitorJobsSpec qualified as MonitorJobsSpec
@@ -99,7 +99,7 @@ main = do
         MemoryStoreSpec.spec pool
         MemoryExpirySpec.spec pool
         MediaSpec.spec pool
-        FetchQueueSpec.spec pool
+        MediaMissingSpec.spec pool
         MonitorSpec.spec pool
         MonitorJobsSpec.spec pool
         QQBackfillSpec.spec pool

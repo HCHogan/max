@@ -62,6 +62,7 @@ import Max.Jobs (newJobs)
 import Max.Log (withCompactLogger)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
 import Max.Matrix (matrixDeliveryTransport, matrixWorker)
+import Max.Media (mediaDiscoveryWorker)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.Memory.Expiry (expiryWorker)
 import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
@@ -120,9 +121,6 @@ main = do
         logBuf <- newLogBuffer logBufferLines
         withCompactLogger cfg.logColor (Just (pushLog logBuf)) $ \logger -> do
           eventQ <- newTQueueIO
-          -- One bell for all three media workers: the jobs live in
-          -- @fetch_jobs@ and each worker claims only its own kind, so a
-          -- shared wakeup costs the other two one indexed query.
           fetchSig <- newFetchSignal
           sessions <- newSessionRegistry
           skillReg <- newSkillRegistry
@@ -165,6 +163,7 @@ main = do
                     beTasks = tasks,
                     beConversations = conversations,
                     beIngress = ingress,
+                    beFetch = fetchSig,
                     beDeliveries = deliveries,
                     beJobs = jobs,
                     beShutdown = shutdown,
@@ -320,6 +319,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
               "monitor-scheduler"
               RequiredWorker
               (monitorWorker cfg.timezone (ownerFor "monitors") dispatchMonitorFire),
+            worker "media-discovery" RequiredWorker (mediaDiscoveryWorker fetchSig),
             worker "canonical-dispatch" RequiredWorker (ingressWorker fetchSig (intentState <$ env.beIntent)),
             worker "jobs" RequiredWorker jobsWorker,
             worker "browser-workspaces" RestartableWorker (forever (browserMaintenance env.beBrowsers >> threadDelay 15_000_000)),
