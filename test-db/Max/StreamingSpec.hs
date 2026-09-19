@@ -12,14 +12,17 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Concurrent.Async (link, runConcurrent, wait, withAsync)
 import Effectful.Log (LogLevel (LogAttention), runLog)
+import Effectful.PostgreSQL (query)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
-import Helpers (insertRawMessage, testTime, truncateAll)
+import Helpers (insertRawMessage, testTime, truncateAll, withDb)
 import Max.Agent.Execution
 import Max.AgentOutput (AgentOutputContext (..), handleAgentEvent)
 import Max.Config (AppConfig (..), loadConfig)
+import Max.DB.AgentTurn (startAgentTurn)
 import Max.DB.Connection (DbPool)
 import Max.Effects.Agent
 import Max.Effects.Blob (runBlob)
@@ -63,7 +66,9 @@ spec pool = before_ (truncateAll pool) $
         tasks <- newTaskRegistry
         jobs <- newJobs tasks
         deliveries <- newDeliveryQueue (DeliveryId 0)
-        turn <- beginTurnRuntime tasks (GroupId 900) (UserId 123) (Just source)
+        [Only principal] <- withDb pool $ query "SELECT author_principal_id FROM messages WHERE canonical_message_id=?" (Only source.unCanonicalMessageId)
+        ref <- withDb pool (startAgentTurn (GroupId 900) source (PrincipalId principal))
+        turn <- beginTurnRuntime tasks ref (GroupId 900) (UserId 123) (Just source)
         budget <- newTVarIO freshBudget
         let first = "This is a deliberately long first sentence sent while the model is still generating."
             tailText = " The final sentence."
@@ -92,12 +97,12 @@ spec pool = before_ (truncateAll pool) $
                 atomically (writeTQueue received (T.strip (renderPlainText segments), ended))
                 pure (Right (Response "ok" 0 (object ["message_id" .= (1000 + index)]) ""))
               other -> expectationFailure ("unexpected QQ action: " <> show other) >> pure (Left "unexpected action")
-            target = ReplyTarget (GroupId 900) [] Nothing False False False False False Nothing
+            target = ReplyTarget (GroupId 900) [] Nothing False False False False False (Just (turnRuntimeOutputContext turn))
             output = AgentOutputContext target source False budget
             agentContext =
               AgentContext
                 ( mkToolContext
-                    (TurnIdentity (GroupId 900) source (UserId 123) (UserId 9) (PrincipalId 1) Nothing Nothing)
+                    (TurnIdentity (GroupId 900) source (UserId 123) (UserId 9) (PrincipalId principal) Nothing (Just (turnRuntimeOutputContext turn)))
                     (TurnCapabilities False False False qqAdvertisedCaps False Map.empty Nothing False)
                 )
                 Nothing

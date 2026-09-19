@@ -91,18 +91,16 @@ executionHooks admission journal group turn =
   ExecutionHooks
     { ehCheck = do
         liftIO (checkTurnCancellation turn)
-        for_ (turnRuntimeAgentTurn turn) $ \durable -> do
-          active <- admission.eaCheck durable
-          unless active (throwIO TaskCancelled),
-      ehStart = \step start -> case turnRuntimeAgentTurn turn of
-        Nothing -> pure Nothing
-        Just ref -> do
-          prepared <- journal.ejPrepare group start
-          allowed <- admission.eaAdmitTool ref step
-          unless allowed (throwIO TaskCancelled)
-          ordinal <- liftIO (nextExecutionOrdinal turn)
-          now <- liftIO getCurrentTime
-          pure (Just (JournalExecution ref ordinal prepared now)),
+        active <- admission.eaCheck (turnRuntimeAgentTurn turn)
+        unless active (throwIO TaskCancelled),
+      ehStart = \step start -> do
+        let ref = turnRuntimeAgentTurn turn
+        prepared <- journal.ejPrepare group start
+        allowed <- admission.eaAdmitTool ref step
+        unless allowed (throwIO TaskCancelled)
+        ordinal <- liftIO (nextExecutionOrdinal turn)
+        now <- liftIO getCurrentTime
+        pure (Just (JournalExecution ref ordinal prepared now)),
       ehFinish = journal.ejFinish,
       ehWorkflow = Nothing
     }

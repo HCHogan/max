@@ -462,3 +462,18 @@ maintained implementation record.
   now emits fixture request bytes and production token estimates with `--stats`.
   See `docs/code-size.md` for the current source/SQL/prompt checkpoint and limits.
   Final removal/readability review and operational acceptance remain pending.
+
+- TurnRuntime now requires one recorded identity, shared by output allocation,
+  admission and cancellation. Removed the identity-free test constructor,
+  duplicated identity fields and unreachable missing-handle branches. Agent
+  carries its current working-context projection forward without a restart
+  restoration path. Feedback prompts now describe the live conversation inbox.
+  Consolidated four duplicate or retired-protocol test cases while retaining
+  ordering, provenance, cancellation and finish-race coverage. The SSE-to-QQ
+  fixture now also uses a real recorded turn and the publication authority gate.
+  All targets build; 1,056 unit and 256 DB examples pass, along with populated
+  upgrade, capability, HLint and offline context checks (9 Historian, 7 recall).
+  Architecture, feature and development docs no longer advertise retired
+  dispatch leases, durable inboxes or tests. The measured source/SQL/prompt
+  checkpoint is updated in `docs/code-size.md`. Final lifecycle readability
+  review, live-model comparison and operational acceptance remain pending.

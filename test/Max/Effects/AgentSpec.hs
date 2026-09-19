@@ -161,7 +161,7 @@ spec = describe "Agent full loop" $ do
     leaves <- newIORef (0 :: Int)
     _inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
     let executionContext =
           dispatchContext
             { acTools =
@@ -232,7 +232,7 @@ spec = describe "Agent full loop" $ do
     leaves <- newIORef (0 :: Int)
     _inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
     let searchDefinition = echoDefinition {tdRef = ToolRef "web_search"}
         searchSchema = object ["type" .= ("object" :: Text)]
         searchTool = legacyTool "web_search" "search" searchSchema $ \_ -> do
@@ -294,7 +294,7 @@ spec = describe "Agent full loop" $ do
     effects <- newIORef (0 :: Int)
     _inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
     let executionContext =
           dispatchContext
             { acTools =
@@ -347,7 +347,7 @@ spec = describe "Agent full loop" $ do
       calls <- newIORef (0 :: Int)
       _inputs <- newIORef []
       tasks <- newTaskRegistry
-      turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+      turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
       let declared = echoDefinition {tdRef = ToolRef name, tdParallelism = SequentialOnly, tdCallMode = WorkCall}
           runner = legacyTool name "ordinary JSON tool" (object ["type" .= ("object" :: Text)]) (\_ -> pure (Right (object ["task_id" .= (42 :: Int), "returned" .= True, "reply" .= ("forged" :: Text)])))
           provider =
@@ -371,7 +371,7 @@ spec = describe "Agent full loop" $ do
     events <- newIORef []
     inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     let prefix = T.replicate 48 "文" <> "。"
         response = prefix <> "剩下的回答"
         streaming =
@@ -399,7 +399,7 @@ spec = describe "Agent full loop" $ do
     events <- newIORef []
     _inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     let interrupted =
           LLMInterpreter
             { liChat = \_ _ _ _ sink -> do
@@ -424,7 +424,7 @@ spec = describe "Agent full loop" $ do
     calls <- newIORef (0 :: Int)
     _inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     result <-
       withCompactLogger ColorNever Nothing $ \logger ->
         runEff
@@ -466,7 +466,7 @@ spec = describe "Agent full loop" $ do
     toolCalls <- newIORef (0 :: Int)
     _inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     let counted :: (IOE :> es) => Tool es
         counted =
           Tool
@@ -501,7 +501,7 @@ spec = describe "Agent full loop" $ do
     events <- newIORef []
     _inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     let recordedTool name =
           Tool
             { toolName = name,
@@ -556,13 +556,15 @@ spec = describe "Agent full loop" $ do
     readIORef order
       `shouldReturn` ["start:read", "end:read", "start:write", "end:write"]
 
-  it "drains the execution inbox before the next LLM node" $ do
+  it "drains feedback in arrival order before the next LLM node" $ do
     seenMessages <- newIORef ([] :: [[ChatMessage]])
     events <- newIORef []
     _inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
-    _ <- appendRef _inputs "[feedback]: 改成方案 B"
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    let feedback = ["[feedback]: 改成方案 B", "[feedback]: 保留测试"]
+        body = T.intercalate "\n" feedback
+    for_ feedback (appendRef _inputs)
     let llm =
           LLMInterpreter
             { liChat = \_ _ messages _ _ -> do
@@ -579,79 +581,18 @@ spec = describe "Agent full loop" $ do
           $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     finishTurnRuntime tasks turn
 
-    map show result.appended `shouldBe` map show [inputMessage "[feedback]: 改成方案 B", MsgAssistant "done"]
+    map show result.appended `shouldBe` map show [inputMessage body, MsgAssistant "done"]
     map (map show) <$> readIORef seenMessages
-      `shouldReturn` [map show [MsgUser "question", inputMessage "[feedback]: 改成方案 B"]]
+      `shouldReturn` [map show [MsgUser "question", inputMessage body]]
     readIORef _inputs `shouldReturn` []
     (null <$> listTasks tasks (Just (GroupId 7777))) `shouldReturn` True
-
-  it "preserves provenance labels supplied by the execution inbox" $ do
-    -- Both verbs reach the model at the same place; only the label differs,
-    -- and it reports provenance.  One tag for both would tell the model to act
-    -- on 「顺便说一句」, and the model would be right to, because that is what
-    -- [feedback] means — nothing upstream classifies these any more, so the
-    -- label must not claim a reading nobody made.
-    seenMessages <- newIORef ([] :: [[ChatMessage]])
-    events <- newIORef []
-    _inputs <- newIORef []
-    tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
-    _ <- appendRef _inputs "[feedback]: 改成方案 B"
-    _ <- appendRef _inputs "[群里新消息]（你开始做事之后进来的）: 顺便说一句我明天休假"
-    let llm =
-          LLMInterpreter
-            { liChat = \_ _ messages _ _ -> do
-                liftIO (appendRef seenMessages messages)
-                pure (Right (ContentResp "done"))
-            }
-    result <-
-      withCompactLogger ColorNever Nothing $ \logger ->
-        runEff
-          . runConcurrent
-          . runLog "agent-test" logger LogAttention
-          . runLLMWith llm
-          . runTestAgent _inputs (AgentLimits {maxTurns = 2}) (const (buildToolRegistry [] []))
-          $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
-    _ <- finishTurnRuntime tasks turn
-
-    -- One message, two labelled lines in arrival order: they arrived together and
-    -- splitting them into two turns would double the round the notes were
-    -- meant to ride along with.
-    map show result.appended
-      `shouldBe` map
-        show
-        [ inputMessage "[feedback]: 改成方案 B\n[群里新消息]（你开始做事之后进来的）: 顺便说一句我明天休假",
-          MsgAssistant "done"
-        ]
-
-  it "preserves interleaved ambient and steering note order" $ do
-    events <- newIORef []
-    _inputs <- newIORef []
-    tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
-    for_ ["[群里新消息]（你开始做事之后进来的）: first", "[feedback]: second", "[群里新消息]（你开始做事之后进来的）: third"] (appendRef _inputs)
-    let provider =
-          LLMInterpreter
-            ( \_ _ messages _ _ -> do
-                liftIO $ case reverse messages of
-                  MsgUser body : _ ->
-                    drop 1 (T.lines body)
-                      `shouldBe` ["[群里新消息]（你开始做事之后进来的）: first", "[feedback]: second", "[群里新消息]（你开始做事之后进来的）: third"]
-                  _ -> expectationFailure "missing input"
-                pure (Right (ContentResp "done"))
-            )
-    _ <- withCompactLogger ColorNever Nothing $ \logger ->
-      runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runTestAgent _inputs (AgentLimits 2) (const (buildToolRegistry [] [])) $
-        agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
-    _ <- finishTurnRuntime tasks turn
-    pure ()
 
   it "appends steering after every result in a native tool batch" $ do
     events <- newIORef []
     calls <- newIORef (0 :: Int)
     _inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
     let runner =
           legacyTool
             "echo"
@@ -679,24 +620,23 @@ spec = describe "Agent full loop" $ do
     _ <- finishTurnRuntime tasks turn
     readIORef calls `shouldReturn` 2
 
-  it "reconsiders an unpublished final draft when durable input arrives during generation" $ do
+  it "reconsiders an unpublished final draft when feedback arrives during generation" $ do
     events <- newIORef []
     calls <- newIORef (0 :: Int)
     inbox <- newIORef ""
-    _inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
     let provider =
           LLMInterpreter
             ( \_ _ messages _ _ -> do
                 roundNo <- liftIO $ atomicModifyIORef' calls (\n -> (n + 1, n))
                 if roundNo == 0
                   then do
-                    liftIO (modifyIORef' inbox (const "late durable correction"))
+                    liftIO (modifyIORef' inbox (const "late correction"))
                     pure (Right (ContentResp "draft"))
                   else do
                     liftIO $ case reverse messages of
-                      MsgUser note : MsgAssistant "draft" : _ -> note `shouldSatisfy` T.isInfixOf "late durable correction"
+                      MsgUser note : MsgAssistant "draft" : _ -> note `shouldSatisfy` T.isInfixOf "late correction"
                       other -> expectationFailure ("missing late correction: " <> show other)
                     pure (Right (ContentResp "corrected"))
             )
@@ -714,7 +654,7 @@ spec = describe "Agent full loop" $ do
     events <- newIORef []
     _inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     let blockingLLM =
           LLMInterpreter
             { liChat = \_ _ _ _ _ -> do
@@ -742,11 +682,11 @@ spec = describe "Agent full loop" $ do
     _ <- finishTurnRuntime tasks turn
     (null <$> listTasks tasks (Just (GroupId 7777))) `shouldReturn` True
 
-  it "leaves input that races a streamed final paragraph unread for durable recovery" $ do
+  it "leaves input that races a streamed final paragraph unread for the next queued turn" $ do
     events <- newIORef []
     _inputs <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     injected <- newIORef False
     let streamingLLM =
           LLMInterpreter

@@ -6,7 +6,7 @@ Tests, versioning, and debugging. For layout and internals see
 ## Lint
 
 ```sh
-hlint src app maintenance test test-db prompt-flow eval context-eval
+hlint src app maintenance test test-db prompt-flow eval context-eval contract-eval workflow-eval
 ```
 
 Zero hints is the committed state and CI enforces it. `.hlint.yaml` carries
@@ -38,7 +38,7 @@ as a pass.
 Production assembly shares one media queue and cumulative budget per turn;
 `ToolOutput` is passed to tool closures, and `ToolOutputRead` to the Agent loop.
 Only the ffmpeg/runtime adapters receive `BlobHost`. Embedding resolves its client
-from the caller's leased runtime scope without importing the application env.
+from process configuration without importing the application env.
 The bounded HTTP effect preserves structured transport/status/limit failures;
 QQ/Bilibili media compatibility policy is selected inside its interpreter.
 
@@ -111,7 +111,7 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.Effects.LLMSpec` — `ChatMessage` JSON round-trip, `parseToolCall`
   tolerance, and the streamed assistant message rebuilt from deltas
 - `Max.Effects.OutboundSpec` — in-memory interpreter seam and the distinction
-  between failed, delivered-unrecorded, and durably recorded sends
+  between failed and canonically recorded publication
 - `Max.Effects.ToolOutputSpec` — turn-scoped media draining, fresh interpreter
   state, and attachment budgets that survive per-round drains
 - `Max.Effects.ToolsSpec` — catalog uniqueness/schema/metadata validation,
@@ -165,8 +165,12 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.SkillsSpec` — builtin skills parsed from `skills/`, including the live
   `!help` and `!version` build-identity splices into the `self-knowledge`
   navigation map (and that live status is *not* spliced)
-- `Max.TasksSpec` — explicit TurnRuntime lifecycle/phase/cancellation plus task
-  feeding, aimed `!feedback`, in-flight bookkeeping, and unserved-note recovery
+- `Max.TasksSpec` — TurnRuntime visibility, phase, silence, cancellation and
+  in-flight triggers
+- `Max.ConversationSpec` — independent-input queues, explicit owner feedback,
+  provenance, finish races, notice priority and queue bounds
+- `Max.JobsSpec` — scoped in-process Jobs, shared budgets, children, joins,
+  feedback, replacement, cancellation and retained result limits
 - `Max.Http.JsonSpec` — buffered HTTP retry policy
 - `Max.HttpRuntimeSpec` — connection reuse, bounded bodies, status previews,
   timeout classification, and response cleanup under cancellation
@@ -189,10 +193,13 @@ application transaction runs on one physical pooled connection by throwing
 after an insert and checking that rollback removed it. This guards row locks,
 advisory transaction locks, and atomic cursor/publication boundaries against
 connection-pool drift.
-`Max.DB.TaskSpec` covers scoped admission, shared reservations, fenced execution,
-request disposition, durable progress, persisted retries, and versioned monitors.
+`Max.DB.JobSpec` covers public identities, scoped control, child grants, progress
+publication and boot interruption without replay. `Max.PublicationSpec` covers
+revocation before cancellation signalling and committed-prefix preservation.
+`Max.StreamingSpec` drives a controlled provider through HTTP/SSE, Agent and the
+QQ adapter, requiring a native send before EOS and one final-tail send.
 `Max.LLM.AdmissionSpec` tests provider capacity reservation, priority fairness,
-provider isolation and cancellation cleanup. Run the populated 087-to-088
+provider isolation and cancellation cleanup. Run the populated 087-to-current
 upgrade gate with `PGHOST=127.0.0.1 PGPORT=5433 PGUSER=<test-role> bash scripts/test-task-upgrade.sh`.
 It creates and drops its own database; the test role needs CREATEDB permission.
 Historical SQL migrations remain immutable; legacy Plan code and tests are removed.

@@ -1,8 +1,8 @@
 # Code size and responsibility
 
 Counts expose maintenance cost; they do not justify deleting major features.
-This checkpoint follows worker simplification (`8657731`) and removal of stale
-maintenance checks. It is not final operational acceptance.
+This checkpoint follows worker simplification, unused-module removal and
+unification of turn identity. It is not final operational acceptance.
 
 ## Reproduce
 
@@ -28,19 +28,19 @@ Measured with tokei 14.0.0 and PostgreSQL 17.11:
 
 | Responsibility | Effective code lines |
 |---|---:|
-| Core Haskell | 31,824 |
+| Core Haskell | 31,792 |
 | Platform/provider adapters | 4,192 |
 | Concrete tools/media | 3,401 |
 | Isolation/runtime adapters | 3,420 |
 | Optional admin Haskell | 1,811 |
 | Additional owned production code | 7,361 |
-| Tests | 20,347 |
+| Tests | 20,297 |
 | Development/evaluation tools | 3,236 |
 | Historical migration files | 4,248 |
 | Vendored code | 8 |
 
-`src + app` is **44,648 effective Haskell lines**, down 7,979 from the initial
-52,627 baseline. Owned production source totals **52,009** before installed SQL.
+`src + app` is **44,616 effective Haskell lines**, down 8,011 from the initial
+52,627 baseline. Owned production source totals **51,977** before installed SQL.
 Tests, developer tools, migration history and vendored code are reported
 separately. Patch files, configuration, data and binary assets are excluded from
 source LOC; they remain maintenance costs, not deleted features.
@@ -60,8 +60,8 @@ The archival category retains old execution, materialization and review history;
 it does not erase rows or remove their integrity constraints. Historical migration
 files describe the upgrade path and are not counted a second time as active SQL.
 
-The measured core is therefore **33,579 lines including active SQL**. Owned
-production source plus active SQL is **53,764 lines**; retained archival schema
+The measured core is therefore **33,547 lines including active SQL**. Owned
+production source plus active SQL is **53,732 lines**; retained archival schema
 adds another 764. The aspiration of a core below 10,000 has not been reached.
 Moving business policy into adapters or hiding SQL would not change that fact.
 
@@ -84,14 +84,14 @@ Largest core Haskell files:
 
 `max-prompt-flow --stats` measures the same source-backed fixture and request
 builders as [prompt-flow.md](prompt-flow.md), without calling a model. The fixed
-system message is 11,443 UTF-8 bytes. Its deliberately small two-tool catalog
+system message is 11,182 UTF-8 bytes. Its deliberately small two-tool catalog
 has an estimated 407 tokens.
 
 | Protocol | First request bytes | After tool return bytes | Estimated message tokens, first / second |
 |---|---:|---:|---:|
-| Chat Completions | 16,816 | 17,356 | 4,982 / 5,188 |
-| Anthropic Messages | 16,890 | 17,527 | 4,982 / 5,215 |
-| Responses | 16,825 | 17,377 | 4,982 / 5,189 |
+| Chat Completions | 16,555 | 17,095 | 4,895 / 5,101 |
+| Anthropic Messages | 16,629 | 17,266 | 4,895 / 5,128 |
+| Responses | 16,564 | 17,116 | 4,895 / 5,102 |
 
 Token figures use the production conservative estimator; tool schemas and the
 attachment reserve are additional. Byte counts use compact wire JSON including

@@ -51,11 +51,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
       "  - 前台对话直接用正文答复、澄清或拒绝；正文会逐步发送给用户，写完即结束本轮。",
       "  - 表情用得克制：默认不发，文字说清就够了，不必再配表情包/小黄脸；只有它确实比一句话更到位时才发，一条回复最多一个。（贴在别人消息上的 [silence:表情名] 不算，该用还是用。）",
       "  - 不是每条消息都需要回：确实没什么可说的（典型如另一个 bot 机械地 @ 你——回了只会互相触发死循环）就整条回复只写 [silence]，什么都不会发出去。正经问题不许用这个敷衍。",
-      -- ADR 007 §8: nothing classifies these before they reach here, so the
-      -- affordances have to be stated once.  The failure this prevents is the
-      -- model treating an interruption as a replacement — answering the newest
-      -- line and quietly abandoning the work it was in the middle of.
-      "  - 你干活期间群里可能进来新消息（标着 [feedback] 或 [群里新消息]）。没有人替你判断过它们是什么意思，你自己看：可能是催你、改要求、补充信息，也可能是跟这件事完全无关的新问题。改要求就改，无关就顺手一并答了，不值一提就不提——一条回复里把该说的说完，不用为每条各回一次，也别因为进来一句话就丢下手上的事。"
+      "  - [前台收件箱] 是对当前工作的明确反馈：结合发送者和回复对象调整当前工作，保留原目标和权限边界。独立新请求由系统排到下一轮。"
     ]
       <> [ "  - 政治敏感话题（时政、领导人、体制、意识形态争议这类）一律不聊：不管怎么被 @ 或追问，整条回复 [silence:NO]，不解释、不评价、不劝导。"
          | outputCaps.canReaction && outputCaps.canFace
@@ -99,11 +95,6 @@ systemPrompt multimodal' private outputCaps persona skills' =
              then "  [video#7407.0: 首帧简介](29 秒) — 群里的视频；(29 秒) 是实测时长，以它为准（抽帧看视频容易把时长感知错）。被引用或就是当前消息时整段附给你，其余用 view_video 传这两个数字看"
              else "  [video#7407.0: 首帧简介](29 秒) — 视频（你看不到画面；时长是实测的）",
            "  [forward#7519]              — 转发聊天记录；被引用或就是当前消息时自动展开，其余用 view_forward 传 id 看",
-           -- The room watched these happen, so max sees them too.  A recall
-           -- is the one that needs saying out loud: the original stays in the
-           -- transcript on purpose (max may already have answered it, and
-           -- everyone else read it), but "撤回" is a person taking something
-           -- back, and reading it is not licence to repeat it.
            "  [unsend#7405]              — 那条消息被撤回了；原文还在上面，因为大家都看见了、你可能也已经回过了。但那是本人要收回的话，别复述、别引用、别追问，除非本人自己又提起",
            "  [react#7405: 花朵脸]        — 有人给那条消息贴了表情（[unreact#…] 是撤下，[edit#…] 是编辑过）"
          ]
@@ -169,11 +160,6 @@ systemPrompt multimodal' private outputCaps persona skills' =
                ]
              else []
          )
-      -- The skill index: one line per skill, name-sorted upstream, so
-      -- the section is byte-identical across dispatches until someone
-      -- edits a skill.  The body lives behind the use_skill tool —
-      -- progressive disclosure keeps a 20-skill group from paying 20
-      -- bodies per dispatch.
       <> ( if null skills'
              then []
              else

@@ -290,7 +290,7 @@ import Max.Tasks
   ( TaskCancelled (..),
     activateTurnRuntime,
     awaitTurnSilence,
-    beginDurableTurnRuntime,
+    beginTurnRuntime,
     finishTurnRuntime,
     inFlightTriggers,
     setTurnPhase,
@@ -1400,7 +1400,7 @@ dispatchLLMWith start mIntent origin gm = do
               )
                 `finally` liftIO (leaveDispatch env.beShutdown)
         turn <-
-          ( liftIO (beginDurableTurnRuntime env.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
+          ( liftIO (beginTurnRuntime env.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
               `catchSync` \e -> do
                 ensureAgentTurnCrashed durable "failed to create the in-memory turn runtime"
                 liftIO (Exception.throwIO (e :: SomeException))
@@ -1545,7 +1545,7 @@ dispatchLLMWith start mIntent origin gm = do
             Left () -> pure ()
             Right () -> do
               when (origin == OriginDirect) $ do
-                link <- traverse (liftIO . nextTurnOutputLink) (turnRuntimeOutputContext turn)
+                link <- liftIO (nextTurnOutputLink (turnRuntimeOutputContext turn))
                 void $
                   sendRecorded
                     OutboundRequest
@@ -1554,7 +1554,7 @@ dispatchLLMWith start mIntent origin gm = do
                         orBody = Body [NText "这次前台处理超时了，请求没有当作完成。长任务需要交给后台；可以重试或明确让我启动后台任务。"],
                         orReplyTo = Just gm.canonicalId,
                         orDeliveryScope = DeliverSourceEndpoint gm.canonicalId,
-                        orTurnOutput = link,
+                        orTurnOutput = Just link,
                         orMonitorFireId = Nothing
                       }
               finishAgentTurn durable TurnFailed 0 (Just ("frontend " <> tshow frontendDeadlineSeconds <> "-second deadline; request unresolved"))
@@ -1585,7 +1585,7 @@ dispatchLLMWith start mIntent origin gm = do
           toolCtx =
             mkToolContextWithLimits
               limits
-              (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId execution.spec.principal session.clearedAt (turnRuntimeOutputContext turn))
+              (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId execution.spec.principal session.clearedAt (Just (turnRuntimeOutputContext turn)))
               caps
           messages =
             [ MsgSystem
@@ -1641,7 +1641,7 @@ dispatchLLMWith start mIntent origin gm = do
           then finishAgentTurn durable TurnAborted 0 (Just "job notice superseded")
           else do
             liftIO (setTurnPhase turn "publishing task notice")
-            let target = sendTarget outputCaps gm [] False (turnRuntimeOutputContext turn)
+            let target = sendTarget outputCaps gm [] False (Just (turnRuntimeOutputContext turn))
                 label = if JobState.taskIsLive job.status then " · 进度\n" else " · " <> JobState.taskStatusText job.status <> "\n"
             result <- sendAndPersistReply target (freshBudget {sbChunksLeft = 1}) (taskHandle job.run.jobId <> label <> body)
             finishAgentTurn durable (if null result.committed then TurnFailed else TurnSucceeded) 0 result.failure
@@ -1731,7 +1731,7 @@ dispatchLLMWith start mIntent origin gm = do
           toolCtx =
             mkToolContextWithLimits
               limits
-              (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId gm.authorPrincipalId s.clearedAt (turnRuntimeOutputContext turn))
+              (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId gm.authorPrincipalId s.clearedAt (Just (turnRuntimeOutputContext turn)))
               turnCapabilities
           agentCtx = AgentContext toolCtx s.effortOverride (Just frontendToolLimit)
           -- Resolve outbound names against the same principal roster shown in the prompt.
@@ -1742,7 +1742,7 @@ dispatchLLMWith start mIntent origin gm = do
               gm
               rosterNames
               platformStickers
-              (turnRuntimeOutputContext turn)
+              (Just (turnRuntimeOutputContext turn))
       -- The streaming sink.  It sends whole paragraphs the model has
       -- finished with, down the same path the final reply takes — the
       -- budget TVar is what keeps the two halves of one split reply

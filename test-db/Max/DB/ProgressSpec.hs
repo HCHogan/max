@@ -17,7 +17,7 @@ import Max.Platform.Delivery.Queue (newDeliveryQueue)
 import Max.Platform.Types (DeliveryId (..))
 import Max.ReplySend
 import Max.Task.Types (JobView (..), TaskProfile (Research))
-import Max.Tasks (beginDurableTurnRuntime)
+import Max.Tasks (beginTurnRuntime)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
@@ -37,7 +37,7 @@ spec pool = before_ (truncateAll pool) $ describe "job notice publication" $ do
         target = ReplyTarget (GroupId 900) [] Nothing False True True False False (Just output)
     deliveries <- newDeliveryQueue (DeliveryId 0)
     let registry = running.tasks
-    _ <- beginDurableTurnRuntime registry front (GroupId 900) (UserId 1) Nothing
+    _ <- beginTurnRuntime registry front (GroupId 900) (UserId 1) Nothing
     published <- withDbLog pool $ runOutbound registry running.jobs deliveries $ sendAndPersistReply target (freshBudget {sbChunksLeft = 1}) text
     length published.committed `shouldBe` 1
     published.failure `shouldBe` Nothing

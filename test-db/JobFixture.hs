@@ -20,7 +20,7 @@ import Max.Monitor.Types (MonitorRef (..))
 import Max.Platform.Store (OutboundDraft (..))
 import Max.Platform.Types
 import Max.Task.Types
-import Max.Tasks (TaskRegistry, TurnRuntime, beginDurableTurnRuntime, newTaskRegistry)
+import Max.Tasks (TaskRegistry, TurnRuntime, beginTurnRuntime, newTaskRegistry)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..), UserId (..))
 
@@ -49,7 +49,7 @@ launchNext :: DbPool -> TaskRegistry -> Jobs -> IO RunningJob
 launchNext pool tasks jobs = do
   LaunchJob job <- takeJobWork jobs
   turn <- withDb pool (startAgentTurn job.spec.group job.spec.source job.spec.principal)
-  runtime <- beginDurableTurnRuntime tasks turn job.spec.group (UserId 1) (Just job.spec.source)
+  runtime <- beginTurnRuntime tasks turn job.spec.group (UserId 1) (Just job.spec.source)
   attached <- attachJobTurn jobs job.run turn
   if attached then pure (RunningJob jobs tasks job turn runtime) else fail "job fixture attach failed"
 

@@ -24,7 +24,7 @@ spec :: Spec
 spec = describe "process-owned Jobs" $ do
   it "keeps detached jobs after their initiating reply and binds status to a conversation" $ do
     (tasks, jobs, request) <- fixture
-    source <- beginDurableTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
+    source <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
     Right job <- admitJob jobs (Just (AgentTurnId 99)) 1 request
     finishTurnRuntime tasks source
     lookupJob jobs request.group 1 `shouldReturn` Just job
@@ -223,7 +223,7 @@ launch :: TaskRegistry -> Jobs -> Int64 -> JobSpec -> IO (JobView, TurnRuntime)
 launch tasks jobs identifier request = do
   Right _ <- admitJob jobs Nothing identifier request
   LaunchJob job <- takeJobWork jobs
-  runtime <- beginDurableTurnRuntime tasks (reference identifier) request.group (UserId 7) Nothing
+  runtime <- beginTurnRuntime tasks (reference identifier) request.group (UserId 7) Nothing
   attachJobTurn jobs job.run (reference identifier) `shouldReturn` True
   pure (job, runtime)
 

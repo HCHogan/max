@@ -1,20 +1,23 @@
 # Architecture
 
-Cross-cutting decisions are recorded in:
+Historical decisions and feature contracts are recorded in these ADRs.
+The [simplification plan](simplification.md) supersedes their execution-recovery
+mechanisms; the runtime described below owns running work in process.
+
 
 - [`ADR 001: Context and Memory Foundations`](adr/001-context-memory-foundations.md)
 - [`ADR 002: Partial Plans and Adaptive Elaboration`](adr/002-partial-plans-adaptive-elaboration.md)
-  — planning direction superseded by ADR 008; reliability contracts retained
+  — retired planning direction
 - [`ADR 003: Message IR and Capability-Tiered Rendering`](adr/003-message-ir-capability-rendering.md)
 - [`ADR 004: Canonical Handles and the Identity the Model Addresses`](adr/004-canonical-handles-for-the-model.md)
 - [`ADR 005: Turn Continuity — Journal Projections and Verbatim Replay`](adr/005-turn-continuity.md)
 - [`ADR 006: Monitors — Typed Triggers and the Unified Scheduler`](adr/006-monitors-typed-triggers.md)
 - [`ADR 007: Plans as Orchestration — Fork, Steering, and What the Kernel Is Actually For`](adr/007-plans-as-orchestration.md)
-  — existing implementation; authoring direction superseded by ADR 008
+  — retired planning implementation
 - [`ADR 008: Durable Tasks and Conversation Coordination`](adr/008-durable-tasks-conversation-coordination.md)
-  — implemented cutover candidate; production validation pending
+  — durable execution superseded by process-local Jobs and conversation queues
 
-Layout, runtime data flow, effect stack, and phase status. For behaviour see
+Layout, runtime data flow and effect stack. For behaviour see
 [features.md](features.md); for tests and debugging see
 [development.md](development.md), and for transport cutover/repair see
 [platforms.md](platforms.md).
@@ -99,7 +102,7 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    ReplySend (planning made real:
                    placeholders, sending, persistence — shared by final,
                    streamed, and progress text), Render, Roster, Shutdown (graceful
-                   drain), Tasks, Worker (required/optional/restartable
+                   drain), Tasks, Worker (required services and finite shutdown
                    supervision),
                    Tools, BuildInfo (compile-time git rev), Admin (JSON API +
                    panel and operational health counters), Util
@@ -646,11 +649,10 @@ fingerprints. Exceptions and timeouts remain conservative for both runner forms.
 Shared invocation labels and budgets use `Concurrent` MVars/TVars, including
 under timeout races; they are not thread-local state.
 
-`Turn.Start` distinguishes new foreground requests from task execution/notices. `TaskCommand` requires a
-`TaskRevision` for replacement, while its mutation boundary distinguishes
-`DurableTaskId`, `GroupId` and `PrincipalId`. `Dispatch.Lease` settles the short
-ingress claim when the process queue accepts it. No lease renewal runs during
-the foreground model loop.
+`Turn.Start` distinguishes foreground input, background Jobs and result notices.
+Jobs serialize feedback, replacement and cancellation through STM under group and
+principal checks. Fresh persisted messages enter the bounded ingress queue;
+there are no SQL execution claims or model-authored revisions.
 
 `ToolContext` is opaque and is minted once from the already-authorized inbound
 turn identity. It carries current-conversation authority alongside capability
@@ -664,7 +666,7 @@ draining a round clears queued media but preserves the turn-wide attachment
 counter. This prevents concurrent turns from sharing output state and keeps
 mutable queue mechanics out of context records. Embedding consumers use the
 injectable `Embedding` effect. Its assembly supplies a client resolver from the
-current leased scope; the effect no longer imports `BotEnv`. The bounded `Http`
+process configuration; the effect no longer imports `BotEnv`. The bounded `Http`
 effect preserves typed transport, status and size-limit failures, with compatibility
 pool policy chosen by its interpreter for QQ/Bilibili media downloads.
 
@@ -679,11 +681,12 @@ budget deterministic. Independent turns still have independent queues and run
 in parallel.
 
 `Handler` creates a `TurnRuntime` at dispatch admission and is its sole
-finalizer. The same object carries phase, cancellation, feedback, absorbed
-messages, and task identity through context collection and every Agent node;
-there is no trigger-id lookup/adoption on the production path. Failed message
-persistence is an explicit non-durable ingest state: media jobs, agent dispatch,
-and proactive work are suppressed while the event loop remains alive.
+finalizer. One mandatory recorded turn identity and output-ordinal allocator
+are shared by Agent execution, publication and cancellation. The registry owns
+phase, heartbeat and cancellation state; `Conversation` owns the feedback inbox.
+There is no identity-free production/test mode or trigger-id adoption path.
+Failed message persistence suppresses media jobs, agent dispatch and proactive
+work while the event loop remains alive.
 The shutdown slot, durable turn, in-memory runtime, and child async are handed
 off under asynchronous-exception masking; before publication the caller owns
 rollback, and after publication the child finalizer owns every resource. The
@@ -712,40 +715,13 @@ ambiguous external effects are never replayed by supervision. Listener setup,
 queue ownership and unhandled database/invariant failures terminate the process.
 The process owns one OneBot listener and client slot.
 
-## Phase status
+## Implementation status
 
-| Phase | What | Status |
-|---|---|---|
-| 1–3 | OneBot 11 transport, supervision, persistence (messages/images/forwards) | ✅ |
-| 4 | Vector retrieval via pgvector (`context_search`) | ✅ |
-| 5 | effectful layering, LLM client, async dispatch | ✅ |
-| 6 | !cmd DSL, sessions, agent loop, sandbox/files/search tools | ✅ |
-| 7 | Multimodal (inline context images) + browser toolset | ✅ |
-| 8 | Long-term memory (tools + extraction + injection) | ✅ |
-| 9 | Private chats (pseudo-group pipeline) | ✅ |
-| 10 | NixOS module + production deployment | ✅ |
-| 11 | Admin JSON API + panel | ✅ |
-| 12 | Skills (progressive disclosure) + episode memory extraction | ✅ |
-| 13 | Token-planned infinite context + unified Historian/memory lifecycle | ✅ |
-| 14 | Merged self-knowledge + exact deployed-source inspection | ✅ |
-| 15 | Canonical message IR, identities, per-endpoint capability lowering, QQ/Matrix/iMessage/WeChat ingress and mirror delivery | ✅ |
-| 16 | Durable turns/journal replay, typed monitors, reconnect QQ history audit | ✅, with QQ coverage explicitly best-effort |
-| 17 | Historical Plan DSL and fork/checkpoint orchestration | Retired by ADR 008; execution journal and turn runtime retained |
-| 18 | Configuration lifetime, admin timeline and operational health | Configuration generations retired; changes now restart the service. Live health acceptance remains pending. |
-| 19 | ADR 008 durable task interface, monitor-to-task admission, durable inboxes and conversation frontend | Initial cutover reported complete by operator; follow-up adds fivefold quotas, provider admission, progress/retries and Plan retirement (migration 088) |
+The [simplification checklist](simplification.md) records implemented changes,
+validation and remaining release acceptance. Local builds and integration tests
+do not establish deployed behaviour or live model quality. Size accounting is in
+[code-size.md](code-size.md).
 
-Remaining work is intentionally narrower than these completed phases:
-
-- ADR 004: explicit cross-platform principal merge.
-- ADR 005: small-model thought/digest cache and narrator unification.
-- ADR 006/008: monitor-to-task admission, overlap/revision/cancellation and admin
-  visibility are implemented. `ExternalPoll` remains deliberately deferred.
-- ADR 008: validate real task outcomes and production health at the coordinated
-  switch; token/cost ceilings and arbitrary task-specific result schemas are
-  not claimed. Migration 088 archives old Plan work without replay and removes
-  its runtime. New Task data, reservations and journal evidence survive upgrade.
-  Ordinary hole elaboration, adaptive horizon, and expanded Plan grammar are
-  retired directions, not unfinished milestones.
-- ADR 003 operations: share iMessage bridge circuit state with outbound
-  delivery so a known-down edge does not create avoidable ambiguity, and add a
-  typed reconciliation/acknowledgement lifecycle for durable terminal debt.
+Explicit cross-platform principal merging and monitor `ExternalPoll` remain
+unimplemented. Earlier Plan grammars, crash continuation, wire replay and
+terminal-debt acknowledgement are retired directions, not pending work.

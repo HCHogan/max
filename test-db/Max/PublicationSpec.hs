@@ -37,9 +37,9 @@ spec pool = before_ (truncateAll pool) $ describe "canonical publication boundar
     registry <- newTaskRegistry
     jobs <- newJobs registry
     deliveries <- newDeliveryQueue (DeliveryId 0)
-    turn <- beginDurableTurnRuntime registry durable (GroupId 900) (UserId 123) (Just (CanonicalMessageId source))
-    Just output <- pure (turnRuntimeOutputContext turn)
-    let publish = do
+    turn <- beginTurnRuntime registry durable (GroupId 900) (UserId 123) (Just (CanonicalMessageId source))
+    let output = turnRuntimeOutputContext turn
+        publish = do
           link <- nextTurnOutputLink output
           withDbLog pool $
             runOutbound registry jobs deliveries $

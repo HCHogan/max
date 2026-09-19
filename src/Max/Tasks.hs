@@ -8,7 +8,6 @@ module Max.Tasks
     TaskId (..),
     TurnRuntime,
     beginTurnRuntime,
-    beginDurableTurnRuntime,
     activateTurnRuntime,
     finishTurnRuntime,
     turnRuntimeTaskId,
@@ -49,41 +48,30 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Max.Platform.Types (CanonicalMessageId (..))
-import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), ExecutionOrdinal (..), TurnOutputContext, newTurnOutputContext)
+import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), ExecutionOrdinal (..), TurnOutputContext, newTurnOutputContext, turnOutputAgentTurn)
 import OneBot.Types (GroupId (..), UserId (..))
 
--- | Short, human-typeable id like @t17@ — easy to !kill from the
--- group.  Counter resets on restart.
+-- | Process-local @!kill@ handle, such as @t17@; resets on restart.
 newtype TaskId = TaskId {unTaskId :: Text}
   deriving stock (Show, Eq, Ord)
 
--- | The explicit lifecycle object for one dispatch.  The task entry remains
--- process-local, while production turns also carry their durable identity and
--- one shared visible-output ordinal allocator.  Tests can
--- still create an in-memory-only runtime with 'beginTurnRuntime'.
+-- | One dispatch owns its registry entry and tool-result ordinal allocator.
 data TurnRuntime = TurnRuntime
   { trEntry :: !TaskEntry,
-    trAgentTurn :: !(Maybe AgentTurnRef),
-    trOutputContext :: !(Maybe TurnOutputContext),
     trExecutionOrdinal :: !(TVar Int64)
   }
 
--- | The one registry entry.  Fields the agent loop supplies are 'TVar's
--- because the entry outlives the window in which they are unknown.
+-- | Mutable lifecycle state shared with cancellation and visibility queries.
 data TaskEntry = TaskEntry
   { teId :: !TaskId,
     teGroup :: !GroupId,
-    -- | Who triggered this turn.  Shown by @!ps@; does /not/ gate who
-    -- may steer it (module header).
+    -- | Triggering user for @!ps@, not an authorization rule.
     teUser :: !UserId,
     -- | The message that triggered the dispatch, when there is one.
     -- 'Nothing' for a poke (no message) and for synthetic dispatches.
     -- This is what @!feedback@ resolves a reply against.
     teTrigger :: !(Maybe Int64),
-    -- | Durable identity, present on production dispatches.  Exact replies to
-    -- linked bot output use this to steer the producing turn without a
-    -- task-boundary classifier.
-    teAgentTurn :: !(Maybe AgentTurnRef),
+    teOutputContext :: !TurnOutputContext,
     teStartedAt :: !UTCTime,
     -- | Label shown in @!ps@: @"starting"@ until the loop attaches.
     teKind :: !(TVar Text),
@@ -108,9 +96,7 @@ data TaskInfo = TaskInfo
     tiTrigger :: !(Maybe Int64),
     tiKind :: !Text,
     tiStartedAt :: !UTCTime,
-    -- | When this turn last changed phase.  Age answers "how long has this
-    -- been running", which a healthy long turn also answers; this answers
-    -- "when was it last seen moving", which only a wedged one answers badly.
+    -- | Last phase change; the silence watchdog measures from here.
     tiProgressAt :: !UTCTime
   }
   deriving stock (Show)
@@ -134,41 +120,14 @@ instance Exception TaskCancelled where
 --------------------------------------------------------------------------------
 -- Lifecycle
 
--- | Create the one runtime object that owns a dispatch's task lifecycle.
--- Visibility begins in the same STM transaction that allocates its task id,
--- before context/media collection or any LLM call.
-beginTurnRuntime :: TaskRegistry -> GroupId -> UserId -> Maybe CanonicalMessageId -> IO TurnRuntime
-beginTurnRuntime reg gid uid mTrigger =
-  beginTurnRuntimeWith reg Nothing Nothing gid uid mTrigger
-
--- | Production constructor.  The caller has already committed the
--- @agent_turns@ row, so the in-memory registry can never advertise a turn
--- whose durable identity does not exist.
-beginDurableTurnRuntime ::
-  TaskRegistry ->
-  AgentTurnRef ->
-  GroupId ->
-  UserId ->
-  Maybe CanonicalMessageId ->
-  IO TurnRuntime
-beginDurableTurnRuntime reg durable gid uid mTrigger = do
-  output <- newTurnOutputContext durable
-  beginTurnRuntimeWith reg (Just durable) (Just output) gid uid mTrigger
-
-beginTurnRuntimeWith ::
-  TaskRegistry ->
-  Maybe AgentTurnRef ->
-  Maybe TurnOutputContext ->
-  GroupId ->
-  UserId ->
-  Maybe CanonicalMessageId ->
-  IO TurnRuntime
-beginTurnRuntimeWith reg durable output gid uid mTrigger = do
+-- | Register before context collection. Production callers first create the
+-- history row; tests can supply a reference without a database.
+beginTurnRuntime :: TaskRegistry -> AgentTurnRef -> GroupId -> UserId -> Maybe CanonicalMessageId -> IO TurnRuntime
+beginTurnRuntime reg ref gid uid mTrigger = do
+  output <- newTurnOutputContext ref
   now <- getCurrentTime
   kind <- newTVarIO "starting"
-  -- Seeded with the start time rather than left empty: a turn that has not
-  -- reached its first phase yet has still only been silent since it began, and
-  -- a Maybe here would make every reader answer that question again.
+  -- Context collection counts toward silence before the first phase change.
   progressAt <- newTVarIO now
   cancel <- newTVarIO Nothing
   killed <- newTVarIO False
@@ -182,7 +141,7 @@ beginTurnRuntimeWith reg durable output gid uid mTrigger = do
               teGroup = gid,
               teUser = uid,
               teTrigger = realTrigger mTrigger,
-              teAgentTurn = durable,
+              teOutputContext = output,
               teStartedAt = now,
               teKind = kind,
               teProgressAt = progressAt,
@@ -193,8 +152,6 @@ beginTurnRuntimeWith reg durable output gid uid mTrigger = do
     pure
       TurnRuntime
         { trEntry = entry,
-          trAgentTurn = durable,
-          trOutputContext = output,
           trExecutionOrdinal = executionOrdinal
         }
   where
@@ -205,11 +162,11 @@ beginTurnRuntimeWith reg durable output gid uid mTrigger = do
 turnRuntimeTaskId :: TurnRuntime -> TaskId
 turnRuntimeTaskId turn = turn.trEntry.teId
 
-turnRuntimeAgentTurn :: TurnRuntime -> Maybe AgentTurnRef
-turnRuntimeAgentTurn = (.trAgentTurn)
+turnRuntimeAgentTurn :: TurnRuntime -> AgentTurnRef
+turnRuntimeAgentTurn = turnOutputAgentTurn . turnRuntimeOutputContext
 
-turnRuntimeOutputContext :: TurnRuntime -> Maybe TurnOutputContext
-turnRuntimeOutputContext = (.trOutputContext)
+turnRuntimeOutputContext :: TurnRuntime -> TurnOutputContext
+turnRuntimeOutputContext = (.trEntry.teOutputContext)
 
 nextExecutionOrdinal :: TurnRuntime -> IO ExecutionOrdinal
 nextExecutionOrdinal turn = atomically $ do
@@ -234,10 +191,7 @@ setTurnPhase turn phase = do
   now <- getCurrentTime
   atomically (writePhase turn.trEntry now phase)
 
--- | Enter a phase and stamp the heartbeat, which are the same event: a turn is
--- observably alive exactly when it moves.  Every writer of 'teKind' goes
--- through here so the two cannot drift into disagreeing about when this turn
--- was last seen.
+-- | Update phase and heartbeat atomically.
 writePhase :: TaskEntry -> UTCTime -> Text -> STM ()
 writePhase entry now phase = do
   writeTVar entry.teKind phase
@@ -308,13 +262,8 @@ listTasks reg mGid = atomically $ do
             tiProgressAt = progressAt
           }
 
--- | Trigger the cancel action for one task.  'False' means the id is
--- unknown (the task already finished).
---
--- A task still in its prologue has no cancel action yet; the kill is
--- recorded on the entry and 'activateTurnRuntime' hands it to the loop, which
--- dies before doing a turn's work.  Either way the user gets told the
--- kill was accepted, which is the truth.
+-- | Revoke before signalling. A kill before activation is retained until
+-- the worker attaches; repeated kills do not signal again. Unknown ids return False.
 cancelTask :: TaskRegistry -> TaskId -> IO Bool
 cancelTask reg tid = do
   mAct <- atomically $ do
@@ -334,7 +283,7 @@ cancelAgentTurnTask :: TaskRegistry -> AgentTurnId -> IO Bool
 cancelAgentTurnTask reg turnId = do
   (_, entries) <- readTVarIO reg.trState
   let matches =
-        [entry.teId | entry <- Map.elems entries, fmap (.atrTurnId) entry.teAgentTurn == Just turnId]
+        [entry.teId | entry <- Map.elems entries, entryTurnId entry == turnId]
   or <$> traverse (cancelTask reg) matches
 
 -- | Trigger the cancel action for every registered task (all groups —
@@ -359,7 +308,7 @@ cancelAllTasks reg = do
 turnIsLive :: TaskRegistry -> AgentTurnId -> STM Bool
 turnIsLive registry turn = do
   (_, entries) <- readTVar registry.trState
-  case [entry | entry <- Map.elems entries, fmap (.atrTurnId) entry.teAgentTurn == Just turn] of
+  case [entry | entry <- Map.elems entries, entryTurnId entry == turn] of
     [entry] -> not <$> readTVar entry.teKilled
     _ -> pure False
 
@@ -367,6 +316,9 @@ turnIsLive registry turn = do
 authorizeTurnOutput :: TaskRegistry -> GroupId -> AgentTurnId -> IO Bool
 authorizeTurnOutput registry group turn = atomically $ do
   (_, entries) <- readTVar registry.trState
-  case [entry | entry <- Map.elems entries, entry.teGroup == group, fmap (.atrTurnId) entry.teAgentTurn == Just turn] of
+  case [entry | entry <- Map.elems entries, entry.teGroup == group, entryTurnId entry == turn] of
     [entry] -> not <$> readTVar entry.teKilled
     _ -> pure False
+
+entryTurnId :: TaskEntry -> AgentTurnId
+entryTurnId = (.atrTurnId) . turnOutputAgentTurn . (.teOutputContext)

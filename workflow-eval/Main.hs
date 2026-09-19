@@ -59,7 +59,7 @@ import Max.Task.State qualified as State
 import Max.Task.ToolRuntime (taskTools)
 import Max.Task.Types
 import Max.Task.WorkflowRuntime (taskWorkflowHost)
-import Max.Tasks (TaskRegistry, TurnRuntime, beginDurableTurnRuntime, finishTurnRuntime, newTaskRegistry)
+import Max.Tasks (TaskRegistry, TurnRuntime, beginTurnRuntime, finishTurnRuntime, newTaskRegistry)
 import Max.Tool.Catalog (catalogTools)
 import Max.ToolContext
 import Max.Tools.Schema (stringParam, toolObject)
@@ -135,7 +135,7 @@ newRoot pool opts group objective inputs structured = do
 attach :: DbPool -> TaskRegistry -> Jobs.Jobs -> JobView -> IO (AgentTurnRef, TurnRuntime)
 attach pool tasks jobs job = do
   turn <- withDb pool (startAgentTurn job.spec.group job.spec.source job.spec.principal)
-  runtime <- beginDurableTurnRuntime tasks turn job.spec.group (UserId 1) (Just job.spec.source)
+  runtime <- beginTurnRuntime tasks turn job.spec.group (UserId 1) (Just job.spec.source)
   attached <- Jobs.attachJobTurn jobs job.run turn
   unless attached (die "evaluation job ended before launch")
   pure (turn, runtime)
