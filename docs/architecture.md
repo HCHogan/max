@@ -88,8 +88,8 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    SelfSource (public text snapshot + deterministic bundle hash),
                    EpisodeScheduler (protected quiet-tail timing), Historian +
                    EpisodeStore (atomic exact-range P1/P2/P3 capture and scoped
-                   memory proposals), Prompt context pipeline (materialized
-                   compartment generations + token-sized protected raw tail),
+                   memory proposals), Prompt context pipeline (current summaries
+                   + token-sized protected raw tail),
                    MemoryExtract (nightly memory maintenance),
                    Embedding + Embedder
                    (vector worker), Forward/Image/File workers, FetchQueue (their
@@ -179,14 +179,13 @@ strong-signal policy which intentionally has no production prompt caller.
 
 The authenticated admin context console is the operational boundary for this
 projection lifecycle. It reports exact cursor/coverage lag, range gaps and
-overlaps, completed captures and validation failures, materialization revisions,
-body-free prompt budget/tier decisions, memory versions/evidence/audit,
+overlaps, completed captures and validation failures, memory versions/evidence/audit,
 embedding spaces and backlog, and a policy-scoped retrieval trace. Full or
 single-compartment rebuilds enqueue local requests: the old
 active compartment remains live until replacement publication succeeds.
 Reindex clears only selected derived vectors while holding the embedding
 maintenance lock, then the normal worker backfills them. Integrity checks are
-read-only and recompute source hashes, ownership, materialization references,
+read-only and recompute source hashes, ownership,
 cursor bounds, and the memory current/version projection.
 
 Every conversation takes the newest active compartment suffix that has no
@@ -196,25 +195,15 @@ Partial older
 backfills stay out of the stable prefix when a raw gap separates them. The pure
 `Max.Context.Policy` assigns P1/P2/P3/P4 using coarse age, episode distance,
 importance, confidence, and token pressure; P4 remains stored but is omitted
-from the default prompt. The selected tiers, source compartment ids/projection
-versions, policy version, and exact raw-tail cursor live in a CAS-versioned
-`context_materializations` row plus an append-only revision ledger. Normal
-turns reuse that revision. Initial enrollment, an active projection
-replacement, or raw history crossing the model-derived high-token watermark
-publishes one new revision; it folds only enough prepared compartments to aim
-the tail back below the low-token watermark. Smaller profiles derive these at
-20%/40% of their available prompt window, while 16,384/32,768 token ceilings
-keep larger future windows from turning group noise into an oversized verbatim
-tail. Store publication locks and
-rechecks active source versions, rejects gaps or backward cursor movement, and
-records the cache-bust reason. Under exceptional per-turn pressure active
+from the default prompt. Every turn derives its prefix from those active
+summaries; no prompt revision, CAS publication, high/low-water transition or
+append-only planning trace is stored. New Historian publications become visible
+on the next collection. The raw fetch target is 40% of the available prompt
+window, bounded to 1,024–16,384 estimated tokens. Under token pressure active
 memory is removed first, compartments can degrade one tier at a time, and only
-then is the oldest raw tail trimmed. A conversation with no active compartment
-automatically pages over the immutable raw ledger and retains the newest rows
-up to the same raw-tail token target. A corrupt/stale
-materialization instead renders the newest gap-free active compartments at
-deterministic base tiers plus their exact raw tail for that turn, without
-restoring the retired mention lane or changing source/projection data.
+then is the oldest raw tail trimmed. Without an active compartment, the same
+bounded reader pages backward over the ledger and retains its newest eligible
+rows. Truncation reports the summary boundary and oldest retained raw cursor.
 The global `context.force_raw_fallback` release switch bypasses projection reads
 for every conversation and uses the same token-budgeted raw ledger; it neither
 deletes projections nor stops Historian, so disabling it restores tiered reads.
@@ -224,14 +213,13 @@ longer invokes the full renderer for every discarded item. The selected result
 is rendered once for the final exact budget and trace observation.
 `Max.Context.Types` makes unselected `ContextCandidates` and selected
 `SelectedContext` different pipeline values, while `Max.Prompt.System` owns the
-stable system prefix. `collectContextPreview` is the read-only collection path
-for admin/evaluation: it can be planned and rendered without publishing a
-materialization revision or context-plan trace. Its consumer receives only
-`ContextQuery`; `Prompt.Runtime` installs the read-only interpreter.
-`Prompt.Collect` and `Prompt.History` load snapshots, `Prompt.Render` contains
-pure planning/rendering/cost accounting, and `Prompt.Materialize` alone owns
-materialization publication. The ordinary prompt facade assembles those phases;
-preview does not select a write path through a runtime boolean.
+stable system prefix. Ordinary prompts and diagnostic previews share the same
+read-only collector. The preview consumer receives only `ContextQuery`;
+`Prompt.Runtime` installs its interpreter. `Prompt.Collect` and `Prompt.History`
+load the snapshot, and `Prompt.Render` plans and renders it without effects.
+Body-free plan decisions are sampled at trace log level (canonical trigger IDs
+divisible by 16); over-budget plans always emit attention logs. Historical
+materialization and trace tables remain untouched and are no longer read.
 At Historian startup, exact oldest-first backfill jobs fill any raw gaps at or
 before migration 041's deployment baseline. Each token-sized range stops before
 the next active owner, publishes under the ordinary source-hash/exclusion
@@ -310,7 +298,7 @@ Jobs belong to the process; a restart does not resume them.
 | Messages, sessions, memories, stickers, permissions, skills | written through on every mutation; Session persists revision CAS before publishing its TVar (builtin skills re-seed from the binary) |
 | Media sources and completed attachments | Canonical messages retain URLs/native references; startup and periodic scans discover missing images/videos/files/forward content. Typed bounded queues execute reads locally, prioritizing live ingress. `forward_expansions` distinguishes an empty completed expansion from partial import; old `fetch_jobs` are archived diagnostics |
 | Historian results and coverage | `episode_capture_runs` stores completed results; summaries, citations, memory proposals and the conversation cursor publish in one transaction. Quiet timers, attempts and manual rebuild requests are local; startup derives fresh work from source gaps |
-| Tiered prompt prefix | current `context_materializations` revision plus append-only versions; active compartment ids/versions, tiers, end cursor, policy, fingerprint, and cache-bust reason are durable |
+| Prompt selection | derived from active summaries and the bounded raw tail each turn; sampled body-free log diagnostics, no persistent planning state |
 | Episode expansion handles | random UUID on the immutable compartment; scoped lookup recovers the exact raw ingest range, including after supersession |
 | Monitors and reminders | `monitors` and `monitor_fires` hold TimeCron/LedgerMatch state, retry, provenance, caps and one-time Jobs admission; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll messages, memories, active episode summaries, stickers, and media for missing/incompatible derived data, so any gap or model change backfills itself |

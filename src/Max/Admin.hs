@@ -49,7 +49,6 @@ import Max.ContextAdmin
     invalidateEmbeddingsAdmin,
     listCaptureRunsAdmin,
     listCompartmentsAdmin,
-    listPlanTracesAdmin,
     loadContextStatus,
     loadEmbeddingStatus,
     runContextIntegrityCheck,
@@ -151,7 +150,6 @@ data Route
   | RContextStatus
   | RContextCaptures
   | RContextCompartments
-  | RContextPlans
   | RContextMemory !Int64
   | RContextEmbeddings
   | RContextRecall
@@ -188,7 +186,6 @@ route m path
       ["api", "context", "status"] -> Just RContextStatus
       ["api", "context", "captures"] -> Just RContextCaptures
       ["api", "context", "compartments"] -> Just RContextCompartments
-      ["api", "context", "plans"] -> Just RContextPlans
       ["api", "context", "memories", i] -> RContextMemory <$> int i
       ["api", "context", "embeddings"] -> Just RContextEmbeddings
       ["api", "context", "recall"] -> Just RContextRecall
@@ -608,9 +605,6 @@ handle env profiles logBuf r params body = case r of
     pure (ok rows)
   RContextCompartments -> do
     rows <- listCompartmentsAdmin (intParam "group") (clamp (1, 500) (fromMaybe 100 (intParam "limit")))
-    pure (ok rows)
-  RContextPlans -> do
-    rows <- listPlanTracesAdmin (intParam "group") (clamp (1, 200) (fromMaybe 50 (intParam "limit")))
     pure (ok rows)
   RContextMemory mid ->
     fetchMemoryHistoryAdmin (MemoryId mid) >>= \case

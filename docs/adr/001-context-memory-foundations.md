@@ -4,6 +4,11 @@
 - Date: 2026-08-02
 - Tracking issue: [#10](https://github.com/HCHogan/max/issues/10)
 
+September 19 update: durable prompt materialization and planning traces are
+retired by [the runtime simplification](../simplification.md). Current prompts
+derive their selection from active summaries and recent source messages; the
+source, scope and expansion invariants below still apply.
+
 ## Context
 
 Max replaced its bounded prompt assembled from recent rows and extracted

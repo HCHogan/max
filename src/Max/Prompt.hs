@@ -18,8 +18,6 @@ module Max.Prompt
     cpInputs,
     collectContextPreview,
     planContext,
-    materializeTieredHistory,
-    HistoryTokenWatermarks (..),
     applyBaseCompartmentTiers,
     renderContextPlan,
     renderContext,
@@ -37,15 +35,14 @@ module Max.Prompt
   )
 where
 
-import Control.Monad (unless)
+import Control.Monad (unless, when)
+import Data.Aeson (Value)
 import Data.Int (Int64)
 import Data.Text (Text)
-import Data.Text qualified as T
-import Data.Time (getCurrentTime)
 import Effectful
-import Effectful.Log (Log, logAttention, object, (.=))
+import Effectful.Log (Log, logAttention, logTrace, object, (.=))
 import Effectful.PostgreSQL (WithConnection)
-import Max.Context (ContextBudget (..))
+import Max.Context (ContextBudget (..), ContextTrace (..))
 import Max.Context.Media (tagMediaMarkers)
 import Max.Context.Policy (applyBaseCompartmentTiers)
 import Max.Context.Types
@@ -55,7 +52,6 @@ import Max.Context.Types
     ContextPlan (..),
     ContextReadMode (..),
     ContextSnapshot (..),
-    HistoryTokenWatermarks (..),
     PromptImage (..),
     PromptInputs (..),
     SelectedContext (..),
@@ -63,19 +59,13 @@ import Max.Context.Types
     cpInputs,
     csInputs,
   )
-import Max.ContextTraceStore (recordContextPlanTrace)
-import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History.Media (withMediaHandles)
 import Max.Dispatch (DispatchMessage (canonicalId, groupId))
 import Max.Effects.Blob (Blob)
 import Max.Effects.ContextQuery (collectContextPreview)
 import Max.LLM.Types (ChatMessage)
 import Max.Platform.Types (CanonicalMessageId (..))
-import Max.Prompt.Collect (collectContextSnapshot)
-import Max.Prompt.Materialize
-  ( collectPublishedHistory,
-    materializeTieredHistory,
-  )
+import Max.Prompt.Collect qualified as Collect
 import Max.Prompt.Render
   ( applyStickerCaptions,
     contextRoster,
@@ -87,40 +77,28 @@ import Max.Prompt.Render
     tagImageMarkers,
   )
 import Max.Prompt.Request (PromptRequest (..))
-import Max.Util (trySync)
 import OneBot.Types (GroupId (..))
 
 buildContext ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   PromptRequest -> Eff es ([ChatMessage], [(Int64, Text)])
 buildContext request = do
-  let limits = request.prLimits
-      readMode = request.prReadMode
-      gm = request.prTrigger
-  now <- liftIO getCurrentTime
-  history <- collectPublishedHistory now request
-  snapshot <- collectContextSnapshot request now history
-  let plan = planContext limits snapshot
-      CanonicalMessageId triggerMessageId = gm.canonicalId
-      scope = conversationScopeFor gm.groupId
-  traceStored <-
-    trySync $
-      recordContextPlanTrace
-        scope
-        triggerMessageId
-        (contextReadModeText readMode)
-        plan.cpPolicyVersion
-        plan.cpMaterializationVersion
-        plan.cpMaterializationReason
-        plan.cpBudget
-        plan.cpEstimatedPromptTokens
-        plan.cpWithinBudget
-        plan.cpTrace
-  case traceStored of
-    Left err ->
-      logAttention "context: failed to persist planning trace" $
-        object ["group_id" .= (let GroupId groupId = gm.groupId in groupId), "error" .= T.pack (show err)]
-    Right () -> pure ()
+  snapshot <- Collect.collectContextPreview request
+  let plan = planContext request.prLimits snapshot
+      CanonicalMessageId triggerMessageId = request.prTrigger.canonicalId
+      GroupId groupId = request.prTrigger.groupId
+  -- Sample body-free decisions only when trace logging is enabled.
+  when (triggerMessageId `mod` 16 == 0) $
+    logTrace "context: sampled prompt plan" $
+      object
+        [ "group_id" .= groupId,
+          "trigger_message_id" .= triggerMessageId,
+          "policy_version" .= plan.cpPolicyVersion,
+          "estimated_prompt_tokens" .= plan.cpEstimatedPromptTokens,
+          "prompt_token_limit" .= plan.cpBudget.cbPromptTokenLimit,
+          "within_budget" .= plan.cpWithinBudget,
+          "decisions" .= map traceJson plan.cpTrace
+        ]
   unless plan.cpWithinBudget $
     logAttention "context plan exceeds model input budget" $
       object
@@ -130,7 +108,11 @@ buildContext request = do
         ]
   pure (renderContextPlan plan, contextRoster (cpInputs plan))
 
-contextReadModeText :: ContextReadMode -> Text
-contextReadModeText = \case
-  TieredContext -> "tiered"
-  RawLedgerEmergency -> "raw_emergency"
+traceJson :: ContextTrace -> Value
+traceJson trace =
+  object
+    [ "source" .= trace.ctSource,
+      "estimated_tokens" .= trace.ctEstimatedTokens,
+      "decision" .= show trace.ctDecision,
+      "reason" .= trace.ctReason
+    ]

@@ -19,7 +19,6 @@ import Data.Text qualified as T
 import Helpers (truncateAll)
 import Max.AdminTimelineSpec qualified as AdminTimelineSpec
 import Max.ContextAdminSpec qualified as ContextAdminSpec
-import Max.ContextMaterializationSpec qualified as ContextMaterializationSpec
 import Max.ConversationCapabilitiesSpec qualified as ConversationCapabilitiesSpec
 import Max.DB.AgentTurnSpec qualified as AgentTurnSpec
 import Max.DB.BrowserSpec qualified as BrowserSpec
@@ -86,7 +85,6 @@ main = do
         ConnectionSpec.spec pool
         ProjectionSpec.spec pool
         ConversationCursorSpec.spec pool
-        ContextMaterializationSpec.spec pool
         ContextAdminSpec.spec pool
         ConversationCapabilitiesSpec.spec pool
         ResourceCapabilitiesSpec.spec pool

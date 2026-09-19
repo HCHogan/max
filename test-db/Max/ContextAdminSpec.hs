@@ -8,16 +8,13 @@ import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb)
-import Max.Context (ContextDecision (..), ContextTrace (..), contextBudget)
 import Max.ContextAdmin
-import Max.ContextTraceStore (ContextPlanTraceRow (..), listContextPlanTraces, recordContextPlanTrace)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
 import Max.DB.History (MessageCursor (..))
 import Max.Embedding.Maintenance (newEmbeddingLock, tryWithEmbeddingLock)
 import Max.MemoryStore
-import Max.ModelCatalog (defaultContextLimits)
 import OneBot.Types (GroupId (..))
 import Test.Hspec
 
@@ -50,25 +47,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.ContextAdmin" $ do
       pure ()
     conflicted <- withDb pool (loadContextStatus (Just groupId))
     parseCutover conflicted `shouldBe` Right ("all_conversations", True, 0, 1, True)
-
-  it "persists body-free prompt decisions and returns their budget" $ do
-    let budget = contextBudget defaultContextLimits False
-        decisions = [ContextTrace "history.raw" 123 ContextIncluded "selected chronological raw transcript"]
-    withDb pool $
-      recordContextPlanTrace
-        scope
-        1001
-        "tiered"
-        "context-policy/test"
-        (Just 3)
-        (Just "high_water")
-        budget
-        456
-        True
-        decisions
-    traces <- withDb pool (listContextPlanTraces (Just groupId) 10)
-    map (\trace -> (trace.cptrHistoryMode, trace.cptrEstimatedPromptTokens, trace.cptrWithinBudget)) traces
-      `shouldBe` [("tiered", 456, True)]
 
   it "invalidates only the requested conversation embedding projection" $ do
     _ <- insertRawMessage pool 1001 groupId memberId botId testTime Nothing "searchable message"

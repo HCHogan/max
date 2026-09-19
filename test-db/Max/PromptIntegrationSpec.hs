@@ -16,18 +16,19 @@ import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL (execute, query)
 import Helpers (insertMessageWithCanonicalId, insertRawKind, insertRawMessage, requireJust, truncateAll, updateDbSession, withDb, withDbLog)
-import Max.ContextMaterialization (ContextMaterialization (..))
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool)
 import Max.DB.History (LedgerItem (..), MessageCursor (..))
 import Max.DB.Session (fetchOrInit)
+import Max.DB.Transaction (withReadSnapshot)
 import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.LLM (ChatMessage (..))
 import Max.EpisodeStore
 import Max.IR (Body (..), MentionTarget (MentionIdentity), Node (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..))
-import Max.Prompt (ContextReadMode (..), HistoryTokenWatermarks (..), PromptRequest (..), buildContext, collectContextPreview, materializeTieredHistory, planContext, renderContextPlan)
+import Max.Prompt (ContextReadMode (..), PromptRequest (..), buildContext, collectContextPreview, planContext, renderContextPlan)
+import Max.Prompt.History (fetchBoundedPromptTail)
 import Max.Prompt.Runtime (runContextQueryWithDatabase)
 import Max.Session (Session (..))
 import OneBot.Types (GroupId (..), UserId (..))
@@ -178,42 +179,26 @@ spec pool = before_ (truncateAll pool) $
           fst <$> buildContext ((promptRequest s trigger) {prReadMode = RawLedgerEmergency})
       userBodyOf rawEmergency `shouldSatisfy` ("settled raw one" `T.isInfixOf`)
       userBodyOf rawEmergency `shouldSatisfy` (not . ("settled full summary" `T.isInfixOf`))
-      _ <- withDb pool $ execute "UPDATE context_materializations SET source_fingerprint = repeat('0', 64)" ()
-      fallback <-
-        withDbLog pool $
-          fst <$> buildContext ((promptRequest s trigger) {prLimits = defaultContextLimits})
-      -- The last-known-good fallback re-runs deterministic base decay rather
-      -- than trusting the corrupt materialization's stored tier.  This old
-      -- fixture is therefore P2 at the test clock, not forced back to P1.
-      userBodyOf fallback `shouldSatisfy` ("settled compact summary" `T.isInfixOf`)
-      userBodyOf fallback `shouldSatisfy` (not . ("settled raw one" `T.isInfixOf`))
-      userBodyOf fallback `shouldSatisfy` ("ambient raw tail" `T.isInfixOf`)
 
-    it "changes the durable prefix once when raw tokens cross the high watermark" $ do
+    it "reads newly published summaries immediately without durable prompt state" $ do
       insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "first settled range"
-      (_firstCompartment, firstEnd) <- publishNextCompartment pool (MessageCursor 0) [1001] "first materialized summary"
+      (_, firstEnd) <- publishNextCompartment pool (MessageCursor 0) [1001] "first summary"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      let tightLimits = ContextLimits 8000 512 0 0
-          build =
-            withDbLog pool $
-              fst <$> buildContext ((promptRequest s trigger) {prLimits = tightLimits})
-      _ <- build
-      initial <- withDb pool $ query "SELECT revision, reason, jsonb_array_length(items) FROM context_materializations" ()
-      (initial :: [(Int64, Text, Int)]) `shouldBe` [(1, "initial_materialization", 1)]
-
-      let hugeRaw = T.replicate 10000 "unmaterialized "
-      insertMessageWithCanonicalId pool 1002 groupRaw otherMemberRaw botRaw (timeAt 10) (Just "Bob") hugeRaw
-      _ <- publishNextCompartment pool firstEnd [1002] "second materialized summary"
-      msgs <- build
-      let ub = userBodyOf msgs
-      ub `shouldSatisfy` ("second materialized summary" `T.isInfixOf`)
-      ub `shouldSatisfy` (not . (hugeRaw `T.isInfixOf`))
-      folded <- withDb pool $ query "SELECT revision, reason, jsonb_array_length(items) FROM context_materializations" ()
-      (folded :: [(Int64, Text, Int)]) `shouldBe` [(2, "high_water", 2)]
-
-      _ <- build
-      stable <- withDb pool $ query "SELECT revision, count(*) OVER () FROM context_materialization_versions ORDER BY revision" ()
-      (stable :: [(Int64, Int64)]) `shouldBe` [(1, 2), (2, 2)]
+      let request = (promptRequest s trigger) {prLimits = ContextLimits 8000 512 0 0}
+          build = withDbLog pool $ withReadSnapshot $ fst <$> buildContext request
+      first <- build
+      userBodyOf first `shouldSatisfy` ("first summary" `T.isInfixOf`)
+      insertMessageWithCanonicalId pool 1002 groupRaw otherMemberRaw botRaw (timeAt 10) (Just "Bob") "newly settled source"
+      _ <- publishNextCompartment pool firstEnd [1002] "second summary"
+      second <- build
+      userBodyOf second `shouldSatisfy` ("second summary" `T.isInfixOf`)
+      userBodyOf second `shouldSatisfy` (not . ("newly settled source" `T.isInfixOf`))
+      snapshot <- withDbLog pool $ runContextQueryWithDatabase (collectContextPreview request)
+      userBodyOf (renderContextPlan (planContext request.prLimits snapshot)) `shouldBe` userBodyOf second
+      [Only materializations] <- withDb pool $ query "SELECT count(*) FROM context_materializations" ()
+      [Only traces] <- withDb pool $ query "SELECT count(*) FROM context_plan_traces" ()
+      (materializations :: Int64) `shouldBe` 0
+      (traces :: Int64) `shouldBe` 0
 
     -- Everything the chat saw is in the table; only `kind = 'chat'`
     -- reaches the model.  Load-bearing for !btw in particular: its
@@ -287,20 +272,6 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("[pinned" `T.isInfixOf`)
       ub `shouldSatisfy` ("重要信息" `T.isInfixOf`)
 
-    it "collects and plans a read-only preview without publishing materialization or trace rows" $ do
-      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "preview source"
-      _ <- publishNextCompartment pool (MessageCursor 0) [1001] "preview summary"
-      s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      snapshot <-
-        withDbLog pool $
-          runContextQueryWithDatabase (collectContextPreview (promptRequest s trigger))
-      let rendered = renderContextPlan (planContext defaultContextLimits snapshot)
-      userBodyOf rendered `shouldSatisfy` ("preview summary" `T.isInfixOf`)
-      [Only materializations] <- withDb pool $ query "SELECT count(*) FROM context_materializations" ()
-      [Only traces] <- withDb pool $ query "SELECT count(*) FROM context_plan_traces" ()
-      (materializations :: Int64) `shouldBe` 0
-      (traces :: Int64) `shouldBe` 0
-
     it "renders reply context when trigger has SegReply" $ do
       quoted <- insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "被引用的话"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
@@ -314,25 +285,19 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("[quoted context]" `T.isInfixOf`)
       ub `shouldSatisfy` ("被引用的话" `T.isInfixOf`)
 
-    it "reports the dropped tail region when the historian is behind and no fold target exists" $ do
+    it "reports omitted raw history when the historian is behind" $ do
       insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 1) (Just "Alice") "folded one"
       insertMessageWithCanonicalId pool 1002 groupRaw memberRaw botRaw (timeAt 2) (Just "Alice") "folded two"
       (_, end) <- publishNextCompartment pool (MessageCursor 0) [1001, 1002] "folded summary"
       -- More raw rows after the last compartment than one fetch page (256),
-      -- and far more tokens than the tiny high watermark below.  With no
-      -- newer compartment to fold into, the tail must truncate — and say so.
+      -- and far more tokens than the fetch budget. Truncation stays observable.
       mapM_
         (\i -> insertRawMessage pool (2000 + i) groupRaw otherMemberRaw botRaw (timeAt 3) (Just "Bob") ("burst " <> T.pack (show i)))
         [1 .. 260 :: Int64]
       let scope = conversationScopeFor (GroupId groupRaw)
-          watermarks = HistoryTokenWatermarks {htwLow = 64, htwHigh = 128}
-      active <- withDb pool $ listActiveCompartments scope
-      (materialized, tailRows, tailDropped) <-
-        withDb pool $ materializeTieredHistory scope 9000 Nothing (timeAt 4) watermarks active
+      (tailRows, tailDropped) <-
+        withDb pool $ fetchBoundedPromptTail scope end 9000 Nothing 128
       tailDropped `shouldBe` True
-      -- Last-known-good projection preserved: coverage still ends at the
-      -- published compartment; the returned tail is only the newest slice.
-      materialized.cmEndCursor `shouldBe` end
       case tailRows of
         oldest : _ -> oldest.cursor.ingestSeq `shouldSatisfy` (> end.ingestSeq)
         [] -> expectationFailure "expected a bounded raw tail"

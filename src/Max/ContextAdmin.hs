@@ -5,7 +5,6 @@ module Max.ContextAdmin
   ( loadContextStatus,
     listCaptureRunsAdmin,
     listCompartmentsAdmin,
-    listPlanTracesAdmin,
     fetchMemoryHistoryAdmin,
     loadEmbeddingStatus,
     runContextIntegrityCheck,
@@ -25,7 +24,6 @@ import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
-import Max.ContextTraceStore (ContextPlanTraceRow (..), listContextPlanTraces)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (notForwardChild)
 import Max.DB.Transaction (withTransaction)
@@ -49,25 +47,13 @@ data CoverageRow = CoverageRow
     coverageOverlapRanges :: !Int64,
     coverageUncoveredSettledMessages :: !Int64,
     coverageLiveTailMessages :: !Int64,
-    coverageOldestLiveTailAt :: !(Maybe UTCTime),
-    coverageMaterializationRevision :: !(Maybe Int64),
-    coverageMaterializationEnd :: !(Maybe Int64),
-    coverageMaterializationPolicy :: !(Maybe Text),
-    coverageMaterializationReason :: !(Maybe Text),
-    coverageMaterializationUpdatedAt :: !(Maybe UTCTime),
-    coverageMaterializationValid :: !(Maybe Bool)
+    coverageOldestLiveTailAt :: !(Maybe UTCTime)
   }
 
 instance FromRow CoverageRow where
   fromRow =
     CoverageRow
       <$> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
       <*> field
       <*> field
       <*> field
@@ -136,31 +122,13 @@ loadContextStatus selectedConversation = do
       \        message_stats.first_seq, message_stats.last_seq, message_stats.last_message_at, \
       \        historian.ingest_seq, COALESCE(active.active_count, 0), active.active_start, active.active_end, \
       \        COALESCE(range_health.gaps, 0), COALESCE(range_health.overlaps, 0), \
-      \        coverage.uncovered_settled, coverage.live_tail, coverage.oldest_live_tail_at, \
-      \        materialization.revision, materialization.end_ingest_seq, materialization.policy_version, \
-      \        materialization.reason, materialization.updated_at, \
-      \        CASE WHEN materialization.conversation_id IS NULL THEN NULL ELSE ( \
-      \          EXISTS (SELECT 1 FROM conversation_compartments AS ending \
-      \                  WHERE ending.conversation_id = conversations.conversation_id \
-      \                    AND ending.state = 'active' \
-      \                    AND ending.end_ingest_seq = materialization.end_ingest_seq) \
-      \          AND NOT EXISTS ( \
-      \            SELECT 1 FROM jsonb_array_elements(materialization.items) AS item \
-      \            LEFT JOIN conversation_compartments AS source \
-      \              ON source.id = (item->>'compartment_id')::bigint \
-      \             AND source.conversation_id = conversations.conversation_id \
-      \             AND source.state = 'active' \
-      \             AND source.materialization_version = (item->>'projection_version')::bigint \
-      \            WHERE source.id IS NULL \
-      \          ) \
-      \        ) END AS materialization_valid \
+      \        coverage.uncovered_settled, coverage.live_tail, coverage.oldest_live_tail_at \
       \ FROM conversations \
       \ LEFT JOIN message_stats USING (conversation_id) \
       \ LEFT JOIN historian USING (conversation_id) \
       \ LEFT JOIN active USING (conversation_id) \
       \ LEFT JOIN range_health USING (conversation_id) \
       \ LEFT JOIN coverage USING (conversation_id) \
-      \ LEFT JOIN context_materializations AS materialization USING (conversation_id) \
       \ WHERE (?::bigint IS NULL OR conversations.conversation_id = ?) \
       \ ORDER BY conversations.conversation_id"
       (selectedConversation, selectedConversation)
@@ -214,15 +182,6 @@ coverageJson row =
       "uncovered_settled_messages" .= row.coverageUncoveredSettledMessages,
       "live_tail_messages" .= row.coverageLiveTailMessages,
       "oldest_live_tail_at" .= row.coverageOldestLiveTailAt,
-      "materialization"
-        .= object
-          [ "revision" .= row.coverageMaterializationRevision,
-            "end_ingest_seq" .= row.coverageMaterializationEnd,
-            "policy_version" .= row.coverageMaterializationPolicy,
-            "reason" .= row.coverageMaterializationReason,
-            "updated_at" .= row.coverageMaterializationUpdatedAt,
-            "valid" .= row.coverageMaterializationValid
-          ],
       "issues" .= coverageIssues row
     ]
 
@@ -232,8 +191,7 @@ coverageIssues row =
     [ issue (row.coverageOverlapRanges > 0) "active compartment ranges overlap",
       issue (row.coverageGapRanges > 0) "raw messages exist between active compartment ranges",
       issue (row.coverageUncoveredSettledMessages > 0) "settled messages are not owned by an active compartment",
-      issue (row.coverageHistorianCursor > row.coverageLastSeq) "historian cursor is beyond the source ledger",
-      issue (row.coverageMaterializationValid == Just False) "materialization references stale or inactive compartments"
+      issue (row.coverageHistorianCursor > row.coverageLastSeq) "historian cursor is beyond the source ledger"
     ]
   where
     issue condition message = if condition then Just message else Nothing
@@ -401,35 +359,6 @@ compartmentAdminJson row =
       "created_at" .= row.compartmentAdminCreatedAt,
       "activated_at" .= row.compartmentAdminActivatedAt,
       "evidence_links" .= row.compartmentAdminEvidenceCount
-    ]
-
-listPlanTracesAdmin ::
-  (WithConnection :> es, IOE :> es) =>
-  Maybe Int64 ->
-  Int ->
-  Eff es [Value]
-listPlanTracesAdmin conversationId limit =
-  map planTraceJson <$> listContextPlanTraces conversationId limit
-
-planTraceJson :: ContextPlanTraceRow -> Value
-planTraceJson trace =
-  object
-    [ "id" .= trace.cptrId,
-      "conversation_id" .= trace.cptrConversationId,
-      "trigger_message_id" .= trace.cptrTriggerMessageId,
-      "history_mode" .= trace.cptrHistoryMode,
-      "policy_version" .= trace.cptrPolicyVersion,
-      "materialization_revision" .= trace.cptrMaterializationRevision,
-      "materialization_reason" .= trace.cptrMaterializationReason,
-      "estimated_prompt_tokens" .= trace.cptrEstimatedPromptTokens,
-      "prompt_token_limit" .= trace.cptrPromptTokenLimit,
-      "max_input_tokens" .= trace.cptrMaxInputTokens,
-      "reserved_output_tokens" .= trace.cptrReservedOutputTokens,
-      "attachment_reserve" .= trace.cptrAttachmentReserve,
-      "tool_round_reserve" .= trace.cptrToolRoundReserve,
-      "within_budget" .= trace.cptrWithinBudget,
-      "decisions" .= trace.cptrDecisions,
-      "created_at" .= trace.cptrCreatedAt
     ]
 
 fetchMemoryHistoryAdmin ::
@@ -610,18 +539,7 @@ runContextIntegrityCheck conversationId = do
       \      AND NOT EXISTS (SELECT 1 FROM conversation_compartments AS owner \
       \                      WHERE owner.conversation_id = conversations.conversation_id AND owner.state = 'active' \
       \                        AND message.ingest_seq BETWEEN owner.start_ingest_seq AND owner.end_ingest_seq)) AS uncovered_settled, \
-      \   (COALESCE(historian.ingest_seq, 0) > COALESCE((SELECT max(ingest_seq) FROM messages AS source WHERE source.group_id = conversations.conversation_id), 0)) AS cursor_beyond_ledger, \
-      \   (SELECT count(*) FROM context_materializations AS materialization \
-      \    WHERE materialization.conversation_id = conversations.conversation_id \
-      \      AND (NOT EXISTS (SELECT 1 FROM conversation_compartments AS ending \
-      \                       WHERE ending.conversation_id = conversations.conversation_id AND ending.state = 'active' \
-      \                         AND ending.end_ingest_seq = materialization.end_ingest_seq) \
-      \        OR EXISTS (SELECT 1 FROM jsonb_array_elements(materialization.items) AS item \
-      \                   LEFT JOIN conversation_compartments AS source \
-      \                     ON source.id = (item->>'compartment_id')::bigint \
-      \                    AND source.conversation_id = conversations.conversation_id AND source.state = 'active' \
-      \                    AND source.materialization_version = (item->>'projection_version')::bigint \
-      \                   WHERE source.id IS NULL))) AS bad_materializations \
+      \   (COALESCE(historian.ingest_seq, 0) > COALESCE((SELECT max(ingest_seq) FROM messages AS source WHERE source.group_id = conversations.conversation_id), 0)) AS cursor_beyond_ledger \
       \ FROM conversations LEFT JOIN historian USING (conversation_id) \
       \ WHERE (?::bigint IS NULL OR conversations.conversation_id = ?) \
       \ ORDER BY conversations.conversation_id"
@@ -636,7 +554,7 @@ runContextIntegrityCheck conversationId = do
       \    OR memory.lifecycle IS DISTINCT FROM version.lifecycle OR memory.category IS DISTINCT FROM version.category \
       \    OR memory.superseded_by IS DISTINCT FROM version.superseded_by)"
       (conversationId, conversationId, conversationId)
-  let typedRows = rows :: [(Int64, Int64, Int64, Int64, Bool, Int64)]
+  let typedRows = rows :: [(Int64, Int64, Int64, Int64, Bool)]
       conversations =
         [ object
             [ "conversation_id" .= groupId,
@@ -644,18 +562,17 @@ runContextIntegrityCheck conversationId = do
               "overlap_ranges" .= overlaps,
               "uncovered_settled_messages" .= uncovered,
               "cursor_beyond_ledger" .= cursorBeyond,
-              "bad_materializations" .= badMaterializations,
-              "ok" .= (badSource == 0 && overlaps == 0 && uncovered == 0 && not cursorBeyond && badMaterializations == 0)
+              "ok" .= (badSource == 0 && overlaps == 0 && uncovered == 0 && not cursorBeyond)
             ]
-        | (groupId, badSource, overlaps, uncovered, cursorBeyond, badMaterializations) <- typedRows
+        | (groupId, badSource, overlaps, uncovered, cursorBeyond) <- typedRows
         ]
       memoryMismatch = case memoryProjectionMismatch :: [Only Int64] of
         Only count : _ -> count
         [] -> 0
       allHealthy =
         all
-          ( \(_, badSource, overlaps, uncovered, cursorBeyond, badMaterializations) ->
-              badSource == 0 && overlaps == 0 && uncovered == 0 && not cursorBeyond && badMaterializations == 0
+          ( \(_, badSource, overlaps, uncovered, cursorBeyond) ->
+              badSource == 0 && overlaps == 0 && uncovered == 0 && not cursorBeyond
           )
           typedRows
           && memoryMismatch == 0

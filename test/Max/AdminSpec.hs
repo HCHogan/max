@@ -21,7 +21,6 @@ spec = describe "Max.Admin" $ do
       route "GET" ["api", "context", "status"] `shouldBe` Just RContextStatus
       route "GET" ["api", "context", "captures"] `shouldBe` Just RContextCaptures
       route "GET" ["api", "context", "compartments"] `shouldBe` Just RContextCompartments
-      route "GET" ["api", "context", "plans"] `shouldBe` Just RContextPlans
       route "GET" ["api", "context", "memories", "77"] `shouldBe` Just (RContextMemory 77)
       route "GET" ["api", "context", "embeddings"] `shouldBe` Just RContextEmbeddings
       route "GET" ["api", "context", "recall"] `shouldBe` Just RContextRecall

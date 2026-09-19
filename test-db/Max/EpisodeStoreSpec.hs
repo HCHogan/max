@@ -10,7 +10,6 @@ import Database.PostgreSQL.Simple (Only (..), execute)
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful.PostgreSQL (query)
 import Helpers (insertRawKind, insertRawMessage, requireJust, testTime, truncateAll, withDb)
-import Max.ContextMaterialization
 import Max.ConversationScope (ConversationScope, conversationScopeFor, currentConversationRecall)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
@@ -18,6 +17,7 @@ import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..))
 import Max.EpisodeStore
 import Max.MemoryStore (MemoryId, MemoryVersion)
 import Max.MemoryStore qualified as Memory
+import Max.Prompt.Render (latestGapFreeSuffix)
 import OneBot.Types (GroupId (..))
 import Test.Hspec
 
@@ -419,21 +419,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     map (.activeGapBefore) active `shouldBe` [False, True]
     map (.activeStartedAt) active `shouldBe` [testTime, testTime]
     map (.activeEndedAt) active `shouldBe` [testTime, testTime]
-    let materialization =
-          MaterializationDraft
-            { mdEndCursor = (last active).activeRange.srEnd,
-              mdPolicyVersion = "context-policy/v2",
-              mdItems =
-                [ MaterializedCompartment
-                    compartment.activeCompartmentId
-                    compartment.activeMaterializationVersion
-                    "p2"
-                | compartment <- active
-                ],
-              mdReason = "initial_materialization"
-            }
-    withDb pool (publishContextMaterialization scopeA Nothing materialization)
-      `shouldThrow` (\(_ :: SomeException) -> True)
+    map (.activeCompartmentId) (latestGapFreeSuffix active)
+      `shouldBe` [(last active).activeCompartmentId]
 
 -- | Run the shipped re-stamp migration itself, so the test pins the SQL that
 -- production will execute rather than a copy of it.

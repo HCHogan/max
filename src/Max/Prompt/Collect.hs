@@ -1,5 +1,5 @@
 -- | Read-only context and media collection; no publication capability.
-module Max.Prompt.Collect (collectContextPreview, collectContextSnapshot) where
+module Max.Prompt.Collect (collectContextPreview) where
 
 import Control.Concurrent (threadDelay)
 import Control.Monad (when)
@@ -92,11 +92,7 @@ import Max.Platform.Types
   ( CanonicalMessageId (CanonicalMessageId),
     PrincipalId (PrincipalId),
   )
-import Max.Prompt.History
-  ( HistorySelection (..),
-    collectHistoryProjection,
-    loadHistorySource,
-  )
+import Max.Prompt.History (HistorySelection (..), collectHistory)
 import Max.Prompt.Render
   ( applyStickerCaptions,
     dedupById,
@@ -125,15 +121,13 @@ import Max.Session.Types (Session (..))
 import Max.Time (fmtDurationSec, fmtHM)
 import Max.Turn.Continuity (renderRecentTurn)
 
--- | Read-only collection. It never publishes a materialization revision or
--- diagnostic row; callers can plan and render the snapshot independently.
+-- | Shared read-only collection for ordinary prompts and diagnostic previews.
 collectContextPreview ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   PromptRequest -> Eff es ContextSnapshot
 collectContextPreview request = do
   now <- liftIO getCurrentTime
-  source <- loadHistorySource request
-  history <- collectHistoryProjection "read_only_preview" now request source
+  history <- collectHistory now request
   collectContextSnapshot request now history
 
 collectContextSnapshot ::
@@ -156,7 +150,8 @@ collectContextSnapshot request now' history = do
       PrincipalId senderPrincipal = gm.authorPrincipalId
       scope = conversationScopeFor gm.groupId
   recentTurns' <- map (renderRecentTurn tz') <$> recentTurnDigests scope s.clearedAt now'
-  let HistorySelection compartments' transcript' materializationVersion materializationReason = history
+  let compartments' = history.selectedCompartments
+      transcript' = history.selectedHistory
   pinnedItems' <- fetchMessagesByIdsInScope scope s.pinned
   -- Bound the uncached memory block; older entries remain searchable.
   groupMems <- listRecentMemories (groupMemoryNamespace scope) memoryInjectCap
@@ -268,9 +263,7 @@ collectContextSnapshot request now' history = do
                 skills = skills',
                 now = now',
                 tz = tz'
-              },
-        csMaterializationVersion = materializationVersion,
-        csMaterializationReason = materializationReason
+              }
       }
 
 -- | Wait for downloaded trigger-image rows, up to 'waitImagesMaxMs'. Failed

@@ -1,18 +1,17 @@
 -- | Pure context selection, cost accounting and rendering.
-module Max.Prompt.Render (applyStickerCaptions, contextRoster, planContext, renderContext, renderContextPlan, renderCurrentLine, renderHistoryLine, tagImageMarkers, dedupById, displayName, maxForwardLines, memoryInjectCap, contextCompartmentFromActive, historyTokenWatermarks, latestGapFreeSuffix, rawTailTokens, materializationDraft, materializationMatches, materializedCompartments, targetAtLowWater) where
+module Max.Prompt.Render (applyStickerCaptions, contextRoster, planContext, renderContext, renderContextPlan, renderCurrentLine, renderHistoryLine, tagImageMarkers, dedupById, displayName, maxForwardLines, memoryInjectCap, contextCompartmentFromActive, historyTokenLimit, latestGapFreeSuffix, rawTailTokens) where
 
 import Data.Function (on)
 import Data.Int (Int64)
-import Data.List (find, groupBy, sortOn)
+import Data.List (groupBy, sortOn)
 import Data.Map.Strict qualified as Map
   ( Map,
     findWithDefault,
-    fromList,
     fromListWith,
     lookup,
     toAscList,
   )
-import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
   ( empty,
@@ -33,7 +32,6 @@ import Data.Text qualified as T
     replace,
     strip,
     take,
-    toLower,
   )
 import Data.Time (TimeZone, UTCTime)
 import Max.Context
@@ -54,23 +52,11 @@ import Max.Context
     estimateMessagesTokens,
     estimateTextTokens,
   )
-import Max.Context.Materialization
-  ( ContextMaterialization (cmEndCursor, cmItems, cmPolicyVersion),
-    MaterializationDraft (..),
-    MaterializedCompartment
-      ( MaterializedCompartment,
-        mcCompartmentId,
-        mcProjectionVersion,
-        mcTier
-      ),
-  )
 import Max.Context.Media (consumeMarkers)
 import Max.Context.Policy
   ( ContextCostModel (..),
     PolicyDrop (pdSource, pdTokens),
-    applyBaseCompartmentTiers,
     compartmentTierText,
-    degradeCompartment,
     selectContextTo,
     selectedCompartmentSummary,
   )
@@ -79,12 +65,7 @@ import Max.Context.Types
     ContextCandidates (ContextCandidates),
     ContextCompartment (..),
     ContextPlan (..),
-    ContextSnapshot
-      ( csCandidates,
-        csMaterializationReason,
-        csMaterializationVersion
-      ),
-    HistoryTokenWatermarks (..),
+    ContextSnapshot (csCandidates),
     PromptImage (piDataUrl, piLabel),
     PromptInputs
       ( compartments,
@@ -135,14 +116,12 @@ import Max.Episode.Types
         activeGapBefore,
         activeImportance,
         activeMaterializationVersion,
-        activeRange,
         activeStartedAt,
         activeSummaryP1,
         activeSummaryP2,
         activeSummaryP3
       ),
     CompartmentId (unCompartmentId),
-    SourceRange (srEnd),
     episodeHandleText,
   )
 import Max.File.Types
@@ -157,7 +136,7 @@ import Max.History.Types
         renderedText,
         replyTo
       ),
-    LedgerItem (cursor, history),
+    LedgerItem (history),
     bestName,
   )
 import Max.LLM.Types
@@ -186,18 +165,9 @@ import Max.Text (tshow)
 import Max.Time (fmtDate, fmtEnvStamp, fmtHM)
 import OneBot.Types (GroupId (..), isPrivateChat)
 
-rawTailLowCeiling :: Int
-rawTailLowCeiling = 8192
-
-rawTailHighCeiling :: Int
-rawTailHighCeiling = 16384
-
-historyTokenWatermarks :: ContextLimits -> Bool -> HistoryTokenWatermarks
-historyTokenWatermarks limits multimodal' =
-  HistoryTokenWatermarks
-    { htwLow = min rawTailLowCeiling (max 512 (promptLimit `div` 5)),
-      htwHigh = min rawTailHighCeiling (max 1024 (promptLimit * 2 `div` 5))
-    }
+historyTokenLimit :: ContextLimits -> Bool -> Int
+historyTokenLimit limits multimodal' =
+  min 16384 (max 1024 (promptLimit * 2 `div` 5))
   where
     promptLimit = (contextBudget limits multimodal').cbPromptTokenLimit
 
@@ -404,25 +374,9 @@ planContext limits snapshot =
           cpBudget = budget,
           cpEstimatedPromptTokens = estimated,
           cpWithinBudget = withinBudget,
-          cpTrace = materializationTrace snapshot <> contextTrace budget selected messages drops withinBudget,
-          cpPolicyVersion = contextPolicyVersion,
-          cpMaterializationVersion = snapshot.csMaterializationVersion,
-          cpMaterializationReason = snapshot.csMaterializationReason
+          cpTrace = contextTrace budget selected messages drops withinBudget,
+          cpPolicyVersion = contextPolicyVersion
         }
-
-materializationTrace :: ContextSnapshot -> [ContextTrace]
-materializationTrace snapshot = case snapshot.csMaterializationVersion of
-  Nothing -> []
-  Just revision ->
-    [ ContextTrace
-        "history.materialization"
-        0
-        ContextIncluded
-        ( "revision="
-            <> T.pack (show revision)
-            <> maybe "" (" reason=" <>) snapshot.csMaterializationReason
-        )
-    ]
 
 renderContextPlan :: ContextPlan -> [ChatMessage]
 renderContextPlan = renderContext . cpInputs
@@ -625,96 +579,13 @@ contextCompartmentFromActive active =
     }
 
 contextPolicyVersion :: Text
-contextPolicyVersion = "context-policy/v4"
-
-materializationMatches :: [ActiveCompartment] -> ContextMaterialization -> Bool
-materializationMatches active materialization =
-  materialization.cmPolicyVersion == contextPolicyVersion
-    && not (null owned)
-    && length owned == length materialization.cmItems
-    && (last owned).activeRange.srEnd == materialization.cmEndCursor
-    && expectedItems == materialization.cmItems
-  where
-    owned = filter ((<= materialization.cmEndCursor) . (.srEnd) . (.activeRange)) active
-    expectedItems =
-      [ MaterializedCompartment
-          compartment.activeCompartmentId
-          compartment.activeMaterializationVersion
-          stored.mcTier
-      | (compartment, stored) <- zip owned materialization.cmItems
-      ]
-
-targetAtLowWater ::
-  ContextMaterialization ->
-  [LedgerItem] ->
-  [ActiveCompartment] ->
-  Int ->
-  Maybe [ActiveCompartment]
-targetAtLowWater current tailRows active lowWater = do
-  let newer = filter ((> current.cmEndCursor) . (.srEnd) . (.activeRange)) active
-  _ <- listToMaybe newer
-  let chosen =
-        fromMaybe
-          (last newer)
-          ( find
-              (\compartment -> rawTailTokens (rowsAfter compartment.activeRange.srEnd) <= lowWater)
-              newer
-          )
-  pure (filter ((<= chosen.activeRange.srEnd) . (.srEnd) . (.activeRange)) active)
-  where
-    rowsAfter cursor = filter ((> cursor) . (.cursor)) tailRows
-
-materializationDraft :: UTCTime -> Int -> Text -> [ActiveCompartment] -> MaterializationDraft
-materializationDraft now' compartmentBudget reason active =
-  MaterializationDraft
-    { mdEndCursor = (last active).activeRange.srEnd,
-      mdPolicyVersion = contextPolicyVersion,
-      mdItems = zipWith toStored active tiered,
-      mdReason = reason
-    }
-  where
-    tiered = fitCompartmentTiers compartmentBudget (applyBaseCompartmentTiers now' (map contextCompartmentFromActive active))
-    toStored source planned =
-      MaterializedCompartment
-        { mcCompartmentId = source.activeCompartmentId,
-          mcProjectionVersion = source.activeMaterializationVersion,
-          mcTier = compartmentTierStorageText planned.contextTier
-        }
-
-fitCompartmentTiers :: Int -> [ContextCompartment] -> [ContextCompartment]
-fitCompartmentTiers tokenLimit = go
-  where
-    go compartments'
-      | sum (map compartmentSelectedTokens compartments') <= tokenLimit = compartments'
-      | otherwise = case degradeCompartment compartments' of
-          Nothing -> compartments'
-          Just (_, degraded) -> go degraded
-
-materializedCompartments :: [ActiveCompartment] -> ContextMaterialization -> [ContextCompartment]
-materializedCompartments active materialization = mapMaybe materialize materialization.cmItems
-  where
-    byId = Map.fromList [(compartment.activeCompartmentId, compartment) | compartment <- active]
-    materialize stored = do
-      source <- Map.lookup stored.mcCompartmentId byId
-      tier <- compartmentTierFromStorageText stored.mcTier
-      pure (contextCompartmentFromActive source) {contextTier = tier}
+contextPolicyVersion = "context-policy/v5"
 
 rawTailTokens :: [LedgerItem] -> Int
 rawTailTokens =
   sum
     . map
       (\entry -> 8 + estimateTextTokens entry.history.renderedText)
-
-compartmentTierStorageText :: CompartmentTier -> Text
-compartmentTierStorageText = T.toLower . compartmentTierText
-
-compartmentTierFromStorageText :: Text -> Maybe CompartmentTier
-compartmentTierFromStorageText = \case
-  "p1" -> Just TierP1
-  "p2" -> Just TierP2
-  "p3" -> Just TierP3
-  "p4" -> Just TierP4
-  _ -> Nothing
 
 -- | Hide questions being answered by other turns to prevent duplicate replies.
 -- Keep bot rows; do not replace hidden questions with model-visible annotations.

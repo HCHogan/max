@@ -53,9 +53,9 @@ import Max.Effects.LLM
   )
 import Max.Effects.ToolOutput (InlineMedia (..))
 import Max.EpisodeStore (EpisodeExpansion (..), EpisodeHandle, SourceRange (..), parseEpisodeHandle)
+import Max.IR (Body (..), MediaKind (..), MediaMeta (..), MentionTarget (..), Node (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..), LLMProfile (..), Protocol (..), defaultContextLimits)
-import Max.IR (Body (..), MediaKind (..), MediaMeta (..), MentionTarget (..), Node (..))
 import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..), qqAdvertisedCaps)
 import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Recall (RecallHit (..))
@@ -95,10 +95,10 @@ renderPromptFlow =
       "DB / PlatformApi / EpisodeStore effects",
       "        │",
       "        ▼",
-      "ContextCollector ──▶ ContextMaterialization CAS (tiered history)",
-      "        │                        │ revision + exact raw cursor",
-      "        └────────────────────────▼",
-      "                         ContextSnapshot",
+      "ContextCollector (read-only current summaries + bounded raw tail)",
+      "                           │",
+      "                           ▼",
+      "                     ContextSnapshot",
       "                           │",
       "                           ▼",
       "                 ContextPolicy + ContextBudget",
@@ -349,7 +349,7 @@ initialMessages =
   renderContextPlan $
     planContext
       defaultContextLimits
-      (ContextSnapshot (ContextCandidates promptFixture) Nothing Nothing)
+      (ContextSnapshot (ContextCandidates promptFixture))
 
 promptFixture :: PromptInputs
 promptFixture =

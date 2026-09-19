@@ -90,7 +90,6 @@ function admin() {
       status: { summary: {}, conversations: [] },
       captures: [],
       compartments: [],
-      plans: [],
       embeddings: { corpora: [] },
       integrity: null,
       recallQuery: '',
@@ -109,7 +108,6 @@ function admin() {
       { v: 'coverage', label: '覆盖' },
       { v: 'capture', label: 'capture' },
       { v: 'compartments', label: '分格' },
-      { v: 'plans', label: '计划' },
       { v: 'embedding', label: 'embedding' },
       { v: 'probe', label: '诊断' },
     ],
@@ -603,7 +601,6 @@ function admin() {
         coverage: this.ctx.status.conversations,
         capture: this.ctx.captures,
         compartments: this.ctx.compartments,
-        plans: this.ctx.plans,
         embedding: this.ctx.embeddings.corpora,
       }[v];
       return n ? n.length : 0;
@@ -631,15 +628,14 @@ function admin() {
 
     async loadContext() {
       const suffix = this.contextQuery();
-      const [status, captures, compartments, plans, embeddings, integrity] = await Promise.all([
+      const [status, captures, compartments, embeddings, integrity] = await Promise.all([
         this.api('/context/status' + suffix),
         this.api('/context/captures' + this.contextQuery({ limit: '100' })),
         this.api('/context/compartments' + this.contextQuery({ limit: '100' })),
-        this.api('/context/plans' + this.contextQuery({ limit: '50' })),
         this.api('/context/embeddings' + suffix),
         this.api('/context/integrity' + suffix),
       ]);
-      Object.assign(this.ctx, { status, captures, compartments, plans, embeddings, integrity, loaded: true });
+      Object.assign(this.ctx, { status, captures, compartments, embeddings, integrity, loaded: true });
     },
 
     async contextRecall() {

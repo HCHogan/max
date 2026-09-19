@@ -57,8 +57,7 @@ selectContextTo costs tokenLimit initialTokens candidates =
     continue estimated drop' dropped inputs =
       go (max 0 (estimated - drop'.pdTokens)) (drop' : dropped) inputs
 
--- | One deterministic fidelity downgrade, shared by materialization and the
--- final prompt budget. The caller owns its token-cost model.
+-- | One deterministic fidelity downgrade under prompt budget pressure.
 degradeCompartment :: [ContextCompartment] -> Maybe (Text, [ContextCompartment])
 degradeCompartment compartments' = case filter ((/= TierP4) . (.contextTier)) compartments' of
   [] -> Nothing

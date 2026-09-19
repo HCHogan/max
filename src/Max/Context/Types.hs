@@ -15,7 +15,6 @@ module Max.Context.Types
     csInputs,
     ContextPlan (..),
     cpInputs,
-    HistoryTokenWatermarks (..),
   )
 where
 
@@ -186,10 +185,8 @@ newtype SelectedContext = SelectedContext
   }
 
 -- | Complete output of the effectful collection step, before pure selection.
-data ContextSnapshot = ContextSnapshot
-  { csCandidates :: !ContextCandidates,
-    csMaterializationVersion :: !(Maybe Int64),
-    csMaterializationReason :: !(Maybe Text)
+newtype ContextSnapshot = ContextSnapshot
+  { csCandidates :: ContextCandidates
   }
 
 csInputs :: ContextSnapshot -> PromptInputs
@@ -203,15 +200,8 @@ data ContextPlan = ContextPlan
     cpEstimatedPromptTokens :: !Int,
     cpWithinBudget :: !Bool,
     cpTrace :: ![ContextTrace],
-    cpPolicyVersion :: !Text,
-    cpMaterializationVersion :: !(Maybe Int64),
-    cpMaterializationReason :: !(Maybe Text)
+    cpPolicyVersion :: !Text
   }
 
 cpInputs :: ContextPlan -> PromptInputs
 cpInputs = (.cpSelected.selectedInputs)
-
-data HistoryTokenWatermarks = HistoryTokenWatermarks
-  { htwLow :: !Int,
-    htwHigh :: !Int
-  }

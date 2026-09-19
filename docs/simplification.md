@@ -111,7 +111,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [x] Delete cross-turn raw wire archive replay.
 - [ ] Simplify context to recent messages, one sourced summary representation
       and relevant scoped memory; retain history search/expansion and token limits.
-- [ ] Replace persistent materialization/CAS traces with derived in-memory state
+- [x] Replace persistent materialization/CAS traces with derived in-memory state
       and optional sampled diagnostics.
 
 ### F. Removal and acceptance
@@ -398,3 +398,18 @@ maintained implementation record.
   capability, HLint and offline checks (9 Historian, 7 recall fixtures).
   Effective src/app Haskell is 45,670 lines; core Haskell is 32,759. Context
   representation/materialization and final operational acceptance remain.
+
+- Prompt assembly now reads current summaries and a bounded raw tail through
+  the same collector used for previews. Removed materialization CAS, durable
+  revisions/fingerprints, high/low-water transitions, persistent planning traces
+  and their admin surfaces. New summary publications become visible on the next
+  collection; source-gap selection, scoped history, pins, replies, media and
+  exact final token checks remain. Trace-level logs sample body-free decisions;
+  historical planning tables remain untouched and unused.
+  Retired four obsolete/duplicate DB cases and replaced the high-water protocol
+  case with real read-only prompt assembly, fresh-summary visibility and preview
+  parity. All targets build; 1,061 unit and 255 DB examples pass, followed by all
+  13 prompt DB cases after the read-only fixture cleanup. Upgrade, capability,
+  HLint, package and offline context checks pass. Effective src/app Haskell is
+  44,871 lines (799 fewer); core Haskell is 32,047. Three-level summaries, remaining
+  worker failure handling and final operational acceptance are still pending.

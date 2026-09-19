@@ -169,12 +169,10 @@ library
         Max.CliProxy
         Max.Config
         Max.ContextAdmin
-        Max.ContextMaterialization
         Max.Context
         Max.Context.Policy
         Max.Context.Working
         Max.Context.Types
-        Max.ContextTraceStore
         Max.ConversationScope
         Max.MCP.Client
         Max.DB.Calls
@@ -325,8 +323,6 @@ library
         Max.Prompt.Runtime
         Max.Effects.ContextQuery
         Max.Prompt.History
-        Max.Prompt.Materialize
-        Max.Context.Materialization
         Max.Text
         Max.Prompt.System
         Max.Recall
@@ -778,7 +774,6 @@ test-suite max-test-db
         Max.DB.FilesSpec
         Max.DB.SessionSpec
         Max.DB.TransactionSpec
-        Max.ContextMaterializationSpec
         Max.ContextAdminSpec
         Max.ConversationCapabilitiesSpec
         Max.ResourceCapabilitiesSpec

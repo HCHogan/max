@@ -11,6 +11,7 @@ import Max.Context (ContextDecision (..), ContextTrace (..))
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.DB.History qualified as History
+import Max.DB.Media (MediaSegment (..), MessageMedia (..), noMessageMedia)
 import Max.Dispatch (DispatchMessage (..))
 import Max.Dispatch qualified as Dispatch
 import Max.DispatchFixture (qqDispatch)
@@ -21,7 +22,6 @@ import Max.IR (Body (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), noAdvertisedCaps, qqAdvertisedCaps)
-import Max.DB.Media (MediaSegment (..), MessageMedia (..), noMessageMedia)
 import Max.Prompt (CompartmentTier (..), ContextCandidates (..), ContextCompartment (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyBaseCompartmentTiers, applyStickerCaptions, cpInputs, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Segment (Segment (..))
@@ -782,7 +782,8 @@ spec = do
     it "names the poker and shows no message line" $ do
       let pokeGm =
             (triggerMsg [])
-              { Dispatch.canonicalId = CanonicalMessageId 0 }
+              { Dispatch.canonicalId = CanonicalMessageId 0
+              }
           inp = baseInputs {origin = OriginPoke, triggerMessage = pokeGm}
           (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("[current message — 戳一戳]" `T.isInfixOf`)
@@ -929,14 +930,12 @@ episodeHandleAt cid =
     (parseEpisodeHandle ("00000000-0000-0000-0000-" <> T.justifyRight 12 '0' (T.pack (show cid))))
 
 snapshot :: PromptInputs -> ContextSnapshot
-snapshot inputs = ContextSnapshot (ContextCandidates inputs) Nothing Nothing
+snapshot inputs = ContextSnapshot (ContextCandidates inputs)
 
 tieredSnapshot :: PromptInputs -> ContextSnapshot
 tieredSnapshot inputs =
   ContextSnapshot
     (ContextCandidates (inputs {compartments = applyBaseCompartmentTiers inputs.now inputs.compartments}))
-    (Just 1)
-    (Just "initial_materialization")
 
 generousLimits :: ContextLimits
 generousLimits = ContextLimits 200000 4096 0 0

@@ -1,93 +1,65 @@
--- | Reading a history projection does not publish or trace a prompt.
-module Max.Prompt.History (HistorySource (..), HistorySelection (..), loadHistorySource, collectHistoryProjection, fetchBoundedPromptTail) where
+-- | Read current summaries and the token-bounded raw tail they precede.
+module Max.Prompt.History (HistorySelection (..), collectHistory, fetchBoundedPromptTail) where
 
+import Control.Monad (when)
 import Data.Int (Int64)
-import Data.Text (Text)
+import Data.List.NonEmpty qualified as NE
+import Data.Maybe (listToMaybe)
 import Effectful (Eff, IOE, type (:>))
-import Effectful.Log
-  ( Log,
-    UTCTime,
-    logAttention,
-    logInfo,
-    object,
-    (.=),
-  )
+import Effectful.Log (Log, UTCTime, logAttention, logInfo, object, (.=))
 import Effectful.PostgreSQL (WithConnection)
 import Max.Context.Policy (applyBaseCompartmentTiers)
-import Max.Context.Types
-  ( ContextCompartment,
-    ContextReadMode (RawLedgerEmergency, TieredContext),
-    HistoryTokenWatermarks (htwHigh),
-  )
-import Max.ConversationScope
-  ( ConversationScope,
-    conversationScopeFor,
-  )
-import Max.DB.History
-  ( HistoryItem,
-    HistoryPage (hasMore, items),
-    LedgerItem (cursor, history),
-    MessageCursor (MessageCursor),
-    fetchNewestPromptPageBefore,
-  )
+import Max.Context.Types (ContextCompartment, ContextReadMode (..))
+import Max.ConversationScope (ConversationScope, conversationScopeFor)
+import Max.DB.History (HistoryItem, HistoryPage (..), LedgerItem (..), MessageCursor (..), fetchNewestPromptPageBefore)
 import Max.Dispatch (DispatchMessage (canonicalId, groupId))
 import Max.Episode.Types (SourceRange (..))
-import Max.EpisodeStore
-  ( ActiveCompartment (..),
-    listActiveCompartments,
-  )
-import Max.Platform.Types
-  ( CanonicalMessageId (CanonicalMessageId),
-  )
-import Max.Prompt.Render
-  ( contextCompartmentFromActive,
-    historyTokenWatermarks,
-    latestGapFreeSuffix,
-    rawTailTokens,
-  )
-import Max.Prompt.Request
-  ( PromptRequest
-      ( prLimits,
-        prMultimodal,
-        prReadMode,
-        prSession,
-        prTrigger
-      ),
-  )
+import Max.EpisodeStore (ActiveCompartment (..), listActiveCompartments)
+import Max.Platform.Types (CanonicalMessageId (..))
+import Max.Prompt.Render (contextCompartmentFromActive, historyTokenLimit, latestGapFreeSuffix, rawTailTokens)
+import Max.Prompt.Request (PromptRequest (..))
 import Max.Session.Types (Session (clearedAt))
 import OneBot.Types (GroupId (..))
 
-data HistorySource = RawHistory !Text | ProjectedHistory ![ActiveCompartment]
+data HistorySelection = HistorySelection
+  { selectedCompartments :: ![ContextCompartment],
+    selectedHistory :: ![HistoryItem]
+  }
 
-data HistorySelection = HistorySelection ![ContextCompartment] ![HistoryItem] !(Maybe Int64) !(Maybe Text)
-
-loadHistorySource :: (WithConnection :> es, Log :> es, IOE :> es) => PromptRequest -> Eff es HistorySource
-loadHistorySource request = case request.prReadMode of
-  RawLedgerEmergency -> do
-    logAttention "context: global raw-ledger emergency reader enabled" (object ["group_id" .= gid])
-    pure (RawHistory "operator_forced_raw_fallback")
-  TieredContext -> do
-    active <- listActiveCompartments scope
-    let visible = maybe active (\cleared -> filter ((> cleared) . (.activeStartedAt)) active) request.prSession.clearedAt
-    case latestGapFreeSuffix visible of
-      [] -> do
+collectHistory :: (WithConnection :> es, Log :> es, IOE :> es) => UTCTime -> PromptRequest -> Eff es HistorySelection
+collectHistory now request = do
+  covered <- case request.prReadMode of
+    RawLedgerEmergency -> do
+      logAttention "context: global raw-ledger emergency reader enabled" (object ["group_id" .= gid])
+      pure []
+    TieredContext -> do
+      active <- listActiveCompartments scope
+      let visible = maybe active (\cleared -> filter ((> cleared) . (.activeStartedAt)) active) request.prSession.clearedAt
+          suffix = latestGapFreeSuffix visible
+      when (null suffix) $
         logInfo "context: no active compartment; using token-budgeted raw fallback" (object ["group_id" .= gid])
-        pure (RawHistory "raw_fallback_no_compartments")
-      covered -> pure (ProjectedHistory covered)
+      pure suffix
+  let end = maybe (MessageCursor 0) ((.activeRange.srEnd) . NE.last) (NE.nonEmpty covered)
+      tokenLimit = historyTokenLimit request.prLimits request.prMultimodal
+  (raw, dropped) <- fetchBoundedPromptTail scope end trigger request.prSession.clearedAt tokenLimit
+  when dropped $
+    logAttention "context: raw history exceeds bounded tail" $
+      object
+        [ "group_id" .= gid,
+          "summary_end_seq" .= end.ingestSeq,
+          "tail_start_seq" .= fmap (.cursor.ingestSeq) (listToMaybe raw),
+          "tail_tokens" .= rawTailTokens raw,
+          "tail_token_limit" .= tokenLimit
+        ]
+  pure
+    HistorySelection
+      { selectedCompartments = applyBaseCompartmentTiers now (map contextCompartmentFromActive covered),
+        selectedHistory = map (.history) raw
+      }
   where
     GroupId gid = request.prTrigger.groupId
     scope = conversationScopeFor request.prTrigger.groupId
-
-collectHistoryProjection :: (WithConnection :> es, IOE :> es) => Text -> UTCTime -> PromptRequest -> HistorySource -> Eff es HistorySelection
-collectHistoryProjection reason now request source = do
-  let (cursor, compartments, detail) = case source of
-        RawHistory why -> (MessageCursor 0, [], why)
-        ProjectedHistory covered -> ((last covered).activeRange.srEnd, applyBaseCompartmentTiers now (map contextCompartmentFromActive covered), reason)
-      scope = conversationScopeFor request.prTrigger.groupId
-      CanonicalMessageId trigger = request.prTrigger.canonicalId
-      limits = historyTokenWatermarks request.prLimits request.prMultimodal
-  (raw, _) <- fetchBoundedPromptTail scope cursor trigger request.prSession.clearedAt limits.htwHigh
-  pure (HistorySelection compartments (map (.history) raw) Nothing (Just detail))
+    CanonicalMessageId trigger = request.prTrigger.canonicalId
 
 -- | Collect only the newest token-sized raw tail.  SQL pages are walked
 -- backward so an arbitrarily old ledger never has to enter memory merely to

@@ -47,7 +47,7 @@ example 不能证明生产正在使用该值——当前生效配置只能靠运
 - 完整数据库 schema：`migrations/000_baseline.sql`（生产 schema 基线，单文件）
 - 消息 IR 与能力降级：`src/Max/IR.hs` 与 `src/Max/IR/`；平台层：`src/Max/Platform/`
   与 `src/Max/{Matrix,IMessage,WechatHook}.hs`；OneBot 边缘：`src/OneBot/`
-- 上下文、记忆与检索：`src/Max/{Context,ContextMaterialization,Prompt}*.hs`、
+- 上下文、记忆与检索：`src/Max/{Context,Prompt}*.hs`、`src/Max/{Context,Prompt}/`、
   `src/Max/{Historian,EpisodeStore,MemoryStore,Recall}.hs` 与 `src/Max/Memory/`
 - 命令实现：`src/Max/Command/`；配置结构与默认值：`src/Max/Config.hs`
 - 工具与技能系统：`src/Max/Tools/`、`src/Max/{Toolset,Skills}.hs`

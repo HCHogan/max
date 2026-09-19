@@ -127,9 +127,8 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.MCP.ClientSpec` — Streamable-HTTP body decoding (JSON + SSE)
 - `Max.HistorianSpec` / DB counterpart — token-sized episode prefixes, explicit
   identity provenance, structured-call publication, and raw-output retention
-- `Max.ContextMaterializationSpec` (DB) — active-projection validation,
-  optimistic revision publication, append-only versions, and stale-source
-  rejection at the prompt cache-bust boundary
+- `Max.PromptIntegrationSpec` (DB) — read-only prompt assembly, immediate
+  visibility of new summaries, preview parity, bounded history, pins and replies
 - `Max.EpisodeStoreSpec` — strict capture schema, evidence validation,
   source-hash/CAS rollback, rebuild/backfill, and proposal isolation
 - `Max.EpisodeSchedulerSpec` — quiet-period scheduling, retry and input races
@@ -252,7 +251,6 @@ query filter where relevant:
 GET  /api/context/status
 GET  /api/context/captures
 GET  /api/context/compartments
-GET  /api/context/plans
 GET  /api/context/embeddings
 GET  /api/context/recall?group=...&q=...
 GET  /api/context/memories/:id
@@ -261,10 +259,10 @@ POST /api/context/rebuild
 POST /api/context/reindex
 ```
 
-Prompt traces retain only budget decisions and source names, never a second
-copy of the prompt body, and are capped at 200 per conversation. Rebuild is
-staged and CAS-published; repeated clicks cannot enqueue two open replacements
-for the same compartment. Reindex is a recoverable derived-data operation and
+Prompt budget decisions and source names are sampled in trace logs, with no
+second copy of the prompt body or planning rows in the database. The old plan
+endpoint and admin tab are retired. Rebuild requests are deduplicated locally;
+the old summary remains active until source-checked publication commits. Reindex is a recoverable derived-data operation and
 returns `409` while the embedding worker is processing a batch.
 
 ### Platform release gate

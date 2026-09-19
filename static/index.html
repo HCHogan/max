@@ -570,11 +570,11 @@
 
           <!-- coverage / doctor -->
           <div class="tabs-content" x-show="ctxTab === 'coverage'">
-            <p class="card-desc">每个会话的账本覆盖、cursor 滞后与 materialization</p>
+            <p class="card-desc">每个会话的账本覆盖与 cursor 滞后</p>
             <div class="table-wrap">
               <table>
                 <thead><tr>
-                  <th>会话</th><th>消息</th><th>cursor</th><th>compartments</th><th>raw tail</th><th>未覆盖 settled</th><th>materialization</th><th>状态</th>
+                  <th>会话</th><th>消息</th><th>cursor</th><th>compartments</th><th>raw tail</th><th>未覆盖 settled</th><th>状态</th>
                 </tr></thead>
                 <tbody>
                   <template x-for="c in ctx.status.conversations" :key="c.conversation_id">
@@ -585,10 +585,6 @@
                       <td class="num" data-label="compartments" x-text="c.active_compartments"></td>
                       <td class="num" data-label="raw tail" x-text="c.live_tail_messages"></td>
                       <td class="num" data-label="未覆盖 settled" x-text="c.uncovered_settled_messages"></td>
-                      <td data-label="materialization">
-                        <span class="id" x-text="c.materialization.revision == null ? '-' : 'r' + c.materialization.revision"></span>
-                        <span class="muted" x-text="c.materialization.reason || ''"></span>
-                      </td>
                       <td data-label="状态">
                         <span class="verdict" :class="{ deny: c.issues.length }"
                               x-text="c.issues.length ? c.issues.join(';') : 'ok'"></span>
@@ -648,37 +644,6 @@
               </table>
               <p class="empty" x-show="!ctx.compartments.length">没有 compartment。</p>
             </div>
-          </div>
-
-          <!-- prompt token / tier decisions -->
-          <div class="tabs-content" x-show="ctxTab === 'plans'">
-            <p class="card-desc">每次 dispatch 的 token 预算与降级决策,只存决策不存正文</p>
-            <div class="logs" x-show="ctx.plans.length">
-              <template x-for="p in ctx.plans" :key="p.id">
-                <details class="trace">
-                  <summary>
-                    <span class="id" x-text="gname(p.conversation_id) + ' #' + p.trigger_message_id"></span>
-                    <span x-text="p.estimated_prompt_tokens + '/' + p.prompt_token_limit + ' tokens'"></span>
-                    <span x-text="p.history_mode + (p.materialization_reason ? ' · ' + p.materialization_reason : '')"></span>
-                    <span class="stamp" x-text="fmtDate(p.created_at)"></span>
-                  </summary>
-                  <table>
-                    <thead><tr><th>source</th><th>tokens</th><th>decision</th><th>reason</th></tr></thead>
-                    <tbody>
-                      <template x-for="(d, i) in p.decisions" :key="i">
-                        <tr>
-                          <td class="rowkey" data-label="source" x-text="d.source"></td>
-                          <td class="num" data-label="tokens" x-text="d.estimated_tokens"></td>
-                          <td data-label="decision" x-text="d.decision"></td>
-                          <td class="wide" data-label="reason" :title="d.reason" x-text="d.reason"></td>
-                        </tr>
-                      </template>
-                    </tbody>
-                  </table>
-                </details>
-              </template>
-            </div>
-            <p class="empty" x-show="!ctx.plans.length">没有 plan 记录。</p>
           </div>
 
           <!-- embedding backlog -->

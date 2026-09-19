@@ -102,7 +102,6 @@ def check_imports():
         "Max.Recall.Types": {"Max.Episode.Types", "Max.Memory.Types"},
         "Max.Context.Types": {"Max.Context", "Max.Dispatch", "Max.File.Types", "Max.History.Types", "Max.Episode.Types", "Max.LLM.Types", "Max.Memory.Types", "Max.Platform.Types", "Max.Session.Types"},
         "Max.Context.Policy": {"Max.Context", "Max.Context.Types", "Max.History.Types", "Max.Memory.Types"},
-        "Max.Context.Materialization": {"Max.History.Types", "Max.Episode.Types"},
         "Max.Prompt.Request": {"Max.Context.Types", "Max.Dispatch", "Max.ModelCatalog.Internal", "Max.Platform.Types", "Max.Session.Types"},
         "Max.Sandbox.Types": set(),
         "Max.Context.Media": {"Max.History.Types", "Max.Media.Types", "Max.Time"},
@@ -118,12 +117,12 @@ def check_imports():
 
     renderer = (ROOT / "src/Max/Prompt/Render.hs").read_text()
     for dependency in IMPORT.findall(renderer):
-        if dependency.startswith(("Effectful", "Max.DB.", "System.")) or dependency.endswith("Store") or dependency in {"Max.Env", "Max.Util", "Max.ContextMaterialization"}:
+        if dependency.startswith(("Effectful", "Max.DB.", "System.")) or dependency.endswith("Store") or dependency in {"Max.Env", "Max.Util"}:
             errors.append(f"Prompt rendering acquired execution dependency: {dependency}")
     for module in ["Max.Prompt.Collect", "Max.Prompt.History", "Max.Prompt.Runtime"]:
         source = (ROOT / "src" / (module.replace(".", "/") + ".hs")).read_text()
-        if set(IMPORT.findall(source)) & {"Max.Prompt.Materialize", "Max.ContextMaterialization", "Max.ContextTraceStore"}:
-            errors.append(f"{module}: preview adapter acquired publication")
+        if re.search(r"\b(execute|execute_|executeMany)\b", source):
+            errors.append(f"{module}: context collection acquired SQL writes")
     tools = (ROOT / "src/Max/Effects/Tools.hs").read_text()
     if "tdFailuresPrecedeEffects" in tools:
         errors.append("Tool runner reconstructed failure proof from historical metadata")
