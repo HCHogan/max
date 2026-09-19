@@ -16,6 +16,8 @@ spec = describe "deployed self-source snapshot" $ do
     paths `shouldSatisfy` notElem "docs/runbooks/operational-debt.md"
     paths `shouldContain` ["docs/runbooks/database-health.md"]
     paths `shouldContain` ["docs/schema-scope.json"]
+    paths `shouldContain` ["docs/research/simplification-evaluation.md"]
+    paths `shouldContain` ["docs/research/simplification-20260919.json"]
     paths `shouldContain` ["test/Max/HistorianSpec.hs"]
     paths `shouldContain` ["migrations/000_baseline.sql"]
     paths `shouldContain` ["src/Max/DB/Health.hs"]

@@ -493,3 +493,15 @@ maintained implementation record.
   Current source, active/archival SQL and prompt counts are in `docs/code-size.md`.
   Release CI, representative live-model comparison and operational acceptance
   remain required; no production deployment is claimed.
+
+- Release CI for `e99a0a3` passed every job, including Linux DB tests, Nix package,
+  both platform bridges and the runtime VM checks. The timestamp fixture fix
+  removes the Linux-only exact-time mismatch without weakening its assertions.
+- [Live model-loop comparison](research/simplification-evaluation.md): twelve
+  predeclared, counterbalanced synthetic cases used the configured production
+  default profile. All returned without timeout/tool errors; clarification and
+  frozen-lookup answers met their narrow expectations. New long replies released
+  text before model completion, but timing and explanation quality did not
+  improve uniformly. The report records calls, usage, outputs, limitations and
+  the exact one-off runner; it is not a generic model-quality certificate.
+  Coordinated deployment and operational acceptance remain pending.

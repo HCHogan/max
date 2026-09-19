@@ -34,7 +34,7 @@ Measured with tokei 14.0.0 and PostgreSQL 17.11:
 | Isolation/runtime adapters | 3,420 |
 | Optional admin Haskell | 1,811 |
 | Additional owned production code | 7,361 |
-| Tests | 20,296 |
+| Tests | 20,298 |
 | Development/evaluation tools | 3,236 |
 | Historical migration files | 4,248 |
 | Vendored code | 8 |
@@ -98,3 +98,7 @@ attachment reserve are additional. Byte counts use compact wire JSON including
 fixture media, not Markdown formatting. This fixture is not the full enabled
 tool catalog, representative live traffic, provider billing or a model-quality
 comparison. Those claims require separately recorded runtime evidence.
+
+The [live comparison](research/simplification-evaluation.md) records a separate
+small experiment. Its JSON stores the one-off runner verbatim as historical data;
+it adds no executable target or runtime mechanism.
