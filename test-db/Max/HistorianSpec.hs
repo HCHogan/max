@@ -66,9 +66,9 @@ spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ d
     (rows :: [(Text, Maybe Text, Maybe Text)])
       `shouldBe` [("published", Just (rawCapture memberPrincipal), Just "max_interaction")]
     withDb pool (loadCursor scope historianCursor) `shouldReturn` end
-    compartments <- withDb pool $ query "SELECT summary_p1, summary_p3 FROM conversation_compartments WHERE state = 'active'" ()
-    (compartments :: [(Text, Text)])
-      `shouldBe` [("Alice said she likes green tea; Max acknowledged it.", "Alice's green-tea preference was acknowledged.")]
+    compartments <- withDb pool $ query "SELECT summary FROM conversation_compartments WHERE state = 'active'" ()
+    (compartments :: [Only Text])
+      `shouldBe` [Only "Alice said she likes green tea; Max acknowledged it."]
 
   it "heals a commit-order skip below the live cursor without rewinding it" $ do
     let scope = conversationScopeFor (GroupId groupId)
@@ -161,9 +161,7 @@ publishRange pool scope expected end evidence = do
 rangeCapture :: [Int64] -> EpisodeCapture
 rangeCapture ids =
   EpisodeCapture
-    { captureSummaryP1 = CitedSummary "full summary" ids,
-      captureSummaryP2 = CitedSummary "compact summary" (take 1 ids),
-      captureSummaryP3 = CitedSummary "anchor" (take 1 (reverse ids)),
+    { captureSummary = CitedSummary "full summary" ids,
       captureImportance = 0.5,
       captureConfidence = 0.9,
       captureEpisodeKind = Ambient,
@@ -209,7 +207,7 @@ latestCursor pool = do
 -- principal that spoke a cited message.
 rawCapture :: Int64 -> Text
 rawCapture memberPrincipal =
-  "{\"summary_p1\":{\"text\":\"Alice said she likes green tea; Max acknowledged it.\",\"evidence_message_ids\":[1001,1002]},\"summary_p2\":{\"text\":\"Alice likes green tea.\",\"evidence_message_ids\":[1001]},\"summary_p3\":{\"text\":\"Alice's green-tea preference was acknowledged.\",\"evidence_message_ids\":[1001,1002]},\"importance\":0.7,\"confidence\":0.95,\"episode_kind\":\"max_interaction\",\"memory_proposals\":[{\"action\":\"add\",\"scope\":\"user\",\"user_id\":"
+  "{\"summary\":{\"text\":\"Alice said she likes green tea; Max acknowledged it.\",\"evidence_message_ids\":[1001,1002]},\"importance\":0.7,\"confidence\":0.95,\"episode_kind\":\"max_interaction\",\"memory_proposals\":[{\"action\":\"add\",\"scope\":\"user\",\"user_id\":"
     <> tshow memberPrincipal
     <> ",\"content\":\"Alice likes green tea.\",\"category\":\"preference\",\"evidence_message_ids\":[1001]}]}"
 

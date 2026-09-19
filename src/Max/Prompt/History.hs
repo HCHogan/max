@@ -8,7 +8,6 @@ import Data.Maybe (listToMaybe)
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Log (Log, UTCTime, logAttention, logInfo, object, (.=))
 import Effectful.PostgreSQL (WithConnection)
-import Max.Context.Policy (applyBaseCompartmentTiers)
 import Max.Context.Types (ContextCompartment, ContextReadMode (..))
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.History (HistoryItem, HistoryPage (..), LedgerItem (..), MessageCursor (..), fetchNewestPromptPageBefore)
@@ -26,13 +25,13 @@ data HistorySelection = HistorySelection
     selectedHistory :: ![HistoryItem]
   }
 
-collectHistory :: (WithConnection :> es, Log :> es, IOE :> es) => UTCTime -> PromptRequest -> Eff es HistorySelection
-collectHistory now request = do
+collectHistory :: (WithConnection :> es, Log :> es, IOE :> es) => PromptRequest -> Eff es HistorySelection
+collectHistory request = do
   covered <- case request.prReadMode of
     RawLedgerEmergency -> do
       logAttention "context: global raw-ledger emergency reader enabled" (object ["group_id" .= gid])
       pure []
-    TieredContext -> do
+    SummaryContext -> do
       active <- listActiveCompartments scope
       let visible = maybe active (\cleared -> filter ((> cleared) . (.activeStartedAt)) active) request.prSession.clearedAt
           suffix = latestGapFreeSuffix visible
@@ -53,7 +52,7 @@ collectHistory now request = do
         ]
   pure
     HistorySelection
-      { selectedCompartments = applyBaseCompartmentTiers now (map contextCompartmentFromActive covered),
+      { selectedCompartments = map contextCompartmentFromActive covered,
         selectedHistory = map (.history) raw
       }
   where

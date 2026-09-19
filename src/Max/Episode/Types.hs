@@ -68,31 +68,16 @@ data ActiveCompartment = ActiveCompartment
     -- gap-free suffix, so a partial historical backfill can never masquerade
     -- as complete chronological coverage.
     activeGapBefore :: !Bool,
-    activeSummaryP1 :: !Text,
-    activeSummaryP2 :: !Text,
-    activeSummaryP3 :: !Text,
-    activeKind :: !Text,
-    activeImportance :: !Double,
-    activeConfidence :: !Double,
-    activeMaterializationVersion :: !Int64
+    activeSummary :: !Text
   }
   deriving stock (Show, Eq)
 
--- | One policy-checked page of the immutable source range behind a summary.
--- Pages contain ledger rows, not re-summarized text, including rows that were
--- deliberately excluded from the normal prompt transcript.
 instance FromRow ActiveCompartment where
   fromRow =
     ActiveCompartment
       <$> field
       <*> field
       <*> (SourceRange . MessageCursor <$> field <*> (MessageCursor <$> field) <*> field <*> field)
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
       <*> field
       <*> field
       <*> field

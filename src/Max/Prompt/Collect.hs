@@ -26,8 +26,7 @@ import Effectful.Log (Log, logAttention, object, (.=))
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.Context.Media (tagMediaMarkers)
 import Max.Context.Types
-  ( ContextCandidates (ContextCandidates),
-    ContextSnapshot (..),
+  ( ContextSnapshot (..),
     PromptImage (PromptImage),
     PromptInputs
       ( PromptInputs,
@@ -127,7 +126,7 @@ collectContextPreview ::
   PromptRequest -> Eff es ContextSnapshot
 collectContextPreview request = do
   now <- liftIO getCurrentTime
-  history <- collectHistory now request
+  history <- collectHistory request
   collectContextSnapshot request now history
 
 collectContextSnapshot ::
@@ -238,32 +237,31 @@ collectContextSnapshot request now' history = do
       else pure []
   pure $
     ContextSnapshot
-      { csCandidates =
-          ContextCandidates $
-            PromptInputs
-              { defaultPersona = defaultPersona,
-                session = s,
-                triggerMessage = gm,
-                recentTurns = recentTurns',
-                continuationView = continuation',
-                transcript = transcriptCtx,
-                compartments = compartments',
-                historyTurns = historyTurns',
-                inFlight = inFlight',
-                pinnedItems = pinnedItems'',
-                replyCtx = replyCtx',
-                triggerForward = triggerKids,
-                multimodal = multimodal',
-                outputCapabilities = outputCaps,
-                origin = origin',
-                groupBrief = brief,
-                groupMemories = groupMems,
-                userMemories = userMems,
-                images = images' <> videos',
-                skills = skills',
-                now = now',
-                tz = tz'
-              }
+      { csInputs =
+          PromptInputs
+            { defaultPersona = defaultPersona,
+              session = s,
+              triggerMessage = gm,
+              recentTurns = recentTurns',
+              continuationView = continuation',
+              transcript = transcriptCtx,
+              compartments = compartments',
+              historyTurns = historyTurns',
+              inFlight = inFlight',
+              pinnedItems = pinnedItems'',
+              replyCtx = replyCtx',
+              triggerForward = triggerKids,
+              multimodal = multimodal',
+              outputCapabilities = outputCaps,
+              origin = origin',
+              groupBrief = brief,
+              groupMemories = groupMems,
+              userMemories = userMems,
+              images = images' <> videos',
+              skills = skills',
+              now = now',
+              tz = tz'
+            }
       }
 
 -- | Wait for downloaded trigger-image rows, up to 'waitImagesMaxMs'. Failed

@@ -6,18 +6,13 @@ module Max.Context.Policy
   ( ContextCostModel (..),
     PolicyDrop (..),
     selectContextTo,
-    applyBaseCompartmentTiers,
-    degradeCompartment,
-    selectedCompartmentSummary,
-    compartmentTierText,
+    limitSummaryTokens,
   )
 where
 
 import Data.Function (on)
 import Data.List (minimumBy)
 import Data.Text (Text)
-import Data.Text qualified as T
-import Data.Time (UTCTime, diffUTCTime)
 import Max.Context (estimateTextTokens)
 import Max.Context.Types
 import Max.History.Types (HistoryItem (..))
@@ -34,9 +29,9 @@ data PolicyDrop = PolicyDrop
     pdTokens :: !Int
   }
 
-selectContextTo :: ContextCostModel -> Int -> Int -> ContextCandidates -> (SelectedContext, [PolicyDrop])
+selectContextTo :: ContextCostModel -> Int -> Int -> ContextSnapshot -> (SelectedContext, [PolicyDrop])
 selectContextTo costs tokenLimit initialTokens candidates =
-  let (selected, drops) = go initialTokens [] candidates.candidateInputs
+  let (selected, drops) = go initialTokens [] candidates.csInputs
    in (SelectedContext selected, drops)
   where
     go estimated dropped inputs
@@ -45,8 +40,8 @@ selectContextTo costs tokenLimit initialTokens candidates =
           continue estimated (memoryDrop costs "memory.active" inputs withoutMemory memory) dropped withoutMemory
       | Just (line, withoutTurn) <- dropOldestRecentTurn inputs =
           continue estimated (PolicyDrop "turn.recent" (max 1 (costs.ccmRecentTurnTokens line))) dropped withoutTurn
-      | Just (source, savedTokens, degraded) <- degradeOneCompartment costs inputs =
-          continue estimated (PolicyDrop source savedTokens) dropped degraded
+      | Just (savedTokens, withoutSummary) <- dropOldestSummary costs inputs =
+          continue estimated (PolicyDrop "history.summary" savedTokens) dropped withoutSummary
       | oldest : rest <- inputs.transcript =
           let drop' = PolicyDrop "history.raw" (max 1 (estimateTextTokens oldest.renderedText))
            in continue estimated drop' dropped (inputs {transcript = rest})
@@ -57,33 +52,26 @@ selectContextTo costs tokenLimit initialTokens candidates =
     continue estimated drop' dropped inputs =
       go (max 0 (estimated - drop'.pdTokens)) (drop' : dropped) inputs
 
--- | One deterministic fidelity downgrade under prompt budget pressure.
-degradeCompartment :: [ContextCompartment] -> Maybe (Text, [ContextCompartment])
-degradeCompartment compartments' = case filter ((/= TierP4) . (.contextTier)) compartments' of
-  [] -> Nothing
-  candidates ->
-    let selected = minimumBy (compare `on` degradationKey) candidates
-        nextTier = succ selected.contextTier
-        degraded = selected {contextTier = nextTier}
-        source =
-          "history.compartment."
-            <> T.toLower (compartmentTierText selected.contextTier)
-            <> "->"
-            <> T.toLower (compartmentTierText nextTier)
-     in Just (source, [if c.contextCompartmentId == selected.contextCompartmentId then degraded else c | c <- compartments'])
+-- | Retain the newest chronological suffix under the summary budget.
+limitSummaryTokens :: Int -> ContextSnapshot -> (ContextSnapshot, [PolicyDrop])
+limitSummaryTokens tokenLimit candidates =
+  let inputs = candidates.csInputs
+      rows = inputs.compartments
+      costs = map ((64 +) . estimateTextTokens . (.contextSummary)) rows
+      (retained, removed) = trim (sum costs) (zip rows costs) []
+   in (ContextSnapshot (inputs {compartments = retained}), removed)
   where
-    degradationKey compartment =
-      ( compartment.contextImportance,
-        compartment.contextEndedAt,
-        compartment.contextMaterializationVersion,
-        compartment.contextCompartmentId
-      )
+    trim used ((row, tokens) : rest) removed
+      | used > max 0 tokenLimit = trim (used - tokens) rest (PolicyDrop "history.summary" tokens : removed)
+      | otherwise = (row : map fst rest, reverse removed)
+    trim _ [] removed = ([], reverse removed)
 
-degradeOneCompartment :: ContextCostModel -> PromptInputs -> Maybe (Text, Int, PromptInputs)
-degradeOneCompartment costs inputs = do
-  (source, compartments') <- degradeCompartment inputs.compartments
-  let after = inputs {compartments = compartments'}
-  pure (source, blockRemovalCost (costs.ccmCompartmentBlockTokens inputs) (costs.ccmCompartmentBlockTokens after), after)
+dropOldestSummary :: ContextCostModel -> PromptInputs -> Maybe (Int, PromptInputs)
+dropOldestSummary costs inputs = case inputs.compartments of
+  [] -> Nothing
+  _ : rest ->
+    let after = inputs {compartments = rest}
+     in Just (blockRemovalCost (costs.ccmCompartmentBlockTokens inputs) (costs.ccmCompartmentBlockTokens after), after)
 
 memoryDrop :: ContextCostModel -> Text -> PromptInputs -> PromptInputs -> MemoryItem -> PolicyDrop
 memoryDrop costs source before after memory =
@@ -120,37 +108,3 @@ dropOldestRecentTurn :: PromptInputs -> Maybe (Text, PromptInputs)
 dropOldestRecentTurn inputs = case reverse inputs.recentTurns of
   [] -> Nothing
   oldest : rest -> Just (oldest, inputs {recentTurns = reverse rest})
-
-applyBaseCompartmentTiers :: UTCTime -> [ContextCompartment] -> [ContextCompartment]
-applyBaseCompartmentTiers now' compartments' =
-  [ compartment {contextTier = baseTier distance compartment}
-  | (distance, compartment) <- zip [count - 1, count - 2 .. 0] compartments'
-  ]
-  where
-    count = length compartments'
-    ageDays compartment =
-      max 0 (realToFrac (diffUTCTime now' compartment.contextEndedAt) / 86400 :: Double)
-    baseTier distance compartment
-      | distance <= 1 && ageDays compartment <= 7 && compartment.contextConfidence >= 0.5 = TierP1
-      | compartment.contextImportance >= 0.9 = TierP2
-      | compartment.contextImportance >= 0.7 = TierP2
-      | ageDays compartment <= 30 = TierP2
-      | distance <= 15 && ageDays compartment <= 90 = TierP2
-      | compartment.contextImportance >= 0.4 = TierP3
-      | ageDays compartment <= 180 = TierP3
-      | distance <= 63 && ageDays compartment <= 365 = TierP3
-      | otherwise = TierP4
-
-selectedCompartmentSummary :: ContextCompartment -> Maybe Text
-selectedCompartmentSummary compartment = case compartment.contextTier of
-  TierP1 -> Just compartment.contextSummaryP1
-  TierP2 -> Just compartment.contextSummaryP2
-  TierP3 -> Just compartment.contextSummaryP3
-  TierP4 -> Nothing
-
-compartmentTierText :: CompartmentTier -> Text
-compartmentTierText = \case
-  TierP1 -> "P1"
-  TierP2 -> "P2"
-  TierP3 -> "P3"
-  TierP4 -> "P4"

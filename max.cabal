@@ -38,6 +38,7 @@ extra-source-files:
     test-db/fixtures/local-delivery-upgrade.sql
     test-db/fixtures/local-media-upgrade.sql
     test-db/fixtures/local-historian-upgrade.sql
+    test-db/fixtures/single-summary-upgrade.sql
     test-db/fixtures/browser-upgrade-after.sql
     assets/codesnap/*.tmTheme
     browser-image/*.patch

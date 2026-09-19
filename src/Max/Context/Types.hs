@@ -4,15 +4,12 @@
 -- handles, so every pipeline stage can be invoked and tested independently.
 module Max.Context.Types
   ( PromptInputs (..),
-    ContextCandidates (..),
     SelectedContext (..),
     TriggerOrigin (..),
     ContextReadMode (..),
-    CompartmentTier (..),
     ContextCompartment (..),
     PromptImage (..),
     ContextSnapshot (..),
-    csInputs,
     ContextPlan (..),
     cpInputs,
   )
@@ -53,9 +50,7 @@ data PromptInputs = PromptInputs
     -- Text labels retain speaker, time and ID across providers; user/assistant
     -- roles alone cannot distinguish the members of a group.
     transcript :: ![HistoryItem],
-    -- | Settled chronological history preceding 'transcript'.  Each item
-    -- carries all precomputed fidelity levels; ContextPolicy chooses one
-    -- without invoking an LLM.  Empty in legacy mode.
+    -- | Sourced chronological summaries preceding 'transcript'.
     compartments :: ![ContextCompartment],
     -- | Put history back into real @user@\/@assistant@ turns instead of
     -- the flat transcript.  Per-profile
@@ -141,28 +136,16 @@ data TriggerOrigin
 -- | Process-wide release reader choice.  The emergency mode is deliberately
 -- raw-only rather than a resurrection of the retired mention/history lane.
 data ContextReadMode
-  = TieredContext
+  = SummaryContext
   | RawLedgerEmergency
   deriving stock (Show, Eq)
 
-data CompartmentTier = TierP1 | TierP2 | TierP3 | TierP4
-  deriving stock (Show, Eq, Ord, Enum, Bounded)
-
--- | Pure prompt-facing form of an immutable active compartment.  Keeping all
--- three summaries in the snapshot makes fidelity selection deterministic and
--- rebuild-free inside ContextPolicy.
+-- | A chronological summary with a scoped handle for its original messages.
 data ContextCompartment = ContextCompartment
-  { contextCompartmentId :: !Int64,
-    contextExpandHandle :: !EpisodeHandle,
+  { contextExpandHandle :: !EpisodeHandle,
     contextStartedAt :: !UTCTime,
     contextEndedAt :: !UTCTime,
-    contextImportance :: !Double,
-    contextConfidence :: !Double,
-    contextMaterializationVersion :: !Int64,
-    contextSummaryP1 :: !Text,
-    contextSummaryP2 :: !Text,
-    contextSummaryP3 :: !Text,
-    contextTier :: !CompartmentTier
+    contextSummary :: !Text
   }
   deriving stock (Show, Eq)
 
@@ -176,21 +159,14 @@ data PromptImage = PromptImage
   }
   deriving stock (Show, Eq)
 
-newtype ContextCandidates = ContextCandidates
-  { candidateInputs :: PromptInputs
-  }
-
 newtype SelectedContext = SelectedContext
   { selectedInputs :: PromptInputs
   }
 
 -- | Complete output of the effectful collection step, before pure selection.
 newtype ContextSnapshot = ContextSnapshot
-  { csCandidates :: ContextCandidates
+  { csInputs :: PromptInputs
   }
-
-csInputs :: ContextSnapshot -> PromptInputs
-csInputs = (.csCandidates.candidateInputs)
 
 -- | Deterministic, fully selected context with its budget and decision trace.
 -- Rendering this value performs no I/O and no further selection.

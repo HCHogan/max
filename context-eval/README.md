@@ -27,7 +27,7 @@ cabal run max-context-eval -- --eval-profile historian-candidate \
   --runs 3 --min-pass-rate 1
 ```
 
-Every Historian case labels required/forbidden summary terms, P1 evidence, and
+Every Historian case labels required/forbidden summary terms, summary evidence, and
 expected semantic-memory proposals. Additional proposals fail by default:
 omission is safer than turning ambient banter into durable fact. Reports show
 estimated prompt size, provider-reported prompt/completion/cache tokens, and

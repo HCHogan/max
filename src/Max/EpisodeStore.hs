@@ -290,9 +290,7 @@ instance ToJSON EpisodeMemoryProposal where
         ]
 
 data EpisodeCapture = EpisodeCapture
-  { captureSummaryP1 :: !CitedSummary,
-    captureSummaryP2 :: !CitedSummary,
-    captureSummaryP3 :: !CitedSummary,
+  { captureSummary :: !CitedSummary,
     captureImportance :: !Double,
     captureConfidence :: !Double,
     captureEpisodeKind :: !EpisodeKind,
@@ -304,9 +302,7 @@ instance FromJSON EpisodeCapture where
   parseJSON = withObject "episode_capture" $ \o -> do
     rejectUnknownKeys
       "episode_capture"
-      [ "summary_p1",
-        "summary_p2",
-        "summary_p3",
+      [ "summary",
         "importance",
         "confidence",
         "episode_kind",
@@ -315,9 +311,7 @@ instance FromJSON EpisodeCapture where
       o
     capture <-
       EpisodeCapture
-        <$> o .: "summary_p1"
-        <*> o .: "summary_p2"
-        <*> o .: "summary_p3"
+        <$> o .: "summary"
         <*> o .: "importance"
         <*> o .: "confidence"
         <*> o .: "episode_kind"
@@ -339,9 +333,7 @@ rejectUnknownKeys label allowed objectValue =
 instance ToJSON EpisodeCapture where
   toJSON capture =
     object
-      [ "summary_p1" .= capture.captureSummaryP1,
-        "summary_p2" .= capture.captureSummaryP2,
-        "summary_p3" .= capture.captureSummaryP3,
+      [ "summary" .= capture.captureSummary,
         "importance" .= capture.captureImportance,
         "confidence" .= capture.captureConfidence,
         "episode_kind" .= capture.captureEpisodeKind,
@@ -415,9 +407,7 @@ validateEpisodeCapture run source capture =
           entry.transcriptEligible
         ]
     summaryErrors =
-      validateSummary eligibleByMessage "summary_p1" 4000 capture.captureSummaryP1
-        <> validateSummary eligibleByMessage "summary_p2" 2000 capture.captureSummaryP2
-        <> validateSummary eligibleByMessage "summary_p3" 500 capture.captureSummaryP3
+      validateSummary eligibleByMessage "summary" 4000 capture.captureSummary
         <> [ CaptureValidationError "source_range" "loaded source does not match the capture run range"
            | not (sourceMatchesRun run source)
            ]
@@ -799,10 +789,10 @@ insertStagedCompartment run capture = do
     query
       "INSERT INTO conversation_compartments \
       \ (conversation_id, capture_run_id, start_ingest_seq, end_ingest_seq, source_hash, \
-      \  source_message_count, summary_p1, summary_p2, summary_p3, episode_kind, \
+      \  source_message_count, summary, episode_kind, \
       \  importance, confidence, state, historian_profile, prompt_version, schema_version, \
       \  materialization_version, speaker_stats) \
-      \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'staged', ?, ?, ?, \
+      \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'staged', ?, ?, ?, \
       \         COALESCE((SELECT max(materialization_version) + 1 \
       \                   FROM conversation_compartments WHERE conversation_id = ?), 1), \
       \         (SELECT jsonb_object_agg(user_id::text, message_count) \
@@ -815,9 +805,7 @@ insertStagedCompartment run capture = do
         run.crRange.srEnd.ingestSeq,
         run.crRange.srHash,
         run.crRange.srMessageCount,
-        T.strip capture.captureSummaryP1.summaryText,
-        T.strip capture.captureSummaryP2.summaryText,
-        T.strip capture.captureSummaryP3.summaryText,
+        T.strip capture.captureSummary.summaryText,
         episodeKindText capture.captureEpisodeKind,
         capture.captureImportance,
         capture.captureConfidence,
@@ -840,26 +828,21 @@ insertSummaryEvidence ::
   EpisodeCapture ->
   Eff es ()
 insertSummaryEvidence run compartment capture = do
-  insertTier ("p1" :: Text) capture.captureSummaryP1.evidenceMessageIds
-  insertTier ("p2" :: Text) capture.captureSummaryP2.evidenceMessageIds
-  insertTier ("p3" :: Text) capture.captureSummaryP3.evidenceMessageIds
-  where
-    insertTier tier messageIds = do
-      inserted <-
-        execute
-          "INSERT INTO compartment_evidence \
-          \ (compartment_id, summary_tier, source_canonical_message_id, source_principal_id) \
-          \ SELECT ?, ?, canonical_message_id, author_principal_id FROM messages \
-          \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND canonical_message_id IN ?"
-          ( compartment,
-            tier,
-            run.crConversationId,
-            run.crRange.srStart.ingestSeq,
-            run.crRange.srEnd.ingestSeq,
-            In messageIds
-          )
-      unless (inserted == fromIntegral (length messageIds)) $
-        publicationFailure "summary citation left the authorized source range"
+  let messageIds = capture.captureSummary.evidenceMessageIds
+  inserted <-
+    execute
+      "INSERT INTO compartment_evidence \
+      \ (compartment_id, summary_tier, source_canonical_message_id, source_principal_id) \
+      \ SELECT ?, 'summary', canonical_message_id, author_principal_id FROM messages \
+      \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND canonical_message_id IN ?"
+      ( compartment,
+        run.crConversationId,
+        run.crRange.srStart.ingestSeq,
+        run.crRange.srEnd.ingestSeq,
+        In messageIds
+      )
+  unless (inserted == fromIntegral (length messageIds)) $
+    publicationFailure "summary citation left the authorized source range"
 
 data ProposalOutcome = ProposalOutcome
   { outcomeIndex :: !Int,
@@ -1083,8 +1066,7 @@ listActiveCompartments scope =
     \            AND gap_message.ingest_seq > a.previous_end \
     \            AND gap_message.ingest_seq < a.start_ingest_seq \
     \        )), \
-    \        a.summary_p1, a.summary_p2, a.summary_p3, a.episode_kind, a.importance, a.confidence, \
-    \        a.materialization_version \
+    \        a.summary \
     \ FROM active AS a \
     \ JOIN messages AS first_message \
     \   ON first_message.group_id = a.conversation_id AND first_message.ingest_seq = a.start_ingest_seq \

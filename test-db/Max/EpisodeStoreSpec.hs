@@ -125,12 +125,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
           \ FROM compartment_evidence ORDER BY summary_tier, source_canonical_message_id"
           ()
     (citations :: [(Text, Int64, Int64)])
-      `shouldBe` [ ("p1", m1, memberPrincipal),
-                   ("p1", m2, memberPrincipal),
-                   ("p1", m3, botPrincipal),
-                   ("p2", m1, memberPrincipal),
-                   ("p2", m3, botPrincipal),
-                   ("p3", m3, botPrincipal)
+      `shouldBe` [ ("summary", m1, memberPrincipal),
+                   ("summary", m2, memberPrincipal),
+                   ("summary", m3, botPrincipal)
                  ]
 
     handle <- case active of
@@ -318,7 +315,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
       `shouldReturn` [old]
 
     rebuildSource <- withDb pool $ loadCaptureSource rebuildRun
-    let rebuiltCapture = (validCapture [m1, m2, m3] []) {captureSummaryP3 = CitedSummary "rebuilt anchor" [m3]}
+    let rebuiltCapture = (validCapture [m1, m2, m3] []) {captureSummary = CitedSummary "rebuilt anchor" [m3]}
     rebuiltValidated <- requireValid rebuildRun rebuildSource rebuiltCapture
     new <- withDb pool $ publishCaptureRun scopeA rebuildRun "fixture response" rebuiltValidated
     new `shouldNotBe` old
@@ -460,9 +457,7 @@ cursorFor pool messageId = do
 validCapture :: [Int64] -> [EpisodeMemoryProposal] -> EpisodeCapture
 validCapture ids proposals =
   EpisodeCapture
-    { captureSummaryP1 = CitedSummary "full summary" ids,
-      captureSummaryP2 = CitedSummary "compact summary" (take 1 ids <> take 1 (reverse ids)),
-      captureSummaryP3 = CitedSummary "anchor" (take 1 (reverse ids)),
+    { captureSummary = CitedSummary "full summary" ids,
       captureImportance = 0.8,
       captureConfidence = 0.9,
       captureEpisodeKind = Mixed,

@@ -29,9 +29,9 @@ spec = describe "EpisodeCapture validation" $ do
   it "rejects summaries that cite filtered or out-of-range messages" $ do
     let bad =
           validCapture
-            { captureSummaryP1 = CitedSummary "bad citation" [11, 12, 99]
+            { captureSummary = CitedSummary "bad citation" [11, 12, 99]
             }
-    expectValidationPath "summary_p1.evidence_message_ids" (validateEpisodeCapture captureRun source bad)
+    expectValidationPath "summary.evidence_message_ids" (validateEpisodeCapture captureRun source bad)
 
   it "rejects a source page that is not the run's exact range" $ do
     expectValidationPath "source_range" (validateEpisodeCapture captureRun (take 1 source) validCapture)
@@ -94,9 +94,7 @@ ledger seqNo message speaker eligible body =
 validCapture :: EpisodeCapture
 validCapture =
   EpisodeCapture
-    { captureSummaryP1 = CitedSummary "full" [11],
-      captureSummaryP2 = CitedSummary "compact" [11],
-      captureSummaryP3 = CitedSummary "anchor" [11],
+    { captureSummary = CitedSummary "full" [11],
       captureImportance = 0.7,
       captureConfidence = 0.8,
       captureEpisodeKind = Ambient,
@@ -105,7 +103,7 @@ validCapture =
 
 fencedCapture :: Text
 fencedCapture =
-  "```json\n{\"summary_p1\":{\"text\":\"full\",\"evidence_message_ids\":[11]},\"summary_p2\":{\"text\":\"compact\",\"evidence_message_ids\":[11]},\"summary_p3\":{\"text\":\"anchor\",\"evidence_message_ids\":[11]},\"importance\":0.7,\"confidence\":0.8,\"episode_kind\":\"ambient\",\"memory_proposals\":[]}\n```"
+  "```json\n{\"summary\":{\"text\":\"full\",\"evidence_message_ids\":[11]},\"importance\":0.7,\"confidence\":0.8,\"episode_kind\":\"ambient\",\"memory_proposals\":[]}\n```"
 
 expectValidationPath :: Text -> Either [CaptureValidationError] a -> Expectation
 expectValidationPath path = \case

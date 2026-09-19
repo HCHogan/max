@@ -13,7 +13,7 @@ spec = describe "generated prompt-flow documentation" $ do
   it "matches the Prompt → Agent → LLM production path" $
     renderPromptFlow `shouldBe` decodeUtf8 $(embedFile "docs/prompt-flow.md")
 
-  it "shows tiered episode rendering and one-turn source expansion" $ do
+  it "shows sourced summaries and one-turn source expansion" $ do
     renderPromptFlow `shouldSatisfy` T.isInfixOf "[episode#bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     renderPromptFlow `shouldSatisfy` T.isInfixOf "[episode#cccccccc-cccc-4ccc-8ccc-cccccccccccc"
     renderPromptFlow `shouldSatisfy` T.isInfixOf "[episode#dddddddd-dddd-4ddd-8ddd-dddddddddddd"

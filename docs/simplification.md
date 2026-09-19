@@ -109,7 +109,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [x] Delete model-driven memory dreaming; retain deterministic processing of
       recorded expiry dates without leases.
 - [x] Delete cross-turn raw wire archive replay.
-- [ ] Simplify context to recent messages, one sourced summary representation
+- [x] Simplify context to recent messages, one sourced summary representation
       and relevant scoped memory; retain history search/expansion and token limits.
 - [x] Replace persistent materialization/CAS traces with derived in-memory state
       and optional sampled diagnostics.
@@ -413,3 +413,22 @@ maintained implementation record.
   HLint, package and offline context checks pass. Effective src/app Haskell is
   44,871 lines (799 fewer); core Haskell is 32,047. Three-level summaries, remaining
   worker failure handling and final operational acceptance are still pending.
+
+- Historian now emits one summary with one citation list. Removed P1/P2/P3/P4
+  fields and age/importance-based fidelity transitions from prompt assembly.
+  The planner keeps a chronological summary suffix within one quarter of its
+  prompt budget (at most 8,192 estimated tokens), then applies the existing
+  complete-prompt limit with pins, replies, trigger and attachments protected.
+  Scoped memories, history search and source expansion remain. Collection and
+  selection now use one snapshot type instead of nested equivalent wrappers.
+- Migration 122 merges distinct old summary texts and their citation union while
+  retaining the original columns, evidence, source ranges, handles and messages.
+  Only vectors whose text changed are invalidated. Lexical and vector recall
+  now read the same summary; new captures do not write legacy tiers.
+  All targets build; 1,062 unit and 255 DB examples pass, plus all 13 prompt DB
+  cases after the snapshot type cleanup. Upgrade, capability, HLint and offline
+  checks pass (9 synthetic and 4 historical Historian fixtures, 7 recall cases).
+  These offline checks do not establish live-model quality. Effective src/app
+  Haskell is 44,733 lines; core Haskell is 31,909. Worker error classification,
+  remaining removal/readability work, measurements and operational acceptance
+  remain before full plan completion.

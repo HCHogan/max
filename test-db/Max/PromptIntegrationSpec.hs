@@ -152,9 +152,7 @@ spec pool = before_ (truncateAll pool) $
       source <- withDb pool $ loadCaptureSource run
       let capture =
             EpisodeCapture
-              { captureSummaryP1 = CitedSummary "settled full summary" [1001, 1002],
-                captureSummaryP2 = CitedSummary "settled compact summary" [1001, 1002],
-                captureSummaryP3 = CitedSummary "settled anchor" [1002],
+              { captureSummary = CitedSummary "settled full summary" [1001, 1002],
                 captureImportance = 0.8,
                 captureConfidence = 1,
                 captureEpisodeKind = MaxInteraction,
@@ -171,7 +169,7 @@ spec pool = before_ (truncateAll pool) $
         withDbLog pool $
           fst <$> buildContext ((promptRequest s trigger) {prLimits = defaultContextLimits})
       let ub = userBodyOf msgs
-      ub `shouldSatisfy` ("settled compact summary" `T.isInfixOf`)
+      ub `shouldSatisfy` ("settled full summary" `T.isInfixOf`)
       ub `shouldSatisfy` ("ambient raw tail" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("settled raw one" `T.isInfixOf`))
       rawEmergency <-
@@ -332,9 +330,7 @@ publishNextCompartment pool expected evidence summary = do
   source <- withDb pool $ loadCaptureSource run
   let capture =
         EpisodeCapture
-          { captureSummaryP1 = CitedSummary summary evidence,
-            captureSummaryP2 = CitedSummary summary evidence,
-            captureSummaryP3 = CitedSummary summary evidence,
+          { captureSummary = CitedSummary summary evidence,
             captureImportance = 0.8,
             captureConfidence = 1,
             captureEpisodeKind = Mixed,

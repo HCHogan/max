@@ -144,11 +144,11 @@ Pure logic in `test/` mirroring the library layout:
   `history_as_turns` shape (including that neither can produce two consecutive
   same-role messages), section ordering, roster/名片 identity, 私聊 scene,
   memory block placement, quoted-forward expansion, in-flight hiding, and
-  deterministic P1/P2/P3/P4 decay before a token-sized raw tail; context
+  bounded chronological summaries before a token-sized raw tail; context
   candidates and selected plans are distinct types, and selection uses one
   full-prompt measurement plus block-local cost deltas
 - `Max.PromptFlowSpec` — generated `docs/prompt-flow.md` matches the live
-  Prompt → Agent → LLM rendering path, including P1/P2/P3/P4 omission,
+  Prompt → Agent → LLM rendering path, including sourced summaries,
   unified recall result rendering, and one-turn episode expansion (regenerate
   with `cabal run max-prompt-flow`)
 - `Max.RenderSpec` — markdown table → typst

@@ -7,18 +7,14 @@ module Max.Prompt
 
     -- * Building blocks (exposed for tests)
     PromptInputs (..),
-    ContextCandidates (..),
     SelectedContext (..),
     PromptImage (..),
     ContextCompartment (..),
-    CompartmentTier (..),
     ContextSnapshot (..),
-    csInputs,
     ContextPlan (..),
     cpInputs,
     collectContextPreview,
     planContext,
-    applyBaseCompartmentTiers,
     renderContextPlan,
     renderContext,
     contextRoster,
@@ -44,11 +40,8 @@ import Effectful.Log (Log, logAttention, logTrace, object, (.=))
 import Effectful.PostgreSQL (WithConnection)
 import Max.Context (ContextBudget (..), ContextTrace (..))
 import Max.Context.Media (tagMediaMarkers)
-import Max.Context.Policy (applyBaseCompartmentTiers)
 import Max.Context.Types
-  ( CompartmentTier (..),
-    ContextCandidates (..),
-    ContextCompartment (..),
+  ( ContextCompartment (..),
     ContextPlan (..),
     ContextReadMode (..),
     ContextSnapshot (..),
@@ -57,7 +50,6 @@ import Max.Context.Types
     SelectedContext (..),
     TriggerOrigin (..),
     cpInputs,
-    csInputs,
   )
 import Max.DB.History.Media (withMediaHandles)
 import Max.Dispatch (DispatchMessage (canonicalId, groupId))

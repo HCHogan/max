@@ -200,7 +200,7 @@ instance FromJSON ExpectedProposal where
 data HistorianExpect = HistorianExpect
   { heSummaryTermGroups :: ![[Text]],
     heForbiddenSummaryTerms :: ![Text],
-    heP1EvidenceIds :: ![Int64],
+    heSummaryEvidenceIds :: ![Int64],
     heProposals :: ![ExpectedProposal],
     heAllowAdditionalProposals :: !Bool
   }
@@ -210,7 +210,7 @@ instance FromJSON HistorianExpect where
     HistorianExpect . fromMaybe []
       <$> o .:? "summary_term_groups"
       <*> (fromMaybe [] <$> o .:? "forbidden_summary_terms")
-      <*> (fromMaybe [] <$> o .:? "p1_evidence_message_ids")
+      <*> (fromMaybe [] <$> o .:? "summary_evidence_message_ids")
       <*> (fromMaybe [] <$> o .:? "memory_proposals")
       <*> (fromMaybe False <$> o .:? "allow_additional_memory_proposals")
 
@@ -407,7 +407,7 @@ evaluateCapture fixture run source capture =
     warningErrors = case validateEpisodeCapture run source capture of
       Left _ -> []
       Right validated -> map (("proposal validation: " <>) . renderValidation) (captureValidationWarnings validated)
-    summary = T.toCaseFold $ T.intercalate "\n" [capture.captureSummaryP1.summaryText, capture.captureSummaryP2.summaryText, capture.captureSummaryP3.summaryText]
+    summary = T.toCaseFold capture.captureSummary.summaryText
     expectations = fixture.hfExpect
     summaryErrors =
       [ "summary missing one of: " <> T.intercalate " | " alternatives
@@ -415,9 +415,9 @@ evaluateCapture fixture run source capture =
         not (any ((`T.isInfixOf` summary) . T.toCaseFold) alternatives)
       ]
         <> ["summary contains forbidden term: " <> term | term <- expectations.heForbiddenSummaryTerms, T.toCaseFold term `T.isInfixOf` summary]
-        <> [ "P1 evidence missing message " <> tshow messageId
-           | messageId <- expectations.heP1EvidenceIds,
-             messageId `notElem` capture.captureSummaryP1.evidenceMessageIds
+        <> [ "summary evidence missing message " <> tshow messageId
+           | messageId <- expectations.heSummaryEvidenceIds,
+             messageId `notElem` capture.captureSummary.evidenceMessageIds
            ]
     actual = capture.captureMemoryProposals
     expected = expectations.heProposals

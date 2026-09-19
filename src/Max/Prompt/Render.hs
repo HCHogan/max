@@ -11,7 +11,7 @@ import Data.Map.Strict qualified as Map
     lookup,
     toAscList,
   )
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
   ( empty,
@@ -56,16 +56,13 @@ import Max.Context.Media (consumeMarkers)
 import Max.Context.Policy
   ( ContextCostModel (..),
     PolicyDrop (pdSource, pdTokens),
-    compartmentTierText,
+    limitSummaryTokens,
     selectContextTo,
-    selectedCompartmentSummary,
   )
 import Max.Context.Types
-  ( CompartmentTier (..),
-    ContextCandidates (ContextCandidates),
-    ContextCompartment (..),
+  ( ContextCompartment (..),
     ContextPlan (..),
-    ContextSnapshot (csCandidates),
+    ContextSnapshot (ContextSnapshot, csInputs),
     PromptImage (piDataUrl, piLabel),
     PromptInputs
       ( compartments,
@@ -94,7 +91,6 @@ import Max.Context.Types
     SelectedContext (selectedInputs),
     TriggerOrigin (..),
     cpInputs,
-    csInputs,
   )
 import Max.Dispatch
   ( DispatchMessage
@@ -108,20 +104,7 @@ import Max.Dispatch
     dispatchTextWithoutSelf,
   )
 import Max.Episode.Types
-  ( ActiveCompartment
-      ( activeCompartmentId,
-        activeConfidence,
-        activeEndedAt,
-        activeExpandHandle,
-        activeGapBefore,
-        activeImportance,
-        activeMaterializationVersion,
-        activeStartedAt,
-        activeSummaryP1,
-        activeSummaryP2,
-        activeSummaryP3
-      ),
-    CompartmentId (unCompartmentId),
+  ( ActiveCompartment (activeEndedAt, activeExpandHandle, activeGapBefore, activeStartedAt, activeSummary),
     episodeHandleText,
   )
 import Max.File.Types
@@ -352,19 +335,20 @@ renderContext pi' =
 -- message, environment, and attached media are protected here.
 planContext :: ContextLimits -> ContextSnapshot -> ContextPlan
 planContext limits snapshot =
-  let initial = csInputs snapshot
-      budget = contextBudget limits (not (null initial.images))
+  let budget = contextBudget limits (not (null (csInputs snapshot).images))
+      (candidates, summaryDrops) = limitSummaryTokens (min 8192 (budget.cbPromptTokenLimit `div` 4)) snapshot
+      initial = candidates.csInputs
       initialMessages = renderContext initial
       initialTokens = estimateMessagesTokens initialMessages
       -- Block-local deltas can miss wrapper overhead. Re-render and keep
       -- degrading until the wire-shaped estimate fits or nothing optional remains.
-      refine candidates tokens accumulated =
-        let (selection, removed) = selectContextTo contextCostModel budget.cbPromptTokenLimit tokens candidates
+      refine remaining tokens accumulated =
+        let (selection, removed) = selectContextTo contextCostModel budget.cbPromptTokenLimit tokens remaining
             actual = estimateMessagesTokens (renderContext selection.selectedInputs)
          in if actual <= budget.cbPromptTokenLimit || null removed
               then (selection, accumulated <> removed)
-              else refine (ContextCandidates selection.selectedInputs) actual (accumulated <> removed)
-      (selectedContext, drops) = refine snapshot.csCandidates initialTokens []
+              else refine (ContextSnapshot selection.selectedInputs) actual (accumulated <> removed)
+      (selectedContext, drops) = refine candidates initialTokens summaryDrops
       selected = selectedContext.selectedInputs
       messages = renderContext selected
       estimated = estimateMessagesTokens messages
@@ -422,15 +406,10 @@ contextTrace budget inputs messages drops withinBudget =
       ContextIncluded
       "selected chronological raw transcript",
     ContextTrace
-      "history.compartment"
+      "history.summary"
       (sum (map compartmentSelectedTokens inputs.compartments))
       ContextIncluded
-      "selected deterministic P1/P2/P3 chronological projections",
-    ContextTrace
-      "history.compartment.p4"
-      0
-      (if any ((== TierP4) . (.contextTier)) inputs.compartments then ContextDropped else ContextIncluded)
-      "P4 episodes remain searchable and expandable but are omitted from the default prompt",
+      "selected chronological summaries with source handles",
     ContextTrace
       "turn.recent"
       (sum (map estimateTextTokens inputs.recentTurns))
@@ -495,7 +474,7 @@ contextTrace budget inputs messages drops withinBudget =
        ]
 
 compartmentSelectedTokens :: ContextCompartment -> Int
-compartmentSelectedTokens = maybe 0 estimateTextTokens . selectedCompartmentSummary
+compartmentSelectedTokens = estimateTextTokens . (.contextSummary)
 
 systemTokens :: [ChatMessage] -> Int
 systemTokens = \case
@@ -565,21 +544,14 @@ latestGapFreeSuffix compartments' = drop lastBreak compartments'
 contextCompartmentFromActive :: ActiveCompartment -> ContextCompartment
 contextCompartmentFromActive active =
   ContextCompartment
-    { contextCompartmentId = active.activeCompartmentId.unCompartmentId,
-      contextExpandHandle = active.activeExpandHandle,
+    { contextExpandHandle = active.activeExpandHandle,
       contextStartedAt = active.activeStartedAt,
       contextEndedAt = active.activeEndedAt,
-      contextImportance = active.activeImportance,
-      contextConfidence = active.activeConfidence,
-      contextMaterializationVersion = active.activeMaterializationVersion,
-      contextSummaryP1 = active.activeSummaryP1,
-      contextSummaryP2 = active.activeSummaryP2,
-      contextSummaryP3 = active.activeSummaryP3,
-      contextTier = TierP1
+      contextSummary = active.activeSummary
     }
 
 contextPolicyVersion :: Text
-contextPolicyVersion = "context-policy/v5"
+contextPolicyVersion = "context-policy/v6"
 
 rawTailTokens :: [LedgerItem] -> Int
 rawTailTokens =
@@ -710,26 +682,21 @@ renderUser tz' now' origin' compartments' recentTurns' continuationView' mTransc
       ]
 
 renderCompartments :: TimeZone -> [ContextCompartment] -> [Text]
-renderCompartments tz' compartments' = case mapMaybe renderOne compartments' of
-  [] -> []
-  rows ->
-    ["[earlier conversation — rebuildable chronological summaries]"]
-      <> rows
-      <> [""]
+renderCompartments _ [] = []
+renderCompartments tz' compartments' =
+  ["[earlier conversation — sourced summaries]"]
+    <> map renderOne compartments'
+    <> [""]
   where
-    renderOne compartment = do
-      summary <- selectedCompartmentSummary compartment
-      pure $
-        "[episode#"
-          <> episodeHandleText compartment.contextExpandHandle
-          <> " "
-          <> fmtDate tz' compartment.contextStartedAt
-          <> ".."
-          <> fmtDate tz' compartment.contextEndedAt
-          <> " "
-          <> compartmentTierText compartment.contextTier
-          <> "]: "
-          <> oneLine summary
+    renderOne compartment =
+      "[episode#"
+        <> episodeHandleText compartment.contextExpandHandle
+        <> " "
+        <> fmtDate tz' compartment.contextStartedAt
+        <> ".."
+        <> fmtDate tz' compartment.contextEndedAt
+        <> "]: "
+        <> oneLine compartment.contextSummary
 
 renderHistoryLine :: TimeZone -> HistoryItem -> Text
 renderHistoryLine tz' h =

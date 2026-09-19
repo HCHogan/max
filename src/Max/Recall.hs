@@ -476,17 +476,17 @@ lexicalCandidatesSql =
   \  LIMIT (SELECT candidate_limit FROM input) \
   \), episode_candidates AS ( \
   \  SELECT 'episode'::text AS source, 'episode:' || episode.id::text AS dedup_key, \
-  \         left(episode.summary_p2, 800) AS snippet, COALESCE(episode.activated_at, episode.created_at) AS occurred_at, \
+  \         left(episode.summary, 800) AS snippet, COALESCE(episode.activated_at, episode.created_at) AS occurred_at, \
   \         NULL::bigint AS principal_id, NULL::bigint AS message_id, episode.expand_handle AS episode_handle, \
   \         NULL::bigint AS memory_id, episode.importance, \
-  \         GREATEST((SELECT count(*) FILTER (WHERE position(term in lower(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3)))>0)::double precision / GREATEST(cardinality(input.query_terms),1) FROM unnest(input.query_terms) term), similarity(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3), input.query_text), \
-  \           CASE WHEN position(lower(input.query_text) in lower(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3))) > 0 THEN 1 ELSE 0 END \
+  \         GREATEST((SELECT count(*) FILTER (WHERE position(term in lower(episode.summary))>0)::double precision / GREATEST(cardinality(input.query_terms),1) FROM unnest(input.query_terms) term), similarity(episode.summary, input.query_text), \
+  \           CASE WHEN position(lower(input.query_text) in lower(episode.summary)) > 0 THEN 1 ELSE 0 END \
   \         )::double precision AS lexical_score, \
   \         NULL::double precision AS semantic_score, false AS is_pinned, false AS is_permanent \
   \  FROM conversation_compartments AS episode CROSS JOIN input \
   \  WHERE episode.conversation_id = input.conversation_id AND episode.state = 'active' \
-  \    AND (position(lower(input.query_text) in lower(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3))) > 0 \
-  \      OR similarity(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3), input.query_text) >= 0.08 OR EXISTS(SELECT 1 FROM unnest(input.query_terms) term WHERE position(term in lower(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3)))>0)) \
+  \    AND (position(lower(input.query_text) in lower(episode.summary)) > 0 \
+  \      OR similarity(episode.summary, input.query_text) >= 0.08 OR EXISTS(SELECT 1 FROM unnest(input.query_terms) term WHERE position(term in lower(episode.summary))>0)) \
   \  ORDER BY lexical_score DESC, occurred_at DESC, episode.id \
   \  LIMIT (SELECT candidate_limit FROM input) \
   \), message_candidates AS ( \
@@ -585,7 +585,7 @@ semanticCandidatesSql =
   \    AND episode.embedding_model = input.model_id AND episode.embedding_dimensions = input.dimensions \
   \), episode_candidates AS ( \
   \  SELECT 'episode'::text AS source, 'episode:' || episode.id::text AS dedup_key, \
-  \         left(episode.summary_p2, 800) AS snippet, COALESCE(episode.activated_at, episode.created_at) AS occurred_at, \
+  \         left(episode.summary, 800) AS snippet, COALESCE(episode.activated_at, episode.created_at) AS occurred_at, \
   \         NULL::bigint AS principal_id, NULL::bigint AS message_id, episode.expand_handle AS episode_handle, \
   \         NULL::bigint AS memory_id, episode.importance, NULL::double precision AS lexical_score, \
   \         (1 - (episode.embedding <=> episode.query_vector))::double precision AS semantic_score, \

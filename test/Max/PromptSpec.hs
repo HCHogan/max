@@ -22,7 +22,7 @@ import Max.IR (Body (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), noAdvertisedCaps, qqAdvertisedCaps)
-import Max.Prompt (CompartmentTier (..), ContextCandidates (..), ContextCompartment (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyBaseCompartmentTiers, applyStickerCaptions, cpInputs, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
+import Max.Prompt (ContextCompartment (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, cpInputs, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -884,43 +884,46 @@ spec = do
       plan.cpTrace
         `shouldSatisfy` any (\trace -> trace.ctSource == "prompt.total" && trace.ctDecision == ContextOverBudget)
 
-    it "renders a tiered compartment prefix before the token-sized raw tail" $ do
+    it "renders sourced summaries chronologically before the raw tail" $ do
       let raw = historyAt 11 101 otherMemberId (Just "Bob") "live tail"
-          old = compartmentAt 1 (UTCTime (fromGregorian 2025 1 1) 0) 0.1 "old P1" "old P2" "old P3"
-          recent = compartmentAt 2 (timeAt 10) 0.5 "recent P1" "recent P2" "recent P3"
-          plan = planContext generousLimits (tieredSnapshot baseInputs {compartments = [old, recent], transcript = [raw]})
+          old = compartmentAt 1 (UTCTime (fromGregorian 2025 1 1) 0) "old summary"
+          recent = compartmentAt 2 (timeAt 10) "recent summary"
+          plan = planContext generousLimits (snapshot baseInputs {compartments = [old, recent], transcript = [raw]})
           (_, body) = splitMessages (renderContextPlan plan)
-      map (.contextTier) (cpInputs plan).compartments `shouldBe` [TierP4, TierP1]
+      map (.contextExpandHandle) (cpInputs plan).compartments `shouldBe` [episodeHandleAt 1, episodeHandleAt 2]
       body `shouldSatisfy` ("[episode#00000000-0000-0000-0000-000000000002" `T.isInfixOf`)
-      body `shouldSatisfy` ("recent P1" `T.isInfixOf`)
-      body `shouldSatisfy` (not . ("old P3" `T.isInfixOf`))
+      body `shouldSatisfy` ("old summary" `T.isInfixOf`)
+      body `shouldSatisfy` ("recent summary" `T.isInfixOf`)
       body `shouldSatisfy` ("live tail" `T.isInfixOf`)
 
-    it "degrades all compartment fidelity before dropping the raw tail" $ do
+    it "omits summaries before dropping the raw tail under token pressure" $ do
       let raw = historyAt 11 101 otherMemberId (Just "Bob") "protected live tail"
-          rawPlan = planContext generousLimits (tieredSnapshot baseInputs {transcript = [raw]})
+          rawPlan = planContext generousLimits (snapshot baseInputs {transcript = [raw]})
           tightLimits = ContextLimits rawPlan.cpEstimatedPromptTokens 512 0 0
-          large = compartmentAt 1 (timeAt 10) 0.5 (T.replicate 4000 "P1 ") (T.replicate 2000 "P2 ") (T.replicate 500 "P3 ")
-          pressured = planContext tightLimits (tieredSnapshot baseInputs {compartments = [large], transcript = [raw]})
+          large = compartmentAt 1 (timeAt 10) (T.replicate 4000 "长")
+          pressured = planContext tightLimits (snapshot baseInputs {compartments = [large], transcript = [raw]})
       map (.canonicalId) (cpInputs pressured).transcript `shouldBe` [raw.canonicalId]
-      map (.contextTier) (cpInputs pressured).compartments `shouldBe` [TierP4]
+      (cpInputs pressured).compartments `shouldBe` []
+      pressured.cpWithinBudget `shouldBe` True
       pressured.cpTrace
-        `shouldSatisfy` any (\trace -> trace.ctSource == "history.compartment.p3->p4" && trace.ctDecision == ContextDropped)
+        `shouldSatisfy` any (\trace -> trace.ctSource == "history.summary" && trace.ctDecision == ContextDropped)
 
-compartmentAt :: Int64 -> UTCTime -> Double -> Text -> Text -> Text -> ContextCompartment
-compartmentAt cid ended importance p1 p2 p3 =
+    it "bounds summaries separately and retains the newest suffix without displacing memory" $ do
+      let summaries = [compartmentAt cid (timeAt (fromIntegral cid)) (T.replicate 3000 "旧") | cid <- [1 .. 4]]
+          recent = compartmentAt 5 (timeAt 10) "recent summary"
+          memory = memAt 1 "important current fact"
+          plan = planContext generousLimits (snapshot baseInputs {compartments = summaries <> [recent], groupMemories = [memory]})
+      map (.contextExpandHandle) (cpInputs plan).compartments `shouldBe` map episodeHandleAt [3, 4, 5]
+      map (.memId) (cpInputs plan).groupMemories `shouldBe` [memory.memId]
+      plan.cpWithinBudget `shouldBe` True
+
+compartmentAt :: Int64 -> UTCTime -> Text -> ContextCompartment
+compartmentAt cid ended summary =
   ContextCompartment
-    { contextCompartmentId = cid,
-      contextExpandHandle = episodeHandleAt cid,
+    { contextExpandHandle = episodeHandleAt cid,
       contextStartedAt = ended,
       contextEndedAt = ended,
-      contextImportance = importance,
-      contextConfidence = 1,
-      contextMaterializationVersion = cid,
-      contextSummaryP1 = p1,
-      contextSummaryP2 = p2,
-      contextSummaryP3 = p3,
-      contextTier = TierP1
+      contextSummary = summary
     }
 
 episodeHandleAt :: Int64 -> EpisodeHandle
@@ -930,12 +933,7 @@ episodeHandleAt cid =
     (parseEpisodeHandle ("00000000-0000-0000-0000-" <> T.justifyRight 12 '0' (T.pack (show cid))))
 
 snapshot :: PromptInputs -> ContextSnapshot
-snapshot inputs = ContextSnapshot (ContextCandidates inputs)
-
-tieredSnapshot :: PromptInputs -> ContextSnapshot
-tieredSnapshot inputs =
-  ContextSnapshot
-    (ContextCandidates (inputs {compartments = applyBaseCompartmentTiers inputs.now inputs.compartments}))
+snapshot = ContextSnapshot
 
 generousLimits :: ContextLimits
 generousLimits = ContextLimits 200000 4096 0 0

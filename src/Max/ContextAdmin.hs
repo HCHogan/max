@@ -279,7 +279,7 @@ listCompartmentsAdmin conversationId requestedLimit = do
       \       compartment.embedding_model, compartment.embedding_dimensions, compartment.embedding_content_hash, \
       \       compartment.created_at, compartment.activated_at, count(evidence.*) \
       \ FROM conversation_compartments AS compartment \
-      \ LEFT JOIN compartment_evidence AS evidence ON evidence.compartment_id = compartment.id \
+      \ LEFT JOIN compartment_evidence AS evidence ON evidence.compartment_id = compartment.id AND evidence.summary_tier = 'summary' \
       \ WHERE (?::bigint IS NULL OR compartment.conversation_id = ?) \
       \ GROUP BY compartment.id \
       \ ORDER BY compartment.id DESC LIMIT ?"
@@ -474,7 +474,7 @@ loadEmbeddingStatus targetModel conversationId = do
              \         memory.embedding IS NOT NULL, memory.embedding_model, memory.embedding_dimensions, memory.embedding_content_hash \
              \  FROM memories AS memory WHERE memory.lifecycle IN ('active', 'permanent') \
              \  UNION ALL \
-             \  SELECT 'episode', episode.conversation_id, episode.summary_p1, \
+             \  SELECT 'episode', episode.conversation_id, episode.summary, \
              \         episode.embedding IS NOT NULL, episode.embedding_model, episode.embedding_dimensions, episode.embedding_content_hash \
              \  FROM conversation_compartments AS episode WHERE episode.state = 'active' \
              \  UNION ALL \

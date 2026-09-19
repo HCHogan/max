@@ -107,7 +107,7 @@ embedWorker lock = forever $ do
       mems <- listPendingMemoryEmbeddings modelId batchSize
       episodes <-
         query
-          "SELECT id, summary_p1 FROM conversation_compartments \
+          "SELECT id, summary FROM conversation_compartments \
           \ WHERE state = 'active' \
           \   AND (embedding IS NULL OR embedding_model IS DISTINCT FROM ?) \
           \ ORDER BY activated_at DESC NULLS LAST, id DESC LIMIT 64"
@@ -138,7 +138,7 @@ embedWorker lock = forever $ do
             embedInto
               "UPDATE conversation_compartments SET embedding = ?::vector, embedding_model = ?, \
               \ embedding_dimensions = ?, embedding_content_hash = ?, embedding_updated_at = now() \
-              \ WHERE id = ? AND summary_p1 = ? AND state = 'active'"
+              \ WHERE id = ? AND summary = ? AND state = 'active'"
               episodes
           okS <-
             embedInto

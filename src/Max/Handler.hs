@@ -229,7 +229,7 @@ import Max.Platform.Types
     noAdvertisedCaps,
   )
 import Max.Prompt
-  ( ContextReadMode (RawLedgerEmergency, TieredContext),
+  ( ContextReadMode (RawLedgerEmergency, SummaryContext),
     PromptRequest
       ( PromptRequest,
         prContinuation,
@@ -1711,7 +1711,7 @@ dispatchLLMWith start mIntent origin gm = do
           PromptRequest
             { prContinuation = continuation,
               prLimits = limits,
-              prReadMode = if env.beForceRawContext then RawLedgerEmergency else TieredContext,
+              prReadMode = if env.beForceRawContext then RawLedgerEmergency else SummaryContext,
               prOutputCaps = outputCaps,
               prPersona = env.bePersona,
               prMultimodal = multimodal,

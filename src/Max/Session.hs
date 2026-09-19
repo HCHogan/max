@@ -195,7 +195,7 @@ clearAll now s =
     }
 
 -- | Remove the 'clearedAt' watermark.  The next prompt is allowed to
--- pull in the tiered history from before any
+-- pull in summaries from before any
 -- earlier @!clear@.
 unclear :: Session -> Session
 unclear s = s {clearedAt = Nothing}

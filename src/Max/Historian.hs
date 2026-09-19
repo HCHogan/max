@@ -87,10 +87,10 @@ import Max.Util (catchSync, trySync, tshow)
 import OneBot.Types (GroupId (..))
 
 historianPromptVersion :: Text
-historianPromptVersion = "historian/v5"
+historianPromptVersion = "historian/v6"
 
 historianSchemaVersion :: Int
-historianSchemaVersion = 2
+historianSchemaVersion = 3
 
 -- | Internal SQL pagination is not an episode-size policy.  Pages are joined
 -- until the deterministic token boundary is reached.
@@ -420,7 +420,7 @@ historianRepairPrompt =
   T.unlines
     [ "The previous answer was not valid EpisodeCapture JSON.",
       "Return the complete corrected JSON object only; do not explain the repair.",
-      "summary_p1/summary_p2/summary_p3 must each be objects with text and evidence_message_ids.",
+      "summary must be an object with text and evidence_message_ids.",
       "Every message id, user_id, memory id, and expected_version must be a JSON number, never a quoted string.",
       "For add use only action,scope,user_id,content,category,evidence_message_ids.",
       "For update use only action,id,expected_version,content,evidence_message_ids; category/scope/user_id are forbidden.",
@@ -517,9 +517,7 @@ renderHistorianSourceLine tz history =
 deterministicFilteredCapture :: [LedgerItem] -> EpisodeCapture
 deterministicFilteredCapture _ =
   EpisodeCapture
-    { captureSummaryP1 = CitedSummary "No transcript-eligible chat messages were present in this source range." [],
-      captureSummaryP2 = CitedSummary "No visible chat messages." [],
-      captureSummaryP3 = CitedSummary "Non-chat ledger activity." [],
+    { captureSummary = CitedSummary "No transcript-eligible chat messages were present in this source range." [],
       captureImportance = 0,
       captureConfidence = 1,
       captureEpisodeKind = Ambient,
@@ -535,23 +533,21 @@ historianInputBudget profile catalog =
 historianSystem :: Text
 historianSystem =
   T.unlines
-    [ "You are Max's Historian v2. Capture one settled multi-speaker chat episode once.",
+    [ "You are Max's Historian v3. Capture one settled multi-speaker chat episode once.",
       "Return exactly one JSON object and no prose. Unknown fields are rejected.",
       "Raw messages are immutable; your output is a rebuildable projection with exact evidence.",
       "",
       "Required top-level fields:",
-      "  summary_p1, summary_p2, summary_p3: {text, evidence_message_ids}",
+      "  summary: {text, evidence_message_ids}",
       "  importance: number 0..1",
       "  confidence: number 0..1",
       "  episode_kind: max_interaction|ambient|mixed|decision|support|social",
       "  memory_proposals: array",
       "",
       "Summary policy:",
-      "  Write summaries and memory content in the source transcript's dominant language; preserve names, dates, and technical terms exactly.",
-      "  P1 (<=4000 chars): faithful episode account: speakers, goals, decisions, commitments, unresolved points, and outcome.",
-      "  P2 (<=2000 chars): compact key facts and outcome.",
-      "  P3 (<=500 chars): one anchor saying what happened.",
-      "  Every summary must cite one or more message_id values from the supplied transcript.",
+      "  Write the summary and memory content in the source transcript's dominant language; preserve names, dates, and technical terms exactly.",
+      "  Summary (<=4000 chars): concise faithful account: speakers, goals, decisions, commitments, unresolved points, and outcome.",
+      "  The summary must cite one or more message_id values from the supplied transcript.",
       "  Preserve who said what. Do not turn speculation, jokes, or another speaker's claim into a fact about someone.",
       "",
       "Memory proposals are optional and must be stable enough to help future conversations. Most ambient/social episodes need none.",

@@ -13,7 +13,7 @@ promptRequest session trigger =
   PromptRequest
     { prContinuation = Nothing,
       prLimits = defaultContextLimits,
-      prReadMode = TieredContext,
+      prReadMode = SummaryContext,
       prOutputCaps = qqAdvertisedCaps,
       prPersona = "default-persona",
       prMultimodal = False,

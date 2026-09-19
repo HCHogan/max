@@ -36,7 +36,6 @@ import Data.Time
   )
 import Data.Vector qualified as V
 import Max.Config qualified as Config
-import Max.Context.Types (ContextCandidates (..))
 import Max.DB.Calls (redactDataUrls)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..), LedgerItem (LedgerItem), MessageCursor (..))
@@ -57,7 +56,7 @@ import Max.IR (Body (..), MediaKind (..), MediaMeta (..), MentionTarget (..), No
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..), LLMProfile (..), Protocol (..), defaultContextLimits)
 import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..), qqAdvertisedCaps)
-import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
+import Max.Prompt (ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Recall (RecallHit (..))
 import Max.Session (Session (..))
 import Max.Tools (contextSearchSummary, episodeExpansionSummary)
@@ -122,7 +121,7 @@ renderPromptFlow =
       "```",
       "",
       "这里用固定的多模态群聊 fixture：群历史、pin、引用文件、两类 memory、",
-      "P1/P2/P3/P4 episode、技能索引、当前图片/视频都存在。工具表刻意只保留 `view_image` 和",
+      "带来源的 episode 摘要、技能索引、当前图片/视频都存在。工具表刻意只保留 `view_image` 和",
       "`view_video`，让 JSON 仍可阅读；这两个 schema 直接取自工具实现，不是文档副本。",
       "第一轮模型调用 `view_image(message_id=7405)`，第二轮展示 agent 追加",
       "assistant 原文、tool result 和真实图片块后的完整请求。",
@@ -144,20 +143,20 @@ renderPromptFlow =
 -- results, then passed through the live model-facing result renderers.
 renderEpisodeLifecycle :: [Text]
 renderEpisodeLifecycle =
-  [ "## Episode 分代、搜索与展开",
+  [ "## Episode 摘要、搜索与展开",
     "",
-    "这一段展示同一个 episode 如何从稳定 prompt 中的摘要，变成一次性的原文工具结果。",
-    "fixture 中最老的低功耗调试 episode 已衰减到 P4，因此首轮 prompt 不显示它；",
+    "这一段展示当前摘要、历史检索和原文展开如何进入模型请求。",
+    "这个固定快照只含近期摘要；更早的低功耗调试 episode 留在历史中，",
     "`context_search` 仍能返回其 opaque handle，`context_expand` 再按当前会话权限恢复原始 ledger。",
     "搜索和展开的固定 typed fixture 都经过生产 `Max.Tools` 的结果 renderer。",
     "",
-    "### 首轮 prompt：P1/P2/P3 + raw tail",
+    "### 首轮 prompt：近期摘要 + raw tail",
     "",
     "```text",
     episodePromptExcerpt,
     "```",
     "",
-    "P4 的 `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa` 没有出现在上面；它只是不渲染，",
+    "更早的 `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa` 没有出现在上面；它只是不渲染，",
     "不是被删除，也没有失去检索和展开能力。",
     "",
     "### 模型调用 `context_search`",
@@ -177,7 +176,7 @@ renderEpisodeLifecycle =
     jsonFence contextExpandFixture,
     "",
     "这个 JSON 只作为当前 agent turn 的 tool result 进入下一轮请求。turn 结束后它不会写回",
-    "稳定 prompt；下一个独立 dispatch 仍从上面的 P1/P2/P3 + raw tail 开始，P4 继续按需搜索。",
+    "prompt；下一个独立 dispatch 重新选择当前摘要与 raw tail，更多历史继续按需搜索。",
     ""
   ]
 
@@ -349,7 +348,7 @@ initialMessages =
   renderContextPlan $
     planContext
       defaultContextLimits
-      (ContextSnapshot (ContextCandidates promptFixture))
+      (ContextSnapshot promptFixture)
 
 promptFixture :: PromptInputs
 promptFixture =
@@ -391,68 +390,32 @@ promptFixture =
 fixtureCompartments :: [ContextCompartment]
 fixtureCompartments =
   [ compartment
-      101
-      contextEpisodeHandle
-      (dayAt 2025 1 11 20 4)
-      (dayAt 2025 1 11 20 18)
-      0.35
-      hiddenP4SummaryP1
-      hiddenP4SummaryP2
-      "LoRa 气象站曾解决 STOP2 唤醒后复位问题。"
-      TierP4,
-    compartment
-      102
-      (fixtureHandle "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
       (dayAt 2026 3 2 19 20)
       (dayAt 2026 3 2 20 6)
-      0.48
-      "群里比较 STM32L4 和 ESP32-S3 后，决定气象站主控继续使用 STM32L4；老张负责原理图复核，阿飞先验证低功耗和 LoRa 唤醒链路。"
-      "气象站主控确定为 STM32L4，先验证低功耗与 LoRa 唤醒。"
-      "群里确定 LoRa 气象站的主控和验证顺序。"
-      TierP3,
+      "群里比较 STM32L4 和 ESP32-S3 后，决定气象站主控继续使用 STM32L4；老张负责原理图复核，阿飞先验证低功耗和 LoRa 唤醒链路。",
     compartment
-      103
-      (fixtureHandle "cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+      "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
       (dayAt 2026 6 5 21 10)
       (dayAt 2026 6 5 22 3)
-      0.66
-      "阿飞完成 LoRa 气象站首版通信协议；节点每五分钟上报温湿度和电池电压，网关按 sequence 去重。老张要求掉线重连不得重放旧采样，Max 给出状态机测试清单。"
-      "LoRa 气象站确定五分钟上报、sequence 去重和重连不重放旧采样。"
-      "群里敲定气象站 LoRa 上报协议。"
-      TierP2,
+      "阿飞完成 LoRa 气象站首版通信协议；节点每五分钟上报温湿度和电池电压，网关按 sequence 去重。老张要求掉线重连不得重放旧采样，Max 给出状态机测试清单。",
     compartment
-      104
-      (fixtureHandle "dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+      "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
       (dayAt 2026 7 20 22 14)
       (dayAt 2026 7 20 22 42)
-      0.82
       "阿飞的新固件在复位后持续进入 HardFault，串口 PC 指向 DMA 完成回调。老张怀疑 buffer 生命周期，Max 建议先保留 fault frame、反汇编 PC 并检查链接脚本；阿飞承诺补 map 文件和最小复现。"
-      "气象站新固件复位后进入 HardFault，当前在核对 DMA buffer、fault frame、map 文件和链接脚本。"
-      "气象站固件出现 HardFault，等待 map 文件定位。"
-      TierP1
   ]
   where
-    compartment cid handle started ended importance p1 p2 p3 tier =
+    compartment handle started ended summary =
       ContextCompartment
-        { contextCompartmentId = cid,
-          contextExpandHandle = handle,
+        { contextExpandHandle = fixtureHandle handle,
           contextStartedAt = started,
           contextEndedAt = ended,
-          contextImportance = importance,
-          contextConfidence = 0.92,
-          contextMaterializationVersion = cid - 100,
-          contextSummaryP1 = p1,
-          contextSummaryP2 = p2,
-          contextSummaryP3 = p3,
-          contextTier = tier
+          contextSummary = summary
         }
 
-hiddenP4SummaryP1 :: Text
-hiddenP4SummaryP1 =
-  "阿飞测试 STOP2 时发现节点唤醒后立即复位。老张指出 NRST 上的 100nF 电容与长 ST-Link 排线让复位沿过慢，建议先换成 10nF 并缩短排线；修改后连续唤醒 200 次稳定。"
-
-hiddenP4SummaryP2 :: Text
-hiddenP4SummaryP2 =
+archivedSummary :: Text
+archivedSummary =
   "气象站 STOP2 唤醒复位由 NRST 100nF 电容和长 ST-Link 排线导致；改为 10nF 后恢复稳定。"
 
 contextQuery :: Text
@@ -477,7 +440,7 @@ contextSearchFixture =
     [ RecallHit
         { rhSource = "episode",
           rhDedupKey = "episode:101",
-          rhSnippet = hiddenP4SummaryP2,
+          rhSnippet = archivedSummary,
           rhOccurredAt = dayAt 2025 1 11 20 18,
           rhPrincipalId = Nothing,
           rhMessageId = Nothing,
