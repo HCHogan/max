@@ -3,7 +3,7 @@ name:               max
 version:            0.18.0
 synopsis:           Multi-platform group agent with durable context and memory
 description:        A multi-platform group agent with a canonical message ledger,
-                    durable task and turn execution, scoped memory, and typed tools.
+                    process-owned Jobs, scoped memory, and typed tools.
 category:           Network
 license:            MIT
 license-file:       LICENSE
@@ -75,6 +75,9 @@ extra-source-files:
     docs/platforms.md
     docs/prompt-flow.md
     docs/simplification.md
+    docs/code-scope.json
+    docs/schema-scope.json
+    docs/code-size.md
     docs/runbooks/*.md
     eval/README.md
     eval/fixtures/*.jsonl
@@ -308,7 +311,6 @@ library
         Max.Platform.Rpc
         Max.Platform.Runtime
         Max.Platform.QQHistory
-        Max.Concurrent.Lease
         Max.Platform.Delivery
         Max.Platform.Delivery.Parts
         Max.Platform.Delivery.Queue
@@ -321,8 +323,6 @@ library
         Max.Prompt.Render
         Max.Prompt.Request
         Max.Prompt.Collect
-        Max.Prompt.Runtime
-        Max.Effects.ContextQuery
         Max.Prompt.History
         Max.Text
         Max.Prompt.System
@@ -679,7 +679,6 @@ test-suite max-test
         Max.MonitorSpec
         Max.ReplySpec
         Max.ReplySendSpec
-        Max.Concurrent.LeaseSpec
         Max.ResourceSpec
         Max.SelfSourceSpec
         Max.SessionSpec

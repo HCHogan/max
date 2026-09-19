@@ -23,9 +23,10 @@ a workspace observation can include concurrent changes, not only that call's eff
 resource limits, a private temporary directory and per-instance state. Its Nix
 package supplies Camoufox, MCP, fonts, extensions, GeoIP data, Xvfb and the HTTP
 gateway. The gateway binds a kernel-assigned loopback port and publishes it only
-after listening. Browser services do not appear in `machinectl`. The existing
-conversation host / task workspace / lease / fencing / cold-recovery contract
-remains in the Haskell registry and MCP patches.
+after listening. Browser services do not appear in `machinectl`. The Haskell
+registry owns running job workspaces and revokes access on completion or
+cancellation. Restart discards those sessions. Explicitly saved,
+owner-scoped browser profiles retain allowed authentication data.
 The gateway catches asynchronous sends to disconnected requests, so a late child
 response cannot crash sibling MCP sessions. A delayed-response fixture verifies
 this behavior during package builds, independently of browser launch timing.
@@ -47,7 +48,7 @@ is loaded. Generic module users may still supply `settings` or `configFile`.
 
 Persistent Max state is under root-owned `/var/lib/max`:
 
-- `app`: main service home, images, files, outbox and browser checkpoint key;
+- `app`: main service home, images, files, outbox and browser profile encryption key;
   owned by `max-service`, mode 0700.
 - `runtime`: root-owned sandbox work, disposable guest roots and broker metadata.
 - `napcat`: QQ account/configuration, owned by `max-napcat`.

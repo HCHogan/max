@@ -9,6 +9,7 @@
 -- input data and Markdown framing around their output.
 module PromptFlow
   ( renderPromptFlow,
+    promptStatistics,
   )
 where
 
@@ -36,6 +37,8 @@ import Data.Time
   )
 import Data.Vector qualified as V
 import Max.Config qualified as Config
+import Max.Context (estimateMessagesTokens)
+import Max.Context.Working (estimateToolTokens)
 import Max.DB.Calls (redactDataUrls)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..), LedgerItem (LedgerItem), MessageCursor (..))
@@ -202,18 +205,39 @@ renderProtocol protocol =
     ""
   ]
   where
-    (raw, tc) = toolCallFixture protocol
-    nextMessages =
-      initialMessages
-        <> assembleToolRound
-          raw
-          [tc]
-          [toolResultMessage tc (Right toolResult)]
-          [toolImage]
+    (raw, _) = toolCallFixture protocol
+    nextMessages = secondRound protocol
+
+secondRound :: Protocol -> [ChatMessage]
+secondRound protocol =
+  let (raw, call) = toolCallFixture protocol
+   in initialMessages <> assembleToolRound raw [call] [toolResultMessage call (Right toolResult)] [toolImage]
 
 wireRequest :: Protocol -> [ChatMessage] -> Value
 wireRequest protocol messages =
   redactDataUrls (requestBodyFor (profileFor protocol) messages representativeTools False)
+
+-- | Fixed fixture sizes, not live traffic or provider-billed token counts.
+promptStatistics :: Value
+promptStatistics =
+  object
+    [ "scope" .= ("prompt-flow multimodal fixture with two image/video tools; excludes the full enabled tool catalog" :: Text),
+      "token_method" .= ("production tokenizer-independent estimator; attachments use the separate reserve" :: Text),
+      "system_utf8_bytes" .= sum [LBS.length (LBS.fromStrict (TE.encodeUtf8 body)) | MsgSystem body <- initialMessages],
+      "tool_count" .= length representativeTools,
+      "estimated_tool_tokens" .= estimateToolTokens representativeTools,
+      "requests"
+        .= [ object
+               [ "protocol" .= protocolTitle protocol,
+                 "round" .= roundNumber,
+                 "message_count" .= length messages,
+                 "estimated_message_tokens" .= estimateMessagesTokens messages,
+                 "compact_wire_bytes" .= LBS.length (encode (requestBodyFor (profileFor protocol) messages representativeTools False))
+               ]
+           | protocol <- [minBound .. maxBound],
+             (roundNumber, messages) <- [(1 :: Int, initialMessages), (2, secondRound protocol)]
+           ]
+    ]
 
 representativeTools :: [ToolSpec]
 representativeTools = [viewImageSpec, viewVideoSpec]

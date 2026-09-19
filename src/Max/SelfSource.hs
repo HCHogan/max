@@ -50,7 +50,8 @@ data SourceSlice = SourceSlice
 -- @AGENTS.md@, VCS metadata, build output, or runtime state is reachable.
 -- file-embed tracks existing files rather than directory membership, so adding
 -- an eligible file under one of these roots must accompany a byte change here;
--- the source-bundle tests then prove that the new file shipped.
+-- the source-bundle tests cover shipped paths, including the schema manifest
+-- and the current operations guide after retiring unused modules.
 embeddedFiles :: [(FilePath, BS.ByteString)]
 embeddedFiles =
   prefixDirectory "src" $(embedDir "src")

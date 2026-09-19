@@ -149,6 +149,7 @@ cabal build all
 | [architecture.md](docs/architecture.md) | runtime, context/memory design, and durability |
 | [SSH operations](docs/runbooks/ssh-operations.md) | dedicated Tailscale, fleet login, recovery and acceptance |
 | [native runtime](docs/runbooks/native-runtime.md) | systemd services, sandbox state and service accounts |
+| [database health](docs/runbooks/database-health.md) | retained failures, memory corrections and release acceptance |
 | [platforms.md](docs/platforms.md) | platform operations, mirroring, and cutover invariants |
 | [ADR 001](docs/adr/001-context-memory-foundations.md) | context/memory invariants and privacy boundaries |
 | [ADR 002](docs/adr/002-partial-plans-adaptive-elaboration.md) | historical partial-plan design; runtime contracts retained by ADR 008 |

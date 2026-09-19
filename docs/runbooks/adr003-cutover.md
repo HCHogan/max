@@ -283,8 +283,8 @@ preserves both public system-event projections and historical debug-body
 projections; no production reprojection was needed. Migration 102 adds scoped,
 append-only reviews of exact terminal observations. Reviewed history remains
 visible, while new debt and expired active leases continue to fail the gate.
-Use the [debt review runbook](operational-debt.md) for supported operator
-commands and the [release evidence](../research/2026-09-09-memory-health-release.md)
+Debt review commands were subsequently retired. Use [current database health
+operations](database-health.md) for supported commands and the [release evidence](../research/2026-09-09-memory-health-release.md)
 for snapshot rehearsal, deployed closure, actual data repairs, historical
 decisions, and repeated live verification. These database checks do not prove
 that an unreachable platform bridge has recovered.

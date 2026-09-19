@@ -120,8 +120,9 @@ No old job is converted into a new SSH command.
 A binary upgrade changes embedded skills and source, but it does not rewrite
 monitor objectives, task inputs, previous tool results or `/work` repositories.
 DB-global or group skills can shadow builtins; successful skill loads are pinned
-within an execution and recovery can retain their instructions. Inspect the
-effective skill and task revision when behavior still follows an old workflow.
+within a running execution. Restart interrupts that execution; it does not
+restore loaded instructions. Inspect the effective skill and job generation
+when behavior still follows an old workflow.
 
 Use `self-knowledge` and `inspect_source` for the running build's implementation.
 For an editable checkout, inspect its remote, HEAD and local changes, fetch the

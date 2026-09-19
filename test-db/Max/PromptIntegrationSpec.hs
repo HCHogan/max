@@ -27,9 +27,9 @@ import Max.EpisodeStore
 import Max.IR (Body (..), MentionTarget (MentionIdentity), Node (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..))
-import Max.Prompt (ContextReadMode (..), PromptRequest (..), buildContext, collectContextPreview, planContext, renderContextPlan)
+import Max.Prompt (ContextReadMode (..), PromptRequest (..), buildContext, planContext, renderContextPlan)
+import Max.Prompt.Collect (collectContextPreview)
 import Max.Prompt.History (fetchBoundedPromptTail)
-import Max.Prompt.Runtime (runContextQueryWithDatabase)
 import Max.Session (Session (..))
 import OneBot.Types (GroupId (..), UserId (..))
 import PromptFixture (promptRequest)
@@ -191,7 +191,7 @@ spec pool = before_ (truncateAll pool) $
       second <- build
       userBodyOf second `shouldSatisfy` ("second summary" `T.isInfixOf`)
       userBodyOf second `shouldSatisfy` (not . ("newly settled source" `T.isInfixOf`))
-      snapshot <- withDbLog pool $ runContextQueryWithDatabase (collectContextPreview request)
+      snapshot <- withDbLog pool $ withReadSnapshot (collectContextPreview request)
       userBodyOf (renderContextPlan (planContext request.prLimits snapshot)) `shouldBe` userBodyOf second
       [Only materializations] <- withDb pool $ query "SELECT count(*) FROM context_materializations" ()
       [Only traces] <- withDb pool $ query "SELECT count(*) FROM context_plan_traces" ()

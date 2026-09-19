@@ -84,7 +84,7 @@ iMessage 在 06:45:38、06:47:09 UTC 仍记录 bridge 连接超时并等待恢�
 
 ## 操作边界
 
-使用 [operational-debt runbook](../runbooks/operational-debt.md) 中的受支持命令完成上述检查和修复。数据库一致性、已审查的历史终态与平台可达性分别记录：iMessage bridge 在本轮验收时仍有连接超时，Max 处于等待恢复状态；这不证明 iMessage 可以正常收发，也没有因此关闭 #13。
+上述检查和修复使用当时的 operational-debt runbook；该命令集已退役，当前操作见 [database health runbook](../runbooks/database-health.md)。数据库一致性、已审查的历史终态与平台可达性分别记录：iMessage bridge 在本轮验收时仍有连接超时，Max 处于等待恢复状态；这不证明 iMessage 可以正常收发，也没有因此关闭 #13。
 
 ## 后续证据勘误
 

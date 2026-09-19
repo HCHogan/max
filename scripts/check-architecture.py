@@ -119,7 +119,7 @@ def check_imports():
     for dependency in IMPORT.findall(renderer):
         if dependency.startswith(("Effectful", "Max.DB.", "System.")) or dependency.endswith("Store") or dependency in {"Max.Env", "Max.Util"}:
             errors.append(f"Prompt rendering acquired execution dependency: {dependency}")
-    for module in ["Max.Prompt.Collect", "Max.Prompt.History", "Max.Prompt.Runtime"]:
+    for module in ["Max.Prompt.Collect", "Max.Prompt.History"]:
         source = (ROOT / "src" / (module.replace(".", "/") + ".hs")).read_text()
         if re.search(r"\b(execute|execute_|executeMany)\b", source):
             errors.append(f"{module}: context collection acquired SQL writes")
@@ -199,7 +199,6 @@ import Data.Aeson (Value (Null), Result, fromJSON)
 import Effectful
 import Max.Effects.Blob
 import Max.Effects.BlobHost
-import Max.Effects.ContextQuery (ContextQuery)
 import Max.Effects.SkillLoading (SkillLoading, loadSkill)
 import Max.Effects.Search (Search, searchWeb)
 import Max.Effects.Sandbox (Sandbox, listSandboxes)
@@ -309,7 +308,6 @@ publish request = () <$ sendRecorded request
 
 NEGATIVE = {
     "authorization requires a transaction": ("InTransaction", "bad :: (WithConnection :> es, IOE :> es) => Eff es Bool\nbad = authorizeCallerWithin (AgentTurnId 1) (GroupId 1) (PrincipalId 1)"),
-    "ContextQuery cannot use arbitrary IO": ("IOE", "bad :: ContextQuery :> es => Eff es ()\nbad = liftIO (pure ())"),
     "SkillLoading cannot use arbitrary IO": ("IOE", "bad :: SkillLoading :> es => Eff es ()\nbad = liftIO (pure ())"),
     "Search cannot use arbitrary IO": ("IOE", "bad :: Search :> es => Eff es ()\nbad = liftIO (pure ())"),
     "Sandbox cannot use arbitrary IO": ("IOE", "bad :: Sandbox :> es => Eff es ()\nbad = liftIO (pure ())"),

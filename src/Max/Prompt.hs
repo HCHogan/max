@@ -13,7 +13,6 @@ module Max.Prompt
     ContextSnapshot (..),
     ContextPlan (..),
     cpInputs,
-    collectContextPreview,
     planContext,
     renderContextPlan,
     renderContext,
@@ -54,7 +53,6 @@ import Max.Context.Types
 import Max.DB.History.Media (withMediaHandles)
 import Max.Dispatch (DispatchMessage (canonicalId, groupId))
 import Max.Effects.Blob (Blob)
-import Max.Effects.ContextQuery (collectContextPreview)
 import Max.LLM.Types (ChatMessage)
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Prompt.Collect qualified as Collect

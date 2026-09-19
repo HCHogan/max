@@ -56,7 +56,7 @@ minimal trigger markers remain persistent; executing a reminder uses Jobs.
 - [x] Clean prose comments and correct stale descriptions without changing code.
 - [x] Keep representative behavioral fixtures and define the Haskell core file
       manifest in `docs/code-scope.json`; validate it with `scripts/count-code.py`.
-- [ ] Add active SQL/schema and prompt-size accounting to final measurements.
+- [x] Add active SQL/schema and prompt-size accounting to final measurements.
 - [x] Remove whole-source-hash model certificates as generic CI blockers while
       retaining relevant deterministic and model-level evaluation.
 
@@ -447,3 +447,18 @@ maintained implementation record.
   and HLint checks. Effective src/app Haskell is 44,698 lines; core Haskell is
   31,874. Remaining removal/readability work, final measurements and operational
   acceptance are still pending. No production deployment is claimed.
+
+- Removed obsolete dispatch/recovery-index checks from maintenance verification.
+  Deleted the unused lease-renewal module and its two obsolete tests, plus the
+  preview-only effect/interpreter whose sole caller was a test. The integration
+  test now exercises the real collector directly in a read-only transaction;
+  remaining capability checks stay intact. The shared hash helper is retained
+  because two evaluation executables still use it.
+  Current runbooks now describe process-owned Jobs, retained failures, explicit
+  browser profiles and supported memory corrections; removed retired debt-review
+  commands. Added an exhaustive installed-table/view classification and read-only
+  schema measurement. `count-code.py --schema` reports active/shared SQL and
+  retained archive structures separately, without deleting either. Prompt-flow
+  now emits fixture request bytes and production token estimates with `--stats`.
+  See `docs/code-size.md` for the current source/SQL/prompt checkpoint and limits.
+  Final removal/readability review and operational acceptance remain pending.

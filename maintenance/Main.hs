@@ -140,11 +140,8 @@ verify connection = do
   operationalHealth connection
   putStrLn "verification PASSED (schema, IR, projections, and ledger)"
 
--- | Fast, read-only operational gate.  Retryable queues are reported because
--- they are useful during an incident, but only states that have lost automatic
--- progress or require explicit reconciliation fail the command.  A second run
--- after one lease interval separates a recovery race from a genuinely
--- abandoned owner.
+-- | Report stored failures and unresolved effects without changing history.
+-- Process-local queue depth and worker liveness require the running admin API.
 operationalHealth :: Connection -> IO ()
 operationalHealth connection = do
   measurements <- forM operationalChecks $ \(label, critical, sql) -> do
@@ -160,7 +157,7 @@ operationalHealth connection = do
   unless (null problems) $ do
     putStrLn "Operational health check FAILED:"
     mapM_ (putStrLn . ("  - " <>)) problems
-    die "durable work requires operator attention"
+    die "stored failures or unresolved effects require operator attention"
   putStrLn "Operational health check PASSED"
 
 verifyProjections :: Connection -> IO [String]
@@ -240,10 +237,6 @@ schemaChecks =
       \  ) \
       \) SELECT count(*) FROM damaged"
     ),
-    ( "expired-delivery recovery index missing",
-      "SELECT count(*) FROM (SELECT 1 WHERE \
-      \ to_regclass('message_deliveries_sending_lease_idx') IS NULL) missing"
-    ),
     ( "non-QQ messages retaining compatibility segments",
       "SELECT count(*) FROM messages WHERE source_platform <> 'qq' AND segments <> '[]'::jsonb"
     ),
@@ -282,11 +275,6 @@ schemaChecks =
       \LEFT JOIN conversation_endpoints endpoint ON endpoint.endpoint_id = delivery.endpoint_id \
       \WHERE message.canonical_message_id IS NULL OR endpoint.endpoint_id IS NULL"
     ),
-    ( "orphaned dispatches",
-      "SELECT count(*) FROM message_dispatches dispatch \
-      \LEFT JOIN messages message ON message.canonical_message_id = dispatch.canonical_message_id \
-      \WHERE message.canonical_message_id IS NULL"
-    ),
     ( "legacy message-writer functions still installed",
       "SELECT count(*) FROM pg_proc \
       \WHERE proname IN ('messages_canonicalize_legacy', 'messages_publish_legacy_source', \
@@ -307,7 +295,6 @@ ledgerCounts connection = do
   events <- scalarCount connection "SELECT count(*) FROM platform_events"
   relations <- scalarCount connection "SELECT count(*) FROM message_relations"
   deliveries <- scalarCount connection "SELECT count(*) FROM message_deliveries"
-  dispatches <- scalarCount connection "SELECT count(*) FROM message_dispatches"
   pure
     ( "messages="
         <> show messages
@@ -317,8 +304,6 @@ ledgerCounts connection = do
         <> show relations
         <> ", deliveries="
         <> show deliveries
-        <> ", dispatches="
-        <> show dispatches
     )
 
 parseCommand :: [String] -> IO Command

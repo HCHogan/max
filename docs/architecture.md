@@ -215,9 +215,9 @@ is rendered once for the final exact budget and trace observation.
 `Max.Context.Types` makes unselected `ContextSnapshot` and selected
 `SelectedContext` different pipeline values, while `Max.Prompt.System` owns the
 stable system prefix. Ordinary prompts and diagnostic previews share the same
-read-only collector. The preview consumer receives only `ContextQuery`;
-`Prompt.Runtime` installs its interpreter. `Prompt.Collect` and `Prompt.History`
-load the snapshot, and `Prompt.Render` plans and renders it without effects.
+read-only collector. `Prompt.Collect` and `Prompt.History` load the snapshot;
+`Prompt.Render` plans and renders it without effects. Integration tests run the
+collector in a read-only database transaction.
 Body-free plan decisions are sampled at trace log level (canonical trigger IDs
 divisible by 16); over-budget plans always emit attention logs. Migration 122 combines distinct legacy summary texts and their citation union,
 retains their original columns, and invalidates vectors only when their text
@@ -445,8 +445,8 @@ browser and file tools receive scoped `Browser` and `FileTransfer` operations. T
 canonical caption resolution and persistence. `Sandbox` binds a group without
 exposing its registry or mutable entries; `Search` and `SkillLoading` similarly
 hide network credentials and skill registry mechanics from their consumers.
-Compile-negative architecture fixtures verify that each capability, including
-`ContextQuery`, cannot be used to perform arbitrary IO.
+Compile-negative architecture fixtures verify that scoped tool capabilities
+cannot be used to perform arbitrary IO.
 
 The Agent loop receives separate local admission, diagnostic storage and inbox
 contracts from `Agent.Runtime`; it imports no database implementation. Jobs
@@ -586,8 +586,8 @@ the same wire plan and skips successful parts. Matrix may replay uncertain
 parts with stable transaction keys; QQ/iMessage require proof of no effect
 before retrying an uncertain part.
 
-`Max.Concurrent.Lease` remains around fetch and maintenance work pending their
-cutover. `Max.Concurrent.Lock` supplies keyed locks and entry-owned mutexes.
+`Max.Concurrent.Lock` supplies keyed locks and entry-owned mutexes.
+The retired execution workers no longer need a shared lease-renewal loop.
 Delivery has no lease heartbeat or SQL claim. Receipt reconciliation can confirm
 historical sends, but its retry admission is restricted to IDs allocated after
 this process started.
