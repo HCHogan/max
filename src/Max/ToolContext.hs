@@ -25,8 +25,6 @@ module Max.ToolContext
     toolContextLimits,
     toolSkillLoads,
     withToolSkillLoads,
-    toolInvocationIdentity,
-    withToolInvocationIdentity,
   )
 where
 
@@ -83,7 +81,6 @@ data ToolContext = ToolContext
     toolCapabilities :: !TurnCapabilities,
     toolConversationScope :: !ConversationScope,
     toolContextLimits :: !ContextLimits,
-    toolInvocationIdentity :: !(Maybe Text),
     toolSkillLoads :: !(Map Text SkillLoad)
   }
 
@@ -96,16 +93,12 @@ mkToolContext identity capabilities =
       toolCapabilities = capabilities,
       toolConversationScope = conversationScopeFor identity.tiGroupId,
       toolContextLimits = defaultContextLimits,
-      toolSkillLoads = Map.empty,
-      toolInvocationIdentity = Nothing
+      toolSkillLoads = Map.empty
     }
 
 mkToolContextWithLimits :: ContextLimits -> TurnIdentity -> TurnCapabilities -> ToolContext
 mkToolContextWithLimits limits identity capabilities =
   (mkToolContext identity capabilities) {toolContextLimits = limits}
-
-withToolInvocationIdentity :: Maybe Text -> ToolContext -> ToolContext
-withToolInvocationIdentity identity context = context {toolInvocationIdentity = identity}
 
 withToolSkillLoads :: [SkillLoad] -> ToolContext -> ToolContext
 withToolSkillLoads loads context = context {toolSkillLoads = mergeSkillLoads context.toolSkillLoads loads}

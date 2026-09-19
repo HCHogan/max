@@ -148,8 +148,8 @@ runWasmProgram session hooks catalog limits program = do
             missing = pure (ToolInvocation (ToolRejected (ToolFault "agent_requires_job" "agent and phase require a job host" RetrySafe)) ContinueLoop)
             handlers =
               Map.fromList
-                [ (agentName, \row args -> if any ((== ToolRef "task_start") . (.ctDefinition.tdRef)) catalog then maybe missing (\host -> host.whAgent args row) hooks.ehWorkflow else missing),
-                  (phaseName, \_ args -> case args of String summary | any ((== ToolRef "task_progress") . (.ctDefinition.tdRef)) catalog -> maybe missing (\host -> host.whPhase summary) hooks.ehWorkflow; _ -> missing)
+                [ (agentName, \args -> if any ((== ToolRef "task_start") . (.ctDefinition.tdRef)) catalog then maybe missing (\host -> host.whAgent args) hooks.ehWorkflow else missing),
+                  (phaseName, \case String summary | any ((== ToolRef "task_progress") . (.ctDefinition.tdRef)) catalog -> maybe missing (\host -> host.whPhase summary) hooks.ehWorkflow; _ -> missing)
                 ]
         batch <- restore (if hasHost then executeHostBatch (maybe False (.whParallel) hooks.ehWorkflow && all ((== agentName) . (.trName)) requests) handlers session boundHooks (catalog <> hostCatalog) requests else executeToolBatch session hooks catalog requests)
         liftIO . atomically $ do

@@ -24,7 +24,6 @@ import Max.Effects.Blob (Blob, runBlob)
 import Max.IR (Body (..), Node (NText))
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
-import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Turn.Continuity (TurnDigest (..), currentPromptMajor, renderContinuationDigest)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..))
@@ -133,16 +132,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
           \ FROM execution_journal WHERE journal_id = ?"
           (Only noteAndFirst.jeJournalId)
       (storageRows :: [(Bool, Bool)]) `shouldBe` [(True, True)]
-
-  it "persists bounded working checkpoints without changing task authority" $ do
-    fixture <- createFixture pool 42 1001
-    other <- createFixture pool 43 1002
-    withDb pool (readWorkingContext fixture.fxTurn) `shouldReturn` ""
-    withDb pool (writeWorkingContext fixture.fxTurn "goal / correction / pending; t#1" 900 1000)
-    withDb pool (readWorkingContext fixture.fxTurn) `shouldReturn` "goal / correction / pending; t#1"
-    withDb pool (readWorkingContext other.fxTurn) `shouldReturn` ""
-    withDb pool (writeWorkingContext fixture.fxTurn "latest" 800 1000)
-    withDb pool (readWorkingContext fixture.fxTurn) `shouldReturn` "latest"
 
   it "expands spilled results by local call id with bounded pages and scope/clear guards" $ do
     fixture <- createFixture pool 42 1001
@@ -325,27 +314,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
       case adopted.jsInput of
         Object fields -> KeyMap.lookup "_max_host_network_mode" fields `shouldBe` Just (String network)
         other -> expectationFailure ("expected adopted network, got " <> show other)
-
-  it "restores only successful host skill receipts from the same execution" $ do
-    fixture <- createFixture pool 42 1001
-    independent <- createFixture pool 42 1002
-    let instructions = "full skill instructions"
-        load = SkillLoad "web" (skillLoadVersion instructions) instructions Nothing Nothing
-    execution <- withDb pool $ startJournalExecution fixture.fxTurn (journalStart "skill" "use_skill")
-    forged <- withDb pool $ startJournalExecution independent.fxTurn (journalStart "forged" "echo")
-    withTemporaryBlobRoot $ \blobRoot -> withDbBlob pool blobRoot $ do
-      finishJournalExecution
-        execution
-        ( JournalSucceeded
-            ( object
-                [ "instructions" .= instructions,
-                  "_max_journal_observed_manifest" .= object ["skill_loads" .= [load]]
-                ]
-            )
-        )
-      finishJournalExecution forged (JournalSucceeded (object ["skill_loads" .= [load]]))
-    withDb pool (readSkillLoads fixture.fxTurn) `shouldReturn` [load]
-    withDb pool (readSkillLoads independent.fxTurn) `shouldReturn` []
 
   it "stores host-observed sandbox evidence separately from the tool result" $ do
     fixture <- createFixture pool 42 1001

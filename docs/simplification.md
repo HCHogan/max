@@ -307,3 +307,11 @@ maintained implementation record.
   fewer than the conversation checkpoint), with core Haskell at 33,596. Execution
   journals, publication/outbox queues, maintenance and context simplification
   remain; this is not completion of the full plan.
+
+- Removed unused per-invocation identity plumbing and restart-only skill/working
+  summary readers. Agent now builds one tool registry per model round; invocation
+  and catalog reads use that same snapshot. Skill activation still takes effect
+  at the next round, and saved workflows consume the actual in-memory activation
+  receipt. Historical result handles and diagnostic manifests remain available.
+  All targets build; 1,050 unit and 272 DB examples pass after retiring the two
+  restoration tests. Capability checks pass.

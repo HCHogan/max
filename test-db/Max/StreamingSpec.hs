@@ -101,7 +101,7 @@ spec pool = before_ (truncateAll pool) $
                 Nothing
                 Nothing
             admission = ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ _ _ -> pure Nothing)
-            journal = ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ -> pure []) (\_ -> pure "") (\_ _ _ _ -> pure ())
+            journal = ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ _ _ -> pure ())
         manager <- HTTP.newManager managerSettings
         let runtime = httpRuntimeFromManagers manager manager manager
             transport = oneBotDeliveryTransport runtime PlatformQQ backend

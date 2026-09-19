@@ -51,7 +51,7 @@ runTestAgent ::
 runTestAgent inputs =
   runAgentWith
     (ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ _ _ -> pure Nothing))
-    (ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ -> pure []) (\_ -> pure "") (\_ _ _ _ -> pure ()))
+    (ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ _ _ -> pure ()))
     (ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inputs (\notes -> ([], T.intercalate "\n" notes))))
     Nothing
 
@@ -701,7 +701,7 @@ spec = describe "Agent full loop" $ do
                     pure (Right (ContentResp "corrected"))
             )
         admission = ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ _ _ -> pure Nothing)
-        journal = ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ -> pure []) (\_ -> pure "") (\_ _ _ _ -> pure ())
+        journal = ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ _ _ -> pure ())
         inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inbox ("",))
     result <- withCompactLogger ColorNever Nothing $ \logger ->
       runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 3) (const (buildToolRegistry [] [])) $

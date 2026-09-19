@@ -4,7 +4,7 @@ import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async
 import Control.Exception (SomeException, fromException, try)
 import Control.Monad (replicateM_, unless, void)
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value, object, toJSON, (.=))
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -40,7 +40,7 @@ import Max.Task.Types (JobResult (..), JobRun (..), JobSpec (..), JobView (..), 
 import Max.Tasks (TaskCancelled (..))
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Tool.Catalog (catalogTools)
-import Max.Tool.Control (LoopControl (..))
+import Max.Tool.Control (LoopControl (..), controlSkillLoads)
 import Max.Turn.Types (AgentTurnRef (..))
 import OneBot.Types (GroupId (..))
 import System.Timeout (timeout)
@@ -156,7 +156,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
       runWasmTools session (hostHooks jobs turn) (views registry) defaultWasmLimits binary
     result.cmControl `shouldBe` LoadSkills [load]
     map (.ccOutcome) result.cmCalls `shouldBe` ["succeeded", "rejected"]
-    withDb pool (readSkillLoads turn) `shouldReturn` [load, load]
+    withDb pool (query "SELECT observed_manifest->'skill_loads' FROM execution_journal WHERE turn_id=? AND tool_ref='use_skill' ORDER BY execution_ordinal" (Only turn.atrTurnId)) `shouldReturn` [Only (toJSON [load]), Only (toJSON [load])]
 
   it "uses an exact loaded workflow and journals its version and output contract failure" $ do
     (jobs, turn) <- fixture
@@ -170,24 +170,23 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     let loader = echoTool {toolName = "use_skill", toolRunner = LegacyRunner $ \value -> activateSkills [pinned] >> pure (Right value)}
         definition = echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [loader])
-    _ <- withHost pool . runToolsWithControl runToolControl registry $ do
+    loaded <- withHost pool . runToolsWithControl runToolControl registry $ do
       session <- newExecutionSession Nothing
       executeToolBatch session (hostHooks jobs turn) (views registry) [ToolRequest "load" "use_skill" args]
-    let resumed = turn
-    restored <- withDb pool (readSkillLoads resumed)
-    restored `shouldBe` [pinned]
+    let active = concatMap (controlSkillLoads . (.tiControl)) loaded.tbInvocations
+    active `shouldBe` [pinned]
     result <- withHost pool . runTools effectRegistry $ do
       session <- newExecutionSession Nothing
       executeModelBatch
         True
-        (Map.fromList [(l.slName, l) | l <- restored])
+        (Map.fromList [(l.slName, l) | l <- active])
         session
-        (hostHooks jobs resumed)
+        (hostHooks jobs turn)
         (views effectRegistry)
         [ToolRequest "saved-code" "run_code" (object ["workflow" .= ("saved/run" :: Text), "args" .= args])]
     map (outcomeName . (.tiOutcome)) result.tbInvocations `shouldBe` ["outcome-unknown"]
-    states resumed `shouldReturn` [("use_skill", "succeeded"), ("host:wasm/v1", "outcome-unknown"), ("echo", "committed")]
-    evidence <- withDb pool $ query "SELECT normalized_input->'program'->'workflow'->>'version', normalized_input->'program'->>'source' FROM execution_journal WHERE turn_id=? AND tool_ref='host:wasm/v1'" (Only resumed.atrTurnId)
+    states turn `shouldReturn` [("use_skill", "succeeded"), ("host:wasm/v1", "outcome-unknown"), ("echo", "committed")]
+    evidence <- withDb pool $ query "SELECT normalized_input->'program'->'workflow'->>'version', normalized_input->'program'->>'source' FROM execution_journal WHERE turn_id=? AND tool_ref='host:wasm/v1'" (Only turn.atrTurnId)
     evidence `shouldBe` [(pinned.slVersion, workflow.wfSource)]
 
   it "reserves the last shared call when different sessions race for the last call" $ do

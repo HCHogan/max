@@ -13,7 +13,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.Agent.Execution
 import Max.Conversation (Conversations)
 import Max.Conversation qualified as Conversation
-import Max.DB.AgentTurn (enrichSandboxJournalStart, finishJournalExecution, markJournalOutcomeUnknown, readSkillLoads, readWorkingContext, recordAgentTurnLlmRound, recordModelNote, startJournalExecution, writeWorkingContext)
+import Max.DB.AgentTurn (enrichSandboxJournalStart, finishJournalExecution, markJournalOutcomeUnknown, recordAgentTurnLlmRound, recordModelNote, startJournalExecution, writeWorkingContext)
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.Agent (Agent, AgentLimits, runAgentWith)
 import Max.Effects.Blob (Blob)
@@ -39,7 +39,7 @@ runAgentRuntime ::
 runAgentRuntime jobs conversations =
   runAgentWith
     (executionAdmission jobs)
-    (ExecutionJournal recordModelNote finishJournalExecution markJournalOutcomeUnknown readSkillLoads readWorkingContext saveWorking)
+    (ExecutionJournal recordModelNote finishJournalExecution markJournalOutcomeUnknown saveWorking)
     (ExecutionInbox (\turn -> (<>) <$> jobInbox turn.atrTurnId <*> liftIO (Conversation.readFeedback conversations turn.atrTurnId)))
     (Just (taskWorkflowHost jobs))
   where

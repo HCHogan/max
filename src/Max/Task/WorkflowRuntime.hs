@@ -20,7 +20,7 @@ taskWorkflowHost :: (WithConnection :> es, IOE :> es) => Jobs.Jobs -> ToolContex
 taskWorkflowHost jobs context turn =
   WorkflowHost
     { whAllowed = maybe True (not . (.spec.delegated)) <$> liftIO (Jobs.jobForTurn jobs turn.atrTurnId),
-      whAgent = \raw _journal -> runAgent raw,
+      whAgent = runAgent,
       whPhase = \label -> do
         accepted <- liftIO (Jobs.reportJobProgress jobs turn.atrTurnId label)
         pure $ if accepted then committed (object ["recorded" .= True]) else rejected "phase requires a current job",

@@ -53,7 +53,7 @@ import Effectful.Exception
     throwIO,
   )
 import Max.Agent.Execution
-import Max.Effects.Tools (Tools, invokeToolWithIdentity)
+import Max.Effects.Tools (Tools, invokeToolWithControl)
 import Max.Execution.Types
 import Max.Execution.Workflow
 import Max.Tasks
@@ -137,20 +137,18 @@ data ToolBatch = ToolBatch
 executeToolBatch :: (Tools :> es, Concurrent :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
 executeToolBatch session hooks catalog = executeBatch False invoke session hooks catalog
   where
-    invoke row request = invokeToolWithIdentity ((\entry -> "max:j" <> T.pack (show entry.jeJournalId)) <$> row) request.trName request.trArguments
+    invoke request = invokeToolWithControl request.trName request.trArguments
 
--- Queue-and-join callbacks are host-owned and admit ordinary tasks under the
--- database lock. Their waits may overlap; actual child work is still scheduled
--- by the task scheduler. They share all local reservations and journal handling
--- below with normal leaves, which retain their catalog parallelism policy.
-executeHostBatch :: (Tools :> es, Concurrent :> es) => Bool -> Map Text (Maybe JournalExecution -> Value -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
+-- Host callbacks share tool admission and budgets. Independent child waits may
+-- overlap; ordinary tools retain their catalog parallelism policy.
+executeHostBatch :: (Tools :> es, Concurrent :> es) => Bool -> Map Text (Value -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
 executeHostBatch independent handlers = executeBatch independent invoke
   where
-    invoke row request = case Map.lookup request.trName handlers of
-      Just handler -> handler row request.trArguments
-      Nothing -> invokeToolWithIdentity ((\entry -> "max:j" <> T.pack (show entry.jeJournalId)) <$> row) request.trName request.trArguments
+    invoke request = case Map.lookup request.trName handlers of
+      Just handler -> handler request.trArguments
+      Nothing -> invokeToolWithControl request.trName request.trArguments
 
-executeBatch :: (Concurrent :> es) => Bool -> (Maybe JournalExecution -> ToolRequest -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
+executeBatch :: (Concurrent :> es) => Bool -> (ToolRequest -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
 executeBatch independent invoke session hooks catalog requests =
   bracket_ (takeMVar session.batchLock) (putMVar session.batchLock ()) $ mask $ \restoreBatch -> do
     hooks.ehCheck
@@ -181,10 +179,10 @@ executeBatch independent invoke session hooks catalog requests =
                           atomically $ modifyTVar' unused (subtract (cost request))
                           pure row
                       }
-              (_, invocation) <- withExecutionRecord admitting step start $ \row -> do
+              (_, invocation) <- withExecutionRecord admitting step start $ \_ -> do
                 result <- case view request of
                   Nothing -> pure (rejected "unknown_tool" ("tool is outside the execution catalog: " <> request.trName))
-                  Just _ -> invoke row request
+                  Just _ -> invoke request
                 pure ((), result)
               pure invocation
         invocations <- restoreBatch (if independent || all canParallel requests then mapConcurrently execute requests else traverse execute requests) `finally` release

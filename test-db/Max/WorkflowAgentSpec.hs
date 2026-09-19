@@ -39,7 +39,7 @@ spec pool = before_ (truncateAll pool) $ describe "process-owned workflow childr
     context <- toolContext running workflowGrants
     let host = taskWorkflowHost running.jobs context running.turn
         request = object ["objective" .= ("answer" :: Text), "profile" .= ("research" :: Text), "output_contract" .= object ["type" .= ("string" :: Text)]]
-    Async.withAsync (withDb pool (host.whAgent request Nothing)) $ \waiting -> do
+    Async.withAsync (withDb pool (host.whAgent request)) $ \waiting -> do
       child <- awaitChild running.jobs
       child.spec.grants `shouldBe` workflowGrants
       Right result <- pure (parseJobResult child.spec "\"answer\"")
@@ -54,7 +54,7 @@ spec pool = before_ (truncateAll pool) $ describe "process-owned workflow childr
       forM_ [workflowGrants, Map.insert tool "changed" workflowGrants] $ \current -> do
         context <- toolContext running current
         let host = taskWorkflowHost running.jobs context running.turn
-        result <- withDb pool (host.whAgent (object ["objective" .= ("inspect" :: Text), "profile" .= profileName profile]) Nothing)
+        result <- withDb pool (host.whAgent (object ["objective" .= ("inspect" :: Text), "profile" .= profileName profile]))
         result.tiOutcome `shouldSatisfy` (\case ToolRejected _ -> True; _ -> False)
       jobs <- Jobs.allJobs running.jobs
       length jobs `shouldBe` 1

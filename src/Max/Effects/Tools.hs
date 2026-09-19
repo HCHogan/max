@@ -16,8 +16,6 @@ module Max.Effects.Tools
     runToolsWith,
     runToolsWithControl,
     runToolsWithControlDynamic,
-    runToolsWithInvocationDynamic,
-    invokeToolWithIdentity,
     invokeTool,
     invokeToolWithControl,
     outcomeResult,
@@ -103,7 +101,7 @@ buildToolRegistry definitions runners = do
       pure (ref, RegisteredTool view run)
 
 data Tools :: Effect where
-  InvokeTool :: Maybe Text -> Text -> Value -> Tools m ToolInvocation
+  InvokeTool :: Text -> Value -> Tools m ToolInvocation
 
 type instance DispatchOf Tools = Dynamic
 
@@ -138,18 +136,9 @@ runToolsWithControlDynamic ::
   Eff es (ToolRegistry toolEs) ->
   Eff (Tools : es) a ->
   Eff es a
-runToolsWithControlDynamic lower currentRegistry = runToolsWithInvocationDynamic lower (const currentRegistry)
-
-runToolsWithInvocationDynamic ::
-  forall es toolEs a.
-  (Concurrent :> es) =>
-  (forall x. Eff toolEs x -> Eff es (x, LoopControl)) ->
-  (Maybe Text -> Eff es (ToolRegistry toolEs)) ->
-  Eff (Tools : es) a ->
-  Eff es a
-runToolsWithInvocationDynamic lower currentRegistry = interpret $ \_ -> \case
-  InvokeTool identity name args -> do
-    registry <- currentRegistry identity
+runToolsWithControlDynamic lower currentRegistry = interpret $ \_ -> \case
+  InvokeTool name args -> do
+    registry <- currentRegistry
     sanitizeInvocation <$> case Map.lookup (ToolRef name) registry.registryRunners of
       Nothing -> pure . ordinary . ToolRejected $ ToolFault "unknown_tool" ("unknown tool: " <> name) RetrySafe
       Just registered -> case validateArguments registered.rtView args of
@@ -254,7 +243,7 @@ invokeTool :: (Tools :> es) => Text -> Value -> Eff es ToolOutcome
 invokeTool name args = (.tiOutcome) <$> invokeToolWithControl name args
 
 invokeToolWithControl :: (Tools :> es) => Text -> Value -> Eff es ToolInvocation
-invokeToolWithControl name args = send (InvokeTool Nothing name args)
+invokeToolWithControl name args = send (InvokeTool name args)
 
 outcomeResult :: ToolOutcome -> Either Text Value
 outcomeResult = \case
@@ -263,7 +252,3 @@ outcomeResult = \case
   ToolSucceeded value -> Right value
   ToolCommitted value -> Right value
   ToolOutcomeUnknown fault -> Left (fault.tfMessage <> " (outcome unknown; not retried)")
-
--- Host identity is supplied by the execution journal, never from arguments.
-invokeToolWithIdentity :: (Tools :> es) => Maybe Text -> Text -> Value -> Eff es ToolInvocation
-invokeToolWithIdentity identity name args = send (InvokeTool identity name args)

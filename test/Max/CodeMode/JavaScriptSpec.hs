@@ -33,7 +33,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
         host =
           WorkflowHost
             (pure True)
-            ( \args _ -> do
+            ( \args -> do
                 liftIO $
                   if args == object ["objective" .= ("one" :: Text), "profile" .= ("research" :: Text)]
                     then putMVar first () >> takeMVar second
@@ -53,7 +53,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     let host =
           WorkflowHost
             (pure True)
-            (\_ _ -> liftIO (modifyIORef' count (+ 1)) >> pure (ToolInvocation (ToolCommitted (object ["interrupted" .= True, "reason" .= ("workflow_steering_pending" :: Text)])) ContinueLoop))
+            (\_ -> liftIO (modifyIORef' count (+ 1)) >> pure (ToolInvocation (ToolCommitted (object ["interrupted" .= True, "reason" .= ("workflow_steering_pending" :: Text)])) ContinueLoop))
             (\_ -> pure (ToolInvocation (ToolSucceeded Null) ContinueLoop))
             True
     registry <- checked [echoDefinition {tdRef = ToolRef "task_start"}] [echoTool {toolName = "task_start"}]
@@ -63,7 +63,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     result.cmExit `shouldBe` WasmHostStopped
     readIORef count `shouldReturn` 1
   it "rejects recursive workflow execution for an awaited child before any guest work" $ do
-    let host = WorkflowHost (pure False) (\_ _ -> error "unreachable agent") (\_ -> error "unreachable phase") True
+    let host = WorkflowHost (pure False) (\_ -> error "unreachable agent") (\_ -> error "unreachable phase") True
     registry <- checked [echoDefinition] [echoTool]
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing

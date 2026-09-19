@@ -52,7 +52,7 @@ import Max.Effects.Tools
     Tools,
     outcomeResult,
     registryCatalog,
-    runToolsWithInvocationDynamic,
+    runToolsWithControlDynamic,
   )
 import Max.Execution.Tools
 import Max.Execution.Workflow (WorkflowHost)
@@ -67,7 +67,7 @@ import Max.Tasks
   )
 import Max.Tool.Bundles (SkillLoad (..))
 import Max.Tool.Control (LoopControl, controlSkillLoads)
-import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolContextLimits, toolGroupId, toolSkillLoads, toolTurnOutputContext, withToolInvocationIdentity, withToolSkillLoads)
+import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolContextLimits, toolGroupId, toolSkillLoads, toolTurnOutputContext, withToolSkillLoads)
 import Max.Turn.Types (AgentTurnRef (..), turnHandleText, turnOutputAgentTurn)
 import OneBot.Types (GroupId (..))
 
@@ -159,16 +159,11 @@ runAgentWith ::
   Eff (Agent : es) a ->
   Eff es a
 runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $ \localEnv -> \case
-  AgentTurn turn ctx profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
+  AgentTurn turn context profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
     selfTid <- liftIO myThreadId
-    previousWorking <- maybe (pure "") journal.ejReadWorking (turnRuntimeAgentTurn turn)
-    workingRef <- liftIO (newTVarIO (Nothing, previousWorking))
-    restored <- maybe (pure []) journal.ejReadSkillLoads (turnRuntimeAgentTurn turn)
-    let context = ctx {acTools = withToolSkillLoads restored ctx.acTools}
-        restoredInstructions = T.intercalate "\n\n" (map (.slInstructions) (Map.elems (toolSkillLoads context.acTools)))
-        recoveryMessages = [MsgUser ("[恢复的宿主技能说明]\n" <> restoredInstructions) | not (T.null restoredInstructions)]
+    workingRef <- liftIO (newTVarIO (Nothing, ""))
     catalog <- either throwIO pure (toolFactory context.acTools)
-    catalogRef <- liftIO (newTVarIO (context.acTools, catalog))
+    catalogRef <- liftIO (newTVarIO catalog)
     let cancel = throwTo selfTid TaskCancelled
         emit :: AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es))
         emit event = raise (raise (raise (unlift (sink event))))
@@ -180,19 +175,16 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
     session <- newExecutionSession context.acMaxToolCalls
     outputQueue <- newToolOutputQueue defaultInlineMediaLimit
     runToolOutputRead outputQueue $
-      runToolDirectoryDynamic (registryCatalog . snd <$> liftIO (readTVarIO catalogRef)) $
-        runToolsWithInvocationDynamic
+      runToolDirectoryDynamic (registryCatalog <$> liftIO (readTVarIO catalogRef)) $
+        runToolsWithControlDynamic
           (raise . raise . runToolControl . runToolOutput outputQueue)
-          ( \identity -> do
-              (current, _) <- liftIO (readTVarIO catalogRef)
-              either throwIO pure (toolFactory (withToolInvocationIdentity identity current))
-          )
-          (loop workingRef session catalogRef emit context turn profile (msgs <> recoveryMessages))
+          (liftIO (readTVarIO catalogRef))
+          (loop workingRef session catalogRef emit context turn profile msgs)
   where
     loop ::
       TVar (Maybe UsageAnchor, Text) ->
       ExecutionSession ->
-      TVar (ToolContext, ToolRegistry (ToolOutput : ToolControl : es)) ->
+      TVar (ToolRegistry (ToolOutput : ToolControl : es)) ->
       AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
       AgentContext ->
       TurnRuntime ->
@@ -204,7 +196,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
     go ::
       TVar (Maybe UsageAnchor, Text) ->
       ExecutionSession ->
-      TVar (ToolContext, ToolRegistry (ToolOutput : ToolControl : es)) ->
+      TVar (ToolRegistry (ToolOutput : ToolControl : es)) ->
       AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
       AgentContext ->
       TurnRuntime ->
@@ -215,7 +207,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
     go workingRef session catalogRef emit ctx h n appended profile msgs = do
       catalog <- either throwIO pure (toolFactory ctx.acTools)
-      liftIO (atomically (writeTVar catalogRef (ctx.acTools, catalog)))
+      liftIO (atomically (writeTVar catalogRef catalog))
       -- Drain any feedback notes that arrived since the previous turn.
       liftIO (checkTurnCancellation h)
       durableNotes <- maybe (pure "") (raise . raise . raise . inbox.eiRead) (turnRuntimeAgentTurn h)

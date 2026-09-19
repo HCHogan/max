@@ -14,8 +14,6 @@ module Max.DB.AgentTurn
     finishAgentTurn,
     ensureAgentTurnCrashed,
     reclaimInterruptedTurns,
-    readSkillLoads,
-    readWorkingContext,
     writeWorkingContext,
     enrichSandboxJournalStart,
     startJournalExecution,
@@ -49,7 +47,6 @@ import Max.DB.Transaction (withTransaction)
 import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
 import Max.Execution.Types (JournalExecution (..), JournalFinish (..), JournalStart (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
-import Max.Tool.Bundles (SkillLoad)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..))
 
@@ -255,20 +252,6 @@ reclaimInterruptedTurns = withTransaction $ do
       ()
   void $ execute "UPDATE monitor_fires SET result=jsonb_build_object('status','cancelled','summary','process restarted before completion'),finished_at=now() WHERE task_id IS NOT NULL AND finished_at IS NULL" ()
   pure (ReclaimedTurns (fromIntegral (length (crashed :: [Only AgentTurnId]))) executions)
-
--- | Successful skill loads remain available to the current task attempt.
-readSkillLoads :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> Eff es [SkillLoad]
-readSkillLoads turn = do
-  rows <-
-    query
-      "SELECT (j.observed_manifest->'skill_loads')::text FROM execution_journal j \
-      \ WHERE j.tool_ref='use_skill' AND j.state IN ('succeeded','committed') \
-      \ AND jsonb_typeof(j.observed_manifest->'skill_loads')='array' AND \
-      \ j.turn_id=? ORDER BY j.execution_ordinal"
-      (Only turn.atrTurnId)
-  concat <$> traverse decode (rows :: [Only Text])
-  where
-    decode (Only value) = either (error . ("invalid durable skill receipt: " <>)) pure (eitherDecodeStrict' (TE.encodeUtf8 value))
 
 -- | Add host-observed sandbox network mode to the immutable started row.  The
 -- model chooses a sandbox handle but cannot choose or forge this value.
@@ -557,14 +540,6 @@ writeWorkingContext turn summary tokens limit = do
       "INSERT INTO turn_working_context(turn_id,summary,input_tokens,input_limit) VALUES (?,?,?,?)"
       (turn.atrTurnId, T.take 8000 summary, max 0 tokens, max 0 limit)
   pure ()
-
-readWorkingContext :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> Eff es Text
-readWorkingContext turn = do
-  rows <-
-    query
-      "SELECT summary FROM turn_working_context WHERE turn_id=? ORDER BY checkpoint_id DESC LIMIT 1"
-      (Only turn.atrTurnId)
-  pure $ case rows of [Only summary] -> summary; _ -> ""
 
 -- | Recover one journal result without publishing blob paths or replaying an
 -- effect. Provider call ids are local to a turn; ambiguous ids fail closed.
