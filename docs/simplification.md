@@ -8,8 +8,8 @@ unfinished design and acceptance goals.
 ## Status against the original numbered plan
 
 Sections 7–8 include the monitor cutover below. Section 13 separates resource
-ownership from dispatch work and makes loop state/outcomes explicit. Earlier
-deployment evidence remains historical.
+ownership from dispatch work and makes loop state/outcomes explicit. These
+changes are deployed on h610; earlier deployment evidence remains historical.
 
 | Plan section | Status | Remaining work or limit |
 |---|---|---|
@@ -31,7 +31,7 @@ Further size or prompt work must preserve major features. The remaining budget
 and broader model/real-conversation acceptance goals are separate from this
 monitor and readability cutover. Counts and evidence are in
 [code-size.md](code-size.md) and the
-[deployment report](research/simplification-release-20260919.md).
+[deployment report](research/simplification-7-8-13-release-20260919.md).
 
 ## Product contract
 
@@ -250,8 +250,11 @@ maintained implementation record.
 - Section 13: all Cabal components build; 1,043 unit and 267 PostgreSQL examples
   pass; HLint and architecture capability checks pass. The removed 14 examples
   tested an Agent retry classifier with no production caller. Current source
-  and active SQL total 33,725 core lines. This is local validation; production
-  acceptance is recorded separately after the release.
+  and active SQL total 33,725 core lines. Final code `1cd1132` passed all CI jobs
+  and is deployed on h610. Native upgrade preservation, HTTP, sandbox, browser
+  and existing scheduled-Job observations are recorded in the
+  [release report](research/simplification-7-8-13-release-20260919.md), including
+  the remaining historical health failures.
 
 
 - `eb90b84`: comment-only cleanup across 70 modules; 1,586 fewer full-line

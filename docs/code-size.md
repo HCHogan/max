@@ -3,7 +3,7 @@
 Counts expose maintenance cost; they do not justify deleting major features.
 This checkpoint includes sections 7–8 and 13: monitor lease/replay removal,
 explicit Agent outcomes, named loop state and dispatch ownership. See the separate
-[deployment observations and limits](research/simplification-release-20260919.md).
+[deployment observations and limits](research/simplification-7-8-13-release-20260919.md).
 
 ## Reproduce
 
