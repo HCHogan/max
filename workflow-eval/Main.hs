@@ -50,7 +50,8 @@ import Max.Jobs qualified as Jobs
 import Max.Log (withCompactLogger)
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
 import Max.Platform.QQ (ensureQQEndpointFor)
-import Max.Platform.Store hiding (capabilities, fingerprint)
+import Max.Platform.Store.Endpoint (RegisteredEndpoint (endpointId))
+import Max.Platform.Store.Ingest (IngestOptions (createDispatch, createMirrorDeliveries), IngestResult (Ingested), NewIngest (canonicalMessageId), defaultIngestOptions, ingestEnvelope)
 import Max.Platform.Types
 import Max.Skill.Contract (parseContract)
 import Max.Task.Delegation (parseJobResult)

@@ -13,7 +13,7 @@ import Effectful (runEff)
 import Effectful.PostgreSQL.Connection (runWithConnection)
 import Max.IR (Body, Phase (Canonical), mentionIdentities)
 import Max.IR.Prompt (promptCanonicalText, systemEventText)
-import Max.Platform.Store (mentionPrincipalsFor)
+import Max.Platform.Store.Identity (mentionPrincipalsFor)
 import Max.Platform.Types (EventKind (..))
 
 data ProjectionRow = ProjectionRow
@@ -31,13 +31,15 @@ instance FromRow ProjectionRow where
   fromRow = ProjectionRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field
 
 projectionRows :: Connection -> IO [ProjectionRow]
-projectionRows connection = query_ connection
-  "SELECT m.canonical_message_id,m.canonical_content,m.rendered_text,m.kind,m.event_kind, \
-  \ relation.target_canonical_message_id,relation.reaction_key, \
-  \ NOT EXISTS (SELECT 1 FROM message_relations r WHERE r.canonical_message_id=m.canonical_message_id AND r.relation_kind='reaction' AND NOT r.reaction_added) \
-  \FROM messages m LEFT JOIN LATERAL (SELECT target_canonical_message_id,reaction_key FROM message_relations r \
-  \ WHERE r.canonical_message_id=m.canonical_message_id AND r.relation_kind IN ('replace','redacts','reaction') \
-  \ ORDER BY relation_position NULLS LAST,relation_id LIMIT 1) relation ON true ORDER BY m.canonical_message_id"
+projectionRows connection =
+  query_
+    connection
+    "SELECT m.canonical_message_id,m.canonical_content,m.rendered_text,m.kind,m.event_kind, \
+    \ relation.target_canonical_message_id,relation.reaction_key, \
+    \ NOT EXISTS (SELECT 1 FROM message_relations r WHERE r.canonical_message_id=m.canonical_message_id AND r.relation_kind='reaction' AND NOT r.reaction_added) \
+    \FROM messages m LEFT JOIN LATERAL (SELECT target_canonical_message_id,reaction_key FROM message_relations r \
+    \ WHERE r.canonical_message_id=m.canonical_message_id AND r.relation_kind IN ('replace','redacts','reaction') \
+    \ ORDER BY relation_position NULLS LAST,relation_id LIMIT 1) relation ON true ORDER BY m.canonical_message_id"
 
 expectedProjection :: Connection -> ProjectionRow -> IO (Either String Text)
 expectedProjection connection row = case fromJSON row.canonicalContent of

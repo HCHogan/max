@@ -12,7 +12,7 @@ import Max.FetchQueue (FetchPriority (MissingFetch), FetchSignal, fetchTick, wai
 import Max.Files (enqueueFiles)
 import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
-import Max.Platform.Store (loadDispatchMessage)
+import Max.Platform.Store.Ingest (loadDispatchMessage)
 import Max.Util (catchSync)
 import Max.Worker (recovering)
 

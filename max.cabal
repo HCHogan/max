@@ -258,6 +258,16 @@ library
         Max.Files
         Max.Forward
         Max.Handler
+        Max.Handler.Access
+        Max.Handler.Command
+        Max.Handler.Jobs
+        Max.Handler.Output
+        Max.Handler.QQ
+        Max.Handler.Reaction
+        Max.Monitor.Dispatch
+        Max.Turn.Dispatch
+        Max.Turn.Job
+        Max.Turn.Reply
         Max.Hash
         Max.Historian
         Max.Http.Failure
@@ -317,7 +327,14 @@ library
         Max.Platform.Delivery.Queue
         Max.Platform.Delivery.Store
         Max.Platform.Types
-        Max.Platform.Store
+        Max.Platform.Sanitize
+        Max.Platform.Store.Conversation
+        Max.Platform.Store.Delivery
+        Max.Platform.Store.Endpoint
+        Max.Platform.Store.Identity
+        Max.Platform.Store.Ingest
+        Max.Platform.Store.Outbound
+        Max.Platform.Store.Relation
         Max.Platform.Ingress
         Max.Platform.QQ
         Max.Prompt

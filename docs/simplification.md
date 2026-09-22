@@ -13,7 +13,7 @@ changes are deployed on h610; earlier deployment evidence remains historical.
 
 | Plan section | Status | Remaining work or limit |
 |---|---|---|
-| 1. Core-size goal | Measurement established; target unmet | The measured core is 33,725 effective lines including active SQL. |
+| 1. Core-size goal | Measurement established; target unmet | The measured core is 34,656 effective lines including active SQL. |
 | 2. Product contract | Main runtime contract implemented | Major features and conservative handling of uncertain effects remain. |
 | 3. Responsibility boundary | Implemented | File and schema manifests expose core and total maintenance cost. |
 | 4. Model responsibilities | Partial | Finish/disposition protocols are gone; prompt reduction and monitor observation contracts still need review. |
@@ -21,11 +21,11 @@ changes are deployed on h610; earlier deployment evidence remains historical.
 | 6. Runtime boundaries | Implemented with regression coverage | Streaming, cancellation, provider state and resource boundaries have tests; live acceptance does not cover every case. |
 | 7. Persistence scope | Implemented | Definitions and trigger facts remain; worker leases, retry state and crash replay are gone. Frozen definitions preserve pending-retention and authority semantics. |
 | 8. Removal candidates | Implemented | Reminder triggers feed ordinary Jobs; old runtime tables have no serving-code consumers. Obsolete debt views and lease helpers are removed. |
-| 9. Core responsibility budgets | Not reached | Core Haskell is 31,978 lines, plus 1,747 active SQL lines. Preserve major features when pursuing further reductions. |
+| 9. Core responsibility budgets | Not reached | Core Haskell is 32,909 lines, plus 1,747 active SQL lines. Preserve major features when pursuing further reductions. |
 | 10. Migration sequence | Runtime cutover shipped; phase F partial | Cleanup and budget/readability goals remain after the deployed A–E changes. |
 | 11. Acceptance | Substantial but incomplete | Build, regression, upgrade and selected live checks passed. Model comparison was small; real-chat Jobs/reminder cases were not all exercised and strict historical health remains non-green. |
 | 12. Worker architecture | Main changes implemented | Scoped service supervision, local Jobs and queues replace the old execution recovery machinery; monitor scheduling now uses the same no-replay restart contract. |
-| 13. Readability | Implemented | Named LoopState/capabilities/SQL decoding, explicit outcomes, one production tool interpreter and separate dispatch ownership. |
+| 13. Readability | Implemented; responsibility split complete | Direct entry points for ingress, commands, permission, dispatch, Jobs and storage operations; named state/results and localized transaction/resource scopes. See the readability boundary below. |
 
 Further size or prompt work must preserve major features. The remaining budget
 and broader model/real-conversation acceptance goals are separate from this
@@ -194,6 +194,29 @@ mutable configuration snapshot. Runtime comments state current invariants;
 architecture.md begins with entry points and ownership. Obsolete automatic
 Agent-retry classification and its tests are removed; streaming, shared tool
 execution, cancellation and database behavior fixtures remain.
+
+The September 22 readability pass separates QQ ingest/backfill, canonical
+routing, command authorization, reaction publication, monitor admission and Job
+queue consumption. `Turn.Dispatch` owns admission and finalizers; `Turn.Reply`
+owns foreground prepare/run/publish; `Turn.Job` owns background execution. Job
+work is handled by its actual constructor, without a fabricated empty notice.
+Task command mutations use a closed operation type instead of a catch-all string
+branch that implies cancellation. Turn identity and event-sink construction use
+named fields.
+
+The former `Platform.Store` facade is removed. Its callers import Endpoint,
+Conversation, Identity, Relation, Ingest, Outbound or Delivery directly. Each
+query remains beside its row codec and conversion; ingest/publication transactions
+and identity lock ordering are unchanged. Payload sanitization is a pure module.
+Only cross-module operations are exported, and tool architecture checks reject
+all raw `Platform.Store.*` imports.
+
+Comments retain contracts, provenance, lock ordering and cancellation invariants.
+Retired recovery descriptions, incident narratives and UI prose are removed or
+condensed. Large declarative configuration and protocol adapters remain together
+where splitting would add navigation without separating responsibilities. The
+existing Agent loop, shared tool executor and cancellation state machines retain
+their explicit state and resource scopes; no parallel framework is introduced.
 
 ## Size accounting
 

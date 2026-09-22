@@ -12,7 +12,7 @@ import Max.DB.QQBackfill
     startQQBackfillRun,
   )
 import Max.Platform.QQ (ensureQQEndpointFor)
-import Max.Platform.Store (RegisteredEndpoint (..))
+import Max.Platform.Store.Endpoint (RegisteredEndpoint (..))
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 

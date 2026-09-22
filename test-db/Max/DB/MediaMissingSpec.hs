@@ -23,7 +23,7 @@ import Max.IR qualified as IR
 import Max.Images (enqueueImages, imageWorker)
 import Max.Platform (PlatformBackend (..))
 import Max.Platform.Rpc (platformRouter)
-import Max.Platform.Store (loadDispatchMessage)
+import Max.Platform.Store.Ingest (loadDispatchMessage)
 import Max.Platform.Types (CanonicalMessageId (..))
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200)

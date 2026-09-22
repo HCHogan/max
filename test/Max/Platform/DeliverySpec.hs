@@ -19,7 +19,10 @@ import Max.IR.Lower
 import Max.Platform.Delivery
 import Max.Platform.Delivery.Queue
 import Max.Platform.QQ (qqCapabilities)
-import Max.Platform.Store (DeliveryCompletion (..), DeliveryTarget (..))
+import Max.Platform.Store.Delivery
+  ( DeliveryCompletion (..),
+    DeliveryTarget (..),
+  )
 import Max.Platform.Types (DeliveryId (..), EndpointId (..), NativeEventId (..), NativeUserId (..), Platform (..), ReactionAction (..))
 import Max.Util (withTempDirectory)
 import Network.HTTP.Client

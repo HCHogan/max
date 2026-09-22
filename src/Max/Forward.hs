@@ -32,15 +32,17 @@ import Max.Images (enqueueImages)
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (Backfill))
 import Max.Platform.Failure (renderPlatformFailure)
 import Max.Platform.QQ (ensureQQEndpointFor, qqIngestBody)
-import Max.Platform.Store
+import Max.Platform.Store.Endpoint (RegisteredEndpoint (..))
+import Max.Platform.Store.Ingest
   ( IngestOptions (..),
     IngestResult (..),
     NewIngest (..),
-    RegisteredEndpoint (..),
-    compatibilityMessageIdForCanonical,
     defaultIngestOptions,
     ingestEnvelope,
     loadDispatchMessage,
+  )
+import Max.Platform.Store.Relation
+  ( compatibilityMessageIdForCanonical,
     nativeEventIdForCanonical,
   )
 import Max.Platform.Types

@@ -7,10 +7,13 @@ import Data.Text qualified as T
 import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
-import Max.Conversation.Roster (ConversationRoster (..), RosterIdentity (..))
+import Max.Conversation.Roster
+  ( ConversationRoster (..),
+    RosterIdentity (..),
+  )
 import Max.Effects.Blob (Blob)
 import Max.IR
-import Max.Platform.Store (conversationRoster)
+import Max.Platform.Store.Conversation (conversationRoster)
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId)
 import Max.Reply (chunkSource, planReply)
 import Max.Reply.Resolve

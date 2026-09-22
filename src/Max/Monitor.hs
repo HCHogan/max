@@ -14,6 +14,10 @@ import Data.Time (TimeZone, UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
 import Effectful
 import Effectful.Log (Log, logAttention)
 import Effectful.PostgreSQL (WithConnection)
+import Max.Conversation.Roster
+  ( ConversationRoster (..),
+    RosterIdentity (..),
+  )
 import Max.DB.Monitor
 import Max.DB.Notify (WorkChannel (MonitorWork), waitForWorkUntil)
 import Max.Effects.Blob (Blob)
@@ -22,7 +26,10 @@ import Max.IR (Body (..), Phase (Canonical))
 import Max.MessageKind (MessageKind (KindChat))
 import Max.Monitor.Schedule (nextCronFire)
 import Max.Monitor.Types (MonitorDispatchResult (..), MonitorFireId (..))
-import Max.Platform.Store (ConversationRoster (..), RosterIdentity (..), conversationAdvertisedCaps, conversationRoster)
+import Max.Platform.Store.Conversation
+  ( conversationAdvertisedCaps,
+    conversationRoster,
+  )
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId)
 import Max.Reply (Chunk (TextChunk))
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, prepareReplyChunk)

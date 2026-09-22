@@ -23,7 +23,7 @@ import Max.Episode.Types (EpisodeExpansion (..), EpisodeHandle)
 import Max.EpisodeStore qualified as Episodes
 import Max.History.Types (HistoryItem (..), LedgerItem (..), MessageCursor)
 import Max.Media.Types (MessageMedia)
-import Max.Platform.Store (conversationRoster)
+import Max.Platform.Store.Conversation (conversationRoster)
 import Max.Recall qualified as Recall
 import Max.Recall.Types (RecallHit)
 

@@ -84,7 +84,11 @@ import Max.MemoryStore
     listUserMemoriesEverywhereAdmin,
   )
 import Max.Monitor.Http (handleHttpMonitor)
-import Max.Platform.Store (ConversationSummary (..), listConversations, listPlatformStatus)
+import Max.Platform.Store.Conversation
+  ( ConversationSummary (..),
+    listConversations,
+    listPlatformStatus,
+  )
 import Max.Recall
   ( RecallCandidate (..),
     RecallHit (..),

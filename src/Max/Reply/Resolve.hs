@@ -30,7 +30,7 @@ import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
 import Max.IR
 import Max.IR.Digest (digest)
 import Max.IR.Prompt (MentionRoster (..), parseModelChunk)
-import Max.Platform.Store (resolveMentionIdentities)
+import Max.Platform.Store.Identity (resolveMentionIdentities)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId)
 import Max.Render (renderCodeImage, renderTableImage)
 import Max.Reply

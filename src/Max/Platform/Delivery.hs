@@ -57,7 +57,7 @@ import Max.Platform (PlatformBackend (..))
 import Max.Platform.Delivery.Parts
 import Max.Platform.Delivery.Queue
 import Max.Platform.Delivery.Store
-import Max.Platform.Store
+import Max.Platform.Store.Delivery
   ( DeliveryCompletion (..),
     DeliveryRequest (..),
     DeliveryTarget (..),

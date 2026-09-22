@@ -181,9 +181,8 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
     let cancel = throwTo selfTid TaskCancelled
         emit :: AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es))
         emit event = raise (raise (raise (unlift (sink event))))
-    -- Handler created this runtime before context collection and remains its
-    -- sole finalizer.  Agent only activates the worker cancellation hook and
-    -- consumes feedback through the explicit object.
+    -- Turn.Dispatch registers and finalizes the runtime. Agent attaches
+    -- cancellation and consumes feedback through the supplied interfaces.
     preKilled <- liftIO (activateTurnRuntime turn "llm" cancel)
     when preKilled $ throwIO TaskCancelled
     session <- newExecutionSession context.acMaxToolCalls

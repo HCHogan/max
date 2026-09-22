@@ -5,15 +5,19 @@
 module Max.DB.PlatformIds
   ( mappedId,
     nativeId,
+    compatibilityId,
   )
 where
 
 import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
+import Data.Text qualified as T (unpack)
 import Database.PostgreSQL.Simple (Only (..))
-import Effectful
+import Effectful (Eff, IOE, type (:>))
 import Effectful.PostgreSQL (WithConnection, query)
+import Max.DB.Codec (exactlyOne)
+import Text.Read (readMaybe)
 
 -- | The synthetic bigint for a native id, allocating one on first
 -- sight.  Idempotent under races: the conflict arm re-selects.
@@ -51,3 +55,21 @@ nativeId platform kind mapped = do
       \ WHERE platform = ? AND kind = ? AND mapped_id = ?"
       (platform, kind, mapped)
   pure (fromOnly <$> listToMaybe rows)
+
+compatibilityId ::
+  (WithConnection :> es, IOE :> es) =>
+  Text ->
+  Text ->
+  Text ->
+  Eff es Int64
+compatibilityId platformName kind native =
+  case platformName of
+    "qq" | Just numeric <- readMaybe (T.unpack native) -> pure numeric
+    _ -> do
+      rows <-
+        query
+          "INSERT INTO platform_ids (platform, kind, native_id) VALUES (?, ?, ?) \
+          \ ON CONFLICT (platform, kind, native_id) DO UPDATE SET native_id = EXCLUDED.native_id \
+          \ RETURNING mapped_id"
+          (platformName, kind, native)
+      pure (exactlyOne "compatibilityId" rows)

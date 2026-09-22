@@ -20,7 +20,7 @@ import Max.Effects.Outbound
 import Max.Effects.TaskControl qualified as Control
 import Max.Effects.TaskExecution qualified as Progress
 import Max.Effects.TaskQuery qualified as Query
-import Max.Handler (shutdownJobs)
+import Max.Handler.Jobs (shutdownJobs)
 import Max.IR (Body (..), Node (NText))
 import Max.Jobs qualified as Jobs
 import Max.MessageKind (MessageKind (KindChat))

@@ -14,7 +14,11 @@ import Max.Platform (PlatformBackend (..))
 import Max.Platform.Failure (PlatformFailure (..))
 import Max.Platform.Roster (GroupMember (..), GroupMeta (..))
 import Max.Platform.Rpc (platformRouter)
-import Max.Platform.Store (RegisteredEndpoint (..), ensureConfiguredEndpoint, ensureLegacyEndpoint)
+import Max.Platform.Store.Endpoint
+  ( RegisteredEndpoint (..),
+    ensureConfiguredEndpoint,
+    ensureLegacyEndpoint,
+  )
 import Max.Platform.Types
 import OneBot.Action (Action (..), Response (..))
 import OneBot.Types (GroupId (..), UserId (..))

@@ -28,7 +28,11 @@ import Max.Jobs qualified as Jobs
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Monitor.Types (MonitorFireId)
 import Max.Platform.Delivery.Queue (DeliveryQueue, queueDeliveries)
-import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
+import Max.Platform.Store.Outbound
+  ( EnqueuedOutbound (..),
+    OutboundDraft (..),
+    enqueueOutbound,
+  )
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Tasks (TaskRegistry, authorizeTurnOutput)
 import Max.Turn.Types (TurnOutputLink (..))

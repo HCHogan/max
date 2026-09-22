@@ -188,13 +188,8 @@ defaultPersona =
 
 loadConfig :: IO AppConfig
 loadConfig = do
-  -- The parser knows which file it read but has no way to hand it
-  -- back with the settings: 'withYamlConfig' consumes the path to
-  -- produce the config object, and opt-env-conf parsers are
-  -- applicative, so no field of the record can depend on it.  A ref
-  -- filled during resolution is the contained way to get it out, and
-  -- it is worth getting out — "which file did you actually read" is
-  -- the first question when a key looks ignored.
+  -- Capture the resolved YAML path for diagnostics; the applicative parser
+  -- cannot return it as a dependent configuration field.
   usedRef <- newIORef Nothing
   cfg <-
     runParser
@@ -604,14 +599,8 @@ dbParser = do
       ]
   maxConns <-
     setting
-      [ -- Sized against the connections that are held rather than the ones
-        -- that are used.  Every 'Max.DB.Notify' waiter pins one for as long as
-        -- it is asleep: dispatch, monitors and plans take one each, delivery
-        -- takes one per lane — one per configured platform plus the unrouted
-        -- lane — and each in-flight admin long-poll takes one more.
-        -- At the old default of 8 that left four for every turn, worker and
-        -- query in the process, and 'Data.Pool' blocks on acquire with no
-        -- timeout: exhaustion does not error, it hangs the bot.
+      [ -- Admin long-polls hold connections while waiting. Leave capacity
+        -- for concurrent turns and maintenance queries.
         help "Connection-pool size for workers and queries",
         reader auto,
         option,

@@ -77,12 +77,14 @@ import Max.IR.Lower (OutboundCaps (..), Tier (TierNative), textOnlyCaps)
 import Max.Platform (PlatformBackend (..))
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
 import Max.Platform.Ingress (Ingress, queueIngest)
-import Max.Platform.Store
+import Max.Platform.Store.Endpoint
+  ( RegisteredEndpoint (..),
+    ensureConfiguredEndpoint,
+  )
+import Max.Platform.Store.Ingest
   ( IngestResult (..),
     NewIngest (..),
-    RegisteredEndpoint (..),
     defaultIngestOptions,
-    ensureConfiguredEndpoint,
     ingestEnvelope,
   )
 import Max.Platform.Types

@@ -38,11 +38,11 @@ import Max.Effects.Blob (Blob, runBlob)
 import Max.IR (Body (..), Node (NText))
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
 import Max.Platform.QQ (ensureQQEndpointFor)
-import Max.Platform.Store
+import Max.Platform.Store.Endpoint (RegisteredEndpoint (..))
+import Max.Platform.Store.Ingest
   ( IngestOptions (..),
     IngestResult (..),
     NewIngest (..),
-    RegisteredEndpoint (..),
     defaultIngestOptions,
     ingestEnvelope,
   )

@@ -3,7 +3,17 @@
 module Max.HandlerSpec (spec) where
 
 import Max.Command.Permission (PermTier (..))
-import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, recordAs, rosterTier, splitQuoteHandles)
+import Max.Handler.Access (rosterTier)
+import Max.Handler.Output
+  ( isSilentReply,
+    parseSilence,
+    splitQuoteHandles,
+  )
+import Max.Handler.QQ
+  ( IngestOutcome (..),
+    ingestAllowsDownstream,
+    recordAs,
+  )
 import Max.IR.Prompt (promptText)
 import Max.MessageKind (MessageKind (..))
 import Max.Platform.QQ (qqIngestBody)

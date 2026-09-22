@@ -18,6 +18,7 @@ module Max.IR.Lower
     lower,
     mediaTier,
     platformDisplayLabel,
+    metaCapabilityEnabled,
   )
 where
 
@@ -442,3 +443,10 @@ charUtf8Bytes c
   | otherwise = 4
   where
     n = fromEnum c
+
+metaCapabilityEnabled :: Text -> OutboundCaps -> Bool
+metaCapabilityEnabled capability = case capability of
+  "edit" -> (.edit)
+  "reaction" -> (.reaction)
+  "redact" -> (.redact)
+  _ -> const False

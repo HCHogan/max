@@ -17,7 +17,7 @@ import Max.DB.Monitor.Occurrence (OccurrenceDraft (..), recordOccurrence)
 import Max.IR (Body (..), Node (NText))
 import Max.Jobs
 import Max.Monitor.Types (MonitorRef (..))
-import Max.Platform.Store (OutboundDraft (..))
+import Max.Platform.Store.Outbound (OutboundDraft (..))
 import Max.Platform.Types
 import Max.Task.Types
 import Max.Tasks (TaskRegistry, TurnRuntime, beginTurnRuntime, newTaskRegistry)

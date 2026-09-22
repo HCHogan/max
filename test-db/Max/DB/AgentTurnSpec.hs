@@ -22,7 +22,11 @@ import Max.DB.Connection (DbPool, withConn)
 import Max.DB.TurnContinuity
 import Max.Effects.Blob (Blob, runBlob)
 import Max.IR (Body (..), Node (NText))
-import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
+import Max.Platform.Store.Outbound
+  ( EnqueuedOutbound (..),
+    OutboundDraft (..),
+    enqueueOutbound,
+  )
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Turn.Continuity (TurnDigest (..), currentPromptMajor, renderContinuationDigest)
 import Max.Turn.Types

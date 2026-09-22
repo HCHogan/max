@@ -17,6 +17,11 @@ import Database.PostgreSQL.Simple qualified as PostgreSQL
 import Database.PostgreSQL.Simple.FromField (ResultError (..))
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Helpers (resultId, truncateAll, withDb, withDbLog)
+import Max.Conversation.Roster
+  ( ConversationRoster (crIdentities, crPlatforms),
+    RosterIdentity (riNativeUserId, riPrincipalId),
+  )
+import Max.Conversation.Roster qualified as PlatformStore ()
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.History (HistoryItem (..), fetchForwardChildrenInScope)
@@ -33,8 +38,136 @@ import Max.Platform.Delivery.Queue
 import Max.Platform.Delivery.Store
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (Backfill, LiveDelivery))
 import Max.Platform.Ingress (newIngress, nextIngress, queueIngest)
-import Max.Platform.Store
-import Max.Platform.Store qualified as PlatformStore
+import Max.Platform.Sanitize (sanitizeRawPayload)
+import Max.Platform.Store.Conversation
+  ( PlatformEndpointStatus
+      ( cursors,
+        endpointId,
+        outcomeUnknownDeliveries,
+        pendingDeliveries,
+        permanentFailureDeliveries,
+        suppressedDeliveries
+      ),
+    conversationAdvertisedCaps,
+    conversationRoster,
+    listPlatformStatus,
+  )
+import Max.Platform.Store.Conversation qualified as PlatformStore
+  (
+  )
+import Max.Platform.Store.Delivery
+  ( DeliveryCompletion
+      ( DeliveryAccepted,
+        DeliveryConfirmedAs,
+        DeliveryPermanentlyFailed,
+        DeliveryRetry,
+        DeliverySuppressedAs,
+        DeliveryUnknown
+      ),
+    DeliveryRequest
+      ( actionTarget,
+        attemptCount,
+        body,
+        canonicalMessageId,
+        deliveryId,
+        endpointId,
+        eventKind,
+        idempotencyKey,
+        reactionAction,
+        reactionKey,
+        replyContext
+      ),
+    DeliveryTarget (deliveryId, endpointId),
+    UnconfirmedDelivery (deliveryId, nativeEventId),
+    completeDelivery,
+    confirmUnconfirmedDelivery,
+    deliveryProcessBoundary,
+    deliveryTargets,
+    listUnconfirmedDeliveries,
+    loadDelivery,
+    retryUnconfirmedDelivery,
+    startDelivery,
+  )
+import Max.Platform.Store.Delivery qualified as PlatformStore ()
+import Max.Platform.Store.Endpoint
+  ( EndpointRegistration
+      ( EndpointRegistration,
+        accountDisplayName,
+        capabilities,
+        conversationId,
+        conversationKind,
+        endpointDisplayName,
+        endpointMode,
+        nativeAccountId,
+        nativeConversationId,
+        platform
+      ),
+    RegisteredEndpoint
+      ( conversationId,
+        endpointId,
+        platformAccountId
+      ),
+    createConversation,
+    ensureConfiguredEndpoint,
+    ensureLegacyEndpoint,
+    registerEndpoint,
+  )
+import Max.Platform.Store.Endpoint qualified as PlatformStore ()
+import Max.Platform.Store.Identity ()
+import Max.Platform.Store.Identity qualified as PlatformStore ()
+import Max.Platform.Store.Ingest
+  ( CursorRecord (CursorRecord),
+    IngestOptions
+      ( IngestOptions,
+        createDispatch,
+        createMirrorDeliveries,
+        qqProvenanceSegments,
+        selfEventsAreEchoes
+      ),
+    IngestResult (..),
+    NewIngest (mirrorDeliveries),
+    advanceIngestCursorCAS,
+    defaultIngestOptions,
+    ingestEnvelope,
+    loadDispatchMessage,
+  )
+import Max.Platform.Store.Ingest qualified as PlatformStore
+  ( IngestOptions (qqProvenanceSegments),
+  )
+import Max.Platform.Store.Outbound
+  ( EnqueuedOutbound
+      ( canonicalMessageId,
+        deliveries,
+        primaryDeliveryId
+      ),
+    EnqueuedReaction (canonicalMessageId, deliveries),
+    OutboundDraft
+      ( OutboundDraft,
+        canonicalBody,
+        legacyConversationId,
+        monitorFireId,
+        replyToCanonicalMessageId,
+        sourceCanonicalMessageId,
+        transcriptKind,
+        turnOutputLink
+      ),
+    ReactionDraft
+      ( ReactionDraft,
+        legacyConversationId,
+        reactionAction,
+        reactionKey,
+        requiredPlatform,
+        targetCanonicalMessageId
+      ),
+    enqueueOutbound,
+    enqueueReaction,
+  )
+import Max.Platform.Store.Outbound qualified as PlatformStore ()
+import Max.Platform.Store.Relation
+  ( nativeEventIdForCanonical,
+    nativeEventWasDeliveredTo,
+  )
+import Max.Platform.Store.Relation qualified as PlatformStore ()
 import Max.Platform.Types
 import Max.Util (tshow)
 import Network.HTTP.Client qualified as HTTP

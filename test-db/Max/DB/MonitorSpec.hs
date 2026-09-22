@@ -56,7 +56,7 @@ import Max.Monitor.Types
     MonitorRef (..),
   )
 import Max.Platform.Envelope (IngestClass (Backfill))
-import Max.Platform.Store
+import Max.Platform.Store.Outbound
   ( EnqueuedOutbound (..),
     OutboundDraft (..),
     enqueueOutbound,

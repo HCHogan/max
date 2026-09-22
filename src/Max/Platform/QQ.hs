@@ -34,7 +34,10 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.IR
 import Max.IR.Lower (OutboundCaps (..), Tier (..), textOnlyCaps)
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
-import Max.Platform.Store (RegisteredEndpoint (..), ensureLegacyEndpoint)
+import Max.Platform.Store.Endpoint
+  ( RegisteredEndpoint (..),
+    ensureLegacyEndpoint,
+  )
 import Max.Platform.Types
 import Max.Util (tshow)
 import OneBot.Event (EmojiLike (..), GroupMessage (..), MessageNotice (..), NoticeKind (..), Sender (..))

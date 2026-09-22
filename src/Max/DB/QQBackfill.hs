@@ -17,7 +17,7 @@ import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
-import Max.Platform.Store (RegisteredEndpoint (..))
+import Max.Platform.Store.Endpoint (RegisteredEndpoint (..))
 import Max.Platform.Types (ConversationId (..), EndpointId (..), PlatformAccountId (..))
 
 data QQBackfillEndpoint = QQBackfillEndpoint

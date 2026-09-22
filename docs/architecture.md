@@ -8,13 +8,34 @@ it does not reconstruct an execution from those records.
 
 | Path to review | Entry and order | Owner |
 |---|---|---|
-| Ordinary answer | [`Handler.dispatchLLMWith`](../src/Max/Handler.hs) → `forkDispatch` → `runDispatch`; chat uses `prepareReply` → `runReply` → `publishReply` | `forkDispatch` registers before context collection and releases the shutdown slot, conversation ticket, runtime and browser scope in its finalizer |
+| Ordinary answer | [`Turn.Dispatch.dispatchLLMWith`](../src/Max/Turn/Dispatch.hs) → `forkDispatch` → [`Turn.Reply.runDispatch`](../src/Max/Turn/Reply.hs); chat uses `prepareReply` → `runReply` → `publishReply` | `forkDispatch` registers before context collection and releases the shutdown slot, conversation ticket, runtime and browser scope in its finalizer |
 | Model/tool loop | [`Effects.Agent.runAgentWith`](../src/Max/Effects/Agent.hs); `LoopState` names the changing context, history, appended messages and round | The enclosing run owns its model, event sink, working-context cache and execution session |
 | Tool invocation | [`Effects.Tools.runToolsWith`](../src/Max/Effects/Tools.hs) plus [`Execution.Tools`](../src/Max/Execution/Tools.hs) | Assembly installs narrow runner effects; native calls and code mode share authorization, budgets and outcomes |
 | Visible output | [`AgentOutput.handleAgentEvent`](../src/Max/AgentOutput.hs) → [`ReplySend.sendAndPersistReply`](../src/Max/ReplySend.hs) → [`Effects.Outbound`](../src/Max/Effects/Outbound.hs) | The output scope shares one stream/tail budget; `AgentReply.publishedPrefix` prevents repeating accepted text |
 | Cancellation | [`Tasks`](../src/Max/Tasks.hs), [`Conversation`](../src/Max/Conversation.hs), [`Jobs`](../src/Max/Jobs.hs) | Revoke local publication authority before cancelling the worker; the dispatch finalizer closes resources |
-| Reminder | [`Monitor.monitorWorker`](../src/Max/Monitor.hs) → [`Handler.dispatchMonitorFire`](../src/Max/Handler.hs) → ordinary Jobs | One scheduler, no lease or retry owner. Startup ends unfinished triggers |
+| Inbound message | [`Handler.QQ.handleEvents`](../src/Max/Handler/QQ.hs) / platform adapter → [`Store.Ingest.ingestEnvelope`](../src/Max/Platform/Store/Ingest.hs) → [`Handler.ingressWorker`](../src/Max/Handler.hs) | The ingest transaction owns deduplication and canonical history; Handler routes only committed messages |
+| Background Job | [`Handler.Jobs.jobsWorker`](../src/Max/Handler/Jobs.hs) → `Turn.Dispatch` → [`Turn.Job.runJob`](../src/Max/Turn/Job.hs) | Jobs owns task state; the ordinary dispatch scope owns runtime registration and cleanup |
+| Reminder | [`Monitor.monitorWorker`](../src/Max/Monitor.hs) → [`Monitor.Dispatch.dispatchMonitorFire`](../src/Max/Monitor/Dispatch.hs) → ordinary Jobs | One scheduler, no lease or retry owner. Startup ends unfinished triggers |
 | Startup and configuration | [`Main`](../app/Main.hs), [`Env`](../src/Max/Env.hs), [`Worker`](../src/Max/Worker.hs) | Main projects configuration once and allocates process resources; supervised workers share their lifetime |
+
+Storage entry points are grouped by transaction or query responsibility:
+
+- [`Store.Ingest`](../src/Max/Platform/Store/Ingest.hs): deduplicate, reconcile echoes,
+  insert canonical events and advance adapter cursors. The complete ingest stays
+  in one transaction; registration and ingest retain the same lock order.
+- [`Store.Outbound`](../src/Max/Platform/Store/Outbound.hs): atomically record text,
+  internal silence or reactions and their endpoint delivery records.
+- [`Store.Delivery`](../src/Max/Platform/Store/Delivery.hs): load current routing,
+  persist attempt outcomes and reconcile receipts. Queue ownership remains in
+  `Platform.Delivery.Queue`; stored rows do not resume execution after restart.
+- `Store.Endpoint`, `Store.Identity`, `Store.Relation` and `Store.Conversation`:
+  endpoint registration, scoped identity resolution, native/canonical links and
+  read-side conversation views. Callers import the operation they need directly.
+
+Command parsing and permission checks live in `Handler.Command` and
+`Handler.Access`; reply/reaction publication is in `Handler.Output` and
+`Handler.Reaction`. `Turn.Dispatch` contains resource ownership, while
+`Turn.Reply` contains prompt collection, execution and final publication.
 
 `AgentOutcome` distinguishes a complete answer, an interruption carrying a
 partial answer, and failure without a final draft. Partial publication remains
@@ -104,7 +125,7 @@ src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory
                    Skills — progressive disclosure, SelfSource — bounded reads
                    of the allowlisted compile-time source snapshot)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
-                   Platform.Types/Store/Delivery (canonical conversations,
+                   Platform.Types/Store/*/Delivery (canonical conversations,
                    identities, native provenance, ingest cursors and receipts), QQ normalization, Matrix and iMessage adapters,
                    AgentEvent (typed progress/debug/final-stream port and its
                    ReplySend/Outbound interpreter),
@@ -152,9 +173,9 @@ app/Main.hs        wires effects + workers + server
         ┌─────▼────┐ ┌───▼────┐ ┌───▼─────┐ ┌──────▼──────────────────┐
         │img/fwd/  │ │embedWkr│ │!cmd     │ │ agentTurn (async task)  │
         │file wkrs │ │pgvector│ │dispatch │ │  buildContext (+memory) │
-        │(claim    │ │backfill│ │(session,│ │  → LLM (tools)          │
+        │(local    │ │backfill│ │(session,│ │  → LLM (tools)          │
         │ fetch_   │ │+ tail  │ │ memory, │ │    └─ tool loop ◀──┐    │
-        │ jobs)    │ └────────┘ │ tasks)  │ │  (sandbox/browser/ │    │
+        │ queues)  │ └────────┘ │ tasks)  │ │  (sandbox/browser/ │    │
         └──────────┘            └─────────┘ │   search/files/mem)┘    │
                                             │  → AgentEvent           │
                                             │      → ReplySend        │

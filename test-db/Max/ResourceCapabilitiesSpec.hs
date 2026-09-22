@@ -14,7 +14,10 @@ import Effectful.PostgreSQL (execute, query)
 import GHC.Conc (BlockReason (BlockedOnMVar), ThreadStatus (ThreadBlocked), threadStatus)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb, withDbLog)
 import JobFixture (seed)
-import Max.Conversation.Roster (ConversationRoster (..), RosterIdentity (..))
+import Max.Conversation.Roster
+  ( ConversationRoster (..),
+    RosterIdentity (..),
+  )
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn (AgentTurnTerminal (TurnCancelled), finishAgentTurn)
 import Max.DB.Connection (DbPool)
@@ -29,7 +32,10 @@ import Max.Embedding (EmbeddingRecord (..))
 import Max.File.Types (FileRecord (..))
 import Max.Media.Types (StoredImage (..), StoredVideo (..))
 import Max.Pin.Policy (PinFailure (..))
-import Max.Platform.Store (ensureEndpointPrincipals, resolveMentionIdentities)
+import Max.Platform.Store.Identity
+  ( ensureEndpointPrincipals,
+    resolveMentionIdentities,
+  )
 import Max.Platform.Types (CanonicalMessageId (..), EndpointId (..), NativeUserId (..))
 import Max.Session qualified as Session
 import Max.Session.Types (Session (..))

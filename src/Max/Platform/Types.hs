@@ -33,6 +33,8 @@ module Max.Platform.Types
     noAdvertisedCaps,
     qqAdvertisedCaps,
     DeliveryStatus (..),
+    renderEventKind,
+    parseEventKind,
   )
 where
 
@@ -193,3 +195,20 @@ data DeliveryStatus
   | DeliveryPermanentFailure
   | DeliverySuppressed
   deriving stock (Eq, Ord, Show, Generic)
+
+renderEventKind :: EventKind -> Text
+renderEventKind = \case
+  EventMessage -> "message"
+  EventEdit -> "edit"
+  EventReaction -> "reaction"
+  EventRedaction -> "redaction"
+  EventMembership -> "membership"
+
+parseEventKind :: Text -> Maybe EventKind
+parseEventKind = \case
+  "message" -> Just EventMessage
+  "edit" -> Just EventEdit
+  "reaction" -> Just EventReaction
+  "redaction" -> Just EventRedaction
+  "membership" -> Just EventMembership
+  _ -> Nothing

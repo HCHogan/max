@@ -38,7 +38,10 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection)
 import Max.Platform (ActionAddress (..), PlatformBackend (..), actionAddress, backendForPlatform)
 import Max.Platform.Failure (PlatformFailure (..))
-import Max.Platform.Store (platformForLegacyConversation, platformForLegacyMessage)
+import Max.Platform.Store.Endpoint
+  ( platformForLegacyConversation,
+    platformForLegacyMessage,
+  )
 import Network.WebSockets qualified as WS
 import OneBot.Action (Action, Envelope (..), Response (..), encodeAction)
 import OneBot.Server (Client (..), ClientSlot)

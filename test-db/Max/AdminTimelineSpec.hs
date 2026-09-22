@@ -12,11 +12,25 @@ import Data.Time (UTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), execute, query)
 import Helpers (resultId, truncateAll, withDb)
 import Max.AdminTimeline (loadAdminTimeline, waitAdminTimeline)
+import Max.Conversation.Roster ()
 import Max.DB.Connection (DbPool, withConn)
 import Max.IR
 import Max.IR.Lower (textOnlyCaps)
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
-import Max.Platform.Store
+import Max.Platform.Store.Conversation ()
+import Max.Platform.Store.Delivery ()
+import Max.Platform.Store.Endpoint
+  ( RegisteredEndpoint (endpointId),
+    ensureConfiguredEndpoint,
+  )
+import Max.Platform.Store.Identity ()
+import Max.Platform.Store.Ingest
+  ( IngestOptions (createDispatch, createMirrorDeliveries),
+    defaultIngestOptions,
+    ingestEnvelope,
+  )
+import Max.Platform.Store.Outbound ()
+import Max.Platform.Store.Relation ()
 import Max.Platform.Types
 import Test.Hspec
 

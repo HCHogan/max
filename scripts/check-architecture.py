@@ -93,6 +93,7 @@ def check_imports():
 
     # Read-model codecs may decode SQL fields, but cannot execute queries or IO.
     read_models = {
+        "Max.Platform.Sanitize": {"Max.IR", "Max.Platform.Envelope", "Max.Platform.Types", "Crypto.Hash.SHA256"},
         "Max.Memory.Types": {"Max.ConversationScope", "Max.Memory.Policy"},
         "Max.History.Types": {"Control.Applicative", "Max.IR"},
         "Max.Media.Types": set(),
@@ -161,7 +162,7 @@ def check_imports():
         domain_tools = {"src/Max/Tools/Skills.hs", "src/Max/Tools/Search.hs", "src/Max/Tools/Sandbox.hs", "src/Max/Tools/Browser.hs", "src/Max/Tools/Files.hs", "src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Reminder.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Pins.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs"}
         resource_tools = {"src/Max/Tools/Files.hs", "src/Max/Tools/Browser.hs"}
         if relative in domain_tools | resource_tools:
-            if any(dependency.startswith("Max.DB.") for dependency in dependencies) or dependencies & {"Effectful.PostgreSQL", "Max.Platform.Store", "Max.Session", "Max.Reply.Resolve", "Max.Reply.Caption", "Max.Task.ToolRuntime", "Max.Monitor.ToolRuntime", "Max.Memory.ToolRuntime", "Max.MemoryStore", "Max.EpisodeStore", "Max.Recall", "Max.Prompt", "Max.Conversation.ToolRuntime", "Max.Monitor", "Max.Tools"}:
+            if any(dependency.startswith(("Max.DB.", "Max.Platform.Store.")) for dependency in dependencies) or dependencies & {"Effectful.PostgreSQL", "Max.Platform.Store", "Max.Session", "Max.Reply.Resolve", "Max.Reply.Caption", "Max.Task.ToolRuntime", "Max.Monitor.ToolRuntime", "Max.Memory.ToolRuntime", "Max.MemoryStore", "Max.EpisodeStore", "Max.Recall", "Max.Prompt", "Max.Conversation.ToolRuntime", "Max.Monitor", "Max.Tools"}:
                 errors.append(f"{relative}: raw storage/assembly dependency")
             if relative not in {"src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Files.hs"} and "Max.Effects.Blob" in dependencies:
                 errors.append(f"{relative}: unneeded content store capability")

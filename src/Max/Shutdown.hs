@@ -1,9 +1,5 @@
--- | Bounded graceful shutdown for agent dispatches. Admission and the drain
--- flag share an STM transaction; each dispatch holds a slot from entry through
--- context collection, execution and finalization. Graceful shutdown also waits
--- for current-process output; a hard crash does not replay it.
--- QQ reconnect backfill is bounded and deduplicated, not a complete offline
--- cursor: messages outside its windows, reactions and recalls may be missed.
+-- | Stop admission, then wait for running turns and queued output under one
+-- deadline. Hard crashes do not replay work.
 module Max.Shutdown
   ( ShutdownState,
     newShutdownState,
@@ -78,10 +74,7 @@ leaveDispatch st = atomically (modifyTVar' st.ssInflight (subtract 1))
 --------------------------------------------------------------------------------
 -- Shutdown side
 
--- | Flip into draining mode.  'True' when this call is what flipped
--- it; 'False' means a drain was already under way — which is how the
--- signal handler tells a second SIGTERM (\"I said now\") from the
--- first.
+-- | Return False for repeated signals so the caller can force shutdown.
 beginDrain :: ShutdownState -> IO Bool
 beginDrain st = atomically $ do
   draining <- readTVar st.ssDraining
@@ -89,9 +82,7 @@ beginDrain st = atomically $ do
     then pure False
     else True <$ writeTVar st.ssDraining True
 
--- | Block until 'beginDrain' fires.  Lets the drain supervisor live as
--- an ordinary worker (and so log through the effect stack) while the
--- signal handler itself stays trivial and non-blocking.
+-- | Wait for the signal handler to request a drain; the handler never blocks.
 awaitDrain :: ShutdownState -> IO ()
 awaitDrain st = atomically $ do
   draining <- readTVar st.ssDraining

@@ -44,4 +44,4 @@
 
 # The parentheses hlint wants removed are what make the scope of `finally`
 # obvious, and that scope is the whole point of the dispatch cleanup block.
-- ignore: {name: Move brackets to avoid $, within: Max.Handler}
+- ignore: {name: Move brackets to avoid $, within: [Max.Turn.Dispatch, Max.Handler.Jobs]}

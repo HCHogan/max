@@ -18,7 +18,10 @@ import Data.List (find)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time
-import Max.Platform.Store (DeliveryCompletion (..), DeliveryTarget (..))
+import Max.Platform.Store.Delivery
+  ( DeliveryCompletion (..),
+    DeliveryTarget (..),
+  )
 import Max.Platform.Types
 
 -- The boundary prevents provider reconciliation from resuming pre-start sends.

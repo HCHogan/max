@@ -12,7 +12,10 @@ import Effectful.Concurrent (runConcurrent)
 import Effectful.Log (LogLevel (LogAttention), runLog)
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.Platform.Delivery.Queue
-import Max.Platform.Store (DeliveryCompletion (..), DeliveryTarget (..))
+import Max.Platform.Store.Delivery
+  ( DeliveryCompletion (..),
+    DeliveryTarget (..),
+  )
 import Max.Platform.Types (DeliveryId (..), EndpointId (..), Platform (..))
 import Max.Shutdown
   ( awaitQuiescent,

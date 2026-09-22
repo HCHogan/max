@@ -92,13 +92,7 @@ codesnapArgs mConfig lang inPath outPath =
     outPath,
     "--silent",
     "--has-line-number",
-    -- Scale buys nothing at a glance and everything on a second look.
-    -- A chat client fits the picture to the bubble, so what decides
-    -- unzoomed legibility is characters per line, not pixels: measured on
-    -- a 300dp bubble, scale 2 and scale 3 give an identical ~4.2 dp per
-    -- character at 60 columns and ~2.5 at 100.  Where they differ is the
-    -- tap-to-zoom view — 23 real pixels per character against 15 — and a
-    -- long line is exactly what gets tapped.  The cost is bytes alone.
+    -- Scale 3 improves tap-to-zoom detail; line length controls bubble legibility.
     "--scale-factor",
     "3"
   ]

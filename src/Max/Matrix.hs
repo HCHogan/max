@@ -74,20 +74,22 @@ import Max.Platform.Delivery
 import Max.Platform.Delivery.Parts
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
 import Max.Platform.Ingress (Ingress, queueIngest)
-import Max.Platform.Store
+import Max.Platform.Store.Delivery (DeliveryRequest (..))
+import Max.Platform.Store.Endpoint
+  ( RegisteredEndpoint (..),
+    ensureConfiguredEndpoint,
+  )
+import Max.Platform.Store.Ingest
   ( CursorRecord (..),
-    DeliveryRequest (..),
     IngestOptions (..),
     IngestResult (..),
     NewIngest (..),
-    RegisteredEndpoint (..),
     advanceIngestCursorCAS,
     defaultIngestOptions,
-    ensureConfiguredEndpoint,
     ingestEnvelope,
-    latestNativeEventId,
     readIngestCursor,
   )
+import Max.Platform.Store.Relation (latestNativeEventId)
 import Max.Platform.Types
 import Max.Worker (retrying)
 import Network.HTTP.Client qualified as HTTP

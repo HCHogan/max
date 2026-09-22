@@ -1,31 +1,43 @@
 -- | Typed decoding for text and native JSON columns at the SQL boundary.
 -- Malformed durable values are conversion failures, never default authority.
-module Max.DB.Codec (jsonField, jsonbField, nullableJsonbField, enumField, queryRows, databaseNow, jsonText) where
+module Max.DB.Codec (jsonField, jsonbField, nullableJsonbField, enumField, queryRows, databaseNow, jsonText, Jsonb (..), exactlyOne) where
 
 import Data.Aeson
   ( FromJSON,
     Result (..),
     ToJSON,
+    Value,
     eitherDecodeStrict',
     encode,
     fromJSON,
   )
-import Data.ByteString.Lazy qualified as LBS
+import Data.ByteString.Lazy qualified as LBS (toStrict)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
+  ( decodeUtf8,
+    encodeUtf8,
+  )
 import Data.Time (UTCTime)
 import Data.Typeable (Typeable)
-import Database.PostgreSQL.Simple qualified as SQL
+import Database.PostgreSQL.Simple qualified as SQL (queryWith)
 import Database.PostgreSQL.Simple.FromField
   ( ResultError (ConversionFailed),
     fromField,
     returnError,
   )
 import Database.PostgreSQL.Simple.FromRow (RowParser, fieldWith)
+import Database.PostgreSQL.Simple.ToField
+  ( ToField (..),
+    toJSONField,
+  )
 import Database.PostgreSQL.Simple.ToRow (ToRow)
 import Database.PostgreSQL.Simple.Types (Only (..), Query)
-import Effectful
-import Effectful.PostgreSQL (WithConnection, query, withConnection)
+import Effectful (Eff, IOE, MonadIO (liftIO), type (:>))
+import Effectful.PostgreSQL
+  ( WithConnection,
+    query,
+    withConnection,
+  )
 
 jsonField :: (FromJSON a, Typeable a) => RowParser a
 jsonField = fieldWith $ \column bytes -> do
@@ -66,3 +78,12 @@ databaseNow = do
 
 jsonText :: (ToJSON a) => a -> Text
 jsonText = TE.decodeUtf8 . LBS.toStrict . encode
+
+newtype Jsonb = Jsonb Value
+
+instance ToField Jsonb where
+  toField (Jsonb value) = toJSONField value
+
+exactlyOne :: String -> [Only a] -> a
+exactlyOne _ [Only value] = value
+exactlyOne label _ = error (label <> ": expected exactly one row")

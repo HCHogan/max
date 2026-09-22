@@ -83,26 +83,30 @@ import Max.Platform.Delivery.Parts
 import Max.Platform.Delivery.Queue (DeliveryQueue, queueDeliveryRetry)
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
 import Max.Platform.Ingress (Ingress, queueIngest)
-import Max.Platform.Store
-  ( CursorRecord (..),
-    DeliveryRequest (..),
+import Max.Platform.Store.Delivery
+  ( DeliveryRequest (..),
     DeliveryTarget (..),
+    UnconfirmedDelivery (..),
+    confirmUnconfirmedDelivery,
+    listUnconfirmedDeliveries,
+    loadDelivery,
+    retryUnconfirmedDelivery,
+  )
+import Max.Platform.Store.Endpoint
+  ( RegisteredEndpoint (..),
+    ensureConfiguredEndpoint,
+  )
+import Max.Platform.Store.Ingest
+  ( CursorRecord (..),
     IngestOptions (..),
     IngestResult (..),
     NewIngest (..),
-    RegisteredEndpoint (..),
-    UnconfirmedDelivery (..),
     advanceIngestCursorCAS,
-    confirmUnconfirmedDelivery,
     defaultIngestOptions,
-    ensureConfiguredEndpoint,
     ingestEnvelope,
-    listUnconfirmedDeliveries,
-    loadDelivery,
-    nativeEventWasDeliveredTo,
     readIngestCursor,
-    retryUnconfirmedDelivery,
   )
+import Max.Platform.Store.Relation (nativeEventWasDeliveredTo)
 import Max.Platform.Types
 import Max.Worker (retrying)
 import Network.HTTP.Client qualified as HTTP

@@ -5,7 +5,10 @@ module Max.Platform.Ingress (Ingress, newIngress, queueIngest, nextIngress) wher
 import Control.Concurrent.STM
 import Control.Monad (when)
 import Max.Platform.Delivery.Queue (DeliveryQueue, queueDeliveries)
-import Max.Platform.Store (IngestResult (..), NewIngest (..))
+import Max.Platform.Store.Ingest
+  ( IngestResult (..),
+    NewIngest (..),
+  )
 import Max.Platform.Types (CanonicalMessageId)
 
 data Ingress = Ingress (TBQueue CanonicalMessageId) DeliveryQueue

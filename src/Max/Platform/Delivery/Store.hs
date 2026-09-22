@@ -9,7 +9,8 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Transaction (withTransaction)
 import Max.Platform.Delivery.Parts
-import Max.Platform.Store (DeliveryRequest (..), resolveNativeTarget)
+import Max.Platform.Store.Delivery (DeliveryRequest (..))
+import Max.Platform.Store.Relation (resolveNativeTarget)
 import Max.Platform.Types
 
 planDeliveryParts :: (WithConnection :> es, IOE :> es) => DeliveryRequest -> [Text] -> Eff es Bool
