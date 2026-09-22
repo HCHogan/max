@@ -80,7 +80,7 @@ data ElaboratedMonitorFire = ElaboratedMonitorFire
     emfGroupId :: !Int64,
     emfArmedByPrincipal :: !PrincipalId,
     emfArmingTurn :: !(Maybe AgentTurnRef),
-    -- | The arming principal's own live inbound row, replayed as the fresh
+    -- | The arming principal's own inbound row, used as the fresh
     -- turn's dispatch identity.  'Nothing' is a fail-closed state, not a
     -- normal one: the fire expires with a reason instead of disappearing.
     emfSeedCanonicalMessage :: !(Maybe CanonicalMessageId),

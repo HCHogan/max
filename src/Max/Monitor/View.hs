@@ -1,4 +1,4 @@
--- | Bounded durable-work read models. SQL supplies facts; Haskell owns the
+-- | Bounded monitor status and history views. SQL supplies facts; Haskell owns the
 -- public handles and JSON/prose projection consumed by tools and admin UI.
 module Max.Monitor.View
   ( TimeMonitor (..),

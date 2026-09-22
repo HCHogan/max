@@ -48,7 +48,7 @@ import OneBot.Server (Client (..), ClientSlot)
 
 data PlatformRouter es = PlatformRouter !PlatformBackend !(Eff es [PlatformBackend])
 
--- | Resolve foreign backends from the caller's leased generation per call.
+-- | Resolve the configured foreign backends for each routed call.
 platformRouter :: PlatformBackend -> Eff es [PlatformBackend] -> PlatformRouter es
 platformRouter = PlatformRouter
 

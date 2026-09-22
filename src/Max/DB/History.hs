@@ -106,9 +106,7 @@ fetchTranscriptAfter ::
 fetchTranscriptAfter scope (MessageCursor after) excludeId since =
   map (.history) <$> fetchPromptLedgerAfter scope (MessageCursor after) excludeId since
 
--- | Cursor-bearing form of 'fetchTranscriptAfter', used to decide exactly
--- which precomputed compartments can replace enough raw tokens at a high-water
--- materialization boundary.
+-- | Cursor-bearing transcript for selecting summaries and the protected raw tail.
 fetchPromptLedgerAfter ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->

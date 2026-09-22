@@ -5,7 +5,7 @@
 -- Each round reads pending input, calls the model, and either executes tools
 -- or handles a content response under the turn's completion policy.
 -- Streaming emits safe fragments and tracks the accepted prefix per call.
--- Handler owns the TurnRuntime and its cleanup; this interpreter installs
+-- Turn.Dispatch owns the TurnRuntime and its cleanup; this interpreter installs
 -- cancellation, checks it between steps, and consumes the execution inbox.
 module Max.Effects.Agent
   ( Agent,

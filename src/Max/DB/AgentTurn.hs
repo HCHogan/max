@@ -127,10 +127,7 @@ markAgentTurnRunning ref profile = do
       (profile, ref.atrTurnId)
   pure ()
 
--- | Checkpoint an attempted model round before crossing the provider
--- boundary.  Unlike token usage (known only from a response), this survives a
--- process death during the request and lets one recovered durable turn retain
--- the work count from every process incarnation.
+-- | Add completed provider-response usage to this turn's diagnostic history.
 addAgentTurnUsage ::
   (WithConnection :> es, IOE :> es) =>
   AgentTurnId ->

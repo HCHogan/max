@@ -1,4 +1,4 @@
--- | Default command capabilities and tiers. "Max.Handler" resolves access:
+-- | Default command capabilities and tiers. "Max.Handler.Access" resolves access:
 -- owner > explicit grant/deny (group before global) > role > member.
 -- Private-chat senders have the group-admin tier for their own session.
 module Max.Command.Permission

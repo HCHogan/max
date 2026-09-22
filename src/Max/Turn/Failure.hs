@@ -1,6 +1,6 @@
 -- | Dispatch cancellation encloses both normal work and failure handling.
--- Keep it outside the publication handler so a kill during its database
--- checkpoint follows the same durable cancellation path as a kill during work.
+-- Cancellation during publication bookkeeping reaches the same owner as
+-- cancellation during model or tool execution.
 module Max.Turn.Failure (handleTurnFailures) where
 
 import Control.Exception (SomeException)

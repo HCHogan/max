@@ -1,4 +1,4 @@
--- | Small types shared by the durable turn store, task runtime, tools and
+-- | Small types shared by turn history, the task runtime, tools and
 -- outbound boundary.  This module contains no database operations, keeping
 -- the identity usable by the in-memory Agent tests.
 module Max.Turn.Types

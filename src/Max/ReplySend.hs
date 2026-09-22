@@ -67,7 +67,7 @@ data ReplyTarget = ReplyTarget
     rtCanMention :: !Bool,
     rtCanFace :: !Bool,
     rtCanImage :: !Bool,
-    -- | Shared by every visible output path in this durable turn.
+    -- | Shared by every visible output path in this turn.
     rtTurnOutputContext :: !(Maybe TurnOutputContext)
   }
 

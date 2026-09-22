@@ -164,7 +164,7 @@ forkDispatch start origin gm work = do
   outputCaps <- conversationAdvertisedCaps gidRaw (if midRaw > 0 then Just midRaw else Nothing)
   -- Acquire shutdown admission before spawning, in the same transaction as
   -- the drain check. The slot covers setup, context collection and execution;
-  -- Handler also registers the TurnRuntime before launching the child.
+  -- Register the TurnRuntime before launching the child.
   launched <- mask $ \restore -> do
     acquired <- liftIO (enterDispatch env.beShutdown)
     case acquired of

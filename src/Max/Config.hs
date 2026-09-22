@@ -80,9 +80,8 @@ data AppConfig = AppConfig
     -- advances per round, not per individual tool call.
     turnSilenceSeconds :: !Int,
     llm :: !ModelCatalog,
-    -- | Global release escape hatch: bypass compartments/materialization and
-    -- build every prompt from the immutable ledger under the normal token
-    -- budget.  Projections and background capture remain untouched.
+    -- | Emergency raw-history context under the normal token budget.
+    -- Background summary capture continues.
     forceRawContext :: !Bool,
     -- | Display timezone for all model/user-facing timestamps
     -- (stored times stay UTC).  Default UTC+8.
