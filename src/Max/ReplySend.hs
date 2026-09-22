@@ -1,15 +1,14 @@
 -- | Shared publication path for final replies, streamed text and progress.
 -- Resolve placeholders, publish chunks in order and persist their visible form.
--- SendBudget carries the chunk limit and image deduplication across calls;
--- whole-reply callers start with freshBudget. ReplyTarget keeps this boundary
+-- SendState carries image deduplication across calls;
+-- whole-reply callers start with emptySendState. ReplyTarget keeps this boundary
 -- independent of ToolContext.
 module Max.ReplySend
   ( ReplyTarget (..),
-    SendBudget (..),
+    SendState (..),
     ReplyPublication (..),
     ReplyPublicationException (..),
-    freshBudget,
-    canStream,
+    emptySendState,
     sendAndPersistReply,
     prepareReplyChunk,
     cleanModelText,
@@ -18,9 +17,6 @@ module Max.ReplySend
     stripThinkSpans,
     messageImageNodes,
     chunkDelayMicros,
-
-    -- * Exposed for tests
-    capTo,
   )
 where
 
@@ -40,7 +36,7 @@ import Max.Effects.Outbound
 import Max.IR (Body, Phase (Canonical))
 import Max.MessageKind (MessageKind (KindChat))
 import Max.Platform.Types (CanonicalMessageId, PrincipalId)
-import Max.Reply (Chunk (..), chunkSource, maxChunks, planReply)
+import Max.Reply (Chunk (..), planReply)
 import Max.Reply.Resolve (cleanModelText, messageImageNodes, stripBareMarkers, stripStickerText, stripThinkSpans)
 import Max.Reply.Resolve qualified as Resolve
 import Max.Turn.Types (TurnOutputContext, nextTurnOutputLink)
@@ -71,29 +67,25 @@ data ReplyTarget = ReplyTarget
     rtTurnOutputContext :: !(Maybe TurnOutputContext)
   }
 
--- | What one logical reply has spent so far.  Threaded across calls so
--- that a reply split by streaming is bounded exactly like an unsplit
--- one; see the module header.
-data SendBudget = SendBudget
+-- | Images already resent across streamed chunks and the final remainder.
+newtype SendState = SendState
   { -- | Images already resent this reply, keyed the way the model names
     -- them: a whole message, or one @(message, seg_index)@ picture of it.
-    sbSentImages :: !(Set (Int64, Maybe Int)),
-    -- | Chunks still allowed before the rest is folded into one.
-    sbChunksLeft :: !Int
+    ssSentImages :: Set (Int64, Maybe Int)
   }
   deriving stock (Show, Eq)
 
-freshBudget :: SendBudget
-freshBudget = SendBudget {sbSentImages = Set.empty, sbChunksLeft = maxChunks}
+emptySendState :: SendState
+emptySendState = SendState {ssSentImages = Set.empty}
 
 -- | Rendering resolves canonical content without access to publication identity.
 prepareReplyChunk ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   ReplyTarget ->
-  SendBudget ->
+  SendState ->
   Chunk ->
-  Eff es (SendBudget, Maybe (Body 'Canonical, Maybe CanonicalMessageId, T.Text))
-prepareReplyChunk rt budget chunk = do
+  Eff es (SendState, Maybe (Body 'Canonical, Maybe CanonicalMessageId, T.Text))
+prepareReplyChunk rt state chunk = do
   let context =
         Resolve.ResolveContext
           rt.rtGroupId
@@ -104,13 +96,13 @@ prepareReplyChunk rt budget chunk = do
           rt.rtCanMention
           rt.rtCanFace
           rt.rtCanImage
-  (seen, content) <- Resolve.prepareReplyChunk context budget.sbSentImages chunk
-  pure (budget {sbSentImages = seen}, content)
+  (seen, content) <- Resolve.prepareReplyChunk context state.ssSentImages chunk
+  pure (state {ssSentImages = seen}, content)
 
 -- | Receipts for the committed prefix. Failure stops the remainder; callers
 -- must not retry the whole text with fresh output identities.
 data ReplyPublication = ReplyPublication
-  { budget :: !SendBudget,
+  { sendState :: !SendState,
     committed :: ![CanonicalMessageId],
     failure :: !(Maybe T.Text)
   }
@@ -125,23 +117,18 @@ instance Exception ReplyPublicationException where
   toException = asyncExceptionToException
   fromException = asyncExceptionFromException
 
--- | Reserve the last send slot for the merged final tail. Streaming stops
--- before using it so repeated calls cannot bypass the per-reply chunk limit.
-canStream :: SendBudget -> Bool
-canStream b = b.sbChunksLeft > 1
-
 -- | Plan, resolve and publish chunks in order. Tables render as images with
 -- markdown fallback; empty resolved chunks are skipped. Persist the resolved
 -- surface form, or the source markdown for tables, for subsequent context.
--- Image deduplication spans the SendBudget. Only committed chunks spend it;
+-- Image deduplication spans the SendState. Only committed chunks update it;
 -- the first failure stops publication and returns the committed prefix.
 -- See parseReplyTokens for placeholder syntax.
 sendAndPersistReply ::
   (Blob :> es, Outbound :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  ReplyTarget -> SendBudget -> T.Text -> Eff es ReplyPublication
+  ReplyTarget -> SendState -> T.Text -> Eff es ReplyPublication
 sendAndPersistReply rt initial rawBody = go initial [] 0 chunks
   where
-    chunks = capTo initial.sbChunksLeft (planReply (cleanModelText rawBody))
+    chunks = planReply (cleanModelText rawBody)
     go b receipts _ [] = pure (ReplyPublication b (reverse receipts) Nothing)
     go b receipts i (chunk : rest) = do
       (prepared, mPlan) <- prepareReplyChunk rt b chunk
@@ -167,19 +154,7 @@ sendAndPersistReply rt initial rawBody = go initial [] 0 chunks
               logAttention "llm reply publication failed" $ object ["error" .= err, "chunk" .= i]
               pure (ReplyPublication b (reverse receipts) (Just err))
             Published canonical ->
-              go prepared {sbChunksLeft = max 0 (b.sbChunksLeft - 1)} (canonical : receipts) (i + 1) rest
-
--- | Fold everything past the remaining allowance into one last message,
--- the same way 'Max.Reply.capChunks' does within a single call — loud
--- but bounded beats truncated, and the bot's own history still records
--- what it said.  An exhausted budget still sends one merged chunk
--- rather than silently dropping the tail.
-capTo :: Int -> [Chunk] -> [Chunk]
-capTo n cs
-  | length cs <= n = cs
-  | otherwise = keep <> [TextChunk (T.intercalate "\n\n" (map chunkSource spill))]
-  where
-    (keep, spill) = splitAt (max 0 (n - 1)) cs
+              go prepared (canonical : receipts) (i + 1) rest
 
 -- | How long to pause before a follow-up chunk, roughly scaled to how
 -- long a human would take to type it: ~35ms per character with ±30%

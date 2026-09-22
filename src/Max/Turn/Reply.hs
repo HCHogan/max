@@ -107,9 +107,8 @@ import Max.Prompt
 import Max.ReplySend
   ( ReplyPublication (..),
     ReplyTarget (..),
-    SendBudget (..),
     cleanModelText,
-    freshBudget,
+    emptySendState,
     sendAndPersistReply,
   )
 import Max.Roster
@@ -246,7 +245,7 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
             liftIO (setTurnPhase turn "publishing task notice")
             let target = sendTarget outputCaps gm [] False (Just (turnRuntimeOutputContext turn))
                 label = if JobState.taskIsLive job.status then " · 进度\n" else " · " <> JobState.taskStatusText job.status <> "\n"
-            result <- sendAndPersistReply target (freshBudget {sbChunksLeft = 1}) (taskHandle job.run.jobId <> label <> body)
+            result <- sendAndPersistReply target emptySendState (taskHandle job.run.jobId <> label <> body)
             finishAgentTurn turnRef (if null result.committed then TurnFailed else TurnSucceeded) 0 result.failure
       _ -> finishAgentTurn turnRef TurnAborted 0 (Just "missing job notice")
 
@@ -351,8 +350,8 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
       pure PreparedReply {agent = agentCtx, prompt = frontendCtx, target, debug = debugEff}
 
     runReply env s prepared = do
-      streamBudget <- liftIO (newTVarIO freshBudget)
-      let output = AgentOutputContext {aocReplyTarget = prepared.target, aocSourceMessageId = gm.canonicalId, aocDebug = prepared.debug, aocStreamBudget = streamBudget}
+      streamState <- liftIO (newTVarIO emptySendState)
+      let output = AgentOutputContext {aocReplyTarget = prepared.target, aocSourceMessageId = gm.canonicalId, aocDebug = prepared.debug, aocStreamState = streamState}
       -- Cancel stalled tools even between Agent rounds; retain published text.
       raced <-
         race
@@ -370,9 +369,9 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
             queueQQReaction gm.groupId gm.canonicalId processingFaceId False
             queueQQReaction gm.groupId gm.canonicalId failureFaceId True
           finishAgentTurn turnRef TurnFailed 0 (Just "turn stopped making progress")
-        Left result -> publishReply env s prepared.target streamBudget result
+        Left result -> publishReply env s prepared.target streamState result
 
-    publishReply env session target streamBudget result = do
+    publishReply env session target streamState result = do
       terminal <- case result.outcome of
         Answered reply -> publish reply
         Interrupted _ partial -> publish partial >> pure TurnFailed
@@ -385,9 +384,9 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
           pure TurnFailed
       finishAgentTurn turnRef terminal result.turnsUsed (renderAgentFailure <$> agentFailure result.outcome)
       where
-        publish = handleReply env session target streamBudget result
+        publish = handleReply env session target streamState result
 
-    handleReply env s target streamBudget result reply = do
+    handleReply env s target streamState result reply = do
       -- Publish only the unsent tail, retaining valid media/reference tokens.
       let remaining = replyRemainder reply
           stickersEff = fromMaybe env.beStickerDefault s.stickerOverride && outputCaps.canMedia
@@ -441,12 +440,12 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
               True
           pure TurnSilence
         Nothing -> do
-          -- The final tail shares the stream's message budget and image-dedupe set.
-          budget <- liftIO (readTVarIO streamBudget)
+          -- The final tail shares the stream's image-deduplication state.
+          state <- liftIO (readTVarIO streamState)
           publication <-
             sendAndPersistReply
               target {rtStickers = stickersEff}
-              budget
+              state
               stripped
           logInfo "llm replied" $
             object

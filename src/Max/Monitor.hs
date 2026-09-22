@@ -32,7 +32,7 @@ import Max.Platform.Store.Conversation
   )
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId)
 import Max.Reply (Chunk (TextChunk))
-import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, prepareReplyChunk)
+import Max.ReplySend (ReplyTarget (..), cleanModelText, emptySendState, prepareReplyChunk)
 import Max.Util (catchSync)
 import Max.Worker (recovering)
 import OneBot.Types (GroupId (..))
@@ -129,7 +129,7 @@ deliveryBody groupId@(GroupId group) body = do
             rtCanImage = caps.canMedia,
             rtTurnOutputContext = Nothing
           }
-  (_, prepared) <- prepareReplyChunk target freshBudget (TextChunk ("⏰ 提醒：" <> cleanModelText body))
+  (_, prepared) <- prepareReplyChunk target emptySendState (TextChunk ("⏰ 提醒：" <> cleanModelText body))
   pure $ case prepared of
     Just (resolved, replyTo, _) -> (resolved, replyTo)
     Nothing -> (Body [], Nothing)

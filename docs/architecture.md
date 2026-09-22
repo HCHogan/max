@@ -11,7 +11,7 @@ it does not reconstruct an execution from those records.
 | Ordinary answer | [`Turn.Dispatch.dispatchLLMWith`](../src/Max/Turn/Dispatch.hs) → `forkDispatch` → [`Turn.Reply.runDispatch`](../src/Max/Turn/Reply.hs); chat uses `prepareReply` → `runReply` → `publishReply` | `forkDispatch` registers before context collection and releases the shutdown slot, conversation ticket, runtime and browser scope in its finalizer |
 | Model/tool loop | [`Effects.Agent.runAgentWith`](../src/Max/Effects/Agent.hs); `LoopState` names the changing context, history, appended messages and round | The enclosing run owns its model, event sink, working-context cache and execution session |
 | Tool invocation | [`Effects.Tools.runToolsWith`](../src/Max/Effects/Tools.hs) plus [`Execution.Tools`](../src/Max/Execution/Tools.hs) | Assembly installs narrow runner effects; native calls and code mode share authorization, budgets and outcomes |
-| Visible output | [`AgentOutput.handleAgentEvent`](../src/Max/AgentOutput.hs) → [`ReplySend.sendAndPersistReply`](../src/Max/ReplySend.hs) → [`Effects.Outbound`](../src/Max/Effects/Outbound.hs) | The output scope shares one stream/tail budget; `AgentReply.publishedPrefix` prevents repeating accepted text |
+| Visible output | [`AgentOutput.handleAgentEvent`](../src/Max/AgentOutput.hs) → [`ReplySend.sendAndPersistReply`](../src/Max/ReplySend.hs) → [`Effects.Outbound`](../src/Max/Effects/Outbound.hs) | The output scope shares image deduplication across streamed text and the final tail; `AgentReply.publishedPrefix` prevents repeating accepted text |
 | Cancellation | [`Tasks`](../src/Max/Tasks.hs), [`Conversation`](../src/Max/Conversation.hs), [`Jobs`](../src/Max/Jobs.hs) | Revoke local publication authority before cancelling the worker; the dispatch finalizer closes resources |
 | Inbound message | [`Handler.QQ.handleEvents`](../src/Max/Handler/QQ.hs) / platform adapter → [`Store.Ingest.ingestEnvelope`](../src/Max/Platform/Store/Ingest.hs) → [`Handler.ingressWorker`](../src/Max/Handler.hs) | The ingest transaction owns deduplication and canonical history; Handler routes only committed messages |
 | Background Job | [`Handler.Jobs.jobsWorker`](../src/Max/Handler/Jobs.hs) → `Turn.Dispatch` → [`Turn.Job.runJob`](../src/Max/Turn/Job.hs) | Jobs owns task state; the ordinary dispatch scope owns runtime registration and cleanup |
@@ -633,9 +633,10 @@ endpoint. QQ faces and reactions require an enabled QQ endpoint, and reaction
 targets still require a valid native copy.
 
 Canonical publication returns `Published` or `PublicationFailed`; it makes no
-claim about physical delivery. `ReplySend` spends budget only on committed
-chunks and stops at the first failure. Stream publication failure escapes the
-provider retry path, preserving the committed prefix without replaying it.
+claim about physical delivery. `ReplySend` updates image deduplication state
+only on committed chunks and stops at the first failure. Stream publication
+failure escapes the provider retry path, preserving the committed prefix
+without replaying it.
 `Max.Reply.Resolve` supplies the shared model-text resolver for replies,
 reminders and artifact captions, with no publication or transport authority.
 Sandbox images and files both publish blob-backed canonical messages; bounded
@@ -671,8 +672,8 @@ instead of violating endpoint provenance uniqueness.
 `Agent` depends on `LLM`, scoped `Tools`, an explicit `TurnRuntime`, logging,
 and its typed `AgentEventSink`; it has no OneBot segment, `Outbound`, or message
 persistence dependency.  The production sink is assembled per dispatch in
-`Handler`, where reply target, debug policy, and the shared stream budget are
-known.
+`Turn.Reply`, where reply target, debug policy, and the shared image
+deduplication state are known.
 
 Each `AgentTurn` installs narrower scopes inside the process stack:
 

@@ -55,42 +55,25 @@ spec = do
       planTexts "手写完你们等到明年。\n\n[split]"
         `shouldBe` ["手写完你们等到明年。"]
 
-  -- A reply becomes one QQ message per chunk, paced ~2s apart, so an
-  -- unbounded split is also an unbounded amount of time spent talking
-  -- over the group.  Production once turned one generation into 26
-  -- messages across 54 seconds.
-  describe "planReply / chunk ceiling" $ do
-    let paras k = T.intercalate "\n\n" ["第" <> T.pack (show i) <> "段" | i <- [1 .. k :: Int]]
+  describe "planReply / unlimited chunks" $ do
+    let paragraphs = ["第" <> T.pack (show i) <> "段" | i <- [1 :: Int .. 26]]
 
-    it "leaves a reply at the ceiling untouched" $
-      length (planTexts (paras 10)) `shouldBe` 10
+    it "preserves every paragraph beyond the former ten-message ceiling" $
+      planTexts (T.intercalate "\n\n" paragraphs) `shouldBe` paragraphs
 
-    it "caps a runaway split" $
-      length (planTexts (paras 26)) `shouldBe` 10
+    it "preserves every explicit split beyond the former ceiling" $
+      planTexts (T.intercalate " [split] " paragraphs) `shouldBe` paragraphs
 
-    it "merges the overflow into the last message instead of dropping it" $ do
-      let out = planTexts (paras 13)
-      length out `shouldBe` 10
-      take 3 out `shouldBe` ["第1段", "第2段", "第3段"]
-      last out `shouldBe` "第10段\n\n第11段\n\n第12段\n\n第13段"
-
-    it "keeps every word — nothing is truncated away" $ do
-      let out = planTexts (paras 30)
-      T.concat out `shouldSatisfy` \t ->
-        all (\i -> ("第" <> T.pack (show i) <> "段") `T.isInfixOf` t) [1 .. 30 :: Int]
-
-    -- The ceiling bounds outbound messages; it is not a formatting
-    -- rule.  A model spraying [split] costs the group exactly what one
-    -- spraying blank lines costs, so it is capped the same way.
-    it "caps explicit [split] markers too" $ do
-      let ps = [T.pack ("p" <> show i) | i <- [1 .. 26 :: Int]]
-      length (planTexts (T.intercalate " [split] " ps)) `shouldBe` 10
+    it "keeps tables and code as renderable chunks after ten paragraphs" $ do
+      let tailText = "| a |\n|---|\n| 1 |\n\n```haskell\nx = 1\n```"
+      drop (length paragraphs) (planReply (T.intercalate "\n\n" (paragraphs <> [tailText])))
+        `shouldBe` planReply tailText
 
     it "does not split inside code fences" $
       planTexts "看这段:\n[split]\n```python\nx = 1\n[split]\ny = 2\n```\n[split]\n就这样"
         `shouldBe` ["看这段:", "```python\nx = 1\n[split]\ny = 2\n```", "就这样"]
 
-    it "honours explicit [split] markers up to the ceiling" $ do
+    it "honours explicit [split] markers" $ do
       let ps = [T.pack ("p" <> show i) | i <- [1 .. 8 :: Int]]
       planTexts (T.intercalate " [split] " ps) `shouldBe` ps
 

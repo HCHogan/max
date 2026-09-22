@@ -1,12 +1,11 @@
 -- | Pure reply planning: extract tables, convert LaTeX to Unicode, and split
 -- at blank lines or [split] outside code fences. Rendering and sending belong
--- to the caller; the sender applies maxChunks across the logical reply.
+-- to the caller. There is no limit on the number of chunks.
 module Max.Reply
   ( Chunk (..),
     CodeBlock (..),
     chunkSource,
     planReply,
-    maxChunks,
     stripHallucinatedTokens,
     latexToUnicode,
     ReplyPiece (..),
@@ -62,27 +61,13 @@ chunkSource = \case
 -- | Plan outgoing chunks. Blank or [split]-only input produces no chunks;
 -- do not restore the raw input when planning returns an empty list.
 planReply :: Text -> [Chunk]
-planReply body = capChunks (concatMap explode (splitBlocks body))
+planReply body = concatMap explode (splitBlocks body)
   where
     explode (TableChunk t) = [TableChunk t]
     -- Deliberately not through 'latexToUnicode': inside a fence, @\alpha@
     -- is somebody's identifier, not a symbol waiting to be prettified.
     explode c@(CodeChunk _) = [c]
     explode (TextChunk t) = map TextChunk (splitChunks (latexToUnicode t))
-
--- | Maximum messages per logical reply. Excess chunks merge into the last
--- message; that merge retains only the first reply target in the tail.
-maxChunks :: Int
-maxChunks = 10
-
--- | Merge excess chunks into the final message. Tables in the tail become
--- markdown; only its first reply target survives placeholder parsing.
-capChunks :: [Chunk] -> [Chunk]
-capChunks cs
-  | length cs <= maxChunks = cs
-  | otherwise = keep <> [TextChunk (T.intercalate "\n\n" (map chunkSource spill))]
-  where
-    (keep, spill) = splitAt (maxChunks - 1) cs
 
 --------------------------------------------------------------------------------
 -- Outbound placeholders: [reply#<id>] quotes, [sticker#<id>] stickers,
@@ -642,7 +627,7 @@ symbols =
 
 -- | Preserve the exact input while releasing completed paragraphs or plain
 -- prose sentences. Keep markup intact and avoid sending each short sentence
--- as a separate message; the sender also enforces the whole-reply chunk limit.
+-- as a separate message.
 readyPrefix :: Text -> (Text, Text)
 readyPrefix acc
   | T.null safe = T.splitAt (proseBoundary acc) acc

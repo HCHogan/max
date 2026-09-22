@@ -68,7 +68,7 @@ spec pool = before_ (truncateAll pool) $
         [Only principal] <- withDb pool $ query "SELECT author_principal_id FROM messages WHERE canonical_message_id=?" (Only source.unCanonicalMessageId)
         ref <- withDb pool (startAgentTurn (GroupId 900) source (PrincipalId principal))
         turn <- beginTurnRuntime tasks ref (GroupId 900) (UserId 123) (Just source)
-        budget <- newTVarIO freshBudget
+        state <- newTVarIO emptySendState
         let first = "This is a deliberately long first sentence sent while the model is still generating."
             tailText = " The final sentence."
             frame text = "data: " <> LBS.toStrict (encode (object ["choices" .= [object ["delta" .= object ["content" .= (text :: Text)]]]])) <> "\n\n"
@@ -97,7 +97,7 @@ spec pool = before_ (truncateAll pool) $
                 pure (Right (Response "ok" 0 (object ["message_id" .= (1000 + index)]) ""))
               other -> expectationFailure ("unexpected QQ action: " <> show other) >> pure (Left "unexpected action")
             target = ReplyTarget (GroupId 900) [] Nothing False False False False False (Just (turnRuntimeOutputContext turn))
-            output = AgentOutputContext target source False budget
+            output = AgentOutputContext target source False state
             agentContext =
               AgentContext
                 ( mkToolContext
@@ -142,8 +142,8 @@ spec pool = before_ (truncateAll pool) $
                   let reply = case result.outcome of
                         Answered value -> value
                         _ -> error "streaming fixture did not complete"
-                  remainingBudget <- liftIO (readTVarIO budget)
-                  publication <- sendAndPersistReply target remainingBudget (replyRemainder reply)
+                  remainingState <- liftIO (readTVarIO state)
+                  publication <- sendAndPersistReply target remainingState (replyRemainder reply)
                   liftIO $ do
                     publication.failure `shouldBe` Nothing
                     atomically (readTQueue received) `shouldReturn` (T.strip tailText, True)

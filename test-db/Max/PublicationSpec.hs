@@ -2,6 +2,7 @@ module Max.PublicationSpec (spec) where
 
 import Control.Concurrent.STM
 import Control.Exception (try)
+import Control.Monad (forM)
 import Data.IORef
 import Data.Int (Int64)
 import Data.Text qualified as T
@@ -71,19 +72,38 @@ spec pool = before_ (truncateAll pool) $ describe "canonical publication boundar
     outside <- withDb pool (fetchMessageWithCursorInScope (conversationScopeFor (GroupId 901)) second)
     fmap fst outside `shouldBe` Nothing
 
-  it "never acknowledges a failed stream publication or spends its budget" $ do
-    budget <- newTVarIO freshBudget
+  it "streams beyond ten paragraphs and publishes the final tail exactly once" $ do
+    state <- newTVarIO emptySendState
+    sent <- newIORef []
+    let paragraphs = ["paragraph " <> T.pack (show i) | i <- [1 :: Int .. 26]]
+        output = AgentOutputContext target (CanonicalMessageId 1) False state
+        publish request = liftIO $ do
+          index <- atomicModifyIORef' sent $ \previous ->
+            (previous <> [T.strip (T.concat [text | NText text <- request.orBody.nodes])], length previous + 1)
+          pure (Published (CanonicalMessageId (fromIntegral index)))
+    (acknowledged, final) <- withDbLog pool $ runOutboundWith publish $ do
+      acknowledged <- forM paragraphs $ \text -> handleAgentEvent output (AgentFinalStreamText (text <> "\n\n"))
+      remaining <- liftIO (readTVarIO state)
+      final <- sendAndPersistReply target remaining "final tail"
+      pure (acknowledged, final)
+    acknowledged `shouldBe` replicate 26 True
+    final.failure `shouldBe` Nothing
+    length final.committed `shouldBe` 1
+    readIORef sent `shouldReturn` paragraphs <> ["final tail"]
+
+  it "never acknowledges a failed stream publication or advances its state" $ do
+    state <- newTVarIO emptySendState
     result <-
       try $
         withDbLog pool $
           runOutboundWith (const (pure (PublicationFailed "injected"))) $
             handleAgentEvent
-              (AgentOutputContext target (CanonicalMessageId 1) False budget)
+              (AgentOutputContext target (CanonicalMessageId 1) False state)
               (AgentFinalStreamText "first paragraph\n\n")
     case result of
       Left (ReplyPublicationException err) -> err `shouldBe` "injected"
       Right _ -> expectationFailure "publication failure was acknowledged or swallowed"
-    readTVarIO budget `shouldReturn` freshBudget
+    readTVarIO state `shouldReturn` emptySendState
 
   it "retains the committed prefix and stops before publishing a later suffix" $ do
     calls <- newIORef (0 :: Int)
@@ -94,10 +114,9 @@ spec pool = before_ (truncateAll pool) $ describe "canonical publication boundar
               index <- liftIO (atomicModifyIORef' calls (\i -> (i + 1, i)))
               pure $ if index == 0 then Published (CanonicalMessageId 10) else PublicationFailed "second failed"
           )
-        $ sendAndPersistReply target freshBudget "first\n\nsecond\n\nthird"
+        $ sendAndPersistReply target emptySendState "first\n\nsecond\n\nthird"
     result.committed `shouldBe` [CanonicalMessageId 10]
     result.failure `shouldBe` Just "second failed"
-    result.budget.sbChunksLeft `shouldBe` freshBudget.sbChunksLeft - 1
     readIORef calls `shouldReturn` 2
 
   it "resolves caption mentions and scoped replies through the shared canonical resolver" $ do

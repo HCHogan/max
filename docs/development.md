@@ -152,9 +152,9 @@ Pure logic in `test/` mirroring the library layout:
   unified recall result rendering, and one-turn episode expansion (regenerate
   with `cabal run max-prompt-flow`)
 - `Max.RenderSpec` — markdown table → typst
-- `Max.ReplySpec` — reply paragraph splitting (fences, `[split]`, chunk ceiling)
+- `Max.ReplySpec` — reply paragraph splitting (fences, `[split]`, long replies)
 - `Max.ReplySendSpec` — that splitting a reply at a `readyPrefix` boundary sends
-  the same messages as never splitting it, plus the per-reply chunk ceiling
+  the same messages as never splitting it, including replies longer than ten paragraphs
 - `Max.Sandbox.RuntimeSpec` — package wrapping and exec argv
 - `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, …)
 - `Max.ShutdownSpec` — drain flag / in-flight counter transitions

@@ -1,5 +1,5 @@
 -- | Production interpreter for agent output events. This boundary owns
--- presentation, reply budgets and canonical publication.
+-- presentation, image deduplication and canonical publication.
 module Max.AgentOutput (AgentOutputContext (..), handleAgentEvent) where
 
 import Control.Concurrent.STM (TVar, atomically, readTVarIO, writeTVar)
@@ -19,7 +19,7 @@ import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundReque
 import Max.IR (Body (..), Node (NText))
 import Max.MessageKind (MessageKind (KindDebug))
 import Max.Platform.Types (CanonicalMessageId)
-import Max.ReplySend (ReplyPublication (..), ReplyPublicationException (..), ReplyTarget (..), SendBudget, canStream, freshBudget, sendAndPersistReply)
+import Max.ReplySend (ReplyPublication (..), ReplyPublicationException (..), ReplyTarget (..), SendState, emptySendState, sendAndPersistReply)
 import Max.Turn.Types (nextTurnOutputLink)
 
 -- | Everything fixed while one dispatch's events are interpreted.
@@ -31,8 +31,8 @@ data AgentOutputContext = AgentOutputContext
     aocSourceMessageId :: !CanonicalMessageId,
     aocDebug :: !Bool,
     -- | Shared only by final-stream events and the final remainder.  Progress
-    -- narration is a separate utterance and receives its own bounded budget.
-    aocStreamBudget :: !(TVar SendBudget)
+    -- narration is a separate utterance with its own image deduplication.
+    aocStreamState :: !(TVar SendState)
   }
 
 -- | Production event sink.  Model-authored text always takes the ReplySend
@@ -45,19 +45,16 @@ handleAgentEvent ::
   Eff es a
 handleAgentEvent ctx = \case
   AgentProgressText body ->
-    void (sendAndPersistReply ctx.aocReplyTarget freshBudget body)
+    void (sendAndPersistReply ctx.aocReplyTarget emptySendState body)
   AgentToolDebug event ->
     when ctx.aocDebug (mapM_ sendDebug (renderToolDebug event))
   AgentFinalStreamText body -> do
-    budget <- liftIO (readTVarIO ctx.aocStreamBudget)
-    if not (canStream budget)
-      then pure False
-      else do
-        publication <- sendAndPersistReply ctx.aocReplyTarget budget body
-        liftIO (atomically (writeTVar ctx.aocStreamBudget publication.budget))
-        case publication.failure of
-          Nothing -> pure True
-          Just err -> throwIO (ReplyPublicationException err)
+    state <- liftIO (readTVarIO ctx.aocStreamState)
+    publication <- sendAndPersistReply ctx.aocReplyTarget state body
+    liftIO (atomically (writeTVar ctx.aocStreamState publication.sendState))
+    case publication.failure of
+      Nothing -> pure True
+      Just err -> throwIO (ReplyPublicationException err)
   where
     sendDebug :: Text -> Eff es ()
     sendDebug body = do
