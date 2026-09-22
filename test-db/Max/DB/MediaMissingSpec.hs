@@ -14,6 +14,7 @@ import Effectful.Concurrent (runConcurrent)
 import Helpers (insertRawMessage, requireJust, testTime, truncateAll, withDb, withDbLog)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.MediaMissing
+import Max.Effects.ChatView (runChatViewWith)
 import Max.Effects.Http (runHttp)
 import Max.Effects.PlatformQuery (runPlatformQuery)
 import Max.FetchQueue
@@ -81,7 +82,7 @@ spec pool = before_ (truncateAll pool) $ describe "missing media discovery" $ do
       runEff (enqueueImages MissingFetch signal message)
       manager <- newManager defaultManagerSettings
       let runtime = httpRuntimeFromManagers manager manager manager
-      withAsync (withDbLog pool . runConcurrent . runHttp runtime $ imageWorker 2 signal) $ \_ -> do
+      withAsync (withDbLog pool . runConcurrent . runHttp runtime . runChatViewWith (\_ _ _ -> pure ()) $ imageWorker 2 signal) $ \_ -> do
         timeout 3_000_000 (waitUntil $ isJust <$> withDb pool (storedMedia MediaImage mid 1)) `shouldReturn` Just ()
         withDb pool (storedMedia MediaImage mid 0) `shouldReturn` Nothing
         snd <$> withDb pool (missingMediaMessages 0) `shouldReturn` []

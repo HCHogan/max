@@ -30,6 +30,25 @@ let
   effectiveConfigFile = if cfg.configFile != null then cfg.configFile else renderedConfig;
   # The parent remains root-owned; sibling services keep separate identities.
   stateDir = "/var/lib/max/app";
+  # objects/ is Max's content store; views/<group>/ are the sandbox /chat
+  # views, hardlinks into objects. Only root creates, removes or replaces a
+  # view, so Max can fill one but never redirect what a sandbox binds.
+  mediaLayout = pkgs.writeShellScript "max-media-layout" ''
+    set -eu
+    media=${lib.escapeShellArg cfg.mediaDirectory}
+    install -d -m 0711 -o root -g root "$media" "$media/views"
+    # Objects used to live in the state directory; move them once.
+    legacy=${stateDir}/images
+    if [ -d "$legacy" ] && [ ! -L "$legacy" ]; then
+      if [ -e "$media/objects" ] && [ -n "$(ls -A "$media/objects")" ]; then
+        echo "both $legacy and $media/objects hold objects; merge them before starting Max" >&2
+        exit 1
+      fi
+      rmdir "$media/objects" 2>/dev/null || true
+      mv "$legacy" "$media/objects"
+    fi
+    install -d -m 0700 -o max-service -g max-service "$media/objects"
+  '';
   # How long the bot waits for in-flight agent dispatches on SIGTERM.
   # Mirrors Max.Config's default so TimeoutStopSec below can follow it.
   # Only visible when the config comes from `settings`; a hand-managed
@@ -150,6 +169,16 @@ in
     package = lib.mkOption {
       type = lib.types.package;
       description = "The max package to run (defaults to the flake's build).";
+    };
+
+    mediaDirectory = lib.mkOption {
+      type = lib.types.str;
+      default = "/var/lib/max/media";
+      description = ''
+        Content store (objects/) and per-conversation sandbox /chat views
+        (views/). View entries are hardlinks into the store, so both live
+        under this directory and Max receives it as one writable mount.
+      '';
     };
 
     settings = lib.mkOption {
@@ -354,7 +383,8 @@ in
         # Env (not settings) so they hold for hand-managed configFile
         # setups too — opt-env-conf gives env precedence over the file.
         MAX_DB_URL = lib.mkDefault "postgresql://max@/max?host=/run/postgresql";
-        MAX_IMAGES_DIR = lib.mkDefault "${stateDir}/images";
+        MAX_IMAGES_DIR = lib.mkDefault "${cfg.mediaDirectory}/objects";
+        MAX_CHAT_VIEWS_DIR = lib.mkDefault "${cfg.mediaDirectory}/views";
         # The .sql files ship with the flake source, not the binary.
         MAX_MIGRATIONS_DIR = lib.mkDefault "${../migrations}";
       };
@@ -363,6 +393,11 @@ in
         Group = "max-service";
         StateDirectory = "max/app";
         StateDirectoryMode = "0700";
+        # Root prepares the media layout before every start.
+        ExecStartPre = [ "+${mediaLayout}" ];
+        # One mount for objects and views: hardlinks cannot cross mounts,
+        # and each ReadWritePaths entry would otherwise be its own.
+        ReadWritePaths = [ cfg.mediaDirectory ];
         RuntimeDirectory = "max";
         # The bot resolves images_dir and var/outbox relative paths
         # against its cwd; keep everything under the state dir.

@@ -69,6 +69,9 @@ data AppConfig = AppConfig
     db :: !DbConfig,
     migrationsDir :: !FilePath,
     imagesDir :: !FilePath,
+    -- | Root of the per-conversation sandbox views (@<root>/<group>/@),
+    -- filled with hardlinks into 'imagesDir'. Absent disables the views.
+    chatViewsDir :: !(Maybe FilePath),
     imageWorkers :: !Int,
     -- | How long SIGTERM waits for in-flight agent dispatches before
     -- giving up and tearing down anyway (see "Max.Shutdown").  Should
@@ -291,6 +294,17 @@ appConfigParser usedRef =
           metavar "DIR",
           value "var/images"
         ]
+    chatViewsDir <-
+      optional $
+        setting
+          [ help "Root of per-conversation sandbox /chat views; entries are hardlinks into images_dir, so both must be one mount",
+            reader str,
+            option,
+            long "chat-views-dir",
+            env "MAX_CHAT_VIEWS_DIR",
+            conf "chat_views_dir",
+            metavar "DIR"
+          ]
     imageWorkers <-
       setting
         [ help "Parallel image-download workers",

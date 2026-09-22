@@ -222,8 +222,10 @@ library
         Max.Effects.Blob
         Max.Blob.Reference
         Max.File.Types
+        Max.File.ChatView
         Max.File.ToolRuntime
         Max.File.TransferRuntime
+        Max.Effects.ChatView
         Max.Effects.FileTransfer
         Max.Conversation.Roster
         Max.Media.ToolRuntime
@@ -373,6 +375,7 @@ library
         Max.Reply.Resolve
         Max.Resource
         Max.Roster
+        Max.Sandbox.Chat
         Max.Sandbox.Runtime
         Max.Sandbox.Registry
         Max.Sandbox.Types
@@ -733,6 +736,7 @@ test-suite max-test
         Max.Task.DelegationSpec
         Max.ReminderArgsSpec
         Max.Concurrent.LockSpec
+        Max.Sandbox.ChatSpec
         Max.Sandbox.RuntimeSpec
         Max.Runtime.ProtocolSpec
         Max.Tools.FilesSpec
@@ -797,6 +801,7 @@ test-suite max-test-db
         Max.ConversationCapabilitiesSpec
         Max.ResourceCapabilitiesSpec
         Max.SandboxRegistrySpec
+        Max.ChatViewSpec
         Max.EpisodeStoreSpec
         Max.HistorianSpec
         Max.DB.HistorySpec
@@ -842,6 +847,7 @@ test-suite max-test-db
         , wai                  >= 3.2 && < 3.3
         , warp                 >= 3.3 && < 3.5
         , http-client          >= 0.7 && < 0.8
+        , unix                 >= 2.8 && < 2.9
     ghc-options:        -threaded -rtsopts -with-rtsopts=-N
 
 source-repository head

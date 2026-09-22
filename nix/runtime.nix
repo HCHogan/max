@@ -39,6 +39,8 @@ let
       dns = cfg.sandbox.nameservers;
       operationsGroups = lib.optionals cfg.operations.enable cfg.operations.allowedGroups;
       operationsDns = [ "100.100.100.100" ];
+      # Max fills each conversation's view; the broker owns the directories.
+      chatViews = "${cfg.mediaDirectory}/views";
       # Each backend adopts only its own effective template. A browser package
       # change must not invalidate unrelated, running command sandboxes.
       generations =
@@ -219,6 +221,8 @@ in
           # is needed here, and omitting it also supports VM/9p-backed stores.
           "--bind-ro=/nix/store:/nix/store"
           "--bind=${runtime.stateDirectory}/volumes/max-sb-%i-data/work:/work:idmap"
+          # The conversation's view, through a broker-owned link in the volume.
+          "--bind-ro=${runtime.stateDirectory}/volumes/max-sb-%i-data/chat:/chat"
           "--tmpfs=/tmp:mode=1777,size=512M"
           "--tmpfs=/home/sandbox:mode=0700,uid=1000,gid=1000,size=256M"
           (toString guestInit)
@@ -286,6 +290,7 @@ in
         Restart = "no";
         InaccessiblePaths = [
           "-/var/lib/max/app"
+          "-${cfg.mediaDirectory}"
           "-/var/lib/max/napcat"
           "-/var/lib/max/private"
           "-${runtime.stateDirectory}"

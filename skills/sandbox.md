@@ -1,24 +1,26 @@
-沙箱与群文件的完整用法：nix 装包、超时与输出截断、文件进出群——用沙箱开工前先取这份
+沙箱与群文件的完整用法：nix 装包、超时与输出截断、/chat 里的群文件和发文件——用沙箱开工前先取这份
 
 # 生命周期与共享
 
-sandbox_create 拿到 sandbox_id，之后所有沙箱工具都传它。沙箱跨 dispatch 存活——
-先 sandbox_list 看有没有现成的，优先复用，别每次新建。销毁只有三种情况：
-sandbox_destroy、群里 !clear --all、连续 14 天没用触发 TTL 清理。bot 重启后会按数据库
-记录接回原来的 /work 卷；旧策略或停止的容器会围着原卷重建。同群的其他并发任务共享这些沙箱；
+每个群一个沙箱，第一次用任何沙箱工具时自动启动，不用创建也不用传 id；群里的
+`!` 命令也在同一个沙箱里跑。它跨 dispatch 存活，销毁只有三种情况：
+sandbox_destroy、群里 !clear --all、连续 14 天没用触发 TTL 清理；销毁后下一次调用会
+起一个空的新沙箱。bot 重启后会按数据库记录接回原来的 /work 卷；旧策略或停止的容器
+会围着原卷重建。同群的其他并发任务共享这个沙箱；
 同一个沙箱支持多条 sandbox_exec 并发，后台任务不会独占整个沙箱。没有数据依赖的
 命令可同批提交；命令之间有先后依赖就分轮执行。每条命令的超时、取消、stdout/stderr
 各自独立，/work、临时文件和端口仍然共享，同一路径的修改要自己协调。删除或策略重建
 会等正在使用它的命令结束；不要靠删除 sandbox 取消某一条命令。文件系统观察可能包含
 并发任务的变化，不能把所有变化都归因于当前命令。它是有期限的工作区，不是长期存储：
 重要产物尽快发出去。
-sandbox_create 没有参数。NixOS 系统和网络是宿主策略，不交给调用者选择：命令固定在
+NixOS 系统和网络是宿主策略，不交给调用者选择：命令固定在
 宿主预构建的 NixOS 沙箱里以 uid 1000、无 Linux capability、no-new-privileges 运行，
-有 CPU/内存/PID 上限；根文件系统只读，只有 /work 和有大小上限的临时目录可写。
+有 CPU/内存/PID 上限；根文件系统只读，只有 /work 和有大小上限的临时目录可写，
+/chat 只读。
 普通群的 max-sandbox 网络允许访问公网 IPv4，可以 curl、git clone、调用公开 API、
 下载项目依赖；普通群无法访问宿主机、内网、链路本地、Tailscale 地址和其他沙箱，IPv6 关闭。
 已开启运维功能的群使用共享 maxops 内网；SSH、fleet 和部署方法见 operations 技能。
-查看 sandbox_create/list 返回的 network_mode 确认当前网络；共享网络中的临时服务使用动态端口。
+共享网络中的临时服务使用动态端口。
 加载技能只提供说明和工具，不改变群的网络策略。/work 中的代码和文件跨升级保留，
 读取旧 checkout 前先核对版本，不能拿它推断当前 Max 的能力。
 联网不等于获得对外写入权限：发布、上传、修改远端数据仍须符合任务授权。
@@ -53,22 +55,22 @@ sandbox_exec 把 command 原样交给 sh -c，timeout(1) 控真实时钟（默�
 stdout/stderr 各截 ~16KiB；truncated=true 时已保存的前段输出在 full_output_file 指的
 文件里，但这个 spill 每个流最多保留 8MiB；spill_truncated=true 表示更后面的字节
 只计长度和 SHA-256、不再落盘。下一条命令直接 grep/head/tail/wc 现有文件提取要点，
-不要换着 flag 重跑原命令。多行脚本先 sandbox_write_file 写进去（自动建父目录、覆盖写）再执行；
-看结果文件用 sandbox_read_file（UTF-8 文本，默认 16KiB、max_bytes 上限 64KiB；
-二进制文件别用它读，直接用命令处理或发出去）。工作目录是 /work，相对路径都
-相对它。
+不要换着 flag 重跑原命令。工作目录是 /work，相对路径都相对它；所有文件工具的
+path 都是沙箱里的真实路径。read_file 读文本文件开头（默认 16KiB、max_bytes 上限
+64KiB；二进制文件只报大小），write_file 写 UTF-8 文本（自动建父目录、覆盖写）——
+两者只是省一次 sandbox_exec，heredoc、重定向照样能用。
 
 # 群文件进出
 
-进：list_recent_files 列群里最近发的非图片文件（file_id、名字、发送人、大小、
-ready；默认 10 条，最多 50）。ready=true 表示 bot 已把字节下载到本地，这时
-import_file_to_sandbox 才能把它拷进 /work（dest_path 可改名；ready=false 时
-稍等重试）。结果里有 message_id，可以和引用消息对上号（"用户刚回复的那条里的
-文件"）。
-出：图表/截图这类图片用 send_image_from_sandbox 直接贴进聊天（base64 内联，
-几 MB 以内；caption 参数在图前带一句话，支持引用/@ 占位符）；其他产物
-（.csv/.pdf/.zip/.log…）用 send_file_from_sandbox 传进群文件（name 参数改
-显示名，默认取文件名）。
+进：本群所有文件、图片和视频（表情包除外）都在只读的 /chat 里，名字就是上下文里的
+编号——[image#123.0] 是 /chat/123.0.<扩展名>，视频同理；#456 那条消息里的
+[file:报告.pdf] 是 /chat/456-报告.pdf（一条消息带多个文件时是 456.0-、456.1-）。
+直接 ls、cat、重定向、当命令参数用；要改就先复制到 /work。文件下载完成就会出现在
+/chat 里，正在跑的命令也看得到；引用上下文里标着 ready=false 的还在下载，稍后再看。
+出：图表/截图这类图片用 send_image 直接贴进聊天（几 MB 以内；caption 参数在图前带
+一句话，支持引用/@ 占位符）；其他产物（.csv/.pdf/.zip/.log…）用 send_file 传进群文件
+（name 参数改显示名，默认取文件名）。两者都在调用那一刻读取文件并返回新消息的
+message_id，之后再改同一路径不会影响已发出的内容。写进任何目录都不会自动发出去。
 
 # 中文字体（画图、转文档，凡是要渲染中文都会踩）
 

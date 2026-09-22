@@ -182,8 +182,8 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
         <> taskTools env.beJobs dc
         <> skillToolsWithRuntime env.beSkills dc prepareSkill bindPackages
         <> bilibiliToolsFor env.beTimeZone dc
-        <> sandboxToolsWithRuntime env.beTimeZone (toolGroupId dc) env.beSandboxes
-        <> fileToolsWithDatabase env.beTimeZone dc env.beSandboxes
+        <> sandboxToolsWithRuntime (toolGroupId dc) env.beSandboxes
+        <> fileToolsWithDatabase dc env.beSandboxes
         <> [t | toolStickers dc && env.beEmbeddingEnabled, t <- stickerToolsWithDatabase]
         <> maybe [] (searchToolsWithRuntime runtime) env.beSearch
         <> [t | toolMultimodal dc, t <- browserToolsFor env.beJobs dc env.beBrowsers env.beBrowserProxy]
@@ -315,19 +315,18 @@ toolInventory =
     -- shared attachment order/budget; independent turns have independent
     -- ToolOutput interpreters and still run concurrently.
     always (statefulReadTool "view_bilibili" ["network.bilibili", "tool.media"] [CurrentConversation]),
-    always (writeTool "sandbox_create" ["sandbox.lifecycle"] [CurrentConversation, ProcessResource "sandbox"]),
+    -- Sandbox tools act on the group's sandbox, started on first use. These
+    -- definitions keep their earlier fingerprints so standing grants still match.
     -- Allow the container's 600s command timeout plus 60s for the runtime client.
     always (withDeadline 660 ((writeTool "sandbox_exec" ["sandbox.process", "sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]) {tdParallelism = ParallelIndependent})),
     -- Host package search has its own 120s bound; allow transport slack here.
     always (withDeadline 180 (statefulReadTool "nix_search" ["sandbox.process", "network.nix"] [CurrentConversation, ProcessResource "sandbox"])),
-    always (statefulReadTool "sandbox_list" ["sandbox.registry"] [CurrentConversation, ProcessResource "sandbox"]),
     always (writeTool "sandbox_destroy" ["sandbox.lifecycle"] [CurrentConversation, ProcessResource "sandbox"]),
-    always (statefulReadTool "sandbox_read_file" ["sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]),
-    always (writeTool "sandbox_write_file" ["sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]),
-    always (readTool "list_recent_files" ["conversation.db", "blob.store"] [CurrentConversation]),
-    always (writeTool "import_file_to_sandbox" ["blob.store", "sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]),
-    always (sendReadTool "send_image_from_sandbox" ["sandbox.fs"]),
-    always (sendReadTool "send_file_from_sandbox" ["sandbox.fs"]),
+    -- Paths are sandbox paths: /work, and /chat mirroring this chat's files.
+    always (statefulReadTool "read_file" ["sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]),
+    always (writeTool "write_file" ["sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]),
+    always (sendReadTool "send_image" ["sandbox.fs"]),
+    always (sendReadTool "send_file" ["sandbox.fs"]),
     gated StickersOnly (llmReadTool "find_stickers" ["sticker.db"] [CurrentConversation]),
     gated SearchOnly (readTool "web_search" ["network.search"] [CurrentConversation]),
     gated MultimodalOnly (browserTool "browser"),

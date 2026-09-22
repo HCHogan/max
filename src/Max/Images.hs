@@ -20,15 +20,18 @@ import Effectful
 import Effectful.Concurrent.Async (Concurrent, forConcurrently_)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute)
+import Max.DB.Media (videoMime, viewableImageMime)
 import Max.DB.MediaMissing (storedMedia)
 import Max.DB.Stickers (recordSticker, stickerMeta)
 import Max.DB.Transaction (withTransaction)
 import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.Blob (Blob, blobRefSha256, blobRefStoredPath, putBlob)
+import Max.Effects.ChatView (ChatView, linkChatMedia)
 import Max.Effects.Http (Http, getQQMedia, renderDownloadError)
 import Max.FetchQueue (FetchPriority (..), FetchSignal, ImageJob (..), JobKind (JobImage), MediaKind (..), enqueueFetch, notifyFetch, runFetchLoop)
 import Max.IR qualified as IR
 import Max.Platform.Types (CanonicalMessageId (..))
+import Max.Sandbox.Chat (ChatKind (..), chatMediaName)
 import Max.Util (withTempDirectory)
 import OneBot.Types (GroupId (..))
 import System.Exit (ExitCode (..))
@@ -105,7 +108,7 @@ downloadableVideoCount = length . mapMaybe videoNodeUrl . (.nodes)
       _ -> Nothing
 
 imageWorker ::
-  (Log :> es, Http :> es, Blob :> es, WithConnection :> es, Concurrent :> es, IOE :> es) =>
+  (Log :> es, Http :> es, Blob :> es, ChatView :> es, WithConnection :> es, Concurrent :> es, IOE :> es) =>
   Int ->
   FetchSignal ->
   Eff es ()
@@ -116,7 +119,7 @@ imageWorker poolSize sig = localDomain "image-worker" $ do
       runFetchLoop sig JobImage processOne
 
 processOne ::
-  (Log :> es, Http :> es, Blob :> es, WithConnection :> es, IOE :> es) =>
+  (Log :> es, Http :> es, Blob :> es, ChatView :> es, WithConnection :> es, IOE :> es) =>
   ImageJob ->
   Eff es (Either Text ())
 processOne job = do
@@ -125,7 +128,7 @@ processOne job = do
     Just _ -> pure (Right ())
     Nothing -> downloadMedia job
 
-downloadMedia :: (Log :> es, Http :> es, Blob :> es, WithConnection :> es, IOE :> es) => ImageJob -> Eff es (Either Text ())
+downloadMedia :: (Log :> es, Http :> es, Blob :> es, ChatView :> es, WithConnection :> es, IOE :> es) => ImageJob -> Eff es (Either Text ())
 downloadMedia job = do
   logInfo "image downloading" $
     object
@@ -155,6 +158,12 @@ downloadMedia job = do
           -- QQ's CDN is sloppy about video content types; normalise
           -- anything that isn't video/* to mp4 (what QQ serves).
           withTransaction $ recordVideo sha (if "video/" `T.isPrefixOf` mime then mime else "video/mp4") (BS.length bytes) rel dur job
+      -- Name it in the conversation's sandbox view by its recorded row, the
+      -- rule backfill uses; stickers stay out.
+      recorded <- case job.kind of
+        MediaImage -> fmap (chatMediaName ChatImage job.canonicalMessageId job.segIndex . Just) <$> viewableImageMime sha
+        MediaVideo -> fmap (chatMediaName ChatVideo job.canonicalMessageId job.segIndex . Just) <$> videoMime sha
+      for_ ((,) <$> job.groupId <*> recorded) $ \(group, name) -> linkChatMedia (GroupId group) name ref
       logInfo "media stored" $
         object
           [ "sha256_short" .= T.take 8 sha,

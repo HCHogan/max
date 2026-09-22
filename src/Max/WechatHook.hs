@@ -60,8 +60,10 @@ import Effectful
 import Effectful.Concurrent.Async (Concurrent, concurrently_)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute)
+import Max.DB.Media (viewableImageMime)
 import Max.DB.PlatformIds qualified as PlatformIds
 import Max.Effects.Blob (Blob, BlobRef, blobRefSha256, blobRefStoredPath, putBlob)
+import Max.Effects.ChatView (ChatView, linkChatMedia)
 import Max.HttpRuntime
   ( BufferedResponse (body),
     HttpPool (StandardPool),
@@ -99,6 +101,7 @@ import Max.Platform.Types
     NativeUserId (..),
     Platform (PlatformWeChatHook),
   )
+import Max.Sandbox.Chat (ChatKind (ChatImage), chatMediaName)
 import Max.Util (catchSync)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (methodPost, status200, status404)
@@ -409,7 +412,7 @@ data Health = Health
 -- The watchdog runs alongside the listener rather than as its own worker
 -- because it exists only to describe this listener's health.
 wechatHookWorker ::
-  (WithConnection :> es, Blob :> es, Log :> es, Concurrent :> es, IOE :> es) =>
+  (WithConnection :> es, Blob :> es, ChatView :> es, Log :> es, Concurrent :> es, IOE :> es) =>
   HttpRuntime ->
   WechatHookConfig ->
   Ingress ->
@@ -441,7 +444,7 @@ wechatHookWorker runtime cfg ingress = localDomain "wechathook" $ do
           EndpointStandalone
           (Just legacy)
           (wechatHookCapabilities cfg)
-      pure (room, endpoint)
+      pure (room, (endpoint, GroupId legacy))
 
     -- Doubles as the liveness probe: the DLL only answers while it is loaded
     -- into a running WeChat, so a failure here is the outage signal that
@@ -500,7 +503,7 @@ wechatHookWorker runtime cfg ingress = localDomain "wechathook" $ do
       | T.null cb.cbRoomId = pure ()
       | Nothing <- Map.lookup cb.cbRoomId endpoints = pure ()
       | otherwise = do
-          let endpoint = endpoints Map.! cb.cbRoomId
+          let (endpoint, group) = endpoints Map.! cb.cbRoomId
               nativeEvent = T.pack (show cb.cbMsgId)
               selfAuthored = cb.cbSender == cfg.whSelfWxid
           (body, relations, pendingImage) <- resolveContent cb
@@ -537,7 +540,12 @@ wechatHookWorker runtime cfg ingress = localDomain "wechathook" $ do
               -- alongside the blob.  Without these rows the picture is in the
               -- body and in the store, and 'view_image' still cannot find it:
               -- that tool reads @message_images@, not the canonical body.
-              for_ pendingImage (recordInboundImage fresh.canonicalMessageId)
+              for_ pendingImage $ \image@(ref, _) -> do
+                recordInboundImage fresh.canonicalMessageId image
+                -- Named by its recorded row, like every image in the view.
+                recorded <- viewableImageMime (blobRefSha256 ref)
+                for_ recorded $ \mime ->
+                  linkChatMedia group (chatMediaName ChatImage (unCanonicalMessageId fresh.canonicalMessageId) 0 (Just mime)) ref
               liftIO (queueIngest ingress (Ingested fresh))
               logInfo "wechat event ingested" $
                 object

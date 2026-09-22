@@ -40,6 +40,7 @@ import Max.DB.QQBackfillSpec qualified as QQBackfillSpec
 import Max.DB.SessionSpec qualified as SessionSpec
 import Max.DB.TransactionSpec qualified as TransactionSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
+import Max.ChatViewSpec qualified as ChatViewSpec
 import Max.ExecutionSpec qualified as ExecutionSpec
 import Max.HistorianSpec qualified as HistorianSpec
 import Max.MemoryCapabilitiesSpec qualified as MemoryCapabilitiesSpec
@@ -90,6 +91,7 @@ main = do
         ConversationCapabilitiesSpec.spec pool
         ResourceCapabilitiesSpec.spec pool
         SandboxRegistrySpec.spec pool
+        ChatViewSpec.spec pool
         EpisodeStoreSpec.spec pool
         HistorianSpec.spec pool
         HistorySpec.spec pool

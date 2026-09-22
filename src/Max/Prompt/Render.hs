@@ -112,7 +112,7 @@ import Max.Episode.Types
     episodeHandleText,
   )
 import Max.File.Types
-  ( FileRecord (frBlobRef, frBytesSize, frFileId, frFileName),
+  ( FileRecord (frBlobRef, frBytesSize, frCanonicalMessageId, frFileName),
   )
 import Max.History.Types
   ( HistoryItem
@@ -147,6 +147,7 @@ import Max.Platform.Types
     PrincipalId (PrincipalId),
   )
 import Max.Prompt.System (systemPrompt)
+import Max.Sandbox.Chat (chatFileNames, chatRoot)
 import Max.Session.Types (Session (model, persona))
 import Max.Text (tshow)
 import Max.Time (fmtDate, fmtEnvStamp, fmtHM)
@@ -762,19 +763,24 @@ renderReplyForward tz' kids =
 maxForwardLines :: Int
 maxForwardLines = 30
 
+-- | The quoted message's files as their read-only sandbox paths, named the
+-- same way the /chat mirror names them.
 renderReplyFiles :: [FileRecord] -> [Text]
 renderReplyFiles [] = []
 renderReplyFiles xs =
-  "  附带文件（file_id 可直接传给 import_file_to_sandbox）:" : map fileLine xs
+  "  附带文件（沙箱里的只读路径）:" : concatMap messageLines (groupBy ((==) `on` (.frCanonicalMessageId)) xs)
   where
-    fileLine r =
-      "    - file_id="
-        <> tquote r.frFileId
-        <> ", name="
-        <> tquote r.frFileName
+    messageLines records = case records of
+      first : _
+        | Just message <- first.frCanonicalMessageId ->
+            zipWith fileLine [chatRoot <> "/" <> entry | entry <- chatFileNames message (map (.frFileName) records)] records
+      _ -> map (\r -> fileLine ("name=" <> tquote r.frFileName) r) records
+    fileLine location r =
+      "    - "
+        <> location
         <> sizePart r.frBytesSize
         <> ", ready="
-        <> (case r.frBlobRef of Just _ -> "true"; Nothing -> "false")
+        <> (case r.frBlobRef of Just _ -> "true"; Nothing -> "false（还在下载）")
     sizePart Nothing = ""
     sizePart (Just n) = ", bytes=" <> T.pack (show n)
     tquote t = "\"" <> t <> "\""

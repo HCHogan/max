@@ -146,7 +146,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed(execute(first, "echo durable > /work/keep"))
     machine.wait_until_succeeds(execute(first, "ssh fleet 'sudo -n id -u' | grep -x 0"), timeout=120)
     machine.wait_until_succeeds(execute(first, "curl -fsS --max-time 10 http://10.66.0.1:8090/probe | grep route-ok"), timeout=90)
-    assert machine.succeed(cli + f"policy {first}").strip() == "7 maxops 1"
+    assert machine.succeed(cli + f"policy {first}").strip() == "8 maxops 1"
     machine.succeed("test /run/netns/maxops -ef /run/netns/" + first)
     machine.fail(execute(first, "test -S /run/max-ops-tailscale/tailscaled.sock"))
     host_id = machine.succeed("tailscale status --json | jq -r .Self.ID").strip()
@@ -168,7 +168,7 @@ pkgs.testers.runNixOSTest {
     assert machine.succeed(cli + "network 123").strip() == "max-sandbox"
     create(first, "max-sandbox")
     machine.succeed(execute(first, "cat /work/keep | grep durable"))
-    assert machine.succeed(cli + f"policy {first}").strip() == "7 max-sandbox 1"
+    assert machine.succeed(cli + f"policy {first}").strip() == "8 max-sandbox 1"
     machine.succeed("systemctl stop max-stack.target", timeout=120)
     machine.wait_until_succeeds("test ! -e /run/netns/maxops", timeout=60)
     machine.succeed("systemctl is-active tailscaled")

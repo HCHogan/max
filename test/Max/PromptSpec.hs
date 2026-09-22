@@ -605,7 +605,8 @@ spec = do
           (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("[quoted context]" `T.isInfixOf`)
       ub `shouldSatisfy` ("report.pdf" `T.isInfixOf`)
-      ub `shouldSatisfy` ("file_id=\"abc-123\"" `T.isInfixOf`)
+      -- The quoted file is named exactly as the sandbox's /chat mirror names it.
+      ub `shouldSatisfy` ("/chat/5001-report.pdf" `T.isInfixOf`)
       ub `shouldSatisfy` ("ready=true" `T.isInfixOf`)
 
     it "marks ready=false when reply file has no blob reference" $ do

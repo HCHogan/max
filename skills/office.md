@@ -2,9 +2,9 @@
 
 # 总流程
 
-都在沙箱里做（没读过 sandbox 手册先取那份）。文件进出：list_recent_files →
-import_file_to_sandbox 拿进 /work，成品 send_file_from_sandbox 发回群文件；要给人
-看效果，转成图片走 send_image_from_sandbox。工具分两档：能用命令行解决就不开
+都在沙箱里做（没读过 sandbox 手册先取那份）。文件进出：群里发的文件已经在只读的
+/chat 里（名字见 sandbox 手册），直接读或复制到 /work 再改；成品 send_file 发回群文件；
+要给人看效果，转成图片走 send_image。工具分两档：能用命令行解决就不开
 python；要精细读写内容才上 python 库——记住 sandbox 手册里的 Python 规则：把
 `python3Packages.<attr>` 直接放进 packages，宿主生成可 import 的 Nix Python 环境，
 需要 PyPI 特定版本时，再按 sandbox 手册在 /work 的独立 venv 中安装。
@@ -17,7 +17,7 @@ pdftoppm）→ `pdftotext -layout in.pdf out.txt` 保排版；`pdfinfo` 看页�
 拆/合/旋转：packages=["qpdf"] → 截取 `qpdf in.pdf --pages . 1-5 -- out.pdf`；
 合并 `qpdf --empty --pages a.pdf b.pdf -- merged.pdf`。
 页面转图（预览/给人看）：`pdftoppm -png -r 100 -f 1 -l 1 in.pdf page` →
-send_image_from_sandbox。
+send_image。
 生成 PDF：不要手写，先产 markdown/docx/pptx 再转（见转换一节）。
 
 # Excel（xlsx）

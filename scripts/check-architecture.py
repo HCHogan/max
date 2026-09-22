@@ -185,7 +185,8 @@ def check_imports():
         if relative.startswith("src/Max/Tools") and "Max.Effects.PlatformAccount" in dependencies:
             errors.append(f"{relative}: account administration exposed to tools")
         if "Max.Effects.BlobHost" in IMPORT.findall(source) and relative not in {
-            "src/Max/MediaCaption.hs", "src/Max/File/TransferRuntime.hs", "src/Max/Toolset.hs", "src/Max/File/ToolRuntime.hs"
+            "src/Max/MediaCaption.hs", "src/Max/File/TransferRuntime.hs", "src/Max/Toolset.hs", "src/Max/File/ToolRuntime.hs",
+            "src/Max/File/ChatView.hs",  # Hardlinks objects into sandbox /chat views.
         }:
             errors.append(f"{relative}: host paths outside approved ffmpeg/docker adapters and assembly")
         if relative.startswith("src/Max/Tools/") and re.search(r"\b(ToolOutputRead|drainInlineMedia|runToolOutputRead|newToolOutputQueue)\b", source):
@@ -202,9 +203,10 @@ import Max.Effects.Blob
 import Max.Effects.BlobHost
 import Max.Effects.SkillLoading (SkillLoading, loadSkill)
 import Max.Effects.Search (Search, searchWeb)
-import Max.Effects.Sandbox (Sandbox, listSandboxes)
+import Max.Effects.Sandbox (Sandbox, searchPackages)
 import Max.Effects.Browser (Browser, readZhihu)
 import Max.Effects.FileTransfer (FileTransfer, sendSandboxFile)
+import Max.Effects.ChatView (ChatView, linkChatMedia)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Transaction (InTransaction, withTransaction)
 import Max.DB.Authority (authorizeCallerWithin)
@@ -253,11 +255,13 @@ skillLoading = () <$ loadSkill "demo"
 searching :: Search :> es => Eff es ()
 searching = () <$ searchWeb "query" 1
 sandboxing :: Sandbox :> es => Eff es ()
-sandboxing = () <$ listSandboxes
+sandboxing = () <$ searchPackages "ffmpeg"
 browserReading :: Browser :> es => Eff es ()
 browserReading = () <$ readZhihu "https://zhihu.com/"
 fileTransfer :: FileTransfer :> es => Eff es ()
-fileTransfer = () <$ sendSandboxFile "sandbox" "result.csv" Nothing
+fileTransfer = () <$ sendSandboxFile "result.csv" Nothing
+chatView :: ChatView :> es => BlobRef -> Eff es ()
+chatView = linkChatMedia (GroupId 1) "1-result.csv"
 
 conversation :: ConversationQuery :> es => Eff es ()
 conversation = () <$ readMessage 1
@@ -314,6 +318,8 @@ NEGATIVE = {
     "Sandbox cannot use arbitrary IO": ("IOE", "bad :: Sandbox :> es => Eff es ()\nbad = liftIO (pure ())"),
     "Browser cannot use arbitrary IO": ("IOE", "bad :: Browser :> es => Eff es ()\nbad = liftIO (pure ())"),
     "FileTransfer cannot use arbitrary IO": ("IOE", "bad :: FileTransfer :> es => Eff es ()\nbad = liftIO (pure ())"),
+    "chat view linking cannot resolve host paths": ("BlobHost", "bad :: ChatView :> es => BlobRef -> Eff es FilePath\nbad = resolveBlobHostPath"),
+    "chat view linking cannot use arbitrary IO": ("IOE", "bad :: ChatView :> es => Eff es ()\nbad = liftIO (pure ())"),
 
     "conversation query cannot control tasks": ("TaskControl", 'bad :: ConversationQuery :> es => Eff es ()\nbad = () <$ startTask "goal" Basic Null'),
     "conversation query cannot publish": ("Outbound", 'bad :: ConversationQuery :> es => OutboundRequest -> Eff es ()\nbad request = () <$ sendRecorded request'),

@@ -155,7 +155,10 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.ReplySpec` — reply paragraph splitting (fences, `[split]`, long replies)
 - `Max.ReplySendSpec` — that splitting a reply at a `readyPrefix` boundary sends
   the same messages as never splitting it, including replies longer than ten paragraphs
-- `Max.Sandbox.RuntimeSpec` — package wrapping and exec argv
+- `Max.Sandbox.RuntimeSpec` — package wrapping, exec argv and text/binary
+  classification of bounded file reads
+- `Max.Sandbox.ChatSpec` — `/chat` names from prompt handles and safe,
+  bounded display names
 - `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, …)
 - `Max.ShutdownSpec` — drain flag / in-flight counter transitions
 - `Max.WorkerSpec` — scoped failure propagation, sibling cleanup and explicit
@@ -193,6 +196,12 @@ application transaction runs on one physical pooled connection by throwing
 after an insert and checking that rollback removed it. This guards row locks,
 advisory transaction locks, and atomic cursor/publication boundaries against
 connection-pool drift.
+`Max.SandboxRegistrySpec` runs the registry against a stub runtime client: shared
+commands, destruction draining, one start for concurrent first calls, and the
+view backfill that follows a start.
+`Max.ChatViewSpec` runs the view catalog queries against real objects:
+conversation scoping, sticker exclusion, file numbering, 0444 hardlinks to the
+same inode, idempotent backfill, and ingest links only into existing views.
 `Max.DB.JobSpec` covers public identities, scoped control, child grants, progress
 publication and boot interruption without replay. `Max.PublicationSpec` covers
 revocation before cancellation signalling and committed-prefix preservation.

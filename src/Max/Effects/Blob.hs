@@ -22,6 +22,7 @@ import Max.Util (withBinaryTempFile)
 import System.Directory (createDirectoryIfMissing, doesFileExist, renameFile)
 import System.FilePath (takeFileName, (</>))
 import System.IO (hClose)
+import System.Posix.Files (setFileMode)
 
 data Blob :: Effect where
   PutBlob ::
@@ -36,6 +37,8 @@ data Blob :: Effect where
 type instance DispatchOf Blob = Dynamic
 
 -- | Content-addressed filesystem store under @root/<2-hex-prefix>/<sha>@.
+-- Objects are immutable and mode 0444: sandbox /chat views hardlink them, so
+-- they must be readable there and writable by no one.
 -- Concurrent writes for the same sha are safe: a unique scoped tmp filename
 -- is used per call and the final 'renameFile' is an atomic POSIX move. If a
 -- writer loses the race, its tmp file is renamed on top of byte-identical
@@ -71,4 +74,5 @@ writeFileSafe root rel bytes = do
       withBinaryTempFile subdir (takeFileName rel <> ".tmp") $ \tmp h -> do
         BS.hPut h bytes
         hClose h
+        setFileMode tmp 0o444
         renameFile tmp final

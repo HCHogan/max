@@ -1,26 +1,26 @@
--- | Group-scoped sandbox lifecycle, commands, files and Nix package lookup.
--- The host broker resolves requested packages into the guest's PATH. Sandboxes
--- persist across turns and are shared within a group: independent commands may
--- run concurrently, lifecycle changes wait, and callers coordinate paths/ports.
+-- | The group's sandbox: commands, files and Nix package lookup. The host
+-- starts the sandbox on first use and keeps it across turns; it is shared
+-- within a group, so independent commands may run concurrently, lifecycle
+-- changes wait, and callers coordinate paths/ports. /work is the persistent
+-- workspace and /chat a read-only mirror of this chat's files.
 module Max.Tools.Sandbox
-  ( sandboxToolsFor,
+  ( sandboxTools,
   )
 where
 
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
+import Data.ByteString qualified as BS
 import Data.Maybe (fromMaybe)
 import Data.Ord (clamp)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (TimeZone)
+import Data.Text.Encoding qualified as TE
 import Effectful
 import Max.Effects.Sandbox
   ( Sandbox,
-    createSandbox,
     destroySandbox,
     execInSandbox,
-    listSandboxes,
     readSandboxFile,
     searchPackages,
     writeSandboxFile,
@@ -43,8 +43,6 @@ import Max.Sandbox.Types
         erStdoutSha256,
         erTruncated
       ),
-    SandboxId (SandboxId, unSandboxId),
-    SandboxInfo (seContainer, seCreatedAt, seId, seImage),
     SandboxManifest
       ( smChangedPaths,
         smChangedPathsTruncated,
@@ -55,9 +53,9 @@ import Max.Sandbox.Types
         smSha256,
         smTruncated
       ),
+    SandboxRead (srBytes, srContent, srTruncated),
     maxOutputBytes,
   )
-import Max.Time (fmtDateHMS)
 import Max.Tools.Schema
   ( integerParam,
     noArguments,
@@ -67,53 +65,14 @@ import Max.Tools.Schema
     withKeys,
   )
 
-sandboxToolsFor :: (Sandbox :> es) => TimeZone -> [Tool es]
-sandboxToolsFor tz =
-  [ createTool,
-    execTool,
+sandboxTools :: (Sandbox :> es) => [Tool es]
+sandboxTools =
+  [ execTool,
     nixSearchTool,
-    listTool tz,
     destroyTool,
     readFileTool,
     writeFileTool
   ]
-
---------------------------------------------------------------------------------
--- sandbox_create
-
-createTool :: (Sandbox :> es) => Tool es
-createTool =
-  Tool
-    { toolName = "sandbox_create",
-      toolDescription =
-        T.unwords
-          [ "Create a Linux sandbox (NixOS container) and get the 'sandbox_id' the",
-            "other sandbox_* tools take.  Nix-based: do NOT apt/yum install — pass",
-            "nixpkgs attributes in sandbox_exec's 'packages' instead.  Sandboxes",
-            "persist across dispatches and are shared with this group's other",
-            "running tasks: prefer reusing one from sandbox_list.",
-            "开工前先 use_skill 取 sandbox 手册。"
-          ],
-      toolSchema = noArguments,
-      toolRunner = LegacyRunner $ \args ->
-        case parseEither (withObject "args" parseArgs) args of
-          Left e -> pure $ Left ("bad args: " <> T.pack e)
-          Right () -> do
-            res <- createSandbox
-            pure $ case res of
-              Left err -> Left err
-              Right e ->
-                Right $
-                  object
-                    [ "sandbox_id" .= e.seId.unSandboxId,
-                      "image" .= e.seImage,
-                      "container" .= e.seContainer,
-                      "note" .= ("Use sandbox_exec with sandbox_id to run commands." :: Text)
-                    ]
-    }
-  where
-    parseArgs :: Object -> Parser ()
-    parseArgs _ = pure ()
 
 --------------------------------------------------------------------------------
 -- sandbox_exec
@@ -124,8 +83,9 @@ execTool =
     { toolName = "sandbox_exec",
       toolDescription =
         T.unwords
-          [ "Run a shell command in a sandbox (verbatim 'sh -c', wallclock",
-            "timeout, exit_code 0 = success). Independent commands may run concurrently in the same sandbox; coordinate shared paths and ports. Output capped ~16 KiB per",
+          [ "Run a shell command in this group's sandbox (verbatim 'sh -c' in /work, wallclock",
+            "timeout, exit_code 0 = success). /work persists; /chat is a read-only mirror of this chat's files and media.",
+            "Independent commands may run concurrently; coordinate shared paths and ports. Output capped ~16 KiB per",
             "stream; when 'truncated' is true a bounded output spill is saved",
             "to 'full_output_file'.  'spill_truncated' says whether that file",
             "also reached its safety cap — inspect it instead of re-running.",
@@ -136,8 +96,7 @@ execTool =
           ],
       toolSchema =
         toolObject
-          [ ("sandbox_id", stringParam "Sandbox id from sandbox_create."),
-            ("command", stringParam "Shell command to run."),
+          [ ("command", stringParam "Shell command to run."),
             ( "packages",
               withKeys ["maxItems" .= (32 :: Int)] $
                 stringArrayParam "nixpkgs attributes to put on PATH for this command (find them with nix_search); python3Packages.* attributes are also made importable."
@@ -146,12 +105,12 @@ execTool =
               withKeys ["default" .= (30 :: Int)] (integerParam "Max wallclock seconds (default 30, max 600).")
             )
           ]
-          ["sandbox_id", "command"],
+          ["command"],
       toolRunner = LegacyRunner $ \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
-          Right (sid, cmd, pkgs, t) -> do
-            res <- execInSandbox (SandboxId sid) pkgs cmd (clamp (1, 600) t)
+          Right (cmd, pkgs, t) -> do
+            res <- execInSandbox pkgs cmd (clamp (1, 600) t)
             pure $ case res of
               Left err -> Left err
               Right er ->
@@ -166,13 +125,12 @@ execTool =
                     <> ["_max_journal_observed_manifest" .= journalObservation er]
     }
   where
-    parseArgs :: Object -> Parser (Text, Text, [Text], Int)
+    parseArgs :: Object -> Parser (Text, [Text], Int)
     parseArgs o = do
-      sid <- o .: "sandbox_id"
       cmd <- o .: "command"
       pkgs <- o .:? "packages" .!= []
       mTo <- o .:? "timeout_seconds"
-      pure (sid, cmd, pkgs, fromMaybe 30 mTo)
+      pure (cmd, pkgs, fromMaybe 30 mTo)
 
 journalObservation :: ExecResult -> Value
 journalObservation er =
@@ -211,7 +169,7 @@ journalObservation er =
 --------------------------------------------------------------------------------
 -- nix_search
 
--- | Search the host-owned package pin after checking sandbox ownership.
+-- | Search the host-owned package pin.
 nixSearchTool :: (Sandbox :> es) => Tool es
 nixSearchTool =
   Tool
@@ -225,15 +183,13 @@ nixSearchTool =
           ],
       toolSchema =
         toolObject
-          [ ("sandbox_id", stringParam "Sandbox id to search in."),
-            ("query", stringParam "Regex matched against package names and descriptions.")
-          ]
-          ["sandbox_id", "query"],
+          [("query", stringParam "Regex matched against package names and descriptions.")]
+          ["query"],
       toolRunner = LegacyRunner $ \args ->
-        case parseEither (withObject "args" parseArgs) args of
+        case parseEither (withObject "args" (.: "query")) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
-          Right (sid, query) -> do
-            res <- searchPackages (SandboxId sid) query
+          Right query -> do
+            res <- searchPackages query
             pure $ case res of
               Left err -> Left err
               Right results
@@ -242,29 +198,6 @@ nixSearchTool =
                 | otherwise ->
                     Right (object ["results" .= T.take maxOutputBytes results, "truncated" .= (T.length results > maxOutputBytes)])
     }
-  where
-    parseArgs :: Object -> Parser (Text, Text)
-    parseArgs o = (,) <$> o .: "sandbox_id" <*> o .: "query"
-
---------------------------------------------------------------------------------
--- sandbox_list
-
-listTool :: (Sandbox :> es) => TimeZone -> Tool es
-listTool tz =
-  Tool
-    { toolName = "sandbox_list",
-      toolDescription =
-        "List sandboxes available in this group's session (created by you or by other parallel dispatches).",
-      toolSchema = noArguments,
-      toolRunner = LegacyRunner $ \_args -> Right . toJSON . map summarize <$> listSandboxes
-    }
-  where
-    summarize e =
-      object
-        [ "sandbox_id" .= e.seId.unSandboxId,
-          "image" .= e.seImage,
-          "created_at" .= fmtDateHMS tz e.seCreatedAt
-        ]
 
 --------------------------------------------------------------------------------
 -- sandbox_destroy
@@ -274,89 +207,78 @@ destroyTool =
   Tool
     { toolName = "sandbox_destroy",
       toolDescription =
-        "Permanently destroy a sandbox and its /work data (downloaded packages \
-        \survive in the shared store).  Use when done, to free resources.",
-      toolSchema = toolObject [("sandbox_id", stringParam "Sandbox id to destroy.")] ["sandbox_id"],
-      toolRunner = LegacyRunner $ \args ->
-        case parseEither (withObject "args" (\o -> o .: "sandbox_id")) args of
-          Left e -> pure $ Left ("bad args: " <> T.pack e)
-          Right (sid :: Text) -> do
-            res <- destroySandbox (SandboxId sid)
-            pure $ case res of
-              Left err -> Left err
-              Right () -> Right (object ["ok" .= True])
+        "Delete this group's sandbox and everything in /work (downloaded \
+        \packages survive in the shared store).  The next sandbox call starts \
+        \a fresh one.  Other tasks in the group share it.",
+      toolSchema = noArguments,
+      toolRunner = LegacyRunner $ \_args -> do
+        destroyed <- destroySandbox
+        pure (Right (object ["ok" .= True, "destroyed" .= destroyed]))
     }
 
 --------------------------------------------------------------------------------
--- sandbox_read_file
+-- read_file
 
 readFileTool :: (Sandbox :> es) => Tool es
 readFileTool =
   Tool
-    { toolName = "sandbox_read_file",
+    { toolName = "read_file",
       toolDescription =
-        "Read up to max_bytes of a text file in a sandbox (path relative to \
-        \/work, or absolute; UTF-8, silently truncated at the cap).",
+        "Read the start of a text file in the sandbox (absolute path, or \
+        \relative to /work; /chat holds this chat's files).  Returns up to \
+        \max_bytes of UTF-8; for a binary file only its size — process it \
+        \with sandbox_exec instead.",
       toolSchema =
         toolObject
-          [ ("sandbox_id", stringParam "Sandbox id."),
-            ("path", stringParam "File path (relative to /work, or absolute)."),
+          [ ("path", stringParam "File path (absolute, or relative to /work)."),
             ( "max_bytes",
               withKeys ["default" .= (maxOutputBytes :: Int)] (integerParam "Cap (default 16384, max 65536).")
             )
           ]
-          ["sandbox_id", "path"],
+          ["path"],
       toolRunner = LegacyRunner $ \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
-          Right (sid, path, mx) -> do
-            res <- readSandboxFile (SandboxId sid) path (clamp (1, 65536) mx)
+          Right (path, mx) -> do
+            res <- readSandboxFile path (clamp (1, 65536) mx)
             pure $ case res of
               Left err -> Left err
-              Right content ->
-                Right $
-                  object
-                    [ "content" .= content,
-                      "bytes" .= T.length content
-                    ]
+              Right read' -> Right . object $ case read'.srContent of
+                Just content -> ["content" .= content, "bytes" .= read'.srBytes, "truncated" .= read'.srTruncated]
+                Nothing -> ["binary" .= True, "bytes_read" .= read'.srBytes, "truncated" .= read'.srTruncated]
     }
   where
-    parseArgs :: Object -> Parser (Text, Text, Int)
+    parseArgs :: Object -> Parser (Text, Int)
     parseArgs o = do
-      sid <- o .: "sandbox_id"
       path <- o .: "path"
       mx <- o .:? "max_bytes"
-      pure (sid, path, fromMaybe maxOutputBytes mx)
+      pure (path, fromMaybe maxOutputBytes mx)
 
 --------------------------------------------------------------------------------
--- sandbox_write_file
+-- write_file
 
 writeFileTool :: (Sandbox :> es) => Tool es
 writeFileTool =
   Tool
-    { toolName = "sandbox_write_file",
+    { toolName = "write_file",
       toolDescription =
-        "Write a text file in a sandbox (creates parent dirs, overwrites) — \
-        \e.g. drop a script before sandbox_exec runs it.",
+        "Write a UTF-8 text file in the sandbox (absolute path, or relative \
+        \to /work; creates parent directories, overwrites).  /chat is read-only.",
       toolSchema =
         toolObject
-          [ ("sandbox_id", stringParam "Sandbox id."),
-            ("path", stringParam "File path (relative to /work, or absolute)."),
+          [ ("path", stringParam "File path (absolute, or relative to /work)."),
             ("content", stringParam "File content (UTF-8 text).")
           ]
-          ["sandbox_id", "path", "content"],
+          ["path", "content"],
       toolRunner = LegacyRunner $ \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
-          Right (sid, path, content) -> do
-            res <- writeSandboxFile (SandboxId sid) path content
+          Right (path, content) -> do
+            res <- writeSandboxFile path content
             pure $ case res of
               Left err -> Left err
-              Right () -> Right (object ["ok" .= True, "bytes" .= T.length content])
+              Right () -> Right (object ["ok" .= True, "bytes" .= BS.length (TE.encodeUtf8 content)])
     }
   where
-    parseArgs :: Object -> Parser (Text, Text, Text)
-    parseArgs o = (,,) <$> o .: "sandbox_id" <*> o .: "path" <*> o .: "content"
-
---------------------------------------------------------------------------------
--- Helpers.
+    parseArgs :: Object -> Parser (Text, Text)
+    parseArgs o = (,) <$> o .: "path" <*> o .: "content"

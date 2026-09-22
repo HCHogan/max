@@ -7,14 +7,12 @@ module Max.DB.Files
     insertSeen,
     markStored,
     fileStored,
-    fetchByFileIdInScope,
     fetchFilesForMessageInScope,
-    listRecentInGroup,
+    listConversationFilesInScope,
   )
 where
 
 import Data.Int (Int64)
-import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
@@ -65,25 +63,9 @@ markStored fid ref mime size = do
       (blobRefSha256 ref, blobRefStoredPath ref, mime, size, fid)
   pure ()
 
-fetchByFileIdInScope ::
-  (WithConnection :> es, IOE :> es) =>
-  ConversationScope ->
-  Text ->
-  Eff es (Maybe FileRecord)
-fetchByFileIdInScope scope fid = do
-  rows <-
-    query
-      "SELECT file_id, group_id, canonical_message_id, sender_user_id, file_name, \
-      \       mime_type, bytes_size, sha256, received_at, fetched_at \
-      \  FROM group_files \
-      \  WHERE group_id = ? AND file_id = ? \
-      \  LIMIT 1"
-      (conversationStorageId scope, fid)
-  pure (listToMaybe rows)
-
 -- | All files attached to one message — used by the prompt builder
 -- to enrich reply context (\"the user is asking about the file in
--- the message they quoted; here are its file_ids\").
+-- the message they quoted; here is its /chat path\").
 fetchFilesForMessageInScope ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->
@@ -95,24 +77,24 @@ fetchFilesForMessageInScope scope mid =
     \       mime_type, bytes_size, sha256, received_at, fetched_at \
     \  FROM group_files \
     \  WHERE group_id = ? AND canonical_message_id = ? \
-    \  ORDER BY received_at ASC"
+    \  ORDER BY received_at ASC, file_id"
     (conversationStorageId scope, mid)
 
--- | Newest @n@ files in @gid@, ordered by receipt time descending.
-listRecentInGroup ::
+-- | Every file of this conversation grouped by message, each message's files
+-- in the same order as 'fetchFilesForMessageInScope', so view names agree
+-- with reply context. Files still downloading are included for numbering.
+listConversationFilesInScope ::
   (WithConnection :> es, IOE :> es) =>
-  Int64 -> -- group_id
-  Int -> -- limit
+  ConversationScope ->
   Eff es [FileRecord]
-listRecentInGroup gid lim = do
+listConversationFilesInScope scope =
   query
     "SELECT file_id, group_id, canonical_message_id, sender_user_id, file_name, \
     \       mime_type, bytes_size, sha256, received_at, fetched_at \
     \  FROM group_files \
-    \  WHERE group_id = ? \
-    \  ORDER BY received_at DESC \
-    \  LIMIT ?"
-    (gid, lim)
+    \  WHERE group_id = ? AND canonical_message_id IS NOT NULL \
+    \  ORDER BY canonical_message_id, received_at ASC, file_id"
+    (Only (conversationStorageId scope))
 
 fileStored :: (WithConnection :> es, IOE :> es) => Text -> Eff es Bool
 fileStored fileId = do

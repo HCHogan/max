@@ -7,7 +7,7 @@ where
 
 import Data.Aeson (Result (..), fromJSON)
 import Data.ByteString qualified as BS
-import Data.Foldable (traverse_)
+import Data.Foldable (for_, traverse_)
 import Data.Int (Int64)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -15,21 +15,24 @@ import Data.Text qualified as T
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
+import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Files qualified as DB
 import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
+import Max.Effects.ChatView (ChatView, linkChatMedia)
 import Max.Effects.Http (Http, getQQMedia, renderDownloadError)
 import Max.Effects.PlatformQuery (PlatformQuery, queryGroupFileUrl)
 import Max.FetchQueue (FetchPriority (..), FetchSignal, FileJob (..), JobKind (JobFile), enqueueFetch, notifyFetch, runFetchLoop)
 import Max.IR (Body (..), MediaKind (MFile), MediaMeta (..), Node (NMedia), Phase (Canonical))
 import Max.Platform.Failure (renderPlatformFailure)
 import Max.Platform.Types (CanonicalMessageId (..))
+import Max.Sandbox.Chat (chatFileNames)
 import OneBot.Segment (FileSegInfo (..), Segment (..))
 import OneBot.Types (GroupId (..), UserId (..))
 
 -- | Walk canonical media nodes and enqueue every QQ file. Also
--- inserts the catalog row up front so that @list_recent_files@ can
--- show the file even while the worker is still fetching the bytes.
+-- inserts the catalog row up front, so reply context can show the file as
+-- still downloading while the worker fetches the bytes.
 enqueueFiles ::
   (WithConnection :> es, IOE :> es) =>
   FetchPriority ->
@@ -41,7 +44,7 @@ enqueueFiles priority sig gm = do
       GroupId gid = gm.groupId
       UserId uid = gm.userId
       jobs = mapMaybe (mkJob mid gid uid) gm.body.nodes
-  -- Insert seen rows so list_recent_files works immediately.
+  -- Insert seen rows so reply context lists them immediately.
   traverse_ insertJob jobs
   traverse_ enqueueOne jobs
   liftIO (notifyFetch sig)
@@ -81,6 +84,7 @@ fileWorker ::
   ( Log :> es,
     Http :> es,
     Blob :> es,
+    ChatView :> es,
     WithConnection :> es,
     PlatformQuery :> es,
     IOE :> es
@@ -95,6 +99,7 @@ processOne ::
   ( Log :> es,
     Http :> es,
     Blob :> es,
+    ChatView :> es,
     WithConnection :> es,
     PlatformQuery :> es,
     IOE :> es
@@ -105,7 +110,7 @@ processOne job = do
   stored <- DB.fileStored job.fjFileId
   if stored then pure (Right ()) else downloadFile job
 
-downloadFile :: (Log :> es, Http :> es, Blob :> es, WithConnection :> es, PlatformQuery :> es, IOE :> es) => FileJob -> Eff es (Either Text ())
+downloadFile :: (Log :> es, Http :> es, Blob :> es, ChatView :> es, WithConnection :> es, PlatformQuery :> es, IOE :> es) => FileJob -> Eff es (Either Text ())
 downloadFile job = do
   logInfo "file processing" $
     object
@@ -128,6 +133,11 @@ downloadFile job = do
             ref
             (Just mime)
             (fromIntegral (BS.length bytes))
+          -- Numbering depends on every file of the message, as in reply context.
+          let group = GroupId job.fjGroupId
+          siblings <- DB.fetchFilesForMessageInScope (conversationScopeFor group) job.fjMessageId
+          for_ [name | (name, record) <- zip (chatFileNames job.fjMessageId (map (.frFileName) siblings)) siblings, record.frFileId == job.fjFileId] $ \name ->
+            linkChatMedia group name ref
           logInfo "file stored" $
             object
               [ "file_id" .= job.fjFileId,

@@ -1,10 +1,12 @@
 module Max.DB.FilesSpec (spec) where
 
+import Control.Monad (void)
 import Data.Int (Int64)
+import Effectful.PostgreSQL (execute)
 import Helpers (insertMessageWithCanonicalId, testTime, truncateAll, withDb)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool)
-import Max.DB.Files (FileRecord (..), fetchByFileIdInScope, fetchFilesForMessageInScope, insertSeen)
+import Max.DB.Files (FileRecord (..), fetchFilesForMessageInScope, insertSeen, listConversationFilesInScope)
 import OneBot.Types (GroupId (..))
 import Test.Hspec
 
@@ -24,13 +26,20 @@ spec pool = before_ (truncateAll pool) $
           insertMessageWithCanonicalId pool 9001 groupA sender 1000 testTime Nothing "visible"
           insertMessageWithCanonicalId pool 9002 groupB sender 1000 testTime Nothing "secret"
 
-    it "does not resolve another conversation file_id" $ do
+    it "lists a conversation's files by message, each message's in receipt order" $ do
       seedMessages
+      insertMessageWithCanonicalId pool 9003 groupA sender 1000 testTime Nothing "later"
+      withDb pool $ insertSeen "file-a1" groupA (Just 9001) sender "old.txt" Nothing
+      withDb pool $ insertSeen "file-a3y" groupA (Just 9003) sender "second.txt" Nothing
+      withDb pool $ insertSeen "file-a3x" groupA (Just 9003) sender "first.txt" Nothing
       withDb pool $ insertSeen "file-b" groupB (Just 9002) sender "secret.txt" Nothing
-      fromA <- withDb pool $ fetchByFileIdInScope scopeA "file-b"
-      fromB <- withDb pool $ fetchByFileIdInScope scopeB "file-b"
-      fromA `shouldSatisfy` isNothing
-      fmap (.frFileName) fromB `shouldBe` Just "secret.txt"
+      -- Messages in order; one message's files in receipt order.
+      void . withDb pool $ execute "UPDATE group_files SET received_at = now() - interval '1 hour' WHERE file_id = 'file-a1'" ()
+      void . withDb pool $ execute "UPDATE group_files SET received_at = now() - interval '1 minute' WHERE file_id = 'file-a3y'" ()
+      files <- withDb pool $ listConversationFilesInScope scopeA
+      map (.frFileId) files `shouldBe` ["file-a1", "file-a3y", "file-a3x"]
+      foreign' <- withDb pool $ listConversationFilesInScope scopeB
+      map (.frFileId) foreign' `shouldBe` ["file-b"]
 
     it "confines message attachment lookup even when message ids are supplied directly" $ do
       seedMessages
@@ -40,8 +49,3 @@ spec pool = before_ (truncateAll pool) $
       hidden <- withDb pool $ fetchFilesForMessageInScope scopeA 9002
       map (.frFileId) visible `shouldBe` ["file-a"]
       hidden `shouldSatisfy` null
-
--- Keep this local rather than importing Data.Maybe for one predicate.
-isNothing :: Maybe a -> Bool
-isNothing Nothing = True
-isNothing Just {} = False

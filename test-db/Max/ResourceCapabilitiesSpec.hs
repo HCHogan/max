@@ -22,6 +22,7 @@ import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn (AgentTurnTerminal (TurnCancelled), finishAgentTurn)
 import Max.DB.Connection (DbPool)
 import Max.DB.Files qualified as Files
+import Max.DB.Media qualified as MediaDB
 import Max.DB.Session qualified as SessionDB
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.ConversationQuery qualified as Conversation
@@ -66,12 +67,14 @@ spec pool = before_ (truncateAll pool) $ describe "scoped resource capabilities"
     withDb pool (Media.runMediaQuery foreignScope (Media.readVideo identifier Nothing)) >>= (`shouldSatisfy` isNothing)
     forM_ [1 .. 55 :: Int] $ \index ->
       withDb pool (Files.insertSeen (T.pack (show index)) 900 (Just identifier) 1 "file.txt" Nothing)
-    files <- withDb pool (Media.runMediaQuery scope (Media.listFiles 999))
-    length files `shouldBe` 50
-    map (.frGroupId) files `shouldBe` replicate 50 900
-    withDb pool (Media.runMediaQuery scope (Media.readStoredFile "1")) >>= (`shouldSatisfy` isJust)
-    withDb pool (Media.runMediaQuery foreignScope (Media.readStoredFile "1")) >>= (`shouldSatisfy` isNothing)
-    withDb pool (Media.runMediaQuery foreignScope (Media.listFiles 999)) >>= (`shouldSatisfy` null)
+    -- Sandbox views read this conversation's catalog only.
+    files <- withDb pool (Files.listConversationFilesInScope scope)
+    length files `shouldBe` 55
+    map (.frGroupId) files `shouldBe` replicate 55 900
+    withDb pool (Files.listConversationFilesInScope foreignScope) >>= (`shouldSatisfy` null)
+    map (.cmrSha256) <$> withDb pool (MediaDB.fetchConversationImagesInScope scope) `shouldReturn` ["asset-image"]
+    withDb pool (MediaDB.fetchConversationImagesInScope foreignScope) >>= (`shouldSatisfy` null)
+    withDb pool (MediaDB.fetchConversationVideosInScope foreignScope) >>= (`shouldSatisfy` null)
     roster <- withDb pool (Conversation.runConversationQuery scope Conversation.readRoster)
     map (.riPrincipalId) roster.crIdentities `shouldContain` [actor]
     map (.riPrincipalId) roster.crIdentities `shouldNotContain` [otherActor]

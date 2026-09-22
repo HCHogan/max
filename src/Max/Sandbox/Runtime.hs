@@ -20,11 +20,11 @@ module Max.Sandbox.Runtime
     runExec,
     runPreparePackages,
     runSearch,
-    runRead,
+    runReadPrefix,
+    classifyRead,
     runWrite,
 
     -- * Copy
-    runCopyToContainer,
     readSandboxArtifact,
     readBoundedArtifact,
 
@@ -47,16 +47,22 @@ import Control.Concurrent
     putMVar,
     takeMVar,
   )
+import Control.Concurrent.Async (concurrently)
 import Control.Exception
   ( IOException,
     SomeException,
     bracket,
+    catch,
+    finally,
+    throwIO,
     try,
   )
+import Control.Monad (unless, void)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.Char (isSpace)
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -68,6 +74,7 @@ import Max.Runtime.Protocol (sandboxPolicyVersion)
 import Max.Sandbox.Types
   ( ExecResult (..),
     SandboxManifest (..),
+    SandboxRead (..),
     maxOutputBytes,
   )
 import System.Directory (getTemporaryDirectory, removeFile)
@@ -79,11 +86,11 @@ import System.IO
     hSetBinaryMode,
     openBinaryTempFile,
   )
+import System.IO.Error (isResourceVanishedError)
 import System.Process
   ( CreateProcess (..),
     StdStream (..),
     proc,
-    readCreateProcessWithExitCode,
     readProcessWithExitCode,
     waitForProcess,
     withCreateProcess,
@@ -620,46 +627,30 @@ runtimeExecSmall container command = do
     Right (ExitSuccess, _, _) -> True
     _ -> False
 
--- | Read a file from the container, capped at 'maxOutputBytes'.
---
--- > sh -c "head -c <max> /work/<path>"
-runRead ::
-  -- | container name
-  Text ->
-  -- | path (relative to /work, or absolute)
-  Text ->
-  -- | cap bytes
-  Int ->
-  IO (Either Text Text)
-runRead container path maxBytes = do
-  let cmd =
-        "head -c "
-          <> T.pack (show maxBytes)
-          <> " "
-          <> shellQuote path
-      args =
-        [ "exec",
-          "--workdir",
-          "/work",
-          T.unpack container,
-          "sh",
-          "-c",
-          T.unpack cmd
-        ]
-  res <- try @IOException $ readProcessWithExitCode "max-runtime" args ""
-  pure $ case res of
-    Left e -> Left ("sandbox exec failed: " <> T.pack (show e))
-    Right (ExitSuccess, out, _) -> Right (T.pack out)
-    Right (ExitFailure c, _, err) ->
-      Left $
-        "read failed (exit "
-          <> T.pack (show c)
-          <> "): "
-          <> T.strip (T.pack err)
+-- | Read at most @limit@ bytes of one file (relative to /work, or
+-- absolute). @head -c@ bounds the guest side and the host keeps no more.
+runReadPrefix :: Text -> Text -> Int -> IO (Either Text BS.ByteString)
+runReadPrefix container path limit =
+  runtimeBytes 40 limit ["exec", "--workdir", "/work", T.unpack container, "timeout", "30", "head", "-c", show limit, "--", T.unpack path] BS.empty
 
--- | Write @content@ to a file inside the container, overwriting if
--- present.  Uses @sandbox exec -i ... tee@ with content fed via stdin
--- so we don't have to shell-quote arbitrary bytes.
+-- | Decide how a prefix read of @limit + 1@ bytes is shown: text when it is
+-- UTF-8 (allowing a character cut by the limit), otherwise binary.
+classifyRead :: Int -> BS.ByteString -> SandboxRead
+classifyRead limit bytes = SandboxRead content (BS.length prefix) truncated
+  where
+    truncated = BS.length bytes > limit
+    prefix = BS.take limit bytes
+    content
+      | BS.elem 0 prefix = Nothing
+      | otherwise = case TE.decodeUtf8' prefix of
+          Right text -> Just text
+          Left _
+            | truncated -> listToMaybe [text | dropped <- [1 .. 3], Right text <- [TE.decodeUtf8' (BS.dropEnd dropped prefix)]]
+            | otherwise -> Nothing
+
+-- | Write UTF-8 @content@ to a file inside the container, overwriting it
+-- and creating parent directories. Bytes travel on stdin, never in a quoted
+-- command line.
 runWrite ::
   -- | container name
   Text ->
@@ -669,66 +660,17 @@ runWrite ::
   Text ->
   IO (Either Text ())
 runWrite container path content = do
-  -- mkdir -p the parent first (cheap, handles "subdir/file.py")
   let parent = T.dropWhileEnd (/= '/') path
       mkParent =
         if T.null parent
           then ""
           else "mkdir -p " <> shellQuote (T.dropEnd 1 parent) <> " && "
-      cmd =
-        mkParent <> "cat > " <> shellQuote path
-      args =
-        [ "exec",
-          "-i",
-          "--workdir",
-          "/work",
-          T.unpack container,
-          "sh",
-          "-c",
-          T.unpack cmd
-        ]
-      proc' = (proc "max-runtime" args) {std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe}
-  res <- try @IOException $ readCreateProcessWithExitCode proc' (T.unpack content)
-  pure $ case res of
-    Left e -> Left ("sandbox exec failed: " <> T.pack (show e))
-    Right (ExitSuccess, _, _) -> Right ()
-    Right (ExitFailure c, _, err) ->
-      Left $
-        "write failed (exit "
-          <> T.pack (show c)
-          <> "): "
-          <> T.strip (T.pack err)
+      cmd = mkParent <> "cat > " <> shellQuote path
+  written <- runtimeBytes 60 4096 ["exec", "-i", "--workdir", "/work", T.unpack container, "sh", "-c", T.unpack cmd] (TE.encodeUtf8 content)
+  pure (void written)
 
 --------------------------------------------------------------------------------
 -- Copy in/out.
-
--- | @sandbox copy HOST_PATH CONTAINER:CONTAINER_PATH@.  Used by
--- @import_file_to_sandbox@ to materialise a host-side blob inside
--- the sandbox at /work/<path>.
-runCopyToContainer ::
-  -- | container name
-  Text ->
-  -- | host path
-  FilePath ->
-  -- | container path
-  Text ->
-  IO (Either Text ())
-runCopyToContainer container hostPath containerPath = do
-  res <-
-    try @IOException $
-      readProcessWithExitCode
-        "max-runtime"
-        ["copy-to", T.unpack container, hostPath, T.unpack containerPath]
-        ""
-  pure $ case res of
-    Left e -> Left ("sandbox copy failed: " <> T.pack (show e))
-    Right (ExitSuccess, _, _) -> Right ()
-    Right (ExitFailure c, _, err) ->
-      Left $
-        "sandbox copy exited "
-          <> T.pack (show c)
-          <> ": "
-          <> T.strip (T.pack err)
 
 -- | Read bytes directly from the container with a bound at both ends. No
 -- unbounded host staging file or readFile allocation precedes validation.
@@ -779,6 +721,50 @@ readBoundedArtifact limit handle = do
     if BS.length bytes > max 0 limit
       then Left "sandbox artifact exceeds byte limit"
       else Right bytes
+
+--------------------------------------------------------------------------------
+-- Runtime client calls.
+
+-- | One runtime client call with binary stdin and bounded binary stdout.
+-- A failure carries the client's exit status and the head of its stderr.
+runtimeBytes :: Int -> Int -> [String] -> BS.ByteString -> IO (Either Text BS.ByteString)
+runtimeBytes seconds limit arguments input = do
+  result <- try @IOException
+    $ timeout (seconds * 1_000_000)
+    $ withCreateProcess
+      (proc "max-runtime" arguments)
+        { std_in = CreatePipe,
+          std_out = CreatePipe,
+          std_err = CreatePipe
+        }
+    $ \stdinPipe stdoutPipe stderrPipe process -> case (stdinPipe, stdoutPipe, stderrPipe) of
+      (Just sink, Just output, Just errors) -> do
+        mapM_ (`hSetBinaryMode` True) [sink, output, errors]
+        let feed = (BS.hPut sink input `finally` hClose sink) `catch` \err -> unless (isResourceVanishedError err) (throwIO err)
+        (_, (out, err)) <- concurrently feed (concurrently (drainBounded limit output) (drainBounded 4096 errors))
+        code <- waitForProcess process
+        pure $ case code of
+          ExitSuccess -> Right out
+          ExitFailure status ->
+            Left ("sandbox runtime exited " <> T.pack (show status) <> ": " <> T.strip (TE.decodeUtf8With lenientDecode err))
+      _ -> pure (Left "sandbox runtime did not expose its pipes")
+  pure $ case result of
+    Left err -> Left ("sandbox runtime failed: " <> T.pack (show err))
+    Right Nothing -> Left "sandbox runtime timed out"
+    Right (Just value) -> value
+
+-- | Keep at most @limit@ bytes but read to EOF, so a chatty child never
+-- blocks on a full pipe while the host waits for it to exit.
+drainBounded :: Int -> Handle -> IO BS.ByteString
+drainBounded limit handle = go 0 []
+  where
+    go kept chunks = do
+      chunk <- BS.hGetSome handle 32768
+      if BS.null chunk
+        then pure (BS.concat (reverse chunks))
+        else do
+          let retained = BS.take (max 0 (limit - kept)) chunk
+          go (kept + BS.length retained) (if BS.null retained then chunks else retained : chunks)
 
 --------------------------------------------------------------------------------
 -- Helpers.

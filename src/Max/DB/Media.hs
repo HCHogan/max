@@ -10,6 +10,11 @@ module Max.DB.Media
     fetchMessageImagesInScope,
     fetchMessageVideoInScope,
     fetchMediaSegments,
+    ChatMediaRow (..),
+    fetchConversationImagesInScope,
+    fetchConversationVideosInScope,
+    viewableImageMime,
+    videoMime,
   )
 where
 
@@ -20,6 +25,7 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (In (..), Only (..))
+import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
@@ -107,3 +113,52 @@ fetchMediaSegments ids = do
       (Map.zipWithMatched (\_ imageSegs videoSegs -> MessageMedia imageSegs videoSegs))
       imageMap
       videoMap
+
+-- | One stored image or video of a conversation, for its sandbox view.
+data ChatMediaRow = ChatMediaRow
+  { cmrMessageId :: !Int64,
+    cmrSegment :: !Int,
+    cmrMime :: !Text,
+    cmrSha256 :: !Text
+  }
+  deriving stock (Show, Eq)
+
+instance FromRow ChatMediaRow where
+  fromRow = ChatMediaRow <$> field <*> field <*> field <*> field
+
+-- | Every stored image of this conversation. Stickers are reactions rather
+-- than material, so they stay out of the view.
+fetchConversationImagesInScope :: (WithConnection :> es, IOE :> es) => ConversationScope -> Eff es [ChatMediaRow]
+fetchConversationImagesInScope scope =
+  query
+    "SELECT mi.canonical_message_id, mi.seg_index, i.mime_type, i.sha256 \
+    \  FROM messages m \
+    \  JOIN message_images mi USING (canonical_message_id) \
+    \  JOIN images i ON i.sha256 = mi.sha256 \
+    \  WHERE m.group_id = ? \
+    \    AND NOT EXISTS (SELECT 1 FROM stickers s WHERE s.sha256 = mi.sha256)"
+    (Only (conversationStorageId scope))
+
+-- | Every stored video of this conversation.
+fetchConversationVideosInScope :: (WithConnection :> es, IOE :> es) => ConversationScope -> Eff es [ChatMediaRow]
+fetchConversationVideosInScope scope =
+  query
+    "SELECT mv.canonical_message_id, mv.seg_index, v.mime_type, v.sha256 \
+    \  FROM messages m \
+    \  JOIN message_videos mv USING (canonical_message_id) \
+    \  JOIN videos v ON v.sha256 = mv.sha256 \
+    \  WHERE m.group_id = ?"
+    (Only (conversationStorageId scope))
+
+-- | The recorded type of an image that belongs in sandbox views, by the same
+-- rule as 'fetchConversationImagesInScope': 'Nothing' for stickers.
+viewableImageMime :: (WithConnection :> es, IOE :> es) => Text -> Eff es (Maybe Text)
+viewableImageMime sha =
+  listToMaybe . map fromOnly
+    <$> query
+      "SELECT mime_type FROM images i \
+      \ WHERE sha256 = ? AND NOT EXISTS (SELECT 1 FROM stickers s WHERE s.sha256 = i.sha256)"
+      (Only sha)
+
+videoMime :: (WithConnection :> es, IOE :> es) => Text -> Eff es (Maybe Text)
+videoMime sha = listToMaybe . map fromOnly <$> query "SELECT mime_type FROM videos WHERE sha256 = ?" (Only sha)

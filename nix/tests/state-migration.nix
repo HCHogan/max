@@ -108,7 +108,10 @@ pkgs.testers.runNixOSTest {
     machine.fail("runuser -u max -- psql -U max -At -d max -c 'SELECT current_user'")
     paths = machine.succeed("runuser -u max-service -- psql -U max -At -d max -c 'SELECT local_path FROM images ORDER BY local_path'").splitlines()
     assert set(paths) == {"/var/lib/max/app/images/keep", "images/relative"}, paths
-    machine.succeed("grep -qx media /var/lib/max/app/images/keep; grep -qx account /var/lib/max/napcat/QQ/keep; grep -qx work /var/lib/max/runtime/volumes/max-sb-1-s1-data/work/keep")
+    # Max's start moves the legacy object store into the media layout.
+    machine.succeed("grep -qx media /var/lib/max/media/objects/keep; grep -qx account /var/lib/max/napcat/QQ/keep; grep -qx work /var/lib/max/runtime/volumes/max-sb-1-s1-data/work/keep")
+    machine.fail("test -e /var/lib/max/app/images")
+    assert machine.succeed("stat -c '%U %a' /var/lib/max/media /var/lib/max/media/views /var/lib/max/media/objects").splitlines() == ["root 711", "root 711", "max-service 700"]
     machine.fail("test -e /var/lib/max-bot")
     machine.fail("test -e /var/lib/max-runtime")
     machine.fail("test -e /var/lib/max/app/max.yaml")

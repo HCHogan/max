@@ -1,9 +1,11 @@
 -- | Persist sandbox metadata and work directories; cache handles and locks in STM.
 -- Boot adopts live containers or rebuilds them around retained volumes. Lifecycle
 -- changes stop admission and drain users; callers coordinate concurrent file/port use.
+-- A (re)created sandbox has its conversation's /chat view backfilled.
 module Max.Sandbox.Registry
   ( -- * Registry
     SandboxRegistry,
+    ChatViewBackfill,
     newDurableSandboxRegistry,
     reconcileSandboxes,
     gcExpiredSandboxes,
@@ -22,6 +24,7 @@ module Max.Sandbox.Registry
     execInSandbox,
     readSandboxFile,
     writeSandboxFile,
+    readSandboxBytes,
     destroySandbox,
     destroySandboxesForGroup,
 
@@ -32,6 +35,7 @@ where
 
 import Control.Concurrent.STM
 import Control.Monad (void, when)
+import Data.ByteString qualified as BS
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Foldable (for_)
 import Data.Int (Int64)
@@ -55,9 +59,12 @@ import Database.PostgreSQL.Simple
     withTransaction,
   )
 import Max.Concurrent.Lock
-  ( SharedLock,
+  ( LockMap,
+    SharedLock,
+    newLockMap,
     newSharedLock,
     withExclusiveLock,
+    withKeyLock,
     withLock,
     withSharedLock,
   )
@@ -66,15 +73,17 @@ import Max.Sandbox.Runtime
   ( ExecResult (..),
     RuntimeContainerStatus (..),
     RuntimePresence (..),
+    classifyRead,
     inspectContainerPolicy,
     inspectContainerStatus,
     inspectVolumePresence,
     listContainersByPrefix,
     listVolumesByPrefix,
     networkForGroup,
+    readSandboxArtifact,
     runExec,
     runPreparePackages,
-    runRead,
+    runReadPrefix,
     runRm,
     runRun,
     runVolumeRm,
@@ -82,7 +91,7 @@ import Max.Sandbox.Runtime
     sandboxNetwork,
     wrapPackages,
   )
-import Max.Sandbox.Types (SandboxId (..))
+import Max.Sandbox.Types (SandboxId (..), SandboxRead)
 import OneBot.Types (GroupId (..))
 
 -- | All container/volume names start here; we own the namespace,
@@ -106,14 +115,22 @@ data SandboxEntry = SandboxEntry
     sePrepareLock :: !(TMVar ())
   }
 
+-- | Link a conversation's existing media into the /chat view the broker has
+-- just created or re-bound. Ingest links later media as they arrive. Supplied
+-- by host assembly, which alone resolves blob host paths; it never throws.
+type ChatViewBackfill = GroupId -> IO ()
+
 data SandboxRegistry = SandboxRegistry
   { srEntries :: !(TVar (Map SandboxId SandboxEntry)),
-    srDbPool :: !DbPool
+    srDbPool :: !DbPool,
+    srBackfill :: !ChatViewBackfill,
+    -- | Serializes first use per group, so concurrent calls share one sandbox.
+    srStarting :: !(LockMap GroupId)
   }
 
-newDurableSandboxRegistry :: DbPool -> IO SandboxRegistry
-newDurableSandboxRegistry pool = do
-  registry <- SandboxRegistry <$> newTVarIO Map.empty <*> pure pool
+newDurableSandboxRegistry :: DbPool -> ChatViewBackfill -> IO SandboxRegistry
+newDurableSandboxRegistry pool backfill = do
+  registry <- SandboxRegistry <$> newTVarIO Map.empty <*> pure pool <*> pure backfill <*> newLockMap
   reconcileSandboxes registry
   pure registry
 
@@ -210,7 +227,7 @@ rebuildPersisted reg pool row = do
       runRm row.psContainer
       updateSandboxRuntime pool secured
       runRun secured.psContainer secured.psImage secured.psVolume secured.psNetwork >>= \case
-        Right _ -> adoptPersisted reg pool secured
+        Right _ -> adoptPersisted reg pool secured >> reg.srBackfill (GroupId secured.psGroup)
         Left detail -> markSandboxUnknown pool row.psId detail
 
 --------------------------------------------------------------------------------
@@ -276,19 +293,22 @@ createWithNetwork reg gid opts network = do
     Right _ -> do
       markSandboxActive reg.srDbPool dbId
       atomically $ modifyTVar' reg.srEntries (Map.insert sid entry)
+      reg.srBackfill gid
       pure (Right entry)
 
--- | The group's default sandbox for user-facing @! \<cmd\>@ shell
--- commands: reuse the group's existing sandbox if it has one (the
--- lowest-id entry, for stability), otherwise spin one up with
--- 'defaultCreateOpts'.  The model's own @sandbox_create@ flow is
--- unaffected — it always makes a fresh, explicitly-managed sandbox.
+-- | The group's sandbox, shared by model tools and @! \<cmd\>@: reuse the
+-- lowest-id entry (for stability), otherwise start one with
+-- 'defaultCreateOpts'.
+-- Parallel first calls wait for one start instead of each creating a sandbox.
 ensureSandbox :: SandboxRegistry -> GroupId -> IO (Either Text SandboxEntry)
-ensureSandbox reg gid = do
-  existing <- listSandboxesForGroup reg gid
-  case listToMaybe (sortOn (.seId) existing) of
+ensureSandbox reg gid =
+  current >>= \case
     Just e -> pure (Right e)
-    Nothing -> createSandbox reg gid defaultCreateOpts
+    Nothing ->
+      withKeyLock reg.srStarting gid $
+        current >>= maybe (createSandbox reg gid defaultCreateOpts) (pure . Right)
+  where
+    current = listToMaybe . sortOn (.seId) <$> listSandboxesForGroup reg gid
 
 --------------------------------------------------------------------------------
 -- Lookup.
@@ -330,49 +350,54 @@ execInSandbox reg gid sid packages cmd timeoutSecs = do
     else
       if not (all validNixAttribute packages)
         then pure (Left "invalid nixpkgs attribute (allowed: letters, digits, '.', '_', '+', '-', non-empty path segments, at most 128 characters)")
-        else run
-  where
-    run = do
-      mEntry <- listSandbox reg gid sid
-      case mEntry of
-        Nothing -> pure (Left "sandbox not found")
-        Just e -> useEntry e
-    useEntry e = do
-      ready <- withLock e.sePrepareLock $ do
-        selected <- networkForGroup (let GroupId raw = gid in fromIntegral raw)
-        case selected of
-          Left detail -> pure (Left detail)
-          Right network -> do
-            current <- inspectContainerPolicy e.seContainer network
-            if current
-              then pure (Right network)
-              else withExclusiveLock e.seAccess $ do
-                present <- Map.member sid <$> readTVarIO reg.srEntries
-                if not present
-                  then pure (Left "sandbox not found")
-                  else do
-                    launched <- runRun e.seContainer e.seImage e.seVolume network
-                    case launched of
-                      Left detail -> pure (Left detail)
-                      Right _ -> do
-                        atomically $ modifyTVar' reg.srEntries (Map.adjust (\entry -> entry {seNetwork = network}) sid)
-                        withConn reg.srDbPool $ \conn -> void $ execute conn "UPDATE sandboxes SET network_mode = ? WHERE sandbox_handle = ?" (network, sid.unSandboxId)
-                        pure (Right network)
-      case ready of
+        else withPreparedEntry reg gid sid $ \e network -> do
+          prepared <- runPreparePackages e.seContainer packages timeoutSecs
+          case prepared of
+            Left detail -> pure (Left detail)
+            Right storePaths -> do
+              executed <- runExec e.seContainer network (wrapPackages storePaths cmd) timeoutSecs
+              -- Invocation failure leaves the write's outcome unknown.
+              -- A real nonzero shell exit remains a committed result.
+              pure $ if executed.erExitCode == -1 then Left executed.erStderr else Right executed
+
+-- | Resolve and ready one sandbox, then run under shared access.
+withPreparedEntry :: SandboxRegistry -> GroupId -> SandboxId -> (SandboxEntry -> Text -> IO (Either Text a)) -> IO (Either Text a)
+withPreparedEntry reg gid sid action = do
+  mEntry <- listSandbox reg gid sid
+  case mEntry of
+    Nothing -> pure (Left "sandbox not found")
+    Just e ->
+      prepareEntry reg gid e >>= \case
         Left detail -> pure (Left detail)
-        Right network -> withSharedLock e.seAccess $ do
+        Right ready -> withSharedLock e.seAccess $ do
           present <- Map.member sid <$> readTVarIO reg.srEntries
+          if present then action e ready else pure (Left "sandbox not found")
+
+-- | Readiness shared by every command path: repair an instance created under
+-- an outdated policy (backfilling the view the broker re-binds) and return
+-- the network commands run on.
+prepareEntry :: SandboxRegistry -> GroupId -> SandboxEntry -> IO (Either Text Text)
+prepareEntry reg gid e = withLock e.sePrepareLock $ do
+  selected <- networkForGroup (let GroupId raw = gid in fromIntegral raw)
+  case selected of
+    Left detail -> pure (Left detail)
+    Right network -> do
+      current <- inspectContainerPolicy e.seContainer network
+      if current
+        then pure (Right network)
+        else withExclusiveLock e.seAccess $ do
+          present <- Map.member e.seId <$> readTVarIO reg.srEntries
           if not present
             then pure (Left "sandbox not found")
             else do
-              prepared <- runPreparePackages e.seContainer packages timeoutSecs
-              case prepared of
+              launched <- runRun e.seContainer e.seImage e.seVolume network
+              case launched of
                 Left detail -> pure (Left detail)
-                Right storePaths -> do
-                  executed <- runExec e.seContainer network (wrapPackages storePaths cmd) timeoutSecs
-                  -- Invocation failure leaves the write's outcome unknown.
-                  -- A real nonzero shell exit remains a committed result.
-                  pure $ if executed.erExitCode == -1 then Left executed.erStderr else Right executed
+                Right _ -> do
+                  atomically $ modifyTVar' reg.srEntries (Map.adjust (\entry -> entry {seNetwork = network}) e.seId)
+                  withConn reg.srDbPool $ \conn -> void $ execute conn "UPDATE sandboxes SET network_mode = ? WHERE sandbox_handle = ?" (network, e.seId.unSandboxId)
+                  reg.srBackfill gid
+                  pure (Right network)
 
 maxPackageAttributes :: Int
 maxPackageAttributes = 32
@@ -390,21 +415,17 @@ validNixAttribute attr =
         || isDigit c
         || c `elem` ("._+-" :: String)
 
+-- | At most @maxBytes@ of one file, classified as text or binary.
 readSandboxFile ::
   SandboxRegistry ->
   GroupId ->
   SandboxId ->
   Text ->
   Int ->
-  IO (Either Text Text)
-readSandboxFile reg gid sid path maxBytes = do
-  mEntry <- listSandbox reg gid sid
-  case mEntry of
-    Nothing -> pure (Left "sandbox not found")
-    Just e ->
-      withSharedLock e.seAccess $ do
-        present <- Map.member sid <$> readTVarIO reg.srEntries
-        if present then runRead e.seContainer path maxBytes else pure (Left "sandbox not found")
+  IO (Either Text SandboxRead)
+readSandboxFile reg gid sid path maxBytes =
+  withPreparedEntry reg gid sid $ \e _ ->
+    fmap (classifyRead maxBytes) <$> runReadPrefix e.seContainer path (maxBytes + 1)
 
 writeSandboxFile ::
   SandboxRegistry ->
@@ -413,14 +434,14 @@ writeSandboxFile ::
   Text ->
   Text ->
   IO (Either Text ())
-writeSandboxFile reg gid sid path content = do
-  mEntry <- listSandbox reg gid sid
-  case mEntry of
-    Nothing -> pure (Left "sandbox not found")
-    Just e ->
-      withSharedLock e.seAccess $ do
-        present <- Map.member sid <$> readTVarIO reg.srEntries
-        if present then runWrite e.seContainer path content else pure (Left "sandbox not found")
+writeSandboxFile reg gid sid path content =
+  withPreparedEntry reg gid sid $ \e _ -> runWrite e.seContainer path content
+
+-- | A complete artifact for publication, read once so the published bytes
+-- are exactly what was read.
+readSandboxBytes :: SandboxRegistry -> GroupId -> SandboxId -> Text -> IO (Either Text BS.ByteString)
+readSandboxBytes reg gid sid path =
+  withPreparedEntry reg gid sid $ \e _ -> readSandboxArtifact e.seContainer path
 
 --------------------------------------------------------------------------------
 -- Destroy.

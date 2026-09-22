@@ -45,8 +45,8 @@ import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Process (getProcessID)
 import System.Posix.Signals (sigKILL, sigTERM, signalProcessGroup)
-import System.Posix.Types (Fd (..), UserID)
-import System.Posix.User (getEffectiveUserID, getUserEntryForName, userID)
+import System.Posix.Types (Fd (..), GroupID, UserID)
+import System.Posix.User (getEffectiveUserID, getUserEntryForName, userGroupID, userID)
 import System.Process
 import System.Timeout (timeout)
 
@@ -64,7 +64,10 @@ data Configuration = Configuration
     operationsGroups :: [Int64],
     operationsDns :: [Text],
     generations :: Map.Map Text FilePath,
-    commands :: Map.Map Text FilePath
+    commands :: Map.Map Text FilePath,
+    -- | Root of the per-conversation /chat views. Max populates each view with
+    -- hardlinks into its object store; the broker owns the directories.
+    chatViews :: FilePath
   }
   deriving stock (Generic)
   deriving anyclass (FromJSON)
@@ -77,6 +80,7 @@ data Metadata = Metadata
 data Broker = Broker
   { configuration :: Configuration,
     uid :: UserID,
+    gid :: GroupID,
     locks :: MVar (Map.Map Text (Int, SharedLock)),
     packages :: LockMap Text,
     addresses :: MVar ()
@@ -251,6 +255,25 @@ volumePath broker name = broker.configuration.stateDirectory </> "volumes" </> T
 rootPath :: Broker -> InstanceName -> FilePath
 rootPath broker name = broker.configuration.stateDirectory </> "roots" </> T.unpack name.fullName
 
+-- | Point the volume's @chat@ at its conversation's view, creating the view
+-- owned by Max. Views sit under a root-owned parent, so Max can change a
+-- view's entries but never replace the directory this unit binds; entries
+-- are hardlinks to Max's own objects and reach the guest read-only.
+prepareChatView :: Broker -> InstanceName -> FilePath -> IO ()
+prepareChatView broker name volume = do
+  group <- maybe (failure 64 "sandbox has no owning conversation") pure (instanceGroup name)
+  let view = broker.configuration.chatViews </> show group
+      link = volume </> "chat"
+  existing <- (Just <$> Posix.getSymbolicLinkStatus view) `catch` \err -> if isDoesNotExistError err then pure Nothing else throwIO err
+  case existing of
+    Nothing -> do
+      createDirectory view
+      Posix.setOwnerAndGroup view broker.uid broker.gid
+      Posix.setFileMode view 0o755
+    Just status -> unless (Posix.isDirectory status) (failure 125 "chat view is not a directory")
+  ignoreMissing (removePathForcibly link)
+  Posix.createSymbolicLink view link
+
 legacyCheck :: Broker -> InstanceName -> IO ()
 legacyCheck broker name = forM_ broker.configuration.legacyVolumeDirectory $ \directory -> do
   exists <- doesPathExist (directory </> T.unpack name.fullName <> "-data")
@@ -336,7 +359,9 @@ startInstance broker name = withInstance broker name $ do
         createDirectoryIfMissing True work
         Posix.setFileMode work 0o700
         Posix.setOwnerAndGroup work 1000 1000
-        forM_ ["", "etc", "usr", "usr/bin", "var", "run", "work", "nix", "nix/store"] $ \directory -> do
+        -- The unit binds this link, so its target must exist before every start.
+        prepareChatView broker name volume
+        forM_ ["", "etc", "usr", "usr/bin", "var", "run", "work", "chat", "nix", "nix/store"] $ \directory -> do
           createDirectoryIfMissing True (root </> directory)
           Posix.setFileMode (root </> directory) 0o755
         forM_ ["etc/os-release", "etc/machine-id"] $ \file -> do
@@ -619,15 +644,20 @@ runRuntimeBroker path = do
   require (configuration.subnet == "10.231.0.0/16" && configuration.gateway == "10.231.0.1") "unsupported sandbox address pool"
   forM_ ["systemctl", "systemd-run", "ip", "bridge", "nix", "mount"] $ \command ->
     require (maybe False (T.isPrefixOf "/nix/store/" . T.pack) (Map.lookup command configuration.commands)) "broker executables must be store paths"
-  peer <- userID <$> getUserEntryForName configuration.user
+  account <- getUserEntryForName configuration.user
   locks <- newMVar Map.empty
   packages <- newLockMap
   addresses <- newMVar ()
-  let broker = Broker configuration peer locks packages addresses
+  let broker = Broker configuration (userID account) (userGroupID account) locks packages addresses
   forM_ ["instances", "roots", "volumes"] $ \directory -> do
     let target = configuration.stateDirectory </> directory
     createDirectoryIfMissing True target
     Posix.setFileMode target 0o700
+  -- Max traverses to its views but may not add, remove or replace one.
+  createDirectoryIfMissing True configuration.chatViews
+  views <- Posix.getSymbolicLinkStatus configuration.chatViews
+  require (Posix.isDirectory views && Posix.fileOwner views == 0) "chat views root must be a root-owned directory"
+  Posix.setFileMode configuration.chatViews 0o711
   pid <- getProcessID
   listenPid <- lookupEnv "LISTEN_PID"
   listenFds <- lookupEnv "LISTEN_FDS"

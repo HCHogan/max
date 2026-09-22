@@ -70,6 +70,7 @@ pkgs.testers.runNixOSTest {
     networking.firewall.enable = false;
   };
   testScript = ''
+    import json
     import shlex
     start_all()
     machine.wait_for_unit("max.service")
@@ -94,7 +95,7 @@ pkgs.testers.runNixOSTest {
     except Exception:
         print(machine.succeed("journalctl --machine=max-sandbox--100-s1 --no-pager -n 80"))
         raise
-    assert machine.succeed(cli + f"policy {name}").strip() == "7 max-sandbox 1"
+    assert machine.succeed(cli + f"policy {name}").strip() == "8 max-sandbox 1"
 
     with subtest("store, host paths and namespaces are protected"):
         machine.fail(execute + "touch /nix/store/max-test-write")
@@ -111,6 +112,22 @@ pkgs.testers.runNixOSTest {
         assert status in (77, 125)
         machine.succeed("chmod 600 /run/max-runtime/control.sock")
         machine.fail(cli + "create ../../etc nixos-sandbox-v1 ../../etc-data max-sandbox")
+
+    with subtest("the conversation view is read-only in the guest and only root controls it"):
+        view = "/var/lib/max/media/views/-100"
+        assert machine.succeed(f"stat -c %U {view}").strip() == "max-service"
+        machine.succeed(f"test -L /var/lib/max/runtime/volumes/{volume}/chat")
+        # Max links an object into the view; the running guest sees it at once.
+        entry = "1-\u62a5\u544a.txt"
+        fill = "printf 'chat bytes' > /var/lib/max/media/objects/fixture && chmod 0444 /var/lib/max/media/objects/fixture && ln /var/lib/max/media/objects/fixture " + shlex.quote(view + "/" + entry)
+        machine.succeed("runuser -u max-service -- sh -c " + shlex.quote(fill))
+        assert machine.succeed(execute + "cat " + shlex.quote("/chat/" + entry)).strip() == "chat bytes"
+        machine.fail(execute + "touch /chat/forged")
+        machine.fail(execute + "sh -c " + shlex.quote("echo forged > /chat/" + entry))
+        machine.succeed("grep -qx 'chat bytes' /var/lib/max/media/objects/fixture")
+        # Max may change a view's entries but never the view the unit binds.
+        machine.fail(f"runuser -u max-service -- mv {view} /var/lib/max/media/views/moved")
+        machine.fail("runuser -u max-service -- ln -s / /var/lib/max/media/views/-101")
 
     with subtest("commands overlap and cancelling one leaves its sibling running"):
         survivor = "touch /work/parallel-ready; while ! test -e /work/parallel-release; do sleep 0.1; done; echo survivor"
@@ -150,7 +167,7 @@ pkgs.testers.runNixOSTest {
         invocation = machine.succeed(f"systemctl show {unit} -p InvocationID --value").strip()
         machine.succeed("/run/current-system/specialisation/browser-template/bin/switch-to-configuration test")
         assert machine.succeed(f"systemctl show {unit} -p InvocationID --value").strip() == invocation
-        assert machine.succeed(cli + f"policy {name}").strip() == "7 max-sandbox 1"
+        assert machine.succeed(cli + f"policy {name}").strip() == "8 max-sandbox 1"
 
     with subtest("Max restart preserves the sibling sandbox; manual replacement fails adoption"):
         invocation = machine.succeed(f"systemctl show {unit} -p InvocationID --value").strip()

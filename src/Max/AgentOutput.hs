@@ -93,7 +93,7 @@ renderToolDebug = \case
               Left err -> "✗ " <> err
 
 silentTools :: [Text]
-silentTools = ["send_image_from_sandbox", "send_file_from_sandbox"]
+silentTools = ["send_image", "send_file"]
 
 debugPreviewChars :: Int
 debugPreviewChars = 1000

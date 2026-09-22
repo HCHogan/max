@@ -76,13 +76,10 @@ taskGrants profile parent = Map.filterWithKey (\name _ -> name `elem` allowed) p
           Browser ->
             ["browser", "view_zhihu"]
           Sandbox ->
-            [ "sandbox_list",
-              "sandbox_create",
-              "sandbox_destroy",
+            [ "sandbox_destroy",
               "sandbox_exec",
-              "sandbox_read_file",
-              "sandbox_write_file",
-              "import_file_to_sandbox",
+              "read_file",
+              "write_file",
               "nix_search"
             ]
 

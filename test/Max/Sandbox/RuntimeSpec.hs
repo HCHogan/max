@@ -1,7 +1,12 @@
 module Max.Sandbox.RuntimeSpec (spec) where
 
 import Control.Exception (bracket)
-import Max.Sandbox.Runtime (inspectContainerPolicy, stripAnsi, wrapPackages)
+import Data.ByteString qualified as BS
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Max.Runtime.Protocol (sandboxPolicyVersion)
+import Max.Sandbox.Runtime (classifyRead, inspectContainerPolicy, stripAnsi, wrapPackages)
+import Max.Sandbox.Types (SandboxRead (..))
 import System.Directory (Permissions (..), getPermissions, setPermissions)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.FilePath ((</>))
@@ -12,13 +17,13 @@ spec :: Spec
 spec = do
   describe "container network adoption" $ do
     it "adopts only the current policy on exactly the operator network" $
-      withRuntimeInspection "printf '7 max-sandbox 1\\n'" $
+      withRuntimeInspection (current "max-sandbox 1") $
         inspectContainerPolicy "fixture" "max-sandbox" `shouldReturn` True
     it "rejects an otherwise current container connected to a second network" $
-      withRuntimeInspection "printf '7 max-sandbox 2\\n'" $
+      withRuntimeInspection (current "max-sandbox 2") $
         inspectContainerPolicy "fixture" "max-sandbox" `shouldReturn` False
     it "rejects a replaced network even when its policy label is current" $
-      withRuntimeInspection "printf '7 bridge 1\\n'" $
+      withRuntimeInspection (current "bridge 1") $
         inspectContainerPolicy "fixture" "max-sandbox" `shouldReturn` False
     it "rebuilds an old disconnected shell" $
       withRuntimeInspection "printf '4 none 0\\n'" $
@@ -29,11 +34,22 @@ spec = do
 
   describe "operations network adoption" $ do
     it "requires the requested operations network" $
-      withRuntimeInspection "printf '7 maxops 1\\n'" $
+      withRuntimeInspection (current "maxops 1") $
         inspectContainerPolicy "fixture" "maxops" `shouldReturn` True
     it "does not adopt an operations container as a public sandbox" $
-      withRuntimeInspection "printf '7 maxops 1\\n'" $
+      withRuntimeInspection (current "maxops 1") $
         inspectContainerPolicy "fixture" "max-sandbox" `shouldReturn` False
+
+  describe "file reads" $ do
+    it "returns text, marking a read that reached its limit" $ do
+      classifyRead 5 "hello" `shouldBe` SandboxRead (Just "hello") 5 False
+      classifyRead 4 "hello" `shouldBe` SandboxRead (Just "hell") 4 True
+    it "drops a character cut by the limit instead of calling the file binary" $ do
+      let bytes = TE.encodeUtf8 "报告"
+      classifyRead 4 bytes `shouldBe` SandboxRead (Just "报") 4 True
+    it "reports binary content by size only" $ do
+      classifyRead 16 (BS.pack [0x89, 0x50, 0x4e, 0x47, 0, 1]) `shouldBe` SandboxRead Nothing 6 False
+      classifyRead 16 (BS.pack [0xff, 0xfe, 0x41]) `shouldBe` SandboxRead Nothing 3 False
 
   describe "stripAnsi" $ do
     it "drops SGR colour codes" $
@@ -62,6 +78,10 @@ spec = do
     it "combines multiple outputs and preserves shell quoting" $
       wrapPackages ["/nix/store/abc-qpdf", "/nix/store/def-python-env"] "python3 -c 'import openpyxl'"
         `shouldBe` "export PATH='/nix/store/abc-qpdf/bin:/nix/store/def-python-env/bin':\"$PATH\"; exec sh -c 'python3 -c '\\''import openpyxl'\\'''"
+
+-- | A policy line claiming the current contract for the given network.
+current :: String -> String
+current rest = "printf '" <> T.unpack sandboxPolicyVersion <> " " <> rest <> "\\n'"
 
 withRuntimeInspection :: String -> IO a -> IO a
 withRuntimeInspection output action = withSystemTempDirectory "max-runtime-policy" $ \directory -> do

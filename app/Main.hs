@@ -50,6 +50,8 @@ import Max.Embedding.Maintenance (newEmbeddingLock)
 import Max.Env (BotEnv (..))
 import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
+import Max.Effects.ChatView (ChatView)
+import Max.File.ChatView (backfillChatView, runChatView)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
 import Max.Handler (dispatchProactive, ingressWorker)
@@ -117,12 +119,19 @@ main = do
     -- named volumes are durable E0 state, so boot reconciles/adopts them and
     -- process exit deliberately leaves them intact.
     reapStaleBrowsers
-    sandboxes <- newDurableSandboxRegistry pool
     browserKey <- loadBrowserVault cfg.browserStateKeyFile
     browsers <- configureBrowserRegistry browserKey cfg.browserIdleSeconds cfg.browserGraceSeconds <$> newBrowserRegistry httpRuntime
     ( do
         logBuf <- newLogBuffer logBufferLines
         withCompactLogger cfg.logColor (Just (pushLog logBuf)) $ \logger -> do
+          -- A (re)created sandbox's /chat view receives the conversation's
+          -- existing media here, in host assembly, which alone resolves blob
+          -- host paths. Ingest links later media as it arrives.
+          let backfill gid =
+                for_ cfg.chatViewsDir $ \views ->
+                  runEff . runLog "chat-view" logger cfg.logLevel . runWithConnectionPool pool . runBlobHost cfg.imagesDir $
+                    backfillChatView views gid
+          sandboxes <- newDurableSandboxRegistry pool backfill
           eventQ <- newTQueueIO
           fetchSig <- newFetchSignal
           sessions <- newSessionRegistry
@@ -187,6 +196,7 @@ main = do
             . runLog "max" logger cfg.logLevel
             . runHttp httpRuntime
             . runBlobHost cfg.imagesDir
+            . runChatView cfg.chatViewsDir
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
             . runOutbound tasks jobs deliveries
@@ -250,6 +260,7 @@ runApp ::
     Embedding :> es,
     BlobHost :> es,
     Blob :> es,
+    ChatView :> es,
     WithConnection :> es,
     PlatformQuery :> es,
     PlatformAccount :> es,
@@ -284,6 +295,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
           "path" .= s.path,
           "db_max_conns" .= cfg.db.maxConns,
           "images_dir" .= T.pack cfg.imagesDir,
+          "chat_views_dir" .= fmap T.pack cfg.chatViewsDir,
           "image_workers" .= cfg.imageWorkers,
           -- Which file the settings came from, or that none was
           -- found.  Every value above can also come from a flag or an

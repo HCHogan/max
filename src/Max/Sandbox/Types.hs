@@ -1,15 +1,10 @@
 -- | Sandbox read models contain no registry, locks or runtime closures.
-module Max.Sandbox.Types (SandboxId (..), SandboxInfo (..), ExecResult (..), SandboxManifest (..), maxOutputBytes) where
+module Max.Sandbox.Types (SandboxId (..), ExecResult (..), SandboxManifest (..), SandboxRead (..), maxOutputBytes) where
 
 import Data.Text (Text)
-import Data.Time (UTCTime)
 
 newtype SandboxId = SandboxId {unSandboxId :: Text}
   deriving stock (Show, Eq, Ord)
-
-data SandboxInfo = SandboxInfo
-  {seId :: !SandboxId, seImage :: !Text, seContainer :: !Text, seCreatedAt :: !UTCTime}
-  deriving stock (Show, Eq)
 
 maxOutputBytes :: Int
 maxOutputBytes = 16 * 1024
@@ -37,6 +32,11 @@ data ExecResult = ExecResult
     erObservedManifest :: !(Maybe SandboxManifest)
   }
   deriving stock (Show)
+
+-- | A bounded prefix of one sandbox file: UTF-8 text, or only its length
+-- when the bytes are binary.
+data SandboxRead = SandboxRead {srContent :: !(Maybe Text), srBytes :: !Int, srTruncated :: !Bool}
+  deriving stock (Show, Eq)
 
 data SandboxManifest = SandboxManifest
   { smSha256 :: !Text,

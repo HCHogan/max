@@ -1,14 +1,16 @@
 module Max.SandboxRegistrySpec (spec) where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (wait, withAsync)
+import Control.Concurrent.Async (concurrently, wait, withAsync)
 import Control.Exception (bracket)
 import Control.Monad (unless, void)
 import Data.Either (fromLeft)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Data.Text qualified as T
-import Database.PostgreSQL.Simple (execute_)
+import Database.PostgreSQL.Simple (Only (..), execute_, query_)
 import Helpers (insertRawMessage, testTime, truncateAll)
 import Max.DB.Connection (DbPool, withConn)
+import Max.Runtime.Protocol (sandboxPolicyVersion)
 import Max.Sandbox.Registry
 import Max.Sandbox.Runtime (ExecResult (..))
 import OneBot.Types (GroupId (..))
@@ -50,6 +52,19 @@ spec pool = before_ (truncateAll pool) $ describe "concurrent sandbox registry" 
           later <- execInSandbox registry (GroupId 42) (SandboxId "s1") [] "false" 1
           fromLeft "unexpected execution" later `shouldBe` "sandbox not found"
 
+  it "starts one sandbox when a group's first calls arrive together, then backfills its view" $ do
+    backfilled <- newIORef []
+    fixtureWith pool (\group -> atomicModifyIORef' backfilled (\groups -> (group : groups, ()))) $ \registry _ -> do
+      void $ insertRawMessage pool 2 43 100 999 testTime Nothing "first use"
+      (first, second) <- concurrently (ensureSandbox registry (GroupId 43)) (ensureSandbox registry (GroupId 43))
+      fmap (.seId) first `shouldBe` fmap (.seId) second
+      fmap (.seId) first `shouldSatisfy` either (const False) (const True)
+      started <- withConn pool $ \connection ->
+        query_ connection "SELECT count(*) FROM sandboxes JOIN conversations USING (conversation_id) WHERE legacy_group_id = 43"
+      started `shouldBe` [Only (1 :: Int)]
+      -- The broker created the view with the sandbox; existing media follow.
+      readIORef backfilled `shouldReturn` [GroupId 43]
+
 waitForFile :: FilePath -> IO ()
 waitForFile path = do
   exists <- doesFileExist path
@@ -58,7 +73,10 @@ waitForFile path = do
 -- Exercise real registry/DB admission with a process fixture at the broker boundary.
 -- The Linux VM check separately exercises nspawn and systemd cancellation.
 fixture :: DbPool -> (SandboxRegistry -> FilePath -> IO a) -> IO a
-fixture pool action = withSystemTempDirectory "max-shared-sandbox" $ \directory -> do
+fixture pool = fixtureWith pool (const (pure ()))
+
+fixtureWith :: DbPool -> ChatViewBackfill -> (SandboxRegistry -> FilePath -> IO a) -> IO a
+fixtureWith pool backfill action = withSystemTempDirectory "max-shared-sandbox" $ \directory -> do
   void $ insertRawMessage pool 1 42 100 999 testTime Nothing "sandbox fixture"
   withConn pool $ \connection ->
     void $
@@ -71,9 +89,11 @@ fixture pool action = withSystemTempDirectory "max-shared-sandbox" $ \directory 
       [ "#!/bin/sh",
         "case \"$1\" in",
         " list) echo max-sb-42-s1;;",
+        -- Starting is slow enough that unserialized first uses would both start.
+        " create) sleep 0.3; echo \"$2\";;",
         " volumes) echo max-sb-42-s1-data;;",
         " status) echo running;;",
-        " policy) echo '7 max-sandbox 1';;",
+        " policy) echo '" <> T.unpack sandboxPolicyVersion <> " max-sandbox 1';;",
         " network) echo max-sandbox;;",
         " volume-status) test ! -f '" <> (directory </> "removed") <> "' || exit 3;;",
         " volume-remove) touch '" <> (directory </> "removed") <> "';;",
@@ -89,5 +109,5 @@ fixture pool action = withSystemTempDirectory "max-shared-sandbox" $ \directory 
   setPermissions command (permissions {executable = True})
   bracket (lookupEnv "PATH") (maybe (unsetEnv "PATH") (setEnv "PATH")) $ \previous -> do
     setEnv "PATH" (directory <> maybe "" (':' :) previous)
-    registry <- newDurableSandboxRegistry pool
+    registry <- newDurableSandboxRegistry pool backfill
     action registry directory

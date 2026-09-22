@@ -370,7 +370,7 @@ Jobs belong to the process; a restart does not resume them.
 | Embedding ownership | one process-local lock serializes the worker and explicit reindex; conditional writes reject changed source content and memory versions |
 | Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` stores completed diagnostics with locally allocated result ordinals. Diagnostic write failure is logged without changing a completed outcome. Boot ends interrupted turns as crashed; it never reopens their model loop; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
 | Background Jobs and child work | Bounded STM state holds goals, ownership, budgets, results, feedback and joins. Workers use the ordinary agent runtime and stop on restart. The public ID sequence is retained; old task tables are historical only. Child grants remain bounded by their parent |
-| Sandbox workspaces | `sandboxes` persists lifecycle metadata and the root-owned runtime work directory holds current state. Boot adopts only a running container carrying the current broker generation and matching systemd invocation; otherwise it rebuilds a non-root, capability-free, resource-capped, read-only shell around the surviving volume. NixOS owns network provisioning and host/private/peer filtering; Haskell owns instance reconciliation and the privileged broker API. Only a positively absent volume marks the workspace destroyed, and 14-day sliding TTL GC replaces shutdown/boot reaping |
+| Sandbox workspaces | `sandboxes` persists lifecycle metadata and the root-owned runtime work directory holds current state. Boot adopts only a running container carrying the current broker generation and matching systemd invocation; otherwise it rebuilds a non-root, capability-free, resource-capped, read-only shell around the surviving volume. NixOS owns network provisioning and host/private/peer filtering; Haskell owns instance reconciliation and the privileged broker API. Only a positively absent volume marks the workspace destroyed, and 14-day sliding TTL GC replaces shutdown/boot reaping. The volume's root-owned `chat` link points at the conversation's `/chat` view, which is backfilled whenever the broker (re)creates the sandbox |
 
 | Lost on restart | Why |
 |---|---|
@@ -385,7 +385,10 @@ Effect stack at the top of `runApp`:
 
 ### Sandbox concurrency
 
-Independent `sandbox_exec` calls can run in parallel, including from different
+Model tools and `!` commands share one sandbox per group, started on first use
+(the lowest surviving id when older groups have several); concurrent first
+calls wait for one start. Independent
+`sandbox_exec` calls can run in parallel, including from different
 tasks in one conversation. There is no task-wide sandbox reservation; legacy
 `task_resource_owners` rows are retained as unused schema history and do not
 grant or deny access. Tool admission still checks the current task and group,
@@ -397,6 +400,47 @@ removing an instance. Package roots are serialized only for the same instance
 and package expression. Guest commands use distinct systemd units; observation
 markers and output spills use unique IDs. Cancellation releases only that
 command's access, and filesystem observations describe the shared workspace.
+
+### Media store and sandbox /chat views
+
+`services.max.mediaDirectory` (default `/var/lib/max/media`) holds the content
+store and the per-conversation views that sandboxes mount:
+
+```
+media/                    root 0711
+  objects/<aa>/<sha256>   max-service 0700 tree, objects 0444 (immutable)
+  views/                  root 0711
+    <group>/              max-service 0755, created by the broker
+      123.0.jpg           hardlink to an object
+      456-报告.pdf        hardlink to an object
+```
+
+A view names a conversation's media by what the prompt already shows:
+`[image#123.0]` is `/chat/123.0.jpg`, and a `[file:a.pdf]` on line `#456` is
+`/chat/456-a.pdf` (`456.0-`, `456.1-` when a message carries several). It holds
+every stored file, image and video of the conversation; stickers stay out.
+Entries are hardlinks, so a view costs no bytes and needs no window or budget.
+
+Views are written at ingest, not synchronized. The image and file workers and
+the WeChat adapter link each object through the `ChatView` effect as they
+record it, named from the recorded row. `Max.File.ChatView`, the only adapter
+that maps content references to host paths here, links only into a view that
+exists. When the broker starts a sandbox it creates the conversation's view if
+needed and points the volume's root-owned `chat` link at it; the registry then
+backfills the conversation's existing media. Links are idempotent and names
+never change for a message's media, so ingest and backfill cannot conflict.
+
+The layout is also the isolation boundary. Views sit under a root-owned
+parent, so Max can add entries but cannot replace the directory a unit binds;
+a symbolic link inside a view resolves in the guest, and protected hardlinks
+limit Max to its own objects. The guest sees `/chat` read-only, and objects are
+0444 in a 0700 tree. Max's unit receives the media directory as a single
+writable mount because hardlinks cannot cross mounts. An `ExecStartPre` run by
+root creates the layout and moves a legacy `app/images` store into `objects/`.
+
+Outbound files go through `send_file` and `send_image`, which read the sandbox
+path once and publish that snapshot as blob-backed media. Writing into a
+directory never publishes anything.
 
 ### Skill visibility and SSH operations
 
@@ -605,7 +649,7 @@ text. Cleanup from a superseded socket cannot erase a newer published client.
 Assembly installs `Blob` and `BlobHost` with the same configured storage root.
 Producers receive an opaque, validated `BlobRef` from `putBlob`; ordinary consumers
 only need content access. Host path bridging is a separate capability supplied to
-the sandbox import and ffmpeg adapters:
+the /chat view and ffmpeg adapters:
 
 ```
 Blob

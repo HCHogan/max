@@ -9,6 +9,7 @@ module Helpers
     resultId,
     testTime,
     withDbLog,
+    silentLogger,
     truncateAll,
     insertRawMessage,
     insertRawMessageWithClass,
