@@ -127,7 +127,7 @@ newRoot pool opts group objective inputs structured = do
   identifier <- withDb pool allocateJobId
   now <- getCurrentTime
   let outputContract = if structured then Just (either (error . T.unpack) id (parseContract outputSchema)) else Nothing
-      spec = JobSpec (GroupId group) actor message objective Research (taskGrants Research evalGrants) inputs Nothing outputContract False Nothing Nothing (addUTCTime (fromIntegral opts.seconds) now)
+      spec = JobSpec (GroupId group) actor message objective Basic (taskGrants Basic evalGrants) inputs Nothing outputContract False Nothing Nothing (addUTCTime (fromIntegral opts.seconds) now)
   Right _ <- Jobs.admitJob jobs Nothing identifier spec
   Jobs.LaunchJob root <- Jobs.takeJobWork jobs
   pure (tasks, jobs, root)
@@ -151,7 +151,7 @@ runCase cfg opts pool sources group parallel = do
   (parent, parentRuntime) <- attach pool tasks jobs root
   output <- newTurnOutputContext parent
   let context = mkToolContext (TurnIdentity root.spec.group root.spec.source (UserId 1) (UserId 3) root.spec.principal Nothing (Just output)) capabilities
-      requests = [object ["objective" .= question, "profile" .= ("research" :: Text), "inputs" .= object ["files" .= files], "output_contract" .= outputSchema] | (question, files) <- questions]
+      requests = [object ["objective" .= question, "profile" .= ("basic" :: Text), "inputs" .= object ["files" .= files], "output_contract" .= outputSchema] | (question, files) <- questions]
       script = "max.phase('source audit'); const requests=" <> json requests <> "; return " <> (if parallel then "max.batch(requests.map(agent=>({agent}))).map(max.value)" else "requests.map(agent)") <> ";"
       hooks = (executionHooks (executionAdmission jobs) (ExecutionJournal recordModelNote enrichSandboxJournalStart recordJournalExecution) root.spec.group parentRuntime) {ehWorkflow = Just (taskWorkflowHost jobs context parent)}
       registry = either (error . show) id (buildToolRegistry (filter ((/= ToolRef "web_search") . (.tdRef)) definitions) [legacyTool name "host task marker" (toolObject [] []) (const (pure (Left "use the host primitive"))) | name <- ["task_start", "task_progress"]])

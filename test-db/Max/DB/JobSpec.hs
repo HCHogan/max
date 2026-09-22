@@ -35,7 +35,7 @@ import Test.Hspec
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ do
   it "publishes a root interruption notice directly and retains it for delivery drain" $ do
-    running <- runningJob pool Research Map.empty
+    running <- runningJob pool Basic Map.empty
     deliveries <- newDeliveryQueue (DeliveryId 0)
     withDbLog pool . runOutbound running.tasks running.jobs deliveries $ shutdownJobs running.jobs
     rows <- withDb pool (query "SELECT rendered_text,reply_to_canonical_message_id FROM messages WHERE message_origin='outbound'" ())
@@ -58,10 +58,10 @@ spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ d
     withDb pool (query "SELECT count(*) FROM durable_tasks" ()) `shouldReturn` [Only (0 :: Int64)]
 
   it "rechecks the bound actor and conversation before task control" $ do
-    running <- runningJob pool Research Map.empty
+    running <- runningJob pool Basic Map.empty
     (_, _, other) <- seed pool 900 2
     let owner = scope running
-    Right child <- withDb pool . Control.runTaskControl running.jobs owner $ Control.startTask "child" Research Null
+    Right child <- withDb pool . Control.runTaskControl running.jobs owner $ Control.startTask "child" Basic Null
     let steer bound = withDb pool . Control.runTaskControl running.jobs bound $ Control.controlTask child.run.jobId (SteerJob "feedback")
     steer (owner {Control.principal = other}) >>= (`shouldSatisfy` isLeft)
     steer (owner {Control.group = GroupId 901}) >>= (`shouldSatisfy` isLeft)
@@ -72,7 +72,7 @@ spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ d
   it "takes child authority from the bound scope and requires the authenticated source" $ do
     running <- runningJob pool Sandbox (Map.fromList [("task_start", "v1"), ("sandbox_exec", "v1")])
     let caller = scope running
-        start bound = withDb pool . Control.runTaskControl running.jobs bound $ Control.startTask "child" Research (object ["grants" .= object ["sandbox_exec" .= ("forged" :: Text)]])
+        start bound = withDb pool . Control.runTaskControl running.jobs bound $ Control.startTask "child" Basic (object ["grants" .= object ["sandbox_exec" .= ("forged" :: Text)]])
     Right child <- start caller
     child.spec.grants `shouldBe` Map.singleton "task_start" "v1"
     child.spec.parent `shouldBe` Just running.job.run
@@ -81,16 +81,16 @@ spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ d
     withDb pool (query "SELECT count(*) FROM durable_tasks" ()) `shouldReturn` [Only (0 :: Int64)]
 
   it "binds query and progress capabilities without exposing another conversation" $ do
-    running <- runningJob pool Research Map.empty
+    running <- runningJob pool Basic Map.empty
     withDb pool (Query.runTaskQuery running.jobs (GroupId 901) Query.listTasks) `shouldReturn` []
     withDb pool (Query.runTaskQuery running.jobs (GroupId 901) (Query.readTask running.job.run.jobId)) `shouldReturn` Nothing
     withDb pool (Progress.runTaskExecution running.jobs Nothing (Progress.reportProgress "no caller")) >>= (`shouldSatisfy` isLeft)
     withDb pool (Progress.runTaskExecution running.jobs (Just running.turn.atrTurnId) (Progress.reportProgress "latest progress")) `shouldReturn` Right ()
     void (cancelAgentTurnTask running.tasks running.turn.atrTurnId)
-    withDb pool (Control.runTaskControl running.jobs (scope running) (Control.startTask "late" Research Null)) >>= (`shouldSatisfy` isLeft)
+    withDb pool (Control.runTaskControl running.jobs (scope running) (Control.startTask "late" Basic Null)) >>= (`shouldSatisfy` isLeft)
 
   it "blocks background output and revokes a stale progress notice at the shared publisher" $ do
-    running <- runningJob pool Research Map.empty
+    running <- runningJob pool Basic Map.empty
     deliveries <- newDeliveryQueue (DeliveryId 0)
     let request turn = OutboundRequest KindChat (GroupId 900) (Body [NText "output"]) Nothing DeliverConversation (Just (TurnOutputLink turn.atrTurnId 0)) Nothing
         publish turn = withDbLog pool . runOutbound running.tasks running.jobs deliveries $ sendRecorded (request turn)
@@ -108,7 +108,7 @@ spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ d
     withDb pool (query "SELECT count(*) FROM messages WHERE agent_turn_id IS NOT NULL" ()) `shouldReturn` [Only (1 :: Int64)]
 
   it "terminalizes interrupted turns at boot without creating another job" $ do
-    running <- runningJob pool Research Map.empty
+    running <- runningJob pool Basic Map.empty
     _ <- withDb pool reclaimInterruptedTurns
     rows <- withDb pool (query "SELECT status FROM agent_turns WHERE turn_id=?" (Only running.turn.atrTurnId))
     rows `shouldBe` [Only ("crashed" :: Text)]

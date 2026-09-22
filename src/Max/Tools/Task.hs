@@ -58,7 +58,7 @@ taskToolsFor context =
           toolSchema =
             toolObject
               [ ("objective", stringParam "自包含目标、约束和期望证据，不依赖整段聊天记录。"),
-                ("profile", enumParam taskProfileNames "research 默认只读；browser 使用浏览器；sandbox 执行命令，包括 SSH 运维。运维方法加载 operations 技能。"),
+                ("profile", enumParam taskProfileNames "按所需工具选择：basic 提供搜索、上下文与媒体读取；browser 增加浏览器；sandbox 增加命令和文件操作，包括 SSH。研究任务也可选择 browser 或 sandbox。"),
                 ("context", stringParam "显式传给子任务的上下文，最多 60000 字符。"),
                 ("resources", stringArrayParam "可选的本会话 t#N:rM 结果句柄，最多 40 个；在 admission 时解析并冻结。")
               ]

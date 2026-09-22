@@ -35,7 +35,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
             (pure True)
             ( \args -> do
                 liftIO $
-                  if args == object ["objective" .= ("one" :: Text), "profile" .= ("research" :: Text)]
+                  if args == object ["objective" .= ("one" :: Text), "profile" .= ("basic" :: Text)]
                     then putMVar first () >> takeMVar second
                     else putMVar second () >> takeMVar first
                 pure (ToolInvocation (ToolCommitted args) ContinueLoop)
@@ -45,7 +45,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     registry <- checked [start] [tool]
     result <- timeout 30000000 . runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession (Just 2)
-      runJavaScript session noJournal {ehWorkflow = Just host} (views registry) "return max.batch(['one','two'].map(objective => ({agent:{objective,profile:'research'}}))).map(max.value).map(x=>x.objective);"
+      runJavaScript session noJournal {ehWorkflow = Just host} (views registry) "return max.batch(['one','two'].map(objective => ({agent:{objective,profile:'basic'}}))).map(max.value).map(x=>x.objective);"
     fmap (.cmExit) result `shouldBe` Just WasmCompleted
     fmap (.cmOutput) result `shouldBe` Just (Just (toValue [String "one", String "two"]))
   it "stops guest execution at the steering boundary even if JavaScript would ignore the result" $ do
@@ -59,7 +59,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     registry <- checked [echoDefinition {tdRef = ToolRef "task_start"}] [echoTool {toolName = "task_start"}]
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession (Just 3)
-      runJavaScript session noJournal {ehWorkflow = Just host} (views registry) "agent({objective:'one',profile:'research'}); agent({objective:'two',profile:'research'}); return 'unreachable';"
+      runJavaScript session noJournal {ehWorkflow = Just host} (views registry) "agent({objective:'one',profile:'basic'}); agent({objective:'two',profile:'basic'}); return 'unreachable';"
     result.cmExit `shouldBe` WasmHostStopped
     readIORef count `shouldReturn` 1
   it "rejects recursive workflow execution for an awaited child before any guest work" $ do

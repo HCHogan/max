@@ -16,7 +16,7 @@ import Max.Jobs qualified as Jobs
 import Max.Platform.Delivery.Queue (newDeliveryQueue)
 import Max.Platform.Types (DeliveryId (..))
 import Max.ReplySend
-import Max.Task.Types (JobView (..), TaskProfile (Research))
+import Max.Task.Types (JobView (..), TaskProfile (Basic))
 import Max.Tasks (beginTurnRuntime)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..), UserId (..))
@@ -25,7 +25,7 @@ import Test.Hspec
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "job notice publication" $ do
   it "publishes one canonical message through the shared mention and reply resolver" $ do
-    running <- runningJob pool Research Map.empty
+    running <- runningJob pool Basic Map.empty
     Jobs.reportJobProgress running.jobs running.turn.atrTurnId "progress" `shouldReturn` True
     Jobs.PublishJobNotice job version _ <- Jobs.takeJobWork running.jobs
     (front, _, _) <- seed pool 900 1

@@ -235,7 +235,7 @@ import Max.Effects.TaskQuery qualified as TaskQuery
 import Max.Effects.TaskControl (TaskControl, startTask)
 import Max.Effects.TaskExecution (TaskExecution, reportProgress)
 import Max.Effects.TurnQuery (TurnQuery, resolveTurnResult)
-import Max.Task.Types (TaskProfile (Research))
+import Max.Task.Types (TaskProfile (Basic))
 import Max.Effects.PlatformQuery
 import Max.Effects.PlatformInteraction
 import Max.Effects.PlatformAccount
@@ -292,7 +292,7 @@ editPins = () <$ pinMessage 1
 readTasks :: TaskQuery :> es => Eff es ()
 readTasks = () <$ TaskQuery.listTasks
 startOwnedTask :: TaskControl :> es => Eff es ()
-startOwnedTask = () <$ startTask "goal" Research Null
+startOwnedTask = () <$ startTask "goal" Basic Null
 reportOwnedTask :: TaskExecution :> es => Eff es ()
 reportOwnedTask = () <$ reportProgress "progress"
 readOwnedResult :: TurnQuery :> es => Eff es ()
@@ -315,7 +315,7 @@ NEGATIVE = {
     "Browser cannot use arbitrary IO": ("IOE", "bad :: Browser :> es => Eff es ()\nbad = liftIO (pure ())"),
     "FileTransfer cannot use arbitrary IO": ("IOE", "bad :: FileTransfer :> es => Eff es ()\nbad = liftIO (pure ())"),
 
-    "conversation query cannot control tasks": ("TaskControl", 'bad :: ConversationQuery :> es => Eff es ()\nbad = () <$ startTask "goal" Research Null'),
+    "conversation query cannot control tasks": ("TaskControl", 'bad :: ConversationQuery :> es => Eff es ()\nbad = () <$ startTask "goal" Basic Null'),
     "conversation query cannot publish": ("Outbound", 'bad :: ConversationQuery :> es => OutboundRequest -> Eff es ()\nbad request = () <$ sendRecorded request'),
     "media query cannot publish": ("Outbound", "bad :: MediaQuery :> es => OutboundRequest -> Eff es ()\nbad request = () <$ sendRecorded request"),
     "media query cannot resolve host paths": ("BlobHost", "bad :: MediaQuery :> es => BlobRef -> Eff es FilePath\nbad = resolveBlobHostPath"),
@@ -330,10 +330,10 @@ NEGATIVE = {
     "monitor query cannot control a monitor": ("MonitorControl", 'bad :: MonitorQuery :> es => Eff es ()\nbad = () <$ controlMonitor (MonitorOrdinal 1) CancelMonitor False'),
     "monitor query cannot use arbitrary IO": ("IOE", 'bad :: MonitorQuery :> es => Eff es ()\nbad = liftIO (pure ())'),
     "monitor control cannot read other conversations": ("MonitorQuery", 'bad :: MonitorControl :> es => Eff es ()\nbad = () <$ listMonitors'),
-    "task query cannot control tasks": ("TaskControl", 'bad :: TaskQuery :> es => Eff es ()\nbad = () <$ startTask "goal" Research Null'),
+    "task query cannot control tasks": ("TaskControl", 'bad :: TaskQuery :> es => Eff es ()\nbad = () <$ startTask "goal" Basic Null'),
     "task query cannot submit execution reports": ("TaskExecution", 'bad :: TaskQuery :> es => Eff es ()\nbad = () <$ reportProgress "done"'),
     "task query cannot use arbitrary IO": ("IOE", 'bad :: TaskQuery :> es => Eff es ()\nbad = liftIO (pure ())'),
-    "turn result reader cannot control tasks": ("TaskControl", 'bad :: TurnQuery :> es => Eff es ()\nbad = () <$ startTask "goal" Research Null'),
+    "turn result reader cannot control tasks": ("TaskControl", 'bad :: TurnQuery :> es => Eff es ()\nbad = () <$ startTask "goal" Basic Null'),
     "directory cannot activate skills": ("ToolControl", 'bad :: ToolDirectory :> es => Eff es ()\nbad = activateSkills []'),
     "loop control cannot be decoded from JSON": ("LoopControl", 'bad :: Value -> Result LoopControl\nbad = fromJSON'),
     "platform query cannot poke": ("PlatformInteraction", "bad :: PlatformQuery :> es => Eff es (Either PlatformFailure ())\nbad = pokeUser (GroupId 1) (UserId 2)"),

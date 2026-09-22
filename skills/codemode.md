@@ -19,7 +19,7 @@
   需要并行时使用此接口；Promise.all 本身不会让同步工具调用并行。
 - `max.names`：本次运行可用工具名的完整只读数组。`tools` 与 `max` 不可替换。
 - `agent({objective, inputs, profile, output_contract?})`（也可写 `max.agent`）：
-  在根后台任务中启动普通子任务并等待报告。profile 为 research/browser/sandbox，
+  在根后台任务中启动普通子任务并等待报告。profile 为 basic/browser/sandbox，
   只收窄父任务当前权限；SSH 运维使用 sandbox 并加载 operations 技能；inputs 是最多 64 KiB 请求内的显式 JSON 数据。
   返回 `{task,status,text,payload}`。未指定 output_contract 时，子任务直接回答即可。
   指定时使用技能的闭合 JSON Schema 子集；子任务以符合契约的 JSON 作为最终答案，

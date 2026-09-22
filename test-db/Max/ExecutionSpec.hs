@@ -36,7 +36,7 @@ import Max.Skill.Contract (Contract, parseContract)
 import Max.Skill.Package
 import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Task.State (TaskStatus (Failed))
-import Max.Task.Types (JobResult (..), JobRun (..), JobSpec (..), JobView (..), TaskProfile (Research))
+import Max.Task.Types (JobResult (..), JobRun (..), JobSpec (..), JobView (..), TaskProfile (Basic))
 import Max.Tasks (TaskCancelled (..), TurnRuntime)
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Tool.Catalog (catalogTools)
@@ -298,7 +298,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     timeout 20000 (Jobs.takeJobWork jobs) `shouldReturn` Nothing
   where
     fixture = do
-      running <- runningJob pool Research Map.empty
+      running <- runningJob pool Basic Map.empty
       pure (running.jobs, running.turn, running.runtime)
     callCount jobs turn = do
       Just job <- Jobs.jobForTurn jobs turn.atrTurnId

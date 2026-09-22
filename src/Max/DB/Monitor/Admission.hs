@@ -162,7 +162,7 @@ observationContract =
 monitorTaskProfile :: (WithConnection :> es, IOE :> es) => MonitorFireId -> Eff es TaskProfile
 monitorTaskProfile fire = do
   rows <- query "SELECT COALESCE(definition_snapshot->>'profile',task_profile) FROM monitor_fires JOIN monitors USING(monitor_id) WHERE fire_id=?" (Only fire)
-  pure $ case rows of [Only name] -> fromMaybe Research (parseProfile name); _ -> Research
+  pure $ case rows of [Only name] -> fromMaybe Basic (parseProfile name); _ -> Basic
 
 -- Returns whether this result should be announced; no effect is replayed here.
 recordMonitorResult :: (WithConnection :> es, IOE :> es) => MonitorFireId -> TaskStatus -> JobResult -> Eff es Bool

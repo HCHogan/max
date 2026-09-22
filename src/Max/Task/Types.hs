@@ -30,23 +30,23 @@ import Max.Task.State (TaskStatus)
 import OneBot.Types (GroupId)
 import Text.Read (readMaybe)
 
-data TaskProfile = Research | Browser | Sandbox
+data TaskProfile = Basic | Browser | Sandbox
   deriving stock (Eq, Show)
 
 profileName :: TaskProfile -> Text
-profileName Research = "research"
+profileName Basic = "basic"
 profileName Browser = "browser"
 profileName Sandbox = "sandbox"
 
 taskProfileNames :: [Text]
-taskProfileNames = map profileName [Research, Browser, Sandbox]
+taskProfileNames = map profileName [Basic, Browser, Sandbox]
 
 parseProfile :: Text -> Maybe TaskProfile
-parseProfile "research" = Just Research
+parseProfile "basic" = Just Basic
 parseProfile "browser" = Just Browser
 parseProfile "sandbox" = Just Sandbox
--- Stored tasks, monitor snapshots and old workflow programs retain this name.
--- Decode it into the one shell profile; new writes always use "sandbox".
+-- Historical snapshots and workflow programs retain the former names.
+parseProfile "research" = Just Basic
 parseProfile "operations" = Just Sandbox
 parseProfile _ = Nothing
 
@@ -72,7 +72,7 @@ taskGrants profile parent = Map.filterWithKey (\name _ -> name `elem` allowed) p
         "task_wait"
       ]
         <> case profile of
-          Research -> []
+          Basic -> []
           Browser ->
             ["browser", "view_zhihu"]
           Sandbox ->

@@ -97,7 +97,7 @@ spec = describe "browser view and surface" $ do
         candidates = Map.fromList [(name, "grant") | name <- names <> ["browser_back", "browser_screenshot", "browser_navigate", "browser_click"]]
     names `shouldBe` ["browser", "view_zhihu"]
     Map.keys (taskGrants Browser candidates) `shouldBe` names
-    taskGrants Research candidates `shouldBe` Map.empty
+    taskGrants Basic candidates `shouldBe` Map.empty
     case runners of
       browser : _ ->
         runEff (do queue <- newToolOutputQueue 0; runToolOutput queue (toolRun browser (object ["action" .= ("evaluate" :: String), "expression" .= ("1+1" :: String)])))

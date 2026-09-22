@@ -88,7 +88,7 @@ armMonitorTool tz =
             ("cooldown_seconds", integerParam "ledger/http：冷却秒数，0..86400；ledger 默认 60，http 默认 0。"),
             ("ttl_days", integerParam "ledger/http：有效天数，1..1825；ledger 默认 150，http 省略则不过期。"),
             ("max_fires", integerParam "ledger/http：触发次数上限，1..100；ledger 默认 100，http 省略则不限。"),
-            ("profile", enumParam taskProfileNames "http：任务能力，默认 research；需要执行命令或 SSH 时选 sandbox。")
+            ("profile", enumParam taskProfileNames "http：任务能力，默认 basic；需要执行命令或 SSH 时选 sandbox。")
           ]
           ["goal", "trigger"],
       toolRunner = LegacyRunner $ \raw -> case parseEither (withObject "args" parseArm) raw of
@@ -126,8 +126,8 @@ armMonitorTool tz =
                                 "max_fires" .= maxFires,
                                 "cooldown_seconds" .= args.aaCooldownSeconds
                               ]
-                "http" -> case maybe (Just Research) parseProfile args.aaProfile of
-                  Nothing -> pure (Left "profile 必须是 research/browser/sandbox")
+                "http" -> case maybe (Just Basic) parseProfile args.aaProfile of
+                  Nothing -> pure (Left "profile 必须是 basic/browser/sandbox")
                   Just profile -> do
                     let spec =
                           HttpMonitorSpec

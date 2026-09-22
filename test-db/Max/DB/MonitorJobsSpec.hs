@@ -137,6 +137,8 @@ spec pool = before_ (truncateAll pool) $ describe "reminder Jobs and retained bu
     (turn, _, actor) <- seed pool 900 1
     now <- getCurrentTime
     Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
+    defaults <- withDb pool (query "SELECT task_profile FROM monitors WHERE monitor_id=?" (Only monitor.mrMonitorId))
+    defaults `shouldBe` [Only ("basic" :: Text)]
     changed <- withDb pool (withTransaction (MonitorDB.controlMonitor 900 actor.unPrincipalId False monitor.mrMonitorOrdinal.unMonitorOrdinal (MonitorControl.ConfigureMonitor 1 "browser watch" QueueOccurrences 160 MonitorControl.RetainPending (Just (Browser, True))) False))
     changed `shouldSatisfy` isRight
     insertOccurrence pool monitor "browser"
@@ -170,7 +172,7 @@ spec pool = before_ (truncateAll pool) $ describe "reminder Jobs and retained bu
     void $ withDb pool (execute "UPDATE monitor_fires SET notified_at=now()-interval '2 hours' WHERE notified_at IS NOT NULL" ())
     finish "later" `shouldReturn` True
     insertOccurrence pool monitor "old pending"
-    Right _ <- withDb pool (withTransaction (MonitorDB.controlMonitor 900 actor.unPrincipalId False monitor.mrMonitorOrdinal.unMonitorOrdinal (MonitorControl.ConfigureMonitor 1 "new" Coalesce 40 MonitorControl.RetainPending (Just (Research, False))) False))
+    Right _ <- withDb pool (withTransaction (MonitorDB.controlMonitor 900 actor.unPrincipalId False monitor.mrMonitorOrdinal.unMonitorOrdinal (MonitorControl.ConfigureMonitor 1 "new" Coalesce 40 MonitorControl.RetainPending (Just (Basic, False))) False))
     [fire] <- withDb pool (pendingElaboratedMonitorFires now [] (MonitorFireId 0) 10)
     Right (MonitorTaskAdmitted _ job) <- withDb pool (withTransaction (admitMonitorTaskWithin fire.emfFireId Nothing Map.empty message.unCanonicalMessageId))
     job.contract `shouldSatisfy` (/= Nothing)

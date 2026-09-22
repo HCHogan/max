@@ -7,7 +7,7 @@ endpoint and HTTP arming are disabled. No external service is configured
 automatically.
 
 `arm_monitor` accepts `trigger: "http"`, a goal and an optional task profile
-(research by default; sandbox for command/SSH work). It returns the monitor
+(basic by default; sandbox for command/SSH work). It returns the monitor
 handle, URL and independent bearer token. Only the token hash is stored in the
 hook table; the original credential is also present in the normal tool result.
 Keep it out of public replies and use a restricted sender credential file.

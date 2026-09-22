@@ -35,10 +35,10 @@ import Test.Hspec hiding (context)
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "process-owned workflow children" $ do
   it "admits ordinary children without a durable journal or model key" $ do
-    running <- runningJob pool Research workflowGrants
+    running <- runningJob pool Basic workflowGrants
     context <- toolContext running workflowGrants
     let host = taskWorkflowHost running.jobs context running.turn
-        request = object ["objective" .= ("answer" :: Text), "profile" .= ("research" :: Text), "output_contract" .= object ["type" .= ("string" :: Text)]]
+        request = object ["objective" .= ("answer" :: Text), "profile" .= ("basic" :: Text), "output_contract" .= object ["type" .= ("string" :: Text)]]
     Async.withAsync (withDb pool (host.whAgent request)) $ \waiting -> do
       child <- awaitChild running.jobs
       child.spec.grants `shouldBe` workflowGrants
@@ -60,8 +60,8 @@ spec pool = before_ (truncateAll pool) $ describe "process-owned workflow childr
       length jobs `shouldBe` 1
 
   it "joins real JavaScript batches and starts explicit new calls when a program is rerun" $ do
-    running <- runningJob pool Research workflowGrants
-    let program = "max.phase('research'); return max.batch(['first','second'].map(objective=>({agent:{objective,profile:'research'}}))).map(max.value);"
+    running <- runningJob pool Basic workflowGrants
+    let program = "max.phase('research'); return max.batch(['first','second'].map(objective=>({agent:{objective,profile:'basic'}}))).map(max.value);"
     forM_ [1 .. 2 :: Int] $ \_ -> Async.withAsync (runScript pool running Nothing program) $ \worker -> do
       first <- awaitChild running.jobs
       second <- awaitChild running.jobs
@@ -73,14 +73,14 @@ spec pool = before_ (truncateAll pool) $ describe "process-owned workflow childr
     withDb pool (query "SELECT count(*) FROM workflow_agent_waits" ()) `shouldReturn` [Only (0 :: Int)]
 
   it "rejects an over-budget batch before child admission" $ do
-    running <- runningJob pool Research workflowGrants
-    result <- runScript pool running (Just 1) "return max.batch(['one','two'].map(objective=>({agent:{objective,profile:'research'}})));"
+    running <- runningJob pool Basic workflowGrants
+    result <- runScript pool running (Just 1) "return max.batch(['one','two'].map(objective=>({agent:{objective,profile:'basic'}})));"
     result.cmOverBudget `shouldBe` True
     Jobs.allJobs running.jobs >>= (\jobs -> length jobs `shouldBe` 1)
 
   it "stops guest code on feedback, retains the child, and leaves feedback for the model" $ do
-    running <- runningJob pool Research workflowGrants
-    Async.withAsync (runScript pool running Nothing "agent({objective:'one',profile:'research'}); agent({objective:'unreachable',profile:'research'});") $ \worker -> do
+    running <- runningJob pool Basic workflowGrants
+    Async.withAsync (runScript pool running Nothing "agent({objective:'one',profile:'basic'}); agent({objective:'unreachable',profile:'basic'});") $ \worker -> do
       _ <- awaitChild running.jobs
       Jobs.steerJob running.jobs running.job.spec.group running.job.spec.principal Nothing running.job.run.jobId "new evidence" `shouldReturn` Right ()
       result <- timeout 3000000 (Async.wait worker)
@@ -89,15 +89,15 @@ spec pool = before_ (truncateAll pool) $ describe "process-owned workflow childr
     Jobs.allJobs running.jobs >>= (\jobs -> length jobs `shouldBe` 2)
 
   it "does not admit a child when feedback was already pending" $ do
-    running <- runningJob pool Research workflowGrants
+    running <- runningJob pool Basic workflowGrants
     Jobs.steerJob running.jobs running.job.spec.group running.job.spec.principal Nothing running.job.run.jobId "wait" `shouldReturn` Right ()
-    result <- runScript pool running Nothing "agent({objective:'unreachable',profile:'research'});"
+    result <- runScript pool running Nothing "agent({objective:'unreachable',profile:'basic'});"
     result.cmExit `shouldBe` WasmHostStopped
     Jobs.allJobs running.jobs >>= (\jobs -> length jobs `shouldBe` 1)
 
   it "cancels an awaiting guest without executing its next step" $ do
-    running <- runningJob pool Research workflowGrants
-    Async.withAsync (runScript pool running Nothing "agent({objective:'one',profile:'research'}); agent({objective:'unreachable',profile:'research'});") $ \worker -> do
+    running <- runningJob pool Basic workflowGrants
+    Async.withAsync (runScript pool running Nothing "agent({objective:'one',profile:'basic'}); agent({objective:'unreachable',profile:'basic'});") $ \worker -> do
       _ <- awaitChild running.jobs
       timeout 3000000 (Async.cancel worker) `shouldReturn` Just ()
     Jobs.allJobs running.jobs >>= (\jobs -> length jobs `shouldBe` 2)

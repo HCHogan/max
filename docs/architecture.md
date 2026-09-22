@@ -412,14 +412,17 @@ The `operations` skill loads sandbox tools after the broker confirms the group
 has the dedicated Tailscale network. Commands use ordinary SSH, and background
 operations inherit the parent shell grants. Remote systemd jobs retain long-running
 work across SSH disconnects; see [SSH operations](runbooks/ssh-operations.md).
-Task profiles select tools (`research`, `browser`, `sandbox`); skills describe
-methods (`sandbox` for shell mechanics, `operations` for fleet work); conversation
+Task profiles select tools (`basic`, `browser`, `sandbox`), not task purposes.
+Basic provides search, context and media reads; research work may also need
+browser or sandbox tools. Skills describe methods (`sandbox` for shell mechanics,
+`operations` for fleet work); conversation
 configuration selects networking. Neither a task profile nor skill loading changes network access:
 the broker selects it from the canonical conversation and configured group list.
 There is no separate read-only SSH grant within an enabled operations network.
 
-Legacy `operations` task/monitor profiles and frozen snapshots decode as `sandbox`;
-new writes use `sandbox`. Original rows and journals remain unchanged. Each explicit workflow child call
+Legacy `research` and `operations` task/monitor profiles and frozen snapshots
+decode as `basic` and `sandbox`; new writes use those canonical names. Original
+rows and journals remain unchanged. Each explicit workflow child call
 creates new work; there is no cross-call result reuse or restart continuation.
 
 `max.service` and the broker client use `max-service`; the broker runs as root.

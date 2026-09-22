@@ -36,7 +36,7 @@ taskWorkflowHost jobs context turn =
           Just _ | pending -> pure feedbackPending
           Just job | isNothing job.spec.parent && Map.member "task_start" (toolCatalogGrants context) -> do
             let grants = taskGrants request.profile (Map.intersectionWith const (toolCatalogGrants context) job.spec.grants)
-                required = case request.profile of Research -> Nothing; Browser -> Just "browser"; Sandbox -> Just "sandbox_exec"
+                required = case request.profile of Basic -> Nothing; Browser -> Just "browser"; Sandbox -> Just "sandbox_exec"
                 spec = job.spec {objective = request.objective, profile = request.profile, grants, inputs = request.inputs, parent = Just job.run, contract = request.outputContract, delegated = True, monitor = Nothing, browserProfile = Nothing}
             if maybe False (`Map.notMember` grants) required
               then pure (rejected "requested profile exceeds the parent capability ceiling")
