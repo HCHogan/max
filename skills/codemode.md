@@ -37,7 +37,7 @@ const results = max.batch(inputs.map(args => ({tool: toolName, args})));
 return results.map((result, index) => ({index, ...result}));
 ```
 
-用实际工具名和参数替换示例中的变量。可使用普通 JS、数组、对象、正则、
+用实际工具名和参数替换示例中的变量。多步浏览网页的写法见 web 手册的"多步浏览写成程序"。可使用普通 JS、数组、对象、正则、
 JSON 和 Promise。没有 Node、浏览器 API、import/require、console、计时器、
 网络、文件系统、环境变量或宿主时间/随机源；需要这些能力时调用授权工具。
 

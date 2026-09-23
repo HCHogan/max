@@ -3,11 +3,13 @@ module Max.CodeMode.JavaScriptSpec (spec) where
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (forM_)
 import Data.Aeson (Value (..), object, toJSON, (.=))
+import Data.Aeson.KeyMap qualified as KM
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
 import Effectful (liftIO, runEff)
 import Effectful.Concurrent (runConcurrent)
 import ExecutionFixture
@@ -79,6 +81,43 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     result.cmExit `shouldBe` WasmCompleted
     result.cmOutput `shouldBe` Just (object ["sum" .= (6 :: Int), "text" .= ("中文 😀" :: Text)])
     map (.ccOutcome) result.cmCalls `shouldBe` replicate 3 "succeeded"
+
+  it "runs the web manual's browsing program as written" $ do
+    manual <- TIO.readFile "skills/web.md"
+    let (_, section) = T.breakOn "# 多步浏览写成程序" manual
+        source = fst (T.breakOn "```" (T.drop (T.length "```javascript\n") (snd (T.breakOn "```javascript\n" section))))
+    source `shouldSatisfy` T.isInfixOf "max.raw(\"browser\""
+    -- A stateful page: the first address lands on a redirected plans page,
+    -- the second on the pricing table the program is meant to parse.
+    current <- newIORef ("" :: Text)
+    let page url body = String ("Outcome: open ok HTTP 200\nPage: " <> url <> " | Title\nPosition: 0,0 viewport 1280x800 pageHeight 900\nContent:\n" <> body)
+        browse args = case args of
+          Object fields
+            | Just (String "open") <- KM.lookup "action" fields,
+              Just (String url) <- KM.lookup "url" fields -> do
+                let docs = "docs." `T.isInfixOf` url
+                liftIO (modifyIORef' current (const (if docs then "docs" else "plans")))
+                pure (Right (page (if docs then "https://docs.example.com/pricing" else "https://example.com/ja-JP/plans") "..."))
+            | Just (String "read") <- KM.lookup "action" fields -> do
+                shown <- liftIO (readIORef current)
+                pure . Right . page "?" $
+                  if shown == "docs" then "Prices per 1M tokens.\nmodel-a\n$10.00\n$1.00\n$12.50\n$50.00\nmodel-b\n$2.00" else "Consumer plans\nPlus"
+          _ -> pure (Left "unexpected browser call")
+        definition = echoDefinition {tdRef = ToolRef "browser", tdEffects = Set.singleton (EffectWrite "browser.session"), tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe, tdFailuresPrecedeEffects = False}
+    registry <- checked [definition] [legacyTool "browser" "browser" (object ["type" .= ("object" :: Text)]) browse]
+    result <- runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session noJournal (views registry) source
+    result.cmExit `shouldBe` WasmCompleted
+    result.cmOutput
+      `shouldBe` Just
+        ( object
+            [ "source" .= ("https://docs.example.com/pricing" :: Text),
+              "rows" .= object ["model-a" .= (["$10.00", "$1.00", "$12.50", "$50.00"] :: [Text])],
+              "tried" .= [object ["url" .= ("https://example.com/pricing" :: Text), "landed" .= ("https://example.com/ja-JP/plans" :: Text)]]
+            ]
+        )
+    map (.ccTool) result.cmCalls `shouldBe` ["browser", "browser", "browser", "browser"]
 
   it "pages large Unicode results without a second effect or budget charge" $ do
     count <- newIORef (0 :: Int)
