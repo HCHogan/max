@@ -435,8 +435,11 @@ parent, so Max can add entries but cannot replace the directory a unit binds;
 a symbolic link inside a view resolves in the guest, and protected hardlinks
 limit Max to its own objects. The guest sees `/chat` read-only, and objects are
 0444 in a 0700 tree. Max's unit receives the media directory as a single
-writable mount because hardlinks cannot cross mounts. An `ExecStartPre` run by
-root creates the layout and moves a legacy `app/images` store into `objects/`.
+writable mount because hardlinks cannot cross mounts. `max-media.service`, a
+root oneshot ordered before Max and the broker, creates the layout and renames
+a legacy `app/images` store into `objects/`. It runs outside Max's sandbox: in
+that mount namespace the two directories are separate mounts and the move
+would become a copy. It refuses to start when both locations hold objects.
 
 Outbound files go through `send_file` and `send_image`, which read the sandbox
 path once and publish that snapshot as blob-backed media. Writing into a

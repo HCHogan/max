@@ -117,7 +117,7 @@ entryNames view = bracket (PosixDirectory.openDirStream (raw view)) PosixDirecto
       entry <- PosixDirectory.readDirStream stream
       if BS.null entry
         then pure names
-        else go (Set.insert (TE.decodeUtf8With lenientDecode entry) names) stream
+        else go (if entry `elem` [".", ".."] then names else Set.insert (TE.decodeUtf8With lenientDecode entry) names) stream
 
 viewPath :: FilePath -> GroupId -> FilePath
 viewPath root group = root </> show (groupNumber group)

@@ -158,10 +158,12 @@ in
       requires = [
         "max-runtime.socket"
         "max-storage.service"
+        "max-media.service"
       ];
       after = [
         "max-runtime.socket"
         "max-storage.service"
+        "max-media.service"
       ]
       ++ lib.optional cfg.sandbox.enable "max-sandbox-network.service";
       serviceConfig = {

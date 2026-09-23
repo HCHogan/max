@@ -342,15 +342,39 @@ in
       psql -d max -tAc 'CREATE EXTENSION IF NOT EXISTS vector' >/dev/null
     '';
 
+    # A plain root oneshot, outside Max's sandbox: in the service's own mount
+    # namespace the state and media directories are separate mounts, so a
+    # legacy move would degrade from a rename to a copy.
+    systemd.services.max-media = {
+      description = "Max media store layout";
+      partOf = [ "max-stack.target" ];
+      requires = [ "max-storage.service" ];
+      after = [ "max-storage.service" ];
+      before = [
+        "max.service"
+        "max-runtime.service"
+      ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = mediaLayout;
+      };
+    };
+
     systemd.services.max = {
       description = "max — QQ group-chat agent";
       restartTriggers = [ effectiveConfigFile ];
       after = [
         "network-online.target"
         "max-storage.service"
+        "max-media.service"
       ]
       ++ lib.optional cfg.postgres.enable "postgresql.service";
-      requires = [ "max-storage.service" ] ++ lib.optional cfg.postgres.enable "postgresql.service";
+      requires = [
+        "max-storage.service"
+        "max-media.service"
+      ]
+      ++ lib.optional cfg.postgres.enable "postgresql.service";
       wants = [ "network-online.target" ];
       wantedBy = [ "max-stack.target" ];
       # Table rendering, code screenshots and animated-sticker frames.
@@ -393,10 +417,9 @@ in
         Group = "max-service";
         StateDirectory = "max/app";
         StateDirectoryMode = "0700";
-        # Root prepares the media layout before every start.
-        ExecStartPre = [ "+${mediaLayout}" ];
         # One mount for objects and views: hardlinks cannot cross mounts,
-        # and each ReadWritePaths entry would otherwise be its own.
+        # and each ReadWritePaths entry would otherwise be its own. It must
+        # exist before any ExecStartPre, so max-media creates it first.
         ReadWritePaths = [ cfg.mediaDirectory ];
         RuntimeDirectory = "max";
         # The bot resolves images_dir and var/outbox relative paths
