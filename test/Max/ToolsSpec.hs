@@ -16,7 +16,7 @@ import Max.Effects.MemoryQuery (MemoryQuery)
 import Max.Effects.PlatformInteraction (PlatformInteraction)
 import Max.Effects.Tools (Tool (..))
 import Max.Effects.TurnQuery (TurnQuery)
-import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
+import Max.ModelCatalog (ContextLimits (..), contextLimitsForWindow, defaultContextLimits)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
 import Max.Time.Parse (parseTimeArg)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext)
@@ -91,6 +91,16 @@ spec = describe "model-visible builtins" $ do
     rawHighTokens big True `shouldBe` rawHighTokens big False - 4096
     -- max_input is already an input ceiling, so output is not subtracted twice.
     rawHighTokens (big {reservedOutputTokens = 60000}) False `shouldBe` rawHighTokens big False
+
+  it "scales context navigation and compaction from the net combined-window budget" $ do
+    resolved <- either (fail . T.unpack) pure (contextLimitsForWindow 262144 Nothing True)
+    rawHighTokens resolved False `shouldBe` 98304
+    rawLowTokens resolved False `shouldBe` 49152
+    summaryTokens resolved False `shouldBe` 24576
+    readPageTokens resolved False `shouldBe` 6144
+    rawHighTokens resolved True `shouldBe` 81920
+    smallerOutput <- either (fail . T.unpack) pure (contextLimitsForWindow 262144 (Just 16384) True)
+    rawHighTokens smallerOutput False `shouldBe` 106496
 
   it "splits long Unicode bodies without losing codepoints" $ do
     let body = T.replicate 1000 "聊天😀"

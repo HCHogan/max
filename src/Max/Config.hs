@@ -46,7 +46,7 @@ import Max.IMessage (IMessageConfig (..))
 import Max.Intent (IntentConfig (..))
 import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Matrix (MatrixConfig (..))
-import Max.ModelCatalog (ContextLimits (..), ModelCatalog, defaultContextLimits, modelProfileNames)
+import Max.ModelCatalog (ContextLimits (..), ModelCatalog, contextLimitsForWindow, defaultContextLimits, modelProfileNames)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), mkModelCatalogFromProfiles, parseProtocol)
 import Max.Monitor.Http (validWebhookBaseUrl)
 import Max.Tools.Search (SearchConfig (..))
@@ -1218,6 +1218,7 @@ data ProfileSpec = ProfileSpec
   { apiKey :: !(Maybe Text),
     baseUrl :: !(Maybe Text),
     model :: !(Maybe Text),
+    contextWindow :: !(Maybe Int),
     maxInputTokens :: !(Maybe Int),
     maxTokens :: !(Maybe Int),
     attachmentReserve :: !(Maybe Int),
@@ -1234,7 +1235,7 @@ data ProfileSpec = ProfileSpec
 
 emptySpec :: ProfileSpec
 emptySpec =
-  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 -- | Per-field first-Just-wins overlay (left = higher priority).
 mergeSpec :: ProfileSpec -> ProfileSpec -> ProfileSpec
@@ -1243,6 +1244,7 @@ mergeSpec a b =
     { apiKey = a.apiKey <|> b.apiKey,
       baseUrl = a.baseUrl <|> b.baseUrl,
       model = a.model <|> b.model,
+      contextWindow = a.contextWindow <|> b.contextWindow,
       maxInputTokens = a.maxInputTokens <|> b.maxInputTokens,
       maxTokens = a.maxTokens <|> b.maxTokens,
       attachmentReserve = a.attachmentReserve <|> b.attachmentReserve,
@@ -1263,7 +1265,8 @@ instance HasCodec ProfileSpec where
         <$> optionalField "api_key" "API key" .= (.apiKey)
         <*> optionalField "base_url" "OpenAI: …/v1 base URL; Anthropic: bare host" .= (.baseUrl)
         <*> optionalField "model" "Model id" .= (.model)
-        <*> optionalField "max_input_tokens" "Hard input-token ceiling for prompt planning" .= (.maxInputTokens)
+        <*> optionalField "context_window" "Total input plus output tokens; derives input, output and context reserves" .= (.contextWindow)
+        <*> optionalField "max_input_tokens" "Legacy hard input ceiling; mutually exclusive with context_window" .= (.maxInputTokens)
         <*> optionalField "max_tokens" "Max tokens per completion" .= (.maxTokens)
         <*> optionalField "attachment_reserve" "Input tokens reserved when media is attached" .= (.attachmentReserve)
         <*> optionalField "tool_round_reserve" "Input tokens reserved for later agent tool rounds" .= (.toolRoundReserve)
@@ -1347,10 +1350,20 @@ overlayProfileParser = do
           env "MAX_LLM_MODEL",
           metavar "NAME"
         ]
+  contextWindow <-
+    optional $
+      setting
+        [ help "Total input plus output window for the default profile",
+          reader auto,
+          option,
+          long "llm-context-window",
+          env "MAX_LLM_CONTEXT_WINDOW",
+          metavar "N"
+        ]
   maxInputTokens <-
     optional $
       setting
-        [ help "Hard input-token ceiling for prompt planning",
+        [ help "Legacy hard input ceiling; mutually exclusive with --llm-context-window",
           reader auto,
           option,
           long "llm-max-input-tokens",
@@ -1497,13 +1510,23 @@ materializeLLM (dn, fileProfiles, overlay) = do
                      else "\n  set via llm.profiles." <> T.unpack profName <> ".api_key"
                  )
       let resolvedMultimodal = fromMaybe False spec.multimodal
-          resolvedMaxInput = fromMaybe defaultContextLimits.maxInputTokens spec.maxInputTokens
-          resolvedMaxOutput = fromMaybe defaultContextLimits.reservedOutputTokens spec.maxTokens
+          profileError message = fail ("llm profile '" <> T.unpack profName <> "': " <> T.unpack message)
+      defaults <- case (spec.contextWindow, spec.maxInputTokens) of
+        (Just _, Just _) -> profileError "context_window and legacy max_input_tokens are mutually exclusive"
+        -- Preserve explicit legacy input ceilings, including their old reserves.
+        (Nothing, Just input) ->
+          pure defaultContextLimits
+            { maxInputTokens = input,
+              reservedOutputTokens = fromMaybe defaultContextLimits.reservedOutputTokens spec.maxTokens,
+              attachmentReserve = if resolvedMultimodal then defaultContextLimits.attachmentReserve else 0
+            }
+        (window, Nothing) ->
+          either profileError pure (contextLimitsForWindow (fromMaybe 131072 window) spec.maxTokens resolvedMultimodal)
+      let resolvedMaxInput = defaults.maxInputTokens
+          resolvedMaxOutput = defaults.reservedOutputTokens
           resolvedAttachmentReserve =
-            fromMaybe
-              (if resolvedMultimodal then defaultContextLimits.attachmentReserve else 0)
-              spec.attachmentReserve
-          resolvedToolRoundReserve = fromMaybe defaultContextLimits.toolRoundReserve spec.toolRoundReserve
+            fromMaybe defaults.attachmentReserve spec.attachmentReserve
+          resolvedToolRoundReserve = fromMaybe defaults.toolRoundReserve spec.toolRoundReserve
       when (resolvedMaxInput <= 0) $
         fail $
           "llm profile '" <> T.unpack profName <> "' has non-positive max_input_tokens"
@@ -1513,7 +1536,7 @@ materializeLLM (dn, fileProfiles, overlay) = do
       when (resolvedAttachmentReserve < 0 || resolvedToolRoundReserve < 0) $
         fail $
           "llm profile '" <> T.unpack profName <> "' has a negative context reserve"
-      when (resolvedAttachmentReserve + resolvedToolRoundReserve >= resolvedMaxInput) $
+      when (toInteger resolvedAttachmentReserve + toInteger resolvedToolRoundReserve >= toInteger resolvedMaxInput) $
         fail $
           "llm profile '" <> T.unpack profName <> "' reserves its entire input window"
       pure

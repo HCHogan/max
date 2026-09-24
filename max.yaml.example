@@ -51,7 +51,7 @@ persona: |
 # Conversation history has no message-count setting.  Every conversation uses
 # active P1/P2/P3/P4 compartments followed by an exact protected raw tail;
 # ContextPolicy derives token watermarks from the selected profile's
-# max_input_tokens and output/media/tool reserves.  If projections are not yet
+# context_window, after output/media/tool reserves. If projections are not yet
 # ready, the immutable raw ledger is the fail-soft source and is still trimmed
 # only by that token budget.
 
@@ -170,20 +170,21 @@ persona: |
 llm:
   default: deepseek-flash
 
-  # Omitted limits inherit the roomy group-chat baseline:
-  #   max_input_tokens: 114688
-  #   max_tokens: 16384
-  #   tool_round_reserve: 16384
-  # Multimodal profiles also inherit attachment_reserve: 16384; text-only
-  # profiles reserve zero attachment tokens.  Per-profile values below are
-  # examples of explicit overrides.
+  # Set the total input + output window once per profile:
+  #   context_window: 262144
+  # Max derives output=32768, hard input=229376, tool reserve=32768, and
+  # media reserve=32768 for multimodal profiles (zero for text-only).
+  # Planning budget: 196608 without attachments, 163840 with attachments.
+  # Omitted context_window defaults to 131072. max_tokens remains an optional
+  # output-cap override; it is subtracted from the total before input planning.
+  # Legacy max_input_tokens is supported, but cannot coexist with context_window.
 
   profiles:
     deepseek-flash:
       api_key: "sk-..."
       base_url: "https://api.deepseek.com/v1"
       model: deepseek-v4-flash
-      max_tokens: 16384
+      context_window: 131072
       temperature: 0.7
       # Total time per HTTP attempt, including queueing and the full stream.
       # The default is 1800 seconds; explicit per-profile overrides still win.
@@ -193,7 +194,7 @@ llm:
       api_key: "sk-..."
       base_url: "https://api.deepseek.com/v1"
       model: deepseek-v4-pro
-      max_tokens: 16384
+      context_window: 131072
       temperature: 0.3
 
     # Anthropic native protocol — use when the endpoint only exposes

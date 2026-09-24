@@ -7,7 +7,7 @@ import Data.Text qualified as T
 import Max.Context (estimateMessagesTokens)
 import Max.Context.Working
 import Max.LLM.Types (ChatMessage (..), ContentBlock (..), TokenUsage (..), ToolCall (..))
-import Max.ModelCatalog (ContextLimits (..))
+import Max.ModelCatalog (ContextLimits (..), contextLimitsForWindow)
 import Max.Tool.Types (ToolSpec (..))
 import Test.Hspec hiding (fit)
 
@@ -60,6 +60,13 @@ spec = describe "recoverable working context" $ do
     Right plan <- pure (fitWorkingContext exact Nothing "id" "t#7" "" messages [])
     plan.wpCompacted `shouldBe` False
     fit Nothing [MsgUser (T.replicate 50000 "原始目标")] [] `shouldSatisfy` isLeft
+
+  it "cannot spend the combined window's output allowance on protected input" $ do
+    resolved <- either (fail . T.unpack) pure (contextLimitsForWindow 262144 Nothing False)
+    let tooLarge = [MsgUser (T.replicate 230000 "汉")]
+    fitWorkingContext resolved Nothing "qwen" "t#7" "" tooLarge [] `shouldSatisfy` isLeft
+    Right plan <- pure (fitWorkingContext resolved Nothing "qwen" "t#7" "" [MsgUser "hello"] [])
+    plan.wpLimit + resolved.reservedOutputTokens `shouldBe` 262144
 
   it "allows protected instructions to consume soft headroom but respects a smaller model window" $ do
     let messages = [MsgUser (T.replicate 4000 "x")]

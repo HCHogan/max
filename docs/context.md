@@ -19,12 +19,28 @@ merge. Consolidation/dreaming is intentionally deferred.
 
 ## Capacity policy
 
-All context **capacity** targets derive from the selected profile. `max_input_tokens`
-is an input ceiling, not a combined input/output window; do not subtract output
-twice. The effective input budget `B` subtracts the configured tool-round reserve
-and, when attachments are present, the attachment reserve. For a combined 262,144
-token deployment, first configure an input ceiling compatible with its output
-allowance; merely setting both input and output to 262,144 is not valid.
+Configure only `context_window` on the selected profile: it is the **combined
+input plus output** token limit, not usable input space. Omission defaults to
+131,072. Max derives an output allowance `O = max(1, C / 8)`, hard input ceiling
+`I = C - O`, tool-round reserve `T = C / 8`, and attachment reserve `A = C / 8`
+for multimodal profiles (zero for text-only profiles). Integer division rounds
+down. The effective text budget is `B = I - T - A` with attachments, or
+`B = I - T` without them. Output is subtracted exactly once, during configuration
+resolution; both initial prompts and working-turn pruning use the resolved limits.
+
+For `context_window: 262144`, the default output limit is 32,768, the hard input
+ceiling 229,376, and the planning budget 196,608 without attachments or 163,840
+with attachments. These are conservative planning budgets, not an exact provider
+tokenizer or a promise that every request can fill the entire window.
+
+Advanced `max_tokens`, `tool_round_reserve`, and `attachment_reserve` overrides
+remain available for provider-specific limits; increasing output reduces the
+derived input ceiling. Invalid output/reserve combinations fail at startup.
+Legacy `max_input_tokens` remains an input-only compatibility setting with the
+old default reserves; it must not be combined with `context_window`. New configs
+should never need to calculate or specify `max_input_tokens` themselves.
+The CLI/environment equivalents are `--llm-context-window` and
+`MAX_LLM_CONTEXT_WINDOW`.
 
 | Capacity | Target |
 | --- | --- |

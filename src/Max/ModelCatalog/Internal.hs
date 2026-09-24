@@ -9,6 +9,7 @@ module Max.ModelCatalog.Internal
     ModelCatalogError (..),
     ContextLimits (..),
     defaultContextLimits,
+    contextLimitsForWindow,
     contextInputBudget,
     ModelCapabilities (..),
     LLMProfile (..),
@@ -67,10 +68,9 @@ data LLMProfile = LLMProfile
   }
   deriving stock (Eq)
 
--- | Prompt-side limits for one model profile.  @maxInputTokens@ is the
--- provider's hard input ceiling.  Output is tracked separately because it is
--- sent as the completion limit, while attachment and future tool-round
--- reserves consume space inside the input ceiling before history is planned.
+-- | Resolved prompt-side limits. Output has already been subtracted from the
+-- configured combined window to obtain @maxInputTokens@. Consumers must not
+-- subtract it again; media and tool reserves live inside this input ceiling.
 data ContextLimits = ContextLimits
   { maxInputTokens :: !Int,
     reservedOutputTokens :: !Int,
@@ -91,6 +91,22 @@ defaultContextLimits =
       attachmentReserve = 16384,
       toolRoundReserve = 16384
     }
+
+-- | Resolve a combined input/output window once, before any prompt planning.
+-- One eighth each is the default output allowance, tool-round headroom and
+-- (for multimodal profiles) attachment allowance. An explicit provider output
+-- cap changes the derived hard input ceiling, not the total window.
+contextLimitsForWindow :: Int -> Maybe Int -> Bool -> Either Text ContextLimits
+contextLimitsForWindow window outputOverride multimodal
+  | window < 2 = Left "context_window must leave room for input and output"
+  | output <= 0 = Left "max_tokens must be positive"
+  | output >= window = Left "max_tokens must be smaller than context_window"
+  | otherwise = Right (ContextLimits input output media reserve)
+  where
+    reserve = window `div` 8
+    output = maybe (max 1 reserve) id outputOverride
+    input = window - output
+    media = if multimodal then reserve else 0
 
 -- | Text-message budget after reserving space for future tool rounds and,
 -- only when present, multimodal attachments.
