@@ -19,6 +19,7 @@ import Max.Execution.Workflow (WorkflowHost (..))
 import Max.Skill.Workflow (ResolvedWorkflow (..), resolveWorkflow)
 import Max.Tool.Bundles (SkillLoad)
 import Max.Tool.Control (LoopControl (..))
+import Max.Tool.Returns (withReturnType)
 import Max.Tool.Types
 import Max.Tools.Schema (stringParam, toolObject)
 
@@ -26,7 +27,7 @@ codeModeSpecs :: Bool -> [ToolSpec]
 codeModeSpecs enabled =
   [ ToolSpec
       "run_code"
-      "用 codemode 技能的 JavaScript SDK 组合当前工具并返回筛选后的 JSON。必须单独提交；同一程序不自动重试，已发生的工具效果不会回滚。"
+      (withReturnType "run_code" "用 codemode 技能的 JavaScript SDK 组合当前工具并返回筛选后的 JSON。必须单独提交；同一程序不自动重试，已发生的工具效果不会回滚。")
       (toolObject [("code", stringParam "临时 async 函数体，最大 64 KiB；与 workflow/args 二选一"), ("workflow", stringParam "已加载工作流 skill/entry，固定为 use_skill 返回的版本"), ("args", object ["description" .= ("工作流输入，遵循已加载契约" :: Text)])] [])
   | enabled
   ]

@@ -227,6 +227,7 @@
       "src/Max/Tool/Catalog.hs",
       "src/Max/Tool/Control.hs",
       "src/Max/Tool/Protocol.hs",
+      "src/Max/Tool/Returns.hs",
       "src/Max/Tool/Types.hs",
       "src/Max/ToolContext.hs",
       "src/Max/Tools.hs",

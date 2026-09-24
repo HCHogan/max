@@ -98,6 +98,7 @@ estimateMessagesTokens messages = 4 + sum (map estimateMessageTokens messages)
 estimateBlockTokens :: ContentBlock -> Int
 estimateBlockTokens = \case
   TextBlock content -> estimateTextTokens content + 2
+  CacheBoundary -> 0
   -- Binary payloads are represented by the attachment reserve, not by treating
   -- base64 bytes as language tokens.
   ImageDataUrl _ -> 0

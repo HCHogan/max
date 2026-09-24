@@ -19,6 +19,7 @@ import Max.Dispatch qualified as Dispatch
 import Max.DispatchFixture (qqDispatch)
 import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
+import Max.LLM.Protocol (resolveCacheBoundaries)
 import Max.EpisodeStore (EpisodeHandle, parseEpisodeHandle)
 import Max.IR (Body (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
@@ -155,8 +156,12 @@ baseInputs =
 -- with prior bot replies living inside the transcript as text rather
 -- than as 'MsgAssistant' turns.  Nothing can produce two consecutive
 -- same-role messages if there is only one of each.
+-- | What a profile without prompt-cache hints receives.
+sent :: PromptInputs -> [ChatMessage]
+sent = resolveCacheBoundaries False . renderContext
+
 splitMessages :: [ChatMessage] -> (Text, Text)
-splitMessages msgs = case msgs of
+splitMessages msgs = case resolveCacheBoundaries False msgs of
   [MsgSystem sys, MsgUser ub] -> (sys, ub)
   other -> error $ "expected [MsgSystem, MsgUser], got: " <> show other
 
@@ -196,7 +201,7 @@ spec = do
       ub `shouldSatisfy` ("7777" `T.isInfixOf`)
       ub `shouldSatisfy` ("deepseek-flash" `T.isInfixOf`)
 
-    it "renders recent worked turns before the ambient transcript" $ do
+    it "renders recent worked turns after the transcript, before the environment" $ do
       let inputs =
             baseInputs
               { recentTurns = ["t#42 14:32 ✓「画了图」 · 5 tools ↦ #1234"]
@@ -204,7 +209,11 @@ spec = do
           (system, body) = splitMessages (renderContext inputs)
       body `shouldSatisfy` ("[recent turns — 工作记录" `T.isInfixOf`)
       body `shouldSatisfy` ("t#42 14:32" `T.isInfixOf`)
+      -- Work records change every turn, so they follow the append-only
+      -- transcript and precede the environment block.
       T.breakOn "[recent messages]" body
+        `shouldSatisfy` (\(prefix, _) -> not ("t#42" `T.isInfixOf` prefix))
+      T.breakOn "[environment]" body
         `shouldSatisfy` (\(prefix, _) -> "t#42" `T.isInfixOf` prefix)
       system `shouldSatisfy` ("完整 t#<n> 传给 context_resume" `T.isInfixOf`)
 
@@ -480,7 +489,7 @@ spec = do
     -- avoid, and in a group it would happen almost every turn.
     it "emits strictly alternating turns, current message last" $ do
       let inp = baseInputs {transcript = convo, historyTurns = True}
-      case renderContext inp of
+      case sent inp of
         [MsgSystem _, MsgUser h1, MsgAssistant a, MsgUser curr] -> do
           h1 `shouldSatisfy` ("[09:00 Alice #8001]:" `T.isInfixOf`)
           -- Multi-chunk replies persist as several bot rows; they merge
@@ -526,7 +535,7 @@ spec = do
     -- model reads the same message twice.
     it "does not repeat rows that became turns in the user body" $ do
       let inp = baseInputs {transcript = convo, historyTurns = True}
-      case last (renderContext inp) of
+      case last (sent inp) of
         MsgUser ub -> do
           ub `shouldSatisfy` (not . ("你好 Alice" `T.isInfixOf`))
           ub `shouldSatisfy` (not . ("#8001" `T.isInfixOf`))
@@ -534,7 +543,7 @@ spec = do
 
     it "omits the [recent messages] block when nothing trails the bot" $ do
       let inp = baseInputs {transcript = take 3 convo, historyTurns = True}
-      case last (renderContext inp) of
+      case last (sent inp) of
         MsgUser ub -> ub `shouldSatisfy` (not . ("[recent messages]" `T.isInfixOf`))
         other -> expectationFailure $ "unexpected trailing: " <> show other
 
@@ -545,7 +554,7 @@ spec = do
                 historyTurns = True,
                 inFlight = Set.fromList [8005]
               }
-      case renderContext inp of
+      case sent inp of
         [MsgSystem _, MsgUser _, MsgAssistant _, MsgUser curr] ->
           curr `shouldSatisfy` (not . ("我也想听" `T.isInfixOf`))
         other -> expectationFailure $ "unexpected shape: " <> show other
@@ -647,7 +656,7 @@ spec = do
       let img1 = PromptImage "[09:15 Alice] 消息里的图片:" "data:image/png;base64,AAAA"
           img2 = PromptImage "[当前消息] 里的图片:" "data:image/jpeg;base64,BBBB"
           inp = baseInputs {multimodal = True, images = [img1, img2]}
-          msgs = renderContext inp
+          msgs = sent inp
       case last msgs of
         MsgUserBlocks (TextBlock body : blocks) -> do
           body `shouldSatisfy` ("[current message]" `T.isInfixOf`)
@@ -659,6 +668,25 @@ spec = do
                          TextBlock img2.piLabel,
                          ImageDataUrl img2.piDataUrl
                        ]
+        other -> expectationFailure $ "unexpected shape: " <> show other
+
+    it "marks the stable prefix and the transcript as cache boundaries at token boundaries" $ do
+      let inp =
+            baseInputs
+              { transcript = [historyAt 9 8001 memberId (Just "Alice") "@1000 你好", historyAt 9 8002 botId Nothing "你好 Alice"],
+                recentTurns = ["t#42 14:32 ✓「画了图」 · 5 tools ↦ #1234"]
+              }
+      case last (renderContext inp) of
+        MsgUserBlocks blocks -> do
+          let texts = [t | TextBlock t <- blocks]
+              boundaries = length (filter (== CacheBoundary) blocks)
+          boundaries `shouldBe` length texts - 1
+          -- Each marked part ends in a newline and the next opens a block
+          -- header, so no token spans the boundary.
+          mapM_ (\t -> t `shouldSatisfy` ("\n" `T.isSuffixOf`)) (init texts)
+          mapM_ (\t -> T.take 1 t `shouldBe` "[") (drop 1 texts)
+          last texts `shouldSatisfy` ("[recent turns" `T.isPrefixOf`)
+          [ub | MsgUser ub <- [last (sent inp)]] `shouldBe` [T.concat texts]
         other -> expectationFailure $ "unexpected shape: " <> show other
 
     it "stays a plain MsgUser when no images were loaded" $ do

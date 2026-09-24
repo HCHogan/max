@@ -260,6 +260,7 @@ profileFor protocol =
       protocol = protocol,
       multimodal = True,
       historyAsTurns = False,
+      promptCacheBreakpoints = False,
       stream = False
     }
   where

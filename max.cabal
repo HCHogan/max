@@ -415,6 +415,7 @@ library
         Max.Tool.Types
         Max.Tool.Arguments
         Max.Tool.Protocol
+        Max.Tool.Returns
         Max.ToolContext
         Max.Tools
         Max.Tools.Bilibili
@@ -696,6 +697,7 @@ test-suite max-test
         Max.IR.PromptSpec
         Max.LLM.AdmissionSpec
         Max.LLM.TransportSpec
+        Max.LLM.ProtocolSpec
         Max.LLM.StreamSpec
         Max.LogSpec
         OneBot.ActionSpec
@@ -743,6 +745,7 @@ test-suite max-test
         Max.Sandbox.ChatSpec
         Max.Sandbox.RuntimeSpec
         Max.Runtime.ProtocolSpec
+        Max.Tool.ReturnsSpec
         Max.Tools.BrowserSpec
         Max.Tools.FilesSpec
         Max.ToolsSpec

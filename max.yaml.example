@@ -248,6 +248,15 @@ llm:
     #     The transcript is the default because roles cannot express a
     #     group (`user` conflates N speakers); flip this to compare the
     #     two shapes with !model rather than arguing about them.
+    #
+    #   prompt_cache_breakpoints: true
+    #     Mark the stable prompt prefixes (pins and summaries, then the
+    #     append-only transcript) for the server's prefix cache: NInfer's
+    #     prompt_cache_breakpoint on the OpenAI protocol, cache_control on
+    #     Anthropic.  Hybrid models such as Qwen3.5+ can only resume from an
+    #     exact checkpoint, so without these hints a new turn re-prefills
+    #     from the start.  Leave it off for servers that reject unknown
+    #     content fields; they then receive the unsplit prompt.
     # kimi:
     #   api_key: sk-...
     #   base_url: "https://api.moonshot.cn/v1"

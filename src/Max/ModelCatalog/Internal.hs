@@ -26,6 +26,7 @@ where
 
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 
@@ -64,7 +65,9 @@ data LLMProfile = LLMProfile
     protocol :: !Protocol,
     multimodal :: !Bool,
     historyAsTurns :: !Bool,
-    stream :: !Bool
+    stream :: !Bool,
+    -- | Send 'CacheBoundary' markers to the server as prefix-cache hints.
+    promptCacheBreakpoints :: !Bool
   }
   deriving stock (Eq)
 
@@ -104,7 +107,7 @@ contextLimitsForWindow window outputOverride multimodal
   | otherwise = Right (ContextLimits input output media reserve)
   where
     reserve = window `div` 8
-    output = maybe (max 1 reserve) id outputOverride
+    output = fromMaybe (max 1 reserve) outputOverride
     input = window - output
     media = if multimodal then reserve else 0
 

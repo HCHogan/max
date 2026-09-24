@@ -129,7 +129,7 @@ import Max.History.Types
   )
 import Max.LLM.Types
   ( ChatMessage (MsgAssistant, MsgSystem, MsgUser, MsgUserBlocks),
-    ContentBlock (ImageDataUrl, TextBlock, VideoDataUrl),
+    ContentBlock (CacheBoundary, ImageDataUrl, TextBlock, VideoDataUrl),
   )
 import Max.Media.Types
   ( MediaSegment (msDescription, msSegIndex),
@@ -298,7 +298,7 @@ renderContext pi' =
       mTranscript
         | pi'.historyTurns = if null bodyRows then Nothing else Just bodyRows
         | otherwise = Just bodyRows
-      userBody =
+      userParts =
         renderUser
           pi'.tz
           pi'.now
@@ -318,13 +318,16 @@ renderContext pi' =
       mediaBlock u
         | "data:video/" `T.isPrefixOf` u = VideoDataUrl u
         | otherwise = ImageDataUrl u
-      userMessage = case pi'.images of
-        [] -> MsgUser userBody
+      -- Cache boundaries follow the stable parts; profiles without cache
+      -- hints receive the same text merged back into one block.
+      (prefixParts, volatilePart) = (init userParts, last userParts)
+      prefixBlocks = concat [[TextBlock part, CacheBoundary] | part <- prefixParts]
+      userMessage = MsgUserBlocks . (prefixBlocks <>) $ case pi'.images of
+        [] -> [TextBlock volatilePart]
         (i0 : rest) ->
-          MsgUserBlocks $
-            TextBlock (userBody <> "\n\n" <> i0.piLabel)
-              : mediaBlock i0.piDataUrl
-              : concat [[TextBlock i.piLabel, mediaBlock i.piDataUrl] | i <- rest]
+          TextBlock (volatilePart <> "\n\n" <> i0.piLabel)
+            : mediaBlock i0.piDataUrl
+            : concat [[TextBlock i.piLabel, mediaBlock i.piDataUrl] | i <- rest]
       messages =
         [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) pi'.outputCapabilities effectivePersona pi'.skills)]
           <> historyTurnMessages pi'.tz turnRows
@@ -615,30 +618,40 @@ renderUser ::
   [HistoryItem] -> -- pinned items, in user pin order
   [HistoryItem] -> -- trigger's own forward children (trigger IS a 转发)
   DispatchMessage ->
-  Text
+  [Text]
 renderUser tz' now' origin' compartments' recentTurns' continuationView' mTranscript envText mMemBlock replyCtx' pinnedItems' triggerFwd' gm =
-  T.intercalate "\n" $
-    concat
-      [ -- Pinned first so the model sees them as primary context
-        if null pinnedItems'
-          then []
-          else
-            [ "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]",
-              T.intercalate "\n" (map (renderHistoryLine tz') pinnedItems'),
-              ""
-            ],
-        renderCompartments tz' compartments',
-        if null recentTurns'
-          then []
-          else
-            [ "[recent turns — 工作记录，细节用 t# 句柄调 context_resume]",
-              T.intercalate "\n" recentTurns'
-            ],
-        case mTranscript of
+  -- Every part but the last is a cacheable prefix: pins and summaries change
+  -- rarely, the transcript only grows. Each ends in a newline and the next
+  -- starts with a bracket, so a cache boundary falls on a token boundary.
+  [T.intercalate "\n" part <> "\n" | part <- [stable, transcript], not (null part)]
+    <> [T.intercalate "\n" (dropWhile T.null volatile)]
+  where
+   -- Pinned first so the model sees them as primary context
+   stable =
+    ( if null pinnedItems'
+        then []
+        else
+          [ "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]",
+            T.intercalate "\n" (map (renderHistoryLine tz') pinnedItems'),
+            ""
+          ]
+    )
+      <> renderCompartments tz' compartments'
+   transcript = case mTranscript of
           Nothing -> []
           Just [] -> ["[recent messages]", "(无历史消息)"]
-          Just hs -> "[recent messages]" : map (renderHistoryLine tz') hs,
-        -- Keep changing time/roster data after the cacheable transcript prefix.
+          Just hs -> "[recent messages]" : map (renderHistoryLine tz') hs
+   -- Everything below changes every turn; keep it after the append-only
+   -- transcript so the cacheable prefix ends at the latest message.
+   volatile =
+    concat
+      [ if null recentTurns'
+          then []
+          else
+            [ "",
+              "[recent turns — 工作记录，细节用 t# 句柄调 context_resume]",
+              T.intercalate "\n" recentTurns'
+            ],
         ["", envText],
         maybe [] (\b -> ["", b]) mMemBlock,
         [""],

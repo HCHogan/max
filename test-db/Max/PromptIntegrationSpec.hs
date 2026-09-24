@@ -23,6 +23,7 @@ import Max.DB.Session (fetchOrInit)
 import Max.DB.Transaction (withReadSnapshot)
 import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.LLM (ChatMessage (..))
+import Max.LLM.Protocol (resolveCacheBoundaries)
 import Max.EpisodeStore
 import Max.IR (Body (..), MentionTarget (MentionIdentity), Node (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
@@ -69,8 +70,9 @@ trigger =
       mentionPrincipals = Map.singleton (PrincipalIdentityId 1) (PrincipalId 1)
     }
 
+-- | The body a profile without prompt-cache hints receives.
 userBodyOf :: [ChatMessage] -> Text
-userBodyOf msgs = case last msgs of
+userBodyOf msgs = case last (resolveCacheBoundaries False msgs) of
   MsgUser t -> t
   other -> error $ "expected trailing MsgUser, got: " <> show other
 
@@ -107,7 +109,7 @@ spec pool = before_ (truncateAll pool) $
       -- The whole conversation is [system, user]: the bot's own past
       -- replies are lines in the transcript, not assistant turns.
       length msgs `shouldBe` 2
-      case msgs of
+      case resolveCacheBoundaries False msgs of
         [MsgSystem _, MsgUser ub] -> do
           ub `shouldSatisfy` ("[09:00 Alice #1001]:" `T.isInfixOf`)
           ub `shouldSatisfy` ("[10:00 Max #1002]: 你好 Alice" `T.isInfixOf`)

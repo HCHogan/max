@@ -40,6 +40,7 @@ import Max.Tool.Catalog
     validateArguments,
   )
 import Max.Tool.Control (LoopControl (..))
+import Max.Tool.Returns (withReturnType)
 import Max.Tool.Types
 import Max.Util (trySync)
 
@@ -86,7 +87,7 @@ instance Show (ToolRegistry es) where
 
 buildToolRegistry :: [ToolDefinition] -> [Tool es] -> Either ToolCatalogError (ToolRegistry es)
 buildToolRegistry definitions runners = do
-  catalog <- buildToolCatalog definitions [ToolSpec t.toolName t.toolDescription t.toolSchema | t <- runners]
+  catalog <- buildToolCatalog definitions [ToolSpec t.toolName (withReturnType t.toolName t.toolDescription) t.toolSchema | t <- runners]
   registered <- traverse (register catalog) runners
   pure (ToolRegistry catalog (Map.fromList registered))
   where

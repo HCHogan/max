@@ -2,6 +2,7 @@
 -- because feature modules already import it; assembly there would create a cycle.
 module Max.Toolset
   ( allToolsFor,
+    inventoryToolNames,
     toolCountFor,
     toolDefinitionsFor,
     toolAllowedByEffectCeiling,
@@ -11,7 +12,7 @@ where
 
 import Data.Aeson (object, (.=))
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, isNothing)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -239,7 +240,10 @@ toolDefinitionsFor env gid caps =
       StickersOnly -> caps.tcStickers && env.beEmbeddingEnabled
       SkillsOnly -> caps.tcSkills
       SearchOnly -> isJust env.beSearch
-      MonitorArmOnly -> caps.tcMonitorArming
+      -- Ordinary foreground turns list arm_monitor for every initiator so the
+      -- tool block (a cached prompt prefix) does not change with who speaks.
+      -- MonitorControl still rejects arming for roles below group admin.
+      MonitorArmOnly -> caps.tcMonitorArming || (not caps.tcBackground && isNothing caps.tcEffectCeiling)
       BackgroundOnly -> caps.tcBackground
     ceilingOpen definition' =
       (caps.tcBackground && definition'.tdRef `elem` [ToolRef "task_wait", ToolRef "task_progress"])
@@ -269,6 +273,10 @@ data ToolInventoryItem = ToolInventoryItem
   { tiGate :: !ToolGate,
     tiDefinition :: !ToolDefinition
   }
+
+-- | Every tool name the inventory can expose, before any gate.
+inventoryToolNames :: [Text]
+inventoryToolNames = [item.tiDefinition.tdRef.unToolRef | item <- toolInventory]
 
 toolInventory :: [ToolInventoryItem]
 toolInventory =

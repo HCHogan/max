@@ -66,6 +66,28 @@ retry delays, storage quotas, and expiry semantics are not context capacities an
 are not multiplied by the model window. Existing summary tiers remain an age and
 importance policy under the model-sized summary budget.
 
+## Prompt layout and cache boundaries
+
+The prompt is ordered by how often each part changes, so the provider's prefix
+cache covers as much as possible: system prompt, then the tool definitions,
+then pins and episode summaries, then the append-only raw transcript, and
+last the per-turn blocks (recent work turns, environment, memories, quoted
+context, current message). Ordinary foreground turns list the same tools
+whoever speaks; `arm_monitor` is visible to every initiator and still rejects
+arming below group admin. Every tool description ends with its result shape
+(`返回：`), used by native calls and code mode alike; the shapes live in
+`Max.Tool.Returns`, outside the schema hash.
+
+The user message carries `CacheBoundary` markers after the summaries and after
+the transcript. A profile with `prompt_cache_breakpoints: true` sends them as
+prefix-cache hints (`prompt_cache_breakpoint` for NInfer's OpenAI protocol,
+`cache_control` for Anthropic); every other profile receives the unsplit
+text. Each marked part ends in a newline and the next begins with a block
+header, so the boundary is a token boundary. Hybrid attention models can only
+resume from an exact checkpoint, so these markers are what let a new turn
+reuse the summaries and the transcript it shares with the previous one;
+whether the server keeps them depends on its own cache capacity.
+
 ## Three primitives
 
 `context_search({query, kinds?, from?, until?, sender?, limit?})` finds relevant

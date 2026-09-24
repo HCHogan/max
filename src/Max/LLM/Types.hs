@@ -29,6 +29,10 @@ data ContentBlock
     -- (Kimi K3, Qwen-VL, GLM-4V…) accept.  Anthropic's protocol has no
     -- video input; it degrades to a text marker there.
     VideoDataUrl !Text
+  | -- | Zero-width marker: the prompt up to the preceding block is a stable
+    -- prefix. Profiles with @prompt_cache_breakpoints@ send it as a cache
+    -- hint; all others drop it and merge the surrounding text.
+    CacheBoundary
   deriving stock (Show, Eq)
 
 -- | A single message in the chat history.  Mirrors OpenAI's role
@@ -108,6 +112,7 @@ instance ToJSON ContentBlock where
         [ "type" .= ("image_url" :: Text),
           "image_url" .= object ["url" .= url]
         ]
+    CacheBoundary -> object ["type" .= ("cache_boundary" :: Text)]
 
 instance FromJSON ContentBlock where
   parseJSON = withObject "ContentBlock" $ \o ->
@@ -115,6 +120,7 @@ instance FromJSON ContentBlock where
       "text" -> TextBlock <$> o .: "text"
       "video_url" -> VideoDataUrl <$> nestedUrl o "video_url"
       "image_url" -> ImageDataUrl <$> nestedUrl o "image_url"
+      "cache_boundary" -> pure CacheBoundary
       other -> fail ("unknown content block type: " <> T.unpack (other :: Text))
     where
       nestedUrl o key = o .: key >>= withObject "url wrapper" (.: "url")

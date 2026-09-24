@@ -2,6 +2,7 @@
 -- A single request body serves both actual transport and the call record.
 module Max.LLM.Protocol
   ( requestBodyFor,
+    resolveCacheBoundaries,
     parseResponseOpenAI,
     parseResponseAnthropic,
     parseResponseResponses,
@@ -32,13 +33,46 @@ import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
 import Max.Tool.Types (ToolSpec (..))
 
 requestBodyFor :: LLMProfile -> [ChatMessage] -> [ToolSpec] -> Bool -> Value
-requestBodyFor cfg msgs tools streaming =
+requestBodyFor cfg rawMsgs tools streaming =
   object $ case cfg.protocol of
     ProtocolOpenAI ->
       openAIFields cfg msgs tools
         <> (if streaming then streamFieldsOpenAI else ["stream" .= False])
     ProtocolAnthropic -> anthropicFields cfg msgs tools <> ["stream" .= streaming]
     ProtocolResponses -> responsesFields cfg msgs tools <> ["stream" .= streaming]
+  where
+    msgs = resolveCacheBoundaries cfg.promptCacheBreakpoints rawMsgs
+
+-- | 'CacheBoundary' markers are prefix-cache hints only for profiles that opt
+-- in. For every other profile drop them and rejoin the text they separated,
+-- so the request is byte-identical to an unmarked prompt.
+resolveCacheBoundaries :: Bool -> [ChatMessage] -> [ChatMessage]
+resolveCacheBoundaries keep = map $ \case
+  MsgUserBlocks blocks
+    | not keep -> case unmark blocks of
+        [TextBlock text] -> MsgUser text
+        merged -> MsgUserBlocks merged
+  message -> message
+  where
+    unmark = \case
+      TextBlock a : CacheBoundary : TextBlock b : rest -> unmark (TextBlock (a <> b) : rest)
+      CacheBoundary : rest -> unmark rest
+      block : rest -> block : unmark rest
+      [] -> []
+
+-- | Encode blocks, marking each block that a 'CacheBoundary' follows.
+encodeMarkedBlocks :: (Value -> Value) -> (ContentBlock -> Value) -> [ContentBlock] -> [Value]
+encodeMarkedBlocks mark encodeBlock = \case
+  [] -> []
+  CacheBoundary : rest -> encodeMarkedBlocks mark encodeBlock rest
+  block : CacheBoundary : rest -> mark (encodeBlock block) : encodeMarkedBlocks mark encodeBlock rest
+  block : rest -> encodeBlock block : encodeMarkedBlocks mark encodeBlock rest
+
+-- | NInfer's OpenAI-compatible explicit prefix-cache write candidate.
+withBreakpoint :: Value -> Value
+withBreakpoint = \case
+  Object o -> Object (KM.insert "prompt_cache_breakpoint" (object ["mode" .= ("explicit" :: Text)]) o)
+  other -> other
 
 -- | Ask the OpenAI streaming endpoint to report usage, including cache hits.
 streamFieldsOpenAI :: [Pair]
@@ -137,7 +171,7 @@ parsedCalls acc =
 openAIFields :: LLMProfile -> [ChatMessage] -> [ToolSpec] -> [Pair]
 openAIFields cfg msgs tools =
   [ "model" .= cfg.model,
-    "messages" .= msgs,
+    "messages" .= map encodeMessage msgs,
     "max_tokens" .= cfg.maxTokens
   ]
     <> temperatureField cfg
@@ -149,6 +183,10 @@ openAIFields cfg msgs tools =
              "tool_choice" .= ("auto" :: Text)
            ]
        ]
+  where
+    encodeMessage = \case
+      MsgUserBlocks blocks -> object ["role" .= ("user" :: Text), "content" .= encodeMarkedBlocks withBreakpoint toJSON blocks]
+      message -> toJSON message
 
 -- | @temperature@ only when configured — omitting lets the server
 -- pick its default, and some providers 400 on explicit values.
@@ -223,7 +261,7 @@ responsesInput msgs = (instructions, concatMap item msgs)
       MsgSystem _ -> []
       MsgUser c -> [object ["role" .= ("user" :: Text), "content" .= c]]
       MsgUserBlocks blocks ->
-        [object ["role" .= ("user" :: Text), "content" .= map inputBlock blocks]]
+        [object ["role" .= ("user" :: Text), "content" .= encodeMarkedBlocks withBreakpoint inputBlock blocks]]
       MsgAssistant c -> [object ["role" .= ("assistant" :: Text), "content" .= c]]
       MsgAssistantToolCalls raw _ -> case raw of
         Array xs -> V.toList xs
@@ -238,6 +276,7 @@ responsesInput msgs = (instructions, concatMap item msgs)
     inputBlock = \case
       TextBlock t -> object ["type" .= ("input_text" :: Text), "text" .= t]
       ImageDataUrl u -> object ["type" .= ("input_image" :: Text), "image_url" .= u]
+      CacheBoundary -> object []
       -- No video input on this API; a marker beats a 400.
       VideoDataUrl _ -> object ["type" .= ("input_text" :: Text), "text" .= ("[video omitted]" :: Text)]
 
@@ -423,6 +462,11 @@ data AnthropicMsg = AnthropicMsg !Text !Value
 ephemeralCache :: Value
 ephemeralCache = object ["type" .= ("ephemeral" :: Text)]
 
+addCacheControl :: Value -> Value -> Value
+addCacheControl control = \case
+  Object o -> Object (KM.insert "cache_control" control o)
+  other -> other
+
 -- | Put a @cache_control@ breakpoint on the request's final content
 -- block, so the next request in the agent loop (same messages + a few
 -- appended) reads everything up to here from cache.  A plain-string
@@ -483,9 +527,11 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
       -- media_type, data}@ rather than OpenAI's data-URL
       -- @image_url@, so split our data URLs back apart.  A URL that
       -- doesn't parse degrades to a text marker.
-      let content =
-            [ case b of
+      let content = encodeMarkedBlocks (addCacheControl ephemeralCache) anthropicBlock blocks
+          anthropicBlock b =
+            case b of
                 TextBlock t -> object ["type" .= ("text" :: Text), "text" .= t]
+                CacheBoundary -> object []
                 -- Anthropic has no video input type.
                 VideoDataUrl _ ->
                   object ["type" .= ("text" :: Text), "text" .= ("[video：该模型协议不支持视频输入]" :: Text)]
@@ -502,8 +548,6 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
                       ]
                   Nothing ->
                     object ["type" .= ("text" :: Text), "text" .= ("[image]" :: Text)]
-            | b <- blocks
-            ]
        in AnthropicMsg "user" (toJSON content) : go rest
     go (MsgAssistant t : rest) = AnthropicMsg "assistant" (toJSON t) : go rest
     go (MsgAssistantToolCalls raw tcs : rest) =

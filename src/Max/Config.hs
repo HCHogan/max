@@ -1229,13 +1229,14 @@ data ProfileSpec = ProfileSpec
     protocol :: !(Maybe Protocol),
     multimodal :: !(Maybe Bool),
     historyAsTurns :: !(Maybe Bool),
-    stream :: !(Maybe Bool)
+    stream :: !(Maybe Bool),
+    promptCacheBreakpoints :: !(Maybe Bool)
   }
   deriving stock (Show, Eq)
 
 emptySpec :: ProfileSpec
 emptySpec =
-  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 -- | Per-field first-Just-wins overlay (left = higher priority).
 mergeSpec :: ProfileSpec -> ProfileSpec -> ProfileSpec
@@ -1255,7 +1256,8 @@ mergeSpec a b =
       protocol = a.protocol <|> b.protocol,
       multimodal = a.multimodal <|> b.multimodal,
       historyAsTurns = a.historyAsTurns <|> b.historyAsTurns,
-      stream = a.stream <|> b.stream
+      stream = a.stream <|> b.stream,
+      promptCacheBreakpoints = a.promptCacheBreakpoints <|> b.promptCacheBreakpoints
     }
 
 instance HasCodec ProfileSpec where
@@ -1277,6 +1279,7 @@ instance HasCodec ProfileSpec where
         <*> optionalField "multimodal" "Endpoint accepts image content blocks" .= (.multimodal)
         <*> optionalField "history_as_turns" "Render history as user/assistant turns instead of one flat transcript" .= (.historyAsTurns)
         <*> optionalField "stream" "Stream the completion over SSE, sending finished paragraphs as they arrive" .= (.stream)
+        <*> optionalField "prompt_cache_breakpoints" "Mark stable prompt prefixes for the server's prefix cache (NInfer prompt_cache_breakpoint; Anthropic cache_control)" .= (.promptCacheBreakpoints)
 
 -- | autodocodec has no @HasCodec Double@ on purpose (lossy floats);
 -- bridge through Scientific, which is fine for temperature values.
@@ -1470,6 +1473,7 @@ overlayProfileParser = do
           env "MAX_LLM_EFFORT",
           metavar "LEVEL"
         ]
+  let promptCacheBreakpoints = Nothing
   pure ProfileSpec {..}
   where
     protoReader = eitherReader $ \s -> case parseProtocol (T.pack s) of
@@ -1557,7 +1561,8 @@ materializeLLM (dn, fileProfiles, overlay) = do
             protocol = fromMaybe ProtocolOpenAI spec.protocol,
             multimodal = resolvedMultimodal,
             historyAsTurns = fromMaybe False spec.historyAsTurns,
-            stream = fromMaybe True spec.stream
+            stream = fromMaybe True spec.stream,
+            promptCacheBreakpoints = fromMaybe False spec.promptCacheBreakpoints
           }
 
 -- | @auto@ / @always@ / @never@ — the spellings 'parseColorMode' takes.

@@ -7,6 +7,7 @@
 完整 SDK：
 
 - `tools.<工具名>(args)`：调用本轮可见工具，成功返回值，失败抛出 ToolError。
+  每个工具描述末尾的「返回：」就是这个值的类型，可以直接按字段取用，不必先返回原文看结构。
   也可写 `tools[工具名](args)`。参数省略时为 `{}`；`await` 可用于返回值。
 - `max.raw(name, args)`：返回完整 outcome，不抛出工具失败。
   成功是 `{outcome: "succeeded" | "committed", value}`；失败是
