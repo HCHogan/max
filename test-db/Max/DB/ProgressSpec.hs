@@ -16,7 +16,8 @@ import Max.Jobs qualified as Jobs
 import Max.Platform.Delivery.Queue (newDeliveryQueue)
 import Max.Platform.Types (DeliveryId (..))
 import Max.ReplySend
-import Max.Task.Types (JobView (..), TaskProfile (Basic))
+import Max.Task.State (TaskStatus (Succeeded))
+import Max.Task.Types (JobResult (..), JobView (..), TaskProfile (Basic))
 import Max.Tasks (beginTurnRuntime)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..), UserId (..))
@@ -26,7 +27,8 @@ spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "job notice publication" $ do
   it "publishes notice paragraphs through the shared mention and reply resolver" $ do
     running <- runningJob pool Basic Map.empty
-    Jobs.reportJobProgress running.jobs running.turn.atrTurnId "progress" `shouldReturn` True
+    -- Only terminal results enqueue notices; progress stays in task status.
+    Jobs.completeJob running.jobs running.job.run Succeeded (JobResult "result" Nothing)
     Jobs.PublishJobNotice job version _ <- Jobs.takeJobWork running.jobs
     (front, _, _) <- seed pool 900 1
     Jobs.bindJobNotice running.jobs front.atrTurnId job.run version

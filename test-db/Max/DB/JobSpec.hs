@@ -27,9 +27,10 @@ import Max.MessageKind (MessageKind (KindChat))
 import Max.Platform.Delivery.Queue (newDeliveryQueue, pendingDeliveryCount)
 import Max.Platform.Types (CanonicalMessageId (..), DeliveryId (..))
 import Max.Task.Types
-import Max.Tasks (beginTurnRuntime, cancelAgentTurnTask, newTaskRegistry)
+import Max.Tasks (cancelAgentTurnTask, newTaskRegistry)
 import Max.Turn.Types
-import OneBot.Types (GroupId (..), UserId (..))
+import OneBot.Types (GroupId (..))
+import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: DbPool -> Spec
@@ -89,23 +90,16 @@ spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ d
     void (cancelAgentTurnTask running.tasks running.turn.atrTurnId)
     withDb pool (Control.runTaskControl running.jobs (scope running) (Control.startTask "late" Basic Null)) >>= (`shouldSatisfy` isLeft)
 
-  it "blocks background output and revokes a stale progress notice at the shared publisher" $ do
+  it "blocks background output and keeps progress off the shared publisher" $ do
     running <- runningJob pool Basic Map.empty
     deliveries <- newDeliveryQueue (DeliveryId 0)
     let request turn = OutboundRequest KindChat (GroupId 900) (Body [NText "output"]) Nothing DeliverConversation (Just (TurnOutputLink turn.atrTurnId 0)) Nothing
         publish turn = withDbLog pool . runOutbound running.tasks running.jobs deliveries $ sendRecorded (request turn)
     publish running.turn >>= (`shouldSatisfy` publicationFailed)
+    -- Progress is visible through task status only; it queues no notice.
     Jobs.reportJobProgress running.jobs running.turn.atrTurnId "progress" `shouldReturn` True
-    Jobs.PublishJobNotice job version _ <- Jobs.takeJobWork running.jobs
-    (notice, _, _) <- seed pool 900 1
-    -- A missing runtime is denied even if a caller guesses a valid job notice.
-    Jobs.bindJobNotice running.jobs notice.atrTurnId job.run version
-    publish notice >>= (`shouldSatisfy` publicationFailed)
-    _ <- beginTurnRuntime running.tasks notice (GroupId 900) (UserId 1) Nothing
-    publish notice >>= (`shouldSatisfy` (not . publicationFailed))
-    Jobs.reportJobProgress running.jobs running.turn.atrTurnId "newer progress" `shouldReturn` True
-    publish notice >>= (`shouldSatisfy` publicationFailed)
-    withDb pool (query "SELECT count(*) FROM messages WHERE agent_turn_id IS NOT NULL" ()) `shouldReturn` [Only (1 :: Int64)]
+    timeout 20000 (Jobs.takeJobWork running.jobs) `shouldReturn` Nothing
+    withDb pool (query "SELECT count(*) FROM messages WHERE agent_turn_id IS NOT NULL" ()) `shouldReturn` [Only (0 :: Int64)]
 
   it "terminalizes interrupted turns at boot without creating another job" $ do
     running <- runningJob pool Basic Map.empty
