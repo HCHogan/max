@@ -70,7 +70,6 @@ pkgs.testers.runNixOSTest {
     networking.firewall.enable = false;
   };
   testScript = ''
-    import json
     import shlex
     start_all()
     machine.wait_for_unit("max.service")
