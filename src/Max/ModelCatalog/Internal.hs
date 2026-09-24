@@ -11,6 +11,7 @@ module Max.ModelCatalog.Internal
     defaultContextLimits,
     contextLimitsForWindow,
     contextInputBudget,
+    contextWorkingBudget,
     ModelCapabilities (..),
     LLMProfile (..),
     Protocol (..),
@@ -67,7 +68,9 @@ data LLMProfile = LLMProfile
     historyAsTurns :: !Bool,
     stream :: !Bool,
     -- | Send 'CacheBoundary' markers to the server as prefix-cache hints.
-    promptCacheBreakpoints :: !Bool
+    promptCacheBreakpoints :: !Bool,
+    -- | Soft budget for the context Max assembles up front; see 'ContextLimits'.
+    contextBudget :: !(Maybe Int)
   }
   deriving stock (Eq)
 
@@ -78,7 +81,11 @@ data ContextLimits = ContextLimits
   { maxInputTokens :: !Int,
     reservedOutputTokens :: !Int,
     attachmentReserve :: !Int,
-    toolRoundReserve :: !Int
+    toolRoundReserve :: !Int,
+    -- | Optional soft budget for the context assembled up front (raw tail,
+    -- summaries, memories, read pages). It trades prefill time and long-context
+    -- quality against recall; the hard ceilings above still bound a turn.
+    workingBudget :: !(Maybe Int)
   }
   deriving stock (Show, Eq)
 
@@ -92,7 +99,8 @@ defaultContextLimits =
     { maxInputTokens = 114688,
       reservedOutputTokens = 16384,
       attachmentReserve = 16384,
-      toolRoundReserve = 16384
+      toolRoundReserve = 16384,
+      workingBudget = Nothing
     }
 
 -- | Resolve a combined input/output window once, before any prompt planning.
@@ -104,7 +112,7 @@ contextLimitsForWindow window outputOverride multimodal
   | window < 2 = Left "context_window must leave room for input and output"
   | output <= 0 = Left "max_tokens must be positive"
   | output >= window = Left "max_tokens must be smaller than context_window"
-  | otherwise = Right (ContextLimits input output media reserve)
+  | otherwise = Right (ContextLimits input output media reserve Nothing)
   where
     reserve = window `div` 8
     output = fromMaybe (max 1 reserve) outputOverride
@@ -119,6 +127,13 @@ contextInputBudget limits hasAttachments =
     limits.maxInputTokens
       - limits.toolRoundReserve
       - if hasAttachments then limits.attachmentReserve else 0
+
+-- | The budget up-front context capacities derive from: the soft working
+-- budget when configured, never more than the hard input budget.
+contextWorkingBudget :: ContextLimits -> Bool -> Int
+contextWorkingBudget limits hasAttachments = maybe hard (min hard) limits.workingBudget
+  where
+    hard = contextInputBudget limits hasAttachments
 
 -- | Safe projection used by prompt construction and command/status paths.
 data ModelCapabilities = ModelCapabilities
@@ -195,7 +210,8 @@ lookupModelCapabilities name catalog =
                 { maxInputTokens = profile.maxInputTokens,
                   reservedOutputTokens = profile.maxTokens,
                   attachmentReserve = profile.attachmentReserve,
-                  toolRoundReserve = profile.toolRoundReserve
+                  toolRoundReserve = profile.toolRoundReserve,
+                  workingBudget = profile.contextBudget
                 }
           }
 

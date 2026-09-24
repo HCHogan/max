@@ -261,6 +261,7 @@ profileFor protocol =
       multimodal = True,
       historyAsTurns = False,
       promptCacheBreakpoints = False,
+      contextBudget = Nothing,
       stream = False
     }
   where

@@ -141,7 +141,7 @@ import Max.Memory.Types
     MemoryItem (memContent, memId, memUpdatedAt, memVersion),
     MemoryVersion (unMemoryVersion),
   )
-import Max.ModelCatalog.Internal (ContextLimits, contextInputBudget)
+import Max.ModelCatalog.Internal (ContextLimits, contextWorkingBudget)
 import Max.Platform.Types
   ( AdvertisedCaps (canMention),
     CanonicalMessageId (CanonicalMessageId),
@@ -507,7 +507,7 @@ replyContextTokens = \case
 -- not a storage cap — 'Max.Tools.Memory.maxMemoriesPerScope' still
 -- governs what a scope may hold.
 memoryInjectCap :: ContextLimits -> Bool -> Int
-memoryInjectCap limits media = max 1 (contextInputBudget limits media `div` 32 `div` 364)
+memoryInjectCap limits media = max 1 (contextWorkingBudget limits media `div` 32 `div` 364)
 
 -- | Render memories as background notes; omit the block when empty.
 renderMemories :: TimeZone -> Bool -> Text -> [MemoryItem] -> [MemoryItem] -> Maybe Text

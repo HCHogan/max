@@ -42,13 +42,27 @@ should never need to calculate or specify `max_input_tokens` themselves.
 The CLI/environment equivalents are `--llm-context-window` and
 `MAX_LLM_CONTEXT_WINDOW`.
 
+`context_budget` optionally sets a smaller **working budget** `W = min(B,
+context_budget)` for the context assembled up front. The window stays the hard
+ceiling for a turn (tool rounds, final fit checks); the working budget trades
+prefill time and long-context quality against recall. Without it `W = B`.
+Startup rejects a budget above the text planning budget. For example
+`context_window: 262144` with `context_budget: 131072` keeps a 196,608-token
+turn ceiling while sizing the initial context from 131,072.
+
+At startup Max also lists each OpenAI-protocol server's models and warns when a
+profile's configured window exceeds the context length the server reports
+(`context_length`, `max_context_length`, `max_model_len` or `context_window`).
+The check is advisory: an unreachable server or unreported length is skipped,
+and the configuration remains the source of truth.
+
 | Capacity | Target |
 | --- | --- |
-| Raw history collection/high watermark | `B / 2` |
-| Raw tail retained by automatic historian | `B / 4` |
-| Episode summary injection | `B / 8` |
-| Memory candidates per subject | `max(1, B / 32 / 364)` entries |
-| Read page text budget | `B / 32`, transport guard at 16,384 estimated tokens |
+| Raw history collection/high watermark | `W / 2` |
+| Raw tail retained by automatic historian | `W / 4` |
+| Episode summary injection | `W / 8` |
+| Memory candidates per subject | `max(1, W / 32 / 364)` entries |
+| Read page text budget | `W / 32`, transport guard at 16,384 estimated tokens |
 | Historian source batch | `2 / 3` of the historian profile's own input budget |
 
 Automatic capture keeps the recent raw tail; a single newest message exceeding

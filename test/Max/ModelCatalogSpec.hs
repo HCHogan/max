@@ -14,7 +14,8 @@ spec = describe "ModelCatalog" $ do
         { maxInputTokens = 114688,
           reservedOutputTokens = 16384,
           attachmentReserve = 16384,
-          toolRoundReserve = 16384
+          toolRoundReserve = 16384,
+          workingBudget = Nothing
         }
 
   it "keeps a valid default and lists profile names deterministically" $ do
@@ -39,14 +40,14 @@ spec = describe "ModelCatalog" $ do
 
   it "derives the 262K combined window instead of granting 262K input" $ do
     contextLimitsForWindow 262144 Nothing True
-      `shouldBe` Right (ContextLimits 229376 32768 32768 32768)
+      `shouldBe` Right (ContextLimits 229376 32768 32768 32768 Nothing)
     fmap (`contextInputBudget` False) (contextLimitsForWindow 262144 Nothing True) `shouldBe` Right 196608
     fmap (`contextInputBudget` True) (contextLimitsForWindow 262144 Nothing True) `shouldBe` Right 163840
 
   it "preserves the 128K defaults and reallocates an explicit output cap" $ do
     contextLimitsForWindow 131072 Nothing True `shouldBe` Right defaultContextLimits
     contextLimitsForWindow 262144 (Just 16384) False
-      `shouldBe` Right (ContextLimits 245760 16384 0 32768)
+      `shouldBe` Right (ContextLimits 245760 16384 0 32768 Nothing)
 
   it "rejects impossible combined windows and output caps" $ do
     contextLimitsForWindow 0 Nothing False `shouldSatisfy` either (const True) (const False)
@@ -76,4 +77,4 @@ capabilities =
     ]
 
 limits :: ContextLimits
-limits = ContextLimits 32768 4096 4096 4096
+limits = ContextLimits 32768 4096 4096 4096 Nothing

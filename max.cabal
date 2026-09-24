@@ -304,6 +304,7 @@ library
         Max.Agent.Runtime
         Max.Agent.Failure
         Max.LLM.Types
+        Max.LLM.WindowCheck
         Max.LLM.Protocol
         Max.LLM.CallContext
         Max.LLM.Stream
@@ -699,6 +700,7 @@ test-suite max-test
         Max.LLM.TransportSpec
         Max.LLM.ProtocolSpec
         Max.LLM.StreamSpec
+        Max.LLM.WindowCheckSpec
         Max.LogSpec
         OneBot.ActionSpec
         OneBot.EventSpec

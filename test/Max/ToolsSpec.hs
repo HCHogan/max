@@ -16,7 +16,7 @@ import Max.Effects.MemoryQuery (MemoryQuery)
 import Max.Effects.PlatformInteraction (PlatformInteraction)
 import Max.Effects.Tools (Tool (..))
 import Max.Effects.TurnQuery (TurnQuery)
-import Max.ModelCatalog (ContextLimits (..), contextLimitsForWindow, defaultContextLimits)
+import Max.ModelCatalog (ContextLimits (..), contextInputBudget, contextLimitsForWindow, defaultContextLimits)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
 import Max.Time.Parse (parseTimeArg)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext)
@@ -91,6 +91,14 @@ spec = describe "model-visible builtins" $ do
     rawHighTokens big True `shouldBe` rawHighTokens big False - 4096
     -- max_input is already an input ceiling, so output is not subtracted twice.
     rawHighTokens (big {reservedOutputTokens = 60000}) False `shouldBe` rawHighTokens big False
+    -- A soft budget sizes up-front context; the hard ceilings stay put.
+    let budgeted = defaultContextLimits {workingBudget = Just 32768}
+    rawHighTokens budgeted False `shouldBe` 16384
+    rawLowTokens budgeted False `shouldBe` 8192
+    summaryTokens budgeted False `shouldBe` 4096
+    readPageTokens budgeted False `shouldBe` 1024
+    contextInputBudget budgeted False `shouldBe` contextInputBudget defaultContextLimits False
+    rawHighTokens defaultContextLimits {workingBudget = Just 10000000} False `shouldBe` rawHighTokens defaultContextLimits False
 
   it "scales context navigation and compaction from the net combined-window budget" $ do
     resolved <- either (fail . T.unpack) pure (contextLimitsForWindow 262144 Nothing True)

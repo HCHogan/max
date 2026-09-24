@@ -1219,6 +1219,7 @@ data ProfileSpec = ProfileSpec
     baseUrl :: !(Maybe Text),
     model :: !(Maybe Text),
     contextWindow :: !(Maybe Int),
+    contextBudget :: !(Maybe Int),
     maxInputTokens :: !(Maybe Int),
     maxTokens :: !(Maybe Int),
     attachmentReserve :: !(Maybe Int),
@@ -1236,7 +1237,7 @@ data ProfileSpec = ProfileSpec
 
 emptySpec :: ProfileSpec
 emptySpec =
-  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 -- | Per-field first-Just-wins overlay (left = higher priority).
 mergeSpec :: ProfileSpec -> ProfileSpec -> ProfileSpec
@@ -1246,6 +1247,7 @@ mergeSpec a b =
       baseUrl = a.baseUrl <|> b.baseUrl,
       model = a.model <|> b.model,
       contextWindow = a.contextWindow <|> b.contextWindow,
+      contextBudget = a.contextBudget <|> b.contextBudget,
       maxInputTokens = a.maxInputTokens <|> b.maxInputTokens,
       maxTokens = a.maxTokens <|> b.maxTokens,
       attachmentReserve = a.attachmentReserve <|> b.attachmentReserve,
@@ -1268,6 +1270,7 @@ instance HasCodec ProfileSpec where
         <*> optionalField "base_url" "OpenAI: …/v1 base URL; Anthropic: bare host" .= (.baseUrl)
         <*> optionalField "model" "Model id" .= (.model)
         <*> optionalField "context_window" "Total input plus output tokens; derives input, output and context reserves" .= (.contextWindow)
+        <*> optionalField "context_budget" "Soft budget for context assembled up front (raw tail, summaries, memories, read pages); at most the planning budget" .= (.contextBudget)
         <*> optionalField "max_input_tokens" "Legacy hard input ceiling; mutually exclusive with context_window" .= (.maxInputTokens)
         <*> optionalField "max_tokens" "Max tokens per completion" .= (.maxTokens)
         <*> optionalField "attachment_reserve" "Input tokens reserved when media is attached" .= (.attachmentReserve)
@@ -1361,6 +1364,16 @@ overlayProfileParser = do
           option,
           long "llm-context-window",
           env "MAX_LLM_CONTEXT_WINDOW",
+          metavar "N"
+        ]
+  contextBudget <-
+    optional $
+      setting
+        [ help "Soft budget for the default profile's up-front context",
+          reader auto,
+          option,
+          long "llm-context-budget",
+          env "MAX_LLM_CONTEXT_BUDGET",
           metavar "N"
         ]
   maxInputTokens <-
@@ -1543,6 +1556,12 @@ materializeLLM (dn, fileProfiles, overlay) = do
       when (toInteger resolvedAttachmentReserve + toInteger resolvedToolRoundReserve >= toInteger resolvedMaxInput) $
         fail $
           "llm profile '" <> T.unpack profName <> "' reserves its entire input window"
+      let planningBudget = resolvedMaxInput - resolvedToolRoundReserve
+      case spec.contextBudget of
+        Just budget
+          | budget <= 0 || budget > planningBudget ->
+              fail ("llm profile '" <> T.unpack profName <> "': context_budget must be between 1 and the planning budget " <> show planningBudget)
+        _ -> pure ()
       pure
         LLMProfile
           { apiKey = key,
@@ -1562,7 +1581,8 @@ materializeLLM (dn, fileProfiles, overlay) = do
             multimodal = resolvedMultimodal,
             historyAsTurns = fromMaybe False spec.historyAsTurns,
             stream = fromMaybe True spec.stream,
-            promptCacheBreakpoints = fromMaybe False spec.promptCacheBreakpoints
+            promptCacheBreakpoints = fromMaybe False spec.promptCacheBreakpoints,
+            contextBudget = spec.contextBudget
           }
 
 -- | @auto@ / @always@ / @never@ — the spellings 'parseColorMode' takes.

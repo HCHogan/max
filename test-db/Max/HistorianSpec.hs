@@ -125,7 +125,7 @@ spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ d
           profiles =
             Map.fromList
               [ ("historian-test", ModelCapabilities False False Nothing defaultContextLimits),
-                ("small-chat", ModelCapabilities False False Nothing (ContextLimits 1024 256 0 0))
+                ("small-chat", ModelCapabilities False False Nothing (ContextLimits 1024 256 0 0 Nothing))
               ]
       catalog <- either (fail . show) pure (mkModelCatalog "small-chat" profiles)
       tasks <- newTaskRegistry

@@ -143,6 +143,7 @@
       "src/Max/LLM/Stream.hs",
       "src/Max/LLM/Transport.hs",
       "src/Max/LLM/Types.hs",
+      "src/Max/LLM/WindowCheck.hs",
       "src/Max/Log.hs",
       "src/Max/LogBuffer.hs",
       "src/Max/Media/ToolRuntime.hs",

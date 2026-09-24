@@ -59,6 +59,7 @@ import Max.Handler.Jobs (jobsWorker, shutdownJobs)
 import Max.Handler.QQ (handleEvents)
 import Max.Historian (historianWorker)
 import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
+import Max.LLM.WindowCheck (checkContextWindows)
 import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
 import Max.Images (imageWorker)
 import Max.Intent (IntentState, intentWorker, newIntentState)
@@ -337,7 +338,9 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
               (deliveryWorker env.beDeliveries deliveryTransports)
           ]
         configuredWorkers =
-          [ worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown env.beDeliveries (shutdownJobs env.beJobs))
+          [ worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown env.beDeliveries (shutdownJobs env.beJobs)),
+            -- Advisory: warns when a configured window exceeds the server's.
+            worker "context-window-check" OptionalWorker (checkContextWindows httpRuntime cfg.llm)
           ]
             <> [ worker "embeddings" RequiredWorker (embedWorker env.beEmbeddingLock)
                | env.beEmbeddingEnabled

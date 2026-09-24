@@ -177,6 +177,14 @@ llm:
   # Planning budget: 196608 without attachments, 163840 with attachments.
   # Omitted context_window defaults to 131072. max_tokens remains an optional
   # output-cap override; it is subtracted from the total before input planning.
+  # context_budget (optional) sizes the context assembled up front — raw tail,
+  # summaries, memories, read pages — below the planning budget, trading
+  # prefill time and long-context quality for recall; the window still bounds
+  # the whole turn:
+  #   context_window: 262144
+  #   context_budget: 131072
+  # At startup Max warns when a configured window exceeds what the server's
+  # /models listing reports.
   # Legacy max_input_tokens is supported, but cannot coexist with context_window.
 
   profiles:
