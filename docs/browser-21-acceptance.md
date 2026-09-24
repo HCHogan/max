@@ -29,6 +29,11 @@ published workflow grants are not silently widened to the new tool fingerprint.
   `text/plain` documents. `read` pages by character `offset`; the browser returns the
   window's range and Max's projection reports the exact next offset of the text it
   showed.
+- The Linux default virtual display waits for Xvfb's socket before Firefox launches
+  (up to 10 s) and fails the start if Xvfb exits first; launching against a display
+  that was not accepting connections yet made first starts fail intermittently. A
+  fresh start failure reports its proxy-sanitized cause; a restore failure stays
+  generic because its error could echo saved cookies or storage.
 - Model placeholders (empty strings and lists, a 0,0 scroll) are dropped before a
   request is built. Argument errors are rejected before the browser is called.
   Failures of observing actions (snapshot, read, find, links, forms, screenshot,

@@ -49,7 +49,12 @@ export async function handleWorkspaceTool(name: string, input: Record<string, un
 export async function startWorkspace(input: SessionStartToolInput & { storage?: BrowserContextOptions["storageState"] }) {
   try {
     const result = await handleSessionStart({ ...input, exclude_addons: ["UBO"], enable_cache: true, viewport: { width: 1280, height: 800 } }, input.storage);
-    return "isError" in result ? buildToolError("workspace start or restore failed") : result;
+    if (!("isError" in result)) return result;
+    // The start error is already proxy-sanitized; a restore error could echo
+    // saved cookies or storage, so only a fresh start reports its cause.
+    if (input.storage !== undefined) return buildToolError("workspace start or restore failed");
+    const cause = result.content.find(item => item.type === "text")?.text ?? "";
+    return buildToolError(`workspace start failed: ${cause.slice(0, 300)}`);
   } catch {
     return buildToolError("workspace restore failed");
   }

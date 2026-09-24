@@ -1,18 +1,26 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const directory = pathToFileURL(process.argv[2]);
 const { NewBrowser } = await import(new URL("sync_api.js", directory));
 const { VirtualDisplay } = await import(new URL("virtdisplay.js", directory));
+const ready = VirtualDisplay.prototype.ready;
 let allocated = 0;
+const events = [];
 VirtualDisplay.prototype.get = function () { allocated += 1; return ":fixture"; };
 VirtualDisplay.prototype.kill = function () { allocated -= 1; };
+VirtualDisplay.prototype.ready = async function () { events.push("ready"); };
 const options = { executablePath: "/unused-fixture" };
 await assert.rejects(NewBrowser({ launch: async () => { throw new Error("fixture launch failed"); } }, "virtual", options));
 assert.equal(allocated, 0);
 let finish;
 const pending = new Promise(resolve => { finish = resolve; });
-const browser = await NewBrowser({ launch: async () => ({ close: () => pending }) }, "virtual", options);
+events.length = 0;
+const browser = await NewBrowser({ launch: async () => { events.push("launch"); return { close: () => pending }; } }, "virtual", options);
+assert.deepEqual(events, ["ready", "launch"]);
 const closed = browser.close();
 assert.equal(allocated, 1);
 assert.ok(closed instanceof Promise);
@@ -23,3 +31,17 @@ const failed = await NewBrowser({ launch: async () => ({ close: async () => { th
 await assert.rejects(failed.close());
 assert.equal(allocated, 0);
 console.log("PASS virtual displays roll back on launch failure and wait for asynchronous browser closure");
+
+VirtualDisplay.prototype.ready = async function () { throw new Error("fixture display never came up"); };
+let launched = false;
+await assert.rejects(NewBrowser({ launch: async () => { launched = true; } }, "virtual", options), /never came up/);
+assert.equal(launched, false);
+assert.equal(allocated, 0);
+const sockets = mkdtempSync(join(tmpdir(), "x11-fixture-"));
+const display = (number, exitCode = null) => Object.assign(new VirtualDisplay(), { _display: number, proc: { exitCode, signalCode: null } });
+const appearing = ready.call(display(4242), sockets, 5000);
+setTimeout(() => writeFileSync(join(sockets, "X4242"), ""), 100);
+await appearing;
+await assert.rejects(ready.call(display(4243, 1), sockets, 5000), /exited before it was ready/);
+await assert.rejects(ready.call(display(4244), sockets, 100), /not ready after 100 ms/);
+console.log("PASS Firefox launches only after the virtual display socket exists; an exited or silent Xvfb fails the start");

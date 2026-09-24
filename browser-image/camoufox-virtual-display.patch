@@ -1,6 +1,6 @@
 --- a/node_modules/camoufox-js/dist/sync_api.js
 +++ b/node_modules/camoufox-js/dist/sync_api.js
-@@ -7,6 +7,7 @@
+@@ -7,11 +7,13 @@
  }
  export async function NewBrowser(playwright, headless = false, fromOptions = {}, userDataDir = false, debug = false, launch_options = {}) {
      let virtualDisplay = null;
@@ -8,7 +8,13 @@
      // Normalize headless to boolean and prepare options for launchOptions function
      const normalizedHeadless = headless === "virtual" ? false : headless || false;
      if (headless === "virtual") {
-@@ -26,4 +27,8 @@
+         virtualDisplay = new VirtualDisplay(debug);
+         launch_options.virtual_display = virtualDisplay.get();
++        await virtualDisplay.ready();
+     }
+     if (!fromOptions || Object.keys(fromOptions).length === 0) {
+         fromOptions = await launchOptions({
+@@ -26,4 +28,8 @@
      }
      const browser = await playwright.launch(fromOptions);
      return syncAttachVD(browser, virtualDisplay);
@@ -38,3 +44,30 @@
      browser._virtualDisplay = virtualDisplay;
      return browser;
  }
+--- a/node_modules/camoufox-js/dist/virtdisplay.js
++++ b/node_modules/camoufox-js/dist/virtdisplay.js
+@@ -74,6 +74,24 @@
+         // });
+         return `:${this.display}`;
+     }
++    /**
++     * Xvfb starts asynchronously and Firefox fails outright when the display
++     * is not accepting connections yet. Wait for its socket, and fail early
++     * when Xvfb has already exited.
++     */
++    async ready(socketDirectory = "/tmp/.X11-unix", timeout = 10000) {
++        const socket = path.join(socketDirectory, `X${this.display}`);
++        for (const started = Date.now(); Date.now() - started < timeout;) {
++            if (existsSync(socket)) {
++                return;
++            }
++            if (this.proc && (this.proc.exitCode !== null || this.proc.signalCode !== null)) {
++                throw new Error(`virtual display :${this.display} exited before it was ready`);
++            }
++            await new Promise((resolve) => setTimeout(resolve, 25));
++        }
++        throw new Error(`virtual display :${this.display} was not ready after ${timeout} ms`);
++    }
+     kill() {
+         // this._lock.runExclusive(() => {
+         if (this.proc && !this.proc.killed) {
