@@ -103,6 +103,7 @@ pkgs.buildNpmPackage {
     ../browser-image/camoufox-workspaces.patch
     ../browser-image/camoufox-navigation.patch
     ../browser-image/camoufox-browser-surface.patch
+    ../browser-image/camoufox-preformatted-text.patch
   ];
   postPatch = ''
     cp ${./browser-deps/package.json} package.json

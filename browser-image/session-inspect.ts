@@ -11,10 +11,15 @@ import { answerNextDialog } from "./dialogs.js";
 import { collectPage } from "./collect.js";
 import type { ScreenshotResult, SessionRecord } from "./types.js";
 
+// read pages through long text by character offset; each call re-extracts the
+// text up to offset + maxChars, so the bound keeps one read proportional.
+const MAX_READ_OFFSET = 1_000_000;
+
 export const sessionInspectShape = {
   ...sessionIdShape,
   action: z.enum(["read", "find", "links", "forms", "screenshot", "dialog", "collect"]),
   maxChars: z.number().int().min(512).max(30000).default(6000),
+  offset: z.number().int().min(0).max(MAX_READ_OFFSET).default(0),
   maxElements: z.number().int().min(1).max(200).default(40),
   selector: z.string().max(2000).optional(), frame: frameSchema,
   mode: z.enum(["text", "outline"]).default("text"),
@@ -37,6 +42,7 @@ export async function handleSessionInspect(input: InspectInput) {
       const frame = await resolveReadFrame(current.page, input.frame);
       let screenshot: ScreenshotResult | undefined;
       const notes: string[] = [];
+      let textRange: { offset: number; end: number; more: boolean } | undefined;
       const payload = await withTimeout(runGuardedPageRead(current.page, current.requestGuard, async () => {
         let text: string;
         switch (input.action) {
@@ -47,10 +53,13 @@ export async function handleSessionInspect(input: InspectInput) {
               text += "\nLandmarks: " + result.landmarks.join(", ");
             } else {
               const selector = input.selector ?? (await frame.locator("article").count() ? "article" : undefined);
-              const result = await extractPageContent(frame, "text", input.maxChars, selector);
-              text = result.value;
+              const end = input.offset + input.maxChars;
+              const result = await extractPageContent(frame, "text", end, selector);
+              text = [...result.value].slice(input.offset, end).join("");
+              // An empty window ends paging even if the node limit cut extraction.
+              textRange = { offset: input.offset, end: input.offset + [...text].length, more: text.length > 0 && result.truncated };
               if (!result.found) notes.push("selector did not match an element");
-              if (result.truncated) notes.push("article text truncated; narrow selector or raise maxChars");
+              else if (!text && input.offset > 0) notes.push(result.truncated ? "text at this offset is beyond the extraction node limit; narrow selector" : "offset is past the end of the text");
             }
             break;
           }
@@ -90,7 +99,7 @@ export async function handleSessionInspect(input: InspectInput) {
           }
         }
         if ([...text].length > input.maxChars) notes.push("content truncated to maxChars");
-        return { text: [...text].slice(0, input.maxChars).join("") };
+        return { text: [...text].slice(0, input.maxChars).join(""), textRange };
       }), input.timeout, "Session inspection");
       const view = await sessionView(current, payload, previousUrl);
       view.notes.push(...notes);

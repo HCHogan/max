@@ -40,9 +40,15 @@ selector 滚动容器。动作后返回附近元素。evaluate 的 expression �
 每次结果先给操作结果，再给 URL/标题、滚动位置/视口/页面高度，最后给内容。默认 open /
 snapshot 的总文字预算 6000 字、40 个元素；动作后 1500 字、20 个附近元素。
 maxChars（512–30000）限制整个文字结果，maxElements（1–200）限制元素数。
-需要更多内容时缩小 selector、滚动或提高预算；不要把截断当作页面没有内容。
+需要更多内容时缩小 selector、滚动或提高预算；不要把截断当作页面没有内容。read 可以按
+字符分页：结果里有 `Note: text characters A-B; more text: read again with offset=B` 时，
+下一次传 offset=B 从断点接着读；写 end of text 就是读完了。
+直接调用时，大段结果在上下文里只保留最近一两份，更早的会移进工作记录，要 context_expand
+才能取回。读长文档先用 find 或 selector 定位要的那一段，不要对同一页反复大预算 open/read；
+要通读、比对或抽数据时写进 run_code（见最后一节）。
 
 read 优先读 article 正文，没有 article 时读页面；mode=outline 返回标题大纲和 selector。
+raw 文件、.md、llms.txt、JSON 这类纯文本页和代码块保留原有换行和缩进，可以按行解析。
 find、query 返回匹配文字和附近内容；links 列出链接，forms 列出表单字段和选项。
 这些读取支持 selector 和 frame。collect 会逐屏滚动、累积并去重可见文字，默认最多
 5 次滚动，每次等待 250ms；maxScrolls、waitMs、timeout 可调整，结果会报告停止原因。
@@ -55,7 +61,10 @@ screenshot 显式请求当前视口图片。页面跳转或正文很短时工具
 不会提供多个标签页、cookie 读写或 user-agent 覆盖；登录授权仍由发起者管理。
 
 navigation incomplete 表示文档已到达但加载未完成，先读已有内容或 wait_for，不要重复 open。
-blocked host 的 DNS note 表示该子资源被跳过，页面和下一次调用仍可用。
+blocked host 的 note 表示该子资源（DNS 不通，或在私有/保留地址上）被跳过，页面和下一次
+调用仍可用。open 失败写 Blocked unsafe browser request 和 host 时，是页面本身落在私有或保留
+地址上：换地址，不要重试。snapshot、read、find、links、forms、screenshot、collect、wait_for
+只读页面，失败时什么都没发生，可以直接重试；其他动作失败时效果不明，按下面的规则核对。
 page navigated from A to B 表示页面已经跳转，旧 selector 失效。
 传输断线会清掉页面并重建连接：按提示 open 恢复页面；之前的点击/提交可能已发生，
 先核对外部结果，不能再发同一动作来试连接。工具超时或未确认的工作区中断仍需发起者 reset。
@@ -86,6 +95,21 @@ for (const url of candidates) {
   return {source: landed, rows: {"model-a": after("model-a", 4)}, tried};
 }
 return {source: null, tried};
+```
+
+长文本（整份 README、llms-full.txt、大表格）用 offset 循环读完再解析：
+
+```javascript
+let offset = 0, text = "";
+for (let page = 0; page < 40; page++) {
+  const chunk = await tools.browser({action: "read", maxChars: 30000, offset});
+  text += chunk.slice(chunk.indexOf("Content:\n") + "Content:\n".length);
+  const next = chunk.match(/read again with offset=(\d+)/);
+  if (!next) break;
+  offset = Number(next[1]);
+}
+const headings = text.split("\n").filter(line => line.startsWith("## "));
+return {chars: text.length, headings};
 ```
 
 把示例里的地址、关键字和解析换成实际站点的。数字要由程序从页面文本里解析并

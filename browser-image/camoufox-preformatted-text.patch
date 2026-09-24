@@ -1,0 +1,51 @@
+diff --git a/src/extractors/content.ts b/src/extractors/content.ts
+index 4763d67..82f7482 100644
+--- a/src/extractors/content.ts
++++ b/src/extractors/content.ts
+@@ -197,7 +197,36 @@ export async function extractPageContent(
+       let visitedNodes = 0;
+       const stack: Array<{ node: Node; closing: boolean }> = [{ node: root, closing: false }];
+ 
+-      function appendText(chunk: string): void {
++      // Preformatted text (code blocks, text/plain documents) keeps its line
++      // breaks; pre-line keeps breaks but still collapses runs of spaces.
++      function whiteSpaceOf(element: Element | null): "collapse" | "lines" | "preserve" {
++        if (!element) {
++          return "collapse";
++        }
++
++        const style = window.getComputedStyle(element);
++        const value = style.getPropertyValue("white-space-collapse") || style.whiteSpace;
++        if (value === "pre-line" || value === "preserve-breaks") {
++          return "lines";
++        }
++
++        return value.startsWith("pre") || value === "break-spaces" || element.closest("pre, textarea")
++          ? "preserve"
++          : "collapse";
++      }
++
++      function appendText(chunk: string, whiteSpace: "collapse" | "lines" | "preserve"): void {
++        if (whiteSpace !== "collapse") {
++          const lines = chunk.replace(/\r\n?/g, "\n");
++          const kept = whiteSpace === "lines" ? lines.replace(/[^\S\n]+/g, " ") : lines;
++          if (kept) {
++            const result = appendBounded(text, kept);
++            text = result.value;
++            truncated = truncated || result.truncated;
++          }
++          return;
++        }
++
+         const normalized = chunk.replace(/\s+/g, " ").trim();
+         if (!normalized) {
+           return;
+@@ -254,7 +283,7 @@ export async function extractPageContent(
+             stack.push({ node: element.childNodes[index], closing: false });
+           }
+         } else if (node.nodeType === Node.TEXT_NODE) {
+-          appendText(node.nodeValue ?? "");
++          appendText(node.nodeValue ?? "", whiteSpaceOf(node.parentElement));
+         }
+       }
+ 

@@ -16,6 +16,7 @@ import ExecutionFixture
 import Max.CodeMode.Execution
 import Max.CodeMode.JavaScript
 import Max.CodeMode.Model (executeModelBatch)
+import Max.Browser.View (browserBudget, browserView)
 import Max.CodeMode.Wasm
 import Max.Effects.Tools
 import Max.Execution.Tools
@@ -118,6 +119,34 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
             ]
         )
     map (.ccTool) result.cmCalls `shouldBe` ["browser", "browser", "browser", "browser"]
+
+  it "runs the web manual's paging loop against the real read projection" $ do
+    manual <- TIO.readFile "skills/web.md"
+    let (_, section) = T.breakOn "# 多步浏览写成程序" manual
+        blocks = drop 1 (T.splitOn "```javascript\n" section)
+        source = case blocks of
+          _ : paging : _ -> fst (T.breakOn "```" paging)
+          _ -> ""
+        document = T.unlines (concat [["## Section " <> T.pack (show n), T.replicate 30 (T.pack (show n) <> " ")] | n <- [1 :: Int .. 1200]])
+        -- The browser returns a window; Max's projection decides what fits.
+        browse args = case args of
+          Object fields
+            | Just (String "read") <- KM.lookup "action" fields -> do
+                let offset = case KM.lookup "offset" fields of Just (Number n) -> truncate n; _ -> 0
+                    window = T.take 30000 (T.drop offset document)
+                    end = offset + T.length window
+                    payload = object ["structuredContent" .= object ["url" .= ("https://example.test/README.md" :: Text), "text" .= window, "textRange" .= object ["offset" .= offset, "end" .= end, "more" .= (end < T.length document)]]]
+                pure (Right (browserView (browserBudget "read" args) "read" payload))
+          _ -> pure (Left "unexpected browser call")
+        definition = echoDefinition {tdRef = ToolRef "browser", tdEffects = Set.singleton (EffectWrite "browser.session"), tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe, tdFailuresPrecedeEffects = False}
+    source `shouldSatisfy` T.isInfixOf "offset"
+    registry <- checked [definition] [legacyTool "browser" "browser" (object ["type" .= ("object" :: Text)]) browse]
+    result <- runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session noJournal (views registry) source
+    result.cmExit `shouldBe` WasmCompleted
+    result.cmOutput `shouldBe` Just (object ["chars" .= T.length document, "headings" .= ["## Section " <> T.pack (show n) | n <- [1 :: Int .. 1200]]])
+    length result.cmCalls `shouldSatisfy` (> 1)
 
   it "pages large Unicode results without a second effect or budget charge" $ do
     count <- newIORef (0 :: Int)

@@ -17,9 +17,23 @@ published workflow grants are not silently widened to the new tool fingerprint.
   lease in the fork and by task scope in Haskell. A foreground call cannot enable
   it by supplying an expression or a forged lease field.
 - Failed DNS aborts that request and records a bounded host-only note. Private,
-  reserved and unsupported targets abort and fail the operation. Notes drain into
-  results; request counts and fatal errors reset at the next operation. HTTP and
-  WebSocket requests use the same address policy.
+  reserved and unsupported subresources, frames and WebSockets are aborted with the
+  same kind of note; pages commonly embed such leftovers (trackers, livereload), and
+  the abort already stops the request. A disallowed top-level document, or a
+  disallowed literal target that still received a response (it bypassed routing),
+  fails the operation with an error naming only the host. Notes drain into results;
+  request counts and fatal errors reset at the next operation. HTTP and WebSocket
+  requests use the same address policy.
+- Text extraction keeps line breaks and indentation of preformatted content
+  (`pre`, `textarea`, `white-space: pre*`), which includes Firefox's rendering of
+  `text/plain` documents. `read` pages by character `offset`; the browser returns the
+  window's range and Max's projection reports the exact next offset of the text it
+  showed.
+- Model placeholders (empty strings and lists, a 0,0 scroll) are dropped before a
+  request is built. Argument errors are rejected before the browser is called.
+  Failures of observing actions (snapshot, read, find, links, forms, screenshot,
+  dialog, collect, wait_for) are failed-before-effect; other failures stay
+  outcome-unknown.
 - Transport loss clears the page, handshakes once, and rebinds task authority. It
   does not replay the operation. Cold task recovery reuses that new connection.
   The caller must open again and check uncertain external effects before acting.

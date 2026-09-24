@@ -6,9 +6,9 @@ module Max.Tools.Browser
 where
 
 import Data.Aeson
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (parseMaybe)
-import Data.Bifunctor (first)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -27,7 +27,7 @@ import Max.Effects.ToolOutput
     canQueueInlineMediaOnce,
     queueInlineMediaOnce,
   )
-import Max.Effects.Tools (Tool (..), ToolRunner (..))
+import Max.Effects.Tools (Tool (..), ToolFault (..), ToolOutcome (..), ToolRetryClass (..), ToolRunner (..))
 import Max.Tools.Schema
   ( boundedIntegerParam,
     enumParam,
@@ -54,6 +54,27 @@ argText v k = parseMaybe (withObject "args" (.: k)) v
 passThrough :: Value -> [Key] -> [(Key, Value)]
 passThrough (Object o) keys = [(k, x) | k <- keys, Just x <- [KM.lookup k o]]
 passThrough _ _ = []
+
+-- | Some models fill every schema field with a placeholder. Empty strings and
+-- lists mean "not supplied" (fill keeps an empty text: it clears the field),
+-- and a scroll of 0,0 means the default scroll.
+dropPlaceholders :: Value -> Value
+dropPlaceholders (Object o) = Object (stillScrolls (KM.filterWithKey supplied o))
+  where
+    supplied key = \case
+      String text -> not (T.null (T.strip text)) || (key == "text" && KM.lookup "action" o == Just "fill")
+      Array items -> not (null items)
+      Null -> False
+      _ -> True
+    stillScrolls fields
+      | all (\key -> maybe True (== Number 0) (KM.lookup key fields)) ["deltaX", "deltaY"] = KM.delete "deltaX" (KM.delete "deltaY" fields)
+      | otherwise = fields
+dropPlaceholders other = other
+
+-- | Actions that only observe the page. When they fail nothing external has
+-- happened, so they can be retried; other failures stay outcome-unknown.
+observingActions :: [Text]
+observingActions = ["snapshot", "read", "find", "links", "forms", "screenshot", "dialog", "collect", "wait_for"]
 
 --------------------------------------------------------------------------------
 -- Tools.
@@ -84,6 +105,7 @@ browserTool canEvaluate =
             ("loadState", enumParam ["domcontentloaded", "load", "networkidle"] "Readiness state for wait_for."),
             ("timeout", boundedIntegerParam 100 60000 10000),
             ("mode", enumParam ["text", "outline"] "read mode, default article text."),
+            ("offset", boundedIntegerParam 0 1000000 0),
             ("query", stringParam "Text to locate with find."),
             ("response", enumParam ["accept", "dismiss"] "One-shot answer for the next dialog, default dismiss."),
             ("promptText", stringParam "Text for accepting the next prompt dialog."),
@@ -94,9 +116,10 @@ browserTool canEvaluate =
             ("maxElements", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "maximum" .= (200 :: Int), "description" .= ("Default 40 for snapshot, 20 after an action." :: Text)])
           ]
           ["action"],
-      toolRunner = LegacyRunner $ \args -> do
+      toolRunner = OutcomeRunner $ \raw -> do
         canAttach <- canQueueInlineMediaOnce "browser.screenshot"
-        let action = fromMaybe "" (argText args "action")
+        let args = dropPlaceholders raw
+            action = fromMaybe "" (argText args "action")
             budget = browserBudget action args
             limits = ["maxChars" .= budget.maxChars, "maxElements" .= budget.maxElements]
             required = case action of
@@ -111,20 +134,17 @@ browserTool canEvaluate =
               "find" -> ["query"]
               _ -> []
             missing = [key | key <- required, null (passThrough args [key])]
-        result <-
-          if not (null missing)
-            then pure (Left "missing required arguments for browser action")
-            else case action of
-              "open" -> navigateUrlWith (fromMaybe "" (argText args "url")) (limits <> passThrough args ["timeout", "selector"])
-              "snapshot" -> sessionRequest SessionSnapshot (limits <> passThrough args ["selector", "frame"])
+            request = case action of
+              "open" -> Right (navigateUrlWith (fromMaybe "" (argText args "url")) (limits <> passThrough args ["timeout", "selector"]))
+              "snapshot" -> Right (sessionRequest SessionSnapshot (limits <> passThrough args ["selector", "frame"]))
               "screenshot"
                 | not canAttach ->
-                    fmap (setScreenshotNote "screenshot not attached: this turn's screenshot or attachment quota is exhausted") <$> sessionRequest SessionSnapshot limits
+                    Right (fmap (setScreenshotNote "screenshot not attached: this turn's screenshot or attachment quota is exhausted") <$> sessionRequest SessionSnapshot limits)
               _
                 | action `elem` ["read", "find", "links", "forms", "screenshot", "dialog", "collect"] ->
-                    sessionRequest SessionInspect (("action" .= action) : limits <> passThrough args ["selector", "frame", "mode", "query", "response", "promptText", "maxScrolls", "waitMs", "timeout"])
-              "evaluate" | not canEvaluate -> pure (Left "evaluate requires a browser task; use task_start profile=browser")
-              "wait_for" | null (passThrough args ["selector", "loadState"]) -> pure (Left "wait_for requires selector or loadState")
+                    Right (sessionRequest SessionInspect (("action" .= action) : limits <> passThrough args ["selector", "frame", "mode", "offset", "query", "response", "promptText", "maxScrolls", "waitMs", "timeout"]))
+              "evaluate" | not canEvaluate -> Left "evaluate requires a browser task; use task_start profile=browser"
+              "wait_for" | null (passThrough args ["selector", "loadState"]) -> Left "wait_for requires selector or loadState"
               _
                 | action `elem` ["click", "fill", "type", "press", "hover", "select", "scroll", "wait_for", "evaluate"] ->
                     let actionType = if action == "wait_for" then "waitFor" else action
@@ -133,12 +153,22 @@ browserTool canEvaluate =
                             <> passThrough args ["selector", "frame", "key", "delay", "deltaY", "deltaX", "state", "loadState", "timeout", "expression"]
                             <> (if action == "fill" then ["value" .= argText args "text"] else passThrough args ["text", "value"])
                             <> ["maxChars" .= budget.maxChars | action == "evaluate"]
-                     in sessionRequest SessionAction (("action" .= object fields) : limits)
-              _ -> pure (Left "unknown browser action")
-        withImage <- case result of
-          Left err -> pure (Left err)
-          Right value -> Right <$> attachBrowserScreenshot budget action canAttach value
-        pure (first (browserFailureView budget action) (browserView budget action <$> withImage))
+                     in Right (sessionRequest SessionAction (("action" .= object fields) : limits))
+              _ -> Left "unknown browser action"
+            rejected message = pure (ToolRejected (ToolFault "invalid_arguments" message RetrySafe))
+        case request of
+          _ | not (null missing) -> rejected ("missing required arguments for browser action: " <> T.intercalate ", " (map Key.toText missing))
+          Left message -> rejected message
+          Right send -> do
+            result <- send
+            withImage <- case result of
+              Left err -> pure (Left err)
+              Right value -> Right <$> attachBrowserScreenshot budget action canAttach value
+            pure $ case withImage of
+              Right value -> ToolCommitted (browserView budget action value)
+              Left err
+                | action `elem` observingActions -> ToolFailedBeforeEffect (ToolFault "tool_error" (browserFailureView budget action err) RetrySafe)
+                | otherwise -> ToolOutcomeUnknown (ToolFault "tool_error" (browserFailureView budget action err) RetryUnsafe)
     }
 
 -- The media queue is scoped to the actual Agent turn, so task generations and

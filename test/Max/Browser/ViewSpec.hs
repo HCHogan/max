@@ -82,6 +82,26 @@ spec = describe "browser view and surface" $ do
         text `shouldSatisfy` T.isSuffixOf "(outcome unknown; not retried)"
       _ -> expectationFailure "expected error tool message"
 
+  it "reports the exact next offset of a paged read from the text it showed" $ do
+    let text = T.pack (concat [show n <> "\n" | n <- [1000 :: Int .. 1999]])
+        paged more = object ["structuredContent" .= object ["text" .= text, "textRange" .= object ["offset" .= (5000 :: Int), "end" .= (5000 + T.length text), "more" .= more]]]
+    case browserView (BrowserBudget 1500 20) "read" (paged False) of
+      String view -> do
+        T.length view `shouldSatisfy` (<= 1500)
+        let shown = T.drop 1 (snd (T.breakOn "\n" (snd (T.breakOn "Content:" view))))
+            next = 5000 + T.length shown
+        shown `shouldSatisfy` (`T.isPrefixOf` text)
+        view `shouldSatisfy` T.isInfixOf ("Note: text characters 5000-" <> T.pack (show next) <> "; more text: read again with offset=" <> T.pack (show next) <> "\n")
+      _ -> expectationFailure "expected compact text"
+    case browserView (BrowserBudget 30000 20) "read" (paged False) of
+      String view -> do
+        view `shouldSatisfy` T.isSuffixOf text
+        view `shouldSatisfy` T.isInfixOf ("Note: text characters 5000-" <> T.pack (show (5000 + T.length text)) <> "; end of text")
+      _ -> expectationFailure "expected compact text"
+    case browserView (BrowserBudget 30000 20) "read" (paged True) of
+      String view -> view `shouldSatisfy` T.isInfixOf ("read again with offset=" <> T.pack (show (5000 + T.length text)))
+      _ -> expectationFailure "expected compact text"
+
   it "requests screenshots for explicit requests, navigation or short content only" $ do
     let payload fields = object ["structuredContent" .= object fields]
         long = "text" .= T.replicate 200 "x"

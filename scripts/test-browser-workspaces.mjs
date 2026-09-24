@@ -7,8 +7,26 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 const clients = [];
 const transports = new Map();
 let effects = 0;
+// 127.0.0.1 is reachable only on the allowed fixture port; 18766 stands in
+// for a private target.
+const plainText = Array.from({ length: 400 }, (_, index) => `line ${index}: value ${index * 7}`).join("\n");
 const fixture = createServer((request, response) => {
   if (request.url === "/blocked.js" || request.url === "/no-document") return;
+  if (request.url === "/plain.txt") {
+    response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+    response.end(plainText + "\n");
+    return;
+  }
+  if (request.url === "/private-subresource") {
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end('<!doctype html><title>Private subresource</title><p>visible fixture text</p><img src="http://127.0.0.1:18766/pixel.png">');
+    return;
+  }
+  if (request.url === "/redirect-private") {
+    response.writeHead(302, { location: "http://127.0.0.1:18766/admin" });
+    response.end();
+    return;
+  }
   if (request.url === "/missing") {
     response.writeHead(404, { "content-type": "text/html" });
     response.end('<!doctype html><title>Fixture not found</title><p>Missing fixture document</p><script src="/blocked.js"></script>');
@@ -174,6 +192,35 @@ try {
   await success(partialClient, "max_workspace_revoke");
   report("stalled scripts return a partial 404; absent documents remain errors without stale-page fallback");
 
+  const pageClient = await connect();
+  const pageSession = await start(pageClient, 1);
+  const open = url => call(pageClient, "browse_session_navigate", { sessionId: pageSession, _maxLease: lease(1), url, timeout: 15000 });
+  const inspect = args => success(pageClient, "browse_session_inspect", { sessionId: pageSession, _maxLease: lease(1), ...args });
+  assert.ok(!(await open("http://127.0.0.1:18765/plain.txt")).isError);
+  const firstPage = await inspect({ action: "read", maxChars: 512 });
+  assert.equal(firstPage.text, plainText.slice(0, 512));
+  assert.deepEqual(firstPage.textRange, { offset: 0, end: 512, more: true });
+  const secondPage = await inspect({ action: "read", maxChars: 512, offset: firstPage.textRange.end });
+  assert.equal(secondPage.text, plainText.slice(512, 1024));
+  const lastPage = await inspect({ action: "read", maxChars: 30000, offset: 1024 });
+  assert.equal(lastPage.text, plainText.slice(1024));
+  assert.deepEqual(lastPage.textRange, { offset: 1024, end: plainText.length, more: false });
+  report("a text/plain page keeps its lines and read pages through it exactly by offset");
+
+  const skipped = await open("http://127.0.0.1:18765/private-subresource");
+  assert.ok(!skipped.isError, JSON.stringify(skipped));
+  const skippedView = skipped.structuredContent;
+  assert.match(skippedView.text, /visible fixture text/);
+  const skippedNotes = [...skippedView.notes, ...(await inspect({ action: "read" })).notes];
+  assert.ok(skippedNotes.some(note => /blocked host 127\.0\.0\.1: .*resource skipped/.test(note)), JSON.stringify(skippedNotes));
+  const redirected = await open("http://127.0.0.1:18765/redirect-private");
+  assert.equal(redirected.isError, true);
+  // Upstream names the requested URL for loopback failures; the guard names
+  // the blocked host. Either way the model sees which host was refused.
+  assert.match(JSON.stringify(redirected), /Blocked unsafe browser request[^"]*127\.0\.0\.1/);
+  await success(pageClient, "max_workspace_revoke");
+  report("a private subresource is skipped with a note; a private top-level redirect fails and names the host");
+
   const foreground = await connect();
   const foregroundSession = await success(foreground, "browse_session_start", { humanize: false, geoip: false });
   await success(foreground, "browse_session_navigate", { sessionId: foregroundSession.sessionId, url: "http://127.0.0.1:18765/" });
@@ -194,7 +241,7 @@ try {
   // A late child response must not kill the gateway or sibling MCP sessions.
   await independent.listTools({}, { timeout: 5000 });
   report("transport termination during launch drains without resurrecting a browser");
-  console.log("ACCEPTANCE PASSED: 9 real-browser scenarios; only isolated fixture state used");
+  console.log("ACCEPTANCE PASSED: 11 real-browser scenarios; only isolated fixture state used");
 } finally {
   await Promise.allSettled(clients.map(client => call(client, "max_workspace_revoke")));
   await Promise.allSettled(clients.map(client => transports.get(client).terminateSession()));

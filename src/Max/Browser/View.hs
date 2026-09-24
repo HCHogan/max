@@ -36,11 +36,27 @@ boundedBrowserText budget value
   where
     marker = "\n[truncated]"
 
+-- | A paged read reports where its visible text ends, so the next offset is
+-- exact even when the header and notes leave less room than the window.
 browserView :: BrowserBudget -> Text -> Value -> Value
 browserView budget action raw =
-  String . boundedBrowserText budget.maxChars $
-    header <> notes <> "Content:\n" <> body
+  String . boundedBrowserText budget.maxChars $ case textRange of
+    Just (start, more) ->
+      let full = fromMaybe "" (textField "text" payload)
+          room = budget.maxChars - T.length (header <> notes [rangeNote start (start + T.length full) True] <> "Content:\n")
+          shown = T.take (max 0 room) full
+          end = start + T.length shown
+       in header <> notes [rangeNote start end (more || end < start + T.length full)] <> "Content:\n" <> shown
+    Nothing -> header <> notes [] <> "Content:\n" <> body
   where
+    textRange = field "textRange" payload >>= parseMaybe (withObject "text range" (\o -> (,) <$> o .: "offset" <*> o .: "more"))
+    rangeNote :: Int -> Int -> Bool -> Text
+    rangeNote start end more =
+      "Note: text characters "
+        <> T.pack (show start)
+        <> "-"
+        <> T.pack (show end)
+        <> if more then "; more text: read again with offset=" <> T.pack (show end) else "; end of text"
     payload = browserPayload raw
     snapshot = fromMaybe payload (field "snapshot" payload)
     position = fromMaybe Null (field "position" payload)
@@ -68,9 +84,10 @@ browserView budget action raw =
         <> "\n"
     status = maybe "" (\v -> " HTTP " <> short 12 (textOf v)) (field "status" snapshot)
     number key = short 10 (valueText (field key position))
-    notes =
+    notes first =
       boundedBrowserText (budget.maxChars `div` 3) . T.unlines $
-        ["Note: navigation incomplete; inspect the content that arrived" | (field "navigation" payload >>= field "complete") == Just (Bool False)]
+        first
+          <> ["Note: navigation incomplete; inspect the content that arrived" | (field "navigation" payload >>= field "complete") == Just (Bool False)]
           <> ["Note: page navigated from " <> short 140 (textOf before) <> " to " <> short 140 (valueText (field "url" payload)) <> "; selectors are stale" | Just before <- [field "previousUrl" payload]]
           <> ["Note: " <> short 200 (textOf note) | note <- array (field "notes" payload)]
           <> ["Note: " <> fromMaybe "screenshot available with action=screenshot" (textField "screenshotNote" payload)]

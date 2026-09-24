@@ -739,6 +739,7 @@ test-suite max-test
         Max.Sandbox.ChatSpec
         Max.Sandbox.RuntimeSpec
         Max.Runtime.ProtocolSpec
+        Max.Tools.BrowserSpec
         Max.Tools.FilesSpec
         Max.ToolsSpec
         Max.Turn.TypesSpec

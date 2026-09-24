@@ -30,7 +30,10 @@ export async function collectPage(session: SessionRecord, frame: Frame, input: C
         const bounds = parent.getBoundingClientRect();
         const style = getComputedStyle(parent);
         if (!bounds.width || !bounds.height || style.visibility === "hidden" || style.display === "none" || bounds.bottom < viewport.top || bounds.top > viewport.bottom || bounds.right < viewport.left || bounds.left > viewport.right) continue;
-        const value = walker.currentNode.textContent?.replace(/\s+/g, " ").trim();
+        // Preformatted text (code, text/plain documents) keeps its line breaks.
+        const raw = walker.currentNode.textContent ?? "";
+        const preformatted = /^(pre|break-spaces)/.test(style.getPropertyValue("white-space-collapse") || style.whiteSpace) || parent.closest("pre,textarea");
+        const value = (preformatted ? raw.replace(/\r\n?/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n") : raw.replace(/\s+/g, " ")).trim();
         if (value) text.push(value.slice(0, 30000));
       }
       const target = selector ? root : document.scrollingElement!;
