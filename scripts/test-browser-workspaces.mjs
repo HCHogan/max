@@ -8,7 +8,8 @@ const clients = [];
 const transports = new Map();
 let effects = 0;
 // 127.0.0.1 is reachable only on the allowed fixture port; 18766 stands in
-// for a private target.
+// for a private target. The private subresource is a script because the
+// fast stealth profile blocks images before any request is made.
 const plainText = Array.from({ length: 400 }, (_, index) => `line ${index}: value ${index * 7}`).join("\n");
 const fixture = createServer((request, response) => {
   if (request.url === "/blocked.js" || request.url === "/no-document") return;
@@ -19,7 +20,7 @@ const fixture = createServer((request, response) => {
   }
   if (request.url === "/private-subresource") {
     response.writeHead(200, { "content-type": "text/html" });
-    response.end('<!doctype html><title>Private subresource</title><p>visible fixture text</p><img src="http://127.0.0.1:18766/pixel.png">');
+    response.end('<!doctype html><title>Private subresource</title><p>visible fixture text</p><script async src="http://127.0.0.1:18766/tracker.js"></script>');
     return;
   }
   if (request.url === "/redirect-private") {
