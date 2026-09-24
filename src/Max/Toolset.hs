@@ -273,10 +273,9 @@ data ToolInventoryItem = ToolInventoryItem
 toolInventory :: [ToolInventoryItem]
 toolInventory =
   [ always (readTool "inspect_source" ["self.source"] [ProcessResource "self-source"]),
-    always (readTool "get_message_by_id" ["conversation.db"] [CurrentConversation]),
-    always (llmReadTool "context_search" ["conversation.db"] [CurrentConversation]),
-    always (readToolV 2 "context_expand" ["conversation.db"] [CurrentConversation]),
-    always (readTool "view_forward" ["conversation.db"] [CurrentConversation]),
+    always ((llmReadTool "context_search" ["conversation.db"] [CurrentConversation]) {tdSchemaVersion = SchemaVersion 2}),
+    always (readTool "context_resume" ["conversation.db"] [CurrentConversation]),
+    always (readTool "context_read" ["conversation.db"] [CurrentConversation]),
     always (sendTool "poke" "chat.endpoint"),
     -- An explicit reminder is the asker's own standing consent, not
     -- bot-initiated activity: it stays open to every member.  Only

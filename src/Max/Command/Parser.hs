@@ -250,7 +250,8 @@ classify verb raw@(RawArgs pos flags) = case verb of
     [] -> PersonaShow
     ["clear"] -> PersonaClear
     _ -> PersonaSet (T.unwords pos)
-  "clear" -> if "all" `Map.member` flags then ClearAll else Clear
+  "compact" -> if null pos && Map.null flags then Compact else Unknown verb raw
+  "clear" -> if "all" `Map.member` flags then ClearAll else Compact
   "unclear" -> Unclear
   "pin" -> case pos of
     [] -> Pin Nothing

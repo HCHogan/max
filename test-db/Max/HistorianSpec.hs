@@ -2,11 +2,12 @@ module Max.HistorianSpec (spec) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async (withAsync)
+import Control.Monad (forM_)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (getCurrentTime, minutesToTimeZone)
+import Data.Time (addUTCTime, getCurrentTime, minutesToTimeZone)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful (IOE, liftIO, (:>))
 import Effectful.PostgreSQL (WithConnection, query)
@@ -23,7 +24,7 @@ import Max.Effects.LLM
     LLMInterpreter (..),
     runLLMWith,
   )
-import Max.EpisodeScheduler (continueEpisodeAt, newEpisodeScheduler)
+import Max.EpisodeScheduler (EpisodeRequest (..), EpisodeWork (..), newEpisodeScheduler, queueCompact, retryEpisodeAt)
 import Max.EpisodeStore
 import Max.Historian
   ( historianPromptVersion,
@@ -31,7 +32,7 @@ import Max.Historian
     historianWorker,
     prepareOldestCoverageGap,
   )
-import Max.ModelCatalog (ModelCapabilities (..), defaultContextLimits, mkModelCatalog)
+import Max.ModelCatalog (ContextLimits (..), ModelCapabilities (..), defaultContextLimits, mkModelCatalog)
 import Max.Tasks (newTaskRegistry)
 import Max.Util (tshow)
 import OneBot.Types (GroupId (..))
@@ -49,8 +50,7 @@ spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ d
     tasks <- newTaskRegistry
     scheduler <- newEpisodeScheduler
     catalog <- either (fail . show) pure (mkModelCatalog "historian-test" (Map.singleton "historian-test" (ModelCapabilities False False Nothing defaultContextLimits)))
-    now <- getCurrentTime
-    continueEpisodeAt scheduler (GroupId groupId) now
+    queueCompact scheduler (GroupId groupId) end.ingestSeq
     withAsync
       ( withDbLog pool . runLLMWith (fakeHistorian memberPrincipal (rawCapture memberPrincipal)) $
           historianWorker "historian-test" 600 catalog (minutesToTimeZone 480) tasks "historian-test" scheduler
@@ -69,6 +69,72 @@ spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ d
     compartments <- withDb pool $ query "SELECT summary FROM conversation_compartments WHERE state = 'active'" ()
     (compartments :: [Only Text])
       `shouldBe` [Only "Alice said she likes green tea; Max acknowledged it."]
+
+  it "compacts only the requested snapshot while preserving new arrivals" $ do
+    insertMessageWithCanonicalId pool 1001 groupId member botId testTime Nothing "Alice likes green tea"
+    insertMessageWithCanonicalId pool 1002 groupId botId botId testTime Nothing "Max acknowledges"
+    principal <- principalFor pool member
+    end <- latestCursor pool
+    let scope = conversationScopeFor (GroupId groupId)
+    tasks <- newTaskRegistry
+    scheduler <- newEpisodeScheduler
+    queueCompact scheduler (GroupId groupId) end.ingestSeq
+    catalog <- either (fail . show) pure (mkModelCatalog "historian-test" (Map.singleton "historian-test" (ModelCapabilities False False Nothing defaultContextLimits)))
+    started <- newEmptyMVar
+    release <- newEmptyMVar
+    let model = fakeHistorian principal (rawCapture principal)
+        gated = LLMInterpreter $ \ctx profile messages tools sink -> do
+          liftIO (putMVar started () >> takeMVar release)
+          model.liChat ctx profile messages tools sink
+    withAsync (withDbLog pool . runLLMWith gated $ historianWorker "historian-test" 600 catalog (minutesToTimeZone 480) tasks "historian-test" scheduler) $ \_ -> do
+      timeout 3_000_000 (takeMVar started) `shouldReturn` Just ()
+      withDb pool (loadCursor scope historianCursor) `shouldReturn` MessageCursor 0
+      insertMessageWithCanonicalId pool 1003 groupId member botId testTime Nothing "new message during compaction"
+      putMVar release ()
+      timeout 3_000_000 (waitUntil $ (== end) <$> withDb pool (loadCursor scope historianCursor)) `shouldReturn` Just ()
+    withDb pool (query "SELECT source_message_count FROM conversation_compartments WHERE state='active'" ()) `shouldReturn` [Only (2 :: Int)]
+    withDb pool (query "SELECT count(*) FROM messages WHERE group_id=?" (Only groupId)) `shouldReturn` [Only (3 :: Int)]
+
+  it "keeps the raw prefix and cursor on invalid compact output" $ do
+    insertMessageWithCanonicalId pool 1001 groupId member botId testTime Nothing "Alice likes green tea"
+    insertMessageWithCanonicalId pool 1002 groupId botId botId testTime Nothing "Max acknowledges"
+    principal <- principalFor pool member
+    end <- latestCursor pool
+    let scope = conversationScopeFor (GroupId groupId)
+    tasks <- newTaskRegistry
+    scheduler <- newEpisodeScheduler
+    queueCompact scheduler (GroupId groupId) end.ingestSeq
+    catalog <- either (fail . show) pure (mkModelCatalog "historian-test" (Map.singleton "historian-test" (ModelCapabilities False False Nothing defaultContextLimits)))
+    withAsync (withDbLog pool . runLLMWith (fakeHistorian principal "invalid JSON") $ historianWorker "historian-test" 600 catalog (minutesToTimeZone 480) tasks "historian-test" scheduler) $ \_ -> do
+      timeout 3_000_000 (waitUntil $ (== [Only (1 :: Int)]) <$> withDb pool (query "SELECT count(*) FROM episode_capture_runs WHERE status='failed'" ())) `shouldReturn` Just ()
+      withDb pool (loadCursor scope historianCursor) `shouldReturn` MessageCursor 0
+      withDb pool (listActiveCompartments scope) `shouldReturn` []
+    withDb pool (query "SELECT count(*) FROM messages WHERE group_id=?" (Only groupId)) `shouldReturn` [Only (2 :: Int)]
+
+  forM_ [(250, 3), (800, 4)] $ \(paddingSize, capturedCount) ->
+    it ("uses the chat profile for pressure and handles the raw tail, message size " <> show paddingSize) $ do
+      let padding = T.replicate paddingSize "长"
+      insertMessageWithCanonicalId pool 1001 groupId member botId testTime Nothing ("Alice likes green tea " <> padding)
+      insertMessageWithCanonicalId pool 1002 groupId botId botId testTime Nothing ("Max acknowledges " <> padding)
+      insertMessageWithCanonicalId pool 1003 groupId member botId testTime Nothing padding
+      insertMessageWithCanonicalId pool 1004 groupId member botId testTime Nothing padding
+      principal <- principalFor pool member
+      end <- latestCursor pool
+      _ <- withDb pool (query "INSERT INTO sessions(group_id,model) VALUES(?,'small-chat') RETURNING group_id" (Only groupId)) :: IO [Only Int64]
+      let scope = conversationScopeFor (GroupId groupId)
+          profiles =
+            Map.fromList
+              [ ("historian-test", ModelCapabilities False False Nothing defaultContextLimits),
+                ("small-chat", ModelCapabilities False False Nothing (ContextLimits 1024 256 0 0))
+              ]
+      catalog <- either (fail . show) pure (mkModelCatalog "small-chat" profiles)
+      tasks <- newTaskRegistry
+      scheduler <- newEpisodeScheduler
+      now <- getCurrentTime
+      retryEpisodeAt scheduler (EpisodeWork (PressureConversation (GroupId groupId)) 0) (addUTCTime (-61) now)
+      withAsync (withDbLog pool . runLLMWith (fakeHistorian principal (rawCapture principal)) $ historianWorker "historian-test" 600 catalog (minutesToTimeZone 480) tasks "small-chat" scheduler) $ \_ ->
+        timeout 3_000_000 (waitUntil $ (== MessageCursor (end.ingestSeq - fromIntegral (4 - capturedCount))) <$> withDb pool (loadCursor scope historianCursor)) `shouldReturn` Just ()
+      withDb pool (query "SELECT source_message_count FROM conversation_compartments WHERE state='active'" ()) `shouldReturn` [Only (capturedCount :: Int)]
 
   it "heals a commit-order skip below the live cursor without rewinding it" $ do
     let scope = conversationScopeFor (GroupId groupId)

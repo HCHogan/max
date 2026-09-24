@@ -6,6 +6,8 @@ module Max.EpisodeScheduler
     episodeGroup,
     newEpisodeScheduler,
     queueEpisodeRebuilds,
+    queueCompact,
+    continueCompactAt,
     armEpisode,
     bumpEpisode,
     retryEpisodeAt,
@@ -35,6 +37,8 @@ import OneBot.Types (GroupId (..))
 
 data EpisodeRequest
   = SettledConversation !GroupId
+  | PressureConversation !GroupId
+  | CompactConversation !GroupId !Int64
   | RebuildEpisode !GroupId !CompartmentId !Text
   deriving stock (Eq, Ord, Show)
 
@@ -54,7 +58,7 @@ newEpisodeScheduler :: IO EpisodeScheduler
 newEpisodeScheduler = EpisodeScheduler <$> newTVarIO Map.empty <*> newTVarIO Set.empty <*> newTVarIO 0
 
 episodeGroup :: EpisodeRequest -> GroupId
-episodeGroup = \case SettledConversation gid -> gid; RebuildEpisode gid _ _ -> gid
+episodeGroup = \case SettledConversation gid -> gid; PressureConversation gid -> gid; CompactConversation gid _ -> gid; RebuildEpisode gid _ _ -> gid
 
 episodeIdleSeconds :: Int
 episodeIdleSeconds = 600
@@ -66,6 +70,20 @@ episodeRetryDelaySeconds attempt
   | attempt == 3 = 900
   | attempt == 4 = 3600
   | otherwise = 21600
+
+-- | Fixed snapshot boundary, independent of subsequent traffic. Coalesce
+-- repeated manual requests; one conversation still has at most one publisher.
+queueCompact :: EpisodeScheduler -> GroupId -> Int64 -> IO ()
+queueCompact scheduler gid cutoff = getCurrentTime >>= continueCompactAt scheduler gid cutoff
+
+continueCompactAt :: EpisodeScheduler -> GroupId -> Int64 -> UTCTime -> IO ()
+continueCompactAt scheduler gid cutoff now = atomically $ do
+  current <- readTVar scheduler.pending
+  let previous = [bound | CompactConversation group bound <- Map.keys current, group == gid]
+      keep = Map.filterWithKey (\key _ -> case key of CompactConversation group _ -> group /= gid; _ -> True) current
+      end = maximum (cutoff : previous)
+  writeTVar scheduler.pending (Map.insert (CompactConversation gid end) (now, 0) keep)
+  modifyTVar' scheduler.version (+ 1)
 
 -- | Admit a whole admin request or leave the queue unchanged.
 queueEpisodeRebuilds :: EpisodeScheduler -> GroupId -> [CompartmentId] -> Text -> IO Bool
@@ -99,6 +117,9 @@ bumpEpisode scheduler gid@(GroupId raw) = do
     when (Map.member key current || Set.member raw active) $ do
       writeTVar scheduler.pending (Map.insert key (addUTCTime (fromIntegral episodeIdleSeconds) now, 0) current)
       modifyTVar' scheduler.version (+ 1)
+    -- Traffic may postpone quiet capture, never the bounded pressure check.
+    modifyTVar' scheduler.pending (Map.insertWith (\_ old -> old) (PressureConversation gid) (addUTCTime 60 now, 0))
+    modifyTVar' scheduler.version (+ 1)
 
 retryEpisodeAt :: EpisodeScheduler -> EpisodeWork -> UTCTime -> IO ()
 retryEpisodeAt scheduler work now =

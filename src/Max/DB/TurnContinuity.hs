@@ -14,16 +14,19 @@ module Max.DB.TurnContinuity
   )
 where
 
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value, encode, object, (.=))
+import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, diffUTCTime)
 import Database.PostgreSQL.Simple (In (..), Only (..), Query)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.Context.Read (messageRef)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Turn.Continuity
@@ -270,12 +273,14 @@ loadAmbientMessages scope finishedIngestSeq (CanonicalMessageId currentMessage) 
     )
   where
     ambientSelect projection =
-      "SELECT " <> projection <> " FROM messages m \
-      \JOIN messages current ON current.canonical_message_id = ? AND current.conversation_id = m.conversation_id \
-      \JOIN conversations c ON c.conversation_id = m.conversation_id \
-      \WHERE c.legacy_group_id = ? AND m.ingest_seq > ? AND m.ingest_seq < current.ingest_seq \
-      \  AND m.canonical_message_id <> current.canonical_message_id \
-      \  AND NOT m.is_synthetic AND m.kind IN ('chat','system')"
+      "SELECT "
+        <> projection
+        <> " FROM messages m \
+           \JOIN messages current ON current.canonical_message_id = ? AND current.conversation_id = m.conversation_id \
+           \JOIN conversations c ON c.conversation_id = m.conversation_id \
+           \WHERE c.legacy_group_id = ? AND m.ingest_seq > ? AND m.ingest_seq < current.ingest_seq \
+           \  AND m.canonical_message_id <> current.canonical_message_id \
+           \  AND NOT m.is_synthetic AND m.kind IN ('chat','system')"
 
 loadSandboxStates ::
   (WithConnection :> es, IOE :> es) =>
@@ -352,8 +357,16 @@ expandTurnTrace scope cleared ordinal after limit = do
           \FROM execution_journal WHERE turn_id=? AND execution_ordinal>? \
           \ORDER BY execution_ordinal LIMIT ?"
           (turnId, cursor, bounded + 1)
-      outputs <- loadOutputs turnId
-      let page = take bounded (rows :: [JournalTraceRow])
+      outputRows <-
+        query
+          "SELECT turn_chunk_index, canonical_message_id, left(rendered_text,240) FROM messages WHERE agent_turn_id=? ORDER BY turn_chunk_index DESC LIMIT 6"
+          (Only turnId)
+      requests <-
+        query
+          "SELECT m.canonical_message_id, m.rendered_text FROM agent_turns t JOIN messages m ON m.canonical_message_id=t.trigger_canonical_message_id AND m.conversation_id=t.conversation_id WHERE t.turn_id=?"
+          (Only turnId)
+      let outputs = reverse (take 5 (outputRows :: [(Int, Int64, Text)]))
+          page = take bounded (rows :: [JournalTraceRow])
           hasMore = length rows > bounded
           nextCursor = if hasMore then journalOrdinal (last page) else Nothing
       pure . Just $
@@ -365,7 +378,11 @@ expandTurnTrace scope cleared ordinal after limit = do
             "finished_at" .= finished,
             "usage" .= object ["llm_turns" .= llmTurns, "prompt_tokens" .= promptTokens, "completion_tokens" .= completionTokens],
             "journal" .= map (journalValue ordinal) page,
-            "outputs" .= [object ["chunk" .= chunk, "message_id" .= messageId, "preview" .= preview] | (chunk, messageId, preview) <- outputs],
+            "request" .= [object ["read" .= object ["ref" .= messageRef mid], "text" .= T.take 800 body, "complete" .= (T.length body <= 800)] | (mid, body) <- requests],
+            "outputs" .= [object ["chunk" .= chunk, "message_id" .= T.pack (show messageId), "read" .= object ["ref" .= messageRef messageId], "preview" .= preview] | (chunk, messageId, preview) <- outputs],
+            "outputs_has_older" .= (length outputRows > 5),
+            "replayed" .= False,
+            "continuation_note" .= ("Read-only historical evidence. Recheck uncertain effects and current external state before continuing. User corrections may be in surrounding chat; use context_read on the request with before/after." :: Text),
             "has_more" .= hasMore,
             "next_after_cursor" .= nextCursor
           ]
@@ -395,8 +412,19 @@ data TargetDigestRow = TargetDigestRow
 
 instance FromRow TargetDigestRow where
   fromRow =
-    TargetDigestRow <$> field <*> field <*> field <*> field <*> field <*> field
-      <*> field <*> field <*> field <*> field <*> field <*> field
+    TargetDigestRow
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
 
 targetTurnDigest :: TargetDigestRow -> TurnDigest
 targetTurnDigest row =
@@ -435,9 +463,25 @@ data JournalTraceRow = JournalTraceRow
 
 instance FromRow JournalTraceRow where
   fromRow =
-    JournalTraceRow <$> field <*> field <*> field <*> field <*> field <*> field
-      <*> field <*> field <*> field <*> field <*> field <*> field <*> field
-      <*> field <*> field <*> field <*> field <*> field
+    JournalTraceRow
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
 
 journalOrdinal :: JournalTraceRow -> Maybe Int64
 journalOrdinal = Just . (.jtrOrdinal)
@@ -452,18 +496,21 @@ journalValue turnOrdinal row =
       "tool" .= row.jtrToolRef,
       "schema_version" .= row.jtrSchemaVersion,
       "schema_hash" .= row.jtrSchemaHash,
-      "arguments" .= row.jtrInput,
+      "arguments" .= boundedValue row.jtrInput,
       "effects" .= row.jtrEffects,
       "retry_class" .= row.jtrRetryClass,
-      "failure" .= object ["code" .= row.jtrFailureCode, "detail" .= row.jtrFailureDetail],
-      "result" .= row.jtrResultInline,
-      "result_preview" .= row.jtrResultPreview,
+      "failure" .= object ["code" .= row.jtrFailureCode, "detail" .= fmap (T.take 600) row.jtrFailureDetail, "complete" .= maybe True ((<= 600) . T.length) row.jtrFailureDetail],
+      "result" .= boundedValue row.jtrResultInline,
+      "result_preview" .= fmap (T.take 600) row.jtrResultPreview,
+      "resume" .= object ["turn" .= (turnHandleText turnOrdinal <> ":r" <> T.pack (show row.jtrOrdinal))],
       "result_spilled" .= row.jtrSpilled,
       "result_size_bytes" .= row.jtrResultSize,
-      "observed_manifest" .= row.jtrObserved,
+      "observed_manifest" .= boundedValue row.jtrObserved,
       "started_at" .= row.jtrStartedAt,
       "finished_at" .= row.jtrFinishedAt
     ]
+  where
+    boundedValue value = fmap (\v -> let text = TE.decodeUtf8 (LBS.toStrict (encode v)) in if T.length text <= 600 then v else object ["preview" .= T.take 600 text, "complete" .= False]) value
 
 nonBlank :: Maybe Text -> Maybe Text
 nonBlank = (>>= \text -> if T.null (T.strip text) then Nothing else Just text)

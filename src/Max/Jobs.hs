@@ -207,11 +207,12 @@ reportJobProgress jobs turn body = atomically $ do
   case entryForTurn entries turn of
     Just entry | currentRuntime entry && taskIsLive entry.view.status && not (T.null (T.strip body)) && T.length body <= 40000 -> do
       let unchanged = entry.view.progress == Just body
+          -- Progress is observable through task status and the parent's inbox,
+          -- never a conversation publication. Only terminal results enqueue
+          -- notices; in particular monitor progress must not bypass its policy.
           updated =
             entry
-              { view = entry.view {progress = Just body},
-                noticeVersion = entry.noticeVersion + if unchanged then 0 else 1,
-                pendingNotice = if isNothing entry.view.spec.parent && not unchanged then Just body else entry.pendingNotice
+              { view = entry.view {progress = Just body}
               }
           notify parent = parent {childUpdates = Set.insert entry.view.run parent.childUpdates}
           withParent = if unchanged then entries else maybe entries (\owner -> Map.adjust notify owner.jobId entries) entry.view.spec.parent

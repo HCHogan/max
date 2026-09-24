@@ -118,6 +118,6 @@ taskToolsFor context =
     progressTool =
       legacyTool
         "task_progress"
-        "记录进度；重复状态去重，尚未发送的进度合并。子任务交给父任务；根任务直接发送最新摘要，请用简洁的用户可读正文。"
+        "记录内部进度，重复状态去重；可通过 task_status 查询，子任务更新交给父任务。不向聊天发送过程播报；任务结束后才发送最终结果。"
         (toolObject [("summary", stringParam "当前进度、阻碍或正在验证的证据，最多 40000 字符。")] ["summary"])
         (parseArgs (withObject "task progress" (.: "summary")) (fmap (either Left (const (Right (object ["recorded" .= True])))) . reportProgress))

@@ -71,6 +71,7 @@ extra-source-files:
     codemode/*.js
     codemode/QUICKJS-LICENSE
     docs/features.md
+    docs/context.md
     docs/development.md
     docs/platforms.md
     docs/prompt-flow.md
@@ -175,6 +176,8 @@ library
         Max.ContextAdmin
         Max.Context
         Max.Context.Policy
+        Max.Context.Capacity
+        Max.Context.Read
         Max.Context.Working
         Max.Context.Types
         Max.ConversationScope
@@ -189,6 +192,7 @@ library
         Max.DB.Health
         Max.DB.Projection
         Max.DB.History
+        Max.DB.ContextRead
         Max.History.Types
         Max.Media.Caption
         Max.Media.Types
@@ -799,6 +803,7 @@ test-suite max-test-db
         Max.DB.SessionSpec
         Max.DB.TransactionSpec
         Max.ContextAdminSpec
+        Max.ContextReadSpec
         Max.ConversationCapabilitiesSpec
         Max.ResourceCapabilitiesSpec
         Max.SandboxRegistrySpec

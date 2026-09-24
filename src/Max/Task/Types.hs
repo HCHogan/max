@@ -55,10 +55,9 @@ taskGrants profile parent = Map.filterWithKey (\name _ -> name `elem` allowed) p
   where
     allowed =
       [ "web_search",
-        "get_message_by_id",
         "context_search",
-        "context_expand",
-        "view_forward",
+        "context_resume",
+        "context_read",
         "memory_list",
         "view_image",
         "view_video",

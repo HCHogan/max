@@ -17,7 +17,7 @@ spec = do
     it "gates group-admin-tier state changes" $ do
       requiredCapability (PersonaSet "猫") `shouldBe` Just ("persona", TierGroupAdmin)
       requiredCapability PersonaClear `shouldBe` Just ("persona", TierGroupAdmin)
-      requiredCapability Clear `shouldBe` Just ("clear", TierGroupAdmin)
+      requiredCapability Compact `shouldBe` Just ("compact", TierGroupAdmin)
       requiredCapability Unclear `shouldBe` Just ("clear", TierGroupAdmin)
       requiredCapability (Kill "t1") `shouldBe` Just ("kill", TierGroupAdmin)
 

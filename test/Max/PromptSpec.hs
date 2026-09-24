@@ -206,7 +206,7 @@ spec = do
       body `shouldSatisfy` ("t#42 14:32" `T.isInfixOf`)
       T.breakOn "[recent messages]" body
         `shouldSatisfy` (\(prefix, _) -> "t#42" `T.isInfixOf` prefix)
-      system `shouldSatisfy` ("完整 t#<n> 传给 context_expand" `T.isInfixOf`)
+      system `shouldSatisfy` ("完整 t#<n> 传给 context_resume" `T.isInfixOf`)
 
     it "accounts for a continuation digest and places it before the current message" $ do
       let inputs = baseInputs {continuationView = Just "[continuation]\nold facts"}
@@ -915,10 +915,13 @@ spec = do
       let summaries = [compartmentAt cid (timeAt (fromIntegral cid)) (T.replicate 3000 "旧") | cid <- [1 .. 4]]
           recent = compartmentAt 5 (timeAt 10) "recent summary"
           memory = memAt 1 "important current fact"
-          plan = planContext generousLimits (snapshot baseInputs {compartments = summaries <> [recent], groupMemories = [memory]})
+          limits = ContextLimits 65536 8192 0 0
+          plan = planContext limits (snapshot baseInputs {compartments = summaries <> [recent], groupMemories = [memory]})
       map (.contextExpandHandle) (cpInputs plan).compartments `shouldBe` map episodeHandleAt [3, 4, 5]
       map (.memId) (cpInputs plan).groupMemories `shouldBe` [memory.memId]
       plan.cpWithinBudget `shouldBe` True
+      let larger = planContext (limits {maxInputTokens = 131072}) (snapshot baseInputs {compartments = summaries <> [recent], groupMemories = [memory]})
+      length (cpInputs larger).compartments `shouldBe` 5
 
     it "chooses detail by recency and importance, keeping single-summary rows usable" $ do
       let ago days = addUTCTime (negate (days * 86400)) baseInputs.now

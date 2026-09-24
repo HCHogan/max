@@ -28,10 +28,11 @@ import Max.Browser.Registry (destroyBrowsersForGroup)
 import Max.Command.Help (helpText)
 import Max.Command.Types
 import Max.Command.Version (readHostUptime, readOsPretty, versionCard)
-import Max.ConversationScope (conversationScopeFor)
+import Max.ConversationScope (conversationScopeFor, conversationStorageId)
 import Max.DB.History (HistoryItem (..), bestName, fetchMessageInScope, fetchMessagesByIdsInScope)
 import Max.DB.Stickers qualified as Stickers
 import Max.Env (BotEnv (..))
+import Max.EpisodeScheduler (queueCompact)
 import Max.Intent (IntentConfig (..))
 import Max.Jobs qualified as Jobs
 import Max.MemoryStore
@@ -186,10 +187,15 @@ execute t gid uid senderPrincipal replyTarget cmd = do
       updateSession t (\s -> (s {persona = Just p}, ()))
       ack
     --
-    Clear -> do
-      now <- liftIO getCurrentTime
-      updateSession t (\s -> (Session.clearHistory now s, ()))
-      ack
+    Compact -> case env.beEpisodeScheduler of
+      Nothing -> reply "未启用 historian，不能压缩；原始记录和当前上下文未改变。"
+      Just scheduler -> do
+        rows <- query "SELECT COALESCE(max(ingest_seq),0) FROM messages WHERE group_id=?" (Only (conversationStorageId conversation))
+        case rows of
+          [Only (cutoff :: Int64)] -> do
+            liftIO (queueCompact scheduler gid cutoff)
+            reply "已请求立即压缩此前记录为 episode；只在校验并发布成功后替换上下文，原文始终保留。新消息不会并入本次压缩；涉及进行中任务的部分会等任务结束。"
+          _ -> reply "无法确定压缩范围；上下文未改变。"
     ClearAll -> do
       now <- liftIO getCurrentTime
       updateSession t (\s -> (Session.clearAll now s, ()))

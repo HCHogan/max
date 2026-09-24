@@ -43,7 +43,7 @@ maxChars（512–30000）限制整个文字结果，maxElements（1–200）限�
 需要更多内容时缩小 selector、滚动或提高预算；不要把截断当作页面没有内容。read 可以按
 字符分页：结果里有 `Note: text characters A-B; more text: read again with offset=B` 时，
 下一次传 offset=B 从断点接着读；写 end of text 就是读完了。
-直接调用时，大段结果在上下文里只保留最近一两份，更早的会移进工作记录，要 context_expand
+直接调用时，大段结果在上下文里只保留最近一两份，更早的会移进工作记录，要 context_resume
 才能取回。读长文档先用 find 或 selector 定位要的那一段，不要对同一页反复大预算 open/read；
 要通读、比对或抽数据时写进 run_code（见最后一节）。
 

@@ -32,7 +32,7 @@ spec = describe "recoverable working context" $ do
     let calls = [tc.callId | MsgAssistantToolCalls _ tcs <- plan.wpMessages, tc <- tcs]
         results = [cid | MsgTool cid _ <- plan.wpMessages]
     results `shouldMatchList` calls
-    plan.wpSummary `shouldSatisfy` T.isInfixOf "context_expand(handle=t#7, call_id="
+    plan.wpSummary `shouldSatisfy` T.isInfixOf "context_resume(turn=t#7, call_id="
     Right stable <- pure (fitWorkingContext limits Nothing "id" "t#7" plan.wpSummary plan.wpMessages [])
     stable.wpCompacted `shouldBe` False
     map show stable.wpMessages `shouldBe` map show plan.wpMessages

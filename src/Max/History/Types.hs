@@ -35,7 +35,7 @@ data HistoryItem = HistoryItem
     receivedAt :: !UTCTime,
     -- | The message this one quotes (@reply_to_canonical_message_id@), if
     -- any.  Rendered as a @[↩#\<id\>]@ handle so the model can walk the
-    -- quote chain via @get_message_by_id@; 'Nothing' for non-replies.
+    -- quote chain via @context_read@; 'Nothing' for non-replies.
     replyTo :: !(Maybe Int64)
   }
   deriving stock (Show)

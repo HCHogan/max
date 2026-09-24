@@ -24,6 +24,7 @@ import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Ord (Down (..))
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -35,6 +36,7 @@ import Effectful.Exception (bracket)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.Context (estimateMessagesTokens, estimateTextTokens)
+import Max.Context.Capacity (historianSourceTokens, rawHighTokens, rawLowTokens)
 import Max.ConversationScope (ConversationScope, conversationScopeFor, conversationStorageId)
 import Max.DB.ConversationCursor (historianCursor, loadCursor)
 import Max.DB.History
@@ -43,11 +45,12 @@ import Max.DB.History
     LedgerItem (..),
     MessageCursor (..),
     bestName,
+    fetchNewestPromptPageBefore,
     fetchOldestPageAfter,
     fetchOldestPageThrough,
     hasMessagesAfter,
   )
-import Max.DB.Session (listSessions)
+import Max.DB.Session (SessionRecord (..), fetchRecord, listSessions)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
 import Max.EpisodeScheduler
   ( EpisodeRequest (..),
@@ -55,6 +58,7 @@ import Max.EpisodeScheduler
     EpisodeWork (..),
     armEpisode,
     awaitDueEpisode,
+    continueCompactAt,
     continueEpisodeAt,
     deferEpisodeAt,
     episodeGroup,
@@ -80,6 +84,8 @@ import Max.ModelCatalog
     defaultContextLimits,
     lookupModelCapabilities,
   )
+import Max.Prompt.History (fetchBoundedPromptTail)
+import Max.Prompt.Render (rawTailTokens)
 import Max.Session.Types (Session (..))
 import Max.Tasks (TaskRegistry, inFlightTriggers)
 import Max.Time (fmtDateHM, fmtEnvStamp)
@@ -132,7 +138,7 @@ historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler =
       )
   where
     inputBudget = historianInputBudget profile catalog
-    sourceBudget = min 65536 (max 512 (inputBudget * 2 `div` 3))
+    sourceBudget = historianSourceTokens inputBudget
     request reason model = CaptureRequest reason model historianPromptVersion historianSchemaVersion
 
     runWork work = do
@@ -140,6 +146,15 @@ historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler =
           scope = conversationScopeFor gid
       prepared <- case work.request of
         RebuildEpisode _ compartment model -> prepareRebuildRun scope compartment (request CaptureRebuild model)
+        CompactConversation _ cutoff -> do
+          cursor <- loadCursor scope historianCursor
+          -- Bound every batch by the command's original snapshot. Publishing
+          -- a batch advances the cursor atomically; failures leave it intact.
+          window <- scanEpisodeWindowThrough tz scope cursor (MessageCursor cutoff) sourceBudget
+          case window of
+            Nothing -> pure Nothing
+            Just selected -> prepareCaptureRun scope cursor selected.endCursor (request CaptureTokenPressure profile)
+        PressureConversation _ -> prepareAutomatic gid scope True
         SettledConversation _ -> do
           moved <- liftIO (episodePendingDeadline scheduler gid)
           protected <- liftIO (inFlightTriggers tasks gid)
@@ -151,17 +166,7 @@ historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler =
               case gap of
                 Just run -> pure (Just run)
                 Nothing -> do
-                  cursor <- loadCursor scope historianCursor
-                  window <- scanEpisodeWindow tz scope cursor sourceBudget
-                  movedDuringScan <- liftIO (episodePendingDeadline scheduler gid)
-                  case (window, movedDuringScan) of
-                    (Just selected, Nothing) ->
-                      prepareCaptureRun
-                        scope
-                        cursor
-                        selected.endCursor
-                        (request (if selected.hitTokenBoundary then CaptureTokenPressure else CaptureIdle) profile)
-                    _ -> pure Nothing
+                  prepareAutomatic gid scope False
       for_ prepared $ \run -> do
         outcome <- trySync (processCaptureRun (historianInputBudget run.crHistorianProfile catalog) timeoutSeconds tz tasks run)
         result <- case outcome of
@@ -178,32 +183,56 @@ historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler =
             gap <- findOldestBackfillGap scope
             cursor <- loadCursor scope historianCursor
             pending <- hasMessagesAfter scope cursor
-            case gap of
-              Just _ -> liftIO (continueEpisodeAt scheduler gid (addUTCTime 1 now))
-              Nothing
-                | pending ->
-                    liftIO $
-                      if run.crReason == "token_pressure" then continueEpisodeAt scheduler gid now else armEpisode scheduler gid
-              Nothing -> pure ()
+            case work.request of
+              CompactConversation _ cutoff
+                | cursor.ingestSeq < cutoff -> liftIO (continueCompactAt scheduler gid cutoff now)
+              CompactConversation {} -> pure ()
+              _ -> case gap of
+                Just _ -> liftIO (continueEpisodeAt scheduler gid (addUTCTime 1 now))
+                Nothing
+                  | pending ->
+                      liftIO $
+                        if run.crReason == "token_pressure" then continueEpisodeAt scheduler gid now else armEpisode scheduler gid
+                Nothing -> pure ()
           CaptureFailed -> liftIO (retryEpisodeAt scheduler work now)
           CaptureDeferred -> liftIO (deferEpisodeAt scheduler work now)
           CaptureAbandoned -> liftIO (deferEpisodeAt scheduler work now)
 
+    prepareAutomatic gid scope pressure = do
+      protected <- liftIO (inFlightTriggers tasks gid)
+      if not (Set.null protected)
+        then do
+          when pressure (liftIO (getCurrentTime >>= deferEpisodeAt scheduler (EpisodeWork (PressureConversation gid) 0)))
+          pure Nothing
+        else do
+          session <- fetchRecord gid defaultModel
+          let model = maybe defaultModel (.session.model) session
+              limits = maybe defaultContextLimits (.contextLimits) (lookupModelCapabilities model catalog)
+          cursor <- loadCursor scope historianCursor
+          (tailRows, overflow) <- fetchBoundedPromptTail scope cursor 0 Nothing (rawHighTokens limits False)
+          -- A single oversized newest message may not fit even the high
+          -- watermark. Let the historian attempt that fixed prefix instead
+          -- of leaving pressure permanently stuck behind an empty raw tail.
+          oversizedEnd <-
+            if null tailRows && overflow
+              then fmap (fmap (.cursor) . listToMaybe . (.items)) (fetchNewestPromptPageBefore scope cursor Nothing 0 Nothing 1)
+              else pure Nothing
+          let retained = takeEpisodeByToken tz (rawLowTokens limits False) (reverse tailRows)
+              through = case reverse retained of
+                oldest : _ -> MessageCursor (oldest.cursor.ingestSeq - 1)
+                [] -> fromMaybe cursor oversizedEnd
+          if pressure && not overflow && rawTailTokens tailRows < rawHighTokens limits False
+            then pure Nothing
+            else do
+              window <- scanEpisodeWindowThrough tz scope cursor through sourceBudget
+              case window of
+                Nothing -> pure Nothing
+                Just selected -> prepareCaptureRun scope cursor selected.endCursor (request (if pressure then CaptureTokenPressure else CaptureIdle) profile)
+
 data EpisodeWindow = EpisodeWindow
   { endCursor :: !MessageCursor,
-    estimatedTokens :: !Int,
-    hitTokenBoundary :: !Bool
+    estimatedTokens :: !Int
   }
-
-scanEpisodeWindow ::
-  (WithConnection :> es, IOE :> es) =>
-  TimeZone ->
-  ConversationScope ->
-  MessageCursor ->
-  Int ->
-  Eff es (Maybe EpisodeWindow)
-scanEpisodeWindow tz scope initial tokenLimit =
-  scanEpisodeWindowBounded tz scope initial Nothing tokenLimit
 
 scanEpisodeWindowThrough ::
   (WithConnection :> es, IOE :> es) =>
@@ -241,14 +270,14 @@ scanEpisodeWindowBounded tz scope initial through tokenLimit = go initial 0 Noth
             [] -> latest
           stoppedInsidePage = length selected < length page.items
       if stoppedInsidePage
-        then pure (EpisodeWindow <$> latest' <*> pure (used + selectedTokens) <*> pure True)
+        then pure (EpisodeWindow <$> latest' <*> pure (used + selectedTokens))
         else case latest' of
           Nothing -> pure Nothing
           Just end
             | page.hasMore && used + selectedTokens < tokenLimit ->
                 go end (used + selectedTokens) latest'
             | otherwise ->
-                pure (Just (EpisodeWindow end (used + selectedTokens) page.hasMore))
+                pure (Just (EpisodeWindow end (used + selectedTokens)))
 
 -- | Backfill the oldest uncovered range below the live cursor, including late
 -- commits whose ingestion sequence the cursor already passed. Publication checks

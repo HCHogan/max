@@ -62,8 +62,8 @@ collectHistory request = do
 
 -- | Collect only the newest token-sized raw tail.  SQL pages are walked
 -- backward so an arbitrarily old ledger never has to enter memory merely to
--- be dropped by ContextPolicy.  The final page may overshoot the token target;
--- the pure policy remains the authoritative exact selection boundary.
+-- be dropped by ContextPolicy. Trim the final I/O page to the actual token
+-- target; the overall prompt planner still protects current input and pins.
 fetchBoundedPromptTail ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->
@@ -84,7 +84,16 @@ fetchBoundedPromptTail scope after triggerId cleared tokenLimit = go Nothing [] 
         oldest : _
           | page.hasMore && used' < max 1 tokenLimit ->
               go (Just oldest.cursor) accumulated' used'
-          | otherwise -> pure (accumulated', page.hasMore)
+          | otherwise ->
+              let selected = reverse (fit (max 0 tokenLimit) (reverse accumulated'))
+               in pure (selected, page.hasMore || length selected < length accumulated')
+
+    fit _ [] = []
+    fit remaining (entry : rest)
+      | cost <= remaining = entry : fit (remaining - cost) rest
+      | otherwise = []
+      where
+        cost = rawTailTokens [entry]
 
 -- Internal database page size only; never a retained-message boundary.
 promptTailPageSize :: Int

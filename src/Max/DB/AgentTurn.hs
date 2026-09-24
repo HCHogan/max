@@ -407,14 +407,14 @@ expandJournalResult scope cleared handle callId after limit = case target of
   Just (ordinal, execution) -> do
     rows <-
       query
-        "SELECT j.execution_ordinal,j.state,j.tool_ref,j.normalized_input,j.failure_detail,j.result_inline,j.result_blob_sha256 \
+        "SELECT j.execution_ordinal,j.state,j.tool_ref,j.normalized_input,j.failure_detail,j.result_inline,j.result_blob_sha256,j.observed_manifest \
         \ FROM conversations c JOIN agent_turns t USING(conversation_id) JOIN execution_journal j ON j.turn_id=t.turn_id \
         \ WHERE c.legacy_group_id=? AND t.turn_ordinal=? AND j.event_kind='tool_call' \
         \ AND (?::timestamptz IS NULL OR t.started_at>?) \
         \ AND (?::bigint IS NULL OR j.execution_ordinal=?) AND (?::text IS NULL OR j.call_id=?) LIMIT 2"
         (conversationStorageId scope, ordinal, cleared, cleared, execution, execution, callId, callId)
-    case rows :: [(ExecutionOrdinal, Text, Maybe Text, Maybe Value, Maybe Text, Maybe Value, Maybe Text)] of
-      [(number, state, name, input, failure, inline, blob)] -> do
+    case rows :: [(ExecutionOrdinal, Text, Maybe Text, Maybe Value, Maybe Text, Maybe Value, Maybe Text, Maybe Value)] of
+      [(number, state, name, input, failure, inline, blob, observed)] -> do
         value <- case (inline, blob >>= blobRefFromSha256) of
           (Just v, _) -> pure (Just v)
           (_, Just ref) -> either (const Nothing) Just . eitherDecodeStrict' <$> readBlob ref
@@ -422,7 +422,7 @@ expandJournalResult scope cleared handle callId after limit = case target of
         let payload =
               TE.decodeUtf8 . LBS.toStrict . encode $
                 object
-                  ["state" .= state, "tool" .= name, "input" .= input, "failure" .= failure, "result" .= value]
+                  ["state" .= state, "tool" .= name, "input" .= input, "failure" .= failure, "result" .= value, "observed_manifest" .= observed]
             cursor = fromIntegral (max 0 (min (fromIntegral (T.length payload)) (fromMaybe 0 after)))
             bounded = max 256 (min 12000 limit)
             part = T.take bounded (T.drop cursor payload)

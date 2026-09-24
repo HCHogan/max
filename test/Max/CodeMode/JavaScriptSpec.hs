@@ -13,10 +13,10 @@ import Data.Text.IO qualified as TIO
 import Effectful (liftIO, runEff)
 import Effectful.Concurrent (runConcurrent)
 import ExecutionFixture
+import Max.Browser.View (browserBudget, browserView)
 import Max.CodeMode.Execution
 import Max.CodeMode.JavaScript
 import Max.CodeMode.Model (executeModelBatch)
-import Max.Browser.View (browserBudget, browserView)
 import Max.CodeMode.Wasm
 import Max.Effects.Tools
 import Max.Execution.Tools
@@ -82,6 +82,29 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     result.cmExit `shouldBe` WasmCompleted
     result.cmOutput `shouldBe` Just (object ["sum" .= (6 :: Int), "text" .= ("中文 😀" :: Text)])
     map (.ccOutcome) result.cmCalls `shouldBe` replicate 3 "succeeded"
+
+  it "runs the context navigation manual with unchanged read/next objects and lossless IDs" $ do
+    manual <- TIO.readFile "skills/codemode.md"
+    let (_, section) = T.breakOn "## 翻聊天上下文" manual
+        source = fst (T.breakOn "```" (T.drop (T.length "```javascript\n") (snd (T.breakOn "```javascript\n" section))))
+        ref = "message:9007199254740993" :: Text
+        first = object ["ref" .= ref]
+        next = object ["cursor" .= ("opaque-not-a-number" :: Text)]
+        item = object ["ref" .= ref, "text" .= ("原文" :: Text), "more" .= Null]
+        search _ = pure (Right (object ["results" .= [object ["read" .= first]]]))
+        readPage args
+          | args == first = pure (Right (object ["items" .= [item], "next" .= next]))
+          | args == next = pure (Right (object ["items" .= [item], "next" .= Null]))
+          | otherwise = pure (Left "continuation was changed")
+        definitions = [echoDefinition {tdRef = ToolRef name} | name <- ["context_search", "context_read"]]
+        schema = object ["type" .= ("object" :: Text)]
+    registry <- checked definitions [legacyTool "context_search" "search" schema search, legacyTool "context_read" "read" schema readPage]
+    result <- runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session noJournal (views registry) source
+    result.cmExit `shouldBe` WasmCompleted
+    result.cmOutput `shouldBe` Just (object ["rows" .= [item, item], "next" .= Null])
+    length result.cmCalls `shouldBe` 3
 
   it "runs the web manual's browsing program as written" $ do
     manual <- TIO.readFile "skills/web.md"

@@ -48,8 +48,8 @@ data Command
     PersonaClear
   | -- | '!persona <text>'
     PersonaSet !Text
-  | -- | '!clear'
-    Clear
+  | -- | '!compact' ('!clear' is a compatibility alias)
+    Compact
   | -- | '!clear --all' / '!clear -a'
     ClearAll
   | -- | '!unclear' — remove the cleared_at watermark

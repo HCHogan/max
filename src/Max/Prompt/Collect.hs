@@ -106,6 +106,7 @@ import Max.Prompt.Request
         prGroupBrief,
         prHistoryTurns,
         prInFlight,
+        prLimits,
         prMultimodal,
         prOrigin,
         prOutputCaps,
@@ -153,8 +154,9 @@ collectContextSnapshot request now' history = do
       transcript' = history.selectedHistory
   pinnedItems' <- fetchMessagesByIdsInScope scope s.pinned
   -- Bound the uncached memory block; older entries remain searchable.
-  groupMems <- listRecentMemories (groupMemoryNamespace scope) memoryInjectCap
-  userMems <- listRecentMemories (userMemoryNamespace scope senderPrincipal) memoryInjectCap
+  let memoryCap = memoryInjectCap request.prLimits request.prMultimodal
+  groupMems <- listRecentMemories (groupMemoryNamespace scope) memoryCap
+  userMems <- listRecentMemories (userMemoryNamespace scope senderPrincipal) memoryCap
   replyCtx0 <- case (\(CanonicalMessageId target) -> target) <$> gm.replyTo of
     Nothing -> pure Nothing
     Just rid -> do
@@ -201,7 +203,7 @@ collectContextSnapshot request now' history = do
         waitForTriggerForward mid
         -- Same enrichment as every other rendered line — in
         -- particular nested forwards must carry their [forward#<id>]
-        -- handle so the model can view_forward one level deeper.
+        -- handle so the model can context_read a forward ref one level deeper.
         map enrich <$> fetchForwardChildrenInScope scope mid maxForwardLines
       else pure []
   images' <-

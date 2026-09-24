@@ -86,11 +86,12 @@ spec = do
         other -> expectationFailure $ "expected Unknown proactive, got: " <> show other
 
   describe "!clear / !unclear" $ do
-    it "plain clear" $ "!clear" `parsesTo` Clear
+    it "compact" $ "!compact" `parsesTo` Compact
+    it "plain clear" $ "!clear" `parsesTo` Compact
     it "clear --all" $ "!clear --all" `parsesTo` ClearAll
     it "clear -a (short form)" $ "!clear -a" `parsesTo` ClearAll
     it "a partly-unknown cluster (-ax) stays a value, so no --all" $
-      "!clear -ax" `parsesTo` Clear
+      "!clear -ax" `parsesTo` Compact
     it "unclear" $ "!unclear" `parsesTo` Unclear
 
   describe "!pin / !unpin / !pins" $ do
@@ -160,7 +161,8 @@ spec = do
         other -> expectationFailure $ "expected Unknown memory, got: " <> show other
 
   describe "!version" $
-    it "parses" $ "!version" `parsesTo` Version
+    it "parses" $
+      "!version" `parsesTo` Version
 
   describe "unknown verbs" $ do
     it "fall through to Unknown with the raw verb" $

@@ -174,28 +174,43 @@ spec = describe "process-owned Jobs" $ do
     cancelJob jobs request.group (PrincipalId 8) True 1 "admin" `shouldReturn` Right ()
     attachJobTurn jobs child.run (reference 2) `shouldReturn` False
 
-  it "coalesces progress and supersedes queued notices without suppressing the final result" $ do
+  it "keeps root progress internal without suppressing the final result" $ do
     (tasks, jobs, request) <- fixture
     (root, _) <- launch tasks jobs 1 request
     reportJobProgress jobs (AgentTurnId 1) "first" `shouldReturn` True
-    PublishJobNotice first version "first" <- takeJobWork jobs
-    bindJobNotice jobs (AgentTurnId 10) first.run version
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
     reportJobProgress jobs (AgentTurnId 1) "latest" `shouldReturn` True
     reportJobProgress jobs (AgentTurnId 1) "latest" `shouldReturn` True
-    authorizeJobPublication jobs (AgentTurnId 10) `shouldReturn` False
+    Just current <- lookupJob jobs request.group root.run.jobId
+    current.progress `shouldBe` Just "latest"
     timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
     completeJob jobs root.run Succeeded (JobResult "final" Nothing)
-    detachJobNotice jobs (AgentTurnId 10)
     PublishJobNotice final finalVersion body <- takeJobWork jobs
     final.status `shouldBe` Succeeded
     body `shouldBe` "final"
     noticeIsCurrent jobs final.run finalVersion `shouldReturn` True
+
+  it "keeps monitor progress internal and still notifies parents of child progress" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 (request {monitor = Just (JobMonitor (MonitorId 10) (MonitorFireId 1))})
+    reportJobProgress jobs (AgentTurnId 1) "monitor progress" `shouldReturn` True
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+    (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    reportJobProgress jobs (AgentTurnId 2) "child progress" `shouldReturn` True
+    Just current <- lookupJob jobs request.group child.run.jobId
+    current.progress `shouldBe` Just "child progress"
+    readJobInbox jobs (AgentTurnId 1) `shouldReturn` [object ["child_update" .= current]]
+    reportJobProgress jobs (AgentTurnId 2) "child progress" `shouldReturn` True
+    readJobInbox jobs (AgentTurnId 1) `shouldReturn` []
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
 
   it "blocks background publication and tracks notice replies without reviving old work" $ do
     (tasks, jobs, request) <- fixture
     (root, _) <- launch tasks jobs 1 request
     authorizeJobPublication jobs (AgentTurnId 1) `shouldReturn` False
     reportJobProgress jobs (AgentTurnId 1) "progress" `shouldReturn` True
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+    completeJob jobs root.run Succeeded (JobResult "final" Nothing)
     PublishJobNotice _ version _ <- takeJobWork jobs
     bindJobNotice jobs (AgentTurnId 10) root.run version
     authorizeJobPublication jobs (AgentTurnId 10) `shouldReturn` True

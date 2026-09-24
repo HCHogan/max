@@ -52,6 +52,7 @@ import Max.Context
     estimateMessagesTokens,
     estimateTextTokens,
   )
+import Max.Context.Capacity (rawHighTokens, summaryTokens)
 import Max.Context.Media (consumeMarkers)
 import Max.Context.Policy
   ( ContextCostModel (..),
@@ -140,7 +141,7 @@ import Max.Memory.Types
     MemoryItem (memContent, memId, memUpdatedAt, memVersion),
     MemoryVersion (unMemoryVersion),
   )
-import Max.ModelCatalog.Internal (ContextLimits)
+import Max.ModelCatalog.Internal (ContextLimits, contextInputBudget)
 import Max.Platform.Types
   ( AdvertisedCaps (canMention),
     CanonicalMessageId (CanonicalMessageId),
@@ -154,10 +155,7 @@ import Max.Time (fmtDate, fmtEnvStamp, fmtHM)
 import OneBot.Types (GroupId (..), isPrivateChat)
 
 historyTokenLimit :: ContextLimits -> Bool -> Int
-historyTokenLimit limits multimodal' =
-  min 16384 (max 1024 (promptLimit * 2 `div` 5))
-  where
-    promptLimit = (contextBudget limits multimodal').cbPromptTokenLimit
+historyTokenLimit = rawHighTokens
 
 selfRosterLabel :: PromptInputs -> Int64 -> Text -> Text
 selfRosterLabel pi' principal name
@@ -343,7 +341,7 @@ planContext limits snapshot =
   let budget = contextBudget limits (not (null (csInputs snapshot).images))
       inputs = snapshot.csInputs
       tiered = ContextSnapshot (inputs {compartments = applyBaseCompartmentTiers inputs.now inputs.compartments})
-      (candidates, summaryDrops) = limitSummaryTokens (min 8192 (budget.cbPromptTokenLimit `div` 4)) tiered
+      (candidates, summaryDrops) = limitSummaryTokens (summaryTokens limits (not (null inputs.images))) tiered
       initial = candidates.csInputs
       initialMessages = renderContext initial
       initialTokens = estimateMessagesTokens initialMessages
@@ -505,8 +503,8 @@ replyContextTokens = \case
 -- | How many entries per scope the prompt carries.  Injection policy,
 -- not a storage cap — 'Max.Tools.Memory.maxMemoriesPerScope' still
 -- governs what a scope may hold.
-memoryInjectCap :: Int
-memoryInjectCap = 12
+memoryInjectCap :: ContextLimits -> Bool -> Int
+memoryInjectCap limits media = max 1 (contextInputBudget limits media `div` 32 `div` 364)
 
 -- | Render memories as background notes; omit the block when empty.
 renderMemories :: TimeZone -> Bool -> Text -> [MemoryItem] -> [MemoryItem] -> Maybe Text
@@ -566,7 +564,7 @@ contextCompartmentFromActive active =
     }
 
 contextPolicyVersion :: Text
-contextPolicyVersion = "context-policy/v7"
+contextPolicyVersion = "context-policy/v8"
 
 rawTailTokens :: [LedgerItem] -> Int
 rawTailTokens =
@@ -633,7 +631,7 @@ renderUser tz' now' origin' compartments' recentTurns' continuationView' mTransc
         if null recentTurns'
           then []
           else
-            [ "[recent turns — 工作记录，细节用 t# 句柄调 context_expand]",
+            [ "[recent turns — 工作记录，细节用 t# 句柄调 context_resume]",
               T.intercalate "\n" recentTurns'
             ],
         case mTranscript of
@@ -740,7 +738,7 @@ renderReplyLine tz' h =
     <> oneLine h.renderedText
 
 -- | If this message itself quotes another, a "[↩#\<id\>]" handle the
--- model can expand with @get_message_by_id@ (and re-emit to quote the
+-- model can expand with @context_read@ (and re-emit to quote the
 -- same message).  Empty for non-replies.  This keeps a quote chain
 -- walkable one hop at a time instead of recursively pre-expanding it.
 replyPrefix :: HistoryItem -> Text

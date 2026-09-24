@@ -38,7 +38,7 @@ requiredCapability = \case
   -- group-admin tier: group-scoped state changes
   PersonaSet _ -> Just ("persona", TierGroupAdmin)
   PersonaClear -> Just ("persona", TierGroupAdmin)
-  Clear -> Just ("clear", TierGroupAdmin)
+  Compact -> Just ("compact", TierGroupAdmin)
   ClearAll -> Just ("clear", TierGroupAdmin)
   Unclear -> Just ("clear", TierGroupAdmin)
   Kill _ -> Just ("kill", TierGroupAdmin)

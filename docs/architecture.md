@@ -242,14 +242,14 @@ suffix's exact end cursor until the model-derived token target is covered.
 Partial older
 backfills stay out of the stable prefix when a raw gap separates them. The pure
 `Max.Context.Policy` selects summary detail by age, importance, and budget
-while retaining chronological order. Its summary allowance is one quarter of
-the prompt window, capped at 8,192 estimated tokens including source-label
+while retaining chronological order. Its summary allowance is one eighth of
+the effective input budget, including source-label
 overhead. Omitted episodes remain searchable and expandable.
 Every turn derives its prefix from those active
 summaries; no prompt revision, CAS publication, high/low-water transition or
 append-only planning trace is stored. New Historian publications become visible
-on the next collection. The raw fetch target is 40% of the available prompt
-window, bounded to 1,024–16,384 estimated tokens. Under token pressure active
+on the next collection. The raw fetch target is half the effective input
+budget; automatic historian capture retains a quarter as raw tail. Under token pressure active
 memory is removed first, then recent turn digests; summaries are compressed or
 omitted by importance and age before the oldest raw tail is trimmed. Without an active compartment, the same
 bounded reader pages backward over the ledger and retains its newest eligible
@@ -279,8 +279,8 @@ full text without inventing shorter versions. No database migration is needed.
 
 The pure planner starts recent, confident episodes at P1 and older episodes at
 P2 or P3 according to age and importance. Very old, low-importance episodes stay
-searchable but leave the prompt. Under the summary budget (one quarter of the
-input ceiling, at most 8,192 estimated tokens), lower-importance, older episodes
+searchable but leave the prompt. Under the summary budget (one eighth of the
+input budget; see the model-scaled capacities in [context.md](context.md)), lower-importance, older episodes
 are compressed before being omitted. Missing or non-shorter tiers are skipped.
 The complete rendered prompt is then checked against the model budget, retaining
 protected pins, replies, the trigger, and media. Historical materialization and
@@ -291,13 +291,19 @@ the next active owner, publishes under the ordinary source-hash/exclusion
 fences, and leaves the live Historian cursor unchanged.
 
 Rendered summaries carry a random, stable `[episode#<uuid>]` handle rather
-than the internal compartment sequence. `context_expand` treats that handle
+than the internal compartment sequence. `context_read` treats that handle
 only as a locator: every page re-applies the current conversation's
-`RecallPolicy` in SQL before reading the exact ingest range. Expansion returns
-raw ledger rows in ingest order, reports whether the current source hash still
-matches the captured hash, paginates without leaving the range, and keeps old
+scope in SQL. Reading starts at the episode source, annotates membership and
+reports whether the current source hash still matches the captured hash. Pages
+can cross episode boundaries; explicit date ranges remain hard filters. It keeps old
 handles expandable after a rebuild supersedes their projection. A handle from
 another group or direct chat is indistinguishable from a nonexistent handle.
+
+`context_resume` reads previous turn traces and full tool results without
+restarting work or replaying effects. `!compact` queues a fixed-cutoff historian
+capture; each validated batch replaces its prefix atomically, preserving raw
+sources and messages beyond the cutoff. See [context.md](context.md) for exact
+pagination, failure, scheduling, and capacity semantics.
 
 `context_search` is the volatile unified-recall surface. It searches visible
 active/permanent memories, active episode summaries, raw messages, current

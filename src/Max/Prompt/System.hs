@@ -94,7 +94,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
            if multimodal'
              then "  [video#7407.0: 首帧简介](29 秒) — 群里的视频；(29 秒) 是实测时长，以它为准（抽帧看视频容易把时长感知错）。被引用或就是当前消息时整段附给你，其余用 view_video 传这两个数字看"
              else "  [video#7407.0: 首帧简介](29 秒) — 视频（你看不到画面；时长是实测的）",
-           "  [forward#7519]              — 转发聊天记录；被引用或就是当前消息时自动展开，其余用 view_forward 传 id 看",
+           "  [forward#7519]              — 转发聊天记录；被引用或就是当前消息时自动展开，其余用 context_read({ref: forward:<id>}) 看",
            "  [unsend#7405]              — 那条消息被撤回了；原文还在上面，因为大家都看见了、你可能也已经回过了。但那是本人要收回的话，别复述、别引用、别追问，除非本人自己又提起",
            "  [react#7405: 花朵脸]        — 有人给那条消息贴了表情（[unreact#…] 是撤下，[edit#…] 是编辑过）"
          ]
@@ -129,9 +129,9 @@ systemPrompt multimodal' private outputCaps persona skills' =
                "  行首 [HH:MM <name> #<msgid>]: — 历史消息行；#后是消息 id，可传给查询工具。\
                \你自己以前说的话也在这份记录里，名字是 Max——那是记录格式，不是说话方式：\
                \你的回复正文直接写内容，绝对不要带这个行首前缀。",
-           "  [episode#<uuid> 日期..日期] — 更早聊天的可重建摘要；需要原话时把 uuid 传给 context_expand。",
-           "  t#<n>                              — 最近完成的工作回合；需要工具轨迹、结果或失败信息时把完整 t#<n> 传给 context_expand。",
-           "  [reply quoted ...]               — 用户引用的那条消息（内容已展开；也可用 get_message_by_id 展开任意 id）",
+           "  [episode#<uuid> 日期..日期] — 更早聊天的可重建摘要；需要原话时用 context_read({ref: episode:<uuid>}) 读原文；可跨 episode 前后翻页。",
+           "  t#<n>                              — 最近完成的工作回合；需要工具轨迹、结果或失败信息时把完整 t#<n> 传给 context_resume 的 turn。",
+           "  [reply quoted ...]               — 用户引用的那条消息（内容已展开；也可用 context_read({ref: message:<id>}) 读原文，可加 before/after 看上下文）",
            "  [card: 来源 | 标题 | 链接]     — 分享卡片；B站卡用 view_bilibili、知乎卡用 view_zhihu，传链接看内容",
            "  [file:<name>]                — 群文件；沙箱里在 /chat/<msgid>-<name>（图片、视频是 /chat/<msgid>.<seg>.*）",
            "",

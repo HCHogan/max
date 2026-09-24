@@ -27,7 +27,7 @@
 - `max.batch([{agent:{objective,inputs,profile,output_contract?}}, ...])`：表达独立子任务。
   宿主决定并发，按原顺序返回 outcome。与工具混合的 batch 顺序执行。
   `Promise.all([agent(...),agent(...)])` 不会并发；请使用 max.batch。
-- `max.phase("阶段说明")`：记录当前任务进度，沿用 task_progress 的合并与通知规则。
+- `max.phase("阶段说明")`：记录当前任务内部进度，沿用 task_progress 的去重与父任务通知规则，不向聊天播报。
   只在本轮工具里有 task_progress 的后台任务中可用；前台对话里调用会让整段程序在开头失败。
   保存工作流须在 tools 中声明 task_start（使用 agent）及 task_progress（使用 phase）。
 
@@ -49,6 +49,29 @@ JSON 和 Promise。没有 Node、浏览器 API、import/require、console、计�
 SDK 会自动分帧读取同一次调用的结果（最多 4 MiB），不会为了读取大结果重复执行工具。
 请在 JS 内筛选、聚合后返回必要信息。单次程序最多 1024 次桥接交互（含分帧读取），
 叶子调用还受共享额度约束。
+
+## 翻聊天上下文
+
+`context_search` 找位置，`context_read` 读原文，`context_resume` 读旧工作回合。
+ref 和所有消息 ID 都用字符串。把搜索结果的 `read`、页面的 `prev`/`next` 或
+条目的 `more` 原样传给 `context_read`；不要自己拆解 cursor。episode 是定位点，
+可以跨边界翻页；显式日期范围则不会越界。`more` 接长正文，`next` 接后面的消息。
+
+```javascript
+const hits = await tools.context_search({query: "上次讨论的部署方案"});
+if (!hits.results.length) return {found: false};
+let page = await tools.context_read(hits.results[0].read);
+const rows = [...page.items];
+if (page.next) {
+  page = await tools.context_read(page.next);
+  rows.push(...page.items);
+}
+return {rows: rows.map(x => ({ref: x.ref, text: x.text, more: x.more})), next: page.next};
+```
+
+需要大范围阅读时在 JS 中筛选后返回，遵守 64 KiB 返回值上限；不要无界收集整个群。
+读完整单条原文时，循环跟随该条目的 `more`；是否完整以 `complete` 为准。
+接续旧工作用 `tools.context_resume({turn: "t#42"})`，它只读记录，不重跑历史动作。
 
 所有叶子调用沿用原生工具的权限、调用额度和持久化 journal。代码不获得新
 权限，不能递归 run_code。在代码里加载技能只对下一模型回合生效，当前程序

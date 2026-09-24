@@ -2,9 +2,10 @@
 
 -- | Conversation reads with scope fixed by host assembly. Media enrichment
 -- accepts only rows obtained by the scoped reader, never arbitrary model ids.
-module Max.Effects.ConversationQuery (ConversationQuery, readRoster, readMessage, readForward, searchConversation, expandEpisode, runConversationQuery) where
+module Max.Effects.ConversationQuery (ConversationQuery, readRoster, readMessage, readForward, readContext, searchConversation, searchContext, expandEpisode, runConversationQuery) where
 
 import Control.Monad (forM)
+import Data.Aeson (Value)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Maybe (listToMaybe)
@@ -12,8 +13,10 @@ import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.PostgreSQL (WithConnection)
+import Max.Context.Read (ReadRequest)
 import Max.Conversation.Roster (ConversationRoster)
 import Max.ConversationScope (ConversationScope, conversationStorageId, currentConversationRecall)
+import Max.DB.ContextRead qualified as ContextRead
 import Max.DB.History qualified as History
 import Max.DB.History.Media (withMediaHandles)
 import Max.DB.Media (fetchMediaSegments)
@@ -25,13 +28,15 @@ import Max.History.Types (HistoryItem (..), LedgerItem (..), MessageCursor)
 import Max.Media.Types (MessageMedia)
 import Max.Platform.Store.Conversation (conversationRoster)
 import Max.Recall qualified as Recall
-import Max.Recall.Types (RecallHit)
+import Max.Recall.Types (RecallFilter, RecallHit)
 
 data ConversationQuery :: Effect where
   ReadRoster :: ConversationQuery m ConversationRoster
   ReadMessage :: Int64 -> ConversationQuery m (Maybe HistoryItem)
   ReadForward :: Int64 -> Int -> ConversationQuery m [HistoryItem]
   SearchConversation :: Text -> Maybe EmbeddingRecord -> Int -> ConversationQuery m [RecallHit]
+  SearchContext :: RecallFilter -> Text -> Maybe EmbeddingRecord -> Int -> ConversationQuery m [RecallHit]
+  ReadContext :: Int -> ReadRequest -> ConversationQuery m (Either Text Value)
   ExpandEpisode :: EpisodeHandle -> Maybe MessageCursor -> Int -> ConversationQuery m (Maybe (EpisodeExpansion, Map Int64 MessageMedia))
 
 type instance DispatchOf ConversationQuery = Dynamic
@@ -48,6 +53,12 @@ readForward identifier limit = send (ReadForward identifier limit)
 searchConversation :: (ConversationQuery :> es) => Text -> Maybe EmbeddingRecord -> Int -> Eff es [RecallHit]
 searchConversation query embedding limit = send (SearchConversation query embedding limit)
 
+searchContext :: (ConversationQuery :> es) => RecallFilter -> Text -> Maybe EmbeddingRecord -> Int -> Eff es [RecallHit]
+searchContext filters query embedding limit = send (SearchContext filters query embedding limit)
+
+readContext :: (ConversationQuery :> es) => Int -> ReadRequest -> Eff es (Either Text Value)
+readContext budget request = send (ReadContext budget request)
+
 expandEpisode :: (ConversationQuery :> es) => EpisodeHandle -> Maybe MessageCursor -> Int -> Eff es (Maybe (EpisodeExpansion, Map Int64 MessageMedia))
 expandEpisode handle after limit = send (ExpandEpisode handle after limit)
 
@@ -61,6 +72,8 @@ runConversationQuery scope = interpret $ \_ -> \case
     withReadSnapshot $
       History.fetchForwardChildrenInScope scope identifier (max 1 (min 100 limit)) >>= withMediaHandles
   SearchConversation query embedding limit -> Recall.searchRecall (currentConversationRecall scope) query embedding limit
+  SearchContext filters query embedding limit -> Recall.searchRecallFiltered (currentConversationRecall scope) filters query embedding limit
+  ReadContext budget request -> withReadSnapshot (ContextRead.readContext scope budget request)
   ExpandEpisode handle after limit -> withReadSnapshot $ do
     expanded <- Episodes.expandEpisode (currentConversationRecall scope) handle after limit
     forM expanded $ \episode -> do

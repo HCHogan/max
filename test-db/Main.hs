@@ -18,7 +18,9 @@ import Control.Exception (bracket)
 import Data.Text qualified as T
 import Helpers (truncateAll)
 import Max.AdminTimelineSpec qualified as AdminTimelineSpec
+import Max.ChatViewSpec qualified as ChatViewSpec
 import Max.ContextAdminSpec qualified as ContextAdminSpec
+import Max.ContextReadSpec qualified as ContextReadSpec
 import Max.ConversationCapabilitiesSpec qualified as ConversationCapabilitiesSpec
 import Max.DB.AgentTurnSpec qualified as AgentTurnSpec
 import Max.DB.BrowserSpec qualified as BrowserSpec
@@ -40,7 +42,6 @@ import Max.DB.QQBackfillSpec qualified as QQBackfillSpec
 import Max.DB.SessionSpec qualified as SessionSpec
 import Max.DB.TransactionSpec qualified as TransactionSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
-import Max.ChatViewSpec qualified as ChatViewSpec
 import Max.ExecutionSpec qualified as ExecutionSpec
 import Max.HistorianSpec qualified as HistorianSpec
 import Max.MemoryCapabilitiesSpec qualified as MemoryCapabilitiesSpec
@@ -88,6 +89,7 @@ main = do
         ProjectionSpec.spec pool
         ConversationCursorSpec.spec pool
         ContextAdminSpec.spec pool
+        ContextReadSpec.spec pool
         ConversationCapabilitiesSpec.spec pool
         ResourceCapabilitiesSpec.spec pool
         SandboxRegistrySpec.spec pool

@@ -38,6 +38,7 @@ import Data.Time
 import Data.Vector qualified as V
 import Max.Config qualified as Config
 import Max.Context (estimateMessagesTokens)
+import Max.Context.Read (ReadCursor (..), ReadLane (Timeline), renderReadMessage)
 import Max.Context.Types (CompartmentTier (..))
 import Max.Context.Working (estimateToolTokens)
 import Max.DB.Calls (redactDataUrls)
@@ -55,7 +56,7 @@ import Max.Effects.LLM
     requestBodyFor,
   )
 import Max.Effects.ToolOutput (InlineMedia (..))
-import Max.EpisodeStore (EpisodeExpansion (..), EpisodeHandle, SourceRange (..), parseEpisodeHandle)
+import Max.EpisodeStore (EpisodeHandle, parseEpisodeHandle)
 import Max.IR (Body (..), MediaKind (..), MediaMeta (..), MentionTarget (..), Node (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..), LLMProfile (..), Protocol (..), defaultContextLimits)
@@ -63,7 +64,7 @@ import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), Princ
 import Max.Prompt (ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Recall (RecallHit (..))
 import Max.Session (Session (..))
-import Max.Tools (contextSearchSummary, episodeExpansionSummary)
+import Max.Tools (contextSearchSummary)
 import Max.Tools.Images (viewImageSpec)
 import Max.Tools.Video (viewVideoSpec)
 import OneBot.Types (GroupId (..), UserId (..))
@@ -151,8 +152,8 @@ renderEpisodeLifecycle =
     "",
     "这一段展示当前摘要、历史检索和原文展开如何进入模型请求。",
     "这个固定快照只含近期摘要；更早的低功耗调试 episode 留在历史中，",
-    "`context_search` 仍能返回其 opaque handle，`context_expand` 再按当前会话权限恢复原始 ledger。",
-    "搜索和展开的固定 typed fixture 都经过生产 `Max.Tools` 的结果 renderer。",
+    "`context_search` 仍能返回其 opaque handle，`context_read` 再按当前会话权限恢复原始 ledger。",
+    "搜索结果和原文条目经过生产 renderer；数据库导航由固定来源快照表示。",
     "",
     "### 首轮 prompt：近期摘要 + raw tail",
     "",
@@ -171,13 +172,13 @@ renderEpisodeLifecycle =
     "",
     jsonFence contextSearchFixture,
     "",
-    "### 模型调用 `context_expand`",
+    "### 模型调用 `context_read`",
     "",
-    jsonFence (object ["handle" .= contextHandleText, "limit" .= (40 :: Int)]),
+    jsonFence (object ["ref" .= ("episode:" <> contextHandleText), "limit" .= (40 :: Int)]),
     "",
     "工具返回原始消息及身份、reply、cursor 和 hash 状态：",
     "",
-    jsonFence contextExpandFixture,
+    jsonFence contextReadFixture,
     "",
     "这个 JSON 只作为当前 agent turn 的 tool result 进入下一轮请求。turn 结束后它不会写回",
     "prompt；下一个独立 dispatch 重新选择当前摘要与 raw tail，更多历史继续按需搜索。",
@@ -502,31 +503,36 @@ contextSearchFixture =
         }
     ]
 
-contextExpandFixture :: Value
-contextExpandFixture =
-  episodeExpansionSummary
-    hkTimeZone
-    Map.empty
-    EpisodeExpansion
-      { expansionHandle = contextEpisodeHandle,
-        expansionRange =
-          SourceRange
-            (MessageCursor 4100)
-            (MessageCursor 4104)
-            (T.replicate 64 "b")
-            5,
-        expansionState = "active",
-        expansionSourceHashMatches = True,
-        expansionMessages =
-          [ episodeLedger 4100 7210 223344556 "阿飞" 20 4 "一进 STOP2，RTC 唤醒后板子就像重新上电，boot count 也清了。" Nothing,
-            episodeLedger 4101 7211 777888999 "老张" 20 7 "先看 NRST 波形。你板上是不是还挂着 100nF 和那根很长的 ST-Link 排线？" (Just 7210),
-            episodeLedger 4102 7212 223344556 "阿飞" 20 9 "对，NRST 是 100nF，调试器也一直插着。" (Just 7211),
-            episodeLedger 4103 7213 777888999 "老张" 20 12 "换 10nF 再把 ST-Link 排线拔掉试试，100nF 这个沿太慢了。" (Just 7212),
-            episodeLedger 4104 7214 223344556 "阿飞" 20 18 "好了，连续唤醒 200 次都没再复位。" (Just 7213)
-          ],
-        expansionHasMore = False,
-        expansionNextCursor = Nothing
-      }
+contextReadFixture :: Value
+contextReadFixture =
+  object
+    [ "items" .= map render source,
+      "prev" .= Null,
+      "next" .= Null,
+      "anchor" .= Null,
+      "order" .= ("ingest" :: Text),
+      "range" .= object ["from" .= Null, "until" .= Null, "time_field" .= ("received_at" :: Text)],
+      "episode"
+        .= object
+          [ "ref" .= ("episode:" <> contextHandleText),
+            "start_cursor" .= ("4100" :: Text),
+            "end_cursor" .= ("4104" :: Text),
+            "state" .= ("active" :: Text),
+            "source_hash_matches" .= True
+          ]
+    ]
+  where
+    cursor = ReadCursor 1 123 Timeline Nothing Nothing (Just contextHandleText) False 4099 40
+    render (LedgerItem _ h _) = case renderReadMessage cursor 8192 0 h h.receivedAt (Just contextHandleText) False of
+      Object fields -> Object (KM.insert "in_episode" (Bool True) fields)
+      value -> value
+    source =
+      [ episodeLedger 4100 7210 223344556 "阿飞" 20 4 "一进 STOP2，RTC 唤醒后板子就像重新上电，boot count 也清了。" Nothing,
+        episodeLedger 4101 7211 777888999 "老张" 20 7 "先看 NRST 波形。你板上是不是还挂着 100nF 和那根很长的 ST-Link 排线？" (Just 7210),
+        episodeLedger 4102 7212 223344556 "阿飞" 20 9 "对，NRST 是 100nF，调试器也一直插着。" (Just 7211),
+        episodeLedger 4103 7213 777888999 "老张" 20 12 "换 10nF 再把 ST-Link 排线拔掉试试，100nF 这个沿太慢了。" (Just 7212),
+        episodeLedger 4104 7214 223344556 "阿飞" 20 18 "好了，连续唤醒 200 次都没再复位。" (Just 7213)
+      ]
 
 episodeLedger :: Int64 -> Int64 -> Int64 -> Text -> Int -> Int -> Text -> Maybe Int64 -> LedgerItem
 episodeLedger cursor' mid uid name hour minute body reply =

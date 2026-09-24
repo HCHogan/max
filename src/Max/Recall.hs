@@ -9,6 +9,7 @@ module Max.Recall
     RecallTrace (..),
     RecallTraceCandidate (..),
     searchRecall,
+    searchRecallFiltered,
     searchRecallIn,
     searchRecallTrace,
     selectRecallHits,
@@ -28,7 +29,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
-import Database.PostgreSQL.Simple (FromRow, Query)
+import Database.PostgreSQL.Simple (FromRow, Query, (:.) (..))
 import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful
@@ -38,7 +39,7 @@ import Max.DB.History (notForwardChild)
 import Max.Embedding (EmbeddingRecord (..))
 import Max.Episode.Types (EpisodeHandle)
 import Max.Memory.Types (MemoryId)
-import Max.Recall.Types (RecallHit (..))
+import Max.Recall.Types (RecallFilter (..), RecallHit (..), defaultRecallFilter)
 
 data RecallCorpus
   = RecallMemories
@@ -131,6 +132,11 @@ searchRecall ::
 searchRecall policy rawQuery embedding requestedLimit =
   searchRecallIn policy (Set.fromList [minBound .. maxBound]) rawQuery embedding requestedLimit
 
+searchRecallFiltered :: (WithConnection :> es, IOE :> es) => RecallPolicy -> RecallFilter -> Text -> Maybe EmbeddingRecord -> Int -> Eff es [RecallHit]
+searchRecallFiltered policy filters rawQuery embedding limit = do
+  (now, _, _, candidates) <- loadFilteredCandidates policy (Set.fromList [minBound .. maxBound]) filters (T.strip rawQuery) embedding limit
+  pure (selectRecallHitsFor (T.strip rawQuery) now limit candidates)
+
 -- | Search a code-selected subset of the unified recall corpus.  This is the
 -- compatibility boundary for the older specialised tools: callers may narrow
 -- what they present, but cannot widen the SQL visibility policy.
@@ -207,18 +213,22 @@ loadRecallCandidates ::
   Maybe EmbeddingRecord ->
   Int ->
   Eff es (UTCTime, Int, Int, [RecallCandidate])
-loadRecallCandidates policy corpora queryText embedding requestedLimit = do
+loadRecallCandidates policy corpora = loadFilteredCandidates policy corpora defaultRecallFilter
+
+loadFilteredCandidates :: (WithConnection :> es, IOE :> es) => RecallPolicy -> Set.Set RecallCorpus -> RecallFilter -> Text -> Maybe EmbeddingRecord -> Int -> Eff es (UTCTime, Int, Int, [RecallCandidate])
+loadFilteredCandidates policy corpora filters queryText embedding requestedLimit = do
   let conversationId = conversationStorageId (recallConversationScope policy)
       resultLimit = max 1 (min 30 requestedLimit)
       candidateLimit = max 8 (min 200 (resultLimit * 4))
-  -- Score the full phrase and bounded query fragments in one scoped SQL pass.
-  lexical <- query lexicalCandidatesSql (conversationId, queryText, PGArray (recallTerms queryText), candidateLimit)
+      -- Score the full phrase and bounded query fragments in one scoped SQL pass.
+      filterArgs = (PGArray filters.rfKinds, filters.rfFrom, filters.rfUntil, filters.rfSender)
+  lexical <- query lexicalCandidatesSql ((conversationId, queryText, PGArray (recallTerms queryText), candidateLimit) :. filterArgs)
   semantic <- case embedding of
     Nothing -> pure []
     Just record ->
       query
         semanticCandidatesSql
-        (conversationId, record.erModelId, record.erDimensions, record.erVector, candidateLimit)
+        ((conversationId, record.erModelId, record.erDimensions, record.erVector, candidateLimit) :. filterArgs)
   now <- liftIO getCurrentTime
   let allowedSources = Set.map corpusText corpora
       allowed = filter ((`Set.member` allowedSources) . (.rcSource)) (lexical <> semantic)
@@ -442,7 +452,7 @@ toHit now candidate =
 lexicalCandidatesSql :: Query
 lexicalCandidatesSql =
   "WITH input AS ( \
-  \  SELECT ?::bigint AS conversation_id, ?::text AS query_text, ?::text[] AS query_terms, ?::int AS candidate_limit \
+  \  SELECT ?::bigint AS conversation_id, ?::text AS query_text, ?::text[] AS query_terms, ?::int AS candidate_limit, ?::text[] AS kinds, ?::timestamptz AS from_time, ?::timestamptz AS until_time, ?::bigint AS sender \
   \), pins AS ( \
   \  SELECT DISTINCT pin.value::bigint AS canonical_message_id \
   \  FROM sessions AS session \
@@ -470,6 +480,7 @@ lexicalCandidatesSql =
   \  WHERE ((memory.scope = 'group' AND memory.scope_id = input.conversation_id) \
   \      OR (memory.scope = 'user' AND memory.source_group_id = input.conversation_id)) \
   \    AND memory.lifecycle IN ('active', 'permanent') \
+  \    AND 'memory'=ANY(input.kinds) AND (input.from_time IS NULL OR memory.updated_at>=input.from_time) AND (input.until_time IS NULL OR memory.updated_at<input.until_time) AND (input.sender IS NULL OR (memory.scope='user' AND memory.scope_id=input.sender)) \
   \    AND (position(lower(input.query_text) in lower(memory.content)) > 0 \
   \      OR similarity(memory.content, input.query_text) >= 0.08 OR EXISTS(SELECT 1 FROM unnest(input.query_terms) term WHERE position(term in lower(memory.content))>0)) \
   \  ORDER BY lexical_score DESC, memory.updated_at DESC, memory.id \
@@ -485,6 +496,7 @@ lexicalCandidatesSql =
   \         NULL::double precision AS semantic_score, false AS is_pinned, false AS is_permanent \
   \  FROM conversation_compartments AS episode CROSS JOIN input \
   \  WHERE episode.conversation_id = input.conversation_id AND episode.state = 'active' \
+  \    AND 'episode'=ANY(input.kinds) AND input.sender IS NULL AND ((input.from_time IS NULL AND input.until_time IS NULL) OR EXISTS(SELECT 1 FROM messages src WHERE src.group_id=episode.conversation_id AND src.ingest_seq BETWEEN episode.start_ingest_seq AND episode.end_ingest_seq AND (input.from_time IS NULL OR src.received_at>=input.from_time) AND (input.until_time IS NULL OR src.received_at<input.until_time))) \
   \    AND (position(lower(input.query_text) in lower(episode.summary)) > 0 \
   \      OR similarity(episode.summary, input.query_text) >= 0.08 OR EXISTS(SELECT 1 FROM unnest(input.query_terms) term WHERE position(term in lower(episode.summary))>0)) \
   \  ORDER BY lexical_score DESC, occurred_at DESC, episode.id \
@@ -500,6 +512,7 @@ lexicalCandidatesSql =
   \         NULL::double precision AS semantic_score, (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
   \  FROM messages AS message CROSS JOIN input LEFT JOIN pins USING (canonical_message_id) \
   \  WHERE message.group_id = input.conversation_id AND NOT message.is_synthetic \
+  \    AND 'message'=ANY(input.kinds) AND (input.from_time IS NULL OR message.received_at>=input.from_time) AND (input.until_time IS NULL OR message.received_at<input.until_time) AND (input.sender IS NULL OR message.author_principal_id=input.sender) \
   \    AND message.kind IN ('chat', 'system') \
   \    AND "
     <> notForwardChild "message"
@@ -532,6 +545,7 @@ lexicalCandidatesSql =
        \  FROM media JOIN messages AS message USING (canonical_message_id) CROSS JOIN input \
        \  LEFT JOIN pins USING (canonical_message_id) \
        \  WHERE message.group_id = input.conversation_id \
+       \    AND 'message'=ANY(input.kinds) AND (input.from_time IS NULL OR message.received_at>=input.from_time) AND (input.until_time IS NULL OR message.received_at<input.until_time) AND (input.sender IS NULL OR message.author_principal_id=input.sender) \
        \    AND (position(lower(input.query_text) in lower(media.description)) > 0 \
        \      OR similarity(media.description, input.query_text) >= 0.08 OR EXISTS(SELECT 1 FROM unnest(input.query_terms) term WHERE position(term in lower(media.description))>0)) \
        \  ORDER BY lexical_score DESC, message.received_at DESC, message.canonical_message_id \
@@ -546,7 +560,7 @@ semanticCandidatesSql :: Query
 semanticCandidatesSql =
   "WITH input AS ( \
   \  SELECT ?::bigint AS conversation_id, ?::text AS model_id, ?::int AS dimensions, \
-  \         ?::vector AS query_vector, ?::int AS candidate_limit \
+  \         ?::vector AS query_vector, ?::int AS candidate_limit, ?::text[] AS kinds, ?::timestamptz AS from_time, ?::timestamptz AS until_time, ?::bigint AS sender \
   \), pins AS ( \
   \  SELECT DISTINCT pin.value::bigint AS canonical_message_id \
   \  FROM sessions AS session \
@@ -565,6 +579,7 @@ semanticCandidatesSql =
   \      OR (memory.scope = 'user' AND memory.source_group_id = input.conversation_id)) \
   \    AND memory.lifecycle IN ('active', 'permanent') \
   \    AND memory.embedding_model = input.model_id AND memory.embedding_dimensions = input.dimensions \
+  \    AND 'memory'=ANY(input.kinds) AND (input.from_time IS NULL OR memory.updated_at>=input.from_time) AND (input.until_time IS NULL OR memory.updated_at<input.until_time) AND (input.sender IS NULL OR (memory.scope='user' AND memory.scope_id=input.sender)) \
   \), memory_candidates AS ( \
   \  SELECT 'memory'::text AS source, \
   \         'memory:' || memory.id::text AS dedup_key, \
@@ -583,6 +598,7 @@ semanticCandidatesSql =
   \  FROM conversation_compartments AS episode CROSS JOIN input \
   \  WHERE episode.conversation_id = input.conversation_id AND episode.state = 'active' \
   \    AND episode.embedding_model = input.model_id AND episode.embedding_dimensions = input.dimensions \
+  \    AND 'episode'=ANY(input.kinds) AND input.sender IS NULL AND ((input.from_time IS NULL AND input.until_time IS NULL) OR EXISTS(SELECT 1 FROM messages src WHERE src.group_id=episode.conversation_id AND src.ingest_seq BETWEEN episode.start_ingest_seq AND episode.end_ingest_seq AND (input.from_time IS NULL OR src.received_at>=input.from_time) AND (input.until_time IS NULL OR src.received_at<input.until_time))) \
   \), episode_candidates AS ( \
   \  SELECT 'episode'::text AS source, 'episode:' || episode.id::text AS dedup_key, \
   \         left(episode.summary, 800) AS snippet, COALESCE(episode.activated_at, episode.created_at) AS occurred_at, \
@@ -602,6 +618,7 @@ semanticCandidatesSql =
     <> notForwardChild "message"
     <> " \
        \    AND message.embedding_model = input.model_id AND message.embedding_dimensions = input.dimensions \
+       \    AND 'message'=ANY(input.kinds) AND (input.from_time IS NULL OR message.received_at>=input.from_time) AND (input.until_time IS NULL OR message.received_at<input.until_time) AND (input.sender IS NULL OR message.author_principal_id=input.sender) \
        \), message_candidates AS ( \
        \  SELECT CASE WHEN pins.canonical_message_id IS NULL THEN 'message' ELSE 'pin' END::text AS source, \
        \         'message:' || message.canonical_message_id::text AS dedup_key, left(message.rendered_text, 800) AS snippet, \

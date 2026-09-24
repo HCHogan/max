@@ -12,6 +12,7 @@ import Max.EpisodeScheduler
     episodeRetryCount,
     episodeRetryDelaySeconds,
     newEpisodeScheduler,
+    queueCompact,
     queueEpisodeRebuilds,
     releaseEpisodeClaim,
     retryEpisodeAt,
@@ -23,6 +24,16 @@ import Test.Hspec
 spec :: Spec
 spec =
   describe "failure scheduling" $ do
+    it "starts manual compact immediately, coalesces cutoffs, and ignores traffic postponement" $ do
+      sched <- newEpisodeScheduler
+      queueCompact sched (GroupId 42) 50
+      queueCompact sched (GroupId 42) 100
+      bumpEpisode sched (GroupId 42)
+      work <- timeout 1_000_000 (awaitDueEpisode sched)
+      work `shouldBe` Just (EpisodeWork (CompactConversation (GroupId 42) 100) 0)
+      releaseEpisodeClaim sched (EpisodeWork (CompactConversation (GroupId 42) 100) 0)
+      timeout 20_000 (awaitDueEpisode sched) `shouldReturn` Nothing
+
     it "re-arms a failed group after one minute" $ do
       sched <- newEpisodeScheduler
       now <- getCurrentTime

@@ -3,28 +3,27 @@
 module Max.Tools
   ( builtinsFor,
     contextSearchSummary,
-    episodeExpansionSummary,
     parseTimeArg,
   )
 where
 
+import Control.Monad (unless)
 import Data.Aeson
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (parseEither)
 import Data.Int (Int64)
-import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone)
 import Effectful
 import Effectful.Log
-import Max.Context.Media (tagMediaMarkers)
+import Max.Context.Capacity (readPageTokens)
+import Max.Context.Read (messageRef, parseCanonicalId, parseReadRequest)
 import Max.Effects.ConversationQuery
   ( ConversationQuery,
-    expandEpisode,
-    readForward,
-    readMessage,
-    searchConversation,
+    readContext,
+    searchContext,
   )
 import Max.Effects.Embedding
   ( Embedding,
@@ -42,27 +41,17 @@ import Max.Effects.TurnQuery
     expandTurnTrace,
   )
 import Max.Embedding (EmbeddingRecord)
-import Max.Episode.Types
-  ( EpisodeExpansion (..),
-    SourceRange (..),
-    episodeHandleText,
-    parseEpisodeHandle,
-  )
-import Max.History.Types
-  ( HistoryItem (..),
-    LedgerItem (..),
-    MessageCursor (..),
-    bestName,
-  )
-import Max.Media.Types (MessageMedia)
+import Max.Episode.Types (episodeHandleText)
+import Max.Memory.Types (MemoryId (..))
 import Max.Platform.Failure (renderPlatformFailure)
-import Max.Recall.Types (RecallHit (..))
+import Max.Recall.Types (RecallFilter (..), RecallHit (..))
 import Max.Time (fmtDateHM)
 import Max.Time.Parse (parseTimeArg)
-import Max.ToolContext (ToolContext, toolGroupId)
+import Max.ToolContext (ToolContext, toolContextLimits, toolGroupId, toolMultimodal)
 import Max.Tools.Schema
   ( boundedIntegerParam,
     integerParam,
+    stringArrayParam,
     stringParam,
     toolObject,
   )
@@ -82,36 +71,33 @@ builtinsFor ::
   [Tool es]
 builtinsFor tz dc =
   selfSourceTools
-    <> [ getMessageByIdTool tz,
-         contextSearchTool tz,
-         contextExpandTool tz,
-         viewForwardTool tz,
+    <> [ contextSearchTool tz,
+         contextReadTool tz dc,
+         contextResumeTool dc,
          pokeTool dc
        ]
 
---------------------------------------------------------------------------------
--- get_message_by_id
-
-getMessageByIdTool :: (ConversationQuery :> es) => TimeZone -> Tool es
-getMessageByIdTool tz =
+-- | Same request and continuation objects in native calls and code mode.
+contextReadTool :: (ConversationQuery :> es) => TimeZone -> ToolContext -> Tool es
+contextReadTool tz dc =
   Tool
-    { toolName = "get_message_by_id",
-      toolDescription =
-        T.unwords
-          [ "按 id 取一条历史消息：传上下文行里 #<id> 或 [reply#<id>] 的那个数字。",
-            "适合有人提到一条旧消息、或者你想看引用/转发的原文时用。",
-            "库里没有这条就返回 null。"
-          ],
-      toolSchema = toolObject [("message_id", integerParam "上下文里 #<id> / [reply#<id>] 的那个数字")] ["message_id"],
-      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseArgs) args of
-        Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right mid -> do
-          message <- readMessage mid
-          pure $ Right (toJSON (map (historyItemSummary tz) (maybe [] pure message)))
+    { toolName = "context_read",
+      toolDescription = "读取当前会话原文。无参数读最近消息；ref 支持 message:<id>、episode:<uuid>、memory:<id>、forward:<id>。message 可加 before/after 看上下文。episode 只是定位，prev/next 可以跨 episode；日期 [from,until) 是硬筛选，默认配置时区，也接受 Z/offset。items 按时间线顺序；原样传 prev/next 继续翻页，item.more 续读长正文。不会删除原文，不接受其他群号。",
+      toolSchema =
+        toolObject
+          [ ("ref", stringParam "规范引用，ID 用字符串"),
+            ("from", stringParam "起始日期/时间（包含）"),
+            ("until", stringParam "结束日期/时间（不包含）"),
+            ("before", boundedIntegerParam 0 100 0),
+            ("after", boundedIntegerParam 0 100 0),
+            ("limit", boundedIntegerParam 1 100 40),
+            ("cursor", stringParam "原样传入返回的续读对象，不与其他参数混用")
+          ]
+          [],
+      toolRunner = LegacyRunner $ \args -> case parseEither (parseReadRequest tz) args of
+        Left err -> pure (Left ("bad args: " <> T.pack err))
+        Right request -> readContext (readPageTokens (toolContextLimits dc) (toolMultimodal dc)) request
     }
-  where
-    parseArgs :: Object -> Parser Int64
-    parseArgs o = o .: "message_id"
 
 -- context_search
 
@@ -126,21 +112,25 @@ contextSearchTool tz =
         T.unwords
           [ "统一搜索当前会话的长期记忆、episode 摘要、原始消息、pin 和媒体简介。",
             "结果已经做 scope 过滤、混合排序、来源配额和同源去重；",
-            "episode 的细节用返回的 handle 调 context_expand。"
+            "结果 read 对象可以直接传给 context_read；搜索是相关候选，不保证穷举。kinds 为 message/episode/memory，pin 和媒体简介归入 message。日期筛选原文按接收时间、episode 按来源范围、memory 按更新时间；sender 只返回该人原话和个人记忆。"
           ],
       toolSchema =
         toolObject
           [ ("query", stringParam "要回忆的自然语言主题或关键词"),
-            ("limit", boundedIntegerParam 1 30 10)
+            ("limit", boundedIntegerParam 1 30 10),
+            ("kinds", stringArrayParam "message、episode、memory；默认全部"),
+            ("from", stringParam "日期/时间（包含）"),
+            ("until", stringParam "日期/时间（不包含）"),
+            ("sender", stringParam "规范 principal ID 字符串")
           ]
           ["query"],
       toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseRecallArgs) args of
         Left err -> pure $ Left ("bad args: " <> T.pack err)
-        Right (rawQuery, limit)
+        Right (rawQuery, limit, filters)
           | T.null (T.strip rawQuery) -> pure (Left "bad args: query cannot be blank")
           | otherwise -> do
               embedding <- bestEffortRecallEmbedding "context_search" rawQuery
-              hits <- searchConversation rawQuery embedding limit
+              hits <- searchContext filters rawQuery embedding limit
               pure . Right $
                 contextSearchSummary
                   tz
@@ -149,10 +139,19 @@ contextSearchTool tz =
                   hits
     }
   where
-    parseRecallArgs o =
-      (,)
-        <$> o .: "query"
-        <*> (fromMaybe 10 <$> o .:? "limit")
+    parseRecallArgs o = do
+      query <- o .: "query"
+      limit <- o .:? "limit" .!= 10
+      kinds <- o .:? "kinds" .!= ["message", "episode", "memory"]
+      from <- time o "from"
+      endTime <- time o "until"
+      sender <- o .:? "sender" >>= traverse (either (fail . T.unpack) pure . parseCanonicalId)
+      unless (limit >= 1 && limit <= 30 && all (`elem` ["message", "episode", "memory"]) kinds) (fail "invalid limit or kinds")
+      case (from, endTime) of
+        (Just start, Just end) | start >= end -> fail "from must precede until"
+        _ -> pure ()
+      pure (query, limit, RecallFilter kinds from endTime sender)
+    time o key = o .:? key >>= traverse (either (fail . T.unpack) pure . parseTimeArg tz)
 
 -- | Stable model-facing shape of unified recall results.  Kept pure so the
 -- generated prompt-flow document can exercise the same renderer as the live
@@ -181,6 +180,9 @@ recallHitSummary :: TimeZone -> RecallHit -> Value
 recallHitSummary tz hit =
   object $
     [ "source" .= hit.rhSource,
+      "kind" .= kind,
+      "ref" .= ref,
+      "read" .= object ["ref" .= ref],
       "score" .= hit.rhScore,
       "time" .= fmtDateHM tz hit.rhOccurredAt,
       "snippet" .= hit.rhSnippet,
@@ -192,117 +194,56 @@ recallHitSummary tz hit =
             "semantic" .= hit.rhSemanticScore
           ]
     ]
-      <> ["principal_id" .= principal | Just principal <- [hit.rhPrincipalId]]
-      <> ["message_id" .= message | Just message <- [hit.rhMessageId]]
-      <> ["memory_id" .= memory | Just memory <- [hit.rhMemoryId]]
+      <> ["principal_id" .= T.pack (show principal) | Just principal <- [hit.rhPrincipalId]]
+      <> ["message_id" .= T.pack (show message) | Just message <- [hit.rhMessageId]]
+      <> ["memory_id" .= T.pack (show memory.unMemoryId) | Just memory <- [hit.rhMemoryId]]
       <> ["handle" .= episodeHandleText handle | Just handle <- [hit.rhEpisodeHandle]]
+  where
+    (kind, ref) = case (hit.rhSource, hit.rhMemoryId, hit.rhEpisodeHandle, hit.rhMessageId) of
+      ("memory", Just mid, _, _) -> ("memory" :: Text, "memory:" <> T.pack (show mid.unMemoryId))
+      ("episode", _, Just handle, _) -> ("episode", "episode:" <> episodeHandleText handle)
+      (_, _, _, Just mid) -> ("message", messageRef mid)
+      _ -> (hit.rhSource, hit.rhDedupKey)
 
---------------------------------------------------------------------------------
--- context_expand
-
-contextExpandTool :: (ConversationQuery :> es, TurnQuery :> es) => TimeZone -> Tool es
-contextExpandTool tz =
+-- | Reading a previous working turn does not restart or replay its effects.
+contextResumeTool :: (TurnQuery :> es) => ToolContext -> Tool es
+contextResumeTool dc =
   Tool
-    { toolName = "context_expand",
-      toolDescription =
-        T.unwords
-          [ "展开上下文中的 [episode#<handle>]，读取该摘要对应的原始聊天记录。",
-            "也可展开 [recent turns] 中的 t#<n>，读取该工作回合的规范化执行记录。",
-            "handle 只用于定位；每次调用都会按当前会话重新检查权限。",
-            "也可用 t#<n>:r<m>，或 t#<n> 加 call_id 读取完整工具结果（JSON 文本分页）。",
-            "按 next_after_cursor 续读；恢复结果不会重新执行工具。"
-          ],
+    { toolName = "context_resume",
+      toolDescription = "读旧工作回合以接续当前工作：turn=t#<n> 返回执行轨迹、结果和状态；t#<n>:r<m> 或 call_id 读取完整工具结果。原样传 next 续读。只读取，不重启任务、不重放工具；旧结果不代表当前外部状态，outcome-unknown 仍需核实。",
       toolSchema =
         toolObject
-          [ ( "handle",
-              stringParam "episode UUID、t#<n> 或 t#<n>:r<m>"
-            ),
-            ("call_id", stringParam "配合 t#<n> 精确定位工具调用；重名拒绝，改用结果句柄"),
-            ("after_cursor", integerParam "上页 next_after_cursor；结果分页时是字符偏移"),
+          [ ("turn", stringParam "t#<n> 或 t#<n>:r<m>"),
+            ("call_id", stringParam "可选工具调用 ID；有歧义时使用结果句柄"),
+            ("after_cursor", integerParam "返回的分页位置；通常直接传 next"),
             ("limit", boundedIntegerParam 1 12000 40)
           ]
-          ["handle"],
-      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseExpandArgs) args of
-        Left err -> pure $ Left ("bad args: " <> T.pack err)
-        Right (rawHandle, callId, after, limit) -> case (parseEpisodeHandle rawHandle, parseTurnHandle rawHandle) of
-          (Just handle, _) | isNothing callId -> do
-            expanded <- expandEpisode handle (MessageCursor <$> after) limit
-            pure $ case expanded of
-              Nothing -> Left "episode not found or not visible in this conversation"
-              Just (episode, media) -> Right (episodeExpansionSummary tz media episode)
-          (Nothing, Just (ParsedTurn ordinal)) | isNothing callId -> do
-            expanded <- expandTurnTrace ordinal after limit
-            pure $ maybe (Left "turn not found or not visible in this conversation") Right expanded
-          (Nothing, Just _) -> do
-            expanded <- expandTurnResult rawHandle callId after (if limit == 40 then 6000 else limit)
-            pure $ maybe (Left "result not found, ambiguous, or not visible in this conversation") Right expanded
-          _ -> pure (Left "bad args: handle must be an episode UUID or t#<n>")
+          ["turn"],
+      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "context_resume" parseArgs) args of
+        Left err -> pure (Left ("bad args: " <> T.pack err))
+        Right (turn, callId, after, limit) -> case parseTurnHandle turn of
+          Nothing -> pure (Left "bad args: turn must be t#<n> or t#<n>:r<m>")
+          Just parsed -> do
+            result <- case (parsed, callId) of
+              (ParsedTurn ordinal, Nothing) -> expandTurnTrace ordinal after (min limit (max 1 (budget `div` 1400)))
+              _ -> expandTurnResult turn callId after (min (budget * 2) (if limit == 40 then 6000 else limit))
+            pure $ maybe (Left "turn/result not found, ambiguous, or not visible") (Right . withNext turn callId limit) result
     }
   where
-    parseExpandArgs o =
-      (,,,)
-        <$> o .: "handle"
-        <*> o .:? "call_id"
-        <*> o .:? "after_cursor"
-        <*> (fromMaybe 40 <$> o .:? "limit")
-
-episodeExpansionSummary :: TimeZone -> Map.Map Int64 MessageMedia -> EpisodeExpansion -> Value
-episodeExpansionSummary tz media episode =
-  object
-    [ "handle" .= episodeHandleText episode.expansionHandle,
-      "source_range"
-        .= object
-          [ "start_cursor" .= episode.expansionRange.srStart.ingestSeq,
-            "end_cursor" .= episode.expansionRange.srEnd.ingestSeq,
-            "message_count" .= episode.expansionRange.srMessageCount
-          ],
-      "projection_state" .= episode.expansionState,
-      "source_hash_matches" .= episode.expansionSourceHashMatches,
-      "messages" .= map (expandedHistoryItem tz media) episode.expansionMessages,
-      "has_more" .= episode.expansionHasMore,
-      "next_after_cursor" .= fmap (.ingestSeq) episode.expansionNextCursor
-    ]
-
-expandedHistoryItem :: TimeZone -> Map.Map Int64 MessageMedia -> LedgerItem -> Value
-expandedHistoryItem tz media entry =
-  object $
-    [ "ingest_cursor" .= entry.cursor.ingestSeq,
-      "message_id" .= h.canonicalId,
-      "principal_id" .= h.authorPrincipalId,
-      "sender" .= bestName h,
-      "time" .= fmtDateHM tz h.receivedAt,
-      "text" .= h.renderedText,
-      "prompt_eligible" .= entry.transcriptEligible
-    ]
-      <> ["reply_to" .= reply | Just reply <- [h.replyTo]]
-  where
-    h = tagMediaMarkers media entry.history
-
--- view_forward — expand a 转发聊天记录 on demand
-
--- | Cap on child lines returned per call — a mega-bundle shouldn't
--- flood the context (the summary shape already truncates each line).
-maxForwardChildren :: Int
-maxForwardChildren = 100
-
-viewForwardTool :: (ConversationQuery :> es) => TimeZone -> Tool es
-viewForwardTool tz =
-  Tool
-    { toolName = "view_forward",
-      toolDescription =
-        T.unwords
-          [ "展开一条转发聊天记录：传 [forward#<id>] 里的 <id>（容器消息的 message_id），",
-            "返回里面的每条消息。嵌套的转发同样以 [forward#<id>] 出现，可以继续展开。"
-          ],
-      toolSchema = toolObject [("message_id", integerParam "[forward#<id>] 标记里的 id（可能是负数）")] ["message_id"],
-      toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" (\o -> o .: "message_id")) args of
-        Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (mid :: Int64) -> do
-          kids <- readForward mid maxForwardChildren
-          if null kids
-            then pure $ Left "这条消息没有已展开的转发内容（不是转发聊天记录，或还没抓取完）"
-            else pure . Right . toJSON $ map (historyItemSummary tz) kids
-    }
+    budget = readPageTokens (toolContextLimits dc) (toolMultimodal dc)
+    parseArgs o = do
+      turn <- o .: "turn"
+      callId <- o .:? "call_id"
+      after <- o .:? "after_cursor"
+      limit <- o .:? "limit" .!= 40
+      unless (limit >= 1 && limit <= 12000 && maybe True (>= 0) after) (fail "invalid limit or cursor")
+      pure (turn, callId, after, limit)
+    withNext turn callId limit (Object fields) =
+      let next = case KeyMap.lookup "next_after_cursor" fields of
+            Just at | at /= Null -> object (["turn" .= (turn :: Text), "after_cursor" .= at, "limit" .= (limit :: Int)] <> ["call_id" .= cid | Just cid <- [callId]])
+            _ -> Null
+       in Object (KeyMap.insert "next" next fields)
+    withNext _ _ _ value = value
 
 --------------------------------------------------------------------------------
 -- poke — 戳一戳
@@ -331,27 +272,3 @@ pokeTool dc =
               logInfo "poke: sent" $ object ["qq" .= qq]
               pure $ Right (object ["ok" .= True])
     }
-
---------------------------------------------------------------------------------
--- Summary shape sent back to the model.  Keep it compact — every byte
--- here costs prompt tokens on the next turn.
-
-historyItemSummary :: TimeZone -> HistoryItem -> Value
-historyItemSummary tz h =
-  object $
-    [ "message_id" .= h.canonicalId,
-      "principal_id" .= h.authorPrincipalId,
-      -- 群名片 > 昵称 > principal id, matching the prompt's context lines.
-      "sender" .= bestName h,
-      "time" .= fmtDateHM tz h.receivedAt,
-      "text" .= shorten 400 h.renderedText
-    ]
-      -- The message this one quotes, so a quote chain is walkable one
-      -- get_message_by_id hop at a time (the same handle rendered as
-      -- [reply#<id>] in the prompt's context lines).
-      <> ["reply_to" .= r | Just r <- [h.replyTo]]
-
-shorten :: Int -> Text -> Text
-shorten n t
-  | T.length t <= n = t
-  | otherwise = T.take n t <> "…"
