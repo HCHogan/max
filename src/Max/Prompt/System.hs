@@ -133,7 +133,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
            "  t#<n>                              — 最近完成的工作回合；需要工具轨迹、结果或失败信息时把完整 t#<n> 传给 context_resume 的 turn。",
            "  [reply quoted ...]               — 用户引用的那条消息（内容已展开；也可用 context_read({ref: message:<id>}) 读原文，可加 before/after 看上下文）",
            "  [card: 来源 | 标题 | 链接]     — 分享卡片；B站卡用 view_bilibili、知乎卡用 view_zhihu，传链接看内容",
-           "  [file:<name>]                — 群文件；沙箱里在 /chat/<msgid>-<name>（图片、视频是 /chat/<msgid>.<seg>.*）",
+           "  [file:<name>]                — 群文件；沙箱里在 /chat/<msgid>-<name>（图片、视频是 /chat/<msgid>.<seg>.*）；图片或视频文件用 view_image/view_video 的 path 直接看",
            "",
            "铁律：动作只有上面明确列出的那些。工具调用永远走工具通道，把工具名写进方括号",
            "（如 [context_search query=...]）不会执行任何东西，也不会发出去。",

@@ -4,7 +4,8 @@
 -- trigger / pins); everything else in the group history renders as an
 -- @[image#\<id\>]@ marker, and this tool is how the model turns such a
 -- marker back into pixels — same injection channel (and per-dispatch
--- budget) as @view_avatar@.
+-- budget) as @view_avatar@.  A sandbox path shows a file directly: a group
+-- file under /chat or something a command produced under /work.
 module Max.Tools.Images
   ( imageToolsFor,
     viewImageSpec,
@@ -36,7 +37,8 @@ import Max.Media.Types (StoredImage (..))
 import Max.Time (fmtHM)
 import Max.Tool.Types (ToolSpec (..))
 import Max.ToolContext (ToolContext, toolMultimodal)
-import Max.Tools.Schema (integerParam, toolObject)
+import Max.IR (sniffMediaMime)
+import Max.Tools.Schema (integerParam, stringParam, toolObject)
 
 -- | Same per-image cap as the prompt builder's inline path.
 maxImageBytes :: Int
@@ -47,24 +49,42 @@ imageToolsFor ::
   TimeZone -> -- display timezone for the image label's HH:MM
   ToolContext ->
   (Text -> BS.ByteString -> Eff es (Text, BS.ByteString)) ->
+  -- | Read a file from the conversation's sandbox.
+  (Text -> Eff es (Either Text BS.ByteString)) ->
   [Tool es]
-imageToolsFor tz dc prepare
-  | toolMultimodal dc = [viewImageTool tz prepare]
+imageToolsFor tz dc prepare readPath
+  | toolMultimodal dc = [viewImageTool tz prepare readPath]
   | otherwise = []
 
 viewImageTool ::
   (Blob :> es, MediaQuery :> es, Log :> es, ToolOutput :> es) =>
   TimeZone ->
   (Text -> BS.ByteString -> Eff es (Text, BS.ByteString)) ->
+  (Text -> Eff es (Either Text BS.ByteString)) ->
   Tool es
-viewImageTool tz prepare =
+viewImageTool tz prepare readPath =
   Tool
     { toolName = viewImageSpec.specName,
       toolDescription = viewImageSpec.specDescription,
       toolSchema = viewImageSpec.specSchema,
       toolRunner = LegacyRunner $ \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (mid, seg) -> do
+        Right (Right path) ->
+          readPath path >>= \case
+            Left failure -> pure (Left ("读不到这个沙箱文件：" <> failure))
+            Right bytes0 -> case sniffMediaMime bytes0 of
+              Just mime | "image/" `T.isPrefixOf` mime -> do
+                (mime', bytes) <- prepare mime bytes0
+                if BS.length bytes > maxImageBytes
+                  then pure (Left "图片太大（超过 20MB），先在沙箱里缩小再看")
+                  else do
+                    ok <- queueInlineMedia (InlineMedia ("[沙箱文件 " <> path <> "]:") ("data:" <> mime' <> ";base64," <> TE.decodeUtf8 (B64.encode bytes)) Nothing)
+                    pure $
+                      if ok
+                        then Right (object ["attached" .= (1 :: Int), "path" .= path, "note" .= ("图片已附在下一条消息里" :: Text)])
+                        else Left "本次任务的附件配额（8 个）已用完"
+              _ -> pure (Left "这个文件不是 JPEG/PNG/GIF/WebP 图片；视频用 view_video 的 path")
+        Right (Left (mid, seg)) -> do
           (message, rows) <- readImages mid seg
           case rows of
             [] -> pure $ Left "这条消息没有已存的图片（id 写错了？或图片没下载成功）"
@@ -84,8 +104,12 @@ viewImageTool tz prepare =
                         ]
     }
   where
-    parseArgs :: Object -> Parser (Int64, Maybe Int)
-    parseArgs o = (,) <$> o .: "message_id" <*> o .:? "seg_index"
+    parseArgs :: Object -> Parser (Either (Int64, Maybe Int) Text)
+    parseArgs o = do
+      path <- o .:? "path"
+      case T.strip <$> path of
+        Just value | not (T.null value) -> pure (Right value)
+        _ -> Left <$> ((,) <$> o .: "message_id" <*> o .:? "seg_index")
 
     -- "[10:32 Alice] 消息里的图片" — mirrors the label the prompt
     -- builder puts on inline images, so both kinds read the same.
@@ -140,12 +164,14 @@ viewImageSpec =
       specDescription =
         "查看上下文里标记为 [image#<id>.<seg>] 的图片：把这两个数字分别传给\
         \ message_id 和 seg_index，那张图会附在下一条消息里给你看；省略\
-        \ seg_index 就是那条消息的全部图片。只在图片跟当前话题相关时用；\
+        \ seg_index 就是那条消息的全部图片。沙箱里的图片（/chat 里的群文件、\
+        \/work 里命令生成的图）传 path 直接看，不用先发到群里。只在图片跟当前话题相关时用；\
         \与 view_avatar 共用每次任务 8 张的配额。",
       specSchema =
         toolObject
           [ ("message_id", integerParam "[image#<id>.<seg>] 里 . 前面那个数字"),
-            ("seg_index", integerParam "[image#<id>.<seg>] 里 . 后面那个数字；省略就看这条消息的全部图片")
+            ("seg_index", integerParam "[image#<id>.<seg>] 里 . 后面那个数字；省略就看这条消息的全部图片"),
+            ("path", stringParam "沙箱里的图片路径，例如 /work/frame.jpg 或 /chat/<msgid>-<name>.png；给了 path 就不看 message_id")
           ]
-          ["message_id"]
+          []
     }

@@ -19,7 +19,7 @@ import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isNothing)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -30,7 +30,8 @@ import GHC.Generics (Generic)
 import Max.DB.Codec (Jsonb (..), exactlyOne)
 import Max.DB.PlatformIds (compatibilityId)
 import Max.DB.Transaction (withTransaction)
-import Max.IR (Body (Body), Phase (Canonical), mentionIdentities)
+import Max.Blob.Reference (blobRefFromSha256, blobRefStoredPath)
+import Max.IR (Body (Body), MediaKind (MImage), MediaMeta (kind, mime, sizeBytes), Node (NMedia), mediaRefBlobSha, Phase (Canonical), mentionIdentities)
 import Max.IR.Lower
   ( OutboundCaps (reaction),
     outboundCapsFromValue,
@@ -207,6 +208,17 @@ enqueueOutboundInTransaction draft = do
         platformName
       )
   when (inserted /= 1) (error "enqueueOutbound: canonical insert did not affect one row")
+  -- Images Max sends are indexed like received ones, so its own pictures get
+  -- [image#id.seg] handles and can be viewed or quoted later.
+  forM_ [(index, sha, meta) | (index, NMedia (Just source) meta) <- zip [0 :: Int ..] (bodyNodes draft.canonicalBody), meta.kind == MImage, Just sha <- [mediaRefBlobSha source]] $ \(index, sha, meta) ->
+    forM_ (blobRefFromSha256 sha) $ \ref -> do
+      _ <-
+        execute
+          "INSERT INTO images (sha256, mime_type, bytes_size, local_path) VALUES (?,?,?,?) ON CONFLICT (sha256) DO NOTHING"
+          (sha, fromMaybe "image/jpeg" meta.mime, fromMaybe 0 meta.sizeBytes, blobRefStoredPath ref)
+      execute
+        "INSERT INTO message_images (canonical_message_id, sha256, seg_index) VALUES (?,?,?) ON CONFLICT DO NOTHING"
+        (canonical, sha, index)
   -- Delivery adapters resolve replies through the canonical relation table,
   -- not through the legacy compatibility column.  Keeping both projections
   -- in the same publish transaction lets Matrix preserve native replies and
@@ -509,3 +521,6 @@ enqueueReaction draft = withTransaction $ do
                     deliveries = targets
                   }
             )
+
+bodyNodes :: Body 'Canonical -> [Node 'Canonical]
+bodyNodes (Body nodes) = nodes

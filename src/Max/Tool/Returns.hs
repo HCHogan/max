@@ -29,7 +29,7 @@ returnTypes =
       ("automation_history", "{handle: string; revision: number; instruction: string; status: \"armed\" | \"fired\" | \"cancelled\" | \"expired\"; overlap: string; queue_limit: number; next_fire: string | null; fires: {fire_id: number; definition_revision: number; scheduled_at: string; disposition: string; task_id: number | null; coalesced_into: number | null; admission_state: \"pending\" | \"dispatched\"; evidence: string; last_error: string | null}[]}"),
       ("group_members", "{member_count: number; total_matched: number; offset: number; members: {id: number; name: string; platforms: string[]; role?: string; title?: string; qq?: string}[]; group_name?: string; group_avatar_url?: string; member_avatar_url_pattern?: string}"),
       ("view_avatar", "{attached: boolean; note: string}（图片附在下一条消息里）"),
-      ("view_image", "{attached: number; total: number; note: string}（图片附在下一条消息里）"),
+      ("view_image", "{attached: number; total?: number; path?: string; note: string}（图片附在下一条消息里）"),
       ("view_video", "{attached: true; label: string; vision_tokens: number | null; note: string}（视频附在下一条消息里，label 写明时长、片段和倍速）"),
       ("memory_save", "{id: number; version: number}"),
       ("memory_update", "{id: number; version: number}"),

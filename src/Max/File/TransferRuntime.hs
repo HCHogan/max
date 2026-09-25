@@ -32,6 +32,7 @@ import Max.IR
       ),
     Node (NMedia),
     mediaBlobRef,
+    sniffMediaMime,
   )
 import Max.MessageKind (MessageKind (KindChat))
 import Max.Platform.Types (CanonicalMessageId (..))
@@ -122,7 +123,7 @@ runFileTransferWithDatabase context sandboxes = runFileTransfer image file
     imageMeta bytes =
       MediaMeta
         { kind = MImage,
-          mime = Just "image/png",
+          mime = Just (fromMaybe "image/png" (sniffMediaMime bytes)),
           sizeBytes = Just (fromIntegral (BS.length bytes)),
           name = Just "sandbox.png",
           description = Nothing,

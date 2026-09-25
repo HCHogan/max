@@ -176,7 +176,7 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
       builtinsWithDatabase env.beTimeZone dc
         <> monitorToolsWithDatabase env.beJobs env.beTimeZone env.beWebhookBaseUrl dc
         <> groupToolsWithDatabase dc
-        <> imageToolsWithDatabase env.beTimeZone dc
+        <> imageToolsWithDatabase env.beTimeZone env.beSandboxes dc
         <> memoryToolsWithDatabase dc
         <> pinToolsWithDatabase env.beSessions env.beDefaultModel dc
         <> taskTools env.beJobs dc
@@ -187,7 +187,7 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
         <> [t | toolStickers dc && env.beEmbeddingEnabled, t <- stickerToolsWithDatabase]
         <> maybe [] (searchToolsWithRuntime runtime) env.beSearch
         <> [t | toolMultimodal dc, t <- browserToolsFor env.beJobs dc env.beBrowsers env.beBrowserProxy]
-        <> [t | toolMultimodal dc, t <- videoToolsWithDatabase dc]
+        <> [t | toolMultimodal dc, t <- videoToolsWithDatabase env.beSandboxes dc]
 
 -- | How many tools a dispatch with these gates would get — the
 -- @!version@ card's number.  This is intentionally a pure projection
