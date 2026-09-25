@@ -137,7 +137,7 @@ browserCommand jobs registry group@(GroupId groupId) actor@(PrincipalId principa
             void $ execute "UPDATE monitors SET definition_revision=definition_revision+1 WHERE monitor_id=?" (Only monitor)
             pure (Right (object ["monitor" .= handle, "profile" .= name, "applies_to" .= ("future occurrences only; existing snapshots unchanged" :: Text)]))
           _ -> pure (Left "owned browser monitor or active profile not found")
-      _ -> pure (Left "用法：!browser profiles | reset task#N | save task#N 名称 https://站点 | use task#N 名称 | delete 名称 | monitor m#N 名称 | unmonitor m#N。reset/use 确认不重放旧操作；仅任务发起者可用。")
+      _ -> pure (Left "用法：!browser profiles | reset agent#N | save agent#N 名称 https://站点 | use agent#N 名称 | delete 名称 | monitor m#N 名称 | unmonitor m#N。reset/use 确认不重放旧操作；仅发起者可用。")
     validName name = not (T.null name) && T.length name <= 80
     lookupProfile :: Text -> Eff es [(Int64, Int64)]
     lookupProfile name =

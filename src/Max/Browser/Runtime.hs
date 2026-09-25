@@ -145,7 +145,7 @@ resetTaskBrowser jobs registry group actor identifier profile = ownedJobBrowser 
       now <- liftIO getCurrentTime
       let generation = maybe 1 ((+ 1) . (.jbGeneration)) previous
       liftIO (putJobBrowser registry identifier (JobBrowser job.run (browserScopeForTask group identifier generation) generation profile False now Nothing))
-      pure (Right (object ["reset" .= True, "task" .= identifier]))
+      pure (Right (object ["reset" .= True, "agent" .= identifier]))
 
 exportJobBrowser :: (IOE :> es) => BrowserRegistry -> Int64 -> Eff es (Either Text Value)
 exportJobBrowser registry identifier = liftIO $ do

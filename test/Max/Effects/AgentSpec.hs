@@ -307,7 +307,7 @@ spec = describe "Agent full loop" $ do
                     liftIO $ [text | MsgUser text <- messages, "[当前已加载宿主技能]" `T.isPrefixOf` text] `shouldBe` []
                     liftIO $ names `shouldContain` ["run_code"]
                     liftIO $ names `shouldNotContain` ["web_search"]
-                    respond "run_code" (object ["code" .= ("const value = tools.echo({value:7}); tools.echo({value:8}); tools.use_skill({name:'web'}); return {answer:value.echo.value, hidden:!max.names.includes('web_search')};" :: Text)])
+                    respond "run_code" (object ["code" .= ("const value = await tools.echo({value:7}); await tools.echo({value:8}); await tools.use_skill({name:'web'}); return {answer:value.echo.value, hidden:!max.names.includes('web_search')};" :: Text)])
                   _ -> do
                     liftIO $ readIORef leaves `shouldReturn` 2
                     liftIO $ case reverse messages of
@@ -464,7 +464,7 @@ spec = describe "Agent full loop" $ do
     readIORef effects `shouldReturn` 1
     toolVisible (toolSkillLoads executionContext.acTools) "web_search" `shouldBe` False
 
-  for_ ["task_start", "arbitrary_tool"] $ \name ->
+  for_ ["agent", "arbitrary_tool"] $ \name ->
     it ("does not interpret " <> T.unpack name <> " JSON as a loop control receipt") $ do
       events <- newIORef []
       calls <- newIORef (0 :: Int)

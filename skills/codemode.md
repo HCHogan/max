@@ -4,47 +4,48 @@
 `return` 返回 JSON；没有 return 则返回 null。必须把 run_code 作为该轮唯一调用。
 工具参数遵循本轮工具列表提供的完整 schema；这里只改变组合方式。
 
-完整 SDK：
+完整 SDK（所有调用都返回 Promise，先 `await` 再取字段）：
 
-- `tools.<工具名>(args)`：调用本轮可见工具，成功返回值，失败抛出 ToolError。
+- `await tools.<工具名>(args)`：调用本轮可见工具，成功得到返回值，失败抛出 ToolError。
   每个工具描述末尾的「返回：」就是这个值的类型，可以直接按字段取用，不必先返回原文看结构。
-  也可写 `tools[工具名](args)`。参数省略时为 `{}`；`await` 可用于返回值。
-- `max.raw(name, args)`：返回完整 outcome，不抛出工具失败。
+  也可写 `tools[工具名](args)`。参数省略时为 `{}`。
+- 并发就用原生写法：同时发起、一起 await 的调用会作为一批提交，宿主按工具元数据
+  并发执行，例如 `const [a, b] = await Promise.all([tools.x(p), tools.y(q)])`。
+  依次 `await` 的调用按顺序执行。一批最多 32 个调用，更多的会分批。
+- `await max.raw(name, args)`：返回完整 outcome，不抛出工具失败。
   成功是 `{outcome: "succeeded" | "committed", value}`；失败是
   `{outcome: "rejected" | "failed-before-effect" | "outcome-unknown",
   error: {code, message, retry: "safe" | "idempotent" | "unsafe"}}`。
+  配合 `Promise.all` 可以保留每个调用各自的成败。
 - `max.value(outcome)`：从上述结构取成功值，否则抛出 ToolError。
   ToolError 带有 `outcome`、`code`、`retry` 和 `message`。
-- `max.batch([{tool: "工具名", args: {...}}, ...])`：一次提交 1–32 个调用，
-  按输入顺序返回 outcome 数组。宿主按工具元数据决定并发或顺序执行。
-  需要并行时使用此接口；Promise.all 本身不会让同步工具调用并行。
 - `max.names`：本次运行可用工具名的完整只读数组。`tools` 与 `max` 不可替换。
-- `agent({objective, inputs, profile, output_contract?})`（也可写 `max.agent`）：
-  在根后台任务中启动普通子任务并等待报告。profile 为 basic/browser/sandbox，
-  只收窄父任务当前权限；SSH 运维使用 sandbox 并加载 operations 技能；inputs 是最多 64 KiB 请求内的显式 JSON 数据。
-  返回 `{task,status,text,payload}`。未指定 output_contract 时，子任务直接回答即可。
-  指定时使用技能的闭合 JSON Schema 子集；子任务以符合契约的 JSON 作为最终答案，
-  宿主验证后放入 payload。契约只验证形状，不证明内容正确。
-- `max.batch([{agent:{objective,inputs,profile,output_contract?}}, ...])`：表达独立子任务。
-  宿主决定并发，按原顺序返回 outcome。与工具混合的 batch 顺序执行。
-  `Promise.all([agent(...),agent(...)])` 不会并发；请使用 max.batch。
-- `max.phase("阶段说明")`：记录当前任务内部进度，沿用 task_progress 的去重与父任务通知规则，不向聊天播报。
-  只在本轮工具里有 task_progress 的后台任务中可用；前台对话里调用会让整段程序在开头失败。
-  保存工作流须在 tools 中声明 task_start（使用 agent）及 task_progress（使用 phase）。
+- `await agent(args)`（也可写 `max.agent`）：就是 `tools.agent({...args, wait: true})`，
+  派一个子 agent 并等它的报告，得到已结束的 Agent：报告在 `result.text`，给了
+  `output_contract` 时符合契约的 JSON 在 `result.payload`。参数与 agent 工具相同
+  （objective、profile、context、resources、inputs、output_contract）。前台和后台
+  都能用：前台等到的报告只回到这次调用，不会再另行转述；程序被取消时子 agent 继续
+  运行，报告按普通方式转述。多个子 agent 并行：
+  `await Promise.all(items.map(x => agent({objective: ..., profile: "basic"})))`。
+  契约只验证形状，不证明内容正确。
+- `await max.phase("阶段说明")`：就是 `tools.agent_progress({summary})`，记录后台
+  agent 的内部进度，不向聊天播报；只在有 agent_progress 的后台 agent 中可用。
+- `await max.batch([{tool, args} | {agent: {...}}, ...])`：旧写法，等同于对每项
+  `max.raw` 再 `Promise.all`。
 
 例如，按一个已可见工具的 schema 构造多份参数后：
 
 ```javascript
-const results = max.batch(inputs.map(args => ({tool: toolName, args})));
+const results = await Promise.all(inputs.map(args => max.raw(toolName, args)));
 return results.map((result, index) => ({index, ...result}));
 ```
 
 用实际工具名和参数替换示例中的变量。多步浏览网页的写法见 web 手册的"多步浏览写成程序"。可使用普通 JS、数组、对象、正则、
-JSON 和 Promise。没有 Node、浏览器 API、import/require、console、计时器、
+JSON、Promise 和 async/await。没有 Node、浏览器 API、import/require、console、计时器、
 网络、文件系统、环境变量或宿主时间/随机源；需要这些能力时调用授权工具。
 
 每次程序是独立环境，不保存 JS 变量。单次源码和返回值各最多 64 KiB，Wasm
-内存 64 MiB，总时间最多六小时（含子任务/工具等待，且不能越过任务截止时间）；单个工具
+内存 64 MiB，总时间最多六小时（含子 agent/工具等待，且不能越过 agent 截止时间）；单个工具
 仍有自己的 deadline。计算有 fuel 上限：用尽时整段程序终止、返回值丢失，只剩已完成调用
 的回执。在大文本上别用 `[^"]{0,60}关键词` 这类回溯很重的正则，先 indexOf 定位再切片。
 SDK 会自动分帧读取同一次调用的结果（最多 4 MiB），不会为了读取大结果重复执行工具。
@@ -92,7 +93,8 @@ outcome-unknown 时先查明现状，不能直接重跑整段程序。宿主返�
 二选一。保存流程只能调用其声明且当前仍获授权的工具；契约变化会在执行前拒绝。
 结果包含 run_ref 和工作流版本。输出契约错误也不会撤销已完成的工具效果。
 
-每次显式调用 agent 都创建新子任务，包括重跑同一段程序。子任务不能再执行
-run_code/agent。任务和等待只在当前进程内存在；重启不会续跑或重放。
-收到 steering 时宿主在 agent 边界停止程序，由父任务下一模型回合读取收件箱；
-已启动的子任务继续运行。可以通过 task_status/task_wait 收集它们，避免重复启动。
+每次调用 agent 都派出新的子 agent，包括重跑同一段程序。wait 派出的子 agent 是叶子，
+不能再执行 run_code。子 agent 和等待只在当前进程内存在；重启不会续跑或重放。
+后台 agent 等待时收到 steering，agent 调用返回 `feedback_pending`，宿主在这里停止
+程序，由下一模型回合读取收件箱；已派出的子 agent 继续运行，可以通过
+agent_status/agent_wait 收集它们，避免重复派出。

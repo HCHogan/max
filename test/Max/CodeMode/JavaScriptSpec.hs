@@ -22,55 +22,43 @@ import Max.Effects.Tools
 import Max.Execution.Tools
 import Max.Execution.Workflow
 import Max.Tool.Catalog (catalogTools)
-import Max.Tool.Control (LoopControl (..))
 import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: Spec
 spec = describe "JavaScript SDK in embedded Wasm" $ do
-  it "awaits independent agent reports through the shared batch budget in input order" $ do
+  it "runs agent() calls started together concurrently, as waiting agent tool calls, in input order" $ do
     first <- newEmptyMVar
     second <- newEmptyMVar
-    let start = echoDefinition {tdRef = ToolRef "task_start"}
-        tool = echoTool {toolName = "task_start"}
-        host =
-          WorkflowHost
-            (pure True)
-            ( \args -> do
-                liftIO $
-                  if args == object ["objective" .= ("one" :: Text), "profile" .= ("basic" :: Text)]
-                    then putMVar first () >> takeMVar second
-                    else putMVar second () >> takeMVar first
-                pure (ToolInvocation (ToolCommitted args) ContinueLoop)
-            )
-            (\_ -> pure (ToolInvocation (ToolSucceeded Null) ContinueLoop))
-            True
-    registry <- checked [start] [tool]
+    let definition = echoDefinition {tdRef = ToolRef "agent", tdEffects = Set.singleton (EffectWrite "task.db"), tdParallelism = ParallelIndependent, tdRetryClass = RetryUnsafe}
+        runner args = do
+          liftIO $
+            if objectiveOf args == Just "one"
+              then putMVar first () >> takeMVar second
+              else putMVar second () >> takeMVar first
+          pure (Right args)
+    registry <- checked [definition] [legacyTool "agent" "agent" (object ["type" .= ("object" :: Text)]) runner]
     result <- timeout 30000000 . runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession (Just 2)
-      runJavaScript session noJournal {ehWorkflow = Just host} (views registry) "return max.batch(['one','two'].map(objective => ({agent:{objective,profile:'basic'}}))).map(max.value).map(x=>x.objective);"
+      runJavaScript session noJournal (views registry) "const reports = await Promise.all(['one','two'].map(objective => agent({objective, profile:'basic'}))); return reports.map(x => [x.objective, x.wait]);"
     fmap (.cmExit) result `shouldBe` Just WasmCompleted
-    fmap (.cmOutput) result `shouldBe` Just (Just (toValue [String "one", String "two"]))
-  it "stops guest execution at the steering boundary even if JavaScript would ignore the result" $ do
+    fmap (.cmOutput) result `shouldBe` Just (Just (toValue [toValue [String "one", Bool True], toValue [String "two", Bool True]]))
+  it "stops guest execution when a waiting agent call returns for pending feedback" $ do
     count <- newIORef (0 :: Int)
-    let host =
-          WorkflowHost
-            (pure True)
-            (\_ -> liftIO (modifyIORef' count (+ 1)) >> pure (ToolInvocation (ToolCommitted (object ["interrupted" .= True, "reason" .= ("workflow_steering_pending" :: Text)])) ContinueLoop))
-            (\_ -> pure (ToolInvocation (ToolSucceeded Null) ContinueLoop))
-            True
-    registry <- checked [echoDefinition {tdRef = ToolRef "task_start"}] [echoTool {toolName = "task_start"}]
+    let definition = echoDefinition {tdRef = ToolRef "agent", tdParallelism = ParallelIndependent}
+        runner _ = liftIO (modifyIORef' count (+ 1)) >> pure (Right (object ["agent" .= ("agent#1" :: Text), "feedback_pending" .= True]))
+    registry <- checked [definition] [legacyTool "agent" "agent" (object ["type" .= ("object" :: Text)]) runner]
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession (Just 3)
-      runJavaScript session noJournal {ehWorkflow = Just host} (views registry) "agent({objective:'one',profile:'basic'}); agent({objective:'two',profile:'basic'}); return 'unreachable';"
+      runJavaScript session noJournal (views registry) "await agent({objective:'one',profile:'basic'}); await agent({objective:'two',profile:'basic'}); return 'unreachable';"
     result.cmExit `shouldBe` WasmHostStopped
     readIORef count `shouldReturn` 1
-  it "rejects recursive workflow execution for an awaited child before any guest work" $ do
-    let host = WorkflowHost (pure False) (\_ -> error "unreachable agent") (\_ -> error "unreachable phase") True
+  it "rejects run_code for a leaf agent before any guest work" $ do
+    let host = WorkflowHost (pure False)
     registry <- checked [echoDefinition] [echoTool]
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
-      executeModelBatch True Map.empty session noJournal {ehWorkflow = Just host} (views registry) [ToolRequest "child" "run_code" (object ["code" .= ("return tools.echo({value:1});" :: Text)])]
+      executeModelBatch True Map.empty session noJournal {ehWorkflow = Just host} (views registry) [ToolRequest "child" "run_code" (object ["code" .= ("return await tools.echo({value:1});" :: Text)])]
     map (outcomeName . (.tiOutcome)) result.tbInvocations `shouldBe` ["rejected"]
   it "cannot register run_code as a leaf runner that would recursively acquire the gate" $ do
     case buildToolRegistry [echoDefinition {tdRef = ToolRef "run_code"}] [echoTool {toolName = "run_code"}] of
@@ -178,7 +166,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     registry <- checked [echoDefinition] [runner]
     (result, following) <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession (Just 1)
-      result <- runJavaScript session noJournal (views registry) "const value = tools.echo({value:1}); return {length:[...value.text].length, tail:value.text.slice(-7)};"
+      result <- runJavaScript session noJournal (views registry) "const value = await tools.echo({value:1}); return {length:[...value.text].length, tail:value.text.slice(-7)};"
       following <- executeToolBatch session noJournal (views registry) [ToolRequest "native" "echo" (object ["value" .= (2 :: Int)])]
       pure (result, following)
     result.cmExit `shouldBe` WasmCompleted
@@ -187,7 +175,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     following.tbOverBudget `shouldBe` True
     readIORef count `shouldReturn` 1
 
-  it "uses the shared parallel batch scheduler and keeps input order" $ do
+  it "submits calls awaited together as one parallel batch and keeps input order" $ do
     first <- newEmptyMVar
     second <- newEmptyMVar
     let runner =
@@ -202,15 +190,36 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     registry <- checked [echoDefinition] [runner]
     result <- timeout 30000000 . runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession (Just 2)
-      runJavaScript session noJournal (views registry) "return max.batch([1,2].map(value => ({tool:'echo',args:{value}}))).map(max.value);"
+      runJavaScript session noJournal (views registry) "return await Promise.all([1,2].map(value => tools.echo({value})));"
     fmap (.cmExit) result `shouldBe` Just WasmCompleted
     fmap (.cmOutput) result `shouldBe` Just (Just (toValue [object ["value" .= (1 :: Int)], object ["value" .= (2 :: Int)]]))
+
+  it "keeps max.batch as Promise.all over raw outcomes" $ do
+    result <- simple "return (await max.batch([1,2].map(value => ({tool:'echo',args:{value}})))).map(max.value);"
+    result.cmExit `shouldBe` WasmCompleted
+    result.cmOutput `shouldBe` Just (toValue [object ["value" .= (1 :: Int)], object ["value" .= (2 :: Int)]])
+
+  it "runs calls awaited one after another as separate batches" $ do
+    result <- simple "const a = await tools.echo({value:1}); const b = await tools.echo({value:a.value + 1}); return b.value;"
+    result.cmOutput `shouldBe` Just (Number 2)
+    length result.cmCalls `shouldBe` 2
+
+  it "names the missing await instead of reading undefined" $ do
+    result <- simple "const value = tools.echo({value:1}); return value.value;"
+    result.cmExit `shouldSatisfy` trapped
+    result.cmOutput `shouldSatisfy` maybe False (T.isInfixOf "await" . T.pack . show)
+
+  it "still runs a call nobody awaited before publishing the result" $ do
+    result <- simple "tools.echo({value:1}); return 2;"
+    result.cmExit `shouldBe` WasmCompleted
+    result.cmOutput `shouldBe` Just (Number 2)
+    map (.ccOutcome) result.cmCalls `shouldBe` ["succeeded"]
 
   it "rejects a batch atomically when the shared call budget is too small" $ do
     registry <- checked [echoDefinition] [echoTool]
     (result, later) <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession (Just 1)
-      result <- runJavaScript session noJournal (views registry) "return max.batch([1,2].map(value => ({tool:'echo',args:{value}}))).map(x => x.outcome);"
+      result <- runJavaScript session noJournal (views registry) "return (await max.batch([1,2].map(value => ({tool:'echo',args:{value}})))).map(x => x.outcome);"
       later <- executeToolBatch session noJournal (views registry) [ToolRequest "native" "echo" (object ["value" .= (1 :: Int)])]
       pure (result, later)
     result.cmOverBudget `shouldBe` True
@@ -218,10 +227,10 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     map (outcomeName . (.tiOutcome)) later.tbInvocations `shouldBe` ["succeeded"]
 
   it "retains fault classification in both raw outcomes and ToolError" $ do
-    result <- simple "const raw = max.raw('echo', {}); try {tools.echo({});} catch (error) {return [raw.outcome, error.outcome, error.code, error.retry];}"
+    result <- simple "const raw = await max.raw('echo', {}); try {await tools.echo({});} catch (error) {return [raw.outcome, error.outcome, error.code, error.retry];}"
     result.cmExit `shouldBe` WasmCompleted
     result.cmOutput `shouldBe` Just (toValue (map String ["rejected", "rejected", "invalid_arguments", "safe"]))
-    uncaught <- simple "return tools.echo({});"
+    uncaught <- simple "return await tools.echo({});"
     uncaught.cmSubmittedCalls `shouldBe` 1
     map (.ccOutcome) uncaught.cmCalls `shouldBe` ["rejected"]
     outcomeName (codeModeInvocation uncaught).tiOutcome `shouldBe` "failed-before-effect"
@@ -233,7 +242,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     registry <- checked [definition] [runner]
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
-      runJavaScript session noJournal (views registry) "tools.echo({value:1}); throw new Error('after commit');"
+      runJavaScript session noJournal (views registry) "await tools.echo({value:1}); throw new Error('after commit');"
     result.cmExit `shouldSatisfy` trapped
     map (.ccOutcome) result.cmCalls `shouldBe` ["committed"]
     result.cmOutput `shouldBe` Just (object ["error" .= ("Error: after commit" :: Text)])
@@ -313,6 +322,11 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
   where
     code :: Text -> ToolRequest
     code source = ToolRequest "model-code" "run_code" (object ["code" .= source])
+
+objectiveOf :: Value -> Maybe Value
+objectiveOf = \case
+  Object fields -> KM.lookup "objective" fields
+  _ -> Nothing
 
 simple :: Text -> IO CodeModeResult
 simple source = do

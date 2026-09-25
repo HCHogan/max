@@ -57,7 +57,7 @@ runBrowserWithRegistry scope reg proxy = runBrowser $ \operation -> liftIO $ cas
       Just action <- KM.lookup "action" (KM.fromList fields),
       Just ("evaluate" :: Text) <- parseMaybe (withObject "action" (.: "type")) action,
       not (browserScopeIsTask scope) ->
-        pure (Left "evaluate requires a browser task; use task_start profile=browser")
+        pure (Left "evaluate requires a browser agent; use the agent tool with profile=browser")
     | otherwise -> withSession reg scope (methodName method) fields
   where
     methodName SessionSnapshot = "browse_session_snapshot"

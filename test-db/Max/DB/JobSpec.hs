@@ -62,7 +62,7 @@ spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ d
     running <- runningJob pool Basic Map.empty
     (_, _, other) <- seed pool 900 2
     let owner = scope running
-    Right child <- withDb pool . Control.runTaskControl running.jobs owner $ Control.startTask "child" Basic Null
+    Right (Control.StartedTask child) <- withDb pool . Control.runTaskControl running.jobs owner $ Control.startTask (detached "child" Null)
     let steer bound = withDb pool . Control.runTaskControl running.jobs bound $ Control.controlTask child.run.jobId (SteerJob "feedback")
     steer (owner {Control.principal = other}) >>= (`shouldSatisfy` isLeft)
     steer (owner {Control.group = GroupId 901}) >>= (`shouldSatisfy` isLeft)
@@ -71,11 +71,11 @@ spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ d
     steer owner >>= (`shouldSatisfy` isLeft)
 
   it "takes child authority from the bound scope and requires the authenticated source" $ do
-    running <- runningJob pool Sandbox (Map.fromList [("task_start", "v1"), ("sandbox_exec", "v1")])
+    running <- runningJob pool Sandbox (Map.fromList [("agent", "v1"), ("sandbox_exec", "v1")])
     let caller = scope running
-        start bound = withDb pool . Control.runTaskControl running.jobs bound $ Control.startTask "child" Basic (object ["grants" .= object ["sandbox_exec" .= ("forged" :: Text)]])
-    Right child <- start caller
-    child.spec.grants `shouldBe` Map.singleton "task_start" "v1"
+        start bound = withDb pool . Control.runTaskControl running.jobs bound $ Control.startTask (detached "child" (object ["grants" .= object ["sandbox_exec" .= ("forged" :: Text)]]))
+    Right (Control.StartedTask child) <- start caller
+    child.spec.grants `shouldBe` Map.singleton "agent" "v1"
     child.spec.parent `shouldBe` Just running.job.run
     (_, otherSource, _) <- seed pool 901 2
     start (caller {Control.source = otherSource}) >>= (`shouldSatisfy` isLeft)
@@ -88,7 +88,7 @@ spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ d
     withDb pool (Progress.runTaskExecution running.jobs Nothing (Progress.reportProgress "no caller")) >>= (`shouldSatisfy` isLeft)
     withDb pool (Progress.runTaskExecution running.jobs (Just running.turn.atrTurnId) (Progress.reportProgress "latest progress")) `shouldReturn` Right ()
     void (cancelAgentTurnTask running.tasks running.turn.atrTurnId)
-    withDb pool (Control.runTaskControl running.jobs (scope running) (Control.startTask "late" Basic Null)) >>= (`shouldSatisfy` isLeft)
+    withDb pool (Control.runTaskControl running.jobs (scope running) (Control.startTask (detached "late" Null))) >>= (`shouldSatisfy` isLeftOutcome)
 
   it "blocks background output and keeps progress off the shared publisher" $ do
     running <- runningJob pool Basic Map.empty
@@ -120,3 +120,11 @@ scope running = Control.TaskControlScope running.job.spec.group (Just running.tu
 publicationFailed :: PublicationResult -> Bool
 publicationFailed PublicationFailed {} = True
 publicationFailed _ = False
+
+detached :: Text -> Value -> Control.TaskRequest
+detached objective inputs = Control.TaskRequest objective Basic inputs Nothing False
+
+isLeftOutcome :: Either Text Control.StartOutcome -> Bool
+isLeftOutcome = \case
+  Left _ -> True
+  Right _ -> False

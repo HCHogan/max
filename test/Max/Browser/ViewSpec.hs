@@ -121,5 +121,5 @@ spec = describe "browser view and surface" $ do
     case runners of
       browser : _ ->
         runEff (do queue <- newToolOutputQueue 0; runToolOutput queue (toolRun browser (object ["action" .= ("evaluate" :: String), "expression" .= ("1+1" :: String)])))
-          >>= (`shouldSatisfy` either (T.isInfixOf "requires a browser task") (const False))
+          >>= (`shouldSatisfy` either (T.isInfixOf "requires a browser agent") (const False))
       [] -> expectationFailure "missing browser runner"

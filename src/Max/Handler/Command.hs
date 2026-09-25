@@ -81,7 +81,10 @@ routeTaskInput ::
   DispatchMessage -> Eff es Bool
 routeTaskInput message = do
   let body = T.strip (dispatchTextWithoutSelf message)
-      pieces = T.words body
+      -- !agent is the command's name; !task still works.
+      pieces = case T.words body of
+        "!agent" : rest -> "!task" : rest
+        other -> other
       reply value = replyText message (T.take 16000 (encodeText value)) >> pure True
       mutate identifier operation note = do
         env :: BotEnv <- ask
@@ -107,7 +110,7 @@ routeTaskInput message = do
       | operation `elem` ["steer", "cancel"],
         Just identifier <- parseTaskHandle handle ->
           mutate identifier (if operation == "steer" then SteerJob else CancelJob) (if null note && operation == "cancel" then "cancelled by user" else T.unwords note)
-    "!task" : _ -> replyText message "用法：!task list | status task#N | steer task#N 内容 | cancel task#N [原因] | replace task#N 新目标" >> pure True
+    "!task" : _ -> replyText message "用法：!agent list | status agent#N | steer agent#N 内容 | cancel agent#N [原因] | replace agent#N 新目标" >> pure True
     command : handle : note
       | command `elem` ["!feedback", "!fb"],
         Just identifier <- parseTaskHandle handle ->

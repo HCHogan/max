@@ -1,5 +1,9 @@
 # ADR-015: Delegated agents inside workflows
 
+> Amended by [ADR-016](016-agent-tool-and-native-await.md): `agent()` is now the
+> ordinary `agent` tool with `wait`, calls use native `await`, and the foreground
+> may wait too. The host primitive described below no longer exists.
+
 > Historical design. The September 19 [simplification](../simplification.md)
 > replaces task leases, restart continuation and automatic browser checkpoints
 > with process-owned Jobs. See [current job operations](../runbooks/jobs.md).

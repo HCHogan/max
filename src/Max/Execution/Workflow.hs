@@ -1,20 +1,15 @@
 {-# LANGUAGE RankNTypes #-}
 
--- | Host capabilities available to the guest adapter. Assembly binds these to
--- one active job; the guest cannot choose a task, actor or generation.
+-- | Host policy for the guest adapter, bound by assembly to one active turn.
+-- Task starts, waits and progress are ordinary tools; the host only decides
+-- whether this turn may run code at all.
 module Max.Execution.Workflow (WorkflowHost (..), hoistWorkflowHost) where
 
-import Data.Aeson (Value)
-import Data.Text (Text)
 import Effectful (Eff)
-import Max.Tool.Types (ToolInvocation)
 
-data WorkflowHost es = WorkflowHost
-  { whAllowed :: Eff es Bool,
-    whAgent :: Value -> Eff es ToolInvocation,
-    whPhase :: Text -> Eff es ToolInvocation,
-    whParallel :: Bool
-  }
+-- | False for a leaf worker (a task started with wait, or one of its
+-- descendants), which runs the ordinary agent loop without run_code.
+newtype WorkflowHost es = WorkflowHost {whAllowed :: Eff es Bool}
 
 hoistWorkflowHost :: (forall a. Eff es a -> Eff target a) -> WorkflowHost es -> WorkflowHost target
-hoistWorkflowHost lower host = WorkflowHost (lower host.whAllowed) (lower . host.whAgent) (lower . host.whPhase) host.whParallel
+hoistWorkflowHost lower host = WorkflowHost (lower host.whAllowed)

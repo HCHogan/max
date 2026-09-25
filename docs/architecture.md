@@ -768,11 +768,14 @@ under timeout races; they are not thread-local state.
 
 `Turn.Start` distinguishes foreground input, background Jobs and result notices.
 A root Job's result notice runs as an ordinary frontend turn with the report as
-host-authored `[task report]` evidence, including a usage line: model calls,
+host-authored `[agent report]` evidence, including a usage line: model calls,
 tokens, wall time from admission, and estimated cost. Each completion attributed
 to a Job's turn is booked on that Job and all its ancestors, so a root's line
 covers its whole tree. The relay ends with that line verbatim; if the turn
 delivers nothing, the report and usage line are published, quoting the request.
+A root admitted by `agent` with `wait` from a foreground turn is awaited by that
+turn: its report returns to the call, and only if the turn stops waiting, or
+had already ended when the job finished, does it fall back to the relay.
 An automation fire's Job runs as an ordinary foreground turn and settles on its outcome.
 Jobs serialize feedback, replacement and cancellation through STM under group and
 principal checks. Fresh persisted messages enter the bounded ingress queue;

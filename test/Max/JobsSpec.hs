@@ -155,6 +155,51 @@ spec = describe "process-owned Jobs" $ do
     notes <- readJobInbox jobs (AgentTurnId 1)
     notes `shouldBe` [object ["child_update" .= cancelled]]
 
+  it "returns an awaited root's report to the waiting turn instead of a relay notice" $ do
+    (tasks, jobs, request) <- fixture
+    caller <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
+    Right admitted <- admitJob jobs (Just (AgentTurnId 99)) 1 (request {awaited = True, delegated = True})
+    LaunchJob job <- takeJobWork jobs
+    withAsync (awaitJob jobs (AgentTurnId 99) admitted.run) $ \waiting -> do
+      completeJob jobs job.run Succeeded (JobResult "report" Nothing)
+      Right finished <- wait waiting
+      finished.result `shouldBe` Just (JobResult "report" Nothing)
+    timeout 20_000 (takeJobWork jobs) `shouldReturn` Nothing
+    finishTurnRuntime tasks caller
+
+  it "relays a report its waiter collected only after the report was ready" $ do
+    (tasks, jobs, request) <- fixture
+    caller <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
+    Right admitted <- admitJob jobs (Just (AgentTurnId 99)) 1 (request {awaited = True})
+    LaunchJob job <- takeJobWork jobs
+    completeJob jobs job.run Succeeded (JobResult "ready" Nothing)
+    timeout 20_000 (takeJobWork jobs) `shouldReturn` Nothing
+    _ <- cancelAgentTurnTask tasks (AgentTurnId 99)
+    awaitJob jobs (AgentTurnId 99) admitted.run `shouldThrow` (\TaskCancelled -> True)
+    PublishJobNotice noticed _ body <- takeJobWork jobs
+    (noticed.run, body) `shouldBe` (admitted.run, "ready")
+    finishTurnRuntime tasks caller
+
+  it "relays an awaited root's report once its waiter stops waiting" $ do
+    (tasks, jobs, request) <- fixture
+    caller <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
+    Right first <- admitJob jobs (Just (AgentTurnId 99)) 1 (request {awaited = True})
+    Right second <- admitJob jobs (Just (AgentTurnId 99)) 2 (request {awaited = True})
+    LaunchJob running <- takeJobWork jobs
+    LaunchJob _ <- takeJobWork jobs
+    -- Abandoned while running: the report is relayed when it arrives.
+    withAsync (awaitJob jobs (AgentTurnId 99) first.run) $ \waiting -> do
+      cancelAgentTurnTask tasks (AgentTurnId 99) `shouldReturn` True
+      wait waiting `shouldThrow` (\TaskCancelled -> True)
+    completeJob jobs running.run Succeeded (JobResult "late report" Nothing)
+    PublishJobNotice noticed _ body <- takeJobWork jobs
+    (noticed.run, body) `shouldBe` (first.run, "late report")
+    -- Its waiter ended without ever waiting: relayed as soon as it finishes.
+    completeJob jobs second.run Succeeded (JobResult "unread report" Nothing)
+    PublishJobNotice unread _ text <- takeJobWork jobs
+    (unread.run, text) `shouldBe` (second.run, "unread report")
+    finishTurnRuntime tasks caller
+
   it "cancels descendants before signalling and stops old work after replacement" $ do
     (tasks, jobs, request) <- fixture
     (root, runtime) <- launch tasks jobs 1 request
@@ -290,6 +335,7 @@ fixture = do
           parent = Nothing,
           contract = Nothing,
           delegated = False,
+          awaited = False,
           monitor = Nothing,
           browserProfile = Nothing,
           deadline = addUTCTime 3600 now

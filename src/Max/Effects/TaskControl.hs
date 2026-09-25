@@ -1,12 +1,12 @@
 {-# LANGUAGE TypeFamilies #-}
 
 -- | Mutations are bound to the authenticated turn; tools cannot choose an actor.
-module Max.Effects.TaskControl (TaskControl, TaskControlScope (..), startTask, controlTask, waitTasks, runTaskControl) where
+module Max.Effects.TaskControl (TaskControl, TaskControlScope (..), TaskRequest (..), StartOutcome (..), startTask, controlTask, waitTasks, runTaskControl) where
 
 import Data.Aeson (Value)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Time (addUTCTime, getCurrentTime)
 import Effectful
@@ -18,6 +18,7 @@ import Max.DB.Transaction (withTransaction)
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Jobs qualified as Jobs
 import Max.Platform.Types (CanonicalMessageId, PrincipalId)
+import Max.Skill.Contract (Contract)
 import Max.Task.Types
 import Max.Turn.Types (AgentTurnRef (..))
 import OneBot.Types (GroupId)
@@ -30,15 +31,33 @@ data TaskControlScope = TaskControlScope
     grants :: !(Map Text Text)
   }
 
+-- | One task_start call. With @wait@, the call returns the finished job; the
+-- child is then a leaf worker that cannot run code itself.
+data TaskRequest = TaskRequest
+  { objective :: !Text,
+    profile :: !TaskProfile,
+    inputs :: !Value,
+    contract :: !(Maybe Contract),
+    wait :: !Bool
+  }
+
+data StartOutcome
+  = StartedTask !JobView
+  | FinishedTask !JobView
+  | -- | Feedback reached a waiting background job: the child, if one was
+    -- started, keeps running and the parent reads its inbox first.
+    FeedbackFirst !(Maybe JobView)
+  deriving stock (Show)
+
 data TaskControl :: Effect where
-  StartTask :: Text -> TaskProfile -> Value -> TaskControl m (Either Text JobView)
+  StartTask :: TaskRequest -> TaskControl m (Either Text StartOutcome)
   ControlTask :: Int64 -> JobCommand -> TaskControl m (Either Text ())
   WaitTasks :: [Int64] -> TaskControl m (Either Text JobWait)
 
 type instance DispatchOf TaskControl = Dynamic
 
-startTask :: (TaskControl :> es) => Text -> TaskProfile -> Value -> Eff es (Either Text JobView)
-startTask objective profile inputs = send (StartTask objective profile inputs)
+startTask :: (TaskControl :> es) => TaskRequest -> Eff es (Either Text StartOutcome)
+startTask = send . StartTask
 
 controlTask :: (TaskControl :> es) => Int64 -> JobCommand -> Eff es (Either Text ())
 controlTask identifier command = send (ControlTask identifier command)
@@ -48,11 +67,26 @@ waitTasks = send . WaitTasks
 
 runTaskControl :: forall es a. (WithConnection :> es, IOE :> es) => Jobs.Jobs -> TaskControlScope -> Eff (TaskControl : es) a -> Eff es a
 runTaskControl jobs scope = interpret $ \_ -> \case
-  StartTask objective profile inputs -> withCaller $ \turn -> do
+  StartTask request -> withCaller $ \turn -> do
     parent <- liftIO (Jobs.jobForTurn jobs turn.atrTurnId)
-    now <- liftIO getCurrentTime
-    let spec = JobSpec scope.group scope.principal scope.source objective profile (taskGrants profile scope.grants) inputs ((.run) <$> parent) Nothing False Nothing Nothing (addUTCTime 21600 now)
-    admitFromTurn jobs turn spec
+    -- A waiting job reads new feedback before it starts more work.
+    pending <- if request.wait && isJust parent then liftIO (Jobs.jobHasFeedback jobs turn.atrTurnId) else pure False
+    if pending
+      then pure (Right (FeedbackFirst Nothing))
+      else do
+        now <- liftIO getCurrentTime
+        let spec = JobSpec scope.group scope.principal scope.source request.objective request.profile (taskGrants request.profile scope.grants) request.inputs ((.run) <$> parent) request.contract request.wait request.wait Nothing Nothing (addUTCTime 21600 now)
+        admitFromTurn jobs turn spec >>= \case
+          Left failure -> pure (Left failure)
+          Right started
+            | not request.wait -> pure (Right (StartedTask started))
+            | isJust parent ->
+                liftIO (Jobs.waitForChildren jobs turn.atrTurnId [started.run.jobId]) >>= \case
+                  Right (ChildrenFinished [finished]) -> pure (Right (FinishedTask finished))
+                  Right FeedbackPending -> Right . FeedbackFirst . Just . fromMaybe started <$> liftIO (Jobs.lookupJob jobs scope.group started.run.jobId)
+                  Right _ -> pure (Left "child result unavailable")
+                  Left failure -> pure (Left failure)
+            | otherwise -> fmap FinishedTask <$> liftIO (Jobs.awaitJob jobs turn.atrTurnId started.run)
   ControlTask identifier command -> withCaller $ \turn -> do
     parent <- liftIO (Jobs.jobForTurn jobs turn.atrTurnId)
     target <- liftIO (Jobs.lookupJob jobs scope.group identifier)

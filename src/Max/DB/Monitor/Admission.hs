@@ -126,7 +126,7 @@ admitMonitorTaskWithin occurrence next grants seed = do
                       let group = case groups of [Only value] -> GroupId value; _ -> error "monitor conversation disappeared"
                           contract = if snapshot.changeOnly then Just observationContract else Nothing
                           profile = (,) <$> snapshot.browserProfile <*> snapshot.browserVersion
-                          spec = JobSpec group (PrincipalId actor) (CanonicalMessageId seed) snapshot.goal snapshot.profile grants inputs Nothing contract False (Just (JobMonitor fire.monitor occurrence)) profile (addUTCTime 3000 now)
+                          spec = JobSpec group (PrincipalId actor) (CanonicalMessageId seed) snapshot.goal snapshot.profile grants inputs Nothing contract False False (Just (JobMonitor fire.monitor occurrence)) profile (addUTCTime 3000 now)
                       void $
                         execute
                           "UPDATE monitor_fires SET admission_state='dispatched',dispatched_at=now(),task_id=?,disposition='task' WHERE fire_id=?"

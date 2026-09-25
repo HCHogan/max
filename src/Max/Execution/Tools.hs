@@ -11,7 +11,6 @@ module Max.Execution.Tools
     hoistExecutionHooks,
     freshExecutionLabel,
     executeToolBatch,
-    executeHostBatch,
     withExecutionRecord,
     outcomeName,
     outcomeEnvelope,
@@ -23,8 +22,6 @@ import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Foldable (for_)
 import Data.List (find)
-import Data.Map.Strict (Map)
-import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -140,21 +137,12 @@ data ToolBatch = ToolBatch
 -- | A batch owns the scheduling gate, including settlement. Its unused local
 -- reservations are released even when admission or a sibling is interrupted.
 executeToolBatch :: (Tools :> es, Concurrent :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
-executeToolBatch session hooks catalog = executeBatch False invoke session hooks catalog
+executeToolBatch session hooks catalog = executeBatch invoke session hooks catalog
   where
     invoke request = invokeToolWithControl request.trName request.trArguments
 
--- Host callbacks share tool admission and budgets. Independent child waits may
--- overlap; ordinary tools retain their catalog parallelism policy.
-executeHostBatch :: (Tools :> es, Concurrent :> es) => Bool -> Map Text (Value -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
-executeHostBatch independent handlers = executeBatch independent invoke
-  where
-    invoke request = case Map.lookup request.trName handlers of
-      Just handler -> handler request.trArguments
-      Nothing -> invokeToolWithControl request.trName request.trArguments
-
-executeBatch :: (Concurrent :> es) => Bool -> (ToolRequest -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
-executeBatch independent invoke session hooks catalog requests =
+executeBatch :: (Concurrent :> es) => (ToolRequest -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
+executeBatch invoke session hooks catalog requests =
   bracket_ (takeMVar session.batchLock) (putMVar session.batchLock ()) $ mask $ \restoreBatch -> do
     hooks.ehCheck
     let view request = find ((== ToolRef request.trName) . (.ctDefinition.tdRef)) catalog
@@ -190,7 +178,7 @@ executeBatch independent invoke session hooks catalog requests =
                   Just _ -> invoke request
                 pure ((), result)
               pure invocation
-        invocations <- restoreBatch (if independent || all canParallel requests then mapConcurrently execute requests else traverse execute requests) `finally` release
+        invocations <- restoreBatch (if all canParallel requests then mapConcurrently execute requests else traverse execute requests) `finally` release
         pure (ToolBatch invocations False)
 
 -- | Admission is local. Record the outcome after the cancellable body; a

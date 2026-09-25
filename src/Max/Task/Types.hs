@@ -20,6 +20,7 @@ module Max.Task.Types
   )
 where
 
+import Control.Applicative ((<|>))
 import Data.Aeson (ToJSON (..), Value, object, (.=))
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
@@ -71,11 +72,11 @@ taskGrants profile parent = Map.filterWithKey (\name _ -> name `elem` allowed) p
         "view_avatar",
         "view_bilibili",
         "use_skill",
-        "task_start",
-        "task_status",
-        "task_list",
-        "task_steer",
-        "task_wait"
+        "agent",
+        "agent_status",
+        "agent_list",
+        "agent_steer",
+        "agent_wait"
       ]
         <> case profile of
           Basic -> []
@@ -90,11 +91,13 @@ taskGrants profile parent = Map.filterWithKey (\name _ -> name `elem` allowed) p
             ]
 
 taskHandle :: Int64 -> Text
-taskHandle identifier = "task#" <> T.pack (show identifier)
+taskHandle identifier = "agent#" <> T.pack (show identifier)
 
+-- | History from before the rename still names agents task#N.
 parseTaskHandle :: Text -> Maybe Int64
 parseTaskHandle raw = do
-  digits <- T.stripPrefix "task#" (T.strip raw)
+  let stripped = T.strip raw
+  digits <- T.stripPrefix "agent#" stripped <|> T.stripPrefix "task#" stripped
   if T.null digits || T.any (\character -> character < '0' || character > '9') digits
     then Nothing
     else do
@@ -119,6 +122,9 @@ data JobSpec = JobSpec
     parent :: !(Maybe JobRun),
     contract :: !(Maybe Contract),
     delegated :: !Bool,
+    -- | The admitting call waits for the report (task_start with wait). A
+    -- root's report then returns to that turn instead of a relay notice.
+    awaited :: !Bool,
     monitor :: !(Maybe JobMonitor),
     browserProfile :: !(Maybe (Int64, Int64)),
     deadline :: !UTCTime
@@ -243,7 +249,7 @@ money (currency, amount) = case T.toUpper currency of
 instance ToJSON JobView where
   toJSON job =
     object
-      [ "task" .= taskHandle job.run.jobId,
+      [ "agent" .= taskHandle job.run.jobId,
         "objective" .= job.spec.objective,
         "profile" .= profileName job.spec.profile,
         "owner" .= job.spec.principal,

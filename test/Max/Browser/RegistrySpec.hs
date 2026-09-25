@@ -102,7 +102,7 @@ spec = describe "withBrowserSession" $ do
     sent `shouldSatisfy` (not . BS8.isInfixOf "foreign-page")
     let action kind = "action" .= object ["type" .= (kind :: String)]
     request SessionAction [action "click", action "evaluate"]
-      `shouldReturn` Left "evaluate requires a browser task; use task_start profile=browser"
+      `shouldReturn` Left "evaluate requires a browser agent; use the agent tool with profile=browser"
     BS8.concat <$> readIORef writes `shouldReturn` sent
 
   it "keeps failed foreground cleanup fenced and retries closure without replaying tools" $ do

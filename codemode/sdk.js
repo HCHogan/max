@@ -35,6 +35,36 @@
     return {tool, args};
   }
 
+  // Calls queue as pending promises. When no job can run, the guest's event
+  // loop calls flush, which submits every queued call as one host batch (the
+  // host runs it concurrently where tool metadata allows) and resolves them.
+  // So calls started together, e.g. under Promise.all, run together.
+  const queue = [];
+  const flush = () => {
+    if (!queue.length) return false;
+    const pending = queue.splice(0, 32);
+    let replies;
+    try {
+      replies = pending.length === 1 ? [exchange(pending[0].request)] : exchange({calls: pending.map(entry => entry.request)});
+    } catch (error) {
+      for (const entry of pending) entry.reject(error);
+      return true;
+    }
+    pending.forEach((entry, index) => entry.resolve(replies[index]));
+    return true;
+  };
+  Object.defineProperty(globalThis, "__maxFlush", {value: flush});
+
+  // A tool result used without await is a Promise; say so instead of
+  // letting a field read quietly produce undefined.
+  const awaitable = promise =>
+    new Proxy(promise, {
+      get(target, key) {
+        if (key === "then" || key === "catch" || key === "finally") return target[key].bind(target);
+        throw new TypeError("tool calls return a Promise; await the result first (const r = await tools.name(args))");
+      }
+    });
+
   function value(outcome) {
     if (outcome.outcome === "succeeded" || outcome.outcome === "committed") return outcome.value;
     const error = new Error(outcome.error.message);
@@ -45,24 +75,27 @@
     throw error;
   }
 
-  const raw = (tool, args = {}) => exchange(request(tool, args));
-  const agentRequest = args => {
-    if (!allowed.has("task_start")) throw new TypeError("agent requires task_start in the workflow catalog");
+  const submit = call => new Promise((resolve, reject) => queue.push({request: call, resolve, reject}));
+  const raw = (tool, args = {}) => awaitable(submit(request(tool, args)));
+  const call = (tool, args = {}) => awaitable(submit(request(tool, args)).then(value));
+  // agent() is the agent tool waiting for its report; phase() is agent_progress.
+  const agentArgs = args => {
     if (!args || typeof args !== "object" || Array.isArray(args)) throw new TypeError("agent arguments must be an object");
-    return {agent: args};
+    return {...args, wait: true};
   };
-  const agent = args => value(exchange(agentRequest(args)));
+  const agent = args => call("agent", agentArgs(args));
   const phase = summary => {
-    if (!allowed.has("task_progress")) throw new TypeError("phase requires task_progress in the workflow catalog");
     if (typeof summary !== "string") throw new TypeError("phase requires a string");
-    return value(exchange({phase: summary}));
+    return call("agent_progress", {summary});
   };
   const tools = Object.create(null);
-  for (const name of names) tools[name] = (args = {}) => value(raw(name, args));
+  for (const name of names) tools[name] = (args = {}) => call(name, args);
+  // Kept for existing programs: the same as Promise.all over max.raw.
   const batch = calls => {
     if (!Array.isArray(calls) || calls.length < 1 || calls.length > 32)
       throw new RangeError("batch requires 1 to 32 calls");
-    return exchange({calls: calls.map(call => call.agent ? agentRequest(call.agent) : request(call.tool, call.args ?? {}))});
+    const requests = calls.map(entry => (entry.agent ? request("agent", agentArgs(entry.agent)) : request(entry.tool, entry.args ?? {})));
+    return awaitable(Promise.all(requests.map(submit)));
   };
   Object.defineProperties(globalThis, {
     tools: {value: Object.freeze(tools)},

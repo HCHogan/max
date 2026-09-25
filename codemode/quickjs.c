@@ -123,20 +123,33 @@ void _start(void) {
   JS_SetHostPromiseRejectionTracker(runtime, track_rejection, &unhandled);
   JSValue global = JS_GetGlobalObject(ctx);
   JS_SetPropertyStr(ctx, global, "__maxCall", JS_NewCFunction(ctx, host_call, "__maxCall", 1));
-  JS_FreeValue(ctx, global);
   JSValue result = JS_Eval(ctx, source, (size_t)size, "<codemode>", JS_EVAL_TYPE_GLOBAL);
   free(source);
   if (JS_IsException(result)) fail(ctx, JS_GetException(ctx));
-  if (JS_IsPromise(result)) {
-    JS_PromiseMarkAsHandled(ctx, result);
-    /* No timers or external events: pending with no jobs cannot make progress.
-       Drain jobs before publication so queued effects/errors are not dropped. */
+  /* The SDK defines __maxFlush non-writable before the program runs. */
+  JSValue flush = JS_GetPropertyStr(ctx, global, "__maxFlush");
+  JS_FreeValue(ctx, global);
+  if (!JS_IsFunction(ctx, flush)) fail(ctx, JS_NewString(ctx, "SDK event loop missing"));
+  if (JS_IsPromise(result)) JS_PromiseMarkAsHandled(ctx, result);
+  /* The event loop. Tool calls only queue; once no job can run, the SDK
+     submits everything queued as one host batch and resolves it. There are
+     no timers or other events, so idle with nothing queued is final. Calls
+     queued but never awaited still run before the result is published. */
+  for (;;) {
     JSContext *job_ctx;
     int status;
     while ((status = JS_ExecutePendingJob(runtime, &job_ctx)) > 0) {}
     if (status < 0) fail(job_ctx, JS_GetException(job_ctx));
+    JSValue flushed = JS_Call(ctx, flush, JS_UNDEFINED, 0, NULL);
+    if (JS_IsException(flushed)) fail(ctx, JS_GetException(ctx));
+    int progressed = JS_ToBool(ctx, flushed);
+    JS_FreeValue(ctx, flushed);
+    if (!progressed) break;
+  }
+  JS_FreeValue(ctx, flush);
+  if (JS_IsPromise(result)) {
     JSPromiseStateEnum state = JS_PromiseState(ctx, result);
-    if (state == JS_PROMISE_PENDING) fail(ctx, JS_NewString(ctx, "unresolved promise: no external event loop"));
+    if (state == JS_PROMISE_PENDING) fail(ctx, JS_NewString(ctx, "unresolved promise: nothing left to wait for"));
     JSValue value = JS_PromiseResult(ctx, result);
     JS_FreeValue(ctx, result);
     result = value;

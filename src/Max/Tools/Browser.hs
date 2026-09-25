@@ -143,7 +143,7 @@ browserTool canEvaluate =
               _
                 | action `elem` ["read", "find", "links", "forms", "screenshot", "dialog", "collect"] ->
                     Right (sessionRequest SessionInspect (("action" .= action) : limits <> passThrough args ["selector", "frame", "mode", "offset", "query", "response", "promptText", "maxScrolls", "waitMs", "timeout"]))
-              "evaluate" | not canEvaluate -> Left "evaluate requires a browser task; use task_start profile=browser"
+              "evaluate" | not canEvaluate -> Left "evaluate requires a browser agent; use the agent tool with profile=browser"
               "wait_for" | null (passThrough args ["selector", "loadState"]) -> Left "wait_for requires selector or loadState"
               _
                 | action `elem` ["click", "fill", "type", "press", "hover", "select", "scroll", "wait_for", "evaluate"] ->

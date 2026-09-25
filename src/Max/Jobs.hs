@@ -14,6 +14,7 @@ module Max.Jobs
     attachJobTurn,
     detachJobTurn,
     completeJob,
+    awaitJob,
     recordJobUsage,
     reportJobProgress,
     readJobInbox,
@@ -40,6 +41,7 @@ module Max.Jobs
 where
 
 import Control.Concurrent.STM
+import Control.Exception (mask, onException)
 import Control.Monad (forM_, unless, void, when)
 import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteString.Lazy qualified as LBS
@@ -80,7 +82,9 @@ data Entry = Entry
     pendingNotice :: !(Maybe Text),
     pendingMonitor :: !Bool,
     noticeInFlight :: !Bool,
-    budgetExhausted :: !Bool
+    budgetExhausted :: !Bool,
+    -- | The foreground turn waiting for this awaited root's report.
+    awaiter :: !(Maybe AgentTurnId)
   }
 
 data Jobs = Jobs
@@ -103,7 +107,7 @@ admitJob jobs caller identifier requested = do
     closing <- readTVar jobs.closed
     allowed <- maybe (pure True) (turnIsLive jobs.tasks) caller
     current <- readTVar jobs.entries
-    let retained job = taskIsLive job.view.status || isJust job.runtime || job.pendingMonitor || job.noticeInFlight || isJust job.pendingNotice || maybe False (liveRun current) job.view.spec.parent
+    let retained job = taskIsLive job.view.status || isJust job.runtime || job.pendingMonitor || job.noticeInFlight || isJust job.pendingNotice || isJust job.awaiter || maybe False (liveRun current) job.view.spec.parent
         completed = sortOn (Down . (.view.created)) (filter (not . retained) (Map.elems current))
         kept = Map.filter retained current <> Map.fromList [(entry.view.run.jobId, entry) | entry <- take 256 completed]
         parents = ancestors kept requested.parent
@@ -113,7 +117,8 @@ admitJob jobs caller identifier requested = do
         run = JobRun identifier 1
         root = maybe run (.root) (lookupRun kept =<< spec.parent)
         view = JobView run spec Queued Nothing Nothing 0 0 now True emptyJobUsage Nothing
-        newEntry = Entry view root Nothing Set.empty Set.empty Seq.empty 0 Nothing False False False
+        awaiter = if spec.awaited && isNothing spec.parent then caller else Nothing
+        newEntry = Entry view root Nothing Set.empty Set.empty Seq.empty 0 Nothing False False False awaiter
         invalid detail = pure (Left detail)
     if closing || not allowed || Map.member identifier current
       then invalid "job caller ended or identity already exists"
@@ -188,12 +193,15 @@ completeJob jobs run status result = do
     entries <- readTVar jobs.entries
     case lookupRun entries run of
       Just entry | taskIsLive entry.view.status && not (taskIsLive status) -> do
+        -- A waiter that already ended cannot collect the report; relay it.
+        waiting <- maybe (pure False) (turnIsLive jobs.tasks) entry.awaiter
         let (stopped, turns) = stopChildren now entries entry.children "parent job ended"
             completed =
               entry
                 { view = entry.view {status = if entry.budgetExhausted then BudgetExhausted else status, result = Just result, finished = Just now},
                   noticeVersion = entry.noticeVersion + 1,
-                  pendingNotice = if isNothing entry.view.spec.parent && isNothing entry.view.spec.monitor then Just result.text else Nothing,
+                  pendingNotice = if isNothing entry.view.spec.parent && isNothing entry.view.spec.monitor && not waiting then Just result.text else Nothing,
+                  awaiter = if waiting then entry.awaiter else Nothing,
                   pendingMonitor = isJust entry.view.spec.monitor
                 }
             notify parent = parent {childUpdates = Set.insert run parent.childUpdates}
@@ -202,6 +210,36 @@ completeJob jobs run status result = do
         pure turns
       _ -> pure []
   stopTurns jobs cancelled
+
+-- | A foreground turn waits for a root it admitted with @awaited@; the report
+-- returns here instead of through a relay notice. If the turn stops waiting
+-- first (cancelled, timed out, or the objective was replaced), the job becomes
+-- an ordinary root again, so its report is still relayed.
+awaitJob :: Jobs -> AgentTurnId -> JobRun -> IO (Either Text JobView)
+awaitJob jobs turn run = mask $ \restore -> restore waitReport `onException` atomically release
+  where
+    waitReport = atomically $ do
+      live <- turnIsLive jobs.tasks turn
+      unless live (throwSTM TaskCancelled)
+      entries <- readTVar jobs.entries
+      case Map.lookup run.jobId entries of
+        Just entry
+          | entry.awaiter /= Just turn -> pure (Left "this turn is not waiting for that job")
+          | entry.view.run /= run -> release >> pure (Left "the job's objective was replaced; its report will be relayed")
+          | taskIsLive entry.view.status -> retry
+          | otherwise -> do
+              writeTVar jobs.entries (Map.insert run.jobId entry {awaiter = Nothing} entries)
+              pure (Right entry.view)
+        Nothing -> pure (Left "job not found")
+    release = do
+      closing <- readTVar jobs.closed
+      modifyTVar' jobs.entries (Map.adjust (detach closing) run.jobId)
+    -- A report nobody collected is relayed like any root's, unless the job
+    -- was cancelled or shutdown already owns its notice.
+    detach closing entry
+      | entry.awaiter /= Just turn = entry
+      | taskIsLive entry.view.status || closing || entry.view.status == Cancelled = entry {awaiter = Nothing}
+      | otherwise = entry {awaiter = Nothing, pendingNotice = (.text) <$> entry.view.result}
 
 -- | Book one completion against the job whose turn made it and every
 -- ancestor, so a root's report covers its whole tree.

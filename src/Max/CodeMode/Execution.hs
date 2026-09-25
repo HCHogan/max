@@ -33,9 +33,7 @@ import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Either (fromRight)
 import Data.Foldable (toList)
-import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust)
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -46,8 +44,6 @@ import Max.CodeMode.Wasm
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools
 import Max.Execution.Types
-import Max.Execution.Workflow
-import Max.Schema (unconstrainedSchema)
 import Max.Skill.Contract (Contract, validateValue)
 import Max.Tool.Control
   ( LoopControl (..),
@@ -143,21 +139,14 @@ runWasmProgram session hooks catalog limits program = do
       invoke restore many calls = do
         requests <- traverse (\(name, args) -> (\call -> ToolRequest call name args) <$> freshExecutionLabel session (label <> "/call")) calls
         liftIO . atomically $ modifyTVar' submitted (+ length requests)
-        let hasHost = any ((`elem` [agentName, phaseName]) . (.trName)) requests
-            sourceFingerprint = digest (wire program.wpEvidence)
-            boundHooks = hooks {ehStart = \step entry -> hooks.ehStart step (if entry.jsToolRef == agentName then entry {jsInput = object ["args" .= entry.jsInput, "source_fingerprint" .= sourceFingerprint, "workflow" .= program.wpWorkflow]} else entry)}
-            missing = pure (ToolInvocation (ToolRejected (ToolFault "agent_requires_job" "agent and phase require a job host" RetrySafe)) ContinueLoop)
-            handlers =
-              Map.fromList
-                [ (agentName, \args -> if any ((== ToolRef "task_start") . (.ctDefinition.tdRef)) catalog then maybe missing (\host -> host.whAgent args) hooks.ehWorkflow else missing),
-                  (phaseName, \case String summary | any ((== ToolRef "task_progress") . (.ctDefinition.tdRef)) catalog -> maybe missing (\host -> host.whPhase summary) hooks.ehWorkflow; _ -> missing)
-                ]
-        batch <- restore (if hasHost then executeHostBatch (maybe False (.whParallel) hooks.ehWorkflow && all ((== agentName) . (.trName)) requests) handlers session boundHooks (catalog <> hostCatalog) requests else executeToolBatch session hooks catalog requests)
+        batch <- restore (executeToolBatch session hooks catalog requests)
         liftIO . atomically $ do
           modifyTVar' receipts (reverse [CodeModeCall req.trCallId req.trName (outcomeName invocation.tiOutcome) | (req, invocation) <- zip requests batch.tbInvocations] <>)
           modifyTVar' decisions (\previous -> mergeControls (previous : map (.tiControl) batch.tbInvocations))
           modifyTVar' exhausted (|| batch.tbOverBudget)
-        let boundary = any (\(request, invocation) -> request.trName == agentName && steeringOutcome invocation.tiOutcome) (zip requests batch.tbInvocations)
+        -- A waiting agent call that returns because feedback arrived stops the
+        -- program here, so the job's next model round reads its inbox.
+        let boundary = any (\(request, invocation) -> request.trName == "agent" && feedbackPending invocation.tiOutcome) (zip requests batch.tbInvocations)
         if boundary
           then do
             liftIO . atomically $ writeTVar interrupted (Just (toJSON (map (outcomeEnvelope . (.tiOutcome)) batch.tbInvocations)))
@@ -189,23 +178,13 @@ runWasmProgram session hooks catalog limits program = do
   where
     digest = TE.decodeUtf8 . Base16.encode . SHA256.hash
 
-agentName, phaseName :: Text
-agentName = "host:workflow_agent/v1"
-phaseName = "host:workflow_phase/v1"
-
--- Internal callback metadata is not added to the model's tool catalog. Only
--- the host's agent batch may overlap queue-and-join callbacks; direct tool
--- writes keep the existing SequentialOnly policy.
-hostCatalog :: [CatalogTool]
-hostCatalog =
-  [ CatalogTool (ToolDefinition (ToolRef name) (SchemaVersion 1) (Set.singleton (EffectWrite "task")) SequentialOnly RetryIdempotent (Set.singleton CurrentConversation) (ToolDeadline 21600) False mode) "workflow host primitive" unconstrainedSchema (SchemaHash name)
-  | (name, mode) <- [(agentName, WorkCall), (phaseName, CheckpointCall)]
-  ]
-
-steeringOutcome :: ToolOutcome -> Bool
-steeringOutcome (ToolRejected fault) = fault.tfCode == "workflow_steering_pending"
-steeringOutcome (ToolCommitted (Object fields)) = KeyMap.lookup "interrupted" fields == Just (Bool True) && KeyMap.lookup "reason" fields == Just (String "workflow_steering_pending")
-steeringOutcome _ = False
+feedbackPending :: ToolOutcome -> Bool
+feedbackPending = \case
+  ToolSucceeded (Object fields) -> pending fields
+  ToolCommitted (Object fields) -> pending fields
+  _ -> False
+  where
+    pending fields = KeyMap.lookup "feedback_pending" fields == Just (Bool True)
 
 codeModeInvocation :: CodeModeResult -> ToolInvocation
 codeModeInvocation result = ToolInvocation outcome result.cmControl
@@ -257,12 +236,9 @@ parseRequest bytes = case eitherDecodeStrict' bytes of
   where
     invalid = Left "expected {tool: string, args: object}, {calls: [1..32 requests]}, or {result_ref: string, offset: integer}"
     parseCall (Object fields)
-      | KeyMap.size fields == 1, Just args@(Object _) <- KeyMap.lookup "agent" fields = Just (agentName, args)
-      | KeyMap.size fields == 1, Just (String label) <- KeyMap.lookup "phase" fields = Just (phaseName, String label)
       | KeyMap.size fields == 2,
         Just (String name) <- KeyMap.lookup "tool" fields,
         not (T.null name),
-        name `notElem` [agentName, phaseName],
         T.length name <= 256,
         Just args@(Object _) <- KeyMap.lookup "args" fields =
           Just (name, args)

@@ -848,26 +848,26 @@ spec = do
       view `shouldSatisfy` T.isInfixOf "另有 2 次触发合并进这一次。"
       T.length view `shouldSatisfy` (< 6300)
 
-  describe "renderContext task report turns" $ do
+  describe "renderContext agent report turns" $ do
     it "hands the report to the frontend as evidence it must relay" $ do
       let request = historyAt 9 812 memberId (Just "Alice") "帮我查一下 h610 的磁盘"
           report = renderTaskReport utc 680 Succeeded "检查 h610 磁盘占用" (Just request) "用量：模型调用 3 次" "根分区 71%，/nix 占 40G。"
           inp = baseInputs {origin = OriginTask, triggerMessage = (triggerMsg []) {Dispatch.body = Body []}, continuationView = Just report}
           (_, ub) = splitMessages (renderContext inp)
-      ub `shouldSatisfy` T.isInfixOf "[task report — task#680，已完成]"
+      ub `shouldSatisfy` T.isInfixOf "[agent report — agent#680，已完成]"
       ub `shouldSatisfy` T.isInfixOf "发起请求：[09:00 Alice #812]: 帮我查一下 h610 的磁盘"
       ub `shouldSatisfy` T.isInfixOf "根分区 71%，/nix 占 40G。"
       ub `shouldSatisfy` T.isInfixOf "用量：模型调用 3 次"
-      ub `shouldSatisfy` T.isInfixOf "原样附上 [task report] 里的「用量：」那一行"
-      ub `shouldSatisfy` T.isInfixOf "[current event — task report]"
+      ub `shouldSatisfy` T.isInfixOf "原样附上 [agent report] 里的「用量：」那一行"
+      ub `shouldSatisfy` T.isInfixOf "[current event — agent report]"
       ub `shouldSatisfy` T.isInfixOf "不能回 [silence]"
       ub `shouldSatisfy` (not . T.isInfixOf "Alice: hello")
 
-    it "bounds an oversized report and points at task_status" $ do
+    it "bounds an oversized report and points at agent_status" $ do
       let report = renderTaskReport utc 7 Failed "目标" Nothing "用量：没有调用模型，用时 1 秒" (T.replicate 20000 "字")
       T.length report `shouldSatisfy` (< 16200)
-      report `shouldSatisfy` T.isInfixOf "[task report — task#7，失败]"
-      report `shouldSatisfy` T.isInfixOf "task_status task#7"
+      report `shouldSatisfy` T.isInfixOf "[agent report — agent#7，失败]"
+      report `shouldSatisfy` T.isInfixOf "agent_status agent#7"
 
   describe "ContextSnapshot → ContextPlan → renderer" $ do
     it "preserves the existing byte output under a generous budget" $ do

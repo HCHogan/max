@@ -85,7 +85,7 @@ createAutomationTool tz =
       toolDescription =
         T.unwords
           [ "创建一条自动化：触发时你会带着 instruction 在这个会话的前台醒来处理。",
-            "只是要说的话就用自己的话说（该 @ 谁就 @），要做的事就直接做完再回复，耗时长的交给 task_start。",
+            "只是要说的话就用自己的话说（该 @ 谁就 @），要做的事就直接做完再回复，耗时长的派子 agent（agent 工具）去做。",
             "用户说“提醒我…”“过 N 分钟看看…”“每天九点…”“有人发了…就…”都用它。",
             "trigger=time 用 in_minutes/at/cron，任何人都能建；message 在新消息匹配时触发，",
             "webhook 返回接收 JSON POST 的 url 和独立 bearer_token，这两种只有群管理员能建。",

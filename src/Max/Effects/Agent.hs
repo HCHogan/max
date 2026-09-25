@@ -170,7 +170,7 @@ runAgentWith ::
   ExecutionAdmission es ->
   ExecutionJournal es ->
   ExecutionInbox es ->
-  Maybe (ToolContext -> AgentTurnRef -> WorkflowHost es) ->
+  Maybe (AgentTurnRef -> WorkflowHost es) ->
   AgentLimits ->
   (ToolContext -> Either ToolCatalogError (ToolRegistry (ToolOutput : ToolControl : es))) ->
   Eff (Agent : es) a ->
@@ -298,7 +298,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
                   -- independent calls execute concurrently.
                   registered <- listCatalogTools
                   let baseHooks = executionHooks admission journal (toolGroupId ctx.acTools) h
-                      hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehWorkflow = (\build -> build ctx.acTools (turnRuntimeAgentTurn h)) <$> workflowHost}
+                      hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehWorkflow = (\build -> build (turnRuntimeAgentTurn h)) <$> workflowHost}
                       requests = [ToolRequest tc.callId tc.callName tc.callArguments | tc <- tcs]
                   for_ tcs $ \tc ->
                     logInfo "agent: tool call" $ object ["id" .= tc.callId, "name" .= tc.callName, "args" .= previewJson 200 tc.callArguments]

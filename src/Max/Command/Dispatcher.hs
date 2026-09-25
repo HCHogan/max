@@ -123,7 +123,7 @@ execute t gid uid senderPrincipal replyTarget cmd = do
     -- Routing happens in the Handler, which has the trigger message and
     -- can render the note the way history lines are rendered.
     Feedback note -> case T.strip note of
-      "" -> reply "用法：!task steer task#N <内容>；!feedback/!fb 需要显式 task# 或回复任务关联消息，不再默认选最新任务"
+      "" -> reply "用法：!agent steer agent#N <内容>；!feedback/!fb 需要显式 agent# 或回复子 agent 关联的消息，不再默认选最新的"
       body -> pure (FeedbackNote body)
     Help mTopic -> reply (helpText mTopic)
     --

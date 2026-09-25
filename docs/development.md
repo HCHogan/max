@@ -514,8 +514,11 @@ ln -sfn js-runtime/quickjs.wasm .generated/quickjs.wasm
 
 The JS entry uses 1 billion fuel units, 64 MiB memory and a 30-minute elapsed
 limit including tool waits. Source and final output are each bounded to 64 KiB.
-Named SDK methods are synchronous (await is supported); `max.batch` submits up
-to 32 leaves to the host's metadata-based concurrency rules. Large replies are
+SDK calls return promises and only queue; when no job can run, the guest's C
+event loop calls the SDK's flush, which submits everything queued (up to 32 per
+batch) to the host's metadata-based concurrency rules. `Promise.all` is the way
+to run calls together; `max.batch` remains as `Promise.all` over `max.raw`.
+`agent()` is the `agent` tool with `wait`, not a host primitive. Large replies are
 read from a bounded ephemeral buffer without another tool invocation. Runtime
 imports, guest source, SDK source and model schemas are independent of native
 tool authority. Full SDK usage ships in `skills/codemode.md`.

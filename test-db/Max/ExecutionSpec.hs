@@ -79,7 +79,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
   it "journals real JavaScript batches and source evidence without charging the container" $ do
     (jobs, turn, runtime) <- fixture
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [echoTool])
-    let source = "return max.batch([1,2].map(value => ({tool:'echo',args:{value}}))).map(max.value);"
+    let source = "return await Promise.all([1,2].map(value => tools.echo({value})));"
     result <- withHost pool . runTools registry $ do
       session <- newExecutionSession (Just 2)
       runJavaScript session (hostHooks jobs runtime) (views registry) source

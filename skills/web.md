@@ -18,12 +18,12 @@ url 接受完整链接、BV号、b23.tv 短链、[card:] 卡片里的链接。�
 
 # 通用网页（browser）
 
-用 browser action=open、url 打开 HTTP(S) 网页。每群共享浏览器服务，但每个 task 拥有独立页面，子任务
+用 browser action=open、url 打开 HTTP(S) 网页。每群共享浏览器服务，但每个子 agent 拥有独立页面，它派出的子 agent
 和自动化的每次触发也独立。短重试可继续使用活页面；等待闲置默认保留 30 分钟，
 结束默认保留 5 分钟。前台临时浏览仍只活到当前 turn 结束。冷恢复只能带回已保存的
 cookies/localStorage，不能恢复 DOM、JS、旧 selector 或表单；必须重新 open/snapshot。
 点击、提交或中断后的未知效果不能自动重放：先核对站点结果，请发起者用
-!browser reset task#N 清理，再通过 !task steer 提供核对结果。登录身份不按群共享，
+!browser reset agent#N 清理，再通过 !agent steer 提供核对结果。登录身份不按群共享，
 只能由发起者用 !browser save/use/monitor 显式授权。页面隔离不等于服务端账号隔离，
 对同一账号的冲突修改仍须协调，不能因各自有浏览器就假定安全。
 交互循环：open → snapshot → 从最新结果选 selector → click / fill / press → 阅读结果，
@@ -114,7 +114,7 @@ return {chars: text.length, headings};
 
 把示例里的地址、关键字和解析换成实际站点的。数字要由程序从页面文本里解析并
 连同来源 URL 返回，不要看完页面再手抄进程序。同一页面上的动作按顺序 await，
-browser 不能靠 max.batch 并行，但可以和 web_search 等工具在同一段程序里组合。
+同一次 Promise.all 里的多个 browser 调用也会按顺序执行（browser 不能并行），但可以和 web_search 等工具在同一段程序里组合。
 程序里只放读取和导航：open、read、find、links、collect、scroll、wait_for、snapshot。
 会提交、发帖、购买或改动账号的点击和填写照旧一步一看，结果不明时不能在程序里重试。
 自动附带的截图照常在程序结束后给你。
