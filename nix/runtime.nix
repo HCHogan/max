@@ -315,7 +315,12 @@ in
         MemoryMax = "4G";
         MemorySwapMax = 0;
         CPUQuota = "200%";
-        TasksMax = 512;
+        # One Camoufox session measured about 175 tasks (7 processes) on a
+        # single page, and multi-site pages add a content process per site.
+        # Four sessions (CAMOUFOX_MCP_MAX_SESSIONS) plus their virtual
+        # displays and the MCP server overran 512, and fork then failed with
+        # EAGAIN; this still bounds a runaway page.
+        TasksMax = 2048;
         KillMode = "mixed";
         TimeoutStopSec = 30;
         Restart = "no";

@@ -54,7 +54,12 @@ export async function startWorkspace(input: SessionStartToolInput & { storage?: 
     // saved cookies or storage, so only a fresh start reports its cause.
     if (input.storage !== undefined) return buildToolError("workspace start or restore failed");
     const cause = result.content.find(item => item.type === "text")?.text ?? "";
-    return buildToolError(`workspace start failed: ${cause.slice(0, 300)}`);
+    // EAGAIN at spawn is the service's process/thread budget, not a broken
+    // browser: say so, or the model abandons the browser for the whole task.
+    const exhausted = /\bEAGAIN\b|Resource temporarily unavailable/.test(cause)
+      ? "this conversation's browser service is at its process limit (too many concurrent browser sessions); wait for other tasks to finish, then retry. "
+      : "";
+    return buildToolError(`workspace start failed: ${exhausted}${cause.slice(0, 300)}`);
   } catch {
     return buildToolError("workspace restore failed");
   }
