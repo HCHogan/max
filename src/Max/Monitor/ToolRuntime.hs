@@ -1,5 +1,5 @@
--- | The database and clock boundary for monitor/reminder tool invocations.
-module Max.Monitor.ToolRuntime (monitorToolsWithDatabase, reminderToolsWithDatabase) where
+-- | The database and clock boundary for automation tool invocations.
+module Max.Monitor.ToolRuntime (monitorToolsWithDatabase) where
 
 import Data.Text (Text)
 import Data.Time (TimeZone, UTCTime, getCurrentTime)
@@ -12,14 +12,10 @@ import Max.Effects.Tools (Tool, hoistTool)
 import Max.Jobs (Jobs)
 import Max.ToolContext
 import Max.Tools.Monitor (monitorToolsFor)
-import Max.Tools.Reminder (reminderToolsFor)
 import Max.Turn.Types (turnOutputAgentTurn)
 
 monitorToolsWithDatabase :: (WithConnection :> es, IOE :> es) => Jobs -> TimeZone -> Maybe Text -> ToolContext -> [Tool es]
 monitorToolsWithDatabase jobs tz base context = map (hoistTool (runMonitorTools jobs base context)) (monitorToolsFor tz)
-
-reminderToolsWithDatabase :: (WithConnection :> es, IOE :> es) => Jobs -> TimeZone -> ToolContext -> [Tool es]
-reminderToolsWithDatabase jobs tz context = map (hoistTool (runMonitorTools jobs Nothing context)) (reminderToolsFor tz)
 
 runMonitorTools :: (WithConnection :> es, IOE :> es) => Jobs -> Maybe Text -> ToolContext -> Eff (MonitorQuery : MonitorControl : Reader UTCTime : es) a -> Eff es a
 runMonitorTools jobs base context action = do

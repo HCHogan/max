@@ -8,7 +8,9 @@ import Control.Concurrent.STM (newTVarIO, readTVarIO)
 import Control.Monad (forM_, join, void, when)
 import Data.Foldable (for_)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isNothing, listToMaybe)
+import Data.Aeson (FromJSON, Key, Value (Null), withObject, (.:))
+import Data.Aeson.Types (parseMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
@@ -33,6 +35,7 @@ import Max.DB.AgentTurn
     markAgentTurnRunning,
   )
 import Max.DB.History (fetchMessageInScope)
+import Max.DB.Monitor (monitorLabel)
 import Max.DB.TurnContinuity
   ( ReplyTurnTarget (rttTurn),
     continuationDigest,
@@ -104,6 +107,7 @@ import Max.Prompt
     PromptRequest (..),
     TriggerOrigin (..),
     buildContext,
+    renderAutomationFire,
     renderTaskReport,
   )
 import Max.ReplySend
@@ -125,9 +129,12 @@ import Max.Task.Policy
   ( frontendDeadlineSeconds,
     frontendToolLimit,
   )
+import Max.Task.State qualified as JobState
 import Max.Task.Types
-  ( JobRun (jobId),
-    JobSpec (monitor, objective, source),
+  ( JobMonitor (definitionId),
+    JobResult (JobResult),
+    JobRun (jobId),
+    JobSpec (inputs, monitor, objective, source),
     JobView (run, spec, status),
     taskHandle,
   )
@@ -151,8 +158,10 @@ import Max.Turn.Continuity
     toolCatalogFingerprint,
   )
 import Max.Turn.Job (runJob)
-import Max.Turn.Start (TurnStart (JobNotice, JobTurn))
+import Max.Turn.Start (TurnStart (AutomationTurn, JobNotice, JobTurn))
 import Max.Turn.Types (AgentTurnRef, nextTurnOutputLink)
+import Max.Monitor.Types (monitorHandleText)
+import Max.Text (encodeText)
 import Max.Util (trySync, tshow)
 import OneBot.Types (GroupId (..), UserId (UserId), isPrivateChat)
 
@@ -198,10 +207,10 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
         Just target -> resolveReplyTurn (conversationScopeFor gm.groupId) session.clearedAt target
       raced <-
         race
-          ( withProcessingReaction $ do
-              if notice
-                then dispatchNotice env session
-                else dispatchOrdinary env session (replyTarget >>= finishedTarget)
+          ( withProcessingReaction $ case start of
+              JobNotice {} -> dispatchNotice env session
+              AutomationTurn job -> dispatchAutomation env session job
+              _ -> dispatchOrdinary env session (replyTarget >>= finishedTarget)
           )
           (threadDelay (frontendDeadlineSeconds * 1_000_000))
       case raced of
@@ -224,9 +233,8 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
           finishAgentTurn turnRef TurnFailed 0 (Just ("frontend " <> tshow frontendDeadlineSeconds <> "-second deadline; request unresolved"))
   where
     backgroundJob = case start of JobTurn job -> Just job; _ -> Nothing
-    notice = case start of JobNotice {} -> True; _ -> False
     relayedReport = case start of
-      JobNotice job _ body | isNothing job.spec.monitor -> Just (job, body)
+      JobNotice job _ body -> Just (job, body)
       _ -> Nothing
     finishedTarget target
       | replyTurnIsFinished target = Just target
@@ -246,13 +254,7 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
         current <- liftIO (Jobs.noticeIsCurrent env.beJobs job.run version)
         if not current
           then finishAgentTurn turnRef TurnAborted 0 (Just "job notice superseded")
-          else case job.spec.monitor of
-            -- Reminder results follow their monitor's publication policy.
-            Just _ -> do
-              liftIO (setTurnPhase turn "publishing task notice")
-              result <- sendAndPersistReply noticeTarget emptySendState body
-              finishAgentTurn turnRef (if null result.committed then TurnFailed else TurnSucceeded) 0 result.failure
-            Nothing -> relayReport env session job body
+          else relayReport env session job body
       _ -> finishAgentTurn turnRef TurnAborted 0 (Just "missing job notice")
 
     -- A root task's report returns to the frontend, which relays it in an
@@ -271,6 +273,41 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
           logAttention "task report relay did not deliver; publishing the report" (object ["task" .= taskHandle job.run.jobId, "reason" .= reason])
           result <- publishReport job body
           settle (if null result.committed then TurnFailed else TurnSucceeded, turns, Just ("relay fell back to the task report: " <> reason))
+
+    -- An automation fire is its creator's delayed request: an ordinary turn
+    -- with the instruction and what fired it as host-authored evidence. The
+    -- outcome settles the admitting job; the turn itself did the talking.
+    dispatchAutomation env session job = do
+      label <- maybe (pure Nothing) (monitorLabel . (.definitionId)) job.spec.monitor
+      let field :: (FromJSON a) => Key -> Maybe a
+          field key = parseMaybe (withObject "automation inputs" (.: key)) job.spec.inputs
+          evidence = field "trigger" :: Maybe T.Text
+          payload = case field "payload" :: Maybe Value of
+            Just Null -> Nothing
+            other -> other
+          coalesced = maybe 0 length (field "coalesced_evidence" :: Maybe [Value])
+          content = case (label, payload) of
+            (_, Just body) -> Just (encodeText body)
+            (Just (_, "ledger_match", _, _), _) -> evidence
+            _ -> Nothing
+          view =
+            renderAutomationFire
+              env.beTimeZone
+              (maybe "m#?" (\(ordinal, _, _, _) -> monitorHandleText ordinal) label)
+              (maybe "time_cron" (\(_, kind, _, _) -> kind) label)
+              (label >>= \(_, _, cron, _) -> cron)
+              ((\(_, _, _, created) -> created) <$> label)
+              job.spec.objective
+              (field "scheduled_at")
+              content
+              coalesced
+      settled@(terminal, _, reason) <- prepareReply env session Nothing (Just view) >>= runReply env session
+      settle settled
+      let (status, summary) = case terminal of
+            TurnSucceeded -> (JobState.Succeeded, "前台已处理")
+            TurnSilence -> (JobState.Succeeded, "前台按说明没有发言")
+            _ -> (JobState.Failed, "前台处理失败" <> maybe "" ("：" <>) reason)
+      liftIO (Jobs.completeJob env.beJobs job.run status (JobResult summary Nothing))
 
     publishReport job body =
       sendAndPersistReply noticeTarget emptySendState ("[↩#" <> tshow job.spec.source.unCanonicalMessageId <> "] " <> body)

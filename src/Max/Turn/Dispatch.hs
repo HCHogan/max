@@ -187,6 +187,7 @@ forkDispatch start origin gm work = do
                 `finally` do
                   releaseTurnScope env turn
                   for_ backgroundJob $ \job -> liftIO (Jobs.detachJobTurn env.beJobs job.run)
+                  settleAutomation env JobState.Failed "自动化这次触发没能开始处理"
         case start of
           JobTurn job -> do
             attached <- liftIO (Jobs.attachJobTurn env.beJobs job.run turnRef)
@@ -204,6 +205,7 @@ forkDispatch start origin gm work = do
         pure True
   unless launched $ do
     for_ backgroundJob $ \job -> liftIO (Jobs.completeJob env.beJobs job.run JobState.Cancelled (JobResult "service shutting down" Nothing))
+    settleAutomation env JobState.Cancelled "service shutting down"
     logInfo "llm dispatch declined: draining" ident
     -- Signal declined direct triggers with a reaction during drain.
     when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
@@ -212,7 +214,13 @@ forkDispatch start origin gm work = do
     allowInput = startAllowsInput start
     backgroundJob = case start of JobTurn job -> Just job; _ -> Nothing
     background = isJust backgroundJob
-    notice = case start of JobNotice {} -> True; _ -> False
+    -- Notices and automation fires wait behind queued user requests.
+    notice = case start of JobNotice {} -> True; AutomationTurn {} -> True; _ -> False
+    -- Every exit settles the automation's job, so the next fire of the same
+    -- automation can start; runDispatch settles it first on a normal end.
+    settleAutomation env status detail = case start of
+      AutomationTurn job -> liftIO (Jobs.completeJob env.beJobs job.run status (JobResult detail Nothing))
+      _ -> pure ()
     admitConversation env turnRef = do
       source <- fetchMessageWithCursorInScope (conversationScopeFor gm.groupId) gm.canonicalId.unCanonicalMessageId
       let sourceOrder = fst <$> source
@@ -253,6 +261,7 @@ forkDispatch start origin gm work = do
               ( do
                   finishAgentTurn turnRef TurnCancelled 0 (Just "cancelled by !kill")
                   for_ backgroundJob $ \job -> liftIO (Jobs.completeJob env.beJobs job.run JobState.Cancelled (JobResult "任务已取消。" Nothing))
+                  settleAutomation env JobState.Cancelled "cancelled by !kill"
                   logInfo "llm dispatch cancelled" $ object ["group_id" .= gidRaw]
               )
               ( do
@@ -273,6 +282,7 @@ forkDispatch start origin gm work = do
                 for_ backgroundJob $ \job -> liftIO $ do
                   Jobs.completeJob env.beJobs job.run JobState.Failed (JobResult "任务中断；已发生的外部操作不会重试。" Nothing)
                   Jobs.detachJobTurn env.beJobs job.run
+                settleAutomation env JobState.Failed "自动化这次触发的处理中断了"
 
     ensureTerminal ref reason =
       ensureAgentTurnCrashed ref reason

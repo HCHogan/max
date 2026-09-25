@@ -1,27 +1,20 @@
 -- | Monitor definitions and trigger facts. One scheduler dispatches each
 -- occurrence; startup interrupts unfinished occurrences instead of replaying them.
 module Max.DB.Monitor
-  ( TimeMonitor (..),
-    CannedMonitorFire (..),
-    ElaboratedMonitorFire (..),
+  ( ElaboratedMonitorFire (..),
     ArmedMonitor (..),
     MonitorArmError (..),
-    armCannedTimeMonitor,
     armElaboratedTimeMonitor,
     armLedgerMatchMonitor,
     armElaboratedMonitor,
-    listCannedTimeMonitors,
     listArmedMonitors,
     nextMonitorDeadline,
     admitDueTimeMonitors,
     evaluateLedgerMatches,
-    pendingCannedMonitorFires,
     pendingElaboratedMonitorFires,
     expireElaboratedMonitorFire,
-    lookupMonitorFireOutput,
-    beginCannedMonitorFire,
-    finishCannedMonitorFire,
     interruptMonitorFires,
+    monitorLabel,
   )
 where
 
@@ -50,7 +43,7 @@ import Max.IR (Body, Phase (Canonical))
 import Max.Monitor.Control (MonitorArmError (..))
 import Max.Monitor.Schedule (nextCronFire)
 import Max.Monitor.Types
-import Max.Monitor.View (ArmedMonitor (..), TimeMonitor (..))
+import Max.Monitor.View (ArmedMonitor (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), PrincipalIdentityId)
 import Max.Turn.Types (AgentTurnRef (..))
 import OneBot.Types (GroupId (..))
@@ -130,97 +123,6 @@ instance FromRow ElaboratedMonitorFire where
             fromRight Map.empty (eitherDecodeStrict' (TE.encodeUtf8 encodedToolGrants)),
           emfRequiredRole = requiredRole
         }
-
-timeMonitorRow :: RowParser TimeMonitor
-timeMonitorRow = do
-  monitorId <- field
-  ordinal <- field
-  groupId <- field
-  author <- field
-  armingTurnId <- field
-  armingTurnOrdinal <- field
-  text <- field
-  cron <- field
-  nextFire <- field
-  created <- field
-  fireCount <- field
-  pure
-    TimeMonitor
-      { tmRef = MonitorRef monitorId ordinal,
-        tmGroupId = groupId,
-        tmAuthorPrincipalId = author,
-        tmArmingTurn = AgentTurnRef <$> armingTurnId <*> armingTurnOrdinal,
-        tmText = text,
-        tmCron = cron,
-        tmNextFireAt = nextFire,
-        tmCreatedAt = created,
-        tmFireCount = fireCount
-      }
-
-data CannedMonitorFire = CannedMonitorFire
-  { cmfFireId :: !MonitorFireId,
-    cmfMonitor :: !MonitorRef,
-    cmfGroupId :: !Int64,
-    cmfAuthorPrincipalId :: !(Maybe Int64),
-    cmfText :: !Text,
-    cmfCron :: !(Maybe Text),
-    cmfScheduledAt :: !UTCTime
-  }
-  deriving stock (Show, Eq)
-
-instance FromRow CannedMonitorFire where
-  fromRow = do
-    fire <- field
-    monitor <- MonitorRef <$> field <*> field
-    group <- field
-    author <- field
-    body <- field
-    cron <- field
-    scheduled <- field
-    pure CannedMonitorFire {cmfFireId = fire, cmfMonitor = monitor, cmfGroupId = group, cmfAuthorPrincipalId = author, cmfText = body, cmfCron = cron, cmfScheduledAt = scheduled}
-
--- | Allocate m# under a conversation-row lock, the same durable alternate-key
--- pattern used for t#.  The optional arming turn is host-derived provenance.
-armCannedTimeMonitor ::
-  (WithConnection :> es, IOE :> es) =>
-  GroupId ->
-  PrincipalId ->
-  Maybe AgentTurnRef ->
-  Text ->
-  Maybe Text ->
-  UTCTime ->
-  Eff es MonitorRef
-armCannedTimeMonitor (GroupId legacyGroup) (PrincipalId principal) armingTurn body cron fireAt =
-  withTransaction $ do
-    conversationRows <-
-      query
-        "SELECT conversation_id FROM conversations WHERE legacy_group_id = ? FOR UPDATE"
-        (Only legacyGroup)
-    let conversation = exactlyOne "armCannedTimeMonitor conversation" (conversationRows :: [Only Int64])
-    ordinalRows <-
-      query
-        "SELECT COALESCE(max(monitor_ordinal), 0) + 1 FROM monitors WHERE conversation_id = ?"
-        (Only conversation)
-    let ordinal = exactlyOne "armCannedTimeMonitor ordinal" (ordinalRows :: [Only MonitorOrdinal])
-    rows <-
-      query
-        "INSERT INTO monitors \
-        \ (conversation_id, monitor_ordinal, armed_by_principal_id, arming_turn_id, \
-        \  goal_text, trigger_kind, trigger_version, trigger_spec, continuation_kind, \
-        \  effect_ceiling, status, schedule_cron, next_fire_at) \
-        \ VALUES (?, ?, ?, ?, ?, 'time_cron', 1, ?, \
-        \   'canned', '{}'::jsonb, 'armed', ?, ?) \
-        \ RETURNING monitor_id"
-        ( conversation,
-          ordinal,
-          principal,
-          fmap (.atrTurnId) armingTurn,
-          body,
-          Jsonb (object (["kind" .= ("TimeCron" :: Text), "version" .= (1 :: Int), "at" .= fireAt] <> ["cron" .= expression | Just expression <- [cron]])),
-          cron,
-          fireAt
-        )
-    pure (MonitorRef (exactlyOne "armCannedTimeMonitor insert" (rows :: [Only MonitorId])) ordinal)
 
 armElaboratedTimeMonitor ::
   (WithConnection :> es, IOE :> es) =>
@@ -341,7 +243,7 @@ armElaboratedMonitor (GroupId legacyGroup) (PrincipalId principal) armingTurn go
                     \  goal_text, trigger_kind, trigger_version, trigger_spec, continuation_kind, \
                     \  effect_ceiling, status, schedule_cron, next_fire_at, armed_ingest_seq, \
                     \  cooldown_seconds, expires_at, max_fire_count, required_role) \
-                    \ VALUES (?, ?, ?, ?, ?, ?, 1, ?, 'elaborated', ?, 'armed', ?, ?, ?, ?, ?, ?, 'group_admin') \
+                    \ VALUES (?, ?, ?, ?, ?, ?, 1, ?, 'elaborated', ?, 'armed', ?, ?, ?, ?, ?, ?, ?) \
                     \ RETURNING monitor_id"
                     ( conversation,
                       ordinal,
@@ -356,27 +258,13 @@ armElaboratedMonitor (GroupId legacyGroup) (PrincipalId principal) armingTurn go
                       frontier,
                       cooldown,
                       expires,
-                      maxFires
+                      maxFires,
+                      -- A time automation is its creator's own request; watching
+                      -- messages or webhooks stays an administrator's decision.
+                      if triggerKind == "time_cron" then "member" :: Text else "group_admin"
                     )
                 pure (Right (MonitorRef (exactlyOne "armElaboratedMonitor insert" (rows :: [Only MonitorId])) ordinal))
       _ -> error "armElaboratedMonitor: duplicate arming turn"
-
-listCannedTimeMonitors ::
-  (WithConnection :> es, IOE :> es) =>
-  ConversationScope ->
-  Eff es [TimeMonitor]
-listCannedTimeMonitors scope =
-  queryRows
-    timeMonitorRow
-    "SELECT m.monitor_id, m.monitor_ordinal, c.legacy_group_id, m.armed_by_principal_id, \
-    \       m.arming_turn_id, arming.turn_ordinal, m.goal_text, m.schedule_cron, \
-    \       m.next_fire_at, m.created_at, m.fire_count \
-    \FROM conversations c JOIN monitors m USING (conversation_id) \
-    \LEFT JOIN agent_turns arming ON arming.turn_id=m.arming_turn_id AND arming.conversation_id=m.conversation_id \
-    \WHERE c.legacy_group_id=? AND m.status='armed' AND m.trigger_kind='time_cron' \
-    \  AND m.continuation_kind='canned' \
-    \ORDER BY m.next_fire_at, m.monitor_ordinal"
-    (Only (conversationStorageId scope))
 
 listArmedMonitors ::
   (WithConnection :> es, IOE :> es) =>
@@ -415,8 +303,7 @@ nextMonitorDeadline now deferred = do
       \  FROM monitor_fires f JOIN monitors m USING (monitor_id) \
       \  WHERE (m.status='armed' OR (m.status='expired' AND m.status_reason='max_fire_count')) \
       \    AND f.admission_state='pending' AND f.cancelled_at IS NULL \
-      \    AND NOT (f.fire_id=ANY(?::bigint[])) AND (m.continuation_kind='canned' \
-      \      OR (m.continuation_kind='elaborated' AND m.trigger_kind='time_cron' AND m.schedule_cron IS NULL) \
+      \    AND NOT (f.fire_id=ANY(?::bigint[])) AND ((m.continuation_kind='elaborated' AND m.trigger_kind='time_cron' AND m.schedule_cron IS NULL) \
       \      OR (m.continuation_kind='elaborated' AND ( \
       \        SELECT count(*) FROM monitor_fires recent \
       \        JOIN monitors rm ON rm.monitor_id=recent.monitor_id \
@@ -597,15 +484,6 @@ evaluateLedgerMatches conversation ingestSeq canonical sender self mentionPrinci
 
 -- The application runs exactly one monitor scheduler. These are trigger
 -- markers, not worker claims; dispatch never transfers to another process.
-pendingCannedMonitorFires :: (WithConnection :> es, IOE :> es) => Int -> Eff es [CannedMonitorFire]
-pendingCannedMonitorFires limit =
-  query
-    "SELECT f.fire_id,m.monitor_id,m.monitor_ordinal,c.legacy_group_id,m.armed_by_principal_id,f.definition_snapshot->>'goal',m.schedule_cron,f.scheduled_at\
-    \ FROM monitor_fires f JOIN monitors m USING(monitor_id) JOIN conversations c ON c.conversation_id=m.conversation_id\
-    \ WHERE m.status='armed' AND m.continuation_kind='canned' AND f.admission_state='pending' AND f.cancelled_at IS NULL\
-    \ ORDER BY f.fire_id LIMIT ?"
-    (Only (max 1 (min 100 limit)))
-
 pendingElaboratedMonitorFires :: (WithConnection :> es, IOE :> es) => UTCTime -> [MonitorFireId] -> MonitorFireId -> Int -> Eff es [ElaboratedMonitorFire]
 pendingElaboratedMonitorFires now deferred after limit =
   query
@@ -673,45 +551,8 @@ expireElaboratedMonitorFire fireId reason = withTransaction $ do
       pure True
     _ -> error "expireElaboratedMonitorFire: duplicate fire"
 
-lookupMonitorFireOutput ::
-  (WithConnection :> es, IOE :> es) =>
-  MonitorFireId ->
-  Eff es (Maybe CanonicalMessageId)
-lookupMonitorFireOutput fireId = do
-  rows <-
-    query
-      "SELECT canonical_message_id FROM messages WHERE monitor_fire_id=?"
-      (Only fireId)
-  pure $ CanonicalMessageId <$> listToMaybe [messageId | Only messageId <- (rows :: [Only Int64])]
-
--- | Consume the calendar edge before publication. A crash can lose this
--- occurrence, but cannot repeat its external effect on restart.
-beginCannedMonitorFire :: (WithConnection :> es, IOE :> es) => MonitorFireId -> Maybe UTCTime -> Eff es Bool
-beginCannedMonitorFire fire next = withTransaction $ do
-  rows <-
-    query
-      "SELECT m.monitor_id FROM monitor_fires f JOIN monitors m USING(monitor_id) WHERE f.fire_id=?\
-      \ AND f.admission_state='pending' AND f.cancelled_at IS NULL AND m.status='armed' FOR UPDATE OF m,f"
-      (Only fire)
-  case rows :: [Only MonitorId] of
-    [Only monitor] -> do
-      void $ execute "UPDATE monitor_fires SET admission_state='dispatched',dispatched_at=now(),started_at=now() WHERE fire_id=?" (Only fire)
-      void $ execute "UPDATE monitors SET next_fire_at=?,status=CASE WHEN ?::timestamptz IS NULL THEN 'fired' ELSE 'armed' END,fire_count=fire_count+1,updated_at=now() WHERE monitor_id=?" (next, next, monitor)
-      pure True
-    _ -> pure False
-
--- | Publication is already final; this write only records its outcome.
-finishCannedMonitorFire :: (WithConnection :> es, IOE :> es) => MonitorFireId -> Either Text CanonicalMessageId -> Eff es ()
-finishCannedMonitorFire fire outcome =
-  void $
-    execute
-      "UPDATE monitor_fires SET outbound_canonical_message_id=?,last_error=?,finished_at=now() WHERE fire_id=?"
-      (either (const Nothing) (Just . (.unCanonicalMessageId)) outcome, either Just (const Nothing) outcome, fire)
-
 -- | Run once before ingress starts. Definitions survive; unfinished triggers
--- end here, including any canonical output whose acknowledgement was lost.
--- Old canned history has no started_at; some migrated rows also lack receipts.
--- Only the new publisher sets started_at before an external send.
+-- end here instead of replaying on restart.
 interruptMonitorFires :: (WithConnection :> es, IOE :> es) => TimeZone -> UTCTime -> Eff es Int64
 interruptMonitorFires tz now = withTransaction $ do
   schedules <-
@@ -727,10 +568,17 @@ interruptMonitorFires tz now = withTransaction $ do
     \ disposition=CASE WHEN admission_state='pending' THEN 'cancelled' ELSE disposition END,\
     \ last_error=COALESCE(last_error,'process restarted before completion'),\
     \ result=COALESCE(result,jsonb_build_object('status','cancelled','summary','process restarted before completion'))\
-    \ WHERE finished_at IS NULL AND cancelled_at IS NULL AND (admission_state='pending' OR task_id IS NOT NULL\
-    \ OR (outbound_canonical_message_id IS NULL AND started_at IS NOT NULL\
-    \ AND EXISTS(SELECT 1 FROM monitors m WHERE m.monitor_id=f.monitor_id AND m.continuation_kind='canned')))"
+    \ WHERE finished_at IS NULL AND cancelled_at IS NULL AND (admission_state='pending' OR task_id IS NOT NULL)"
     ()
+
+-- | The m# handle, trigger kind, schedule and creation time of a definition,
+-- for the prompt of a foreground automation turn.
+monitorLabel :: (WithConnection :> es, IOE :> es) => MonitorId -> Eff es (Maybe (MonitorOrdinal, Text, Maybe Text, UTCTime))
+monitorLabel identifier =
+  listToMaybe
+    <$> query
+      "SELECT monitor_ordinal, trigger_kind, schedule_cron, created_at FROM monitors WHERE monitor_id=?"
+      (Only identifier)
 
 exactlyOne :: Text -> [Only a] -> a
 exactlyOne _ [Only value] = value

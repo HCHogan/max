@@ -24,6 +24,7 @@ module Max.Prompt
     renderHistoryLine,
     renderCurrentLine,
     renderTaskReport,
+    renderAutomationFire,
 
     -- * Forward markers (shared with "Max.Tools")
     tagMediaMarkers,
@@ -66,6 +67,7 @@ import Max.Prompt.Render
     renderCurrentLine,
     renderHistoryLine,
     renderTaskReport,
+    renderAutomationFire,
     tagImageMarkers,
   )
 import Max.Prompt.Request (PromptRequest (..))

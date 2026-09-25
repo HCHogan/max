@@ -1,4 +1,5 @@
--- | Explicit execution intent; background work never admits foreground feedback.
+-- | Explicit execution intent; background work, notices and automation fires
+-- never admit foreground feedback.
 module Max.Turn.Start (TurnStart (..), InputAdmission (..), startAllowsInput) where
 
 import Data.Text (Text)
@@ -10,6 +11,9 @@ data TurnStart
   = NewTurn !InputAdmission
   | JobTurn !JobView
   | JobNotice !JobView !Int !Text
+  | -- | An automation fire: its creator's delayed request, handled by an
+    -- ordinary foreground turn and settled into the job that admitted it.
+    AutomationTurn !JobView
   deriving stock (Eq, Show)
 
 startAllowsInput :: TurnStart -> Bool

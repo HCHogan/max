@@ -432,7 +432,6 @@ library
         Max.Tools.Monitor
         Max.Tools.Pins
         Max.Tools.Task
-        Max.Tools.Reminder
         Max.Tools.Sandbox
         Max.Tools.Schema
         Max.Tools.Search
@@ -748,7 +747,7 @@ test-suite max-test
         Max.RecallSpec
         Max.Context.WorkingSpec
         Max.Task.DelegationSpec
-        Max.ReminderArgsSpec
+        Max.AutomationArgsSpec
         Max.Concurrent.LockSpec
         Max.Sandbox.ChatSpec
         Max.Sandbox.RuntimeSpec

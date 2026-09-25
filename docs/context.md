@@ -129,8 +129,8 @@ cache covers as much as possible: system prompt, then the tool definitions,
 then pins and episode summaries, then the append-only raw transcript, and
 last the per-turn blocks (recent work turns, environment, memories, quoted
 context, current message). Ordinary foreground turns list the same tools
-whoever speaks; `arm_monitor` is visible to every initiator and still rejects
-arming below group admin. Every tool description ends with its result shape
+whoever speaks; `create_automation` is visible to every initiator and still
+rejects message and webhook triggers below group admin. Every tool description ends with its result shape
 (`返回：`), used by native calls and code mode alike; the shapes live in
 `Max.Tool.Returns`, outside the schema hash.
 

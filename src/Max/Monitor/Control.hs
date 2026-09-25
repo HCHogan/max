@@ -70,17 +70,17 @@ instance ToJSON MonitorControlReceipt where
 
 monitorControlErrorText :: MonitorControlError -> Text
 monitorControlErrorText = \case
-  MonitorNotFound -> "monitor not found"
-  MonitorOwnerRequired -> "monitor owner or administrator required"
-  MonitorRevisionConflict -> "revision conflict"
-  InvalidMonitorDefinition -> "invalid monitor definition"
-  MonitorCallerFenced -> "monitor caller identity or running turn is no longer valid"
+  MonitorNotFound -> "这个会话里没有这条自动化"
+  MonitorOwnerRequired -> "只有创建者或管理员能修改或取消这条自动化"
+  MonitorRevisionConflict -> "revision 已变化，先用 automation_history 查最新 revision"
+  InvalidMonitorDefinition -> "自动化定义无效：说明不能为空、不超过 40000 字，queue_limit 在 1..160"
+  MonitorCallerFenced -> "当前回合身份或运行状态已失效，不能修改自动化"
 
 armErrorText :: MonitorArmError -> Text
 armErrorText = \case
-  ArmedMonitorCapReached -> "本会话已达到 100 个 armed monitor 上限"
-  ConditionMonitorCapReached -> "本会话已达到 25 个 condition monitor 上限"
-  ArmingTurnOutsideConversation -> "arming turn 不属于当前会话"
-  MonitorArmingForbidden -> "当前角色无权武装会主动发起回合的 monitor"
-  ArmingCallerFenced -> "当前回合身份或运行状态已失效，不能创建提醒或 monitor"
-  HttpMonitorsUnavailable -> "HTTP monitor 未启用：需要配置 admin.webhook_base_url"
+  ArmedMonitorCapReached -> "本会话已达到 100 条生效中自动化的上限"
+  ConditionMonitorCapReached -> "本会话已达到 25 条消息/webhook 自动化的上限"
+  ArmingTurnOutsideConversation -> "创建回合不属于当前会话"
+  MonitorArmingForbidden -> "只有群管理员能创建按消息或 webhook 触发的自动化；定时触发任何人都能建"
+  ArmingCallerFenced -> "当前回合身份或运行状态已失效，不能创建自动化"
+  HttpMonitorsUnavailable -> "webhook 自动化未启用：需要配置 admin.webhook_base_url"

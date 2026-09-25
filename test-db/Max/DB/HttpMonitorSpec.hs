@@ -43,27 +43,27 @@ import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "HTTP monitors" $ do
-  it "creates a webhook through the model tool under the current caller's authority" $ do
+  it "creates a webhook automation through the model tool under the current caller's authority" $ do
     (turn, _, actor) <- seed pool 900 1
     jobs <- newTaskRegistry >>= Jobs.newJobs
     now <- getCurrentTime
     let scope = Control.MonitorControlScope (GroupId 900) (Just turn) actor Map.empty True (Just "https://max.example")
-        tool = case filter (\item -> item.toolName == "arm_monitor") (monitorToolsFor utc) of
+        tool = case filter (\item -> item.toolName == "create_automation") (monitorToolsFor utc) of
           [found] -> found
-          _ -> error "expected exactly one arm_monitor tool"
+          _ -> error "expected exactly one create_automation tool"
         call current =
           withDb pool $
             runReader now $
               Control.runMonitorControl jobs current $
                 runMonitorQuery (conversationScopeFor (GroupId 900)) $
-                  toolRun tool (object ["goal" .= String "inspect this event", "trigger" .= String "http", "profile" .= String "sandbox"])
+                  toolRun tool (object ["instruction" .= String "inspect this event", "trigger" .= String "webhook"])
     Right (Object result) <- call scope
     KM.lookup "url" result `shouldSatisfy` (\case Just (String value) -> T.isPrefixOf "https://max.example/hooks/" value; _ -> False)
     KM.lookup "bearer_token" result `shouldSatisfy` (\case Just (String value) -> T.length value == 64; _ -> False)
     call (scope {Control.armingAllowed = False}) `shouldReturn` Left (armErrorText MonitorArmingForbidden)
     call (scope {Control.httpBaseUrl = Nothing}) `shouldReturn` Left (armErrorText HttpMonitorsUnavailable)
-    settings <- withDb pool (query "SELECT task_profile,change_only,expires_at IS NULL,max_fire_count IS NULL FROM monitors" ())
-    settings `shouldBe` [("sandbox" :: Text, False, True, True)]
+    settings <- withDb pool (query "SELECT required_role,expires_at IS NULL,max_fire_count IS NULL FROM monitors" ())
+    settings `shouldBe` [("group_admin" :: Text, True, True)]
 
   it "bounds and authenticates real HTTP requests before admitting work" $ do
     hook <- arm pool defaultSpec

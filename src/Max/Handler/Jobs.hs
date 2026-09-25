@@ -7,6 +7,7 @@ where
 import Control.Monad (forever, void, when)
 import Data.Foldable (for_)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Effectful (Eff, IOE, MonadIO (liftIO), type (:>))
 import Effectful.Concurrent.Async (Concurrent)
@@ -32,7 +33,7 @@ import Max.Jobs qualified as Jobs
 import Max.MessageKind (MessageKind (KindChat))
 import Max.ModelCatalog (ModelCatalog)
 import Max.Platform.Store.Ingest (loadDispatchMessage)
-import Max.Prompt (TriggerOrigin (OriginTask))
+import Max.Prompt (TriggerOrigin (OriginMonitor, OriginTask))
 import Max.Task.State qualified as JobState
 import Max.Task.Types
   ( JobMonitor (fireId),
@@ -43,7 +44,7 @@ import Max.Task.Types
     taskHandle,
   )
 import Max.Turn.Dispatch (dispatchLLMWith)
-import Max.Turn.Start (TurnStart (JobNotice, JobTurn))
+import Max.Turn.Start (TurnStart (AutomationTurn, JobNotice, JobTurn))
 import Max.Util (catchSync)
 
 shutdownJobs :: (WithConnection :> es, Outbound :> es, Log :> es, IOE :> es) => Jobs.Jobs -> Eff es ()
@@ -51,9 +52,11 @@ shutdownJobs registry = do
   jobs <- liftIO (Jobs.closeJobs registry)
   for_ jobs $ \job ->
     ( for_ job.result $ \result -> do
+        -- An interrupted automation fire is recorded, not announced: its turn
+        -- spoke for itself, and its creator's request may be days old.
         publish <- case job.spec.monitor of
           Nothing -> pure True
-          Just monitor -> MonitorJob.recordMonitorResult monitor.fireId job.status result
+          Just monitor -> False <$ MonitorJob.recordMonitorResult monitor.fireId job.status result
         when publish $
           void $
             sendRecorded
@@ -90,7 +93,8 @@ jobsWorker = do
     case work of
       Jobs.LaunchJob job ->
         let failed detail = liftIO (Jobs.completeJob env.beJobs job.run JobState.Failed (JobResult detail Nothing))
-         in dispatch job (JobTurn job) failed `catchSync` (failed . T.pack . show)
+            start = if isJust job.spec.monitor then AutomationTurn job else JobTurn job
+         in dispatch job start failed `catchSync` (failed . T.pack . show)
       Jobs.PublishJobNotice job version body ->
         dispatch job (JobNotice job version body) (noticeFailed env job)
           `catchSync` (noticeFailed env job . T.pack . show)
@@ -103,15 +107,15 @@ jobsWorker = do
         Just source | source.groupId == job.spec.group -> do
           let trigger = source {body = Body [], replyTo = Nothing, mentionPrincipals = Map.empty}
           case start of
-            JobTurn _ -> for_ job.spec.monitor (MonitorJob.markMonitorJobStarted . (.fireId))
+            AutomationTurn _ -> for_ job.spec.monitor (MonitorJob.markMonitorJobStarted . (.fireId))
             _ -> pure ()
-          dispatchLLMWith start Nothing OriginTask trigger
+          dispatchLLMWith start Nothing (case start of AutomationTurn _ -> OriginMonitor; _ -> OriginTask) trigger
         _ -> failed "task source provenance unavailable"
 
+    -- The automation turn already spoke; its outcome only enters history.
     recordResult env job =
       for_ ((,) <$> job.spec.monitor <*> job.result) $ \(fire, result) -> do
-        publish <- MonitorJob.recordMonitorResult fire.fireId job.status result
-        when publish (liftIO (Jobs.queueJobResultNotice env.beJobs job.run))
+        void (MonitorJob.recordMonitorResult fire.fireId job.status result)
         liftIO (Jobs.releaseJobNotice env.beJobs job.run)
 
     noticeFailed env job (detail :: T.Text) = do

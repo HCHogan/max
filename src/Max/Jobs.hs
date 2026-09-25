@@ -32,7 +32,6 @@ module Max.Jobs
     authorizeJobPublication,
     recordJobPublication,
     taskForReply,
-    queueJobResultNotice,
     allJobs,
     closeJobs,
     setJobBrowserAccess,
@@ -444,15 +443,6 @@ taskForReply jobs group message = atomically $ do
     run <- Map.lookup message published
     entry <- Map.lookup run.jobId entries
     if entry.view.spec.group == group then Just run.jobId else Nothing
-
-queueJobResultNotice :: Jobs -> JobRun -> IO ()
-queueJobResultNotice jobs run = atomically $ do
-  entries <- readTVar jobs.entries
-  case lookupRun entries run of
-    Just entry
-      | Just result <- entry.view.result ->
-          writeTVar jobs.entries (Map.insert run.jobId (entry {pendingNotice = Just result.text}) entries)
-    _ -> pure ()
 
 allJobs :: Jobs -> IO [JobView]
 allJobs jobs = map (.view) . Map.elems <$> readTVarIO jobs.entries

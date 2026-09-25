@@ -3,15 +3,16 @@
 -- On 2026-08-10 @gpt-5.6-luna@ asked for a one-shot reminder as
 -- @{"at":".","cron":".","in_minutes":1}@ — filling the two unused optional
 -- parameters with a placeholder instead of omitting them.  The mutual-exclusion
--- check read three specifiers, rejected the call, and because @set_reminder@
+-- check read three specifiers, rejected the call, and because the tool
 -- writes, the rejection reached the model as outcome-unknown — which the host
 -- prompt tells it not to retry.  It re-sent the identical arguments seven times.
-module Max.ReminderArgsSpec (spec) where
+-- @create_automation@ keeps the same tolerance for its time trigger.
+module Max.AutomationArgsSpec (spec) where
 
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone (..), UTCTime (..), fromGregorian, secondsToDiffTime)
-import Max.Tools.Reminder
+import Max.Tools.Monitor (TimeArgs (..), dropFiller, dropZero, resolveTime)
 import Test.Hspec
 
 tz :: TimeZone
@@ -20,17 +21,16 @@ tz = TimeZone (8 * 60) False "CST"
 now :: UTCTime
 now = UTCTime (fromGregorian 2026 8 10) (secondsToDiffTime (1 * 3600))
 
-args :: Maybe Int -> Maybe Text -> Maybe Text -> SetArgs
+args :: Maybe Int -> Maybe Text -> Maybe Text -> TimeArgs
 args minutes at cron =
-  SetArgs
-    { saText = "1分钟到了，起来一下。",
-      saInMinutes = dropZero minutes,
-      saAt = dropFiller at,
-      saCron = dropFiller cron
+  TimeArgs
+    { taInMinutes = dropZero minutes,
+      taAt = dropFiller at,
+      taCron = dropFiller cron
     }
 
-resolved :: SetArgs -> Either Text (Maybe Text)
-resolved setArgs = fst <$> resolveWhen tz setArgs now
+resolved :: TimeArgs -> Either Text (Maybe Text)
+resolved timeArgs = fst <$> resolveTime tz timeArgs now
 
 spec :: Spec
 spec = do

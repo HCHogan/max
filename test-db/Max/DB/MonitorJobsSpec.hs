@@ -39,13 +39,13 @@ import OneBot.Types (GroupId (..))
 import Test.Hspec
 
 spec :: DbPool -> Spec
-spec pool = before_ (truncateAll pool) $ describe "reminder Jobs and retained business state" $ do
+spec pool = before_ (truncateAll pool) $ describe "automation Jobs and retained business state" $ do
   it "fences monitor mutations after the bound turn ends" $ do
     jobs <- newTaskRegistry >>= Jobs.newJobs
     (turn, _, actor) <- seed pool 900 1
     now <- getCurrentTime
     let scope = MonitorCapability.MonitorControlScope (GroupId 900) (Just turn) actor Map.empty False Nothing
-        reminder = MonitorCapability.armMonitor (MonitorCapability.CannedReminder "reminder" Nothing (addUTCTime 60 now))
+        reminder = MonitorCapability.armMonitor (MonitorCapability.TimeMonitor "remind me" Nothing (addUTCTime 60 now))
     Right monitor <- withDb pool (MonitorCapability.runMonitorControl jobs scope reminder)
     withDb pool (finishAgentTurn turn TurnCancelled 0 (Just "cancelled"))
     withDb pool (MonitorCapability.runMonitorControl jobs scope reminder) `shouldReturn` Left MonitorControl.ArmingCallerFenced
@@ -59,12 +59,16 @@ spec pool = before_ (truncateAll pool) $ describe "reminder Jobs and retained bu
     (_, _, otherActor) <- seed pool 901 2
     now <- getCurrentTime
     let scope = MonitorCapability.MonitorControlScope (GroupId 900) (Just turn) actor (Map.singleton "context_search" "frozen") False Nothing
-        reminder = MonitorCapability.armMonitor (MonitorCapability.CannedReminder "reminder" Nothing (addUTCTime 60 now))
-        elaborated = MonitorCapability.armMonitor (MonitorCapability.TimeMonitor "watch" Nothing (addUTCTime 60 now))
-    withDb pool (MonitorCapability.runMonitorControl jobs (scope {MonitorCapability.principal = otherActor}) reminder) `shouldReturn` Left MonitorControl.ArmingCallerFenced
-    withDb pool (MonitorCapability.runMonitorControl jobs (scope {MonitorCapability.group = GroupId 901}) reminder) `shouldReturn` Left MonitorControl.ArmingCallerFenced
-    withDb pool (MonitorCapability.runMonitorControl jobs scope elaborated) `shouldReturn` Left MonitorControl.MonitorArmingForbidden
-    Right monitor <- withDb pool (MonitorCapability.runMonitorControl jobs (scope {MonitorCapability.armingAllowed = True}) elaborated)
+        timed = MonitorCapability.armMonitor (MonitorCapability.TimeMonitor "watch" Nothing (addUTCTime 60 now))
+        watching = MonitorCapability.armMonitor (MonitorCapability.LedgerMonitor "watch" (LedgerMatchSpec Nothing (Just "alert") Nothing False) 60 (addUTCTime 3600 now) 10)
+    withDb pool (MonitorCapability.runMonitorControl jobs (scope {MonitorCapability.principal = otherActor}) timed) `shouldReturn` Left MonitorControl.ArmingCallerFenced
+    withDb pool (MonitorCapability.runMonitorControl jobs (scope {MonitorCapability.group = GroupId 901}) timed) `shouldReturn` Left MonitorControl.ArmingCallerFenced
+    -- Any member may time an automation; watching messages needs an administrator.
+    withDb pool (MonitorCapability.runMonitorControl jobs scope watching) `shouldReturn` Left MonitorControl.MonitorArmingForbidden
+    Right watcher <- withDb pool (MonitorCapability.runMonitorControl jobs (scope {MonitorCapability.armingAllowed = True}) watching)
+    Right monitor <- withDb pool (MonitorCapability.runMonitorControl jobs scope timed)
+    roles <- withDb pool (query "SELECT required_role FROM monitors WHERE monitor_id IN (?,?) ORDER BY monitor_id" (watcher.mrMonitorId, monitor.mrMonitorId))
+    roles `shouldBe` [Only ("group_admin" :: Text), Only "member"]
     grants <- withDb pool (query "SELECT effect_ceiling->'tool_grants' FROM monitors WHERE monitor_id=?" (Only monitor.mrMonitorId))
     grants `shouldBe` [Only (object ["context_search" .= ("frozen" :: Text)])]
     withDb pool (MonitorQueryCapability.runMonitorQuery (conversationScopeFor (GroupId 901)) (MonitorQueryCapability.readMonitorHistory monitor.mrMonitorOrdinal)) `shouldReturn` Nothing

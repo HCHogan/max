@@ -15,7 +15,7 @@ it does not reconstruct an execution from those records.
 | Cancellation | [`Tasks`](../src/Max/Tasks.hs), [`Conversation`](../src/Max/Conversation.hs), [`Jobs`](../src/Max/Jobs.hs) | Revoke local publication authority before cancelling the worker; the dispatch finalizer closes resources |
 | Inbound message | [`Handler.QQ.handleEvents`](../src/Max/Handler/QQ.hs) / platform adapter → [`Store.Ingest.ingestEnvelope`](../src/Max/Platform/Store/Ingest.hs) → [`Handler.ingressWorker`](../src/Max/Handler.hs) | The ingest transaction owns deduplication and canonical history; Handler routes only committed messages |
 | Background Job | [`Handler.Jobs.jobsWorker`](../src/Max/Handler/Jobs.hs) → `Turn.Dispatch` → [`Turn.Job.runJob`](../src/Max/Turn/Job.hs) | Jobs owns task state; the ordinary dispatch scope owns runtime registration and cleanup |
-| Reminder | [`Monitor.monitorWorker`](../src/Max/Monitor.hs) → [`Monitor.Dispatch.dispatchMonitorFire`](../src/Max/Monitor/Dispatch.hs) → ordinary Jobs | One scheduler, no lease or retry owner. Startup ends unfinished triggers |
+| Automation | [`Monitor.monitorWorker`](../src/Max/Monitor.hs) → [`Monitor.Dispatch.dispatchMonitorFire`](../src/Max/Monitor/Dispatch.hs) → Job → foreground `AutomationTurn` | One scheduler, no lease or retry owner. The fire's Job settles when its turn ends. Startup ends unfinished triggers |
 | Startup and configuration | [`Main`](../app/Main.hs), [`Env`](../src/Max/Env.hs), [`Worker`](../src/Max/Worker.hs) | Main projects configuration once and allocates process resources; supervised workers share their lifetime |
 
 Storage entry points are grouped by transaction or query responsibility:
@@ -111,7 +111,7 @@ src/Max/HttpRuntime process-wide http-client managers, bounded response scopes,
 src/Max/DB/        postgresql-simple queries: Connection, pinned Transaction,
                    Migrations, Message, Forward,
                    History, ConversationCursor, Session, Files, Memory, Permissions,
-                   PlatformIds, Reminder, Stickers, MediaMissing (derived media),
+                   PlatformIds, Stickers, MediaMissing (derived media),
                    Calls, Usage
 src/Max/Command/   !cmd DSL: Types, Parser (megaparsec), Dispatcher, Help (the
                    !help text — a leaf module so the self-knowledge skill can
@@ -121,7 +121,7 @@ src/Max/Sandbox/   Per-group NixOS workspace lifecycle + registry
 src/Max/Browser/   Per-group camoufox host + per-turn MCP/browser lifecycle
 src/Max/MCP/       Minimal MCP client (Streamable HTTP)
 src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory,
-                   Images, Video, Bilibili, Stickers, Pins, Group, Reminder,
+                   Images, Video, Bilibili, Stickers, Pins, Group, Monitor (automations),
                    Skills — progressive disclosure, SelfSource — bounded reads
                    of the allowlisted compile-time source snapshot)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
@@ -143,7 +143,7 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    (vector worker), Forward/Image/File workers, FetchQueue (their
                    typed local queues), Media (missing-source scan), MediaCaption + Stickers (caption workers),
                    Conversation (local queue), Turn + Task, Monitor
-                   (typed trigger scheduler), Reminder, Reply (planning),
+                   (typed trigger scheduler), Reply (planning),
                    ReplySend (planning made real:
                    placeholders, sending, persistence — shared by final,
                    streamed, and progress text), Render, Roster, Shutdown (graceful
@@ -371,7 +371,7 @@ Jobs belong to the process; a restart does not resume them.
 | Historian results and coverage | `episode_capture_runs` stores completed results; summaries, citations, memory proposals and the conversation cursor publish in one transaction. Quiet timers, attempts and manual rebuild requests are local; startup derives fresh work from source gaps |
 | Prompt selection | derived from active summaries and the bounded raw tail each turn; sampled body-free log diagnostics, no persistent planning state |
 | Episode expansion handles | random UUID on the immutable compartment; scoped lookup recovers the exact raw ingest range, including after supersession |
-| Monitors and reminders | Definitions, deduplicated TimeCron/LedgerMatch/HTTP trigger facts, frozen authority and result history; one scheduler starts ordinary Jobs. Startup interrupts unfinished triggers; no leases or delivery retry ledger |
+| Automations | Definitions, deduplicated TimeCron/LedgerMatch/HTTP trigger facts, frozen authority and result history. One scheduler admits each fire as a Job, which runs a foreground turn. Startup interrupts unfinished triggers; there are no leases or delivery retry ledger |
 | Embeddings, captions | workers poll messages, memories, active episode summaries, stickers, and media for missing/incompatible derived data, so any gap or model change backfills itself |
 | Embedding ownership | one process-local lock serializes the worker and explicit reindex; conditional writes reject changed source content and memory versions |
 | Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` stores completed diagnostics with locally allocated result ordinals. Diagnostic write failure is logged without changing a completed outcome. Boot ends interrupted turns as crashed; it never reopens their model loop; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
@@ -525,7 +525,7 @@ Task tools are assembled with bound conversation, caller and execution scopes.
 Their code holds TaskQuery/TaskControl/TaskExecution and TurnQuery capabilities,
 without raw SQL, Blob or IO access. Task control checks local liveness and rechecks the bound caller under a
 conversation transaction; administrative authority is absent from that interface.
-Monitor and reminder tools similarly receive MonitorQuery/MonitorControl;
+Automation tools similarly receive MonitorQuery/MonitorControl;
 list/history readers have no control capability. Host assembly supplies one
 clock value per invocation. The write interpreter rechecks the bound actor,
 conversation and live turn in the definition transaction; elaborated

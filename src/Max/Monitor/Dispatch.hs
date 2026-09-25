@@ -124,6 +124,7 @@ dispatchMonitorFire fire = do
 
 roleStillAllows :: T.Text -> PermTier -> Bool
 roleStillAllows required actual = case required of
+  "member" -> True
   "owner" -> tierSatisfied TierOwner actual
   "group_admin" -> tierSatisfied TierGroupAdmin actual
   _ -> False

@@ -18,10 +18,6 @@ operationalChecks =
       True,
       "SELECT count(*) FROM message_deliveries WHERE status = 'outcome_unknown'"
     ),
-    ( "monitor_publication_failure",
-      True,
-      "SELECT count(*) FROM monitor_fires f JOIN monitors m USING(monitor_id) WHERE m.continuation_kind='canned' AND f.finished_at IS NOT NULL AND f.cancelled_at IS NULL AND f.last_error IS NOT NULL"
-    ),
     ( "journal_unresolved_outcome_unknown",
       True,
       "SELECT count(*) FROM execution_journal journal \

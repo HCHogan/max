@@ -1,8 +1,7 @@
 -- | Bounded monitor status and history views. SQL supplies facts; Haskell owns the
 -- public handles and JSON/prose projection consumed by tools and admin UI.
 module Max.Monitor.View
-  ( TimeMonitor (..),
-    ArmedMonitor (..),
+  ( ArmedMonitor (..),
     MonitorStatus (..),
     monitorStatusText,
     parseMonitorStatus,
@@ -26,7 +25,6 @@ import Max.Monitor.Policy (OccurrenceDisposition, OverlapPolicy, dispositionText
 import Max.Monitor.Types (MonitorRef)
 import Max.Task.State (TaskStatus, taskStatusText)
 import Max.Task.Types (TaskProfile, profileName, taskHandle)
-import Max.Turn.Types (AgentTurnRef)
 
 data MonitorStatus = Armed | Fired | MonitorCancelled | Expired deriving stock (Eq, Show)
 
@@ -110,12 +108,10 @@ instance ToJSON MonitorHistory where
     object
       [ "handle" .= monitorHandle view.definition.ordinal,
         "revision" .= view.definition.revision,
-        "goal" .= view.definition.goal,
-        "profile" .= profileName view.definition.profile,
+        "instruction" .= view.definition.goal,
         "status" .= monitorStatusText view.definition.status,
         "overlap" .= overlapPolicyText view.definition.overlap,
         "queue_limit" .= view.definition.queueLimit,
-        "change_only" .= view.definition.changeOnly,
         "next_fire" .= view.definition.nextFire,
         "fires" .= view.fires
       ]
@@ -178,15 +174,3 @@ data ArmedMonitor = ArmedMonitor
   }
   deriving stock (Show, Eq)
 
-data TimeMonitor = TimeMonitor
-  { tmRef :: !MonitorRef,
-    tmGroupId :: !Int64,
-    tmAuthorPrincipalId :: !(Maybe Int64),
-    tmArmingTurn :: !(Maybe AgentTurnRef),
-    tmText :: !Text,
-    tmCron :: !(Maybe Text),
-    tmNextFireAt :: !UTCTime,
-    tmCreatedAt :: !UTCTime,
-    tmFireCount :: !Int64
-  }
-  deriving stock (Show, Eq)

@@ -159,7 +159,7 @@ def check_imports():
         dependencies = set(IMPORT.findall(source))
         if relative != "src/Max/MemoryStore.hs" and re.search(r"\bcreateMemory\b", source):
             errors.append(f"{relative}: memory creation bypasses shared admission")
-        domain_tools = {"src/Max/Tools/Skills.hs", "src/Max/Tools/Search.hs", "src/Max/Tools/Sandbox.hs", "src/Max/Tools/Browser.hs", "src/Max/Tools/Files.hs", "src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Reminder.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Pins.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs"}
+        domain_tools = {"src/Max/Tools/Skills.hs", "src/Max/Tools/Search.hs", "src/Max/Tools/Sandbox.hs", "src/Max/Tools/Browser.hs", "src/Max/Tools/Files.hs", "src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Pins.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs"}
         resource_tools = {"src/Max/Tools/Files.hs", "src/Max/Tools/Browser.hs"}
         if relative in domain_tools | resource_tools:
             if any(dependency.startswith(("Max.DB.", "Max.Platform.Store.")) for dependency in dependencies) or dependencies & {"Effectful.PostgreSQL", "Max.Platform.Store", "Max.Session", "Max.Reply.Resolve", "Max.Reply.Caption", "Max.Task.ToolRuntime", "Max.Monitor.ToolRuntime", "Max.Memory.ToolRuntime", "Max.MemoryStore", "Max.EpisodeStore", "Max.Recall", "Max.Prompt", "Max.Conversation.ToolRuntime", "Max.Monitor", "Max.Tools"}:

@@ -329,7 +329,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
             worker
               "monitor-scheduler"
               RequiredWorker
-              (monitorWorker cfg.timezone dispatchMonitorFire),
+              (monitorWorker dispatchMonitorFire),
             worker "media-discovery" RequiredWorker (mediaDiscoveryWorker fetchSig),
             worker "canonical-dispatch" RequiredWorker (ingressWorker fetchSig (intentState <$ env.beIntent)),
             worker "jobs" RequiredWorker jobsWorker,

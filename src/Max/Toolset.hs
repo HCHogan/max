@@ -61,7 +61,6 @@ import Max.Media.ToolRuntime
 import Max.Memory.ToolRuntime (memoryToolsWithDatabase)
 import Max.Monitor.ToolRuntime
   ( monitorToolsWithDatabase,
-    reminderToolsWithDatabase,
   )
 import Max.Pin.ToolRuntime (pinToolsWithDatabase)
 import Max.Platform.Types (noAdvertisedCaps)
@@ -175,7 +174,6 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
       bindWorkflowContracts javaScriptRuntimeVersion (catalogTools (registryCatalog registry)) loads
     runners0 =
       builtinsWithDatabase env.beTimeZone dc
-        <> reminderToolsWithDatabase env.beJobs env.beTimeZone dc
         <> monitorToolsWithDatabase env.beJobs env.beTimeZone env.beWebhookBaseUrl dc
         <> groupToolsWithDatabase dc
         <> imageToolsWithDatabase env.beTimeZone dc
@@ -241,9 +239,9 @@ toolDefinitionsFor env gid caps =
       StickersOnly -> caps.tcStickers && env.beEmbeddingEnabled
       SkillsOnly -> caps.tcSkills
       SearchOnly -> isJust env.beSearch
-      -- Ordinary foreground turns list arm_monitor for every initiator so the
-      -- tool block (a cached prompt prefix) does not change with who speaks.
-      -- MonitorControl still rejects arming for roles below group admin.
+      -- Ordinary foreground turns list create_automation for every initiator
+      -- so the tool block (a cached prompt prefix) does not change with who
+      -- speaks. Background tasks do not create automations.
       MonitorArmOnly -> caps.tcMonitorArming || (not caps.tcBackground && isNothing caps.tcEffectCeiling)
       BackgroundOnly -> caps.tcBackground
     ceilingOpen definition' =
@@ -286,20 +284,15 @@ toolInventory =
     always (readTool "context_resume" ["conversation.db"] [CurrentConversation]),
     always (readTool "context_read" ["conversation.db"] [CurrentConversation]),
     always (sendTool "poke" "chat.endpoint"),
-    -- An explicit reminder is the asker's own standing consent, not
-    -- bot-initiated activity: it stays open to every member.  Only
-    -- 'arm_monitor', which opens turns nobody asked for at that moment,
-    -- carries the role gate (ADR 006 "quietness is structural").
-    -- Audited: bad args, empty text and every resolveWhen rejection all return
-    -- before armCannedTimeMonitor is reached.
-    always (legacyFailureFingerprint (writeToolV 2 "set_reminder" ["monitor.db"] [CurrentConversation])),
-    always (readToolV 2 "list_reminders" ["monitor.db"] [CurrentConversation]),
-    always (writeToolV 2 "cancel_reminder" ["monitor.db"] [CurrentConversation]),
-    gated MonitorArmOnly (writeToolV 1 "arm_monitor" ["monitor.db"] [CurrentConversation]),
-    always (readToolV 1 "list_monitors" ["monitor.db"] [CurrentConversation]),
-    always (writeToolV 2 "cancel_monitor" ["monitor.db"] [CurrentConversation]),
-    always (writeToolV 2 "configure_monitor" ["monitor.db"] [CurrentConversation]),
-    always (readTool "monitor_history" ["monitor.db"] [CurrentConversation]),
+    -- A time automation is its creator's own delayed request, so every
+    -- foreground initiator sees create_automation; MonitorControl still
+    -- rejects message and webhook triggers below group admin. Rejections
+    -- all return before anything is armed.
+    gated MonitorArmOnly (legacyFailureFingerprint (writeTool "create_automation" ["monitor.db"] [CurrentConversation])),
+    always (readTool "list_automations" ["monitor.db"] [CurrentConversation]),
+    always (writeTool "cancel_automation" ["monitor.db"] [CurrentConversation]),
+    always (writeTool "update_automation" ["monitor.db"] [CurrentConversation]),
+    always (readTool "automation_history" ["monitor.db"] [CurrentConversation]),
     gated GroupOnly (readTool "group_members" ["chat.roster"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_avatar" ["chat.avatar", "tool.media"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_image" ["conversation.db", "blob.store", "tool.media"] [CurrentConversation]),

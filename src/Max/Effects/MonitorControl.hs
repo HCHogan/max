@@ -39,8 +39,7 @@ data MonitorControlScope = MonitorControlScope
   }
 
 data MonitorArm
-  = CannedReminder !Text !(Maybe Text) !UTCTime
-  | TimeMonitor !Text !(Maybe Text) !UTCTime
+  = TimeMonitor !Text !(Maybe Text) !UTCTime
   | LedgerMonitor !Text !LedgerMatchSpec !Int !UTCTime !Int64
   deriving stock (Eq, Show)
 
@@ -70,9 +69,9 @@ runMonitorControl jobs scope = interpret $ \_ -> \case
         Just base -> fmap (\registration -> registration {path = base <> registration.path}) <$> HttpDB.armHttpMonitor scope.group scope.principal turn scope.grants spec
   ArmMonitor request -> withCaller ArmingCallerFenced $ \turn ->
     case request of
-      CannedReminder body cron at -> Right <$> DB.armCannedTimeMonitor scope.group scope.principal (Just turn) body cron at
-      _ | not scope.armingAllowed -> pure (Left MonitorArmingForbidden)
+      -- A time automation is its creator's own delayed request.
       TimeMonitor goal cron at -> DB.armElaboratedTimeMonitor scope.group scope.principal turn goal cron at scope.grants
+      _ | not scope.armingAllowed -> pure (Left MonitorArmingForbidden)
       LedgerMonitor goal predicate cooldown expires maxFires -> DB.armLedgerMatchMonitor scope.group scope.principal turn goal predicate cooldown expires maxFires scope.grants
   ControlMonitor ordinal command cancelTasks -> do
     result <- withCaller MonitorCallerFenced $ \_ ->

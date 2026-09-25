@@ -25,8 +25,9 @@ v2 alerts 直接返回数组；结合 labels、annotations、startsAt、endsAt �
 两台实例可能持有同一组告警，核对 cluster 状态并按 fingerprint 去重；
 Prometheus 的查询接口仍是 `/api/v1/query`，不要一并改成 v2。
 
-需要接收推送时，使用通用 `arm_monitor(trigger="http", profile="sandbox")`，
-在 goal 中说明收到告警后核查主机、服务和日志的任务；由用户在群内决定是否创建。
+需要接收推送时，使用 `create_automation(trigger="webhook")`，在 instruction 中
+说明收到告警后核查主机、服务和日志的任务；由用户在群内决定是否创建。触发时你在
+前台以创建者的权限处理，sandbox 和 SSH 照常可用。
 工具返回独立 URL 和 bearer_token，供 Alertmanager 的 webhook receiver 配置使用，
 凭据写入受限的配置/凭据文件，不在群回复中展示。发送端配置和当前端口以
 nix-config 的监控模块及目标机有效配置为准；修改接收路由前核对现有 receiver，
