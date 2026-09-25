@@ -454,10 +454,16 @@ systemd.services.max.environment.MAX_LOG_COLOR = "always";
 `!debug on` mirrors tool calls *and their results* into the chat itself.
 
 Media fetches use bounded process-local queues. The admin overview exposes
-`media_pending` and `media_failed` for this process; `media fetch failed` logs
-include the kind, source key, attempt and error. Each read gets at most five
-attempts per admission. Missing-data scans revisit canonical history, including
-late commits, with a bounded cache suppressing recently processed keys.
+`media_pending` and `media_failed` for this process. Each read gets at most five
+attempts per admission; retries log `media fetch retrying` at info, and the last
+failure logs `media fetch failed` with the kind, source key and error. A key that
+fails every attempt is parked in `media_fetch_failures` (migration 129): scans
+skip it until `retry_after`, an hour after the first round, then a day, 24 days,
+and at most 30 days. Expired QQ media and forwards NapCat can no longer serve
+("消息已过期或者为内层消息") therefore cost one attempt a month, not a burst after
+every restart. Missing-data scans revisit canonical history, including late
+commits, with a bounded cache suppressing recently processed keys. Delete a row
+to retry its source at the next scan.
 
 Inspect `message_images`, `message_videos`, `group_files` and
 `forward_expansions` for completed results. A forward completion with zero

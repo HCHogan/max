@@ -367,7 +367,7 @@ Jobs belong to the process; a restart does not resume them.
 | Survives a restart | How |
 |---|---|
 | Messages, sessions, memories, stickers, permissions, skills | written through on every mutation; Session persists revision CAS before publishing its TVar (builtin skills re-seed from the binary) |
-| Media sources and completed attachments | Canonical messages retain URLs/native references; startup and periodic scans discover missing images/videos/files/forward content. Typed bounded queues execute reads locally, prioritizing live ingress. `forward_expansions` distinguishes an empty completed expansion from partial import; old `fetch_jobs` are archived diagnostics |
+| Media sources and completed attachments | Canonical messages retain URLs/native references; startup and periodic scans discover missing images/videos/files/forward content. Typed bounded queues execute reads locally, prioritizing live ingress. `forward_expansions` distinguishes an empty completed expansion from partial import; `media_fetch_failures` parks sources that exhausted their retries until a backoff expires; old `fetch_jobs` are archived diagnostics |
 | Historian results and coverage | `episode_capture_runs` stores completed results; summaries, citations, memory proposals and the conversation cursor publish in one transaction. Quiet timers, attempts and manual rebuild requests are local; startup derives fresh work from source gaps |
 | Prompt selection | derived from active summaries and the bounded raw tail each turn; sampled body-free log diagnostics, no persistent planning state |
 | Episode expansion handles | random UUID on the immutable compartment; scoped lookup recovers the exact raw ingest range, including after supersession |

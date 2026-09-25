@@ -136,6 +136,7 @@ truncateAll pool = withConn pool $ \c -> do
       \  sessions, \
       \  group_files, \
       \  llm_usage, \
+      \  media_fetch_failures, \
       \  fetch_jobs \
       \  RESTART IDENTITY CASCADE"
   pure ()

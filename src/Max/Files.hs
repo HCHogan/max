@@ -17,6 +17,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Files qualified as DB
+import Max.DB.MediaMissing (parkFetch)
 import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
 import Max.Effects.ChatView (ChatView, linkChatMedia)
@@ -93,7 +94,7 @@ fileWorker ::
   Eff es ()
 fileWorker sig = localDomain "file-worker" $ do
   logInfo_ "file worker started"
-  runFetchLoop sig JobFile processOne
+  runFetchLoop sig JobFile parkFetch processOne
 
 processOne ::
   ( Log :> es,

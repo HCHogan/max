@@ -8,7 +8,7 @@ import Data.Int (Int64)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Database.PostgreSQL.Simple (Only (..), execute, query_)
+import Database.PostgreSQL.Simple (Only (..), execute, query, query_)
 import Effectful (runEff)
 import Effectful.Concurrent (runConcurrent)
 import Helpers (insertRawMessage, requireJust, testTime, truncateAll, withDb, withDbLog)
@@ -53,6 +53,25 @@ spec pool = before_ (truncateAll pool) $ describe "missing media discovery" $ do
     missing `shouldReturn` [(CanonicalMessageId mid, True)]
     _ <- withConn pool $ \c -> execute c "UPDATE message_images SET seg_index=1 WHERE canonical_message_id=?" (Only mid)
     missing `shouldReturn` []
+
+  it "skips parked fetches until their retry time, backing off each round" $ do
+    mid <- source pool 13 True [media IR.MImage, fileNode, forwardNode]
+    let missing = snd <$> withDb pool (missingMediaMessages 0)
+        park kind key = withDb pool (parkFetch kind key "expired")
+        backoff kind key wait = withConn pool $ \c ->
+          query c "SELECT rounds, retry_after = failed_at + ?::interval FROM media_fetch_failures WHERE kind=? AND fetch_key=?" (wait :: Text, kind :: Text, key)
+    park "image" (T.pack (show mid <> ":0"))
+    park "file" "file-id"
+    missing `shouldReturn` [(CanonicalMessageId mid, True)]
+    park "forward" (T.pack (show mid <> ":chain"))
+    missing `shouldReturn` []
+    park "forward" (T.pack (show mid <> ":chain"))
+    park "forward" (T.pack (show mid <> ":chain"))
+    park "forward" (T.pack (show mid <> ":chain"))
+    backoff "forward" (T.pack (show mid <> ":chain")) "30 days" `shouldReturn` [(4 :: Int, True)]
+    backoff "image" (T.pack (show mid <> ":0")) "1 hour" `shouldReturn` [(1, True)]
+    _ <- withConn pool $ \c -> execute c "UPDATE media_fetch_failures SET retry_after = now() WHERE kind='file'" ()
+    missing `shouldReturn` [(CanonicalMessageId mid, True)]
 
   it "fetches media inside imported forwards without reopening nested forward chains" $ do
     mid <- source pool 12 False [forwardNode]

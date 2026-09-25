@@ -22,7 +22,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.MediaMissing (forwardExpanded, recordForwardExpansion)
+import Max.DB.MediaMissing (forwardExpanded, parkFetch, recordForwardExpansion)
 import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.PlatformQuery (PlatformQuery, queryForward)
 import Max.FetchQueue (FetchPriority (..), FetchSignal, ForwardJob (..), JobKind (JobForward), enqueueFetch, notifyFetch, runFetchLoop)
@@ -92,7 +92,7 @@ forwardWorker ::
   Eff es ()
 forwardWorker sig = localDomain "forward-worker" $ do
   logInfo_ "forward worker started"
-  runFetchLoop sig JobForward (processJob sig)
+  runFetchLoop sig JobForward parkFetch (processJob sig)
 
 processJob ::
   (Log :> es, PlatformQuery :> es, WithConnection :> es, IOE :> es) =>

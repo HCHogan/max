@@ -1,5 +1,5 @@
--- | Missing media sources and completed forward expansions.
-module Max.DB.MediaMissing (missingMediaMessages, storedMedia, forwardExpanded, recordForwardExpansion) where
+-- | Missing media sources, completed forward expansions and parked fetches.
+module Max.DB.MediaMissing (missingMediaMessages, storedMedia, forwardExpanded, recordForwardExpansion, parkFetch) where
 
 import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
@@ -32,18 +32,26 @@ missingMediaMessages after = do
       \         OR (node->>'kind'='video' AND lower(node->>'source') LIKE 'http%' AND NOT EXISTS ( \
       \           SELECT 1 FROM message_videos v \
       \           WHERE v.canonical_message_id=m.canonical_message_id AND v.seg_index=n.position-1)) \
-      \       ) \
+      \       ) AND NOT EXISTS ( \
+      \         SELECT 1 FROM media_fetch_failures x WHERE x.kind='image' AND x.retry_after > now() \
+      \           AND x.fetch_key=m.canonical_message_id || ':' || (n.position-1)) \
       \     ) OR ( \
       \       node->>'type'='media' AND node->>'kind'='file' \
       \       AND COALESCE(node->'raw'->'data'->>'file_id',node->'raw'->'data'->>'file') IS NOT NULL \
       \       AND NOT EXISTS ( \
       \         SELECT 1 FROM group_files f WHERE f.sha256 IS NOT NULL \
       \           AND f.file_id=COALESCE(node->'raw'->'data'->>'file_id',node->'raw'->'data'->>'file')) \
+      \       AND NOT EXISTS ( \
+      \         SELECT 1 FROM media_fetch_failures x WHERE x.kind='file' AND x.retry_after > now() \
+      \           AND x.fetch_key=COALESCE(node->'raw'->'data'->>'file_id',node->'raw'->'data'->>'file')) \
       \     ) OR ( \
       \       node->>'type'='forward' AND m.source_native_event_id NOT LIKE 'forward:%' \
       \       AND NOT EXISTS ( \
       \         SELECT 1 FROM forward_expansions f \
       \         WHERE f.canonical_message_id=m.canonical_message_id AND f.forward_id=node->>'native_id') \
+      \       AND NOT EXISTS ( \
+      \         SELECT 1 FROM media_fetch_failures x WHERE x.kind='forward' AND x.retry_after > now() \
+      \           AND x.fetch_key=m.canonical_message_id || ':' || (node->>'native_id')) \
       \     ) \
       \   ) \
       \ FROM source m ORDER BY m.canonical_message_id"
@@ -69,4 +77,21 @@ forwardExpanded job = do
 recordForwardExpansion :: (WithConnection :> es, IOE :> es) => ForwardJob -> Int -> Eff es ()
 recordForwardExpansion job count = do
   _ <- execute "INSERT INTO forward_expansions(canonical_message_id,forward_id,top_level_count) VALUES (?,?,?) ON CONFLICT DO NOTHING" (job.containerMessageId, job.forwardId, count)
+  pure ()
+
+-- | Park a fetch that exhausted its retries; discovery skips it until
+-- retry_after. Each round waits 24 times longer (an hour, a day, 24 days), at
+-- most 30 days, so a lasting failure costs one attempt a month.
+parkFetch :: (WithConnection :> es, IOE :> es) => Text -> Text -> Text -> Eff es ()
+parkFetch kind key err = do
+  _ <-
+    execute
+      "INSERT INTO media_fetch_failures (kind, fetch_key, last_error, retry_after) \
+      \ VALUES (?, ?, ?, now() + interval '1 hour') \
+      \ ON CONFLICT (kind, fetch_key) DO UPDATE SET \
+      \   rounds = media_fetch_failures.rounds + 1, \
+      \   last_error = EXCLUDED.last_error, \
+      \   failed_at = now(), \
+      \   retry_after = now() + least(interval '30 days', interval '1 hour' * power(24, media_fetch_failures.rounds))"
+      (kind, key, err)
   pure ()

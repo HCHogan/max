@@ -21,7 +21,7 @@ import Effectful.Concurrent.Async (Concurrent, forConcurrently_)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute)
 import Max.DB.Media (videoMime, viewableImageMime)
-import Max.DB.MediaMissing (storedMedia)
+import Max.DB.MediaMissing (parkFetch, storedMedia)
 import Max.DB.Stickers (recordSticker, stickerMeta)
 import Max.DB.Transaction (withTransaction)
 import Max.Dispatch (DispatchMessage (..))
@@ -116,7 +116,7 @@ imageWorker poolSize sig = localDomain "image-worker" $ do
   logInfo "image worker pool started" $ object ["workers" .= poolSize]
   forConcurrently_ [1 .. poolSize] $ \wid ->
     localData [("w", toJSON (wid :: Int))] $
-      runFetchLoop sig JobImage processOne
+      runFetchLoop sig JobImage parkFetch processOne
 
 processOne ::
   (Log :> es, Http :> es, Blob :> es, ChatView :> es, WithConnection :> es, IOE :> es) =>

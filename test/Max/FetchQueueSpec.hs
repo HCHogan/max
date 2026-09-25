@@ -23,7 +23,7 @@ spec = describe "process-local media queue" $ do
     enqueue queue LiveFetch "new"
     enqueue queue LiveFetch "old-a"
     withAsync
-      ( logged $ runFetchLoop queue JobForward $ \job -> do
+      ( logged $ runFetchLoop queue JobForward ignoreExhausted $ \job -> do
           liftIO . atomically $ writeTQueue seen job.forwardId
           pure (Right ())
       )
@@ -40,14 +40,16 @@ spec = describe "process-local media queue" $ do
     timeout 1_000_000 (enqueue queue LiveFetch "new") `shouldReturn` Just ()
     fetchCounts queue `shouldReturn` (129, 0)
 
-  it "retries synchronous failures five times then processes the next item" $ do
+  it "retries synchronous failures five times, parks the key, then processes the next item" $ do
     queue <- newFetchSignal
     attempts <- newTVarIO (0 :: Int)
+    parked <- newTVarIO []
     done <- newEmptyTMVarIO
     enqueue queue LiveFetch "broken"
     enqueue queue LiveFetch "healthy"
+    let park kind key _ = liftIO . atomically $ modifyTVar' parked ((kind, key) :)
     withAsync
-      ( logged $ runFetchLoop queue JobForward $ \job ->
+      ( logged $ runFetchLoop queue JobForward park $ \job ->
           if job.forwardId == "broken"
             then do
               liftIO . atomically $ modifyTVar' attempts (+ 1)
@@ -57,6 +59,7 @@ spec = describe "process-local media queue" $ do
       $ \_ -> do
         timeout 6_000_000 (atomically $ takeTMVar done) `shouldReturn` Just ()
         readTVarIO attempts `shouldReturn` 5
+        readTVarIO parked `shouldReturn` [("forward", "broken" :: Text)]
         (_, failed) <- fetchCounts queue
         failed `shouldBe` 1
 
@@ -69,7 +72,7 @@ spec = describe "process-local media queue" $ do
           liftIO . atomically $ writeTQueue started job.forwardId
           liftIO . atomically $ takeTMVar gate
           pure (Right ())
-        run = logged (runFetchLoop queue JobForward process)
+        run = logged (runFetchLoop queue JobForward ignoreExhausted process)
     withAsync run $ \_ -> withAsync run $ \_ -> do
       timeout 1_000_000 (atomically $ readTQueue started) `shouldReturn` Just "blocked"
       enqueue queue LiveFetch "blocked"
@@ -83,3 +86,6 @@ enqueue queue priority key = runEff (enqueueFetch queue priority JobForward key 
 
 logged :: Eff '[Log, IOE] a -> IO a
 logged action = withCompactLogger ColorNever Nothing $ \logger -> runEff (runLog "media-test" logger LogAttention action)
+
+ignoreExhausted :: Text -> Text -> Text -> Eff es ()
+ignoreExhausted _ _ _ = pure ()
