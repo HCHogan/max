@@ -67,7 +67,10 @@ data Configuration = Configuration
     commands :: Map.Map Text FilePath,
     -- | Root of the per-conversation /chat views. Max populates each view with
     -- hardlinks into its object store; the broker owns the directories.
-    chatViews :: FilePath
+    chatViews :: FilePath,
+    -- | DRM render node bound into every sandbox container. Command units
+    -- keep PrivateDevices and get only this node back.
+    renderDevice :: Maybe FilePath
   }
   deriving stock (Generic)
   deriving anyclass (FromJSON)
@@ -459,13 +462,15 @@ guestExec broker name arguments socket handles = do
           "--property=PrivateDevices=yes",
           "--property=RestrictSUIDSGID=yes",
           "--property=RestrictNamespaces=yes",
-          "--property=ProtectControlGroups=yes",
-          "--setenv=HOME=/home/sandbox",
-          "--setenv=PATH=/run/current-system/sw/bin:/bin",
-          "--",
-          "/run/current-system/sw/bin/env",
-          "--"
+          "--property=ProtectControlGroups=yes"
         ]
+          <> concat [["--property=BindPaths=" <> device, "--property=DeviceAllow=" <> device <> " rw"] | Just device <- [broker.configuration.renderDevice]]
+          <> [ "--setenv=HOME=/home/sandbox",
+               "--setenv=PATH=/run/current-system/sw/bin:/bin",
+               "--",
+               "/run/current-system/sw/bin/env",
+               "--"
+             ]
           <> map T.unpack arguments
   execute broker socket handles command 3660 (Just (machine, unit))
 

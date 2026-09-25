@@ -42,6 +42,12 @@ attribute 名用 nix_search 查（regex 匹配名字和描述，最多回 30 条
 'python.*opencv'、'^nodejs$'；空结果就放宽 regex）。包 store 全沙箱共享：某个包
 第一次用要下载，那一次把 timeout_seconds 提到 120-300；下过之后所有沙箱瞬时可用。
 
+宿主开放了 GPU 时沙箱里有 /dev/dri/renderD128（`test -e` 一下）。这时 nixpkgs 的
+ffmpeg 可以用 VA-API 硬件编解码：解码加 `-hwaccel vaapi -hwaccel_device
+/dev/dri/renderD128 -hwaccel_output_format vaapi`，缩放用 `scale_vaapi`，编码用
+`h264_vaapi`/`hevc_vaapi`/`av1_vaapi`，要回到 CPU 滤镜先 `hwdownload,format=nv12`。
+硬件帧不会自动按旋转元数据转正，需要时自己加 transpose。硬件路径报错就去掉这些参数走 CPU。
+
 Python 专门提醒：python3 本身已预装，标准库直接跑。第三方库把对应
 `python3Packages.<attr>` 放进 packages；宿主会把同一次调用里的这些库收成一个
 `python3.withPackages` 环境，所以命令中的 python3 可以直接 import。例如

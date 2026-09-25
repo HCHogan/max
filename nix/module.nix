@@ -474,7 +474,9 @@ in
         PrivateDevices = true;
         # The only device exception: an opted-in VA-API render node.
         BindPaths = lib.optional (cfg.videoAcceleration.device != null) cfg.videoAcceleration.device;
-        DeviceAllow = lib.optional (cfg.videoAcceleration.device != null) "${cfg.videoAcceleration.device} rw";
+        DeviceAllow = lib.optional (
+          cfg.videoAcceleration.device != null
+        ) "${cfg.videoAcceleration.device} rw";
         PrivateMounts = true;
         ProtectProc = "invisible";
         ProtectClock = true;

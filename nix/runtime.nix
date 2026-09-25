@@ -26,35 +26,41 @@ let
       )
     );
   brokerConfig = pkgs.writeText "max-runtime.json" (
-    builtins.toJSON {
-      user = "max-service";
-      stateDirectory = runtime.stateDirectory;
-      gcRootsDirectory = "${runtime.stateDirectory}/gcroots";
-      legacyVolumeDirectory = "/var/lib/docker/volumes";
-      nixpkgs = toString cfg.sandbox.nixpkgs;
-      system = pkgs.stdenv.hostPlatform.system;
-      bridge = "max-sb-native";
-      subnet = "10.231.0.0/16";
-      gateway = "10.231.0.1";
-      dns = cfg.sandbox.nameservers;
-      operationsGroups = lib.optionals cfg.operations.enable cfg.operations.allowedGroups;
-      operationsDns = [ "100.100.100.100" ];
-      # Max fills each conversation's view; the broker owns the directories.
-      chatViews = "${cfg.mediaDirectory}/views";
-      # Each backend adopts only its own effective template. A browser package
-      # change must not invalidate unrelated, running command sandboxes.
-      generations =
-        lib.optionalAttrs cfg.sandbox.enable { sandbox = instancePolicy "sandbox"; }
-        // lib.optionalAttrs cfg.browser.enable { browser = instancePolicy "browser"; };
-      commands = {
-        systemctl = "${config.systemd.package}/bin/systemctl";
-        systemd-run = "${config.systemd.package}/bin/systemd-run";
-        ip = "${pkgs.iproute2}/bin/ip";
-        bridge = "${pkgs.iproute2}/bin/bridge";
-        nix = "${pkgs.nix}/bin/nix";
-        mount = "${pkgs.util-linux}/bin/mount";
-      };
-    }
+    builtins.toJSON (
+      {
+        user = "max-service";
+        stateDirectory = runtime.stateDirectory;
+        gcRootsDirectory = "${runtime.stateDirectory}/gcroots";
+        legacyVolumeDirectory = "/var/lib/docker/volumes";
+        nixpkgs = toString cfg.sandbox.nixpkgs;
+        system = pkgs.stdenv.hostPlatform.system;
+        bridge = "max-sb-native";
+        subnet = "10.231.0.0/16";
+        gateway = "10.231.0.1";
+        dns = cfg.sandbox.nameservers;
+        operationsGroups = lib.optionals cfg.operations.enable cfg.operations.allowedGroups;
+        operationsDns = [ "100.100.100.100" ];
+        # Max fills each conversation's view; the broker owns the directories.
+        chatViews = "${cfg.mediaDirectory}/views";
+        # Each backend adopts only its own effective template. A browser package
+        # change must not invalidate unrelated, running command sandboxes.
+        generations =
+          lib.optionalAttrs cfg.sandbox.enable { sandbox = instancePolicy "sandbox"; }
+          // lib.optionalAttrs cfg.browser.enable { browser = instancePolicy "browser"; };
+        commands = {
+          systemctl = "${config.systemd.package}/bin/systemctl";
+          systemd-run = "${config.systemd.package}/bin/systemd-run";
+          ip = "${pkgs.iproute2}/bin/ip";
+          bridge = "${pkgs.iproute2}/bin/bridge";
+          nix = "${pkgs.nix}/bin/nix";
+          mount = "${pkgs.util-linux}/bin/mount";
+        };
+      }
+      // lib.optionalAttrs (cfg.sandbox.renderDevice != null) {
+        # Command units get this node back inside their private /dev.
+        renderDevice = cfg.sandbox.renderDevice;
+      }
+    )
   );
   client = cfg.package;
   guestInit = pkgs.writeScript "max-sandbox-init" ''
@@ -98,6 +104,19 @@ in
           "119.29.29.29"
         ];
         description = "Public DNS servers reachable through the sandbox egress policy.";
+      };
+      renderDevice = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/dev/dri/renderD128";
+        description = ''
+          DRM render node shared with every command sandbox, for VA-API and
+          Vulkan tools such as `ffmpeg -hwaccel vaapi`. The node and the host's
+          /run/opengl-driver are bound into each container, and each command
+          unit gets the node back inside its private /dev. Sandboxes run
+          untrusted commands, so this also exposes the host GPU driver to them.
+          Changing it recreates sandboxes around their work volumes on next use.
+        '';
       };
     };
     browser = {
@@ -207,28 +226,38 @@ in
         # Join before nspawn creates its user namespace. A later setns into a
         # host-owned netns would fail after losing capabilities in the parent.
         NetworkNamespacePath = "/run/netns/max-sb-%i";
-        ExecStart = lib.concatStringsSep " " [
-          "${config.systemd.package}/bin/systemd-nspawn"
-          "--keep-unit"
-          "--register=yes"
-          "--notify-ready=yes"
-          "--kill-signal=SIGRTMIN+3"
-          "--machine=max-sandbox-%i"
-          "--directory=${runtime.stateDirectory}/roots/max-sb-%i"
-          "--private-users=pick"
-          "--private-users-ownership=auto"
-          # The broker supplies DNS reachable from the private network namespace.
-          "--resolv-conf=off"
-          # Store files are world-readable and immutable. No ownership mapping
-          # is needed here, and omitting it also supports VM/9p-backed stores.
-          "--bind-ro=/nix/store:/nix/store"
-          "--bind=${runtime.stateDirectory}/volumes/max-sb-%i-data/work:/work:idmap"
-          # The conversation's view, through a broker-owned link in the volume.
-          "--bind-ro=${runtime.stateDirectory}/volumes/max-sb-%i-data/chat:/chat"
-          "--tmpfs=/tmp:mode=1777,size=512M"
-          "--tmpfs=/home/sandbox:mode=0700,uid=1000,gid=1000,size=256M"
-          (toString guestInit)
-        ];
+        ExecStart = lib.concatStringsSep " " (
+          [
+            "${config.systemd.package}/bin/systemd-nspawn"
+            "--keep-unit"
+            "--register=yes"
+            "--notify-ready=yes"
+            "--kill-signal=SIGRTMIN+3"
+            "--machine=max-sandbox-%i"
+            "--directory=${runtime.stateDirectory}/roots/max-sb-%i"
+            "--private-users=pick"
+            "--private-users-ownership=auto"
+            # The broker supplies DNS reachable from the private network namespace.
+            "--resolv-conf=off"
+            # Store files are world-readable and immutable. No ownership mapping
+            # is needed here, and omitting it also supports VM/9p-backed stores.
+            "--bind-ro=/nix/store:/nix/store"
+            "--bind=${runtime.stateDirectory}/volumes/max-sb-%i-data/work:/work:idmap"
+            # The conversation's view, through a broker-owned link in the volume.
+            "--bind-ro=${runtime.stateDirectory}/volumes/max-sb-%i-data/chat:/chat"
+          ]
+          ++ lib.optionals (cfg.sandbox.renderDevice != null) [
+            # Render nodes are world-accessible, so the user namespace needs no
+            # mapping; the driver link must match the host's kernel driver.
+            "--bind=${cfg.sandbox.renderDevice}"
+            "--bind-ro=/run/opengl-driver"
+          ]
+          ++ [
+            "--tmpfs=/tmp:mode=1777,size=512M"
+            "--tmpfs=/home/sandbox:mode=0700,uid=1000,gid=1000,size=256M"
+            (toString guestInit)
+          ]
+        );
         KillMode = "mixed";
         TimeoutStartSec = 90;
         TimeoutStopSec = 30;
