@@ -1,4 +1,4 @@
--- | Tavily search through the shared HTTP runtime, enabled when configured.
+-- | Exa search through the shared HTTP runtime, enabled when configured.
 -- Return title/URL/snippet and an optional answer; omit bulky raw content,
 -- images and ranking metadata from the model-facing result.
 module Max.Tools.Search
@@ -42,12 +42,12 @@ webSearchTool defaultMaxResults =
   argumentTool
     "web_search"
     ( T.unwords
-        [ "Search the web via Tavily.  Use for current events, news,",
+        [ "Search the web via Exa.  Use for current events, news,",
           "documentation lookups, definitions, library references —",
           "anything you're not sure about or that may have changed",
           "since your training cutoff.  Returns the top results with",
-          "title / url / snippet, plus a synthesised 'answer' when",
-          "Tavily can produce one.  Prefer following up with curl /",
+          "title / url / snippet containing source highlights.",
+          "Prefer following up with curl /",
           "fetch from a sandbox if you need the full page text."
         ]
     )
@@ -57,15 +57,15 @@ webSearchTool defaultMaxResults =
     )
     $ \(q, requested) -> do
       let maxR = clamp (1, 10) requested
-      logInfo "search: tavily request" $
+      logInfo "search: exa request" $
         object ["query" .= q, "max_results" .= maxR]
       eres <- searchWeb q maxR
       case eres of
         Left err -> do
-          logAttention "search: tavily failed" $ object ["error" .= err]
+          logAttention "search: exa failed" $ object ["error" .= err]
           pure (readResult (Left err))
         Right v -> do
-          logInfo "search: tavily ok" $
+          logInfo "search: exa ok" $
             object
               [ "result_count" .= countResults v
               ]

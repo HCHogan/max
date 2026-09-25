@@ -685,6 +685,7 @@ test-suite max-test
         Max.Command.ParserSpec
         Max.Command.PermissionSpec
         Max.ConfigSpec
+        Max.Search.RuntimeSpec
         Max.SchemaSpec
         Max.ConversationScopeSpec
         Max.DB.CallsSpec

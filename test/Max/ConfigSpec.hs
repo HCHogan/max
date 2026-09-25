@@ -6,6 +6,7 @@ import Max.Config
 import Max.Http.Json (replyRetryDelaysSecs)
 import Max.ModelCatalog
 import Max.Task.Policy (frontendDeadlineSeconds, taskDeadlineSeconds)
+import Max.Tools.Search (SearchConfig (..))
 import System.Environment (withArgs)
 import System.IO (hClose, hPutStr)
 import System.IO.Temp (withSystemTempFile)
@@ -13,6 +14,21 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "startup configuration" $ do
+  it "enables free Exa search without credentials and accepts an optional fallback key" $ do
+    config <- withArgs ["--llm-api-key", "test-key", "--exa-api-key", ""] loadConfig
+    config.search `shouldBe` Just (SearchConfig Nothing 5 30)
+    keyed <- withArgs ["--llm-api-key", "test-key", "--exa-api-key", " exa-test "] loadConfig
+    keyed.search `shouldBe` Just (SearchConfig (Just "exa-test") 5 30)
+    disabled <- withArgs ["--llm-api-key", "test-key", "--search-enabled", "False"] loadConfig
+    disabled.search `shouldBe` Nothing
+  it "reads Exa search settings from YAML and rejects invalid budgets" $
+    withSystemTempFile "max-search.yaml" $ \path handle -> do
+      hPutStr handle "llm:\n  default: main\n  profiles:\n    main:\n      api_key: test-key\nsearch:\n  enabled: true\n  exa_api_key: exa-test\n  max_results: 3\n  timeout_seconds: 15\n"
+      hClose handle
+      config <- withArgs ["--config-file", path] loadConfig
+      config.search `shouldBe` Just (SearchConfig (Just "exa-test") 3 15)
+      for_ [["--search-max-results", "0"], ["--search-max-results", "11"], ["--search-timeout-seconds", "0"], ["--search-timeout-seconds", "301"]] $ \flags ->
+        withArgs (["--config-file", path] <> flags) loadConfig `shouldThrow` anyIOException
   it "derives all context limits from the single combined-window CLI option" $ do
     config <- withArgs ["--llm-api-key", "test-key", "--llm-context-window", "262144", "--llm-multimodal", "True"] loadConfig
     fmap (.contextLimits) (lookupModelCapabilities (defaultModelName config.llm) config.llm)

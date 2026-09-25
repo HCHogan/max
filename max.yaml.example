@@ -283,15 +283,28 @@ llm:
     #   history_as_turns: false
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Web search.  When tavily_api_key is set (here or via MAX_TAVILY_API_KEY
-# / --tavily-api-key) the agent gets a web_search tool backed by Tavily.
-# Without a key, the tool simply isn't registered — model never sees it.
+# Web search via Exa, enabled by default without credentials.
+# Free hosted MCP is tried first; exa_api_key enables REST API fallback.
+# MAX_EXA_API_KEY / --exa-api-key also configure the fallback key.
+# Tavily is retired; remove search.tavily_api_key / MAX_TAVILY_API_KEY.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # search:
-#   tavily_api_key: "tvly-..."
+#   enabled: true
+#   exa_api_key: "..."
 #   max_results: 5
 #   timeout_seconds: 30
+
+# Transient transport/408/5xx failures retry twice after 1s and 3s.
+# timeout_seconds bounds each backend including its retries (at most 2x
+# that budget for MCP + API, excluding the shared backend queues).
+# MCP requests are serialized and paced across all conversations/tasks.
+# MCP failures enter a shared cooldown: Retry-After, otherwise 60s.
+# API failures share a separate cooldown; 400/422 do not cool other queries.
+# A Retry-After response is cooled instead of immediately retried.
+# 429, permanent 4xx, malformed replies and empty results are not retried.
+# During cooldown requests use the API key, or fail clearly if none is set.
+# Disable search with search.enabled: false / MAX_SEARCH_ENABLED=False.
 
 # SSH fleet access is configured with services.max.operations in NixOS.
 

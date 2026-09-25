@@ -84,6 +84,7 @@ import Max.Sandbox.Registry
     newDurableSandboxRegistry,
     reconcileSandboxes,
   )
+import Max.Search.Runtime (newSearchRuntime)
 import Max.Session (newSessionRegistry)
 import Max.Shutdown (ShutdownState, beginDrain, drainWorker, newShutdownState)
 import Max.Skills (loadSkills, newSkillRegistry)
@@ -114,6 +115,7 @@ main = do
 
   cfg <- loadConfig
   httpRuntime <- newHttpRuntime
+  searchRuntime <- traverse newSearchRuntime cfg.search
   bracket (newDbPool cfg.db) closeDbPool $ \pool -> do
     applied <- runMigrations pool cfg.migrationsDir
     -- Browser containers remain ephemeral.  Sandboxes are different: their
@@ -183,7 +185,7 @@ main = do
                     beShutdown = shutdown,
                     beSandboxes = sandboxes,
                     beBrowsers = browsers,
-                    beSearch = cfg.search,
+                    beSearch = searchRuntime,
                     beCliProxy = cfg.cliproxy,
                     beBrowserProxy = cfg.browserProxy,
                     beMemoryExtract = cfg.memoryExtractProfile,

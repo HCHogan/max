@@ -1,6 +1,6 @@
 -- |
--- Shared buffered JSON-POST transport for the OpenAI/Anthropic clients and
--- Tavily.  Connection ownership lives in 'Max.HttpRuntime'; this module owns
+-- Shared buffered JSON-POST transport for the LLM clients.
+-- Connection ownership lives in 'Max.HttpRuntime'; this module owns
 -- only retry policy and JSON decoding.
 module Max.Http.Json
   ( postAndParse,
@@ -137,7 +137,7 @@ postAndParseRetrying runtime delays secs headers url requestBody parser = go del
               Right parsed -> Right parsed
 
 -- | One line per chat message for safe diagnostics.  'Nothing' for non-chat
--- JSON such as the Tavily request.
+-- JSON without a messages array.
 requestShape :: BS.ByteString -> Maybe [Text]
 requestShape bytes = do
   Object root <- decode (LBS.fromStrict bytes)

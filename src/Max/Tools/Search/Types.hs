@@ -6,7 +6,7 @@ where
 import Data.Text (Text)
 
 data SearchConfig = SearchConfig
-  { scTavilyApiKey :: !Text,
+  { scExaApiKey :: !(Maybe Text),
     scDefaultMaxResults :: !Int,
     scTimeoutSeconds :: !Int
   }

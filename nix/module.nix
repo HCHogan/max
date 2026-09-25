@@ -234,7 +234,7 @@ in
       example = "/run/secrets/max.env";
       description = ''
         EnvironmentFile with secrets: MAX_LLM_API_KEY,
-        MAX_ACCESS_TOKEN, MAX_TAVILY_API_KEY, ...
+        MAX_ACCESS_TOKEN, MAX_EXA_API_KEY, ...
       '';
     };
 

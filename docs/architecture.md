@@ -591,7 +591,8 @@ app/Main
             same validation + explicit AllowEMS for known legacy CDNs
               │
               ├─ Http effect ───── bounded downloads / redirect lookup
-              ├─ Http.Json ─────── buffered LLM + Tavily JSON POST
+              ├─ Http.Json ─────── buffered LLM JSON POST
+              ├─ Search.Runtime ─ Exa free MCP + keyed API fallback, shared cooldown
               ├─ Http.Stream ───── LLM SSE POST
               ├─ Embedding effect ─ validated records over a bounded
               │                     OpenAI-compatible JSON POST

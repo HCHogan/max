@@ -228,6 +228,7 @@ validateConfig cfg =
       maybe [] validateIMessage cfg.imessage,
       maybe [] validateWechatHook cfg.wechathook,
       maybe [] validateIntent cfg.intent,
+      maybe [] (\searchCfg -> invalid "search.max_results" (searchCfg.scDefaultMaxResults < 1 || searchCfg.scDefaultMaxResults > 10) <> invalid "search.timeout_seconds" (searchCfg.scTimeoutSeconds <= 0 || searchCfg.scTimeoutSeconds > 300)) cfg.search,
       validateProfile "memory.extract_profile" cfg.memoryExtractProfile,
       validateProfile "stickers.caption_profile" cfg.stickerCaptionProfile,
       validateProfile "intent.profile" ((.icProfile) <$> cfg.intent)
@@ -630,15 +631,26 @@ dbParser = do
 
 searchParser :: Parser (Maybe SearchConfig)
 searchParser = do
+  enabled <-
+    setting
+      [ help "Enable Exa web search (free MCP first, optional API key fallback)",
+        reader auto,
+        option,
+        long "search-enabled",
+        env "MAX_SEARCH_ENABLED",
+        conf "enabled",
+        metavar "BOOL",
+        value True
+      ]
   mKey <-
     optional $
       setting
-        [ help "Tavily API key (enables the web_search tool)",
+        [ help "Exa API key used when free MCP search is unavailable",
           reader str,
           option,
-          long "tavily-api-key",
-          env "MAX_TAVILY_API_KEY",
-          conf "tavily_api_key",
+          long "exa-api-key",
+          env "MAX_EXA_API_KEY",
+          conf "exa_api_key",
           metavar "KEY"
         ]
   maxResults <-
@@ -663,16 +675,16 @@ searchParser = do
         metavar "N",
         value 30
       ]
-  pure $ case mKey of
-    Just key
-      | not (T.null key) ->
-          Just
-            SearchConfig
-              { scTavilyApiKey = key,
-                scDefaultMaxResults = maxResults,
-                scTimeoutSeconds = timeoutSecs
-              }
-    _ -> Nothing
+  pure $
+    if enabled
+      then
+        Just
+          SearchConfig
+            { scExaApiKey = mKey >>= (\key -> if T.null (T.strip key) then Nothing else Just (T.strip key)),
+              scDefaultMaxResults = maxResults,
+              scTimeoutSeconds = timeoutSecs
+            }
+      else Nothing
 
 --------------------------------------------------------------------------------
 -- The credential pool in front of the subscription.

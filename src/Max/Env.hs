@@ -20,11 +20,11 @@ import Max.Jobs (Jobs)
 import Max.Platform.Delivery.Queue (DeliveryQueue)
 import Max.Platform.Ingress (Ingress)
 import Max.Sandbox.Registry (SandboxRegistry)
+import Max.Search.Runtime (SearchRuntime)
 import Max.Session (SessionRegistry)
 import Max.Shutdown (ShutdownState)
 import Max.Skills (SkillRegistry)
 import Max.Tasks (TaskRegistry)
-import Max.Tools.Search (SearchConfig)
 
 -- AppConfig is read once in Main. These immutable projections are the serving
 -- configuration; session overrides stay in SessionRegistry.
@@ -38,7 +38,7 @@ data BotEnv = BotEnv
     beTurnSilenceSeconds :: !Int,
     beOwners :: ![Int64],
     beWebhookBaseUrl :: !(Maybe Text),
-    beSearch :: !(Maybe SearchConfig),
+    beSearch :: !(Maybe SearchRuntime),
     beCliProxy :: !(Maybe CliProxyConfig),
     beBrowserProxy :: !(Maybe Text),
     -- | Historian profile; the configuration retains its memory-extract key.
