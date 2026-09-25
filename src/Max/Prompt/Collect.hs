@@ -123,7 +123,7 @@ import Max.Prompt.Request
       ),
   )
 import Max.Session.Types (Session (..))
-import Max.Time (fmtDurationSec, fmtHM)
+import Max.Time (fmtHM)
 import Max.Turn.Continuity (renderRecentTurn)
 
 -- | Shared read-only collection for ordinary prompts and diagnostic previews.

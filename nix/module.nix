@@ -238,6 +238,21 @@ in
       '';
     };
 
+    videoAcceleration.device = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/dev/dri/renderD128";
+      description = ''
+        VA-API render node for preparing video renditions. When set, the
+        node is bound into the service's private /dev and Max decodes,
+        drops frames and scales on the GPU, downloading only the kept
+        frames for x264; any failure falls back to software decoding.
+        Needs hardware.graphics with a VA-API driver (iHD for Intel Arc)
+        and a node the service user can open (NixOS render nodes are
+        world-accessible; PrivateUsers hides supplementary groups).
+      '';
+    };
+
     postgres.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -411,6 +426,9 @@ in
         MAX_CHAT_VIEWS_DIR = lib.mkDefault "${cfg.mediaDirectory}/views";
         # The .sql files ship with the flake source, not the binary.
         MAX_MIGRATIONS_DIR = lib.mkDefault "${../migrations}";
+      }
+      // lib.optionalAttrs (cfg.videoAcceleration.device != null) {
+        MAX_VAAPI_DEVICE = cfg.videoAcceleration.device;
       };
       serviceConfig = {
         User = "max-service";
@@ -454,6 +472,9 @@ in
         ProtectHome = true;
         PrivateTmp = true;
         PrivateDevices = true;
+        # The only device exception: an opted-in VA-API render node.
+        BindPaths = lib.optional (cfg.videoAcceleration.device != null) cfg.videoAcceleration.device;
+        DeviceAllow = lib.optional (cfg.videoAcceleration.device != null) "${cfg.videoAcceleration.device} rw";
         PrivateMounts = true;
         ProtectProc = "invisible";
         ProtectClock = true;

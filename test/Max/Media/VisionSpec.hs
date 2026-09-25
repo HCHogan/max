@@ -103,14 +103,30 @@ spec = describe "vision envelope" $ do
         Just _ -> withSystemTempDirectory "vision-spec" $ \dir -> do
           let source = dir </> "source.mp4"
           callProcess "ffmpeg" ["-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=30:duration=70", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", source]
-          prepared <- prepareVideoFile limits 16384 wholeVideo source
+          -- A render node that cannot be opened falls back to software.
+          prepared <- prepareVideoFile (Just (dir </> "no-render-node")) limits 16384 wholeVideo source
           case prepared of
             Left failure -> expectationFailure (T.unpack failure)
             Right video -> do
+              video.videoDecoder `shouldBe` "software"
               video.videoTokens `shouldSatisfy` (<= 12288)
               video.videoTokens `shouldSatisfy` (> 8000)
               video.videoSourceSeconds `shouldSatisfy` (\seconds -> seconds > 69 && seconds < 71)
               BS.length video.videoBytes `shouldSatisfy` (> 0)
+
+    it "plans a rotated phone video in its display orientation" $ do
+      ffmpeg <- findExecutable "ffmpeg"
+      case ffmpeg of
+        Nothing -> pendingWith "ffmpeg is not installed"
+        Just _ -> withSystemTempDirectory "vision-spec" $ \dir -> do
+          let coded = dir </> "coded.mp4"
+              rotated = dir </> "rotated.mp4"
+          callProcess "ffmpeg" ["-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30:duration=4", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", coded]
+          callProcess "ffmpeg" ["-v", "error", "-display_rotation", "90", "-i", coded, "-c", "copy", rotated]
+          prepared <- prepareVideoFile Nothing limits 16384 wholeVideo rotated
+          case prepared of
+            Left failure -> expectationFailure (T.unpack failure)
+            Right video -> video.videoPlan.planRows `shouldSatisfy` (> video.videoPlan.planColumns)
 
     it "shrinks an oversized image to the per-image cap" $ do
       ffmpeg <- findExecutable "ffmpeg"

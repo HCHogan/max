@@ -8,7 +8,6 @@ module Max.Media.Prepare
   )
 where
 
-import Control.Applicative ((<|>))
 import Control.Exception (IOException, try)
 import Data.Aeson (Value (..), eitherDecodeStrict', withObject, (.:), (.:?))
 import Data.Aeson.Types (Parser, parseEither)
@@ -68,37 +67,49 @@ data PreparedVideo = PreparedVideo
   { videoBytes :: !ByteString,
     videoTokens :: !Int,
     videoPlan :: !VideoPlan,
-    videoSourceSeconds :: !Double
+    videoSourceSeconds :: !Double,
+    -- | "vaapi" when the render node decoded and scaled, else "software".
+    videoDecoder :: !Text
   }
 
 -- | Render one video file within an item budget. Rotation is applied, audio
--- dropped, and the output is measured so its token count is exact.
-prepareVideoFile :: VisionLimits -> Int -> VideoWindow -> FilePath -> IO (Either Text PreparedVideo)
-prepareVideoFile limits budget window path = do
+-- dropped, and the output is measured so its token count is exact. With a
+-- VA-API render node, decoding, frame dropping and scaling run on the GPU and
+-- only the kept frames are downloaded for x264; any failure there falls back
+-- to the software path.
+prepareVideoFile :: Maybe FilePath -> VisionLimits -> Int -> VideoWindow -> FilePath -> IO (Either Text PreparedVideo)
+prepareVideoFile device limits budget window path = do
   probed <- probeVideo path
   case probed of
     Left failure -> pure (Left failure)
-    Right source -> withTempDirectory "max-vision-video-" $ \workspace -> do
+    Right (source, rotation) -> withTempDirectory "max-vision-video-" $ \workspace -> do
       let plan = planVideo limits budget source window
           output = workspace </> "rendition.mp4"
           decimal value = showFFloat (Just 6) value ""
-          filters =
-            "setpts=(PTS-STARTPTS)/"
-              <> decimal plan.planSpeed
-              <> ",fps="
-              <> decimal plan.planFps
-              <> ",scale="
-              <> show (plan.planColumns * 32)
-              <> ":"
-              <> show (plan.planRows * 32)
-              <> ",setsar=1"
-      encoded <-
-        run 300 "ffmpeg" $
-          ["-y", "-v", "error", "-ss", decimal plan.planStart, "-t", decimal plan.planSeconds, "-i", path]
-            <> ["-an", "-sn", "-dn", "-vf", filters, "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output]
+          (width, height) = (plan.planColumns * 32, plan.planRows * 32)
+          timing = "setpts=(PTS-STARTPTS)/" <> decimal plan.planSpeed <> ",fps=" <> decimal plan.planFps
+          window' = ["-ss", decimal plan.planStart, "-t", decimal plan.planSeconds, "-i", path]
+          encode = ["-an", "-sn", "-dn", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output]
+          software = ["-nostdin", "-y", "-v", "error"] <> window' <> ["-vf", timing <> ",scale=" <> show width <> ":" <> show height <> ",setsar=1"] <> encode
+          -- Hardware frames skip ffmpeg's autorotation: scale in the coded
+          -- orientation, then turn the small downloaded frames.
+          quarter = rotation == 90 || rotation == 270
+          (codedWidth, codedHeight) = if quarter then (height, width) else (width, height)
+          turn = case rotation of
+            90 -> ",transpose=clock"
+            180 -> ",hflip,vflip"
+            270 -> ",transpose=cclock"
+            _ -> ""
+          hardware node =
+            ["-nostdin", "-y", "-v", "error", "-hwaccel", "vaapi", "-hwaccel_device", node, "-hwaccel_output_format", "vaapi"]
+              <> window'
+              <> ["-vf", timing <> ",scale_vaapi=w=" <> show codedWidth <> ":h=" <> show codedHeight <> ":format=nv12,hwdownload,format=nv12" <> turn <> ",setsar=1"]
+              <> encode
+      accelerated <- maybe (pure Nothing) (\node -> either (const Nothing) (const (Just "vaapi")) <$> run 300 "ffmpeg" (hardware node)) device
+      encoded <- maybe (fmap (const "software") <$> run 300 "ffmpeg" software) (pure . Right) accelerated
       case encoded of
         Left failure -> pure (Left ("视频转码失败：" <> failure))
-        Right _ -> do
+        Right decoder -> do
           measured <- run 60 "ffprobe" ["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=width,height,nb_read_frames", "-of", "csv=p=0", output]
           case measured of
             Right out
@@ -109,18 +120,19 @@ prepareVideoFile limits budget window path = do
                     then pure (Left "转码结果超出单个视频的视觉预算")
                     else do
                       bytes <- BS.readFile output
-                      pure (Right (PreparedVideo bytes tokens plan source.sourceSeconds))
+                      pure (Right (PreparedVideo bytes tokens plan source.sourceSeconds decoder))
             _ -> pure (Left "转码结果无法测量")
 
--- Display size (after rotation) and duration of the first video stream.
-probeVideo :: FilePath -> IO (Either Text VideoSource)
+-- Display size (after rotation), duration, and the clockwise rotation ffmpeg
+-- applies for display (0, 90, 180 or 270) of the first video stream.
+probeVideo :: FilePath -> IO (Either Text (VideoSource, Int))
 probeVideo path = do
   result <- run 30 "ffprobe" ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height:stream_side_data=rotation:stream_tags=rotate:format=duration", "-of", "json", path]
   pure $ case result of
     Left failure -> Left ("无法读取视频信息：" <> failure)
     Right out -> either (Left . ("无法读取视频信息：" <>) . T.pack) Right (eitherDecodeStrict' (BC.pack out) >>= parseEither source)
   where
-    source :: Value -> Parser VideoSource
+    source :: Value -> Parser (VideoSource, Int)
     source = withObject "ffprobe" $ \o -> do
       streams <- o .: "streams"
       format <- o .: "format"
@@ -132,10 +144,14 @@ probeVideo path = do
       tagged <- maybe (pure Nothing) (.:? "rotate") tags
       rotations <- traverse (.:? "rotation") sideData
       duration <- format .: "duration"
-      let rotation = listToMaybe (catMaybes rotations) <|> (readMaybe . T.unpack =<< tagged)
-          quarter = maybe False (\r -> (abs (r :: Int) `mod` 180) == 90) rotation
+      -- A display matrix rotates counter-clockwise; the legacy tag clockwise.
+      let clockwise = case listToMaybe (catMaybes rotations) of
+            Just matrix -> negate (matrix :: Int)
+            Nothing -> fromMaybe 0 (readMaybe . T.unpack =<< tagged)
+          rotation = ((clockwise `mod` 360) + 45) `div` 90 * 90 `mod` 360
+          quarter = rotation == 90 || rotation == 270
       seconds <- maybe (fail "unknown duration") pure (readMaybe (T.unpack duration))
-      pure (if quarter then VideoSource height width seconds else VideoSource width height seconds)
+      pure (if quarter then VideoSource height width seconds else VideoSource width height seconds, rotation)
 
 run :: Int -> FilePath -> [String] -> IO (Either Text String)
 run seconds program arguments = do

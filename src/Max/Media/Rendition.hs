@@ -8,6 +8,7 @@ module Max.Media.Rendition
 where
 
 import Control.Exception (IOException)
+import Control.Monad (mfilter)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
@@ -26,6 +27,7 @@ import Max.Time (fmtDurationSec)
 import Max.ModelCatalog (VisionLimits (..))
 import Max.Util (withTempDirectory)
 import Numeric (showFFloat)
+import System.Environment (lookupEnv)
 import System.FilePath ((</>))
 
 -- | One item-sized rendition of a window of the source video. The loader runs
@@ -51,10 +53,12 @@ videoRendition limits window source loadSource = do
       case loaded of
         Left failure -> pure (Left failure)
         Right sourceBytes -> do
+          -- A VA-API render node the host exposed for decoding, if any.
+          device <- liftIO (mfilter (not . null) <$> lookupEnv "MAX_VAAPI_DEVICE")
           prepared <- liftIO $ withTempDirectory "max-rendition-" $ \workspace -> do
             let path = workspace </> "source"
             BS.writeFile path sourceBytes
-            prepareVideoFile limits (videoTokenCap limits) window path
+            prepareVideoFile device limits (videoTokenCap limits) window path
           case prepared of
             Left failure -> do
               logAttention "video rendition failed" (object ["source" .= source, "params" .= params, "error" .= failure])
@@ -64,7 +68,7 @@ videoRendition limits window source loadSource = do
               let plan = video.videoPlan
                   stored = StoredRendition (blobRefSha256 ref) video.videoTokens video.videoSourceSeconds plan.planStart plan.planSeconds plan.planSpeed
               storeVideoRendition source params stored
-              logInfo "video rendition prepared" (object ["source" .= source, "params" .= params, "bytes" .= BS.length video.videoBytes, "vision_tokens" .= video.videoTokens])
+              logInfo "video rendition prepared" (object ["source" .= source, "params" .= params, "bytes" .= BS.length video.videoBytes, "vision_tokens" .= video.videoTokens, "decoder" .= video.videoDecoder])
               pure (Right (rendition video.videoBytes stored))
   where
     decimal value = T.pack (showFFloat (Just 1) value "")

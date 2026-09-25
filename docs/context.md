@@ -89,6 +89,15 @@ prepares media to fit instead of sending them as-is:
 `attachment_reserve` defaults to at least `vision_tokens` so media fit inside
 the input window beside the text budget.
 
+With `services.max.videoAcceleration.device` (for example
+`/dev/dri/renderD128`), the NixOS module binds that VA-API render node into
+the service and renditions decode, drop frames and scale on the GPU. Only the
+kept frames are downloaded for x264, so quality and token counts match the
+software path. The hardware path applies rotation itself, and any failure
+falls back to software decoding. The `video rendition prepared` log records
+the decoder. On h610's Arc A380 this cuts CPU time by 6–10×, and HEVC sources
+finish about 3× sooner.
+
 | Capacity | Target |
 | --- | --- |
 | Raw history collection/high watermark | `W / 2` |
