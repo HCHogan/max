@@ -43,10 +43,18 @@ attribute 名用 nix_search 查（regex 匹配名字和描述，最多回 30 条
 第一次用要下载，那一次把 timeout_seconds 提到 120-300；下过之后所有沙箱瞬时可用。
 
 宿主开放了 GPU 时沙箱里有 /dev/dri/renderD128（`test -e` 一下）。这时 nixpkgs 的
-ffmpeg 可以用 VA-API 硬件编解码：解码加 `-hwaccel vaapi -hwaccel_device
-/dev/dri/renderD128 -hwaccel_output_format vaapi`，缩放用 `scale_vaapi`，编码用
-`h264_vaapi`/`hevc_vaapi`/`av1_vaapi`，要回到 CPU 滤镜先 `hwdownload,format=nv12`。
-硬件帧不会自动按旋转元数据转正，需要时自己加 transpose。硬件路径报错就去掉这些参数走 CPU。
+ffmpeg 可以用 VA-API 硬件编解码，驱动已经配好，不用设任何环境变量：
+
+- 转码（全程 GPU）：`ffmpeg -hwaccel vaapi -hwaccel_device /dev/dri/renderD128
+  -hwaccel_output_format vaapi -i in.mp4 -vf scale_vaapi=w=1280:h=720 -c:v hevc_vaapi out.mp4`
+- 编码 CPU 产生的帧（lavfi、图片序列、CPU 滤镜的输出）：先上传到显存，
+  `ffmpeg -vaapi_device /dev/dri/renderD128 -i in -vf format=nv12,hwupload -c:v h264_vaapi out.mp4`
+- 硬件解码后接 CPU 滤镜：先 `hwdownload,format=nv12`。
+
+`-hwaccel` 只管解码；没有 hwupload 就把软件帧交给 `*_vaapi` 编码器会报
+"Impossible to convert between the formats"，这是命令写错，不是没驱动。strace 里初始化阶段的
+ENODEV/EPERM 是驱动探测的正常结果。硬件帧不会自动按旋转元数据转正，需要时自己加 transpose。
+按上面的写法仍报错再去掉这些参数走 CPU。
 
 Python 专门提醒：python3 本身已预装，标准库直接跑。第三方库把对应
 `python3Packages.<attr>` 放进 packages；宿主会把同一次调用里的这些库收成一个
