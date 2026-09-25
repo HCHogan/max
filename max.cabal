@@ -825,6 +825,7 @@ test-suite max-test-db
         Max.DB.HistorySpec
         Max.DB.ProjectionSpec
         Max.DB.MediaSpec
+        Max.DB.UsageSpec
         Max.DB.VideoRenditionSpec
         Max.DB.MediaMissingSpec
         Max.MemoryStoreSpec

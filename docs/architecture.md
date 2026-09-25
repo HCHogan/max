@@ -768,8 +768,12 @@ under timeout races; they are not thread-local state.
 
 `Turn.Start` distinguishes foreground input, background Jobs and result notices.
 A root Job's result notice runs as an ordinary frontend turn with the report as
-host-authored `[task report]` evidence. If that turn delivers nothing, the report
-is published verbatim, quoting the request. Monitor Job results publish directly.
+host-authored `[task report]` evidence, including a usage line: model calls,
+tokens, wall time from admission, and estimated cost. Each completion attributed
+to a Job's turn is booked on that Job and all its ancestors, so a root's line
+covers its whole tree. The relay ends with that line verbatim; if the turn
+delivers nothing, the report and usage line are published, quoting the request.
+An automation fire's Job runs as an ordinary foreground turn and settles on its outcome.
 Jobs serialize feedback, replacement and cancellation through STM under group and
 principal checks. Fresh persisted messages enter the bounded ingress queue;
 there are no SQL execution claims or model-authored revisions.

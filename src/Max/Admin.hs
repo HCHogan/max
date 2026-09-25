@@ -482,7 +482,9 @@ handle env profiles logBuf r params body = case r of
             "calls" .= u.udCalls,
             "prompt_tokens" .= u.udPrompt,
             "completion_tokens" .= u.udCompletion,
-            "cached_prompt_tokens" .= u.udCachedPrompt
+            "cached_prompt_tokens" .= u.udCachedPrompt,
+            "cost" .= u.udCost,
+            "currency" .= u.udCurrency
           ]
       | u <- rows
       ]

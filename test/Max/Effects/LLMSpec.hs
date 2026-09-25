@@ -8,13 +8,16 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text, isPrefixOf)
 import Data.Vector qualified as V
 import Max.Effects.LLM
-  ( ChatMessage (..),
+  ( CallCost (..),
+    ChatMessage (..),
     ChatResponse (..),
     ContentBlock (..),
+    TokenPrices (..),
     TokenUsage (..),
     ToolCall (..),
     parseResponseAnthropic,
     parseResponseOpenAI,
+    priceUsage,
     parseResponseResponses,
     rebuildAnthropic,
     rebuildOpenAI,
@@ -317,7 +320,7 @@ spec = do
       let v = openaiResp ["usage" .= object ["prompt_tokens" .= (120 :: Int), "completion_tokens" .= (30 :: Int)]]
       case parseEither parseResponseOpenAI v of
         Right (ContentResp _, Just u) ->
-          u `shouldBe` TokenUsage 120 30 Nothing
+          u `shouldBe` TokenUsage 120 30 Nothing Nothing
         other -> expectationFailure $ "expected usage, got: " <> show other
 
     it "DeepSeek prompt_cache_hit_tokens lands in cached" $ do
@@ -359,21 +362,31 @@ spec = do
         Right (ContentResp _, Nothing) -> pure ()
         other -> expectationFailure $ "expected lenient Nothing, got: " <> show other
 
+  describe "priceUsage" $ do
+    let prices = TokenPrices "CNY" 2 0.5 8
+    it "bills cache hits at the cached price and the rest at the input price" $
+      priceUsage prices (TokenUsage 1000000 250000 (Just 800000) Nothing)
+        `shouldBe` CallCost "CNY" (0.2 * 2 + 0.8 * 0.5 + 0.25 * 8)
+    it "treats an unreported cache split as all fresh input" $
+      priceUsage prices (TokenUsage 500000 0 Nothing Nothing) `shouldBe` CallCost "CNY" 1
+
   describe "usage extraction (Anthropic shape)" $ do
-    it "input/output/cache_read tokens" $ do
+    -- input_tokens excludes cache reads and writes; the whole prompt is their sum.
+    it "input/output/cache tokens" $ do
       let v =
             object
               [ "content" .= [object ["type" .= ("text" :: Text), "text" .= ("hi" :: Text)]],
                 "usage"
                   .= object
-                    [ "input_tokens" .= (200 :: Int),
+                    [ "input_tokens" .= (20 :: Int),
                       "output_tokens" .= (50 :: Int),
-                      "cache_read_input_tokens" .= (180 :: Int)
+                      "cache_read_input_tokens" .= (180 :: Int),
+                      "cache_creation_input_tokens" .= (30 :: Int)
                     ]
               ]
       case parseEither parseResponseAnthropic v of
         Right (ContentResp _, Just u) ->
-          u `shouldBe` TokenUsage 200 50 (Just 180)
+          u `shouldBe` TokenUsage 230 50 (Just 180) Nothing
         other -> expectationFailure $ "expected usage, got: " <> show other
 
     it "absent usage → Nothing, response still parses" $ do

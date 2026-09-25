@@ -4,6 +4,10 @@ module Max.Task.Types
     JobMonitor (..),
     JobView (..),
     JobResult (..),
+    JobUsage (..),
+    emptyJobUsage,
+    addJobUsage,
+    jobUsageLine,
     JobWait (..),
     JobCommand (..),
     TaskProfile (..),
@@ -20,14 +24,17 @@ import Data.Aeson (ToJSON (..), Value, object, (.=))
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (NominalDiffTime, UTCTime, diffUTCTime)
+import Max.LLM.Types (CallCost (..), TokenUsage (..))
 import Max.Monitor.Types (MonitorFireId, MonitorId)
 import Max.Platform.Types (CanonicalMessageId, PrincipalId)
 import Max.Skill.Contract (Contract)
 import Max.Task.State (TaskStatus)
 import OneBot.Types (GroupId)
+import Text.Printf (printf)
 import Text.Read (readMaybe)
 
 data TaskProfile = Basic | Browser | Sandbox
@@ -124,6 +131,44 @@ data JobResult = JobResult {text :: !Text, payload :: !(Maybe Value)}
 instance ToJSON JobResult where
   toJSON result = object ["text" .= result.text, "payload" .= result.payload]
 
+-- | Model spend of a job and all its descendants, booked as each completion
+-- returns.
+data JobUsage = JobUsage
+  { modelCalls :: !Int,
+    promptTokens :: !Int,
+    cachedPromptTokens :: !Int,
+    completionTokens :: !Int,
+    -- | Estimated cost per currency; calls on unpriced profiles add none.
+    costs :: !(Map Text Double),
+    unpricedCalls :: !Int
+  }
+  deriving stock (Eq, Show)
+
+emptyJobUsage :: JobUsage
+emptyJobUsage = JobUsage 0 0 0 0 Map.empty 0
+
+addJobUsage :: TokenUsage -> JobUsage -> JobUsage
+addJobUsage usage total =
+  JobUsage
+    { modelCalls = total.modelCalls + 1,
+      promptTokens = total.promptTokens + max 0 usage.usagePrompt,
+      cachedPromptTokens = total.cachedPromptTokens + max 0 (maybe 0 (min usage.usagePrompt) usage.usageCachedPrompt),
+      completionTokens = total.completionTokens + max 0 usage.usageCompletion,
+      costs = maybe total.costs (\cost -> Map.insertWith (+) cost.currency cost.amount total.costs) usage.usageCost,
+      unpricedCalls = total.unpricedCalls + maybe 1 (const 0) usage.usageCost
+    }
+
+instance ToJSON JobUsage where
+  toJSON usage =
+    object
+      [ "model_calls" .= usage.modelCalls,
+        "prompt_tokens" .= usage.promptTokens,
+        "cached_prompt_tokens" .= usage.cachedPromptTokens,
+        "completion_tokens" .= usage.completionTokens,
+        "cost" .= usage.costs,
+        "unpriced_calls" .= usage.unpricedCalls
+      ]
+
 data JobView = JobView
   { run :: !JobRun,
     spec :: !JobSpec,
@@ -133,9 +178,67 @@ data JobView = JobView
     calls :: !Int,
     rounds :: !Int,
     created :: !UTCTime,
-    browserAllowed :: !Bool
+    browserAllowed :: !Bool,
+    usage :: !JobUsage,
+    finished :: !(Maybe UTCTime)
   }
   deriving stock (Eq, Show)
+
+-- | The spend and wall time of a finished job, for its report.
+jobUsageLine :: JobView -> Text
+jobUsageLine job =
+  "用量："
+    <> T.intercalate
+      "，"
+      ( tokens
+          <> ["用时 " <> elapsed (maybe 0 (`diffUTCTime` job.created) job.finished)]
+          <> ["预估费用 " <> T.intercalate " + " (map money (Map.toList used.costs)) <> unpriced | not (Map.null used.costs)]
+      )
+  where
+    used = job.usage
+    tokens
+      | used.modelCalls == 0 = ["没有调用模型"]
+      | otherwise =
+          [ "模型调用 " <> count used.modelCalls <> " 次",
+            "输入 " <> count used.promptTokens <> " tokens" <> (if used.cachedPromptTokens > 0 then "（缓存命中 " <> count used.cachedPromptTokens <> "）" else ""),
+            "输出 " <> count used.completionTokens <> " tokens"
+          ]
+    unpriced
+      | used.unpricedCalls > 0 = "（另有 " <> count used.unpricedCalls <> " 次调用未配置价格）"
+      | otherwise = ""
+
+-- | 12345 → "1.2万"; counts below ten thousand stay exact.
+count :: Int -> Text
+count n
+  | n >= 100000000 = scaled 100000000 "亿"
+  | n >= 10000 = scaled 10000 "万"
+  | otherwise = T.pack (show n)
+  where
+    scaled unit suffix =
+      let value = fromIntegral n / fromIntegral (unit :: Int) :: Double
+          digits = T.pack (printf "%.1f" value)
+       in fromMaybe digits (T.stripSuffix ".0" digits) <> suffix
+
+elapsed :: NominalDiffTime -> Text
+elapsed duration
+  | total < 60 = T.pack (show total) <> " 秒"
+  | total < 3600 = T.pack (show (total `div` 60)) <> " 分 " <> T.pack (show (total `mod` 60)) <> " 秒"
+  | otherwise = T.pack (show (total `div` 3600)) <> " 小时 " <> T.pack (show ((total `mod` 3600) `div` 60)) <> " 分"
+  where
+    total = max 0 (round duration) :: Int
+
+money :: (Text, Double) -> Text
+money (currency, amount) = case T.toUpper currency of
+  "USD" -> "$" <> figure
+  "CNY" -> "¥" <> figure
+  "RMB" -> "¥" <> figure
+  _ -> figure <> " " <> currency
+  where
+    figure
+      | amount <= 0 = "0"
+      | amount < 0.0001 = "<0.0001"
+      | amount < 1 = T.pack (printf "%.4f" amount)
+      | otherwise = T.pack (printf "%.2f" amount)
 
 instance ToJSON JobView where
   toJSON job =
@@ -151,6 +254,9 @@ instance ToJSON JobView where
         "result" .= job.result,
         "calls" .= job.calls,
         "model_rounds" .= job.rounds,
+        "usage" .= job.usage,
+        "created_at" .= job.created,
+        "finished_at" .= job.finished,
         "deadline" .= job.spec.deadline
       ]
 

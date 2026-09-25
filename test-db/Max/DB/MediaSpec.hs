@@ -70,7 +70,7 @@ spec pool = before_ (truncateAll pool) $
 
     it "shows sandbox images and videos by path, naming the file" $ do
       let png = BS.pack ([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13] <> map (fromIntegral . fromEnum) "IHDR" <> [0, 0, 1, 0, 0, 0, 1, 0])
-          context =
+          toolContext =
             mkToolContext
               (TurnIdentity (GroupId groupA) (CanonicalMessageId 1) (UserId sender) (UserId botId) (PrincipalId 1) Nothing Nothing)
               (TurnCapabilities True False False noAdvertisedCaps False Map.empty Nothing False)
@@ -80,7 +80,7 @@ spec pool = before_ (truncateAll pool) $
           named name tools = case [tool | tool <- tools, tool.toolName == name] of
             tool : _ -> tool
             [] -> error ("missing tool " <> show name)
-          viewImage = named "view_image" (imageToolsFor utc context (curry pure) readPath)
+          viewImage = named "view_image" (imageToolsFor utc toolContext (curry pure) readPath)
           viewVideo = named "view_video" (videoToolsFor (\_ _ -> pure (Left "unused")) (\path _ -> pure (if path == "/chat/1-demo.mp4" then Right clip else Left "no such file")))
           call tool arguments = withDbLog pool $ do
             queue <- newToolOutputQueue 8

@@ -263,6 +263,7 @@ profileFor protocol =
       promptCacheBreakpoints = False,
       contextBudget = Nothing,
       visionLimits = Nothing,
+      prices = Nothing,
       stream = False
     }
   where

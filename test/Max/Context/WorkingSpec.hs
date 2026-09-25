@@ -79,7 +79,7 @@ spec = describe "recoverable working context" $ do
 
   it "anchors only unchanged prefixes under the same model/config/schema identity" $ do
     let prefix = [MsgUser "hello"]
-        anchor = observeUsage "id" prefix (Just (TokenUsage 9000 100 (Just 8000)))
+        anchor = observeUsage "id" prefix (Just (TokenUsage 9000 100 (Just 8000) Nothing))
         longer = prefix <> [MsgAssistant "answer", MsgUser "steering"]
     requestTokens anchor "id" longer [] `shouldSatisfy` (> 9000)
     requestTokens anchor "changed" longer [] `shouldBe` requestTokens Nothing "changed" longer []

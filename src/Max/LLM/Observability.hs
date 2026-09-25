@@ -102,3 +102,4 @@ usageFields (Just u) =
     "completion_tokens" .= u.usageCompletion
   ]
     <> maybe [] (\c -> ["cached_prompt_tokens" .= c]) u.usageCachedPrompt
+    <> maybe [] (\c -> ["cost" .= c.amount, "cost_currency" .= c.currency]) u.usageCost

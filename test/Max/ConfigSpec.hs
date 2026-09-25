@@ -61,6 +61,29 @@ spec = describe "startup configuration" $ do
       config <- withArgs ["--config-file", path] loadConfig
       fmap (.contextLimits) (lookupModelCapabilities "main" config.llm)
         `shouldBe` Just (ContextLimits 229376 32768 49152 32768 Nothing (Just (VisionLimits 49152 16384 600 768 25165824)))
+  it "reads per-profile prices, defaulting the cached price and currency" $ do
+    let load fields = withSystemTempFile "max-prices.yaml" $ \path handle -> do
+          hPutStr handle ("llm:\n  default: main\n  profiles:\n    main:\n      api_key: test-key\n" <> fields)
+          hClose handle
+          (.llm) <$> withArgs ["--config-file", path] loadConfig
+    defaulted <- load "      price_input: 2\n      price_output: 8\n"
+    explicit <- load "      price_input: 2\n      price_cached_input: 2\n      price_output: 8\n      price_currency: USD\n"
+    discounted <- load "      price_input: 2\n      price_cached_input: 0.5\n      price_output: 8\n"
+    unpriced <- load ""
+    (defaulted == explicit) `shouldBe` True
+    (defaulted == discounted) `shouldBe` False
+    (defaulted == unpriced) `shouldBe` False
+  it "rejects incomplete or negative prices" $
+    for_
+      [ "      price_input: 2\n",
+        "      price_cached_input: 0.1\n",
+        "      price_input: -1\n      price_output: 2\n",
+        "      price_input: 1\n      price_output: 2\n      price_currency: \"  \"\n"
+      ]
+      $ \fields -> withSystemTempFile "max-prices.yaml" $ \path handle -> do
+        hPutStr handle ("llm:\n  default: main\n  profiles:\n    main:\n      api_key: test-key\n" <> fields)
+        hClose handle
+        withArgs ["--config-file", path] loadConfig `shouldThrow` anyIOException
   it "rejects inconsistent vision envelopes" $
     for_
       [ "      multimodal: true\n      vision_tokens: 16384\n      vision_item_tokens: 32768\n",

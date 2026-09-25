@@ -8,12 +8,14 @@ import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isNothing)
 import Data.Time (addUTCTime, getCurrentTime)
+import Data.Text qualified as T
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Jobs
+import Max.LLM.Types (CallCost (..), TokenUsage (..))
 import Max.Monitor.Types (MonitorFireId (..), MonitorId (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Task.State
-import Max.Task.Types (JobMonitor (..), TaskProfile (..))
+import Max.Task.Types (JobMonitor (..), JobUsage (..), TaskProfile (..), jobUsageLine)
 import Max.Tasks
 import Max.Turn.Types
 import OneBot.Types (GroupId (..), UserId (..))
@@ -85,6 +87,28 @@ spec = describe "process-owned Jobs" $ do
     authorizeJobStep jobs (AgentTurnId 1) ExecutionCheckpoint `shouldReturn` True
     completeJob jobs budget.run Failed (JobResult "budget spent" Nothing)
     fmap (fmap (.status)) (lookupJob jobs request.group 1) `shouldReturn` Just BudgetExhausted
+
+  it "books model spend on the calling job and its ancestors, and times the job" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    (_, _) <- launch tasks jobs 3 (request {parent = Just child.run})
+    recordJobUsage jobs (AgentTurnId 3) (TokenUsage 120000 800 (Just 100000) (Just (CallCost "CNY" 0.25)))
+    recordJobUsage jobs (AgentTurnId 2) (TokenUsage 5000 200 Nothing Nothing)
+    recordJobUsage jobs (AgentTurnId 1) (TokenUsage 3000 100 (Just 2000) (Just (CallCost "USD" 0.01)))
+    recordJobUsage jobs (AgentTurnId 99) (TokenUsage 1 1 Nothing (Just (CallCost "CNY" 9)))
+    Just third <- lookupJob jobs request.group 3
+    third.usage `shouldBe` JobUsage 1 120000 100000 800 (Map.fromList [("CNY", 0.25)]) 0
+    Just second <- lookupJob jobs request.group 2
+    second.usage `shouldBe` JobUsage 2 125000 100000 1000 (Map.fromList [("CNY", 0.25)]) 1
+    completeJob jobs root.run Succeeded (JobResult "done" Nothing)
+    PublishJobNotice finished _ _ <- takeJobWork jobs
+    finished.usage `shouldBe` JobUsage 3 128000 102000 1100 (Map.fromList [("CNY", 0.25), ("USD", 0.01)]) 1
+    finished.finished `shouldSatisfy` maybe False (>= finished.created)
+    let line = jobUsageLine finished
+    line `shouldSatisfy` T.isPrefixOf "用量：模型调用 3 次，输入 12.8万 tokens（缓存命中 10.2万），输出 1100 tokens，用时 0 秒"
+    line `shouldSatisfy` T.isInfixOf "预估费用 ¥0.2500 + $0.0100（另有 1 次调用未配置价格）"
+    jobUsageLine finished {usage = finished.usage {costs = Map.empty}} `shouldSatisfy` (not . T.isInfixOf "费用")
 
   it "waits without holding a child worker slot and retains child results until collected" $ do
     (tasks, jobs, request) <- fixture

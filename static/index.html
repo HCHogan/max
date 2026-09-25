@@ -263,6 +263,38 @@
           </div>
         </div>
 
+        <!-- Spend per profile over the usage window.  Each profile is
+             priced in its own currency, so costs are listed, never
+             summed across units. -->
+        <div class="card">
+          <div class="card-header">
+            <h2>预估费用</h2>
+            <p class="card-desc" x-text="rangeWords('usage') + ' · 按各 profile 配置的单价估算' + (costTotal() ? ' · 合计 ' + costTotal() : '')"></p>
+          </div>
+          <div class="card-content">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>profile</th><th class="text-right">调用</th><th class="text-right">prompt</th><th class="text-right">缓存命中</th><th class="text-right">completion</th><th class="text-right">费用</th></tr></thead>
+                <tbody>
+                  <template x-for="r in costRows()" :key="r.profile">
+                    <tr>
+                      <td class="rowkey" data-label="profile" x-text="r.profile"></td>
+                      <td class="num text-right" data-label="调用" x-text="r.calls.toLocaleString()"></td>
+                      <td class="num text-right" data-label="prompt" x-text="compact(r.prompt)"></td>
+                      <td class="num text-right" data-label="缓存命中" x-text="compact(r.cached)"></td>
+                      <td class="num text-right" data-label="completion" x-text="compact(r.completion)"></td>
+                      <td class="num text-right" data-label="费用">
+                        <span><span x-text="moneyList(r.costs) || '未配置价格'" :class="{ muted: !moneyList(r.costs) }"></span><span class="muted" x-show="moneyList(r.costs) && r.unpriced" x-text="' · ' + r.unpriced + ' 次未计价'"></span></span>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <p class="empty" x-show="!costRows().length">这段时间没有模型调用。</p>
+            </div>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-header has-action">
             <h2>消息</h2>

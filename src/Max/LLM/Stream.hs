@@ -295,13 +295,16 @@ stepAnthropic payload acc = case decodeStrict' payload of
         _ -> pure a
 
     -- Anthropic splits usage across the first and last frames: input
-    -- (with its cache breakdown) up front, output at the end.
+    -- (with its cache breakdown) up front, output at the end. Cache reads
+    -- and writes are added back to the uncached input_tokens.
     messageStart v a = fromMaybe a $ do
       usage <- fld "message" v >>= fld "usage"
+      let hit = fld "cache_read_input_tokens" usage
+          whole fresh = fresh + fromMaybe 0 hit + fromMaybe 0 (fld "cache_creation_input_tokens" usage)
       pure
         a
-          { saPromptTokens = fld "input_tokens" usage <|>? a.saPromptTokens,
-            saCachedTokens = fld "cache_read_input_tokens" usage <|>? a.saCachedTokens
+          { saPromptTokens = (whole <$> fld "input_tokens" usage) <|>? a.saPromptTokens,
+            saCachedTokens = hit <|>? a.saCachedTokens
           }
 
     messageDelta v a = fromMaybe a $ do

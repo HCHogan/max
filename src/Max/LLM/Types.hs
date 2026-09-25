@@ -1,5 +1,5 @@
 -- | Completion messages and JSON codecs, also used by recorded-request evaluation.
-module Max.LLM.Types (ContentBlock (..), ChatMessage (..), ToolCall (..), ChatResponse (..), TokenUsage (..), parseToolCall) where
+module Max.LLM.Types (ContentBlock (..), ChatMessage (..), ToolCall (..), ChatResponse (..), TokenUsage (..), TokenPrices (..), CallCost (..), priceUsage, parseToolCall) where
 
 import Control.Applicative ((<|>))
 import Data.Aeson
@@ -90,16 +90,41 @@ data ChatResponse
 -- the interpreter's 'UsageWriter' (see @llm_usage@) and logged, so
 -- both the admin API and journalctl can reconstruct token spend.
 data TokenUsage = TokenUsage
-  { usagePrompt :: !Int,
+  { -- | All prompt tokens, cache hits included, whatever the protocol.
+    usagePrompt :: !Int,
     usageCompletion :: !Int,
     -- | Prompt tokens served from the provider's prefix cache, when
     -- reported (DeepSeek @prompt_cache_hit_tokens@, OpenAI
     -- @prompt_tokens_details.cached_tokens@, Anthropic
     -- @cache_read_input_tokens@).  Cache hits bill at a steep
     -- discount, so cost math needs the split.
-    usageCachedPrompt :: !(Maybe Int)
+    usageCachedPrompt :: !(Maybe Int),
+    -- | Estimated charge under the profile's configured prices. Parsers leave
+    -- it empty; the completion interpreter fills it in.
+    usageCost :: !(Maybe CallCost)
   }
   deriving stock (Show, Eq)
+
+-- | A profile's configured prices per million tokens, in one currency.
+data TokenPrices = TokenPrices
+  { currency :: !Text,
+    input :: !Double,
+    cachedInput :: !Double,
+    output :: !Double
+  }
+  deriving stock (Show, Eq)
+
+data CallCost = CallCost {currency :: !Text, amount :: !Double}
+  deriving stock (Show, Eq)
+
+-- | Uncached prompt tokens bill at the input price. A provider that reports no
+-- cache split is billed as if nothing hit the cache.
+priceUsage :: TokenPrices -> TokenUsage -> CallCost
+priceUsage prices usage =
+  CallCost prices.currency ((fromIntegral fresh * prices.input + fromIntegral cached * prices.cachedInput + fromIntegral (max 0 usage.usageCompletion) * prices.output) / 1000000)
+  where
+    cached = max 0 (min usage.usagePrompt (fromMaybe 0 usage.usageCachedPrompt))
+    fresh = max 0 (usage.usagePrompt - cached)
 
 instance ToJSON ContentBlock where
   toJSON = \case

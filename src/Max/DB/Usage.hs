@@ -13,6 +13,7 @@ import Data.Text (Text)
 import Data.Time (Day)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.LLM.Types (CallCost (..), TokenUsage (..))
 
 -- | Record one completed call.  Callers guard against failure — a
 -- lost accounting row must never fail the call it describes.
@@ -21,16 +22,14 @@ insertUsage ::
   Maybe Int64 -> -- group served (Nothing = groupless work)
   Text -> -- source subsystem
   Text -> -- profile name
-  Int -> -- prompt tokens
-  Int -> -- completion tokens
-  Maybe Int -> -- cached prompt tokens, when reported
+  TokenUsage ->
   Eff es ()
-insertUsage gid source profile promptT completionT cachedT = do
+insertUsage gid source profile usage = do
   _ <-
     execute
-      "INSERT INTO llm_usage (group_id, source, profile, prompt_tokens, completion_tokens, cached_prompt_tokens) \
-      \ VALUES (?,?,?,?,?,?)"
-      (gid, source, profile, promptT, completionT, cachedT)
+      "INSERT INTO llm_usage (group_id, source, profile, prompt_tokens, completion_tokens, cached_prompt_tokens, cost, cost_currency) \
+      \ VALUES (?,?,?,?,?,?,?,?)"
+      (gid, source, profile, usage.usagePrompt, usage.usageCompletion, usage.usageCachedPrompt, (.amount) <$> usage.usageCost, (.currency) <$> usage.usageCost)
   pure ()
 
 -- | One aggregate bucket of 'usageDaily': a (day, group, source,
@@ -45,7 +44,11 @@ data UsageDay = UsageDay
     udCompletion :: !Int64,
     -- | Sum over rows that reported a cache split; rows that didn't
     -- contribute nothing (absent ≠ zero).
-    udCachedPrompt :: !Int64
+    udCachedPrompt :: !Int64,
+    -- | Estimated cost of the bucket's priced calls. Buckets split by
+    -- currency, so an unpriced bucket has neither.
+    udCost :: !(Maybe Double),
+    udCurrency :: !(Maybe Text)
   }
   deriving stock (Show, Eq)
 
@@ -66,13 +69,14 @@ usageDaily tzMinutes days = do
       \       count(*), \
       \       sum(prompt_tokens)::bigint, \
       \       sum(completion_tokens)::bigint, \
-      \       coalesce(sum(cached_prompt_tokens), 0)::bigint \
+      \       coalesce(sum(cached_prompt_tokens), 0)::bigint, \
+      \       sum(cost), cost_currency \
       \  FROM llm_usage \
       \ WHERE at > now() - make_interval(days => ?) \
-      \ GROUP BY 1, 2, 3, 4 \
-      \ ORDER BY 1 DESC, 2 NULLS LAST, 3, 4"
+      \ GROUP BY 1, 2, 3, 4, cost_currency \
+      \ ORDER BY 1 DESC, 2 NULLS LAST, 3, 4, cost_currency NULLS FIRST"
       (tzMinutes, days)
   pure
-    [ UsageDay d g s p calls pr comp cach
-    | (d, g, s, p, calls, pr, comp, cach) <- rows
+    [ UsageDay d g s p calls pr comp cach cost currency
+    | (d, g, s, p, calls, pr, comp, cach, cost, currency) <- rows
     ]

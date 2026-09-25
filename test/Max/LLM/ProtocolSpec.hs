@@ -29,7 +29,8 @@ profile protocol hints =
       stream = False,
       promptCacheBreakpoints = hints,
       contextBudget = Nothing,
-      visionLimits = Nothing
+      visionLimits = Nothing,
+      prices = Nothing
     }
 
 marked :: [ChatMessage]

@@ -1039,6 +1039,37 @@ function admin() {
       });
     },
 
+    // One row per profile over the usage window.  Costs stay keyed by
+    // currency; calls from before a profile had prices count as
+    // unpriced rather than as free.
+    costRows() {
+      const by = new Map();
+      for (const r of this.daysBack(this.usageRows, this.range.usage)) {
+        let acc = by.get(r.profile);
+        if (!acc) by.set(r.profile, (acc = { profile: r.profile, calls: 0, prompt: 0, cached: 0, completion: 0, costs: {}, unpriced: 0 }));
+        acc.calls += r.calls;
+        acc.prompt += r.prompt_tokens;
+        acc.cached += r.cached_prompt_tokens;
+        acc.completion += r.completion_tokens;
+        if (r.currency) acc.costs[r.currency] = (acc.costs[r.currency] || 0) + r.cost;
+        else acc.unpriced += r.calls;
+      }
+      const spend = (row) => Object.values(row.costs).reduce((n, v) => n + v, 0);
+      return [...by.values()].sort((a, b) => spend(b) - spend(a) || b.calls - a.calls);
+    },
+    costTotal() {
+      const total = {};
+      for (const r of this.daysBack(this.usageRows, this.range.usage))
+        if (r.currency) total[r.currency] = (total[r.currency] || 0) + r.cost;
+      return this.moneyList(total);
+    },
+    moneyList(costs) {
+      return Object.entries(costs).sort().map(([cur, v]) => money(cur, v)).join(' + ');
+    },
+    compact(n) {
+      return compact(n);
+    },
+
     // Totals under each small multiple's caption — the chart shows the
     // shape, the caption answers "how much, over the window I picked".
     rangeTotal(field) {
@@ -1064,6 +1095,11 @@ function admin() {
       const tokPrev = tokDays[tokDays.length - 2];
       const prompt = byDay(this.usageRows, (r) => r.prompt_tokens);
       const completion = byDay(this.usageRows, (r) => r.completion_tokens);
+      const todayCost = {};
+      if (tokLast)
+        for (const r of this.usageRows)
+          if (r.day === tokLast.day && r.currency) todayCost[r.currency] = (todayCost[r.currency] || 0) + r.cost;
+      const todaySpend = this.moneyList(todayCost);
 
       const msgDays = byDay(this.msgRows, (r) => r.count);
       const msgLast = msgDays[msgDays.length - 1];
@@ -1089,7 +1125,7 @@ function admin() {
             ? 'prompt ' + compact(prompt[prompt.length - 1].v) +
               ' · completion ' + compact(completion[completion.length - 1].v)
             : '还没有数据',
-          foot2: '对比前一日',
+          foot2: (todaySpend ? '预估费用 ' + todaySpend + ' · ' : '') + '对比前一日',
         },
         {
           label: '今日消息',
@@ -1406,6 +1442,16 @@ function deltaPct(now, prev) {
 
 function fmtDay(d) {
   return d.getMonth() + 1 + '/' + d.getDate();
+}
+
+// The same figure the task reports print: symbols for the two
+// currencies Max is usually priced in, the ISO code otherwise.
+function money(currency, amount) {
+  const figure = amount <= 0 ? '0' : amount < 0.0001 ? '<0.0001' : amount < 1 ? amount.toFixed(4) : amount.toFixed(2);
+  const code = currency.toUpperCase();
+  if (code === 'USD') return '$' + figure;
+  if (code === 'CNY' || code === 'RMB') return '¥' + figure;
+  return figure + ' ' + currency;
 }
 
 // 12_400 → "12.4k".  Token counts run long and the axis is narrow.

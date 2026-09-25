@@ -341,7 +341,7 @@ parseUsageResponses = withObject "usage" $ \o -> do
   cached <- case mDetails of
     Nothing -> pure Nothing
     Just d -> d .:? "cached_tokens"
-  pure (TokenUsage p c cached)
+  pure (TokenUsage p c cached Nothing)
 
 -- | The terminal @response.completed@ frame carried the entire
 -- response object, so rebuilding is just parsing it; a stream that
@@ -410,7 +410,7 @@ parseUsageOpenAI = withObject "usage" $ \u -> do
   mCached <- case mDetails of
     Just (Object d) -> d .:? "cached_tokens"
     _ -> pure Nothing
-  pure (TokenUsage p c (mHit <|> mCached))
+  pure (TokenUsage p c (mHit <|> mCached) Nothing)
 
 --------------------------------------------------------------------------------
 -- Anthropic Messages API: POST {baseUrl}/v1/messages.
@@ -625,11 +625,12 @@ parseResponseAnthropic = withObject "AnthropicResponse" $ \o -> do
         _ -> pure Nothing
 
 -- | Anthropic usage block.  @input_tokens@ counts only uncached
--- prompt tokens; cache reads ride separately in
--- @cache_read_input_tokens@.
+-- prompt tokens; cache reads and writes ride separately and are added
+-- back so 'usagePrompt' means the whole prompt on every protocol.
 parseUsageAnthropic :: Value -> Parser TokenUsage
-parseUsageAnthropic = withObject "usage" $ \u ->
-  TokenUsage
-    <$> u .: "input_tokens"
-    <*> u .: "output_tokens"
-    <*> u .:? "cache_read_input_tokens"
+parseUsageAnthropic = withObject "usage" $ \u -> do
+  fresh <- u .: "input_tokens"
+  hit <- u .:? "cache_read_input_tokens"
+  written <- u .:? "cache_creation_input_tokens"
+  output <- u .: "output_tokens"
+  pure (TokenUsage (fresh + fromMaybe 0 hit + fromMaybe 0 written) output hit Nothing)

@@ -136,6 +136,7 @@ import Max.Task.Types
     JobRun (jobId),
     JobSpec (inputs, monitor, objective, source),
     JobView (run, spec, status),
+    jobUsageLine,
     taskHandle,
   )
 import Max.Tasks
@@ -262,7 +263,7 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
     -- itself so the requester still receives the result.
     relayReport env session job body = do
       request <- fetchMessageInScope (conversationScopeFor gm.groupId) job.spec.source.unCanonicalMessageId
-      let report = renderTaskReport env.beTimeZone job.run.jobId job.status job.spec.objective request body
+      let report = renderTaskReport env.beTimeZone job.run.jobId job.status job.spec.objective request (jobUsageLine job) body
       relayed <- trySync (prepareReply env session Nothing (Just report) >>= runReply env session)
       case relayed of
         Right settled@(TurnSucceeded, _, _) -> settle settled
@@ -310,7 +311,7 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
       liftIO (Jobs.completeJob env.beJobs job.run status (JobResult summary Nothing))
 
     publishReport job body =
-      sendAndPersistReply noticeTarget emptySendState ("[↩#" <> tshow job.spec.source.unCanonicalMessageId <> "] " <> body)
+      sendAndPersistReply noticeTarget emptySendState ("[↩#" <> tshow job.spec.source.unCanonicalMessageId <> "] " <> body <> "\n" <> jobUsageLine job)
 
     noticeTarget = sendTarget outputCaps gm [] False (Just (turnRuntimeOutputContext turn))
 

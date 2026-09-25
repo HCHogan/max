@@ -46,6 +46,7 @@ import Max.IMessage (IMessageConfig (..))
 import Max.Intent (IntentConfig (..))
 import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Matrix (MatrixConfig (..))
+import Max.LLM.Types (TokenPrices (..))
 import Max.ModelCatalog (ContextLimits (..), ModelCatalog, contextLimitsForWindow, defaultContextLimits, modelProfileNames)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), VisionLimits (..), mkModelCatalogFromProfiles, parseProtocol)
 import Max.Monitor.Http (validWebhookBaseUrl)
@@ -1248,13 +1249,17 @@ data ProfileSpec = ProfileSpec
     visionItemTokens :: !(Maybe Int),
     videoMaxSeconds :: !(Maybe Int),
     videoMaxFrames :: !(Maybe Int),
-    videoMaxPixels :: !(Maybe Int)
+    videoMaxPixels :: !(Maybe Int),
+    priceInput :: !(Maybe Double),
+    priceCachedInput :: !(Maybe Double),
+    priceOutput :: !(Maybe Double),
+    priceCurrency :: !(Maybe Text)
   }
   deriving stock (Show, Eq)
 
 emptySpec :: ProfileSpec
 emptySpec =
-  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 -- | Per-field first-Just-wins overlay (left = higher priority).
 mergeSpec :: ProfileSpec -> ProfileSpec -> ProfileSpec
@@ -1281,7 +1286,11 @@ mergeSpec a b =
       visionItemTokens = a.visionItemTokens <|> b.visionItemTokens,
       videoMaxSeconds = a.videoMaxSeconds <|> b.videoMaxSeconds,
       videoMaxFrames = a.videoMaxFrames <|> b.videoMaxFrames,
-      videoMaxPixels = a.videoMaxPixels <|> b.videoMaxPixels
+      videoMaxPixels = a.videoMaxPixels <|> b.videoMaxPixels,
+      priceInput = a.priceInput <|> b.priceInput,
+      priceCachedInput = a.priceCachedInput <|> b.priceCachedInput,
+      priceOutput = a.priceOutput <|> b.priceOutput,
+      priceCurrency = a.priceCurrency <|> b.priceCurrency
     }
 
 instance HasCodec ProfileSpec where
@@ -1310,11 +1319,18 @@ instance HasCodec ProfileSpec where
         <*> optionalField "video_max_seconds" "Longest video segment the server accepts (default 600)" .= (.videoMaxSeconds)
         <*> optionalField "video_max_frames" "Most frames the server samples from one video (default 768)" .= (.videoMaxFrames)
         <*> optionalField "video_max_pixels" "Pixel volume (frames x height x width) the server's video processor keeps before downscaling (default 25165824, Qwen-VL's longest_edge)" .= (.videoMaxPixels)
+        <*> optionalFieldWith "price_input" doubleCodec "Price per million uncached prompt tokens; with price_output, calls on this profile carry an estimated cost" .= (.priceInput)
+        <*> optionalFieldWith "price_cached_input" doubleCodec "Price per million prompt tokens served from the provider's cache (default: price_input)" .= (.priceCachedInput)
+        <*> optionalFieldWith "price_output" doubleCodec "Price per million completion tokens" .= (.priceOutput)
+        <*> optionalField "price_currency" "Currency of the prices, shown beside estimated costs (default USD)" .= (.priceCurrency)
 
 -- | autodocodec has no @HasCodec Double@ on purpose (lossy floats);
--- bridge through Scientific, which is fine for temperature values.
+-- bridge through Scientific, which is fine for temperatures and prices.
+doubleCodec :: JSONCodec Double
+doubleCodec = dimapCodec realToFrac realToFrac scientificCodec
+
 temperatureCodec :: JSONCodec Double
-temperatureCodec = dimapCodec realToFrac realToFrac scientificCodec
+temperatureCodec = doubleCodec
 
 protocolCodec :: JSONCodec Protocol
 protocolCodec = bimapCodec parse render codec
@@ -1519,6 +1535,10 @@ overlayProfileParser = do
       videoMaxSeconds = Nothing
       videoMaxFrames = Nothing
       videoMaxPixels = Nothing
+      priceInput = Nothing
+      priceCachedInput = Nothing
+      priceOutput = Nothing
+      priceCurrency = Nothing
   pure ProfileSpec {..}
   where
     protoReader = eitherReader $ \s -> case parseProtocol (T.pack s) of
@@ -1586,6 +1606,19 @@ materializeLLM (dn, fileProfiles, overlay) = do
           when (item <= 0 || item > total) (invalid "vision_item_tokens must be between 1 and vision_tokens")
           when (seconds <= 0 || frames < 4 || pixels < 131072) (invalid "video_max_seconds must be positive, video_max_frames at least 4 and video_max_pixels at least 131072")
           pure (Just (VisionLimits total item seconds frames pixels))
+      let priceError :: (MonadFail m) => String -> m a
+          priceError detail = fail ("llm profile '" <> T.unpack profName <> "': " <> detail)
+      prices <- case (spec.priceInput, spec.priceOutput) of
+        (Nothing, Nothing)
+          | isJust spec.priceCachedInput || isJust spec.priceCurrency -> priceError "price_cached_input and price_currency need price_input and price_output"
+          | otherwise -> pure Nothing
+        (Just input, Just output) -> do
+          let cached = fromMaybe input spec.priceCachedInput
+              currency = maybe "USD" T.strip spec.priceCurrency
+          when (any (\price -> price < 0 || isNaN price || isInfinite price) [input, cached, output]) (priceError "prices must be finite and non-negative")
+          when (T.null currency) (priceError "price_currency must not be empty")
+          pure (Just (TokenPrices currency input cached output))
+        _ -> priceError "price_input and price_output go together"
       let resolvedMaxInput = defaults.maxInputTokens
           resolvedMaxOutput = defaults.reservedOutputTokens
           -- Media must fit inside the input window beside the text budget.
@@ -1632,7 +1665,8 @@ materializeLLM (dn, fileProfiles, overlay) = do
             stream = fromMaybe True spec.stream,
             promptCacheBreakpoints = fromMaybe False spec.promptCacheBreakpoints,
             contextBudget = spec.contextBudget,
-            visionLimits
+            visionLimits,
+            prices
           }
 
 -- | @auto@ / @always@ / @never@ — the spellings 'parseColorMode' takes.

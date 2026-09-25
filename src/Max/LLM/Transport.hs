@@ -52,7 +52,7 @@ callChatStream runtime cfg messages tools sink = do
       ProtocolAnthropic -> (stepAnthropic, rebuildAnthropic)
       ProtocolResponses -> (stepResponses, rebuildResponses)
     accUsage acc = case (acc.saPromptTokens, acc.saCompletionTokens) of
-      (Just prompt, Just completion) -> Just (TokenUsage prompt completion acc.saCachedTokens)
+      (Just prompt, Just completion) -> Just (TokenUsage prompt completion acc.saCachedTokens Nothing)
       _ -> Nothing
 
 completionTarget :: LLMProfile -> (String, RequestHeaders)

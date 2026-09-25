@@ -19,6 +19,9 @@ module Max.Effects.LLM
     -- * Response
     ChatResponse (..),
     TokenUsage (..),
+    TokenPrices (..),
+    CallCost (..),
+    priceUsage,
     LLMFailure (..),
     renderLLMFailure,
 
@@ -169,12 +172,14 @@ runOneChat admission runtime usageWriter callWriter reg ctx name msgs tools mSin
         streaming = cfg.stream && isJust mSink
     logChatRequest name cfg streaming (length msgs) (length tools) (length (if streaming then replyRetryDelaysSecs else bufferedRetryDelays))
     started <- liftIO getMonotonicTimeNSec
-    result <- withAdmission admission cfg.baseUrl (priorityForSource ctx.ccSource) $ case mSink of
+    raw <- withAdmission admission cfg.baseUrl (priorityForSource ctx.ccSource) $ case mSink of
       Just sink | cfg.stream -> callChatStream runtime cfg msgs tools sink
       _ -> callChat runtime bufferedRetryDelays cfg msgs tools
     finished <- liftIO getMonotonicTimeNSec
-    recordChatResult usageWriter callWriter ctx name cfg streaming msgs tools (fromIntegral ((finished - started) `div` 1_000_000)) result
-    pure result
+    -- Cost is priced here, once, so every observer books the same figure.
+    let priced = fmap (fmap (fmap (\usage -> usage {usageCost = (`priceUsage` usage) <$> cfg.prices}))) raw
+    recordChatResult usageWriter callWriter ctx name cfg streaming msgs tools (fromIntegral ((finished - started) `div` 1_000_000)) priced
+    pure priced
 
 chat ::
   (LLM :> es) =>

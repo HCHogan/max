@@ -153,7 +153,7 @@ spec = do
   describe "stepAnthropic" $ do
     let stream =
           rec_
-            [ "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":120,\"cache_read_input_tokens\":96}}}",
+            [ "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":24,\"cache_read_input_tokens\":96}}}",
               "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
               "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"我查\"}}",
               "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"一下\"}}",
@@ -166,7 +166,8 @@ spec = do
     it "concatenates text_delta in order" $
       acc.saText `shouldBe` "我查一下"
 
-    -- Anthropic splits usage across the first and last frames.
+    -- Anthropic splits usage across the first and last frames; cache reads
+    -- are added back to the uncached input_tokens.
     it "takes input usage from the start and output from the end" $
       (acc.saPromptTokens, acc.saCachedTokens, acc.saCompletionTokens)
         `shouldBe` (Just 120, Just 96, Just 8)

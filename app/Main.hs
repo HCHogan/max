@@ -63,7 +63,7 @@ import Max.LLM.WindowCheck (checkContextWindows)
 import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
 import Max.Images (imageWorker)
 import Max.Intent (IntentState, intentWorker, newIntentState)
-import Max.Jobs (newJobs)
+import Max.Jobs (newJobs, recordJobUsage)
 import Max.Log (withCompactLogger)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
 import Max.Matrix (matrixDeliveryTransport, matrixWorker)
@@ -210,9 +210,12 @@ main = do
             -- effect stack.
             . runLLM
               httpRuntime
-              ( \ctx profile u ->
+              ( \ctx profile u -> do
+                  -- In memory first: a background task's report counts
+                  -- this call even when the database write fails.
+                  for_ ctx.ccAgentTurnId $ \turnId -> recordJobUsage jobs turnId u
                   runEff . runWithConnectionPool pool $ do
-                    insertUsage ctx.ccGroup ctx.ccSource profile u.usagePrompt u.usageCompletion u.usageCachedPrompt
+                    insertUsage ctx.ccGroup ctx.ccSource profile u
                     for_ ctx.ccAgentTurnId $ \turnId ->
                       addAgentTurnUsage turnId u.usagePrompt u.usageCompletion u.usageCachedPrompt
               )

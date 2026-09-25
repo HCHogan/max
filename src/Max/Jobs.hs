@@ -14,6 +14,7 @@ module Max.Jobs
     attachJobTurn,
     detachJobTurn,
     completeJob,
+    recordJobUsage,
     reportJobProgress,
     readJobInbox,
     jobHasFeedback,
@@ -55,8 +56,9 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
+import Max.LLM.Types (TokenUsage)
 import Max.Platform.Types (CanonicalMessageId, PrincipalId)
 import Max.Task.State (TaskStatus (..), taskIsLive)
 import Max.Task.Types
@@ -110,7 +112,7 @@ admitJob jobs caller identifier requested = do
         spec = requested {deadline, objective = T.strip requested.objective, delegated = requested.delegated || any (.view.spec.delegated) parents}
         run = JobRun identifier 1
         root = maybe run (.root) (lookupRun kept =<< spec.parent)
-        view = JobView run spec Queued Nothing Nothing 0 0 now True
+        view = JobView run spec Queued Nothing Nothing 0 0 now True emptyJobUsage Nothing
         newEntry = Entry view root Nothing Set.empty Set.empty Seq.empty 0 Nothing False False False
         invalid detail = pure (Left detail)
     if closing || not allowed || Map.member identifier current
@@ -181,14 +183,15 @@ detachJobTurn jobs run =
 
 completeJob :: Jobs -> JobRun -> TaskStatus -> JobResult -> IO ()
 completeJob jobs run status result = do
+  now <- getCurrentTime
   cancelled <- atomically $ do
     entries <- readTVar jobs.entries
     case lookupRun entries run of
       Just entry | taskIsLive entry.view.status && not (taskIsLive status) -> do
-        let (stopped, turns) = stopChildren entries entry.children "parent job ended"
+        let (stopped, turns) = stopChildren now entries entry.children "parent job ended"
             completed =
               entry
-                { view = entry.view {status = if entry.budgetExhausted then BudgetExhausted else status, result = Just result},
+                { view = entry.view {status = if entry.budgetExhausted then BudgetExhausted else status, result = Just result, finished = Just now},
                   noticeVersion = entry.noticeVersion + 1,
                   pendingNotice = if isNothing entry.view.spec.parent && isNothing entry.view.spec.monitor then Just result.text else Nothing,
                   pendingMonitor = isJust entry.view.spec.monitor
@@ -199,6 +202,18 @@ completeJob jobs run status result = do
         pure turns
       _ -> pure []
   stopTurns jobs cancelled
+
+-- | Book one completion against the job whose turn made it and every
+-- ancestor, so a root's report covers its whole tree.
+recordJobUsage :: Jobs -> AgentTurnId -> TokenUsage -> IO ()
+recordJobUsage jobs turn usage = atomically $ do
+  entries <- readTVar jobs.entries
+  case entryForTurn entries turn of
+    Just entry -> do
+      let owners = entry.view.run.jobId : map (.view.run.jobId) (ancestors entries entry.view.spec.parent)
+          book job = job {view = job.view {usage = addJobUsage usage job.view.usage}}
+      writeTVar jobs.entries (foldr (Map.adjust book) entries owners)
+    Nothing -> pure ()
 
 reportJobProgress :: Jobs -> AgentTurnId -> Text -> IO Bool
 reportJobProgress jobs turn body = atomically $ do
@@ -313,21 +328,21 @@ steerJob jobs group actor source identifier note = atomically $ do
     _ -> pure (Left "job not found, finished, or feedback exceeds its bound")
 
 cancelJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> Text -> IO (Either Text ())
-cancelJob jobs group actor admin identifier reason = controlJob jobs group actor admin identifier $ \entries entry ->
-  let (stopped, turns) = stopChildren entries (Set.singleton entry.view.run) reason
+cancelJob jobs group actor admin identifier reason = controlJob jobs group actor admin identifier $ \now entries entry ->
+  let (stopped, turns) = stopChildren now entries (Set.singleton entry.view.run) reason
    in Right (stopped, turns)
 
 replaceJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> Text -> IO (Either Text ())
-replaceJob jobs group actor admin identifier objective = controlJob jobs group actor admin identifier $ \entries entry ->
+replaceJob jobs group actor admin identifier objective = controlJob jobs group actor admin identifier $ \now entries entry ->
   if T.null (T.strip objective) || T.length objective > 40000
     then Left "invalid replacement objective"
     else
-      let (stopped, turns) = stopChildren entries entry.children "parent objective replaced"
+      let (stopped, turns) = stopChildren now entries entry.children "parent objective replaced"
           run = entry.view.run {generation = entry.view.run.generation + 1}
           spec = entry.view.spec {objective = T.strip objective}
           replacement =
             entry
-              { view = entry.view {run, spec, status = Queued, progress = Nothing, result = Nothing},
+              { view = entry.view {run, spec, status = Queued, progress = Nothing, result = Nothing, finished = Nothing},
                 children = Set.empty,
                 childUpdates = Set.empty,
                 inbox = Seq.empty,
@@ -341,13 +356,14 @@ replaceJob jobs group actor admin identifier objective = controlJob jobs group a
           withParent = maybe stopped (\parent -> Map.adjust updateParent parent.jobId stopped) spec.parent
        in Right (Map.insert identifier replacement withParent, turns <> maybe [] (pure . (.atrTurnId) . snd) entry.runtime)
 
-controlJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> (Map Int64 Entry -> Entry -> Either Text (Map Int64 Entry, [AgentTurnId])) -> IO (Either Text ())
+controlJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> (UTCTime -> Map Int64 Entry -> Entry -> Either Text (Map Int64 Entry, [AgentTurnId])) -> IO (Either Text ())
 controlJob jobs group actor admin identifier transition = do
+  now <- getCurrentTime
   outcome <- atomically $ do
     entries <- readTVar jobs.entries
     case Map.lookup identifier entries of
       Just entry | entry.view.spec.group == group && (admin || entry.view.spec.principal == actor) && taskIsLive entry.view.status ->
-        case transition entries entry of
+        case transition now entries entry of
           Left detail -> pure (Left detail)
           Right (updated, turns) -> writeTVar jobs.entries updated >> pure (Right turns)
       _ -> pure (Left "live job not found or owner permission required")
@@ -382,14 +398,14 @@ currentRuntime entry = fmap fst entry.runtime == Just entry.view.run
 appendInbox :: Value -> Entry -> Entry
 appendInbox note entry = entry {inbox = Seq.take 256 (entry.inbox |> note)}
 
-stopChildren :: Map Int64 Entry -> Set JobRun -> Text -> (Map Int64 Entry, [AgentTurnId])
-stopChildren entries children reason = Set.foldl' stop (entries, []) children
+stopChildren :: UTCTime -> Map Int64 Entry -> Set JobRun -> Text -> (Map Int64 Entry, [AgentTurnId])
+stopChildren now entries children reason = Set.foldl' stop (entries, []) children
   where
     stop (current, turns) run = case lookupRun current run of
       Just entry
         | taskIsLive entry.view.status ->
-            let (descendants, childTurns) = stopChildren current entry.children reason
-                stopped = entry {view = entry.view {status = Cancelled, result = Just (JobResult reason Nothing)}, pendingNotice = Nothing, pendingMonitor = isJust entry.view.spec.monitor, noticeVersion = entry.noticeVersion + 1}
+            let (descendants, childTurns) = stopChildren now current entry.children reason
+                stopped = entry {view = entry.view {status = Cancelled, result = Just (JobResult reason Nothing), finished = Just now}, pendingNotice = Nothing, pendingMonitor = isJust entry.view.spec.monitor, noticeVersion = entry.noticeVersion + 1}
                 notify parent = parent {childUpdates = Set.insert run parent.childUpdates}
                 withParent = maybe descendants (\parent -> Map.adjust notify parent.jobId descendants) entry.view.spec.parent
              in (Map.insert run.jobId stopped withParent, turns <> childTurns <> maybe [] (pure . (.atrTurnId) . snd) entry.runtime)
@@ -451,6 +467,7 @@ allJobs jobs = map (.view) . Map.elems <$> readTVarIO jobs.entries
 -- entered publication; already-running terminal notices keep their ownership.
 closeJobs :: Jobs -> IO [JobView]
 closeJobs jobs = do
+  now <- getCurrentTime
   (notices, turns) <- atomically $ do
     closing <- readTVar jobs.closed
     if closing
@@ -460,7 +477,7 @@ closeJobs jobs = do
         entries <- readTVar jobs.entries
         publishing <- Set.fromList . map fst . Map.elems <$> readTVar jobs.notices
         let live = Set.fromList [entry.view.run | entry <- Map.elems entries, taskIsLive entry.view.status]
-            (stopped, turns) = stopChildren entries live "服务重启，任务已中断；已发生的操作不会自动重试。"
+            (stopped, turns) = stopChildren now entries live "服务重启，任务已中断；已发生的操作不会自动重试。"
             unbound entry = entry.noticeInFlight && Set.notMember entry.view.run publishing
             needsNotice entry = isNothing entry.view.spec.parent && (Set.member entry.view.run live || isJust entry.pendingNotice || entry.pendingMonitor || unbound entry)
             notices = [updated.view | entry <- Map.elems entries, needsNotice entry, Just updated <- [lookupRun stopped entry.view.run]]

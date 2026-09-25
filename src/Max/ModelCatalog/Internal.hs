@@ -31,6 +31,7 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Max.LLM.Types (TokenPrices)
 
 -- | Which wire format an endpoint speaks.
 data Protocol
@@ -72,7 +73,9 @@ data LLMProfile = LLMProfile
     promptCacheBreakpoints :: !Bool,
     -- | Soft budget for the context Max assembles up front; see 'ContextLimits'.
     contextBudget :: !(Maybe Int),
-    visionLimits :: !(Maybe VisionLimits)
+    visionLimits :: !(Maybe VisionLimits),
+    -- | Configured prices; absent means calls on this profile carry no cost.
+    prices :: !(Maybe TokenPrices)
   }
   deriving stock (Eq)
 
