@@ -54,7 +54,7 @@ taskToolsFor context =
     startTool =
       Tool
         { toolName = "task_start",
-          toolDescription = "把长研究、浏览器、sandbox 或 SSH 运维工作交给后台。启动后立即返回 task#，简短告知用户任务已启动即可结束本轮；不要等待或轮询。子任务不会直接向群里发言。profile 只收窄现有权限。每棵任务树共享 200 次工具预留、400 次模型请求和六小时截止时间，替换目标不重置。token/cost 仅观测，不是硬额度。",
+          toolDescription = "把长研究、浏览器、sandbox 或 SSH 运维工作交给后台。启动后立即返回 task#，简短告知用户任务已启动即可结束本轮；不要等待或轮询。后台不会直接向群里发言；任务结束后报告会交回前台，由你转述给发起者。profile 只收窄现有权限。每棵任务树共享 200 次工具预留、400 次模型请求和六小时截止时间，替换目标不重置。token/cost 仅观测，不是硬额度。",
           toolSchema =
             toolObject
               [ ("objective", stringParam "自包含目标、约束和期望证据，不依赖整段聊天记录。"),

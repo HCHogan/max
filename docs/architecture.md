@@ -766,6 +766,9 @@ Shared invocation labels and budgets use `Concurrent` MVars/TVars, including
 under timeout races; they are not thread-local state.
 
 `Turn.Start` distinguishes foreground input, background Jobs and result notices.
+A root Job's result notice runs as an ordinary frontend turn with the report as
+host-authored `[task report]` evidence. If that turn delivers nothing, the report
+is published verbatim, quoting the request. Monitor Job results publish directly.
 Jobs serialize feedback, replacement and cancellation through STM under group and
 principal checks. Fresh persisted messages enter the bounded ingress queue;
 there are no SQL execution claims or model-authored revisions.

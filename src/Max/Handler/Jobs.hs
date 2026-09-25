@@ -60,7 +60,7 @@ shutdownJobs registry = do
               OutboundRequest
                 { orKind = KindChat,
                   orGroupId = job.spec.group,
-                  orBody = Body [NText (taskHandle job.run.jobId <> " · " <> JobState.taskStatusText job.status <> "\n" <> result.text)],
+                  orBody = Body [NText result.text],
                   orReplyTo = Just job.spec.source,
                   orDeliveryScope = DeliverConversation,
                   orTurnOutput = Nothing,

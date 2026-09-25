@@ -12,8 +12,11 @@ can cancel or replace a job: `!task cancel task#N`,
 budget and deadline, revokes the old generation and cancels its children.
 Background jobs may steer and await their own children with `task_wait`.
 
-The initiating foreground reply does not own a detached job's lifetime. A job
-owns its children and cancels them on exit. State, waits and browser sessions are
+The initiating foreground reply does not own a detached job's lifetime. When a
+root job finishes, its report goes back to the frontend. A later frontend turn
+relays it to the requester; if that turn fails or stays silent, the report is
+published as-is. Shutdown notices skip the frontend and are published directly,
+as a reply to the request. A job owns its children and cancels them on exit. State, waits and browser sessions are
 bounded and process-local. Graceful restart closes admission, cancels live Jobs,
 and publishes an interruption notice for each root Job within the shared drain
 deadline. Unpublished terminal results are also included. A hard crash or an

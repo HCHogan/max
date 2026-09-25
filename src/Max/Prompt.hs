@@ -23,6 +23,7 @@ module Max.Prompt
     -- * Shared line rendering (used by "Max.Intent" / "Max.Handler")
     renderHistoryLine,
     renderCurrentLine,
+    renderTaskReport,
 
     -- * Forward markers (shared with "Max.Tools")
     tagMediaMarkers,
@@ -64,6 +65,7 @@ import Max.Prompt.Render
     renderContextPlan,
     renderCurrentLine,
     renderHistoryLine,
+    renderTaskReport,
     tagImageMarkers,
   )
 import Max.Prompt.Request (PromptRequest (..))

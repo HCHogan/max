@@ -8,7 +8,7 @@ import Control.Concurrent.STM (newTVarIO, readTVarIO)
 import Control.Monad (forM_, join, void, when)
 import Data.Foldable (for_)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
@@ -32,6 +32,7 @@ import Max.DB.AgentTurn
     finishAgentTurn,
     markAgentTurnRunning,
   )
+import Max.DB.History (fetchMessageInScope)
 import Max.DB.TurnContinuity
   ( ReplyTurnTarget (rttTurn),
     continuationDigest,
@@ -95,7 +96,7 @@ import Max.Platform.Store.Outbound
   )
 import Max.Platform.Types
   ( AdvertisedCaps (..),
-    CanonicalMessageId (CanonicalMessageId),
+    CanonicalMessageId (..),
     PrincipalId (PrincipalId),
   )
 import Max.Prompt
@@ -103,6 +104,7 @@ import Max.Prompt
     PromptRequest (..),
     TriggerOrigin (..),
     buildContext,
+    renderTaskReport,
   )
 import Max.ReplySend
   ( ReplyPublication (..),
@@ -123,10 +125,10 @@ import Max.Task.Policy
   ( frontendDeadlineSeconds,
     frontendToolLimit,
   )
-import Max.Task.State qualified as JobState
 import Max.Task.Types
   ( JobRun (jobId),
-    JobView (run, status),
+    JobSpec (monitor, objective, source),
+    JobView (run, spec, status),
     taskHandle,
   )
 import Max.Tasks
@@ -151,7 +153,7 @@ import Max.Turn.Continuity
 import Max.Turn.Job (runJob)
 import Max.Turn.Start (TurnStart (JobNotice, JobTurn))
 import Max.Turn.Types (AgentTurnRef, nextTurnOutputLink)
-import Max.Util (tshow)
+import Max.Util (trySync, tshow)
 import OneBot.Types (GroupId (..), UserId (UserId), isPrivateChat)
 
 data PreparedReply = PreparedReply
@@ -198,13 +200,14 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
         race
           ( withProcessingReaction $ do
               if notice
-                then dispatchNotice
+                then dispatchNotice env session
                 else dispatchOrdinary env session (replyTarget >>= finishedTarget)
           )
           (threadDelay (frontendDeadlineSeconds * 1_000_000))
       case raced of
         Left () -> pure ()
         Right () -> do
+          for_ relayedReport (uncurry publishReport)
           when (origin == OriginDirect) $ do
             link <- liftIO (nextTurnOutputLink (turnRuntimeOutputContext turn))
             void $
@@ -222,6 +225,9 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
   where
     backgroundJob = case start of JobTurn job -> Just job; _ -> Nothing
     notice = case start of JobNotice {} -> True; _ -> False
+    relayedReport = case start of
+      JobNotice job _ body | isNothing job.spec.monitor -> Just (job, body)
+      _ -> Nothing
     finishedTarget target
       | replyTurnIsFinished target = Just target
       | otherwise = Nothing
@@ -235,25 +241,49 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
           (queueQQReaction gm.groupId gm.canonicalId processingFaceId True >> act)
             `finally` queueQQReaction gm.groupId gm.canonicalId processingFaceId False
 
-    dispatchNotice = case start of
+    dispatchNotice env session = case start of
       JobNotice job version body -> do
-        env :: BotEnv <- ask
         current <- liftIO (Jobs.noticeIsCurrent env.beJobs job.run version)
         if not current
           then finishAgentTurn turnRef TurnAborted 0 (Just "job notice superseded")
-          else do
-            liftIO (setTurnPhase turn "publishing task notice")
-            let target = sendTarget outputCaps gm [] False (Just (turnRuntimeOutputContext turn))
-                label = if JobState.taskIsLive job.status then " · 进度\n" else " · " <> JobState.taskStatusText job.status <> "\n"
-            result <- sendAndPersistReply target emptySendState (taskHandle job.run.jobId <> label <> body)
-            finishAgentTurn turnRef (if null result.committed then TurnFailed else TurnSucceeded) 0 result.failure
+          else case job.spec.monitor of
+            -- Reminder results follow their monitor's publication policy.
+            Just _ -> do
+              liftIO (setTurnPhase turn "publishing task notice")
+              result <- sendAndPersistReply noticeTarget emptySendState body
+              finishAgentTurn turnRef (if null result.committed then TurnFailed else TurnSucceeded) 0 result.failure
+            Nothing -> relayReport env session job body
       _ -> finishAgentTurn turnRef TurnAborted 0 (Just "missing job notice")
 
-    dispatchOrdinary env session continuation = do
-      prepared <- prepareReply env session continuation
-      runReply env session prepared
+    -- A root task's report returns to the frontend, which relays it in an
+    -- ordinary turn. If that turn does not deliver it, publish the report
+    -- itself so the requester still receives the result.
+    relayReport env session job body = do
+      request <- fetchMessageInScope (conversationScopeFor gm.groupId) job.spec.source.unCanonicalMessageId
+      let report = renderTaskReport env.beTimeZone job.run.jobId job.status job.spec.objective request body
+      relayed <- trySync (prepareReply env session Nothing (Just report) >>= runReply env session)
+      case relayed of
+        Right settled@(TurnSucceeded, _, _) -> settle settled
+        Right (terminal, turns, reason) -> fallback turns (tshow terminal <> maybe "" (": " <>) reason)
+        Left err -> fallback 0 (T.pack (show err))
+      where
+        fallback turns reason = do
+          logAttention "task report relay did not deliver; publishing the report" (object ["task" .= taskHandle job.run.jobId, "reason" .= reason])
+          result <- publishReport job body
+          settle (if null result.committed then TurnFailed else TurnSucceeded, turns, Just ("relay fell back to the task report: " <> reason))
 
-    prepareReply env s continuationTarget = do
+    publishReport job body =
+      sendAndPersistReply noticeTarget emptySendState ("[↩#" <> tshow job.spec.source.unCanonicalMessageId <> "] " <> body)
+
+    noticeTarget = sendTarget outputCaps gm [] False (Just (turnRuntimeOutputContext turn))
+
+    settle (terminal, turns, reason) = finishAgentTurn turnRef terminal turns reason
+
+    dispatchOrdinary env session continuation = do
+      prepared <- prepareReply env session continuation Nothing
+      settle =<< runReply env session prepared
+
+    prepareReply env s continuationTarget report = do
       catalog :: ModelCatalog <- ask
       let capabilities = lookupModelCapabilities s.model catalog
           multimodal = maybe False supportsMultimodal capabilities
@@ -309,7 +339,7 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
             target
         pure (renderContinuationDigest env.beTimeZone <$> digestView)
       liftIO (setTurnPhase turn "context")
-      let continuation = replyContinuation
+      let continuation = report <|> replyContinuation
       (ctx, roster) <-
         buildContext
           PromptRequest
@@ -368,7 +398,7 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
           when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $ do
             queueQQReaction gm.groupId gm.canonicalId processingFaceId False
             queueQQReaction gm.groupId gm.canonicalId failureFaceId True
-          finishAgentTurn turnRef TurnFailed 0 (Just "turn stopped making progress")
+          pure (TurnFailed, 0, Just "turn stopped making progress")
         Left result -> publishReply env s prepared.target streamState result
 
     publishReply env session target streamState result = do
@@ -382,7 +412,7 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
             queueQQReaction gm.groupId gm.canonicalId processingFaceId False
             queueQQReaction gm.groupId gm.canonicalId failureFaceId True
           pure TurnFailed
-      finishAgentTurn turnRef terminal result.turnsUsed (renderAgentFailure <$> agentFailure result.outcome)
+      pure (terminal, result.turnsUsed, renderAgentFailure <$> agentFailure result.outcome)
       where
         publish = handleReply env session target streamState result
 

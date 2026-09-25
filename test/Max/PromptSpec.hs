@@ -25,8 +25,9 @@ import Max.IR (Body (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), noAdvertisedCaps, qqAdvertisedCaps)
-import Max.Prompt (ContextCompartment (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, cpInputs, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
+import Max.Prompt (ContextCompartment (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, cpInputs, planContext, renderContext, renderContextPlan, renderTaskReport, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
+import Max.Task.State (TaskStatus (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
@@ -841,6 +842,25 @@ spec = do
       ub `shouldSatisfy` T.isInfixOf "也可以整条回复 [silence]"
       ub `shouldSatisfy` (not . T.isInfixOf "[#0]")
       ub `shouldSatisfy` (not . T.isInfixOf "Alice: hello")
+
+  describe "renderContext task report turns" $ do
+    it "hands the report to the frontend as evidence it must relay" $ do
+      let request = historyAt 9 812 memberId (Just "Alice") "帮我查一下 h610 的磁盘"
+          report = renderTaskReport utc 680 Succeeded "检查 h610 磁盘占用" (Just request) "根分区 71%，/nix 占 40G。"
+          inp = baseInputs {origin = OriginTask, triggerMessage = (triggerMsg []) {Dispatch.body = Body []}, continuationView = Just report}
+          (_, ub) = splitMessages (renderContext inp)
+      ub `shouldSatisfy` T.isInfixOf "[task report — task#680，已完成]"
+      ub `shouldSatisfy` T.isInfixOf "发起请求：[09:00 Alice #812]: 帮我查一下 h610 的磁盘"
+      ub `shouldSatisfy` T.isInfixOf "根分区 71%，/nix 占 40G。"
+      ub `shouldSatisfy` T.isInfixOf "[current event — task report]"
+      ub `shouldSatisfy` T.isInfixOf "不能回 [silence]"
+      ub `shouldSatisfy` (not . T.isInfixOf "Alice: hello")
+
+    it "bounds an oversized report and points at task_status" $ do
+      let report = renderTaskReport utc 7 Failed "目标" Nothing (T.replicate 20000 "字")
+      T.length report `shouldSatisfy` (< 16200)
+      report `shouldSatisfy` T.isInfixOf "[task report — task#7，失败]"
+      report `shouldSatisfy` T.isInfixOf "task_status task#7"
 
   describe "ContextSnapshot → ContextPlan → renderer" $ do
     it "preserves the existing byte output under a generous budget" $ do
