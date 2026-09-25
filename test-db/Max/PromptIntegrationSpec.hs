@@ -186,7 +186,7 @@ spec pool = before_ (truncateAll pool) $
       insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "first settled range"
       (_, firstEnd) <- publishNextCompartment pool (MessageCursor 0) [1001] "first summary"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      let request = (promptRequest s trigger) {prLimits = ContextLimits 8000 512 0 0 Nothing}
+      let request = (promptRequest s trigger) {prLimits = ContextLimits 8000 512 0 0 Nothing Nothing}
           build = withDbLog pool $ withReadSnapshot $ fst <$> buildContext request
       first <- build
       userBodyOf first `shouldSatisfy` ("first summary" `T.isInfixOf`)
@@ -229,7 +229,7 @@ spec pool = before_ (truncateAll pool) $
         (\i -> insertRawMessage pool (3000 + i) groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") ("短消息" <> T.pack (show i)))
         [1 .. 200 :: Int64]
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      msgs <- withDbLog pool $ fst <$> buildContext ((promptRequest s trigger) {prLimits = ContextLimits 100000 1024 0 0 Nothing})
+      msgs <- withDbLog pool $ fst <$> buildContext ((promptRequest s trigger) {prLimits = ContextLimits 100000 1024 0 0 Nothing Nothing})
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("短消息1" `T.isInfixOf`)
       ub `shouldSatisfy` ("短消息200" `T.isInfixOf`)
@@ -253,7 +253,7 @@ spec pool = before_ (truncateAll pool) $
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <-
         withDbLog pool $
-          fst <$> buildContext ((promptRequest s trigger) {prLimits = ContextLimits 8000 1024 0 0 Nothing})
+          fst <$> buildContext ((promptRequest s trigger) {prLimits = ContextLimits 8000 1024 0 0 Nothing Nothing})
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("newest-sentinel" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("oldest-sentinel" `T.isInfixOf`))

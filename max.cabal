@@ -233,6 +233,9 @@ library
         Max.Effects.FileTransfer
         Max.Conversation.Roster
         Max.Media.ToolRuntime
+        Max.Media.Prepare
+        Max.Media.Rendition
+        Max.Media.Vision
         Max.Browser.ToolRuntime
         Max.Browser.Client
         Max.Effects.Browser
@@ -281,6 +284,7 @@ library
         Max.HttpRuntime
         Max.Http.Stream
         Max.ImagePrep
+        Max.DB.VideoRendition
         Max.Images
         Max.IMessage
         Max.Intent
@@ -701,6 +705,7 @@ test-suite max-test
         Max.LLM.ProtocolSpec
         Max.LLM.StreamSpec
         Max.LLM.WindowCheckSpec
+        Max.Media.VisionSpec
         Max.LogSpec
         OneBot.ActionSpec
         OneBot.EventSpec
@@ -761,6 +766,7 @@ test-suite max-test
         , aeson           >= 2.2  && < 2.4
         , async           >= 2.2  && < 2.3
         , base            >= 4.20 && < 5
+        , base64-bytestring >= 1.2 && < 1.3
         , bytestring      >= 0.12 && < 0.13
         , containers      >= 0.7  && < 0.9
         , directory       >= 1.3  && < 1.4
@@ -774,6 +780,7 @@ test-suite max-test
         , log-base        >= 0.12 && < 0.13
         , max
         , network         >= 3.1  && < 3.3
+        , process         >= 1.6  && < 1.7
         , text            >= 2.1  && < 2.2
         , time            >= 1.12 && < 1.17
         , tls             >= 2.0  && < 3.0
@@ -818,6 +825,7 @@ test-suite max-test-db
         Max.DB.HistorySpec
         Max.DB.ProjectionSpec
         Max.DB.MediaSpec
+        Max.DB.VideoRenditionSpec
         Max.DB.MediaMissingSpec
         Max.MemoryStoreSpec
         Max.MemoryCapabilitiesSpec
@@ -843,6 +851,7 @@ test-suite max-test-db
         , containers           >= 0.7  && < 0.9
         , directory            >= 1.3  && < 1.4
         , filepath             >= 1.5  && < 1.6
+        , process              >= 1.6  && < 1.7
         , temporary            >= 1.3  && < 1.4
         , hspec                >= 2.11 && < 2.12
         , log-base             >= 0.12 && < 0.13

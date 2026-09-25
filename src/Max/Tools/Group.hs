@@ -307,7 +307,7 @@ fetchAndQueue url label =
       let mime' = fromMaybe (defaultMime mime) (sniffMediaMime bytes)
           b64 = TE.decodeUtf8 (B64.encode bytes)
           dataUrl = "data:" <> mime' <> ";base64," <> b64
-      ok <- queueInlineMedia (InlineMedia label dataUrl)
+      ok <- queueInlineMedia (InlineMedia label dataUrl Nothing)
       pure $
         if ok
           then Right (object ["attached" .= True, "note" .= ("头像已附在下一条消息里" :: Text)])

@@ -184,7 +184,9 @@ selectedCompartmentSummary compartment =
 data PromptImage = PromptImage
   { piLabel :: !Text,
     -- | @data:\<mime\>;base64,...@
-    piDataUrl :: !Text
+    piDataUrl :: !Text,
+    -- | Vision tokens of a prepared video rendition; images carry their size.
+    piVisionTokens :: !(Maybe Int)
   }
   deriving stock (Show, Eq)
 

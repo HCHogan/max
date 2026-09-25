@@ -262,6 +262,7 @@ profileFor protocol =
       historyAsTurns = False,
       promptCacheBreakpoints = False,
       contextBudget = Nothing,
+      visionLimits = Nothing,
       stream = False
     }
   where
@@ -368,7 +369,8 @@ toolImage :: InlineMedia
 toolImage =
   InlineMedia
     { imLabel = "[22:52 老张] 消息里的图片:",
-      imDataUrl = "data:image/jpeg;base64,dG9vbC1pbWFnZQ=="
+      imDataUrl = "data:image/jpeg;base64,dG9vbC1pbWFnZQ==",
+      imVisionTokens = Nothing
     }
 
 initialMessages :: [ChatMessage]
@@ -403,9 +405,9 @@ promptFixture =
       groupMemories = [memory 12 "group" 114514191 "群里主要玩 STM32 和 ESP32，老张是硬件老师傅"],
       userMemories = [memory 31 "user" 223344556 "阿飞在做一个 LoRa 气象站毕设"],
       images =
-        [ PromptImage "[↩ quoted message（22:45 阿飞）] 里的图片:" "data:image/jpeg;base64,cXVvdGVkLWltYWdl",
-          PromptImage "[current message] 里的图片:" "data:image/png;base64,Y3VycmVudC1pbWFnZQ==",
-          PromptImage "[current message] 里的视频（时长 29 秒）:" "data:video/mp4;base64,Y3VycmVudC12aWRlbw=="
+        [ PromptImage "[↩ quoted message（22:45 阿飞）] 里的图片:" "data:image/jpeg;base64,cXVvdGVkLWltYWdl" Nothing,
+          PromptImage "[current message] 里的图片:" "data:image/png;base64,Y3VycmVudC1pbWFnZQ==" Nothing,
+          PromptImage "[current message] 里的视频（时长 29 秒）:" "data:video/mp4;base64,Y3VycmVudC12aWRlbw==" Nothing
         ],
       skills =
         [ ("self-knowledge", "自知总入口：inspect_source 源码快照的导航图与实时命令帮助"),

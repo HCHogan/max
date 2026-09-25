@@ -28,7 +28,8 @@ profile protocol hints =
       historyAsTurns = False,
       stream = False,
       promptCacheBreakpoints = hints,
-      contextBudget = Nothing
+      contextBudget = Nothing,
+      visionLimits = Nothing
     }
 
 marked :: [ChatMessage]

@@ -118,7 +118,7 @@ spec = describe "shared host tool execution" $ do
 
   it "shares the media queue and cumulative attachment budget across adapters" $ do
     binary <- guestCalls [request "echo" args] ""
-    let media = InlineMedia "image" "data:image/png;base64,AA=="
+    let media = InlineMedia "image" "data:image/png;base64,AA==" Nothing
         runner = echoTool {toolRunner = LegacyRunner $ \value -> queueInlineMedia media >> pure (Right value)}
         definition = echoDefinition {tdParallelism = SequentialOnly}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
@@ -134,7 +134,7 @@ spec = describe "shared host tool execution" $ do
     attachments `shouldBe` ([media], [])
 
   it "keeps the browser screenshot category spent after drains and adapter reconstruction" $ do
-    let media = InlineMedia "browser screenshot" "data:image/jpeg;base64,AA=="
+    let media = InlineMedia "browser screenshot" "data:image/jpeg;base64,AA==" Nothing
     result <- runEff $ do
       queue <- newToolOutputQueue 8
       first <- runToolOutput queue (queueInlineMediaOnce "browser.screenshot" media)

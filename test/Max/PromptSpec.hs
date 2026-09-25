@@ -654,8 +654,8 @@ spec = do
 
   describe "renderContext images" $ do
     it "attaches images with labels, never two adjacent text blocks" $ do
-      let img1 = PromptImage "[09:15 Alice] 消息里的图片:" "data:image/png;base64,AAAA"
-          img2 = PromptImage "[当前消息] 里的图片:" "data:image/jpeg;base64,BBBB"
+      let img1 = PromptImage "[09:15 Alice] 消息里的图片:" "data:image/png;base64,AAAA" Nothing
+          img2 = PromptImage "[当前消息] 里的图片:" "data:image/jpeg;base64,BBBB" Nothing
           inp = baseInputs {multimodal = True, images = [img1, img2]}
           msgs = sent inp
       case last msgs of
@@ -889,7 +889,7 @@ spec = do
           veryLong = historyAt 9 101 memberId (Just "Alice") (T.replicate 6000 "汉")
           shortOnly = baseInputs {transcript = [short]}
           shortPlan = planContext generousLimits (snapshot shortOnly)
-          tightLimits = ContextLimits shortPlan.cpEstimatedPromptTokens 512 0 0 Nothing
+          tightLimits = ContextLimits shortPlan.cpEstimatedPromptTokens 512 0 0 Nothing Nothing
           pressured = planContext tightLimits (snapshot baseInputs {transcript = [veryLong, short]})
       map (.canonicalId) (cpInputs pressured).transcript `shouldBe` [short.canonicalId]
       pressured.cpWithinBudget `shouldBe` True
@@ -900,7 +900,7 @@ spec = do
       let recent = historyAt 10 102 otherMemberId (Just "Bob") "keep the live line"
           rawOnly = baseInputs {transcript = [recent]}
           rawPlan = planContext generousLimits (snapshot rawOnly)
-          tightLimits = ContextLimits rawPlan.cpEstimatedPromptTokens 512 0 0 Nothing
+          tightLimits = ContextLimits rawPlan.cpEstimatedPromptTokens 512 0 0 Nothing Nothing
           pressured =
             planContext
               tightLimits
@@ -911,7 +911,7 @@ spec = do
 
     it "cuts oldest recent-turn lines under token pressure" $ do
       let baseline = planContext generousLimits (snapshot baseInputs)
-          tightLimits = ContextLimits baseline.cpEstimatedPromptTokens 512 0 0 Nothing
+          tightLimits = ContextLimits baseline.cpEstimatedPromptTokens 512 0 0 Nothing Nothing
           pressured =
             planContext
               tightLimits
@@ -930,7 +930,7 @@ spec = do
         `shouldSatisfy` any (\trace -> trace.ctSource == "turn.recent" && trace.ctDecision == ContextDropped)
 
     it "reports an over-budget plan when only protected sources remain" $ do
-      let plan = planContext (ContextLimits 1 512 0 0 Nothing) (snapshot baseInputs)
+      let plan = planContext (ContextLimits 1 512 0 0 Nothing Nothing) (snapshot baseInputs)
       plan.cpWithinBudget `shouldBe` False
       plan.cpTrace
         `shouldSatisfy` any (\trace -> trace.ctSource == "prompt.total" && trace.ctDecision == ContextOverBudget)
@@ -950,7 +950,7 @@ spec = do
     it "omits summaries before dropping the raw tail under token pressure" $ do
       let raw = historyAt 11 101 otherMemberId (Just "Bob") "protected live tail"
           rawPlan = planContext generousLimits (snapshot baseInputs {transcript = [raw]})
-          tightLimits = ContextLimits rawPlan.cpEstimatedPromptTokens 512 0 0 Nothing
+          tightLimits = ContextLimits rawPlan.cpEstimatedPromptTokens 512 0 0 Nothing Nothing
           large = compartmentAt 1 (timeAt 10) (T.replicate 4000 "长")
           pressured = planContext tightLimits (snapshot baseInputs {compartments = [large], transcript = [raw]})
       map (.canonicalId) (cpInputs pressured).transcript `shouldBe` [raw.canonicalId]
@@ -963,7 +963,7 @@ spec = do
       let summaries = [compartmentAt cid (timeAt (fromIntegral cid)) (T.replicate 3000 "旧") | cid <- [1 .. 4]]
           recent = compartmentAt 5 (timeAt 10) "recent summary"
           memory = memAt 1 "important current fact"
-          limits = ContextLimits 65536 8192 0 0 Nothing
+          limits = ContextLimits 65536 8192 0 0 Nothing Nothing
           plan = planContext limits (snapshot baseInputs {compartments = summaries <> [recent], groupMemories = [memory]})
       map (.contextExpandHandle) (cpInputs plan).compartments `shouldBe` map episodeHandleAt [3, 4, 5]
       map (.memId) (cpInputs plan).groupMemories `shouldBe` [memory.memId]
@@ -1032,4 +1032,4 @@ snapshot :: PromptInputs -> ContextSnapshot
 snapshot = ContextSnapshot
 
 generousLimits :: ContextLimits
-generousLimits = ContextLimits 200000 4096 0 0 Nothing
+generousLimits = ContextLimits 200000 4096 0 0 Nothing Nothing

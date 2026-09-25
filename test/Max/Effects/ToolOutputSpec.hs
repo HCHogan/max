@@ -8,8 +8,8 @@ import Test.Hspec
 spec :: Spec
 spec = describe "ToolOutput" $ do
   it "drains queued media without resetting the turn-wide budget" $ do
-    let first = InlineMedia "first" "data:image/png;base64,AA=="
-        second = InlineMedia "second" "data:image/png;base64,BB=="
+    let first = InlineMedia "first" "data:image/png;base64,AA==" Nothing
+        second = InlineMedia "second" "data:image/png;base64,BB==" Nothing
     (accepted, rejected, drained, empty, rejectedAfterDrain) <-
       runEff $ do
         queue <- newToolOutputQueue 1
@@ -28,7 +28,7 @@ spec = describe "ToolOutput" $ do
 
   it "shares one atomic budget across concurrent producers and a separate consumer" $ do
     queue <- runEff (newToolOutputQueue 4)
-    let media = InlineMedia "parallel" "data:image/png;base64,AA=="
+    let media = InlineMedia "parallel" "data:image/png;base64,AA==" Nothing
     accepted <- replicateConcurrently 32 (runEff . runToolOutput queue $ queueInlineMedia media)
     length (filter id accepted) `shouldBe` 4
     drained <- runEff . runToolOutputRead queue $ drainInlineMedia
@@ -37,7 +37,7 @@ spec = describe "ToolOutput" $ do
     runEff (runToolOutputRead queue drainInlineMedia) `shouldReturn` []
 
   it "starts each interpreter with a fresh queue and budget" $ do
-    let media = InlineMedia "fresh" "data:image/png;base64,AA=="
+    let media = InlineMedia "fresh" "data:image/png;base64,AA==" Nothing
         runOnce = runEff $ do
           queue <- newToolOutputQueue 1
           runToolOutput queue (queueInlineMedia media)

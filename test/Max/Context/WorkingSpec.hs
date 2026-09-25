@@ -52,11 +52,11 @@ spec = describe "recoverable working context" $ do
     let messages = [MsgSystem "rules", MsgUser "目标"]
         huge = [ToolSpec "loaded" "instructions" (object ["schema" .= T.replicate 60000 "x"])]
     fit Nothing messages huge `shouldSatisfy` isLeft
-    fit Nothing (messages <> [MsgUserBlocks [VideoDataUrl "data:video/mp4;base64,x", VideoDataUrl "data:video/mp4;base64,y"]]) [] `shouldSatisfy` isLeft
+    fit Nothing (messages <> [MsgUserBlocks [VideoDataUrl "data:video/mp4;base64,x" Nothing, VideoDataUrl "data:video/mp4;base64,y" Nothing]]) [] `shouldSatisfy` isLeft
 
   it "does not spend the output reserve twice or drop an oversized protected goal" $ do
     let messages = [MsgUser "hello"]
-        exact = ContextLimits (estimateMessagesTokens messages) 100000 0 0 Nothing
+        exact = ContextLimits (estimateMessagesTokens messages) 100000 0 0 Nothing Nothing
     Right plan <- pure (fitWorkingContext exact Nothing "id" "t#7" "" messages [])
     plan.wpCompacted `shouldBe` False
     fit Nothing [MsgUser (T.replicate 50000 "原始目标")] [] `shouldSatisfy` isLeft
@@ -70,8 +70,8 @@ spec = describe "recoverable working context" $ do
 
   it "allows protected instructions to consume soft headroom but respects a smaller model window" $ do
     let messages = [MsgUser (T.replicate 4000 "x")]
-        large = ContextLimits 5000 1000 0 4000 Nothing
-        small = ContextLimits 1000 1000 0 0 Nothing
+        large = ContextLimits 5000 1000 0 4000 Nothing Nothing
+        small = ContextLimits 1000 1000 0 0 Nothing Nothing
     Right plan <- pure (fitWorkingContext large Nothing "large" "t#7" "" messages [])
     plan.wpCompacted `shouldBe` False
     plan.wpEstimatedTokens `shouldSatisfy` (<= plan.wpLimit)
@@ -89,7 +89,7 @@ spec = describe "recoverable working context" $ do
     workingIdentity "large" "g1" limits [] `shouldNotBe` workingIdentity "large" "g1" limits [ToolSpec "a" "b" (object [])]
 
 limits :: ContextLimits
-limits = ContextLimits 12000 4000 2048 1000 Nothing
+limits = ContextLimits 12000 4000 2048 1000 Nothing Nothing
 
 fit :: Maybe UsageAnchor -> [ChatMessage] -> [ToolSpec] -> Either Text WorkingProjection
 fit anchor messages = fitWorkingContext limits anchor "id" "t#7" "" messages

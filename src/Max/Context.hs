@@ -102,7 +102,7 @@ estimateBlockTokens = \case
   -- Binary payloads are represented by the attachment reserve, not by treating
   -- base64 bytes as language tokens.
   ImageDataUrl _ -> 0
-  VideoDataUrl _ -> 0
+  VideoDataUrl _ _ -> 0
 
 estimateLazyBytesTokens :: LBS.ByteString -> Int
 estimateLazyBytesTokens bytes

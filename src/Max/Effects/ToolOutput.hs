@@ -30,7 +30,9 @@ import Effectful.Dispatch.Dynamic (interpret, send)
 
 data InlineMedia = InlineMedia
   { imLabel :: !Text,
-    imDataUrl :: !Text
+    imDataUrl :: !Text,
+    -- | Vision tokens of a prepared video rendition; images carry their size.
+    imVisionTokens :: !(Maybe Int)
   }
   deriving stock (Show, Eq)
 

@@ -187,7 +187,7 @@ attachBrowserScreenshot budget action available value
         Right imageResult -> case imageOf imageResult of
           Nothing -> pure (setScreenshotNote "screenshot unavailable: no image returned" value)
           Just dataUrl -> do
-            queued <- queueInlineMediaOnce "browser.screenshot" (InlineMedia "browser viewport screenshot" dataUrl)
+            queued <- queueInlineMediaOnce "browser.screenshot" (InlineMedia "browser viewport screenshot" dataUrl Nothing)
             pure (setScreenshotNote (if queued then "viewport screenshot attached" else "screenshot not attached: turn attachment quota exhausted") (mergeBrowserNotes imageResult value))
   where
     imageOf raw = do

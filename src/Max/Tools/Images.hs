@@ -124,7 +124,7 @@ viewImageTool tz prepare =
                 else do
                   let b64 = TE.decodeUtf8 (B64.encode bytes)
                       dataUrl = "data:" <> mime' <> ";base64," <> b64
-                  ok <- queueInlineMedia (InlineMedia numbered dataUrl)
+                  ok <- queueInlineMedia (InlineMedia numbered dataUrl Nothing)
                   if ok
                     then (1 +) <$> attachAll label rest total
                     else pure 0

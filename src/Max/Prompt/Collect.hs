@@ -6,6 +6,7 @@ import Control.Monad (when)
 import Data.ByteString qualified as BS (length)
 import Data.ByteString.Base64 qualified as B64 (encode)
 import Data.Either (partitionEithers)
+import Data.Maybe (mapMaybe)
 import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
@@ -27,7 +28,7 @@ import Effectful.PostgreSQL (WithConnection, query)
 import Max.Context.Media (tagMediaMarkers)
 import Max.Context.Types
   ( ContextSnapshot (..),
-    PromptImage (PromptImage),
+    PromptImage (..),
     PromptInputs
       ( PromptInputs,
         compartments,
@@ -77,7 +78,11 @@ import Max.Dispatch
   )
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.IR (Body (..), Node (..), Phase (Canonical))
-import Max.ImagePrep (prepareImageForLLM)
+import Max.LLM.Types (ContentBlock (ImageDataUrl))
+import Max.Media.Prepare (prepareImageWithin)
+import Max.Media.Rendition (rawVideoAttachment, videoRendition)
+import Max.Media.Vision (VideoAttachment (..), blockVisionTokens, wholeVideo)
+import Max.ModelCatalog (ContextLimits (..), VisionLimits (..))
 import Max.Images
   ( downloadableImageCount,
     downloadableVideoCount,
@@ -206,24 +211,10 @@ collectContextSnapshot request now' history = do
         -- handle so the model can context_read a forward ref one level deeper.
         map enrich <$> fetchForwardChildrenInScope scope mid maxForwardLines
       else pure []
-  images' <-
-    if multimodal'
-      then do
-        -- Wait only for newly queued trigger images, not older context downloads.
-        let expected = downloadableImageCount gm.body
-        when (expected > 0) $ waitForTriggerImages mid expected
-        -- Budget priority: the reply target is what the user is
-        -- pointing at, then pins (explicit user signals).  Ambient
-        -- recency is deliberately NOT a candidate any more — see the
-        -- marker-tagging pass above.
-        loadPromptImages
-          tz'
-          mid
-          (Set.fromList (map (.canonicalId) replyItems))
-          (dedupById (replyItems <> pinnedItems''))
-      else pure []
-  -- Attach trigger/reply videos, waiting for the trigger download if needed.
-  -- Ambient videos remain handles for view_video.
+  -- Trigger/reply videos take the vision budget first: they are what the
+  -- user points at, and each is a whole item. Ambient videos remain handles
+  -- for view_video. Display order stays images, then videos.
+  let vision = request.prLimits.visionLimits
   videos' <-
     if multimodal'
       then do
@@ -235,7 +226,25 @@ collectContextSnapshot request now' history = do
                 (\(r, _, _) -> [(r.canonicalId, "[↩ quoted message] 里的视频")])
                 replyCtx0
                 <> [(mid, "[current message] 里的视频") | expectedVids > 0]
-        take maxPromptVideos . concat <$> traverse loadMessageVideos cands
+        loadPromptVideos vision cands
+      else pure []
+  images' <-
+    if multimodal'
+      then do
+        -- Wait only for newly queued trigger images, not older context downloads.
+        let expected = downloadableImageCount gm.body
+        when (expected > 0) $ waitForTriggerImages mid expected
+        -- Budget priority: the reply target is what the user is
+        -- pointing at, then pins (explicit user signals).  Ambient
+        -- recency is deliberately NOT a candidate any more — see the
+        -- marker-tagging pass above.
+        loadPromptImages
+          vision
+          (maybe maxBound (\limits -> limits.requestTokens - sum (mapMaybe (.piVisionTokens) videos')) vision)
+          tz'
+          mid
+          (Set.fromList (map (.canonicalId) replyItems))
+          (dedupById (replyItems <> pinnedItems''))
       else pure []
   pure $
     ContextSnapshot
@@ -330,44 +339,54 @@ waitForTriggerVideos mid expected = go 0
               liftIO (threadDelay (stepMs * 1000))
               go (elapsed + stepMs)
 
--- | Load a message's downloaded videos from the blob store as prompt
--- attachments.  Empty when the message has none (or the worker hasn't
--- caught up) — the [video#<id>] marker stays.
-loadMessageVideos ::
+-- | Load the candidates' downloaded videos as prompt attachments, at most
+-- 'maxPromptVideos' and, under a declared vision envelope, as cached
+-- renditions within the request budget. Missing or failed videos keep their
+-- [video#<id>] marker.
+loadPromptVideos ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  (Int64, Text) -> -- (message_id, attachment label prefix, sans colon)
+  Maybe VisionLimits ->
+  [(Int64, Text)] -> -- (message_id, attachment label prefix, sans colon)
   Eff es [PromptImage]
-loadMessageVideos (mid, label) = do
-  rows <-
-    query
-      "SELECT v.mime_type, v.sha256, v.duration_seconds \
-      \  FROM message_videos mv \
-      \  JOIN videos v USING (sha256) \
-      \  WHERE mv.canonical_message_id = ? \
-      \  ORDER BY mv.seg_index"
-      (Only mid)
-  fmap concat . traverse loadOne $ (rows :: [(Text, Text, Maybe Double)])
+loadPromptVideos vision cands = do
+  rows <- concat <$> traverse messageVideos cands
+  go (maybe maxBound (.requestTokens) vision) (take maxPromptVideos rows)
   where
-    -- The probed duration goes into the label: the model's own
-    -- duration perception from sampled frames is unreliable (a 29s
-    -- clip once read back as "2.1秒").
-    loadOne (mime, sha, mDur) = case blobRefFromSha256 sha of
+    messageVideos (mid, label) = do
+      rows <-
+        query
+          "SELECT v.mime_type, v.sha256, v.duration_seconds \
+          \  FROM message_videos mv \
+          \  JOIN videos v USING (sha256) \
+          \  WHERE mv.canonical_message_id = ? \
+          \  ORDER BY mv.seg_index"
+          (Only mid)
+      pure [(label, row) | row <- rows :: [(Text, Text, Maybe Double)]]
+    go _ [] = pure []
+    go left ((label, (mime, sha, mDur)) : rest) = case blobRefFromSha256 sha of
       Nothing -> do
         logAttention "prompt: invalid video blob ref" $ object ["sha256" .= sha]
-        pure []
-      Just ref -> do
-        eres <- try @IOException (readBlob ref)
-        case eres of
-          Left e -> do
-            logAttention "prompt: video read failed" $
-              object ["sha256" .= sha, "error" .= T.pack (show e)]
-            pure []
-          Right bytes ->
-            pure
-              [ PromptImage
-                  (label <> maybe "" (\d -> "（时长 " <> fmtDurationSec d <> "）") mDur <> ":")
-                  ("data:" <> mime <> ";base64," <> TE.decodeUtf8 (B64.encode bytes))
-              ]
+        go left rest
+      Just ref -> case vision of
+        -- The probed duration goes into the label: the model's own
+        -- duration perception from sampled frames is unreliable (a 29s
+        -- clip once read back as "2.1秒").
+        Nothing ->
+          try @IOException (readBlob ref) >>= \case
+            Left e -> do
+              logAttention "prompt: video read failed" $ object ["sha256" .= sha, "error" .= T.pack (show e)]
+              go left rest
+            Right bytes -> (attached (rawVideoAttachment mime mDur bytes) :) <$> go left rest
+        Just limits -> do
+          rendered <- videoRendition limits wholeVideo sha (either (Left . T.pack . show) Right <$> try @IOException (readBlob ref))
+          case rendered of
+            Right video
+              | Just tokens <- video.attachmentTokens,
+                tokens <= left ->
+                  (attached video :) <$> go (left - tokens) rest
+            _ -> go left rest
+      where
+        attached video = PromptImage (label <> video.attachmentNote <> ":") video.attachmentDataUrl video.attachmentTokens
 
 -- | Wait up to 'waitForwardMaxMs' for forwarded children; otherwise retain the
 -- bare marker. Children from one fetch are committed together.
@@ -425,16 +444,19 @@ maxPromptImages = 8
 maxImageBytes :: Int
 maxImageBytes = 20 * 1024 * 1024
 
--- | Allocate image slots to the trigger first, then candidates in priority order.
--- Display context chronologically with the trigger last; skip missing/oversized files.
+-- | Allocate image slots to the trigger first, then candidates in priority
+-- order, within the remaining vision budget. Display context chronologically
+-- with the trigger last; skip missing/oversized files.
 loadPromptImages ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  Maybe VisionLimits ->
+  Int -> -- vision tokens left for images
   TimeZone -> -- display timezone for the image labels' HH:MM
   Int64 -> -- trigger canonical message id
   Set.Set Int64 -> -- canonical ids belonging to the quoted reply (incl. forward children)
   [HistoryItem] -> -- context candidates, priority order, deduped
   Eff es [PromptImage]
-loadPromptImages tz' mid replyIds candidates = do
+loadPromptImages vision budget tz' mid replyIds candidates = do
   let candidates' = filter (\h -> h.canonicalId /= mid) candidates
       ids = mid : map (.canonicalId) candidates'
   rows <-
@@ -454,12 +476,19 @@ loadPromptImages tz' mid replyIds candidates = do
         take maxPromptImages $
           map Left (imagesOf mid)
             <> [Right (h, mp) | h <- candidates', mp <- imagesOf h.canonicalId]
-      (triggerPicked, contextUnsorted) = partitionEithers picked
-      contextPicked = sortOn (\(h, _) -> h.receivedAt) contextUnsorted
-  ctxImgs <- concat <$> traverse (uncurry loadCtx) contextPicked
-  trigImgs <- concat <$> traverse (loadOne "[current message] 里的图片:") triggerPicked
+  loaded <- allocate budget picked
+  let (trigImgs, contextUnsorted) = partitionEithers loaded
+      ctxImgs = map snd (sortOn fst contextUnsorted)
   pure (ctxImgs <> trigImgs)
   where
+    allocate _ [] = pure []
+    allocate left (candidate : rest) = do
+      loaded <- either (loadOne "[current message] 里的图片:") (uncurry loadCtx) candidate
+      case loaded of
+        Just (image, tokens)
+          | tokens <= left ->
+              (either (const (Left image)) (\(h, _) -> Right (h.receivedAt, image)) candidate :) <$> allocate (left - tokens) rest
+        _ -> allocate left rest
     loadCtx h mp =
       -- The quoted message's images get an unmistakable label — "which
       -- picture are you asking about" must not depend on the model
@@ -481,21 +510,22 @@ loadPromptImages tz' mid replyIds candidates = do
     loadOne label (mime, sha) = case blobRefFromSha256 sha of
       Nothing -> do
         logAttention "prompt: invalid image blob ref" $ object ["sha256" .= sha]
-        pure []
+        pure Nothing
       Just ref -> do
         eres <- try @IOException (readBlob ref)
         case eres of
           Right bytes0 -> do
-            (mime', bytes) <- liftIO (prepareImageForLLM mime bytes0)
+            (mime', bytes) <- liftIO (prepareImageWithin vision mime bytes0)
             if BS.length bytes > maxImageBytes
               then do
                 logAttention "prompt: image skipped (too large)" $
                   object ["sha256" .= sha, "bytes" .= BS.length bytes]
-                pure []
+                pure Nothing
               else
                 let b64 = TE.decodeUtf8 (B64.encode bytes)
-                 in pure [PromptImage label ("data:" <> mime' <> ";base64," <> b64)]
+                    image = PromptImage label ("data:" <> mime' <> ";base64," <> b64) Nothing
+                 in pure (Just (image, maybe 0 (\limits -> blockVisionTokens limits (ImageDataUrl image.piDataUrl)) vision))
           Left e -> do
             logAttention "prompt: image read failed" $
               object ["sha256" .= sha, "error" .= T.pack (show e)]
-            pure []
+            pure Nothing

@@ -8,6 +8,7 @@ module Max.ModelCatalog.Internal
   ( ModelCatalog,
     ModelCatalogError (..),
     ContextLimits (..),
+    VisionLimits (..),
     defaultContextLimits,
     contextLimitsForWindow,
     contextInputBudget,
@@ -70,9 +71,27 @@ data LLMProfile = LLMProfile
     -- | Send 'CacheBoundary' markers to the server as prefix-cache hints.
     promptCacheBreakpoints :: !Bool,
     -- | Soft budget for the context Max assembles up front; see 'ContextLimits'.
-    contextBudget :: !(Maybe Int)
+    contextBudget :: !(Maybe Int),
+    visionLimits :: !(Maybe VisionLimits)
   }
   deriving stock (Eq)
+
+-- | A provider's vision envelope. A request that exceeds any bound is rejected
+-- whole, so Max prepares and budgets media to fit before sending them.
+data VisionLimits = VisionLimits
+  { -- | Vision tokens of all images and videos in one request.
+    requestTokens :: !Int,
+    -- | Vision tokens of one image or video.
+    itemTokens :: !Int,
+    -- | Longest video segment the server accepts.
+    videoMaxSeconds :: !Int,
+    -- | Most frames the server samples from one video.
+    videoMaxFrames :: !Int,
+    -- | Pixel volume (frames × height × width) the server's video processor
+    -- keeps before downscaling; 2048 pixels make one token.
+    videoMaxPixels :: !Int
+  }
+  deriving stock (Show, Eq)
 
 -- | Resolved prompt-side limits. Output has already been subtracted from the
 -- configured combined window to obtain @maxInputTokens@. Consumers must not
@@ -85,7 +104,9 @@ data ContextLimits = ContextLimits
     -- | Optional soft budget for the context assembled up front (raw tail,
     -- summaries, memories, read pages). It trades prefill time and long-context
     -- quality against recall; the hard ceilings above still bound a turn.
-    workingBudget :: !(Maybe Int)
+    workingBudget :: !(Maybe Int),
+    -- | Declared provider vision envelope; absent means media are sent as-is.
+    visionLimits :: !(Maybe VisionLimits)
   }
   deriving stock (Show, Eq)
 
@@ -100,7 +121,8 @@ defaultContextLimits =
       reservedOutputTokens = 16384,
       attachmentReserve = 16384,
       toolRoundReserve = 16384,
-      workingBudget = Nothing
+      workingBudget = Nothing,
+      visionLimits = Nothing
     }
 
 -- | Resolve a combined input/output window once, before any prompt planning.
@@ -112,7 +134,7 @@ contextLimitsForWindow window outputOverride multimodal
   | window < 2 = Left "context_window must leave room for input and output"
   | output <= 0 = Left "max_tokens must be positive"
   | output >= window = Left "max_tokens must be smaller than context_window"
-  | otherwise = Right (ContextLimits input output media reserve Nothing)
+  | otherwise = Right (ContextLimits input output media reserve Nothing Nothing)
   where
     reserve = window `div` 8
     output = fromMaybe (max 1 reserve) outputOverride
@@ -211,7 +233,8 @@ lookupModelCapabilities name catalog =
                   reservedOutputTokens = profile.maxTokens,
                   attachmentReserve = profile.attachmentReserve,
                   toolRoundReserve = profile.toolRoundReserve,
-                  workingBudget = profile.contextBudget
+                  workingBudget = profile.contextBudget,
+                  visionLimits = profile.visionLimits
                 }
           }
 

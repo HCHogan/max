@@ -234,6 +234,16 @@ llm:
     # message).  Works for OpenAI and Anthropic protocols.  Text-only
     # profiles (DeepSeek, etc.) should leave `multimodal` omitted —
     # they'll error on the array-of-blocks request body.
+    #
+    # For a server that rejects requests over a vision budget (NInfer),
+    # declare the envelope and Max prepares media to fit: images are
+    # downscaled, videos re-encoded (long ones as a fast overview), and a
+    # turn's oldest media give way to newer ones.
+    #   vision_tokens: 49152        # all images + videos in one request
+    #   vision_item_tokens: 16384   # one image or video
+    #   video_max_seconds: 600
+    #   video_max_frames: 768
+    #   video_max_pixels: 25165824  # video_preprocessor_config longest_edge
     # gemma4-local:
     #   api_key: ollama       # ollama ignores it; the field is required
     #   base_url: "http://localhost:11434/v1"

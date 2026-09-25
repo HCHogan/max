@@ -28,6 +28,7 @@ import Max.Effects.ToolOutput
     queueInlineMedia,
   )
 import Max.Effects.Tools (Tool (..), ToolRunner (..))
+import Max.Media.Vision (VideoAttachment (..))
 import Max.Time (fmtDateHM)
 import Max.ToolContext (ToolContext, toolMultimodal)
 import Max.Tools.Schema
@@ -41,8 +42,10 @@ bilibiliToolsFor ::
   (Http :> es, Log :> es, ToolOutput :> es) =>
   TimeZone ->
   ToolContext ->
+  -- | Prepare a downloaded stream for the current profile.
+  (BS.ByteString -> Eff es (Either Text VideoAttachment)) ->
   [Tool es]
-bilibiliToolsFor tz dc = [viewBilibiliTool tz dc]
+bilibiliToolsFor tz dc prepare = [viewBilibiliTool tz dc prepare]
 
 -- | Same budget as QQ videos (see 'Max.Images'): Kimi caps the whole
 -- request body at a documented 100MB, so 70MB raw ≈ 93MB base64 plus
@@ -57,8 +60,9 @@ viewBilibiliTool ::
   (Http :> es, Log :> es, ToolOutput :> es) =>
   TimeZone ->
   ToolContext ->
+  (BS.ByteString -> Eff es (Either Text VideoAttachment)) ->
   Tool es
-viewBilibiliTool tz dc =
+viewBilibiliTool tz dc prepare =
   Tool
     { toolName = "view_bilibili",
       toolDescription =
@@ -156,16 +160,18 @@ viewBilibiliTool tz dc =
               | otherwise ->
                   getBilibiliMedia streamUrl biliHeaders maxStreamBytes >>= \case
                     Left err -> pure ["video_attached" .= False, "video_note" .= ("视频下载失败: " <> renderDownloadError err)]
-                    Right (bytes, _) -> do
-                      let label = "[B站 " <> info.bvBvid <> " " <> info.bvTitle <> "]:"
-                          dataUrl = "data:video/mp4;base64," <> TE.decodeUtf8 (B64.encode bytes)
-                      ok <- queueInlineMedia (InlineMedia label dataUrl)
-                      if ok
-                        then do
-                          logInfo "view_bilibili: stream attached" $
-                            object ["bvid" .= info.bvBvid, "bytes" .= BS.length bytes]
-                          pure ["video_attached" .= True, "video_note" .= ("视频已附在下一条消息里" :: Text)]
-                        else pure ["video_attached" .= False, "video_note" .= ("本次任务的附件配额（8 个）已用完" :: Text)]
+                    Right (bytes, _) ->
+                      prepare bytes >>= \case
+                        Left failure -> pure ["video_attached" .= False, "video_note" .= ("视频准备失败: " <> failure)]
+                        Right video -> do
+                          let label = "[B站 " <> info.bvBvid <> " " <> info.bvTitle <> "]" <> video.attachmentNote <> ":"
+                          ok <- queueInlineMedia (InlineMedia label video.attachmentDataUrl video.attachmentTokens)
+                          if ok
+                            then do
+                              logInfo "view_bilibili: stream attached" $
+                                object ["bvid" .= info.bvBvid, "bytes" .= BS.length bytes, "vision_tokens" .= video.attachmentTokens]
+                              pure ["video_attached" .= True, "video_note" .= ("视频已附在下一条消息里" <> video.attachmentNote)]
+                            else pure ["video_attached" .= False, "video_note" .= ("本次任务的附件配额（8 个）已用完" :: Text)]
 
     fmtDuration :: Int -> Text
     fmtDuration s

@@ -278,7 +278,7 @@ responsesInput msgs = (instructions, concatMap item msgs)
       ImageDataUrl u -> object ["type" .= ("input_image" :: Text), "image_url" .= u]
       CacheBoundary -> object []
       -- No video input on this API; a marker beats a 400.
-      VideoDataUrl _ -> object ["type" .= ("input_text" :: Text), "text" .= ("[video omitted]" :: Text)]
+      VideoDataUrl _ _ -> object ["type" .= ("input_text" :: Text), "text" .= ("[video omitted]" :: Text)]
 
 -- | Responses tools are flat — no @function@ wrapper.
 encodeToolSpecResponses :: ToolSpec -> Value
@@ -533,7 +533,7 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
                 TextBlock t -> object ["type" .= ("text" :: Text), "text" .= t]
                 CacheBoundary -> object []
                 -- Anthropic has no video input type.
-                VideoDataUrl _ ->
+                VideoDataUrl _ _ ->
                   object ["type" .= ("text" :: Text), "text" .= ("[video：该模型协议不支持视频输入]" :: Text)]
                 ImageDataUrl url -> case splitDataUrl url of
                   Just (mime, b64) ->

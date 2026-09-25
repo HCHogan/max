@@ -56,6 +56,39 @@ profile's configured window exceeds the context length the server reports
 The check is advisory: an unreachable server or unreported length is skipped,
 and the configuration remains the source of truth.
 
+### Vision envelope
+
+A multimodal profile may declare its server's vision limits: `vision_tokens`
+(all images and videos in one request), `vision_item_tokens` (one medium;
+default `min(vision_tokens, 16384)`), `video_max_seconds` (default 600),
+`video_max_frames` (default 768) and `video_max_pixels` (the video processor's
+kept pixel volume; default 25,165,824, Qwen-VL's `longest_edge`). NInfer rejects
+a whole request that exceeds any of these, so with a declared envelope Max
+prepares media to fit instead of sending them as-is:
+
+- **Costs** follow the Qwen-VL geometry: one token per 32×32 merged patch after
+  the server's rounding, two video frames per temporal patch. Images are priced
+  from their header; videos carry the measured token count of their rendition.
+- **Images** above half an item are downscaled to the largest patch grid within
+  that cap.
+- **Videos** are re-encoded (audio dropped, rotation applied) within
+  `min(vision_item_tokens, video_max_pixels / 2048)` tokens. Frames keep at
+  least 256 tokens (about 512×512); the frame rate falls below the server's
+  2 fps before frames become illegible. A window longer than
+  `video_max_seconds` is time-compressed into an overview; the label states
+  duration, window and speed. `view_video` accepts `start_seconds` and
+  `end_seconds` to watch a section at normal speed. Renditions are cached in
+  `video_renditions` by source content, envelope and window, so repeated views
+  send identical bytes.
+- **Per request**, trigger and quoted videos take the budget first, then images
+  in priority order. Before each model round the turn's oldest media are
+  replaced by a text note until the request fits `vision_tokens`. If the
+  server still answers `media_budget_exceeded`, the round is retried once
+  without media.
+
+`attachment_reserve` defaults to at least `vision_tokens` so media fit inside
+the input window beside the text budget.
+
 | Capacity | Target |
 | --- | --- |
 | Raw history collection/high watermark | `W / 2` |

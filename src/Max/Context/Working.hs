@@ -88,7 +88,7 @@ mediaReserve limits messages
   where
     blocks = concat [xs | MsgUserBlocks xs <- messages]
     images = length [() | ImageDataUrl _ <- blocks]
-    videos = length [() | VideoDataUrl _ <- blocks]
+    videos = length [() | VideoDataUrl _ _ <- blocks]
 
 -- Exact user/system messages (including steering), loaded skill instructions,
 -- and the newest call/result pair remain protected. Old result payloads are

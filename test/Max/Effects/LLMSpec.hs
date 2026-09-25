@@ -430,7 +430,7 @@ spec = do
         other -> expectationFailure $ "object: " <> show other
 
     it "encodes a video block with the video_url extension shape" $ do
-      let m = MsgUserBlocks [VideoDataUrl "data:video/mp4;base64,BBBB"]
+      let m = MsgUserBlocks [VideoDataUrl "data:video/mp4;base64,BBBB" Nothing]
       case decode (encode m) :: Maybe Value of
         Just (Object o) -> case KM.lookup "content" o of
           Just (Array arr) -> case arr V.!? 0 of

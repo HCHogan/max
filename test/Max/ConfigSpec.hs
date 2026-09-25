@@ -1,5 +1,6 @@
 module Max.ConfigSpec (spec) where
 
+import Data.Foldable (for_)
 import Max.Admin (AdminConfig (..))
 import Max.Config
 import Max.Http.Json (replyRetryDelaysSecs)
@@ -15,28 +16,45 @@ spec = describe "startup configuration" $ do
   it "derives all context limits from the single combined-window CLI option" $ do
     config <- withArgs ["--llm-api-key", "test-key", "--llm-context-window", "262144", "--llm-multimodal", "True"] loadConfig
     fmap (.contextLimits) (lookupModelCapabilities (defaultModelName config.llm) config.llm)
-      `shouldBe` Just (ContextLimits 229376 32768 32768 32768 Nothing)
+      `shouldBe` Just (ContextLimits 229376 32768 32768 32768 Nothing Nothing)
   it "reads context_window from a profile and applies an output override safely" $
     withSystemTempFile "max-window.yaml" $ \path handle -> do
       hPutStr handle "llm:\n  default: main\n  profiles:\n    main:\n      api_key: test-key\n      context_window: 262144\n      multimodal: true\n"
       hClose handle
       config <- withArgs ["--config-file", path, "--llm-max-tokens", "8192"] loadConfig
       fmap (.contextLimits) (lookupModelCapabilities "main" config.llm)
-        `shouldBe` Just (ContextLimits 253952 8192 32768 32768 Nothing)
+        `shouldBe` Just (ContextLimits 253952 8192 32768 32768 Nothing Nothing)
   it "keeps legacy input-only configurations compatible" $ do
     config <- withArgs ["--llm-api-key", "test-key", "--llm-max-input-tokens", "65536", "--llm-max-tokens", "4096"] loadConfig
     fmap (.contextLimits) (lookupModelCapabilities (defaultModelName config.llm) config.llm)
-      `shouldBe` Just (ContextLimits 65536 4096 0 16384 Nothing)
+      `shouldBe` Just (ContextLimits 65536 4096 0 16384 Nothing Nothing)
   it "validates the final reserves after applying explicit provider overrides" $ do
     config <- withArgs ["--llm-api-key", "test-key", "--llm-context-window", "262144", "--llm-max-tokens", "250000", "--llm-tool-round-reserve", "0", "--llm-attachment-reserve", "0"] loadConfig
     fmap (.contextLimits) (lookupModelCapabilities (defaultModelName config.llm) config.llm)
-      `shouldBe` Just (ContextLimits 12144 250000 0 0 Nothing)
+      `shouldBe` Just (ContextLimits 12144 250000 0 0 Nothing Nothing)
   it "carries a soft context budget and rejects one above the planning budget" $ do
     config <- withArgs ["--llm-api-key", "test-key", "--llm-context-window", "262144", "--llm-context-budget", "131072"] loadConfig
     fmap (.contextLimits) (lookupModelCapabilities (defaultModelName config.llm) config.llm)
-      `shouldBe` Just (ContextLimits 229376 32768 0 32768 (Just 131072))
+      `shouldBe` Just (ContextLimits 229376 32768 0 32768 (Just 131072) Nothing)
     withArgs ["--llm-api-key", "test-key", "--llm-context-window", "262144", "--llm-context-budget", "196609"] loadConfig `shouldThrow` anyIOException
     withArgs ["--llm-api-key", "test-key", "--llm-context-window", "262144", "--llm-context-budget", "0"] loadConfig `shouldThrow` anyIOException
+  it "reads a vision envelope and reserves input room for its media" $
+    withSystemTempFile "max-vision.yaml" $ \path handle -> do
+      hPutStr handle "llm:\n  default: main\n  profiles:\n    main:\n      api_key: test-key\n      context_window: 262144\n      multimodal: true\n      vision_tokens: 49152\n      vision_item_tokens: 16384\n"
+      hClose handle
+      config <- withArgs ["--config-file", path] loadConfig
+      fmap (.contextLimits) (lookupModelCapabilities "main" config.llm)
+        `shouldBe` Just (ContextLimits 229376 32768 49152 32768 Nothing (Just (VisionLimits 49152 16384 600 768 25165824)))
+  it "rejects inconsistent vision envelopes" $
+    for_
+      [ "      multimodal: true\n      vision_tokens: 16384\n      vision_item_tokens: 32768\n",
+        "      vision_tokens: 49152\n",
+        "      multimodal: true\n      video_max_seconds: 600\n"
+      ]
+      $ \fields -> withSystemTempFile "max-vision.yaml" $ \path handle -> do
+        hPutStr handle ("llm:\n  default: main\n  profiles:\n    main:\n      api_key: test-key\n" <> fields)
+        hClose handle
+        withArgs ["--config-file", path] loadConfig `shouldThrow` anyIOException
   it "rejects mixed total/input settings, impossible output, and exhausted reserves" $ do
     let invalid flags = withArgs (["--llm-api-key", "test-key", "--llm-context-window", "262144"] <> flags) loadConfig `shouldThrow` anyIOException
     invalid ["--llm-max-input-tokens", "262144"]

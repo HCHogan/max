@@ -28,12 +28,12 @@ import Autodocodec
     scientificCodec,
     (.=),
   )
-import Control.Monad (when)
+import Control.Monad (unless, when)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone, minutesToTimeZone)
@@ -47,7 +47,7 @@ import Max.Intent (IntentConfig (..))
 import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Matrix (MatrixConfig (..))
 import Max.ModelCatalog (ContextLimits (..), ModelCatalog, contextLimitsForWindow, defaultContextLimits, modelProfileNames)
-import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), mkModelCatalogFromProfiles, parseProtocol)
+import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), VisionLimits (..), mkModelCatalogFromProfiles, parseProtocol)
 import Max.Monitor.Http (validWebhookBaseUrl)
 import Max.Tools.Search (SearchConfig (..))
 import Max.WechatHook (WechatHookConfig (..))
@@ -1231,13 +1231,18 @@ data ProfileSpec = ProfileSpec
     multimodal :: !(Maybe Bool),
     historyAsTurns :: !(Maybe Bool),
     stream :: !(Maybe Bool),
-    promptCacheBreakpoints :: !(Maybe Bool)
+    promptCacheBreakpoints :: !(Maybe Bool),
+    visionTokens :: !(Maybe Int),
+    visionItemTokens :: !(Maybe Int),
+    videoMaxSeconds :: !(Maybe Int),
+    videoMaxFrames :: !(Maybe Int),
+    videoMaxPixels :: !(Maybe Int)
   }
   deriving stock (Show, Eq)
 
 emptySpec :: ProfileSpec
 emptySpec =
-  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 -- | Per-field first-Just-wins overlay (left = higher priority).
 mergeSpec :: ProfileSpec -> ProfileSpec -> ProfileSpec
@@ -1259,7 +1264,12 @@ mergeSpec a b =
       multimodal = a.multimodal <|> b.multimodal,
       historyAsTurns = a.historyAsTurns <|> b.historyAsTurns,
       stream = a.stream <|> b.stream,
-      promptCacheBreakpoints = a.promptCacheBreakpoints <|> b.promptCacheBreakpoints
+      promptCacheBreakpoints = a.promptCacheBreakpoints <|> b.promptCacheBreakpoints,
+      visionTokens = a.visionTokens <|> b.visionTokens,
+      visionItemTokens = a.visionItemTokens <|> b.visionItemTokens,
+      videoMaxSeconds = a.videoMaxSeconds <|> b.videoMaxSeconds,
+      videoMaxFrames = a.videoMaxFrames <|> b.videoMaxFrames,
+      videoMaxPixels = a.videoMaxPixels <|> b.videoMaxPixels
     }
 
 instance HasCodec ProfileSpec where
@@ -1283,6 +1293,11 @@ instance HasCodec ProfileSpec where
         <*> optionalField "history_as_turns" "Render history as user/assistant turns instead of one flat transcript" .= (.historyAsTurns)
         <*> optionalField "stream" "Stream the completion over SSE, sending finished paragraphs as they arrive" .= (.stream)
         <*> optionalField "prompt_cache_breakpoints" "Mark stable prompt prefixes for the server's prefix cache (NInfer prompt_cache_breakpoint; Anthropic cache_control)" .= (.promptCacheBreakpoints)
+        <*> optionalField "vision_tokens" "Vision tokens the server accepts for all images and videos in one request; Max prepares and budgets media to fit" .= (.visionTokens)
+        <*> optionalField "vision_item_tokens" "Vision tokens for one image or video (default: min(vision_tokens, 16384))" .= (.visionItemTokens)
+        <*> optionalField "video_max_seconds" "Longest video segment the server accepts (default 600)" .= (.videoMaxSeconds)
+        <*> optionalField "video_max_frames" "Most frames the server samples from one video (default 768)" .= (.videoMaxFrames)
+        <*> optionalField "video_max_pixels" "Pixel volume (frames x height x width) the server's video processor keeps before downscaling (default 25165824, Qwen-VL's longest_edge)" .= (.videoMaxPixels)
 
 -- | autodocodec has no @HasCodec Double@ on purpose (lossy floats);
 -- bridge through Scientific, which is fine for temperature values.
@@ -1487,6 +1502,11 @@ overlayProfileParser = do
           metavar "LEVEL"
         ]
   let promptCacheBreakpoints = Nothing
+      visionTokens = Nothing
+      visionItemTokens = Nothing
+      videoMaxSeconds = Nothing
+      videoMaxFrames = Nothing
+      videoMaxPixels = Nothing
   pure ProfileSpec {..}
   where
     protoReader = eitherReader $ \s -> case parseProtocol (T.pack s) of
@@ -1539,10 +1559,27 @@ materializeLLM (dn, fileProfiles, overlay) = do
             }
         (window, Nothing) ->
           either profileError pure (contextLimitsForWindow (fromMaybe 131072 window) spec.maxTokens resolvedMultimodal)
+      visionLimits <- case spec.visionTokens of
+        Nothing
+          | any isJust [spec.visionItemTokens, spec.videoMaxSeconds, spec.videoMaxFrames, spec.videoMaxPixels] ->
+              fail ("llm profile '" <> T.unpack profName <> "': vision_item_tokens and the video_max_* fields need vision_tokens")
+          | otherwise -> pure Nothing
+        Just total -> do
+          let item = fromMaybe (min total 16384) spec.visionItemTokens
+              seconds = fromMaybe 600 spec.videoMaxSeconds
+              frames = fromMaybe 768 spec.videoMaxFrames
+              pixels = fromMaybe 25165824 spec.videoMaxPixels
+              invalid detail = fail ("llm profile '" <> T.unpack profName <> "': " <> detail)
+          unless resolvedMultimodal (invalid "vision_tokens needs multimodal: true")
+          when (item <= 0 || item > total) (invalid "vision_item_tokens must be between 1 and vision_tokens")
+          when (seconds <= 0 || frames < 4 || pixels < 131072) (invalid "video_max_seconds must be positive, video_max_frames at least 4 and video_max_pixels at least 131072")
+          pure (Just (VisionLimits total item seconds frames pixels))
       let resolvedMaxInput = defaults.maxInputTokens
           resolvedMaxOutput = defaults.reservedOutputTokens
+          -- Media must fit inside the input window beside the text budget.
+          defaultAttachmentReserve = maybe defaults.attachmentReserve (max defaults.attachmentReserve . (.requestTokens)) visionLimits
           resolvedAttachmentReserve =
-            fromMaybe defaults.attachmentReserve spec.attachmentReserve
+            fromMaybe defaultAttachmentReserve spec.attachmentReserve
           resolvedToolRoundReserve = fromMaybe defaults.toolRoundReserve spec.toolRoundReserve
       when (resolvedMaxInput <= 0) $
         fail $
@@ -1582,7 +1619,8 @@ materializeLLM (dn, fileProfiles, overlay) = do
             historyAsTurns = fromMaybe False spec.historyAsTurns,
             stream = fromMaybe True spec.stream,
             promptCacheBreakpoints = fromMaybe False spec.promptCacheBreakpoints,
-            contextBudget = spec.contextBudget
+            contextBudget = spec.contextBudget,
+            visionLimits
           }
 
 -- | @auto@ / @always@ / @never@ — the spellings 'parseColorMode' takes.

@@ -36,7 +36,8 @@ import Max.Skills (newSkillRegistry)
 import Max.Tasks
 import Max.Tool.Bundles (toolVisible)
 import Max.Tool.Catalog (buildToolCatalog, catalogTools)
-import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext, toolSkillLoads)
+import Max.ModelCatalog (ContextLimits (..), VisionLimits (..), defaultContextLimits)
+import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext, mkToolContextWithLimits, toolSkillLoads)
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
@@ -124,7 +125,7 @@ echoTool =
       toolDescription = "echo test input",
       toolSchema = object ["type" .= ("object" :: Text)],
       toolRunner = LegacyRunner $ \args -> do
-        _ <- queueInlineMedia (InlineMedia "[tool image]:" "data:image/png;base64,AA==")
+        _ <- queueInlineMedia (InlineMedia "[tool image]:" "data:image/png;base64,AA==" Nothing)
         pure (Right (object ["echo" .= args]))
     }
 
@@ -162,8 +163,90 @@ dispatchContext =
     Nothing
     Nothing
 
+-- Each call attaches a distinct 12288-token video rendition.
+clipTool :: (ToolOutput :> es, IOE :> es) => IORef Int -> Tool es
+clipTool counter =
+  Tool
+    { toolName = "clip",
+      toolDescription = "attach a clip",
+      toolSchema = object ["type" .= ("object" :: Text)],
+      toolRunner = LegacyRunner $ \_ -> do
+        n <- liftIO (atomicModifyIORef' counter (\k -> (k + 1, k + 1)))
+        _ <- queueInlineMedia (InlineMedia "[clip]:" ("data:video/mp4;base64,clip" <> T.pack (show n)) (Just 12288))
+        pure (Right (object ["attached" .= True]))
+    }
+
+clipDefinition :: ToolDefinition
+clipDefinition = echoDefinition {tdRef = ToolRef "clip"}
+
+-- Room for one 12288-token video per request.
+visionContext :: AgentContext
+visionContext =
+  dispatchContext
+    { acTools =
+        mkToolContextWithLimits
+          defaultContextLimits {visionLimits = Just (VisionLimits 16384 16384 600 768 25165824)}
+          (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001) Nothing Nothing)
+          (TurnCapabilities True True False qqAdvertisedCaps True Map.empty Nothing False)
+    }
+
+videosIn :: [ChatMessage] -> [Text]
+videosIn messages = [url | MsgUserBlocks blocks <- messages, VideoDataUrl url _ <- blocks]
+
+runVisionTurn :: LLMInterpreter '[Log, Concurrent, IOE] -> IO AgentResult
+runVisionTurn provider = do
+  counter <- newIORef 0
+  inputs <- newIORef []
+  events <- newIORef []
+  tasks <- newTaskRegistry
+  turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
+  result <-
+    withCompactLogger ColorNever Nothing $ \logger ->
+      runEff
+        . runConcurrent
+        . runLog "vision-test" logger LogAttention
+        . runLLMWith provider
+        . runTestAgent inputs (AgentLimits {maxTurns = 4}) (const (buildToolRegistry [clipDefinition] [clipTool counter]))
+        $ agentTurn turn visionContext "fake" [MsgUser "question"] (eventSink events)
+  _ <- finishTurnRuntime tasks turn
+  pure result
+
 spec :: Spec
 spec = describe "Agent full loop" $ do
+  it "evicts the turn's oldest media when a request would exceed the vision envelope" $ do
+    calls <- newIORef (0 :: Int)
+    seen <- newIORef []
+    let clip = ToolCallsResp providerMessage "" [ToolCall "call" "clip" (object [])]
+        provider =
+          LLMInterpreter
+            { liChat = \_ _ messages _ _ -> do
+                n <- liftIO (atomicModifyIORef' calls (\k -> (k + 1, k)))
+                liftIO (appendRef seen messages)
+                pure (Right (if n < 2 then clip else ContentResp "done"))
+            }
+    result <- runVisionTurn provider
+    result.outcome `shouldBe` Answered (AgentReply "done" "")
+    requests <- readIORef seen
+    map videosIn requests `shouldBe` [[], ["data:video/mp4;base64,clip1"], ["data:video/mp4;base64,clip2"]]
+    T.concat [text | MsgUserBlocks blocks <- last requests, TextBlock text <- blocks] `shouldSatisfy` T.isInfixOf "这个附件已移出上下文"
+
+  it "retries without media when the server still rejects them" $ do
+    calls <- newIORef (0 :: Int)
+    seen <- newIORef []
+    let provider =
+          LLMInterpreter
+            { liChat = \_ _ messages _ _ -> do
+                n <- liftIO (atomicModifyIORef' calls (\k -> (k + 1, k)))
+                liftIO (appendRef seen messages)
+                pure $ case n of
+                  0 -> Right (ToolCallsResp providerMessage "" [ToolCall "call" "clip" (object [])])
+                  1 -> Left (LLMResponseFailure (ResponseDecode "HTTP 400: {\"error\":{\"code\":\"media_budget_exceeded\"}}"))
+                  _ -> Right (ContentResp "done")
+            }
+    result <- runVisionTurn provider
+    result.outcome `shouldBe` Answered (AgentReply "done" "")
+    map videosIn <$> readIORef seen `shouldReturn` [[], ["data:video/mp4;base64,clip1"], []]
+
   it "loads codemode, invokes JavaScript with the round catalog, and preserves media and later skill activation" $ do
     registry <- newSkillRegistry
     events <- newIORef []

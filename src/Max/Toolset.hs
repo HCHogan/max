@@ -55,6 +55,7 @@ import Max.HttpRuntime (HttpRuntime)
 import Max.Media.ToolRuntime
   ( imageToolsWithDatabase,
     stickerToolsWithDatabase,
+    videoStreamAttachment,
     videoToolsWithDatabase,
   )
 import Max.Memory.ToolRuntime (memoryToolsWithDatabase)
@@ -182,7 +183,7 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
         <> pinToolsWithDatabase env.beSessions env.beDefaultModel dc
         <> taskTools env.beJobs dc
         <> skillToolsWithRuntime env.beSkills dc prepareSkill bindPackages
-        <> bilibiliToolsFor env.beTimeZone dc
+        <> bilibiliToolsFor env.beTimeZone dc (videoStreamAttachment dc)
         <> sandboxToolsWithRuntime (toolGroupId dc) env.beSandboxes
         <> fileToolsWithDatabase dc env.beSandboxes
         <> [t | toolStickers dc && env.beEmbeddingEnabled, t <- stickerToolsWithDatabase]

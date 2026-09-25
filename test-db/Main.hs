@@ -33,6 +33,7 @@ import Max.DB.HttpMonitorSpec qualified as HttpMonitorSpec
 import Max.DB.JobSpec qualified as JobSpec
 import Max.DB.MediaMissingSpec qualified as MediaMissingSpec
 import Max.DB.MediaSpec qualified as MediaSpec
+import Max.DB.VideoRenditionSpec qualified as VideoRenditionSpec
 import Max.DB.Migrations (runMigrations)
 import Max.DB.MonitorJobsSpec qualified as MonitorJobsSpec
 import Max.DB.MonitorSpec qualified as MonitorSpec
@@ -83,6 +84,7 @@ main = do
         TransactionSpec.spec pool
         AgentTurnSpec.spec pool
         JobSpec.spec pool
+        VideoRenditionSpec.spec pool
         ProgressSpec.spec pool
         BrowserSpec.spec pool
         ConnectionSpec.spec pool

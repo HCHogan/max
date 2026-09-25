@@ -128,6 +128,7 @@ truncateAll pool = withConn pool $ \c -> do
       \  conversation_cursors, \
       \  messages, \
       \  images, \
+      \  video_renditions, \
       \  message_images, \
       \  videos, \
       \  message_videos, \

@@ -27,8 +27,10 @@ data ContentBlock
     -- with the de-facto OpenAI-compatible extension
     -- @{type: video_url, video_url: {url}}@ that natively-video models
     -- (Kimi K3, Qwen-VL, GLM-4V…) accept.  Anthropic's protocol has no
-    -- video input; it degrades to a text marker there.
-    VideoDataUrl !Text
+    -- video input; it degrades to a text marker there. The count is the
+    -- vision tokens of a rendition Max prepared for a declared envelope;
+    -- images carry their size in their own header instead.
+    VideoDataUrl !Text !(Maybe Int)
   | -- | Zero-width marker: the prompt up to the preceding block is a stable
     -- prefix. Profiles with @prompt_cache_breakpoints@ send it as a cache
     -- hint; all others drop it and merge the surrounding text.
@@ -102,7 +104,7 @@ data TokenUsage = TokenUsage
 instance ToJSON ContentBlock where
   toJSON = \case
     TextBlock t -> object ["type" .= ("text" :: Text), "text" .= t]
-    VideoDataUrl url ->
+    VideoDataUrl url _ ->
       object
         [ "type" .= ("video_url" :: Text),
           "video_url" .= object ["url" .= url]
@@ -118,7 +120,7 @@ instance FromJSON ContentBlock where
   parseJSON = withObject "ContentBlock" $ \o ->
     o .: "type" >>= \case
       "text" -> TextBlock <$> o .: "text"
-      "video_url" -> VideoDataUrl <$> nestedUrl o "video_url"
+      "video_url" -> (\url -> VideoDataUrl url Nothing) <$> nestedUrl o "video_url"
       "image_url" -> ImageDataUrl <$> nestedUrl o "image_url"
       "cache_boundary" -> pure CacheBoundary
       other -> fail ("unknown content block type: " <> T.unpack (other :: Text))

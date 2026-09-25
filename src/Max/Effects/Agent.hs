@@ -60,6 +60,9 @@ import Max.Effects.Tools
   )
 import Max.Execution.Tools
 import Max.Execution.Workflow (WorkflowHost)
+import Max.LLM.Failure (renderLLMFailure)
+import Max.Media.Vision (evictMedia, fitVisionBudget)
+import Max.ModelCatalog (ContextLimits (..))
 import Max.Reply (readyPrefix)
 import Max.Tasks
   ( TaskCancelled (..),
@@ -350,8 +353,14 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
               else takeWhile systemMessage withoutSkills <> skillFrames <> dropWhile systemMessage withoutSkills
           systemMessage MsgSystem {} = True
           systemMessage _ = False
-      case fitWorkingContext limits anchor identity handle previous stableSkills specs of
-        Left detail -> pure (stableSkills, Left (AgentContextBudget detail))
+          -- Keep the request inside the provider's vision envelope: the
+          -- turn's oldest media give way to newer ones.
+          (visible, evicted) = maybe (stableSkills, 0) (`fitVisionBudget` stableSkills) limits.visionLimits
+      when (evicted > 0) $
+        logInfo "agent: media evicted for the vision budget" $
+          object ["evicted" .= evicted, "turn" .= handle]
+      case fitWorkingContext limits anchor identity handle previous visible specs of
+        Left detail -> pure (visible, Left (AgentContextBudget detail))
         Right plan -> do
           active <- raise (raise (raise (admission.eaReserveRound (turnRuntimeAgentTurn turn))))
           unless active (throwIO TaskCancelled)
@@ -359,11 +368,22 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
             logInfo "agent: working context compacted" $
               object ["estimated_tokens" .= plan.wpEstimatedTokens, "input_limit" .= plan.wpLimit, "turn" .= handle]
           result <- chatMeasured (turnCtx ctx source) profile plan.wpMessages specs sink
-          let nextAnchor = case result of
-                Right (_, usage) -> observeUsage identity plan.wpMessages usage
-                Left _ -> Nothing
-          liftIO (atomically (writeTVar workingRef (nextAnchor, plan.wpSummary)))
-          pure (plan.wpMessages, either (Left . AgentModelFailure) (Right . fst) result)
+          case result of
+            -- A server that still rejects the media gets one more request
+            -- without any, rather than failing the turn.
+            Left failure
+              | "media_budget_exceeded" `T.isInfixOf` renderLLMFailure failure,
+                (stripped, removed) <- evictMedia maxBound visible,
+                removed > 0 -> do
+                  logAttention "agent: server rejected media; retrying without them" $
+                    object ["removed" .= removed, "turn" .= handle]
+                  budgetedCall workingRef ctx turn profile source stripped specs sink
+            _ -> do
+              let nextAnchor = case result of
+                    Right (_, usage) -> observeUsage identity plan.wpMessages usage
+                    Left _ -> Nothing
+              liftIO (atomically (writeTVar workingRef (nextAnchor, plan.wpSummary)))
+              pure (plan.wpMessages, either (Left . AgentModelFailure) (Right . fst) result)
 
     -- Salvage a tool-free partial answer at the cap; it still counts as interrupted.
     finalAnswer ::
@@ -454,12 +474,12 @@ assembleToolRound raw tcs toolMsgs imgs =
        | not (null imgs)
        ]
   where
-    imageBlocks i = [TextBlock i.imLabel, mediaBlock i.imDataUrl]
+    imageBlocks i = [TextBlock i.imLabel, mediaBlock i]
     -- Videos ride the same queue (and budget); the data URL's mime
     -- prefix decides the wire block type.
-    mediaBlock u
-      | "data:video/" `T.isPrefixOf` u = VideoDataUrl u
-      | otherwise = ImageDataUrl u
+    mediaBlock i
+      | "data:video/" `T.isPrefixOf` i.imDataUrl = VideoDataUrl i.imDataUrl i.imVisionTokens
+      | otherwise = ImageDataUrl i.imDataUrl
 
 -- | Turn a tool runner's result into the text-only message paired with
 -- its call id on the wire. Text results remain text; structured JSON uses

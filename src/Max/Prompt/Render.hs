@@ -66,7 +66,7 @@ import Max.Context.Types
     ContextCompartment (..),
     ContextPlan (..),
     ContextSnapshot (ContextSnapshot, csInputs),
-    PromptImage (piDataUrl, piLabel),
+    PromptImage (piDataUrl, piLabel, piVisionTokens),
     PromptInputs
       ( compartments,
         continuationView,
@@ -317,9 +317,9 @@ renderContext pi' =
           pi'.triggerMessage
       -- Interleave source labels and media; merge the first label into the body
       -- to avoid adjacent text blocks on strict providers. MIME distinguishes video.
-      mediaBlock u
-        | "data:video/" `T.isPrefixOf` u = VideoDataUrl u
-        | otherwise = ImageDataUrl u
+      mediaBlock i
+        | "data:video/" `T.isPrefixOf` i.piDataUrl = VideoDataUrl i.piDataUrl i.piVisionTokens
+        | otherwise = ImageDataUrl i.piDataUrl
       -- Cache boundaries follow the stable parts; profiles without cache
       -- hints receive the same text merged back into one block.
       (prefixParts, volatilePart) = (init userParts, last userParts)
@@ -328,8 +328,8 @@ renderContext pi' =
         [] -> [TextBlock volatilePart]
         (i0 : rest) ->
           TextBlock (volatilePart <> "\n\n" <> i0.piLabel)
-            : mediaBlock i0.piDataUrl
-            : concat [[TextBlock i.piLabel, mediaBlock i.piDataUrl] | i <- rest]
+            : mediaBlock i0
+            : concat [[TextBlock i.piLabel, mediaBlock i] | i <- rest]
       messages =
         [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) pi'.outputCapabilities effectivePersona pi'.skills)]
           <> historyTurnMessages pi'.tz turnRows
