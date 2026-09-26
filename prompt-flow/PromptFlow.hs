@@ -215,7 +215,7 @@ secondRound :: Protocol -> [ChatMessage]
 secondRound protocol =
   let (raw, call) = toolCallFixture protocol
       cursor = Projection.logCursor Projection.emptyLog
-      initial = Projection.newTaskRecord cursor initialMessages
+      initial = Projection.newTaskRecord (Projection.Observer 0) cursor initialMessages
       results = drop 1 (assembleToolRound raw [call] [toolResultMessage call (Right toolResult)] [toolImage])
       record = Projection.recordResults results (Projection.recordPoll cursor (Just (MsgAssistantToolCalls raw [call])) initial)
    in Projection.project Projection.emptyLog record cursor

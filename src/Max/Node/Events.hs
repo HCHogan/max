@@ -29,6 +29,9 @@ module Max.Node.Events
     close,
     isOpen,
     sameNode,
+    observationOwner,
+    readObservations,
+    appendObservation,
   )
 where
 
@@ -44,6 +47,8 @@ import Data.Sequence qualified as Seq
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Max.LLM.Types (ChatMessage)
+import Max.Node.Log qualified as Log
 import Max.Task.FrontendInput (FrontendInputView)
 import Max.Task.Types (JobRun, JobSpec)
 import Max.Tool.Media (InlineMedia)
@@ -86,10 +91,10 @@ data Task = Task !Node !Integer deriving stock (Eq)
 sameNode :: Task -> Task -> Bool
 sameNode (Task node _) (Task other _) = node == other
 
-data State = State {next :: !Integer, tasks :: !(Map Integer Bool), events :: !(Seq Event), stopped :: !(Set Integer)}
+data State = State {next :: !Integer, tasks :: !(Map Integer Bool), events :: !(Seq Event), stopped :: !(Set Integer), observations :: !Log.NodeLog}
 
 newNode :: STM Node
-newNode = Node <$> newTVar (State 0 Map.empty Seq.empty Set.empty)
+newNode = Node <$> newTVar (State 0 Map.empty Seq.empty Set.empty Log.emptyLog)
 
 newTask :: Node -> STM Task
 newTask node@(Node ref) = do
@@ -97,6 +102,24 @@ newTask node@(Node ref) = do
   let key = state.next
   writeTVar ref state {next = key + 1, tasks = Map.insert key True state.tasks}
   pure (Task node key)
+
+observationOwner :: Task -> Log.Observer
+observationOwner (Task _ key) = Log.Observer key
+
+readObservations :: Task -> STM Log.NodeLog
+readObservations (Task (Node ref) _) = (.observations) <$> readTVar ref
+
+-- | The node owns the log. A retired or revoked task cannot resurrect a trail;
+-- callers keep immutable snapshots for a poll already in progress.
+appendObservation :: Task -> [ChatMessage] -> STM (Maybe Log.NodeLog)
+appendObservation task@(Task (Node ref) key) messages = do
+  state <- readTVar ref
+  if not (Map.member key state.tasks) || Set.member key state.stopped
+    then pure Nothing
+    else do
+      let observations = Log.appendObservation (observationOwner task) messages state.observations
+      writeTVar ref state {observations}
+      pure (Just observations)
 
 isOpen :: Task -> STM Bool
 isOpen (Task (Node ref) key) = Map.findWithDefault False key . (.tasks) <$> readTVar ref
@@ -213,4 +236,4 @@ tryFinish task@(Task (Node ref) key) = do
 
 close :: Task -> STM ()
 close (Task (Node ref) key) = modifyTVar' ref $ \state ->
-  state {tasks = Map.delete key state.tasks, events = Seq.filter ((/= key) . (.target)) state.events, stopped = Set.delete key state.stopped}
+  state {tasks = Map.delete key state.tasks, events = Seq.filter ((/= key) . (.target)) state.events, stopped = Set.delete key state.stopped, observations = Log.retire (Log.Observer key) state.observations}

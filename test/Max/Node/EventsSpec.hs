@@ -3,8 +3,11 @@ module Max.Node.EventsSpec (spec) where
 import Control.Concurrent.Async (concurrently)
 import Control.Concurrent.STM
 import Control.Monad (replicateM, replicateM_)
-import Data.Aeson (Value (String))
+import Data.Aeson (Value (String), encode)
+import Data.Maybe (isNothing)
 import Data.Set qualified as Set
+import Max.Context.Projection qualified as Projection
+import Max.LLM.Types (ChatMessage (MsgUser))
 import Max.Node.Events
 import Max.Task.Types (JobRun (..))
 import Test.Hspec
@@ -23,6 +26,37 @@ spec = describe "node event delivery and observation" $ do
     map (.body) right `shouldBe` [Steered (String "second")]
     map (.sequence) left `shouldSatisfy` (< map (.sequence) right)
     atomically (observe first) `shouldReturn` []
+
+  it "shares immutable observation snapshots and retires only the closing task without moving cursors" $ do
+    (first, second) <- atomically $ do
+      node <- newNode
+      (,) <$> newTask node <*> newTask node
+    let firstRecord = Projection.newTaskRecord (observationOwner first) (Projection.logCursor Projection.emptyLog) []
+        secondRecord = Projection.newTaskRecord (observationOwner second) (Projection.logCursor Projection.emptyLog) []
+        visible snapshot record = encode (Projection.project snapshot record (Projection.logCursor snapshot))
+    _ <- atomically (appendObservation first [MsgUser "first private evidence"])
+    _ <- atomically (appendObservation second [MsgUser "second private evidence"])
+    snapshot <- atomically (readObservations first)
+    sameSnapshot <- atomically (readObservations second)
+    visible snapshot secondRecord `shouldBe` visible sameSnapshot secondRecord
+    visible snapshot firstRecord `shouldBe` encode [MsgUser "first private evidence"]
+    visible snapshot secondRecord `shouldBe` encode [MsgUser "second private evidence"]
+    atomically (close first)
+    retired <- atomically (readObservations second)
+    Projection.logCursor retired `shouldBe` Projection.logCursor snapshot
+    visible retired secondRecord `shouldBe` visible snapshot secondRecord
+    visible retired firstRecord `shouldBe` encode ([] :: [ChatMessage])
+    visible snapshot firstRecord `shouldBe` encode [MsgUser "first private evidence"]
+    atomically (isNothing <$> appendObservation first [MsgUser "resurrection"]) `shouldReturn` True
+    Just later <- atomically (appendObservation second [MsgUser "later second evidence"])
+    Projection.logCursor later `shouldSatisfy` (> Projection.logCursor retired)
+    visible later secondRecord `shouldBe` encode [MsgUser "second private evidence", MsgUser "later second evidence"]
+
+  it "refuses new observations as soon as a terminal control revokes the task" $ do
+    task <- atomically (newNode >>= newTask)
+    _ <- atomically (appendObservation task [MsgUser "before cancellation"])
+    atomically (deliver task Cancelled) `shouldReturn` True
+    atomically (isNothing <$> appendObservation task [MsgUser "after cancellation"]) `shouldReturn` True
 
   it "acknowledges only frozen receipts while late steering still fences completion" $ do
     (task, other) <- atomically $ do

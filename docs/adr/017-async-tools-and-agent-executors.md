@@ -9,7 +9,14 @@ execution permits: async awaits yield immediately, short-tool rounds yield at
 five seconds, and ready segments use the priority/FIFO order below. Up to 32
 tasks can be open on a root; additional admitted requests remain queued.
 Task records and observation-ordered projection now
-drive agent polls from frozen observations; raw answers (including reasoning
+drive agent polls from frozen observations. The observation log is owned by the
+node, shared by its task runtimes, rather than accumulated inside each model
+loop. Records carry the observing task identity, so interleaved private inputs
+and correction notes cannot enter another task's projection. Cursor positions
+never move when a task closes; retirement drops only its own log entries, while
+already-captured immutable snapshots remain valid. Correction and budget-wrapup
+notes use this same log. Trigger event references and the remaining executor
+migration are still pending; raw answers (including reasoning
 and signatures), tool results and the initial window remain in the record.
 Compaction and media planning use explicit projection checkpoints. Root
 polls also observe later canonical conversation messages through a frozen history
