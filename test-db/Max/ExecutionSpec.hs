@@ -7,7 +7,8 @@ import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (atomically, check, newTVarIO, readTVar, writeTVar)
 import Control.Exception (AsyncException (ThreadKilled), bracket_, throwIO)
 import Control.Monad (replicateM_, void, when)
-import Data.Aeson (Value, object, toJSON, (.=))
+import Data.Aeson (Value, decodeStrict', object, toJSON, withObject, (.:), (.=))
+import Data.Aeson.Types (parseMaybe)
 import Data.Either (isLeft)
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (sort)
@@ -15,6 +16,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful (Eff, IOE, liftIO, raise, runEff)
 import Effectful.Concurrent (Concurrent, runConcurrent)
@@ -53,9 +55,10 @@ import Max.Skill.ToolRuntime (skillToolsWithRuntime)
 import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Skills (newSkillRegistry)
 import Max.Task.Policy (treeToolCalls)
-import Max.Task.State (TaskStatus (Failed, Succeeded))
-import Max.Task.Types (JobResult (..), JobRun (..), JobSpec (..), JobView (..), TaskProfile (Basic))
-import Max.Tasks (TaskCancelled (..), TurnRuntime, beginTurnRuntime, finishTurnRuntime, newTaskRegistry, turnAcceptsWork, turnRuntimeOutputContext)
+import Max.Task.State (TaskStatus (Cancelled, Failed, Succeeded))
+import Max.Task.ToolRuntime (taskTools)
+import Max.Task.Types (JobResult (..), JobRun (..), JobSpec (..), JobView (..), TaskProfile (Basic, Sandbox))
+import Max.Tasks (TaskCancelled (..), TurnRuntime, beginTurnRuntime, finishTurnRuntime, newTaskRegistry, turnAcceptsWork, turnRuntimeOutputContext, turnWasCancelled)
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion, toolVisible)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (LoopControl (..), controlSkillLoads)
@@ -86,6 +89,92 @@ hostHooks jobs = hoistExecutionHooks raise . hooks jobs
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution with real journal" $ do
+  it "steers a background native await through node events and rejoins its original future" $ do
+    let grants = Map.singleton "sandbox_exec" "fixture"
+    running <- runningJob pool Sandbox grants
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    calls <- newIORef (0 :: Int)
+    leaves <- newIORef (0 :: Int)
+    let context =
+          mkToolContext
+            (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 99) running.job.spec.principal Nothing (Just (turnRuntimeOutputContext running.runtime)))
+            (TurnCapabilities False False False noAdvertisedCaps False grants (Just grants) True)
+        factory _ =
+          buildToolRegistry
+            [echoDefinition {tdRef = ToolRef "sandbox_exec", tdAwait = AsyncTool}]
+            [ echoTool
+                { toolName = "sandbox_exec",
+                  toolRunner = LegacyRunner $ \value -> liftIO $ do
+                    modifyIORef' leaves (+ 1)
+                    putMVar entered ()
+                    takeMVar release
+                    pure (Right value)
+                }
+            ]
+        provider = LLMInterpreter $ \_ _ messages specs _ -> do
+          n <- liftIO (atomicModifyIORef' calls (\value -> (value + 1, value)))
+          let respond call name arguments = pure (Right (ToolCallsResp (object []) "" [ToolCall call name arguments]))
+          case n of
+            0 -> respond "slow" "sandbox_exec" (object ["value" .= (42 :: Int)])
+            1 -> do
+              liftIO $ messages `shouldSatisfy` any (\case MsgUser body -> "keep waiting" `T.isInfixOf` body; _ -> False)
+              liftIO $ map (.specName) specs `shouldContain` ["execution_wait"]
+              ref <- liftIO $ case [ref :: Text | MsgTool "slow" body <- messages, Just value <- [decodeStrict' (TE.encodeUtf8 body)], Just ref <- [parseMaybe (withObject "running call" (.: "result")) value]] of
+                [ref] -> pure ref
+                refs -> expectationFailure ("expected one running call reference, got " <> show refs) >> fail "missing running call reference"
+              liftIO (putMVar release ())
+              respond "joined" "execution_wait" (object ["result" .= ref])
+            _ -> do
+              liftIO $ messages `shouldSatisfy` any (\case MsgTool "joined" body -> "\"value\":42" `T.isInfixOf` body; _ -> False)
+              pure (Right (ContentResp "42 after steering"))
+        run =
+          withHost pool . runLLMWith provider . runAgentRuntime running.jobs (Agent.AgentLimits 4) factory $
+            Agent.agentTurn running.runtime (Agent.AgentContext context Nothing Nothing Nothing) "fixture" [MsgUser "slow work"] (\case AgentFinalStreamText _ -> pure False; AgentProgressText _ -> pure (); AgentToolDebug _ -> pure ())
+    Async.withAsync run $ \worker -> do
+      timeout 1000000 (takeMVar entered) `shouldReturn` Just ()
+      Jobs.steerJob running.jobs (GroupId 900) running.job.spec.principal Nothing running.job.run.jobId "keep waiting" `shouldReturn` Right ()
+      Just result <- timeout 10000000 (Async.wait worker)
+      result.outcome `shouldBe` Agent.Answered (Agent.AgentReply "42 after steering" "")
+    readIORef calls `shouldReturn` 3
+    readIORef leaves `shouldReturn` 1
+    states running.turn `shouldReturn` [("sandbox_exec", "succeeded")]
+    finishTurnRuntime running.tasks running.runtime
+
+  it "cancels an actual agent call and its descendants when its guest returns from a race" $ do
+    running <- runningJob pool Basic (Map.singleton "agent" "fixture")
+    release <- newEmptyMVar
+    let context =
+          mkToolContext
+            (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 99) running.job.spec.principal Nothing (Just (turnRuntimeOutputContext running.runtime)))
+            (TurnCapabilities False False False noAdvertisedCaps False running.job.spec.grants (Just running.job.spec.grants) True)
+        agentDefinition = echoDefinition {tdRef = ToolRef "agent", tdEffects = Set.singleton (EffectWrite "task.db"), tdParallelism = ParallelIndependent, tdRetryClass = RetryUnsafe, tdAwait = AsyncTool}
+        winner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (takeMVar release) >> pure (Right value)}
+    registry <- either (fail . show) pure (buildToolRegistry [agentDefinition, echoDefinition] (winner : filter ((== "agent") . (.toolName)) (taskTools running.jobs context)))
+    let run = withHost pool . runTools registry $ do
+          session <- newExecutionSession Nothing
+          runJavaScript session (hostHooks running.jobs running.runtime) (views registry) "return await Promise.race([agent({objective:'child',profile:'basic'}), tools.echo({value:7})]);"
+    Async.withAsync run $ \worker -> do
+      Just child <- timeout 10000000 (launchNext pool running.tasks running.jobs)
+      identifier <- withDb pool allocateJobId
+      Right _ <- Jobs.admitJob running.jobs (Just child.turn.atrTurnId) identifier child.job.spec {parent = Just child.job.run, awaited = False, objective = "grandchild"}
+      grandchild <- launchNext pool running.tasks running.jobs
+      putMVar release ()
+      Just result <- timeout 10000000 (Async.wait worker)
+      result.cmExit `shouldBe` WasmCompleted
+      result.cmOutput `shouldBe` Just (object ["value" .= (7 :: Int)])
+      sort (map (.ccOutcome) result.cmCalls) `shouldBe` ["outcome-unknown", "succeeded"]
+      Just cancelledChild <- Jobs.lookupJob running.jobs (GroupId 900) child.job.run.jobId
+      Just cancelledGrandchild <- Jobs.lookupJob running.jobs (GroupId 900) grandchild.job.run.jobId
+      map (.status) [cancelledChild, cancelledGrandchild] `shouldBe` [Cancelled, Cancelled]
+      atomically (turnWasCancelled child.runtime) `shouldReturn` True
+      atomically (turnWasCancelled grandchild.runtime) `shouldReturn` True
+      atomically (turnWasCancelled running.runtime) `shouldReturn` False
+      states running.turn `shouldReturn` [("host:wasm/v2", "succeeded"), ("agent", "outcome-unknown"), ("echo", "succeeded")]
+      finishTurnRuntime grandchild.tasks grandchild.runtime
+      finishTurnRuntime child.tasks child.runtime
+    finishTurnRuntime running.tasks running.runtime
+
   it "runs codemode through an awaited background agent's model loop and returns its actual report" $ do
     let grants = Map.fromList [("web_search", "fixture"), ("use_skill", "fixture")]
     parent <- runningJob pool Basic grants

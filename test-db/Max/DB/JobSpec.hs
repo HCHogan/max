@@ -74,6 +74,27 @@ spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ d
     withDb pool (finishAgentTurn running.turn TurnSucceeded 0 Nothing)
     steer owner >>= (`shouldSatisfy` isLeft)
 
+  it "restricts background control and waits to direct children through the task interpreter" $ do
+    root <- runningJob pool Basic Map.empty
+    let spawn owner = do
+          Right (Control.StartedTask _) <- withDb pool . Control.runTaskControl root.jobs (scope owner) $ Control.startTask (detached "child" Null)
+          launchNext pool root.tasks root.jobs
+    middle <- spawn root
+    sibling <- spawn root
+    child <- spawn middle
+    grandchild <- spawn child
+    let control target command = withDb pool . Control.runTaskControl root.jobs (scope middle) $ Control.controlTask target.job.run.jobId command
+        waitFor target = withDb pool . Control.runTaskControl root.jobs (scope middle) $ Control.waitTasks [target.job.run.jobId]
+    forM_ [root, middle, sibling, grandchild] $ \target -> do
+      control target (SteerJob "invalid direction") >>= (`shouldSatisfy` isLeft)
+      waitFor target >>= (`shouldSatisfy` isLeft)
+    control child (SteerJob "continue") `shouldReturn` Right ()
+    control child (CancelJob "not exposed to background") >>= (`shouldSatisfy` isLeft)
+    control child (ReplaceJob "not exposed to background") >>= (`shouldSatisfy` isLeft)
+    Jobs.completeJob root.jobs child.job.run Succeeded (JobResult "child result" Nothing)
+    Right (ChildrenFinished [finished]) <- waitFor child
+    finished.result `shouldBe` Just (JobResult "child result" Nothing)
+
   it "takes child authority from the bound scope and requires the authenticated source" $ do
     running <- runningJob pool Sandbox (Map.fromList [("agent", "v1"), ("sandbox_exec", "v1")])
     let caller = scope running

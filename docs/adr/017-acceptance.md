@@ -17,8 +17,8 @@ is local implementation/test evidence, not deployment evidence.
 | 4. One event admission, routing policy and wake rule | Pending | Trace every producer through `Node.Events`, `Node.Router`, frontend admission and monitor routing; verify no alternate model wake bypass. |
 | 5. Observation-ordered, byte-stable projection | Reviewed | `Context.Projection.projectPolls`; projection specs compare encoded prefixes, raw reasoning and interleaved task isolation. Prompt-flow has an independent uninterrupted append oracle. |
 | 6. Interrupted await preserves future | Reviewed | `Execution.Tools` detaches owned native futures; `CodeMode.Execution` parks the program. Native and JavaScript interruption tests verify no replay/cancellation. |
-| 7. Downward controls; upward reports/messages; only ask waits upward | Pending | Review all tree-control and task-tool paths, including cancellation of a guest's awaited descendants. |
-| 8. Process-local; no replay after restart | Pending | Review startup recovery and shutdown against §9, including retained calls and terminal monitor receipts. |
+| 7. Downward controls; upward reports/messages; only ask waits upward | Reviewed | `TaskControl` restricts background steering to direct children; `Jobs.waitForChildren` rejects ancestor/self/sibling/deeper joins. DB `JobSpec` exercises these through the authenticated interpreter. `stopChildren`/`revokeChanges` revoke descendants atomically; `ExecutionSpec` checks attached child/grandchild cancellation on guest return. `tellParent`/`askParent` route upward; two-level ask tests retain both computations. |
+| 8. Process-local; no replay after restart | Pending | Startup no-replay is reviewed below. Finish tracing shutdown of retained native calls through dispatch lifetimes; `JobsSpec` verifies queued/claimed terminal monitor receipts are taken over without changing successful results to cancellation. |
 
 ## Guest ABI and SDK (§2; delivery step 1)
 
@@ -30,7 +30,7 @@ is local implementation/test evidence, not deployment evidence.
 | Lifetime fuel, independent step deadline, interruption joins before freeing | Reviewed | C sets fuel once at open and resets only epoch deadlines per step. `Wasm.timed` and Wasm interruption/fuel/deadline tests. |
 | Remove mailbox, callback StablePtr, reply buffer and result_ref paging | Reviewed | No old bridge symbols in `src`, `app`, `cbits` or `codemode`. The guest's 64 KiB final-output limit is not the removed callback reply buffer. |
 | Per-completion resume, first-result race and incremental pipeline | Reviewed | Embedded `JavaScriptSpec` uses blocked sibling calls to prove first completion and starts a pipeline's next stage before unrelated searches finish. |
-| Program return cancels running calls and their descendants | Pending | Direct-call cancellation/receipts are covered; finish auditing the real agent tool's child-tree cancellation path. |
+| Program return cancels running calls and their descendants | Reviewed | DB `ExecutionSpec` runs the actual `agent` tool in a guest race, attaches child and grandchild runtimes, then checks both Cancelled states/runtime fences, an unaffected parent, and the leaf's outcome-unknown journal receipt. `TaskControl.StartTask` cancels its child tree when the owning await throws. `WorkflowAgentSpec` also covers two competing real agent calls. |
 | Promise.race losers remain awaitable | Reviewed | Test races a pending promise, releases it through another call, then awaits its actual result. |
 | max.race/max.cancel cancel only direct tool promises; no duplicate effects | Reviewed | SDK WeakMap identity and cancellation outbox; race-cancel test waits for loser cleanup before continuing, outbox cancellation test asserts no calls. |
 | max.sleep is a host future without clock access | Reviewed | SDK strips Date/Math.random; driver handles `$sleep`; embedded sleep test. |
@@ -45,7 +45,7 @@ is local implementation/test evidence, not deployment evidence.
 | ParallelSafe/Independent share gate; SequentialOnly exclusive FIFO | Reviewed | Gate tickets are reserved synchronously; `Execution/ToolsSpec` proves an exclusive call cannot be overtaken and queued cancellation releases its ticket. |
 | Native join_all returns protocol-order results; guest waits for any | Reviewed | Native `requestMap`/completed map and guest driver use the same `awaitWake`; native result-order and guest race tests. |
 | Async yields immediately; short tools yield at five seconds | Reviewed | `Executor.await`/`shortDeadline`; executor tests cover both branches and ownership reacquisition. |
-| Long background async await is steerable | Pending | Verify integrated background steering, not only a generic interrupt STM fixture. |
+| Long background async await is steerable | Reviewed | DB `ExecutionSpec` runs a background model loop with a blocked async sandbox fixture, delivers real `Jobs.steerJob`, checks the next poll observes the note and exposes `execution_wait`, then joins the original value. Three polls, one leaf invocation and one successful journal row prove interruption did not replay the call. |
 | Paused program resumes original await and records cancellation | Reviewed | `JavaScriptSpec` checks preserved local state, buffered completions, unfinished effect receipts and task-end cancellation. |
 
 ## Node events and routing (§4; delivery step 4)
@@ -61,7 +61,7 @@ is local implementation/test evidence, not deployment evidence.
 | Detached native completion relays after starting task ends | Pending | Review retained runtime and source grants through delivery/publication. |
 | Monitor occurrence enters as Fired under overlap policy | Pending | Review frozen consumer, admission rollback and durable overflow. |
 | !kill logs Cancelled and interrupts an active model call | Pending | Connect command entry to Tasks control and agent cancellation assertions. |
-| Deeper steering also sends non-urgent provenance to parent | Pending | Review direct/deeper/ask-answer distinctions. |
+| Deeper steering also sends non-urgent provenance to parent | Reviewed | `Jobs.steerJobFrom` logs attributed external steering and a normal parent message in one STM transaction; a full parent log rolls both back. `JobsSpec` checks the provenance body, backpressure, external advice leaving ask pending, and a parent answer settling without a new interrupt. |
 | Final answer closes atomically unless an interrupt is unobserved | Pending | Review both ordinary and streamed final publication paths. |
 | Remove Conversation tickets, Jobs inbox/notice/waiter/JobWork, old feedback paths | Reviewed | Current source search has no `readFeedback`, `ExecutionInbox`, `FeedbackPending`, `FeedbackFirst`, `feedback_pending`, `pendingNotice`, `noticeInFlight`, `JobWork`, `childWaiters`, `taskWorkflowHost`, `delegated` or `batchLock`. Generic status constructors are not old tickets. |
 
@@ -85,10 +85,10 @@ is local implementation/test evidence, not deployment evidence.
 | Paused guest retains store, buffers futures, admits no steps until resume | Reviewed | Resume TMVar/paused flag, guest actor await and buffered-results test. |
 | Paused task-end cancels program/calls; short tools defer steering | Reviewed | Program ownership cleanup and `Execution/ToolsSpec` non-async test. |
 | Background leaf-worker restriction removed; global/tree limits reject immediately | Pending | Finish tree-limit and profile/tool-directory audit. |
-| agent_tell/max.tell and agent_ask/max.ask; urgent/normal distinction | Pending | Trace production tool metadata, SDK, parent routing and returned values. |
-| Ask answered across two levels; agent_progress only status | Pending | Review Jobs/TaskExecution/Tasks tests and implementation together. |
+| agent_tell/max.tell and agent_ask/max.ask; urgent/normal distinction | Reviewed | `Tools.Task`/`Task.ToolRuntime` bind the real handlers; `Toolset` exposes them to background tasks and marks ask async. SDK forwards to those tools. DB `WorkflowAgentSpec` resumes the original JavaScript local state with an actual parent answer; `JobsSpec` checks normal versus urgent wake behavior, question cancellation, runtime expiry and stale relay/question isolation. |
+| Ask answered across two levels; agent_progress only status | Reviewed | `JobsSpec` holds leaf and middle ask computations concurrently and answers each through its immediate parent. `Effects.TaskExecution` delegates directly to Jobs; progress only updates the entry. Unit tests check no relay, and DB `JobSpec` verifies no chat publication or message row. |
 | Frozen monitor consumer; durable schedule/dedup; bounded queue/coalesce | Pending | Review §8 source and database assertions. |
-| No running-work replay; monitor definitions/trigger facts persist | Pending | Startup/shutdown review. |
+| No running-work replay; monitor definitions/trigger facts persist | Reviewed | Before ingress, `app/Main.hs` calls `reclaimInterruptedTurns` and `interruptMonitorFires`: old turns become crashed and pending/admitted fires become terminal, without deleting definitions/evidence. `Jobs.newJobs` creates empty process-local registries. DB `JobSpec` checks no reconstructed jobs; `MonitorJobsSpec` checks queued/admitted fires end and new events remain eligible; `MonitorSpec` checks the next recurring schedule survives. Shutdown of retained runtime work remains a separate invariant-8 review. |
 | feed/replace overlap, workflow consumer and subscriptions | Deferred by ADR | Each requires its own decision; delivery step 5 is explicitly outside this implementation. |
 
 ## Numeric limits (§10)
