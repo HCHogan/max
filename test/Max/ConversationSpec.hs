@@ -1,12 +1,14 @@
 module Max.ConversationSpec (spec) where
 
 import Control.Concurrent.Async (concurrently, wait, withAsync)
+import Control.Concurrent.STM qualified as STM
 import Control.Monad (forM_, replicateM_)
 import Data.Int (Int64)
 import Data.Maybe (isNothing)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Max.Conversation
+import Max.Node.Executor qualified as Node
 import Max.Platform.Types (PrincipalId (..))
 import Max.Task.FrontendInput (FrontendInputView (..))
 import Max.Turn.Types (AgentTurnId (..))
@@ -16,6 +18,22 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "Max.Conversation" $ do
+  it "routes steering to the newest open owner even when that owner yielded" $ do
+    queue <- newConversations
+    first <- admit queue (request 1)
+    Just actor <- actorFor first
+    future <- STM.newEmptyTMVarIO
+    withAsync (Node.await actor True STM.retry (STM.readTMVar future)) $ \waiting -> do
+      next <- admit queue ((request 2) {principal = PrincipalId 99})
+      timeout 1000000 (awaitTurn next) `shouldReturn` Just True
+      feedback <- admit queue (steering 3)
+      text <- readFeedback queue (AgentTurnId 1)
+      text `shouldSatisfy` T.isInfixOf "correction"
+      awaitTurn feedback `shouldReturn` False
+      release queue next
+      STM.atomically (STM.putTMVar future ())
+      wait waiting `shouldReturn` Just ()
+
   it "serializes independent inputs and lets other conversations run" $ do
     queue <- newConversations
     first <- admit queue (request 1)
@@ -123,7 +141,7 @@ spec = describe "Max.Conversation" $ do
     _ <- admit queue ((request 5001) {group = GroupId 5})
     pure ()
 
-admit :: Conversations -> TurnInput -> IO Ticket
+admit :: Conversations -> TurnInput -> IO TaskHandle
 admit queue input = enqueue queue input >>= maybe (expectationFailure "queue full" >> fail "queue full") pure
 
 request :: Int64 -> TurnInput

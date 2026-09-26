@@ -40,7 +40,9 @@ import Max.CodeMode.Wasm
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools
 import Max.Execution.Types
+import Max.Node.Executor qualified as Executor
 import Max.Skill.Contract (Contract, validateValue)
+import Max.Tasks (TaskCancelled (..))
 import Max.Tool.Control
   ( LoopControl (..),
     mergeControls,
@@ -88,7 +90,14 @@ runWasmProgram session hooks catalog limits program = mask $ \restore -> do
   resumes <- liftIO newEmptyTMVarIO
   paused <- liftIO (newTVarIO False)
   owner <- liftIO newEmptyTMVarIO
-  let waitReply worker = atomically $ takeTMVar replies `orElse` (Async.waitCatchSTM worker >>= either throwSTM pure)
+  parentActor <- liftIO hooks.ehActor
+  guestActor <- liftIO (traverse (atomically . Executor.guestActor) parentActor)
+  let guestHooks = hooks {ehActor = pure guestActor}
+      waitReply worker =
+        let ready = takeTMVar replies `orElse` (Async.waitCatchSTM worker >>= either throwSTM pure)
+         in case parentActor of
+              Nothing -> atomically ready
+              Just actor -> Executor.await actor True retry ready >>= maybe (Exception.throwIO TaskCancelled) pure
       install worker ref =
         registerProgram session ref $
           ProgramControl
@@ -113,12 +122,19 @@ runWasmProgram session hooks catalog limits program = mask $ \restore -> do
         liftIO . atomically $ do
           writeTVar paused True
           putTMVar replies result
-        liftIO (atomically (takeTMVar resumes))
+        awaitExecution guestHooks True (takeTMVar resumes)
   worker <- asyncWithUnmask $ \unmask -> unmask $ do
     self <- liftIO (atomically (readTMVar owner))
-    result <- bracket hooks.ehAcquireGuest (mapM_ liftIO) $ \case
-      Nothing -> pure (CodeModeResult (WasmRejected "live guest limit exceeded; retry later or use native tools") [] ContinueLoop Nothing 0 False "" program.wpWorkflow)
-      Just _ -> runAdmittedProgram session hooks catalog limits program (install self) suspend
+    result <-
+      ( do
+          forM_ guestActor $ \actor -> do
+            entered <- liftIO (Executor.enter actor)
+            if entered then pure () else throwIO TaskCancelled
+          bracket hooks.ehAcquireGuest (mapM_ liftIO) $ \case
+            Nothing -> pure (CodeModeResult (WasmRejected "live guest limit exceeded; retry later or use native tools") [] ContinueLoop Nothing 0 False "" program.wpWorkflow)
+            Just _ -> runAdmittedProgram session guestHooks catalog limits program (install self) suspend
+      )
+        `finally` liftIO (mapM_ (atomically . Executor.closeActor) guestActor)
     liftIO . atomically $ do
       writeTVar paused False
       _ <- tryPutTMVar replies result
@@ -222,7 +238,7 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
                 else do
                   let interrupt = if all (asyncTool . (.trName) . fst) (Map.elems pending) then hooks.ehInterrupt else retry
                       collect = do
-                        wake <- liftIO (atomically (awaitWake interrupt (snd <$> pending)))
+                        wake <- awaitExecution hooks (any (asyncTool . (.trName) . fst) (Map.elems pending)) (awaitWake interrupt (snd <$> pending))
                         case wake of
                           Interrupted -> pause [] >> collect
                           Settled ready -> pure [(ident, request, outcome) | (ident, outcome) <- ready, Just (request, _) <- [Map.lookup ident pending]]

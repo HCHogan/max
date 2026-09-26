@@ -12,6 +12,8 @@ module Max.Tasks
     finishTurnRuntime,
     turnRuntimeTaskId,
     turnRuntimeAgentTurn,
+    turnExecutor,
+    setTurnExecutor,
     turnRuntimeOutputContext,
     nextExecutionOrdinal,
     setTurnPhase,
@@ -47,6 +49,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
+import Max.Node.Executor qualified as Executor
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), ExecutionOrdinal (..), TurnOutputContext, newTurnOutputContext, turnOutputAgentTurn)
 import OneBot.Types (GroupId (..), UserId (..))
@@ -58,7 +61,8 @@ newtype TaskId = TaskId {unTaskId :: Text}
 -- | One dispatch owns its registry entry and tool-result ordinal allocator.
 data TurnRuntime = TurnRuntime
   { trEntry :: !TaskEntry,
-    trExecutionOrdinal :: !(TVar Int64)
+    trExecutionOrdinal :: !(TVar Int64),
+    trExecutor :: !(TVar Executor.Actor)
   }
 
 -- | Mutable lifecycle state shared with cancellation and visibility queries.
@@ -108,6 +112,15 @@ newtype TaskRegistry = TaskRegistry
 newTaskRegistry :: IO TaskRegistry
 newTaskRegistry = TaskRegistry <$> newTVarIO (0, Map.empty)
 
+turnExecutor :: TurnRuntime -> IO Executor.Actor
+turnExecutor = readTVarIO . (.trExecutor)
+
+setTurnExecutor :: TurnRuntime -> Executor.Actor -> IO ()
+setTurnExecutor turn actor = atomically $ do
+  previous <- readTVar turn.trExecutor
+  Executor.closeTask previous
+  writeTVar turn.trExecutor actor
+
 -- | User cancellation is asynchronous so 'catchSync' cannot swallow it.
 -- Resource brackets still run; the dispatch root handles the final exception.
 data TaskCancelled = TaskCancelled
@@ -132,6 +145,9 @@ beginTurnRuntime reg ref gid uid mTrigger = do
   cancel <- newTVarIO Nothing
   killed <- newTVarIO False
   executionOrdinal <- newTVarIO 0
+  node <- Executor.newExecutor
+  actor <- atomically (Executor.registerTask node ref.atrTurnId Executor.NewRequest)
+  executor <- newTVarIO actor
   atomically $ do
     (n, m) <- readTVar reg.trState
     let tid = TaskId ("t" <> T.pack (show (n + 1)))
@@ -152,7 +168,8 @@ beginTurnRuntime reg ref gid uid mTrigger = do
     pure
       TurnRuntime
         { trEntry = entry,
-          trExecutionOrdinal = executionOrdinal
+          trExecutionOrdinal = executionOrdinal,
+          trExecutor = executor
         }
   where
     realTrigger = \case
@@ -227,7 +244,8 @@ checkTurnCancellation turn = do
 -- | The dispatch root atomically drops its process-local visibility.
 finishTurnRuntime :: TaskRegistry -> TurnRuntime -> IO ()
 finishTurnRuntime reg turn =
-  atomically $
+  atomically $ do
+    readTVar turn.trExecutor >>= Executor.closeTask
     modifyTVar' reg.trState (second (Map.delete turn.trEntry.teId))
 
 -- | Message ids in @gid@ that some turn is already handling: triggers

@@ -14,6 +14,8 @@ module Max.Execution.Tools
     launchCall,
     Wake (..),
     awaitWake,
+    awaitExecution,
+    awaitExecutionUntil,
     ProgramControl (..),
     registerProgram,
     unregisterProgram,
@@ -69,11 +71,13 @@ import Effectful.Exception
 import Max.Agent.Execution
 import Max.Effects.Tools (Tools, invokeToolWithControl)
 import Max.Execution.Types
+import Max.Node.Executor qualified as Executor
 import Max.Tasks
   ( TaskCancelled (..),
     TurnRuntime,
     checkTurnCancellation,
     nextExecutionOrdinal,
+    turnExecutor,
     turnRuntimeAgentTurn,
   )
 import Max.Tool.Control
@@ -97,7 +101,8 @@ data ExecutionHooks es = ExecutionHooks
     ehStart :: ExecutionStep -> JournalStart -> Eff es (Maybe JournalExecution),
     ehFinish :: JournalExecution -> JournalFinish -> Eff es (),
     ehAcquireGuest :: Eff es (Maybe (IO ())),
-    ehInterrupt :: STM.STM ()
+    ehInterrupt :: STM.STM (),
+    ehActor :: IO (Maybe Executor.Actor)
   }
 
 executionHooks :: (IOE :> es) => ExecutionAdmission es -> ExecutionJournal es -> GroupId -> TurnRuntime -> ExecutionHooks es
@@ -119,7 +124,8 @@ executionHooks admission journal group turn =
         pure (Just (JournalExecution ref ordinal prepared now)),
       ehFinish = journal.ejFinish,
       ehAcquireGuest = pure (Just (pure ())),
-      ehInterrupt = STM.retry
+      ehInterrupt = STM.retry,
+      ehActor = Just <$> turnExecutor turn
     }
 
 hoistExecutionHooks :: (forall x. Eff es x -> Eff target x) -> ExecutionHooks es -> ExecutionHooks target
@@ -129,7 +135,8 @@ hoistExecutionHooks lower hooks =
       ehStart = \step -> lower . hooks.ehStart step,
       ehFinish = \row -> lower . hooks.ehFinish row,
       ehAcquireGuest = lower hooks.ehAcquireGuest,
-      ehInterrupt = hooks.ehInterrupt
+      ehInterrupt = hooks.ehInterrupt,
+      ehActor = hooks.ehActor
     }
 
 -- | Admission refused a call because its agent tree's budget is spent. The
@@ -193,6 +200,22 @@ awaitWake interrupt pending =
     STM.check (not (null completed))
     pure (Settled completed)
 
+-- | A native await and a guest await release the same node executor. The
+-- caller keeps the future; cancellation here only abandons its scheduling slot.
+awaitExecution :: (IOE :> es) => ExecutionHooks es -> Bool -> STM.STM a -> Eff es a
+awaitExecution hooks immediate ready = do
+  deadline <- liftIO Executor.shortDeadline
+  awaitExecutionUntil hooks immediate deadline ready
+
+awaitExecutionUntil :: (IOE :> es) => ExecutionHooks es -> Bool -> STM.STM () -> STM.STM a -> Eff es a
+awaitExecutionUntil hooks immediate deadline ready = do
+  actor <- liftIO hooks.ehActor
+  case actor of
+    Nothing -> liftIO (STM.atomically ready)
+    Just owner -> do
+      result <- liftIO (Executor.await owner immediate deadline ready)
+      maybe (throwIO TaskCancelled) pure result
+
 -- | Labels are local to this session; result ordinals belong to the turn.
 freshExecutionLabel :: (Concurrent :> es) => ExecutionSession -> Text -> Eff es Text
 freshExecutionLabel session prefix = atomically $ do
@@ -208,7 +231,7 @@ data ToolBatch = ToolBatch
 
 -- | Native rounds join all calls, but guest programs can wait for any one of
 -- the same futures. Admission and journal start precede worker creation.
-executeToolBatch :: (Tools :> es, Concurrent :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
+executeToolBatch :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
 executeToolBatch session hooks catalog requests = mask $ \restore -> do
   owned <- newTVarIO Map.empty
   let cleanup = readTVarIO owned >>= mapM_ cancel . reverse . Map.elems
@@ -225,18 +248,18 @@ executeToolBatch session hooks catalog requests = mask $ \restore -> do
         pure (runningInvocation ref)
       asyncTool request = maybe False ((== AsyncTool) . (.ctDefinition.tdAwait)) (find ((== ToolRef request.trName) . (.ctDefinition.tdRef)) catalog)
       requestMap = Map.fromList (zip [0 :: Int ..] requests)
-      join completed = do
+      join deadline completed = do
         pending <- readTVarIO owned
         if Map.null pending
           then pure completed
           else do
             let interrupt = if all (asyncTool . (requestMap Map.!)) (Map.keys pending) then hooks.ehInterrupt else STM.retry
-            wake <- atomically (awaitWake interrupt pending)
+            wake <- awaitExecutionUntil hooks (any (asyncTool . (requestMap Map.!)) (Map.keys pending)) deadline (awaitWake interrupt pending)
             case wake of
               Settled ready -> do
                 values <- traverse (\(index, value) -> (index,) <$> either throwIO pure value) ready
                 atomically $ modifyTVar' owned (\active -> foldr Map.delete active (map fst ready))
-                join (completed <> Map.fromList values)
+                join deadline (completed <> Map.fromList values)
               Interrupted -> do
                 values <- traverse (\(index, worker) -> (index,) <$> detach index (requestMap Map.! index) worker) (Map.toList pending)
                 pure (completed <> Map.fromList values)
@@ -247,7 +270,8 @@ executeToolBatch session hooks catalog requests = mask $ \restore -> do
             atomically $ modifyTVar' owned (Map.insert index worker)
         )
         (Map.toList requestMap)
-      results <- Map.elems <$> restore (join Map.empty)
+      deadline <- liftIO Executor.shortDeadline
+      results <- Map.elems <$> restore (join deadline Map.empty)
       pure (ToolBatch results (any spent results))
     )
     `finally` cleanup
@@ -259,13 +283,13 @@ executeToolBatch session hooks catalog requests = mask $ \restore -> do
 runningInvocation :: Text -> ToolInvocation
 runningInvocation ref = ToolInvocation (ToolSucceeded (object ["status" .= ("running" :: Text), "result" .= ref])) ContinueLoop
 
-waitExecution :: (Concurrent :> es) => ExecutionSession -> STM.STM () -> Text -> Eff es ToolInvocation
-waitExecution session interrupt ref = do
+waitExecution :: (Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> Text -> Eff es ToolInvocation
+waitExecution session hooks ref = do
   active <- Map.lookup ref <$> readTVarIO session.nativeFutures
   case active of
     Nothing -> pure (rejected "unknown_execution" "result is not retained in this task")
     Just worker ->
-      atomically (awaitWake interrupt (Map.singleton ref worker)) >>= \case
+      awaitExecution hooks True (awaitWake hooks.ehInterrupt (Map.singleton ref worker)) >>= \case
         Interrupted -> pure (runningInvocation ref)
         Settled [(_, result)] -> either throwIO pure result
         _ -> error "single future wake cardinality"

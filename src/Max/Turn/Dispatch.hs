@@ -76,6 +76,7 @@ import Max.Tasks
     activateTurnRuntime,
     beginTurnRuntime,
     finishTurnRuntime,
+    setTurnExecutor,
     turnRuntimeAgentTurn,
   )
 import Max.Turn.Failure (handleTurnFailures)
@@ -134,7 +135,7 @@ dispatchLLMWith ::
 dispatchLLMWith start intent origin message =
   forkDispatch start origin message (runDispatch start intent origin message)
 
--- Owns the shutdown slot, registered runtime, conversation ticket and browser
+-- Owns the shutdown slot, registered runtime, root-node task and browser
 -- scope from before context collection until the child terminates.
 forkDispatch ::
   ( Log :> es,
@@ -194,14 +195,14 @@ forkDispatch start origin gm work = do
             unless attached (launchFailed >> liftIO (ioError (userError "job replaced or cancelled before launch")))
           JobNotice job version _ -> liftIO (Jobs.bindJobNotice env.beJobs turnRef.atrTurnId job.run version)
           _ -> pure ()
-        ticket <- (if background then pure Nothing else admitConversation env turnRef) `onException` launchFailed
-        if not background && isNothing ticket
+        nodeTask <- (if background then pure Nothing else admitConversation env turnRef) `onException` launchFailed
+        if not background && isNothing nodeTask
           then do
             finishAgentTurn turnRef TurnAborted 0 (Just "conversation queue full") `finally` launchFailed
             when (origin == OriginDirect) (replyText gm "当前处理队列已满，请稍后重试。")
           else
-            launchTurn env outputCaps ident gidRaw restore turn turnRef ticket
-              `onException` (for_ ticket (liftIO . Conversation.release env.beConversations) >> launchFailed)
+            launchTurn env outputCaps ident gidRaw restore turn turnRef nodeTask
+              `onException` (for_ nodeTask (liftIO . Conversation.release env.beConversations) >> launchFailed)
         pure True
   unless launched $ do
     for_ backgroundJob $ \job -> liftIO (Jobs.completeJob env.beJobs job.run JobState.Cancelled (JobResult "service shutting down" Nothing))
@@ -242,7 +243,7 @@ forkDispatch start origin gm work = do
               notice
             }
 
-    launchTurn env outputCaps ident gidRaw restore turn turnRef ticket =
+    launchTurn env outputCaps ident gidRaw restore turn turnRef nodeTask =
       void . async . restore $
         ( localDomain "llm" $ do
             logInfo "llm dispatch" ident
@@ -268,16 +269,18 @@ forkDispatch start origin gm work = do
                   worker <- liftIO Thread.myThreadId
                   preKilled <- liftIO (activateTurnRuntime turn "queued" (Thread.throwTo worker TaskCancelled))
                   when preKilled (liftIO (Exception.throwIO TaskCancelled))
-                  running <- maybe (pure True) (liftIO . Conversation.awaitTurn) ticket
+                  running <- maybe (pure True) (liftIO . Conversation.awaitTurn) nodeTask
                   if running
-                    then work outputCaps turn turnRef
+                    then do
+                      for_ nodeTask $ \handle -> liftIO (Conversation.actorFor handle) >>= mapM_ (liftIO . setTurnExecutor turn)
+                      work outputCaps turn turnRef
                     else finishAgentTurn turnRef TurnAborted 0 (Just "feedback consumed by the active conversation turn")
               )
         )
           `finally` do
             ensureTerminal turnRef "dispatch unwound before a terminal checkpoint"
               `finally` do
-                for_ ticket (liftIO . Conversation.release env.beConversations)
+                for_ nodeTask (liftIO . Conversation.release env.beConversations)
                 releaseTurnScope env turn
                 for_ backgroundJob $ \job -> liftIO $ do
                   Jobs.completeJob env.beJobs job.run JobState.Failed (JobResult "任务中断；已发生的外部操作不会重试。" Nothing)

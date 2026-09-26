@@ -45,7 +45,7 @@ spec = describe "shared host tool execution" $ do
           _ -> liftIO (fail "await did not detach as a handle")
         liftIO (atomically (writeTVar steering False))
         liftIO (putMVar release ())
-        finished <- waitExecution session hooks.ehInterrupt ref
+        finished <- waitExecution session hooks ref
         liftIO (finished.tiOutcome `shouldBe` ToolSucceeded args)
         liftIO (readIORef count `shouldReturn` 1)
 

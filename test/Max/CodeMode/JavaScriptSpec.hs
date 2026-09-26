@@ -24,12 +24,41 @@ import Max.CodeMode.Model (executeModelBatch)
 import Max.CodeMode.Wasm
 import Max.Effects.Tools
 import Max.Execution.Tools
+import Max.Node.Executor qualified as Node
 import Max.Tool.Catalog (catalogTools)
+import Max.Turn.Types (AgentTurnId (..))
 import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: Spec
 spec = describe "JavaScript SDK in embedded Wasm" $ do
+  it "lets another root segment run during an async await and gates every resumed guest step" $ do
+    node <- Node.newExecutor
+    parent <- atomically (Node.registerTask node (AgentTurnId 1) Node.NewRequest)
+    other <- atomically (Node.registerTask node (AgentTurnId 2) Node.NewRequest)
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    nextEffect <- newEmptyMVar
+    let runner value = liftIO $ do
+          case valueOf value of
+            Just (Number 2) -> putMVar entered () >> takeMVar release
+            _ -> putMVar nextEffect ()
+          pure (Right value)
+    registry <- checked [echoDefinition {tdAwait = AsyncTool}] [echoTool {toolRunner = LegacyRunner runner}]
+    let program = runEff . runConcurrent . runTools registry $ do
+          session <- newExecutionSession Nothing
+          runJavaScript session noJournal {ehActor = pure (Just parent)} (views registry) "let base=40; const a=await tools.echo({value:2}); await tools.echo({value:3}); return base+a.value;"
+    Async.withAsync program $ \running -> do
+      timeout 1000000 (takeMVar entered) `shouldReturn` Just ()
+      timeout 1000000 (Node.enter other) `shouldReturn` Just True
+      putMVar release ()
+      timeout 20000 (takeMVar nextEffect) `shouldReturn` Nothing
+      atomically (Node.closeTask other)
+      result <- timeout 30000000 (Async.wait running)
+      fmap (.cmOutput) result `shouldBe` Just (Just (Number 42))
+      timeout 1000000 (takeMVar nextEffect) `shouldReturn` Just ()
+    atomically (Node.closeTask parent)
+
   it "runs agent() calls started together concurrently, as waiting agent tool calls, in input order" $ do
     first <- newEmptyMVar
     second <- newEmptyMVar

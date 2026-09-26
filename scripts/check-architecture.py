@@ -116,6 +116,11 @@ def check_imports():
         if re.search(r"\b(IOE|liftIO|unsafePerformIO|unsafeCoerce)\b", source):
             errors.append(f"{module}: execution escape")
 
+    executor_node = (ROOT / "src/Max/Node/Executor.hs").read_text()
+    for dependency in IMPORT.findall(executor_node):
+        if dependency.startswith(("Max.DB.", "Max.Effects.", "System.")) or dependency in {"Max.Env", "Max.Jobs", "Max.Conversation"}:
+            errors.append(f"Node segment scheduler acquired tools, persistence or routing policy: {dependency}")
+
     projection = (ROOT / "src/Max/Context/Projection.hs").read_text()
     for dependency in IMPORT.findall(projection):
         if dependency.startswith(("Effectful", "Max.DB.", "Max.Effects.", "System.")) or dependency in {"Max.Env", "Max.Agent.Runtime", "Max.Jobs", "Max.Conversation"}:

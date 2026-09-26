@@ -3,8 +3,11 @@
 Status: in progress 2026-09-26. Delivery steps 1–2 are implemented: poll-driven
 guests, shared per-call scheduling, native async interruption and paused guest
 resume/cancel using the current inbox. Projection and node scheduling (steps
-3–4), including executor yielding and detached-result routing after a task
-ends, remain in progress. Task records and observation-ordered projection now
+3–4), including unified event routing and detached-result routing after a task
+ends, remain in progress. Root requests and guest drivers now share per-node
+execution permits: async awaits yield immediately, short-tool rounds yield at
+five seconds, and ready segments use the priority/FIFO order below. Up to 32
+tasks can be open on a root; additional admitted requests remain queued. Task records and observation-ordered projection now
 drive agent polls using the existing inbox; raw answers (including reasoning
 and signatures), tool results and the initial window remain in the record.
 Compaction and media planning use explicit projection checkpoints. Node-wide

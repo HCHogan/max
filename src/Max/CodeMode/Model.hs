@@ -47,7 +47,7 @@ executeModelBatch enabled loaded session hooks catalog requests
     KeyMap.size fields == 1,
     Just (String ref) <- KeyMap.lookup "result" fields = do
       hooks.ehCheck
-      invocation <- waitExecution session hooks.ehInterrupt ref
+      invocation <- waitExecution session hooks ref
       pure (ToolBatch [invocation] False)
   | [request] <- requests,
     enabled,

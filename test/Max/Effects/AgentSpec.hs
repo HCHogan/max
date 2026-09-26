@@ -6,7 +6,7 @@ module Max.Effects.AgentSpec (spec) where
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM qualified as STM
-import Control.Exception (fromException)
+import Control.Exception (finally, fromException)
 import Control.Monad (when)
 import Data.Aeson (Value, object, (.=))
 import Data.Foldable (for_)
@@ -23,6 +23,7 @@ import Max.Agent.Execution (ExecutionAdmission (..), ExecutionInbox (..), Execut
 import Max.Agent.Failure (AgentFailure (..))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion)
+import Max.Conversation qualified as Conversation
 import Max.Effects.Agent (Agent, AgentContext (..), AgentLimits (..), AgentOutcome (..), AgentReply (..), AgentResult (..), agentTurn, runAgentWith)
 import Max.Effects.LLM
 import Max.Effects.ToolControl (ToolControl)
@@ -42,6 +43,7 @@ import Max.Tool.Catalog (buildToolCatalog, catalogTools)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext, mkToolContextWithLimits, toolSkillLoads)
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..), UserId (..))
+import System.Timeout (timeout)
 import Test.Hspec
 
 runTestAgent ::
@@ -217,6 +219,46 @@ runVisionTurn provider = do
 
 spec :: Spec
 spec = describe "Agent full loop" $ do
+  it "answers a second root request while the first awaits a native async tool" $ do
+    conversations <- Conversation.newConversations
+    tasks <- newTaskRegistry
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    ran <- newIORef (0 :: Int)
+    inputs <- newIORef []
+    let request n = Conversation.TurnInput (GroupId 7777) (AgentTurnId n) (PrincipalId 2001) (Just n) Nothing True False
+        slow = legacyTool "echo" "slow read" (object ["type" .= ("object" :: Text)]) $ \args -> do
+          liftIO (modifyIORef' ran (+ 1) >> putMVar entered () >> takeMVar release)
+          pure (Right args)
+        provider = LLMInterpreter $ \_ _ messages _ _ ->
+          if any (\case MsgUser "second" -> True; _ -> False) messages
+            then pure (Right (ContentResp "second answered"))
+            else
+              if any (\case MsgTool {} -> True; _ -> False) messages
+                then pure (Right (ContentResp "first completed"))
+                else pure (Right (ToolCallsResp providerMessage "" [ToolCall "slow" "echo" (object [])]))
+        run handle turn question =
+          ( do
+              Conversation.awaitTurn handle `shouldReturn` True
+              Conversation.actorFor handle >>= mapM_ (setTurnExecutor turn)
+              withCompactLogger ColorNever Nothing $ \logger ->
+                runEff . runConcurrent . runLog "yield-test" logger LogAttention . runLLMWith provider . runTestAgent inputs (AgentLimits 4) (const (buildToolRegistry [echoDefinition {tdAwait = AsyncTool}] [slow])) $
+                  agentTurn turn dispatchContext "fake" [MsgUser question] (\case AgentFinalStreamText _ -> pure False; AgentProgressText _ -> pure (); AgentToolDebug _ -> pure ())
+          )
+            `finally` (Conversation.release conversations handle >> finishTurnRuntime tasks turn)
+    Just first <- Conversation.enqueue conversations (request 1)
+    Just second <- Conversation.enqueue conversations (request 2)
+    firstTurn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
+    secondTurn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 2) (TurnOrdinal 2)) (GroupId 7777) (UserId 2001) Nothing
+    Async.withAsync (run first firstTurn "first") $ \waiting -> do
+      timeout 1000000 (takeMVar entered) `shouldReturn` Just ()
+      answered <- timeout 1000000 (run second secondTurn "second")
+      fmap (.outcome) answered `shouldBe` Just (Answered (AgentReply "second answered" ""))
+      putMVar release ()
+      completed <- timeout 1000000 (Async.wait waiting)
+      fmap (.outcome) completed `shouldBe` Just (Answered (AgentReply "first completed" ""))
+    readIORef ran `shouldReturn` 1
+
   it "evicts the turn's oldest media when a request would exceed the vision envelope" $ do
     calls <- newIORef (0 :: Int)
     seen <- newIORef []

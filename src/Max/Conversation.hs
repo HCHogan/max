@@ -1,12 +1,14 @@
--- | Bounded process-local conversation ownership. Waiting turns keep their
--- original dispatch context; only explicit owner feedback enters a live turn.
+-- | Root nodes and frontend admission. Segment ownership is granted by the
+-- shared node executor, and survives neither task closure nor cancellation.
+-- Frontend provenance is retained separately from execution permits.
 module Max.Conversation
   ( Conversations,
-    Ticket,
+    TaskHandle,
     TurnInput (..),
     newConversations,
     enqueue,
     awaitTurn,
+    actorFor,
     release,
     readFeedback,
     awaitFeedback,
@@ -14,20 +16,27 @@ module Max.Conversation
 where
 
 import Control.Concurrent.STM
-import Control.Monad (filterM, forM_, when)
-import Data.Foldable (find)
+import Control.Monad (filterM, forM_, void)
 import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust, mapMaybe)
+import Data.Maybe (isJust)
+import Data.Ord (Down (..))
 import Data.Text (Text)
+import Max.Node.Executor qualified as Executor
 import Max.Platform.Types (PrincipalId)
 import Max.Task.FrontendInput (FrontendInputView, renderFrontendInputs)
 import Max.Turn.Types (AgentTurnId)
 import OneBot.Types (GroupId)
 
-newtype Conversations = Conversations (TVar (Map GroupId [Ticket]))
+newtype Conversations = Conversations (TVar (Map GroupId Root))
+
+data Root = Root
+  { executor :: !Executor.Executor,
+    tasks :: !(Map AgentTurnId TaskHandle),
+    inputs :: !(Map AgentTurnId [(TaskHandle, FrontendInputView)])
+  }
 
 data TurnInput = TurnInput
   { group :: !GroupId,
@@ -39,91 +48,81 @@ data TurnInput = TurnInput
     notice :: !Bool
   }
 
-data Ticket = Ticket {input :: !TurnInput, state :: !(TVar TicketState)}
-
-data TicketState = Waiting | Running | Feeding | Observed
-  deriving stock (Eq)
+-- | A routed input acknowledges without running a model. An admitted task has
+-- an actor on the root executor. There are no parked conversation tickets.
+data TaskHandle = TaskHandle {input :: !TurnInput, decision :: !(TMVar (Maybe Executor.Actor))}
 
 newConversations :: IO Conversations
 newConversations = Conversations <$> newTVarIO Map.empty
 
--- | Each admitted turn owns a bounded waiting slot. The caller installs
--- 'release' before unmasking or waiting, including for feedback-only turns.
-enqueue :: Conversations -> TurnInput -> IO (Maybe Ticket)
-enqueue (Conversations registry) input = atomically $ do
-  groups <- readTVar registry
-  let tickets = Map.findWithDefault [] input.group groups
-  if length tickets >= 256 || sum (map length (Map.elems groups)) >= 1024
-    then pure Nothing
-    else do
-      active <- filterM (fmap (== Running) . readTVar . (.state)) tickets
-      let feeds owner =
-            owner.input.acceptsFeedback
-              && input.principal == owner.input.principal
-              && isJust input.feedback
-              && case (owner.input.sourceOrder, input.sourceOrder) of
+enqueue :: Conversations -> TurnInput -> IO (Maybe TaskHandle)
+enqueue (Conversations registry) input = do
+  fresh <- Executor.newExecutor
+  atomically $ do
+    groups <- readTVar registry
+    let root = Map.findWithDefault (Root fresh Map.empty Map.empty) input.group groups
+    if Map.size root.tasks >= 256 || sum (map (Map.size . (.tasks)) (Map.elems groups)) >= 1024 || Map.member input.turn root.tasks
+      then pure Nothing
+      else do
+        open <- filterM (fmap (maybe False id) . started) (Map.elems root.tasks)
+        let feeds owner =
+              owner.input.acceptsFeedback && input.principal == owner.input.principal && isJust input.feedback && case (owner.input.sourceOrder, input.sourceOrder) of
                 (Just previous, Just incoming) -> incoming > previous
                 _ -> False
-          initial = case active of
-            [] -> Running
-            [owner] | feeds owner -> Feeding
-            _ -> Waiting
-      ticket <- Ticket input <$> newTVar initial
-      writeTVar registry (Map.insert input.group (tickets <> [ticket]) groups)
-      pure (Just ticket)
+            newest = filter feeds (sortOn (Down . (.input.sourceOrder)) open)
+        handle <- TaskHandle input <$> newEmptyTMVar
+        routed <- case (newest, input.feedback) of
+          (owner : _, Just feedback) -> pure root {inputs = Map.insertWith (flip (<>)) owner.input.turn [(handle, feedback)] root.inputs}
+          _ -> do
+            actor <- Executor.registerTask root.executor input.turn (if input.notice then Executor.Notice else Executor.NewRequest)
+            putTMVar handle.decision (Just actor)
+            pure root
+        writeTVar registry (Map.insert input.group routed {tasks = Map.insert input.turn handle routed.tasks} groups)
+        pure (Just handle)
+  where
+    started handle =
+      tryReadTMVar handle.decision >>= \case
+        Just (Just actor) -> Just <$> Executor.taskStarted actor
+        _ -> pure Nothing
 
--- | False means the active Agent consumed this explicit feedback.
-awaitTurn :: Ticket -> IO Bool
-awaitTurn ticket =
-  atomically $
-    readTVar ticket.state >>= \case
-      Running -> pure True
-      Observed -> pure False
-      _ -> retry
+awaitTurn :: TaskHandle -> IO Bool
+awaitTurn handle = actorFor handle >>= maybe (pure False) Executor.enter
 
-release :: Conversations -> Ticket -> IO ()
-release (Conversations registry) ticket = atomically $ do
+actorFor :: TaskHandle -> IO (Maybe Executor.Actor)
+actorFor handle = atomically (readTMVar handle.decision)
+
+release :: Conversations -> TaskHandle -> IO ()
+release (Conversations registry) handle = atomically $ do
   groups <- readTVar registry
-  let remaining = filter ((/= ticket.input.turn) . (.input.turn)) (Map.findWithDefault [] ticket.input.group groups)
-  wasRunning <- (== Running) <$> readTVar ticket.state
-  writeTVar ticket.state Observed
-  when wasRunning $ do
-    -- Feedback arriving after the final inbox read gets its own turn.
-    forM_ remaining $ \pending -> do
-      status <- readTVar pending.state
-      when (status == Feeding) (writeTVar pending.state Waiting)
-    waiting <- filterM (fmap (== Waiting) . readTVar . (.state)) remaining
-    case find (not . (.input.notice)) waiting of
-      Just next -> writeTVar next.state Running
-      Nothing -> forM_ (take 1 waiting) $ \next -> writeTVar next.state Running
-  writeTVar registry $
-    if null remaining
-      then Map.delete ticket.input.group groups
-      else Map.insert ticket.input.group remaining groups
+  case Map.lookup handle.input.group groups of
+    Nothing -> pure ()
+    Just root -> do
+      decision <- tryReadTMVar handle.decision
+      forM_ decision (mapM_ Executor.closeTask)
+      -- Until all frontend delivery moves into the node event log, preserve
+      -- unread inputs at the finish boundary as independent requests.
+      forM_ (Map.findWithDefault [] handle.input.turn root.inputs) $ \(pending, _) -> do
+        actor <- Executor.registerTask root.executor pending.input.turn Executor.NewRequest
+        void (tryPutTMVar pending.decision (Just actor))
+      void (tryPutTMVar handle.decision Nothing)
+      let remaining = Map.delete handle.input.turn root.tasks
+          inputs = Map.map (filter ((/= handle.input.turn) . (.input.turn) . fst)) (Map.delete handle.input.turn root.inputs)
+      writeTVar registry $ if Map.null remaining then Map.delete handle.input.group groups else Map.insert handle.input.group root {tasks = remaining, inputs} groups
 
 awaitFeedback :: Conversations -> AgentTurnId -> STM ()
 awaitFeedback (Conversations registry) turn = do
   groups <- readTVar registry
-  case find (any ((== turn) . (.input.turn))) (Map.elems groups) of
-    Nothing -> retry
-    Just tickets -> do
-      active <- filterM (fmap (== Running) . readTVar . (.state)) tickets
-      check (any ((== turn) . (.input.turn)) active)
-      feeding <- filterM (fmap (== Feeding) . readTVar . (.state)) tickets
-      check (not (null feeding))
+  check (any (not . null . Map.findWithDefault [] turn . (.inputs)) (Map.elems groups))
 
 readFeedback :: Conversations -> AgentTurnId -> IO Text
 readFeedback (Conversations registry) turn = atomically $ do
   groups <- readTVar registry
-  let owningGroup = find (any ((== turn) . (.input.turn))) (Map.elems groups)
-  case owningGroup of
-    Nothing -> pure ""
-    Just tickets -> do
-      active <- filterM (fmap (== Running) . readTVar . (.state)) tickets
-      if not (any ((== turn) . (.input.turn)) active)
-        then pure ""
-        else do
-          feeding <- filterM (fmap (== Feeding) . readTVar . (.state)) tickets
-          let observed = take 32 (sortOn (.input.sourceOrder) feeding)
-          forM_ observed $ \ticket -> writeTVar ticket.state Observed
-          pure (renderFrontendInputs (mapMaybe (.input.feedback) observed))
+  let selected = [(group, root) | (group, root) <- Map.toList groups, Map.member turn root.tasks]
+  case selected of
+    [] -> pure ""
+    (group, root) : _ -> do
+      let pending = sortOn ((.input.sourceOrder) . fst) (Map.findWithDefault [] turn root.inputs)
+          (observed, remaining) = splitAt 32 pending
+      forM_ observed $ \(handle, _) -> void (tryPutTMVar handle.decision Nothing)
+      writeTVar registry (Map.insert group root {inputs = Map.insert turn remaining root.inputs} groups)
+      pure (renderFrontendInputs (map snd observed))
