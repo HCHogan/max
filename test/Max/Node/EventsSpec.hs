@@ -15,6 +15,36 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "node event delivery and observation" $ do
+  it "publishes an owned completion and its node event atomically and wakes only the selected await" $ do
+    (task, other) <- atomically $ do
+      node <- newNode
+      (,) <$> newTask node <*> newTask node
+    future <- atomically (newFuture task)
+    let selected = noPending {calls = Set.singleton "call"}
+        body = Settled "call" (String "actual result") []
+    atomically (pollFuture selected future) `shouldReturn` Nothing
+    atomically (settleFuture future body (42 :: Int)) `shouldReturn` True
+    atomically (settleFuture future body 99) `shouldReturn` False
+    atomically (pollFuture noPending future) `shouldReturn` Nothing
+    atomically (pollFuture selected future) `shouldReturn` Just 42
+    snapshot <- atomically (readObservations task)
+    Log.deliveredBetween (observationOwner task) (Log.logCursor Log.emptyLog) (Log.logCursor snapshot) snapshot `shouldBe` [body]
+    Log.deliveredBetween (observationOwner other) (Log.logCursor Log.emptyLog) (Log.logCursor snapshot) snapshot `shouldBe` []
+    Log.observedBetween (observationOwner task) (Log.logCursor Log.emptyLog) (Log.logCursor snapshot) snapshot `shouldSatisfy` null
+    atomically (observeAll task) `shouldReturn` []
+    atomically (deliver task Cancelled) `shouldReturn` True
+    atomically (pollFuture selected future) `shouldReturn` Nothing
+
+  it "refuses a late owned completion after cancellation or retirement without resurrecting the log" $ do
+    task <- atomically (newNode >>= newTask)
+    future <- atomically (newFuture task)
+    atomically (deliver task Cancelled) `shouldReturn` True
+    atomically (settleFuture future (Settled "call" (String "late") []) ()) `shouldReturn` False
+    atomically (close task)
+    atomically (settleFuture future (Settled "call" (String "late") []) ()) `shouldReturn` False
+    snapshot <- atomically (readObservations task)
+    Log.deliveredBetween (observationOwner task) (Log.logCursor Log.emptyLog) (Log.logCursor snapshot) snapshot `shouldBe` []
+
   it "records one immutable trigger and keeps its reference valid in a frozen snapshot after retirement" $ do
     task <- atomically (newNode >>= \node -> newTaskFrom node (Log.Said Nothing))
     Just reference <- atomically (taskTrigger task)

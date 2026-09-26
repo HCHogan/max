@@ -35,13 +35,15 @@ module Max.Node.Events
     observationOwner,
     readObservations,
     appendObservation,
+    Future,
+    newFuture,
+    settleFuture,
+    pollFuture,
   )
 where
 
 import Control.Concurrent.STM
-import Data.Aeson (Value)
 import Data.Foldable (toList)
-import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -49,47 +51,43 @@ import Data.Sequence (Seq, (|>))
 import Data.Sequence qualified as Seq
 import Data.Set (Set)
 import Data.Set qualified as Set
-import Data.Text (Text)
 import Max.LLM.Types (ChatMessage)
+import Max.Node.Event
 import Max.Node.Log qualified as Log
-import Max.Task.FrontendInput (FrontendInputView)
-import Max.Task.Types (JobRun, JobSpec)
-import Max.Tool.Media (InlineMedia)
-
-data Urgency = Normal | Urgent deriving stock (Eq, Show)
-
--- | A monitor's admitted occurrence owns its immutable consumer and inputs.
--- External payloads cannot choose the goal, principal or grant ceiling.
-data Occurrence = Occurrence {run :: !JobRun, consumer :: !JobSpec} deriving stock (Eq, Show)
-
--- | Terminal controls reserve one of the 256 slots, independent of data backpressure.
-data Control = Cancel | Replace !Text deriving stock (Eq, Show)
-
-controlBody :: Control -> Body
-controlBody Cancel = Cancelled
-controlBody (Replace objective) = Replaced objective
-
-data Body
-  = FrontendSteered !Int64 !FrontendInputView
-  | Steered !Value
-  | Replaced !Text
-  | Cancelled
-  | ChildSaid !JobRun !Text !Urgency
-  | ChildDone !JobRun !Value
-  | Settled !Text !Value ![InlineMedia]
-  | Fired !Occurrence
-  deriving stock (Eq, Show)
 
 data Event = Event {sequence :: !Integer, target :: !Integer, body :: !Body} deriving stock (Eq, Show)
-
-data Pending = Pending {calls :: !(Set Text), children :: !(Set JobRun)}
-
-noPending :: Pending
-noPending = Pending Set.empty Set.empty
 
 newtype Node = Node (TVar State) deriving stock (Eq)
 
 data Task = Task !Node !Integer deriving stock (Eq)
+
+-- | A selected await owns the actual value and its event receipt. It does not
+-- occupy the model's unobserved-input buffer: its value is retained by the
+-- call owner and projected in the protocol result slot when the await returns.
+data Future value = Future !Task !(TVar (Maybe (Event, value)))
+
+newFuture :: Task -> STM (Future value)
+newFuture task = Future task <$> newTVar Nothing
+
+settleFuture :: Future value -> Body -> value -> STM Bool
+settleFuture (Future task ref) body value = do
+  existing <- readTVar ref
+  active <- isOpen task
+  case existing of
+    Just _ -> pure False
+    Nothing | not active -> pure False
+    Nothing -> do
+      event <- recordEvent task body
+      writeTVar ref (Just (event, value))
+      pure True
+
+pollFuture :: Pending -> Future value -> STM (Maybe value)
+pollFuture pending (Future task ref) = do
+  active <- isOpen task
+  settled <- readTVar ref
+  pure $ case settled of
+    Just (event, value) | active && wakes pending event.body -> Just value
+    _ -> Nothing
 
 sameNode :: Task -> Task -> Bool
 sameNode (Task node _) (Task other _) = node == other
@@ -171,16 +169,28 @@ deliverTracked task@(Task (Node ref) key) body = do
   if not accepted
     then pure Nothing
     else do
-      let event = Event state.next key body
-      writeTVar
-        ref
-        state
-          { next = state.next + 1,
-            events = state.events |> event,
-            tasks = if terminal then Map.insert key False state.tasks else state.tasks,
-            stopped = if terminal then Set.insert key state.stopped else state.stopped
+      event <- recordEvent task body
+      modifyTVar' ref $ \current ->
+        current
+          { events = current.events |> event,
+            tasks = if terminal then Map.insert key False current.tasks else current.tasks,
+            stopped = if terminal then Set.insert key current.stopped else current.stopped
           }
       pure (Just event)
+
+-- | Both an owned completion and a buffered input enter the same node log.
+-- Admission and handing its receipt to the consumer share one transaction.
+recordEvent :: Task -> Body -> STM Event
+recordEvent task@(Task (Node ref) key) body = do
+  state <- readTVar ref
+  let event = Event state.next key body
+  writeTVar
+    ref
+    state
+      { next = state.next + 1,
+        observations = Log.appendEvent (observationOwner task) body state.observations
+      }
+  pure event
 
 -- | Multi-node control delivery either accepts every event or none. A full
 -- parent log cannot leave a child steered without its parent's provenance note.
@@ -230,17 +240,6 @@ pendingEvents state key = sortOn eventOrder [event | event <- toList state.event
 discard :: Task -> Integer -> STM ()
 discard (Task (Node ref) key) receipt = modifyTVar' ref $ \state ->
   state {events = Seq.filter (\event -> event.target /= key || event.sequence /= receipt) state.events}
-
-wakes :: Pending -> Body -> Bool
-wakes pending = \case
-  FrontendSteered {} -> True
-  Steered {} -> True
-  Replaced {} -> True
-  Cancelled -> True
-  ChildSaid _ _ Urgent -> True
-  ChildDone child _ -> Set.member child pending.children
-  Settled call _ _ -> Set.member call pending.calls
-  _ -> False
 
 hasInterrupt :: Task -> Pending -> STM Bool
 hasInterrupt (Task (Node ref) key) pending =

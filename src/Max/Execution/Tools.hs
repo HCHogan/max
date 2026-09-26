@@ -73,6 +73,7 @@ import Max.Agent.Execution
 import Max.Effects.Tools (Tools, invokeToolWithAuthority)
 import Max.Execution.Authority (CallAuthority, revokeCallAuthority)
 import Max.Execution.Types
+import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Executor
 import Max.Tasks
   ( TaskCancelled (..),
@@ -82,6 +83,7 @@ import Max.Tasks
     nextExecutionOrdinal,
     retainTurnWork,
     startTurnCall,
+    turnEvents,
     turnExecutor,
     turnRuntimeAgentTurn,
   )
@@ -107,6 +109,7 @@ data ExecutionHooks es = ExecutionHooks
     ehFinish :: JournalExecution -> JournalFinish -> Eff es (),
     ehAcquireGuest :: Eff es (Maybe (IO ())),
     ehInterrupt :: STM.STM (),
+    ehEvents :: STM.STM (Maybe Events.Task),
     ehRetain :: Async ToolInvocation -> Async ToolInvocation -> Eff es (),
     ehActor :: IO (Maybe Executor.Actor),
     ehCallAuthority :: Text -> Eff es (Maybe CallAuthority)
@@ -135,6 +138,7 @@ executionHooks admission journal group turn =
         journal.ejFinish row result,
       ehAcquireGuest = pure (Just (pure ())),
       ehInterrupt = STM.retry,
+      ehEvents = Just <$> turnEvents turn,
       ehRetain = \call delivery -> liftIO (retainTurnWork turn (Async.cancel delivery) (Async.cancel call) (void (Async.waitCatchSTM delivery))),
       ehActor = Just <$> turnExecutor turn,
       ehCallAuthority = admission.eaCallAuthority (turnRuntimeAgentTurn turn)
@@ -148,6 +152,7 @@ hoistExecutionHooks lower hooks =
       ehFinish = \row -> lower . hooks.ehFinish row,
       ehAcquireGuest = lower hooks.ehAcquireGuest,
       ehInterrupt = hooks.ehInterrupt,
+      ehEvents = hooks.ehEvents,
       ehRetain = \call -> lower . hooks.ehRetain call,
       ehActor = hooks.ehActor,
       ehCallAuthority = lower . hooks.ehCallAuthority
@@ -164,7 +169,8 @@ data ExecutionSession = ExecutionSession
     sequenceNumber :: !(TVar Integer),
     gate :: !(TVar ([(Integer, Bool)], Int, Bool)),
     programs :: !(TVar (Map Text ProgramControl)),
-    nativeFutures :: !(TVar (Map Text (Async ToolInvocation))),
+    nativeFutures :: !(TVar (Map Text NativeFuture)),
+    events :: !Events.Task,
     callHandles :: !(TVar (Map Text Text)),
     resultSink :: !(TVar (Maybe (Text -> ToolInvocation -> IO ()))),
     completions :: !(STM.TQueue (Text, ToolInvocation))
@@ -172,7 +178,13 @@ data ExecutionSession = ExecutionSession
 
 newExecutionSession :: (Concurrent :> es) => Maybe Int -> Eff es ExecutionSession
 newExecutionSession limit =
-  ExecutionSession <$> newTVarIO (max 0 <$> limit) <*> newTVarIO 0 <*> newTVarIO ([], 0, False) <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO Nothing <*> newTQueueIO
+  ExecutionSession <$> newTVarIO (max 0 <$> limit) <*> newTVarIO 0 <*> newTVarIO ([], 0, False) <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> atomically (Events.newNode >>= Events.newTask) <*> newTVarIO Map.empty <*> newTVarIO Nothing <*> newTQueueIO
+
+data NativeFuture = NativeFuture
+  { worker :: !(Async ToolInvocation),
+    settlement :: !(Events.Future (Either SomeException ToolInvocation)),
+    reference :: !Text
+  }
 
 setExecutionResultSink :: (Concurrent :> es) => ExecutionSession -> (Text -> ToolInvocation -> IO ()) -> Eff es ()
 setExecutionResultSink session sink = atomically (writeTVar session.resultSink (Just sink))
@@ -208,15 +220,21 @@ closeExecutionSession session = do
 
 data Wake k = Settled ![(k, Either SomeException ToolInvocation)] | Interrupted
 
--- | Shared readiness rule for native and guest futures. Guest completions
--- stay below the model loop; interruption changes ownership, never cancels.
-awaitWake :: STM.STM () -> Map k (Async ToolInvocation) -> STM.STM (Wake k)
-awaitWake interrupt pending =
+-- | Shared waiting protocol. Native readiness is proved by a selected node
+-- event; guest-private promises stay below the model event stream (§4).
+-- Interruption changes ownership, never cancels the pending computations.
+awaitWake :: STM.STM () -> (future -> STM.STM (Maybe (Either SomeException ToolInvocation))) -> Map k future -> STM.STM (Wake k)
+awaitWake interrupt poll pending =
   (interrupt >> pure Interrupted) `STM.orElse` do
-    ready <- traverse Async.pollSTM pending
+    ready <- traverse poll pending
     let completed = [(key, result) | (key, Just result) <- Map.toList ready]
     STM.check (not (null completed))
     pure (Settled completed)
+
+awaitNative :: STM.STM () -> Map k NativeFuture -> STM.STM (Wake k)
+awaitNative interrupt pending = awaitWake interrupt (Events.pollFuture selection . (.settlement)) pending
+  where
+    selection = Events.noPending {Events.calls = Set.fromList (map (.reference) (Map.elems pending))}
 
 -- | A native await and a guest await release the same node executor. The
 -- caller keeps the future; cancellation here only abandons its scheduling slot.
@@ -252,8 +270,9 @@ data ToolBatch = ToolBatch
 executeToolBatch :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
 executeToolBatch session hooks catalog requests = mask $ \restore -> do
   owned <- newTVarIO Map.empty
-  let cleanup = readTVarIO owned >>= mapM_ cancel . reverse . Map.elems
-      detach index request worker = do
+  let cleanup = readTVarIO owned >>= mapM_ (cancel . (.worker)) . reverse . Map.elems
+      detach index request future = do
+        let worker = future.worker
         handles <- readTVarIO session.callHandles
         ref <- maybe (freshExecutionLabel session "result") pure (Map.lookup request.trCallId handles)
         watcher <- asyncWithUnmask $ \unmask ->
@@ -269,7 +288,7 @@ executeToolBatch session hooks catalog requests = mask $ \restore -> do
             `finally` cancel worker
         hooks.ehRetain worker watcher `onException` cancel watcher
         atomically $ do
-          modifyTVar' session.nativeFutures (Map.insert ref worker)
+          modifyTVar' session.nativeFutures (Map.insert ref future)
           modifyTVar' owned (Map.delete index)
         pure (runningInvocation ref)
       asyncTool request = maybe False ((== AsyncTool) . (.ctDefinition.tdAwait)) (find ((== ToolRef request.trName) . (.ctDefinition.tdRef)) catalog)
@@ -280,7 +299,7 @@ executeToolBatch session hooks catalog requests = mask $ \restore -> do
           then pure completed
           else do
             let interrupt = if all (asyncTool . (requestMap Map.!)) (Map.keys pending) then hooks.ehInterrupt else STM.retry
-            wake <- awaitExecutionUntil hooks (any (asyncTool . (requestMap Map.!)) (Map.keys pending)) deadline (awaitWake interrupt pending)
+            wake <- awaitExecutionUntil hooks (any (asyncTool . (requestMap Map.!)) (Map.keys pending)) deadline (awaitNative interrupt pending)
             case wake of
               Settled ready -> do
                 values <- traverse (\(index, value) -> (index,) <$> either throwIO pure value) ready
@@ -292,8 +311,8 @@ executeToolBatch session hooks catalog requests = mask $ \restore -> do
   ( do
       mapM_
         ( \(index, request) -> do
-            worker <- launchCall session hooks catalog request
-            atomically $ modifyTVar' owned (Map.insert index worker)
+            future <- launchNativeCall session hooks catalog request
+            atomically $ modifyTVar' owned (Map.insert index future)
         )
         (Map.toList requestMap)
       deadline <- liftIO Executor.shortDeadline
@@ -314,8 +333,8 @@ waitExecution session hooks ref = do
   active <- Map.lookup ref <$> readTVarIO session.nativeFutures
   case active of
     Nothing -> pure (rejected "unknown_execution" "result is not retained in this task")
-    Just worker ->
-      awaitExecution hooks True (awaitWake hooks.ehInterrupt (Map.singleton ref worker)) >>= \case
+    Just future ->
+      awaitExecution hooks True (awaitNative hooks.ehInterrupt (Map.singleton ref future)) >>= \case
         Interrupted -> pure (runningInvocation ref)
         -- The retained completion owns its media delivery. Waiting again only
         -- returns the value, even if it wins the race with that delivery.
@@ -329,25 +348,43 @@ drainExecutionCompletions :: (Concurrent :> es) => ExecutionSession -> Eff es [(
 drainExecutionCompletions session = atomically (STM.flushTQueue session.completions)
 
 launchCall :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es (Async ToolInvocation)
-launchCall session hooks catalog request = mask $ \_ -> do
+launchCall = launchCallWith (const (pure ()))
+
+launchNativeCall :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es NativeFuture
+launchNativeCall session hooks catalog request = do
+  target <- atomically (maybe session.events id <$> hooks.ehEvents)
+  settlement <- atomically (Events.newFuture target)
+  reference <- freshExecutionLabel session "native"
+  let publish result = do
+        let invocation = either (\exception -> ToolInvocation (ToolOutcomeUnknown (ToolFault "interrupted" (T.pack (show exception)) RetryUnsafe)) ContinueLoop) id result
+        atomically . void $ Events.settleFuture settlement (Events.Settled reference (outcomeEnvelope invocation.tiOutcome) invocation.tiMedia) result
+  worker <- launchCallWith publish session hooks catalog request
+  pure (NativeFuture worker settlement reference)
+
+launchCallWith :: (Tools :> es, Concurrent :> es, IOE :> es) => (Either SomeException ToolInvocation -> Eff es ()) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es (Async ToolInvocation)
+launchCallWith publish session hooks catalog request = mask $ \_ -> do
   hooks.ehCheck
   let view = find ((== ToolRef request.trName) . (.ctDefinition.tdRef)) catalog
       cost = if maybe WorkCall (.ctDefinition.tdCallMode) view == WorkCall then 1 else 0
       shared = maybe False ((`elem` [ParallelSafe, ParallelIndependent]) . (.ctDefinition.tdParallelism)) view
       start = maybe (unknownJournalStart request) (catalogJournalStart request) view
       step = if cost == 0 then ExecutionCheckpoint else ExecutionWork ReserveCall
+      notify action = mask $ \restore -> do
+        result <- try (restore action)
+        publish result
+        either throwIO pure result
   reserved <- atomically $ do
     budget <- readTVar session.remaining
     case budget of
       Just available | cost > available -> pure False
       _ -> writeTVar session.remaining (subtract cost <$> budget) >> pure True
   if not reserved
-    then async (pure budgetSpent)
+    then async (notify (pure budgetSpent))
     else do
       let refund = atomically $ modifyTVar' session.remaining (fmap (+ cost))
       admitted <- try (hooks.ehStart step start) `onException` refund
       case admitted of
-        Left CallBudgetExhausted -> refund >> async (pure budgetSpent)
+        Left CallBudgetExhausted -> refund >> async (notify (pure budgetSpent))
         Right row -> do
           ref <- maybe (freshExecutionLabel session "result") (pure . (\entry -> resultHandleText entry.jeTurn.atrTurnOrdinal entry.jeExecutionOrdinal)) row
           atomically $ modifyTVar' session.callHandles (Map.insert request.trCallId ref)
@@ -389,7 +426,7 @@ launchCall session hooks catalog request = mask $ \_ -> do
                 pure invocation {tiOutcome = stripJournalMetadata invocation.tiOutcome}
           authority <- hooks.ehCallAuthority request.trName `onException` dequeue
           let cleanup = for_ authority (liftIO . revokeCallAuthority) >> dequeue
-          (asyncWithUnmask $ \unmask -> run authority unmask `finally` cleanup) `onException` cleanup
+          (asyncWithUnmask $ \unmask -> notify (run authority unmask `finally` cleanup)) `onException` cleanup
   where
     budgetSpent = rejected "call_budget_exhausted" "工具调用预算已经用完，不能再执行这个调用；直接根据已有信息给出最终回复"
 

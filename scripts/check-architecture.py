@@ -48,6 +48,7 @@ PURE = {
     "Max.Platform.Failure",
     "Max.Monitor.Policy",
     "Max.Node.Routing",
+    "Max.Node.Event",
     "Max.Node.Log",
     "Max.Monitor.Control",
     "Max.Memory.Policy",

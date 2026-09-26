@@ -181,6 +181,7 @@ library
         Max.Context.Working
         Max.Context.Projection
         Max.Node.Executor
+        Max.Node.Event
         Max.Node.Events
         Max.Node.Futures
         Max.Node.Log

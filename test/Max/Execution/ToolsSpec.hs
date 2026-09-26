@@ -3,7 +3,7 @@ module Max.Execution.ToolsSpec (spec) where
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (atomically, check, modifyTVar', newTVarIO, readTVar, writeTVar)
-import Control.Monad (forM_)
+import Control.Monad (forM_, replicateM_)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.IORef (modifyIORef', newIORef, readIORef)
@@ -20,6 +20,8 @@ import Max.Effects.ToolControl (activateSkills, runToolControl)
 import Max.Effects.ToolOutput (InlineMedia (..), canQueueInlineMediaOnce, drainInlineMedia, newToolOutputQueue, queueInlineMedia, queueInlineMediaOnce, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
 import Max.Execution.Tools
+import Max.Node.Events qualified as Events
+import Max.Node.Log qualified as Log
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (LoopControl (..))
@@ -28,6 +30,62 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "shared host tool execution" $ do
+  it "logs native settlements in completion order while returning protocol order without duplicate observations" $ do
+    target <- atomically (Events.newNode >>= Events.newTask)
+    blocked <- newEmptyMVar
+    let first = object ["value" .= (1 :: Int)]
+        second = object ["value" .= (2 :: Int)]
+        runner =
+          echoTool
+            { toolRunner = LegacyRunner $ \value -> do
+                if value == first then liftIO (takeMVar blocked) else pure ()
+                pure (Right value)
+            }
+        hooks = noJournal {ehEvents = pure (Just target)}
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [runner])
+    Async.withAsync
+      ( runEff . runConcurrent . runTools registry $ do
+          session <- newExecutionSession Nothing
+          executeToolBatch session hooks (views registry) [ToolRequest "one" "echo" first, ToolRequest "two" "echo" second]
+      )
+      $ \waiting -> do
+        timeout
+          1000000
+          ( atomically $ do
+              snapshot <- Events.readObservations target
+              let events = Log.deliveredBetween (Events.observationOwner target) (Log.logCursor Log.emptyLog) (Log.logCursor snapshot) snapshot
+              check (any (\case Events.Settled _ value _ -> value == outcomeEnvelope (ToolSucceeded second); _ -> False) events)
+          )
+          `shouldReturn` Just ()
+        putMVar blocked ()
+        result <- Async.wait waiting
+        map (.tiOutcome) result.tbInvocations `shouldBe` [ToolSucceeded first, ToolSucceeded second]
+    snapshot <- atomically (Events.readObservations target)
+    let events = Log.deliveredBetween (Events.observationOwner target) (Log.logCursor Log.emptyLog) (Log.logCursor snapshot) snapshot
+    [value | Events.Settled _ value _ <- events] `shouldBe` map (outcomeEnvelope . ToolSucceeded) [second, first]
+    atomically (Events.observeAll target) `shouldReturn` []
+
+  it "completes an owned native await despite a full buffer of non-interrupting model inputs" $ do
+    target <- atomically (Events.newNode >>= Events.newTask)
+    atomically (replicateM_ 255 (Events.deliver target (Events.Settled "unselected" Null [])))
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [echoTool])
+    result <- timeout 1000000 $ runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      executeToolBatch session noJournal {ehEvents = pure (Just target), ehInterrupt = Events.awaitInterrupt target Events.noPending} (views registry) [ToolRequest "native" "echo" args]
+    fmap (map (.tiOutcome) . (.tbInvocations)) result `shouldBe` Just [ToolSucceeded args]
+    length <$> atomically (Events.observeAll target) `shouldReturn` 255
+
+  it "keeps guest-private settlements out of the model node event log" $ do
+    target <- atomically (Events.newNode >>= Events.newTask)
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [echoTool])
+    binary <- guestCalls [request "echo" args] ""
+    result <- runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runWasmTools session noJournal {ehEvents = pure (Just target)} (views registry) defaultWasmLimits binary
+    result.cmExit `shouldBe` WasmCompleted
+    snapshot <- atomically (Events.readObservations target)
+    Log.deliveredBetween (Events.observationOwner target) (Log.logCursor Log.emptyLog) (Log.logCursor snapshot) snapshot `shouldBe` []
+
   it "interrupts a native async await without cancelling or repeating its call" $ do
     entered <- newEmptyMVar
     release <- newEmptyMVar

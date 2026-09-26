@@ -50,6 +50,8 @@ import Max.Jobs qualified as Jobs
 import Max.LLM.Failure (LLMFailure (..))
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.Memory.ToolRuntime (memoryToolsWithDatabase)
+import Max.Node.Events qualified as Events
+import Max.Node.Log qualified as NodeLog
 import Max.Node.Router qualified as Router
 import Max.Platform.Types (noAdvertisedCaps)
 import Max.Skill.Contract (Contract, parseContract)
@@ -61,7 +63,7 @@ import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State (TaskStatus (Cancelled, Failed, Succeeded))
 import Max.Task.ToolRuntime (taskTools)
 import Max.Task.Types (JobResult (..), JobRun (..), JobSpec (..), JobView (..), TaskProfile (Basic, Sandbox))
-import Max.Tasks (TaskCancelled (..), TurnRuntime, beginTurnRuntime, finishTurnRuntime, newTaskRegistry, turnAcceptsWork, turnRuntimeOutputContext, turnWasCancelled)
+import Max.Tasks (TaskCancelled (..), TurnRuntime, beginTurnRuntime, finishTurnRuntime, newTaskRegistry, turnAcceptsWork, turnEvents, turnRuntimeOutputContext, turnWasCancelled)
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion, toolVisible)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (LoopControl (..), controlSkillLoads)
@@ -606,10 +608,16 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
         calls = [("echo", args), ("echo", object []), ("hidden", args), ("read_fail", args), ("write", args), ("unknown", args)]
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition, readDefinition, writeDefinition "write", writeDefinition "unknown"] [echoTool, readFail, write, unknown])
     binary <- guestCalls [request name value | (name, value) <- calls] ""
-    _ <- withHost pool . runTools registry $ do
+    native <- withHost pool . runTools registry $ do
       session <- newExecutionSession Nothing
-      _ <- executeToolBatch session (hostHooks jobs runtime) (views registry) [ToolRequest ("native:" <> name) name value | (name, value) <- calls]
-      runWasmTools session (hostHooks jobs runtime) (views registry) defaultWasmLimits binary
+      native <- executeToolBatch session (hostHooks jobs runtime) (views registry) [ToolRequest ("native:" <> name) name value | (name, value) <- calls]
+      _ <- runWasmTools session (hostHooks jobs runtime) (views registry) defaultWasmLimits binary
+      pure native
+    target <- atomically (turnEvents runtime)
+    snapshot <- atomically (Events.readObservations target)
+    let events = NodeLog.deliveredBetween (Events.observationOwner target) (NodeLog.logCursor NodeLog.emptyLog) (NodeLog.logCursor snapshot) snapshot
+    [value | Events.Settled _ value _ <- events] `shouldMatchList` map (outcomeEnvelope . (.tiOutcome)) native.tbInvocations
+    atomically (Router.observeEvents jobs.resultRouter target) `shouldReturn` []
     rows <- withDb pool $ query "SELECT state,tool_ref,schema_hash,normalized_input,result_inline,failure_code FROM execution_journal WHERE turn_id=? AND tool_ref<>'host:wasm/v2' ORDER BY execution_ordinal" (Only turn.atrTurnId)
     let facts = rows :: [(Text, Text, Text, Value, Maybe Value, Maybe Text)]
     take 6 facts `shouldBe` drop 6 facts

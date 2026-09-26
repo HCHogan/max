@@ -1,5 +1,5 @@
--- | Immutable snapshots of a node's observation log. Positions never move when
--- a task retires; projection reads only the observations owned by that task.
+-- | Immutable snapshots of node arrivals and observations. Positions never move
+-- when a task retires; projection reads only that task's rendered observations.
 module Max.Node.Log
   ( Cursor,
     Observer (..),
@@ -12,6 +12,8 @@ module Max.Node.Log
     emptyLog,
     logCursor,
     appendObservation,
+    appendEvent,
+    deliveredBetween,
     observedBetween,
     retire,
   )
@@ -23,6 +25,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Max.LLM.Types (ChatMessage)
+import Max.Node.Event (Body)
 import Max.Platform.Types (CanonicalMessageId)
 import Max.Task.Types (JobRun, JobSpec, JobView)
 import Max.Tool.Media (InlineMedia)
@@ -45,7 +48,7 @@ data Trigger
   | Settled !CanonicalMessageId !Int64 !Text !Value ![InlineMedia]
   deriving stock (Eq, Show)
 
-data Entry = Started !Trigger | Observed ![ChatMessage] deriving stock (Show)
+data Entry = Started !Trigger | Delivered !Body | Observed ![ChatMessage] deriving stock (Show)
 
 data NodeLog = NodeLog !Int !(Map Int (Observer, Entry)) deriving stock (Show)
 
@@ -70,6 +73,18 @@ logCursor (NodeLog next _) = Cursor next
 appendObservation :: Observer -> [ChatMessage] -> NodeLog -> NodeLog
 appendObservation _ [] nodeLog = nodeLog
 appendObservation owner messages (NodeLog next entries) = NodeLog (next + 1) (Map.insert next (owner, Observed messages) entries)
+
+-- | Arrival order is retained independently of model observation order.
+-- Awaited outcomes are projected as protocol results in the task's poll; raw
+-- deliveries never become an additional model-visible message here.
+appendEvent :: Observer -> Body -> NodeLog -> NodeLog
+appendEvent owner body (NodeLog next entries) = NodeLog (next + 1) (Map.insert next (owner, Delivered body) entries)
+
+deliveredBetween :: Observer -> Cursor -> Cursor -> NodeLog -> [Body]
+deliveredBetween owner (Cursor start) (Cursor end) (NodeLog _ entries) =
+  [body | (target, Delivered body) <- Map.elems selected, target == owner]
+  where
+    selected = fst (Map.split end (snd (Map.split (start - 1) entries)))
 
 observedBetween :: Observer -> Cursor -> Cursor -> NodeLog -> [ChatMessage]
 observedBetween owner (Cursor start) (Cursor end) (NodeLog _ entries) =

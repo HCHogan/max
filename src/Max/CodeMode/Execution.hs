@@ -246,7 +246,7 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
                 else do
                   let interrupt = if all (asyncTool . (.trName) . fst) (Map.elems pending) then hooks.ehInterrupt else retry
                       collect = do
-                        wake <- awaitExecution hooks (any (asyncTool . (.trName) . fst) (Map.elems pending)) (awaitWake interrupt (snd <$> pending))
+                        wake <- awaitExecution hooks (any (asyncTool . (.trName) . fst) (Map.elems pending)) (awaitWake interrupt Async.pollSTM (snd <$> pending))
                         case wake of
                           Interrupted -> pause [] >> collect
                           Settled ready -> pure [(ident, request, outcome) | (ident, outcome) <- ready, Just (request, _) <- [Map.lookup ident pending]]
