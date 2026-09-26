@@ -47,6 +47,7 @@ PURE = {
     "Max.Task.FrontendInput",
     "Max.Platform.Failure",
     "Max.Monitor.Policy",
+    "Max.Node.Routing",
     "Max.Monitor.Control",
     "Max.Memory.Policy",
     "Max.Pin.Policy",

@@ -27,6 +27,7 @@ import Max.DB.History (MessageCursor (..))
 import Max.DB.Monitor
 import Max.DB.Monitor.Admission
 import Max.DB.Monitor.Control qualified as MonitorDB
+import Max.DB.Monitor.Occurrence qualified as Occurrence
 import Max.DB.Monitor.Overview qualified as WorkQuery
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.MonitorControl qualified as MonitorCapability
@@ -195,6 +196,44 @@ spec pool = before_ (truncateAll pool) $ describe "automation Jobs and retained 
     insertOccurrence pool monitor "overflow"
     rows <- withDb pool $ query "SELECT disposition FROM monitor_fires ORDER BY fire_id" ()
     rows `shouldBe` map Only (["cancelled", "coalesced", "pending", "overflow"] :: [Text])
+
+  it "records backpressure instead of merging evidence into an already frozen consumer" $ do
+    (turn, message, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 20 Map.empty)
+    (fire, _) <- admitOccurrence pool monitor message "first"
+    insertOccurrence pool monitor "arrived after admission"
+    rows <- withDb pool $ query "SELECT disposition,coalesced_into,last_error FROM monitor_fires WHERE fire_id<>?" (Only fire)
+    rows `shouldBe` [("overflow" :: Text, Nothing :: Maybe MonitorFireId, Just ("pending monitor consumer already owns frozen inputs" :: Text))]
+    withDb pool (markMonitorJobStarted fire)
+    insertOccurrence pool monitor "next pending consumer"
+    latest <- withDb pool $ query "SELECT disposition FROM monitor_fires ORDER BY fire_id DESC LIMIT 1" ()
+    latest `shouldBe` [Only ("pending" :: Text)]
+
+  it "does not count discarded timer markers as queued consumers" $ do
+    (turn, message, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    Right monitor <- withDb pool (armElaboratedTimeMonitor (GroupId 900) actor turn "watch" (Just "* * * * *") now Map.empty)
+    _ <- withDb pool $ execute "UPDATE monitors SET overlap_policy='queue',queue_limit=1 WHERE monitor_id=?" (Only monitor.mrMonitorId)
+    insertOccurrence pool monitor "first"
+    insertOccurrence pool monitor "overflow marker"
+    [Only first] <- withDb pool $ query "SELECT min(fire_id) FROM monitor_fires" ()
+    Right MonitorTaskAdmitted {} <- withDb pool (withTransaction (admitMonitorTaskWithin first (Just (addUTCTime 60 now)) Map.empty message.unCanonicalMessageId))
+    withDb pool (markMonitorJobStarted first)
+    insertOccurrence pool monitor "new pending consumer"
+    rows <- withDb pool $ query "SELECT disposition FROM monitor_fires ORDER BY fire_id" ()
+    rows `shouldBe` map Only (["task", "overflow", "pending"] :: [Text])
+
+  it "bounds merged durable evidence by bytes while retaining overflow evidence" $ do
+    (turn, _, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 20 Map.empty)
+    let body = T.replicate 20000 "汉"
+    forM_ ["first", "second", "third"] $ \key ->
+      void $ withDb pool $ Occurrence.recordOccurrence monitor.mrMonitorId (Occurrence.OccurrenceDraft key now Nothing body Nothing True)
+    rows <- withDb pool $ query "SELECT disposition,trigger_evidence FROM monitor_fires ORDER BY fire_id" ()
+    rows `shouldBe` [(disposition :: Text, body) | disposition <- ["pending", "coalesced", "overflow"]]
+    withDb pool (query "SELECT last_error FROM monitor_fires ORDER BY fire_id DESC LIMIT 1" ()) `shouldReturn` [Only (Just ("bounded monitor aggregate full" :: Text))]
 
   it "requires an administrator when a legacy monitor has no owning principal" $ do
     (turn, _, actor) <- seed pool 900 1

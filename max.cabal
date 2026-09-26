@@ -184,6 +184,7 @@ library
         Max.Node.Events
         Max.Node.Render
         Max.Node.Router
+        Max.Node.Routing
         Max.Context.Types
         Max.ConversationScope
         Max.MCP.Client
@@ -757,6 +758,7 @@ test-suite max-test
         Max.Node.ExecutorSpec
         Max.Node.EventsSpec
         Max.Node.RouterSpec
+        Max.Node.RoutingSpec
         Max.Task.DelegationSpec
         Max.AutomationArgsSpec
         Max.Concurrent.LockSpec

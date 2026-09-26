@@ -95,7 +95,14 @@ cancellation/replacement, deadlines, tree budgets, retained calls and browser
 ownership apply to the actual root execution. Its foreground catalog uses the
 frozen grant ceiling, and only this live generation may publish. The initial
 model poll observes the occurrence through the ordinary bounded observation
-path, rather than re-reading a mutable monitor definition for its prompt. Each admitted native or guest leaf now
+path, rather than re-reading a mutable monitor definition for its prompt. Overlap
+now belongs to the pure root policy in `Node.Routing`: stores supply a locked
+buffer snapshot and persist its typed destination in the same transaction.
+HTTP uses the same prepared decision, returning Busy before consuming a retry
+key when full; durable triggers retain the overflow row and reason. Coalescing
+cannot append evidence to an already-admitted consumer's frozen inputs. Merges
+are bounded to 64 additional occurrences/about 128 KiB of evidence, and discarded
+timer markers no longer occupy queue capacity or become merge destinations. Each admitted native or guest leaf now
 receives host-owned call authority. Memory, pin, monitor and task mutations use
 that authority to finish after a normal terminal checkpoint, rechecking its
 validity after acquiring database locks. Identity, source, role and grant checks
@@ -103,7 +110,7 @@ remain in force; cancellation, replacement, expiry and invocation return revoke
 this permission. New calls and default database callers still require a live
 model turn. An admitted agent call can create its child after parent completion
 under the original tree grants and deadline. Full routing
-(replacement/cancellation and monitor overlap decisions) and the remaining node executor
+(replacement/cancellation) and the remaining node executor
 migration remain in step 4.
 Each model request now adds a fresh volatile tail of at most 16 other open tasks
 on the same node: trigger message, phase, pending call handles/tool names and age.

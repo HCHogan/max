@@ -6,12 +6,18 @@ module Max.DB.Monitor.Occurrence
     loadDefinition,
     recordOccurrence,
     insertOccurrenceWithin,
+    PreparedOccurrence,
+    occurrenceRoute,
+    prepareOccurrenceWithin,
+    insertPreparedOccurrenceWithin,
   )
 where
 
-import Data.Aeson (Value)
+import Data.Aeson (Value (String))
+import Data.ByteString qualified as BS
 import Data.Int (Int64)
 import Data.Text (Text)
+import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.Types (Only (..))
@@ -21,6 +27,7 @@ import Max.DB.Codec (databaseNow, enumField, jsonField, jsonText)
 import Max.DB.Transaction (withTransaction)
 import Max.Monitor.Policy
 import Max.Monitor.Types (MonitorFireId, MonitorId (..))
+import Max.Node.Routing
 import Max.Task.Types (parseProfile)
 import Max.Turn.Types (AgentTurnId)
 
@@ -76,19 +83,44 @@ data OccurrenceDraft = OccurrenceDraft
   }
   deriving stock (Eq, Show)
 
-insertOccurrenceWithin :: (WithConnection :> es, IOE :> es) => MonitorDefinition -> OccurrenceDraft -> Eff es (Maybe MonitorFireId)
-insertOccurrenceWithin definition draft = do
-  -- The locked definition pins its revision and browser binding. Query only
-  -- queued work in that revision; completed history does not consume capacity.
-  queued <-
+-- | The plan is consumed under the same conversation/definition locks that
+-- supplied its buffer facts. Ingress can inspect it without recalculating policy.
+data PreparedOccurrence = PreparedOccurrence !MonitorDefinition !OccurrenceDraft !OccurrenceRoute
+
+occurrenceRoute :: PreparedOccurrence -> OccurrenceRoute
+occurrenceRoute (PreparedOccurrence _ _ route) = route
+
+prepareOccurrenceWithin :: (WithConnection :> es, IOE :> es) => MonitorDefinition -> OccurrenceDraft -> Eff es PreparedOccurrence
+prepareOccurrenceWithin definition draft = do
+  -- Discarded timer markers still need schedule acknowledgement, but they do
+  -- not consume buffer capacity or become a coalescing destination.
+  rows <-
     query
-      "SELECT count(*)::integer,min(fire_id) FROM monitor_fires fire\
-      \ WHERE fire.monitor_id=? AND fire.cancelled_at IS NULL AND fire.definition_revision=?\
-      \ AND (fire.admission_state='pending' OR (fire.task_id IS NOT NULL AND fire.started_at IS NULL AND fire.finished_at IS NULL))"
+      "SELECT (count(*) OVER ())::integer,f.fire_id,f.admission_state='pending',\
+      \ (SELECT count(*)::integer FROM monitor_fires WHERE coalesced_into=f.fire_id),\
+      \ (octet_length(to_jsonb(f.trigger_evidence)::text)+COALESCE(octet_length(f.trigger_payload::text),0)+\
+      \  (SELECT COALESCE(sum(octet_length(to_jsonb(trigger_evidence)::text)+COALESCE(octet_length(trigger_payload::text),0)),0) FROM monitor_fires WHERE coalesced_into=f.fire_id))::bigint\
+      \ FROM monitor_fires f WHERE f.monitor_id=? AND f.definition_revision=? AND f.cancelled_at IS NULL\
+      \ AND ((f.admission_state='pending' AND f.disposition='pending') OR (f.task_id IS NOT NULL AND f.started_at IS NULL AND f.finished_at IS NULL))\
+      \ ORDER BY f.fire_id LIMIT 1"
       (definition.monitorId, definition.revision)
-  let (count, pending) = case queued :: [(Int, Maybe Int64)] of [row] -> row; _ -> (0, Nothing)
-      disposition = if definition.elaborated then decideOverlap definition.snapshot.overlap definition.snapshot.capacity count else PendingOccurrence
-      coalesced = if disposition == CoalescedOccurrence then pending else Nothing
+  let buffer = case rows of
+        [(count, fire, mutable, messages, bytes)] -> OccurrenceBuffer count (Just (MergeCandidate fire mutable messages bytes))
+        _ -> OccurrenceBuffer 0 Nothing
+      size text = fromIntegral (BS.length (TE.encodeUtf8 text))
+      incomingBytes = size (jsonText (String draft.evidence)) + maybe 0 (size . jsonText) draft.payload
+      route = if definition.elaborated then routeOccurrence definition.snapshot.overlap definition.snapshot.capacity incomingBytes buffer else BufferOccurrence
+  pure (PreparedOccurrence definition draft route)
+
+insertOccurrenceWithin :: (WithConnection :> es, IOE :> es) => MonitorDefinition -> OccurrenceDraft -> Eff es (Maybe MonitorFireId)
+insertOccurrenceWithin definition draft = prepareOccurrenceWithin definition draft >>= insertPreparedOccurrenceWithin
+
+insertPreparedOccurrenceWithin :: (WithConnection :> es, IOE :> es) => PreparedOccurrence -> Eff es (Maybe MonitorFireId)
+insertPreparedOccurrenceWithin (PreparedOccurrence definition draft route) = do
+  let (disposition, coalesced, failure) = case route of
+        BufferOccurrence -> (PendingOccurrence, Nothing, Nothing)
+        MergeInto target -> (CoalescedOccurrence, Just target, Nothing)
+        RecordOverflow reason -> (OverflowOccurrence, Nothing, Just (overflowReason reason))
       discarded = disposition == CoalescedOccurrence || disposition == OverflowOccurrence
   now <- databaseNow
   inserted <-
@@ -109,7 +141,7 @@ insertOccurrenceWithin definition draft = do
         dispositionText disposition,
         coalesced,
         if discarded && not definition.timed then Just now else Nothing,
-        if disposition == OverflowOccurrence then Just ("bounded monitor queue full" :: Text) else Nothing
+        failure
       )
   pure $ case inserted of [Only fire] -> Just fire; _ -> Nothing
 

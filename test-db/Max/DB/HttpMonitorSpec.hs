@@ -122,6 +122,18 @@ spec pool = before_ (truncateAll pool) $ describe "HTTP monitors" $ do
     counts <- withDb pool (query "SELECT fire_count FROM monitors" ())
     counts `shouldBe` [Only (2 :: Int)]
 
+  it "serializes concurrent root routing decisions without exceeding durable capacity" $ do
+    hook <- arm pool defaultSpec
+    void $ withDb pool (execute "UPDATE monitors SET overlap_policy='queue',queue_limit=3 WHERE monitor_id=?" (Only hook.monitor.mrMonitorId))
+    outcomes <- mapConcurrently (\n -> (n,) <$> receive pool hook (Just (T.pack (show n))) event) [1 .. 20 :: Int]
+    length [() | (_, HttpAccepted) <- outcomes] `shouldBe` 3
+    length [() | (_, HttpBusy) <- outcomes] `shouldBe` 17
+    countFires pool `shouldReturn` 3
+    void $ withDb pool (execute "UPDATE monitor_fires SET cancelled_at=now(),disposition='cancelled' WHERE fire_id=(SELECT min(fire_id) FROM monitor_fires)" ())
+    retryKey : _ <- pure [n | (n, HttpBusy) <- outcomes]
+    receive pool hook (Just (T.pack (show retryKey))) event `shouldReturn` HttpAccepted
+    countFires pool `shouldReturn` 4
+
   it "admits legacy research snapshots without changing grants or trusting event JSON" $ do
     (turn, message, actor) <- seed pool 900 1
     let grants = Map.singleton "context_search" "frozen"

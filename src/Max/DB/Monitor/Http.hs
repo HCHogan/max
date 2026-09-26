@@ -22,8 +22,8 @@ import Max.DB.Monitor.Occurrence
 import Max.DB.Transaction (withTransaction)
 import Max.Hash (jsonHash)
 import Max.Monitor.Control (HttpMonitorSpec (..), MonitorArmError)
-import Max.Monitor.Policy
 import Max.Monitor.Types
+import Max.Node.Routing (OccurrenceRoute (..))
 import Max.Platform.Types (PrincipalId)
 import Max.Task.Types (profileName)
 import Max.Turn.Types (AgentTurnRef)
@@ -96,54 +96,29 @@ receiveHttpMonitor hook token eventId payload = withTransaction $ do
         else do
           limits <-
             query
-              "SELECT status='armed' AND (max_fire_count IS NULL OR fire_count<max_fire_count),\
-              \ cooldown_until IS NULL OR cooldown_until<=?,\
-              \ (SELECT count(*)::integer FROM monitor_fires f WHERE f.monitor_id=m.monitor_id\
-              \ AND f.cancelled_at IS NULL AND f.definition_revision=m.definition_revision\
-              \ AND (f.admission_state='pending' OR (f.task_id IS NOT NULL AND f.started_at IS NULL AND f.finished_at IS NULL)))\
-              \ FROM monitors m WHERE monitor_id=?"
+              "SELECT status='armed' AND (max_fire_count IS NULL OR fire_count<max_fire_count), cooldown_until IS NULL OR cooldown_until<=? FROM monitors WHERE monitor_id=?"
               (now, definition.monitorId)
-          case limits :: [(Bool, Bool, Int)] of
-            [(False, _, _)] -> pure HttpGone
-            [(True, ready, count)]
-              | not ready || decideOverlap definition.snapshot.overlap definition.snapshot.capacity count == OverflowOccurrence ->
-                  pure HttpBusy
-              | otherwise -> do
-                  room <-
-                    if decideOverlap definition.snapshot.overlap definition.snapshot.capacity count == CoalescedOccurrence
-                      then coalescingRoom definition
-                      else pure True
-                  if not room
-                    then pure HttpBusy
-                    else do
-                      key <- maybe (liftIO (("http:" <>) . UUID.toText <$> UUID.nextRandom)) pure explicitKey
-                      inserted <-
-                        insertOccurrenceWithin
-                          definition
-                          (OccurrenceDraft key now Nothing "HTTP webhook event (untrusted external data)" (Just payload) True)
-                      if isJust inserted
-                        then do
-                          void $
-                            execute
-                              "UPDATE monitors SET fire_count=fire_count+1,cooldown_until=?::timestamptz+cooldown_seconds*interval '1 second',\
-                              \ status=CASE WHEN fire_count+1>=max_fire_count THEN 'expired' ELSE status END,\
-                              \ status_reason=CASE WHEN fire_count+1>=max_fire_count THEN 'max_fire_count' ELSE status_reason END,\
-                              \ updated_at=now() WHERE monitor_id=?"
-                              (now, definition.monitorId)
-                          pure HttpAccepted
-                        else pure HttpDuplicate
+          case limits :: [(Bool, Bool)] of
+            [(False, _)] -> pure HttpGone
+            [(True, False)] -> pure HttpBusy
+            [(True, True)] -> do
+              key <- maybe (liftIO (("http:" <>) . UUID.toText <$> UUID.nextRandom)) pure explicitKey
+              prepared <- prepareOccurrenceWithin definition (OccurrenceDraft key now Nothing "HTTP webhook event (untrusted external data)" (Just payload) True)
+              case occurrenceRoute prepared of
+                -- Retriable ingress declines before consuming the key or budget.
+                -- Durable producers persist this same routing decision instead.
+                RecordOverflow _ -> pure HttpBusy
+                _ -> do
+                  inserted <- insertPreparedOccurrenceWithin prepared
+                  if isJust inserted
+                    then do
+                      void $
+                        execute
+                          "UPDATE monitors SET fire_count=fire_count+1,cooldown_until=?::timestamptz+cooldown_seconds*interval '1 second',\
+                          \ status=CASE WHEN fire_count+1>=max_fire_count THEN 'expired' ELSE status END,\
+                          \ status_reason=CASE WHEN fire_count+1>=max_fire_count THEN 'max_fire_count' ELSE status_reason END,\
+                          \ updated_at=now() WHERE monitor_id=?"
+                          (now, definition.monitorId)
+                      pure HttpAccepted
+                    else pure HttpDuplicate
             _ -> pure HttpGone
-    -- A dispatched Job already owns its inputs. Before dispatch, leave room
-    -- for the input envelope and stay below admission's 80-observation limit.
-    coalescingRoom definition = do
-      rows <-
-        query
-          "SELECT f.admission_state='pending' AND\
-          \ (SELECT count(*)<64 AND COALESCE(sum(octet_length(trigger_payload::text)),0)\
-          \  +octet_length(f.trigger_payload::text)+octet_length(?::text)<=131072\
-          \  FROM monitor_fires WHERE coalesced_into=f.fire_id)\
-          \ FROM monitor_fires f WHERE f.monitor_id=? AND f.definition_revision=? AND f.cancelled_at IS NULL\
-          \ AND (f.admission_state='pending' OR (f.task_id IS NOT NULL AND f.started_at IS NULL AND f.finished_at IS NULL))\
-          \ ORDER BY f.fire_id LIMIT 1"
-          (jsonText payload, definition.monitorId, definition.revision)
-      pure (rows == [Only True])

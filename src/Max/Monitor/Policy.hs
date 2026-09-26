@@ -1,4 +1,4 @@
--- | Frozen monitor definition and overlap decisions. Occurrence input is
+-- | Frozen monitor definition and stored policy names. Occurrence input is
 -- data; all authority comes from the arm-time ceiling and current owner.
 module Max.Monitor.Policy
   ( OverlapPolicy (..),
@@ -7,7 +7,6 @@ module Max.Monitor.Policy
     OccurrenceDisposition (..),
     dispositionText,
     parseOccurrenceDisposition,
-    decideOverlap,
     DefinitionSnapshot (..),
   )
 where
@@ -49,11 +48,6 @@ parseOccurrenceDisposition = \case
   "cancelled" -> Just CancelledOccurrence
   _ -> Nothing
 
-decideOverlap :: OverlapPolicy -> Int -> Int -> OccurrenceDisposition
-decideOverlap Coalesce _ queued | queued > 0 = CoalescedOccurrence
-decideOverlap QueueOccurrences capacity queued | queued >= capacity = OverflowOccurrence
-decideOverlap _ _ _ = PendingOccurrence
-
 data DefinitionSnapshot = DefinitionSnapshot
   { goal :: !Text,
     grants :: !(Map Text Text),
@@ -85,10 +79,10 @@ instance FromJSON DefinitionSnapshot where
   parseJSON = withObject "monitor definition snapshot" $ \fields -> do
     capability <- fields .: "profile" >>= maybe (fail "invalid monitor task profile") pure . parseProfile
     overlap <- fields .: "overlap" >>= maybe (fail "invalid monitor overlap policy") pure . parseOverlapPolicy
-    ceiling <- fields .: "grants" >>= withObject "effect ceiling" (\stored -> stored .:? "tool_grants" .!= mempty)
+    frozenGrants <- fields .: "grants" >>= withObject "effect ceiling" (\stored -> stored .:? "tool_grants" .!= mempty)
     DefinitionSnapshot
       <$> fields .: "goal"
-      <*> pure ceiling
+      <*> pure frozenGrants
       <*> fields .: "required_role"
       <*> pure capability
       <*> fields .: "change_only"
