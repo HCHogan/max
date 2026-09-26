@@ -41,7 +41,7 @@ import Max.Skill.Contract (Contract, parseContract)
 import Max.Skill.Package
 import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Task.Policy (treeToolCalls)
-import Max.Task.State (TaskStatus (Failed))
+import Max.Task.State (TaskStatus (Failed, Succeeded))
 import Max.Task.Types (JobResult (..), JobRun (..), JobSpec (..), JobView (..), TaskProfile (Basic))
 import Max.Tasks (TaskCancelled (..), TurnRuntime, beginTurnRuntime, finishTurnRuntime, newTaskRegistry, turnAcceptsWork)
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
@@ -143,6 +143,33 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     Jobs.authorizeJobPublication running.jobs frontend.atrTurnId `shouldReturn` False
     Jobs.detachJobNotice running.jobs frontend.atrTurnId
     atomically (Router.referencedOwners running.jobs.resultRouter) `shouldReturn` Set.empty
+
+  it "allows an admitted background call to checkpoint and settle after the model task finishes" $ do
+    running <- runningJob pool Basic Map.empty
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    steering <- newTVarIO False
+    let runner =
+          echoTool
+            { toolRunner = LegacyRunner $ \value -> do
+                liftIO (putMVar entered () >> takeMVar release)
+                allowed <- liftIO (Jobs.authorizeJobStep running.jobs running.turn.atrTurnId (ExecutionWork CheckOnly))
+                pure (if allowed then Right value else Left "admitted background call was revoked by normal completion")
+            }
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition {tdAwait = AsyncTool}] [runner])
+    Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ -> do
+      _ <- withHost pool . runTools registry $ do
+        session <- newExecutionSession Nothing
+        executeToolBatch session (hostHooks running.jobs running.runtime) {ehInterrupt = readTVar steering >>= check} (views registry) [ToolRequest "detached" "echo" args]
+      Jobs.completeJob running.jobs running.job.run Succeeded (JobResult "call still running" Nothing)
+      withDb pool (finishAgentTurn running.turn TurnSucceeded 1 Nothing)
+      Async.withAsync (finishTurnRuntime running.tasks running.runtime) $ \closing -> do
+        timeout 1000000 (atomically (turnAcceptsWork running.tasks running.turn.atrTurnId >>= check . not)) `shouldReturn` Just ()
+        Jobs.authorizeJobStep running.jobs running.turn.atrTurnId (ExecutionWork ReserveCall) `shouldReturn` False
+        putMVar release ()
+        timeout 3000000 (Async.wait closing) `shouldReturn` Just ()
+      states running.turn `shouldReturn` [("echo", "succeeded")]
+      Jobs.authorizeJobStep running.jobs running.turn.atrTurnId (ExecutionWork CheckOnly) `shouldReturn` False
 
   it "records a JavaScript syntax failure before any leaf as failed-before-effect" $ do
     (jobs, turn, runtime) <- fixture

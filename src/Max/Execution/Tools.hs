@@ -104,7 +104,7 @@ data ExecutionHooks es = ExecutionHooks
     ehFinish :: JournalExecution -> JournalFinish -> Eff es (),
     ehAcquireGuest :: Eff es (Maybe (IO ())),
     ehInterrupt :: STM.STM (),
-    ehRetain :: Async ToolInvocation -> Eff es (),
+    ehRetain :: Async ToolInvocation -> Async ToolInvocation -> Eff es (),
     ehActor :: IO (Maybe Executor.Actor)
   }
 
@@ -128,7 +128,7 @@ executionHooks admission journal group turn =
       ehFinish = journal.ejFinish,
       ehAcquireGuest = pure (Just (pure ())),
       ehInterrupt = STM.retry,
-      ehRetain = \worker -> liftIO (retainTurnWork turn (Async.cancel worker) (void (Async.waitCatch worker))),
+      ehRetain = \call delivery -> liftIO (retainTurnWork turn (Async.cancel delivery) (Async.cancel call) (void (Async.waitCatchSTM delivery))),
       ehActor = Just <$> turnExecutor turn
     }
 
@@ -140,7 +140,7 @@ hoistExecutionHooks lower hooks =
       ehFinish = \row -> lower . hooks.ehFinish row,
       ehAcquireGuest = lower hooks.ehAcquireGuest,
       ehInterrupt = hooks.ehInterrupt,
-      ehRetain = lower . hooks.ehRetain,
+      ehRetain = \call -> lower . hooks.ehRetain call,
       ehActor = hooks.ehActor
     }
 
@@ -258,7 +258,7 @@ executeToolBatch session hooks catalog requests = mask $ \restore -> do
               pure invocation
           )
             `finally` cancel worker
-        hooks.ehRetain watcher `onException` cancel watcher
+        hooks.ehRetain worker watcher `onException` cancel watcher
         atomically $ do
           modifyTVar' session.nativeFutures (Map.insert ref worker)
           modifyTVar' owned (Map.delete index)

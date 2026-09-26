@@ -3,12 +3,13 @@
 module Max.TasksSpec (spec) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
-import Control.Concurrent.Async (cancel, race, wait, waitCatch, withAsync)
+import Control.Concurrent.Async (cancel, race, wait, waitCatch, waitCatchSTM, withAsync)
 import Control.Concurrent.STM (atomically, check)
 import Control.Monad (replicateM_, void)
 import Data.Either (isLeft, isRight)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Set qualified as Set
+import Data.Time (addUTCTime, getCurrentTime)
 import Max.Node.Executor qualified as Node
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Tasks
@@ -18,6 +19,7 @@ import Max.Tasks
     authorizeTurnOutput,
     awaitTurnSilence,
     beginTurnRuntime,
+    bindTurnDeadline,
     cancelAllTasks,
     cancelTask,
     checkTurnCancellation,
@@ -31,6 +33,7 @@ import Max.Tasks
     turnAcceptsWork,
     turnIsLive,
     turnRuntimeTaskId,
+    turnWasCancelled,
   )
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..), UserId (..))
@@ -49,6 +52,48 @@ reference n = AgentTurnRef (AgentTurnId (fromIntegral n)) (TurnOrdinal (fromInte
 
 spec :: Spec
 spec = describe "Max.Tasks" $ do
+  it "cancels retained calls at the original deadline after the model task ends" $ do
+    registry <- newTaskRegistry
+    turn <- beginTurnRuntime registry (reference 1) gid alice Nothing
+    now <- getCurrentTime
+    atomically (bindTurnDeadline registry (AgentTurnId 1) (addUTCTime 0.05 now)) `shouldReturn` True
+    atomically (bindTurnDeadline registry (AgentTurnId 1) (addUTCTime 3600 now)) `shouldReturn` True
+    never <- newEmptyMVar
+    withAsync (takeMVar never :: IO ()) $ \worker -> do
+      retainTurnWork turn (cancel worker) (cancel worker) (void (waitCatchSTM worker))
+      timeout 1000000 (finishTurnRuntime registry turn) `shouldReturn` Just ()
+      waitCatch worker >>= (`shouldSatisfy` isLeft)
+    atomically (turnWasCancelled turn) `shouldReturn` False
+    atomically (turnIsLive registry (AgentTurnId 1)) `shouldReturn` False
+
+  it "does not revoke already-settled results when cleanup runs after the deadline" $ do
+    registry <- newTaskRegistry
+    turn <- beginTurnRuntime registry (reference 1) gid alice Nothing
+    now <- getCurrentTime
+    atomically (bindTurnDeadline registry (AgentTurnId 1) (addUTCTime (-1) now)) `shouldReturn` True
+    withAsync (pure ()) $ \worker -> do
+      wait worker
+      retainTurnWork turn (cancel worker) (cancel worker) (void (waitCatchSTM worker))
+      finishTurnRuntime registry turn
+    atomically (turnWasCancelled turn) `shouldReturn` False
+
+  it "retains completed outcomes under delivery backpressure beyond the call deadline" $ do
+    registry <- newTaskRegistry
+    turn <- beginTurnRuntime registry (reference 1) gid alice Nothing
+    now <- getCurrentTime
+    atomically (bindTurnDeadline registry (AgentTurnId 1) (addUTCTime (-1) now)) `shouldReturn` True
+    release <- newEmptyMVar
+    withAsync (pure ()) $ \call ->
+      withAsync (takeMVar release :: IO ()) $ \delivery -> do
+        wait call
+        retainTurnWork turn (cancel delivery) (cancel call) (void (waitCatchSTM delivery))
+        withAsync (finishTurnRuntime registry turn) $ \closing -> do
+          timeout 20000 (wait closing) `shouldReturn` Nothing
+          atomically (turnWasCancelled turn) `shouldReturn` False
+          putMVar release ()
+          timeout 1000000 (wait closing) `shouldReturn` Just ()
+          waitCatch delivery >>= (`shouldSatisfy` isRight)
+
   it "retains detached work while releasing model admission and public output" $ do
     registry <- newTaskRegistry
     turn <- beginTurnRuntime registry (reference 1) gid alice (Just (CanonicalMessageId 7001))
@@ -58,7 +103,7 @@ spec = describe "Max.Tasks" $ do
     next <- atomically (Node.registerTask node (AgentTurnId 2) Node.NewRequest)
     release <- newEmptyMVar
     withAsync (takeMVar release) $ \worker -> do
-      retainTurnWork turn (cancel worker) (void (waitCatch worker))
+      retainTurnWork turn (cancel worker) (cancel worker) (void (waitCatchSTM worker))
       withAsync (finishTurnRuntime registry turn) $ \closing -> do
         timeout 1000000 (atomically (turnAcceptsWork registry (AgentTurnId 1) >>= check . not)) `shouldReturn` Just ()
         atomically (turnIsLive registry (AgentTurnId 1)) `shouldReturn` True
@@ -76,7 +121,7 @@ spec = describe "Max.Tasks" $ do
     turn <- beginTurnRuntime registry (reference 1) gid alice Nothing
     never <- newEmptyMVar
     withAsync (takeMVar never :: IO ()) $ \worker -> do
-      retainTurnWork turn (cancel worker) (void (waitCatch worker))
+      retainTurnWork turn (cancel worker) (cancel worker) (void (waitCatchSTM worker))
       withAsync (finishTurnRuntime registry turn) $ \closing -> do
         timeout 1000000 (atomically (turnAcceptsWork registry (AgentTurnId 1) >>= check . not)) `shouldReturn` Just ()
         cancelTask registry (turnRuntimeTaskId turn) `shouldReturn` True

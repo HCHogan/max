@@ -29,6 +29,125 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "process-owned Jobs" $ do
+  it "lets admitted calls and descendants finish after a parent's final answer while fencing new parent work" $ do
+    (tasks, jobs, request) <- fixture
+    (root, runtime) <- launch tasks jobs 1 request
+    (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    completeJob jobs root.run Succeeded (JobResult "children will report later" Nothing)
+    authorizeJobStep jobs (AgentTurnId 1) (ExecutionWork CheckOnly) `shouldReturn` True
+    forM_ [ExecutionCheckpoint, ExecutionWork ReserveCall, ExecutionWork ReserveRound] $ \step ->
+      authorizeJobStep jobs (AgentTurnId 1) step `shouldReturn` False
+    authorizeJobStep jobs (AgentTurnId 2) (ExecutionWork ReserveCall) `shouldReturn` True
+    admitJob jobs Nothing 3 (request {parent = Just root.run}) `shouldReturnSatisfying` isLeft
+    (grandchild, _) <- launch tasks jobs 3 (request {parent = Just child.run})
+    finishTurnRuntime tasks runtime
+    detachJobTurn jobs root.run
+    authorizeJobStep jobs (AgentTurnId 1) (ExecutionWork CheckOnly) `shouldReturn` False
+    authorizeJobStep jobs (AgentTurnId 3) (ExecutionWork ReserveRound) `shouldReturn` True
+    cancelJob jobs request.group request.principal False root.run.jobId "stop remaining work" `shouldReturn` Right ()
+    forM_ [child, grandchild] $ \job -> do
+      fmap (fmap (.status)) (lookupJob jobs request.group job.run.jobId) `shouldReturn` Just Cancelled
+      authorizeJobStep jobs (AgentTurnId job.run.jobId) (ExecutionWork CheckOnly) `shouldReturn` False
+
+  it "relays a child's late report after its parent has ended" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    completeJob jobs root.run Succeeded (JobResult "parent done" Nothing)
+    PublishJobNotice _ _ "parent done" <- takeJobWork jobs
+    releaseJobNotice jobs root.run
+    completeJob jobs child.run Succeeded (JobResult "late child result" Nothing)
+    Just (PublishJobNotice result _ body) <- timeout 1000000 (takeJobWork jobs)
+    result.run `shouldBe` child.run
+    body `shouldBe` "late child result"
+
+  it "returns a retained child wait after the parent ends without also publishing the report" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    withAsync (waitForChildren jobs (AgentTurnId 1) [2]) $ \joining -> do
+      timeout 20000 (wait joining) `shouldReturn` Nothing
+      completeJob jobs root.run Succeeded (JobResult "parent done" Nothing)
+      PublishJobNotice {} <- takeJobWork jobs
+      releaseJobNotice jobs root.run
+      completeJob jobs child.run Succeeded (JobResult "awaited result" Nothing)
+      Just (Right (ChildrenFinished [result])) <- timeout 1000000 (wait joining)
+      result.result `shouldBe` Just (JobResult "awaited result" Nothing)
+      timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+
+  it "keeps ended ancestors and their shared budget while live descendants survive registry pruning" $ do
+    (tasks, jobs, request) <- fixture
+    (root, runtime) <- launch tasks jobs 1 request
+    _ <- launch tasks jobs 2 (request {parent = Just root.run})
+    authorizeJobStep jobs (AgentTurnId 2) (ExecutionWork ReserveCall) `shouldReturn` True
+    completeJob jobs root.run Succeeded (JobResult "parent done" Nothing)
+    finishTurnRuntime tasks runtime
+    detachJobTurn jobs root.run
+    PublishJobNotice {} <- takeJobWork jobs
+    releaseJobNotice jobs root.run
+    forM_ [3 .. 270] $ \identifier -> do
+      Right other <- admitJob jobs Nothing identifier request
+      completeJob jobs other.run Succeeded (JobResult "done" Nothing)
+      PublishJobNotice {} <- takeJobWork jobs
+      releaseJobNotice jobs other.run
+    Just retained <- lookupJob jobs request.group root.run.jobId
+    retained.calls `shouldBe` 1
+    authorizeJobStep jobs (AgentTurnId 2) (ExecutionWork ReserveCall) `shouldReturn` True
+    fmap (fmap (.calls)) (lookupJob jobs request.group root.run.jobId) `shouldReturn` Just 2
+
+  it "fences a completed parent's retained call and descendants when its objective is replaced" $ do
+    (tasks, jobs, request) <- fixture
+    (root, runtime) <- launch tasks jobs 1 request
+    _ <- launch tasks jobs 2 (request {parent = Just root.run})
+    completeJob jobs root.run Succeeded (JobResult "parent done" Nothing)
+    replaceJob jobs request.group request.principal False 1 "new objective" `shouldReturn` Right ()
+    forM_ [1, 2] $ \identifier -> authorizeJobStep jobs (AgentTurnId identifier) (ExecutionWork CheckOnly) `shouldReturn` False
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+    finishTurnRuntime tasks runtime
+    detachJobTurn jobs root.run
+    LaunchJob replacement <- takeJobWork jobs
+    replacement.run.generation `shouldBe` 2
+
+  it "keeps another concurrent child wait owned when one waiter is cancelled" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    withAsync (waitForChildren jobs (AgentTurnId 1) [2]) $ \first ->
+      withAsync (waitForChildren jobs (AgentTurnId 1) [2]) $ \second -> do
+        timeout 20000 (wait first) `shouldReturn` Nothing
+        timeout 20000 (wait second) `shouldReturn` Nothing
+        completeJob jobs root.run Succeeded (JobResult "parent done" Nothing)
+        PublishJobNotice {} <- takeJobWork jobs
+        releaseJobNotice jobs root.run
+        cancel first
+        completeJob jobs child.run Succeeded (JobResult "awaited result" Nothing)
+        Just (Right (ChildrenFinished [result])) <- timeout 1000000 (wait second)
+        result.result `shouldBe` Just (JobResult "awaited result" Nothing)
+        timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+
+  it "retains a settled sibling until a multi-child wait can collect the whole batch" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (first, firstRuntime) <- launch tasks jobs 2 (request {parent = Just root.run})
+    (second, _) <- launch tasks jobs 3 (request {parent = Just root.run})
+    withAsync (waitForChildren jobs (AgentTurnId 1) [2, 3]) $ \joining -> do
+      timeout 20000 (wait joining) `shouldReturn` Nothing
+      completeJob jobs root.run Succeeded (JobResult "parent done" Nothing)
+      PublishJobNotice {} <- takeJobWork jobs
+      releaseJobNotice jobs root.run
+      completeJob jobs first.run Succeeded (JobResult "first result" Nothing)
+      finishTurnRuntime tasks firstRuntime
+      detachJobTurn jobs first.run
+      forM_ [4 .. 270] $ \identifier -> do
+        Right other <- admitJob jobs Nothing identifier request
+        completeJob jobs other.run Succeeded (JobResult "done" Nothing)
+        PublishJobNotice {} <- takeJobWork jobs
+        releaseJobNotice jobs other.run
+      completeJob jobs second.run Succeeded (JobResult "second result" Nothing)
+      Just (Right (ChildrenFinished results)) <- timeout 1000000 (wait joining)
+      map (.result) results `shouldBe` map (Just . (`JobResult` Nothing)) ["first result", "second result"]
+      timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+
   it "rejects guests immediately at the tree/global limits and releases slots once" $ do
     (tasks, jobs, request) <- fixture
     (root, _) <- launch tasks jobs 1 request

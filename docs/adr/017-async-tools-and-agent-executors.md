@@ -45,8 +45,15 @@ quota and once-only keys shared across call scopes. Native completion events
 and frontend relays carry those attachments through normal media planning;
 guest pause/resume snapshots transfer each completed leaf's attachments once.
 An explicit wait for a detached native result does not duplicate its event's
-attachments. Background-job authority after job completion remains to be
-integrated.
+attachments. Normal job completion now leaves descendants running under their
+original tree budgets and deadlines. Ended ancestors stay retained while live
+descendants depend on them. A completed job admits only checkpoints for its
+already-running calls; new model/tool reservations remain fenced. Retained native
+calls inherit the job deadline even after the model loop ends. Explicit cancel
+and replacement still revoke the old generation and its descendants. Child waits
+can outlive the parent task, and an unclaimed child report arriving after parent
+closure uses the existing frontend relay. Call-scoped database mutation authority
+after the model turn's terminal checkpoint remains to be integrated.
 Full routing
 (child relays, replacement/cancellation and monitor fires), combined
 observation bounds and the open-task tail remain in step 4. Amends

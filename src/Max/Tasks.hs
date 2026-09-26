@@ -19,6 +19,7 @@ module Max.Tasks
     turnEvents,
     lookupTurnEvents,
     bindTurnEvents,
+    bindTurnDeadline,
     turnObservationCursor,
     setTurnObservationCursor,
     setTurnExecutor,
@@ -48,7 +49,7 @@ import Control.Exception (Exception (..), asyncExceptionFromException, asyncExce
 import Control.Monad (filterM, unless, when)
 import Data.Bifunctor (second)
 import Data.Int (Int64)
-import Data.List (sortOn)
+import Data.List (find, sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, mapMaybe)
@@ -56,7 +57,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Max.History.Types (MessageCursor)
 import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Executor
@@ -100,9 +101,14 @@ data TaskEntry = TaskEntry
     -- | A @!kill@ has been accepted for this entry.
     teKilled :: !(TVar Bool),
     teDraining :: !(TVar Bool),
-    teRetained :: !(TVar [(IO (), IO ())]),
+    teRetained :: !(TVar [RetainedWork]),
+    teDeadline :: !(TVar (Maybe UTCTime)),
     teEvents :: !(TVar Events.Task)
   }
+
+-- The call deadline stops effects, while delivery keeps ownership of a result
+-- that may already have completed. Explicit cancellation revokes both.
+data RetainedWork = RetainedWork {rwCancel :: IO (), rwExpire :: IO (), rwSettled :: STM ()}
 
 -- | Public snapshot of one task for @!ps@ output.
 data TaskInfo = TaskInfo
@@ -146,6 +152,17 @@ bindTurnEvents registry turn events = do
       writeTVar entry.teEvents events
       pure True
     [] -> pure False
+
+-- | Background scopes retain the original tree deadline while native calls
+-- outlive their model task. Rebinding cannot extend that deadline.
+bindTurnDeadline :: TaskRegistry -> AgentTurnId -> UTCTime -> STM Bool
+bindTurnDeadline registry turn deadline = do
+  (_, entries) <- readTVar registry.trState
+  case find ((== turn) . entryTurnId) (Map.elems entries) of
+    Nothing -> pure False
+    Just entry -> do
+      modifyTVar' entry.teDeadline (Just . maybe deadline (min deadline))
+      pure True
 
 turnObservationCursor :: TurnRuntime -> IO (Maybe MessageCursor)
 turnObservationCursor = readTVarIO . (.trObservationCursor)
@@ -195,6 +212,7 @@ beginTurnRuntime reg ref gid uid mTrigger = do
     events <- Events.newNode >>= Events.newTask >>= newTVar
     draining <- newTVar False
     retained <- newTVar []
+    deadline <- newTVar Nothing
     let tid = TaskId ("t" <> T.pack (show (n + 1)))
         entry =
           TaskEntry
@@ -210,6 +228,7 @@ beginTurnRuntime reg ref gid uid mTrigger = do
               teKilled = killed,
               teDraining = draining,
               teRetained = retained,
+              teDeadline = deadline,
               teEvents = events
             }
     writeTVar reg.trState (n + 1, Map.insert tid entry m)
@@ -292,15 +311,15 @@ checkTurnCancellation turn = do
 
 -- | Native calls detached by an interrupted await retain the execution scope.
 -- The cancellation and join actions come from host-owned Async handles.
-retainTurnWork :: TurnRuntime -> IO () -> IO () -> IO ()
-retainTurnWork turn cancel await = mask $ \restore -> do
+retainTurnWork :: TurnRuntime -> IO () -> IO () -> STM () -> IO ()
+retainTurnWork turn cancel expire await = mask $ \restore -> do
   accepted <- atomically $ do
     draining <- readTVar turn.trEntry.teDraining
     killed <- readTVar turn.trEntry.teKilled
     if draining || killed
       then pure False
       else do
-        modifyTVar' turn.trEntry.teRetained ((cancel, await) :)
+        modifyTVar' turn.trEntry.teRetained (RetainedWork cancel expire await :)
         pure True
   unless accepted (restore cancel)
 
@@ -317,14 +336,31 @@ finishTurnRuntime reg turn = mask $ \restore -> do
     writeTVar entry.teDraining True
     retained <- readTVar entry.teRetained
     unless (null retained) (writePhase entry now "detached calls")
-    writeTVar entry.teCancel (Just (mapM_ fst retained))
+    writeTVar entry.teCancel (Just (mapM_ (.rwCancel) retained))
     killed <- readTVar entry.teKilled
     pure (retained, killed)
-  let cancel = mapM_ fst retained
+  let cancel = mapM_ (.rwCancel) retained
+      await = mapM_ (.rwSettled) retained
+      drain = do
+        deadline <- readTVarIO turn.trEntry.teDeadline
+        case deadline of
+          Just deadlineAt | not (null retained) -> do
+            current <- getCurrentTime
+            let micros = fromInteger (max 0 (min (toInteger (maxBound :: Int)) (ceiling (diffUTCTime deadlineAt current * 1000000))))
+            timer <- registerDelay micros
+            settled <-
+              restore . atomically $
+                (await >> pure True)
+                  `orElse` ( do
+                               readTVar timer >>= check
+                               pure False
+                           )
+            unless settled (mapM_ (.rwExpire) retained >> restore (atomically await))
+          _ -> restore (atomically await)
       remove = atomically $ do
         writeTVar turn.trEntry.teRetained []
         modifyTVar' reg.trState (second (Map.delete turn.trEntry.teId))
-  (when killed cancel >> restore (mapM_ snd retained) `onException` cancel) `finally` remove
+  (when killed cancel >> drain `onException` cancel) `finally` remove
 
 -- | Message ids in @gid@ that some turn is already handling: triggers
 -- belonging to live dispatches.  'Max.Prompt.buildContext' uses this
