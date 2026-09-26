@@ -79,7 +79,12 @@ canonical output provenance identifies the producing root task. Detached native
 calls now retain the execution runtime until they settle: the root executor is
 released first, new model/tool admission and publication are fenced, and browser
 teardown and shutdown-slot release wait for these calls. Kill/shutdown cancel
-retained calls. Native completions now pass through `Node.Router`: an open task
+retained calls. Shutdown marks the task registry stopping in the same transaction
+as Jobs admission closes. Already-draining foreground and completed-job runtimes
+are revoked before cancellation callbacks run; runtimes that close later see the
+same flag and cancel retained work before releasing browser and dispatch scopes.
+The already-completed job report keeps its terminal result. Native completions
+now pass through `Node.Router`: an open task
 observes a `Settled` event, while a closed task gets a frontend relay under the
 original catalog ceiling. Results remain owned until observation or relay;
 closing after delivery but before observation also relays exactly once. The

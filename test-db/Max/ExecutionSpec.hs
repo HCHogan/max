@@ -288,6 +288,37 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
       atomically (Router.releaseRelay jobs.resultRouter relay)
       Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork CheckOnly) `shouldReturn` False
 
+  it "journals shutdown cancellation of a retained native call after its foreground model has finished" $ do
+    (turn, message, principal) <- seed pool 900 1
+    tasks <- newTaskRegistry
+    jobs <- Jobs.newJobs tasks
+    runtime <- beginTurnRuntime tasks turn (GroupId 900) (UserId 1) (Just message)
+    let context =
+          mkToolContext
+            (TurnIdentity (GroupId 900) message (UserId 1) (UserId 99) principal Nothing Nothing)
+            (TurnCapabilities False False False noAdvertisedCaps False Map.empty Nothing False)
+    origin <- Jobs.resultOrigin jobs runtime context
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    steering <- newTVarIO False
+    effects <- newIORef (0 :: Int)
+    let runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (putMVar entered () >> takeMVar release >> modifyIORef' effects (+ 1)) >> pure (Right value)}
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition {tdAwait = AsyncTool}] [runner])
+    Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ -> do
+      _ <- withHost pool . runTools registry $ do
+        session <- newExecutionSession Nothing
+        setExecutionResultSink session (\ref invocation -> atomically (Router.deliverResult jobs.resultRouter origin ref (outcomeEnvelope invocation.tiOutcome) invocation.tiMedia))
+        executeToolBatch session (hostHooks jobs runtime) {ehInterrupt = readTVar steering >>= check} (views registry) [ToolRequest "detached" "echo" args]
+      withDb pool (finishAgentTurn turn TurnSucceeded 1 Nothing)
+      Async.withAsync (finishTurnRuntime tasks runtime) $ \closing -> do
+        timeout 1000000 (atomically (turnAcceptsWork tasks turn.atrTurnId >>= check . not)) `shouldReturn` Just ()
+        timeout 3000000 (Jobs.closeJobs jobs) `shouldReturn` Just []
+        timeout 3000000 (Async.wait closing) `shouldReturn` Just ()
+      states turn `shouldReturn` [("echo", "outcome-unknown")]
+      readIORef effects `shouldReturn` 0
+      atomically (turnWasCancelled runtime) `shouldReturn` True
+      timeout 20000 (atomically (Router.takeDelivery jobs.resultRouter)) `shouldReturn` Nothing
+
   it "lets an admitted native memory write commit after turn closure and revokes its call authority on return" $ do
     running <- runningJob pool Basic Map.empty
     output <- newTurnOutputContext running.turn

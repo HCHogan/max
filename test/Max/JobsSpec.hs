@@ -1,9 +1,9 @@
 module Max.JobsSpec (Max.JobsSpec.spec) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
-import Control.Concurrent.Async (cancel, concurrently, mapConcurrently, poll, wait, withAsync)
-import Control.Concurrent.STM (STM, atomically, retry)
-import Control.Monad (forM_, replicateM, replicateM_)
+import Control.Concurrent.Async (cancel, concurrently, mapConcurrently, poll, wait, waitCatch, waitCatchSTM, withAsync)
+import Control.Concurrent.STM (STM, atomically, check, retry)
+import Control.Monad (forM_, replicateM, replicateM_, void)
 import Data.Aeson (Value (..), object, (.=))
 import Data.ByteString qualified as BS
 import Data.Either (isLeft, isRight)
@@ -524,6 +524,41 @@ spec = describe "process-owned Jobs" $ do
     admitJob jobs Nothing 4 request >>= (`shouldSatisfy` isLeft)
     timeout 20_000 (takeWork jobs) `shouldReturn` Nothing
     closeJobs jobs `shouldReturn` []
+
+  it "cancels retained foreground and completed-job work at shutdown without replacing the final report" $ do
+    (tasks, jobs, request) <- fixture
+    (job, background) <- launch tasks jobs 1 request
+    foreground <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
+    completeJob jobs job.run Succeeded (JobResult "already finished" Nothing)
+    let retained runtime action = do
+          never <- newEmptyMVar
+          withAsync (takeMVar never :: IO ()) $ \call -> do
+            retainTurnWork runtime (cancel call) (cancel call) (void (waitCatchSTM call))
+            withAsync (finishTurnRuntime tasks runtime) $ \closing -> do
+              timeout 1000000 (atomically (turnAcceptsWork tasks (turnRuntimeAgentTurn runtime).atrTurnId >>= check . not)) `shouldReturn` Just ()
+              action
+              timeout 1000000 (wait closing) `shouldReturn` Just ()
+              waitCatch call >>= (`shouldSatisfy` isLeft)
+              atomically (turnWasCancelled runtime) `shouldReturn` True
+    retained background . retained foreground $ do
+      notices <- closeJobs jobs
+      map (.status) notices `shouldBe` [Succeeded]
+      map (.result) notices `shouldBe` [Just (JobResult "already finished" Nothing)]
+      closeJobs jobs `shouldReturn` []
+
+  it "leaves active foreground owners unsignalled and cancels calls retained after shutdown begins" $ do
+    (tasks, jobs, request) <- fixture
+    foreground <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
+    closeJobs jobs `shouldReturn` []
+    atomically (turnAcceptsWork tasks (AgentTurnId 99)) `shouldReturn` True
+    atomically (turnWasCancelled foreground) `shouldReturn` False
+    never <- newEmptyMVar
+    withAsync (takeMVar never :: IO ()) $ \call -> do
+      retainTurnWork foreground (cancel call) (cancel call) (void (waitCatchSTM call))
+      timeout 1000000 (finishTurnRuntime tasks foreground) `shouldReturn` Just ()
+      waitCatch call >>= (`shouldSatisfy` isLeft)
+      atomically (turnWasCancelled foreground) `shouldReturn` True
+    listTasks tasks Nothing >>= (`shouldSatisfy` null)
 
   it "includes an unclaimed final result but does not replay a notice already publishing" $ do
     (tasks, jobs, request) <- fixture

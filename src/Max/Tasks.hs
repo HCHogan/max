@@ -49,6 +49,7 @@ module Max.Tasks
     cancelAgentTurnTask,
     controlAgentTurnTask,
     cancelAllTasks,
+    stopRetainedTasks,
     inFlightTriggers,
 
     -- * Exception
@@ -58,7 +59,7 @@ where
 
 import Control.Concurrent.STM
 import Control.Exception (Exception (..), asyncExceptionFromException, asyncExceptionToException, finally, mask, onException, throwIO)
-import Control.Monad (filterM, forM, unless, when)
+import Control.Monad (filterM, forM, unless, void, when)
 import Data.Bifunctor (second)
 import Data.Int (Int64)
 import Data.List (find, sortOn)
@@ -142,12 +143,13 @@ data TaskInfo = TaskInfo
   }
   deriving stock (Show)
 
-newtype TaskRegistry = TaskRegistry
-  { trState :: TVar (Int, Map TaskId TaskEntry)
+data TaskRegistry = TaskRegistry
+  { trState :: TVar (Int, Map TaskId TaskEntry),
+    trStopping :: TVar Bool
   }
 
 newTaskRegistry :: IO TaskRegistry
-newTaskRegistry = TaskRegistry <$> newTVarIO (0, Map.empty)
+newTaskRegistry = TaskRegistry <$> newTVarIO (0, Map.empty) <*> newTVarIO False
 
 turnEvents :: TurnRuntime -> STM Events.Task
 turnEvents = readTVar . (.trEntry.teEvents)
@@ -435,6 +437,8 @@ finishTurnRuntime reg turn = mask $ \restore -> do
     retained <- readTVar entry.teRetained
     unless (null retained) (writePhase entry now "detached calls")
     writeTVar entry.teCancel (Just (mapM_ (.rwCancel) retained))
+    stopping <- readTVar reg.trStopping
+    when (stopping && not (null retained)) $ void (controlEntry entry Events.Cancel)
     killed <- readTVar entry.teKilled
     pure (retained, killed)
   let cancel = mapM_ (.rwCancel) retained
@@ -545,6 +549,17 @@ cancelAllTasks reg = do
     traverse (`controlEntry` Events.Cancel) (Map.elems m)
   sequence_ (catMaybes acts)
   pure (length acts)
+
+-- | Shutdown stops detached work once its model task closes; active owners
+-- keep their existing shutdown path. Revoke already-draining runtimes and set
+-- the flag atomically; the caller signals after the shutdown state commits.
+-- A later finishTurnRuntime observes the flag in its own closing transaction.
+stopRetainedTasks :: TaskRegistry -> STM [IO ()]
+stopRetainedTasks reg = do
+  writeTVar reg.trStopping True
+  (_, entries) <- readTVar reg.trState
+  draining <- filterM (readTVar . (.teDraining)) (Map.elems entries)
+  catMaybes <$> traverse (`controlEntry` Events.Cancel) draining
 
 -- | Read in the same STM transaction as job admission and budget reservation.
 turnIsLive :: TaskRegistry -> AgentTurnId -> STM Bool

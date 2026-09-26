@@ -832,9 +832,10 @@ closeJobs jobs = do
             notices = [updated.view | entry <- Map.elems entries, needsNotice entry, Just updated <- [lookupRun stopped entry.view.run]]
             fence entry = entry {reportSource = NoReport, deliveryVersion = entry.deliveryVersion + if unbound entry then 1 else 0}
         writeTVar jobs.entries (fmap fence stopped)
+        retained <- Tasks.stopRetainedTasks jobs.tasks
         cancellations <- revokeChanges jobs entries stopped
         Router.flush jobs.resultRouter
-        pure (notices, cancellations)
+        pure (notices, retained <> cancellations)
   sequence_ signals
   pure notices
 
