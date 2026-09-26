@@ -1,8 +1,11 @@
+{-# LANGUAGE PatternSynonyms #-}
+
 -- | Completion messages and JSON codecs, also used by recorded-request evaluation.
-module Max.LLM.Types (ContentBlock (..), ChatMessage (..), ToolCall (..), ChatResponse (..), TokenUsage (..), TokenPrices (..), CallCost (..), priceUsage, parseToolCall) where
+module Max.LLM.Types (ContentBlock (..), ChatMessage (..), ToolCall (..), ChatResponse (ContentResp, RawContentResp, InterruptedResp, ToolCallsResp), assistantMessage, TokenUsage (..), TokenPrices (..), CallCost (..), priceUsage, parseToolCall) where
 
 import Control.Applicative ((<|>))
 import Data.Aeson
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Parser)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Maybe (fromMaybe)
@@ -51,10 +54,11 @@ data ChatMessage
     -- is the OpenAI content-block array
     -- (@content: [{type:text,...}, {type:image_url,...}, ...]@).
     MsgUserBlocks ![ContentBlock]
-  | -- | Plain assistant text response.  Any 'reasoning_content' from
-    -- the original response is dropped — per DeepSeek docs it's not
-    -- needed in subsequent turns when no tool call happened.
+  | -- | Synthetic or historical assistant text without a provider message.
     MsgAssistant !Text
+  | -- | A provider final answer retained for another poll of the same task.
+    -- Keep opaque reasoning/signatures; the text is only its visible content.
+    MsgAssistantRaw !Value !Text
   | -- | Assistant chose to call one or more tools.  Carries the
     -- raw provider message, including opaque reasoning, unchanged into the next
     -- tool round. The parsed calls are used for execution only.
@@ -76,8 +80,8 @@ data ToolCall = ToolCall
 
 -- | What the model decided this turn.
 data ChatResponse
-  = -- | A plain text answer.  The loop is done.
-    ContentResp !Text
+  = -- | A final answer can still be followed by a poll after steering.
+    ContentResponse !(Maybe Value) !Text
   | -- | Usable partial text, with an explicit transport failure. Never success.
     InterruptedResp !Text !ResponseFailure
   | -- | The model wants to call one or more tools.  Caller executes
@@ -85,6 +89,27 @@ data ChatResponse
     -- in 'MsgAssistantToolCalls'; 'Text' contains any accompanying narration.
     ToolCallsResp !Value !Text ![ToolCall]
   deriving stock (Show)
+
+-- | Consumers interested only in visible text can handle every final answer
+-- uniformly. Synthetic backends can construct one without a wire message.
+pattern ContentResp :: Text -> ChatResponse
+pattern ContentResp text <- ContentResponse _ text
+  where
+    ContentResp text = ContentResponse Nothing text
+
+pattern RawContentResp :: Value -> Text -> ChatResponse
+pattern RawContentResp raw text = ContentResponse (Just raw) text
+
+{-# COMPLETE ContentResp, InterruptedResp, ToolCallsResp #-}
+
+-- | The original assistant message for an observation-ordered task record.
+-- Raw fields never become the user-visible reply.
+assistantMessage :: ChatResponse -> ChatMessage
+assistantMessage = \case
+  ContentResponse (Just raw) text -> MsgAssistantRaw raw text
+  ContentResponse Nothing text -> MsgAssistant text
+  InterruptedResp text _ -> MsgAssistant text
+  ToolCallsResp raw _ calls -> MsgAssistantToolCalls raw calls
 
 -- | Provider-reported token usage for one completion.  Persisted via
 -- the interpreter's 'UsageWriter' (see @llm_usage@) and logged, so
@@ -164,6 +189,7 @@ instance ToJSON ChatMessage where
     MsgAssistant c -> object ["role" .= ("assistant" :: Text), "content" .= c]
     -- Emit the provider's message verbatim — field names and
     -- structure must survive the round-trip untouched.
+    MsgAssistantRaw raw _ -> raw
     MsgAssistantToolCalls raw _ -> raw
     MsgTool cid c ->
       object
@@ -192,7 +218,8 @@ instance FromJSON ChatMessage where
             pure (MsgAssistantToolCalls (Object o) tcs')
           _ -> do
             mC <- o .:? "content"
-            pure (MsgAssistant (fromMaybe "" mC))
+            let text = fromMaybe "" mC
+            pure (if all (`elem` ["role", "content"]) (KM.keys o) then MsgAssistant text else MsgAssistantRaw (Object o) text)
       r -> fail $ "unknown chat role: " <> T.unpack r
 
 parseToolCall :: Value -> Parser ToolCall

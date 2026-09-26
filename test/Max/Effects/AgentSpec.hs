@@ -3,9 +3,9 @@
 
 module Max.Effects.AgentSpec (spec) where
 
-import Control.Concurrent.STM qualified as STM
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async qualified as Async
+import Control.Concurrent.STM qualified as STM
 import Control.Exception (fromException)
 import Control.Monad (when)
 import Data.Aeson (Value, object, (.=))
@@ -787,7 +787,8 @@ spec = describe "Agent full loop" $ do
     tasks <- newTaskRegistry
     let nonEmpty body = if T.null (T.strip body) then Just "报告是空的" else Nothing
         checked = dispatchContext {acAnswerCheck = Just nonEmpty}
-        run answers = do
+        rawAnswer = object ["role" .= ("assistant" :: Text), "content" .= ("" :: Text), "reasoning_content" .= ("retained reasoning" :: Text)]
+        run keepRaw answers = do
           calls <- newIORef (0 :: Int)
           turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
           let provider =
@@ -798,16 +799,21 @@ spec = describe "Agent full loop" $ do
                         MsgUser note : rest -> do
                           note `shouldSatisfy` T.isInfixOf "报告是空的"
                           [() | MsgAssistant "" <- rest] `shouldBe` []
+                          when keepRaw $ case rest of
+                            MsgAssistantRaw raw "" : _ -> raw `shouldBe` rawAnswer
+                            other -> expectationFailure ("lost reasoning-only answer: " <> show other)
                         other -> expectationFailure ("missing correction: " <> show other)
-                      pure (Right (ContentResp (answers !! min roundNo (length answers - 1))))
+                      let text = answers !! min roundNo (length answers - 1)
+                      pure (Right (if keepRaw && T.null text then RawContentResp rawAnswer text else ContentResp text))
                   )
           result <- withCompactLogger ColorNever Nothing $ \logger ->
             runEff . runConcurrent . runLog "answer-check" logger LogAttention . runLLMWith provider . runTestAgent _inputs (AgentLimits 8) (const (buildToolRegistry [] [])) $
               agentTurn turn checked "fake" [MsgUser "question"] (eventSink events)
           _ <- finishTurnRuntime tasks turn
           (,) result.outcome <$> readIORef calls
-    run ["", "report"] `shouldReturn` (Answered (AgentReply "report" ""), 2)
-    run [""] `shouldReturn` (Answered (AgentReply "" ""), 3)
+    for_ [False, True] $ \keepRaw -> do
+      run keepRaw ["", "report"] `shouldReturn` (Answered (AgentReply "report" ""), 2)
+      run keepRaw [""] `shouldReturn` (Answered (AgentReply "" ""), 3)
 
   it "reconsiders an unpublished final draft when feedback arrives during generation" $ do
     events <- newIORef []
@@ -815,17 +821,20 @@ spec = describe "Agent full loop" $ do
     inbox <- newIORef ""
     tasks <- newTaskRegistry
     turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
-    let provider =
+    let raw = object ["role" .= ("assistant" :: Text), "content" .= ("draft" :: Text), "reasoning_content" .= ("opaque reasoning" :: Text), "signature" .= ("provider signature" :: Text)]
+        provider =
           LLMInterpreter
             ( \_ _ messages _ _ -> do
                 roundNo <- liftIO $ atomicModifyIORef' calls (\n -> (n + 1, n))
                 if roundNo == 0
                   then do
                     liftIO (modifyIORef' inbox (const "late correction"))
-                    pure (Right (ContentResp "draft"))
+                    pure (Right (RawContentResp raw "draft"))
                   else do
                     liftIO $ case reverse messages of
-                      MsgUser note : MsgAssistant "draft" : _ -> note `shouldSatisfy` T.isInfixOf "late correction"
+                      MsgUser note : MsgAssistantRaw replay "draft" : _ -> do
+                        replay `shouldBe` raw
+                        note `shouldSatisfy` T.isInfixOf "late correction"
                       other -> expectationFailure ("missing late correction: " <> show other)
                     pure (Right (ContentResp "corrected"))
             )

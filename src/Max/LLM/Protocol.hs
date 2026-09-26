@@ -86,7 +86,7 @@ streamFieldsOpenAI =
 -- are absent from both execution and the next request's expected tool results.
 rebuildOpenAI :: StreamAcc -> ChatResponse
 rebuildOpenAI acc = case parsedCalls acc of
-  [] -> ContentResp (stripLeadingThink acc.saText)
+  [] -> RawContentResp (withFields withoutCalls (roleField <> contentField)) (stripLeadingThink acc.saText)
   tcs ->
     ToolCallsResp
       (withFields acc.saMessage (roleField <> [("tool_calls", toJSON (map wireCall tcs))]))
@@ -97,6 +97,13 @@ rebuildOpenAI acc = case parsedCalls acc of
     roleField
       | hasKey "role" acc.saMessage = []
       | otherwise = ["role" .= ("assistant" :: Text)]
+    -- A malformed streamed tool call is never replayed without a result.
+    withoutCalls = case acc.saMessage of
+      Object fields | not (null (accToolCalls acc)) -> Object (KM.delete "tool_calls" fields)
+      raw -> raw
+    contentField
+      | hasKey "content" acc.saMessage = []
+      | otherwise = ["content" .= acc.saText]
     wireCall tc =
       object
         [ "id" .= tc.callId,
@@ -115,7 +122,7 @@ rebuildOpenAI acc = case parsedCalls acc of
 -- be absent from both replay and execution.
 rebuildAnthropic :: StreamAcc -> ChatResponse
 rebuildAnthropic acc = case parsedCalls acc of
-  [] -> ContentResp (stripLeadingThink acc.saText)
+  [] -> RawContentResp (object ["role" .= ("assistant" :: Text), "content" .= content []]) (stripLeadingThink acc.saText)
   tcs ->
     ToolCallsResp
       (object ["role" .= ("assistant" :: Text), "content" .= content tcs])
@@ -246,7 +253,7 @@ responsesFields cfg msgs tools =
     (instructions, inputItems) = responsesInput msgs
 
 -- | Split the conversation into the request's @instructions@ (system
--- text) and @input@ items.  A 'MsgAssistantToolCalls' stores the
+-- text) and @input@ items. Raw assistant messages store the
 -- provider's whole @output@ array as its raw value, so replay splices
 -- the array back in — reasoning items, encrypted content, function
 -- calls, all byte-identical.
@@ -263,9 +270,8 @@ responsesInput msgs = (instructions, concatMap item msgs)
       MsgUserBlocks blocks ->
         [object ["role" .= ("user" :: Text), "content" .= encodeMarkedBlocks withBreakpoint inputBlock blocks]]
       MsgAssistant c -> [object ["role" .= ("assistant" :: Text), "content" .= c]]
-      MsgAssistantToolCalls raw _ -> case raw of
-        Array xs -> V.toList xs
-        v -> [v]
+      MsgAssistantRaw raw _ -> rawItems raw
+      MsgAssistantToolCalls raw _ -> rawItems raw
       MsgTool cid c ->
         [ object
             [ "type" .= ("function_call_output" :: Text),
@@ -273,6 +279,8 @@ responsesInput msgs = (instructions, concatMap item msgs)
               "output" .= c
             ]
         ]
+    rawItems (Array xs) = V.toList xs
+    rawItems v = [v]
     inputBlock = \case
       TextBlock t -> object ["type" .= ("input_text" :: Text), "text" .= t]
       ImageDataUrl u -> object ["type" .= ("input_image" :: Text), "image_url" .= u]
@@ -292,8 +300,8 @@ encodeToolSpecResponses t =
 
 -- | Walk the @output@ array: @function_call@ items become tool calls
 -- (keyed by @call_id@ — that is what @function_call_output@ must echo),
--- @message@ items contribute their @output_text@.  When calls are
--- present the whole array is kept as the raw round-trip value.
+-- @message@ items contribute their @output_text@. The whole array is kept
+-- for replay, including when an answer is followed by steering.
 parseResponseResponses :: Value -> Parser (ChatResponse, Maybe TokenUsage)
 parseResponseResponses = withObject "Response" $ \o -> do
   outputs <- o .: "output" :: Parser [Value]
@@ -302,7 +310,7 @@ parseResponseResponses = withObject "Response" $ \o -> do
   let text = T.intercalate "" (concatMap messageText outputs)
   resp <- case calls of
     [] | T.null (T.strip text) -> fail "no output_text nor function_call in output"
-    [] -> pure (ContentResp text)
+    [] -> pure (RawContentResp (toJSON outputs) text)
     tcs -> pure (ToolCallsResp (toJSON outputs) text tcs)
   pure (resp, parseMaybe parseUsageResponses =<< mUsageV)
   where
@@ -352,7 +360,7 @@ rebuildResponses acc =
     Just (resp, _) -> resp
     Nothing -> ContentResp acc.saText
 
--- | Parse @choices[0].message@, preserving raw tool-call reasoning for the next
+-- | Parse @choices[0].message@, preserving raw assistant reasoning for the next
 -- request. Invalid usage metadata must not fail an otherwise valid response.
 parseResponseOpenAI :: Value -> Parser (ChatResponse, Maybe TokenUsage)
 parseResponseOpenAI = withObject "ChatResponse" $ \o -> do
@@ -378,7 +386,7 @@ parseResponseOpenAI = withObject "ChatResponse" $ \o -> do
         _ -> do
           mC <- m .:? "content"
           case mC of
-            Just c' -> pure (ContentResp (stripLeadingThink c'))
+            Just c' -> pure (RawContentResp (Object m) (stripLeadingThink c'))
             Nothing -> fail "no content nor tool_calls in message"
 
 -- | Models that inline their reasoning (MiniMax, GLM, …) open the
@@ -530,26 +538,31 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
       let content = encodeMarkedBlocks (addCacheControl ephemeralCache) anthropicBlock blocks
           anthropicBlock b =
             case b of
-                TextBlock t -> object ["type" .= ("text" :: Text), "text" .= t]
-                CacheBoundary -> object []
-                -- Anthropic has no video input type.
-                VideoDataUrl _ _ ->
-                  object ["type" .= ("text" :: Text), "text" .= ("[video：该模型协议不支持视频输入]" :: Text)]
-                ImageDataUrl url -> case splitDataUrl url of
-                  Just (mime, b64) ->
-                    object
-                      [ "type" .= ("image" :: Text),
-                        "source"
-                          .= object
-                            [ "type" .= ("base64" :: Text),
-                              "media_type" .= mime,
-                              "data" .= b64
-                            ]
-                      ]
-                  Nothing ->
-                    object ["type" .= ("text" :: Text), "text" .= ("[image]" :: Text)]
+              TextBlock t -> object ["type" .= ("text" :: Text), "text" .= t]
+              CacheBoundary -> object []
+              -- Anthropic has no video input type.
+              VideoDataUrl _ _ ->
+                object ["type" .= ("text" :: Text), "text" .= ("[video：该模型协议不支持视频输入]" :: Text)]
+              ImageDataUrl url -> case splitDataUrl url of
+                Just (mime, b64) ->
+                  object
+                    [ "type" .= ("image" :: Text),
+                      "source"
+                        .= object
+                          [ "type" .= ("base64" :: Text),
+                            "media_type" .= mime,
+                            "data" .= b64
+                          ]
+                    ]
+                Nothing ->
+                  object ["type" .= ("text" :: Text), "text" .= ("[image]" :: Text)]
        in AnthropicMsg "user" (toJSON content) : go rest
     go (MsgAssistant t : rest) = AnthropicMsg "assistant" (toJSON t) : go rest
+    go (MsgAssistantRaw raw text : rest) =
+      let content = case raw of
+            Object o | Just blocks@(Array _) <- KM.lookup "content" o -> blocks
+            _ -> toJSON text
+       in AnthropicMsg "assistant" content : go rest
     go (MsgAssistantToolCalls raw tcs : rest) =
       -- Replay the assistant turn's content blocks verbatim —
       -- thinking/text blocks must survive the round-trip.  Rebuild
@@ -589,7 +602,7 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
 -- present → 'ToolCallsResp' carrying the whole content array verbatim
 -- (thinking/text blocks included) so the next request replays the
 -- assistant turn exactly as Claude produced it.  Else if any text →
--- 'ContentResp' with the concatenation.  Usage extraction is lenient,
+-- 'RawContentResp' with the concatenation and original blocks. Usage extraction is lenient,
 -- same as the OpenAI path.
 parseResponseAnthropic :: Value -> Parser (ChatResponse, Maybe TokenUsage)
 parseResponseAnthropic = withObject "AnthropicResponse" $ \o -> do
@@ -603,7 +616,7 @@ parseResponseAnthropic = withObject "AnthropicResponse" $ \o -> do
       then pure (ToolCallsResp rawMsg (T.concat texts) toolCalls)
       else
         if not (null texts)
-          then pure (ContentResp (T.concat texts))
+          then pure (RawContentResp rawMsg (T.concat texts))
           else fail "no text nor tool_use blocks in response.content"
   mUsageV <- o .:? "usage"
   pure (resp, parseMaybe parseUsageAnthropic =<< mUsageV)

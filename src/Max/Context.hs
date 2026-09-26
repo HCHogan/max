@@ -78,6 +78,7 @@ estimateMessageTokens message =
     MsgUser content -> estimateTextTokens content
     MsgUserBlocks blocks -> sum (map estimateBlockTokens blocks)
     MsgAssistant content -> estimateTextTokens content
+    MsgAssistantRaw raw _ -> estimateLazyBytesTokens (encode raw)
     MsgAssistantToolCalls raw calls ->
       estimateLazyBytesTokens (encode raw)
         + sum

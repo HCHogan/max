@@ -81,6 +81,7 @@ recordChatResult usageWriter callWriter ctx name cfg streaming msgs tools durati
 
 responseJson :: ChatResponse -> Value
 responseJson = \case
+  RawContentResp raw t -> object ["raw" .= raw, "content" .= t]
   ContentResp t -> object ["content" .= t]
   InterruptedResp t reason -> object ["content" .= t, "interrupted" .= True, "error" .= reason]
   ToolCallsResp raw narration tcs ->

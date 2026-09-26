@@ -1,7 +1,6 @@
 module Max.Tools.Task (taskToolsFor) where
 
 import Data.Aeson
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map

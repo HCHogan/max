@@ -76,6 +76,7 @@ requestTokens anchor identity messages specs = max estimated anchored
               rest -> sum (map estimateMessageTokens rest)
       _ -> 0
     assistant MsgAssistant {} = True
+    assistant MsgAssistantRaw {} = True
     assistant MsgAssistantToolCalls {} = True
     assistant _ = False
 

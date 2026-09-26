@@ -17,8 +17,8 @@ import Max.Effects.LLM
     ToolCall (..),
     parseResponseAnthropic,
     parseResponseOpenAI,
-    priceUsage,
     parseResponseResponses,
+    priceUsage,
     rebuildAnthropic,
     rebuildOpenAI,
     stripLeadingThink,
@@ -77,6 +77,14 @@ spec = do
       case roundTrip m of
         Right (MsgAssistant t) -> t `shouldBe` "hi back"
         other -> expectationFailure $ "bad round-trip: " <> show other
+
+    it "retains opaque fields when decoding a recorded final answer" $ do
+      let raw = object ["role" .= ("assistant" :: Text), "content" .= ("answer" :: Text), "reasoning_content" .= ("opaque" :: Text)]
+      case eitherDecode (encode raw) of
+        Right message@(MsgAssistantRaw _ text) -> do
+          text `shouldBe` "answer"
+          toJSON message `shouldBe` raw
+        other -> expectationFailure (show other)
 
     -- Contract evaluation decodes recorded requests, including multimodal input.
     it "MsgUserBlocks" $ do

@@ -45,7 +45,7 @@ import Max.Agent.Failure (AgentFailure (..))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.CodeMode.Model (codeModeSpecs, executeModelBatch, executionWaitSpecs)
 import Max.Context.Working
-import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), ToolSpec, chatMeasured)
+import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), ToolSpec, assistantMessage, chatMeasured)
 import Max.Effects.ToolControl (ToolControl, runToolControl)
 import Max.Effects.ToolDirectory (ToolDirectory, listCatalogTools, listToolSpecs, runToolDirectoryDynamic)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, ToolOutputRead, defaultInlineMediaLimit, drainInlineMedia, newToolOutputQueue, runToolOutput, runToolOutputRead)
@@ -261,7 +261,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                         appended = appended' <> [MsgAssistant text],
                         turnsUsed = n + 1
                       }
-                Right (ContentResp text) -> do
+                Right response@(ContentResp text) -> do
                   -- Before publishing an untouched draft, consume feedback that arrived
                   -- during the call and let the model revise its answer.
                   lateFeedback <-
@@ -273,7 +273,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                         pure
                           AgentResult
                             { outcome = Answered (AgentReply text sent),
-                              appended = appended' <> [MsgAssistant text],
+                              appended = appended' <> [assistantMessage response],
                               turnsUsed = n + 1
                             }
                   case lateMessages of
@@ -282,13 +282,16 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                         | T.null sent && state.corrections < 2 -> do
                             logInfo "agent: final answer rejected, asking again" $
                               object ["reason" .= note, "length" .= T.length text]
-                            let newMsgs = [MsgAssistant text | not (T.null (T.strip text))] <> [MsgUser ("[system] " <> note)]
+                            let retained = case response of
+                                  RawContentResp {} -> [assistantMessage response]
+                                  _ -> [assistantMessage response | not (T.null (T.strip text))]
+                                newMsgs = retained <> [MsgUser ("[system] " <> note)]
                             go state {roundNumber = n + 1, corrections = state.corrections + 1, appended = appended' <> newMsgs, history = msgs'' <> newMsgs}
                       _ -> done
                     xs -> do
                       logInfo "agent: feedback arrived during final answer, continuing" $
                         object ["count" .= length xs]
-                      let newMsgs = MsgAssistant text : xs
+                      let newMsgs = assistantMessage response : xs
                       go state {roundNumber = n + 1, appended = appended' <> newMsgs, history = msgs'' <> newMsgs}
                 Right (ToolCallsResp raw narration tcs) -> do
                   logInfo "agent: tool calls" $
@@ -436,7 +439,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
             Right _ -> Failed reason ""
             Left err -> Failed err ""
           finalMessages = case outcome of
-            Interrupted _ reply -> [MsgAssistant reply.body]
+            Interrupted _ _ | Right response <- eres -> [assistantMessage response]
             _ -> []
       pure AgentResult {outcome, appended = appended <> [capNote] <> finalMessages, turnsUsed = n + 1}
 

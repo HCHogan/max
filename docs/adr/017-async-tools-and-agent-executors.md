@@ -4,7 +4,9 @@ Status: in progress 2026-09-26. Delivery steps 1–2 are implemented: poll-drive
 guests, shared per-call scheduling, native async interruption and paused guest
 resume/cancel using the current inbox. Projection and node scheduling (steps
 3–4), including executor yielding and detached-result routing after a task
-ends, remain in progress. Amends
+ends, remain in progress. Step 3 now preserves raw final answers (including
+reasoning and signatures) across continued polls; the task-record projection
+itself is not yet implemented. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)
 and the Wasm host ABI of [ADR-012](012-wasm-tool-execution.md). Work stays
 process-local; restart persistence is out of scope (§9).

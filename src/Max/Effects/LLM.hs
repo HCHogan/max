@@ -18,6 +18,7 @@ module Max.Effects.LLM
 
     -- * Response
     ChatResponse (..),
+    assistantMessage,
     TokenUsage (..),
     TokenPrices (..),
     CallCost (..),
