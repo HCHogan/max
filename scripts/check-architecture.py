@@ -116,6 +116,11 @@ def check_imports():
         if re.search(r"\b(IOE|liftIO|unsafePerformIO|unsafeCoerce)\b", source):
             errors.append(f"{module}: execution escape")
 
+    projection = (ROOT / "src/Max/Context/Projection.hs").read_text()
+    for dependency in IMPORT.findall(projection):
+        if dependency.startswith(("Effectful", "Max.DB.", "Max.Effects.", "System.")) or dependency in {"Max.Env", "Max.Agent.Runtime", "Max.Jobs", "Max.Conversation"}:
+            errors.append(f"Task projection acquired execution or mutable routing dependency: {dependency}")
+
     renderer = (ROOT / "src/Max/Prompt/Render.hs").read_text()
     for dependency in IMPORT.findall(renderer):
         if dependency.startswith(("Effectful", "Max.DB.", "System.")) or dependency.endswith("Store") or dependency in {"Max.Env", "Max.Util"}:

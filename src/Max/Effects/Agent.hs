@@ -27,8 +27,7 @@ where
 import Control.Concurrent (myThreadId, throwTo)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVarIO, writeTVar)
 import Control.Monad (unless, when)
-import Data.Aeson (Value (..), decodeStrict', encode)
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson (Value (..), encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
 import Data.Map.Strict qualified as Map
@@ -44,6 +43,7 @@ import Max.Agent.Execution
 import Max.Agent.Failure (AgentFailure (..))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.CodeMode.Model (codeModeSpecs, executeModelBatch, executionWaitSpecs)
+import Max.Context.Projection qualified as Projection
 import Max.Context.Working
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), ToolSpec, assistantMessage, chatMeasured)
 import Max.Effects.ToolControl (ToolControl, runToolControl)
@@ -61,8 +61,6 @@ import Max.Effects.Tools
 import Max.Execution.Tools hiding (Interrupted)
 import Max.Execution.Types (Admission (..))
 import Max.LLM.Failure (renderLLMFailure)
-import Max.Media.Vision (evictMedia, fitVisionBudget)
-import Max.ModelCatalog (ContextLimits (..))
 import Max.Reply (readyPrefix)
 import Max.Tasks
   ( TaskCancelled (..),
@@ -149,8 +147,8 @@ data LoopState = LoopState
   { context :: !AgentContext,
     roundNumber :: !Int,
     corrections :: !Int,
-    history :: ![ChatMessage],
-    appended :: ![ChatMessage]
+    observations :: !Projection.NodeLog,
+    record :: !Projection.TaskRecord
   }
 
 data Agent :: Effect where
@@ -212,14 +210,17 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
       [ChatMessage] ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
     loop workingRef session catalogRef emit initialContext turn profile messages =
-      go LoopState {context = initialContext, roundNumber = 0, corrections = 0, history = messages, appended = []}
+      go LoopState {context = initialContext, roundNumber = 0, corrections = 0, observations = Projection.emptyLog, record = Projection.newTaskRecord (Projection.logCursor Projection.emptyLog) messages}
       where
         go :: LoopState -> Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
-        go state = do
+        go state = step state >>= either pure go
+
+        -- One model poll and its result delivery. The node scheduler will own
+        -- when the next transition is admitted; records already outlive a poll.
+        step :: LoopState -> Eff (Tools : ToolDirectory : ToolOutputRead : es) (Either AgentResult LoopState)
+        step state = do
           let ctx = state.context
               n = state.roundNumber
-              msgs = state.history
-              appended = state.appended
               h = turn
           catalog <- either throwIO pure (toolFactory ctx.acTools)
           liftIO (atomically (writeTVar catalogRef catalog))
@@ -227,38 +228,38 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
           liftIO (checkTurnCancellation h)
           feedback <- raise (raise (raise (inbox.eiRead (turnRuntimeAgentTurn h))))
           settled <- drainExecutionCompletions session
-          let completed = if null settled then "" else "\n[已完成的异步调用]\n" <> TE.decodeUtf8 (LBS.toStrict (encode [object ["result" .= ref, "outcome" .= outcomeEnvelope invocation.tiOutcome] | (ref, invocation) <- settled]))
-              newNotes = inputMessages (feedback <> completed)
-              msgs' = msgs <> newNotes
-              appended' = appended <> newNotes
+          let completionNote = if null settled then "" else "\n[已完成的异步调用]\n" <> TE.decodeUtf8 (LBS.toStrict (encode [object ["result" .= ref, "outcome" .= outcomeEnvelope invocation.tiOutcome] | (ref, invocation) <- settled]))
+              newNotes = inputMessages (feedback <> completionNote)
+              observedLog = Projection.appendObservation newNotes state.observations
+              cursor = Projection.logCursor observedLog
           if n >= lims.maxTurns
-            then finalAnswer workingRef ctx h n appended' profile msgs' AgentRoundLimit
+            then Left <$> finalAnswer workingRef ctx h n profile observedLog state.record AgentRoundLimit
             else do
               liftIO (setTurnPhase h "llm")
               nativeSpecs <- listToolSpecs
               detached <- hasDetachedExecutions session
               let codeEnabled = (toolCapabilities ctx.acTools).tcSkills && Map.member "codemode" (toolSkillLoads ctx.acTools)
                   specs = nativeSpecs <> codeModeSpecs codeEnabled <> executionWaitSpecs detached
-              -- Carry trimmed history forward for prefix caching; publication tracking
-              -- starts afresh for each model call.
+              -- Publication tracking is per poll; the input is projected from
+              -- frozen observations and raw recorded outputs/results.
               sentRef <- liftIO (newTVarIO "")
-              (msgs'', eres) <- budgetedCall workingRef ctx h profile "turn" msgs' specs (Just (releaseReplyPrefix emit sentRef))
+              (prepared, eres) <- budgetedCall workingRef ctx h profile "turn" observedLog state.record cursor specs (Just (releaseReplyPrefix emit sentRef))
               checkAdmission h
               sent <- liftIO (readTVarIO sentRef)
               case eres of
-                Left AgentBudgetExhausted -> finalAnswer workingRef ctx h (n + 1) appended' profile msgs' AgentBudgetExhausted
+                Left AgentBudgetExhausted -> Left <$> finalAnswer workingRef ctx h (n + 1) profile observedLog state.record AgentBudgetExhausted
                 Left err ->
-                  pure
+                  pure . Left $
                     AgentResult
                       { outcome = Failed err sent,
-                        appended = appended',
+                        appended = Projection.taskTranscript observedLog prepared cursor,
                         turnsUsed = n + 1
                       }
                 Right (InterruptedResp text reason) ->
-                  pure
+                  pure . Left $
                     AgentResult
                       { outcome = Interrupted (AgentStreamInterrupted reason) (AgentReply text sent),
-                        appended = appended' <> [MsgAssistant text],
+                        appended = Projection.taskTranscript observedLog (Projection.recordPoll cursor (Just (MsgAssistant text)) prepared) cursor,
                         turnsUsed = n + 1
                       }
                 Right response@(ContentResp text) -> do
@@ -270,10 +271,10 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                       else pure ""
                   let lateMessages = inputMessages lateFeedback
                   let done =
-                        pure
+                        pure . Left $
                           AgentResult
                             { outcome = Answered (AgentReply text sent),
-                              appended = appended' <> [assistantMessage response],
+                              appended = Projection.taskTranscript observedLog (Projection.recordPoll cursor (Just (assistantMessage response)) prepared) cursor,
                               turnsUsed = n + 1
                             }
                   case lateMessages of
@@ -283,16 +284,17 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                             logInfo "agent: final answer rejected, asking again" $
                               object ["reason" .= note, "length" .= T.length text]
                             let retained = case response of
-                                  RawContentResp {} -> [assistantMessage response]
-                                  _ -> [assistantMessage response | not (T.null (T.strip text))]
-                                newMsgs = retained <> [MsgUser ("[system] " <> note)]
-                            go state {roundNumber = n + 1, corrections = state.corrections + 1, appended = appended' <> newMsgs, history = msgs'' <> newMsgs}
+                                  RawContentResp {} -> Just (assistantMessage response)
+                                  _ | not (T.null (T.strip text)) -> Just (assistantMessage response)
+                                  _ -> Nothing
+                                nextLog = Projection.appendObservation [MsgUser ("[system] " <> note)] observedLog
+                            pure (Right state {roundNumber = n + 1, corrections = state.corrections + 1, observations = nextLog, record = Projection.recordPoll cursor retained prepared})
                       _ -> done
                     xs -> do
                       logInfo "agent: feedback arrived during final answer, continuing" $
                         object ["count" .= length xs]
-                      let newMsgs = assistantMessage response : xs
-                      go state {roundNumber = n + 1, appended = appended' <> newMsgs, history = msgs'' <> newMsgs}
+                      let nextLog = Projection.appendObservation xs observedLog
+                      pure (Right state {roundNumber = n + 1, observations = nextLog, record = Projection.recordPoll cursor (Just (assistantMessage response)) prepared})
                 Right (ToolCallsResp raw narration tcs) -> do
                   logInfo "agent: tool calls" $
                     object
@@ -334,11 +336,11 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                   for_ executed $ \(_, event, _) -> emit (AgentToolDebug event)
                   let toolMsgs = [message | (message, _, _) <- executed]
                   imgs <- drainToolMedia
-                  let newMsgs = assembleToolRound raw tcs toolMsgs imgs
+                  let completed = Projection.recordResults (drop 1 (assembleToolRound raw tcs toolMsgs imgs)) (Projection.recordPoll cursor (Just (MsgAssistantToolCalls raw tcs)) prepared)
                       nextContext = ctx {acTools = withToolSkillLoads (concatMap (\(_, _, decision) -> controlSkillLoads decision) executed) ctx.acTools}
                   if overBudget
-                    then finalAnswer workingRef ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs) AgentBudgetExhausted
-                    else go state {context = nextContext, roundNumber = n + 1, appended = appended' <> newMsgs, history = msgs'' <> newMsgs}
+                    then Left <$> finalAnswer workingRef ctx h (n + 1) profile observedLog completed AgentBudgetExhausted
+                    else pure (Right state {context = nextContext, roundNumber = n + 1, observations = observedLog, record = completed})
 
     budgetedCall ::
       TVar (Maybe UsageAnchor, Text) ->
@@ -346,69 +348,52 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
       TurnRuntime ->
       Text ->
       Text ->
-      [ChatMessage] ->
+      Projection.NodeLog ->
+      Projection.TaskRecord ->
+      Projection.Cursor ->
       [ToolSpec] ->
       Maybe (Text -> Eff (Tools : ToolDirectory : ToolOutputRead : es) ()) ->
-      Eff (Tools : ToolDirectory : ToolOutputRead : es) ([ChatMessage], Either AgentFailure ChatResponse)
-    budgetedCall workingRef ctx turn profile source messages specs sink = do
-      (anchor, previous) <- liftIO (readTVarIO workingRef)
-      let limits = toolContextLimits ctx.acTools
-          identity = workingIdentity profile "process" limits specs
-          handle = turnHandleText (turnRuntimeAgentTurn turn).atrTurnOrdinal
-          -- Native use_skill results are protected by the working planner.
-          -- Only restore instructions absent there (nested code mode),
-          -- avoiding a second full copy of every directly loaded skill.
-          visibleInstructions = nativeSkillInstructions messages
-          missingInstructions = [load.slInstructions | load <- Map.elems (toolSkillLoads ctx.acTools), not (any (load.slInstructions `T.isInfixOf`) visibleInstructions)]
-          instructions = T.intercalate "\n\n" missingInstructions
-          skillPrefix = "[当前已加载宿主技能]\n"
-          withoutSkills = filter (\case MsgUser text -> not (skillPrefix `T.isPrefixOf` text); _ -> True) messages
-          skillFrames = [MsgUser (skillPrefix <> instructions) | not (T.null instructions)]
-          currentFrames = [m | m@(MsgUser text) <- messages, skillPrefix `T.isPrefixOf` text]
-          stableSkills =
-            if map messageFingerprint currentFrames == map messageFingerprint skillFrames
-              then messages
-              else takeWhile systemMessage withoutSkills <> skillFrames <> dropWhile systemMessage withoutSkills
-          systemMessage MsgSystem {} = True
-          systemMessage _ = False
-          -- Keep the request inside the provider's vision envelope: the
-          -- turn's oldest media give way to newer ones.
-          (visible, evicted) = maybe (stableSkills, 0) (`fitVisionBudget` stableSkills) limits.visionLimits
-      when (evicted > 0) $
-        logInfo "agent: media evicted for the vision budget" $
-          object ["evicted" .= evicted, "turn" .= handle]
-      case fitWorkingContext limits anchor identity handle previous visible specs of
-        Left detail -> pure (visible, Left (AgentContextBudget detail))
-        Right plan -> do
-          -- The tool-free wrap-up after a spent budget reserves no round.
-          admitted <-
-            if source == "wrapup"
-              then (\live -> if live then Admitted else Refused) <$> raise (raise (raise (admission.eaCheck (turnRuntimeAgentTurn turn))))
-              else raise (raise (raise (admission.eaReserveRound (turnRuntimeAgentTurn turn))))
-          case admitted of
-            Refused -> throwIO TaskCancelled
-            OverBudget -> pure (visible, Left AgentBudgetExhausted)
-            Admitted -> do
-              when plan.wpCompacted $
-                logInfo "agent: working context compacted" $
-                  object ["estimated_tokens" .= plan.wpEstimatedTokens, "input_limit" .= plan.wpLimit, "turn" .= handle]
-              result <- chatMeasured (turnCtx ctx source) {ccPromptTokens = Just plan.wpEstimatedTokens} profile plan.wpMessages specs sink
-              case result of
-                -- A server that still rejects the media gets one more request
-                -- without any, rather than failing the turn.
-                Left failure
-                  | "media_budget_exceeded" `T.isInfixOf` renderLLMFailure failure,
-                    (stripped, removed) <- evictMedia maxBound visible,
-                    removed > 0 -> do
-                      logAttention "agent: server rejected media; retrying without them" $
-                        object ["removed" .= removed, "turn" .= handle]
-                      budgetedCall workingRef ctx turn profile source stripped specs sink
-                _ -> do
-                  let nextAnchor = case result of
-                        Right (_, usage) -> observeUsage identity plan.wpMessages usage
-                        Left _ -> Nothing
-                  liftIO (atomically (writeTVar workingRef (nextAnchor, plan.wpSummary)))
-                  pure (plan.wpMessages, either (Left . AgentModelFailure) (Right . fst) result)
+      Eff (Tools : ToolDirectory : ToolOutputRead : es) (Projection.TaskRecord, Either AgentFailure ChatResponse)
+    budgetedCall workingRef ctx turn profile source observedLog record cursor specs sink = attempt False
+      where
+        attempt removeMedia = do
+          (anchor, previous) <- liftIO (readTVarIO workingRef)
+          let limits = toolContextLimits ctx.acTools
+              identity = workingIdentity profile "process" limits specs
+              handle = turnHandleText (turnRuntimeAgentTurn turn).atrTurnOrdinal
+              options = Projection.ProjectionOptions limits anchor identity handle previous (map (.slInstructions) (Map.elems (toolSkillLoads ctx.acTools))) specs removeMedia
+          case Projection.planProjection options observedLog record cursor of
+            Left detail -> pure (record, Left (AgentContextBudget detail))
+            Right projection -> do
+              let plan = projection.working
+              when (projection.evictedMedia > 0) $
+                logInfo "agent: media evicted for the vision budget" $
+                  object ["evicted" .= projection.evictedMedia, "turn" .= handle]
+              -- The tool-free wrap-up after a spent budget reserves no round.
+              admitted <-
+                if source == "wrapup"
+                  then (\live -> if live then Admitted else Refused) <$> raise (raise (raise (admission.eaCheck (turnRuntimeAgentTurn turn))))
+                  else raise (raise (raise (admission.eaReserveRound (turnRuntimeAgentTurn turn))))
+              case admitted of
+                Refused -> throwIO TaskCancelled
+                OverBudget -> pure (record, Left AgentBudgetExhausted)
+                Admitted -> do
+                  when plan.wpCompacted $
+                    logInfo "agent: working context compacted" $
+                      object ["estimated_tokens" .= plan.wpEstimatedTokens, "input_limit" .= plan.wpLimit, "turn" .= handle]
+                  result <- chatMeasured (turnCtx ctx source) {ccPromptTokens = Just plan.wpEstimatedTokens} profile plan.wpMessages specs sink
+                  case result of
+                    Left failure
+                      | "media_budget_exceeded" `T.isInfixOf` renderLLMFailure failure,
+                        projection.hasMedia -> do
+                          logAttention "agent: server rejected media; retrying without them" $ object ["turn" .= handle]
+                          attempt True
+                    _ -> do
+                      let nextAnchor = case result of
+                            Right (_, usage) -> observeUsage identity plan.wpMessages usage
+                            Left _ -> Nothing
+                      liftIO (atomically (writeTVar workingRef (nextAnchor, plan.wpSummary)))
+                      pure (projection.record, either (Left . AgentModelFailure) (Right . fst) result)
 
     -- Salvage a tool-free partial answer at the cap; it still counts as interrupted.
     finalAnswer ::
@@ -416,12 +401,12 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
       AgentContext ->
       TurnRuntime ->
       Int ->
-      [ChatMessage] ->
       Text ->
-      [ChatMessage] ->
+      Projection.NodeLog ->
+      Projection.TaskRecord ->
       AgentFailure ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
-    finalAnswer workingRef ctx h n appended profile msgs reason = do
+    finalAnswer workingRef ctx h n profile observedLog record reason = do
       logInfo "agent: limit reached, forcing final answer" $
         object ["turns" .= n, "reason" .= reason]
       liftIO (checkTurnCancellation h)
@@ -433,15 +418,18 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
               _ ->
                 "[system] 工具调用轮次已用满，别再调用任何工具了。\
                 \直接根据目前已经掌握的信息，给用户一个最终回复。"
-      (_, eres) <- budgetedCall workingRef ctx h profile "wrapup" (msgs <> [capNote]) [] Nothing
+          nextLog = Projection.appendObservation [capNote] observedLog
+          cursor = Projection.logCursor nextLog
+      (prepared, eres) <- budgetedCall workingRef ctx h profile "wrapup" nextLog record cursor [] Nothing
       let outcome = case eres of
             Right (ContentResp text) | not (T.null (T.strip text)) -> Interrupted reason (AgentReply text "")
             Right _ -> Failed reason ""
             Left err -> Failed err ""
-          finalMessages = case outcome of
-            Interrupted _ _ | Right response <- eres -> [assistantMessage response]
-            _ -> []
-      pure AgentResult {outcome, appended = appended <> [capNote] <> finalMessages, turnsUsed = n + 1}
+          finalMessage = case outcome of
+            Interrupted _ _ | Right response <- eres -> Just (assistantMessage response)
+            _ -> Nothing
+          completed = Projection.recordPoll cursor finalMessage prepared
+      pure AgentResult {outcome, appended = Projection.taskTranscript nextLog completed cursor, turnsUsed = n + 1}
 
     -- Publish safe fragments, advancing only after the sender accepts them.
     -- Transport timeouts cannot interrupt publication before acknowledgement;
@@ -470,19 +458,6 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
     checkAdmission turn = do
       active <- raise (raise (raise (admission.eaCheck (turnRuntimeAgentTurn turn))))
       unless active (throwIO TaskCancelled)
-
--- Match results to their actual protocol round, since providers may reuse ids.
-nativeSkillInstructions :: [ChatMessage] -> [Text]
-nativeSkillInstructions = go []
-  where
-    go _ [] = []
-    go _ (MsgAssistantToolCalls _ calls : rest) = go [call.callId | call <- calls, call.callName == "use_skill"] rest
-    go pending (MsgTool cid body : rest)
-      | cid `elem` pending,
-        Just (Object value) <- decodeStrict' (TE.encodeUtf8 body),
-        Just (String instructions) <- KeyMap.lookup "instructions" value =
-          instructions : go pending rest
-    go pending (_ : rest) = go pending rest
 
 -- | The model protocol adapter owns messages and debug events, not execution.
 nativeResult :: ToolCall -> ToolInvocation -> (ChatMessage, ToolDebugEvent, LoopControl)

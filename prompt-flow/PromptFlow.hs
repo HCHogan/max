@@ -38,6 +38,7 @@ import Data.Time
 import Data.Vector qualified as V
 import Max.Config qualified as Config
 import Max.Context (estimateMessagesTokens)
+import Max.Context.Projection qualified as Projection
 import Max.Context.Read (ReadCursor (..), ReadLane (Timeline), renderReadMessage)
 import Max.Context.Types (CompartmentTier (..))
 import Max.Context.Working (estimateToolTokens)
@@ -213,7 +214,11 @@ renderProtocol protocol =
 secondRound :: Protocol -> [ChatMessage]
 secondRound protocol =
   let (raw, call) = toolCallFixture protocol
-   in initialMessages <> assembleToolRound raw [call] [toolResultMessage call (Right toolResult)] [toolImage]
+      cursor = Projection.logCursor Projection.emptyLog
+      initial = Projection.newTaskRecord cursor initialMessages
+      results = drop 1 (assembleToolRound raw [call] [toolResultMessage call (Right toolResult)] [toolImage])
+      record = Projection.recordResults results (Projection.recordPoll cursor (Just (MsgAssistantToolCalls raw [call])) initial)
+   in Projection.project Projection.emptyLog record cursor
 
 wireRequest :: Protocol -> [ChatMessage] -> Value
 wireRequest protocol messages =
