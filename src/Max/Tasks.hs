@@ -73,6 +73,7 @@ import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Max.History.Types (MessageCursor (..))
 import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Executor
+import Max.Node.Log qualified as NodeLog
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), ExecutionOrdinal (..), TurnOutputContext, newTurnOutputContext, turnOutputAgentTurn)
 import OneBot.Types (GroupId (..), UserId (..))
@@ -250,7 +251,7 @@ beginTurnRuntime reg ref gid uid mTrigger = do
   observationCursor <- newTVarIO Nothing
   atomically $ do
     (n, m) <- readTVar reg.trState
-    events <- Events.newNode >>= Events.newTask >>= newTVar
+    events <- Events.newNode >>= (\eventNode -> Events.newTaskFrom eventNode (NodeLog.Said (CanonicalMessageId <$> realTrigger mTrigger))) >>= newTVar
     draining <- newTVar False
     retained <- newTVar []
     deadline <- newTVar Nothing

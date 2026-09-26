@@ -24,6 +24,7 @@ import Data.Map.Strict qualified as Map
 import Data.Ord (Down (..))
 import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Executor
+import Max.Node.Log qualified as NodeLog
 import Max.Platform.Types (PrincipalId)
 import Max.Task.FrontendInput (FrontendInputView (..))
 import Max.Turn.Types (AgentTurnId)
@@ -45,7 +46,8 @@ data TurnInput = TurnInput
     sourceMessage :: !(Maybe Int64),
     replyTurn :: !(Maybe AgentTurnId),
     feedback :: !(Maybe FrontendInputView),
-    notice :: !Bool
+    notice :: !Bool,
+    trigger :: !NodeLog.Trigger
   }
 
 -- | A routed input acknowledges without running a model. An admitted task has
@@ -99,7 +101,7 @@ enqueue (Conversations registry) input = do
             _ : _ -> pure Nothing -- matched recipient refused the bounded event
             [] -> do
               actor <- Executor.registerTask root.executor input.turn (if input.notice then Executor.Notice else Executor.NewRequest)
-              target <- Events.newTask root.events
+              target <- Events.newTaskFrom root.events input.trigger
               putTMVar decision (Just actor)
               let handle = TaskHandle input decision (Just target)
               writeTVar registry (Map.insert input.group root {tasks = Map.insert input.turn handle root.tasks} groups)

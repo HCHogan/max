@@ -75,6 +75,7 @@ import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation 
 import Max.LLM.Types (TokenUsage)
 import Max.Node.Events qualified as Events
 import Max.Node.Futures qualified as Futures
+import Max.Node.Log qualified as NodeLog
 import Max.Node.Router qualified as Router
 import Max.Platform.Types (CanonicalMessageId, PrincipalId)
 import Max.Task.Policy (treeModelRounds, treeToolCalls)
@@ -251,6 +252,7 @@ admitJobWithAuthority authority jobs caller identifier requested = do
                               else do
                                 let addChild parent = parent {children = Set.insert run parent.children}
                                     withParent = maybe kept (\owner -> Map.adjust addChild owner.jobId kept) spec.parent
+                                _ <- Events.startTask events (jobTrigger view)
                                 writeTVar jobs.entries (Map.insert identifier newEntry withParent)
                                 when spec.awaited $ forM_ caller $ \owner ->
                                   Futures.reserve jobs.reportFutures owner identifier $ do
@@ -258,6 +260,9 @@ admitJobWithAuthority authority jobs caller identifier requested = do
                                     latest <- readTVar jobs.entries
                                     pure (live && isJust (lookupRun latest run))
                                 pure (Right view)
+
+jobTrigger :: JobView -> NodeLog.Trigger
+jobTrigger job = if isJust job.spec.monitor then NodeLog.Fired job.run job.spec else NodeLog.Spawned job.run job.spec
 
 -- | The launch consumer claims job identity only. Node deliveries are consumed
 -- directly from the router, independently of source loading and dispatch.
@@ -300,6 +305,12 @@ attachAutomationTurn jobs run turn target =
         Just entry | entry.view.status == Running && isNothing entry.runtime && isJust entry.view.spec.monitor -> do
           exists <- lookupTurnEvents jobs.tasks turn.atrTurnId
           check (isJust exists)
+          trigger <- Events.taskTrigger target
+          case trigger of
+            Nothing -> Events.startTask target (jobTrigger entry.view) >>= check . isJust
+            Just reference -> do
+              nodeLog <- Events.readObservations target
+              check (NodeLog.triggerAt reference nodeLog == Just (jobTrigger entry.view))
           pending <- Events.peekAll entry.events
           Events.deliverAll ((target, Events.Fired (Events.Occurrence run entry.view.spec)) : [(target, event.body) | event <- pending]) >>= check
           Events.close entry.events
@@ -706,6 +717,10 @@ controlJob jobs group actor admin identifier transition = do
         case transition now entries entry fresh of
           Left detail -> pure (Left detail)
           Right updated -> do
+            forM_ (Map.lookup identifier updated) $ \current ->
+              when (current.view.run /= entry.view.run) $ do
+                _ <- Events.startTask fresh (jobTrigger current.view)
+                pure ()
             writeTVar jobs.entries updated
             signals <- revokeChanges jobs entries updated
             Router.flush jobs.resultRouter

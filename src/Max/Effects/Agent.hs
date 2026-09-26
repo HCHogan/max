@@ -223,11 +223,12 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
       [ChatMessage] ->
       Eff (Tools : ToolDirectory : es) AgentResult
     loop workingRef session catalogRef emit initialContext turn profile messages = do
-      (owner, cursor) <- liftIO . atomically $ do
+      (trigger, cursor) <- liftIO . atomically $ do
         target <- turnEvents turn
         nodeLog <- Events.readObservations target
-        pure (Events.observationOwner target, Projection.logCursor nodeLog)
-      go LoopState {context = initialContext, roundNumber = 0, corrections = 0, record = Projection.newTaskRecord owner cursor messages}
+        trigger <- Events.taskTrigger target >>= maybe (throwSTM TaskCancelled) pure
+        pure (trigger, Projection.logCursor nodeLog)
+      go LoopState {context = initialContext, roundNumber = 0, corrections = 0, record = Projection.newTaskRecord trigger cursor messages}
       where
         go :: LoopState -> Eff (Tools : ToolDirectory : es) AgentResult
         go state = step state >>= either pure go

@@ -36,6 +36,7 @@ import Max.Http.Failure (ResponseFailure (..), TransportFailure (..))
 import Max.Jobs qualified as Jobs
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.ModelCatalog (ContextLimits (..), VisionLimits (..), defaultContextLimits)
+import Max.Node.Log qualified as NodeLog
 import Max.Node.Render (renderOpenTasks)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
 import Max.Skill.ToolRuntime (skillToolsWithRuntime)
@@ -262,7 +263,7 @@ spec = describe "Agent full loop" $ do
     ran <- newIORef (0 :: Int)
     inputs <- newIORef []
     published <- newIORef []
-    let request n = Conversation.TurnInput (GroupId 7777) (AgentTurnId n) (PrincipalId 2001) (Just n) (Just n) Nothing Nothing False
+    let request n = Conversation.TurnInput (GroupId 7777) (AgentTurnId n) (PrincipalId 2001) (Just n) (Just n) Nothing Nothing False (NodeLog.Said (Just (CanonicalMessageId n)))
         slow = legacyTool "echo" "slow read" (object ["type" .= ("object" :: Text)]) $ \args -> do
           liftIO (modifyIORef' ran (+ 1) >> putMVar entered () >> takeMVar release)
           pure (Right args)

@@ -11,8 +11,9 @@ import Max.Conversation
 import Max.LLM.Types (ChatMessage (MsgUser))
 import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Node
+import Max.Node.Log qualified as NodeLog
 import Max.Node.Render (renderEvents)
-import Max.Platform.Types (PrincipalId (..))
+import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Task.FrontendInput (FrontendInputView (..))
 import Max.Turn.Types (AgentTurnId (..))
 import OneBot.Types (GroupId (..))
@@ -21,6 +22,15 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "Max.Conversation" $ do
+  it "records the direct trigger at admission without duplicating it as steering" $ do
+    queue <- newConversations
+    _ <- admit queue (request 17)
+    Just target <- STM.atomically (eventsFor queue (AgentTurnId 17))
+    Just reference <- STM.atomically (Events.taskTrigger target)
+    snapshot <- STM.atomically (Events.readObservations target)
+    NodeLog.triggerAt reference snapshot `shouldBe` Just (NodeLog.Said (Just (CanonicalMessageId 17)))
+    STM.atomically (Events.observeAll target) `shouldReturn` []
+
   it "routes steering to the newest open owner even when that owner yielded" $ do
     queue <- newConversations
     first <- admit queue (request 1)
@@ -216,7 +226,7 @@ admit :: Conversations -> TurnInput -> IO TaskHandle
 admit queue input = enqueue queue input >>= maybe (expectationFailure "queue full" >> fail "queue full") pure
 
 request :: Int64 -> TurnInput
-request n = TurnInput (GroupId 1) (AgentTurnId n) (PrincipalId 7) (Just n) (Just n) Nothing Nothing False
+request n = TurnInput (GroupId 1) (AgentTurnId n) (PrincipalId 7) (Just n) (Just n) Nothing Nothing False (NodeLog.Said (Just (CanonicalMessageId n)))
 
 steering :: Int64 -> TurnInput
 steering n = (request n) {feedback = Just (FrontendInputView n "steering" 7 (Just "Alice") (UTCTime (fromGregorian 2026 9 19) 0) Nothing "correction")}

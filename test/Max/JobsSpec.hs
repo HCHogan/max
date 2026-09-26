@@ -20,6 +20,7 @@ import Max.Jobs qualified as Jobs
 import Max.LLM.Types (CallCost (..), TokenUsage (..))
 import Max.Monitor.Types (MonitorFireId (..), MonitorId (..))
 import Max.Node.Events qualified as Events
+import Max.Node.Log qualified as NodeLog
 import Max.Node.Render (renderEvents)
 import Max.Node.Router qualified as Router
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
@@ -74,6 +75,9 @@ spec = describe "process-owned Jobs" $ do
     atomically (attachAutomationTurn jobs job.run (reference 1) target) `shouldReturn` True
     -- Dispatch binds this same conversation log after acquiring its root slot.
     atomically (bindTurnEvents tasks (AgentTurnId 1) target) `shouldReturn` True
+    Just trigger <- atomically (Events.taskTrigger target)
+    triggerLog <- atomically (Events.readObservations target)
+    NodeLog.triggerAt trigger triggerLog `shouldBe` Just (NodeLog.Fired job.run job.spec)
     events <- atomically (turnEvents runtime >>= Router.observeEvents jobs.resultRouter)
     [occurrence] <- pure [occurrence | Events.Event {body = Events.Fired occurrence} <- events]
     occurrence.consumer `shouldBe` job.spec
@@ -100,6 +104,7 @@ spec = describe "process-owned Jobs" $ do
     atomically (replicateM_ 255 (Events.deliver target (Events.Steered Null)))
     steerJob jobs request.group request.principal Nothing 1 "preserved correction" `shouldReturn` Right ()
     atomically (attachAutomationTurn jobs job.run (reference 1) target) `shouldReturn` False
+    atomically (Events.taskTrigger target) `shouldReturn` Nothing
     jobForTurn jobs (AgentTurnId 1) `shouldReturn` Nothing
     _ <- atomically (Events.observeAll target)
     atomically (attachAutomationTurn jobs job.run (reference 1) target) `shouldReturn` True
@@ -108,6 +113,35 @@ spec = describe "process-owned Jobs" $ do
     length [() | Events.Event {body = Events.Fired _} <- events] `shouldBe` 1
     length events `shouldBe` 2
     T.pack (show (renderEvents events)) `shouldSatisfy` T.isInfixOf "preserved correction"
+
+  it "rejects an automation handoff into a task created by a different trigger" $ do
+    (tasks, jobs, request) <- fixture
+    Right _ <- admitJob jobs Nothing 1 request {monitor = Just (JobMonitor (MonitorId 10) (MonitorFireId 1))}
+    Left job <- takeWork jobs
+    _ <- beginTurnRuntime tasks (reference 1) request.group (UserId 7) Nothing
+    target <- atomically (Events.newNode >>= \node -> Events.newTaskFrom node (NodeLog.Said (Just request.source)))
+    atomically (attachAutomationTurn jobs job.run (reference 1) target) `shouldReturn` False
+    jobForTurn jobs (AgentTurnId 1) `shouldReturn` Nothing
+    atomically (Events.observeAll target) `shouldReturn` []
+
+  it "keeps each background generation's frozen admission trigger" $ do
+    (tasks, jobs, request) <- fixture
+    (original, oldRuntime) <- launch tasks jobs 1 request
+    oldEvents <- atomically (turnEvents oldRuntime)
+    Just oldRef <- atomically (Events.taskTrigger oldEvents)
+    oldLog <- atomically (Events.readObservations oldEvents)
+    replaceJob jobs request.group request.principal False 1 "replacement objective" `shouldReturn` Right ()
+    finishTurnRuntime tasks oldRuntime
+    detachJobTurn jobs original.run
+    Left replacement <- takeWork jobs
+    fresh <- beginTurnRuntime tasks (reference 2) request.group (UserId 7) Nothing
+    attachJobTurn jobs replacement.run (reference 2) `shouldReturn` True
+    target <- atomically (turnEvents fresh)
+    Just currentRef <- atomically (Events.taskTrigger target)
+    currentLog <- atomically (Events.readObservations target)
+    NodeLog.triggerAt oldRef oldLog `shouldBe` Just (NodeLog.Spawned original.run original.spec)
+    NodeLog.triggerAt currentRef currentLog `shouldBe` Just (NodeLog.Spawned replacement.run replacement.spec)
+    replacement.spec.objective `shouldBe` "replacement objective"
 
   it "relays a child report delivered before its parent closes but not yet observed" $ do
     (tasks, jobs, request) <- fixture

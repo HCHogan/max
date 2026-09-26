@@ -9,11 +9,25 @@ import Data.Set qualified as Set
 import Max.Context.Projection qualified as Projection
 import Max.LLM.Types (ChatMessage (MsgUser))
 import Max.Node.Events
+import Max.Node.Log qualified as Log
 import Max.Task.Types (JobRun (..))
 import Test.Hspec
 
 spec :: Spec
 spec = describe "node event delivery and observation" $ do
+  it "records one immutable trigger and keeps its reference valid in a frozen snapshot after retirement" $ do
+    task <- atomically (newNode >>= \node -> newTaskFrom node (Log.Said Nothing))
+    Just reference <- atomically (taskTrigger task)
+    snapshot <- atomically (readObservations task)
+    Log.triggerAt reference snapshot `shouldBe` Just (Log.Said Nothing)
+    atomically (startTask task (Log.Said Nothing)) `shouldReturn` Nothing
+    atomically (observeAll task) `shouldReturn` []
+    atomically (close task)
+    atomically (taskTrigger task) `shouldReturn` Nothing
+    retired <- atomically (readObservations task)
+    Log.triggerAt reference retired `shouldBe` Nothing
+    Log.triggerAt reference snapshot `shouldBe` Just (Log.Said Nothing)
+
   it "isolates tasks on one node while assigning a shared event order" $ do
     (first, second) <- atomically $ do
       node <- newNode
@@ -31,8 +45,10 @@ spec = describe "node event delivery and observation" $ do
     (first, second) <- atomically $ do
       node <- newNode
       (,) <$> newTask node <*> newTask node
-    let firstRecord = Projection.newTaskRecord (observationOwner first) (Projection.logCursor Projection.emptyLog) []
-        secondRecord = Projection.newTaskRecord (observationOwner second) (Projection.logCursor Projection.emptyLog) []
+    Just firstTrigger <- atomically (startTask first (Log.Said Nothing))
+    Just secondTrigger <- atomically (startTask second (Log.Said Nothing))
+    let firstRecord = Projection.newTaskRecord firstTrigger (Projection.logCursor Projection.emptyLog) []
+        secondRecord = Projection.newTaskRecord secondTrigger (Projection.logCursor Projection.emptyLog) []
         visible snapshot record = encode (Projection.project snapshot record (Projection.logCursor snapshot))
     _ <- atomically (appendObservation first [MsgUser "first private evidence"])
     _ <- atomically (appendObservation second [MsgUser "second private evidence"])

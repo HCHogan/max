@@ -90,6 +90,7 @@ import Max.Turn.Start
     TurnStart (..),
     startAllowsInput,
   )
+import Max.Turn.Start qualified as Start
 import Max.Turn.Types
   ( AgentTurnId (unAgentTurnId),
     AgentTurnRef (atrTurnId),
@@ -271,7 +272,8 @@ forkDispatch start origin gm work = do
               sourceMessage = if notice then Nothing else Just gm.canonicalId.unCanonicalMessageId,
               replyTurn,
               feedback = if allowInput then feedback else Nothing,
-              notice
+              notice,
+              trigger = Start.startTrigger start (if gm.canonicalId.unCanonicalMessageId == 0 then Nothing else Just gm.canonicalId)
             }
 
     launchTurn env outputCaps ident gidRaw restore turn turnRef nodeTask =

@@ -15,8 +15,14 @@ loop. Records carry the observing task identity, so interleaved private inputs
 and correction notes cannot enter another task's projection. Cursor positions
 never move when a task closes; retirement drops only its own log entries, while
 already-captured immutable snapshots remain valid. Correction and budget-wrapup
-notes use this same log. Trigger event references and the remaining executor
-migration are still pending; raw answers (including reasoning
+notes use this same log. Each task record now holds an `EventRef` to the actual
+admission trigger in that log: a message reference, a frozen background objective
+or monitor occurrence, or the original relay payload. Admission installs the
+trigger once; a model cannot start without it. Replacement creates a fresh
+trigger for the new generation. Automation handoff installs or validates the
+same frozen occurrence atomically with its event delivery, including rollback
+under backpressure. Triggers are not rendered again over the frozen initial
+window. The remaining executor migration is still pending; raw answers (including reasoning
 and signatures), tool results and the initial window remain in the record.
 Compaction and media planning use explicit projection checkpoints. Root
 polls also observe later canonical conversation messages through a frozen history

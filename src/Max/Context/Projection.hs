@@ -4,6 +4,7 @@
 module Max.Context.Projection
   ( Cursor,
     Observer (..),
+    EventRef,
     NodeLog,
     emptyLog,
     logCursor,
@@ -33,13 +34,13 @@ import Max.Context.Working
 import Max.LLM.Types (ChatMessage (..), ToolCall (..))
 import Max.Media.Vision (evictMedia, fitVisionBudget)
 import Max.ModelCatalog (ContextLimits (..))
-import Max.Node.Log (Cursor, NodeLog, Observer (..), appendObservation, emptyLog, logCursor, observedBetween)
+import Max.Node.Log (Cursor, EventRef, NodeLog, Observer (..), appendObservation, emptyLog, logCursor, observedBetween, triggerOwner)
 import Max.Tool.Types (ToolSpec)
 
 -- | The frozen initial prompt includes the trigger and its conversation window.
 -- Outputs and results belong to polls, never to the observation log.
 data TaskRecord = TaskRecord
-  { observer :: !Observer,
+  { trigger :: !EventRef,
     base :: !Cursor,
     window :: ![ChatMessage],
     polls :: !(Seq Poll),
@@ -60,8 +61,8 @@ data Poll = Poll
 -- Raw evidence remains in the log/polls, and taskTranscript ignores this cache.
 data Checkpoint = Checkpoint !Int !Cursor ![ChatMessage] deriving stock (Show)
 
-newTaskRecord :: Observer -> Cursor -> [ChatMessage] -> TaskRecord
-newTaskRecord observer cursor messages = TaskRecord observer cursor messages Seq.empty Nothing
+newTaskRecord :: EventRef -> Cursor -> [ChatMessage] -> TaskRecord
+newTaskRecord trigger cursor messages = TaskRecord trigger cursor messages Seq.empty Nothing
 
 recordPoll :: Cursor -> Maybe ChatMessage -> TaskRecord -> TaskRecord
 recordPoll cursor response record = record {polls = record.polls |> Poll cursor response []}
@@ -76,12 +77,12 @@ recordResults messages record = case Seq.viewr record.polls of
 project :: NodeLog -> TaskRecord -> Cursor -> [ChatMessage]
 project nodeLog record cursor = case record.checkpoint of
   Nothing -> record.window <> taskTranscript nodeLog record cursor
-  Just (Checkpoint count cut prefix) -> prefix <> projectPolls record.observer nodeLog cut (toList (Seq.drop count record.polls)) cursor
+  Just (Checkpoint count cut prefix) -> prefix <> projectPolls (triggerOwner record.trigger) nodeLog cut (toList (Seq.drop count record.polls)) cursor
 
 -- | Full within-task evidence, independent of context compaction and excluding
 -- the initial conversation. This also supplies the existing AgentResult trail.
 taskTranscript :: NodeLog -> TaskRecord -> Cursor -> [ChatMessage]
-taskTranscript nodeLog record = projectPolls record.observer nodeLog record.base (toList record.polls)
+taskTranscript nodeLog record = projectPolls (triggerOwner record.trigger) nodeLog record.base (toList record.polls)
 
 projectPolls :: Observer -> NodeLog -> Cursor -> [Poll] -> Cursor -> [ChatMessage]
 projectPolls owner nodeLog = go

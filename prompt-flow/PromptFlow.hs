@@ -61,6 +61,7 @@ import Max.EpisodeStore (EpisodeHandle, parseEpisodeHandle)
 import Max.IR (Body (..), MediaKind (..), MediaMeta (..), MentionTarget (..), Node (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..), LLMProfile (..), Protocol (..), defaultContextLimits)
+import Max.Node.Log qualified as NodeLog
 import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..), qqAdvertisedCaps)
 import Max.Prompt (ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Recall (RecallHit (..))
@@ -214,11 +215,12 @@ renderProtocol protocol =
 secondRound :: Protocol -> [ChatMessage]
 secondRound protocol =
   let (raw, call) = toolCallFixture protocol
-      cursor = Projection.logCursor Projection.emptyLog
-      initial = Projection.newTaskRecord (Projection.Observer 0) cursor initialMessages
+      (trigger, nodeLog) = NodeLog.appendTrigger (NodeLog.Observer 0) (NodeLog.Said Nothing) NodeLog.emptyLog
+      cursor = Projection.logCursor nodeLog
+      initial = Projection.newTaskRecord trigger cursor initialMessages
       results = drop 1 (assembleToolRound raw [call] [toolResultMessage call (Right toolResult)] [toolImage])
       record = Projection.recordResults results (Projection.recordPoll cursor (Just (MsgAssistantToolCalls raw [call])) initial)
-   in Projection.project Projection.emptyLog record cursor
+   in Projection.project nodeLog record cursor
 
 wireRequest :: Protocol -> [ChatMessage] -> Value
 wireRequest protocol messages =

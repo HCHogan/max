@@ -14,6 +14,9 @@ module Max.Node.Events
     noPending,
     newNode,
     newTask,
+    newTaskFrom,
+    startTask,
+    taskTrigger,
     deliver,
     deliverTracked,
     deliverAll,
@@ -91,10 +94,10 @@ data Task = Task !Node !Integer deriving stock (Eq)
 sameNode :: Task -> Task -> Bool
 sameNode (Task node _) (Task other _) = node == other
 
-data State = State {next :: !Integer, tasks :: !(Map Integer Bool), events :: !(Seq Event), stopped :: !(Set Integer), observations :: !Log.NodeLog}
+data State = State {next :: !Integer, tasks :: !(Map Integer Bool), events :: !(Seq Event), stopped :: !(Set Integer), observations :: !Log.NodeLog, triggers :: !(Map Integer Log.EventRef)}
 
 newNode :: STM Node
-newNode = Node <$> newTVar (State 0 Map.empty Seq.empty Set.empty Log.emptyLog)
+newNode = Node <$> newTVar (State 0 Map.empty Seq.empty Set.empty Log.emptyLog Map.empty)
 
 newTask :: Node -> STM Task
 newTask node@(Node ref) = do
@@ -102,6 +105,28 @@ newTask node@(Node ref) = do
   let key = state.next
   writeTVar ref state {next = key + 1, tasks = Map.insert key True state.tasks}
   pure (Task node key)
+
+newTaskFrom :: Node -> Log.Trigger -> STM Task
+newTaskFrom node trigger = do
+  task <- newTask node
+  _ <- startTask task trigger
+  pure task
+
+-- | Admission records exactly one immutable trigger before a model can start.
+-- A staged task is useful during handoff, but cannot start a model without it.
+startTask :: Task -> Log.Trigger -> STM (Maybe Log.EventRef)
+startTask task@(Task (Node ref) key) trigger = do
+  active <- isOpen task
+  state <- readTVar ref
+  if not active || Map.member key state.triggers
+    then pure Nothing
+    else do
+      let (event, observations) = Log.appendTrigger (observationOwner task) trigger state.observations
+      writeTVar ref state {observations, triggers = Map.insert key event state.triggers}
+      pure (Just event)
+
+taskTrigger :: Task -> STM (Maybe Log.EventRef)
+taskTrigger (Task (Node ref) key) = Map.lookup key . (.triggers) <$> readTVar ref
 
 observationOwner :: Task -> Log.Observer
 observationOwner (Task _ key) = Log.Observer key
@@ -236,4 +261,4 @@ tryFinish task@(Task (Node ref) key) = do
 
 close :: Task -> STM ()
 close (Task (Node ref) key) = modifyTVar' ref $ \state ->
-  state {tasks = Map.delete key state.tasks, events = Seq.filter ((/= key) . (.target)) state.events, stopped = Set.delete key state.stopped, observations = Log.retire (Log.Observer key) state.observations}
+  state {tasks = Map.delete key state.tasks, events = Seq.filter ((/= key) . (.target)) state.events, stopped = Set.delete key state.stopped, observations = Log.retire (Log.Observer key) state.observations, triggers = Map.delete key state.triggers}
