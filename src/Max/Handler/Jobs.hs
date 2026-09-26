@@ -141,8 +141,8 @@ jobsWorker = do
                           dispatchLLMWith (CompletionNotice relay) Nothing OriginTask message {body = Body [], replyTo = Nothing, mentionPrincipals = Map.empty}
                     _ -> release >> logAttention "execution result source unavailable" (object ["result" .= relay.reference])
         void . async $ relayResult `catchSync` (\err -> release >> logAttention "execution result relay failed" (object ["error" .= T.pack (show err)]))
-      Jobs.RecordMonitorResult job ->
-        recordResult env job `catchSync` (monitorFailed env job . T.pack . show)
+      Jobs.RecordMonitorResult receipt ->
+        recordResult env receipt `catchSync` (monitorFailed env receipt . T.pack . show)
   where
     dispatch job start failed = do
       sourceMessage <- loadDispatchMessage job.spec.source
@@ -156,11 +156,12 @@ jobsWorker = do
         _ -> failed "task source provenance unavailable"
 
     -- The automation turn already spoke; its outcome only enters history.
-    recordResult env job =
-      for_ ((,) <$> job.spec.monitor <*> job.result) $ \(fire, result) -> do
-        void (MonitorJob.recordMonitorResult fire.fireId job.status result)
-        liftIO (Jobs.releaseMonitorResult env.beJobs job.run)
+    recordResult env receipt = do
+      let job = receipt.job
+      for_ ((,) <$> job.spec.monitor <*> job.result) $ \(fire, result) ->
+        void (MonitorJob.recordMonitorResultWhen (atomically (Router.monitorIsCurrent receipt)) fire.fireId job.status result)
+      liftIO (atomically (Router.releaseMonitorResult env.beJobs.resultRouter receipt))
 
-    monitorFailed env job (detail :: T.Text) = do
-      liftIO (Jobs.releaseMonitorResult env.beJobs job.run)
+    monitorFailed env receipt (detail :: T.Text) = do
+      liftIO (atomically (Router.releaseMonitorResult env.beJobs.resultRouter receipt))
       logAttention "monitor result recording failed; not replayed" (object ["error" .= detail])

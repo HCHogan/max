@@ -911,12 +911,88 @@ spec = describe "process-owned Jobs" $ do
     timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
     completeJob jobs first.run Succeeded (JobResult "same observation" Nothing)
     RecordMonitorResult result <- takeJobWork jobs
-    result.run `shouldBe` first.run
+    result.job.run `shouldBe` first.run
     timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
     finishTurnRuntime tasks runtime
     detachJobTurn jobs first.run
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+    atomically (Router.releaseMonitorResult jobs.resultRouter result)
     LaunchJob second <- takeJobWork jobs
     second.run.jobId `shouldBe` 2
+
+  it "orders monitor completion with reports on the shared delivery queue" $ do
+    (_, jobs, request) <- fixture
+    Right first <- admitJob jobs Nothing 1 request
+    Right monitor <- admitJob jobs Nothing 2 request {monitor = Just (JobMonitor (MonitorId 10) (MonitorFireId 1))}
+    completeJob jobs first.run Succeeded (JobResult "ordinary report" Nothing)
+    completeJob jobs monitor.run Succeeded (JobResult "business state" Nothing)
+    RelayReport report <- takeJobWork jobs
+    RecordMonitorResult result <- takeJobWork jobs
+    report.job.run `shouldBe` first.run
+    result.job.run `shouldBe` monitor.run
+    atomically (Router.releaseReport jobs.resultRouter report >> Router.releaseMonitorResult jobs.resultRouter result)
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+
+  it "retains monitor completion under shared router backpressure without blocking the producer" $ do
+    (tasks, jobs, request) <- fixture
+    (_, runtime) <- launch tasks jobs 1 request
+    let callContext =
+          TC.mkToolContext
+            (TC.TurnIdentity request.group request.source (UserId 7) (UserId 99) request.principal Nothing Nothing)
+            (TC.TurnCapabilities False False False noAdvertisedCaps False Map.empty Nothing False)
+    origin <- resultOrigin jobs runtime callContext
+    atomically (Router.closeTask jobs.resultRouter origin.target)
+    forM_ [1 .. 1024 :: Int] $ \n -> atomically (Router.deliverResult jobs.resultRouter origin (T.pack (show n)) Null [])
+    Right monitor <- admitJob jobs Nothing 2 request {monitor = Just (JobMonitor (MonitorId 10) (MonitorFireId 1))}
+    timeout 1000000 (completeJob jobs monitor.run Succeeded (JobResult "retained business state" Nothing)) `shouldReturn` Just ()
+    replicateM_ 1024 $ do
+      RelayResult result <- takeJobWork jobs
+      atomically (Router.releaseRelay jobs.resultRouter result)
+    RecordMonitorResult result <- takeJobWork jobs
+    result.job.result `shouldBe` Just (JobResult "retained business state" Nothing)
+    atomically (Router.releaseMonitorResult jobs.resultRouter result)
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+
+  it "revokes claimed monitor completion on cancellation and keeps the replacement receipt owned" $ do
+    (_, jobs, request) <- fixture
+    Right monitor <- admitJob jobs Nothing 1 request {monitor = Just (JobMonitor (MonitorId 10) (MonitorFireId 1))}
+    completeJob jobs monitor.run Succeeded (JobResult "obsolete success" Nothing)
+    RecordMonitorResult old <- takeJobWork jobs
+    cancelJob jobs request.group request.principal False 1 "cancelled after claim" `shouldReturn` Right ()
+    atomically (Router.monitorIsCurrent old) `shouldReturn` False
+    RecordMonitorResult current <- takeJobWork jobs
+    current.job.status `shouldBe` Cancelled
+    atomically (Router.releaseMonitorResult jobs.resultRouter old)
+    atomically (Router.monitorOwners jobs.resultRouter) `shouldReturn` Set.singleton monitor.run
+    atomically (Router.releaseMonitorResult jobs.resultRouter current)
+    atomically (Router.monitorOwners jobs.resultRouter) `shouldReturn` Set.empty
+
+  it "revokes the previous generation's claimed monitor result on replacement" $ do
+    (_, jobs, request) <- fixture
+    Right monitor <- admitJob jobs Nothing 1 request {monitor = Just (JobMonitor (MonitorId 10) (MonitorFireId 1))}
+    completeJob jobs monitor.run Succeeded (JobResult "old result" Nothing)
+    RecordMonitorResult old <- takeJobWork jobs
+    replaceJob jobs request.group request.principal False 1 "new consumer" `shouldReturn` Right ()
+    atomically (Router.monitorIsCurrent old) `shouldReturn` False
+    LaunchJob fresh <- takeJobWork jobs
+    fresh.run.generation `shouldBe` 2
+    completeJob jobs fresh.run Succeeded (JobResult "new result" Nothing)
+    RecordMonitorResult current <- takeJobWork jobs
+    atomically (Router.releaseMonitorResult jobs.resultRouter old)
+    atomically (Router.monitorOwners jobs.resultRouter) `shouldReturn` Set.singleton fresh.run
+    atomically (Router.releaseMonitorResult jobs.resultRouter current)
+
+  it "takes over queued and claimed monitor results at shutdown without losing their final state" $ do
+    (_, jobs, request) <- fixture
+    forM_ [1, 2] $ \identifier -> do
+      Right monitor <- admitJob jobs Nothing identifier request {monitor = Just (JobMonitor (MonitorId 10) (MonitorFireId identifier))}
+      completeJob jobs monitor.run Succeeded (JobResult "completed before shutdown" Nothing)
+    RecordMonitorResult claimed <- takeJobWork jobs
+    notices <- closeJobs jobs
+    map (.status) notices `shouldBe` [Succeeded, Succeeded]
+    atomically (Router.monitorIsCurrent claimed) `shouldReturn` False
+    atomically (Router.monitorOwners jobs.resultRouter) `shouldReturn` Set.empty
+    closeJobs jobs `shouldReturn` []
 
   it "bounds queued jobs and feedback with explicit rejection" $ do
     (_, jobs, request) <- fixture

@@ -79,7 +79,14 @@ and relay publication. The old `childUpdates` set is removed. Awaited reports ar
 reserved at admission, including before the wait registers, and are handed to the
 original future once; an abandoned waiter releases the report back to routing.
 Report relays preserve the original source and grant ceiling, and their attempt
-identity protects retry ownership. Each admitted native or guest leaf now
+identity protects retry ownership. Monitor completions now use the same bounded
+router and exact delivery receipts, removing `pendingMonitor` and
+`monitorInFlight`. A result stays owned until business-state recording finishes;
+the next execution of the same monitor waits for this acknowledgement, while
+unrelated work proceeds. Cancellation and replacement revoke claimed results,
+and the database writer checks ownership again after taking the monitor lock.
+Shutdown takes over queued and claimed terminal results without downgrading
+already-completed work to cancellation. Each admitted native or guest leaf now
 receives host-owned call authority. Memory, pin, monitor and task mutations use
 that authority to finish after a normal terminal checkpoint, rechecking its
 validity after acquiring database locks. Identity, source, role and grant checks

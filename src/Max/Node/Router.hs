@@ -1,16 +1,18 @@
 -- | Process-local delivery ownership. Results, reports and child messages stay
--- retained until observation, relay or folding; final-answer closure cannot drop them.
+-- retained until observation, relay, folding or durable monitor recording.
 module Max.Node.Router
   ( Router,
     Origin (..),
     Relay (..),
     ReportRelay (..),
     MessageRelay (..),
+    MonitorResult (..),
     DeliveryWork (..),
     newRouter,
     deliverResult,
     deliverReport,
     deliverMessage,
+    deliverMonitorResult,
     flush,
     observeResults,
     observeEvents,
@@ -19,6 +21,7 @@ module Max.Node.Router
     observeEventsAt,
     reportOwners,
     messageOwners,
+    monitorOwners,
     closeTask,
     takeDelivery,
     takeRelay,
@@ -28,10 +31,12 @@ module Max.Node.Router
     requeueReport,
     releaseMessage,
     requeueMessage,
+    releaseMonitorResult,
     referencedOwners,
     relayIsCurrent,
     reportIsCurrent,
     messageIsCurrent,
+    monitorIsCurrent,
   )
 where
 
@@ -93,7 +98,17 @@ instance Eq MessageRelay where
 instance Show MessageRelay where
   show relay = "MessageRelay " <> show relay.identifier <> " " <> show relay.job.run
 
-data DeliveryWork = NativeResult !Relay | JobReport !ReportRelay | ChildMessage !MessageRelay deriving stock (Eq, Show)
+-- | Automation already published through its own turn. Its terminal delivery
+-- persists business state instead of starting a second frontend turn.
+data MonitorResult = MonitorResult {identifier :: !Integer, attempt :: !Integer, job :: !JobView, valid :: !(STM Bool)}
+
+instance Eq MonitorResult where
+  a == b = a.identifier == b.identifier && a.attempt == b.attempt && a.job.run == b.job.run
+
+instance Show MonitorResult where
+  show result = "MonitorResult " <> show result.identifier <> " " <> show result.job.run
+
+data DeliveryWork = NativeResult !Relay | JobReport !ReportRelay | ChildMessage !MessageRelay | MonitorCompleted !MonitorResult deriving stock (Eq, Show)
 
 data Delivery = Buffered !Events.Task !Integer | Queued | InFlight deriving stock (Eq)
 
@@ -109,8 +124,7 @@ deliverResult router origin reference value media =
   deliver
     router
     origin.valid
-    (Just origin.target)
-    (Events.Settled reference value media)
+    (Just (origin.target, Events.Settled reference value media))
     (\identifier -> NativeResult (Relay identifier 0 origin reference value media))
     >>= check
 
@@ -122,9 +136,12 @@ deliverReport router original target valid notes = do
   deliver
     router
     valid
-    target
-    (Events.ChildDone job.run (object ["child_update" .= job]))
+    ((,Events.ChildDone job.run (object ["child_update" .= job])) <$> target)
     (\identifier -> JobReport (ReportRelay identifier 0 job target valid notes))
+
+deliverMonitorResult :: Router -> JobView -> STM Bool -> STM Bool
+deliverMonitorResult router job valid =
+  deliver router valid Nothing (\identifier -> MonitorCompleted (MonitorResult identifier 0 job valid))
 
 -- | Normal messages belong to the parent's observation while it is open, and
 -- to the final report after closure. Urgent messages become individual relays.
@@ -142,14 +159,13 @@ deliverMessage router job target text urgency valid foldIntoReport answers = do
           deliver
             router
             valid
-            target
-            (Events.ChildSaid job.run text urgency)
+            ((,Events.ChildSaid job.run text urgency) <$> target)
             (\identifier -> ChildMessage (MessageRelay identifier 0 job target text urgency valid foldIntoReport answers))
 
 -- | Policy and ownership are shared by native outcomes, reports and messages.
 -- A full target leaves ownership with the producer; a closed target relays.
-deliver :: Router -> STM Bool -> Maybe Events.Task -> Events.Body -> (Integer -> DeliveryWork) -> STM Bool
-deliver (Router ref) valid target body make = do
+deliver :: Router -> STM Bool -> Maybe (Events.Task, Events.Body) -> (Integer -> DeliveryWork) -> STM Bool
+deliver (Router ref) valid target make = do
   allowed <- valid
   if not allowed
     then pure True
@@ -159,9 +175,9 @@ deliver (Router ref) valid target body make = do
       if Map.size entries >= 1024
         then pure False
         else do
-          open <- maybe (pure False) Events.isOpen target
+          open <- maybe (pure False) (Events.isOpen . fst) target
           delivery <- case target of
-            Just task | open -> fmap (Buffered task . (.sequence)) <$> Events.deliverTracked task body
+            Just (task, body) | open -> fmap (Buffered task . (.sequence)) <$> Events.deliverTracked task body
             _ -> pure (Just Queued)
           case delivery of
             Nothing -> pure False
@@ -199,6 +215,12 @@ messageOwners :: Router -> STM (Set JobRun)
 messageOwners (Router ref) = do
   (_, entries) <- readTVar ref
   pure (Set.fromList [relay.job.run | (_, ChildMessage relay) <- Map.elems entries])
+
+monitorOwners :: Router -> STM (Set JobRun)
+monitorOwners router@(Router ref) = do
+  flush router
+  (_, entries) <- readTVar ref
+  pure (Set.fromList [result.job.run | (_, MonitorCompleted result) <- Map.elems entries])
 
 observeResults :: Router -> Events.Task -> [Events.Event] -> STM ()
 observeResults (Router ref) task events = modifyTVar' ref $ \(next, entries) ->
@@ -240,6 +262,7 @@ takeMatching wanted (Router ref) = do
           messages <- relay.notes
           pure (JobReport (ReportRelay relay.identifier (relay.attempt + 1) relay.job {messages} relay.target relay.valid relay.notes))
         ChildMessage relay -> pure (ChildMessage (MessageRelay relay.identifier (relay.attempt + 1) relay.job relay.target relay.text relay.urgency relay.valid relay.foldIntoReport relay.answersPendingQuestion))
+        MonitorCompleted result -> pure (MonitorCompleted (MonitorResult result.identifier (result.attempt + 1) result.job result.valid))
       writeTVar ref (next, Map.insert key (InFlight, claimed) current)
       pure claimed
     Nothing -> retry
@@ -262,6 +285,9 @@ releaseMessage router relay = finish router relay.identifier (ChildMessage relay
 requeueMessage :: Router -> MessageRelay -> STM ()
 requeueMessage router relay = finish router relay.identifier (ChildMessage relay) (Just Queued)
 
+releaseMonitorResult :: Router -> MonitorResult -> STM ()
+releaseMonitorResult router result = finish router result.identifier (MonitorCompleted result) Nothing
+
 -- | Only the current attempt can release or retry a claimed delivery.
 finish :: Router -> Integer -> DeliveryWork -> Maybe Delivery -> STM ()
 finish (Router ref) identifier work nextState = modifyTVar' ref $ \(next, entries) ->
@@ -271,7 +297,7 @@ referencedOwners :: Router -> STM (Set JobRun)
 referencedOwners (Router ref) = do
   (next, entries) <- readTVar ref
   live <- normalizeEntries entries
-  let owners = \case NativeResult relay -> maybe [] pure relay.origin.owner; JobReport relay -> [relay.job.run]; ChildMessage relay -> [relay.job.run]
+  let owners = \case NativeResult relay -> maybe [] pure relay.origin.owner; JobReport relay -> [relay.job.run]; ChildMessage relay -> [relay.job.run]; MonitorCompleted result -> [result.job.run]
   writeTVar ref (next, live)
   pure (Set.fromList (concatMap (owners . snd) (Map.elems live)))
 
@@ -294,7 +320,7 @@ normalizeEntries entries = Map.fromList . concat <$> mapM normalize (Map.toList 
             _ -> pure [(key, (state, work))]
 
 isCurrent :: DeliveryWork -> STM Bool
-isCurrent = \case NativeResult relay -> relayIsCurrent relay; JobReport relay -> reportIsCurrent relay; ChildMessage relay -> messageIsCurrent relay
+isCurrent = \case NativeResult relay -> relayIsCurrent relay; JobReport relay -> reportIsCurrent relay; ChildMessage relay -> messageIsCurrent relay; MonitorCompleted result -> monitorIsCurrent result
 
 relayIsCurrent :: Relay -> STM Bool
 relayIsCurrent = (.origin.valid)
@@ -304,3 +330,6 @@ reportIsCurrent = (.valid)
 
 messageIsCurrent :: MessageRelay -> STM Bool
 messageIsCurrent = (.valid)
+
+monitorIsCurrent :: MonitorResult -> STM Bool
+monitorIsCurrent = (.valid)

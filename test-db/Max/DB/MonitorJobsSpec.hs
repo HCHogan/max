@@ -1,6 +1,9 @@
 module Max.DB.MonitorJobsSpec (Max.DB.MonitorJobsSpec.spec) where
 
-import Control.Monad (forM, forM_, void)
+import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
+import Control.Concurrent.Async (wait, withAsync)
+import Control.Concurrent.STM (atomically)
+import Control.Monad (forM, forM_, unless, void)
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Either (isLeft, isRight)
@@ -12,12 +15,13 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime, utc)
 import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple qualified as PostgreSQL
 import Effectful.PostgreSQL (execute, query)
 import Helpers (truncateAll, withDb)
 import JobFixture (insertOccurrence, seed)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn (AgentTurnTerminal (..), finishAgentTurn)
-import Max.DB.Connection (DbPool)
+import Max.DB.Connection (DbPool, withConn)
 import Max.DB.Monitor
 import Max.DB.Monitor.Admission
 import Max.DB.Monitor.Control qualified as MonitorDB
@@ -30,16 +34,47 @@ import Max.Monitor.Control qualified as MonitorControl
 import Max.Monitor.Policy (OverlapPolicy (..))
 import Max.Monitor.Types
 import Max.Monitor.View qualified as WorkView
+import Max.Node.Router qualified as Router
 import Max.Platform.Types
 import Max.Task.Delegation (parseJobResult)
 import Max.Task.State (TaskStatus (..))
 import Max.Task.Types
 import Max.Tasks (newTaskRegistry)
 import OneBot.Types (GroupId (..))
+import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "automation Jobs and retained business state" $ do
+  it "rechecks monitor result ownership after waiting for the database lock" $ do
+    jobs <- newTaskRegistry >>= Jobs.newJobs
+    (turn, message, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    Right monitor <- withDb pool (armElaboratedTimeMonitor (GroupId 900) actor turn "watch" Nothing now Map.empty)
+    (fire, request) <- admitOccurrence pool monitor message "first"
+    Right job <- Jobs.admitJob jobs Nothing 1 request
+    Jobs.completeJob jobs job.run Succeeded (JobResult "stale success" Nothing)
+    Jobs.RecordMonitorResult old <- Jobs.takeJobWork jobs
+    start <- newEmptyMVar
+    let persist receipt = withDb pool $ recordMonitorResultWhen (atomically (Router.monitorIsCurrent receipt)) fire receipt.job.status (maybe (error "missing monitor result") id receipt.job.result)
+    withAsync (takeMVar start >> persist old) $ \writer -> do
+      withConn pool $ \connection -> PostgreSQL.withTransaction connection $ do
+        (_ :: [Only MonitorId]) <- PostgreSQL.query connection "SELECT monitor_id FROM monitors WHERE monitor_id=? FOR UPDATE" (Only monitor.mrMonitorId)
+        [Only (locker :: Int)] <- PostgreSQL.query_ connection "SELECT pg_backend_pid()"
+        putMVar start ()
+        let blocked = do
+              waiting <- withDb pool $ query "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE ?=ANY(pg_blocking_pids(pid)))" (Only locker)
+              unless (waiting == [Only True]) (threadDelay 1000 >> blocked)
+        timeout 2000000 blocked `shouldReturn` Just ()
+        Jobs.cancelJob jobs request.group request.principal False job.run.jobId "cancelled while waiting for lock" `shouldReturn` Right ()
+      wait writer `shouldReturn` False
+    withDb pool (query "SELECT result IS NULL FROM monitor_fires WHERE fire_id=?" (Only fire)) `shouldReturn` [Only True]
+    Jobs.RecordMonitorResult current <- Jobs.takeJobWork jobs
+    persist current `shouldReturn` True
+    persist old `shouldReturn` False
+    withDb pool (query "SELECT result->>'status' FROM monitor_fires WHERE fire_id=?" (Only fire)) `shouldReturn` [Only ("cancelled" :: Text)]
+    atomically (Router.releaseMonitorResult jobs.resultRouter old >> Router.releaseMonitorResult jobs.resultRouter current)
+
   it "fences monitor mutations after the bound turn ends" $ do
     jobs <- newTaskRegistry >>= Jobs.newJobs
     (turn, _, actor) <- seed pool 900 1

@@ -1,5 +1,5 @@
 -- | Validate a trigger and start an ordinary in-process Job.
-module Max.DB.Monitor.Admission (MonitorAdmission (..), MonitorAdmissionError (..), admitMonitorTaskWithin, monitorTaskProfile, recordMonitorResult, markMonitorJobStarted) where
+module Max.DB.Monitor.Admission (MonitorAdmission (..), MonitorAdmissionError (..), admitMonitorTaskWithin, monitorTaskProfile, recordMonitorResult, recordMonitorResultWhen, markMonitorJobStarted) where
 
 import Control.Monad (join, void, when)
 import Data.Aeson (Value, object, withObject, (.:?), (.=))
@@ -166,21 +166,30 @@ monitorTaskProfile fire = do
 
 -- Returns whether this result should be announced; no effect is replayed here.
 recordMonitorResult :: (WithConnection :> es, IOE :> es) => MonitorFireId -> TaskStatus -> JobResult -> Eff es Bool
-recordMonitorResult fire status result = withTransaction $ do
+recordMonitorResult = recordMonitorResultWhen (pure True)
+
+-- | Recheck receipt ownership after the database lock. A replaced/cancelled
+-- result waiting behind another writer must not overwrite the new generation.
+recordMonitorResultWhen :: (WithConnection :> es, IOE :> es) => IO Bool -> MonitorFireId -> TaskStatus -> JobResult -> Eff es Bool
+recordMonitorResultWhen current fire status result = withTransaction $ do
   (_ :: [Only Int64]) <- query "SELECT monitor_id FROM monitors JOIN monitor_fires USING(monitor_id) WHERE fire_id=? FOR UPDATE OF monitors" (Only fire)
-  rows <- query "SELECT monitor_id,definition_revision,COALESCE((definition_snapshot->>'change_only')::boolean,false) FROM monitor_fires WHERE fire_id=?" (Only fire)
-  case rows :: [(Int64, Int, Bool)] of
-    [(monitor, revision, changeOnly)] -> do
-      previous <- query "SELECT result FROM monitor_fires WHERE monitor_id=? AND definition_revision=? AND fire_id<>? AND result IS NOT NULL ORDER BY finished_at DESC,fire_id DESC LIMIT 1" (monitor, revision, fire)
-      repeatedFailure <- query "SELECT EXISTS(SELECT 1 FROM monitor_fires WHERE monitor_id=? AND definition_revision=? AND fire_id<>? AND result->>'status'=? AND notified_at>now()-interval '1 hour')" (monitor, revision, fire, jsonStatus status)
-      let observation :: Maybe Value
-          observation = join (result.payload >>= parseMaybe (withObject "monitor result" (.:? "observation")))
-          oldObservation = case previous of [Only value] -> join (parseMaybe (withObject "monitor result" (.:? "observation")) value); _ -> Nothing
-          quiet = changeOnly && (if status == Succeeded then isJust observation && observation == oldObservation else repeatedFailure == [Only True])
-          report = object ["status" .= status, "summary" .= result.text, "observation" .= observation]
-      void $ execute "UPDATE monitor_fires SET result=?::jsonb,finished_at=now(),notified_at=CASE WHEN ? THEN NULL ELSE now() END WHERE fire_id=?" (jsonText report, quiet, fire)
-      pure (not quiet)
-    _ -> pure False
+  allowed <- liftIO current
+  if not allowed
+    then pure False
+    else do
+      rows <- query "SELECT monitor_id,definition_revision,COALESCE((definition_snapshot->>'change_only')::boolean,false) FROM monitor_fires WHERE fire_id=?" (Only fire)
+      case rows :: [(Int64, Int, Bool)] of
+        [(monitor, revision, changeOnly)] -> do
+          previous <- query "SELECT result FROM monitor_fires WHERE monitor_id=? AND definition_revision=? AND fire_id<>? AND result IS NOT NULL ORDER BY finished_at DESC,fire_id DESC LIMIT 1" (monitor, revision, fire)
+          repeatedFailure <- query "SELECT EXISTS(SELECT 1 FROM monitor_fires WHERE monitor_id=? AND definition_revision=? AND fire_id<>? AND result->>'status'=? AND notified_at>now()-interval '1 hour')" (monitor, revision, fire, jsonStatus status)
+          let observation :: Maybe Value
+              observation = join (result.payload >>= parseMaybe (withObject "monitor result" (.:? "observation")))
+              oldObservation = case previous of [Only value] -> join (parseMaybe (withObject "monitor result" (.:? "observation")) value); _ -> Nothing
+              quiet = changeOnly && (if status == Succeeded then isJust observation && observation == oldObservation else repeatedFailure == [Only True])
+              report = object ["status" .= status, "summary" .= result.text, "observation" .= observation]
+          void $ execute "UPDATE monitor_fires SET result=?::jsonb,finished_at=now(),notified_at=CASE WHEN ? THEN NULL ELSE now() END WHERE fire_id=?" (jsonText report, quiet, fire)
+          pure (not quiet)
+        _ -> pure False
   where
     jsonStatus = \case Succeeded -> "succeeded" :: Text; Failed -> "failed"; BudgetExhausted -> "budget_exhausted"; Cancelled -> "cancelled"; _ -> "failed"
 
