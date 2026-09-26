@@ -9,6 +9,9 @@ module Max.Jobs
     JobWork (..),
     JobWait (..),
     newJobs,
+    resultRouter,
+    resultOrigin,
+    bindResultRelay,
     acquireGuestSlot,
     admitJob,
     takeJobWork,
@@ -65,15 +68,17 @@ import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation (..))
 import Max.LLM.Types (TokenUsage)
 import Max.Node.Events qualified as Events
+import Max.Node.Router qualified as Router
 import Max.Platform.Types (CanonicalMessageId, PrincipalId)
 import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State (TaskStatus (..), taskIsLive)
 import Max.Task.Types
-import Max.Tasks (TaskCancelled (..), TaskRegistry, bindTurnEvents, cancelAgentTurnTask, lookupTurnEvents, turnAcceptsWork, turnIsLive)
+import Max.Tasks (TaskCancelled (..), TaskRegistry, TurnRuntime, bindTurnEvents, cancelAgentTurnTask, lookupTurnEvents, turnAcceptsWork, turnEvents, turnIsLive, turnRuntimeAgentTurn, turnWasCancelled)
+import Max.ToolContext (ToolContext)
 import Max.Turn.Types (AgentTurnId, AgentTurnRef (..))
 import OneBot.Types (GroupId)
 
-data JobWork = LaunchJob !JobView | PublishJobNotice !JobView !Int !Text | RecordMonitorResult !JobView
+data JobWork = LaunchJob !JobView | PublishJobNotice !JobView !Int !Text | RecordMonitorResult !JobView | RelayResult !Router.Relay
   deriving stock (Eq, Show)
 
 data Entry = Entry
@@ -101,11 +106,13 @@ data Jobs = Jobs
     notices :: !(TVar (Map AgentTurnId (JobRun, Int))),
     closed :: !(TVar Bool),
     guestSlots :: !(TVar (Map (Either AgentTurnId JobRun) Int)),
+    resultRouter :: !Router.Router,
+    resultNotices :: !(TVar (Map AgentTurnId Router.Relay)),
     tasks :: !TaskRegistry
   }
 
 newJobs :: TaskRegistry -> IO Jobs
-newJobs tasks = Jobs <$> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO False <*> newTVarIO Map.empty <*> pure tasks
+newJobs tasks = Jobs <$> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO False <*> newTVarIO Map.empty <*> Router.newRouter <*> newTVarIO Map.empty <*> pure tasks
 
 -- | Admission never waits: a paused ancestor must not occupy the slot a
 -- descendant is queued for. The release action is idempotent and survives job
@@ -128,6 +135,31 @@ acquireGuestSlot jobs turn = atomically $ do
           writeTVar released True
           modifyTVar' jobs.guestSlots (Map.update (\n -> if n <= 1 then Nothing else Just (n - 1)) tree)
 
+-- | Capture host-minted provenance and a revocation check. Retained relay
+-- owners prevent the job identity from being pruned before publication.
+resultOrigin :: Jobs -> TurnRuntime -> ToolContext -> IO Router.Origin
+resultOrigin jobs runtime context = atomically $ do
+  entries <- readTVar jobs.entries
+  notices <- readTVar jobs.notices
+  resultNotices <- readTVar jobs.resultNotices
+  target <- turnEvents runtime
+  let turn = (turnRuntimeAgentTurn runtime).atrTurnId
+      owner = case entryForTurn entries turn of
+        Just entry -> Just entry.view.run
+        Nothing -> case Map.lookup turn resultNotices of
+          Just relay -> relay.origin.owner
+          Nothing -> fst <$> Map.lookup turn notices
+      valid = do
+        cancelled <- turnWasCancelled runtime
+        closed <- readTVar jobs.closed
+        current <- readTVar jobs.entries
+        inherited <- maybe (pure True) Router.relayIsCurrent (Map.lookup turn resultNotices)
+        pure (not cancelled && not closed && inherited && maybe True (\run -> maybe False ((/= Cancelled) . (.view.status)) (lookupRun current run)) owner)
+  pure Router.Origin {turn, owner, context, target, valid}
+
+bindResultRelay :: Jobs -> AgentTurnId -> Router.Relay -> IO ()
+bindResultRelay jobs turn relay = atomically (modifyTVar' jobs.resultNotices (Map.insert turn relay))
+
 -- | IDs come from the retained task identity sequence, never from model input.
 -- Terminal entries can be discarded only after their live parent releases them.
 admitJob :: Jobs -> Maybe AgentTurnId -> Int64 -> JobSpec -> IO (Either Text JobView)
@@ -137,9 +169,10 @@ admitJob jobs caller identifier requested = do
     closing <- readTVar jobs.closed
     allowed <- maybe (pure True) (turnIsLive jobs.tasks) caller
     current <- readTVar jobs.entries
+    resultOwners <- Router.referencedOwners jobs.resultRouter
     events <- Events.newNode >>= Events.newTask
     callerEvents <- maybe (pure Nothing) (lookupTurnEvents jobs.tasks) caller
-    let retained job = taskIsLive job.view.status || isJust job.runtime || job.pendingMonitor || job.noticeInFlight || isJust job.pendingNotice || isJust job.awaiter || maybe False (liveRun current) job.view.spec.parent
+    let retained job = Set.member job.view.run resultOwners || taskIsLive job.view.status || isJust job.runtime || job.pendingMonitor || job.noticeInFlight || isJust job.pendingNotice || isJust job.awaiter || maybe False (liveRun current) job.view.spec.parent
         completed = sortOn (Down . (.view.created)) (filter (not . retained) (Map.elems current))
         kept = Map.filter retained current <> Map.fromList [(entry.view.run.jobId, entry) | entry <- take 256 completed]
         parents = ancestors kept requested.parent
@@ -190,7 +223,7 @@ takeJobWork jobs = atomically $ do
     Just entry -> do
       writeTVar jobs.entries (Map.insert entry.view.run.jobId (entry {pendingMonitor = False, noticeInFlight = True}) entries)
       pure (RecordMonitorResult entry.view)
-    Nothing -> takeReady entries
+    Nothing -> takeReady entries `orElse` (RelayResult <$> Router.takeRelay jobs.resultRouter)
   where
     takeReady entries = case find (\entry -> entry.view.status == Queued && isNothing entry.runtime && monitorAvailable entries entry) (Map.elems entries) of
       Just entry -> do
@@ -594,6 +627,9 @@ bindJobNotice jobs turn run version = atomically $ modifyTVar' jobs.notices (Map
 
 detachJobNotice :: Jobs -> AgentTurnId -> IO ()
 detachJobNotice jobs turn = atomically $ do
+  relays <- readTVar jobs.resultNotices
+  forM_ (Map.lookup turn relays) (Router.releaseRelay jobs.resultRouter)
+  modifyTVar' jobs.resultNotices (Map.delete turn)
   notices <- readTVar jobs.notices
   modifyTVar' jobs.notices (Map.delete turn)
   forM_ (Map.lookup turn notices) $ \(run, _) -> releaseNoticeSTM jobs run
@@ -609,13 +645,16 @@ authorizeJobPublication :: Jobs -> AgentTurnId -> IO Bool
 authorizeJobPublication jobs turn = atomically $ do
   entries <- readTVar jobs.entries
   notices <- readTVar jobs.notices
-  pure $ case entryForTurn entries turn of
-    Just _ -> False
-    Nothing -> case Map.lookup turn notices of
-      Nothing -> True
-      Just (run, version) -> case lookupRun entries run of
-        Just entry -> entry.noticeVersion == version && entry.view.status /= Cancelled
-        _ -> False
+  relays <- readTVar jobs.resultNotices
+  case entryForTurn entries turn of
+    Just _ -> pure False
+    Nothing -> case Map.lookup turn relays of
+      Just relay -> Router.relayIsCurrent relay
+      Nothing -> pure $ case Map.lookup turn notices of
+        Nothing -> True
+        Just (run, version) -> case lookupRun entries run of
+          Just entry -> entry.noticeVersion == version && entry.view.status /= Cancelled
+          _ -> False
 
 allJobs :: Jobs -> IO [JobView]
 allJobs jobs = map (.view) . Map.elems <$> readTVarIO jobs.entries

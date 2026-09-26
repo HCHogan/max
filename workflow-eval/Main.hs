@@ -4,6 +4,7 @@
 module Main (main) where
 
 import Control.Concurrent.Async qualified as Async
+import Control.Concurrent.STM (atomically)
 import Control.Exception (SomeException, bracket, finally, mask_, try)
 import Control.Monad (forM, forM_, forever, unless, void)
 import Data.Aeson hiding (Options)
@@ -47,6 +48,7 @@ import Max.HttpRuntime (newHttpRuntime)
 import Max.IR (Body (..), Node (NText))
 import Max.Jobs qualified as Jobs
 import Max.Log (withCompactLogger)
+import Max.Node.Router qualified as Router
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
 import Max.Platform.QQ (ensureQQEndpointFor)
 import Max.Platform.Store.Endpoint (RegisteredEndpoint (endpointId))
@@ -163,6 +165,9 @@ runCase cfg opts pool sources group parallel = do
                 worker <- Async.asyncWithUnmask (\unmask -> unmask (runChild cfg opts pool sources tasks jobs child calls))
                 modifyIORef' workers (worker :)
               Jobs.PublishJobNotice job _ _ -> Jobs.releaseJobNotice jobs job.run
+              -- The benchmark consumes reports through the guest result and
+              -- journal; it has no chat frontend for late-call notifications.
+              Jobs.RelayResult relay -> atomically (Router.releaseRelay jobs.resultRouter relay)
               Jobs.RecordMonitorResult _ -> die "unexpected reminder in source audit"
       cleanup = readIORef workers >>= mapM_ Async.cancel
   started <- getCurrentTime

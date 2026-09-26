@@ -59,6 +59,7 @@ import Max.Handler.Reaction (failureFaceId, queueQQReaction)
 import Max.Intent (IntentState)
 import Max.Jobs qualified as Jobs
 import Max.ModelCatalog (ModelCatalog)
+import Max.Node.Router qualified as Router
 import Max.Platform.Store.Conversation
   ( conversationAdvertisedCaps,
   )
@@ -197,10 +198,14 @@ forkDispatch start origin gm work = do
             attached <- liftIO (Jobs.attachJobTurn env.beJobs job.run turnRef)
             unless attached (launchFailed >> liftIO (ioError (userError "job replaced or cancelled before launch")))
           JobNotice job version _ -> liftIO (Jobs.bindJobNotice env.beJobs turnRef.atrTurnId job.run version)
+          CompletionNotice relay -> liftIO (Jobs.bindResultRelay env.beJobs turnRef.atrTurnId relay)
           _ -> pure ()
         nodeTask <- (if background then pure Nothing else admitConversation env turnRef) `onException` launchFailed
         if not background && isNothing nodeTask
           then do
+            case start of
+              CompletionNotice relay -> liftIO (STM.atomically (Router.requeueRelay env.beJobs.resultRouter relay))
+              _ -> pure ()
             finishAgentTurn turnRef TurnAborted 0 (Just "conversation queue full") `finally` launchFailed
             when (origin == OriginDirect) (replyText gm "当前处理队列已满，请稍后重试。")
           else
@@ -208,6 +213,9 @@ forkDispatch start origin gm work = do
               `onException` (for_ nodeTask (liftIO . Conversation.release env.beConversations) >> launchFailed)
         pure True
   unless launched $ do
+    case start of
+      CompletionNotice relay -> liftIO (STM.atomically (Router.releaseRelay env.beJobs.resultRouter relay))
+      _ -> pure ()
     for_ backgroundJob $ \job -> liftIO (Jobs.completeJob env.beJobs job.run JobState.Cancelled (JobResult "service shutting down" Nothing))
     settleAutomation env JobState.Cancelled "service shutting down"
     logInfo "llm dispatch declined: draining" ident
@@ -219,7 +227,7 @@ forkDispatch start origin gm work = do
     backgroundJob = case start of JobTurn job -> Just job; _ -> Nothing
     background = isJust backgroundJob
     -- Notices and automation fires wait behind queued user requests.
-    notice = case start of JobNotice {} -> True; AutomationTurn {} -> True; _ -> False
+    notice = case start of JobNotice {} -> True; CompletionNotice {} -> True; AutomationTurn {} -> True; _ -> False
     -- Every exit settles the automation's job, so the next fire of the same
     -- automation can start; runDispatch settles it first on a normal end.
     settleAutomation env status detail = case start of

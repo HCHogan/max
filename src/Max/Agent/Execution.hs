@@ -1,7 +1,8 @@
 -- | Local admission, diagnostic storage and feedback supplied by assembly.
-module Max.Agent.Execution (ExecutionAdmission (..), ExecutionJournal (..), ExecutionEvents (..)) where
+module Max.Agent.Execution (ExecutionAdmission (..), ExecutionJournal (..), ExecutionEvents (..), ExecutionResults (..)) where
 
 import Control.Concurrent.STM (STM)
+import Data.Aeson (Value)
 import Data.Text (Text)
 import Effectful (Eff)
 import Max.Execution.Types
@@ -26,5 +27,8 @@ data ExecutionJournal es = ExecutionJournal
 data ExecutionEvents es = ExecutionEvents
   { eeObserve :: TurnRuntime -> ToolContext -> Eff es [ChatMessage],
     eeInterrupt :: TurnRuntime -> STM (),
-    eeFinish :: TurnRuntime -> Eff es Bool
+    eeFinish :: TurnRuntime -> Eff es Bool,
+    eeResults :: TurnRuntime -> ToolContext -> Eff es (Maybe ExecutionResults)
   }
+
+data ExecutionResults = ExecutionResults {erDeliver :: Text -> Value -> IO (), erClose :: IO ()}

@@ -57,9 +57,9 @@ data Pending = Pending {calls :: !(Set Text), children :: !(Set JobRun)}
 noPending :: Pending
 noPending = Pending Set.empty Set.empty
 
-newtype Node = Node (TVar State)
+newtype Node = Node (TVar State) deriving stock (Eq)
 
-data Task = Task !Node !Integer
+data Task = Task !Node !Integer deriving stock (Eq)
 
 data State = State {next :: !Integer, tasks :: !(Map Integer Bool), events :: !(Seq Event)}
 

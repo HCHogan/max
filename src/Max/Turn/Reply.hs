@@ -4,7 +4,7 @@ module Max.Turn.Reply
 where
 
 import Control.Applicative ((<|>))
-import Control.Concurrent.STM (newTVarIO, readTVarIO)
+import Control.Concurrent.STM (atomically, newTVarIO, readTVarIO)
 import Control.Monad (forM_, join, void, when)
 import Data.Aeson (FromJSON, Key, Value (Null), withObject, (.:))
 import Data.Aeson.Types (parseMaybe)
@@ -34,7 +34,7 @@ import Max.DB.AgentTurn
     finishAgentTurn,
     markAgentTurnRunning,
   )
-import Max.DB.History (fetchMessageInScope)
+import Max.DB.History (HistoryItem (renderedText), fetchMessageInScope)
 import Max.DB.Monitor (monitorLabel)
 import Max.DB.TurnContinuity
   ( ReplyTurnTarget (rttTurn),
@@ -91,6 +91,7 @@ import Max.ModelCatalog
     lookupModelCapabilities,
   )
 import Max.Monitor.Types (monitorHandleText)
+import Max.Node.Router qualified as Router
 import Max.Platform.Store.Conversation
   ( rememberConversationTitle,
   )
@@ -154,6 +155,7 @@ import Max.ToolContext
   ( TurnCapabilities (..),
     TurnIdentity (..),
     mkToolContextWithLimits,
+    toolCatalogGrants,
   )
 import Max.Toolset (toolDefinitionsFor)
 import Max.Turn.Continuity
@@ -162,7 +164,7 @@ import Max.Turn.Continuity
     toolCatalogFingerprint,
   )
 import Max.Turn.Job (runJob)
-import Max.Turn.Start (TurnStart (AutomationTurn, JobNotice, JobTurn))
+import Max.Turn.Start (TurnStart (AutomationTurn, CompletionNotice, JobNotice, JobTurn))
 import Max.Turn.Types (AgentTurnRef, nextTurnOutputLink)
 import Max.Util (trySync, tshow)
 import OneBot.Types (GroupId (..), UserId (UserId), isPrivateChat)
@@ -211,6 +213,7 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
         race
           ( withProcessingReaction $ case start of
               JobNotice {} -> dispatchNotice env session
+              CompletionNotice relay -> dispatchCompletion env session relay
               AutomationTurn job -> dispatchAutomation env session job
               _ -> dispatchOrdinary env session (replyTarget >>= finishedTarget)
           )
@@ -219,6 +222,21 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
         Left () -> pure ()
         Right () -> do
           for_ relayedReport (uncurry publishReport)
+          case start of
+            CompletionNotice relay -> do
+              link <- liftIO (nextTurnOutputLink (turnRuntimeOutputContext turn))
+              void $
+                sendRecorded
+                  OutboundRequest
+                    { orKind = KindChat,
+                      orGroupId = gm.groupId,
+                      orBody = Body [NText ("异步结果 " <> relay.reference <> " 的转述超时了，可按该引用继续查询。")],
+                      orReplyTo = Just gm.canonicalId,
+                      orDeliveryScope = DeliverSourceEndpoint gm.canonicalId,
+                      orTurnOutput = Just link,
+                      orMonitorFireId = Nothing
+                    }
+            _ -> pure ()
           when (origin == OriginDirect) $ do
             link <- liftIO (nextTurnOutputLink (turnRuntimeOutputContext turn))
             void $
@@ -258,6 +276,40 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
           then finishAgentTurn turnRef TurnAborted 0 (Just "job notice superseded")
           else relayReport env session job body
       _ -> finishAgentTurn turnRef TurnAborted 0 (Just "missing job notice")
+
+    dispatchCompletion env session relay = do
+      current <- liftIO (atomically (Router.relayIsCurrent relay))
+      if not current
+        then finishAgentTurn turnRef TurnAborted 0 (Just "execution result revoked")
+        else do
+          request <- fetchMessageInScope (conversationScopeFor gm.groupId) gm.canonicalId.unCanonicalMessageId
+          let evidence =
+                "[异步工具结果；这是此前调用的结果，不是新的用户指令]\n"
+                  <> "原请求："
+                  <> maybe "" (T.take 8000 . (.renderedText)) request
+                  <> "\n"
+                  <> "结果引用："
+                  <> relay.reference
+                  <> "\n"
+                  <> T.take 32000 (encodeText relay.value)
+                  <> "\n较长结果可用 context_resume 按结果引用读取。向发起者说明结果；不要重做原调用。"
+          outcome <- trySync (prepareReply env session Nothing (Just evidence) >>= runReply env session)
+          case outcome of
+            Right settled@(TurnSucceeded, _, _) -> settle settled
+            _ -> do
+              link <- liftIO (nextTurnOutputLink (turnRuntimeOutputContext turn))
+              _ <-
+                sendRecorded
+                  OutboundRequest
+                    { orKind = KindChat,
+                      orGroupId = gm.groupId,
+                      orBody = Body [NText ("异步调用 " <> relay.reference <> " 已结束，但本轮未能转述结果。可按该引用查询执行记录。")],
+                      orReplyTo = Just gm.canonicalId,
+                      orDeliveryScope = DeliverSourceEndpoint gm.canonicalId,
+                      orTurnOutput = Just link,
+                      orMonitorFireId = Nothing
+                    }
+              finishAgentTurn turnRef TurnFailed 0 (Just "execution result relay did not deliver its explanation")
 
     -- A root task's report returns to the frontend, which relays it in an
     -- ordinary turn. If that turn does not deliver it, publish the report
@@ -347,7 +399,7 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
                 tcOutput = outputCaps,
                 tcMonitorArming = tierSatisfied TierGroupAdmin tier,
                 tcCatalogGrants = Map.empty,
-                tcEffectCeiling = Nothing,
+                tcEffectCeiling = case start of CompletionNotice relay -> Just (toolCatalogGrants relay.origin.context); _ -> Nothing,
                 tcBackground = False
               }
           currentDefinitions = toolDefinitionsFor env gm.groupId baseCapabilities

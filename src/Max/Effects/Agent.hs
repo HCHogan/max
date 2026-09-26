@@ -191,13 +191,15 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
     preKilled <- liftIO (activateTurnRuntime turn "llm" cancel)
     when preKilled $ throwIO TaskCancelled
     session <- newExecutionSession context.acMaxToolCalls
+    results <- inbox.eeResults turn context.acTools
+    for_ results $ \channel -> setExecutionResultSink session (\ref invocation -> channel.erDeliver ref (outcomeEnvelope invocation.tiOutcome))
     outputQueue <- newToolOutputQueue defaultInlineMediaLimit
     runToolOutputRead outputQueue $
       runToolDirectoryDynamic (registryCatalog <$> liftIO (readTVarIO catalogRef)) $
         runToolsWith
           (raise . raise . runToolControl . runToolOutput outputQueue)
           (liftIO (readTVarIO catalogRef))
-          (loop workingRef session catalogRef emit context turn profile msgs `finally` closeExecutionSession session)
+          (loop workingRef session catalogRef emit context turn profile msgs `finally` (closeExecutionSession session `finally` for_ results (liftIO . (.erClose))))
   where
     loop ::
       TVar (Maybe UsageAnchor, Text) ->

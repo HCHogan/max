@@ -183,6 +183,7 @@ library
         Max.Node.Executor
         Max.Node.Events
         Max.Node.Render
+        Max.Node.Router
         Max.Context.Types
         Max.ConversationScope
         Max.MCP.Client
@@ -662,6 +663,7 @@ executable max-workflow-eval
         , async                >= 2.2 && < 2.3
         , opt-env-conf         >= 0.15 && < 0.17
         , postgresql-simple    >= 0.7  && < 0.8
+        , stm                  >= 2.5  && < 2.6
         , text                 >= 2.1  && < 2.2
         , time                 >= 1.12 && < 1.16
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
@@ -752,6 +754,7 @@ test-suite max-test
         Max.Context.ProjectionSpec
         Max.Node.ExecutorSpec
         Max.Node.EventsSpec
+        Max.Node.RouterSpec
         Max.Task.DelegationSpec
         Max.AutomationArgsSpec
         Max.Concurrent.LockSpec

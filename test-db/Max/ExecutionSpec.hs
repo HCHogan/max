@@ -34,6 +34,8 @@ import Max.Execution.Tools
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Jobs qualified as Jobs
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
+import Max.Node.Router qualified as Router
+import Max.Platform.Types (noAdvertisedCaps)
 import Max.Skill.Contract (Contract, parseContract)
 import Max.Skill.Package
 import Max.Skill.Workflow (bindWorkflowContracts)
@@ -44,10 +46,11 @@ import Max.Tasks (TaskCancelled (..), TurnRuntime, beginTurnRuntime, finishTurnR
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (LoopControl (..), controlSkillLoads)
-import Max.Turn.Types (AgentTurnRef (..))
+import Max.ToolContext
+import Max.Turn.Types (AgentTurnRef (..), ExecutionOrdinal (..), resultHandleText)
 import OneBot.Types (GroupId (..), UserId (..))
 import System.Timeout (timeout)
-import Test.Hspec
+import Test.Hspec hiding (context)
 
 type DbEffects = '[Blob, WithConnection, Log, Concurrent, IOE]
 
@@ -70,10 +73,15 @@ hostHooks jobs = hoistExecutionHooks raise . hooks jobs
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution with real journal" $ do
   it "keeps a detached native call alive through task finish and journals its actual result" $ do
-    (turn, message, _) <- seed pool 900 1
+    (turn, message, principal) <- seed pool 900 1
     tasks <- newTaskRegistry
     jobs <- Jobs.newJobs tasks
     runtime <- beginTurnRuntime tasks turn (GroupId 900) (UserId 1) (Just message)
+    let context =
+          mkToolContext
+            (TurnIdentity (GroupId 900) message (UserId 1) (UserId 99) principal Nothing Nothing)
+            (TurnCapabilities False False False noAdvertisedCaps False Map.empty Nothing False)
+    origin <- Jobs.resultOrigin jobs runtime context
     entered <- newEmptyMVar
     release <- newEmptyMVar
     steering <- newTVarIO False
@@ -82,7 +90,9 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ -> do
       _ <- withHost pool . runTools registry $ do
         session <- newExecutionSession Nothing
+        setExecutionResultSink session (\ref invocation -> atomically (Router.deliverResult jobs.resultRouter origin ref (outcomeEnvelope invocation.tiOutcome)))
         executeToolBatch session (hostHooks jobs runtime) {ehInterrupt = readTVar steering >>= check} (views registry) [ToolRequest "detached" "echo" args]
+      atomically (Router.closeTask jobs.resultRouter origin.target)
       withDb pool (finishAgentTurn turn TurnSucceeded 1 Nothing)
       Async.withAsync (finishTurnRuntime tasks runtime) $ \closing -> do
         timeout 1000000 (atomically (turnAcceptsWork tasks turn.atrTurnId >>= check . not)) `shouldReturn` Just ()
@@ -93,7 +103,30 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
         putMVar release ()
         timeout 3000000 (Async.wait closing) `shouldReturn` Just ()
       states turn `shouldReturn` [("echo", "succeeded")]
+      Just (Jobs.RelayResult relay) <- timeout 1000000 (Jobs.takeJobWork jobs)
+      relay.value `shouldBe` outcomeEnvelope (ToolSucceeded args)
+      relay.origin.turn `shouldBe` turn.atrTurnId
+      relay.reference `shouldBe` resultHandleText turn.atrTurnOrdinal (ExecutionOrdinal 1)
+      atomically (Router.releaseRelay jobs.resultRouter relay)
       Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork CheckOnly) `shouldReturn` False
+
+  it "revokes a queued native result and its publication when the producing job is replaced" $ do
+    running <- runningJob pool Basic Map.empty
+    let context =
+          mkToolContext
+            (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 99) running.job.spec.principal Nothing Nothing)
+            (TurnCapabilities False False False noAdvertisedCaps False Map.empty Nothing True)
+    origin <- Jobs.resultOrigin running.jobs running.runtime context
+    atomically (Router.closeTask running.jobs.resultRouter origin.target >> Router.deliverResult running.jobs.resultRouter origin "r1" (toJSON ("obsolete" :: Text)))
+    relay <- atomically (Router.takeRelay running.jobs.resultRouter)
+    (frontend, _, _) <- seed pool 900 1
+    Jobs.bindResultRelay running.jobs frontend.atrTurnId relay
+    Jobs.authorizeJobPublication running.jobs frontend.atrTurnId `shouldReturn` True
+    Jobs.replaceJob running.jobs (GroupId 900) running.job.spec.principal False running.job.run.jobId "replacement" `shouldReturn` Right ()
+    atomically (Router.relayIsCurrent relay) `shouldReturn` False
+    Jobs.authorizeJobPublication running.jobs frontend.atrTurnId `shouldReturn` False
+    Jobs.detachJobNotice running.jobs frontend.atrTurnId
+    atomically (Router.referencedOwners running.jobs.resultRouter) `shouldReturn` Set.empty
 
   it "records a JavaScript syntax failure before any leaf as failed-before-effect" $ do
     (jobs, turn, runtime) <- fixture

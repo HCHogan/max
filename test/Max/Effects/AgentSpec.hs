@@ -75,6 +75,7 @@ runTestAgentObserved inputs observe =
         )
         (const STM.retry)
         (\_ -> liftIO (null <$> readIORef inputs))
+        (\_ _ -> pure Nothing)
     )
     Nothing
 
@@ -839,7 +840,7 @@ spec = describe "Agent full loop" $ do
             }
         admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure OverBudget)
         journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
-        inputs = ExecutionEvents (\_ _ -> liftIO $ atomicModifyIORef' _inputs (\notes -> ([], [inputMessage (T.intercalate "\n" notes) | not (null notes)]))) (const STM.retry) (\_ -> liftIO (null <$> readIORef _inputs))
+        inputs = ExecutionEvents (\_ _ -> liftIO $ atomicModifyIORef' _inputs (\notes -> ([], [inputMessage (T.intercalate "\n" notes) | not (null notes)]))) (const STM.retry) (\_ -> liftIO (null <$> readIORef _inputs)) (\_ _ -> pure Nothing)
     result <- withCompactLogger ColorNever Nothing $ \logger ->
       runEff . runConcurrent . runLog "budget-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 4) (const (buildToolRegistry [echoDefinition] [counted])) $
         agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
@@ -906,7 +907,7 @@ spec = describe "Agent full loop" $ do
             )
         admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted)
         journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
-        inputs = ExecutionEvents (\_ _ -> liftIO $ atomicModifyIORef' inbox (\text -> ("", [inputMessage text | not (T.null text)]))) (const STM.retry) (\_ -> liftIO (T.null <$> readIORef inbox))
+        inputs = ExecutionEvents (\_ _ -> liftIO $ atomicModifyIORef' inbox (\text -> ("", [inputMessage text | not (T.null text)]))) (const STM.retry) (\_ -> liftIO (T.null <$> readIORef inbox)) (\_ _ -> pure Nothing)
     result <- withCompactLogger ColorNever Nothing $ \logger ->
       runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 3) (const (buildToolRegistry [] [])) $
         agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)

@@ -12,6 +12,7 @@ module Max.Tasks
     finishTurnRuntime,
     retainTurnWork,
     turnAcceptsWork,
+    turnWasCancelled,
     turnRuntimeTaskId,
     turnRuntimeAgentTurn,
     turnExecutor,
@@ -426,3 +427,6 @@ authorizeTurnOutput registry group turn = atomically $ do
 
 entryTurnId :: TaskEntry -> AgentTurnId
 entryTurnId = (.atrTurnId) . turnOutputAgentTurn . (.teOutputContext)
+
+turnWasCancelled :: TurnRuntime -> STM Bool
+turnWasCancelled = readTVar . (.trEntry.teKilled)

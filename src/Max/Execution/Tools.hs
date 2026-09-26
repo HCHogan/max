@@ -7,6 +7,7 @@ module Max.Execution.Tools
     ToolRequest (..),
     ToolBatch (..),
     newExecutionSession,
+    setExecutionResultSink,
     executionHooks,
     hoistExecutionHooks,
     freshExecutionLabel,
@@ -156,12 +157,16 @@ data ExecutionSession = ExecutionSession
     programs :: !(TVar (Map Text ProgramControl)),
     nativeFutures :: !(TVar (Map Text (Async ToolInvocation))),
     callHandles :: !(TVar (Map Text Text)),
+    resultSink :: !(TVar (Maybe (Text -> ToolInvocation -> IO ()))),
     completions :: !(STM.TQueue (Text, ToolInvocation))
   }
 
 newExecutionSession :: (Concurrent :> es) => Maybe Int -> Eff es ExecutionSession
 newExecutionSession limit =
-  ExecutionSession <$> newTVarIO (max 0 <$> limit) <*> newTVarIO 0 <*> newTVarIO ([], 0, False) <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTQueueIO
+  ExecutionSession <$> newTVarIO (max 0 <$> limit) <*> newTVarIO 0 <*> newTVarIO ([], 0, False) <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO Nothing <*> newTQueueIO
+
+setExecutionResultSink :: (Concurrent :> es) => ExecutionSession -> (Text -> ToolInvocation -> IO ()) -> Eff es ()
+setExecutionResultSink session sink = atomically (writeTVar session.resultSink (Just sink))
 
 -- | Process-local control of a retained guest. Only its owner session can
 -- resolve the handle; controls contain no model-supplied authority.
@@ -242,14 +247,21 @@ executeToolBatch session hooks catalog requests = mask $ \restore -> do
       detach index request worker = do
         handles <- readTVarIO session.callHandles
         ref <- maybe (freshExecutionLabel session "result") pure (Map.lookup request.trCallId handles)
-        hooks.ehRetain worker
+        watcher <- asyncWithUnmask $ \unmask ->
+          ( do
+              result <- unmask (waitCatch worker)
+              let invocation = either (\exception -> ToolInvocation (ToolOutcomeUnknown (ToolFault "interrupted" (T.pack (show exception)) RetryUnsafe)) ContinueLoop) id result
+              sink <- readTVarIO session.resultSink
+              case sink of
+                Nothing -> atomically (STM.writeTQueue session.completions (ref, invocation))
+                Just deliver -> unmask (liftIO (deliver ref invocation))
+              pure invocation
+          )
+            `finally` cancel worker
+        hooks.ehRetain watcher `onException` cancel watcher
         atomically $ do
           modifyTVar' session.nativeFutures (Map.insert ref worker)
           modifyTVar' owned (Map.delete index)
-        _ <- asyncWithUnmask $ \unmask -> do
-          result <- unmask (waitCatch worker)
-          let invocation = either (\exception -> ToolInvocation (ToolOutcomeUnknown (ToolFault "interrupted" (T.pack (show exception)) RetryUnsafe)) ContinueLoop) id result
-          atomically (STM.writeTQueue session.completions (ref, invocation))
         pure (runningInvocation ref)
       asyncTool request = maybe False ((== AsyncTool) . (.ctDefinition.tdAwait)) (find ((== ToolRef request.trName) . (.ctDefinition.tdRef)) catalog)
       requestMap = Map.fromList (zip [0 :: Int ..] requests)

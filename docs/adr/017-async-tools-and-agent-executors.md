@@ -35,10 +35,15 @@ canonical output provenance identifies the producing root task. Detached native
 calls now retain the execution runtime until they settle: the root executor is
 released first, new model/tool admission and publication are fenced, and browser
 teardown and shutdown-slot release wait for these calls. Kill/shutdown cancel
-retained calls. Their completed outcomes still need terminal-task relay routing;
-background-job authority after job completion also remains to be integrated.
+retained calls. Native completions now pass through `Node.Router`: an open task
+observes a `Settled` event, while a closed task gets a frontend relay under the
+original catalog ceiling. Results remain owned until observation or relay;
+closing after delivery but before observation also relays exactly once. The
+bounded router retains job-generation provenance and fences revoked output.
+Background-job authority after job completion and handoff of queued media
+attachments to result relays remain to be integrated.
 Full routing
-(child relays, replacement/cancellation, native completions and monitor fires), combined
+(child relays, replacement/cancellation and monitor fires), combined
 observation bounds and the open-task tail remain in step 4. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)
 and the Wasm host ABI of [ADR-012](012-wasm-tool-execution.md). Work stays

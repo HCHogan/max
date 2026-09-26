@@ -21,6 +21,7 @@ import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Jobs qualified as Jobs
 import Max.Node.Events qualified as Events
 import Max.Node.Render (renderEvents)
+import Max.Node.Router qualified as Router
 import Max.Tasks (setTurnObservationCursor, turnEvents, turnObservationCursor, turnRuntimeAgentTurn)
 import Max.ToolContext (ToolContext, toolClearedAt, toolGroupId)
 import Max.Turn.Types (AgentTurnRef (..))
@@ -48,11 +49,18 @@ runAgentRuntime jobs =
                 pure messages
             events <- liftIO . atomically $ do
               Jobs.flushJobEvents jobs (turnRuntimeAgentTurn turn).atrTurnId
-              turnEvents turn >>= Events.observe
+              target <- turnEvents turn
+              events <- Events.observe target
+              Router.observeResults jobs.resultRouter target events
+              pure events
             pure (published <> renderEvents events)
         )
         (\turn -> turnEvents turn >>= (`Events.awaitInterrupt` Events.noPending))
         (\turn -> liftIO . atomically $ turnEvents turn >>= Events.tryFinish)
+        ( \turn context -> liftIO $ do
+            origin <- Jobs.resultOrigin jobs turn context
+            pure (Just ExecutionResults {erDeliver = \ref value -> atomically (Router.deliverResult jobs.resultRouter origin ref value), erClose = atomically (Router.closeTask jobs.resultRouter origin.target)})
+        )
     )
     (Just (liftIO . Jobs.acquireGuestSlot jobs . (.atrTurnId)))
 

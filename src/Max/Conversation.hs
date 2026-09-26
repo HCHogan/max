@@ -11,6 +11,7 @@ module Max.Conversation
     actorFor,
     release,
     eventsFor,
+    canAdmit,
   )
 where
 
@@ -53,6 +54,11 @@ data TaskHandle = TaskHandle {input :: !TurnInput, decision :: !(TMVar (Maybe Ex
 
 newConversations :: IO Conversations
 newConversations = Conversations <$> newTVarIO Map.empty
+
+canAdmit :: Conversations -> GroupId -> STM Bool
+canAdmit (Conversations registry) group = do
+  groups <- readTVar registry
+  pure (maybe 0 (Map.size . (.tasks)) (Map.lookup group groups) < 256 && sum (map (Map.size . (.tasks)) (Map.elems groups)) < 1024)
 
 enqueue :: Conversations -> TurnInput -> IO (Maybe TaskHandle)
 enqueue (Conversations registry) input = do

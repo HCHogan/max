@@ -4,16 +4,18 @@ module Max.Handler.Jobs
   )
 where
 
+import Control.Concurrent.STM (atomically, check)
 import Control.Monad (forever, void, when)
 import Data.Foldable (for_)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Effectful (Eff, IOE, MonadIO (liftIO), type (:>))
-import Effectful.Concurrent.Async (Concurrent)
+import Effectful.Concurrent.Async (Concurrent, async)
 import Effectful.Log (Log, logAttention, object, (.=))
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask)
+import Max.Conversation qualified as Conversation
 import Max.DB.Monitor.Admission qualified as MonitorJob
 import Max.Dispatch
   ( DispatchMessage (..),
@@ -32,6 +34,7 @@ import Max.IR (Body (Body), Node (NText))
 import Max.Jobs qualified as Jobs
 import Max.MessageKind (MessageKind (KindChat))
 import Max.ModelCatalog (ModelCatalog)
+import Max.Node.Router qualified as Router
 import Max.Platform.Store.Ingest (loadDispatchMessage)
 import Max.Prompt (TriggerOrigin (OriginMonitor, OriginTask))
 import Max.Task.State qualified as JobState
@@ -44,8 +47,9 @@ import Max.Task.Types
     jobReportText,
     taskHandle,
   )
+import Max.ToolContext (toolAuthorPrincipalId, toolCanonicalId, toolGroupId)
 import Max.Turn.Dispatch (dispatchLLMWith)
-import Max.Turn.Start (TurnStart (AutomationTurn, JobNotice, JobTurn))
+import Max.Turn.Start (TurnStart (AutomationTurn, CompletionNotice, JobNotice, JobTurn))
 import Max.Util (catchSync)
 
 shutdownJobs :: (WithConnection :> es, Outbound :> es, Log :> es, IOE :> es) => Jobs.Jobs -> Eff es ()
@@ -99,6 +103,25 @@ jobsWorker = do
       Jobs.PublishJobNotice job version body ->
         dispatch job (JobNotice job version body) (noticeFailed env job)
           `catchSync` (noticeFailed env job . T.pack . show)
+      Jobs.RelayResult relay -> do
+        let context = relay.origin.context
+            release = liftIO (atomically (Router.releaseRelay env.beJobs.resultRouter relay))
+            relayResult = do
+              liftIO . atomically $ do
+                current <- Router.relayIsCurrent relay
+                capacity <- Conversation.canAdmit env.beConversations (toolGroupId context)
+                check (not current || capacity)
+              current <- liftIO (atomically (Router.relayIsCurrent relay))
+              if not current
+                then release
+                else do
+                  source <- loadDispatchMessage (toolCanonicalId context)
+                  case source of
+                    Just message
+                      | message.groupId == toolGroupId context && message.authorPrincipalId == toolAuthorPrincipalId context ->
+                          dispatchLLMWith (CompletionNotice relay) Nothing OriginTask message {body = Body [], replyTo = Nothing, mentionPrincipals = Map.empty}
+                    _ -> release >> logAttention "execution result source unavailable" (object ["result" .= relay.reference])
+        void . async $ relayResult `catchSync` (\err -> release >> logAttention "execution result relay failed" (object ["error" .= T.pack (show err)]))
       Jobs.RecordMonitorResult job ->
         recordResult env job `catchSync` (noticeFailed env job . T.pack . show)
   where
