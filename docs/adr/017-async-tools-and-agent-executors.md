@@ -2,8 +2,8 @@
 
 Status: proposed 2026-09-26; not implemented. Would amend
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)
-and the Wasm host ABI of [ADR-012](012-wasm-tool-execution.md). Keeps the
-restart contract of the [runtime simplification](../simplification.md).
+and the Wasm host ABI of [ADR-012](012-wasm-tool-execution.md). Work stays
+process-local; restart persistence is out of scope (§9).
 
 ## Summary
 
@@ -132,8 +132,8 @@ still pending.
 7. **Control flows down the tree; messages and reports flow up.** A node waits
    for an ancestor only through `ask`. The question interrupts the ancestor's
    await, so waits never form a cycle.
-8. **Everything here is process-local.** A restart interrupts running work and
-   never resumes or replays it.
+8. **Everything here is process-local.** A restart interrupts running work; this
+   ADR adds no resumption or replay (§9).
 
 ### 2. Codemode guests are poll-driven coroutines
 
@@ -197,10 +197,35 @@ is ready. A completion wakes the program, never the model. As a result:
 - `Promise.race` returns with its first result.
 - A pipeline starts each agent as soon as its own search returns.
 
-**Returning with calls in flight.** Non-detachable calls finish and are recorded
-before the result is returned, as they are today. Detachable calls that were
-never awaited become handles listed in the result (`detached`). Their outcomes
-arrive later as events (§4).
+**Returning cancels what is still in flight.** When a program returns, the
+result of any call still in flight can no longer reach anything, because the
+program is gone. Such calls are cancelled, and so are their descendants. This is
+structured concurrency, like dropping a tokio `JoinSet`. It replaces ADR-016's
+rule that unawaited calls run before the result is published: a program must
+await the work it wants done. Work that should outlive the program is detached
+explicitly. `tools.agent` without `wait` returns a handle at once, so it is never
+in flight at return. A cancelled call is recorded like any interrupted call:
+outcome-unknown if it may already have started an effect, cancelled otherwise.
+
+**Race losers.** `Promise.race` cannot cancel its losers. The program may still
+await one later, for example
+`await Promise.race([p, max.sleep(60_000)]); …; await p`. So race losers run on
+until they finish or the program returns. Two SDK additions give earlier
+cancellation:
+
+- `max.race(promises)` settles like `Promise.race` and then cancels the calls
+  behind the other promises, like `tokio::select!` dropping its other branches.
+- `max.cancel(promise)` cancels one call.
+
+Both act on promises returned directly by tool calls. A derived promise, such as
+the result of an `async` function, cannot be traced back to its calls; those
+calls are cancelled at return at the latest. A losing call has no reader for its
+result. If it is an effectful tool that has already started, cancelling it can
+leave the effect partial, which is recorded as outcome-unknown. Races are meant
+for redundant reads and redundant agents, where this does not arise.
+
+`max.sleep(ms)` is a host future without effects, for timeouts. It gives the
+guest no clock reading.
 
 ### 3. One scheduler for native calls and code
 
@@ -388,10 +413,10 @@ An interrupting event (§4) ends the await without cancelling anything.
   completions are buffered, and no guest step runs. `run_code` returns
   `{status: "paused", run: "t#41:r3", calls, pending}`. The model may resume the
   program (`run_code_resume`) or cancel it (`run_code_cancel`). Pausing keeps a
-  program and the model from issuing calls concurrently for the same task.
-  - When its task ends, a paused program is cancelled.
-  - Its in-flight calls finish and are recorded.
-  - Detachable in-flight calls become handles.
+  program and the model from issuing calls concurrently for the same task. When
+  its task ends, a paused program is cancelled, and so are its in-flight calls
+  (§2). An interrupted native call differs: it has already become a handle that
+  the model saw, as with `agent` without `wait`.
 
 Non-async tools are not interrupted. An interrupting event waits for them to
 finish; they are short by definition.
@@ -405,10 +430,9 @@ executor.
 
 Live guests are limited globally and per agent tree. A `run_code` over either
 limit is rejected before any effect, with retry-safe status; it is never queued.
-So a parent's paused program can never hold the slot its descendant needs, as
-the simplification contract requires ("a parent awaiting children must not hold
-their last available resource slot"). Tree budgets and the 16-level nesting
-limit stay.
+Queueing could deadlock: an ancestor's paused program would hold the slot its
+descendant is waiting for. After a rejection the model can fall back to native
+calls. Tree budgets and the 16-level nesting limit stay.
 
 **Messages up the tree.** Agent nodes get two tools, with matching SDK
 functions:
@@ -474,9 +498,15 @@ and each needs its own decision:
 
 ### 9. Restart
 
-Unchanged. Nodes, tasks, records, guests and futures are process-local. A
-restart interrupts them and resumes nothing. Monitor definitions and trigger
-facts persist as they do today.
+Unchanged. Nodes, tasks, records, guests and futures are process-local, like
+today's jobs. A restart interrupts them and resumes nothing. Monitor definitions
+and trigger facts persist as they do today.
+
+Persistence is deferred, not ruled out. The projection's records are already
+plain data. A guest could be rebuilt by deterministic replay: the SDK has no
+clock or entropy, results are journaled, and the host would add the wake order.
+Neither is worth building while the work being awaited (child agents, in-memory
+subscriptions) itself ends on restart.
 
 ## Delivery
 
@@ -487,7 +517,8 @@ Each step ships on its own, with the test suites and `max-prompt-flow` passing.
    - Removed: the mailbox, the callback and paging, and the leaf-worker rule.
    - Added: guest limits.
    - Tests:
-     - `Promise.race` returns with the first completion.
+     - `Promise.race` returns with the first completion; `max.race` cancels the
+       losers; returning cancels calls still in flight.
      - A pipeline starts each agent after its own search.
      - Each resume delivers completions individually.
      - A waiting background agent can run code.
@@ -574,16 +605,16 @@ Each step ships on its own, with the test suites and `max-prompt-flow` passing.
 - **Concurrent segments on one node.** Leads to contradictory replies,
   undefined observations and racing publication.
 - **Keeping leaf workers.** No longer justified; see §7.
-- **Guest snapshots, or Temporal-style replay to survive restart.** Replay would
-  mean a deterministic guest plus journaled results and wake order. Both options
-  contradict the restart contract and would bring back the replay that ADR-005
-  retired.
+- **Guest snapshots, or Temporal-style replay to survive restart.** Deferred
+  rather than rejected; see §9.
+- **Cancelling race losers inside `Promise.race`.** Rejected: it would break the
+  legitimate pattern of racing a call against a timeout and then awaiting it
+  anyway.
 
 ## Open questions
 
-- Should the losers of a `Promise.race` be cancelled? The proposal is to finish
-  or detach them as in §2, and add an explicit `max.cancel(promise)` if needed.
-- Limits: the yield threshold (five seconds), live guests (global and per tree),
-  the observation cap, and the ready-queue classes.
+- Limits: the yield threshold, live guests (global and per tree), in-flight calls
+  per program, the observation cap, open tasks per group, and the ready-queue
+  classes.
 - The format and size of the volatile tail that describes other open tasks.
 - Tool names: `agent_tell`, `agent_ask`, `run_code_resume`, `run_code_cancel`.
