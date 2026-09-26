@@ -9,6 +9,7 @@ module Max.Execution.Tools
     newExecutionSession,
     setExecutionResultSink,
     executionHooks,
+    executionEventTask,
     hoistExecutionHooks,
     freshExecutionLabel,
     executeToolBatch,
@@ -186,6 +187,9 @@ data NativeFuture = NativeFuture
     reference :: !Text
   }
 
+executionEventTask :: ExecutionSession -> ExecutionHooks es -> STM.STM Events.Task
+executionEventTask session hooks = maybe session.events id <$> hooks.ehEvents
+
 setExecutionResultSink :: (Concurrent :> es) => ExecutionSession -> (Text -> ToolInvocation -> IO ()) -> Eff es ()
 setExecutionResultSink session sink = atomically (writeTVar session.resultSink (Just sink))
 
@@ -352,7 +356,7 @@ launchCall = launchCallWith (const (pure ()))
 
 launchNativeCall :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es NativeFuture
 launchNativeCall session hooks catalog request = do
-  target <- atomically (maybe session.events id <$> hooks.ehEvents)
+  target <- atomically (executionEventTask session hooks)
   settlement <- atomically (Events.newFuture target)
   reference <- freshExecutionLabel session "native"
   let publish result = do

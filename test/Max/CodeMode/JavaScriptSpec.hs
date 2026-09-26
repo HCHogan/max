@@ -26,7 +26,9 @@ import Max.CodeMode.Wasm
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, drainInlineMedia, forkToolOutputQueue, newToolOutputQueue, queueInlineMedia, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
 import Max.Execution.Tools
+import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Node
+import Max.Node.Log qualified as NodeLog
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (LoopControl (ContinueLoop))
 import Max.Turn.Types (AgentTurnId (..))
@@ -79,6 +81,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     fmap (.cmExit) result `shouldBe` Just WasmCompleted
     fmap (.cmOutput) result `shouldBe` Just (Just (toValue [toValue [String "one", Bool True], toValue [String "two", Bool True]]))
   it "hands each leaf attachment to one guest snapshot across pause and resume" $ do
+    target <- atomically (Events.newNode >>= Events.newTask)
     entered <- newEmptyMVar
     release <- newEmptyMVar
     steering <- newTVarIO False
@@ -90,7 +93,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
             _ -> pure first
           _ <- queueInlineMedia media
           pure (Right value)
-        hooks = noJournal {ehInterrupt = readTVar steering >>= check}
+        hooks = noJournal {ehInterrupt = readTVar steering >>= check, ehEvents = pure (Just target)}
     registry <- checked [echoDefinition {tdAwait = AsyncTool}] [echoTool {toolRunner = LegacyRunner runner}]
     output <- runEff (newToolOutputQueue 2)
     let lower :: forall x. Eff '[ToolOutput, Concurrent, IOE] x -> Eff '[Concurrent, IOE] (x, LoopControl, [InlineMedia])
@@ -110,6 +113,8 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
             resumed <- controlProgram session True paused.cmRunRef
             liftIO (resumed.tiMedia `shouldBe` [second])
             liftIO (codeValue resumed `shouldBe` Just (String "done"))
+            liftIO $ programEvents target `shouldReturn` [(outcomeEnvelope (codeModeInvocation paused).tiOutcome, [first]), (outcomeEnvelope resumed.tiOutcome, [second])]
+            liftIO (atomically (Events.observeAll target) `shouldReturn` [])
           )
           `Eff.finally` closeExecutionSession session
 
@@ -156,12 +161,13 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
           `Eff.finally` closeExecutionSession session
 
   it "cancels a paused program, joins its tools and records unfinished effects" $ do
+    target <- atomically (Events.newNode >>= Events.newTask)
     entered <- newEmptyMVar
     release <- newEmptyMVar
     ended <- newEmptyMVar
     steering <- newTVarIO False
     let runner value = liftIO ((putMVar entered () >> takeMVar release >> pure (Right value)) `Exception.finally` putMVar ended ())
-        hooks = noJournal {ehInterrupt = readTVar steering >>= check}
+        hooks = noJournal {ehInterrupt = readTVar steering >>= check, ehEvents = pure (Just target)}
     registry <- checked [echoDefinition {tdAwait = AsyncTool}] [echoTool {toolRunner = LegacyRunner runner}]
     Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ ->
       runEff . runConcurrent . runTools registry $ do
@@ -172,22 +178,76 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
             cancelled <- controlProgram session False paused.cmRunRef
             liftIO (outcomeName cancelled.tiOutcome `shouldBe` "outcome-unknown")
             liftIO (timeout 1000000 (takeMVar ended) `shouldReturn` Just ())
+            liftIO $ programEvents target `shouldReturn` [(outcomeEnvelope (codeModeInvocation paused).tiOutcome, []), (outcomeEnvelope cancelled.tiOutcome, [])]
             stale <- controlProgram session True paused.cmRunRef
             liftIO (outcomeName stale.tiOutcome `shouldBe` "rejected")
           )
           `Eff.finally` closeExecutionSession session
 
   it "cancels a paused guest when its owning task ends" $ do
+    target <- atomically (Events.newNode >>= Events.newTask)
     steering <- newTVarIO True
     registry <- checked [echoDefinition {tdAwait = AsyncTool}] [echoTool]
-    runEff . runConcurrent . runTools registry $ do
+    finished <- timeout 3000000 . runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
-      paused <- runJavaScript session noJournal {ehInterrupt = readTVar steering >>= check} (views registry) "return await tools.echo({value:1});"
+      paused <- runJavaScript session noJournal {ehInterrupt = readTVar steering >>= check, ehEvents = pure (Just target)} (views registry) "return await tools.echo({value:1});"
       liftIO (paused.cmExit `shouldBe` WasmPaused)
       liftIO (paused.cmSubmittedCalls `shouldBe` 0)
+      liftIO (atomically (Events.tryFinish target) `shouldReturn` True)
       closeExecutionSession session
       result <- controlProgram session True paused.cmRunRef
       liftIO (outcomeName result.tiOutcome `shouldBe` "rejected")
+      liftIO $ programEvents target `shouldReturn` [(outcomeEnvelope (codeModeInvocation paused).tiOutcome, [])]
+    finished `shouldBe` Just ()
+
+  it "records a host admission exception before waking and failing the parent await" $ do
+    target <- atomically (Events.newNode >>= Events.newTask)
+    registry <- checked [echoDefinition] [echoTool]
+    let failure = userError "guest admission failed"
+        hooks = noJournal {ehEvents = pure (Just target), ehAcquireGuest = liftIO (Exception.throwIO failure)}
+        run = runEff . runConcurrent . runTools registry $ do
+          session <- newExecutionSession Nothing
+          runJavaScript session hooks (views registry) "return 42;"
+    timeout 3000000 run `shouldThrow` anyIOException
+    programEvents target `shouldReturn` [(outcomeEnvelope (ToolOutcomeUnknown (ToolFault "interrupted" (T.pack (show failure)) RetryUnsafe)), [])]
+
+  it "yields the parent executor while cancellation waits for leaf cleanup" $ do
+    node <- Node.newExecutor
+    parent <- atomically (Node.registerTask node (AgentTurnId 1) Node.NewRequest)
+    target <- atomically (Events.newNode >>= Events.newTask)
+    entered <- newEmptyMVar
+    blocked <- newEmptyMVar
+    cleanupStarted <- newEmptyMVar
+    cleanupRelease <- newEmptyMVar
+    peerReady <- newEmptyMVar
+    steering <- newTVarIO False
+    let runner value =
+          liftIO $
+            (putMVar entered () >> takeMVar blocked >> pure (Right value))
+              `Exception.finally` (putMVar cleanupStarted () >> takeMVar cleanupRelease)
+        hooks = noJournal {ehActor = pure (Just parent), ehEvents = pure (Just target), ehInterrupt = readTVar steering >>= check}
+    registry <- checked [echoDefinition {tdAwait = AsyncTool}] [echoTool {toolRunner = LegacyRunner runner}]
+    Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ ->
+      Async.withAsync
+        ( do
+            peer <- takeMVar peerReady
+            takeMVar cleanupStarted
+            timeout 1000000 (Node.enter peer) `shouldReturn` Just True
+            putMVar cleanupRelease ()
+            atomically (Node.closeTask peer)
+        )
+        $ \peerWorker -> do
+          finished <- timeout 3000000 . runEff . runConcurrent . runTools registry $ do
+            session <- newExecutionSession Nothing
+            paused <- runJavaScript session hooks (views registry) "await tools.echo({value:1}); return 'unreachable';"
+            liftIO (paused.cmExit `shouldBe` WasmPaused)
+            peer <- liftIO (atomically (Node.registerTask node (AgentTurnId 2) Node.NewRequest))
+            liftIO (putMVar peerReady peer)
+            cancelled <- controlProgram session False paused.cmRunRef
+            liftIO (outcomeName cancelled.tiOutcome `shouldBe` "outcome-unknown")
+            liftIO (Async.wait peerWorker)
+            closeExecutionSession session
+          finished `shouldBe` Just ()
 
   it "rejects run_code over its guest limit before any guest work" $ do
     registry <- checked [echoDefinition] [echoTool]
@@ -555,6 +615,12 @@ codeValue :: ToolInvocation -> Maybe Value
 codeValue invocation = case invocation.tiOutcome of
   ToolSucceeded (Object fields) -> KM.lookup "value" fields
   _ -> Nothing
+
+programEvents :: Events.Task -> IO [(Value, [InlineMedia])]
+programEvents target = atomically $ do
+  snapshot <- Events.readObservations target
+  let events = NodeLog.deliveredBetween (Events.observationOwner target) (NodeLog.logCursor NodeLog.emptyLog) (NodeLog.logCursor snapshot) snapshot
+  pure [(value, media) | Events.Settled _ value media <- events]
 
 valueOf :: Value -> Maybe Value
 valueOf = \case

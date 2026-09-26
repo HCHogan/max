@@ -94,6 +94,34 @@ hostHooks jobs = hoistExecutionHooks raise . hooks jobs
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution with real journal" $ do
+  it "wakes an awaited native agent through its tool settlement without a duplicate child report event" $ do
+    running <- runningJob pool Basic (Map.singleton "agent" "fixture")
+    let context =
+          mkToolContext
+            (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 99) running.job.spec.principal Nothing (Just (turnRuntimeOutputContext running.runtime)))
+            (TurnCapabilities False False False noAdvertisedCaps False running.job.spec.grants (Just running.job.spec.grants) True)
+        definition = echoDefinition {tdRef = ToolRef "agent", tdEffects = Set.singleton (EffectWrite "task.db"), tdParallelism = ParallelIndependent, tdRetryClass = RetryUnsafe, tdAwait = AsyncTool}
+    registry <- either (fail . show) pure (buildToolRegistry [definition] (filter ((== "agent") . (.toolName)) (taskTools running.jobs context)))
+    let run = withHost pool . runTools registry $ do
+          session <- newExecutionSession Nothing
+          executeToolBatch session (hostHooks running.jobs running.runtime) (views registry) [ToolRequest "child" "agent" (object ["objective" .= ("answer" :: Text), "profile" .= ("basic" :: Text), "wait" .= True])]
+    Async.withAsync run $ \waiting -> do
+      Just child <- timeout 10000000 (launchNext pool running.tasks running.jobs)
+      Jobs.completeJob running.jobs child.job.run Succeeded (JobResult "checked child report" Nothing)
+      Just result <- timeout 10000000 (Async.wait waiting)
+      [invocation] <- pure result.tbInvocations
+      outcomeName invocation.tiOutcome `shouldBe` "committed"
+      T.pack (show invocation.tiOutcome) `shouldSatisfy` T.isInfixOf "checked child report"
+      target <- atomically (turnEvents running.runtime)
+      snapshot <- atomically (Events.readObservations target)
+      let events = NodeLog.deliveredBetween (Events.observationOwner target) (NodeLog.logCursor NodeLog.emptyLog) (NodeLog.logCursor snapshot) snapshot
+      [value | Events.Settled _ value _ <- events] `shouldBe` [outcomeEnvelope invocation.tiOutcome]
+      [reportedRun | Events.ChildDone reportedRun _ <- events] `shouldBe` []
+      atomically (Router.observeEvents running.jobs.resultRouter target) `shouldReturn` []
+      states running.turn `shouldReturn` [("agent", "committed")]
+      finishTurnRuntime child.tasks child.runtime
+    finishTurnRuntime running.tasks running.runtime
+
   forM_ [("round limit", Nothing), ("tree model budget", Just ReserveRound), ("tree tool budget", Just ReserveCall)] $ \(label, budget) ->
     it ("observes late steering during " <> label <> " wrap-up and stays tool-free") $ do
       running <- runningJob pool Basic Map.empty
@@ -608,15 +636,15 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
         calls = [("echo", args), ("echo", object []), ("hidden", args), ("read_fail", args), ("write", args), ("unknown", args)]
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition, readDefinition, writeDefinition "write", writeDefinition "unknown"] [echoTool, readFail, write, unknown])
     binary <- guestCalls [request name value | (name, value) <- calls] ""
-    native <- withHost pool . runTools registry $ do
+    (native, guest) <- withHost pool . runTools registry $ do
       session <- newExecutionSession Nothing
       native <- executeToolBatch session (hostHooks jobs runtime) (views registry) [ToolRequest ("native:" <> name) name value | (name, value) <- calls]
-      _ <- runWasmTools session (hostHooks jobs runtime) (views registry) defaultWasmLimits binary
-      pure native
+      guest <- runWasmTools session (hostHooks jobs runtime) (views registry) defaultWasmLimits binary
+      pure (native, guest)
     target <- atomically (turnEvents runtime)
     snapshot <- atomically (Events.readObservations target)
     let events = NodeLog.deliveredBetween (Events.observationOwner target) (NodeLog.logCursor NodeLog.emptyLog) (NodeLog.logCursor snapshot) snapshot
-    [value | Events.Settled _ value _ <- events] `shouldMatchList` map (outcomeEnvelope . (.tiOutcome)) native.tbInvocations
+    [value | Events.Settled _ value _ <- events] `shouldMatchList` map (outcomeEnvelope . (.tiOutcome)) (native.tbInvocations <> [codeModeInvocation guest])
     atomically (Router.observeEvents jobs.resultRouter target) `shouldReturn` []
     rows <- withDb pool $ query "SELECT state,tool_ref,schema_hash,normalized_input,result_inline,failure_code FROM execution_journal WHERE turn_id=? AND tool_ref<>'host:wasm/v2' ORDER BY execution_ordinal" (Only turn.atrTurnId)
     let facts = rows :: [(Text, Text, Text, Value, Maybe Value, Maybe Text)]

@@ -75,7 +75,7 @@ spec = describe "shared host tool execution" $ do
     fmap (map (.tiOutcome) . (.tbInvocations)) result `shouldBe` Just [ToolSucceeded args]
     length <$> atomically (Events.observeAll target) `shouldReturn` 255
 
-  it "keeps guest-private settlements out of the model node event log" $ do
+  it "logs only the whole program result while keeping its private leaf settlements out of the model node log" $ do
     target <- atomically (Events.newNode >>= Events.newTask)
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [echoTool])
     binary <- guestCalls [request "echo" args] ""
@@ -84,7 +84,9 @@ spec = describe "shared host tool execution" $ do
       runWasmTools session noJournal {ehEvents = pure (Just target)} (views registry) defaultWasmLimits binary
     result.cmExit `shouldBe` WasmCompleted
     snapshot <- atomically (Events.readObservations target)
-    Log.deliveredBetween (Events.observationOwner target) (Log.logCursor Log.emptyLog) (Log.logCursor snapshot) snapshot `shouldBe` []
+    let events = Log.deliveredBetween (Events.observationOwner target) (Log.logCursor Log.emptyLog) (Log.logCursor snapshot) snapshot
+    [value | Events.Settled _ value _ <- events] `shouldBe` [outcomeEnvelope (codeModeInvocation result).tiOutcome]
+    atomically (Events.observeAll target) `shouldReturn` []
 
   it "interrupts a native async await without cancelling or repeating its call" $ do
     entered <- newEmptyMVar

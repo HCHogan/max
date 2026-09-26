@@ -821,7 +821,18 @@ Each step ships on its own, with the test suites and `max-prompt-flow` passing.
   legitimate pattern of racing a call against a timeout and then awaiting it
   anyway.
 
-## Open questions
+## Resolved interface details
 
-- The format and size of the volatile tail that describes other open tasks.
-- Tool names: `agent_tell`, `agent_ask`, `run_code_resume`, `run_code_cancel`.
+The volatile tail has a coordination-only heading followed by at most 16 JSON
+lines, one per other started, open task on the same node and in the same
+conversation. Each line carries `task`, `trigger_message`, `phase`, `pending`,
+`more_pending` and `age_seconds`. `pending` shows at most eight result/tool
+pairs; tool names are capped at 80 characters. The tail is refreshed for each
+request, charged to its context budget, and excluded from stored poll history,
+compaction checkpoints and the provider's cached prefix.
+
+The tool names are `agent_tell`, `agent_ask`, `run_code_resume` and
+`run_code_cancel`. The SDK exposes `max.tell` and `max.ask` for the first two.
+Guest resume/cancel take the paused program's `run` handle. Detached native
+calls use `execution_wait` with their `result` handle. `agent_progress` remains
+an internal status update rather than a parent message.

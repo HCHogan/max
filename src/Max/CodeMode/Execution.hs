@@ -35,11 +35,12 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent (Concurrent, threadDelay)
 import Effectful.Concurrent.Async (async, asyncWithUnmask, cancel)
-import Effectful.Exception (bracket, catch, finally, mask, onException, throwIO)
+import Effectful.Exception (bracket, catch, finally, mask, onException, throwIO, try)
 import Max.CodeMode.Wasm
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools
 import Max.Execution.Types
+import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Executor
 import Max.Skill.Contract (Contract, validateValue)
 import Max.Tasks (TaskCancelled (..))
@@ -88,18 +89,36 @@ runWasmTools session hooks catalog limits binary = runWasmProgram session hooks 
 -- runner would recursively acquire that gate and deadlock.
 runWasmProgram :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> WasmLimits -> WasmProgram -> Eff es CodeModeResult
 runWasmProgram session hooks catalog limits program = mask $ \restore -> do
-  replies <- liftIO newEmptyTMVarIO
+  target <- liftIO (atomically (executionEventTask session hooks))
+  reference <- freshExecutionLabel session "program"
+  initialReply <- liftIO (atomically (Events.newFuture target))
+  replies <- liftIO (newTVarIO initialReply)
   resumes <- liftIO newEmptyTMVarIO
   paused <- liftIO (newTVarIO False)
   owner <- liftIO newEmptyTMVarIO
   parentActor <- liftIO hooks.ehActor
   guestActor <- liftIO (traverse (atomically . Executor.guestActor) parentActor)
   let guestHooks = hooks {ehActor = pure guestActor}
-      waitReply worker =
-        let ready = takeTMVar replies `orElse` (Async.waitCatchSTM worker >>= either throwSTM pure)
-         in case parentActor of
-              Nothing -> atomically ready
-              Just actor -> Executor.await actor True retry ready >>= maybe (Exception.throwIO TaskCancelled) pure
+      publish future outcome =
+        let invocation = either (\(exception :: Exception.SomeException) -> ToolInvocation (ToolOutcomeUnknown (ToolFault "interrupted" (T.pack (show exception)) RetryUnsafe)) ContinueLoop) codeModeInvocation outcome
+         in void (Events.settleFuture future (Events.Settled reference (outcomeEnvelope invocation.tiOutcome) invocation.tiMedia) outcome)
+      waitReply future = do
+        let selection = Events.noPending {Events.calls = Set.singleton reference}
+            ready =
+              Events.pollFuture selection future >>= \case
+                Just value -> pure value
+                Nothing -> do
+                  active <- Events.isOpen target
+                  if active then retry else pure (Left (Exception.toException TaskCancelled))
+        outcome <- case parentActor of
+          Nothing -> atomically ready
+          Just actor -> Executor.await actor True retry ready >>= maybe (Exception.throwIO TaskCancelled) pure
+        either Exception.throwIO pure outcome
+      freshReply = do
+        future <- Events.newFuture target
+        writeTVar replies future
+        writeTVar paused False
+        pure future
       install worker ref =
         registerProgram session ref $
           ProgramControl
@@ -107,43 +126,54 @@ runWasmProgram session hooks catalog limits program = mask $ \restore -> do
                 accepted <- atomically $ do
                   waiting <- readTVar paused
                   if not waiting
-                    then pure False
+                    then pure Nothing
                     else do
-                      writeTVar paused False
+                      future <- freshReply
                       putTMVar resumes ()
-                      pure True
-                if accepted
-                  then codeModeInvocation <$> restoreIO (waitReply worker)
-                  else pure (ToolInvocation (ToolRejected (ToolFault "program_not_paused" "program is not paused" RetrySafe)) ContinueLoop),
-              pcCancel = do
-                Async.cancel worker
-                result <- Async.waitCatch worker
-                either Exception.throwIO (pure . codeModeInvocation) result
+                      pure (Just future)
+                case accepted of
+                  Just future -> codeModeInvocation <$> restoreIO (waitReply future)
+                  Nothing -> pure (ToolInvocation (ToolRejected (ToolFault "program_not_paused" "program is not paused" RetrySafe)) ContinueLoop),
+              pcCancel = Exception.mask $ \restoreIO -> do
+                active <- atomically (Events.isOpen target)
+                if not active
+                  -- Scope teardown joins cleanup after the model has ended;
+                  -- it must not resurrect or await that closed model's log.
+                  then Async.cancel worker >> Async.waitCatch worker >>= either Exception.throwIO (pure . codeModeInvocation)
+                  else do
+                    future <- atomically $ do
+                      waiting <- readTVar paused
+                      if waiting then freshReply else readTVar replies
+                    -- Cancellation can wait for leaf cleanup. Release the
+                    -- parent's permit until its final receipt is published.
+                    Async.withAsync (Async.cancel worker) $ \_ -> codeModeInvocation <$> restoreIO (waitReply future)
             }
       suspend result = do
         liftIO . atomically $ do
           writeTVar paused True
-          putTMVar replies result
+          future <- readTVar replies
+          publish future (Right result)
         awaitExecution guestHooks True (takeTMVar resumes)
-  worker <- asyncWithUnmask $ \unmask -> unmask $ do
-    self <- liftIO (atomically (readTMVar owner))
-    result <-
-      ( do
-          forM_ guestActor $ \actor -> do
-            entered <- liftIO (Executor.enter actor)
-            if entered then pure () else throwIO TaskCancelled
-          bracket hooks.ehAcquireGuest (mapM_ liftIO) $ \case
-            Nothing -> pure (CodeModeResult (WasmRejected "live guest limit exceeded; retry later or use native tools") [] ContinueLoop Nothing 0 False "" program.wpWorkflow [])
-            Just _ -> runAdmittedProgram session guestHooks catalog limits program (install self) suspend
-      )
-        `finally` liftIO (mapM_ (atomically . Executor.closeActor) guestActor)
+  worker <- asyncWithUnmask $ \unmask -> do
+    outcome <-
+      try . unmask $
+        ( do
+            self <- liftIO (atomically (readTMVar owner))
+            forM_ guestActor $ \actor -> do
+              entered <- liftIO (Executor.enter actor)
+              if entered then pure () else throwIO TaskCancelled
+            bracket hooks.ehAcquireGuest (mapM_ liftIO) $ \case
+              Nothing -> pure (CodeModeResult (WasmRejected "live guest limit exceeded; retry later or use native tools") [] ContinueLoop Nothing 0 False "" program.wpWorkflow [])
+              Just _ -> runAdmittedProgram session guestHooks catalog limits program (install self) suspend
+        )
+          `finally` liftIO (mapM_ (atomically . Executor.closeActor) guestActor)
     liftIO . atomically $ do
       writeTVar paused False
-      _ <- tryPutTMVar replies result
-      pure ()
-    pure result
+      future <- readTVar replies
+      publish future outcome
+    either throwIO pure outcome
   liftIO (atomically (putTMVar owner worker))
-  restore (liftIO (waitReply worker)) `onException` cancel worker
+  restore (liftIO (waitReply initialReply)) `onException` cancel worker
 
 runAdmittedProgram :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> WasmLimits -> WasmProgram -> (Text -> Eff es ()) -> (CodeModeResult -> Eff es ()) -> Eff es CodeModeResult
 runAdmittedProgram session hooks catalog limits program install suspend = do
