@@ -2,6 +2,7 @@
 module Max.Agent.Runtime (runAgentRuntime, observeAgentInputs, executionAdmission, executionJournal) where
 
 import Control.Concurrent.STM (atomically)
+import Control.Monad ((>=>))
 import Data.Aeson (encode, object, (.=))
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
@@ -49,7 +50,7 @@ runAgentRuntime jobs =
     executionJournal
     ( ExecutionEvents
         (observeAgentInputs jobs)
-        (\turn -> turnEvents turn >>= (`Events.awaitInterrupt` Events.noPending))
+        (turnEvents >=> (`Events.awaitInterrupt` Events.noPending))
         (\turn -> liftIO . atomically $ turnEvents turn >>= Events.tryFinish)
         ( \turn context -> liftIO $ do
             origin <- Jobs.resultOrigin jobs turn context

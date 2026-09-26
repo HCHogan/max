@@ -3,7 +3,7 @@ module Max.JobsSpec (Max.JobsSpec.spec) where
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async (cancel, concurrently, mapConcurrently, poll, wait, waitCatch, waitCatchSTM, withAsync)
 import Control.Concurrent.STM (STM, atomically, check, retry)
-import Control.Monad (foldM, forM_, replicateM, replicateM_, void)
+import Control.Monad (foldM, forM_, replicateM, replicateM_, void, when)
 import Data.Aeson (Value (..), object, (.=))
 import Data.ByteString qualified as BS
 import Data.Either (isLeft, isRight)
@@ -169,11 +169,9 @@ spec = describe "process-owned Jobs" $ do
       Left _ <- takeWork jobs
       completeJob jobs child.run Succeeded (JobResult "frontend-owned report" Nothing)
       timeout 20000 (takeWork jobs) `shouldReturn` Nothing
-      if observed
-        then do
-          events <- atomically (Router.observeEvents jobs.resultRouter target)
-          map (\event -> case event.body of Events.ChildDone run _ -> Just run; _ -> Nothing) events `shouldBe` [Just child.run]
-        else pure ()
+      when observed $ do
+        events <- atomically (Router.observeEvents jobs.resultRouter target)
+        map (\event -> case event.body of Events.ChildDone run _ -> Just run; _ -> Nothing) events `shouldBe` [Just child.run]
       finishTurnRuntime tasks caller
       if observed
         then timeout 20000 (takeWork jobs) `shouldReturn` Nothing

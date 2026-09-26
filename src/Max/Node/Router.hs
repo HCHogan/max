@@ -42,6 +42,7 @@ where
 
 import Control.Concurrent.STM
 import Data.Aeson (Value, object, (.=))
+import Data.Bifunctor (second)
 import Data.Foldable (find)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -296,8 +297,9 @@ releaseMonitorResult router result = finish router result.identifier (MonitorCom
 
 -- | Only the current attempt can release or retry a claimed delivery.
 finish :: Router -> Integer -> DeliveryWork -> Maybe Delivery -> STM ()
-finish (Router ref) identifier work nextState = modifyTVar' ref $ \(next, entries) ->
-  (next, Map.update (\entry@(state, current) -> if state == InFlight && current == work then (,current) <$> nextState else Just entry) identifier entries)
+finish (Router ref) identifier work nextState =
+  modifyTVar' ref . second $
+    Map.update (\entry@(state, current) -> if state == InFlight && current == work then (,current) <$> nextState else Just entry) identifier
 
 referencedOwners :: Router -> STM (Set JobRun)
 referencedOwners (Router ref) = do

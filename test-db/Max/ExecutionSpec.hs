@@ -6,13 +6,14 @@ import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (atomically, check, newTVarIO, readTVar, writeTVar)
 import Control.Exception (AsyncException (ThreadKilled), bracket_, throwIO)
-import Control.Monad (forM_, replicateM_, void, when)
+import Control.Monad (forM_, replicateM_, unless, void, when)
 import Data.Aeson (Value, decodeStrict', object, toJSON, withObject, (.:), (.=))
 import Data.Aeson.Types (parseMaybe)
 import Data.Either (isLeft)
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (sort)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isNothing)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -152,9 +153,9 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
                       messages `shouldSatisfy` any (\case MsgUser body -> "include this correction" `T.isInfixOf` body; _ -> False)
                     pure (Right (ContentResp "revised summary"))
       result <-
-        withHost pool . runLLMWith provider . runAgentRuntime running.jobs (Agent.AgentLimits (if budget == Nothing then 0 else 4)) (const (buildToolRegistry [echoDefinition] [echoTool])) $
+        withHost pool . runLLMWith provider . runAgentRuntime running.jobs (Agent.AgentLimits (if isNothing budget then 0 else 4)) (const (buildToolRegistry [echoDefinition] [echoTool])) $
           Agent.agentTurn running.runtime (Agent.AgentContext context Nothing Nothing Nothing) "fixture" [MsgUser "work"] (\case AgentFinalStreamText _ -> pure False; AgentProgressText _ -> pure (); AgentToolDebug _ -> pure ())
-      result.outcome `shouldBe` Agent.Interrupted (if budget == Nothing then AgentRoundLimit else AgentBudgetExhausted) (Agent.AgentReply "revised summary" "")
+      result.outcome `shouldBe` Agent.Interrupted (if isNothing budget then AgentRoundLimit else AgentBudgetExhausted) (Agent.AgentReply "revised summary" "")
       readIORef calls `shouldReturn` (if budget == Just ReserveCall then 3 else 2)
       states running.turn `shouldReturn` []
       finishTurnRuntime running.tasks running.runtime
@@ -301,7 +302,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
                     { toolName = "web_search",
                       toolRunner = LegacyRunner $ \value -> do
                         liftIO $ do
-                          fmap (const ()) <$> Async.poll waiting `shouldReturn` Nothing
+                          void <$> Async.poll waiting `shouldReturn` Nothing
                           modifyIORef' leaves (+ 1)
                         pure (Right value)
                     }
@@ -790,7 +791,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
               then void (runWasmTools session (hostHooks jobs runtime) (views registry) defaultWasmLimits binary)
               else void (executeToolBatch session bound (views registry) [ToolRequest "one" "echo" args, ToolRequest "two" "echo" args])
           takeMVar entered
-          when (not guest) (takeMVar admitted)
+          unless guest (takeMVar admitted)
           withDb pool (query "SELECT count(*) FROM execution_journal WHERE turn_id=?" (Only turn.atrTurnId)) `shouldReturn` [Only (0 :: Int)]
           timeout 3000000 (Async.cancel worker) `shouldReturn` Just ()
           rows <- states turn

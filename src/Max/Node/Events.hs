@@ -47,6 +47,7 @@ import Data.Foldable (toList)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isJust)
 import Data.Sequence (Seq, (|>))
 import Data.Sequence qualified as Seq
 import Data.Set (Set)
@@ -150,7 +151,7 @@ isOpen (Task (Node ref) key) = Map.findWithDefault False key . (.tasks) <$> read
 -- | Refuse before accepting an effect; internal producers retain their source
 -- result when the bounded buffer is full. Sequence numbers belong to the node.
 deliver :: Task -> Body -> STM Bool
-deliver task body = maybe False (const True) <$> deliverTracked task body
+deliver task body = isJust <$> deliverTracked task body
 
 -- | A delivery receipt lets the router release exactly the event observed,
 -- even when multiple reports or messages share the same producer.

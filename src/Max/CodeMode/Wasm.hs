@@ -26,6 +26,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -137,7 +138,7 @@ runGuestStep guest@(Guest handle _ _) input
               Just trapped@(GuestTrap _) -> pure trapped
               _ -> GuestTrap . WasmTrapped <$> readDiagnostic message
             else pure $ maybe (GuestTrap (WasmTrapped "guest step did not write output")) decodeStep output
-      pure (maybe (GuestTrap WasmTimedOut) id result)
+      pure (fromMaybe (GuestTrap WasmTimedOut) result)
 
 timed :: Guest -> IO a -> IO (Maybe a)
 timed (Guest handle limits _) action = Exception.mask $ \restore -> do

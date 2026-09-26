@@ -14,10 +14,12 @@ module Max.Execution.Tools
     freshExecutionLabel,
     executeToolBatch,
     launchCall,
+    launchYieldingCall,
     Wake (..),
     awaitWake,
     awaitExecution,
     awaitExecutionUntil,
+    parked,
     ProgramControl (..),
     registerProgram,
     unregisterProgram,
@@ -35,13 +37,15 @@ where
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM qualified as STM
 import Control.Exception (fromException)
-import Control.Monad (unless, void)
+import Control.Exception qualified as Exception
+import Control.Monad (unless, void, when)
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Foldable (for_)
 import Data.List (find)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -82,6 +86,7 @@ import Max.Tasks
     checkTurnCancellation,
     finishTurnCall,
     nextExecutionOrdinal,
+    parkTurn,
     retainTurnWork,
     startTurnCall,
     turnEvents,
@@ -113,7 +118,10 @@ data ExecutionHooks es = ExecutionHooks
     ehEvents :: STM.STM (Maybe Events.Task),
     ehRetain :: Async ToolInvocation -> Async ToolInvocation -> Eff es (),
     ehActor :: IO (Maybe Executor.Actor),
-    ehCallAuthority :: Text -> Eff es (Maybe CallAuthority)
+    ehCallAuthority :: Text -> Eff es (Maybe CallAuthority),
+    -- | Entered around every wait on futures, returning the exit. The turn
+    -- uses it to tell its silence watchdog it is parked, not stalled.
+    ehPark :: IO (IO ())
   }
 
 executionHooks :: (IOE :> es) => ExecutionAdmission es -> ExecutionJournal es -> GroupId -> TurnRuntime -> ExecutionHooks es
@@ -142,6 +150,7 @@ executionHooks admission journal group turn =
       ehEvents = Just <$> turnEvents turn,
       ehRetain = \call delivery -> liftIO (retainTurnWork turn (Async.cancel delivery) (Async.cancel call) (void (Async.waitCatchSTM delivery))),
       ehActor = Just <$> turnExecutor turn,
+      ehPark = parkTurn turn,
       ehCallAuthority = admission.eaCallAuthority (turnRuntimeAgentTurn turn)
     }
 
@@ -156,7 +165,8 @@ hoistExecutionHooks lower hooks =
       ehEvents = hooks.ehEvents,
       ehRetain = \call -> lower . hooks.ehRetain call,
       ehActor = hooks.ehActor,
-      ehCallAuthority = lower . hooks.ehCallAuthority
+      ehCallAuthority = lower . hooks.ehCallAuthority,
+      ehPark = hooks.ehPark
     }
 
 -- | Admission refused a call because its agent tree's budget is spent. The
@@ -184,11 +194,12 @@ newExecutionSession limit =
 data NativeFuture = NativeFuture
   { worker :: !(Async ToolInvocation),
     settlement :: !(Events.Future (Either SomeException ToolInvocation)),
-    reference :: !Text
+    reference :: !Text,
+    yieldGate :: !(STM.STM ())
   }
 
 executionEventTask :: ExecutionSession -> ExecutionHooks es -> STM.STM Events.Task
-executionEventTask session hooks = maybe session.events id <$> hooks.ehEvents
+executionEventTask session hooks = fromMaybe session.events <$> hooks.ehEvents
 
 setExecutionResultSink :: (Concurrent :> es) => ExecutionSession -> (Text -> ToolInvocation -> IO ()) -> Eff es ()
 setExecutionResultSink session sink = atomically (writeTVar session.resultSink (Just sink))
@@ -251,10 +262,16 @@ awaitExecutionUntil :: (IOE :> es) => ExecutionHooks es -> Bool -> STM.STM () ->
 awaitExecutionUntil hooks immediate deadline ready = do
   actor <- liftIO hooks.ehActor
   case actor of
-    Nothing -> liftIO (STM.atomically ready)
+    Nothing -> liftIO (parked hooks (STM.atomically ready))
     Just owner -> do
-      result <- liftIO (Executor.await owner immediate deadline ready)
+      result <- liftIO (parked hooks (Executor.await owner immediate deadline ready))
       maybe (throwIO TaskCancelled) pure result
+
+-- | Run a wait on futures as parked time for the turn's silence watchdog.
+parked :: ExecutionHooks es -> IO a -> IO a
+parked hooks action = Exception.mask $ \restore -> do
+  leave <- hooks.ehPark
+  restore action `Exception.finally` leave
 
 -- | Labels are local to this session; result ordinals belong to the turn.
 freshExecutionLabel :: (Concurrent :> es) => ExecutionSession -> Text -> Eff es Text
@@ -292,6 +309,8 @@ executeToolBatch session hooks catalog requests = mask $ \restore -> do
             `finally` cancel worker
         hooks.ehRetain worker watcher `onException` cancel watcher
         atomically $ do
+          -- The model now orders its later calls around this one.
+          future.yieldGate
           modifyTVar' session.nativeFutures (Map.insert ref future)
           modifyTVar' owned (Map.delete index)
         pure (runningInvocation ref)
@@ -352,7 +371,12 @@ drainExecutionCompletions :: (Concurrent :> es) => ExecutionSession -> Eff es [(
 drainExecutionCompletions session = atomically (STM.flushTQueue session.completions)
 
 launchCall :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es (Async ToolInvocation)
-launchCall = launchCallWith (const (pure ()))
+launchCall session hooks catalog request = fst <$> launchYieldingCall session hooks catalog request
+
+-- | Also returns the action that takes the call out of the session's call
+-- ordering once the model no longer awaits it (see 'launchCallWith').
+launchYieldingCall :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es (Async ToolInvocation, STM.STM ())
+launchYieldingCall = launchCallWith (const (pure ()))
 
 launchNativeCall :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es NativeFuture
 launchNativeCall session hooks catalog request = do
@@ -362,10 +386,16 @@ launchNativeCall session hooks catalog request = do
   let publish result = do
         let invocation = either (\exception -> ToolInvocation (ToolOutcomeUnknown (ToolFault "interrupted" (T.pack (show exception)) RetryUnsafe)) ContinueLoop) id result
         atomically . void $ Events.settleFuture settlement (Events.Settled reference (outcomeEnvelope invocation.tiOutcome) invocation.tiMedia) result
-  worker <- launchCallWith publish session hooks catalog request
-  pure (NativeFuture worker settlement reference)
+  (worker, yieldGate) <- launchCallWith publish session hooks catalog request
+  pure (NativeFuture worker settlement reference yieldGate)
 
-launchCallWith :: (Tools :> es, Concurrent :> es, IOE :> es) => (Either SomeException ToolInvocation -> Eff es ()) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es (Async ToolInvocation)
+-- | Calls enter the session's gate in arrival order: shared calls run together,
+-- an exclusive call runs alone. A shared call whose await was interrupted, or
+-- whose program paused, yields its place: it stops holding back later calls,
+-- because the model has taken over their ordering, as with a detached agent.
+-- Exclusive calls keep their slot; they may share a stateful resource such as
+-- a browser session, and their deadlines are short.
+launchCallWith :: (Tools :> es, Concurrent :> es, IOE :> es) => (Either SomeException ToolInvocation -> Eff es ()) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es (Async ToolInvocation, STM.STM ())
 launchCallWith publish session hooks catalog request = mask $ \_ -> do
   hooks.ehCheck
   let view = find ((== ToolRef request.trName) . (.ctDefinition.tdRef)) catalog
@@ -383,16 +413,18 @@ launchCallWith publish session hooks catalog request = mask $ \_ -> do
       Just available | cost > available -> pure False
       _ -> writeTVar session.remaining (subtract cost <$> budget) >> pure True
   if not reserved
-    then async (notify (pure budgetSpent))
+    then (,pure ()) <$> async (notify (pure budgetSpent))
     else do
       let refund = atomically $ modifyTVar' session.remaining (fmap (+ cost))
       admitted <- try (hooks.ehStart step start) `onException` refund
       case admitted of
-        Left CallBudgetExhausted -> refund >> async (notify (pure budgetSpent))
+        Left CallBudgetExhausted -> refund >> ((,pure ()) <$> async (notify (pure budgetSpent)))
         Right row -> do
           ref <- maybe (freshExecutionLabel session "result") (pure . (\entry -> resultHandleText entry.jeTurn.atrTurnOrdinal entry.jeExecutionOrdinal)) row
           atomically $ modifyTVar' session.callHandles (Map.insert request.trCallId ref)
           started <- newTVarIO False
+          held <- newTVarIO False
+          yielded <- newTVarIO False
           ticket <- atomically $ do
             ticket <- readTVar session.sequenceNumber
             writeTVar session.sequenceNumber (ticket + 1)
@@ -401,10 +433,28 @@ launchCallWith publish session hooks catalog request = mask $ \_ -> do
           let dequeue = atomically $ modifyTVar' session.gate (\(queue, readers, writer) -> (filter ((/= ticket) . fst) queue, readers, writer))
               acquire = atomically $ do
                 (queue, readers, writer) <- readTVar session.gate
-                let before = takeWhile ((/= ticket) . fst) queue
-                check (not writer && (if shared then all snd before else null before && readers == 0))
-                writeTVar session.gate (filter ((/= ticket) . fst) queue, readers + if shared then 1 else 0, not shared)
-              release = atomically $ modifyTVar' session.gate (\(queue, readers, _) -> (queue, readers - if shared then 1 else 0, False))
+                gone <- readTVar yielded
+                if gone
+                  then do
+                    -- Out of the ordering, but never beside a running exclusive call.
+                    check (not writer)
+                    writeTVar session.gate (filter ((/= ticket) . fst) queue, readers, writer)
+                  else do
+                    let before = takeWhile ((/= ticket) . fst) queue
+                    check (not writer && (if shared then all snd before else null before && readers == 0))
+                    writeTVar session.gate (filter ((/= ticket) . fst) queue, readers + if shared then 1 else 0, not shared)
+                    writeTVar held True
+              release = atomically $ do
+                holding <- readTVar held
+                when holding $ do
+                  writeTVar held False
+                  modifyTVar' session.gate (\(queue, readers, _) -> (queue, readers - if shared then 1 else 0, False))
+              -- Idempotent; a no-op for exclusive and already finished calls.
+              yieldGate = when shared $ do
+                writeTVar yielded True
+                holding <- readTVar held
+                writeTVar held False
+                modifyTVar' session.gate (\(queue, readers, writer) -> (filter ((/= ticket) . fst) queue, if holding then readers - 1 else readers, writer))
               interrupted (exception :: SomeException) = case fromException exception of
                 Just Async.AsyncCancelled -> do
                   began <- readTVarIO started
@@ -430,7 +480,8 @@ launchCallWith publish session hooks catalog request = mask $ \_ -> do
                 pure invocation {tiOutcome = stripJournalMetadata invocation.tiOutcome}
           authority <- hooks.ehCallAuthority request.trName `onException` dequeue
           let cleanup = for_ authority (liftIO . revokeCallAuthority) >> dequeue
-          (asyncWithUnmask $ \unmask -> notify (run authority unmask `finally` cleanup)) `onException` cleanup
+          worker <- asyncWithUnmask (\unmask -> notify (run authority unmask `finally` cleanup)) `onException` cleanup
+          pure (worker, yieldGate)
   where
     budgetSpent = rejected "call_budget_exhausted" "工具调用预算已经用完，不能再执行这个调用；直接根据已有信息给出最终回复"
 

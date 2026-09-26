@@ -19,6 +19,7 @@ where
 
 import Control.Concurrent.STM
 import Control.Monad (filterM)
+import Data.Bifunctor (second)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -83,8 +84,7 @@ publish futures@(Futures ref) key value = do
 -- | Replacement keeps logical joins but removes the previous generation's
 -- outcomes. Generation-bound admission reservations expire through their guard.
 invalidate :: (Ord key) => Futures owner key value -> key -> STM ()
-invalidate (Futures ref) key = modifyTVar' ref $ \(next, entries) ->
-  (next, fmap (\entry -> entry {values = Map.delete key entry.values}) entries)
+invalidate (Futures ref) key = modifyTVar' ref (second (fmap (\entry -> entry {values = Map.delete key entry.values})))
 
 await :: (Ord key) => Ticket owner key value -> STM (Maybe [value])
 await (Ticket futures identifier keys) = do
@@ -99,7 +99,7 @@ await (Ticket futures identifier keys) = do
 -- subscription even when its principal and producer selection are identical.
 release :: Ticket owner key value -> STM (Set key)
 release (Ticket (Futures ref) identifier keys) = do
-  modifyTVar' ref (\(next, entries) -> (next, Map.delete identifier entries))
+  modifyTVar' ref (second (Map.delete identifier))
   pure keys
 
 retainedKeys :: (Ord key) => Futures owner key value -> STM (Set key)

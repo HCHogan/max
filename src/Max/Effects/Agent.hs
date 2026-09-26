@@ -208,9 +208,9 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
             pure (value, control, media)
         )
         ( \authority -> do
-            (current, catalog) <- liftIO (readTVarIO catalogRef)
+            (current, registry) <- liftIO (readTVarIO catalogRef)
             case authority of
-              Nothing -> pure catalog
+              Nothing -> pure registry
               Just call -> either throwIO pure (toolFactory (withToolCallAuthority call current))
         )
         (loop workingRef session catalogRef emit context turn profile msgs `finally` (closeExecutionSession session `finally` for_ results (liftIO . (.erClose))))

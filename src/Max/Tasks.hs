@@ -32,6 +32,8 @@ module Max.Tasks
     nextExecutionOrdinal,
     setTurnPhase,
     awaitTurnSilence,
+    parkTurn,
+    whileAwaiting,
     checkTurnCancellation,
     authorizeTurnOutput,
     turnIsLive,
@@ -113,6 +115,9 @@ data TaskEntry = TaskEntry
     -- Updates occur at round boundaries; a slow multi-tool round has one heartbeat.
     -- Individual tool deadlines are enforced separately.
     teProgressAt :: !(TVar UTCTime),
+    -- | Awaits in progress. Time parked at an await is not silence: the task
+    -- is waiting for work it started, not stalled.
+    teAwaiting :: !(TVar Int),
     -- | What to run when @!kill@ targets this task.  'Nothing' until
     -- 'activateTurnRuntime' supplies it.
     teCancel :: !(TVar (Maybe (IO ()))),
@@ -255,6 +260,7 @@ beginTurnRuntime reg ref gid uid mTrigger = do
     (n, m) <- readTVar reg.trState
     events <- Events.newNode >>= (\eventNode -> Events.newTaskFrom eventNode (NodeLog.Said (CanonicalMessageId <$> realTrigger mTrigger))) >>= newTVar
     draining <- newTVar False
+    awaiting <- newTVar 0
     retained <- newTVar []
     deadline <- newTVar Nothing
     let tid = TaskId ("t" <> T.pack (show (n + 1)))
@@ -273,6 +279,7 @@ beginTurnRuntime reg ref gid uid mTrigger = do
               teInputBodies = inputBodies,
               teRoutedInputs = routedInputs,
               teProgressAt = progressAt,
+              teAwaiting = awaiting,
               teCancel = cancel,
               teKilled = killed,
               teDraining = draining,
@@ -388,20 +395,43 @@ awaitTurnSilence :: TurnRuntime -> Int -> IO ()
 awaitTurnSilence turn limitMicros = go
   where
     progress = turn.trEntry.teProgressAt
+    awaiting = turn.trEntry.teAwaiting
     go = do
+      atomically (readTVar awaiting >>= check . (== 0))
       seen <- readTVarIO progress
       timer <- registerDelay limitMicros
       stalled <-
         atomically $
           ( do
-              expired <- readTVar timer
-              if expired then pure True else retry
+              parked <- readTVar awaiting
+              if parked > 0 then pure False else retry
           )
+            `orElse` ( do
+                         expired <- readTVar timer
+                         if expired then pure True else retry
+                     )
             `orElse` ( do
                          current <- readTVar progress
                          if current == seen then retry else pure False
                      )
       unless stalled go
+
+-- | Mark the task as parked at an await for the silence watchdog; the result
+-- ends the await. Leaving counts as progress, so the watchdog's clock
+-- restarts from there.
+parkTurn :: TurnRuntime -> IO (IO ())
+parkTurn turn = do
+  atomically (modifyTVar' turn.trEntry.teAwaiting (+ 1))
+  pure $ do
+    now <- getCurrentTime
+    atomically $ do
+      modifyTVar' turn.trEntry.teAwaiting (subtract 1)
+      writeTVar turn.trEntry.teProgressAt now
+
+whileAwaiting :: TurnRuntime -> IO a -> IO a
+whileAwaiting turn action = mask $ \restore -> do
+  leave <- parkTurn turn
+  restore action `finally` leave
 
 checkTurnCancellation :: TurnRuntime -> IO ()
 checkTurnCancellation turn = do
@@ -574,7 +604,7 @@ turnAcceptsWork :: TaskRegistry -> AgentTurnId -> STM Bool
 turnAcceptsWork registry turn = do
   (_, entries) <- readTVar registry.trState
   case [entry | entry <- Map.elems entries, entryTurnId entry == turn] of
-    [entry] -> (&&) <$> (not <$> readTVar entry.teKilled) <*> (not <$> readTVar entry.teDraining)
+    [entry] -> (\killed draining -> not (killed || draining)) <$> readTVar entry.teKilled <*> readTVar entry.teDraining
     _ -> pure False
 
 -- | Revocation precedes the cancellation signal, including if a worker masks it.
@@ -582,7 +612,7 @@ authorizeTurnOutput :: TaskRegistry -> GroupId -> AgentTurnId -> IO Bool
 authorizeTurnOutput registry group turn = atomically $ do
   (_, entries) <- readTVar registry.trState
   case [entry | entry <- Map.elems entries, entry.teGroup == group, entryTurnId entry == turn] of
-    [entry] -> (&&) <$> (not <$> readTVar entry.teKilled) <*> (not <$> readTVar entry.teDraining)
+    [entry] -> (\killed draining -> not (killed || draining)) <$> readTVar entry.teKilled <*> readTVar entry.teDraining
     _ -> pure False
 
 entryTurnId :: TaskEntry -> AgentTurnId

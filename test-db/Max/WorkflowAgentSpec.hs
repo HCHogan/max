@@ -48,7 +48,7 @@ spec pool = before_ (truncateAll pool) $ describe "agent() through the agent too
     running <- runningJob pool Basic workflowGrants
     Async.withAsync (runScript pool running Nothing "const base=40; await max.tell('working'); const answer=await max.ask('which number?'); return base+Number(answer.body);") $ \worker -> do
       Just (Right (Router.ChildMessage notice)) <- timeout 3000000 (NodeWorkFixture.takeWork running.jobs)
-      notice.text `shouldSatisfy` (Data.Text.isInfixOf "which number?")
+      notice.text `shouldSatisfy` Data.Text.isInfixOf "which number?"
       (relay, message, principal) <- seed pool 900 2
       _ <- beginTurnRuntime running.tasks relay (GroupId 900) (UserId 2) (Just message)
       Jobs.bindMessageRelay running.jobs relay.atrTurnId notice
@@ -245,11 +245,11 @@ runForeground pool front source = do
   runProgram pool front.jobs front.runtime front.turn context Nothing source
 
 runProgram :: DbPool -> Jobs.Jobs -> TurnRuntime -> AgentTurnRef -> ToolContext -> Maybe Int -> Text -> IO CodeModeResult
-runProgram pool jobs runtime turn context budget source = runProgramUsing pool jobs runtime turn context budget source (\_ -> pure)
+runProgram pool jobs runtime turn context budget source = runProgramUsing pool jobs runtime turn context budget source (const pure)
 
 runProgramUsing :: DbPool -> Jobs.Jobs -> TurnRuntime -> AgentTurnRef -> ToolContext -> Maybe Int -> Text -> (ExecutionSession -> CodeModeResult -> Eff (Tools : DbEffects) a) -> IO a
 runProgramUsing pool jobs runtime turn context budget source continuation = do
-  let bound = (hooks jobs runtime) {ehAcquireGuest = liftIO (Jobs.acquireGuestSlot jobs turn.atrTurnId), ehInterrupt = (Jobs.jobEventTask jobs turn.atrTurnId >>= maybe retry (`Events.awaitInterrupt` Events.noPending))}
+  let bound = (hooks jobs runtime) {ehAcquireGuest = liftIO (Jobs.acquireGuestSlot jobs turn.atrTurnId), ehInterrupt = Jobs.jobEventTask jobs turn.atrTurnId >>= maybe retry (`Events.awaitInterrupt` Events.noPending)}
       runners = [tool | tool <- taskTools jobs context, tool.toolName `elem` ["agent", "agent_progress", "agent_tell", "agent_ask"]]
       present = map (.toolName) runners
   registry <- either (fail . show) pure (buildToolRegistry [definition | definition <- agentDefinitions, definition.tdRef.unToolRef `elem` present] runners)

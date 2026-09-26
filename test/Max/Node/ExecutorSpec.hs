@@ -4,7 +4,7 @@ import Control.Concurrent (myThreadId)
 import Control.Concurrent.Async (cancel, wait, withAsync)
 import Control.Concurrent.STM
 import Control.Exception (finally, throwIO)
-import Control.Monad (forM, forM_)
+import Control.Monad (forM, forM_, when)
 import Max.Node.Executor qualified as Node
 import Max.Turn.Types (AgentTurnId (..))
 import System.Timeout (timeout)
@@ -23,7 +23,7 @@ spec = describe "single-segment node executor" $ do
         firstStep n = do
           myThreadId `shouldReturn` caller
           record ("first" <> show n)
-          if n == 0 then Node.await first True retry (pure ()) `shouldReturn` Just () else pure ()
+          when (n == 0) (Node.await first True retry (pure ()) `shouldReturn` Just ())
           pure (if n == (0 :: Int) then Right 1 else Left ("done" :: String))
         guestStep = do
           Node.enter guest `shouldReturn` True
@@ -46,7 +46,7 @@ spec = describe "single-segment node executor" $ do
     let record label = atomically (modifyTVar' trace (<> [label]))
         step n = do
           record ("first" <> show n)
-          if n == 1 then Node.await first False retry (pure ()) `shouldReturn` Just () else pure ()
+          when (n == 1) (Node.await first False retry (pure ()) `shouldReturn` Just ())
           pure (if n < (2 :: Int) then Right (n + 1) else Left ())
     withAsync (Node.runSteps peer () (\() -> record "peer" >> pure (Left ()))) $ \worker -> do
       Node.runSteps first 0 step `shouldReturn` Just ()

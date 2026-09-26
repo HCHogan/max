@@ -43,6 +43,7 @@ import Max.Tasks
     turnIsLive,
     turnRuntimeTaskId,
     turnWasCancelled,
+    whileAwaiting,
   )
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), ExecutionOrdinal (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..), UserId (..))
@@ -114,7 +115,7 @@ spec = describe "Max.Tasks" $ do
     never <- newEmptyMVar
     withAsync (takeMVar never :: IO ()) $ \worker -> do
       retainTurnWork turn (cancel worker) (cancel worker) (void (waitCatchSTM worker))
-      timeout 1000000 (finishTurnRuntime registry turn) `shouldReturn` Just ()
+      timeout 1_000_000 (finishTurnRuntime registry turn) `shouldReturn` Just ()
       waitCatch worker >>= (`shouldSatisfy` isLeft)
     atomically (turnWasCancelled turn) `shouldReturn` False
     atomically (turnIsLive registry (AgentTurnId 1)) `shouldReturn` False
@@ -141,10 +142,10 @@ spec = describe "Max.Tasks" $ do
         wait call
         retainTurnWork turn (cancel delivery) (cancel call) (void (waitCatchSTM delivery))
         withAsync (finishTurnRuntime registry turn) $ \closing -> do
-          timeout 20000 (wait closing) `shouldReturn` Nothing
+          timeout 20_000 (wait closing) `shouldReturn` Nothing
           atomically (turnWasCancelled turn) `shouldReturn` False
           putMVar release ()
-          timeout 1000000 (wait closing) `shouldReturn` Just ()
+          timeout 1_000_000 (wait closing) `shouldReturn` Just ()
           waitCatch delivery >>= (`shouldSatisfy` isRight)
 
   it "retains detached work while releasing model admission and public output" $ do
@@ -158,14 +159,14 @@ spec = describe "Max.Tasks" $ do
     withAsync (takeMVar release) $ \worker -> do
       retainTurnWork turn (cancel worker) (cancel worker) (void (waitCatchSTM worker))
       withAsync (finishTurnRuntime registry turn) $ \closing -> do
-        timeout 1000000 (atomically (turnAcceptsWork registry (AgentTurnId 1) >>= check . not)) `shouldReturn` Just ()
+        timeout 1_000_000 (atomically (turnAcceptsWork registry (AgentTurnId 1) >>= check . not)) `shouldReturn` Just ()
         atomically (turnIsLive registry (AgentTurnId 1)) `shouldReturn` True
-        timeout 1000000 (Node.enter next) `shouldReturn` Just True
+        timeout 1_000_000 (Node.enter next) `shouldReturn` Just True
         authorizeTurnOutput registry gid (AgentTurnId 1) `shouldReturn` False
         inFlightTriggers registry gid `shouldReturn` Set.empty
-        timeout 20000 (wait closing) `shouldReturn` Nothing
+        timeout 20_000 (wait closing) `shouldReturn` Nothing
         putMVar release ()
-        timeout 1000000 (wait closing) `shouldReturn` Just ()
+        timeout 1_000_000 (wait closing) `shouldReturn` Just ()
     atomically (turnIsLive registry (AgentTurnId 1)) `shouldReturn` False
     listTasks registry Nothing >>= (`shouldSatisfy` null)
 
@@ -176,10 +177,10 @@ spec = describe "Max.Tasks" $ do
     withAsync (takeMVar never :: IO ()) $ \worker -> do
       retainTurnWork turn (cancel worker) (cancel worker) (void (waitCatchSTM worker))
       withAsync (finishTurnRuntime registry turn) $ \closing -> do
-        timeout 1000000 (atomically (turnAcceptsWork registry (AgentTurnId 1) >>= check . not)) `shouldReturn` Just ()
+        timeout 1_000_000 (atomically (turnAcceptsWork registry (AgentTurnId 1) >>= check . not)) `shouldReturn` Just ()
         cancelTask registry (turnRuntimeTaskId turn) `shouldReturn` True
         waitCatch worker >>= (`shouldSatisfy` isLeft)
-        timeout 1000000 (wait closing) `shouldReturn` Just ()
+        timeout 1_000_000 (wait closing) `shouldReturn` Just ()
 
   it "signals each killed task only once while its finalizer is still running" $ do
     registry <- newTaskRegistry
@@ -244,6 +245,18 @@ spec = describe "Max.Tasks" $ do
           (awaitTurnSilence turn 200_000)
           (replicateM_ 20 (threadDelay 20_000 >> setTurnPhase turn "tools"))
       working `shouldSatisfy` isRight
+      stalled <- race (awaitTurnSilence turn 50_000) (threadDelay 3_000_000)
+      stalled `shouldSatisfy` isLeft
+      _ <- finishTurnRuntime reg turn
+      pure ()
+
+    it "does not count time parked at an await as silence" $ do
+      reg <- newTaskRegistry
+      turn <- beginTurnRuntime reg (reference 1) gid alice (Just (CanonicalMessageId 7001))
+      -- Parked for four silence limits; the watchdog must not fire meanwhile.
+      parked <- race (awaitTurnSilence turn 50_000) (whileAwaiting turn (threadDelay 200_000))
+      parked `shouldSatisfy` isRight
+      -- Once the await ends, ordinary silence is detected again.
       stalled <- race (awaitTurnSilence turn 50_000) (threadDelay 3_000_000)
       stalled `shouldSatisfy` isLeft
       _ <- finishTurnRuntime reg turn

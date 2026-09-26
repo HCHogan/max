@@ -33,7 +33,7 @@ spec = describe "poll-driven Wasmtime boundary" $ do
 
   it "copies Unicode outcomes through the input channel" $ do
     binary <- compileWat "(module (import \"max_v1\" \"input_size\" (func $size (result i32))) (import \"max_v1\" \"input_read\" (func $read (param i32 i32 i32) (result i32))) (import \"max_v1\" \"output_write\" (func $write (param i32 i32))) (memory (export \"memory\") 1) (func (export \"start\") (drop (call $read (i32.const 0) (i32.const 0) (call $size))) (call $write (i32.const 0) (call $size))))"
-    runEff (withGuest defaultWasmLimits binary (TE.encodeUtf8 "{\"done\":\"中文😀\"}") (\_ -> pure)) `shouldReturn` GuestDone (String "中文😀")
+    runEff (withGuest defaultWasmLimits binary (TE.encodeUtf8 "{\"done\":\"中文😀\"}") (const pure)) `shouldReturn` GuestDone (String "中文😀")
 
   it "rejects old callbacks, ambient imports and invalid entry signatures" $ do
     modules <-
@@ -46,31 +46,31 @@ spec = describe "poll-driven Wasmtime boundary" $ do
           "(module)"
         ]
     forM_ ("invalid" : modules) $ \binary ->
-      runEff (withGuest defaultWasmLimits binary "{}" (\_ -> pure)) >>= (`shouldSatisfy` trapped)
+      runEff (withGuest defaultWasmLimits binary "{}" (const pure)) >>= (`shouldSatisfy` trapped)
 
   it "checks negative and overflowing data ranges" $ do
     forM_ ["(i32.const -1) (i32.const 1)", "(i32.const 65530) (i32.const 16)", "(i32.const 0) (i32.const -1)"] $ \args -> do
       binary <- compileWat ("(module (import \"max_v1\" \"output_write\" (func $write (param i32 i32))) (memory (export \"memory\") 1) (func (export \"start\") (call $write " <> args <> ")))")
-      runEff (withGuest defaultWasmLimits binary "{}" (\_ -> pure)) >>= (`shouldSatisfy` trapped)
+      runEff (withGuest defaultWasmLimits binary "{}" (const pure)) >>= (`shouldSatisfy` trapped)
 
   it "rejects a second output and channel use during instantiation" $ do
     forM_ ["(func (export \"start\") (call $emit) (call $emit))", "(start $emit) (func (export \"start\"))"] $ \entry -> do
       binary <- compileWat ("(module (import \"max_v1\" \"output_write\" (func $write (param i32 i32))) (memory (export \"memory\") 1) (func $emit (call $write (i32.const 0) (i32.const 1))) " <> entry <> ")")
-      runEff (withGuest defaultWasmLimits binary "{}" (\_ -> pure)) >>= (`shouldSatisfy` trapped)
+      runEff (withGuest defaultWasmLimits binary "{}" (const pure)) >>= (`shouldSatisfy` trapped)
 
   it "enforces store memory and input limits before guest effects" $ do
     binary <- compileWat "(module (memory 3) (func (export \"start\")))"
-    runEff (withGuest defaultWasmLimits {wlMemoryBytes = 131072} binary "{}" (\_ -> pure)) >>= (`shouldSatisfy` trapped)
-    runEff (withGuest defaultWasmLimits binary (BS.replicate (1024 * 1024 + 1) 32) (\_ -> pure)) >>= (`shouldSatisfy` trapped)
+    runEff (withGuest defaultWasmLimits {wlMemoryBytes = 131072} binary "{}" (const pure)) >>= (`shouldSatisfy` trapped)
+    runEff (withGuest defaultWasmLimits binary (BS.replicate (1024 * 1024 + 1) 32) (const pure)) >>= (`shouldSatisfy` trapped)
 
   it "stops computation by total fuel and independently by step deadline" $ do
     binary <- compileWat "(module (func (export \"start\") (loop br 0)))"
-    runEff (withGuest defaultWasmLimits {wlFuel = 100} binary "{}" (\_ -> pure)) >>= (`shouldSatisfy` trapped)
-    timeout 3000000 (runEff (withGuest defaultWasmLimits {wlFuel = maxBound, wlTimeoutMicros = 20000} binary "{}" (\_ -> pure))) `shouldReturn` Just (GuestTrap WasmTimedOut)
+    runEff (withGuest defaultWasmLimits {wlFuel = 100} binary "{}" (const pure)) >>= (`shouldSatisfy` trapped)
+    timeout 3000000 (runEff (withGuest defaultWasmLimits {wlFuel = maxBound, wlTimeoutMicros = 20000} binary "{}" (const pure))) `shouldReturn` Just (GuestTrap WasmTimedOut)
 
   it "interrupts and joins a running safe FFI step before freeing its store" $ do
     binary <- compileWat "(module (func (export \"start\") (loop br 0)))"
-    worker <- Async.async (runEff (withGuest defaultWasmLimits {wlFuel = maxBound} binary "{}" (\_ -> pure)))
+    worker <- Async.async (runEff (withGuest defaultWasmLimits {wlFuel = maxBound} binary "{}" (const pure)))
     timeout 3000000 (Async.cancel worker) `shouldReturn` Just ()
   where
     trapped GuestTrap {} = True

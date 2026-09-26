@@ -12,7 +12,7 @@ where
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM
 import Control.Exception qualified as Exception
-import Control.Monad (forM, forM_, void)
+import Control.Monad (forM, forM_, void, when)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
   ( Value (..),
@@ -26,6 +26,7 @@ import Data.Aeson.Types (parseJSON, parseMaybe)
 import Data.ByteString (ByteString)
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
+import Data.Either (fromRight)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Set qualified as Set
@@ -110,7 +111,7 @@ runWasmProgram session hooks catalog limits program = mask $ \restore -> do
                 Nothing -> do
                   active <- Events.isOpen target
                   if active then retry else pure (Left (Exception.toException TaskCancelled))
-        outcome <- case parentActor of
+        outcome <- parked hooks $ case parentActor of
           Nothing -> atomically ready
           Just actor -> Executor.await actor True retry ready >>= maybe (Exception.throwIO TaskCancelled) pure
         either Exception.throwIO pure outcome
@@ -184,6 +185,8 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
   exhausted <- liftIO (newTVarIO False)
   submitted <- liftIO (newTVarIO 0)
   workers <- liftIO (newTVarIO Map.empty)
+  -- Every leaf's gate release; pausing hands the ordering back to the model.
+  yields <- liftIO (newTVarIO [])
   seen <- liftIO (newTVarIO Set.empty)
   buffered <- liftIO (newTVarIO [])
   reference <- liftIO (newTVarIO label)
@@ -208,11 +211,11 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
           cancel worker
           outcome <- liftIO (Async.waitCatch worker)
           let stopped = if request.trName == "$sleep" then ToolInvocation (ToolRejected (ToolFault "cancelled" "sleep cancelled" RetrySafe)) ContinueLoop else cancelled
-              invocation = either (const stopped) id outcome
+              invocation = fromRight stopped outcome
           record request invocation
           liftIO . atomically $ modifyTVar' workers (Map.delete ident)
           pure (ident, boundedOutcome invocation.tiOutcome)
-      cleanup = liftIO (readTVarIO workers) >>= mapM_ (void . stop) . reverse . Map.keys
+      cleanup = liftIO (readTVarIO workers) >>= mapM_ stop . reverse . Map.keys
       launch (GuestCall ident name args) = mask $ \_ -> do
         request <- (\call -> ToolRequest call name args) <$> freshExecutionLabel session (label <> "/call")
         used <- liftIO (readTVarIO submitted)
@@ -229,7 +232,10 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
                       ms <= 21600000 ->
                         threadDelay (ms * 1000) >> pure (ToolInvocation (ToolSucceeded Null) ContinueLoop)
                   _ -> pure (ToolInvocation (ToolRejected (ToolFault "invalid_sleep" "invalid sleep duration" RetrySafe)) ContinueLoop)
-                else launchCall session hooks catalog request
+                else do
+                  (call, yieldGate) <- launchYieldingCall session hooks catalog request
+                  liftIO . atomically $ modifyTVar' yields (yieldGate :)
+                  pure call
         liftIO . atomically $ modifyTVar' workers (Map.insert ident (request, worker))
       snapshot exit output = do
         calls <- reverse <$> liftIO (readTVarIO receipts)
@@ -244,6 +250,7 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
         pure (CodeModeResult exit calls control output count overBudget ref program.wpWorkflow media)
       asyncTool name = name == "$sleep" || any (\entry -> entry.ctDefinition.tdRef == ToolRef name && entry.ctDefinition.tdAwait == AsyncTool) catalog
       pause queued = do
+        liftIO (atomically (readTVar yields >>= sequence_))
         active <- liftIO (readTVarIO workers)
         result <- snapshot WasmPaused (Just (object ["pending" .= ([object ["call" .= request.trCallId, "tool" .= request.trName, "status" .= ("running" :: Text)] | (request, _) <- Map.elems active] <> [object ["tool" .= call.gcTool, "status" .= ("queued" :: Text)] | call <- queued])]))
         suspend result
@@ -252,7 +259,7 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
           then pure ()
           else do
             interrupt <- liftIO . atomically $ (hooks.ehInterrupt >> pure True) `orElse` pure False
-            if interrupt then pause queued else pure ()
+            when interrupt (pause queued)
       drive guest = \case
         GuestDone value -> pure (WasmCompleted, Just value)
         GuestTrap exit -> pure (exit, case exit of WasmTrapped detail -> Just (object ["error" .= detail]); _ -> Nothing)

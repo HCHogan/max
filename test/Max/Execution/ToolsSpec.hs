@@ -3,10 +3,11 @@ module Max.Execution.ToolsSpec (spec) where
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (atomically, check, modifyTVar', newTVarIO, readTVar, writeTVar)
-import Control.Monad (forM_, replicateM_)
+import Control.Monad (forM_, replicateM_, when)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.Maybe (isNothing)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful (liftIO, runEff)
@@ -38,7 +39,7 @@ spec = describe "shared host tool execution" $ do
         runner =
           echoTool
             { toolRunner = LegacyRunner $ \value -> do
-                if value == first then liftIO (takeMVar blocked) else pure ()
+                when (value == first) (liftIO (takeMVar blocked))
                 pure (Right value)
             }
         hooks = noJournal {ehEvents = pure (Just target)}
@@ -115,6 +116,24 @@ spec = describe "shared host tool execution" $ do
         liftIO (timeout 1000000 (takeMVar delivered) `shouldReturn` Just [media])
         liftIO (readIORef count `shouldReturn` 1)
 
+  it "lets a later exclusive call run while an interrupted shared call stays detached" $ do
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    steering <- newTVarIO False
+    let slow = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (putMVar entered () >> takeMVar release) >> pure (Right value)}
+        quick = legacyTool "note" "note" (object ["type" .= ("object" :: Text)]) (pure . Right)
+        hooks = noJournal {ehInterrupt = readTVar steering >>= check}
+        noteDefinition = echoDefinition {tdRef = ToolRef "note", tdParallelism = SequentialOnly}
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition {tdAwait = AsyncTool, tdParallelism = ParallelIndependent}, noteDefinition] [slow, quick])
+    Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ -> do
+      outcome <- timeout 3000000 . runEff . runConcurrent . runTools registry $ do
+        session <- newExecutionSession Nothing
+        _ <- executeToolBatch session hooks (views registry) [ToolRequest "async" "echo" args]
+        liftIO (atomically (writeTVar steering False))
+        executeToolBatch session hooks (views registry) [ToolRequest "after" "note" (object [])]
+      putMVar release ()
+      fmap (map (outcomeName . (.tiOutcome)) . (.tbInvocations)) outcome `shouldBe` Just ["succeeded"]
+
   it "waits for non-async tools before admitting steering" $ do
     entered <- newEmptyMVar
     release <- newEmptyMVar
@@ -127,7 +146,7 @@ spec = describe "shared host tool execution" $ do
       )
       $ \worker -> do
         takeMVar entered
-        timeout 20000 (Async.wait worker) >>= (`shouldSatisfy` maybe True (const False))
+        timeout 20000 (Async.wait worker) >>= (`shouldSatisfy` isNothing)
         putMVar release ()
         batch <- Async.wait worker
         map (.tiOutcome) batch.tbInvocations `shouldBe` [ToolSucceeded args]
@@ -261,7 +280,7 @@ spec = describe "shared host tool execution" $ do
           echoTool
             { toolName = name,
               toolRunner = LegacyRunner $ \value -> do
-                liftIO $ if name == "first" then putMVar entered () >> takeMVar release else pure ()
+                liftIO $ when (name == "first") (putMVar entered () >> takeMVar release)
                 liftIO (modifyIORef' seen (<> [name]))
                 pure (Right value)
             }

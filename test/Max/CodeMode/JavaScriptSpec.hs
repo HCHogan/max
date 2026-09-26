@@ -1,6 +1,6 @@
 module Max.CodeMode.JavaScriptSpec (spec) where
 
-import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
+import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM
 import Control.Exception qualified as Exception
@@ -163,6 +163,37 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
             other <- newExecutionSession Nothing
             denied <- controlProgram other True paused.cmRunRef
             liftIO (outcomeName denied.tiOutcome `shouldBe` "rejected")
+          )
+          `Eff.finally` closeExecutionSession session
+
+  it "lets the model run an exclusive call while its program is paused" $ do
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    steering <- newTVarIO False
+    late <- newTVarIO False
+    let runner value = liftIO $ do
+          case valueOf value of
+            Just (Number 2) -> putMVar entered () >> takeMVar release
+            _ -> pure ()
+          pure (Right value)
+        hooks = noJournal {ehInterrupt = readTVar steering >>= check}
+        exclusive = echoDefinition {tdRef = ToolRef "note", tdParallelism = SequentialOnly}
+    registry <- checked [echoDefinition {tdAwait = AsyncTool}, exclusive] [echoTool {toolRunner = LegacyRunner runner}, echoTool {toolName = "note"}]
+    Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ ->
+      runEff . runConcurrent . runTools registry $ do
+        session <- newExecutionSession Nothing
+        ( do
+            paused <- runJavaScript session hooks (views registry) "return (await tools.echo({value:2})).value;"
+            liftIO (paused.cmExit `shouldBe` WasmPaused)
+            liftIO (atomically (writeTVar steering False))
+            -- The paused program's call is still running; it must not hold
+            -- the model's next exclusive call until it finishes.
+            watchdog <- liftIO (Async.async (threadDelay 2000000 >> atomically (writeTVar late True) >> putMVar release ()))
+            noted <- executeToolBatch session hooks (views registry) [ToolRequest "note" "note" (object ["value" .= (1 :: Int)])]
+            liftIO (readTVarIO late `shouldReturn` False)
+            liftIO (Async.cancel watchdog)
+            liftIO (map (outcomeName . (.tiOutcome)) noted.tbInvocations `shouldBe` ["succeeded"])
+            liftIO (putMVar release ())
           )
           `Eff.finally` closeExecutionSession session
 

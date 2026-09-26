@@ -5,7 +5,7 @@ import Control.Concurrent.Async (cancel, mapConcurrently, mapConcurrently_, wait
 import Control.Concurrent.MVar
 import Control.Concurrent.STM qualified as STM
 import Control.Exception (finally)
-import Control.Monad (forM_, replicateM, when)
+import Control.Monad (forM_, replicateM, when, (>=>))
 import Data.Aeson (encode, object, (.=))
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
@@ -73,7 +73,7 @@ spec = describe "withBrowserSession" $ do
           | n < 3 = browserScopeForTurn (GroupId 1) (AgentTurnId n)
           | otherwise = browserScopeForTask (GroupId 1) n 0
         invoke n = withBrowserSession registry (scope n) (callBrowserTool registry (scope n) "fixture" (object []))
-    forM_ [1 .. 4] $ \n -> invoke n >>= (`shouldSatisfy` isRight)
+    forM_ [1 .. 4] (invoke >=> (`shouldSatisfy` isRight))
     invoke 1 >>= (`shouldSatisfy` isRight)
     readIORef connections `shouldReturn` 13
     invoke 5 >>= (`shouldSatisfy` isLeft)
@@ -100,7 +100,7 @@ spec = describe "withBrowserSession" $ do
       pure browserOk
     let scope n = browserScopeForTask (GroupId 1) n 0
         invoke n = withBrowserSession registry (scope n) (callBrowserTool registry (scope n) "fixture" (object []))
-    forM_ [1 .. 3] $ \n -> invoke n >>= (`shouldSatisfy` isRight)
+    forM_ [1 .. 3] (invoke >=> (`shouldSatisfy` isRight))
     withAsync (invoke 4) $ \worker -> do
       timeout 1_000_000 (takeMVar entered) `shouldReturn` Just ()
       invoke 5 >>= (`shouldSatisfy` isLeft)

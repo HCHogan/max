@@ -10,6 +10,7 @@ import Data.Either (isLeft, isRight)
 import Data.Foldable (for_)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -93,7 +94,7 @@ spec pool = before_ (truncateAll pool) $ describe "automation Jobs and retained 
     Right (Router.MonitorCompleted old) <- NodeWorkFixture.takeWork jobs
     Right unrelated <- Jobs.admitJob jobs Nothing 2 request {Jobs.monitor = Nothing}
     start <- newEmptyMVar
-    let persist receipt = withDb pool $ recordMonitorResultWhen (atomically (Router.monitorIsCurrent receipt)) fire receipt.job.status (maybe (error "missing monitor result") id receipt.job.result)
+    let persist receipt = withDb pool $ recordMonitorResultWhen (atomically (Router.monitorIsCurrent receipt)) fire receipt.job.status (fromMaybe (error "missing monitor result") receipt.job.result)
     withAsync (takeMVar start >> persist old) $ \writer -> do
       withConn pool $ \connection -> PostgreSQL.withTransaction connection $ do
         (_ :: [Only MonitorId]) <- PostgreSQL.query connection "SELECT monitor_id FROM monitors WHERE monitor_id=? FOR UPDATE" (Only monitor.mrMonitorId)

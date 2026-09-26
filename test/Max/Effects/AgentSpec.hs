@@ -282,7 +282,7 @@ spec = describe "Agent full loop" $ do
               if any (\case MsgTool {} -> True; _ -> False) messages
                 then do
                   liftIO $ case reverse messages of
-                    MsgUser "second published" : MsgTool "slow" _ : MsgAssistantToolCalls _ _ : MsgUser "first" : [] -> pure ()
+                    [MsgUser "second published", MsgTool "slow" _, MsgAssistantToolCalls _ _, MsgUser "first"] -> pure ()
                     other -> expectationFailure ("observations moved before the tool result: " <> show other)
                   pure (Right (ContentResp "first completed"))
                 else pure (Right (ToolCallsResp providerMessage "" [ToolCall "slow" "echo" (object [])]))

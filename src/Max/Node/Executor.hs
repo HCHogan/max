@@ -21,7 +21,7 @@ where
 
 import Control.Concurrent.STM
 import Control.Exception (mask, onException)
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Data.List (find, sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -121,9 +121,8 @@ enqueue :: Actor -> Priority -> STM ()
 enqueue actor priority = do
   let Executor stateRef = actor.executor
   state <- readTVar stateRef
-  if Map.member actor.identifier state.actors && Map.member actor.task state.tasks && state.owner /= Just actor.identifier && not (Map.member actor.identifier state.ready)
-    then writeTVar stateRef state {next = state.next + 1, ready = Map.insert actor.identifier (priority, state.next) state.ready}
-    else pure ()
+  when (Map.member actor.identifier state.actors && Map.member actor.task state.tasks && state.owner /= Just actor.identifier && not (Map.member actor.identifier state.ready)) $
+    writeTVar stateRef state {next = state.next + 1, ready = Map.insert actor.identifier (priority, state.next) state.ready}
 
 leave :: Actor -> STM ()
 leave actor = suspend actor >> dispatch actor.executor

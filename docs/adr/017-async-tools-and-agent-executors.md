@@ -426,6 +426,17 @@ Budget reservation, admission and the journal start all happen before the
 `batchLock`: `ParallelSafe` and `ParallelIndependent` calls share it, and
 `SequentialOnly` calls take it exclusively, in arrival order.
 
+A shared call whose await is interrupted (§6), or whose program pauses, leaves
+the gate. From then on the model orders its later calls around it, as it does
+around an agent started without `wait`; otherwise a detached six-hour `agent`
+call would hold every later exclusive call of the task, including the
+`agent_steer` or `agent_cancel` meant for that agent. An exclusive call keeps
+its slot until it finishes: it may share a stateful resource such as a browser
+session, and its deadline is minutes, not hours.
+
+Time a task spends parked at an await does not count toward the frontend's
+silence watchdog (`turn_silence_seconds`). Ending the await counts as progress.
+
 A native tool round is `join_all` over its calls. Provider protocols need every
 result before the next model call, so native calls cannot express race, select
 or pipelines. A single native call behaves exactly like

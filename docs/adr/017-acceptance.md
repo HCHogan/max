@@ -43,6 +43,8 @@ local implementation/test evidence, not deployment evidence.
 |---|---|---|
 | Reservation, admission and journal start before worker creation | Reviewed | `Execution.Tools.launchCall` orders these before `asyncWithUnmask`; native/guest share that function. |
 | ParallelSafe/Independent share gate; SequentialOnly exclusive FIFO | Reviewed | Gate tickets are reserved synchronously; `Execution/ToolsSpec` proves an exclusive call cannot be overtaken and queued cancellation releases its ticket. |
+| Detached or paused shared calls leave the gate | Reviewed | Found after the first audit: a detached `agent` kept its shared slot and held every later exclusive call of the task until it ended. `Execution.Tools.launchCallWith` now yields a shared call's slot (idempotently, queued or running) when its await detaches and when its program pauses; exclusive calls keep theirs. `Execution/ToolsSpec` runs an exclusive call while an interrupted shared call is still running, and `JavaScriptSpec` does the same beside a paused program. |
+| Parked awaits are not silence | Reviewed | Found after the first audit: the frontend silence watchdog (default four hours) counted a long foreground await as a stall and cut the turn, cancelling its awaited children. `ExecutionHooks.ehPark` brackets every wait on futures through `Tasks.parkTurn`; `awaitTurnSilence` ignores parked time and restarts from the end of the await. `TasksSpec` parks for four limits without firing and still detects silence afterwards. |
 | Native join_all returns protocol-order results; guest waits for any | Reviewed | Native `requestMap`/completed map and guest driver use the same `awaitWake`; native result-order and guest race tests. |
 | Async yields immediately; short tools yield at five seconds | Reviewed | `Executor.await`/`shortDeadline`; executor tests cover both branches and ownership reacquisition. |
 | Long background async await is steerable | Reviewed | DB `ExecutionSpec` runs a background model loop with a blocked async sandbox fixture, delivers real `Jobs.steerJob`, checks the next poll observes the note and exposes `execution_wait`, then joins the original value. Three polls, one leaf invocation and one successful journal row prove interruption did not replay the call. |
@@ -149,7 +151,8 @@ the projection/provider and task-selection tests above cover the tail boundary.
 - Run both `max-test` and `max-test-db` with the current poll-driven embedded
   Wasm artifact and the isolated PostgreSQL database.
 - Run `cabal build all`, `scripts/check-architecture.py`, formatting and diff
-  checks.
+  checks, and `hlint` over CI's directories (zero hints; CI's Lint step
+  enforces it).
 - Run `cabal run max-prompt-flow`, include the document if changed, then run
   `cabal run max-prompt-flow -- --check` before every commit. Both commands now
   also refuse an uninterrupted projection mismatch against the append oracle.
@@ -157,7 +160,7 @@ the projection/provider and task-selection tests above cover the tail boundary.
   have no unresolved items within delivery steps 1–4. The wake-boundary audit
   closes the final cross-path review; green suites alone were not its evidence.
 
-Final validation: 1312 unit examples and 330 database examples, zero failures;
-full build, architecture checks, formatting, diff checks and both prompt-flow
-gates passed. The database suite uses the isolated local PostgreSQL instance;
+Final validation: 1315 unit examples and 330 database examples, zero failures;
+full build, architecture checks, formatting, diff checks, zero hlint hints and
+both prompt-flow gates passed. The database suite uses the isolated local PostgreSQL instance;
 no production activation or deployment is part of this acceptance.
