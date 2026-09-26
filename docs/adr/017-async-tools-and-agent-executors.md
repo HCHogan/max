@@ -22,7 +22,16 @@ trigger once; a model cannot start without it. Replacement creates a fresh
 trigger for the new generation. Automation handoff installs or validates the
 same frozen occurrence atomically with its event delivery, including rollback
 under backpressure. Triggers are not rendered again over the frozen initial
-window. The remaining executor migration is still pending; raw answers (including reasoning
+window. `Node.Executor.runSteps` now drives model polls and checks ownership
+before each step. Continuations yield only through the shared await policy:
+async waits yield immediately; short tools that finish within five seconds keep
+the permit across the next poll, as do model corrections. The scoped model callback
+stays on its original Haskell thread, preserving sequential effect interpreters;
+awaits still park that continuation and reacquire permission before returning.
+Normal terminal results retain execution ownership until final publication
+closes the task, while exceptions revoke the task and its guest actors. The
+agent no longer privately recurses into its next model step. The full step 3–4
+acceptance audit remains in progress; raw answers (including reasoning
 and signatures), tool results and the initial window remain in the record.
 Compaction and media planning use explicit projection checkpoints. Root
 polls also observe later canonical conversation messages through a frozen history
@@ -137,7 +146,7 @@ still running. Collection and report acknowledgement share one transaction;
 abandonment releases exactly that subscription. Replacement invalidates cached
 outcomes without losing logical child joins, while generation-bound admission
 reservations expire. Cancellation replaces a cached partial success before the
-batch can be collected. The remaining node executor migration remains in step 4.
+batch can be collected. The remaining node execution and routing acceptance audit stays in step 4.
 `JobWork` is removed. Jobs exposes only a transactional launch claim; a separate
 consumer takes terminal receipts directly from `Node.Router`. Slow source loading
 cannot prevent result intake, and a blocked monitor writer cannot hold launch

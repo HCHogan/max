@@ -62,6 +62,7 @@ import Max.Execution.Tools hiding (Interrupted)
 import Max.Execution.Types (Admission (..))
 import Max.LLM.Failure (renderLLMFailure)
 import Max.Node.Events qualified as Events
+import Max.Node.Executor qualified as Executor
 import Max.Reply (readyPrefix)
 import Max.Tasks
   ( TaskCancelled (..),
@@ -71,6 +72,7 @@ import Max.Tasks
     nextExecutionOrdinal,
     setTurnPhase,
     turnEvents,
+    turnExecutor,
     turnRuntimeAgentTurn,
   )
 import Max.Tool.Bundles (SkillLoad (..))
@@ -228,13 +230,13 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
         nodeLog <- Events.readObservations target
         trigger <- Events.taskTrigger target >>= maybe (throwSTM TaskCancelled) pure
         pure (trigger, Projection.logCursor nodeLog)
-      go LoopState {context = initialContext, roundNumber = 0, corrections = 0, record = Projection.newTaskRecord trigger cursor messages}
+      actor <- liftIO (turnExecutor turn)
+      let initial = LoopState {context = initialContext, roundNumber = 0, corrections = 0, record = Projection.newTaskRecord trigger cursor messages}
+      result <- withEffToIO SeqUnlift $ \run -> Executor.runSteps actor initial (run . step)
+      maybe (throwIO TaskCancelled) pure result
       where
-        go :: LoopState -> Eff (Tools : ToolDirectory : es) AgentResult
-        go state = step state >>= either pure go
-
-        -- One model poll and its result delivery. The node scheduler will own
-        -- when the next transition is admitted; records already outlive a poll.
+        -- One model poll and its result delivery. Only the node executor may
+        -- invoke the next step; projection and call admission stay scoped here.
         step :: LoopState -> Eff (Tools : ToolDirectory : es) (Either AgentResult LoopState)
         step state = do
           let ctx = state.context

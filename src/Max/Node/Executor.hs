@@ -9,6 +9,7 @@ module Max.Node.Executor
     registerTask,
     guestActor,
     enter,
+    runSteps,
     leave,
     closeActor,
     closeTask,
@@ -70,6 +71,37 @@ enter :: Actor -> IO Bool
 enter actor = mask $ \restore -> do
   atomically (enqueue actor actor.priority >> dispatch actor.executor)
   restore (atomically (granted actor)) `onException` atomically (closeActor actor)
+
+-- | Drive a model task's steps under this node's ownership. State is handed
+-- back to the executor after each poll. Only 'await' yields ownership: a short
+-- tool round that completes before its deadline keeps the permit, as do model
+-- corrections. Awaiting retains the Haskell continuation and reacquires
+-- ownership before returning, in the ready queue's priority/FIFO order.
+-- The callback is always invoked on the caller's thread, so scoped sequential
+-- effect interpreters and their output sinks remain on that same thread.
+-- A normal result keeps ownership through the caller's final publication;
+-- its existing closeTask boundary releases the slot. Exceptions revoke it now.
+runSteps :: Actor -> state -> (state -> IO (Either result state)) -> IO (Maybe result)
+runSteps actor initial step = mask $ \restore ->
+  let go state = do
+        active <- restore (atomically (granted actor))
+        if not active
+          then pure Nothing
+          else do
+            outcome <- restore (step state)
+            case outcome of
+              Left value -> do
+                current <- atomically (granted actor)
+                pure (if current then Just value else Nothing)
+              Right next -> go next
+   in ( do
+          active <- restore (enter actor)
+          if active then go initial else pure Nothing
+      )
+        `onException` atomically (closeTask actor)
+
+continuationPriority :: Actor -> Priority
+continuationPriority actor = if actor.priority == GuestStep then GuestStep else ResumedTask
 
 granted :: Actor -> STM Bool
 granted actor = do
@@ -155,7 +187,7 @@ await actor immediate deadline ready = mask $ \restore -> do
         suspend actor
         value <- (Just <$> ready) `orElse` pure Nothing
         case value of
-          Just _ -> enqueue actor resumePriority
+          Just _ -> enqueue actor (continuationPriority actor)
           Nothing -> pure ()
         dispatch actor.executor
         pure value
@@ -169,7 +201,7 @@ await actor immediate deadline ready = mask $ \restore -> do
                 )
                   `orElse` ( do
                                value <- ready
-                               enqueue actor resumePriority
+                               enqueue actor (continuationPriority actor)
                                dispatch actor.executor
                                pure (Just value)
                            )
@@ -179,5 +211,3 @@ await actor immediate deadline ready = mask $ \restore -> do
           pure (if active then value else Nothing)
         )
         `onException` atomically (closeActor actor)
-  where
-    resumePriority = if actor.priority == GuestStep then GuestStep else ResumedTask
