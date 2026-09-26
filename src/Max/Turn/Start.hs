@@ -4,7 +4,7 @@
 module Max.Turn.Start (TurnStart (..), InputAdmission (..), startAllowsInput) where
 
 import Data.Text (Text)
-import Max.Node.Router (Relay)
+import Max.Node.Router (Relay, ReportRelay)
 import Max.Task.Types (JobView)
 
 data InputAdmission = AdmitFrontendInput | StartSeparateTurn deriving stock (Eq, Show)
@@ -14,6 +14,7 @@ data TurnStart
   | JobTurn !JobView
   | JobNotice !JobView !Int !Text
   | CompletionNotice !Relay
+  | ReportNotice !ReportRelay
   | -- | An automation fire: its creator's delayed request, handled by an
     -- ordinary foreground turn and settled into the job that admitted it.
     AutomationTurn !JobView

@@ -136,8 +136,9 @@ import Max.Task.Types
   ( JobMonitor (definitionId),
     JobResult (JobResult),
     JobRun (jobId),
-    JobSpec (inputs, monitor, objective, source),
-    JobView (run, spec, status),
+    JobSpec (grants, inputs, monitor, objective, source),
+    JobView (result, run, spec, status),
+    jobReportText,
     jobUsageLine,
     taskHandle,
   )
@@ -165,7 +166,7 @@ import Max.Turn.Continuity
     toolCatalogFingerprint,
   )
 import Max.Turn.Job (runJob)
-import Max.Turn.Start (TurnStart (AutomationTurn, CompletionNotice, JobNotice, JobTurn))
+import Max.Turn.Start (TurnStart (AutomationTurn, CompletionNotice, JobNotice, JobTurn, ReportNotice))
 import Max.Turn.Types (AgentTurnRef, nextTurnOutputLink)
 import Max.Util (trySync, tshow)
 import OneBot.Types (GroupId (..), UserId (UserId), isPrivateChat)
@@ -215,6 +216,9 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
           ( withProcessingReaction $ case start of
               JobNotice {} -> dispatchNotice env session
               CompletionNotice relay -> dispatchCompletion env session relay
+              ReportNotice relay -> do
+                current <- liftIO (atomically (Router.reportIsCurrent relay))
+                if current then for_ (reportBody relay) (relayReport env session relay.job) else finishAgentTurn turnRef TurnAborted 0 (Just "child report revoked")
               AutomationTurn job -> dispatchAutomation env session job
               _ -> dispatchOrdinary env session (replyTarget >>= finishedTarget)
           )
@@ -256,7 +260,9 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
     backgroundJob = case start of JobTurn job -> Just job; _ -> Nothing
     relayedReport = case start of
       JobNotice job _ body -> Just (job, body)
+      ReportNotice relay -> (relay.job,) <$> reportBody relay
       _ -> Nothing
+    reportBody relay = jobReportText relay.job <$> relay.job.result
     finishedTarget target
       | replyTurnIsFinished target = Just target
       | otherwise = Nothing
@@ -402,7 +408,7 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
                 tcOutput = outputCaps,
                 tcMonitorArming = tierSatisfied TierGroupAdmin tier,
                 tcCatalogGrants = Map.empty,
-                tcEffectCeiling = case start of CompletionNotice relay -> Just (toolCatalogGrants relay.origin.context); _ -> Nothing,
+                tcEffectCeiling = case start of CompletionNotice relay -> Just (toolCatalogGrants relay.origin.context); ReportNotice relay -> Just relay.job.spec.grants; _ -> Nothing,
                 tcBackground = False
               }
           currentDefinitions = toolDefinitionsFor env gm.groupId baseCapabilities

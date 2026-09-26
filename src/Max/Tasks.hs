@@ -406,6 +406,7 @@ cancelTask reg tid = do
       Just e -> do
         killed <- readTVar e.teKilled
         writeTVar e.teKilled True
+        readTVar e.teEvents >>= Events.close
         if killed then pure (Just Nothing) else Just <$> readTVar e.teCancel
   case mAct of
     Nothing -> pure False
@@ -431,6 +432,7 @@ cancelAllTasks reg = do
       ( \e -> do
           killed <- readTVar e.teKilled
           writeTVar e.teKilled True
+          readTVar e.teEvents >>= Events.close
           if killed then pure Nothing else readTVar e.teCancel
       )
       (Map.elems m)

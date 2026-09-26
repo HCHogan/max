@@ -51,9 +51,7 @@ runAgentRuntime jobs =
             events <- liftIO . atomically $ do
               Jobs.flushJobEvents jobs (turnRuntimeAgentTurn turn).atrTurnId
               target <- turnEvents turn
-              events <- Events.observe target
-              Router.observeResults jobs.resultRouter target events
-              pure events
+              Router.observeEvents jobs.resultRouter target
             pure (published <> renderEvents events)
         )
         (\turn -> turnEvents turn >>= (`Events.awaitInterrupt` Events.noPending))

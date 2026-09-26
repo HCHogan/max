@@ -19,7 +19,7 @@ Frontend and background steering now enter a shared typed node event store;
 `ExecutionInbox`, the frontend feedback queue and the job feedback inbox are
 removed. One wake predicate classifies interrupts. Delivery and successful
 final-answer closure share STM, including already-streamed answers. Pending
-child-report references stay in Jobs until the bounded event store accepts them;
+reports keep a bounded source slot in Jobs until the shared router accepts them;
 progress changes status only. Background `agent_tell` / `agent_ask` and their
 SDK functions deliver to the starting task's event log. A parent's answer
 settles the pending ask without re-interrupting the guest that receives it;
@@ -51,8 +51,16 @@ descendants depend on them. A completed job admits only checkpoints for its
 already-running calls; new model/tool reservations remain fenced. Retained native
 calls inherit the job deadline even after the model loop ends. Explicit cancel
 and replacement still revoke the old generation and its descendants. Child waits
-can outlive the parent task, and an unclaimed child report arriving after parent
-closure uses the existing frontend relay. Each admitted native or guest leaf now
+can outlive the parent task. Unclaimed agent reports now share Node.Router with
+native results: they belong to the task that started the agent until observation,
+and become independent frontend relays if that task closes. This also covers
+reports delivered before closure but not yet observed. Event receipts acknowledge
+only the actual observation; replacement fences buffered reports before projection
+and relay publication. The old `childUpdates` set is removed. Awaited reports are
+reserved at admission, including before the wait registers, and are handed to the
+original future once; an abandoned waiter releases the report back to routing.
+Report relays preserve the original source and grant ceiling, and their attempt
+identity protects retry ownership. Each admitted native or guest leaf now
 receives host-owned call authority. Memory, pin, monitor and task mutations use
 that authority to finish after a normal terminal checkpoint, rechecking its
 validity after acquiring database locks. Identity, source, role and grant checks
@@ -60,7 +68,7 @@ remain in force; cancellation, replacement, expiry and invocation return revoke
 this permission. New calls and default database callers still require a live
 model turn. An admitted agent call can create its child after parent completion
 under the original tree grants and deadline. Full routing
-(child relays, replacement/cancellation and monitor fires), combined
+(child messages, replacement/cancellation and monitor fires), combined
 observation bounds and the open-task tail remain in step 4. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)
 and the Wasm host ABI of [ADR-012](012-wasm-tool-execution.md). Work stays

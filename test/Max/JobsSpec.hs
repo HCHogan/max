@@ -1,6 +1,6 @@
 module Max.JobsSpec (Max.JobsSpec.spec) where
 
-import Control.Concurrent.Async (cancel, mapConcurrently, poll, wait, withAsync)
+import Control.Concurrent.Async (cancel, concurrently, mapConcurrently, poll, wait, withAsync)
 import Control.Concurrent.STM (STM, atomically, retry)
 import Control.Monad (forM_, replicateM, replicateM_)
 import Data.Aeson (Value (..), object, (.=))
@@ -9,19 +9,23 @@ import Data.Either (isLeft, isRight)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, isJust, isNothing)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (addUTCTime, getCurrentTime)
 import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation (..))
-import Max.Jobs
+import Max.Jobs hiding (takeJobWork)
+import Max.Jobs qualified as Jobs
 import Max.LLM.Types (CallCost (..), TokenUsage (..))
 import Max.Monitor.Types (MonitorFireId (..), MonitorId (..))
 import Max.Node.Events qualified as Events
-import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
+import Max.Node.Router qualified as Router
+import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
 import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State
-import Max.Task.Types (JobMonitor (..), JobUsage (..), TaskProfile (..), jobUsageLine)
+import Max.Task.Types (JobMonitor (..), JobUsage (..), TaskProfile (..), jobReportText, jobUsageLine)
 import Max.Tasks
+import Max.ToolContext qualified as TC
 import Max.Turn.Types
 import OneBot.Types (GroupId (..), UserId (..))
 import System.Timeout (timeout)
@@ -29,6 +33,160 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "process-owned Jobs" $ do
+  it "relays a child report delivered before its parent closes but not yet observed" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    let report = JobResult "child proof" (Just (object ["answer" .= (42 :: Int)]))
+    completeJob jobs child.run Succeeded report
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+    completeJob jobs root.run Succeeded (JobResult "parent finished" Nothing)
+    RelayReport childRelay <- takeJobWork jobs
+    RelayReport parentRelay <- takeJobWork jobs
+    childRelay.job.run `shouldBe` child.run
+    childRelay.job.result `shouldBe` Just report
+    parentRelay.job.run `shouldBe` root.run
+    atomically (Router.releaseReport jobs.resultRouter childRelay >> Router.releaseReport jobs.resultRouter parentRelay)
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+
+  it "routes a root agent report to its starting frontend task until that task ends" $ do
+    forM_ [False, True] $ \observed -> do
+      (tasks, jobs, request) <- fixture
+      caller <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
+      target <- atomically (turnEvents caller)
+      Right child <- admitJob jobs (Just (AgentTurnId 99)) 1 request
+      LaunchJob _ <- takeJobWork jobs
+      completeJob jobs child.run Succeeded (JobResult "frontend-owned report" Nothing)
+      timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+      if observed
+        then do
+          events <- atomically (Router.observeEvents jobs.resultRouter target)
+          map (\event -> case event.body of Events.ChildDone run _ -> Just run; _ -> Nothing) events `shouldBe` [Just child.run]
+        else pure ()
+      finishTurnRuntime tasks caller
+      if observed
+        then timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+        else do
+          RelayReport relay <- takeJobWork jobs
+          relay.job.run `shouldBe` child.run
+
+  it "retains both reports when parent closure races child completion" $ do
+    replicateM_ 20 $ do
+      (tasks, jobs, request) <- fixture
+      (root, _) <- launch tasks jobs 1 request
+      (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+      _ <- concurrently (completeJob jobs child.run Succeeded (JobResult "child" Nothing)) (completeJob jobs root.run Succeeded (JobResult "parent" Nothing))
+      RelayReport first <- takeJobWork jobs
+      RelayReport second <- takeJobWork jobs
+      Set.fromList [first.job.run, second.job.run] `shouldBe` Set.fromList [root.run, child.run]
+      atomically (Router.releaseReport jobs.resultRouter first >> Router.releaseReport jobs.resultRouter second)
+      timeout 1000 (takeJobWork jobs) `shouldReturn` Nothing
+
+  it "does not relay a child report the parent already observed" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    completeJob jobs child.run Succeeded (JobResult "observed proof" Nothing)
+    notes <- observeJobEvents jobs (AgentTurnId 1)
+    length notes `shouldBe` 1
+    completeJob jobs root.run Succeeded (JobResult "done" Nothing)
+    RelayReport relay <- takeJobWork jobs
+    relay.job.run `shouldBe` root.run
+    atomically (Router.releaseReport jobs.resultRouter relay)
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+
+  it "retains a report refused by the parent event buffer and relays it after closure" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    Just target <- atomically (jobEventTask jobs (AgentTurnId 1))
+    atomically (replicateM_ 256 (Events.deliver target (Events.Steered Null)))
+    timeout 1000000 (completeJob jobs child.run Succeeded (JobResult "backpressured proof" Nothing)) `shouldReturn` Just ()
+    completeJob jobs root.run Succeeded (JobResult "done" Nothing)
+    RelayReport first <- takeJobWork jobs
+    RelayReport second <- takeJobWork jobs
+    Set.fromList [first.job.run, second.job.run] `shouldBe` Set.fromList [root.run, child.run]
+    atomically (Router.releaseReport jobs.resultRouter first >> Router.releaseReport jobs.resultRouter second)
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+
+  it "keeps report source ownership while native results fill the shared router" $ do
+    (tasks, jobs, request) <- fixture
+    (root, runtime) <- launch tasks jobs 1 request
+    (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    let callContext =
+          TC.mkToolContext
+            (TC.TurnIdentity request.group request.source (UserId 7) (UserId 99) request.principal Nothing Nothing)
+            (TC.TurnCapabilities False False False noAdvertisedCaps False Map.empty Nothing False)
+    origin <- resultOrigin jobs runtime callContext
+    atomically (Router.closeTask jobs.resultRouter origin.target)
+    forM_ [1 .. 1024 :: Int] $ \n -> atomically (Router.deliverResult jobs.resultRouter origin (T.pack (show n)) Null [])
+    timeout 1000000 (completeJob jobs child.run Succeeded (JobResult "retained child" Nothing)) `shouldReturn` Just ()
+    timeout 1000000 (completeJob jobs root.run Succeeded (JobResult "retained parent" Nothing)) `shouldReturn` Just ()
+    replicateM_ 1024 $ do
+      RelayResult relay <- takeJobWork jobs
+      atomically (Router.releaseRelay jobs.resultRouter relay)
+    RelayReport first <- takeJobWork jobs
+    RelayReport second <- takeJobWork jobs
+    Set.fromList [first.job.run, second.job.run] `shouldBe` Set.fromList [root.run, child.run]
+    atomically (Router.releaseReport jobs.resultRouter first >> Router.releaseReport jobs.resultRouter second)
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+
+  it "fences an accepted child report on replacement before parent observation" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (child, runtime) <- launch tasks jobs 2 (request {parent = Just root.run})
+    completeJob jobs child.run Succeeded (JobResult "obsolete proof" Nothing)
+    finishTurnRuntime tasks runtime
+    detachJobTurn jobs child.run
+    replaceJob jobs request.group request.principal False 2 "new work" `shouldReturn` Right ()
+    atomically (Router.referencedOwners jobs.resultRouter) `shouldReturn` Set.empty
+    observeJobEvents jobs (AgentTurnId 1) `shouldReturn` []
+    LaunchJob fresh <- takeJobWork jobs
+    fresh.run `shouldBe` JobRun 2 2
+
+  it "reserves an awaited child's report before its worker can finish and before the wait registers" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    Right child <- admitJob jobs (Just (AgentTurnId 1)) 2 (request {parent = Just root.run, awaited = True})
+    LaunchJob _ <- takeJobWork jobs
+    completeJob jobs child.run Succeeded (JobResult "immediate child" Nothing)
+    observeJobEvents jobs (AgentTurnId 1) `shouldReturn` []
+    completeJob jobs root.run Succeeded (JobResult "parent done" Nothing)
+    RelayReport parentRelay <- takeJobWork jobs
+    parentRelay.job.run `shouldBe` root.run
+    Right (ChildrenFinished [result]) <- waitForChildren jobs (AgentTurnId 1) [2]
+    result.result `shouldBe` Just (JobResult "immediate child" Nothing)
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+
+  it "relays a ready awaited root report when its caller ends without entering the wait" $ do
+    (tasks, jobs, request) <- fixture
+    caller <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
+    Right child <- admitJob jobs (Just (AgentTurnId 99)) 1 (request {awaited = True})
+    LaunchJob _ <- takeJobWork jobs
+    completeJob jobs child.run Succeeded (JobResult "unclaimed" Nothing)
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+    finishTurnRuntime tasks caller
+    Just (RelayReport relay) <- timeout 1000000 (takeJobWork jobs)
+    relay.job.run `shouldBe` child.run
+    reportText relay `shouldBe` "unclaimed"
+
+  it "binds report relay publication to its exact attempt and original generation" $ do
+    (tasks, jobs, request) <- fixture
+    (root, runtime) <- launch tasks jobs 1 request
+    completeJob jobs root.run Succeeded (JobResult "proof" Nothing)
+    finishTurnRuntime tasks runtime
+    detachJobTurn jobs root.run
+    RelayReport first <- takeJobWork jobs
+    atomically (Router.requeueReport jobs.resultRouter first)
+    RelayReport second <- takeJobWork jobs
+    second.attempt `shouldBe` first.attempt + 1
+    atomically (Router.releaseReport jobs.resultRouter first >> Router.requeueReport jobs.resultRouter first)
+    bindReportRelay jobs (AgentTurnId 10) second
+    authorizeJobPublication jobs (AgentTurnId 10) `shouldReturn` True
+    replaceJob jobs request.group request.principal False 1 "replacement" `shouldReturn` Right ()
+    authorizeJobPublication jobs (AgentTurnId 10) `shouldReturn` False
+    detachJobNotice jobs (AgentTurnId 10)
+
   it "lets admitted calls and descendants finish after a parent's final answer while fencing new parent work" $ do
     (tasks, jobs, request) <- fixture
     (root, runtime) <- launch tasks jobs 1 request
@@ -54,10 +212,13 @@ spec = describe "process-owned Jobs" $ do
     (root, _) <- launch tasks jobs 1 request
     (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
     completeJob jobs root.run Succeeded (JobResult "parent done" Nothing)
-    PublishJobNotice _ _ "parent done" <- takeJobWork jobs
-    releaseJobNotice jobs root.run
+    RelayReport notice <- takeJobWork jobs
+    reportText notice `shouldBe` "parent done"
+    atomically (Router.releaseReport jobs.resultRouter notice)
     completeJob jobs child.run Succeeded (JobResult "late child result" Nothing)
-    Just (PublishJobNotice result _ body) <- timeout 1000000 (takeJobWork jobs)
+    Just (RelayReport relay) <- timeout 1000000 (takeJobWork jobs)
+    let result = relay.job
+        body = reportText relay
     result.run `shouldBe` child.run
     body `shouldBe` "late child result"
 
@@ -68,8 +229,8 @@ spec = describe "process-owned Jobs" $ do
     withAsync (waitForChildren jobs (AgentTurnId 1) [2]) $ \joining -> do
       timeout 20000 (wait joining) `shouldReturn` Nothing
       completeJob jobs root.run Succeeded (JobResult "parent done" Nothing)
-      PublishJobNotice {} <- takeJobWork jobs
-      releaseJobNotice jobs root.run
+      RelayReport otherNotice <- takeJobWork jobs
+      atomically (Router.releaseReport jobs.resultRouter otherNotice)
       completeJob jobs child.run Succeeded (JobResult "awaited result" Nothing)
       Just (Right (ChildrenFinished [result])) <- timeout 1000000 (wait joining)
       result.result `shouldBe` Just (JobResult "awaited result" Nothing)
@@ -83,13 +244,13 @@ spec = describe "process-owned Jobs" $ do
     completeJob jobs root.run Succeeded (JobResult "parent done" Nothing)
     finishTurnRuntime tasks runtime
     detachJobTurn jobs root.run
-    PublishJobNotice {} <- takeJobWork jobs
-    releaseJobNotice jobs root.run
+    RelayReport notice <- takeJobWork jobs
+    atomically (Router.releaseReport jobs.resultRouter notice)
     forM_ [3 .. 270] $ \identifier -> do
       Right other <- admitJob jobs Nothing identifier request
       completeJob jobs other.run Succeeded (JobResult "done" Nothing)
-      PublishJobNotice {} <- takeJobWork jobs
-      releaseJobNotice jobs other.run
+      RelayReport otherNotice <- takeJobWork jobs
+      atomically (Router.releaseReport jobs.resultRouter otherNotice)
     Just retained <- lookupJob jobs request.group root.run.jobId
     retained.calls `shouldBe` 1
     authorizeJobStep jobs (AgentTurnId 2) (ExecutionWork ReserveCall) `shouldReturn` True
@@ -117,8 +278,8 @@ spec = describe "process-owned Jobs" $ do
         timeout 20000 (wait first) `shouldReturn` Nothing
         timeout 20000 (wait second) `shouldReturn` Nothing
         completeJob jobs root.run Succeeded (JobResult "parent done" Nothing)
-        PublishJobNotice {} <- takeJobWork jobs
-        releaseJobNotice jobs root.run
+        RelayReport completedNotice <- takeJobWork jobs
+        atomically (Router.releaseReport jobs.resultRouter completedNotice)
         cancel first
         completeJob jobs child.run Succeeded (JobResult "awaited result" Nothing)
         Just (Right (ChildrenFinished [result])) <- timeout 1000000 (wait second)
@@ -133,16 +294,16 @@ spec = describe "process-owned Jobs" $ do
     withAsync (waitForChildren jobs (AgentTurnId 1) [2, 3]) $ \joining -> do
       timeout 20000 (wait joining) `shouldReturn` Nothing
       completeJob jobs root.run Succeeded (JobResult "parent done" Nothing)
-      PublishJobNotice {} <- takeJobWork jobs
-      releaseJobNotice jobs root.run
+      RelayReport otherNotice <- takeJobWork jobs
+      atomically (Router.releaseReport jobs.resultRouter otherNotice)
       completeJob jobs first.run Succeeded (JobResult "first result" Nothing)
       finishTurnRuntime tasks firstRuntime
       detachJobTurn jobs first.run
       forM_ [4 .. 270] $ \identifier -> do
         Right other <- admitJob jobs Nothing identifier request
         completeJob jobs other.run Succeeded (JobResult "done" Nothing)
-        PublishJobNotice {} <- takeJobWork jobs
-        releaseJobNotice jobs other.run
+        RelayReport completedNotice <- takeJobWork jobs
+        atomically (Router.releaseReport jobs.resultRouter completedNotice)
       completeJob jobs second.run Succeeded (JobResult "second result" Nothing)
       Just (Right (ChildrenFinished results)) <- timeout 1000000 (wait joining)
       map (.result) results `shouldBe` map (Just . (`JobResult` Nothing)) ["first result", "second result"]
@@ -197,8 +358,8 @@ spec = describe "process-owned Jobs" $ do
     (first, _) <- launch tasks jobs 1 request
     (second, _) <- launch tasks jobs 2 request
     completeJob jobs first.run Succeeded (JobResult "first result" Nothing)
-    PublishJobNotice sending version _ <- takeJobWork jobs
-    bindJobNotice jobs (AgentTurnId 10) sending.run version
+    RelayReport relay <- takeJobWork jobs
+    bindReportRelay jobs (AgentTurnId 10) relay
     completeJob jobs second.run Succeeded (JobResult "second result" Nothing)
     notices <- closeJobs jobs
     map (.run.jobId) notices `shouldBe` [2]
@@ -209,10 +370,10 @@ spec = describe "process-owned Jobs" $ do
     (tasks, jobs, request) <- fixture
     (job, _) <- launch tasks jobs 1 request
     completeJob jobs job.run Succeeded (JobResult "result" Nothing)
-    PublishJobNotice sending version _ <- takeJobWork jobs
+    RelayReport relay <- takeJobWork jobs
     notices <- closeJobs jobs
     map (.run.jobId) notices `shouldBe` [1]
-    bindJobNotice jobs (AgentTurnId 10) sending.run version
+    bindReportRelay jobs (AgentTurnId 10) relay
     authorizeJobPublication jobs (AgentTurnId 10) `shouldReturn` False
 
   it "keeps detached jobs after their initiating reply and binds status to a conversation" $ do
@@ -257,7 +418,8 @@ spec = describe "process-owned Jobs" $ do
     Just second <- lookupJob jobs request.group 2
     second.usage `shouldBe` JobUsage 2 125000 100000 1000 (Map.fromList [("CNY", 0.25)]) 1
     completeJob jobs root.run Succeeded (JobResult "done" Nothing)
-    PublishJobNotice finished _ _ <- takeJobWork jobs
+    RelayReport relay <- takeJobWork jobs
+    let finished = relay.job
     finished.usage `shouldBe` JobUsage 3 128000 102000 1100 (Map.fromList [("CNY", 0.25), ("USD", 0.01)]) 1
     finished.finished `shouldSatisfy` maybe False (>= finished.created)
     let line = jobUsageLine finished
@@ -277,7 +439,7 @@ spec = describe "process-owned Jobs" $ do
       Right (ChildrenFinished [result]) <- wait joining
       result.result `shouldBe` Just (JobResult "child result" Nothing)
     notes <- observeJobEvents jobs (AgentTurnId 1)
-    length notes `shouldBe` 1
+    length notes `shouldBe` 0
     observeJobEvents jobs (AgentTurnId 1) `shouldReturn` []
     timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
 
@@ -331,7 +493,9 @@ spec = describe "process-owned Jobs" $ do
     timeout 20_000 (takeJobWork jobs) `shouldReturn` Nothing
     _ <- cancelAgentTurnTask tasks (AgentTurnId 99)
     awaitJob jobs (AgentTurnId 99) admitted.run `shouldThrow` (\TaskCancelled -> True)
-    PublishJobNotice noticed _ body <- takeJobWork jobs
+    RelayReport relay <- takeJobWork jobs
+    let noticed = relay.job
+        body = reportText relay
     (noticed.run, body) `shouldBe` (admitted.run, "ready")
     finishTurnRuntime tasks caller
 
@@ -347,11 +511,15 @@ spec = describe "process-owned Jobs" $ do
       cancelAgentTurnTask tasks (AgentTurnId 99) `shouldReturn` True
       wait waiting `shouldThrow` (\TaskCancelled -> True)
     completeJob jobs running.run Succeeded (JobResult "late report" Nothing)
-    PublishJobNotice noticed _ body <- takeJobWork jobs
+    RelayReport relay <- takeJobWork jobs
+    let noticed = relay.job
+        body = reportText relay
     (noticed.run, body) `shouldBe` (first.run, "late report")
     -- Its waiter ended without ever waiting: relayed as soon as it finishes.
     completeJob jobs second.run Succeeded (JobResult "unread report" Nothing)
-    PublishJobNotice unread _ text <- takeJobWork jobs
+    RelayReport secondRelay <- takeJobWork jobs
+    let unread = secondRelay.job
+        text = reportText secondRelay
     (unread.run, text) `shouldBe` (second.run, "unread report")
     finishTurnRuntime tasks caller
 
@@ -409,10 +577,12 @@ spec = describe "process-owned Jobs" $ do
     current.progress `shouldBe` Just "latest"
     timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
     completeJob jobs root.run Succeeded (JobResult "final" Nothing)
-    PublishJobNotice final finalVersion body <- takeJobWork jobs
+    RelayReport relay <- takeJobWork jobs
+    let final = relay.job
+        body = reportText relay
     final.status `shouldBe` Succeeded
     body `shouldBe` "final"
-    noticeIsCurrent jobs final.run finalVersion `shouldReturn` True
+    atomically (Router.reportIsCurrent relay) `shouldReturn` True
 
   it "delivers tells to the parent and only urgent messages interrupt its await" $ do
     (tasks, jobs, request) <- fixture
@@ -534,7 +704,8 @@ spec = describe "process-owned Jobs" $ do
     length finished.messages `shouldSatisfy` (<= 50)
     BS.length (TE.encodeUtf8 (T.intercalate "\n" finished.messages)) `shouldSatisfy` (<= 32768)
     last finished.messages `shouldSatisfy` T.isPrefixOf "60"
-    PublishJobNotice _ _ body <- takeJobWork jobs
+    RelayReport relay <- takeJobWork jobs
+    let body = reportText relay
     body `shouldSatisfy` T.isInfixOf "60"
     finishTurnRuntime tasks runtime
 
@@ -546,7 +717,8 @@ spec = describe "process-owned Jobs" $ do
     completeJob jobs job.run Succeeded (JobResult "final" Nothing)
     noticeIsCurrent jobs job.run version `shouldReturn` True
     releaseJobNotice jobs job.run
-    PublishJobNotice _ _ body <- takeJobWork jobs
+    RelayReport relay <- takeJobWork jobs
+    let body = reportText relay
     body `shouldBe` "final"
     (live, _) <- launch tasks jobs 2 request
     tellParent jobs (AgentTurnId 2) "obsolete" True `shouldReturn` Right ()
@@ -596,8 +768,8 @@ spec = describe "process-owned Jobs" $ do
     reportJobProgress jobs (AgentTurnId 1) "progress" `shouldReturn` True
     timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
     completeJob jobs root.run Succeeded (JobResult "final" Nothing)
-    PublishJobNotice _ version _ <- takeJobWork jobs
-    bindJobNotice jobs (AgentTurnId 10) root.run version
+    RelayReport relay <- takeJobWork jobs
+    bindReportRelay jobs (AgentTurnId 10) relay
     authorizeJobPublication jobs (AgentTurnId 10) `shouldReturn` True
     detachJobNotice jobs (AgentTurnId 10)
     fresh <- newJobs tasks
@@ -673,7 +845,7 @@ observeJobEvents :: Jobs -> AgentTurnId -> IO [Value]
 observeJobEvents jobs turn = atomically $ do
   flushJobEvents jobs turn
   target <- jobEventTask jobs turn
-  events <- maybe (pure []) Events.observe target
+  events <- maybe (pure []) (Router.observeEvents jobs.resultRouter) target
   pure [value | event <- events, value <- case event.body of Events.Steered value -> [value]; Events.ChildDone _ value -> [value]; _ -> []]
 
 awaitJobInterrupt :: Jobs -> AgentTurnId -> STM ()
@@ -681,3 +853,9 @@ awaitJobInterrupt jobs turn = jobEventTask jobs turn >>= maybe retry (`Events.aw
 
 shouldReturnSatisfying :: (Show a) => IO a -> (a -> Bool) -> Expectation
 shouldReturnSatisfying action predicate = action >>= (`shouldSatisfy` predicate)
+
+reportText :: Router.ReportRelay -> T.Text
+reportText relay = maybe "" (jobReportText relay.job) relay.job.result
+
+takeJobWork :: Jobs -> IO JobWork
+takeJobWork jobs = timeout 3000000 (Jobs.takeJobWork jobs) >>= maybe (fail "no job work arrived within three seconds") pure

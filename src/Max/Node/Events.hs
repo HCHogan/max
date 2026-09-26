@@ -12,8 +12,10 @@ module Max.Node.Events
     newNode,
     newTask,
     deliver,
+    deliverTracked,
     deliverAll,
     observe,
+    discard,
     wakes,
     awaitInterrupt,
     hasInterrupt,
@@ -80,14 +82,20 @@ isOpen (Task (Node ref) key) = Map.findWithDefault False key . (.tasks) <$> read
 -- | Refuse before accepting an effect; internal producers retain their source
 -- result when the bounded buffer is full. Sequence numbers belong to the node.
 deliver :: Task -> Body -> STM Bool
-deliver task@(Task (Node ref) key) body = do
+deliver task body = maybe False (const True) <$> deliverTracked task body
+
+-- | A delivery receipt lets the router release exactly the event observed,
+-- even when multiple reports or messages share the same producer.
+deliverTracked :: Task -> Body -> STM (Maybe Event)
+deliverTracked task@(Task (Node ref) key) body = do
   active <- isOpen task
   state <- readTVar ref
   if not active || Seq.length (Seq.filter ((== key) . (.target)) state.events) >= 256
-    then pure False
+    then pure Nothing
     else do
-      writeTVar ref state {next = state.next + 1, events = state.events |> Event state.next key body}
-      pure True
+      let event = Event state.next key body
+      writeTVar ref state {next = state.next + 1, events = state.events |> event}
+      pure (Just event)
 
 -- | Multi-node control delivery either accepts every event or none. A full
 -- parent log cannot leave a child steered without its parent's provenance note.
@@ -109,6 +117,11 @@ observe (Task (Node ref) key) = do
     eventOrder event = case event.body of
       FrontendSteered order _ -> (0 :: Int, toInteger order)
       _ -> (1, event.sequence)
+
+-- | Revoke an owned delivery without consuming unrelated observations.
+discard :: Task -> Integer -> STM ()
+discard (Task (Node ref) key) receipt = modifyTVar' ref $ \state ->
+  state {events = Seq.filter (\event -> event.target /= key || event.sequence /= receipt) state.events}
 
 wakes :: Pending -> Body -> Bool
 wakes pending = \case

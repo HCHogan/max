@@ -37,6 +37,17 @@ spec = describe "node result routing" $ do
     atomically (releaseRelay router relay)
     timeout 20000 (atomically (takeRelay router)) `shouldReturn` Nothing
 
+  it "acknowledges event receipts rather than deleting later outcomes with the same reference" $ do
+    (router, origin, _) <- fixture
+    atomically (replicateM_ 201 (deliverResult router origin "same-reference" (String "done") []))
+    events <- atomically (observeEvents router origin.target)
+    length events `shouldBe` 200
+    atomically (closeTask router origin.target)
+    Just relay <- timeout 1000000 (atomically (takeRelay router))
+    relay.reference `shouldBe` "same-reference"
+    atomically (releaseRelay router relay)
+    timeout 20000 (atomically (takeRelay router)) `shouldReturn` Nothing
+
   it "delivers to a live task once and does not relay an observed result" $ do
     (router, origin, _) <- fixture
     atomically (deliverResult router origin "t#1:r1" (String "done") [])

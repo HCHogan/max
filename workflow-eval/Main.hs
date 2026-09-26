@@ -168,6 +168,7 @@ runCase cfg opts pool sources group parallel = do
               -- The benchmark consumes reports through the guest result and
               -- journal; it has no chat frontend for late-call notifications.
               Jobs.RelayResult relay -> atomically (Router.releaseRelay jobs.resultRouter relay)
+              Jobs.RelayReport relay -> atomically (Router.releaseReport jobs.resultRouter relay)
               Jobs.RecordMonitorResult _ -> die "unexpected reminder in source audit"
       cleanup = readIORef workers >>= mapM_ Async.cancel
   started <- getCurrentTime

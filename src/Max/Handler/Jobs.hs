@@ -49,7 +49,7 @@ import Max.Task.Types
   )
 import Max.ToolContext (toolAuthorPrincipalId, toolCanonicalId, toolGroupId)
 import Max.Turn.Dispatch (dispatchLLMWith)
-import Max.Turn.Start (TurnStart (AutomationTurn, CompletionNotice, JobNotice, JobTurn))
+import Max.Turn.Start (TurnStart (AutomationTurn, CompletionNotice, JobNotice, JobTurn, ReportNotice))
 import Max.Util (catchSync)
 
 shutdownJobs :: (WithConnection :> es, Outbound :> es, Log :> es, IOE :> es) => Jobs.Jobs -> Eff es ()
@@ -103,6 +103,17 @@ jobsWorker = do
       Jobs.PublishJobNotice job version body ->
         dispatch job (JobNotice job version body) (noticeFailed env job)
           `catchSync` (noticeFailed env job . T.pack . show)
+      Jobs.RelayReport relay -> do
+        let release = liftIO (atomically (Router.releaseReport env.beJobs.resultRouter relay))
+            failed detail = release >> logAttention "job report relay failed" (object ["error" .= (detail :: T.Text)])
+            deliver = do
+              liftIO . atomically $ do
+                current <- Router.reportIsCurrent relay
+                capacity <- Conversation.canAdmit env.beConversations relay.job.spec.group
+                check (not current || capacity)
+              current <- liftIO (atomically (Router.reportIsCurrent relay))
+              if current then dispatch relay.job (ReportNotice relay) failed else release
+        void . async $ deliver `catchSync` (failed . T.pack . show)
       Jobs.RelayResult relay -> do
         let context = relay.origin.context
             release = liftIO (atomically (Router.releaseRelay env.beJobs.resultRouter relay))
@@ -128,7 +139,7 @@ jobsWorker = do
     dispatch job start failed = do
       sourceMessage <- loadDispatchMessage job.spec.source
       case sourceMessage of
-        Just source | source.groupId == job.spec.group -> do
+        Just source | source.groupId == job.spec.group && source.authorPrincipalId == job.spec.principal -> do
           let trigger = source {body = Body [], replyTo = Nothing, mentionPrincipals = Map.empty}
           case start of
             AutomationTurn _ -> for_ job.spec.monitor (MonitorJob.markMonitorJobStarted . (.fireId))

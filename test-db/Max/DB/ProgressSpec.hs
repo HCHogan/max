@@ -2,6 +2,7 @@ module Max.DB.ProgressSpec (Max.DB.ProgressSpec.spec) where
 
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.FromRow (field)
@@ -17,7 +18,7 @@ import Max.Platform.Delivery.Queue (newDeliveryQueue)
 import Max.Platform.Types (DeliveryId (..))
 import Max.ReplySend
 import Max.Task.State (TaskStatus (Succeeded))
-import Max.Task.Types (JobResult (..), JobView (..), TaskProfile (Basic))
+import Max.Task.Types (JobResult (..), JobRun (jobId), JobSpec (principal), JobView (..), TaskProfile (Basic))
 import Max.Tasks (beginTurnRuntime)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..), UserId (..))
@@ -29,9 +30,9 @@ spec pool = before_ (truncateAll pool) $ describe "job notice publication" $ do
     running <- runningJob pool Basic Map.empty
     -- Only terminal results enqueue notices; progress stays in task status.
     Jobs.completeJob running.jobs running.job.run Succeeded (JobResult "result" Nothing)
-    Jobs.PublishJobNotice job version _ <- Jobs.takeJobWork running.jobs
+    Jobs.RelayReport relay <- Jobs.takeJobWork running.jobs
     (front, _, _) <- seed pool 900 1
-    Jobs.bindJobNotice running.jobs front.atrTurnId job.run version
+    Jobs.bindReportRelay running.jobs front.atrTurnId relay
     [Only principal] <- withDb pool $ query "SELECT author_principal_id FROM messages ORDER BY canonical_message_id LIMIT 1" ()
     [Only source] <- withDb pool $ query "SELECT canonical_message_id FROM messages ORDER BY canonical_message_id LIMIT 1" ()
     output <- newTurnOutputContext front
@@ -52,3 +53,11 @@ spec pool = before_ (truncateAll pool) $ describe "job notice publication" $ do
         tailReply `shouldBe` Nothing
         T.strip (T.concat [value | NText value <- tailBody.nodes]) `shouldBe` "正在验证"
       _ -> expectationFailure "missing canonical publication"
+
+    -- Replacement fences the same already-started relay at the actual shared
+    -- publication boundary, including its fallback path.
+    Jobs.replaceJob running.jobs (GroupId 900) running.job.spec.principal False running.job.run.jobId "replacement" `shouldReturn` Right ()
+    rejected <- withDbLog pool $ runOutbound registry running.jobs deliveries $ sendAndPersistReply target emptySendState "obsolete report"
+    rejected.committed `shouldBe` []
+    rejected.failure `shouldSatisfy` isJust
+    withDb pool (query "SELECT count(*) FROM messages WHERE agent_turn_id=?" (Only front.atrTurnId)) `shouldReturn` [Only (2 :: Int)]

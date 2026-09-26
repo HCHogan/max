@@ -25,6 +25,7 @@ import Max.Execution.Tools
 import Max.ExecutionSpec (DbEffects, hooks, withHost)
 import Max.Jobs qualified as Jobs
 import Max.Node.Events qualified as Events
+import Max.Node.Router qualified as Router
 import Max.Platform.Types (CanonicalMessageId, PrincipalId, noAdvertisedCaps)
 import Max.Task.Delegation (parseJobResult)
 import Max.Task.State (TaskStatus (Cancelled, Succeeded))
@@ -183,6 +184,7 @@ awaitChild jobs = do
   case next of
     Just (Jobs.LaunchJob child) -> pure child
     Just (Jobs.PublishJobNotice job _ _) -> Jobs.releaseJobNotice jobs job.run >> awaitChild jobs
+    Just (Jobs.RelayReport relay) -> atomically (Router.releaseReport jobs.resultRouter relay) >> awaitChild jobs
     _ -> fail "workflow child did not start"
 
 field :: Key -> Value -> Maybe Value
