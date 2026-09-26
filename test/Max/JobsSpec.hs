@@ -3,7 +3,7 @@ module Max.JobsSpec (Max.JobsSpec.spec) where
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async (cancel, concurrently, mapConcurrently, poll, wait, waitCatch, waitCatchSTM, withAsync)
 import Control.Concurrent.STM (STM, atomically, check, retry)
-import Control.Monad (forM_, replicateM, replicateM_, void)
+import Control.Monad (foldM, forM_, replicateM, replicateM_, void)
 import Data.Aeson (Value (..), object, (.=))
 import Data.ByteString qualified as BS
 import Data.Either (isLeft, isRight)
@@ -24,6 +24,7 @@ import Max.Node.Log qualified as NodeLog
 import Max.Node.Render (renderEvents)
 import Max.Node.Router qualified as Router
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
+import Max.Task.Delegation (parseJobResult)
 import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State
 import Max.Task.Types (JobMonitor (..), JobUsage (..), TaskProfile (..), jobReportText, jobUsageLine)
@@ -792,6 +793,38 @@ spec = describe "process-owned Jobs" $ do
     child.spec.deadline `shouldBe` root.spec.deadline
     cancelJob jobs request.group (PrincipalId 8) True 1 "admin" `shouldReturn` Right ()
     attachJobTurn jobs child.run (reference 2) `shouldReturn` False
+
+  it "caps a tree at six hours and preserves earlier requested and ancestor deadlines" $ do
+    (_, jobs, request) <- fixture
+    now <- getCurrentTime
+    Right root <- admitJob jobs Nothing 1 request {deadline = addUTCTime 86400 now}
+    root.spec.deadline `shouldBe` addUTCTime 21600 root.created
+    Right child <- admitJob jobs Nothing 2 root.spec {parent = Just root.run, deadline = addUTCTime 86400 now}
+    child.spec.deadline `shouldBe` root.spec.deadline
+    let earlier = addUTCTime 60 now
+    Right short <- admitJob jobs Nothing 3 child.spec {parent = Just child.run, deadline = earlier}
+    short.spec.deadline `shouldBe` earlier
+    admitJob jobs Nothing 4 request {deadline = addUTCTime (-1) now} `shouldReturn` Left "job deadline has passed"
+
+  it "admits sixteen generations and rejects a seventeenth without consuming its identity" $ do
+    (_, jobs, request) <- fixture
+    Right root <- admitJob jobs Nothing 1 request
+    deepest <-
+      foldM
+        ( \parent identifier -> do
+            Right child <- admitJob jobs Nothing identifier request {parent = Just parent.run}
+            pure child
+        )
+        root
+        [2 .. 16]
+    admitJob jobs Nothing 17 request {parent = Just deepest.run} `shouldReturn` Left "job nesting limit"
+    admitJob jobs Nothing 17 request {parent = Just root.run} >>= (`shouldSatisfy` isRight)
+
+  it "accepts 100000 report characters and rejects one more without truncating" $ do
+    (_, _, request) <- fixture
+    let body = T.replicate 100000 "😀"
+    parseJobResult request body `shouldBe` Right (JobResult body Nothing)
+    parseJobResult request (body <> "文") `shouldBe` Left "job response exceeds 100000 characters"
 
   it "keeps root progress internal without suppressing the final result" $ do
     (tasks, jobs, request) <- fixture

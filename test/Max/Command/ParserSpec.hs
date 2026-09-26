@@ -1,6 +1,7 @@
 module Max.Command.ParserSpec (spec) where
 
 import Data.Text (Text)
+import Data.Text qualified as T
 import Max.Command.Parser (parseCommand)
 import Max.Command.Types (Command (..), UnpinTarget (..))
 import Test.Hspec
@@ -119,6 +120,17 @@ spec = do
     it "joins words" $ "!feedback 改成 B 方案" `parsesTo` Feedback "改成 B 方案"
     it "!fb is the same command" $ "!fb 改成 B 方案" `parsesTo` Feedback "改成 B 方案"
     it "empty body still works" $ "!feedback" `parsesTo` Feedback ""
+    it "accepts 8000 characters and rejects longer feedback before task routing" $ do
+      let body = T.replicate 8000 "😀"
+      mapM_
+        ( \verb -> do
+            (verb <> body) `parsesTo` Feedback body
+            parseCommand (verb <> body <> "多") `shouldBe` Left "feedback exceeds 8000 characters"
+        )
+        ["!fb ", "!feedback "]
+    it "does not impose the steering limit on independent side questions" $ do
+      let body = T.replicate 8001 "文"
+      ("!btw " <> body) `parsesTo` Btw body
     -- Same free-text treatment as !btw: a note is prose, so a
     -- dash-prefixed word in it is text and not a flag.
     it "keeps a leading -a word verbatim" $

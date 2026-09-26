@@ -5,9 +5,10 @@ import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM
 import Control.Exception qualified as Exception
 import Control.Monad (forM_)
-import Data.Aeson (Value (..), object, toJSON, (.=))
+import Data.Aeson (Value (..), encode, object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KM
-import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.ByteString.Lazy qualified as LBS
+import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -493,6 +494,32 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     result.cmExit `shouldBe` WasmCompleted
     result.cmOutput `shouldBe` Just (toJSON ([0 .. 129] :: [Int]))
     length result.cmCalls `shouldBe` 130
+
+  it "refuses the 4097th guest call before its effect across multiple outbox drains" $ do
+    effects <- newIORef (0 :: Int)
+    registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner $ \args -> liftIO (atomicModifyIORef' effects (\n -> (n + 1, ()))) >> pure (Right args)}]
+    result <- runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session noJournal (views registry) "const r=await Promise.all(Array.from({length:4097},(_,value)=>max.raw('echo',{value}))); return {succeeded:r.filter(x=>x.outcome==='succeeded').length,last:r[4096]};"
+    result.cmExit `shouldBe` WasmCompleted
+    result.cmOutput `shouldBe` Just (object ["succeeded" .= (4096 :: Int), "last" .= object ["outcome" .= ("rejected" :: Text), "error" .= object ["code" .= ("guest_call_limit" :: Text), "message" .= ("program leaf call limit exceeded" :: Text), "retry" .= ("safe" :: Text)]]])
+    result.cmSubmittedCalls `shouldBe` 4097
+    readIORef effects `shouldReturn` 4096
+
+  it "delivers a 4 MiB outcome but refuses one extra byte without replaying its effect" $ do
+    effects <- newIORef (0 :: Int)
+    let overhead = fromIntegral (LBS.length (encode (outcomeEnvelope (ToolSucceeded (String "")))))
+        chars = 4 * 1024 * 1024 - overhead
+        runner args = do
+          liftIO (atomicModifyIORef' effects (\n -> (n + 1, ())))
+          pure (Right (String (T.replicate (chars + if valueOf args == Just (Number 2) then 1 else 0) "x")))
+    registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner runner}]
+    result <- runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session noJournal (views registry) "const first=await tools.echo({value:1}); const second=await max.raw('echo',{value:2}); return {chars:first.length,second};"
+    result.cmExit `shouldBe` WasmCompleted
+    result.cmOutput `shouldBe` Just (object ["chars" .= chars, "second" .= object ["outcome" .= ("outcome-unknown" :: Text), "error" .= object ["code" .= ("result_too_large" :: Text), "message" .= ("tool result exceeds 4 MiB; do not replay effects" :: Text), "retry" .= ("unsafe" :: Text)]]])
+    readIORef effects `shouldReturn` 2
 
   it "delivers more than one resume worth of large outcomes without losing any" $ do
     let payload = T.replicate (3 * 1024 * 1024) "x"

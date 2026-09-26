@@ -40,6 +40,7 @@ parseCommand input
        in Right (Just (Shell pkgs cmd))
   | not (looksLikeCommand input) = Right Nothing
   | otherwise = case runParser (commandP <* eof) "command" input of
+      Right (Feedback body) | T.length body > 8000 -> Left "feedback exceeds 8000 characters"
       Right cmd -> Right (Just cmd)
       Left bundle -> Left (T.pack (errorBundlePretty bundle))
 
