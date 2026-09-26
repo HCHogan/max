@@ -70,7 +70,8 @@ import Effectful.Exception
     try,
   )
 import Max.Agent.Execution
-import Max.Effects.Tools (Tools, invokeToolWithControl)
+import Max.Effects.Tools (Tools, invokeToolWithAuthority)
+import Max.Execution.Authority (CallAuthority, revokeCallAuthority)
 import Max.Execution.Types
 import Max.Node.Executor qualified as Executor
 import Max.Tasks
@@ -105,7 +106,8 @@ data ExecutionHooks es = ExecutionHooks
     ehAcquireGuest :: Eff es (Maybe (IO ())),
     ehInterrupt :: STM.STM (),
     ehRetain :: Async ToolInvocation -> Async ToolInvocation -> Eff es (),
-    ehActor :: IO (Maybe Executor.Actor)
+    ehActor :: IO (Maybe Executor.Actor),
+    ehCallAuthority :: Text -> Eff es (Maybe CallAuthority)
   }
 
 executionHooks :: (IOE :> es) => ExecutionAdmission es -> ExecutionJournal es -> GroupId -> TurnRuntime -> ExecutionHooks es
@@ -129,7 +131,8 @@ executionHooks admission journal group turn =
       ehAcquireGuest = pure (Just (pure ())),
       ehInterrupt = STM.retry,
       ehRetain = \call delivery -> liftIO (retainTurnWork turn (Async.cancel delivery) (Async.cancel call) (void (Async.waitCatchSTM delivery))),
-      ehActor = Just <$> turnExecutor turn
+      ehActor = Just <$> turnExecutor turn,
+      ehCallAuthority = admission.eaCallAuthority (turnRuntimeAgentTurn turn)
     }
 
 hoistExecutionHooks :: (forall x. Eff es x -> Eff target x) -> ExecutionHooks es -> ExecutionHooks target
@@ -141,7 +144,8 @@ hoistExecutionHooks lower hooks =
       ehAcquireGuest = lower hooks.ehAcquireGuest,
       ehInterrupt = hooks.ehInterrupt,
       ehRetain = \call -> lower . hooks.ehRetain call,
-      ehActor = hooks.ehActor
+      ehActor = hooks.ehActor,
+      ehCallAuthority = lower . hooks.ehCallAuthority
     }
 
 -- | Admission refused a call because its agent tree's budget is spent. The
@@ -319,7 +323,7 @@ hasDetachedExecutions session = not . Map.null <$> readTVarIO session.nativeFutu
 drainExecutionCompletions :: (Concurrent :> es) => ExecutionSession -> Eff es [(Text, ToolInvocation)]
 drainExecutionCompletions session = atomically (STM.flushTQueue session.completions)
 
-launchCall :: (Tools :> es, Concurrent :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es (Async ToolInvocation)
+launchCall :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es (Async ToolInvocation)
 launchCall session hooks catalog request = mask $ \_ -> do
   hooks.ehCheck
   let view = find ((== ToolRef request.trName) . (.ctDefinition.tdRef)) catalog
@@ -365,19 +369,22 @@ launchCall session hooks catalog request = mask $ \_ -> do
                 Nothing -> do
                   for_ row $ \entry -> hooks.ehFinish entry (JournalOutcomeUnknown "interrupted" (T.pack (show exception)))
                   throwIO exception
-              run unmask = do
+              run authority unmask = do
                 invocation <-
                   unmask
                     ( bracket_ acquire release $ do
                         atomically (writeTVar started True)
                         case view of
                           Nothing -> pure (rejected "unknown_tool" ("tool is outside the execution catalog: " <> request.trName))
-                          Just _ -> invokeToolWithControl request.trName request.trArguments
+                          Just _ -> invokeToolWithAuthority authority request.trName request.trArguments
                     )
+                    `finally` for_ authority (liftIO . revokeCallAuthority)
                     `catch` interrupted
                 for_ row $ \entry -> hooks.ehFinish entry (journalFinish (journalControl invocation))
                 pure invocation {tiOutcome = stripJournalMetadata invocation.tiOutcome}
-          (asyncWithUnmask $ \unmask -> run unmask `finally` dequeue) `onException` dequeue
+          authority <- hooks.ehCallAuthority request.trName `onException` dequeue
+          let cleanup = for_ authority (liftIO . revokeCallAuthority) >> dequeue
+          (asyncWithUnmask $ \unmask -> run authority unmask `finally` cleanup) `onException` cleanup
   where
     budgetSpent = rejected "call_budget_exhausted" "工具调用预算已经用完，不能再执行这个调用；直接根据已有信息给出最终回复"
 

@@ -21,6 +21,7 @@ import Effectful.Log (Log, runLog)
 import Log (LogLevel (LogAttention))
 import Max.Agent.Execution (ExecutionAdmission (..), ExecutionEvents (..), ExecutionJournal (..))
 import Max.Agent.Failure (AgentFailure (..))
+import Max.Agent.Runtime (executionAdmission)
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion)
 import Max.Conversation qualified as Conversation
@@ -29,8 +30,10 @@ import Max.Effects.LLM
 import Max.Effects.ToolControl (ToolControl)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools
+import Max.Execution.Authority (callIsUsable, callMatchesTool)
 import Max.Execution.Types (Admission (..))
 import Max.Http.Failure (ResponseFailure (..), TransportFailure (..))
+import Max.Jobs qualified as Jobs
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.ModelCatalog (ContextLimits (..), VisionLimits (..), defaultContextLimits)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
@@ -40,7 +43,7 @@ import Max.Skills (newSkillRegistry)
 import Max.Tasks
 import Max.Tool.Bundles (toolVisible)
 import Max.Tool.Catalog (buildToolCatalog, catalogTools)
-import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext, mkToolContextWithLimits, toolSkillLoads)
+import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext, mkToolContextWithLimits, toolCallAuthority, toolSkillLoads)
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..), UserId (..))
 import System.Timeout (timeout)
@@ -65,7 +68,7 @@ runTestAgentObserved ::
   Eff es a
 runTestAgentObserved inputs observe =
   runAgentWith
-    (ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted))
+    (ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted) (\_ _ -> pure Nothing))
     (ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ()))
     ( ExecutionEvents
         ( \_ _ -> liftIO $ do
@@ -609,6 +612,49 @@ spec = describe "Agent full loop" $ do
     result.outcome `shouldBe` Interrupted (AgentStreamInterrupted (ResponseTransport ResponseTimeoutFailure)) (AgentReply "第一段\n\n第二段没写完" "第一段\n\n")
     readIORef events `shouldReturn` [SeenFinalStream "第一段\n\n"]
 
+  it "binds each assembled runner to its admitted call and revokes authority before the next model round" $ do
+    events <- newIORef []
+    calls <- newIORef (0 :: Int)
+    captured <- newIORef []
+    tasks <- newTaskRegistry
+    jobs <- Jobs.newJobs tasks
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
+    let factory callContext =
+          buildToolRegistry
+            [echoDefinition]
+            [ legacyTool "echo" "echo test input" (object ["type" .= ("object" :: Text)]) $ \args -> do
+                liftIO $ case toolCallAuthority callContext of
+                  Nothing -> expectationFailure "runner was assembled without admitted call authority"
+                  Just authority -> do
+                    callMatchesTool authority "echo" `shouldBe` True
+                    callIsUsable authority `shouldReturn` True
+                    appendRef captured authority
+                pure (Right args)
+            ]
+        provider = LLMInterpreter $ \ctx profile messages catalog sink -> do
+          n <- liftIO (readIORef calls)
+          when (n > 0) $ liftIO $ do
+            authorities <- readIORef captured
+            length authorities `shouldBe` 1
+            mapM callIsUsable authorities `shouldReturn` [False]
+            STM.atomically (turnIsLive tasks (AgentTurnId 1)) `shouldReturn` True
+          (fakeLLM calls).liChat ctx profile messages catalog sink
+    result <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff
+        . runConcurrent
+        . runLog "call-authority" logger LogAttention
+        . runLLMWith provider
+        . runAgentWith
+          (executionAdmission jobs)
+          (ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ()))
+          (ExecutionEvents (\_ _ -> pure []) (const STM.retry) (const (pure True)) (\_ _ -> pure Nothing))
+          Nothing
+          (AgentLimits 4)
+          factory
+        $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+    result.outcome `shouldBe` Answered (AgentReply "第一段\n\n第二段" "第一段\n\n")
+    finishTurnRuntime tasks turn
+
   it "runs fake LLM + tool rounds and emits typed output events in memory" $ do
     events <- newIORef []
     calls <- newIORef (0 :: Int)
@@ -838,7 +884,7 @@ spec = describe "Agent full loop" $ do
               toolSchema = object ["type" .= ("object" :: Text)],
               toolRunner = LegacyRunner $ \args -> liftIO (modifyIORef' ran (+ 1)) >> pure (Right args)
             }
-        admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure OverBudget)
+        admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure OverBudget) (\_ _ -> pure Nothing)
         journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
         inputs = ExecutionEvents (\_ _ -> liftIO $ atomicModifyIORef' _inputs (\notes -> ([], [inputMessage (T.intercalate "\n" notes) | not (null notes)]))) (const STM.retry) (\_ -> liftIO (null <$> readIORef _inputs)) (\_ _ -> pure Nothing)
     result <- withCompactLogger ColorNever Nothing $ \logger ->
@@ -905,7 +951,7 @@ spec = describe "Agent full loop" $ do
                       other -> expectationFailure ("missing late correction: " <> show other)
                     pure (Right (ContentResp "corrected"))
             )
-        admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted)
+        admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted) (\_ _ -> pure Nothing)
         journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
         inputs = ExecutionEvents (\_ _ -> liftIO $ atomicModifyIORef' inbox (\text -> ("", [inputMessage text | not (T.null text)]))) (const STM.retry) (\_ -> liftIO (T.null <$> readIORef inbox)) (\_ _ -> pure Nothing)
     result <- withCompactLogger ColorNever Nothing $ \logger ->

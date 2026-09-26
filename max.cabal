@@ -304,6 +304,7 @@ library
         Max.LLM.Admission
         Max.LLM.Failure
         Max.Execution.Types
+        Max.Execution.Authority
         Max.Execution.Tools
         Max.CodeMode.Wasm
         Max.CodeMode.JavaScript

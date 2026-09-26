@@ -3,10 +3,11 @@ module Max.ExecutionSpec (Max.ExecutionSpec.spec, withHost, hooks, DbEffects) wh
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (atomically, check, newTVarIO, readTVar, writeTVar)
-import Control.Exception (bracket_)
+import Control.Exception (AsyncException (ThreadKilled), bracket_, throwIO)
 import Control.Monad (replicateM_, void, when)
 import Data.Aeson (Value, object, toJSON, (.=))
-import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.Either (isLeft)
+import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (sort)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -31,10 +32,12 @@ import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.ToolControl (activateSkills, runToolControl)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, drainInlineMedia, forkToolOutputQueue, newToolOutputQueue, queueInlineMedia, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
+import Max.Execution.Authority (callIsUsable)
 import Max.Execution.Tools
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Jobs qualified as Jobs
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
+import Max.Memory.ToolRuntime (memoryToolsWithDatabase)
 import Max.Node.Router qualified as Router
 import Max.Platform.Types (noAdvertisedCaps)
 import Max.Skill.Contract (Contract, parseContract)
@@ -48,7 +51,7 @@ import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (LoopControl (..), controlSkillLoads)
 import Max.ToolContext
-import Max.Turn.Types (AgentTurnRef (..), ExecutionOrdinal (..), resultHandleText)
+import Max.Turn.Types (AgentTurnRef (..), ExecutionOrdinal (..), newTurnOutputContext, resultHandleText)
 import OneBot.Types (GroupId (..), UserId (..))
 import System.Timeout (timeout)
 import Test.Hspec hiding (context)
@@ -126,6 +129,53 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
       atomically (Router.releaseRelay jobs.resultRouter relay)
       Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork CheckOnly) `shouldReturn` False
 
+  it "lets an admitted native memory write commit after turn closure and revokes its call authority on return" $ do
+    running <- runningJob pool Basic Map.empty
+    output <- newTurnOutputContext running.turn
+    let context =
+          mkToolContext
+            (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 99) running.job.spec.principal Nothing (Just output))
+            (TurnCapabilities False False False noAdvertisedCaps False Map.empty Nothing True)
+        definition = echoDefinition {tdRef = ToolRef "memory_save", tdAwait = AsyncTool, tdEffects = Set.singleton (EffectWrite "memory"), tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe, tdFailuresPrecedeEffects = False}
+        input = object ["scope" .= ("group" :: Text), "content" .= ("retained explicit fact" :: Text)]
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    steering <- newTVarIO False
+    captured <- newIORef Nothing
+    let factory authority = do
+          liftIO (writeIORef captured authority)
+          let bound = maybe context (`withToolCallAuthority` context) authority
+              runners =
+                [ runner
+                    { toolRunner = LegacyRunner $ \value -> do
+                        liftIO (putMVar entered () >> takeMVar release)
+                        toolRun runner value
+                    }
+                | runner <- memoryToolsWithDatabase bound,
+                  runner.toolName == "memory_save"
+                ]
+          either (liftIO . fail . show) pure (buildToolRegistry [definition] runners)
+        lower action = (,,) <$> action <*> pure ContinueLoop <*> pure []
+    registry <- withHost pool (factory Nothing)
+    Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ -> do
+      _ <- withHost pool . runToolsScoped lower factory $ do
+        session <- newExecutionSession Nothing
+        executeToolBatch session (hostHooks running.jobs running.runtime) {ehInterrupt = readTVar steering >>= check} (views registry) [ToolRequest "save" "memory_save" input]
+      Just authority <- readIORef captured
+      callIsUsable authority `shouldReturn` True
+      Jobs.completeJob running.jobs running.job.run Succeeded (JobResult "write still running" Nothing)
+      withDb pool (finishAgentTurn running.turn TurnSucceeded 1 Nothing)
+      Async.withAsync (finishTurnRuntime running.tasks running.runtime) $ \closing -> do
+        timeout 1000000 (atomically (turnAcceptsWork running.tasks running.turn.atrTurnId >>= check . not)) `shouldReturn` Just ()
+        putMVar release ()
+        timeout 3000000 (Async.wait closing) `shouldReturn` Just ()
+      states running.turn `shouldReturn` [("memory_save", "committed")]
+      withDb pool (query "SELECT content FROM memories" ()) `shouldReturn` [Only ("retained explicit fact" :: Text)]
+      callIsUsable authority `shouldReturn` False
+      reused <- withHost pool . runToolsScoped lower factory $ invokeToolWithAuthority (Just authority) "memory_save" input
+      reused.tiOutcome `shouldSatisfy` (\case ToolRejected fault -> fault.tfCode == "call_authority_revoked"; _ -> False)
+      withDb pool (query "SELECT count(*) FROM memory_mutations" ()) `shouldReturn` [Only (1 :: Int)]
+
   it "revokes a queued native result and its publication when the producing job is replaced" $ do
     running <- runningJob pool Basic Map.empty
     let context =
@@ -170,6 +220,66 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
         timeout 3000000 (Async.wait closing) `shouldReturn` Just ()
       states running.turn `shouldReturn` [("echo", "succeeded")]
       Jobs.authorizeJobStep running.jobs running.turn.atrTurnId (ExecutionWork CheckOnly) `shouldReturn` False
+
+  it "revokes an interrupted call before waiting on diagnostic persistence" $ do
+    (jobs, turn, runtime) <- fixture
+    captured <- newIORef Nothing
+    recording <- newEmptyMVar
+    release <- newEmptyMVar
+    let runner = echoTool {toolRunner = LegacyRunner $ \_ -> liftIO (throwIO ThreadKilled)}
+        base = hostHooks jobs runtime
+        bound =
+          base
+            { ehCallAuthority = \name -> do
+                authority <- base.ehCallAuthority name
+                liftIO (writeIORef captured authority)
+                pure authority,
+              ehFinish = \row outcome -> do
+                liftIO (putMVar recording () >> takeMVar release)
+                base.ehFinish row outcome
+            }
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [runner])
+    Async.withAsync
+      ( withHost pool . runTools registry $ do
+          session <- newExecutionSession Nothing
+          executeToolBatch session bound (views registry) [ToolRequest "interrupted" "echo" args]
+      )
+      $ \worker -> do
+        timeout 1000000 (takeMVar recording) `shouldReturn` Just ()
+        Just authority <- readIORef captured
+        callIsUsable authority `shouldReturn` False
+        Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork CheckOnly) `shouldReturn` True
+        putMVar release ()
+        outcome <- timeout 3000000 (Async.waitCatch worker)
+        outcome `shouldSatisfy` maybe False isLeft
+    states turn `shouldReturn` [("echo", "outcome-unknown")]
+
+  it "gives JavaScript leaves separate call authority and revokes it while the owning turn remains live" $ do
+    (jobs, turn, runtime) <- fixture
+    captured <- newIORef []
+    let factory authority = do
+          let runner =
+                echoTool
+                  { toolRunner = LegacyRunner $ \value -> do
+                      liftIO $ case authority of
+                        Nothing -> expectationFailure "JavaScript leaf has no call authority"
+                        Just call -> do
+                          callIsUsable call `shouldReturn` True
+                          atomicModifyIORef' captured (\calls -> (call : calls, ()))
+                      pure (Right value)
+                  }
+          either (liftIO . fail . show) pure (buildToolRegistry [echoDefinition] [runner])
+        lower action = (,,) <$> action <*> pure ContinueLoop <*> pure []
+    registry <- withHost pool (factory Nothing)
+    result <- withHost pool . runToolsScoped lower factory $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session (hostHooks jobs runtime) (views registry) "return await Promise.all([1,2].map(value => tools.echo({value})));"
+    result.cmExit `shouldBe` WasmCompleted
+    authorities <- readIORef captured
+    length authorities `shouldBe` 2
+    mapM callIsUsable authorities `shouldReturn` [False, False]
+    Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork CheckOnly) `shouldReturn` True
+    states turn `shouldReturn` [("host:wasm/v2", "succeeded"), ("echo", "succeeded"), ("echo", "succeeded")]
 
   it "records a JavaScript syntax failure before any leaf as failed-before-effect" $ do
     (jobs, turn, runtime) <- fixture

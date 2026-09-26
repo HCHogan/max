@@ -14,6 +14,7 @@ module Max.Jobs
     bindResultRelay,
     acquireGuestSlot,
     admitJob,
+    admitJobWithAuthority,
     takeJobWork,
     attachJobTurn,
     detachJobTurn,
@@ -65,6 +66,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Max.Execution.Authority (CallAuthority, callIsActive, callIsCurrent, callMatchesTool)
 import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation (..))
 import Max.LLM.Types (TokenUsage)
 import Max.Node.Events qualified as Events
@@ -164,9 +166,20 @@ bindResultRelay jobs turn relay = atomically (modifyTVar' jobs.resultNotices (Ma
 -- | IDs come from the retained task identity sequence, never from model input.
 -- Terminal entries can be discarded only after their live parent releases them.
 admitJob :: Jobs -> Maybe AgentTurnId -> Int64 -> JobSpec -> IO (Either Text JobView)
-admitJob jobs caller identifier requested = do
+admitJob = admitJobWithAuthority Nothing
+
+admitJobWithAuthority :: Maybe CallAuthority -> Jobs -> Maybe AgentTurnId -> Int64 -> JobSpec -> IO (Either Text JobView)
+admitJobWithAuthority authority jobs caller identifier requested = do
+  callCurrent <- case (authority, caller) of
+    (Nothing, _) -> pure True
+    (Just call, Just turn) -> callIsCurrent call turn
+    _ -> pure False
   now <- getCurrentTime
   atomically $ do
+    activeCall <- case (authority, caller) of
+      (Nothing, _) -> pure True
+      (Just call, Just turn) -> callIsActive call turn
+      _ -> pure False
     closing <- readTVar jobs.closed
     allowed <- maybe (pure True) (turnIsLive jobs.tasks) caller
     current <- readTVar jobs.entries
@@ -192,7 +205,10 @@ admitJob jobs caller identifier requested = do
         parentEvents = maybe callerEvents (fmap (.events) . lookupRun kept) spec.parent
         newEntry = Entry view root guestTree Nothing Set.empty Set.empty events parentEvents caller Nothing 0 Nothing False False False awaiter
         invalid detail = pure (Left detail)
-    if closing || not allowed || Map.member identifier current
+    let parentAllowed owner = case lookupRun kept owner of
+          Just parent -> taskIsLive parent.view.status || (parent.view.status /= Cancelled && currentRuntime parent && fmap ((.atrTurnId) . snd) parent.runtime == caller && maybe False (`callMatchesTool` "agent") authority)
+          Nothing -> False
+    if closing || not allowed || not callCurrent || not activeCall || Map.member identifier current
       then invalid "job caller ended or identity already exists"
       else
         if identifier <= 0 || T.null spec.objective || T.length spec.objective > 40000 || LBS.length (encode spec.inputs) > 262144
@@ -204,7 +220,7 @@ admitJob jobs caller identifier requested = do
                 if spec.grants /= taskGrants spec.profile spec.grants
                   then invalid "job profile cannot grant these tools"
                   else
-                    if maybe False (not . liveRun kept) spec.parent || not (all withinScope parents)
+                    if maybe False (not . parentAllowed) spec.parent || not (all withinScope parents) || any ((== Cancelled) . (.view.status)) parents
                       then invalid "parent ended or child authority exceeds its parent"
                       else
                         if length parents >= 16

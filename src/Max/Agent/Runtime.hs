@@ -17,6 +17,7 @@ import Max.Effects.LLM (LLM)
 import Max.Effects.ToolControl (ToolControl)
 import Max.Effects.ToolOutput (ToolOutput)
 import Max.Effects.Tools (ToolCatalogError, ToolRegistry)
+import Max.Execution.Authority (newCallAuthority)
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Jobs qualified as Jobs
 import Max.Node.Events qualified as Events
@@ -69,7 +70,8 @@ executionAdmission jobs =
   ExecutionAdmission
     { eaReserveRound = \turn -> liftIO (Jobs.decideJobStep jobs turn.atrTurnId (ExecutionWork ReserveRound)),
       eaCheck = \turn -> liftIO (Jobs.authorizeJobStep jobs turn.atrTurnId ExecutionCheckpoint),
-      eaAdmitTool = \turn step -> liftIO (Jobs.decideJobStep jobs turn.atrTurnId step)
+      eaAdmitTool = \turn step -> liftIO (Jobs.decideJobStep jobs turn.atrTurnId step),
+      eaCallAuthority = \turn tool -> liftIO $ Just <$> newCallAuthority turn.atrTurnId tool (Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork CheckOnly))
     }
 
 -- | Diagnostics are best effort; cancellation still propagates.

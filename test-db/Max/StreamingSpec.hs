@@ -119,7 +119,7 @@ spec pool = before_ (truncateAll pool) $
                 Nothing
                 Nothing
                 Nothing
-            admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted)
+            admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted) (\_ _ -> pure Nothing)
             journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
         manager <- HTTP.newManager managerSettings
         let runtime = httpRuntimeFromManagers manager manager manager

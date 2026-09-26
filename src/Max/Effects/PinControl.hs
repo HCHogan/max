@@ -2,7 +2,7 @@
 
 -- | Only pin edits, bound to the current turn and conversation. Session model,
 -- persona and general configuration mutation are not part of this capability.
-module Max.Effects.PinControl (PinControl, PinControlScope (..), pinMessage, unpinMessage, runPinControl) where
+module Max.Effects.PinControl (PinControl, PinControlScope (..), pinMessage, unpinMessage, runPinControl, runPinControlWithAuthority) where
 
 import Control.Monad (forM_)
 import Data.Aeson (object, (.=))
@@ -14,8 +14,9 @@ import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Log (Log, logInfo)
 import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (conversationScopeFor)
-import Max.DB.Authority (authorizeCallerWithin)
+import Max.DB.Authority (authorizeCallWithin)
 import Max.DB.History (fetchMessageInScope)
+import Max.Execution.Authority (CallAuthority)
 import Max.Pin.Policy
 import Max.Platform.Types (PrincipalId)
 import Max.Session (Session (..), SessionRegistry, loadSession, updateSessionGuarded)
@@ -41,7 +42,10 @@ unpinMessage :: (PinControl :> es) => Int64 -> Eff es (Either PinFailure Int)
 unpinMessage = send . UnpinMessage
 
 runPinControl :: forall es a. (WithConnection :> es, Log :> es, IOE :> es) => PinControlScope -> SessionRegistry -> Text -> Eff (PinControl : es) a -> Eff es a
-runPinControl scope sessions defaultModel = interpret $ \_ -> \case
+runPinControl = runPinControlWithAuthority Nothing
+
+runPinControlWithAuthority :: forall es a. (WithConnection :> es, Log :> es, IOE :> es) => Maybe CallAuthority -> PinControlScope -> SessionRegistry -> Text -> Eff (PinControl : es) a -> Eff es a
+runPinControlWithAuthority authority scope sessions defaultModel = interpret $ \_ -> \case
   PinMessage message -> submit "pin" True message addToolPin
   UnpinMessage message -> submit "unpin" False message removeToolPin
   where
@@ -52,7 +56,7 @@ runPinControl scope sessions defaultModel = interpret $ \_ -> \case
         Just turn -> do
           session <- loadSession sessions defaultModel scope.group
           let guard = do
-                authorized <- authorizeCallerWithin turn scope.group scope.principal
+                authorized <- authorizeCallWithin authority turn scope.group scope.principal
                 if not authorized
                   then pure (Left PinCallerFenced)
                   else do

@@ -11,10 +11,12 @@ import Effectful.Concurrent (runConcurrent, threadDelay)
 import Max.Effects.ToolControl (activateSkills, runToolControl)
 import Max.Effects.ToolDirectory (listCatalogTools, listToolSpecs, runToolDirectory)
 import Max.Effects.Tools
+import Max.Execution.Authority
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Tool.Control (LoopControl (..))
 import Max.Toolset (toolAllowedByEffectCeiling)
 import Max.Turn.Continuity (toolCatalogFingerprint)
+import Max.Turn.Types (AgentTurnId (..))
 import Test.Hspec
 
 schema :: Value
@@ -61,6 +63,29 @@ skill = SkillLoad "test" (skillLoadVersion "trusted instructions") "trusted inst
 
 spec :: Spec
 spec = describe "validated tool kernel" $ do
+  it "rejects a mismatched, revoked or stale call before entering its runner" $ do
+    ran <- newIORef False
+    current <- newIORef True
+    authority <- newCallAuthority (AgentTurnId 1) "read" (readIORef current)
+    let runner = readTool {toolRunner = LegacyRunner $ \value -> liftIO (writeIORef ran True) >> pure (Right value)}
+        input = object ["value" .= (1 :: Int)]
+    registry <- expectCatalog (buildToolRegistry [readDefinition] [runner])
+    let invoke name = runEff . runConcurrent . runTools registry $ invokeToolWithAuthority (Just authority) name input
+        rejected invocation = case invocation.tiOutcome of
+          ToolRejected fault -> fault.tfCode == "call_authority_revoked"
+          _ -> False
+    callIsCurrent authority (AgentTurnId 2) `shouldReturn` False
+    invoke "other" >>= (`shouldSatisfy` rejected)
+    writeIORef current False
+    invoke "read" >>= (`shouldSatisfy` rejected)
+    readIORef ran `shouldReturn` False
+    writeIORef current True
+    invoke "read" >>= (\invocation -> invocation.tiOutcome `shouldBe` ToolSucceeded input)
+    writeIORef ran False
+    revokeCallAuthority authority
+    invoke "read" >>= (`shouldSatisfy` rejected)
+    readIORef ran `shouldReturn` False
+
   it "keeps successful host control separate from the JSON result" $ do
     let runner = readTool {toolRunner = LegacyRunner $ \_ -> activateSkills [skill] >> pure (Right (object ["error" .= ("model-facing data" :: String)]))}
     catalog <- expectCatalog (buildToolRegistry [readDefinition {tdParallelism = SequentialOnly, tdEffects = Set.singleton EffectReflect, tdRetryClass = RetryUnsafe}] [runner])

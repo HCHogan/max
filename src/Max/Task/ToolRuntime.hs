@@ -4,7 +4,7 @@ module Max.Task.ToolRuntime (taskTools) where
 import Effectful
 import Effectful.PostgreSQL (WithConnection)
 import Max.Effects.Blob (Blob)
-import Max.Effects.TaskControl (TaskControl, TaskControlScope (..), runTaskControl)
+import Max.Effects.TaskControl (TaskControl, TaskControlScope (..), runTaskControlWithAuthority)
 import Max.Effects.TaskExecution (TaskExecution, runTaskExecution)
 import Max.Effects.TaskQuery (TaskQuery, runTaskQuery)
 import Max.Effects.Tools (Tool (..), hoistTool)
@@ -23,5 +23,5 @@ taskTools jobs context = map (hoistTool lower) (taskToolsFor context)
     lower =
       runTurnQuery (toolConversationScope context) (toolClearedAt context)
         . runTaskExecution jobs ((.atrTurnId) <$> turn)
-        . runTaskControl jobs scope
+        . runTaskControlWithAuthority (toolCallAuthority context) jobs scope
         . runTaskQuery jobs (toolGroupId context)

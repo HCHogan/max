@@ -6,7 +6,7 @@ import Data.Time (TimeZone, UTCTime, getCurrentTime)
 import Effectful
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static (Reader, runReader)
-import Max.Effects.MonitorControl (MonitorControl, MonitorControlScope (..), runMonitorControl)
+import Max.Effects.MonitorControl (MonitorControl, MonitorControlScope (..), runMonitorControlWithAuthority)
 import Max.Effects.MonitorQuery (MonitorQuery, runMonitorQuery)
 import Max.Effects.Tools (Tool, hoistTool)
 import Max.Jobs (Jobs)
@@ -21,7 +21,7 @@ runMonitorTools :: (WithConnection :> es, IOE :> es) => Jobs -> Maybe Text -> To
 runMonitorTools jobs base context action = do
   now <- liftIO getCurrentTime
   runReader now $
-    runMonitorControl jobs scope $
+    runMonitorControlWithAuthority (toolCallAuthority context) jobs scope $
       runMonitorQuery (toolConversationScope context) action
   where
     scope = MonitorControlScope (toolGroupId context) (turnOutputAgentTurn <$> toolTurnOutputContext context) (toolAuthorPrincipalId context) (toolCatalogGrants context) (toolMonitorArmingAllowed context) base

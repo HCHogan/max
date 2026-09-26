@@ -225,7 +225,8 @@ import Max.Effects.FileTransfer (FileTransfer, sendSandboxFile)
 import Max.Effects.ChatView (ChatView, linkChatMedia)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Transaction (InTransaction, withTransaction)
-import Max.DB.Authority (authorizeCallerWithin)
+import Max.DB.Authority (authorizeCallerWithin, authorizeCallWithin)
+import Max.Execution.Authority (CallAuthority)
 import Max.Platform.Types (PrincipalId (..))
 import OneBot.Types (GroupId (..))
 import Max.Execution.Types (ExecutionStep (ExecutionCheckpoint))
@@ -266,6 +267,8 @@ import OneBot.Types (GroupId (..), UserId (..))
 POSITIVE = """
 transaction :: (WithConnection :> es, IOE :> es) => Eff es Bool
 transaction = withTransaction (authorizeCallerWithin (AgentTurnId 1) (GroupId 1) (PrincipalId 1))
+callTransaction :: (WithConnection :> es, IOE :> es) => Eff es Bool
+callTransaction = withTransaction (authorizeCallWithin Nothing (AgentTurnId 1) (GroupId 1) (PrincipalId 1))
 skillLoading :: SkillLoading :> es => Eff es ()
 skillLoading = () <$ loadSkill "demo"
 searching :: Search :> es => Eff es ()
@@ -328,6 +331,7 @@ publish request = () <$ sendRecorded request
 """
 
 NEGATIVE = {
+    "call authorization requires a transaction": ("InTransaction", "bad :: (WithConnection :> es, IOE :> es) => Eff es Bool\nbad = authorizeCallWithin Nothing (AgentTurnId 1) (GroupId 1) (PrincipalId 1)"),
     "authorization requires a transaction": ("InTransaction", "bad :: (WithConnection :> es, IOE :> es) => Eff es Bool\nbad = authorizeCallerWithin (AgentTurnId 1) (GroupId 1) (PrincipalId 1)"),
     "SkillLoading cannot use arbitrary IO": ("IOE", "bad :: SkillLoading :> es => Eff es ()\nbad = liftIO (pure ())"),
     "Search cannot use arbitrary IO": ("IOE", "bad :: Search :> es => Eff es ()\nbad = liftIO (pure ())"),
@@ -357,6 +361,7 @@ NEGATIVE = {
     "task query cannot use arbitrary IO": ("IOE", 'bad :: TaskQuery :> es => Eff es ()\nbad = liftIO (pure ())'),
     "turn result reader cannot control tasks": ("TaskControl", 'bad :: TurnQuery :> es => Eff es ()\nbad = () <$ startTask (TaskRequest "goal" Basic Null Nothing False)'),
     "directory cannot activate skills": ("ToolControl", 'bad :: ToolDirectory :> es => Eff es ()\nbad = activateSkills []'),
+    "call authority cannot be decoded from JSON": ("CallAuthority", 'bad :: Value -> Result CallAuthority\nbad = fromJSON'),
     "loop control cannot be decoded from JSON": ("LoopControl", 'bad :: Value -> Result LoopControl\nbad = fromJSON'),
     "platform query cannot poke": ("PlatformInteraction", "bad :: PlatformQuery :> es => Eff es (Either PlatformFailure ())\nbad = pokeUser (GroupId 1) (UserId 2)"),
     "platform query cannot administer an account": ("PlatformAccount", 'bad :: PlatformQuery :> es => Eff es (Either PlatformFailure ())\nbad = respondToFriendRequest "flag" AcceptFriend'),

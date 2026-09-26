@@ -2,7 +2,7 @@
 
 -- | Explicit memory edits by the current caller. Actor, evidence, lifecycle
 -- and visibility are interpreter decisions, never model-supplied authority.
-module Max.Effects.MemoryControl (MemoryControl, MemoryControlScope (..), saveMemory, updateMemory, forgetMemory, runMemoryControl) where
+module Max.Effects.MemoryControl (MemoryControl, MemoryControlScope (..), saveMemory, updateMemory, forgetMemory, runMemoryControl, runMemoryControlWithAuthority) where
 
 import Control.Monad (forM_)
 import Data.Aeson (object, (.=))
@@ -16,8 +16,9 @@ import Max.ConversationScope
   ( conversationScopeFor,
     currentConversationRecall,
   )
-import Max.DB.Authority (authorizeCallerWithin)
+import Max.DB.Authority (authorizeCallWithin)
 import Max.DB.Transaction (InTransaction, withTransaction)
+import Max.Execution.Authority (CallAuthority)
 import Max.Memory.Policy
 import Max.Memory.Types
 import Max.MemoryStore qualified as DB
@@ -52,7 +53,10 @@ forgetMemory :: (MemoryControl :> es) => MemoryId -> ExpectedVersion -> Eff es (
 forgetMemory identifier version = send (ForgetMemory identifier version)
 
 runMemoryControl :: forall es a. (WithConnection :> es, Log :> es, IOE :> es) => MemoryControlScope -> Eff (MemoryControl : es) a -> Eff es a
-runMemoryControl scope = interpret $ \_ -> \case
+runMemoryControl = runMemoryControlWithAuthority Nothing
+
+runMemoryControlWithAuthority :: forall es a. (WithConnection :> es, Log :> es, IOE :> es) => Maybe CallAuthority -> MemoryControlScope -> Eff (MemoryControl : es) a -> Eff es a
+runMemoryControlWithAuthority authority scope = interpret $ \_ -> \case
   SaveMemory subject content -> submit "memory_save" $ case checkContent content of
     Left failure -> pure (Left (MemoryContentInvalid failure))
     Right text -> do
@@ -78,7 +82,7 @@ runMemoryControl scope = interpret $ \_ -> \case
       result <- case scope.turn of
         Nothing -> pure (Left MemoryCallerFenced)
         Just turn -> withTransaction $ do
-          authorized <- authorizeCallerWithin turn scope.group scope.principal
+          authorized <- authorizeCallWithin authority turn scope.group scope.principal
           provenance <- query "SELECT EXISTS(SELECT 1 FROM agent_turns WHERE turn_id=? AND trigger_canonical_message_id=?)" (turn, source)
           if authorized && provenance == [Only True] then action else pure (Left MemoryCallerFenced)
       forM_ result $ \item -> logInfo "memory: explicit mutation" (object ["operation" .= operation, "id" .= item.memId, "version" .= item.memVersion])

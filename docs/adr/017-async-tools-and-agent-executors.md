@@ -52,9 +52,14 @@ already-running calls; new model/tool reservations remain fenced. Retained nativ
 calls inherit the job deadline even after the model loop ends. Explicit cancel
 and replacement still revoke the old generation and its descendants. Child waits
 can outlive the parent task, and an unclaimed child report arriving after parent
-closure uses the existing frontend relay. Call-scoped database mutation authority
-after the model turn's terminal checkpoint remains to be integrated.
-Full routing
+closure uses the existing frontend relay. Each admitted native or guest leaf now
+receives host-owned call authority. Memory, pin, monitor and task mutations use
+that authority to finish after a normal terminal checkpoint, rechecking its
+validity after acquiring database locks. Identity, source, role and grant checks
+remain in force; cancellation, replacement, expiry and invocation return revoke
+this permission. New calls and default database callers still require a live
+model turn. An admitted agent call can create its child after parent completion
+under the original tree grants and deadline. Full routing
 (child relays, replacement/cancellation and monitor fires), combined
 observation bounds and the open-task tail remain in step 4. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)

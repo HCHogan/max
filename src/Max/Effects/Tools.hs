@@ -15,8 +15,10 @@ module Max.Effects.Tools
     runTools,
     runToolsWith,
     runToolsWithMedia,
+    runToolsScoped,
     invokeTool,
     invokeToolWithControl,
+    invokeToolWithAuthority,
     outcomeResult,
     module Max.Tool.Types,
   )
@@ -33,6 +35,7 @@ import Effectful
 import Effectful.Concurrent (Concurrent, threadDelay)
 import Effectful.Concurrent.Async (race)
 import Effectful.Dispatch.Dynamic (interpret, send)
+import Max.Execution.Authority (CallAuthority, callIsUsable, callMatchesTool)
 import Max.Tool.Bundles (SkillLoad (..), skillReceiptVersion)
 import Max.Tool.Catalog
   ( ToolCatalog,
@@ -102,18 +105,18 @@ buildToolRegistry definitions runners = do
       pure (ref, RegisteredTool view run)
 
 data Tools :: Effect where
-  InvokeTool :: Text -> Value -> Tools m ToolInvocation
+  InvokeTool :: Maybe CallAuthority -> Text -> Value -> Tools m ToolInvocation
 
 type instance DispatchOf Tools = Dynamic
 
-runTools :: (Concurrent :> es) => ToolRegistry es -> Eff (Tools : es) a -> Eff es a
+runTools :: (Concurrent :> es, IOE :> es) => ToolRegistry es -> Eff (Tools : es) a -> Eff es a
 runTools registry = runToolsWith (fmap (,ContinueLoop)) (pure registry)
 
 -- | Install runner capabilities at assembly; business tools keep their narrow
 -- effects. The registry is refreshed only between model rounds.
 runToolsWith ::
   forall es toolEs a.
-  (Concurrent :> es) =>
+  (Concurrent :> es, IOE :> es) =>
   (forall x. Eff toolEs x -> Eff es (x, LoopControl)) ->
   Eff es (ToolRegistry toolEs) ->
   Eff (Tools : es) a ->
@@ -126,19 +129,36 @@ runToolsWith lower = runToolsWithMedia $ \action -> do
 -- the model-visible JSON outcome and cannot be forged through tool arguments.
 runToolsWithMedia ::
   forall es toolEs a.
-  (Concurrent :> es) =>
+  (Concurrent :> es, IOE :> es) =>
   (forall x. Eff toolEs x -> Eff es (x, LoopControl, [InlineMedia])) ->
   Eff es (ToolRegistry toolEs) ->
   Eff (Tools : es) a ->
   Eff es a
-runToolsWithMedia lower currentRegistry = interpret $ \_ -> \case
-  InvokeTool name args -> do
-    registry <- currentRegistry
-    sanitizeInvocation <$> case Map.lookup (ToolRef name) registry.registryRunners of
-      Nothing -> pure . ordinary . ToolRejected $ ToolFault "unknown_tool" ("unknown tool: " <> name) RetrySafe
-      Just registered -> case validateArguments registered.rtView args of
-        Left fault -> pure (ordinary (ToolRejected fault))
-        Right () -> execute args registered
+runToolsWithMedia lower currentRegistry = runToolsScoped lower (const currentRegistry)
+
+-- | Rebuild host-bound runner scopes for this invocation only. The capability
+-- travels outside model arguments and is checked before running any adapter.
+runToolsScoped ::
+  forall es toolEs a.
+  (Concurrent :> es, IOE :> es) =>
+  (forall x. Eff toolEs x -> Eff es (x, LoopControl, [InlineMedia])) ->
+  (Maybe CallAuthority -> Eff es (ToolRegistry toolEs)) ->
+  Eff (Tools : es) a ->
+  Eff es a
+runToolsScoped lower currentRegistry = interpret $ \_ -> \case
+  InvokeTool authority name args -> do
+    allowed <- case authority of
+      Nothing -> pure True
+      Just call -> if callMatchesTool call name then liftIO (callIsUsable call) else pure False
+    if not allowed
+      then pure (ordinary (ToolRejected (ToolFault "call_authority_revoked" "invocation authority is no longer current or belongs to another tool" RetrySafe)))
+      else do
+        registry <- currentRegistry authority
+        sanitizeInvocation <$> case Map.lookup (ToolRef name) registry.registryRunners of
+          Nothing -> pure . ordinary . ToolRejected $ ToolFault "unknown_tool" ("unknown tool: " <> name) RetrySafe
+          Just registered -> case validateArguments registered.rtView args of
+            Left fault -> pure (ordinary (ToolRejected fault))
+            Right () -> execute args registered
   where
     execute :: Value -> RegisteredTool toolEs -> Eff es ToolInvocation
     execute args registered = do
@@ -242,7 +262,10 @@ invokeTool :: (Tools :> es) => Text -> Value -> Eff es ToolOutcome
 invokeTool name args = (.tiOutcome) <$> invokeToolWithControl name args
 
 invokeToolWithControl :: (Tools :> es) => Text -> Value -> Eff es ToolInvocation
-invokeToolWithControl name args = send (InvokeTool name args)
+invokeToolWithControl = invokeToolWithAuthority Nothing
+
+invokeToolWithAuthority :: (Tools :> es) => Maybe CallAuthority -> Text -> Value -> Eff es ToolInvocation
+invokeToolWithAuthority authority name args = send (InvokeTool authority name args)
 
 outcomeResult :: ToolOutcome -> Either Text Value
 outcomeResult = \case

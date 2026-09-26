@@ -1,28 +1,32 @@
 module Max.MemoryCapabilitiesSpec (spec) where
 
-import Control.Concurrent.Async (mapConcurrently)
+import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
+import Control.Concurrent.Async (mapConcurrently, wait, withAsync)
 import Control.Monad (forM_, void)
 import Data.Either (isRight)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple.Types (Only (..))
-import Effectful (raise)
+import Effectful (liftIO, raise)
 import Effectful.PostgreSQL (execute, query)
 import Helpers (truncateAll, withDb, withDbLog)
 import JobFixture (seed)
 import Max.ConversationScope (conversationScopeFor)
-import Max.DB.AgentTurn (AgentTurnTerminal (TurnCancelled), finishAgentTurn)
+import Max.DB.AgentTurn (AgentTurnTerminal (..), finishAgentTurn)
 import Max.DB.Connection (DbPool)
+import Max.DB.ConversationLock (lockTurnConversation)
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.MemoryControl qualified as Control
 import Max.Effects.MemoryQuery qualified as Query
+import Max.Execution.Authority (newCallAuthority, revokeCallAuthority)
 import Max.Memory.Policy
 import Max.Memory.Types
 import Max.MemoryStore qualified as Store
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Turn.Types (AgentTurnRef (..))
 import OneBot.Types (GroupId (..))
+import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: DbPool -> Spec
@@ -86,6 +90,61 @@ spec pool = before_ (truncateAll pool) $ describe "scoped memory capabilities" $
     run (Control.forgetMemory item.memId (ExpectedVersion updated.memVersion)) `shouldReturn` Left MemoryCallerFenced
     rows <- withDb pool (query "SELECT lifecycle,version FROM memories WHERE id=?" (Only item.memId))
     rows `shouldBe` [("permanent" :: Text, updated.memVersion)]
+
+  it "keeps identity and provenance fences for a call that survives a successful turn" $ do
+    (turn, message, actor) <- seed pool 900 1
+    (otherTurn, otherMessage, otherActor) <- seed pool 901 2
+    authority <- newCallAuthority turn.atrTurnId "memory_save" (pure True)
+    let scope = Control.MemoryControlScope (GroupId 900) (Just turn.atrTurnId) actor message
+        save = Control.saveMemory ConversationMemory "admitted write"
+        run bound = withDbLog pool . Control.runMemoryControlWithAuthority (Just authority) bound
+    withDb pool (finishAgentTurn turn TurnSucceeded 1 Nothing)
+    withDbLog pool (Control.runMemoryControl scope save) `shouldReturn` Left MemoryCallerFenced
+    forM_ [scope {Control.group = GroupId 901}, scope {Control.principal = otherActor}, scope {Control.source = otherMessage}, scope {Control.turn = Just otherTurn.atrTurnId}] $ \foreignScope ->
+      run foreignScope save `shouldReturn` Left MemoryCallerFenced
+    run scope save `shouldSatisfyIO` isRight
+    revokeCallAuthority authority
+    run scope save `shouldReturn` Left MemoryCallerFenced
+    withDb pool (query "SELECT count(*) FROM memory_mutations" ()) `shouldReturn` [Only (1 :: Int)]
+
+  it "does not let call authority override cancellation or a crash" $ do
+    forM_ [TurnCancelled, TurnCrashed] $ \terminal -> do
+      (turn, message, actor) <- seed pool 900 1
+      authority <- newCallAuthority turn.atrTurnId "memory_save" (pure True)
+      withDb pool (finishAgentTurn turn terminal 0 Nothing)
+      let scope = Control.MemoryControlScope (GroupId 900) (Just turn.atrTurnId) actor message
+      withDbLog pool (Control.runMemoryControlWithAuthority (Just authority) scope (Control.saveMemory ConversationMemory "forbidden")) `shouldReturn` Left MemoryCallerFenced
+    withDb pool (query "SELECT count(*) FROM memories" ()) `shouldReturn` [Only (0 :: Int)]
+
+  it "rechecks call revocation after waiting for the conversation commit lock" $ do
+    (turn, message, actor) <- seed pool 900 1
+    authority <- newCallAuthority turn.atrTurnId "memory_save" (pure True)
+    locked <- newEmptyMVar
+    release <- newEmptyMVar
+    writerPid <- newEmptyMVar
+    let scope = Control.MemoryControlScope (GroupId 900) (Just turn.atrTurnId) actor message
+        holdLock = withDb pool . withTransaction $ do
+          _ <- lockTurnConversation turn.atrTurnId
+          liftIO (putMVar locked () >> takeMVar release)
+        write = withDbLog pool . withTransaction $ do
+          rows <- query "SELECT pg_backend_pid()" ()
+          case rows of
+            [Only pid] -> liftIO (putMVar writerPid (pid :: Int))
+            _ -> liftIO (fail "missing PostgreSQL backend identity")
+          raise (Control.runMemoryControlWithAuthority (Just authority) scope (Control.saveMemory ConversationMemory "revoked while blocked"))
+        awaitBlocked pid = do
+          rows <- withDb pool (query "SELECT cardinality(pg_blocking_pids(?)) > 0" (Only pid))
+          if rows == [Only True] then pure () else threadDelay 1000 >> awaitBlocked pid
+    withAsync holdLock $ \holder -> do
+      takeMVar locked
+      withAsync write $ \writer -> do
+        pid <- takeMVar writerPid
+        timeout 3000000 (awaitBlocked pid) `shouldReturn` Just ()
+        revokeCallAuthority authority
+        putMVar release ()
+        timeout 3000000 (wait writer) `shouldReturn` Just (Left MemoryCallerFenced)
+      wait holder
+    withDb pool (query "SELECT count(*) FROM memory_mutations" ()) `shouldReturn` [Only (0 :: Int)]
 
   it "admits only canonical principals visible in the current conversation" $ do
     (turn, message, actor) <- seed pool 900 2783846439

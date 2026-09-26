@@ -56,7 +56,7 @@ import Max.Effects.Tools
     Tools,
     outcomeResult,
     registryCatalog,
-    runToolsWithMedia,
+    runToolsScoped,
   )
 import Max.Execution.Tools hiding (Interrupted)
 import Max.Execution.Types (Admission (..))
@@ -74,7 +74,7 @@ import Max.Tasks
 import Max.Tool.Bundles (SkillLoad (..))
 import Max.Tool.Control (LoopControl, controlSkillLoads)
 import Max.Tool.Media (inlineMediaMessages)
-import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolContextLimits, toolGroupId, toolSkillLoads, toolTurnOutputContext, withToolSkillLoads)
+import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolContextLimits, toolGroupId, toolSkillLoads, toolTurnOutputContext, withToolCallAuthority, withToolSkillLoads)
 import Max.Turn.Types (AgentTurnRef (..), turnHandleText, turnOutputAgentTurn)
 import OneBot.Types (GroupId (..))
 
@@ -183,7 +183,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
     selfTid <- liftIO myThreadId
     workingRef <- liftIO (newTVarIO (Nothing, ""))
     catalog <- either throwIO pure (toolFactory context.acTools)
-    catalogRef <- liftIO (newTVarIO catalog)
+    catalogRef <- liftIO (newTVarIO (context.acTools, catalog))
     let cancel = throwTo selfTid TaskCancelled
         emit :: AgentEventSink (Eff (Tools : ToolDirectory : es))
         emit event = raise (raise (unlift (sink event)))
@@ -195,21 +195,26 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
     results <- inbox.eeResults turn context.acTools
     for_ results $ \channel -> setExecutionResultSink session (\ref invocation -> channel.erDeliver ref (outcomeEnvelope invocation.tiOutcome) invocation.tiMedia)
     outputQueue <- newToolOutputQueue defaultInlineMediaLimit
-    runToolDirectoryDynamic (registryCatalog <$> liftIO (readTVarIO catalogRef)) $
-      runToolsWithMedia
+    runToolDirectoryDynamic (registryCatalog . snd <$> liftIO (readTVarIO catalogRef)) $
+      runToolsScoped
         ( \action -> raise $ do
             scoped <- forkToolOutputQueue outputQueue
             (value, control) <- runToolControl (runToolOutput scoped action)
             media <- runToolOutputRead scoped drainInlineMedia
             pure (value, control, media)
         )
-        (liftIO (readTVarIO catalogRef))
+        ( \authority -> do
+            (current, catalog) <- liftIO (readTVarIO catalogRef)
+            case authority of
+              Nothing -> pure catalog
+              Just call -> either throwIO pure (toolFactory (withToolCallAuthority call current))
+        )
         (loop workingRef session catalogRef emit context turn profile msgs `finally` (closeExecutionSession session `finally` for_ results (liftIO . (.erClose))))
   where
     loop ::
       TVar (Maybe UsageAnchor, Text) ->
       ExecutionSession ->
-      TVar (ToolRegistry (ToolOutput : ToolControl : es)) ->
+      TVar (ToolContext, ToolRegistry (ToolOutput : ToolControl : es)) ->
       AgentEventSink (Eff (Tools : ToolDirectory : es)) ->
       AgentContext ->
       TurnRuntime ->
@@ -230,7 +235,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
               n = state.roundNumber
               h = turn
           catalog <- either throwIO pure (toolFactory ctx.acTools)
-          liftIO (atomically (writeTVar catalogRef catalog))
+          liftIO (atomically (writeTVar catalogRef (ctx.acTools, catalog)))
           -- Freeze newly observed events after the preceding poll and results.
           liftIO (checkTurnCancellation h)
           published <- raise (raise (inbox.eeObserve h ctx.acTools))

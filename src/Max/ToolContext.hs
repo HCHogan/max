@@ -24,6 +24,8 @@ module Max.ToolContext
     toolContextLimits,
     toolSkillLoads,
     withToolSkillLoads,
+    toolCallAuthority,
+    withToolCallAuthority,
   )
 where
 
@@ -32,6 +34,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
+import Max.Execution.Authority (CallAuthority)
 import Max.ModelCatalog (ContextLimits, defaultContextLimits)
 import Max.Platform.Types (AdvertisedCaps, CanonicalMessageId, PrincipalId)
 import Max.Tool.Bundles (SkillLoad, mergeSkillLoads)
@@ -80,7 +83,8 @@ data ToolContext = ToolContext
     toolCapabilities :: !TurnCapabilities,
     toolConversationScope :: !ConversationScope,
     toolContextLimits :: !ContextLimits,
-    toolSkillLoads :: !(Map Text SkillLoad)
+    toolSkillLoads :: !(Map Text SkillLoad),
+    toolCallAuthority :: !(Maybe CallAuthority)
   }
 
 -- | Mint current-turn authority from the already-authorized inbound identity.
@@ -92,7 +96,8 @@ mkToolContext identity capabilities =
       toolCapabilities = capabilities,
       toolConversationScope = conversationScopeFor identity.tiGroupId,
       toolContextLimits = defaultContextLimits,
-      toolSkillLoads = Map.empty
+      toolSkillLoads = Map.empty,
+      toolCallAuthority = Nothing
     }
 
 mkToolContextWithLimits :: ContextLimits -> TurnIdentity -> TurnCapabilities -> ToolContext
@@ -101,6 +106,9 @@ mkToolContextWithLimits limits identity capabilities =
 
 withToolSkillLoads :: [SkillLoad] -> ToolContext -> ToolContext
 withToolSkillLoads loads context = context {toolSkillLoads = mergeSkillLoads context.toolSkillLoads loads}
+
+withToolCallAuthority :: CallAuthority -> ToolContext -> ToolContext
+withToolCallAuthority authority context = context {toolCallAuthority = Just authority}
 
 toolGroupId :: ToolContext -> GroupId
 toolGroupId = (.toolIdentity.tiGroupId)

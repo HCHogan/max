@@ -5,6 +5,7 @@ import Control.Concurrent.STM (STM)
 import Data.Aeson (Value)
 import Data.Text (Text)
 import Effectful (Eff)
+import Max.Execution.Authority (CallAuthority)
 import Max.Execution.Types
 import Max.LLM.Types (ChatMessage)
 import Max.Tasks (TurnRuntime)
@@ -16,7 +17,8 @@ import OneBot.Types (GroupId)
 data ExecutionAdmission es = ExecutionAdmission
   { eaReserveRound :: AgentTurnRef -> Eff es Admission,
     eaCheck :: AgentTurnRef -> Eff es Bool,
-    eaAdmitTool :: AgentTurnRef -> ExecutionStep -> Eff es Admission
+    eaAdmitTool :: AgentTurnRef -> ExecutionStep -> Eff es Admission,
+    eaCallAuthority :: AgentTurnRef -> Text -> Eff es (Maybe CallAuthority)
   }
 
 data ExecutionJournal es = ExecutionJournal

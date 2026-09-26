@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeFamilies #-}
 
 -- | Mutations are bound to the authenticated turn; tools cannot choose an actor.
-module Max.Effects.TaskControl (TaskControl, TaskControlScope (..), TaskRequest (..), StartOutcome (..), startTask, controlTask, waitTasks, runTaskControl) where
+module Max.Effects.TaskControl (TaskControl, TaskControlScope (..), TaskRequest (..), StartOutcome (..), startTask, controlTask, waitTasks, runTaskControl, runTaskControlWithAuthority) where
 
 import Control.Monad (void)
 import Data.Aeson (Value)
@@ -14,9 +14,10 @@ import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Exception (mask, onException)
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Authority (authorizeCallerWithin)
-import Max.DB.Job (admitFromTurn)
+import Max.DB.Authority (authorizeCallWithin)
+import Max.DB.Job (admitFromTurnWithAuthority)
 import Max.DB.Transaction (withTransaction)
+import Max.Execution.Authority (CallAuthority)
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Jobs qualified as Jobs
 import Max.Platform.Types (CanonicalMessageId, PrincipalId)
@@ -65,12 +66,15 @@ waitTasks :: (TaskControl :> es) => [Int64] -> Eff es (Either Text JobWait)
 waitTasks = send . WaitTasks
 
 runTaskControl :: forall es a. (WithConnection :> es, IOE :> es) => Jobs.Jobs -> TaskControlScope -> Eff (TaskControl : es) a -> Eff es a
-runTaskControl jobs scope = interpret $ \_ -> \case
+runTaskControl = runTaskControlWithAuthority Nothing
+
+runTaskControlWithAuthority :: forall es a. (WithConnection :> es, IOE :> es) => Maybe CallAuthority -> Jobs.Jobs -> TaskControlScope -> Eff (TaskControl : es) a -> Eff es a
+runTaskControlWithAuthority authority jobs scope = interpret $ \_ -> \case
   StartTask request -> mask $ \restore -> withCaller $ \turn -> do
     parent <- liftIO (Jobs.jobForTurn jobs turn.atrTurnId)
     now <- liftIO getCurrentTime
     let spec = JobSpec scope.group scope.principal scope.source request.objective request.profile (taskGrants request.profile scope.grants) request.inputs ((.run) <$> parent) request.contract request.wait Nothing Nothing (addUTCTime 21600 now)
-    admitFromTurn jobs turn spec >>= \case
+    admitFromTurnWithAuthority authority jobs turn spec >>= \case
       Left failure -> pure (Left failure)
       Right started -> do
         let cancelChild = liftIO . void $ Jobs.cancelJob jobs scope.group scope.principal False started.run.jobId "owning agent call cancelled"
@@ -103,5 +107,5 @@ runTaskControl jobs scope = interpret $ \_ -> \case
       Nothing -> pure (Left "task control requires an active turn")
       Just turn -> do
         live <- liftIO (Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork CheckOnly))
-        identity <- withTransaction (authorizeCallerWithin turn.atrTurnId scope.group scope.principal)
+        identity <- withTransaction (authorizeCallWithin authority turn.atrTurnId scope.group scope.principal)
         if live && identity then action turn else pure (Left "task caller has ended or its bound identity is invalid")

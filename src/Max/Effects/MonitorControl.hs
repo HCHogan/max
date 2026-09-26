@@ -2,7 +2,7 @@
 
 -- | Monitor writes carry host-bound identity, role and grants. Every mutation
 -- rechecks the caller under the same transaction that changes the definition.
-module Max.Effects.MonitorControl (MonitorControl, MonitorControlScope (..), MonitorArm (..), armMonitor, armHttpMonitor, controlMonitor, runMonitorControl) where
+module Max.Effects.MonitorControl (MonitorControl, MonitorControlScope (..), MonitorArm (..), armMonitor, armHttpMonitor, controlMonitor, runMonitorControl, runMonitorControlWithAuthority) where
 
 import Control.Monad (forM_, void)
 import Data.Int (Int64)
@@ -12,11 +12,12 @@ import Data.Time (UTCTime)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Authority (authorizeCallerWithin)
+import Max.DB.Authority (authorizeCallWithin)
 import Max.DB.Monitor qualified as DB
 import Max.DB.Monitor.Control qualified as Control
 import Max.DB.Monitor.Http qualified as HttpDB
 import Max.DB.Transaction (InTransaction, withTransaction)
+import Max.Execution.Authority (CallAuthority)
 import Max.Jobs qualified as Jobs
 import Max.Monitor.Control
 import Max.Monitor.Types
@@ -60,7 +61,10 @@ controlMonitor :: (MonitorControl :> es) => MonitorOrdinal -> MonitorCommand -> 
 controlMonitor ordinal command cancelTasks = send (ControlMonitor ordinal command cancelTasks)
 
 runMonitorControl :: forall es a. (WithConnection :> es, IOE :> es) => Jobs.Jobs -> MonitorControlScope -> Eff (MonitorControl : es) a -> Eff es a
-runMonitorControl jobs scope = interpret $ \_ -> \case
+runMonitorControl = runMonitorControlWithAuthority Nothing
+
+runMonitorControlWithAuthority :: forall es a. (WithConnection :> es, IOE :> es) => Maybe CallAuthority -> Jobs.Jobs -> MonitorControlScope -> Eff (MonitorControl : es) a -> Eff es a
+runMonitorControlWithAuthority authority jobs scope = interpret $ \_ -> \case
   ArmHttpMonitor spec -> withCaller ArmingCallerFenced $ \turn ->
     if not scope.armingAllowed
       then pure (Left MonitorArmingForbidden)
@@ -87,5 +91,5 @@ runMonitorControl jobs scope = interpret $ \_ -> \case
     withCaller failure action = case scope.turn of
       Nothing -> pure (Left failure)
       Just turn -> withTransaction $ do
-        allowed <- authorizeCallerWithin turn.atrTurnId scope.group scope.principal
+        allowed <- authorizeCallWithin authority turn.atrTurnId scope.group scope.principal
         if allowed then action turn else pure (Left failure)

@@ -20,12 +20,15 @@ import Max.Effects.Outbound
 import Max.Effects.TaskControl qualified as Control
 import Max.Effects.TaskExecution qualified as Progress
 import Max.Effects.TaskQuery qualified as Query
+import Max.Execution.Authority (newCallAuthority, revokeCallAuthority)
+import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Handler.Jobs (shutdownJobs)
 import Max.IR (Body (..), Node (NText))
 import Max.Jobs qualified as Jobs
 import Max.MessageKind (MessageKind (KindChat))
 import Max.Platform.Delivery.Queue (newDeliveryQueue, pendingDeliveryCount)
 import Max.Platform.Types (CanonicalMessageId (..), DeliveryId (..))
+import Max.Task.State (TaskStatus (Succeeded))
 import Max.Task.Types
 import Max.Tasks (cancelAgentTurnTask, newTaskRegistry)
 import Max.Turn.Types
@@ -80,6 +83,26 @@ spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ d
     (_, otherSource, _) <- seed pool 901 2
     start (caller {Control.source = otherSource}) >>= (`shouldSatisfy` isLeft)
     withDb pool (query "SELECT count(*) FROM durable_tasks" ()) `shouldReturn` [Only (0 :: Int64)]
+
+  it "admits the child of an already-running agent call after parent completion without admitting new calls" $ do
+    running <- runningJob pool Basic (Map.singleton "agent" "v1")
+    let current = Jobs.authorizeJobStep running.jobs running.turn.atrTurnId (ExecutionWork CheckOnly)
+        start authority = withDb pool . Control.runTaskControlWithAuthority authority running.jobs (scope running) $ Control.startTask (detached "admitted child" Null)
+    authority <- newCallAuthority running.turn.atrTurnId "agent" current
+    wrongTool <- newCallAuthority running.turn.atrTurnId "memory_save" current
+    Jobs.completeJob running.jobs running.job.run Succeeded (JobResult "parent ended" Nothing)
+    withDb pool (finishAgentTurn running.turn TurnSucceeded 1 Nothing)
+    start Nothing >>= (`shouldSatisfy` isLeftOutcome)
+    start (Just wrongTool) >>= (`shouldSatisfy` isLeftOutcome)
+    Right (Control.StartedTask child) <- start (Just authority)
+    child.spec.parent `shouldBe` Just running.job.run
+    child.spec.grants `shouldBe` running.job.spec.grants
+    child.spec.deadline `shouldBe` running.job.spec.deadline
+    revokeCallAuthority authority
+    start (Just authority) >>= (`shouldSatisfy` isLeftOutcome)
+    replacementAuthority <- newCallAuthority running.turn.atrTurnId "agent" current
+    Jobs.replaceJob running.jobs (GroupId 900) running.job.spec.principal False running.job.run.jobId "replacement" `shouldReturn` Right ()
+    start (Just replacementAuthority) >>= (`shouldSatisfy` isLeftOutcome)
 
   it "binds query and progress capabilities without exposing another conversation" $ do
     running <- runningJob pool Basic Map.empty
