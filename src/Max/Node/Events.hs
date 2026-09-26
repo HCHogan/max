@@ -6,6 +6,7 @@ module Max.Node.Events
     Task,
     Event (..),
     Body (..),
+    Occurrence (..),
     Urgency (..),
     Pending (..),
     noPending,
@@ -42,10 +43,14 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Max.Task.FrontendInput (FrontendInputView)
-import Max.Task.Types (JobRun)
+import Max.Task.Types (JobRun, JobSpec)
 import Max.Tool.Media (InlineMedia)
 
 data Urgency = Normal | Urgent deriving stock (Eq, Show)
+
+-- | A monitor's admitted occurrence owns its immutable consumer and inputs.
+-- External payloads cannot choose the goal, principal or grant ceiling.
+data Occurrence = Occurrence {run :: !JobRun, consumer :: !JobSpec} deriving stock (Eq, Show)
 
 data Body
   = FrontendSteered !Int64 !FrontendInputView
@@ -55,6 +60,7 @@ data Body
   | ChildSaid !JobRun !Text !Urgency
   | ChildDone !JobRun !Value
   | Settled !Text !Value ![InlineMedia]
+  | Fired !Occurrence
   deriving stock (Eq, Show)
 
 data Event = Event {sequence :: !Integer, target :: !Integer, body :: !Body} deriving stock (Eq, Show)

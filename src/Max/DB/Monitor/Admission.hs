@@ -20,7 +20,7 @@ import Max.DB.Job (allocateJobId)
 import Max.DB.Monitor.Occurrence
 import Max.DB.Transaction (withTransaction)
 import Max.Monitor.Policy
-import Max.Monitor.Types (MonitorFireId (..), MonitorId)
+import Max.Monitor.Types (MonitorFireId (..), MonitorId, MonitorOrdinal, monitorHandleText)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Skill.Contract (Contract, parseContract)
 import Max.Task.State (TaskStatus (..))
@@ -109,11 +109,16 @@ admitMonitorTaskWithin occurrence next grants seed = do
                         query
                           "SELECT result->'observation' FROM monitor_fires WHERE monitor_id=? AND definition_revision=? AND fire_id<>? AND result->>'status'='succeeded' AND jsonb_typeof(result->'observation')='object' ORDER BY scheduled_at DESC,fire_id DESC LIMIT 1"
                           (fire.monitor, fire.revision, occurrence)
-                      let baseline = listToMaybe [value | Only value <- previous :: [Only Value]]
+                      labels <- query "SELECT c.legacy_group_id,m.monitor_ordinal,m.trigger_kind,m.schedule_cron,m.created_at FROM monitors m JOIN conversations c USING(conversation_id) WHERE m.monitor_id=?" (Only fire.monitor)
+                      let (group, label) = case labels :: [(Int64, MonitorOrdinal, Text, Maybe Text, UTCTime)] of
+                            [(legacy, ordinal, kind, cron, created)] -> (GroupId legacy, object ["handle" .= monitorHandleText ordinal, "kind" .= kind, "cron" .= cron, "created_at" .= created])
+                            _ -> error "monitor conversation disappeared"
+                          baseline = listToMaybe [value | Only value <- previous :: [Only Value]]
                           evidence = [object ["fire" .= (identifier :: Int64), "evidence" .= T.take 5000 detail, "payload" .= (payload :: Value)] | (identifier, detail, payload) <- observations]
                           inputs =
                             object
-                              [ "trigger" .= fire.evidence,
+                              [ "monitor" .= label,
+                                "trigger" .= fire.evidence,
                                 "payload" .= fire.payload,
                                 "scheduled_at" .= fire.scheduled,
                                 "definition_revision" .= fire.revision,
@@ -122,9 +127,7 @@ admitMonitorTaskWithin occurrence next grants seed = do
                                 "coalesced_evidence" .= (if null evidence then Nothing else Just evidence)
                               ]
                       identifier <- allocateJobId
-                      groups <- query "SELECT legacy_group_id FROM conversations WHERE conversation_id=?" (Only fire.conversation)
-                      let group = case groups of [Only value] -> GroupId value; _ -> error "monitor conversation disappeared"
-                          contract = if snapshot.changeOnly then Just observationContract else Nothing
+                      let contract = if snapshot.changeOnly then Just observationContract else Nothing
                           profile = (,) <$> snapshot.browserProfile <*> snapshot.browserVersion
                           spec = JobSpec group (PrincipalId actor) (CanonicalMessageId seed) snapshot.goal snapshot.profile grants inputs Nothing contract False (Just (JobMonitor fire.monitor occurrence)) profile (addUTCTime 3000 now)
                       void $

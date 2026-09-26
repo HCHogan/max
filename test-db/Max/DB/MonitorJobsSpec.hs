@@ -19,9 +19,11 @@ import Database.PostgreSQL.Simple qualified as PostgreSQL
 import Effectful.PostgreSQL (execute, query)
 import Helpers (truncateAll, withDb)
 import JobFixture (insertOccurrence, seed)
+import Max.Agent.Runtime (observeAgentInputs)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn (AgentTurnTerminal (..), finishAgentTurn)
 import Max.DB.Connection (DbPool, withConn)
+import Max.DB.History (MessageCursor (..))
 import Max.DB.Monitor
 import Max.DB.Monitor.Admission
 import Max.DB.Monitor.Control qualified as MonitorDB
@@ -34,18 +36,50 @@ import Max.Monitor.Control qualified as MonitorControl
 import Max.Monitor.Policy (OverlapPolicy (..))
 import Max.Monitor.Types
 import Max.Monitor.View qualified as WorkView
+import Max.Node.Events qualified as Events
 import Max.Node.Router qualified as Router
 import Max.Platform.Types
 import Max.Task.Delegation (parseJobResult)
 import Max.Task.State (TaskStatus (..))
 import Max.Task.Types
-import Max.Tasks (newTaskRegistry)
-import OneBot.Types (GroupId (..))
+import Max.Tasks (beginTurnRuntime, bindTurnEvents, finishTurnRuntime, newTaskRegistry, setTurnObservationCursor)
+import Max.ToolContext
+import Max.Turn.Types (AgentTurnRef (..))
+import OneBot.Types (GroupId (..), UserId (..))
 import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "automation Jobs and retained business state" $ do
+  it "observes the admitted frozen monitor consumer as a Fired event exactly once" $ do
+    tasks <- newTaskRegistry
+    jobs <- Jobs.newJobs tasks
+    (turn, message, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    Right monitor <- withDb pool (armElaboratedTimeMonitor (GroupId 900) actor turn "frozen occurrence goal" Nothing now Map.empty)
+    (_, request) <- admitOccurrence pool monitor message "first"
+    Right _ <- Jobs.admitJob jobs Nothing 1 request
+    Jobs.LaunchJob job <- Jobs.takeJobWork jobs
+    _ <- withDb pool $ execute "UPDATE monitors SET goal_text='later edited goal' WHERE monitor_id=?" (Only monitor.mrMonitorId)
+    runtime <- beginTurnRuntime tasks turn request.group (UserId 1) (Just message)
+    setTurnObservationCursor runtime (MessageCursor 0)
+    target <- atomically (Events.newNode >>= Events.newTask)
+    atomically (Jobs.attachAutomationTurn jobs job.run turn target) `shouldReturn` True
+    atomically (bindTurnEvents tasks turn.atrTurnId target) `shouldReturn` True
+    let callContext =
+          mkToolContext
+            (TurnIdentity request.group message (UserId 1) (UserId 99) actor Nothing Nothing)
+            (TurnCapabilities False False False noAdvertisedCaps False Map.empty (Just request.grants) False)
+    first <- withDb pool (observeAgentInputs jobs runtime callContext)
+    T.pack (show first) `shouldSatisfy` T.isInfixOf "Fired"
+    T.pack (show first) `shouldSatisfy` T.isInfixOf "frozen occurrence goal"
+    T.pack (show first) `shouldSatisfy` T.isInfixOf (monitorHandleText monitor.mrMonitorOrdinal)
+    T.pack (show first) `shouldNotSatisfy` T.isInfixOf "later edited goal"
+    second <- withDb pool (observeAgentInputs jobs runtime callContext)
+    length second `shouldBe` 0
+    finishTurnRuntime tasks runtime
+    Jobs.detachJobTurn jobs job.run
+
   it "rechecks monitor result ownership after waiting for the database lock" $ do
     jobs <- newTaskRegistry >>= Jobs.newJobs
     (turn, message, actor) <- seed pool 900 1

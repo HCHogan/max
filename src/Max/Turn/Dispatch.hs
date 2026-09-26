@@ -191,7 +191,7 @@ forkDispatch start origin gm work = do
               ensureTerminal turnRef "dispatch failed before worker launch"
                 `finally` do
                   releaseTurnScope env turn
-                  for_ backgroundJob $ \job -> liftIO (Jobs.detachJobTurn env.beJobs job.run)
+                  for_ ownedJob $ \job -> liftIO (Jobs.detachJobTurn env.beJobs job.run)
                   settleAutomation env JobState.Failed "自动化这次触发没能开始处理"
         case start of
           JobTurn job -> do
@@ -212,7 +212,16 @@ forkDispatch start origin gm work = do
             finishAgentTurn turnRef TurnAborted 0 (Just "conversation queue full") `finally` launchFailed
             when (origin == OriginDirect) (replyText gm "当前处理队列已满，请稍后重试。")
           else
-            launchTurn env outputCaps ident gidRaw restore turn turnRef nodeTask
+            ( do
+                case start of
+                  AutomationTurn job -> do
+                    attached <- liftIO . STM.atomically $ do
+                      target <- Conversation.eventsFor env.beConversations turnRef.atrTurnId
+                      maybe (pure False) (Jobs.attachAutomationTurn env.beJobs job.run turnRef) target
+                    unless attached (liftIO (ioError (userError "automation replaced, cancelled or event log full before launch")))
+                  _ -> pure ()
+                launchTurn env outputCaps ident gidRaw restore turn turnRef nodeTask
+            )
               `onException` (for_ nodeTask (liftIO . Conversation.release env.beConversations) >> launchFailed)
         pure True
   unless launched $ do
@@ -230,6 +239,7 @@ forkDispatch start origin gm work = do
   where
     allowInput = startAllowsInput start
     backgroundJob = case start of JobTurn job -> Just job; _ -> Nothing
+    ownedJob = case start of JobTurn job -> Just job; AutomationTurn job -> Just job; _ -> Nothing
     background = isJust backgroundJob
     -- Notices and automation fires wait behind queued user requests.
     notice = case start of MessageNotice {} -> True; ReportNotice {} -> True; CompletionNotice {} -> True; AutomationTurn {} -> True; _ -> False
@@ -312,6 +322,7 @@ forkDispatch start origin gm work = do
                   Jobs.completeJob env.beJobs job.run JobState.Failed (JobResult "任务中断；已发生的外部操作不会重试。" Nothing)
                   Jobs.detachJobTurn env.beJobs job.run
                 settleAutomation env JobState.Failed "自动化这次触发的处理中断了"
+                for_ ownedJob $ \job -> liftIO (Jobs.detachJobTurn env.beJobs job.run)
 
     ensureTerminal ref reason =
       ensureAgentTurnCrashed ref reason

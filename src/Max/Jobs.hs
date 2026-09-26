@@ -21,6 +21,7 @@ module Max.Jobs
     admitJobWithAuthority,
     takeJobWork,
     attachJobTurn,
+    attachAutomationTurn,
     detachJobTurn,
     completeJob,
     awaitJob,
@@ -287,6 +288,27 @@ attachJobTurn jobs run turn = atomically $ do
         writeTVar jobs.entries (Map.insert run.jobId (entry {runtime = Just (run, turn)}) entries)
       pure bound
     _ -> pure False
+
+-- | Root automation shares the conversation's event log, while keeping job
+-- identity, cancellation, grants and retained-call lifetime. Bind before the
+-- root worker starts so queued cancellation cannot escape runtime ownership.
+attachAutomationTurn :: Jobs -> JobRun -> AgentTurnRef -> Events.Task -> STM Bool
+attachAutomationTurn jobs run turn target =
+  ( do
+      entries <- readTVar jobs.entries
+      case lookupRun entries run of
+        Just entry | entry.view.status == Running && isNothing entry.runtime && isJust entry.view.spec.monitor -> do
+          exists <- lookupTurnEvents jobs.tasks turn.atrTurnId
+          check (isJust exists)
+          pending <- Events.peekAll entry.events
+          Events.deliverAll ((target, Events.Fired (Events.Occurrence run entry.view.spec)) : [(target, event.body) | event <- pending]) >>= check
+          Events.close entry.events
+          _ <- bindTurnDeadline jobs.tasks turn.atrTurnId entry.view.spec.deadline
+          writeTVar jobs.entries (Map.insert run.jobId entry {events = target, runtime = Just (run, turn)} entries)
+          pure True
+        _ -> pure False
+  )
+    `orElse` pure False
 
 detachJobTurn :: Jobs -> JobRun -> IO ()
 detachJobTurn jobs run =
@@ -731,7 +753,7 @@ authorizeJobPublication jobs turn = atomically $ do
   relays <- readTVar jobs.resultNotices
   reports <- readTVar jobs.reportNotices
   case entryForTurn entries turn of
-    Just _ -> pure False
+    Just entry -> pure (isJust entry.view.spec.monitor && currentRuntime entry && taskIsLive entry.view.status)
     Nothing -> case Map.lookup turn relays of
       Just relay -> Router.relayIsCurrent relay
       Nothing -> case Map.lookup turn reports of

@@ -19,6 +19,7 @@ import Max.Jobs qualified as Jobs
 import Max.LLM.Types (CallCost (..), TokenUsage (..))
 import Max.Monitor.Types (MonitorFireId (..), MonitorId (..))
 import Max.Node.Events qualified as Events
+import Max.Node.Render (renderEvents)
 import Max.Node.Router qualified as Router
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
 import Max.Task.Policy (treeModelRounds, treeToolCalls)
@@ -33,6 +34,52 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "process-owned Jobs" $ do
+  it "binds a fired occurrence and queued steering to the actual root runtime" $ do
+    (tasks, jobs, request) <- fixture
+    let frozen = request {objective = "saved goal", inputs = object ["goal" .= ("untrusted replacement" :: T.Text)], monitor = Just (JobMonitor (MonitorId 10) (MonitorFireId 1))}
+    Right _ <- admitJob jobs Nothing 1 frozen
+    LaunchJob job <- takeJobWork jobs
+    steerJob jobs request.group request.principal Nothing 1 "queued correction" `shouldReturn` Right ()
+    runtime <- beginTurnRuntime tasks (reference 1) request.group (UserId 7) Nothing
+    target <- atomically (Events.newNode >>= Events.newTask)
+    atomically (attachAutomationTurn jobs job.run (reference 1) target) `shouldReturn` True
+    -- Dispatch binds this same conversation log after acquiring its root slot.
+    atomically (bindTurnEvents tasks (AgentTurnId 1) target) `shouldReturn` True
+    events <- atomically (turnEvents runtime >>= Router.observeEvents jobs.resultRouter)
+    [occurrence] <- pure [occurrence | Events.Event {body = Events.Fired occurrence} <- events]
+    occurrence.consumer `shouldBe` job.spec
+    occurrence.run `shouldBe` job.run
+    Events.wakes Events.noPending (Events.Fired occurrence) `shouldBe` False
+    T.pack (show (renderEvents events)) `shouldSatisfy` T.isInfixOf "saved goal"
+    T.pack (show (renderEvents events)) `shouldSatisfy` T.isInfixOf "queued correction"
+    atomically (Events.observe target) `shouldReturn` []
+    authorizeJobPublication jobs (AgentTurnId 1) `shouldReturn` True
+    authorizeJobStep jobs (AgentTurnId 1) (ExecutionWork ReserveCall) `shouldReturn` True
+    steerJob jobs request.group request.principal Nothing 1 "live correction" `shouldReturn` Right ()
+    atomically (Events.hasInterrupt target Events.noPending) `shouldReturn` True
+    cancelJob jobs request.group request.principal False 1 "cancel root automation" `shouldReturn` Right ()
+    atomically (turnWasCancelled runtime) `shouldReturn` True
+    authorizeJobPublication jobs (AgentTurnId 1) `shouldReturn` False
+    authorizeJobStep jobs (AgentTurnId 1) (ExecutionWork ReserveCall) `shouldReturn` False
+
+  it "rolls back a full root log handoff and never duplicates its Fired event on retry" $ do
+    (tasks, jobs, request) <- fixture
+    Right _ <- admitJob jobs Nothing 1 request {monitor = Just (JobMonitor (MonitorId 10) (MonitorFireId 1))}
+    LaunchJob job <- takeJobWork jobs
+    _ <- beginTurnRuntime tasks (reference 1) request.group (UserId 7) Nothing
+    target <- atomically (Events.newNode >>= Events.newTask)
+    atomically (replicateM_ 256 (Events.deliver target (Events.Steered Null)))
+    steerJob jobs request.group request.principal Nothing 1 "preserved correction" `shouldReturn` Right ()
+    atomically (attachAutomationTurn jobs job.run (reference 1) target) `shouldReturn` False
+    jobForTurn jobs (AgentTurnId 1) `shouldReturn` Nothing
+    _ <- atomically (Events.observeAll target)
+    atomically (attachAutomationTurn jobs job.run (reference 1) target) `shouldReturn` True
+    atomically (attachAutomationTurn jobs job.run (reference 1) target) `shouldReturn` False
+    events <- atomically (Events.observeAll target)
+    length [() | Events.Event {body = Events.Fired _} <- events] `shouldBe` 1
+    length events `shouldBe` 2
+    T.pack (show (renderEvents events)) `shouldSatisfy` T.isInfixOf "preserved correction"
+
   it "relays a child report delivered before its parent closes but not yet observed" $ do
     (tasks, jobs, request) <- fixture
     (root, _) <- launch tasks jobs 1 request

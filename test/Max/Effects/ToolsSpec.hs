@@ -1,4 +1,4 @@
-module Max.Effects.ToolsSpec (spec) where
+module Max.Effects.ToolsSpec (Max.Effects.ToolsSpec.spec) where
 
 import Control.Exception (throwIO)
 import Control.Monad (forM_)
@@ -6,17 +6,24 @@ import Data.Aeson (Value (Null), object, (.=))
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Time (getCurrentTime)
 import Effectful (liftIO, runEff, runPureEff)
 import Effectful.Concurrent (runConcurrent, threadDelay)
 import Max.Effects.ToolControl (activateSkills, runToolControl)
 import Max.Effects.ToolDirectory (listCatalogTools, listToolSpecs, runToolDirectory)
 import Max.Effects.Tools
 import Max.Execution.Authority
+import Max.Monitor.Types (MonitorFireId (..), MonitorId (..))
+import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
+import Max.Task.State (TaskStatus (Running))
+import Max.Task.Types (JobMonitor (..), JobRun (..), JobSpec (..), JobView (..), TaskProfile (Basic), emptyJobUsage)
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Tool.Control (LoopControl (..))
 import Max.Toolset (toolAllowedByEffectCeiling)
 import Max.Turn.Continuity (toolCatalogFingerprint)
+import Max.Turn.Start (TurnStart (AutomationTurn), startToolCeiling)
 import Max.Turn.Types (AgentTurnId (..))
+import OneBot.Types (GroupId (..))
 import Test.Hspec
 
 schema :: Value
@@ -333,6 +340,22 @@ spec = describe "validated tool kernel" $ do
     toolAllowedByEffectCeiling (Just grant) upgraded `shouldBe` False
     toolAllowedByEffectCeiling (Just Map.empty) readDefinition `shouldBe` False
     toolAllowedByEffectCeiling Nothing upgraded `shouldBe` True
+
+  it "applies the frozen automation grants when constructing the runnable tool registry" $ do
+    now <- getCurrentTime
+    let grant = Map.singleton "read" (toolCatalogFingerprint [readDefinition])
+        request = JobSpec (GroupId 1) (PrincipalId 1) (CanonicalMessageId 1) "saved goal" Basic grant Null Nothing Nothing False (Just (JobMonitor (MonitorId 1) (MonitorFireId 1))) Nothing now
+        job = JobView (JobRun 1 1) request Running Nothing Nothing 0 0 now True emptyJobUsage Nothing []
+        changed = readDefinition {tdSchemaVersion = SchemaVersion 2}
+        grantCeiling = startToolCeiling (AutomationTurn job)
+        allowed = filter (toolAllowedByEffectCeiling grantCeiling)
+    catalog <- expectCatalog (buildToolRegistry (allowed [readDefinition]) [readTool])
+    good <- runEff . runConcurrent . runTools catalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
+    good `shouldBe` ToolSucceeded (object ["value" .= (1 :: Int)])
+    allowed [changed] `shouldBe` []
+    allowed [readDefinition {tdRef = ToolRef "newly_added_tool"}] `shouldBe` []
+    let revoked = startToolCeiling (AutomationTurn job {spec = request {grants = Map.empty}})
+    filter (toolAllowedByEffectCeiling revoked) [readDefinition] `shouldBe` []
   where
     isDuplicateDefinition (Left DuplicateToolDefinition {}) = True
     isDuplicateDefinition _ = False
