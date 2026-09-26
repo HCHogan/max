@@ -81,7 +81,7 @@ def check_imports():
         for dependency in IMPORT.findall(source):
             if dependency.startswith("Max.DB.") or dependency in {"Effectful.PostgreSQL", "Max.Effects.LLM", "Max.Env", "Max.Agent.Runtime"}:
                 errors.append(f"{name}: LLM, persistence or application assembly leaked into execution")
-    if "invokeTool" in guest or "executeToolBatch" not in guest:
+    if "invokeTool" in guest or "launchCall" not in guest:
         errors.append("Wasm adapter bypasses shared tool execution")
     if "invokeTool" in model or "executeToolBatch" not in model:
         errors.append("Code submission bypasses shared tool execution")

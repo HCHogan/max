@@ -299,7 +299,6 @@ library
         Max.LLM.Failure
         Max.Execution.Types
         Max.Execution.Tools
-        Max.Execution.Workflow
         Max.CodeMode.Wasm
         Max.CodeMode.JavaScript
         Max.CodeMode.Model
@@ -377,7 +376,6 @@ library
         Max.Effects.TurnQuery
         Max.Task.State
         Max.Task.Delegation
-        Max.Task.WorkflowRuntime
         Max.Render
         Max.Reply
         Max.ReplySend

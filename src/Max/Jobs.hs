@@ -9,6 +9,7 @@ module Max.Jobs
     JobWork (..),
     JobWait (..),
     newJobs,
+    acquireGuestSlot,
     admitJob,
     takeJobWork,
     attachJobTurn,
@@ -76,6 +77,7 @@ data JobWork = LaunchJob !JobView | PublishJobNotice !JobView !Int !Text | Recor
 data Entry = Entry
   { view :: !JobView,
     root :: !JobRun,
+    guestTree :: !(Either AgentTurnId JobRun),
     runtime :: !(Maybe (JobRun, AgentTurnRef)),
     children :: !(Set JobRun),
     childUpdates :: !(Set JobRun),
@@ -94,11 +96,33 @@ data Jobs = Jobs
     notices :: !(TVar (Map AgentTurnId (JobRun, Int))),
     publications :: !(TVar (Map CanonicalMessageId JobRun)),
     closed :: !(TVar Bool),
+    guestSlots :: !(TVar (Map (Either AgentTurnId JobRun) Int)),
     tasks :: !TaskRegistry
   }
 
 newJobs :: TaskRegistry -> IO Jobs
-newJobs tasks = Jobs <$> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO False <*> pure tasks
+newJobs tasks = Jobs <$> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO False <*> newTVarIO Map.empty <*> pure tasks
+
+-- | Admission never waits: a paused ancestor must not occupy the slot a
+-- descendant is queued for. The release action is idempotent and survives job
+-- retirement/replacement. Foreground guests and their children share a tree.
+acquireGuestSlot :: Jobs -> AgentTurnId -> IO (Maybe (IO ()))
+acquireGuestSlot jobs turn = atomically $ do
+  entries <- readTVar jobs.entries
+  slots <- readTVar jobs.guestSlots
+  closing <- readTVar jobs.closed
+  let tree = maybe (Left turn) (.guestTree) (entryForTurn entries turn)
+      count = Map.findWithDefault 0 tree slots
+  if closing || sum slots >= 32 || count >= 16
+    then pure Nothing
+    else do
+      writeTVar jobs.guestSlots (Map.insert tree (count + 1) slots)
+      released <- newTVar False
+      pure . Just . atomically $ do
+        done <- readTVar released
+        unless done $ do
+          writeTVar released True
+          modifyTVar' jobs.guestSlots (Map.update (\n -> if n <= 1 then Nothing else Just (n - 1)) tree)
 
 -- | IDs come from the retained task identity sequence, never from model input.
 -- Terminal entries can be discarded only after their live parent releases them.
@@ -115,12 +139,13 @@ admitJob jobs caller identifier requested = do
         parents = ancestors kept requested.parent
         withinScope parent = parent.view.spec.group == requested.group && parent.view.spec.principal == requested.principal && Map.isSubmapOfBy (==) requested.grants parent.view.spec.grants
         deadline = minimum (addUTCTime 21600 now : requested.deadline : map (.view.spec.deadline) parents)
-        spec = requested {deadline, objective = T.strip requested.objective, delegated = requested.delegated || any (.view.spec.delegated) parents}
+        spec = requested {deadline, objective = T.strip requested.objective}
         run = JobRun identifier 1
         root = maybe run (.root) (lookupRun kept =<< spec.parent)
         view = JobView run spec Queued Nothing Nothing 0 0 now True emptyJobUsage Nothing
         awaiter = if spec.awaited && isNothing spec.parent then caller else Nothing
-        newEntry = Entry view root Nothing Set.empty Set.empty Seq.empty 0 Nothing False False False awaiter
+        guestTree = maybe (maybe (Right run) Left caller) (.guestTree) (lookupRun kept =<< spec.parent)
+        newEntry = Entry view root guestTree Nothing Set.empty Set.empty Seq.empty 0 Nothing False False False awaiter
         invalid detail = pure (Left detail)
     if closing || not allowed || Map.member identifier current
       then invalid "job caller ended or identity already exists"

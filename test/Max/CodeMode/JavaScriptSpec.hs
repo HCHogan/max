@@ -1,6 +1,7 @@
 module Max.CodeMode.JavaScriptSpec (spec) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
+import Control.Exception qualified as Exception
 import Control.Monad (forM_)
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KM
@@ -20,7 +21,6 @@ import Max.CodeMode.Model (executeModelBatch)
 import Max.CodeMode.Wasm
 import Max.Effects.Tools
 import Max.Execution.Tools
-import Max.Execution.Workflow
 import Max.Tool.Catalog (catalogTools)
 import System.Timeout (timeout)
 import Test.Hspec
@@ -53,12 +53,11 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
       runJavaScript session noJournal (views registry) "await agent({objective:'one',profile:'basic'}); await agent({objective:'two',profile:'basic'}); return 'unreachable';"
     result.cmExit `shouldBe` WasmHostStopped
     readIORef count `shouldReturn` 1
-  it "rejects run_code for a leaf agent before any guest work" $ do
-    let host = WorkflowHost (pure False)
+  it "rejects run_code over its guest limit before any guest work" $ do
     registry <- checked [echoDefinition] [echoTool]
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
-      executeModelBatch True Map.empty session noJournal {ehWorkflow = Just host} (views registry) [ToolRequest "child" "run_code" (object ["code" .= ("return await tools.echo({value:1});" :: Text)])]
+      executeModelBatch True Map.empty session noJournal {ehAcquireGuest = pure Nothing} (views registry) [ToolRequest "child" "run_code" (object ["code" .= ("return await tools.echo({value:1});" :: Text)])]
     map (outcomeName . (.tiOutcome)) result.tbInvocations `shouldBe` ["rejected"]
   it "cannot register run_code as a leaf runner that would recursively acquire the gate" $ do
     case buildToolRegistry [echoDefinition {tdRef = ToolRef "run_code"}] [echoTool {toolName = "run_code"}] of
@@ -209,13 +208,13 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     result.cmExit `shouldSatisfy` trapped
     result.cmOutput `shouldSatisfy` maybe False (T.isInfixOf "await" . T.pack . show)
 
-  it "still runs a call nobody awaited before publishing the result" $ do
+  it "discards calls still in the outbox when the program returns" $ do
     result <- simple "tools.echo({value:1}); return 2;"
     result.cmExit `shouldBe` WasmCompleted
     result.cmOutput `shouldBe` Just (Number 2)
-    map (.ccOutcome) result.cmCalls `shouldBe` ["succeeded"]
+    map (.ccOutcome) result.cmCalls `shouldBe` []
 
-  it "rejects a batch atomically when the shared call budget is too small" $ do
+  it "reserves the shared budget per call before launching futures" $ do
     registry <- checked [echoDefinition] [echoTool]
     (result, later) <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession (Just 1)
@@ -223,8 +222,8 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
       later <- executeToolBatch session noJournal (views registry) [ToolRequest "native" "echo" (object ["value" .= (1 :: Int)])]
       pure (result, later)
     result.cmOverBudget `shouldBe` True
-    result.cmOutput `shouldBe` Just (toValue [String "rejected", String "rejected"])
-    map (outcomeName . (.tiOutcome)) later.tbInvocations `shouldBe` ["succeeded"]
+    result.cmOutput `shouldBe` Just (toValue [String "succeeded", String "rejected"])
+    map (outcomeName . (.tiOutcome)) later.tbInvocations `shouldBe` ["rejected"]
 
   it "retains fault classification in both raw outcomes and ToolError" $ do
     result <- simple "const raw = await max.raw('echo', {}); try {await tools.echo({});} catch (error) {return [raw.outcome, error.outcome, error.code, error.retry];}"
@@ -276,11 +275,11 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
         result.cmCalls `shouldBe` []
         outcomeName (codeModeInvocation result).tiOutcome `shouldBe` "failed-before-effect"
 
-  it "allows a caught rejection and still drains scheduled jobs before returning" $ do
+  it "drains promise jobs but discards their unawaited outbox at return" $ do
     result <- simple "const value = Promise.reject('handled'); value.catch(() => {}); Promise.resolve().then(() => tools.echo({value:1})); return 2;"
     result.cmExit `shouldBe` WasmCompleted
     result.cmOutput `shouldBe` Just (Number 2)
-    length result.cmCalls `shouldBe` 1
+    length result.cmCalls `shouldBe` 0
 
   it "interrupts unbounded JavaScript with guest fuel" $ do
     registry <- checked [echoDefinition] [echoTool]
@@ -289,21 +288,85 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
       runWasmProgram session noJournal (views registry) javaScriptLimits {wlFuel = 10000000} (javaScriptProgram (views registry) "for (;;) {}")
     result.cmExit `shouldSatisfy` trapped
 
-  it "does not call an interrupted host effect safe merely because its receipt is missing" $ do
+  it "returns Promise.race's first completion and cancels remaining calls at return" $ do
+    entered <- newEmptyMVar
     blocked <- newEmptyMVar
-    registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner $ \value -> liftIO (takeMVar blocked) >> pure (Right value)}]
+    ended <- newEmptyMVar
+    let runner args = liftIO $ case valueOf args of
+          Just (Number 1) -> takeMVar entered >> pure (Right args)
+          _ -> (putMVar entered () >> takeMVar blocked >> pure (Right args)) `Exception.finally` putMVar ended ()
+    registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner runner}]
+    result <- timeout 3000000 . runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session noJournal (views registry) "return await Promise.race([tools.echo({value:1}), tools.echo({value:2})]);"
+    fmap (.cmOutput) result `shouldBe` Just (Just (object ["value" .= (1 :: Int)]))
+    timeout 1000000 (takeMVar ended) `shouldReturn` Just ()
+    fmap (map (.ccOutcome) . (.cmCalls)) result `shouldBe` Just ["succeeded", "outcome-unknown"]
+
+  it "max.race cancels a loser before the program continues with another tool" $ do
+    entered <- newEmptyMVar
+    blocked <- newEmptyMVar
+    ended <- newEmptyMVar
+    let runner args = liftIO $ case valueOf args of
+          Just (Number 1) -> takeMVar entered >> pure (Right args)
+          Just (Number 2) -> (putMVar entered () >> takeMVar blocked >> pure (Right args)) `Exception.finally` putMVar ended ()
+          _ -> takeMVar ended >> pure (Right args)
+    registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner runner}]
+    result <- timeout 3000000 . runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session noJournal (views registry) "await max.race([tools.echo({value:1}), tools.echo({value:2})]); return await tools.echo({value:3});"
+    fmap (.cmOutput) result `shouldBe` Just (Just (object ["value" .= (3 :: Int)]))
+
+  it "Promise.race leaves its loser available to await later" $ do
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    let runner args = liftIO $ case valueOf args of
+          Just (Number 1) -> takeMVar entered >> pure (Right args)
+          Just (Number 2) -> putMVar entered () >> takeMVar release >> pure (Right args)
+          _ -> putMVar release () >> pure (Right args)
+    registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner runner}]
+    result <- timeout 3000000 . runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session noJournal (views registry) "const p = tools.echo({value:2}); await Promise.race([tools.echo({value:1}), p]); await tools.echo({value:3}); return await p;"
+    fmap (.cmOutput) result `shouldBe` Just (Just (object ["value" .= (2 :: Int)]))
+
+  it "starts each pipeline's next call before unrelated searches finish" $ do
+    agentStarted <- newEmptyMVar
+    let runner args = liftIO $ case valueOf args of
+          Just (Number 2) -> takeMVar agentStarted >> pure (Right args)
+          Just (Number 11) -> putMVar agentStarted () >> pure (Right args)
+          _ -> pure (Right args)
+    registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner runner}]
+    result <- timeout 3000000 . runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session noJournal (views registry) "return await Promise.all([1,2].map(async value => { const r = await tools.echo({value}); return (await tools.echo({value:r.value+10})).value; }));"
+    fmap (.cmOutput) result `shouldBe` Just (Just (toValue [Number 11, Number 12]))
+
+  it "cancels an outbox call once and provides a safe rejection without effects" $ do
+    result <- simple "const p=max.raw('echo',{value:1}); max.cancel(p); max.cancel(p); return await p;"
+    result.cmExit `shouldBe` WasmCompleted
+    result.cmCalls `shouldBe` []
+    result.cmOutput `shouldBe` Just (object ["outcome" .= ("rejected" :: Text), "error" .= object ["code" .= ("cancelled" :: Text), "message" .= ("call cancelled" :: Text), "retry" .= ("safe" :: Text)]])
+
+  it "supports sleep futures without exposing a clock" $ do
+    result <- simple "await max.sleep(1); return typeof Date;"
+    result.cmOutput `shouldBe` Just (String "undefined")
+    map (.ccTool) result.cmCalls `shouldBe` ["$sleep"]
+
+  it "bounds in-flight calls and drains all queued calls without a batch barrier" $ do
+    result <- simple "return (await Promise.all(Array.from({length:130}, (_,value) => tools.echo({value})))).map(x=>x.value);"
+    result.cmExit `shouldBe` WasmCompleted
+    result.cmOutput `shouldBe` Just (toJSON ([0 .. 129] :: [Int]))
+    length result.cmCalls `shouldBe` 130
+
+  it "delivers more than one resume worth of large outcomes without losing any" $ do
+    let payload = T.replicate (3 * 1024 * 1024) "x"
+    registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner $ \args -> pure (Right (object ["arg" .= args, "text" .= payload]))}]
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
-      runWasmProgram
-        session
-        noJournal
-        (views registry)
-        javaScriptLimits {wlTimeoutMicros = 5000000}
-        (javaScriptProgram (views registry) "tools.echo({value:1});")
-    result.cmExit `shouldBe` WasmTimedOut
-    result.cmCalls `shouldBe` []
-    result.cmSubmittedCalls `shouldBe` 1
-    outcomeName (codeModeInvocation result).tiOutcome `shouldBe` "outcome-unknown"
+      runJavaScript session noJournal (views registry) "return (await Promise.all([1,2,3,4,5,6].map(value=>tools.echo({value})))).map(x=>[x.arg.value,x.text.length]);"
+    result.cmExit `shouldBe` WasmCompleted
+    result.cmOutput `shouldBe` Just (toJSON [[n, 3 * 1024 * 1024] | n <- [1 .. 6 :: Int]])
 
   it "rejects hidden, mixed and oversized model submissions before any effect" $ do
     count <- newIORef (0 :: Int)
@@ -322,6 +385,11 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
   where
     code :: Text -> ToolRequest
     code source = ToolRequest "model-code" "run_code" (object ["code" .= source])
+
+valueOf :: Value -> Maybe Value
+valueOf = \case
+  Object fields -> KM.lookup "value" fields
+  _ -> Nothing
 
 objectiveOf :: Value -> Maybe Value
 objectiveOf = \case

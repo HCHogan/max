@@ -1,41 +1,44 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 
--- | Embedded Wasmtime mechanics only: memory, resources and scoped callbacks.
--- Tool authority, journal and language SDKs do not belong to this module.
+-- | Poll-driven Wasmtime stores. No guest callback enters Haskell; a store
+-- retains only data between steps. The owner serializes all resume operations.
 module Max.CodeMode.Wasm
   ( WasmLimits (..),
     WasmExit (..),
+    Guest,
+    GuestCall (..),
+    GuestStep (..),
     defaultWasmLimits,
-    runWasm,
-    runWasmWithInput,
+    withGuest,
+    resumeGuest,
     watToWasm,
   )
 where
 
 import Control.Concurrent.Async qualified as Async
-import Control.Concurrent.STM
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, swapMVar)
 import Control.Exception qualified as Exception
-import Control.Monad (void, when)
+import Control.Monad (unless, void, when)
+import Data.Aeson (Value, eitherDecodeStrict', encode, withObject, (.!=), (.:), (.:?))
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (parseEither)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.Either (fromRight)
-import Data.Int (Int32, Int64)
+import Data.ByteString.Lazy qualified as LBS
+import Data.Int (Int64)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Text.Encoding.Error (lenientDecode)
 import Data.Word (Word64, Word8)
 import Effectful
-import Effectful.Concurrent (Concurrent, threadDelay)
-import Effectful.Concurrent.Async (race)
-import Effectful.Exception (bracket, throwIO)
+import Effectful.Exception (bracket)
 import Foreign.C (CInt (..), CSize (..), CString)
 import Foreign.Marshal.Alloc (alloca, allocaBytes)
-import Foreign.Marshal.Utils (copyBytes)
-import Foreign.Ptr (FunPtr, Ptr, castPtr, nullPtr)
-import Foreign.StablePtr (StablePtr, deRefStablePtr, freeStablePtr, newStablePtr)
+import Foreign.Ptr (Ptr, castPtr, nullPtr)
 import Foreign.Storable (peek)
+import System.Timeout (timeout)
 
--- Limits are host configuration, never guest-provided authority.
 data WasmLimits = WasmLimits
   { wlFuel :: !Word64,
     wlMemoryBytes :: !Int64,
@@ -48,12 +51,18 @@ data WasmLimits = WasmLimits
 defaultWasmLimits :: WasmLimits
 defaultWasmLimits = WasmLimits 10000000 (64 * 1024 * 1024) (30 * 1000000) (1024 * 1024) 128
 
-data WasmExit = WasmCompleted | WasmHostStopped | WasmTrapped !Text | WasmTimedOut
+data WasmExit = WasmCompleted | WasmHostStopped | WasmRejected !Text | WasmTrapped !Text | WasmTimedOut
+  deriving stock (Show, Eq)
+
+data GuestCall = GuestCall {gcId :: !Int, gcTool :: !Text, gcArgs :: !Value}
+  deriving stock (Show, Eq)
+
+data GuestStep = GuestCalls ![GuestCall] ![Int] !Int | GuestDone !Value | GuestTrap !WasmExit
   deriving stock (Show, Eq)
 
 data WasmHandle
 
-type ToolCallback = StablePtr Mailbox -> Ptr Word8 -> CSize -> Ptr Word8 -> CSize -> IO Int32
+data Guest = Guest !(Ptr WasmHandle) !WasmLimits !(MVar Bool)
 
 foreign import ccall unsafe "max_wasm_new" wasmNew :: IO (Ptr WasmHandle)
 
@@ -61,67 +70,61 @@ foreign import ccall unsafe "max_wasm_delete" wasmDelete :: Ptr WasmHandle -> IO
 
 foreign import ccall unsafe "max_wasm_interrupt" wasmInterrupt :: Ptr WasmHandle -> IO ()
 
-foreign import ccall safe "max_wasm_run" wasmRun :: Ptr WasmHandle -> Ptr Word8 -> CSize -> Word64 -> Int64 -> Ptr Word8 -> CSize -> Ptr (Ptr Word8) -> Ptr CSize -> FunPtr ToolCallback -> StablePtr Mailbox -> CString -> CSize -> IO CInt
+foreign import ccall safe "max_wasm_open" wasmOpen :: Ptr WasmHandle -> Ptr Word8 -> CSize -> Word64 -> Int64 -> CString -> CSize -> IO CInt
 
-foreign export ccall "max_haskell_wasm_dispatch" dispatchCallback :: ToolCallback
-
-foreign import ccall "&max_haskell_wasm_dispatch" callbackPointer :: FunPtr ToolCallback
+foreign import ccall safe "max_wasm_step" wasmStep :: Ptr WasmHandle -> Ptr Word8 -> CSize -> Ptr (Ptr Word8) -> Ptr CSize -> CString -> CSize -> IO CInt
 
 foreign import ccall safe "max_wasm_wat" wasmWat :: Ptr Word8 -> CSize -> Ptr (Ptr Word8) -> Ptr CSize -> CString -> CSize -> IO CInt
 
 foreign import ccall unsafe "max_wasm_free" wasmFree :: Ptr Word8 -> IO ()
 
-data Pending = Pending !ByteString !(TMVar (Maybe ByteString))
-
-data Mailbox = Mailbox !(TQueue Pending) !(TVar Bool)
-
-data RunningWasm = RunningWasm
-  { rwHandle :: !(Ptr WasmHandle),
-    rwCallback :: !(StablePtr Mailbox),
-    rwStopped :: !(TVar Bool),
-    rwQueue :: !(TQueue Pending),
-    rwWorker :: !(Async.Async (WasmExit, Maybe ByteString))
-  }
-
--- | Host calls are serviced on an Effectful thread through a mailbox. The FFI
--- callback copies bytes only; it cannot throw a Haskell exception through C or
--- retain a guest pointer. Nothing requests a trap after a host control decision.
-runWasm :: (Concurrent :> es, IOE :> es) => WasmLimits -> ByteString -> (ByteString -> Eff es (Maybe ByteString)) -> Eff es WasmExit
-runWasm limits binary dispatch = fst <$> runWasmWithInput limits binary Nothing dispatch
-
--- | Optional immutable input enables the data ABI. One bounded output survives
--- a later guest trap; neither channel can dispatch tools or manufacture control.
-runWasmWithInput :: (Concurrent :> es, IOE :> es) => WasmLimits -> ByteString -> Maybe ByteString -> (ByteString -> Eff es (Maybe ByteString)) -> Eff es (WasmExit, Maybe ByteString)
-runWasmWithInput limits binary input dispatch
-  | limits.wlFuel == 0 || limits.wlMemoryBytes <= 0 || limits.wlTimeoutMicros <= 0 || limits.wlModuleBytes <= 0 || limits.wlHostCalls <= 0 = invalid "invalid host resource limits"
-  | BS.length binary > limits.wlModuleBytes = invalid "module exceeds host size limit"
-  | maybe False ((> 1024 * 1024) . BS.length) input = invalid "input exceeds host size limit"
-  | otherwise = bracket (liftIO acquire) (liftIO . release) $ \running -> do
-      result <- race (threadDelay limits.wlTimeoutMicros) (drive 0 running)
-      pure (fromRight (WasmTimedOut, Nothing) result)
+-- | Resources outlive individual steps but not their owner. Cancellation joins
+-- the safe FFI worker before releasing the store. A timeout covers CPU steps,
+-- not host futures, and fuel is set exactly once for the whole program.
+withGuest :: (IOE :> es) => WasmLimits -> ByteString -> ByteString -> (Guest -> GuestStep -> Eff es a) -> Eff es a
+withGuest limits binary input use = bracket (liftIO acquire) (liftIO . release) $ \guest@(Guest handle _ suspended) -> do
+  initial <-
+    liftIO $
+      if invalid
+        then pure (GuestTrap (WasmTrapped "invalid guest resources or module size"))
+        else do
+          opened <- timed guest $ BS.useAsCStringLen binary $ \(bytes, size) -> allocaBytes 4096 $ \message -> do
+            code <- wasmOpen handle (castPtr bytes) (fromIntegral size) limits.wlFuel limits.wlMemoryBytes message 4096
+            if code == 0 then pure Nothing else Just . WasmTrapped <$> readDiagnostic message
+          case opened of
+            Nothing -> pure (GuestTrap WasmTimedOut)
+            Just (Just err) -> pure (GuestTrap err)
+            Just Nothing -> runGuestStep guest input
+  liftIO (void (swapMVar suspended (isSuspended initial)))
+  use guest initial
   where
-    invalid detail = pure (WasmTrapped detail, Nothing)
-    acquire = Exception.mask $ \restore -> do
-      queue <- newTQueueIO
-      stopped <- newTVarIO False
+    invalid = limits.wlFuel == 0 || limits.wlMemoryBytes <= 0 || limits.wlTimeoutMicros <= 0 || limits.wlModuleBytes <= 0 || limits.wlHostCalls <= 0 || BS.length binary > limits.wlModuleBytes || BS.length input > 1024 * 1024
+    acquire = do
       handle <- wasmNew
       when (handle == nullPtr) $ Exception.throwIO (userError "could not allocate Wasmtime engine")
-      callback <- newStablePtr (Mailbox queue stopped) `Exception.onException` wasmDelete handle
-      worker <- Async.async (restore (run handle callback)) `Exception.onException` (freeStablePtr callback >> wasmDelete handle)
-      pure (RunningWasm handle callback stopped queue worker)
-    -- The safe FFI call cannot be killed with throwTo. Wake callbacks and trap
-    -- guest computation, then join before releasing their C resources. This
-    -- cleanup cannot be abandoned by a second cancellation.
-    release running = Exception.uninterruptibleMask_ $ do
-      atomically (writeTVar running.rwStopped True)
-      wasmInterrupt running.rwHandle
-      void (Async.waitCatch running.rwWorker)
-      freeStablePtr running.rwCallback
-      wasmDelete running.rwHandle
-    run handle callback =
-      BS.useAsCStringLen binary $ \(bytes, size) -> allocaBytes 4096 $ \message ->
-        withInput $ \inputBytes inputSize -> alloca $ \outputPtr -> alloca $ \outputSize -> do
-          code <- wasmRun handle (castPtr bytes) (fromIntegral size) limits.wlFuel limits.wlMemoryBytes inputBytes inputSize outputPtr outputSize callbackPointer callback message 4096
+      Guest handle limits <$> newMVar False
+    release (Guest handle _ suspended) = modifyMVar_ suspended (\_ -> wasmDelete handle >> pure False)
+
+-- | At most 16 MiB of outcomes per step; the caller retains excess completions.
+resumeGuest :: Guest -> [(Int, Value)] -> IO GuestStep
+resumeGuest guest@(Guest _ _ suspended) outcomes = modifyMVar suspended $ \waiting ->
+  if not waiting
+    then pure (False, GuestTrap (WasmTrapped "guest is not suspended"))
+    else do
+      step <- runGuestStep guest (LBS.toStrict (encode outcomes))
+      pure (isSuspended step, step)
+
+isSuspended :: GuestStep -> Bool
+isSuspended GuestCalls {} = True
+isSuspended _ = False
+
+runGuestStep :: Guest -> ByteString -> IO GuestStep
+runGuestStep guest@(Guest handle _ _) input
+  | BS.length input > 16 * 1024 * 1024 = pure (GuestTrap (WasmTrapped "resume exceeds 16 MiB"))
+  | otherwise = do
+      result <- timed guest $ BS.useAsCStringLen input $ \(bytes, size) ->
+        allocaBytes 4096 $ \message -> alloca $ \outputPtr -> alloca $ \outputSize -> do
+          code <- wasmStep handle (castPtr bytes) (fromIntegral size) outputPtr outputSize message 4096
           buffer <- peek outputPtr
           output <-
             if buffer == nullPtr
@@ -129,42 +132,44 @@ runWasmWithInput limits binary input dispatch
               else do
                 len <- peek outputSize
                 Just <$> (BS.packCStringLen (castPtr buffer, fromIntegral len) `Exception.finally` wasmFree buffer)
-          exit <- if code == 0 then pure WasmCompleted else WasmTrapped <$> readDiagnostic message
-          pure (exit, output)
-    withInput action = case input of
-      Nothing -> action nullPtr 0
-      Just value -> BS.useAsCStringLen value $ \(bytes, size) -> action (castPtr bytes) (fromIntegral size)
-    drive count running = do
-      next <-
-        liftIO . atomically $
-          (Left <$> Async.waitCatchSTM running.rwWorker) `orElse` (Right <$> readTQueue running.rwQueue)
-      case next of
-        Left result -> either throwIO pure result
-        Right (Pending request response)
-          | count >= limits.wlHostCalls -> invalid "host call limit exceeded"
-          | otherwise -> do
-              value <- dispatch request
-              liftIO . atomically $ putTMVar response value
-              drive (count + 1) running
+          if code /= 0
+            then case fmap decodeStep output of
+              Just trapped@(GuestTrap _) -> pure trapped
+              _ -> GuestTrap . WasmTrapped <$> readDiagnostic message
+            else pure $ maybe (GuestTrap (WasmTrapped "guest step did not write output")) decodeStep output
+      pure (maybe (GuestTrap WasmTimedOut) id result)
 
--- Static foreign export avoids allocating executable libffi trampolines.
--- Its only dynamic state is a scoped StablePtr to the mailbox, freed after join.
-dispatchCallback :: ToolCallback
-dispatchCallback stable bytes size output capacity =
-  Exception.handle (\(_ :: Exception.SomeException) -> pure (-1)) $ do
-    Mailbox queue stopped <- deRefStablePtr stable
-    request <- BS.packCStringLen (castPtr bytes, fromIntegral size)
-    reply <- newEmptyTMVarIO
-    atomically (writeTQueue queue (Pending request reply))
-    response <-
-      atomically $
-        (readTVar stopped >>= check >> pure Nothing) `orElse` takeTMVar reply
-    case response of
-      Just value | BS.length value <= fromIntegral capacity && BS.length value <= 65536 ->
-        BS.useAsCStringLen value $ \(payload, len) -> do
-          copyBytes output (castPtr payload) len
-          pure (fromIntegral len)
-      _ -> pure (-1)
+timed :: Guest -> IO a -> IO (Maybe a)
+timed (Guest handle limits _) action = Exception.mask $ \restore -> do
+  worker <- Async.async (restore action)
+  let stop = Exception.uninterruptibleMask_ $ wasmInterrupt handle >> void (Async.waitCatch worker)
+  result <- restore (timeout limits.wlTimeoutMicros (Async.wait worker)) `Exception.onException` stop
+  case result of Nothing -> stop; Just _ -> pure ()
+  pure result
+
+decodeStep :: ByteString -> GuestStep
+decodeStep bytes = either (GuestTrap . WasmTrapped . T.pack) id $ do
+  value <- eitherDecodeStrict' bytes
+  parseEither
+    ( withObject "guest step" $ \o -> do
+        let done = KeyMap.lookup "done" o
+        err <- o .:? "error"
+        case (done, err) of
+          (Just result, _) -> pure (GuestDone result)
+          (_, Just message) -> pure (GuestTrap (WasmTrapped message))
+          _ ->
+            GuestCalls
+              <$> ( o .: "calls"
+                      >>= traverse
+                        ( withObject "guest call" $ \c -> do
+                            unless (KeyMap.size c == 3) (fail "unexpected guest call fields")
+                            GuestCall <$> c .: "id" <*> c .: "tool" <*> c .: "args"
+                        )
+                  )
+              <*> (o .:? "cancel" .!= [])
+              <*> o .: "waiting"
+    )
+    value
 
 -- | Compile bounded host-authored WAT fixtures with the same pinned library.
 watToWasm :: ByteString -> IO (Either Text ByteString)

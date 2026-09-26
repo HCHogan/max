@@ -20,7 +20,6 @@ import Max.Effects.ToolOutput (ToolOutput)
 import Max.Effects.Tools (ToolCatalogError, ToolRegistry)
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Jobs qualified as Jobs
-import Max.Task.WorkflowRuntime (taskWorkflowHost)
 import Max.ToolContext (ToolContext)
 import Max.Turn.Types (AgentTurnRef (..))
 import Max.Util (catchSync)
@@ -38,7 +37,7 @@ runAgentRuntime jobs conversations =
     (executionAdmission jobs)
     executionJournal
     (ExecutionInbox (\turn -> (<>) <$> jobInbox turn.atrTurnId <*> liftIO (Conversation.readFeedback conversations turn.atrTurnId)))
-    (Just (taskWorkflowHost jobs))
+    (Just (liftIO . Jobs.acquireGuestSlot jobs . (.atrTurnId)))
   where
     jobInbox turn = do
       notes <- liftIO (Jobs.readJobInbox jobs turn)

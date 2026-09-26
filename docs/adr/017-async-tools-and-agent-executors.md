@@ -1,6 +1,8 @@
 # ADR-017: Async tools, agent executors and projected context
 
-Status: proposed 2026-09-26; not implemented. Would amend
+Status: in progress 2026-09-26. Delivery step 1 is implemented; the per-call
+launch/gate foundation of step 2 is implemented. Interruption, projection and
+node scheduling (steps 2–4) remain in progress. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)
 and the Wasm host ABI of [ADR-012](012-wasm-tool-execution.md). Work stays
 process-local; restart persistence is out of scope (§9).
@@ -187,7 +189,7 @@ The store lives on between steps:
 - Interruption works as it does today.
 
 This removes `dispatchCallback`, the mailbox, the callback `StablePtr`, the
-64 KiB reply buffer and `result_ref` paging. One resume carries at most 4 MiB of
+64 KiB reply buffer and `result_ref` paging. One resume carries at most 16 MiB of
 outcomes; anything beyond that waits for the next resume.
 
 **Driver.** `Max.CodeMode.Execution` loops over three steps: launch each new call
@@ -541,7 +543,8 @@ introduces them.
 Each step ships on its own, with the test suites and `max-prompt-flow` passing.
 
 1. **Poll-driven guests and background codemode.**
-   - Scope: the new ABI, SDK and driver (§2) on today's batch executor.
+   - Scope: the new ABI, SDK and driver (§2), using the per-call launch/gate
+     foundation from step 2 so race and pipelines do not retain a batch barrier.
    - Removed: the mailbox, the callback and paging, and the leaf-worker rule.
    - Added: guest limits.
    - Tests:

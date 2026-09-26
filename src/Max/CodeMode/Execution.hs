@@ -9,18 +9,12 @@ module Max.CodeMode.Execution
   )
 where
 
-import Control.Applicative ((<|>))
-import Control.Concurrent.STM
-  ( atomically,
-    modifyTVar',
-    newTVarIO,
-    readTVarIO,
-    writeTVar,
-  )
+import Control.Concurrent.Async qualified as Async
+import Control.Concurrent.STM (atomically, modifyTVar', newTVarIO, readTVarIO, writeTVar)
+import Control.Monad (forM, forM_, void)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
   ( Value (..),
-    eitherDecodeStrict',
     encode,
     object,
     toJSON,
@@ -31,15 +25,16 @@ import Data.Aeson.Types (parseJSON, parseMaybe)
 import Data.ByteString (ByteString)
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
-import Data.Either (fromRight)
-import Data.Foldable (toList)
-import Data.Maybe (fromMaybe, isJust)
+import Data.Map.Strict qualified as Map
+import Data.Maybe (catMaybes, fromMaybe)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
-import Effectful.Concurrent (Concurrent)
-import Effectful.Exception (mask)
+import Effectful.Concurrent (Concurrent, threadDelay)
+import Effectful.Concurrent.Async (async, cancel)
+import Effectful.Exception (bracket, finally, mask, throwIO)
 import Max.CodeMode.Wasm
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools
@@ -87,104 +82,125 @@ runWasmTools session hooks catalog limits binary = runWasmProgram session hooks 
 -- | Orchestration enters outside the leaf gate. Registering this as a leaf Tool
 -- runner would recursively acquire that gate and deadlock.
 runWasmProgram :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> WasmLimits -> WasmProgram -> Eff es CodeModeResult
-runWasmProgram session hooks catalog limits program = do
+runWasmProgram session hooks catalog limits program = bracket hooks.ehAcquireGuest (mapM_ liftIO) $ \case
+  Nothing -> pure (CodeModeResult (WasmRejected "live guest limit exceeded; retry later or use native tools") [] ContinueLoop Nothing 0 False "" program.wpWorkflow)
+  Just _ -> runAdmittedProgram session hooks catalog limits program
+
+runAdmittedProgram :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> WasmLimits -> WasmProgram -> Eff es CodeModeResult
+runAdmittedProgram session hooks catalog limits program = do
   label <- freshExecutionLabel session "wasm"
   receipts <- liftIO (newTVarIO [])
   decisions <- liftIO (newTVarIO ContinueLoop)
   exhausted <- liftIO (newTVarIO False)
   submitted <- liftIO (newTVarIO 0)
-  -- One bounded reply buffer, scoped to this run, replaced by the next dispatch.
-  -- Paging this buffer never invokes a tool or reserves another leaf call.
-  replyBuffer <- liftIO (newTVarIO Nothing)
-  interrupted <- liftIO (newTVarIO Nothing)
+  workers <- liftIO (newTVarIO Map.empty)
+  seen <- liftIO (newTVarIO Set.empty)
+  buffered <- liftIO (newTVarIO [])
   let start =
         JournalStart
           label
-          "host:wasm/v1"
-          1
-          "max-wasm-abi-v1"
+          "host:wasm/v2"
+          2
+          "max-wasm-abi-v2"
           (object ["sha256" .= digest program.wpModule, "input_sha256" .= fmap digest program.wpInput, "program" .= program.wpEvidence, "fuel" .= limits.wlFuel, "memory_bytes" .= limits.wlMemoryBytes, "timeout_micros" .= limits.wlTimeoutMicros, "host_calls" .= limits.wlHostCalls])
           (toJSON ([] :: [Value]))
           "unsafe"
-      reply value = do
-        liftIO . atomically $ writeTVar replyBuffer Nothing
-        let bytes = LBS.take (4 * 1024 * 1024 + 1) (encode value)
-        if LBS.length bytes > 4 * 1024 * 1024
-          then pure . Just . wire $ object ["bridge_error" .= ("tool result exceeds 4 MiB; calls already ran, do not replay the program" :: Text)]
-          else
-            if LBS.length bytes <= 65536
-              then pure (Just (LBS.toStrict bytes))
-              else do
-                ref <- freshExecutionLabel session (label <> "/result")
-                let body = TE.decodeUtf8 (LBS.toStrict bytes)
-                liftIO . atomically $ writeTVar replyBuffer (Just (ref, body))
-                pure . Just . wire $ object ["result_ref" .= ref]
-      dispatch bytes = case parseRequest bytes of
-        Left detail -> pure . Just . wire $ outcomeEnvelope (ToolRejected (ToolFault "invalid_guest_request" detail RetrySafe))
-        Right (ReadResult ref offset) -> do
-          buffered <- liftIO (readTVarIO replyBuffer)
-          pure . Just . wire $ case buffered of
-            Just (current, body)
-              | current == ref && offset >= 0 && offset <= T.length body ->
-                  let chunk = T.take 8000 (T.drop offset body)
-                      next = offset + T.length chunk
-                   in object ["chunk" .= chunk, "next" .= next, "done" .= (next == T.length body)]
-            _ -> object ["bridge_error" .= ("result reference or offset is not valid in this run" :: Text)]
-        Right (Invoke many calls) -> mask $ \restore -> do
-          used <- liftIO (readTVarIO submitted)
-          let refuse = outcomeEnvelope (ToolRejected (ToolFault "guest_call_limit" "program leaf call limit exceeded" RetrySafe))
-          if used + length calls > limits.wlHostCalls
-            then reply (if many then toJSON (map (const refuse) calls) else refuse)
-            else invoke restore many calls
-      invoke restore many calls = do
-        requests <- traverse (\(name, args) -> (\call -> ToolRequest call name args) <$> freshExecutionLabel session (label <> "/call")) calls
-        liftIO . atomically $ modifyTVar' submitted (+ length requests)
-        batch <- restore (executeToolBatch session hooks catalog requests)
-        liftIO . atomically $ do
-          modifyTVar' receipts (reverse [CodeModeCall req.trCallId req.trName (outcomeName invocation.tiOutcome) | (req, invocation) <- zip requests batch.tbInvocations] <>)
-          modifyTVar' decisions (\previous -> mergeControls (previous : map (.tiControl) batch.tbInvocations))
-          modifyTVar' exhausted (|| batch.tbOverBudget)
-        -- A waiting agent call that returns because feedback arrived stops the
-        -- program here, so the job's next model round reads its inbox.
-        let boundary = any (\(request, invocation) -> request.trName == "agent" && feedbackPending invocation.tiOutcome) (zip requests batch.tbInvocations)
-        if boundary
-          then do
-            liftIO . atomically $ writeTVar interrupted (Just (toJSON (map (outcomeEnvelope . (.tiOutcome)) batch.tbInvocations)))
-            pure Nothing
-          else case (many, batch.tbInvocations) of
-            (False, [invocation]) -> reply (outcomeEnvelope invocation.tiOutcome)
-            (True, invocations) -> reply (toJSON (map (outcomeEnvelope . (.tiOutcome)) invocations))
-            _ -> error "executeToolBatch violated result cardinality"
+      record request invocation = liftIO . atomically $ do
+        modifyTVar' receipts (CodeModeCall request.trCallId request.trName (outcomeName invocation.tiOutcome) :)
+        modifyTVar' decisions (\previous -> mergeControls [previous, invocation.tiControl])
+        modifyTVar' exhausted (|| isBudget invocation.tiOutcome)
+      cancelled = ToolInvocation (ToolOutcomeUnknown (ToolFault "cancelled" "program cancelled an in-flight call; effects may have started" RetryUnsafe)) ContinueLoop
+      stop ident = do
+        pending <- Map.lookup ident <$> liftIO (readTVarIO workers)
+        forM pending $ \(request, worker) -> do
+          cancel worker
+          outcome <- liftIO (Async.waitCatch worker)
+          let stopped = if request.trName == "$sleep" then ToolInvocation (ToolRejected (ToolFault "cancelled" "sleep cancelled" RetrySafe)) ContinueLoop else cancelled
+              invocation = either (const stopped) id outcome
+          record request invocation
+          liftIO . atomically $ modifyTVar' workers (Map.delete ident)
+          pure (ident, boundedOutcome invocation.tiOutcome)
+      cleanup = liftIO (readTVarIO workers) >>= mapM_ (void . stop) . Map.keys
+      launch (GuestCall ident name args) = mask $ \_ -> do
+        request <- (\call -> ToolRequest call name args) <$> freshExecutionLabel session (label <> "/call")
+        used <- liftIO (readTVarIO submitted)
+        liftIO . atomically $ modifyTVar' submitted (+ 1)
+        worker <-
+          if used >= limits.wlHostCalls
+            then async (pure (ToolInvocation (ToolRejected (ToolFault "guest_call_limit" "program leaf call limit exceeded" RetrySafe)) ContinueLoop))
+            else do
+              if name == "$sleep"
+                then async $ case args of
+                  Object fields
+                    | Just ms <- KeyMap.lookup "ms" fields >>= parseMaybe (parseJSON @Int),
+                      ms >= 0,
+                      ms <= 21600000 ->
+                        threadDelay (ms * 1000) >> pure (ToolInvocation (ToolSucceeded Null) ContinueLoop)
+                  _ -> pure (ToolInvocation (ToolRejected (ToolFault "invalid_sleep" "invalid sleep duration" RetrySafe)) ContinueLoop)
+                else launchCall session hooks catalog request
+        liftIO . atomically $ modifyTVar' workers (Map.insert ident (request, worker))
+      drive guest = \case
+        GuestDone value -> pure (WasmCompleted, Just value)
+        GuestTrap exit -> pure (exit, case exit of WasmTrapped detail -> Just (object ["error" .= detail]); _ -> Nothing)
+        GuestCalls calls cancellations waiting -> do
+          known <- liftIO (readTVarIO seen)
+          active <- liftIO (readTVarIO workers)
+          let ids = map gcId calls
+              valid = all (> 0) ids && Set.size (Set.fromList ids) == length ids && all (`Set.notMember` known) ids && Map.size active + length calls <= 64 && waiting >= Map.size active + length calls && all (\call -> case call.gcArgs of Object _ -> True; _ -> False) calls
+          if not valid
+            then pure (WasmTrapped "invalid guest call set", Nothing)
+            else do
+              liftIO . atomically $ modifyTVar' seen (<> Set.fromList ids)
+              forM_ calls launch
+              -- Cancellation completes the promise too: a program may catch it.
+              cancelledResults <- catMaybes <$> traverse stop (Set.toList (Set.fromList cancellations))
+              pending <- liftIO (readTVarIO workers)
+              previous <- liftIO (readTVarIO buffered)
+              if Map.null pending && null cancelledResults && null previous
+                then pure (WasmTrapped "guest waiting without in-flight calls", Nothing)
+                else do
+                  ready <-
+                    if null cancelledResults && null previous
+                      then liftIO . atomically $ do
+                        _ <- Async.waitAnyCatchSTM (map (snd . snd) (Map.toList pending))
+                        forM (Map.toList pending) $ \(ident, (request, worker)) -> (ident,request,) <$> Async.pollSTM worker
+                      else pure []
+                  let completed = [(ident, request, outcome) | (ident, request, Just outcome) <- ready]
+                  outcomes <- forM completed $ \(ident, request, outcome) -> do
+                    invocation <- either throwIO pure outcome
+                    record request invocation
+                    liftIO . atomically $ modifyTVar' workers (Map.delete ident)
+                    pure (ident, boundedOutcome invocation.tiOutcome)
+                  -- Deliver every ready completion that fits; retain the rest
+                  -- until the next step without holding unrelated calls back.
+                  let (chunk, rest) = resumeChunk (previous <> cancelledResults <> outcomes)
+                  liftIO . atomically $ writeTVar buffered rest
+                  if any (feedbackPending . snd) outcomes
+                    then pure (WasmHostStopped, Just (toJSON (map snd outcomes)))
+                    else do
+                      step <- liftIO (resumeGuest guest chunk)
+                      drive guest step
 
   (result, _) <- withExecutionRecord hooks ExecutionCheckpoint start $ \row -> do
-    (exit, rawOutput) <- runWasmWithInput limits program.wpModule program.wpInput dispatch
+    (exit, output) <- withGuest limits program.wpModule (fromMaybe "" program.wpInput) (\guest initial -> drive guest initial `finally` cleanup)
     calls <- reverse <$> liftIO (readTVarIO receipts)
     control <- liftIO (readTVarIO decisions)
     overBudget <- liftIO (readTVarIO exhausted)
     submittedCalls <- liftIO (readTVarIO submitted)
-    boundary <- liftIO (readTVarIO interrupted)
-    let parsed = traverse (eitherDecodeStrict' @Value) rawOutput
-        finalExit
-          | isJust boundary = WasmHostStopped
-          | Left _ <- parsed = WasmTrapped "guest output is not JSON"
-          | exit == WasmCompleted,
-            Just contract <- program.wpOutputContract,
-            Left err <- validateValue contract (fromMaybe Null (fromRight Nothing parsed)) =
-              WasmTrapped ("workflow output contract: " <> err)
-          | otherwise = exit
-        result = CodeModeResult finalExit calls control (boundary <|> fromRight Nothing parsed) submittedCalls overBudget (maybe label (\entry -> resultHandleText entry.jeTurn.atrTurnOrdinal entry.jeExecutionOrdinal) row) program.wpWorkflow
+    let finalExit = case (exit, program.wpOutputContract) of
+          (WasmCompleted, Just contract) | Left err <- validateValue contract (fromMaybe Null output) -> WasmTrapped ("workflow output contract: " <> err)
+          _ -> exit
+        result = CodeModeResult finalExit calls control output submittedCalls overBudget (maybe label (\entry -> resultHandleText entry.jeTurn.atrTurnOrdinal entry.jeExecutionOrdinal) row) program.wpWorkflow
     pure (result, codeModeInvocation result)
   pure result
   where
     digest = TE.decodeUtf8 . Base16.encode . SHA256.hash
-
-feedbackPending :: ToolOutcome -> Bool
-feedbackPending = \case
-  ToolSucceeded (Object fields) -> pending fields
-  ToolCommitted (Object fields) -> pending fields
-  _ -> False
-  where
-    pending fields = KeyMap.lookup "feedback_pending" fields == Just (Bool True)
+    isBudget (ToolRejected fault) = fault.tfCode == "call_budget_exhausted"
+    isBudget _ = False
+    feedbackPending (Object fields) = case KeyMap.lookup "value" fields of
+      Just (Object value) -> KeyMap.lookup "feedback_pending" value == Just (Bool True)
+      _ -> False
+    feedbackPending _ = False
 
 codeModeInvocation :: CodeModeResult -> ToolInvocation
 codeModeInvocation result = ToolInvocation outcome result.cmControl
@@ -209,37 +225,27 @@ codeModeInvocation result = ToolInvocation outcome result.cmControl
     outcome = case result.cmExit of
       WasmCompleted -> ToolSucceeded summary
       WasmHostStopped -> ToolSucceeded summary
+      WasmRejected detail -> ToolRejected (ToolFault "guest_limit" detail RetrySafe)
       _ | beforeEffects -> ToolFailedBeforeEffect (ToolFault "wasm_failed_before_effect" (TE.decodeUtf8 (wire summary)) RetrySafe)
       _ -> ToolOutcomeUnknown (ToolFault "wasm_interrupted" (TE.decodeUtf8 (wire summary)) RetryUnsafe)
 
+boundedOutcome :: ToolOutcome -> Value
+boundedOutcome outcome =
+  let value = outcomeEnvelope outcome
+      limit = 4 * 1024 * 1024
+   in if LBS.length (LBS.take (limit + 1) (encode value)) <= limit
+        then value
+        else outcomeEnvelope (ToolOutcomeUnknown (ToolFault "result_too_large" "tool result exceeds 4 MiB; do not replay effects" RetryUnsafe))
+
+resumeChunk :: [(Int, Value)] -> ([(Int, Value)], [(Int, Value)])
+resumeChunk = go 2 []
+  where
+    go _ acc [] = (reverse acc, [])
+    go bytes acc remaining@(entry : rest)
+      | total > 16 * 1024 * 1024 = (reverse acc, remaining)
+      | otherwise = go total (entry : acc) rest
+      where
+        total = bytes + LBS.length (encode entry) + if null acc then 0 else 1
+
 wire :: Value -> ByteString
 wire = LBS.toStrict . encode
-
-data GuestRequest = Invoke !Bool ![(Text, Value)] | ReadResult !Text !Int
-
--- No task IDs, call IDs, schemas or controls can be supplied through the ABI.
-parseRequest :: ByteString -> Either Text GuestRequest
-parseRequest bytes = case eitherDecodeStrict' bytes of
-  Right value@(Object fields)
-    | Just single <- parseCall value -> Right (Invoke False [single])
-    | KeyMap.size fields == 1,
-      Just (Array calls) <- KeyMap.lookup "calls" fields,
-      not (null calls),
-      length calls <= 32,
-      Just parsed <- traverse parseCall (toList calls) ->
-        Right (Invoke True parsed)
-    | KeyMap.size fields == 2,
-      Just (String ref) <- KeyMap.lookup "result_ref" fields,
-      Just offset <- KeyMap.lookup "offset" fields >>= parseMaybe parseJSON ->
-        Right (ReadResult ref offset)
-  _ -> invalid
-  where
-    invalid = Left "expected {tool: string, args: object}, {calls: [1..32 requests]}, or {result_ref: string, offset: integer}"
-    parseCall (Object fields)
-      | KeyMap.size fields == 2,
-        Just (String name) <- KeyMap.lookup "tool" fields,
-        not (T.null name),
-        T.length name <= 256,
-        Just args@(Object _) <- KeyMap.lookup "args" fields =
-          Just (name, args)
-    parseCall _ = Nothing

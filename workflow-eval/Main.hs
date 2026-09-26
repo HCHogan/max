@@ -58,7 +58,6 @@ import Max.Task.Delegation (parseJobResult)
 import Max.Task.State qualified as State
 import Max.Task.ToolRuntime (taskTools)
 import Max.Task.Types
-import Max.Task.WorkflowRuntime (taskWorkflowHost)
 import Max.Tasks (TaskRegistry, TurnRuntime, beginTurnRuntime, finishTurnRuntime, newTaskRegistry)
 import Max.Tool.Catalog (catalogTools)
 import Max.ToolContext
@@ -127,7 +126,7 @@ newRoot pool opts group objective inputs structured = do
   identifier <- withDb pool allocateJobId
   now <- getCurrentTime
   let outputContract = if structured then Just (either (error . T.unpack) id (parseContract outputSchema)) else Nothing
-      spec = JobSpec (GroupId group) actor message objective Basic (taskGrants Basic evalGrants) inputs Nothing outputContract False False Nothing Nothing (addUTCTime (fromIntegral opts.seconds) now)
+      spec = JobSpec (GroupId group) actor message objective Basic (taskGrants Basic evalGrants) inputs Nothing outputContract False Nothing Nothing (addUTCTime (fromIntegral opts.seconds) now)
   Right _ <- Jobs.admitJob jobs Nothing identifier spec
   Jobs.LaunchJob root <- Jobs.takeJobWork jobs
   pure (tasks, jobs, root)
@@ -153,7 +152,7 @@ runCase cfg opts pool sources group parallel = do
   let context = mkToolContext (TurnIdentity root.spec.group root.spec.source (UserId 1) (UserId 3) root.spec.principal Nothing (Just output)) capabilities
       requests = [object ["objective" .= question, "profile" .= ("basic" :: Text), "inputs" .= object ["files" .= files], "output_contract" .= outputSchema] | (question, files) <- questions]
       script = "await max.phase('source audit'); const requests=" <> json requests <> "; " <> (if parallel then "return await Promise.all(requests.map(agent));" else "const reports = []; for (const request of requests) reports.push(await agent(request)); return reports;")
-      hooks = (executionHooks (executionAdmission jobs) (ExecutionJournal recordModelNote enrichSandboxJournalStart recordJournalExecution) root.spec.group parentRuntime) {ehWorkflow = Just (taskWorkflowHost jobs parent)}
+      hooks = (executionHooks (executionAdmission jobs) (ExecutionJournal recordModelNote enrichSandboxJournalStart recordJournalExecution) root.spec.group parentRuntime) {ehAcquireGuest = liftIO (Jobs.acquireGuestSlot jobs parent.atrTurnId)}
       registry = either (error . show) id (buildToolRegistry (filter ((/= ToolRef "web_search") . (.tdRef)) definitions) (filter (\tool -> tool.toolName `elem` ["agent", "agent_progress"]) (taskTools jobs context)))
   calls <- newIORef []
   workers <- newIORef []
@@ -267,9 +266,9 @@ outputSchema = object ["type" .= ("object" :: Text), "properties" .= object ["cl
 
 questions :: [(Text, [Text])]
 questions =
-  [ ("Audit whether agent() can widen its parent's authority. Identify the actual rejection and intersection points and any limits of the evidence.", ["src/Max/Task/WorkflowRuntime.hs", "src/Max/Task/Types.hs"]),
+  [ ("Audit whether agent() can widen its parent's authority. Identify the actual rejection and intersection points and any limits of the evidence.", ["src/Max/Effects/TaskControl.hs", "src/Max/Task/Types.hs"]),
     ("Audit whether two awaited siblings can overspend the shared call/round budget and whether waiting parents can deadlock task capacity. Cite actual STM transactions and counters.", ["src/Max/Jobs.hs", "src/Max/DB/Job.hs"]),
-    ("Audit steering and cancellation boundaries. Explain whether explicitly rerunning a script creates new work and identify provenance gaps.", ["src/Max/Task/WorkflowRuntime.hs", "src/Max/CodeMode/Execution.hs", "src/Max/Task/Delegation.hs"])
+    ("Audit steering and cancellation boundaries. Explain whether explicitly rerunning a script creates new work and identify provenance gaps.", ["src/Max/Effects/TaskControl.hs", "src/Max/CodeMode/Execution.hs", "src/Max/Task/Delegation.hs"])
   ]
 
 silentSink :: (Applicative m) => AgentEventSink m

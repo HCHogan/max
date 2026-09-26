@@ -121,7 +121,6 @@ data JobSpec = JobSpec
     inputs :: !Value,
     parent :: !(Maybe JobRun),
     contract :: !(Maybe Contract),
-    delegated :: !Bool,
     -- | The admitting call waits for the report (task_start with wait). A
     -- root's report then returns to that turn instead of a relay notice.
     awaited :: !Bool,

@@ -9,9 +9,12 @@
 - `await tools.<工具名>(args)`：调用本轮可见工具，成功得到返回值，失败抛出 ToolError。
   每个工具描述末尾的「返回：」就是这个值的类型，可以直接按字段取用，不必先返回原文看结构。
   也可写 `tools[工具名](args)`。参数省略时为 `{}`。
-- 并发就用原生写法：同时发起、一起 await 的调用会作为一批提交，宿主按工具元数据
-  并发执行，例如 `const [a, b] = await Promise.all([tools.x(p), tools.y(q)])`。
-  依次 `await` 的调用按顺序执行。一批最多 32 个调用，更多的会分批。
+- 并发就用原生写法：同时发起的调用按工具元数据并发执行，各自完成就各自恢复，例如 `const [a, b] = await Promise.all([tools.x(p), tools.y(q)])`。
+  依次 `await` 的调用按顺序执行。同一程序最多 64 个在途调用，更多的会在 outbox 等待。
+  `Promise.race` 在首个结果返回时恢复，其他调用继续运行，可稍后 await。
+- `await max.race(promises)`：首个结果返回后取消其余直接工具 Promise。
+  `max.cancel(promise)` 取消一个直接工具调用；派生 Promise 不支持这两种取消。
+- `await max.sleep(ms)`：等待毫秒数（最多六小时），可用于 race 超时，不提供时钟读数。
 - `await max.raw(name, args)`：返回完整 outcome，不抛出工具失败。
   成功是 `{outcome: "succeeded" | "committed", value}`；失败是
   `{outcome: "rejected" | "failed-before-effect" | "outcome-unknown",
@@ -24,8 +27,8 @@
   派一个子 agent 并等它的报告，得到已结束的 Agent：报告在 `result.text`，给了
   `output_contract` 时符合契约的 JSON 在 `result.payload`。参数与 agent 工具相同
   （objective、profile、context、resources、inputs、output_contract）。前台和后台
-  都能用：前台等到的报告只回到这次调用，不会再另行转述；程序被取消时子 agent 继续
-  运行，报告按普通方式转述。多个子 agent 并行：
+  都能用：前台等到的报告只回到这次调用，不会再另行转述；程序返回或被取消时，仍在等待的子 agent 及其后代会被取消。
+  要让子 agent 独立继续，使用 `await tools.agent({...args, wait:false})` 取得句柄。多个子 agent 并行：
   `await Promise.all(items.map(x => agent({objective: ..., profile: "basic"})))`。
   契约只验证形状，不证明内容正确。
 - `await max.phase("阶段说明")`：就是 `tools.agent_progress({summary})`，记录后台
@@ -45,12 +48,16 @@ JSON、Promise 和 async/await。没有 Node、浏览器 API、import/require、
 网络、文件系统、环境变量或宿主时间/随机源；需要这些能力时调用授权工具。
 
 每次程序是独立环境，不保存 JS 变量。单次源码和返回值各最多 64 KiB，Wasm
-内存 64 MiB，总时间最多六小时（含子 agent/工具等待，且不能越过 agent 截止时间）；单个工具
-仍有自己的 deadline。计算有 fuel 上限：用尽时整段程序终止、返回值丢失，只剩已完成调用
+内存 256 MiB（JS 堆 192 MiB），每个 guest 计算步骤最多 60 秒，等待仍受 agent
+截止时间和工具自身 deadline 约束。计算有 fuel 上限：用尽时整段程序终止、返回值丢失，只剩已完成调用
 的回执。在大文本上别用 `[^"]{0,60}关键词` 这类回溯很重的正则，先 indexOf 定位再切片。
-SDK 会自动分帧读取同一次调用的结果（最多 4 MiB），不会为了读取大结果重复执行工具。
-请在 JS 内筛选、聚合后返回必要信息。单次程序最多 4096 次桥接交互（含分帧读取），
-叶子调用还受共享额度约束。
+单个工具结果最多 4 MiB，每次恢复最多传入 16 MiB；超出部分留待后续恢复。
+请在 JS 内筛选、聚合后返回必要信息。单次程序最多 4096 次宿主调用，
+工具调用还受共享额度约束。全局最多 32、每棵 agent 树最多 16 个活跃程序；
+超限会在执行前拒绝，可稍后重试或改用原生工具。
+
+程序返回时会取消仍在途的调用；未提交的 outbox 调用直接丢弃。需要完成的工作必须 await。
+取消已开始的副作用可能留下部分效果，按 outcome-unknown 处理。
 
 ## 翻聊天上下文
 
@@ -93,8 +100,7 @@ outcome-unknown 时先查明现状，不能直接重跑整段程序。宿主返�
 二选一。保存流程只能调用其声明且当前仍获授权的工具；契约变化会在执行前拒绝。
 结果包含 run_ref 和工作流版本。输出契约错误也不会撤销已完成的工具效果。
 
-每次调用 agent 都派出新的子 agent，包括重跑同一段程序。wait 派出的子 agent 是叶子，
-不能再执行 run_code。子 agent 和等待只在当前进程内存在；重启不会续跑或重放。
+每次调用 agent 都派出新的子 agent，包括重跑同一段程序。等待中的子 agent 也能运行 run_code。子 agent 和等待只在当前进程内存在；重启不会续跑或重放。
 后台 agent 等待时收到 steering，agent 调用返回 `feedback_pending`，宿主在这里停止
 程序，由下一模型回合读取收件箱；已派出的子 agent 继续运行，可以通过
 agent_status/agent_wait 收集它们，避免重复派出。

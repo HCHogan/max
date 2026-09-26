@@ -112,7 +112,7 @@ spec = describe "saved skill workflows" $ do
     count <- newIORef (0 :: Int)
     let definition = echoDefinition {tdEffects = Set.singleton (EffectWrite "test"), tdRetryClass = RetryUnsafe, tdParallelism = SequentialOnly}
     registry <- checked [definition] [echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}]
-    loads <- pin (views registry) baseWorkflow {wfSource = "tools.echo(args); return 'invalid';"}
+    loads <- pin (views registry) baseWorkflow {wfSource = "await tools.echo(args); return 'invalid';"}
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
       executeModelBatch True loads session noJournal (views registry) [submission arguments]

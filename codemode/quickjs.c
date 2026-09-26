@@ -12,7 +12,6 @@
 IMPORT("input_size") extern int32_t input_size(void);
 IMPORT("input_read") extern int32_t input_read(uint32_t, uint32_t, uint32_t);
 IMPORT("output_write") extern void output_write(uint32_t, uint32_t);
-IMPORT("tool_call") extern int32_t tool_call(uint32_t, uint32_t, uint32_t, uint32_t);
 
 /* Libc is an allocator/string/math implementation, not an ambient capability.
    These internal stubs resolve its diagnostic/clock paths. The build checks
@@ -64,24 +63,6 @@ static _Noreturn void fail(JSContext *ctx, JSValue error) {
   __builtin_trap();
 }
 
-static JSValue host_call(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv) {
-  (void)self;
-  if (argc != 1) return JS_ThrowTypeError(ctx, "one JSON request required");
-  size_t size;
-  const char *request = JS_ToCStringLen(ctx, &size, argv[0]);
-  if (!request) return JS_EXCEPTION;
-  if (size > LIMIT) {
-    JS_FreeCString(ctx, request);
-    return JS_ThrowRangeError(ctx, "tool request exceeds 64 KiB");
-  }
-  char reply[LIMIT];
-  int32_t len = tool_call((uint32_t)(uintptr_t)request, (uint32_t)size,
-                          (uint32_t)(uintptr_t)reply, sizeof(reply));
-  JS_FreeCString(ctx, request);
-  if (len < 0 || len > LIMIT) return JS_ThrowInternalError(ctx, "invalid host reply");
-  return JS_NewStringLen(ctx, reply, len);
-}
-
 typedef struct rejection {
   JSValue promise, reason;
   struct rejection *next;
@@ -106,68 +87,98 @@ static void track_rejection(JSContext *ctx, JSValueConst promise, JSValueConst r
   }
 }
 
-void _start(void) {
-  int32_t size = input_size();
-  if (size <= 0 || size > 1024 * 1024) __builtin_trap();
-  char *source = malloc((size_t)size + 1);
-  if (!source) __builtin_trap();
-  if (input_read(0, (uint32_t)(uintptr_t)source, (uint32_t)size) != size) __builtin_trap();
-  source[size] = 0;
-  JSRuntime *runtime = JS_NewRuntime();
-  if (!runtime) __builtin_trap();
-  JS_SetMemoryLimit(runtime, 48 * 1024 * 1024);
-  JS_SetMaxStackSize(runtime, 256 * 1024);
-  JSContext *ctx = JS_NewContext(runtime);
-  if (!ctx) __builtin_trap();
-  rejection *unhandled = NULL;
-  JS_SetHostPromiseRejectionTracker(runtime, track_rejection, &unhandled);
-  JSValue global = JS_GetGlobalObject(ctx);
-  JS_SetPropertyStr(ctx, global, "__maxCall", JS_NewCFunction(ctx, host_call, "__maxCall", 1));
-  JSValue result = JS_Eval(ctx, source, (size_t)size, "<codemode>", JS_EVAL_TYPE_GLOBAL);
-  free(source);
-  if (JS_IsException(result)) fail(ctx, JS_GetException(ctx));
-  /* The SDK defines __maxFlush non-writable before the program runs. */
-  JSValue flush = JS_GetPropertyStr(ctx, global, "__maxFlush");
-  JS_FreeValue(ctx, global);
-  if (!JS_IsFunction(ctx, flush)) fail(ctx, JS_NewString(ctx, "SDK event loop missing"));
-  if (JS_IsPromise(result)) JS_PromiseMarkAsHandled(ctx, result);
-  /* The event loop. Tool calls only queue; once no job can run, the SDK
-     submits everything queued as one host batch and resolves it. There are
-     no timers or other events, so idle with nothing queued is final. Calls
-     queued but never awaited still run before the result is published. */
-  for (;;) {
-    JSContext *job_ctx;
-    int status;
-    while ((status = JS_ExecutePendingJob(runtime, &job_ctx)) > 0) {}
-    if (status < 0) fail(job_ctx, JS_GetException(job_ctx));
-    JSValue flushed = JS_Call(ctx, flush, JS_UNDEFINED, 0, NULL);
-    if (JS_IsException(flushed)) fail(ctx, JS_GetException(ctx));
-    int progressed = JS_ToBool(ctx, flushed);
-    JS_FreeValue(ctx, flushed);
-    if (!progressed) break;
-  }
-  JS_FreeValue(ctx, flush);
-  if (JS_IsPromise(result)) {
-    JSPromiseStateEnum state = JS_PromiseState(ctx, result);
-    if (state == JS_PROMISE_PENDING) fail(ctx, JS_NewString(ctx, "unresolved promise: nothing left to wait for"));
-    JSValue value = JS_PromiseResult(ctx, result);
-    JS_FreeValue(ctx, result);
-    result = value;
-    if (state == JS_PROMISE_REJECTED) fail(ctx, result);
-  }
-  if (unhandled) fail(ctx, unhandled->reason);
-  if (JS_IsUndefined(result)) result = JS_NULL;
-  JSValue json = JS_JSONStringify(ctx, result, JS_UNDEFINED, JS_UNDEFINED);
+static JSRuntime *runtime;
+static JSContext *ctx;
+static JSValue result, take, settle;
+static rejection *unhandled;
+static int suspended;
+
+static char *read_input(int32_t limit, int32_t *size) {
+  *size = input_size();
+  if (*size <= 0 || *size > limit) __builtin_trap();
+  char *bytes = malloc((size_t)*size + 1);
+  if (!bytes) __builtin_trap();
+  if (input_read(0, (uint32_t)(uintptr_t)bytes, (uint32_t)*size) != *size) __builtin_trap();
+  bytes[*size] = 0;
+  return bytes;
+}
+
+static void emit(JSValue value, size_t limit) {
+  JSValue json = JS_JSONStringify(ctx, value, JS_UNDEFINED, JS_UNDEFINED);
   if (JS_IsException(json)) fail(ctx, JS_GetException(ctx));
   if (JS_IsUndefined(json)) fail(ctx, JS_NewString(ctx, "return value must be JSON serializable"));
-  size_t output_size;
-  const char *output = JS_ToCStringLen(ctx, &output_size, json);
-  if (!output) fail(ctx, JS_GetException(ctx));
-  if (output_size > LIMIT) fail(ctx, JS_NewString(ctx, "return value exceeds 64 KiB; select or aggregate results"));
-  write_bytes(output, output_size);
-  JS_FreeCString(ctx, output);
+  size_t size;
+  const char *bytes = JS_ToCStringLen(ctx, &size, json);
+  if (!bytes) fail(ctx, JS_GetException(ctx));
+  if (size > limit) fail(ctx, JS_NewString(ctx, "return value exceeds 64 KiB; select or aggregate results"));
+  write_bytes(bytes, size);
+  JS_FreeCString(ctx, bytes);
   JS_FreeValue(ctx, json);
-  JS_FreeValue(ctx, result);
-  JS_FreeContext(ctx);
-  JS_FreeRuntime(runtime);
+  JS_FreeValue(ctx, value);
+}
+
+static void drain(void) {
+  JSContext *job_ctx;
+  int status;
+  while ((status = JS_ExecutePendingJob(runtime, &job_ctx)) > 0) {}
+  if (status < 0) fail(job_ctx, JS_GetException(job_ctx));
+  if (unhandled) fail(ctx, unhandled->reason);
+  JSPromiseStateEnum state = JS_IsPromise(result) ? JS_PromiseState(ctx, result) : JS_PROMISE_FULFILLED;
+  if (state != JS_PROMISE_PENDING) {
+    JSValue value = JS_IsPromise(result) ? JS_PromiseResult(ctx, result) : JS_DupValue(ctx, result);
+    if (state == JS_PROMISE_REJECTED) fail(ctx, value);
+    if (JS_IsUndefined(value)) value = JS_NULL;
+    JSValue report = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, report, "done", value);
+    emit(report, LIMIT + 9); /* {"done":...} framing is not the return value. */
+    return;
+  }
+  JSValue calls = JS_Call(ctx, take, JS_UNDEFINED, 0, NULL);
+  if (JS_IsException(calls)) fail(ctx, JS_GetException(ctx));
+  JSValue count = JS_GetPropertyStr(ctx, calls, "waiting");
+  int32_t waiting;
+  if (JS_ToInt32(ctx, &waiting, count) || waiting <= 0)
+    fail(ctx, JS_NewString(ctx, "unresolved promise: nothing left to wait for"));
+  JS_FreeValue(ctx, count);
+  suspended = 1;
+  emit(calls, 16 * 1024 * 1024);
+}
+
+void start(void) {
+  if (runtime) __builtin_trap();
+  int32_t size;
+  char *source = read_input(1024 * 1024, &size);
+  runtime = JS_NewRuntime();
+  if (!runtime) __builtin_trap();
+  JS_SetMemoryLimit(runtime, 192 * 1024 * 1024);
+  JS_SetMaxStackSize(runtime, 256 * 1024);
+  ctx = JS_NewContext(runtime);
+  if (!ctx) __builtin_trap();
+  JS_SetHostPromiseRejectionTracker(runtime, track_rejection, &unhandled);
+  result = JS_Eval(ctx, source, (size_t)size, "<codemode>", JS_EVAL_TYPE_GLOBAL);
+  free(source);
+  if (JS_IsException(result)) fail(ctx, JS_GetException(ctx));
+  JSValue global = JS_GetGlobalObject(ctx);
+  take = JS_GetPropertyStr(ctx, global, "__maxTake");
+  settle = JS_GetPropertyStr(ctx, global, "__maxSettle");
+  JS_FreeValue(ctx, global);
+  if (!JS_IsFunction(ctx, take) || !JS_IsFunction(ctx, settle))
+    fail(ctx, JS_NewString(ctx, "SDK event loop missing"));
+  if (JS_IsPromise(result)) JS_PromiseMarkAsHandled(ctx, result);
+  drain();
+}
+
+void resume(void) {
+  if (!suspended) __builtin_trap();
+  suspended = 0;
+  int32_t size;
+  char *bytes = read_input(16 * 1024 * 1024, &size);
+  JSValue outcomes = JS_ParseJSON(ctx, bytes, (size_t)size, "<outcomes>");
+  free(bytes);
+  if (JS_IsException(outcomes)) fail(ctx, JS_GetException(ctx));
+  JSValue settled = JS_Call(ctx, settle, JS_UNDEFINED, 1, &outcomes);
+  JS_FreeValue(ctx, outcomes);
+  if (JS_IsException(settled)) fail(ctx, JS_GetException(ctx));
+  JS_FreeValue(ctx, settled);
+  drain();
 }

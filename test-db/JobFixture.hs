@@ -41,7 +41,7 @@ runningJob pool profile grants = do
   jobs <- newJobs tasks
   now <- getCurrentTime
   identifier <- withDb pool allocateJobId
-  let spec = JobSpec {group = GroupId 900, principal = actor, source = message, objective = "bounded work", profile, grants, inputs = Null, parent = Nothing, contract = Nothing, delegated = False, awaited = False, monitor = Nothing, browserProfile = Nothing, deadline = addUTCTime 3600 now}
+  let spec = JobSpec {group = GroupId 900, principal = actor, source = message, objective = "bounded work", profile, grants, inputs = Null, parent = Nothing, contract = Nothing, awaited = False, monitor = Nothing, browserProfile = Nothing, deadline = addUTCTime 3600 now}
   Right _ <- admitJob jobs Nothing identifier spec
   launchNext pool tasks jobs
 

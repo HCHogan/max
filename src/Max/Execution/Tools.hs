@@ -11,12 +11,15 @@ module Max.Execution.Tools
     hoistExecutionHooks,
     freshExecutionLabel,
     executeToolBatch,
+    launchCall,
     withExecutionRecord,
     outcomeName,
     outcomeEnvelope,
   )
 where
 
+import Control.Concurrent.Async qualified as Async
+import Control.Exception (fromException)
 import Control.Monad (unless)
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -27,16 +30,11 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Effectful
-import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
-import Effectful.Concurrent.MVar
-  ( MVar,
-    newMVar,
-    putMVar,
-    takeMVar,
-  )
+import Effectful.Concurrent.Async (Async, Concurrent, async, cancel, wait)
 import Effectful.Concurrent.STM
   ( TVar,
     atomically,
+    check,
     modifyTVar',
     newTVarIO,
     readTVar,
@@ -50,13 +48,13 @@ import Effectful.Exception
     catch,
     finally,
     mask,
+    onException,
     throwIO,
     try,
   )
 import Max.Agent.Execution
 import Max.Effects.Tools (Tools, invokeToolWithControl)
 import Max.Execution.Types
-import Max.Execution.Workflow
 import Max.Tasks
   ( TaskCancelled (..),
     TurnRuntime,
@@ -83,7 +81,7 @@ data ExecutionHooks es = ExecutionHooks
   { ehCheck :: Eff es (),
     ehStart :: ExecutionStep -> JournalStart -> Eff es (Maybe JournalExecution),
     ehFinish :: JournalExecution -> JournalFinish -> Eff es (),
-    ehWorkflow :: Maybe (WorkflowHost es)
+    ehAcquireGuest :: Eff es (Maybe (IO ()))
   }
 
 executionHooks :: (IOE :> es) => ExecutionAdmission es -> ExecutionJournal es -> GroupId -> TurnRuntime -> ExecutionHooks es
@@ -104,7 +102,7 @@ executionHooks admission journal group turn =
         now <- liftIO getCurrentTime
         pure (Just (JournalExecution ref ordinal prepared now)),
       ehFinish = journal.ejFinish,
-      ehWorkflow = Nothing
+      ehAcquireGuest = pure (Just (pure ()))
     }
 
 hoistExecutionHooks :: (forall x. Eff es x -> Eff target x) -> ExecutionHooks es -> ExecutionHooks target
@@ -113,7 +111,7 @@ hoistExecutionHooks lower hooks =
     { ehCheck = lower hooks.ehCheck,
       ehStart = \step -> lower . hooks.ehStart step,
       ehFinish = \row -> lower . hooks.ehFinish row,
-      ehWorkflow = hoistWorkflowHost lower <$> hooks.ehWorkflow
+      ehAcquireGuest = lower hooks.ehAcquireGuest
     }
 
 -- | Admission refused a call because its agent tree's budget is spent. The
@@ -125,12 +123,12 @@ instance Exception CallBudgetExhausted
 data ExecutionSession = ExecutionSession
   { remaining :: !(TVar (Maybe Int)),
     sequenceNumber :: !(TVar Integer),
-    batchLock :: !(MVar ())
+    gate :: !(TVar ([(Integer, Bool)], Int, Bool))
   }
 
 newExecutionSession :: (Concurrent :> es) => Maybe Int -> Eff es ExecutionSession
 newExecutionSession limit =
-  ExecutionSession <$> newTVarIO (max 0 <$> limit) <*> newTVarIO 0 <*> newMVar ()
+  ExecutionSession <$> newTVarIO (max 0 <$> limit) <*> newTVarIO 0 <*> newTVarIO ([], 0, False)
 
 -- | Labels are local to this session; result ordinals belong to the turn.
 freshExecutionLabel :: (Concurrent :> es) => ExecutionSession -> Text -> Eff es Text
@@ -145,55 +143,87 @@ data ToolBatch = ToolBatch
   }
   deriving stock (Show)
 
--- | A batch owns the scheduling gate, including settlement. Its unused local
--- reservations are released even when admission or a sibling is interrupted.
+-- | Native rounds join all calls, but guest programs can wait for any one of
+-- the same futures. Admission and journal start precede worker creation.
 executeToolBatch :: (Tools :> es, Concurrent :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
-executeToolBatch session hooks catalog = executeBatch invoke session hooks catalog
+executeToolBatch session hooks catalog requests = mask $ \restore -> do
+  workers <- newTVarIO []
+  let cleanup = readTVarIO workers >>= mapM_ cancel
+  ( do
+      launched <-
+        traverse
+          ( \request -> do
+              worker <- launchCall session hooks catalog request
+              atomically $ modifyTVar' workers (worker :)
+              pure worker
+          )
+          requests
+      results <- restore (traverse wait launched)
+      pure (ToolBatch results (any spent results))
+    )
+    `finally` cleanup
   where
-    invoke request = invokeToolWithControl request.trName request.trArguments
+    spent invocation = case invocation.tiOutcome of
+      ToolRejected fault -> fault.tfCode == "call_budget_exhausted"
+      _ -> False
 
-executeBatch :: (Concurrent :> es) => (ToolRequest -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
-executeBatch invoke session hooks catalog requests =
-  bracket_ (takeMVar session.batchLock) (putMVar session.batchLock ()) $ mask $ \restoreBatch -> do
-    hooks.ehCheck
-    let view request = find ((== ToolRef request.trName) . (.ctDefinition.tdRef)) catalog
-        mode request = maybe WorkCall (.ctDefinition.tdCallMode) (view request)
-        cost request = if mode request == WorkCall then 1 else 0
-        total = sum [cost request | request <- requests]
-        canParallel request = maybe False ((`elem` [ParallelSafe, ParallelIndependent]) . (.ctDefinition.tdParallelism)) (view request)
-    reserved <- atomically $ do
-      budget <- readTVar session.remaining
-      case budget of
-        Just available | total > available -> pure False
-        _ -> writeTVar session.remaining (subtract total <$> budget) >> pure True
-    if not reserved
-      then pure (ToolBatch (map (const budgetSpent) requests) True)
-      else do
-        unused <- newTVarIO total
-        spent <- newTVarIO False
-        let release = atomically $ do
-              refund <- readTVar unused
-              modifyTVar' session.remaining (fmap (+ refund))
-            execute request = do
-              let start = maybe (unknownJournalStart request) (catalogJournalStart request) (view request)
-                  step = if cost request == 0 then ExecutionCheckpoint else ExecutionWork ReserveCall
-                  admitting =
-                    hooks
-                      { ehStart = \reservation entry -> do
-                          row <- hooks.ehStart reservation entry
-                          atomically $ modifyTVar' unused (subtract (cost request))
-                          pure row
-                      }
-              recorded <- try $ withExecutionRecord admitting step start $ \_ -> do
-                result <- case view request of
-                  Nothing -> pure (rejected "unknown_tool" ("tool is outside the execution catalog: " <> request.trName))
-                  Just _ -> invoke request
-                pure ((), result)
-              case recorded of
-                Right (_, invocation) -> pure invocation
-                Left CallBudgetExhausted -> atomically (writeTVar spent True) >> pure budgetSpent
-        invocations <- restoreBatch (if all canParallel requests then mapConcurrently execute requests else traverse execute requests) `finally` release
-        ToolBatch invocations <$> readTVarIO spent
+launchCall :: (Tools :> es, Concurrent :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es (Async ToolInvocation)
+launchCall session hooks catalog request = mask $ \restore -> do
+  hooks.ehCheck
+  let view = find ((== ToolRef request.trName) . (.ctDefinition.tdRef)) catalog
+      cost = if maybe WorkCall (.ctDefinition.tdCallMode) view == WorkCall then 1 else 0
+      shared = maybe False ((`elem` [ParallelSafe, ParallelIndependent]) . (.ctDefinition.tdParallelism)) view
+      start = maybe (unknownJournalStart request) (catalogJournalStart request) view
+      step = if cost == 0 then ExecutionCheckpoint else ExecutionWork ReserveCall
+  reserved <- atomically $ do
+    budget <- readTVar session.remaining
+    case budget of
+      Just available | cost > available -> pure False
+      _ -> writeTVar session.remaining (subtract cost <$> budget) >> pure True
+  if not reserved
+    then async (pure budgetSpent)
+    else do
+      let refund = atomically $ modifyTVar' session.remaining (fmap (+ cost))
+      admitted <- try (hooks.ehStart step start) `onException` refund
+      case admitted of
+        Left CallBudgetExhausted -> refund >> async (pure budgetSpent)
+        Right row -> do
+          started <- newTVarIO False
+          ticket <- atomically $ do
+            ticket <- readTVar session.sequenceNumber
+            writeTVar session.sequenceNumber (ticket + 1)
+            modifyTVar' session.gate (\(queue, readers, writer) -> (queue <> [(ticket, shared)], readers, writer))
+            pure ticket
+          let dequeue = atomically $ modifyTVar' session.gate (\(queue, readers, writer) -> (filter ((/= ticket) . fst) queue, readers, writer))
+              acquire = atomically $ do
+                (queue, readers, writer) <- readTVar session.gate
+                let before = takeWhile ((/= ticket) . fst) queue
+                check (not writer && (if shared then all snd before else null before && readers == 0))
+                writeTVar session.gate (filter ((/= ticket) . fst) queue, readers + if shared then 1 else 0, not shared)
+              release = atomically $ modifyTVar' session.gate (\(queue, readers, _) -> (queue, readers - if shared then 1 else 0, False))
+              interrupted (exception :: SomeException) = case fromException exception of
+                Just Async.AsyncCancelled -> do
+                  began <- readTVarIO started
+                  pure $
+                    if began
+                      then ToolInvocation (ToolOutcomeUnknown (ToolFault "cancelled" "call cancelled after it may have started effects" RetryUnsafe)) ContinueLoop
+                      else rejected "cancelled" "call cancelled before starting"
+                Nothing -> do
+                  for_ row $ \entry -> hooks.ehFinish entry (JournalOutcomeUnknown "interrupted" (T.pack (show exception)))
+                  throwIO exception
+              run = do
+                invocation <-
+                  restore
+                    ( bracket_ acquire release $ do
+                        atomically (writeTVar started True)
+                        case view of
+                          Nothing -> pure (rejected "unknown_tool" ("tool is outside the execution catalog: " <> request.trName))
+                          Just _ -> invokeToolWithControl request.trName request.trArguments
+                    )
+                    `catch` interrupted
+                for_ row $ \entry -> hooks.ehFinish entry (journalFinish (journalControl invocation))
+                pure invocation {tiOutcome = stripJournalMetadata invocation.tiOutcome}
+          async (run `finally` dequeue) `onException` dequeue
   where
     budgetSpent = rejected "call_budget_exhausted" "工具调用预算已经用完，不能再执行这个调用；直接根据已有信息给出最终回复"
 

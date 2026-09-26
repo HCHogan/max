@@ -20,7 +20,7 @@ pkgs.pkgsCross.wasi32.stdenv.mkDerivation {
     $CC -O2 -DNDEBUG -D_GNU_SOURCE -D_WASI_EMULATED_SIGNAL -I. -L. \
       -nostartfiles ${../codemode/quickjs.c} \
       quickjs.c dtoa.c libregexp.c libunicode.c \
-      -lm -Wl,--entry=_start -Wl,-z,stack-size=2097152 \
+      -lm -Wl,--no-entry -Wl,--export=start -Wl,--export=resume -Wl,-z,stack-size=2097152 \
       -o quickjs.wasm
     python3 ${../scripts/check-codemode-imports.py} quickjs.wasm
     runHook postBuild

@@ -3,7 +3,7 @@ module Max.ExecutionSpec (Max.ExecutionSpec.spec, withHost, hooks) where
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async
 import Control.Exception (bracket_)
-import Control.Monad (replicateM_, void)
+import Control.Monad (replicateM_, void, when)
 import Data.Aeson (Value, object, toJSON, (.=))
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List (sort)
@@ -75,7 +75,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
       session <- newExecutionSession Nothing
       runJavaScript session (hostHooks jobs runtime) (views registry) "return ("
     outcomeName (codeModeInvocation result).tiOutcome `shouldBe` "failed-before-effect"
-    states turn `shouldReturn` [("host:wasm/v1", "failed")]
+    states turn `shouldReturn` [("host:wasm/v2", "failed")]
     callCount jobs turn `shouldReturn` 0
 
   it "journals real JavaScript batches and source evidence without charging the container" $ do
@@ -86,9 +86,9 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
       session <- newExecutionSession (Just 2)
       runJavaScript session (hostHooks jobs runtime) (views registry) source
     result.cmExit `shouldBe` WasmCompleted
-    states turn `shouldReturn` [("host:wasm/v1", "succeeded"), ("echo", "succeeded"), ("echo", "succeeded")]
+    states turn `shouldReturn` [("host:wasm/v2", "succeeded"), ("echo", "succeeded"), ("echo", "succeeded")]
     callCount jobs turn `shouldReturn` 2
-    sourceRows <- withDb pool $ query "SELECT normalized_input->'program'->>'source' FROM execution_journal WHERE turn_id=? AND tool_ref='host:wasm/v1'" (Only turn.atrTurnId)
+    sourceRows <- withDb pool $ query "SELECT normalized_input->'program'->>'source' FROM execution_journal WHERE turn_id=? AND tool_ref='host:wasm/v2'" (Only turn.atrTurnId)
     sourceRows `shouldBe` [Only source]
 
   it "retains committed JavaScript leaves and partial failure evidence without replay" $ do
@@ -99,10 +99,10 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
     result <- withHost pool . runTools registry $ do
       session <- newExecutionSession Nothing
-      runJavaScript session (hostHooks jobs runtime) (views registry) "tools.echo({value:1}); throw new Error('after commit');"
+      runJavaScript session (hostHooks jobs runtime) (views registry) "await tools.echo({value:1}); throw new Error('after commit');"
     result.cmExit `shouldSatisfy` (\case WasmTrapped _ -> True; _ -> False)
     map (.ccOutcome) result.cmCalls `shouldBe` ["committed"]
-    states turn `shouldReturn` [("host:wasm/v1", "outcome-unknown"), ("echo", "committed")]
+    states turn `shouldReturn` [("host:wasm/v2", "outcome-unknown"), ("echo", "committed")]
     callCount jobs turn `shouldReturn` 1
     readIORef count `shouldReturn` 1
 
@@ -115,11 +115,11 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
     worker <- Async.async . withHost pool . runTools registry $ do
       session <- newExecutionSession Nothing
-      runJavaScript session (hostHooks jobs runtime) (views registry) "tools.echo({value:1}); tools.echo({value:2});"
+      runJavaScript session (hostHooks jobs runtime) (views registry) "await tools.echo({value:1}); await tools.echo({value:2});"
     reached <- timeout 30000000 (takeMVar entered)
     reached `shouldBe` Just ()
     timeout 3000000 (Async.cancel worker) `shouldReturn` Just ()
-    states turn `shouldReturn` [("host:wasm/v1", "outcome-unknown"), ("echo", "outcome-unknown")]
+    states turn `shouldReturn` [("host:wasm/v2", "outcome-unknown"), ("echo", "outcome-unknown")]
     callCount jobs turn `shouldReturn` 1
 
   it "records identical leaf outcomes, schemas, input and results through both adapters" $ do
@@ -136,7 +136,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
       session <- newExecutionSession Nothing
       _ <- executeToolBatch session (hostHooks jobs runtime) (views registry) [ToolRequest ("native:" <> name) name value | (name, value) <- calls]
       runWasmTools session (hostHooks jobs runtime) (views registry) defaultWasmLimits binary
-    rows <- withDb pool $ query "SELECT state,tool_ref,schema_hash,normalized_input,result_inline,failure_code FROM execution_journal WHERE turn_id=? AND tool_ref<>'host:wasm/v1' ORDER BY execution_ordinal" (Only turn.atrTurnId)
+    rows <- withDb pool $ query "SELECT state,tool_ref,schema_hash,normalized_input,result_inline,failure_code FROM execution_journal WHERE turn_id=? AND tool_ref<>'host:wasm/v2' ORDER BY execution_ordinal" (Only turn.atrTurnId)
     let facts = rows :: [(Text, Text, Text, Value, Maybe Value, Maybe Text)]
     take 6 facts `shouldBe` drop 6 facts
     map (\(state, _, _, _, _, _) -> state) (take 6 facts) `shouldBe` ["succeeded", "rejected", "rejected", "failed", "committed", "outcome-unknown"]
@@ -162,7 +162,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
   it "uses an exact loaded workflow and journals its version and output contract failure" $ do
     (jobs, turn, runtime) <- fixture
     let contract = checkedContract $ object ["type" .= ("object" :: Text), "additionalProperties" .= True]
-        workflow = Workflow "saved" "tools.echo(args); return 'wrong shape';" contract contract ["echo"]
+        workflow = Workflow "saved" "await tools.echo(args); return 'wrong shape';" contract contract ["echo"]
         package = SkillPackage [] (Map.singleton "run" workflow)
         raw = SkillLoad "saved" "" "saved instructions" Nothing (Just (PinnedPackage 1 package Map.empty Nothing TrustedSkill))
         writeDefinition = echoDefinition {tdEffects = Set.singleton (EffectWrite "test"), tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
@@ -186,8 +186,8 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
         (views effectRegistry)
         [ToolRequest "saved-code" "run_code" (object ["workflow" .= ("saved/run" :: Text), "args" .= args])]
     map (outcomeName . (.tiOutcome)) result.tbInvocations `shouldBe` ["outcome-unknown"]
-    states turn `shouldReturn` [("use_skill", "succeeded"), ("host:wasm/v1", "outcome-unknown"), ("echo", "committed")]
-    evidence <- withDb pool $ query "SELECT normalized_input->'program'->'workflow'->>'version', normalized_input->'program'->>'source' FROM execution_journal WHERE turn_id=? AND tool_ref='host:wasm/v1'" (Only turn.atrTurnId)
+    states turn `shouldReturn` [("use_skill", "succeeded"), ("host:wasm/v2", "outcome-unknown"), ("echo", "committed")]
+    evidence <- withDb pool $ query "SELECT normalized_input->'program'->'workflow'->>'version', normalized_input->'program'->>'source' FROM execution_journal WHERE turn_id=? AND tool_ref='host:wasm/v2'" (Only turn.atrTurnId)
     evidence `shouldBe` [(pinned.slVersion, workflow.wfSource)]
 
   it "refuses the loser before effect when sessions race for the last shared call" $ do
@@ -229,7 +229,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     map (outcomeName . (.tiOutcome)) native.tbInvocations `shouldBe` ["committed"]
     map (.ccOutcome) guest.cmCalls `shouldBe` ["committed"]
     readIORef count `shouldReturn` 2
-    states turn `shouldReturn` [("host:wasm/v1", "succeeded")]
+    states turn `shouldReturn` [("host:wasm/v2", "succeeded")]
     callCount jobs turn `shouldReturn` 2
 
   it "retains a committed leaf after a guest trap and never retries the container" $ do
@@ -244,7 +244,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
       runWasmTools session (hostHooks jobs runtime) (views registry) defaultWasmLimits binary
     result.cmExit `shouldSatisfy` (\case WasmTrapped _ -> True; _ -> False)
     rows <- states turn
-    rows `shouldBe` [("host:wasm/v1", "outcome-unknown"), ("echo", "committed")]
+    rows `shouldBe` [("host:wasm/v2", "outcome-unknown"), ("echo", "committed")]
     readIORef effects `shouldReturn` 1
     callCount jobs turn `shouldReturn` 1
     Just job <- Jobs.jobForTurn jobs turn.atrTurnId
@@ -260,22 +260,32 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
           truncateAll pool
           (jobs, turn, runtime) <- fixture
           entered <- newEmptyMVar
+          admitted <- newEmptyMVar
           blocked <- newEmptyMVar
           let runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (putMVar entered () >> takeMVar blocked) >> pure (Right value)}
               definition = echoDefinition {tdParallelism = SequentialOnly}
           registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
           binary <- guestCalls [request "echo" args, request "echo" args] ""
+          let base = hostHooks jobs runtime
+              bound =
+                base
+                  { ehStart = \step start -> do
+                      row <- base.ehStart step start
+                      when (start.jsCallId == "two") (liftIO (putMVar admitted ()))
+                      pure row
+                  }
           worker <- Async.async . withHost pool . runTools registry $ do
             session <- newExecutionSession Nothing
             if guest
               then void (runWasmTools session (hostHooks jobs runtime) (views registry) defaultWasmLimits binary)
-              else void (executeToolBatch session (hostHooks jobs runtime) (views registry) [ToolRequest "one" "echo" args, ToolRequest "two" "echo" args])
+              else void (executeToolBatch session bound (views registry) [ToolRequest "one" "echo" args, ToolRequest "two" "echo" args])
           takeMVar entered
+          when (not guest) (takeMVar admitted)
           withDb pool (query "SELECT count(*) FROM execution_journal WHERE turn_id=?" (Only turn.atrTurnId)) `shouldReturn` [Only (0 :: Int)]
           timeout 3000000 (Async.cancel worker) `shouldReturn` Just ()
           rows <- states turn
-          rows `shouldBe` ([("host:wasm/v1", "outcome-unknown") | guest] <> [("echo", "outcome-unknown")])
-          callCount jobs turn `shouldReturn` 1
+          rows `shouldBe` ([("host:wasm/v2", "outcome-unknown") | guest] <> [("echo", "outcome-unknown")] <> [("echo", "rejected") | not guest])
+          callCount jobs turn `shouldReturn` (if guest then 1 else 2)
       )
       [False, True]
 
@@ -296,7 +306,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     stale False `shouldThrow` (\TaskCancelled -> True)
     stale True `shouldThrow` (\TaskCancelled -> True)
     rows <- states old
-    rows `shouldBe` [("host:wasm/v1", "succeeded"), ("echo", "succeeded")]
+    rows `shouldBe` [("host:wasm/v2", "succeeded"), ("echo", "succeeded")]
     Just replaced <- Jobs.lookupJob jobs job.spec.group job.run.jobId
     replaced.calls `shouldBe` 1
     timeout 20000 (Jobs.takeJobWork jobs) `shouldReturn` Nothing

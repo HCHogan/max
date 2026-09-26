@@ -8,7 +8,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..))
-import Effectful (raise)
+import Effectful (liftIO, raise)
 import Effectful.PostgreSQL (query)
 import Helpers (truncateAll, withDb)
 import JobFixture
@@ -22,10 +22,9 @@ import Max.ExecutionSpec (hooks, withHost)
 import Max.Jobs qualified as Jobs
 import Max.Platform.Types (CanonicalMessageId, PrincipalId, noAdvertisedCaps)
 import Max.Task.Delegation (parseJobResult)
-import Max.Task.State (TaskStatus (Succeeded))
+import Max.Task.State (TaskStatus (Cancelled, Succeeded))
 import Max.Task.ToolRuntime (taskTools)
 import Max.Task.Types
-import Max.Task.WorkflowRuntime
 import Max.Tasks (TurnRuntime, beginTurnRuntime)
 import Max.Tool.Catalog (catalogTools)
 import Max.ToolContext
@@ -43,13 +42,27 @@ spec pool = before_ (truncateAll pool) $ describe "agent() through the agent too
     Async.withAsync (runScript pool running Nothing "return await agent({objective: 'answer', profile: 'basic', output_contract: {type: 'string'}});") $ \waiting -> do
       child <- awaitChild running.jobs
       child.spec.grants `shouldBe` workflowGrants
-      (child.spec.parent, child.spec.delegated, child.spec.awaited) `shouldBe` (Just running.job.run, True, True)
+      (child.spec.parent, child.spec.awaited) `shouldBe` (Just running.job.run, True)
       Right result <- pure (parseJobResult child.spec "\"answer\"")
       Jobs.completeJob running.jobs child.run Succeeded result
       returned <- Async.wait waiting
       returned.cmExit `shouldBe` WasmCompleted
       fmap (field "result") returned.cmOutput `shouldBe` Just (Just (object ["text" .= ("\"answer\"" :: Text), "payload" .= ("answer" :: Text)]))
     withDb pool (query "SELECT count(*) FROM workflow_agent_steps" ()) `shouldReturn` [Only (0 :: Int)]
+
+  it "cancels an awaited race loser and its descendants when the program returns" $ do
+    running <- runningJob pool Basic workflowGrants
+    Async.withAsync (runScript pool running Nothing "return await Promise.race(['one','two'].map(objective=>agent({objective,profile:'basic'})));") $ \worker -> do
+      first <- awaitChild running.jobs
+      second <- awaitChild running.jobs
+      Right descendant <- Jobs.admitJob running.jobs Nothing 999 (second.spec {parent = Just second.run, awaited = False})
+      Jobs.completeJob running.jobs first.run Succeeded (JobResult "winner" Nothing)
+      result <- timeout 3000000 (Async.wait worker)
+      fmap (.cmExit) result `shouldBe` Just WasmCompleted
+      Just loser <- Jobs.lookupJob running.jobs second.spec.group second.run.jobId
+      loser.status `shouldBe` Cancelled
+      Just cancelled <- Jobs.lookupJob running.jobs second.spec.group descendant.run.jobId
+      cancelled.status `shouldBe` Cancelled
 
   it "rejects wider profiles and changed tool contracts before starting children" $ do
     forM_ [(Browser, "browser"), (Sandbox, "sandbox_exec")] $ \(profile, tool) -> do
@@ -75,11 +88,25 @@ spec pool = before_ (truncateAll pool) $ describe "agent() through the agent too
     length [job | job <- jobs, job.spec.parent == Just running.job.run] `shouldBe` 4
     withDb pool (query "SELECT count(*) FROM workflow_agent_waits" ()) `shouldReturn` [Only (0 :: Int)]
 
-  it "rejects an over-budget batch before child admission" $ do
+  it "reserves each call's budget before child admission" $ do
     running <- runningJob pool Basic workflowGrants
-    result <- runScript pool running (Just 1) "return await Promise.all(['one', 'two'].map(objective => max.raw('agent', {objective, profile: 'basic', wait: true})));"
-    result.cmOverBudget `shouldBe` True
-    Jobs.allJobs running.jobs >>= (\jobs -> length jobs `shouldBe` 1)
+    Async.withAsync (runScript pool running (Just 1) "return await Promise.all(['one', 'two'].map(objective => max.raw('agent', {objective, profile: 'basic', wait: true})));") $ \worker -> do
+      child <- awaitChild running.jobs
+      Jobs.completeJob running.jobs child.run Succeeded (JobResult "done" Nothing)
+      result <- Async.wait worker
+      result.cmOverBudget `shouldBe` True
+      Jobs.allJobs running.jobs >>= (\jobs -> length jobs `shouldBe` 2)
+
+  it "lets an awaited background child run code without a leaf restriction" $ do
+    running <- runningJob pool Basic workflowGrants
+    Async.withAsync (runScript pool running Nothing "return await agent({objective:'code child',profile:'basic'});") $ \parent -> do
+      child <- launchNext pool running.tasks running.jobs
+      child.job.spec.awaited `shouldBe` True
+      output <- runScript pool child Nothing "return {calculated:6*7};"
+      output.cmOutput `shouldBe` Just (object ["calculated" .= (42 :: Int)])
+      Jobs.completeJob running.jobs child.job.run Succeeded (JobResult "42" Nothing)
+      result <- Async.wait parent
+      result.cmExit `shouldBe` WasmCompleted
 
   it "stops guest code on feedback, retains the child, and leaves feedback for the model" $ do
     running <- runningJob pool Basic workflowGrants
@@ -179,7 +206,7 @@ runForeground pool front source = do
 
 runProgram :: DbPool -> Jobs.Jobs -> TurnRuntime -> AgentTurnRef -> ToolContext -> Maybe Int -> Text -> IO CodeModeResult
 runProgram pool jobs runtime turn context budget source = do
-  let bound = (hooks jobs runtime) {ehWorkflow = Just (taskWorkflowHost jobs turn)}
+  let bound = (hooks jobs runtime) {ehAcquireGuest = liftIO (Jobs.acquireGuestSlot jobs turn.atrTurnId)}
       runners = [tool | tool <- taskTools jobs context, tool.toolName `elem` ["agent", "agent_progress"]]
       present = map (.toolName) runners
   registry <- either (fail . show) pure (buildToolRegistry [definition | definition <- agentDefinitions, definition.tdRef.unToolRef `elem` present] runners)

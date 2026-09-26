@@ -6,7 +6,7 @@ import Data.Aeson (Value (..), object, (.=))
 import Data.Either (isLeft, isRight)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isNothing)
+import Data.Maybe (catMaybes, isJust, isNothing)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
 import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation (..))
@@ -25,6 +25,35 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "process-owned Jobs" $ do
+  it "rejects guests immediately at the tree/global limits and releases slots once" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    _ <- launch tasks jobs 2 (request {parent = Just root.run})
+    tree <- replicateM 16 (acquireGuestSlot jobs (AgentTurnId 1))
+    all isJust tree `shouldBe` True
+    isNothing <$> acquireGuestSlot jobs (AgentTurnId 2) `shouldReturn` True
+    others <- traverse (acquireGuestSlot jobs . AgentTurnId) [100 .. 115]
+    all isJust others `shouldBe` True
+    isNothing <$> acquireGuestSlot jobs (AgentTurnId 200) `shouldReturn` True
+    first : _ <- pure (catMaybes tree)
+    first >> first
+    Just release <- acquireGuestSlot jobs (AgentTurnId 2)
+    isNothing <$> acquireGuestSlot jobs (AgentTurnId 2) `shouldReturn` True
+    release
+    sequence_ (catMaybes (tree <> others))
+    isJust <$> acquireGuestSlot jobs (AgentTurnId 2) `shouldReturn` True
+
+  it "counts a foreground guest and its awaited children against the same tree" $ do
+    (tasks, jobs, request) <- fixture
+    _ <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
+    Right child <- admitJob jobs (Just (AgentTurnId 99)) 1 (request {awaited = True})
+    _ <- takeJobWork jobs
+    _ <- beginTurnRuntime tasks (reference 1) request.group (UserId 7) Nothing
+    attachJobTurn jobs child.run (reference 1) `shouldReturn` True
+    slots <- replicateM 16 (acquireGuestSlot jobs (AgentTurnId 99))
+    isNothing <$> acquireGuestSlot jobs (AgentTurnId 1) `shouldReturn` True
+    sequence_ (catMaybes slots)
+
   it "fences new work and returns one shutdown notice per interrupted root" $ do
     (tasks, jobs, request) <- fixture
     (root, _) <- launch tasks jobs 1 request
@@ -147,11 +176,10 @@ spec = describe "process-owned Jobs" $ do
       cancelAgentTurnTask tasks (AgentTurnId 1) `shouldReturn` True
       wait joining `shouldThrow` (\TaskCancelled -> True)
 
-  it "delivers child cancellation and inherits delegation restrictions" $ do
+  it "delivers child cancellation" $ do
     (tasks, jobs, request) <- fixture
-    (root, _) <- launch tasks jobs 1 (request {delegated = True})
-    Right child <- admitJob jobs Nothing 2 (request {parent = Just root.run})
-    child.spec.delegated `shouldBe` True
+    (root, _) <- launch tasks jobs 1 request
+    Right _ <- admitJob jobs Nothing 2 (request {parent = Just root.run})
     cancelJob jobs request.group request.principal False 2 "cancel child" `shouldReturn` Right ()
     Right (ChildrenFinished [cancelled]) <- waitForChildren jobs (AgentTurnId 1) []
     cancelled.status `shouldBe` Cancelled
@@ -161,7 +189,7 @@ spec = describe "process-owned Jobs" $ do
   it "returns an awaited root's report to the waiting turn instead of a relay notice" $ do
     (tasks, jobs, request) <- fixture
     caller <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
-    Right admitted <- admitJob jobs (Just (AgentTurnId 99)) 1 (request {awaited = True, delegated = True})
+    Right admitted <- admitJob jobs (Just (AgentTurnId 99)) 1 (request {awaited = True})
     LaunchJob job <- takeJobWork jobs
     withAsync (awaitJob jobs (AgentTurnId 99) admitted.run) $ \waiting -> do
       completeJob jobs job.run Succeeded (JobResult "report" Nothing)
@@ -342,7 +370,6 @@ fixture = do
           inputs = Null,
           parent = Nothing,
           contract = Nothing,
-          delegated = False,
           awaited = False,
           monitor = Nothing,
           browserProfile = Nothing,

@@ -60,7 +60,6 @@ import Max.Effects.Tools
   )
 import Max.Execution.Tools
 import Max.Execution.Types (Admission (..))
-import Max.Execution.Workflow (WorkflowHost)
 import Max.LLM.Failure (renderLLMFailure)
 import Max.Media.Vision (evictMedia, fitVisionBudget)
 import Max.ModelCatalog (ContextLimits (..))
@@ -175,12 +174,12 @@ runAgentWith ::
   ExecutionAdmission es ->
   ExecutionJournal es ->
   ExecutionInbox es ->
-  Maybe (AgentTurnRef -> WorkflowHost es) ->
+  Maybe (AgentTurnRef -> Eff es (Maybe (IO ()))) ->
   AgentLimits ->
   (ToolContext -> Either ToolCatalogError (ToolRegistry (ToolOutput : ToolControl : es))) ->
   Eff (Agent : es) a ->
   Eff es a
-runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $ \localEnv -> \case
+runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret $ \localEnv -> \case
   AgentTurn turn context profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
     selfTid <- liftIO myThreadId
     workingRef <- liftIO (newTVarIO (Nothing, ""))
@@ -311,7 +310,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
                   -- independent calls execute concurrently.
                   registered <- listCatalogTools
                   let baseHooks = executionHooks admission journal (toolGroupId ctx.acTools) h
-                      hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehWorkflow = (\build -> build (turnRuntimeAgentTurn h)) <$> workflowHost}
+                      hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehAcquireGuest = maybe (pure (Just (pure ()))) (\acquire -> acquire (turnRuntimeAgentTurn h)) guestAdmission}
                       requests = [ToolRequest tc.callId tc.callName tc.callArguments | tc <- tcs]
                   for_ tcs $ \tc ->
                     logInfo "agent: tool call" $ object ["id" .= tc.callId, "name" .= tc.callName, "args" .= previewJson 200 tc.callArguments]

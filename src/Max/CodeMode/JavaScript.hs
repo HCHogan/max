@@ -28,7 +28,6 @@ import Max.Effects.Tools (Tools)
 import Max.Execution.Tools (ExecutionHooks, ExecutionSession)
 import Max.Skill.Contract (Contract)
 import Max.Skill.Package (Workflow (..))
-import Max.Task.Policy (taskDeadlineSeconds)
 import Max.Tool.Types
 import System.Environment (lookupEnv)
 
@@ -54,7 +53,8 @@ javaScriptLimits :: WasmLimits
 javaScriptLimits =
   defaultWasmLimits
     { wlFuel = 10000000000,
-      wlTimeoutMicros = taskDeadlineSeconds * 1000000,
+      wlTimeoutMicros = 60 * 1000000,
+      wlMemoryBytes = 256 * 1024 * 1024,
       wlModuleBytes = 4 * 1024 * 1024,
       wlHostCalls = 4096
     }
@@ -91,7 +91,7 @@ programWithInput catalog source args contract workflow =
     argument = maybe "" (LBS.toStrict . encode . TE.decodeUtf8 . LBS.toStrict . encode) args
     suffix = maybe "()" (const ("(JSON.parse(" <> argument <> "))")) args
     parameter = maybe "" (const "args") args
-    input = javaScriptSdk <> "(__maxCall," <> LBS.toStrict (encode names) <> ");\n(async (" <> parameter <> ") => {\n\"use strict\";\n" <> TE.encodeUtf8 source <> "\n})" <> suffix
+    input = javaScriptSdk <> "(" <> LBS.toStrict (encode names) <> ");\n(async (" <> parameter <> ") => {\n\"use strict\";\n" <> TE.encodeUtf8 source <> "\n})" <> suffix
 
 runJavaScript :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> Text -> Eff es CodeModeResult
 runJavaScript session hooks catalog source = runWasmProgram session hooks catalog javaScriptLimits (javaScriptProgram catalog source)

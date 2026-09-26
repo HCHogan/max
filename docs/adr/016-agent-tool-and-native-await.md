@@ -2,8 +2,10 @@
 
 Status: implemented 2026-09-26. Amends [ADR-015](015-delegated-agents-in-workflows.md).
 
-> Proposed follow-up: [ADR-017](017-async-tools-and-agent-executors.md) would
-> remove the leaf-worker rule and stop waits from holding the conversation.
+> [ADR-017](017-async-tools-and-agent-executors.md) replaces the blocking guest
+> and batch barrier with poll-driven calls, removes the leaf-worker rule, and
+> cancels outstanding calls when a program returns. Its later executor steps
+> will release conversations during waits.
 
 ## Context
 

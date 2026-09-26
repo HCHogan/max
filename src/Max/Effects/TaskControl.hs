@@ -3,6 +3,7 @@
 -- | Mutations are bound to the authenticated turn; tools cannot choose an actor.
 module Max.Effects.TaskControl (TaskControl, TaskControlScope (..), TaskRequest (..), StartOutcome (..), startTask, controlTask, waitTasks, runTaskControl) where
 
+import Control.Monad (void)
 import Data.Aeson (Value)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
@@ -11,6 +12,7 @@ import Data.Text (Text)
 import Data.Time (addUTCTime, getCurrentTime)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
+import Effectful.Exception (mask, onException)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Authority (authorizeCallerWithin)
 import Max.DB.Job (admitFromTurn)
@@ -31,8 +33,8 @@ data TaskControlScope = TaskControlScope
     grants :: !(Map Text Text)
   }
 
--- | One task_start call. With @wait@, the call returns the finished job; the
--- child is then a leaf worker that cannot run code itself.
+-- | One agent call. With @wait@, it owns the child until its report is
+-- collected; cancelling the call cancels that child and its descendants.
 data TaskRequest = TaskRequest
   { objective :: !Text,
     profile :: !TaskProfile,
@@ -67,7 +69,7 @@ waitTasks = send . WaitTasks
 
 runTaskControl :: forall es a. (WithConnection :> es, IOE :> es) => Jobs.Jobs -> TaskControlScope -> Eff (TaskControl : es) a -> Eff es a
 runTaskControl jobs scope = interpret $ \_ -> \case
-  StartTask request -> withCaller $ \turn -> do
+  StartTask request -> mask $ \restore -> withCaller $ \turn -> do
     parent <- liftIO (Jobs.jobForTurn jobs turn.atrTurnId)
     -- A waiting job reads new feedback before it starts more work.
     pending <- if request.wait && isJust parent then liftIO (Jobs.jobHasFeedback jobs turn.atrTurnId) else pure False
@@ -75,18 +77,22 @@ runTaskControl jobs scope = interpret $ \_ -> \case
       then pure (Right (FeedbackFirst Nothing))
       else do
         now <- liftIO getCurrentTime
-        let spec = JobSpec scope.group scope.principal scope.source request.objective request.profile (taskGrants request.profile scope.grants) request.inputs ((.run) <$> parent) request.contract request.wait request.wait Nothing Nothing (addUTCTime 21600 now)
+        let spec = JobSpec scope.group scope.principal scope.source request.objective request.profile (taskGrants request.profile scope.grants) request.inputs ((.run) <$> parent) request.contract request.wait Nothing Nothing (addUTCTime 21600 now)
         admitFromTurn jobs turn spec >>= \case
           Left failure -> pure (Left failure)
-          Right started
-            | not request.wait -> pure (Right (StartedTask started))
-            | isJust parent ->
-                liftIO (Jobs.waitForChildren jobs turn.atrTurnId [started.run.jobId]) >>= \case
-                  Right (ChildrenFinished [finished]) -> pure (Right (FinishedTask finished))
-                  Right FeedbackPending -> Right . FeedbackFirst . Just . fromMaybe started <$> liftIO (Jobs.lookupJob jobs scope.group started.run.jobId)
-                  Right _ -> pure (Left "child result unavailable")
-                  Left failure -> pure (Left failure)
-            | otherwise -> fmap FinishedTask <$> liftIO (Jobs.awaitJob jobs turn.atrTurnId started.run)
+          Right started -> do
+            let cancelChild = liftIO . void $ Jobs.cancelJob jobs scope.group scope.principal False started.run.jobId "owning agent call cancelled"
+                awaitReport
+                  | isJust parent =
+                      liftIO (Jobs.waitForChildren jobs turn.atrTurnId [started.run.jobId]) >>= \case
+                        Right (ChildrenFinished [finished]) -> pure (Right (FinishedTask finished))
+                        Right FeedbackPending -> Right . FeedbackFirst . Just . fromMaybe started <$> liftIO (Jobs.lookupJob jobs scope.group started.run.jobId)
+                        Right _ -> pure (Left "child result unavailable")
+                        Left failure -> pure (Left failure)
+                  | otherwise = fmap FinishedTask <$> liftIO (Jobs.awaitJob jobs turn.atrTurnId started.run)
+            if not request.wait
+              then pure (Right (StartedTask started))
+              else restore awaitReport `onException` cancelChild
   ControlTask identifier command -> withCaller $ \turn -> do
     parent <- liftIO (Jobs.jobForTurn jobs turn.atrTurnId)
     target <- liftIO (Jobs.lookupJob jobs scope.group identifier)

@@ -43,6 +43,6 @@ def imports(data):
 if __name__ == "__main__":
     actual = imports(Path(sys.argv[1]).read_bytes())
     expected = {("max_v1", name) for name in
-                ("tool_call", "input_size", "input_read", "output_write")}
+                ("input_size", "input_read", "output_write")}
     assert len(actual) == len(expected) and set(actual) == expected, actual
     print("codemode guest imports: Max ABI only")

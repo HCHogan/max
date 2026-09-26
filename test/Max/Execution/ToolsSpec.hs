@@ -9,7 +9,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful (liftIO, runEff)
 import Effectful.Concurrent (runConcurrent)
-import Effectful.Concurrent.Async (concurrently)
+import Effectful.Concurrent.Async (cancel, concurrently, wait)
 import Effectful.Exception (SomeException, throwIO, try)
 import ExecutionFixture
 import Max.CodeMode.Execution
@@ -102,7 +102,8 @@ spec = describe "shared host tool execution" $ do
     guest <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
       runWasmTools session noJournal (views registry) defaultWasmLimits binary
-    length guest.cmCalls `shouldBe` 1
+    guest.cmCalls `shouldBe` []
+    guest.cmExit `shouldSatisfy` (\case WasmTrapped _ -> True; _ -> False)
     guest.cmControl `shouldBe` ContinueLoop
 
   it "refunds local reservations when admission denies a call" $ do
@@ -145,6 +146,49 @@ spec = describe "shared host tool execution" $ do
       remaining <- runToolOutputRead queue drainInlineMedia
       pure (first, drained, available, second, ordinary, remaining)
     result `shouldBe` (True, [media], False, False, True, [media])
+
+  it "admits in arrival order and keeps later readers behind an exclusive call" $ do
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    seen <- newIORef ([] :: [Text])
+    let runner name =
+          echoTool
+            { toolName = name,
+              toolRunner = LegacyRunner $ \value -> do
+                liftIO $ if name == "first" then putMVar entered () >> takeMVar release else pure ()
+                liftIO (modifyIORef' seen (<> [name]))
+                pure (Right value)
+            }
+        definitions = [echoDefinition {tdRef = ToolRef name, tdParallelism = if name == "exclusive" then SequentialOnly else ParallelSafe} | name <- ["first", "exclusive", "last"]]
+    registry <- either (fail . show) pure (buildToolRegistry definitions (map runner ["first", "exclusive", "last"]))
+    result <- timeout 3000000 . runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      first <- launchCall session noJournal (views registry) (ToolRequest "1" "first" args)
+      liftIO (takeMVar entered)
+      exclusive <- launchCall session noJournal (views registry) (ToolRequest "2" "exclusive" args)
+      lastCall <- launchCall session noJournal (views registry) (ToolRequest "3" "last" args)
+      liftIO (putMVar release ())
+      traverse wait [first, exclusive, lastCall]
+    fmap length result `shouldBe` Just 3
+    readIORef seen `shouldReturn` ["first", "exclusive", "last"]
+
+  it "records a queued cancellation as pre-effect and releases its gate ticket" $ do
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    let definition = echoDefinition {tdParallelism = SequentialOnly}
+        runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (putMVar entered () >> takeMVar release) >> pure (Right value)}
+    registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
+    result <- timeout 3000000 . runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      first <- launchCall session noJournal (views registry) (ToolRequest "1" "echo" args)
+      liftIO (takeMVar entered)
+      queued <- launchCall session noJournal (views registry) (ToolRequest "2" "echo" args)
+      cancel queued
+      cancelled <- wait queued
+      liftIO (putMVar release ())
+      _ <- wait first
+      pure (outcomeName cancelled.tiOutcome)
+    result `shouldBe` Just "rejected"
 
   it "does not run a sequential submission alongside a parallel batch" $ do
     started <- newEmptyMVar
