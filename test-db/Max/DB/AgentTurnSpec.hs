@@ -19,6 +19,7 @@ import Helpers (insertRawMessage, testTime, truncateAll, withDb)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn
 import Max.DB.Connection (DbPool, withConn)
+import Max.DB.History (isTurnTriggerInScope, publishedTurnInScope)
 import Max.DB.TurnContinuity
 import Max.Effects.Blob (Blob, runBlob)
 import Max.IR (Body (..), Node (NText))
@@ -62,6 +63,24 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
         "SELECT count(*), count(DISTINCT turn_ordinal) FROM agent_turns"
         ()
     (rows :: [(Int64, Int64)]) `shouldBe` [(12, 12)]
+
+  it "resolves only public outputs in the current conversation for live reply routing" $ do
+    fixture <- createFixture pool 42 1001
+    sent <- withDb pool (enqueueOutbound (outbound fixture (TurnOutputLink fixture.fxTurn.atrTurnId 0) "partial reply"))
+    let scope = conversationScopeFor fixture.fxGroup
+    withDb pool (publishedTurnInScope scope sent.canonicalMessageId.unCanonicalMessageId) `shouldReturn` Just fixture.fxTurn.atrTurnId
+    withDb pool (publishedTurnInScope (conversationScopeFor (GroupId 43)) sent.canonicalMessageId.unCanonicalMessageId) `shouldReturn` Nothing
+    withDb pool (publishedTurnInScope scope fixture.fxTrigger.unCanonicalMessageId) `shouldReturn` Nothing
+    withDb pool (isTurnTriggerInScope scope fixture.fxTrigger.unCanonicalMessageId) `shouldReturn` True
+    withDb pool (isTurnTriggerInScope (conversationScopeFor (GroupId 43)) fixture.fxTrigger.unCanonicalMessageId) `shouldReturn` False
+    withDb pool (isTurnTriggerInScope scope sent.canonicalMessageId.unCanonicalMessageId) `shouldReturn` False
+    hidden <- withDb pool (enqueueOutbound ((outbound fixture (TurnOutputLink fixture.fxTurn.atrTurnId 1) "private trace") {transcriptKind = "debug"}))
+    withDb pool (publishedTurnInScope scope hidden.canonicalMessageId.unCanonicalMessageId) `shouldReturn` Nothing
+    withDb pool (finishAgentTurn fixture.fxTurn TurnSucceeded 1 Nothing)
+    withDb pool (isTurnTriggerInScope scope fixture.fxTrigger.unCanonicalMessageId) `shouldReturn` True
+    -- Persistent provenance remains usable; the node registry decides whether
+    -- to steer a live task or admit a new request after it has closed.
+    withDb pool (publishedTurnInScope scope sent.canonicalMessageId.unCanonicalMessageId) `shouldReturn` Just fixture.fxTurn.atrTurnId
 
   it "orders journal facts, spills large results, and scopes result lookup to the conversation" $ do
     fixture <- createFixture pool 42 1001

@@ -37,8 +37,6 @@ module Max.Jobs
     detachJobNotice,
     releaseJobNotice,
     authorizeJobPublication,
-    recordJobPublication,
-    taskForReply,
     allJobs,
     closeJobs,
     setJobBrowserAccess,
@@ -101,14 +99,13 @@ data Entry = Entry
 data Jobs = Jobs
   { entries :: !(TVar (Map Int64 Entry)),
     notices :: !(TVar (Map AgentTurnId (JobRun, Int))),
-    publications :: !(TVar (Map CanonicalMessageId JobRun)),
     closed :: !(TVar Bool),
     guestSlots :: !(TVar (Map (Either AgentTurnId JobRun) Int)),
     tasks :: !TaskRegistry
   }
 
 newJobs :: TaskRegistry -> IO Jobs
-newJobs tasks = Jobs <$> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO False <*> newTVarIO Map.empty <*> pure tasks
+newJobs tasks = Jobs <$> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO False <*> newTVarIO Map.empty <*> pure tasks
 
 -- | Admission never waits: a paused ancestor must not occupy the slot a
 -- descendant is queued for. The release action is idempotent and survives job
@@ -619,24 +616,6 @@ authorizeJobPublication jobs turn = atomically $ do
       Just (run, version) -> case lookupRun entries run of
         Just entry -> entry.noticeVersion == version && entry.view.status /= Cancelled
         _ -> False
-
-recordJobPublication :: Jobs -> AgentTurnId -> CanonicalMessageId -> IO ()
-recordJobPublication jobs turn message = atomically $ do
-  notices <- readTVar jobs.notices
-  case Map.lookup turn notices of
-    Nothing -> pure ()
-    Just (run, _) -> modifyTVar' jobs.publications $ \published ->
-      let updated = Map.insert message run published
-       in if Map.size updated > 2048 then Map.deleteMin updated else updated
-
-taskForReply :: Jobs -> GroupId -> CanonicalMessageId -> IO (Maybe Int64)
-taskForReply jobs group message = atomically $ do
-  published <- readTVar jobs.publications
-  entries <- readTVar jobs.entries
-  pure $ do
-    run <- Map.lookup message published
-    entry <- Map.lookup run.jobId entries
-    if entry.view.spec.group == group then Just run.jobId else Nothing
 
 allJobs :: Jobs -> IO [JobView]
 allJobs jobs = map (.view) . Map.elems <$> readTVarIO jobs.entries

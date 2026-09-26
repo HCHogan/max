@@ -120,25 +120,14 @@ routeTaskInput message = do
       | command `elem` ["!feedback", "!fb"],
         Just identifier <- parseTaskHandle handle ->
           mutate identifier SteerJob (T.unwords note)
-    command : note
-      | command `elem` ["!feedback", "!fb"],
-        not (null note) -> do
-          env :: BotEnv <- ask
-          target <- liftIO $ maybe (pure Nothing) (Jobs.taskForReply env.beJobs message.groupId) message.replyTo
-          maybe (pure False) (\identifier -> mutate identifier SteerJob (T.unwords note)) target
-    -- Implicit steering: a message that starts with a live agent's handle, or
-    -- replies to its output. Anything else, including another bot's own
-    -- "task#N" progress lines and replies to finished agents, is ordinary chat.
+    -- A literal live agent handle remains explicit steering. Quoted replies,
+    -- including !fb replies, enter the root node's normal reply routing.
     handle : note
       | "agent#" `T.isPrefixOf` handle,
         not (null note),
         Just identifier <- parseTaskHandle handle ->
           steerLive identifier (T.unwords note)
-    _ | "!" `T.isPrefixOf` body -> pure False
-    _ -> do
-      env :: BotEnv <- ask
-      target <- liftIO $ maybe (pure Nothing) (Jobs.taskForReply env.beJobs message.groupId) message.replyTo
-      maybe (pure False) (`steerLive` body) target
+    _ -> pure False
 
 --------------------------------------------------------------------------------
 -- Commands.

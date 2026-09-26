@@ -26,7 +26,7 @@ import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Parser (parseCommand)
 import Max.Command.Types (Command (..))
 import Max.ConversationScope (conversationScopeFor)
-import Max.DB.History (HistoryItem (fromBot), fetchMessageInScope)
+import Max.DB.History (HistoryItem (fromBot), fetchMessageInScope, isTurnTriggerInScope)
 import Max.Dispatch
   ( DispatchMessage (..),
     dispatchMentionsSelf,
@@ -189,10 +189,14 @@ onConversationMessage mIntent gm = do
   trig <- case classifyDispatch False gm of
     TriggerNone
       | Just (CanonicalMessageId rid) <- gm.replyTo -> do
+          taskReply <- isTurnTriggerInScope (conversationScopeFor gm.groupId) rid
           mQuoted <- fetchMessageInScope (conversationScopeFor gm.groupId) rid
-          pure $ case mQuoted of
-            Just quoted | quoted.fromBot -> classifyDispatch True gm
-            _ -> TriggerNone
+          pure $
+            if taskReply
+              then classifyDispatch True gm
+              else case mQuoted of
+                Just quoted | quoted.fromBot -> classifyDispatch True gm
+                _ -> TriggerNone
     t -> pure t
   -- Refresh the followup window, but retain buffered intent until LLM context
   -- consumes it. A command such as !status must not discard pending conversation.

@@ -43,6 +43,7 @@ import Max.DB.AgentTurn
 import Max.DB.History
   ( HistoryItem (..),
     fetchMessageWithCursorInScope,
+    publishedTurnInScope,
   )
 import Max.Dispatch
   ( DispatchMessage (..),
@@ -226,11 +227,15 @@ forkDispatch start origin gm work = do
       _ -> pure ()
     admitConversation env turnRef = do
       source <- fetchMessageWithCursorInScope (conversationScopeFor gm.groupId) gm.canonicalId.unCanonicalMessageId
+      replyTurn <- maybe (pure Nothing) (publishedTurnInScope (conversationScopeFor gm.groupId) . unCanonicalMessageId) gm.replyTo
       let sourceOrder = fst <$> source
-          feedback = case (parseCommand (dispatchTextWithoutSelf gm), source) of
-            (Right (Just (Feedback _)), Just (_, history))
+          feedback = case source of
+            Just (_, history)
               | PrincipalId history.authorPrincipalId == gm.authorPrincipalId ->
-                  Just (FrontendInputView history.canonicalId "steering" history.authorPrincipalId history.senderNickname history.receivedAt history.replyTo history.renderedText)
+                  let kind = case parseCommand (dispatchTextWithoutSelf gm) of
+                        Right (Just (Feedback _)) -> "steering"
+                        _ -> "reply"
+                   in Just (FrontendInputView history.canonicalId kind history.authorPrincipalId history.senderNickname history.receivedAt history.replyTo history.renderedText)
             _ -> Nothing
       liftIO $
         Conversation.enqueue
@@ -240,8 +245,9 @@ forkDispatch start origin gm work = do
               turn = turnRef.atrTurnId,
               principal = gm.authorPrincipalId,
               sourceOrder,
+              sourceMessage = if notice then Nothing else Just gm.canonicalId.unCanonicalMessageId,
+              replyTurn,
               feedback = if allowInput then feedback else Nothing,
-              acceptsFeedback = allowInput && not notice,
               notice
             }
 

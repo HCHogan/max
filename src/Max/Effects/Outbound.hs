@@ -14,7 +14,6 @@ module Max.Effects.Outbound
   )
 where
 
-import Control.Monad (forM_)
 import Data.Aeson (object, (.=))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -118,7 +117,6 @@ runOutbound tasks jobs deliveries = runOutboundWith deliver
         Left e -> failed req ("canonical publish failed: " <> T.pack (show (e :: SomeException)))
         Right queued -> do
           liftIO (queueDeliveries deliveries queued.deliveries)
-          forM_ req.orTurnOutput $ \link -> liftIO (Jobs.recordJobPublication jobs link.tolTurnId queued.canonicalMessageId)
           pure (Published queued.canonicalMessageId)
 
     failed :: OutboundRequest -> Text -> Eff es PublicationResult

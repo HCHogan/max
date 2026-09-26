@@ -27,8 +27,12 @@ external/deeper steering also records a normal note in the parent's log.
 After the starting task ends, normal messages are bounded and folded into the
 final report, preserving its original contract payload. Urgent messages still
 use the existing bounded frontend notice relay, which can aggregate messages;
-replacing that relay with per-event routing remains unfinished. Full routing (new requests/replies, child relays,
-replacement/cancellation, native completions and monitor fires), combined
+replacing that relay with per-event routing remains unfinished. Replies to an
+open root task's trigger or public output now steer that task, while unquoted
+`!fb` targets the sender's newest open task. `!btw` starts a separate task that
+can itself receive later replies. The old job-output reply map is removed;
+canonical output provenance identifies the producing root task. Full routing
+(child relays, replacement/cancellation, native completions and monitor fires), combined
 observation bounds and the open-task tail remain in step 4. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)
 and the Wasm host ABI of [ADR-012](012-wasm-tool-execution.md). Work stays

@@ -1,4 +1,4 @@
--- | Canonical provenance carried by explicit feedback in the live inbox.
+-- | Canonical provenance carried by replies and explicit steering events.
 module Max.Task.FrontendInput (FrontendInputView (..), renderFrontendInputs) where
 
 import Data.Aeson (encode, object, (.=))

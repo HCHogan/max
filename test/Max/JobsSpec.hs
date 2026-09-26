@@ -470,7 +470,7 @@ spec = describe "process-owned Jobs" $ do
     observeJobEvents jobs (AgentTurnId 1) `shouldReturn` []
     timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
 
-  it "blocks background publication and tracks notice replies without reviving old work" $ do
+  it "blocks background publication and authorizes its current notice" $ do
     (tasks, jobs, request) <- fixture
     (root, _) <- launch tasks jobs 1 request
     authorizeJobPublication jobs (AgentTurnId 1) `shouldReturn` False
@@ -480,13 +480,9 @@ spec = describe "process-owned Jobs" $ do
     PublishJobNotice _ version _ <- takeJobWork jobs
     bindJobNotice jobs (AgentTurnId 10) root.run version
     authorizeJobPublication jobs (AgentTurnId 10) `shouldReturn` True
-    recordJobPublication jobs (AgentTurnId 10) (CanonicalMessageId 20)
     detachJobNotice jobs (AgentTurnId 10)
-    taskForReply jobs request.group (CanonicalMessageId 20) `shouldReturn` Just 1
-    taskForReply jobs (GroupId 9) (CanonicalMessageId 20) `shouldReturn` Nothing
     fresh <- newJobs tasks
     lookupJob fresh request.group 1 `shouldReturn` Nothing
-    taskForReply fresh request.group (CanonicalMessageId 20) `shouldReturn` Nothing
 
   it "runs one occurrence per reminder while unrelated reminders and children proceed" $ do
     (tasks, jobs, request) <- fixture

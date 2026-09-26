@@ -1,5 +1,6 @@
 -- | Explicit execution intent; background work, notices and automation fires
--- never admit foreground feedback.
+-- never route their trigger as foreground feedback. Once started, root tasks
+-- can receive replies, including tasks started by !btw, notices and fires.
 module Max.Turn.Start (TurnStart (..), InputAdmission (..), startAllowsInput) where
 
 import Data.Text (Text)

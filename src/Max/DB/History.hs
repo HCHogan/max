@@ -18,6 +18,8 @@ module Max.DB.History
     hasMessagesAfter,
     fetchMessageInScope,
     fetchMessageWithCursorInScope,
+    publishedTurnInScope,
+    isTurnTriggerInScope,
     fetchMessagesByIdsInScope,
     fetchForwardChildrenInScope,
     messageStatsDaily,
@@ -33,6 +35,7 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.History.Types
+import Max.Turn.Types (AgentTurnId)
 
 -- | Exact end of the canonical ledger in the caller's snapshot.
 latestMessageCursor :: (WithConnection :> es, IOE :> es) => ConversationScope -> Eff es MessageCursor
@@ -379,3 +382,25 @@ fetchMessageWithCursorInScope scope message = do
   pure $ case rows of
     [Only cursor :. history] -> Just (cursor, history)
     _ -> Nothing
+
+-- | Only a public output in this conversation can identify a reply recipient.
+-- Liveness belongs to the process-local node registry, not the stored status.
+publishedTurnInScope :: (WithConnection :> es, IOE :> es) => ConversationScope -> Int64 -> Eff es (Maybe AgentTurnId)
+publishedTurnInScope scope message = do
+  rows <-
+    query
+      ("SELECT agent_turn_id FROM messages WHERE group_id=? AND canonical_message_id=? AND user_id=self_id AND agent_turn_id IS NOT NULL AND " <> transcriptEligibleExpr)
+      (conversationStorageId scope, message)
+  pure $ case rows of
+    [Only turn] -> Just turn
+    _ -> Nothing
+
+-- | A reply to an earlier trigger remains addressed to Max after the task
+-- ends. The router then creates a new task instead of reviving the old one.
+isTurnTriggerInScope :: (WithConnection :> es, IOE :> es) => ConversationScope -> Int64 -> Eff es Bool
+isTurnTriggerInScope scope message = do
+  rows <-
+    query
+      "SELECT EXISTS (SELECT 1 FROM messages m JOIN agent_turns t ON t.trigger_canonical_message_id=m.canonical_message_id AND t.conversation_id=m.conversation_id WHERE m.group_id=? AND m.canonical_message_id=?)"
+      (conversationStorageId scope, message)
+  pure (rows == [Only True])
