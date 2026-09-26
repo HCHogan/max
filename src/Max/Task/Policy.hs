@@ -1,4 +1,4 @@
-module Max.Task.Policy (frontendToolLimit, frontendDeadlineSeconds, taskDeadlineSeconds) where
+module Max.Task.Policy (frontendToolLimit, frontendDeadlineSeconds, taskDeadlineSeconds, treeToolCalls, treeModelRounds) where
 
 frontendToolLimit :: Int
 frontendToolLimit = 600
@@ -10,3 +10,11 @@ frontendDeadlineSeconds = 21600
 -- remaining time. Leave room for slow local inference and transport retries.
 taskDeadlineSeconds :: Int
 taskDeadlineSeconds = 21600
+
+-- Shared by every agent in one tree. Reaching either ends the tree's work
+-- with a tool-free report, not a cancellation.
+treeToolCalls :: Int
+treeToolCalls = 2000
+
+treeModelRounds :: Int
+treeModelRounds = 2000

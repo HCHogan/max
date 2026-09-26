@@ -24,6 +24,7 @@ module Max.Jobs
     lookupJob,
     jobForTurn,
     authorizeJobStep,
+    decideJobStep,
     steerJob,
     cancelJob,
     replaceJob,
@@ -59,9 +60,10 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
-import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
+import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation (..))
 import Max.LLM.Types (TokenUsage)
 import Max.Platform.Types (CanonicalMessageId, PrincipalId)
+import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State (TaskStatus (..), taskIsLive)
 import Max.Task.Types
 import Max.Tasks (TaskCancelled (..), TaskRegistry, cancelAgentTurnTask, turnIsLive)
@@ -314,19 +316,22 @@ lookupJob jobs group identifier = do
 jobForTurn :: Jobs -> AgentTurnId -> IO (Maybe JobView)
 jobForTurn jobs turn = fmap (.view) . (`entryForTurn` turn) <$> readTVarIO jobs.entries
 
--- | True for live foreground turns. Background budgets are shared with the
--- root and survive replacement; stale generations never fall back to foreground.
 authorizeJobStep :: Jobs -> AgentTurnId -> ExecutionStep -> IO Bool
-authorizeJobStep jobs turn step = do
+authorizeJobStep jobs turn step = (== Admitted) <$> decideJobStep jobs turn step
+
+-- | Live foreground turns are admitted. Background budgets are shared with the
+-- root and survive replacement; stale generations never fall back to foreground.
+decideJobStep :: Jobs -> AgentTurnId -> ExecutionStep -> IO Admission
+decideJobStep jobs turn step = do
   now <- getCurrentTime
   atomically $ do
     live <- turnIsLive jobs.tasks turn
     if not live
-      then pure False
+      then pure Refused
       else do
         entries <- readTVar jobs.entries
         case entryForTurn entries turn of
-          Nothing -> pure True
+          Nothing -> pure Admitted
           Just entry -> case lookupRun entries entry.root of
             Just root
               | currentRuntime entry
@@ -335,8 +340,8 @@ authorizeJobStep jobs turn step = do
                   && (step == ExecutionCheckpoint || entry.view.spec.deadline > now)
                   && all (taskIsLive . (.view.status)) (ancestors entries entry.view.spec.parent) -> do
                   let canReserve = case step of
-                        ExecutionWork ReserveCall -> root.view.calls < 200
-                        ExecutionWork ReserveRound -> root.view.rounds < 400
+                        ExecutionWork ReserveCall -> root.view.calls < treeToolCalls
+                        ExecutionWork ReserveRound -> root.view.rounds < treeModelRounds
                         _ -> True
                       bump view = case step of
                         ExecutionWork ReserveCall -> view {calls = view.calls + 1}
@@ -346,24 +351,28 @@ authorizeJobStep jobs turn step = do
                   if reserve && not canReserve
                     then do
                       writeTVar jobs.entries (foldr (Map.adjust (\job -> job {budgetExhausted = True})) entries (Set.toList (Set.fromList [entry.view.run.jobId, root.view.run.jobId])))
-                      pure False
+                      pure OverBudget
                     else do
                       when reserve $ writeTVar jobs.entries (foldr (Map.adjust (\job -> job {view = bump job.view})) entries (Set.toList (Set.fromList [entry.view.run.jobId, root.view.run.jobId])))
-                      pure True
-            _ -> pure False
+                      pure Admitted
+            _ -> pure Refused
 
 steerJob :: Jobs -> GroupId -> PrincipalId -> Maybe CanonicalMessageId -> Int64 -> Text -> IO (Either Text ())
 steerJob jobs group actor source identifier note = atomically $ do
   entries <- readTVar jobs.entries
   case Map.lookup identifier entries of
-    Just entry | entry.view.spec.group == group && taskIsLive entry.view.status && T.length note <= 8000 && not (T.null (T.strip note)) -> do
-      if Seq.length entry.inbox >= 256
-        then pure (Left "job feedback inbox is full")
-        else do
+    Just entry | entry.view.spec.group == group -> deliver entries entry
+    _ -> pure (Left ("no " <> taskHandle identifier <> " in this conversation"))
+  where
+    deliver entries entry
+      | not (taskIsLive entry.view.status) = pure (Left (taskHandle identifier <> " has already finished"))
+      | T.null (T.strip note) = pure (Left "feedback is empty")
+      | T.length note > 8000 = pure (Left "feedback exceeds 8000 characters")
+      | Seq.length entry.inbox >= 256 = pure (Left "job feedback inbox is full")
+      | otherwise = do
           let feedback = object ["author" .= actor, "source_message" .= source, "body" .= note]
           writeTVar jobs.entries (Map.insert identifier (appendInbox feedback entry) entries)
           pure (Right ())
-    _ -> pure (Left "job not found, finished, or feedback exceeds its bound")
 
 cancelJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> Text -> IO (Either Text ())
 cancelJob jobs group actor admin identifier reason = controlJob jobs group actor admin identifier $ \now entries entry ->

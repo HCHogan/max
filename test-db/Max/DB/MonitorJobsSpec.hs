@@ -160,7 +160,9 @@ spec pool = before_ (truncateAll pool) $ describe "automation Jobs and retained 
       let observation = object ["active" .= active]
           result = JobResult label (Just (object ["summary" .= label, "observation" .= observation]))
       whenPrevious job label
-      forM_ ["{}", "{\"summary\":\"ok\",\"observation\":{}}", "{\"summary\":\"ok\",\"observation\":\"healthy\"}"] $ \body -> parseJobResult job body `shouldSatisfy` isLeft
+      forM_ ["{}", "{\"summary\":\"ok\",\"observation\":{}}", "{\"summary\":\"ok\",\"observation\":\"healthy\"}", "   "] $ \body -> parseJobResult job body `shouldSatisfy` isLeft
+      -- A Markdown fence around the contract JSON is not part of the data.
+      fmap (.text) (parseJobResult job "```json\n{\"summary\":\"fenced\",\"observation\":{\"a\":1}}\n```") `shouldBe` Right "fenced"
       withDb pool (recordMonitorResult fire Succeeded result)
     notices `shouldBe` [True, False, True, True]
 

@@ -7,13 +7,14 @@ import Data.Either (isLeft, isRight)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isNothing)
-import Data.Time (addUTCTime, getCurrentTime)
 import Data.Text qualified as T
-import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
+import Data.Time (addUTCTime, getCurrentTime)
+import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation (..))
 import Max.Jobs
 import Max.LLM.Types (CallCost (..), TokenUsage (..))
 import Max.Monitor.Types (MonitorFireId (..), MonitorId (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
+import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State
 import Max.Task.Types (JobMonitor (..), JobUsage (..), TaskProfile (..), jobUsageLine)
 import Max.Tasks
@@ -77,13 +78,15 @@ spec = describe "process-owned Jobs" $ do
     (root, _) <- launch tasks jobs 1 request
     (_, _) <- launch tasks jobs 2 (request {parent = Just root.run})
     (_, _) <- launch tasks jobs 3 (request {parent = Just root.run})
-    reserved <- mapConcurrently (\n -> authorizeJobStep jobs (AgentTurnId (if even n then 2 else 3)) (ExecutionWork ReserveCall)) [1 .. 260 :: Int]
-    length (filter id reserved) `shouldBe` 200
+    reserved <- mapConcurrently (\n -> decideJobStep jobs (AgentTurnId (if even n then 2 else 3)) (ExecutionWork ReserveCall)) [1 .. treeToolCalls + 60]
+    length (filter (== Admitted) reserved) `shouldBe` treeToolCalls
+    -- Spent budget refuses the call but leaves the agent running.
+    length (filter (== OverBudget) reserved) `shouldBe` 60
     Just budget <- lookupJob jobs request.group 1
-    budget.calls `shouldBe` 200
-    rounds <- replicateM 400 (authorizeJobStep jobs (AgentTurnId 1) (ExecutionWork ReserveRound))
+    budget.calls `shouldBe` treeToolCalls
+    rounds <- replicateM treeModelRounds (authorizeJobStep jobs (AgentTurnId 1) (ExecutionWork ReserveRound))
     and rounds `shouldBe` True
-    authorizeJobStep jobs (AgentTurnId 1) (ExecutionWork ReserveRound) `shouldReturn` False
+    decideJobStep jobs (AgentTurnId 1) (ExecutionWork ReserveRound) `shouldReturn` OverBudget
     authorizeJobStep jobs (AgentTurnId 1) ExecutionCheckpoint `shouldReturn` True
     completeJob jobs budget.run Failed (JobResult "budget spent" Nothing)
     fmap (fmap (.status)) (lookupJob jobs request.group 1) `shouldReturn` Just BudgetExhausted
@@ -314,7 +317,12 @@ spec = describe "process-owned Jobs" $ do
     forM_ [1 .. 160] $ \identifier -> admitJob jobs Nothing identifier request >>= (`shouldSatisfy` isRight)
     admitJob jobs Nothing 161 request >>= (`shouldSatisfy` isLeft)
     forM_ [1 .. 256 :: Int] $ \_ -> steerJob jobs request.group request.principal Nothing 1 "note" `shouldReturn` Right ()
-    steerJob jobs request.group request.principal Nothing 1 "overflow" >>= (`shouldSatisfy` isLeft)
+    steerJob jobs request.group request.principal Nothing 1 "overflow" `shouldReturn` Left "job feedback inbox is full"
+    steerJob jobs request.group request.principal Nothing 2 (T.replicate 8001 "x") `shouldReturn` Left "feedback exceeds 8000 characters"
+    steerJob jobs request.group request.principal Nothing 999 "note" `shouldReturn` Left "no agent#999 in this conversation"
+    Just third <- lookupJob jobs request.group 3
+    completeJob jobs third.run Succeeded (JobResult "done" Nothing)
+    steerJob jobs request.group request.principal Nothing 3 "late" `shouldReturn` Left "agent#3 has already finished"
 
 fixture :: IO (TaskRegistry, Jobs, JobSpec)
 fixture = do

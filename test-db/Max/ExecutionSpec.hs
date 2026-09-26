@@ -2,10 +2,11 @@ module Max.ExecutionSpec (Max.ExecutionSpec.spec, withHost, hooks) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async
-import Control.Exception (SomeException, bracket_, fromException, try)
+import Control.Exception (bracket_)
 import Control.Monad (replicateM_, void)
 import Data.Aeson (Value, object, toJSON, (.=))
 import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.List (sort)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -35,6 +36,7 @@ import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.Skill.Contract (Contract, parseContract)
 import Max.Skill.Package
 import Max.Skill.Workflow (bindWorkflowContracts)
+import Max.Task.Policy (treeToolCalls)
 import Max.Task.State (TaskStatus (Failed))
 import Max.Task.Types (JobResult (..), JobRun (..), JobSpec (..), JobView (..), TaskProfile (Basic))
 import Max.Tasks (TaskCancelled (..), TurnRuntime)
@@ -188,21 +190,23 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     evidence <- withDb pool $ query "SELECT normalized_input->'program'->'workflow'->>'version', normalized_input->'program'->>'source' FROM execution_journal WHERE turn_id=? AND tool_ref='host:wasm/v1'" (Only turn.atrTurnId)
     evidence `shouldBe` [(pinned.slVersion, workflow.wfSource)]
 
-  it "reserves the last shared call when different sessions race for the last call" $ do
+  it "refuses the loser before effect when sessions race for the last shared call" $ do
     (jobs, turn, runtime) <- fixture
-    replicateM_ 199 (Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork ReserveCall) >>= (`shouldBe` True))
+    replicateM_ (treeToolCalls - 1) (Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork ReserveCall) >>= (`shouldBe` True))
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [echoTool])
     binary <- guestCalls [request "echo" args] ""
     let native = withHost pool . runTools registry $ do
           session <- newExecutionSession Nothing
-          void (executeToolBatch session (hostHooks jobs runtime) (views registry) [ToolRequest "native" "echo" args])
+          batch <- executeToolBatch session (hostHooks jobs runtime) (views registry) [ToolRequest "native" "echo" args]
+          pure (batch.tbOverBudget, map (outcomeName . (.tiOutcome)) batch.tbInvocations)
         guest = withHost pool . runTools registry $ do
           session <- newExecutionSession Nothing
-          void (runWasmTools session (hostHooks jobs runtime) (views registry) defaultWasmLimits binary)
-    (a, b) <- Async.concurrently (try @SomeException native) (try @SomeException guest)
-    length [() | Right () <- [a, b]] `shouldBe` 1
-    length [() | Left exception <- [a, b], Just TaskCancelled <- [fromException exception]] `shouldBe` 1
-    callCount jobs turn `shouldReturn` 200
+          result <- runWasmTools session (hostHooks jobs runtime) (views registry) defaultWasmLimits binary
+          pure (result.cmOverBudget, map (.ccOutcome) result.cmCalls)
+    -- Neither side is cancelled: the loser's call is rejected and flagged.
+    (a, b) <- Async.concurrently native guest
+    sort [a, b] `shouldBe` [(False, ["succeeded"]), (True, ["rejected"])]
+    callCount jobs turn `shouldReturn` treeToolCalls
     rows <- withDb pool $ query "SELECT state FROM execution_journal WHERE turn_id=? AND tool_ref='echo'" (Only turn.atrTurnId)
     rows `shouldBe` [Only ("succeeded" :: Text)]
 

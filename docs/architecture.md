@@ -495,8 +495,11 @@ Queued foreground requests precede queued task notices. Commands remain responsi
 The dispatch finalizer releases its queue ticket even if database cleanup fails.
 Interrupted foreground turns end without restart continuation; published prefixes
 remain recorded. Jobs own detached work, child results and feedback in STM. A
-parent awaiting children holds no worker slot. Each root shares 200 tool calls
-and 400 model rounds; children inherit its deadline and grant fingerprints.
+parent awaiting children holds no worker slot. Each root shares 2000 tool calls
+and 2000 model rounds; children inherit its deadline and grant fingerprints.
+When either runs out, further calls are rejected before effect and each agent
+writes a tool-free report, so the tree ends as `budget_exhausted` with its
+findings rather than cancelled.
 Cancellation and replacement fence the old generation before signalling it.
 Outbound copies belong to bounded process queues; restart never reconstructs them.
 

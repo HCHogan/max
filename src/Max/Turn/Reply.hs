@@ -6,10 +6,10 @@ where
 import Control.Applicative ((<|>))
 import Control.Concurrent.STM (newTVarIO, readTVarIO)
 import Control.Monad (forM_, join, void, when)
-import Data.Foldable (for_)
-import Data.Map.Strict qualified as Map
 import Data.Aeson (FromJSON, Key, Value (Null), withObject, (.:))
 import Data.Aeson.Types (parseMaybe)
+import Data.Foldable (for_)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -90,6 +90,7 @@ import Max.ModelCatalog
     defaultContextLimits,
     lookupModelCapabilities,
   )
+import Max.Monitor.Types (monitorHandleText)
 import Max.Platform.Store.Conversation
   ( rememberConversationTitle,
   )
@@ -146,6 +147,7 @@ import Max.Tasks
     setTurnPhase,
     turnRuntimeOutputContext,
   )
+import Max.Text (encodeText)
 import Max.Tool.Types (ToolDefinition (..), ToolRef (..))
 import Max.ToolContext
   ( TurnCapabilities (..),
@@ -161,8 +163,6 @@ import Max.Turn.Continuity
 import Max.Turn.Job (runJob)
 import Max.Turn.Start (TurnStart (AutomationTurn, JobNotice, JobTurn))
 import Max.Turn.Types (AgentTurnRef, nextTurnOutputLink)
-import Max.Monitor.Types (monitorHandleText)
-import Max.Text (encodeText)
 import Max.Util (trySync, tshow)
 import OneBot.Types (GroupId (..), UserId (UserId), isPrivateChat)
 
@@ -405,7 +405,7 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
               limits
               TurnIdentity {tiGroupId = gm.groupId, tiCanonicalId = gm.canonicalId, tiUserId = gm.userId, tiSelfId = gm.selfId, tiAuthorPrincipalId = gm.authorPrincipalId, tiClearedAt = s.clearedAt, tiTurnOutputContext = Just (turnRuntimeOutputContext turn)}
               turnCapabilities
-          agentCtx = AgentContext {acTools = toolCtx, acEffort = s.effortOverride, acMaxToolCalls = Just frontendToolLimit}
+          agentCtx = AgentContext {acTools = toolCtx, acEffort = s.effortOverride, acMaxToolCalls = Just frontendToolLimit, acAnswerCheck = Nothing}
           -- Resolve outbound names against the same principal roster shown in the prompt.
           rosterNames = [(name, PrincipalId principal) | (principal, name) <- roster]
           target =

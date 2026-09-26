@@ -40,15 +40,18 @@ import Effectful.Concurrent.STM
     modifyTVar',
     newTVarIO,
     readTVar,
+    readTVarIO,
     writeTVar,
   )
 import Effectful.Exception
-  ( SomeException,
+  ( Exception,
+    SomeException,
     bracket_,
     catch,
     finally,
     mask,
     throwIO,
+    try,
   )
 import Max.Agent.Execution
 import Max.Effects.Tools (Tools, invokeToolWithControl)
@@ -93,8 +96,10 @@ executionHooks admission journal group turn =
       ehStart = \step start -> do
         let ref = turnRuntimeAgentTurn turn
         prepared <- journal.ejPrepare group start
-        allowed <- admission.eaAdmitTool ref step
-        unless allowed (throwIO TaskCancelled)
+        admission.eaAdmitTool ref step >>= \case
+          Admitted -> pure ()
+          OverBudget -> throwIO CallBudgetExhausted
+          Refused -> throwIO TaskCancelled
         ordinal <- liftIO (nextExecutionOrdinal turn)
         now <- liftIO getCurrentTime
         pure (Just (JournalExecution ref ordinal prepared now)),
@@ -110,6 +115,12 @@ hoistExecutionHooks lower hooks =
       ehFinish = \row -> lower . hooks.ehFinish row,
       ehWorkflow = hoistWorkflowHost lower <$> hooks.ehWorkflow
     }
+
+-- | Admission refused a call because its agent tree's budget is spent. The
+-- call is rejected before any effect; the agent itself keeps running.
+data CallBudgetExhausted = CallBudgetExhausted deriving stock (Show)
+
+instance Exception CallBudgetExhausted
 
 data ExecutionSession = ExecutionSession
   { remaining :: !(TVar (Maybe Int)),
@@ -156,9 +167,10 @@ executeBatch invoke session hooks catalog requests =
         Just available | total > available -> pure False
         _ -> writeTVar session.remaining (subtract total <$> budget) >> pure True
     if not reserved
-      then pure (ToolBatch (map (const (rejected "call_budget_exhausted" "这个子任务的工具调用额度已经用满，不能再执行这个调用")) requests) True)
+      then pure (ToolBatch (map (const budgetSpent) requests) True)
       else do
         unused <- newTVarIO total
+        spent <- newTVarIO False
         let release = atomically $ do
               refund <- readTVar unused
               modifyTVar' session.remaining (fmap (+ refund))
@@ -172,14 +184,18 @@ executeBatch invoke session hooks catalog requests =
                           atomically $ modifyTVar' unused (subtract (cost request))
                           pure row
                       }
-              (_, invocation) <- withExecutionRecord admitting step start $ \_ -> do
+              recorded <- try $ withExecutionRecord admitting step start $ \_ -> do
                 result <- case view request of
                   Nothing -> pure (rejected "unknown_tool" ("tool is outside the execution catalog: " <> request.trName))
                   Just _ -> invoke request
                 pure ((), result)
-              pure invocation
+              case recorded of
+                Right (_, invocation) -> pure invocation
+                Left CallBudgetExhausted -> atomically (writeTVar spent True) >> pure budgetSpent
         invocations <- restoreBatch (if all canParallel requests then mapConcurrently execute requests else traverse execute requests) `finally` release
-        pure (ToolBatch invocations False)
+        ToolBatch invocations <$> readTVarIO spent
+  where
+    budgetSpent = rejected "call_budget_exhausted" "工具调用预算已经用完，不能再执行这个调用；直接根据已有信息给出最终回复"
 
 -- | Admission is local. Record the outcome after the cancellable body; a
 -- diagnostic failure must not reclassify a completed external effect.

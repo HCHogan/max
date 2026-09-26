@@ -14,7 +14,7 @@ import Effectful.Concurrent (threadDelay)
 import Effectful.Concurrent.Async (Concurrent, race)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask)
-import Max.Agent.Failure (renderAgentFailure)
+import Max.Agent.Failure (AgentFailure (..), renderAgentFailure)
 import Max.AgentEvent (AgentEvent (..))
 import Max.DB.AgentTurn
   ( AgentTurnTerminal (TurnFailed, TurnSucceeded),
@@ -121,9 +121,14 @@ runJob env session execution gm turn turnRef = do
   setAgentTurnEnvironment turnRef currentPromptMajor (toolCatalogFingerprint definitions)
   now <- liftIO getCurrentTime
   let remaining = max 0 (min 21600 (realToFrac (Time.diffUTCTime execution.spec.deadline now) :: Double))
+      -- An empty, oversized or off-contract report gets another round
+      -- instead of failing the job.
+      reportCheck body = either (Just . correction) (const Nothing) (parseJobResult execution.spec body)
+      correction detail =
+        "最终报告没有被接受：" <> detail <> "。请重新给出最终回复。内容太多就精简，细节写进文件；不要在一次回复里写完所有内容。"
   raced <-
     race
-      (agentTurn turn (AgentContext {acTools = toolCtx, acEffort = session.effortOverride, acMaxToolCalls = Nothing}) session.model messages (taskProgressEvent env.beJobs turnRef.atrTurnId))
+      (agentTurn turn (AgentContext {acTools = toolCtx, acEffort = session.effortOverride, acMaxToolCalls = Nothing, acAnswerCheck = Just reportCheck}) session.model messages (taskProgressEvent env.beJobs turnRef.atrTurnId))
       (threadDelay (ceiling (remaining * 1_000_000)))
   case raced of
     Right () -> do
@@ -132,6 +137,9 @@ runJob env session execution gm turn turnRef = do
     Left result -> do
       let outcome = case result.outcome of
             Answered reply -> parseJobResult execution.spec reply.body
+            -- The report written after the tree's budget ran out; the job's
+            -- status still says budget_exhausted.
+            Interrupted AgentBudgetExhausted reply -> parseJobResult execution.spec reply.body
             Interrupted reason _ -> Left (renderAgentFailure reason)
             Failed reason _ -> Left (renderAgentFailure reason)
       case outcome of

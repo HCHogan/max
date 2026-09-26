@@ -28,6 +28,7 @@ import Max.Effects.Blob (runBlob)
 import Max.Effects.LLM
 import Max.Effects.Outbound (runOutbound)
 import Max.Effects.Tools (buildToolRegistry)
+import Max.Execution.Types (Admission (..))
 import Max.HttpRuntime (httpRuntimeFromManagers)
 import Max.Jobs (newJobs)
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
@@ -116,7 +117,8 @@ spec pool = before_ (truncateAll pool) $
                 )
                 Nothing
                 Nothing
-            admission = ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ -> pure True)
+                Nothing
+            admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted)
             journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
         manager <- HTTP.newManager managerSettings
         let runtime = httpRuntimeFromManagers manager manager manager

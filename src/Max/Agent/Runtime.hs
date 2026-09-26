@@ -47,9 +47,9 @@ runAgentRuntime jobs conversations =
 executionAdmission :: (IOE :> es) => Jobs.Jobs -> ExecutionAdmission es
 executionAdmission jobs =
   ExecutionAdmission
-    { eaReserveRound = \turn -> liftIO (Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork ReserveRound)),
+    { eaReserveRound = \turn -> liftIO (Jobs.decideJobStep jobs turn.atrTurnId (ExecutionWork ReserveRound)),
       eaCheck = \turn -> liftIO (Jobs.authorizeJobStep jobs turn.atrTurnId ExecutionCheckpoint),
-      eaAdmitTool = \turn step -> liftIO (Jobs.authorizeJobStep jobs turn.atrTurnId step)
+      eaAdmitTool = \turn step -> liftIO (Jobs.decideJobStep jobs turn.atrTurnId step)
     }
 
 -- | Diagnostics are best effort; cancellation still propagates.

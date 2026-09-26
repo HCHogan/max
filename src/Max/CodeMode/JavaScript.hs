@@ -53,10 +53,10 @@ javaScriptRuntimeVersion = TE.decodeUtf8 (Base16.encode (SHA256.hash (javaScript
 javaScriptLimits :: WasmLimits
 javaScriptLimits =
   defaultWasmLimits
-    { wlFuel = 1000000000,
+    { wlFuel = 10000000000,
       wlTimeoutMicros = taskDeadlineSeconds * 1000000,
       wlModuleBytes = 4 * 1024 * 1024,
-      wlHostCalls = 1024
+      wlHostCalls = 4096
     }
 
 javaScriptProgram :: [CatalogTool] -> Text -> WasmProgram

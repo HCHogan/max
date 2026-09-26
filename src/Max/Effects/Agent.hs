@@ -59,6 +59,7 @@ import Max.Effects.Tools
     runToolsWith,
   )
 import Max.Execution.Tools
+import Max.Execution.Types (Admission (..))
 import Max.Execution.Workflow (WorkflowHost)
 import Max.LLM.Failure (renderLLMFailure)
 import Max.Media.Vision (evictMedia, fitVisionBudget)
@@ -86,7 +87,10 @@ data AgentContext = AgentContext
     -- call this turn makes ('turnCtx').  'Nothing' = the profile's
     -- configured effort.
     acEffort :: !(Maybe Text),
-    acMaxToolCalls :: !(Maybe Int)
+    acMaxToolCalls :: !(Maybe Int),
+    -- | Rejects a final answer with a correction note. The loop asks again at
+    -- most twice; 'Nothing' accepts any answer.
+    acAnswerCheck :: !(Maybe (Text -> Maybe Text))
   }
 
 -- | Usage attribution for a dispatch's own LLM calls.  Private chats
@@ -109,7 +113,7 @@ data AgentLimits = AgentLimits
 
 -- | Outer cap; frontend and Job budgets usually stop a run earlier.
 defaultLimits :: AgentLimits
-defaultLimits = AgentLimits {maxTurns = 1000}
+defaultLimits = AgentLimits {maxTurns = 2000}
 
 -- | The accepted prefix is already visible; publication sends only the tail.
 data AgentReply = AgentReply
@@ -145,6 +149,7 @@ replyRemainder reply = T.drop (T.length reply.publishedPrefix) reply.body
 data LoopState = LoopState
   { context :: !AgentContext,
     roundNumber :: !Int,
+    corrections :: !Int,
     history :: ![ChatMessage],
     appended :: ![ChatMessage]
   }
@@ -208,7 +213,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
       [ChatMessage] ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
     loop workingRef session catalogRef emit initialContext turn profile messages =
-      go LoopState {context = initialContext, roundNumber = 0, history = messages, appended = []}
+      go LoopState {context = initialContext, roundNumber = 0, corrections = 0, history = messages, appended = []}
       where
         go :: LoopState -> Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
         go state = do
@@ -226,7 +231,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
               msgs' = msgs <> newNotes
               appended' = appended <> newNotes
           if n >= lims.maxTurns
-            then finalAnswer workingRef ctx h n appended' profile msgs'
+            then finalAnswer workingRef ctx h n appended' profile msgs' AgentRoundLimit
             else do
               liftIO (setTurnPhase h "llm")
               nativeSpecs <- listToolSpecs
@@ -239,6 +244,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
               checkAdmission h
               sent <- liftIO (readTVarIO sentRef)
               case eres of
+                Left AgentBudgetExhausted -> finalAnswer workingRef ctx h (n + 1) appended' profile msgs' AgentBudgetExhausted
                 Left err ->
                   pure
                     AgentResult
@@ -269,7 +275,14 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
                               turnsUsed = n + 1
                             }
                   case lateMessages of
-                    [] -> done
+                    [] -> case ctx.acAnswerCheck >>= ($ text) of
+                      Just note
+                        | T.null sent && state.corrections < 2 -> do
+                            logInfo "agent: final answer rejected, asking again" $
+                              object ["reason" .= note, "length" .= T.length text]
+                            let newMsgs = [MsgAssistant text | not (T.null (T.strip text))] <> [MsgUser ("[system] " <> note)]
+                            go state {roundNumber = n + 1, corrections = state.corrections + 1, appended = appended' <> newMsgs, history = msgs'' <> newMsgs}
+                      _ -> done
                     xs -> do
                       logInfo "agent: feedback arrived during final answer, continuing" $
                         object ["count" .= length xs]
@@ -319,7 +332,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
                   let newMsgs = assembleToolRound raw tcs toolMsgs imgs
                       nextContext = ctx {acTools = withToolSkillLoads (concatMap (\(_, _, decision) -> controlSkillLoads decision) executed) ctx.acTools}
                   if overBudget
-                    then finalAnswer workingRef ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                    then finalAnswer workingRef ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs) AgentBudgetExhausted
                     else go state {context = nextContext, roundNumber = n + 1, appended = appended' <> newMsgs, history = msgs'' <> newMsgs}
 
     budgetedCall ::
@@ -362,28 +375,35 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
       case fitWorkingContext limits anchor identity handle previous visible specs of
         Left detail -> pure (visible, Left (AgentContextBudget detail))
         Right plan -> do
-          active <- raise (raise (raise (admission.eaReserveRound (turnRuntimeAgentTurn turn))))
-          unless active (throwIO TaskCancelled)
-          when plan.wpCompacted $
-            logInfo "agent: working context compacted" $
-              object ["estimated_tokens" .= plan.wpEstimatedTokens, "input_limit" .= plan.wpLimit, "turn" .= handle]
-          result <- chatMeasured (turnCtx ctx source) profile plan.wpMessages specs sink
-          case result of
-            -- A server that still rejects the media gets one more request
-            -- without any, rather than failing the turn.
-            Left failure
-              | "media_budget_exceeded" `T.isInfixOf` renderLLMFailure failure,
-                (stripped, removed) <- evictMedia maxBound visible,
-                removed > 0 -> do
-                  logAttention "agent: server rejected media; retrying without them" $
-                    object ["removed" .= removed, "turn" .= handle]
-                  budgetedCall workingRef ctx turn profile source stripped specs sink
-            _ -> do
-              let nextAnchor = case result of
-                    Right (_, usage) -> observeUsage identity plan.wpMessages usage
-                    Left _ -> Nothing
-              liftIO (atomically (writeTVar workingRef (nextAnchor, plan.wpSummary)))
-              pure (plan.wpMessages, either (Left . AgentModelFailure) (Right . fst) result)
+          -- The tool-free wrap-up after a spent budget reserves no round.
+          admitted <-
+            if source == "wrapup"
+              then (\live -> if live then Admitted else Refused) <$> raise (raise (raise (admission.eaCheck (turnRuntimeAgentTurn turn))))
+              else raise (raise (raise (admission.eaReserveRound (turnRuntimeAgentTurn turn))))
+          case admitted of
+            Refused -> throwIO TaskCancelled
+            OverBudget -> pure (visible, Left AgentBudgetExhausted)
+            Admitted -> do
+              when plan.wpCompacted $
+                logInfo "agent: working context compacted" $
+                  object ["estimated_tokens" .= plan.wpEstimatedTokens, "input_limit" .= plan.wpLimit, "turn" .= handle]
+              result <- chatMeasured (turnCtx ctx source) profile plan.wpMessages specs sink
+              case result of
+                -- A server that still rejects the media gets one more request
+                -- without any, rather than failing the turn.
+                Left failure
+                  | "media_budget_exceeded" `T.isInfixOf` renderLLMFailure failure,
+                    (stripped, removed) <- evictMedia maxBound visible,
+                    removed > 0 -> do
+                      logAttention "agent: server rejected media; retrying without them" $
+                        object ["removed" .= removed, "turn" .= handle]
+                      budgetedCall workingRef ctx turn profile source stripped specs sink
+                _ -> do
+                  let nextAnchor = case result of
+                        Right (_, usage) -> observeUsage identity plan.wpMessages usage
+                        Left _ -> Nothing
+                  liftIO (atomically (writeTVar workingRef (nextAnchor, plan.wpSummary)))
+                  pure (plan.wpMessages, either (Left . AgentModelFailure) (Right . fst) result)
 
     -- Salvage a tool-free partial answer at the cap; it still counts as interrupted.
     finalAnswer ::
@@ -394,19 +414,24 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
       [ChatMessage] ->
       Text ->
       [ChatMessage] ->
+      AgentFailure ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
-    finalAnswer workingRef ctx h n appended profile msgs = do
-      logInfo "agent: max turns reached, forcing final answer" $
-        object ["turns" .= n]
+    finalAnswer workingRef ctx h n appended profile msgs reason = do
+      logInfo "agent: limit reached, forcing final answer" $
+        object ["turns" .= n, "reason" .= reason]
       liftIO (checkTurnCancellation h)
       let capNote =
-            MsgUser
-              "[system] 工具调用轮次已用满，别再调用任何工具了。\
-              \直接根据目前已经掌握的信息，给用户一个最终回复。"
+            MsgUser $ case reason of
+              AgentBudgetExhausted ->
+                "[system] 工具调用预算已经用完，别再调用任何工具了。\
+                \直接根据目前已经掌握的信息给出最终回复：写清已完成的、没完成的和建议的下一步。"
+              _ ->
+                "[system] 工具调用轮次已用满，别再调用任何工具了。\
+                \直接根据目前已经掌握的信息，给用户一个最终回复。"
       (_, eres) <- budgetedCall workingRef ctx h profile "wrapup" (msgs <> [capNote]) [] Nothing
       let outcome = case eres of
-            Right (ContentResp text) | not (T.null (T.strip text)) -> Interrupted AgentRoundLimit (AgentReply text "")
-            Right _ -> Failed AgentRoundLimit ""
+            Right (ContentResp text) | not (T.null (T.strip text)) -> Interrupted reason (AgentReply text "")
+            Right _ -> Failed reason ""
             Left err -> Failed err ""
           finalMessages = case outcome of
             Interrupted _ reply -> [MsgAssistant reply.body]

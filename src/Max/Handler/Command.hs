@@ -65,6 +65,7 @@ import Max.Platform.Types
 import Max.Prompt (TriggerOrigin (OriginDirect))
 import Max.Roster (GroupMember (mUserId), fetchGroupMembers)
 import Max.Session (loadSession)
+import Max.Task.State (taskIsLive)
 import Max.Task.Types (parseTaskHandle)
 import Max.Text (encodeText)
 import Max.Turn.Dispatch (dispatchLLM, dispatchLLMWith)
@@ -97,6 +98,10 @@ routeTaskInput message = do
       readJobs action = do
         env :: BotEnv <- ask
         liftIO (action env.beJobs) >>= reply
+      steerLive identifier note = do
+        env :: BotEnv <- ask
+        live <- liftIO (maybe False (taskIsLive . (.status)) <$> Jobs.lookupJob env.beJobs message.groupId identifier)
+        if live then mutate identifier SteerJob note else pure False
   case pieces of
     "!browser" : arguments -> do
       env :: BotEnv <- ask
@@ -121,12 +126,19 @@ routeTaskInput message = do
           env :: BotEnv <- ask
           target <- liftIO $ maybe (pure Nothing) (Jobs.taskForReply env.beJobs message.groupId) message.replyTo
           maybe (pure False) (\identifier -> mutate identifier SteerJob (T.unwords note)) target
-    handle : note | Just identifier <- parseTaskHandle handle -> mutate identifier SteerJob (T.unwords note)
+    -- Implicit steering: a message that starts with a live agent's handle, or
+    -- replies to its output. Anything else, including another bot's own
+    -- "task#N" progress lines and replies to finished agents, is ordinary chat.
+    handle : note
+      | "agent#" `T.isPrefixOf` handle,
+        not (null note),
+        Just identifier <- parseTaskHandle handle ->
+          steerLive identifier (T.unwords note)
     _ | "!" `T.isPrefixOf` body -> pure False
     _ -> do
       env :: BotEnv <- ask
       target <- liftIO $ maybe (pure Nothing) (Jobs.taskForReply env.beJobs message.groupId) message.replyTo
-      maybe (pure False) (\identifier -> mutate identifier SteerJob body) target
+      maybe (pure False) (`steerLive` body) target
 
 --------------------------------------------------------------------------------
 -- Commands.

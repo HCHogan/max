@@ -7,7 +7,7 @@ module Max.Task.Delegation
   )
 where
 
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (parseEither)
@@ -46,11 +46,12 @@ parseAgentRequest raw = do
 
 parseJobResult :: JobSpec -> Text -> Either Text JobResult
 parseJobResult spec body = do
-  unless (not (T.null (T.strip body)) && T.length body <= 40000) (Left "job response is empty or exceeds its bound")
+  when (T.null (T.strip body)) (Left "job response is empty")
+  when (T.length body > reportLimit) (Left ("job response exceeds " <> T.pack (show reportLimit) <> " characters"))
   case spec.contract of
     Nothing -> Right (JobResult body Nothing)
     Just contract -> do
-      payload <- either (Left . T.pack) Right (eitherDecodeStrict' (TE.encodeUtf8 body))
+      payload <- either (Left . T.pack) Right (eitherDecodeStrict' (TE.encodeUtf8 (unfence body)))
       validateValue contract payload
       summary <- case spec.monitor of
         Nothing -> Right body
@@ -60,3 +61,13 @@ parseJobResult spec body = do
             Object fields | not (KM.null fields) && not (T.null (T.strip summary)) -> Right summary
             _ -> Left "change-only reminder requires a nonempty observation and summary"
       Right (JobResult summary (Just payload))
+
+reportLimit :: Int
+reportLimit = 100000
+
+-- | Models often wrap contract JSON in a Markdown fence; the fence is not data.
+unfence :: Text -> Text
+unfence body = case T.stripPrefix "```" (T.strip body) of
+  Just rest
+    | Just inner <- T.stripSuffix "```" (T.strip rest) -> T.drop 1 (T.dropWhile (/= '\n') inner)
+  _ -> body

@@ -11,6 +11,7 @@ data AgentFailure
   | AgentStreamInterrupted !ResponseFailure
   | AgentContextBudget !Text
   | AgentRoundLimit
+  | AgentBudgetExhausted
   deriving stock (Eq, Show)
 
 renderAgentFailure :: AgentFailure -> Text
@@ -19,6 +20,7 @@ renderAgentFailure = \case
   AgentStreamInterrupted failure -> "LLM stream interrupted: " <> renderResponseFailure failure
   AgentContextBudget detail -> "context budget: " <> detail
   AgentRoundLimit -> "max-turns"
+  AgentBudgetExhausted -> "agent tree budget exhausted"
 
 instance ToJSON AgentFailure where
   toJSON failure = object ["kind" .= kind, "detail" .= renderAgentFailure failure]
@@ -29,3 +31,4 @@ instance ToJSON AgentFailure where
         AgentStreamInterrupted _ -> "stream_interrupted"
         AgentContextBudget _ -> "context_budget"
         AgentRoundLimit -> "round_limit"
+        AgentBudgetExhausted -> "budget_exhausted"

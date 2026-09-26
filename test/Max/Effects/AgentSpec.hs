@@ -27,8 +27,10 @@ import Max.Effects.LLM
 import Max.Effects.ToolControl (ToolControl)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools
+import Max.Execution.Types (Admission (..))
 import Max.Http.Failure (ResponseFailure (..), TransportFailure (..))
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
+import Max.ModelCatalog (ContextLimits (..), VisionLimits (..), defaultContextLimits)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
 import Max.Skill.ToolRuntime (skillToolsWithRuntime)
 import Max.Skill.Workflow (bindWorkflowContracts)
@@ -36,7 +38,6 @@ import Max.Skills (newSkillRegistry)
 import Max.Tasks
 import Max.Tool.Bundles (toolVisible)
 import Max.Tool.Catalog (buildToolCatalog, catalogTools)
-import Max.ModelCatalog (ContextLimits (..), VisionLimits (..), defaultContextLimits)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext, mkToolContextWithLimits, toolSkillLoads)
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..), UserId (..))
@@ -51,7 +52,7 @@ runTestAgent ::
   Eff es a
 runTestAgent inputs =
   runAgentWith
-    (ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ -> pure True))
+    (ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted))
     (ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ()))
     (ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inputs (\notes -> ([], T.intercalate "\n" notes))))
     Nothing
@@ -160,6 +161,7 @@ dispatchContext =
             }
         )
     )
+    Nothing
     Nothing
     Nothing
 
@@ -608,7 +610,7 @@ spec = describe "Agent full loop" $ do
     result.appended
       `shouldSatisfy` any
         ( \case
-            MsgTool _ body -> "工具调用额度已经用满" `T.isInfixOf` body
+            MsgTool _ body -> "工具调用预算已经用完" `T.isInfixOf` body
             _ -> False
         )
 
@@ -737,6 +739,73 @@ spec = describe "Agent full loop" $ do
     _ <- finishTurnRuntime tasks turn
     readIORef calls `shouldReturn` 2
 
+  it "writes a tool-free report instead of stopping when the tree's budget is spent" $ do
+    events <- newIORef []
+    calls <- newIORef (0 :: Int)
+    ran <- newIORef (0 :: Int)
+    _inputs <- newIORef []
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
+    let provider =
+          LLMInterpreter
+            ( \_ _ messages tools _ -> do
+                roundNo <- liftIO $ atomicModifyIORef' calls (\n -> (n + 1, n))
+                if roundNo == 0
+                  then pure (Right (ToolCallsResp providerMessage "" [ToolCall "call-1" "echo" (object [])]))
+                  else do
+                    liftIO $ do
+                      length tools `shouldBe` 0
+                      case reverse messages of
+                        MsgUser note : _ -> note `shouldSatisfy` T.isInfixOf "预算已经用完"
+                        other -> expectationFailure ("missing wrap-up note: " <> show other)
+                    pure (Right (ContentResp "partial findings"))
+            )
+        counted :: (IOE :> es) => Tool es
+        counted =
+          Tool
+            { toolName = "echo",
+              toolDescription = "counted echo test input",
+              toolSchema = object ["type" .= ("object" :: Text)],
+              toolRunner = LegacyRunner $ \args -> liftIO (modifyIORef' ran (+ 1)) >> pure (Right args)
+            }
+        admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure OverBudget)
+        journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
+        inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' _inputs (\notes -> ([], T.intercalate "\n" notes)))
+    result <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff . runConcurrent . runLog "budget-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 4) (const (buildToolRegistry [echoDefinition] [counted])) $
+        agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+    readIORef ran `shouldReturn` 0
+    result.outcome `shouldBe` Interrupted AgentBudgetExhausted (AgentReply "partial findings" "")
+
+  it "asks again, at most twice, when the caller rejects the final answer" $ do
+    events <- newIORef []
+    _inputs <- newIORef []
+    tasks <- newTaskRegistry
+    let nonEmpty body = if T.null (T.strip body) then Just "报告是空的" else Nothing
+        context = dispatchContext {acAnswerCheck = Just nonEmpty}
+        run answers = do
+          calls <- newIORef (0 :: Int)
+          turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
+          let provider =
+                LLMInterpreter
+                  ( \_ _ messages _ _ -> do
+                      roundNo <- liftIO $ atomicModifyIORef' calls (\n -> (n + 1, n))
+                      when (roundNo > 0) . liftIO $ case reverse messages of
+                        MsgUser note : rest -> do
+                          note `shouldSatisfy` T.isInfixOf "报告是空的"
+                          [() | MsgAssistant "" <- rest] `shouldBe` []
+                        other -> expectationFailure ("missing correction: " <> show other)
+                      pure (Right (ContentResp (answers !! min roundNo (length answers - 1))))
+                  )
+          result <- withCompactLogger ColorNever Nothing $ \logger ->
+            runEff . runConcurrent . runLog "answer-check" logger LogAttention . runLLMWith provider . runTestAgent _inputs (AgentLimits 8) (const (buildToolRegistry [] [])) $
+              agentTurn turn context "fake" [MsgUser "question"] (eventSink events)
+          _ <- finishTurnRuntime tasks turn
+          (,) result.outcome <$> readIORef calls
+    run ["", "report"] `shouldReturn` (Answered (AgentReply "report" ""), 2)
+    run [""] `shouldReturn` (Answered (AgentReply "" ""), 3)
+
   it "reconsiders an unpublished final draft when feedback arrives during generation" $ do
     events <- newIORef []
     calls <- newIORef (0 :: Int)
@@ -757,7 +826,7 @@ spec = describe "Agent full loop" $ do
                       other -> expectationFailure ("missing late correction: " <> show other)
                     pure (Right (ContentResp "corrected"))
             )
-        admission = ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ -> pure True)
+        admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted)
         journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
         inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inbox ("",))
     result <- withCompactLogger ColorNever Nothing $ \logger ->
