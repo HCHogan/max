@@ -1,8 +1,8 @@
 module Max.StreamingSpec (spec) where
 
-import Control.Concurrent.STM qualified as STM
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM
+import Control.Concurrent.STM qualified as STM
 import Control.Monad (void)
 import Data.Aeson (encode, object, (.=))
 import Data.ByteString qualified as BS
@@ -133,7 +133,7 @@ spec pool = before_ (truncateAll pool) $
               . runBlob "var/images"
               . runLLM runtime (\_ _ _ -> pure ()) (\_ -> pure ()) config.llm
               . runOutbound tasks jobs deliveries
-              . runAgentWith admission journal (ExecutionInbox (const (pure "")) (const STM.retry)) Nothing (AgentLimits 2) (const (buildToolRegistry [] []))
+              . runAgentWith admission journal (ExecutionInbox (const (pure "")) (const STM.retry) (\_ _ -> pure [])) Nothing (AgentLimits 2) (const (buildToolRegistry [] []))
               $ withAsync (deliveryWorker deliveries [transport])
               $ \sender -> do
                 link sender

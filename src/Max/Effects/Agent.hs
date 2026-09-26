@@ -226,10 +226,11 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
           liftIO (atomically (writeTVar catalogRef catalog))
           -- Drain any feedback notes that arrived since the previous turn.
           liftIO (checkTurnCancellation h)
+          published <- raise (raise (raise (inbox.eiObserve h ctx.acTools)))
           feedback <- raise (raise (raise (inbox.eiRead (turnRuntimeAgentTurn h))))
           settled <- drainExecutionCompletions session
           let completionNote = if null settled then "" else "\n[已完成的异步调用]\n" <> TE.decodeUtf8 (LBS.toStrict (encode [object ["result" .= ref, "outcome" .= outcomeEnvelope invocation.tiOutcome] | (ref, invocation) <- settled]))
-              newNotes = inputMessages (feedback <> completionNote)
+              newNotes = published <> inputMessages (feedback <> completionNote)
               observedLog = Projection.appendObservation newNotes state.observations
               cursor = Projection.logCursor observedLog
           if n >= lims.maxTurns

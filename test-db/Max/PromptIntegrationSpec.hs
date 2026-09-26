@@ -8,30 +8,38 @@
 -- resolution, and reply lookup).
 module Max.PromptIntegrationSpec (spec) where
 
+import Data.Aeson (Value (..), eitherDecodeStrict', encode)
+import Data.Aeson.KeyMap qualified as KM
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL (execute, query)
 import Helpers (insertMessageWithCanonicalId, insertRawKind, insertRawMessage, requireJust, truncateAll, updateDbSession, withDb, withDbLog)
+import Max.Context.Read (ReadRequest (..))
 import Max.ConversationScope (conversationScopeFor)
+import Max.DB.AgentTurn (startAgentTurn)
 import Max.DB.Connection (DbPool)
+import Max.DB.ContextRead (readContext)
 import Max.DB.History (LedgerItem (..), MessageCursor (..))
+import Max.DB.Observation (observePublishedAfter)
 import Max.DB.Session (fetchOrInit)
 import Max.DB.Transaction (withReadSnapshot)
 import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.LLM (ChatMessage (..))
-import Max.LLM.Protocol (resolveCacheBoundaries)
 import Max.EpisodeStore
 import Max.IR (Body (..), MentionTarget (MentionIdentity), Node (..))
+import Max.LLM.Protocol (resolveCacheBoundaries)
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..))
-import Max.Prompt (ContextReadMode (..), PromptRequest (..), buildContext, planContext, renderContextPlan)
+import Max.Prompt (ContextReadMode (..), PromptRequest (..), buildContext, buildContextAtCursor, planContext, renderContextPlan)
 import Max.Prompt.Collect (collectContextPreview)
 import Max.Prompt.History (fetchBoundedPromptTail)
 import Max.Session (Session (..))
+import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..))
 import OneBot.Types (GroupId (..), UserId (..))
 import PromptFixture (promptRequest)
 import Test.Hspec
@@ -88,6 +96,63 @@ spec pool = before_ (truncateAll pool) $
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("随便聊" `T.isInfixOf`)
       ub `shouldSatisfy` ("另一条" `T.isInfixOf`)
+
+    it "observes only later public output, excluding its own turn, debug and other conversations" $ do
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "original request"
+      insertMessageWithCanonicalId pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "already in the window"
+      [Only principal] <- withDb pool $ query "SELECT author_principal_id FROM messages WHERE canonical_message_id=1001" ()
+      own <- withDb pool $ startAgentTurn (GroupId groupRaw) (CanonicalMessageId 1001) (PrincipalId principal)
+      s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
+      ((initial, _), base) <- withDbLog pool $ buildContextAtCursor (promptRequest s trigger)
+      userBodyOf initial `shouldSatisfy` T.isInfixOf "already in the window"
+      insertMessageWithCanonicalId pool 1003 groupRaw botRaw botRaw (timeAt 11) Nothing "own publication"
+      _ <- withDb pool $ execute "UPDATE messages SET agent_turn_id=?, turn_chunk_index=0 WHERE canonical_message_id=1003" (Only own.atrTurnId)
+      insertMessageWithCanonicalId pool 1004 groupRaw botRaw botRaw (timeAt 11) Nothing "other task published"
+      insertMessageWithCanonicalId pool 1005 groupRaw botRaw botRaw (timeAt 11) Nothing "private debug"
+      _ <- withDb pool $ execute "UPDATE messages SET kind='debug' WHERE canonical_message_id=1005" ()
+      insertMessageWithCanonicalId pool 1006 (groupRaw + 1) botRaw botRaw (timeAt 11) Nothing "other conversation"
+      (cut, observed) <- withDb pool $ observePublishedAfter (conversationScopeFor (GroupId groupRaw)) own.atrTurnId Nothing base
+      length observed `shouldBe` 1
+      let rendered = T.pack (show observed)
+      rendered `shouldSatisfy` T.isInfixOf "other task published"
+      rendered `shouldSatisfy` T.isInfixOf "2026-06-05T11:00:00Z"
+      rendered `shouldNotSatisfy` T.isInfixOf "own publication"
+      (_, repeated) <- withDb pool $ observePublishedAfter (conversationScopeFor (GroupId groupRaw)) own.atrTurnId Nothing cut
+      encode repeated `shouldBe` encode ([] :: [ChatMessage])
+      -- Later edits cannot mutate a previously frozen observation.
+      _ <- withDb pool $ execute "UPDATE messages SET rendered_text='edited later' WHERE canonical_message_id=1004" ()
+      T.pack (show observed) `shouldNotSatisfy` T.isInfixOf "edited later"
+
+    it "caps public observations and supplies a working scoped recovery cursor" $ do
+      let scope = conversationScopeFor (GroupId groupRaw)
+      mapM_ (\n -> insertMessageWithCanonicalId pool n groupRaw botRaw botRaw (timeAt 11) Nothing ("publication " <> T.pack (show n))) [1001 .. 1202]
+      (cut, observed) <- withDb pool $ observePublishedAfter scope (AgentTurnId 0) Nothing (MessageCursor 0)
+      length observed `shouldBe` 201
+      case last observed of
+        MsgUser raw -> case eitherDecodeStrict' (TE.encodeUtf8 raw) of
+          Right (Object fields) -> do
+            KM.lookup "unobserved_publications" fields `shouldBe` Just (Number 2)
+            case KM.lookup "context_read" fields of
+              Just (Object link) | Just (String cursor) <- KM.lookup "cursor" link -> do
+                recovered <- withDb pool $ readContext scope 32000 (ReadRequest Nothing Nothing Nothing 0 0 100 (Just cursor))
+                case recovered of
+                  Right body -> T.pack (show body) `shouldSatisfy` T.isInfixOf "publication 1201"
+                  Left err -> expectationFailure (T.unpack err)
+              other -> expectationFailure (show other)
+          other -> expectationFailure (show other)
+        other -> expectationFailure (show other)
+      (_, repeated) <- withDb pool $ observePublishedAfter scope (AgentTurnId 0) Nothing cut
+      encode repeated `shouldBe` encode ([] :: [ChatMessage])
+
+    it "omits an oversized observation with its recovery locator and respects clear" $ do
+      let scope = conversationScopeFor (GroupId groupRaw)
+      insertMessageWithCanonicalId pool 1001 groupRaw botRaw botRaw (timeAt 9) Nothing "before clear"
+      insertMessageWithCanonicalId pool 1002 groupRaw botRaw botRaw (timeAt 11) Nothing (T.replicate 40000 "汉")
+      (_, observed) <- withDb pool $ observePublishedAfter scope (AgentTurnId 0) (Just (timeAt 10)) (MessageCursor 0)
+      length observed `shouldBe` 1
+      T.pack (show observed) `shouldSatisfy` T.isInfixOf "context_read"
+      T.pack (show observed) `shouldNotSatisfy` T.isInfixOf "before clear"
+      T.length (T.pack (show observed)) `shouldSatisfy` (< 2000)
 
     it "honours cleared_at watermark — older rows are dropped" $ do
       insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "旧"

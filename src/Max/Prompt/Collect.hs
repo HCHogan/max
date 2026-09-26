@@ -1,12 +1,11 @@
 -- | Read-only context and media collection; no publication capability.
-module Max.Prompt.Collect (collectContextPreview) where
+module Max.Prompt.Collect (collectContextPreview, collectContextAtCursor) where
 
 import Control.Concurrent (threadDelay)
 import Control.Monad (when)
 import Data.ByteString qualified as BS (length)
 import Data.ByteString.Base64 qualified as B64 (encode)
 import Data.Either (partitionEithers)
-import Data.Maybe (mapMaybe)
 import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
@@ -15,6 +14,7 @@ import Data.Map.Strict qualified as Map
     findWithDefault,
     fromListWith,
   )
+import Data.Maybe (mapMaybe)
 import Data.Set qualified as Set (Set, fromList, member)
 import Data.Text (Text)
 import Data.Text qualified as T (pack)
@@ -61,6 +61,7 @@ import Max.DB.Files qualified as DBFiles
   )
 import Max.DB.History
   ( HistoryItem (canonicalId, receivedAt),
+    MessageCursor,
     fetchForwardChildrenInScope,
     fetchMessageInScope,
     fetchMessagesByIdsInScope,
@@ -78,20 +79,20 @@ import Max.Dispatch
   )
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.IR (Body (..), Node (..), Phase (Canonical))
-import Max.LLM.Types (ContentBlock (ImageDataUrl))
-import Max.Media.Prepare (prepareImageWithin)
-import Max.Media.Rendition (rawVideoAttachment, videoRendition)
-import Max.Media.Vision (VideoAttachment (..), blockVisionTokens, wholeVideo)
-import Max.ModelCatalog (ContextLimits (..), VisionLimits (..))
 import Max.Images
   ( downloadableImageCount,
     downloadableVideoCount,
   )
+import Max.LLM.Types (ContentBlock (ImageDataUrl))
+import Max.Media.Prepare (prepareImageWithin)
+import Max.Media.Rendition (rawVideoAttachment, videoRendition)
+import Max.Media.Vision (VideoAttachment (..), blockVisionTokens, wholeVideo)
 import Max.MemoryStore
   ( groupMemoryNamespace,
     listRecentMemories,
     userMemoryNamespace,
   )
+import Max.ModelCatalog (ContextLimits (..), VisionLimits (..))
 import Max.Platform.Types
   ( CanonicalMessageId (CanonicalMessageId),
     PrincipalId (PrincipalId),
@@ -130,10 +131,16 @@ import Max.Turn.Continuity (renderRecentTurn)
 collectContextPreview ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   PromptRequest -> Eff es ContextSnapshot
-collectContextPreview request = do
+collectContextPreview request = fst <$> collectContextAtCursor request
+
+collectContextAtCursor ::
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  PromptRequest -> Eff es (ContextSnapshot, MessageCursor)
+collectContextAtCursor request = do
   now <- liftIO getCurrentTime
   history <- collectHistory request
-  collectContextSnapshot request now history
+  snapshot <- collectContextSnapshot request now history
+  pure (snapshot, history.selectedThrough)
 
 collectContextSnapshot ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>

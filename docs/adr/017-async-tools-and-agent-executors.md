@@ -7,12 +7,16 @@ resume/cancel using the current inbox. Projection and node scheduling (steps
 ends, remain in progress. Root requests and guest drivers now share per-node
 execution permits: async awaits yield immediately, short-tool rounds yield at
 five seconds, and ready segments use the priority/FIFO order below. Up to 32
-tasks can be open on a root; additional admitted requests remain queued. Task records and observation-ordered projection now
+tasks can be open on a root; additional admitted requests remain queued.
+Task records and observation-ordered projection now
 drive agent polls using the existing inbox; raw answers (including reasoning
 and signatures), tool results and the initial window remain in the record.
-Compaction and media planning use explicit projection checkpoints. Node-wide
-observations, their bounds/recovery locators and the open-task tail still need
-the event routing in step 4. Amends
+Compaction and media planning use explicit projection checkpoints. Root
+polls also observe later canonical public output through a frozen history cut,
+excluding their own publications and private traces. These public observations
+are bounded to 200 messages/about 32k tokens with context_read recovery.
+Unified event observations (including incoming user messages), their combined
+bounds and the open-task tail still need the event routing in step 4. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)
 and the Wasm host ABI of [ADR-012](012-wasm-tool-execution.md). Work stays
 process-local; restart persistence is out of scope (§9).

@@ -2,6 +2,7 @@ module Max.Prompt
   ( -- * Pipeline
     PromptRequest (..),
     buildContext,
+    buildContextAtCursor,
     ContextReadMode (..),
     TriggerOrigin (..),
 
@@ -55,6 +56,7 @@ import Max.Context.Types
 import Max.DB.History.Media (withMediaHandles)
 import Max.Dispatch (DispatchMessage (canonicalId, groupId))
 import Max.Effects.Blob (Blob)
+import Max.History.Types (MessageCursor)
 import Max.LLM.Types (ChatMessage)
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Prompt.Collect qualified as Collect
@@ -62,12 +64,12 @@ import Max.Prompt.Render
   ( applyStickerCaptions,
     contextRoster,
     planContext,
+    renderAutomationFire,
     renderContext,
     renderContextPlan,
     renderCurrentLine,
     renderHistoryLine,
     renderTaskReport,
-    renderAutomationFire,
     tagImageMarkers,
   )
 import Max.Prompt.Request (PromptRequest (..))
@@ -76,8 +78,13 @@ import OneBot.Types (GroupId (..))
 buildContext ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   PromptRequest -> Eff es ([ChatMessage], [(Int64, Text)])
-buildContext request = do
-  snapshot <- Collect.collectContextPreview request
+buildContext request = fst <$> buildContextAtCursor request
+
+buildContextAtCursor ::
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  PromptRequest -> Eff es (([ChatMessage], [(Int64, Text)]), MessageCursor)
+buildContextAtCursor request = do
+  (snapshot, cursor) <- Collect.collectContextAtCursor request
   let plan = planContext request.prLimits snapshot
       CanonicalMessageId triggerMessageId = request.prTrigger.canonicalId
       GroupId groupId = request.prTrigger.groupId
@@ -100,7 +107,7 @@ buildContext request = do
           "prompt_token_limit" .= plan.cpBudget.cbPromptTokenLimit,
           "policy_version" .= plan.cpPolicyVersion
         ]
-  pure (renderContextPlan plan, contextRoster (cpInputs plan))
+  pure ((renderContextPlan plan, contextRoster (cpInputs plan)), cursor)
 
 traceJson :: ContextTrace -> Value
 traceJson trace =

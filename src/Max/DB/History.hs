@@ -4,6 +4,7 @@ module Max.DB.History
     LedgerItem (..),
     HistoryPage (..),
     bestName,
+    latestMessageCursor,
     fetchRecentInGroup,
     historyColumns,
     transcriptEligibleExpr,
@@ -32,6 +33,14 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.History.Types
+
+-- | Exact end of the canonical ledger in the caller's snapshot.
+latestMessageCursor :: (WithConnection :> es, IOE :> es) => ConversationScope -> Eff es MessageCursor
+latestMessageCursor scope = do
+  rows <- query "SELECT COALESCE(max(ingest_seq), 0) FROM messages WHERE group_id=?" (Only (conversationStorageId scope))
+  pure $ case rows of
+    [Only cursor] -> MessageCursor cursor
+    _ -> error "latestMessageCursor: aggregate cardinality"
 
 -- | The column list every 'HistoryItem' query selects, in 'FromRow' order.
 -- One definition because a projection that drifts between two of these

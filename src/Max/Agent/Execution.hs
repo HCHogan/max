@@ -5,6 +5,9 @@ import Control.Concurrent.STM (STM)
 import Data.Text (Text)
 import Effectful (Eff)
 import Max.Execution.Types
+import Max.LLM.Types (ChatMessage)
+import Max.Tasks (TurnRuntime)
+import Max.ToolContext (ToolContext)
 import Max.Turn.Types (AgentTurnRef, ExecutionOrdinal)
 import OneBot.Types (GroupId)
 
@@ -22,5 +25,6 @@ data ExecutionJournal es = ExecutionJournal
 
 data ExecutionInbox es = ExecutionInbox
   { eiRead :: AgentTurnRef -> Eff es Text,
-    eiInterrupt :: AgentTurnRef -> STM ()
+    eiInterrupt :: AgentTurnRef -> STM (),
+    eiObserve :: TurnRuntime -> ToolContext -> Eff es [ChatMessage]
   }

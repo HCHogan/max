@@ -12,7 +12,9 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.Agent.Execution
 import Max.Conversation (Conversations)
 import Max.Conversation qualified as Conversation
+import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn (enrichSandboxJournalStart, recordJournalExecution, recordModelNote)
+import Max.DB.Observation (observePublishedAfter)
 import Max.Effects.Agent (Agent, AgentLimits, runAgentWith)
 import Max.Effects.Blob (Blob)
 import Max.Effects.LLM (LLM)
@@ -21,7 +23,8 @@ import Max.Effects.ToolOutput (ToolOutput)
 import Max.Effects.Tools (ToolCatalogError, ToolRegistry)
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Jobs qualified as Jobs
-import Max.ToolContext (ToolContext)
+import Max.Tasks (setTurnObservationCursor, turnObservationCursor, turnRuntimeAgentTurn)
+import Max.ToolContext (ToolContext, toolClearedAt, toolGroupId)
 import Max.Turn.Types (AgentTurnRef (..))
 import Max.Util (catchSync)
 
@@ -40,6 +43,15 @@ runAgentRuntime jobs conversations =
     ( ExecutionInbox
         (\turn -> (<>) <$> jobInbox turn.atrTurnId <*> liftIO (Conversation.readFeedback conversations turn.atrTurnId))
         (\turn -> Jobs.awaitFeedback jobs turn.atrTurnId `orElse` Conversation.awaitFeedback conversations turn.atrTurnId)
+        ( \turn context -> do
+            cursor <- liftIO (turnObservationCursor turn)
+            case cursor of
+              Nothing -> pure []
+              Just after -> do
+                (through, messages) <- observePublishedAfter (conversationScopeFor (toolGroupId context)) (turnRuntimeAgentTurn turn).atrTurnId (toolClearedAt context) after
+                liftIO (setTurnObservationCursor turn through)
+                pure messages
+        )
     )
     (Just (liftIO . Jobs.acquireGuestSlot jobs . (.atrTurnId)))
   where

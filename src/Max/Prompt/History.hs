@@ -10,7 +10,8 @@ import Effectful.Log (Log, UTCTime, logAttention, logInfo, object, (.=))
 import Effectful.PostgreSQL (WithConnection)
 import Max.Context.Types (ContextCompartment, ContextReadMode (..))
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
-import Max.DB.History (HistoryItem, HistoryPage (..), LedgerItem (..), MessageCursor (..), fetchNewestPromptPageBefore)
+import Max.DB.History (HistoryItem, HistoryPage (..), LedgerItem (..), MessageCursor (..), fetchNewestPromptPageBefore, latestMessageCursor)
+import Max.DB.Transaction (withReadSnapshot)
 import Max.Dispatch (DispatchMessage (canonicalId, groupId))
 import Max.Episode.Types (SourceRange (..))
 import Max.EpisodeStore (ActiveCompartment (..), listActiveCompartments)
@@ -22,11 +23,13 @@ import OneBot.Types (GroupId (..))
 
 data HistorySelection = HistorySelection
   { selectedCompartments :: ![ContextCompartment],
-    selectedHistory :: ![HistoryItem]
+    selectedHistory :: ![HistoryItem],
+    selectedThrough :: !MessageCursor
   }
 
 collectHistory :: (WithConnection :> es, Log :> es, IOE :> es) => PromptRequest -> Eff es HistorySelection
-collectHistory request = do
+collectHistory request = withReadSnapshot $ do
+  through <- latestMessageCursor scope
   covered <- case request.prReadMode of
     RawLedgerEmergency -> do
       logAttention "context: global raw-ledger emergency reader enabled" (object ["group_id" .= gid])
@@ -40,7 +43,7 @@ collectHistory request = do
       pure suffix
   let end = maybe (MessageCursor 0) ((.activeRange.srEnd) . NE.last) (NE.nonEmpty covered)
       tokenLimit = historyTokenLimit request.prLimits request.prMultimodal
-  (raw, dropped) <- fetchBoundedPromptTail scope end trigger request.prSession.clearedAt tokenLimit
+  (raw, dropped) <- fetchBoundedPromptTailBefore scope end (Just (MessageCursor (through.ingestSeq + 1))) trigger request.prSession.clearedAt tokenLimit
   when dropped $
     logAttention "context: raw history exceeds bounded tail" $
       object
@@ -53,7 +56,8 @@ collectHistory request = do
   pure
     HistorySelection
       { selectedCompartments = map contextCompartmentFromActive covered,
-        selectedHistory = map (.history) raw
+        selectedHistory = map (.history) raw,
+        selectedThrough = through
       }
   where
     GroupId gid = request.prTrigger.groupId
@@ -72,7 +76,12 @@ fetchBoundedPromptTail ::
   Maybe UTCTime ->
   Int ->
   Eff es ([LedgerItem], Bool)
-fetchBoundedPromptTail scope after triggerId cleared tokenLimit = go Nothing [] 0
+fetchBoundedPromptTail scope after = fetchBoundedPromptTailBefore scope after Nothing
+
+fetchBoundedPromptTailBefore ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope -> MessageCursor -> Maybe MessageCursor -> Int64 -> Maybe UTCTime -> Int -> Eff es ([LedgerItem], Bool)
+fetchBoundedPromptTailBefore scope after beforeCut triggerId cleared tokenLimit = go beforeCut [] 0
   where
     go before accumulated used = do
       page <- fetchNewestPromptPageBefore scope after before triggerId cleared promptTailPageSize

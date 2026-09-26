@@ -13,6 +13,8 @@ module Max.Tasks
     turnRuntimeTaskId,
     turnRuntimeAgentTurn,
     turnExecutor,
+    turnObservationCursor,
+    setTurnObservationCursor,
     setTurnExecutor,
     turnRuntimeOutputContext,
     nextExecutionOrdinal,
@@ -49,6 +51,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
+import Max.History.Types (MessageCursor)
 import Max.Node.Executor qualified as Executor
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), ExecutionOrdinal (..), TurnOutputContext, newTurnOutputContext, turnOutputAgentTurn)
@@ -62,7 +65,8 @@ newtype TaskId = TaskId {unTaskId :: Text}
 data TurnRuntime = TurnRuntime
   { trEntry :: !TaskEntry,
     trExecutionOrdinal :: !(TVar Int64),
-    trExecutor :: !(TVar Executor.Actor)
+    trExecutor :: !(TVar Executor.Actor),
+    trObservationCursor :: !(TVar (Maybe MessageCursor))
   }
 
 -- | Mutable lifecycle state shared with cancellation and visibility queries.
@@ -112,6 +116,12 @@ newtype TaskRegistry = TaskRegistry
 newTaskRegistry :: IO TaskRegistry
 newTaskRegistry = TaskRegistry <$> newTVarIO (0, Map.empty)
 
+turnObservationCursor :: TurnRuntime -> IO (Maybe MessageCursor)
+turnObservationCursor = readTVarIO . (.trObservationCursor)
+
+setTurnObservationCursor :: TurnRuntime -> MessageCursor -> IO ()
+setTurnObservationCursor turn cursor = atomically (writeTVar turn.trObservationCursor (Just cursor))
+
 turnExecutor :: TurnRuntime -> IO Executor.Actor
 turnExecutor = readTVarIO . (.trExecutor)
 
@@ -148,6 +158,7 @@ beginTurnRuntime reg ref gid uid mTrigger = do
   node <- Executor.newExecutor
   actor <- atomically (Executor.registerTask node ref.atrTurnId Executor.NewRequest)
   executor <- newTVarIO actor
+  observationCursor <- newTVarIO Nothing
   atomically $ do
     (n, m) <- readTVar reg.trState
     let tid = TaskId ("t" <> T.pack (show (n + 1)))
@@ -169,7 +180,8 @@ beginTurnRuntime reg ref gid uid mTrigger = do
       TurnRuntime
         { trEntry = entry,
           trExecutionOrdinal = executionOrdinal,
-          trExecutor = executor
+          trExecutor = executor,
+          trObservationCursor = observationCursor
         }
   where
     realTrigger = \case

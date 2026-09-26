@@ -194,6 +194,7 @@ library
         Max.DB.Health
         Max.DB.Projection
         Max.DB.History
+        Max.DB.Observation
         Max.DB.ContextRead
         Max.History.Types
         Max.Media.Caption
