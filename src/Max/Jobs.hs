@@ -69,7 +69,7 @@ import Max.Platform.Types (CanonicalMessageId, PrincipalId)
 import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State (TaskStatus (..), taskIsLive)
 import Max.Task.Types
-import Max.Tasks (TaskCancelled (..), TaskRegistry, bindTurnEvents, cancelAgentTurnTask, lookupTurnEvents, turnIsLive)
+import Max.Tasks (TaskCancelled (..), TaskRegistry, bindTurnEvents, cancelAgentTurnTask, lookupTurnEvents, turnAcceptsWork, turnIsLive)
 import Max.Turn.Types (AgentTurnId, AgentTurnRef (..))
 import OneBot.Types (GroupId)
 
@@ -359,7 +359,7 @@ decideJobStep :: Jobs -> AgentTurnId -> ExecutionStep -> IO Admission
 decideJobStep jobs turn step = do
   now <- getCurrentTime
   atomically $ do
-    live <- turnIsLive jobs.tasks turn
+    live <- (if step == ExecutionWork CheckOnly then turnIsLive else turnAcceptsWork) jobs.tasks turn
     if not live
       then pure Refused
       else do

@@ -2,6 +2,7 @@ module Max.ExecutionSpec (Max.ExecutionSpec.spec, withHost, hooks, DbEffects) wh
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async
+import Control.Concurrent.STM (atomically, check, newTVarIO, readTVar, writeTVar)
 import Control.Exception (bracket_)
 import Control.Monad (replicateM_, void, when)
 import Data.Aeson (Value, object, toJSON, (.=))
@@ -18,7 +19,7 @@ import Effectful.PostgreSQL (WithConnection, execute, query)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import ExecutionFixture
 import Helpers (truncateAll, withDb)
-import JobFixture (RunningJob (..), runningJob)
+import JobFixture (RunningJob (..), runningJob, seed)
 import Max.Agent.Runtime (executionAdmission, executionJournal)
 import Max.CodeMode.Execution
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion, runJavaScript)
@@ -39,12 +40,12 @@ import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Task.Policy (treeToolCalls)
 import Max.Task.State (TaskStatus (Failed))
 import Max.Task.Types (JobResult (..), JobRun (..), JobSpec (..), JobView (..), TaskProfile (Basic))
-import Max.Tasks (TaskCancelled (..), TurnRuntime)
+import Max.Tasks (TaskCancelled (..), TurnRuntime, beginTurnRuntime, finishTurnRuntime, newTaskRegistry, turnAcceptsWork)
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (LoopControl (..), controlSkillLoads)
 import Max.Turn.Types (AgentTurnRef (..))
-import OneBot.Types (GroupId (..))
+import OneBot.Types (GroupId (..), UserId (..))
 import System.Timeout (timeout)
 import Test.Hspec
 
@@ -68,6 +69,32 @@ hostHooks jobs = hoistExecutionHooks raise . hooks jobs
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution with real journal" $ do
+  it "keeps a detached native call alive through task finish and journals its actual result" $ do
+    (turn, message, _) <- seed pool 900 1
+    tasks <- newTaskRegistry
+    jobs <- Jobs.newJobs tasks
+    runtime <- beginTurnRuntime tasks turn (GroupId 900) (UserId 1) (Just message)
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    steering <- newTVarIO False
+    let runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (putMVar entered () >> takeMVar release) >> pure (Right value)}
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition {tdAwait = AsyncTool}] [runner])
+    Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ -> do
+      _ <- withHost pool . runTools registry $ do
+        session <- newExecutionSession Nothing
+        executeToolBatch session (hostHooks jobs runtime) {ehInterrupt = readTVar steering >>= check} (views registry) [ToolRequest "detached" "echo" args]
+      withDb pool (finishAgentTurn turn TurnSucceeded 1 Nothing)
+      Async.withAsync (finishTurnRuntime tasks runtime) $ \closing -> do
+        timeout 1000000 (atomically (turnAcceptsWork tasks turn.atrTurnId >>= check . not)) `shouldReturn` Just ()
+        Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork CheckOnly) `shouldReturn` True
+        Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork ReserveCall) `shouldReturn` False
+        Jobs.authorizeJobStep jobs turn.atrTurnId ExecutionCheckpoint `shouldReturn` False
+        timeout 20000 (Async.wait closing) `shouldReturn` Nothing
+        putMVar release ()
+        timeout 3000000 (Async.wait closing) `shouldReturn` Just ()
+      states turn `shouldReturn` [("echo", "succeeded")]
+      Jobs.authorizeJobStep jobs turn.atrTurnId (ExecutionWork CheckOnly) `shouldReturn` False
+
   it "records a JavaScript syntax failure before any leaf as failed-before-effect" $ do
     (jobs, turn, runtime) <- fixture
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [echoTool])

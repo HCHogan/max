@@ -306,14 +306,12 @@ forkDispatch start origin gm work = do
           logAttention "turn terminal cleanup failed" $
             object ["turn_id" .= ref.atrTurnId.unAgentTurnId, "reason" .= reason, "error" .= T.pack (show (e :: SomeException))]
 
-    -- Release local ownership before browser teardown, which may block or fail.
+    -- The root executor is already released. Retained native calls finish
+    -- before their browser scope is torn down or shutdown's slot is released.
     releaseTurnScope env turn = do
       let ref = turnRuntimeAgentTurn turn
-      liftIO $ do
-        leaveDispatch env.beShutdown
-        finishTurnRuntime env.beTasks turn
-      releaseBrowserTurn env.beJobs env.beBrowsers gm.groupId ref.atrTurnId
-        `catchSync` \e ->
-          logAttention "browser scope finalizer failed" $
-            object ["error" .= T.pack (show (e :: SomeException))]
-      liftIO (Jobs.detachJobNotice env.beJobs ref.atrTurnId)
+          browserCleanup =
+            releaseBrowserTurn env.beJobs env.beBrowsers gm.groupId ref.atrTurnId
+              `catchSync` \e -> logAttention "browser scope finalizer failed" (object ["error" .= T.pack (show (e :: SomeException))])
+      (liftIO (finishTurnRuntime env.beTasks turn) `finally` browserCleanup)
+        `finally` liftIO (Jobs.detachJobNotice env.beJobs ref.atrTurnId >> leaveDispatch env.beShutdown)

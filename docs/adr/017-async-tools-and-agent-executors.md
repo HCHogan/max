@@ -31,7 +31,13 @@ replacing that relay with per-event routing remains unfinished. Replies to an
 open root task's trigger or public output now steer that task, while unquoted
 `!fb` targets the sender's newest open task. `!btw` starts a separate task that
 can itself receive later replies. The old job-output reply map is removed;
-canonical output provenance identifies the producing root task. Full routing
+canonical output provenance identifies the producing root task. Detached native
+calls now retain the execution runtime until they settle: the root executor is
+released first, new model/tool admission and publication are fenced, and browser
+teardown and shutdown-slot release wait for these calls. Kill/shutdown cancel
+retained calls. Their completed outcomes still need terminal-task relay routing;
+background-job authority after job completion also remains to be integrated.
+Full routing
 (child relays, replacement/cancellation, native completions and monitor fires), combined
 observation bounds and the open-task tail remain in step 4. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)

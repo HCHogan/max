@@ -10,6 +10,8 @@ module Max.Tasks
     beginTurnRuntime,
     activateTurnRuntime,
     finishTurnRuntime,
+    retainTurnWork,
+    turnAcceptsWork,
     turnRuntimeTaskId,
     turnRuntimeAgentTurn,
     turnExecutor,
@@ -41,8 +43,8 @@ module Max.Tasks
 where
 
 import Control.Concurrent.STM
-import Control.Exception (Exception (..), asyncExceptionFromException, asyncExceptionToException, throwIO)
-import Control.Monad (unless, when)
+import Control.Exception (Exception (..), asyncExceptionFromException, asyncExceptionToException, finally, mask, onException, throwIO)
+import Control.Monad (filterM, unless, when)
 import Data.Bifunctor (second)
 import Data.Int (Int64)
 import Data.List (sortOn)
@@ -96,6 +98,8 @@ data TaskEntry = TaskEntry
     teCancel :: !(TVar (Maybe (IO ()))),
     -- | A @!kill@ has been accepted for this entry.
     teKilled :: !(TVar Bool),
+    teDraining :: !(TVar Bool),
+    teRetained :: !(TVar [(IO (), IO ())]),
     teEvents :: !(TVar Events.Task)
   }
 
@@ -188,6 +192,8 @@ beginTurnRuntime reg ref gid uid mTrigger = do
   atomically $ do
     (n, m) <- readTVar reg.trState
     events <- Events.newNode >>= Events.newTask >>= newTVar
+    draining <- newTVar False
+    retained <- newTVar []
     let tid = TaskId ("t" <> T.pack (show (n + 1)))
         entry =
           TaskEntry
@@ -201,6 +207,8 @@ beginTurnRuntime reg ref gid uid mTrigger = do
               teProgressAt = progressAt,
               teCancel = cancel,
               teKilled = killed,
+              teDraining = draining,
+              teRetained = retained,
               teEvents = events
             }
     writeTVar reg.trState (n + 1, Map.insert tid entry m)
@@ -281,13 +289,41 @@ checkTurnCancellation turn = do
   killed <- readTVarIO entry.teKilled
   when killed (throwIO TaskCancelled)
 
--- | The dispatch root atomically drops its process-local visibility.
+-- | Native calls detached by an interrupted await retain the execution scope.
+-- The cancellation and join actions come from host-owned Async handles.
+retainTurnWork :: TurnRuntime -> IO () -> IO () -> IO ()
+retainTurnWork turn cancel await = mask $ \restore -> do
+  accepted <- atomically $ do
+    draining <- readTVar turn.trEntry.teDraining
+    killed <- readTVar turn.trEntry.teKilled
+    if draining || killed
+      then pure False
+      else do
+        modifyTVar' turn.trEntry.teRetained ((cancel, await) :)
+        pure True
+  unless accepted (restore cancel)
+
+-- | Close the model task and release its executor immediately. Execution
+-- identity and resources remain until its already-admitted native calls settle.
+-- Kill/shutdown now signal those calls instead of the finished model segment.
 finishTurnRuntime :: TaskRegistry -> TurnRuntime -> IO ()
-finishTurnRuntime reg turn =
-  atomically $ do
+finishTurnRuntime reg turn = mask $ \restore -> do
+  now <- getCurrentTime
+  (retained, killed) <- atomically $ do
     readTVar turn.trExecutor >>= Executor.closeTask
     turnEvents turn >>= Events.close
-    modifyTVar' reg.trState (second (Map.delete turn.trEntry.teId))
+    let entry = turn.trEntry
+    writeTVar entry.teDraining True
+    retained <- readTVar entry.teRetained
+    unless (null retained) (writePhase entry now "detached calls")
+    writeTVar entry.teCancel (Just (mapM_ fst retained))
+    killed <- readTVar entry.teKilled
+    pure (retained, killed)
+  let cancel = mapM_ fst retained
+      remove = atomically $ do
+        writeTVar turn.trEntry.teRetained []
+        modifyTVar' reg.trState (second (Map.delete turn.trEntry.teId))
+  (when killed cancel >> restore (mapM_ snd retained) `onException` cancel) `finally` remove
 
 -- | Message ids in @gid@ that some turn is already handling: triggers
 -- belonging to live dispatches.  'Max.Prompt.buildContext' uses this
@@ -296,7 +332,8 @@ finishTurnRuntime reg turn =
 inFlightTriggers :: TaskRegistry -> GroupId -> IO (Set Int64)
 inFlightTriggers reg gid = atomically $ do
   (_, m) <- readTVar reg.trState
-  let mine = filter (\e -> e.teGroup == gid) (Map.elems m)
+  active <- filterM (fmap not . readTVar . (.teDraining)) (Map.elems m)
+  let mine = filter (\e -> e.teGroup == gid) active
   pure (Set.fromList (mapMaybe teTrigger mine))
 
 listTasks :: TaskRegistry -> Maybe GroupId -> IO [TaskInfo]
@@ -371,12 +408,20 @@ turnIsLive registry turn = do
     [entry] -> not <$> readTVar entry.teKilled
     _ -> pure False
 
+-- | Finished model tasks can only finish calls that were already admitted.
+turnAcceptsWork :: TaskRegistry -> AgentTurnId -> STM Bool
+turnAcceptsWork registry turn = do
+  (_, entries) <- readTVar registry.trState
+  case [entry | entry <- Map.elems entries, entryTurnId entry == turn] of
+    [entry] -> (&&) <$> (not <$> readTVar entry.teKilled) <*> (not <$> readTVar entry.teDraining)
+    _ -> pure False
+
 -- | Revocation precedes the cancellation signal, including if a worker masks it.
 authorizeTurnOutput :: TaskRegistry -> GroupId -> AgentTurnId -> IO Bool
 authorizeTurnOutput registry group turn = atomically $ do
   (_, entries) <- readTVar registry.trState
   case [entry | entry <- Map.elems entries, entry.teGroup == group, entryTurnId entry == turn] of
-    [entry] -> not <$> readTVar entry.teKilled
+    [entry] -> (&&) <$> (not <$> readTVar entry.teKilled) <*> (not <$> readTVar entry.teDraining)
     _ -> pure False
 
 entryTurnId :: TaskEntry -> AgentTurnId

@@ -33,7 +33,7 @@ where
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM qualified as STM
 import Control.Exception (fromException)
-import Control.Monad (unless)
+import Control.Monad (unless, void)
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Foldable (for_)
@@ -77,6 +77,7 @@ import Max.Tasks
     TurnRuntime,
     checkTurnCancellation,
     nextExecutionOrdinal,
+    retainTurnWork,
     turnExecutor,
     turnRuntimeAgentTurn,
   )
@@ -102,6 +103,7 @@ data ExecutionHooks es = ExecutionHooks
     ehFinish :: JournalExecution -> JournalFinish -> Eff es (),
     ehAcquireGuest :: Eff es (Maybe (IO ())),
     ehInterrupt :: STM.STM (),
+    ehRetain :: Async ToolInvocation -> Eff es (),
     ehActor :: IO (Maybe Executor.Actor)
   }
 
@@ -125,6 +127,7 @@ executionHooks admission journal group turn =
       ehFinish = journal.ejFinish,
       ehAcquireGuest = pure (Just (pure ())),
       ehInterrupt = STM.retry,
+      ehRetain = \worker -> liftIO (retainTurnWork turn (Async.cancel worker) (void (Async.waitCatch worker))),
       ehActor = Just <$> turnExecutor turn
     }
 
@@ -136,6 +139,7 @@ hoistExecutionHooks lower hooks =
       ehFinish = \row -> lower . hooks.ehFinish row,
       ehAcquireGuest = lower hooks.ehAcquireGuest,
       ehInterrupt = hooks.ehInterrupt,
+      ehRetain = lower . hooks.ehRetain,
       ehActor = hooks.ehActor
     }
 
@@ -238,6 +242,7 @@ executeToolBatch session hooks catalog requests = mask $ \restore -> do
       detach index request worker = do
         handles <- readTVarIO session.callHandles
         ref <- maybe (freshExecutionLabel session "result") pure (Map.lookup request.trCallId handles)
+        hooks.ehRetain worker
         atomically $ do
           modifyTVar' session.nativeFutures (Map.insert ref worker)
           modifyTVar' owned (Map.delete index)
