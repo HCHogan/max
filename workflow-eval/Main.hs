@@ -164,7 +164,7 @@ runCase cfg opts pool sources group parallel = do
               Jobs.LaunchJob child -> do
                 worker <- Async.asyncWithUnmask (\unmask -> unmask (runChild cfg opts pool sources tasks jobs child calls))
                 modifyIORef' workers (worker :)
-              Jobs.PublishJobNotice job _ _ -> Jobs.releaseJobNotice jobs job.run
+              Jobs.RelayMessage relay -> atomically (Router.releaseMessage jobs.resultRouter relay)
               -- The benchmark consumes reports through the guest result and
               -- journal; it has no chat frontend for late-call notifications.
               Jobs.RelayResult relay -> atomically (Router.releaseRelay jobs.resultRouter relay)

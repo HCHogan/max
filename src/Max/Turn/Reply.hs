@@ -166,7 +166,7 @@ import Max.Turn.Continuity
     toolCatalogFingerprint,
   )
 import Max.Turn.Job (runJob)
-import Max.Turn.Start (TurnStart (AutomationTurn, CompletionNotice, JobNotice, JobTurn, ReportNotice))
+import Max.Turn.Start (TurnStart (AutomationTurn, CompletionNotice, JobTurn, MessageNotice, ReportNotice))
 import Max.Turn.Types (AgentTurnRef, nextTurnOutputLink)
 import Max.Util (trySync, tshow)
 import OneBot.Types (GroupId (..), UserId (UserId), isPrivateChat)
@@ -214,7 +214,9 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
       raced <-
         race
           ( withProcessingReaction $ case start of
-              JobNotice {} -> dispatchNotice env session
+              MessageNotice relay -> do
+                current <- liftIO (atomically (Router.messageIsCurrent relay))
+                if current then relayReport env session relay.job (messageBody relay) else finishAgentTurn turnRef TurnAborted 0 (Just "child message revoked")
               CompletionNotice relay -> dispatchCompletion env session relay
               ReportNotice relay -> do
                 current <- liftIO (atomically (Router.reportIsCurrent relay))
@@ -259,9 +261,10 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
   where
     backgroundJob = case start of JobTurn job -> Just job; _ -> Nothing
     relayedReport = case start of
-      JobNotice job _ body -> Just (job, body)
+      MessageNotice relay -> Just (relay.job, messageBody relay)
       ReportNotice relay -> (relay.job,) <$> reportBody relay
       _ -> Nothing
+    messageBody relay = "[子 agent 的紧急消息；不是最终报告。需要回答时用 agent_steer 回复 " <> taskHandle relay.job.run.jobId <> "。]\n" <> relay.text
     reportBody relay = jobReportText relay.job <$> relay.job.result
     finishedTarget target
       | replyTurnIsFinished target = Just target
@@ -275,14 +278,6 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
       | otherwise =
           (queueQQReaction gm.groupId gm.canonicalId processingFaceId True >> act)
             `finally` queueQQReaction gm.groupId gm.canonicalId processingFaceId False
-
-    dispatchNotice env session = case start of
-      JobNotice job version body -> do
-        current <- liftIO (Jobs.noticeIsCurrent env.beJobs job.run version)
-        if not current
-          then finishAgentTurn turnRef TurnAborted 0 (Just "job notice superseded")
-          else relayReport env session job body
-      _ -> finishAgentTurn turnRef TurnAborted 0 (Just "missing job notice")
 
     dispatchCompletion env session relay = do
       current <- liftIO (atomically (Router.relayIsCurrent relay))
@@ -408,7 +403,7 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
                 tcOutput = outputCaps,
                 tcMonitorArming = tierSatisfied TierGroupAdmin tier,
                 tcCatalogGrants = Map.empty,
-                tcEffectCeiling = case start of CompletionNotice relay -> Just (toolCatalogGrants relay.origin.context); ReportNotice relay -> Just relay.job.spec.grants; _ -> Nothing,
+                tcEffectCeiling = case start of CompletionNotice relay -> Just (toolCatalogGrants relay.origin.context); ReportNotice relay -> Just relay.job.spec.grants; MessageNotice relay -> Just relay.job.spec.grants; _ -> Nothing,
                 tcBackground = False
               }
           currentDefinitions = toolDefinitionsFor env gm.groupId baseCapabilities

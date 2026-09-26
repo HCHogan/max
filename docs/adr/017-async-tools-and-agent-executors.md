@@ -24,10 +24,15 @@ progress changes status only. Background `agent_tell` / `agent_ask` and their
 SDK functions deliver to the starting task's event log. A parent's answer
 settles the pending ask without re-interrupting the guest that receives it;
 external/deeper steering also records a normal note in the parent's log.
-After the starting task ends, normal messages are bounded and folded into the
-final report, preserving its original contract payload. Urgent messages still
-use the existing bounded frontend notice relay, which can aggregate messages;
-replacing that relay with per-event routing remains unfinished. Replies to an
+Child messages now share the result/report router and its bounded delivery
+receipts. Closing the starting task folds unobserved normal messages into the
+final report in delivery order, preserving its contract payload, including when
+the report was already ready. Unobserved urgent messages become separate frontend
+relays under the original source and grant ceiling. The old `pendingNotice`,
+`PublishJobNotice` and `JobNotice` aggregation path is removed. A relay answering
+an ask is bound to that exact pending question, so an older relay cannot settle
+a later ask. Cancellation/replacement removes buffered messages as well as relay
+ownership before observation or publication. Replies to an
 open root task's trigger or public output now steer that task, while unquoted
 `!fb` targets the sender's newest open task. `!btw` starts a separate task that
 can itself receive later replies. The old job-output reply map is removed;
@@ -68,7 +73,7 @@ remain in force; cancellation, replacement, expiry and invocation return revoke
 this permission. New calls and default database callers still require a live
 model turn. An admitted agent call can create its child after parent completion
 under the original tree grants and deadline. Full routing
-(child messages, replacement/cancellation and monitor fires), combined
+(replacement/cancellation and monitor fires), combined
 observation bounds and the open-task tail remain in step 4. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)
 and the Wasm host ABI of [ADR-012](012-wasm-tool-execution.md). Work stays

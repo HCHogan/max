@@ -46,11 +46,11 @@ spec pool = before_ (truncateAll pool) $ describe "agent() through the agent too
   it "runs SDK tell and ask, then resumes the original JavaScript await with the parent's answer" $ do
     running <- runningJob pool Basic workflowGrants
     Async.withAsync (runScript pool running Nothing "const base=40; await max.tell('working'); const answer=await max.ask('which number?'); return base+Number(answer.body);") $ \worker -> do
-      Just (Jobs.PublishJobNotice _ version body) <- timeout 3000000 (Jobs.takeJobWork running.jobs)
-      body `shouldSatisfy` (Data.Text.isInfixOf "which number?")
+      Just (Jobs.RelayMessage notice) <- timeout 3000000 (Jobs.takeJobWork running.jobs)
+      notice.text `shouldSatisfy` (Data.Text.isInfixOf "which number?")
       (relay, message, principal) <- seed pool 900 2
       _ <- beginTurnRuntime running.tasks relay (GroupId 900) (UserId 2) (Just message)
-      Jobs.bindJobNotice running.jobs relay.atrTurnId running.job.run version
+      Jobs.bindMessageRelay running.jobs relay.atrTurnId notice
       Jobs.steerJobFrom running.jobs (Just relay.atrTurnId) (GroupId 900) principal (Just message) running.job.run.jobId "2" `shouldReturn` Right ()
       Just result <- timeout 3000000 (Async.wait worker)
       result.cmExit `shouldBe` WasmCompleted
@@ -144,7 +144,7 @@ spec pool = before_ (truncateAll pool) $ describe "agent() through the agent too
       timeout 3000000 (takeMVar pausedSignal) `shouldReturn` Just ()
       atomically (Jobs.jobEventTask running.jobs running.turn.atrTurnId >>= maybe (pure False) (`Events.hasInterrupt` Events.noPending)) `shouldReturn` True
       Jobs.completeJob running.jobs child.run Succeeded (JobResult "actual report" Nothing)
-      _ <- atomically (Jobs.jobEventTask running.jobs running.turn.atrTurnId >>= maybe (pure []) Events.observe)
+      _ <- atomically (Jobs.jobEventTask running.jobs running.turn.atrTurnId >>= maybe (pure []) (Router.observeEvents running.jobs.resultRouter))
       putMVar resumeSignal ()
       result <- timeout 3000000 (Async.wait worker)
       fmap (.tiOutcome) result `shouldSatisfy` (\case Just (ToolSucceeded (Object fields)) -> KeyMap.lookup "value" fields == Just (String "actual report"); _ -> False)
@@ -183,7 +183,7 @@ awaitChild jobs = do
   next <- timeout 30000000 (Jobs.takeJobWork jobs)
   case next of
     Just (Jobs.LaunchJob child) -> pure child
-    Just (Jobs.PublishJobNotice job _ _) -> Jobs.releaseJobNotice jobs job.run >> awaitChild jobs
+    Just (Jobs.RelayMessage relay) -> atomically (Router.releaseMessage jobs.resultRouter relay) >> awaitChild jobs
     Just (Jobs.RelayReport relay) -> atomically (Router.releaseReport jobs.resultRouter relay) >> awaitChild jobs
     _ -> fail "workflow child did not start"
 

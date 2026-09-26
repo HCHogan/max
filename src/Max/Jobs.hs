@@ -13,6 +13,7 @@ module Max.Jobs
     resultOrigin,
     bindResultRelay,
     bindReportRelay,
+    bindMessageRelay,
     acquireGuestSlot,
     admitJob,
     admitJobWithAuthority,
@@ -37,10 +38,8 @@ module Max.Jobs
     askParent,
     cancelJob,
     replaceJob,
-    noticeIsCurrent,
-    bindJobNotice,
     detachJobNotice,
-    releaseJobNotice,
+    releaseMonitorResult,
     authorizeJobPublication,
     allJobs,
     closeJobs,
@@ -81,7 +80,7 @@ import Max.ToolContext (ToolContext)
 import Max.Turn.Types (AgentTurnId, AgentTurnRef (..))
 import OneBot.Types (GroupId)
 
-data JobWork = LaunchJob !JobView | PublishJobNotice !JobView !Int !Text | RecordMonitorResult !JobView | RelayResult !Router.Relay | RelayReport !Router.ReportRelay
+data JobWork = LaunchJob !JobView | RecordMonitorResult !JobView | RelayResult !Router.Relay | RelayReport !Router.ReportRelay | RelayMessage !Router.MessageRelay
   deriving stock (Eq, Show)
 
 data ReportSource = NoReport | WaitingReport | PendingReport deriving stock (Eq)
@@ -97,10 +96,9 @@ data Entry = Entry
     parentEvents :: !(Maybe Events.Task),
     parentTurn :: !(Maybe AgentTurnId),
     question :: !(Maybe (TMVar Value)),
-    noticeVersion :: !Int,
-    pendingNotice :: !(Maybe Text),
+    deliveryVersion :: !Int,
     pendingMonitor :: !Bool,
-    noticeInFlight :: !Bool,
+    monitorInFlight :: !Bool,
     budgetExhausted :: !Bool,
     -- | The admitted agent call owns this report even before its wait registers.
     awaiter :: !(Maybe AgentTurnId)
@@ -108,7 +106,7 @@ data Entry = Entry
 
 data Jobs = Jobs
   { entries :: !(TVar (Map Int64 Entry)),
-    notices :: !(TVar (Map AgentTurnId (JobRun, Int))),
+    messageNotices :: !(TVar (Map AgentTurnId Router.MessageRelay)),
     closed :: !(TVar Bool),
     guestSlots :: !(TVar (Map (Either AgentTurnId JobRun) Int)),
     resultRouter :: !Router.Router,
@@ -147,7 +145,7 @@ acquireGuestSlot jobs turn = atomically $ do
 resultOrigin :: Jobs -> TurnRuntime -> ToolContext -> IO Router.Origin
 resultOrigin jobs runtime context = atomically $ do
   entries <- readTVar jobs.entries
-  notices <- readTVar jobs.notices
+  notices <- readTVar jobs.messageNotices
   resultNotices <- readTVar jobs.resultNotices
   reportNotices <- readTVar jobs.reportNotices
   target <- turnEvents runtime
@@ -158,14 +156,15 @@ resultOrigin jobs runtime context = atomically $ do
           Just relay -> relay.origin.owner
           Nothing -> case Map.lookup turn reportNotices of
             Just relay -> Just relay.job.run
-            Nothing -> fst <$> Map.lookup turn notices
+            Nothing -> (.job.run) <$> Map.lookup turn notices
       valid = do
         cancelled <- turnWasCancelled runtime
         closed <- readTVar jobs.closed
         current <- readTVar jobs.entries
         inherited <- maybe (pure True) Router.relayIsCurrent (Map.lookup turn resultNotices)
         reportCurrent <- maybe (pure True) Router.reportIsCurrent (Map.lookup turn reportNotices)
-        pure (not cancelled && not closed && inherited && reportCurrent && maybe True (\run -> maybe False ((/= Cancelled) . (.view.status)) (lookupRun current run)) owner)
+        messageCurrent <- maybe (pure True) Router.messageIsCurrent (Map.lookup turn notices)
+        pure (not cancelled && not closed && inherited && reportCurrent && messageCurrent && maybe True (\run -> maybe False ((/= Cancelled) . (.view.status)) (lookupRun current run)) owner)
   pure Router.Origin {turn, owner, context, target, valid}
 
 bindResultRelay :: Jobs -> AgentTurnId -> Router.Relay -> IO ()
@@ -173,6 +172,9 @@ bindResultRelay jobs turn relay = atomically (modifyTVar' jobs.resultNotices (Ma
 
 bindReportRelay :: Jobs -> AgentTurnId -> Router.ReportRelay -> IO ()
 bindReportRelay jobs turn relay = atomically (modifyTVar' jobs.reportNotices (Map.insert turn relay))
+
+bindMessageRelay :: Jobs -> AgentTurnId -> Router.MessageRelay -> IO ()
+bindMessageRelay jobs turn relay = atomically (modifyTVar' jobs.messageNotices (Map.insert turn relay))
 
 -- | IDs come from the retained task identity sequence, never from model input.
 -- Terminal entries can be discarded only after their live parent releases them.
@@ -193,13 +195,13 @@ admitJobWithAuthority authority jobs caller identifier requested = do
       _ -> pure False
     closing <- readTVar jobs.closed
     allowed <- maybe (pure True) (turnIsLive jobs.tasks) caller
-    current <- readTVar jobs.entries
     resultOwners <- Router.referencedOwners jobs.resultRouter
+    current <- readTVar jobs.entries
     waiters <- readTVar jobs.childWaiters
     events <- Events.newNode >>= Events.newTask
     callerEvents <- maybe (pure Nothing) (lookupTurnEvents jobs.tasks) caller
     let awaitedChildren = Set.fromList [child | ((_, child), _) <- Map.toList waiters]
-        owned job = Set.member job.view.run resultOwners || Set.member job.view.run.jobId awaitedChildren || taskIsLive job.view.status || isJust job.runtime || job.reportSource /= NoReport || job.pendingMonitor || job.noticeInFlight || isJust job.pendingNotice || isJust job.awaiter || maybe False (liveRun current) job.view.spec.parent
+        owned job = Set.member job.view.run resultOwners || Set.member job.view.run.jobId awaitedChildren || taskIsLive job.view.status || isJust job.runtime || job.reportSource /= NoReport || job.pendingMonitor || job.monitorInFlight || isJust job.awaiter || maybe False (liveRun current) job.view.spec.parent
         ancestry = Set.fromList [parent.view.run | job <- Map.elems current, owned job, parent <- ancestors current job.view.spec.parent]
         retained job = owned job || Set.member job.view.run ancestry
         completed = sortOn (Down . (.view.created)) (filter (not . retained) (Map.elems current))
@@ -214,7 +216,7 @@ admitJobWithAuthority authority jobs caller identifier requested = do
         awaiter = if spec.awaited then caller else Nothing
         guestTree = maybe (maybe (Right run) Left caller) (.guestTree) (lookupRun kept =<< spec.parent)
         parentEvents = maybe callerEvents (fmap (.events) . lookupRun kept) spec.parent
-        newEntry = Entry view root guestTree Nothing Set.empty NoReport events parentEvents caller Nothing 0 Nothing False False False awaiter
+        newEntry = Entry view root guestTree Nothing Set.empty NoReport events parentEvents caller Nothing 0 False False False awaiter
         invalid detail = pure (Left detail)
     let parentAllowed owner = case lookupRun kept owner of
           Just parent -> taskIsLive parent.view.status || (parent.view.status /= Cancelled && currentRuntime parent && fmap ((.atrTurnId) . snd) parent.runtime == caller && maybe False (`callMatchesTool` "agent") authority)
@@ -254,20 +256,16 @@ takeJobWork jobs = atomically $ do
   entries <- readTVar jobs.entries
   case find (.pendingMonitor) (Map.elems entries) of
     Just entry -> do
-      writeTVar jobs.entries (Map.insert entry.view.run.jobId (entry {pendingMonitor = False, noticeInFlight = True}) entries)
+      writeTVar jobs.entries (Map.insert entry.view.run.jobId (entry {pendingMonitor = False, monitorInFlight = True}) entries)
       pure (RecordMonitorResult entry.view)
-    Nothing -> takeReady entries `orElse` (Router.takeDelivery jobs.resultRouter >>= \case Router.NativeResult relay -> pure (RelayResult relay); Router.JobReport relay -> pure (RelayReport relay))
+    Nothing -> takeReady entries `orElse` (Router.takeDelivery jobs.resultRouter >>= \case Router.NativeResult relay -> pure (RelayResult relay); Router.JobReport relay -> pure (RelayReport relay); Router.ChildMessage relay -> pure (RelayMessage relay))
   where
     takeReady entries = case find (\entry -> entry.view.status == Queued && isNothing entry.runtime && monitorAvailable entries entry) (Map.elems entries) of
       Just entry -> do
         let running = entry {view = entry.view {status = Running}}
         writeTVar jobs.entries (Map.insert entry.view.run.jobId running entries)
         pure (LaunchJob running.view)
-      Nothing -> case find (\entry -> not entry.noticeInFlight && isJust entry.pendingNotice) (Map.elems entries) of
-        Just entry | Just body <- entry.pendingNotice -> do
-          writeTVar jobs.entries (Map.insert entry.view.run.jobId (entry {pendingNotice = Nothing, noticeInFlight = True}) entries)
-          pure (PublishJobNotice entry.view entry.noticeVersion body)
-        _ -> retry
+      Nothing -> retry
 
 attachJobTurn :: Jobs -> JobRun -> AgentTurnRef -> IO Bool
 attachJobTurn jobs run turn = atomically $ do
@@ -306,8 +304,8 @@ completeJob jobs run status result = do
                   awaiter = if waiting then entry.awaiter else Nothing,
                   pendingMonitor = isJust entry.view.spec.monitor
                 }
-        Router.closeTask jobs.resultRouter entry.events
         writeTVar jobs.entries (Map.insert run.jobId completed stopped)
+        Router.closeTask jobs.resultRouter entry.events
         flushReports jobs
         pure turns
       _ -> pure []
@@ -379,6 +377,7 @@ flushJobEvents jobs _ = flushReports jobs
 
 flushReports :: Jobs -> STM ()
 flushReports jobs = do
+  Router.flush jobs.resultRouter
   entries <- readTVar jobs.entries
   updated <- forM (Map.toList entries) $ \(identifier, original) -> do
     waiting <- if original.reportSource == WaitingReport then hasReportWaiter jobs original else pure False
@@ -390,11 +389,11 @@ flushReports jobs = do
               current <- readTVar jobs.entries
               open <- maybe (pure False) Events.isOpen entry.parentEvents
               pure $ case lookupRun current entry.view.run of
-                Just latest -> latest.noticeVersion == entry.noticeVersion && latest.view.status == entry.view.status && (latest.view.status /= Cancelled || open)
+                Just latest -> latest.deliveryVersion == entry.deliveryVersion && latest.view.status == entry.view.status && (latest.view.status /= Cancelled || open)
                 Nothing -> False
-        accepted <- Router.deliverReport jobs.resultRouter entry.view entry.parentEvents valid
+        accepted <- Router.deliverReport jobs.resultRouter entry.view entry.parentEvents valid (reportMessages jobs entry.view.run)
         pure (identifier, entry {reportSource = if accepted then NoReport else PendingReport})
-  writeTVar jobs.entries (Map.fromList updated)
+  modifyTVar' jobs.entries (\current -> foldr (\(identifier, update) -> Map.adjust (\entry -> entry {reportSource = update.reportSource, awaiter = update.awaiter}) identifier) current updated)
 
 jobEventTask :: Jobs -> AgentTurnId -> STM (Maybe Events.Task)
 jobEventTask jobs turn = do
@@ -510,7 +509,7 @@ steerJob jobs = steerJobFrom jobs Nothing
 steerJobFrom :: Jobs -> Maybe AgentTurnId -> GroupId -> PrincipalId -> Maybe CanonicalMessageId -> Int64 -> Text -> IO (Either Text ())
 steerJobFrom jobs sender group actor source identifier note = atomically $ do
   entries <- readTVar jobs.entries
-  notices <- readTVar jobs.notices
+  notices <- readTVar jobs.messageNotices
   case Map.lookup identifier entries of
     Just entry
       | entry.view.spec.group == group ->
@@ -523,39 +522,44 @@ steerJobFrom jobs sender group actor source identifier note = atomically $ do
                   if T.length note > 8000
                     then pure (Left "feedback exceeds 8000 characters")
                     else do
+                      relayAnswer <- case sender >>= (`Map.lookup` notices) of
+                        Just relay | relay.job.run == entry.view.run -> do
+                          current <- Router.messageIsCurrent relay
+                          if current then relay.answersPendingQuestion else pure False
+                        _ -> pure False
                       let feedback = object ["author" .= actor, "source_message" .= source, "body" .= note]
-                          fromParent = case sender of
-                            Nothing -> False
-                            Just turn -> case entry.view.spec.parent of
-                              Just parent -> maybe False (\owner -> currentRuntime owner && owner.view.run == parent) (entryForTurn entries turn)
-                              Nothing -> entry.parentTurn == Just turn || maybe False ((== entry.view.run) . fst) (Map.lookup turn notices)
+                          fromParent =
+                            relayAnswer || case sender of
+                              Nothing -> False
+                              Just turn -> case entry.view.spec.parent of
+                                Just parent -> maybe False (\owner -> currentRuntime owner && owner.view.run == parent) (entryForTurn entries turn)
+                                Nothing -> entry.parentTurn == Just turn
                       answering <- case entry.question of
                         Just reply | fromParent -> isEmptyTMVar reply
                         _ -> pure False
                       -- An answer settles the question future. It is still logged, but is
                       -- not another interrupt that would pause the guest receiving it.
-                      parentOpen <- maybe (pure False) Events.isOpen entry.parentEvents
                       let noteToParent = "[子任务收到直接 steering] " <> TE.decodeUtf8 (LBS.toStrict (encode feedback))
-                          parentNotes = [(parent, Events.ChildSaid entry.view.run noteToParent Events.Normal) | not fromParent && parentOpen, Just parent <- [entry.parentEvents]]
-                      accepted <- Events.deliverAll ((entry.events, if answering then Events.Settled "agent_ask" feedback [] else Events.Steered feedback) : parentNotes)
-                      when (accepted && not fromParent && not parentOpen) $
-                        writeTVar jobs.entries (Map.insert identifier entry {view = entry.view {messages = boundedMessages (entry.view.messages <> [noteToParent])}} entries)
+                      accepted <-
+                        ( do
+                            Events.deliver entry.events (if answering then Events.Settled "agent_ask" feedback [] else Events.Steered feedback) >>= check
+                            unless fromParent $ deliverChildMessage jobs entry noteToParent Events.Normal (pure False) >>= check
+                            pure True
+                        )
+                          `orElse` pure False
                       when (accepted && answering) $ forM_ entry.question (\reply -> putTMVar reply feedback)
                       pure (if accepted then Right () else Left "job event log is full or its task has ended")
     _ -> pure (Left ("no " <> taskHandle identifier <> " in this conversation"))
 
--- | Message routing shares the parent's ordinary node event stream. A root
--- whose starting task ended uses the existing frontend relay admission path.
+-- | The router owns each accepted message until observation, folding into
+-- the final report, or an individual frontend relay.
 tellParent :: Jobs -> AgentTurnId -> Text -> Bool -> IO (Either Text ())
 tellParent jobs turn text urgent = atomically $ do
   live <- turnIsLive jobs.tasks turn
   entries <- readTVar jobs.entries
   case entryForTurn entries turn of
     Just entry | live && currentRuntime entry && taskIsLive entry.view.status -> do
-      outcome <- routeMessage entry text urgent
-      case outcome of
-        Left err -> pure (Left err)
-        Right updated -> writeTVar jobs.entries (Map.insert entry.view.run.jobId updated entries) >> pure (Right ())
+      routeMessage jobs entry text urgent (pure False)
     _ -> pure (Left "message requires a current agent")
 
 askParent :: Jobs -> AgentTurnId -> Text -> IO (Either Text Value)
@@ -565,12 +569,15 @@ askParent jobs turn text = mask $ \restore -> do
     entries <- readTVar jobs.entries
     case entryForTurn entries turn of
       Just entry | live && currentRuntime entry && taskIsLive entry.view.status && isNothing entry.question -> do
-        outcome <- routeMessage entry text True
+        reply <- newEmptyTMVar
+        let answers = do
+              current <- readTVar jobs.entries
+              pure (maybe False ((== Just reply) . (.question)) (lookupRun current entry.view.run))
+        outcome <- routeMessage jobs entry text True answers
         case outcome of
           Left err -> pure (Left err)
-          Right updated -> do
-            reply <- newEmptyTMVar
-            writeTVar jobs.entries (Map.insert entry.view.run.jobId updated {question = Just reply} entries)
+          Right () -> do
+            modifyTVar' jobs.entries (Map.adjust (\current -> current {question = Just reply}) entry.view.run.jobId)
             pure (Right (entry.view.run, reply))
       _ -> pure (Left "ask requires a current agent without another pending question")
   case registered of
@@ -586,24 +593,26 @@ askParent jobs turn text = mask $ \restore -> do
         )
         `finally` atomically (modifyTVar' jobs.entries (Map.adjust (\entry -> if entry.view.run == run && entry.question == Just reply then entry {question = Nothing} else entry) run.jobId))
 
-routeMessage :: Entry -> Text -> Bool -> STM (Either Text Entry)
-routeMessage entry text urgent
+routeMessage :: Jobs -> Entry -> Text -> Bool -> STM Bool -> STM (Either Text ())
+routeMessage jobs entry text urgent answers
   | T.null (T.strip text) || T.length text > 8000 = pure (Left "message must contain 1..8000 characters")
   | otherwise = do
-      active <- maybe (pure False) Events.isOpen entry.parentEvents
-      if active
-        then do
-          accepted <- maybe (pure False) (\parent -> Events.deliver parent (Events.ChildSaid entry.view.run text (if urgent then Events.Urgent else Events.Normal))) entry.parentEvents
-          pure (if accepted then Right entry else Left "parent event buffer is full")
-        else
-          if urgent
-            then do
-              let body = appendNotice entry.pendingNotice ("[子 agent 的紧急消息；不是最终报告。需要回答时用 agent_steer 回复 " <> taskHandle entry.view.run.jobId <> "。]\n" <> text)
-              pure $ if BS.length (TE.encodeUtf8 body) > 262144 then Left "frontend relay buffer is full" else Right entry {pendingNotice = Just body}
-            else pure (Right entry {view = entry.view {messages = boundedMessages (entry.view.messages <> [text])}})
+      accepted <- deliverChildMessage jobs entry text (if urgent then Events.Urgent else Events.Normal) answers
+      pure (if accepted then Right () else Left "parent event or relay buffer is full")
 
-appendNotice :: Maybe Text -> Text -> Text
-appendNotice previous body = maybe body (\before -> before <> "\n\n" <> body) previous
+deliverChildMessage :: Jobs -> Entry -> Text -> Events.Urgency -> STM Bool -> STM Bool
+deliverChildMessage jobs entry text urgency answers =
+  Router.deliverMessage jobs.resultRouter entry.view entry.parentEvents text urgency valid foldIntoReport answers
+  where
+    valid = do
+      entries <- readTVar jobs.entries
+      pure $ case lookupRun entries entry.view.run of
+        Just current -> current.deliveryVersion == entry.deliveryVersion && current.view.status /= Cancelled
+        Nothing -> False
+    foldIntoReport = modifyTVar' jobs.entries (Map.adjust (\current -> if current.view.run == entry.view.run then current {view = current.view {messages = boundedMessages (current.view.messages <> [text])}} else current) entry.view.run.jobId)
+
+reportMessages :: Jobs -> JobRun -> STM [Text]
+reportMessages jobs run = maybe [] (.view.messages) . (`lookupRun` run) <$> readTVar jobs.entries
 
 boundedMessages :: [Text] -> [Text]
 boundedMessages = reverse . fit 32768 . take 50 . reverse
@@ -635,10 +644,9 @@ replaceJob jobs group actor admin identifier objective = controlJob jobs group a
                 reportSource = NoReport,
                 events = freshEvents,
                 question = Nothing,
-                noticeVersion = entry.noticeVersion + 1,
-                pendingNotice = Nothing,
+                deliveryVersion = entry.deliveryVersion + 1,
                 pendingMonitor = False,
-                noticeInFlight = False,
+                monitorInFlight = False,
                 root = if entry.root == entry.view.run then run else entry.root
               }
           updateParent parent = parent {children = Set.insert run (Set.delete entry.view.run parent.children)}
@@ -649,27 +657,20 @@ controlJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> (UTCTime -> Map
 controlJob jobs group actor admin identifier transition = do
   now <- getCurrentTime
   outcome <- atomically $ do
-    entries <- readTVar jobs.entries
     routed <- Router.referencedOwners jobs.resultRouter
+    entries <- readTVar jobs.entries
     case Map.lookup identifier entries of
       Just entry | entry.view.spec.group == group && (admin || entry.view.spec.principal == actor) && controllable routed entries entry -> do
         fresh <- Events.newNode >>= Events.newTask
         case transition now entries entry fresh of
           Left detail -> pure (Left detail)
-          Right (updated, turns) -> Router.closeTask jobs.resultRouter entry.events >> writeTVar jobs.entries updated >> pure (Right turns)
+          Right (updated, turns) -> writeTVar jobs.entries updated >> Router.closeTask jobs.resultRouter entry.events >> pure (Right turns)
       _ -> pure (Left "live job not found or owner permission required")
   case outcome of
     Left detail -> pure (Left detail)
     Right turns -> stopTurns jobs turns >> pure (Right ())
   where
-    controllable routed entries entry = entry.view.status /= Cancelled && (Set.member entry.view.run routed || taskIsLive entry.view.status || isJust entry.runtime || entry.reportSource /= NoReport || isJust entry.pendingNotice || entry.noticeInFlight || any (\child -> taskIsLive child.view.status && any ((== entry.view.run) . (.view.run)) (ancestors entries child.view.spec.parent)) (Map.elems entries))
-
-noticeIsCurrent :: Jobs -> JobRun -> Int -> IO Bool
-noticeIsCurrent jobs run version = do
-  entries <- readTVarIO jobs.entries
-  pure $ case lookupRun entries run of
-    Just entry -> entry.noticeVersion == version && entry.view.status /= Cancelled
-    _ -> False
+    controllable routed entries entry = entry.view.status /= Cancelled && (Set.member entry.view.run routed || taskIsLive entry.view.status || isJust entry.runtime || entry.reportSource /= NoReport || entry.monitorInFlight || any (\child -> taskIsLive child.view.status && any ((== entry.view.run) . (.view.run)) (ancestors entries child.view.spec.parent)) (Map.elems entries))
 
 lookupRun :: Map Int64 Entry -> JobRun -> Maybe Entry
 lookupRun entries run = Map.lookup run.jobId entries >>= \entry -> if entry.view.run == run then Just entry else Nothing
@@ -695,15 +696,12 @@ stopChildren now entries children reason = Set.foldl' stop (entries, []) childre
       Just entry
         | entry.view.status /= Cancelled ->
             let (descendants, childTurns) = stopChildren now current entry.children reason
-                stopped = entry {view = entry.view {status = Cancelled, result = Just (JobResult reason Nothing), finished = Just now}, reportSource = if isNothing entry.view.spec.monitor then PendingReport else NoReport, pendingNotice = Nothing, pendingMonitor = isJust entry.view.spec.monitor, noticeVersion = entry.noticeVersion + 1}
+                stopped = entry {view = entry.view {status = Cancelled, result = Just (JobResult reason Nothing), finished = Just now}, reportSource = if isNothing entry.view.spec.monitor then PendingReport else NoReport, pendingMonitor = isJust entry.view.spec.monitor, deliveryVersion = entry.deliveryVersion + 1}
              in (Map.insert run.jobId stopped descendants, turns <> childTurns <> maybe [] (pure . (.atrTurnId) . snd) entry.runtime)
       _ -> (current, turns)
 
 stopTurns :: Jobs -> [AgentTurnId] -> IO ()
 stopTurns jobs = mapM_ (\turn -> void (cancelAgentTurnTask jobs.tasks turn))
-
-bindJobNotice :: Jobs -> AgentTurnId -> JobRun -> Int -> IO ()
-bindJobNotice jobs turn run version = atomically $ modifyTVar' jobs.notices (Map.insert turn (run, version))
 
 detachJobNotice :: Jobs -> AgentTurnId -> IO ()
 detachJobNotice jobs turn = atomically $ do
@@ -713,21 +711,21 @@ detachJobNotice jobs turn = atomically $ do
   relays <- readTVar jobs.resultNotices
   forM_ (Map.lookup turn relays) (Router.releaseRelay jobs.resultRouter)
   modifyTVar' jobs.resultNotices (Map.delete turn)
-  notices <- readTVar jobs.notices
-  modifyTVar' jobs.notices (Map.delete turn)
-  forM_ (Map.lookup turn notices) $ \(run, _) -> releaseNoticeSTM jobs run
+  notices <- readTVar jobs.messageNotices
+  modifyTVar' jobs.messageNotices (Map.delete turn)
+  forM_ (Map.lookup turn notices) (Router.releaseMessage jobs.resultRouter)
 
-releaseJobNotice :: Jobs -> JobRun -> IO ()
-releaseJobNotice jobs run = atomically (releaseNoticeSTM jobs run)
+releaseMonitorResult :: Jobs -> JobRun -> IO ()
+releaseMonitorResult jobs run = atomically (releaseMonitorSTM jobs run)
 
-releaseNoticeSTM :: Jobs -> JobRun -> STM ()
-releaseNoticeSTM jobs run = modifyTVar' jobs.entries $ Map.adjust (\entry -> if entry.view.run == run then entry {noticeInFlight = False} else entry) run.jobId
+releaseMonitorSTM :: Jobs -> JobRun -> STM ()
+releaseMonitorSTM jobs run = modifyTVar' jobs.entries $ Map.adjust (\entry -> if entry.view.run == run then entry {monitorInFlight = False} else entry) run.jobId
 
 -- Called at the shared publication boundary, after checking the turn runtime.
 authorizeJobPublication :: Jobs -> AgentTurnId -> IO Bool
 authorizeJobPublication jobs turn = atomically $ do
   entries <- readTVar jobs.entries
-  notices <- readTVar jobs.notices
+  notices <- readTVar jobs.messageNotices
   relays <- readTVar jobs.resultNotices
   reports <- readTVar jobs.reportNotices
   case entryForTurn entries turn of
@@ -736,11 +734,7 @@ authorizeJobPublication jobs turn = atomically $ do
       Just relay -> Router.relayIsCurrent relay
       Nothing -> case Map.lookup turn reports of
         Just relay -> Router.reportIsCurrent relay
-        Nothing -> pure $ case Map.lookup turn notices of
-          Nothing -> True
-          Just (run, version) -> case lookupRun entries run of
-            Just entry -> entry.noticeVersion == version && entry.view.status /= Cancelled
-            _ -> False
+        Nothing -> maybe (pure True) Router.messageIsCurrent (Map.lookup turn notices)
 
 allJobs :: Jobs -> IO [JobView]
 allJobs jobs = map (.view) . Map.elems <$> readTVarIO jobs.entries
@@ -755,17 +749,19 @@ closeJobs jobs = do
     if closing
       then pure ([], [])
       else do
+        Router.flush jobs.resultRouter
         writeTVar jobs.closed True
         entries <- readTVar jobs.entries
-        publishing <- Set.fromList . map fst . Map.elems <$> readTVar jobs.notices
+        publishing <- Set.fromList . map (.job.run) . Map.elems <$> readTVar jobs.messageNotices
+        messageOwners <- Router.messageOwners jobs.resultRouter
         reportOwners <- Router.reportOwners jobs.resultRouter
         publishingReports <- Set.fromList . map (.job.run) . Map.elems <$> readTVar jobs.reportNotices
         let live = Set.fromList [entry.view.run | entry <- Map.elems entries, taskIsLive entry.view.status]
             (stopped, turns) = stopChildren now entries live "服务重启，任务已中断；已发生的操作不会自动重试。"
-            unbound entry = (entry.noticeInFlight && Set.notMember entry.view.run publishing) || (Set.member entry.view.run reportOwners && Set.notMember entry.view.run publishingReports)
-            needsNotice entry = isNothing entry.view.spec.parent && (Set.member entry.view.run live || entry.reportSource == PendingReport || isJust entry.pendingNotice || entry.pendingMonitor || unbound entry)
+            unbound entry = (Set.member entry.view.run messageOwners && Set.notMember entry.view.run publishing) || (Set.member entry.view.run reportOwners && Set.notMember entry.view.run publishingReports)
+            needsNotice entry = isNothing entry.view.spec.parent && (Set.member entry.view.run live || entry.reportSource == PendingReport || entry.pendingMonitor || unbound entry)
             notices = [updated.view | entry <- Map.elems entries, needsNotice entry, Just updated <- [lookupRun stopped entry.view.run]]
-            fence entry = entry {reportSource = NoReport, pendingNotice = Nothing, pendingMonitor = False, noticeVersion = entry.noticeVersion + if unbound entry then 1 else 0}
+            fence entry = entry {reportSource = NoReport, pendingMonitor = False, deliveryVersion = entry.deliveryVersion + if unbound entry then 1 else 0}
         writeTVar jobs.entries (fmap fence stopped)
         pure (notices, turns)
   stopTurns jobs turns

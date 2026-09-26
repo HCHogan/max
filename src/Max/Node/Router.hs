@@ -1,17 +1,21 @@
--- | Process-local delivery ownership. A result or report is retained until its
--- task observes it or a relay consumes it; final-answer closure cannot drop it.
+-- | Process-local delivery ownership. Results, reports and child messages stay
+-- retained until observation, relay or folding; final-answer closure cannot drop them.
 module Max.Node.Router
   ( Router,
     Origin (..),
     Relay (..),
     ReportRelay (..),
+    MessageRelay (..),
     DeliveryWork (..),
     newRouter,
     deliverResult,
     deliverReport,
+    deliverMessage,
+    flush,
     observeResults,
     observeEvents,
     reportOwners,
+    messageOwners,
     closeTask,
     takeDelivery,
     takeRelay,
@@ -19,14 +23,16 @@ module Max.Node.Router
     requeueRelay,
     releaseReport,
     requeueReport,
+    releaseMessage,
+    requeueMessage,
     referencedOwners,
     relayIsCurrent,
     reportIsCurrent,
+    messageIsCurrent,
   )
 where
 
 import Control.Concurrent.STM
-import Control.Monad (filterM, unless)
 import Data.Aeson (Value, object, (.=))
 import Data.Foldable (find)
 import Data.Map.Strict (Map)
@@ -58,7 +64,7 @@ instance Show Relay where
 
 -- | The immutable report carries its original job/source/grant provenance.
 -- It does not borrow the parent's lifetime or an aggregated notice slot.
-data ReportRelay = ReportRelay {identifier :: !Integer, attempt :: !Integer, job :: !JobView, target :: !(Maybe Events.Task), valid :: !(STM Bool)}
+data ReportRelay = ReportRelay {identifier :: !Integer, attempt :: !Integer, job :: !JobView, target :: !(Maybe Events.Task), valid :: !(STM Bool), notes :: !(STM [Text])}
 
 instance Eq ReportRelay where
   a == b = a.identifier == b.identifier && a.attempt == b.attempt && a.job.run == b.job.run
@@ -66,7 +72,25 @@ instance Eq ReportRelay where
 instance Show ReportRelay where
   show relay = "ReportRelay " <> show relay.identifier <> " " <> show relay.job.run
 
-data DeliveryWork = NativeResult !Relay | JobReport !ReportRelay deriving stock (Eq, Show)
+data MessageRelay = MessageRelay
+  { identifier :: !Integer,
+    attempt :: !Integer,
+    job :: !JobView,
+    target :: !(Maybe Events.Task),
+    text :: !Text,
+    urgency :: !Events.Urgency,
+    valid :: !(STM Bool),
+    foldIntoReport :: !(STM ()),
+    answersPendingQuestion :: !(STM Bool)
+  }
+
+instance Eq MessageRelay where
+  a == b = a.identifier == b.identifier && a.attempt == b.attempt && a.job.run == b.job.run
+
+instance Show MessageRelay where
+  show relay = "MessageRelay " <> show relay.identifier <> " " <> show relay.job.run
+
+data DeliveryWork = NativeResult !Relay | JobReport !ReportRelay | ChildMessage !MessageRelay deriving stock (Eq, Show)
 
 data Delivery = Buffered !Events.Task !Integer | Queued | InFlight deriving stock (Eq)
 
@@ -87,16 +111,39 @@ deliverResult router origin reference value media =
     (\identifier -> NativeResult (Relay identifier 0 origin reference value media))
     >>= check
 
-deliverReport :: Router -> JobView -> Maybe Events.Task -> STM Bool -> STM Bool
-deliverReport router job target valid =
+deliverReport :: Router -> JobView -> Maybe Events.Task -> STM Bool -> STM [Text] -> STM Bool
+deliverReport router original target valid notes = do
+  flush router
+  messages <- notes
+  let job = original {messages}
   deliver
     router
     valid
     target
     (Events.ChildDone job.run (object ["child_update" .= job]))
-    (\identifier -> JobReport (ReportRelay identifier 0 job target valid))
+    (\identifier -> JobReport (ReportRelay identifier 0 job target valid notes))
 
--- | Policy and ownership are shared by native outcomes and child reports.
+-- | Normal messages belong to the parent's observation while it is open, and
+-- to the final report after closure. Urgent messages become individual relays.
+deliverMessage :: Router -> JobView -> Maybe Events.Task -> Text -> Events.Urgency -> STM Bool -> STM () -> STM Bool -> STM Bool
+deliverMessage router job target text urgency valid foldIntoReport answers = do
+  flush router
+  current <- valid
+  open <- maybe (pure False) Events.isOpen target
+  if not current
+    then pure True
+    else
+      if not open && urgency == Events.Normal
+        then foldIntoReport >> pure True
+        else
+          deliver
+            router
+            valid
+            target
+            (Events.ChildSaid job.run text urgency)
+            (\identifier -> ChildMessage (MessageRelay identifier 0 job target text urgency valid foldIntoReport answers))
+
+-- | Policy and ownership are shared by native outcomes, reports and messages.
 -- A full target leaves ownership with the producer; a closed target relays.
 deliver :: Router -> STM Bool -> Maybe Events.Task -> Events.Body -> (Integer -> DeliveryWork) -> STM Bool
 deliver (Router ref) valid target body make = do
@@ -105,7 +152,7 @@ deliver (Router ref) valid target body make = do
     then pure True
     else do
       (next, previous) <- readTVar ref
-      entries <- sweepEntries previous
+      entries <- normalizeEntries previous
       if Map.size entries >= 1024
         then pure False
         else do
@@ -117,12 +164,12 @@ deliver (Router ref) valid target body make = do
             Nothing -> pure False
             Just state -> writeTVar ref (next + 1, Map.insert next (state, make next) entries) >> pure True
 
--- | Revoke buffered reports before they enter a model observation. Receipt
+-- | Revoke buffered deliveries before they enter a model observation. Receipt
 -- identity prevents revoking an unrelated message from the same child.
 observeEvents :: Router -> Events.Task -> STM [Events.Event]
 observeEvents router@(Router ref) task = do
   (next, entries) <- readTVar ref
-  current <- sweepEntries entries
+  current <- normalizeEntries entries
   writeTVar ref (next, current)
   events <- Events.observe task
   observeResults router task events
@@ -133,6 +180,11 @@ reportOwners (Router ref) = do
   (_, entries) <- readTVar ref
   pure (Set.fromList [relay.job.run | (_, JobReport relay) <- Map.elems entries])
 
+messageOwners :: Router -> STM (Set JobRun)
+messageOwners (Router ref) = do
+  (_, entries) <- readTVar ref
+  pure (Set.fromList [relay.job.run | (_, ChildMessage relay) <- Map.elems entries])
+
 observeResults :: Router -> Events.Task -> [Events.Event] -> STM ()
 observeResults (Router ref) task events = modifyTVar' ref $ \(next, entries) ->
   let observed = Set.fromList (map (.sequence) events)
@@ -141,10 +193,13 @@ observeResults (Router ref) task events = modifyTVar' ref $ \(next, entries) ->
    in (next, Map.filter keep entries)
 
 closeTask :: Router -> Events.Task -> STM ()
-closeTask (Router ref) task = do
-  Events.close task
-  modifyTVar' ref $ \(next, entries) ->
-    (next, fmap (\(delivery, work) -> (case delivery of Buffered target _ | target == task -> Queued; _ -> delivery, work)) entries)
+closeTask router task = Events.close task >> flush router
+
+flush :: Router -> STM ()
+flush (Router ref) = do
+  (next, entries) <- readTVar ref
+  current <- normalizeEntries entries
+  writeTVar ref (next, current)
 
 takeDelivery :: Router -> STM DeliveryWork
 takeDelivery = takeMatching (const True)
@@ -160,22 +215,16 @@ takeRelay router =
 takeMatching :: (DeliveryWork -> Bool) -> Router -> STM DeliveryWork
 takeMatching wanted (Router ref) = do
   (next, entries) <- readTVar ref
-  live <- Map.toList <$> sweepEntries entries
-  promoted <-
-    mapM
-      ( \(key, (state, work)) -> do
-          delivery <- case state of
-            Buffered task _ -> do open <- Events.isOpen task; pure (if open then state else Queued)
-            _ -> pure state
-          pure (key, (delivery, work))
-      )
-      live
-  let current = Map.fromList promoted
+  current <- normalizeEntries entries
+  let promoted = Map.toList current
   case find (\(_, (state, work)) -> state == Queued && wanted work) promoted of
     Just (key, (_, work)) -> do
-      let claimed = case work of
-            NativeResult relay -> NativeResult (Relay relay.identifier (relay.attempt + 1) relay.origin relay.reference relay.value relay.media)
-            JobReport relay -> JobReport (ReportRelay relay.identifier (relay.attempt + 1) relay.job relay.target relay.valid)
+      claimed <- case work of
+        NativeResult relay -> pure (NativeResult (Relay relay.identifier (relay.attempt + 1) relay.origin relay.reference relay.value relay.media))
+        JobReport relay -> do
+          messages <- relay.notes
+          pure (JobReport (ReportRelay relay.identifier (relay.attempt + 1) relay.job {messages} relay.target relay.valid relay.notes))
+        ChildMessage relay -> pure (ChildMessage (MessageRelay relay.identifier (relay.attempt + 1) relay.job relay.target relay.text relay.urgency relay.valid relay.foldIntoReport relay.answersPendingQuestion))
       writeTVar ref (next, Map.insert key (InFlight, claimed) current)
       pure claimed
     Nothing -> retry
@@ -192,6 +241,12 @@ releaseReport router relay = finish router relay.identifier (JobReport relay) No
 requeueReport :: Router -> ReportRelay -> STM ()
 requeueReport router relay = finish router relay.identifier (JobReport relay) (Just Queued)
 
+releaseMessage :: Router -> MessageRelay -> STM ()
+releaseMessage router relay = finish router relay.identifier (ChildMessage relay) Nothing
+
+requeueMessage :: Router -> MessageRelay -> STM ()
+requeueMessage router relay = finish router relay.identifier (ChildMessage relay) (Just Queued)
+
 -- | Only the current attempt can release or retry a claimed delivery.
 finish :: Router -> Integer -> DeliveryWork -> Maybe Delivery -> STM ()
 finish (Router ref) identifier work nextState = modifyTVar' ref $ \(next, entries) ->
@@ -200,28 +255,37 @@ finish (Router ref) identifier work nextState = modifyTVar' ref $ \(next, entrie
 referencedOwners :: Router -> STM (Set JobRun)
 referencedOwners (Router ref) = do
   (next, entries) <- readTVar ref
-  live <- sweepEntries entries
-  let owners = \case NativeResult relay -> maybe [] pure relay.origin.owner; JobReport relay -> [relay.job.run]
+  live <- normalizeEntries entries
+  let owners = \case NativeResult relay -> maybe [] pure relay.origin.owner; JobReport relay -> [relay.job.run]; ChildMessage relay -> [relay.job.run]
   writeTVar ref (next, live)
   pure (Set.fromList (concatMap (owners . snd) (Map.elems live)))
 
--- Dropping ownership must also remove the buffered event. Otherwise a later
--- observation could no longer tell that the producer's generation was revoked.
-sweepEntries :: Map Integer (Delivery, DeliveryWork) -> STM (Map Integer (Delivery, DeliveryWork))
-sweepEntries entries = Map.fromList <$> filterM keep (Map.toList entries)
+-- Revocation removes the event and ownership atomically. Closure transfers
+-- ordinary messages into the report before a report relay can be claimed.
+normalizeEntries :: Map Integer (Delivery, DeliveryWork) -> STM (Map Integer (Delivery, DeliveryWork))
+normalizeEntries entries = Map.fromList . concat <$> mapM normalize (Map.toList entries)
   where
-    keep (_, (state, work)) = do
+    normalize (key, (state, work)) = do
       current <- isCurrent work
-      unless current $ case state of
-        Buffered task receipt -> Events.discard task receipt
-        _ -> pure ()
-      pure current
+      if not current
+        then do
+          case state of Buffered task receipt -> Events.discard task receipt; _ -> pure ()
+          pure []
+        else do
+          open <- case state of Buffered task _ -> Events.isOpen task; _ -> pure False
+          case (state, work) of
+            (Buffered _ _, ChildMessage relay) | not open && relay.urgency == Events.Normal -> relay.foldIntoReport >> pure []
+            (Buffered _ _, _) | not open -> pure [(key, (Queued, work))]
+            _ -> pure [(key, (state, work))]
 
 isCurrent :: DeliveryWork -> STM Bool
-isCurrent = \case NativeResult relay -> relayIsCurrent relay; JobReport relay -> reportIsCurrent relay
+isCurrent = \case NativeResult relay -> relayIsCurrent relay; JobReport relay -> reportIsCurrent relay; ChildMessage relay -> messageIsCurrent relay
 
 relayIsCurrent :: Relay -> STM Bool
 relayIsCurrent = (.origin.valid)
 
 reportIsCurrent :: ReportRelay -> STM Bool
 reportIsCurrent = (.valid)
+
+messageIsCurrent :: MessageRelay -> STM Bool
+messageIsCurrent = (.valid)

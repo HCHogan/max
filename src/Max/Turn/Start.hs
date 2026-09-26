@@ -3,8 +3,7 @@
 -- can receive replies, including tasks started by !btw, notices and fires.
 module Max.Turn.Start (TurnStart (..), InputAdmission (..), startAllowsInput) where
 
-import Data.Text (Text)
-import Max.Node.Router (Relay, ReportRelay)
+import Max.Node.Router (MessageRelay, Relay, ReportRelay)
 import Max.Task.Types (JobView)
 
 data InputAdmission = AdmitFrontendInput | StartSeparateTurn deriving stock (Eq, Show)
@@ -12,7 +11,7 @@ data InputAdmission = AdmitFrontendInput | StartSeparateTurn deriving stock (Eq,
 data TurnStart
   = NewTurn !InputAdmission
   | JobTurn !JobView
-  | JobNotice !JobView !Int !Text
+  | MessageNotice !MessageRelay
   | CompletionNotice !Relay
   | ReportNotice !ReportRelay
   | -- | An automation fire: its creator's delayed request, handled by an

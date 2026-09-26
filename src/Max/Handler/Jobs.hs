@@ -49,7 +49,7 @@ import Max.Task.Types
   )
 import Max.ToolContext (toolAuthorPrincipalId, toolCanonicalId, toolGroupId)
 import Max.Turn.Dispatch (dispatchLLMWith)
-import Max.Turn.Start (TurnStart (AutomationTurn, CompletionNotice, JobNotice, JobTurn, ReportNotice))
+import Max.Turn.Start (TurnStart (AutomationTurn, CompletionNotice, JobTurn, MessageNotice, ReportNotice))
 import Max.Util (catchSync)
 
 shutdownJobs :: (WithConnection :> es, Outbound :> es, Log :> es, IOE :> es) => Jobs.Jobs -> Eff es ()
@@ -100,9 +100,17 @@ jobsWorker = do
         let failed detail = liftIO (Jobs.completeJob env.beJobs job.run JobState.Failed (JobResult detail Nothing))
             start = if isJust job.spec.monitor then AutomationTurn job else JobTurn job
          in dispatch job start failed `catchSync` (failed . T.pack . show)
-      Jobs.PublishJobNotice job version body ->
-        dispatch job (JobNotice job version body) (noticeFailed env job)
-          `catchSync` (noticeFailed env job . T.pack . show)
+      Jobs.RelayMessage relay -> do
+        let release = liftIO (atomically (Router.releaseMessage env.beJobs.resultRouter relay))
+            failed detail = release >> logAttention "child message relay failed" (object ["error" .= (detail :: T.Text)])
+            deliver = do
+              liftIO . atomically $ do
+                current <- Router.messageIsCurrent relay
+                capacity <- Conversation.canAdmit env.beConversations relay.job.spec.group
+                check (not current || capacity)
+              current <- liftIO (atomically (Router.messageIsCurrent relay))
+              if current then dispatch relay.job (MessageNotice relay) failed else release
+        void . async $ deliver `catchSync` (failed . T.pack . show)
       Jobs.RelayReport relay -> do
         let release = liftIO (atomically (Router.releaseReport env.beJobs.resultRouter relay))
             failed detail = release >> logAttention "job report relay failed" (object ["error" .= (detail :: T.Text)])
@@ -134,7 +142,7 @@ jobsWorker = do
                     _ -> release >> logAttention "execution result source unavailable" (object ["result" .= relay.reference])
         void . async $ relayResult `catchSync` (\err -> release >> logAttention "execution result relay failed" (object ["error" .= T.pack (show err)]))
       Jobs.RecordMonitorResult job ->
-        recordResult env job `catchSync` (noticeFailed env job . T.pack . show)
+        recordResult env job `catchSync` (monitorFailed env job . T.pack . show)
   where
     dispatch job start failed = do
       sourceMessage <- loadDispatchMessage job.spec.source
@@ -151,8 +159,8 @@ jobsWorker = do
     recordResult env job =
       for_ ((,) <$> job.spec.monitor <*> job.result) $ \(fire, result) -> do
         void (MonitorJob.recordMonitorResult fire.fireId job.status result)
-        liftIO (Jobs.releaseJobNotice env.beJobs job.run)
+        liftIO (Jobs.releaseMonitorResult env.beJobs job.run)
 
-    noticeFailed env job (detail :: T.Text) = do
-      liftIO (Jobs.releaseJobNotice env.beJobs job.run)
-      logAttention "job notice failed; not replayed" (object ["error" .= detail])
+    monitorFailed env job (detail :: T.Text) = do
+      liftIO (Jobs.releaseMonitorResult env.beJobs job.run)
+      logAttention "monitor result recording failed; not replayed" (object ["error" .= detail])
