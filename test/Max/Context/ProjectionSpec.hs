@@ -1,6 +1,7 @@
 module Max.Context.ProjectionSpec (spec) where
 
 import Data.Aeson (encode, object, (.=))
+import Data.Either (isLeft)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.Context.Projection
@@ -11,6 +12,25 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "observation-ordered task projection" $ do
+  it "refreshes the volatile tail without saving it in a poll or compaction checkpoint" $ do
+    let payload = T.replicate 20000 "汉"
+        task = foldl (\record n -> addRound (T.pack (show n)) payload record) (newTaskRecord (logCursor emptyLog) [MsgUser "goal"]) [1 .. 6 :: Int]
+    Right first <- pure (planProjection options {volatileTail = ["another task is waiting"]} emptyLog task (logCursor emptyLog))
+    first.working.wpCompacted `shouldBe` True
+    encode (last first.working.wpMessages) `shouldBe` encode (MsgVolatile "another task is waiting")
+    let stable = project emptyLog first.record (logCursor emptyLog)
+        answered = recordPoll (logCursor emptyLog) (Just (MsgAssistant "continue")) first.record
+    encode stable `shouldBe` encode (init first.working.wpMessages)
+    Right second <- pure (planProjection options {volatileTail = ["another task is ready"], previousSummary = first.working.wpSummary} emptyLog answered (logCursor emptyLog))
+    encode second.working.wpMessages `shouldBe` encode (stable <> [MsgAssistant "continue", MsgVolatile "another task is ready"])
+    [text | MsgVolatile text <- taskTranscript emptyLog second.record (logCursor emptyLog)] `shouldBe` []
+    Right ended <- pure (planProjection options emptyLog second.record (logCursor emptyLog))
+    encode ended.working.wpMessages `shouldBe` encode (stable <> [MsgAssistant "continue"])
+
+  it "counts the volatile tail against the hard context budget before a request" $ do
+    let task = newTaskRecord (logCursor emptyLog) [MsgUser "goal"]
+    isLeft (planProjection options {volatileTail = [T.replicate 40000 "汉"]} emptyLog task (logCursor emptyLog)) `shouldBe` True
+
   it "freezes the initial window at a nonzero log cursor" $ do
     let earlierLog = appendObservation [MsgUser "already in the initial window"] emptyLog
         original = [MsgSystem "rules", MsgUser "observed name and text", MsgUser "trigger"]
@@ -87,7 +107,7 @@ spec = describe "observation-ordered task projection" $ do
     encode second.working.wpMessages `shouldBe` encode (first.working.wpMessages <> [MsgAssistant "draft", MsgUser "correction"])
 
 options :: ProjectionOptions
-options = ProjectionOptions (ContextLimits 12000 4000 2048 1000 Nothing Nothing) Nothing "id" "t#7" "" [] [] False
+options = ProjectionOptions (ContextLimits 12000 4000 2048 1000 Nothing Nothing) Nothing "id" "t#7" "" [] [] False []
 
 addRound :: Text -> Text -> TaskRecord -> TaskRecord
 addRound ident body = recordResults [MsgTool ident body] . recordPoll (logCursor emptyLog) (Just (MsgAssistantToolCalls (object []) [ToolCall ident "read" (object [])]))

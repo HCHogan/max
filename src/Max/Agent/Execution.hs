@@ -31,7 +31,8 @@ data ExecutionEvents es = ExecutionEvents
   { eeObserve :: TurnRuntime -> ToolContext -> Eff es [ChatMessage],
     eeInterrupt :: TurnRuntime -> STM (),
     eeFinish :: TurnRuntime -> Eff es Bool,
-    eeResults :: TurnRuntime -> ToolContext -> Eff es (Maybe ExecutionResults)
+    eeResults :: TurnRuntime -> ToolContext -> Eff es (Maybe ExecutionResults),
+    eeTail :: TurnRuntime -> Eff es [Text]
   }
 
 data ExecutionResults = ExecutionResults {erDeliver :: Text -> Value -> [InlineMedia] -> IO (), erClose :: IO ()}

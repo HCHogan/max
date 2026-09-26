@@ -76,6 +76,7 @@ estimateMessageTokens message =
   messageOverhead + case message of
     MsgSystem content -> estimateTextTokens content
     MsgUser content -> estimateTextTokens content
+    MsgVolatile content -> estimateTextTokens content
     MsgUserBlocks blocks -> sum (map estimateBlockTokens blocks)
     MsgAssistant content -> estimateTextTokens content
     MsgAssistantRaw raw _ -> estimateLazyBytesTokens (encode raw)

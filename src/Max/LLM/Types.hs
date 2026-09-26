@@ -48,6 +48,9 @@ data ChatMessage
     MsgSystem !Text
   | -- | @{ role: "user", content: ... }@
     MsgUser !Text
+  | -- | Per-request coordination state, outside the stable cache prefix.
+    -- Never appended to a task's transcript or compaction checkpoint.
+    MsgVolatile !Text
   | -- | Multimodal user message.  Used only when the active LLM
     -- profile sets @multimodal = true@; otherwise build a 'MsgUser'
     -- with text markers like @[image]@ instead.  Wire format
@@ -181,6 +184,7 @@ instance ToJSON ChatMessage where
   toJSON = \case
     MsgSystem c -> object ["role" .= ("system" :: Text), "content" .= c]
     MsgUser c -> object ["role" .= ("user" :: Text), "content" .= c]
+    MsgVolatile c -> object ["role" .= ("user" :: Text), "content" .= c, "volatile" .= True]
     MsgUserBlocks blocks ->
       object
         [ "role" .= ("user" :: Text),
@@ -206,7 +210,9 @@ instance FromJSON ChatMessage where
       -- Text or blocks, dispatched on the shape the encoder produced.
       "user" ->
         o .: "content" >>= \case
-          String text -> pure (MsgUser text)
+          String text -> do
+            volatile <- o .:? "volatile" .!= False
+            pure (if volatile then MsgVolatile text else MsgUser text)
           blocks@(Array _) -> MsgUserBlocks <$> parseJSON blocks
           _ -> fail "user content must be a string or an array of content blocks"
       "tool" -> MsgTool <$> o .: "tool_call_id" <*> o .: "content"

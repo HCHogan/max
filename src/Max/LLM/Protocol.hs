@@ -192,6 +192,7 @@ openAIFields cfg msgs tools =
        ]
   where
     encodeMessage = \case
+      MsgVolatile text -> toJSON (MsgUser text)
       MsgUserBlocks blocks -> object ["role" .= ("user" :: Text), "content" .= encodeMarkedBlocks withBreakpoint toJSON blocks]
       message -> toJSON message
 
@@ -267,6 +268,7 @@ responsesInput msgs = (instructions, concatMap item msgs)
     item = \case
       MsgSystem _ -> []
       MsgUser c -> [object ["role" .= ("user" :: Text), "content" .= c]]
+      MsgVolatile c -> [object ["role" .= ("user" :: Text), "content" .= c]]
       MsgUserBlocks blocks ->
         [object ["role" .= ("user" :: Text), "content" .= encodeMarkedBlocks withBreakpoint inputBlock blocks]]
       MsgAssistant c -> [object ["role" .= ("assistant" :: Text), "content" .= c]]
@@ -427,7 +429,7 @@ anthropicFields :: LLMProfile -> [ChatMessage] -> [ToolSpec] -> [Pair]
 anthropicFields cfg msgs tools =
   [ "model" .= cfg.model,
     "max_tokens" .= cfg.maxTokens,
-    "messages" .= map encodeAnthropicMsg (markLastForCache anthropicMsgs)
+    "messages" .= map encodeAnthropicMsg (markLastForCache anthropicMsgs <> volatileMsgs)
   ]
     <> temperatureField cfg
     <> effortFieldAnthropic cfg
@@ -440,7 +442,9 @@ anthropicFields cfg msgs tools =
            ]
        ]
   where
-    (systemText, anthropicMsgs) = toAnthropicMessages msgs
+    (stable, volatile) = break (\case MsgVolatile {} -> True; _ -> False) msgs
+    (systemText, anthropicMsgs) = toAnthropicMessages stable
+    (_, volatileMsgs) = toAnthropicMessages volatile
     systemField = case systemText of
       Just s ->
         [ "system"
@@ -530,6 +534,7 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
 
     go [] = []
     go (MsgUser t : rest) = AnthropicMsg "user" (toJSON t) : go rest
+    go (MsgVolatile t : rest) = AnthropicMsg "user" (toJSON t) : go rest
     go (MsgUserBlocks blocks : rest) =
       -- Anthropic image blocks carry @source: {type:base64,
       -- media_type, data}@ rather than OpenAI's data-URL

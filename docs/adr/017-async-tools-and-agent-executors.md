@@ -74,7 +74,13 @@ this permission. New calls and default database callers still require a live
 model turn. An admitted agent call can create its child after parent completion
 under the original tree grants and deadline. Full routing
 (replacement/cancellation and monitor fires), combined
-observation bounds and the open-task tail remain in step 4. Amends
+observation bounds and the remaining node executor migration remain in step 4.
+Each model request now adds a fresh volatile tail of at most 16 other open tasks
+on the same node: trigger message, phase, pending call handles/tool names and age.
+Child nodes, queued requests and ended tasks are excluded. The tail consumes the
+working-context budget but is never saved in task history or compaction
+checkpoints. Anthropic's final cache breakpoint stays before this tail; host
+metadata is stripped from all provider wire formats. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)
 and the Wasm host ABI of [ADR-012](012-wasm-tool-execution.md). Work stays
 process-local; restart persistence is out of scope (§9).

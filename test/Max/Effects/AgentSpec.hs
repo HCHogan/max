@@ -36,6 +36,7 @@ import Max.Http.Failure (ResponseFailure (..), TransportFailure (..))
 import Max.Jobs qualified as Jobs
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.ModelCatalog (ContextLimits (..), VisionLimits (..), defaultContextLimits)
+import Max.Node.Render (renderOpenTasks)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
 import Max.Skill.ToolRuntime (skillToolsWithRuntime)
 import Max.Skill.Workflow (bindWorkflowContracts)
@@ -66,7 +67,18 @@ runTestAgentObserved ::
   (ToolContext -> Either ToolCatalogError (ToolRegistry (ToolOutput : ToolControl : es))) ->
   Eff (Agent : es) a ->
   Eff es a
-runTestAgentObserved inputs observe =
+runTestAgentObserved inputs observe = runTestAgentObservedWithTail inputs observe (pure [])
+
+runTestAgentObservedWithTail ::
+  (LLM :> es, Concurrent :> es, Log :> es, IOE :> es) =>
+  IORef [Text] ->
+  IO [ChatMessage] ->
+  IO [Text] ->
+  AgentLimits ->
+  (ToolContext -> Either ToolCatalogError (ToolRegistry (ToolOutput : ToolControl : es))) ->
+  Eff (Agent : es) a ->
+  Eff es a
+runTestAgentObservedWithTail inputs observe tailSnapshot =
   runAgentWith
     (ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted) (\_ _ -> pure Nothing))
     (ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ()))
@@ -79,6 +91,7 @@ runTestAgentObserved inputs observe =
         (const STM.retry)
         (\_ -> liftIO (null <$> readIORef inputs))
         (\_ _ -> pure Nothing)
+        (const (liftIO tailSnapshot))
     )
     Nothing
 
@@ -241,7 +254,7 @@ runVisionTurn provider = do
 
 spec :: Spec
 spec = describe "Agent full loop" $ do
-  it "answers a second root request and observes its publication after the first tool result" $ do
+  it "shows a waiting root task in the volatile tail, then observes the second task's publication after the first result" $ do
     conversations <- Conversation.newConversations
     tasks <- newTaskRegistry
     entered <- newEmptyMVar
@@ -255,7 +268,15 @@ spec = describe "Agent full loop" $ do
           pure (Right args)
         provider = LLMInterpreter $ \_ _ messages _ _ ->
           if any (\case MsgUser "second" -> True; _ -> False) messages
-            then pure (Right (ContentResp "second answered"))
+            then do
+              liftIO $ case reverse messages of
+                MsgVolatile snapshot : _ -> do
+                  snapshot `shouldSatisfy` T.isInfixOf "t#1:r1"
+                  snapshot `shouldSatisfy` T.isInfixOf "echo"
+                  snapshot `shouldSatisfy` T.isInfixOf "\"trigger_message\":1"
+                  snapshot `shouldSatisfy` (not . T.isInfixOf "t#2")
+                other -> expectationFailure ("missing live node tail: " <> show other)
+              pure (Right (ContentResp "second answered"))
             else
               if any (\case MsgTool {} -> True; _ -> False) messages
                 then do
@@ -268,14 +289,17 @@ spec = describe "Agent full loop" $ do
           ( do
               Conversation.awaitTurn handle `shouldReturn` True
               Conversation.actorFor handle >>= mapM_ (setTurnExecutor turn)
+              STM.atomically $ do
+                target <- Conversation.eventsFor conversations (turnRuntimeAgentTurn turn).atrTurnId
+                maybe (pure False) (bindTurnEvents tasks (turnRuntimeAgentTurn turn).atrTurnId) target >>= STM.check
               withCompactLogger ColorNever Nothing $ \logger ->
-                runEff . runConcurrent . runLog "yield-test" logger LogAttention . runLLMWith provider . runTestAgentObserved inputs (atomicModifyIORef' published ([],)) (AgentLimits 4) (const (buildToolRegistry [echoDefinition {tdAwait = AsyncTool}] [slow])) $
+                runEff . runConcurrent . runLog "yield-test" logger LogAttention . runLLMWith provider . runTestAgentObservedWithTail inputs (atomicModifyIORef' published ([],)) (renderOpenTasks <$> otherOpenTasks tasks turn) (AgentLimits 4) (const (buildToolRegistry [echoDefinition {tdAwait = AsyncTool}] [slow])) $
                   agentTurn turn dispatchContext "fake" [MsgUser question] (\case AgentFinalStreamText _ -> pure False; AgentProgressText _ -> pure (); AgentToolDebug _ -> pure ())
           )
             `finally` (Conversation.release conversations handle >> finishTurnRuntime tasks turn)
     Just first <- Conversation.enqueue conversations (request 1)
     Just second <- Conversation.enqueue conversations (request 2)
-    firstTurn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
+    firstTurn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 1))
     secondTurn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 2) (TurnOrdinal 2)) (GroupId 7777) (UserId 2001) Nothing
     Async.withAsync (run first firstTurn "first") $ \waiting -> do
       timeout 1000000 (takeMVar entered) `shouldReturn` Just ()
@@ -647,7 +671,7 @@ spec = describe "Agent full loop" $ do
         . runAgentWith
           (executionAdmission jobs)
           (ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ()))
-          (ExecutionEvents (\_ _ -> pure []) (const STM.retry) (const (pure True)) (\_ _ -> pure Nothing))
+          (ExecutionEvents (\_ _ -> pure []) (const STM.retry) (const (pure True)) (\_ _ -> pure Nothing) (const (pure [])))
           Nothing
           (AgentLimits 4)
           factory
@@ -886,7 +910,7 @@ spec = describe "Agent full loop" $ do
             }
         admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure OverBudget) (\_ _ -> pure Nothing)
         journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
-        inputs = ExecutionEvents (\_ _ -> liftIO $ atomicModifyIORef' _inputs (\notes -> ([], [inputMessage (T.intercalate "\n" notes) | not (null notes)]))) (const STM.retry) (\_ -> liftIO (null <$> readIORef _inputs)) (\_ _ -> pure Nothing)
+        inputs = ExecutionEvents (\_ _ -> liftIO $ atomicModifyIORef' _inputs (\notes -> ([], [inputMessage (T.intercalate "\n" notes) | not (null notes)]))) (const STM.retry) (\_ -> liftIO (null <$> readIORef _inputs)) (\_ _ -> pure Nothing) (const (pure []))
     result <- withCompactLogger ColorNever Nothing $ \logger ->
       runEff . runConcurrent . runLog "budget-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 4) (const (buildToolRegistry [echoDefinition] [counted])) $
         agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
@@ -953,7 +977,7 @@ spec = describe "Agent full loop" $ do
             )
         admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted) (\_ _ -> pure Nothing)
         journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
-        inputs = ExecutionEvents (\_ _ -> liftIO $ atomicModifyIORef' inbox (\text -> ("", [inputMessage text | not (T.null text)]))) (const STM.retry) (\_ -> liftIO (T.null <$> readIORef inbox)) (\_ _ -> pure Nothing)
+        inputs = ExecutionEvents (\_ _ -> liftIO $ atomicModifyIORef' inbox (\text -> ("", [inputMessage text | not (T.null text)]))) (const STM.retry) (\_ -> liftIO (T.null <$> readIORef inbox)) (\_ _ -> pure Nothing) (const (pure []))
     result <- withCompactLogger ColorNever Nothing $ \logger ->
       runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 3) (const (buildToolRegistry [] [])) $
         agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)

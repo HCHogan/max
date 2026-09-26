@@ -34,6 +34,10 @@ module Max.Tasks
     -- * Operations
     TaskInfo (..),
     listTasks,
+    OpenTask (..),
+    otherOpenTasks,
+    startTurnCall,
+    finishTurnCall,
     cancelTask,
     cancelAgentTurnTask,
     cancelAllTasks,
@@ -46,7 +50,7 @@ where
 
 import Control.Concurrent.STM
 import Control.Exception (Exception (..), asyncExceptionFromException, asyncExceptionToException, finally, mask, onException, throwIO)
-import Control.Monad (filterM, unless, when)
+import Control.Monad (filterM, forM, unless, when)
 import Data.Bifunctor (second)
 import Data.Int (Int64)
 import Data.List (find, sortOn)
@@ -73,7 +77,6 @@ newtype TaskId = TaskId {unTaskId :: Text}
 data TurnRuntime = TurnRuntime
   { trEntry :: !TaskEntry,
     trExecutionOrdinal :: !(TVar Int64),
-    trExecutor :: !(TVar Executor.Actor),
     trObservationCursor :: !(TVar (Maybe MessageCursor))
   }
 
@@ -91,6 +94,8 @@ data TaskEntry = TaskEntry
     teStartedAt :: !UTCTime,
     -- | Label shown in @!ps@: @"starting"@ until the loop attaches.
     teKind :: !(TVar Text),
+    teExecutor :: !(TVar Executor.Actor),
+    teCalls :: !(TVar (Map ExecutionOrdinal Text)),
     -- | Last phase change, used by the silence watchdog rather than total age.
     -- Updates occur at round boundaries; a slow multi-tool round has one heartbeat.
     -- Individual tool deadlines are enforced separately.
@@ -171,13 +176,13 @@ setTurnObservationCursor :: TurnRuntime -> MessageCursor -> IO ()
 setTurnObservationCursor turn cursor = atomically (writeTVar turn.trObservationCursor (Just cursor))
 
 turnExecutor :: TurnRuntime -> IO Executor.Actor
-turnExecutor = readTVarIO . (.trExecutor)
+turnExecutor = readTVarIO . (.trEntry.teExecutor)
 
 setTurnExecutor :: TurnRuntime -> Executor.Actor -> IO ()
 setTurnExecutor turn actor = atomically $ do
-  previous <- readTVar turn.trExecutor
+  previous <- readTVar turn.trEntry.teExecutor
   Executor.closeTask previous
-  writeTVar turn.trExecutor actor
+  writeTVar turn.trEntry.teExecutor actor
 
 -- | User cancellation is asynchronous so 'catchSync' cannot swallow it.
 -- Resource brackets still run; the dispatch root handles the final exception.
@@ -198,6 +203,7 @@ beginTurnRuntime reg ref gid uid mTrigger = do
   output <- newTurnOutputContext ref
   now <- getCurrentTime
   kind <- newTVarIO "starting"
+  calls <- newTVarIO Map.empty
   -- Context collection counts toward silence before the first phase change.
   progressAt <- newTVarIO now
   cancel <- newTVarIO Nothing
@@ -223,6 +229,8 @@ beginTurnRuntime reg ref gid uid mTrigger = do
               teOutputContext = output,
               teStartedAt = now,
               teKind = kind,
+              teExecutor = executor,
+              teCalls = calls,
               teProgressAt = progressAt,
               teCancel = cancel,
               teKilled = killed,
@@ -236,7 +244,6 @@ beginTurnRuntime reg ref gid uid mTrigger = do
       TurnRuntime
         { trEntry = entry,
           trExecutionOrdinal = executionOrdinal,
-          trExecutor = executor,
           trObservationCursor = observationCursor
         }
   where
@@ -275,6 +282,43 @@ setTurnPhase :: TurnRuntime -> Text -> IO ()
 setTurnPhase turn phase = do
   now <- getCurrentTime
   atomically (writePhase turn.trEntry now phase)
+
+startTurnCall :: TurnRuntime -> ExecutionOrdinal -> Text -> IO ()
+startTurnCall turn ordinal name = atomically (modifyTVar' turn.trEntry.teCalls (Map.insert ordinal name))
+
+finishTurnCall :: TurnRuntime -> ExecutionOrdinal -> IO ()
+finishTurnCall turn ordinal = atomically (modifyTVar' turn.trEntry.teCalls (Map.delete ordinal))
+
+-- | Only public lifecycle facts from other open tasks on the same node.
+-- Private child nodes, ended tasks and the observing task are excluded.
+data OpenTask = OpenTask
+  { turn :: !AgentTurnRef,
+    trigger :: !(Maybe Int64),
+    phase :: !Text,
+    pending :: ![(ExecutionOrdinal, Text)],
+    ageSeconds :: !Int
+  }
+  deriving stock (Show)
+
+otherOpenTasks :: TaskRegistry -> TurnRuntime -> IO [OpenTask]
+otherOpenTasks registry current = do
+  now <- getCurrentTime
+  atomically $ do
+    target <- turnEvents current
+    (_, entries) <- readTVar registry.trState
+    open <- filterM (eligible target) (sortOn teStartedAt (Map.elems entries))
+    forM (take 16 open) $ \entry -> do
+      phase <- readTVar entry.teKind
+      pending <- Map.toAscList <$> readTVar entry.teCalls
+      pure (OpenTask (turnOutputAgentTurn entry.teOutputContext) entry.teTrigger phase pending (max 0 (floor (diffUTCTime now entry.teStartedAt))))
+  where
+    eligible target entry = do
+      events <- readTVar entry.teEvents
+      open <- Events.isOpen events
+      started <- readTVar entry.teExecutor >>= Executor.taskStarted
+      killed <- readTVar entry.teKilled
+      draining <- readTVar entry.teDraining
+      pure (entry.teId /= current.trEntry.teId && entry.teGroup == current.trEntry.teGroup && Events.sameNode target events && open && started && not killed && not draining)
 
 -- | Update phase and heartbeat atomically.
 writePhase :: TaskEntry -> UTCTime -> Text -> STM ()
@@ -330,7 +374,7 @@ finishTurnRuntime :: TaskRegistry -> TurnRuntime -> IO ()
 finishTurnRuntime reg turn = mask $ \restore -> do
   now <- getCurrentTime
   (retained, killed) <- atomically $ do
-    readTVar turn.trExecutor >>= Executor.closeTask
+    readTVar turn.trEntry.teExecutor >>= Executor.closeTask
     turnEvents turn >>= Events.close
     let entry = turn.trEntry
     writeTVar entry.teDraining True

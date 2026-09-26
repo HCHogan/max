@@ -11,6 +11,7 @@ module Max.Jobs
     newJobs,
     resultRouter,
     resultOrigin,
+    otherOpenTasks,
     bindResultRelay,
     bindReportRelay,
     bindMessageRelay,
@@ -76,6 +77,7 @@ import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State (TaskStatus (..), taskIsLive)
 import Max.Task.Types
 import Max.Tasks (TaskCancelled (..), TaskRegistry, TurnRuntime, bindTurnDeadline, bindTurnEvents, cancelAgentTurnTask, lookupTurnEvents, turnAcceptsWork, turnEvents, turnIsLive, turnRuntimeAgentTurn, turnWasCancelled)
+import Max.Tasks qualified as Tasks
 import Max.ToolContext (ToolContext)
 import Max.Turn.Types (AgentTurnId, AgentTurnRef (..))
 import OneBot.Types (GroupId)
@@ -166,6 +168,9 @@ resultOrigin jobs runtime context = atomically $ do
         messageCurrent <- maybe (pure True) Router.messageIsCurrent (Map.lookup turn notices)
         pure (not cancelled && not closed && inherited && reportCurrent && messageCurrent && maybe True (\run -> maybe False ((/= Cancelled) . (.view.status)) (lookupRun current run)) owner)
   pure Router.Origin {turn, owner, context, target, valid}
+
+otherOpenTasks :: Jobs -> TurnRuntime -> IO [Tasks.OpenTask]
+otherOpenTasks jobs = Tasks.otherOpenTasks jobs.tasks
 
 bindResultRelay :: Jobs -> AgentTurnId -> Router.Relay -> IO ()
 bindResultRelay jobs turn relay = atomically (modifyTVar' jobs.resultNotices (Map.insert turn relay))

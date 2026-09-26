@@ -4,6 +4,7 @@ module Max.Context.Working
     observeUsage,
     WorkingProjection (..),
     fitWorkingContext,
+    fitWorkingContextWithTail,
     workingIdentity,
     requestTokens,
     estimateToolTokens,
@@ -98,14 +99,21 @@ mediaReserve limits messages
 -- material alone cannot fit, return an error before any model/effect call.
 fitWorkingContext :: ContextLimits -> Maybe UsageAnchor -> Text -> Text -> Text -> [ChatMessage] -> [ToolSpec] -> Either Text WorkingProjection
 fitWorkingContext limits anchor identity turnHandle previous messages specs =
-  if cost messages <= ceiling' && toolChars messages <= 60000
-    then Right (WorkingProjection messages previous (cost messages) hardLimit False)
-    else finish (shrink indexed [] removable)
+  fitWorkingContextWithTail limits anchor identity turnHandle previous messages specs []
+
+-- | The tail consumes the same request budget, but follows even a compaction
+-- summary. It is never eligible for historical pruning or checkpoint storage.
+fitWorkingContextWithTail :: ContextLimits -> Maybe UsageAnchor -> Text -> Text -> Text -> [ChatMessage] -> [ToolSpec] -> [ChatMessage] -> Either Text WorkingProjection
+fitWorkingContextWithTail limits anchor identity turnHandle previous messages specs tailMessages =
+  fmap (\plan -> plan {wpMessages = plan.wpMessages <> tailMessages}) $
+    if cost messages <= ceiling' && toolChars messages <= 60000
+      then Right (WorkingProjection messages previous (cost messages) hardLimit False)
+      else finish (shrink indexed [] removable)
   where
-    hardLimit = max 0 (limits.maxInputTokens - mediaReserve limits messages)
+    hardLimit = max 0 (limits.maxInputTokens - mediaReserve limits (messages <> tailMessages))
     ceiling' = max 0 (hardLimit - limits.toolRoundReserve)
     low = ceiling' * 3 `div` 4
-    cost xs = requestTokens anchor identity xs specs
+    cost xs = requestTokens anchor identity (xs <> tailMessages) specs
     toolChars xs = sum [T.length text | MsgTool _ text <- xs]
     indexed = zip [0 :: Int ..] messages
     rounds = [(index, calls) | (index, MsgAssistantToolCalls _ calls) <- indexed]

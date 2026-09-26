@@ -78,8 +78,10 @@ import Max.Tasks
   ( TaskCancelled (..),
     TurnRuntime,
     checkTurnCancellation,
+    finishTurnCall,
     nextExecutionOrdinal,
     retainTurnWork,
+    startTurnCall,
     turnExecutor,
     turnRuntimeAgentTurn,
   )
@@ -126,8 +128,11 @@ executionHooks admission journal group turn =
           Refused -> throwIO TaskCancelled
         ordinal <- liftIO (nextExecutionOrdinal turn)
         now <- liftIO getCurrentTime
+        liftIO (startTurnCall turn ordinal prepared.jsToolRef)
         pure (Just (JournalExecution ref ordinal prepared now)),
-      ehFinish = journal.ejFinish,
+      ehFinish = \row result -> do
+        liftIO (finishTurnCall turn row.jeExecutionOrdinal)
+        journal.ejFinish row result,
       ehAcquireGuest = pure (Just (pure ())),
       ehInterrupt = STM.retry,
       ehRetain = \call delivery -> liftIO (retainTurnWork turn (Async.cancel delivery) (Async.cancel call) (void (Async.waitCatchSTM delivery))),

@@ -363,10 +363,11 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
       where
         attempt removeMedia = do
           (anchor, previous) <- liftIO (readTVarIO workingRef)
+          tailMessages <- raise (raise (inbox.eeTail turn))
           let limits = toolContextLimits ctx.acTools
               identity = workingIdentity profile "process" limits specs
               handle = turnHandleText (turnRuntimeAgentTurn turn).atrTurnOrdinal
-              options = Projection.ProjectionOptions limits anchor identity handle previous (map (.slInstructions) (Map.elems (toolSkillLoads ctx.acTools))) specs removeMedia
+              options = Projection.ProjectionOptions limits anchor identity handle previous (map (.slInstructions) (Map.elems (toolSkillLoads ctx.acTools))) specs removeMedia tailMessages
           case Projection.planProjection options observedLog record cursor of
             Left detail -> pure (record, Left (AgentContextBudget detail))
             Right projection -> do

@@ -63,6 +63,20 @@ parts = \case
 
 spec :: Spec
 spec = describe "LLM wire encoding" $ do
+  it "keeps volatile coordination outside the Anthropic cache boundary and host metadata off every wire" $ do
+    let messages = [MsgSystem "rules", MsgUser "request", MsgAssistant "prior", MsgVolatile "other task is waiting"]
+        encoded = requestBodyFor (profile ProtocolAnthropic True) messages [] False
+        wire = parts (field "messages" encoded)
+    length wire `shouldBe` 3
+    field "cache_control" (last (parts (field "content" (wire !! 1)))) `shouldNotBe` Nothing
+    field "content" (last wire) `shouldBe` Just (String "other task is waiting")
+    field "volatile" (last wire) `shouldBe` Nothing
+    forM_ [ProtocolOpenAI, ProtocolResponses] $ \protocol -> do
+      let body = requestBodyFor (profile protocol False) messages [] False
+          rows = parts (field (if protocol == ProtocolOpenAI then "messages" else "input") body)
+      field "content" (last rows) `shouldBe` Just (String "other task is waiting")
+      field "volatile" (last rows) `shouldBe` Nothing
+
   it "sends unmarked profiles the same plain string as an unsplit prompt" $
     userContent (requestBodyFor (profile ProtocolOpenAI False) marked [] False)
       `shouldBe` Just (String "[episodes]\n[recent messages]\nhi\n[current message]\nq")

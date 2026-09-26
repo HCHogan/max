@@ -22,6 +22,7 @@ module Max.Node.Events
     tryFinish,
     close,
     isOpen,
+    sameNode,
   )
 where
 
@@ -63,6 +64,9 @@ noPending = Pending Set.empty Set.empty
 newtype Node = Node (TVar State) deriving stock (Eq)
 
 data Task = Task !Node !Integer deriving stock (Eq)
+
+sameNode :: Task -> Task -> Bool
+sameNode (Task node _) (Task other _) = node == other
 
 data State = State {next :: !Integer, tasks :: !(Map Integer Bool), events :: !(Seq Event)}
 

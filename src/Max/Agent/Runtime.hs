@@ -21,7 +21,7 @@ import Max.Execution.Authority (newCallAuthority)
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Jobs qualified as Jobs
 import Max.Node.Events qualified as Events
-import Max.Node.Render (renderEvents)
+import Max.Node.Render (renderEvents, renderOpenTasks)
 import Max.Node.Router qualified as Router
 import Max.Tasks (setTurnObservationCursor, turnEvents, turnObservationCursor, turnRuntimeAgentTurn)
 import Max.ToolContext (ToolContext, toolClearedAt, toolGroupId)
@@ -60,6 +60,7 @@ runAgentRuntime jobs =
             origin <- Jobs.resultOrigin jobs turn context
             pure (Just ExecutionResults {erDeliver = \ref value media -> atomically (Router.deliverResult jobs.resultRouter origin ref value media), erClose = atomically (Router.closeTask jobs.resultRouter origin.target)})
         )
+        (\turn -> renderOpenTasks <$> liftIO (Jobs.otherOpenTasks jobs turn))
     )
     (Just (liftIO . Jobs.acquireGuestSlot jobs . (.atrTurnId)))
 

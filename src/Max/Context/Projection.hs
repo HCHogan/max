@@ -118,7 +118,8 @@ data ProjectionOptions = ProjectionOptions
     previousSummary :: !Text,
     skillInstructions :: ![Text],
     tools :: ![ToolSpec],
-    removeMedia :: !Bool
+    removeMedia :: !Bool,
+    volatileTail :: ![Text]
   }
 
 data Projection = Projection
@@ -133,10 +134,12 @@ data Projection = Projection
 -- so it cannot accidentally append an observation or replay a tool result.
 planProjection :: ProjectionOptions -> NodeLog -> TaskRecord -> Cursor -> Either Text Projection
 planProjection options nodeLog record cursor = do
-  plan <- fitWorkingContext options.limits options.anchor options.identity options.handle options.previousSummary visible options.tools
-  let nextRecord
-        | map messageFingerprint messages == map messageFingerprint plan.wpMessages = record
-        | otherwise = record {checkpoint = Just (Checkpoint (Seq.length record.polls) cursor plan.wpMessages)}
+  let tailMessages = map MsgVolatile options.volatileTail
+  plan <- fitWorkingContextWithTail options.limits options.anchor options.identity options.handle options.previousSummary visible options.tools tailMessages
+  let stable = take (length plan.wpMessages - length tailMessages) plan.wpMessages
+      nextRecord
+        | map messageFingerprint messages == map messageFingerprint stable = record
+        | otherwise = record {checkpoint = Just (Checkpoint (Seq.length record.polls) cursor stable)}
   pure (Projection plan nextRecord (visionEvicted + forcedEvicted) (snd (evictMedia maxBound plan.wpMessages) > 0))
   where
     messages = project nodeLog record cursor

@@ -5,37 +5,45 @@ module Max.TasksSpec (spec) where
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async (cancel, race, wait, waitCatch, waitCatchSTM, withAsync)
 import Control.Concurrent.STM (atomically, check)
-import Control.Monad (replicateM_, void)
+import Control.Monad (forM, forM_, replicateM_, void)
 import Data.Either (isLeft, isRight)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
+import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Node
+import Max.Node.Render (renderOpenTasks)
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Tasks
-  ( TaskCancelled (..),
+  ( OpenTask (..),
+    TaskCancelled (..),
     TaskInfo (..),
     activateTurnRuntime,
     authorizeTurnOutput,
     awaitTurnSilence,
     beginTurnRuntime,
     bindTurnDeadline,
+    bindTurnEvents,
     cancelAllTasks,
     cancelTask,
     checkTurnCancellation,
+    finishTurnCall,
     finishTurnRuntime,
     inFlightTriggers,
     listTasks,
     newTaskRegistry,
+    otherOpenTasks,
     retainTurnWork,
     setTurnExecutor,
     setTurnPhase,
+    startTurnCall,
     turnAcceptsWork,
     turnIsLive,
     turnRuntimeTaskId,
     turnWasCancelled,
   )
-import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
+import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), ExecutionOrdinal (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..), UserId (..))
 import System.Timeout (timeout)
 import Test.Hspec
@@ -52,6 +60,50 @@ reference n = AgentTurnRef (AgentTurnId (fromIntegral n)) (TurnOrdinal (fromInte
 
 spec :: Spec
 spec = describe "Max.Tasks" $ do
+  it "shows at most sixteen other open node tasks without exposing private child nodes or ended work" $ do
+    registry <- newTaskRegistry
+    node <- atomically Events.newNode
+    let attach n group = do
+          runtime <- beginTurnRuntime registry (reference n) group alice (Just (CanonicalMessageId (fromIntegral n)))
+          atomically $ do
+            events <- Events.newTask node
+            bindTurnEvents registry (AgentTurnId (fromIntegral n)) events >>= check
+          pure runtime
+    current <- attach 1 gid
+    sibling <- attach 2 gid
+    _privateChild <- beginTurnRuntime registry (reference 3) gid alice Nothing
+    _otherGroup <- attach 4 (GroupId 101)
+    ended <- attach 5 gid
+    finishTurnRuntime registry ended
+    cancelled <- attach 6 gid
+    cancelTask registry (turnRuntimeTaskId cancelled) `shouldReturn` True
+    queued <- attach 27 gid
+    executor <- Node.newExecutor
+    queuedActor <- atomically $ do
+      _ <- Node.registerTask executor (AgentTurnId 99) Node.NewRequest
+      Node.registerTask executor (AgentTurnId 27) Node.NewRequest
+    setTurnExecutor queued queuedActor
+    setTurnPhase sibling "tools"
+    startTurnCall sibling (ExecutionOrdinal 1) "web_search"
+    startTurnCall sibling (ExecutionOrdinal 2) "agent"
+    [view] <- otherOpenTasks registry current
+    view.turn `shouldBe` reference 2
+    view.trigger `shouldBe` Just 2
+    view.phase `shouldBe` "tools"
+    view.pending `shouldBe` [(ExecutionOrdinal 1, "web_search"), (ExecutionOrdinal 2, "agent")]
+    view.ageSeconds `shouldSatisfy` (>= 0)
+    finishTurnCall sibling (ExecutionOrdinal 1)
+    [settled] <- otherOpenTasks registry current
+    settled.pending `shouldBe` [(ExecutionOrdinal 2, "agent")]
+    rest <- forM [7 .. 26] (`attach` gid)
+    views <- otherOpenTasks registry current
+    length views `shouldBe` 16
+    [rendered] <- pure (renderOpenTasks views)
+    length (T.lines rendered) `shouldBe` 17
+    rendered `shouldSatisfy` T.isInfixOf "t#2:r2"
+    forM_ (sibling : rest) (finishTurnRuntime registry)
+    otherOpenTasks registry current >>= (`shouldSatisfy` null)
+
   it "cancels retained calls at the original deadline after the model task ends" $ do
     registry <- newTaskRegistry
     turn <- beginTurnRuntime registry (reference 1) gid alice Nothing
