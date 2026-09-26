@@ -32,6 +32,7 @@ import Max.Task.State (TaskStatus (Succeeded))
 import Max.Task.Types
 import Max.Tasks (cancelAgentTurnTask, newTaskRegistry)
 import Max.Turn.Types
+import NodeWorkFixture qualified
 import OneBot.Types (GroupId (..))
 import System.Timeout (timeout)
 import Test.Hspec
@@ -121,7 +122,7 @@ spec pool = before_ (truncateAll pool) $ describe "Jobs database boundaries" $ d
     publish running.turn >>= (`shouldSatisfy` publicationFailed)
     -- Progress is visible through task status only; it queues no notice.
     Jobs.reportJobProgress running.jobs running.turn.atrTurnId "progress" `shouldReturn` True
-    timeout 20000 (Jobs.takeJobWork running.jobs) `shouldReturn` Nothing
+    timeout 20000 (NodeWorkFixture.takeWork running.jobs) `shouldReturn` Nothing
     withDb pool (query "SELECT count(*) FROM messages WHERE agent_turn_id IS NOT NULL" ()) `shouldReturn` [Only (0 :: Int64)]
 
   it "terminalizes interrupted turns at boot without creating another job" $ do

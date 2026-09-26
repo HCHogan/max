@@ -4,7 +4,7 @@
 module Main (main) where
 
 import Control.Concurrent.Async qualified as Async
-import Control.Concurrent.STM (atomically)
+import Control.Concurrent.STM (atomically, check)
 import Control.Exception (SomeException, bracket, finally, mask_, try)
 import Control.Monad (forM, forM_, forever, unless, void)
 import Data.Aeson hiding (Options)
@@ -129,7 +129,7 @@ newRoot pool opts group objective inputs structured = do
   let outputContract = if structured then Just (either (error . T.unpack) id (parseContract outputSchema)) else Nothing
       spec = JobSpec (GroupId group) actor message objective Basic (taskGrants Basic evalGrants) inputs Nothing outputContract False Nothing Nothing (addUTCTime (fromIntegral opts.seconds) now)
   Right _ <- Jobs.admitJob jobs Nothing identifier spec
-  Jobs.LaunchJob root <- Jobs.takeJobWork jobs
+  root <- atomically (Jobs.claimReadyJob jobs)
   pure (tasks, jobs, root)
 
 attach :: DbPool -> TaskRegistry -> Jobs.Jobs -> JobView -> IO (AgentTurnRef, TurnRuntime)
@@ -157,19 +157,23 @@ runCase cfg opts pool sources group parallel = do
       registry = either (error . show) id (buildToolRegistry (filter ((/= ToolRef "web_search") . (.tdRef)) definitions) (filter (\tool -> tool.toolName `elem` ["agent", "agent_progress"]) (taskTools jobs context)))
   calls <- newIORef []
   workers <- newIORef []
-  let workerLoop =
-        forever $
-          mask_ $
-            Jobs.takeJobWork jobs >>= \case
-              Jobs.LaunchJob child -> do
-                worker <- Async.asyncWithUnmask (\unmask -> unmask (runChild cfg opts pool sources tasks jobs child calls))
-                modifyIORef' workers (worker :)
-              Jobs.RelayMessage relay -> atomically (Router.releaseMessage jobs.resultRouter relay)
-              -- The benchmark consumes reports through the guest result and
-              -- journal; it has no chat frontend for late-call notifications.
-              Jobs.RelayResult relay -> atomically (Router.releaseRelay jobs.resultRouter relay)
-              Jobs.RelayReport relay -> atomically (Router.releaseReport jobs.resultRouter relay)
-              Jobs.RecordMonitorResult _ -> die "unexpected reminder in source audit"
+  let launchLoop = forever $ mask_ $ do
+        child <- atomically (Jobs.claimReadyJob jobs)
+        worker <- Async.asyncWithUnmask (\unmask -> unmask (runChild cfg opts pool sources tasks jobs child calls))
+        modifyIORef' workers (worker :)
+      deliveryLoop = forever $ mask_ $ do
+        receipt <- atomically $ do
+          Jobs.jobsAreOpen jobs >>= check
+          Jobs.flushJobEvents jobs
+          Router.takeDelivery jobs.resultRouter
+        -- The benchmark consumes reports through the guest result and
+        -- journal; it has no chat frontend for late-call notifications.
+        case receipt of
+          Router.ChildMessage relay -> atomically (Router.releaseMessage jobs.resultRouter relay)
+          Router.NativeResult relay -> atomically (Router.releaseRelay jobs.resultRouter relay)
+          Router.JobReport relay -> atomically (Router.releaseReport jobs.resultRouter relay)
+          Router.MonitorCompleted _ -> die "unexpected reminder in source audit"
+      workerLoop = Async.concurrently_ launchLoop deliveryLoop
       cleanup = readIORef workers >>= mapM_ Async.cancel
   started <- getCurrentTime
   attempted <-

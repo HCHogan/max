@@ -70,7 +70,7 @@ observeAgentInputs jobs turn context = do
       json value = TE.decodeUtf8 (LBS.toStrict (encode value))
   cursor <- liftIO (turnObservationCursor turn)
   (target, receipts, excluded) <- liftIO . atomically $ do
-    Jobs.flushJobEvents jobs owner
+    Jobs.flushJobEvents jobs
     target <- turnEvents turn
     frozen <- Router.peekEvents jobs.resultRouter target
     routed <- routedInputSources turn

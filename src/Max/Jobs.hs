@@ -6,7 +6,6 @@ module Max.Jobs
     JobSpec (..),
     JobView (..),
     JobResult (..),
-    JobWork (..),
     JobWait (..),
     newJobs,
     resultRouter,
@@ -19,7 +18,8 @@ module Max.Jobs
     acquireGuestSlot,
     admitJob,
     admitJobWithAuthority,
-    takeJobWork,
+    claimReadyJob,
+    jobsAreOpen,
     attachJobTurn,
     attachAutomationTurn,
     detachJobTurn,
@@ -84,9 +84,6 @@ import Max.Tasks qualified as Tasks
 import Max.ToolContext (ToolContext)
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..))
 import OneBot.Types (GroupId)
-
-data JobWork = LaunchJob !JobView | RecordMonitorResult !Router.MonitorResult | RelayResult !Router.Relay | RelayReport !Router.ReportRelay | RelayMessage !Router.MessageRelay
-  deriving stock (Eq, Show)
 
 data ReportSource = NoReport | WaitingReport | PendingReport deriving stock (Eq)
 
@@ -260,22 +257,23 @@ admitJobWithAuthority authority jobs caller identifier requested = do
                                 writeTVar jobs.entries (Map.insert identifier newEntry withParent)
                                 pure (Right view)
 
--- | Launch requests stay on bounded job entries. All terminal deliveries use
--- router receipts, sharing capacity and ownership with detached native calls.
-takeJobWork :: Jobs -> IO JobWork
-takeJobWork jobs = atomically $ do
-  readTVar jobs.closed >>= check . not
+-- | The launch consumer claims job identity only. Node deliveries are consumed
+-- directly from the router, independently of source loading and dispatch.
+jobsAreOpen :: Jobs -> STM Bool
+jobsAreOpen jobs = not <$> readTVar jobs.closed
+
+claimReadyJob :: Jobs -> STM JobView
+claimReadyJob jobs = do
+  jobsAreOpen jobs >>= check
   flushReports jobs
   monitorResults <- Router.monitorOwners jobs.resultRouter
   entries <- readTVar jobs.entries
-  takeReady monitorResults entries `orElse` (Router.takeDelivery jobs.resultRouter >>= \case Router.NativeResult relay -> pure (RelayResult relay); Router.JobReport relay -> pure (RelayReport relay); Router.ChildMessage relay -> pure (RelayMessage relay); Router.MonitorCompleted result -> pure (RecordMonitorResult result))
-  where
-    takeReady monitorResults entries = case find (\entry -> entry.view.status == Queued && isNothing entry.runtime && monitorAvailable monitorResults entries entry) (Map.elems entries) of
-      Just entry -> do
-        let running = entry {view = entry.view {status = Running}}
-        writeTVar jobs.entries (Map.insert entry.view.run.jobId running entries)
-        pure (LaunchJob running.view)
-      Nothing -> retry
+  case find (\entry -> entry.view.status == Queued && isNothing entry.runtime && monitorAvailable monitorResults entries entry) (Map.elems entries) of
+    Just entry -> do
+      let running = entry {view = entry.view {status = Running}}
+      writeTVar jobs.entries (Map.insert entry.view.run.jobId running entries)
+      pure running.view
+    Nothing -> retry
 
 attachJobTurn :: Jobs -> JobRun -> AgentTurnRef -> IO Bool
 attachJobTurn jobs run turn = atomically $ do
@@ -403,8 +401,8 @@ reportJobProgress jobs turn body = atomically $ do
 
 -- Unaccepted reports retain one bounded source slot in their job entry. Once
 -- admitted, the router owns them through observation or frontend relay.
-flushJobEvents :: Jobs -> AgentTurnId -> STM ()
-flushJobEvents jobs _ = flushReports jobs
+flushJobEvents :: Jobs -> STM ()
+flushJobEvents = flushReports
 
 flushReports :: Jobs -> STM ()
 flushReports jobs = do

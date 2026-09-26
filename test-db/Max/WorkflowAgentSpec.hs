@@ -35,6 +35,7 @@ import Max.Tasks (TurnRuntime, beginTurnRuntime)
 import Max.Tool.Catalog (catalogTools)
 import Max.ToolContext
 import Max.Turn.Types
+import NodeWorkFixture qualified
 import OneBot.Types (GroupId (..), UserId (..))
 import System.Timeout (timeout)
 import Test.Hspec hiding (context)
@@ -46,7 +47,7 @@ spec pool = before_ (truncateAll pool) $ describe "agent() through the agent too
   it "runs SDK tell and ask, then resumes the original JavaScript await with the parent's answer" $ do
     running <- runningJob pool Basic workflowGrants
     Async.withAsync (runScript pool running Nothing "const base=40; await max.tell('working'); const answer=await max.ask('which number?'); return base+Number(answer.body);") $ \worker -> do
-      Just (Jobs.RelayMessage notice) <- timeout 3000000 (Jobs.takeJobWork running.jobs)
+      Just (Right (Router.ChildMessage notice)) <- timeout 3000000 (NodeWorkFixture.takeWork running.jobs)
       notice.text `shouldSatisfy` (Data.Text.isInfixOf "which number?")
       (relay, message, principal) <- seed pool 900 2
       _ <- beginTurnRuntime running.tasks relay (GroupId 900) (UserId 2) (Just message)
@@ -176,15 +177,15 @@ spec pool = before_ (truncateAll pool) $ describe "agent() through the agent too
       result <- Async.wait waiting
       result.cmExit `shouldBe` WasmCompleted
       result.cmOutput `shouldBe` Just (String "found it")
-    timeout 20000 (Jobs.takeJobWork running.jobs) `shouldReturn` Nothing
+    timeout 20000 (NodeWorkFixture.takeWork running.jobs) `shouldReturn` Nothing
 
 awaitChild :: Jobs.Jobs -> IO JobView
 awaitChild jobs = do
-  next <- timeout 30000000 (Jobs.takeJobWork jobs)
+  next <- timeout 30000000 (NodeWorkFixture.takeWork jobs)
   case next of
-    Just (Jobs.LaunchJob child) -> pure child
-    Just (Jobs.RelayMessage relay) -> atomically (Router.releaseMessage jobs.resultRouter relay) >> awaitChild jobs
-    Just (Jobs.RelayReport relay) -> atomically (Router.releaseReport jobs.resultRouter relay) >> awaitChild jobs
+    Just (Left child) -> pure child
+    Just (Right (Router.ChildMessage relay)) -> atomically (Router.releaseMessage jobs.resultRouter relay) >> awaitChild jobs
+    Just (Right (Router.JobReport relay)) -> atomically (Router.releaseReport jobs.resultRouter relay) >> awaitChild jobs
     _ -> fail "workflow child did not start"
 
 field :: Key -> Value -> Maybe Value

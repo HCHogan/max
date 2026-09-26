@@ -22,6 +22,7 @@ import Max.Platform.Types
 import Max.Task.Types
 import Max.Tasks (TaskRegistry, TurnRuntime, beginTurnRuntime, newTaskRegistry)
 import Max.Turn.Types
+import NodeWorkFixture qualified
 import OneBot.Types (GroupId (..), UserId (..))
 
 data RunningJob = RunningJob {jobs :: Jobs, tasks :: TaskRegistry, job :: JobView, turn :: AgentTurnRef, runtime :: TurnRuntime}
@@ -47,7 +48,7 @@ runningJob pool profile grants = do
 
 launchNext :: DbPool -> TaskRegistry -> Jobs -> IO RunningJob
 launchNext pool tasks jobs = do
-  LaunchJob job <- takeJobWork jobs
+  Left job <- NodeWorkFixture.takeWork jobs
   turn <- withDb pool (startAgentTurn job.spec.group job.spec.source job.spec.principal)
   runtime <- beginTurnRuntime tasks turn job.spec.group (UserId 1) (Just job.spec.source)
   attached <- attachJobTurn jobs job.run turn

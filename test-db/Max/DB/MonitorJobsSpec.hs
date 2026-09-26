@@ -46,6 +46,7 @@ import Max.Task.Types
 import Max.Tasks (beginTurnRuntime, bindTurnEvents, finishTurnRuntime, newTaskRegistry, setTurnObservationCursor)
 import Max.ToolContext
 import Max.Turn.Types (AgentTurnRef (..))
+import NodeWorkFixture qualified
 import OneBot.Types (GroupId (..), UserId (..))
 import System.Timeout (timeout)
 import Test.Hspec
@@ -60,7 +61,7 @@ spec pool = before_ (truncateAll pool) $ describe "automation Jobs and retained 
     Right monitor <- withDb pool (armElaboratedTimeMonitor (GroupId 900) actor turn "frozen occurrence goal" Nothing now Map.empty)
     (_, request) <- admitOccurrence pool monitor message "first"
     Right _ <- Jobs.admitJob jobs Nothing 1 request
-    Jobs.LaunchJob job <- Jobs.takeJobWork jobs
+    Left job <- NodeWorkFixture.takeWork jobs
     _ <- withDb pool $ execute "UPDATE monitors SET goal_text='later edited goal' WHERE monitor_id=?" (Only monitor.mrMonitorId)
     runtime <- beginTurnRuntime tasks turn request.group (UserId 1) (Just message)
     setTurnObservationCursor runtime (MessageCursor 0)
@@ -89,7 +90,8 @@ spec pool = before_ (truncateAll pool) $ describe "automation Jobs and retained 
     (fire, request) <- admitOccurrence pool monitor message "first"
     Right job <- Jobs.admitJob jobs Nothing 1 request
     Jobs.completeJob jobs job.run Succeeded (JobResult "stale success" Nothing)
-    Jobs.RecordMonitorResult old <- Jobs.takeJobWork jobs
+    Right (Router.MonitorCompleted old) <- NodeWorkFixture.takeWork jobs
+    Right unrelated <- Jobs.admitJob jobs Nothing 2 request {Jobs.monitor = Nothing}
     start <- newEmptyMVar
     let persist receipt = withDb pool $ recordMonitorResultWhen (atomically (Router.monitorIsCurrent receipt)) fire receipt.job.status (maybe (error "missing monitor result") id receipt.job.result)
     withAsync (takeMVar start >> persist old) $ \writer -> do
@@ -101,10 +103,12 @@ spec pool = before_ (truncateAll pool) $ describe "automation Jobs and retained 
               waiting <- withDb pool $ query "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE ?=ANY(pg_blocking_pids(pid)))" (Only locker)
               unless (waiting == [Only True]) (threadDelay 1000 >> blocked)
         timeout 2000000 blocked `shouldReturn` Just ()
+        Just claimed <- timeout 1000000 (atomically (Jobs.claimReadyJob jobs))
+        claimed.run `shouldBe` unrelated.run
         Jobs.cancelJob jobs request.group request.principal False job.run.jobId "cancelled while waiting for lock" `shouldReturn` Right ()
       wait writer `shouldReturn` False
     withDb pool (query "SELECT result IS NULL FROM monitor_fires WHERE fire_id=?" (Only fire)) `shouldReturn` [Only True]
-    Jobs.RecordMonitorResult current <- Jobs.takeJobWork jobs
+    Right (Router.MonitorCompleted current) <- NodeWorkFixture.takeWork jobs
     persist current `shouldReturn` True
     persist old `shouldReturn` False
     withDb pool (query "SELECT result->>'status' FROM monitor_fires WHERE fire_id=?" (Only fire)) `shouldReturn` [Only ("cancelled" :: Text)]

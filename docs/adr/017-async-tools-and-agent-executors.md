@@ -117,7 +117,13 @@ Job generation/status changes, descendant controls and runtime authority
 revocation share one transaction before any worker cancellation callback runs.
 This also covers shutdown and descendants of a cancelled completion. Kills
 before activation prevent later log rebinding. The remaining node executor
-migration and removal of the job-work/waiter bridges remain in step 4.
+migration and removal of the waiter bridges remain in step 4.
+`JobWork` is removed. Jobs exposes only a transactional launch claim; a separate
+consumer takes terminal receipts directly from `Node.Router`. Slow source loading
+cannot prevent result intake, and a blocked monitor writer cannot hold launch
+intake. Same-monitor executions still wait for the previous result's exact
+acknowledgement. Both consumers share the worker's supervised lifetime and stop
+accepting work when Jobs closes.
 Each model request now adds a fresh volatile tail of at most 16 other open tasks
 on the same node: trigger message, phase, pending call handles/tool names and age.
 Child nodes, queued requests and ended tasks are excluded. The tail consumes the

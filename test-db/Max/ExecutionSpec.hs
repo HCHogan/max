@@ -52,6 +52,7 @@ import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (LoopControl (..), controlSkillLoads)
 import Max.ToolContext
 import Max.Turn.Types (AgentTurnRef (..), ExecutionOrdinal (..), newTurnOutputContext, resultHandleText)
+import NodeWorkFixture qualified
 import OneBot.Types (GroupId (..), UserId (..))
 import System.Timeout (timeout)
 import Test.Hspec hiding (context)
@@ -121,7 +122,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
         putMVar release ()
         timeout 3000000 (Async.wait closing) `shouldReturn` Just ()
       states turn `shouldReturn` [("echo", "succeeded")]
-      Just (Jobs.RelayResult relay) <- timeout 1000000 (Jobs.takeJobWork jobs)
+      Just (Right (Router.NativeResult relay)) <- timeout 1000000 (NodeWorkFixture.takeWork jobs)
       relay.value `shouldBe` outcomeEnvelope (ToolSucceeded args)
       relay.media `shouldBe` [media]
       relay.origin.turn `shouldBe` turn.atrTurnId
@@ -463,8 +464,8 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     Just job <- Jobs.jobForTurn jobs turn.atrTurnId
     Jobs.completeJob jobs job.run Failed (JobResult "guest trapped" Nothing)
     withDb pool (finishAgentTurn turn TurnFailed 0 Nothing)
-    _ <- Jobs.takeJobWork jobs -- one result notice, never another execution
-    timeout 20000 (Jobs.takeJobWork jobs) `shouldReturn` Nothing
+    _ <- NodeWorkFixture.takeWork jobs -- one result notice, never another execution
+    timeout 20000 (NodeWorkFixture.takeWork jobs) `shouldReturn` Nothing
 
   it "settles cancellation during a host call and leaves later calls unstarted" $ do
     -- Exercise both adapters against separate turns and the same DB interpreter.
@@ -522,7 +523,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     rows `shouldBe` [("host:wasm/v2", "succeeded"), ("echo", "succeeded")]
     Just replaced <- Jobs.lookupJob jobs job.spec.group job.run.jobId
     replaced.calls `shouldBe` 1
-    timeout 20000 (Jobs.takeJobWork jobs) `shouldReturn` Nothing
+    timeout 20000 (NodeWorkFixture.takeWork jobs) `shouldReturn` Nothing
   where
     fixture = do
       running <- runningJob pool Basic Map.empty

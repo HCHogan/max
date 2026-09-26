@@ -15,6 +15,7 @@ import Max.DB.Connection (DbPool)
 import Max.Effects.Outbound (runOutbound)
 import Max.IR (Body (..), Node (NMention, NText), Phase (Canonical))
 import Max.Jobs qualified as Jobs
+import Max.Node.Router qualified as Router
 import Max.Platform.Delivery.Queue (newDeliveryQueue)
 import Max.Platform.Types (DeliveryId (..))
 import Max.ReplySend
@@ -22,6 +23,7 @@ import Max.Task.State (TaskStatus (Succeeded))
 import Max.Task.Types (JobResult (..), JobRun (jobId), JobSpec (principal), JobView (..), TaskProfile (Basic))
 import Max.Tasks (beginTurnRuntime)
 import Max.Turn.Types
+import NodeWorkFixture qualified
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
@@ -34,11 +36,11 @@ spec pool = before_ (truncateAll pool) $ describe "job notice publication" $ do
       if messageRelay
         then do
           Jobs.tellParent running.jobs running.turn.atrTurnId "urgent evidence" True `shouldReturn` Right ()
-          Jobs.RelayMessage relay <- Jobs.takeJobWork running.jobs
+          Right (Router.ChildMessage relay) <- NodeWorkFixture.takeWork running.jobs
           Jobs.bindMessageRelay running.jobs front.atrTurnId relay
         else do
           Jobs.completeJob running.jobs running.job.run Succeeded (JobResult "result" Nothing)
-          Jobs.RelayReport relay <- Jobs.takeJobWork running.jobs
+          Right (Router.JobReport relay) <- NodeWorkFixture.takeWork running.jobs
           Jobs.bindReportRelay running.jobs front.atrTurnId relay
       [Only principal] <- withDb pool $ query "SELECT author_principal_id FROM messages ORDER BY canonical_message_id LIMIT 1" ()
       [Only source] <- withDb pool $ query "SELECT canonical_message_id FROM messages ORDER BY canonical_message_id LIMIT 1" ()

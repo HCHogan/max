@@ -11,7 +11,7 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Effectful (Eff, IOE, MonadIO (liftIO), type (:>))
-import Effectful.Concurrent.Async (Concurrent, async)
+import Effectful.Concurrent.Async (Concurrent, async, concurrently_)
 import Effectful.Log (Log, logAttention, object, (.=))
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask)
@@ -93,57 +93,65 @@ jobsWorker ::
   Eff es ()
 jobsWorker = do
   env :: BotEnv <- ask
-  forever $ do
-    work <- liftIO (Jobs.takeJobWork env.beJobs)
-    case work of
-      Jobs.LaunchJob job ->
-        let failed detail = liftIO (Jobs.completeJob env.beJobs job.run JobState.Failed (JobResult detail Nothing))
-            start = if isJust job.spec.monitor then AutomationTurn job else JobTurn job
-         in dispatch job start failed `catchSync` (failed . T.pack . show)
-      Jobs.RelayMessage relay -> do
-        let release = liftIO (atomically (Router.releaseMessage env.beJobs.resultRouter relay))
-            failed detail = release >> logAttention "child message relay failed" (object ["error" .= (detail :: T.Text)])
-            deliver = do
-              liftIO . atomically $ do
-                current <- Router.messageIsCurrent relay
-                capacity <- Conversation.canAdmit env.beConversations relay.job.spec.group
-                check (not current || capacity)
-              current <- liftIO (atomically (Router.messageIsCurrent relay))
-              if current then dispatch relay.job (MessageNotice relay) failed else release
-        void . async $ deliver `catchSync` (failed . T.pack . show)
-      Jobs.RelayReport relay -> do
-        let release = liftIO (atomically (Router.releaseReport env.beJobs.resultRouter relay))
-            failed detail = release >> logAttention "job report relay failed" (object ["error" .= (detail :: T.Text)])
-            deliver = do
-              liftIO . atomically $ do
-                current <- Router.reportIsCurrent relay
-                capacity <- Conversation.canAdmit env.beConversations relay.job.spec.group
-                check (not current || capacity)
-              current <- liftIO (atomically (Router.reportIsCurrent relay))
-              if current then dispatch relay.job (ReportNotice relay) failed else release
-        void . async $ deliver `catchSync` (failed . T.pack . show)
-      Jobs.RelayResult relay -> do
-        let context = relay.origin.context
-            release = liftIO (atomically (Router.releaseRelay env.beJobs.resultRouter relay))
-            relayResult = do
-              liftIO . atomically $ do
-                current <- Router.relayIsCurrent relay
-                capacity <- Conversation.canAdmit env.beConversations (toolGroupId context)
-                check (not current || capacity)
-              current <- liftIO (atomically (Router.relayIsCurrent relay))
-              if not current
-                then release
-                else do
-                  source <- loadDispatchMessage (toolCanonicalId context)
-                  case source of
-                    Just message
-                      | message.groupId == toolGroupId context && message.authorPrincipalId == toolAuthorPrincipalId context ->
-                          dispatchLLMWith (CompletionNotice relay) Nothing OriginTask message {body = Body [], replyTo = Nothing, mentionPrincipals = Map.empty}
-                    _ -> release >> logAttention "execution result source unavailable" (object ["result" .= relay.reference])
-        void . async $ relayResult `catchSync` (\err -> release >> logAttention "execution result relay failed" (object ["error" .= T.pack (show err)]))
-      Jobs.RecordMonitorResult receipt ->
-        recordResult env receipt `catchSync` (monitorFailed env receipt . T.pack . show)
+  -- Independent consumers prevent a slow source lookup or monitor write from
+  -- holding the other intake. Router receipts still own every terminal result.
+  concurrently_ (launches env) (deliveries env)
   where
+    launches env = forever $ do
+      job <- liftIO (atomically (Jobs.claimReadyJob env.beJobs))
+      let failed detail = liftIO (Jobs.completeJob env.beJobs job.run JobState.Failed (JobResult detail Nothing))
+          start = if isJust job.spec.monitor then AutomationTurn job else JobTurn job
+      dispatch job start failed `catchSync` (failed . T.pack . show)
+
+    deliveries env = forever $ do
+      work <- liftIO . atomically $ do
+        Jobs.jobsAreOpen env.beJobs >>= check
+        Jobs.flushJobEvents env.beJobs
+        Router.takeDelivery env.beJobs.resultRouter
+      case work of
+        Router.ChildMessage relay -> do
+          let release = liftIO (atomically (Router.releaseMessage env.beJobs.resultRouter relay))
+              failed detail = release >> logAttention "child message relay failed" (object ["error" .= (detail :: T.Text)])
+              deliver = do
+                liftIO . atomically $ do
+                  current <- Router.messageIsCurrent relay
+                  capacity <- Conversation.canAdmit env.beConversations relay.job.spec.group
+                  check (not current || capacity)
+                current <- liftIO (atomically (Router.messageIsCurrent relay))
+                if current then dispatch relay.job (MessageNotice relay) failed else release
+          void . async $ deliver `catchSync` (failed . T.pack . show)
+        Router.JobReport relay -> do
+          let release = liftIO (atomically (Router.releaseReport env.beJobs.resultRouter relay))
+              failed detail = release >> logAttention "job report relay failed" (object ["error" .= (detail :: T.Text)])
+              deliver = do
+                liftIO . atomically $ do
+                  current <- Router.reportIsCurrent relay
+                  capacity <- Conversation.canAdmit env.beConversations relay.job.spec.group
+                  check (not current || capacity)
+                current <- liftIO (atomically (Router.reportIsCurrent relay))
+                if current then dispatch relay.job (ReportNotice relay) failed else release
+          void . async $ deliver `catchSync` (failed . T.pack . show)
+        Router.NativeResult relay -> do
+          let context = relay.origin.context
+              release = liftIO (atomically (Router.releaseRelay env.beJobs.resultRouter relay))
+              relayResult = do
+                liftIO . atomically $ do
+                  current <- Router.relayIsCurrent relay
+                  capacity <- Conversation.canAdmit env.beConversations (toolGroupId context)
+                  check (not current || capacity)
+                current <- liftIO (atomically (Router.relayIsCurrent relay))
+                if not current
+                  then release
+                  else do
+                    source <- loadDispatchMessage (toolCanonicalId context)
+                    case source of
+                      Just message
+                        | message.groupId == toolGroupId context && message.authorPrincipalId == toolAuthorPrincipalId context ->
+                            dispatchLLMWith (CompletionNotice relay) Nothing OriginTask message {body = Body [], replyTo = Nothing, mentionPrincipals = Map.empty}
+                      _ -> release >> logAttention "execution result source unavailable" (object ["result" .= relay.reference])
+          void . async $ relayResult `catchSync` (\err -> release >> logAttention "execution result relay failed" (object ["error" .= T.pack (show err)]))
+        Router.MonitorCompleted receipt ->
+          recordResult env receipt `catchSync` (monitorFailed env receipt . T.pack . show)
     dispatch job start failed = do
       sourceMessage <- loadDispatchMessage job.spec.source
       case sourceMessage of

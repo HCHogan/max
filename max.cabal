@@ -678,6 +678,7 @@ test-suite max-test
     main-is:            Spec.hs
     other-modules:
         ExecutionFixture
+        NodeWorkFixture
         Max.CodeMode.WasmSpec
         Max.CodeMode.JavaScriptSpec
         Max.Execution.ToolsSpec
@@ -817,6 +818,7 @@ test-suite max-test-db
         JobFixture
         PromptFixture
         ExecutionFixture
+        NodeWorkFixture
         Max.ExecutionSpec
         Max.SkillWorkflowSpec
         Max.AdminTimelineSpec
