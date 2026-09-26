@@ -88,7 +88,7 @@ data OccurrenceDraft = OccurrenceDraft
 data PreparedOccurrence = PreparedOccurrence !MonitorDefinition !OccurrenceDraft !OccurrenceRoute
 
 occurrenceRoute :: PreparedOccurrence -> OccurrenceRoute
-occurrenceRoute (PreparedOccurrence _ _ route) = route
+occurrenceRoute (PreparedOccurrence _ _ decision) = decision
 
 prepareOccurrenceWithin :: (WithConnection :> es, IOE :> es) => MonitorDefinition -> OccurrenceDraft -> Eff es PreparedOccurrence
 prepareOccurrenceWithin definition draft = do
@@ -109,15 +109,15 @@ prepareOccurrenceWithin definition draft = do
         _ -> OccurrenceBuffer 0 Nothing
       size text = fromIntegral (BS.length (TE.encodeUtf8 text))
       incomingBytes = size (jsonText (String draft.evidence)) + maybe 0 (size . jsonText) draft.payload
-      route = if definition.elaborated then routeOccurrence definition.snapshot.overlap definition.snapshot.capacity incomingBytes buffer else BufferOccurrence
-  pure (PreparedOccurrence definition draft route)
+      decision = if definition.elaborated then route (Occurrence definition.snapshot.overlap definition.snapshot.capacity incomingBytes buffer) else BufferOccurrence
+  pure (PreparedOccurrence definition draft decision)
 
 insertOccurrenceWithin :: (WithConnection :> es, IOE :> es) => MonitorDefinition -> OccurrenceDraft -> Eff es (Maybe MonitorFireId)
 insertOccurrenceWithin definition draft = prepareOccurrenceWithin definition draft >>= insertPreparedOccurrenceWithin
 
 insertPreparedOccurrenceWithin :: (WithConnection :> es, IOE :> es) => PreparedOccurrence -> Eff es (Maybe MonitorFireId)
-insertPreparedOccurrenceWithin (PreparedOccurrence definition draft route) = do
-  let (disposition, coalesced, failure) = case route of
+insertPreparedOccurrenceWithin (PreparedOccurrence definition draft decision) = do
+  let (disposition, coalesced, failure) = case decision of
         BufferOccurrence -> (PendingOccurrence, Nothing, Nothing)
         MergeInto target -> (CoalescedOccurrence, Just target, Nothing)
         RecordOverflow reason -> (OverflowOccurrence, Nothing, Just (overflowReason reason))

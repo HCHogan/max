@@ -969,6 +969,20 @@ spec = describe "process-owned Jobs" $ do
     body `shouldSatisfy` T.isInfixOf "60"
     finishTurnRuntime tasks runtime
 
+  it "folds a late normal tell even when the relay queue is full, while refusing an urgent relay" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (child, _) <- launch tasks jobs 2 request {parent = Just root.run}
+    Just parent <- atomically (jobEventTask jobs (AgentTurnId 1))
+    atomically (Events.close parent)
+    forM_ [1 .. 1024 :: Int] $ \_ ->
+      atomically (Router.deliverMonitorResult jobs.resultRouter child (pure True)) `shouldReturn` True
+    tellParent jobs (AgentTurnId 2) "folded evidence" False `shouldReturn` Right ()
+    tellParent jobs (AgentTurnId 2) "urgent evidence" True `shouldReturn` Left "parent event or relay buffer is full"
+    atomically (Router.flush jobs.resultRouter >> Router.flush jobs.resultRouter)
+    Just current <- lookupJob jobs request.group child.run.jobId
+    current.messages `shouldBe` ["folded evidence"]
+
   it "relays each unobserved urgent message and folds ordinary messages into an already-finished report" $ do
     (tasks, jobs, request) <- fixture
     (root, _) <- launch tasks jobs 1 request

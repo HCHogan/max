@@ -16,18 +16,17 @@ module Max.Conversation
 where
 
 import Control.Concurrent.STM
-import Control.Monad (filterM, forM_, void)
+import Control.Monad (forM_, void)
 import Data.Int (Int64)
-import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Ord (Down (..))
 import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Executor
 import Max.Node.Log qualified as NodeLog
+import Max.Node.Routing qualified as Routing
 import Max.Platform.Types (PrincipalId)
 import Max.Task.FrontendInput (FrontendInputView (..))
-import Max.Turn.Types (AgentTurnId)
+import Max.Turn.Types (AgentTurnId (..))
 import OneBot.Types (GroupId)
 
 newtype Conversations = Conversations (TVar (Map GroupId Root))
@@ -72,24 +71,11 @@ enqueue (Conversations registry) input = do
     if Map.size root.tasks >= 256 || sum (map (Map.size . (.tasks)) (Map.elems groups)) >= 1024 || Map.member input.turn root.tasks
       then pure Nothing
       else do
-        -- A quoted reply can reach an admitted request before its first
-        -- segment. Unquoted feedback selects only an already-open task.
-        open <- filterM (case input.feedback >>= (.replyTo) of Just _ -> hasOpenEvents; Nothing -> isOpenTask) (Map.elems root.tasks)
-        let feeds owner =
-              newerThan owner && case input.feedback of
-                Just feedback -> case feedback.replyTo of
-                  Just message -> matchesReply message input.replyTurn owner
-                  Nothing -> feedback.kind == "steering" && input.principal == owner.input.principal
-                Nothing -> False
-            newerThan owner = case (owner.input.sourceOrder, input.sourceOrder) of
-              (Just previous, Just incoming) -> incoming > previous
-              _ -> False
-            newest = filter feeds (sortOn (Down . (.input.turn)) open)
+        owners <- traverse routingOwner (Map.elems root.tasks)
+        let selected = Routing.route (Routing.Frontend (Routing.FrontendInput input.principal input.sourceOrder input.replyTurn input.feedback) owners)
         decision <- newEmptyTMVar
-        routed <- case (newest, input.feedback, input.sourceOrder) of
-          (owner : _, Just feedback, Just order) -> case owner.taskEvents of
-            Just target -> Events.deliver target (Events.FrontendSteered order feedback)
-            Nothing -> pure False
+        routed <- case (selected >>= (`Map.lookup` root.tasks) >>= (.taskEvents), input.feedback, input.sourceOrder) of
+          (Just target, Just feedback, Just order) -> Events.deliver target (Events.FrontendSteered order feedback)
           _ -> pure False
         if routed
           then do
@@ -97,9 +83,9 @@ enqueue (Conversations registry) input = do
             let handle = TaskHandle input decision Nothing
             writeTVar registry (Map.insert input.group root {tasks = Map.insert input.turn handle root.tasks} groups)
             pure (Just handle)
-          else case newest of
-            _ : _ -> pure Nothing -- matched recipient refused the bounded event
-            [] -> do
+          else case selected of
+            Just _ -> pure Nothing -- matched recipient refused the bounded event
+            Nothing -> do
               actor <- Executor.registerTask root.executor input.turn (if input.notice then Executor.Notice else Executor.NewRequest)
               target <- Events.newTaskFrom root.events input.trigger
               putTMVar decision (Just actor)
@@ -107,18 +93,11 @@ enqueue (Conversations registry) input = do
               writeTVar registry (Map.insert input.group root {tasks = Map.insert input.turn handle root.tasks} groups)
               pure (Just handle)
 
-matchesReply :: Int64 -> Maybe AgentTurnId -> TaskHandle -> Bool
-matchesReply message publishedBy owner = case publishedBy of
-  Just turn -> owner.input.turn == turn
-  Nothing -> owner.input.sourceMessage == Just message
-
-isOpenTask :: TaskHandle -> STM Bool
-isOpenTask handle =
-  tryReadTMVar handle.decision >>= \case
-    Just (Just actor) -> do
-      active <- hasOpenEvents handle
-      (active &&) <$> Executor.taskStarted actor
-    _ -> pure False
+routingOwner :: TaskHandle -> STM (Routing.FrontendOwner AgentTurnId)
+routingOwner handle = do
+  open <- hasOpenEvents handle
+  started <- tryReadTMVar handle.decision >>= maybe (pure False) (maybe (pure False) Executor.taskStarted)
+  pure (Routing.FrontendOwner handle.input.turn handle.input.turn.unAgentTurnId handle.input.principal handle.input.sourceOrder handle.input.sourceMessage open started)
 
 hasOpenEvents :: TaskHandle -> STM Bool
 hasOpenEvents = maybe (pure False) Events.isOpen . (.taskEvents)

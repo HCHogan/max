@@ -49,6 +49,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Max.Node.Events qualified as Events
+import Max.Node.Routing qualified as Routing
 import Max.Task.Types (JobRun, JobView (..))
 import Max.Tool.Media (InlineMedia)
 import Max.ToolContext (ToolContext)
@@ -148,19 +149,16 @@ deliverMonitorResult router job valid =
 deliverMessage :: Router -> JobView -> Maybe Events.Task -> Text -> Events.Urgency -> STM Bool -> STM () -> STM Bool -> STM Bool
 deliverMessage router job target text urgency valid foldIntoReport answers = do
   flush router
-  current <- valid
-  open <- maybe (pure False) Events.isOpen target
-  if not current
-    then pure True
-    else
-      if not open && urgency == Events.Normal
-        then foldIntoReport >> pure True
-        else
-          deliver
-            router
-            valid
-            ((,Events.ChildSaid job.run text urgency) <$> target)
-            (\identifier -> ChildMessage (MessageRelay identifier 0 job target text urgency valid foldIntoReport answers))
+  deliver
+    router
+    valid
+    ((,Events.ChildSaid job.run text urgency) <$> target)
+    (\identifier -> ChildMessage (MessageRelay identifier 0 job target text urgency valid foldIntoReport answers))
+
+deliveryKind :: DeliveryWork -> Routing.DeliveryKind (STM ())
+deliveryKind = \case
+  ChildMessage relay -> Routing.Message (relay.urgency == Events.Urgent) relay.foldIntoReport
+  _ -> Routing.Completion
 
 -- | Policy and ownership are shared by native outcomes, reports and messages.
 -- A full target leaves ownership with the producer; a closed target relays.
@@ -172,16 +170,24 @@ deliver (Router ref) valid target make = do
     else do
       (next, previous) <- readTVar ref
       entries <- normalizeEntries previous
-      if Map.size entries >= 1024
-        then pure False
-        else do
-          open <- maybe (pure False) (Events.isOpen . fst) target
-          delivery <- case target of
-            Just (task, body) | open -> fmap (Buffered task . (.sequence)) <$> Events.deliverTracked task body
-            _ -> pure (Just Queued)
-          case delivery of
+      -- Normalization can fold messages. Commit its ownership transfer even
+      -- when this new delivery is refused by either capacity boundary.
+      writeTVar ref (next, entries)
+      open <- maybe (pure False) (Events.isOpen . fst) target
+      let work = make next
+          decision = Routing.route (Routing.Delivery (deliveryKind work) open)
+          retain delivery = case delivery of
             Nothing -> pure False
-            Just state -> writeTVar ref (next + 1, Map.insert next (state, make next) entries) >> pure True
+            Just state -> writeTVar ref (next + 1, Map.insert next (state, work) entries) >> pure True
+      case decision of
+        Routing.FoldDelivery foldIntoReport -> do
+          foldIntoReport
+          pure True
+        _ | Map.size entries >= 1024 -> pure False
+        Routing.BufferDelivery -> case target of
+          Just (task, body) -> Events.deliverTracked task body >>= retain . fmap (Buffered task . (.sequence))
+          Nothing -> pure False
+        Routing.RelayDelivery -> retain (Just Queued)
 
 -- | Revoke buffered deliveries before they enter a model observation. Receipt
 -- identity prevents revoking an unrelated message from the same child.
@@ -313,10 +319,13 @@ normalizeEntries entries = Map.fromList . concat <$> mapM normalize (Map.toList 
           case state of Buffered task receipt -> Events.discard task receipt; _ -> pure ()
           pure []
         else do
-          open <- case state of Buffered task _ -> Events.isOpen task; _ -> pure False
-          case (state, work) of
-            (Buffered _ _, ChildMessage relay) | not open && relay.urgency == Events.Normal -> relay.foldIntoReport >> pure []
-            (Buffered _ _, _) | not open -> pure [(key, (Queued, work))]
+          case state of
+            Buffered task _ -> do
+              open <- Events.isOpen task
+              case Routing.route (Routing.Delivery (deliveryKind work) open) of
+                Routing.FoldDelivery foldIntoReport -> foldIntoReport >> pure []
+                Routing.RelayDelivery -> pure [(key, (Queued, work))]
+                Routing.BufferDelivery -> pure [(key, (state, work))]
             _ -> pure [(key, (state, work))]
 
 isCurrent :: DeliveryWork -> STM Bool
