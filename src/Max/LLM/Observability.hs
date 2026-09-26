@@ -21,7 +21,7 @@ import Max.Util (trySync)
 
 logChatRequest :: (Log :> es) => Text -> LLMProfile -> Bool -> Int -> Int -> Int -> Eff es ()
 logChatRequest name cfg streaming messageCount toolCount retries =
-  logInfo "llm: chat request" $ object ["msg_count" .= messageCount, "tool_count" .= toolCount, "profile" .= name, "model" .= cfg.model, "stream" .= streaming, "timeout_seconds" .= cfg.timeoutSeconds, "transport_retries" .= retries]
+  logInfo "llm: chat request" $ object ["msg_count" .= messageCount, "tool_count" .= toolCount, "profile" .= name, "model" .= cfg.model, "stream" .= streaming, "timeout_seconds" .= cfg.timeoutSeconds, "transport_retries" .= retries, "max_tokens" .= cfg.maxTokens]
 
 recordChatResult :: (Log :> es, IOE :> es) => UsageWriter -> CallWriter -> ChatCtx -> Text -> LLMProfile -> Bool -> [ChatMessage] -> [ToolSpec] -> Int -> Either LLMFailure (ChatResponse, Maybe TokenUsage) -> Eff es ()
 recordChatResult usageWriter callWriter ctx name cfg streaming msgs tools durationMs r = do

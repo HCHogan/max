@@ -252,6 +252,7 @@ profileFor protocol =
       model = modelName,
       maxInputTokens = defaultContextLimits.maxInputTokens,
       maxTokens = defaultContextLimits.reservedOutputTokens,
+      adaptiveOutput = False,
       attachmentReserve = defaultContextLimits.attachmentReserve,
       toolRoundReserve = defaultContextLimits.toolRoundReserve,
       temperature = Nothing,

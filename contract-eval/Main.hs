@@ -108,7 +108,7 @@ main = do
       runEff
         . runLog "max-contract-eval" logger LogAttention
         . runLLM runtime (\_ _ _ -> pure ()) (\call -> modifyIORef' calls (call :)) cfg.llm
-        $ chat (ChatCtx "contract-eval" Nothing Nothing Nothing (Just []) Nothing) row.profile messages []
+        $ chat (ChatCtx "contract-eval" Nothing Nothing Nothing (Just []) Nothing Nothing) row.profile messages []
     records <- reverse <$> readIORef calls
     let decoded = case response of
           Right (ContentResp answer) -> decodeContract (contract row) answer

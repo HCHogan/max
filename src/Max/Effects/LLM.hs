@@ -55,6 +55,7 @@ where
 
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
 import Effectful.Log
@@ -168,18 +169,33 @@ runOneChat admission runtime usageWriter callWriter reg ctx name msgs tools mSin
     logAttention "llm: unknown profile" $ object ["profile" .= name]
     pure $ Left (LLMUnknownProfile name)
   Just cfg -> do
-    let bufferedRetryDelays = fromMaybe defaultRetryDelaysSecs ctx.ccBufferedRetryDelaysSeconds
-        streaming = cfg.stream && isJust mSink
-    logChatRequest name cfg streaming (length msgs) (length tools) (length (if streaming then replyRetryDelaysSecs else bufferedRetryDelays))
-    started <- liftIO getMonotonicTimeNSec
-    raw <- withAdmission admission cfg.baseUrl (priorityForSource ctx.ccSource) $ case mSink of
-      Just sink | cfg.stream -> callChatStream runtime cfg msgs tools sink
-      _ -> callChat runtime bufferedRetryDelays cfg msgs tools
-    finished <- liftIO getMonotonicTimeNSec
-    -- Cost is priced here, once, so every observer books the same figure.
-    let priced = fmap (fmap (fmap (\usage -> usage {usageCost = (`priceUsage` usage) <$> cfg.prices}))) raw
-    recordChatResult usageWriter callWriter ctx name cfg streaming msgs tools (fromIntegral ((finished - started) `div` 1_000_000)) priced
-    pure priced
+    result <- attempt cfg
+    case (result, configureCallProfile reg ctx {ccPromptTokens = Nothing} name) of
+      -- The prompt estimate can undershoot. When the server refuses the
+      -- adaptive completion limit, ask once more with the planning reserve.
+      (Left failure, Just reserve)
+        | reserve.maxTokens < cfg.maxTokens && windowRejected failure -> do
+            logAttention "llm: adaptive completion limit rejected; retrying with the reserve" $
+              object ["profile" .= name, "max_tokens" .= cfg.maxTokens, "reserve" .= reserve.maxTokens]
+            attempt reserve
+      _ -> pure result
+  where
+    windowRejected failure =
+      let detail = T.toLower (renderLLMFailure failure)
+       in any (`T.isInfixOf` detail) ["context length", "max_tokens", "max_completion_tokens", "max_output_tokens"]
+    attempt cfg = do
+      let bufferedRetryDelays = fromMaybe defaultRetryDelaysSecs ctx.ccBufferedRetryDelaysSeconds
+          streaming = cfg.stream && isJust mSink
+      logChatRequest name cfg streaming (length msgs) (length tools) (length (if streaming then replyRetryDelaysSecs else bufferedRetryDelays))
+      started <- liftIO getMonotonicTimeNSec
+      raw <- withAdmission admission cfg.baseUrl (priorityForSource ctx.ccSource) $ case mSink of
+        Just sink | cfg.stream -> callChatStream runtime cfg msgs tools sink
+        _ -> callChat runtime bufferedRetryDelays cfg msgs tools
+      finished <- liftIO getMonotonicTimeNSec
+      -- Cost is priced here, once, so every observer books the same figure.
+      let priced = fmap (fmap (fmap (\usage -> usage {usageCost = (`priceUsage` usage) <$> cfg.prices}))) raw
+      recordChatResult usageWriter callWriter ctx name cfg streaming msgs tools (fromIntegral ((finished - started) `div` 1_000_000)) priced
+      pure priced
 
 chat ::
   (LLM :> es) =>

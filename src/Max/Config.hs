@@ -33,7 +33,7 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone, minutesToTimeZone)
@@ -44,9 +44,9 @@ import Max.DB.Connection (DbConfig (..))
 import Max.Embedding (EmbeddingConfig (..))
 import Max.IMessage (IMessageConfig (..))
 import Max.Intent (IntentConfig (..))
+import Max.LLM.Types (TokenPrices (..))
 import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Matrix (MatrixConfig (..))
-import Max.LLM.Types (TokenPrices (..))
 import Max.ModelCatalog (ContextLimits (..), ModelCatalog, contextLimitsForWindow, defaultContextLimits, modelProfileNames)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), VisionLimits (..), mkModelCatalogFromProfiles, parseProtocol)
 import Max.Monitor.Http (validWebhookBaseUrl)
@@ -1303,7 +1303,7 @@ instance HasCodec ProfileSpec where
         <*> optionalField "context_window" "Total input plus output tokens; derives input, output and context reserves" .= (.contextWindow)
         <*> optionalField "context_budget" "Soft budget for context assembled up front (raw tail, summaries, memories, read pages); at most the planning budget" .= (.contextBudget)
         <*> optionalField "max_input_tokens" "Legacy hard input ceiling; mutually exclusive with context_window" .= (.maxInputTokens)
-        <*> optionalField "max_tokens" "Max tokens per completion" .= (.maxTokens)
+        <*> optionalField "max_tokens" "Fixed completion limit; without it, a declared context_window lets planned requests use what the prompt leaves" .= (.maxTokens)
         <*> optionalField "attachment_reserve" "Input tokens reserved when media is attached" .= (.attachmentReserve)
         <*> optionalField "tool_round_reserve" "Input tokens reserved for later agent tool rounds" .= (.toolRoundReserve)
         <*> optionalFieldWith "temperature" temperatureCodec "Sampling temperature; omit to not send the field (some providers reject explicit values)" .= (.temperature)
@@ -1584,11 +1584,12 @@ materializeLLM (dn, fileProfiles, overlay) = do
         (Just _, Just _) -> profileError "context_window and legacy max_input_tokens are mutually exclusive"
         -- Preserve explicit legacy input ceilings, including their old reserves.
         (Nothing, Just input) ->
-          pure defaultContextLimits
-            { maxInputTokens = input,
-              reservedOutputTokens = fromMaybe defaultContextLimits.reservedOutputTokens spec.maxTokens,
-              attachmentReserve = if resolvedMultimodal then defaultContextLimits.attachmentReserve else 0
-            }
+          pure
+            defaultContextLimits
+              { maxInputTokens = input,
+                reservedOutputTokens = fromMaybe defaultContextLimits.reservedOutputTokens spec.maxTokens,
+                attachmentReserve = if resolvedMultimodal then defaultContextLimits.attachmentReserve else 0
+              }
         (window, Nothing) ->
           either profileError pure (contextLimitsForWindow (fromMaybe 131072 window) spec.maxTokens resolvedMultimodal)
       visionLimits <- case spec.visionTokens of
@@ -1651,6 +1652,7 @@ materializeLLM (dn, fileProfiles, overlay) = do
             model = fromMaybe "deepseek-v4-flash" spec.model,
             maxInputTokens = resolvedMaxInput,
             maxTokens = resolvedMaxOutput,
+            adaptiveOutput = isJust spec.contextWindow && isNothing spec.maxTokens,
             attachmentReserve = resolvedAttachmentReserve,
             toolRoundReserve = resolvedToolRoundReserve,
             -- No default: omitted temperature means "don't send the

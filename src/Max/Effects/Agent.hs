@@ -100,7 +100,7 @@ turnCtx :: AgentContext -> Text -> ChatCtx
 turnCtx ctx source =
   let GroupId gid = toolGroupId ctx.acTools
       durable = (.atrTurnId) . turnOutputAgentTurn <$> toolTurnOutputContext ctx.acTools
-   in ChatCtx (if (toolCapabilities ctx.acTools).tcBackground then "task/" <> source else source) (Just gid) ctx.acEffort Nothing Nothing durable
+   in ChatCtx (if (toolCapabilities ctx.acTools).tcBackground then "task/" <> source else source) (Just gid) ctx.acEffort Nothing Nothing durable Nothing
 
 -- | Caps on a single agent invocation.  Per-tool and per-call HTTP
 -- timeouts are configured at the 'LLM' layer; these are loop-level.
@@ -387,7 +387,7 @@ runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $
               when plan.wpCompacted $
                 logInfo "agent: working context compacted" $
                   object ["estimated_tokens" .= plan.wpEstimatedTokens, "input_limit" .= plan.wpLimit, "turn" .= handle]
-              result <- chatMeasured (turnCtx ctx source) profile plan.wpMessages specs sink
+              result <- chatMeasured (turnCtx ctx source) {ccPromptTokens = Just plan.wpEstimatedTokens} profile plan.wpMessages specs sink
               case result of
                 -- A server that still rejects the media gets one more request
                 -- without any, rather than failing the turn.

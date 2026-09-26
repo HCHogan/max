@@ -69,6 +69,37 @@ spec = describe "LLM transport and call observation" $ do
       case result of
         Left failure@(LLMResponseFailure (ResponseTransport (HttpStatusFailure 503 _ _ _))) -> retryableLLMFailure failure `shouldBe` True
         _ -> expectationFailure ("unexpected failure: " <> show result)
+  it "gives a declared window's completion what the prompt leaves, unless max_tokens is fixed" $ do
+    let declared = ["--llm-context-window", "262144"]
+    -- 262144 - 8541 - 8541 / 4 - 1024; never below the window's reserve.
+    sentLimit declared (Just 8541) `shouldReturn` Just (Number 250444)
+    sentLimit declared (Just 200000) `shouldReturn` Just (Number 32768)
+    sentLimit declared Nothing `shouldReturn` Just (Number 32768)
+    sentLimit (declared <> ["--llm-max-tokens", "8192"]) (Just 8541) `shouldReturn` Just (Number 8192)
+    sentLimit [] (Just 8541) `shouldReturn` Just (Number 16384)
+  it "asks once more with the reserve when the server refuses an adaptive completion limit" $
+    withSystemTempFile "max-llm-window.yaml" $ \path handle -> do
+      hPutStr handle "{}\n"
+      hClose handle
+      withArgs ["--config-file", path, "--llm-api-key", "fixture-key", "--llm-model", "fixture-model", "--llm-base-url", "http://provider.test", "--llm-protocol", "openai", "--llm-stream", "False", "--llm-context-window", "262144"] $ do
+        config <- loadConfig
+        written <- newIORef BS.empty
+        calls <- newIORef []
+        let refusal = "{\"object\":\"error\",\"message\":\"This model's maximum context length is 262144 tokens. However, you requested 270000 tokens.\",\"code\":400}"
+        manager <- sequencedManager [rawResponse 400 refusal, wireResponse "openai" False] written
+        let runtime = httpRuntimeFromManagers manager manager manager
+        result <- withCompactLogger ColorNever Nothing $ \logger ->
+          runEff
+            . runLog "llm-wire-test" logger LogAttention
+            . runLLM runtime (\_ _ _ -> pure ()) (\record -> modifyIORef' calls (<> [record])) config.llm
+            $ chat callContext {ccPromptTokens = Just 1000} (defaultModelName config.llm) [MsgUser "hello"] []
+        result `shouldSatisfy` completed
+        records <- readIORef calls
+        let limit record = case record.crRequest of
+              Object fields -> KM.lookup "max_tokens" fields
+              _ -> Nothing
+        -- 262144 - 1000 - 1000 / 4 - 1024, then the window's reserve.
+        map limit records `shouldBe` map (Just . Number) [259870, 32768]
   it "reports an unknown profile without opening a provider connection" $
     withFixture "openai" False $ \config -> do
       written <- newIORef BS.empty
@@ -163,7 +194,7 @@ spec = describe "LLM transport and call observation" $ do
     completed _ = False
 
 callContext :: ChatCtx
-callContext = ChatCtx "turn" Nothing Nothing (Just 5) (Just []) Nothing
+callContext = ChatCtx "turn" Nothing Nothing (Just 5) (Just []) Nothing Nothing
 
 withFixture :: String -> Bool -> (AppConfig -> IO a) -> IO a
 withFixture protocol streaming action = withSystemTempFile "max-llm-wire.yaml" $ \path handle -> do
@@ -177,6 +208,40 @@ recordingManager response written =
   newManager
     defaultManagerSettings
       { managerRawConnection = pure $ \_ _ _ -> do
+          remaining <- newIORef response
+          makeConnection (atomicModifyIORef' remaining (BS.empty,)) (\bytes -> modifyIORef' written (<> bytes)) (pure ()),
+        managerRetryableException = const False
+      }
+
+-- | The completion limit one planned request actually carries.
+sentLimit :: [String] -> Maybe Int -> IO (Maybe Value)
+sentLimit flags prompt = withSystemTempFile "max-llm-limit.yaml" $ \path handle -> do
+  hPutStr handle "{}\n"
+  hClose handle
+  withArgs (["--config-file", path, "--llm-api-key", "fixture-key", "--llm-model", "fixture-model", "--llm-base-url", "http://provider.test", "--llm-protocol", "openai", "--llm-stream", "False"] <> flags) $ do
+    config <- loadConfig
+    written <- newIORef BS.empty
+    calls <- newIORef []
+    manager <- recordingManager (wireResponse "openai" False) written
+    let runtime = httpRuntimeFromManagers manager manager manager
+    _ <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff
+        . runLog "llm-wire-test" logger LogAttention
+        . runLLM runtime (\_ _ _ -> pure ()) (\record -> modifyIORef' calls (<> [record])) config.llm
+        $ chat callContext {ccPromptTokens = prompt} (defaultModelName config.llm) [MsgUser "hello"] []
+    records <- readIORef calls
+    pure $ case records of
+      [record] | Object fields <- record.crRequest -> KM.lookup "max_tokens" fields
+      _ -> Nothing
+
+-- | One canned response per connection, in order.
+sequencedManager :: [ByteString] -> IORef ByteString -> IO Manager
+sequencedManager responses written = do
+  queue <- newIORef responses
+  newManager
+    defaultManagerSettings
+      { managerRawConnection = pure $ \_ _ _ -> do
+          response <- atomicModifyIORef' queue (\case next : rest -> (rest, next); [] -> ([], BS.empty))
           remaining <- newIORef response
           makeConnection (atomicModifyIORef' remaining (BS.empty,)) (\bytes -> modifyIORef' written (<> bytes)) (pure ()),
         managerRetryableException = const False

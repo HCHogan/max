@@ -60,6 +60,9 @@ data LLMProfile = LLMProfile
     model :: !Text,
     maxInputTokens :: !Int,
     maxTokens :: !Int,
+    -- | The window is declared and no fixed @max_tokens@ is: a planned
+    -- request may give its completion everything its prompt leaves.
+    adaptiveOutput :: !Bool,
     attachmentReserve :: !Int,
     toolRoundReserve :: !Int,
     temperature :: !(Maybe Double),

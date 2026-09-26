@@ -36,7 +36,11 @@ data ChatCtx = ChatCtx
     ccBufferedRetryDelaysSeconds :: !(Maybe [Int]),
     -- | Durable agent attribution.  Background/model-router calls leave it
     -- empty; every call inside a production turn carries it.
-    ccAgentTurnId :: !(Maybe AgentTurnId)
+    ccAgentTurnId :: !(Maybe AgentTurnId),
+    -- | Estimated prompt tokens of this request, when the caller planned it.
+    -- A profile with an adaptive output allowance spends the rest of its
+    -- window on the completion.
+    ccPromptTokens :: !(Maybe Int)
   }
   deriving stock (Show, Eq)
 

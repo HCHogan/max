@@ -783,7 +783,7 @@ spec = describe "Agent full loop" $ do
     _inputs <- newIORef []
     tasks <- newTaskRegistry
     let nonEmpty body = if T.null (T.strip body) then Just "报告是空的" else Nothing
-        context = dispatchContext {acAnswerCheck = Just nonEmpty}
+        checked = dispatchContext {acAnswerCheck = Just nonEmpty}
         run answers = do
           calls <- newIORef (0 :: Int)
           turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
@@ -800,7 +800,7 @@ spec = describe "Agent full loop" $ do
                   )
           result <- withCompactLogger ColorNever Nothing $ \logger ->
             runEff . runConcurrent . runLog "answer-check" logger LogAttention . runLLMWith provider . runTestAgent _inputs (AgentLimits 8) (const (buildToolRegistry [] [])) $
-              agentTurn turn context "fake" [MsgUser "question"] (eventSink events)
+              agentTurn turn checked "fake" [MsgUser "question"] (eventSink events)
           _ <- finishTurnRuntime tasks turn
           (,) result.outcome <$> readIORef calls
     run ["", "report"] `shouldReturn` (Answered (AgentReply "report" ""), 2)

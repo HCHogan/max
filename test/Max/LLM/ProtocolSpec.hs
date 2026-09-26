@@ -18,6 +18,7 @@ profile protocol hints =
       model = "fixture",
       maxInputTokens = 100000,
       maxTokens = 1000,
+      adaptiveOutput = False,
       attachmentReserve = 0,
       toolRoundReserve = 0,
       temperature = Nothing,

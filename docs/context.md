@@ -28,7 +28,17 @@ down. The effective text budget is `B = I - T - A` with attachments, or
 `B = I - T` without them. Output is subtracted exactly once, during configuration
 resolution; both initial prompts and working-turn pruning use the resolved limits.
 
-For `context_window: 262144`, the default output limit is 32,768, the hard input
+`O` is the planning reserve, not always the completion limit sent. When a profile
+declares `context_window` and sets no `max_tokens`, a request planned by the agent
+loop may give its completion what the window leaves after its estimated prompt
+`P`: `max(O, C - P - P / 4 - 1024)`, where the quarter of `P` and 1024 tokens absorb
+estimation error. If the server still refuses that limit as exceeding its context,
+the call is retried once with `O`. A fixed `max_tokens`, a profile without a
+declared window, and unplanned calls (intent, captions, Historian) always send `O`.
+A reasoning model on a large window therefore no longer runs out of output after
+`C / 8` tokens while most of the window sits unused.
+
+For `context_window: 262144`, the output reserve is 32,768, the hard input
 ceiling 229,376, and the planning budget 196,608 without attachments or 163,840
 with attachments. These are conservative planning budgets, not an exact provider
 tokenizer or a promise that every request can fill the entire window.
