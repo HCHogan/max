@@ -110,6 +110,14 @@
     if (typeof summary !== "string") throw new TypeError("phase requires a string");
     return call("agent_progress", {summary});
   };
+  const tell = (text, {urgent = false} = {}) => {
+    if (typeof text !== "string" || typeof urgent !== "boolean") throw new TypeError("tell requires text and a boolean urgent flag");
+    return call("agent_tell", {text, urgent});
+  };
+  const ask = question => {
+    if (typeof question !== "string") throw new TypeError("ask requires a question string");
+    return call("agent_ask", {question});
+  };
   const tools = Object.create(null);
   for (const name of names) tools[name] = (args = {}) => call(name, args);
   // Kept for existing programs: the same as Promise.all over max.raw.
@@ -122,6 +130,6 @@
   Object.defineProperties(globalThis, {
     tools: {value: Object.freeze(tools)},
     agent: {value: agent},
-    max: {value: Object.freeze({raw, batch, value, agent, phase, race, cancel, sleep, names: Object.freeze(names)})}
+    max: {value: Object.freeze({raw, batch, value, agent, phase, tell, ask, race, cancel, sleep, names: Object.freeze(names)})}
   });
 })

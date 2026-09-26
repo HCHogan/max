@@ -12,6 +12,7 @@ module Max.Node.Events
     newNode,
     newTask,
     deliver,
+    deliverAll,
     observe,
     wakes,
     awaitInterrupt,
@@ -86,6 +87,13 @@ deliver task@(Task (Node ref) key) body = do
     else do
       writeTVar ref state {next = state.next + 1, events = state.events |> Event state.next key body}
       pure True
+
+-- | Multi-node control delivery either accepts every event or none. A full
+-- parent log cannot leave a child steered without its parent's provenance note.
+deliverAll :: [(Task, Body)] -> STM Bool
+deliverAll messages =
+  (mapM_ (\(task, body) -> deliver task body >>= check) messages >> pure True)
+    `orElse` pure False
 
 -- | The task record retains the rendered observations after this cut. Other
 -- tasks' pending events stay in the node log and cannot be consumed here.

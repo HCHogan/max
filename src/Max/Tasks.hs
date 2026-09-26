@@ -14,6 +14,7 @@ module Max.Tasks
     turnRuntimeAgentTurn,
     turnExecutor,
     turnEvents,
+    lookupTurnEvents,
     bindTurnEvents,
     turnObservationCursor,
     setTurnObservationCursor,
@@ -122,6 +123,13 @@ newTaskRegistry = TaskRegistry <$> newTVarIO (0, Map.empty)
 
 turnEvents :: TurnRuntime -> STM Events.Task
 turnEvents = readTVar . (.trEntry.teEvents)
+
+lookupTurnEvents :: TaskRegistry -> AgentTurnId -> STM (Maybe Events.Task)
+lookupTurnEvents registry turn = do
+  (_, entries) <- readTVar registry.trState
+  case [entry | entry <- Map.elems entries, (turnOutputAgentTurn entry.teOutputContext).atrTurnId == turn] of
+    entry : _ -> Just <$> readTVar entry.teEvents
+    [] -> pure Nothing
 
 bindTurnEvents :: TaskRegistry -> AgentTurnId -> Events.Task -> STM Bool
 bindTurnEvents registry turn events = do

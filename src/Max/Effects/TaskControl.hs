@@ -93,7 +93,7 @@ runTaskControl jobs scope = interpret $ \_ -> \case
     if isJust parent && (not child || case command of SteerJob _ -> False; _ -> True)
       then pure (Left "background jobs can only steer their own children")
       else liftIO $ case command of
-        SteerJob note -> Jobs.steerJob jobs scope.group scope.principal (Just scope.source) identifier note
+        SteerJob note -> Jobs.steerJobFrom jobs (Just turn.atrTurnId) scope.group scope.principal (Just scope.source) identifier note
         ReplaceJob objective -> Jobs.replaceJob jobs scope.group scope.principal False identifier objective
         CancelJob reason -> Jobs.cancelJob jobs scope.group scope.principal False identifier reason
   WaitTasks children -> withCaller $ \turn -> liftIO (Jobs.waitForChildren jobs turn.atrTurnId children)

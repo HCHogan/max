@@ -27,6 +27,9 @@ module Max.Jobs
     authorizeJobStep,
     decideJobStep,
     steerJob,
+    steerJobFrom,
+    tellParent,
+    askParent,
     cancelJob,
     replaceJob,
     noticeIsCurrent,
@@ -43,9 +46,10 @@ module Max.Jobs
 where
 
 import Control.Concurrent.STM
-import Control.Exception (mask, onException)
+import Control.Exception (finally, mask, onException)
 import Control.Monad (forM, forM_, unless, void, when)
-import Data.Aeson (encode, object, (.=))
+import Data.Aeson (Value, encode, object, (.=))
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (find)
 import Data.Int (Int64)
@@ -58,6 +62,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation (..))
 import Max.LLM.Types (TokenUsage)
@@ -66,7 +71,7 @@ import Max.Platform.Types (CanonicalMessageId, PrincipalId)
 import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State (TaskStatus (..), taskIsLive)
 import Max.Task.Types
-import Max.Tasks (TaskCancelled (..), TaskRegistry, bindTurnEvents, cancelAgentTurnTask, turnIsLive)
+import Max.Tasks (TaskCancelled (..), TaskRegistry, bindTurnEvents, cancelAgentTurnTask, lookupTurnEvents, turnIsLive)
 import Max.Turn.Types (AgentTurnId, AgentTurnRef (..))
 import OneBot.Types (GroupId)
 
@@ -81,6 +86,9 @@ data Entry = Entry
     children :: !(Set JobRun),
     childUpdates :: !(Set JobRun),
     events :: !Events.Task,
+    parentEvents :: !(Maybe Events.Task),
+    parentTurn :: !(Maybe AgentTurnId),
+    question :: !(Maybe (TMVar Value)),
     noticeVersion :: !Int,
     pendingNotice :: !(Maybe Text),
     pendingMonitor :: !Bool,
@@ -133,6 +141,7 @@ admitJob jobs caller identifier requested = do
     allowed <- maybe (pure True) (turnIsLive jobs.tasks) caller
     current <- readTVar jobs.entries
     events <- Events.newNode >>= Events.newTask
+    callerEvents <- maybe (pure Nothing) (lookupTurnEvents jobs.tasks) caller
     let retained job = taskIsLive job.view.status || isJust job.runtime || job.pendingMonitor || job.noticeInFlight || isJust job.pendingNotice || isJust job.awaiter || maybe False (liveRun current) job.view.spec.parent
         completed = sortOn (Down . (.view.created)) (filter (not . retained) (Map.elems current))
         kept = Map.filter retained current <> Map.fromList [(entry.view.run.jobId, entry) | entry <- take 256 completed]
@@ -142,10 +151,11 @@ admitJob jobs caller identifier requested = do
         spec = requested {deadline, objective = T.strip requested.objective}
         run = JobRun identifier 1
         root = maybe run (.root) (lookupRun kept =<< spec.parent)
-        view = JobView run spec Queued Nothing Nothing 0 0 now True emptyJobUsage Nothing
+        view = JobView run spec Queued Nothing Nothing 0 0 now True emptyJobUsage Nothing []
         awaiter = if spec.awaited && isNothing spec.parent then caller else Nothing
         guestTree = maybe (maybe (Right run) Left caller) (.guestTree) (lookupRun kept =<< spec.parent)
-        newEntry = Entry view root guestTree Nothing Set.empty Set.empty events 0 Nothing False False False awaiter
+        parentEvents = maybe callerEvents (fmap (.events) . lookupRun kept) spec.parent
+        newEntry = Entry view root guestTree Nothing Set.empty Set.empty events parentEvents caller Nothing 0 Nothing False False False awaiter
         invalid detail = pure (Left detail)
     if closing || not allowed || Map.member identifier current
       then invalid "job caller ended or identity already exists"
@@ -227,8 +237,7 @@ completeJob jobs run status result = do
             completed =
               entry
                 { view = entry.view {status = if entry.budgetExhausted then BudgetExhausted else status, result = Just result, finished = Just now},
-                  noticeVersion = entry.noticeVersion + 1,
-                  pendingNotice = if isNothing entry.view.spec.parent && isNothing entry.view.spec.monitor && not waiting then Just result.text else Nothing,
+                  pendingNotice = if isNothing entry.view.spec.parent && isNothing entry.view.spec.monitor && not waiting then Just (appendNotice entry.pendingNotice (jobReportText entry.view result)) else entry.pendingNotice,
                   awaiter = if waiting then entry.awaiter else Nothing,
                   pendingMonitor = isJust entry.view.spec.monitor
                 }
@@ -267,7 +276,7 @@ awaitJob jobs turn run = mask $ \restore -> restore waitReport `onException` ato
     detach closing entry
       | entry.awaiter /= Just turn = entry
       | taskIsLive entry.view.status || closing || entry.view.status == Cancelled = entry {awaiter = Nothing}
-      | otherwise = entry {awaiter = Nothing, pendingNotice = (.text) <$> entry.view.result}
+      | otherwise = entry {awaiter = Nothing, pendingNotice = maybe entry.pendingNotice (Just . appendNotice entry.pendingNotice . jobReportText entry.view) entry.view.result}
 
 -- | Book one completion against the job whose turn made it and every
 -- ancestor, so a root's report covers its whole tree.
@@ -385,21 +394,117 @@ decideJobStep jobs turn step = do
                       pure Admitted
             _ -> pure Refused
 
+-- | Ordinary external steering does not impersonate an answer from the parent.
 steerJob :: Jobs -> GroupId -> PrincipalId -> Maybe CanonicalMessageId -> Int64 -> Text -> IO (Either Text ())
-steerJob jobs group actor source identifier note = atomically $ do
+steerJob jobs = steerJobFrom jobs Nothing
+
+steerJobFrom :: Jobs -> Maybe AgentTurnId -> GroupId -> PrincipalId -> Maybe CanonicalMessageId -> Int64 -> Text -> IO (Either Text ())
+steerJobFrom jobs sender group actor source identifier note = atomically $ do
   entries <- readTVar jobs.entries
+  notices <- readTVar jobs.notices
   case Map.lookup identifier entries of
-    Just entry | entry.view.spec.group == group -> deliver entry
+    Just entry
+      | entry.view.spec.group == group ->
+          if not (taskIsLive entry.view.status)
+            then pure (Left (taskHandle identifier <> " has already finished"))
+            else
+              if T.null (T.strip note)
+                then pure (Left "feedback is empty")
+                else
+                  if T.length note > 8000
+                    then pure (Left "feedback exceeds 8000 characters")
+                    else do
+                      let feedback = object ["author" .= actor, "source_message" .= source, "body" .= note]
+                          fromParent = case sender of
+                            Nothing -> False
+                            Just turn -> case entry.view.spec.parent of
+                              Just parent -> maybe False (\owner -> currentRuntime owner && owner.view.run == parent) (entryForTurn entries turn)
+                              Nothing -> entry.parentTurn == Just turn || maybe False ((== entry.view.run) . fst) (Map.lookup turn notices)
+                      answering <- case entry.question of
+                        Just reply | fromParent -> isEmptyTMVar reply
+                        _ -> pure False
+                      -- An answer settles the question future. It is still logged, but is
+                      -- not another interrupt that would pause the guest receiving it.
+                      parentOpen <- maybe (pure False) Events.isOpen entry.parentEvents
+                      let noteToParent = "[子任务收到直接 steering] " <> TE.decodeUtf8 (LBS.toStrict (encode feedback))
+                          parentNotes = [(parent, Events.ChildSaid entry.view.run noteToParent Events.Normal) | not fromParent && parentOpen, Just parent <- [entry.parentEvents]]
+                      accepted <- Events.deliverAll ((entry.events, if answering then Events.Settled "agent_ask" feedback else Events.Steered feedback) : parentNotes)
+                      when (accepted && not fromParent && not parentOpen) $
+                        writeTVar jobs.entries (Map.insert identifier entry {view = entry.view {messages = boundedMessages (entry.view.messages <> [noteToParent])}} entries)
+                      when (accepted && answering) $ forM_ entry.question (\reply -> putTMVar reply feedback)
+                      pure (if accepted then Right () else Left "job event log is full or its task has ended")
     _ -> pure (Left ("no " <> taskHandle identifier <> " in this conversation"))
+
+-- | Message routing shares the parent's ordinary node event stream. A root
+-- whose starting task ended uses the existing frontend relay admission path.
+tellParent :: Jobs -> AgentTurnId -> Text -> Bool -> IO (Either Text ())
+tellParent jobs turn text urgent = atomically $ do
+  live <- turnIsLive jobs.tasks turn
+  entries <- readTVar jobs.entries
+  case entryForTurn entries turn of
+    Just entry | live && currentRuntime entry && taskIsLive entry.view.status -> do
+      outcome <- routeMessage entry text urgent
+      case outcome of
+        Left err -> pure (Left err)
+        Right updated -> writeTVar jobs.entries (Map.insert entry.view.run.jobId updated entries) >> pure (Right ())
+    _ -> pure (Left "message requires a current agent")
+
+askParent :: Jobs -> AgentTurnId -> Text -> IO (Either Text Value)
+askParent jobs turn text = mask $ \restore -> do
+  registered <- atomically $ do
+    live <- turnIsLive jobs.tasks turn
+    entries <- readTVar jobs.entries
+    case entryForTurn entries turn of
+      Just entry | live && currentRuntime entry && taskIsLive entry.view.status && isNothing entry.question -> do
+        outcome <- routeMessage entry text True
+        case outcome of
+          Left err -> pure (Left err)
+          Right updated -> do
+            reply <- newEmptyTMVar
+            writeTVar jobs.entries (Map.insert entry.view.run.jobId updated {question = Just reply} entries)
+            pure (Right (entry.view.run, reply))
+      _ -> pure (Left "ask requires a current agent without another pending question")
+  case registered of
+    Left err -> pure (Left err)
+    Right (run, reply) ->
+      restore
+        ( atomically $ do
+            live <- turnIsLive jobs.tasks turn
+            entries <- readTVar jobs.entries
+            case lookupRun entries run of
+              Just entry | live && currentRuntime entry && taskIsLive entry.view.status -> Right <$> readTMVar reply
+              _ -> pure (Left "asking agent ended or was replaced")
+        )
+        `finally` atomically (modifyTVar' jobs.entries (Map.adjust (\entry -> if entry.view.run == run && entry.question == Just reply then entry {question = Nothing} else entry) run.jobId))
+
+routeMessage :: Entry -> Text -> Bool -> STM (Either Text Entry)
+routeMessage entry text urgent
+  | T.null (T.strip text) || T.length text > 8000 = pure (Left "message must contain 1..8000 characters")
+  | otherwise = do
+      active <- maybe (pure False) Events.isOpen entry.parentEvents
+      if active
+        then do
+          accepted <- maybe (pure False) (\parent -> Events.deliver parent (Events.ChildSaid entry.view.run text (if urgent then Events.Urgent else Events.Normal))) entry.parentEvents
+          pure (if accepted then Right entry else Left "parent event buffer is full")
+        else
+          if urgent
+            then do
+              let body = appendNotice entry.pendingNotice ("[子 agent 的紧急消息；不是最终报告。需要回答时用 agent_steer 回复 " <> taskHandle entry.view.run.jobId <> "。]\n" <> text)
+              pure $ if BS.length (TE.encodeUtf8 body) > 262144 then Left "frontend relay buffer is full" else Right entry {pendingNotice = Just body}
+            else pure (Right entry {view = entry.view {messages = boundedMessages (entry.view.messages <> [text])}})
+
+appendNotice :: Maybe Text -> Text -> Text
+appendNotice previous body = maybe body (\before -> before <> "\n\n" <> body) previous
+
+boundedMessages :: [Text] -> [Text]
+boundedMessages = reverse . fit 32768 . take 50 . reverse
   where
-    deliver entry
-      | not (taskIsLive entry.view.status) = pure (Left (taskHandle identifier <> " has already finished"))
-      | T.null (T.strip note) = pure (Left "feedback is empty")
-      | T.length note > 8000 = pure (Left "feedback exceeds 8000 characters")
-      | otherwise = do
-          let feedback = object ["author" .= actor, "source_message" .= source, "body" .= note]
-          accepted <- Events.deliver entry.events (Events.Steered feedback)
-          pure (if accepted then Right () else Left "job event log is full or its task has ended")
+    fit _ [] = []
+    fit remaining (text : rest)
+      | bytes <= remaining = text : fit (remaining - bytes) rest
+      | otherwise = []
+      where
+        bytes = BS.length (TE.encodeUtf8 text) + 1
 
 cancelJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> Text -> IO (Either Text ())
 cancelJob jobs group actor admin identifier reason = controlJob jobs group actor admin identifier $ \now entries entry _ ->
@@ -416,10 +521,11 @@ replaceJob jobs group actor admin identifier objective = controlJob jobs group a
           spec = entry.view.spec {objective = T.strip objective}
           replacement =
             entry
-              { view = entry.view {run, spec, status = Queued, progress = Nothing, result = Nothing, finished = Nothing},
+              { view = entry.view {run, spec, status = Queued, progress = Nothing, result = Nothing, finished = Nothing, messages = []},
                 children = Set.empty,
                 childUpdates = Set.empty,
                 events = freshEvents,
+                question = Nothing,
                 noticeVersion = entry.noticeVersion + 1,
                 pendingNotice = Nothing,
                 pendingMonitor = False,

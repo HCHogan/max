@@ -33,6 +33,13 @@
   契约只验证形状，不证明内容正确。
 - `await max.phase("阶段说明")`：就是 `tools.agent_progress({summary})`，记录后台
   agent 的内部进度，不向聊天播报；只在有 agent_progress 的后台 agent 中可用。
+- `await max.tell("消息", {urgent: false})`：后台 agent 向上级发消息，默认不打断上级等待；
+  `urgent: true` 会打断。原发起任务结束后，普通消息并入最终报告的 `messages`
+  （保留最后 50 条，最多 32 KiB），紧急消息转给前台接续处理。
+- `const answer = await max.ask("问题")`：后台 agent 发出紧急问题并等待上级用
+  `agent_steer` 回答，返回 `{author, source_message, body}`，回答文字在 `answer.body`。
+  同一 agent 同时只能有一个未回答的问题。等待保留当前程序的变量和执行位置；
+  取消这个调用会撤销等待，不会取消 agent。tell 和 ask 的文字都最多 8000 字符。
 - `await max.batch([{tool, args} | {agent: {...}}, ...])`：旧写法，等同于对每项
   `max.raw` 再 `Promise.all`。
 

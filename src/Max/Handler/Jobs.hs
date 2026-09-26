@@ -37,10 +37,11 @@ import Max.Prompt (TriggerOrigin (OriginMonitor, OriginTask))
 import Max.Task.State qualified as JobState
 import Max.Task.Types
   ( JobMonitor (fireId),
-    JobResult (JobResult, text),
+    JobResult (JobResult),
     JobRun (jobId),
     JobSpec (group, monitor, source),
     JobView (..),
+    jobReportText,
     taskHandle,
   )
 import Max.Turn.Dispatch (dispatchLLMWith)
@@ -63,7 +64,7 @@ shutdownJobs registry = do
               OutboundRequest
                 { orKind = KindChat,
                   orGroupId = job.spec.group,
-                  orBody = Body [NText result.text],
+                  orBody = Body [NText (jobReportText job result)],
                   orReplyTo = Just job.spec.source,
                   orDeliveryScope = DeliverConversation,
                   orTurnOutput = Nothing,

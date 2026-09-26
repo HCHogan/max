@@ -8,6 +8,7 @@ module Max.Task.Types
     emptyJobUsage,
     addJobUsage,
     jobUsageLine,
+    jobReportText,
     JobWait (..),
     JobCommand (..),
     TaskProfile (..),
@@ -185,9 +186,15 @@ data JobView = JobView
     created :: !UTCTime,
     browserAllowed :: !Bool,
     usage :: !JobUsage,
-    finished :: !(Maybe UTCTime)
+    finished :: !(Maybe UTCTime),
+    messages :: ![Text]
   }
   deriving stock (Eq, Show)
+
+-- | Message items accompany the report without modifying a validated payload
+-- or the original final text (which may itself be contract JSON).
+jobReportText :: JobView -> JobResult -> Text
+jobReportText job result = result.text <> if null job.messages then "" else "\n[此前向上级发送的消息]\n" <> T.intercalate "\n" job.messages
 
 -- | The spend and wall time of a finished job, for its report.
 jobUsageLine :: JobView -> Text
@@ -257,6 +264,7 @@ instance ToJSON JobView where
         "status" .= job.status,
         "progress" .= job.progress,
         "result" .= job.result,
+        "messages" .= job.messages,
         "calls" .= job.calls,
         "model_rounds" .= job.rounds,
         "usage" .= job.usage,

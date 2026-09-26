@@ -17,7 +17,9 @@ import Max.Effects.TaskControl
   )
 import Max.Effects.TaskExecution
   ( TaskExecution,
+    askParent,
     reportProgress,
+    tellParent,
   )
 import Max.Effects.TaskQuery (TaskQuery, listTasks, readTask)
 import Max.Effects.Tools (Tool (..), ToolRunner (..), legacyTool)
@@ -46,7 +48,7 @@ taskToolsFor context =
       (parseArgs (withObject "agent_status" (.: "agent")) $ \handle -> withHandle handle (fmap (maybe (Left "agent not found in this conversation") (Right . toJSON)) . readTask))
   ]
     <> [controlTool operation | operation <- [State.Steer, State.Replace, State.Cancel], not background || operation == State.Steer]
-    <> (if background then [waitTool, progressTool] else [])
+    <> (if background then [waitTool, progressTool, tellTool, askTool] else [])
   where
     background = (toolCapabilities context).tcBackground
     durable = turnOutputAgentTurn <$> toolTurnOutputContext context
@@ -102,7 +104,7 @@ taskToolsFor context =
       Tool
         { toolName = "agent_" <> State.taskOperationText operation,
           toolDescription = case operation of
-            State.Steer -> "给指定 agent# 留下有归属的建议；收到建议不代表已经执行。"
+            State.Steer -> "给指定 agent# 留下有归属的建议，或回答其 agent_ask；收到建议不代表已经执行。"
             State.Replace -> "替换子 agent 的目标并取消旧执行；保留预算和截止时间。只有发起者可用。"
             _ -> "取消子 agent 及它派出的子 agent；已经发生的效果不会撤回。只有发起者可用。",
           toolSchema = toolObject [("agent", stringParam "agent# 标识"), ("note", stringParam "建议、替换目标或取消原因")] ["agent", "note"],
@@ -123,6 +125,22 @@ taskToolsFor context =
               Just children -> fmap (fmap renderWait) (waitTasks children)
         )
     renderWait (ChildrenFinished children) = object ["children" .= children]
+
+    tellTool =
+      legacyTool
+        "agent_tell"
+        "向派出你的上级发送消息。urgent=true 会打断其等待；普通消息在上级下次模型调用时观察。上级原任务已结束时，普通消息并入最终报告，紧急消息交由前台接续处理。"
+        (toolObject [("text", stringParam "消息，1..8000 字符。"), ("urgent", boolParam "是否需要立即处理；默认 false。")] ["text"])
+        ( parseArgs
+            (withObject "agent tell" $ \o -> (,) <$> o .: "text" <*> o .:? "urgent" .!= False)
+            (\(text, urgent) -> fmap (const (object ["delivered" .= True])) <$> tellParent text urgent)
+        )
+    askTool =
+      legacyTool
+        "agent_ask"
+        "向上级提出紧急问题，等待上级通过 agent_steer 给出的回答。回答作为本次调用的真实结果返回；同一 agent 同时只能有一个未回答的问题。"
+        (toolObject [("question", stringParam "问题，1..8000 字符。")] ["question"])
+        (parseArgs (withObject "agent ask" (.: "question")) askParent)
 
     progressTool =
       legacyTool

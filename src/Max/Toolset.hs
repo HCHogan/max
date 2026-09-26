@@ -246,7 +246,7 @@ toolDefinitionsFor env gid caps =
       MonitorArmOnly -> caps.tcMonitorArming || (not caps.tcBackground && isNothing caps.tcEffectCeiling)
       BackgroundOnly -> caps.tcBackground
     ceilingOpen definition' =
-      (caps.tcBackground && definition'.tdRef `elem` [ToolRef "agent_wait", ToolRef "agent_progress"])
+      (caps.tcBackground && definition'.tdRef `elem` [ToolRef "agent_wait", ToolRef "agent_progress", ToolRef "agent_tell", ToolRef "agent_ask"])
         || toolAllowedByEffectCeiling caps.tcEffectCeiling definition'
 
 -- | Exact grant intersection for a standing continuation. A matching name is
@@ -313,6 +313,8 @@ toolInventory =
     always (writeTool "agent_replace" ["task.db"] [CurrentConversation]),
     always (writeTool "agent_cancel" ["task.db"] [CurrentConversation]),
     gated BackgroundOnly (withDeadline 21600 (readTool "agent_wait" ["task.state"] [CurrentConversation])),
+    gated BackgroundOnly (writeTool "agent_tell" ["task.events"] [CurrentConversation]),
+    gated BackgroundOnly (withDeadline 21600 ((writeTool "agent_ask" ["task.events"] [CurrentConversation]) {tdParallelism = ParallelIndependent})),
     gated BackgroundOnly ((writeTool "agent_progress" ["task.db"] [CurrentConversation]) {tdCallMode = CheckpointCall}),
     -- Queues turn-scoped inline video as well as reading the network.  Keep it
     -- sequential inside one agent round so concurrent calls cannot race the
@@ -356,7 +358,7 @@ definition name effects parallelism retry authorities =
       tdDeadline = defaultToolDeadline,
       tdFailuresPrecedeEffects = False,
       tdCallMode = WorkCall,
-      tdAwait = if name `elem` ["agent", "agent_wait", "sandbox_exec", "browser", "view_bilibili"] then AsyncTool else ShortTool
+      tdAwait = if name `elem` ["agent", "agent_wait", "agent_ask", "sandbox_exec", "browser", "view_bilibili"] then AsyncTool else ShortTool
     }
 
 -- | Bound individual calls so a stalled tool returns before the turn watchdog.

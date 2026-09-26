@@ -20,7 +20,14 @@ Frontend and background steering now enter a shared typed node event store;
 removed. One wake predicate classifies interrupts. Delivery and successful
 final-answer closure share STM, including already-streamed answers. Pending
 child-report references stay in Jobs until the bounded event store accepts them;
-progress changes status only. Full routing (new requests/replies, child relays,
+progress changes status only. Background `agent_tell` / `agent_ask` and their
+SDK functions deliver to the starting task's event log. A parent's answer
+settles the pending ask without re-interrupting the guest that receives it;
+external/deeper steering also records a normal note in the parent's log.
+After the starting task ends, normal messages are bounded and folded into the
+final report, preserving its original contract payload. Urgent messages still
+use the existing bounded frontend notice relay, which can aggregate messages;
+replacing that relay with per-event routing remains unfinished. Full routing (new requests/replies, child relays,
 replacement/cancellation, native completions and monitor fires), combined
 observation bounds and the open-task tail remain in step 4. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)

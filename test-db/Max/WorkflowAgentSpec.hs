@@ -9,6 +9,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful (Eff, liftIO, raise)
 import Effectful.Exception (finally)
@@ -41,6 +42,22 @@ import Test.Hspec hiding (context)
 -- through the same registry, admission and Jobs as a model's native call.
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "agent() through the agent tool" $ do
+  it "runs SDK tell and ask, then resumes the original JavaScript await with the parent's answer" $ do
+    running <- runningJob pool Basic workflowGrants
+    Async.withAsync (runScript pool running Nothing "const base=40; await max.tell('working'); const answer=await max.ask('which number?'); return base+Number(answer.body);") $ \worker -> do
+      Just (Jobs.PublishJobNotice _ version body) <- timeout 3000000 (Jobs.takeJobWork running.jobs)
+      body `shouldSatisfy` (Data.Text.isInfixOf "which number?")
+      (relay, message, principal) <- seed pool 900 2
+      _ <- beginTurnRuntime running.tasks relay (GroupId 900) (UserId 2) (Just message)
+      Jobs.bindJobNotice running.jobs relay.atrTurnId running.job.run version
+      Jobs.steerJobFrom running.jobs (Just relay.atrTurnId) (GroupId 900) principal (Just message) running.job.run.jobId "2" `shouldReturn` Right ()
+      Just result <- timeout 3000000 (Async.wait worker)
+      result.cmExit `shouldBe` WasmCompleted
+      result.cmOutput `shouldBe` Just (toJSON (42 :: Int))
+      Just current <- Jobs.lookupJob running.jobs (GroupId 900) running.job.run.jobId
+      current.calls `shouldBe` 2
+      current.messages `shouldBe` ["working"]
+
   it "waits for an ordinary child and returns its checked report" $ do
     running <- runningJob pool Basic workflowGrants
     Async.withAsync (runScript pool running Nothing "return await agent({objective: 'answer', profile: 'basic', output_contract: {type: 'string'}});") $ \waiting -> do
@@ -178,8 +195,8 @@ workflowGrants = Map.fromList [("agent", "v1"), ("web_search", "v1")]
 
 agentDefinitions :: [ToolDefinition]
 agentDefinitions =
-  [ ToolDefinition (ToolRef name) (SchemaVersion 1) (Set.singleton (EffectWrite "task.db")) parallelism RetryUnsafe (Set.singleton CurrentConversation) (ToolDeadline 21600) True mode (if name == "agent" then AsyncTool else ShortTool)
-  | (name, parallelism, mode) <- [("agent", ParallelIndependent, WorkCall), ("agent_progress", SequentialOnly, CheckpointCall)]
+  [ ToolDefinition (ToolRef name) (SchemaVersion 1) (Set.singleton (EffectWrite "task.db")) parallelism RetryUnsafe (Set.singleton CurrentConversation) (ToolDeadline 21600) True mode (if name `elem` ["agent", "agent_ask"] then AsyncTool else ShortTool)
+  | (name, parallelism, mode) <- [("agent", ParallelIndependent, WorkCall), ("agent_progress", SequentialOnly, CheckpointCall), ("agent_tell", SequentialOnly, WorkCall), ("agent_ask", ParallelIndependent, WorkCall)]
   ]
 
 capabilities :: Bool -> Map.Map Text Text -> TurnCapabilities
@@ -230,7 +247,7 @@ runProgram pool jobs runtime turn context budget source = runProgramUsing pool j
 runProgramUsing :: DbPool -> Jobs.Jobs -> TurnRuntime -> AgentTurnRef -> ToolContext -> Maybe Int -> Text -> (ExecutionSession -> CodeModeResult -> Eff (Tools : DbEffects) a) -> IO a
 runProgramUsing pool jobs runtime turn context budget source continuation = do
   let bound = (hooks jobs runtime) {ehAcquireGuest = liftIO (Jobs.acquireGuestSlot jobs turn.atrTurnId), ehInterrupt = (Jobs.jobEventTask jobs turn.atrTurnId >>= maybe retry (`Events.awaitInterrupt` Events.noPending))}
-      runners = [tool | tool <- taskTools jobs context, tool.toolName `elem` ["agent", "agent_progress"]]
+      runners = [tool | tool <- taskTools jobs context, tool.toolName `elem` ["agent", "agent_progress", "agent_tell", "agent_ask"]]
       present = map (.toolName) runners
   registry <- either (fail . show) pure (buildToolRegistry [definition | definition <- agentDefinitions, definition.tdRef.unToolRef `elem` present] runners)
   withHost pool . runTools registry $ do

@@ -1,14 +1,16 @@
 module Max.JobsSpec (Max.JobsSpec.spec) where
 
-import Control.Concurrent.Async (mapConcurrently, wait, withAsync)
+import Control.Concurrent.Async (cancel, mapConcurrently, poll, wait, withAsync)
 import Control.Concurrent.STM (STM, atomically, retry)
 import Control.Monad (forM_, replicateM, replicateM_)
 import Data.Aeson (Value (..), object, (.=))
+import Data.ByteString qualified as BS
 import Data.Either (isLeft, isRight)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, isJust, isNothing)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time (addUTCTime, getCurrentTime)
 import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation (..))
 import Max.Jobs
@@ -293,6 +295,146 @@ spec = describe "process-owned Jobs" $ do
     body `shouldBe` "final"
     noticeIsCurrent jobs final.run finalVersion `shouldReturn` True
 
+  it "delivers tells to the parent and only urgent messages interrupt its await" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (_, childRuntime) <- launch tasks jobs 2 (request {parent = Just root.run})
+    tellParent jobs (AgentTurnId 2) "ordinary" False `shouldReturn` Right ()
+    Just parentEvents <- atomically (jobEventTask jobs (AgentTurnId 1))
+    atomically (Events.hasInterrupt parentEvents Events.noPending) `shouldReturn` False
+    first <- atomically (Events.observe parentEvents)
+    map (.body) first `shouldBe` [Events.ChildSaid (JobRun 2 1) "ordinary" Events.Normal]
+    tellParent jobs (AgentTurnId 2) "urgent" True `shouldReturn` Right ()
+    atomically (Events.hasInterrupt parentEvents Events.noPending) `shouldReturn` True
+    finishTurnRuntime tasks childRuntime
+    tellParent jobs (AgentTurnId 2) "too late" True `shouldReturnSatisfying` isLeft
+
+  it "routes a root child's tells to the foreground task that admitted it" $ do
+    (tasks, jobs, request) <- fixture
+    caller <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
+    parentEvents <- atomically (turnEvents caller)
+    Right job <- admitJob jobs (Just (AgentTurnId 99)) 1 request
+    LaunchJob _ <- takeJobWork jobs
+    _ <- beginTurnRuntime tasks (reference 1) request.group (UserId 7) Nothing
+    attachJobTurn jobs job.run (reference 1) `shouldReturn` True
+    tellParent jobs (AgentTurnId 1) "question" True `shouldReturn` Right ()
+    atomically (Events.hasInterrupt parentEvents Events.noPending) `shouldReturn` True
+    observed <- atomically (Events.observe parentEvents)
+    map (.body) observed `shouldBe` [Events.ChildSaid job.run "question" Events.Urgent]
+    timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
+
+  it "rejects direct steering atomically when the parent's provenance log is full" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    _ <- launch tasks jobs 2 (request {parent = Just root.run})
+    Just childEvents <- atomically (jobEventTask jobs (AgentTurnId 2))
+    replicateM_ 256 $ tellParent jobs (AgentTurnId 2) "parent buffer" False `shouldReturn` Right ()
+    steerJob jobs request.group request.principal Nothing 2 "change direction" `shouldReturnSatisfying` isLeft
+    atomically (Events.observe childEvents) `shouldReturn` []
+    _ <- observeJobEvents jobs (AgentTurnId 1)
+    steerJob jobs request.group request.principal Nothing 2 "change direction" `shouldReturn` Right ()
+    atomically (Events.hasInterrupt childEvents Events.noPending) `shouldReturn` True
+
+  it "answers one question through the parent's steer without treating the answer as another interrupt" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    _ <- launch tasks jobs 2 (request {parent = Just root.run})
+    Just parentEvents <- atomically (jobEventTask jobs (AgentTurnId 1))
+    Just childEvents <- atomically (jobEventTask jobs (AgentTurnId 2))
+    withAsync (askParent jobs (AgentTurnId 2) "which path?") $ \asking -> do
+      timeout 1000000 (atomically (Events.awaitInterrupt parentEvents Events.noPending)) `shouldReturn` Just ()
+      _ <- atomically (Events.observe parentEvents)
+      askParent jobs (AgentTurnId 2) "second question" `shouldReturnSatisfying` isLeft
+      steerJob jobs request.group request.principal Nothing 2 "outside advice" `shouldReturn` Right ()
+      poll asking >>= (`shouldSatisfy` isNothing)
+      _ <- atomically (Events.observe childEvents)
+      steerJobFrom jobs (Just (AgentTurnId 1)) request.group request.principal Nothing 2 "path B" `shouldReturn` Right ()
+      timeout 1000000 (wait asking) `shouldReturn` Just (Right (object ["author" .= request.principal, "source_message" .= Null, "body" .= ("path B" :: T.Text)]))
+      atomically (Events.hasInterrupt childEvents Events.noPending) `shouldReturn` False
+      notes <- atomically (Events.observe parentEvents)
+      map (.body) notes `shouldSatisfy` any (\case Events.ChildSaid _ text Events.Normal -> "outside advice" `T.isInfixOf` text; _ -> False)
+
+  it "answers asks across two levels while retaining both awaiting computations" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (middle, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    _ <- launch tasks jobs 3 (request {parent = Just middle.run})
+    Just rootEvents <- atomically (jobEventTask jobs (AgentTurnId 1))
+    Just middleEvents <- atomically (jobEventTask jobs (AgentTurnId 2))
+    withAsync (askParent jobs (AgentTurnId 3) "permission?") $ \leaf -> do
+      timeout 1000000 (atomically (Events.awaitInterrupt middleEvents Events.noPending)) `shouldReturn` Just ()
+      _ <- atomically (Events.observe middleEvents)
+      withAsync (askParent jobs (AgentTurnId 2) "leaf requests permission") $ \middleAsk -> do
+        timeout 1000000 (atomically (Events.awaitInterrupt rootEvents Events.noPending)) `shouldReturn` Just ()
+        steerJobFrom jobs (Just (AgentTurnId 1)) request.group request.principal Nothing 2 "yes" `shouldReturn` Right ()
+        timeout 1000000 (wait middleAsk) `shouldReturn` Just (Right (object ["author" .= request.principal, "source_message" .= Null, "body" .= ("yes" :: T.Text)]))
+      steerJobFrom jobs (Just (AgentTurnId 2)) request.group request.principal Nothing 3 "proceed" `shouldReturn` Right ()
+      timeout 1000000 (wait leaf) `shouldReturn` Just (Right (object ["author" .= request.principal, "source_message" .= Null, "body" .= ("proceed" :: T.Text)]))
+
+  it "releases a cancelled question without cancelling its agent" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    _ <- launch tasks jobs 2 (request {parent = Just root.run})
+    Just parentEvents <- atomically (jobEventTask jobs (AgentTurnId 1))
+    withAsync (askParent jobs (AgentTurnId 2) "first") $ \first -> do
+      atomically (Events.awaitInterrupt parentEvents Events.noPending)
+      cancel first
+    _ <- atomically (Events.observe parentEvents)
+    withAsync (askParent jobs (AgentTurnId 2) "second") $ \second -> do
+      timeout 1000000 (atomically (Events.awaitInterrupt parentEvents Events.noPending)) `shouldReturn` Just ()
+      steerJobFrom jobs (Just (AgentTurnId 1)) request.group request.principal Nothing 2 "answer" `shouldReturn` Right ()
+      wait second `shouldReturnSatisfying` isRight
+
+  it "releases a question when its runtime ends before job completion" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (_, runtime) <- launch tasks jobs 2 (request {parent = Just root.run})
+    Just parentEvents <- atomically (jobEventTask jobs (AgentTurnId 1))
+    withAsync (askParent jobs (AgentTurnId 2) (T.replicate 8000 "x")) $ \asking -> do
+      timeout 1000000 (atomically (Events.awaitInterrupt parentEvents Events.noPending)) `shouldReturn` Just ()
+      finishTurnRuntime tasks runtime
+      answer <- timeout 1000000 (wait asking)
+      answer `shouldSatisfy` maybe False isLeft
+
+  it "folds bounded late messages into the report without altering a contract payload" $ do
+    (tasks, jobs, request) <- fixture
+    caller <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
+    Right job <- admitJob jobs (Just (AgentTurnId 99)) 1 request
+    LaunchJob _ <- takeJobWork jobs
+    runtime <- beginTurnRuntime tasks (reference 1) request.group (UserId 7) Nothing
+    attachJobTurn jobs job.run (reference 1) `shouldReturn` True
+    finishTurnRuntime tasks caller
+    forM_ [1 .. 60 :: Int] $ \n -> tellParent jobs (AgentTurnId 1) (T.pack (show n)) False `shouldReturn` Right ()
+    Just buffered <- lookupJob jobs request.group 1
+    buffered.messages `shouldBe` map (T.pack . show) [11 .. 60 :: Int]
+    forM_ [1 .. 60 :: Int] $ \n -> tellParent jobs (AgentTurnId 1) (T.pack (show n) <> T.replicate 1000 "汉") False `shouldReturn` Right ()
+    let original = JobResult "{\"answer\":42}" (Just (object ["answer" .= (42 :: Int)]))
+    completeJob jobs job.run Succeeded original
+    Just finished <- lookupJob jobs request.group 1
+    finished.result `shouldBe` Just original
+    length finished.messages `shouldSatisfy` (<= 50)
+    BS.length (TE.encodeUtf8 (T.intercalate "\n" finished.messages)) `shouldSatisfy` (<= 32768)
+    last finished.messages `shouldSatisfy` T.isPrefixOf "60"
+    PublishJobNotice _ _ body <- takeJobWork jobs
+    body `shouldSatisfy` T.isInfixOf "60"
+    finishTurnRuntime tasks runtime
+
+  it "preserves queued urgent messages across completion and fences them on replacement" $ do
+    (tasks, jobs, request) <- fixture
+    (job, _) <- launch tasks jobs 1 request
+    tellParent jobs (AgentTurnId 1) "need attention" True `shouldReturn` Right ()
+    PublishJobNotice _ version _ <- takeJobWork jobs
+    completeJob jobs job.run Succeeded (JobResult "final" Nothing)
+    noticeIsCurrent jobs job.run version `shouldReturn` True
+    releaseJobNotice jobs job.run
+    PublishJobNotice _ _ body <- takeJobWork jobs
+    body `shouldBe` "final"
+    (live, _) <- launch tasks jobs 2 request
+    tellParent jobs (AgentTurnId 2) "obsolete" True `shouldReturn` Right ()
+    PublishJobNotice _ old _ <- takeJobWork jobs
+    replaceJob jobs request.group request.principal False 2 "new goal" `shouldReturn` Right ()
+    noticeIsCurrent jobs live.run old `shouldReturn` False
+
   it "does not attach node events to a runtime that has already ended" $ do
     (tasks, jobs, request) <- fixture
     Right job <- admitJob jobs Nothing 1 request
@@ -421,3 +563,6 @@ observeJobEvents jobs turn = atomically $ do
 
 awaitJobInterrupt :: Jobs -> AgentTurnId -> STM ()
 awaitJobInterrupt jobs turn = jobEventTask jobs turn >>= maybe retry (`Events.awaitInterrupt` Events.noPending)
+
+shouldReturnSatisfying :: (Show a) => IO a -> (a -> Bool) -> Expectation
+shouldReturnSatisfying action predicate = action >>= (`shouldSatisfy` predicate)

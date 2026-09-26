@@ -23,7 +23,7 @@ renderEvents events =
       Steered value -> Just value
       Replaced text -> Just (object ["replaced" .= text])
       Cancelled -> Just (object ["cancelled" .= True])
-      ChildSaid child text urgency -> Just (object ["child" .= taskHandle child.jobId, "generation" .= child.generation, "body" .= text, "urgent" .= (urgency == Urgent)])
+      ChildSaid child text urgency -> Just (object ["child" .= taskHandle child.jobId, "generation" .= child.generation, "body" .= text, "urgent" .= (urgency == Urgent), "reply_tool" .= ("agent_steer" :: Text)])
       ChildDone _ value -> Just value
       Settled ref value -> Just (object ["result" .= ref, "outcome" .= value])
 
