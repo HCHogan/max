@@ -10,6 +10,7 @@
 module PromptFlow
   ( renderPromptFlow,
     promptStatistics,
+    projectionParityFailures,
   )
 where
 
@@ -221,6 +222,21 @@ secondRound protocol =
       results = drop 1 (assembleToolRound raw [call] [toolResultMessage call (Right toolResult)] [toolImage])
       record = Projection.recordResults results (Projection.recordPoll cursor (Just (MsgAssistantToolCalls raw [call])) initial)
    in Projection.project nodeLog record cursor
+
+-- | An independent pre-projection oracle: the uninterrupted agent appended a
+-- complete tool round to its frozen initial window. Check both internal messages
+-- and the unredacted provider bytes (including reasoning/signatures and media).
+-- Regenerating the document must not bless a changed projection as a new golden.
+projectionParityFailures :: [Text]
+projectionParityFailures =
+  [ protocolTitle protocol
+  | protocol <- [minBound .. maxBound],
+    let (raw, call) = toolCallFixture protocol
+        expected = initialMessages <> assembleToolRound raw [call] [toolResultMessage call (Right toolResult)] [toolImage]
+        actual = secondRound protocol
+        wire messages = encode (requestBodyFor (profileFor protocol) messages representativeTools False),
+    encode expected /= encode actual || wire expected /= wire actual
+  ]
 
 wireRequest :: Protocol -> [ChatMessage] -> Value
 wireRequest protocol messages =

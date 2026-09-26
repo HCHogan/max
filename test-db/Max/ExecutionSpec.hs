@@ -1,3 +1,5 @@
+{-# LANGUAGE GADTs #-}
+
 module Max.ExecutionSpec (Max.ExecutionSpec.spec, withHost, hooks, DbEffects) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
@@ -12,6 +14,7 @@ import Data.List (sort)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful (Eff, IOE, liftIO, raise, runEff)
 import Effectful.Concurrent (Concurrent, runConcurrent)
@@ -20,15 +23,19 @@ import Effectful.PostgreSQL (WithConnection, execute, query)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import ExecutionFixture
 import Helpers (truncateAll, withDb)
-import JobFixture (RunningJob (..), runningJob, seed)
-import Max.Agent.Runtime (executionAdmission, executionJournal)
+import JobFixture (RunningJob (..), launchNext, runningJob, seed)
+import Max.Agent.Runtime (executionAdmission, executionJournal, runAgentRuntime)
+import Max.AgentEvent (AgentEvent (..))
 import Max.CodeMode.Execution
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion, runJavaScript)
 import Max.CodeMode.Model (executeModelBatch)
 import Max.CodeMode.Wasm
 import Max.DB.AgentTurn
 import Max.DB.Connection (DbPool)
+import Max.DB.Job (allocateJobId)
+import Max.Effects.Agent qualified as Agent
 import Max.Effects.Blob (Blob, runBlob)
+import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), LLMInterpreter (..), ToolCall (..), ToolSpec (..), runLLMWith)
 import Max.Effects.ToolControl (activateSkills, runToolControl)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, drainInlineMedia, forkToolOutputQueue, newToolOutputQueue, queueInlineMedia, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
@@ -42,12 +49,14 @@ import Max.Node.Router qualified as Router
 import Max.Platform.Types (noAdvertisedCaps)
 import Max.Skill.Contract (Contract, parseContract)
 import Max.Skill.Package
+import Max.Skill.ToolRuntime (skillToolsWithRuntime)
 import Max.Skill.Workflow (bindWorkflowContracts)
+import Max.Skills (newSkillRegistry)
 import Max.Task.Policy (treeToolCalls)
 import Max.Task.State (TaskStatus (Failed, Succeeded))
 import Max.Task.Types (JobResult (..), JobRun (..), JobSpec (..), JobView (..), TaskProfile (Basic))
-import Max.Tasks (TaskCancelled (..), TurnRuntime, beginTurnRuntime, finishTurnRuntime, newTaskRegistry, turnAcceptsWork)
-import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
+import Max.Tasks (TaskCancelled (..), TurnRuntime, beginTurnRuntime, finishTurnRuntime, newTaskRegistry, turnAcceptsWork, turnRuntimeOutputContext)
+import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion, toolVisible)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (LoopControl (..), controlSkillLoads)
 import Max.ToolContext
@@ -77,6 +86,66 @@ hostHooks jobs = hoistExecutionHooks raise . hooks jobs
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution with real journal" $ do
+  it "runs codemode through an awaited background agent's model loop and returns its actual report" $ do
+    let grants = Map.fromList [("web_search", "fixture"), ("use_skill", "fixture")]
+    parent <- runningJob pool Basic grants
+    identifier <- withDb pool allocateJobId
+    let childSpec = parent.job.spec {parent = Just parent.job.run, awaited = True, objective = "compute with codemode"}
+    Right child <- Jobs.admitJob parent.jobs (Just parent.turn.atrTurnId) identifier childSpec
+    running <- launchNext pool parent.tasks parent.jobs
+    running.job.run `shouldBe` child.run
+    skills <- newSkillRegistry
+    calls <- newIORef (0 :: Int)
+    leaves <- newIORef (0 :: Int)
+    let context =
+          mkToolContext
+            (TurnIdentity (GroupId 900) child.spec.source (UserId 1) (UserId 99) child.spec.principal Nothing (Just (turnRuntimeOutputContext running.runtime)))
+            (TurnCapabilities False False True noAdvertisedCaps False grants (Just grants) True)
+        agentContext = Agent.AgentContext context Nothing Nothing Nothing
+    Async.withAsync (Jobs.awaitJob parent.jobs parent.turn.atrTurnId child.run) $ \waiting -> do
+      timeout 20000 (Async.wait waiting) `shouldReturn` Nothing
+      let factory current =
+            buildToolRegistry
+              ([echoDefinition {tdRef = ToolRef "web_search"} | toolVisible (toolSkillLoads current) "web_search"] <> [echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}])
+              ( [ echoTool
+                    { toolName = "web_search",
+                      toolRunner = LegacyRunner $ \value -> do
+                        liftIO $ do
+                          fmap (const ()) <$> Async.poll waiting `shouldReturn` Nothing
+                          modifyIORef' leaves (+ 1)
+                        pure (Right value)
+                    }
+                | toolVisible (toolSkillLoads current) "web_search"
+                ]
+                  <> skillToolsWithRuntime skills current (const (pure (Right Nothing))) Right
+              )
+          provider = LLMInterpreter $ \_ _ messages specs _ -> do
+            n <- liftIO (atomicModifyIORef' calls (\value -> (value + 1, value)))
+            let respond call name value = pure (Right (ToolCallsResp (object []) "" [ToolCall call name value]))
+            case n of
+              0 -> do
+                liftIO $ map (.specName) specs `shouldNotContain` ["run_code"]
+                pure (Right (ToolCallsResp (object []) "" [ToolCall name "use_skill" (object ["name" .= name]) | name <- ["web", "codemode"]]))
+              1 -> do
+                liftIO $ map (.specName) specs `shouldContain` ["run_code"]
+                respond "code" "run_code" (object ["code" .= ("return (await tools.web_search({value:6})).value * 7;" :: Text)])
+              _ -> do
+                liftIO $ messages `shouldSatisfy` any (\case MsgTool "code" body -> "\"value\":42" `T.isInfixOf` body; _ -> False)
+                pure (Right (ContentResp "42"))
+      Just result <-
+        timeout 10000000 $
+          withHost pool . runLLMWith provider . runAgentRuntime running.jobs (Agent.AgentLimits 4) factory $
+            Agent.agentTurn running.runtime agentContext "fixture" [MsgUser child.spec.objective] (\case AgentFinalStreamText _ -> pure False; AgentProgressText _ -> pure (); AgentToolDebug _ -> pure ())
+      result.outcome `shouldBe` Agent.Answered (Agent.AgentReply "42" "")
+      readIORef calls `shouldReturn` 3
+      readIORef leaves `shouldReturn` 1
+      states running.turn `shouldReturn` [("use_skill", "succeeded"), ("use_skill", "succeeded"), ("host:wasm/v2", "succeeded"), ("web_search", "succeeded")]
+      Jobs.completeJob running.jobs child.run Succeeded (JobResult "42" Nothing)
+      Just (Right reported) <- timeout 1000000 (Async.wait waiting)
+      reported.result `shouldBe` Just (JobResult "42" Nothing)
+    finishTurnRuntime running.tasks running.runtime
+    finishTurnRuntime parent.tasks parent.runtime
+
   it "keeps a detached native call alive through task finish and journals its actual result" $ do
     (turn, message, principal) <- seed pool 900 1
     tasks <- newTaskRegistry

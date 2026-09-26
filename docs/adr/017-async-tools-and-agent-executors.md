@@ -1,5 +1,8 @@
 # ADR-017: Async tools, agent executors and projected context
 
+The requirement-by-requirement [acceptance audit](017-acceptance.md) records
+reviewed evidence and the remaining verification work.
+
 Status: in progress 2026-09-26. Delivery steps 1–2 are implemented: poll-driven
 guests, shared per-call scheduling, native async interruption and paused guest
 resume/cancel through node interrupts. Projection and node scheduling (steps

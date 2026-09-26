@@ -5,11 +5,14 @@ module Max.PromptFlowSpec (spec) where
 import Data.FileEmbed (embedFile)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8)
-import PromptFlow (renderPromptFlow)
+import PromptFlow (projectionParityFailures, renderPromptFlow)
 import Test.Hspec
 
 spec :: Spec
 spec = describe "generated prompt-flow documentation" $ do
+  it "preserves uninterrupted messages and provider bytes independently of the generated document" $
+    projectionParityFailures `shouldBe` []
+
   it "matches the Prompt → Agent → LLM production path" $
     renderPromptFlow `shouldBe` decodeUtf8 $(embedFile "docs/prompt-flow.md")
 
