@@ -233,7 +233,7 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
                         threadDelay (ms * 1000) >> pure (ToolInvocation (ToolSucceeded Null) ContinueLoop)
                   _ -> pure (ToolInvocation (ToolRejected (ToolFault "invalid_sleep" "invalid sleep duration" RetrySafe)) ContinueLoop)
                 else do
-                  (call, yieldGate) <- launchYieldingCall session hooks catalog request
+                  (call, yieldGate) <- launchCallYielding session hooks catalog request
                   liftIO . atomically $ modifyTVar' yields (yieldGate :)
                   pure call
         liftIO . atomically $ modifyTVar' workers (Map.insert ident (request, worker))

@@ -14,7 +14,7 @@ module Max.Execution.Tools
     freshExecutionLabel,
     executeToolBatch,
     launchCall,
-    launchYieldingCall,
+    launchCallYielding,
     Wake (..),
     awaitWake,
     awaitExecution,
@@ -371,12 +371,12 @@ drainExecutionCompletions :: (Concurrent :> es) => ExecutionSession -> Eff es [(
 drainExecutionCompletions session = atomically (STM.flushTQueue session.completions)
 
 launchCall :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es (Async ToolInvocation)
-launchCall session hooks catalog request = fst <$> launchYieldingCall session hooks catalog request
+launchCall session hooks catalog request = fst <$> launchCallYielding session hooks catalog request
 
 -- | Also returns the action that takes the call out of the session's call
 -- ordering once the model no longer awaits it (see 'launchCallWith').
-launchYieldingCall :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es (Async ToolInvocation, STM.STM ())
-launchYieldingCall = launchCallWith (const (pure ()))
+launchCallYielding :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es (Async ToolInvocation, STM.STM ())
+launchCallYielding = launchCallWith (const (pure ()))
 
 launchNativeCall :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> ToolRequest -> Eff es NativeFuture
 launchNativeCall session hooks catalog request = do
