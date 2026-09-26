@@ -6,6 +6,8 @@ module Max.Node.Events
     Task,
     Event (..),
     Body (..),
+    Control (..),
+    controlBody,
     Occurrence (..),
     Urgency (..),
     Pending (..),
@@ -52,6 +54,13 @@ data Urgency = Normal | Urgent deriving stock (Eq, Show)
 -- External payloads cannot choose the goal, principal or grant ceiling.
 data Occurrence = Occurrence {run :: !JobRun, consumer :: !JobSpec} deriving stock (Eq, Show)
 
+-- | Terminal controls reserve one of the 256 slots, independent of data backpressure.
+data Control = Cancel | Replace !Text deriving stock (Eq, Show)
+
+controlBody :: Control -> Body
+controlBody Cancel = Cancelled
+controlBody (Replace objective) = Replaced objective
+
 data Body
   = FrontendSteered !Int64 !FrontendInputView
   | Steered !Value
@@ -77,10 +86,10 @@ data Task = Task !Node !Integer deriving stock (Eq)
 sameNode :: Task -> Task -> Bool
 sameNode (Task node _) (Task other _) = node == other
 
-data State = State {next :: !Integer, tasks :: !(Map Integer Bool), events :: !(Seq Event)}
+data State = State {next :: !Integer, tasks :: !(Map Integer Bool), events :: !(Seq Event), stopped :: !(Set Integer)}
 
 newNode :: STM Node
-newNode = Node <$> newTVar (State 0 Map.empty Seq.empty)
+newNode = Node <$> newTVar (State 0 Map.empty Seq.empty Set.empty)
 
 newTask :: Node -> STM Task
 newTask node@(Node ref) = do
@@ -103,11 +112,26 @@ deliverTracked :: Task -> Body -> STM (Maybe Event)
 deliverTracked task@(Task (Node ref) key) body = do
   active <- isOpen task
   state <- readTVar ref
-  if not active || Seq.length (Seq.filter ((== key) . (.target)) state.events) >= 256
+  let terminal = case body of
+        Cancelled -> True
+        Replaced _ -> True
+        _ -> False
+      accepted =
+        if terminal
+          then Map.member key state.tasks && Set.notMember key state.stopped
+          else active && Seq.length (Seq.filter ((== key) . (.target)) state.events) < 255
+  if not accepted
     then pure Nothing
     else do
       let event = Event state.next key body
-      writeTVar ref state {next = state.next + 1, events = state.events |> event}
+      writeTVar
+        ref
+        state
+          { next = state.next + 1,
+            events = state.events |> event,
+            tasks = if terminal then Map.insert key False state.tasks else state.tasks,
+            stopped = if terminal then Set.insert key state.stopped else state.stopped
+          }
       pure (Just event)
 
 -- | Multi-node control delivery either accepts every event or none. A full
@@ -180,7 +204,8 @@ awaitInterrupt task pending = hasInterrupt task pending >>= check
 tryFinish :: Task -> STM Bool
 tryFinish task@(Task (Node ref) key) = do
   pending <- hasInterrupt task noPending
-  if pending
+  stopped <- Set.member key . (.stopped) <$> readTVar ref
+  if pending || stopped
     then pure False
     else do
       modifyTVar' ref (\state -> state {tasks = Map.adjust (const False) key state.tasks})
@@ -188,4 +213,4 @@ tryFinish task@(Task (Node ref) key) = do
 
 close :: Task -> STM ()
 close (Task (Node ref) key) = modifyTVar' ref $ \state ->
-  state {tasks = Map.delete key state.tasks, events = Seq.filter ((/= key) . (.target)) state.events}
+  state {tasks = Map.delete key state.tasks, events = Seq.filter ((/= key) . (.target)) state.events, stopped = Set.delete key state.stopped}

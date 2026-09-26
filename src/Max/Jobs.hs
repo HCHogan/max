@@ -51,7 +51,7 @@ where
 
 import Control.Concurrent.STM
 import Control.Exception (finally, mask, onException)
-import Control.Monad (forM, forM_, unless, void, when)
+import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -60,7 +60,7 @@ import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust, isNothing, mapMaybe)
+import Data.Maybe (catMaybes, isJust, isNothing, mapMaybe)
 import Data.Ord (Down (..))
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -79,7 +79,7 @@ import Max.Platform.Types (CanonicalMessageId, PrincipalId)
 import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State (TaskStatus (..), taskIsLive)
 import Max.Task.Types
-import Max.Tasks (TaskCancelled (..), TaskRegistry, TurnRuntime, bindTurnDeadline, bindTurnEvents, cancelAgentTurnTask, lookupTurnEvents, turnAcceptsWork, turnEvents, turnIsLive, turnRuntimeAgentTurn, turnWasCancelled)
+import Max.Tasks (TaskCancelled (..), TaskRegistry, TurnRuntime, bindTurnDeadline, bindTurnEvents, controlAgentTurnTask, lookupTurnEvents, turnAcceptsWork, turnEvents, turnIsLive, turnRuntimeAgentTurn, turnWasCancelled)
 import Max.Tasks qualified as Tasks
 import Max.ToolContext (ToolContext)
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..))
@@ -327,7 +327,7 @@ completeJob jobs run status result = do
       Just entry | taskIsLive entry.view.status && not (taskIsLive status) -> do
         -- A waiter that already ended cannot collect the report; relay it.
         waiting <- hasReportWaiter jobs entry
-        let (stopped, turns) = if status == Cancelled then stopChildren now entries entry.children "parent job cancelled" else (entries, [])
+        let stopped = if status == Cancelled then stopChildren now entries entry.children "parent job cancelled" else entries
             completed =
               entry
                 { view = entry.view {status = if entry.budgetExhausted then BudgetExhausted else status, result = Just result, finished = Just now},
@@ -335,11 +335,12 @@ completeJob jobs run status result = do
                   awaiter = if waiting then entry.awaiter else Nothing
                 }
         writeTVar jobs.entries (Map.insert run.jobId completed stopped)
+        signals <- revokeChanges jobs entries stopped
         Router.closeTask jobs.resultRouter entry.events
         flushReports jobs
-        pure turns
+        pure signals
       _ -> pure []
-  stopTurns jobs cancelled
+  sequence_ cancelled
 
 hasReportWaiter :: Jobs -> Entry -> STM Bool
 hasReportWaiter jobs entry = do
@@ -658,15 +659,14 @@ boundedMessages = reverse . fit 32768 . take 50 . reverse
 
 cancelJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> Text -> IO (Either Text ())
 cancelJob jobs group actor admin identifier reason = controlJob jobs group actor admin identifier $ \now entries entry _ ->
-  let (stopped, turns) = stopChildren now entries (Set.singleton entry.view.run) reason
-   in Right (stopped, turns)
+  Right (stopChildren now entries (Set.singleton entry.view.run) reason)
 
 replaceJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> Text -> IO (Either Text ())
 replaceJob jobs group actor admin identifier objective = controlJob jobs group actor admin identifier $ \now entries entry freshEvents ->
   if T.null (T.strip objective) || T.length objective > 40000
     then Left "invalid replacement objective"
     else
-      let (stopped, turns) = stopChildren now entries entry.children "parent objective replaced"
+      let stopped = stopChildren now entries entry.children "parent objective replaced"
           run = entry.view.run {generation = entry.view.run.generation + 1}
           spec = entry.view.spec {objective = T.strip objective}
           replacement =
@@ -681,9 +681,9 @@ replaceJob jobs group actor admin identifier objective = controlJob jobs group a
               }
           updateParent parent = parent {children = Set.insert run (Set.delete entry.view.run parent.children)}
           withParent = maybe stopped (\parent -> Map.adjust updateParent parent.jobId stopped) spec.parent
-       in Right (Map.insert identifier replacement withParent, turns <> maybe [] (pure . (.atrTurnId) . snd) entry.runtime)
+       in Right (Map.insert identifier replacement withParent)
 
-controlJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> (UTCTime -> Map Int64 Entry -> Entry -> Events.Task -> Either Text (Map Int64 Entry, [AgentTurnId])) -> IO (Either Text ())
+controlJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> (UTCTime -> Map Int64 Entry -> Entry -> Events.Task -> Either Text (Map Int64 Entry)) -> IO (Either Text ())
 controlJob jobs group actor admin identifier transition = do
   now <- getCurrentTime
   outcome <- atomically $ do
@@ -694,11 +694,15 @@ controlJob jobs group actor admin identifier transition = do
         fresh <- Events.newNode >>= Events.newTask
         case transition now entries entry fresh of
           Left detail -> pure (Left detail)
-          Right (updated, turns) -> writeTVar jobs.entries updated >> Router.closeTask jobs.resultRouter entry.events >> pure (Right turns)
+          Right updated -> do
+            writeTVar jobs.entries updated
+            signals <- revokeChanges jobs entries updated
+            Router.flush jobs.resultRouter
+            pure (Right signals)
       _ -> pure (Left "live job not found or owner permission required")
   case outcome of
     Left detail -> pure (Left detail)
-    Right turns -> stopTurns jobs turns >> pure (Right ())
+    Right signals -> sequence_ signals >> pure (Right ())
   where
     controllable routed entries entry = entry.view.status /= Cancelled && (Set.member entry.view.run routed || taskIsLive entry.view.status || isJust entry.runtime || entry.reportSource /= NoReport || any (\child -> taskIsLive child.view.status && any ((== entry.view.run) . (.view.run)) (ancestors entries child.view.spec.parent)) (Map.elems entries))
 
@@ -719,19 +723,29 @@ entryForTurn entries turn = find ((== Just turn) . fmap ((.atrTurnId) . snd) . (
 currentRuntime :: Entry -> Bool
 currentRuntime entry = fmap fst entry.runtime == Just entry.view.run
 
-stopChildren :: UTCTime -> Map Int64 Entry -> Set JobRun -> Text -> (Map Int64 Entry, [AgentTurnId])
-stopChildren now entries children reason = Set.foldl' stop (entries, []) children
+stopChildren :: UTCTime -> Map Int64 Entry -> Set JobRun -> Text -> Map Int64 Entry
+stopChildren now entries children reason = Set.foldl' stop entries children
   where
-    stop (current, turns) run = case lookupRun current run of
+    stop current run = case lookupRun current run of
       Just entry
         | entry.view.status /= Cancelled ->
-            let (descendants, childTurns) = stopChildren now current entry.children reason
+            let descendants = stopChildren now current entry.children reason
                 stopped = entry {view = entry.view {status = Cancelled, result = Just (JobResult reason Nothing), finished = Just now}, reportSource = PendingReport, deliveryVersion = entry.deliveryVersion + 1}
-             in (Map.insert run.jobId stopped descendants, turns <> childTurns <> maybe [] (pure . (.atrTurnId) . snd) entry.runtime)
-      _ -> (current, turns)
+             in Map.insert run.jobId stopped descendants
+      _ -> current
 
-stopTurns :: Jobs -> [AgentTurnId] -> IO ()
-stopTurns jobs = mapM_ (\turn -> void (cancelAgentTurnTask jobs.tasks turn))
+-- | Route controls and revoke every affected runtime in the same transaction
+-- as the generation/status change. Signals can block; authority cannot wait.
+revokeChanges :: Jobs -> Map Int64 Entry -> Map Int64 Entry -> STM [IO ()]
+revokeChanges jobs previous updated = fmap catMaybes $ forM (Map.elems previous) $ \entry ->
+  case Map.lookup entry.view.run.jobId updated of
+    Just current | current.view.run /= entry.view.run || (current.view.status == Cancelled && entry.view.status /= Cancelled) -> do
+      let control = if current.view.run /= entry.view.run then Events.Replace current.view.spec.objective else Events.Cancel
+      _ <- Events.deliver entry.events (Events.controlBody control)
+      case entry.runtime of
+        Just (_, turn) -> controlAgentTurnTask jobs.tasks turn.atrTurnId control
+        Nothing -> pure Nothing
+    _ -> pure Nothing
 
 detachJobNotice :: Jobs -> AgentTurnId -> IO ()
 detachJobNotice jobs turn = atomically $ do
@@ -768,7 +782,7 @@ allJobs jobs = map (.view) . Map.elems <$> readTVarIO jobs.entries
 closeJobs :: Jobs -> IO [JobView]
 closeJobs jobs = do
   now <- getCurrentTime
-  (notices, turns) <- atomically $ do
+  (notices, signals) <- atomically $ do
     closing <- readTVar jobs.closed
     if closing
       then pure ([], [])
@@ -782,14 +796,16 @@ closeJobs jobs = do
         monitorOwners <- Router.monitorOwners jobs.resultRouter
         publishingReports <- Set.fromList . map (.job.run) . Map.elems <$> readTVar jobs.reportNotices
         let live = Set.fromList [entry.view.run | entry <- Map.elems entries, taskIsLive entry.view.status]
-            (stopped, turns) = stopChildren now entries live "服务重启，任务已中断；已发生的操作不会自动重试。"
+            stopped = stopChildren now entries live "服务重启，任务已中断；已发生的操作不会自动重试。"
             unbound entry = Set.member entry.view.run monitorOwners || (Set.member entry.view.run messageOwners && Set.notMember entry.view.run publishing) || (Set.member entry.view.run reportOwners && Set.notMember entry.view.run publishingReports)
             needsNotice entry = isNothing entry.view.spec.parent && (Set.member entry.view.run live || entry.reportSource == PendingReport || unbound entry)
             notices = [updated.view | entry <- Map.elems entries, needsNotice entry, Just updated <- [lookupRun stopped entry.view.run]]
             fence entry = entry {reportSource = NoReport, deliveryVersion = entry.deliveryVersion + if unbound entry then 1 else 0}
         writeTVar jobs.entries (fmap fence stopped)
-        pure (notices, turns)
-  stopTurns jobs turns
+        cancellations <- revokeChanges jobs entries stopped
+        Router.flush jobs.resultRouter
+        pure (notices, cancellations)
+  sequence_ signals
   pure notices
 
 setJobBrowserAccess :: Jobs -> JobRun -> Bool -> IO ()

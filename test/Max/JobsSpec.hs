@@ -1,5 +1,6 @@
 module Max.JobsSpec (Max.JobsSpec.spec) where
 
+import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async (cancel, concurrently, mapConcurrently, poll, wait, withAsync)
 import Control.Concurrent.STM (STM, atomically, retry)
 import Control.Monad (forM_, replicateM, replicateM_)
@@ -68,7 +69,7 @@ spec = describe "process-owned Jobs" $ do
     LaunchJob job <- takeJobWork jobs
     _ <- beginTurnRuntime tasks (reference 1) request.group (UserId 7) Nothing
     target <- atomically (Events.newNode >>= Events.newTask)
-    atomically (replicateM_ 256 (Events.deliver target (Events.Steered Null)))
+    atomically (replicateM_ 255 (Events.deliver target (Events.Steered Null)))
     steerJob jobs request.group request.principal Nothing 1 "preserved correction" `shouldReturn` Right ()
     atomically (attachAutomationTurn jobs job.run (reference 1) target) `shouldReturn` False
     jobForTurn jobs (AgentTurnId 1) `shouldReturn` Nothing
@@ -147,7 +148,7 @@ spec = describe "process-owned Jobs" $ do
     (root, _) <- launch tasks jobs 1 request
     (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
     Just target <- atomically (jobEventTask jobs (AgentTurnId 1))
-    atomically (replicateM_ 256 (Events.deliver target (Events.Steered Null)))
+    atomically (replicateM_ 255 (Events.deliver target (Events.Steered Null)))
     timeout 1000000 (completeJob jobs child.run Succeeded (JobResult "backpressured proof" Nothing)) `shouldReturn` Just ()
     completeJob jobs root.run Succeeded (JobResult "done" Nothing)
     RelayReport first <- takeJobWork jobs
@@ -590,6 +591,26 @@ spec = describe "process-owned Jobs" $ do
     completeJob jobs root.run Succeeded (JobResult "obsolete" Nothing)
     lookupJob jobs request.group 1 `shouldReturn` Just replacement
 
+  it "revokes every runtime and routes terminal controls before a cancellation signal can block" $ do
+    (tasks, jobs, request) <- fixture
+    (root, rootRuntime) <- launch tasks jobs 1 request
+    (_, childRuntime) <- launch tasks jobs 2 (request {parent = Just root.run})
+    rootEvents <- atomically (turnEvents rootRuntime)
+    childEvents <- atomically (turnEvents childRuntime)
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    _ <- activateTurnRuntime childRuntime "blocked cancellation" (putMVar entered () >> takeMVar release)
+    withAsync (replaceJob jobs request.group request.principal False 1 "new objective") $ \replacing -> do
+      timeout 1000000 (takeMVar entered) `shouldReturn` Just ()
+      atomically (turnIsLive tasks (AgentTurnId 1)) `shouldReturn` False
+      atomically (turnIsLive tasks (AgentTurnId 2)) `shouldReturn` False
+      authorizeTurnOutput tasks request.group (AgentTurnId 2) `shouldReturn` False
+      map (.body) <$> atomically (Events.peekAll rootEvents) `shouldReturn` [Events.Replaced "new objective"]
+      map (.body) <$> atomically (Events.peekAll childEvents) `shouldReturn` [Events.Cancelled]
+      atomically (Events.deliver childEvents (Events.Steered Null)) `shouldReturn` False
+      putMVar release ()
+      wait replacing `shouldReturn` Right ()
+
   it "keeps replaced child handles joinable by their parent" $ do
     (tasks, jobs, request) <- fixture
     (root, _) <- launch tasks jobs 1 request
@@ -664,7 +685,7 @@ spec = describe "process-owned Jobs" $ do
     (root, _) <- launch tasks jobs 1 request
     _ <- launch tasks jobs 2 (request {parent = Just root.run})
     Just childEvents <- atomically (jobEventTask jobs (AgentTurnId 2))
-    replicateM_ 256 $ tellParent jobs (AgentTurnId 2) "parent buffer" False `shouldReturn` Right ()
+    replicateM_ 255 $ tellParent jobs (AgentTurnId 2) "parent buffer" False `shouldReturn` Right ()
     steerJob jobs request.group request.principal Nothing 2 "change direction" `shouldReturnSatisfying` isLeft
     atomically (Router.observeEvents jobs.resultRouter childEvents) `shouldReturn` []
     _ <- observeJobEvents jobs (AgentTurnId 1)
@@ -910,12 +931,12 @@ spec = describe "process-owned Jobs" $ do
     (tasks, jobs, request) <- fixture
     (root, _) <- launch tasks jobs 1 request
     (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
-    replicateM_ 256 $ steerJob jobs request.group request.principal Nothing 1 "feedback" `shouldReturn` Right ()
+    replicateM_ 255 $ steerJob jobs request.group request.principal Nothing 1 "feedback" `shouldReturn` Right ()
     completeJob jobs child.run Succeeded (JobResult "retained report" Nothing)
     first <- observeJobEvents jobs (AgentTurnId 1)
     length first `shouldBe` 200
     second <- observeJobEvents jobs (AgentTurnId 1)
-    length second `shouldBe` 57
+    length second `shouldBe` 56
     T.pack (show second) `shouldSatisfy` T.isInfixOf "retained report"
     observeJobEvents jobs (AgentTurnId 1) `shouldReturn` []
 
@@ -1045,7 +1066,7 @@ spec = describe "process-owned Jobs" $ do
     (_, jobs, request) <- fixture
     forM_ [1 .. 160] $ \identifier -> admitJob jobs Nothing identifier request >>= (`shouldSatisfy` isRight)
     admitJob jobs Nothing 161 request >>= (`shouldSatisfy` isLeft)
-    forM_ [1 .. 256 :: Int] $ \_ -> steerJob jobs request.group request.principal Nothing 1 "note" `shouldReturn` Right ()
+    forM_ [1 .. 255 :: Int] $ \_ -> steerJob jobs request.group request.principal Nothing 1 "note" `shouldReturn` Right ()
     steerJob jobs request.group request.principal Nothing 1 "overflow" `shouldReturn` Left "job event log is full or its task has ended"
     steerJob jobs request.group request.principal Nothing 2 (T.replicate 8001 "x") `shouldReturn` Left "feedback exceeds 8000 characters"
     steerJob jobs request.group request.principal Nothing 999 "note" `shouldReturn` Left "no agent#999 in this conversation"

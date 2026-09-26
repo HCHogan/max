@@ -47,6 +47,7 @@ module Max.Tasks
     finishTurnCall,
     cancelTask,
     cancelAgentTurnTask,
+    controlAgentTurnTask,
     cancelAllTasks,
     inFlightTriggers,
 
@@ -162,10 +163,14 @@ bindTurnEvents registry turn events = do
   (_, entries) <- readTVar registry.trState
   case [entry | entry <- Map.elems entries, (turnOutputAgentTurn entry.teOutputContext).atrTurnId == turn] of
     entry : _ -> do
-      previous <- readTVar entry.teEvents
-      Events.close previous
-      writeTVar entry.teEvents events
-      pure True
+      killed <- readTVar entry.teKilled
+      if killed
+        then pure False
+        else do
+          previous <- readTVar entry.teEvents
+          unless (previous == events) (Events.close previous)
+          writeTVar entry.teEvents events
+          pure True
     [] -> pure False
 
 -- | Background scopes retain the original tree deadline while native calls
@@ -495,11 +500,7 @@ cancelTask reg tid = do
     (_, m) <- readTVar reg.trState
     case Map.lookup tid m of
       Nothing -> pure Nothing
-      Just e -> do
-        killed <- readTVar e.teKilled
-        writeTVar e.teKilled True
-        readTVar e.teEvents >>= Events.close
-        if killed then pure (Just Nothing) else Just <$> readTVar e.teCancel
+      Just e -> Just <$> controlEntry e Events.Cancel
   case mAct of
     Nothing -> pure False
     Just act -> sequence_ act >> pure True
@@ -507,10 +508,30 @@ cancelTask reg tid = do
 -- | Revoke and signal the runtime carrying this turn identity, if still present.
 cancelAgentTurnTask :: TaskRegistry -> AgentTurnId -> IO Bool
 cancelAgentTurnTask reg turnId = do
-  (_, entries) <- readTVarIO reg.trState
-  let matches =
-        [entry.teId | entry <- Map.elems entries, entryTurnId entry == turnId]
-  or <$> traverse (cancelTask reg) matches
+  action <- atomically (controlAgentTurnTask reg turnId Events.Cancel)
+  case action of
+    Nothing -> pure False
+    Just signal -> signal >> pure True
+
+-- | Revoke in the caller's transaction, then signal after commit. Jobs uses
+-- this to fence the entire old tree before any worker's cancellation can block.
+controlAgentTurnTask :: TaskRegistry -> AgentTurnId -> Events.Control -> STM (Maybe (IO ()))
+controlAgentTurnTask reg turnId control = do
+  (_, entries) <- readTVar reg.trState
+  case find ((== turnId) . entryTurnId) (Map.elems entries) of
+    Nothing -> pure Nothing
+    Just entry -> Just . sequence_ <$> controlEntry entry control
+
+controlEntry :: TaskEntry -> Events.Control -> STM (Maybe (IO ()))
+controlEntry entry control = do
+  killed <- readTVar entry.teKilled
+  if killed
+    then pure Nothing
+    else do
+      writeTVar entry.teKilled True
+      events <- readTVar entry.teEvents
+      _ <- Events.deliver events (Events.controlBody control)
+      readTVar entry.teCancel
 
 -- | Trigger the cancel action for every registered task (all groups —
 -- same scope as @!ps --all@).  Returns how many were signalled.
@@ -520,14 +541,7 @@ cancelAllTasks :: TaskRegistry -> IO Int
 cancelAllTasks reg = do
   acts <- atomically $ do
     (_, m) <- readTVar reg.trState
-    traverse
-      ( \e -> do
-          killed <- readTVar e.teKilled
-          writeTVar e.teKilled True
-          readTVar e.teEvents >>= Events.close
-          if killed then pure Nothing else readTVar e.teCancel
-      )
-      (Map.elems m)
+    traverse (`controlEntry` Events.Cancel) (Map.elems m)
   sequence_ (catMaybes acts)
   pure (length acts)
 

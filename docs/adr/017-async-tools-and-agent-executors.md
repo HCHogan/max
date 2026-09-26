@@ -109,9 +109,15 @@ validity after acquiring database locks. Identity, source, role and grant checks
 remain in force; cancellation, replacement, expiry and invocation return revoke
 this permission. New calls and default database callers still require a live
 model turn. An admitted agent call can create its child after parent completion
-under the original tree grants and deadline. Full routing
-(replacement/cancellation) and the remaining node executor
-migration remain in step 4.
+under the original tree grants and deadline. Cancellation and replacement now
+enter the node log as terminal controls. Each task reserves one of its 256 event slots
+for a terminal control, so a full data buffer cannot prevent revocation;
+observing the control cannot reopen the task or permit a final answer.
+Job generation/status changes, descendant controls and runtime authority
+revocation share one transaction before any worker cancellation callback runs.
+This also covers shutdown and descendants of a cancelled completion. Kills
+before activation prevent later log rebinding. The remaining node executor
+migration and removal of the job-work/waiter bridges remain in step 4.
 Each model request now adds a fresh volatile tail of at most 16 other open tasks
 on the same node: trigger message, phase, pending call handles/tool names and age.
 Child nodes, queued requests and ended tasks are excluded. The tail consumes the
@@ -649,7 +655,7 @@ introduces them.
 | Observations per poll | 200 events or about 32k tokens | Beyond that, a count and a `context_read` locator. |
 | Volatile tail | 16 open tasks, one line each | Outside the cached prefix. |
 | Open tasks per root node | 32 | Further requests wait in the ready queue. |
-| Buffered events per task | 256 | As the job inbox today. |
+| Buffered events per task | 256 | 255 data events and one reserved terminal control. |
 | Non-urgent tells folded into a final report | Last 50, at most 32 KiB | When the starting task has ended. |
 | Tell and steer text | 8000 characters | As steering today. |
 

@@ -72,14 +72,34 @@ spec = describe "node event delivery and observation" $ do
     (task, other) <- atomically $ do
       node <- newNode
       (,) <$> newTask node <*> newTask node
-    atomically (replicateM 256 (deliver task (Steered (String "input")))) `shouldReturn` replicate 256 True
+    atomically (replicateM 255 (deliver task (Steered (String "input")))) `shouldReturn` replicate 255 True
     atomically (deliver task (Steered (String "overflow"))) `shouldReturn` False
     atomically (deliver other (Steered (String "other"))) `shouldReturn` True
     length <$> atomically (observe task) `shouldReturn` 200
     atomically (tryFinish task) `shouldReturn` False
-    length <$> atomically (observe task) `shouldReturn` 56
+    length <$> atomically (observe task) `shouldReturn` 55
     atomically (tryFinish task) `shouldReturn` True
     length <$> atomically (observe other) `shouldReturn` 1
+
+  it "accepts one terminal control even with a full data buffer and permanently fences finish" $ do
+    task <- atomically (newNode >>= newTask)
+    atomically (replicateM 255 (deliver task (Steered (String "queued")))) `shouldReturn` replicate 255 True
+    atomically (deliver task (Replaced "new goal")) `shouldReturn` True
+    atomically (isOpen task) `shouldReturn` False
+    atomically (deliver task Cancelled) `shouldReturn` False
+    atomically (deliver task (Steered (String "late"))) `shouldReturn` False
+    events <- atomically (observeAll task)
+    length events `shouldBe` 256
+    map (.body) (drop 255 events) `shouldBe` [Replaced "new goal"]
+    atomically (tryFinish task) `shouldReturn` False
+
+  it "revokes a finished task while refusing controls after its log is retired" $ do
+    task <- atomically (newNode >>= newTask)
+    atomically (tryFinish task) `shouldReturn` True
+    atomically (deliver task Cancelled) `shouldReturn` True
+    atomically (hasInterrupt task noPending) `shouldReturn` True
+    atomically (close task)
+    atomically (deliver task Cancelled) `shouldReturn` False
 
   it "buffers non-urgent messages without interrupting a final answer" $ do
     task <- atomically (newNode >>= newTask)

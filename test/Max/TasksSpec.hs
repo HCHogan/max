@@ -39,6 +39,7 @@ import Max.Tasks
     setTurnPhase,
     startTurnCall,
     turnAcceptsWork,
+    turnEvents,
     turnIsLive,
     turnRuntimeTaskId,
     turnWasCancelled,
@@ -189,6 +190,18 @@ spec = describe "Max.Tasks" $ do
     cancelAllTasks registry `shouldReturn` 1
     cancelTask registry (turnRuntimeTaskId turn) `shouldReturn` True
     readIORef signals `shouldReturn` 1
+
+  it "records a pre-activation kill and refuses to rebind its revoked runtime" $ do
+    registry <- newTaskRegistry
+    turn <- beginTurnRuntime registry (reference 1) gid alice Nothing
+    events <- atomically (turnEvents turn)
+    cancelTask registry (turnRuntimeTaskId turn) `shouldReturn` True
+    map (.body) <$> atomically (Events.peekAll events) `shouldReturn` [Events.Cancelled]
+    fresh <- atomically (Events.newNode >>= Events.newTask)
+    atomically (bindTurnEvents registry (AgentTurnId 1) fresh) `shouldReturn` False
+    atomically ((== events) <$> turnEvents turn) `shouldReturn` True
+    activateTurnRuntime turn "late worker" (pure ()) `shouldReturn` True
+    atomically (turnAcceptsWork registry (AgentTurnId 1)) `shouldReturn` False
 
   describe "explicit TurnRuntime" $ do
     it "owns visibility, phase and finalization without trigger lookup" $ do

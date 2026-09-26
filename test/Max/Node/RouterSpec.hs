@@ -84,7 +84,7 @@ spec = describe "node result routing" $ do
 
   it "retains a result under event-buffer pressure and reroutes it on closure" $ do
     (router, origin, _) <- fixture
-    atomically (replicateM_ 256 (Events.deliver origin.target (Events.Steered (String "full"))))
+    atomically (replicateM_ 255 (Events.deliver origin.target (Events.Steered (String "full"))))
     withAsync (atomically (deliverResult router origin "r1" (String "retained") [])) $ \producer -> do
       timeout 20000 (wait producer) `shouldReturn` Nothing
       atomically (closeTask router origin.target)
