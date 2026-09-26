@@ -82,7 +82,7 @@ contextReadTool :: (ConversationQuery :> es) => TimeZone -> ToolContext -> Tool 
 contextReadTool tz dc =
   Tool
     { toolName = "context_read",
-      toolDescription = "读取当前会话原文。无参数读最近消息；ref 支持 message:<id>、episode:<uuid>、memory:<id>、forward:<id>。message 可加 before/after 看上下文。episode 只是定位，prev/next 可以跨 episode；日期 [from,until) 是硬筛选，默认配置时区，也接受 Z/offset。items 按时间线顺序；原样传 prev/next 继续翻页，item.more 续读长正文。不会删除原文，不接受其他群号。",
+      toolDescription = "读取当前会话原文。无参数读最近消息；ref 支持 message:<id>、episode:<uuid>、memory:<id>、forward:<id>。message 可加 before/after 看上下文。episode 只是定位，prev/next 可以跨 episode；日期 [from,until) 是硬筛选，默认配置时区，也接受 Z/offset。items 按时间线顺序；原样传 prev/next 继续翻页，item.more 续读长正文。节点观察的溢出 cursor 只在所属任务本次进程内有效，续读 items.kind=node_observation 的原始事件文本。不会删除原文，不接受其他群号。",
       toolSchema =
         toolObject
           [ ("ref", stringParam "规范引用，ID 用字符串"),

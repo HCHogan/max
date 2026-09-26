@@ -14,6 +14,7 @@ module Max.Node.Router
     flush,
     observeResults,
     observeEvents,
+    observeAllEvents,
     reportOwners,
     messageOwners,
     closeTask,
@@ -167,11 +168,17 @@ deliver (Router ref) valid target body make = do
 -- | Revoke buffered deliveries before they enter a model observation. Receipt
 -- identity prevents revoking an unrelated message from the same child.
 observeEvents :: Router -> Events.Task -> STM [Events.Event]
-observeEvents router@(Router ref) task = do
+observeEvents = observeWith Events.observe
+
+observeAllEvents :: Router -> Events.Task -> STM [Events.Event]
+observeAllEvents = observeWith Events.observeAll
+
+observeWith :: (Events.Task -> STM [Events.Event]) -> Router -> Events.Task -> STM [Events.Event]
+observeWith observe router@(Router ref) task = do
   (next, entries) <- readTVar ref
   current <- normalizeEntries entries
   writeTVar ref (next, current)
-  events <- Events.observe task
+  events <- observe task
   observeResults router task events
   pure events
 

@@ -2,7 +2,7 @@
 
 -- | Conversation reads with scope fixed by host assembly. Media enrichment
 -- accepts only rows obtained by the scoped reader, never arbitrary model ids.
-module Max.Effects.ConversationQuery (ConversationQuery, readRoster, readMessage, readForward, readContext, searchConversation, searchContext, expandEpisode, runConversationQuery) where
+module Max.Effects.ConversationQuery (ConversationQuery, readRoster, readMessage, readForward, readContext, searchConversation, searchContext, expandEpisode, runConversationQuery, runConversationQueryWithObservations) where
 
 import Control.Monad (forM)
 import Data.Aeson (Value)
@@ -13,7 +13,7 @@ import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.PostgreSQL (WithConnection)
-import Max.Context.Read (ReadRequest)
+import Max.Context.Read (ReadCursor (..), ReadLane (..), ReadRequest (..), decodeReadCursor)
 import Max.Conversation.Roster (ConversationRoster)
 import Max.ConversationScope (ConversationScope, conversationStorageId, currentConversationRecall)
 import Max.DB.ContextRead qualified as ContextRead
@@ -63,7 +63,10 @@ expandEpisode :: (ConversationQuery :> es) => EpisodeHandle -> Maybe MessageCurs
 expandEpisode handle after limit = send (ExpandEpisode handle after limit)
 
 runConversationQuery :: (WithConnection :> es, IOE :> es) => ConversationScope -> Eff (ConversationQuery : es) a -> Eff es a
-runConversationQuery scope = interpret $ \_ -> \case
+runConversationQuery scope = runConversationQueryWithObservations scope (\_ _ -> pure (Left "node observation requires its owning live task"))
+
+runConversationQueryWithObservations :: (WithConnection :> es, IOE :> es) => ConversationScope -> (Int -> ReadCursor -> IO (Either Text Value)) -> Eff (ConversationQuery : es) a -> Eff es a
+runConversationQueryWithObservations scope readObservation = interpret $ \_ -> \case
   ReadRoster -> withReadSnapshot (conversationRoster (conversationStorageId scope))
   ReadMessage identifier -> withReadSnapshot $ do
     message <- History.fetchMessageInScope scope identifier
@@ -73,7 +76,10 @@ runConversationQuery scope = interpret $ \_ -> \case
       History.fetchForwardChildrenInScope scope identifier (max 1 (min 100 limit)) >>= withMediaHandles
   SearchConversation query embedding limit -> Recall.searchRecall (currentConversationRecall scope) query embedding limit
   SearchContext filters query embedding limit -> Recall.searchRecallFiltered (currentConversationRecall scope) filters query embedding limit
-  ReadContext budget request -> withReadSnapshot (ContextRead.readContext scope budget request)
+  ReadContext budget request -> case traverse (decodeReadCursor (conversationStorageId scope)) request.rrCursor of
+    Left err -> pure (Left err)
+    Right (Just cursor@ReadCursor {rcLane = Observation {}}) -> liftIO (readObservation budget cursor)
+    _ -> withReadSnapshot (ContextRead.readContext scope budget request)
   ExpandEpisode handle after limit -> withReadSnapshot $ do
     expanded <- Episodes.expandEpisode (currentConversationRecall scope) handle after limit
     forM expanded $ \episode -> do

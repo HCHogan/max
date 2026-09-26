@@ -22,6 +22,7 @@ module Max.Tasks
     bindTurnDeadline,
     turnObservationCursor,
     setTurnObservationCursor,
+    advanceTurnObservation,
     setTurnExecutor,
     turnRuntimeOutputContext,
     nextExecutionOrdinal,
@@ -36,6 +37,8 @@ module Max.Tasks
     listTasks,
     OpenTask (..),
     otherOpenTasks,
+    saveTurnObservation,
+    lookupTurnObservation,
     startTurnCall,
     finishTurnCall,
     cancelTask,
@@ -96,6 +99,7 @@ data TaskEntry = TaskEntry
     teKind :: !(TVar Text),
     teExecutor :: !(TVar Executor.Actor),
     teCalls :: !(TVar (Map ExecutionOrdinal Text)),
+    teObservations :: !(TVar (Int64, Map Int64 Text)),
     -- | Last phase change, used by the silence watchdog rather than total age.
     -- Updates occur at round boundaries; a slow multi-tool round has one heartbeat.
     -- Individual tool deadlines are enforced separately.
@@ -173,7 +177,10 @@ turnObservationCursor :: TurnRuntime -> IO (Maybe MessageCursor)
 turnObservationCursor = readTVarIO . (.trObservationCursor)
 
 setTurnObservationCursor :: TurnRuntime -> MessageCursor -> IO ()
-setTurnObservationCursor turn cursor = atomically (writeTVar turn.trObservationCursor (Just cursor))
+setTurnObservationCursor turn cursor = atomically (advanceTurnObservation turn cursor)
+
+advanceTurnObservation :: TurnRuntime -> MessageCursor -> STM ()
+advanceTurnObservation turn cursor = writeTVar turn.trObservationCursor (Just cursor)
 
 turnExecutor :: TurnRuntime -> IO Executor.Actor
 turnExecutor = readTVarIO . (.trEntry.teExecutor)
@@ -204,6 +211,7 @@ beginTurnRuntime reg ref gid uid mTrigger = do
   now <- getCurrentTime
   kind <- newTVarIO "starting"
   calls <- newTVarIO Map.empty
+  observations <- newTVarIO (0, Map.empty)
   -- Context collection counts toward silence before the first phase change.
   progressAt <- newTVarIO now
   cancel <- newTVarIO Nothing
@@ -231,6 +239,7 @@ beginTurnRuntime reg ref gid uid mTrigger = do
               teKind = kind,
               teExecutor = executor,
               teCalls = calls,
+              teObservations = observations,
               teProgressAt = progressAt,
               teCancel = cancel,
               teKilled = killed,
@@ -285,6 +294,21 @@ setTurnPhase turn phase = do
 
 startTurnCall :: TurnRuntime -> ExecutionOrdinal -> Text -> IO ()
 startTurnCall turn ordinal name = atomically (modifyTVar' turn.trEntry.teCalls (Map.insert ordinal name))
+
+saveTurnObservation :: TurnRuntime -> Text -> STM Int64
+saveTurnObservation turn body = do
+  (next, entries) <- readTVar turn.trEntry.teObservations
+  writeTVar turn.trEntry.teObservations (next + 1, Map.insert next body entries)
+  pure next
+
+lookupTurnObservation :: TaskRegistry -> GroupId -> AgentTurnId -> Int64 -> IO (Maybe Text)
+lookupTurnObservation registry group owner batch = atomically $ do
+  (_, entries) <- readTVar registry.trState
+  case [entry | entry <- Map.elems entries, entry.teGroup == group, (turnOutputAgentTurn entry.teOutputContext).atrTurnId == owner] of
+    entry : _ -> do
+      killed <- readTVar entry.teKilled
+      if killed then pure Nothing else Map.lookup batch . snd <$> readTVar entry.teObservations
+    [] -> pure Nothing
 
 finishTurnCall :: TurnRuntime -> ExecutionOrdinal -> IO ()
 finishTurnCall turn ordinal = atomically (modifyTVar' turn.trEntry.teCalls (Map.delete ordinal))

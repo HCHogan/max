@@ -13,8 +13,14 @@ drive agent polls from frozen observations; raw answers (including reasoning
 and signatures), tool results and the initial window remain in the record.
 Compaction and media planning use explicit projection checkpoints. Root
 polls also observe later canonical public output through a frozen history cut,
-excluding their own publications and private traces. These public observations
-are bounded to 200 messages/about 32k tokens with context_read recovery.
+excluding their own publications and private traces. Public output and node
+events share a cap of 200 messages/about 32k tokens per poll, including overflow
+notices. The durable cut is read before consuming node events. Omitted node
+evidence is archived with its task in the same STM transaction that acknowledges
+delivery; a scoped `context_read` cursor pages frozen event envelopes and
+attachments without replaying their effects. Recovery requires the original
+task and conversation, and expires with that task's process-local record.
+Public overflow keeps its durable timeline cursor.
 Frontend and background steering now enter a shared typed node event store;
 `ExecutionInbox`, the frontend feedback queue and the job feedback inbox are
 removed. One wake predicate classifies interrupts. Delivery and successful
@@ -73,8 +79,8 @@ remain in force; cancellation, replacement, expiry and invocation return revoke
 this permission. New calls and default database callers still require a live
 model turn. An admitted agent call can create its child after parent completion
 under the original tree grants and deadline. Full routing
-(replacement/cancellation and monitor fires), combined
-observation bounds and the remaining node executor migration remain in step 4.
+(replacement/cancellation and monitor fires), observation of ordinary incoming
+conversation messages and the remaining node executor migration remain in step 4.
 Each model request now adds a fresh volatile tail of at most 16 other open tasks
 on the same node: trigger message, phase, pending call handles/tool names and age.
 Child nodes, queued requests and ended tasks are excluded. The tail consumes the

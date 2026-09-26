@@ -174,7 +174,7 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
       registry <- either (Left . T.pack . show) Right (allToolsFor runtime env (withToolSkillLoads loads dc) :: Either ToolCatalogError (ToolRegistry es))
       bindWorkflowContracts javaScriptRuntimeVersion (catalogTools (registryCatalog registry)) loads
     runners0 =
-      builtinsWithDatabase env.beTimeZone dc
+      builtinsWithDatabase env.beJobs env.beTimeZone dc
         <> monitorToolsWithDatabase env.beJobs env.beTimeZone env.beWebhookBaseUrl dc
         <> groupToolsWithDatabase dc
         <> imageToolsWithDatabase env.beTimeZone env.beSandboxes dc

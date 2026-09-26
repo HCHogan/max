@@ -67,6 +67,7 @@ readContext scope tokens request = case request.rrCursor of
     initial lane ep backward at = ReadCursor 1 gid lane request.rrFrom request.rrUntil ep backward at pageSize
 
     continue cursor = case cursor.rcLane of
+      Observation {} -> pure (Left "node observation requires its owning live task")
       Body mid offset fingerprint -> do
         found <- messageUnfiltered mid
         case found of
@@ -166,6 +167,7 @@ readContext scope tokens request = case request.rrCursor of
           )
           ((gid, gid, parent, cursor.rcAt) :. times cursor :. Only count)
       Body {} -> pure []
+      Observation {} -> pure []
 
     episodeInfo handle = do
       found <-

@@ -17,6 +17,7 @@ module Max.Context.Read
     textFingerprint,
     takeTextTokens,
     renderReadMessage,
+    renderObservationPage,
   )
 where
 
@@ -53,7 +54,7 @@ data ReadRequest = ReadRequest
   }
   deriving stock (Show, Eq)
 
-data ReadLane = Timeline | Forward !Int64 | Body !Int64 !Int !Text
+data ReadLane = Timeline | Forward !Int64 | Body !Int64 !Int !Text | Observation !Int64 !Int64 !Int
   deriving stock (Show, Eq, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -128,11 +129,23 @@ decodeReadCursor scope raw = do
     _ -> pure ()
   case cursor.rcLane of
     Body _ offset _ | offset < 0 -> Left "invalid body offset"
+    Observation _ batch offset | batch < 0 || offset < 0 -> Left "invalid observation cursor"
     _ -> pure ()
   pure cursor
 
 readLink :: ReadCursor -> Value
 readLink cursor = object ["cursor" .= encodeReadCursor cursor]
+
+-- | Frozen task-local evidence is paged as text, including the original event
+-- envelope. The interpreter must check both conversation and task ownership.
+renderObservationPage :: ReadCursor -> Int -> Text -> Either Text Value
+renderObservationPage cursor budget body = case cursor.rcLane of
+  Observation owner batch offset ->
+    let part = takeTextTokens (max 1 (budget - 256)) (T.drop offset body)
+        end = offset + T.length part
+        next = if end < T.length body then readLink cursor {rcLane = Observation owner batch end} else Null
+     in Right (object ["items" .= [object ["kind" .= ("node_observation" :: Text), "text" .= part, "text_offset" .= offset, "complete" .= (end >= T.length body), "more" .= next]], "prev" .= Null, "next" .= next])
+  _ -> Left "not an observation cursor"
 
 messageRef :: Int64 -> Text
 messageRef mid = "message:" <> T.pack (show mid)

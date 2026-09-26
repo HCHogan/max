@@ -15,6 +15,7 @@ module Max.Node.Events
     deliverTracked,
     deliverAll,
     observe,
+    observeAll,
     discard,
     wakes,
     awaitInterrupt,
@@ -111,9 +112,17 @@ deliverAll messages =
 -- | The task record retains the rendered observations after this cut. Other
 -- tasks' pending events stay in the node log and cannot be consumed here.
 observe :: Task -> STM [Event]
-observe (Task (Node ref) key) = do
+observe = observeUpTo 200
+
+-- | Assembly consumes one bounded event-buffer cut, retaining omitted evidence
+-- before acknowledging the delivery receipts.
+observeAll :: Task -> STM [Event]
+observeAll = observeUpTo 256
+
+observeUpTo :: Int -> Task -> STM [Event]
+observeUpTo limit (Task (Node ref) key) = do
   state <- readTVar ref
-  let selected = Seq.fromList (take 200 (sortOn eventOrder [event | event <- toList state.events, event.target == key]))
+  let selected = Seq.fromList (take limit (sortOn eventOrder [event | event <- toList state.events, event.target == key]))
       observed = Set.fromList (map (.sequence) (toList selected))
   writeTVar ref state {events = Seq.filter (not . (`Set.member` observed) . (.sequence)) state.events}
   pure (toList selected)

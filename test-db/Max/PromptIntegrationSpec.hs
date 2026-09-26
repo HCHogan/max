@@ -8,10 +8,14 @@
 -- resolution, and reply lookup).
 module Max.PromptIntegrationSpec (spec) where
 
+import Control.Concurrent.STM (atomically, check)
+import Control.Monad (forM_)
 import Data.Aeson (Value (..), eitherDecodeStrict', encode)
 import Data.Aeson.KeyMap qualified as KM
+import Data.Either (isLeft)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -19,6 +23,8 @@ import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL (execute, query)
 import Helpers (insertMessageWithCanonicalId, insertRawKind, insertRawMessage, requireJust, truncateAll, updateDbSession, withDb, withDbLog)
+import Max.Agent.Runtime (observeAgentInputs)
+import Max.Context (estimateMessagesTokens)
 import Max.Context.Read (ReadRequest (..))
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn (startAgentTurn)
@@ -29,19 +35,27 @@ import Max.DB.Observation (observePublishedAfter)
 import Max.DB.Session (fetchOrInit)
 import Max.DB.Transaction (withReadSnapshot)
 import Max.Dispatch (DispatchMessage (..))
+import Max.Effects.ConversationQuery qualified as Query
 import Max.Effects.LLM (ChatMessage (..))
 import Max.EpisodeStore
 import Max.IR (Body (..), MentionTarget (MentionIdentity), Node (..))
+import Max.Jobs qualified as Jobs
 import Max.LLM.Protocol (resolveCacheBoundaries)
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
-import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..))
+import Max.Node.Events qualified as Events
+import Max.Node.Router qualified as Router
+import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..), qqAdvertisedCaps)
 import Max.Prompt (ContextReadMode (..), PromptRequest (..), buildContext, buildContextAtCursor, planContext, renderContextPlan)
 import Max.Prompt.Collect (collectContextPreview)
 import Max.Prompt.History (fetchBoundedPromptTail)
 import Max.Session (Session (..))
-import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..))
+import Max.Tasks (beginTurnRuntime, cancelTask, finishTurnRuntime, newTaskRegistry, setTurnObservationCursor, turnRuntimeTaskId)
+import Max.Tool.Media (InlineMedia (..))
+import Max.ToolContext
+import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..), UserId (..))
 import PromptFixture (promptRequest)
+import System.Timeout (timeout)
 import Test.Hspec
 
 groupRaw :: (Integral a) => a
@@ -87,6 +101,90 @@ userBodyOf msgs = case last (resolveCacheBoundaries False msgs) of
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $
   describe "Max.Prompt.buildContext (integration)" $ do
+    it "shares one observation cap across public messages and owned node events, with task-scoped recovery" $ do
+      tasks <- newTaskRegistry
+      jobs <- Jobs.newJobs tasks
+      let owner = AgentTurnId 700
+          group = GroupId groupRaw
+          scope = conversationScopeFor group
+      turn <- beginTurnRuntime tasks (AgentTurnRef owner (TurnOrdinal 700)) group (UserId memberRaw) Nothing
+      setTurnObservationCursor turn (MessageCursor 0)
+      forM_ [1001 .. 1202] $ \n -> insertMessageWithCanonicalId pool n groupRaw botRaw botRaw (timeAt 11) Nothing ("publication " <> T.pack (show n))
+      origin <- Jobs.resultOrigin jobs turn observationContext
+      forM_ [1 .. 205 :: Int] $ \n -> atomically (Router.deliverResult jobs.resultRouter origin (T.pack (show n)) (String ("node result " <> T.pack (show n))) [])
+      observed <- withDb pool (observeAgentInputs jobs turn observationContext)
+      length observed `shouldBe` 200
+      estimateMessagesTokens observed `shouldSatisfy` (<= 32000)
+      let notices = [fields | MsgUser raw <- observed, Right (Object fields) <- [eitherDecodeStrict' (TE.encodeUtf8 raw)]]
+          nodeLinks = [cursor | fields <- notices, KM.lookup "unobserved_node_events" fields == Just (Number 7), Just (Object link) <- [KM.lookup "context_read" fields], Just (String cursor) <- [KM.lookup "cursor" link]]
+          publicLinks = [cursor | fields <- notices, KM.lookup "unobserved_publications" fields == Just (Number 202), Just (Object link) <- [KM.lookup "context_read" fields], Just (String cursor) <- [KM.lookup "cursor" link]]
+      [nodeCursor] <- pure nodeLinks
+      [publicCursor] <- pure publicLinks
+      let readAs currentScope caller cursor = withDb pool $ Query.runConversationQueryWithObservations currentScope (Jobs.readObservationPage jobs group caller) (Query.readContext 4096 (ReadRequest Nothing Nothing Nothing 0 0 100 (Just cursor)))
+      Right recovered <- readAs scope (Just owner) nodeCursor
+      T.pack (show recovered) `shouldSatisfy` T.isInfixOf "node result 205"
+      Right publications <- readAs scope (Just owner) publicCursor
+      T.pack (show publications) `shouldSatisfy` T.isInfixOf "publication 1001"
+      readAs scope (Just (AgentTurnId 701)) nodeCursor >>= (`shouldSatisfy` isLeft)
+      readAs (conversationScopeFor (GroupId (groupRaw + 1))) (Just owner) nodeCursor >>= (`shouldSatisfy` isLeft)
+      again <- withDb pool (observeAgentInputs jobs turn observationContext)
+      encode again `shouldBe` encode ([] :: [ChatMessage])
+      atomically (Router.referencedOwners jobs.resultRouter) `shouldReturn` Set.empty
+      finishTurnRuntime tasks turn
+      timeout 20000 (atomically (Router.takeRelay jobs.resultRouter)) `shouldReturn` Nothing
+      readAs scope (Just owner) nodeCursor >>= (`shouldSatisfy` isLeft)
+
+    it "enforces the combined token budget even when both sources individually fit their former limits" $ do
+      tasks <- newTaskRegistry
+      jobs <- Jobs.newJobs tasks
+      turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 700) (TurnOrdinal 700)) (GroupId groupRaw) (UserId memberRaw) Nothing
+      setTurnObservationCursor turn (MessageCursor 0)
+      forM_ [1001 .. 1010] $ \n -> insertMessageWithCanonicalId pool n groupRaw botRaw botRaw (timeAt 11) Nothing ("publication " <> T.replicate 2200 "群")
+      origin <- Jobs.resultOrigin jobs turn observationContext
+      forM_ [1 .. 8 :: Int] $ \n -> atomically (Router.deliverResult jobs.resultRouter origin (T.pack (show n)) (String ("node result " <> T.replicate 2200 "汉")) [])
+      observed <- withDb pool (observeAgentInputs jobs turn observationContext)
+      estimateMessagesTokens observed `shouldSatisfy` (<= 32000)
+      length [() | MsgUser text <- observed, "node result" `T.isInfixOf` text] `shouldBe` 8
+      length [() | MsgUser text <- observed, "publication " `T.isInfixOf` text] `shouldSatisfy` (< 10)
+      T.pack (show observed) `shouldSatisfy` T.isInfixOf "context_read"
+      finishTurnRuntime tasks turn
+
+    it "pages oversized node evidence losslessly, retaining attachments and removing acknowledged interrupts" $ do
+      tasks <- newTaskRegistry
+      jobs <- Jobs.newJobs tasks
+      let owner = AgentTurnId 700
+          group = GroupId groupRaw
+          scope = conversationScopeFor group
+          body = T.replicate 40000 "汉" <> " final evidence"
+          media = InlineMedia "proof" "data:image/png;base64,AA==" Nothing
+      turn <- beginTurnRuntime tasks (AgentTurnRef owner (TurnOrdinal 700)) group (UserId memberRaw) Nothing
+      origin <- Jobs.resultOrigin jobs turn observationContext
+      atomically $ do
+        Events.deliver origin.target (Events.Steered (String body)) >>= check
+        Router.deliverResult jobs.resultRouter origin "large" (String "attachment evidence") [media]
+      observed <- withDb pool (observeAgentInputs jobs turn observationContext)
+      length observed `shouldBe` 1
+      estimateMessagesTokens observed `shouldSatisfy` (<= 32000)
+      [cursor] <- pure [cursor | MsgUser raw <- observed, Right (Object fields) <- [eitherDecodeStrict' (TE.encodeUtf8 raw)], Just (Object link) <- [KM.lookup "context_read" fields], Just (String cursor) <- [KM.lookup "cursor" link]]
+      let recover raw = do
+            Right page <- withDb pool $ Query.runConversationQueryWithObservations scope (Jobs.readObservationPage jobs group (Just owner)) (Query.readContext 2048 (ReadRequest Nothing Nothing Nothing 0 0 100 (Just raw)))
+            case page of
+              Object fields | Just (Array items) <- KM.lookup "items" fields -> do
+                let part = T.concat [text | Object item <- foldr (:) [] items, Just (String text) <- [KM.lookup "text" item]]
+                rest <- case KM.lookup "next" fields of
+                  Just (Object next) | Just (String more) <- KM.lookup "cursor" next -> recover more
+                  _ -> pure ""
+                pure (part <> rest)
+              _ -> fail "missing observation page"
+      recovered <- recover cursor
+      recovered `shouldSatisfy` T.isInfixOf body
+      recovered `shouldSatisfy` T.isInfixOf "data:image/png;base64,AA=="
+      atomically (Events.hasInterrupt origin.target Events.noPending) `shouldReturn` False
+      atomically (Events.tryFinish origin.target) `shouldReturn` True
+      timeout 20000 (atomically (Router.takeRelay jobs.resultRouter)) `shouldReturn` Nothing
+      cancelTask tasks (turnRuntimeTaskId turn) `shouldReturn` True
+      withDb pool (Query.runConversationQueryWithObservations scope (Jobs.readObservationPage jobs group (Just owner)) (Query.readContext 2048 (ReadRequest Nothing Nothing Nothing 0 0 100 (Just cursor)))) >>= (`shouldSatisfy` isLeft)
+
     it "renders ambient rows from the messages table" $ do
       insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "随便聊"
       insertMessageWithCanonicalId pool 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "另一条"
@@ -127,11 +225,11 @@ spec pool = before_ (truncateAll pool) $
       let scope = conversationScopeFor (GroupId groupRaw)
       mapM_ (\n -> insertMessageWithCanonicalId pool n groupRaw botRaw botRaw (timeAt 11) Nothing ("publication " <> T.pack (show n))) [1001 .. 1202]
       (cut, observed) <- withDb pool $ observePublishedAfter scope (AgentTurnId 0) Nothing (MessageCursor 0)
-      length observed `shouldBe` 201
+      length observed `shouldBe` 200
       case last observed of
         MsgUser raw -> case eitherDecodeStrict' (TE.encodeUtf8 raw) of
           Right (Object fields) -> do
-            KM.lookup "unobserved_publications" fields `shouldBe` Just (Number 2)
+            KM.lookup "unobserved_publications" fields `shouldBe` Just (Number 3)
             case KM.lookup "context_read" fields of
               Just (Object link) | Just (String cursor) <- KM.lookup "cursor" link -> do
                 recovered <- withDb pool $ readContext scope 32000 (ReadRequest Nothing Nothing Nothing 0 0 100 (Just cursor))
@@ -412,3 +510,9 @@ publishNextCompartment pool expected evidence summary = do
     Left errors -> expectationFailure (show errors) >> error "invalid capture"
   compartment <- withDb pool $ publishCaptureRun scope run "fixture response" validated
   pure (compartment, end)
+
+observationContext :: ToolContext
+observationContext =
+  mkToolContext
+    (TurnIdentity (GroupId groupRaw) (CanonicalMessageId 1000) (UserId memberRaw) (UserId botRaw) (PrincipalId 1) Nothing Nothing)
+    (TurnCapabilities False False False qqAdvertisedCaps False Map.empty Nothing False)

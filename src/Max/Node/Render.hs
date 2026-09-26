@@ -1,6 +1,6 @@
 -- | Freeze event text once, when a model poll observes it. Raw task outputs
 -- and results remain in the projection and are never rendered here.
-module Max.Node.Render (renderEvents, renderOpenTasks) where
+module Max.Node.Render (renderEvents, renderOpenTasks, selectEventObservation) where
 
 import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteString.Lazy qualified as LBS
@@ -8,6 +8,7 @@ import Data.List (sortOn)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Max.Context (estimateMessagesTokens)
 import Max.LLM.Types (ChatMessage (MsgUser))
 import Max.Node.Events
 import Max.Task.FrontendInput (renderFrontendInputs)
@@ -50,6 +51,19 @@ renderEvents events =
       Settled ref value _ -> Just (object ["result" .= ref, "outcome" .= value])
     attachments (Settled _ _ media) = inlineMediaMessages media
     attachments _ = []
+
+-- | Keep complete event envelopes (and their media) together. Overflow is
+-- retained by assembly before delivery receipts are acknowledged.
+selectEventObservation :: Int -> Int -> [Event] -> ([ChatMessage], [Event])
+selectEventObservation = go
+  where
+    go _ _ [] = ([], [])
+    go count tokens remaining@(event : rest)
+      | length messages > count || cost > tokens = ([], remaining)
+      | otherwise = let (selected, omitted) = go (count - length messages) (tokens - cost) rest in (messages <> selected, omitted)
+      where
+        messages = renderEvents [event]
+        cost = estimateMessagesTokens messages
 
 json :: Value -> Text
 json = TE.decodeUtf8 . LBS.toStrict . encode

@@ -12,6 +12,7 @@ module Max.Jobs
     resultRouter,
     resultOrigin,
     otherOpenTasks,
+    readObservationPage,
     bindResultRelay,
     bindReportRelay,
     bindMessageRelay,
@@ -67,6 +68,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Max.Context.Read (ReadCursor (..), ReadLane (..), renderObservationPage)
+import Max.ConversationScope (conversationScopeFor, conversationStorageId)
 import Max.Execution.Authority (CallAuthority, callIsActive, callIsCurrent, callMatchesTool)
 import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation (..))
 import Max.LLM.Types (TokenUsage)
@@ -79,7 +82,7 @@ import Max.Task.Types
 import Max.Tasks (TaskCancelled (..), TaskRegistry, TurnRuntime, bindTurnDeadline, bindTurnEvents, cancelAgentTurnTask, lookupTurnEvents, turnAcceptsWork, turnEvents, turnIsLive, turnRuntimeAgentTurn, turnWasCancelled)
 import Max.Tasks qualified as Tasks
 import Max.ToolContext (ToolContext)
-import Max.Turn.Types (AgentTurnId, AgentTurnRef (..))
+import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..))
 import OneBot.Types (GroupId)
 
 data JobWork = LaunchJob !JobView | RecordMonitorResult !JobView | RelayResult !Router.Relay | RelayReport !Router.ReportRelay | RelayMessage !Router.MessageRelay
@@ -171,6 +174,13 @@ resultOrigin jobs runtime context = atomically $ do
 
 otherOpenTasks :: Jobs -> TurnRuntime -> IO [Tasks.OpenTask]
 otherOpenTasks jobs = Tasks.otherOpenTasks jobs.tasks
+
+readObservationPage :: Jobs -> GroupId -> Maybe AgentTurnId -> Int -> ReadCursor -> IO (Either Text Value)
+readObservationPage jobs group caller budget cursor = case cursor.rcLane of
+  Observation owner batch _ | caller == Just (AgentTurnId owner) && cursor.rcScope == conversationStorageId (conversationScopeFor group) -> do
+    found <- Tasks.lookupTurnObservation jobs.tasks group (AgentTurnId owner) batch
+    pure $ maybe (Left "node observation expired or is not visible to this task") (renderObservationPage cursor budget) found
+  _ -> pure (Left "node observation belongs to another task or conversation")
 
 bindResultRelay :: Jobs -> AgentTurnId -> Router.Relay -> IO ()
 bindResultRelay jobs turn relay = atomically (modifyTVar' jobs.resultNotices (Map.insert turn relay))
