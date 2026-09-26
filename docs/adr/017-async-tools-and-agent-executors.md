@@ -508,6 +508,34 @@ clock or entropy, results are journaled, and the host would add the wake order.
 Neither is worth building while the work being awaited (child agents, in-memory
 subscriptions) itself ends on restart.
 
+### 10. Limits
+
+The numbers assume Max runs on tank (20 cores, 62 GiB) rather than h610. Values
+marked *live* already apply since `3400fd5`; the rest arrive with the step that
+introduces them.
+
+| Limit | Value | Note |
+|---|---|---|
+| Tool calls per agent tree | 2000 | Live. Spent: calls are refused before effect and each agent writes a tool-free report. |
+| Model rounds per agent tree | 2000 | Live. Same wrap-up. |
+| Tree deadline / nesting | 6 hours / 16 levels | Unchanged. |
+| Model rounds per agent loop | 2000 | Live; matches the tree budget. |
+| Report length | 100,000 characters | Live. Empty, oversized or off-contract reports get two correction rounds. |
+| Guest fuel per program | 10¹⁰ | Live (was 10⁹). |
+| Host calls per program | 4096 | Live (was 1024). |
+| Guest memory | 256 MiB store, 192 MiB JS heap | Was 64 / 48 MiB; the heap limit is compiled into the guest. |
+| Live guests | 32 global, 16 per tree | Worst case 8 GiB. Over the limit, `run_code` is rejected, never queued (§7). |
+| Wall time per guest step | 60 seconds | Fuel still bounds total CPU. |
+| In-flight calls per program | 64 | Further calls wait in the outbox. |
+| Outcomes per resume | 16 MiB | One tool result stays capped at 4 MiB. |
+| Yield threshold for short tools | 5 seconds | Async tools yield at once. |
+| Observations per poll | 200 events or about 32k tokens | Beyond that, a count and a `context_read` locator. |
+| Volatile tail | 16 open tasks, one line each | Outside the cached prefix. |
+| Open tasks per root node | 32 | Further requests wait in the ready queue. |
+| Buffered events per task | 256 | As the job inbox today. |
+| Non-urgent tells folded into a final report | Last 50, at most 32 KiB | When the starting task has ended. |
+| Tell and steer text | 8000 characters | As steering today. |
+
 ## Delivery
 
 Each step ships on its own, with the test suites and `max-prompt-flow` passing.
@@ -613,8 +641,5 @@ Each step ships on its own, with the test suites and `max-prompt-flow` passing.
 
 ## Open questions
 
-- Limits: the yield threshold, live guests (global and per tree), in-flight calls
-  per program, the observation cap, open tasks per group, and the ready-queue
-  classes.
 - The format and size of the volatile tail that describes other open tasks.
 - Tool names: `agent_tell`, `agent_ask`, `run_code_resume`, `run_code_cancel`.
