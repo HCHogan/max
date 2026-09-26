@@ -17,6 +17,7 @@ module Max.Browser.Registry
     ensureJobBrowserLease,
     newBrowserRegistry,
     newBrowserRegistryWithHost,
+    newBrowserRegistryWithHosts,
     configureBrowserRegistry,
     browserVault,
     browserRetention,
@@ -187,11 +188,16 @@ configureBrowserRegistry :: BrowserVault -> Int -> Int -> BrowserRegistry -> Bro
 configureBrowserRegistry vault idle grace registry = registry {brVault = vault, brIdleSeconds = idle, brGraceSeconds = grace}
 
 newBrowserRegistryWithHost :: HttpRuntime -> GroupId -> String -> String -> IO BrowserRegistry
-newBrowserRegistryWithHost runtime group endpoint hostHeader = do
+newBrowserRegistryWithHost runtime group endpoint hostHeader = newBrowserRegistryWithHosts runtime [(group, endpoint, hostHeader)]
+
+-- | Seed externally managed hosts, including independent groups in transport
+-- fixtures. Production creates group hosts lazily through the runtime broker.
+newBrowserRegistryWithHosts :: HttpRuntime -> [(GroupId, String, String)] -> IO BrowserRegistry
+newBrowserRegistryWithHosts runtime hosts = do
   registry <- newBrowserRegistry runtime
   created <- getCurrentTime
-  let entry = BrowserEntry group "external-browser-host" endpoint hostHeader created
-  atomically $ modifyTVar' registry.brEntries (Map.insert group entry)
+  let entries = [(group, BrowserEntry group "external-browser-host" endpoint hostHeader created) | (group, endpoint, hostHeader) <- hosts]
+  atomically $ writeTVar registry.brEntries (Map.fromList entries)
   pure registry
 
 browserVault :: BrowserRegistry -> BrowserVault
@@ -260,19 +266,6 @@ reapStaleBrowsers = do
 --------------------------------------------------------------------------------
 -- Lazy ensure.
 
--- | Get the group's browser, creating the container if needed.
-ensureBrowserForGroup :: BrowserRegistry -> GroupId -> IO (Either Text BrowserEntry)
-ensureBrowserForGroup reg gid = do
-  startLock <- lockFor reg.brStartLocks gid
-  bracket_
-    (atomically $ takeTMVar startLock)
-    (atomically $ putTMVar startLock ())
-    $ do
-      entries <- readTVarIO reg.brEntries
-      case Map.lookup gid entries of
-        Just entry -> pure (Right entry)
-        Nothing -> createEntry reg gid
-
 createEntry :: BrowserRegistry -> GroupId -> IO (Either Text BrowserEntry)
 createEntry reg gid = do
   now <- getCurrentTime
@@ -305,26 +298,37 @@ createEntry reg gid = do
 -- | Get the workspace's isolated MCP client, creating and initializing it if needed.
 -- The scope lock held by every tool sequence also serializes this transition,
 -- so there can be only one client per scope without a second creation lock.
+-- The group lock covers capacity, host selection and publication of the client.
+-- Initializing clients count against the limit, but their network handshakes
+-- run outside the group lock so unrelated scopes can start concurrently.
 ensureBrowserInstance :: BrowserRegistry -> BrowserScope -> IO (Either Text BrowserInstance)
-ensureBrowserInstance reg scope = do
-  instances <- readTVarIO reg.brInstances
-  case Map.lookup scope instances of
-    Just instance' -> pure (Right instance')
-    Nothing -> do
-      ensureBrowserForGroup reg (browserScopeGroup scope) >>= \case
-        Left err -> pure (Left err)
-        Right entry -> do
-          client <- newMcpClient reg.brHttp entry.beEndpoint entry.beHostHeader
-          let instance' = BrowserInstance client entry.beCreatedAt
-              rollback = dropFailedBrowserInstance reg scope entry instance'
-          mask $ \restore -> do
-            -- Publish the initializing instance first.  Host retirement can
-            -- now see every sibling that still depends on this container,
-            -- including one whose MCP child has not finished starting yet.
-            atomically $ modifyTVar' reg.brInstances (Map.insert scope instance')
-            restore (waitReady client) `onException` rollback >>= \case
-              Left err -> Left err <$ rollback
-              Right () -> pure (Right instance')
+ensureBrowserInstance reg scope = mask $ \restore -> do
+  let group = browserScopeGroup scope
+  startLock <- lockFor reg.brStartLocks group
+  prepared <- bracket_ (atomically (takeTMVar startLock)) (atomically (putTMVar startLock ())) $ do
+    instances <- readTVarIO reg.brInstances
+    case Map.lookup scope instances of
+      Just instance' -> pure (Right (instance', Nothing))
+      Nothing
+        | length (filter ((== group) . browserScopeGroup) (Map.keys instances)) >= 4 ->
+            pure (Left "this conversation already has 4 browser workspaces; wait for one to close, then retry")
+        | otherwise -> do
+            entries <- readTVarIO reg.brEntries
+            restore (maybe (createEntry reg group) (pure . Right) (Map.lookup group entries)) >>= \case
+              Left err -> pure (Left err)
+              Right entry -> do
+                client <- newMcpClient reg.brHttp entry.beEndpoint entry.beHostHeader
+                let instance' = BrowserInstance client entry.beCreatedAt
+                atomically $ modifyTVar' reg.brInstances (Map.insert scope instance')
+                pure (Right (instance', Just entry))
+  case prepared of
+    Left err -> pure (Left err)
+    Right (instance', Nothing) -> pure (Right instance')
+    Right (instance', Just entry) -> do
+      let rollback = dropFailedBrowserInstance reg scope entry instance'
+      restore (waitReady instance'.biClient) `onException` rollback >>= \case
+        Left err -> Left err <$ rollback
+        Right () -> pure (Right instance')
 
 dropFailedBrowserInstance :: BrowserRegistry -> BrowserScope -> BrowserEntry -> BrowserInstance -> IO ()
 dropFailedBrowserInstance reg scope entry instance' = mask_ $ do

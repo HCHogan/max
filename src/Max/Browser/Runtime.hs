@@ -82,7 +82,7 @@ managedBrowserTools jobs context registry build = map wrap (build fallback)
                                 else do
                                   bound <- liftIO (ensureJobBrowserLease registry workspace.jbScope task.spec.deadline)
                                   case bound of
-                                    Left _ -> pure (Left "browser workspace binding failed; no action was replayed")
+                                    Left err -> pure (Left ("browser workspace binding failed: " <> renderBrowserError err <> "; no action was replayed"))
                                     Right _ -> do
                                       when cold $ forM_ saved (liftIO . prepareBrowserRestore registry workspace.jbScope)
                                       let uncertain = liftIO (putJobBrowser registry task.run.jobId (workspace {jbUncertain = True}))

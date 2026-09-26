@@ -153,6 +153,13 @@ cannot prevent result intake, and a blocked monitor writer cannot hold launch
 intake. Same-monitor executions still wait for the previous result's exact
 acknowledgement. Both consumers share the worker's supervised lifetime and stop
 accepting work when Jobs closes.
+Browser workspace admission is now bounded to four per group, across foreground
+turns and background generations. Starting clients and failed cleanup both keep
+their slots; excess calls are refused before MCP initialization. Group host
+selection, capacity checking and client registration share the group lock,
+while network initialization runs outside it. Successful cleanup or cancelled
+startup returns capacity. Sandbox tools reuse the group's sandbox and serialize
+its first creation, so concurrent tasks do not allocate one sandbox each.
 Each model request now adds a fresh volatile tail of at most 16 other open tasks
 on the same node: trigger message, phase, pending call handles/tool names and age.
 Child nodes, queued requests and ended tasks are excluded. The tail consumes the
@@ -693,6 +700,7 @@ introduces them.
 | Buffered events per task | 256 | 255 data events and one reserved terminal control. |
 | Non-urgent tells folded into a final report | Last 50, at most 32 KiB | When the starting task has ended. |
 | Tell and steer text | 8000 characters | As steering today. |
+| Browser workspaces per group | 4 | Includes initializing clients and cleanup still pending; excess calls are refused before starting an MCP child. |
 
 ## Delivery
 

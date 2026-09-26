@@ -1,18 +1,21 @@
 module Max.Browser.RegistrySpec (spec) where
 
 import Control.Concurrent (forkIO, killThread, threadDelay)
-import Control.Concurrent.Async (mapConcurrently_, wait, withAsync)
+import Control.Concurrent.Async (cancel, mapConcurrently, mapConcurrently_, wait, withAsync)
 import Control.Concurrent.MVar
+import Control.Concurrent.STM qualified as STM
 import Control.Exception (finally)
 import Control.Monad (forM_, replicateM, when)
 import Data.Aeson (encode, object, (.=))
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
+import Data.Either (isLeft, isRight)
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.Text qualified as T
 import Effectful (runEff)
 import Max.Browser.Client (runBrowserWithRegistry)
-import Max.Browser.Registry (BrowserRegistry, browserScopeForTask, browserScopeForTurn, callBrowserTool, getCamoSession, newBrowserRegistry, newBrowserRegistryWithHost, releaseBrowserScope, retryBrowserReleases, setCamoSession, tryWithBrowserWorkspace, withBrowserSession, withBrowserWorkspace)
+import Max.Browser.Error (browserErrorMessage)
+import Max.Browser.Registry (BrowserRegistry, browserScopeForTask, browserScopeForTurn, callBrowserTool, getCamoSession, newBrowserRegistry, newBrowserRegistryWithHost, newBrowserRegistryWithHosts, releaseBrowserScope, retryBrowserReleases, setCamoSession, tryWithBrowserWorkspace, withBrowserSession, withBrowserWorkspace)
 import Max.Browser.ToolRuntime (browserToolsAt)
 import Max.Effects.Browser (SessionMethod (..), sessionRequest)
 import Max.Effects.ToolOutput (newToolOutputQueue, runToolOutput)
@@ -26,6 +29,86 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "withBrowserSession" $ do
+  it "bounds concurrent workspace startups before any excess MCP child can start" $ do
+    gate <- newEmptyMVar
+    connections <- STM.newTVarIO (0 :: Int)
+    refused <- STM.newTVarIO (0 :: Int)
+    registry <- capacityRegistry $ do
+      STM.atomically (STM.modifyTVar' connections (+ 1))
+      readMVar gate
+      pure browserOk
+    let scopes = [browserScopeForTurn (GroupId 1) (AgentTurnId n) | n <- [1 .. 20]]
+        invoke scope = withBrowserSession registry scope $ do
+          result <- callBrowserTool registry scope "fixture" (object [])
+          when (isLeft result) (STM.atomically (STM.modifyTVar' refused (+ 1)))
+          pure result
+    withAsync (mapConcurrently invoke scopes) $ \worker -> do
+      timeout
+        1_000_000
+        ( STM.atomically $ do
+            started <- STM.readTVar connections
+            rejected <- STM.readTVar refused
+            STM.check (started == 4 && rejected == 16)
+        )
+        `shouldReturn` Just ()
+      withAsync (invoke (browserScopeForTurn (GroupId 2) (AgentTurnId 1))) $ \otherGroup -> do
+        timeout 1_000_000 (STM.atomically (STM.readTVar connections >>= STM.check . (== 5))) `shouldReturn` Just ()
+        putMVar gate ()
+        wait otherGroup >>= (`shouldSatisfy` isRight)
+        results <- wait worker
+        length (filter isRight results) `shouldBe` 4
+        [browserErrorMessage err | Left err <- results]
+          `shouldSatisfy` all (T.isInfixOf "4 browser workspaces")
+    -- Two handshake requests and one tool request per admitted workspace.
+    STM.readTVarIO connections `shouldReturn` 15
+
+  it "reuses an occupied workspace and only admits another after successful cleanup" $ do
+    connections <- newIORef (0 :: Int)
+    failClose <- newIORef False
+    registry <- capacityRegistry $ do
+      atomicModifyIORef' connections (\n -> (n + 1, ()))
+      failing <- readIORef failClose
+      pure (if failing then browserFailure else browserOk)
+    let scope n
+          | n < 3 = browserScopeForTurn (GroupId 1) (AgentTurnId n)
+          | otherwise = browserScopeForTask (GroupId 1) n 0
+        invoke n = withBrowserSession registry (scope n) (callBrowserTool registry (scope n) "fixture" (object []))
+    forM_ [1 .. 4] $ \n -> invoke n >>= (`shouldSatisfy` isRight)
+    invoke 1 >>= (`shouldSatisfy` isRight)
+    readIORef connections `shouldReturn` 13
+    invoke 5 >>= (`shouldSatisfy` isLeft)
+    readIORef connections `shouldReturn` 13
+    modifyIORef' failClose (const True)
+    releaseBrowserScope registry (scope 1)
+    invoke 5 >>= (`shouldSatisfy` isLeft)
+    readIORef connections `shouldReturn` 14
+    modifyIORef' failClose (const False)
+    retryBrowserReleases registry
+    invoke 5 >>= (`shouldSatisfy` isRight)
+    readIORef connections `shouldReturn` 19
+
+  it "reclaims a cancelled startup without retiring siblings or leaking capacity" $ do
+    connections <- STM.newTVarIO (0 :: Int)
+    entered <- newEmptyMVar
+    gate <- newEmptyMVar
+    registry <- capacityRegistry $ do
+      n <- STM.atomically $ do
+        STM.modifyTVar' connections (+ 1)
+        STM.readTVar connections
+      -- Three already-live siblings consume the first nine connections.
+      when (n == 10) (putMVar entered () >> takeMVar gate)
+      pure browserOk
+    let scope n = browserScopeForTask (GroupId 1) n 0
+        invoke n = withBrowserSession registry (scope n) (callBrowserTool registry (scope n) "fixture" (object []))
+    forM_ [1 .. 3] $ \n -> invoke n >>= (`shouldSatisfy` isRight)
+    withAsync (invoke 4) $ \worker -> do
+      timeout 1_000_000 (takeMVar entered) `shouldReturn` Just ()
+      invoke 5 >>= (`shouldSatisfy` isLeft)
+      cancel worker
+    invoke 5 >>= (`shouldSatisfy` isRight)
+    invoke 1 >>= (`shouldSatisfy` isRight)
+    STM.readTVarIO connections `shouldReturn` 14
+
   it "recreates transport once, clears the page and never replays a lost click" $ do
     let group = GroupId 1
         scope = browserScopeForTurn group (AgentTurnId 1)
@@ -210,3 +293,24 @@ testRegistry :: IO BrowserRegistry
 testRegistry = do
   runtime <- newHttpRuntime
   newBrowserRegistry runtime
+
+browserOk, browserFailure :: BS8.ByteString
+browserOk = "{\"jsonrpc\":\"2.0\",\"result\":{\"ok\":true}}"
+browserFailure = "{\"jsonrpc\":\"2.0\",\"result\":{\"isError\":true,\"content\":[]}}"
+
+capacityRegistry :: IO BS8.ByteString -> IO BrowserRegistry
+capacityRegistry response = do
+  manager <-
+    newManager
+      defaultManagerSettings
+        { managerIdleConnectionCount = 0,
+          managerRetryableException = const False,
+          managerRawConnection = pure $ \_ _ _ -> do
+            body <- response
+            chunks <- newIORef ["HTTP/1.1 200 OK\r\nMcp-Session-Id: fixture\r\nContent-Length: " <> BS8.pack (show (BS8.length body)) <> "\r\n\r\n" <> body]
+            makeConnection
+              (atomicModifyIORef' chunks $ \case [] -> ([], BS8.empty); chunk : rest -> (rest, chunk))
+              (const (pure ()))
+              (pure ())
+        }
+  newBrowserRegistryWithHosts (httpRuntimeFromManagers manager manager manager) [(GroupId n, "http://example.test/mcp", "localhost:8931") | n <- [1, 2]]
