@@ -234,6 +234,22 @@ spec = describe "process-owned Jobs" $ do
     result.result `shouldBe` Just (JobResult "immediate child" Nothing)
     timeout 20000 (takeWork jobs) `shouldReturn` Nothing
 
+  it "collects folded late notes with an already-settled future without changing its report payload" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    Right child <- admitJob jobs (Just (AgentTurnId 1)) 2 request {parent = Just root.run, awaited = True}
+    Left _ <- takeWork jobs
+    childRuntime <- beginTurnRuntime tasks (reference 2) request.group (UserId 7) Nothing
+    attachJobTurn jobs child.run (reference 2) `shouldReturn` True
+    tellParent jobs (AgentTurnId 2) "unobserved note" False `shouldReturn` Right ()
+    let report = JobResult "report" (Just (object ["proof" .= (7 :: Int)]))
+    completeJob jobs child.run Succeeded report
+    completeJob jobs root.run Succeeded (JobResult "parent ended" Nothing)
+    Right (ChildrenFinished [collected]) <- waitForChildren jobs (AgentTurnId 1) [2]
+    collected.messages `shouldBe` ["unobserved note"]
+    collected.result `shouldBe` Just report
+    finishTurnRuntime tasks childRuntime
+
   it "relays a ready awaited root report when its caller ends without entering the wait" $ do
     (tasks, jobs, request) <- fixture
     caller <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
@@ -384,6 +400,52 @@ spec = describe "process-owned Jobs" $ do
       Just (Right (ChildrenFinished results)) <- timeout 1000000 (wait joining)
       map (.result) results `shouldBe` map (Just . (`JobResult` Nothing)) ["first result", "second result"]
       timeout 20000 (takeWork jobs) `shouldReturn` Nothing
+
+  it "replaces a partially collected child outcome without acknowledging the new generation early" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (first, oldRuntime) <- launch tasks jobs 2 (request {parent = Just root.run})
+    (second, _) <- launch tasks jobs 3 (request {parent = Just root.run})
+    withAsync (waitForChildren jobs (AgentTurnId 1) [2, 3]) $ \joining -> do
+      timeout 20000 (wait joining) `shouldReturn` Nothing
+      completeJob jobs first.run Succeeded (JobResult "obsolete partial result" Nothing)
+      finishTurnRuntime tasks oldRuntime
+      detachJobTurn jobs first.run
+      replaceJob jobs request.group request.principal False 2 "replacement child" `shouldReturn` Right ()
+      Left replacement <- takeWork jobs
+      replacement.run `shouldBe` JobRun 2 2
+      completeJob jobs second.run Succeeded (JobResult "sibling result" Nothing)
+      timeout 20000 (wait joining) `shouldReturn` Nothing
+      completeJob jobs replacement.run Succeeded (JobResult "replacement result" Nothing)
+      Just (Right (ChildrenFinished results)) <- timeout 1000000 (wait joining)
+      map (.result) results `shouldBe` map (Just . (`JobResult` Nothing)) ["replacement result", "sibling result"]
+      observeJobEvents jobs (AgentTurnId 1) `shouldReturn` []
+
+  it "replaces a cached partial success with cancellation before a join collects the batch" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (first, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    (second, _) <- launch tasks jobs 3 (request {parent = Just root.run})
+    withAsync (waitForChildren jobs (AgentTurnId 1) [2, 3]) $ \joining -> do
+      timeout 20000 (wait joining) `shouldReturn` Nothing
+      completeJob jobs first.run Succeeded (JobResult "revoked success" Nothing)
+      cancelJob jobs request.group request.principal False 2 "cancel cached result" `shouldReturn` Right ()
+      completeJob jobs second.run Succeeded (JobResult "sibling result" Nothing)
+      Just (Right (ChildrenFinished results)) <- timeout 1000000 (wait joining)
+      map (.status) results `shouldBe` [Cancelled, Succeeded]
+      observeJobEvents jobs (AgentTurnId 1) `shouldReturn` []
+
+  it "expires an unclaimed admission reservation when its root is replaced" $ do
+    (tasks, jobs, request) <- fixture
+    caller <- beginTurnRuntime tasks (reference 99) request.group (UserId 7) Nothing
+    Right original <- admitJob jobs (Just (AgentTurnId 99)) 1 request {awaited = True}
+    replaceJob jobs request.group request.principal False 1 "replacement root" `shouldReturn` Right ()
+    Left replacement <- takeWork jobs
+    atomically (turnEvents caller >>= Events.close)
+    completeJob jobs replacement.run Succeeded (JobResult "new root report" Nothing)
+    Right (Router.JobReport relay) <- takeWork jobs
+    relay.job.run `shouldBe` replacement.run
+    awaitJob jobs (AgentTurnId 99) original.run `shouldReturnSatisfying` isLeft
 
   it "rejects guests immediately at the tree/global limits and releases slots once" $ do
     (tasks, jobs, request) <- fixture

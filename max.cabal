@@ -182,6 +182,7 @@ library
         Max.Context.Projection
         Max.Node.Executor
         Max.Node.Events
+        Max.Node.Futures
         Max.Node.Render
         Max.Node.Router
         Max.Node.Routing
@@ -758,6 +759,7 @@ test-suite max-test
         Max.Context.ProjectionSpec
         Max.Node.ExecutorSpec
         Max.Node.EventsSpec
+        Max.Node.FuturesSpec
         Max.Node.RouterSpec
         Max.Node.RoutingSpec
         Max.Task.DelegationSpec

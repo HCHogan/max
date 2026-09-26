@@ -74,6 +74,7 @@ import Max.Execution.Authority (CallAuthority, callIsActive, callIsCurrent, call
 import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation (..))
 import Max.LLM.Types (TokenUsage)
 import Max.Node.Events qualified as Events
+import Max.Node.Futures qualified as Futures
 import Max.Node.Router qualified as Router
 import Max.Platform.Types (CanonicalMessageId, PrincipalId)
 import Max.Task.Policy (treeModelRounds, treeToolCalls)
@@ -99,9 +100,7 @@ data Entry = Entry
     parentTurn :: !(Maybe AgentTurnId),
     question :: !(Maybe (TMVar Value)),
     deliveryVersion :: !Int,
-    budgetExhausted :: !Bool,
-    -- | The admitted agent call owns this report even before its wait registers.
-    awaiter :: !(Maybe AgentTurnId)
+    budgetExhausted :: !Bool
   }
 
 data Jobs = Jobs
@@ -112,12 +111,12 @@ data Jobs = Jobs
     resultRouter :: !Router.Router,
     resultNotices :: !(TVar (Map AgentTurnId Router.Relay)),
     reportNotices :: !(TVar (Map AgentTurnId Router.ReportRelay)),
-    childWaiters :: !(TVar (Map (AgentTurnId, Int64) Int)),
+    reportFutures :: !(Futures.Futures AgentTurnId Int64 JobView),
     tasks :: !TaskRegistry
   }
 
 newJobs :: TaskRegistry -> IO Jobs
-newJobs tasks = Jobs <$> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO False <*> newTVarIO Map.empty <*> Router.newRouter <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> pure tasks
+newJobs tasks = Jobs <$> newTVarIO Map.empty <*> newTVarIO Map.empty <*> newTVarIO False <*> newTVarIO Map.empty <*> Router.newRouter <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> atomically Futures.newFutures <*> pure tasks
 
 -- | Admission never waits: a paused ancestor must not occupy the slot a
 -- descendant is queued for. The release action is idempotent and survives job
@@ -207,11 +206,10 @@ admitJobWithAuthority authority jobs caller identifier requested = do
     allowed <- maybe (pure True) (turnIsLive jobs.tasks) caller
     resultOwners <- Router.referencedOwners jobs.resultRouter
     current <- readTVar jobs.entries
-    waiters <- readTVar jobs.childWaiters
+    awaitedChildren <- Futures.retainedKeys jobs.reportFutures
     events <- Events.newNode >>= Events.newTask
     callerEvents <- maybe (pure Nothing) (lookupTurnEvents jobs.tasks) caller
-    let awaitedChildren = Set.fromList [child | ((_, child), _) <- Map.toList waiters]
-        owned job = Set.member job.view.run resultOwners || Set.member job.view.run.jobId awaitedChildren || taskIsLive job.view.status || isJust job.runtime || job.reportSource /= NoReport || isJust job.awaiter || maybe False (liveRun current) job.view.spec.parent
+    let owned job = Set.member job.view.run resultOwners || Set.member job.view.run.jobId awaitedChildren || taskIsLive job.view.status || isJust job.runtime || job.reportSource /= NoReport || maybe False (liveRun current) job.view.spec.parent
         ancestry = Set.fromList [parent.view.run | job <- Map.elems current, owned job, parent <- ancestors current job.view.spec.parent]
         retained job = owned job || Set.member job.view.run ancestry
         completed = sortOn (Down . (.view.created)) (filter (not . retained) (Map.elems current))
@@ -223,10 +221,9 @@ admitJobWithAuthority authority jobs caller identifier requested = do
         run = JobRun identifier 1
         root = maybe run (.root) (lookupRun kept =<< spec.parent)
         view = JobView run spec Queued Nothing Nothing 0 0 now True emptyJobUsage Nothing []
-        awaiter = if spec.awaited then caller else Nothing
         guestTree = maybe (maybe (Right run) Left caller) (.guestTree) (lookupRun kept =<< spec.parent)
         parentEvents = maybe callerEvents (fmap (.events) . lookupRun kept) spec.parent
-        newEntry = Entry view root guestTree Nothing Set.empty NoReport events parentEvents caller Nothing 0 False awaiter
+        newEntry = Entry view root guestTree Nothing Set.empty NoReport events parentEvents caller Nothing 0 False
         invalid detail = pure (Left detail)
     let parentAllowed owner = case lookupRun kept owner of
           Just parent -> taskIsLive parent.view.status || (parent.view.status /= Cancelled && currentRuntime parent && fmap ((.atrTurnId) . snd) parent.runtime == caller && maybe False (`callMatchesTool` "agent") authority)
@@ -255,6 +252,11 @@ admitJobWithAuthority authority jobs caller identifier requested = do
                                 let addChild parent = parent {children = Set.insert run parent.children}
                                     withParent = maybe kept (\owner -> Map.adjust addChild owner.jobId kept) spec.parent
                                 writeTVar jobs.entries (Map.insert identifier newEntry withParent)
+                                when spec.awaited $ forM_ caller $ \owner ->
+                                  Futures.reserve jobs.reportFutures owner identifier $ do
+                                    live <- turnIsLive jobs.tasks owner
+                                    latest <- readTVar jobs.entries
+                                    pure (live && isJust (lookupRun latest run))
                                 pure (Right view)
 
 -- | The launch consumer claims job identity only. Node deliveries are consumed
@@ -323,14 +325,11 @@ completeJob jobs run status result = do
     entries <- readTVar jobs.entries
     case lookupRun entries run of
       Just entry | taskIsLive entry.view.status && not (taskIsLive status) -> do
-        -- A waiter that already ended cannot collect the report; relay it.
-        waiting <- hasReportWaiter jobs entry
         let stopped = if status == Cancelled then stopChildren now entries entry.children "parent job cancelled" else entries
             completed =
               entry
                 { view = entry.view {status = if entry.budgetExhausted then BudgetExhausted else status, result = Just result, finished = Just now},
-                  reportSource = if waiting && isNothing entry.view.spec.monitor then WaitingReport else PendingReport,
-                  awaiter = if waiting then entry.awaiter else Nothing
+                  reportSource = PendingReport
                 }
         writeTVar jobs.entries (Map.insert run.jobId completed stopped)
         signals <- revokeChanges jobs entries stopped
@@ -340,41 +339,57 @@ completeJob jobs run status result = do
       _ -> pure []
   sequence_ cancelled
 
-hasReportWaiter :: Jobs -> Entry -> STM Bool
-hasReportWaiter jobs entry = do
-  waiters <- readTVar jobs.childWaiters
-  let turns = maybe [] pure entry.awaiter <> [turn | ((turn, child), _) <- Map.toList waiters, child == entry.view.run.jobId]
-  or <$> mapM (turnIsLive jobs.tasks) turns
-
--- | A foreground turn waits for a root it admitted with @awaited@; the report
--- returns here instead of through a relay notice. If the turn stops waiting
--- first (cancelled, timed out, or the objective was replaced), the job becomes
--- an ordinary root again, so its report is still relayed.
+-- | Attach the future reserved by the admitted call, then consume its actual
+-- result and acknowledge ownership in the same transaction.
 awaitJob :: Jobs -> AgentTurnId -> JobRun -> IO (Either Text JobView)
-awaitJob jobs turn run = mask $ \restore -> restore waitReport `onException` atomically release
+awaitJob jobs turn run = mask $ \restore -> do
+  selected <- atomically $ do
+    turnIsLive jobs.tasks turn >>= flip unless (throwSTM TaskCancelled)
+    entries <- readTVar jobs.entries
+    case Map.lookup run.jobId entries of
+      Nothing -> pure (Left "job not found")
+      Just entry | entry.view.run /= run -> pure (Left "the job's objective was replaced; its report will be relayed")
+      _ ->
+        Futures.claim jobs.reportFutures turn run.jobId >>= \case
+          Nothing -> pure (Left "this turn is not waiting for that job")
+          Just ticket -> pure (Right ticket)
+  case selected of
+    Left detail -> pure (Left detail)
+    Right ticket -> restore (atomically (collect ticket)) `onException` atomically (releaseReports jobs ticket True)
   where
-    waitReport = atomically $ do
-      live <- turnIsLive jobs.tasks turn
-      unless live (throwSTM TaskCancelled)
+    collect ticket = do
+      turnIsLive jobs.tasks turn >>= flip unless (throwSTM TaskCancelled)
       entries <- readTVar jobs.entries
       case Map.lookup run.jobId entries of
         Just entry
-          | entry.awaiter /= Just turn -> pure (Left "this turn is not waiting for that job")
-          | entry.view.run /= run -> release >> pure (Left "the job's objective was replaced; its report will be relayed")
-          | taskIsLive entry.view.status -> retry
-          | otherwise -> do
-              writeTVar jobs.entries (Map.insert run.jobId entry {awaiter = Nothing, reportSource = NoReport} entries)
-              pure (Right entry.view)
-        Nothing -> pure (Left "job not found")
-    release = do
-      closing <- readTVar jobs.closed
-      modifyTVar' jobs.entries (Map.adjust (detach closing) run.jobId)
-    -- A report nobody collected is relayed like any root's, unless the job
-    -- was cancelled or shutdown already owns its notice.
-    detach closing entry
-      | entry.awaiter /= Just turn = entry
-      | taskIsLive entry.view.status || closing || entry.view.status == Cancelled = entry {awaiter = Nothing}
-      | otherwise = entry {awaiter = Nothing, reportSource = if isJust entry.view.result then PendingReport else NoReport}
+          | entry.view.run == run ->
+              Futures.await ticket >>= \case
+                Just [result] -> releaseReports jobs ticket False >> pure (Right (collectedReport entry result))
+                _ -> releaseReports jobs ticket True >> pure (Left "report future is no longer owned")
+        _ -> releaseReports jobs ticket True >> pure (Left "the job's objective was replaced; its report will be relayed")
+
+-- Reports settle once. Notes folded after task closure and usage booked by
+-- retained calls are observation-time metadata, read in the collection cut.
+collectedReport :: Entry -> JobView -> JobView
+collectedReport entry result = result {messages = entry.view.messages, usage = entry.view.usage}
+
+-- | Completion and acknowledgement cannot cross a replacement transaction.
+-- Abandonment releases only this ticket; another live join retains its values.
+releaseReports :: Jobs -> Futures.Ticket AgentTurnId Int64 JobView -> Bool -> STM ()
+releaseReports jobs ticket abandoned = do
+  identifiers <- Futures.release ticket
+  forM_ identifiers $ \identifier -> do
+    waiting <- Futures.hasSubscribers jobs.reportFutures identifier
+    modifyTVar'
+      jobs.entries
+      ( Map.adjust
+          ( \entry ->
+              if entry.reportSource /= WaitingReport
+                then entry
+                else entry {reportSource = if not abandoned then NoReport else if waiting then WaitingReport else PendingReport}
+          )
+          identifier
+      )
 
 -- | Book one completion against the job whose turn made it and every
 -- ancestor, so a root's report covers its whole tree.
@@ -409,8 +424,8 @@ flushReports jobs = do
   Router.flush jobs.resultRouter
   entries <- readTVar jobs.entries
   updated <- forM (Map.toList entries) $ \(identifier, original) -> do
-    waiting <- if original.reportSource == WaitingReport then hasReportWaiter jobs original else pure False
-    let entry = if original.reportSource == WaitingReport && not waiting then original {reportSource = PendingReport, awaiter = Nothing} else original
+    waiting <- if original.reportSource == WaitingReport then Futures.hasSubscribers jobs.reportFutures identifier else pure False
+    let entry = if original.reportSource == WaitingReport && not waiting then original {reportSource = PendingReport} else original
     if entry.reportSource /= PendingReport
       then pure (identifier, entry)
       else do
@@ -420,11 +435,15 @@ flushReports jobs = do
               pure $ case lookupRun current entry.view.run of
                 Just latest -> latest.deliveryVersion == entry.deliveryVersion && latest.view.status == entry.view.status && (isJust entry.view.spec.monitor || latest.view.status /= Cancelled || open)
                 Nothing -> False
-        accepted <- case entry.view.spec.monitor of
-          Just _ -> Router.deliverMonitorResult jobs.resultRouter entry.view valid
-          Nothing -> Router.deliverReport jobs.resultRouter entry.view entry.parentEvents valid (reportMessages jobs entry.view.run)
-        pure (identifier, entry {reportSource = if accepted then NoReport else PendingReport})
-  modifyTVar' jobs.entries (\current -> foldr (\(identifier, update) -> Map.adjust (\entry -> entry {reportSource = update.reportSource, awaiter = update.awaiter}) identifier) current updated)
+        owned <- if isNothing entry.view.spec.monitor then Futures.publish jobs.reportFutures identifier entry.view else pure False
+        if owned
+          then pure (identifier, entry {reportSource = WaitingReport})
+          else do
+            accepted <- case entry.view.spec.monitor of
+              Just _ -> Router.deliverMonitorResult jobs.resultRouter entry.view valid
+              Nothing -> Router.deliverReport jobs.resultRouter entry.view entry.parentEvents valid (reportMessages jobs entry.view.run)
+            pure (identifier, entry {reportSource = if accepted then NoReport else PendingReport})
+  modifyTVar' jobs.entries (\current -> foldr (\(identifier, update) -> Map.adjust (\entry -> entry {reportSource = update.reportSource}) identifier) current updated)
 
 jobEventTask :: Jobs -> AgentTurnId -> STM (Maybe Events.Task)
 jobEventTask jobs turn = do
@@ -440,31 +459,25 @@ waitForChildren jobs turn requested = mask $ \restore -> do
     case found of
       Left detail -> pure (Left detail)
       Right children -> do
-        let identifiers = map (.view.run.jobId) children
-        modifyTVar' jobs.childWaiters (\waiters -> foldr (\child -> Map.insertWith (+) (turn, child) 1) waiters identifiers)
-        pure (Right identifiers)
+        let identifiers = Set.fromList (map (.view.run.jobId) children)
+            ready = Map.fromList [(child.view.run.jobId, child.view) | child <- children, not (taskIsLive child.view.status)]
+        ticket <- Futures.subscribe jobs.reportFutures turn identifiers ready (turnIsLive jobs.tasks turn)
+        pure (Right (identifiers, ticket))
   case selected of
     Left detail -> pure (Left detail)
-    Right identifiers -> do
-      let release abandoned = atomically $ do
-            modifyTVar' jobs.childWaiters (\waiters -> foldr (\child -> Map.update (\n -> if n <= 1 then Nothing else Just (n - 1)) (turn, child)) waiters identifiers)
-            entries <- readTVar jobs.entries
-            updated <- forM identifiers $ \identifier -> case Map.lookup identifier entries of
-              Just child | child.reportSource == WaitingReport || child.awaiter == Just turn -> do
-                let released = if child.awaiter == Just turn then child {awaiter = Nothing} else child
-                waiting <- hasReportWaiter jobs released
-                let source = if child.reportSource /= WaitingReport then child.reportSource else if not abandoned then NoReport else if waiting then WaitingReport else PendingReport
-                pure (Just (identifier, released {reportSource = source}))
-              _ -> pure Nothing
-            writeTVar jobs.entries (Map.fromList (mapMaybe id updated) <> entries)
-          await =
-            atomically $
-              (if null identifiers then pure (Right []) else childrenFor identifiers) >>= \case
-                Left detail -> pure (Left detail)
-                Right found -> if any (taskIsLive . (.view.status)) found then retry else pure (Right (ChildrenFinished (map (.view) found)))
-      result <- restore await `onException` release True
-      release (case result of Left _ -> True; Right _ -> False)
-      pure result
+    Right (identifiers, ticket) ->
+      let collect = do
+            found <- if Set.null identifiers then pure (Right []) else childrenFor (Set.toList identifiers)
+            case found of
+              Left detail -> releaseReports jobs ticket True >> pure (Left detail)
+              Right children ->
+                Futures.await ticket >>= \case
+                  Just results -> do
+                    let enrich result = maybe result (`collectedReport` result) (find ((== result.run) . (.view.run)) children)
+                    releaseReports jobs ticket False
+                    pure (Right (ChildrenFinished (map enrich results)))
+                  Nothing -> throwSTM TaskCancelled
+       in restore (atomically collect) `onException` atomically (releaseReports jobs ticket True)
   where
     childrenFor identifiers = do
       live <- turnIsLive jobs.tasks turn
@@ -738,6 +751,10 @@ revokeChanges :: Jobs -> Map Int64 Entry -> Map Int64 Entry -> STM [IO ()]
 revokeChanges jobs previous updated = fmap catMaybes $ forM (Map.elems previous) $ \entry ->
   case Map.lookup entry.view.run.jobId updated of
     Just current | current.view.run /= entry.view.run || (current.view.status == Cancelled && entry.view.status /= Cancelled) -> do
+      Futures.invalidate jobs.reportFutures entry.view.run.jobId
+      when (current.view.status == Cancelled && isNothing current.view.spec.monitor) $ do
+        collected <- Futures.publish jobs.reportFutures entry.view.run.jobId current.view
+        when collected $ modifyTVar' jobs.entries (Map.adjust (\latest -> if latest.reportSource == PendingReport then latest {reportSource = WaitingReport} else latest) entry.view.run.jobId)
       let control = if current.view.run /= entry.view.run then Events.Replace current.view.spec.objective else Events.Cancel
       _ <- Events.deliver entry.events (Events.controlBody control)
       case entry.runtime of

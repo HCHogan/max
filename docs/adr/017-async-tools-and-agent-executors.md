@@ -116,8 +116,15 @@ observing the control cannot reopen the task or permit a final answer.
 Job generation/status changes, descendant controls and runtime authority
 revocation share one transaction before any worker cancellation callback runs.
 This also covers shutdown and descendants of a cancelled completion. Kills
-before activation prevent later log rebinding. The remaining node executor
-migration and removal of the waiter bridges remain in step 4.
+before activation prevent later log rebinding. Report waits now use owned node
+futures instead of `Jobs.Entry.awaiter` and `childWaiters`. Admission reserves a
+future before the worker can finish, and each explicit join has its own receipt.
+Futures retain actual results, including settled siblings while another child is
+still running. Collection and report acknowledgement share one transaction;
+abandonment releases exactly that subscription. Replacement invalidates cached
+outcomes without losing logical child joins, while generation-bound admission
+reservations expire. Cancellation replaces a cached partial success before the
+batch can be collected. The remaining node executor migration remains in step 4.
 `JobWork` is removed. Jobs exposes only a transactional launch claim; a separate
 consumer takes terminal receipts directly from `Node.Router`. Slow source loading
 cannot prevent result intake, and a blocked monitor writer cannot hold launch
