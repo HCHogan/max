@@ -58,7 +58,7 @@ taskToolsFor context =
     startTool =
       Tool
         { toolName = "agent",
-          toolDescription = "派一个子 agent 在后台工作。默认启动后立即返回 agent#：适合长研究、浏览器、sandbox 或 SSH 运维，简短告知用户已启动即可结束本轮，不要等待或轮询；它结束后报告交回前台，由你转述给发起者。wait=true 时在本次调用里等报告回来，返回已结束的子 agent（result.text，契约结果在 result.payload）：用于本轮就要用结果的子问题，多个独立子问题一起提交会并发执行；等待的子 agent 是叶子，不能再用 run_code。子 agent 不会直接向群里发言。profile 只收窄现有权限。每棵 agent 树共享 2000 次工具预留、2000 次模型请求和六小时截止时间，替换目标不重置；预算用完时各 agent 不再调用工具，直接写报告。token/cost 仅观测，不是硬额度。",
+          toolDescription = "派一个子 agent 在后台工作。默认启动后立即返回 agent#：适合长研究、浏览器、sandbox 或 SSH 运维，简短告知用户已启动即可结束本轮，不要等待或轮询；它结束后报告交回前台，由你转述给发起者。wait=true 时在本次调用里等报告回来，返回已结束的子 agent（result.text，契约结果在 result.payload）：用于本轮就要用结果的子问题，多个独立子问题一起提交会并发执行；子 agent 可以继续派生子任务并运行 run_code，等待工具时让出执行权。子 agent 不会直接向群里发言。profile 只收窄现有权限。每棵 agent 树共享 2000 次工具预留、2000 次模型请求和六小时截止时间，替换目标不重置；预算用完时各 agent 不再调用工具，直接写报告。token/cost 仅观测，不是硬额度。",
           toolSchema =
             toolObject
               [ ("objective", stringParam "自包含目标、约束和期望证据，不依赖整段聊天记录。"),
@@ -127,6 +127,6 @@ taskToolsFor context =
     progressTool =
       legacyTool
         "agent_progress"
-        "记录内部进度，重复状态去重；可通过 agent_status 查询，更新会交给派出你的上级 agent。不向聊天发送过程播报；结束后才发送最终结果。"
+        "更新内部进度，可通过 agent_status 查询。进度是状态，不作为消息发送给上级或聊天。"
         (toolObject [("summary", stringParam "当前进度、阻碍或正在验证的证据，最多 40000 字符。")] ["summary"])
         (parseArgs (withObject "agent progress" (.: "summary")) (fmap (either Left (const (Right (object ["recorded" .= True])))) . reportProgress))

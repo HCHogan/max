@@ -33,7 +33,6 @@ import Max.CodeMode.Execution
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion, runJavaScript)
 import Max.CodeMode.Wasm (WasmExit (..))
 import Max.Config (AppConfig (..), appConfigParser)
-import Max.Conversation (newConversations)
 import Max.DB.AgentTurn
 import Max.DB.Connection
 import Max.DB.Job (allocateJobId)
@@ -210,12 +209,11 @@ runOrdinary cfg opts pool sources group = do
 runChild :: AppConfig -> Options -> DbPool -> Map.Map Text Text -> TaskRegistry -> Jobs.Jobs -> JobView -> IORef [CallRecord] -> IO ()
 runChild cfg opts pool sources tasks jobs job records =
   bracket (attach pool tasks jobs job) cleanup $ \(turn, taskRuntime) -> do
-    conversations <- newConversations
     output <- newTurnOutputContext turn
     runtime <- newHttpRuntime
     let context = mkToolContext (TurnIdentity job.spec.group job.spec.source (UserId 1) (UserId 3) job.spec.principal Nothing (Just output)) capabilities {tcEffectCeiling = Just job.spec.grants}
         messages = [MsgSystem "Read every provided file using web_search(query=exact file path). It returns frozen repository source with source:path as its citation. Analyze the objective using those reads. End with one JSON value matching output_contract: claims contains concrete findings, sources contains every source:path read. Never delegate or run_code. Shape does not establish correctness; acknowledge insufficient evidence in the claims. Do not claim deployment or measured performance benefits.", MsgUser (job.spec.objective <> "\n" <> json job.spec.inputs <> "\noutput_contract: " <> json job.spec.contract)]
-    result <- withCompactLogger cfg.logColor Nothing $ \logger -> runEff . runConcurrent . runLog "max-workflow-eval" logger LogAttention . runWithConnectionPool pool . runBlob "/tmp/max-workflow-eval-blobs" . runLLM runtime (\_ _ _ -> pure ()) (\call -> atomicModifyIORef' records (\xs -> (call : xs, ()))) cfg.llm . runAgentRuntime jobs conversations (AgentLimits 12) (factory jobs sources) $ agentTurn taskRuntime (AgentContext context Nothing (Just 24) Nothing) opts.profile messages silentSink
+    result <- withCompactLogger cfg.logColor Nothing $ \logger -> runEff . runConcurrent . runLog "max-workflow-eval" logger LogAttention . runWithConnectionPool pool . runBlob "/tmp/max-workflow-eval-blobs" . runLLM runtime (\_ _ _ -> pure ()) (\call -> atomicModifyIORef' records (\xs -> (call : xs, ()))) cfg.llm . runAgentRuntime jobs (AgentLimits 12) (factory jobs sources) $ agentTurn taskRuntime (AgentContext context Nothing (Just 24) Nothing) opts.profile messages silentSink
     let answer = case result.outcome of
           Answered reply -> parseJobResult job.spec reply.body
           Interrupted _ _ -> Left "agent interrupted"

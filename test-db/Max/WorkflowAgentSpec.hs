@@ -2,6 +2,7 @@ module Max.WorkflowAgentSpec (Max.WorkflowAgentSpec.spec) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async
+import Control.Concurrent.STM (atomically, retry)
 import Control.Monad (forM_)
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -22,6 +23,7 @@ import Max.Effects.Tools
 import Max.Execution.Tools
 import Max.ExecutionSpec (DbEffects, hooks, withHost)
 import Max.Jobs qualified as Jobs
+import Max.Node.Events qualified as Events
 import Max.Platform.Types (CanonicalMessageId, PrincipalId, noAdvertisedCaps)
 import Max.Task.Delegation (parseJobResult)
 import Max.Task.State (TaskStatus (Cancelled, Succeeded))
@@ -122,9 +124,9 @@ spec pool = before_ (truncateAll pool) $ describe "agent() through the agent too
       child <- awaitChild running.jobs
       Jobs.steerJob running.jobs running.job.spec.group running.job.spec.principal Nothing running.job.run.jobId "new evidence" `shouldReturn` Right ()
       timeout 3000000 (takeMVar pausedSignal) `shouldReturn` Just ()
-      Jobs.jobHasFeedback running.jobs running.turn.atrTurnId `shouldReturn` True
+      atomically (Jobs.jobEventTask running.jobs running.turn.atrTurnId >>= maybe (pure False) (`Events.hasInterrupt` Events.noPending)) `shouldReturn` True
       Jobs.completeJob running.jobs child.run Succeeded (JobResult "actual report" Nothing)
-      _ <- Jobs.readJobInbox running.jobs running.turn.atrTurnId
+      _ <- atomically (Jobs.jobEventTask running.jobs running.turn.atrTurnId >>= maybe (pure []) Events.observe)
       putMVar resumeSignal ()
       result <- timeout 3000000 (Async.wait worker)
       fmap (.tiOutcome) result `shouldSatisfy` (\case Just (ToolSucceeded (Object fields)) -> KeyMap.lookup "value" fields == Just (String "actual report"); _ -> False)
@@ -227,7 +229,7 @@ runProgram pool jobs runtime turn context budget source = runProgramUsing pool j
 
 runProgramUsing :: DbPool -> Jobs.Jobs -> TurnRuntime -> AgentTurnRef -> ToolContext -> Maybe Int -> Text -> (ExecutionSession -> CodeModeResult -> Eff (Tools : DbEffects) a) -> IO a
 runProgramUsing pool jobs runtime turn context budget source continuation = do
-  let bound = (hooks jobs runtime) {ehAcquireGuest = liftIO (Jobs.acquireGuestSlot jobs turn.atrTurnId), ehInterrupt = Jobs.awaitFeedback jobs turn.atrTurnId}
+  let bound = (hooks jobs runtime) {ehAcquireGuest = liftIO (Jobs.acquireGuestSlot jobs turn.atrTurnId), ehInterrupt = (Jobs.jobEventTask jobs turn.atrTurnId >>= maybe retry (`Events.awaitInterrupt` Events.noPending))}
       runners = [tool | tool <- taskTools jobs context, tool.toolName `elem` ["agent", "agent_progress"]]
       present = map (.toolName) runners
   registry <- either (fail . show) pure (buildToolRegistry [definition | definition <- agentDefinitions, definition.tdRef.unToolRef `elem` present] runners)

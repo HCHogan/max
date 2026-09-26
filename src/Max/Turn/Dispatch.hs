@@ -5,6 +5,7 @@ module Max.Turn.Dispatch
 where
 
 import Control.Concurrent qualified as Thread
+import Control.Concurrent.STM qualified as STM
 import Control.Exception qualified as Exception
 import Control.Monad (unless, void, when)
 import Data.Foldable (for_)
@@ -75,6 +76,7 @@ import Max.Tasks
     TurnRuntime,
     activateTurnRuntime,
     beginTurnRuntime,
+    bindTurnEvents,
     finishTurnRuntime,
     setTurnExecutor,
     turnRuntimeAgentTurn,
@@ -273,8 +275,13 @@ forkDispatch start origin gm work = do
                   if running
                     then do
                       for_ nodeTask $ \handle -> liftIO (Conversation.actorFor handle) >>= mapM_ (liftIO . setTurnExecutor turn)
+                      liftIO . STM.atomically $ do
+                        target <- Conversation.eventsFor env.beConversations turnRef.atrTurnId
+                        for_ target $ \events -> do
+                          bound <- bindTurnEvents env.beTasks turnRef.atrTurnId events
+                          unless bound (STM.throwSTM TaskCancelled)
                       work outputCaps turn turnRef
-                    else finishAgentTurn turnRef TurnAborted 0 (Just "feedback consumed by the active conversation turn")
+                    else finishAgentTurn turnRef TurnAborted 0 (Just "feedback routed to the active conversation task")
               )
         )
           `finally` do

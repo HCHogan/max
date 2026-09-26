@@ -6,7 +6,7 @@
 -- or handles a content response under the turn's completion policy.
 -- Streaming emits safe fragments and tracks the accepted prefix per call.
 -- Turn.Dispatch owns the TurnRuntime and its cleanup; this interpreter installs
--- cancellation, checks it between steps, and consumes the execution inbox.
+-- cancellation, checks it between steps, and observes the node event log.
 module Max.Effects.Agent
   ( Agent,
     AgentLimits (..),
@@ -165,13 +165,13 @@ data Agent :: Effect where
 type instance DispatchOf Agent = Dynamic
 
 -- | Install scoped tools and drive the loop using the supplied admission,
--- journal and inbox interfaces. Visible output goes through the event sink.
+-- journal and event interfaces. Visible output goes through the event sink.
 runAgentWith ::
   forall es a.
   (LLM :> es, Concurrent :> es, Log :> es, IOE :> es) =>
   ExecutionAdmission es ->
   ExecutionJournal es ->
-  ExecutionInbox es ->
+  ExecutionEvents es ->
   Maybe (AgentTurnRef -> Eff es (Maybe (IO ()))) ->
   AgentLimits ->
   (ToolContext -> Either ToolCatalogError (ToolRegistry (ToolOutput : ToolControl : es))) ->
@@ -224,13 +224,12 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
               h = turn
           catalog <- either throwIO pure (toolFactory ctx.acTools)
           liftIO (atomically (writeTVar catalogRef catalog))
-          -- Drain any feedback notes that arrived since the previous turn.
+          -- Freeze newly observed events after the preceding poll and results.
           liftIO (checkTurnCancellation h)
-          published <- raise (raise (raise (inbox.eiObserve h ctx.acTools)))
-          feedback <- raise (raise (raise (inbox.eiRead (turnRuntimeAgentTurn h))))
+          published <- raise (raise (raise (inbox.eeObserve h ctx.acTools)))
           settled <- drainExecutionCompletions session
           let completionNote = if null settled then "" else "\n[已完成的异步调用]\n" <> TE.decodeUtf8 (LBS.toStrict (encode [object ["result" .= ref, "outcome" .= outcomeEnvelope invocation.tiOutcome] | (ref, invocation) <- settled]))
-              newNotes = published <> inputMessages (feedback <> completionNote)
+              newNotes = published <> inputMessages completionNote
               observedLog = Projection.appendObservation newNotes state.observations
               cursor = Projection.logCursor observedLog
           if n >= lims.maxTurns
@@ -264,13 +263,6 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                         turnsUsed = n + 1
                       }
                 Right response@(ContentResp text) -> do
-                  -- Before publishing an untouched draft, consume feedback that arrived
-                  -- during the call and let the model revise its answer.
-                  lateFeedback <-
-                    if T.null sent
-                      then raise (raise (raise (inbox.eiRead (turnRuntimeAgentTurn h))))
-                      else pure ""
-                  let lateMessages = inputMessages lateFeedback
                   let done =
                         pure . Left $
                           AgentResult
@@ -278,24 +270,24 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                               appended = Projection.taskTranscript observedLog (Projection.recordPoll cursor (Just (assistantMessage response)) prepared) cursor,
                               turnsUsed = n + 1
                             }
-                  case lateMessages of
-                    [] -> case ctx.acAnswerCheck >>= ($ text) of
-                      Just note
-                        | T.null sent && state.corrections < 2 -> do
-                            logInfo "agent: final answer rejected, asking again" $
-                              object ["reason" .= note, "length" .= T.length text]
-                            let retained = case response of
-                                  RawContentResp {} -> Just (assistantMessage response)
-                                  _ | not (T.null (T.strip text)) -> Just (assistantMessage response)
-                                  _ -> Nothing
-                                nextLog = Projection.appendObservation [MsgUser ("[system] " <> note)] observedLog
-                            pure (Right state {roundNumber = n + 1, corrections = state.corrections + 1, observations = nextLog, record = Projection.recordPoll cursor retained prepared})
-                      _ -> done
-                    xs -> do
-                      logInfo "agent: feedback arrived during final answer, continuing" $
-                        object ["count" .= length xs]
-                      let nextLog = Projection.appendObservation xs observedLog
-                      pure (Right state {roundNumber = n + 1, observations = nextLog, record = Projection.recordPoll cursor (Just (assistantMessage response)) prepared})
+                  case ctx.acAnswerCheck >>= ($ text) of
+                    Just note
+                      | T.null sent && state.corrections < 2 -> do
+                          logInfo "agent: final answer rejected, asking again" $
+                            object ["reason" .= note, "length" .= T.length text]
+                          let retained = case response of
+                                RawContentResp {} -> Just (assistantMessage response)
+                                _ | not (T.null (T.strip text)) -> Just (assistantMessage response)
+                                _ -> Nothing
+                              nextLog = Projection.appendObservation [MsgUser ("[system] " <> note)] observedLog
+                          pure (Right state {roundNumber = n + 1, corrections = state.corrections + 1, observations = nextLog, record = Projection.recordPoll cursor retained prepared})
+                    _ -> do
+                      finished <- raise (raise (raise (inbox.eeFinish h)))
+                      if finished
+                        then done
+                        else do
+                          logInfo "agent: unobserved interrupt at final answer, polling again" (object [])
+                          pure (Right state {roundNumber = n + 1, observations = observedLog, record = Projection.recordPoll cursor (Just (assistantMessage response)) prepared})
                 Right (ToolCallsResp raw narration tcs) -> do
                   logInfo "agent: tool calls" $
                     object
@@ -319,7 +311,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                   -- independent calls execute concurrently.
                   registered <- listCatalogTools
                   let baseHooks = executionHooks admission journal (toolGroupId ctx.acTools) h
-                      hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehInterrupt = inbox.eiInterrupt (turnRuntimeAgentTurn h), ehAcquireGuest = maybe (pure (Just (pure ()))) (\acquire -> acquire (turnRuntimeAgentTurn h)) guestAdmission}
+                      hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehInterrupt = inbox.eeInterrupt h, ehAcquireGuest = maybe (pure (Just (pure ()))) (\acquire -> acquire (turnRuntimeAgentTurn h)) guestAdmission}
                       requests = [ToolRequest tc.callId tc.callName tc.callArguments | tc <- tcs]
                   for_ tcs $ \tc ->
                     logInfo "agent: tool call" $ object ["id" .= tc.callId, "name" .= tc.callName, "args" .= previewJson 200 tc.callArguments]

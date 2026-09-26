@@ -13,6 +13,8 @@ module Max.Tasks
     turnRuntimeTaskId,
     turnRuntimeAgentTurn,
     turnExecutor,
+    turnEvents,
+    bindTurnEvents,
     turnObservationCursor,
     setTurnObservationCursor,
     setTurnExecutor,
@@ -52,6 +54,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Max.History.Types (MessageCursor)
+import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Executor
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), ExecutionOrdinal (..), TurnOutputContext, newTurnOutputContext, turnOutputAgentTurn)
@@ -91,7 +94,8 @@ data TaskEntry = TaskEntry
     -- 'activateTurnRuntime' supplies it.
     teCancel :: !(TVar (Maybe (IO ()))),
     -- | A @!kill@ has been accepted for this entry.
-    teKilled :: !(TVar Bool)
+    teKilled :: !(TVar Bool),
+    teEvents :: !(TVar Events.Task)
   }
 
 -- | Public snapshot of one task for @!ps@ output.
@@ -115,6 +119,20 @@ newtype TaskRegistry = TaskRegistry
 
 newTaskRegistry :: IO TaskRegistry
 newTaskRegistry = TaskRegistry <$> newTVarIO (0, Map.empty)
+
+turnEvents :: TurnRuntime -> STM Events.Task
+turnEvents = readTVar . (.trEntry.teEvents)
+
+bindTurnEvents :: TaskRegistry -> AgentTurnId -> Events.Task -> STM Bool
+bindTurnEvents registry turn events = do
+  (_, entries) <- readTVar registry.trState
+  case [entry | entry <- Map.elems entries, (turnOutputAgentTurn entry.teOutputContext).atrTurnId == turn] of
+    entry : _ -> do
+      previous <- readTVar entry.teEvents
+      Events.close previous
+      writeTVar entry.teEvents events
+      pure True
+    [] -> pure False
 
 turnObservationCursor :: TurnRuntime -> IO (Maybe MessageCursor)
 turnObservationCursor = readTVarIO . (.trObservationCursor)
@@ -161,6 +179,7 @@ beginTurnRuntime reg ref gid uid mTrigger = do
   observationCursor <- newTVarIO Nothing
   atomically $ do
     (n, m) <- readTVar reg.trState
+    events <- Events.newNode >>= Events.newTask >>= newTVar
     let tid = TaskId ("t" <> T.pack (show (n + 1)))
         entry =
           TaskEntry
@@ -173,7 +192,8 @@ beginTurnRuntime reg ref gid uid mTrigger = do
               teKind = kind,
               teProgressAt = progressAt,
               teCancel = cancel,
-              teKilled = killed
+              teKilled = killed,
+              teEvents = events
             }
     writeTVar reg.trState (n + 1, Map.insert tid entry m)
     pure
@@ -258,6 +278,7 @@ finishTurnRuntime :: TaskRegistry -> TurnRuntime -> IO ()
 finishTurnRuntime reg turn =
   atomically $ do
     readTVar turn.trExecutor >>= Executor.closeTask
+    turnEvents turn >>= Events.close
     modifyTVar' reg.trState (second (Map.delete turn.trEntry.teId))
 
 -- | Message ids in @gid@ that some turn is already handling: triggers

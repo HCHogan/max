@@ -133,7 +133,7 @@ spec pool = before_ (truncateAll pool) $
               . runBlob "var/images"
               . runLLM runtime (\_ _ _ -> pure ()) (\_ -> pure ()) config.llm
               . runOutbound tasks jobs deliveries
-              . runAgentWith admission journal (ExecutionInbox (const (pure "")) (const STM.retry) (\_ _ -> pure [])) Nothing (AgentLimits 2) (const (buildToolRegistry [] []))
+              . runAgentWith admission journal (ExecutionEvents (\_ _ -> pure []) (const STM.retry) (const (pure True))) Nothing (AgentLimits 2) (const (buildToolRegistry [] []))
               $ withAsync (deliveryWorker deliveries [transport])
               $ \sender -> do
                 link sender

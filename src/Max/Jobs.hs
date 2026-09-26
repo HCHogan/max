@@ -18,9 +18,8 @@ module Max.Jobs
     awaitJob,
     recordJobUsage,
     reportJobProgress,
-    readJobInbox,
-    jobHasFeedback,
-    awaitFeedback,
+    flushJobEvents,
+    jobEventTask,
     waitForChildren,
     listJobs,
     lookupJob,
@@ -45,18 +44,16 @@ where
 
 import Control.Concurrent.STM
 import Control.Exception (mask, onException)
-import Control.Monad (forM_, unless, void, when)
-import Data.Aeson (Value, encode, object, (.=))
+import Control.Monad (forM, forM_, unless, void, when)
+import Data.Aeson (encode, object, (.=))
 import Data.ByteString.Lazy qualified as LBS
-import Data.Foldable (find, toList)
+import Data.Foldable (find)
 import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, isNothing, mapMaybe)
 import Data.Ord (Down (..))
-import Data.Sequence (Seq, (|>))
-import Data.Sequence qualified as Seq
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -64,11 +61,12 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation (..))
 import Max.LLM.Types (TokenUsage)
+import Max.Node.Events qualified as Events
 import Max.Platform.Types (CanonicalMessageId, PrincipalId)
 import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State (TaskStatus (..), taskIsLive)
 import Max.Task.Types
-import Max.Tasks (TaskCancelled (..), TaskRegistry, cancelAgentTurnTask, turnIsLive)
+import Max.Tasks (TaskCancelled (..), TaskRegistry, bindTurnEvents, cancelAgentTurnTask, turnIsLive)
 import Max.Turn.Types (AgentTurnId, AgentTurnRef (..))
 import OneBot.Types (GroupId)
 
@@ -82,7 +80,7 @@ data Entry = Entry
     runtime :: !(Maybe (JobRun, AgentTurnRef)),
     children :: !(Set JobRun),
     childUpdates :: !(Set JobRun),
-    inbox :: !(Seq Value),
+    events :: !Events.Task,
     noticeVersion :: !Int,
     pendingNotice :: !(Maybe Text),
     pendingMonitor :: !Bool,
@@ -134,6 +132,7 @@ admitJob jobs caller identifier requested = do
     closing <- readTVar jobs.closed
     allowed <- maybe (pure True) (turnIsLive jobs.tasks) caller
     current <- readTVar jobs.entries
+    events <- Events.newNode >>= Events.newTask
     let retained job = taskIsLive job.view.status || isJust job.runtime || job.pendingMonitor || job.noticeInFlight || isJust job.pendingNotice || isJust job.awaiter || maybe False (liveRun current) job.view.spec.parent
         completed = sortOn (Down . (.view.created)) (filter (not . retained) (Map.elems current))
         kept = Map.filter retained current <> Map.fromList [(entry.view.run.jobId, entry) | entry <- take 256 completed]
@@ -146,7 +145,7 @@ admitJob jobs caller identifier requested = do
         view = JobView run spec Queued Nothing Nothing 0 0 now True emptyJobUsage Nothing
         awaiter = if spec.awaited && isNothing spec.parent then caller else Nothing
         guestTree = maybe (maybe (Right run) Left caller) (.guestTree) (lookupRun kept =<< spec.parent)
-        newEntry = Entry view root guestTree Nothing Set.empty Set.empty Seq.empty 0 Nothing False False False awaiter
+        newEntry = Entry view root guestTree Nothing Set.empty Set.empty events 0 Nothing False False False awaiter
         invalid detail = pure (Left detail)
     if closing || not allowed || Map.member identifier current
       then invalid "job caller ended or identity already exists"
@@ -202,8 +201,9 @@ attachJobTurn jobs run turn = atomically $ do
   entries <- readTVar jobs.entries
   case lookupRun entries run of
     Just entry | entry.view.status == Running && isNothing entry.runtime -> do
-      writeTVar jobs.entries (Map.insert run.jobId (entry {runtime = Just (run, turn)}) entries)
-      pure True
+      bound <- bindTurnEvents jobs.tasks turn.atrTurnId entry.events
+      when bound $ writeTVar jobs.entries (Map.insert run.jobId (entry {runtime = Just (run, turn)}) entries)
+      pure bound
     _ -> pure False
 
 detachJobTurn :: Jobs -> JobRun -> IO ()
@@ -286,28 +286,33 @@ reportJobProgress jobs turn body = atomically $ do
   entries <- readTVar jobs.entries
   case entryForTurn entries turn of
     Just entry | currentRuntime entry && taskIsLive entry.view.status && not (T.null (T.strip body)) && T.length body <= 40000 -> do
-      let unchanged = entry.view.progress == Just body
-          -- Progress is observable through task status and the parent's inbox,
-          -- never a conversation publication. Only terminal results enqueue
-          -- notices; in particular monitor progress must not bypass its policy.
-          updated =
-            entry
-              { view = entry.view {progress = Just body}
-              }
-          notify parent = parent {childUpdates = Set.insert entry.view.run parent.childUpdates}
-          withParent = if unchanged then entries else maybe entries (\owner -> Map.adjust notify owner.jobId entries) entry.view.spec.parent
-      writeTVar jobs.entries (Map.insert entry.view.run.jobId updated withParent)
+      -- Status progress is not a message. Children use ChildSaid for that.
+      let updated = entry {view = entry.view {progress = Just body}}
+      writeTVar jobs.entries (Map.insert entry.view.run.jobId updated entries)
       pure True
     _ -> pure False
 
-readJobInbox :: Jobs -> AgentTurnId -> IO [Value]
-readJobInbox jobs turn = atomically $ do
+-- Completed child reports remain in the job registry if the bounded node log
+-- cannot accept their notification yet. They are never discarded on overflow.
+flushJobEvents :: Jobs -> AgentTurnId -> STM ()
+flushJobEvents jobs turn = do
   entries <- readTVar jobs.entries
   case entryForTurn entries turn of
     Just entry | currentRuntime entry && taskIsLive entry.view.status -> do
-      writeTVar jobs.entries (Map.insert entry.view.run.jobId (entry {inbox = Seq.empty, childUpdates = Set.empty}) entries)
-      pure (toList entry.inbox <> [object ["child_update" .= child.view] | run <- Set.toList entry.childUpdates, Just child <- [lookupRun entries run]])
-    _ -> pure []
+      delivered <- forM (Set.toList entry.childUpdates) $ \run -> case lookupRun entries run of
+        Nothing -> pure (Just run)
+        Just child -> do
+          accepted <- Events.deliver entry.events (Events.ChildDone run (object ["child_update" .= child.view]))
+          pure (if accepted then Just run else Nothing)
+      writeTVar jobs.entries (Map.insert entry.view.run.jobId entry {childUpdates = entry.childUpdates Set.\\ Set.fromList (mapMaybe id delivered)} entries)
+    _ -> pure ()
+
+jobEventTask :: Jobs -> AgentTurnId -> STM (Maybe Events.Task)
+jobEventTask jobs turn = do
+  entries <- readTVar jobs.entries
+  pure $ case entryForTurn entries turn of
+    Just entry | currentRuntime entry && taskIsLive entry.view.status -> Just entry.events
+    _ -> Nothing
 
 waitForChildren :: Jobs -> AgentTurnId -> [Int64] -> IO (Either Text JobWait)
 waitForChildren jobs turn requested = atomically $ do
@@ -384,26 +389,25 @@ steerJob :: Jobs -> GroupId -> PrincipalId -> Maybe CanonicalMessageId -> Int64 
 steerJob jobs group actor source identifier note = atomically $ do
   entries <- readTVar jobs.entries
   case Map.lookup identifier entries of
-    Just entry | entry.view.spec.group == group -> deliver entries entry
+    Just entry | entry.view.spec.group == group -> deliver entry
     _ -> pure (Left ("no " <> taskHandle identifier <> " in this conversation"))
   where
-    deliver entries entry
+    deliver entry
       | not (taskIsLive entry.view.status) = pure (Left (taskHandle identifier <> " has already finished"))
       | T.null (T.strip note) = pure (Left "feedback is empty")
       | T.length note > 8000 = pure (Left "feedback exceeds 8000 characters")
-      | Seq.length entry.inbox >= 256 = pure (Left "job feedback inbox is full")
       | otherwise = do
           let feedback = object ["author" .= actor, "source_message" .= source, "body" .= note]
-          writeTVar jobs.entries (Map.insert identifier (appendInbox feedback entry) entries)
-          pure (Right ())
+          accepted <- Events.deliver entry.events (Events.Steered feedback)
+          pure (if accepted then Right () else Left "job event log is full or its task has ended")
 
 cancelJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> Text -> IO (Either Text ())
-cancelJob jobs group actor admin identifier reason = controlJob jobs group actor admin identifier $ \now entries entry ->
+cancelJob jobs group actor admin identifier reason = controlJob jobs group actor admin identifier $ \now entries entry _ ->
   let (stopped, turns) = stopChildren now entries (Set.singleton entry.view.run) reason
    in Right (stopped, turns)
 
 replaceJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> Text -> IO (Either Text ())
-replaceJob jobs group actor admin identifier objective = controlJob jobs group actor admin identifier $ \now entries entry ->
+replaceJob jobs group actor admin identifier objective = controlJob jobs group actor admin identifier $ \now entries entry freshEvents ->
   if T.null (T.strip objective) || T.length objective > 40000
     then Left "invalid replacement objective"
     else
@@ -415,7 +419,7 @@ replaceJob jobs group actor admin identifier objective = controlJob jobs group a
               { view = entry.view {run, spec, status = Queued, progress = Nothing, result = Nothing, finished = Nothing},
                 children = Set.empty,
                 childUpdates = Set.empty,
-                inbox = Seq.empty,
+                events = freshEvents,
                 noticeVersion = entry.noticeVersion + 1,
                 pendingNotice = Nothing,
                 pendingMonitor = False,
@@ -426,16 +430,17 @@ replaceJob jobs group actor admin identifier objective = controlJob jobs group a
           withParent = maybe stopped (\parent -> Map.adjust updateParent parent.jobId stopped) spec.parent
        in Right (Map.insert identifier replacement withParent, turns <> maybe [] (pure . (.atrTurnId) . snd) entry.runtime)
 
-controlJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> (UTCTime -> Map Int64 Entry -> Entry -> Either Text (Map Int64 Entry, [AgentTurnId])) -> IO (Either Text ())
+controlJob :: Jobs -> GroupId -> PrincipalId -> Bool -> Int64 -> (UTCTime -> Map Int64 Entry -> Entry -> Events.Task -> Either Text (Map Int64 Entry, [AgentTurnId])) -> IO (Either Text ())
 controlJob jobs group actor admin identifier transition = do
   now <- getCurrentTime
   outcome <- atomically $ do
     entries <- readTVar jobs.entries
     case Map.lookup identifier entries of
-      Just entry | entry.view.spec.group == group && (admin || entry.view.spec.principal == actor) && taskIsLive entry.view.status ->
-        case transition now entries entry of
+      Just entry | entry.view.spec.group == group && (admin || entry.view.spec.principal == actor) && taskIsLive entry.view.status -> do
+        fresh <- Events.newNode >>= Events.newTask
+        case transition now entries entry fresh of
           Left detail -> pure (Left detail)
-          Right (updated, turns) -> writeTVar jobs.entries updated >> pure (Right turns)
+          Right (updated, turns) -> Events.close entry.events >> writeTVar jobs.entries updated >> pure (Right turns)
       _ -> pure (Left "live job not found or owner permission required")
   case outcome of
     Left detail -> pure (Left detail)
@@ -464,9 +469,6 @@ entryForTurn entries turn = find ((== Just turn) . fmap ((.atrTurnId) . snd) . (
 
 currentRuntime :: Entry -> Bool
 currentRuntime entry = fmap fst entry.runtime == Just entry.view.run
-
-appendInbox :: Value -> Entry -> Entry
-appendInbox note entry = entry {inbox = Seq.take 256 (entry.inbox |> note)}
 
 stopChildren :: UTCTime -> Map Int64 Entry -> Set JobRun -> Text -> (Map Int64 Entry, [AgentTurnId])
 stopChildren now entries children reason = Set.foldl' stop (entries, []) children
@@ -574,15 +576,3 @@ monitorAvailable entries candidate = case candidate.view.spec.monitor of
         other.view.run == candidate.view.run
           || fmap (.definitionId) other.view.spec.monitor /= Just monitor.definitionId
           || (other.view.status /= Running && isNothing other.runtime)
-
-awaitFeedback :: Jobs -> AgentTurnId -> STM ()
-awaitFeedback jobs turn = do
-  entries <- readTVar jobs.entries
-  case entryForTurn entries turn of
-    Just entry | currentRuntime entry && taskIsLive entry.view.status -> check (not (Seq.null entry.inbox))
-    _ -> retry
-
-jobHasFeedback :: Jobs -> AgentTurnId -> IO Bool
-jobHasFeedback jobs turn = do
-  entries <- readTVarIO jobs.entries
-  pure $ maybe False (not . Seq.null . (.inbox)) (entryForTurn entries turn)

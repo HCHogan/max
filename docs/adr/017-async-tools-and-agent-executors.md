@@ -2,21 +2,27 @@
 
 Status: in progress 2026-09-26. Delivery steps 1–2 are implemented: poll-driven
 guests, shared per-call scheduling, native async interruption and paused guest
-resume/cancel using the current inbox. Projection and node scheduling (steps
+resume/cancel through node interrupts. Projection and node scheduling (steps
 3–4), including unified event routing and detached-result routing after a task
 ends, remain in progress. Root requests and guest drivers now share per-node
 execution permits: async awaits yield immediately, short-tool rounds yield at
 five seconds, and ready segments use the priority/FIFO order below. Up to 32
 tasks can be open on a root; additional admitted requests remain queued.
 Task records and observation-ordered projection now
-drive agent polls using the existing inbox; raw answers (including reasoning
+drive agent polls from frozen observations; raw answers (including reasoning
 and signatures), tool results and the initial window remain in the record.
 Compaction and media planning use explicit projection checkpoints. Root
 polls also observe later canonical public output through a frozen history cut,
 excluding their own publications and private traces. These public observations
 are bounded to 200 messages/about 32k tokens with context_read recovery.
-Unified event observations (including incoming user messages), their combined
-bounds and the open-task tail still need the event routing in step 4. Amends
+Frontend and background steering now enter a shared typed node event store;
+`ExecutionInbox`, the frontend feedback queue and the job feedback inbox are
+removed. One wake predicate classifies interrupts. Delivery and successful
+final-answer closure share STM, including already-streamed answers. Pending
+child-report references stay in Jobs until the bounded event store accepts them;
+progress changes status only. Full routing (new requests/replies, child relays,
+replacement/cancellation, native completions and monitor fires), combined
+observation bounds and the open-task tail remain in step 4. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)
 and the Wasm host ABI of [ADR-012](012-wasm-tool-execution.md). Work stays
 process-local; restart persistence is out of scope (§9).

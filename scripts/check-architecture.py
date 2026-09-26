@@ -121,6 +121,11 @@ def check_imports():
         if dependency.startswith(("Max.DB.", "Max.Effects.", "System.")) or dependency in {"Max.Env", "Max.Jobs", "Max.Conversation"}:
             errors.append(f"Node segment scheduler acquired tools, persistence or routing policy: {dependency}")
 
+    node_events = (ROOT / "src/Max/Node/Events.hs").read_text()
+    for dependency in IMPORT.findall(node_events):
+        if dependency.startswith(("Effectful", "Max.DB.", "Max.Effects.", "System.")) or dependency in {"Max.Env", "Max.Jobs", "Max.Tasks", "Max.Conversation"}:
+            errors.append(f"Node event policy acquired an execution or producer dependency: {dependency}")
+
     projection = (ROOT / "src/Max/Context/Projection.hs").read_text()
     for dependency in IMPORT.findall(projection):
         if dependency.startswith(("Effectful", "Max.DB.", "Max.Effects.", "System.")) or dependency in {"Max.Env", "Max.Agent.Runtime", "Max.Jobs", "Max.Conversation"}:

@@ -243,7 +243,7 @@ main = do
             . runReader env
             . runPlatforms qqEdge foreignEdges
             . runRuntimeEmbedding (pure (newEmbedClient httpRuntime <$> cfg.embedding))
-            . runAgentRuntime jobs conversations defaultLimits (allToolsFor httpRuntime env)
+            . runAgentRuntime jobs defaultLimits (allToolsFor httpRuntime env)
             $ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState logBuf clientRef mainTid
       )
       `finally` destroyAllBrowsers browsers

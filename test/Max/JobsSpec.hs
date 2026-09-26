@@ -1,8 +1,8 @@
 module Max.JobsSpec (Max.JobsSpec.spec) where
 
 import Control.Concurrent.Async (mapConcurrently, wait, withAsync)
-import Control.Concurrent.STM (atomically)
-import Control.Monad (forM_, replicateM)
+import Control.Concurrent.STM (STM, atomically, retry)
+import Control.Monad (forM_, replicateM, replicateM_)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Either (isLeft, isRight)
 import Data.Int (Int64)
@@ -14,6 +14,7 @@ import Max.Execution.Types (Admission (..), ExecutionStep (..), StepReservation 
 import Max.Jobs
 import Max.LLM.Types (CallCost (..), TokenUsage (..))
 import Max.Monitor.Types (MonitorFireId (..), MonitorId (..))
+import Max.Node.Events qualified as Events
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State
@@ -154,9 +155,9 @@ spec = describe "process-owned Jobs" $ do
       completeJob jobs child.run Succeeded (JobResult "child result" Nothing)
       Right (ChildrenFinished [result]) <- wait joining
       result.result `shouldBe` Just (JobResult "child result" Nothing)
-    notes <- readJobInbox jobs (AgentTurnId 1)
+    notes <- observeJobEvents jobs (AgentTurnId 1)
     length notes `shouldBe` 1
-    readJobInbox jobs (AgentTurnId 1) `shouldReturn` []
+    observeJobEvents jobs (AgentTurnId 1) `shouldReturn` []
     timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
 
   it "signals attributed feedback without completing the child future" $ do
@@ -165,9 +166,9 @@ spec = describe "process-owned Jobs" $ do
     _ <- admitJob jobs Nothing 2 (request {parent = Just root.run})
     withAsync (waitForChildren jobs (AgentTurnId 1) [2]) $ \joining -> do
       steerJob jobs request.group (PrincipalId 8) (Just (CanonicalMessageId 55)) 1 "new evidence" `shouldReturn` Right ()
-      timeout 20000 (atomically (awaitFeedback jobs (AgentTurnId 1))) `shouldReturn` Just ()
+      timeout 20000 (atomically (awaitJobInterrupt jobs (AgentTurnId 1))) `shouldReturn` Just ()
       timeout 20000 (wait joining) `shouldReturn` Nothing
-    readJobInbox jobs (AgentTurnId 1) `shouldReturn` [object ["author" .= PrincipalId 8, "source_message" .= CanonicalMessageId 55, "body" .= String "new evidence"]]
+    observeJobEvents jobs (AgentTurnId 1) `shouldReturn` [object ["author" .= PrincipalId 8, "source_message" .= CanonicalMessageId 55, "body" .= String "new evidence"]]
     waitForChildren jobs (AgentTurnId 1) [99] >>= (`shouldSatisfy` isLeft)
 
   it "wakes a waiting parent when its turn is cancelled outside Jobs" $ do
@@ -185,7 +186,7 @@ spec = describe "process-owned Jobs" $ do
     cancelJob jobs request.group request.principal False 2 "cancel child" `shouldReturn` Right ()
     Right (ChildrenFinished [cancelled]) <- waitForChildren jobs (AgentTurnId 1) []
     cancelled.status `shouldBe` Cancelled
-    notes <- readJobInbox jobs (AgentTurnId 1)
+    notes <- observeJobEvents jobs (AgentTurnId 1)
     notes `shouldBe` [object ["child_update" .= cancelled]]
 
   it "returns an awaited root's report to the waiting turn instead of a relay notice" $ do
@@ -292,7 +293,28 @@ spec = describe "process-owned Jobs" $ do
     body `shouldBe` "final"
     noticeIsCurrent jobs final.run finalVersion `shouldReturn` True
 
-  it "keeps monitor progress internal and still notifies parents of child progress" $ do
+  it "does not attach node events to a runtime that has already ended" $ do
+    (tasks, jobs, request) <- fixture
+    Right job <- admitJob jobs Nothing 1 request
+    LaunchJob _ <- takeJobWork jobs
+    runtime <- beginTurnRuntime tasks (reference 1) request.group (UserId 7) Nothing
+    finishTurnRuntime tasks runtime
+    attachJobTurn jobs job.run (reference 1) `shouldReturn` False
+
+  it "retains a completed child report when the node event buffer is full" $ do
+    (tasks, jobs, request) <- fixture
+    (root, _) <- launch tasks jobs 1 request
+    (child, _) <- launch tasks jobs 2 (request {parent = Just root.run})
+    replicateM_ 256 $ steerJob jobs request.group request.principal Nothing 1 "feedback" `shouldReturn` Right ()
+    completeJob jobs child.run Succeeded (JobResult "retained report" Nothing)
+    first <- observeJobEvents jobs (AgentTurnId 1)
+    length first `shouldBe` 200
+    second <- observeJobEvents jobs (AgentTurnId 1)
+    length second `shouldBe` 57
+    T.pack (show second) `shouldSatisfy` T.isInfixOf "retained report"
+    observeJobEvents jobs (AgentTurnId 1) `shouldReturn` []
+
+  it "keeps monitor and child progress in status rather than delivering messages" $ do
     (tasks, jobs, request) <- fixture
     (root, _) <- launch tasks jobs 1 (request {monitor = Just (JobMonitor (MonitorId 10) (MonitorFireId 1))})
     reportJobProgress jobs (AgentTurnId 1) "monitor progress" `shouldReturn` True
@@ -301,9 +323,9 @@ spec = describe "process-owned Jobs" $ do
     reportJobProgress jobs (AgentTurnId 2) "child progress" `shouldReturn` True
     Just current <- lookupJob jobs request.group child.run.jobId
     current.progress `shouldBe` Just "child progress"
-    readJobInbox jobs (AgentTurnId 1) `shouldReturn` [object ["child_update" .= current]]
+    observeJobEvents jobs (AgentTurnId 1) `shouldReturn` []
     reportJobProgress jobs (AgentTurnId 2) "child progress" `shouldReturn` True
-    readJobInbox jobs (AgentTurnId 1) `shouldReturn` []
+    observeJobEvents jobs (AgentTurnId 1) `shouldReturn` []
     timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
 
   it "blocks background publication and tracks notice replies without reviving old work" $ do
@@ -347,7 +369,7 @@ spec = describe "process-owned Jobs" $ do
     forM_ [1 .. 160] $ \identifier -> admitJob jobs Nothing identifier request >>= (`shouldSatisfy` isRight)
     admitJob jobs Nothing 161 request >>= (`shouldSatisfy` isLeft)
     forM_ [1 .. 256 :: Int] $ \_ -> steerJob jobs request.group request.principal Nothing 1 "note" `shouldReturn` Right ()
-    steerJob jobs request.group request.principal Nothing 1 "overflow" `shouldReturn` Left "job feedback inbox is full"
+    steerJob jobs request.group request.principal Nothing 1 "overflow" `shouldReturn` Left "job event log is full or its task has ended"
     steerJob jobs request.group request.principal Nothing 2 (T.replicate 8001 "x") `shouldReturn` Left "feedback exceeds 8000 characters"
     steerJob jobs request.group request.principal Nothing 999 "note" `shouldReturn` Left "no agent#999 in this conversation"
     Just third <- lookupJob jobs request.group 3
@@ -389,3 +411,13 @@ launch tasks jobs identifier request = do
 
 reference :: Int64 -> AgentTurnRef
 reference identifier = AgentTurnRef (AgentTurnId identifier) (TurnOrdinal identifier)
+
+observeJobEvents :: Jobs -> AgentTurnId -> IO [Value]
+observeJobEvents jobs turn = atomically $ do
+  flushJobEvents jobs turn
+  target <- jobEventTask jobs turn
+  events <- maybe (pure []) Events.observe target
+  pure [value | event <- events, value <- case event.body of Events.Steered value -> [value]; Events.ChildDone _ value -> [value]; _ -> []]
+
+awaitJobInterrupt :: Jobs -> AgentTurnId -> STM ()
+awaitJobInterrupt jobs turn = jobEventTask jobs turn >>= maybe retry (`Events.awaitInterrupt` Events.noPending)

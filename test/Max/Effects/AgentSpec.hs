@@ -19,7 +19,7 @@ import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Concurrent.Async (Concurrent, runConcurrent)
 import Effectful.Log (Log, runLog)
 import Log (LogLevel (LogAttention))
-import Max.Agent.Execution (ExecutionAdmission (..), ExecutionInbox (..), ExecutionJournal (..))
+import Max.Agent.Execution (ExecutionAdmission (..), ExecutionEvents (..), ExecutionJournal (..))
 import Max.Agent.Failure (AgentFailure (..))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.CodeMode.JavaScript (javaScriptRuntimeVersion)
@@ -67,7 +67,15 @@ runTestAgentObserved inputs observe =
   runAgentWith
     (ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted))
     (ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ()))
-    (ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inputs (\notes -> ([], T.intercalate "\n" notes))) (const STM.retry) (\_ _ -> liftIO observe))
+    ( ExecutionEvents
+        ( \_ _ -> liftIO $ do
+            published <- observe
+            notes <- atomicModifyIORef' inputs ([],)
+            pure (published <> [inputMessage (T.intercalate "\n" notes) | not (null notes)])
+        )
+        (const STM.retry)
+        (\_ -> liftIO (null <$> readIORef inputs))
+    )
     Nothing
 
 inputMessage :: Text -> ChatMessage
@@ -831,7 +839,7 @@ spec = describe "Agent full loop" $ do
             }
         admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure OverBudget)
         journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
-        inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' _inputs (\notes -> ([], T.intercalate "\n" notes))) (const STM.retry) (\_ _ -> pure [])
+        inputs = ExecutionEvents (\_ _ -> liftIO $ atomicModifyIORef' _inputs (\notes -> ([], [inputMessage (T.intercalate "\n" notes) | not (null notes)]))) (const STM.retry) (\_ -> liftIO (null <$> readIORef _inputs))
     result <- withCompactLogger ColorNever Nothing $ \logger ->
       runEff . runConcurrent . runLog "budget-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 4) (const (buildToolRegistry [echoDefinition] [counted])) $
         agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
@@ -898,7 +906,7 @@ spec = describe "Agent full loop" $ do
             )
         admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted)
         journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
-        inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inbox ("",)) (const STM.retry) (\_ _ -> pure [])
+        inputs = ExecutionEvents (\_ _ -> liftIO $ atomicModifyIORef' inbox (\text -> ("", [inputMessage text | not (T.null text)]))) (const STM.retry) (\_ -> liftIO (T.null <$> readIORef inbox))
     result <- withCompactLogger ColorNever Nothing $ \logger ->
       runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 3) (const (buildToolRegistry [] [])) $
         agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
@@ -938,17 +946,22 @@ spec = describe "Agent full loop" $ do
     _ <- finishTurnRuntime tasks turn
     (null <$> listTasks tasks (Just (GroupId 7777))) `shouldReturn` True
 
-  it "leaves input that races a streamed final paragraph unread for the next queued turn" $ do
+  it "polls again when an interrupt races a streamed final paragraph" $ do
     events <- newIORef []
     _inputs <- newIORef []
     tasks <- newTaskRegistry
     turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     injected <- newIORef False
+    calls <- newIORef (0 :: Int)
     let streamingLLM =
           LLMInterpreter
             { liChat = \_ _ _ _ mSink -> do
-                for_ mSink (\sink -> sink "第一段\n\n还在生成")
-                pure (Right (ContentResp "第一段\n\n还在生成"))
+                roundNo <- liftIO (atomicModifyIORef' calls (\n -> (n + 1, n)))
+                if roundNo == 0
+                  then do
+                    for_ mSink (\sink -> sink "第一段\n\n还在生成")
+                    pure (Right (ContentResp "第一段\n\n还在生成"))
+                  else pure (Right (ContentResp "已按补充修正"))
             }
     result <-
       withCompactLogger ColorNever Nothing $ \logger ->
@@ -961,6 +974,7 @@ spec = describe "Agent full loop" $ do
     finishTurnRuntime tasks turn
 
     Answered reply <- pure result.outcome
-    reply.publishedPrefix `shouldBe` "第一段\n\n"
-    readIORef _inputs `shouldReturn` ["[feedback]: 流式期间补充"]
+    reply `shouldBe` AgentReply "已按补充修正" ""
+    readIORef calls `shouldReturn` 2
+    readIORef _inputs `shouldReturn` []
     (null <$> listTasks tasks (Just (GroupId 7777))) `shouldReturn` True

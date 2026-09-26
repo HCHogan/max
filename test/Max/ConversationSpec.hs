@@ -8,7 +8,10 @@ import Data.Maybe (isNothing)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Max.Conversation
+import Max.LLM.Types (ChatMessage (MsgUser))
+import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Node
+import Max.Node.Render (renderEvents)
 import Max.Platform.Types (PrincipalId (..))
 import Max.Task.FrontendInput (FrontendInputView (..))
 import Max.Turn.Types (AgentTurnId (..))
@@ -27,7 +30,7 @@ spec = describe "Max.Conversation" $ do
       next <- admit queue ((request 2) {principal = PrincipalId 99})
       timeout 1000000 (awaitTurn next) `shouldReturn` Just True
       feedback <- admit queue (steering 3)
-      text <- readFeedback queue (AgentTurnId 1)
+      text <- observeFrontend queue (AgentTurnId 1)
       text `shouldSatisfy` T.isInfixOf "correction"
       awaitTurn feedback `shouldReturn` False
       release queue next
@@ -43,7 +46,7 @@ spec = describe "Max.Conversation" $ do
     awaitTurn other `shouldReturn` True
     withAsync (awaitTurn next) $ \waiting -> do
       (isNothing <$> timeout 20000 (wait waiting)) `shouldReturn` True
-      readFeedback queue (AgentTurnId 1) `shouldReturn` ""
+      observeFrontend queue (AgentTurnId 1) `shouldReturn` ""
       release queue first
       wait waiting `shouldReturn` True
 
@@ -53,11 +56,11 @@ spec = describe "Max.Conversation" $ do
     feedback <- admit queue (steering 2)
     outsider <- admit queue ((steering 3) {principal = PrincipalId 99})
     separate <- admit queue ((steering 4) {feedback = Nothing})
-    text <- readFeedback queue (AgentTurnId 1)
+    text <- observeFrontend queue (AgentTurnId 1)
     forM_ ["\"message_id\":2", "\"author_principal_id\":7", "\"reply_to\":1", "Alice", "correction"] $ \field ->
       text `shouldSatisfy` T.isInfixOf field
     awaitTurn feedback `shouldReturn` False
-    readFeedback queue (AgentTurnId 1) `shouldReturn` ""
+    observeFrontend queue (AgentTurnId 1) `shouldReturn` ""
     withAsync (awaitTurn outsider) $ \waiting -> (isNothing <$> timeout 20000 (wait waiting)) `shouldReturn` True
     withAsync (awaitTurn separate) $ \waiting -> (isNothing <$> timeout 20000 (wait waiting)) `shouldReturn` True
 
@@ -66,29 +69,36 @@ spec = describe "Max.Conversation" $ do
     first <- admit queue (request 2)
     older <- admit queue (steering 1)
     other <- admit queue ((steering 3) {group = GroupId 9})
-    readFeedback queue (AgentTurnId 2) `shouldReturn` ""
+    observeFrontend queue (AgentTurnId 2) `shouldReturn` ""
     awaitTurn other `shouldReturn` True
     release queue first
     awaitTurn older `shouldReturn` True
 
-  it "orders feedback by canonical ingestion order, with a 32 item read bound" $ do
+  it "orders feedback by canonical ingestion order, with a 200 item observation bound" $ do
     queue <- newConversations
     _ <- admit queue (request 1)
-    forM_ (reverse [2 .. 35]) $ \n -> admit queue (steering n)
-    first <- readFeedback queue (AgentTurnId 1)
-    T.count "\"message_id\":" first `shouldBe` 32
+    forM_ (reverse [2 .. 203]) $ \n -> admit queue (steering n)
+    first <- observeFrontend queue (AgentTurnId 1)
+    T.count "\"message_id\":" first `shouldBe` 200
     map (T.isInfixOf "\"message_id\":2,") (take 1 (drop 1 (T.lines first))) `shouldBe` [True]
-    second <- readFeedback queue (AgentTurnId 1)
+    second <- observeFrontend queue (AgentTurnId 1)
     T.count "\"message_id\":" second `shouldBe` 2
-    readFeedback queue (AgentTurnId 1) `shouldReturn` ""
+    observeFrontend queue (AgentTurnId 1) `shouldReturn` ""
 
-  it "turns unread feedback into the next request at the finish boundary" $ do
+  it "atomically either accepts feedback before finishing or routes it to a new task" $ do
     replicateM_ 100 $ do
       queue <- newConversations
       first <- admit queue (request 1)
-      (_, next) <- concurrently (release queue first) (admit queue (steering 2))
-      awaitTurn next `shouldReturn` True
-      readFeedback queue (AgentTurnId 1) `shouldReturn` ""
+      Just target <- STM.atomically (eventsFor queue (AgentTurnId 1))
+      (finished, next) <- concurrently (STM.atomically (Events.tryFinish target)) (admit queue (steering 2))
+      if finished
+        then do
+          release queue first
+          awaitTurn next `shouldReturn` True
+        else do
+          awaitTurn next `shouldReturn` False
+          observeFrontend queue (AgentTurnId 1) >>= (`shouldSatisfy` T.isInfixOf "correction")
+          STM.atomically (Events.tryFinish target) `shouldReturn` True
 
   it "cancels a waiting ticket without releasing the current owner" $ do
     queue <- newConversations
@@ -115,7 +125,7 @@ spec = describe "Max.Conversation" $ do
       release queue next
       wait waiting `shouldReturn` True
     feedback <- admit queue (steering 4)
-    readFeedback queue (AgentTurnId 2) `shouldReturn` ""
+    observeFrontend queue (AgentTurnId 2) `shouldReturn` ""
     release queue notice
     awaitTurn feedback `shouldReturn` True
 
@@ -123,7 +133,7 @@ spec = describe "Max.Conversation" $ do
     queue <- newConversations
     _ <- admit queue (request 1)
     firstFeedback : _ <- mapM (admit queue . steering) [2 .. 256]
-    _ <- readFeedback queue (AgentTurnId 1)
+    _ <- observeFrontend queue (AgentTurnId 1)
     (isNothing <$> enqueue queue (request 257)) `shouldReturn` True
     release queue firstFeedback
     _ <- admit queue (request 257)
@@ -149,3 +159,9 @@ request n = TurnInput (GroupId 1) (AgentTurnId n) (PrincipalId 7) (Just n) Nothi
 
 steering :: Int64 -> TurnInput
 steering n = (request n) {feedback = Just (FrontendInputView n "steering" 7 (Just "Alice") (UTCTime (fromGregorian 2026 9 19) 0) (Just 1) "correction")}
+
+observeFrontend :: Conversations -> AgentTurnId -> IO T.Text
+observeFrontend queue turn = STM.atomically $ do
+  target <- eventsFor queue turn
+  events <- maybe (pure []) Events.observe target
+  pure (T.intercalate "\n" [text | MsgUser text <- renderEvents events])

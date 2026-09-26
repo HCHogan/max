@@ -181,6 +181,8 @@ library
         Max.Context.Working
         Max.Context.Projection
         Max.Node.Executor
+        Max.Node.Events
+        Max.Node.Render
         Max.Context.Types
         Max.ConversationScope
         Max.MCP.Client
@@ -749,6 +751,7 @@ test-suite max-test
         Max.Context.WorkingSpec
         Max.Context.ProjectionSpec
         Max.Node.ExecutorSpec
+        Max.Node.EventsSpec
         Max.Task.DelegationSpec
         Max.AutomationArgsSpec
         Max.Concurrent.LockSpec
