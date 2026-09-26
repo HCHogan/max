@@ -1,9 +1,11 @@
 module Max.Execution.ToolsSpec (spec) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
-import Control.Concurrent.STM (atomically, check, modifyTVar', newTVarIO, readTVar)
+import Control.Concurrent.Async qualified as Async
+import Control.Concurrent.STM (atomically, check, modifyTVar', newTVarIO, readTVar, writeTVar)
 import Control.Monad (forM_)
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -26,6 +28,44 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "shared host tool execution" $ do
+  it "interrupts a native async await without cancelling or repeating its call" $ do
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    steering <- newTVarIO False
+    count <- newIORef (0 :: Int)
+    let runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' count (+ 1) >> putMVar entered () >> takeMVar release) >> pure (Right value)}
+        hooks = noJournal {ehInterrupt = readTVar steering >>= check}
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition {tdAwait = AsyncTool}] [runner])
+    Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ ->
+      runEff . runConcurrent . runTools registry $ do
+        session <- newExecutionSession Nothing
+        batch <- executeToolBatch session hooks (views registry) [ToolRequest "async" "echo" args]
+        ref <- case batch.tbInvocations of
+          [ToolInvocation (ToolSucceeded (Object fields)) _] | Just (String ref) <- KeyMap.lookup "result" fields -> pure ref
+          _ -> liftIO (fail "await did not detach as a handle")
+        liftIO (atomically (writeTVar steering False))
+        liftIO (putMVar release ())
+        finished <- waitExecution session hooks.ehInterrupt ref
+        liftIO (finished.tiOutcome `shouldBe` ToolSucceeded args)
+        liftIO (readIORef count `shouldReturn` 1)
+
+  it "waits for non-async tools before admitting steering" $ do
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    let runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (putMVar entered () >> takeMVar release) >> pure (Right value)}
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [runner])
+    Async.withAsync
+      ( runEff . runConcurrent . runTools registry $ do
+          session <- newExecutionSession Nothing
+          executeToolBatch session noJournal {ehInterrupt = pure ()} (views registry) [ToolRequest "short" "echo" args]
+      )
+      $ \worker -> do
+        takeMVar entered
+        timeout 20000 (Async.wait worker) >>= (`shouldSatisfy` maybe True (const False))
+        putMVar release ()
+        batch <- Async.wait worker
+        map (.tiOutcome) batch.tbInvocations `shouldBe` [ToolSucceeded args]
+
   it "enforces remote identifier string bounds before native or Wasm execution" $ do
     let runner = echoTool {toolSchema = object ["type" .= ("object" :: Text), "required" .= (["value"] :: [Text]), "properties" .= object ["value" .= object ["type" .= ("string" :: Text), "minLength" .= (36 :: Int), "maxLength" .= (36 :: Int)]]]}
         values = map (\value -> object ["value" .= (value :: Text)]) ["133", "01a08fdf-744d-7401-a700-616632d53bee", "01a08fdf-744d-7401-a700-616632d53bee-extra"]

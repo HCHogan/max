@@ -51,7 +51,7 @@ data WasmLimits = WasmLimits
 defaultWasmLimits :: WasmLimits
 defaultWasmLimits = WasmLimits 10000000 (64 * 1024 * 1024) (30 * 1000000) (1024 * 1024) 128
 
-data WasmExit = WasmCompleted | WasmHostStopped | WasmRejected !Text | WasmTrapped !Text | WasmTimedOut
+data WasmExit = WasmCompleted | WasmPaused | WasmRejected !Text | WasmTrapped !Text | WasmTimedOut
   deriving stock (Show, Eq)
 
 data GuestCall = GuestCall {gcId :: !Int, gcTool :: !Text, gcArgs :: !Value}

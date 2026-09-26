@@ -38,12 +38,12 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent.Async (Concurrent)
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
-import Effectful.Exception (throwIO)
+import Effectful.Exception (finally, throwIO)
 import Effectful.Log
 import Max.Agent.Execution
 import Max.Agent.Failure (AgentFailure (..))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
-import Max.CodeMode.Model (codeModeSpecs, executeModelBatch)
+import Max.CodeMode.Model (codeModeSpecs, executeModelBatch, executionWaitSpecs)
 import Max.Context.Working
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), ToolSpec, chatMeasured)
 import Max.Effects.ToolControl (ToolControl, runToolControl)
@@ -58,7 +58,7 @@ import Max.Effects.Tools
     registryCatalog,
     runToolsWith,
   )
-import Max.Execution.Tools
+import Max.Execution.Tools hiding (Interrupted)
 import Max.Execution.Types (Admission (..))
 import Max.LLM.Failure (renderLLMFailure)
 import Max.Media.Vision (evictMedia, fitVisionBudget)
@@ -199,7 +199,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
         runToolsWith
           (raise . raise . runToolControl . runToolOutput outputQueue)
           (liftIO (readTVarIO catalogRef))
-          (loop workingRef session catalogRef emit context turn profile msgs)
+          (loop workingRef session catalogRef emit context turn profile msgs `finally` closeExecutionSession session)
   where
     loop ::
       TVar (Maybe UsageAnchor, Text) ->
@@ -226,7 +226,9 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
           -- Drain any feedback notes that arrived since the previous turn.
           liftIO (checkTurnCancellation h)
           feedback <- raise (raise (raise (inbox.eiRead (turnRuntimeAgentTurn h))))
-          let newNotes = inputMessages feedback
+          settled <- drainExecutionCompletions session
+          let completed = if null settled then "" else "\n[已完成的异步调用]\n" <> TE.decodeUtf8 (LBS.toStrict (encode [object ["result" .= ref, "outcome" .= outcomeEnvelope invocation.tiOutcome] | (ref, invocation) <- settled]))
+              newNotes = inputMessages (feedback <> completed)
               msgs' = msgs <> newNotes
               appended' = appended <> newNotes
           if n >= lims.maxTurns
@@ -234,8 +236,9 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
             else do
               liftIO (setTurnPhase h "llm")
               nativeSpecs <- listToolSpecs
+              detached <- hasDetachedExecutions session
               let codeEnabled = (toolCapabilities ctx.acTools).tcSkills && Map.member "codemode" (toolSkillLoads ctx.acTools)
-                  specs = nativeSpecs <> codeModeSpecs codeEnabled
+                  specs = nativeSpecs <> codeModeSpecs codeEnabled <> executionWaitSpecs detached
               -- Carry trimmed history forward for prefix caching; publication tracking
               -- starts afresh for each model call.
               sentRef <- liftIO (newTVarIO "")
@@ -310,7 +313,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                   -- independent calls execute concurrently.
                   registered <- listCatalogTools
                   let baseHooks = executionHooks admission journal (toolGroupId ctx.acTools) h
-                      hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehAcquireGuest = maybe (pure (Just (pure ()))) (\acquire -> acquire (turnRuntimeAgentTurn h)) guestAdmission}
+                      hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehInterrupt = inbox.eiInterrupt (turnRuntimeAgentTurn h), ehAcquireGuest = maybe (pure (Just (pure ()))) (\acquire -> acquire (turnRuntimeAgentTurn h)) guestAdmission}
                       requests = [ToolRequest tc.callId tc.callName tc.callArguments | tc <- tcs]
                   for_ tcs $ \tc ->
                     logInfo "agent: tool call" $ object ["id" .= tc.callId, "name" .= tc.callName, "args" .= previewJson 200 tc.callArguments]

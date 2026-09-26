@@ -9,7 +9,7 @@ import Test.Hspec
 spec :: Spec
 spec = describe "tool return types" $ do
   it "declares a result shape for every inventory tool and run_code" $
-    [name | name <- "run_code" : inventoryToolNames, isNothing (toolReturnType name)] `shouldBe` []
+    [name | name <- ["run_code", "run_code_resume", "run_code_cancel", "execution_wait"] <> inventoryToolNames, isNothing (toolReturnType name)] `shouldBe` []
 
   it "appends the shape after the description and leaves unknown tools unchanged" $ do
     withReturnType "poke" "戳一戳" `shouldBe` "戳一戳\n返回：{ok: true}"

@@ -265,7 +265,7 @@ instance ToJSON JobView where
         "deadline" .= job.spec.deadline
       ]
 
-data JobWait = ChildrenFinished ![JobView] | FeedbackPending
+newtype JobWait = ChildrenFinished [JobView]
   deriving stock (Eq, Show)
 
 data JobCommand = SteerJob !Text | ReplaceJob !Text | CancelJob !Text

@@ -39,7 +39,8 @@ definition ref effects parallelism retry =
       tdAuthorities = Set.singleton CurrentConversation,
       tdDeadline = ToolDeadline 30,
       tdFailuresPrecedeEffects = False,
-      tdCallMode = WorkCall
+      tdCallMode = WorkCall,
+      tdAwait = ShortTool
     }
 
 readDefinition :: ToolDefinition

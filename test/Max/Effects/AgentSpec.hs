@@ -3,6 +3,7 @@
 
 module Max.Effects.AgentSpec (spec) where
 
+import Control.Concurrent.STM qualified as STM
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async qualified as Async
 import Control.Exception (fromException)
@@ -54,7 +55,7 @@ runTestAgent inputs =
   runAgentWith
     (ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted))
     (ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ()))
-    (ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inputs (\notes -> ([], T.intercalate "\n" notes))))
+    (ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inputs (\notes -> ([], T.intercalate "\n" notes))) (const STM.retry))
     Nothing
 
 inputMessage :: Text -> ChatMessage
@@ -141,7 +142,8 @@ echoDefinition =
       tdAuthorities = Set.singleton CurrentConversation,
       tdDeadline = ToolDeadline 30,
       tdFailuresPrecedeEffects = False,
-      tdCallMode = WorkCall
+      tdCallMode = WorkCall,
+      tdAwait = ShortTool
     }
 
 dispatchContext :: AgentContext
@@ -643,7 +645,8 @@ spec = describe "Agent full loop" $ do
               tdAuthorities = Set.singleton CurrentConversation,
               tdDeadline = ToolDeadline 30,
               tdFailuresPrecedeEffects = False,
-              tdCallMode = WorkCall
+              tdCallMode = WorkCall,
+              tdAwait = ShortTool
             }
         twoCallLLM =
           LLMInterpreter
@@ -770,7 +773,7 @@ spec = describe "Agent full loop" $ do
             }
         admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure OverBudget)
         journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
-        inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' _inputs (\notes -> ([], T.intercalate "\n" notes)))
+        inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' _inputs (\notes -> ([], T.intercalate "\n" notes))) (const STM.retry)
     result <- withCompactLogger ColorNever Nothing $ \logger ->
       runEff . runConcurrent . runLog "budget-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 4) (const (buildToolRegistry [echoDefinition] [counted])) $
         agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
@@ -828,7 +831,7 @@ spec = describe "Agent full loop" $ do
             )
         admission = ExecutionAdmission (\_ -> pure Admitted) (\_ -> pure True) (\_ _ -> pure Admitted)
         journal = ExecutionJournal (\_ _ _ -> pure ()) (const pure) (\_ _ -> pure ())
-        inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inbox ("",))
+        inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inbox ("",)) (const STM.retry)
     result <- withCompactLogger ColorNever Nothing $ \logger ->
       runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 3) (const (buildToolRegistry [] [])) $
         agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)

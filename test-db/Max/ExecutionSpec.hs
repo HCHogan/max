@@ -1,4 +1,4 @@
-module Max.ExecutionSpec (Max.ExecutionSpec.spec, withHost, hooks) where
+module Max.ExecutionSpec (Max.ExecutionSpec.spec, withHost, hooks, DbEffects) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async

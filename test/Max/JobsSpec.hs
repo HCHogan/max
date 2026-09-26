@@ -1,6 +1,7 @@
 module Max.JobsSpec (Max.JobsSpec.spec) where
 
 import Control.Concurrent.Async (mapConcurrently, wait, withAsync)
+import Control.Concurrent.STM (atomically)
 import Control.Monad (forM_, replicateM)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Either (isLeft, isRight)
@@ -158,13 +159,14 @@ spec = describe "process-owned Jobs" $ do
     readJobInbox jobs (AgentTurnId 1) `shouldReturn` []
     timeout 20000 (takeJobWork jobs) `shouldReturn` Nothing
 
-  it "wakes waits for attributed feedback and refuses another job's children" $ do
+  it "signals attributed feedback without completing the child future" $ do
     (tasks, jobs, request) <- fixture
     (root, _) <- launch tasks jobs 1 request
     _ <- admitJob jobs Nothing 2 (request {parent = Just root.run})
     withAsync (waitForChildren jobs (AgentTurnId 1) [2]) $ \joining -> do
       steerJob jobs request.group (PrincipalId 8) (Just (CanonicalMessageId 55)) 1 "new evidence" `shouldReturn` Right ()
-      wait joining `shouldReturn` Right FeedbackPending
+      timeout 20000 (atomically (awaitFeedback jobs (AgentTurnId 1))) `shouldReturn` Just ()
+      timeout 20000 (wait joining) `shouldReturn` Nothing
     readJobInbox jobs (AgentTurnId 1) `shouldReturn` [object ["author" .= PrincipalId 8, "source_message" .= CanonicalMessageId 55, "body" .= String "new evidence"]]
     waitForChildren jobs (AgentTurnId 1) [99] >>= (`shouldSatisfy` isLeft)
 

@@ -7,6 +7,7 @@ module Max.Tool.Types
     ToolEffect (..),
     ToolParallelism (..),
     ToolCallMode (..),
+    ToolAwait (..),
     ToolRetryClass (..),
     ToolAuthority (..),
     ToolDeadline (..),
@@ -57,6 +58,9 @@ data ToolEffect
 -- | Checkpoints do not spend work budget; finish calls are exclusive in a round.
 data ToolCallMode = WorkCall | CheckpointCall deriving stock (Show, Eq, Ord)
 
+-- | Async awaits can be interrupted without cancelling the call.
+data ToolAwait = ShortTool | AsyncTool deriving stock (Show, Eq, Ord)
+
 data ToolParallelism
   = ParallelSafe
   | -- | Audited independent calls may write; callers order shared resources.
@@ -98,7 +102,8 @@ data ToolDefinition = ToolDefinition
     -- workflows keep their identity; execution classification comes exclusively
     -- from ToolRunner results and never trusts this compatibility bit.
     tdFailuresPrecedeEffects :: !Bool,
-    tdCallMode :: !ToolCallMode
+    tdCallMode :: !ToolCallMode,
+    tdAwait :: !ToolAwait
   }
   deriving stock (Show, Eq)
 

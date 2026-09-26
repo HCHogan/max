@@ -1,5 +1,6 @@
 module Max.WorkflowAgentSpec (Max.WorkflowAgentSpec.spec) where
 
+import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async
 import Control.Monad (forM_)
 import Data.Aeson
@@ -8,7 +9,8 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..))
-import Effectful (liftIO, raise)
+import Effectful (Eff, liftIO, raise)
+import Effectful.Exception (finally)
 import Effectful.PostgreSQL (query)
 import Helpers (truncateAll, withDb)
 import JobFixture
@@ -18,7 +20,7 @@ import Max.CodeMode.Wasm (WasmExit (..))
 import Max.DB.Connection (DbPool)
 import Max.Effects.Tools
 import Max.Execution.Tools
-import Max.ExecutionSpec (hooks, withHost)
+import Max.ExecutionSpec (DbEffects, hooks, withHost)
 import Max.Jobs qualified as Jobs
 import Max.Platform.Types (CanonicalMessageId, PrincipalId, noAdvertisedCaps)
 import Max.Task.Delegation (parseJobResult)
@@ -108,21 +110,31 @@ spec pool = before_ (truncateAll pool) $ describe "agent() through the agent too
       result <- Async.wait parent
       result.cmExit `shouldBe` WasmCompleted
 
-  it "stops guest code on feedback, retains the child, and leaves feedback for the model" $ do
+  it "pauses on feedback, keeps the child and resumes with its actual report" $ do
     running <- runningJob pool Basic workflowGrants
-    Async.withAsync (runScript pool running Nothing "await agent({objective: 'one', profile: 'basic'}); await agent({objective: 'unreachable', profile: 'basic'});") $ \worker -> do
-      _ <- awaitChild running.jobs
+    pausedSignal <- newEmptyMVar
+    resumeSignal <- newEmptyMVar
+    let afterPause session paused = do
+          liftIO (paused.cmExit `shouldBe` WasmPaused)
+          liftIO (putMVar pausedSignal () >> takeMVar resumeSignal)
+          controlProgram session True paused.cmRunRef
+    Async.withAsync (runScriptUsing pool running "const child=await agent({objective:'one',profile:'basic'}); return child.result.text;" afterPause) $ \worker -> do
+      child <- awaitChild running.jobs
       Jobs.steerJob running.jobs running.job.spec.group running.job.spec.principal Nothing running.job.run.jobId "new evidence" `shouldReturn` Right ()
+      timeout 3000000 (takeMVar pausedSignal) `shouldReturn` Just ()
+      Jobs.jobHasFeedback running.jobs running.turn.atrTurnId `shouldReturn` True
+      Jobs.completeJob running.jobs child.run Succeeded (JobResult "actual report" Nothing)
+      _ <- Jobs.readJobInbox running.jobs running.turn.atrTurnId
+      putMVar resumeSignal ()
       result <- timeout 3000000 (Async.wait worker)
-      fmap (.cmExit) result `shouldBe` Just WasmHostStopped
-    Jobs.jobHasFeedback running.jobs running.turn.atrTurnId `shouldReturn` True
+      fmap (.tiOutcome) result `shouldSatisfy` (\case Just (ToolSucceeded (Object fields)) -> KeyMap.lookup "value" fields == Just (String "actual report"); _ -> False)
     Jobs.allJobs running.jobs >>= (\jobs -> length jobs `shouldBe` 2)
 
   it "does not start a child when feedback was already pending" $ do
     running <- runningJob pool Basic workflowGrants
     Jobs.steerJob running.jobs running.job.spec.group running.job.spec.principal Nothing running.job.run.jobId "wait" `shouldReturn` Right ()
     result <- runScript pool running Nothing "await agent({objective: 'unreachable', profile: 'basic'});"
-    result.cmExit `shouldBe` WasmHostStopped
+    result.cmExit `shouldBe` WasmPaused
     Jobs.allJobs running.jobs >>= (\jobs -> length jobs `shouldBe` 1)
 
   it "cancels an awaiting guest without executing its next step" $ do
@@ -164,7 +176,7 @@ workflowGrants = Map.fromList [("agent", "v1"), ("web_search", "v1")]
 
 agentDefinitions :: [ToolDefinition]
 agentDefinitions =
-  [ ToolDefinition (ToolRef name) (SchemaVersion 1) (Set.singleton (EffectWrite "task.db")) parallelism RetryUnsafe (Set.singleton CurrentConversation) (ToolDeadline 21600) True mode
+  [ ToolDefinition (ToolRef name) (SchemaVersion 1) (Set.singleton (EffectWrite "task.db")) parallelism RetryUnsafe (Set.singleton CurrentConversation) (ToolDeadline 21600) True mode (if name == "agent" then AsyncTool else ShortTool)
   | (name, parallelism, mode) <- [("agent", ParallelIndependent, WorkCall), ("agent_progress", SequentialOnly, CheckpointCall)]
   ]
 
@@ -190,6 +202,12 @@ runScriptWith pool running current budget source = do
   let context = mkToolContext (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 3) running.job.spec.principal Nothing (Just output)) (capabilities True current)
   runProgram pool running.jobs running.runtime running.turn context budget source
 
+runScriptUsing :: DbPool -> RunningJob -> Text -> (ExecutionSession -> CodeModeResult -> Eff (Tools : DbEffects) a) -> IO a
+runScriptUsing pool running source continuation = do
+  output <- newTurnOutputContext running.turn
+  let context = mkToolContext (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 3) running.job.spec.principal Nothing (Just output)) (capabilities True workflowGrants)
+  runProgramUsing pool running.jobs running.runtime running.turn context Nothing source continuation
+
 data Foreground = Foreground
   { jobs :: Jobs.Jobs,
     turn :: AgentTurnRef,
@@ -205,11 +223,14 @@ runForeground pool front source = do
   runProgram pool front.jobs front.runtime front.turn context Nothing source
 
 runProgram :: DbPool -> Jobs.Jobs -> TurnRuntime -> AgentTurnRef -> ToolContext -> Maybe Int -> Text -> IO CodeModeResult
-runProgram pool jobs runtime turn context budget source = do
-  let bound = (hooks jobs runtime) {ehAcquireGuest = liftIO (Jobs.acquireGuestSlot jobs turn.atrTurnId)}
+runProgram pool jobs runtime turn context budget source = runProgramUsing pool jobs runtime turn context budget source (\_ -> pure)
+
+runProgramUsing :: DbPool -> Jobs.Jobs -> TurnRuntime -> AgentTurnRef -> ToolContext -> Maybe Int -> Text -> (ExecutionSession -> CodeModeResult -> Eff (Tools : DbEffects) a) -> IO a
+runProgramUsing pool jobs runtime turn context budget source continuation = do
+  let bound = (hooks jobs runtime) {ehAcquireGuest = liftIO (Jobs.acquireGuestSlot jobs turn.atrTurnId), ehInterrupt = Jobs.awaitFeedback jobs turn.atrTurnId}
       runners = [tool | tool <- taskTools jobs context, tool.toolName `elem` ["agent", "agent_progress"]]
       present = map (.toolName) runners
   registry <- either (fail . show) pure (buildToolRegistry [definition | definition <- agentDefinitions, definition.tdRef.unToolRef `elem` present] runners)
   withHost pool . runTools registry $ do
     session <- newExecutionSession budget
-    runJavaScript session (hoistExecutionHooks raise bound) (catalogTools (registryCatalog registry)) source
+    (runJavaScript session (hoistExecutionHooks raise bound) (catalogTools (registryCatalog registry)) source >>= continuation session) `finally` closeExecutionSession session

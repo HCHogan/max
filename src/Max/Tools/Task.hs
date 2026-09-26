@@ -99,9 +99,6 @@ taskToolsFor context =
     renderStart = \case
       StartedTask job -> toJSON job
       FinishedTask job -> toJSON job
-      FeedbackFirst job -> case toJSON <$> job of
-        Just (Object fields) -> Object (KeyMap.insert "feedback_pending" (Bool True) fields)
-        _ -> object ["feedback_pending" .= True]
     controlTool operation =
       Tool
         { toolName = "agent_" <> State.taskOperationText operation,
@@ -127,7 +124,6 @@ taskToolsFor context =
               Just children -> fmap (fmap renderWait) (waitTasks children)
         )
     renderWait (ChildrenFinished children) = object ["children" .= children]
-    renderWait FeedbackPending = object ["feedback_pending" .= True]
 
     progressTool =
       legacyTool

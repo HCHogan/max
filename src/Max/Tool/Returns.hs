@@ -12,7 +12,7 @@ withReturnType :: Text -> Text -> Text
 withReturnType name description = maybe description (\shape -> description <> "\n返回：" <> shape) (toolReturnType name)
 
 toolReturnType :: Text -> Maybe Text
-toolReturnType name = Map.lookup name returnTypes
+toolReturnType name = Map.lookup (if name `elem` ["run_code_resume", "run_code_cancel"] then "run_code" else name) returnTypes
 
 returnTypes :: Map Text Text
 returnTypes =
@@ -37,13 +37,14 @@ returnTypes =
       ("memory_list", "{id: number; content: string; version: number; lifecycle: string}[]"),
       ("pin_message", "{ok: true; pin_count: number}"),
       ("unpin_message", "{ok: true}"),
-      ("agent", "Agent（wait=true 时为已结束的 Agent，报告在 result.text、契约结果在 result.payload；等待中收到反馈时为仍在运行的 Agent & {feedback_pending: true}，或未派出的 {feedback_pending: true}）；Agent = {agent: string; objective: string; profile: string; owner: number; group_id: number; parent: string | null; status: string; progress: string | null; result: {text: string; payload: unknown} | null; calls: number; model_rounds: number; usage: {model_calls: number; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: {[currency: string]: number}; unpriced_calls: number}; created_at: string; finished_at: string | null; deadline: string}"),
+      ("agent", "Agent（wait=true 时为已结束的 Agent，报告在 result.text、契约结果在 result.payload；原生等待被 steering 中断时为 {status: \"running\"; result: string}，可用 execution_wait 等待真实结果）；Agent = {agent: string; objective: string; profile: string; owner: number; group_id: number; parent: string | null; status: string; progress: string | null; result: {text: string; payload: unknown} | null; calls: number; model_rounds: number; usage: {model_calls: number; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: {[currency: string]: number}; unpriced_calls: number}; created_at: string; finished_at: string | null; deadline: string}"),
       ("agent_list", "Agent[]（字段同 agent_status）"),
       ("agent_status", "{agent: string; objective: string; profile: string; owner: number; group_id: number; parent: string | null; status: string; progress: string | null; result: {text: string; payload: unknown} | null; calls: number; model_rounds: number; usage: {model_calls: number; prompt_tokens: number; cached_prompt_tokens: number; completion_tokens: number; cost: {[currency: string]: number}; unpriced_calls: number}; created_at: string; finished_at: string | null; deadline: string}"),
       ("agent_steer", "{accepted: true}"),
       ("agent_replace", "{accepted: true}"),
       ("agent_cancel", "{accepted: true}"),
-      ("agent_wait", "{children: Agent[]} | {feedback_pending: true}（Agent 字段同 agent_status）"),
+      ("agent_wait", "{children: Agent[]} | {status: \"running\"; result: string}（Agent 字段同 agent_status）"),
+      ("execution_wait", "原调用的真实返回值；等待再次被 steering 中断时为 {status: \"running\"; result: string}"),
       ("agent_progress", "{recorded: true}"),
       ("use_skill", "{skill: string; loaded: string[]; already_loaded?: boolean; versions: {[name: string]: string}; availability: {skill: string; details: {tools: string[]; unavailable: string[]; reason?: string}}[]; instructions: string}"),
       ("view_bilibili", "{bvid: string; title: string; up: string; duration: string; pubdate: string; desc: string; stats: {view: number; like: number; coin: number; favorite: number; danmaku: number; reply: number; share: number}; top_comments: {user: string; likes: number; text: string}[] | string; parts?: number; video_attached: boolean; video_note?: string}"),
@@ -58,5 +59,5 @@ returnTypes =
       ("web_search", "{answer: string | null; results: {title: string; url: string; snippet: string}[]}"),
       ("browser", "string：首行 \"Outcome: <action> ok|failed\"，第二行 \"Page: <url> | <title>\"，随后 Position/Note 行，\"Content:\" 之后是元素和正文；read 分页时 Note 含 \"read again with offset=N\""),
       ("view_zhihu", "string，格式同 browser"),
-      ("run_code", "{value: unknown; exit: string; calls: {call: string; tool: string; outcome: string}[]; call_count: number; submitted_calls: number; omitted_calls: number; over_budget: boolean; run_ref: string}")
+      ("run_code", "{status: \"paused\" | \"finished\"; run: string; pending: {tool: string; status: string}[]; value: unknown; exit: string; calls: {call: string; tool: string; outcome: string}[]; call_count: number; submitted_calls: number; omitted_calls: number; over_budget: boolean; run_ref: string}")
     ]

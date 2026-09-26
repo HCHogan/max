@@ -10,7 +10,8 @@ module Max.CodeMode.Execution
 where
 
 import Control.Concurrent.Async qualified as Async
-import Control.Concurrent.STM (atomically, modifyTVar', newTVarIO, readTVarIO, writeTVar)
+import Control.Concurrent.STM
+import Control.Exception qualified as Exception
 import Control.Monad (forM, forM_, void)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
@@ -33,8 +34,8 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent (Concurrent, threadDelay)
-import Effectful.Concurrent.Async (async, cancel)
-import Effectful.Exception (bracket, finally, mask, throwIO)
+import Effectful.Concurrent.Async (async, asyncWithUnmask, cancel)
+import Effectful.Exception (bracket, catch, finally, mask, onException, throwIO)
 import Max.CodeMode.Wasm
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools
@@ -82,12 +83,52 @@ runWasmTools session hooks catalog limits binary = runWasmProgram session hooks 
 -- | Orchestration enters outside the leaf gate. Registering this as a leaf Tool
 -- runner would recursively acquire that gate and deadlock.
 runWasmProgram :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> WasmLimits -> WasmProgram -> Eff es CodeModeResult
-runWasmProgram session hooks catalog limits program = bracket hooks.ehAcquireGuest (mapM_ liftIO) $ \case
-  Nothing -> pure (CodeModeResult (WasmRejected "live guest limit exceeded; retry later or use native tools") [] ContinueLoop Nothing 0 False "" program.wpWorkflow)
-  Just _ -> runAdmittedProgram session hooks catalog limits program
+runWasmProgram session hooks catalog limits program = mask $ \restore -> do
+  replies <- liftIO newEmptyTMVarIO
+  resumes <- liftIO newEmptyTMVarIO
+  paused <- liftIO (newTVarIO False)
+  owner <- liftIO newEmptyTMVarIO
+  let waitReply worker = atomically $ takeTMVar replies `orElse` (Async.waitCatchSTM worker >>= either throwSTM pure)
+      install worker ref =
+        registerProgram session ref $
+          ProgramControl
+            { pcResume = Exception.mask $ \restoreIO -> do
+                accepted <- atomically $ do
+                  waiting <- readTVar paused
+                  if not waiting
+                    then pure False
+                    else do
+                      writeTVar paused False
+                      putTMVar resumes ()
+                      pure True
+                if accepted
+                  then codeModeInvocation <$> restoreIO (waitReply worker)
+                  else pure (ToolInvocation (ToolRejected (ToolFault "program_not_paused" "program is not paused" RetrySafe)) ContinueLoop),
+              pcCancel = do
+                Async.cancel worker
+                result <- Async.waitCatch worker
+                either Exception.throwIO (pure . codeModeInvocation) result
+            }
+      suspend result = do
+        liftIO . atomically $ do
+          writeTVar paused True
+          putTMVar replies result
+        liftIO (atomically (takeTMVar resumes))
+  worker <- asyncWithUnmask $ \unmask -> unmask $ do
+    self <- liftIO (atomically (readTMVar owner))
+    result <- bracket hooks.ehAcquireGuest (mapM_ liftIO) $ \case
+      Nothing -> pure (CodeModeResult (WasmRejected "live guest limit exceeded; retry later or use native tools") [] ContinueLoop Nothing 0 False "" program.wpWorkflow)
+      Just _ -> runAdmittedProgram session hooks catalog limits program (install self) suspend
+    liftIO . atomically $ do
+      writeTVar paused False
+      _ <- tryPutTMVar replies result
+      pure ()
+    pure result
+  liftIO (atomically (putTMVar owner worker))
+  restore (liftIO (waitReply worker)) `onException` cancel worker
 
-runAdmittedProgram :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> WasmLimits -> WasmProgram -> Eff es CodeModeResult
-runAdmittedProgram session hooks catalog limits program = do
+runAdmittedProgram :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> WasmLimits -> WasmProgram -> (Text -> Eff es ()) -> (CodeModeResult -> Eff es ()) -> Eff es CodeModeResult
+runAdmittedProgram session hooks catalog limits program install suspend = do
   label <- freshExecutionLabel session "wasm"
   receipts <- liftIO (newTVarIO [])
   decisions <- liftIO (newTVarIO ContinueLoop)
@@ -96,6 +137,7 @@ runAdmittedProgram session hooks catalog limits program = do
   workers <- liftIO (newTVarIO Map.empty)
   seen <- liftIO (newTVarIO Set.empty)
   buffered <- liftIO (newTVarIO [])
+  reference <- liftIO (newTVarIO label)
   let start =
         JournalStart
           label
@@ -120,7 +162,7 @@ runAdmittedProgram session hooks catalog limits program = do
           record request invocation
           liftIO . atomically $ modifyTVar' workers (Map.delete ident)
           pure (ident, boundedOutcome invocation.tiOutcome)
-      cleanup = liftIO (readTVarIO workers) >>= mapM_ (void . stop) . Map.keys
+      cleanup = liftIO (readTVarIO workers) >>= mapM_ (void . stop) . reverse . Map.keys
       launch (GuestCall ident name args) = mask $ \_ -> do
         request <- (\call -> ToolRequest call name args) <$> freshExecutionLabel session (label <> "/call")
         used <- liftIO (readTVarIO submitted)
@@ -139,6 +181,24 @@ runAdmittedProgram session hooks catalog limits program = do
                   _ -> pure (ToolInvocation (ToolRejected (ToolFault "invalid_sleep" "invalid sleep duration" RetrySafe)) ContinueLoop)
                 else launchCall session hooks catalog request
         liftIO . atomically $ modifyTVar' workers (Map.insert ident (request, worker))
+      snapshot exit output = do
+        calls <- reverse <$> liftIO (readTVarIO receipts)
+        control <- liftIO (readTVarIO decisions)
+        overBudget <- liftIO (readTVarIO exhausted)
+        count <- liftIO (readTVarIO submitted)
+        ref <- liftIO (readTVarIO reference)
+        pure (CodeModeResult exit calls control output count overBudget ref program.wpWorkflow)
+      asyncTool name = name == "$sleep" || any (\entry -> entry.ctDefinition.tdRef == ToolRef name && entry.ctDefinition.tdAwait == AsyncTool) catalog
+      pause queued = do
+        active <- liftIO (readTVarIO workers)
+        result <- snapshot WasmPaused (Just (object ["pending" .= ([object ["call" .= request.trCallId, "tool" .= request.trName, "status" .= ("running" :: Text)] | (request, _) <- Map.elems active] <> [object ["tool" .= call.gcTool, "status" .= ("queued" :: Text)] | call <- queued])]))
+        suspend result
+      pauseIfRequested allowed queued =
+        if not allowed
+          then pure ()
+          else do
+            interrupt <- liftIO . atomically $ (hooks.ehInterrupt >> pure True) `orElse` pure False
+            if interrupt then pause queued else pure ()
       drive guest = \case
         GuestDone value -> pure (WasmCompleted, Just value)
         GuestTrap exit -> pure (exit, case exit of WasmTrapped detail -> Just (object ["error" .= detail]); _ -> Nothing)
@@ -150,22 +210,23 @@ runAdmittedProgram session hooks catalog limits program = do
           if not valid
             then pure (WasmTrapped "invalid guest call set", Nothing)
             else do
+              pauseIfRequested (all (asyncTool . (.trName) . fst) (Map.elems active) && any (asyncTool . gcTool) calls) calls
               liftIO . atomically $ modifyTVar' seen (<> Set.fromList ids)
               forM_ calls launch
               -- Cancellation completes the promise too: a program may catch it.
-              cancelledResults <- catMaybes <$> traverse stop (Set.toList (Set.fromList cancellations))
+              cancelledResults <- catMaybes <$> traverse stop (reverse (Set.toList (Set.fromList cancellations)))
               pending <- liftIO (readTVarIO workers)
               previous <- liftIO (readTVarIO buffered)
               if Map.null pending && null cancelledResults && null previous
                 then pure (WasmTrapped "guest waiting without in-flight calls", Nothing)
                 else do
-                  ready <-
-                    if null cancelledResults && null previous
-                      then liftIO . atomically $ do
-                        _ <- Async.waitAnyCatchSTM (map (snd . snd) (Map.toList pending))
-                        forM (Map.toList pending) $ \(ident, (request, worker)) -> (ident,request,) <$> Async.pollSTM worker
-                      else pure []
-                  let completed = [(ident, request, outcome) | (ident, request, Just outcome) <- ready]
+                  let interrupt = if all (asyncTool . (.trName) . fst) (Map.elems pending) then hooks.ehInterrupt else retry
+                      collect = do
+                        wake <- liftIO (atomically (awaitWake interrupt (snd <$> pending)))
+                        case wake of
+                          Interrupted -> pause [] >> collect
+                          Settled ready -> pure [(ident, request, outcome) | (ident, outcome) <- ready, Just (request, _) <- [Map.lookup ident pending]]
+                  completed <- if null cancelledResults && null previous then collect else pure []
                   outcomes <- forM completed $ \(ident, request, outcome) -> do
                     invocation <- either throwIO pure outcome
                     record request invocation
@@ -175,32 +236,32 @@ runAdmittedProgram session hooks catalog limits program = do
                   -- until the next step without holding unrelated calls back.
                   let (chunk, rest) = resumeChunk (previous <> cancelledResults <> outcomes)
                   liftIO . atomically $ writeTVar buffered rest
-                  if any (feedbackPending . snd) outcomes
-                    then pure (WasmHostStopped, Just (toJSON (map snd outcomes)))
-                    else do
-                      step <- liftIO (resumeGuest guest chunk)
-                      drive guest step
+                  remaining <- liftIO (readTVarIO workers)
+                  pauseIfRequested (all (asyncTool . (.trName) . fst) (Map.elems remaining)) []
+                  step <- liftIO (resumeGuest guest chunk)
+                  drive guest step
 
-  (result, _) <- withExecutionRecord hooks ExecutionCheckpoint start $ \row -> do
-    (exit, output) <- withGuest limits program.wpModule (fromMaybe "" program.wpInput) (\guest initial -> drive guest initial `finally` cleanup)
-    calls <- reverse <$> liftIO (readTVarIO receipts)
-    control <- liftIO (readTVarIO decisions)
-    overBudget <- liftIO (readTVarIO exhausted)
-    submittedCalls <- liftIO (readTVarIO submitted)
-    let finalExit = case (exit, program.wpOutputContract) of
-          (WasmCompleted, Just contract) | Left err <- validateValue contract (fromMaybe Null output) -> WasmTrapped ("workflow output contract: " <> err)
-          _ -> exit
-        result = CodeModeResult finalExit calls control output submittedCalls overBudget (maybe label (\entry -> resultHandleText entry.jeTurn.atrTurnOrdinal entry.jeExecutionOrdinal) row) program.wpWorkflow
-    pure (result, codeModeInvocation result)
-  pure result
+  let run = do
+        (result, _) <- withExecutionRecord hooks ExecutionCheckpoint start $ \row -> do
+          let ref = maybe label (\entry -> resultHandleText entry.jeTurn.atrTurnOrdinal entry.jeExecutionOrdinal) row
+          liftIO (atomically (writeTVar reference ref))
+          install ref
+          (exit, output) <- withGuest limits program.wpModule (fromMaybe "" program.wpInput) (\guest initial -> drive guest initial `finally` cleanup)
+          let finalExit = case (exit, program.wpOutputContract) of
+                (WasmCompleted, Just contract) | Left err <- validateValue contract (fromMaybe Null output) -> WasmTrapped ("workflow output contract: " <> err)
+                _ -> exit
+          result <- snapshot finalExit output
+          pure (result, codeModeInvocation result)
+        pure result
+  ( run `catch` \(exception :: Exception.SomeException) -> case Exception.fromException exception of
+      Just Async.AsyncCancelled -> snapshot (WasmTrapped "program cancelled") Nothing
+      Nothing -> throwIO exception
+    )
+    `finally` (liftIO (readTVarIO reference) >>= unregisterProgram session)
   where
     digest = TE.decodeUtf8 . Base16.encode . SHA256.hash
     isBudget (ToolRejected fault) = fault.tfCode == "call_budget_exhausted"
     isBudget _ = False
-    feedbackPending (Object fields) = case KeyMap.lookup "value" fields of
-      Just (Object value) -> KeyMap.lookup "feedback_pending" value == Just (Bool True)
-      _ -> False
-    feedbackPending _ = False
 
 codeModeInvocation :: CodeModeResult -> ToolInvocation
 codeModeInvocation result = ToolInvocation outcome result.cmControl
@@ -209,6 +270,9 @@ codeModeInvocation result = ToolInvocation outcome result.cmControl
     summary =
       object
         [ "run_ref" .= result.cmRunRef,
+          "run" .= result.cmRunRef,
+          "status" .= (if result.cmExit == WasmPaused then "paused" else "finished" :: Text),
+          "pending" .= (case result.cmOutput of Just (Object fields) | result.cmExit == WasmPaused -> fromMaybe (Array mempty) (KeyMap.lookup "pending" fields); _ -> Array mempty),
           "workflow" .= result.cmWorkflow,
           "exit" .= T.pack (show result.cmExit),
           "value" .= result.cmOutput,
@@ -224,7 +288,7 @@ codeModeInvocation result = ToolInvocation outcome result.cmControl
     beforeEffects = count == result.cmSubmittedCalls && all ((`elem` ["rejected", "failed-before-effect"]) . (.ccOutcome)) result.cmCalls
     outcome = case result.cmExit of
       WasmCompleted -> ToolSucceeded summary
-      WasmHostStopped -> ToolSucceeded summary
+      WasmPaused -> ToolSucceeded summary
       WasmRejected detail -> ToolRejected (ToolFault "guest_limit" detail RetrySafe)
       _ | beforeEffects -> ToolFailedBeforeEffect (ToolFault "wasm_failed_before_effect" (TE.decodeUtf8 (wire summary)) RetrySafe)
       _ -> ToolOutcomeUnknown (ToolFault "wasm_interrupted" (TE.decodeUtf8 (wire summary)) RetryUnsafe)

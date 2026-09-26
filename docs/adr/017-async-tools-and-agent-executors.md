@@ -1,8 +1,10 @@
 # ADR-017: Async tools, agent executors and projected context
 
-Status: in progress 2026-09-26. Delivery step 1 is implemented; the per-call
-launch/gate foundation of step 2 is implemented. Interruption, projection and
-node scheduling (steps 2–4) remain in progress. Amends
+Status: in progress 2026-09-26. Delivery steps 1–2 are implemented: poll-driven
+guests, shared per-call scheduling, native async interruption and paused guest
+resume/cancel using the current inbox. Projection and node scheduling (steps
+3–4), including executor yielding and detached-result routing after a task
+ends, remain in progress. Amends
 [ADR-016](016-agent-tool-and-native-await.md) (leaf workers, foreground waits)
 and the Wasm host ABI of [ADR-012](012-wasm-tool-execution.md). Work stays
 process-local; restart persistence is out of scope (§9).

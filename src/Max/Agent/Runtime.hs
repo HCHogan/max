@@ -1,6 +1,7 @@
 -- | Agent assembly: local admission and inboxes, persisted diagnostics.
 module Max.Agent.Runtime (runAgentRuntime, executionAdmission, executionJournal) where
 
+import Control.Concurrent.STM (orElse)
 import Data.Aeson (encode, object, (.=))
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text.Encoding qualified as TE
@@ -36,7 +37,10 @@ runAgentRuntime jobs conversations =
   runAgentWith
     (executionAdmission jobs)
     executionJournal
-    (ExecutionInbox (\turn -> (<>) <$> jobInbox turn.atrTurnId <*> liftIO (Conversation.readFeedback conversations turn.atrTurnId)))
+    ( ExecutionInbox
+        (\turn -> (<>) <$> jobInbox turn.atrTurnId <*> liftIO (Conversation.readFeedback conversations turn.atrTurnId))
+        (\turn -> Jobs.awaitFeedback jobs turn.atrTurnId `orElse` Conversation.awaitFeedback conversations turn.atrTurnId)
+    )
     (Just (liftIO . Jobs.acquireGuestSlot jobs . (.atrTurnId)))
   where
     jobInbox turn = do

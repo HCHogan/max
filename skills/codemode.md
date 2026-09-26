@@ -47,7 +47,7 @@ return results.map((result, index) => ({index, ...result}));
 JSON、Promise 和 async/await。没有 Node、浏览器 API、import/require、console、计时器、
 网络、文件系统、环境变量或宿主时间/随机源；需要这些能力时调用授权工具。
 
-每次程序是独立环境，不保存 JS 变量。单次源码和返回值各最多 64 KiB，Wasm
+每次新程序是独立环境；暂停和恢复保留同一程序的 JS 变量。单次源码和返回值各最多 64 KiB，Wasm
 内存 256 MiB（JS 堆 192 MiB），每个 guest 计算步骤最多 60 秒，等待仍受 agent
 截止时间和工具自身 deadline 约束。计算有 fuel 上限：用尽时整段程序终止、返回值丢失，只剩已完成调用
 的回执。在大文本上别用 `[^"]{0,60}关键词` 这类回溯很重的正则，先 indexOf 定位再切片。
@@ -84,7 +84,7 @@ return {rows: rows.map(x => ({ref: x.ref, text: x.text, more: x.more})), next: p
 
 所有叶子调用沿用原生工具的权限、调用额度和持久化 journal。代码不获得新
 权限，不能递归 run_code。在代码里加载技能只对下一模型回合生效，当前程序
-仍使用启动时的工具集合。取消或收到待处理反馈时，宿主可以终止程序，之后代码不执行。
+仍使用启动时的工具集合。取消会终止程序，之后代码不执行；steering 在异步 await 处暂停程序。
 
 失败不会回滚先前的效果。工具和整段代码都不会自动重试；遇到 committed 或
 outcome-unknown 时先查明现状，不能直接重跑整段程序。宿主返回部分调用回执，
@@ -101,6 +101,10 @@ outcome-unknown 时先查明现状，不能直接重跑整段程序。宿主返�
 结果包含 run_ref 和工作流版本。输出契约错误也不会撤销已完成的工具效果。
 
 每次调用 agent 都派出新的子 agent，包括重跑同一段程序。等待中的子 agent 也能运行 run_code。子 agent 和等待只在当前进程内存在；重启不会续跑或重放。
-后台 agent 等待时收到 steering，agent 调用返回 `feedback_pending`，宿主在这里停止
-程序，由下一模型回合读取收件箱；已派出的子 agent 继续运行，可以通过
-agent_status/agent_wait 收集它们，避免重复派出。
+等待异步工具时收到 steering，`run_code` 返回 `{status:"paused", run, pending, calls}`，
+由下一模型回合读取输入。工具继续运行，但程序保持在原 await，不会提前执行后续代码。
+单独调用 `run_code_resume({run})` 从原位置继续，得到真实工具结果，保留变量且不重复调用；
+`run_code_cancel({run})` 取消程序及仍在途的调用，返回已有回执。句柄只属于当前任务，
+任务结束会取消它的暂停程序。需要接续原工作时应恢复，不能重跑整段源码。
+原生异步工具被 steering 中断时返回 `{status:"running", result}`，可用
+`execution_wait({result})` 等真实结果；完成的结果也会进入下一轮执行收件箱。

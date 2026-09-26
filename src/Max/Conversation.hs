@@ -9,6 +9,7 @@ module Max.Conversation
     awaitTurn,
     release,
     readFeedback,
+    awaitFeedback,
   )
 where
 
@@ -99,6 +100,17 @@ release (Conversations registry) ticket = atomically $ do
     if null remaining
       then Map.delete ticket.input.group groups
       else Map.insert ticket.input.group remaining groups
+
+awaitFeedback :: Conversations -> AgentTurnId -> STM ()
+awaitFeedback (Conversations registry) turn = do
+  groups <- readTVar registry
+  case find (any ((== turn) . (.input.turn))) (Map.elems groups) of
+    Nothing -> retry
+    Just tickets -> do
+      active <- filterM (fmap (== Running) . readTVar . (.state)) tickets
+      check (any ((== turn) . (.input.turn)) active)
+      feeding <- filterM (fmap (== Feeding) . readTVar . (.state)) tickets
+      check (not (null feeding))
 
 readFeedback :: Conversations -> AgentTurnId -> IO Text
 readFeedback (Conversations registry) turn = atomically $ do

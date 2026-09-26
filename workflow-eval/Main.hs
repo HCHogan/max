@@ -42,7 +42,7 @@ import Max.Effects.Agent
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.LLM
 import Max.Effects.Tools
-import Max.Execution.Tools
+import Max.Execution.Tools hiding (Interrupted)
 import Max.Hash (jsonHash)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.IR (Body (..), Node (NText))
@@ -241,7 +241,7 @@ factory jobs sources context = buildToolRegistry definitions (readerTool : filte
       Right (object ["source" .= ("source:" <> path), "body" .= body, "fingerprint" .= jsonHash (String body)])
 
 definitions :: [ToolDefinition]
-definitions = [ToolDefinition (ToolRef name) (SchemaVersion 1) (Set.singleton (if name == "web_search" then EffectRead "source" else EffectWrite "task.db")) parallelism (if name == "web_search" then RetrySafe else RetryUnsafe) (Set.singleton CurrentConversation) (ToolDeadline deadline) True mode | (name, mode, parallelism, deadline) <- [("web_search", WorkCall, SequentialOnly, 30), ("agent", WorkCall, ParallelIndependent, 21600), ("agent_progress", CheckpointCall, SequentialOnly, 30)]]
+definitions = [ToolDefinition (ToolRef name) (SchemaVersion 1) (Set.singleton (if name == "web_search" then EffectRead "source" else EffectWrite "task.db")) parallelism (if name == "web_search" then RetrySafe else RetryUnsafe) (Set.singleton CurrentConversation) (ToolDeadline deadline) True mode (if name == "agent" then AsyncTool else ShortTool) | (name, mode, parallelism, deadline) <- [("web_search", WorkCall, SequentialOnly, 30), ("agent", WorkCall, ParallelIndependent, 21600), ("agent_progress", CheckpointCall, SequentialOnly, 30)]]
 
 evalGrants :: Map.Map Text Text
 evalGrants = Map.fromList [(entry.tdRef.unToolRef, toolCatalogFingerprint [entry]) | entry <- definitions]

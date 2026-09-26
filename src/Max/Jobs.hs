@@ -20,6 +20,7 @@ module Max.Jobs
     reportJobProgress,
     readJobInbox,
     jobHasFeedback,
+    awaitFeedback,
     waitForChildren,
     listJobs,
     lookupJob,
@@ -320,12 +321,9 @@ waitForChildren jobs turn requested = atomically $ do
       if any (`notElem` map (.jobId) selected) requested || length found /= length selected
         then pure (Left "wait requires current children of this job")
         else
-          if not (Seq.null entry.inbox)
-            then pure (Right FeedbackPending)
-            else
-              if not (any (taskIsLive . (.view.status)) found)
-                then pure (Right (ChildrenFinished (map (.view) found)))
-                else retry
+          if not (any (taskIsLive . (.view.status)) found)
+            then pure (Right (ChildrenFinished (map (.view) found)))
+            else retry
     _ -> throwSTM TaskCancelled
 
 listJobs :: Jobs -> GroupId -> IO [JobView]
@@ -576,6 +574,13 @@ monitorAvailable entries candidate = case candidate.view.spec.monitor of
         other.view.run == candidate.view.run
           || fmap (.definitionId) other.view.spec.monitor /= Just monitor.definitionId
           || (other.view.status /= Running && isNothing other.runtime)
+
+awaitFeedback :: Jobs -> AgentTurnId -> STM ()
+awaitFeedback jobs turn = do
+  entries <- readTVar jobs.entries
+  case entryForTurn entries turn of
+    Just entry | currentRuntime entry && taskIsLive entry.view.status -> check (not (Seq.null entry.inbox))
+    _ -> retry
 
 jobHasFeedback :: Jobs -> AgentTurnId -> IO Bool
 jobHasFeedback jobs turn = do

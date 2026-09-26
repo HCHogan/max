@@ -1,6 +1,7 @@
 -- | Local admission, diagnostic storage and feedback supplied by assembly.
 module Max.Agent.Execution (ExecutionAdmission (..), ExecutionJournal (..), ExecutionInbox (..)) where
 
+import Control.Concurrent.STM (STM)
 import Data.Text (Text)
 import Effectful (Eff)
 import Max.Execution.Types
@@ -19,4 +20,7 @@ data ExecutionJournal es = ExecutionJournal
     ejFinish :: JournalExecution -> JournalFinish -> Eff es ()
   }
 
-newtype ExecutionInbox es = ExecutionInbox {eiRead :: AgentTurnRef -> Eff es Text}
+data ExecutionInbox es = ExecutionInbox
+  { eiRead :: AgentTurnRef -> Eff es Text,
+    eiInterrupt :: AgentTurnRef -> STM ()
+  }

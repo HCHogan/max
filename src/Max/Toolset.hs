@@ -38,6 +38,7 @@ import Max.Effects.Tools
   ( SchemaVersion (..),
     Tool (..),
     ToolAuthority (..),
+    ToolAwait (..),
     ToolCatalogError,
     ToolDeadline (..),
     ToolDefinition (..),
@@ -354,7 +355,8 @@ definition name effects parallelism retry authorities =
       tdAuthorities = Set.fromList authorities,
       tdDeadline = defaultToolDeadline,
       tdFailuresPrecedeEffects = False,
-      tdCallMode = WorkCall
+      tdCallMode = WorkCall,
+      tdAwait = if name `elem` ["agent", "agent_wait", "sandbox_exec", "browser", "view_bilibili"] then AsyncTool else ShortTool
     }
 
 -- | Bound individual calls so a stalled tool returns before the turn watchdog.

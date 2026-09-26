@@ -1,6 +1,8 @@
 module Max.CodeMode.JavaScriptSpec (spec) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
+import Control.Concurrent.Async qualified as Async
+import Control.Concurrent.STM
 import Control.Exception qualified as Exception
 import Control.Monad (forM_)
 import Data.Aeson (Value (..), object, toJSON, (.=))
@@ -13,6 +15,7 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Effectful (liftIO, runEff)
 import Effectful.Concurrent (runConcurrent)
+import Effectful.Exception qualified as Eff
 import ExecutionFixture
 import Max.Browser.View (browserBudget, browserView)
 import Max.CodeMode.Execution
@@ -43,16 +46,82 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
       runJavaScript session noJournal (views registry) "const reports = await Promise.all(['one','two'].map(objective => agent({objective, profile:'basic'}))); return reports.map(x => [x.objective, x.wait]);"
     fmap (.cmExit) result `shouldBe` Just WasmCompleted
     fmap (.cmOutput) result `shouldBe` Just (Just (toValue [toValue [String "one", Bool True], toValue [String "two", Bool True]]))
-  it "stops guest execution when a waiting agent call returns for pending feedback" $ do
+  it "pauses on steering and resumes the original await with buffered results" $ do
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    completed <- newEmptyMVar
+    slots <- newTVarIO (0 :: Int)
+    steering <- newTVarIO False
     count <- newIORef (0 :: Int)
-    let definition = echoDefinition {tdRef = ToolRef "agent", tdParallelism = ParallelIndependent}
-        runner _ = liftIO (modifyIORef' count (+ 1)) >> pure (Right (object ["agent" .= ("agent#1" :: Text), "feedback_pending" .= True]))
-    registry <- checked [definition] [legacyTool "agent" "agent" (object ["type" .= ("object" :: Text)]) runner]
-    result <- runEff . runConcurrent . runTools registry $ do
-      session <- newExecutionSession (Just 3)
-      runJavaScript session noJournal (views registry) "await agent({objective:'one',profile:'basic'}); await agent({objective:'two',profile:'basic'}); return 'unreachable';"
-    result.cmExit `shouldBe` WasmHostStopped
-    readIORef count `shouldReturn` 1
+    let definition = echoDefinition {tdAwait = AsyncTool}
+        runner value = liftIO $ do
+          modifyIORef' count (+ 1)
+          case valueOf value of
+            Just (Number 2) -> putMVar entered () >> takeMVar release >> putMVar completed ()
+            _ -> pure ()
+          pure (Right value)
+        hooks =
+          noJournal
+            { ehInterrupt = readTVar steering >>= check,
+              ehAcquireGuest = liftIO $ do
+                atomically (modifyTVar' slots (+ 1))
+                pure (Just (atomically (modifyTVar' slots (subtract 1))))
+            }
+    registry <- checked [definition] [echoTool {toolRunner = LegacyRunner runner}]
+    Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ ->
+      runEff . runConcurrent . runTools registry $ do
+        session <- newExecutionSession Nothing
+        ( do
+            paused <- runJavaScript session hooks (views registry) "let base=40; const a=await tools.echo({value:2}); await tools.echo({value:3}); return base+a.value;"
+            liftIO (paused.cmExit `shouldBe` WasmPaused)
+            liftIO (readTVarIO slots `shouldReturn` 1)
+            liftIO (putMVar release () >> takeMVar completed)
+            liftIO (readIORef count `shouldReturn` 1)
+            liftIO (atomically (writeTVar steering False))
+            resumed <- executeModelBatch True Map.empty session hooks (views registry) [ToolRequest "resume" "run_code_resume" (object ["run" .= paused.cmRunRef])]
+            liftIO (map codeValue resumed.tbInvocations `shouldBe` [Just (Number 42)])
+            liftIO (readIORef count `shouldReturn` 2)
+            liftIO (readTVarIO slots `shouldReturn` 0)
+            other <- newExecutionSession Nothing
+            denied <- controlProgram other True paused.cmRunRef
+            liftIO (outcomeName denied.tiOutcome `shouldBe` "rejected")
+          )
+          `Eff.finally` closeExecutionSession session
+
+  it "cancels a paused program, joins its tools and records unfinished effects" $ do
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    ended <- newEmptyMVar
+    steering <- newTVarIO False
+    let runner value = liftIO ((putMVar entered () >> takeMVar release >> pure (Right value)) `Exception.finally` putMVar ended ())
+        hooks = noJournal {ehInterrupt = readTVar steering >>= check}
+    registry <- checked [echoDefinition {tdAwait = AsyncTool}] [echoTool {toolRunner = LegacyRunner runner}]
+    Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ ->
+      runEff . runConcurrent . runTools registry $ do
+        session <- newExecutionSession Nothing
+        ( do
+            paused <- runJavaScript session hooks (views registry) "await tools.echo({value:1}); return 'unreachable';"
+            liftIO (paused.cmExit `shouldBe` WasmPaused)
+            cancelled <- controlProgram session False paused.cmRunRef
+            liftIO (outcomeName cancelled.tiOutcome `shouldBe` "outcome-unknown")
+            liftIO (timeout 1000000 (takeMVar ended) `shouldReturn` Just ())
+            stale <- controlProgram session True paused.cmRunRef
+            liftIO (outcomeName stale.tiOutcome `shouldBe` "rejected")
+          )
+          `Eff.finally` closeExecutionSession session
+
+  it "cancels a paused guest when its owning task ends" $ do
+    steering <- newTVarIO True
+    registry <- checked [echoDefinition {tdAwait = AsyncTool}] [echoTool]
+    runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      paused <- runJavaScript session noJournal {ehInterrupt = readTVar steering >>= check} (views registry) "return await tools.echo({value:1});"
+      liftIO (paused.cmExit `shouldBe` WasmPaused)
+      liftIO (paused.cmSubmittedCalls `shouldBe` 0)
+      closeExecutionSession session
+      result <- controlProgram session True paused.cmRunRef
+      liftIO (outcomeName result.tiOutcome `shouldBe` "rejected")
+
   it "rejects run_code over its guest limit before any guest work" $ do
     registry <- checked [echoDefinition] [echoTool]
     result <- runEff . runConcurrent . runTools registry $ do
@@ -374,7 +443,10 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     forM_
       [ (False, [code "return 1"]),
         (True, [code "return 1", ToolRequest "leaf" "echo" (object ["value" .= (1 :: Int)])]),
-        (True, [code (T.replicate 65537 "x")])
+        (True, [code (T.replicate 65537 "x")]),
+        (True, [ToolRequest "bad-resume" "run_code_resume" (object ["code" .= ("return await tools.echo({value:1});" :: Text)])]),
+        (True, [ToolRequest "bad-cancel" "run_code_cancel" (object ["code" .= ("return 1" :: Text)])]),
+        (True, [ToolRequest "bad-wait" "execution_wait" (object ["code" .= ("return 1" :: Text)])])
       ]
       $ \(enabled, calls) -> do
         result <- runEff . runConcurrent . runTools registry $ do
@@ -385,6 +457,11 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
   where
     code :: Text -> ToolRequest
     code source = ToolRequest "model-code" "run_code" (object ["code" .= source])
+
+codeValue :: ToolInvocation -> Maybe Value
+codeValue invocation = case invocation.tiOutcome of
+  ToolSucceeded (Object fields) -> KM.lookup "value" fields
+  _ -> Nothing
 
 valueOf :: Value -> Maybe Value
 valueOf = \case

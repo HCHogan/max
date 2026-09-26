@@ -1,5 +1,6 @@
 module ExecutionFixture (compileWat, guestProgram, guestCalls, echoDefinition, echoTool, noJournal) where
 
+import Control.Concurrent.STM (retry)
 import Data.Aeson (Value (..), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString (ByteString)
@@ -39,10 +40,10 @@ guestProgram requests after =
     escape = T.pack . concatMap (\byte -> let h = showHex byte "" in '\\' : (if length h == 1 then '0' : h else h)) . BS.unpack
 
 echoDefinition :: ToolDefinition
-echoDefinition = ToolDefinition (ToolRef "echo") (SchemaVersion 1) (Set.singleton (EffectRead "test")) ParallelSafe RetrySafe (Set.singleton CurrentConversation) (ToolDeadline 30) True WorkCall
+echoDefinition = ToolDefinition (ToolRef "echo") (SchemaVersion 1) (Set.singleton (EffectRead "test")) ParallelSafe RetrySafe (Set.singleton CurrentConversation) (ToolDeadline 30) True WorkCall ShortTool
 
 echoTool :: Tool es
 echoTool = legacyTool "echo" "echo" (object ["type" .= ("object" :: Text), "required" .= (["value"] :: [Text]), "properties" .= object ["value" .= object ["type" .= ("integer" :: Text)]]]) (pure . Right)
 
 noJournal :: ExecutionHooks es
-noJournal = ExecutionHooks (pure ()) (\_ _ -> pure Nothing) (\_ _ -> pure ()) (pure (Just (pure ())))
+noJournal = ExecutionHooks (pure ()) (\_ _ -> pure Nothing) (\_ _ -> pure ()) (pure (Just (pure ()))) retry
