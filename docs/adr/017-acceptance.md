@@ -35,7 +35,7 @@ is local implementation/test evidence, not deployment evidence.
 | max.race/max.cancel cancel only direct tool promises; no duplicate effects | Reviewed | SDK WeakMap identity and cancellation outbox; race-cancel test waits for loser cleanup before continuing, outbox cancellation test asserts no calls. |
 | max.sleep is a host future without clock access | Reviewed | SDK strips Date/Math.random; driver handles `$sleep`; embedded sleep test. |
 | Awaited background agent can run code | Reviewed | DB `ExecutionSpec` runs a real admitted/attached awaited child through `runAgentRuntime`, loads web/codemode, executes a leaf, verifies journal rows and returns the actual report to its waiting parent. Model and leaf service are deterministic fixtures. |
-| Guest-limit refusal before effects; existing workflow-agent behavior | Pending | `JavaScriptSpec` and `JobsSpec` cover guest admission; include workflow suite and actual global/tree bounds in final gate review. |
+| Guest-limit refusal before effects; existing workflow-agent behavior | Reviewed | `runWasmProgram` acquires capacity before `runAdmittedProgram`, store creation or leaf execution, and returns a rejected outcome on refusal. `JavaScriptSpec` covers rejection; `JobsSpec` checks exact 32-global/16-tree bounds and idempotent release. DB `WorkflowAgentSpec` covers real agent futures, concurrent starts, budgets, interruption/resume and child cancellation; `ExecutionSpec` additionally runs an awaited child's model loop through codemode. |
 
 ## Shared scheduler (§3; delivery step 2)
 
@@ -62,7 +62,7 @@ is local implementation/test evidence, not deployment evidence.
 | Monitor occurrence enters as Fired under overlap policy | Pending | Review frozen consumer, admission rollback and durable overflow. |
 | !kill logs Cancelled and interrupts an active model call | Reviewed | Parser/permission specs cover command admission; `Command.Dispatcher` invokes `cancelTask`/`cancelAllTasks`. `Tasks.controlEntry` writes the terminal event and revokes before invoking the registered worker signal. `Turn.Dispatch` binds `throwTo TaskCancelled`; `Effects.AgentSpec` kills a blocked model call and checks the exception/cleanup. `TasksSpec` checks the Cancelled event, pre-activation fencing, retained-call cancellation and once-only signals. |
 | Deeper steering also sends non-urgent provenance to parent | Reviewed | `Jobs.steerJobFrom` logs attributed external steering and a normal parent message in one STM transaction; a full parent log rolls both back. `JobsSpec` checks the provenance body, backpressure, external advice leaving ask pending, and a parent answer settling without a new interrupt. |
-| Final answer closes atomically unless an interrupt is unobserved | Pending | Ordinary/streamed `ContentResp` checks `eeFinish` / `Events.tryFinish`; event/conversation race specs and the streamed-paragraph agent test cover that path. Finish reviewing budget-wrapup and `InterruptedResp` exits, which return partial answers through different branches. |
+| Final answer closes atomically unless an interrupt is unobserved | Reviewed | Every terminal branch in `Effects.Agent` uses `finish` / `eeFinish` / `Events.tryFinish`, including budget wrap-up, interrupted streams and model failures. Event/conversation race specs cover atomic acceptance versus closure. Five DB `ExecutionSpec` cases inject real steering during round-limit, tree-model-budget, tree-tool-budget, partial-stream and failed-model exits: the next poll sees it and the earlier output, exhausted runs stay tool-free, and already-published paragraphs are retained without republishing. Existing agent specs cover ordinary final replies and stream interruption without a new event. |
 | Remove Conversation tickets, Jobs inbox/notice/waiter/JobWork, old feedback paths | Reviewed | Current source search has no `readFeedback`, `ExecutionInbox`, `FeedbackPending`, `FeedbackFirst`, `feedback_pending`, `pendingNotice`, `noticeInFlight`, `JobWork`, `childWaiters`, `taskWorkflowHost`, `delegated` or `batchLock`. Generic status constructors are not old tickets. |
 
 ## Projection (§5; delivery step 3)
@@ -84,7 +84,7 @@ is local implementation/test evidence, not deployment evidence.
 | Native handles remain live; subsequent wait receives real value | Reviewed | Native detach/retain and waitExecution paths; interruption and retained-call specs. |
 | Paused guest retains store, buffers futures, admits no steps until resume | Reviewed | Resume TMVar/paused flag, guest actor await and buffered-results test. |
 | Paused task-end cancels program/calls; short tools defer steering | Reviewed | Program ownership cleanup and `Execution/ToolsSpec` non-async test. |
-| Background leaf-worker restriction removed; global/tree limits reject immediately | Pending | Finish tree-limit and profile/tool-directory audit. |
+| Background leaf-worker restriction removed; global/tree limits reject immediately | Reviewed | `Task.Types.taskGrants` keeps use_skill/agent in every profile; `Turn.Job` enables loaded skills without an awaited/leaf condition. `Toolset` advertises codemode and `Effects.Agent` exposes run_code by skill visibility alone. `Jobs.admitJobWithAuthority` inherits the guest-tree identity; `acquireGuestSlot` returns Nothing at capacity without retry. Foreground and awaited descendants share the tested tree cap. No production delegated/taskWorkflowHost path remains. |
 | agent_tell/max.tell and agent_ask/max.ask; urgent/normal distinction | Reviewed | `Tools.Task`/`Task.ToolRuntime` bind the real handlers; `Toolset` exposes them to background tasks and marks ask async. SDK forwards to those tools. DB `WorkflowAgentSpec` resumes the original JavaScript local state with an actual parent answer; `JobsSpec` checks normal versus urgent wake behavior, question cancellation, runtime expiry and stale relay/question isolation. |
 | Ask answered across two levels; agent_progress only status | Reviewed | `JobsSpec` holds leaf and middle ask computations concurrently and answers each through its immediate parent. `Effects.TaskExecution` delegates directly to Jobs; progress only updates the entry. Unit tests check no relay, and DB `JobSpec` verifies no chat publication or message row. |
 | Frozen monitor consumer; durable schedule/dedup; bounded queue/coalesce | Pending | Review §8 source and database assertions. |
@@ -93,8 +93,9 @@ is local implementation/test evidence, not deployment evidence.
 
 ## Numeric limits (§10)
 
-All rows remain subject to the final configuration-and-boundary-test review.
-These are the required values, not claims derived from default fixture limits.
+Rows explicitly marked `Reviewed` have passed source and boundary review; the
+other rows still need that review. Required values are not claims derived from
+default fixture limits.
 
 | Requirement | Required value | Source to verify |
 |---|---|---|
@@ -105,7 +106,7 @@ These are the required values, not claims derived from default fixture limits.
 | Guest fuel | 10^10 total | `CodeMode.JavaScript.javaScriptLimits`, C store creation |
 | Guest host calls | 4096 | JavaScript limits and driver submitted counter |
 | Guest store / heap | 256 / 192 MiB | JavaScript limits / compiled `codemode/quickjs.c` |
-| Live guests | 32 global / 16 per tree | `Jobs.acquireGuestSlot` |
+| Live guests | 32 global / 16 per tree | Reviewed: `Jobs.acquireGuestSlot` checks sum >=32 and tree count >=16 in STM. `JobsSpec` admits exactly both limits, rejects the next admission, shares a foreground tree with its awaited child, and verifies double release does not create capacity. |
 | Guest step wall time | 60 seconds | JavaScript limits / Wasm timed step |
 | Calls in flight | 64 | SDK outbox and host GuestCalls validation |
 | Resume outcomes / one result | 16 MiB / 4 MiB | `resumeChunk`, `boundedOutcome`, Wasm channel limits |

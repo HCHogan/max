@@ -152,6 +152,7 @@ data LoopState = LoopState
   { context :: !AgentContext,
     roundNumber :: !Int,
     corrections :: !Int,
+    wrapupReason :: !(Maybe AgentFailure),
     record :: !Projection.TaskRecord
   }
 
@@ -231,7 +232,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
         trigger <- Events.taskTrigger target >>= maybe (throwSTM TaskCancelled) pure
         pure (trigger, Projection.logCursor nodeLog)
       actor <- liftIO (turnExecutor turn)
-      let initial = LoopState {context = initialContext, roundNumber = 0, corrections = 0, record = Projection.newTaskRecord trigger cursor messages}
+      let initial = LoopState {context = initialContext, roundNumber = 0, corrections = 0, wrapupReason = Nothing, record = Projection.newTaskRecord trigger cursor messages}
       result <- withEffToIO SeqUnlift $ \run -> Executor.runSteps actor initial (run . step)
       maybe (throwIO TaskCancelled) pure result
       where
@@ -252,9 +253,10 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
               newNotes = published <> inputMessages completionNote <> inlineMediaMessages (concatMap ((.tiMedia) . snd) settled)
           observedLog <- appendObserved h newNotes
           let cursor = Projection.logCursor observedLog
-          if n >= lims.maxTurns
-            then Left <$> finalAnswer workingRef ctx h n profile state.record AgentRoundLimit
-            else do
+          case state.wrapupReason of
+            Just reason -> wrapup state reason
+            Nothing | n >= lims.maxTurns -> wrapup state AgentRoundLimit
+            Nothing -> do
               liftIO (setTurnPhase h "llm")
               nativeSpecs <- listToolSpecs
               detached <- hasDetachedExecutions session
@@ -267,27 +269,30 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
               checkAdmission h
               sent <- liftIO (readTVarIO sentRef)
               case eres of
-                Left AgentBudgetExhausted -> Left <$> finalAnswer workingRef ctx h (n + 1) profile state.record AgentBudgetExhausted
-                Left err ->
-                  pure . Left $
+                Left AgentBudgetExhausted -> pure (Right state {roundNumber = n + 1, record = prepared, wrapupReason = Just AgentBudgetExhausted})
+                Left err -> do
+                  let completed = if T.null sent then prepared else Projection.recordPoll cursor (Just (MsgAssistant sent)) prepared
+                  finish state {record = completed} $
                     AgentResult
                       { outcome = Failed err sent,
-                        appended = Projection.taskTranscript observedLog prepared cursor,
+                        appended = Projection.taskTranscript observedLog completed cursor,
                         turnsUsed = n + 1
                       }
-                Right (InterruptedResp text reason) ->
-                  pure . Left $
+                Right (InterruptedResp text reason) -> do
+                  let completed = Projection.recordPoll cursor (Just (MsgAssistant text)) prepared
+                  finish state {record = completed} $
                     AgentResult
                       { outcome = Interrupted (AgentStreamInterrupted reason) (AgentReply text sent),
-                        appended = Projection.taskTranscript observedLog (Projection.recordPoll cursor (Just (MsgAssistant text)) prepared) cursor,
+                        appended = Projection.taskTranscript observedLog completed cursor,
                         turnsUsed = n + 1
                       }
                 Right response@(ContentResp text) -> do
-                  let done =
-                        pure . Left $
+                  let completed = Projection.recordPoll cursor (Just (assistantMessage response)) prepared
+                      done =
+                        finish state {record = completed} $
                           AgentResult
                             { outcome = Answered (AgentReply text sent),
-                              appended = Projection.taskTranscript observedLog (Projection.recordPoll cursor (Just (assistantMessage response)) prepared) cursor,
+                              appended = Projection.taskTranscript observedLog completed cursor,
                               turnsUsed = n + 1
                             }
                   case ctx.acAnswerCheck >>= ($ text) of
@@ -301,13 +306,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                                 _ -> Nothing
                           _ <- appendObserved h [MsgUser ("[system] " <> note)]
                           pure (Right state {roundNumber = n + 1, corrections = state.corrections + 1, record = Projection.recordPoll cursor retained prepared})
-                    _ -> do
-                      finished <- raise (raise (inbox.eeFinish h))
-                      if finished
-                        then done
-                        else do
-                          logInfo "agent: unobserved interrupt at final answer, polling again" (object [])
-                          pure (Right state {roundNumber = n + 1, record = Projection.recordPoll cursor (Just (assistantMessage response)) prepared})
+                    _ -> done
                 Right (ToolCallsResp raw narration tcs) -> do
                   logInfo "agent: tool calls" $
                     object
@@ -352,8 +351,25 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                   let completed = Projection.recordResults (drop 1 (assembleToolRound raw tcs toolMsgs imgs)) (Projection.recordPoll cursor (Just (MsgAssistantToolCalls raw tcs)) prepared)
                       nextContext = ctx {acTools = withToolSkillLoads (concatMap (\(_, _, decision) -> controlSkillLoads decision) executed) ctx.acTools}
                   if overBudget
-                    then Left <$> finalAnswer workingRef ctx h (n + 1) profile completed AgentBudgetExhausted
+                    then pure (Right state {context = nextContext, roundNumber = n + 1, record = completed, wrapupReason = Just AgentBudgetExhausted})
                     else pure (Right state {context = nextContext, roundNumber = n + 1, record = completed})
+
+        -- Every terminal branch uses the same atomic event/closure decision.
+        -- An interrupted wrap-up stays tool-free when the executor polls again.
+        finish :: LoopState -> AgentResult -> Eff (Tools : ToolDirectory : es) (Either AgentResult LoopState)
+        finish next result = do
+          liftIO (checkTurnCancellation turn)
+          finished <- raise (raise (inbox.eeFinish turn))
+          if finished
+            then pure (Left result)
+            else do
+              logInfo "agent: unobserved interrupt at task end, polling again" (object [])
+              pure (Right next {roundNumber = result.turnsUsed})
+
+        wrapup :: LoopState -> AgentFailure -> Eff (Tools : ToolDirectory : es) (Either AgentResult LoopState)
+        wrapup state reason = do
+          (result, completed) <- finalAnswer workingRef state.context turn state.roundNumber profile state.record reason
+          finish state {record = completed, wrapupReason = Just reason} result
 
     budgetedCall ::
       TVar (Maybe UsageAnchor, Text) ->
@@ -418,7 +434,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
       Text ->
       Projection.TaskRecord ->
       AgentFailure ->
-      Eff (Tools : ToolDirectory : es) AgentResult
+      Eff (Tools : ToolDirectory : es) (AgentResult, Projection.TaskRecord)
     finalAnswer workingRef ctx h n profile record reason = do
       logInfo "agent: limit reached, forcing final answer" $
         object ["turns" .= n, "reason" .= reason]
@@ -442,7 +458,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
             Interrupted _ _ | Right response <- eres -> Just (assistantMessage response)
             _ -> Nothing
           completed = Projection.recordPoll cursor finalMessage prepared
-      pure AgentResult {outcome, appended = Projection.taskTranscript nextLog completed cursor, turnsUsed = n + 1}
+      pure (AgentResult {outcome, appended = Projection.taskTranscript nextLog completed cursor, turnsUsed = n + 1}, completed)
 
     appendObserved :: TurnRuntime -> [ChatMessage] -> Eff (Tools : ToolDirectory : es) Projection.NodeLog
     appendObserved turn messages = liftIO . atomically $ do

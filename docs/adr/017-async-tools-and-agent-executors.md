@@ -57,7 +57,14 @@ marked as already observed.
 Frontend and background steering now enter a shared typed node event store;
 `ExecutionInbox`, the frontend feedback queue and the job feedback inbox are
 removed. One wake predicate classifies interrupts. Delivery and successful
-final-answer closure share STM, including already-streamed answers. Pending
+final-answer closure share STM, including already-streamed answers. Budget
+wrap-up, interrupted-stream and failed-model exits now use the same closure
+decision: an unobserved interrupt schedules another poll with the retained
+record. Budget exhaustion returns through the executor before the wrap-up poll,
+so that poll observes inputs accepted during the preceding tool round.
+A budget-exhausted continuation remains tool-free; streamed evidence
+already published before a failure stays in its trail without being sent again.
+Pending
 reports keep a bounded source slot in Jobs until the shared router accepts them;
 progress changes status only. Background `agent_tell` / `agent_ask` and their
 SDK functions deliver to the starting task's event log. A parent's answer

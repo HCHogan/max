@@ -6,7 +6,7 @@ import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async
 import Control.Concurrent.STM (atomically, check, newTVarIO, readTVar, writeTVar)
 import Control.Exception (AsyncException (ThreadKilled), bracket_, throwIO)
-import Control.Monad (replicateM_, void, when)
+import Control.Monad (forM_, replicateM_, void, when)
 import Data.Aeson (Value, decodeStrict', object, toJSON, withObject, (.:), (.=))
 import Data.Aeson.Types (parseMaybe)
 import Data.Either (isLeft)
@@ -26,6 +26,7 @@ import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import ExecutionFixture
 import Helpers (truncateAll, withDb)
 import JobFixture (RunningJob (..), launchNext, runningJob, seed)
+import Max.Agent.Failure (AgentFailure (..))
 import Max.Agent.Runtime (executionAdmission, executionJournal, runAgentRuntime)
 import Max.AgentEvent (AgentEvent (..))
 import Max.CodeMode.Execution
@@ -37,14 +38,16 @@ import Max.DB.Connection (DbPool)
 import Max.DB.Job (allocateJobId)
 import Max.Effects.Agent qualified as Agent
 import Max.Effects.Blob (Blob, runBlob)
-import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), LLMInterpreter (..), ToolCall (..), ToolSpec (..), runLLMWith)
+import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), LLMInterpreter (..), ToolCall (..), runLLMWith)
 import Max.Effects.ToolControl (activateSkills, runToolControl)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, drainInlineMedia, forkToolOutputQueue, newToolOutputQueue, queueInlineMedia, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
 import Max.Execution.Authority (callIsUsable)
 import Max.Execution.Tools
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
+import Max.Http.Failure (ResponseFailure (..), TransportFailure (..))
 import Max.Jobs qualified as Jobs
+import Max.LLM.Failure (LLMFailure (..))
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.Memory.ToolRuntime (memoryToolsWithDatabase)
 import Max.Node.Router qualified as Router
@@ -54,7 +57,7 @@ import Max.Skill.Package
 import Max.Skill.ToolRuntime (skillToolsWithRuntime)
 import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Skills (newSkillRegistry)
-import Max.Task.Policy (treeToolCalls)
+import Max.Task.Policy (treeModelRounds, treeToolCalls)
 import Max.Task.State (TaskStatus (Cancelled, Failed, Succeeded))
 import Max.Task.ToolRuntime (taskTools)
 import Max.Task.Types (JobResult (..), JobRun (..), JobSpec (..), JobView (..), TaskProfile (Basic, Sandbox))
@@ -89,6 +92,74 @@ hostHooks jobs = hoistExecutionHooks raise . hooks jobs
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution with real journal" $ do
+  forM_ [("round limit", Nothing), ("tree model budget", Just ReserveRound), ("tree tool budget", Just ReserveCall)] $ \(label, budget) ->
+    it ("observes late steering during " <> label <> " wrap-up and stays tool-free") $ do
+      running <- runningJob pool Basic Map.empty
+      forM_ budget $ \reservation -> replicateM_ (if reservation == ReserveRound then treeModelRounds else treeToolCalls) (Jobs.authorizeJobStep running.jobs running.turn.atrTurnId (ExecutionWork reservation) `shouldReturn` True)
+      calls <- newIORef (0 :: Int)
+      let context =
+            mkToolContext
+              (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 99) running.job.spec.principal Nothing (Just (turnRuntimeOutputContext running.runtime)))
+              (TurnCapabilities False False False noAdvertisedCaps False Map.empty (Just Map.empty) True)
+          provider = LLMInterpreter $ \_ _ messages specs _ -> do
+            n <- liftIO (atomicModifyIORef' calls (\value -> (value + 1, value)))
+            let firstWrapup = if budget == Just ReserveCall then 1 else 0
+            if n < firstWrapup
+              then do
+                liftIO $ map (.specName) specs `shouldContain` ["echo"]
+                liftIO $ Jobs.steerJob running.jobs (GroupId 900) running.job.spec.principal Nothing running.job.run.jobId "before wrap-up" `shouldReturn` Right ()
+                pure (Right (ToolCallsResp (object []) "" [ToolCall "over-budget" "echo" (object ["value" .= (42 :: Int)])]))
+              else do
+                liftIO $ specs `shouldSatisfy` null
+                if n == firstWrapup
+                  then do
+                    when (budget == Just ReserveCall) $ liftIO $ messages `shouldSatisfy` any (\case MsgUser body -> "before wrap-up" `T.isInfixOf` body; _ -> False)
+                    liftIO $ Jobs.steerJob running.jobs (GroupId 900) running.job.spec.principal Nothing running.job.run.jobId "include this correction" `shouldReturn` Right ()
+                    pure (Right (ContentResp "earlier summary"))
+                  else do
+                    liftIO $ do
+                      messages `shouldSatisfy` any (\case MsgAssistant "earlier summary" -> True; _ -> False)
+                      messages `shouldSatisfy` any (\case MsgUser body -> "include this correction" `T.isInfixOf` body; _ -> False)
+                    pure (Right (ContentResp "revised summary"))
+      result <-
+        withHost pool . runLLMWith provider . runAgentRuntime running.jobs (Agent.AgentLimits (if budget == Nothing then 0 else 4)) (const (buildToolRegistry [echoDefinition] [echoTool])) $
+          Agent.agentTurn running.runtime (Agent.AgentContext context Nothing Nothing Nothing) "fixture" [MsgUser "work"] (\case AgentFinalStreamText _ -> pure False; AgentProgressText _ -> pure (); AgentToolDebug _ -> pure ())
+      result.outcome `shouldBe` Agent.Interrupted (if budget == Nothing then AgentRoundLimit else AgentBudgetExhausted) (Agent.AgentReply "revised summary" "")
+      readIORef calls `shouldReturn` (if budget == Just ReserveCall then 3 else 2)
+      states running.turn `shouldReturn` []
+      finishTurnRuntime running.tasks running.runtime
+
+  forM_ [("interrupted stream", Right (InterruptedResp "published paragraph\n\npartial reply" (ResponseTransport ResponseTimeoutFailure))), ("failed model call", Left (LLMResponseFailure (ResponseTransport ResponseTimeoutFailure)))] $ \(label, terminal) ->
+    it ("observes pending steering before closing after a terminal response: " <> label) $ do
+      running <- runningJob pool Basic Map.empty
+      calls <- newIORef (0 :: Int)
+      published <- newIORef ([] :: [Text])
+      let context =
+            mkToolContext
+              (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 99) running.job.spec.principal Nothing (Just (turnRuntimeOutputContext running.runtime)))
+              (TurnCapabilities False False False noAdvertisedCaps False Map.empty (Just Map.empty) True)
+          provider = LLMInterpreter $ \_ _ messages _ sink -> do
+            n <- liftIO (atomicModifyIORef' calls (\value -> (value + 1, value)))
+            if n == 0
+              then do
+                maybe (pure ()) ($ "published paragraph\n\nunpublished tail") sink
+                liftIO $ Jobs.steerJob running.jobs (GroupId 900) running.job.spec.principal Nothing running.job.run.jobId "new evidence" `shouldReturn` Right ()
+                pure terminal
+              else do
+                liftIO $ messages `shouldSatisfy` any (\case MsgUser body -> "new evidence" `T.isInfixOf` body; _ -> False)
+                case terminal of
+                  Right _ -> liftIO $ messages `shouldSatisfy` any (\case MsgAssistant "published paragraph\n\npartial reply" -> True; _ -> False)
+                  Left _ -> liftIO $ messages `shouldSatisfy` any (\case MsgAssistant "published paragraph\n\n" -> True; _ -> False)
+                pure (Right (ContentResp "handled new evidence"))
+      result <-
+        withHost pool . runLLMWith provider . runAgentRuntime running.jobs (Agent.AgentLimits 4) (const (buildToolRegistry [] [])) $
+          Agent.agentTurn running.runtime (Agent.AgentContext context Nothing Nothing Nothing) "fixture" [MsgUser "work"] (\case AgentFinalStreamText text -> liftIO (modifyIORef' published (<> [text])) >> pure True; AgentProgressText _ -> pure (); AgentToolDebug _ -> pure ())
+      result.outcome `shouldBe` Agent.Answered (Agent.AgentReply "handled new evidence" "")
+      readIORef calls `shouldReturn` 2
+      readIORef published `shouldReturn` ["published paragraph\n\n"]
+      states running.turn `shouldReturn` []
+      finishTurnRuntime running.tasks running.runtime
+
   it "steers a background native await through node events and rejoins its original future" $ do
     let grants = Map.singleton "sandbox_exec" "fixture"
     running <- runningJob pool Sandbox grants
