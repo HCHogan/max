@@ -153,7 +153,7 @@ runWasmProgram session hooks catalog limits program = mask $ \restore -> do
           writeTVar paused True
           future <- readTVar replies
           publish future (Right result)
-        awaitExecution guestHooks True (takeTMVar resumes)
+        awaitGuestExecution session guestHooks (reference <> "/resume") True (takeTMVar resumes)
   worker <- asyncWithUnmask $ \unmask -> do
     outcome <-
       try . unmask $
@@ -276,7 +276,7 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
                 else do
                   let interrupt = if all (asyncTool . (.trName) . fst) (Map.elems pending) then hooks.ehInterrupt else retry
                       collect = do
-                        wake <- awaitExecution hooks (any (asyncTool . (.trName) . fst) (Map.elems pending)) (awaitWake interrupt Async.pollSTM (snd <$> pending))
+                        wake <- awaitGuestExecution session hooks label (any (asyncTool . (.trName) . fst) (Map.elems pending)) (awaitWake interrupt Async.pollSTM (snd <$> pending))
                         case wake of
                           Interrupted -> pause [] >> collect
                           Settled ready -> pure [(ident, request, outcome) | (ident, outcome) <- ready, Just (request, _) <- [Map.lookup ident pending]]
@@ -316,6 +316,26 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
     digest = TE.decodeUtf8 . Base16.encode . SHA256.hash
     isBudget (ToolRejected fault) = fault.tfCode == "call_budget_exhausted"
     isBudget _ = False
+
+-- | A guest's private future is captured in the same transaction as its
+-- readiness receipt, before the executor can enqueue another guest step.
+-- Each await owns a fresh receipt, so a previous pause/completion cannot wake
+-- a later await. Only the opaque guest reference enters the node log.
+awaitGuestExecution :: (IOE :> es) => ExecutionSession -> ExecutionHooks es -> Text -> Bool -> STM a -> Eff es a
+awaitGuestExecution session hooks reference immediate ready = do
+  (target, future) <- liftIO . atomically $ do
+    target <- executionEventTask session hooks
+    (target,) <$> Events.newFuture target
+  let selection = Events.noPending {Events.calls = Set.singleton reference}
+  result <- awaitExecution hooks immediate $ do
+    active <- Events.isOpen target
+    if not active
+      then pure Nothing
+      else do
+        value <- ready
+        _ <- Events.settleFuture future (Events.GuestReady reference) value
+        Events.pollFuture selection future
+  maybe (throwIO TaskCancelled) pure result
 
 codeModeInvocation :: CodeModeResult -> ToolInvocation
 codeModeInvocation result = (ToolInvocation outcome result.cmControl) {tiMedia = result.cmMedia}

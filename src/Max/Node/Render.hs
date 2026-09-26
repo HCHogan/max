@@ -55,6 +55,7 @@ renderObservedEvents seen events =
       ChildSaid child text urgency -> Just (object ["child" .= taskHandle child.jobId, "generation" .= child.generation, "body" .= text, "urgent" .= (urgency == Urgent), "reply_tool" .= ("agent_steer" :: Text)])
       ChildDone _ value -> Just value
       Settled ref value _ -> Just (object ["result" .= ref, "outcome" .= value])
+      GuestReady _ -> Nothing
       Fired occurrence -> Just (object ["event" .= ("Fired" :: Text), "task" .= taskHandle occurrence.run.jobId, "generation" .= occurrence.run.generation, "goal" .= occurrence.consumer.objective, "input" .= occurrence.consumer.inputs])
     attachments (Settled _ _ media) = inlineMediaMessages media
     attachments _ = []

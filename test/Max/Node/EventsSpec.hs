@@ -10,11 +10,30 @@ import Max.Context.Projection qualified as Projection
 import Max.LLM.Types (ChatMessage (MsgUser))
 import Max.Node.Events
 import Max.Node.Log qualified as Log
+import Max.Node.Render (renderEvents)
 import Max.Task.Types (JobRun (..))
 import Test.Hspec
 
 spec :: Spec
 spec = describe "node event delivery and observation" $ do
+  it "records guest readiness without publishing its value or waking an unselected model await" $ do
+    task <- atomically (newNode >>= newTask)
+    (first, next) <- atomically $ (,) <$> newFuture task <*> newFuture task
+    let selected = noPending {calls = Set.singleton "guest"}
+        body = GuestReady "guest"
+    atomically (replicateM_ 255 (deliver task (Steered (String "queued"))))
+    atomically (settleFuture first body ("private result" :: String)) `shouldReturn` True
+    atomically (pollFuture selected first) `shouldReturn` Just "private result"
+    atomically (pollFuture noPending first) `shouldReturn` Nothing
+    atomically (pollFuture selected next) `shouldReturn` Nothing
+    renderEvents [Event 0 0 body] `shouldSatisfy` null
+    snapshot <- atomically (readObservations task)
+    last (Log.deliveredBetween (observationOwner task) (Log.logCursor Log.emptyLog) (Log.logCursor snapshot) snapshot) `shouldBe` body
+    length <$> atomically (observeAll task) `shouldReturn` 255
+    atomically (deliver task Cancelled) `shouldReturn` True
+    atomically (settleFuture next body ("late result" :: String)) `shouldReturn` False
+    atomically (pollFuture selected first) `shouldReturn` Nothing
+
   it "publishes an owned completion and its node event atomically and wakes only the selected await" $ do
     (task, other) <- atomically $ do
       node <- newNode

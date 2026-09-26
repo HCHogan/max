@@ -1,11 +1,11 @@
 # ADR-017 acceptance audit
 
-Status: in progress. This is the requirement inventory for
-[ADR-017](017-async-tools-and-agent-executors.md), not a completion declaration.
-`Reviewed` means the implementation and the stated assertions have been read;
-`Pending` means the final cross-path review is still required, even when existing
-tests pass. Source paths below are relative to the repository root. Validation
-is local implementation/test evidence, not deployment evidence.
+Status: implemented and reviewed, 2026-09-26. This is the requirement inventory
+for [ADR-017](017-async-tools-and-agent-executors.md), delivery steps 1–4.
+`Reviewed` means the implementation and the stated assertions have been read
+and the required validation passed. Step 5 remains deferred by the original
+ADR. Source paths below are relative to the repository root. Validation is
+local implementation/test evidence, not deployment evidence.
 
 ## Invariants (§1)
 
@@ -14,7 +14,7 @@ is local implementation/test evidence, not deployment evidence.
 | 1. One segment per node; independent nodes progress concurrently | Reviewed | `Node.Executor` grants a single owner; `ExecutorSpec`, `ConversationSpec`, `Effects/AgentSpec` and `CodeMode/JavaScriptSpec` exercise competing model/guest actors. |
 | 2. Interleave only at awaits | Reviewed | `runSteps` retains ownership between polls; only `Executor.await` yields. Executor tests distinguish no-await corrections, fast short tools and async awaits. |
 | 3. Tool bodies off the executor; model/guest steps gated | Reviewed | `Execution.Tools.launchCall` starts the body in an Async; `Effects.Agent` calls `runSteps`; guest driver reacquires its actor before `resumeGuest`. |
-| 4. One event admission, routing policy and wake rule | Pending | Frontend recipient selection, completion/message buffering versus relay/fold, and monitor queue/coalesce/overflow now use the single typed `Node.Routing.route` policy. Conversation, Router and the locked occurrence store supply facts and apply its decision in the same transaction. RoutingSpec covers canonical ordering, quoted/queued/closed owners and delivery kinds; Conversation/Router/Jobs and DB monitor specs exercise the adapters, including folding a normal late tell under full relay capacity. Native calls now publish an owned Settled receipt into the node log before readiness. Events.pollFuture applies the same wakes predicate as buffered input; the actual invocation stays with its call and is projected once in the protocol result slot. EventsSpec and ToolsSpec cover atomic publication, selected wake, ordering, revocation, no duplicate observations and completion under input-buffer pressure; DB ExecutionSpec checks the real runtime binding and journal. Program handoffs now use a fresh owned receipt for each pause/resume/cancel cycle; normal results, guest-limit refusal and host exceptions publish before waitReply can wake the parent. JavaScriptSpec checks pause/resume media, cancellation receipts, yielding during leaf cleanup and teardown after task closure; DB ExecutionSpec checks native leaves and the whole program against the real node log/journal without private leaf events. Child report joins enter only through TaskControl inside a tool body; DB ExecutionSpec runs a real awaited native agent and verifies its report returns in one Settled tool result, with no duplicate ChildDone observation. Remaining: finish the audit of private guest step/resume scheduling against the every-wake invariant; §4 excludes guest-private leaf outcomes from model Settled events. Native/guest still share awaitWake. Do not infer this invariant from the passing routing tests. |
+| 4. One event admission, routing policy and wake rule | Reviewed | Frontend recipient selection, completion/message buffering versus relay/fold, and monitor queue/coalesce/overflow now use the single typed `Node.Routing.route` policy. Conversation, Router and the locked occurrence store supply facts and apply its decision in the same transaction. RoutingSpec covers canonical ordering, quoted/queued/closed owners and delivery kinds; Conversation/Router/Jobs and DB monitor specs exercise the adapters, including folding a normal late tell under full relay capacity. Native calls now publish an owned Settled receipt into the node log before readiness. Events.pollFuture applies the same wakes predicate as buffered input; the actual invocation stays with its call and is projected once in the protocol result slot. EventsSpec and ToolsSpec cover atomic publication, selected wake, ordering, revocation, no duplicate observations and completion under input-buffer pressure; DB ExecutionSpec checks the real runtime binding and journal. Program handoffs now use a fresh owned receipt for each pause/resume/cancel cycle; normal results, guest-limit refusal and host exceptions publish before waitReply can wake the parent. JavaScriptSpec checks pause/resume media, cancellation receipts, yielding during leaf cleanup and teardown after task closure; DB ExecutionSpec checks native leaves and the whole program against the real node log/journal without private leaf outcomes. Child report joins enter only through TaskControl inside a tool body; DB ExecutionSpec runs a real awaited native agent and verifies its report returns in one Settled tool result, with no duplicate ChildDone observation. Private guest completion and explicit resume now pass through awaitGuestExecution: it captures the ready value and an opaque GuestReady receipt atomically, then applies Events.pollFuture/wakes before executor enqueue. JavaScriptSpec proves the receipt exists while a peer still holds the permit, and checks a separate resume receipt; EventsSpec checks selection, private rendering, full input buffers, fresh receipts and closure. Native/guest share awaitWake; private leaf values never become model Settled observations. |
 | 5. Observation-ordered, byte-stable projection | Reviewed | `Context.Projection.projectPolls`; projection specs compare encoded prefixes, raw reasoning and interleaved task isolation. Prompt-flow has an independent uninterrupted append oracle. |
 | 6. Interrupted await preserves future | Reviewed | `Execution.Tools` detaches owned native futures; `CodeMode.Execution` parks the program. Native and JavaScript interruption tests verify no replay/cancellation. |
 | 7. Downward controls; upward reports/messages; only ask waits upward | Reviewed | `TaskControl` restricts background steering to direct children; `Jobs.waitForChildren` rejects ancestor/self/sibling/deeper joins. DB `JobSpec` exercises these through the authenticated interpreter. `stopChildren`/`revokeChanges` revoke descendants atomically; `ExecutionSpec` checks attached child/grandchild cancellation on guest return. `tellParent`/`askParent` route upward; two-level ask tests retain both computations. |
@@ -93,9 +93,9 @@ is local implementation/test evidence, not deployment evidence.
 
 ## Numeric limits (§10)
 
-Rows explicitly marked `Reviewed` have passed source and boundary review; the
-other rows still need that review. Required values are not claims derived from
-default fixture limits.
+Every row below has passed source and boundary review. Required values are
+checked at their production configuration, not inferred from default fixture
+limits.
 
 | Requirement | Required value | Source to verify |
 |---|---|---|
@@ -119,6 +119,26 @@ default fixture limits.
 | Tell / steer text | 8000 characters | Reviewed: Jobs checks tell/ask/steer at 8000 characters. Parser now rejects oversized frontend !fb/!feedback before task routing. ParserSpec checks exact Unicode boundary and keeps independent !btw unrestricted; JobsSpec covers maximum-length asks and oversized steering. |
 | Browser workspaces per group | 4 including startup/failed cleanup | Reviewed: Browser.Registry counts all entries in the group before creation, including startup and pending cleanup. Browser registry specs cover twenty concurrent attempts against the four-slot limit, mixed owners, independent groups, failed cleanup and cancelled startup. |
 
+## Wake-boundary audit
+
+The production executor awaits have been traced end to end:
+
+| Boundary | Logged readiness and ownership |
+|---|---|
+| Native round / execution_wait | `launchNativeCall` settles an owned `Events.Future`; `awaitNative` selects its `Settled` receipt through `wakes`. Interrupts use `Events.awaitInterrupt`. |
+| Whole guest program / resume / cancel result | `runWasmProgram.waitReply` selects a fresh owned program-result receipt. The worker publishes success or exception after cleanup. |
+| Private guest completion / explicit resume signal | `awaitGuestExecution` captures the result or signal and records `GuestReady` in one STM transaction before executor enqueue. The receipt is fresh for every await and carries no leaf payload. |
+| Child join / parent answer / host sleep | These wait inside off-executor leaf bodies. Their completion reaches the enclosing native or guest boundary above; there is no independent model-segment wake. The actual native-agent DB test proves the report is returned once. |
+| New request / guest initial entry | Admission, not an await continuation: the task already owns its immutable trigger and the guest belongs to that task's tool call. |
+| Closure / cancellation cleanup | Revocation removes the actor; cleanup joins workers without starting another model/guest step. Closed logs reject late receipts. |
+
+`Executor.await` is the only production continuation-enqueue boundary. Its
+five-second timer releases ownership but cannot start a continuation without
+ready input. Owned futures retain their admitted task; routing policy is needed
+only when choosing a recipient or changing delivery ownership. Raw receipts and
+rendered observations share the node log but remain distinct, preventing a
+private result or an already-returned tool result from appearing twice.
+
 ## Completion gates
 
 The ADR's former tail-format and tool-name questions are resolved in its
@@ -133,5 +153,11 @@ the projection/provider and task-selection tests above cover the tail boundary.
 - Run `cabal run max-prompt-flow`, include the document if changed, then run
   `cabal run max-prompt-flow -- --check` before every commit. Both commands now
   also refuse an uninterrupted projection mismatch against the append oracle.
-- Resolve every Pending row, inspect each numbered limit, then update the ADR
-  status. Green suites alone are not the completion audit.
+- The invariant, delivery, projection, restart and numeric-limit rows above
+  have no unresolved items within delivery steps 1–4. The wake-boundary audit
+  closes the final cross-path review; green suites alone were not its evidence.
+
+Final validation: 1312 unit examples and 330 database examples, zero failures;
+full build, architecture checks, formatting, diff checks and both prompt-flow
+gates passed. The database suite uses the isolated local PostgreSQL instance;
+no production activation or deployment is part of this acceptance.

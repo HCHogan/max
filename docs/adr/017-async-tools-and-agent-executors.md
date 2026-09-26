@@ -1,13 +1,12 @@
 # ADR-017: Async tools, agent executors and projected context
 
 The requirement-by-requirement [acceptance audit](017-acceptance.md) records
-reviewed evidence and the remaining verification work.
+the implementation and validation evidence for delivery steps 1–4.
 
-Status: in progress 2026-09-26. Delivery steps 1–2 are implemented: poll-driven
-guests, shared per-call scheduling, native async interruption and paused guest
-resume/cancel through node interrupts. Projection and node scheduling (steps
-3–4), including unified event routing and detached-result routing after a task
-ends, remain in progress. Root requests and guest drivers now share per-node
+Status: implemented 2026-09-26. Delivery steps 1–4 are complete: poll-driven
+guests, shared per-call scheduling, native async interruption, paused guest
+resume/cancel, projected context, unified node event routing and detached-result
+routing after a task ends. Step 5 remains subject to separate decisions (§8). Root requests and guest drivers now share per-node
 execution permits: async awaits yield immediately, short-tool rounds yield at
 five seconds, and ready segments use the priority/FIFO order below. Up to 32
 tasks can be open on a root; additional admitted requests remain queued.
@@ -33,9 +32,10 @@ stays on its original Haskell thread, preserving sequential effect interpreters;
 awaits still park that continuation and reacquire permission before returning.
 Normal terminal results retain execution ownership until final publication
 closes the task, while exceptions revoke the task and its guest actors. The
-agent no longer privately recurses into its next model step. The full step 3–4
-acceptance audit remains in progress; raw answers (including reasoning
-and signatures), tool results and the initial window remain in the record.
+agent no longer privately recurses into its next model step. The step 3–4
+acceptance audit covers both runtime wiring and protocol output; raw answers
+(including reasoning and signatures), tool results and the initial window remain
+in the record.
 Compaction and media planning use explicit projection checkpoints. Root
 polls also observe later canonical conversation messages through a frozen history
 cut, including ordinary incoming messages, excluding their own publications and
@@ -161,7 +161,10 @@ still running. Collection and report acknowledgement share one transaction;
 abandonment releases exactly that subscription. Replacement invalidates cached
 outcomes without losing logical child joins, while generation-bound admission
 reservations expire. Cancellation replaces a cached partial success before the
-batch can be collected. The remaining node execution and routing acceptance audit stays in step 4.
+batch can be collected. Native and whole-program awaits now select owned settlement receipts from
+this same node log. Private guest awaits and explicit resume signals record an
+opaque GuestReady receipt before scheduler enqueue; their values stay private
+and never become additional model observations.
 `JobWork` is removed. Jobs exposes only a transactional launch claim; a separate
 consumer takes terminal receipts directly from `Node.Router`. Slow source loading
 cannot prevent result intake, and a blocked monitor writer cannot hold launch
@@ -448,6 +451,7 @@ data EventBody
   | ChildSaid AgentRun Text Urgency
   | ChildDone AgentRun Report
   | Settled CallRef ToolInvocation  -- only for calls that no guest is waiting on
+  | GuestReady GuestRef             -- opaque readiness; the guest owns its value
   | Fired Occurrence
 
 -- The only way in.
@@ -459,6 +463,7 @@ deliver :: Node -> Event -> STM ()
 wakes :: Pending -> EventBody -> Bool
 wakes pending = \case
   Settled call _ -> completesAwait pending call
+  GuestReady guest -> completesAwait pending guest
   ChildDone run _ -> completesAwait pending run
   ChildSaid _ _ Urgent -> True
   Steered _ -> True
@@ -480,6 +485,15 @@ The ready queue is ordered by class, first to last:
 4. notices.
 
 Within a class, order is first in, first out.
+
+A private guest await records `GuestReady` atomically with capturing its ready
+value, before the executor enqueues the next guest step. This also applies to
+the explicit resume signal after a pause. Each await owns a fresh receipt;
+only that receipt's selected guest can consume the value. The marker carries
+no leaf result or media, uses no model-input buffer capacity, and is excluded
+from model observations. Leaf outcomes remain in the original futures and the
+execution journal. Task closure refuses late receipts. Returning from the
+whole program to its caller uses a separate owned `Settled` receipt.
 
 **Routing.** This is the one place that holds policy. At the root:
 

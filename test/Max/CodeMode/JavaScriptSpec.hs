@@ -38,6 +38,7 @@ import Test.Hspec
 spec :: Spec
 spec = describe "JavaScript SDK in embedded Wasm" $ do
   it "lets another root segment run during an async await and gates every resumed guest step" $ do
+    target <- atomically (Events.newNode >>= Events.newTask)
     node <- Node.newExecutor
     parent <- atomically (Node.registerTask node (AgentTurnId 1) Node.NewRequest)
     other <- atomically (Node.registerTask node (AgentTurnId 2) Node.NewRequest)
@@ -52,16 +53,20 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
     registry <- checked [echoDefinition {tdAwait = AsyncTool}] [echoTool {toolRunner = LegacyRunner runner}]
     let program = runEff . runConcurrent . runTools registry $ do
           session <- newExecutionSession Nothing
-          runJavaScript session noJournal {ehActor = pure (Just parent)} (views registry) "let base=40; const a=await tools.echo({value:2}); await tools.echo({value:3}); return base+a.value;"
+          runJavaScript session noJournal {ehActor = pure (Just parent), ehEvents = pure (Just target)} (views registry) "let base=40; const a=await tools.echo({value:2}); await tools.echo({value:3}); return base+a.value;"
     Async.withAsync program $ \running -> do
       timeout 1000000 (takeMVar entered) `shouldReturn` Just ()
       timeout 1000000 (Node.enter other) `shouldReturn` Just True
       putMVar release ()
+      -- Readiness is logged before the guest can regain the node permit.
+      timeout 1000000 (atomically (guestEvents target >>= check . (== 1) . length)) `shouldReturn` Just ()
       timeout 20000 (takeMVar nextEffect) `shouldReturn` Nothing
       atomically (Node.closeTask other)
       result <- timeout 30000000 (Async.wait running)
       fmap (.cmOutput) result `shouldBe` Just (Just (Number 42))
       timeout 1000000 (takeMVar nextEffect) `shouldReturn` Just ()
+    length <$> atomically (guestEvents target) `shouldReturn` 2
+    atomically (Events.observeAll target) `shouldReturn` []
     atomically (Node.closeTask parent)
 
   it "runs agent() calls started together concurrently, as waiting agent tool calls, in input order" $ do
@@ -114,6 +119,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
             liftIO (resumed.tiMedia `shouldBe` [second])
             liftIO (codeValue resumed `shouldBe` Just (String "done"))
             liftIO $ programEvents target `shouldReturn` [(outcomeEnvelope (codeModeInvocation paused).tiOutcome, [first]), (outcomeEnvelope resumed.tiOutcome, [second])]
+            liftIO $ length . filter (T.isSuffixOf "/resume") <$> atomically (guestEvents target) `shouldReturn` 1
             liftIO (atomically (Events.observeAll target) `shouldReturn` [])
           )
           `Eff.finally` closeExecutionSession session
@@ -615,6 +621,11 @@ codeValue :: ToolInvocation -> Maybe Value
 codeValue invocation = case invocation.tiOutcome of
   ToolSucceeded (Object fields) -> KM.lookup "value" fields
   _ -> Nothing
+
+guestEvents :: Events.Task -> STM [Text]
+guestEvents target = do
+  snapshot <- Events.readObservations target
+  pure [reference | Events.GuestReady reference <- NodeLog.deliveredBetween (Events.observationOwner target) (NodeLog.logCursor NodeLog.emptyLog) (NodeLog.logCursor snapshot) snapshot]
 
 programEvents :: Events.Task -> IO [(Value, [InlineMedia])]
 programEvents target = atomically $ do

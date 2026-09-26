@@ -75,7 +75,7 @@ spec = describe "shared host tool execution" $ do
     fmap (map (.tiOutcome) . (.tbInvocations)) result `shouldBe` Just [ToolSucceeded args]
     length <$> atomically (Events.observeAll target) `shouldReturn` 255
 
-  it "logs only the whole program result while keeping its private leaf settlements out of the model node log" $ do
+  it "logs guest readiness and the whole program result without private leaf outcomes" $ do
     target <- atomically (Events.newNode >>= Events.newTask)
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [echoTool])
     binary <- guestCalls [request "echo" args] ""
@@ -86,6 +86,7 @@ spec = describe "shared host tool execution" $ do
     snapshot <- atomically (Events.readObservations target)
     let events = Log.deliveredBetween (Events.observationOwner target) (Log.logCursor Log.emptyLog) (Log.logCursor snapshot) snapshot
     [value | Events.Settled _ value _ <- events] `shouldBe` [outcomeEnvelope (codeModeInvocation result).tiOutcome]
+    length [() | Events.GuestReady _ <- events] `shouldBe` 1
     atomically (Events.observeAll target) `shouldReturn` []
 
   it "interrupts a native async await without cancelling or repeating its call" $ do

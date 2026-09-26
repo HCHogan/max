@@ -42,6 +42,9 @@ data Body
   | ChildSaid !JobRun !Text !Urgency
   | ChildDone !JobRun !Value
   | Settled !Text !Value ![InlineMedia]
+  | -- A guest owns the selected receipt and its value; the log records only
+    -- that its private await became ready, never the leaf result itself.
+    GuestReady !Text
   | Fired !Occurrence
   deriving stock (Eq, Show)
 
@@ -59,4 +62,5 @@ wakes pending = \case
   ChildSaid _ _ Urgent -> True
   ChildDone child _ -> Set.member child pending.children
   Settled call _ _ -> Set.member call pending.calls
+  GuestReady guest -> Set.member guest pending.calls
   _ -> False
