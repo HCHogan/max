@@ -24,6 +24,24 @@ spec = describe "node event delivery and observation" $ do
     map (.sequence) left `shouldSatisfy` (< map (.sequence) right)
     atomically (observe first) `shouldReturn` []
 
+  it "acknowledges only frozen receipts while late steering still fences completion" $ do
+    (task, other) <- atomically $ do
+      node <- newNode
+      (,) <$> newTask node <*> newTask node
+    atomically (deliver task (ChildSaid (JobRun 7 1) "observed note" Normal)) `shouldReturn` True
+    frozen <- atomically (peekAll task)
+    atomically (deliver task (Steered (String "late correction"))) `shouldReturn` True
+    atomically (deliver other (Steered (String "other task"))) `shouldReturn` True
+    foreignEvents <- atomically (peekAll other)
+    -- Even an unrelated receipt in the supplied cut cannot acknowledge it.
+    observed <- atomically (observeAt task (Set.fromList (map (.sequence) (frozen <> foreignEvents))))
+    observed `shouldBe` frozen
+    atomically (hasInterrupt task noPending) `shouldReturn` True
+    atomically (tryFinish task) `shouldReturn` False
+    map (.body) <$> atomically (observe task) `shouldReturn` [Steered (String "late correction")]
+    atomically (tryFinish task) `shouldReturn` True
+    atomically (observe other) `shouldReturn` foreignEvents
+
   it "uses the same wake rule for messages, steering and selected completions" $ do
     let child = JobRun 7 1
         awaiting = Pending (Set.singleton "r1") (Set.singleton child)

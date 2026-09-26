@@ -15,6 +15,8 @@ module Max.Node.Router
     observeResults,
     observeEvents,
     observeAllEvents,
+    peekEvents,
+    observeEventsAt,
     reportOwners,
     messageOwners,
     closeTask,
@@ -172,6 +174,12 @@ observeEvents = observeWith Events.observe
 
 observeAllEvents :: Router -> Events.Task -> STM [Events.Event]
 observeAllEvents = observeWith Events.observeAll
+
+peekEvents :: Router -> Events.Task -> STM [Events.Event]
+peekEvents router task = flush router >> Events.peekAll task
+
+observeEventsAt :: Router -> Events.Task -> Set Integer -> STM [Events.Event]
+observeEventsAt router task receipts = observeWith (`Events.observeAt` receipts) router task
 
 observeWith :: (Events.Task -> STM [Events.Event]) -> Router -> Events.Task -> STM [Events.Event]
 observeWith observe router@(Router ref) task = do

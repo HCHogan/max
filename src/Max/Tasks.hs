@@ -23,6 +23,10 @@ module Max.Tasks
     turnObservationCursor,
     setTurnObservationCursor,
     advanceTurnObservation,
+    observedInputBodies,
+    routedInputSources,
+    rememberInputBodies,
+    rememberRoutedInputs,
     setTurnExecutor,
     turnRuntimeOutputContext,
     nextExecutionOrdinal,
@@ -65,7 +69,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
-import Max.History.Types (MessageCursor)
+import Max.History.Types (MessageCursor (..))
 import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Executor
 import Max.Platform.Types (CanonicalMessageId (..))
@@ -100,6 +104,8 @@ data TaskEntry = TaskEntry
     teExecutor :: !(TVar Executor.Actor),
     teCalls :: !(TVar (Map ExecutionOrdinal Text)),
     teObservations :: !(TVar (Int64, Map Int64 Text)),
+    teInputBodies :: !(TVar (Map Int64 Text)),
+    teRoutedInputs :: !(TVar (Map Int64 Int64)),
     -- | Last phase change, used by the silence watchdog rather than total age.
     -- Updates occur at round boundaries; a slow multi-tool round has one heartbeat.
     -- Individual tool deadlines are enforced separately.
@@ -180,7 +186,21 @@ setTurnObservationCursor :: TurnRuntime -> MessageCursor -> IO ()
 setTurnObservationCursor turn cursor = atomically (advanceTurnObservation turn cursor)
 
 advanceTurnObservation :: TurnRuntime -> MessageCursor -> STM ()
-advanceTurnObservation turn cursor = writeTVar turn.trObservationCursor (Just cursor)
+advanceTurnObservation turn cursor = do
+  writeTVar turn.trObservationCursor (Just cursor)
+  modifyTVar' turn.trEntry.teRoutedInputs (Map.filter (> cursor.ingestSeq))
+
+observedInputBodies :: TurnRuntime -> STM (Map Int64 Text)
+observedInputBodies = readTVar . (.trEntry.teInputBodies)
+
+routedInputSources :: TurnRuntime -> STM (Set Int64)
+routedInputSources = fmap Map.keysSet . readTVar . (.trEntry.teRoutedInputs)
+
+rememberInputBodies :: TurnRuntime -> [(Int64, Text)] -> STM ()
+rememberInputBodies turn bodies = modifyTVar' turn.trEntry.teInputBodies (Map.union (Map.fromList bodies))
+
+rememberRoutedInputs :: TurnRuntime -> [(Int64, Int64)] -> STM ()
+rememberRoutedInputs turn sources = modifyTVar' turn.trEntry.teRoutedInputs (Map.union (Map.fromList sources))
 
 turnExecutor :: TurnRuntime -> IO Executor.Actor
 turnExecutor = readTVarIO . (.trEntry.teExecutor)
@@ -212,6 +232,8 @@ beginTurnRuntime reg ref gid uid mTrigger = do
   kind <- newTVarIO "starting"
   calls <- newTVarIO Map.empty
   observations <- newTVarIO (0, Map.empty)
+  inputBodies <- newTVarIO Map.empty
+  routedInputs <- newTVarIO Map.empty
   -- Context collection counts toward silence before the first phase change.
   progressAt <- newTVarIO now
   cancel <- newTVarIO Nothing
@@ -240,6 +262,8 @@ beginTurnRuntime reg ref gid uid mTrigger = do
               teExecutor = executor,
               teCalls = calls,
               teObservations = observations,
+              teInputBodies = inputBodies,
+              teRoutedInputs = routedInputs,
               teProgressAt = progressAt,
               teCancel = cancel,
               teKilled = killed,

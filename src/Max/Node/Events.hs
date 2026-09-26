@@ -16,6 +16,8 @@ module Max.Node.Events
     deliverAll,
     observe,
     observeAll,
+    peekAll,
+    observeAt,
     discard,
     wakes,
     awaitInterrupt,
@@ -122,10 +124,25 @@ observeAll = observeUpTo 256
 observeUpTo :: Int -> Task -> STM [Event]
 observeUpTo limit (Task (Node ref) key) = do
   state <- readTVar ref
-  let selected = Seq.fromList (take limit (sortOn eventOrder [event | event <- toList state.events, event.target == key]))
+  let selected = Seq.fromList (take limit (pendingEvents state key))
       observed = Set.fromList (map (.sequence) (toList selected))
   writeTVar ref state {events = Seq.filter (not . (`Set.member` observed) . (.sequence)) state.events}
   pure (toList selected)
+
+peekAll :: Task -> STM [Event]
+peekAll (Task (Node ref) key) = (`pendingEvents` key) <$> readTVar ref
+
+-- | Commit only the previously frozen receipt set. Later arrivals remain
+-- interrupting events for the next poll, even if the durable read saw their row.
+observeAt :: Task -> Set Integer -> STM [Event]
+observeAt (Task (Node ref) key) receipts = do
+  state <- readTVar ref
+  let selected = filter ((`Set.member` receipts) . (.sequence)) (pendingEvents state key)
+  writeTVar ref state {events = Seq.filter (\event -> event.target /= key || Set.notMember event.sequence receipts) state.events}
+  pure selected
+
+pendingEvents :: State -> Integer -> [Event]
+pendingEvents state key = sortOn eventOrder [event | event <- toList state.events, event.target == key]
   where
     eventOrder event = case event.body of
       FrontendSteered order _ -> (0 :: Int, toInteger order)

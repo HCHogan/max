@@ -12,15 +12,23 @@ Task records and observation-ordered projection now
 drive agent polls from frozen observations; raw answers (including reasoning
 and signatures), tool results and the initial window remain in the record.
 Compaction and media planning use explicit projection checkpoints. Root
-polls also observe later canonical public output through a frozen history cut,
-excluding their own publications and private traces. Public output and node
+polls also observe later canonical conversation messages through a frozen history
+cut, including ordinary incoming messages, excluding their own publications and
+private traces. Conversation evidence and node
 events share a cap of 200 messages/about 32k tokens per poll, including overflow
-notices. The durable cut is read before consuming node events. Omitted node
+notices. Node receipts are frozen before the durable read and acknowledged only
+after that read succeeds. Events arriving during the read remain pending and
+can still interrupt or fence completion. Explicitly routed inputs are excluded
+from the ambient cut; late steering of an already visible body adds its routing
+notice and message reference. Changed bodies remain visible. Initial history
+seeds this deduplication only for bodies actually rendered, excluding hidden
+in-flight triggers and omitted history. Omitted node
 evidence is archived with its task in the same STM transaction that acknowledges
 delivery; a scoped `context_read` cursor pages frozen event envelopes and
 attachments without replaying their effects. Recovery requires the original
 task and conversation, and expires with that task's process-local record.
-Public overflow keeps its durable timeline cursor.
+Conversation overflow keeps its durable timeline cursor; omitted bodies are not
+marked as already observed.
 Frontend and background steering now enter a shared typed node event store;
 `ExecutionInbox`, the frontend feedback queue and the job feedback inbox are
 removed. One wake predicate classifies interrupts. Delivery and successful
@@ -79,8 +87,8 @@ remain in force; cancellation, replacement, expiry and invocation return revoke
 this permission. New calls and default database callers still require a live
 model turn. An admitted agent call can create its child after parent completion
 under the original tree grants and deadline. Full routing
-(replacement/cancellation and monitor fires), observation of ordinary incoming
-conversation messages and the remaining node executor migration remain in step 4.
+(replacement/cancellation and monitor fires) and the remaining node executor
+migration remain in step 4.
 Each model request now adds a fresh volatile tail of at most 16 other open tasks
 on the same node: trigger message, phase, pending call handles/tool names and age.
 Child nodes, queued requests and ended tasks are excluded. The tail consumes the

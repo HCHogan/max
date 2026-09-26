@@ -21,6 +21,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Database.PostgreSQL.Simple (Only (..))
+import Effectful (liftIO)
 import Effectful.PostgreSQL (execute, query)
 import Helpers (insertMessageWithCanonicalId, insertRawKind, insertRawMessage, requireJust, truncateAll, updateDbSession, withDb, withDbLog)
 import Max.Agent.Runtime (observeAgentInputs)
@@ -30,8 +31,8 @@ import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn (startAgentTurn)
 import Max.DB.Connection (DbPool)
 import Max.DB.ContextRead (readContext)
-import Max.DB.History (LedgerItem (..), MessageCursor (..))
-import Max.DB.Observation (observePublishedAfter)
+import Max.DB.History (LedgerItem (..), MessageCursor (..), latestMessageCursor)
+import Max.DB.Observation (observeConversationAfter)
 import Max.DB.Session (fetchOrInit)
 import Max.DB.Transaction (withReadSnapshot)
 import Max.Dispatch (DispatchMessage (..))
@@ -45,11 +46,13 @@ import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.Node.Events qualified as Events
 import Max.Node.Router qualified as Router
 import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..), qqAdvertisedCaps)
-import Max.Prompt (ContextReadMode (..), PromptRequest (..), buildContext, buildContextAtCursor, planContext, renderContextPlan)
+import Max.Prompt (ContextReadMode (..), PromptRequest (..), buildContext, buildContextAtCursor, buildContextObserved, planContext, renderContextPlan)
 import Max.Prompt.Collect (collectContextPreview)
 import Max.Prompt.History (fetchBoundedPromptTail)
 import Max.Session (Session (..))
-import Max.Tasks (beginTurnRuntime, cancelTask, finishTurnRuntime, newTaskRegistry, setTurnObservationCursor, turnRuntimeTaskId)
+import Max.Task.FrontendInput (FrontendInputView (FrontendInputView))
+import Max.Task.FrontendInput qualified as Frontend
+import Max.Tasks (beginTurnRuntime, cancelTask, finishTurnRuntime, newTaskRegistry, observedInputBodies, rememberInputBodies, routedInputSources, setTurnObservationCursor, turnEvents, turnRuntimeTaskId)
 import Max.Tool.Media (InlineMedia (..))
 import Max.ToolContext
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
@@ -101,6 +104,105 @@ userBodyOf msgs = case last (resolveCacheBoundaries False msgs) of
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $
   describe "Max.Prompt.buildContext (integration)" $ do
+    it "observes an ordinary incoming message without waking, then attaches late steering by reference" $ do
+      tasks <- newTaskRegistry
+      jobs <- Jobs.newJobs tasks
+      turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 700) (TurnOrdinal 700)) (GroupId groupRaw) (UserId memberRaw) Nothing
+      setTurnObservationCursor turn (MessageCursor 0)
+      target <- atomically (turnEvents turn)
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 11) (Just "Alice") "ordinary input"
+      atomically (Events.hasInterrupt target Events.noPending) `shouldReturn` False
+      first <- withDb pool (observeAgentInputs jobs turn observationContext)
+      length first `shouldBe` 1
+      T.pack (show first) `shouldSatisfy` T.isInfixOf "ordinary input"
+      (order, input) <- frontendInput pool 1001 "ordinary input"
+      atomically (Events.deliver target (Events.FrontendSteered order input)) `shouldReturn` True
+      atomically (Events.hasInterrupt target Events.noPending) `shouldReturn` True
+      steered <- withDb pool (observeAgentInputs jobs turn observationContext)
+      length steered `shouldBe` 1
+      T.pack (show steered) `shouldSatisfy` T.isInfixOf "previously_observed"
+      T.pack (show steered) `shouldSatisfy` T.isInfixOf "message:1001"
+      T.pack (show steered) `shouldNotSatisfy` T.isInfixOf "ordinary input"
+      atomically (Events.deliver target (Events.FrontendSteered order input)) `shouldReturn` True
+      atomically (Events.deliver target (Events.FrontendSteered order input {Frontend.body = "edited correction"})) `shouldReturn` True
+      edited <- withDb pool (observeAgentInputs jobs turn observationContext)
+      length edited `shouldBe` 2
+      T.pack (show edited) `shouldSatisfy` T.isInfixOf "edited correction"
+      T.pack (show (last edited)) `shouldNotSatisfy` T.isInfixOf "previously_observed"
+      finishTurnRuntime tasks turn
+
+    it "consumes already-routed input once instead of also rendering its canonical row" $ do
+      tasks <- newTaskRegistry
+      jobs <- Jobs.newJobs tasks
+      turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 700) (TurnOrdinal 700)) (GroupId groupRaw) (UserId memberRaw) Nothing
+      setTurnObservationCursor turn (MessageCursor 0)
+      target <- atomically (turnEvents turn)
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 11) (Just "Alice") "explicit correction"
+      (order, input) <- frontendInput pool 1001 "explicit correction"
+      atomically (Events.deliver target (Events.FrontendSteered order input)) `shouldReturn` True
+      observed <- withDb pool (observeAgentInputs jobs turn observationContext)
+      length observed `shouldBe` 1
+      T.pack (show observed) `shouldSatisfy` T.isInfixOf "explicit correction"
+      T.pack (show observed) `shouldNotSatisfy` T.isInfixOf "会话公开消息"
+      again <- withDb pool (observeAgentInputs jobs turn observationContext)
+      encode again `shouldBe` encode ([] :: [ChatMessage])
+      finishTurnRuntime tasks turn
+
+    it "keeps routed input excluded until its durable row enters the observation cut" $ do
+      tasks <- newTaskRegistry
+      jobs <- Jobs.newJobs tasks
+      turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 700) (TurnOrdinal 700)) (GroupId groupRaw) (UserId memberRaw) Nothing
+      setTurnObservationCursor turn (MessageCursor 0)
+      target <- atomically (turnEvents turn)
+      first <- withDb pool $ withReadSnapshot $ do
+        -- Establish the snapshot before a separate connection commits the row.
+        _ <- latestMessageCursor (conversationScopeFor (GroupId groupRaw))
+        liftIO $ do
+          insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 11) (Just "Alice") "ahead of snapshot"
+          (order, input) <- frontendInput pool 1001 "ahead of snapshot"
+          atomically (Events.deliver target (Events.FrontendSteered order input)) `shouldReturn` True
+        observeAgentInputs jobs turn observationContext
+      length first `shouldBe` 1
+      T.pack (show first) `shouldSatisfy` T.isInfixOf "ahead of snapshot"
+      atomically (routedInputSources turn) `shouldReturn` Set.singleton 1001
+      second <- withDb pool (observeAgentInputs jobs turn observationContext)
+      encode second `shouldBe` encode ([] :: [ChatMessage])
+      atomically (routedInputSources turn) `shouldReturn` Set.empty
+      finishTurnRuntime tasks turn
+
+    it "seeds deduplication from visible initial history while preserving a hidden task's later feedback" $ do
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 11) (Just "Alice") "already visible"
+      insertMessageWithCanonicalId pool 1002 groupRaw memberRaw botRaw (timeAt 11) (Just "Alice") "previously hidden"
+      session <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
+      ((initial, _), cursor, bodies) <- withDbLog pool $ buildContextObserved (promptRequest session trigger) {prInFlight = Set.singleton 1002}
+      userBodyOf initial `shouldSatisfy` T.isInfixOf "already visible"
+      userBodyOf initial `shouldNotSatisfy` T.isInfixOf "previously hidden"
+      tasks <- newTaskRegistry
+      jobs <- Jobs.newJobs tasks
+      turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 700) (TurnOrdinal 700)) (GroupId groupRaw) (UserId memberRaw) Nothing
+      setTurnObservationCursor turn cursor
+      atomically (rememberInputBodies turn bodies)
+      target <- atomically (turnEvents turn)
+      forM_ [(1001, "already visible"), (1002, "previously hidden")] $ \(mid, body) -> do
+        (order, input) <- frontendInput pool mid body
+        atomically (Events.deliver target (Events.FrontendSteered order input)) `shouldReturn` True
+      observed <- withDb pool (observeAgentInputs jobs turn observationContext)
+      T.pack (show observed) `shouldSatisfy` T.isInfixOf "previously_observed"
+      T.pack (show observed) `shouldNotSatisfy` T.isInfixOf "already visible"
+      T.pack (show observed) `shouldSatisfy` T.isInfixOf "previously hidden"
+      finishTurnRuntime tasks turn
+
+    it "does not mark an omitted incoming body as already observed" $ do
+      tasks <- newTaskRegistry
+      jobs <- Jobs.newJobs tasks
+      turn <- beginTurnRuntime tasks (AgentTurnRef (AgentTurnId 700) (TurnOrdinal 700)) (GroupId groupRaw) (UserId memberRaw) Nothing
+      setTurnObservationCursor turn (MessageCursor 0)
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 11) (Just "Alice") (T.replicate 40000 "汉")
+      observed <- withDb pool (observeAgentInputs jobs turn observationContext)
+      T.pack (show observed) `shouldSatisfy` T.isInfixOf "unobserved_messages"
+      atomically (Map.member 1001 <$> observedInputBodies turn) `shouldReturn` False
+      finishTurnRuntime tasks turn
+
     it "shares one observation cap across public messages and owned node events, with task-scoped recovery" $ do
       tasks <- newTaskRegistry
       jobs <- Jobs.newJobs tasks
@@ -117,7 +219,7 @@ spec pool = before_ (truncateAll pool) $
       estimateMessagesTokens observed `shouldSatisfy` (<= 32000)
       let notices = [fields | MsgUser raw <- observed, Right (Object fields) <- [eitherDecodeStrict' (TE.encodeUtf8 raw)]]
           nodeLinks = [cursor | fields <- notices, KM.lookup "unobserved_node_events" fields == Just (Number 7), Just (Object link) <- [KM.lookup "context_read" fields], Just (String cursor) <- [KM.lookup "cursor" link]]
-          publicLinks = [cursor | fields <- notices, KM.lookup "unobserved_publications" fields == Just (Number 202), Just (Object link) <- [KM.lookup "context_read" fields], Just (String cursor) <- [KM.lookup "cursor" link]]
+          publicLinks = [cursor | fields <- notices, KM.lookup "unobserved_messages" fields == Just (Number 202), Just (Object link) <- [KM.lookup "context_read" fields], Just (String cursor) <- [KM.lookup "cursor" link]]
       [nodeCursor] <- pure nodeLinks
       [publicCursor] <- pure publicLinks
       let readAs currentScope caller cursor = withDb pool $ Query.runConversationQueryWithObservations currentScope (Jobs.readObservationPage jobs group caller) (Query.readContext 4096 (ReadRequest Nothing Nothing Nothing 0 0 100 (Just cursor)))
@@ -195,7 +297,7 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("随便聊" `T.isInfixOf`)
       ub `shouldSatisfy` ("另一条" `T.isInfixOf`)
 
-    it "observes only later public output, excluding its own turn, debug and other conversations" $ do
+    it "observes later ordinary messages and public output, excluding its own output, debug and other conversations" $ do
       insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "original request"
       insertMessageWithCanonicalId pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "already in the window"
       [Only principal] <- withDb pool $ query "SELECT author_principal_id FROM messages WHERE canonical_message_id=1001" ()
@@ -209,13 +311,15 @@ spec pool = before_ (truncateAll pool) $
       insertMessageWithCanonicalId pool 1005 groupRaw botRaw botRaw (timeAt 11) Nothing "private debug"
       _ <- withDb pool $ execute "UPDATE messages SET kind='debug' WHERE canonical_message_id=1005" ()
       insertMessageWithCanonicalId pool 1006 (groupRaw + 1) botRaw botRaw (timeAt 11) Nothing "other conversation"
-      (cut, observed) <- withDb pool $ observePublishedAfter (conversationScopeFor (GroupId groupRaw)) own.atrTurnId Nothing base
-      length observed `shouldBe` 1
+      insertMessageWithCanonicalId pool 1007 groupRaw memberRaw botRaw (timeAt 11) (Just "Alice") "later ordinary message"
+      (cut, observed) <- withDb pool $ observeConversationAfter (conversationScopeFor (GroupId groupRaw)) own.atrTurnId Nothing base
+      length observed `shouldBe` 2
       let rendered = T.pack (show observed)
       rendered `shouldSatisfy` T.isInfixOf "other task published"
+      rendered `shouldSatisfy` T.isInfixOf "later ordinary message"
       rendered `shouldSatisfy` T.isInfixOf "2026-06-05T11:00:00Z"
       rendered `shouldNotSatisfy` T.isInfixOf "own publication"
-      (_, repeated) <- withDb pool $ observePublishedAfter (conversationScopeFor (GroupId groupRaw)) own.atrTurnId Nothing cut
+      (_, repeated) <- withDb pool $ observeConversationAfter (conversationScopeFor (GroupId groupRaw)) own.atrTurnId Nothing cut
       encode repeated `shouldBe` encode ([] :: [ChatMessage])
       -- Later edits cannot mutate a previously frozen observation.
       _ <- withDb pool $ execute "UPDATE messages SET rendered_text='edited later' WHERE canonical_message_id=1004" ()
@@ -224,12 +328,12 @@ spec pool = before_ (truncateAll pool) $
     it "caps public observations and supplies a working scoped recovery cursor" $ do
       let scope = conversationScopeFor (GroupId groupRaw)
       mapM_ (\n -> insertMessageWithCanonicalId pool n groupRaw botRaw botRaw (timeAt 11) Nothing ("publication " <> T.pack (show n))) [1001 .. 1202]
-      (cut, observed) <- withDb pool $ observePublishedAfter scope (AgentTurnId 0) Nothing (MessageCursor 0)
+      (cut, observed) <- withDb pool $ observeConversationAfter scope (AgentTurnId 0) Nothing (MessageCursor 0)
       length observed `shouldBe` 200
       case last observed of
         MsgUser raw -> case eitherDecodeStrict' (TE.encodeUtf8 raw) of
           Right (Object fields) -> do
-            KM.lookup "unobserved_publications" fields `shouldBe` Just (Number 3)
+            KM.lookup "unobserved_messages" fields `shouldBe` Just (Number 3)
             case KM.lookup "context_read" fields of
               Just (Object link) | Just (String cursor) <- KM.lookup "cursor" link -> do
                 recovered <- withDb pool $ readContext scope 32000 (ReadRequest Nothing Nothing Nothing 0 0 100 (Just cursor))
@@ -239,14 +343,14 @@ spec pool = before_ (truncateAll pool) $
               other -> expectationFailure (show other)
           other -> expectationFailure (show other)
         other -> expectationFailure (show other)
-      (_, repeated) <- withDb pool $ observePublishedAfter scope (AgentTurnId 0) Nothing cut
+      (_, repeated) <- withDb pool $ observeConversationAfter scope (AgentTurnId 0) Nothing cut
       encode repeated `shouldBe` encode ([] :: [ChatMessage])
 
     it "omits an oversized observation with its recovery locator and respects clear" $ do
       let scope = conversationScopeFor (GroupId groupRaw)
       insertMessageWithCanonicalId pool 1001 groupRaw botRaw botRaw (timeAt 9) Nothing "before clear"
       insertMessageWithCanonicalId pool 1002 groupRaw botRaw botRaw (timeAt 11) Nothing (T.replicate 40000 "汉")
-      (_, observed) <- withDb pool $ observePublishedAfter scope (AgentTurnId 0) (Just (timeAt 10)) (MessageCursor 0)
+      (_, observed) <- withDb pool $ observeConversationAfter scope (AgentTurnId 0) (Just (timeAt 10)) (MessageCursor 0)
       length observed `shouldBe` 1
       T.pack (show observed) `shouldSatisfy` T.isInfixOf "context_read"
       T.pack (show observed) `shouldNotSatisfy` T.isInfixOf "before clear"
@@ -516,3 +620,8 @@ observationContext =
   mkToolContext
     (TurnIdentity (GroupId groupRaw) (CanonicalMessageId 1000) (UserId memberRaw) (UserId botRaw) (PrincipalId 1) Nothing Nothing)
     (TurnCapabilities False False False qqAdvertisedCaps False Map.empty Nothing False)
+
+frontendInput :: DbPool -> Int64 -> Text -> IO (Int64, FrontendInputView)
+frontendInput pool mid body = do
+  [(order, principal)] <- withDb pool $ query "SELECT ingest_seq,author_principal_id FROM messages WHERE canonical_message_id=?" (Only mid)
+  pure (order, FrontendInputView mid "steering" principal (Just "Alice") (timeAt 11) Nothing body)

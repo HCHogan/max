@@ -3,6 +3,7 @@ module Max.Prompt
     PromptRequest (..),
     buildContext,
     buildContextAtCursor,
+    buildContextObserved,
     ContextReadMode (..),
     TriggerOrigin (..),
 
@@ -36,12 +37,14 @@ where
 import Control.Monad (unless, when)
 import Data.Aeson (Value)
 import Data.Int (Int64)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful
 import Effectful.Log (Log, logAttention, logTrace, object, (.=))
 import Effectful.PostgreSQL (WithConnection)
 import Max.Context (ContextBudget (..), ContextTrace (..))
 import Max.Context.Media (tagMediaMarkers)
+import Max.Context.Read (textFingerprint)
 import Max.Context.Types
   ( ContextCompartment (..),
     ContextPlan (..),
@@ -56,7 +59,7 @@ import Max.Context.Types
 import Max.DB.History.Media (withMediaHandles)
 import Max.Dispatch (DispatchMessage (canonicalId, groupId))
 import Max.Effects.Blob (Blob)
-import Max.History.Types (MessageCursor)
+import Max.History.Types (HistoryItem (..), MessageCursor)
 import Max.LLM.Types (ChatMessage)
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Prompt.Collect qualified as Collect
@@ -84,6 +87,16 @@ buildContextAtCursor ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   PromptRequest -> Eff es (([ChatMessage], [(Int64, Text)]), MessageCursor)
 buildContextAtCursor request = do
+  (context, cursor, _) <- buildContextObserved request
+  pure (context, cursor)
+
+-- | Seed input deduplication only with bodies the selected prompt actually
+-- renders. Summaries, trimmed history and other tasks' hidden triggers do not
+-- license dropping the body of a later explicit steer.
+buildContextObserved ::
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  PromptRequest -> Eff es (([ChatMessage], [(Int64, Text)]), MessageCursor, [(Int64, Text)])
+buildContextObserved request = do
   (snapshot, cursor) <- Collect.collectContextAtCursor request
   let plan = planContext request.prLimits snapshot
       CanonicalMessageId triggerMessageId = request.prTrigger.canonicalId
@@ -107,7 +120,10 @@ buildContextAtCursor request = do
           "prompt_token_limit" .= plan.cpBudget.cbPromptTokenLimit,
           "policy_version" .= plan.cpPolicyVersion
         ]
-  pure ((renderContextPlan plan, contextRoster (cpInputs plan)), cursor)
+  let inputs = cpInputs plan
+      visible = [history | history <- inputs.transcript, history.fromBot || Set.notMember history.canonicalId inputs.inFlight]
+      bodies = [(history.canonicalId, textFingerprint history.renderedText) | history <- visible <> inputs.pinnedItems]
+  pure ((renderContextPlan plan, contextRoster inputs), cursor, bodies)
 
 traceJson :: ContextTrace -> Value
 traceJson trace =
