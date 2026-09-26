@@ -2,15 +2,15 @@
 
 -- |
 -- Scoped output collected from tools for the Agent to feed back into the next
--- model round.  The interpreter is installed once per Agent turn, so media can
--- neither leak across concurrent dispatches nor force tools to share the
--- orchestrator's mutable state.
+-- model round. Each invocation owns a queue and shares its turn's quota, so
+-- detached completions carry their own attachments without crossing calls.
 module Max.Effects.ToolOutput
   ( ToolOutput,
     InlineMedia (..),
     ToolOutputRead,
     ToolOutputQueue,
     newToolOutputQueue,
+    forkToolOutputQueue,
     runToolOutput,
     runToolOutputRead,
     queueInlineMedia,
@@ -27,14 +27,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
-
-data InlineMedia = InlineMedia
-  { imLabel :: !Text,
-    imDataUrl :: !Text,
-    -- | Vision tokens of a prepared video rendition; images carry their size.
-    imVisionTokens :: !(Maybe Int)
-  }
-  deriving stock (Show, Eq)
+import Max.Tool.Media (InlineMedia (..))
 
 data ToolOutput :: Effect where
   QueueInlineMedia :: Maybe Text -> InlineMedia -> ToolOutput m Bool
@@ -53,35 +46,43 @@ defaultInlineMediaLimit = 8
 -- | The queue belongs to one turn. Only the assembly layer shares this handle
 -- between the producer and consumer interpreters; tool closures receive the
 -- producer effect alone. The total counter survives drains.
-data ToolOutputQueue = ToolOutputQueue !Int !(TVar (Int, Set Text, [InlineMedia]))
+data ToolOutputQueue = ToolOutputQueue !Int !(TVar (Int, Set Text)) !(TVar [InlineMedia])
 
 newToolOutputQueue :: (IOE :> es) => Int -> Eff es ToolOutputQueue
-newToolOutputQueue limit = ToolOutputQueue (max 0 limit) <$> liftIO (newTVarIO (0, Set.empty, []))
+newToolOutputQueue limit = ToolOutputQueue (max 0 limit) <$> liftIO (newTVarIO (0, Set.empty)) <*> liftIO (newTVarIO [])
+
+-- | Each invocation owns its attachments, while all invocations in the turn
+-- share the quota and once-only keys, including after the model task closes.
+forkToolOutputQueue :: (IOE :> es) => ToolOutputQueue -> Eff es ToolOutputQueue
+forkToolOutputQueue (ToolOutputQueue limit budget _) = ToolOutputQueue limit budget <$> liftIO (newTVarIO [])
 
 runToolOutput ::
   (IOE :> es) =>
   ToolOutputQueue ->
   Eff (ToolOutput : es) a ->
   Eff es a
-runToolOutput (ToolOutputQueue limit state) = interpret $ \_ -> \case
+runToolOutput (ToolOutputQueue limit state output) = interpret $ \_ -> \case
   CanQueueInlineMediaOnce key -> liftIO . atomically $ do
-    (used, keys, _) <- readTVar state
+    (used, keys) <- readTVar state
     pure (used < limit && Set.notMember key keys)
   QueueInlineMedia key media -> liftIO . atomically $ do
-    (used, keys, queued) <- readTVar state
+    (used, keys) <- readTVar state
+    queued <- readTVar output
     if used >= limit || maybe False (`Set.member` keys) key
       then pure False
-      else True <$ writeTVar state (used + 1, maybe keys (`Set.insert` keys) key, queued <> [media])
+      else do
+        writeTVar state (used + 1, maybe keys (`Set.insert` keys) key)
+        True <$ writeTVar output (queued <> [media])
 
 runToolOutputRead ::
   (IOE :> es) =>
   ToolOutputQueue ->
   Eff (ToolOutputRead : es) a ->
   Eff es a
-runToolOutputRead (ToolOutputQueue _ state) = interpret $ \_ -> \case
+runToolOutputRead (ToolOutputQueue _ _ output) = interpret $ \_ -> \case
   DrainInlineMedia -> liftIO . atomically $ do
-    (used, keys, queued) <- readTVar state
-    writeTVar state (used, keys, [])
+    queued <- readTVar output
+    writeTVar output []
     pure queued
 
 queueInlineMedia :: (ToolOutput :> es) => InlineMedia -> Eff es Bool

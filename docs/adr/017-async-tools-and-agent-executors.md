@@ -40,8 +40,13 @@ observes a `Settled` event, while a closed task gets a frontend relay under the
 original catalog ceiling. Results remain owned until observation or relay;
 closing after delivery but before observation also relays exactly once. The
 bounded router retains job-generation provenance and fences revoked output.
-Background-job authority after job completion and handoff of queued media
-attachments to result relays remain to be integrated.
+Tool attachments now belong to their invocation, with the original turn-wide
+quota and once-only keys shared across call scopes. Native completion events
+and frontend relays carry those attachments through normal media planning;
+guest pause/resume snapshots transfer each completed leaf's attachments once.
+An explicit wait for a detached native result does not duplicate its event's
+attachments. Background-job authority after job completion remains to be
+integrated.
 Full routing
 (child relays, replacement/cancellation and monitor fires), combined
 observation bounds and the open-task tail remain in step 4. Amends

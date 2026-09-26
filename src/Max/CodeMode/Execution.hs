@@ -47,6 +47,7 @@ import Max.Tool.Control
   ( LoopControl (..),
     mergeControls,
   )
+import Max.Tool.Media (InlineMedia)
 import Max.Tool.Types
 import Max.Turn.Types (AgentTurnRef (..), resultHandleText)
 
@@ -66,7 +67,8 @@ data CodeModeResult = CodeModeResult
     cmSubmittedCalls :: !Int,
     cmOverBudget :: !Bool,
     cmRunRef :: !Text,
-    cmWorkflow :: !(Maybe Value)
+    cmWorkflow :: !(Maybe Value),
+    cmMedia :: ![InlineMedia]
   }
   deriving stock (Show, Eq)
 
@@ -131,7 +133,7 @@ runWasmProgram session hooks catalog limits program = mask $ \restore -> do
             entered <- liftIO (Executor.enter actor)
             if entered then pure () else throwIO TaskCancelled
           bracket hooks.ehAcquireGuest (mapM_ liftIO) $ \case
-            Nothing -> pure (CodeModeResult (WasmRejected "live guest limit exceeded; retry later or use native tools") [] ContinueLoop Nothing 0 False "" program.wpWorkflow)
+            Nothing -> pure (CodeModeResult (WasmRejected "live guest limit exceeded; retry later or use native tools") [] ContinueLoop Nothing 0 False "" program.wpWorkflow [])
             Just _ -> runAdmittedProgram session guestHooks catalog limits program (install self) suspend
       )
         `finally` liftIO (mapM_ (atomically . Executor.closeActor) guestActor)
@@ -147,6 +149,7 @@ runAdmittedProgram :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSes
 runAdmittedProgram session hooks catalog limits program install suspend = do
   label <- freshExecutionLabel session "wasm"
   receipts <- liftIO (newTVarIO [])
+  attachments <- liftIO (newTVarIO [])
   decisions <- liftIO (newTVarIO ContinueLoop)
   exhausted <- liftIO (newTVarIO False)
   submitted <- liftIO (newTVarIO 0)
@@ -167,6 +170,7 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
         modifyTVar' receipts (CodeModeCall request.trCallId request.trName (outcomeName invocation.tiOutcome) :)
         modifyTVar' decisions (\previous -> mergeControls [previous, invocation.tiControl])
         modifyTVar' exhausted (|| isBudget invocation.tiOutcome)
+        modifyTVar' attachments (<> invocation.tiMedia)
       cancelled = ToolInvocation (ToolOutcomeUnknown (ToolFault "cancelled" "program cancelled an in-flight call; effects may have started" RetryUnsafe)) ContinueLoop
       stop ident = do
         pending <- Map.lookup ident <$> liftIO (readTVarIO workers)
@@ -203,7 +207,11 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
         overBudget <- liftIO (readTVarIO exhausted)
         count <- liftIO (readTVarIO submitted)
         ref <- liftIO (readTVarIO reference)
-        pure (CodeModeResult exit calls control output count overBudget ref program.wpWorkflow)
+        media <- liftIO . atomically $ do
+          pending <- readTVar attachments
+          writeTVar attachments []
+          pure pending
+        pure (CodeModeResult exit calls control output count overBudget ref program.wpWorkflow media)
       asyncTool name = name == "$sleep" || any (\entry -> entry.ctDefinition.tdRef == ToolRef name && entry.ctDefinition.tdAwait == AsyncTool) catalog
       pause queued = do
         active <- liftIO (readTVarIO workers)
@@ -280,7 +288,7 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
     isBudget _ = False
 
 codeModeInvocation :: CodeModeResult -> ToolInvocation
-codeModeInvocation result = ToolInvocation outcome result.cmControl
+codeModeInvocation result = (ToolInvocation outcome result.cmControl) {tiMedia = result.cmMedia}
   where
     count = length result.cmCalls
     summary =

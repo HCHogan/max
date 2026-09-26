@@ -1,3 +1,5 @@
+{-# LANGUAGE PatternSynonyms #-}
+
 -- | Tool protocol and host-owned metadata, independent of execution.
 module Max.Tool.Types
   ( ToolSpec (..),
@@ -16,7 +18,7 @@ module Max.Tool.Types
     ToolCatalogError (..),
     ToolFault (..),
     ToolOutcome (..),
-    ToolInvocation (..),
+    ToolInvocation (ToolInvocation, tiOutcome, tiControl, tiMedia),
   )
 where
 
@@ -26,6 +28,7 @@ import Data.Set (Set)
 import Data.Text (Text)
 import Max.Schema (Schema)
 import Max.Tool.Control (LoopControl)
+import Max.Tool.Media (InlineMedia)
 
 -- | Model-facing tool description and JSON argument schema.
 data ToolSpec = ToolSpec
@@ -150,5 +153,13 @@ data ToolOutcome
   deriving stock (Show, Eq)
 
 -- | Separate host control from the model-visible outcome.
-data ToolInvocation = ToolInvocation {tiOutcome :: !ToolOutcome, tiControl :: !LoopControl}
+data ToolInvocation = Invocation {tiOutcome :: !ToolOutcome, tiControl :: !LoopControl, tiMedia :: ![InlineMedia]}
   deriving stock (Show, Eq)
+
+-- | Ordinary tools have no attachments; host assembly can attach scoped media.
+pattern ToolInvocation :: ToolOutcome -> LoopControl -> ToolInvocation
+pattern ToolInvocation outcome control <- Invocation outcome control _
+  where
+    ToolInvocation outcome control = Invocation outcome control []
+
+{-# COMPLETE ToolInvocation #-}

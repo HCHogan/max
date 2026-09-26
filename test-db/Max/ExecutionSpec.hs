@@ -29,6 +29,7 @@ import Max.DB.AgentTurn
 import Max.DB.Connection (DbPool)
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.ToolControl (activateSkills, runToolControl)
+import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, drainInlineMedia, forkToolOutputQueue, newToolOutputQueue, queueInlineMedia, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
 import Max.Execution.Tools
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
@@ -85,12 +86,26 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     entered <- newEmptyMVar
     release <- newEmptyMVar
     steering <- newTVarIO False
-    let runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (putMVar entered () >> takeMVar release) >> pure (Right value)}
+    let media = InlineMedia "late result" "data:image/png;base64,AA==" Nothing
+        runner =
+          echoTool
+            { toolRunner = LegacyRunner $ \value -> do
+                liftIO (putMVar entered () >> takeMVar release)
+                _ <- queueInlineMedia media
+                pure (Right value)
+            }
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition {tdAwait = AsyncTool}] [runner])
+    outputQueue <- runEff (newToolOutputQueue 8)
+    let lower :: forall x. Eff (ToolOutput : DbEffects) x -> Eff DbEffects (x, LoopControl, [InlineMedia])
+        lower action = do
+          scoped <- forkToolOutputQueue outputQueue
+          value <- runToolOutput scoped action
+          attachments <- runToolOutputRead scoped drainInlineMedia
+          pure (value, ContinueLoop, attachments)
     Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ -> do
-      _ <- withHost pool . runTools registry $ do
+      _ <- withHost pool . runToolsWithMedia lower (pure registry) $ do
         session <- newExecutionSession Nothing
-        setExecutionResultSink session (\ref invocation -> atomically (Router.deliverResult jobs.resultRouter origin ref (outcomeEnvelope invocation.tiOutcome)))
+        setExecutionResultSink session (\ref invocation -> atomically (Router.deliverResult jobs.resultRouter origin ref (outcomeEnvelope invocation.tiOutcome) invocation.tiMedia))
         executeToolBatch session (hostHooks jobs runtime) {ehInterrupt = readTVar steering >>= check} (views registry) [ToolRequest "detached" "echo" args]
       atomically (Router.closeTask jobs.resultRouter origin.target)
       withDb pool (finishAgentTurn turn TurnSucceeded 1 Nothing)
@@ -105,6 +120,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
       states turn `shouldReturn` [("echo", "succeeded")]
       Just (Jobs.RelayResult relay) <- timeout 1000000 (Jobs.takeJobWork jobs)
       relay.value `shouldBe` outcomeEnvelope (ToolSucceeded args)
+      relay.media `shouldBe` [media]
       relay.origin.turn `shouldBe` turn.atrTurnId
       relay.reference `shouldBe` resultHandleText turn.atrTurnOrdinal (ExecutionOrdinal 1)
       atomically (Router.releaseRelay jobs.resultRouter relay)
@@ -117,7 +133,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
             (TurnIdentity (GroupId 900) running.job.spec.source (UserId 1) (UserId 99) running.job.spec.principal Nothing Nothing)
             (TurnCapabilities False False False noAdvertisedCaps False Map.empty Nothing True)
     origin <- Jobs.resultOrigin running.jobs running.runtime context
-    atomically (Router.closeTask running.jobs.resultRouter origin.target >> Router.deliverResult running.jobs.resultRouter origin "r1" (toJSON ("obsolete" :: Text)))
+    atomically (Router.closeTask running.jobs.resultRouter origin.target >> Router.deliverResult running.jobs.resultRouter origin "r1" (toJSON ("obsolete" :: Text)) [])
     relay <- atomically (Router.takeRelay running.jobs.resultRouter)
     (frontend, _, _) <- seed pool 900 1
     Jobs.bindResultRelay running.jobs frontend.atrTurnId relay

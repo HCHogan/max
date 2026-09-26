@@ -13,8 +13,8 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import Effectful (liftIO, runEff)
-import Effectful.Concurrent (runConcurrent)
+import Effectful (Eff, IOE, liftIO, runEff)
+import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Exception qualified as Eff
 import ExecutionFixture
 import Max.Browser.View (browserBudget, browserView)
@@ -22,10 +22,12 @@ import Max.CodeMode.Execution
 import Max.CodeMode.JavaScript
 import Max.CodeMode.Model (executeModelBatch)
 import Max.CodeMode.Wasm
+import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, drainInlineMedia, forkToolOutputQueue, newToolOutputQueue, queueInlineMedia, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
 import Max.Execution.Tools
 import Max.Node.Executor qualified as Node
 import Max.Tool.Catalog (catalogTools)
+import Max.Tool.Control (LoopControl (ContinueLoop))
 import Max.Turn.Types (AgentTurnId (..))
 import System.Timeout (timeout)
 import Test.Hspec
@@ -75,6 +77,41 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
       runJavaScript session noJournal (views registry) "const reports = await Promise.all(['one','two'].map(objective => agent({objective, profile:'basic'}))); return reports.map(x => [x.objective, x.wait]);"
     fmap (.cmExit) result `shouldBe` Just WasmCompleted
     fmap (.cmOutput) result `shouldBe` Just (Just (toValue [toValue [String "one", Bool True], toValue [String "two", Bool True]]))
+  it "hands each leaf attachment to one guest snapshot across pause and resume" $ do
+    entered <- newEmptyMVar
+    release <- newEmptyMVar
+    steering <- newTVarIO False
+    let first = InlineMedia "first" "data:image/png;base64,AA==" Nothing
+        second = InlineMedia "second" "data:video/mp4;base64,BB==" (Just 128)
+        runner value = do
+          media <- case valueOf value of
+            Just (Number 2) -> liftIO (putMVar entered () >> takeMVar release) >> pure second
+            _ -> pure first
+          _ <- queueInlineMedia media
+          pure (Right value)
+        hooks = noJournal {ehInterrupt = readTVar steering >>= check}
+    registry <- checked [echoDefinition {tdAwait = AsyncTool}] [echoTool {toolRunner = LegacyRunner runner}]
+    output <- runEff (newToolOutputQueue 2)
+    let lower :: forall x. Eff '[ToolOutput, Concurrent, IOE] x -> Eff '[Concurrent, IOE] (x, LoopControl, [InlineMedia])
+        lower action = do
+          scoped <- forkToolOutputQueue output
+          value <- runToolOutput scoped action
+          media <- runToolOutputRead scoped drainInlineMedia
+          pure (value, ContinueLoop, media)
+    Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ ->
+      runEff . runConcurrent . runToolsWithMedia lower (pure registry) $ do
+        session <- newExecutionSession Nothing
+        ( do
+            paused <- runJavaScript session hooks (views registry) "await tools.echo({value:1}); await tools.echo({value:2}); return 'done';"
+            liftIO (paused.cmExit `shouldBe` WasmPaused)
+            liftIO (paused.cmMedia `shouldBe` [first])
+            liftIO (atomically (writeTVar steering False) >> putMVar release ())
+            resumed <- controlProgram session True paused.cmRunRef
+            liftIO (resumed.tiMedia `shouldBe` [second])
+            liftIO (codeValue resumed `shouldBe` Just (String "done"))
+          )
+          `Eff.finally` closeExecutionSession session
+
   it "pauses on steering and resumes the original await with buffered results" $ do
     entered <- newEmptyMVar
     release <- newEmptyMVar

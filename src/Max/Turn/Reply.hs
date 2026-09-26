@@ -150,6 +150,7 @@ import Max.Tasks
     turnRuntimeOutputContext,
   )
 import Max.Text (encodeText)
+import Max.Tool.Media (inlineMediaMessages)
 import Max.Tool.Types (ToolDefinition (..), ToolRef (..))
 import Max.ToolContext
   ( TurnCapabilities (..),
@@ -293,7 +294,9 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
                   <> "\n"
                   <> T.take 32000 (encodeText relay.value)
                   <> "\n较长结果可用 context_resume 按结果引用读取。向发起者说明结果；不要重做原调用。"
-          outcome <- trySync (prepareReply env session Nothing (Just evidence) >>= runReply env session)
+          outcome <- trySync $ do
+            prepared <- prepareReply env session Nothing (Just evidence)
+            runReply env session prepared {prompt = prepared.prompt <> inlineMediaMessages relay.media}
           case outcome of
             Right settled@(TurnSucceeded, _, _) -> settle settled
             _ -> do

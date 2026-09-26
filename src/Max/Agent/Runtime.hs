@@ -59,7 +59,7 @@ runAgentRuntime jobs =
         (\turn -> liftIO . atomically $ turnEvents turn >>= Events.tryFinish)
         ( \turn context -> liftIO $ do
             origin <- Jobs.resultOrigin jobs turn context
-            pure (Just ExecutionResults {erDeliver = \ref value -> atomically (Router.deliverResult jobs.resultRouter origin ref value), erClose = atomically (Router.closeTask jobs.resultRouter origin.target)})
+            pure (Just ExecutionResults {erDeliver = \ref value media -> atomically (Router.deliverResult jobs.resultRouter origin ref value media), erClose = atomically (Router.closeTask jobs.resultRouter origin.target)})
         )
     )
     (Just (liftIO . Jobs.acquireGuestSlot jobs . (.atrTurnId)))

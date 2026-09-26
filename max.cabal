@@ -422,6 +422,7 @@ library
         Max.Tool.Control
         Max.Effects.ToolControl
         Max.Tool.Types
+        Max.Tool.Media
         Max.Tool.Arguments
         Max.Tool.Protocol
         Max.Tool.Returns

@@ -14,6 +14,7 @@ module Max.Effects.Tools
     registryCatalog,
     runTools,
     runToolsWith,
+    runToolsWithMedia,
     invokeTool,
     invokeToolWithControl,
     outcomeResult,
@@ -40,6 +41,7 @@ import Max.Tool.Catalog
     validateArguments,
   )
 import Max.Tool.Control (LoopControl (..))
+import Max.Tool.Media (InlineMedia)
 import Max.Tool.Returns (withReturnType)
 import Max.Tool.Types
 import Max.Util (trySync)
@@ -116,7 +118,20 @@ runToolsWith ::
   Eff es (ToolRegistry toolEs) ->
   Eff (Tools : es) a ->
   Eff es a
-runToolsWith lower currentRegistry = interpret $ \_ -> \case
+runToolsWith lower = runToolsWithMedia $ \action -> do
+  (value, control) <- lower action
+  pure (value, control, [])
+
+-- | Assembly collects only this invocation's attachments. They remain outside
+-- the model-visible JSON outcome and cannot be forged through tool arguments.
+runToolsWithMedia ::
+  forall es toolEs a.
+  (Concurrent :> es) =>
+  (forall x. Eff toolEs x -> Eff es (x, LoopControl, [InlineMedia])) ->
+  Eff es (ToolRegistry toolEs) ->
+  Eff (Tools : es) a ->
+  Eff es a
+runToolsWithMedia lower currentRegistry = interpret $ \_ -> \case
   InvokeTool name args -> do
     registry <- currentRegistry
     sanitizeInvocation <$> case Map.lookup (ToolRef name) registry.registryRunners of
@@ -134,10 +149,14 @@ runToolsWith lower currentRegistry = interpret $ \_ -> \case
         Left exception -> failure "exception" (T.pack (show exception))
         Right (Left ()) ->
           failure "timeout" ("工具执行超时（" <> T.pack (show seconds) <> " 秒）")
-        Right (Right (outcome, control)) -> case outcome of
-          ToolSucceeded _ -> completed outcome control
-          ToolCommitted _ -> completed outcome control
-          _ -> ordinary outcome
+        Right (Right (outcome, control, media)) ->
+          ( case outcome of
+              ToolSucceeded _ -> completed outcome control
+              ToolCommitted _ -> completed outcome control
+              _ -> ordinary outcome
+          )
+            { tiMedia = media
+            }
       where
         completed outcome control
           | permitsControl definition control = ToolInvocation outcome control
@@ -168,7 +187,7 @@ ordinary :: ToolOutcome -> ToolInvocation
 ordinary outcome = ToolInvocation outcome ContinueLoop
 
 sanitizeInvocation :: ToolInvocation -> ToolInvocation
-sanitizeInvocation invocation = ToolInvocation (sanitizeToolOutcome invocation.tiOutcome) (sanitizeControl invocation.tiControl)
+sanitizeInvocation invocation = invocation {tiOutcome = sanitizeToolOutcome invocation.tiOutcome, tiControl = sanitizeControl invocation.tiControl}
   where
     sanitizeControl (LoadSkills loads) =
       LoadSkills

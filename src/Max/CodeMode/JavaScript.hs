@@ -33,6 +33,8 @@ import System.Environment (lookupEnv)
 
 -- Build-time dependency only. No runtime path lookup or executable discovery.
 -- Changing the guest sources re-runs this splice after the Nix artifact rebuild.
+-- Set MAX_CODEMODE_JS_WASM when compiling this module: changing the environment
+-- only when running tests cannot replace guest bytes already embedded here.
 javaScriptRuntime :: ByteString
 javaScriptRuntime =
   $( do

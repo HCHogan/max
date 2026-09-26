@@ -33,12 +33,15 @@ spec = describe "shared host tool execution" $ do
     release <- newEmptyMVar
     steering <- newTVarIO False
     count <- newIORef (0 :: Int)
+    delivered <- newEmptyMVar
+    let media = InlineMedia "detached" "data:image/png;base64,AA==" Nothing
     let runner = echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' count (+ 1) >> putMVar entered () >> takeMVar release) >> pure (Right value)}
         hooks = noJournal {ehInterrupt = readTVar steering >>= check}
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition {tdAwait = AsyncTool}] [runner])
     Async.withAsync (takeMVar entered >> atomically (writeTVar steering True)) $ \_ ->
-      runEff . runConcurrent . runTools registry $ do
+      runEff . runConcurrent . runToolsWithMedia (\action -> do value <- action; pure (value, ContinueLoop, [media])) (pure registry) $ do
         session <- newExecutionSession Nothing
+        setExecutionResultSink session (\_ invocation -> putMVar delivered invocation.tiMedia)
         batch <- executeToolBatch session hooks (views registry) [ToolRequest "async" "echo" args]
         ref <- case batch.tbInvocations of
           [ToolInvocation (ToolSucceeded (Object fields)) _] | Just (String ref) <- KeyMap.lookup "result" fields -> pure ref
@@ -47,6 +50,8 @@ spec = describe "shared host tool execution" $ do
         liftIO (putMVar release ())
         finished <- waitExecution session hooks ref
         liftIO (finished.tiOutcome `shouldBe` ToolSucceeded args)
+        liftIO (finished.tiMedia `shouldBe` [])
+        liftIO (timeout 1000000 (takeMVar delivered) `shouldReturn` Just [media])
         liftIO (readIORef count `shouldReturn` 1)
 
   it "waits for non-async tools before admitting steering" $ do

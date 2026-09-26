@@ -458,7 +458,7 @@ steerJobFrom jobs sender group actor source identifier note = atomically $ do
                       parentOpen <- maybe (pure False) Events.isOpen entry.parentEvents
                       let noteToParent = "[子任务收到直接 steering] " <> TE.decodeUtf8 (LBS.toStrict (encode feedback))
                           parentNotes = [(parent, Events.ChildSaid entry.view.run noteToParent Events.Normal) | not fromParent && parentOpen, Just parent <- [entry.parentEvents]]
-                      accepted <- Events.deliverAll ((entry.events, if answering then Events.Settled "agent_ask" feedback else Events.Steered feedback) : parentNotes)
+                      accepted <- Events.deliverAll ((entry.events, if answering then Events.Settled "agent_ask" feedback [] else Events.Steered feedback) : parentNotes)
                       when (accepted && not fromParent && not parentOpen) $
                         writeTVar jobs.entries (Map.insert identifier entry {view = entry.view {messages = boundedMessages (entry.view.messages <> [noteToParent])}} entries)
                       when (accepted && answering) $ forM_ entry.question (\reply -> putTMVar reply feedback)

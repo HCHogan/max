@@ -24,6 +24,7 @@ PURE = {
     "Max.LLM.Stream",
     "Max.ModelCatalog.Internal",
     "Max.Tool.Types",
+    "Max.Tool.Media",
     "Max.Schema",
     "Max.Text",
     "Max.Hash",

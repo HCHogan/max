@@ -37,6 +37,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Max.Task.FrontendInput (FrontendInputView)
 import Max.Task.Types (JobRun)
+import Max.Tool.Media (InlineMedia)
 
 data Urgency = Normal | Urgent deriving stock (Eq, Show)
 
@@ -47,7 +48,7 @@ data Body
   | Cancelled
   | ChildSaid !JobRun !Text !Urgency
   | ChildDone !JobRun !Value
-  | Settled !Text !Value
+  | Settled !Text !Value ![InlineMedia]
   deriving stock (Eq, Show)
 
 data Event = Event {sequence :: !Integer, target :: !Integer, body :: !Body} deriving stock (Eq, Show)
@@ -117,7 +118,7 @@ wakes pending = \case
   Cancelled -> True
   ChildSaid _ _ Urgent -> True
   ChildDone child _ -> Set.member child pending.children
-  Settled call _ -> Set.member call pending.calls
+  Settled call _ _ -> Set.member call pending.calls
   _ -> False
 
 hasInterrupt :: Task -> Pending -> STM Bool

@@ -32,8 +32,8 @@ spec = describe "node event delivery and observation" $ do
     wakes awaiting (ChildSaid child "note" Normal) `shouldBe` False
     wakes awaiting (ChildDone child (String "report")) `shouldBe` True
     wakes noPending (ChildDone child (String "report")) `shouldBe` False
-    wakes awaiting (Settled "r1" (String "done")) `shouldBe` True
-    wakes awaiting (Settled "r2" (String "unrelated")) `shouldBe` False
+    wakes awaiting (Settled "r1" (String "done") []) `shouldBe` True
+    wakes awaiting (Settled "r2" (String "unrelated") []) `shouldBe` False
     wakes awaiting (Replaced "new goal") `shouldBe` True
     wakes awaiting Cancelled `shouldBe` True
 

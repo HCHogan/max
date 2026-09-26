@@ -308,7 +308,9 @@ waitExecution session hooks ref = do
     Just worker ->
       awaitExecution hooks True (awaitWake hooks.ehInterrupt (Map.singleton ref worker)) >>= \case
         Interrupted -> pure (runningInvocation ref)
-        Settled [(_, result)] -> either throwIO pure result
+        -- The retained completion owns its media delivery. Waiting again only
+        -- returns the value, even if it wins the race with that delivery.
+        Settled [(_, result)] -> (\invocation -> invocation {tiMedia = []}) <$> either throwIO pure result
         _ -> error "single future wake cardinality"
 
 hasDetachedExecutions :: (Concurrent :> es) => ExecutionSession -> Eff es Bool

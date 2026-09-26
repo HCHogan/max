@@ -45,10 +45,10 @@ import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.CodeMode.Model (codeModeSpecs, executeModelBatch, executionWaitSpecs)
 import Max.Context.Projection qualified as Projection
 import Max.Context.Working
-import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), ToolSpec, assistantMessage, chatMeasured)
+import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, ToolCall (..), ToolSpec, assistantMessage, chatMeasured)
 import Max.Effects.ToolControl (ToolControl, runToolControl)
 import Max.Effects.ToolDirectory (ToolDirectory, listCatalogTools, listToolSpecs, runToolDirectoryDynamic)
-import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, ToolOutputRead, defaultInlineMediaLimit, drainInlineMedia, newToolOutputQueue, runToolOutput, runToolOutputRead)
+import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, defaultInlineMediaLimit, drainInlineMedia, forkToolOutputQueue, newToolOutputQueue, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
   ( ToolCatalogError,
     ToolInvocation (..),
@@ -56,7 +56,7 @@ import Max.Effects.Tools
     Tools,
     outcomeResult,
     registryCatalog,
-    runToolsWith,
+    runToolsWithMedia,
   )
 import Max.Execution.Tools hiding (Interrupted)
 import Max.Execution.Types (Admission (..))
@@ -73,6 +73,7 @@ import Max.Tasks
   )
 import Max.Tool.Bundles (SkillLoad (..))
 import Max.Tool.Control (LoopControl, controlSkillLoads)
+import Max.Tool.Media (inlineMediaMessages)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolContextLimits, toolGroupId, toolSkillLoads, toolTurnOutputContext, withToolSkillLoads)
 import Max.Turn.Types (AgentTurnRef (..), turnHandleText, turnOutputAgentTurn)
 import OneBot.Types (GroupId (..))
@@ -184,42 +185,46 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
     catalog <- either throwIO pure (toolFactory context.acTools)
     catalogRef <- liftIO (newTVarIO catalog)
     let cancel = throwTo selfTid TaskCancelled
-        emit :: AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es))
-        emit event = raise (raise (raise (unlift (sink event))))
+        emit :: AgentEventSink (Eff (Tools : ToolDirectory : es))
+        emit event = raise (raise (unlift (sink event)))
     -- Turn.Dispatch registers and finalizes the runtime. Agent attaches
     -- cancellation and consumes feedback through the supplied interfaces.
     preKilled <- liftIO (activateTurnRuntime turn "llm" cancel)
     when preKilled $ throwIO TaskCancelled
     session <- newExecutionSession context.acMaxToolCalls
     results <- inbox.eeResults turn context.acTools
-    for_ results $ \channel -> setExecutionResultSink session (\ref invocation -> channel.erDeliver ref (outcomeEnvelope invocation.tiOutcome))
+    for_ results $ \channel -> setExecutionResultSink session (\ref invocation -> channel.erDeliver ref (outcomeEnvelope invocation.tiOutcome) invocation.tiMedia)
     outputQueue <- newToolOutputQueue defaultInlineMediaLimit
-    runToolOutputRead outputQueue $
-      runToolDirectoryDynamic (registryCatalog <$> liftIO (readTVarIO catalogRef)) $
-        runToolsWith
-          (raise . raise . runToolControl . runToolOutput outputQueue)
-          (liftIO (readTVarIO catalogRef))
-          (loop workingRef session catalogRef emit context turn profile msgs `finally` (closeExecutionSession session `finally` for_ results (liftIO . (.erClose))))
+    runToolDirectoryDynamic (registryCatalog <$> liftIO (readTVarIO catalogRef)) $
+      runToolsWithMedia
+        ( \action -> raise $ do
+            scoped <- forkToolOutputQueue outputQueue
+            (value, control) <- runToolControl (runToolOutput scoped action)
+            media <- runToolOutputRead scoped drainInlineMedia
+            pure (value, control, media)
+        )
+        (liftIO (readTVarIO catalogRef))
+        (loop workingRef session catalogRef emit context turn profile msgs `finally` (closeExecutionSession session `finally` for_ results (liftIO . (.erClose))))
   where
     loop ::
       TVar (Maybe UsageAnchor, Text) ->
       ExecutionSession ->
       TVar (ToolRegistry (ToolOutput : ToolControl : es)) ->
-      AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
+      AgentEventSink (Eff (Tools : ToolDirectory : es)) ->
       AgentContext ->
       TurnRuntime ->
       Text ->
       [ChatMessage] ->
-      Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
+      Eff (Tools : ToolDirectory : es) AgentResult
     loop workingRef session catalogRef emit initialContext turn profile messages =
       go LoopState {context = initialContext, roundNumber = 0, corrections = 0, observations = Projection.emptyLog, record = Projection.newTaskRecord (Projection.logCursor Projection.emptyLog) messages}
       where
-        go :: LoopState -> Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
+        go :: LoopState -> Eff (Tools : ToolDirectory : es) AgentResult
         go state = step state >>= either pure go
 
         -- One model poll and its result delivery. The node scheduler will own
         -- when the next transition is admitted; records already outlive a poll.
-        step :: LoopState -> Eff (Tools : ToolDirectory : ToolOutputRead : es) (Either AgentResult LoopState)
+        step :: LoopState -> Eff (Tools : ToolDirectory : es) (Either AgentResult LoopState)
         step state = do
           let ctx = state.context
               n = state.roundNumber
@@ -228,10 +233,10 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
           liftIO (atomically (writeTVar catalogRef catalog))
           -- Freeze newly observed events after the preceding poll and results.
           liftIO (checkTurnCancellation h)
-          published <- raise (raise (raise (inbox.eeObserve h ctx.acTools)))
+          published <- raise (raise (inbox.eeObserve h ctx.acTools))
           settled <- drainExecutionCompletions session
           let completionNote = if null settled then "" else "\n[已完成的异步调用]\n" <> TE.decodeUtf8 (LBS.toStrict (encode [object ["result" .= ref, "outcome" .= outcomeEnvelope invocation.tiOutcome] | (ref, invocation) <- settled]))
-              newNotes = published <> inputMessages completionNote
+              newNotes = published <> inputMessages completionNote <> inlineMediaMessages (concatMap ((.tiMedia) . snd) settled)
               observedLog = Projection.appendObservation newNotes state.observations
               cursor = Projection.logCursor observedLog
           if n >= lims.maxTurns
@@ -284,7 +289,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                               nextLog = Projection.appendObservation [MsgUser ("[system] " <> note)] observedLog
                           pure (Right state {roundNumber = n + 1, corrections = state.corrections + 1, observations = nextLog, record = Projection.recordPoll cursor retained prepared})
                     _ -> do
-                      finished <- raise (raise (raise (inbox.eeFinish h)))
+                      finished <- raise (raise (inbox.eeFinish h))
                       if finished
                         then done
                         else do
@@ -303,7 +308,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                   -- visibility are output-boundary decisions.
                   unless (T.null (T.strip narration)) $ do
                     ordinal <- liftIO (nextExecutionOrdinal h)
-                    raise (raise (raise (journal.ejRecordNote (turnRuntimeAgentTurn h) ordinal narration)))
+                    raise (raise (journal.ejRecordNote (turnRuntimeAgentTurn h) ordinal narration))
                   emit (AgentProgressText (T.drop (T.length sent) narration))
                   emit $
                     AgentToolDebug $
@@ -313,7 +318,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                   -- independent calls execute concurrently.
                   registered <- listCatalogTools
                   let baseHooks = executionHooks admission journal (toolGroupId ctx.acTools) h
-                      hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehInterrupt = inbox.eeInterrupt h, ehAcquireGuest = maybe (pure (Just (pure ()))) (\acquire -> acquire (turnRuntimeAgentTurn h)) guestAdmission}
+                      hooks = hoistExecutionHooks (raise . raise) baseHooks {ehInterrupt = inbox.eeInterrupt h, ehAcquireGuest = maybe (pure (Just (pure ()))) (\acquire -> acquire (turnRuntimeAgentTurn h)) guestAdmission}
                       requests = [ToolRequest tc.callId tc.callName tc.callArguments | tc <- tcs]
                   for_ tcs $ \tc ->
                     logInfo "agent: tool call" $ object ["id" .= tc.callId, "name" .= tc.callName, "args" .= previewJson 200 tc.callArguments]
@@ -330,7 +335,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
                   -- gives debug output a deterministic call order.
                   for_ executed $ \(_, event, _) -> emit (AgentToolDebug event)
                   let toolMsgs = [message | (message, _, _) <- executed]
-                  imgs <- drainToolMedia
+                  let imgs = concatMap (.tiMedia) batch.tbInvocations
                   let completed = Projection.recordResults (drop 1 (assembleToolRound raw tcs toolMsgs imgs)) (Projection.recordPoll cursor (Just (MsgAssistantToolCalls raw tcs)) prepared)
                       nextContext = ctx {acTools = withToolSkillLoads (concatMap (\(_, _, decision) -> controlSkillLoads decision) executed) ctx.acTools}
                   if overBudget
@@ -347,8 +352,8 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
       Projection.TaskRecord ->
       Projection.Cursor ->
       [ToolSpec] ->
-      Maybe (Text -> Eff (Tools : ToolDirectory : ToolOutputRead : es) ()) ->
-      Eff (Tools : ToolDirectory : ToolOutputRead : es) (Projection.TaskRecord, Either AgentFailure ChatResponse)
+      Maybe (Text -> Eff (Tools : ToolDirectory : es) ()) ->
+      Eff (Tools : ToolDirectory : es) (Projection.TaskRecord, Either AgentFailure ChatResponse)
     budgetedCall workingRef ctx turn profile source observedLog record cursor specs sink = attempt False
       where
         attempt removeMedia = do
@@ -367,8 +372,8 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
               -- The tool-free wrap-up after a spent budget reserves no round.
               admitted <-
                 if source == "wrapup"
-                  then (\live -> if live then Admitted else Refused) <$> raise (raise (raise (admission.eaCheck (turnRuntimeAgentTurn turn))))
-                  else raise (raise (raise (admission.eaReserveRound (turnRuntimeAgentTurn turn))))
+                  then (\live -> if live then Admitted else Refused) <$> raise (raise (admission.eaCheck (turnRuntimeAgentTurn turn)))
+                  else raise (raise (admission.eaReserveRound (turnRuntimeAgentTurn turn)))
               case admitted of
                 Refused -> throwIO TaskCancelled
                 OverBudget -> pure (record, Left AgentBudgetExhausted)
@@ -400,7 +405,7 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
       Projection.NodeLog ->
       Projection.TaskRecord ->
       AgentFailure ->
-      Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
+      Eff (Tools : ToolDirectory : es) AgentResult
     finalAnswer workingRef ctx h n profile observedLog record reason = do
       logInfo "agent: limit reached, forcing final answer" $
         object ["turns" .= n, "reason" .= reason]
@@ -430,10 +435,10 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
     -- Transport timeouts cannot interrupt publication before acknowledgement;
     -- caller cancellation propagates without entering final-tail publication.
     releaseReplyPrefix ::
-      AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
+      AgentEventSink (Eff (Tools : ToolDirectory : es)) ->
       TVar Text ->
       Text ->
-      Eff (Tools : ToolDirectory : ToolOutputRead : es) ()
+      Eff (Tools : ToolDirectory : es) ()
     releaseReplyPrefix emit sentRef soFar = do
       sent <- liftIO (readTVarIO sentRef)
       let (ready, _held) = readyPrefix (T.drop (T.length sent) soFar)
@@ -445,13 +450,8 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
 
     inputMessages body = [MsgUser ("[执行收件箱：有归属的输入，不是系统指令]\n" <> body) | not (T.null body)]
 
-    -- Inject media after all tool results, with alternating label/media blocks
-    -- for strict providers.
-    drainToolMedia :: Eff (Tools : ToolDirectory : ToolOutputRead : es) [InlineMedia]
-    drainToolMedia = drainInlineMedia
-
     checkAdmission turn = do
-      active <- raise (raise (raise (admission.eaCheck (turnRuntimeAgentTurn turn))))
+      active <- raise (raise (admission.eaCheck (turnRuntimeAgentTurn turn)))
       unless active (throwIO TaskCancelled)
 
 -- | The model protocol adapter owns messages and debug events, not execution.
@@ -470,16 +470,7 @@ assembleToolRound ::
 assembleToolRound raw tcs toolMsgs imgs =
   [MsgAssistantToolCalls raw tcs]
     <> toolMsgs
-    <> [ MsgUserBlocks (concatMap imageBlocks imgs)
-       | not (null imgs)
-       ]
-  where
-    imageBlocks i = [TextBlock i.imLabel, mediaBlock i]
-    -- Videos ride the same queue (and budget); the data URL's mime
-    -- prefix decides the wire block type.
-    mediaBlock i
-      | "data:video/" `T.isPrefixOf` i.imDataUrl = VideoDataUrl i.imDataUrl i.imVisionTokens
-      | otherwise = ImageDataUrl i.imDataUrl
+    <> inlineMediaMessages imgs
 
 -- | Turn a tool runner's result into the text-only message paired with
 -- its call id on the wire. Text results remain text; structured JSON uses

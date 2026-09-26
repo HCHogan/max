@@ -27,6 +27,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Max.Node.Events qualified as Events
 import Max.Task.Types (JobRun)
+import Max.Tool.Media (InlineMedia)
 import Max.ToolContext (ToolContext)
 import Max.Turn.Types (AgentTurnId)
 
@@ -38,7 +39,7 @@ data Origin = Origin
     valid :: !(STM Bool)
   }
 
-data Relay = Relay {identifier :: !Integer, attempt :: !Integer, origin :: !Origin, reference :: !Text, value :: !Value}
+data Relay = Relay {identifier :: !Integer, attempt :: !Integer, origin :: !Origin, reference :: !Text, value :: !Value, media :: ![InlineMedia]}
 
 instance Eq Relay where
   a == b = a.identifier == b.identifier && a.attempt == b.attempt && a.origin.turn == b.origin.turn
@@ -55,8 +56,8 @@ newRouter = Router <$> newTVarIO (0, Map.empty)
 
 -- | Full buffers apply backpressure to the completion producer. Closure and
 -- revocation are read in the same transaction, so neither can strand a producer.
-deliverResult :: Router -> Origin -> Text -> Value -> STM ()
-deliverResult (Router ref) origin reference value = do
+deliverResult :: Router -> Origin -> Text -> Value -> [InlineMedia] -> STM ()
+deliverResult (Router ref) origin reference value media = do
   allowed <- origin.valid
   if not allowed
     then pure ()
@@ -68,16 +69,16 @@ deliverResult (Router ref) origin reference value = do
       delivery <-
         if open
           then do
-            accepted <- Events.deliver origin.target (Events.Settled reference value)
+            accepted <- Events.deliver origin.target (Events.Settled reference value media)
             check accepted
             pure Buffered
           else pure Queued
-      let relay = Relay next 0 origin reference value
+      let relay = Relay next 0 origin reference value media
       writeTVar ref (next + 1, Map.insert next (delivery, relay) entries)
 
 observeResults :: Router -> Events.Task -> [Events.Event] -> STM ()
 observeResults (Router ref) task events = modifyTVar' ref $ \(next, entries) ->
-  let observed = Set.fromList [reference | Events.Event {body = Events.Settled reference _} <- events]
+  let observed = Set.fromList [reference | Events.Event {body = Events.Settled reference _ _} <- events]
       keep (delivery, relay) = delivery /= Buffered || relay.origin.target /= task || Set.notMember relay.reference observed
    in (next, Map.filter keep entries)
 

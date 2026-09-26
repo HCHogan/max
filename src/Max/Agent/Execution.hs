@@ -8,6 +8,7 @@ import Effectful (Eff)
 import Max.Execution.Types
 import Max.LLM.Types (ChatMessage)
 import Max.Tasks (TurnRuntime)
+import Max.Tool.Media (InlineMedia)
 import Max.ToolContext (ToolContext)
 import Max.Turn.Types (AgentTurnRef, ExecutionOrdinal)
 import OneBot.Types (GroupId)
@@ -31,4 +32,4 @@ data ExecutionEvents es = ExecutionEvents
     eeResults :: TurnRuntime -> ToolContext -> Eff es (Maybe ExecutionResults)
   }
 
-data ExecutionResults = ExecutionResults {erDeliver :: Text -> Value -> IO (), erClose :: IO ()}
+data ExecutionResults = ExecutionResults {erDeliver :: Text -> Value -> [InlineMedia] -> IO (), erClose :: IO ()}
