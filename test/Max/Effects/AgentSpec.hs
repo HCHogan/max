@@ -374,7 +374,7 @@ spec = describe "Agent full loop" $ do
         factory current =
           buildToolRegistry
             ( [echoDefinition, echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
-                <> [echoDefinition {tdRef = ToolRef "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
+                <> [echoDefinition {tdRef = ToolRef "view_zhihu"} | toolVisible (toolSkillLoads current) "view_zhihu"]
             )
             ( [ legacyTool
                   "echo"
@@ -390,7 +390,7 @@ spec = describe "Agent full loop" $ do
                   )
               ]
                 <> skillToolsWithRuntime registry current (const (pure (Right Nothing))) Right
-                <> [echoTool {toolName = "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
+                <> [echoTool {toolName = "view_zhihu"} | toolVisible (toolSkillLoads current) "view_zhihu"]
             )
         provider =
           LLMInterpreter
@@ -405,14 +405,14 @@ spec = describe "Agent full loop" $ do
                   1 -> do
                     liftIO $ [text | MsgUser text <- messages, "[当前已加载宿主技能]" `T.isPrefixOf` text] `shouldBe` []
                     liftIO $ names `shouldContain` ["run_code"]
-                    liftIO $ names `shouldNotContain` ["web_search"]
-                    respond "run_code" (object ["code" .= ("const value = await tools.echo({value:7}); await tools.echo({value:8}); await tools.use_skill({name:'web'}); return {answer:value.echo.value, hidden:!max.names.includes('web_search')};" :: Text)])
+                    liftIO $ names `shouldNotContain` ["view_zhihu"]
+                    respond "run_code" (object ["code" .= ("const value = await tools.echo({value:7}); await tools.echo({value:8}); await tools.use_skill({name:'web'}); return {answer:value.echo.value, hidden:!max.names.includes('view_zhihu')};" :: Text)])
                   _ -> do
                     liftIO $ readIORef leaves `shouldReturn` 2
                     liftIO $ case reverse messages of
                       MsgUser note : MsgUserBlocks _ : MsgTool "1" _ : _ -> show (MsgUser note) `shouldBe` show (inputMessage "[feedback]: 下一轮改成方案 B")
                       other -> expectationFailure ("input did not follow the complete code result: " <> show other)
-                    liftIO $ names `shouldContain` ["web_search", "run_code"]
+                    liftIO $ names `shouldContain` ["view_zhihu", "run_code"]
                     liftIO $
                       [text | MsgUser text <- messages, "[当前已加载宿主技能]" `T.isPrefixOf` text]
                         `shouldSatisfy` (\frames -> any (T.isInfixOf "[skill: web]") frames && not (any (T.isInfixOf "[skill: codemode]") frames))
@@ -464,10 +464,10 @@ spec = describe "Agent full loop" $ do
     let factory current =
           buildToolRegistry
             ( [echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
-                <> [searchDefinition | toolVisible (toolSkillLoads current) "web_search"]
+                <> [searchDefinition]
             )
             ( skillToolsWithRuntime registry current (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion (catalogTools available))
-                <> [searchTool | toolVisible (toolSkillLoads current) "web_search"]
+                <> [searchTool]
             )
         provider =
           LLMInterpreter
@@ -477,7 +477,6 @@ spec = describe "Agent full loop" $ do
                 case roundNo of
                   0 -> do
                     liftIO $ map (.specName) specs `shouldNotContain` ["run_code"]
-                    liftIO $ map (.specName) specs `shouldNotContain` ["web_search"]
                     respond "use_skill" (object ["name" .= ("batch-search" :: Text)])
                   1 -> do
                     liftIO $ map (.specName) specs `shouldContain` ["web_search", "run_code"]
@@ -527,15 +526,15 @@ spec = describe "Agent full loop" $ do
         factory current =
           buildToolRegistry
             ( [echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
-                <> [echoDefinition {tdRef = ToolRef "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
+                <> [echoDefinition {tdRef = ToolRef "view_zhihu"} | toolVisible (toolSkillLoads current) "view_zhihu"]
             )
             ( skillToolsWithRuntime registry current (const (pure (Right Nothing))) Right
                 <> [ legacyTool
-                       "web_search"
+                       "view_zhihu"
                        "search"
                        (object ["type" .= ("object" :: Text)])
                        (\_ -> liftIO (modifyIORef' effects (+ 1)) >> pure (Right (object ["result" .= T.replicate 70000 "x"])))
-                   | toolVisible (toolSkillLoads current) "web_search"
+                   | toolVisible (toolSkillLoads current) "view_zhihu"
                    ]
             )
         provider =
@@ -547,11 +546,11 @@ spec = describe "Agent full loop" $ do
                 case roundNo of
                   0 -> do
                     liftIO $ names `shouldBe` ["use_skill"]
-                    respond [ToolCall "load" "use_skill" (object ["name" .= ("web" :: Text)]), ToolCall "too-early" "web_search" (object [])]
+                    respond [ToolCall "load" "use_skill" (object ["name" .= ("web" :: Text)]), ToolCall "too-early" "view_zhihu" (object [])]
                   1 -> do
-                    liftIO $ names `shouldContain` ["use_skill", "web_search"]
+                    liftIO $ names `shouldContain` ["use_skill", "view_zhihu"]
                     liftIO $ readIORef effects `shouldReturn` 0
-                    respond [ToolCall "search" "web_search" (object [])]
+                    respond [ToolCall "search" "view_zhihu" (object [])]
                   _ -> do
                     liftIO $ maximum [T.length body | MsgTool _ body <- messages] `shouldSatisfy` (> 70000)
                     pure (Right (ContentResp "done"))
@@ -561,7 +560,7 @@ spec = describe "Agent full loop" $ do
         agentTurn turn executionContext "fake" [MsgUser "search"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
     readIORef effects `shouldReturn` 1
-    toolVisible (toolSkillLoads executionContext.acTools) "web_search" `shouldBe` False
+    toolVisible (toolSkillLoads executionContext.acTools) "view_zhihu" `shouldBe` False
 
   for_ ["agent", "arbitrary_tool"] $ \name ->
     it ("does not interpret " <> T.unpack name <> " JSON as a loop control receipt") $ do

@@ -51,7 +51,9 @@ skillDependencies _ = []
 toolBundle :: Text -> Maybe Text
 toolBundle name
   | name == "inspect_source" = Just "self-knowledge"
-  | name `elem` ["web_search", "browser", "view_zhihu", "view_bilibili"] = Just "web"
+  -- Search stays in every catalog: a factual answer should not wait on a
+  -- skill load the model has to think of first.
+  | name `elem` ["browser", "view_zhihu", "view_bilibili"] = Just "web"
   | "sandbox_" `T.isPrefixOf` name || name `elem` ["nix_search", "read_file", "write_file", "send_image", "send_file"] = Just "sandbox"
   | otherwise = Nothing
 

@@ -48,6 +48,7 @@ spec = describe "Max.Skills builtins" $ do
     toolVisible (toolSkillLoads loaded) "sandbox_exec" `shouldBe` True
     toolVisible (toolSkillLoads loaded) "browser" `shouldBe` False
     toolVisible (toolSkillLoads executionContext) "sandbox_exec" `shouldBe` False
+    toolVisible (toolSkillLoads executionContext) "web_search" `shouldBe` True
     (_, again) <- load loaded
     controlSkillLoads again `shouldBe` []
 
