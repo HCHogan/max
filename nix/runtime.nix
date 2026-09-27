@@ -7,6 +7,10 @@
 let
   cfg = config.services.max;
   runtime = cfg.runtime;
+  # Operations sandboxes share the maxops namespace. Its tailscaled runs with
+  # --accept-dns=false, so 100.100.100.100 answers tailnet names only and
+  # returns SERVFAIL for everything else; glibc then asks the public servers.
+  operationsDns = [ "100.100.100.100" ] ++ cfg.sandbox.nameservers;
   instancePolicy =
     kind:
     pkgs.writeText "max-${kind}-policy" (
@@ -19,7 +23,7 @@ let
           nixpkgs = toString cfg.sandbox.nixpkgs;
           dns = cfg.sandbox.nameservers;
           operationsGroups = lib.optionals cfg.operations.enable cfg.operations.allowedGroups;
-          operationsDns = [ "100.100.100.100" ];
+          inherit operationsDns;
           network =
             if cfg.sandboxNetwork.enable then config.networking.nftables.tables.max-sandbox.content else null;
         }
@@ -39,7 +43,7 @@ let
         gateway = "10.231.0.1";
         dns = cfg.sandbox.nameservers;
         operationsGroups = lib.optionals cfg.operations.enable cfg.operations.allowedGroups;
-        operationsDns = [ "100.100.100.100" ];
+        inherit operationsDns;
         # Max fills each conversation's view; the broker owns the directories.
         chatViews = "${cfg.mediaDirectory}/views";
         # Each backend adopts only its own effective template. A browser package

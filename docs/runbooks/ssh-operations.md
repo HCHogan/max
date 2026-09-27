@@ -52,7 +52,10 @@ metadata and the running container's network namespace identity.
 `NetworkNamespacePath`. Its state is `/var/lib/max/tailscale`, its socket is under
 `/run/max-ops-tailscale`, and the preauthkey is delivered with `LoadCredential`.
 The daemon gets a private resolver file for bootstrap; sandbox DNS uses
-`100.100.100.100`. It does not change the host resolver. The namespace's uplink
+`100.100.100.100`, then the public sandbox nameservers. The daemon runs with
+`--accept-dns=false`, so quad-100 answers tailnet names only and returns
+SERVFAIL for public names, which sends glibc on to the next server. It does not
+change the host resolver. The namespace's uplink
 provides public access and the daemon installs tailnet/subnet routes. The uplink
 rejects bare tailnet destinations and forwarding through the host's Tailscale
 interface, so a stopped dedicated client cannot borrow the host node's identity.
