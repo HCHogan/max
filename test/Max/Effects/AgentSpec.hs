@@ -400,7 +400,8 @@ spec = describe "Agent full loop" $ do
                     respond name args = pure (Right (ToolCallsResp (object []) "" [ToolCall (T.pack (show roundNo)) name args]))
                 case roundNo of
                   0 -> do
-                    liftIO $ names `shouldNotContain` ["run_code"]
+                    liftIO $ names `shouldContain` ["run_code"]
+                    liftIO $ names `shouldNotContain` ["run_code_resume"]
                     respond "use_skill" (object ["name" .= ("codemode" :: Text)])
                   1 -> do
                     liftIO $ [text | MsgUser text <- messages, "[当前已加载宿主技能]" `T.isPrefixOf` text] `shouldBe` []
@@ -476,7 +477,7 @@ spec = describe "Agent full loop" $ do
                 let respond name args = pure (Right (ToolCallsResp (object []) "" [ToolCall (T.pack (show roundNo)) name args]))
                 case roundNo of
                   0 -> do
-                    liftIO $ map (.specName) specs `shouldNotContain` ["run_code"]
+                    liftIO $ map (.specName) specs `shouldContain` ["run_code"]
                     respond "use_skill" (object ["name" .= ("batch-search" :: Text)])
                   1 -> do
                     liftIO $ map (.specName) specs `shouldContain` ["web_search", "run_code"]
@@ -545,7 +546,7 @@ spec = describe "Agent full loop" $ do
                     respond toolCalls = pure (Right (ToolCallsResp (object []) "" toolCalls))
                 case roundNo of
                   0 -> do
-                    liftIO $ names `shouldBe` ["use_skill"]
+                    liftIO $ names `shouldBe` ["use_skill", "run_code"]
                     respond [ToolCall "load" "use_skill" (object ["name" .= ("web" :: Text)]), ToolCall "too-early" "view_zhihu" (object [])]
                   1 -> do
                     liftIO $ names `shouldContain` ["use_skill", "view_zhihu"]

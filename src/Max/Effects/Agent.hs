@@ -260,8 +260,9 @@ runAgentWith admission journal inbox guestAdmission lims toolFactory = interpret
               liftIO (setTurnPhase h "llm")
               nativeSpecs <- listToolSpecs
               detached <- hasDetachedExecutions session
-              let codeEnabled = (toolCapabilities ctx.acTools).tcSkills && Map.member "codemode" (toolSkillLoads ctx.acTools)
-                  specs = nativeSpecs <> codeModeSpecs codeEnabled <> executionWaitSpecs detached
+              paused <- hasLivePrograms session
+              let codeEnabled = (toolCapabilities ctx.acTools).tcSkills
+                  specs = nativeSpecs <> codeModeSpecs codeEnabled paused <> executionWaitSpecs detached
               -- Publication tracking is per poll; the input is projected from
               -- frozen observations and raw recorded outputs/results.
               sentRef <- liftIO (newTVarIO "")

@@ -315,7 +315,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
             let respond call name value = pure (Right (ToolCallsResp (object []) "" [ToolCall call name value]))
             case n of
               0 -> do
-                liftIO $ map (.specName) specs `shouldNotContain` ["run_code"]
+                liftIO $ map (.specName) specs `shouldContain` ["run_code"]
                 pure (Right (ToolCallsResp (object []) "" [ToolCall name "use_skill" (object ["name" .= name]) | name <- ["web", "codemode"]]))
               1 -> do
                 liftIO $ map (.specName) specs `shouldContain` ["run_code"]

@@ -21,7 +21,7 @@ import ExecutionFixture
 import Max.Browser.View (browserBudget, browserView)
 import Max.CodeMode.Execution
 import Max.CodeMode.JavaScript
-import Max.CodeMode.Model (executeModelBatch)
+import Max.CodeMode.Model (codeModeSpecs, executeModelBatch)
 import Max.CodeMode.Wasm
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, drainInlineMedia, forkToolOutputQueue, newToolOutputQueue, queueInlineMedia, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
@@ -124,6 +124,11 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
           )
           `Eff.finally` closeExecutionSession session
 
+  it "offers run_code in every round and program controls only while one is paused" $ do
+    map (.specName) (codeModeSpecs True False) `shouldBe` ["run_code"]
+    map (.specName) (codeModeSpecs True True) `shouldBe` ["run_code", "run_code_resume", "run_code_cancel"]
+    map (.specName) (codeModeSpecs False True) `shouldBe` []
+
   it "pauses on steering and resumes the original await with buffered results" $ do
     entered <- newEmptyMVar
     release <- newEmptyMVar
@@ -152,12 +157,14 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
         ( do
             paused <- runJavaScript session hooks (views registry) "let base=40; const a=await tools.echo({value:2}); await tools.echo({value:3}); return base+a.value;"
             liftIO (paused.cmExit `shouldBe` WasmPaused)
+            hasLivePrograms session >>= liftIO . (`shouldBe` True)
             liftIO (readTVarIO slots `shouldReturn` 1)
             liftIO (putMVar release () >> takeMVar completed)
             liftIO (readIORef count `shouldReturn` 1)
             liftIO (atomically (writeTVar steering False))
             resumed <- executeModelBatch True Map.empty session hooks (views registry) [ToolRequest "resume" "run_code_resume" (object ["run" .= paused.cmRunRef])]
             liftIO (map codeValue resumed.tbInvocations `shouldBe` [Just (Number 42)])
+            hasLivePrograms session >>= liftIO . (`shouldBe` False)
             liftIO (readIORef count `shouldReturn` 2)
             liftIO (readTVarIO slots `shouldReturn` 0)
             other <- newExecutionSession Nothing

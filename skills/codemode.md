@@ -1,6 +1,6 @@
-用 JavaScript 组合多次工具调用、筛选大结果，减少模型往返；适合批量查询、条件流程和数据汇总。
+run_code 的完整手册：子 agent、暂停与恢复、翻聊天上下文、保存的工作流和各项限额；run_code 本身常驻，简单程序看它的描述就够。
 
-加载后下一轮可使用 `run_code({code: "..."})`。`code` 是 async 函数体，使用
+`run_code({code: "..."})` 一直在工具表里，这份是它的完整说明。`code` 是 async 函数体，使用
 `return` 返回 JSON；没有 return 则返回 null。必须把 run_code 作为该轮唯一调用。
 工具参数遵循本轮工具列表提供的完整 schema；这里只改变组合方式。
 

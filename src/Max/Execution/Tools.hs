@@ -28,6 +28,7 @@ module Max.Execution.Tools
     waitExecution,
     drainExecutionCompletions,
     hasDetachedExecutions,
+    hasLivePrograms,
     withExecutionRecord,
     outcomeName,
     outcomeEnvelope,
@@ -366,6 +367,10 @@ waitExecution session hooks ref = do
 
 hasDetachedExecutions :: (Concurrent :> es) => ExecutionSession -> Eff es Bool
 hasDetachedExecutions session = not . Map.null <$> readTVarIO session.nativeFutures
+
+-- | Between model polls a registered program is paused at an await.
+hasLivePrograms :: (Concurrent :> es) => ExecutionSession -> Eff es Bool
+hasLivePrograms session = not . Map.null <$> readTVarIO session.programs
 
 drainExecutionCompletions :: (Concurrent :> es) => ExecutionSession -> Eff es [(Text, ToolInvocation)]
 drainExecutionCompletions session = atomically (STM.flushTQueue session.completions)

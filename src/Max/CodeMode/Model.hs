@@ -8,6 +8,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict (Map)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent (Concurrent)
@@ -22,18 +23,39 @@ import Max.Tool.Returns (withReturnType)
 import Max.Tool.Types
 import Max.Tools.Schema (stringParam, toolObject)
 
-codeModeSpecs :: Bool -> [ToolSpec]
-codeModeSpecs enabled =
+-- | run_code is always offered: the manual is optional reading, and a
+-- composition should not cost a skill-loading poll first. Resume and cancel
+-- appear only while this task has a program paused at an await.
+codeModeSpecs :: Bool -> Bool -> [ToolSpec]
+codeModeSpecs enabled paused =
   [ ToolSpec
       "run_code"
-      (withReturnType "run_code" "用 codemode 技能的 JavaScript SDK 组合当前工具并返回筛选后的 JSON。必须单独提交；同一程序不自动重试，已发生的工具效果不会回滚。")
+      (withReturnType "run_code" runCodeDescription)
       (toolObject [("code", stringParam "临时 async 函数体，最大 64 KiB；与 workflow/args 二选一"), ("workflow", stringParam "已加载工作流 skill/entry，固定为 use_skill 返回的版本"), ("args", object ["description" .= ("工作流输入，遵循已加载契约" :: Text)])] [])
   | enabled
   ]
     <> [ ToolSpec name (withReturnType name description) (toolObject [("run", stringParam "当前任务的暂停程序句柄，来自 run_code 的 run 字段")] ["run"])
        | enabled,
+         paused,
          (name, description) <- [("run_code_resume", "从原 await 恢复暂停的程序；保留变量和已完成的调用，不重放副作用。"), ("run_code_cancel", "取消暂停程序及其仍在途的调用，返回已有回执；已发生的效果不回滚。")]
        ]
+
+runCodeDescription :: Text
+runCodeDescription =
+  T.intercalate
+    "\n"
+    [ "用 JavaScript 组合本轮可见的工具，只把筛选后的 JSON 带回上下文。必须单独提交。",
+      "适合：三个以上调用、有依赖的调用链、要先筛选的大结果、并行派多个子 agent 再汇总。一两个独立调用直接用原生工具，原生调用本身会并发。",
+      "code 是 async 函数体，用 return 返回 JSON（最多 64 KiB）。SDK：",
+      "- await tools.<工具名>(args)：失败抛 ToolError；返回类型见各工具描述末尾「返回：」。",
+      "- 并发用 Promise.all；依次 await 就是顺序执行；items.map(async x => b(await a(x))) 是流水线，每项做完一步就进下一步。",
+      "- await agent({objective, profile, inputs, output_contract})：派子 agent 并等报告；报告在 result.text，给了 output_contract 时符合契约的 JSON 在 result.payload。",
+      "- await max.raw(name, args)：返回 {outcome, value} 或 {outcome, error}，不抛错；扇出时一项失败不拖垮其他项。",
+      "- await max.race(promises) 取第一个结果并取消其余；await max.sleep(ms) 用于超时。",
+      "- 程序返回时会取消仍在途的调用，要做完的必须 await。没有网络、文件、时钟，这些都通过工具。",
+      "不自动重试，已发生的工具效果不回滚。等待异步工具时收到 steering 会返回 {status:\"paused\", run}，再用 run_code_resume 或 run_code_cancel 处理。",
+      "完整手册（翻上下文、保存的工作流、各项限额）：use_skill codemode。"
+    ]
 
 executionWaitSpecs :: Bool -> [ToolSpec]
 executionWaitSpecs available =
