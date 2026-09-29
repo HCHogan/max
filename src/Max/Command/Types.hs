@@ -102,6 +102,8 @@ data Command
     UseClear
   | -- | '!status' — overview of the (target) group
     Status
+  | -- | '!lingo' — expressions and jargon learned from this conversation
+    LingoShow
   | -- | verb + raw args; parser succeeded but verb unknown
     Unknown !Text !RawArgs
   deriving stock (Show, Eq)

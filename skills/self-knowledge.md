@@ -49,6 +49,8 @@ example 不能证明生产正在使用该值——当前生效配置只能靠运
   与 `src/Max/{Matrix,IMessage,WechatHook}.hs`；OneBot 边缘：`src/OneBot/`
 - 上下文、记忆与检索：`src/Max/{Context,Prompt}*.hs`、`src/Max/{Context,Prompt}/`、
   `src/Max/{Historian,EpisodeStore,MemoryStore,Recall}.hs` 与 `src/Max/Memory/`
+- 学群友说话（说法与黑话，跟在 Historian 游标后面学）：`src/Max/{LingoLearner,LingoStore}.hs` 与
+  `src/Max/Lingo/`；`!lingo` 看学习进度和学到的内容
 - 命令实现：`src/Max/Command/`；配置结构与默认值：`src/Max/Config.hs`
 - 工具与技能系统：`src/Max/Tools/`、`src/Max/{Toolset,Skills}.hs`
 - 部署形态：`nix/module.nix`（`max-service` 服务账户，PostgreSQL 数据库/角色仍为 `max`）、

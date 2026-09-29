@@ -20,6 +20,7 @@ import Max.DispatchFixture (qqDispatch)
 import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.LLM.Protocol (resolveCacheBoundaries)
+import Max.Lingo.Types (LingoExpression (..), LingoJargon (..), LingoView (..), emptyLingoView)
 import Max.EpisodeStore (EpisodeHandle, parseEpisodeHandle)
 import Max.IR (Body (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
@@ -141,6 +142,7 @@ baseInputs =
       groupBrief = [],
       groupMemories = [],
       userMemories = [],
+      lingo = emptyLingoView,
       images = [],
       skills = [],
       now = timeAt 12,
@@ -384,6 +386,25 @@ spec = do
       let (upToBlock, _) = T.breakOn "[memories" ub
       upToBlock `shouldSatisfy` ("[recent messages]" `T.isInfixOf`)
       upToBlock `shouldSatisfy` (not . ("[current message]" `T.isInfixOf`))
+
+    it "renders learned lingo after memories and before the current message" $ do
+      let inp =
+            baseInputs
+              { groupMemories = [memAt 5 "群里在开发 max bot"],
+                lingo = sampleLingo,
+                transcript = [historyAt 9 8001 memberId (Just "Alice") "典"]
+              }
+          (sys, ub) = splitMessages (renderContext inp)
+      sys `shouldSatisfy` (not . ("群里的说话习惯" `T.isInfixOf`))
+      ub `shouldSatisfy` ("  讽刺地赞同：用 对对对（群友原话：「对对对，你说的都对」）" `T.isInfixOf`)
+      ub `shouldSatisfy` ("  典：反讽，说事情离谱得很典型" `T.isInfixOf`)
+      let (upToLingo, _) = T.breakOn "[群里的说话习惯" ub
+      upToLingo `shouldSatisfy` ("[memories — 背景备忘]" `T.isInfixOf`)
+      upToLingo `shouldSatisfy` (not . ("[current message]" `T.isInfixOf`))
+
+    it "omits the lingo block when nothing was learned" $ do
+      let (_, ub) = splitMessages (renderContext baseInputs)
+      ub `shouldSatisfy` (not . ("[群里的" `T.isInfixOf`))
 
   describe "renderContext transcript" $ do
     -- The whole conversation is one system message plus one user
@@ -916,6 +937,17 @@ spec = do
       (cpInputs pressured).groupMemories `shouldSatisfy` null
       pressured.cpWithinBudget `shouldBe` True
 
+    it "drops learned lingo before any memory under token pressure" $ do
+      let withMemory = baseInputs {groupMemories = [memAt 20 "keep this memory"]}
+          baseline = planContext generousLimits (snapshot withMemory)
+          tightLimits = ContextLimits baseline.cpEstimatedPromptTokens 512 0 0 Nothing Nothing
+          pressured = planContext tightLimits (snapshot withMemory {lingo = sampleLingo})
+      (cpInputs pressured).lingo `shouldBe` emptyLingoView
+      map (.memId) (cpInputs pressured).groupMemories `shouldBe` [MemoryId 20]
+      pressured.cpWithinBudget `shouldBe` True
+      pressured.cpTrace
+        `shouldSatisfy` any (\trace -> trace.ctSource == "lingo" && trace.ctDecision == ContextDropped)
+
     it "cuts oldest recent-turn lines under token pressure" $ do
       let baseline = planContext generousLimits (snapshot baseInputs)
           tightLimits = ContextLimits baseline.cpEstimatedPromptTokens 512 0 0 Nothing Nothing
@@ -1040,3 +1072,9 @@ snapshot = ContextSnapshot
 
 generousLimits :: ContextLimits
 generousLimits = ContextLimits 200000 4096 0 0 Nothing Nothing
+
+sampleLingo :: LingoView
+sampleLingo =
+  LingoView
+    [LingoExpression 1 "讽刺地赞同" "用 对对对" 12 "对对对，你说的都对"]
+    [LingoJargon "典" "反讽，说事情离谱得很典型" 30]

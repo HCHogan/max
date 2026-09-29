@@ -3,6 +3,7 @@
 module Max.DB.ConversationCursor
   ( CursorKind,
     historianCursor,
+    lingoCursor,
     loadCursor,
     advanceCursor,
   )
@@ -23,6 +24,10 @@ newtype CursorKind = CursorKind Text
 
 historianCursor :: CursorKind
 historianCursor = CursorKind "historian"
+
+-- | How far the lingo learner has read.  It trails 'historianCursor'.
+lingoCursor :: CursorKind
+lingoCursor = CursorKind "lingo"
 
 -- | Read a cursor, creating it at the beginning of the ledger when this is a
 -- new conversation/consumer pair.

@@ -39,6 +39,7 @@ import Max.Context.Types
         historyTurns,
         images,
         inFlight,
+        lingo,
         multimodal,
         now,
         origin,
@@ -55,12 +56,12 @@ import Max.Context.Types
         userMemories
       ),
   )
-import Max.ConversationScope (conversationScopeFor)
+import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Files qualified as DBFiles
   ( fetchFilesForMessageInScope,
   )
 import Max.DB.History
-  ( HistoryItem (canonicalId, receivedAt),
+  ( HistoryItem (canonicalId, fromBot, receivedAt, renderedText),
     MessageCursor,
     fetchForwardChildrenInScope,
     fetchMessageInScope,
@@ -76,6 +77,7 @@ import Max.Dispatch
         groupId,
         replyTo
       ),
+    dispatchText,
   )
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.IR (Body (..), Node (..), Phase (Canonical))
@@ -84,6 +86,17 @@ import Max.Images
     downloadableVideoCount,
   )
 import Max.LLM.Types (ContentBlock (ImageDataUrl))
+import Max.Lingo.Policy
+  ( matchJargon,
+    promptExpressionPool,
+    promptExpressionSample,
+    promptJargonMatches,
+    promptJargonPool,
+    promptJargonWindow,
+    sampleExpressions,
+  )
+import Max.Lingo.Types (LingoView (..))
+import Max.LingoStore (listExpressionCandidates, listKnownJargon)
 import Max.Media.Prepare (prepareImageWithin)
 import Max.Media.Rendition (rawVideoAttachment, videoRendition)
 import Max.Media.Vision (VideoAttachment (..), blockVisionTokens, wholeVideo)
@@ -182,6 +195,14 @@ collectContextSnapshot request now' history = do
           -- messages — one cheap indexed lookup either way.
           kids <- fetchForwardChildrenInScope scope h.canonicalId maxForwardLines
           pure (Just (h, files, kids))
+  lingo' <-
+    collectLingo
+      scope
+      mid
+      ( [h.renderedText | h <- transcript', not h.fromBot]
+          <> maybe [] (\(r, _, _) -> [r.renderedText]) replyCtx0
+          <> [dispatchText gm]
+      )
   -- Context stickers the caption worker has already described read
   -- as [sticker#<id>: <caption>] instead of an opaque [sticker]
   -- marker — a non-multimodal model gets to "see" them, and a
@@ -275,12 +296,33 @@ collectContextSnapshot request now' history = do
               groupBrief = brief,
               groupMemories = groupMems,
               userMemories = userMems,
+              lingo = lingo',
               images = images' <> videos',
               skills = skills',
               now = now',
               tz = tz'
             }
       }
+
+-- | A weighted sample of the group's learned expressions, seeded by the
+-- trigger so a preview and its turn agree, and the known jargon that the
+-- member lines around this trigger actually used.
+collectLingo ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  Int64 ->
+  [Text] ->
+  Eff es LingoView
+collectLingo scope seed recentLines = do
+  expressions <- listExpressionCandidates scope promptExpressionPool
+  known <- listKnownJargon scope promptJargonPool
+  pure
+    LingoView
+      { lvExpressions = sampleExpressions seed promptExpressionSample expressions,
+        lvJargon = matchJargon promptJargonMatches (lastN promptJargonWindow recentLines) known
+      }
+  where
+    lastN n xs = drop (length xs - n) xs
 
 -- | Wait for downloaded trigger-image rows, up to 'waitImagesMaxMs'. Failed
 -- downloads create no row, so timeout continues with whichever images arrived.

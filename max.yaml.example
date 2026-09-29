@@ -363,6 +363,22 @@ llm:
 #   timeout_seconds: 600
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Group lingo (MaiBot-style expression and jargon learning).  When profile
+# names an LLM profile, a background learner reads the ranges the Historian
+# has settled — the first run starts at the beginning of the ledger, so it
+# relearns the whole history — and keeps, per conversation, the phrasings
+# members use ("when X, say Y" with a real example line) and the terms whose
+# meaning in this group differs from their usual reading.  Each prompt then
+# carries a small weighted sample of expressions and the known terms the
+# recent lines used; no extra model call happens at reply time.  Needs
+# memory.extract_profile; uses memory.timeout_seconds per call.  !lingo shows
+# what has been learned.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# lingo:
+#   profile: deepseek-flash
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Proactive triggering (intent classification).  When profile names an LLM
 # profile, every group message that neither @-mentions nor quotes the bot is
 # batched through a cheap classifier that decides whether the bot should

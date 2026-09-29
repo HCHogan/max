@@ -136,7 +136,9 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    SelfSource (public text snapshot + deterministic bundle hash),
                    EpisodeScheduler (protected quiet-tail timing), Historian +
                    EpisodeStore (atomic exact-range summary capture and scoped
-                   memory proposals), Prompt context pipeline (current summaries
+                   memory proposals), LingoLearner + LingoStore (expressions
+                   and jargon learned behind the Historian cursor; pure
+                   Lingo.Policy), Prompt context pipeline (current summaries
                    + token-sized protected raw tail),
                    MemoryExtract (nightly memory maintenance),
                    Embedding + Embedder

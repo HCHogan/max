@@ -29,6 +29,7 @@ import Max.Dispatch (DispatchMessage)
 import Max.Episode.Types (EpisodeHandle)
 import Max.File.Types (FileRecord)
 import Max.History.Types (HistoryItem)
+import Max.Lingo.Types (LingoView)
 import Max.Memory.Types (MemoryItem)
 import Max.Platform.Types (AdvertisedCaps)
 import Max.Session.Types (Session)
@@ -99,6 +100,10 @@ data PromptInputs = PromptInputs
     -- memories are not injected — the model can @memory_list@ them
     -- when actually relevant.
     userMemories :: ![MemoryItem],
+    -- | Learned group lingo: a per-trigger sample of expressions and the
+    -- jargon terms the recent conversation used.  The most optional block:
+    -- dropped first under token pressure.
+    lingo :: !LingoView,
     -- | Already-loaded images to attach to the final user message,
     -- in display order (context images chronological, trigger's
     -- last).  Populated only when 'multimodal' AND the image worker

@@ -289,6 +289,10 @@ library
         Max.Turn.Reply
         Max.Hash
         Max.Historian
+        Max.Lingo.Policy
+        Max.Lingo.Types
+        Max.LingoLearner
+        Max.LingoStore
         Max.Http.Failure
         Max.Http.Json
         Max.HttpRuntime
@@ -694,6 +698,7 @@ test-suite max-test
         Max.Browser.VaultSpec
         Max.Browser.ProfileSpec
         Max.Command.ParserSpec
+        Max.LingoSpec
         Max.Command.PermissionSpec
         Max.ConfigSpec
         Max.Search.RuntimeSpec
@@ -848,6 +853,7 @@ test-suite max-test-db
         Max.DB.VideoRenditionSpec
         Max.DB.MediaMissingSpec
         Max.MemoryStoreSpec
+        Max.LingoStoreSpec
         Max.MemoryCapabilitiesSpec
         Max.MemoryExpirySpec
         Max.WorkflowAgentSpec

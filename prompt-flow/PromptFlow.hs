@@ -60,6 +60,7 @@ import Max.Effects.LLM
 import Max.Effects.ToolOutput (InlineMedia (..))
 import Max.EpisodeStore (EpisodeHandle, parseEpisodeHandle)
 import Max.IR (Body (..), MediaKind (..), MediaMeta (..), MentionTarget (..), Node (..))
+import Max.Lingo.Types (LingoExpression (..), LingoJargon (..), LingoView (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..), LLMProfile (..), Protocol (..), defaultContextLimits)
 import Max.Node.Log qualified as NodeLog
@@ -429,6 +430,14 @@ promptFixture =
         ],
       groupMemories = [memory 12 "group" 114514191 "群里主要玩 STM32 和 ESP32，老张是硬件老师傅"],
       userMemories = [memory 31 "user" 223344556 "阿飞在做一个 LoRa 气象站毕设"],
+      lingo =
+        LingoView
+          { lvExpressions =
+              [ LingoExpression 7 "别人问了很基础的问题" "用 先看手册 带过去" 12 "先看手册第 12 章，看完再来问",
+                LingoExpression 3 "对离谱的接线表示震惊" "用 绷不住了" 5 "绷不住了，电源正负接反还能跑"
+              ],
+            lvJargon = [LingoJargon "炸鸡" "把芯片或板子烧坏；群里自嘲用，不是吃的" 9]
+          },
       images =
         [ PromptImage "[↩ quoted message（22:45 阿飞）] 里的图片:" "data:image/jpeg;base64,cXVvdGVkLWltYWdl" Nothing,
           PromptImage "[current message] 里的图片:" "data:image/png;base64,Y3VycmVudC1pbWFnZQ==" Nothing,

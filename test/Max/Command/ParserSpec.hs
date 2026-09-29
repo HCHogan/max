@@ -57,6 +57,7 @@ spec = do
         Right (Just (Unknown "use" _)) -> pure ()
         other -> expectationFailure $ "expected Unknown use, got: " <> show other
     it "status" $ "!status" `parsesTo` Status
+    it "lingo" $ "!lingo" `parsesTo` LingoShow
 
   describe "!persona" $ do
     it "show" $ "!persona" `parsesTo` PersonaShow

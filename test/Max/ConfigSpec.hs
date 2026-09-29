@@ -144,3 +144,8 @@ spec = describe "startup configuration" $ do
     withArgs ["--llm-api-key", "test-key"] $ do
       config <- loadConfig
       validateConfig (config {memoryExtractProfile = Just "missing-profile"}) `shouldContain` ["memory.extract_profile"]
+  it "requires the Historian for lingo learning" $
+    withArgs ["--llm-api-key", "test-key"] $ do
+      config <- loadConfig
+      validateConfig (config {lingoProfile = Just "default", memoryExtractProfile = Nothing}) `shouldContain` ["lingo.profile"]
+      validateConfig (config {lingoProfile = Just "default", memoryExtractProfile = Just "default"}) `shouldNotContain` ["lingo.profile"]

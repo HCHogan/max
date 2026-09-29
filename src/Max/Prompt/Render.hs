@@ -11,7 +11,7 @@ import Data.Map.Strict qualified as Map
     lookup,
     toAscList,
   )
-import Data.Maybe (fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
   ( empty,
@@ -76,6 +76,7 @@ import Max.Context.Types
         historyTurns,
         images,
         inFlight,
+        lingo,
         multimodal,
         now,
         origin,
@@ -126,6 +127,11 @@ import Max.History.Types
       ),
     LedgerItem (history),
     bestName,
+  )
+import Max.Lingo.Types
+  ( LingoExpression (leExample, leSituation, leStyle),
+    LingoJargon (ljMeaning, ljTerm),
+    LingoView (lvExpressions, lvJargon),
   )
 import Max.LLM.Types
   ( ChatMessage (MsgAssistant, MsgSystem, MsgUser, MsgUserBlocks),
@@ -267,6 +273,9 @@ renderContext pi' =
           senderName
           pi'.groupMemories
           pi'.userMemories
+      backgroundBlock = case catMaybes [memBlock, renderLingo pi'.lingo] of
+        [] -> Nothing
+        blocks -> Just (T.intercalate "\n\n" blocks)
       effectivePersona = fromMaybe pi'.defaultPersona pi'.session.persona
       roster = contextRoster pi'
       envText =
@@ -310,7 +319,7 @@ renderContext pi' =
           pi'.continuationView
           mTranscript
           envText
-          memBlock
+          backgroundBlock
           pi'.replyCtx
           pi'.pinnedItems
           pi'.triggerForward
@@ -336,8 +345,8 @@ renderContext pi' =
           <> [userMessage]
    in messages
 
--- | Pure policy: enforce the selected model's token ceiling.  Optional active
--- memories go first under pressure,
+-- | Pure policy: enforce the selected model's token ceiling.  Learned lingo
+-- goes first under pressure, then optional active memories,
 -- followed by the oldest unpinned raw transcript rows; explicit permanent
 -- memories are the final degradable source.  Reply targets, pins, the current
 -- message, environment, and attached media are protected here.
@@ -395,7 +404,8 @@ contextCostModel =
           . (\inputs -> renderCompartments inputs.tz inputs.compartments),
       -- Include a conservative share of the block header; when the final
       -- line drops, the whole [recent turns] heading disappears too.
-      ccmRecentTurnTokens = (24 +) . estimateTextTokens
+      ccmRecentTurnTokens = (24 +) . estimateTextTokens,
+      ccmLingoBlockTokens = maybe 0 estimateTextTokens . renderLingo . (.lingo)
     }
 
 contextTrace :: ContextBudget -> PromptInputs -> [ChatMessage] -> [PolicyDrop] -> Bool -> [ContextTrace]
@@ -450,6 +460,11 @@ contextTrace budget inputs messages drops withinBudget =
       (sum [estimateTextTokens memory.memContent | memory <- inputs.groupMemories <> inputs.userMemories])
       ContextIncluded
       "scoped active and permanent semantic memory",
+    ContextTrace
+      "lingo"
+      (maybe 0 estimateTextTokens (renderLingo inputs.lingo))
+      ContextIncluded
+      "learned group expressions and the jargon recent lines used",
     ContextTrace
       "environment"
       ( estimateTextTokens inputs.session.model
@@ -529,6 +544,25 @@ renderMemories tz' private senderName groupMems userMems
             then []
             else ("关于当前发言者 <" <> senderName <> ">（本会话）:") : map (memoryLine tz') userMems
         ]
+
+-- | Learned lingo as reference, not instruction: habits to borrow
+-- naturally and terms to understand.  Omitted when nothing was selected.
+renderLingo :: LingoView -> Maybe Text
+renderLingo view
+  | null view.lvExpressions && null view.lvJargon = Nothing
+  | otherwise =
+      Just . T.intercalate "\n" $
+        section
+          "[群里的说话习惯 — 从群友聊天里学来的；顺手自然地用，别硬套，一次用一两个就够，别照抄原话]"
+          [ oneLine expression.leSituation <> "：" <> oneLine expression.leStyle <> "（群友原话：「" <> oneLine expression.leExample <> "」）"
+          | expression <- view.lvExpressions
+          ]
+          <> section
+            "[群里的黑话 — 最近聊天里出现了，这里是它在本群的意思]"
+            [oneLine jargon.ljTerm <> "：" <> oneLine jargon.ljMeaning | jargon <- view.lvJargon]
+  where
+    section _ [] = []
+    section heading rows = heading : map ("  " <>) rows
 
 memoryLine :: TimeZone -> MemoryItem -> Text
 memoryLine tz' m =

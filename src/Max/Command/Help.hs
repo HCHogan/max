@@ -49,6 +49,7 @@ helpText Nothing =
       "  !revoke [@#qq] <权限名>  撤销授权（scope 需和授权时一致）",
       "  !use <群号>              （私聊）之后你发的命令都作用于那个群；!use 看当前，!use clear 退出",
       "  !status                  看（目标）群的概览：model/persona/开关/pin/记忆/任务",
+      "  !lingo                   看从群聊里学到的说法和黑话（学习进度 + 最常见的几条）",
       "  ! <命令>                 在本群沙盒里跑 shell（感叹号后空一格），如 ! ls -al；支持多行",
       "  ! +包名… <命令>          开头 +pkg 把 nixpkgs 放进 PATH，如 ! +ffmpeg ffmpeg -version",
       "",

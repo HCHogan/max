@@ -20,12 +20,14 @@ import Max.Context (estimateTextTokens)
 import Max.Context.Types
 import Max.Episode.Types (EpisodeHandle)
 import Max.History.Types (HistoryItem (..))
+import Max.Lingo.Types (emptyLingoView, nullLingoView)
 import Max.Memory.Types (MemoryId, MemoryItem (..))
 
 data ContextCostModel = ContextCostModel
   { ccmMemoryBlockTokens :: PromptInputs -> Int,
     ccmCompartmentBlockTokens :: PromptInputs -> Int,
-    ccmRecentTurnTokens :: Text -> Int
+    ccmRecentTurnTokens :: Text -> Int,
+    ccmLingoBlockTokens :: PromptInputs -> Int
   }
 
 data PolicyDrop = PolicyDrop
@@ -40,6 +42,10 @@ selectContextTo costs tokenLimit initialTokens candidates =
   where
     go estimated dropped inputs
       | estimated <= tokenLimit = (inputs, reverse dropped)
+      | not (nullLingoView inputs.lingo) =
+          let withoutLingo = inputs {lingo = emptyLingoView}
+              saved = blockRemovalCost (costs.ccmLingoBlockTokens inputs) (costs.ccmLingoBlockTokens withoutLingo)
+           in continue estimated (PolicyDrop "lingo" saved) dropped withoutLingo
       | Just (memory, withoutMemory) <- dropOldestMemory (== "active") inputs =
           continue estimated (memoryDrop costs "memory.active" inputs withoutMemory memory) dropped withoutMemory
       | Just (line, withoutTurn) <- dropOldestRecentTurn inputs =

@@ -64,6 +64,7 @@ import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
 import Max.Images (imageWorker)
 import Max.Intent (IntentState, intentWorker, newIntentState)
 import Max.Jobs (newJobs, recordJobUsage)
+import Max.LingoLearner (lingoWorker)
 import Max.Log (withCompactLogger)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
 import Max.Matrix (matrixDeliveryTransport, matrixWorker)
@@ -361,6 +362,10 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
                    RequiredWorker
                    (historianWorker profile cfg.historianTimeoutSeconds cfg.llm cfg.timezone env.beTasks (defaultModelName cfg.llm) scheduler)
                | (profile, scheduler) <- maybeToList ((,) <$> cfg.memoryExtractProfile <*> env.beEpisodeScheduler)
+               ]
+            -- Configuration validation requires the Historian, whose cursor this follows.
+            <> [ worker "lingo" RequiredWorker (lingoWorker profile cfg.historianTimeoutSeconds (defaultModelName cfg.llm))
+               | profile <- maybeToList cfg.lingoProfile
                ]
             <> [worker "memory-expiry" RequiredWorker expiryWorker]
             <> [ worker

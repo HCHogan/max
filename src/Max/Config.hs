@@ -114,6 +114,10 @@ data AppConfig = AppConfig
     -- are much larger than interactive turns and therefore need an
     -- independent timeout even when both use the same LLM profile.
     historianTimeoutSeconds :: !Int,
+    -- | LLM profile for learning group lingo (expressions and jargon) from
+    -- the ranges the Historian has settled; 'Nothing' disables learning.
+    -- Requires the Historian, whose cursor it follows.
+    lingoProfile :: !(Maybe Text),
     -- | Vision-capable LLM profile for sticker AND chat-media
     -- captioning; 'Nothing' disables both caption workers (stickers
     -- are still recorded, just never described — and thus never
@@ -232,6 +236,8 @@ validateConfig cfg =
       maybe [] (\searchCfg -> invalid "search.max_results" (searchCfg.scDefaultMaxResults < 1 || searchCfg.scDefaultMaxResults > 10) <> invalid "search.timeout_seconds" (searchCfg.scTimeoutSeconds <= 0 || searchCfg.scTimeoutSeconds > 300)) cfg.search,
       validateProfile "memory.extract_profile" cfg.memoryExtractProfile,
       validateProfile "stickers.caption_profile" cfg.stickerCaptionProfile,
+      validateProfile "lingo.profile" cfg.lingoProfile,
+      invalid "lingo.profile" (isJust cfg.lingoProfile && isNothing cfg.memoryExtractProfile),
       validateProfile "intent.profile" ((.icProfile) <$> cfg.intent)
     ]
   where
@@ -423,6 +429,18 @@ appConfigParser usedRef =
             metavar "SECONDS",
             value 600
           ]
+    lingoProfile <-
+      subConfig "lingo" $
+        optional $
+          setting
+            [ help "LLM profile for learning group expressions and jargon from settled history (presence enables it; needs memory.extract_profile)",
+              reader str,
+              option,
+              long "lingo-profile",
+              env "MAX_LINGO_PROFILE",
+              conf "profile",
+              metavar "PROFILE"
+            ]
     stickerCaptionProfile <-
       subConfig "stickers" $
         optional $

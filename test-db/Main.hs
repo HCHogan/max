@@ -48,6 +48,7 @@ import Max.ExecutionSpec qualified as ExecutionSpec
 import Max.HistorianSpec qualified as HistorianSpec
 import Max.MemoryCapabilitiesSpec qualified as MemoryCapabilitiesSpec
 import Max.MemoryExpirySpec qualified as MemoryExpirySpec
+import Max.LingoStoreSpec qualified as LingoStoreSpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
 import Max.PlatformCapabilitiesSpec qualified as PlatformCapabilitiesSpec
 import Max.PlatformStoreSpec qualified as PlatformStoreSpec
@@ -104,6 +105,7 @@ main = do
         FilesSpec.spec pool
         MemoryCapabilitiesSpec.spec pool
         MemoryStoreSpec.spec pool
+        LingoStoreSpec.spec pool
         MemoryExpirySpec.spec pool
         MediaSpec.spec pool
         MediaMissingSpec.spec pool

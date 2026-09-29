@@ -29,12 +29,14 @@ import Max.Command.Help (helpText)
 import Max.Command.Types
 import Max.Command.Version (readHostUptime, readOsPretty, versionCard)
 import Max.ConversationScope (conversationScopeFor, conversationStorageId)
-import Max.DB.History (HistoryItem (..), bestName, fetchMessageInScope, fetchMessagesByIdsInScope)
+import Max.DB.History (HistoryItem (..), MessageCursor (..), bestName, fetchMessageInScope, fetchMessagesByIdsInScope)
 import Max.DB.Stickers qualified as Stickers
 import Max.Env (BotEnv (..))
 import Max.EpisodeScheduler (queueCompact)
 import Max.Intent (IntentConfig (..))
 import Max.Jobs qualified as Jobs
+import Max.Lingo.Types (LingoExpression (..), LingoJargon (..))
+import Max.LingoStore (LingoStats (..), lingoStats, listExpressionCandidates, listKnownJargon)
 import Max.MemoryStore
   ( ExpectedVersion (..),
     MemoryActor (..),
@@ -447,6 +449,11 @@ execute t gid uid senderPrincipal replyTarget cmd = do
           "  任务: " <> tshow (length tasks) <> " 个在跑",
           "  !clear 水位: " <> maybe "无" (T.pack . show) s.clearedAt
         ]
+    LingoShow -> do
+      stats <- lingoStats conversation
+      expressions <- listExpressionCandidates conversation 8
+      jargon <- listKnownJargon conversation 8
+      reply (formatLingo stats expressions jargon)
     Unknown v _ ->
       reply $
         "不认识的命令: !"
@@ -644,3 +651,21 @@ ageText now started =
         n | n < 60 -> tshow n <> "s"
         n | n < 3600 -> tshow (n `div` 60) <> "m"
         n -> tshow (n `div` 3600) <> "h"
+
+-- | What the lingo learner has read and the habits and terms it holds most
+-- firmly.  A fresh cursor with nothing learned usually means learning is off.
+formatLingo :: LingoStats -> [LingoExpression] -> [LingoJargon] -> Text
+formatLingo stats expressions jargon
+  | stats.stLearnedThrough.ingestSeq == 0 && stats.stExpressions == 0 && stats.stJargonCandidates == 0 =
+      "还没学到东西：没配 lingo.profile，或者学习还没轮到这里。"
+  | otherwise =
+      T.intercalate "\n" $
+        [ "说话习惯学习：",
+          "  进度：读到 #" <> tshow stats.stLearnedThrough.ingestSeq <> " / 已整理到 #" <> tshow stats.stSettledThrough.ingestSeq,
+          "  说法 " <> tshow stats.stExpressions <> " 条；黑话候选 " <> tshow stats.stJargonCandidates <> " 个，其中确认是本群用法的 " <> tshow stats.stKnownJargon <> " 个"
+        ]
+          <> section "最常见的说法：" ["  " <> e.leSituation <> "：" <> e.leStyle <> "（×" <> tshow e.leHits <> "）" | e <- expressions]
+          <> section "本群黑话：" ["  " <> j.ljTerm <> "：" <> j.ljMeaning <> "（×" <> tshow j.ljHits <> "）" | j <- jargon]
+  where
+    section _ [] = []
+    section title rows = title : rows

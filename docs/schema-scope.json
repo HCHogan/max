@@ -22,6 +22,8 @@
     "forward_expansions",
     "group_files",
     "images",
+    "lingo_expressions",
+    "lingo_jargon",
     "llm_calls",
     "llm_usage",
     "memories",

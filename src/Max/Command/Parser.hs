@@ -229,6 +229,9 @@ classify verb raw@(RawArgs pos flags) = case verb of
   "status" -> case pos of
     [] -> Status
     _ -> Unknown verb raw
+  "lingo" -> case pos of
+    [] -> LingoShow
+    _ -> Unknown verb raw
   "model" -> case pos of
     [] -> ModelShow
     ["list"] -> ModelList
