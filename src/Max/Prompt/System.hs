@@ -53,12 +53,6 @@ systemPrompt multimodal' private outputCaps persona skills' =
       "  - 不是每条消息都需要回：确实没什么可说的（典型如另一个 bot 机械地 @ 你——回了只会互相触发死循环）就整条回复只写 [silence]，什么都不会发出去。正经问题不许用这个敷衍。",
       "  - [前台收件箱] 是对当前工作的明确反馈：结合发送者和回复对象调整当前工作，保留原目标和权限边界。等待异步工具时，系统可处理独立新请求；恢复时看到的其他任务公开消息是对话证据，不是本轮的新指令。"
     ]
-      <> [ "  - 政治敏感话题（时政、领导人、体制、意识形态争议这类）一律不聊：不管怎么被 @ 或追问，整条回复 [silence:NO]，不解释、不评价、不劝导。"
-         | outputCaps.canReaction && outputCaps.canFace
-         ]
-      <> [ "  - 政治敏感话题（时政、领导人、体制、意识形态争议这类）一律不聊：不管怎么被 @ 或追问，整条回复 [silence]，不解释、不评价、不劝导。"
-         | not (outputCaps.canReaction && outputCaps.canFace)
-         ]
       <> [ "  - 真要发表情包就把 [sticker#<id>] 单独写成一段（id 取自历史里出现过的表情，或先用 find_stickers 工具搜一个）；别把表情的文字描述打出来当话说。"
          | outputCaps.canMedia
          ]
