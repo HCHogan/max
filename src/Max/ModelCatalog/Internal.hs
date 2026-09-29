@@ -15,6 +15,7 @@ module Max.ModelCatalog.Internal
     contextWorkingBudget,
     ModelCapabilities (..),
     LLMProfile (..),
+    ProviderConcurrency (..),
     Protocol (..),
     parseProtocol,
     mkModelCatalogFromCapabilities,
@@ -23,12 +24,15 @@ module Max.ModelCatalog.Internal
     modelProfileNames,
     lookupModelCapabilities,
     lookupCompletionProfile,
+    providerConcurrencyLimits,
+    profileConcurrency,
   )
 where
 
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.LLM.Types (TokenPrices)
@@ -78,9 +82,20 @@ data LLMProfile = LLMProfile
     contextBudget :: !(Maybe Int),
     visionLimits :: !(Maybe VisionLimits),
     -- | Configured prices; absent means calls on this profile carry no cost.
-    prices :: !(Maybe TokenPrices)
+    prices :: !(Maybe TokenPrices),
+    -- | How many completions the endpoint serves at once.  Profiles that
+    -- share a base URL share one limit; absent means the process default.
+    concurrency :: !(Maybe ProviderConcurrency)
   }
   deriving stock (Eq)
+
+-- | One endpoint's admission limit: at most 'maxConcurrency' completions in
+-- flight, of which background work may hold all but 'interactiveReserve'.
+data ProviderConcurrency = ProviderConcurrency
+  { maxConcurrency :: !Int,
+    interactiveReserve :: !Int
+  }
+  deriving stock (Show, Eq)
 
 -- | A provider's vision envelope. A request that exceeds any bound is rejected
 -- whole, so Max prepares and budgets media to fit before sending them.
@@ -200,6 +215,8 @@ instance Show ModelCatalog where
 
 data ModelCatalogError
   = DefaultModelMissing !Text
+  | -- | Two profiles on one base URL declare different limits.
+    ConflictingConcurrency !Text
   deriving stock (Show, Eq)
 
 mkModelCatalogFromCapabilities :: Text -> Map Text ModelCapabilities -> Either ModelCatalogError ModelCatalog
@@ -207,8 +224,13 @@ mkModelCatalogFromCapabilities defaultName =
   mkModelCatalogEntries defaultName . Map.map CapabilityEntry
 
 mkModelCatalogFromProfiles :: Text -> Map Text LLMProfile -> Either ModelCatalogError ModelCatalog
-mkModelCatalogFromProfiles defaultName =
-  mkModelCatalogEntries defaultName . Map.map CompletionEntry
+mkModelCatalogFromProfiles defaultName profiles =
+  case [url | (url, limits) <- Map.toList declared, length (nubOrd limits) > 1] of
+    url : _ -> Left (ConflictingConcurrency url)
+    [] -> mkModelCatalogEntries defaultName (Map.map CompletionEntry profiles)
+  where
+    declared = Map.fromListWith (<>) [(profile.baseUrl, [limits]) | profile <- Map.elems profiles, Just limits <- [profile.concurrency]]
+    nubOrd = Set.toList . Set.fromList . map (\limits -> (limits.maxConcurrency, limits.interactiveReserve))
 
 mkModelCatalogEntries :: Text -> Map Text CatalogEntry -> Either ModelCatalogError ModelCatalog
 mkModelCatalogEntries defaultName profiles
@@ -243,6 +265,24 @@ lookupModelCapabilities name catalog =
                   visionLimits = profile.visionLimits
                 }
           }
+
+-- | Declared admission limits by base URL, the key the LLM interpreter
+-- admits completions under.  Construction rejects conflicting declarations.
+providerConcurrencyLimits :: ModelCatalog -> Map Text ProviderConcurrency
+providerConcurrencyLimits catalog =
+  Map.fromList
+    [ (profile.baseUrl, limits)
+    | CompletionEntry profile <- Map.elems catalog.catalogProfiles,
+      Just limits <- [profile.concurrency]
+    ]
+
+-- | How many completions a background worker may usefully keep in flight on
+-- this profile: its endpoint's limit less the interactive reserve.
+profileConcurrency :: Text -> ModelCatalog -> Maybe Int
+profileConcurrency name catalog = do
+  profile <- lookupCompletionProfile name catalog
+  limits <- Map.lookup profile.baseUrl (providerConcurrencyLimits catalog)
+  pure (limits.maxConcurrency - limits.interactiveReserve)
 
 -- | Private completion settings for the LLM interpreter. Production catalogs
 -- derive their safe capability view from this same entry rather than

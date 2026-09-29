@@ -20,6 +20,7 @@ module Max.ModelCatalog
     defaultModelName,
     modelProfileNames,
     lookupModelCapabilities,
+    profileConcurrency,
   )
 where
 
@@ -41,6 +42,7 @@ import Max.ModelCatalog.Internal
     lookupModelCapabilities,
     mkModelCatalogFromCapabilities,
     modelProfileNames,
+    profileConcurrency,
   )
 
 -- | Construct a capability-only catalog. This is useful for pure consumers

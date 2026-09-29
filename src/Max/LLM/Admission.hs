@@ -1,4 +1,4 @@
-module Max.LLM.Admission (Priority (..), Admission, newAdmission, withAdmission, admissionCounts, priorityForSource) where
+module Max.LLM.Admission (Priority (..), Admission, newAdmission, newProviderAdmission, withAdmission, admissionCounts, priorityForSource) where
 
 import Control.Concurrent.STM
 import Data.Map.Strict (Map)
@@ -16,17 +16,30 @@ data Pool = Pool
     interactiveBurst :: !Int
   }
 
+-- | Completions in flight at once, and how many of them only interactive
+-- work may take.
+data ProviderLimit = ProviderLimit !Int !Int
+
 data Admission = Admission
   { pools :: !(TVar (Map Text Pool)),
     sequenceNumber :: !(TVar Integer),
-    capacity :: !Int,
-    reserved :: !Int
+    defaultLimit :: !ProviderLimit,
+    providerLimits :: !(Map Text ProviderLimit)
   }
 
+-- | One limit for every provider.
 newAdmission :: Int -> Int -> IO Admission
-newAdmission capacity reserved
-  | capacity < 1 || reserved < 0 || reserved >= capacity = ioError (userError "invalid model admission capacity")
-  | otherwise = Admission <$> newTVarIO Map.empty <*> newTVarIO 0 <*> pure capacity <*> pure reserved
+newAdmission capacity reserved = newProviderAdmission (capacity, reserved) Map.empty
+
+-- | A default limit, overridden per provider (base URL) where the endpoint
+-- declares what it can serve.
+newProviderAdmission :: (Int, Int) -> Map Text (Int, Int) -> IO Admission
+newProviderAdmission fallback overrides
+  | any invalid (fallback : Map.elems overrides) = ioError (userError "invalid model admission capacity")
+  | otherwise = Admission <$> newTVarIO Map.empty <*> newTVarIO 0 <*> pure (limit fallback) <*> pure (Map.map limit overrides)
+  where
+    invalid (capacity, reserved) = capacity < 1 || reserved < 0 || reserved >= capacity
+    limit (capacity, reserved) = ProviderLimit capacity reserved
 
 priorityForSource :: Text -> Priority
 priorityForSource source
@@ -48,18 +61,19 @@ withAdmission admission provider priority action =
           (Just . (\pool -> pool {waiting = Map.insert ticket priority pool.waiting}) . fromMaybe emptyPool)
           provider
       pure ticket
+    ProviderLimit capacity reserved = Map.findWithDefault admission.defaultLimit provider admission.providerLimits
     acquire ticket = do
       state <- readTVar admission.pools
       let pool = Map.findWithDefault emptyPool provider state
           first requested = fst <$> Map.lookupMin (Map.filter (== requested) pool.waiting)
           backgroundCount = Map.size (Map.filter (== Background) pool.running)
-          backgroundReady = isJust (first Background) && backgroundCount < admission.capacity - admission.reserved
+          backgroundReady = isJust (first Background) && backgroundCount < capacity - reserved
           permitted = case priority of
             Interactive -> not backgroundReady || pool.interactiveBurst < 5
             Background ->
-              backgroundCount < admission.capacity - admission.reserved
+              backgroundCount < capacity - reserved
                 && (isNothing (first Interactive) || pool.interactiveBurst >= 5)
-      check (Map.size pool.running < admission.capacity && first priority == Just ticket && permitted)
+      check (Map.size pool.running < capacity && first priority == Just ticket && permitted)
       let updated =
             pool
               { waiting = Map.delete ticket pool.waiting,

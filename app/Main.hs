@@ -7,7 +7,7 @@ import Control.Monad (forever, unless, when)
 import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust, maybeToList)
+import Data.Maybe (fromMaybe, isJust, maybeToList)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Effectful
@@ -71,7 +71,7 @@ import Max.Matrix (matrixDeliveryTransport, matrixWorker)
 import Max.Media (mediaDiscoveryWorker)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.Memory.Expiry (expiryWorker)
-import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
+import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames, profileConcurrency)
 import Max.Monitor (monitorWorker)
 import Max.Monitor.Dispatch (dispatchMonitorFire)
 import Max.Platform.Delivery (DeliveryTransport, deliveryWorker, oneBotDeliveryTransport)
@@ -364,7 +364,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
                | (profile, scheduler) <- maybeToList ((,) <$> cfg.memoryExtractProfile <*> env.beEpisodeScheduler)
                ]
             -- Configuration validation requires the Historian, whose cursor this follows.
-            <> [ worker "lingo" RequiredWorker (lingoWorker profile cfg.historianTimeoutSeconds (defaultModelName cfg.llm))
+            <> [ worker "lingo" RequiredWorker (lingoWorker profile cfg.historianTimeoutSeconds (fromMaybe 1 (profileConcurrency profile cfg.llm)) (defaultModelName cfg.llm))
                | profile <- maybeToList cfg.lingoProfile
                ]
             <> [worker "memory-expiry" RequiredWorker expiryWorker]

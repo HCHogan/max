@@ -35,7 +35,8 @@ profile protocol hints =
       promptCacheBreakpoints = hints,
       contextBudget = Nothing,
       visionLimits = Nothing,
-      prices = Nothing
+      prices = Nothing,
+      concurrency = Nothing
     }
 
 marked :: [ChatMessage]

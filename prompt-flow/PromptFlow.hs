@@ -289,6 +289,7 @@ profileFor protocol =
       contextBudget = Nothing,
       visionLimits = Nothing,
       prices = Nothing,
+      concurrency = Nothing,
       stream = False
     }
   where

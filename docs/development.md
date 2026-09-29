@@ -207,8 +207,8 @@ publication and boot interruption without replay. `Max.PublicationSpec` covers
 revocation before cancellation signalling and committed-prefix preservation.
 `Max.StreamingSpec` drives a controlled provider through HTTP/SSE, Agent and the
 QQ adapter, requiring a native send before EOS and one final-tail send.
-`Max.LLM.AdmissionSpec` tests provider capacity reservation, priority fairness,
-provider isolation and cancellation cleanup. Run the populated 087-to-current
+`Max.LLM.AdmissionSpec` tests provider capacity reservation, per-provider limits,
+priority fairness, provider isolation and cancellation cleanup. Run the populated 087-to-current
 upgrade gate with `PGHOST=127.0.0.1 PGPORT=5433 PGUSER=<test-role> bash scripts/test-task-upgrade.sh`.
 It creates and drops its own database; the test role needs CREATEDB permission.
 Historical SQL migrations remain immutable; legacy Plan code and tests are removed.

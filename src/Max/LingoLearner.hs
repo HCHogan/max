@@ -2,8 +2,9 @@
 -- The learner trails the Historian cursor, so it only reads ranges the
 -- Historian has already settled; a fresh cursor starts at the beginning of the
 -- ledger, which makes the first run a full-history backfill.  Conversations
--- are served one batch at a time in turn, so a long backfill in one group
--- does not delay learning in another.
+-- take turns, so a long backfill in one group does not delay learning in
+-- another; each turn learns as many consecutive batches in parallel as the
+-- profile's endpoint admits background work.
 module Max.LingoLearner
   ( lingoWorker,
     LingoStep (..),
@@ -27,6 +28,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
 import Effectful
+import Effectful.Concurrent.Async (Concurrent, forConcurrently)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (ConversationScope, conversationScopeFor, conversationStorageId)
@@ -78,12 +80,13 @@ data Failure = Failure
   }
 
 lingoWorker ::
-  (LLM :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (LLM :> es, WithConnection :> es, Concurrent :> es, Log :> es, IOE :> es) =>
   Text ->
+  Int ->
   Int ->
   Text ->
   Eff es ()
-lingoWorker profile timeoutSeconds defaultModel = localDomain "lingo" $ do
+lingoWorker profile timeoutSeconds parallel defaultModel = localDomain "lingo" $ do
   failuresRef <- liftIO (newIORef Map.empty)
   forever $ do
     progressed <- recovering "lingo pass" (learningPass failuresRef)
@@ -99,7 +102,7 @@ lingoWorker profile timeoutSeconds defaultModel = localDomain "lingo" $ do
       pure (or steps)
 
     learnScope failuresRef scope = do
-      step <- learnConversationOnce profile timeoutSeconds scope
+      step <- learnConversationOnce profile timeoutSeconds parallel scope
       inferred <- inferDueJargon profile timeoutSeconds scope
       case step of
         LingoLearned expressions terms -> do
@@ -151,20 +154,31 @@ skipFailingBatch scope from = do
     Nothing -> pure False
     Just entry -> recordLingoBatch scope from entry.cursor [] []
 
--- | Learn the next settled range of one conversation, if it is ready.
+-- | One planned range: learned by the model, or passed over because it holds
+-- no member line to learn from.
+data Plan
+  = Learn !MessageCursor !MessageCursor ![LingoSource]
+  | PassOver !MessageCursor !MessageCursor
+
+-- | Learn up to @parallel@ consecutive settled ranges of one conversation.
+-- The model calls run concurrently; results commit in cursor order and stop
+-- at the first failure, which the next pass starts from.
 learnConversationOnce ::
-  (LLM :> es, WithConnection :> es, IOE :> es) =>
+  (LLM :> es, WithConnection :> es, Concurrent :> es, IOE :> es) =>
   Text ->
+  Int ->
   Int ->
   ConversationScope ->
   Eff es LingoStep
-learnConversationOnce profile timeoutSeconds scope = do
+learnConversationOnce profile timeoutSeconds parallel scope = do
   learned <- loadCursor scope lingoCursor
   settled <- loadCursor scope historianCursor
-  if learned >= settled
-    then pure LingoWaiting
-    else do
-      (items, reachedEnd) <- collectBatch scope learned settled
+  plans <- if learned >= settled then pure [] else planBatches (max 1 parallel) learned settled
+  results <- forConcurrently plans run
+  commit (0 :: Int) (0, 0) (zip plans results)
+  where
+    planBatches remaining from settled = do
+      (items, reachedEnd) <- collectBatch scope from settled
       redacted <- redactedAmong [entry.history.canonicalId | entry <- items]
       let sources =
             zipWith
@@ -177,27 +191,49 @@ learnConversationOnce profile timeoutSeconds scope = do
                 not (T.null (T.strip (cleanLingoLine entry.history.renderedText)))
               ]
           members = length (filter (not . (.lsFromBot)) sources)
-      -- A settled range with no rows of this conversation has nothing to
-      -- learn; move past it instead of re-reading it every pass.
-      decide sources members reachedEnd learned (maybe settled (.cursor) (lastMaybe items))
-  where
-    decide sources members reachedEnd learned end
-      | end == learned = pure LingoWaiting
-      | null sources && reachedEnd = record learned end [] []
-      | reachedEnd && members < lingoMinMemberLines = pure LingoWaiting
-      | members == 0 = record learned end [] []
-      | otherwise = do
-          response <- chat (lingoCtx scope timeoutSeconds) profile [MsgSystem lingoLearnerSystem, MsgUser (renderLingoSources sources)] []
-          case response of
-            Left err -> pure (LingoFailed ("provider: " <> renderLLMFailure err))
-            Right (ContentResp raw) -> case parseLearnedBatch raw of
-              Left err -> pure (LingoFailed ("invalid response: " <> T.pack err))
-              Right batch -> record learned end (acceptExpressions sources batch.lbExpressions) (acceptJargon sources batch.lbJargon)
-            Right (InterruptedResp _ _) -> pure (LingoFailed "provider interrupted")
-            Right ToolCallsResp {} -> pure (LingoFailed "unexpected tool calls")
-    record from end expressions terms = do
-      stored <- recordLingoBatch scope from end expressions terms
-      pure (if stored then LingoLearned (length expressions) (length terms) else LingoWaiting)
+          -- A settled range with no rows of this conversation has nothing to
+          -- learn; move past it instead of re-reading it every pass.
+          end = maybe settled (.cursor) (lastMaybe items)
+          plan
+            | end == from = Nothing
+            | null sources && reachedEnd = Just (PassOver from end)
+            | reachedEnd && members < lingoMinMemberLines = Nothing
+            | members == 0 = Just (PassOver from end)
+            | otherwise = Just (Learn from end sources)
+      case plan of
+        Nothing -> pure []
+        Just next
+          | reachedEnd || remaining <= 1 -> pure [next]
+          | otherwise -> (next :) <$> planBatches (remaining - 1) end settled
+    run = \case
+      PassOver _ _ -> pure (Right ([], []))
+      Learn _ _ sources -> do
+        response <- chat (lingoCtx scope timeoutSeconds) profile [MsgSystem lingoLearnerSystem, MsgUser (renderLingoSources sources)] []
+        pure $ case response of
+          Left err -> Left ("provider: " <> renderLLMFailure err)
+          Right (ContentResp raw) -> case parseLearnedBatch raw of
+            Left err -> Left ("invalid response: " <> T.pack err)
+            Right batch -> Right (acceptExpressions sources batch.lbExpressions, acceptJargon sources batch.lbJargon)
+          Right (InterruptedResp _ _) -> Left "provider interrupted"
+          Right ToolCallsResp {} -> Left "unexpected tool calls"
+    commit committed totals [] = pure (outcome committed totals Nothing)
+    commit committed totals@(expressions, terms) ((plan, result) : rest) = case result of
+      Left err -> pure (outcome committed totals (Just err))
+      Right (newExpressions, newTerms) -> do
+        let (from, end) = bounds plan
+        stored <- recordLingoBatch scope from end newExpressions newTerms
+        if stored
+          then commit (committed + 1) (expressions + length newExpressions, terms + length newTerms) rest
+          else pure (outcome committed totals Nothing)
+    -- Committing only passed-over ranges still counts as progress; a failure
+    -- is reported only when it held back every range.
+    outcome committed (expressions, terms) failure
+      | committed > 0 = LingoLearned expressions terms
+      | Just err <- failure = LingoFailed err
+      | otherwise = LingoWaiting
+    bounds = \case
+      Learn from end _ -> (from, end)
+      PassOver from end -> (from, end)
     toSource index history =
       LingoSource
         { lsIndex = index,

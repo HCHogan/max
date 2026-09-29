@@ -54,6 +54,7 @@ module Max.Effects.LLM
   )
 where
 
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -63,7 +64,7 @@ import Effectful.Log
 import GHC.Clock (getMonotonicTimeNSec)
 import Max.Http.Json (defaultRetryDelaysSecs, replyRetryDelaysSecs)
 import Max.HttpRuntime (HttpRuntime)
-import Max.LLM.Admission (Admission, newAdmission, priorityForSource, withAdmission)
+import Max.LLM.Admission (Admission, newProviderAdmission, priorityForSource, withAdmission)
 import Max.LLM.CallContext
 import Max.LLM.Configuration (configureCallProfile)
 import Max.LLM.Failure
@@ -72,7 +73,7 @@ import Max.LLM.Protocol
 import Max.LLM.Transport (callChat, callChatStream, interruptionMarker)
 import Max.LLM.Types
 import Max.ModelCatalog (ModelCatalog)
-import Max.ModelCatalog.Internal (LLMProfile (..))
+import Max.ModelCatalog.Internal (LLMProfile (..), ProviderConcurrency (..), providerConcurrencyLimits)
 import Max.Tool.Types (ToolSpec (..))
 
 data LLM :: Effect where
@@ -138,7 +139,13 @@ runLLM ::
   Eff (LLM : es) a ->
   Eff es a
 runLLM runtime usageWriter callWriter catalog action = do
-  admission <- liftIO (newAdmission 50 10)
+  -- Endpoints that declare max_concurrency queue here, where interactive
+  -- turns go first, instead of in the server's own FIFO.
+  admission <-
+    liftIO $
+      newProviderAdmission
+        (50, 10)
+        (Map.map (\limits -> (limits.maxConcurrency, limits.interactiveReserve)) (providerConcurrencyLimits catalog))
   interpret
     ( \localEnv -> \case
         ChatMeasured ctx name msgs tools sink ->

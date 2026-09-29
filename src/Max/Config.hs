@@ -48,7 +48,7 @@ import Max.LLM.Types (TokenPrices (..))
 import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Matrix (MatrixConfig (..))
 import Max.ModelCatalog (ContextLimits (..), ModelCatalog, contextLimitsForWindow, defaultContextLimits, modelProfileNames)
-import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), VisionLimits (..), mkModelCatalogFromProfiles, parseProtocol)
+import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), ProviderConcurrency (..), VisionLimits (..), mkModelCatalogFromProfiles, parseProtocol)
 import Max.Monitor.Http (validWebhookBaseUrl)
 import Max.Tools.Search (SearchConfig (..))
 import Max.WechatHook (WechatHookConfig (..))
@@ -1271,13 +1271,15 @@ data ProfileSpec = ProfileSpec
     priceInput :: !(Maybe Double),
     priceCachedInput :: !(Maybe Double),
     priceOutput :: !(Maybe Double),
-    priceCurrency :: !(Maybe Text)
+    priceCurrency :: !(Maybe Text),
+    maxConcurrency :: !(Maybe Int),
+    interactiveReserve :: !(Maybe Int)
   }
   deriving stock (Show, Eq)
 
 emptySpec :: ProfileSpec
 emptySpec =
-  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 -- | Per-field first-Just-wins overlay (left = higher priority).
 mergeSpec :: ProfileSpec -> ProfileSpec -> ProfileSpec
@@ -1308,7 +1310,9 @@ mergeSpec a b =
       priceInput = a.priceInput <|> b.priceInput,
       priceCachedInput = a.priceCachedInput <|> b.priceCachedInput,
       priceOutput = a.priceOutput <|> b.priceOutput,
-      priceCurrency = a.priceCurrency <|> b.priceCurrency
+      priceCurrency = a.priceCurrency <|> b.priceCurrency,
+      maxConcurrency = a.maxConcurrency <|> b.maxConcurrency,
+      interactiveReserve = a.interactiveReserve <|> b.interactiveReserve
     }
 
 instance HasCodec ProfileSpec where
@@ -1341,6 +1345,8 @@ instance HasCodec ProfileSpec where
         <*> optionalFieldWith "price_cached_input" doubleCodec "Price per million prompt tokens served from the provider's cache (default: price_input)" .= (.priceCachedInput)
         <*> optionalFieldWith "price_output" doubleCodec "Price per million completion tokens" .= (.priceOutput)
         <*> optionalField "price_currency" "Currency of the prices, shown beside estimated costs (default USD)" .= (.priceCurrency)
+        <*> optionalField "max_concurrency" "Completions the endpoint serves at once; profiles sharing base_url share the limit, and interactive turns are admitted before background work" .= (.maxConcurrency)
+        <*> optionalField "interactive_reserve" "Slots of max_concurrency background work may never take (default 0: background may use all of them while no turn waits)" .= (.interactiveReserve)
 
 -- | autodocodec has no @HasCodec Double@ on purpose (lossy floats);
 -- bridge through Scientific, which is fine for temperatures and prices.
@@ -1557,6 +1563,8 @@ overlayProfileParser = do
       priceCachedInput = Nothing
       priceOutput = Nothing
       priceCurrency = Nothing
+      maxConcurrency = Nothing
+      interactiveReserve = Nothing
   pure ProfileSpec {..}
   where
     protoReader = eitherReader $ \s -> case parseProtocol (T.pack s) of
@@ -1657,6 +1665,15 @@ materializeLLM (dn, fileProfiles, overlay) = do
       when (toInteger resolvedAttachmentReserve + toInteger resolvedToolRoundReserve >= toInteger resolvedMaxInput) $
         fail $
           "llm profile '" <> T.unpack profName <> "' reserves its entire input window"
+      concurrency <- case (spec.maxConcurrency, spec.interactiveReserve) of
+        (Nothing, Nothing) -> pure Nothing
+        (Nothing, Just _) ->
+          fail ("llm profile '" <> T.unpack profName <> "': interactive_reserve needs max_concurrency")
+        (Just limit, reserve)
+          | limit < 1 -> fail ("llm profile '" <> T.unpack profName <> "': max_concurrency must be at least 1")
+          | maybe False (\r -> r < 0 || r >= limit) reserve ->
+              fail ("llm profile '" <> T.unpack profName <> "': interactive_reserve must be between 0 and max_concurrency - 1")
+          | otherwise -> pure (Just (ProviderConcurrency limit (fromMaybe 0 reserve)))
       let planningBudget = resolvedMaxInput - resolvedToolRoundReserve
       case spec.contextBudget of
         Just budget
@@ -1686,7 +1703,8 @@ materializeLLM (dn, fileProfiles, overlay) = do
             promptCacheBreakpoints = fromMaybe False spec.promptCacheBreakpoints,
             contextBudget = spec.contextBudget,
             visionLimits,
-            prices
+            prices,
+            concurrency
           }
 
 -- | @auto@ / @always@ / @never@ — the spellings 'parseColorMode' takes.

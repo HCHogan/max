@@ -252,6 +252,18 @@ llm:
     #   temperature: 0.7      # model card default is 1.0; lower for chat
     #   multimodal: true
 
+    # Admission: how many completions an endpoint serves at once.  Profiles
+    # sharing a base_url share the limit.  Excess requests wait inside Max,
+    # where interactive turns go before background work (Historian, lingo,
+    # captions, intent); background may take every slot while no turn waits,
+    # unless interactive_reserve keeps some back.  Set it to the server's own
+    # limit (NInfer --max-concurrency, vLLM --max-num-seqs) so the queue that
+    # forms is Max's priority queue, not the server's FIFO.  Background
+    # workers such as the lingo learner run that many requests in parallel.
+    # Undeclared endpoints admit 50 at once and keep 10 for turns.
+    #   max_concurrency: 4
+    #   interactive_reserve: 0
+    #
     # Two more per-profile switches, both defaulting to false:
     #
     #   stream: true

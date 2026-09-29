@@ -84,6 +84,28 @@ spec = describe "startup configuration" $ do
         hPutStr handle ("llm:\n  default: main\n  profiles:\n    main:\n      api_key: test-key\n" <> fields)
         hClose handle
         withArgs ["--config-file", path] loadConfig `shouldThrow` anyIOException
+  it "shares a declared concurrency limit across profiles on one endpoint" $ do
+    let load profiles = withSystemTempFile "max-concurrency.yaml" $ \path handle -> do
+          hPutStr handle ("llm:\n  default: main\n  profiles:\n" <> profiles)
+          hClose handle
+          (.llm) <$> withArgs ["--config-file", path] loadConfig
+        profile name extra = "    " <> name <> ":\n      api_key: test-key\n      base_url: http://gpu:8000/v1\n" <> extra
+    catalog <- load (profile "main" "      max_concurrency: 4\n" <> profile "fast" "      max_concurrency: 4\n" <> profile "plain" "")
+    profileConcurrency "main" catalog `shouldBe` Just 4
+    profileConcurrency "plain" catalog `shouldBe` Just 4
+    reserved <- load (profile "main" "      max_concurrency: 4\n      interactive_reserve: 1\n")
+    profileConcurrency "main" reserved `shouldBe` Just 3
+    load (profile "main" "      max_concurrency: 4\n" <> profile "other" "      max_concurrency: 2\n") `shouldThrow` anyIOException
+  it "rejects impossible concurrency limits" $
+    for_
+      [ "      max_concurrency: 0\n",
+        "      interactive_reserve: 1\n",
+        "      max_concurrency: 2\n      interactive_reserve: 2\n"
+      ]
+      $ \fields -> withSystemTempFile "max-concurrency.yaml" $ \path handle -> do
+        hPutStr handle ("llm:\n  default: main\n  profiles:\n    main:\n      api_key: test-key\n" <> fields)
+        hClose handle
+        withArgs ["--config-file", path] loadConfig `shouldThrow` anyIOException
   it "rejects inconsistent vision envelopes" $
     for_
       [ "      multimodal: true\n      vision_tokens: 16384\n      vision_item_tokens: 32768\n",

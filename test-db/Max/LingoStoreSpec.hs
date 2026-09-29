@@ -1,6 +1,7 @@
 module Max.LingoStoreSpec (spec) where
 
 import Control.Monad (forM_, void)
+import Control.Concurrent (threadDelay)
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.Text (Text)
@@ -8,13 +9,16 @@ import Data.Text qualified as T
 import Data.Set qualified as Set
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.Types (PGArray (..))
-import Effectful (liftIO)
-import Effectful.PostgreSQL (execute, query)
+import Effectful (IOE, liftIO)
+import Effectful.Concurrent.Async (Concurrent, runConcurrent)
+import Effectful.Log (Log)
+import Effectful.PostgreSQL (WithConnection, execute, query)
 import Helpers (insertMessageWithCanonicalId, testTime, truncateAll, withDb, withDbLog)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Connection (DbPool)
 import Max.DB.ConversationCursor (advanceCursor, historianCursor, lingoCursor, loadCursor)
 import Max.DB.History (MessageCursor (..), latestMessageCursor)
+import Max.Effects.Blob (Blob)
 import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), LLMInterpreter (..), runLLMWith)
 import Max.Http.Failure (ResponseFailure (..), TransportFailure (..))
 import Max.LLM.Failure (LLMFailure (..))
@@ -41,7 +45,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.LingoStore and learner" $
             "{\"expressions\": [{\"situation\": \"讽刺地赞同\", \"style\": \"用 对对对\", \"source_id\": 1}, \
             \{\"situation\": \"自称\", \"style\": \"说 我是鲨鱼\", \"source_id\": 3}], \
             \\"jargon\": [{\"term\": \"典\", \"source_id\": 2}]}"
-    step <- withDbLog pool (runLLMWith model (learnConversationOnce "lingo-test" 60 scope))
+    step <- learnOnce pool model 1
     step `shouldBe` LingoLearned 1 1
     readIORef calls `shouldReturn` 1
     end <- withDb pool (latestMessageCursor scope)
@@ -58,10 +62,43 @@ spec pool = before_ (truncateAll pool) $ describe "Max.LingoStore and learner" $
     let model = LLMInterpreter $ \_ _ _ _ _ -> do
           liftIO (atomicModifyIORef' calls (\n -> (n + 1, ())))
           pure (Right (ContentResp "{}"))
-    step <- withDbLog pool (runLLMWith model (learnConversationOnce "lingo-test" 60 scope))
+    step <- learnOnce pool model 1
     step `shouldBe` LingoWaiting
     readIORef calls `shouldReturn` 0
     withDb pool (loadCursor scope lingoCursor) `shouldReturn` MessageCursor 0
+
+  it "learns consecutive batches concurrently and commits them in order" $ do
+    seedConversation pool (2 * lingoBatchLines + 30)
+    settleThrough pool Nothing
+    inFlight <- newIORef (0 :: Int)
+    peak <- newIORef (0 :: Int)
+    let model = LLMInterpreter $ \_ _ _ _ _ -> liftIO $ do
+          atomicModifyIORef' inFlight (\n -> (n + 1, ())) >> readIORef inFlight >>= \n -> atomicModifyIORef' peak (\p -> (max p n, ()))
+          threadDelay 200_000
+          atomicModifyIORef' inFlight (\n -> (n - 1, ()))
+          pure (Right (ContentResp "{\"expressions\": [{\"situation\": \"讽刺地赞同\", \"style\": \"用 对对对\", \"source_id\": 1}]}"))
+    learnOnce pool model 3 `shouldReturn` LingoLearned 3 0
+    readIORef peak `shouldReturn` 3
+    end <- withDb pool (latestMessageCursor scope)
+    withDb pool (loadCursor scope lingoCursor) `shouldReturn` end
+    -- Every batch opens with a member line, so each batch observed the style
+    -- once and the three merged in order.
+    hits <- withDb pool (query "SELECT hits, example_text FROM lingo_expressions" ())
+    (hits :: [(Int, Text)]) `shouldBe` [(3, "第 121 句闲聊")]
+
+  it "commits only the batches before the first failure" $ do
+    seedConversation pool (2 * lingoBatchLines + 30)
+    settleThrough pool Nothing
+    let model = LLMInterpreter $ \_ _ messages _ _ -> pure $ case messages of
+          [_, MsgUser body] | "第 70 句闲聊" `T.isInfixOf` body -> Left (LLMResponseFailure (ResponseTransport ResponseTimeoutFailure))
+          _ -> Right (ContentResp "{}")
+    learnOnce pool model 3 `shouldReturn` LingoLearned 0 0
+    firstBatchEnd <- withDb pool $ do
+      rows <- query "SELECT ingest_seq FROM messages WHERE canonical_message_id = ?" (Only (100 + fromIntegral lingoBatchLines :: Int64))
+      pure [MessageCursor seq' | Only seq' <- rows]
+    withDb pool (loadCursor scope lingoCursor) >>= \cursor -> [cursor] `shouldBe` firstBatchEnd
+    -- The failed batch is next; with nothing committed the pass reports it.
+    learnOnce pool model 1 >>= (`shouldSatisfy` \case LingoFailed _ -> True; _ -> False)
 
   it "moves past a settled range that holds nothing of this conversation" $ do
     insertMessageWithCanonicalId pool 201 600 11 botId testTime (Just "阿飞") "别的群在聊天"
@@ -69,7 +106,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.LingoStore and learner" $
     withDb pool (loadCursor scope historianCursor) `shouldReturn` MessageCursor 0
     void (withDb pool (advanceCursor scope historianCursor (MessageCursor 0) elsewhere))
     let model = LLMInterpreter $ \_ _ _ _ _ -> error "nothing to learn"
-    withDbLog pool (runLLMWith model (learnConversationOnce "lingo-test" 60 scope)) `shouldReturn` LingoLearned 0 0
+    learnOnce pool model 1 `shouldReturn` LingoLearned 0 0
     withDb pool (loadCursor scope lingoCursor) `shouldReturn` elsewhere
 
   it "skips exactly one failing batch without learning from it" $ do
@@ -147,6 +184,11 @@ spec pool = before_ (truncateAll pool) $ describe "Max.LingoStore and learner" $
     conversationId = groupId
     scope :: ConversationScope
     scope = conversationScopeFor (GroupId groupId)
+
+-- | One learner pass over the test conversation with @parallel@ batches.
+learnOnce :: DbPool -> LLMInterpreter '[Concurrent, Blob, WithConnection, Log, IOE] -> Int -> IO LingoStep
+learnOnce pool model batches =
+  withDbLog pool (runConcurrent (runLLMWith model (learnConversationOnce "lingo-test" 60 batches (conversationScopeFor (GroupId 500)))))
 
 -- | Canonical ids 101.. with two members; the third line is Max's own.
 seedConversation :: DbPool -> Int -> IO ()

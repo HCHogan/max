@@ -6,6 +6,7 @@ import Control.Concurrent.MVar
 import Control.Exception (bracket)
 import Control.Monad (forM, forM_, void)
 import Data.IORef
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Effectful
 import Max.LLM.Admission
@@ -72,6 +73,30 @@ spec = describe "provider admission" $ do
     Async.withAsync (run admission "first" Background (takeMVar never)) $ \_ -> do
       awaitCounts admission "first" (1, 0)
       timeout 1000000 (run admission "second" Background (pure ())) `shouldReturn` Just ()
+
+  it "lets background fill a provider's own limit, then admits a waiting turn first" $ do
+    admission <- newProviderAdmission (50, 10) (Map.fromList [("local", (2, 0))])
+    release <- newEmptyMVar
+    order <- newIORef ([] :: [Text])
+    let record label = atomicModifyIORef' order (\previous -> (previous <> [label], ()))
+    Async.withAsync (run admission "local" Background (takeMVar release)) $ \first ->
+      Async.withAsync (run admission "local" Background (takeMVar release)) $ \second -> do
+        awaitCounts admission "local" (2, 0)
+        Async.withAsync (run admission "local" Background (record "background")) $ \third -> do
+          awaitCounts admission "local" (2, 1)
+          Async.withAsync (run admission "local" Interactive (record "foreground")) $ \turn -> do
+            awaitCounts admission "local" (2, 2)
+            putMVar release ()
+            Async.wait turn
+            Async.wait third
+        putMVar release ()
+        Async.wait first
+        Async.wait second
+    readIORef order `shouldReturn` ["foreground", "background"]
+    -- Undeclared providers keep the process default.
+    timeout 1000000 (forM_ [1 .. 40 :: Int] (\_ -> run admission "cloud" Background (pure ()))) `shouldReturn` Just ()
+    forM_ [(0, 0), (2, 2)] $ \limits ->
+      void (newProviderAdmission (50, 10) (Map.fromList [("local", limits)])) `shouldThrow` anyIOException
 
   forM_ [(0, 0), (2, 2), (2, -1)] $ \(capacity, reserved) ->
     it ("rejects invalid capacity " <> show (capacity, reserved)) $
