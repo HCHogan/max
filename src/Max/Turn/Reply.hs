@@ -72,8 +72,7 @@ import Max.Handler.Output
     splitQuoteHandles,
   )
 import Max.Handler.Reaction
-  ( defaultSilenceFace,
-    failureFaceId,
+  ( failureFaceId,
     processingFaceId,
     queueQQReaction,
   )
@@ -499,7 +498,8 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
         Just mFace -> do
           -- Persist silence internally so the declined question is not answered
           -- again from history. Do not publish text or arm the episode timer.
-          -- Direct triggers may receive a reason reaction; proactive turns stay quiet.
+          -- A bare silence only clears the processing reaction; a direct trigger
+          -- gets a reaction only when the model named one. Proactive turns stay quiet.
           logInfo "llm chose silence" $
             object
               [ "to" .= (let UserId u = gm.userId in u),
@@ -532,12 +532,13 @@ runDispatch start mIntent origin gm outputCaps turn turnRef = do
                   monitorFireId = Nothing
                 }
           -- React to the referenced question, falling back to the trigger.
-          when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-            queueQQReaction
-              gm.groupId
-              (maybe gm.canonicalId CanonicalMessageId quotedTarget)
-              (fromMaybe defaultSilenceFace mFace)
-              True
+          for_ mFace $ \face ->
+            when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
+              queueQQReaction
+                gm.groupId
+                (maybe gm.canonicalId CanonicalMessageId quotedTarget)
+                face
+                True
           pure TurnSilence
         Nothing -> do
           -- The final tail shares the stream's image-deduplication state.

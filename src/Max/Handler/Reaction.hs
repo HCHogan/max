@@ -4,7 +4,6 @@ module Max.Handler.Reaction
     processingFaceId,
     ackFaceId,
     failureFaceId,
-    defaultSilenceFace,
   )
 where
 
@@ -79,7 +78,3 @@ ackFaceId = 124
 -- | QQ 裂开: execution failed; distinct from a refused request.
 failureFaceId :: Int
 failureFaceId = 357
-
--- | QQ 闭嘴: direct-trigger silence without a recognized reason face.
-defaultSilenceFace :: Int
-defaultSilenceFace = 7
