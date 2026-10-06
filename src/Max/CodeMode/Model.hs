@@ -3,17 +3,19 @@
 module Max.CodeMode.Model (codeModeSpecs, executionWaitSpecs, executeModelBatch) where
 
 import Data.Aeson (Value (..), encode, object, (.=))
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict (Map)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent (Concurrent)
 import Max.CodeMode.Execution (CodeModeResult (..), codeModeInvocation, runWasmProgram)
-import Max.CodeMode.JavaScript (javaScriptLimits, javaScriptRuntimeVersion, runJavaScript, workflowProgram)
+import Max.CodeMode.JavaScript (javaScriptLimits, javaScriptRuntimeVersion, runJavaScriptWith, workflowProgram)
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools
 import Max.Skill.Workflow (ResolvedWorkflow (..), resolveWorkflow)
@@ -46,7 +48,7 @@ runCodeDescription =
     "\n"
     [ "用 JavaScript 组合本轮可见的工具，只把筛选后的 JSON 带回上下文。必须单独提交。",
       "适合：三个以上调用、有依赖的调用链、要先筛选的大结果、并行派多个子 agent 再汇总。一两个独立调用直接用原生工具，原生调用本身会并发。",
-      "code 是 async 函数体，用 return 返回 JSON（最多 64 KiB）。SDK：",
+      "code 是 async 函数体，用 return 返回 JSON（最多 64 KiB）；可另传 args，代码里用 args 变量读取。已加载的工作流传 {workflow, args}。SDK：",
       "- await tools.<工具名>(args)：失败抛 ToolError；返回类型见各工具描述末尾「返回：」。",
       "- 并发用 Promise.all；依次 await 就是顺序执行；items.map(async x => b(await a(x))) 是流水线，每项做完一步就进下一步。",
       "- await agent({objective, profile, inputs, output_contract})：派子 agent 并等报告；报告在 result.text，给了 output_contract 时符合契约的 JSON 在 result.payload。",
@@ -88,19 +90,14 @@ executeModelBatch enabled loaded session hooks catalog requests
           | enabled,
             request.trName == "run_code",
             Object fields <- request.trArguments,
-            KeyMap.size fields == 1,
-            Just (String source) <- KeyMap.lookup "code" fields,
-            BS.length (TE.encodeUtf8 source) <= 65536 -> do
-              result <- runJavaScript session hooks catalog source
+            Right (Left (source, args)) <- submission fields -> do
+              result <- runJavaScriptWith session hooks catalog source args
               pure (ToolBatch [codeModeInvocation result] result.cmOverBudget)
         [request]
           | enabled,
             request.trName == "run_code",
             Object fields <- request.trArguments,
-            KeyMap.size fields == 2,
-            Just (String reference) <- KeyMap.lookup "workflow" fields,
-            Just args <- KeyMap.lookup "args" fields,
-            LBS.length (encode args) <= 65536 ->
+            Right (Right (reference, args)) <- submission fields ->
               case resolveWorkflow javaScriptRuntimeVersion loaded catalog reference args of
                 Left detail -> pure (ToolBatch [reject "invalid_workflow_submission" detail] False)
                 Right resolved -> do
@@ -112,7 +109,40 @@ executeModelBatch enabled loaded session hooks catalog requests
                       javaScriptLimits
                       (workflowProgram resolved.rwCatalog reference resolved.rwVersion resolved.rwWorkflow args)
                   pure (ToolBatch [codeModeInvocation result] result.cmOverBudget)
-        _ -> pure (ToolBatch (map (const rejection) requests) False)
+        _ -> pure (ToolBatch (map (const (reject "invalid_code_submission" (rejection requests))) requests) False)
   where
-    rejection = reject "invalid_code_submission" "先加载 codemode；run_code 必须单独提交 {code} 或 {workflow, args}（源码/输入最多 64 KiB）。本轮未执行调用。"
+    -- {code} or {code, args}: ad-hoc code, args bound like a workflow's input.
+    -- {workflow} or {workflow, args}: a loaded workflow, args defaulting to {}.
+    submission fields
+      | any (`notElem` ["code", "workflow", "args"]) keys = Left ("run_code 只认 code、workflow、args；多余字段：" <> T.intercalate "、" (filter (`notElem` ["code", "workflow", "args"]) keys))
+      | otherwise = case (KeyMap.lookup "code" fields, KeyMap.lookup "workflow" fields) of
+          (Just _, Just _) -> Left "code 和 workflow 二选一：临时代码传 code（可带 args），已加载的工作流传 workflow 和 args"
+          (Just (String source), Nothing)
+            | BS.length (TE.encodeUtf8 source) > 65536 -> Left "code 超过 64 KiB"
+            | tooLarge -> Left "args 超过 64 KiB"
+            | otherwise -> Right (Left (source, args))
+          (Nothing, Just (String reference))
+            | tooLarge -> Left "args 超过 64 KiB"
+            | otherwise -> Right (Right (reference, fromMaybe (Object KeyMap.empty) args))
+          (Nothing, Nothing) -> Left "需要 code（临时代码）或 workflow（已加载的工作流）"
+          _ -> Left "code 和 workflow 必须是字符串"
+      where
+        keys = map Key.toText (KeyMap.keys fields)
+        args = case KeyMap.lookup "args" fields of
+          Just Null -> Nothing
+          other -> other
+        tooLarge = maybe False ((> 65536) . LBS.length . encode) args
+    -- Say which rule failed: a generic message got the same mistake repeated.
+    rejection batch
+      | not enabled = "run_code 当前不可用。本轮未执行调用。"
+      | length batch > 1 =
+          "run_code 必须是这一轮唯一的调用，本轮 "
+            <> T.pack (show (length batch))
+            <> " 个调用都没有执行。其他工具写进 code 里用 tools.<名字>(…) 调用，或者分两轮调用。"
+      | [request] <- batch,
+        request.trName == "run_code",
+        Object fields <- request.trArguments,
+        Left reason <- submission fields =
+          reason <> "。本轮未执行调用。"
+      | otherwise = "run_code 的参数必须是对象：{code, args?} 或 {workflow, args?}。本轮未执行调用。"
     reject code detail = ToolInvocation (ToolRejected (ToolFault code detail RetrySafe)) ContinueLoop

@@ -5,13 +5,16 @@ module Max.CodeMode.JavaScript
   ( javaScriptLimits,
     javaScriptRuntimeVersion,
     runJavaScript,
+    runJavaScriptWith,
     javaScriptProgram,
+    javaScriptProgramWith,
     workflowProgram,
   )
 where
 
 import Crypto.Hash.SHA256 qualified as SHA256
-import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson (Value (..), encode, object, (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString (ByteString)
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
@@ -64,6 +67,17 @@ javaScriptLimits =
 javaScriptProgram :: [CatalogTool] -> Text -> WasmProgram
 javaScriptProgram catalog source = programWithInput catalog source Nothing Nothing Nothing
 
+-- | Ad-hoc code with an @args@ value, bound like a workflow's input; the
+-- journal evidence records it so a resumed turn can read what was passed.
+javaScriptProgramWith :: [CatalogTool] -> Text -> Maybe Value -> WasmProgram
+javaScriptProgramWith catalog source = \case
+  Nothing -> javaScriptProgram catalog source
+  Just args ->
+    let program = programWithInput catalog source (Just args) Nothing Nothing
+     in program {wpEvidence = case program.wpEvidence of
+                   Object fields -> Object (KeyMap.insert "args" args fields)
+                   other -> other}
+
 workflowProgram :: [CatalogTool] -> Text -> Text -> Workflow -> Value -> WasmProgram
 workflowProgram catalog reference version workflow args =
   programWithInput
@@ -96,4 +110,7 @@ programWithInput catalog source args contract workflow =
     input = javaScriptSdk <> "(" <> LBS.toStrict (encode names) <> ");\n(async (" <> parameter <> ") => {\n\"use strict\";\n" <> TE.encodeUtf8 source <> "\n})" <> suffix
 
 runJavaScript :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> Text -> Eff es CodeModeResult
-runJavaScript session hooks catalog source = runWasmProgram session hooks catalog javaScriptLimits (javaScriptProgram catalog source)
+runJavaScript session hooks catalog source = runJavaScriptWith session hooks catalog source Nothing
+
+runJavaScriptWith :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> Text -> Maybe Value -> Eff es CodeModeResult
+runJavaScriptWith session hooks catalog source args = runWasmProgram session hooks catalog javaScriptLimits (javaScriptProgramWith catalog source args)

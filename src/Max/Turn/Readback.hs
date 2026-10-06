@@ -23,7 +23,7 @@ import Data.Text.Encoding qualified as TE
 readbackTool :: Maybe Text -> Maybe Text
 readbackTool = fmap (\ref -> if codeMode (Just ref) then "run_code" else ref)
 
--- | A program's workflow reference and arguments, or its source.
+-- | A program's workflow reference and arguments, or its source and args.
 readbackInput :: Maybe Text -> Value -> Value
 readbackInput ref input
   | codeMode ref,
@@ -32,7 +32,7 @@ readbackInput ref input
       case KeyMap.lookup "workflow" program of
         Just (Object workflow) ->
           object (["workflow" .= reference | Just reference <- [KeyMap.lookup "reference" workflow]] <> ["args" .= args | Just args <- [KeyMap.lookup "args" workflow]])
-        _ -> object ["code" .= KeyMap.lookup "source" program]
+        _ -> object (["code" .= KeyMap.lookup "source" program] <> ["args" .= args | Just args <- [KeyMap.lookup "args" program]])
   | otherwise = input
 
 -- | A program's status and returned value, without the per-call receipts.

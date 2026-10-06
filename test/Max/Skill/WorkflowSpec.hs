@@ -77,6 +77,33 @@ spec = describe "saved skill workflows" $ do
     resultValue saved `shouldBe` Just arguments
     native.tbOverBudget `shouldBe` True
 
+  it "says which run_code rule a submission broke and runs nothing" $ do
+    registry <- checked [echoDefinition] [echoTool]
+    loads <- pin (views registry) baseWorkflow
+    let batch requests = runEff . runConcurrent . runTools registry $ do
+          session <- newExecutionSession Nothing
+          executeModelBatch True loads session noJournal (views registry) requests
+        rejections result = [(code, message) | ToolInvocation (ToolRejected (ToolFault code message _)) _ <- result.tbInvocations]
+        code = ToolRequest "code" "run_code" . object
+    mixed <- batch [code ["code" .= ("return 1;" :: Text)], ToolRequest "native" "echo" arguments]
+    map (T.isInfixOf "唯一的调用" . snd) (rejections mixed) `shouldBe` [True, True]
+    both <- batch [code ["code" .= ("return 1;" :: Text), "workflow" .= ("demo/run" :: Text)]]
+    map (T.isInfixOf "二选一" . snd) (rejections both) `shouldBe` [True]
+    extra <- batch [code ["code" .= ("return 1;" :: Text), "note" .= True]]
+    map (T.isInfixOf "note" . snd) (rejections extra) `shouldBe` [True]
+    missing <- batch [code []]
+    map (T.isInfixOf "需要 code" . snd) (rejections missing) `shouldBe` [True]
+    -- A workflow without args is resolved with {} and judged by its contract.
+    bare <- batch [code ["workflow" .= ("demo/run" :: Text)]]
+    map fst (rejections bare) `shouldBe` ["invalid_workflow_submission"]
+
+  it "binds args for ad-hoc code like a workflow's input" $ do
+    registry <- checked [echoDefinition] [echoTool]
+    result <- runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      executeModelBatch True Map.empty session noJournal (views registry) [ToolRequest "code" "run_code" (object ["code" .= ("return {value: args.n + 1};" :: Text), "args" .= object ["n" .= (41 :: Int)]])]
+    resultValue result `shouldBe` Just (object ["value" .= (42 :: Int)])
+
   it "rejects invalid saved arguments before any invocation" $ do
     count <- newIORef (0 :: Int)
     registry <- checked [echoDefinition] [echoTool {toolRunner = LegacyRunner $ \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}]

@@ -1,7 +1,8 @@
 run_code 的完整手册：子 agent、暂停与恢复、翻聊天上下文、保存的工作流和各项限额；run_code 本身常驻，简单程序看它的描述就够。
 
 `run_code({code: "..."})` 一直在工具表里，这份是它的完整说明。`code` 是 async 函数体，使用
-`return` 返回 JSON；没有 return 则返回 null。必须把 run_code 作为该轮唯一调用。
+`return` 返回 JSON；没有 return 则返回 null。可另传 `args`（JSON），代码里用 `args` 变量读取。
+必须把 run_code 作为该轮唯一调用：同一轮再调别的工具，整轮都不执行，其他工具写进代码里用 `tools.<名字>` 调。
 工具参数遵循本轮工具列表提供的完整 schema；这里只改变组合方式。
 
 完整 SDK（所有调用都返回 Promise，先 `await` 再取字段）：
