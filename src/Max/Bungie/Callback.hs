@@ -36,7 +36,7 @@ handleBungieCallback runtime params = case (lookup "state" params, lookup "code"
             ]
       Left failure -> do
         logAttention "bungie: login failed" (object ["error" .= failure])
-        pure (callbackPage status400 "绑定失败" (failure <> " 回到聊天里重新发 !destiny login 再试一次。"))
+        pure (callbackPage status400 "绑定失败" (if "!destiny login" `T.isInfixOf` failure then failure else failure <> " 回到聊天里重新发 !destiny login 再试一次。"))
   _ -> pure (callbackPage status400 "链接不完整" "请从聊天里收到的登录链接打开，而不是直接访问这个地址。")
 
 callbackPage :: Status -> Text -> Text -> Response

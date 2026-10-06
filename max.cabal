@@ -706,6 +706,7 @@ test-suite max-test
         Max.BilibiliSpec
         Max.Bungie.ApiSpec
         Max.Bungie.DefinitionsSpec
+        Max.Tools.DestinySpec
         Max.Browser.ErrorSpec
         Max.Browser.ViewSpec
         Max.Browser.RegistrySpec

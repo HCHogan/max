@@ -3,6 +3,7 @@
 module Max.Toolset
   ( allToolsFor,
     inventoryToolNames,
+    inventoryDefinitions,
     toolCountFor,
     toolDefinitionsFor,
     toolAllowedByEffectCeiling,
@@ -281,6 +282,11 @@ data ToolInventoryItem = ToolInventoryItem
 -- | Every tool name the inventory can expose, before any gate.
 inventoryToolNames :: [Text]
 inventoryToolNames = [item.tiDefinition.tdRef.unToolRef | item <- toolInventory]
+
+-- | Every definition before gates, so specs can assemble a gated toolset
+-- (destiny needs a Bungie application) against its production metadata.
+inventoryDefinitions :: [ToolDefinition]
+inventoryDefinitions = [item.tiDefinition | item <- toolInventory]
 
 toolInventory :: [ToolInventoryItem]
 toolInventory =

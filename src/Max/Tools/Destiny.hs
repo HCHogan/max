@@ -25,7 +25,7 @@ import Max.Effects.Tools
     ToolRunner (..),
   )
 import Max.Tool.Protocol (readResult)
-import Max.Tools.Schema (boundedIntegerParam, integerParam, noArguments, paramOfType, stringParam, toolObject, withKeys)
+import Max.Tools.Schema (boundedIntegerParam, noArguments, paramOfType, stringParam, toolObject, withKeys)
 
 destinyToolsFor :: (Destiny :> es) => [Tool es]
 destinyToolsFor = [accountTool, readTool, writeTool, lookupTool]
@@ -146,7 +146,7 @@ lookupTool =
       toolSchema =
         toolObject
           [ ("kind", stringParam "定义表简称或完整名"),
-            ("hashes", withKeys ["items" .= object ["type" .= ("integer" :: Text)], "maxItems" .= (500 :: Int)] (integerArray "要翻译的 hash（最多 500 个）")),
+            ("hashes", object ["type" .= ("array" :: Text), "description" .= ("要翻译的 hash（最多 500 个）" :: Text), "items" .= object ["type" .= ("integer" :: Text)], "maxItems" .= (500 :: Int)]),
             ("search", stringParam "按名字搜索（子串匹配，中英文都行）"),
             ("limit", boundedIntegerParam 1 50 10)
           ]
@@ -157,7 +157,6 @@ lookupTool =
         Right (Right (kind, term, limit)) -> readResult <$> destinySearch kind term limit
     }
   where
-    integerArray description = withKeys ["type" .= ("array" :: Text)] (integerParam description)
     lookupArgs :: Value -> Parser (Either (Text, [Int64]) (Maybe Text, Text, Int))
     lookupArgs = withObject "arguments" $ \o -> do
       kind <- o .:? "kind"

@@ -71,10 +71,11 @@ stringArrayParam =
   withKeys ["items" .= object ["type" .= ("string" :: Text)]] . param "array"
 
 -- | Decorate a parameter with the schema keys only it needs — @minimum@,
--- @maximum@, @default@.  Later keys win, so a caller can override.
+-- @maximum@, @default@.  The added keys win, so a caller can override.
+-- (KeyMap's '<>' is left-biased: the extra keys must come first.)
 withKeys :: [Pair] -> Value -> Value
 withKeys extra = \case
-  Object fields -> Object (fields <> KeyMap.fromList extra)
+  Object fields -> Object (KeyMap.fromList extra <> fields)
   other -> other
 
 -- | A parameter with no prose at all: its type, plus whatever 'withKeys' adds,
