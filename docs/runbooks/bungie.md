@@ -57,6 +57,13 @@ twenty tables, a few hundred MB of JSON streamed through a temporary file).
 Until the first sync finishes, name search is unavailable but hash lookups
 fall back to Bungie's per-entity endpoint.
 
+## API shapes
+
+`destiny_shape` answers from `data/bungie-shapes.json`, generated from Bungie's
+OpenAPI specification pinned in `scripts/bungie-shapes.py`. When Bungie
+publishes a new spec, bump the pinned commit and run
+`python3 scripts/bungie-shapes.py`; the build embeds the regenerated file.
+
 ## Troubleshooting
 
 - `bungie: login failed` in the log with `invalid_grant`: the code was already

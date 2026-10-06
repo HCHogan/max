@@ -283,6 +283,7 @@
       "src/Max/Bungie/Definitions.hs",
       "src/Max/Bungie/Manifest.hs",
       "src/Max/Bungie/Runtime.hs",
+      "src/Max/Bungie/Shapes.hs",
       "src/Max/Bungie/Types.hs",
       "src/Max/CliProxy.hs",
       "src/Max/Destiny/ToolRuntime.hs",

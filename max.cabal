@@ -94,6 +94,7 @@ extra-source-files:
     scripts/*.mjs
     scripts/*.hs
     scripts/*.py
+    data/*.json
     skills/*.md
     skills/*.json
     static/*.html
@@ -163,6 +164,7 @@ library
         Max.Bungie.Definitions
         Max.Bungie.Manifest
         Max.Bungie.Runtime
+        Max.Bungie.Shapes
         Max.Bungie.Types
         Max.Browser.Service
         Max.Browser.Error

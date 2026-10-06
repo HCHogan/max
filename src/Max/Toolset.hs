@@ -351,6 +351,7 @@ toolInventory =
     gated BungieOnly (readTool "destiny_read" ["network.bungie", "bungie.link"] [CurrentConversation]),
     gated BungieOnly (writeTool "destiny_write" ["network.bungie", "bungie.account"] [CurrentConversation]),
     gated BungieOnly (readTool "destiny_lookup" ["network.bungie", "destiny.manifest"] [CurrentConversation]),
+    gated BungieOnly (readTool "destiny_shape" ["destiny.schema"] [CurrentConversation]),
     gated MultimodalOnly (browserTool "browser"),
     gated MultimodalOnly (browserTool "view_zhihu"),
     gated MultimodalOnly (statefulReadTool "view_video" ["conversation.db", "blob.store", "tool.media"] [CurrentConversation])

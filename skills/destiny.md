@@ -14,9 +14,13 @@
 
 `run_code({workflow, args})`：
 
-- `destiny/inventory` `{query?, slot?: all|weapon|armor|gear, limit?, with_perks?, with_stats?}`：在仓库、
-  背包、已装备里按中/英文名找物品，给出位置、item_id、光等、元素、锁定/大师/锻造和 perk。
-  "我有没有 XX""我仓库里几把 XX""哪把 XX 是 god roll"先用它。
+- `destiny/inventory` `{query?, type?, perk?, slot?: all|weapon|armor|gear, limit?, with_perks?, with_stats?}`：
+  在仓库、背包、已装备里找物品。query 按中/英文名，type 按类型（刀剑、手炮、头盔…），perk 按
+  当前装着或可切换的 perk 名（"有哪些带急切刀锋的刀"= `{type: "刀剑", perk: "急切刀锋"}`）。
+  给出位置、item_id、光等、元素、锁定/大师/锻造、perk，perk 命中时有 `perk_match`。
+- `destiny/loadout` `{character_id? | class?}`：角色当前配装（武器 perk、护甲模组和属性、子职业
+  超能/技能/星相/碎片、角色六维）。"看我猎人的配装""我现在带的什么"用它。
+- `destiny/career` `{}`：生涯统计（PvE/PvP 击杀、KD、胜率、时长、常用武器类型、各角色分项）。
 - `destiny/move` `{item_id, to: "vault" | character_id, equip}`：转移（可顺手装备）。正装备着的会先换上
   同栏位另一件（优先非异域），角色之间自动经仓库中转。返回逐步结果。
 - `destiny/recent` `{mode?, count?, character_id?}`：最近活动（全部角色合并），含 instance_id。
@@ -24,6 +28,10 @@
   技能击杀、队伍比分，`me: true` 是发起人。问"那场打得怎样""谁 carry"直接用它，不要自己摸 PGCR 结构。
 
 工作流覆盖不到的，再用 run_code 自己组合 `destiny_read` / `destiny_lookup` / `destiny_write`。
+**写读取代码前先 `destiny_shape({path, components})` 查返回结构**（官方 OpenAPI，按组件裁剪，
+hash 字段标了 destiny_lookup 的 kind），照着结构写一次写对；不要用 Object.keys 一轮轮试探。
+几个常错的地方：`characters.data`、`characterEquipment.data`、`itemComponents.*.data` 都是**以 id 为键的对象**，
+不是数组（用 `Object.entries`）；物品列表在 `.data.items`；组件包装是 `{data, privacy}`，没请求的组件整个不存在。
 Profile 类响应很大：只在 run_code 里读，`max_chars: 3500000`，在 JS 里筛选后只返回需要的字段。
 
 # 写操作

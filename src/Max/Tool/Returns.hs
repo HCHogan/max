@@ -65,5 +65,6 @@ returnTypes =
       ("destiny_read", "unknown（Bungie 的 Response 字段原样，64 位 id 是字符串）| {too_large: true; chars: number; max_chars: number; keys: string[]; hint: string}"),
       ("destiny_write", "{ok: true; response: unknown}"),
       ("destiny_lookup", "{kind: string; definitions: {[hash: string]: {name?: string; description?: string; type?: string; tier?: string; [field: string]: unknown}}; missing: number[]} | {query: string; results: {kind: string; hash: number; name: string; name_en?: string; type?: string; tier?: string; classType?: number; itemType?: number; description?: string}[]}"),
+      ("destiny_shape", "{endpoint: string; summary: string; components: string[]; legend: string; shape: string; unexpanded: string[]; spec_version: string} | {type: string; legend: string; shape: string; unexpanded: string[]; spec_version: string}"),
       ("run_code", "{status: \"paused\" | \"finished\"; run: string; pending: {tool: string; status: string}[]; value: unknown; exit: string; calls: {call: string; tool: string; outcome: string}[]; call_count: number; submitted_calls: number; omitted_calls: number; over_budget: boolean; run_ref: string}")
     ]

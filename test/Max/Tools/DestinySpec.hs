@@ -1,6 +1,7 @@
 module Max.Tools.DestinySpec (spec) where
 
 import Data.Aeson
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Either (isLeft, isRight)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -14,6 +15,7 @@ import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Skills (Skill (..), listAllSkills, newSkillRegistry)
 import Max.Tool.Bundles (SkillLoad (..))
 import Max.Tool.Catalog (catalogTools)
+import Max.Bungie.Shapes (describeEndpoint, describeType, shapesVersion)
 import Max.Tools.Destiny (destinyToolsFor)
 import Max.Tools.Schema (integerParam, withKeys)
 import Max.Toolset (inventoryDefinitions)
@@ -51,6 +53,21 @@ spec = describe "Max.Tools.Destiny" $ do
     case large of
       Right (Object o) -> fmap (== Bool True) (lookupKey "too_large" o) `shouldBe` Just True
       other -> expectationFailure (show other)
+
+  it "serves response shapes from the embedded OpenAPI data, trimmed to the requested components" $ do
+    shapesVersion `shouldNotBe` "unavailable"
+    let shapeText = \case
+          Right (Object o) | Just (String text) <- KeyMap.lookup "shape" o -> text
+          other -> error (show other)
+        profile = shapeText (describeEndpoint "https://www.bungie.net/Platform/Destiny2/6/Profile/4611686018534405083/" [102, 300] 12000)
+    profile `shouldSatisfy` T.isInfixOf "profileInventory: Single<DestinyInventoryComponent> /*c102*/"
+    profile `shouldSatisfy` T.isInfixOf "itemHash: number /*→item*/"
+    profile `shouldSatisfy` T.isInfixOf "instances: Dict<DestinyItemInstanceComponent> /*c300*/"
+    profile `shouldNotSatisfy` T.isInfixOf "characterEquipment"
+    shapeText (describeEndpoint "/Destiny2/Actions/Items/TransferItem/" [] 12000) `shouldSatisfy` T.isInfixOf "transferToVault: boolean"
+    shapeText (describeType "DestinyItemSocketState" 4000) `shouldSatisfy` T.isInfixOf "plugHash: number /*→item*/"
+    describeEndpoint "/Destiny2/NoSuchThing/" [] 12000 `shouldSatisfy` isLeft
+    T.length (shapeText (describeEndpoint "/Destiny2/6/Profile/1/" [] 3000)) `shouldSatisfy` (< 3500)
 
   it "keeps a refused write distinct from one whose outcome is unknown" $ do
     let write path = runOutcome "destiny_write" (object ["path" .= (path :: Text), "body" .= object []])

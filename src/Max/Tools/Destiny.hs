@@ -16,6 +16,7 @@ import Data.Ord (clamp)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
+import Max.Bungie.Shapes (describeEndpoint, describeType)
 import Max.Effects.Destiny
 import Max.Effects.Tools
   ( Tool (..),
@@ -28,7 +29,7 @@ import Max.Tool.Protocol (readResult)
 import Max.Tools.Schema (boundedIntegerParam, noArguments, paramOfType, stringParam, toolObject, withKeys)
 
 destinyToolsFor :: (Destiny :> es) => [Tool es]
-destinyToolsFor = [accountTool, readTool, writeTool, lookupTool]
+destinyToolsFor = [accountTool, readTool, writeTool, lookupTool, shapeTool]
 
 accountTool :: (Destiny :> es) => Tool es
 accountTool =
@@ -171,6 +172,43 @@ lookupTool =
         (Nothing, Just term)
           | not (T.null (T.strip term)) -> pure (Right (kind, term, limit))
         _ -> fail "hashes 和 search 二选一"
+
+-- Answered from the embedded OpenAPI shapes; no Bungie call, no account.
+shapeTool :: Tool es
+shapeTool =
+  Tool
+    { toolName = "destiny_shape",
+      toolDescription =
+        T.unwords
+          [ "查 Bungie 接口的返回结构（来自官方 OpenAPI 规范，TypeScript 风格）。",
+            "path 传要调用的路径并带上同一组 components，只返回这些组件的字段；",
+            "写读取代码前先查一次，别用 Object.keys 试探。type 查结果里未展开的类型名。",
+            "hash 字段标了用 destiny_lookup 哪个 kind 翻译。"
+          ],
+      toolSchema =
+        toolObject
+          [ ("path", stringParam "要调用的路径，如 /Destiny2/6/Profile/4611…/ 或 /Destiny2/Actions/Items/TransferItem/"),
+            ("components", object ["type" .= ("array" :: Text), "description" .= ("和 destiny_read 相同的组件号" :: Text), "items" .= object ["type" .= ("integer" :: Text)], "maxItems" .= (40 :: Int)]),
+            ("type", stringParam "类型名，如 DestinyItemSocketState"),
+            ("max_chars", boundedIntegerParam 2000 30000 12000)
+          ]
+          [],
+      toolRunner = OutcomeRunner $ \raw -> pure $ case parseEither shapeArgs raw of
+        Left err -> rejected err
+        Right (Left (path, components, budget)) -> readResult (describeEndpoint path components budget)
+        Right (Right (name, budget)) -> readResult (describeType name budget)
+    }
+  where
+    shapeArgs :: Value -> Parser (Either (Text, [Int], Int) (Text, Int))
+    shapeArgs = withObject "arguments" $ \o -> do
+      path <- o .:? "path"
+      name <- o .:? "type"
+      components <- o .:? "components" .!= []
+      budget <- clamp (2000, 30000) <$> o .:? "max_chars" .!= 12000
+      case (path, name) of
+        (Just p, Nothing) -> pure (Left (p, components, budget))
+        (Nothing, Just n) -> pure (Right (n, budget))
+        _ -> fail "path 和 type 二选一"
 
 rejected :: String -> ToolOutcome
 rejected err = ToolRejected (ToolFault "invalid_arguments" (T.pack err) RetrySafe)
