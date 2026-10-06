@@ -225,7 +225,7 @@ contextResumeTool dc =
           Nothing -> pure (Left "bad args: turn must be t#<n> or t#<n>:r<m>")
           Just parsed -> do
             result <- case (parsed, callId) of
-              (ParsedTurn ordinal, Nothing) -> expandTurnTrace ordinal after (min limit (max 1 (budget `div` 1400)))
+              (ParsedTurn ordinal, Nothing) -> expandTurnTrace ordinal after limit (budget * 3)
               _ -> expandTurnResult turn callId after (min (budget * 2) (if limit == 40 then 6000 else limit))
             pure $ maybe (Left "turn/result not found, ambiguous, or not visible") (Right . withNext turn callId limit) result
     }

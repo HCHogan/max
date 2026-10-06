@@ -151,6 +151,54 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
           (noteAndFirst.jeTurn.atrTurnId, noteAndFirst.jeExecutionOrdinal)
       (storageRows :: [(Bool, Bool)]) `shouldBe` [(True, True)]
 
+  it "reads an ordinary trace on one page and leads results with what the program returned" $ do
+    fixture <- createFixture pool 42 1001
+    withTemporaryBlobRoot $ \root -> do
+      forM_ [1 .. 6 :: Int64] $ \n -> do
+        execution <- recordFor fixture.fxTurn (ExecutionOrdinal n) (journalStart ("read-" <> T.pack (show n)) "read")
+        withDbBlob pool root (recordJournalExecution execution (JournalSucceeded (object ["n" .= n])))
+      let program =
+            object
+              [ "fuel" .= (10000000000 :: Int64),
+                "sha256" .= T.replicate 64 "a",
+                "program" .= object ["source" .= ("return 1" :: Text), "catalog" .= [T.replicate 3000 "c"], "workflow" .= object ["reference" .= ("destiny/recent" :: Text), "args" .= object ["count" .= (5 :: Int)], "version" .= T.replicate 64 "v"]]
+              ]
+          returned = object ["instance_id" .= ("17212481216" :: Text), "rows" .= [T.replicate 300 "y"]]
+          receipt = object ["status" .= ("finished" :: Text), "exit" .= ("WasmCompleted" :: Text), "value" .= returned, "calls" .= [T.replicate 400 "x"], "call_count" .= (5 :: Int)]
+      wasm <- recordFor fixture.fxTurn (ExecutionOrdinal 7) ((journalStart "code" "host:wasm/v2") {jsInput = program})
+      withDbBlob pool root (recordJournalExecution wasm (JournalSucceeded receipt))
+      let ordinal = fixture.fxTurn.atrTurnOrdinal
+          scope = conversationScopeFor fixture.fxGroup
+      Just (Object whole) <- withDb pool (expandTurnTrace scope Nothing ordinal Nothing 40 12000)
+      KeyMap.lookup "has_more" whole `shouldBe` Just (Bool False)
+      case KeyMap.lookup "journal" whole of
+        Just (Array entries) -> do
+          length entries `shouldBe` 7
+          case last (foldr (:) [] entries) of
+            Object entry -> do
+              KeyMap.lookup "tool" entry `shouldBe` Just (String "run_code")
+              KeyMap.lookup "arguments" entry `shouldBe` Just (object ["workflow" .= ("destiny/recent" :: Text), "args" .= object ["count" .= (5 :: Int)]])
+              KeyMap.lookup "result" entry `shouldBe` Just (object ["status" .= ("finished" :: Text), "exit" .= ("WasmCompleted" :: Text), "value" .= returned, "call_count" .= (5 :: Int)])
+              KeyMap.member "schema_hash" entry `shouldBe` False
+            other -> expectationFailure (show other)
+        other -> expectationFailure (show other)
+      -- A tight budget still returns one entry and a cursor to the next.
+      Just (Object tight) <- withDb pool (expandTurnTrace scope Nothing ordinal Nothing 40 10)
+      KeyMap.lookup "has_more" tight `shouldBe` Just (Bool True)
+      KeyMap.lookup "next_after_cursor" tight `shouldBe` Just (Number 1)
+      Just (Object full) <- withDbBlob pool root (expandJournalResult scope Nothing (turnHandleText ordinal <> ":r7") Nothing Nothing 6000)
+      KeyMap.lookup "format" full `shouldBe` Just (String "json")
+      case KeyMap.lookup "value" full of
+        Just (Object value) -> do
+          KeyMap.lookup "input" value `shouldBe` Just (object ["workflow" .= ("destiny/recent" :: Text), "args" .= object ["count" .= (5 :: Int)]])
+          fmap (\case Object r -> KeyMap.member "calls" r; _ -> True) (KeyMap.lookup "result" value) `shouldBe` Just False
+        other -> expectationFailure (show other)
+      Just (Object paged) <- withDbBlob pool root (expandJournalResult scope Nothing (turnHandleText ordinal <> ":r7") Nothing Nothing 256)
+      KeyMap.lookup "format" paged `shouldBe` Just (String "json_text")
+      KeyMap.lookup "text" paged `shouldSatisfy` \case
+        Just (String text) -> "{\"tool\":\"run_code\",\"state\":\"succeeded\",\"failure\":null,\"result\":" `T.isPrefixOf` text
+        _ -> False
+
   it "expands spilled results by local call id with bounded pages and scope/clear guards" $ do
     fixture <- createFixture pool 42 1001
     withTemporaryBlobRoot $ \root -> do
@@ -330,20 +378,20 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
 
     expanded <-
       withDb pool $
-        expandTurnTrace (conversationScopeFor fixture.fxGroup) Nothing fixture.fxTurn.atrTurnOrdinal Nothing 40
+        expandTurnTrace (conversationScopeFor fixture.fxGroup) Nothing fixture.fxTurn.atrTurnOrdinal Nothing 40 12000
     expanded `shouldSatisfy` isJust
 
     otherSeed <- createSeed pool 43 2001
     crossConversation <-
       withDb pool $
-        expandTurnTrace (conversationScopeFor otherSeed.fxGroup) Nothing fixture.fxTurn.atrTurnOrdinal Nothing 40
+        expandTurnTrace (conversationScopeFor otherSeed.fxGroup) Nothing fixture.fxTurn.atrTurnOrdinal Nothing 40 12000
     crossConversation `shouldBe` Nothing
 
     clearedAt <- getCurrentTime
     hiddenRecent <- withDb pool (recentTurnDigests (conversationScopeFor fixture.fxGroup) (Just clearedAt) now)
     hiddenExpand <-
       withDb pool $
-        expandTurnTrace (conversationScopeFor fixture.fxGroup) (Just clearedAt) fixture.fxTurn.atrTurnOrdinal Nothing 40
+        expandTurnTrace (conversationScopeFor fixture.fxGroup) (Just clearedAt) fixture.fxTurn.atrTurnOrdinal Nothing 40 12000
     hiddenReply <-
       withDb pool $
         resolveReplyTurn (conversationScopeFor fixture.fxGroup) (Just clearedAt) sent.canonicalMessageId

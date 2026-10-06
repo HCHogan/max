@@ -122,6 +122,39 @@
         "destiny_lookup"
       ],
       "source": "const acct = await tools.destiny_account({});\nif (!acct.linked) return {linked: false, login: acct.login, activities: []};\nconst mt = acct.membership_type, mid = acct.membership_id;\nconst chars = args.character_id ? acct.characters.filter(c => c.character_id === args.character_id) : acct.characters;\nif (!chars.length) return {linked: true, error: \"没有匹配的角色\", activities: []};\nconst count = Math.min(args.count ?? 10, 25);\nconst pages = await Promise.all(chars.map(c => max.raw(\"destiny_read\", {path: `/Destiny2/${mt}/Account/${mid}/Character/${c.character_id}/Stats/Activities/`, query: {count, mode: args.mode ?? 0, page: 0}})));\nconst rows = [], errors = [];\npages.forEach((page, i) => {\n  if (page.outcome !== \"succeeded\") errors.push({class: chars[i].class, error: page.error?.message});\n  else for (const a of page.value.activities ?? []) rows.push({c: chars[i], a});\n});\nrows.sort((x, y) => y.a.period.localeCompare(x.a.period));\nconst shown = rows.slice(0, count);\nconst hashes = [...new Set(shown.flatMap(r => [r.a.activityDetails.referenceId, r.a.activityDetails.directorActivityHash]).filter(Boolean))];\nconst names = hashes.length ? (await tools.destiny_lookup({kind: \"activity\", hashes})).definitions : {};\nconst modes = {2: \"剧情\", 3: \"打击\", 4: \"突袭\", 5: \"PvP\", 6: \"巡逻\", 7: \"PvE\", 10: \"占领\", 12: \"冲突\", 18: \"打击\", 19: \"铁旗\", 25: \"混战\", 46: \"宗师/日落\", 48: \"混战\", 63: \"智谋\", 69: \"竞技\", 70: \"快速比赛\", 82: \"地牢\", 84: \"试炼\", 87: \"失落区域\"};\nconst value = (a, key) => a.values?.[key]?.basic?.value;\nconst display = (a, key) => a.values?.[key]?.basic?.displayValue;\nreturn {\n  bungie_name: acct.bungie_name,\n  activities: shown.map(({c, a}) => {\n    const d = a.activityDetails;\n    const out = {\n      time: a.period, class: c.class,\n      activity: names[d.directorActivityHash]?.name ?? names[d.referenceId]?.name ?? String(d.referenceId),\n      mode: modes[d.mode] ?? `mode ${d.mode}`,\n      completed: value(a, \"completed\") === 1,\n      kills: value(a, \"kills\"), deaths: value(a, \"deaths\"), assists: value(a, \"assists\"),\n      kd: display(a, \"killsDeathsRatio\"), duration: display(a, \"timePlayedSeconds\"),\n      instance_id: d.instanceId\n    };\n    const standing = display(a, \"standing\");\n    if (standing) out.standing = standing;\n    return out;\n  }),\n  errors\n};"
+    },
+    "pgcr": {
+      "description": "一场活动的结算（PGCR，按 instance_id）：活动名、模式、时长、队伍比分，每名玩家的击杀/死亡/助攻、KD、是否完成、最常用的三把武器（中文名）和技能击杀，标出发起人自己。",
+      "input": {
+        "type": "object",
+        "properties": {
+          "instance_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24,
+            "description": "活动 instanceId，来自 destiny/recent"
+          },
+          "max_players": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12
+          }
+        },
+        "required": [
+          "instance_id"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "tools": [
+        "destiny_account",
+        "destiny_read",
+        "destiny_lookup"
+      ],
+      "source": "const report = await tools.destiny_read({path: `/Destiny2/Stats/PostGameCarnageReport/${args.instance_id}/`, max_chars: 3500000});\nif (report.too_large) throw new Error(\"PGCR 响应超过上限\");\nconst account = await max.raw(\"destiny_account\", {});\nconst me = account.outcome === \"succeeded\" && account.value.linked ? account.value.membership_id : null;\nconst value = (values, key) => values?.[key]?.basic?.value;\nconst display = (values, key) => values?.[key]?.basic?.displayValue;\nconst entries = report.entries ?? [];\nconst details = report.activityDetails ?? {};\nconst weaponHashes = entries.flatMap(e => (e.extended?.weapons ?? []).map(w => w.referenceId));\nconst activityHashes = [details.directorActivityHash, details.referenceId].filter(Boolean);\nconst [weapons, activities] = await Promise.all([\n  weaponHashes.length ? tools.destiny_lookup({kind: \"item\", hashes: [...new Set(weaponHashes)].slice(0, 500)}) : {definitions: {}},\n  activityHashes.length ? tools.destiny_lookup({kind: \"activity\", hashes: [...new Set(activityHashes)]}) : {definitions: {}}\n]);\nconst classes = {3655393761: \"泰坦\", 671679327: \"猎人\", 2271682572: \"术士\"};\nconst modes = {2: \"剧情\", 3: \"打击\", 4: \"突袭\", 5: \"PvP\", 6: \"巡逻\", 7: \"PvE\", 10: \"占领\", 12: \"冲突\", 18: \"打击\", 19: \"铁旗\", 25: \"混战\", 46: \"宗师/日落\", 48: \"混战\", 63: \"智谋\", 69: \"竞技\", 70: \"快速比赛\", 82: \"地牢\", 84: \"试炼\", 87: \"失落区域\"};\nconst name = info => info?.bungieGlobalDisplayName ? `${info.bungieGlobalDisplayName}#${String(info.bungieGlobalDisplayNameCode ?? 0).padStart(4, \"0\")}` : (info?.displayName ?? \"?\");\nconst players = entries.map(e => {\n  const info = e.player?.destinyUserInfo ?? {};\n  const ext = e.extended?.values ?? {};\n  const out = {\n    name: name(info),\n    class: classes[e.player?.classHash] ?? e.player?.characterClass,\n    light: e.player?.lightLevel,\n    kills: value(e.values, \"kills\"), deaths: value(e.values, \"deaths\"), assists: value(e.values, \"assists\"),\n    kd: display(e.values, \"killsDeathsRatio\"),\n    completed: value(e.values, \"completed\") === 1,\n    time_played: display(e.values, \"timePlayedSeconds\"),\n    weapons: (e.extended?.weapons ?? [])\n      .map(w => ({name: weapons.definitions[w.referenceId]?.name ?? String(w.referenceId), kills: value(w.values, \"uniqueWeaponKills\") ?? 0, precision: value(w.values, \"uniqueWeaponPrecisionKills\") ?? 0}))\n      .sort((a, b) => b.kills - a.kills).slice(0, 3),\n    abilities: {grenade: value(ext, \"weaponKillsGrenade\") ?? 0, melee: value(ext, \"weaponKillsMelee\") ?? 0, super: value(ext, \"weaponKillsSuper\") ?? 0}\n  };\n  if (me && info.membershipId === me) out.me = true;\n  if (value(e.values, \"team\") !== undefined) out.team = value(e.values, \"team\");\n  if (display(e.values, \"standing\")) out.standing = display(e.values, \"standing\");\n  if (value(e, \"score\") !== undefined && value(e, \"score\") !== 0) out.score = value(e, \"score\");\n  return out;\n}).sort((a, b) => (b.kills ?? 0) - (a.kills ?? 0)).slice(0, args.max_players ?? 12);\nconst first = entries[0]?.values ?? {};\nreturn {\n  instance_id: args.instance_id,\n  period: report.period,\n  activity: activities.definitions[details.directorActivityHash]?.name ?? activities.definitions[details.referenceId]?.name ?? String(details.referenceId),\n  mode: modes[details.mode] ?? `mode ${details.mode}`,\n  duration: display(first, \"activityDurationSeconds\"),\n  from_beginning: report.activityWasStartedFromBeginning,\n  completed: players.some(p => p.completed),\n  player_count: entries.length,\n  teams: (report.teams ?? []).map(t => ({team: t.teamId, name: t.teamName, standing: display(t, \"standing\") ?? t.standing?.basic?.displayValue, score: t.score?.basic?.value})),\n  players\n};"
     }
   }
 }

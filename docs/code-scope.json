@@ -253,6 +253,7 @@
       "src/Max/Turn/Dispatch.hs",
       "src/Max/Turn/Failure.hs",
       "src/Max/Turn/Job.hs",
+      "src/Max/Turn/Readback.hs",
       "src/Max/Turn/Reply.hs",
       "src/Max/Turn/Start.hs",
       "src/Max/Turn/Types.hs",

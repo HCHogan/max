@@ -43,7 +43,7 @@ spec pool = before_ (truncateAll pool) $ describe "scoped conversation capabilit
 
   it "keeps turn trace reads behind the bound conversation and clear watermark" $ do
     (turn, _, _) <- seed pool 900 1
-    let readTrace = Turn.expandTurnTrace turn.atrTurnOrdinal Nothing 10
+    let readTrace = Turn.expandTurnTrace turn.atrTurnOrdinal Nothing 10 12000
     visible <- withDbLog pool (Turn.runTurnQuery scope Nothing readTrace)
     visible `shouldSatisfy` isJust
     visible `shouldSatisfy` (\case Just (Object fields) -> KeyMap.lookup "handle" fields == Just (String "t#1"); _ -> False)

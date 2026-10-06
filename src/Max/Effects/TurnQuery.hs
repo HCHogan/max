@@ -21,15 +21,16 @@ import Max.Turn.Types (TurnOrdinal)
 data TurnQuery :: Effect where
   ExpandTurnResult :: Text -> Maybe Text -> Maybe Int64 -> Int -> TurnQuery m (Maybe Value)
   ResolveTurnResult :: Text -> TurnQuery m (Maybe Value)
-  ExpandTurnTrace :: TurnOrdinal -> Maybe Int64 -> Int -> TurnQuery m (Maybe Value)
+  ExpandTurnTrace :: TurnOrdinal -> Maybe Int64 -> Int -> Int -> TurnQuery m (Maybe Value)
 
 type instance DispatchOf TurnQuery = Dynamic
 
 resolveTurnResult :: (TurnQuery :> es) => Text -> Eff es (Maybe Value)
 resolveTurnResult = send . ResolveTurnResult
 
-expandTurnTrace :: (TurnQuery :> es) => TurnOrdinal -> Maybe Int64 -> Int -> Eff es (Maybe Value)
-expandTurnTrace ordinal after limit = send (ExpandTurnTrace ordinal after limit)
+-- | Up to @limit@ entries, cut once the page's rendered text reaches @chars@.
+expandTurnTrace :: (TurnQuery :> es) => TurnOrdinal -> Maybe Int64 -> Int -> Int -> Eff es (Maybe Value)
+expandTurnTrace ordinal after limit chars = send (ExpandTurnTrace ordinal after limit chars)
 
 expandTurnResult :: (TurnQuery :> es) => Text -> Maybe Text -> Maybe Int64 -> Int -> Eff es (Maybe Value)
 expandTurnResult handle callId after limit = send (ExpandTurnResult handle callId after limit)
@@ -38,4 +39,4 @@ runTurnQuery :: (WithConnection :> es, Blob :> es, IOE :> es) => ConversationSco
 runTurnQuery scope cleared = interpret $ \_ -> \case
   ExpandTurnResult handle callId after limit -> withReadSnapshot (expandJournalResult scope cleared handle callId after limit)
   ResolveTurnResult handle -> resolveJournalResultValue scope cleared handle
-  ExpandTurnTrace ordinal after limit -> withReadSnapshot (DB.expandTurnTrace scope cleared ordinal after limit)
+  ExpandTurnTrace ordinal after limit chars -> withReadSnapshot (DB.expandTurnTrace scope cleared ordinal after limit chars)

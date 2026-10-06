@@ -22,7 +22,7 @@ module Max.DB.AgentTurn
 where
 
 import Control.Monad (void, when)
-import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, (.=))
+import Data.Aeson (ToJSON (..), Value (..), eitherDecodeStrict', encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -43,6 +43,7 @@ import Max.DB.Transaction (withTransaction)
 import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
 import Max.Execution.Types (JournalExecution (..), JournalFinish (..), JournalStart (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
+import Max.Turn.Readback (orderedJson, readbackInput, readbackResult, readbackTool)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..))
 
@@ -419,22 +420,40 @@ expandJournalResult scope cleared handle callId after limit = case target of
           (Just v, _) -> pure (Just v)
           (_, Just ref) -> either (const Nothing) Just . eitherDecodeStrict' <$> readBlob ref
           _ -> pure Nothing
-        let payload =
-              TE.decodeUtf8 . LBS.toStrict . encode $
-                object
-                  ["state" .= state, "tool" .= name, "input" .= input, "failure" .= failure, "result" .= value, "observed_manifest" .= observed]
+        -- The result leads, so a paged reader reaches it first; the call's
+        -- input and observed manifest follow for completeness.
+        let fields =
+              [ ("tool", toJSON (readbackTool name)),
+                ("state", String state),
+                ("failure", toJSON failure),
+                ("result", maybe Null (readbackResult name) value),
+                ("input", maybe Null (readbackInput name) input),
+                ("observed_manifest", fromMaybe Null observed)
+              ]
+            payload = orderedJson fields
             cursor = fromIntegral (max 0 (min (fromIntegral (T.length payload)) (fromMaybe 0 after)))
             bounded = max 256 (min 12000 limit)
             part = T.take bounded (T.drop cursor payload)
             next = cursor + T.length part
         pure . Just $
-          object
-            [ "handle" .= resultHandleText ordinal number,
-              "format" .= ("json_text" :: Text),
-              "text" .= part,
-              "has_more" .= (next < T.length payload),
-              "next_after_cursor" .= (if next < T.length payload then Just next else Nothing)
-            ]
+          if cursor == 0 && T.length payload <= bounded
+            then
+              -- Whole on one page: a JSON value reads better than escaped text.
+              object
+                [ "handle" .= resultHandleText ordinal number,
+                  "format" .= ("json" :: Text),
+                  "value" .= object [key .= v | (key, v) <- fields],
+                  "has_more" .= False,
+                  "next_after_cursor" .= (Nothing :: Maybe Int)
+                ]
+            else
+              object
+                [ "handle" .= resultHandleText ordinal number,
+                  "format" .= ("json_text" :: Text),
+                  "text" .= part,
+                  "has_more" .= (next < T.length payload),
+                  "next_after_cursor" .= (if next < T.length payload then Just next else Nothing)
+                ]
       _ -> pure Nothing
   where
     target = case (parseTurnHandle handle, callId) of

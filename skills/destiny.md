@@ -20,6 +20,8 @@
 - `destiny/move` `{item_id, to: "vault" | character_id, equip}`：转移（可顺手装备）。正装备着的会先换上
   同栏位另一件（优先非异域），角色之间自动经仓库中转。返回逐步结果。
 - `destiny/recent` `{mode?, count?, character_id?}`：最近活动（全部角色合并），含 instance_id。
+- `destiny/pgcr` `{instance_id, max_players?}`：一场的结算：全队击杀/死亡/助攻、KD、常用武器（已翻译）、
+  技能击杀、队伍比分，`me: true` 是发起人。问"那场打得怎样""谁 carry"直接用它，不要自己摸 PGCR 结构。
 
 工作流覆盖不到的，再用 run_code 自己组合 `destiny_read` / `destiny_lookup` / `destiny_write`。
 Profile 类响应很大：只在 run_code 里读，`max_chars: 3500000`，在 JS 里筛选后只返回需要的字段。
@@ -54,7 +56,12 @@ body 一律带 `membershipType`（来自 destiny_account），id 用字符串：
 - 单件 `/Destiny2/{mt}/Profile/{mid}/Item/{itemInstanceId}/`，components 同上。
 - 账号统计 `/Destiny2/{mt}/Account/{mid}/Stats/`（PvE/PvP 生涯：击杀、KD、通关数等）。
 - 活动记录 `/Destiny2/{mt}/Account/{mid}/Character/{cid}/Stats/Activities/`，query `{mode, count, page}`。
-- 单场结算 PGCR `/Destiny2/Stats/PostGameCarnageReport/{instanceId}/`（全队数据、武器击杀）。
+- 单场结算 PGCR `/Destiny2/Stats/PostGameCarnageReport/{instanceId}/`。结构：`period`、`activityDetails`
+  `{referenceId, directorActivityHash, mode, instanceId}`、`entries[]`（每个角色一条：
+  `player.destinyUserInfo{membershipId, bungieGlobalDisplayName, bungieGlobalDisplayNameCode}`、`player.classHash`、
+  `values.<kills|deaths|assists|killsDeathsRatio|completed|timePlayedSeconds|team|standing>.basic.value`、
+  `extended.weapons[]{referenceId, values.uniqueWeaponKills.basic.value}`、
+  `extended.values.<weaponKillsGrenade|weaponKillsMelee|weaponKillsSuper>`）、`teams[]`（PvP）。
 - 角色武器统计 `.../Character/{cid}/Stats/UniqueWeapons/`；活动汇总 `.../Stats/AggregateActivityStats/`。
 - 商人（需授权）`/Destiny2/{mt}/Profile/{mid}/Character/{cid}/Vendors/`，components `[400, 402, 300, 305]`；
   单个商人加 `/{vendorHash}/`，仄尔 vendorHash 2190858386。公开商人 `/Destiny2/Vendors/`。

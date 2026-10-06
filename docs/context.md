@@ -194,8 +194,18 @@ known IDs are locators, never permission to read another room.
 working turn's request reference, execution trace, outputs, and termination state.
 Output previews show the latest five chunks; `outputs_has_older` indicates more,
 reachable with `context_read` around the supplied output references.
-Use its `next` object for more trace entries, or an entry's `resume` object for
-the full JSON-text result. Reading does **not** replay tools or restart tasks.
+A trace page holds up to `limit` entries and stops once their rendered text
+reaches about three characters per page-budget token (always at least one), so
+an ordinary turn reads in one call; every extra page is a whole model round.
+Entries carry the handle, tool, state, bounded arguments and result (or a
+spilled result's preview and size), failure when present, and the size of any
+observed manifest; model notes are one-line `note` entries. Code-mode entries
+read as `run_code` with `{workflow, args}` or `{code}` and the program's
+`{status, exit, value, call_count, run}`, not the journal's execution evidence.
+Use `next` for more entries, or pass an entry's handle (`t#42:r5`) as `turn` for
+its full record: the result leads, then the input and observed manifest. A
+record that fits one page returns as a JSON `value`; a larger one returns
+`json_text` slices with `next`. Reading does **not** replay tools or restart tasks.
 Uncertain effects remain uncertain; inspect current external state before acting.
 User corrections can also be in surrounding chat, reachable from the request's
 `read` reference. Old `context_expand`, `get_message_by_id`, and `view_forward`

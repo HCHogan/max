@@ -14,10 +14,11 @@ module Max.DB.TurnContinuity
   )
 where
 
-import Data.Aeson (Value, encode, object, (.=))
+import Control.Applicative ((<|>))
+import Data.Aeson (Value (..), encode, object, (.=))
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -30,6 +31,7 @@ import Max.Context.Read (messageRef)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Turn.Continuity
+import Max.Turn.Readback (readbackInput, readbackResult, readbackTool)
 import Max.Turn.Types
 
 data ReplyTurnTarget = ReplyTurnTarget
@@ -332,6 +334,10 @@ loadSandboxDrift scope sourceTurn finished (CanonicalMessageId currentMessage) =
 
 -- | Expand a complete normalized trace page.  Blob digests, internal turn ids
 -- and node ids never cross this boundary.
+-- A page holds up to @limit@ entries and stops once their rendered size
+-- reaches @charBudget@ (always at least one entry). Sizing by the rendered
+-- text, not a fixed per-entry estimate, keeps an ordinary turn on one page:
+-- every extra page costs a whole model round.
 expandTurnTrace ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->
@@ -339,8 +345,9 @@ expandTurnTrace ::
   TurnOrdinal ->
   Maybe Int64 ->
   Int ->
+  Int ->
   Eff es (Maybe Value)
-expandTurnTrace scope cleared ordinal after limit = do
+expandTurnTrace scope cleared ordinal after limit charBudget = do
   targets <- case cleared of
     Nothing -> query turnSql (conversationStorageId scope, ordinal)
     Just watermark -> query (turnSql <> " AND t.started_at > ?") (conversationStorageId scope, ordinal, watermark)
@@ -350,10 +357,9 @@ expandTurnTrace scope cleared ordinal after limit = do
           bounded = max 1 (min 100 limit)
       rows <-
         query
-          "SELECT execution_ordinal, event_kind, state, tool_ref, schema_version, schema_hash, \
-          \       normalized_input, effect_labels, retry_class, failure_code, failure_detail, \
-          \       result_inline, result_preview, (result_blob_sha256 IS NOT NULL), result_size_bytes, \
-          \       observed_manifest, started_at, finished_at \
+          "SELECT execution_ordinal, event_kind, state, tool_ref, normalized_input, \
+          \       failure_code, failure_detail, result_inline, result_preview, \
+          \       (result_blob_sha256 IS NOT NULL), result_size_bytes, observed_manifest \
           \FROM execution_journal WHERE turn_id=? AND execution_ordinal>? \
           \ORDER BY execution_ordinal LIMIT ?"
           (turnId, cursor, bounded + 1)
@@ -366,9 +372,10 @@ expandTurnTrace scope cleared ordinal after limit = do
           "SELECT m.canonical_message_id, m.rendered_text FROM agent_turns t JOIN messages m ON m.canonical_message_id=t.trigger_canonical_message_id AND m.conversation_id=t.conversation_id WHERE t.turn_id=?"
           (Only turnId)
       let outputs = reverse (take 5 (outputRows :: [(Int, Int64, Text)]))
-          page = take bounded (rows :: [JournalTraceRow])
-          hasMore = length rows > bounded
-          nextCursor = if hasMore then journalOrdinal (last page) else Nothing
+          rendered = [(row, journalValue ordinal row) | row <- take bounded (rows :: [JournalTraceRow])]
+          page = fitPage charBudget rendered
+          hasMore = length page < length rows
+          nextCursor = if hasMore then journalOrdinal (fst (last page)) else Nothing
       pure . Just $
         object
           [ "handle" .= turnHandleText ordinal,
@@ -377,7 +384,7 @@ expandTurnTrace scope cleared ordinal after limit = do
             "started_at" .= started,
             "finished_at" .= finished,
             "usage" .= object ["llm_turns" .= llmTurns, "prompt_tokens" .= promptTokens, "completion_tokens" .= completionTokens],
-            "journal" .= map (journalValue ordinal) page,
+            "journal" .= map snd page,
             "request" .= [object ["read" .= object ["ref" .= messageRef mid], "text" .= T.take 800 body, "complete" .= (T.length body <= 800)] | (mid, body) <- requests],
             "outputs" .= [object ["chunk" .= chunk, "message_id" .= T.pack (show messageId), "read" .= object ["ref" .= messageRef messageId], "preview" .= preview] | (chunk, messageId, preview) <- outputs],
             "outputs_has_older" .= (length outputRows > 5),
@@ -445,20 +452,14 @@ data JournalTraceRow = JournalTraceRow
     jtrKind :: !Text,
     jtrState :: !Text,
     jtrToolRef :: !(Maybe Text),
-    jtrSchemaVersion :: !(Maybe Int),
-    jtrSchemaHash :: !(Maybe Text),
     jtrInput :: !(Maybe Value),
-    jtrEffects :: !Value,
-    jtrRetryClass :: !(Maybe Text),
     jtrFailureCode :: !(Maybe Text),
     jtrFailureDetail :: !(Maybe Text),
     jtrResultInline :: !(Maybe Value),
     jtrResultPreview :: !(Maybe Text),
     jtrSpilled :: !Bool,
     jtrResultSize :: !(Maybe Int64),
-    jtrObserved :: !(Maybe Value),
-    jtrStartedAt :: !UTCTime,
-    jtrFinishedAt :: !(Maybe UTCTime)
+    jtrObserved :: !(Maybe Value)
   }
 
 instance FromRow JournalTraceRow where
@@ -476,41 +477,54 @@ instance FromRow JournalTraceRow where
       <*> field
       <*> field
       <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
 
 journalOrdinal :: JournalTraceRow -> Maybe Int64
 journalOrdinal = Just . (.jtrOrdinal)
 
+-- Everything needed to continue: what ran, with what, and what came back.
+-- Schema hashes, effect labels and timestamps stay in the journal; the full
+-- record (including any observed manifest) is one handle read away.
 journalValue :: TurnOrdinal -> JournalTraceRow -> Value
-journalValue turnOrdinal row =
-  object
-    [ "handle" .= (turnHandleText turnOrdinal <> ":r" <> T.pack (show row.jtrOrdinal)),
-      "execution" .= ("r" <> T.pack (show row.jtrOrdinal)),
-      "kind" .= row.jtrKind,
-      "state" .= row.jtrState,
-      "tool" .= row.jtrToolRef,
-      "schema_version" .= row.jtrSchemaVersion,
-      "schema_hash" .= row.jtrSchemaHash,
-      "arguments" .= boundedValue row.jtrInput,
-      "effects" .= row.jtrEffects,
-      "retry_class" .= row.jtrRetryClass,
-      "failure" .= object ["code" .= row.jtrFailureCode, "detail" .= fmap (T.take 600) row.jtrFailureDetail, "complete" .= maybe True ((<= 600) . T.length) row.jtrFailureDetail],
-      "result" .= boundedValue row.jtrResultInline,
-      "result_preview" .= fmap (T.take 600) row.jtrResultPreview,
-      "resume" .= object ["turn" .= (turnHandleText turnOrdinal <> ":r" <> T.pack (show row.jtrOrdinal))],
-      "result_spilled" .= row.jtrSpilled,
-      "result_size_bytes" .= row.jtrResultSize,
-      "observed_manifest" .= boundedValue row.jtrObserved,
-      "started_at" .= row.jtrStartedAt,
-      "finished_at" .= row.jtrFinishedAt
-    ]
+journalValue turnOrdinal row
+  | row.jtrKind == "model_note" =
+      object ["handle" .= handle, "kind" .= row.jtrKind, "note" .= (noteText row.jtrResultInline <|> fmap (T.take 600) row.jtrResultPreview)]
+  | otherwise =
+      object $
+        [ "handle" .= handle,
+          "kind" .= row.jtrKind,
+          "tool" .= readbackTool row.jtrToolRef,
+          "state" .= row.jtrState
+        ]
+          <> ["arguments" .= boundedValue (readbackInput row.jtrToolRef input) | Just input <- [row.jtrInput]]
+          <> [ "failure" .= object ["code" .= row.jtrFailureCode, "detail" .= fmap (T.take 600) row.jtrFailureDetail, "complete" .= maybe True ((<= 600) . T.length) row.jtrFailureDetail]
+             | isJust row.jtrFailureCode || isJust row.jtrFailureDetail
+             ]
+          <> case row.jtrResultInline of
+            Just result -> ["result" .= boundedValue (readbackResult row.jtrToolRef result)]
+            Nothing -> ["result_preview" .= fmap (T.take 600) row.jtrResultPreview | isJust row.jtrResultPreview]
+          <> ["result_size_bytes" .= row.jtrResultSize | row.jtrSpilled]
+          <> ["observed_manifest_bytes" .= T.length (jsonText manifest) | Just manifest <- [row.jtrObserved]]
   where
-    boundedValue value = fmap (\v -> let text = TE.decodeUtf8 (LBS.toStrict (encode v)) in if T.length text <= 600 then v else object ["preview" .= T.take 600 text, "complete" .= False]) value
+    handle = turnHandleText turnOrdinal <> ":r" <> T.pack (show row.jtrOrdinal)
+    noteText = \case
+      Just (String note) -> Just (T.take 600 note)
+      Just other -> Just (T.take 600 (jsonText other))
+      Nothing -> Nothing
+    boundedValue value = let text = jsonText value in if T.length text <= 600 then value else object ["preview" .= T.take 600 text, "complete" .= False]
+
+-- Take entries while they fit; the first always does.
+fitPage :: Int -> [(row, Value)] -> [(row, Value)]
+fitPage budget = go 0
+  where
+    go _ [] = []
+    go used (entry@(_, value) : rest)
+      | used > 0 && used + size > budget = []
+      | otherwise = entry : go (used + size) rest
+      where
+        size = T.length (jsonText value)
+
+jsonText :: Value -> Text
+jsonText = TE.decodeUtf8 . LBS.toStrict . encode
 
 nonBlank :: Maybe Text -> Maybe Text
 nonBlank = (>>= \text -> if T.null (T.strip text) then Nothing else Just text)

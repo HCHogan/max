@@ -436,6 +436,7 @@ library
         Max.Turn.Types
         Max.Turn.Start
         Max.Turn.Continuity
+        Max.Turn.Readback
         Max.Time
         Max.Toolset
         Max.Tool.Catalog
