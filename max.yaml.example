@@ -424,6 +424,18 @@ llm:
 #                             # module this file is world-readable in the
 #                             # nix store, so a token here is public
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Destiny 2 through the Bungie.net API (the opt-in `destiny` skill).  Register
+# ONE Confidential application at https://www.bungie.net/en/Application and
+# set its Redirect URL to <admin.webhook_base_url>/oauth/bungie/callback —
+# HTTPS is required, a custom port is fine.  Players never touch keys: they
+# send !destiny login, approve in the browser, done.  Group admins enable the
+# skill per group with !destiny on.  See docs/runbooks/bungie.md.
+# ─────────────────────────────────────────────────────────────────────────────
+# bungie:
+#   api_key: ...              # prefer MAX_BUNGIE_API_KEY
+#   client_id: "12345"
+#   client_secret: ...        # prefer MAX_BUNGIE_CLIENT_SECRET
 # Days of full LLM request/response bodies kept for the panel's call view.
 # Only those are pruned — the token counters behind the usage chart are
 # never deleted.  Top level, not under `admin:`.

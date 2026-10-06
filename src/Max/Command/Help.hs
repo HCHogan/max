@@ -50,12 +50,15 @@ helpText Nothing =
       "  !use <群号>              （私聊）之后你发的命令都作用于那个群；!use 看当前，!use clear 退出",
       "  !status                  看（目标）群的概览：model/persona/开关/pin/记忆/任务",
       "  !lingo                   看从群聊里学到的说法和黑话（学习进度 + 最常见的几条）",
+      "  !destiny                 看命运2功能是否开启、你的 Bungie 绑定",
+      "  !destiny on/off          本群开/关命运2功能（查仓库、战绩，转移装备）",
+      "  !destiny login           私聊拿 Bungie 登录链接，浏览器里点批准就绑定；!destiny logout 解绑",
       "  ! <命令>                 在本群沙盒里跑 shell（感叹号后空一格），如 ! ls -al；支持多行",
       "  ! +包名… <命令>          开头 +pkg 把 nixpkgs 放进 PATH，如 ! +ffmpeg ffmpeg -version",
       "",
       "flag 可用短形式：--all=-a、--deny=-d、--global=-g（可合并，如 -dg）。",
       "权限：!model/!effort/!debug/!sticker/!proactive/!kill --all 仅 bot 主人；",
-      "!persona/!compact/!clear --all/!kill 需群主/管理员（或被授权）；其余全员可用。",
+      "!persona/!compact/!clear --all/!kill/!destiny on|off 需群主/管理员（或被授权）；其余全员可用。",
       "群里发命令：结果私聊发你（加好友才收得到），群里只贴表情。"
     ]
 helpText (Just topic) =

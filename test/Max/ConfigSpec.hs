@@ -2,6 +2,7 @@ module Max.ConfigSpec (spec) where
 
 import Data.Foldable (for_)
 import Max.Admin (AdminConfig (..))
+import Max.Bungie.Types (BungieConfig (..))
 import Max.Config
 import Max.Http.Json (replyRetryDelaysSecs)
 import Max.ModelCatalog
@@ -127,6 +128,17 @@ spec = describe "startup configuration" $ do
     config <- withArgs ["--llm-api-key", "test-key", "--admin-port", "7700", "--webhook-base-url", "https://max.example/"] loadConfig
     fmap (.acWebhookBaseUrl) config.admin `shouldBe` Just (Just "https://max.example")
     withArgs ["--llm-api-key", "test-key", "--admin-port", "7700", "--webhook-base-url", "https://user:secret@max.example"] loadConfig
+      `shouldThrow` anyIOException
+  it "requires the full Bungie application and an HTTPS callback base" $ do
+    let bungie = ["--bungie-api-key", "api-key-value", "--bungie-client-id", "123", "--bungie-client-secret", "secret-value"]
+    config <- withArgs (["--llm-api-key", "test-key", "--admin-port", "7700", "--webhook-base-url", "https://max.example:8443"] <> bungie) loadConfig
+    fmap (.bcClientId) config.bungie `shouldBe` Just "123"
+    show config.bungie `shouldNotContain` "secret-value"
+    show config.bungie `shouldNotContain` "api-key-value"
+    withArgs (["--llm-api-key", "test-key", "--admin-port", "7700", "--webhook-base-url", "http://max.example"] <> bungie) loadConfig
+      `shouldThrow` anyIOException
+    withArgs (["--llm-api-key", "test-key"] <> bungie) loadConfig `shouldThrow` anyIOException
+    withArgs ["--llm-api-key", "test-key", "--admin-port", "7700", "--webhook-base-url", "https://max.example", "--bungie-api-key", "key"] loadConfig
       `shouldThrow` anyIOException
   it "leaves room for slow-model attempts inside phase and task deadlines" $
     withArgs ["--llm-api-key", "test-key"] $ do

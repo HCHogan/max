@@ -156,6 +156,14 @@ library
         Max.Admin
         Max.AdminTimeline
         Max.Bilibili
+        Max.Bungie.Account
+        Max.Bungie.Api
+        Max.Bungie.Callback
+        Max.Bungie.Client
+        Max.Bungie.Definitions
+        Max.Bungie.Manifest
+        Max.Bungie.Runtime
+        Max.Bungie.Types
         Max.Browser.Service
         Max.Browser.Error
         Max.Browser.View
@@ -191,6 +199,8 @@ library
         Max.Context.Types
         Max.ConversationScope
         Max.MCP.Client
+        Max.DB.Bungie
+        Max.Destiny.ToolRuntime
         Max.DB.Calls
         Max.DB.AgentTurn
         Max.DB.Connection
@@ -249,6 +259,7 @@ library
         Max.Browser.ToolRuntime
         Max.Browser.Client
         Max.Effects.Browser
+        Max.Effects.Destiny
         Max.Reply.Caption
         Max.Effects.MediaQuery
         Max.Effects.PinControl
@@ -438,6 +449,7 @@ library
         Max.ToolContext
         Max.Tools
         Max.Tools.Bilibili
+        Max.Tools.Destiny
         Max.Tools.Browser
         Max.Tools.Files
         Max.Tools.Group
@@ -692,6 +704,8 @@ test-suite max-test
         Max.AdminSpec
         Max.CliProxySpec
         Max.BilibiliSpec
+        Max.Bungie.ApiSpec
+        Max.Bungie.DefinitionsSpec
         Max.Browser.ErrorSpec
         Max.Browser.ViewSpec
         Max.Browser.RegistrySpec
@@ -862,6 +876,7 @@ test-suite max-test-db
         Max.DB.MonitorJobsSpec
         Max.DB.ProgressSpec
         Max.DB.BrowserSpec
+        Max.DB.BungieSpec
         Max.DB.QQBackfillSpec
         Max.PromptIntegrationSpec
         Max.PlatformCapabilitiesSpec

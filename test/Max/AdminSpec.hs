@@ -16,6 +16,11 @@ spec = describe "Max.Admin" $ do
         `shouldBe` replicate 3 True
       map validWebhookBaseUrl ["/hooks", "ftp://max.example", "https://user:password@max.example", "https://max.example/?token=x", "https://max.example/#hook"]
         `shouldBe` replicate 5 False
+  describe "Bungie OAuth callback" $
+    it "is a public GET route; the single-use state is its credential" $ do
+      route "GET" ["oauth", "bungie", "callback"] `shouldBe` Just RBungieCallback
+      route "POST" ["oauth", "bungie", "callback"] `shouldBe` Nothing
+      needsAuth RBungieCallback `shouldBe` False
   describe "route" $ do
     it "maps the read endpoints" $ do
       route "GET" ["api", "overview"] `shouldBe` Just ROverview

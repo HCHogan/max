@@ -97,7 +97,8 @@ truncateAll pool = withConn pool $ \c -> do
     execute_
       c
       "TRUNCATE \
-      \  skill_publications, skill_validations, skill_drafts, skills, \
+      \  skill_publications, skill_validations, skill_drafts, skills, skill_enables, \
+      \  bungie_oauth_states, bungie_links, destiny_definitions, destiny_manifest_kinds, \
       \  operational_debt_reviews, \
       \  maintenance_leases, \
       \  qq_backfill_runs, \

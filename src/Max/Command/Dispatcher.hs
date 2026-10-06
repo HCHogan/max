@@ -18,13 +18,15 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (diffUTCTime, getCurrentTime)
+import Data.Time (defaultTimeLocale, diffUTCTime, formatTime, getCurrentTime, utcToLocalTime)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Browser.Registry (destroyBrowsersForGroup)
+import Max.Bungie.Account (LinkedAccount (..), beginLogin, linkedAccount, loginStateTtlMinutes, unlinkAccount)
+import Max.Bungie.Types (DestinyMembership (..))
 import Max.Command.Help (helpText)
 import Max.Command.Types
 import Max.Command.Version (readHostUptime, readOsPretty, versionCard)
@@ -58,7 +60,7 @@ import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), destroySandboxes
 import Max.Sandbox.Runtime (ExecResult (..))
 import Max.Session (Session (..), SessionHandle, updateSession)
 import Max.Session qualified as Session
-import Max.Skills (skillsForGroup)
+import Max.Skills (setSkillEnabled, skillEnabledFor, skillsForGroup)
 import Max.Task.Types (JobView (..))
 import Max.Tasks
   ( TaskId (..),
@@ -83,6 +85,9 @@ data DispatchResult
     -- when the command came from a group (e.g. !version — a public
     -- card, not a personal query).
     ReplyPublicText !Text
+  | -- | Text that must never reach the group, with the notice to post
+    -- there instead when private delivery is impossible (login links).
+    ReplyPrivateOnly !Text !Text
   | SideQuestion !Text
   | -- | !feedback: hand this note to a turn already running.  The
     -- caller does the routing because it holds the trigger message —
@@ -449,6 +454,54 @@ execute t gid uid senderPrincipal replyTarget cmd = do
           "  任务: " <> tshow (length tasks) <> " 个在跑",
           "  !clear 水位: " <> maybe "无" (T.pack . show) s.clearedAt
         ]
+    DestinyStatus -> case env.beBungie of
+      Nothing -> reply destinyUnconfigured
+      Just _ -> do
+        enabled <- liftIO (skillEnabledFor env.beSkills gid "destiny")
+        linked <- linkedAccount senderPrincipal
+        reply . T.intercalate "\n" $
+          [ "命运2（Bungie）：" <> (if enabled then "本群已开启" else "本群未开启（群管理员发 !destiny on 开启）"),
+            case linked of
+              Nothing -> "你的绑定：未绑定。私聊我发 !destiny login，在浏览器里登录 Bungie 并点批准即可。"
+              Just account ->
+                "你的绑定："
+                  <> account.laBungieName
+                  <> maybe "" (\m -> "（" <> platformName m.dmType <> "）") account.laMembership
+                  <> "，授权在 "
+                  <> T.pack (formatTime defaultTimeLocale "%Y-%m-%d" (utcToLocalTime env.beTimeZone account.laRefreshExpiresAt))
+                  <> " 前有效；!destiny logout 解绑"
+          ]
+    DestinySet on -> case env.beBungie of
+      Nothing -> reply destinyUnconfigured
+      Just _ -> do
+        setSkillEnabled env.beSkills gid "destiny" (Just senderPrincipal) on
+        logInfo "skills: destiny toggled" $ object ["enabled" .= on]
+        if on
+          then
+            pure . ReplyPublicText $
+              "命运2功能已开启。想让我查自己的仓库、战绩或转移装备，先私聊我发 !destiny login 绑定 Bungie 账号（浏览器里点批准就行）。"
+          else ack
+    DestinyLogin -> case env.beBungie of
+      Nothing -> reply destinyUnconfigured
+      Just bungie -> do
+        name <- principalName senderPrincipal
+        current <- linkedAccount senderPrincipal
+        url <- beginLogin bungie senderPrincipal name
+        pure $
+          ReplyPrivateOnly
+            ( T.concat
+                [ maybe "" (\a -> "（当前已绑定 " <> a.laBungieName <> "，重新登录会替换它。）\n") current,
+                  "打开下面的链接，用 Bungie 账号登录（Steam/PSN/Xbox/Epic 都行）并点批准，就绑定好了。",
+                  tshow loginStateTtlMinutes,
+                  " 分钟内有效、只能用一次：\n",
+                  url,
+                  "\n别把链接转给别人：谁用它登录，绑定到你名下的就是谁的账号。"
+                ]
+            )
+            "登录链接只能私聊发：先加我好友，再私聊我发 !destiny login。"
+    DestinyLogout -> do
+      removed <- unlinkAccount senderPrincipal
+      reply (if removed then "已解除 Bungie 绑定，保存的授权已删除。" else "你没有绑定 Bungie 账号。")
     LingoShow -> do
       stats <- lingoStats conversation
       expressions <- listExpressionCandidates conversation 8
@@ -460,6 +513,19 @@ execute t gid uid senderPrincipal replyTarget cmd = do
           <> v
           <> "\n用 !help 看可用命令"
   where
+    destinyUnconfigured = "命运2功能未配置：需要 bot 主人在配置里填 bungie 段（Bungie 应用的 api_key/client_id/client_secret）。"
+    platformName = \case
+      1 -> "Xbox" :: Text
+      2 -> "PlayStation"
+      3 -> "Steam"
+      5 -> "Stadia"
+      6 -> "Epic"
+      _ -> "Bungie"
+    principalName (PrincipalId principal) = do
+      rows <- query "SELECT display_name FROM principals WHERE principal_id = ?" (Only principal)
+      pure $ case rows of
+        [Only (Just name)] | not (T.null (T.strip name)) -> name
+        _ -> let UserId raw = uid in "QQ " <> tshow raw
     -- Has the bot ever seen this group?  Cheap sanity check for !use.
     groupKnown g = do
       rows <-

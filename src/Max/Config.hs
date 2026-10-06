@@ -49,6 +49,7 @@ import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Matrix (MatrixConfig (..))
 import Max.ModelCatalog (ContextLimits (..), ModelCatalog, contextLimitsForWindow, defaultContextLimits, modelProfileNames)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), ProviderConcurrency (..), VisionLimits (..), mkModelCatalogFromProfiles, parseProtocol)
+import Max.Bungie.Types (BungieConfig (..))
 import Max.Monitor.Http (validWebhookBaseUrl)
 import Max.Tools.Search (SearchConfig (..))
 import Max.WechatHook (WechatHookConfig (..))
@@ -144,6 +145,9 @@ data AppConfig = AppConfig
     -- | Admin JSON API (loopback warp server); 'Nothing' = never
     -- started.  See "Max.Admin".
     admin :: !(Maybe AdminConfig),
+    -- | Bungie application behind the opt-in destiny skill. Its OAuth
+    -- callback is served under @admin.webhook_base_url@.
+    bungie :: !(Maybe BungieConfig),
     -- | How long @llm_calls@ keeps request/response bodies.  Only the
     -- fat table is pruned; @llm_usage@'s counters are kept forever.
     adminCallRetentionDays :: !Int,
@@ -228,6 +232,7 @@ validateConfig cfg =
       invalid "memory.timeout_seconds" (cfg.historianTimeoutSeconds <= 0),
       invalid "admin_call_retention_days" (cfg.adminCallRetentionDays < 0),
       maybe [] validateAdmin cfg.admin,
+      maybe [] validateBungie cfg.bungie,
       maybe [] (\embedCfg -> invalid "embedding.timeout_seconds" (embedCfg.ecTimeoutSeconds <= 0)) cfg.embedding,
       maybe [] validateMatrix cfg.matrix,
       maybe [] validateIMessage cfg.imessage,
@@ -249,6 +254,13 @@ validateConfig cfg =
         <> invalid "admin.port" (adminCfg.acPort <= 0 || adminCfg.acPort > 65535)
         <> invalid "admin.webhook_base_url" (maybe False (not . validWebhookBaseUrl) adminCfg.acWebhookBaseUrl)
     nonempty field text = invalid field (T.null (T.strip text))
+    -- Bungie only redirects to HTTPS, and the callback rides the public
+    -- webhook listener.
+    validateBungie bungieCfg =
+      nonempty "bungie.api_key" bungieCfg.bcApiKey
+        <> nonempty "bungie.client_id" bungieCfg.bcClientId
+        <> nonempty "bungie.client_secret" bungieCfg.bcClientSecret
+        <> invalid "admin.webhook_base_url" (not (maybe False ("https://" `T.isPrefixOf`) (cfg.admin >>= (.acWebhookBaseUrl))))
     validateMatrix matrixCfg =
       nonempty "matrix.homeserver" matrixCfg.homeserver
         <> nonempty "matrix.access_token" matrixCfg.accessToken
@@ -478,6 +490,7 @@ appConfigParser usedRef =
     wechathook <- subConfig "wechathook" wechatHookParser
     intent <- subConfig "intent" intentParser
     admin <- subConfig "admin" adminParser
+    bungie <- subConfig "bungie" bungieParser
     adminCallRetentionDays <-
       setting
         [ help "Days of full LLM request/response bodies to keep (token counters are kept forever)",
@@ -704,6 +717,53 @@ searchParser = do
               scTimeoutSeconds = timeoutSecs
             }
       else Nothing
+
+--------------------------------------------------------------------------------
+-- Bungie.net (destiny skill).
+
+-- | Presence of @api_key@ enables the integration; the OAuth client id and
+-- secret are then mandatory. Prefer MAX_BUNGIE_* environment variables for
+-- the key and secret.
+bungieParser :: Parser (Maybe BungieConfig)
+bungieParser = do
+  mKey <-
+    optional $
+      setting
+        [ help "Bungie application API key (presence enables the destiny skill)",
+          reader str,
+          option,
+          long "bungie-api-key",
+          env "MAX_BUNGIE_API_KEY",
+          conf "api_key",
+          metavar "KEY"
+        ]
+  clientId <-
+    setting
+      [ help "Bungie OAuth client_id (Confidential application)",
+        reader str,
+        option,
+        long "bungie-client-id",
+        env "MAX_BUNGIE_CLIENT_ID",
+        conf "client_id",
+        metavar "ID",
+        value ""
+      ]
+  clientSecret <-
+    setting
+      [ help "Bungie OAuth client_secret",
+        reader str,
+        option,
+        long "bungie-client-secret",
+        env "MAX_BUNGIE_CLIENT_SECRET",
+        conf "client_secret",
+        metavar "SECRET",
+        value ""
+      ]
+  pure $ case mKey of
+    Just key
+      | not (T.null (T.strip key)) ->
+          Just BungieConfig {bcApiKey = T.strip key, bcClientId = T.strip clientId, bcClientSecret = T.strip clientSecret}
+    _ -> Nothing
 
 --------------------------------------------------------------------------------
 -- The credential pool in front of the subscription.

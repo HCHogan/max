@@ -7,6 +7,11 @@ import Test.Hspec
 spec :: Spec
 spec = do
   describe "requiredCapability" $ do
+    it "leaves Bungie login and logout to each member" $ do
+      requiredCapability DestinyLogin `shouldBe` Nothing
+      requiredCapability DestinyLogout `shouldBe` Nothing
+      requiredCapability DestinyStatus `shouldBe` Nothing
+
     it "gates owner-tier switches" $ do
       requiredCapability (ModelSet "x") `shouldBe` Just ("model", TierOwner)
       requiredCapability (DebugSet Nothing) `shouldBe` Just ("debug", TierOwner)
@@ -18,6 +23,7 @@ spec = do
       requiredCapability (PersonaSet "猫") `shouldBe` Just ("persona", TierGroupAdmin)
       requiredCapability PersonaClear `shouldBe` Just ("persona", TierGroupAdmin)
       requiredCapability Compact `shouldBe` Just ("compact", TierGroupAdmin)
+      requiredCapability (DestinySet True) `shouldBe` Just ("destiny", TierGroupAdmin)
       requiredCapability Unclear `shouldBe` Just ("clear", TierGroupAdmin)
       requiredCapability (Kill "t1") `shouldBe` Just ("kill", TierGroupAdmin)
 

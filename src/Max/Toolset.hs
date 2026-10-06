@@ -84,6 +84,7 @@ import Max.ToolContext
     toolStickers,
     withToolSkillLoads,
   )
+import Max.Destiny.ToolRuntime (destinyToolsWithRuntime)
 import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Turn.Continuity (toolCatalogFingerprint)
 import OneBot.Types (GroupId (..), isPrivateChat)
@@ -187,6 +188,7 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
         <> fileToolsWithDatabase dc env.beSandboxes
         <> [t | toolStickers dc && env.beEmbeddingEnabled, t <- stickerToolsWithDatabase]
         <> maybe [] (searchToolsWithRuntime runtime) env.beSearch
+        <> maybe [] (`destinyToolsWithRuntime` dc) env.beBungie
         <> [t | toolMultimodal dc, t <- browserToolsFor env.beJobs dc env.beBrowsers env.beBrowserProxy]
         <> [t | toolMultimodal dc, t <- videoToolsWithDatabase env.beSandboxes dc]
 
@@ -240,6 +242,7 @@ toolDefinitionsFor env gid caps =
       StickersOnly -> caps.tcStickers && env.beEmbeddingEnabled
       SkillsOnly -> caps.tcSkills
       SearchOnly -> isJust env.beSearch
+      BungieOnly -> isJust env.beBungie
       -- Ordinary foreground turns list create_automation for every initiator
       -- so the tool block (a cached prompt prefix) does not change with who
       -- speaks. Background tasks do not create automations.
@@ -266,6 +269,7 @@ data ToolGate
   | StickersOnly
   | SkillsOnly
   | SearchOnly
+  | BungieOnly
   | MonitorArmOnly
   | BackgroundOnly
 
@@ -335,6 +339,12 @@ toolInventory =
     always (sendReadTool "send_file" ["sandbox.fs"]),
     gated StickersOnly (llmReadTool "find_stickers" ["sticker.db"] [CurrentConversation]),
     gated SearchOnly (readTool "web_search" ["network.search"] [CurrentConversation]),
+    -- Destiny calls act only as the turn's author; the bundle keeps them
+    -- hidden until use_skill destiny in a conversation that enabled it.
+    gated BungieOnly (readTool "destiny_account" ["network.bungie", "bungie.link"] [CurrentConversation]),
+    gated BungieOnly (readTool "destiny_read" ["network.bungie", "bungie.link"] [CurrentConversation]),
+    gated BungieOnly (writeTool "destiny_write" ["network.bungie", "bungie.account"] [CurrentConversation]),
+    gated BungieOnly (readTool "destiny_lookup" ["network.bungie", "destiny.manifest"] [CurrentConversation]),
     gated MultimodalOnly (browserTool "browser"),
     gated MultimodalOnly (browserTool "view_zhihu"),
     gated MultimodalOnly (statefulReadTool "view_video" ["conversation.db", "blob.store", "tool.media"] [CurrentConversation])

@@ -54,6 +54,7 @@ toolBundle name
   -- Search stays in every catalog: a factual answer should not wait on a
   -- skill load the model has to think of first.
   | name `elem` ["browser", "view_zhihu", "view_bilibili"] = Just "web"
+  | "destiny_" `T.isPrefixOf` name = Just "destiny"
   | "sandbox_" `T.isPrefixOf` name || name `elem` ["nix_search", "read_file", "write_file", "send_image", "send_file"] = Just "sandbox"
   | otherwise = Nothing
 

@@ -61,5 +61,9 @@ returnTypes =
       ("web_search", "{answer: string | null; results: {title: string; url: string; snippet: string}[]}"),
       ("browser", "string：首行 \"Outcome: <action> ok|failed\"，第二行 \"Page: <url> | <title>\"，随后 Position/Note 行，\"Content:\" 之后是元素和正文；read 分页时 Note 含 \"read again with offset=N\""),
       ("view_zhihu", "string，格式同 browser"),
+      ("destiny_account", "{linked: false; login: string} | {linked: true; bungie_name: string; membership_type: number | null; membership_id: string | null; linked_at: string; relink_before: string; characters: {character_id: string; class: string; light: number | null; last_played: string | null; minutes_played: number | null}[]; characters_error?: string}"),
+      ("destiny_read", "unknown（Bungie 的 Response 字段原样，64 位 id 是字符串）| {too_large: true; chars: number; max_chars: number; keys: string[]; hint: string}"),
+      ("destiny_write", "{ok: true; response: unknown}"),
+      ("destiny_lookup", "{kind: string; definitions: {[hash: string]: {name?: string; description?: string; type?: string; tier?: string; [field: string]: unknown}}; missing: number[]} | {query: string; results: {kind: string; hash: number; name: string; name_en?: string; type?: string; tier?: string; classType?: number; itemType?: number; description?: string}[]}"),
       ("run_code", "{status: \"paused\" | \"finished\"; run: string; pending: {tool: string; status: string}[]; value: unknown; exit: string; calls: {call: string; tool: string; outcome: string}[]; call_count: number; submitted_calls: number; omitted_calls: number; over_budget: boolean; run_ref: string}")
     ]

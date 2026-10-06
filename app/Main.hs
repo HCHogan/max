@@ -5,6 +5,7 @@ import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
 import Control.Exception (AsyncException (UserInterrupt), bracket, finally, throwTo)
 import Control.Monad (forever, unless, when)
 import Data.Foldable (for_)
+import Data.Traversable (for)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust, maybeToList)
@@ -27,6 +28,8 @@ import Max.Browser.Registry
   )
 import Max.Browser.Runtime (browserMaintenance)
 import Max.Browser.Vault (loadBrowserVault)
+import Max.Bungie.Manifest (manifestWorker)
+import Max.Bungie.Runtime (newBungieRuntime)
 import Max.Config (AppConfig (..), loadConfig)
 import Max.Conversation (newConversations)
 import Max.DB.AgentTurn (addAgentTurnUsage, reclaimInterruptedTurns)
@@ -88,7 +91,7 @@ import Max.Sandbox.Registry
 import Max.Search.Runtime (newSearchRuntime)
 import Max.Session (newSessionRegistry)
 import Max.Shutdown (ShutdownState, beginDrain, drainWorker, newShutdownState)
-import Max.Skills (loadSkills, newSkillRegistry)
+import Max.Skills (loadSkills, newSkillRegistry, setOptInAvailable)
 import Max.Stickers (stickerCaptionWorker)
 import Max.Tasks (newTaskRegistry)
 import Max.Toolset (allToolsFor)
@@ -124,6 +127,9 @@ main = do
     -- process exit deliberately leaves them intact.
     reapStaleBrowsers
     browserKey <- loadBrowserVault cfg.browserStateKeyFile
+    -- Bungie tokens are sealed with the same owner-only state key.
+    bungie <- for cfg.bungie $ \bungieCfg ->
+      newBungieRuntime bungieCfg httpRuntime browserKey (fromMaybe "" (cfg.admin >>= (.acWebhookBaseUrl)))
     browsers <- configureBrowserRegistry browserKey cfg.browserIdleSeconds cfg.browserGraceSeconds <$> newBrowserRegistry httpRuntime
     ( do
         logBuf <- newLogBuffer logBufferLines
@@ -140,6 +146,7 @@ main = do
           fetchSig <- newFetchSignal
           sessions <- newSessionRegistry
           skillReg <- newSkillRegistry
+          setOptInAvailable skillReg ["destiny" | isJust bungie]
           tasks <- newTaskRegistry
           jobs <- newJobs tasks
           clientRef <- newTVarIO (Nothing :: ClientSlot)
@@ -187,6 +194,7 @@ main = do
                     beSandboxes = sandboxes,
                     beBrowsers = browsers,
                     beSearch = searchRuntime,
+                    beBungie = bungie,
                     beCliProxy = cfg.cliproxy,
                     beBrowserProxy = cfg.browserProxy,
                     beMemoryExtract = cfg.memoryExtractProfile,
@@ -368,6 +376,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
                | profile <- maybeToList cfg.lingoProfile
                ]
             <> [worker "memory-expiry" RequiredWorker expiryWorker]
+            <> [worker "destiny-manifest" RequiredWorker (manifestWorker runtime) | runtime <- maybeToList env.beBungie]
             <> [ worker
                    "intent"
                    RequiredWorker

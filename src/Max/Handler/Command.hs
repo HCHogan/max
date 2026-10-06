@@ -182,7 +182,12 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
         -- Private chats and other platforms reply inline.
         ReplyText reply
           | isPrivateChat gm.groupId || isForeignSource sourcePlatform -> replyText gm reply
-          | otherwise -> deliverPrivate reply
+          | otherwise -> deliverPrivate reply (replyText gm (reply <> "\n\n（加我好友后，这类结果会私聊发你，不刷群）"))
+        -- Never falls back to the group: only the notice may appear there.
+        ReplyPrivateOnly reply notice
+          | isPrivateChat gm.groupId -> replyText gm reply
+          | isForeignSource sourcePlatform -> replyText gm notice
+          | otherwise -> deliverPrivate reply (replyText gm notice)
         -- Deliberately group-audience output (e.g. !version).
         ReplyPublicText reply -> replyText gm reply
         -- Pure acknowledgement: an OK reaction on the command message
@@ -199,7 +204,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
           dispatchLLM mIntent OriginDirect gm
 
     -- Record private command output in the DM conversation.
-    deliverPrivate reply = do
+    deliverPrivate reply fallback = do
       let GroupId gidRaw = gm.groupId
           UserId uidRaw = gm.userId
           header = "（群 " <> T.pack (show gidRaw) <> " 的命令结果）\n"
@@ -219,7 +224,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
         else do
           logInfo "cmd: private delivery failed, group fallback" $
             object ["user_id" .= uidRaw, "group_id" .= gidRaw]
-          replyText gm (reply <> "\n\n（加我好友后，这类结果会私聊发你，不刷群）")
+          fallback
 
 -- | Private commands use the selected @!use@ group, except @!use@ itself.
 -- Owners may select any group; other callers must belong to the target group.

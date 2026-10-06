@@ -302,6 +302,13 @@ classify verb raw@(RawArgs pos flags) = case verb of
     ["default"] -> ProactiveSet Nothing
     _ -> Unknown verb raw
   "version" -> Version
+  "destiny" -> case pos of
+    [] -> DestinyStatus
+    ["on"] -> DestinySet True
+    ["off"] -> DestinySet False
+    ["login"] -> DestinyLogin
+    ["logout"] -> DestinyLogout
+    _ -> Unknown verb raw
   _ -> Unknown verb raw
 
 parseInt64 :: Text -> Maybe Int64

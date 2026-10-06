@@ -1,0 +1,127 @@
+{
+  "dependencies": [],
+  "workflows": {
+    "inventory": {
+      "description": "在发起人的仓库、背包和已装备里按名字（中文或英文）找物品，返回位置、item_id、光等、元素、锁定/大师/锻造和武器 perk。",
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "名字子串；省略则列出全部（受 limit 限制）"
+          },
+          "slot": {
+            "type": "string",
+            "enum": [
+              "all",
+              "weapon",
+              "armor",
+              "gear"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60
+          },
+          "with_perks": {
+            "type": "boolean",
+            "description": "默认 true"
+          },
+          "with_stats": {
+            "type": "boolean",
+            "description": "附带每件的属性（护甲六维、武器面板），默认 false"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "tools": [
+        "destiny_account",
+        "destiny_read",
+        "destiny_lookup"
+      ],
+      "source": "const acct = await tools.destiny_account({});\nif (!acct.linked) return {linked: false, login: acct.login, matches: []};\nconst mt = acct.membership_type, mid = acct.membership_id;\nif (mt === null || mid === null) return {linked: true, error: \"这个 Bungie 账号下没有命运2角色\", matches: []};\nconst withPerks = args.with_perks !== false, withStats = args.with_stats === true;\nconst path = `/Destiny2/${mt}/Profile/${mid}/`;\nconst base = [102, 201, 205, 300];\nlet profile = await tools.destiny_read({path, query: {components: base.concat(withPerks ? [305] : [], withStats ? [304] : [])}, max_chars: 3500000});\nif (profile.too_large) profile = await tools.destiny_read({path, query: {components: base}, max_chars: 3500000});\nif (profile.too_large) throw new Error(\"库存响应超过上限\");\nconst cls = {};\nfor (const c of acct.characters) cls[c.character_id] = c.class;\nconst owned = [];\nfor (const it of profile.profileInventory?.data?.items ?? []) owned.push({it, location: \"仓库\", character_id: null, equipped: false});\nfor (const [cid, inv] of Object.entries(profile.characterInventories?.data ?? {}))\n  for (const it of inv.items ?? []) owned.push({it, location: `${cls[cid] ?? cid}背包`, character_id: cid, equipped: false});\nfor (const [cid, inv] of Object.entries(profile.characterEquipment?.data ?? {}))\n  for (const it of inv.items ?? []) owned.push({it, location: `${cls[cid] ?? cid}已装备`, character_id: cid, equipped: true});\nconst define = async (kind, hashes, into) => {\n  const todo = [...new Set(hashes.filter(h => h && !(h in into)))];\n  for (let i = 0; i < todo.length; i += 500) Object.assign(into, (await tools.destiny_lookup({kind, hashes: todo.slice(i, i + 500)})).definitions);\n};\nconst defs = {};\nawait define(\"item\", owned.map(x => x.it.itemHash), defs);\nconst q = (args.query ?? \"\").trim().toLowerCase();\nlet alias = new Set();\nif (q) {\n  const found = await max.raw(\"destiny_lookup\", {kind: \"item\", search: args.query, limit: 50});\n  if (found.outcome === \"succeeded\") alias = new Set(found.value.results.map(r => r.hash));\n}\nconst slot = args.slot ?? \"all\";\nconst slotOk = d => slot === \"all\" || (slot === \"weapon\" && d.itemType === 3) || (slot === \"armor\" && d.itemType === 2) || (slot === \"gear\" && (d.itemType === 2 || d.itemType === 3));\nconst hits = owned.filter(({it}) => {\n  const d = defs[it.itemHash];\n  return d && slotOk(d) && (!q || (d.name ?? \"\").toLowerCase().includes(q) || alias.has(it.itemHash));\n});\nconst instances = profile.itemComponents?.instances?.data ?? {};\nconst sockets = profile.itemComponents?.sockets?.data ?? {};\nconst stats = profile.itemComponents?.stats?.data ?? {};\n// Weapon perks, intrinsic traits, armor perks (exotic intrinsics).\nconst perkCategories = new Set([4241085061, 3956125808, 3154740035]);\nconst perkHashes = row => {\n  const live = sockets[row.it.itemInstanceId]?.sockets ?? [];\n  return (defs[row.it.itemHash].sockets ?? []).filter(s => perkCategories.has(s.category)).map(s => live[s.index]).filter(p => p && p.plugHash && p.isVisible !== false).map(p => p.plugHash);\n};\nconst limit = Math.min(args.limit ?? 30, 60);\nhits.sort((a, b) => (defs[a.it.itemHash].name ?? \"\").localeCompare(defs[b.it.itemHash].name ?? \"\") || (instances[b.it.itemInstanceId]?.primaryStat?.value ?? 0) - (instances[a.it.itemInstanceId]?.primaryStat?.value ?? 0));\nconst shown = hits.slice(0, limit);\nconst plugs = {}, statDefs = {};\nif (withPerks) await define(\"item\", shown.flatMap(perkHashes), plugs);\nif (withStats) await define(\"stat\", shown.flatMap(r => Object.keys(stats[r.it.itemInstanceId]?.stats ?? {}).map(Number)), statDefs);\nconst damage = {1: \"动能\", 2: \"电弧\", 3: \"烈日\", 4: \"虚空\", 6: \"冰影\", 7: \"缚丝\"};\nconst rows = shown.map(row => {\n  const d = defs[row.it.itemHash], inst = instances[row.it.itemInstanceId] ?? {}, state = row.it.state ?? 0;\n  const out = {name: d.name, type: d.type, tier: d.tier, hash: row.it.itemHash, item_id: row.it.itemInstanceId ?? null, location: row.location, character_id: row.character_id, equipped: row.equipped};\n  if ((row.it.quantity ?? 1) > 1) out.quantity = row.it.quantity;\n  if (inst.primaryStat?.value) out.power = inst.primaryStat.value;\n  if (damage[inst.damageType]) out.damage = damage[inst.damageType];\n  if (state & 1) out.locked = true;\n  if (state & 4) out.masterwork = true;\n  if (state & 8) out.crafted = true;\n  if (withPerks) {\n    const names = perkHashes(row).map(h => plugs[h]?.name).filter(Boolean);\n    if (names.length) out.perks = names;\n  }\n  if (withStats && stats[row.it.itemInstanceId]) {\n    out.stats = Object.fromEntries(Object.values(stats[row.it.itemInstanceId].stats).filter(s => s.value).map(s => [statDefs[s.statHash]?.name ?? String(s.statHash), s.value]));\n  }\n  return out;\n});\nreturn {bungie_name: acct.bungie_name, total_items: owned.length, matched: hits.length, shown: rows.length, vault_visible: Boolean(profile.profileInventory?.data), matches: rows};"
+    },
+    "move": {
+      "description": "把发起人的一件装备移到仓库或某个角色，可顺手装备；正装备着的会先换上同栏位的另一件（优先非异域），角色间经仓库中转。逐步返回结果。",
+      "input": {
+        "type": "object",
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "description": "itemInstanceId"
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "description": "\"vault\" 或目标 character_id"
+          },
+          "equip": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "item_id",
+          "to",
+          "equip"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "tools": [
+        "destiny_account",
+        "destiny_read",
+        "destiny_lookup",
+        "destiny_write"
+      ],
+      "source": "const acct = await tools.destiny_account({});\nif (!acct.linked) return {ok: false, error: acct.login, steps: []};\nconst mt = acct.membership_type, mid = acct.membership_id;\nconst profile = await tools.destiny_read({path: `/Destiny2/${mt}/Profile/${mid}/`, query: {components: [102, 201, 205]}, max_chars: 3500000});\nif (profile.too_large) throw new Error(\"库存响应超过上限\");\nlet found = null;\nfor (const it of profile.profileInventory?.data?.items ?? []) if (it.itemInstanceId === args.item_id) found = {it, owner: null, equipped: false};\nfor (const [cid, inv] of Object.entries(profile.characterInventories?.data ?? {}))\n  for (const it of inv.items ?? []) if (it.itemInstanceId === args.item_id) found = {it, owner: cid, equipped: false};\nfor (const [cid, inv] of Object.entries(profile.characterEquipment?.data ?? {}))\n  for (const it of inv.items ?? []) if (it.itemInstanceId === args.item_id) found = {it, owner: cid, equipped: true};\nif (!found) return {ok: false, error: \"仓库和各角色身上都没有这个 item_id（可能已被移动或分解，重新查一次）\", steps: []};\nconst target = args.to === \"vault\" ? null : args.to;\nconst cls = {};\nfor (const c of acct.characters) cls[c.character_id] = c.class;\nif (target !== null && !(target in cls)) return {ok: false, error: \"to 必须是 \\\"vault\\\" 或你自己的 character_id\", steps: []};\nif (args.equip && target === null) return {ok: false, error: \"仓库里不能装备；equip 需要目标角色\", steps: []};\nconst steps = [];\nconst act = async (label, action, body) => {\n  const r = await max.raw(\"destiny_write\", {path: `/Destiny2/Actions/Items/${action}/`, body: {...body, membershipType: mt}});\n  const ok = r.outcome === \"committed\" || r.outcome === \"succeeded\";\n  steps.push(ok ? {step: label, ok} : {step: label, ok, outcome: r.outcome, error: r.error?.message});\n  return ok;\n};\nconst it = found.it;\nconst transfer = (toVault, cid) => act(toVault ? `从${cls[cid]}放进仓库` : `从仓库取到${cls[cid]}`, \"TransferItem\", {itemReferenceHash: it.itemHash, stackSize: it.quantity ?? 1, transferToVault: toVault, itemId: it.itemInstanceId, characterId: cid});\nconst equip = cid => act(`给${cls[cid]}装备`, \"EquipItem\", {itemId: it.itemInstanceId, characterId: cid});\nconst result = ok => ({ok, item_id: it.itemInstanceId, from: found.owner === null ? \"仓库\" : cls[found.owner] + (found.equipped ? \"（已装备）\" : \"\"), to: target === null ? \"仓库\" : cls[target], steps});\nif (found.owner === target) {\n  if (!args.equip || found.equipped) return {...result(true), note: found.equipped ? \"已经装备在这个角色上\" : \"已经在这个角色背包里\"};\n  return result(await equip(target));\n}\nif (found.equipped) {\n  // An equipped item cannot move; equip another from the same slot first, preferring non-exotics.\n  const candidates = (profile.characterInventories?.data?.[found.owner]?.items ?? []).filter(x => x.bucketHash === it.bucketHash && x.itemInstanceId);\n  if (!candidates.length) return {...result(false), error: \"这件正装备着，而这个角色背包里同栏位没有能换上的物品\"};\n  const defs = (await tools.destiny_lookup({kind: \"item\", hashes: [...new Set(candidates.map(x => x.itemHash))]})).definitions;\n  candidates.sort((a, b) => ((defs[a.itemHash]?.tierType === 6) - (defs[b.itemHash]?.tierType === 6)));\n  const swap = candidates[0];\n  const swapped = await act(`先给${cls[found.owner]}换上「${defs[swap.itemHash]?.name ?? swap.itemHash}」`, \"EquipItem\", {itemId: swap.itemInstanceId, characterId: found.owner});\n  if (!swapped) return result(false);\n}\nif (found.owner !== null && !(await transfer(true, found.owner))) return result(false);\nif (target !== null && !(await transfer(false, target))) return result(false);\nif (target !== null && args.equip && !(await equip(target))) return result(false);\nreturn result(true);"
+    },
+    "recent": {
+      "description": "发起人最近的活动记录（所有角色合并按时间排序）：活动名、模式、是否完成、击杀/死亡/助攻、KD、时长和 instance_id（可再查 PGCR）。",
+      "input": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 200,
+            "description": "DestinyActivityModeType，0 为全部"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25
+          },
+          "character_id": {
+            "type": "string",
+            "maxLength": 32
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "tools": [
+        "destiny_account",
+        "destiny_read",
+        "destiny_lookup"
+      ],
+      "source": "const acct = await tools.destiny_account({});\nif (!acct.linked) return {linked: false, login: acct.login, activities: []};\nconst mt = acct.membership_type, mid = acct.membership_id;\nconst chars = args.character_id ? acct.characters.filter(c => c.character_id === args.character_id) : acct.characters;\nif (!chars.length) return {linked: true, error: \"没有匹配的角色\", activities: []};\nconst count = Math.min(args.count ?? 10, 25);\nconst pages = await Promise.all(chars.map(c => max.raw(\"destiny_read\", {path: `/Destiny2/${mt}/Account/${mid}/Character/${c.character_id}/Stats/Activities/`, query: {count, mode: args.mode ?? 0, page: 0}})));\nconst rows = [], errors = [];\npages.forEach((page, i) => {\n  if (page.outcome !== \"succeeded\") errors.push({class: chars[i].class, error: page.error?.message});\n  else for (const a of page.value.activities ?? []) rows.push({c: chars[i], a});\n});\nrows.sort((x, y) => y.a.period.localeCompare(x.a.period));\nconst shown = rows.slice(0, count);\nconst hashes = [...new Set(shown.flatMap(r => [r.a.activityDetails.referenceId, r.a.activityDetails.directorActivityHash]).filter(Boolean))];\nconst names = hashes.length ? (await tools.destiny_lookup({kind: \"activity\", hashes})).definitions : {};\nconst modes = {2: \"剧情\", 3: \"打击\", 4: \"突袭\", 5: \"PvP\", 6: \"巡逻\", 7: \"PvE\", 10: \"占领\", 12: \"冲突\", 18: \"打击\", 19: \"铁旗\", 25: \"混战\", 46: \"宗师/日落\", 48: \"混战\", 63: \"智谋\", 69: \"竞技\", 70: \"快速比赛\", 82: \"地牢\", 84: \"试炼\", 87: \"失落区域\"};\nconst value = (a, key) => a.values?.[key]?.basic?.value;\nconst display = (a, key) => a.values?.[key]?.basic?.displayValue;\nreturn {\n  bungie_name: acct.bungie_name,\n  activities: shown.map(({c, a}) => {\n    const d = a.activityDetails;\n    const out = {\n      time: a.period, class: c.class,\n      activity: names[d.directorActivityHash]?.name ?? names[d.referenceId]?.name ?? String(d.referenceId),\n      mode: modes[d.mode] ?? `mode ${d.mode}`,\n      completed: value(a, \"completed\") === 1,\n      kills: value(a, \"kills\"), deaths: value(a, \"deaths\"), assists: value(a, \"assists\"),\n      kd: display(a, \"killsDeathsRatio\"), duration: display(a, \"timePlayedSeconds\"),\n      instance_id: d.instanceId\n    };\n    const standing = display(a, \"standing\");\n    if (standing) out.standing = standing;\n    return out;\n  }),\n  errors\n};"
+    }
+  }
+}

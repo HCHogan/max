@@ -10,6 +10,7 @@ import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Data.Time (TimeZone, UTCTime)
 import Max.Browser.Registry (BrowserRegistry)
+import Max.Bungie.Runtime (BungieRuntime)
 import Max.CliProxy (CliProxyConfig)
 import Max.Conversation (Conversations)
 import Max.Embedding.Maintenance (EmbeddingLock)
@@ -39,6 +40,8 @@ data BotEnv = BotEnv
     beOwners :: ![Int64],
     beWebhookBaseUrl :: !(Maybe Text),
     beSearch :: !(Maybe SearchRuntime),
+    -- | Present when a Bungie application is configured (destiny skill).
+    beBungie :: !(Maybe BungieRuntime),
     beCliProxy :: !(Maybe CliProxyConfig),
     beBrowserProxy :: !(Maybe Text),
     -- | Historian profile; the configuration retains its memory-extract key.

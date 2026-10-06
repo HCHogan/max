@@ -42,6 +42,7 @@ requiredCapability = \case
   ClearAll -> Just ("clear", TierGroupAdmin)
   Unclear -> Just ("clear", TierGroupAdmin)
   Kill _ -> Just ("kill", TierGroupAdmin)
+  DestinySet _ -> Just ("destiny", TierGroupAdmin)
   -- everything else: queries, own-scope actions (!memory rm already
   -- ownership-checks inside execute), sandboxed !shell, pins, btw
   _ -> Nothing

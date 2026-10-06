@@ -104,6 +104,14 @@ data Command
     Status
   | -- | '!lingo' — expressions and jargon learned from this conversation
     LingoShow
+  | -- | '!destiny' — feature state here + the sender's Bungie link
+    DestinyStatus
+  | -- | '!destiny on' / 'off' — opt this conversation in or out
+    DestinySet !Bool
+  | -- | '!destiny login' — a private, single-use Bungie login link
+    DestinyLogin
+  | -- | '!destiny logout' — forget the sender's Bungie link
+    DestinyLogout
   | -- | verb + raw args; parser succeeded but verb unknown
     Unknown !Text !RawArgs
   deriving stock (Show, Eq)

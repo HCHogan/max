@@ -24,6 +24,7 @@ import Max.ContextReadSpec qualified as ContextReadSpec
 import Max.ConversationCapabilitiesSpec qualified as ConversationCapabilitiesSpec
 import Max.DB.AgentTurnSpec qualified as AgentTurnSpec
 import Max.DB.BrowserSpec qualified as BrowserSpec
+import Max.DB.BungieSpec qualified as BungieSpec
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.ConnectionSpec qualified as ConnectionSpec
 import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
@@ -90,6 +91,7 @@ main = do
         VideoRenditionSpec.spec pool
         ProgressSpec.spec pool
         BrowserSpec.spec pool
+        BungieSpec.spec pool
         ConnectionSpec.spec pool
         ProjectionSpec.spec pool
         ConversationCursorSpec.spec pool

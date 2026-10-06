@@ -9,7 +9,8 @@ import Max.Effects.ToolControl (runToolControl)
 import Max.Effects.Tools (toolRun)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
 import Max.Skill.ToolRuntime (skillToolsWithRuntime)
-import Max.Skills (Skill (..), lookupSkill, newSkillRegistry, skillsForGroup)
+import Max.Skill.Package (SkillPackage (..))
+import Max.Skills (Skill (..), listAllSkills, lookupSkill, newSkillRegistry, setOptInAvailable, skillsForGroup)
 import Max.Tool.Bundles (SkillLoad (..), toolVisible)
 import Max.Tool.Control (controlSkillLoads)
 import Max.ToolContext
@@ -61,6 +62,18 @@ spec = describe "Max.Skills builtins" $ do
     -- self-knowledge.
     map (.skillName) skills `shouldNotContain` ["self-features"]
     map (.skillName) skills `shouldNotContain` ["self-architecture"]
+
+  it "keeps opt-in skills out of the index until configured and switched on" $ do
+    reg <- newSkillRegistry
+    destiny <- filter ((== "destiny") . (.skillName)) <$> listAllSkills reg
+    case destiny of
+      [skill] -> Map.keys skill.skillPackage.spWorkflows `shouldBe` ["inventory", "move", "recent"]
+      other -> expectationFailure ("destiny builtin failed to parse: " <> show (length other))
+    let visible = fmap (map (.skillName)) (skillsForGroup reg (GroupId 7777))
+    visible >>= (`shouldNotContain` ["destiny"])
+    setOptInAvailable reg ["destiny"]
+    visible >>= (`shouldNotContain` ["destiny"])
+    lookupSkill reg (GroupId 7777) "destiny" >>= (`shouldSatisfy` null)
 
   it "gives builtins negative ids, a one-line description, and a body" $ do
     reg <- newSkillRegistry

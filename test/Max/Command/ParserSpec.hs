@@ -77,6 +77,19 @@ spec = do
     it "keeps a --flag-looking word verbatim too" $
       "!persona --global bot" `parsesTo` PersonaSet "--global bot"
 
+  describe "!destiny" $ do
+    it "bare → status" $ "!destiny" `parsesTo` DestinyStatus
+    it "on/off" $ do
+      "!destiny on" `parsesTo` DestinySet True
+      "!destiny off" `parsesTo` DestinySet False
+    it "login/logout" $ do
+      "!destiny login" `parsesTo` DestinyLogin
+      "!destiny logout" `parsesTo` DestinyLogout
+    it "rejects other verbs" $
+      case parseCommand "!destiny vault" of
+        Right (Just (Unknown "destiny" _)) -> pure ()
+        other -> expectationFailure $ "expected Unknown destiny, got: " <> show other
+
   describe "!proactive" $ do
     it "bare → status" $ "!proactive" `parsesTo` ProactiveStatus
     it "on" $ "!proactive on" `parsesTo` ProactiveSet (Just True)

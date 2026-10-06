@@ -41,6 +41,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.AdminTimeline (loadAdminTimeline, waitAdminTimeline)
 import Max.BuildInfo (gitRev)
+import Max.Bungie.Callback (handleBungieCallback)
 import Max.CliProxy (CliProxyConfig (..), credentialJson, fetchCredentials)
 import Max.Command.Parser (effortLevels)
 import Max.ContextAdmin
@@ -130,6 +131,8 @@ data AdminConfig = AdminConfig
 data Route
   = ROverview
   | RHttpMonitor !Text
+  | -- | Bungie's OAuth redirect; public like the webhooks, checked by state.
+    RBungieCallback
   | -- | Every conversation the ledger knows, for the panel's picker.
     RConversations
   | RGroups
@@ -174,6 +177,7 @@ route :: Method -> [Text] -> Maybe Route
 route m path
   | m == methodGet = case path of
       ["api", "overview"] -> Just ROverview
+      ["oauth", "bungie", "callback"] -> Just RBungieCallback
       ["api", "conversations"] -> Just RConversations
       ["api", "groups"] -> Just RGroups
       ["api", "memories"] -> Just RMemoriesList
@@ -247,6 +251,7 @@ needsAuth :: Route -> Bool
 needsAuth = \case
   RStatic _ -> False
   RHttpMonitor _ -> False -- This route checks its own per-monitor bearer token.
+  RBungieCallback -> False -- A browser redirect; the single-use state is the credential.
   _ -> True
 
 --------------------------------------------------------------------------------
@@ -279,6 +284,10 @@ adminServer cfg env profiles logBuf = localDomain "admin" $ do
           case cfg.acWebhookBaseUrl of
             Nothing -> pure (jsonResponse status404 (object ["error" .= ("not found" :: Text)]))
             Just _ -> run (guarded r (handleHttpMonitor hook req))
+        Just r@RBungieCallback ->
+          case env.beBungie of
+            Nothing -> pure (jsonResponse status404 (object ["error" .= ("not found" :: Text)]))
+            Just bungie -> run (guarded r (handleBungieCallback bungie (queryPairs req)))
         Just r -> do
           body <- strictRequestBody req
           run (guarded r (handle env profiles logBuf r (queryPairs req) body))
@@ -366,6 +375,7 @@ handle ::
   Eff es Response
 handle env profiles logBuf r params body = case r of
   RHttpMonitor _ -> pure notFound
+  RBungieCallback -> pure notFound
   ROverview -> do
     now <- liftIO getCurrentTime
     tasks <- liftIO (listTasks env.beTasks Nothing)

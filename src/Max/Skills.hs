@@ -8,11 +8,17 @@
 -- after the first blank line as body; self-knowledge embeds help and version.
 -- Adding an embedded file also requires a byte change here: embedDir tracks
 -- existing file contents, not directory membership.
+-- Opt-in builtins (destiny) stay out of every index until the operator has
+-- configured their backend and a conversation switches them on.
 module Max.Skills
   ( Skill (..),
     SkillRegistry,
     newSkillRegistry,
     loadSkills,
+    optInSkills,
+    setOptInAvailable,
+    skillEnabledFor,
+    setSkillEnabled,
     skillsForGroup,
     lookupSkill,
     listAllSkills,
@@ -41,6 +47,8 @@ import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -69,6 +77,7 @@ import Max.Skill.Package
     validatePackage,
     validatePackageName,
   )
+import Max.Platform.Types (PrincipalId (..))
 import OneBot.Types (GroupId (..))
 import System.FilePath (dropExtension, takeExtension)
 
@@ -95,8 +104,20 @@ data Skill = Skill
   deriving stock (Show, Eq)
 
 -- | The whole table in one TVar, keyed by id.  Builtins sit under
--- negative keys, DB rows under their (positive) primary keys.
-data SkillRegistry = SkillRegistry (TVar (Map Int64 Skill)) (MVar ())
+-- negative keys, DB rows under their (positive) primary keys.  The
+-- second TVar holds the opt-in state: which opt-in skills this process
+-- can serve, and which conversations switched each one on.
+data SkillRegistry = SkillRegistry (TVar (Map Int64 Skill)) (MVar ()) (TVar OptIn)
+
+data OptIn = OptIn
+  { oiAvailable :: !(Set Text),
+    oiEnabled :: !(Set (Int64, Text))
+  }
+
+-- | Builtins hidden unless the operator configured their backend and the
+-- conversation ran @!<name> on@ (destiny needs a Bungie application).
+optInSkills :: [Text]
+optInSkills = ["destiny"]
 
 -- | Every @skills\/*.md@ in the repo, baked in at compile time.
 builtinSkillFiles :: [(FilePath, ByteString)]
@@ -144,18 +165,41 @@ newSkillRegistry = do
   let parsed =
         [s | file <- builtinSkillFiles, Just s <- [parseBuiltin bootTime osName 0 file]]
       builtins = [s {skillId = sid} | (sid, s) <- zip [-1, -2 ..] parsed]
-  SkillRegistry <$> newTVarIO (Map.fromList [(s.skillId, s) | s <- builtins]) <*> newMVar ()
+  SkillRegistry <$> newTVarIO (Map.fromList [(s.skillId, s) | s <- builtins]) <*> newMVar () <*> newTVarIO (OptIn Set.empty Set.empty)
+
+-- | Declare which opt-in skills this process can serve (set once at boot).
+setOptInAvailable :: SkillRegistry -> [Text] -> IO ()
+setOptInAvailable (SkillRegistry _ _ optIn) names =
+  atomically (modifyTVar' optIn (\o -> o {oiAvailable = Set.fromList (filter (`elem` optInSkills) names)}))
+
+-- | Is this opt-in skill switched on here (regardless of availability)?
+skillEnabledFor :: SkillRegistry -> GroupId -> Text -> IO Bool
+skillEnabledFor (SkillRegistry _ _ optIn) (GroupId gid) name =
+  Set.member (gid, name) . (.oiEnabled) <$> readTVarIO optIn
+
+-- | Switch an opt-in skill on or off for one conversation (write-through).
+setSkillEnabled :: (WithConnection :> es, IOE :> es) => SkillRegistry -> GroupId -> Text -> Maybe PrincipalId -> Bool -> Eff es ()
+setSkillEnabled reg@(SkillRegistry _ _ optIn) (GroupId gid) name actor enabled = withMutation reg $ do
+  _ <-
+    withCommittedTransaction $
+      if enabled
+        then execute "INSERT INTO skill_enables (group_id, name, enabled_by) VALUES (?,?,?) ON CONFLICT DO NOTHING" (gid, name, (.unPrincipalId) <$> actor)
+        else execute "DELETE FROM skill_enables WHERE group_id = ? AND name = ?" (gid, name)
+  liftIO . atomically . modifyTVar' optIn $ \o ->
+    o {oiEnabled = (if enabled then Set.insert else Set.delete) (gid, name) o.oiEnabled}
 
 -- | Boot-time load of every DB row, layered over the builtins seeded
 -- by 'newSkillRegistry'.  Returns the total count for the startup log
 -- line.
 loadSkills :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Eff es Int
-loadSkills reg@(SkillRegistry t _) = withMutation reg $ do
+loadSkills reg@(SkillRegistry t _ optIn) = withMutation reg $ do
   rows <-
     query_
       "SELECT id, name, group_id, description, body, enabled, created_by, updated_at, revision, package, evidence \
       \  FROM skills WHERE name NOT LIKE 'learned-task-%' AND jsonb_typeof(evidence)<>'object' ORDER BY id"
   skills <- traverse skillFromRow rows
+  enables <- query_ "SELECT group_id, name FROM skill_enables"
+  liftIO . atomically $ modifyTVar' optIn (\o -> o {oiEnabled = Set.fromList enables})
   liftIO . atomically $ do
     m <- readTVar t
     let builtins = Map.filterWithKey (\k _ -> k < 0) m
@@ -188,13 +232,18 @@ skillFromRow ((i, n, g, d, b, e) :. (cb, up, revision, raw :: Value, evidence)) 
 -- group-scoped over DB-global over builtin — so a DB row hot-fixes a
 -- builtin, and a group specialises either.
 skillsForGroup :: SkillRegistry -> GroupId -> IO [Skill]
-skillsForGroup (SkillRegistry t _) (GroupId gid) = do
+skillsForGroup (SkillRegistry t _ optIn) (GroupId gid) = do
   m <- readTVarIO t
-  let visible =
+  opted <- readTVarIO optIn
+  let switchedOn name =
+        name `notElem` optInSkills
+          || (Set.member name opted.oiAvailable && Set.member (gid, name) opted.oiEnabled)
+      visible =
         [ s
         | s <- Map.elems m,
           s.skillEnabled,
-          maybe True (== gid) s.skillGroup
+          maybe True (== gid) s.skillGroup,
+          switchedOn s.skillName
         ]
       rank s
         | isJust s.skillGroup = 2 :: Int
@@ -213,7 +262,7 @@ lookupSkill reg gid name = do
 
 -- | Every row, enabled or not — the admin surface.
 listAllSkills :: SkillRegistry -> IO [Skill]
-listAllSkills (SkillRegistry t _) = Map.elems <$> readTVarIO t
+listAllSkills (SkillRegistry t _ _) = Map.elems <$> readTVarIO t
 
 --------------------------------------------------------------------------------
 -- Mutations (write-through: Postgres first, cache second).
@@ -244,7 +293,7 @@ createSkill ::
   SkillRegistry ->
   NewSkill ->
   Eff es (Either Text Skill)
-createSkill reg@(SkillRegistry t _) ns = withMutation reg $
+createSkill reg@(SkillRegistry t _ _) ns = withMutation reg $
   case validateSkill ns.nsName ns.nsDescription ns.nsBody >> validateNamedPackage ns.nsName ns.nsPackage of
     Left err -> pure (Left err)
     Right () -> do
@@ -265,7 +314,7 @@ updateSkill :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Int64 -> (S
 updateSkill registry sid = updateSkillAtRevision registry sid Nothing
 
 updateSkillAtRevision :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Int64 -> Maybe Integer -> (Skill -> Skill) -> Eff es (Either Text Skill)
-updateSkillAtRevision reg@(SkillRegistry t _) sid expected edit
+updateSkillAtRevision reg@(SkillRegistry t _ _) sid expected edit
   | sid < 0 = pure (Left "内置技能不可修改；创建独立名称的工作流包")
   | otherwise = withMutation reg $ do
       current <- Map.lookup sid <$> liftIO (readTVarIO t)
@@ -307,11 +356,11 @@ publish t = \case
 -- Serialize DB commits and cache publication; cancellation cannot land in the
 -- commit-to-cache gap. SQL still uses CAS across independent registry instances.
 withMutation :: (IOE :> es) => SkillRegistry -> Eff es a -> Eff es a
-withMutation (SkillRegistry _ gate) action =
+withMutation (SkillRegistry _ gate _) action =
   bracket_ (liftIO (takeMVar gate)) (liftIO (putMVar gate ())) (mask_ action)
 
 deleteSkill :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Int64 -> Eff es Bool
-deleteSkill reg@(SkillRegistry t _) sid
+deleteSkill reg@(SkillRegistry t _ _) sid
   | sid < 0 = pure False
   | otherwise = withMutation reg $ do
       n <- withCommittedTransaction (execute "DELETE FROM skills WHERE id = ?" (Only sid))
