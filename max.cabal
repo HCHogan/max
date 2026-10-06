@@ -137,8 +137,12 @@ common lang
         OverloadedStrings
         StrictData
 
+common linker
+    if os(linux)
+        ghc-options: -optl-fuse-ld=mold
+
 library
-    import:           warnings, lang
+    import:           warnings, lang, linker
     hs-source-dirs:   src
     c-sources:       cbits/max_wasm.c
     include-dirs:    cbits
@@ -537,7 +541,7 @@ library
         , websockets          >= 0.13 && < 0.14
 
 executable max
-    import:           warnings, lang
+    import:           warnings, lang, linker
     if !flag(runtime-tools)
         buildable: False
     hs-source-dirs:   app
@@ -556,7 +560,7 @@ executable max
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
 
 executable max-runtime
-    import:           warnings, lang
+    import:           warnings, lang, linker
     if !flag(runtime-tools)
         buildable: False
     hs-source-dirs:   runtime-cli
@@ -570,7 +574,7 @@ executable max-runtime
 -- Deterministic renderer for docs/prompt-flow.md.  It exercises the pure
 -- seams between the Prompt, Agent and LLM effects; no DB or network needed.
 executable max-prompt-flow
-    import:           warnings, lang
+    import:           warnings, lang, linker
     if !flag(developer-tools)
         buildable: False
     hs-source-dirs:   prompt-flow
@@ -591,7 +595,7 @@ executable max-prompt-flow
 -- It is intentionally a separate executable: the serving binary must never
 -- start against a half-migrated or projection-inconsistent database.
 executable max-adr003-maintenance
-    import:           warnings, lang
+    import:           warnings, lang, linker
     if !flag(runtime-tools)
         buildable: False
     hs-source-dirs:   maintenance
@@ -612,7 +616,7 @@ executable max-adr003-maintenance
 -- profile; see eval/README.md for the journalctl → fixture → replay
 -- workflow.
 executable max-intent-eval
-    import:           warnings, lang
+    import:           warnings, lang, linker
     if !flag(developer-tools)
         buildable: False
     hs-source-dirs:   eval
@@ -631,7 +635,7 @@ executable max-intent-eval
 -- Offline release gate for Historian quality/cost and the deliberately
 -- disabled direct-turn auto-recall policy.
 executable max-context-eval
-    import:           warnings, lang
+    import:           warnings, lang, linker
     if !flag(developer-tools)
         buildable: False
     hs-source-dirs:   context-eval
@@ -649,7 +653,7 @@ executable max-context-eval
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
 
 executable max-contract-eval
-    import:           warnings, lang
+    import:           warnings, lang, linker
     if !flag(developer-tools)
         buildable: False
     hs-source-dirs:   contract-eval
@@ -671,7 +675,7 @@ executable max-contract-eval
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
 
 executable max-workflow-eval
-    import:           warnings, lang
+    import:           warnings, lang, linker
     if !flag(developer-tools)
         buildable: False
     hs-source-dirs:   workflow-eval
@@ -694,7 +698,7 @@ executable max-workflow-eval
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
 
 test-suite max-test
-    import:             warnings, lang
+    import:             warnings, lang, linker
     type:               exitcode-stdio-1.0
     hs-source-dirs:     test, prompt-flow, test-support
     main-is:            Spec.hs
@@ -836,7 +840,7 @@ test-suite max-test
 -- MAX_TEST_DB_URL is unset.  See test-db/README.md for setup, or just
 -- run `devenv up` and `export MAX_TEST_DB_URL=postgresql://.../max_test`.
 test-suite max-test-db
-    import:             warnings, lang
+    import:             warnings, lang, linker
     type:               exitcode-stdio-1.0
     hs-source-dirs:     test-db, test-support
     main-is:            Main.hs

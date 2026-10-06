@@ -70,6 +70,7 @@
                 (hself.callCabal2nix "max" (cleanSrc pkgs) { wasmtime = pkgs.wasmtime; }).overrideAttrs (old: {
                   MAX_GIT_REV = self.shortRev or self.dirtyShortRev or "unknown";
                   MAX_CODEMODE_JS_WASM = "${import ./nix/codemode-js.nix { inherit pkgs; }}/quickjs.wasm";
+                  nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ pkgs.lib.optional pkgs.stdenv.isLinux pkgs.mold;
                   postInstall =
                     (old.postInstall or "")
                     + ''
@@ -140,6 +141,11 @@
             ls -1 ${self.packages.${system}.max-tools}/bin | sort > tools.actual
             printf '%s\n' max-context-eval max-contract-eval max-intent-eval max-prompt-flow max-workflow-eval | sort > tools.expected
             diff -u tools.expected tools.actual
+            ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+              for exe in ${self.packages.${system}.max}/bin/* ${self.packages.${system}.max-tools}/bin/*; do
+                ${pkgs.binutils}/bin/readelf -p .comment "$exe" | grep -q 'mold '
+              done
+            ''}
             touch $out
           '';
         }

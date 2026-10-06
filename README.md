@@ -113,6 +113,10 @@ evaluation executables in `result-tools/bin`. Each package builds only its own
 executable group. Local Cabal builds include both groups by default, including
 `cabal run max-prompt-flow` before every commit.
 
+Linux builds use mold for linking; both the development shell and the Nix
+packages provide it. To verify a Linux binary, run
+`readelf -p .comment <binary>` and look for `mold`.
+
 The NixOS module provisions native NapCat, browser services and command
 sandboxes under `max-stack.target`. Enable `services.max.napcat.enable` for QQ,
 then open <http://localhost:6099> on that host to log in. OneBot uses loopback

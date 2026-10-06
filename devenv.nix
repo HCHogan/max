@@ -20,29 +20,31 @@
     };
   };
 
-  packages = with pkgs; [
-    wasmtime # embedded C API: headers and library
-    hpack
-    ormolu
-    hlint
-    python3 # architecture import and capability checks
+  packages = with pkgs;
+    [
+      wasmtime # embedded C API: headers and library
+      hpack
+      ormolu
+      hlint
+      python3 # architecture import and capability checks
 
-    # tooling for protocol debugging
-    websocat
-    jq
+      # tooling for protocol debugging
+      websocat
+      jq
 
-    # postgres client
-    postgresql_17
+      # postgres client
+      postgresql_17
 
-    # table replies render through the typst CLI
-    typst
+      # table replies render through the typst CLI
+      typst
 
-    # fenced code blocks render through the codesnap CLI
-    codesnap
+      # fenced code blocks render through the codesnap CLI
+      codesnap
 
-    # sticker captioning extracts a GIF frame via ffmpeg
-    ffmpeg
-  ];
+      # sticker captioning extracts a GIF frame via ffmpeg
+      ffmpeg
+    ]
+    ++ lib.optional pkgs.stdenv.isLinux pkgs.mold;
 
   services.postgres = {
     enable = true;
@@ -59,7 +61,7 @@
   };
 
   env = {
-    MAX_CODEMODE_JS_WASM = "${import ./nix/codemode-js.nix { inherit pkgs; }}/quickjs.wasm";
+    MAX_CODEMODE_JS_WASM = "${import ./nix/codemode-js.nix {inherit pkgs;}}/quickjs.wasm";
     # Static CJK face for typst table rendering (matches nix/module.nix).
     TYPST_FONT_PATHS = "${pkgs.source-han-sans}/share/fonts";
     # Appearance and the ocean theme, same as nix/module.nix — without this a
