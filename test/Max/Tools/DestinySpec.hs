@@ -90,7 +90,7 @@ spec = describe "Max.Tools.Destiny" $ do
     fake =
       runDestiny
         (pure (object ["linked" .= False]))
-        ( \path _ _ ->
+        ( \path _ _ _ ->
             pure . Right $
               if path == "big" then object ["blob" .= T.replicate 2000 "x"] else object ["read" .= path]
         )

@@ -15,6 +15,8 @@ import Data.Maybe (isJust, mapMaybe)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Effectful
 import Effectful.Log (Log, logInfo)
 import Effectful.PostgreSQL (WithConnection)
@@ -57,9 +59,15 @@ destinyToolsWithRuntime runtime context =
             ]
               <> either (\e -> ["characters" .= ([] :: [Value]), "characters_error" .= e]) (\cs -> ["characters" .= cs]) characters
 
-    readCall path query body = case readTarget (isJust body) path query of
+    readCall path query body fresh = case readTarget (isJust body) path query of
       Left err -> pure (Left err)
-      Right target -> do
+      Right target0 -> do
+        -- Bungie caches responses by URL for minutes; a unique parameter
+        -- reads the current state.
+        target <-
+          if fresh
+            then (\now -> target0 {atQuery = target0.atQuery <> [("fresh", T.pack (show (floor (utcTimeToPOSIXSeconds now * 1000) :: Integer)))]}) <$> liftIO getCurrentTime
+            else pure target0
         -- An unlinked or broken link still reads public data anonymously.
         token <- either (const Nothing) (fmap fst) <$> accessTokenFor runtime principal
         result <- withRetries token $ \bearer -> callBungie runtime.brHttp runtime.brConfig responseLimit bearer target body

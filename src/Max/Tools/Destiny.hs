@@ -62,20 +62,22 @@ readTool =
           [ ("path", stringParam "Platform 之后的路径，如 /Destiny2/3/Profile/4611686018400000000/"),
             ("query", withKeys ["description" .= ("查询参数对象；数组会写成逗号分隔" :: Text)] (paramOfType "object")),
             ("body", withKeys ["description" .= ("只用于 SearchDestinyPlayerByBungieName 和 User/Search/GlobalName" :: Text)] (paramOfType "object")),
-            ("max_chars", boundedIntegerParam 1000 readBudget 60000)
+            ("max_chars", boundedIntegerParam 1000 readBudget 60000),
+            ("fresh", withKeys ["description" .= ("true 时绕过 Bungie 按 URL 的几分钟缓存，拿当前状态；写操作前定位、写完核对时用" :: Text)] (paramOfType "boolean"))
           ]
           ["path"],
       toolRunner = OutcomeRunner $ \raw -> case parseEither readArgs raw of
         Left err -> pure (rejected err)
-        Right (path, query, body, limit) -> readResult . fmap (bounded limit) <$> destinyRead path query body
+        Right (path, query, body, limit, fresh) -> readResult . fmap (bounded limit) <$> destinyRead path query body fresh
     }
   where
     readArgs = withObject "arguments" $ \o ->
-      (,,,)
+      (,,,,)
         <$> o .: "path"
         <*> o .:? "query" .!= Null
         <*> o .:? "body"
         <*> (clamp (1000, readBudget) <$> o .:? "max_chars" .!= 60000)
+        <*> o .:? "fresh" .!= False
 
 -- | Below the 4 MiB code-mode result limit, so run_code receives it whole.
 readBudget :: Int
