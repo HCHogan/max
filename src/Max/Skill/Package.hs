@@ -97,7 +97,7 @@ validatePackage p = do
   when (containsNul (toJSON p)) (Left "skill package cannot contain NUL")
   when (length p.spDependencies > 16 || length (nub p.spDependencies) /= length p.spDependencies) (Left "dependencies must be unique, at most 16")
   traverse_ validatePackageName p.spDependencies
-  when (Map.size p.spWorkflows > 8) (Left "skill package has more than 8 workflows")
+  when (Map.size p.spWorkflows > 16) (Left "skill package has more than 16 workflows")
   traverse_ validateWorkflow (Map.toList p.spWorkflows)
   where
     validateWorkflow (name, w) = do

@@ -33,6 +33,10 @@ import Test.Hspec hiding (context)
 
 spec :: Spec
 spec = describe "saved skill workflows" $ do
+  it "bounds a package at sixteen workflows" $ do
+    let package n = SkillPackage [] (Map.fromList [(T.pack ("w" <> show i), baseWorkflow) | i <- [1 .. n :: Int]])
+    validatePackage (package 16) `shouldBe` Right ()
+    validatePackage (package 17) `shouldBe` Left "skill package has more than 16 workflows"
   it "treats retired publication certificates as untrusted" $
     fromJSON @SkillEvidence (object ["certificate" .= object []]) `shouldBe` Success UnvalidatedSkill
 

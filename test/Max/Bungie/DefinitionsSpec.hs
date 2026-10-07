@@ -51,5 +51,17 @@ spec = describe "Max.Bungie.Definitions" $ do
   it "merges duplicate plug set entries" $
     projectDefinition "DestinyPlugSetDefinition" (object ["reusablePlugItems" .= [object ["plugItemHash" .= (5 :: Int), "currentlyCanRoll" .= False], object ["plugItemHash" .= (5 :: Int), "currentlyCanRoll" .= True], object ["plugItemHash" .= (6 :: Int)]]])
       `shouldBe` Just ("", object ["plugs" .= [[toJSON (5 :: Int), Bool True], [toJSON (6 :: Int), Bool False]]])
+  it "keeps the presentation tree and record types for progress walks" $ do
+    let node =
+          object
+            [ "displayProperties" .= object ["name" .= ("自动步枪" :: String)],
+              "children" .= object ["presentationNodes" .= ([] :: [Value]), "records" .= [object ["recordHash" .= (3863516258 :: Int)]], "craftables" .= [object ["craftableItemHash" .= (2768185586 :: Int)]]]
+            ]
+    fmap snd (projectDefinition "DestinyPresentationNodeDefinition" node)
+      `shouldBe` Just (object ["name" .= ("自动步枪" :: String), "children" .= object ["records" .= [3863516258 :: Int], "craftables" .= [2768185586 :: Int]]])
+    fmap snd (projectDefinition "DestinyRecordDefinition" (object ["displayProperties" .= object ["name" .= ("实现" :: String)], "recordTypeName" .= ("武器模式" :: String), "objectiveHashes" .= [3199458935 :: Int], "scope" .= (0 :: Int)]))
+      `shouldBe` Just (object ["name" .= ("实现" :: String), "recordType" .= ("武器模式" :: String), "objectiveHashes" .= [3199458935 :: Int], "scope" .= (0 :: Int)])
+    resolveKind "modifier" `shouldBe` Right "DestinyActivityModifierDefinition"
+
   it "reads English names for search without projecting" $
     englishName "DestinyObjectiveDefinition" (object ["progressDescription" .= ("Kills" :: String)]) `shouldBe` Just "Kills"

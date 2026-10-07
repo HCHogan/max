@@ -67,7 +67,7 @@ spec = describe "Max.Skills builtins" $ do
     reg <- newSkillRegistry
     destiny <- filter ((== "destiny") . (.skillName)) <$> listAllSkills reg
     case destiny of
-      [skill] -> Map.keys skill.skillPackage.spWorkflows `shouldBe` ["career", "inventory", "loadout", "move", "pgcr", "recent"]
+      [skill] -> Map.keys skill.skillPackage.spWorkflows `shouldBe` ["career", "inventory", "loadout", "move", "patterns", "pgcr", "raids", "recent", "weapon", "weekly"]
       other -> expectationFailure ("destiny builtin failed to parse: " <> show (length other))
     let visible = fmap (map (.skillName)) (skillsForGroup reg (GroupId 7777))
     visible >>= (`shouldNotContain` ["destiny"])

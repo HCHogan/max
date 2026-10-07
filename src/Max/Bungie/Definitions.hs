@@ -3,6 +3,7 @@
 -- alone is ~200 MB) into the fields a chat answer needs.
 module Max.Bungie.Definitions
   ( syncedKinds,
+    projectionRevision,
     resolveKind,
     kindAliases,
     projectDefinition,
@@ -55,11 +56,17 @@ kindAliases =
     ("node", "DestinyPresentationNodeDefinition"),
     ("progression", "DestinyProgressionDefinition"),
     ("set", "DestinyEquipableItemSetDefinition"),
-    ("loadoutname", "DestinyLoadoutNameDefinition")
+    ("loadoutname", "DestinyLoadoutNameDefinition"),
+    ("modifier", "DestinyActivityModifierDefinition")
   ]
 
 syncedKinds :: [Text]
 syncedKinds = map snd kindAliases
+
+-- | Bump whenever a projection keeps different fields: stored tables carry
+-- the manifest version plus this revision, so every kind re-syncs once.
+projectionRevision :: Text
+projectionRevision = "2"
 
 -- | Accept an alias or a full table name.
 resolveKind :: Text -> Either Text Text
@@ -100,6 +107,20 @@ projectDefinition kind value
       "DestinyObjectiveDefinition" ->
         let name = fromMaybe "" (textAt ["progressDescription"] value)
          in Just (name, compact [("name", text name), ("completionValue", at ["completionValue"] value)])
+      "DestinyPresentationNodeDefinition" -> do
+        (name, Object base) <- named (fromMaybe [] (lookup kind extraFields)) value
+        let children key field = [h | Just (Array entries) <- [at ["children", key] value], entry <- toList entries, Just h <- [at [field] entry]]
+            tree =
+              compact
+                [ ("nodes", list (children "presentationNodes" "presentationNodeHash")),
+                  ("records", list (children "records" "recordHash")),
+                  ("collectibles", list (children "collectibles" "collectibleHash")),
+                  ("craftables", list (children "craftables" "craftableItemHash"))
+                ]
+            list hashes = if null hashes then Nothing else Just (toJSON hashes)
+        pure (name, case tree of
+          Object children' | not (KeyMap.null children') -> Object (KeyMap.insert "children" tree base)
+          _ -> Object base)
       "DestinyLoadoutNameDefinition" -> do
         name <- nonEmpty =<< textAt ["name"] value
         pure (name, compact [("name", text name)])
@@ -117,7 +138,7 @@ extraFields =
     ("DestinyMilestoneDefinition", [("milestoneType", ["milestoneType"])]),
     ("DestinySeasonDefinition", [("seasonNumber", ["seasonNumber"])]),
     ("DestinyCollectibleDefinition", [("source", ["sourceString"]), ("itemHash", ["itemHash"])]),
-    ("DestinyRecordDefinition", [("title", ["titleInfo", "titlesByGender", "Male"]), ("objectiveHashes", ["objectiveHashes"])]),
+    ("DestinyRecordDefinition", [("title", ["titleInfo", "titlesByGender", "Male"]), ("objectiveHashes", ["objectiveHashes"]), ("recordType", ["recordTypeName"]), ("scope", ["scope"])]),
     ("DestinyPresentationNodeDefinition", [("objectiveHash", ["objectiveHash"]), ("completionRecordHash", ["completionRecordHash"])]),
     ("DestinyItemCategoryDefinition", [("shortTitle", ["shortTitle"])]),
     ("DestinyEquipableItemSetDefinition", [("setPerks", ["setPerks"])])
@@ -168,9 +189,9 @@ projectItem value = do
 itemStats :: Value -> Maybe Value
 itemStats value = do
   Object stats <- at ["stats", "stats"] value
-  let pairs = [(key, Number n) | (key, entry) <- KeyMap.toList stats, Just (Number n) <- [at ["value"] entry], n /= 0]
-  guard (not (null pairs))
-  pure (Object (KeyMap.fromList pairs))
+  let entries = [(key, Number n) | (key, entry) <- KeyMap.toList stats, Just (Number n) <- [at ["value"] entry], n /= 0]
+  guard (not (null entries))
+  pure (Object (KeyMap.fromList entries))
 
 -- [[statHash, value]] for plugs that change stats (mods, masterworks, perks).
 investmentStats :: Value -> Maybe Value

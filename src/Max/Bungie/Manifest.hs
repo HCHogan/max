@@ -67,10 +67,11 @@ syncManifest runtime =
     Right index -> case (stringAt ["version"] index, pathsFor "zh-chs" index, pathsFor "en" index) of
       (Just version, Just localized, Just english) -> do
         current <- Map.fromList <$> query_ "SELECT kind, version FROM destiny_manifest_kinds"
-        let stale = [kind | kind <- syncedKinds, Map.lookup kind current /= Just version]
+        let stamped = version <> "#" <> projectionRevision
+            stale = [kind | kind <- syncedKinds, Map.lookup kind current /= Just stamped]
         unless (null stale) $ logInfo "destiny manifest: syncing" (object ["version" .= version, "kinds" .= length stale])
         forM_ stale $ \kind -> case (KeyMap.lookup (Key.fromText kind) localized, KeyMap.lookup (Key.fromText kind) english) of
-          (Just (String zhPath), Just (String enPath)) -> syncKind runtime version kind zhPath enPath
+          (Just (String zhPath), Just (String enPath)) -> syncKind runtime stamped kind zhPath enPath
           _ -> logAttention "destiny manifest: table missing from index" (object ["kind" .= kind])
       _ -> logAttention "destiny manifest: unexpected index shape" (object [])
   where

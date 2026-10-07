@@ -27,6 +27,16 @@
 - `destiny/pgcr` `{instance_id, max_players?}`：一场的结算：全队击杀/死亡/助攻、KD、常用武器（已翻译）、
   技能击杀、队伍比分，`me: true` 是发起人。问"那场打得怎样""谁 carry"直接用它，不要自己摸 PGCR 结构。
 
+- `destiny/weekly` `{}`：周报，不需要登录。每个突袭的挑战和修改器，`weekly_challenge: true` 是本周有周常挑战的
+  （本周重点）；`xur.present` 老九在不在、卖什么、`leaves` 何时走。"周报""本周打什么""老九卖啥"用它。
+- `destiny/raids` `{}`：突袭/地牢通关数（`master` 是其中大师次数）、各职业分项、最快用时；`this_week` 本周各角色
+  打到第几关（只列打过的），`this_week_untouched` 本周还没碰的突袭。
+- `destiny/patterns` `{kind?: patterns|catalysts, query?}`：红框（武器模式）或异域催化进度，按武器类型分组：
+  `in_progress` 带进度，`not_started`，催化另有 `not_obtained`（还没拿到催化）。"我还差哪些红框"用它。
+- `destiny/weapon` `{name, perk?, limit?}`：按名字查武器的 perk 池（每列能随机出的 perk，强化版已合并）、框架、
+  来源、能否锻造，不需要登录。给 perk 时 `perk_columns` 标出在哪几列，`perks` 附说明。名字其实是 perk 时
+  返回 `found: false` 和候选（类型是"特性"）；查"我仓库里哪些枪有某 perk"用 destiny/inventory。
+
 工作流也能在 run_code 里当函数用：`await max.workflow("destiny/pgcr", {instance_id})`，可以循环、组合。
 工作流覆盖不到的，再用 run_code 自己组合 `destiny_read` / `destiny_lookup` / `destiny_write`。
 **写读取代码前先 `destiny_shape({path, components})` 查返回结构**（官方 OpenAPI，按组件裁剪，

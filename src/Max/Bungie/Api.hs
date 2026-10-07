@@ -90,7 +90,9 @@ readPatterns =
     [Lit "GroupV2", Num],
     [Lit "GroupV2", Num, Lit "Members"],
     lits ["Content", "Rss", "NewsArticles"] <> [Num],
-    lits ["GlobalAlerts"]
+    lits ["GlobalAlerts"],
+    -- Root node hashes for records, catalysts and patterns; the season.
+    lits ["Settings"]
   ]
 
 -- | Player searches are reads that Bungie only accepts as POST.

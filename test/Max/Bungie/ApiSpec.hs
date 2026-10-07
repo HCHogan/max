@@ -14,6 +14,8 @@ spec = describe "Max.Bungie" $ do
       target.atSegments `shouldBe` ["Destiny2", "3", "Profile", "4611686018400000000"]
       targetUrl target `shouldBe` "https://www.bungie.net/Platform/Destiny2/3/Profile/4611686018400000000/?components=100%2C200"
       fmap (.atSegments) (readTarget False "destiny2/-1/profile/1/character/2/" Null) `shouldBe` Right ["destiny2", "-1", "profile", "1", "character", "2"]
+    it "reads the common settings that name the record and pattern roots" $
+      fmap (.atSegments) (readTarget False "/Settings/" Null) `shouldBe` Right ["Settings"]
     it "sends post-game carnage reports to the stats host" $
       fmap (.atHost) (readTarget False "/Destiny2/Stats/PostGameCarnageReport/123/" Null) `shouldBe` Right StatsHost
     it "percent-encodes free-text segments" $

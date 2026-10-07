@@ -219,6 +219,113 @@
         "destiny_read"
       ],
       "source": "const acct = await tools.destiny_account({});\nif (!acct.linked) return {linked: false, login: acct.login};\nconst mt = acct.membership_type, mid = acct.membership_id;\nconst r = await tools.destiny_read({path: `/Destiny2/${mt}/Account/${mid}/Stats/`, max_chars: 3500000});\nif (r.too_large) throw new Error(\"生涯统计响应超过上限\");\nconst weaponNames = {AutoRifle: \"自动步枪\", BeamRifle: \"追踪步枪\", Bow: \"战斗弓\", Glaive: \"偃月\", FusionRifle: \"融合步枪\", HandCannon: \"手炮\", TraceRifle: \"追踪步枪\", MachineGun: \"机枪\", PulseRifle: \"脉冲步枪\", RocketLauncher: \"火箭发射器\", ScoutRifle: \"斥候步枪\", Shotgun: \"霰弹枪\", Sniper: \"狙击步枪\", Submachinegun: \"微型冲锋枪\", Relic: \"遗物\", SideArm: \"手枪\", Sword: \"剑\", GrenadeLauncher: \"榴弹发射器\", Ability: \"技能\", Grenade: \"手雷\", Super: \"超能\", Melee: \"近战\"};\nconst shown = (bucket, keys) => Object.fromEntries(keys.filter(k => bucket?.[k]).map(k => [k, bucket[k].basic.displayValue]));\nconst topWeapons = bucket => Object.entries(bucket ?? {})\n  .filter(([k, v]) => k.startsWith(\"weaponKills\") && v.basic?.value > 0)\n  .sort((a, b) => b[1].basic.value - a[1].basic.value).slice(0, 6)\n  .map(([k, v]) => ({type: weaponNames[k.slice(11)] ?? k.slice(11), kills: v.basic.value}));\nconst summary = (results, perCharacter) => {\n  const pve = results?.allPvE?.allTime, pvp = results?.allPvP?.allTime;\n  const out = {};\n  if (pve) {\n    out.pve = shown(pve, perCharacter ? [\"activitiesCleared\", \"kills\", \"deaths\", \"killsDeathsRatio\", \"secondsPlayed\"] : [\"activitiesCleared\", \"activitiesEntered\", \"kills\", \"deaths\", \"assists\", \"killsDeathsRatio\", \"efficiency\", \"precisionKills\", \"secondsPlayed\", \"bestSingleGameKills\", \"longestKillSpree\", \"publicEventsCompleted\", \"heroicPublicEventsCompleted\", \"resurrectionsPerformed\", \"orbsDropped\", \"suicides\"]);\n    if (!perCharacter) out.pve_top_weapons = topWeapons(pve);\n  }\n  if (pvp) {\n    out.pvp = shown(pvp, perCharacter ? [\"activitiesEntered\", \"activitiesWon\", \"killsDeathsRatio\", \"secondsPlayed\"] : [\"activitiesEntered\", \"activitiesWon\", \"kills\", \"deaths\", \"assists\", \"killsDeathsRatio\", \"killsDeathsAssists\", \"efficiency\", \"combatRating\", \"winLossRatio\", \"precisionKills\", \"secondsPlayed\", \"bestSingleGameKills\", \"longestKillSpree\"]);\n    const entered = pvp.activitiesEntered?.basic?.value, won = pvp.activitiesWon?.basic?.value;\n    if (entered) out.pvp.win_rate = `${Math.round(100 * (won ?? 0) / entered)}%`;\n    if (!perCharacter) out.pvp_top_weapons = topWeapons(pvp);\n  }\n  return out;\n};\nconst classOf = Object.fromEntries(acct.characters.map(c => [c.character_id, c.class]));\nreturn {\n  bungie_name: acct.bungie_name,\n  ...summary(r.mergedAllCharacters?.results, false),\n  characters: (r.characters ?? []).filter(c => !c.deleted).map(c => ({character_id: c.characterId, class: classOf[c.characterId] ?? \"未知\", ...summary(c.results, true)}))\n};"
+    },
+    "weekly": {
+      "description": "本周周报（不需要登录）：每个突袭的挑战和修改器、哪些有周常挑战（本周重点）、重置时间；老九在不在、卖什么（异域护甲/武器、职业、价格）、何时离开。",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "tools": [
+        "destiny_read",
+        "destiny_lookup"
+      ],
+      "source": "const lookup = async (kind, hashes) => {\n  const u = [...new Set(hashes.filter(Boolean))], out = {};\n  for (let i = 0; i < u.length; i += 500) Object.assign(out, (await tools.destiny_lookup({kind, hashes: u.slice(i, i + 500)})).definitions);\n  return out;\n};\nconst [milestones, vendors] = await Promise.all([\n  tools.destiny_read({path: \"/Destiny2/Milestones/\", max_chars: 3500000}),\n  max.raw(\"destiny_read\", {path: \"/Destiny2/Vendors/\", query: {components: [400, 402]}, max_chars: 3500000})\n]);\nconst weekly = Object.values(milestones).filter(m => m.activities?.length);\nconst [ms, acts, mods] = await Promise.all([\n  lookup(\"milestone\", weekly.map(m => m.milestoneHash)),\n  lookup(\"activity\", weekly.flatMap(m => m.activities.map(a => a.activityHash))),\n  lookup(\"modifier\", weekly.flatMap(m => m.activities.flatMap(a => a.modifierHashes ?? [])))\n]);\nconst types = await lookup(\"activitytype\", Object.values(acts).map(a => a.activityTypeHash));\nconst kindOf = a => {\n  const type = types[a?.activityTypeHash]?.name;\n  if (type === \"突袭\" || a?.modeTypes?.includes(4)) return \"突袭\";\n  if (type === \"地牢\" || a?.modeTypes?.includes(82)) return \"地牢\";\n  return type ?? \"其他\";\n};\n// Exotic drop bonuses are per player ({var:…} in the text); challenges are\n// modifiers whose text names a challenge; the rest (shields, champions) apply.\nconst rows = weekly.map(m => {\n  const versions = m.activities.map(a => acts[a.activityHash]?.name?.split(/[:：]/)[1]?.trim()).filter(Boolean);\n  const challenges = new Set(), modifiers = new Set();\n  for (const h of m.activities.flatMap(a => a.modifierHashes ?? [])) {\n    const d = mods[h];\n    if (!d?.name || (d.description ?? \"\").includes(\"{var:\")) continue;\n    (/挑战/.test(d.description ?? \"\") || /挑战/.test(d.name) ? challenges : modifiers).add(d.name);\n  }\n  const first = acts[m.activities[0].activityHash];\n  const row = {kind: kindOf(first), name: ms[m.milestoneHash]?.name ?? first?.name?.split(/[:：]/)[0] ?? String(m.milestoneHash)};\n  // A weekly challenge objective marks the featured (pinnacle) raids this week.\n  if (m.activities.some(a => a.challengeObjectiveHashes?.length)) row.weekly_challenge = true;\n  if (versions.length) row.versions = [...new Set(versions)];\n  if (challenges.size) row.challenges = [...challenges];\n  if (modifiers.size) row.modifiers = [...modifiers];\n  return row;\n});\nrows.sort((a, b) => (b.weekly_challenge ? 1 : 0) - (a.weekly_challenge ? 1 : 0) || a.kind.localeCompare(b.kind));\nconst xurHash = 2190858386;\nlet xur = {present: false};\nif (vendors.outcome === \"succeeded\" && vendors.value.vendors?.data?.[xurHash]) {\n  const sales = Object.values(vendors.value.sales?.data?.[xurHash]?.saleItems ?? {});\n  const names = await lookup(\"item\", sales.flatMap(s => [s.itemHash, ...(s.costs ?? []).map(c => c.itemHash)]));\n  const classes = {0: \"泰坦\", 1: \"猎人\", 2: \"术士\"};\n  xur = {\n    present: true,\n    leaves: vendors.value.vendors.data[xurHash].nextRefreshDate,\n    items: [...new Map(sales.filter(s => names[s.itemHash]?.name && names[s.itemHash]?.type).map(s => {\n      const d = names[s.itemHash];\n      const item = {name: d.name, type: d.type, tier: d.tier};\n      if (classes[d.classType]) item.class = classes[d.classType];\n      const cost = (s.costs ?? []).filter(c => c.quantity).map(c => `${names[c.itemHash]?.name ?? c.itemHash}×${c.quantity}`).join(\"、\");\n      if (cost) item.cost = cost;\n      return [JSON.stringify(item), item];\n    })).values()]\n  };\n} else if (vendors.outcome !== \"succeeded\") xur = {present: null, error: vendors.error?.message ?? vendors.outcome};\nconst ends = weekly.map(m => m.endDate).find(Boolean) ?? null;\nreturn {resets: ends, activities: rows, xur};"
+    },
+    "raids": {
+      "description": "发起人的突袭/地牢通关：每个突袭和地牢的总通关数（含大师）、各职业分项、最快用时；本周各角色每个突袭打到第几关。",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "tools": [
+        "destiny_account",
+        "destiny_read",
+        "destiny_lookup"
+      ],
+      "source": "const acct = await tools.destiny_account({});\nif (!acct.linked) return {linked: false, login: acct.login};\nconst mt = acct.membership_type, mid = acct.membership_id;\nconst lookup = async (kind, hashes) => {\n  const u = [...new Set(hashes.filter(Boolean))], out = {};\n  for (let i = 0; i < u.length; i += 500) Object.assign(out, (await tools.destiny_lookup({kind, hashes: u.slice(i, i + 500)})).definitions);\n  return out;\n};\nconst [aggregates, progress] = await Promise.all([\n  Promise.all(acct.characters.map(c => max.raw(\"destiny_read\", {path: `/Destiny2/${mt}/Account/${mid}/Character/${c.character_id}/Stats/AggregateActivityStats/`, max_chars: 3500000}))),\n  max.raw(\"destiny_read\", {path: `/Destiny2/${mt}/Profile/${mid}/`, query: {components: [202]}, max_chars: 3500000, fresh: true})\n]);\nconst rows = [];\naggregates.forEach((r, i) => {\n  if (r.outcome === \"succeeded\") for (const a of r.value.activities ?? []) rows.push({c: acct.characters[i], a});\n});\nconst perCharacter = progress.outcome === \"succeeded\" ? progress.value.characterProgressions?.data ?? {} : {};\nconst milestones = Object.entries(perCharacter).flatMap(([cid, p]) => Object.values(p.milestones ?? {}).map(m => ({cid, m})));\nconst acts = await lookup(\"activity\", [...rows.map(r => r.a.activityHash), ...milestones.flatMap(({m}) => (m.activities ?? []).map(a => a.activityHash))]);\nconst types = await lookup(\"activitytype\", Object.values(acts).map(a => a.activityTypeHash));\nconst kindOf = d => {\n  const type = types[d?.activityTypeHash]?.name;\n  if (type === \"突袭\" || d?.modeTypes?.includes(4)) return \"raids\";\n  if (type === \"地牢\" || d?.modeTypes?.includes(82)) return \"dungeons\";\n  return null;\n};\n// \"最后一愿: 标准\" and \"玻璃拱顶: 大师\" count toward one raid; masters are also counted apart.\nconst base = name => name.split(/[:：]/)[0].trim();\nconst master = name => /大师|宗师/.test(name.split(/[:：]/)[1] ?? \"\");\nconst out = {raids: {}, dungeons: {}};\nfor (const {c, a} of rows) {\n  const d = acts[a.activityHash], kind = kindOf(d);\n  const clears = a.values?.activityCompletions?.basic?.value ?? 0;\n  if (!kind || !clears) continue;\n  const name = base(d.name);\n  const entry = out[kind][name] ??= {name, clears: 0, master: 0, by_class: {}, fastest: null};\n  entry.clears += clears;\n  if (master(d.name)) entry.master += clears;\n  entry.by_class[c.class] = (entry.by_class[c.class] ?? 0) + clears;\n  const fastest = a.values?.fastestCompletionMsForActivity?.basic;\n  if (fastest?.value > 0 && (!entry.fastest || fastest.value < entry.fastest.ms)) entry.fastest = {ms: fastest.value, time: fastest.displayValue};\n}\nconst finish = group => Object.values(group).sort((a, b) => b.clears - a.clears).map(e => {\n  const row = {name: e.name, clears: e.clears, by_class: e.by_class, fastest: e.fastest?.time ?? null};\n  if (e.master) row.master = e.master;\n  return row;\n});\n// This week's encounters: one milestone per raid, per character; standard and\n// master versions list their phases separately, so take the furthest.\nconst ms = await lookup(\"milestone\", milestones.map(({m}) => m.milestoneHash));\nconst cls = Object.fromEntries(acct.characters.map(c => [c.character_id, c.class]));\nconst week = {};\nfor (const {cid, m} of milestones) for (const a of m.activities ?? []) {\n  const d = acts[a.activityHash];\n  if (!kindOf(d) || !a.phases?.length) continue;\n  const name = ms[m.milestoneHash]?.name ?? base(d.name);\n  const done = a.phases.filter(p => p.complete).length;\n  const slot = (week[name] ??= {})[cls[cid] ?? cid];\n  if (!slot || done > slot.done) week[name][cls[cid] ?? cid] = {done, total: a.phases.length};\n}\nconst touched = Object.entries(week).filter(([, by]) => Object.values(by).some(v => v.done));\nconst thisWeek = touched.map(([name, by]) => ({name, by_class: Object.fromEntries(Object.entries(by).map(([k, v]) => [k, `${v.done}/${v.total}`]))}));\nconst untouched = Object.keys(week).filter(name => !touched.some(([n]) => n === name));\nconst result = {bungie_name: acct.bungie_name, raids: finish(out.raids), dungeons: finish(out.dungeons), this_week: thisWeek, this_week_untouched: untouched};\nconst failed = aggregates.filter(r => r.outcome !== \"succeeded\").length;\nif (failed) result.missing_characters = failed;\nif (progress.outcome !== \"succeeded\") result.this_week_error = progress.error?.message ?? progress.outcome;\nreturn result;"
+    },
+    "patterns": {
+      "description": "发起人的红框（武器模式）或异域催化进度：按武器类型/槽位分组，已完成数、进行中的（带进度）、没开始的、催化还没获得的。query 按武器名过滤。",
+      "input": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "patterns",
+              "catalysts"
+            ],
+            "description": "patterns 红框（默认），catalysts 异域催化"
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 32,
+            "description": "武器名子串，只看这些"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "tools": [
+        "destiny_account",
+        "destiny_read",
+        "destiny_lookup"
+      ],
+      "source": "const want = args.kind ?? \"patterns\";\nconst query = (args.query ?? \"\").trim();\nconst acct = await tools.destiny_account({});\nif (!acct.linked) return {linked: false, login: acct.login};\nconst lookup = async (kind, hashes) => {\n  const u = [...new Set(hashes.filter(Boolean))], out = {};\n  for (let i = 0; i < u.length; i += 500) Object.assign(out, (await tools.destiny_lookup({kind, hashes: u.slice(i, i + 500)})).definitions);\n  return out;\n};\nconst [settings, profile] = await Promise.all([\n  tools.destiny_read({path: \"/Settings/\", max_chars: 3500000}),\n  tools.destiny_read({path: `/Destiny2/${acct.membership_type}/Profile/${acct.membership_id}/`, query: {components: [900]}, max_chars: 3500000})\n]);\n// Patterns and catalysts hang under one presentation tree; leaves name the\n// weapon type (patterns) or slot (catalysts).\nconst root = settings.destiny2CoreSettings?.exoticCatalystsRootNodeHash;\nif (!root) throw new Error(\"Settings 里没有 exoticCatalystsRootNodeHash\");\nconst leafOf = {}, parentName = {}, leaves = {};\nlet frontier = [root];\nfor (let depth = 0; frontier.length && depth < 8; depth++) {\n  const nodes = await lookup(\"node\", frontier);\n  const next = [];\n  for (const h of frontier) {\n    const n = nodes[h];\n    if (!n) continue;\n    for (const c of n.children?.nodes ?? []) { parentName[c] = n.name; next.push(c); }\n    if (n.children?.records?.length) leaves[h] = n.name;\n    for (const r of n.children?.records ?? []) leafOf[r] = h;\n  }\n  frontier = next;\n}\n// 榴弹发射器 sits under both 特殊 and 重型: name the parent when leaves collide.\nconst labels = Object.values(leaves);\nconst label = h => labels.filter(n => n === leaves[h]).length > 1 ? `${leaves[h]}（${(parentName[h] ?? \"\").replace(/武器模式$/, \"\")}）` : leaves[h];\nconst records = await lookup(\"record\", Object.keys(leafOf).map(Number));\nconst profileRecords = profile.profileRecords?.data?.records ?? {};\nconst characterRecords = Object.values(profile.characterRecords?.data ?? {}).map(c => c.records ?? {});\n// Character-scoped records: the furthest character counts.\nconst score = e => !e ? -1 : !(e.state & 4) ? 1e9 : (e.objectives ?? []).reduce((s, o) => s + Math.min(o.progress ?? 0, o.completionValue ?? 0), 0);\nconst entryOf = h => profileRecords[h] ?? characterRecords.map(r => r[h]).reduce((best, e) => score(e) > score(best) ? e : best, undefined);\nconst isCatalyst = d => d.recordType === \"异域催化\" || /催化/.test(d.name);\nconst groups = {};\nlet done = 0, total = 0;\nfor (const [h, d] of Object.entries(records)) {\n  if (!d?.name || isCatalyst(d) !== (want === \"catalysts\")) continue;\n  if (query && !d.name.includes(query)) continue;\n  const e = entryOf(h);\n  const g = groups[leafOf[h]] ??= {group: label(leafOf[h]), done: 0, total: 0, in_progress: [], not_started: []};\n  g.total++; total++;\n  if (e && !(e.state & 4)) { g.done++; done++; if (query) (g.complete ??= []).push(d.name); continue; }\n  const objectives = (e?.objectives ?? []).map(o => `${o.progress ?? 0}/${o.completionValue}`);\n  const started = (e?.objectives ?? []).some(o => o.progress > 0);\n  // Catalysts: hidden (8) or invisible (16) means not yet obtained.\n  if (want === \"catalysts\" && (!e || e.state & 24)) (g.not_obtained ??= []).push(d.name);\n  else (started ? g.in_progress : g.not_started).push(objectives.length ? {name: d.name, progress: objectives.join(\" \")} : {name: d.name});\n}\nconst list = Object.values(groups).map(g => {\n  if (!g.in_progress.length) delete g.in_progress;\n  g.not_started = g.not_started.map(x => x.name);\n  if (!g.not_started.length) delete g.not_started;\n  return g;\n});\nreturn {bungie_name: acct.bungie_name, kind: want, done, total, groups: list};"
+    },
+    "weapon": {
+      "description": "按名字查一把武器（中英文，不需要登录）：类型、元素、弹药、框架、来源、能否锻造，以及每列能随机出的 perk（已去重强化版）；给 perk 时标出在哪几列并附说明。同名多个版本（重铸等）分别列出。",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 48,
+            "description": "武器名"
+          },
+          "perk": {
+            "type": "string",
+            "maxLength": 32,
+            "description": "perk 名子串：标出它在哪几列并给出说明"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8,
+            "description": "最多看几个同名版本，默认 4"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "tools": [
+        "destiny_lookup"
+      ],
+      "source": "const name = (args.name ?? \"\").trim();\nconst perk = (args.perk ?? \"\").trim();\nconst lookup = async (kind, hashes) => {\n  const u = [...new Set(hashes.filter(Boolean))], out = {};\n  for (let i = 0; i < u.length; i += 500) Object.assign(out, (await tools.destiny_lookup({kind, hashes: u.slice(i, i + 500)})).definitions);\n  return out;\n};\nconst hits = (await tools.destiny_lookup({kind: \"item\", search: name, limit: 50})).results ?? [];\nconst weapons = hits.filter(h => h.itemType === 3);\nif (!weapons.length) return {found: false, query: name, candidates: hits.slice(0, 8).map(h => ({name: h.name, type: h.type}))};\nconst exact = weapons.filter(h => h.name === name || h.name_en?.toLowerCase() === name.toLowerCase());\nconst pool = exact.length ? exact : weapons;\n// Several hashes per name: reissues, adept copies, the craftable one.\nconst picked = pool.slice(0, args.limit ?? 4);\nconst defs = await lookup(\"item\", picked.map(h => h.hash));\nconst sockets = Object.values(defs).flatMap(d => d.sockets ?? []);\nconst [categories, plugsets, collectibles] = await Promise.all([\n  lookup(\"socketcategory\", sockets.map(s => s.category)),\n  lookup(\"plugset\", sockets.flatMap(s => [s.randomPlugSet, s.plugSet])),\n  lookup(\"collectible\", Object.values(defs).map(d => d.collectibleHash))\n]);\nconst optionsOf = s => {\n  const set = plugsets[s.randomPlugSet ?? s.plugSet];\n  if (set?.plugs?.length) {\n    const rolls = set.plugs.filter(([, canRoll]) => canRoll).map(([h]) => h);\n    return rolls.length ? rolls : set.plugs.map(([h]) => h);\n  }\n  return s.plugs?.length ? s.plugs : [s.initial];\n};\nconst columnsOf = d => (d.sockets ?? []).filter(s => categories[s.category]?.name === \"武器特性\");\nconst plugs = await lookup(\"item\", Object.values(defs).flatMap(d => [...columnsOf(d).flatMap(optionsOf), ...(d.sockets ?? []).map(s => s.initial)]));\n// Trackers, mementos and empty-socket placeholders are not perks.\nconst noise = p => /tracker|memento|empty/.test(p.plugCategory ?? \"\") || /^空.*插槽$/.test(p.name);\n// Enhanced copies (tier 罕见, \"强化…\") collapse into the base perk.\nconst baseName = p => p.tierType === 3 ? p.name.replace(/^强化/, \"\") : p.name;\nconst damage = {1: \"动能\", 2: \"电弧\", 3: \"烈日\", 4: \"虚空\", 6: \"冰影\", 7: \"缚丝\"};\nconst ammo = {1: \"主武器\", 2: \"特殊\", 3: \"重型\"};\nconst craftable = new Set(hits.filter(h => h.itemType === 30).map(h => h.name));\nconst seen = new Map();\nconst versions = [];\nconst perkInfo = new Map();\nfor (const h of picked) {\n  const d = defs[h.hash];\n  if (!d) continue;\n  const intrinsic = (d.sockets ?? []).map(s => plugs[s.initial]).find(p => p?.plugCategory === \"intrinsics\");\n  const columns = columnsOf(d).map(s => {\n    const names = [];\n    for (const ph of optionsOf(s)) {\n      const p = plugs[ph];\n      if (!p?.name || noise(p)) continue;\n      const n = baseName(p);\n      if (!names.includes(n)) names.push(n);\n      if (perk && n.includes(perk) && !perkInfo.has(n)) perkInfo.set(n, p.description ?? \"\");\n    }\n    return names;\n  }).filter(c => c.length);\n  const key = JSON.stringify([d.name, d.tier, columns]);\n  if (seen.has(key)) { seen.get(key).hashes.push(h.hash); continue; }\n  const v = {name: d.name, hashes: [h.hash], type: d.type, tier: d.tier};\n  if (damage[d.damageType]) v.element = damage[d.damageType];\n  if (ammo[d.ammoType]) v.ammo = ammo[d.ammoType];\n  if (intrinsic) v.frame = intrinsic.name;\n  if (craftable.has(d.name)) v.craftable = true;\n  const source = collectibles[d.collectibleHash]?.source;\n  if (source) v.source = source;\n  v.columns = columns;\n  if (perk) v.perk_columns = columns.flatMap((c, i) => c.some(n => n.includes(perk)) ? [i] : []);\n  seen.set(key, v);\n  versions.push(v);\n}\nconst result = {query: name, versions};\nif (perk) result.perks = [...perkInfo].map(([n, description]) => ({name: n, description}));\nif (pool.length > picked.length) result.more_versions = pool.length - picked.length;\nreturn result;"
     }
   }
 }
