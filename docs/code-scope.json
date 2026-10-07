@@ -322,6 +322,7 @@
       "src/Max/Browser/Service.hs",
       "src/Max/Browser/Vault.hs",
       "src/Max/Browser/View.hs",
+      "src/Max/CodeMode/Abi.hs",
       "src/Max/CodeMode/JavaScript.hs",
       "src/Max/CodeMode/Wasm.hs",
       "src/Max/MCP/Client.hs",

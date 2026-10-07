@@ -16,15 +16,18 @@ import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson (Value (..), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
 import Data.FileEmbed (embedFile)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent (Concurrent)
 import Language.Haskell.TH.Syntax (qAddDependentFile, runIO)
+import Max.CodeMode.Abi (checkGuestAbi)
 import Max.CodeMode.Execution
 import Max.CodeMode.Wasm (WasmLimits (..), defaultWasmLimits)
 import Max.Effects.Tools (Tools)
@@ -38,13 +41,24 @@ import System.Environment (lookupEnv)
 -- Changing the guest sources re-runs this splice after the Nix artifact rebuild.
 -- Set MAX_CODEMODE_JS_WASM when compiling this module: changing the environment
 -- only when running tests cannot replace guest bytes already embedded here.
+-- A guest whose imports differ from the host ABI fails the build: a dev shell
+-- evaluated before codemode/quickjs.c changed points at a stale guest, which
+-- would otherwise compile and trap on every program.
 javaScriptRuntime :: ByteString
 javaScriptRuntime =
   $( do
        qAddDependentFile "codemode/quickjs.c"
        qAddDependentFile "nix/codemode-js.nix"
        path <- runIO (fromMaybe ".generated/quickjs.wasm" <$> lookupEnv "MAX_CODEMODE_JS_WASM")
-       embedFile path
+       guest <- runIO (BS.readFile path)
+       case checkGuestAbi guest of
+         Left problem ->
+           fail
+             ( "code-mode guest " <> path <> " does not match the host ABI (" <> T.unpack problem
+                 <> "). It was built from an older codemode/quickjs.c: re-enter the dev shell"
+                 <> " (direnv reload) or set MAX_CODEMODE_JS_WASM to $(nix build .#codemode-js --print-out-paths)/quickjs.wasm."
+             )
+         Right () -> embedFile path
    )
 
 javaScriptSdk :: ByteString
@@ -65,30 +79,31 @@ javaScriptLimits =
     }
 
 javaScriptProgram :: [CatalogTool] -> Text -> WasmProgram
-javaScriptProgram catalog source = programWithInput catalog source Nothing Nothing Nothing
+javaScriptProgram catalog source = programWithInput catalog [] source Nothing Nothing Nothing
 
 -- | Ad-hoc code with an @args@ value, bound like a workflow's input; the
 -- journal evidence records it so a resumed turn can read what was passed.
-javaScriptProgramWith :: [CatalogTool] -> Text -> Maybe Value -> WasmProgram
-javaScriptProgramWith catalog source = \case
-  Nothing -> javaScriptProgram catalog source
+javaScriptProgramWith :: [CatalogTool] -> [(Text, Workflow)] -> Text -> Maybe Value -> WasmProgram
+javaScriptProgramWith catalog callable source = \case
+  Nothing -> programWithInput catalog callable source Nothing Nothing Nothing
   Just args ->
-    let program = programWithInput catalog source (Just args) Nothing Nothing
+    let program = programWithInput catalog callable source (Just args) Nothing Nothing
      in program {wpEvidence = case program.wpEvidence of
                    Object fields -> Object (KeyMap.insert "args" args fields)
                    other -> other}
 
-workflowProgram :: [CatalogTool] -> Text -> Text -> Workflow -> Value -> WasmProgram
-workflowProgram catalog reference version workflow args =
+workflowProgram :: [CatalogTool] -> [(Text, Workflow)] -> Text -> Text -> Workflow -> Value -> WasmProgram
+workflowProgram catalog callable reference version workflow args =
   programWithInput
     catalog
+    callable
     workflow.wfSource
     (Just args)
     (Just workflow.wfOutput)
     (Just (object ["reference" .= reference, "version" .= version, "args" .= args]))
 
-programWithInput :: [CatalogTool] -> Text -> Maybe Value -> Maybe Contract -> Maybe Value -> WasmProgram
-programWithInput catalog source args contract workflow =
+programWithInput :: [CatalogTool] -> [(Text, Workflow)] -> Text -> Maybe Value -> Maybe Contract -> Maybe Value -> WasmProgram
+programWithInput catalog callable source args contract workflow =
   WasmProgram
     javaScriptRuntime
     (Just input)
@@ -97,6 +112,7 @@ programWithInput catalog source args contract workflow =
           "runtime" .= ("quickjs-ng-0.16.2" :: Text),
           "source" .= source,
           "workflow" .= workflow,
+          "callable_workflows" .= map fst callable,
           "catalog" .= [object ["tool" .= entry.ctDefinition.tdRef.unToolRef, "schema_hash" .= entry.ctSchemaHash.unSchemaHash] | entry <- catalog]
         ]
     )
@@ -107,10 +123,18 @@ programWithInput catalog source args contract workflow =
     argument = maybe "" (LBS.toStrict . encode . TE.decodeUtf8 . LBS.toStrict . encode) args
     suffix = maybe "()" (const ("(JSON.parse(" <> argument <> "))")) args
     parameter = maybe "" (const "args") args
-    input = javaScriptSdk <> "(" <> LBS.toStrict (encode names) <> ");\n(async (" <> parameter <> ") => {\n\"use strict\";\n" <> TE.encodeUtf8 source <> "\n})" <> suffix
+    -- Each callable workflow becomes an async function of its args; sealing
+    -- before the body keeps the program from adding or replacing any.
+    registrations =
+      mconcat
+        [ "__maxDefineWorkflow(" <> LBS.toStrict (encode reference) <> ", async (args) => {\n\"use strict\";\n" <> TE.encodeUtf8 w.wfSource <> "\n});\n"
+        | (reference, w) <- callable
+        ]
+        <> "__maxSealWorkflows();\n"
+    input = javaScriptSdk <> "(" <> LBS.toStrict (encode names) <> ");\n" <> registrations <> "(async (" <> parameter <> ") => {\n\"use strict\";\n" <> TE.encodeUtf8 source <> "\n})" <> suffix
 
 runJavaScript :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> Text -> Eff es CodeModeResult
-runJavaScript session hooks catalog source = runJavaScriptWith session hooks catalog source Nothing
+runJavaScript session hooks catalog source = runJavaScriptWith session hooks catalog [] source Nothing
 
-runJavaScriptWith :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> Text -> Maybe Value -> Eff es CodeModeResult
-runJavaScriptWith session hooks catalog source args = runWasmProgram session hooks catalog javaScriptLimits (javaScriptProgramWith catalog source args)
+runJavaScriptWith :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [(Text, Workflow)] -> Text -> Maybe Value -> Eff es CodeModeResult
+runJavaScriptWith session hooks catalog callable source args = runWasmProgram session hooks catalog javaScriptLimits (javaScriptProgramWith catalog callable source args)

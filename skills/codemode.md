@@ -21,6 +21,9 @@ run_code 的完整手册：子 agent、暂停与恢复、翻聊天上下文、�
   `{outcome: "rejected" | "failed-before-effect" | "outcome-unknown",
   error: {code, message, retry: "safe" | "idempotent" | "unsafe"}}`。
   配合 `Promise.all` 可以保留每个调用各自的成败。
+- `await max.workflow("skill/entry", args)`：在本程序里调用一个已加载技能的工作流，返回它 return 的值；
+  可以和普通工具调用、其他工作流自由组合（例如两个工作流的结果求交集）。只有声明的工具都在本程序工具表里的
+  工作流可调；嵌套调用不做输入/输出契约校验，参数按工作流说明传。
 - `max.value(outcome)`：从上述结构取成功值，否则抛出 ToolError。
   ToolError 带有 `outcome`、`code`、`retry` 和 `message`。
 - `max.names`：本次运行可用工具名的完整只读数组。`tools` 与 `max` 不可替换。

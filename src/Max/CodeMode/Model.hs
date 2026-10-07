@@ -18,7 +18,7 @@ import Max.CodeMode.Execution (CodeModeResult (..), codeModeInvocation, runWasmP
 import Max.CodeMode.JavaScript (javaScriptLimits, javaScriptRuntimeVersion, runJavaScriptWith, workflowProgram)
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools
-import Max.Skill.Workflow (ResolvedWorkflow (..), resolveWorkflow)
+import Max.Skill.Workflow (ResolvedWorkflow (..), callableWorkflows, resolveWorkflow)
 import Max.Tool.Bundles (SkillLoad)
 import Max.Tool.Control (LoopControl (..))
 import Max.Tool.Returns (withReturnType)
@@ -53,6 +53,7 @@ runCodeDescription =
       "- 并发用 Promise.all；依次 await 就是顺序执行；items.map(async x => b(await a(x))) 是流水线，每项做完一步就进下一步。",
       "- await agent({objective, profile, inputs, output_contract})：派子 agent 并等报告；报告在 result.text，给了 output_contract 时符合契约的 JSON 在 result.payload。",
       "- await max.raw(name, args)：返回 {outcome, value} 或 {outcome, error}，不抛错；扇出时一项失败不拖垮其他项。",
+      "- await max.workflow(\"skill/entry\", args)：在本程序里调用已加载的工作流，拿到它 return 的值，可以和其他调用自由组合（不做契约校验）。",
       "- await max.race(promises) 取第一个结果并取消其余；await max.sleep(ms) 用于超时。",
       "- 程序返回时会取消仍在途的调用，要做完的必须 await。没有网络、文件、时钟，这些都通过工具。",
       "不自动重试，已发生的工具效果不回滚。等待异步工具时收到 steering 会返回 {status:\"paused\", run}，再用 run_code_resume 或 run_code_cancel 处理。",
@@ -91,7 +92,7 @@ executeModelBatch enabled loaded session hooks catalog requests
             request.trName == "run_code",
             Object fields <- request.trArguments,
             Right (Left (source, args)) <- submission fields -> do
-              result <- runJavaScriptWith session hooks catalog source args
+              result <- runJavaScriptWith session hooks catalog (callableWorkflows javaScriptRuntimeVersion loaded catalog) source args
               pure (ToolBatch [codeModeInvocation result] result.cmOverBudget)
         [request]
           | enabled,
@@ -107,7 +108,7 @@ executeModelBatch enabled loaded session hooks catalog requests
                       hooks
                       resolved.rwCatalog
                       javaScriptLimits
-                      (workflowProgram resolved.rwCatalog reference resolved.rwVersion resolved.rwWorkflow args)
+                      (workflowProgram resolved.rwCatalog (callableWorkflows javaScriptRuntimeVersion loaded resolved.rwCatalog) reference resolved.rwVersion resolved.rwWorkflow args)
                   pure (ToolBatch [codeModeInvocation result] result.cmOverBudget)
         _ -> pure (ToolBatch (map (const (reject "invalid_code_submission" (rejection requests))) requests) False)
   where

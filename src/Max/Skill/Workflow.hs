@@ -1,5 +1,5 @@
 -- | Pure workflow binding and admission against the host's catalog snapshot.
-module Max.Skill.Workflow (ResolvedWorkflow (..), bindWorkflowContracts, resolveWorkflow) where
+module Max.Skill.Workflow (ResolvedWorkflow (..), bindWorkflowContracts, resolveWorkflow, callableWorkflows) where
 
 import Control.Monad (unless)
 import Data.Aeson (Value)
@@ -72,3 +72,19 @@ resolveWorkflow runtime loaded catalog reference args = do
   selected <- traverse (\tool -> maybe (Left ("workflow tool is no longer available: " <> tool)) Right (Map.lookup tool available)) workflow.wfTools
   traverse_ (\tool -> unless (Map.lookup tool.ctDefinition.tdRef.unToolRef package.ppContracts == Just (fingerprint tool)) (Left ("workflow tool contract changed: " <> tool.ctDefinition.tdRef.unToolRef))) selected
   pure (ResolvedWorkflow workflow load.slVersion selected)
+
+-- | Loaded workflows a program may call through max.workflow: trusted current
+-- packages whose declared tools are all in this program's catalog with the
+-- contracts pinned at load. A nested call therefore reaches nothing the
+-- program could not call itself.
+callableWorkflows :: Text -> Map Text SkillLoad -> [CatalogTool] -> [(Text, Workflow)]
+callableWorkflows runtime loaded catalog =
+  [ (name <> "/" <> entry, workflow)
+  | (name, load) <- Map.toList loaded,
+    Right () <- [verifyLoad runtime catalog load],
+    Just package <- [load.slPackage],
+    (entry, workflow) <- Map.toList package.ppContent.spWorkflows,
+    all (\tool -> Map.lookup tool available == Just True && Map.member tool package.ppContracts) workflow.wfTools
+  ]
+  where
+    available = Map.fromList [(t.ctDefinition.tdRef.unToolRef, True) | t <- catalog]

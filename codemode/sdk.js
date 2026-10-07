@@ -120,6 +120,24 @@
   };
   const tools = Object.create(null);
   for (const name of names) tools[name] = (args = {}) => call(name, args);
+  // Loaded workflows the host registers before the program body, then seals:
+  // max.workflow runs one inline with this program's tools and budget.
+  const workflows = new Map();
+  let sealed = false;
+  const defineWorkflow = (reference, run) => {
+    if (sealed) throw new TypeError("workflows are registered by the host only");
+    workflows.set(reference, run);
+  };
+  const sealWorkflows = () => { sealed = true; };
+  const workflow = (reference, args = {}) => {
+    const run = workflows.get(reference);
+    if (!run) throw new TypeError("workflow is not loaded for this program: " + reference + (workflows.size ? "; loaded: " + [...workflows.keys()].join(", ") : ""));
+    if (!args || typeof args !== "object" || Array.isArray(args)) throw new TypeError("workflow arguments must be an object");
+    return run(parse(stringify(args)));
+  };
+  Object.defineProperties(globalThis, {
+    __maxDefineWorkflow: {value: defineWorkflow}, __maxSealWorkflows: {value: sealWorkflows}
+  });
   // Kept for existing programs: the same as Promise.all over max.raw.
   const batch = calls => {
     if (!Array.isArray(calls) || calls.length < 1 || calls.length > 32)
@@ -130,6 +148,6 @@
   Object.defineProperties(globalThis, {
     tools: {value: Object.freeze(tools)},
     agent: {value: agent},
-    max: {value: Object.freeze({raw, batch, value, agent, phase, tell, ask, race, cancel, sleep, names: Object.freeze(names)})}
+    max: {value: Object.freeze({raw, batch, value, agent, phase, tell, ask, race, cancel, sleep, workflow, names: Object.freeze(names)})}
   });
 })

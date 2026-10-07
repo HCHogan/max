@@ -27,6 +27,7 @@
 - `destiny/pgcr` `{instance_id, max_players?}`：一场的结算：全队击杀/死亡/助攻、KD、常用武器（已翻译）、
   技能击杀、队伍比分，`me: true` 是发起人。问"那场打得怎样""谁 carry"直接用它，不要自己摸 PGCR 结构。
 
+工作流也能在 run_code 里当函数用：`await max.workflow("destiny/pgcr", {instance_id})`，可以循环、组合。
 工作流覆盖不到的，再用 run_code 自己组合 `destiny_read` / `destiny_lookup` / `destiny_write`。
 **写读取代码前先 `destiny_shape({path, components})` 查返回结构**（官方 OpenAPI，按组件裁剪，
 hash 字段标了 destiny_lookup 的 kind），照着结构写一次写对；不要用 Object.keys 一轮轮试探。

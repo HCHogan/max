@@ -335,6 +335,7 @@ library
         Max.CodeMode.Wasm
         Max.CodeMode.JavaScript
         Max.CodeMode.Model
+        Max.CodeMode.Abi
         Max.CodeMode.Execution
         Max.Agent.Execution
         Max.Agent.Runtime

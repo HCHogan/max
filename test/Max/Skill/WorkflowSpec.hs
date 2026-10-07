@@ -84,17 +84,17 @@ spec = describe "saved skill workflows" $ do
           session <- newExecutionSession Nothing
           executeModelBatch True loads session noJournal (views registry) requests
         rejections result = [(code, message) | ToolInvocation (ToolRejected (ToolFault code message _)) _ <- result.tbInvocations]
-        code = ToolRequest "code" "run_code" . object
-    mixed <- batch [code ["code" .= ("return 1;" :: Text)], ToolRequest "native" "echo" arguments]
+        submit = ToolRequest "code" "run_code" . object
+    mixed <- batch [submit ["code" .= ("return 1;" :: Text)], ToolRequest "native" "echo" arguments]
     map (T.isInfixOf "唯一的调用" . snd) (rejections mixed) `shouldBe` [True, True]
-    both <- batch [code ["code" .= ("return 1;" :: Text), "workflow" .= ("demo/run" :: Text)]]
+    both <- batch [submit ["code" .= ("return 1;" :: Text), "workflow" .= ("demo/run" :: Text)]]
     map (T.isInfixOf "二选一" . snd) (rejections both) `shouldBe` [True]
-    extra <- batch [code ["code" .= ("return 1;" :: Text), "note" .= True]]
+    extra <- batch [submit ["code" .= ("return 1;" :: Text), "note" .= True]]
     map (T.isInfixOf "note" . snd) (rejections extra) `shouldBe` [True]
-    missing <- batch [code []]
+    missing <- batch [submit []]
     map (T.isInfixOf "需要 code" . snd) (rejections missing) `shouldBe` [True]
     -- A workflow without args is resolved with {} and judged by its contract.
-    bare <- batch [code ["workflow" .= ("demo/run" :: Text)]]
+    bare <- batch [submit ["workflow" .= ("demo/run" :: Text)]]
     map fst (rejections bare) `shouldBe` ["invalid_workflow_submission"]
 
   it "binds args for ad-hoc code like a workflow's input" $ do
@@ -103,6 +103,21 @@ spec = describe "saved skill workflows" $ do
       session <- newExecutionSession Nothing
       executeModelBatch True Map.empty session noJournal (views registry) [ToolRequest "code" "run_code" (object ["code" .= ("return {value: args.n + 1};" :: Text), "args" .= object ["n" .= (41 :: Int)]])]
     resultValue result `shouldBe` Just (object ["value" .= (42 :: Int)])
+
+  it "offers loaded workflows to programs whose catalog covers their tools" $ do
+    registry <- checked [echoDefinition] [echoTool]
+    loads <- pin (views registry) baseWorkflow
+    map fst (callableWorkflows javaScriptRuntimeVersion loads (views registry)) `shouldBe` ["demo/run"]
+    map fst (callableWorkflows javaScriptRuntimeVersion loads []) `shouldBe` []
+    map fst (callableWorkflows "other-runtime" loads (views registry)) `shouldBe` []
+
+  it "lets ad-hoc code compose loaded workflows with max.workflow" $ do
+    registry <- checked [echoDefinition] [echoTool]
+    loads <- pin (views registry) baseWorkflow
+    result <- runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      executeModelBatch True loads session noJournal (views registry) [ToolRequest "code" "run_code" (object ["code" .= ("const a = await max.workflow('demo/run', {value: 2}); const b = await max.workflow('demo/run', {value: 3}); return {value: a.value + b.value};" :: Text)])]
+    resultValue result `shouldBe` Just (object ["value" .= (5 :: Int)])
 
   it "rejects invalid saved arguments before any invocation" $ do
     count <- newIORef (0 :: Int)
@@ -172,7 +187,7 @@ spec = describe "saved skill workflows" $ do
     let workflow = skill.skillPackage.spWorkflows Map.! "search"
     result <- runEff . runConcurrent . runTools registry $ do
       session <- newExecutionSession Nothing
-      runWasmProgram session noJournal (views registry) javaScriptLimits (workflowProgram (views registry) "batch-search/search" "test" workflow (object ["queries" .= (["good", "bad"] :: [Text]), "limit" .= (2 :: Int)]))
+      runWasmProgram session noJournal (views registry) javaScriptLimits (workflowProgram (views registry) [] "batch-search/search" "test" workflow (object ["queries" .= (["good", "bad"] :: [Text]), "limit" .= (2 :: Int)]))
     outcomeName (codeModeInvocation result).tiOutcome `shouldBe` "succeeded"
     case result.cmOutput of
       Just (Array rows) -> map (field "outcome") (foldr (:) [] rows) `shouldBe` [Just (String "succeeded"), Just (String "failed-before-effect")]
