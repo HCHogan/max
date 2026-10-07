@@ -17,14 +17,12 @@
 - `destiny/inventory` `{query?, type?, perks?: string[], slot?: all|weapon|armor|gear, limit?, with_perks?, with_stats?}`：
   在仓库、背包、已装备里找物品。query 按中/英文名，type 按类型（刀剑、手炮、头盔…），perks 是几个 perk 名，
   每个都要在同一件物品上（已选或可切换都算）：`{type: "刀剑", perks: ["急切刀锋"]}`、`{perks: ["嫉妒军械库", "诱导推销"]}`。
-  命中时附 `perk_match` 和完整 `perk_columns`（每列第一个是已选的）。条件更复杂时照下面的模板自己写代码。
+  命中时附 `perk_match` 和完整 `perk_columns`（每列第一个是已选的）。条件更复杂时用 destiny_items 自己写代码（见下）。
 - `destiny/move` `{item_id, to: "vault" | character_id, equip}`：转移（可顺手装备），按当前状态定位并在最后核对；
   返回 `ok`/`verified`/`now`（现在实际在哪）。`verified: false` 时如实告诉对方，别说成功了。
 - `destiny/loadout` `{character_id? | class?}`：角色当前配装（武器 perk、护甲模组和属性、子职业
   超能/技能/星相/碎片、角色六维）。"看我猎人的配装""我现在带的什么"用它。
 - `destiny/career` `{}`：生涯统计（PvE/PvP 击杀、KD、胜率、时长、常用武器类型、各角色分项）。
-- `destiny/move` `{item_id, to: "vault" | character_id, equip}`：转移（可顺手装备）。正装备着的会先换上
-  同栏位另一件（优先非异域），角色之间自动经仓库中转。返回逐步结果。
 - `destiny/recent` `{mode?, count?, character_id?}`：最近活动（全部角色合并），含 instance_id。
 - `destiny/pgcr` `{instance_id, max_players?}`：一场的结算：全队击杀/死亡/助攻、KD、常用武器（已翻译）、
   技能击杀、队伍比分，`me: true` 是发起人。问"那场打得怎样""谁 carry"直接用它，不要自己摸 PGCR 结构。
@@ -37,46 +35,26 @@ hash 字段标了 destiny_lookup 的 kind），照着结构写一次写对；不
 物品组件（300/304/305/310）只返回同一请求里 102/201/205 列出的物品，要和背包组件一起请求。
 
 Bungie 按 URL 缓存响应，最多旧几分钟：要当前状态（玩家刚在游戏里动过、写操作前定位、写完核对）传
-`fresh: true`。Profile 响应很大：只在 run_code 里读，`max_chars: 3500000`，在 JS 里筛选后只返回需要的字段；
-全部组件一次读会超过上限，像模板那样分两次并行读。
+`fresh: true`（destiny_items 总是当前状态）。Profile 响应很大：只在 run_code 里读，`max_chars: 3500000`，
+在 JS 里筛选后只返回需要的字段；带全部物品组件一次读会超过上限，要拆成几次并行读。
 
-# 自己写代码：模板
+# 自己写代码：从 destiny_items 开始
 
-按任意条件筛自己的装备（例：同一把武器上能出 A 和 B 两个 perk，已选或可切换）。改最后的条件和返回字段即可：
+问自己装备的任何问题，先 `destiny_items` 拿到全部物品（当前状态、名字都已翻译），再在 JS 里按任意条件筛：
 
 ```js
-const acct = await tools.destiny_account({});
-const path = `/Destiny2/${acct.membership_type}/Profile/${acct.membership_id}/`;
-const read = components => tools.destiny_read({path, query: {components}, max_chars: 3500000, fresh: true});
-const [p, r] = await Promise.all([read([102, 201, 205, 300, 305]), read([102, 201, 205, 310])]);
-const where = {}, items = [];
-for (const i of p.profileInventory.data.items) { items.push(i); where[i.itemInstanceId] = "仓库"; }
-for (const [cid, c] of Object.entries(p.characterInventories.data)) for (const i of c.items) { items.push(i); where[i.itemInstanceId] = cid; }
-for (const [cid, c] of Object.entries(p.characterEquipment.data)) for (const i of c.items) { items.push(i); where[i.itemInstanceId] = cid + " 已装备"; }
-const lookup = async (kind, hashes) => {
-  const u = [...new Set(hashes)], out = {};
-  for (let i = 0; i < u.length; i += 500) Object.assign(out, (await tools.destiny_lookup({kind, hashes: u.slice(i, i + 500)})).definitions);
-  return out;
-};
-const defs = await lookup("item", items.map(i => i.itemHash));
-const weapons = items.filter(i => i.itemInstanceId && defs[i.itemHash]?.itemType === 3);
-// 固有特性、武器 perk、护甲 perk 三类插槽；每列 = 已选 (305) + 可切换 (310)
-const perkCats = new Set([3956125808, 4241085061, 3154740035]);
-const columns = i => (defs[i.itemHash].sockets ?? []).filter(s => perkCats.has(s.category)).map(s => [...new Set([
-  p.itemComponents.sockets.data[i.itemInstanceId]?.sockets[s.index]?.plugHash,
-  ...(r.itemComponents.reusablePlugs.data[i.itemInstanceId]?.plugs[s.index] ?? []).map(x => x.plugItemHash)
-].filter(Boolean))]);
-const names = await lookup("item", weapons.flatMap(i => columns(i).flat()));
-const has = (i, perk) => columns(i).some(col => col.some(h => names[h]?.name === perk));
-return weapons.filter(i => has(i, "嫉妒军械库") && has(i, "诱导推销")).map(i => ({
-  id: i.itemInstanceId, name: defs[i.itemHash].name, where: where[i.itemInstanceId],
-  power: p.itemComponents.instances.data[i.itemInstanceId]?.primaryStat?.value,
-  perks: columns(i).map(col => col.map(h => names[h]?.name))
-}));
+const {items} = await tools.destiny_items({kind: "weapon", max_chars: 3500000});
+const has = (item, perk) => (item.perks ?? []).some(column => column.includes(perk));
+return items.filter(i => has(i, "嫉妒军械库") && has(i, "诱导推销"))
+  .map(i => ({id: i.id, name: i.name, where: (i.character ?? "") + i.location, power: i.power, perks: i.perks}));
 ```
 
-`where` 里的角色 id 对照 destiny_account 的 characters 换成职业。护甲把 `itemType === 3` 换成 2；
-光等在 `instances.data[id].primaryStat.value`，锁定/大师/锻造是 `state & 1/4/8`；要属性再读一次带 304 的。
+每行：`id`（item_id）、`hash`、`name`、`type`、`tier`、`slot`、`class`（护甲职业）、`location`
+（vault/account/inventory/equipped/postmaster）、`character`/`character_id`、`quantity`、`power`、`damage`、
+`locked`/`tracked`/`masterwork`/`crafted`/`enhanced`、`perks`（每列数组，第一个是已选的，其余可切换）、
+`mods`/`cosmetics`（按插槽分类名分组的已装插件）、`stats`（属性名→数值）、`objectives`（击杀记录器、锻造进度）。
+kind：weapon / armor / gear（默认）/ all（含消耗品、材料）。物品表之外的数据（商人、战绩、成就、PGCR）
+才用 destiny_read，先 destiny_shape 查结构。
 
 # 写操作
 

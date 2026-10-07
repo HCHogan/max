@@ -348,6 +348,7 @@ toolInventory =
     -- Destiny calls act only as the turn's author; the bundle keeps them
     -- hidden until use_skill destiny in a conversation that enabled it.
     gated BungieOnly (readTool "destiny_account" ["network.bungie", "bungie.link"] [CurrentConversation]),
+    gated BungieOnly (readTool "destiny_items" ["network.bungie", "bungie.link", "destiny.manifest"] [CurrentConversation]),
     gated BungieOnly (readTool "destiny_read" ["network.bungie", "bungie.link"] [CurrentConversation]),
     gated BungieOnly (writeTool "destiny_write" ["network.bungie", "bungie.account"] [CurrentConversation]),
     gated BungieOnly (readTool "destiny_lookup" ["network.bungie", "destiny.manifest"] [CurrentConversation]),

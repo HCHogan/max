@@ -26,10 +26,10 @@ import Max.Effects.Tools
     ToolRunner (..),
   )
 import Max.Tool.Protocol (readResult)
-import Max.Tools.Schema (boundedIntegerParam, noArguments, paramOfType, stringParam, toolObject, withKeys)
+import Max.Tools.Schema (boundedIntegerParam, enumParam, noArguments, paramOfType, stringParam, toolObject, withKeys)
 
 destinyToolsFor :: (Destiny :> es) => [Tool es]
-destinyToolsFor = [accountTool, readTool, writeTool, lookupTool, shapeTool]
+destinyToolsFor = [accountTool, itemsTool, readTool, writeTool, lookupTool, shapeTool]
 
 accountTool :: (Destiny :> es) => Tool es
 accountTool =
@@ -44,6 +44,30 @@ accountTool =
       toolSchema = noArguments,
       toolRunner = OutcomeRunner (const (ToolSucceeded <$> destinyAccount))
     }
+
+itemsTool :: (Destiny :> es) => Tool es
+itemsTool =
+  Tool
+    { toolName = "destiny_items",
+      toolDescription =
+        T.unwords
+          [ "发起人自己的全部物品，翻译好的扁平行（当前状态，绕过缓存）：位置、角色、光等、元素、",
+            "锁定/大师/锻造，perk 列（每列已选在前、可切换在后）、模组、外观、属性、击杀记录器和锻造进度。",
+            "在 run_code 里取出后用任意条件筛选（max_chars 调到 3500000）；kind 默认 gear（武器+护甲）。"
+          ],
+      toolSchema =
+        toolObject
+          [ ("kind", withKeys ["default" .= ("gear" :: Text)] (enumParam ["weapon", "armor", "gear", "all"] "all 包括消耗品、材料等非装备")),
+            ("max_chars", boundedIntegerParam 1000 readBudget 60000)
+          ]
+          [],
+      toolRunner = OutcomeRunner $ \raw -> case parseEither itemsArgs raw of
+        Left err -> pure (rejected err)
+        Right (kind, limit) -> readResult . fmap (bounded limit) <$> destinyItems kind
+    }
+  where
+    itemsArgs = withObject "arguments" $ \o ->
+      (,) <$> o .:? "kind" .!= "gear" <*> (clamp (1000, readBudget) <$> o .:? "max_chars" .!= 60000)
 
 readTool :: (Destiny :> es) => Tool es
 readTool =
@@ -96,6 +120,9 @@ bounded limit value
           "keys" .= case value of
             Object o -> map fst (KeyMap.toList o)
             _ -> [],
+          "count" .= case value of
+            Object o | Just (Array items) <- KeyMap.lookup "items" o -> Just (length items)
+            _ -> Nothing,
           "hint" .= ("在 run_code 里调用并把 max_chars 调到 3500000，或减少 components，再在 JS 里只取需要的字段" :: Text)
         ]
   where

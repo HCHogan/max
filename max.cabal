@@ -166,6 +166,7 @@ library
         Max.Bungie.Callback
         Max.Bungie.Client
         Max.Bungie.Definitions
+        Max.Bungie.Items
         Max.Bungie.Manifest
         Max.Bungie.Runtime
         Max.Bungie.Shapes
@@ -713,6 +714,7 @@ test-suite max-test
         Max.BilibiliSpec
         Max.Bungie.ApiSpec
         Max.Bungie.DefinitionsSpec
+        Max.Bungie.ItemsSpec
         Max.Tools.DestinySpec
         Max.Browser.ErrorSpec
         Max.Browser.ViewSpec

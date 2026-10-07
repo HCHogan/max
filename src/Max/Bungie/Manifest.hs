@@ -9,6 +9,7 @@ module Max.Bungie.Manifest
   ( manifestWorker,
     syncManifest,
     lookupDefinitions,
+    lookupLocalDefinitions,
     searchDefinitions,
     SearchHit (..),
 
@@ -186,6 +187,13 @@ lookupDefinitions runtime kind hashes = do
       pure $ case result of
         Right definition | Just (_, projected) <- projectDefinition table definition -> [(hash, projected)]
         _ -> []
+
+-- | The synced rows only, for bulk translation where a per-hash Bungie call
+-- for every gap would cost more than a missing name.
+lookupLocalDefinitions :: (WithConnection :> es, IOE :> es) => Text -> [Int64] -> Eff es (Map Int64 Value)
+lookupLocalDefinitions kind hashes
+  | null hashes = pure Map.empty
+  | otherwise = Map.fromList <$> query "SELECT hash, data FROM destiny_definitions WHERE kind = ? AND hash = ANY(?)" (kind, PGArray hashes)
 
 data SearchHit = SearchHit
   { shKind :: !Text,

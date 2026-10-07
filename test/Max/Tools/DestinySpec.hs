@@ -45,6 +45,7 @@ spec = describe "Max.Tools.Destiny" $ do
     run "destiny_lookup" (object ["hashes" .= [1 :: Int]]) >>= (`shouldSatisfy` isLeft)
     run "destiny_lookup" (object ["kind" .= ("item" :: Text), "hashes" .= [1 :: Int], "search" .= ("x" :: Text)]) >>= (`shouldSatisfy` isLeft)
     run "destiny_write" (object ["path" .= ("/Destiny2/Actions/Items/EquipItem/" :: Text), "body" .= ("x" :: Text)]) >>= (`shouldSatisfy` isLeft)
+    run "destiny_items" (object []) >>= (`shouldBe` Right (object ["kind" .= ("gear" :: Text), "items" .= ([] :: [Value])]))
 
   it "describes an oversized read instead of truncating it" $ do
     small <- run "destiny_read" (object ["path" .= ("/Destiny2/Milestones/" :: Text)])
@@ -101,3 +102,4 @@ spec = describe "Max.Tools.Destiny" $ do
         )
         (\kind hashes -> pure (Right (object ["lookup" .= kind, "hashes" .= hashes])))
         (\_ term limit -> pure (Right (object ["search" .= term, "limit" .= limit])))
+        (\kind -> pure (Right (object ["kind" .= kind, "items" .= ([] :: [Value])])))

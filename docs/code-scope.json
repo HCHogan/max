@@ -281,6 +281,7 @@
       "src/Max/Bungie/Callback.hs",
       "src/Max/Bungie/Client.hs",
       "src/Max/Bungie/Definitions.hs",
+      "src/Max/Bungie/Items.hs",
       "src/Max/Bungie/Manifest.hs",
       "src/Max/Bungie/Runtime.hs",
       "src/Max/Bungie/Shapes.hs",

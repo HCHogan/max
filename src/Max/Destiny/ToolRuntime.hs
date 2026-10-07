@@ -6,6 +6,8 @@ module Max.Destiny.ToolRuntime (destinyToolsWithRuntime) where
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (withMVar)
 import Data.Aeson
+import Data.Foldable (toList)
+import Data.Scientific (toBoundedInteger)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Int (Int64)
@@ -24,7 +26,8 @@ import Max.Bungie.Account
 import Max.Bungie.Api
 import Max.Bungie.Client
 import Max.Bungie.Definitions (kindAliases, resolveKind, unsignedHash)
-import Max.Bungie.Manifest (SearchHit (..), lookupDefinitions, searchDefinitions)
+import Max.Bungie.Items (Lookups (..), itemHashes, normalizeItems, objectiveHashes, parseItemKind, profileComponents, socketPlugHashes, statHashes)
+import Max.Bungie.Manifest (SearchHit (..), lookupDefinitions, lookupLocalDefinitions, searchDefinitions)
 import Max.Bungie.Runtime (BungieRuntime (..))
 import Max.Bungie.Types (DestinyMembership (..))
 import Max.Effects.Destiny
@@ -34,7 +37,7 @@ import Max.Tools.Destiny (destinyToolsFor)
 
 destinyToolsWithRuntime :: (WithConnection :> es, Log :> es, IOE :> es) => BungieRuntime -> ToolContext -> [Tool es]
 destinyToolsWithRuntime runtime context =
-  map (hoistTool (runDestiny account readCall writeCall lookupCall searchCall)) destinyToolsFor
+  map (hoistTool (runDestiny account readCall writeCall lookupCall searchCall itemsCall)) destinyToolsFor
   where
     principal = toolAuthorPrincipalId context
 
@@ -64,10 +67,7 @@ destinyToolsWithRuntime runtime context =
       Right target0 -> do
         -- Bungie caches responses by URL for minutes; a unique parameter
         -- reads the current state.
-        target <-
-          if fresh
-            then (\now -> target0 {atQuery = target0.atQuery <> [("fresh", T.pack (show (floor (utcTimeToPOSIXSeconds now * 1000) :: Integer)))]}) <$> liftIO getCurrentTime
-            else pure target0
+        target <- if fresh then (\pair -> target0 {atQuery = target0.atQuery <> [pair]}) <$> freshQuery else pure target0
         -- An unlinked or broken link still reads public data anonymously.
         token <- either (const Nothing) (fmap fst) <$> accessTokenFor runtime principal
         result <- withRetries token $ \bearer -> callBungie runtime.brHttp runtime.brConfig responseLimit bearer target body
@@ -122,12 +122,54 @@ destinyToolsWithRuntime runtime context =
                 "missing" .= missing
               ]
 
+    -- One fresh profile read with every item component, translated from the
+    -- local manifest only: thousands of plug hashes cost a few queries.
+    itemsCall rawKind = case parseItemKind rawKind of
+      Left err -> pure (Left err)
+      Right kind ->
+        accessTokenFor runtime principal >>= \case
+          Right Nothing -> pure (Left loginHint)
+          Left problem -> pure (Left problem)
+          Right (Just (token, linked)) -> case linked.laMembership of
+            Nothing -> pure (Left "这个 Bungie 账号下没有命运2角色")
+            Just membership -> do
+              fresh <- freshQuery
+              let target = ApiTarget MainHost ["Destiny2", T.pack (show membership.dmType), "Profile", T.pack (show membership.dmId)] [("components", T.intercalate "," (map (T.pack . show) profileComponents)), fresh]
+              result <- withRetries (Just token) $ \bearer -> callBungie runtime.brHttp runtime.brConfig responseLimit bearer target Nothing
+              case result of
+                Left failure -> pure (Left (renderBungieFailure failure))
+                Right profile -> do
+                  items <- lookupLocalDefinitions "DestinyInventoryItemDefinition" (itemHashes profile)
+                  if Map.null items && not (null (itemHashes profile))
+                    then pure (Left "本地 manifest 还在同步，稍后再试；急用可以用 destiny_read 自己读")
+                    else do
+                      plugs <- lookupLocalDefinitions "DestinyInventoryItemDefinition" (socketPlugHashes kind items profile)
+                      let definitions = items <> plugs
+                          hashesAt key = [h | v <- Map.elems items, Just (Number n) <- [lookupPath [key] v], Just h <- [toBoundedInteger n]]
+                          categoryHashes = [h | v <- Map.elems items, Just (Array sockets) <- [lookupPath ["sockets"] v], socket <- toList sockets, Just (Number n) <- [lookupPath ["category"] socket], Just h <- [toBoundedInteger n]]
+                          nameMap = Map.mapMaybe (\v -> case lookupPath ["name"] v of Just (String t) -> Just t; _ -> Nothing)
+                      buckets <- nameMap <$> lookupLocalDefinitions "DestinyInventoryBucketDefinition" (hashesAt "bucketTypeHash")
+                      categories <- nameMap <$> lookupLocalDefinitions "DestinySocketCategoryDefinition" categoryHashes
+                      stats <- nameMap <$> lookupLocalDefinitions "DestinyStatDefinition" (statHashes profile)
+                      objectives <- nameMap <$> lookupLocalDefinitions "DestinyObjectiveDefinition" (objectiveHashes profile)
+                      let rows = normalizeItems kind (Lookups definitions buckets categories stats objectives) profile
+                      pure . Right $
+                        object
+                          [ "bungie_name" .= linked.laBungieName,
+                            "minted" .= lookupPath ["responseMintedTimestamp"] profile,
+                            "count" .= length rows,
+                            "items" .= rows
+                          ]
+
     searchCall rawKind term limit = case traverse resolveKind rawKind of
       Left err -> pure (Left err)
       Right kind ->
         searchDefinitions kind term limit >>= \case
           Nothing -> pure (Left ("本地 manifest 还在同步，暂时不能按名字搜；物品可先用 destiny_read 的 /Destiny2/Armory/Search/DestinyInventoryItemDefinition/" <> term <> "/"))
           Just hits -> pure (Right (object ["query" .= term, "results" .= map hitSummary hits]))
+
+freshQuery :: (IOE :> es) => Eff es (Text, Text)
+freshQuery = (\now -> ("fresh", T.pack (show (floor (utcTimeToPOSIXSeconds now * 1000) :: Integer)))) <$> liftIO getCurrentTime
 
 -- Generous: a whole profile with every component is tens of megabytes. The
 -- tool reports oversize responses instead of returning them.
@@ -199,3 +241,6 @@ intField :: Text -> Value -> Maybe Int
 intField key value = case at [key] value of
   Just (Number n) -> Just (round n)
   _ -> Nothing
+
+lookupPath :: [Text] -> Value -> Maybe Value
+lookupPath = at

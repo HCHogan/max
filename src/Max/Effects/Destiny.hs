@@ -11,6 +11,7 @@ module Max.Effects.Destiny
     destinyWrite,
     destinyLookup,
     destinySearch,
+    destinyItems,
     runDestiny,
   )
 where
@@ -42,6 +43,7 @@ data Destiny :: Effect where
   DestinyWriteCall :: Text -> Value -> Destiny m DestinyWrite
   DestinyLookup :: Text -> [Int64] -> Destiny m (Either Text Value)
   DestinySearch :: Maybe Text -> Text -> Int -> Destiny m (Either Text Value)
+  DestinyItems :: Text -> Destiny m (Either Text Value)
 
 type instance DispatchOf Destiny = Dynamic
 
@@ -62,17 +64,23 @@ destinyLookup kind hashes = send (DestinyLookup kind hashes)
 destinySearch :: (Destiny :> es) => Maybe Text -> Text -> Int -> Eff es (Either Text Value)
 destinySearch kind term limit = send (DestinySearch kind term limit)
 
+-- | The author's items of one kind as translated rows.
+destinyItems :: (Destiny :> es) => Text -> Eff es (Either Text Value)
+destinyItems kind = send (DestinyItems kind)
+
 runDestiny ::
   Eff es Value ->
   (Text -> Value -> Maybe Value -> Bool -> Eff es (Either Text Value)) ->
   (Text -> Value -> Eff es DestinyWrite) ->
   (Text -> [Int64] -> Eff es (Either Text Value)) ->
   (Maybe Text -> Text -> Int -> Eff es (Either Text Value)) ->
+  (Text -> Eff es (Either Text Value)) ->
   Eff (Destiny : es) a ->
   Eff es a
-runDestiny account readCall writeCall lookupCall searchCall = interpret $ \_ -> \case
+runDestiny account readCall writeCall lookupCall searchCall itemsCall = interpret $ \_ -> \case
   DestinyAccount -> account
   DestinyRead path query body fresh -> readCall path query body fresh
   DestinyWriteCall path body -> writeCall path body
   DestinyLookup kind hashes -> lookupCall kind hashes
   DestinySearch kind term limit -> searchCall kind term limit
+  DestinyItems kind -> itemsCall kind
