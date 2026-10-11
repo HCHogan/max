@@ -47,6 +47,10 @@ FROM messages m;
 INSERT INTO message_hook_snapshots (canonical_message_id, conversation_id, name, revision)
 SELECT canonical_message_id, conversation_id, name, revision FROM message_hook_runs;
 
+-- Readers need the historical population's statistics immediately, otherwise
+-- a recent-history query can choose to scan every projection before LIMIT.
+ANALYZE message_projections;
+
 CREATE FUNCTION initialize_message_projection() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   inbound_message boolean := NEW.message_origin='inbound' AND NEW.event_kind='message';
