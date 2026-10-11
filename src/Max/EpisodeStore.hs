@@ -590,7 +590,7 @@ findOldestBackfillGap scope = do
     query
       "WITH first_uncovered AS ( \
       \  SELECT min(source.ingest_seq) AS start_seq \
-      \  FROM messages AS source \
+      \  FROM agent_messages AS source \
       \  WHERE source.group_id = ? AND source.ingest_seq <= ? \
       \    AND NOT EXISTS ( \
       \      SELECT 1 FROM conversation_compartments AS owner \
@@ -607,9 +607,9 @@ findOldestBackfillGap scope = do
       \  FROM first_uncovered WHERE start_seq IS NOT NULL \
       \) \
       \ SELECT \
-      \   COALESCE((SELECT max(previous.ingest_seq) FROM messages AS previous \
+      \   COALESCE((SELECT max(previous.ingest_seq) FROM agent_messages AS previous \
       \             WHERE previous.group_id = ? AND previous.ingest_seq < bounds.start_seq), 0), \
-      \   (SELECT max(source.ingest_seq) FROM messages AS source \
+      \   (SELECT max(source.ingest_seq) FROM agent_messages AS source \
       \    WHERE source.group_id = ? AND source.ingest_seq >= bounds.start_seq \
       \      AND source.ingest_seq <= ? \
       \      AND (bounds.next_active_start IS NULL OR source.ingest_seq < bounds.next_active_start)) \
@@ -657,7 +657,7 @@ prepareRebuildRun scope replaced request = do
     range : _ -> do
       predecessors <-
         query
-          "SELECT COALESCE(max(ingest_seq),0) FROM messages WHERE group_id=? AND ingest_seq<?"
+          "SELECT COALESCE(max(ingest_seq),0) FROM agent_messages WHERE group_id=? AND ingest_seq<?"
           (conversationStorageId scope, range.srStart.ingestSeq)
       case predecessors of
         [Only previous] -> do
@@ -676,7 +676,7 @@ captureSourceRange scope (MessageCursor expected) (MessageCursor end) = do
     query
       "WITH source AS ( \
       \ SELECT min(ingest_seq) AS start_seq, max(ingest_seq) AS end_seq, count(*)::int AS message_count \
-      \ FROM messages WHERE group_id = ? AND ingest_seq > ? AND ingest_seq <= ? \
+      \ FROM agent_messages WHERE group_id = ? AND ingest_seq > ? AND ingest_seq <= ? \
       \) \
       \ SELECT start_seq, end_seq, conversation_source_hash(?, start_seq, end_seq), message_count \
       \ FROM source WHERE message_count > 0 AND end_seq = ?"
@@ -693,7 +693,7 @@ loadCaptureSource run =
         <> historyColumns
         <> ", "
         <> transcriptEligibleExpr
-        <> " FROM messages \
+        <> " FROM agent_messages \
            \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? \
            \ ORDER BY ingest_seq"
     )
@@ -806,7 +806,7 @@ insertStagedCompartment run capture = do
       \         COALESCE((SELECT max(materialization_version) + 1 \
       \                   FROM conversation_compartments WHERE conversation_id = ?), 1), \
       \         (SELECT jsonb_object_agg(user_id::text, message_count) \
-      \          FROM (SELECT user_id, count(*)::int AS message_count FROM messages \
+      \          FROM (SELECT user_id, count(*)::int AS message_count FROM agent_messages \
       \                WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? GROUP BY user_id) stats)) \
       \ RETURNING id"
       ( run.crConversationId,
@@ -854,7 +854,7 @@ insertSummaryEvidence run compartment capture =
         execute
           "INSERT INTO compartment_evidence \
           \ (compartment_id, summary_tier, source_canonical_message_id, source_principal_id) \
-          \ SELECT ?, ?, canonical_message_id, author_principal_id FROM messages \
+          \ SELECT ?, ?, canonical_message_id, author_principal_id FROM agent_messages \
           \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND canonical_message_id IN ?"
           ( compartment,
             tier :: Text,
@@ -1083,16 +1083,16 @@ listActiveCompartments scope =
     \ SELECT a.id, a.expand_handle, a.start_ingest_seq, a.end_ingest_seq, a.source_hash, a.source_message_count, \
     \        first_message.received_at, last_message.received_at, \
     \        (a.previous_end IS NOT NULL AND EXISTS ( \
-    \          SELECT 1 FROM messages AS gap_message \
+    \          SELECT 1 FROM agent_messages AS gap_message \
     \          WHERE gap_message.group_id = a.conversation_id \
     \            AND gap_message.ingest_seq > a.previous_end \
     \            AND gap_message.ingest_seq < a.start_ingest_seq \
     \        )), \
     \        COALESCE(a.summary_p1, a.summary), a.summary_p2, a.summary_p3, a.importance, a.confidence \
     \ FROM active AS a \
-    \ JOIN messages AS first_message \
+    \ JOIN agent_messages AS first_message \
     \   ON first_message.group_id = a.conversation_id AND first_message.ingest_seq = a.start_ingest_seq \
-    \ JOIN messages AS last_message \
+    \ JOIN agent_messages AS last_message \
     \   ON last_message.group_id = a.conversation_id AND last_message.ingest_seq = a.end_ingest_seq \
     \ ORDER BY a.start_ingest_seq, a.end_ingest_seq"
     (Only (conversationStorageId scope))
@@ -1131,7 +1131,7 @@ expandEpisode policy handle requestedAfter requestedSize = do
               <> historyColumns
               <> ", "
               <> transcriptEligibleExpr
-              <> " FROM messages \
+              <> " FROM agent_messages \
                  \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND ingest_seq > ? \
                  \ ORDER BY ingest_seq \
                  \ LIMIT ?"

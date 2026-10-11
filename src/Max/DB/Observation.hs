@@ -46,7 +46,7 @@ readConversationAfter scope own cleared after excluded = withReadSnapshot $ do
     query
       ( "SELECT count(*) OVER (), ingest_seq, "
           <> historyColumns
-          <> " FROM messages WHERE group_id=? AND ingest_seq>? AND ingest_seq<=?"
+          <> " FROM agent_messages WHERE group_id=? AND ingest_seq>? AND ingest_seq<=?"
           <> " AND agent_turn_id IS DISTINCT FROM ? AND NOT(canonical_message_id=ANY(?::bigint[])) AND "
           <> transcriptEligibleExpr
           <> " AND (?::timestamptz IS NULL OR received_at>?) ORDER BY ingest_seq LIMIT 200"

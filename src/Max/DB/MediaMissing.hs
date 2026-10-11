@@ -16,7 +16,7 @@ missingMediaMessages after = do
   rows <-
     query
       "WITH source AS ( \
-      \   SELECT * FROM messages WHERE canonical_message_id > ? \
+      \   SELECT * FROM agent_messages WHERE canonical_message_id > ? \
       \   ORDER BY canonical_message_id LIMIT 128 \
       \ ) \
       \ SELECT m.canonical_message_id, m.source_native_event_id NOT LIKE 'forward:%', \

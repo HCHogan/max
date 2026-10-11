@@ -76,7 +76,7 @@ loadContextStatus selectedConversation = do
   rows <-
     query
       "WITH conversations AS ( \
-      \  SELECT group_id AS conversation_id FROM messages \
+      \  SELECT group_id AS conversation_id FROM agent_messages \
       \  UNION SELECT group_id FROM sessions \
       \  UNION SELECT conversation_id FROM conversation_cursors \
       \  UNION SELECT conversation_id FROM conversation_compartments \
@@ -84,7 +84,7 @@ loadContextStatus selectedConversation = do
       \  SELECT group_id AS conversation_id, count(*) AS message_count, \
       \         min(ingest_seq) AS first_seq, max(ingest_seq) AS last_seq, \
       \         max(received_at) AS last_message_at \
-      \  FROM messages GROUP BY group_id \
+      \  FROM agent_messages GROUP BY group_id \
       \), historian AS ( \
       \  SELECT conversation_id, ingest_seq FROM conversation_cursors WHERE cursor_name = 'historian' \
       \), active AS ( \
@@ -99,7 +99,7 @@ loadContextStatus selectedConversation = do
       \  SELECT current.conversation_id, \
       \         count(*) FILTER (WHERE current.previous_end IS NOT NULL AND current.previous_end >= current.start_ingest_seq) AS overlaps, \
       \         count(*) FILTER (WHERE current.previous_end IS NOT NULL AND current.previous_end < current.start_ingest_seq \
-      \           AND EXISTS (SELECT 1 FROM messages AS gap_message \
+      \           AND EXISTS (SELECT 1 FROM agent_messages AS gap_message \
       \                       WHERE gap_message.group_id = current.conversation_id \
       \                         AND gap_message.ingest_seq > current.previous_end \
       \                         AND gap_message.ingest_seq < current.start_ingest_seq)) AS gaps \
@@ -115,7 +115,7 @@ loadContextStatus selectedConversation = do
       \         min(message.received_at) FILTER (WHERE message.ingest_seq > COALESCE(historian.ingest_seq, 0)) AS oldest_live_tail_at \
       \  FROM conversations \
       \  LEFT JOIN historian USING (conversation_id) \
-      \  LEFT JOIN messages AS message ON message.group_id = conversations.conversation_id \
+      \  LEFT JOIN agent_messages AS message ON message.group_id = conversations.conversation_id \
       \  GROUP BY conversations.conversation_id \
       \) \
       \ SELECT conversations.conversation_id, COALESCE(message_stats.message_count, 0), \
@@ -465,7 +465,7 @@ loadEmbeddingStatus targetModel conversationId = do
       ( "WITH corpus AS ( \
         \  SELECT 'message'::text AS corpus, message.group_id AS conversation_id, message.rendered_text AS content, \
         \         message.embedding IS NOT NULL AS has_embedding, message.embedding_model, message.embedding_dimensions, message.embedding_content_hash \
-        \  FROM messages AS message WHERE NOT message.is_synthetic AND "
+        \  FROM agent_messages AS message WHERE NOT message.is_synthetic AND "
           <> notForwardChild "message"
           <> " \
              \    AND char_length(message.rendered_text) >= 4 \
@@ -518,7 +518,7 @@ runContextIntegrityCheck conversationId = do
   rows <-
     query
       "WITH conversations AS ( \
-      \  SELECT group_id AS conversation_id FROM messages \
+      \  SELECT group_id AS conversation_id FROM agent_messages \
       \  UNION SELECT conversation_id FROM conversation_cursors \
       \  UNION SELECT conversation_id FROM conversation_compartments \
       \), historian AS ( \
@@ -528,18 +528,18 @@ runContextIntegrityCheck conversationId = do
       \   (SELECT count(*) FROM conversation_compartments AS compartment \
       \    WHERE compartment.conversation_id = conversations.conversation_id AND compartment.state = 'active' \
       \      AND (compartment.source_hash IS DISTINCT FROM conversation_source_hash(compartment.conversation_id, compartment.start_ingest_seq, compartment.end_ingest_seq) \
-      \        OR compartment.source_message_count IS DISTINCT FROM (SELECT count(*) FROM messages AS source WHERE source.group_id = compartment.conversation_id AND source.ingest_seq BETWEEN compartment.start_ingest_seq AND compartment.end_ingest_seq))) AS bad_source_ranges, \
+      \        OR compartment.source_message_count IS DISTINCT FROM (SELECT count(*) FROM agent_messages AS source WHERE source.group_id = compartment.conversation_id AND source.ingest_seq BETWEEN compartment.start_ingest_seq AND compartment.end_ingest_seq))) AS bad_source_ranges, \
       \   (SELECT count(*) FROM conversation_compartments AS left_range JOIN conversation_compartments AS right_range \
       \      ON left_range.conversation_id = right_range.conversation_id AND left_range.id < right_range.id \
       \     AND left_range.source_range && right_range.source_range \
       \    WHERE left_range.conversation_id = conversations.conversation_id AND left_range.state = 'active' AND right_range.state = 'active') AS overlaps, \
-      \   (SELECT count(*) FROM messages AS message \
+      \   (SELECT count(*) FROM agent_messages AS message \
       \    WHERE message.group_id = conversations.conversation_id \
       \      AND message.ingest_seq <= COALESCE(historian.ingest_seq, 0) \
       \      AND NOT EXISTS (SELECT 1 FROM conversation_compartments AS owner \
       \                      WHERE owner.conversation_id = conversations.conversation_id AND owner.state = 'active' \
       \                        AND message.ingest_seq BETWEEN owner.start_ingest_seq AND owner.end_ingest_seq)) AS uncovered_settled, \
-      \   (COALESCE(historian.ingest_seq, 0) > COALESCE((SELECT max(ingest_seq) FROM messages AS source WHERE source.group_id = conversations.conversation_id), 0)) AS cursor_beyond_ledger \
+      \   (COALESCE(historian.ingest_seq, 0) > COALESCE((SELECT max(ingest_seq) FROM agent_messages AS source WHERE source.group_id = conversations.conversation_id), 0)) AS cursor_beyond_ledger \
       \ FROM conversations LEFT JOIN historian USING (conversation_id) \
       \ WHERE (?::bigint IS NULL OR conversations.conversation_id = ?) \
       \ ORDER BY conversations.conversation_id"

@@ -140,7 +140,7 @@ readContext scope tokens request = case request.rrCursor of
         query
           ( selectRow
               <> " WHERE group_id=? AND "
-              <> notForwardChild "messages"
+              <> notForwardChild "agent_messages"
               <> " AND ingest_seq "
               <> comparison cursor
               <> " ?"
@@ -153,8 +153,8 @@ readContext scope tokens request = case request.rrCursor of
       Forward parent ->
         query
           ( "WITH children AS (SELECT child.*, row_number() OVER (ORDER BY r.relation_position, r.relation_id) AS child_position "
-              <> "FROM messages child JOIN message_relations r ON r.canonical_message_id=child.canonical_message_id AND r.relation_kind='contained_in' "
-              <> "JOIN messages parent ON parent.canonical_message_id=r.target_canonical_message_id "
+              <> "FROM agent_messages child JOIN message_relations r ON r.canonical_message_id=child.canonical_message_id AND r.relation_kind='contained_in' "
+              <> "JOIN agent_messages parent ON parent.canonical_message_id=r.target_canonical_message_id "
               <> "WHERE child.group_id=? AND parent.group_id=? AND parent.canonical_message_id=?) "
               <> selectForward
               <> " WHERE child_position "
@@ -191,8 +191,8 @@ readContext scope tokens request = case request.rrCursor of
           \   'episode',CASE WHEN ep.expand_handle IS NOT NULL THEN jsonb_build_object('ref','episode:'||ep.expand_handle::text) END, \
           \   'start_cursor',e.source_start_ingest_seq::text,'end_cursor',e.source_end_ingest_seq::text) ORDER BY e.id) \
           \ FROM memory_evidence e \
-          \ LEFT JOIN messages source ON source.canonical_message_id=COALESCE(e.source_canonical_message_id, \
-          \   (SELECT canonical_message_id FROM messages origin WHERE origin.group_id=e.source_conversation_id \
+          \ LEFT JOIN agent_messages source ON source.canonical_message_id=COALESCE(e.source_canonical_message_id, \
+          \   (SELECT canonical_message_id FROM agent_messages origin WHERE origin.group_id=e.source_conversation_id \
           \      AND origin.ingest_seq BETWEEN e.source_start_ingest_seq AND e.source_end_ingest_seq ORDER BY origin.ingest_seq LIMIT 1)) \
           \   AND source.group_id=? \
           \ LEFT JOIN conversation_compartments ep ON ep.id=e.source_episode_id AND ep.conversation_id=? \
@@ -206,9 +206,9 @@ readContext scope tokens request = case request.rrCursor of
         [] -> Left "memory not found or not visible in this conversation"
 
 selectRow, selectForward, rowExtras, timeFilter :: Query
-selectRow = "SELECT ingest_seq, " <> historyColumns <> rowExtras <> " FROM messages"
-selectForward = "SELECT child_position, " <> historyColumns <> rowExtras <> " FROM children AS messages"
-rowExtras = ", occurred_at, (SELECT expand_handle::text FROM conversation_compartments ep WHERE ep.conversation_id=messages.group_id AND ep.state='active' AND messages.ingest_seq BETWEEN ep.start_ingest_seq AND ep.end_ingest_seq LIMIT 1), EXISTS(SELECT 1 FROM message_relations rel WHERE rel.target_canonical_message_id=messages.canonical_message_id AND rel.relation_kind='contained_in'), kind, " <> transcriptEligibleExpr
+selectRow = "SELECT ingest_seq, " <> historyColumns <> rowExtras <> " FROM agent_messages"
+selectForward = "SELECT child_position, " <> historyColumns <> rowExtras <> " FROM children AS agent_messages"
+rowExtras = ", occurred_at, (SELECT expand_handle::text FROM conversation_compartments ep WHERE ep.conversation_id=agent_messages.group_id AND ep.state='active' AND agent_messages.ingest_seq BETWEEN ep.start_ingest_seq AND ep.end_ingest_seq LIMIT 1), EXISTS(SELECT 1 FROM message_relations rel WHERE rel.target_canonical_message_id=agent_messages.canonical_message_id AND rel.relation_kind='contained_in'), kind, " <> transcriptEligibleExpr
 timeFilter = " AND (?::timestamptz IS NULL OR received_at>=?) AND (?::timestamptz IS NULL OR received_at<?)"
 
 times :: ReadCursor -> (Maybe UTCTime, Maybe UTCTime, Maybe UTCTime, Maybe UTCTime)

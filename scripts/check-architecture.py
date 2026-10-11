@@ -39,6 +39,7 @@ PURE = {
     "Max.Tool.Catalog",
     "Max.Task.Types",
     "Max.Monitor.Types",
+    "Max.Hook.Types",
     "Max.Platform.Types",
     "Max.IR",
     "OneBot.Types",
@@ -96,6 +97,13 @@ def check_imports():
     for dependency in IMPORT.findall(wasm):
         if dependency.startswith("Max.") or dependency.startswith("System.Process"):
             errors.append(f"Wasm mechanics acquired domain or subprocess capability: {dependency}")
+
+    # Canonical ingest only persists facts and policy references. Execution and
+    # monitor admission belong to the separate post-commit projection worker.
+    ingest = (ROOT / "src/Max/Platform/Store/Ingest.hs").read_text()
+    for dependency in IMPORT.findall(ingest):
+        if dependency in {"Max.DB.Hook", "Max.DB.MessageProjection", "Max.DB.Monitor"} or dependency.startswith(("Max.Hook.", "Max.CodeMode.")):
+            errors.append(f"Canonical ingest acquired projection execution: {dependency}")
 
     # Read-model codecs may decode SQL fields, but cannot execute queries or IO.
     read_models = {
@@ -180,7 +188,7 @@ def check_imports():
         dependencies = set(IMPORT.findall(source))
         if relative != "src/Max/MemoryStore.hs" and re.search(r"\bcreateMemory\b", source):
             errors.append(f"{relative}: memory creation bypasses shared admission")
-        domain_tools = {"src/Max/Tools/Skills.hs", "src/Max/Tools/Search.hs", "src/Max/Tools/Sandbox.hs", "src/Max/Tools/Browser.hs", "src/Max/Tools/Files.hs", "src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Pins.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs", "src/Max/Tools/Destiny.hs"}
+        domain_tools = {"src/Max/Tools/Skills.hs", "src/Max/Tools/Search.hs", "src/Max/Tools/Sandbox.hs", "src/Max/Tools/Browser.hs", "src/Max/Tools/Files.hs", "src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Hooks.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Pins.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs", "src/Max/Tools/Destiny.hs"}
         resource_tools = {"src/Max/Tools/Files.hs", "src/Max/Tools/Browser.hs"}
         if relative in domain_tools | resource_tools:
             if any(dependency.startswith(("Max.DB.", "Max.Platform.Store.")) for dependency in dependencies) or dependencies & {"Effectful.PostgreSQL", "Max.Platform.Store", "Max.Session", "Max.Reply.Resolve", "Max.Reply.Caption", "Max.Task.ToolRuntime", "Max.Monitor.ToolRuntime", "Max.Memory.ToolRuntime", "Max.MemoryStore", "Max.EpisodeStore", "Max.Recall", "Max.Prompt", "Max.Conversation.ToolRuntime", "Max.Monitor", "Max.Tools"}:
@@ -251,6 +259,9 @@ import Max.Effects.MemoryQuery qualified as MemoryQuery
 import Max.Effects.MemoryControl (MemoryControl, saveMemory)
 import Max.Memory.Policy (MemorySubject (ConversationMemory))
 import Max.Effects.MonitorQuery (MonitorQuery, listMonitors)
+import Max.Effects.HookQuery (HookQuery, queryHooks)
+import Max.Effects.HookControl (HookControl, setHook)
+import Max.Hook.Types qualified as Hook
 import Max.Effects.MonitorControl (MonitorControl, controlMonitor)
 import Max.Monitor.Control (MonitorCommand (CancelMonitor))
 import Max.Monitor.Types (MonitorOrdinal (..))
@@ -293,6 +304,10 @@ memories :: MemoryQuery :> es => Eff es ()
 memories = () <$ MemoryQuery.listMemories ConversationMemory
 editMemory :: MemoryControl :> es => Eff es ()
 editMemory = () <$ saveMemory ConversationMemory "fact"
+hooks :: HookQuery :> es => Eff es ()
+hooks = () <$ queryHooks Hook.HookList
+changeHook :: HookControl :> es => Hook.HookPatch -> Eff es ()
+changeHook patch = () <$ setHook patch
 monitors :: MonitorQuery :> es => Eff es ()
 monitors = () <$ listMonitors
 changeMonitor :: MonitorControl :> es => Eff es ()
@@ -358,6 +373,9 @@ NEGATIVE = {
     "memory query cannot save": ("MemoryControl", 'bad :: MemoryQuery :> es => Eff es ()\nbad = () <$ saveMemory ConversationMemory "fact"'),
     "memory query cannot use arbitrary IO": ("IOE", 'bad :: MemoryQuery :> es => Eff es ()\nbad = liftIO (pure ())'),
     "memory control cannot query other subjects": ("MemoryQuery", 'bad :: MemoryControl :> es => Eff es ()\nbad = () <$ MemoryQuery.listMemories ConversationMemory'),
+    "hook query cannot write": ("HookControl", 'bad :: HookQuery :> es => Hook.HookPatch -> Eff es ()\nbad patch = () <$ setHook patch'),
+    "hook query cannot use arbitrary IO": ("IOE", 'bad :: HookQuery :> es => Eff es ()\nbad = liftIO (pure ())'),
+    "hook control cannot query": ("HookQuery", 'bad :: HookControl :> es => Eff es ()\nbad = () <$ queryHooks Hook.HookList'),
     "monitor query cannot control a monitor": ("MonitorControl", 'bad :: MonitorQuery :> es => Eff es ()\nbad = () <$ controlMonitor (MonitorOrdinal 1) CancelMonitor False'),
     "monitor query cannot use arbitrary IO": ("IOE", 'bad :: MonitorQuery :> es => Eff es ()\nbad = liftIO (pure ())'),
     "monitor control cannot read other conversations": ("MonitorQuery", 'bad :: MonitorControl :> es => Eff es ()\nbad = () <$ listMonitors'),

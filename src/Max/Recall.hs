@@ -463,7 +463,7 @@ lexicalCandidatesSql =
   \         'memory:' || memory.id::text AS dedup_key, \
   \         left(memory.content, 800) AS snippet, memory.updated_at AS occurred_at, \
   \         CASE WHEN memory.scope = 'user' THEN memory.scope_id ELSE NULL END::bigint AS principal_id, \
-  \         (SELECT canonical_message_id FROM messages WHERE canonical_message_id=evidence.source_canonical_message_id AND group_id=input.conversation_id) AS message_id, \
+  \         (SELECT canonical_message_id FROM agent_messages WHERE canonical_message_id=evidence.source_canonical_message_id AND group_id=input.conversation_id) AS message_id, \
   \         (SELECT expand_handle FROM conversation_compartments WHERE id=evidence.source_episode_id AND conversation_id=input.conversation_id) AS episode_handle, memory.id AS memory_id, \
   \         0::double precision AS importance, \
   \         GREATEST((SELECT count(*) FILTER (WHERE position(term in lower(memory.content))>0)::double precision / GREATEST(cardinality(input.query_terms),1) FROM unnest(input.query_terms) term), similarity(memory.content, input.query_text), \
@@ -496,7 +496,7 @@ lexicalCandidatesSql =
   \         NULL::double precision AS semantic_score, false AS is_pinned, false AS is_permanent \
   \  FROM conversation_compartments AS episode CROSS JOIN input \
   \  WHERE episode.conversation_id = input.conversation_id AND episode.state = 'active' \
-  \    AND 'episode'=ANY(input.kinds) AND input.sender IS NULL AND ((input.from_time IS NULL AND input.until_time IS NULL) OR EXISTS(SELECT 1 FROM messages src WHERE src.group_id=episode.conversation_id AND src.ingest_seq BETWEEN episode.start_ingest_seq AND episode.end_ingest_seq AND (input.from_time IS NULL OR src.received_at>=input.from_time) AND (input.until_time IS NULL OR src.received_at<input.until_time))) \
+  \    AND 'episode'=ANY(input.kinds) AND input.sender IS NULL AND ((input.from_time IS NULL AND input.until_time IS NULL) OR EXISTS(SELECT 1 FROM agent_messages src WHERE src.group_id=episode.conversation_id AND src.ingest_seq BETWEEN episode.start_ingest_seq AND episode.end_ingest_seq AND (input.from_time IS NULL OR src.received_at>=input.from_time) AND (input.until_time IS NULL OR src.received_at<input.until_time))) \
   \    AND (position(lower(input.query_text) in lower(episode.summary)) > 0 \
   \      OR similarity(episode.summary, input.query_text) >= 0.08 OR EXISTS(SELECT 1 FROM unnest(input.query_terms) term WHERE position(term in lower(episode.summary))>0)) \
   \  ORDER BY lexical_score DESC, occurred_at DESC, episode.id \
@@ -510,7 +510,7 @@ lexicalCandidatesSql =
   \           CASE WHEN position(lower(input.query_text) in lower(message.rendered_text)) > 0 THEN 1 ELSE 0 END \
   \         )::double precision AS lexical_score, \
   \         NULL::double precision AS semantic_score, (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
-  \  FROM messages AS message CROSS JOIN input LEFT JOIN pins USING (canonical_message_id) \
+  \  FROM agent_messages AS message CROSS JOIN input LEFT JOIN pins USING (canonical_message_id) \
   \  WHERE message.group_id = input.conversation_id AND NOT message.is_synthetic \
   \    AND 'message'=ANY(input.kinds) AND (input.from_time IS NULL OR message.received_at>=input.from_time) AND (input.until_time IS NULL OR message.received_at<input.until_time) AND (input.sender IS NULL OR message.author_principal_id=input.sender) \
   \    AND message.kind IN ('chat', 'system') \
@@ -525,11 +525,11 @@ lexicalCandidatesSql =
        \  SELECT source.canonical_message_id, string_agg(DISTINCT source.description, ' | ') AS description \
        \  FROM ( \
        \    SELECT link.canonical_message_id, image.description FROM message_images AS link \
-       \    JOIN images AS image USING (sha256) JOIN messages AS message USING (canonical_message_id) CROSS JOIN input \
+       \    JOIN images AS image USING (sha256) JOIN agent_messages AS message USING (canonical_message_id) CROSS JOIN input \
        \    WHERE image.description IS NOT NULL AND message.group_id = input.conversation_id \
        \    UNION ALL \
        \    SELECT link.canonical_message_id, video.description FROM message_videos AS link \
-       \    JOIN videos AS video USING (sha256) JOIN messages AS message USING (canonical_message_id) CROSS JOIN input \
+       \    JOIN videos AS video USING (sha256) JOIN agent_messages AS message USING (canonical_message_id) CROSS JOIN input \
        \    WHERE video.description IS NOT NULL AND message.group_id = input.conversation_id \
        \  ) AS source \
        \  GROUP BY source.canonical_message_id \
@@ -542,7 +542,7 @@ lexicalCandidatesSql =
        \           CASE WHEN position(lower(input.query_text) in lower(media.description)) > 0 THEN 1 ELSE 0 END \
        \         )::double precision AS lexical_score, \
        \         NULL::double precision AS semantic_score, (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
-       \  FROM media JOIN messages AS message USING (canonical_message_id) CROSS JOIN input \
+       \  FROM media JOIN agent_messages AS message USING (canonical_message_id) CROSS JOIN input \
        \  LEFT JOIN pins USING (canonical_message_id) \
        \  WHERE message.group_id = input.conversation_id \
        \    AND 'message'=ANY(input.kinds) AND (input.from_time IS NULL OR message.received_at>=input.from_time) AND (input.until_time IS NULL OR message.received_at<input.until_time) AND (input.sender IS NULL OR message.author_principal_id=input.sender) \
@@ -585,7 +585,7 @@ semanticCandidatesSql =
   \         'memory:' || memory.id::text AS dedup_key, \
   \         left(memory.content, 800) AS snippet, memory.updated_at AS occurred_at, \
   \         CASE WHEN memory.scope = 'user' THEN memory.scope_id ELSE NULL END::bigint AS principal_id, \
-  \         (SELECT canonical_message_id FROM messages WHERE canonical_message_id=memory.recall_message_id AND group_id=(SELECT conversation_id FROM input)) AS message_id, \
+  \         (SELECT canonical_message_id FROM agent_messages WHERE canonical_message_id=memory.recall_message_id AND group_id=(SELECT conversation_id FROM input)) AS message_id, \
   \         (SELECT expand_handle FROM conversation_compartments WHERE id=memory.recall_episode_id AND conversation_id=(SELECT conversation_id FROM input)) AS episode_handle, memory.id AS memory_id, \
   \         0::double precision AS importance, NULL::double precision AS lexical_score, \
   \         (1 - (memory.embedding <=> memory.query_vector))::double precision AS semantic_score, \
@@ -598,7 +598,7 @@ semanticCandidatesSql =
   \  FROM conversation_compartments AS episode CROSS JOIN input \
   \  WHERE episode.conversation_id = input.conversation_id AND episode.state = 'active' \
   \    AND episode.embedding_model = input.model_id AND episode.embedding_dimensions = input.dimensions \
-  \    AND 'episode'=ANY(input.kinds) AND input.sender IS NULL AND ((input.from_time IS NULL AND input.until_time IS NULL) OR EXISTS(SELECT 1 FROM messages src WHERE src.group_id=episode.conversation_id AND src.ingest_seq BETWEEN episode.start_ingest_seq AND episode.end_ingest_seq AND (input.from_time IS NULL OR src.received_at>=input.from_time) AND (input.until_time IS NULL OR src.received_at<input.until_time))) \
+  \    AND 'episode'=ANY(input.kinds) AND input.sender IS NULL AND ((input.from_time IS NULL AND input.until_time IS NULL) OR EXISTS(SELECT 1 FROM agent_messages src WHERE src.group_id=episode.conversation_id AND src.ingest_seq BETWEEN episode.start_ingest_seq AND episode.end_ingest_seq AND (input.from_time IS NULL OR src.received_at>=input.from_time) AND (input.until_time IS NULL OR src.received_at<input.until_time))) \
   \), episode_candidates AS ( \
   \  SELECT 'episode'::text AS source, 'episode:' || episode.id::text AS dedup_key, \
   \         left(episode.summary, 800) AS snippet, COALESCE(episode.activated_at, episode.created_at) AS occurred_at, \
@@ -611,7 +611,7 @@ semanticCandidatesSql =
   \  LIMIT (SELECT candidate_limit FROM input) \
   \), compatible_messages AS MATERIALIZED ( \
   \  SELECT message.*, input.query_vector, input.candidate_limit \
-  \  FROM messages AS message CROSS JOIN input \
+  \  FROM agent_messages AS message CROSS JOIN input \
   \  WHERE message.group_id = input.conversation_id AND NOT message.is_synthetic \
   \    AND message.kind IN ('chat', 'system') \
   \    AND "

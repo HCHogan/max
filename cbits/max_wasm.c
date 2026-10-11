@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <pthread.h>
 
 #define MESSAGE_LIMIT (16 * 1024 * 1024)
 
@@ -160,15 +161,12 @@ static wasmtime_error_t *define_func(wasmtime_linker_t *linker, const char *name
   return error;
 }
 
-int max_wasm_open(max_wasm *run, const uint8_t *bytes, size_t length,
-                  uint64_t fuel, int64_t memory, char *message, size_t capacity) {
-  wasmtime_module_t *module = NULL;
+static int open_module(max_wasm *run, const wasmtime_module_t *module,
+                       uint64_t fuel, int64_t memory, char *message, size_t capacity) {
   wasmtime_linker_t *linker = NULL;
   wasm_trap_t *trap = NULL;
   wasmtime_error_t *error = NULL;
   int result = 1;
-  error = wasmtime_module_new(run->engine, bytes, length, &module);
-  if (error) goto failed;
   run->store = wasmtime_store_new(run->engine, NULL, NULL);
   wasmtime_store_limiter(run->store, memory, 10000, 1, 1, 1);
   wasmtime_context_t *context = wasmtime_store_context(run->store);
@@ -196,7 +194,66 @@ failed:
   result = failure(error, trap, message, capacity);
 cleanup:
   if (linker) wasmtime_linker_delete(linker);
-  if (module) wasmtime_module_delete(module);
+  return result;
+}
+
+int max_wasm_open(max_wasm *run, const uint8_t *bytes, size_t length,
+                  uint64_t fuel, int64_t memory, char *message, size_t capacity) {
+  wasmtime_module_t *module = NULL;
+  wasmtime_error_t *error = wasmtime_module_new(run->engine, bytes, length, &module);
+  if (error) return failure(error, NULL, message, capacity);
+  int result = open_module(run, module, fuel, memory, message, capacity);
+  wasmtime_module_delete(module);
+  return result;
+}
+
+/* A single bounded cache for repeated host-authored modules (inbound hooks).
+   Serialized bytes are produced in this process by this exact engine config;
+   no untrusted precompiled bytes can reach deserialize. Each invocation still
+   owns a separate engine/store/heap/epoch, so interrupts never cross guests. */
+static pthread_mutex_t module_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint8_t *module_cache_source;
+static size_t module_cache_length;
+static wasm_byte_vec_t module_cache_serialized;
+
+int max_wasm_open_cached(max_wasm *run, const uint8_t *bytes, size_t length,
+                         uint64_t fuel, int64_t memory, char *message, size_t capacity) {
+  wasmtime_module_t *module = NULL;
+  wasmtime_error_t *error;
+  pthread_mutex_lock(&module_cache_lock);
+  if (module_cache_source && length == module_cache_length &&
+      memcmp(bytes, module_cache_source, length) == 0) {
+    error = wasmtime_module_deserialize(run->engine,
+      (const uint8_t *)module_cache_serialized.data,
+      module_cache_serialized.size, &module);
+  } else {
+    error = wasmtime_module_new(run->engine, bytes, length, &module);
+    if (!error && length <= 4 * 1024 * 1024) {
+      wasm_byte_vec_t serialized = {0};
+      wasmtime_error_t *cache_error = wasmtime_module_serialize(module, &serialized);
+      if (cache_error) {
+        wasmtime_error_delete(cache_error); /* Execution can still proceed. */
+      } else {
+        uint8_t *copy = serialized.size <= 64 * 1024 * 1024 ? malloc(length) : NULL;
+        if (copy) {
+          memcpy(copy, bytes, length);
+          if (module_cache_source) {
+            free(module_cache_source);
+            wasm_byte_vec_delete(&module_cache_serialized);
+          }
+          module_cache_source = copy;
+          module_cache_length = length;
+          module_cache_serialized = serialized;
+        } else {
+          wasm_byte_vec_delete(&serialized);
+        }
+      }
+    }
+  }
+  pthread_mutex_unlock(&module_cache_lock);
+  if (error) return failure(error, NULL, message, capacity);
+  int result = open_module(run, module, fuel, memory, message, capacity);
+  wasmtime_module_delete(module);
   return result;
 }
 

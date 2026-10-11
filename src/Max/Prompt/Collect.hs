@@ -455,7 +455,7 @@ waitForTriggerForward mid = go 0
           rows <-
             query
               "SELECT count(*) FROM message_relations containment \
-              \ JOIN messages container \
+              \ JOIN agent_messages container \
               \   ON container.canonical_message_id = containment.target_canonical_message_id \
               \ WHERE containment.relation_kind = 'contained_in' \
               \   AND container.message_id = ?"

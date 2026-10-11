@@ -42,7 +42,7 @@ fetchMessageImagesInScope scope canonical seg =
     "SELECT mi.seg_index, i.mime_type, i.sha256 \
     \  FROM message_images mi \
     \  JOIN images i ON i.sha256 = mi.sha256 \
-    \  JOIN messages m USING (canonical_message_id) \
+    \  JOIN agent_messages m USING (canonical_message_id) \
     \  WHERE m.group_id = ? AND mi.canonical_message_id = ? \
     \    AND (?::int IS NULL OR mi.seg_index = ?) \
     \  ORDER BY mi.seg_index"
@@ -60,7 +60,7 @@ fetchMessageVideoInScope scope canonical seg = do
       "SELECT mv.seg_index, v.mime_type, v.sha256, v.duration_seconds \
       \  FROM message_videos mv \
       \  JOIN videos v USING (sha256) \
-      \  JOIN messages m USING (canonical_message_id) \
+      \  JOIN agent_messages m USING (canonical_message_id) \
       \  WHERE m.group_id = ? AND mv.canonical_message_id = ? \
       \    AND (?::int IS NULL OR mv.seg_index = ?) \
       \  ORDER BY mv.seg_index \
@@ -132,7 +132,7 @@ fetchConversationImagesInScope :: (WithConnection :> es, IOE :> es) => Conversat
 fetchConversationImagesInScope scope =
   query
     "SELECT mi.canonical_message_id, mi.seg_index, i.mime_type, i.sha256 \
-    \  FROM messages m \
+    \  FROM agent_messages m \
     \  JOIN message_images mi USING (canonical_message_id) \
     \  JOIN images i ON i.sha256 = mi.sha256 \
     \  WHERE m.group_id = ? \
@@ -144,7 +144,7 @@ fetchConversationVideosInScope :: (WithConnection :> es, IOE :> es) => Conversat
 fetchConversationVideosInScope scope =
   query
     "SELECT mv.canonical_message_id, mv.seg_index, v.mime_type, v.sha256 \
-    \  FROM messages m \
+    \  FROM agent_messages m \
     \  JOIN message_videos mv USING (canonical_message_id) \
     \  JOIN videos v ON v.sha256 = mv.sha256 \
     \  WHERE m.group_id = ?"

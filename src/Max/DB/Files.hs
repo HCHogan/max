@@ -76,7 +76,7 @@ fetchFilesForMessageInScope scope mid =
     "SELECT file_id, group_id, canonical_message_id, sender_user_id, file_name, \
     \       mime_type, bytes_size, sha256, received_at, fetched_at \
     \  FROM group_files \
-    \  WHERE group_id = ? AND canonical_message_id = ? \
+    \  WHERE group_id = ? AND canonical_message_id = ? AND EXISTS (SELECT 1 FROM agent_messages m WHERE m.canonical_message_id=group_files.canonical_message_id) \
     \  ORDER BY received_at ASC, file_id"
     (conversationStorageId scope, mid)
 
@@ -92,7 +92,7 @@ listConversationFilesInScope scope =
     "SELECT file_id, group_id, canonical_message_id, sender_user_id, file_name, \
     \       mime_type, bytes_size, sha256, received_at, fetched_at \
     \  FROM group_files \
-    \  WHERE group_id = ? AND canonical_message_id IS NOT NULL \
+    \  WHERE group_id = ? AND canonical_message_id IS NOT NULL AND EXISTS (SELECT 1 FROM agent_messages m WHERE m.canonical_message_id=group_files.canonical_message_id) \
     \  ORDER BY canonical_message_id, received_at ASC, file_id"
     (Only (conversationStorageId scope))
 

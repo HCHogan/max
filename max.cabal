@@ -218,6 +218,14 @@ library
         Max.DB.Health
         Max.DB.Projection
         Max.DB.History
+        Max.DB.Hook
+        Max.DB.MessageProjection
+        Max.Hook.Types
+        Max.Hook.Runtime
+        Max.Hook.ToolRuntime
+        Max.Effects.HookControl
+        Max.Effects.HookQuery
+        Max.Tools.Hooks
         Max.DB.Observation
         Max.DB.ContextRead
         Max.History.Types
@@ -709,6 +717,7 @@ test-suite max-test
         NodeWorkFixture
         Max.CodeMode.WasmSpec
         Max.CodeMode.JavaScriptSpec
+        Max.HookSpec
         Max.Execution.ToolsSpec
         Max.AdminSpec
         Max.CliProxySpec
@@ -865,6 +874,7 @@ test-suite max-test-db
         Max.DB.TransactionSpec
         Max.ContextAdminSpec
         Max.ContextReadSpec
+        Max.HookSpec
         Max.ConversationCapabilitiesSpec
         Max.ResourceCapabilitiesSpec
         Max.SandboxRegistrySpec

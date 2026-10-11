@@ -34,8 +34,6 @@ import Max.DB.HttpMonitorSpec qualified as HttpMonitorSpec
 import Max.DB.JobSpec qualified as JobSpec
 import Max.DB.MediaMissingSpec qualified as MediaMissingSpec
 import Max.DB.MediaSpec qualified as MediaSpec
-import Max.DB.UsageSpec qualified as UsageSpec
-import Max.DB.VideoRenditionSpec qualified as VideoRenditionSpec
 import Max.DB.Migrations (runMigrations)
 import Max.DB.MonitorJobsSpec qualified as MonitorJobsSpec
 import Max.DB.MonitorSpec qualified as MonitorSpec
@@ -44,12 +42,15 @@ import Max.DB.ProjectionSpec qualified as ProjectionSpec
 import Max.DB.QQBackfillSpec qualified as QQBackfillSpec
 import Max.DB.SessionSpec qualified as SessionSpec
 import Max.DB.TransactionSpec qualified as TransactionSpec
+import Max.DB.UsageSpec qualified as UsageSpec
+import Max.DB.VideoRenditionSpec qualified as VideoRenditionSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
 import Max.ExecutionSpec qualified as ExecutionSpec
 import Max.HistorianSpec qualified as HistorianSpec
+import Max.HookSpec qualified as HookSpec
+import Max.LingoStoreSpec qualified as LingoStoreSpec
 import Max.MemoryCapabilitiesSpec qualified as MemoryCapabilitiesSpec
 import Max.MemoryExpirySpec qualified as MemoryExpirySpec
-import Max.LingoStoreSpec qualified as LingoStoreSpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
 import Max.PlatformCapabilitiesSpec qualified as PlatformCapabilitiesSpec
 import Max.PlatformStoreSpec qualified as PlatformStoreSpec
@@ -97,6 +98,7 @@ main = do
         ConversationCursorSpec.spec pool
         ContextAdminSpec.spec pool
         ContextReadSpec.spec pool
+        HookSpec.spec pool
         ConversationCapabilitiesSpec.spec pool
         ResourceCapabilitiesSpec.spec pool
         SandboxRegistrySpec.spec pool

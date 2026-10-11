@@ -69,10 +69,10 @@ embedWorker lock = forever $ do
     pendingMessages modelId = do
       fresh <-
         query
-          ( "SELECT message_id, rendered_text FROM messages \
+          ( "SELECT message_id, rendered_text FROM agent_messages \
             \ WHERE embedding IS NULL AND NOT is_synthetic \
             \   AND char_length(rendered_text) >= 4 AND "
-              <> notForwardChild "messages"
+              <> notForwardChild "agent_messages"
               <> " ORDER BY received_at DESC LIMIT 64"
           )
           ()
@@ -85,16 +85,16 @@ embedWorker lock = forever $ do
           -- on the day it is actually true.
           spread <-
             query
-              "SELECT min(embedding_model), max(embedding_model) FROM messages WHERE embedding IS NOT NULL"
+              "SELECT min(embedding_model), max(embedding_model) FROM agent_messages WHERE embedding IS NOT NULL"
               ()
           case spread :: [(Maybe Text, Maybe Text)] of
             [(Just lo, Just hi)] | lo == modelId && hi == modelId -> pure []
             _ ->
               query
-                ( "SELECT message_id, rendered_text FROM messages \
+                ( "SELECT message_id, rendered_text FROM agent_messages \
                   \ WHERE embedding IS NOT NULL AND embedding_model <> ? \
                   \   AND NOT is_synthetic AND char_length(rendered_text) >= 4 AND "
-                    <> notForwardChild "messages"
+                    <> notForwardChild "agent_messages"
                     <> " ORDER BY received_at DESC LIMIT 64"
                 )
                 [modelId]

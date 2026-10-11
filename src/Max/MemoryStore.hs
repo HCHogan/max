@@ -223,7 +223,7 @@ memorySubjectVisible namespace = case namespaceParts namespace of
     rows <-
       query
         "SELECT EXISTS (SELECT 1 FROM principals person WHERE person.principal_id = ? AND ( \
-        \ EXISTS (SELECT 1 FROM messages message WHERE message.group_id = ? AND message.author_principal_id = person.principal_id) \
+        \ EXISTS (SELECT 1 FROM agent_messages message WHERE message.group_id = ? AND message.author_principal_id = person.principal_id) \
         \ OR EXISTS (SELECT 1 FROM conversations c JOIN conversation_endpoints endpoint USING (conversation_id) \
         \ JOIN endpoint_known_identities known USING (endpoint_id) \
         \ JOIN principal_identities identity USING (principal_identity_id) \
@@ -258,7 +258,7 @@ repairMemorySubjectAdmin scope mid expected principal reason = withTransaction $
           \ AND (SELECT array_agg(DISTINCT identity.principal_id) FROM principal_identities identity \
           \ JOIN conversation_endpoints endpoint USING(platform_account_id) JOIN conversations conversation USING(conversation_id) \
           \ WHERE identity.native_user_id=memory.scope_id::text AND conversation.legacy_group_id=memory.source_group_id)=ARRAY[?::bigint] \
-          \ AND EXISTS (SELECT 1 FROM memory_evidence evidence JOIN messages message ON message.canonical_message_id=evidence.source_canonical_message_id \
+          \ AND EXISTS (SELECT 1 FROM memory_evidence evidence JOIN agent_messages message ON message.canonical_message_id=evidence.source_canonical_message_id \
           \ WHERE evidence.memory_id=memory.id AND evidence.memory_version=memory.version \
           \ AND evidence.source_conversation_id=memory.source_group_id AND message.group_id=memory.source_group_id \
           \ AND evidence.source_principal_id=? AND message.author_principal_id=?) \

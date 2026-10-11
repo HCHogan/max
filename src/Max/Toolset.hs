@@ -26,6 +26,7 @@ import Max.Conversation.ToolRuntime
   ( builtinsWithDatabase,
     groupToolsWithDatabase,
   )
+import Max.Destiny.ToolRuntime (destinyToolsWithRuntime)
 import Max.Effects.Blob (Blob)
 import Max.Effects.BlobHost (BlobHost)
 import Max.Effects.Embedding (Embedding)
@@ -53,6 +54,7 @@ import Max.Effects.Tools
   )
 import Max.Env (BotEnv (..))
 import Max.File.ToolRuntime (fileToolsWithDatabase)
+import Max.Hook.ToolRuntime (hookToolsWithDatabase)
 import Max.HttpRuntime (HttpRuntime)
 import Max.Media.ToolRuntime
   ( imageToolsWithDatabase,
@@ -85,7 +87,6 @@ import Max.ToolContext
     toolStickers,
     withToolSkillLoads,
   )
-import Max.Destiny.ToolRuntime (destinyToolsWithRuntime)
 import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Turn.Continuity (toolCatalogFingerprint)
 import OneBot.Types (GroupId (..), isPrivateChat)
@@ -178,6 +179,7 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
     runners0 =
       builtinsWithDatabase env.beJobs env.beTimeZone dc
         <> monitorToolsWithDatabase env.beJobs env.beTimeZone env.beWebhookBaseUrl dc
+        <> hookToolsWithDatabase dc
         <> groupToolsWithDatabase dc
         <> imageToolsWithDatabase env.beTimeZone env.beSandboxes dc
         <> memoryToolsWithDatabase dc
@@ -304,6 +306,8 @@ toolInventory =
     always (writeTool "cancel_automation" ["monitor.db"] [CurrentConversation]),
     always (writeTool "update_automation" ["monitor.db"] [CurrentConversation]),
     always (readTool "automation_history" ["monitor.db"] [CurrentConversation]),
+    always (writeTool "set_hook" ["hook.db"] [CurrentConversation]),
+    always (readTool "query_hooks" ["hook.db", "conversation.db"] [CurrentConversation]),
     gated GroupOnly (readTool "group_members" ["chat.roster"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_avatar" ["chat.avatar", "tool.media"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_image" ["conversation.db", "blob.store", "tool.media"] [CurrentConversation]),

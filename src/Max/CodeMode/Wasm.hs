@@ -10,6 +10,7 @@ module Max.CodeMode.Wasm
     GuestStep (..),
     defaultWasmLimits,
     withGuest,
+    withCachedGuest,
     resumeGuest,
     watToWasm,
   )
@@ -73,6 +74,8 @@ foreign import ccall unsafe "max_wasm_interrupt" wasmInterrupt :: Ptr WasmHandle
 
 foreign import ccall safe "max_wasm_open" wasmOpen :: Ptr WasmHandle -> Ptr Word8 -> CSize -> Word64 -> Int64 -> CString -> CSize -> IO CInt
 
+foreign import ccall safe "max_wasm_open_cached" wasmOpenCached :: Ptr WasmHandle -> Ptr Word8 -> CSize -> Word64 -> Int64 -> CString -> CSize -> IO CInt
+
 foreign import ccall safe "max_wasm_step" wasmStep :: Ptr WasmHandle -> Ptr Word8 -> CSize -> Ptr (Ptr Word8) -> Ptr CSize -> CString -> CSize -> IO CInt
 
 foreign import ccall safe "max_wasm_wat" wasmWat :: Ptr Word8 -> CSize -> Ptr (Ptr Word8) -> Ptr CSize -> CString -> CSize -> IO CInt
@@ -83,14 +86,21 @@ foreign import ccall unsafe "max_wasm_free" wasmFree :: Ptr Word8 -> IO ()
 -- the safe FFI worker before releasing the store. A timeout covers CPU steps,
 -- not host futures, and fuel is set exactly once for the whole program.
 withGuest :: (IOE :> es) => WasmLimits -> ByteString -> ByteString -> (Guest -> GuestStep -> Eff es a) -> Eff es a
-withGuest limits binary input use = bracket (liftIO acquire) (liftIO . release) $ \guest@(Guest handle _ suspended) -> do
+withGuest = withGuestUsing wasmOpen
+
+-- | Cache compiled code only; every call still owns its engine, store and heap.
+withCachedGuest :: (IOE :> es) => WasmLimits -> ByteString -> ByteString -> (Guest -> GuestStep -> Eff es a) -> Eff es a
+withCachedGuest = withGuestUsing wasmOpenCached
+
+withGuestUsing :: (IOE :> es) => (Ptr WasmHandle -> Ptr Word8 -> CSize -> Word64 -> Int64 -> CString -> CSize -> IO CInt) -> WasmLimits -> ByteString -> ByteString -> (Guest -> GuestStep -> Eff es a) -> Eff es a
+withGuestUsing open limits binary input use = bracket (liftIO acquire) (liftIO . release) $ \guest@(Guest handle _ suspended) -> do
   initial <-
     liftIO $
       if invalid
         then pure (GuestTrap (WasmTrapped "invalid guest resources or module size"))
         else do
           opened <- timed guest $ BS.useAsCStringLen binary $ \(bytes, size) -> allocaBytes 4096 $ \message -> do
-            code <- wasmOpen handle (castPtr bytes) (fromIntegral size) limits.wlFuel limits.wlMemoryBytes message 4096
+            code <- open handle (castPtr bytes) (fromIntegral size) limits.wlFuel limits.wlMemoryBytes message 4096
             if code == 0 then pure Nothing else Just . WasmTrapped <$> readDiagnostic message
           case opened of
             Nothing -> pure (GuestTrap WasmTimedOut)

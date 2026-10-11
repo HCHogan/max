@@ -14,7 +14,7 @@ module Max.Platform.Store.Ingest
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (forM, forM_, join, when)
+import Control.Monad (forM, forM_, join)
 import Data.Aeson (ToJSON (toJSON), Value)
 import Data.Int (Int64)
 import Data.List (find)
@@ -29,7 +29,6 @@ import Effectful (Eff, IOE, type (:>))
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import GHC.Generics (Generic)
 import Max.DB.Codec (Jsonb (Jsonb), jsonbField)
-import Max.DB.Monitor (evaluateLedgerMatches)
 import Max.DB.PlatformIds (compatibilityId)
 import Max.DB.Transaction (withTransaction)
 import Max.Dispatch (DispatchMessage (..))
@@ -129,7 +128,6 @@ data NewIngest = NewIngest
     -- lets adapter-edge observability log a bounded digest without decoding
     -- the row again or retaining the inbound representation.
     canonicalBody :: !(Body 'Canonical),
-    dispatchEligible :: !Bool,
     mirrorDeliveries :: ![DeliveryTarget]
   }
   deriving stock (Eq, Show, Generic)
@@ -181,8 +179,8 @@ instance FromRow DispatchRow where
         }
 
 -- | Persist one normalized event exactly once.  The unique native event key is
--- reserved before any canonical row is inserted, and all derived work is
--- published in the same transaction.
+-- reserved before any canonical row is inserted. The projection trigger only
+-- snapshots policy and persists work; user code and activation run after commit.
 ingestEnvelope ::
   (WithConnection :> es, IOE :> es) =>
   IngestOptions ->
@@ -454,7 +452,7 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
             )
               :. Only identityId
           )
-      let (cid, ingestSeq) = case inserted :: [(Int64, Int64)] of
+      let (cid, _) = case inserted :: [(Int64, Int64)] of
             [row] -> row
             _ -> error "ingestEnvelope message: expected exactly one row"
       _ <-
@@ -468,30 +466,11 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
           \ (canonical_message_id, endpoint_id, status, native_event_id, idempotency_key, confirmed_at) \
           \ VALUES (?, ?, 'confirmed', ?, 'source:' || ?, ?)"
           (cid, envelope.endpointId.unEndpointId, nativeEvent, nativeEvent, envelope.receivedAt)
-      let dispatchable = envelope.ingestClass == LiveDelivery && envelope.eventKind == EventMessage && options.createDispatch
       forM_ envelope.relations (insertRelation cid envelope.endpointId)
-      -- The identity batch above always carries both the sender and Max's own
-      -- account, so the lookups hold; resolving them totally keeps a monitor
-      -- from being the reason an ordinary message fails to ingest, and an
-      -- unresolvable principal simply declines to evaluate (fail closed).
-      let monitorPrincipals = do
-            (_, sender) <- Map.lookup envelope.senderNativeId identities
-            (_, self) <- Map.lookup (NativeUserId endpoint.erNativeAccountId) identities
-            pure (PrincipalId sender, PrincipalId self)
-      when (envelope.ingestClass == LiveDelivery && envelope.eventKind == EventMessage) $
-        forM_ monitorPrincipals $ \(senderPrincipal, selfPrincipal) -> do
-          _ <-
-            evaluateLedgerMatches
-              endpoint.erConversationId
-              ingestSeq
-              (CanonicalMessageId cid)
-              senderPrincipal
-              selfPrincipal
-              (identityPrincipals identities)
-              rendered
-              resolvedBody
-              envelope.receivedAt
-          pure ()
+      _ <-
+        execute
+          "UPDATE message_projections SET dispatch_requested=? WHERE canonical_message_id=?"
+          (envelope.ingestClass == LiveDelivery && envelope.eventKind == EventMessage && options.createDispatch, cid)
       _ <-
         if not options.createMirrorDeliveries
           then pure 0
@@ -515,7 +494,6 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
             NewIngest
               { canonicalMessageId = CanonicalMessageId cid,
                 canonicalBody = resolvedBody,
-                dispatchEligible = dispatchable,
                 mirrorDeliveries = mirrors
               }
         )
@@ -665,7 +643,7 @@ loadDispatchMessage (CanonicalMessageId canonical) = do
       "SELECT m.canonical_message_id, m.group_id, m.user_id, m.self_id, \
       \       m.author_principal_id, self_identity.principal_id, m.canonical_content, \
       \       m.reply_to_canonical_message_id, m.source_platform, m.sender_nickname \
-      \ FROM messages m \
+      \ FROM agent_messages m \
       \ JOIN conversation_endpoints origin_endpoint ON origin_endpoint.endpoint_id = m.origin_endpoint_id \
       \ JOIN platform_accounts origin_account USING (platform_account_id) \
       \ JOIN principal_identities self_identity \

@@ -384,11 +384,11 @@ admitDueTimeMonitors now = withTransaction $ do
   pure (sum inserted)
 
 -- | Evaluate one exact canonical ingest row.  The caller invokes this only
--- for a host-authenticated LiveDelivery inbound message, from inside the same
--- transaction that inserted that row.  Candidate monitor rows are locked in
+-- for a projected, host-authenticated LiveDelivery inbound message, from the
+-- post-ingest projection transaction. Candidate monitor rows are locked in
 -- stable id order; the caller already owns the conversation lock. Cooldown
 -- advancement and the unique edge fire therefore
--- commit atomically with canonical ingest.
+-- commit atomically with the projection decision and dispatch outbox.
 evaluateLedgerMatches ::
   (WithConnection :> es, IOE :> es) =>
   Int64 ->

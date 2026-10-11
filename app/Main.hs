@@ -5,12 +5,12 @@ import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
 import Control.Exception (AsyncException (UserInterrupt), bracket, finally, throwTo)
 import Control.Monad (forever, unless, when)
 import Data.Foldable (for_)
-import Data.Traversable (for)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust, maybeToList)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
+import Data.Traversable (for)
 import Effectful
 import Effectful.Concurrent (threadDelay)
 import Effectful.Concurrent.Async (Concurrent, concurrently_, runConcurrent)
@@ -35,12 +35,14 @@ import Max.Conversation (newConversations)
 import Max.DB.AgentTurn (addAgentTurnUsage, reclaimInterruptedTurns)
 import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
+import Max.DB.MessageProjection (interruptMessageDispatches)
 import Max.DB.Migrations (runMigrations)
 import Max.DB.Monitor (interruptMonitorFires)
 import Max.DB.Usage (insertUsage)
 import Max.Effects.Agent (Agent, defaultLimits)
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.BlobHost (BlobHost, runBlobHost)
+import Max.Effects.ChatView (ChatView)
 import Max.Effects.Embedding (Embedding, runRuntimeEmbedding)
 import Max.Effects.Http (Http, runHttp)
 import Max.Effects.LLM (CallRecord (..), ChatCtx (..), LLM, TokenUsage (..), runLLM)
@@ -53,7 +55,6 @@ import Max.Embedding.Maintenance (newEmbeddingLock)
 import Max.Env (BotEnv (..))
 import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
-import Max.Effects.ChatView (ChatView)
 import Max.File.ChatView (backfillChatView, runChatView)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
@@ -62,11 +63,11 @@ import Max.Handler.Jobs (jobsWorker, shutdownJobs)
 import Max.Handler.QQ (handleEvents)
 import Max.Historian (historianWorker)
 import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
-import Max.LLM.WindowCheck (checkContextWindows)
 import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
 import Max.Images (imageWorker)
 import Max.Intent (IntentState, intentWorker, newIntentState)
 import Max.Jobs (newJobs, recordJobUsage)
+import Max.LLM.WindowCheck (checkContextWindows)
 import Max.LingoLearner (lingoWorker)
 import Max.Log (withCompactLogger)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
@@ -79,7 +80,7 @@ import Max.Monitor (monitorWorker)
 import Max.Monitor.Dispatch (dispatchMonitorFire)
 import Max.Platform.Delivery (DeliveryTransport, deliveryWorker, oneBotDeliveryTransport)
 import Max.Platform.Delivery.Queue (newDeliveryQueue)
-import Max.Platform.Ingress (newIngress)
+import Max.Platform.Ingress (newIngress, projectionWorker)
 import Max.Platform.Runtime (qqBackend, runPlatforms)
 import Max.Platform.Store.Delivery (deliveryProcessBoundary)
 import Max.Platform.Types (Platform (..))
@@ -323,6 +324,9 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
       logInfo "migrations applied" $
         object ["files" .= applied]
     env :: BotEnv <- ask
+    interruptedDispatches <- interruptMessageDispatches
+    when (interruptedDispatches > 0) $
+      logAttention "unfinished message dispatches interrupted; effects not replayed" (object ["messages" .= interruptedDispatches])
     reclaimed <- reclaimInterruptedTurns
     interrupted <- interruptMonitorFires cfg.timezone env.beStartedAt
     when (interrupted > 0) $
@@ -343,6 +347,7 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
               RequiredWorker
               (monitorWorker dispatchMonitorFire),
             worker "media-discovery" RequiredWorker (mediaDiscoveryWorker fetchSig),
+            worker "message-projections" RequiredWorker (projectionWorker env.beIngress),
             worker "canonical-dispatch" RequiredWorker (ingressWorker fetchSig (intentState <$ env.beIntent)),
             worker "jobs" RequiredWorker jobsWorker,
             worker "browser-workspaces" RequiredWorker (forever (recovering "browser maintenance" (browserMaintenance env.beBrowsers) >> threadDelay 15_000_000)),

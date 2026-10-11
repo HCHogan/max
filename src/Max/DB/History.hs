@@ -40,7 +40,7 @@ import Max.Turn.Types (AgentTurnId)
 -- | Exact end of the canonical ledger in the caller's snapshot.
 latestMessageCursor :: (WithConnection :> es, IOE :> es) => ConversationScope -> Eff es MessageCursor
 latestMessageCursor scope = do
-  rows <- query "SELECT COALESCE(max(ingest_seq), 0) FROM messages WHERE group_id=?" (Only (conversationStorageId scope))
+  rows <- query "SELECT COALESCE(max(ingest_seq), 0) FROM agent_messages WHERE group_id=?" (Only (conversationStorageId scope))
   pure $ case rows of
     [Only cursor] -> MessageCursor cursor
     _ -> error "latestMessageCursor: aggregate cardinality"
@@ -95,14 +95,14 @@ fetchRecentInGroup gid excludeId since n = do
         ((gid, excludeId) :. Only t :. Only n)
   pure (reverse (rows :: [HistoryItem]))
   where
-    selectHistory = "SELECT " <> historyColumns <> " FROM messages WHERE group_id = ? AND canonical_message_id <> ?"
+    selectHistory = "SELECT " <> historyColumns <> " FROM agent_messages WHERE group_id = ? AND canonical_message_id <> ?"
     -- Deliberately stricter than 'transcriptEligibleExpr': the prompt window
     -- drops every legacy synthetic row, where the exact-cursor paths keep the
     -- bot-authored ones.  The difference predates ADR 004 and is left alone
     -- rather than unified by a refactor that was only meant to remove copies.
     promptFilters =
       " AND "
-        <> notForwardChild "messages"
+        <> notForwardChild "agent_messages"
         <> " AND NOT is_synthetic AND kind IN ('chat', 'system')"
 
 -- | Complete-range diagnostic read in ingestion order, respecting @!clear@ and
@@ -140,7 +140,7 @@ fetchPromptLedgerAfter scope (MessageCursor after) excludeId since =
     selectLedger =
       "SELECT ingest_seq, "
         <> historyColumns
-        <> ", true FROM messages \
+        <> ", true FROM agent_messages \
            \ WHERE group_id = ? AND ingest_seq > ? AND canonical_message_id <> ? AND "
         <> transcriptEligibleExpr
 
@@ -165,7 +165,7 @@ fetchNewestPromptPageBefore scope (MessageCursor after) before excludeId since r
     query
       ( "SELECT ingest_seq, "
           <> historyColumns
-          <> ", true FROM messages \
+          <> ", true FROM agent_messages \
              \ WHERE group_id = ? AND ingest_seq > ? \
              \   AND (?::bigint IS NULL OR ingest_seq < ?) \
              \   AND canonical_message_id <> ? AND "
@@ -208,7 +208,7 @@ fetchOldestPageAfter scope (MessageCursor after) requestedSize = do
           <> historyColumns
           <> ", "
           <> transcriptEligibleExpr
-          <> " FROM messages \
+          <> " FROM agent_messages \
              \ WHERE group_id = ? AND ingest_seq > ? \
              \ ORDER BY ingest_seq ASC \
              \ LIMIT ?"
@@ -239,7 +239,7 @@ fetchOldestPageThrough scope (MessageCursor after) (MessageCursor through) reque
           <> historyColumns
           <> ", "
           <> transcriptEligibleExpr
-          <> " FROM messages \
+          <> " FROM agent_messages \
              \ WHERE group_id = ? AND ingest_seq > ? AND ingest_seq <= ? \
              \ ORDER BY ingest_seq ASC \
              \ LIMIT ?"
@@ -255,7 +255,7 @@ fetchOldestPageThrough scope (MessageCursor after) (MessageCursor through) reque
 transcriptEligibleExpr :: Query
 transcriptEligibleExpr =
   "("
-    <> notForwardChild "messages"
+    <> notForwardChild "agent_messages"
     <> " AND (NOT is_synthetic OR user_id = self_id) AND kind IN ('chat', 'system'))"
 
 -- | \"…and this row is not a forward child\".  A forward child renders inside
@@ -285,7 +285,7 @@ hasMessagesAfter scope (MessageCursor after) = do
   rows <-
     query
       "SELECT EXISTS ( \
-      \  SELECT 1 FROM messages \
+      \  SELECT 1 FROM agent_messages \
       \  WHERE group_id = ? AND ingest_seq > ? \
       \)"
       (conversationStorageId scope, after)
@@ -304,7 +304,7 @@ fetchMessageInScope scope canonical = do
     query
       ( "SELECT "
           <> historyColumns
-          <> " FROM messages WHERE group_id = ? AND canonical_message_id = ? LIMIT 1"
+          <> " FROM agent_messages WHERE group_id = ? AND canonical_message_id = ? LIMIT 1"
       )
       (conversationStorageId scope, canonical)
   pure (listToMaybe (rows :: [HistoryItem]))
@@ -322,7 +322,7 @@ fetchMessagesByIdsInScope scope ids = do
     query
       ( "SELECT "
           <> historyColumns
-          <> " FROM messages WHERE group_id = ? AND canonical_message_id IN ?"
+          <> " FROM agent_messages WHERE group_id = ? AND canonical_message_id IN ?"
       )
       (conversationStorageId scope, In ids)
   -- Re-order to match input.
@@ -343,11 +343,11 @@ fetchForwardChildrenInScope scope containerId cap =
     ( "SELECT "
         <> historyColumnsOf "child"
         <> ", child.occurred_at, child.reply_to_canonical_message_id \
-           \ FROM messages child \
+           \ FROM agent_messages child \
            \ JOIN message_relations containment \
            \   ON containment.canonical_message_id = child.canonical_message_id \
            \  AND containment.relation_kind = 'contained_in' \
-           \ JOIN messages container \
+           \ JOIN agent_messages container \
            \   ON container.canonical_message_id = containment.target_canonical_message_id \
            \ WHERE child.group_id = ? \
            \   AND container.group_id = ? AND container.canonical_message_id = ? \
@@ -369,7 +369,7 @@ messageStatsDaily tzMinutes days =
   query
     "SELECT (received_at + make_interval(mins => ?))::date AS day, \
     \       group_id, kind, count(*)::bigint \
-    \  FROM messages \
+    \  FROM agent_messages \
     \ WHERE received_at > now() - make_interval(days => ?) \
     \ GROUP BY 1, 2, 3 \
     \ ORDER BY 1 DESC, 2, 3"
@@ -378,7 +378,7 @@ messageStatsDaily tzMinutes days =
 -- | Preserve ingestion order and canonical provenance for live feedback.
 fetchMessageWithCursorInScope :: (WithConnection :> es, IOE :> es) => ConversationScope -> Int64 -> Eff es (Maybe (Int64, HistoryItem))
 fetchMessageWithCursorInScope scope message = do
-  rows <- query ("SELECT ingest_seq," <> historyColumns <> " FROM messages WHERE group_id=? AND canonical_message_id=?") (conversationStorageId scope, message)
+  rows <- query ("SELECT ingest_seq," <> historyColumns <> " FROM agent_messages WHERE group_id=? AND canonical_message_id=?") (conversationStorageId scope, message)
   pure $ case rows of
     [Only cursor :. history] -> Just (cursor, history)
     _ -> Nothing
@@ -389,7 +389,7 @@ publishedTurnInScope :: (WithConnection :> es, IOE :> es) => ConversationScope -
 publishedTurnInScope scope message = do
   rows <-
     query
-      ("SELECT agent_turn_id FROM messages WHERE group_id=? AND canonical_message_id=? AND user_id=self_id AND agent_turn_id IS NOT NULL AND " <> transcriptEligibleExpr)
+      ("SELECT agent_turn_id FROM agent_messages WHERE group_id=? AND canonical_message_id=? AND user_id=self_id AND agent_turn_id IS NOT NULL AND " <> transcriptEligibleExpr)
       (conversationStorageId scope, message)
   pure $ case rows of
     [Only turn] -> Just turn
@@ -401,6 +401,6 @@ isTurnTriggerInScope :: (WithConnection :> es, IOE :> es) => ConversationScope -
 isTurnTriggerInScope scope message = do
   rows <-
     query
-      "SELECT EXISTS (SELECT 1 FROM messages m JOIN agent_turns t ON t.trigger_canonical_message_id=m.canonical_message_id AND t.conversation_id=m.conversation_id WHERE m.group_id=? AND m.canonical_message_id=?)"
+      "SELECT EXISTS (SELECT 1 FROM agent_messages m JOIN agent_turns t ON t.trigger_canonical_message_id=m.canonical_message_id AND t.conversation_id=m.conversation_id WHERE m.group_id=? AND m.canonical_message_id=?)"
       (conversationStorageId scope, message)
   pure (rows == [Only True])

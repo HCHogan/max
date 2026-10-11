@@ -25,6 +25,7 @@ import Max.Conversation.Roster qualified as PlatformStore ()
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.History (HistoryItem (..), fetchForwardChildrenInScope)
+import Max.DB.MessageProjection (drainProjections)
 import Max.Dispatch (DispatchMessage (canonicalId))
 import Max.HttpRuntime (httpRuntimeFromManagers, newHttpRuntime)
 import Max.IMessage (IMessageConfig (..), iMessageWorker)
@@ -318,8 +319,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     outgoing <- newDeliveryQueue (DeliveryId 0)
     ingress <- newIngress outgoing
     mapM_ (queueIngest ingress) [left, right]
-    nextIngress ingress `shouldReturn` resultId left
-    timeout 10000 (nextIngress ingress) `shouldReturn` Nothing
+    withDb pool drainProjections
+    withDb pool (nextIngress ingress) `shouldReturn` resultId left
+    timeout 10000 (withDb pool (nextIngress ingress)) `shouldReturn` Nothing
     mirrored <- nextDelivery outgoing (const True)
     mirrored.target.endpointId `shouldBe` qq.endpointId
     timeout 10000 (nextDelivery outgoing (const True)) `shouldReturn` Nothing
@@ -625,7 +627,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     delivery <- withDb pool (loadDelivery target.deliveryId)
     fmap (.canonicalMessageId) delivery `shouldBe` Just (CanonicalMessageId cid)
 
-  it "queues only new live messages and never reconstructs dispatches on restart" $ do
+  it "queues only projected live messages and never replays started dispatches on restart" $ do
     (_, matrix) <- mirrorPair pool
     now <- getCurrentTime
     ingress <- newIngress =<< newDeliveryQueue (DeliveryId 0)
@@ -635,10 +637,11 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     backfill <- withDb pool (ingestEnvelope defaultIngestOptions ((inbound matrix.endpointId now "old" "history") {ingestClass = Backfill}))
     suppressed <- withDb pool (ingestEnvelope defaultIngestOptions {createDispatch = False} (inbound matrix.endpointId now "disabled" "history only"))
     mapM_ (queueIngest ingress) [first, duplicate, backfill, suppressed]
-    nextIngress ingress `shouldReturn` resultId first
-    timeout 10000 (nextIngress ingress) `shouldReturn` Nothing
+    withDb pool drainProjections
+    withDb pool (nextIngress ingress) `shouldReturn` resultId first
+    timeout 10000 (withDb pool (nextIngress ingress)) `shouldReturn` Nothing
     restarted <- newIngress =<< newDeliveryQueue (DeliveryId 0)
-    timeout 10000 (nextIngress restarted) `shouldReturn` Nothing
+    timeout 10000 (withDb pool (nextIngress restarted)) `shouldReturn` Nothing
     restored <- withDb pool (loadDispatchMessage (resultId first))
     fmap (.canonicalId) restored `shouldBe` Just (resultId first)
 

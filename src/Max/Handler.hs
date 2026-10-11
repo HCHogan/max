@@ -27,6 +27,7 @@ import Max.Command.Parser (parseCommand)
 import Max.Command.Types (Command (..))
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (HistoryItem (fromBot), fetchMessageInScope, isTurnTriggerInScope)
+import Max.DB.MessageProjection (finishMessageDispatch)
 import Max.Dispatch
   ( DispatchMessage (..),
     dispatchMentionsSelf,
@@ -131,9 +132,13 @@ ingressWorker ::
   Eff es ()
 ingressWorker fetchSig mIntent = localDomain "dispatch" $ forever $ do
   env :: BotEnv <- ask
-  canonical <- liftIO (nextIngress env.beIngress)
-  (loadDispatchMessage canonical >>= mapM_ dispatch)
-    `catchSync` \err ->
+  canonical <- nextIngress env.beIngress
+  ( do
+      loadDispatchMessage canonical >>= mapM_ dispatch
+      finishMessageDispatch canonical Nothing
+    )
+    `catchSync` \err -> do
+      finishMessageDispatch canonical (Just (T.pack (show err)))
       logAttention
         "message dispatch failed; not replayed"
         (object ["canonical_message_id" .= canonical, "error" .= show err])

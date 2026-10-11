@@ -12,6 +12,7 @@ module Helpers
     silentLogger,
     truncateAll,
     insertRawMessage,
+    insertPendingRawMessage,
     insertRawMessageWithClass,
     insertRawMessageAtSeq,
     insertRawKind,
@@ -34,6 +35,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Log.Logger (Logger, mkLogger)
 import Max.DB.Connection (DbPool, withConn)
+import Max.DB.MessageProjection (drainProjections)
 import Max.DB.Session qualified as SessionDB
 import Max.Effects.Blob (Blob, runBlob)
 import Max.IR (Body (..), Node (NText))
@@ -159,6 +161,11 @@ insertRawMessage ::
 insertRawMessage pool mid gid uid sid receivedAt nick body =
   insertCanonicalFixture pool LiveDelivery "chat" mid gid uid sid receivedAt nick body Nothing
 
+-- | Stop after durable ingest, before the independent projection worker runs.
+insertPendingRawMessage :: DbPool -> Int64 -> Int64 -> Int64 -> Int64 -> UTCTime -> Maybe Text -> Text -> IO Int64
+insertPendingRawMessage pool mid gid uid sid receivedAt nick body =
+  insertPendingCanonicalFixture pool LiveDelivery "chat" mid gid uid sid receivedAt nick body Nothing
+
 -- | Insert through the real adapter-neutral ingest kernel while selecting the
 -- trusted provenance classification explicitly. Monitor tests use this to
 -- prove a matching history import cannot trigger a standing continuation.
@@ -199,6 +206,7 @@ insertRawMessageAtSeq pool seq' mid gid uid sid receivedAt nick body = do
         c
         "UPDATE messages SET ingest_seq = ?, conversation_seq = ? WHERE canonical_message_id = ?"
         (seq', seq', canonical)
+    _ <- execute c "UPDATE message_projections SET ingest_seq=? WHERE canonical_message_id=?" (seq', canonical)
     _ <-
       query
         c
@@ -257,6 +265,13 @@ insertCanonicalFixture ::
   Maybe Int64 ->
   IO Int64
 insertCanonicalFixture pool ingestClass kind mid gid uid sid receivedAt nick body replyTo =
+  do
+    canonical <- insertPendingCanonicalFixture pool ingestClass kind mid gid uid sid receivedAt nick body replyTo
+    withDb pool drainProjections
+    pure canonical
+
+insertPendingCanonicalFixture :: DbPool -> IngestClass -> Text -> Int64 -> Int64 -> Int64 -> Int64 -> UTCTime -> Maybe Text -> Text -> Maybe Int64 -> IO Int64
+insertPendingCanonicalFixture pool ingestClass kind mid gid uid sid receivedAt nick body replyTo =
   withDb pool $ do
     endpoint <- ensureQQEndpointFor (UserId sid) (GroupId gid)
     let nativeMessage = NativeEventId (T.pack (show mid))

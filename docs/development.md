@@ -529,3 +529,118 @@ Run `cabal test max-test-db` with `MAX_TEST_DB_URL` pointing to a
 dedicated PostgreSQL database for leaf journal parity, durable budget races,
 interruption, trap-after-commit and lease takeover. The database suite is
 destructive to its designated test database and refuses to skip when unset.
+
+
+## Message inbound hooks
+
+`set_hook` and `query_hooks` are built-in, conversation-bound administrator tools.
+Only `message.inbound` is supported. Names are unique within the conversation;
+there are at most eight definitions, including disabled definitions. Reuse a name
+to replace an unused rule. Creation requires `event`, `source` and
+`expected_revision: 0`. Updates require the current revision, preserve omitted
+fields, and replace the whole supplied `source` or `config`. `config: null` is a
+real value. `enabled: false` disables without losing code or revision history.
+
+The source is a strict JavaScript function body with `args.event` and
+`args.config`. Event fields are `type`, `message_id`, `sender_principal` (the
+canonical person ID shown as `[@#principal]`, not a platform user ID), `text`,
+`body` (canonical IR), `platform`, `received_at`, `occurred_at`, `ingest_class`
+and `reply_to`. Return `{action: "pass"}` or
+`{action: "ignore", reason: "blocked_sender"}`. Reason is optional and at most
+512 characters. For example:
+
+```javascript
+const {event, config} = args;
+return {
+  action: config.blocked_principals.includes(event.sender_principal)
+    ? "ignore" : "pass"
+};
+```
+
+Code and config are capped at 32 KiB and 16 KiB respectively. The embedded
+QuickJS/Wasm runner has a separate fuel, memory and time budget and no host tool
+execution. Compiled interpreter code is cached and warmed before live ingress;
+every invocation still receives an independent engine, heap and interrupt state.
+Network, filesystem, model calls, host sleeps, ambient time and
+randomness are unavailable. Each invocation gets a fresh heap; use event
+timestamps and explicit config. Syntax is checked before a definition is
+published. Runtime exceptions, invalid results and exhausted budgets record
+`error` and ignore that message; they do not silently disable the rule.
+
+Ingest first commits canonical messages, relations, frozen hook-version
+references and durable projection work. It never executes user code or admits
+message monitors. Definition changes share the conversation lock with ingest
+and return `effective_after_ingest_seq`; a queued message keeps its original
+versions even if a rule is changed or disabled before processing.
+
+A separate worker evaluates the frozen rules in name order, then atomically
+publishes their audit records, the projection decision, message-monitor fires
+and any unstarted dispatch. Any ignore/error wins; pass cannot override it.
+`message_projections` owns `pending`/`ready`/`error`, `context_visible` and
+`allow_activation`; canonical `messages` has no policy flag. No-hook messages
+have an immediately ready projection, with activation work still deferred
+until after ingest commits. A script or host failure hides the projection and
+records an error without losing the original message. Cancellation/process
+death rolls back only derived work, which a fresh worker can resume. Workers
+lock one bounded evaluation and preserve ingestion order within a conversation.
+
+Only ready, visible projections enter `agent_messages`, the shared read view
+for context, search, quoted history, media/files, turn continuation and historian
+input. Readers cannot advance past an earlier pending decision in the same
+conversation. All containment/metadata ancestors must also be visible. Rule
+changes affect newly ingested live and backfill messages, not old decisions or
+already-produced context/memory. Historical reprojection is not a tool in this
+version. Raw records and cross-platform transport remain intact; pokes and
+other non-message events are outside `message.inbound`.
+
+Pending projections and unstarted `message_projection_dispatches` survive lost in-memory
+notifications and restarts. A dispatcher commits `started` before running any
+command, then records `finished` or `failed`. On startup, unfinished started
+dispatches become `interrupted`, and external effects are not automatically
+replayed. Migration preserves old visibility decisions without creating any
+historical dispatch or monitor work.
+
+`query_hooks` supports `list`, `get`, `test`, `runs`, and `projection`. `get` may select a
+historical revision. `test` accepts either a current-conversation `message_id`
+or a synthetic event object in `sample`, plus optional candidate source/config;
+a draft can be tested with source alone. Test never writes a definition, run
+record or message, nor replays downstream work. It reports the base revision,
+candidate overrides and result. `runs` filters by name, outcome or message ID,
+returns at most 100 records, and pages with `next_before`. The result separates
+each rule's effective action from the final `message_ignored` decision.
+`projection` requires a current-conversation `message_id` and returns processing
+state, frozen hook revisions, visibility/activation flags, effective visibility,
+and dispatch/error state. It does not execute or retry work.
+
+The tools require the host-bound administrator capability. Writes also recheck
+the active turn/call authority in the same transaction as publication. No tool
+argument selects another conversation or supplies authority. Raw audit records
+are available only through these administrative tools; ordinary context reads
+cannot retrieve ignored messages by guessing an ID.
+
+If a rule blocks every administrator message, recover through the operator's
+PostgreSQL connection, outside the message path. Replace the group ID and name
+below. This publishes a disabled revision instead of rewriting old evidence:
+
+```sql
+BEGIN;
+SELECT conversation_id FROM conversations WHERE legacy_group_id = 900 FOR UPDATE;
+INSERT INTO message_hook_versions
+  (conversation_id,name,revision,event,source,config,enabled,
+   actor_principal_id,effective_after_ingest_seq)
+SELECT v.conversation_id,v.name,v.revision+1,v.event,v.source,v.config,false,
+       v.actor_principal_id,
+       COALESCE((SELECT max(ingest_seq) FROM messages
+                 WHERE conversation_id=v.conversation_id),0)
+FROM message_hooks h JOIN message_hook_versions v USING(conversation_id,name,revision)
+JOIN conversations c USING(conversation_id)
+WHERE c.legacy_group_id=900 AND h.name='ignore-members';
+UPDATE message_hooks h SET revision=h.revision+1
+FROM conversations c
+WHERE c.conversation_id=h.conversation_id
+  AND c.legacy_group_id=900 AND h.name='ignore-members';
+COMMIT;
+```
+
+Recovery retains the original principal as provenance; the database operator
+must separately record who performed this out-of-band administrative action.

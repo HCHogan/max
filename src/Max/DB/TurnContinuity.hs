@@ -78,7 +78,7 @@ resolveReplyTurn scope cleared (CanonicalMessageId messageId) = do
     base =
       "SELECT t.turn_id, t.turn_ordinal, t.status, t.profile, t.started_at, t.finished_at \
       \FROM conversations c \
-      \JOIN messages m USING (conversation_id) \
+      \JOIN agent_messages m USING (conversation_id) \
       \JOIN agent_turns t ON t.turn_id = m.agent_turn_id AND t.conversation_id = c.conversation_id \
       \WHERE c.legacy_group_id = ? AND m.canonical_message_id = ?"
 
@@ -141,9 +141,9 @@ recentSql clearClause =
   \         FROM execution_journal j WHERE j.turn_id = t.turn_id \
   \           AND j.event_kind = 'tool_call' AND jsonb_extract_path_text(j.normalized_input, 'sandbox_id') IS NOT NULL \
   \       ) sandbox_refs), ''), \
-  \       (SELECT m.canonical_message_id FROM messages m WHERE m.agent_turn_id = t.turn_id \
+  \       (SELECT m.canonical_message_id FROM agent_messages m WHERE m.agent_turn_id = t.turn_id \
   \          ORDER BY m.turn_chunk_index DESC LIMIT 1), \
-  \       (SELECT split_part(m.rendered_text, E'\\n', 1) FROM messages m WHERE m.agent_turn_id = t.turn_id \
+  \       (SELECT split_part(m.rendered_text, E'\\n', 1) FROM agent_messages m WHERE m.agent_turn_id = t.turn_id \
   \          ORDER BY m.turn_chunk_index DESC LIMIT 1) \
   \FROM conversations c JOIN agent_turns t USING (conversation_id) \
   \WHERE c.legacy_group_id = ? \
@@ -197,8 +197,8 @@ continuationDigest scope cleared currentMessage now currentPrompt currentCatalog
       \       COALESCE((SELECT string_agg(handle, ',' ORDER BY handle) FROM ( \
       \         SELECT DISTINCT j.normalized_input->>'sandbox_id' AS handle FROM execution_journal j \
       \         WHERE j.turn_id=t.turn_id AND jsonb_extract_path_text(j.normalized_input, 'sandbox_id') IS NOT NULL) refs), ''), \
-      \       (SELECT m.canonical_message_id FROM messages m WHERE m.agent_turn_id=t.turn_id ORDER BY m.turn_chunk_index DESC LIMIT 1), \
-      \       (SELECT split_part(m.rendered_text, E'\\n', 1) FROM messages m WHERE m.agent_turn_id=t.turn_id ORDER BY m.turn_chunk_index DESC LIMIT 1), \
+      \       (SELECT m.canonical_message_id FROM agent_messages m WHERE m.agent_turn_id=t.turn_id ORDER BY m.turn_chunk_index DESC LIMIT 1), \
+      \       (SELECT split_part(m.rendered_text, E'\\n', 1) FROM agent_messages m WHERE m.agent_turn_id=t.turn_id ORDER BY m.turn_chunk_index DESC LIMIT 1), \
       \       t.prompt_major, t.tool_catalog_fingerprint, COALESCE(t.finished_ingest_seq, 0) \
       \FROM conversations c JOIN agent_turns t USING (conversation_id) \
       \WHERE c.legacy_group_id=? AND t.turn_id=? \
@@ -246,7 +246,7 @@ loadOutputs :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Eff es [(Int,
 loadOutputs turnId =
   query
     "SELECT turn_chunk_index, canonical_message_id, left(rendered_text, 1200) \
-    \FROM messages WHERE agent_turn_id = ? ORDER BY turn_chunk_index LIMIT 100"
+    \FROM agent_messages WHERE agent_turn_id = ? ORDER BY turn_chunk_index LIMIT 100"
     (Only turnId)
 
 loadAmbientMessages ::
@@ -277,8 +277,8 @@ loadAmbientMessages scope finishedIngestSeq (CanonicalMessageId currentMessage) 
     ambientSelect projection =
       "SELECT "
         <> projection
-        <> " FROM messages m \
-           \JOIN messages current ON current.canonical_message_id = ? AND current.conversation_id = m.conversation_id \
+        <> " FROM agent_messages m \
+           \JOIN agent_messages current ON current.canonical_message_id = ? AND current.conversation_id = m.conversation_id \
            \JOIN conversations c ON c.conversation_id = m.conversation_id \
            \WHERE c.legacy_group_id = ? AND m.ingest_seq > ? AND m.ingest_seq < current.ingest_seq \
            \  AND m.canonical_message_id <> current.canonical_message_id \
@@ -324,7 +324,7 @@ loadSandboxDrift scope sourceTurn finished (CanonicalMessageId currentMessage) =
           \FROM execution_journal j \
           \JOIN agent_turns t ON t.turn_id=j.turn_id \
           \JOIN conversations c ON c.conversation_id=t.conversation_id \
-          \JOIN messages current ON current.canonical_message_id=? AND current.conversation_id=c.conversation_id \
+          \JOIN agent_messages current ON current.canonical_message_id=? AND current.conversation_id=c.conversation_id \
           \WHERE c.legacy_group_id=? AND j.turn_id<>? AND j.observed_manifest IS NOT NULL \
           \  AND j.normalized_input->>'sandbox_id' IN ? \
           \  AND j.finished_at>? AND j.finished_at<current.received_at \
@@ -365,11 +365,11 @@ expandTurnTrace scope cleared ordinal after limit charBudget = do
           (turnId, cursor, bounded + 1)
       outputRows <-
         query
-          "SELECT turn_chunk_index, canonical_message_id, left(rendered_text,240) FROM messages WHERE agent_turn_id=? ORDER BY turn_chunk_index DESC LIMIT 6"
+          "SELECT turn_chunk_index, canonical_message_id, left(rendered_text,240) FROM agent_messages WHERE agent_turn_id=? ORDER BY turn_chunk_index DESC LIMIT 6"
           (Only turnId)
       requests <-
         query
-          "SELECT m.canonical_message_id, m.rendered_text FROM agent_turns t JOIN messages m ON m.canonical_message_id=t.trigger_canonical_message_id AND m.conversation_id=t.conversation_id WHERE t.turn_id=?"
+          "SELECT m.canonical_message_id, m.rendered_text FROM agent_turns t JOIN agent_messages m ON m.canonical_message_id=t.trigger_canonical_message_id AND m.conversation_id=t.conversation_id WHERE t.turn_id=?"
           (Only turnId)
       let outputs = reverse (take 5 (outputRows :: [(Int, Int64, Text)]))
           rendered = [(row, journalValue ordinal row) | row <- take bounded (rows :: [JournalTraceRow])]
