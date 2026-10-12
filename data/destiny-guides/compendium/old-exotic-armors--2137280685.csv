@@ -1,0 +1,1218 @@
+"THIS IS INFORMATION IS PRE-EDGE OF FATE. (but includes its exotics, oops)",,,,,,,,
+,,,,,,,,
+Armor,Icon,Notes,Armor,Icon,Notes,Armor,Icon,Notes
+Assassin's Cowl,,"On Powered Melee Kill:
+Grants Void Invisibility and restores Health.
+(Finishers) increase the duration of the Void Invisibility.
+
+Invisibility Duration | Health:
+Minor = 6.8 seconds (9.8) | 100 HP
+Elite | Guardian = 9.8 seconds (12.8) | ? HP
+Miniboss = 12.8 seconds (15.8) | 200 HP
+Boss = 13.3 seconds | 200 HP",Abeyant Leap,,"Enhances Drengr's Lash
+
+Barricade:
+Creates 2 additional Lashes.
+Lashes now seek enemies more aggressively and travel ?% farther.
+
+Thruster:
+Knot lasts up to ? seconds, lobbing itself towards enemies within ? meters, and detonates on contact.
+
+Upon inflicting Suspension:
+Grants Woven Mail for 10 seconds.",Apotheosis Veil,,"On Super Cast:
+Fully restores Health, Grenade, Melee, and Class Ability Energy.
+Allies within ? meters are granted Cure x3.
+
+On Super End:
+Grants 66% Fixed Bonus Grenade and Melee Ability Energy per second for 8 seconds."
+,,,,,,,,
+Vanishing Execution,,,Puppeteer's Control,,,Insatiable,,
+Athrys's Embrace,,"While Weighted Throwing Knives are equipped:
+
+Weighted Throwing Knives gain a second bounce with greatly increased tracking.
+
+Upon scoring 3 Precision Hits within 2.5 seconds of each:
+ Grants Strengthened Throwing Knife for 10 seconds.
+Scoring additional Precision Hits extends the buff duration by 5 seconds, up to 30 seconds.
+
+Strengthened Throwing Knife:
+Deals 200% [100%] increased damage and stuns unstoppable champions.
+Grants +50 Strength while buff is active.
+ Buff is consumed on hit.",ACD/0 Feedback Fence,,"Melee Hits grant a stack of Armor Charge.
+
+While Armor Charge is active:
+Grants Melee Damage Resist.
+Receiving a Melee Attack emits an Arc Burst, consuming all Armor Charges.
+
+Arc Burst applies Jolt and deals damage in a ? radius.
+
+Arc Burst:
+90 | 130 | 170 | 200 | 225 | 245 Arc Damage
+23.3% | 46.7% | 70% | 73.3% | 76.7% | 80% Melee Damage Resist",Astrocyte Verse,,"Passively grants +30 Airborne Effectiveness and enhances Blink.
+
+Passive Blink Benefits:
+25% Increased Distance.
+20% Decreased Cooldown. (3.55 -> 2.85 seconds for both charges)
+Time between blinks is decreased by 30% (1.65 -> 1.15 seconds)  
+
+On Blink Activation:
++100 Handling for 2 seconds. Stowing cancels the effect.
+Radar remains active.
+Inflicts Volatile to enemies within 10? metres.
+
+During Nova Warp Super:
+Dark Blink does not consume Super Energy."
+,,,,,,,,
+Skittering Stinger,,,Fury Conductors,,,Move to Survive,,
+Balance of Power,,"Enhances Threaded Specter
+ Specter has 50% [25%] Damage Resist, 67% increased Duration, and 2 Perched Threadlings.
+Perched Threadlings are released when the Specter takes 40 damage.
+Destroying the Specter releases all Perched Threadlings.
+Damage Resist does not apply to damage from the user.
+
+Being within 15 meters of the user's Threaded Specter removes the user from radar.
+Signified by the Hidden buff.
+
+0.5x Class Ability Regeneration Speed for 19 seconds upon Class Ability usage.",Actium War Rig,,"Passively grants +30 Airborne Effectiveness to Auto Rifles and Machine Guns.
+
+Readied Auto Rifles and Machine Guns refill 10% of their Magazine every 1.5 seconds.",Ballidorse Wrathweavers,,"Enemies frozen by Winter's Wrath receive 150% increased Shatter Damage.
+
+Upon performing Winter's Wrath's Shatter Attack:
+Allies within 30? meters receive x4 Stasis Weapon Surge for 15 [6] seconds and maximum Frost Armor stacks. 
+Refunds ?% Super Energy per Ally buffed. 
+ Buff is refreshable. Refund only works once per ally?.
+
+On Rift Cast while the Frostpulse Aspect is equipped:
+User and Allies within ? meters receive x2 Stasis Weapon Surge for 11 [6] seconds and maximum Frost Armor.
+Grants 2% Super Energy per ally that receives Frost Armor.
+
+On Winter's Wrath End:
+Grants maximum Frost Armor stacks to the user."
+,,,,,,,,
+Double Down,,,Auto-Loading Link,,,Hearts of Ice,,
+Blight Ranger,,"While in Arc Staff Super:
+Blocking doesn't consume any extra Super Energy.
+Reflected Projectiles deal 400% increased damage.
+Reflecting Projectiles grants ?% Super Energy.
+
+Can deactivate Arc Staff at any time to preserve a portion of unspent Super Energy.
+Deactivation refunds up to 75% of unspent Super Energy at 100% Super Energy, down to 50% of unspent Super Energy at 0% Super Energy.
+
+On Arc Staff deactivation:
+Triggers an Arc Explosion, dealing scaling damage based on the amount of reflected projectiles and blinding enemies within ? meters.
+Deals up to 300 [?] at base, up to 575 [?] after reflecting MANY projectiles.
+Grants x4 Arc Weapon Surge for 21 [16] seconds.",Antaeus Wards,,"During a slide, after sprinting for at least 1.5 seconds, while Class Ability Energy is full: 
+Projects a 180° frontal shield that reflects damage and projectiles for 0.45 seconds.
+Reflected Projectiles deal 50% increased damage.
+
+Drains 2% Class Ability Energy per 1 damage reflected.",Boots of the Assembler,,"Passively grants +30 Airborne Effectiveness to Lumina.
+ Noble Seekers grant Noble Rounds to Lumina.
+
+While standing in a Rift or Well of Radiance:
+Releases Matching Noble Seekers every 5 seconds that seek out allies within 35 metres and apply a buff depending on the type of Rift you stand on. 
+Amount of Noble Seekers spawned is equal to Fireteam Size-1, with a minimum of 1 Seeker.
+Each time a Noble Seeker applies a buff, the Rift Duration gets extended by 5 seconds.
+
+Healing Rift Seekers restore 75 HP and begin Health Regeneration.
+Empowering Rift Seekers grant 35% [15%] increased damage for 5 seconds."
+,,,,,,,,
+Voltaic Mirror,,,Reflective Vents,,,Blessing of Order,,
+The Bombardiers,,"On Class Ability Usage:
+Drops a Parting Gift that explodes after 1.5 seconds, dealing 440 [120] damage over 7.5 metres. Detonates instantly on contact with surface or enemy.
+
+Parting Gift has an additional effect based on the equipped Super:
+Arc: ""Lite"" Blind for 7 [3] seconds. Does not stagger Unstoppable Champions.
+Solar: x40+20 Scorch.
+Void: ""Lite"" Suppress for 9 [7] seconds [Does not apply to Guardians in Super]
+Stasis: x40 [x20] Slow for 2 seconds.
+Strand: Severs for ? seconds.
+
+""Lite"" Blind is closer functionally as an Disorient, and will not proc Arc Synergies.
+""Lite"" Suppression is not a regular Suppression. Explanation in Court's Void Sandbox Guide.",Arbor Warden,,"On Class Ability Usage:
+Replaces Grenade Ability with Barri-Nade. 
+Barri-Nade is lost if Class Ability fully recharges.
+
+Barri-Nade spawns a Barricade on impact. 
+Enemies that are within 5? metres of impact are disoriented. 
+Barricade does not deal Contact Damage within 2 seconds of it being created.
+Barricade Type uses selected Barricade and inherits Aspects such as Bastion and Lash.
+Non-Barricades default to Towering Barricade and its respective cooldown.",Briarbinds,,"Void Souls last 55% longer and can be retrieved by interacting with them, granting Void Soul Ready for 25 seconds, allowing it to be redeployed.
+
+On Void Soul Kill:
+Grants increased Void Soul damage and Damage Resist. 
+Bonuses can be maintained by redeploying.
+
+Void Soul Benefits:
+16.6% | 33.3% | 50% | 66.67% | 83.3% | 100% increased damage.
+8.3% | 16.7% | 25% | 33.3% | 41.7% | 50% Damage Resist."
+,,,,,,,,
+Parting Gift,,,Barri-nade,,,One With The Void,,
+Caliban's Hand,,"Proximity Explosive Knife inflicts x60+0 Scorch on detonation. 
+Proximity Explosive Knife kills trigger an ignition.
+
+500% Additional Base Melee Recharge Rate while Proximity Knife remains unexploded.",Armamentarium,,"Grants an extra Grenade Ability Charge.
+
+Passively grants a copy of Firepower.",Cenotaph Mask,,"Trace Rifles refill 4% of their Magazine every 0.7 seconds. 
+Works while stowed.
+
+Upon scoring 5 Trace Rifle hits within ? seconds of each on a Miniboss, Champion, Boss, or Vehicle:
+Combatant is marked for 10 seconds.
+Additional Trace Rifle Hits refresh the duration of the mark.
+
+On Marked Enemy Death by Ally:
+Generates Heavy Ammo for allies.
+Generates Special Ammo for wearer.
+Cenotaph Ammo Bricks grant 10% of Total Reserves and are affected by Scavenger mods."
+,,,,,,,,
+Roast 'Em,,,And Another Thing,,,High Priority,,
+Celestial Nighthawk,,"Modified Golden Gun deals 684% increased damage but can only fire once per activation.
+(80% more damage compared to 3 Precision Hits with Marksman Golden Gun).
+
+On Golden Gun Kill:
+Refunds 33% Super Energy and causes the enemy to explode, dealing up to 400 [?] damage to enemies within ? metres.
+
+On Precision Kill:
+Grants additional Golden Gun Super Energy, ranging between 1.5% to 4.5%.
+ Actual amount varies by Enemy Rank.",Ashen Wake,,"Enhances Fusion Grenades:
+Grants Fastball intrinsically.
+Grenades detonate on impact
+Stun Unstoppable Champions on hit.
+
+Kills with Fusion Grenades grant Fixed Grenade Ability Energy. 
+Rank-and-File = 25% | Elites = 50% | Minibosses and Bosses = 100% | Guardians = 100%",Chromatic Fire,,"On Kinetic Damage Precision Kill: 
+Enemy explodes in a Super-Matching Elemental Explosion, dealing up to 280 [100] damage and inflicting an Elemental-Matching Debuff in a ? meter radius.
+
+Elemental Explosion has an additional effect based on the equipped Super:
+Arc: Blind for ? [1] seconds.
+Solar: x15+5 Scorch.
+Void: Weaken for 4 seconds.
+Stasis: x30 Slow for 7+1 seconds.
+Strand: Sever for 6+2 seconds."
+,,,,,,,,
+Hawkeye Hack,,,Bring The Heat,,,Crystalline Transistor,,
+Cyrtarachne's Facade,,"Upon Grappling:
+Grants Woven Mail.
+
+While Woven Mail is active:
+?% Flinch Resistance.",Blastwave Striders,,"75% Damage Resist against Explosive Self-Damage.
+
+Kills charge up Blastwave Striders:
+RnF = 7.5% | Elite+ = 15% | Guardians = 20%
+Alethonym's Vestiges = 10% 
+
+Upon sliding, or receiving Explosive Self-Damage while at 100% Charge:
+Propels the user backwards, releasing 8 Shrapnel Projectiles, and granting x5 Frost Armor.
+Each projectile deals 660 [?] Stasis Damage over ? meters and spawns a Stasis Crystal on impact.
+Shrapnel kills do not charge up Blastwave Striders.",Claws of Ahamkara,,"Grants an extra Melee Ability Charge.
+
+Passively grants a copy of Heavy Handed."
+,,,,,,,,
+Acrobat's Focus,,,Blastwave Striders,,,The Whispers,,
+The Dragon's Shadow,,"On Class Ability Usage:
+Grants Wraithmetal Mail for 9 seconds.
+
+Wraithmetal Mail
+Reloads all weapons. Activates On-Reload Perks.
+Sets Handling and Reload Speed to 100
+0.7x Ready/Stow Duration Multiplier.
+Grants +50 Mobility.
+ Increases Sprint Speed by 6.25%.
+Increases Slide Distance by 33%.",Cadmus Ridge Lancecap,,"Diamond Lance creates a Stasis Crystal on impact. 
+Scoring a hit against a non-Rank-and-File Combatant creates 3 Stasis Crystals.
+
+While a Stasis Super Ability is equipped and behind a Rally Barricade:
+Upon scoring 3 Precision Hits within ? seconds of each, or a Kill:
+Spawns a Diamond Lance beside you.
+
+Shares Cooldown with Diamond Lance Aspect.",Contraverse Hold,,"While overcharging a Void Grenade with Chaos Accelerant:
+Grants 20% Damage Resist.
+
+Upon dealing Overcharged Void Grenade Damage:
+Triggers Chaotic Exchange for 1.75 seconds.
+Chaotic Exchange grants 2,000% [1,000%] Additional Base Grenade Regeneration Rate.
+Incurs a 4 second cooldown between activations.
+
+Vortex Grenade can proc twice if enemies get hit by the initial explosion and the last ticks."
+,,,,,,,,
+Wraithmetal Mail,,,Lancer's Vigil,,,Chaotic Exchanger,,
+Foetracer,,"Upon dealing Ability Damage to an Elite, Miniboss, Champion, Boss, or Guardian: 
+Grants x4 Ability Element-Matching Weapon Surge and highlights the enemy for 16 [11] seconds.
+Buff is not refreshable.
+
+Killing highlighted enemies spawns a Subclass-Matching Elemental Pickup.",Citan's Ramparts,,"Modifies Towering Barricade into Assault Barricade.
+
+Assault Barricade enables the user and their allies to shoot through it.
+
+Guardians deal 60% increased damage towards Assault Barricade.
+Combining Bastion with Citan's Ramparts results in 0.4x Class Ability Regeneration Speed.",Crown of Tempests,,"While at least 1 Arc Ability is equipped:
+
+Upon scoring an Arc Ability Kill or a Jolt Kill:
+ Grants a stack of Conduction Tines for 7 [4] seconds, up to a maximum of 3 stacks.
+ All stacks disappear simultaneously. Very short cooldown between gaining stacks.
+
+Conduction Tines:
+168% | 335% | 503% Additional Base Grenade, Melee, and Super Regeneration Rate.
+22% | 44% | 65% Decreased Stormtrance Passive Super Drain."
+,,,,,,,,
+Relentless Tracker,,,Assault Barricade,,,Conduction Tines,,
+Fr0st-EE5,,"While Sprinting: 
+2x Grenade and Melee Regeneration Speed | 100% Additional Base Grenade/Melee Regeneration Rate
+100% [200%] Additional Base Class Ability Regeneration Rate.
+
+On Class Ability Usage:
+6.25% Faster Sprint Speed for 10 seconds. 
+Not refreshable.",Crest of Alpha Lupi,,"On Barricade Placement or Thruster Usage:
+Instantly restores Health and Shields to the wielder and allies within 12 metres.
+Barricade restores 80 Health and 75 Shields.
+Thruster restores 60 Health.
+Allies require Line of Sight to the wielder to receive healing.
+Incurs a 5 second cooldown between healing pulses.
+
+Super Abilities generate an extra Orb of Power that grants 7.14% Super Energy.
+
+Ward of Dawn Interaction:
+Generates a total of 4 Orbs, each granting 3.57% Super Energy.
+Ward of Dawn normally generates 3 Orbs worth 2.3% Super Energy each.",Dawn Chorus,,"Daybreak Projectiles inflict x30+10 Scorch on hit and deal 90% increased damage.
+Due to how Daybreak Projectiles work, it often hits twice, inflicting x60+20 Scorch total.
+
+Scorch deals 200% [50%] increased damage and grants 5% Melee Ability Energy per tick.
+Does not affect Ignition damage."
+,,,,,,,,
+Rapid Cooldown,,,Survival Well,,,Rites of Ember,,
+Gemini Jester,,"On Class Ability Usage:
+Applies Misdirection to enemies within 22 metres.
+
+ Misdirection:
+Rank-and-File and Elite Combatants become disoriented for 5 seconds.
+ Audio becomes briefly distorted, briefly applies disorient, and radar is removed for 5 seconds.
+
+Misdirection deals 1 damage against enemies not at 1HP.",Cuirass of the Falling Star,,"Thundercrash deals 55% increased damage.
+
+On Thundercrash Deactivation:
+50% [10%] Damage Resist (Resist x4) for 5 seconds.
+
+On Melee Kill, while Amplified:
+Grants additional Super Energy based on the Enemy Tier.
+Tier 1 Combatant = 2.5?% | T2 = 2.5% | T3 = ?% | T4 = 3% | Guardian = ?%
+Does not work with Glaive Melee. Works with any Super Ability.",Eunoia,,"Hellion Projectiles increased damage the longer they've been in the air for.
+
+Hellion Projectiles that have been in the air for 1? seconds release 4 pieces of Shrapnel.
+Shrapnel deals ? [?] Damage and inflicts x?+? Scorch.
+Shrapnel projectiles have slight tracking."
+,,,,,,,,
+Misdirection,,,Glorious Charge,,,Consul's Pitch,,
+Graviton Forfeit,,"Void Invisibility lasts 2 seconds longer.
+
+While Invisible:
+Grants +100 Recovery and +100 Reload Speed.
+400% [100%] Additional Base Melee Regeneration Rate.
+Increases to 600% [200%] or 800% [300%] while 1 or 2 enemies are within 15 meters.",Doom Fang Pauldron,,"Scoring 2–3 Void Kills within 10 seconds of each grants a stack of Void Weapon Surge for 11 [6] seconds, up to a maximum of x4 Void Weapon Surge.
+Additional Void Kills while at x4 Weapon Surge refresh the buff duration.
+
+On Powered Void Melee Kill:
+Grants 20% [10%] Super Energy. Can only trigger once per Melee Activation.
+Grants x4 Void Weapon Surge for 11 [6] seconds.
+
+Sentinel Shield's Shield Throw Hits grant 10% Super Energy, extending Super Duration.",Eye of Another World,,"Passively grants 50% Additional Base Grenade, Melee, and Class Regeneration Rate, and +15 Airborne Effectiveness.
+
+Highlights enemies below 50% HP enemies in a red outline.
+Highlights Enemy Guardians with Fully-charged Supers in a yellow outline.
+Invisible enemies that are below 50% HP or have a fully-charged Super will also be highlighted."
+,,,,,,,,
+Vanishing Shadow,,,Horns of Doom,,,Cerebral Uplink,,
+Gifted Conviction,,"Upon using Ascension or Tempest Strike:
+Releases 3 tracking Arc projectiles forward.
+Arc Projectiles deal up to 200 [40] damage and inflict jolt.
+
+Upon inflicting Jolt to enemies within 15? meters:
+Grants a stack of Resist for 10 seconds, up to a maximum of 4 stacks.
+Additional Jolt Applications to enemies within 15? meters refreshes the buff duration.
+
+Damage Resist Scaling:
+1 Jolt Applications = 25% [5%] Damage Resist (Resist x2)
+2 Jolt Applications = 40% [7.5%] Damage Resist (Resist x3)
+3 Jolt Applications = 50% [10%] Damage Resist (Resist x4)",Dunemarchers,,"Increases Sprint Speed by 6.25%
+Increases Slide Distance by 33%
+
+After sprinting for 1.5 seconds:
+Grants Linear Actuators for 7 seconds.
+
+On Melee Hit, while Linear Actuators are active:
+Applies Shocked to the enemy for 2 seconds.
+Shocked Enemies discharge a Static Charge when an enemy is within 12 metres.
+Static Charge deals 220 [50] damage and applies Shocked.
+ Shocked is refreshed upon chaining to an enemy.
+Guardians are immune to additional chain damage for 2 seconds while Shocked.",Fallen Sunstar,,"Ionic Traces move faster and grant doubled Ability Energy.
+
+Total Ability Energy Gained per Ionic Trace:
+Grenade: 25% | Melee: 25% | Class Ability: 30%
+
+On Ionic Trace Pickup:
+Allies within 15 metres receive 10% Grenade, Melee, and Class Ability Energy."
+,,,,,,,,
+The Gift of Certainty,,,Linear Actuators,,,Ionic Conductor,,
+Gwisin Vest,,"Upon Void Invisibility ending, while within 15? meters of an enemy:
+Triggers a Snare Bomb on the user.
+Incurs a 5 second cooldown between activations.
+Does not interact with Trapper's Ambush.
+
+While in Spectral Blades:
+Restores Super Energy on Heavy Attack based on the amount of Spectral Blade Kills and Hits.
+
+Super Energy % Extension gains based on hits and kills
+?%
+?%",Eternal Warrior,,"Scoring 2–3 Arc Kills within 10 seconds of each grants a stack of Arc Weapon Surge for 11 [6] seconds, up to a maximum of x4 Arc Weapon Surge.
+Additional Arc Kills while at x4 Weapon Surge refresh the buff duration.
+
+On Fists of Havoc Cast: 
+Grants a 75 HP Overshield that negates Precision Damage.
+Regenerates over 7 second after 5 seconds of not receiving damage if Overshield is active.
+
+Fists of Havoc Kills grant ?% Super Ability Energy.
+
+On Fists of Havoc End:
+Grants x4 Arc Weapon Surge for 30 [6] seconds.",Felwinter's Helm,,"On Powered Melee Kill or Finisher:
+Creates a burst of energy centered on the Enemy Death Location, disorienting and weakening, increasing incoming damage by 30%.
+Duration and Range are dependent on Enemy Rank. 
+Guardians share the effects of Elites. 
+Screen becomes blackened for 7.5 seconds, progressively getting clearer as the debuff reaches its 15 second duration.
+ HUD does not disappear.
+
+Warlord's End.
+NEEDS RETESTING.
+Enemy Ranks are Minor | Elite | Miniboss and Boss.
+Range: 15 | 15 | 20 | 25 metres.
+Duration: 10 | 10 | 15 | 20 seconds.
+Finisher Duration: 15 | 15 | 20 | 20 seconds."
+,,,,,,,,
+Roving Assassin,,,Resolute,,,Warlord's End,,
+Gyrfalcon's Hauberk,,"Upon Void Invisibility ending:
+Grants Volatile Rounds for 9 [3] seconds.
+
+Upon performing a Finisher while affected by Void Invisibility:
+Grants 35% increased damage for 6 seconds.
+Grants the user and allies within 24 metres a Reserve Overshield 
+
+Reserve Overshield:
+Grants 500% Additional Base Class Ability Regeneration Rate until Class Ability Usage.
+Activated on Class Ability Usage, granting a 40 HP Void Overshield for 10 seconds.",Hallowfire Heart,,"Passively grants +20 Airborne Effectiveness.
+
+While standing in a Sunspot:
+Solar Kills create a Sunspot.
+
+While a Solar Super Ability is equipped and charged:
+350% Additional Base Grenade and Melee Regeneration Rate.",Geomag Stabilizers,,"After sprinting for 3.8 seconds and maintaining the sprint, while having at least x6 Bolt Charges:
+Grants x1 Bolt Charge every 2 seconds.
+
+On Ionic Trace Pickup:
+Grants 7% Chaos Reach Super Ability Energy .
+
+Chaos Reach grants 10% Super Ability Energy on hit.
+Incurs a 0.75 seconds cooldown between activation. 
+ Chaos Reach's Total Damage is increased by up to 120%"
+,,,,,,,,
+"See Me, Feel Me",,,Sunfire Furnace,,,Close Enough,,
+Khepri's Sting,,"Powered Melee Hits instantly cast Smoke Bomb.
+Smoke Bombs deal 50% increased damage. Quickfall does not receive increased damage.
+
+Dealing damage with Smoke Bomb grants Truesight for 3 seconds, allowing the user to see enemy outlines through walls from up to 64 metres away.
+
+On Smoke Bomb Usage:
+Grants 500% Additional Base Melee Regeneration Rate for 14 seconds.
+ Dealing Smoke Bomb damage, or triggering Trapper's Ambush's Invisibility immediately removes the Ability Regeneration buff.",Hazardous Propulsion,,"Scoring a Precision Kill, 4 Weapon Kills, or filling up a counter through Precision Hits, grants a stack of Exodus Rocket, up to a maximum 6 Exodus Rocket stacks. 
+
+Precision Hit Counter:
+Trace Rifles: 10%
+Auto Rifle and Machine Gun: 15%
+Pulse Rifles, Sidearms, and Crimson: 20%
+Hand Cannons, Scout Rifles, and Shotguns: 40%
+Bows, Linear Fusion Rifles, Rocket Sidearms, and Sniper Rifles: 67%
+Precision Counter doesn't reset upon loading a rocket, leading to alternating shots in some cases.
+ (3 -> 2 -> 3 HC shots, for example)
+
+On Class Ability Usage:
+Consumes all stacks, firing a homing Kinetic Rocket per stack, each dealing up to 600 [28] Kinetic Damage over ? meters.
+
+Exodus Rocket increase Rocket Weapon Damage for 10 seconds based on the amount of hits, up to 35% at x6 stacks.
+x1 = 10% | x2 = 17% | x3 = 24% | x4 = 30% | x5 = 33% | x6 = 35%",Getaway Artist,,"While an Arc Grenade Ability is equipped:
+Holding [Grenade] summons a Sentient Arc Soul for 20 seconds and grants Amplified.
+Arc Souls count as Arc Ability Damage. Does not count as Grenade Damage.
+
+Sentient Arc Soul grants 5% Grenade Energy once per burst if it damages an enemy.
+Does not grant Grenade Energy on hit while Devour is active."
+,,,,,,,,
+Touch of Venom,,,Danger Close,,,Dynamic Duo,,
+Knucklehead Radar,,"Passively grants +20 Airborne Effectiveness and radar remains active while ADS.
+
+While crouched: 
+Grants Enhanced Radar.
+ (Has 12 sectors instead of 6)
+
+Upon dealing damage to a Combatant, or upon breaking a Guardian's Shield:
+Marks enemies for 3 seconds.
+Mark persists through walls.
+
+If Enemy is below 30% Health: 
+Grants 1% increased Weapon and Ability Damage per percent below 30%.
+10% HP left -> 20% Increased Damage. Shields do not count as Health.",Heart of Inmost Light,,"On Grenade or Class Ability Usage, or upon dealing Powered Melee Damage:
+Grants a stack of Empowered Abilities for the other two abilities for 5 seconds, up to 2 stacks. 
+e.g.: Dealing Thunderclap damage -> Increased Grenade and Class Ability Regeneration.
+
+x1 = 400% [100%] | x2 = 800% [200%] Additional Base Grenade and Melee Regeneration Rate. 
+x1 = 25% | x2 = 50% Additional Base Class Ability Regeneration Rate.
+x1 = 20% [10%] | x2 = 35% [20%] Increased Grenade Damage.
+x1 = 10% | x2 = 20% Increased Powered Melee Damage.
+
+Buff display is NOT accurate to the active ability regen. 
+With the example in mind, Class Ability Usage before Empowered x1 from Melee runs out will do the following:
+Grenade Empower will go to x2 and will have its duration refreshed. Melee will receive Empower x1 for 5 seconds, and Class Empower x1 won't be refreshed, despite the UI saying Empowered x2.",Karnstein Armlets,,"On Melee Kill:
+Grants x3 Cure and Restoration x1 for 8+4 seconds.
+
+On Finisher:
+Grants x3 Cure and Restoration x2 for 8+4 seconds."
+,,,,,,,,
+Upgraded Sensor Pack,,,Overflowing Light,,,Vampire's Caress,,
+Liar's Handshake,,"While an Arc Melee is equipped:
+Receiving Melee Damage, or scoring a Powered Melee Hit grants Cross Counter for the next Melee Hit within 3 seconds.
+
+Cross Counter grants 200% increased Melee Damage and restores ? HP on Melee Hit.
+Cross Counter's Melee deals Arc Damage.
+
+One-Two Punch's Melee Damage Increase is decreased to 40% when Cross Counter is active.",Helm of Saint-14,,"Guarding with Sentinel Shield blinds enemies within 7 [3.5] metres for 5 seconds.
+Enemies that enter the Ward of Dawn are blinded for 5 seconds.
+
+Ward of Dawn grants Starless Night and Weapons of Light.
+Starless Night grants the user and allies that leave the Ward of Dawn receive Void Overshield.
+Weapons of Light grants the user and allies 25% increased damage for ? seconds.
+Weapons of Light's duration is constantly refreshed while inside the Ward of Dawn.",Lunafaction Boots,,"For wearer and allies standing on Rifts and Well of Radiances cast by the wearer:
+Grants +100 Reload Speed and 0.9x Reload Duration Multiplier.
+Empowering Rifts and Well of Radiances aditionally grant 100% [50%] Increased Damage Falloff Distance.
+
+For Primary Weapons while hipfiring:
++5 Range, +30 Stability,
+-30% Accuracy Cone Size, +2?° Precision Angle Threshold,
+20% Increased Aim Assist and Damage Falloff Distance.
+ DMT, Last Word, and Tommy's Matchbook do not receive the Falloff bonuses, and receive uniquely tweaked Accuracy values. "
+,,,,,,,,
+Cross Counter,,,Starless Night,,,Alchemical Etchings,,
+Lucky Pants,,"While a Hand Cannon is readied:
++20 Airborne Effectiveness
+Increases Sprint Speed by 6.25% | Increases Slide Distance by 33%
+
+Upon Readying a Hand Cannon:
+Grants Illegally Modded Holster for 6 seconds.
+Direct Hits against Combatants grant stacks of Illegally Modded Holster, up to a maximum of 10 stacks.
+Illegally Modded Holster is removed upon readying a non-Hand Cannon.
+
+Illegally Modded Holster:
++100 Ready Speed Handling, 0.6x Ready Duration Multiplier, and -30% Accuracy Cone Size.
+45% increased Direct Impact damage against Combatants per stack, up to 450% at 10 stacks.
+Eriana's Vow receives 30% increased Direct Impact Damage per stack.
+Sturm's Overcharged Rounds, Malfeasance's Explosive Shadow, Hawkmoon's Paracausal Shot, as well as any non-direct damage is not increased.
+
+After Illegally Modded Holster expires, or upon stowing, if Illegally Modded Holster stacks were at x7 or higher:
+Applies Out of Luck for 10 seconds, preventing Illegally Modded Holster from being activated.",Hoarfrost-Z,,"While a Stasis Super Ability is equipped:
+Class Abilities now spawn Stasis Crystals.
+
+Rally and Towering Barricades are replaced by Glacial Fortification.
+Glacial Fortification is composed of 4 medium crystals, and a small crystal in the middle.
+Glacial Fortification Inherits Rally Barricade Bonuses, even if no crystals remain.
+Overrides Barricade Cooldown with Towering Barricade's.
+
+On Thruster Usage:
+Spawns 2 Stasis Crystals in a V formation ahead of the user.
+Does not receive Rally Barricade bonuses, nor does it override the cooldown.",Mataiodoxía,,"Arcane Needles become Shield-Piercing.
+
+Scoring an Arcane Needle hit on an enemy marks them with a vertical mark for 10 seconds.
+Marked Enemies trigger a Suspending Explosion on death.
+
+Upon scoring 2 Arcane Needle hits on a Marked Enemy:
+Triggers a stronger Suspending Explosion, dealing up to ? [?] damage and suspending enemies within ? meters.
+
+Grants Melee Ability Energy upon scoring an Arcane Needle Kill or Suspended Enemy kill.
+T1 Combatant = 15% | T2 = 22.2% | T3 = 33% | T4 = 100% | Guardian = 33%"
+,,,,,,,,
+Illegally Modded Holster,,,Glacial Fortification,,,Stylostixis,,
+Lucky Raspberry,,"Arcbolt Grenades are now able to chain an additional time, up to 4 times.
+Arcbolt Grenades inflict Disruption.
+
+Upon triggering Jolt chain damage:
+Grants 20% Arcbolt Grenade Ability Energy. 
+
+On Ionic Trace Pickup:
+Grants an additional 5% Arcbolt Grenade Ability Energy.",Icefall Mantle,,"While a Stasis Super Ability is equipped:
+
+Restores 10 HP per stack of Frost Armor gained.
+
+Upon scoring 2 Stasis Kills within 3 seconds of each:
+Grants a stack of Frost Armor. 
+
+Replaces Barricade with Glacial Guard. 
+Overrides Ability Cooldown to Towering Barricade.
+
+On Glacial Guard Cast:
+Grants maximum Frost Armor stacks to the user.
+Restores 50 HP, or 80 HP while Whisper of Rime is equipped.
+Inflicts x100 [x40] Slow to enemies within ? meters.",Mantle of Battle Harmony,,"Upon scoring a Super-Element Matching Weapon Kill:
+Grants additional Super Energy based on the Enemy Tier.
+Tier 1 Combatant = 1.5% | T2 = 2% | T3 = ?% | T4 = 2.5% | Guardian = 2.5?%
+
+Upon scoring a Super-Element Matching Weapon Kill while Super Ability is charged:
+Grants x4 Super-Element Matching Weapon Surge for 11 [6] seconds."
+,,,,,,,,
+Probability Matrix,,,Glacial Guard,,,Absorption Cells,,
+Mask of Bakris,,"While a Stasis Super Ability is equipped:
+Replaces Class Ability with Shift.
+Does not replace Acrobat's Dodge.
+
+On Shift Usage:
+Performs a quick shift that moves the user up to 10 meters away, rendering them invisible and invulnerable for the duration of the shift.
+Grants x4 Arc and Stasis Weapon Surge for 11 seconds.
+Lord of Wolves receives x4 Solar Weapon Surge for 11 seconds.
+
+Class Ability Energy is set to 0% while Weapon Surges are active.",An Insurmountable Skullfort,,"On Powered Arc Melee Kill:
+Grants 100% Melee Ability Energy and begins Health Regeneration.
+
+Melee Hits grant Arc Melee Ability Energy, up to once per melee.
+50% Melee Ability Energy on Powered Melee Hit.
+15% Melee Ability Energy on Non-Glaive Melee Hit while Knockout is active.
+5% Melee Ability Energy on Basic/Glaive Melee Hit.",Necrotic Grip,,"Passively grants +30 Airborne Effectiveness to Weapons of Sorrow.
+
+Melee Hits inflict Necrotic Poison.
+Poisoned enemies spread Necrotic Poison on death in a 5 metre radius.
+
+Necrotic Poison Damage ticks every 0.52 [0.7] seconds up to 19 [?] times over 10 [?] seconds, dealing 32 [5?] Kinetic Damage every tick, totalling 1366 [?] damage over its duration.
+
+Poison damage deals more damage every tick, increasing by 11% per tick for the first 14 ticks, then increasing by an average of 41% per tick for the last 5 ticks."
+,,,,,,,,
+Light Shift,,,Transfusion Matrix,,,Grasp of the Devourer,,
+Mask of Fealty,,"On Withering Blade hits and bounces:
+Spawns a Small Stasis Crystal on the 1st and 3rd bounce.
+Grants 7.5% Fixed Melee Ability Energy.
+
+Upon shattering a Stasis Crystal or Frozen Enemy with Withering Blade:
+Releases a spread of 3 Withering Blades.",Khepri's Horn,,"Solar Kills grant 15% Class Ability Energy.
+Incurs a 1? second cooldown between Solar Kills granting Class Ability Energy.
+
+On Barricade Placement, while a Solar Super Ability is equipped:
+Unleashes 3 Tracking Solar Wave up to 18.5 metres away.
+
+Solar Waves:
+Each deals 480 [100] damage and inflicts x60+30 [x30+15] Scorch. Damage cannot overlap.
+Solar Waves spawn a Sunspot under the enemies on hit [kill].
+Solar Wave do not benefit from, nor trigger Roaring Flames.
+
+Solar Effects triggered by Khepri's Solar Waves lose their 3x PVE bonus.
+This means Ignitions deal 66.7% decreased damage.
+Also, due to some wonkiness regarding Sunspot scorch, it takes ~5.3 seconds to ignite without Ashes, and ~1 second with Ashes.",Nezarec's Sin,,"Void Kills grant Abyssal Extractors for 2.5 seconds, up to a maximum of 20 seconds.
+
+While Abyssal Extractor is active:
+300% Additional Base Grenade and Melee Regeneration Rate.
+200% Additional Base Class and Super Regeneration Rate."
+,,,,,,,,
+Null Factor,,,Solar Rampart,,,Abyssal Extractors,,
+Mechaneer's Tricksleeves,,"Passively grants +50 Airborne Effectiveness, +100 Handling and +100 Reload Speed to Sidearms.
+
+Upon readying a sidearm while at Critical Health:
+Grants Damage Buff and refills Sidearm ammo.
+
+Damage Buff:
+Grants 100% [10%] increased Sidearm damage.
+Sidearm Kills refill Magazine.
+Damage Buff has no timer while at Critical Health. 
+Damage Buff has a 5 second timer upon Shields recovering.
+Sidearm Kills refresh 3 seconds.",Lion Rampant,,"Enables hipfiring while in Lift, and passively grants +50 Airborne Effectiveness.
+
+Increases Lift Duration to 4 seconds.
+
+Lift Duration in seconds:
+High Lift: 2.6 -> 4 (54% increase)
+Strafe Lift: 2.2 -> 4 (82% increase)
+Catapult Lift: 1 -> 4 (300% increase)
+
+For Primary Weapons while hipfiring:
++5 Range, +30 Stability,
+-30% Accuracy Cone Size, +2?° Precision Angle Threshold,
+20% Increased Aim Assist and Damage Falloff Distance.
+ DMT, Last Word, and Tommy's Matchbook do not receive the Falloff bonuses, and receive uniquely tweaked Accuracy values. ",Nothing Manacles,,"Grants an extra Scatter Grenade Ability Charge.
+
+Scatter Grenades receive Chaos Accelerant's Tracking Bonus.
+Does not stack with Chaos Accelerant's Bonus."
+,,,,,,,,
+Spring-Loaded Mounting,,,Jump Jets,,,Scatter Charge,,
+Moirai,,"Threaded Spike can now bounce to Tangles, detonating them and immediately returning.
+Detonating a Tangle with Threaded Spike automatically collects a copy of it.
+
+Catching a Threaded Spike that doesn't hit a Tangle refunds an additional ?% Melee Ability Energy.",Loreley Splendor,,"While a Solar Super Ability is equipped:
+
+While at Critical Health if the Class Ability is charged, or upon casting Barricade:
+Spawns a Sunspot under the user.
+The Sunspot spawned grants Sol Invictus even without the Aspect equipped. 
+However, the Sunspot duration cannot be extended without it.",Ophidian Aspect,,"Passively grants +35 Handling, +35 Reload Speed, and +10 Airborne Effectiveness."
+,,,,,,,,
+Webcatcher,,,Cauterizing Flame,,,Cobra Totemic,,
+Mothkeeper’s Wraps,,"Replaces Grenade Ability with 2 Ability Charges of Cage of Loyal Moths.
+Moth Cage overrides Grenade Cooldown to 73 seconds.
+
+Moth Cage:
+Explodes on impact, releasing 2 moths that fly to their nearest target.
+
+Moths that spawn closest to enemies are Arc and chase them, detonating on contact, dealing up to 525 [31 Guardians | 201 Objects] damage and blinding in a 4 meter radius .
+Arc Moths count as Arc Grenade Damage.
+
+Moths that spawn closest to the user or allies are Void and chase them much faster, granting 22.5 HP Void Overshield on contact.",Mask of the Quiet One,,"While at Critical Health: 
+Scoring a kill fully restores Health.
+Shields are not restored.
+
+Upon receiving damage from an enemy:
+Grants 5% Grenade, Melee, and Class Ability Energy.
+Incurs a 1 second cooldown between activations.
+
+While a Void Super Ability is equipped:
+Upon scoring 3 kills within 5 seconds of each, or a kill while at Critical Health:
+Grants Devour.",Osmiomancy Gloves,,"Grants an extra Coldsnap Grenade Ability Charge.
+
+Enhanced Coldsnap Grenades:
+Stronger tracking.
+Travel 17.5% further and faster.
+Grant Fixed Grenade Ability Energy upon dealing damage. 
+
+Coldsnap Grenade Ability Energy:
+Tier 1 Combatant = 10% | T2 = 22% | T3 = 34% | T4 = 50% | Guardian = 7%"
+,,,,,,,,
+Winged Eclipse,,,Dreaded Visage,,,Fervid Coldsnap,,
+Oathkeeper,,"Passively grants +40 Airborne Effectiveness and +10 Draw Time to Bows.
++10 Draw Time is equivalent to Draw Time Masterwork.
+
+Bows can hold perfect draws indefinitely.
+
+After 0.35 seconds of reaching full draw on a Primary Ammo Bow:
+Grants 37.5% increased damage every 0.5 seconds, up to 150% increased impact damage against Combatants after 2 seconds.
+Broadhead, Poison, Stasis Crystals, Dragonfly/Explosive Head, and others are not affected.
+Damage Buff disappears after holding full draw for 4 seconds.",Melas Panoplia,,"Upon collecting a Firesprite, or scoring ? Solar Kills within ? seconds of each:
+Grants Forge Master for ? seconds. Buff timer begins ticking once a Throwing Hammer is used.
+Performing Perfect Recalls and picking up additional Firesprites extends the buff duration by ? seconds, up to +? seconds.
+
+While Forge Master is active:
+Allows recalling the Throwing Hammer by pressing [Melee].
+
+Recalling after ? seconds of scoring a Throwing Hammer hit performs a Perfect Recall.
+Perfect Recall triggers an explosion that deals 270 [?] Damage over ? meters.",Phoenix Protocol,,"While inside your Well of Radiance, while under 50% Super Energy, and if your Super Ability is Well of Radiance: 
+Grants 10% Super Energy per kill. 
+
+Amount of Super Energy gained is decreased by 1.5% for each successive kill, down to a minimum of 4% Super Energy per kill.
+
+10% -> 8.5% -> 7% -> 5% -> 4.5% -> 4% -> 4%..."
+,,,,,,,,
+Adamantine Brace,,,Forge Master,,,Battle-Hearth,,
+Omnioculus,,"Grants an extra Smoke Bomb Melee Ability Charge.
+
+Void Invisibility grants 50% [10%] Damage Resist (Resist x4).
+
+Cloaking allies grants 50% Melee Ability Energy per ally made invisible.
+Allies share the Damage Resist Effect if made invisible by the Omnioculus Wielder.
+Damage Resistance does not apply in Super.",Mk. 44 Stand Asides,,"After sprinting for 0.5 seconds while a Powered Shoulder Charge Melee Ability is equipped and while at Full Health:
+Grants a 75 HP Overshield at a rate of 25 HP per second.
+Overshield disappears instantly upon no longer sprinting.
+Generic Overshield overrides Void Overshield, if active.
+
+Upon dealing Shoulder Charge Damage:
+Grants Melee Ability Energy.
+Seismic Strike and Hammer Strike are granted 40% Fixed Melee Energy.
+Shield Bash is granted 35% Fixed Melee Energy.
+Ballistic Slam is granted 25% Fixed Melee Energy.",Promethium Spur,,"Daybreak Kills spawn both a Healing and Empowering Rift on Enemy Death Location.
+
+While a Solar Super Ability is equipped:
+
+Solar Weapon Kills grant Class Ability Energy, based on the Enemy Rank.
+Tier 1 Combatant = 4.5% | T2 = 6.5% | T3 = 10% | T4 = 15% | Miniboss = 20% | Boss = 25% 
+Guardians = 7.5%
+Kills while affected by a Rift grant 2x Class Ability Energy.
+
+While Class Ability Energy is Full and in a Rift:
+Kills consume your Class Ability Energy and spawn a Empowering + Healing Rift at the Target's Location."
+,,,,,,,,
+Beyond The Veil,,,"Seriously, Watch Out",,,Embers of Light,,
+Ophidia Spathe,,"Grants an extra Melee Charge to Solar Melee Abilities.
+All Melee Charges are recharged simultaneously.
+(Eg: Both are recharged on Gambler's Dodge)
+
+Interaction with Knock 'Em Down Aspect while Radiant.
+Knife Kills restore 1 Charge.
+Knife Trick Precision Kills and Direct Ignition kills in which Knife Trick applies Scorch restores 2 Charges.
+
+On Throwing Knife Kill:
+30% | 60% | 100% Increased Throwing Knife Damage for 5 seconds.
+Class Ability Usage refreshes the duration. ",No Backup Plans,,"Passively grants +? Reload Speed and +30 Airborne Effectiveness to Shotguns.
+
+While Void Overshield is active:
+Shotgun deal 35% [10%] increased damage
+Shotgun Kills refresh Void Overshield health and duration.
+
+While a Void Super Ability is equipped:
+Scoring 3 points grants a Void Overshield and begins Health Regeneration.
+Rank-And-File = 1 Point | Anything Else = 2 Points",Rain of Fire,,"Passively grants +30 Airborne Effectiveness to Fusion Rifles and Linear Fusion Rifles.
+
+Fusion Rifle and Linear Fusion Rifle Kills grant Radiant for 7.5+3.75 seconds.
+
+Air Moves refill all weapons.
+Air Moves include Icarus Dash and Weavewalk."
+,,,,,,,,
+Scissor Fingers,,,Force Multiplier,,,Soaring Fusilier,,
+Orpheus Rig,,"Deadfall returns Ability Energy per Enemy Tethered. 
+X% Super Energy. Max of 50% Super Energy.
+10% Grenade
+10% Melee
+10% Class Ability Energy.
+
+Moebius Quiver can fire an additional volley per Super Activation.",One-Eyed Mask,,"Upon receiving damage:
+Highlights the first enemy that dealt damage for 8 seconds.
+Only one enemy can be highlight at once.
+
+Killing the highlighted enemy grants Vengeance, which is a 95HP Overshield for 6 seconds, and acts as a cooldown for highlighting additional enemies.",Rime-Coat Raiment,,"Enhances Bleak Watcher:
+Targeting Range is increased to ? meters.
+Creates 4 Medium Stasis Crystals diagonally to where it spawns.
+Bleak Watcher emits a Stasis Storm that covers 6 meters.
+The 4 Stasis Crystals respawn after 15 seconds.
+
+While standing in the Stasis Storm:
+Grants a stack of Icicle every second, up to a maximum of 5 stacks.
+Shooting triggers the Icicle to attack, releasing a Stasis Projectile that deals 50 [?] Stasis Damage and applies x50 [x20] Slow for ?+? seconds.
+Icicle can fire every 0.2 seconds.
+Icicle persists for 2 seconds while not in the Stasis Storm."
+,,,,,,,,
+Uncanny Arrows,,,Vengeance,,,Bleak Domain,,
+Raiden Flux,,"While in Arc Staff:
+Hits grant a stack of Synapse Junctions for 5 seconds, up to a maximum of 3 Stacks.
+
+Synapse Junction x1 = 20% Increased damage and X% Slower Passive Super Drain
+Synapse Junction x2 = 44% Increased damage and X% Slower Passive Super Drain
+Synapse Junction x3 = 73% Increased damage and X% Slower Passive Super Drain",The Path of Burning Steps,,"While a Solar Super Ability is equipped:
+
+Scoring 2–3 Solar Kills within 10 seconds of each grants a stack of Solar Weapon Surge for 11 [6] seconds, up to a maximum of x4 Solar Weapon Surge.
+Additional Solar Kills while at x4 Weapon Surge refresh the buff duration.
+
+Being Frozen or scoring a Solar Grenade Kill grants x4 Solar Weapon Surge.
+
+Slow Stacks and Duration are halved.
+Stasis Breakout deals no damage to the user, and releases a burst of Solar Energy, dealing up to 105 damage in a 9 metre radius.",Sanguine Alchemy,,"While in a Rift or Well of Radiance:
+
+Grants x4 Super-Matching Weapon Surge.
+
+Damaging an enemy applies a mark for 5 seconds.
+Marked Enemies receive 10% increased damage from the user.
+
+Kills grant Blood Magic for 5 seconds, up to a maximum of 15 seconds.
+Blood Magic pauses the duration of the Rift for as long as it is active.
+Well of Radiance will not be extended by Blood Magic."
+,,,,,,,,
+Synapse Junctions,,,Firewalker,,,Blood Magic,,
+Raiju's Harness,,"Upon casting Gathering Storm:
+Enemies within ? meters are struck by lightning, receiving 650 [?] damage and becoming jolted.
+Caster and allies within ? meters are granted Amplified.
+
+Lightning Strikes refund Super Energy per Arc-Debuffed Enemy Hits and Kills.
+Hits: T1 = ?% | T2 = ?% | T3 = ?% | T4 = 25?%
+Kills: T1 = ?% | T2 = ?% | T3 = ?% | T4 = ?%
+Refunds up to a maximum of 50% Super Energy.
+
+On Arc-Debuffed Enemy Kill:
+Grants additional Gathering Storm Super Energy.
+Rank-and-File = 1% | Elite = 2.5% | Miniboss+ = 4% | Guardian = 4%",Peacekeepers,,"Passively grants +40 Airborne Effectiveness to Submachine Guns.
+Stowed Submachine Guns are refilled in 1 second.
+
+While a Submachine Gun is readied:
++25 Mobility
++50 Handling with a 0.8?x Ready/Stow Duration Multiplier
+33% Decreased ADS Movement Speed Penalty
+Increases Sprint Speed by 6.25%
+Increases Slide Distance by 33%
+
+Upon scoring a Submachine Gun Hit against a Combatant:
+Grants a stack of Damage Buff for 1 second, up to a maximum of 20 stacks.
+Damage Buff grants 5% increased Submachine Gun Impact Damage against Combatants per stack.
+Additional Submachine Gun Hits refresh the Damage Buff duration.",Secant Filaments,,"Empowering Rifts created by the user grant Overload Shots to the user and allies inside it.
+Does not work with Well of Radiance.
+Weapons that have a Breaker Type, either by mods or intrinsically will not be overriden.
+
+While a Void Super Ability is equipped, for the user only:
+Standing on Empowering Rifts created by the user grant Devour for 11+0 seconds.
+Exiting, and then re-entering the same Empowering Rift refreshes the duration of Devour.
+Secant Filaments' Devour can be refreshed to 11+11 seconds.
+Re-entering an Empowering Rift while Devour duration is >11s will reset it to 11 seconds.
+
+While Devour is active:
+Kills grant 10% Class Ability Energy."
+,,,,,,,,
+Mobius Conduit,,,Mecha Holster,,,Devouring Rift,,
+Radiant Dance Machines,,"Passively grants +20 Airborne Effectiveness to Primary Weapons.
+
+For Primary Weapons while hipfiring:
++30 Mobility, +5 Range, +30 Stability,
+-30?% Accuracy Cone Size, +2?° Precision Angle Threshold,
+20% Increased Aim Assist and Damage Falloff Distance.
+ DMT, Last Word, and Tommy's Matchbook do not receive the Falloff bonuses, and receive uniquely tweaked Accuracy values. 
+Accuracy Cone values aren't testable but are high enough to effectively remove any accuracy cone growth.
+
+Primary Weapon Kills grant Fixed Class Ability Energy.
+Rank-And-File = 34% | Elite+ = 100% | Guardians = 20%
+
+Upon reaching 100% Counter Progress by scoring multiple Primary Weapon Kills within 6 seconds of each while at Full Class Ability Energy: 
+Rank-And-File = 34% | Elite+ = 100% | Guardians = 100%
+Grants an additional Class Ability Charge, up to a maximum of 2 additional Class Ability Charges.",Peregrine Greaves,,"Passively grants +20 Airborne Effectiveness.
+
+After sprinting for 2 seconds, and after being airborne for 0.5 seconds:
+Grants Peregrine Strike until the floor is touched. 
+
+Peregrine Strike:
+Shoulder Charge Abilities deal 225% increased impact damage.
+Champions, Tormentors, and Minibosses instead take 1000% Increased Impact Damage and grant 100% Fixed Melee Ability Energy.
+Shoulder Charge includes Seismic Strike, Hammer Strike, and Shield Bash.
+
+Frozen enemies will not take increased Melee Damage from Peregrine Strike.",Skull of Dire Ahamkara,,"Massively Increases Damage Resist during Nova Bomb.
+Begins at 99.5%, and sharply falls down to 75% near the end.
+
+Nova Bomb returns ~5% Super Energy per kill, up to 50% Super Energy.
+
+Upon scoring a Weapon Kill, while Devour is active:
+Grants additional Super Energy based on the Enemy Tier.
+Tier 1 Combatant = ?% | T2 = ?% | T3 = ?% | T4 = ?% | Guardian = ?%
+Actual amount varies by Enemy Rank. Works with any Super Ability."
+,,,,,,,,
+The Dance,,,Peregrine Strike,,,Actual Grandeur,,
+Renewal Grasps,,"Enhances Duskfield Grenades:
+Slowing Field is granted 25% Increased Radius.
+Creates a Medium Stasis Crytstal.
+
+While inside a Duskfield Grenade's Slowing Field:
+Enemies deal 50% [20%] decreased damage.
+User and allies are immediately granted x1 Frost Armor.
+Grants an additional Frost Armor stack every 0.5 seconds.
+
+When combined with Touch of Winter:
+Stasis Crystal Size increases from Medium to Large.
+Slowing Field radius is increased by +50%, to a total of 75% Increased Radius.",Phoenix Cradle,,"Sol Invictus from Sunspots lasts twice as long (5 -> 10 seconds)
+
+Sunspots now affect allies, granting them Sol Invictus buff for 10 seconds.",Speaker's Sight,,"Healing Grenades' Restoration Orb is replaced with a Healing Turret.
+Consuming a Healing Grenade will spawn a Healing Turret in front of the user.
+
+Healing Turret
+Lasts 15 seconds and has 100? HP.
+Releases Healing Seekers every 3 seconds towards the user and allies within 30 meters.
+Healing Seekers apply Cure x1 and Restoration x1 for 4 [3] seconds over a 7.5 meter radius.
+Cure and Restoration are increased to x2 while Touch of Flame is equipped.
+
+Upon restoring Health once [six times] to a damaged Ally:
+Spawns an Orb of Power that grants 2.5% Super Energy. on the ally's position.
+ Incurs a 10 second cooldown between Orb spawns."
+,,,,,,,,
+Depths of Duskfield,,,Beacons of Empowerment,,,The Lost Voice,,
+Sealed Ahamkara Grasps,,"On Non-Grapple Melee Powered Melee Kill or Finisher:
+Grants Nightmare Fuel for 7 seconds.
+Gaining Nightmare Fuel refills stowed weapons.
+
+Upon readying a different weapon after gaining Nightmare Fuel:
+Refreshes Nightmare Fuel duration.
+Grants 35% [20%] increased damage, +? Handling and +50 Airborne Effectiveness for 7 seconds.
+
+Scoring a Weapon Kill while Nightmare Fuel is active retriggers Nightmare Fuel, allowing the next weapon switch to benefit from the aforementioned bonuses.",Point-Contact Cannon Brace,,"On Thunderclap Usage:
+Strikes enemies within ? metres with lightning, dealing 200 [50] Arc Damage and inflicting Jolt.
+Lightning Damage is increased by 100% while Amplified.
+
+Thunderclap and Lightning Strike Kills grant Fixed Melee Ability Energy based on the Enemy Tier.
+ Tier 1 Combatant = 11.2% | T2 = 13.5% | T3 = 17.6% | T4 = 23.4% | Miniboss = 29.2% | Boss = 35%
+Guardians = 14.7%",Starfire Protocol,,"Grants an extra Fusion Grenade Ability Charge.
+
+Passively grants 20% Additional Base Fusion Grenade Regeneration Rate
+
+While in a Well of Radiance or Empowering Rift:
+Grants 2.5% Fusion Grenade Ability Energy per Weapon Hit.
+Incurs a 0.4 seconds cooldown between Grenade Energy Gains.
+Grants 20% Fusion Grenade Ability Energy on Weapon Kill.
+
+On Fusion Grenade Kill:
+Grants 100% Class Ability Energy."
+,,,,,,,,
+Nightmare Fuel,,,Hammer of the Gods,,,Fusion Harness,,
+Shards of Galanor,,"Blade Barrage Hits and Kills refund Super Energy.
+Caps at 50% Super Energy.
+
+Refund Amount depends on Kills and Hits, as well as Enemy Rank.
+
+Throwing Knife Kills grant 2.5% to 5% Super Energy, depending on Enemy Rank.",Pyrogale Gauntlets,,"Modifies Burning Maul into a single-use slam that deals 650% increased damage and releases 3 tracking waves. 
+
+Waves inflict x20+40 Scorch and create a Cyclone on impact. 
+
+Burning Maul's Cyclones deal 22 [16] damage every 0.2 seconds, inflict x3+2 Scorch every 0.56 seconds for 7.5 seconds, and track enemies.
+Damage from multiple Cyclones can now overlap. 
+
+Consecration's second slam's middle wave creates a Cyclone, which deals 16 [3] damage every 0.2 seconds, and inflicts x3+2 Scorch every 0.56 seconds.",The Stag,,"Grants 25% [5%] Damage Resist (Resist x2) to Guardians inside Rifts created by the wielder. 
+Standing in a Rift that overlaps or is inside a Well of Radiance allows the Damage Resist to work in it.
+
+Upon reaching Critical Health:
+Dearly Departed grants 50% [25%] Class Ability Energy.
+Buff lasts until the user is no longer at Critical Health, essentially serving as a Cooldown.
+
+On Death:
+ Spawns a Healing Rift for 15 seconds."
+,,,,,,,,
+Sharp Edges,,,Percussive Flames,,,Dearly Departed,,
+Shinobu's Vow,,"Grants an extra Skip Grenade Charge.
+
+Skip Grenades' drones chase enemies much more aggressively.
+
+Skip Grenades hits grant 4.2% [1.4%] Fixed Grenade Ability Energy.
+Counts each impact and explosion damage instances as hits.",Precious Scars,,"Upon reviving an ally, or being revived: 
+Projects a 15 meter field for 10 seconds that grants Wearer and Allies Shielded.
+Allies that leave the radius temporarily lose Shielded.
+
+Shielded:
+Overshield with 100 HP. 
+Regenerates over 1 second after 2 seconds of not receiving damage if Shielded is active.
+Shielded is removed and cannot be regained if Overshield gets destroyed.
+Shielded is removed from Allies if wearer's Overshield is destroyed.
+
+Upon scoring a Super-Matching Weapon Kill:
+Grants x1 Restoration for 3+1.5 seconds to the wearer and allies within 15 metres.
+Incurs a 3 second cooldown between activations, displayed with the ""Healing"" buff.",Stormdancer's Brace,,"Kills during Stormtrance grant a stack of Ascending Amplitude for 8 seconds.
+Decreases the Super Cost of Stormtrance's Ionic Blink to ?%/2 :)
+
+Ascending Amplitude:
+ Grants 20% Increased Stormtrance Damage per stack, up to 200% at 10 Stacks.
+
+Refunds up to 30% Stormdancer Super Energy based on the amount of Enemy Kills."
+,,,,,,,,
+New Tricks,,,Kintsugi,,,Ascending Amplitude,,
+The Sixth Coyote,,"Grants an extra Class Ability Charge.
+
+Passively grants a copy of Reaper.",Second Chance,,"Gain an additional Shield Throw Melee Ability Charge.
+ 
+Enhanced Shield Throw:
+ Gains Shield-Piercing Breaker Type and weakens for ? seconds on hit. 
+ Stunning a Barrier Champion grants a Melee Ability Charge. ",Sunbracers,,"The Solar-Element Grenades named ""Solar Grenades"" have Fastball intrinsically and last 2 seconds longer.
+
+Powered Melee Kills grant 5 seconds of Sunbracers Ready.
+
+On Grenade Ability Usage while Sunbracers Ready is active:
+Grants Sunbracers buff for 4 seconds.
+
+Sunbracers grants 20,000% Additional Base ""Solar Grenade"" Grenade Regeneration Rate."
+,,,,,,,,
+Double Dodge,,,Myrmidon's Reach,,,Helium Spirals,,
+Speedloader Slacks,,"On Class Ability Usage:
+Grants x1 Tight Fit for the wearer and allies within 15 metres for 15 seconds.
+
+While Tight Fit is active:
+Kills or Dodges grant an additional stack, up to a maximum of x5 Tight Fit and refresh the duration of the buff.
+Allies within range match the stack amount of the wearer's Tight Fit when the buff is refreshed.
+
+Stat Boost:
++40 | +40 | +45 | +50 | +55 Reload Speed
+- | 0.925x | 0.915x | 0.91x | 0.89x Reload Duration Multiplier
++40? | +40? | +45? | +50? | +55? Handling
++30 | +35 | +40 | +45 | +50 Airborne Effectiveness",Severance Enclosure,,"On Powered Melee Kill or Finisher:
+Enemy triggers a Kinetic Explosion, dealing up to a variable damage in a wide radius with falloff.
+Explosion Damage and Radius depends on Enemy Rank. 
+Finishers upgrade the Enemy Rank to the next higher one (Finisher on Rank-and-File -> Elite Explosion)
+Incurs a 1 second cooldown between non-chaining explosions. 
+
+Severance Explosion Damage | Radius
+Rank-and-File: 533 | 10? meters
+Elite: 665 | ? meters
+Miniboss+: 797 | 15? meters
+
+Severance Explosions from Powered Melee Kills can chain, creating weaker explosions that only deal up to 268 [?] damage in a 8? meter radius. 
+Chaining Explosions do not have a cooldown.",Swarmers,,"Upon destroying a Tangle:
+Spawns 2 Threadlings.
+
+Threadlings inflict Unravel for [?+?*0.5] [5+2.5] seconds on hit."
+,,,,,,,,
+Tight Fit,,,Spheromatik Trigger,,,Swarmers,,
+Star-Eater Scales,,"Orbs of Power grant an additional 2% Super Energy.
+Additional Super Energy is decreased to 0.5% while 3-Shot Golden Gun  is the selected Super ability.
+
+Picking up an Orb of Power while Super is charged grants a stack of Feast of Light. 
+
+On Super Cast:
+Consumes all Feast of Light stacks, restoring HP and increasing Super Damage for 14 seconds.
+18.2% | 36.4% | 54.6% | 59.7% | 64.8% | 70% increased Super Damage.
+Restores ? | ? | ? | ? | ? | 200 HP.
+
+On Super Cast while at x6 Feast of Light Stacks:
+ Grants a 100HP Overshield for 16 seconds.",Stronghold,,"Passively grants +100 Guard Resistance and +100 Guard Endurance. 
+
+While Blocking:
+50% [10%] Damage Resistance.
+Blocking a hit grants x2 Perfect Guard, up to x100.
+Having any Restoration effect disables stack accumulation. 
+Not blocking any hits for 10 seconds removes all Perfect Guard Stacks.
+
+Upon dealing Sword damage while having Perfect Guard Stacks:
+Grants Restoration x2 for a varying amount of time.
+Restoration x2 lasts 4 [3] seconds at x1, increasing up to 16+8 [6+3] seconds at x100.
+
+Stronghold Guarding:
+Sword Block now grants ?% [68%] Damage Resist.
+Sword Energy does not decay from blocking damage or holding guard.",Transversive Steps,,"Upon sprinting for 1.5 seconds:
+Refills Readied Weapon.
+
+Increases Sprint Speed by 6.25%
+Increases Slide Distance by 33%
+Crouch Speed cannot be decreased below 4 metres per second."
+,,,,,,,,
+Feast of Light,,,Clenched Fist,,,Strange Protractor,,
+St0mp-EE5,,"Grants 30% Damage Resist against Combatants while Airborne.
+
+Increases Sprint Speed by 6.25%.
+Increases Slide Distance by 33%.
+Greatly enhances all Jumps.",Synthoceps,,"While within 15 metres of 3 enemies: 
+Grants Biotic Enhancements for 5 seconds.
+
+Biotic Enhancements:
+50% Increased Super Damage.
+165% [100%] Increased Melee Damage.
+100% Increased Glaive Melee Damage.
++35? Handling and +35 Reload Speed.",Verity's Brow,,"Upon scoring a Grenade-Element Matching Weapon Kill: 
+Grants a stack of Death Throes, up to 5 stacks, increasing Grenade Ability Damage and granting Bonus Grenade Ability Energy per second per stack.
+Loses 1 Death Throes stack upon expiring, rather than all of them.
+Death Throes stack timer begins decaying after 2 seconds of gaining a stack.
+
+Death Throes:
+x1 = 40% [20%] increased Grenade Damage, +0.5% Bonus Grenade Energy/s for 8 seconds.
+x2 = 55% [40%] increased Grenade Damage, +1% Bonus Grenade Energy/s for 7 seconds.
+x3 = 70% [60%] increased Grenade Damage, +1.5% Bonus Grenade Energy/s for 6 seconds.
+x4 = 85% [80%] increased Grenade Damage, +2% Bonus Grenade Energy/s for 5 seconds.
+x5 = 100% increased Grenade Damage, +2.5% Bonus Grenade Energy/s for 4 seconds.
+
+On Grenade Ability Usage while Death Throes is active, for 5 seconds: 
+ Allies receive Feel The Flame while within 20 metres.
+Feel The Flame grants 10x Grenade Regeneration Speed."
+,,,,,,,,
+Hydraulic Boosters,,,Biotic Enhancements,,,The Fourth Magic,,
+Triton Vice,,"On Glaive Melee Kill:
+Overflows 1 Ammo to Magazine, up to 100% Increased Magazine Capacity.
+
+While within 15 meters of 3 enemies:
++50 Reload Speed and 100% Increased Glaive Melee Damage.
+Lingers for 5 seconds.
+
+On Glaive Projectile Kill:
+Enemies explode, dealing up to 350 [101] Weapon-Matching Damage in a 4? metre radius.",Ursa Furiosa,,"While guarding with Unbreakable or Sentinel Shield:
+Grants 15% Increased Movement Speed.
+
+Converts guarded damage into Super Energy after Super ends, up to 50% Super Ability Energy.
+Damage received while Overshield are active does not count towards Super Energy Refund.
+
+Unbreakable grants up to 60% Fixed Grenade Ability Energy once it ends.
+Scales from 15% Ability Energy, up to 60% Ability Energy after maxing out Unbreakable.",Vesper of Radius,,"While within 15 meters of at least 3 enemies:
+ Grants Additional Base Class Ability Regeneration Rate, scaling with enemy amount.
+3 Enemies = 250% | 4 = 666% | 5 = 1085% | 6 = 1500%
+
+After 1 second of placing a Rift:
+Triggers an Arc Shockwave that deals 400 [100] Arc Damage and staggers in a 7.5 metres radius. 
+Additional shockwaves occur every 5 seconds, until the Rift expires.
+
+Enemies killed by the Shockwaves explode, dealing 200 [100?] Arc Damage.
+While an Arc Super Ability is equipped, explosions and shockwaves blind."
+,,,,,,,,
+Halberdier's Reach,,,Ursine Guard,,,Planetary Torrent,,
+Wormhusk Crown,,"On Class Ability Usage:
+Instantly recovers 67 HP.",Wishful Ignorance,,"Grants an additional Frenzied Blade Melee Ability Charge.
+
+Upon scoring a Frenzied Blade or Flechette Storm hit:
+Grants a stack of Wish-Dragon's Talons for ? seconds, up to x3? stacks.
+Can only grant 1 stack per Ability Usage.
+
+Wish-Dragon's Talons grants increased Flechette Storm and Frenzied Blade damage.
+Flechette Storm: 10% | 25% | 50% Increased Damage.
+Frenzied Blade: 20% | 50% | 100% Increased Damage. 
+
+Banner of War's Pulses grant 5% Frenzied Blade Melee Ability Energy per ally within 10 meters.
+Wearer counts as an ally.",Wings of Sacred Dawn,,"While a Solar Super Ability is equipped:
+ ADS while Airborne grants Tome of Dawn. 
+Passively grants +50 Airborne Effectiveness while airborne.
+
+Tome of Dawn: 
+Holds the user in place midair for 2.8 seconds. 
+Scoring additional hits extends the buff duration by +? seconds, up to ? seconds.
+Grants 15% Damage Resist and 25% Flinch Resist while active.
+Scoring a Weapon Kill refills all Solar Weapons. Works with stowed guns."
+,,,,,,,,
+Burning Souls,,,Wish-Dragon's Talons,,,Tome of Dawn,,
+Young Ahamkara's Spine,,"Intrinsically grants Fastball to all Grenades, including non-Tripmine Grenades.
+
+Enhanced Tripmine Grenades
+14% Increased Explosion Damage.
+ Explosion Length and Width are increased to 14 metres.
+ Explosions no longer deal self-damage and have no falloff.
+Lasts 30 seconds. (10 -> 30)
+Increases Tripmine Durability to 70 HP.
+
+Solar Ability Hits grant 33% [8%] Tripmine Grenade Ability.
+Incurs a 0.3 second cooldown between Grenade Ability Gains.",Wormgod Caress,,"On Melee, Glaive Melee, or Finisher Kill:
+Grants a stack of Burning Fists, up to 5 stacks, increasing Melee, Glaive Melee, and Weapon Damage per stack.
+Loses 1 Burning Fists stack upon expiring, rather than all of them.
+Burning Fist stack timer begins decaying after 2 seconds of gaining a stack.
+ 
+Burning Fists:
+x1 = 55% increased Melee Damage and 40% increased Glaive Melee Damage for 9.5 seconds.
+x2 = 110% Melee Damage, 80% Glaive Melee, and 20% Increased Weapon Damage for 10 seconds.
+x3 = 165% Melee Damage, 120% Glaive Melee, and 25% [20%] Weapon Damage for 4 seconds.
+x4 = 220% Melee Damage, 160% Glaive Melee, and 30% [25%] Weapon Damage for 4 seconds.
+x5 = 275% Melee Damage, 200% Glaive Melee, and 35% [25%] Weapon Damage for 3 seconds.",Winter's Guile,,"On Melee Kill:
+Grants a stack of Warlord's Sigil, up to 5 stacks.
+Warlord's Sigil grants Increased Melee Damage for 5 seconds 
+
+Bonus Melee Damage:
+55% | 110% | 165% | 220% | 275%
+
+Melee Damage Increase includes Glaive Melee.
+
+Combatants hit by Penumbral Blast automatically shatter."
+,,,,,,,,
+Wish-Dragon Teeth,,,Burning Fists,,,Warlord's Sigil,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+Aeon Sects,,,,,,,,
+"Sect of Force
+
+Foebreaker Chant",,"Upon scoring 4 Precision Hits within 3 seconds of each:
+Grants +30 Reload Speed, 0.85x Reload Duration Multiplier, and +40? Handling for 10 seconds.
+
+Upon scoring 4 Precision Hits within 3 seconds of each on an Elite, Miniboss, or Champion Combatant, or upon stunning a Champion:
+Marks the Combatant for 30 seconds. Cannot be refreshed.
+Marked Combatants are highlight for the entire team and take 20% more damage from Allies. 
+Damage increase stacks with everything.
+Allies see Marked Combatant with an X through walls.
+
+When first marking a Combatant, Aeon Allies not on Sect of Force within ? metres are granted 33.33% Fixed Bonus Grenade and Melee Ability Energy per second for 3 seconds.","Sect of Insight
+
+Armsbearer Chant",,"Upon scoring 2 Precision Multikills:
+Creates an Orb of Power that grants 3.57% Super Energy for allies.
+
+Upon finishing an Elite Combatant:
+Spawns a Special Ammo Brick for Allies within ? meters.
+
+Upon finishing a Miniboss, Champion, or Boss Combatant:
+Spawns a Power Ammo Brick for Allies within ? meters.
+
+Aeon Ammo Bricks grant 60% of a Regular Ammo Brick's Pickup Amount, with full variability.
+
+Upon finishing an Elite, Miniboss, Champion, or Boss Combatant: 
+Aeon Allies that are not using Sect of Insight are granted ?% Super Energy.","Sect of Vigor
+
+Lightgiver Chant",,"On Ally Death:
+Grants 25% Class Ability Energy and 40% Damage Resist against Combatants for 15 seconds.
+
+On Ally Revival:
+Grants 100% Class Ability Energy and 40% Damage Resist against Combatants for 10 seconds.
+
+Allies at Critical Health within 10 metres are granted 25% Damage Resist against Combatants.
+
+Aeon Allies at Critical Health within 10 meters that are not using Sect of Vigor receive 15% Bonus Class Ability Energy per second. 
+
+Ally buffs linger for 1 second after no longer critical."

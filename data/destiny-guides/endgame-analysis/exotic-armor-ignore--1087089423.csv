@@ -1,0 +1,249 @@
+ICON,NAME,DESCRIPTION,CLASS,TYPE,EFFECT,FLEX,SPEED,DPS,POWER,TIER
+,Aeon Swift,"Force: weapon haste/abilities/major debuff on crits/stun
+Insight: orb on 2 crit kills, ammo and super finishers
+Vigor: class energy/DR on ally death, DR for critical allies",H,S,,,,,,
+,Assassin's Cowl,Powered melee kill or finisher = health and invisibility,H,N,,,,,,
+,Athrys's Embrace,"Weighted throwing knives get additional bounce
+3 crits = 3x knife damage + Unstoppable",H,N,,,,,,
+,Blight Ranger,"No energy drain on Arc Staff block
+Orbs on reflect and +650% reflected projectile damage",H,S,,,,,,
+,Caliban's Hand,"Proximity explosive knife applies scorch on detonation
+Proximity explosive knife kills ignite
++500% melee regen if knife is embedded",H,N,,,,,,
+,Celestial Nighthawk,"Golden Gun only fires once, but +72% overall damage
+1.5 to 4.5% super energy on precision kills",H,H,,,,,,
+,Cyrtarachne's Facade,Woven Mail on grapple,H,N,,,,,,
+,Foetracer,x4 subclass surge for 10s on ability damage,H,H,,,,,,
+,FR0ST-EE5,"Sprint = 2x ability regen
+Dodge = improved sprint",H,N,,,,,,
+,Gemini Jester,Disorients nearby enemies for 5s on dodge,H,N,,,,,,
+,Graviton Forfeit,"Invisibility gains 2s duration
+100 recovery, 100 reload, 5x melee regen while invisible
+7x to 9x melee regen if enemies nearby",H,N,,,,,,
+,Gwisin Vest,Extends Spectral Blade on super kills,H,S,,,,,,
+,Gyrfalcon's Hauberk,"Invisibility end = Volatile Rounds for 10s
+Finisher while invis = 35% buff for 6s and team overshield
+Reserve overshield gives 6x class regen until class used",H,N,,,,,,
+,Khepri's Sting,"Powered melee casts +50% damage smoke bomb
+Smoke bomb damage = Truesight for 3s
+6x melee regen while smoke bomb is active",H,N,,,,,,
+,Knucklehead Radar,"Enhanced radar while crouched
++1% damage per target health % under 30%",H,S,,,,,,
+,Liar's Handshake,"Taking or dealing melee = 3x melee and HP on hit
+1.8x with One-Two Punch",H,N,,,,,,
+,Lucky Pants,"Handling and ADS duration decrease for hand cannons
++60% HC damage per hit up to 600% for 5.5s
+Cannot refresh for 10s after swap or timer end",H,H,,,,,,
+,Lucky Raspberry,"Arcbolt grenades chain more and disrupt
+20% grenade return on jolt chain
+5% grenade return on Ionic Trace pickup",H,N,,,,,,
+,Mask of Bakris,"Light Shift instead of dodge
+x4 arc/stasis surge for 11s on shift",H,N,,,,,,
+,Mechaneer's Tricksleeves,"100 handling and reload for sidearms
+Refill and 2x sidearm damage while critical",H,H,,,,,,
+,Mothkeeper's Wraps,"Grenade replaced with 2 moth cages
+Moths blind enemies and deal arc grenade damage
+Moths can also give small void overshield to allies",H,N,,,,,,
+,Oathkeeper,"10 draw time for bows
+Bows can hold perfect draw indefinitely
+Up to +150% impact damage to primary bows after 2s hold",H,N,,,,,,
+,Omnioculus,"Two smoke bomb charges
+Invisibility gives 50% DR
+Refunds 50% of melee per ally made invisible",H,N,,,,,,
+,Ophidia Spathe,"Two simultaneously charging solar melees
+30-100% extra throwing knife damage, stacks on kill",H,N,,,,,,
+,Orpheus Rig,"Up to 50% refund for Deadfall Tether on tethered enemies
+Moebius Quiver fires an additional volley",H,N,,,,,,
+,Radiant Dance Machines,"Dodging within 15m of enemy: infinite dodges for 6s
+Timer can be extended by 5s on kills",H,H,,,,,,
+,Raiden Flux,Increases Arc Staff damage and duration on hit,H,S,,,,,,
+,Raiju's Harness,"Decreases Arc Staff super drain
+Early Arc Staff deactivation to conserve energy
+Deactivation = blinds nearby enemies, x4 arc surge for 21s",H,S,,,,,,
+,Renewal Grasps,"Duskfield radius +25%-50% (Touch of Winter)
+25% DR in duskfields, enemies do 50% less",H,N,,,,,,
+,Sealed Ahamkara Grasps,"Melee hit = equipped weapon refill
+Powered melee kill = all weapons refilled
+7s ICD",H,S,,,,,,
+,Shards of Galanor,"Up to 50% refund for Blade Barrage on hits or kills
+Throwing knife kills give super energy",H,H,,,,,,
+,Shinobu's Vow,"Two skip grenade charges
+More aggressive skip drone tracking
+Skip grenades give 4.2% grenade per hit",H,N,,,,,,
+,Speedloader Slacks,Buffed reload and handling for nearby allies on dodge,H,S,,,,,,
+,ST0MP-EE5,"Dodge full = buffed sprint, slide, and jump height",H,M,,,,,,
+,Star-Eater Scales,"Orbs give +2% more super energy
+4 orbs with full super = +70% super damage, overshield",H,H,,,,,,
+,The Bombardiers,Subclass-matched explosive dropped on dodge,H,N,,,,,,
+,The Dragon's Shadow,"Dodge = 100 handling/reload, buffed sprint/slide
+Reloads all weapons on dodge (special animation)",H,S,,,,,,
+,The Sixth Coyote,Two dodge charges,H,H,,,,,,
+,Triton Vice,"Glaive melee kills overflow mag by 1 ammo
+50 reload and +100% surrounded glaive melee damage
+Subclass-matched glaive kills create explosions",H,N,,,,,,
+,Wormhusk Crown,67HP on dodge,H,N,,,,,,
+,Young Ahamkara's Spine,"Fastball to all grenades
++14% tripmine damage, bigger explosion radius
+Solar ability kills give 33% tripmine energy",H,N,,,,,,
+,Abeyant Leap,"Drengr's Lash: 2 more lashes, more aggressive tracking
+Woven Mail on suspend",T,N,,,,,,
+,ACD/0 Feedback Fence,"Armor Charge on melee, melee DR when charged
+Consumes charges on receiving melee
+Creates arc burst and jotls nearby targets",T,N,,,,,,
+,Actium War Rig,Reloads autos and LMGs,T,N,,,,,,
+,Aeon Safe,"Force: weapon haste/abilities/major debuff on crits/stun
+Insight: orb on 2 crit kills, ammo and super finishers
+Vigor: class energy/DR on ally death, DR for critical allies",T,S,,,,,,
+,An Insurmountable Skullfort,Full refund and health regen on arc powered melee kills,T,N,,,,,,
+,Antaeus Wards,Sliding creates reflective shield but drains class energy,T,N,,,,,,
+,Arbor Warden,"Using barricade turns grenade into Barri-Nade
+Thrown Barri-Nades disorients nearby enemies",T,N,,,,,,
+,Armamentarium,Two grenade charges,T,N,,,,,,
+,Ashen Wake,"Gives fusion grenades Fastball
+Refunds fusion grenade energy on kill (rank-dependent)",T,N,,,,,,
+,Cadmus Ridge Lancecap,"Diamond Lances spawn crystals on impact
+Spawns lance nearby on 3 crits behind rally barricade",T,N,,,,,,
+,Citan's Ramparts,Towering Barricade has low health but can be shot through,T,N,,,,,,
+,Crest of Alpha Lupi,"Team heal on barricade placement
+Supers make one extra orb",T,H,,,,,,
+,Cuirass of the Falling Star,"Doubled Thundercrash damage
+Distance-scaled overshield on Thundercrash",T,S,,,,,,
+,Doom Fang Pauldron,"Void multikills provide x1 surge
+Powered void melee kills provide x4 surge and 20% super
+Extends Sentinel Shield on shield throw hits",T,N,,,,,,
+,Dunemarchers,"Buffs sprint speed and slide
+Chains lightning between enemies after sprinting",T,N,,,,,,
+,Eternal Warrior,"Arc multikills provide x1 surge
+Overshield on Fists of Havoc cast
+30s of x4 surge on Fists of Havoc end",T,H,,,,,,
+,Hallowfire Heart,"Solar kills in sunspots make sunspots
++350% grenade and melee regen with full super",T,N,,,,,,
+,Heart of Inmost Light,Empowers other abilities on ability usage,T,N,,,,,,
+,Helm of Saint-14,"Blinds enemies near Sentinel Shield while blocking
+Blinds enemies inside Ward of Dawn
+Provides small overshield to allies that enter Ward of Dawn",T,S,,,,,,
+,Hoarfrost-Z,"Replaces barricade with crystal wall
+Barricade cooldown is set to Towering",T,N,,,,,,
+,Icefall Mantle,"Stasis multilkills provide x1 surge
+Class ability gives immobile overshield and x4 surge",T,N,,,,,,
+,Khepri's Horn,"Scorching boomerang wave from barricades
+25% class energy on solar kills",T,N,,,,,,
+,Lion Rampant,"Hipfire in lift, +50 AE hipfire
+All lift durations increased to 4s",T,M,,,,,,
+,Loreley Splendor Helm,Barricades or crit health spawn Sol Invictus sunspot,T,N,,,,,,
+,Mask of the Quiet One,"Weapon kills heal to 70HP if critical
+1s ICD +5% abilities when damaged",T,N,,,,,,
+,Mk. 44 Stand Asides,"Overshield on sprint with shoulder charge ready
+50% refund on shoulder charge use (no kickstart)",T,N,,,,,,
+,No Backup Plans,"Buffs reload for shotguns
++35% shotgun damage with Void Overshield
+Overshield and regen on shotgun kills",T,N,,,,,,
+,One-Eyed Mask,"Marks enemies on receiving damage
+Overshield on killing marked enemy",T,N,,,,,,
+,Peacekeepers,"Buffs handling and movement for SMGs
+Reloads stowed SMGs",T,N,,,,,,
+,Peregrine Greaves,2s sprint = 225% airborne shoulder charge damage,T,N,,,,,,
+,Phoenix Cradle,"Doubles Sol Invictus duration
+Allied Sol Invictus (ability regen, super drain, Restoration)",T,N,,,,,,
+,Point-Contact Cannon Brace,"Melee energy on Thunderclap kills (rank-dependent)
+Lightning strike and jolt on Thunderclap
+Increased Thunderclap damage while Amplified",T,N,,,,,,
+,Precious Scars,"Overshield on being revived or reviving ally
+Subclass-matched weapon kills give Restoration for 3s",T,N,,,,,,
+,Pyrogale Gauntlets,"Converts Burning Maul into +650% scorching slam
+Consecration's ignite slam creates scorching DoT cyclone",T,H,,,,,,
+,Second Chance,"2 Anti-Barrier weakening Shield Throw charges
+Refunds melee energy on Barrier stun",T,N,,,,,,
+,Severance Enclosure,4s ICD explosion on powered melee or finisher kills,T,N,,,,,,
+,Stronghold,"Maxes sword guard-related stats
+Massive DR, Perfect Guard, and zero drain on block
+Restoration x2 on Perfect Guard consumption",T,N,,,,,,
+,Synthoceps,"+165% melee, +50% super damage in 15m of 3 enemies",T,N,,,,,,
+,The Path of Burning Steps,"Solar multikills give x1 surge
+Getting frozen or solar grenade kill gives x4 surge
+Reduced stasis effects",T,N,,,,,,
+,Ursa Furiosa,"Buffed Sentinel Shield movement speed
+Up to 50% Sentinel Shield refund after blocking damage",T,S,,,,,,
+,Wormgod Caress,"Max 275% melee or glaive melee damage at 5 melee kills
+Stacks have gradual meter",T,N,,,,,,
+,Aeon Soul,"Force: weapon haste/abilities/major debuff on crits/stun
+Insight: orb on 2 crit kills, ammo and super finishers
+Vigor: class energy/DR on ally death, DR for critical allies",W,S,,,,,,
+,Apotheosis Veil,"Full health and abilities on super cast
+66% grenade/melee per second on super cast for 8s",W,S,,,,,,
+,Astrocyte Verse,"Longer blink
+Enemies near blink become volatile",W,N,,,,,,
+,Ballidorse Wrathweavers,"2x Winter's Wrath shatter damage
+Overshield and x4 stasis surge to allies near shockwave
+Frostpulse rifts give 2x surge and overshield",W,H,,,,,,
+,Boots of the Assembler,"Standing in rift creates healing/35% buff seekers
+Allies standing in rift extend timer",W,N,,,,,,
+,Briarbinds,"Increased Child of the Old Gods duration, DR, and damage
+Allows for Child redeployment",W,N,,,,,,
+,Cenotaph Mask,"Refills traces over time
+5 trace ticks on miniboss+ = team heavy, self special",W,N,,,,,,
+,Chromatic Fire,Subclass-matched explosion on kinetic precision kill,W,N,,,,,,
+,Claws of Ahamkara,"Two melee charges
+Heavy Handed",W,N,,,,,,
+,Contraverse Hold,"DR while charging void grenades
+4s ICD +2000% 1.75s grenade regen on hit",W,N,,,,,,
+,Crown of Tempests,"Arc ability or jolt kills give ability regen timer
+Increased Stormtrance duration",W,N,,,,,,
+,Dawn Chorus,"Scorch deals 3x damage and 5% melee per tick
+90% increased Daybreak damage",W,N,,,,,,
+,Eye of Another World,"Highlights low health targets
++50% ability regen",W,N,,,,,,
+,Fallen Sunstar,"Faster Ionic Traces that give 2x energy
+Gives nearby allies 10% to all abilities on trace pickup",W,N,,,,,,
+,Felwinter's Helm,Finisher/powered melee kill = 30% debuff/disorient nearby,W,N,,,,,,
+,Geomag Stabilizers,"Longer Chaos Reach duration
+2% super on Ionic Trace pickup",W,H,,,,,,
+,Getaway Artist,"Sentient Arc Soul and Amplified on grenade consume
+5% grenade per burst from Sentient Arc Soul",W,N,,,,,,
+,Karnstein Armlets,"x3 Cure and 8s of Restoration x1 on melee kill
+x3 Cure and 8s of Restoration x2 on finisher kill",W,N,,,,,,
+,Lunafaction Boots,"100 reload and 0.9x reload duration in rifts and Wells
+2x damage falloff for empowering rifts and Wells",W,S,,,,,,
+,Mantle of Battle Harmony,"Subclass-matching weapon kills give super every 2s
+If super is full, x4 surge for 11s",W,N,,,,,,
+,Necrotic Grip,"Poison on melee hits
+Poinsoned enemies spread poison on death",W,N,,,,,,
+,Nezarec's Sin,Void kills = +2.5s of 4x grenade/melee and 3x class/super,W,N,,,,,,
+,Nothing Manacles,"Two scatter grenade charges
+Scatters get Chaos Accelerant effect",W,N,,,,,,
+,Ophidian Aspect,35 handling and 35 reload,W,S,,,,,,
+,Osmiomancy Gloves,"Two coldsnap grenade charges
+Better coldsnap tracking, distance, and energy on hit",W,N,,,,,,
+,Phoenix Protocol,Up to 50% Well refund upon getting ~9 kills,W,N,,,,,,
+,Promethium Spur,"Daybreak kills spawn both rift types on corpse
+Solar weapon kills give class energy
+Kills in rift with full class energy spawn dual rifts on corpse",W,N,,,,,,
+,Rain of Fire,"Fusion and linear kills give Radiant for 7.5s
+Icarus Dash and Weavewalk refill all weapons",W,H,,,,,,
+,Sanguine Alchemy,"Rifts grant x2 subclass surge
+Infinite duration rifts on kills",W,N,,,,,,
+,Secant Filaments,Empowering rifts grant Overload (Devour on Voidwalker),W,N,,,,,,
+,Skull of Dire Ahamkara,"Huge DR on Nova Bomb cast
+Up to 50% Nova Bomb refund on kills",W,S,,,,,,
+,Starfire Protocol,"Two fusion grenade charges, +20% recharge rate
+0.4s ICD 2.5% energy on empowered hit, 20% on kill
+Full class ability on grenade kill",W,N,,,,,,
+,Stormdancer's Brace,"Stormtrance kills increase damage up to 2x
+Up to 50% Stormtrance refund on kills",W,S,,,,,,
+,Sunbracers,"Fastball and +4s duration for solar grenades
+Infinite solar grenade energy for 5s on powered melee kill",W,N,,,,,,
+,Swarmers,"Destroyed tangles spawn 2 threadlings
+Threadlings unravel",W,N,,,,,,
+,The Stag,"25% DR in rifts
+50% class energy on critical
+Healing rift on death",W,N,,,,,,
+,Transversive Steps,"1.5s sprint = refills readied weapon
+Buffs sprint speed, slide, and crouch",W,M,,,,,,
+,Verity's Brow,"Subclass-matched weapon kills grant Death Throes
++50% grenade regen and 20% damage per stack
+Nearby allies get 10x grenade regen for 5s on grenade use",W,N,,,,,,
+,Vesper of Radius,"Faster class ability regen if surrounded by 3-6+ enemies
+Rifts create blinding (Stormcaller) shockwaves every 5s",W,N,,,,,,
+,Wings of Sacred Dawn,"Holds you midair while ADS'd
+15% DR and Solar weapon reloads on kllls midair",W,N,,,,,,
+,Winter's Guile,Max 275% melee or glaive melee damage at 5 melee kills,W,N,,,,,,

@@ -1,0 +1,42 @@
+{
+  "merged_ranges": [
+    "A1:B1",
+    "C1:D1",
+    "E1:I1",
+    "J1:K1"
+  ],
+  "hyperlinks": {},
+  "cell_notes": {
+    "E2": "base - 0.5",
+    "E1": "Perks penalized with -1 if in the wrong column",
+    "F2": "grave - 2\nalh - 2\nreplenishing - 2\nbase - 1",
+    "G2": "immovable - 2\nbase - 1\n",
+    "H2": "close to melee - 3\nfrenzy - 2\nbase - 1"
+  },
+  "formulas": {
+    "D3": "IFS(C3=\"Adaptive\",2,C3=\"Rapid\",1,C3=\"Aggressive\",0)",
+    "I3": "2+2+2+1+3",
+    "J3": "SUM(D3,I3)",
+    "D4": "",
+    "I4": "0.5+1+2+2+3+1",
+    "J4": "",
+    "D5": "",
+    "I5": "2+2+3",
+    "J5": "",
+    "D6": "",
+    "I6": "1+2+1+2+1",
+    "J6": "",
+    "D7": "",
+    "I7": "1+2+1+3+1",
+    "J7": "",
+    "D8": "",
+    "I8": "2+2+1+1",
+    "J8": "",
+    "D9": "",
+    "I9": "0.5+1+1+1+1",
+    "J9": ""
+  },
+  "rich_text": {},
+  "hidden_rows": [],
+  "drawings_present": true
+}

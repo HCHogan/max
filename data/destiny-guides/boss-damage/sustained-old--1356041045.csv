@@ -1,0 +1,476 @@
+Name,Type,Family,Icon,#,Notes,Distribution,"peak
+Rate",TtE,Base,Perk,Surge,Buff,Debuff,200.0,Single,"TFS
+Total","TFS
+DPS",Total,DPS,"diff
+Total","diff
+DPS"
+"High-impact bow
+Heavy Bolts, Accelerated Assault, Envious Arsenal + High Ground (A Good Shout), Guidance Ring x3, Moebius Quiver",power,bow,,10.0,,1-1-1...,0.95,9.35,2422.435,1.378,1.22,3.125,1.3,1.1,18198.98806,,,181989.8806,19464.15835,,
+"High-impact bow
+Heavy Bolts, Accelerated Assault, Envious Arsenal + High Ground (A Good Shout), Moebius Quiver",power,bow,,10.0,,1-1-1...,0.95,9.35,1659.403,1.378,1.22,3.125,1.3,1.1,12466.56995,,,124665.6995,13333.2299,,
+"Grapple melee
+One-Two Punch, Biotic Enhancements, Combination Blow x3, Facet of Courage",melee,melee,,INF,,N/A,1.5,N/A,778.076,,,8.965,1.3,2.145,19451.04606,,,INF,12967.36404,N/A,N/A
+"Leviathan's Breath
+Archer's Tempo, Moebius Quiver",power,bow,,14.0,,1-1-1...,1.333,17.329,2069.603,,1.22,3.125,1.3,1.1,11283.21686,3874920.363083247,175335.76303544102,157965.036,9115.646372,2.091203944,2.666951767
+"High-impact bow
+Heavy Bolts, Accelerated Assault, Envious Arsenal + High Ground (A Good Shout), Guidance Ring x3",power,bow,,10.0,,1-1-1...,0.95,9.35,2422.435,1.378,1.22,1.25,1.3,1.1,7279.595224,,,72795.95224,7785.663341,,
+"Aggressive rocket launcher
+Slideshot + e. Surrounded (Crux Termination IV), Pack Hunter",power,rocket,,9.0,,1-1-1...,1.083,8.664,2312.279,1.427269212,1.22,1.25,1.3,1.1,7197.008468,3653747.5851445636,337372.8148794611,64773.07621,7476.116829,0.9093983917,1.13674799
+"Grapple melee
+One-Two Punch, Banner of War, Biotic Enhancements",melee,melee,,INF,,N/A,1.5,N/A,778.076,,,5.15,1.3,2.145,11173.77437,,,INF,7449.182913,N/A,N/A
+"Adaptive rocket launcher
+Timelost Magazine, Envious Arsenal + Elemental Honing x5 (Hezen Vengeance), Pack Hunter",power,rocket,,9.0,1450ms swap,2-2-2-2-1,1.166,10.464,2312.279,1.35,1.22,1.25,1.3,1.1,6807.378279,,,61266.40452,5854.96985,N/A,N/A
+"High-impact bow
+Heavy Bolts, Accelerated Assault, Envious Arsenal + High Ground (A Good Shout)",power,bow,,10.0,,1-1-1...,0.95,9.35,1659.403,1.378,1.22,1.25,1.3,1.1,4986.627981,,,49866.27981,5333.291958,,
+"Throwing Hammer
+One-Two Punch, Biotic Enhancements, Roaring Flames x3, includes <101 Weapons rapid-fire shotgun",melee,melee,,INF,,N/A,0.917,N/A,369.886,,,6.15,1.3,1.3,4858.871251,,,INF,5298.660034,N/A,N/A
+"Fusion grenade
+Death Throes x5, Touch of Flame, Ember of Ashes, Feel the Flame",grenade,grenade,,INF,,N/A,1.567,N/A,1889.593,,,2.0,1.3,1.65,8106.35397,,,INF,5173.167817,N/A,N/A
+"Pinpoint slug shotgun
+Assault Mag, e. Redirection x30 + Elemental Honing x5 (Unvoiced), reload cancelling",special,shotgun,,18.0,,18,0.833,14.161,712.149,2.475,1.22,1.25,1.3,1.15,4018.436486,3666581.350361645,191376.44711945538,72331.85675,5107.821252,1.011967321,1.369132258
+"Flux grenade
+Death Throes x5, Feel the Flame",grenade,grenade,,INF,,N/A,1.567,N/A,1827.135,,,2.0,1.3,1.65,7838.40915,,,INF,5002.17559,N/A,N/A
+"Throwing Hammer
+Biotic Enhancements, Roaring Flames x3, max range",melee,melee,,INF,,N/A,0.883,N/A,503.04496,,,5.15,1.3,1.3,4378.251809,,,INF,4958.38257,,
+"Aggressive sniper
+Aggregate Charge x3 (Refurbished A499), Networked Targeting x5",power,sniper,,20.0,,1-1-1...,1.367,25.973,1890.733,1.512955,1.22,1.25,1.3,1.1,6238.240248,,,124764.805,4803.634734,,
+"Praxic Blade
+throw spam with double hits, Lucent Blades x3, Offensive Form, Forceful Blade III, Gyro Core (solar), simulated",special,sword,,63.0,,,1.983,63.456,4042.776,,1.22,1.25,1.3,1.15,9217.023933,,,294944.7659,4648.020138,,
+"Adaptive rocket launcher
+Clown Cartridge + Elemental Honing x5 (The When and Where), Pack Hunter",power,rocket,,9.0,2150ms reload,1-2-2-2-2,1.166,13.264,2312.279,1.35,1.22,1.25,1.3,1.1,6807.378279,,,61266.40452,4618.999134,N/A,N/A
+"Winterbite
+melee, 2L1H cancel combo, Combination Blow x3, Triton Vice, excludes shatter damage",melee,melee,,INF,,N/A,1.467,N/A,518.05,,,7,1.3,1.43,6741.38465,INF,189567.19094036697,INF,4595.354226,N/A,1.243523564
+"Wolfsbane
+swapping after HLLHLLHLLHLLH, Honed Edge + Jagged Edge, Burning Ambition, 10 lights to regenerate, Outbreak Perfected max nanites",power,sword,,64.0,,5-5-5-3-1-1...,18.967,47.934,31511.83,1.25,1.1,1.25,1.3,1.1,77450.16967,,,219867.6908,4586.883856,,
+"Izanagi's Burden
+includes rehone time, hone before rally",special,sniper,,20.0,,4-4-4-4-4-3,1.717,8.585,2874.336167,,1.22,1.25,1.3,1.15,6553.127168,2197053.3322043605,98082.73804483752,39318.76301,4579.93745,,
+"High-impact rocket launcher
+Envious Arsenal + Bait and Switch (Tomorrow's Answer), Pack Hunter",power,rocket,,11.0,1450ms swap,1-1-1...,1.45,14.5,2145.968,1.245454545,1.22,1.25,1.3,1.1,5828.502737,,,64113.53011,4421.622766,N/A,N/A
+"Legend of Acrius
+body, Trench Barrel",power,shotgun,,16.0,"1416ms m-s
+1550ms s-m-s",3-3-3...,1.183,20.333,1667.836,1.5,1.22,1.25,1.3,1.1,5455.700036,5517030.253603916,191377.48902469527,87291.20057,4293.080242,0.8116397365,1.150737733
+"Merciless
+Impetus, two kills",special,fusion,,17.0,"1000ms charge
+1317ms reload",7-8-2,0.516,11.7,1288.378824,,1.22,1.25,1.3,1.15,2937.34267,2735580.38,167662.4405491542,49934.8254,4267.933794,0.9363802724,1.305810301
+"Still Hunt
+pre-popped into 6 shot cycle, Celestial Nighthawk",special,sniper,,20.0,"1767ms cast
+1817ms reload",1-6-1...,0.65,21.152,1968.2197,,1.22,1.25,1.3,1.15,4487.294889,3783101.1683108946,143844.15088634577,89745.89777,4242.903639,1.216927908,1.513105332
+"Aggressive sniper
+Aggregate Charge x3 (Refurbished A499)",power,sniper,,20.0,,1-1-1...,1.367,25.973,1890.733,1.333,1.22,1.25,1.3,1.1,5496.246914,,,109924.9383,4232.277299,,
+"Dynamic sniper - 140RPM special
+Ionized Heatsink, Dynamic Heat Limiter, Vorpal + Bait and Switch (Conspiracy Honed), Networked Targeting x5",special,sniper,,26.0,,3-9-8-6,0.433,15.35,642.128,1.701946923,1.22,1.25,1.3,1.15,2491.601916,,,64781.64981,4220.302919,,
+"Pulse grenade
+Empowered Grenade x2, Touch of Thunder, Spark of Magnitude, Feel the Flame",grenade,grenade,,INF,,N/A,1.567,N/A,2217.984,,,1.35,1.3,1.65,6422.727168,,,INF,4098.741013,N/A,N/A
+"Wolfsbane
+swapping after HLLHLLHLLHLLH, Honed Edge + Jagged Edge, Burning Ambition, 10 lights to regenerate",power,sword,,64.0,,5-5-5-3-1-1...,18.967,47.934,31511.83,,1.22,1.25,1.3,1.1,68719.42327,,,195082.6056,4069.816949,,
+"Rapid-fire grenade launcher
+no Backup Mag, Spike Grenades, Envious Assassin + e. Surrounded (Koraxis's Distress)",power,HGL,,30.0,2017ms reload,18-6-6,0.4,14.834,640.506,1.4341824,1.22,1.25,1.3,1.1,2003.242254,3269941.41152952,227616.6929924488,60097.26763,4051.319107,0.9427856326,0.9130415531
+"Solar grenade
+Sunbracers, Touch of Flame, Ember of Ashes, repeated activations",grenade,grenade,,INF,,N/A,5.95,N/A,11115,,,,1.3,1.65,23841.675,,,INF,4007.004202,N/A,N/A
+"Bequest
+1H2L combo, Jagged Edge, Relentless Strikes + e. Surrounded, Lucent Blades x3, Pack Hunter",power,sword,,69.0,13 combos + 1H,6-6-6...,2.317,30.121,2741.639,1.418,1.22,1.25,1.3,1.1,8477.979875,5990569.373958277,184677.51938955163,115614.2116,3838.325805,0.9900139632,1.066168883
+"Wave frame sword
+Adept Mag, 1H2L combo, Jagged Edge, Relentless Strikes + e. Surrounded (Summum Bonum), Lucent Blades x3, Pack Hunter",power,sword,,71.0,14 combos + 1H,6-6-6...,2.633,36.862,3084.722,1.418,1.22,1.25,1.3,1.1,9538.896637,6553070.459955054,177773.05789037637,140040.5415,3799.048927,1.096243784,1.096243784
+"Adaptive glaive
+melee, 2L1H cancel combo, Combination Blow x3, Banner of War, Triton Vice, Close to Melee (Unexpected Resurgence)",melee,melee,,INF,,N/A,1.467,N/A,428.95818,,,7.6,1.3,1.3,5509.538864,INF,164291.56548165137,INF,3755.650214,N/A,1.172649085
+"The Fourth Horseman
+body",special,shotgun,,20.0,,5-5-5-5,2.917,9.551,784.7294,,1.22,1.25,1.3,1.15,1789.084941,1178547.5671057045,281746.967990845,35781.69882,3746.382454,1.557442566,0.6821047278
+"High-impact bow
+Heavy Bolts, e. Aggregate Charge x3 (Submersion), Guidance Ring x3",power,bow,,INF,,1-1-1...,1.883,N/A,2422.435,1.33,1.22,1.25,1.3,1.1,7026.024418,,,INF,3731.29284,N/A,N/A
+"Wave frame sword
+1H2L combo, Jagged Edge, Relentless Strikes + e. Elemental Honing x5 (Synanceia), Pack Hunter",power,sword,,71.0,14 combos + 1H,6-6-6...,2.633,36.862,3129.636155,1.35,1.22,1.25,1.3,1.1,9213.687961,,,136454.7187,3701.771979,N/A,N/A
+"Lord of Wolves
+Release the Wolves, hip-fire, precision, includes ignition",special,shotgun,,189.0,,30-30-30...,0.07872413793,20.4297931,174.7514,,1.22,1.25,1.3,1.15,398.4113481,5709778.425,199064.89645434578,75299.74479,3685.781075,0.6765072404,0.9498019426
+"Leviathan's Breath
+Archer's Tempo",power,bow,,14.0,,1-1-1...,1.333,17.329,2069.603,,1.22,1.25,1.3,1.1,4513.286742,3874920.363083247,175335.76303544102,63186.01439,3646.258549,0.8364815778,1.066780707
+"Wave frame sword
+heavy spam, Jagged Edge, Relentless Strikes + e. Elemental Honing x5 (Synanceia), Lucent Blades, Pack Hunter",power,sword,,71.0,,4-4-4...,1.75,31.5,2165.484373,1.35,1.22,1.25,1.3,1.1,6375.213062,,,114753.8351,3642.978893,N/A,N/A
+"Dynamic sniper - 140RPM special
+Ionized Heatsink, Dynamic Heat Limiter, Vorpal + Bait and Switch (Conspiracy Honed)",special,sniper,,26.0,,3-9-8-6,0.433,15.35,642.128,1.468461538,1.22,1.25,1.3,1.15,2149.78595,,,55894.4347,3641.331251,,
+"Throwing Hammer
+One-Two Punch, Forgemaster, Perfect Recall, Roaring Flames x3, close range recall, includes <101 Weapons rapid-fire shotgun",melee,melee,,INF,,N/A,2.533,N/A,943.296,,,4.5,1.3,1.3,9202.6883,,,INF,3633.11816,N/A,N/A
+"Deathbringer
+realistic projectile height",power,rocket,,11.0,,1-1-1...,2.3,23,3476.395,,1.22,1.25,1.3,1.1,7581.148396,3347347.3537697764,132306.21951659195,83392.63236,3625.766624,1.277983073,1.40578138
+"Aggressive sniper
+Extended Mag, Reconstruction + e. Redirection x30 (Succession), Networked Targeting x5",special,sniper,,20.0,"5 mag
+1817ms reload",10-5-5,0.833,17.795,691.27,2.02825,1.22,1.25,1.3,1.15,3196.540642,,,63930.81284,3592.627864,N/A,N/A
+"Duality
+3 pellet shots into On Black Wings x3 slugs",special,shotgun,,17.0,1100ms reload,3-8-6,0.917,15.038,1393.282159,,1.22,1.25,1.3,1.15,3176.509162,,,54000.65575,3590.946652,N/A,N/A
+"Micro-missile pulse rifle
+Rewind Rounds + Elemental Honing x5 (Mint Retrograde)",special,pulse,,14.0,,14,1.05,13.65,1117.428,1.35,1.22,1.25,1.3,1.15,3439.254818,,,48149.56745,3527.440839,N/A,N/A
+"Adaptive grenade launcher
+Spike Grenades, Envious Arsenal + Bait and Switch (Bitter/Sweet)",power,HGL,,26.0,1450ms swap,7-7-7-5,0.508,15.526,745.212,1.276923077,1.22,1.25,1.3,1.1,2075.154596,,,53954.01949,3475.075325,N/A,N/A
+"Rapid-fire shotgun
+body, e. Overflow + e. Surrounded (Until Its Return)",special,shotgun,,25.0,2500ms 7 load,18-7,0.433,12.459,511.708,1.47,1.22,1.25,1.3,1.15,1714.946506,2357299.8722851225,172191.37124069556,42873.66266,3441.180084,0.9329834799,1.025166052
+Sleeper Simulant,power,linear,,16.0,"750ms charge
+2050ms reload",4-4-4-4,1.3,22.5,2217.481,,1.22,1.25,1.3,1.1,4835.771691,3697108.7399999993,147189.61461899828,77372.34705,3438.77098,1.073548691,1.198462046
+"New Land Beyond
+starts at The Master x20, sprint cancelling, Rally Barricade",special,sniper,,40.0,2183ms reload,40,1.133,44.187,979.247,1.7,1.22,1.25,1.3,1.15,3795.353282,8980462.517,137703.36293240922,151814.1313,3435.719358,0.8671848745,1.279886138
+"Caster sword
+1H2L combo, Jagged Edge, Relentless Strikes + e. Surrounded (Ill Omen), Lucent Blades x3, Pack Hunter",power,sword,,71.0,14 combos + 1H,6-6-6...,2.433,34.062,2577.406,1.418,1.22,1.25,1.3,1.1,7970.121595,5810149.319670863,170575.69489962023,116642.7295,3424.423978,1.029837211,1.029837211
+"Bequest
+light attacks, Jagged Edge, Relentless Strikes + e. Surrounded, Pack Hunter",power,sword,,103.0,,103,0.466,47.998,511.961,1.418,1.22,1.25,1.3,1.1,1583.138792,8318297.701993714,157968.3562230566,163063.2956,3397.293545,1.005587708,1.103217583
+"Rapid-fire grenade launcher
+Bandolier, Spike Grenades, Envious Arsenal + Bait and Switch (Outrageous Fortune)",power,HGL,,30.0,1450ms swap,7-7-7-7-2,0.4,15.8,640.506,1.28,1.22,1.25,1.3,1.1,1787.882828,,,53636.48484,3394.714231,N/A,N/A
+"Heartshadow
+heavy attacks, Shot in the Dark, Lucent Blades x3",power,sword,,63.0,,4-4-4...,2.016,30.24,2917.385,,1.22,1.25,1.3,1.1,6362.087339,4802317.701468796,132339.00191437377,101793.3974,3366.183777,1.087343898,1.304812678
+"Rapid-fire sniper
+Tactical Mag, Timelost Magazine, e. Fourth Time's the Charm + Elemental Honing x5 (Praedyth's Revenge), Networked Targeting x5",special,sniper,,59.0,1750ms reload,26-26-7,0.433,27.748,427.926,1.6226,1.22,1.25,1.3,1.15,1583.037425,5508375.13416787,155423.8067257659,93399.20807,3365.979821,0.8697969586,1.110943996
+"Whisper of the Worm
+Whispered Breathing",power,sniper,,38.0,,38,0.801,29.637,1190.573,,1.22,1.25,1.3,1.1,2596.34207,5973516.24742194,155366.1113041495,98660.99865,3328.980621,0.8472540585,1.0991404
+"Hierarchy of Needs
+Guidance Ring x3",primary,bow,,INF,,N/A,1.017,N/A,1467.397,,1.22,1.25,1.3,1.15,3345.481735,INF,64667.2425515122,INF,3289.559228,,
+"Adaptive sword
+1H2L combo, Jagged Edge, Relentless Strikes + Whirlwind Blade (The Other Half), Lucent Blades x3, Pack Hunter",power,sword,,70.0,14 combos,6-6-6...,2.317,32.438,2543.936,1.3,1.22,1.25,1.3,1.1,7211.994962,4983606.637561459,153634.83067887844,105583.6062,3254.935762,1.086803268,1.086803268
+"Double fire grenade launcher
+Spike Grenades, Slideshot + Frenzy (Wilderflight), simulated",special,BGL,,20.0,,1-1-1...,0.667,12.673,783.868,1.15,1.22,1.25,1.3,1.15,2055.189215,,,41103.7843,3243.413896,N/A,N/A
+"Lightweight sword
+light attacks, Jagged Edge, Vorpal Weapon + Whirlwind Blade (Sullen Claw), Pack Hunter",power,sword,,88.0,,88.0,0.466,41.008,483.9320357,1.43,1.22,1.25,1.3,1.1,1509.128745,5565451.288643049,132700.31684890436,132803.3296,3238.473702,1.224071475,1.251891282
+"Adaptive burst linear fusion rifle
+no Backup Mag, Accelerated Coils, Charge MW, e. Rewind Rounds + e. Surrounded (Briar's Contempt)",power,linear,,21.0,"467ms charge
+2017ms reload",13-8,1.367,28.457,1363.335,1.47,1.22,1.25,1.3,1.1,4370.446418,5503386.094888499,149516.03170203484,91779.37477,3225.195023,0.8554867997,1.10653822
+"Storm grenade
+Empowered Grenade x2, Touch of Thunder, Spark of Magnitude, Feel the Flame",grenade,grenade,,INF,,N/A,1.567,N/A,1744.621,,,1.35,1.3,1.65,5051.986261,,,INF,3223.986127,N/A,N/A
+"Slayer's Fang
+Assault Mag, includes submunitions",special,shotgun,,18.0,1200ms reload,7-7-4,0.833,14.895,1149.415,,1.22,1.25,1.3,1.15,2620.522523,2690802.3509825277,144978.5749451793,47169.40542,3166.79459,0.8992424567,1.12050621
+"Compressed wave grenade launcher
+Envious Assassin + Vorpal Weapon (Dimensional Hypotrochoid)",power,HGL,,26.0,2017ms reload,21-5,0.516,14.401,729.551,1.1,1.22,1.25,1.3,1.1,1750.065178,2366885.7355,157981.9607195301,45501.69462,3159.620486,0.986162489,1.025948643
+"Caster sword
+1H2L combo, Jagged Edge, Relentless Strikes + Whirlwind Blade (Ill Omen), Lucent Blades x3, Pack Hunter",power,sword,,71.0,14 combos + 1H,6-6-6...,2.433,34.062,2577.406,1.3,1.22,1.25,1.3,1.1,7306.881575,5326653.113943668,156381.10251728227,106936.2118,3139.457808,1.029837211,1.029837211
+"The Queenbreaker
+Rewind Rounds, Combat Sights",power,linear,,21.0,"550ms charge
+2283ms reload",11-10,1.233,26.26,1798.862,,1.22,1.25,1.3,1.1,3922.868307,5332346.109999999,154681.81214283637,82380.23444,3137.09956,0.7925066094,1.040368635
+"Choir of One
+projectile mode, point blank",special,auto,,225.0,1017ms reload,25-25-25...,0.267,17.748,541.777,,1.22,1.25,1.3,1.15,1235.183838,3696176.8906721096,153988.12192943005,55583.2727,3131.804863,0.771417642,1.043291507
+"Aggressive sniper
+Extended Mag, Accelerated Assault, Triple Tap + Elemental Honing x5 (Something Something), Networked Targeting x5",special,sniper,,29.0,,11-11-7,0.833,25.292,691.27,1.70988469,1.22,1.25,1.3,1.15,2694.793987,,,78149.02562,3089.871328,,
+Merciless,special,fusion,,19.0,"1000ms charge
+1317ms reload",8-8-3,0.516,12.567,896.1377237,,1.22,1.25,1.3,1.15,2043.081993,2126082.5625,140613.92609126982,38818.55786,3088.927975,0.9366071557,1.126879939
+"Euphony
+starts at 0 stacks, Thread of Evolution, includes Threadlings",special,linear,,21.0,"533ms charge
+2100ms reload",6-6-6-3,1.45,31.483,1140.406,1.279047619,1.22,1.25,1.3,1.15,3325.502231,5725873.234511302,139312.26088200536,95395.08868,3030.050779,0.854638567,1.115729115
+"New Land Beyond
+starts at The Master x20, Rally Barricade",special,sniper,,43.0,,43,1.283,53.886,979.247,1.7,1.22,1.25,1.3,1.15,3795.353282,8980462.517,124528.01759664988,163200.1911,3028.619514,0.9322237401,1.247601367
+"One Thousand Voices
+Ember of Ashes",power,fusion,,11.0,"1000ms charge
+2717ms dash",4-4-3,1.733,22.031,2726.463,,1.22,1.25,1.3,1.1,5945.734187,3905575.0034628594,148326.11763559526,65403.07606,2968.683948,0.8590360551,1.0267023
+"Praxic Blade
+3L1H combo, Offensive Form, Forceful Blade III, Impact Core (solar), spam",special,sword,,63.0,,0-0-1...,3.0,567,3884.871,,1.22,1.25,1.3,1.15,8857.020271,,,1673976.831,2952.34009,,
+"D.A.R.C.I.
+Networked Targeting x5, Target Acquired",power,sniper,,31.0,2333ms reload,7-7-7-7-3,0.433,20.59,893.822,,1.22,1.25,1.3,1.1,1949.202327,3993246.6599999997,209399.40534871523,60425.27212,2934.690244,0.7762304546,0.7189273808
+Thunderlord,power,LMG,,379.0,,379,0.083,32.767,115.35,,1.22,1.25,1.3,1.1,251.5495125,5339126.26,137016.6104652655,95337.26524,2909.551233,0.9159899291,1.089308743
+"The Chaperone
+2 shots to activate The Roadborn, reload cancelling",special,shotgun,,18.0,683ms cancel,6-1-1...,0.45,10.912,644.59,1.195555556,1.22,1.25,1.3,1.15,1756.970064,2126708.310794062,160992.3021040168,31625.46116,2898.227745,0.7628289014,0.9234759702
+"Lightweight sword
+light attacks, Jagged Edge, Relentless Strikes + Whirlwind Blade (Goldtusk), Pack Hunter",power,sword,,128.0,,128.0,0.466,59.648,475.442,1.3,1.22,1.25,1.3,1.1,1347.866184,5565451.288643049,132700.31684890436,172526.8715,2892.416704,1.590210297,1.118116615
+"Adaptive sword
+light attacks, Jagged Edge, Relentless Strikes + Whirlwind Blade (The Other Half), Pack Hunter",power,sword,,104.0,,104,0.466,48.464,475.442,1.3,1.22,1.25,1.3,1.1,1347.866184,7095268.0657286495,132399.1055370153,140178.0831,2892.416704,1.013466759,1.120660359
+"Two-Tailed Fox
+Ember of Ashes",power,rocket,,10.0,,1-1-1...,2.217,19.953,2921.091,,1.1,1.25,1.3,1.1,5743.595179,2743738.774255765,123759.07867639896,57435.95179,2878.562211,1.07383922,1.193154689
+"Aggressive sword
+light attacks, Jagged Edge, Relentless Strikes + Whirlwind Blade (Crown-Splitter), Pack Hunter",power,sword,,83.0,,83.0,0.666,55.278,673.906,1.3,1.22,1.25,1.3,1.1,1910.506662,8616601.29660832,133379.79159481628,158572.053,2868.628622,0.9440366411,1.103271737
+"Euphony
+starts at 0 stacks, includes Threadlings",special,linear,,21.0,"533ms charge
+2100ms reload",6-6-6-3,1.45,31.483,1140.406,1.279047619,1.22,1.25,1.3,1.15,3325.502231,5178715.450447502,131103.40119104585,89054.07235,2828.639975,0.8821246034,1.106781563
+"Praxic Blade
+3L1H combo, Offensive Form, Forceful Blade III, Impact Core (solar), Ember of Ashes, spaced ignitions",special,sword,,63.0,,0-0-1...,3.672333333,694.071,4553.281,,1.22,1.25,1.3,1.15,10380.91152,,,1961992.277,2826.789013,,
+"New Malpais
+assumes suspend tick every 3 shots",special,pulse,,27.0,1383ms reload,7-7-7-6,0.89166,24.65718,1125.43,,1.22,1.25,1.3,1.15,2565.839721,,,69277.67247,2809.63486,N/A,N/A
+"The Lament
+2L1H1R combo, Lucent Blades x3",power,sword,,65.0,13 combos,5-5-5...,3.116,40.508,3969.981,,1.22,1.25,1.3,1.1,8657.536066,5474539.8137733,120124.18953292006,112547.9689,2778.413372,1.054601156,1.186491387
+"Aggressive sniper
+Extended Mag, Reconstruction + Chaos Reshaped x2 (Critical Anomaly), Networked Targeting x5",special,sniper,,20.0,"5 mag
+1817ms reload",10-5-5,0.833,17.795,691.27,1.56465,1.22,1.25,1.3,1.15,2465.902781,,,49318.05562,2771.455781,N/A,N/A
+"New Land Beyond
+starts at The Master x0, Rally Barricade, manual reloads until The Grandmaster",special,sniper,,43.0,2183ms reload,8-8-27,1.283,55.686,979.247,1.583151163,1.22,1.25,1.3,1.15,3534.481154,8382429.497000002,116235.36381662881,151982.6896,2729.280064,0.9300845208,1.204503382
+"Adaptive burst linear fusion rifle
+no Backup Mag, Charge MW, Accelerated Coils, Charge MW, e. Rewind Rounds + e. Bait and Switch (Scintillation)",power,linear,,21.0,"467ms charge
+2017ms reload",13-8,1.367,29.824,1363.335,1.3,1.22,1.25,1.3,1.1,3865.020642,5334136.902249999,131515.4935341108,81165.43347,2721.480468,0.7805579558,1.061515898
+"Rapid-fire sniper
+Tactical Mag, Frame of Reference x5, e. Fourth Time's the Charm + Redirection x30 (Lance Ephemeral), Networked Targeting x5",special,sniper,,59.0,1750ms reload,10-10-10...,0.433,31.699,427.926,1.494913559,1.22,1.25,1.3,1.15,1458.464262,,,86049.39145,2714.577477,N/A,N/A
+"Pinpoint slug shotgun
+Assault Mag, e. Fourth Time's the Charm + Elemental Honing x5 (Unvoiced), reload cancelling",special,shotgun,,34.0,,34,0.833,27.489,712.149,1.35,1.22,1.25,1.3,1.15,2191.874447,3948626.0696202326,105338.83072216173,74523.73119,2711.038277,0.9681592122,1.320217108
+The Colony,power,HGL,,25.0,2050ms reload,8-8-8-1,0.433,15.243,756.23,,1.22,1.25,1.3,1.1,1649.148573,2013526.1250000002,146876.22182507845,41228.71431,2704.763781,1.050366164,0.9446611388
+"The Lament
+3L1H2R combo, Lucent Blades x3",power,sword,,65.0,9 combos + 1L1H,7-7-7...,4.05,38.4,5035.64,,1.22,1.25,1.3,1.1,10981.47193,5346650.608573167,125951.722227872,103748.6579,2701.787965,0.9954028558,1.100386751
+"The Prospector
+typical boss model",power,HGL,,30.0,2083ms reload,6-6-6-6-6,0.383,17.907,739.507,,1.22,1.25,1.3,1.1,1612.67989,2860465.9850000003,132908.92969984206,48380.39671,2701.758905,0.8676225627,1.042775049
+"The Lament
+4L1H3R combo, Lucent Blades x3",power,sword,,65.0,7 combos + 1L1H,9-9-9...,5.05,37.3,6271.791,,1.22,1.25,1.3,1.1,13677.20822,5101278.195348558,126269.26226110292,100655.8681,2698.548742,1.012181256,1.096303558
+"The Queenbreaker
+Rewind Rounds, Marksman Sights",power,linear,,21.0,"633ms charge
+1883ms reload",11-10,1.15,24.366,1434.225,,1.22,1.25,1.3,1.1,3127.686169,3704589.66009075,114632.84525453324,65681.40954,2695.617235,0.909495499,1.206277848
+"Rapid-fire shotgun
+body, e. Overflow + Vorpal Weapon (Until Its Return)",special,shotgun,,25.0,2500ms 7 load,18-7,0.433,12.459,511.708,1.15,1.22,1.25,1.3,1.15,1341.624818,1844146.1585904022,134707.5353243537,33540.62045,2692.079657,0.9329834799,1.025166052
+"Black Talon
+2H2L combo, Lucent Blades x3, assumes only one catalyst stack",power,sword,,73.0,9 combos + 1H,3-3-1-1...,2.75,25.117,2990.968,1.1,1.22,1.25,1.3,1.1,7174.808813,2204599.4320595767,104980.92533617032,67263.84461,2678.020648,1.565129206,1.308584358
+"Ager's Scepter
+Will Given Form, Facet of Command",special,trace,,485.0,,485,0.067,31.495,75.872,,1.22,1.25,1.3,1.15,172.978676,3134481.034347742,136477.59978872913,83894.65786,2663.745288,1.372988377,1.001220005
+"Cloudstrike
+Triple Tap",special,sniper,,46.0,1817ms reload,9-9-9-9-10,0.433,25.021,632.741,,1.22,1.25,1.3,1.15,1442.570387,4287903.6525,154630.495943022,66358.23782,2652.101747,0.7938675063,0.8798187902
+"Dead Messenger
+The Fundamentals",special,BGL,,20.0,1550ms reload,1-1-1...,1.55,29.45,1317.177,1.3,1.22,1.25,1.3,1.15,3903.898587,,,78077.97173,2651.204473,N/A,N/A
+"Grand Overture
+volleys when available",power,LMG,,58.0,"817ms charge
+6333ms v-r",20-1-20-1-18-1,0.594,49.097,1008.331,,1.22,1.25,1.3,1.1,2198.917828,7215053.641401451,135585.62862031517,127537.234,2597.658391,0.9067668399,0.9828032388
+"Microcosm
+Paracausal Imbuement",power,trace,,385.0,1117ms reload,120-120-120-25,0.067,28.878,78.809,1.2,1.22,1.25,1.3,1.1,206.2352721,4143067.6979289893,134432.25600859823,74989.43644,2596.766966,0.9284879249,0.9908951229
+"Aggressive shotgun
+body, Assault Mag, Timelost Magazine, e. Rewind Rounds + Trench Barrel (Found Verdict)",special,shotgun,,19.0,1183ms s-m-s,19,1.0,20.081,798.185,1.5,1.22,1.25,1.3,1.15,2729.64304,3218358.762786498,138239.71319043418,51863.21777,2582.700949,0.8266529186,0.9583838753
+"Precision linear fusion rifle
+Accelerated Coils, Charge MW, e. Fourth Time's the Charm + e. Bait and Switch (Cataclysmic)",power,linear,,39.0,"450ms charge
+1650ms reload",10-12-12-5,0.983,39.805,948.389,1.269230769,1.22,1.25,1.3,1.1,2625.022203,6751831.177,123361.67465102683,102375.8659,2571.934831,0.7778112379,1.069492895
+"Precision shotgun
+body, no Backup Mag, Assault Mag, Reconstruction + Trench Barrel (Prophet of Doom), reload cancelling",special,shotgun,,19.0,1100ms s-m-s,5-1-1...,0.833,16.596,655.941,1.5,1.22,1.25,1.3,1.15,2243.195231,2799594.908141609,106476.81543154486,42620.70939,2568.131441,0.7809508088,1.237258352
+"High-impact bow
+Charged Bolts, e. Aggregate Charge x3 (Submersion)",power,bow,,INF,,1-1-1...,1.883,N/A,1659.403,1.33,1.22,1.25,1.3,1.1,4812.928313,,,INF,2555.989545,N/A,N/A
+"Still Hunt
+pre-popped into 6 shot cycle",special,sniper,,20.0,"1767ms cast
+1817ms reload",3-3-3...,0.65,21.985,1229.01415,,1.22,1.25,1.3,1.15,2801.998635,3630821.330559767,122249.87644982379,56039.9727,2549.009448,0.7917557698,1.069599562
+"Lightweight shotgun
+body, Assault Mag, Vorpal Weapon (Without Remorse), reload cancelling",special,shotgun,,18.0,733ms cancel,7-1-1...,0.6915,12.212,655.941,1.15,1.22,1.25,1.3,1.15,1719.78301,1732856.0766964273,115917.85916759832,30956.09419,2534.891434,0.9163932166,1.121778758
+One Thousand Voices,power,fusion,,11.0,"1000ms charge
+2717ms dash",4-4-3,1.733,22.031,2326.554,,1.22,1.25,1.3,1.1,5073.632636,,,55809.95899,2533.246743,N/A,N/A
+"Rapid-fire slug shotgun
+Rapid Hit + e. Precision Instrument (Trachinus), reload cancelling",special,shotgun,,24.0,817ms cancel,8-1-1-1...,0.633,17.503,644.59,1.25625,1.22,1.25,1.3,1.15,1846.165687,,,44307.97648,2531.450407,N/A,N/A
+"Finality's Auger
+Bait and Switch, Linear Fusion Mode",power,linear,,21.0,1800ms reload,6-6-6-3,1.067,23.539,997.237,1.3,1.22,1.25,1.3,1.1,2827.141964,3430701.183,115874.66420103355,59369.98125,2522.196408,0.8877327039,1.116576837
+"Rapid-fire shotgun
+body, Cast No Shadows, Trench Barrel (Perfect Paradox), melee reloads",special,shotgun,,25.0,,,0.433,17.4,511.708,1.5,1.22,1.25,1.3,1.15,1749.945415,2405408.032944003,117664.14092569599,43748.63537,2514.289389,0.9329834799,1.096148349
+"Throwing Hammer
+One-Two Punch, Forgemaster, Perfect Recall, Roaring Flames x3, includes <101 Weapons rapid-fire shotgun",melee,melee,,INF,,N/A,2.533,N/A,568.931,,,4.5,1.3,1.3,6355.642475,,,INF,2509.13639,N/A,N/A
+"Outbreak Perfected
+starts at max nanites, Rewind Rounds, Appended Mag",primary,pulse,,INF,,N/A,15.517,N/A,17033.9,,1.22,1.25,1.3,1.15,38835.16276,INF,97689.90615292043,INF,2502.749421,N/A,1.314213358
+"Heavy burst shotgun
+Appended Mag, e. High-Impact Reserves + Bait and Switch (Pure Recollection), reload cancelling",special,shotgun,,34.0,"16 mag
+1433ms cancel",16-2-2...,0.833,18.728,456.958,1.503291176,1.22,1.25,1.3,,1361.860393,5269682.717130624,142032.3086930792,46303.25335,2472.407804,0.4507391059,0.8929582608
+"Riskrunner
+Arc Conductor, Peacekeepers, simulated",primary,SMG,,INF,,N/A,0.067,N/A,72.639,,1.22,1.25,1.3,1.15,165.6078401,,,INF,2471.758808,N/A,N/A
+"Conditional Finality
+body, average across both shots",special,shotgun,,19.0,,2-2-2...,1.116,20.088,1230.518,,1.135,1.25,1.3,1.15,2609.967132,3218712.126236281,120172.94378122313,49589.3755,2468.606905,0.7903231492,1.053764199
+Truth,power,rocket,,14.0,2167ms reload,3-3-3-3-2,1.283,20.215,1629.71,,1.22,1.25,1.3,1.1,3553.990083,2505848.6390009834,139508.33086521452,49755.86116,2461.33372,1.018562335,0.9050416355
+"Izanagi's Burden
+includes rehone time, hone before rally",special,sniper,,20.0,,4-4-4-4-4-3,3.2,16,2874.336167,,1.22,1.25,1.3,1.15,6553.127168,2197053.3322043605,98082.73804483752,39318.76301,2457.422688,0.918031212,1.285243697
+"Ex Diris
+Corrupted Nucleosynthesis",special,BGL,,35.0,,1-1-1...,0.65,22.1,676.674,,1.22,1.25,1.3,1.15,1542.732136,2599047.47141273,102526.52747190256,53995.62475,2443.240939,1.065718632,1.22244196
+"Winterbite
+projectile",special,glaive,,17.0,1500ms reload,4-4-4...,1.5,24,1574.727,,1.22,1.25,1.3,1.1,3434.085905,2459225.8706891104,103642.35800274402,58379.46039,2432.477516,1.217754821,1.2039536
+"Adaptive sniper
+Appended Mag, Fourth Time's the Charm + Firing Line (Fugue-55), Networked Targeting x5",special,sniper,,46.0,"7 mag
+1817ms reload",11-11-11...,0.65,33.918,564.934,1.3908,1.22,1.25,1.3,1.15,1791.321059,4068056.6126199793,107863.09459419273,82400.7687,2429.411189,1.039064423,1.155384006
+"Praxic Blade
+3L1H combo, Offensive Form, Forceful Blade III",special,sword,,63.0,,0-0-1...,3.0,567,3172.923,,1.22,1.25,1.3,1.15,7233.867825,,,1367201.019,2411.289275,,
+"Parasite
+x20 first shot",power,HGL,,18.0,,1-1-1...,2.167,36.839,2031.837,,1.22,1.25,1.3,1.1,4430.928538,4339646.9025,111255.88121058299,88618.57076,2405.563961,1.047535011,1.109154718
+Gjallarhorn,power,rocket,,11.0,2183ms reload,2-2-2...,1.267,17.25,1715.846,,1.22,1.25,1.3,1.1,3741.831165,2258763.1861319393,148563.74547039854,41160.14281,2386.095235,0.9347691523,0.8238974024
+Xenophage,power,LMG,,29.0,2817ms reload,13-13-3,0.5,18.634,701.14,,1.22,1.25,1.3,1.1,1529.011055,2400315.6139156935,141195.03611268784,44341.3206,2379.592175,0.9476292844,0.8645324587
+"Vortex sword
+1H2L combo, Jagged Edge, Frenzy + Whirlwind Blade (Falling Guillotine), Lucent Blades x3, Pack Hunter",power,sword,,68.0,8 combos + 1H,8-8-8...,2.75,22.716,1877.93,1.495,1.22,1.25,1.3,1.1,6122.467292,3886130.3263740106,152600.73534807234,52928.72974,2330.019798,0.6986703452,0.7832514092
+"Bastion
+Saint's Fury, includes melee time",special,fusion,,21.0,"683ms charge
+3483ms r-m",4-4-4...,1.433,39.593,1304.656,1.45,1.22,1.25,1.3,1.15,4312.956267,4326778.733587138,119716.08470995346,90572.08161,2287.578148,1.073811035,0.9802156552
+"Barrow-Dyad
+Target Lock, Taken Ambition, Peacekeepers",primary,SMG,,INF,,35-35-35...,4.083,N/A,3975.055,,1.22,1.25,1.3,1.15,9062.628518,INF,86933.07656135195,INF,2219.600421,N/A,1.309748618
+"Lightweight shotgun
+body, Assault Mag, Trench Barrel (Retrofuturist), reload cancelling",special,shotgun,,18.0,733ms cancel,7-1-1...,0.6915,18.35,655.941,1.5,1.22,1.25,1.3,1.15,2243.195231,2260247.0565605573,110633.72768284667,40377.51416,2200.409491,0.9163932166,1.020267761
+"Heavy burst shotgun
+Appended Mag, Fourth Time's the Charm + e. Aggregate Charge x3 (Arcane Embrace)",special,shotgun,,66.0,16 mag,28-28-10,0.833,36.19,456.958,1.33,1.22,1.25,1.3,,1204.872583,4411317.920802847,125016.09479121596,79521.59045,2197.336017,0.9247298979,0.9016308145
+"Precision shotgun
+body, no Backup Mag, Assault Mag, e. Bait and Switch (Deadlock), reload cancelling",special,shotgun,,19.0,,5-1-1...,0.833,14.994,655.941,1.15,1.22,1.25,1.3,1.15,1719.78301,1981251.781146369,103411.0225557894,32675.8772,2179.263519,0.8460300429,1.081038388
+"Final Warning
+15 shot half charge auto into tap fire burst, catalyst",primary,sidearm,,INF,3550ms reload,N/A,3.55,N/A,3292.965,,1.22,1.25,1.3,1.15,7507.548579,INF,95698.81081047971,INF,2114.802417,N/A,1.133604228
+"Rapid-fire fusion rifle
+Bandolier, Accelerated Coils, Charge MW, Reconstruction + Controlled Burst (Lionfish-4fr)",special,fusion,,22.0,"467ms charge
+1733ms reload",16-6,0.9,20.2,708.702,1.2,1.22,1.25,1.3,1.15,1938.902367,2309907.702137079,98035.2984524692,42655.85207,2111.675845,0.9472883465,1.104950892
+"Tessellation
+full grenade uptime, Property: Irreducible, Transcendent but excludes 5%, simulated",special,fusion,,22.0,"666ms charge
+4567ms reload",6-6-6-4,3.133,70.761,2978.650476,,1.22,1.25,1.3,1.15,6790.950754,7608558.639149085,92947.12419097575,149400.9166,2111.345467,1.007277354,1.165256524
+"Aggressive sniper
+Appended Mag, Triple Tap + Fourth Time's the Charm (Keen Thistle), Networked Targeting x5",special,sniper,,107.0,"5 mag
+1817ms reload",19-19-19...,0.833,93.218,691.27,1.159,1.22,1.25,1.3,1.15,1826.594653,10616299.917184724,84964.3850915144,195445.6278,2096.65116,0.9443891318,1.265865198
+"Aggressive fusion rifle
+Accelerated Coils, Charge MW, Reconstruction + e. Bait and Switch (Finite Maybe)",special,fusion,,19.0,"600ms charge
+1757ms reload",16-3,1.08333,21.85694,831.194,1.268421053,1.22,1.25,1.3,1.15,2403.68126,2941791.1087499997,100629.0999777656,45669.94394,2089.493952,0.796373587,1.065162161
+Ice Breaker,special,sniper,,10.0,,10,1.233,11.097,1016.191,,1.22,1.25,1.3,1.15,2316.788456,1033510.0992736325,93134.1893551079,23167.88456,2087.761067,1.1499259,1.1499259
+"Rapid-fire machine gun
+no Backup Mag, Tactical Mag, e. Fourth Time's the Charm + e. Target Lock (Retrofit Escapade)",power,LMG,,1162.0,"84 mag
+2250ms reload",166-166-166...,0.067,90.885,54.536,1.3662,1.22,1.25,1.3,1.1,162.4813217,10836537.748446826,116779.32807206019,188803.2958,2077.386761,0.8937524042,0.9125351196
+"Adaptive fusion rifle
+Accelerated Coils, Charge MW, e. Rewind Rounds + Controlled Burst (Techeun Force)",special,fusion,,22.0,600ms charge,22,1.049,22.629,779.029,1.190909091,1.22,1.25,1.3,1.15,2115.160228,2259563.9702999997,87549.45834011391,46533.52502,2056.366831,1.056427047,1.204884248
+"High-impact fusion rifle
+Accelerated Coils, Charge MW, Envious Assassin + Controlled Burst (The Eremite)",special,fusion,,23.0,"900ms charge
+2110ms reload",21-2,1.35,31.36,1021.759,1.2,1.22,1.25,1.3,1.15,2795.37936,2908386.0400924347,86090.22407993472,64293.72528,2050.182566,1.134004398,1.221622148
+"Salvation's Grip
+uncharged",power,HGL,,25.0,2117ms reload,8-8-8-1,0.617,19.308,720.681,,1.22,1.25,1.3,1.1,1571.625091,2198850.225,119561.21064651187,39290.62727,2034.940298,0.9166246117,0.8730911142
+"Aggressive machine gun
+Appended Mag, Envious Assassin + e. Target Lock (Pro Memoria)",power,LMG,,455.0,"91 mag
+2817ms reload",273-91-91,0.1,50.834,76.988,1.3508,1.22,1.25,1.3,1.1,226.7879476,6553259.251199085,111260.76827163131,103188.5162,2029.911401,0.8077411682,0.9359081482
+"Vortex sword
+1H2L combo, Jagged Edge, Relentless Strikes + Whirlwind Blade (Falling Guillotine), Lucent Blades x3, Pack Hunter",power,sword,,68.0,9 combos + 1H,8-8-8...,2.75,25.466,1877.93,1.3,1.22,1.25,1.3,1.1,5323.884602,4260723.442450029,140850.36173388525,51348.86698,2016.369551,0.6182237992,0.734362284
+"Tarrabah
+Ravenous Beast, Peacekeepers",primary,SMG,,INF,,35-35-35...,3.233,N/A,2802.835,,1.22,1.25,1.3,1.15,6390.113446,,,INF,1976.527512,N/A,N/A
+"Whirling Ovation
+no Anticipation, fully charged",power,rocket,,7.0,,1-1-1...,6.983,41.898,5750.584,,1.135,1.25,1.3,1.1,11666.8567,,,81667.99691,1949.209912,N/A,N/A
+"Adaptive SMG
+no Backup Mag, Extended Mag, e. Rewind Rounds + e. Target Lock (Antedate), Peacekeepers",primary,SMG,,INF,,83-83-83...,6.5,N/A,5529.46,,1.22,1.25,1.3,1.15,12606.47762,,,INF,1939.458095,N/A,N/A
+"Choir of One
+hitscan mode, precision",special,auto,,225.0,1017ms reload,25-25-25...,0.267,65.808,248.744,,1.22,1.25,1.3,1.15,567.105227,6665401.783612651,83491.81145156328,127598.6761,1938.953867,0.9820148042,1.191301785
+"Touch of Malice
+final round, blighted",primary,scout,,INF,,N/A,0.233,N/A,196.464,,1.22,1.25,1.3,1.15,447.913362,INF,80083.77875778593,INF,1922.374944,N/A,1.231378993
+"Adaptive machine gun
+Appended Mag, e. Fourth Time's the Charm + e. Target Lock (Hammerhead)",power,LMG,,747.0,"75 mag
+2750ms reload",147-147-147...,0.133,112.303,95.421,1.3652,1.22,1.25,1.3,1.1,284.0835748,12910721.977881916,102614.26805291703,212210.4304,1889.623878,0.8431685463,0.9446388801
+"Precision fusion rifle
+no Backup Mag, Accelerated Coils, Charge MW, Reconstruction + Controlled Burst (Axial Lacuna)",special,fusion,,23.0,"700ms charge
+2092ms reload",12-6-5,1.125,27.384,807.796,1.2,1.22,1.25,1.3,1.15,2210.008687,2548088.3171249996,78988.44716590717,50830.19979,1856.200694,1.023306046,1.205478737
+Forerunner,special,sidearm,,70.0,1333ms reload,12-12-12...,0.283,24.777,283.627,,1.22,1.25,1.3,1.15,646.6341066,2530191.323117431,90889.83846244094,45264.38746,1826.87119,0.9177015932,1.031076278
+"The Wardcliff Coil
+includes Bolt Charge",power,rocket,,8.0,,1-1-1...,3.117,21.819,2275.829,,1.22,1.25,1.3,1.1,4963.014092,1771320.7616896108,81182.49056737755,39704.11273,1819.703595,1.149837537,1.149837537
+"Trace rifle
+e. Rewind Rounds + e. Target Lock (Acasia's Dejection), Cenotaph Mask",special,trace,,520.0,,520,0.067,33.84,27.242,1.45,1.22,1.25,1.3,1.15,90.05711439,2701208.411303063,60257.169878269444,60533.28687,1788.808714,1.149567197,1.52283683
+"Micro-missile grenade launcher
+Implosion Rounds, Reconstruction + Elemental Honing x5 (Theodolite)",special,BGL,,20.0,,2-1-1-1...,0.667,27.667,800.505,1.35,1.22,1.25,1.3,1.15,2463.819305,2313323.459722404,67377.04490366411,49276.3861,1781.052738,1.092699357,1.356010399
+"High-impact machine gun
+Tactical Mag, Fourth Time's the Charm + e. Target Lock (Archon's Thunder)",power,LMG,,755.0,"62 mag
+2800ms reload",119-119-119...,0.167,141.716,112.26,1.3636,1.22,1.25,1.3,1.1,333.8242728,11558925.109770015,95733.22326111274,252037.326,1778.467681,1.118524789,0.9529749746
+Arbalest,special,linear,,22.0,"533ms charge
+1733ms reload",6-6-6-4,1.05,24.632,847.644,,1.22,1.25,1.3,1.15,1932.522365,2329409.745,81172.58755270585,42515.49202,1726.026795,0.9362665798,1.090777933
+Telesto,special,fusion,,19.0,"817ms charge
+2133ms dash",7-7-5,1.356,26.779,1034.684,,1.22,1.25,1.3,1.15,2358.950185,2302265.3410181347,69907.54990490191,44820.05351,1673.701539,0.9986543432,1.22815204
+"Double fire grenade launcher
+Spike Grenades, Envious Assassin + Bait and Switch (Wild Style)",special,BGL,,20.0,,3-1-1-1...,0.667,26.834,783.868,1.255,1.22,1.25,1.3,1.15,2242.836926,2558309.7666038657,74512.42985390183,44856.73852,1671.638165,0.8994411741,1.15083153
+"Dragon's Breath
+auto-loaded, Composite Propellant x5",power,rocket,,11.0,,1-1-1...,5.1,51,3539.585,,1.22,1.25,1.3,1.1,7718.949989,,,84908.44988,1664.871566,N/A,N/A
+"Heirloom
+1 charge, catalyst",special,bow,,20.0,,5-5-5-5,1.35,31.551,1134.4171392564585,,1.22,1.25,1.3,1.15,2586.329275,,,51726.58551,1639.459463,,
+"Osteo Striga
+Peacekeepers",primary,SMG,,INF,,N/A,3.95,N/A,2809.32,,1.22,1.25,1.3,1.15,6404.898435,,,INF,1621.493275,N/A,N/A
+"Rapid-fire glaive
+no Backup Mag, projectile, Redirection x30 (Greasy Luck)",special,glaive,,33.0,1183ms reload,7-7-7-7-5,0.714,24.724,361.841,1.454545455,1.22,1.25,1.3,1.15,1199.930545,,,39597.70799,1601.589872,N/A,N/A
+"Ticuu's Divination
+alternating modes, Causality Arrows x6, Guidance Ring",primary,bow,,INF,,N/A,1.783,N/A,1209.341,,1.22,1.25,1.3,1.15,2757.146312,,,INF,1546.352391,N/A,N/A
+"Edge of Concurrence
+pre-stacked, Lightning Seeker into six shot cycle",special,glaive,,29.0,,complicated,2.917,28.3,657.4473448,,1.22,1.25,1.3,1.15,1498.897765,3363105.684035,65273.87155318984,43468.03519,1535.972975,0.6630216273,1.207097643
+"Vexcalibur
+projectile",special,glaive,,32.0,1083ms reload,7-7-7-7-4,0.714,23.61,493.48,,1.22,1.25,1.3,1.15,1125.072715,,,36002.32688,1524.876191,N/A,N/A
+Tractor Cannon,power,shotgun,,18.0,1583ms reload,7-7-4,0.733,14.161,548.544,,1.22,1.25,1.3,1.1,1196.237328,778473.270774308,48274.41837866228,21532.2719,1520.533289,1.418875697,1.615760856
+"Heirloom
+uncharged",special,bow,,20.0,,9-9-2,1.083,22.483,738.8603834728598,,1.22,1.25,1.3,1.15,1684.509317,,,33690.18634,1498.473795,,
+"Heirloom
+2 charges, catalyst",special,bow,,20.0,,3-3-3...,2.0,50.198,1646.617,,1.22,1.25,1.3,1.15,3754.080933,,,75081.61866,1495.709364,,
+"Revision Zero
+4 burst cycle into 6 Hunter's Trace shots, Extended Mag, Fourth Time's the Charm, Vorpal Weapon",primary,pulse,,INF,,N/A,12.667,N/A,8299.212,,1.22,1.25,1.3,1.15,18921.16596,INF,56683.17044641036,INF,1493.736951,N/A,1.351817894
+Service of Luzaku,power,LMG,,300.0,,47-47-47...,10.45,65.7,149.284,,1.22,1.25,1.3,1.1,325.551083,,,97665.3249,1486.534626,,
+"Rapid-fire glaive
+no Backup Mag, projectile, Chaos Reshaped x2 (Forthcoming Deviance)",special,glaive,,33.0,1183ms reload,7-7-7-7-5,0.714,24.724,361.841,1.35,1.22,1.25,1.3,1.15,1113.685537,1656318.400442636,69869.1639434167,36751.62273,1486.4756,1.138232267,1.091366046
+"Salvation's Grip
+charged",power,HGL,,25.0,2867ms reload,8-8-8-1,1.283,35.544,950.82,,1.22,1.25,1.3,1.1,2073.500715,3834650.625,102284.62590024008,51837.51788,1458.404172,0.6934523059,0.7314181563
+"Revision Zero
+2 burst cycle into 6 Hunter's Trace shots, Extended Mag, Fourth Time's the Charm, Vorpal Weapon",primary,pulse,,INF,,N/A,15.717,N/A,10017.276,,1.22,1.25,1.3,1.15,22838.13712,INF,57093.451193149274,INF,1453.085011,N/A,1.305578312
+Jötunn,special,fusion,,24.0,"817ms charge
+2067ms reload",5-5-5...,1.189,31.676,832.4,,1.22,1.25,1.3,1.15,1897.76795,,,45546.4308,1437.884544,N/A,N/A
+"Hierarchy of Needs
+Guidance Ring",primary,bow,,INF,,N/A,1.017,N/A,630.055,,1.22,1.25,1.3,1.15,1436.446643,INF,64667.2425515122,INF,1412.435244,N/A,1.120424
+"Micro-missile sidearm
+precision, no Backup Mag, e. Redirection x30 (Returned Memory)",special,sidearm,,44.0,817ms reload,12-12-12...,0.616,27.091,282.831,1.340909091,1.22,1.25,1.3,1.15,864.6440964,2214682.4699999993,65268.256218318966,38044.34024,1404.316572,0.8812046679,1.103725842
+"Aggressive glaive
+no Backup Mag, projectile, Vorpal Weapon (Rake Angle)",special,glaive,,34.0,1167ms reload,5-5-5-5-5-5-4,1.0,34.098,527.351,1.15,1.22,1.25,1.3,1.15,1382.638515,,,47009.70952,1378.664717,N/A,N/A
+Heir Apparent,power,LMG,,440.0,4250ms reload,200-200-40,0.067,37.779,53.427,,1.22,1.25,1.3,1.1,116.5109303,4251799.421662026,96296.95426498824,51264.80931,1356.965756,0.6185072259,0.7228605719
+"Micro-missile sidearm
+precision, High-Explosive Ordnance, e. Bait and Switch (Tinasha's Mastery)",special,sidearm,,44.0,817ms reload,12-12-12...,0.616,27.091,282.831,1.279545455,1.22,1.25,1.3,1.15,825.0756377,1719974.1779999994,53888.96757214022,36303.32806,1340.051237,1.08273634,1.275615362
+"Touch of Malice
+blight into 15 shot cycle",primary,scout,,INF,,N/A,5.383,N/A,3163.11,,1.22,1.25,1.3,1.15,7211.495411,,,INF,1339.679623,N/A,N/A
+"Heirloom
+fully charged, catalyst",special,bow,,20.0,,2-2-2...,3.017,69.014,2009.758,,1.22,1.25,1.3,1.15,4581.99702,,,91639.94041,1327.84566,,
+"Tarrabah
+Ravenous Beast",primary,SMG,,INF,,35-35-35...,3.233,N/A,1869.84,,1.22,1.25,1.3,1.15,4263.00147,,,INF,1318.59,N/A,N/A
+"Adaptive glaive
+no Backup Mag, projectile, Vorpal Weapon (Refusal of the Call)",special,glaive,,33.0,1083ms reload,6-6-6-6-6-3,0.91,30.485,459.477,1.15,1.22,1.25,1.3,1.15,1204.682644,,,39754.52726,1304.068468,N/A,N/A
+Alethonym,primary,BGL,,INF,,N/A,1.517,N/A,867.028,,1.22,1.25,1.3,1.15,1976.715462,INF,61751.88243336981,INF,1303.042493,N/A,1.082446841
+"Tommy's Matchbook
+Ember of Ashes",primary,auto,,INF,,N/A,10.4,N/A,5448.3,,1.22,1.25,1.3,1.15,12421.44296,,,INF,1194.369516,N/A,N/A
+"Outbreak Perfected
+starts at 0 nanites, Rewind Rounds, Appended Mag",primary,pulse,,INF,,N/A,15.517,N/A,7946.614,,1.22,1.25,1.3,1.15,18117.28659,INF,59410.23443062794,INF,1167.576632,N/A,1.008143439
+"Precision bow
+Archer's Tempo, Chaos Reshaped (Non-Denouement), Guidance Ring",primary,bow,,INF,,N/A,1.067,N/A,403.202,1.35,1.22,1.25,1.3,1.15,1240.987716,,,INF,1163.062526,N/A,N/A
+Vex Mythoclast,primary,fusion,,INF,,N/A,6.367,N/A,3200.109,,1.22,1.25,1.3,1.15,7295.848506,,,INF,1145.884798,N/A,N/A
+"Barrow-Dyad
+Target Lock, Taken Ambition",primary,SMG,,INF,,35-35-35...,4.083,N/A,2014.565,,1.22,1.25,1.3,1.15,4592.956379,,,INF,1124.897472,N/A,N/A
+"Rat King
+Rat Pack x5",primary,sidearm,,INF,,25-25-25...,3.35,N/A,1869.2,,1.22,1.25,1.3,,3705.689,INF,56710.82882463059,INF,1106.175821,N/A,1.000590481
+"Lightweight grenade launcher
+Spike Grenades, Vorpal Weapon (Pardon Our Dust)",special,BGL,,20.0,,1-1-1...,1.5,28.5,599.069,1.15,1.22,1.25,1.3,1.15,1570.672802,1710999.2259896502,47527.75627749028,31413.45604,1102.226528,0.9418117537,1.189656952
+Osteo Striga,primary,SMG,,INF,,N/A,3.95,N/A,1883.67,,1.22,1.25,1.3,1.15,4294.532141,INF,46856.205418052574,INF,1087.223327,N/A,1.190281947
+"Hawkmoon
+successive mags, Paracausal Shot x7",primary,HC,,INF,,N/A,5.1,N/A,2415.898,,1.22,1.25,1.3,1.15,5507.945453,,,INF,1079.989304,N/A,N/A
+Deterministic Chaos,power,LMG,,376.0,2783ms reload,48-48-48...,0.167,80.937,106.136,,1.22,1.25,1.3,1.1,231.456082,6260004.777970501,79417.49692949484,87027.48683,1075.249723,0.7131485074,0.6945305354
+"Polaris Lance
+Ember of Ashes",primary,scout,,INF,,N/A,0.4,N/A,182.803,,1.22,1.25,1.3,1.15,416.7679896,,,INF,1041.919974,N/A,N/A
+"Cerberus+1
+precision, point blank",primary,auto,,INF,,N/A,6.167,N/A,2732.867,,1.22,1.25,1.3,1.15,6230.595152,,,INF,1010.31217,N/A,N/A
+"Third Iteration
+16 marked shots",primary,scout,,INF,,N/A,7.667,N/A,3320.420896,,1.22,1.25,1.3,1.15,7570.14459,,,INF,987.3672349,N/A,N/A
+"Finality's Auger
+assumes pre-loaded turret, painted target, Bait and Switch, Ruinscribe Turret Mode",tick,linear,,21.0,,3-3-3...,1.692,165.816,588.893,1.3,1.22,1.25,1.3,1.1,1669.496933,9696542.31,45482.674349881796,163610.6994,986.7003148,0.8655516815,1.112852162
+"Riskrunner
+Arc Conductor, simulated",primary,SMG,,INF,,N/A,0.067,N/A,28.369,,1.22,1.25,1.3,1.15,64.67777388,,,INF,965.3399086,N/A,N/A
+"Graviton Spike
+alternating modes with 3 shot cycles, Temporal Alignment",primary,HC,,INF,,N/A,5.683,N/A,2556.6,,1.135,1.25,1.3,1.15,5422.628494,,,INF,954.1841446,N/A,N/A
+"Wave grenade launcher
+e. Elemental Honing x5 (New Pacific Epitaph), Lunafaction Boots, 3x Loader",special,BGL,,20.0,,1-1-1...,1.5,28.5,439.061,1.35,1.22,1.25,1.3,1.15,1351.355666,1451394.492483472,42272.80516349601,27027.11333,948.3197659,0.9552397625,1.150779018
+Polaris Lance,primary,scout,,INF,,N/A,0.4,N/A,162.82,,1.22,1.25,1.3,1.15,371.2092475,,,INF,928.0231188,N/A,N/A
+"Trinity Ghoul
+Guidance Ring",primary,bow,,INF,,N/A,1.25,N/A,507.069,,1.22,1.25,1.3,1.15,1156.053936,,,INF,924.8431491,N/A,N/A
+"Third Iteration
+Amalgamation Round into 15 marked shots",primary,scout,,INF,,N/A,9.05,N/A,3643.45741,,1.22,1.25,1.3,1.15,8306.627463,,,INF,917.8593881,N/A,N/A
+Fighting Lion,primary,BGL,,INF,,N/A,1.517,N/A,584.62,,1.22,1.25,1.3,1.15,1332.860523,,,INF,878.6160333,N/A,N/A
+"Anarchy
+two traps",tick,HGL,,29.0,,2-2-2...,10.05,150.75,4183.626,,1.22,1.25,1.3,1.1,9123.4424,6175880.73905574,45519.66640173753,132289.9148,877.5450401,1.098818685,0.9889368167
+Sweet Business,primary,auto,,INF,,N/A,12.65,N/A,4669.95,,1.22,1.25,1.3,1.15,10646.90226,,,INF,841.6523523,N/A,N/A
+"Lodestar
+ADS",primary,trace,,INF,1117ms reload,75-75-75...,9.483,N/A,3380.45,,1.22,1.25,1.3,1.15,7707.003444,,,INF,812.7178576,N/A,N/A
+"Malfeasance
+successive mags, Vorpal Weapon",primary,HC,,INF,,N/A,8.217,N/A,3556.76,,,1.25,1.3,1.15,6646.69525,,,INF,808.8956128,N/A,N/A
+"Divinity
+held down",special,trace,,470.0,1083ms reload,194-194-82,0.067,33.455,25.029,,1.22,1.25,1.3,1.15,57.06299138,1283025.2619401412,34138.447221885996,26819.60595,801.6621117,1.072297726,1.204608144
+"Hellion
+Consul's Pitch, spaced range, Ember of Ashes",tick,turret,,INF,,N/A,1.317,N/A,615.6,,,,1.3,1.315046361,1052.405302,,,INF,799.0928641,N/A,N/A
+"Quicksilver Storm
+42 shot burst into 3 grenade cycle",primary,auto,,INF,,N/A,7.567,N/A,2589.687,,1.22,1.25,1.3,1.15,5904.162649,,,INF,780.2514403,N/A,N/A
+"The Last Word
+hip-fire, successive mags",primary,HC,,INF,,N/A,3.433,N/A,1264.688,,,1.25,1.3,1.15,2363.3857,,,INF,688.431605,N/A,N/A
+"Khvostov 7G-0X
+ricochetting bullets",primary,auto,,INF,,N/A,5.167,N/A,1549.376,,1.22,1.25,1.3,1.15,3532.383608,,,INF,683.6430439,N/A,N/A
+"Lodestar
+hip-fire",primary,trace,,INF,1117ms reload,75-75-75...,6.133,N/A,1735.425,,1.22,1.25,1.3,1.15,3956.552072,,,INF,645.1250729,N/A,N/A
+"Storm's Keep
+max practical Bolt Charge rate",tick,effect,,INF,,N/A,1.46,N/A,675.457,,,,1.3,,878.0941,,,INF,601.4343151,N/A,N/A
+"Ionic Sentry
+includes Bolt Charge, Spark of Frequency",tick,turret,,INF,,N/A,1.0,N/A,277.816,,,,1.3,1.65,595.91532,INF,12092.6,INF,595.91532,N/A,2.52791847
+"MIDA Multi-Tool
+High-Power Ammo",primary,scout,,INF,1117ms reload,16-16-16...,5.617,N/A,1460.64,,1.22,1.25,1.3,1.15,3330.07662,,,INF,592.8567954,N/A,N/A
+"Hellion
+Ember of Ashes",tick,turret,,INF,,N/A,1.317,N/A,459.42,,,,1.3,1.30587971,779.9314331,INF,23513.712533262806,INF,592.2030623,N/A,1.291955766
+"Area denial grenade launcher
+Elemental Honing x5 (Festival Flight)",tick,BGL,,20.0,,1-1-1...,6.0,120,1079.425,1.35,1.22,1.25,1.3,1.15,3322.287997,3142541.1942332876,20950.274628221916,66445.75994,553.7146662,1.084637195,1.355796494
+" Arc Soul
+Amplified, Facet of Courage",tick,turret,,INF,,N/A,1.35,N/A,272.031,,,1.1,1.3,1.65,641.8571445,INF,14905.588837476804,INF,475.4497367,N/A,1.636265125
+"Witherhoard
+ground",tick,BGL,,20.0,,1-1-1...,4.65,93,951.485,,1.22,1.25,1.3,1.15,2169.266864,2412941.5289662206,20756.486270677164,43385.33729,466.5090031,0.922347086,1.152933858
+"Witherhoard
+direct impact",tick,BGL,,20.0,,1-1-1...,9.783,195.66,1948.335,,1.22,1.25,1.3,1.15,4441.960258,4955947.004408523,20263.506100004186,88839.20516,454.0488867,0.919551825,1.149439781
+"Weaver's Call
+maximum practical rate, Thread of Evolution",tick,effect,,INF,,N/A,2.15,N/A,373.698,,,,1.3,,485.8074,,,INF,225.9569302,N/A,N/A
+" Arc Soul
+Facet of Courage",tick,turret,,INF,,N/A,1.833,N/A,163.219,,,1.1,1.3,1.65,385.1152305,INF,6533.487487981047,INF,210.1010532,N/A,1.649610323
+Jolt,tick,effect,,INF,,N/A,1.0,N/A,99.094,,,,1.3,,128.8222,INF,6611.612670599852,INF,128.8222,N/A,0.9994970311
+"Unravel
+typical rate",tick,effect,,INF,,N/A,1.277,N/A,116.34,,,,1.3,,151.242,INF,3840.9314342532366,INF,118.4353955,N/A,1.581769365
+"Aggressive rocket launcher
+Timelost Magazine, Cluster Bomb + Elemental Honing x5 (Hezen Vengeance), Pack Hunter",power,rocket,,9.0,2233ms reload,2-2-2-2-1,1.083,13.264,?,1.35,1.22,1.25,1.3,1.1,2.9440125,,,?,0.0,N/A,N/A
+"Ergo Sum
+caster frame, The Perfect Fifth, Enduring Blade, 1H2L combo, Lucent Blades x3, Pack Hunter, Transcendent, fireteam scaling",special,sword,,51.0,8 combos + 1H,6-6-6...,2.433,19.464,?,,1.22,1.25,1.3,1.15,2.279875,3460979.647775,158057.2520333836,?,0.0,N/A,0
+"Ergo Sum
+lightweight frame, Unplanned Reprieve, Enduring Blade, 1H2L combo, Lucent Blades x3, Pack Hunter, Transcendent, fireteam scaling",special,sword,,51.0,10 combos + 1H,5-5-5...,2.283,22.83,?,,1.22,1.25,1.3,1.15,2.279875,4594596.373586521,182956.8898015578,?,0.0,N/A,0
+"Ergo Sum
+vortex frame, Unplanned Reprieve, Enduring Blade, 1H2L combo, Lucent Blades x3, Pack Hunter, Transcendent, fireteam scaling",special,sword,,51.0,6 combos + 1H,8-8-8...,2.75,16.5,?,,1.22,1.25,1.3,1.15,2.279875,3565079.8385305298,185198.9526509366,?,0.0,N/A,0

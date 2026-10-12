@@ -1,0 +1,140 @@
+WEAPON,,INFO,,,,,,,PERKS,,,,,,ANALYSIS,,
+🖼️,Name,Season,Energy,Frame,Source,Stun,Ammo,⬆️,Barrel,Mag,MW,Perk 1,Perk 2,Origin Trait,Notes,#,Tier
+,Vouchsafe,29.0,Void,Lightweight,Dreaming City,,51.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Repulsor Brace
+Dimensional Shift
+Shoot to Loot","Destabilizing Rounds
+Explosive Payload
+Withering Gaze",Advanced Reflexes,"every void perk you would want on a scout, just not the best frame and origin",1.0,S
+,Voltaic Shade,28.0,Arc,Balanced,Equilibrium,,59.0,Yes,Fluted Barrel,Enhanced Heatsink,Cooling Efficiency,"Jolting Feedback
+Shoot to Loot","Meganeura
+Voltshot",Imperial Allegiance,"pretty lethal perk combo, very fast jolt, just no sustain or unique utility",2.0,S
+,Unworthy,29.0,Arc,Rapid,Sundered Doctrine,,51.0,Yes,Fluted Barrel,"High-Caliber Rounds
+Alloy Magazine",Reload,Firefly,"Voltshot
+Gear Shift",Subjugation,"great double splash, especially for long range precision, excellent origin and good frame",3.0,S
+,Trustee,29.0,Solar,Rapid,Deep Stone Crypt,,56.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Heal Clip
+Reconstruction","Incandescent
+Meganeura
+Burning Ambition",Bray Inheritance,"unique Bray + Incandescent ticks interaction, otherwise pretty solid as well",4.0,S
+,Doom of Chelchis,29.0,Void,Precision,King's Fall,,54.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Destabilizing Rounds
+Firefly
+Demoralize","Repulsor Brace
+Meganeura
+Withering Gaze
+",Runneth Over,"has classic void combo but can also opt to drop Destab for artifact-based volatile, a shame about the frame",5.0,S
+,Pointed Inquiry,29.0,Void,High-Impact,Throne World,,48.0,Yes,Fluted Barrel,"High-Caliber Rounds
+Alloy Magazine",Reload,"Repulsor Brace
+Shoot to Loot","Demoralize
+Dragonfly",Psychohack,"double stagger, access to volatile through artifact, good origin but mediocre frame",6.0,A
+,No Feelings,29.0,Arc,Precision,Arena Ops,,56.0,Yes,Fluted Barrel,Alloy Magazine,Reload,Voltshot,"Meganeura
+Gear Shift
+Explosive Payload",Forge's Kin,"same roll as Voltaic Shade, better origin and worse archetype",7.0,A
+,Fang of Ir Yût,29.0,Strand,Rapid,Crota's End,,60.0,Yes,Fluted Barrel,"High-Caliber Rounds
+Alloy Magazine",Reload,"Tear
+Slice
+Shoot to Loot","Meganeura
+Hatchling",Cursed Thrall,"pretty solid overall, just worse frame than Scholar and awkward origin trait for a scout",8.0,A
+,Hung Jury SR4,29.0,Kinetic,Precision,Onslaught,,60.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Kinetic Tremors
+Shoot to Loot","Firefly
+Ancillary Ordinance
+Explosive Payload",Indomitability,"decent double kinetic splash, has StL + EP option, just bad frame",9.0,A
+,The Scholar,29.0,Strand,High-Impact,Trials,,50.0,Yes,Fluted Barrel,"High-Caliber Rounds
+Alloy Magazine",Reload,"Firefly
+Shoot to Loot","Tear
+Hatchling
+Explosive Payload",Wild Card,"StL + EP option on slower-firing frame, interesting double splash options for precision weapon",10.0,A
+,Vision of Confluence,29.0,Solar,Precision,Vault of Glass,,52.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Incandescent
+Heal Clip","Burning Ambition
+Firefly
+Explosive Payload",Timelost Magazine,"has good solar double splash options, but not a great frame despite good origin",11.0,A
+,Nature Reclaimed,26.0,Solar,Lightweight,Iron Banner,,69.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Heal Clip
+Shoot to Loot","Incandescent
+Explosive Payload",Skulking Wolf,"classic solar sustain combo with StL + EP option, okay frame, solid origin",12.0,A
+,Aisha's Embrace,27.0,Void,Rapid,Trials,,50.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Demoralize
+Shoot to Loot","Destabilizing Rounds
+Withering Gaze
+Desperate Measures",Roar of Battle,"no Repulsor holds this back a lot, bad origin and pretty good frame though",13.0,A
+,Timeworn Wayfarer,29.0,Solar,Aggressive,Encore,,54.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Heal Clip
+Shoot to Loot",Incandescent,Radiolaria Transposer,"good origin and classic solar sustain combo, just low QoL archetype, good origin though",14.0,A
+,Oxygen SR3,28.0,Solar,Precision,"Tenet of Bravery, Zavala",,54.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Heal Clip
+Shoot to Loot","Meganeura
+Burning Ambition",Accelerated Assault,"solar sustain with a twist, probably not that different from Incandescent with less solar synergy",15.0,B
+,Inbound Surveillance,29.0,Kinetic,High-Impact,"World, Banshee",,56.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Bewildering Burst
+Stopping Power
+Shoot to Loot","Kinetic Tremors
+Explosive Payload","Nail, Meet Hammer","StL + EP but mediocre frame, has okay kinetic combo perks but otherwise not great",16.0,B
+,Forced Memorializer,27.0,Kinetic,Precision,"Tenet of Bravery, Zavala",,48.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Bewildering Burst
+Explosive Payload
+Shoot to Loot","Kinetic Tremors
+Ancillary Ordinance",Vanguard Determination,has lots of kinetic perks but frame and origin aren't great,17.0,B
+,Randy's Throwing Knife,29.0,Kinetic,Rapid,Crucible,,48.0,Yes,Fluted Barrel,"High-Caliber Rounds
+Alloy Magazine",Reload,Rapid Hit,Kinetic Tremors,Accelerated Assault,"solid frame, solid origin, just no good perks in first column",18.0,B
+,Long Arm,29.0,Arc,Aggressive,Spire of the Watcher,,54.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Rolling Storm
+Lucky Shot","Meganeura
+Chaos Reshaped
+Gear Shift",Tex Balanced Stock,"first column a little disappointing, crazy 2nd column, rest of the gun not very good",19.0,B
+,Patron of Lost Causes,29.0,Kinetic,Lightweight,Xur,,52.0,Yes,Fluted Barrel,Alloy Magazine,Reload,Rapid Hit,Kinetic Tremors,Cast No Shadows,"good origin but awkward fit on a scout, otherwise good frame, just lacks 1st column potency",20.0,B
+,Brya's Love,29.0,Void,Precision,Xur,,49.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Loose Change
+Shoot to Loot","Destabilizing Rounds
+Explosive Payload",Head Rush,"no Repulsor hurts a lot, bad frame, decent origin, has StL + EP access",21.0,B
+,Sublimation,27.0,Arc,High-Impact,Kepler,,54.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Demolitionist
+Impromptu Ammunition
+Shoot to Loot","Voltshot
+Explosive Payload",Exhaustive Research,"similar to Tarnished Mettle, just slower frame and better origin",22.0,B
+,Tarnished Mettle,29.0,Arc,Lightweight,Xur,,49.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Demolitionist
+Shoot to Loot","Voltshot
+Explosive Payload",Right Hook,"mediocre frame, bad origin, has StL + EP option but other perks are underwhelming",23.0,B
+,Nameless Midnight,29.0,Kinetic,Precision,Fireteam Ops,,46.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Rapid Hit
+Shoot to Loot","Kinetic Tremors
+Explosive Payload",Accelerated Assault,basically Randy's but worse with a StL + EP option,24.0,B
+,Admetus-D,29.0,Solar,High-Impact,Banshee,,50.0,Yes,Fluted Barrel,"High-Caliber Rounds
+Alloy Magazine",Reload,Heal Clip,Incandescent,Häkke Breach Armaments,"probably worst Heal Clip + Incand option, not much going on besides double stagger",25.0,B
+,Transfiguration,29.0,Kinetic,High-Impact,Last Wish,,55.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Rampage
+Demolitionist
+Rewind Rounds",Kinetic Tremors,Explosive Pact,"kinetic damage + splash, bad origin and mediocre frame",26.0,B
+,The Guiding Sight,24.0,Strand,High-Impact,Iron Banner,,40.0,Yes,Fluted Barrel,Alloy Magazine,Reload,Slice,Hatchling,Skulking Wolf,"very limited perk pool but decent highlights, mediocre frame but good origin",27.0,B
+,Imperative,29.0,Kinetic,High-Impact,Starcrossed,,53.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Demolitionist
+Rapid Hit",Kinetic Tremors,Nano-Munitions,"similar to Transfiguration, just no 1st column damage and much better origin",28.0,B
+,Last Rite,29.0,Kinetic,Aggressive,Solo Ops,,54.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Bewildering Burst
+Stopping Power
+Shoot to Loot","Firefly
+Explosive Payload",Vanguard Determination,technically double splash and stagger but no very potent splash perks and bad frame,29.0,B
+,Red Tape,29.0,Stasis,Lightweight,"World, Banshee",,53.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Rimestealer
+Attrition Orbs","Headstone
+Explosive Payload",Dark Ether Reaper,"technically has AO + EP access, otherwise just an okay stasis combo scout with a good origin",30.0,C
+,Jurisprudent,27.0,Stasis,High-Impact,"Tenet of Bravery, Banshee",,55.0,Yes,Fluted Barrel,Alloy Magazine,Reload,Rimestealer,Headstone,Bray Legacy,slightly better than Live Fire,31.0,C
+,Live Fire,29.0,Stasis,Precision,Banshee,,49.0,Yes,Fluted Barrel,"High-Caliber Rounds
+Alloy Magazine",Reload,Rimestealer,Headstone,Field-Tested,"bad frame but typical stasis combo, okay frame",32.0,C
+,Staccato-46,17.0,Solar,Precision,Banshee,,54.0,No,Fluted Barrel,Alloy Magazine,Reload,"Outlaw
+Shoot to Loot","Incandescent
+Explosive Payload",Suros Synergy,"bad frame but reload + Incand and StL + EP available, bad origin though",33.0,C
+,Perses-D,16.0,Stasis,High-Impact,Banshee,,45.0,No,Fluted Barrel,Alloy Magazine,Reload,"Rapid Hit
+Shoot to Loot","Headstone
+Explosive Payload",Häkke Breach Armaments,"very similar to Staccato, more awkward frame for StL, and arguably worse splash perk",34.0,C
+,Jararaca-3sr,19.0,Stasis,Rapid,Banshee,,49.0,No,Fluted Barrel,"High-Caliber Rounds
+Alloy Magazine",Reload,Rapid Hit,Headstone,Veist Stinger,"good frame, bad 1st column, okay origin",35.0,C
+,Taraxippos,29.0,Strand,Lightweight,Tenet of Bravery,,51.0,Yes,Fluted Barrel,Alloy Magazine,Reload,Enlightened Action,"Tear
+Hatchling
+Explosive Payload",Classy Contender,"splash perks not bad, otherwise very mediocre all around",36.0,C
+,The Prophet,23.0,Stasis,Aggressive,Trials,,60.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Demolitionist
+Enlightened Action",Headstone,Tex Balanced Stock,"worse frame than Jararaca, similar otherwise",37.0,C
+,Glissando-47,29.0,Strand,Precision,Banshee,,50.0,Yes,Fluted Barrel,"High-Caliber Rounds
+Alloy Magazine",Reload,Reconstruction,Hatchling,Suros Synergy,"mediocre frame, no good 1st column perks, bad origin, only really has Hatchling",38.0,C
+,"Long Arm
+RotN version",26.0,Arc,Aggressive,Rite of the Nine,,54.0,Yes,Fluted Barrel,Alloy Magazine,Reload,Rapid Hit,"Explosive Payload
+Dragonfly",Gravity Well,"basically just a Gravity Well vacuum, awful otherwise",39.0,D
+,Night Watch,29.0,Kinetic,Lightweight,Gambit,,49.0,Yes,Fluted Barrel,Alloy Magazine,Reload,Rapid Hit,Explosive Payload,Gun and Run,"classic dated reload + EP combo, mediocre frame and origin",40.0,D
+,Tears of Contrition,29.0,Kinetic,Precision,Presage,,53.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Compulsive Reloader
+Auto-Loading Holster",Explosive Payload,Extrovert,"awful origin trait for a scout, otherwise pretty mediocre",41.0,D
+,Talons of the Eagle,4.0,Kinetic,High-Impact,Iron Banner,,59.0,No,Fluted Barrel,Alloy Magazine,Reload,Outlaw,Explosive Payload,None,EP only thing going for this,42.0,D
+,Servant Leader,15.0,Kinetic,Rapid,Gambit,,50.0,No,Fluted Barrel,Alloy Magazine,Reload,"Rapid Hit
+Shoot to Loot",Rampage,Field-Tested,"no EP but decent frame, StL access, post-buff Rampage, and solid origin",43.0,D
+,Contingency Plan,15.0,Arc,Rapid,"Xur, Dares",,50.0,No,Fluted Barrel,Alloy Magazine,Reload,Outlaw,Kill Clip,None,"no StL or EP access, good frame but extremely dated perks",44.0,E
+,Royal Chase,12.0,Void,Precision,"Xur, Dares",,48.0,No,Fluted Barrel,Alloy Magazine,Reload,Field Prep,Dragonfly,None,"bad frame, only Dragonfly, no origin, has FP for ammo gen",45.0,E
+,Eternal Blazon,13.0,Arc,Lightweight,Zavala,,46.0,No,Candle PS,"High-Caliber Rounds
+Alloy Magazine",Reload,Rapid Hit,Kill Clip,None,"mediocre frame, reload + single target damage",46.0,E
+,Adverse Possession IX,24.0,Arc,Precision,Banshee,,51.0,Yes,Fluted Barrel,Alloy Magazine,Reload,"Eddy Current
+Compulsive Reloader
+Overflow","Frenzy
+Wellspring",Suros Synergy,"terrible second column, bad frame, bad origin",47.0,E
+,Pleiades Corrector,14.0,Solar,Lightweight,Xur,,53.0,No,Fluted Barrel,"High-Caliber Rounds
+Alloy Magazine",Reload,Field Prep,Multikill Clip,None,worst 2nd column I've ever seen on a scout,48.0,E

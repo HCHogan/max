@@ -1,0 +1,862 @@
+{
+  "format_version": 1,
+  "language": "zh-chs",
+  "status": "complete",
+  "pending_text_cells": 0,
+  "generated_at": "2026-10-12T03:42:25+00:00",
+  "manifest_version": "244213.26.06.29.2000-1-bnet.65864",
+  "original_snapshot": "2026-10-12T00:55:01+00:00",
+  "glossary_path": "zh-chs/glossary.json",
+  "method": "Official names matched by Bungie definition hash; community prose machine-translated with gpt-5.6-luna. Not an official translation of the guides.",
+  "validation": "Original SHA-256, row/column coordinates, empty cells, numeric tokens, URLs, newlines and protected tokens checked; original English retained for review.",
+  "sheets": [
+    {
+      "id": "court/242217075",
+      "title": "首页",
+      "path": "zh-chs/court/landing--242217075.csv",
+      "sha256": "1c0d86b3ac31d0123d05a8382bc3169f31a93cbffcf6b38d5d78a62417bd3605",
+      "bytes": 3837,
+      "original_sha256": "e6a6ba392ac964f71a2abb8baea961deccae6797b0b2a2721011339d1893939c"
+    },
+    {
+      "id": "court/2073397587",
+      "title": "叠加规则指南",
+      "path": "zh-chs/court/stacking-guide--2073397587.csv",
+      "sha256": "9505211e52a1cc304876ecb05c158ad6c0a587a3ad91776d595b9f42b9571048",
+      "bytes": 49091,
+      "original_sha256": "4c4b091ccdc60feb607a7d253f7f141ba5027f0ba36c26e56adc81d579d9c28b"
+    },
+    {
+      "id": "court/1367323152",
+      "title": "勇士应对列表",
+      "path": "zh-chs/court/champ-counters-list--1367323152.csv",
+      "sha256": "c3a20c32555acbf80a558acc228b6ed35af11411cd4beabc8886eed4c05e24a8",
+      "bytes": 10876,
+      "original_sha256": "51b091d7718e611ba8fb0c46ec5559ed9a0324ff2633508a6d676e398f69abd7"
+    },
+    {
+      "id": "court/1305623430",
+      "title": "催化剂",
+      "path": "zh-chs/court/catalysts--1305623430.csv",
+      "sha256": "ea9a34170c9d7b69109d6e6d46d9e0ed4d88e4215c4b54282a3fdca70745a4b9",
+      "bytes": 349,
+      "original_sha256": "444915ed35cca841a5c90837c79b2182ddb6006d250dc62929713d312785cda2"
+    },
+    {
+      "id": "court/1888181920",
+      "title": "词缀（敌人词缀）",
+      "path": "zh-chs/court/banes--1888181920.csv",
+      "sha256": "2e874752f962da6e9af384495116c2179e52cec74494334a8cea2f4775fe2eed",
+      "bytes": 348,
+      "original_sha256": "e91b502c7e5d2997d88f77d5b6506f9dbf5d6961ec54bc24ccda964d56056bee"
+    },
+    {
+      "id": "court/640460340",
+      "title": "微型导弹",
+      "path": "zh-chs/court/micro-missiles--640460340.csv",
+      "sha256": "8af2b73ef654cbc18d6e5288e70175258bd4d98d95f50fc17e959b7d18452ad1",
+      "bytes": 340,
+      "original_sha256": "001aca60d193a8cd40243875ca82b3785bedba442283592d28374aa959155ae8"
+    },
+    {
+      "id": "court/1541186536",
+      "title": "敌人分类指南  （未更新）",
+      "path": "zh-chs/court/combatants-guide-not-updated--1541186536.csv",
+      "sha256": "99d536a9f30b8bb4896e502d330f433a9243523651e37362025537ba5a19d8b2",
+      "bytes": 39016,
+      "original_sha256": "6952b492198bab2882ec52f426e78cfe806161ddd7b6417fb4569dcc6dc2b473"
+    },
+    {
+      "id": "court/1034561092",
+      "title": "MARATHON（未更新）",
+      "path": "zh-chs/court/marathon-not-updated--1034561092.csv",
+      "sha256": "af717b7f41631aea725f58b257d77cee3fba3acccf1b4ce0d72bc77a70d5aeb3",
+      "bytes": 15242,
+      "original_sha256": "738cc139020086e25cd8736e3f34ee3f8e7b7ceaeb3e7532fb005c9b54e4ac7d"
+    },
+    {
+      "id": "compendium/1038486120",
+      "title": "首页",
+      "path": "zh-chs/compendium/landing--1038486120.csv",
+      "sha256": "639c89258117a395d22794f0e1f8b79242e9a8de3bf588b6b3dd46e79fe25433",
+      "bytes": 4732,
+      "original_sha256": "6aee7ef8f257efab225b837da00f91be7ad7c85000d8a4b0842ad09110277aed"
+    },
+    {
+      "id": "compendium/1662574278",
+      "title": "武器特性",
+      "path": "zh-chs/compendium/weapon-perks--1662574278.csv",
+      "sha256": "173a4ea3054415aeac09dd1d796e8abdbe5e19b072a2e660322c9db35b43043f",
+      "bytes": 128527,
+      "original_sha256": "f01433e5981c537a13f606334ee77bfb98531a29a00326974549c1fee3a7e593"
+    },
+    {
+      "id": "compendium/1287885342",
+      "title": "护甲特性",
+      "path": "zh-chs/compendium/armor-perks--1287885342.csv",
+      "sha256": "0406cd216e08a740d2573a7aacdf6d55fb85533ab4285270c499413a5a3b5dac",
+      "bytes": 34505,
+      "original_sha256": "12dd26940521a6ecd3a29108033c40263182b88353c741012b8e1340f54c009b"
+    },
+    {
+      "id": "compendium/473308249",
+      "title": "神器特性",
+      "path": "zh-chs/compendium/artifact-perks--473308249.csv",
+      "sha256": "c18e220c92259d5694fa65236bba2fcaeb0f99fc39fff69db1abdb18d77964dd",
+      "bytes": 40413,
+      "original_sha256": "34477d061ffcfb541cf0e62c532931194fd8848daecfca63bbe8495a734573a4"
+    },
+    {
+      "id": "compendium/1934379638",
+      "title": "护甲模组",
+      "path": "zh-chs/compendium/armor-mods--1934379638.csv",
+      "sha256": "16e8bee89b72f05a84837a17a20d928463c087460e1258a718644b0a6c6010d1",
+      "bytes": 22160,
+      "original_sha256": "2b1646b86eaa0991f99cb9ba485183ba575c0efcee957313af228b2f5fec66b2"
+    },
+    {
+      "id": "compendium/618967225",
+      "title": "电弧",
+      "path": "zh-chs/compendium/arc--618967225.csv",
+      "sha256": "726f9bf91a344991291143382253b79f426225cc975000656401c8e8c9d61a45",
+      "bytes": 25608,
+      "original_sha256": "23aca158371b4675615e1944542e7b10ea836917c46b11c2aef3ec8e221ec8d6"
+    },
+    {
+      "id": "compendium/1186062409",
+      "title": "烈日",
+      "path": "zh-chs/compendium/solar--1186062409.csv",
+      "sha256": "a8c977f844276797709548422702ab11a0a9cf06a16692416f06bf4bd769c9e2",
+      "bytes": 35244,
+      "original_sha256": "c02fe8d1d01031e9e0cd0747c13f19b2b593bd82ff22c9bd01b7ca88603a3236"
+    },
+    {
+      "id": "compendium/1907852650",
+      "title": "虚空",
+      "path": "zh-chs/compendium/void--1907852650.csv",
+      "sha256": "3d6ed581e008266dfc5fa103726afa19592f18ad8f078419d02d59e7dbec7da3",
+      "bytes": 32571,
+      "original_sha256": "731de0b3d7f33ee7ed918630e9a77d933bdce2301f3c88e4ec014cda3dcddef5"
+    },
+    {
+      "id": "compendium/1088259962",
+      "title": "冰影",
+      "path": "zh-chs/compendium/stasis--1088259962.csv",
+      "sha256": "064ee759e3be049e68f51e47e7d4973552bc3014f12b1ca50484120d947d61f3",
+      "bytes": 21559,
+      "original_sha256": "c45ea1dbfbc46239ffa3462e93baea9d4b6037fa611df3081701bb15a8b5691f"
+    },
+    {
+      "id": "compendium/1870531554",
+      "title": "缚丝",
+      "path": "zh-chs/compendium/strand--1870531554.csv",
+      "sha256": "fdc57aca4d1ee3456817322395625b8184e1cae8bd4ea38175578ecfabc26c96",
+      "bytes": 20433,
+      "original_sha256": "c5e64c164dbc52f8cda7d5b01be9ab639e0021c6c5efb49481528e8f35817102"
+    },
+    {
+      "id": "compendium/1918152785",
+      "title": "棱镜",
+      "path": "zh-chs/compendium/prismatic--1918152785.csv",
+      "sha256": "17ed9f43f8c93c1b75f4ccfdaf23a17156ec2e29771b218f960aafbd73a6fee3",
+      "bytes": 19208,
+      "original_sha256": "2b8f7e5f77f6175ab3a80d048844df72a0230f559c2eaf10590e33902fe668b7"
+    },
+    {
+      "id": "compendium/20898389",
+      "title": "异域职业物品",
+      "path": "zh-chs/compendium/exotic-class--20898389.csv",
+      "sha256": "208c2418a6127775926acaa26178d266b4290d1446a230493b7b1dc41626cb62",
+      "bytes": 9746,
+      "original_sha256": "efb91d6933ec9eadd23f77d7fdc1ef75b5fb023937992fad4c486500087fef60"
+    },
+    {
+      "id": "compendium/527596209",
+      "title": "职业技能",
+      "path": "zh-chs/compendium/class-abilities--527596209.csv",
+      "sha256": "bf4cd3bfd29efb1ffbd50466607087a8e8fe79ca6430a98f9ae6b7ba320d8a13",
+      "bytes": 5444,
+      "original_sha256": "19dc2fcdc0140208cb65a369a7e883b352aac08cb3fb64f2d2aaa1966ed08d22"
+    },
+    {
+      "id": "compendium/441434520",
+      "title": "异域武器",
+      "path": "zh-chs/compendium/exotic-weapons--441434520.csv",
+      "sha256": "79c4201e9c6643e96bad437c349689b3e435267f84c471569a7e3e3f78006d5d",
+      "bytes": 137045,
+      "original_sha256": "8ef18a000ed1a962dcd04c61981536fc8593135127cfa57cb5503817c3a667b2"
+    },
+    {
+      "id": "compendium/1500097863",
+      "title": "异域护甲",
+      "path": "zh-chs/compendium/exotic-armors--1500097863.csv",
+      "sha256": "69fd30332da8a792baa3dc51a48a331ad970f2a08dcffc4205700593029d4a3b",
+      "bytes": 73606,
+      "original_sha256": "e68343ad9624a0fa7221a01341bba31766d83efdd21bc68fcac08e39128ce114"
+    },
+    {
+      "id": "compendium/1800463143",
+      "title": "游戏机制",
+      "path": "zh-chs/compendium/game-mechanics--1800463143.csv",
+      "sha256": "4958bd13059fda7c9471d6d0719441897f0012dcad3b32b51c1c92a77a79656b",
+      "bytes": 47219,
+      "original_sha256": "5a016bce9817288d53c07206b2697687b3fd041f739a713b6b8daea33830fa94"
+    },
+    {
+      "id": "compendium/715236319",
+      "title": "旧版章节神器特性",
+      "path": "zh-chs/compendium/old-episodic-artifact-perks--715236319.csv",
+      "sha256": "e9c2494fae3e8505a7abbb744160f3a4a7becc3988e720e2ce70ef24b5b341b5",
+      "bytes": 40149,
+      "original_sha256": "b704c942d0178d0ba364812a23aa789153e78490595823db047d7a3d29279e58"
+    },
+    {
+      "id": "compendium/70425171",
+      "title": "旧版赛季神器特性",
+      "path": "zh-chs/compendium/old-seasonal-artifact-perks--70425171.csv",
+      "sha256": "fb3203c94a3e8a88434123d7f6764e6569cc6cd88a6c0d916fea6fe547db07f0",
+      "bytes": 21621,
+      "original_sha256": "67ce106d9af06ebf87642f582af02314cc8c27fbf089b2109d1cd1365f66ed5f"
+    },
+    {
+      "id": "compendium/333521426",
+      "title": "旧版幽冥机制",
+      "path": "zh-chs/compendium/old-nether-mechanics--333521426.csv",
+      "sha256": "5843e1f844b2125d23cd10d2bfc03410d67710b7cbf2a57711b8f50d935bcb0f",
+      "bytes": 11218,
+      "original_sha256": "dee5a3cfde02620ee1d0f8d4b0817dda07c06161cda6a575a348c8ac9d449b0d"
+    },
+    {
+      "id": "compendium/1925335732",
+      "title": "旧版护甲模组",
+      "path": "zh-chs/compendium/old-armor-mods--1925335732.csv",
+      "sha256": "caea177690c2822be16457a7765735ee4305b7e6dff18253628d3a7f83641dcd",
+      "bytes": 39317,
+      "original_sha256": "7017469cb36aa8568fa511bd16af8f7370a1b536884dc80296995e0fbe2b7693"
+    },
+    {
+      "id": "compendium/135237481",
+      "title": "旧版游戏机制",
+      "path": "zh-chs/compendium/old-game-mechanics--135237481.csv",
+      "sha256": "617f32cc01fcdc1e95c4887e9210631654a40e6a90a126b28dc4db31a6afb3aa",
+      "bytes": 32424,
+      "original_sha256": "d7a068cfe748a1d307b3df89ae17f84599512be907e2332c74f7217715e15eeb"
+    },
+    {
+      "id": "compendium/2137280685",
+      "title": "旧版异域护甲",
+      "path": "zh-chs/compendium/old-exotic-armors--2137280685.csv",
+      "sha256": "29cfb00844dc11452f136441c335904ef027d9dd905e21531be21dd60009962b",
+      "bytes": 57900,
+      "original_sha256": "fb28354490921034eb3fceabc0ea575a48a8d54c7117d0b81e1032465dba4965"
+    },
+    {
+      "id": "endgame-analysis/982098131",
+      "title": "参考资料  （已过时）",
+      "path": "zh-chs/endgame-analysis/reference-outdated--982098131.csv",
+      "sha256": "a02ed4738a1ca9b227648b8d9488d50643a16eca9b65e2da2857a32a1a042aac",
+      "bytes": 4526,
+      "original_sha256": "bec260c0c0eb2c49499d25f51a3579f0899dbad5f8cea8de6d6abe669cce8661"
+    },
+    {
+      "id": "endgame-analysis/0",
+      "title": "霰弹枪（旧）",
+      "path": "zh-chs/endgame-analysis/shotguns-old--0.csv",
+      "sha256": "9aba180021807b9bb7df040105a0a3e1e0daef189a7b25a089e5303bf5d87886",
+      "bytes": 5721,
+      "original_sha256": "1e059e674440f8bae51aae700e815cc7ed08d8291d4f7f07a55befebddde13f9"
+    },
+    {
+      "id": "endgame-analysis/1638374773",
+      "title": "狙击步枪（旧）",
+      "path": "zh-chs/endgame-analysis/snipers-old--1638374773.csv",
+      "sha256": "638c56c578b08e7e7fd3b0fdb10c93e61d246722bbc40a1ccb97bdc98b9c7c1f",
+      "bytes": 4299,
+      "original_sha256": "b0d2459a764dd402dbcf08d6c04a7ce9a05df8eaf05692ef06dac5087fbe2614"
+    },
+    {
+      "id": "endgame-analysis/102677244",
+      "title": "融合步枪（旧）",
+      "path": "zh-chs/endgame-analysis/fusions-old--102677244.csv",
+      "sha256": "56e16d8aae394584a7a870c5cd189def21b7496cb72fdc67b0b26721afd81774",
+      "bytes": 4063,
+      "original_sha256": "1e5d496c403160aae4914d963fbccddfc7fb1a55f73cac5bb97dea6a1f383c38"
+    },
+    {
+      "id": "endgame-analysis/666231417",
+      "title": "GL（后膛式）（旧）",
+      "path": "zh-chs/endgame-analysis/gls-breech-old--666231417.csv",
+      "sha256": "f1a3b284f76493f49059adccf16e65441ec68b94950ef88bbcf4e6dd864ef8dc",
+      "bytes": 2225,
+      "original_sha256": "13ca74fbce7189ac9acf62f196fb570e89fc9e40cdac88d3dfefe41c24857893"
+    },
+    {
+      "id": "endgame-analysis/346832350",
+      "title": "状态",
+      "path": "zh-chs/endgame-analysis/status--346832350.csv",
+      "sha256": "0fae5cb7625c4ce2407245cc8c01b11388082cfaabeb63a5284f2776764882f8",
+      "bytes": 1782,
+      "original_sha256": "f451a76e5333753ed891d54b338401ffc1479f9129196dba3737009bfbdbe2f8"
+    },
+    {
+      "id": "endgame-analysis/1439671777",
+      "title": "更新记录",
+      "path": "zh-chs/endgame-analysis/changelog--1439671777.csv",
+      "sha256": "8b5a795abd9df06ceb77d5a75d750aad2344ece51d675e71d21fcd9ee4a055d8",
+      "bytes": 57464,
+      "original_sha256": "62ee1967871da4a91844c0ad37c725c989749816c6dc45978b393e31a3be9d16"
+    },
+    {
+      "id": "endgame-analysis/1062099834",
+      "title": "推荐获取清单",
+      "path": "zh-chs/endgame-analysis/shopping-list--1062099834.csv",
+      "sha256": "03fd903683775bf38b55431bfcb16a324d431cf493eec293b027a8215a6c393e",
+      "bytes": 9003,
+      "original_sha256": "c2fe80d7513b9b705c5e25955ede594b19e3dc85905f59b28f7ea3ec25c828d1"
+    },
+    {
+      "id": "endgame-analysis/1722355267",
+      "title": "武器框架和类型（旧）",
+      "path": "zh-chs/endgame-analysis/archetypes-old--1722355267.csv",
+      "sha256": "d3451cabe71f7d367f62aeea9b1c88e589536e472786f34c754d8ce0c0112700",
+      "bytes": 13954,
+      "original_sha256": "a736f29b4bce6ea57ea9568409a406a55f8a0d66e0bdac7ab4392a211e7bd71e"
+    },
+    {
+      "id": "endgame-analysis/1301036036",
+      "title": "武器框架和类型",
+      "path": "zh-chs/endgame-analysis/archetypes--1301036036.csv",
+      "sha256": "1f0b3b0176a208cd1f66a1db3c1c31fe1971c21c07eea7fcc0fb39a93c0d0c21",
+      "bytes": 41207,
+      "original_sha256": "bf4816d322c6e3fbdb063608f77754f9427792ade88e725a8561c1d26efc08f9"
+    },
+    {
+      "id": "endgame-analysis/1583945599",
+      "title": "想法",
+      "path": "zh-chs/endgame-analysis/ideas--1583945599.csv",
+      "sha256": "bc7628e9afd17ee280cafd42c0e5fdc9d82c56323e63c689b76d70cb6a77958a",
+      "bytes": 4009,
+      "original_sha256": "3110533e785003446cc34cfcf8c203076e8470fe4bd594a04336100c0f4a9689"
+    },
+    {
+      "id": "endgame-analysis/107452313",
+      "title": "实验方案",
+      "path": "zh-chs/endgame-analysis/experimental--107452313.csv",
+      "sha256": "18b7a1a88a434faa336cc3354f6fa97910fedc74dec18cf7c18a1ecf075a01ba",
+      "bytes": 17922,
+      "original_sha256": "4122d650770b1fa217f016e13c08f03d64e70527006323fff40afcbdca13de9a"
+    },
+    {
+      "id": "endgame-analysis/1890042119",
+      "title": "自动步枪",
+      "path": "zh-chs/endgame-analysis/autos--1890042119.csv",
+      "sha256": "41964dc295c74806a657f65bb1fb821456069549076840a97d9f9c0e7ebf801f",
+      "bytes": 16253,
+      "original_sha256": "0b000fab2e8a1e223cfcd8b0b09899815e2973fe442f2d7502e95bfd0d85e5e8"
+    },
+    {
+      "id": "endgame-analysis/324500912",
+      "title": "战斗弓",
+      "path": "zh-chs/endgame-analysis/bows--324500912.csv",
+      "sha256": "73254af6f20466a13cf9360b6cab85a3d906ef8982dde1db031cf9d0b7bfe827",
+      "bytes": 6161,
+      "original_sha256": "b234291ddd10701aa52becee015f4c28d8ef1a75248ebe55ffe8d625f675dd54"
+    },
+    {
+      "id": "endgame-analysis/1315046624",
+      "title": "手炮",
+      "path": "zh-chs/endgame-analysis/hcs--1315046624.csv",
+      "sha256": "f4019e5052859622688a83c10f002a94255db43e474718ca5dc2ab0da74a23a1",
+      "bytes": 16144,
+      "original_sha256": "3ed7f4709dec1c76b73105bb3a63b3b53b774953da10cde1859e771788cbe910"
+    },
+    {
+      "id": "endgame-analysis/1712537582",
+      "title": "脉冲步枪",
+      "path": "zh-chs/endgame-analysis/pulses--1712537582.csv",
+      "sha256": "eea7b1c607adb285af6780d118c625d07ea3976be09e52d5f67b74c044ff0678",
+      "bytes": 15108,
+      "original_sha256": "91d1a3185a1e518c104dff5989e02e52b99e47321dc4291596045e75b8021de6"
+    },
+    {
+      "id": "endgame-analysis/946843299",
+      "title": "斥候步枪",
+      "path": "zh-chs/endgame-analysis/scouts--946843299.csv",
+      "sha256": "ff1da76fd96604538f280310004f843d5d3470692d2351bef0928cc00f3a29f3",
+      "bytes": 11530,
+      "original_sha256": "cd18ac1aadca112e39b303f36db8d877136d9511fc27a24de5df57b57c7011ed"
+    },
+    {
+      "id": "endgame-analysis/1594008157",
+      "title": "手枪",
+      "path": "zh-chs/endgame-analysis/sidearms--1594008157.csv",
+      "sha256": "22773fbf5de35b8b427993f4d32aace7dd65d6d2572d6359bfe23332779b41c2",
+      "bytes": 9600,
+      "original_sha256": "426ea87f6a6cb10d702bb02f1784faf57a17b5deaea8fe325e8af379b8c208de"
+    },
+    {
+      "id": "endgame-analysis/1405969509",
+      "title": "微型冲锋枪",
+      "path": "zh-chs/endgame-analysis/smgs--1405969509.csv",
+      "sha256": "b625c16bfd31758812d12eb7e8e5cd845618361208ff2cc9d34d25fd782f4c6f",
+      "bytes": 13709,
+      "original_sha256": "13e1fbf80e5590335b9b200feb6faefeced04cb37c4a3aea4e62eb20048671af"
+    },
+    {
+      "id": "endgame-analysis/657764751",
+      "title": "后膛装填榴弹发射器",
+      "path": "zh-chs/endgame-analysis/bgls--657764751.csv",
+      "sha256": "9cfc2cb497e1051b1716b59253b68255268cc4d9d4700339e240e0d212fe1560",
+      "bytes": 8857,
+      "original_sha256": "a10cadd751eb8b47fd999ab91b31722ee689c1d8011f8863d64fba82896dc0bc"
+    },
+    {
+      "id": "endgame-analysis/1318165198",
+      "title": "融合步枪",
+      "path": "zh-chs/endgame-analysis/fusions--1318165198.csv",
+      "sha256": "16ba02e9701485e80745daa715924df6c60e72c60fdfe984e4691caa0b623a42",
+      "bytes": 11356,
+      "original_sha256": "8a552b06f1fce535a1325b03df731c86c9ae7ebeccc2f6576011b0d06904e949"
+    },
+    {
+      "id": "endgame-analysis/1239299765",
+      "title": "偃月",
+      "path": "zh-chs/endgame-analysis/glaives--1239299765.csv",
+      "sha256": "67003211add1843e65a6c082b9130847cc4f12dfdba99c0d4b2c6fbd1127531a",
+      "bytes": 4740,
+      "original_sha256": "fe862367f4553069990b08a0b98343d81817fcb2407efe5faed95e6cd2f44cf6"
+    },
+    {
+      "id": "endgame-analysis/1595979957",
+      "title": "霰弹枪",
+      "path": "zh-chs/endgame-analysis/shotguns--1595979957.csv",
+      "sha256": "8ca67938101e6ebab1651bb1e1b45205febad7e6bbc507241bed2e52a9bd01b6",
+      "bytes": 15320,
+      "original_sha256": "240b584d4c9daa9864b90f5d085dd06f40e6702e2d09ef29e801805a2de87ac2"
+    },
+    {
+      "id": "endgame-analysis/1090554564",
+      "title": "狙击步枪",
+      "path": "zh-chs/endgame-analysis/snipers--1090554564.csv",
+      "sha256": "ace50edb8aded29aa5b3b459212a7f09e2cfec3674be4ea53631424a04faee39",
+      "bytes": 13262,
+      "original_sha256": "f33c82e305507ce7003b4239fe4e9d743156bf63d860e81b2b232d35275b17aa"
+    },
+    {
+      "id": "endgame-analysis/550485113",
+      "title": "火箭框架手枪",
+      "path": "zh-chs/endgame-analysis/rocket-sidearms--550485113.csv",
+      "sha256": "253edcee0a22e3657dfcbcb776dbf243c9d255bc117914c796958b62b3d0fbcb",
+      "bytes": 2541,
+      "original_sha256": "36672807ae30da254345ed6b792dc1ed3cd8921dcc0cf682d2a587612e29903b"
+    },
+    {
+      "id": "endgame-analysis/288998351",
+      "title": "追踪步枪",
+      "path": "zh-chs/endgame-analysis/traces--288998351.csv",
+      "sha256": "4d68e45c5386a6b10d08c939c9eabbfb35a7cdec071b921041b77f1893992eca",
+      "bytes": 2940,
+      "original_sha256": "cdb49d3eac2643f91d750f0e2806e1ef79fb7da82764c244103423ad6bb6c225"
+    },
+    {
+      "id": "endgame-analysis/864346075",
+      "title": "偃月  （旧）",
+      "path": "zh-chs/endgame-analysis/glaives-old--864346075.csv",
+      "sha256": "d94c93016c2a1ca95de8ebea910c09ad976beeb662592fcf00896d9991493462",
+      "bytes": 844,
+      "original_sha256": "5206eb63cc28537c68254b622a394b197c84e0ec2d1ed656b0f4a7ad8c50397f"
+    },
+    {
+      "id": "endgame-analysis/363230681",
+      "title": "机枪  （旧）",
+      "path": "zh-chs/endgame-analysis/lmgs-old--363230681.csv",
+      "sha256": "586094a0fafde67816844f5725929a46431e8e295bf421afc589a5bfabf7cb3c",
+      "bytes": 2358,
+      "original_sha256": "04942feca018432be0b824d5aa5edb538e8c5b26ad9cdf2541012e54a34f2f26"
+    },
+    {
+      "id": "endgame-analysis/137431775",
+      "title": "GL（鼓式）（旧）",
+      "path": "zh-chs/endgame-analysis/gls-drum-old--137431775.csv",
+      "sha256": "db0f586642d7fdc0e3b3d9a1b985c9910dc50d6e1e543eb0764cc6148442072b",
+      "bytes": 1762,
+      "original_sha256": "d1aed737bda266550a5f256781274c39c66a6f0a06198aa8ec05f3a0c4bae32a"
+    },
+    {
+      "id": "endgame-analysis/989124166",
+      "title": "刀剑  （旧）",
+      "path": "zh-chs/endgame-analysis/swords-old--989124166.csv",
+      "sha256": "8b496f3478ebfc90a5ee3303b2e26c54e8a1b58e662ff30063d7712f24833733",
+      "bytes": 2313,
+      "original_sha256": "8931069bcf973ee541255b369565255966cf7e1d789340f2e422b53b898a5cf3"
+    },
+    {
+      "id": "endgame-analysis/439751986",
+      "title": "重型榴弹发射器",
+      "path": "zh-chs/endgame-analysis/hgls--439751986.csv",
+      "sha256": "da7e1199791b0c5cad443336c7feac461c85bf39d30ede968ffb7e32aec03d22",
+      "bytes": 6710,
+      "original_sha256": "1e93b36e157b03ab24de2bfeb047b181a068f242fce2878ed74addd26b53187d"
+    },
+    {
+      "id": "endgame-analysis/29008106",
+      "title": "线性融合步枪",
+      "path": "zh-chs/endgame-analysis/lfrs--29008106.csv",
+      "sha256": "6365fc3e76f098043b7c3ebeaed8dff5fed35d9ab2fa4aef32d6b64d99a4fbff",
+      "bytes": 4603,
+      "original_sha256": "f63b727a2c84e60bdab598ab052e89b03ff448a772afb2b048c267402f841e5f"
+    },
+    {
+      "id": "endgame-analysis/1919916707",
+      "title": "机枪",
+      "path": "zh-chs/endgame-analysis/lmgs--1919916707.csv",
+      "sha256": "3fd9bd2546995a818044d88a43b086c07600e38349f0c03584ce205627f8e54e",
+      "bytes": 10868,
+      "original_sha256": "85fdbaeb1bf75c2d876416bb9c352a96e9ec058a9be67c3e2170d41579cf6b5c"
+    },
+    {
+      "id": "endgame-analysis/981030684",
+      "title": "火箭发射器",
+      "path": "zh-chs/endgame-analysis/rockets--981030684.csv",
+      "sha256": "f1f2381dca51441c727dca841c32c5b53c670be66fb2d4462ed5fc85fa518273",
+      "bytes": 8723,
+      "original_sha256": "7d024be473db1809a0782f0b475a56dbb5efeeafa8b24010bac73ff066e23f31"
+    },
+    {
+      "id": "endgame-analysis/473850359",
+      "title": "刀剑",
+      "path": "zh-chs/endgame-analysis/swords--473850359.csv",
+      "sha256": "1b8a7b7a0cd276af17321427fbe1b3628eee3dde1215ad6913f4404b8dd12eb5",
+      "bytes": 11090,
+      "original_sha256": "683c1be8d58961184def6620c955e298c3e18c9617747d89ce4215d69fe6348d"
+    },
+    {
+      "id": "endgame-analysis/266663572",
+      "title": "其他",
+      "path": "zh-chs/endgame-analysis/other--266663572.csv",
+      "sha256": "0ba1d0a72b7d9f050fa78853aec534732fbe6e20eb45cf8af115e28b3c1fd758",
+      "bytes": 2342,
+      "original_sha256": "094d9d0f084bc0672059f7d9bb17abd640a78627247ccdaff0eea8db18fb66b6"
+    },
+    {
+      "id": "endgame-analysis/2065007181",
+      "title": "主要弹药武器",
+      "path": "zh-chs/endgame-analysis/primaries--2065007181.csv",
+      "sha256": "515176865250574cd6a344f8ecd8e8137e4af7609e37f548a5b7031d4e7c122e",
+      "bytes": 3499,
+      "original_sha256": "eae255088c2c3f0d84575bb4cfeb9fd2e7a2e2dd1cb22229c1041ff8e2ef1c15"
+    },
+    {
+      "id": "endgame-analysis/1789798057",
+      "title": "异域武器",
+      "path": "zh-chs/endgame-analysis/exotic-weapons--1789798057.csv",
+      "sha256": "8f0bec34650f1cf35ca05e3c433575f1e49319e12d7865736b335b1547782c15",
+      "bytes": 36140,
+      "original_sha256": "e62ac0735d09206bbc1183fb4098a6039d63b6175c906669e8b6c23676346c9a"
+    },
+    {
+      "id": "endgame-analysis/2145004253",
+      "title": "异域护甲（旧）",
+      "path": "zh-chs/endgame-analysis/exotic-armor-old--2145004253.csv",
+      "sha256": "fe7ffa9857dc56f7dceb0904fa77c1d301676dedfda34a936a8f14f58f8c638f",
+      "bytes": 14448,
+      "original_sha256": "4758471ab98d1e47598e8a1b147a3745bfecc121a1614574d035f9f8dc5fa836"
+    },
+    {
+      "id": "endgame-analysis/1087089423",
+      "title": "异域护甲（忽略）",
+      "path": "zh-chs/endgame-analysis/exotic-armor-ignore--1087089423.csv",
+      "sha256": "2993fa663ba22a266973a8e21f164379c9eadf18e50134351ac861a8ec9e841f",
+      "bytes": 15011,
+      "original_sha256": "76f19db97f5a4661dac63cdae036e7b4547c66df0b3ca063e494b1c0b64970f5"
+    },
+    {
+      "id": "endgame-analysis/1756859209",
+      "title": "配装  （忽略）",
+      "path": "zh-chs/endgame-analysis/builds-ignore--1756859209.csv",
+      "sha256": "ba02d8781acf4ad0725f45143be0dfbbcceda79070fd9d3da58fc44e9b3dc151",
+      "bytes": 3272,
+      "original_sha256": "dba45b93d7fb667e5e8beda205bedaa75a3a5fba6dfbcc18933bfd33869a24de"
+    },
+    {
+      "id": "endgame-analysis/1589555995",
+      "title": "特性",
+      "path": "zh-chs/endgame-analysis/perks--1589555995.csv",
+      "sha256": "9b65263e56044dab4ba77c142c3546d14f4f80a65fbde9ef8efaefae859a00d2",
+      "bytes": 64496,
+      "original_sha256": "438ba39aff00459e1f4d406422fc584a28a8e922e650a189d09588e6d72071ca"
+    },
+    {
+      "id": "endgame-analysis/655418239",
+      "title": "起源特性",
+      "path": "zh-chs/endgame-analysis/origin-traits--655418239.csv",
+      "sha256": "6d0dec536106bae1111bdc4746dc98e6ed7f73deca1e8bb41ffb5c1cd2f2efe5",
+      "bytes": 24455,
+      "original_sha256": "a932d2f5c2ea4c46d17494f6c52f5639583ea0bbc4474842a934e6914974a144"
+    },
+    {
+      "id": "endgame-analysis/1665223292",
+      "title": "护甲套装效果",
+      "path": "zh-chs/endgame-analysis/set-bonuses--1665223292.csv",
+      "sha256": "e514ff2970c0348f1cd871cc39088b70a24180c9711413f7a541f6d6e43e7b80",
+      "bytes": 29706,
+      "original_sha256": "23b0910975db6097ecd0fbfa5f99afcf7e3dfad285ee75a664ff0a352fbb1ff0"
+    },
+    {
+      "id": "endgame-analysis/67326797",
+      "title": "神器模组",
+      "path": "zh-chs/endgame-analysis/artifact-mods--67326797.csv",
+      "sha256": "239baa7bc4b93859ab8c42afa7c4dd360d4b1ac3295225d0e41ba51962d78227",
+      "bytes": 32356,
+      "original_sha256": "32cef63b9265fdf76bbb7b3cac950dbdba1d5f367e2be4b1c7562d3f0f14fb33"
+    },
+    {
+      "id": "endgame-analysis/1402770816",
+      "title": "碎片",
+      "path": "zh-chs/endgame-analysis/fragments--1402770816.csv",
+      "sha256": "db91842b7bd47dd0882bdf55fc4dab48dbc95ae030efd47999978a42863b0e19",
+      "bytes": 21353,
+      "original_sha256": "a7732d110b32f1316f2aaa6649eb5a7c392989328f6e6574ca8e0c5783a9e13e"
+    },
+    {
+      "id": "endgame-analysis/1426359048",
+      "title": "星象",
+      "path": "zh-chs/endgame-analysis/aspects--1426359048.csv",
+      "sha256": "e1e7a8c2373a01ec0b50842e84f372ba73278b0ffa34321ab5c1aac5311adae4",
+      "bytes": 20276,
+      "original_sha256": "09b0516744262d39f3017320696bfa55dbac53f8c9f1998597fcd443876220f7"
+    },
+    {
+      "id": "endgame-analysis/1288211617",
+      "title": "子职业  （旧2）",
+      "path": "zh-chs/endgame-analysis/subclasses-old-2--1288211617.csv",
+      "sha256": "b7b7c1d79d1a18bbeab5e0ee31030ffd9b38a14690d39c741e3da85c08b7cc0f",
+      "bytes": 2585,
+      "original_sha256": "e380de723434f8df654b9516294194a731b4296e7c5c3caf5fe6ab7e1e000214"
+    },
+    {
+      "id": "endgame-analysis/1616572174",
+      "title": "子职业  （旧）",
+      "path": "zh-chs/endgame-analysis/subclasses-old--1616572174.csv",
+      "sha256": "a7fb2bb0b1598eb76c8b8edec61e915a90530aa287c2429d0aeca48b34ae7da0",
+      "bytes": 4668,
+      "original_sha256": "5fc2727f73b24147e1c36ef904c328c10c82465d2e57ac657650b77815c0664b"
+    },
+    {
+      "id": "endgame-analysis/895871604",
+      "title": "子职业",
+      "path": "zh-chs/endgame-analysis/subclasses--895871604.csv",
+      "sha256": "651ec4dfe5cbe88cc74545f1c895179edb549ec10c887860e394b76ca85b326f",
+      "bytes": 9292,
+      "original_sha256": "246f42c40cb2112abec4b9b9ca056fe0f1b1207709ec243b04bdb2a3e073b2fc"
+    },
+    {
+      "id": "endgame-analysis/1741064497",
+      "title": "关卡",
+      "path": "zh-chs/endgame-analysis/encounters--1741064497.csv",
+      "sha256": "3c9bd3b3d6dcdb50375971be7d578985a6580b9cf21d8480dc582c00ba45606d",
+      "bytes": 17217,
+      "original_sha256": "87cd26968556aa4ddab4046798094d0bdbae2820b889f77d30b7d041ad3bb123"
+    },
+    {
+      "id": "endgame-analysis/1767006917",
+      "title": "更新记录（旧）",
+      "path": "zh-chs/endgame-analysis/changelog-old--1767006917.csv",
+      "sha256": "d04aed6fea7d505ef49879bc416190f18e683d37b2bb4399f84673ce1219759e",
+      "bytes": 5798,
+      "original_sha256": "c6a45438ab1aac79b910f89db070691120dc274ab061747d47b9b19f1c6e07f7"
+    },
+    {
+      "id": "boss-damage/1313551887",
+      "title": "首页",
+      "path": "zh-chs/boss-damage/home--1313551887.csv",
+      "sha256": "35e9031f2a9244306507e302e73140fcdd0fa52b681540f333dbadbb0033eb54",
+      "bytes": 1025,
+      "original_sha256": "394be4bf8bbf7de48e684059cf96ef0e4cb943145c28b6a00a5f9be306683176"
+    },
+    {
+      "id": "boss-damage/1268483240",
+      "title": "更新记录",
+      "path": "zh-chs/boss-damage/changelog--1268483240.csv",
+      "sha256": "ba34a9900f76ed57b676bc00906d9c5c32c837dbc7675be5cdf8413a8a7b1b7d",
+      "bytes": 24207,
+      "original_sha256": "e09aa518f7f718a0b44725eb7d3bf7364af3411847cdb570c62f79762e11d34d"
+    },
+    {
+      "id": "boss-damage/1849528083",
+      "title": "常见问题",
+      "path": "zh-chs/boss-damage/faq--1849528083.csv",
+      "sha256": "5b9a9adc8bb38447669bb92b07317e1f22d21d83cd792a71adcc3a96cde337ba",
+      "bytes": 7231,
+      "original_sha256": "ea838bfd1edf0a0dd42280c7e6b020452b2c2cb614bbd743ce98a95b22360105"
+    },
+    {
+      "id": "boss-damage/639621230",
+      "title": "装备（旧）",
+      "path": "zh-chs/boss-damage/equipment-old--639621230.csv",
+      "sha256": "453b7ff72b0c27f37bb292191fefcd557ecadfb0d38f831065f58244f5f7b975",
+      "bytes": 15407,
+      "original_sha256": "a11cba725f2d4e4852e7301832d4a2c126c89cb00be7781b549f75c90843def7"
+    },
+    {
+      "id": "boss-damage/223124500",
+      "title": "武器（旧）",
+      "path": "zh-chs/boss-damage/weapons-old--223124500.csv",
+      "sha256": "1aca8b9b9e212663b7e185ffe957ed358f524986ec7552f18701143cc9b74afb",
+      "bytes": 72221,
+      "original_sha256": "1241db667c8333650c1cd08dfe0dfe2c9e5606651997d2017431a3b93f333794"
+    },
+    {
+      "id": "boss-damage/2139128689",
+      "title": "武器",
+      "path": "zh-chs/boss-damage/weapons--2139128689.csv",
+      "sha256": "841b9f41332da409d9365898026e3fc9b54cba65210cd98e4b00c531a15beb93",
+      "bytes": 68192,
+      "original_sha256": "b8edc05c75f836db665af23c4abe15972cb69eed09de5333c4dd871895ff8124"
+    },
+    {
+      "id": "boss-damage/1439633538",
+      "title": "技能",
+      "path": "zh-chs/boss-damage/abilties--1439633538.csv",
+      "sha256": "7376699d5cfd7ab5828f5470e1856238049e28f0377bc87d84d25a28ed3b3ee0",
+      "bytes": 41247,
+      "original_sha256": "d57836123cdc3319b42e875f0293b047c4695d1dc258ea6ffb914f75ea70773c"
+    },
+    {
+      "id": "boss-damage/2104454056",
+      "title": "伤害缩放（旧）",
+      "path": "zh-chs/boss-damage/scaling-old--2104454056.csv",
+      "sha256": "488b5b9b5b30c7868694741496127f68d6102e8b4af15a849d323be44af7b7ea",
+      "bytes": 7585,
+      "original_sha256": "d30f849d3205c85fcad787436411c19573a880b790c1a5b9997f52c5a662735d"
+    },
+    {
+      "id": "boss-damage/312501241",
+      "title": "技能（旧）",
+      "path": "zh-chs/boss-damage/abilities-old--312501241.csv",
+      "sha256": "6173d7506d874982fd13b6ab23aaf49d7ee9ef448e4cf051d22c12f298a361cc",
+      "bytes": 38302,
+      "original_sha256": "049fd6eba0090dc7105965a07dc16ef1c9a0f9548f89ea24e80144a267ee8cb5"
+    },
+    {
+      "id": "boss-damage/1193280735",
+      "title": "火力战队  (S29)",
+      "path": "zh-chs/boss-damage/fireteam-s29--1193280735.csv",
+      "sha256": "71798ffff4ec24316a9c0e50bd4ec8b3c09befdc35e619d37e1e324bae9eacd4",
+      "bytes": 9426,
+      "original_sha256": "a73b28e14c957dad5abe63348746dc5f7682919096a7730964edd823302ebfb0"
+    },
+    {
+      "id": "boss-damage/1791137823",
+      "title": "图表  (S29)",
+      "path": "zh-chs/boss-damage/graphing-s29--1791137823.csv",
+      "sha256": "97af30b2ae154cb8cae56930a1cfd012fe435dbe50580f5dcdde9bb34bde7e77",
+      "bytes": 105411,
+      "original_sha256": "5b74dcf37311a1d4cd65b21ccacbd89742ea4c391c47cb5f6f310e4055fadd2c"
+    },
+    {
+      "id": "boss-damage/1455724279",
+      "title": "持续输出",
+      "path": "zh-chs/boss-damage/sustained--1455724279.csv",
+      "sha256": "9772cd492ff487eeb7d038f2b251ec5d01c1881704baea620e0e733eed2e7708",
+      "bytes": 62799,
+      "original_sha256": "092846667673726c931727f1dca0703ea7841de78b14b137eefb20f4e6fd221e"
+    },
+    {
+      "id": "boss-damage/1037279437",
+      "title": "火力战队  (S28)",
+      "path": "zh-chs/boss-damage/fireteam-s28--1037279437.csv",
+      "sha256": "80e129b234fd9b9aae35e5cbce8da7b77ad41ab9e0109b73ef94fe79d63f28b5",
+      "bytes": 4155,
+      "original_sha256": "fd0f791cbf6d6247ecfd39c6d1332cfeb80ce0b031d96182c8e50b2609081a5e"
+    },
+    {
+      "id": "boss-damage/1883709516",
+      "title": "图表  (S28)",
+      "path": "zh-chs/boss-damage/graphing-s28--1883709516.csv",
+      "sha256": "13be037e1c66a6c8b278ddff43e1cd167924db7892cf920b454fe123f634fcc1",
+      "bytes": 270627,
+      "original_sha256": "066643e9b94134666fe33a055a7d748bcdbbabc687f2a595c45e69ebb224e5b8"
+    },
+    {
+      "id": "boss-damage/544204052",
+      "title": "切枪",
+      "path": "zh-chs/boss-damage/swap--544204052.csv",
+      "sha256": "fd6ed8461ea6e487491304d919d718cd10dc15cad73e5d43408ab2c8d7820cd7",
+      "bytes": 34262,
+      "original_sha256": "47675cee0e5c5dfbaf97f702df85991b409e92e1304c4902e1738a17018739cd"
+    },
+    {
+      "id": "boss-damage/1356041045",
+      "title": "持续输出  (旧)",
+      "path": "zh-chs/boss-damage/sustained-old--1356041045.csv",
+      "sha256": "08201f3346e8bbd252d867985cb5a07e40dd34ef025bfdae1bee7ca6cebfe7a7",
+      "bytes": 52434,
+      "original_sha256": "5d514ad6518ff7f27c472fa56e3b3198188d0a378f08e6e38e2cd743322a5746"
+    },
+    {
+      "id": "boss-damage/345520689",
+      "title": "切枪  (旧)",
+      "path": "zh-chs/boss-damage/swap-old--345520689.csv",
+      "sha256": "4c38331fa062018f3513eefbe5d65ef0792049e030397a4c7e3691d0a3e0716b",
+      "bytes": 26479,
+      "original_sha256": "c36cf65eb39eb94cf9019b6e0008dc54955d96f1951f77c20461e04d6bbfdd4a"
+    },
+    {
+      "id": "boss-damage/1346678363",
+      "title": "首领",
+      "path": "zh-chs/boss-damage/bosses--1346678363.csv",
+      "sha256": "e66c2ae0643064d15b756c57890c8a17b5047250af76b2b312f94cbf20b4ca09",
+      "bytes": 11582,
+      "original_sha256": "48b23aa4f81cf3e3cb8ff0b633bcb8fc4def33def773b335fb66dc7a75af695d"
+    },
+    {
+      "id": "boss-damage/776354372",
+      "title": "集群猎人",
+      "path": "zh-chs/boss-damage/pack-hunter--776354372.csv",
+      "sha256": "f105e13cc14c573310d1808b8da91b6619cd84a51b7b22e73a538ebdd9476dd7",
+      "bytes": 1004,
+      "original_sha256": "4ede33cdd7babac7cf79fa7264b49b39f421c5aaa0d567a1932dbe7d77912d6c"
+    },
+    {
+      "id": "boss-damage/554296943",
+      "title": "故我在（旧）",
+      "path": "zh-chs/boss-damage/ergo-sum-old--554296943.csv",
+      "sha256": "91fc68ad9061ef8680c4cd86c66833f5ca381d925961ad42a1b513e3bd082b93",
+      "bytes": 4967,
+      "original_sha256": "555ec972594d173da6ad1574d49eaf31ba7ae21a6737b70162efbb8fb800697b"
+    },
+    {
+      "id": "boss-damage/1912387307",
+      "title": "超能（旧）",
+      "path": "zh-chs/boss-damage/super-old--1912387307.csv",
+      "sha256": "c6158bae79909bfe04e6014eb04cf080eff53e3fd7536a69c21b4ccd711215b3",
+      "bytes": 3891,
+      "original_sha256": "0d1b8423bab5d8482a56ed98465a9babd440589398f38dce94180325373e814f"
+    },
+    {
+      "id": "boss-damage/402419508",
+      "title": "Bolt Charge",
+      "path": "zh-chs/boss-damage/bolt-charge--402419508.csv",
+      "sha256": "52a51bdbf051b282d25ef82373ded301d0e0566b43b5b1e8e905402c21fb1903",
+      "bytes": 3016,
+      "original_sha256": "7cfb0dd1f39fbf7fa7a2929b7ca85643d39b6e125373ccc17848a12373821024"
+    },
+    {
+      "id": "boss-damage/277863849",
+      "title": "历史记录",
+      "path": "zh-chs/boss-damage/historical--277863849.csv",
+      "sha256": "096a8c1e4c79295292b229705ff06f2017b6caba306682c89a5ea15d62a7e1e9",
+      "bytes": 4427,
+      "original_sha256": "7ce87aad5a2975a87723f521a0b89144d0ea7eb22adcadf1c6363a1f562ae99d"
+    },
+    {
+      "id": "boss-damage/247390216",
+      "title": "测试",
+      "path": "zh-chs/boss-damage/testing--247390216.csv",
+      "sha256": "b781837d96e57104159e5e56195b40cf1098ba2c871861f7a3c3d3093c874a0a",
+      "bytes": 87505,
+      "original_sha256": "cfa7c46c1b2c2a22edcbe068b2460732c367f2320425e8dab05c22e8664010e7"
+    }
+  ]
+}

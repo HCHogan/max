@@ -1,0 +1,624 @@
+Go back to the top!,,,,,,Game Mechanics,,,,,,,,
+,,,,,,,,,,,,,,
+,Table of Contents,,Table of Contents,,,,,,,,,,,
+,,,,Ability Tiers and Energy Gains,,,,,,,,,,
+,,,,Activity Modifiers,,,,,,,,,,
+,,,,Armor Charge,,,,,,,,,,
+,,,,Character Stats,,,,,,,,,,
+,,,,Champions of the Darkness,,,,,,,,,,
+,,,,Combatant Information,,,,,,,,,,
+,,,,Elemental Orbs,,,,,,,,,,
+,,,,Super Ability Energy,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Ability Tiers,"Ability Tiers, and Ability Energy Generation",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,What are Ability Tiers?,,,,,,,,,,,,
+,,"Ability Tiers define the base cooldowns of all Abilities, including Class, Grenade, Melee, and Super Abilities.
+Every ability of the same type (Grenade, for example) of a certain tier will have a specified cooldown.
+
+Season of the Wish altered how effects that give a chunk % of your Ability Energy, such as Demolitionist, Bomber, Dynamo, and Momentum Transfer, interact with Ability Tiers.
+Supers remain unaffected (for now!)
+
+Ability Tiers scale %-based Energy Gains, down to x0.5 for Grenade and Class Abilities, and 0.6x for Melee Abilities.
+
+Unless explicitly stated, or if an Exotic interacts specifically with a listed Ability, all Ability Energy Gains are affected by Ability Tier Energy Scaling.",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Ability Tier Chunk% Energy Scaling,,,,,,,,,,,,
+,,Grenade Abilities,,,Melee Abilities,,,Class Abilities,,,,,,
+,,Base Cooldown,Energy Multiplier,,Base Cooldown,Energy Multiplier,,Base Cooldown,,Energy Multiplier,"Class Mod Multiplier
+Bomber, Outreach, Distribution",,,
+,,152,0.5,,137,0.6,,"100 – 70
+Acrobat's Dodge | Rifts | Other Barricades",,0.5,1,,,
+,,121,0.625,,114 – 111,0.7,,"55 – 38
+Phoenix Dive | Gambler's Dodge",,0.8,0.6,,,
+,,105,0.75,,101 – 100,0.8,,"38 – 29
+Marksman's Dodge | Thruster | Rally Barricade",,1,0.4,,,
+,,91,0.875,,91 – 82,0.9,,"70
+Icefall Mantle",,1,1,,,
+,,82,0.85,,40,1,,"70
+(Spirit of) Hoarfrost-Z",,1,0.4,,,
+,,73 – 64,1,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Activity Modifiers,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Modifier,,Description,,,,,,,,,,
+,,Air Superiority,,Airborne Combatants deal ?% Increased Damage.,,,,,,,,,,
+,,Arach-NO!,,"Fallen Vandals spawn a Web Mine on death.
+
+Web Mines trigger upon being within ? meters, detonating after ? seconds, dealing Arc Damage, reducing Movement Speed by ?% and disorienting.
+Web Mines can be safely shot while on the ground or while being triggered.",,,,,,,,,,
+,,Ashes to Ashes,,"Dealing Solar Weapon Damage inflicts x?+? Scorch.
+Incurs a ? second cooldown before additional Scorch can be inflicted.
+
+Combatants inflict x? Scorch upon dealing Solar or Explosive Damage.
+Incurs a ? second cooldown before addiitonal Scorch can be received.",,,,,,,,,,
+,,Blackout,,"Combatants deal ?% Increased Melee Damage.
+
+Radar is disabled.",,,,,,,,,,
+,,Blasts,,Combatants deal ?% Increased Explosive Damage.,,,,,,,,,,
+,,Brawler,,"100% Increased Melee Damage.
+
+?x Melee Ability Regeneration Speed.",,,,,,,,,,
+,,Brawn,,"Passively grants an additional +50 Health and +250 Shields.
+Equals to 150% increased Health at T10 Resilience | 120 Health and 380 Shields = 500 HP
+
+Passive Health Regeneration is completely disabled.
+
+Scoring an Elite+ Combatant Kill begins Health Regeneration for the Brawny Boi and their allies within ? meters.",,,,,,,,,,
+,,Chaff,,Radar is disabled.,,,,,,,,,,
+,,Chill Touch,,Combatant Melee Attacks inflict x? Slow for ? seconds.,,,,,,,,,,
+,,Class Warfare,,"On Class Ability Usage:
+Grants the Best Class Enjoyer and their allies a stack of Class Warfare for 15 seconds, up to 3 stacks.
+
+Class Warfare:
+10% | 15% | 20% Increased Weapon Damage.
+20% Damage Resist.",,,,,,,,,,
+,,Counterfeit,,"Combatants have a 10% chance to drop Loot-shaped Explosives on death.
+
+The Loot-shaped Explosives are triggered upon being within ? meters, detonating after 3 seconds, dealing Arc Damage.
+Loot-shaped Explosives glow while within ? meters, and can be shot to instantly explode.
+-Trickster left you a present, huh? Hah. I always hated her.",,,,,,,,,,
+,,Denial,,"Taken Combatants are granted +100 Intellect while Ward of Dawn is equipped.
+Taken Vandals' Shield Cooldown is reduced by ?%.",,,,,,,,,,
+,,Elemental Hunger,,"Grants a 🍔Hunger meter that constantly drains at a rate of 2% 🍔Hunger every second.
+Scoring a Modifier-Matching Hit grants 5% 🍔Hunger meter.
+
+While 🍔Hunger is below 50%:
+Elemental Starvation | 50% Increased Modifier-Matching Incoming Damage
+Seemingly no effect on Ability Regeneration?
+
+While 🍔Hunger is between 50% and 99%:
+Elemental Hunger | No positive or negative effects. 
+
+Upon reaching 🍔100% Hunger:
+Grants Ability Surge for 20 seconds.
+750% Additional Base Grenade, Melee, Class, and Super Ability Regeneration Rate.",,,,,,,,,,
+,,Elemental Surge,,"25% Increased Modifier-Matching Outgoing Damage.
+Applies to ALL sources of said element.
+
+Does not stack with Overcharge Weapons.",,,,,,,,,,
+,,Elemental Threat,,All Modifier-Matching Incoming Damage is increased by 25%.,,,,,,,,,,
+,,Epitaph,,"Taken Combatants spawn a Arc? Blight Geyser on death.
+
+Blight Geysers deal Arc? Damage and inflict heavy knockback after ? seconds.",,,,,,,,,,
+,,Famine,,"Ammo Bricks spawn significantly less.
+¯\_(ツ)_/¯",,,,,,,,,,
+,,Fire Pit,,"Hive Acolytes spawn a Fire Pit on death.
+
+Fire Pits deal Solar Damage for ? seconds.",,,,,,,,,,
+,,Grenadier,,"100% Increased Grenade Damage.
+
+?x Grenade Ability Regeneration Speed.",,,,,,,,,,
+,,Grounded,,"While Airborne:
+?% Increased Incoming Damage.",,,,,,,,,,
+,,Haste,,"While Movement Speed is ≤? meters per second for ? seconds:
+Triggers Danger, Keep Moving! for 4 seconds, then deals 15? damage every second until Movement Speed is ≤? meters per second.
+
+While maintaining both sprint and a movement speed of at least 5m/s:
+Continuously restores 5? HP/s.",,,,,,,,,,
+,,Heavyweight,,"?% Increased Power Weapon Damage.
+
+Heavy Ammo Bricks drop with increased frequency. ¯\_(ツ)_/¯",,,,,,,,,,
+,,Hot Knife,,Fallen Shanks always have Solar Shields.,,,,,,,,,,
+,,Iron,,Combatants have ?% increased health and never flinch.,,,,,,,,,,
+,,Martyr,,Exploder Combatants have ?% increased health.,,,,,,,,,,
+,,Oscillation,,"Dealing damage with Long Range Weapons reduces their damage, and increases Short Range Weapons damage, and vice versa.
+Long Range = Scout Rifle, Pulse Rifle and Grenade Launchers | Short Range = Submachine Gun and Shotguns
+All other Non-Power Weapon Types deal 50% decreased damage.
+
+Scout Rifles and Pulse Rifles scale up to 300% increased damage, down to 35% decreased damage over 50 shots.
+Grenade Launchers scale up to 200% increased damage, down to 50% decreased damage over 14 shots.
+
+Submachine Guns scale up to 200% increased damage, down to 35% decreased damage over 80 shots.
+Shotguns scale up to 200% increased damage, down to 50% decreased damage over 16 shots.
+
+Weapons maintain their maximum damage while at x3 Boost, up to midway through x2 Boost.
+Weapons maintain their base damage up to x1 Decay.
+Going from maximum Boost to Decay, and from maximum Decay to Boost requires scoring the aforementioned amount of shots.
+
+Poison Damage from Thorn and Osteo Striga is unaffected by the Boost/Decay multipliers and do not affect the Oscillation counter.",,,,,,,,,,
+,,Overcharged Weapons,,"Seasonal Artifact Overcharge Perks are active.
+Kinetic Weapons become Overcharged while the equipped Super Ability matches an active Elemental Surge.
+
+Weapons with intrinsic Breaker Effects will not become Overcharged from Artifact Perks.
+
+For example:
+Leviathan's Breath, Le Monarque, and Wish-Ender will not become Overcharged, regardless of the Artifact giving Shield-Piercing, Disruption, or Stunning effects. 
+Leviathan's Breath and Le Monarque would only become overcharged if either Overcharged Bows is active, or if their Damage Type matches the current Surge.
+ In Wish-Ender's case, it would only work if Overcharged Bows is active, or if the equipped Super Ability matches the active Elemental Surge.
+
+Overcharged Weapons:
+25% increased damage.
+Does not stack with Activity Surges.",,,,,,,,,,
+,,Pestilence,,"Cabal Psions spawn a Void Grenade on death.
+
+Void Grenades deal Void Damage after ? seconds.",,,,,,,,,,
+,,Scorched Earth,,"Combatants have 1,000% Additional Base Grenade Regeneration Rate. Sorry, old habit.
+Combatants' Grenade Cooldown is reduced by ?%.",,,,,,,,,,
+,,Shocker,,"Vex Goblins spawn an Arc Pool on death.
+
+Arc Pools deal Arc Damage for ? seconds.",,,,,,,,,,
+,,Shot Caller,,"Upon scoring 3 Precision Hits within ? seconds of each:
+Grants Shot Caller for 15 seconds.
+
+Shot Caller:
+20% Increased Special and Power Weapon Damage.
+20% Damage Resist.",,,,,,,,,,
+,,Counterfeit,,"Combatants have a 1% chance to drop ↑5★★★★★ Mythic Loot on death.
+
+The ↑5★★★★★ Mythic Loot unboxes itself after 3 seconds.",,,,,,,,,,
+,,,,,,,,,,,,,,
+,Armor Charges,Armor Charge,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,What are Armor Charges?,,,,,,,,,,,,
+,,"Armor Charges are a resource used by Armor Charge Mods, activating certain Passive Effects while Armor Charges are active, or consuming Armor Charges in exchange for an instantaneous effect. 
+
+By default, you can only hold up to 3 stacks of Armor Charge. Picking up any Orb of Power while any Armor Charge mod is equipped will grant x1 Armor Charge.
+Maximum Armor Charge Stacks can be increased to x4 | x5 | x6 by equipping the Charged Up Chest Armor Mod.
+
+Passive Mods grant a temporary effect while Armor Charges are active dependent on the mods used without needing a special interaction.
+Equipping any active Passive Mod will decay x1 Armor Charge every 10 seconds.
+Decay Timer is reset every time an Armor Charge is consumed or decayed.
+
+The Decay Timer can be extended to 15 [18] {20} seconds by equipping the Time Dillation Armor Mod in the Class Item.",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Character Attributes,Character Stats,,,,,,,,,,,,
+,,Mobility,,,,Resilience,,,,Recovery,,,,
+,,,,,,,,,,,,,,
+,,Discipline,,,,Intellect,,,,Strength,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Mobility,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Mobility Stat,Mobility Stat,,,,,,,,,,,,
+,,"Mobility is the Stat that governs the majority of Movement Speed. It increases Initial Jump Height, Movement Speed, and lowers the Hunter Dodge Cooldown. 
+It does NOT affect Sprint Speed.
+
+Movement Speed increases in increments of 4% Movement Speed per Tier, maxing out at 40% at T10.",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Mobility In-Depth,Movement Speed In-Depth,,,,,,,,,,,,
+,,"The base movement speed is 5 meters per second, which is the equivalent of moving forwards at T0 Mobility.
+Sprinting moves forward at a speed of 8 meters per second.
+
+Base Movement Speed (Moving Forward, including diagonally to the left and right) cannot exceed 9 meters per second. This includes Sprinting Speed.
+Strafe Movement (Left, Right, or Backward) has a 0.85x Movement Speed Multiplier, and cannot exceed 6 meters per second.
+
+ADS has a 0.75x Movement Speed Multiplier, and adheres to either the Forward or Strafe movement speed cap. Sidearms have a 0.85x Movement Speed Multiplier.
+Crouching Speed has a 0.55x Movement Speed Multiplier that cannot exceed 4 meters per second.
+
+All Movement Speed Multipliers stack with each other.
+Eg: T5 Mobility (6.00m/s), while ADS (0.75x), while strafing (0.85x) = 3.83 meters per second.
+Eg: T10 Mobility (7.00m/s) while ADS (0.85x), while moving forwards, while using a Lightweight Gun (1.0625x) = 6.32 meters per second",,,,,,,,,,,,
+,Mobility Tier,0,1,2,3,4,5,6,7,8,9,10,,
+,"Walk Speed
+ [m/s]",5.00,5.20,5.40,5.60,5.80,6.00,6.20,6.40,6.60,6.80,7,,
+,Strafe Speed [m/s],4.25,4.42,4.59,4.76,4.93,5.10,5.27,5.44,5.61,5.78,5.95,,
+,Crouch Speed,2.75,2.86,2.97,3.08,3.19,3.30,3.41,3.52,3.63,3.74,3.85,,
+,Sprint Speed,"Base Movement Speed of 8 meters per second.
+ DOES NOT CHANGE WITH MOBILITY, ONLY WITH LIGHTWEIGHT WEAPONS AND SPRINT BONUSES, BOTH OF WHICH ADDITIVELY GRANT 6.25% FASTER SPRINT SPEED UP TO 12.5%",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Resilience,Resilience,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Resilience Stat,Resilience Stat,,,,,,,,,,,,
+,,"Resilience determines the strength of the Shield portion of the Health Bar.
+It additionally grants Flinch Resist, and Damage Resistance against Combatants.
+
+Shields range from 115 to 130 HP, depending on the Resilience Tier.
+""Critical"" Health is not affected by Resilience, and is always 70 [100] HP and has 33.34% Damage Resistance against Combatants.
+
+Resilience also affects the Titan Barricade Cooldown, Stasis Breakout Damage and Damage Multiplier from Bosses against Well of Radiance and Ward of Dawn.",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Resilience In-Depth,Health In-Depth,,,,,,,,,,,,
+,Resilience Tier,0,1,2,3,4,5,6,7,8,9,10,,
+,Shield Amount,115,116,117,118,119,120,122,124,126,128,130,,
+,Health Amount,70,70,70,70,70,70,70,70,70,70,70,,
+,Total Health,185,186,187,188,189,190,192,194,196,198,200,,
+,Flinch Resistance,0%,1%,2%,3%,4%,5%,6%,7%,8%,9%,10%,,
+,Resist against Combatants,0%,2%,3%,5%,9%,14%,17%,20%,24%,27%,30%,,
+,,,,,,,,,,,,,,
+,Recovery,Recovery,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Recovery Stat,Recovery Stat,,,,,,,,,,,,
+,,"Recovery determines the delay before Health and Shields begin to recover, as well as the healing rate, decreasing the time taken to fully heal by up to 43%.
+Additionally, Recovery also alters the Warlock Rift Cooldown.",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Recovery In-Depth,Recovery Mechanics,,,,,,,,,,,,
+,,"Recovery is divided into 2 parts, the Regeneration Delay, and the Regeneration Rate.
+
+The Regeneration Delay is inversely proportional to the Recovery Stat, and its timer is reset every time you receive more than 1.35 damage.
+ Health Regeneration begins at 3.25 seconds, and goes down up to 1.75 seconds at Tier 10. 
+Shield Regeneration always begins 2.25 seconds after Health Regeneration (5.5 seconds at base, 4 seconds at Tier 10)
+
+The Regeneration Rate is increasingly higher as your Recovery Stat increases.
+Health and Shield Regeneration each start at 29% per second, maxing out at 50% at Tier 10.
+
+Because Health and Shield Regeneration are not on identical timers, both Health and Shields can regenerate simultaneously.",,,,,,,,,,,,
+,Recovery Tier,0,1,2,3,4,5,6,7,8,9,10,,
+,Health Regen Delay,3.25,3.15,3.05,2.95,2.85,2.75,2.65,2.45,2.25,2.05,1.75,,
+,Shield Regen Delay,5.5,5.4,5.3,5.2,5.1,5,4.9,4.7,4.5,4.3,4,,
+,Health Regen Time,3.45,3.35,3.25,3.15,3.05,2.95,2.85,2.65,2.45,2.25,2,,
+,Shield Regen Time,3.5,3.4,3.3,3.2,3.1,3,2.9,2.7,2.5,2.3,2,,
+,Health+Shield Regen Time,5.75,5.65,5.55,5.45,5.35,5.25,5.15,4.95,4.75,4.55,4.25,,
+,Total Regen Time,9,8.8,8.6,8.4,8.2,8,7.8,7.4,7,6.6,6,,
+,Difference between Tiers,-0.2 seconds per Tier.,,,,,,,-0.4 seconds per Tier.,,,-0.6 seconds,,
+,,,,,,,,,,,,,,
+,Discipline,Discipline,,,,,,,,,,,,
+,,,Grenade Cooldown,,,,,,,,,,,
+,,"Discipline determines the cooldown for Grenade Abilities.
+All Grenade Abilities share the same % benefits from Discipline, only their Base Cooldown is different.",,,,,,,,,,,,
+,Discipline Tier,0,1,2,Base (3),4,5,6,7,8,9,10,,
+,Ability Regeneration Rate,0.7,0.8,0.9,1,1.1,1.2,1.3,1.4,1.55,1.75,2,,
+,,,,,,,,,,,,,,
+,Intellect,Intellect,,,,,,,,,,,,
+,,Passive Super Regeneration,,,,,,Active Super Regeneration,,,,,,
+,,,,,,,,,,,,,,
+,,Passive Super Regeneration,,,,,,,,,,,,
+,,Intellect determines the (passive) cooldown for Super Abilities.,,,,,,,,,,,,
+,Intellect Tier,0,1,2,Base (3),4,5,6,7,8,9,10,,
+,Ability Regeneration Rate,0.69,0.78,0.87,1.00,1.06,1.11,1.16,1.22,1.25,1.29,1.31,,
+,,,,,,,,,,,,,,
+,,Active Super Regeneration,,,,,,,,,,,,
+,,Head over to Super Ability Energy for a more detailed explanation.,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Strength,Strength,,,,,,,,,,,,
+,,,Melee Cooldown,,,,,,,,,,,
+,,"Strength determines the cooldown for Melee Abilities.
+All Melee Abilities share the same % benefits from Strength, only their Base Cooldown is different.",,,,,,,,,,,,
+,Strength Tier,0,1,2,Base (3),4,5,6,7,8,9,10,,
+,Ability Regeneration Rate,0.70,0.80,0.90,1.00,1.10,1.20,1.30,1.40,1.55,1.75,2.00,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Champions of the Darkness,Champions of the Darkness,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Barrier Champions,,,,,,,,,,,,
+,,"Barrier Champions summon an impenetrable Shield once their Health is lowered past a difficulty-determined HP Threshold. 
+Barrier Champions constantly regenerate a portion of their Health while shielded.
+
+The Shield can be pierced through the usage of Anti-Barrier Effects, Weapon Damage while Radiant, Volatile Rounds or Unraveling Rounds, stunning the Champion for a brief time.
+ The Shield's Durability is determined by difficulty.
+
+Stunning prevents the Champion from attacking, moving, or using any abilities.
+Dealing damage to the Shield briefly stops Health Regeneration.
+
+Additional Shield-Piercing Effects:
+Unlimited enemy overpenetration.
+Primary Ammo Weapons deal 10% increased damage towards Frozen Enemies.
+Ignores Hydra Shields, Hobgoblin Immunity, (Taken) Phalanx Shields, and Scorn Buckler Shields.
+Weapons deal 30% increased damage towards Titan Barricades.",,,,,,,,,,,,
+,,Information,,,Standard,"Raid
+(Expert/Master)",Advanced,Expert,"Master
+Grandmaster",Activity Difficulty governs the difficulty of the Champion Mechanics.,,,,
+,,Champion Health,,,2200 HP,3300 HP,4400 HP,5000 HP,5475 HP,"Champion Health is shared between all Races and Champion Types.
+Master Difficulty Champion Health is reduced to Expert-Tier Health.",,,,
+,,Shield Health,,,210,~333,~333 HP,~410 HP,~445 HP,Shield Health is equal to ~10% of the Champion's Health. ,,,,
+,,Shield Summon Threshold,,,60%,60%,60%,75%,85%,"Champion automatically attempts to summon the Shield upon reaching the Health Threshold. 
+Staggers can delay Shield Summoning.",,,,
+,,Health Regeneration while Shielded,,,15% HP/s,15% HP/s,15% HP/s,30% HP/s,45% HP/s,Health is continuously restored at a rate of 1% HP every 0.066 | 0.066 | 0.066 | 0.033 | 0.022 seconds.,,,,
+,,Time to Regen Health upon Shielding,,,0.8 seconds.,,,,,"There is a 0.8 seconds delay upon shielding before Health Regeneration occurs.
+Difficulty does not alter the timer.",,,,
+,,Maximum Shield Duration,,,5,,,,,The Shield lasts for 5 seconds.,,,,
+,,Health Regeneration Delay upon receiving Shield-Piercing Damage,,,1.6 seconds.,,,,,"Dealing any Shield-Piercing Damage immediately halts Health Regeneration, and delays it by 1.6 seconds.",,,,
+,,Stun Duration in Seconds after Shield Break,,,[?],7,7,6,5.5,Champion is stunned for X | 7 | 7 | 6 | 5.5 seconds.,,,,
+,,Shield Lockout after Shield Break,,,[?],7,7,6,5.5,Champion is unable to summon the Shield for a short period of time after being stunned.,,,,
+,,,,,,,,,,,,,,
+,,Overload Champions,,,,,,,,,,,,
+,,"Overload Champions passively restore their Health over time, use abilities and weapons more frequently, and move erratically unless stunned through Disruption.
+Stunning prevents the Champion from attacking, moving, or using any abilities.
+
+Overload Champion Stunning Application:
+ Arc Jolt stuns upon dealing damage to the Champion.
+Stasis Slow stuns upon inflicting Slow Stacks to the Champion.
+ Void Suppression stuns upon suppressing the Champion.
+
+Additional Disruption Effects:
+Combatants become exhausted, dealing 25% decreased damage for 5 seconds.
+0.4x Grenade, Melee, and Class Ability Regeneration Speed for 5 seconds.
+Disruption can be refreshed by reapplying the effect.",,,,,,,,,,,,
+,,Information,,,Standard,"Raid
+(Expert/Master)",Advanced,Expert,"Master
+Grandmaster",Activity Difficulty governs the difficulty of the Champion Mechanics.,,,,
+,,Champion Health,,,2200 HP,3300 HP,4400 HP,5000 HP,5475 HP,"Champion Health is shared between all Races and Champion Types.
+Master Difficulty Champion Health is reduced to Expert-Tier Health.",,,,
+,,Passive Health Regeneration,,,4.5% HP/s,4.5% HP/s,4.5% HP/s,13.65% HP/s,27.4%,"Health is continuously regenerated by 1% HP every 0.22 | 0.22 | 0.22 | 0.073 | 0.037 seconds.
+Frozen Overload Champions continuously regenerate 4.5% HP/s, regardless of Difficulty.",,,,
+,,Stun Duration in Seconds after Disrupting,,,[?],7,7,6,5.5,Champion is stunned for X | 7 | 7 | 6 | 5.5  seconds.,,,,
+,,Cooldown between Stuns in Seconds,,,N/A,N/A,N/A,2.5,4.5,"Time that must pass before a new stun can occur, counting from when the previous stun is over.",,,,
+,,Time to Heal after Disrupting in Seconds ,,,6.5 seconds,,,,,"Health only starts regenerating if the Champion remains undisrupted for 6.5 seconds.
+ Reapplying Disruption refreshes the duration to 6.5 seconds.",,,,
+,,,,,,,,,,,,,,
+,,Unstoppable Champions,,,,,,,,,,,,
+,,"Unstoppable Champions relentlessly chase enemies, and possess 70% Damage Resist unless stunned. 
+Damage Numbers visually appear as Italic Desaturated Pink Numbers
+Stunning removes the Damage Resist and prevents the Champion from attacking, moving, or using any abilities for the duration of the stun.
+
+Stunning Methods outside of Unstoppable Shots:
+Arc Blind Application
+Solar Ignition Application
+Stasis Frozen Shatter Damage
+ Strand Suspension Application",,,,,,,,,,,,
+,,Information,,,Standard,"Raid
+(Expert/Master)",Advanced,Expert,"Master
+Grandmaster",Activity Difficulty governs the difficulty of the Champion Mechanics.,,,,
+,,Champion Health,,,2200 HP,3300 HP,4400 HP,5000 HP,5475 HP,"Champion Health is shared between all Races and Champion Types.
+Master Difficulty Champion Health is reduced to Expert-Tier Health.",,,,
+,,Damage Resistance,,,70% Damage Resist,,,,,Champion decreases all incoming damage by 70% while unstunned.,,,,
+,,Stun Duration in Seconds after Disrupting,,,[?],7,7,6,5.5,Champion is stunned for a minimum of X | 7 | 7 | 6 | 5.5 seconds.,,,,
+,,Cooldown between Stuns in Seconds,,,N/A,N/A,N/A,2.5,4.5,"Time that must pass before a new stun can occur, counting from when the previous stun is over.",,,,
+,,,,,,,,,,,,,,
+,Combatant Classification,Combatant Classification,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Combatant Tiers,,,,,,,,,,,,
+,,"Combatants are divided into 4 different tiers. Each tier groups enemies within a certain range of Health.
+
+Elite Combatants have their Tier increased by +1 compared to their Rank-and-File equivalent.
+E.g: Psion (Tier 1) -> Elite Psion (Tier 2)
+Vandal (Tier 2) -> Elite Vandal (Tier 3)
+
+Champions, Minibosses, and Bosses are exempt from the Tier System, and will count as either the highest possible Tier, or have their own specific classification.
+
+Combatant Tiers affect the Ability Energy Gains and Effect Triggers, such as the Weapon Perks Headstone and Unrelenting, Fragments such as Ember of Searing and Whisper of Refraction, Exotics, like Vex Mythoclast and Promethium Spur, as well as certain Armor Mods.",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Combatant List,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,"Combatant Tier
+Rank-and-File Combatants",Cabal,Fallen,Hive,Vex,Taken,Scorn,Dread,"Massive thanks to MossyMax for his Outgoing Damage Scaling Spreadsheet, which further details how HP enemy scales throughout different Activities, and more!",,,,
+,,,,,,,,,,,,,,
+,,Tier 1 Combatant,"Psion
+Scorpius
+War Beast","Exploding Shank
+Dreg
+Shank
+Tracer Shank
+Wretch","Cursed Thrall
+Thrall",Fanatic,Thrall,"Screeb
+Stalker
+Ravager",-,"Combatant Tiers =/= Combatant Ranks
+
+Combatant Tiers are a classification used for effects that scale based on how strong an enemy is, such as for Devour's Grenade Energy Gains.
+
+Combatant Ranks affect the Tier System:
+Elite Combatants are granted +1 Tier over their RnF equivalent.
+Minibosses, Tormentors, Champions are placed at Tier 5.
+Bosses are placed at Tier 6.
+
+Examples:
+Rank-and-File Vandal (T2) -> Elite Vandal (T3)
+Rank-and-File Captain (T3) -> Elite Captain (T4) -> Overload Champion (T5)
+
+For effects that don't have an established value for Tier 4–6, their next highest value is instead used. Vehicles are wildly inconsistent.
+
+Examples:
+Point-Contact Cannon Brace has Tiers 1–6, so every Combatant Tier works for it.
+Devour has Tiers 1–4, so Minibosses and Bosses will be treated as T4 for it.",,,,
+,,Tier 2 Combatant,"Incendior
+Legionary
+Phalanx","Marauder
+Vandal",Acolyte,"Harpy
+Hobgoblin
+Goblin","Acolyte
+Goblin
+Hobgoblin
+Phalanx
+Vandal","Lurker
+Raider","Attendant
+Grim
+Husk
+Weaver",,,,,
+,,Tier 3 Combatant,"Centurion
+Gladiator",Captain,"Knight
+Wizard",Minotaur,"Captain
+Centurion
+Knight
+Minotaur
+Wizard","Chieftain
+Wraith",-,,,,,
+,,Tier 4 Combatant,Colossus,"Brig
+Heavy Shank
+Servitor","Shrieker
+Ogre","Cyclops
+Hydra
+Wyvern",Ogre,Abomination,"Subjugator
+Tormentors
+Omen",,,,,
+,,"Need information about Combatant Ranks, instead of their Tiers? Head over to Court's Infographic to find out about their interactions!",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Combatant Shields,,,,,,,,,,,,
+,,"Shielded Combatants are equipped with auto-recharging Elemental Shields that protect against Precision Damage and stagger/flinch.
+Shields begin recharging after 5 seconds of not receiving damage, or 5.5 seconds if broken, at a rate of 13.3% Shields every 0.2 seconds (66.6%/s), being fully restored after 1.5 seconds.
+
+Elemental Damage deals 100% increased damage to Shields compared to Kinetic Damage.
+Matching Elemental Damage deals 200% increased damage to Shields compared to Kinetic Damage, or 50% increased damage compared to Non-Matching Elemental Damage.
+
+The ratio between damage dealt to Shields vs Health scales with activity difficulty, with higher difficulties having a much higher ratio.",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Combatant Overshields,,,,,,,,,,,,
+,,"Combatants are able to receive Overshields from multiple different sources, each with different interactions.",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Lucent Hive Moth Overshields,,,,,,,,,,,,
+,,"Lucent Hive can spawn with a Lucent Moth that bestows an Overshield to the wearer.
+Lucent Moths deattach when the Overshield is depleted, attempting to fly to another Lucent Hive Combatant without a Lucent Moth.
+
+Lucent Moths mid-flight can be detonated by damaging them, resulting in an explosion that deals up to ? Arc Damage over ? meters.
+
+stuff",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Shadow Legion Cabal Tech Packs,,,,,,,,,,,,
+,,"Shadow Legion Cabal can spawn with a Tech Pack that bestows an Overshield to the wearer.
+Cabal Combatants equipped with the Tech Pack will drop it on death, deploying it on the ground for 20 seconds, bestowing Cabal Combatants within ? meters with a stronger Overshield.
+
+Tech Pack Overshield begins recharging after 3.25 seconds at a rate of 60% Overshield/s.",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Combatant Banes,,,,,,,,,,,,
+,,"Non-Boss Combatants in Expert+ activities can spawn with Banes, enhancing the enemies with uniquely disruptive abilities.
+
+Combatants with Banes possess 35% Damage Resist against all damage.",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Bane Types,,,,,,,,,,,,
+,,Drain,,"Drain Bane Combatants instantly tether to all Guardians in line of sight within 50 meters, inflicting Umbral Drain on them.
+Tether is removed upon losing line of sight or by being over 50 meters away.
+Invisible Guardians cannot be targeted by the Drain Bane Combatant.
+
+Umbral Drain deals Moderate Non-Lethal Void Damage every ? seconds.
+
+Inflicting Suppression on the Drain Bane Combatant will disable its draining abilities while the debuff is active.
+Invisible Guardians are not able to be tethered.",,,,,,,,,,
+,,Healing,,"Healing Bane Combatants Bestows Health Regeneration to a maximum of 10? Combatants within 20 meters.
+Combatants with the Health Regeneration buff continuously restore HP.
+Rank-and-File Combatants restore 2.25% HP every 0.1 seconds (22.5% HP/s).
+Elite Combatants restore 1% HP every 0.1 seconds (10% HP/s).
+
+Healing Bane Combatants are unable to restore health to Champions, Bosses, or itself.
+
+Inflicting Suppression on the Healing Bane Combatant will disable its healing abilities while the debuff is active.",,,,,,,,,,
+,,Hypernova,,"Nuclear Bane Combatants trigger a Self-Destruct Sequence after being lowered to 67% Health.
+
+Self-Destruct Sequence:
+Ocurrs over 7 seconds, ending in an explosive blast that deals Massive Solar? Damage to all Guardians over 40 meters, killing the Bane Combatant in the process.
+Nuclear Bane Combatants receive an additional 50% Damage Resist and restore 8.25% HP/s.
+
+Self-Destruct can be safely aborted by killing the Nuclear Bane Combatant.
+Self-Destruct can also be avoided by being in cover or being over 40 meters away.",,,,,,,,,,
+,,Meteors,,"Meteor Bane Combatants send out 3 Solar Meteors every 20 seconds.
+
+Meteors track to nearby Guardians within 60 meters, exploding on contact and dealing Moderate? Solar Damage.
+
+Meteors can be destroyed by shooting at them, making them collide on surfaces, or avoided by taking cover.
+
+Invisible Guardians are not able to be tracked.",,,,,,,,,,
+,,Mines,,"Mine Bane Combatants release 4 Proximity-Triggered Mines in a ♦️diamond formation on death.
+
+Mines deal ? Damage, and can be destroyed by dealing damage to them.
+
+Inflicting Suppression on the Mines Bane Combatant will prevent them from releasing mines on death.",,,,,,,,,,
+,,Pummel,,"Pummel Bane Combatants have an Immunity Shield until Physical Melee Damage is received.
+Despite the Immunity Shield, they are susceptible to crowd control effects such as Slow, Freeze, and Suspend.
+Glaive Melee and Sword Attacks can break the Immunity Shield.
+
+Breaking the Immunity Shield causes the Pummel Bane Combatant, as well as other combatants within ? meters to be disoriented for 4 seconds.",,,,,,,,,,
+,,Shielding,,"Shielding Bane Combatants bestow a Void Overshield to a maximum of 10 Combatants within 20 meters.
+Void Overshield has 2500 HP, does not receive Precision Multipliers or Energy Weapon Multipliers, but receives 450% increased damage, reducing it to 450 eHP.
+""Void"" Overshield is not actually a Void Shield, and will not receive increased damage from Void sources.
+
+Shielded Combatants continuously regenerate their Void Overshield at a rate of 600 (108eHP) Overshield HP/s (40%/s).
+Breaking the Void Overshield inconsistently prevents Void Overshield regeneration for ~2 seconds.
+
+Shielding Bane Combatants are unable to bestow Overshields to Champions, Bosses, or itself.
+
+Inflicting Suppression on the Shielding Bane Combatant will disable its shielding abilities while the debuff is active.
+
+Killing the Shielding Bane Combatant will instantly remove all Overshields it bestowed.",,,,,,,,,,
+,,Shock,,"Shock Bane Combatants build up a Shock Charge over ? seconds, and tether to Guardians within 30 meters and in line of sight.
+Shock Charge is discharged to tethered Guardians, dealing Severe Arc Damage to them.
+
+Inflicting Suppression on the Shock Bane Combatant will disable Shock Charge build up while the debuff is active.
+Invisible Guardians are not able to be tethered.
+
+Shock Bane Combatants explode on death, inflicting ? Arc Damage to a combatant within 15 meters.",,,,,,,,,,
+,,Slowing,,"Projects a slowing field over ? meters.
+Guardians inside the slowing field are instantly inflicted x10 Slow, followed by x5 Slow every 0.3 seconds while remaining inside.
+
+Inflicting Suppression on the Slowing Bane Combatant will disable its slowing field while the debuff is active.",,,,,,,,,,
+,,Zealous,angy,"Zealous Bane Combatants bolster Combatants within 20? meters on death by enraging them.
+Enraged Combatants become aggressive and shoot more frequently in longer bursts.
+
+Enraged Combatants explode after being enraged for 20 seconds, dying in the process.
+Explosion can harm Guardians, dealing High Void? Damage, and inflicting heavy knockback.
+
+Zealous Bane Combatants, as well as Enraged Combatants are unaffected by Blind, Disorient, and Suppression, but remain susceptible to other CC effects.",,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Elemental Orbs,Elemental Orbs,,,,,,,,,,,,
+,,"Elemental Orbs were Subclass-themed throwable pickups.
+
+Subclass-Matching Weapon Kills progress a counter that spawns an Elemental Orb upon reaching 100% if the relevant Artifact Perk is active.
+
+Counter System:
+Combatants = 25?% | Guardians = 50%",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Orb Mechanics,,,,,,,,,,,,
+,,"Elemental Orbs remain on the ground for up to 20 seconds before expiring.
+Orbs that are picked up can be held for up to 20 seconds.
+
+Thrown Orbs apply an Elemental Debuff and deal up to 450 [100] damage to enemies within 5? meters.
+Elemental Orb Kills count as Weapon Kills, and are able to activate On-Kill effects, such as Siphon, Ammo Finder, and Spark of Discharge.
+
+Arc Elemental Orbs apply Jolt. Kills from Jolt's chain lightning do not count as Elemental Orb Kills, and are not affected by Elemental Orb Damage Increases.
+
+Solar Elemental Orbs apply x40+20 Scorch. Kills from Solar Effects that were initially triggered by Orbs count as Elemental Orb Kills.
+Solar Effects' Damage is affected by Elemental Orb Damage Increases, such as S22's Frenzied Stacks.
+
+Void Elemental Orbs apply Volatile. Kills from Volatile Explosions do not count as Elemental Orb Kills, and are not affected by Elemental Orb Damage Increases.",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Super Ability Energy,Super Ability Energy,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Active Generation,Active Generation,,,,,,,,,,,,
+,,"Dealing and receiving damage, as well as Kills and Assist all directly contribute to charging your Super Ability.
+Overkill Damage does not count for Super Generation.
+
+Primary Weapons have the greatest Damage to Super Ratio.
+All other damage sources are uniquely tweaked, generally being considerably slower than Primary Weapons.
+Varies heavily between Weapon Archetype.
+
+Super Energy Gain from kills scale based on the Enemy Rank Tier, as well as Mods and Perks. Assists are worth half a kill.
+
+Super Tiers grant an additional multiplier to Active Generation.
+T1 = -20% | T2 = -10% | T3 = 0% | T4 = +10% | T5 = +20%",,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,"Super Energy from Kills, Orbs of Power, and Other Sources.				","Super Energy from Kills, Orbs of Power, and Other Sources.",,,,,,,,,,,,
+,,Rank Classification,,Super Energy,,,,Orb of Power,,,Super Energy,,,
+,,Tier 1 Combatant,,0.60%,,,,Reaper x1 | Firepower x1 | Heavy Handed x1,,,0.80%,,,
+,,Tier 2 Combatant,,0.96%,,,,Reaper x2 | Firepower x2 | Heavy Handed x2,,,1.10%,,,
+,,Tier 3 Combatant,,0.99%,,,,Reaper x3 | Firepower x3 | Heavy Handed x3,,,1.25%,,,
+,,Tier 4 Combatant,,1.80%,,,,Reaper x4 | Firepower x4 | Heavy Handed x4,,,1.50%,,,
+,,Guardians,,1.80%,,,,Ward of Dawn Super,,,2.30%,,,
+,,Note: Assists are worth 50% of the Kill Value.,,,,,,"Siphon x1, Power Preservation x1
+Subclass-specific Fragments",,,2.50%,,,
+,,,,,,,,"Aeon Gauntlet's Sect of Insight
+Ward of Dawn (Crest of Alpha Lupi)
+Well of Radiance Super",,,3.57%,,,
+,,,,,,,,Siphon x2 | Power Preservation x2,,,3.75%,,,
+,,,,,,,,Siphon x3 | Power Preservation x3,,,4.40%,,,
+,,,,,,,,"Super Kills | Benevolent Finisher
+Blight Ranger | Super Kills (Crest of Alpha Lupi)",,,7.15%,,,

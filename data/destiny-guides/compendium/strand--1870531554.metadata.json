@@ -1,0 +1,4067 @@
+{
+  "merged_ranges": [
+    "A1:C1",
+    "D1:M1",
+    "N1:O1",
+    "B3:D3",
+    "G3:I3",
+    "L3:N3",
+    "B5:N5",
+    "D6:N6",
+    "D7:N7",
+    "D8:N8",
+    "D9:N9",
+    "D10:N10",
+    "D11:N11",
+    "D12:N12",
+    "D13:N13",
+    "D15:M15",
+    "D16:M16",
+    "D17:M17",
+    "D18:M18",
+    "D19:M19",
+    "D20:M20",
+    "D21:M21",
+    "D22:M22",
+    "D23:M23",
+    "D24:M24",
+    "D25:M25",
+    "D26:M26",
+    "D27:M27",
+    "D28:M28",
+    "D29:M29",
+    "B31:N31",
+    "D33:M33",
+    "N33:N34",
+    "D34:M34",
+    "D36:M36",
+    "N36:N37",
+    "D37:M37",
+    "D39:M39",
+    "N39:N40",
+    "D40:M40",
+    "D42:M42",
+    "N42:N43",
+    "D43:M43",
+    "B45:D45",
+    "G45:I45",
+    "G47:I47",
+    "B49:N49",
+    "D51:M51",
+    "B53:N53",
+    "D55:M55",
+    "B57:C57",
+    "D57:M57",
+    "D59:M59",
+    "D61:M61",
+    "D63:M63",
+    "D65:M65",
+    "G67:I67",
+    "G69:I69",
+    "B71:N71",
+    "D73:M73",
+    "B75:N75",
+    "D77:M77",
+    "B79:C79",
+    "D79:M79",
+    "D81:M81",
+    "D83:M83",
+    "D85:M85",
+    "D87:M87",
+    "G89:I89",
+    "G91:I91",
+    "B93:N93",
+    "D95:M95",
+    "B97:N97",
+    "D99:M99",
+    "B101:C101",
+    "D101:M101",
+    "D103:M103",
+    "D104:M104",
+    "D105:M105",
+    "D107:M107",
+    "D109:M109"
+  ],
+  "hyperlinks": {
+    "N1": [
+      {
+        "text": "Support the Data Compendium",
+        "url": "https://www.google.com/url?q=https://www.patreon.com/DataCompendium&sa=D&source=editors&ust=1791770086411017&usg=AOvVaw2qmW1YrzJT900PIcBevsBT"
+      }
+    ],
+    "B3": [
+      {
+        "text": "Hunter",
+        "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1870531554#rangeid=2037078107"
+      }
+    ],
+    "G3": [
+      {
+        "text": "Titan",
+        "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1870531554#rangeid=75195928"
+      }
+    ],
+    "L3": [
+      {
+        "text": "Warlock",
+        "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1870531554#rangeid=603241277"
+      }
+    ]
+  },
+  "images": {
+    "C6": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWlwwOXvkHhAv50QhAkyQfGg7B8uPPNeaDR5GdYbY9SVKFPUT1rj-MpKn9ruM3n01zWKNpS882sU-hvP8gm-_bBGP8WBD_Po-MfSAfAgzXJHdXu57AGt-7nutTw5cZOj_AVcZ8OfdCQJsCl_jBPJq4MUM36hDPQMp418Jc=s209-w59-h209",
+        "alt": ""
+      }
+    ],
+    "C7": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVB1FEDA3NSzrnMcH3I5ukuRx-KVJzEm1m9t_olywkGS6P7N0ZlAHzWsfb4D1hzvum0NX98NdgHiXro9RX_3lRetXwnqc-JXCxtTyodxV3Ur4boH_Dkx9ekE451svxg6gI5RFG9BLA0Nr62-o_35G_n4fFCGIL7qvEOh-_X=s119-w59-h119",
+        "alt": ""
+      }
+    ],
+    "C8": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV-pfNdBns8Dp7jPj2RwjOeDE-ktnb1vPFNQ3cFkGZo_tA_KiD28yTjUDkcbYFJdnTa-6z2NAVwfq9VzVMUw1Ew9AGqkml7AfoAomJUhpWCc5bOUXRXHlsJlv96nJ0ffcdD2SCakiGvdP457hr9JakpLpfZlVvtB1E3szPg=s164-w59-h164",
+        "alt": ""
+      }
+    ],
+    "C9": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbYl8zghh25QqKI8p8NWOs4g3-CHZXLLCt_GYcCBVTtZBMUyTMg0DVTAwYNZvVS4Ly8BDgd7yiacQ3c6PBpmFet80JeCNkrq1woph-y-Tyyy8y8Lzn3g08jAtXZgpYpFka4ZKlNi6oinxSt2ih4ltwZHEwYe6X8Rfm6=w59-h89",
+        "alt": ""
+      }
+    ],
+    "C10": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLarQBmpl-WhL-5ILWnvR4-8MMoylWCJBteaVR8JVENoM2OnusfZEJvA0FkJeoN6vtjR0dg7pHs9A2MRIl7q9lctdxfnhCFOWUrbqgCbIxTR0iUAZkLTVq-eLmJ5OrwMG8vm5ledH51wSaDzdSWu51FaE99NZ4wqpZNTfOw=w59-h59",
+        "alt": ""
+      }
+    ],
+    "C11": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbi4DZ0VU5waeikOXf0ggnjvRJ_gvLU1EpwQH8Zlnv88Ms9Q8svFBJmnnKfll8SrH4TNOiCzOzPuUcdcRLKSWCG_h7WgU4FELKTDL4O3R1dkt9K4QlijZ3d8kLPI_d_LZUSZAjR0Bg6BcdmjT91j2xi0z-ioLZ6_YYX3B4=w59-h134",
+        "alt": ""
+      }
+    ],
+    "C12": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXG1-iSp-ZwBCPhdNTO8bCJFw_ywJNnTIKsxWaOL2XK46eMmAfm41Thx3ALjjIImzTPwEsDXvG0Qxc7zLXtDI0DMobxF6W6L7pG4c4wJAZMz2QPYCxbDvndaGMv38_2KqrxssIGmvxrts7YqoNhYYYYPoVvwPJkjrhC0t29=s104-w59-h104",
+        "alt": ""
+      }
+    ],
+    "C13": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU_CuIpPIWtz9GJkoIl_2uM72TE6PAYauZxGh726g-zRIu-BVmj3JHOz_DcZ0AE99KcKTIeTEJzCKejkM57NCEAbyw7YYnZ9v-PuYAMOJaGptdT8cnxJXkmggxw2suvFMuien0D93n4gFhE0YWge-HKBcZSQbWPorx4dhzC=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C16": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xULXtSTGqujTrBr8F8qflCUkSBMSoCWmXdVQITRU0lrzXgpssrr5XNY10CaNmBLhw0au9alBCY2gkRXhYZ4dREeUoKYFISX-mKD1uHgxgQQrqcGKg-HLPLX5a3ifzMtTZ_nYfHxHj52fBpkv9Qi30hDOIvU9yyEvLf_hANo=s74-w59-h74",
+        "alt": ""
+      }
+    ],
+    "C17": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWelU11bzP6XWfesEqWLw6DxxYEox2CfEtL7DHcnuerIrQTbqqOGxVu9z_uUo6puF3YTw9dGnIJW9-qaz2kq1hpR8pi2V2KKvZninDWndgtPMfcuxHE1hzWvlpOlPcRvDqR-UWeA2vfE10wWtXRZyC1NdieE-9blU9Yi_5Y=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C18": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVafccf3_TXvXPp9uu3JjgC4G8uShXJKnIpYDrFV2bBVyaF-43k5mFT02YMQcjX7lekixJ4uxXLxdFW-D1u7uZxkaawSBrg8PYx12FKIzVEKeBkcGO1oCh9iXcslCoI8xAMwLAUBfsRs8TC_Z4K85jYEpsC2GuQuDjbhasA=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C19": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWL6ya17SJyZ9t6VPXrqz4d7hp_NytpCQZS8Afef22FIpcXtCVAOHA9xA0qgUTFYUEQ2ogDodbNV4GwKP84KX1LCv5sU8b_vVY-jl3oz9TK-xS-zMDU6kzF2tF-bQQATCLuUSoVCG4i87FSeBDNVAvfizBbaMXVreU-IYxd=s74-w59-h74",
+        "alt": ""
+      }
+    ],
+    "C20": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUm7iBh8Q0tnwRDpWjTpN_rPJtUqbXvGnwppgR_k5FSc-YoCAcFqeVP8RwFSiQCb2dU_BpS0KFn7N0J_1BgQWA7sMTI_zcFaSnABA9s9hNCs7OwbE6ficdJPoLP2AHtl_3VKQK8vHRXprZ_8eg3-8EMf5BkU5ZTUk8xgI2p=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C21": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV2PtG6z6ACaGWergvvvm1SleBpZUPd2RVus3CazKR8DVTeikgM2cc_CD9739JuYqd0I_QMalKetKNugKBf8gitFTZpfvVMdPqU8q-fmG-rFNidy2they5NJc7A3MG2CrAx57bihDP3RMNK_hOSqTA9c2DycSkaMci1r9PS=s74-w59-h74",
+        "alt": ""
+      }
+    ],
+    "C22": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWGtJML_8SzAHTm2fBE39t_yrzjN8JU6iJ4asYmGVkxPIVG0eZWU_A4SqtabSo_fuQMhioghibnT1sdUDMU7wwK2jCXfIxTcGZ2iPEXquuc1BomX31nFq0aZwr3vnw4Ag8s6aPmpQa-mc4SvwxFL0u0WJ3pBbZdQvYl_8g2=s104-w59-h104",
+        "alt": ""
+      }
+    ],
+    "C23": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVhTr-woErVcvKznlBEZZ59lTZ370ja2XAM-HjKb22x2P5bDn27h5MN2kGAORppoHN1EZ2mD3zGJb0H3McYwg1UafAQj_QVA3WXr6nfuB4N513MBE13JLKiVgoHlQ1RW6WmEmVhawQaDDRClR42AQ6mjqga9nBaSS9GRdg=s224-w59-h224",
+        "alt": ""
+      }
+    ],
+    "C24": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVX3TWHhsMPDHIqFCfuT4p4pvhAy4PbZI1_GbDPL9uwvsY6tz9osu4-nPxxqJSJBTtIyQGcVQRg2WmIKf_cV2aJgVflx9XTX7Ktzlsn0rNbiFjWnBfC3U_Pjtj6moIpzmIqeuwXw5eJqxeyL0vah11LFp_WJfWN3SZju9Rw=s74-w59-h74",
+        "alt": ""
+      }
+    ],
+    "C25": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU_CuIpPIWtz9GJkoIl_2uM72TE6PAYauZxGh726g-zRIu-BVmj3JHOz_DcZ0AE99KcKTIeTEJzCKejkM57NCEAbyw7YYnZ9v-PuYAMOJaGptdT8cnxJXkmggxw2suvFMuien0D93n4gFhE0YWge-HKBcZSQbWPorx4dhzC=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C26": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVqf-ZlSXWTolvpRzo0qZYitXVfLt2yBRSoWG6PVqjzxG9O8NbQzsVYMIF48ZpDVZT-G7VrHst6Vofiq_CjRtDAtnBsF7PtImSr9MJCCR9-aZ3G_wW_oP9q9jGCq2bwl55nBmeMRQBnkr6ZMg4VBKHyqPp4MNOJvfIox1Vj=s74-w59-h74",
+        "alt": ""
+      }
+    ],
+    "C27": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUMgkI0Em0bzF9257GbIWEt2wyDYXREpEhRtcy70pDHccXpRnJrD97IOOXIoXooMSu0MGsYmucmYtOHZINfodTgyOYjd61zJA7kVWRmaZCZ8DNRzLjCib4EAa3itnYB84CcoBVIe1NaI51mblMHsMsyUJOXAYzyCW4sKtPI=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C28": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVoCQtPlYThMjcLhhHDaOXrzPOJDDFLOwQBN6AHPlsr4Gn3LdfhieJL7PH1AbWsflNie5Pxh7oP3tYwGfv_EP872P-PJ16uLGLad32CmsFd80AuzKOzjIDniWria2luKL32MMEcfOFUxCkr5ms7JHiW-RrzddRRpJmzwRsX=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C29": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUZovdIIIcfXOLsQA143mWFkgRANZ3vOvhiT4OUiT-wG3HaYOT1bBIWYaJ6X1Fch0Moj11msAPW5JCANWcEtIq_tb8LSCqjpj_SbflcNYc2pBa78Y025WGnmhQ2qooxflG7EX4T3jiYol1S8O0zPotmXFAbV3OB3u9CRh0=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C33": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWBd8FQ7Zok_t4XpNV57R6Zj7NbcZtdYK1PXySiY06jLL_lw28TsoSEwAzH9J6gYRsPZQxA5Kp0g6cBzcBsLcwSCTNXuovZ2j7ideXHZBpA2fxfzyrJh1nsg79ihzIEjiP-PMNYoRkYX1r94QUlpd8yb3Qy9N6-NOHnynU=s249-w59-h249",
+        "alt": ""
+      }
+    ],
+    "C34": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVmAU4xfJxtitqrzCvso7DRRzzDlba6nBiMvZtudo74CLzNYoDoGQG7ufGG8VH-TnOrSrYj0spDZbH-C9MeTqo0ThJhVkGI6diXlUcS3KY_AYRSXN1YKoq7MqJdc3hgWRW1KPGOr7DcEGIv2sy2KCrUMSejGpjMC3bI2GDk=s59-w59-h44",
+        "alt": ""
+      }
+    ],
+    "C36": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWBuUQzhxgCWeP_wpQW1oeavxGWhFSZbpcnTZ7X1_JB_SwPD6gsWH1sruTpWtLxuk47AbA0PL2ZoAS0w8mC0cG-Qb8Mz-di9J7955kzrfPihRtZRF_dTCxPGuIVbH0ZxpCSokCd-yVV_8P55KaC8y6pC_jKo9e6nW_H1KM=s104-w59-h104",
+        "alt": ""
+      }
+    ],
+    "C37": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVmAU4xfJxtitqrzCvso7DRRzzDlba6nBiMvZtudo74CLzNYoDoGQG7ufGG8VH-TnOrSrYj0spDZbH-C9MeTqo0ThJhVkGI6diXlUcS3KY_AYRSXN1YKoq7MqJdc3hgWRW1KPGOr7DcEGIv2sy2KCrUMSejGpjMC3bI2GDk=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C39": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXdZrySHND_DRjn4znJ2xvUnFGUK_6S4kt9CAdse05daEqhz3Ci76RdTVa-e6BfNdmS0UhCsvkrk0fhOYsqI4xxhOqdqpjBaKI4FUR5Ax0PSPHmXisv9dHLdrvSxc0FmQT1Zqxsf6YDl38xFHqvOtrDbid1f2cXiUWwlv7f=s119-w59-h119",
+        "alt": ""
+      }
+    ],
+    "C40": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVmAU4xfJxtitqrzCvso7DRRzzDlba6nBiMvZtudo74CLzNYoDoGQG7ufGG8VH-TnOrSrYj0spDZbH-C9MeTqo0ThJhVkGI6diXlUcS3KY_AYRSXN1YKoq7MqJdc3hgWRW1KPGOr7DcEGIv2sy2KCrUMSejGpjMC3bI2GDk=s59-w59-h44",
+        "alt": ""
+      }
+    ],
+    "C42": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVCyor3YZdVjm5W2wypLBm5DjTP9Nw0zF_dulvB9DAOBlbY8KC3fBAxAn4BEMHs7d_XBKizOWjVQHmz1e3oI1BpRz9SwnC0dIX-P3Rt-MntjAn17q63qcwLCpL6Ttr2YX9iD95eelqg07f9NnpEyxba5NriQBatxIG53YNG=s89-w59-h89",
+        "alt": ""
+      }
+    ],
+    "C43": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVmAU4xfJxtitqrzCvso7DRRzzDlba6nBiMvZtudo74CLzNYoDoGQG7ufGG8VH-TnOrSrYj0spDZbH-C9MeTqo0ThJhVkGI6diXlUcS3KY_AYRSXN1YKoq7MqJdc3hgWRW1KPGOr7DcEGIv2sy2KCrUMSejGpjMC3bI2GDk=s89-w59-h89",
+        "alt": ""
+      }
+    ],
+    "G47": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUbKfJdmmOxAdDu-9VY2pN7b1w9rxible86gqmj5meZAyhWHq9XuUlGMaZLGzksrYQv2zs_jRq4OJ93rDeEn6ktX0JcqwX3mWa0WnZikJbIPYiuRw6mb7TfOkyVTHMcMmTX6xZIgfFQ_8opdZzM0P_1PUcs9Y1kwFq3VVj-=s290-w290-h79",
+        "alt": ""
+      }
+    ],
+    "C51": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXeKCbGaHlC3D8-pSmWIIW0hxqOXLwmdJ3YIcUD81Xfl7pXvmvOGIFkC62TgKCRAT1P5FSOpprWZ7y4fyNNGYyoY0n02p6476Frdw0us3AsQgzXKyBK-a5HsE4KVHp2GyLmHYhKPj5s7dd-dUgiRDbmvEClhYwlnpcRbBI=s224-w59-h224",
+        "alt": ""
+      }
+    ],
+    "C55": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXhMa6CslPEBkJoYn7P63dpOunWfSi_JLPNcRZ9sn3fniPv-qJhBxztflzWiUiqX3ZaItMMI7Sn3QdpSVZqPpS0ujyuECS2it_PWmVvTJn2fXyUFwmhHOR7MSq73oQW2wFFiD6NI-ZUigSP7WXjESlYIoRLXmMvbraxjPn8=s359-w59-h359",
+        "alt": ""
+      }
+    ],
+    "C59": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUYhQ1ucBB6JqITYZvzIch1C3E5lvcUmESsWm1rPubUnXR4pCAvkNkFmirQvTx8g7gbEz3dE9eigdrzGuX5OXKM0PjZW_tA0eXHkYCqiVEPvLYQMhmKRgjTJHjvI7JkW_qWKu6GRvbDelrrQoxY_dVeKODaMdf3nEGRyLlA=s104-w59-h104",
+        "alt": ""
+      }
+    ],
+    "N59": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h104",
+        "alt": ""
+      }
+    ],
+    "C61": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUsfcUf8ojQrJGVnF0h92yu6gFbuQ8XGEga3FjdkYcSU0nDXPnjETdDuuur6Kx1CzmPSWIszklGYF5yMSo1LrEamsPrqBCZroMiEandNapHSZqDzblmBycd8xQlrr_gl1FvB9GkvRa251ea3RKk3voaAJPa8k-qb7DGrIi3=s209-w59-h209",
+        "alt": ""
+      }
+    ],
+    "N61": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaPv1m7vcb2tvUbcG5v0I4TYrh5NIEOEd1T6MsPNutwdDRxBiCz8uOJNL43uvjRxpC3unAr9xzSEZAdDQsAG3cWqFklWmAPXdjSLEhxZ8m-PplqIpb5OqZZ1U85fwGI1sd9oWqwQB93Gwrh7t-UsfVEBMue-CKgz1ySBAg=w100-h209",
+        "alt": ""
+      }
+    ],
+    "C63": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXJRlMAFbYUnkuYG_0bLVmeZB0XCSTJ7AHVnb37BoV89Tn8GfqTyIHlIeS6Dlfrz-lERoT_MNBQ10SrGXprjkHSGJ1APDLPr_-1vX1TW-8CJCx_aN111r1LhmG2CR7sjX8ZZzYS_1DSOJJi8wIa0kh-n10nOMMZw4t6tX8=s119-w59-h119",
+        "alt": ""
+      }
+    ],
+    "N63": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h119",
+        "alt": ""
+      }
+    ],
+    "C65": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVB1FEDA3NSzrnMcH3I5ukuRx-KVJzEm1m9t_olywkGS6P7N0ZlAHzWsfb4D1hzvum0NX98NdgHiXro9RX_3lRetXwnqc-JXCxtTyodxV3Ur4boH_Dkx9ekE451svxg6gI5RFG9BLA0Nr62-o_35G_n4fFCGIL7qvEOh-_X=s119-w59-h119",
+        "alt": ""
+      }
+    ],
+    "N65": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaPv1m7vcb2tvUbcG5v0I4TYrh5NIEOEd1T6MsPNutwdDRxBiCz8uOJNL43uvjRxpC3unAr9xzSEZAdDQsAG3cWqFklWmAPXdjSLEhxZ8m-PplqIpb5OqZZ1U85fwGI1sd9oWqwQB93Gwrh7t-UsfVEBMue-CKgz1ySBAg=w100-h119",
+        "alt": ""
+      }
+    ],
+    "G69": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX7BqIHDIgAEmRL3m6-b-8u5fpAhmg12FQEGp8u9Ii_shlf4IDzwe3RqaPipAHv_WxE6OGDv8zzTpvWwLP5-4_o3PjxV7fTdnnUG0DI8JepXcNh5az_YIEyYjxTwDEnnXV1tFJL6SFg7bRvbd20Vp0QHhPHfclv7hLbgf4=s290-w290-h79",
+        "alt": ""
+      }
+    ],
+    "C73": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVVwr81xwoLzjk-s1BfOr20T4hXl3ELS_n5SheRk7SpvgGXUmSXlr9FFGfg3JmsKnH2CYxNCx4fTJDI0Z1HIQefyPhR9w5Y08G58cbXF9s3vayvR9ZOCcRLgK6dzUh2tyiVaoQkcZ-koWnHsfnp7it0mZWKdkz6W67OUT8G=s104-w59-h104",
+        "alt": ""
+      }
+    ],
+    "C77": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXC6CMocd08TS9A-s96vZPHk4H_adYVKsHtNqwjdZkIMQTcQzRMThMMZAqX1BmW_aKe_FL0Jw63wQVEIgMghMyTsqiZ_aAJljlGw_iWliQ_VDY3Vq90L6pRzOGBi_ku5vgwpUDImTNeAfmIi0igj75XSgFJNA3nP8Bhk4x1=s254-w59-h254",
+        "alt": ""
+      }
+    ],
+    "C81": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU9PiyMccDexGIxtItdM8Z7j_zsCM-M6m430GMWKHxnoRnADcp60_kC-k-GsUtL9iW-UMiRYPtcGOlZ213XnPVr-xpzDRVgZn0WTzFPo9gDV8jVvyTv6sWVTz9FcfT0aqXXE_NQNi70Lm_AN8fOGEoRMEYE_SYN_Ss952gx=s269-w59-h269",
+        "alt": ""
+      }
+    ],
+    "N81": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h269",
+        "alt": ""
+      }
+    ],
+    "C83": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xW8oijzK3MDlVqsBfQE8U3MUekxc2T3PZVO3LDioQzg8SE60lVzOvkMhEfVv55ExX2GJ4Jilk5xlTNgV3jIP1IOOvXB6YFiS8UcvvUQ-qxpe8ma6nuMP40Z1j2OQYS-FtHX5wgzIDay1HZfdAmqosijfoYgrwAuzIa1lU7O=s89-w59-h89",
+        "alt": ""
+      }
+    ],
+    "N83": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaPv1m7vcb2tvUbcG5v0I4TYrh5NIEOEd1T6MsPNutwdDRxBiCz8uOJNL43uvjRxpC3unAr9xzSEZAdDQsAG3cWqFklWmAPXdjSLEhxZ8m-PplqIpb5OqZZ1U85fwGI1sd9oWqwQB93Gwrh7t-UsfVEBMue-CKgz1ySBAg=w100-h89",
+        "alt": ""
+      }
+    ],
+    "C85": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVNi7VyLIe1tgGQn3PkjZJb_DVwBlp-Xz09fU0CSMprmy_RuKK38ocT48ElrNAtWDkmZL5nTRapZooBBV9zWV11zr2B7cf4ngrkYFeR7Mgv94gdZ9qe_O-1UgVoSh7vEIicM2dhmXbEAr-ytC9x8LUVoY5XmBxD8-NypK5N=s149-w59-h149",
+        "alt": ""
+      }
+    ],
+    "N85": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h149",
+        "alt": ""
+      }
+    ],
+    "C87": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVh90N6cDP_lrlHqYJw2LQigjKwSm1TgdKpUON-oi56RuOMHc3pWQnBUHxH0Gu3IhS9GTBZP0dLs2GAOEvE9PxzkD5WG-MyGXUy0gPP89lqDqi866ZwIGoacMwr5mwx7NGksjkDv0bwtDigiK_1C3sKHJy0KwYM700bprY=s149-w59-h149",
+        "alt": ""
+      }
+    ],
+    "N87": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h149",
+        "alt": ""
+      }
+    ],
+    "G91": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVrVlZZ2WZXD9wr3My8VJ9fJP1W9OGlvZQVH3oQxo4buxuIOi4Eb31NY6pSav0-sf8hbX2XsKNAUIsjqb6-RHQaHfRObNAcNTtca_ZrQmBtwQjfe1FAkfx75v605VJLDz3yb7-qI9yMne17I_25N6plsm_rx7ZiMCRifnw=s290-w290-h79",
+        "alt": ""
+      }
+    ],
+    "C95": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWnc2Hcst82qdKNw1n3yzqv-EWSRPftm5XOloBBAJW6FSyxXYYmgQzFtQ1KYH-mN5SflQ4IleAq_rBKlEiiwOC0lWDzSSixU1QvEQKHCwn5dL_JZjegB4Oakw6PuHZ9mZRj7CcZREi3fcL4eCSUphadHB0LsOTt4cD36wsh=s119-w59-h119",
+        "alt": ""
+      }
+    ],
+    "C99": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUXqYefIV9lTSb5CE7LV2w-eRB2Z0PK3670DMMLCQXiSP2T9OR2_f0SqAGLkzU1qoit-ct5WfVlGqKK8pdhFPCVIEOt9_soCG6PomjMY8WO0msqpCMNFu1zRVfXpShXdoesN06rxXPAI5mIwZjY9RnvgKrGd_18XNlfSLPp=s119-w59-h119",
+        "alt": ""
+      }
+    ],
+    "C103": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVmAU4xfJxtitqrzCvso7DRRzzDlba6nBiMvZtudo74CLzNYoDoGQG7ufGG8VH-TnOrSrYj0spDZbH-C9MeTqo0ThJhVkGI6diXlUcS3KY_AYRSXN1YKoq7MqJdc3hgWRW1KPGOr7DcEGIv2sy2KCrUMSejGpjMC3bI2GDk=s194-w59-h194",
+        "alt": ""
+      }
+    ],
+    "N103": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h194",
+        "alt": ""
+      }
+    ],
+    "C105": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXixG2pOxoMwtYMzubFiYIqgfUr6b3bNWRgGGIB1vYnbbdEeN3ab-FeaIIk35USjbET0Yq5Rsx6C5aern5ju-TqqM4pVsmVPrYxJDr9SHeUnMM_W3cOc_J4MNXRj3aXjx1T9GldvZtOz2ij_I1Lio_g2GUgR-djSKhvZrY4=s119-w59-h119",
+        "alt": ""
+      }
+    ],
+    "N105": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h119",
+        "alt": ""
+      }
+    ],
+    "C107": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUYBF671KIrVhsgcddroRbepprRZXNyQCitEO7QLPPBKh0ojQPGd41TXS7V1mpcYJaWe3PQuOC_t13ZudUAugDjiGnc17w8U5BLW039JIMg1GCi-mBCVYFVVPBLcS0NXjIwr9OjQy8Kyae_jYOVGAX5EYsR9srDDfjU2UQ=s174-w59-h174",
+        "alt": ""
+      }
+    ],
+    "N107": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h174",
+        "alt": ""
+      }
+    ],
+    "C109": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUuYYdZbCAVZljlMPxQtrVQqCF-kKjKsabrY4kDwO0gCTHLjoS8tZReMKj2_gtCMbgF-rfDg_B5Hltvz7IkQwLry6NLfI3xw5dV-PlL-RDTntSiZSwK5KxNH9QfgRFIK1OCSDDV-Ni8c0-3ZSjsWSeQ6Lr05MQuf6EsdwYE=s209-w59-h209",
+        "alt": ""
+      }
+    ],
+    "N109": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaPv1m7vcb2tvUbcG5v0I4TYrh5NIEOEd1T6MsPNutwdDRxBiCz8uOJNL43uvjRxpC3unAr9xzSEZAdDQsAG3cWqFklWmAPXdjSLEhxZ8m-PplqIpb5OqZZ1U85fwGI1sd9oWqwQB93Gwrh7t-UsfVEBMue-CKgz1ySBAg=w100-h209",
+        "alt": ""
+      }
+    ]
+  },
+  "rich_text": {
+    "D6": [
+      {
+        "text": "While a Strand Ability is equipped:",
+        "style": "font-style:italic;color:#63d275;"
+      },
+      {
+        "text": "Strand Debuff ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "(Sever, Suspend, Unravel)",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#6aa84f;"
+      },
+      {
+        "text": " ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "Tangle",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "standard cooldown",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Strand Elemental Pickup:",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Incurs a 12 second cooldown upon creating a Tangle before additional ones can be created, barring exceptions.",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Tangle ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "explosion",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "346 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[100]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Either method counts as an ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Elemental Interaction",
+        "style": "font-weight:normal;font-style:italic;color:#d5a6bd;"
+      },
+      {
+        "text": " for the purposes of perks and effects.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Grappling ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Tangle ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Grenade Energy",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "D7": [
+      {
+        "text": "Tangle Equivalent that exclusively interacts with Grapple, behaving identically to a Tangle for Grappling.",
+        "style": "font-style:italic;color:#b6d7a8;"
+      },
+      {
+        "text": "Grapple",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Grapple Tangle",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "(32m with Grapple Grenade equipped)",
+        "style": "font-size:7pt;font-style:italic;color:#63d275;"
+      },
+      {
+        "text": "Grenade Ability",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Non-Offensive Grapple",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Grapple Melee",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Grapple Tangles",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Grapple Grenade",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": " Ability Charge",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Works on ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Prismatic Hunters",
+        "style": "font-weight:normal;font-style:italic;color:#fbbdec;"
+      },
+      {
+        "text": ", too.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Grappling a Grapple Tangle 5 consecutive times reduces the duration refresh to 1 second.",
+        "style": "font-style:italic;color:#e06666;"
+      }
+    ],
+    "D8": [
+      {
+        "text": "Strand minions",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Threadlings ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "366 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[35]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Threadlings ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Threadlings ",
+        "style": "font-weight:normal;font-style:italic;color:#b6d7a8;"
+      },
+      {
+        "text": "count as damage from the source they were spawned, but will ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "lose that inheritance",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": " if they ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "perch",
+        "style": "font-weight:normal;font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Warlock Interaction:",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Threadlings ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Warlock",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "5 Threadlings",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Threadling",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Powered Melee Hit",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "0.5 second cooldown between releases",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Instantly killing an enemy won't release ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Threadlings",
+        "style": "font-weight:normal;font-style:italic;color:#b6d7a8;"
+      },
+      {
+        "text": "Threadlings ",
+        "style": "color:#b6d7a8;"
+      }
+    ],
+    "D9": [
+      {
+        "text": "45%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[25%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Precision Hits",
+        "style": "font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "and ",
+        "style": "font-style:italic;color:#ea9999;"
+      },
+      {
+        "text": "Melee Attacks",
+        "style": "font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "from Guardians bypass the Damage Resist",
+        "style": "font-style:italic;color:#ea9999;"
+      },
+      {
+        "text": ".",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Woven Mail",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "removed ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "casting any Super Ability",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "D10": [
+      {
+        "text": "40%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[15%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "10",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "+5",
+        "style": "font-size:7pt;color:#93c47d;"
+      },
+      {
+        "text": "[5",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "+2.5",
+        "style": "font-size:7pt;color:#93c47d;"
+      },
+      {
+        "text": "] ",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D11": [
+      {
+        "text": "Suspended ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "Combatants ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Rank-and-File and Elite Combatants ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "suspended ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "6",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "+2",
+        "style": "font-size:7pt;color:#93c47d;"
+      },
+      {
+        "text": "Minibosses ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "suspended ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "3",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "+1",
+        "style": "font-size:7pt;color:#93c47d;"
+      },
+      {
+        "text": "Boss Combatants ",
+        "style": "color:#9fc5e8;"
+      },
+      {
+        "text": "suspension's effects",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "300",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Strand Damage",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Boss Combatants still count as being afflicted by the Suspend debuff during its brief duration despite not receiving its effects.",
+        "style": "font-weight:normal;font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": "Suspended ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "Guardians ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "2",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "+1",
+        "style": "font-size:7pt;color:#93c47d;"
+      },
+      {
+        "text": "Unstoppable Champions",
+        "style": "color:#c67676;"
+      },
+      {
+        "text": "stunned ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Suspended",
+        "style": "color:#6aa84f;"
+      }
+    ],
+    "D12": [
+      {
+        "text": "Unraveled Enemies",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "3 seeking threads",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": " ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Thread ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "26",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " [4]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Unravel ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "Unravel ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "1.2 second cooldown",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "thread ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Thread ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Unravel",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "(If the ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Unravel ",
+        "style": "font-weight:normal;font-style:italic;color:#6aa84f;"
+      },
+      {
+        "text": "source applied a 9 second debuff, ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "thread ",
+        "style": "font-weight:normal;font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": "hits will reapply it to 9 seconds)",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D13": [
+      {
+        "text": "Strand Weapons ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Unravel ",
+        "style": "color:#6aa84f;"
+      }
+    ],
+    "D16": [
+      {
+        "text": "On ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grenade Ability Usage:",
+        "style": "font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": "Incurs a 4 second cooldown between Ammo Refills upon activation.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      }
+    ],
+    "D17": [
+      {
+        "text": "Super Kills",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Suspending Burst.Suspending Burst",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "108 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Suspension ",
+        "style": "color:#6aa84f;"
+      }
+    ],
+    "D18": [
+      {
+        "text": "Strand Debuffs",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "normally ",
+        "style": "font-size:6pt;"
+      },
+      {
+        "text": "Debuff ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "Continuity ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "smaller text",
+        "style": "color:#93c47d;"
+      }
+    ],
+    "D19": [
+      {
+        "text": "Threadling ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Threadling Damage Increase:",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "33% against Combatants",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "12.5% against Guardians",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D20": [
+      {
+        "text": "Finishers ",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": "create ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Threadlings",
+        "style": "font-weight:bold;color:#b6d7a8;"
+      },
+      {
+        "text": ", with the amount scaling with ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Enemy Rank",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Rank-And-File",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": "1",
+        "style": "font-weight:bold;color:#63d275;"
+      },
+      {
+        "text": "Elite ",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": "2",
+        "style": "font-weight:bold;color:#63d275;"
+      },
+      {
+        "text": "Miniboss ",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": "3",
+        "style": "font-weight:bold;color:#63d275;"
+      }
+    ],
+    "D21": [
+      {
+        "text": "Upon ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "dealing damage",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " with ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Tangles",
+        "style": "font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": "Melee Energy",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": " ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Tier 1 Combatant",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "10% ",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "T2 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "18% | ",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "T3 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "20% ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": " ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "T4 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "30% ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": " ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Guardians ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " 25%",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Incurs a 1? second cooldown between triggers.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      }
+    ],
+    "D22": [
+      {
+        "text": "Upon ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "dealing damage:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " Grenade Ability Energy",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Does not grant Slicewire Grenade Energy.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Grenade Ability Energy Gains vary depending on the source, as well as the amount of damage.",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Generally, the more damage something deals, the more ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Ability Energy",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " it will grant.",
+        "style": "font-style:italic;"
+      }
+    ],
+    "D23": [
+      {
+        "text": "Upon scoring",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": "multiple Precision Hits",
+        "style": "font-weight:bold;font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": " within",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " 2 seconds",
+        "style": "font-weight:bold;font-style:italic;"
+      },
+      {
+        "text": " of each:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Emits a ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Severing Burst",
+        "style": "font-weight:bold;color:#6aa84f;"
+      },
+      {
+        "text": ", inflicting ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Sever ",
+        "style": "font-weight:bold;color:#6aa84f;"
+      },
+      {
+        "text": "to enemies within ? metres. ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Incurs a 4 second cooldown upon",
+        "style": "font-style:italic;color:#e06666;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Severing",
+        "style": "font-style:italic;color:#6aa84f;"
+      },
+      {
+        "text": ". ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Precision Hits",
+        "style": "font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "during the cooldown will not be counted.",
+        "style": "font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Precision Hits",
+        "style": "font-weight:bold;color:#f1c232;"
+      },
+      {
+        "text": " work on a Counter System, triggering the ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Severing Burst",
+        "style": "font-weight:bold;color:#6aa84f;"
+      },
+      {
+        "text": " upon reaching 100%.",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Counter System",
+        "style": "font-weight:bold;font-style:italic;"
+      },
+      {
+        "text": " is exclusively Weapon Archetype based.",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Counter Progress per ",
+        "style": "font-size:8pt;font-weight:bold;"
+      },
+      {
+        "text": "Precision Hit",
+        "style": "font-size:8pt;font-weight:bold;color:#ffd966;"
+      },
+      {
+        "text": ":50% Counter: ",
+        "style": "font-size:8pt;font-weight:bold;"
+      },
+      {
+        "text": "Slug Shotguns",
+        "style": "font-size:8pt;color:#93c47d;"
+      },
+      {
+        "text": "34%",
+        "style": "font-size:8pt;font-weight:bold;"
+      },
+      {
+        "text": " ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Counter:",
+        "style": "font-size:8pt;font-weight:bold;"
+      },
+      {
+        "text": " Bows and ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Sniper Rifles",
+        "style": "font-size:8pt;color:#93c47d;"
+      },
+      {
+        "text": "25%",
+        "style": "font-size:8pt;font-weight:bold;"
+      },
+      {
+        "text": " ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Counter",
+        "style": "font-size:8pt;font-weight:bold;"
+      },
+      {
+        "text": ": Hand Cannons and Scout Rifles",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "20% Counter",
+        "style": "font-size:8pt;font-weight:bold;"
+      },
+      {
+        "text": ": Sidearms",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "15% Counter",
+        "style": "font-size:8pt;font-weight:bold;"
+      },
+      {
+        "text": ": Auto Rifles",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "12% Counter",
+        "style": "font-size:8pt;font-weight:bold;"
+      },
+      {
+        "text": ": ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Machine Guns",
+        "style": "font-size:8pt;color:#a481e1;"
+      },
+      {
+        "text": " and Pulse Rifles",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "10% Counter",
+        "style": "font-size:8pt;font-weight:bold;"
+      },
+      {
+        "text": ": ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Trace Rifles",
+        "style": "font-size:8pt;color:#93c47d;"
+      },
+      {
+        "text": " and Submachine Guns",
+        "style": "font-size:8pt;"
+      }
+    ],
+    "D24": [
+      {
+        "text": "Suspended Enemies ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "Class Ability Energy",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Enemy Rank",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Incurs a 1? second cooldown upon scoring a kill.",
+        "style": "font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Tier 1 Combatant = ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "10%",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "T2 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "12%",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "T3 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "15%",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "T4 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "30%",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Guardians ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "= ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "15%",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "D25": [
+      {
+        "text": "On ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Powered Melee Ability Kill",
+        "style": "font-weight:bold;font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grants ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Unraveling Rounds",
+        "style": "font-weight:bold;color:#6aa84f;"
+      },
+      {
+        "text": " to ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Strand Weapons",
+        "style": "font-weight:bold;color:#63d275;"
+      },
+      {
+        "text": " for ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "8",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "[5]",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": " seconds.",
+        "style": "font-weight:bold;"
+      }
+    ],
+    "D26": [
+      {
+        "text": "Strand Weapon Kills",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Threadlings ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Counter Progress ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "(Threadling Amount)",
+        "style": "font-style:italic;color:#b6d7a8;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Rank-And-File = 34% ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "(1)",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": " | Elite = 67% ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "(2)",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": " | Miniboss and Boss = 100% ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "(3)",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Guardians = 67% ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "(2)",
+        "style": "color:#b6d7a8;"
+      }
+    ],
+    "D27": [
+      {
+        "text": "While ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Woven Mail",
+        "style": "font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": " is active:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Tangle",
+        "style": "color:#93c47d;"
+      }
+    ],
+    "D28": [
+      {
+        "text": "On ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Orb of Power",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " Pickup:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Woven Mail",
+        "style": "color:#93c47d;"
+      }
+    ],
+    "D29": [
+      {
+        "text": "Killing ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Suspended Enemies ",
+        "style": "font-weight:bold;color:#6aa84f;"
+      },
+      {
+        "text": "creates an ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Orb of Power",
+        "style": "font-weight:bold;color:#ffd966;"
+      },
+      {
+        "text": " that grants",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": " 2.5% Super Energy.",
+        "style": "font-weight:bold;color:#ffd966;"
+      },
+      {
+        "text": "Incurs a 10 second cooldown after creating an ",
+        "style": "font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Orb of Power",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ".",
+        "style": "font-style:italic;color:#e06666;"
+      }
+    ],
+    "D33": [
+      {
+        "text": "38 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "damage ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Cancelling a ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grapple ",
+        "style": "font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": "within 1 second of activation refunds ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "50% Grenade Energy.",
+        "style": "font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": "Upon ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grappling ",
+        "style": "font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": "a ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Tangle ",
+        "style": "font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": "or ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grapple Tangle",
+        "style": "font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grapple Ability Charge",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Grapple Returned ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": " ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Grappling ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Grenade Kickstart does not activate when grappling a Tangle or Grapple Tangle.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Grapple Melee:",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": " [Melee Attack]",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "grappling",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "432",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " [61]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "impact damage",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "432 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[61] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "radial damage",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "unraveling ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "Guardians directly hit by Grapple Melee have their Melee Lunge disabled for 0.5 seconds",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Grapple Melee",
+        "style": "font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": " counts as both a ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grenade ",
+        "style": "font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": "and ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Melee ",
+        "style": "font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": "Ability.",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Ashes to Assets",
+        "style": "font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": " grants ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "50% less Super Energy",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " when a ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grapple Melee ",
+        "style": "font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": "is used with a",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " Grapple Tangle",
+        "style": "font-style:italic;color:#b6d7a8;"
+      },
+      {
+        "text": ".",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grapple Passive Ability Regeneration is disabled until no longer airborne. Also applies to Silkstrike.",
+        "style": "font-style:italic;color:#e06666;"
+      }
+    ],
+    "D34": [
+      {
+        "text": "Grapple Melee",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Threadlings ",
+        "style": "color:#93c47d;"
+      }
+    ],
+    "D36": [
+      {
+        "text": "Bola Trajectory",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "bola",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "190 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "damage ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Suspension",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": " smaller bolas",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "2 Small Bolas",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "3 Smaller Bolas",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Smaller Bolas",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": " 81 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "damage ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Suspension",
+        "style": "color:#6aa84f;"
+      }
+    ],
+    "D37": [
+      {
+        "text": "Weaver's Trance",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Weaver's Trance",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Suspending",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "explosion",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "Suspending Explosion",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "108",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Strand ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Grenade Ability Damage",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "D39": [
+      {
+        "text": "Medium? Trajectory",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "bouncing grenade",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "splash damage ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Sever ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "+5",
+        "style": "font-size:7pt;color:#63d275;"
+      },
+      {
+        "text": "Slicewire Maximum Damage:1st ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "178",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "2nd ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "178",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "3rd ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "222",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "4th ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "267",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "damage",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "additional instance",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "307",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "damage",
+        "style": "color:#63d275;"
+      }
+    ],
+    "D40": [
+      {
+        "text": " 4 submunition",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "64",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "damage ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Tangle",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Tangle Creation Cooldown",
+        "style": "color:#e06666;"
+      }
+    ],
+    "D42": [
+      {
+        "text": "Medium Trajectory",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Splits into 3 projectiles while midair, each creating a ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Threadling ",
+        "style": "font-weight:bold;color:#b6d7a8;"
+      },
+      {
+        "text": "on impact.",
+        "style": "font-weight:bold;"
+      }
+    ],
+    "D43": [
+      {
+        "text": " [Grenade] ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Nest Grenade",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Nest Grenade",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Teeming Nest",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Teeming Nest",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "300 Construct HP",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "6.7% (-20) HP per second ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Full Health",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "3 Threadlings",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Threadling ",
+        "style": "color:#63d275;"
+      }
+    ],
+    "D51": [
+      {
+        "text": " 427 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[82]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "severing ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "+?",
+        "style": "font-size:7pt;color:#93c47d;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Melee Energy",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "[Melee Attack] ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Threaded Spike",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "amount of Melee Energy",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Strand Subclass Exclusive",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Threaded Spike",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Woven Mail",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Hits | Melee % | Caught %0 | 5% | 20% 1 | 10% | 30%2 | 20% | 50%3 | 30% | 70%4 | 35% | 85%5+ | 40% | 100%",
+        "style": "color:#79bec3;"
+      }
+    ],
+    "D55": [
+      {
+        "text": "General Super Information",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "90%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[45%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "4% Super Drain ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Light Attack",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Drains 4% Super Energy.",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "1638 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[260]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "1293 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Heavy Attack",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Drains 9% Super Energy.",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " [504]",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " [80]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Grenade",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " Grapple Grenade",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Class Ability",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Drains 4.5% Super Energy.",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Arc Staff",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Dodge ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Ensnaring Slam",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Aspect ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "4.5% Super Energy",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "D59": [
+      {
+        "text": "[Air Move] expends ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Class Ability Energy",
+        "style": "font-weight:bold;color:#b4a7d6;"
+      },
+      {
+        "text": " to dive downwards, dealing ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "61",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "[11] ",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": "damage and inflicting ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Suspension ",
+        "style": "font-weight:bold;color:#6aa84f;"
+      },
+      {
+        "text": "to enemies within ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "8",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "[6.5]",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": " metres.",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Triggers the effects of the ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "equipped Class Ability",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ", as well as ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Threaded Specter",
+        "style": "font-style:italic;color:#63d275;"
+      },
+      {
+        "text": " if equipped.",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grants ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Woven Mail",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": " for 4 seconds for each enemy ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "suspended ",
+        "style": "font-weight:bold;color:#6aa84f;"
+      },
+      {
+        "text": "with the ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Ensnaring Slam",
+        "style": "font-weight:bold;color:#63d275;"
+      },
+      {
+        "text": ", up to a maximum of 20 seconds.",
+        "style": "font-weight:bold;"
+      }
+    ],
+    "D61": [
+      {
+        "text": "On ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Class Ability Usage",
+        "style": "font-weight:bold;font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Strand Decoy. Decoy ",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "has ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "175 Construct HP ",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      },
+      {
+        "text": "and lasts for up to 12 seconds. ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Combatants are lured to attack it, and has 70% Damage Resist against Combatants",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": ". ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Allies ",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": "and ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Caster ",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "deal 150% increased Ability and Weapon Damage towards it.",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Decoy ",
+        "style": "font-weight:bold;font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": "always counts as ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "hostile ",
+        "style": "font-weight:bold;font-style:italic;color:#ea9999;"
+      },
+      {
+        "text": "and can be damaged by ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "allies",
+        "style": "font-weight:bold;font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": ", ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "enemies",
+        "style": "font-weight:bold;font-style:italic;"
+      },
+      {
+        "text": ", and the ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "caster",
+        "style": "font-weight:bold;font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": ". Does not activate any On-Kill effect.",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Upon losing ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "all HP",
+        "style": "font-weight:bold;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " or when an enemy is within ? metres:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Deals up to ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "600 ",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": "[60 Guardians | 121 Objects]",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": "damage in a ? metre radius.Explosions triggered by enemies being near it spawn ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "2 Threadlings.",
+        "style": "font-weight:bold;color:#b6d7a8;"
+      },
+      {
+        "text": "Passively applies 0.6x Class Ability Regeneration Speed while equipped.",
+        "style": "font-weight:bold;color:#b4a7d6;"
+      }
+    ],
+    "D63": [
+      {
+        "text": "Upon ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "destroying ",
+        "style": "font-weight:bold;font-style:italic;"
+      },
+      {
+        "text": "a regular, boring ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Tangle:",
+        "style": "font-weight:bold;font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": "Summons a ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Spinny Tangle",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": ", which seeks enemies within ? metres, accelerating as it gets closer, up to a maximum of 6m/s.",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Beyblade Tangles ",
+        "style": "font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": "counts as a ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grapple Tangle",
+        "style": "font-weight:bold;font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": ".",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Whirling Tangles ",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "have ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "? Construct HP",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      },
+      {
+        "text": ", and last for 12 seconds.",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "🛸UFO Tangles",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": " deal ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "29 ",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": "[?] ",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": "Strand damage ",
+        "style": "font-weight:bold;color:#63d275;"
+      },
+      {
+        "text": "every 0.1 seconds in a 2? meter radius, and release ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Unraveling Projectiles ",
+        "style": "font-weight:bold;color:#6aa84f;"
+      },
+      {
+        "text": "on kill.",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Stabby Tangles",
+        "style": "font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": " kills count as ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Tangle Kills",
+        "style": "font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": ". ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Rotating Tangles",
+        "style": "font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": " Hits ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "do not count",
+        "style": "font-style:italic;color:#e06666;"
+      },
+      {
+        "text": " as ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Tangle hits",
+        "style": "font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": " nor as ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Ability Damage",
+        "style": "font-style:italic;color:#d5a6bd;"
+      },
+      {
+        "text": ".",
+        "style": "font-style:italic;"
+      }
+    ],
+    "D65": [
+      {
+        "text": "Grenade Ability Charge.",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Grapple ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Grapple Tangle",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Grapple Tangle",
+        "style": "font-style:italic;color:#b6d7a8;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "won't be created if ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Grapple ",
+        "style": "font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": "attaches to an enemy or",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "ally",
+        "style": "font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": ".",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grapple Melee hit",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Grapple Tangle",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Only creates one if the Grapple wasn't free by initially targeting a Tangle or Grapple Tangle.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      }
+    ],
+    "D73": [
+      {
+        "text": "Innately has ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "3 Melee Ability Charges.",
+        "style": "font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": "0 Charges = 1.15x Regeneration Speed | 1 Charge = 1.55x Regeneration Speed | 2 Charges = 1.95x Regeneration Speed.",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "On Prismatic: ",
+        "style": "color:#fbbdec;"
+      },
+      {
+        "text": "Penalized ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "with an additional 0.7x Regeneration Speed",
+        "style": "color:#fbbdec;"
+      },
+      {
+        "text": "569 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[105]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "severed",
+        "style": "color:#6aa84f;"
+      }
+    ],
+    "D77": [
+      {
+        "text": "General Super Information",
+        "style": "font-weight:bold;color:#ffd966;"
+      },
+      {
+        "text": "Damage Resistance: ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "90%",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "[50%]",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": "Base Duration: 24 seconds, or",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": " 4.167% Super Drain per Second",
+        "style": "font-weight:bold;color:#ffd966;"
+      },
+      {
+        "text": "Grants ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "3 Melee Ability Charges",
+        "style": "font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": " on ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Super End",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ".",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Light Attack",
+        "style": "font-weight:bold;color:#b6d7a8;"
+      },
+      {
+        "text": "Drains 3% Super Energy.",
+        "style": "font-weight:bold;color:#ffd966;"
+      },
+      {
+        "text": "Performs a strengthened ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Frenzied Blade Melee",
+        "style": "font-weight:bold;color:#79bec3;"
+      },
+      {
+        "text": " that deals ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "851",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": " [210] ",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": "damage and can be infinitely chained.Deals 25% increased damage against ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Suspended",
+        "style": "font-weight:bold;color:#6aa84f;"
+      },
+      {
+        "text": " enemies. Attacks 3 times per second. Increases Attack Speed by 100% after chaining 3 sustained light attacks. ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Performing a Heavy Attack, or failing to maintain a Light Attack chain will remove the Attack Speed Increase.",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Heavy Attack",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "Drains 10.5% Super Energy. ",
+        "style": "font-weight:bold;color:#ffd966;"
+      },
+      {
+        "text": "Incurs a 3 second cooldown after usage.",
+        "style": "font-weight:bold;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "Hurls a pair of ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Suspending ",
+        "style": "font-weight:bold;color:#6aa84f;"
+      },
+      {
+        "text": "projectiles forward that home in towards enemies, dealing",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": " 143 x 2 ",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": "[61]",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": " impact damage, and up to ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "608 x 2",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "[36]",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": " splash damage over ? meters.",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Light Attack Hits reduce the cooldown by 1 second. Receiving any damage reduces the cooldown by 1 second.",
+        "style": "font-weight:bold;font-style:italic;color:#e06666;"
+      }
+    ],
+    "D81": [
+      {
+        "text": "Upon scoring a ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Sword Kill",
+        "style": "font-weight:bold;font-style:italic;color:#a481e1;"
+      },
+      {
+        "text": ", ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Melee Kill",
+        "style": "font-weight:bold;font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": ", ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Glaive Melee Kill",
+        "style": "font-weight:bold;font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": ", ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Super Light Attack Kill",
+        "style": "font-weight:bold;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ", or ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Finisher",
+        "style": "font-weight:bold;font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Raises a ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Banner of War ",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "for 15 seconds, buffing the user and ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "nearby allies",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": " within 10 metres. Kills scored by the user or ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "nearby allies",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": " empower and extend the duration of ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Banner of War",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": ", up to a maximum of ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "x4 Banner of War",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": " and 30 seconds.",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Banner of War:",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "Lasts for 15 seconds, up to a maximum of 24 seconds.Grants ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "x1 stacks ",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "for every ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "7 ",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": "[2]",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": " enemies that either die within 20 meters, are killed by the user, or by ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "allies ",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": "within 20 metres.Kills increase the duration by +5 seconds. Each ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "stack after the second ",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "decreases the duration extension by -1, down to +3 seconds per kill at ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "x4 stacks",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": ".Periodically ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "restores 20 HP ",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      },
+      {
+        "text": "every ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "2.5 seconds",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      },
+      {
+        "text": ". Each ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "stack after the first ",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "decreases the ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "delay between",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "pulses ",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      },
+      {
+        "text": "by ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "0.5 second",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      },
+      {
+        "text": ", down to ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "1 second",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      },
+      {
+        "text": " at ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "x4 stacks",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Grants ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "100% ",
+        "style": "font-weight:bold;color:#79bec3;"
+      },
+      {
+        "text": "[Varies]",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": " Increased Melee Damage",
+        "style": "font-weight:bold;color:#79bec3;"
+      },
+      {
+        "text": ", ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "40% Increased Bladefury Damage",
+        "style": "font-weight:bold;color:#ffd966;"
+      },
+      {
+        "text": ", and ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "20% Increased Sword Damage",
+        "style": "font-weight:bold;color:#a481e1;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "[x1 = ?% Inc. Melee DMG | x2 = ?% | x3 = ?% | x4 = ?%]",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": "Stacks ",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "| Time Extension | Kills for next stack | ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Pulse Delay",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      },
+      {
+        "text": "x1 ",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "| +6 seconds | ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "7",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "[2]",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": " Kills | ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "2.5 seconds",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      },
+      {
+        "text": "x2 ",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "| +5 seconds | ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "7",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": " [2]",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": " Kills | ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "2 seconds",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      },
+      {
+        "text": "x3 ",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "| +4 seconds | ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "7",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": " [2]",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": " Kills | ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "1.5 seconds",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      },
+      {
+        "text": "x4 ",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": "| +3 seconds | - | ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "1 second",
+        "style": "font-weight:bold;color:#dd7e6b;"
+      }
+    ],
+    "D83": [
+      {
+        "text": "Elementally-Debuffed Enemies",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "?% Class Ability Energy",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "On ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Class Ability Usage:",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": "Strand Lash",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Strand Lash",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "61",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[31] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Suspension ",
+        "style": "color:#6aa84f;"
+      }
+    ],
+    "D85": [
+      {
+        "text": "While sliding:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "[Melee Ability]",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "50% Melee Energy",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "135 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[66]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Unable to use during slide if user shoots.",
+        "style": "font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "While Airborne after using ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Melee Ability",
+        "style": "font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "[Melee Ability]",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "50% Melee Energy",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": " 4 Unraveling Projectiles",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "171 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[25.2]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "[Melee Ability]",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Non-Melee",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Melee Animation",
+        "style": "color:#79bec3;"
+      }
+    ],
+    "D87": [
+      {
+        "text": "Upon destroying a",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Tangle",
+        "style": "font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "3 pulses",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Tangle ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "restoring 15 HP",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Woven Mail",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "allies ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "On ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Super Cast",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "allies ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Woven Mail",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "While ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Woven Mail ",
+        "style": "font-style:italic;color:#93c47d;"
+      },
+      {
+        "text": "is ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "active:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "300% ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[200%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Additional Base Melee Regeneration Rate.",
+        "style": "color:#79bec3;"
+      }
+    ],
+    "D95": [
+      {
+        "text": "Innately has ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "3 Melee Ability Charges.",
+        "style": "font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": "0 Charges = 1.16x Regeneration Speed | 1 Charge = 1.64x Regeneration Speed | 2 Charges = 2.6x Regeneration Speed",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "On Prismatic: ",
+        "style": "color:#fbbdec;"
+      },
+      {
+        "text": "Penalized ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "with an additional 0.7x Regeneration Speed",
+        "style": "color:#fbbdec;"
+      },
+      {
+        "text": "Strand Needle",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "505",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[68] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "unravel ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": " ?",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "+?",
+        "style": "font-size:7pt;color:#93c47d;"
+      },
+      {
+        "text": " [7",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "+2.5]",
+        "style": "font-size:7pt;color:#93c47d;"
+      },
+      {
+        "text": " ",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D99": [
+      {
+        "text": "General Super Information",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "?%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[53%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " 9 homing projecties",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "783",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " [?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "threadlings",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Threadlings ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Needlestorm ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "368 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D103": [
+      {
+        "text": "Enhances Strand Grenades:",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Grapple | ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Grapple Melees",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "3 Threadlings",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Threadling Grenade |",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "[Grenade] ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Threadling nest",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Shackle Grenade",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "[Grenade] ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Grenade Charge",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " Weaver's Trance",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Suspending Explosion",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "Weaver's Trance",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "108",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Strand",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Grenade Ability Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Slicewire Grenade",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": " [Grenade]",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "4 submunition",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "64",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "damage ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Tangle",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Tangle Creation Cooldown",
+        "style": "color:#e06666;"
+      }
+    ],
+    "D105": [
+      {
+        "text": "Tangles ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Suspending Explosion ",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "324 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "Suspension",
+        "style": "color:#6aa84f;"
+      },
+      {
+        "text": "Thrown Tangles ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Threadling Kills",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Tangle ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Tangle Cooldown",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": " 1 second",
+        "style": "color:#b6d7a8;"
+      }
+    ],
+    "D107": [
+      {
+        "text": "Threadling damage instances ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": " 10% Class Ability Energy",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "700",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " [?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Perched Threadling",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Incurs a 2 second cooldown before additional threadlings can be generated. Cannot generate more than 1 Threadling at a time.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Damage requirement is based on the displayed damage numbers, and is penalized by Power Level Delta.",
+        "style": "font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "On ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Class Ability Usage",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Threadlings",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Perched Threadlings",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Perched Threadling",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Miniboss and below",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "34% ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Boss",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "100%",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Guardians ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "67%",
+        "style": "color:#b6d7a8;"
+      }
+    ],
+    "D109": [
+      {
+        "text": "While ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "airborne and while having at least ",
+        "style": "font-weight:bold;font-style:italic;"
+      },
+      {
+        "text": "1 Melee Ability Charge",
+        "style": "font-weight:bold;font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "[Air Move]",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Weavewalk ",
+        "style": "font-weight:bold;color:#b6d7a8;"
+      },
+      {
+        "text": "instantly consumes ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "20% Melee Ability Energy",
+        "style": "font-weight:bold;color:#79bec3;"
+      },
+      {
+        "text": "While ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Weavewalk",
+        "style": "font-weight:bold;font-style:italic;color:#b6d7a8;"
+      },
+      {
+        "text": " is ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "active",
+        "style": "font-weight:bold;font-style:italic;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Generates a ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Perched Threadlings",
+        "style": "font-weight:bold;color:#b6d7a8;"
+      },
+      {
+        "text": " every 0.5 seconds. Grants ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "90%",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "[90%, 60% while carrying Spark] ",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": "Damage Resist.",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Drains 25% Melee Ability Energy per second.",
+        "style": "font-weight:bold;color:#79bec3;"
+      },
+      {
+        "text": "Functionally identical to ",
+        "style": "font-weight:bold;font-style:italic;"
+      },
+      {
+        "text": "Void Invisibility",
+        "style": "font-weight:bold;font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:bold;font-style:italic;"
+      },
+      {
+        "text": "Arc Souls",
+        "style": "font-weight:bold;font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": ",",
+        "style": "font-weight:bold;font-style:italic;"
+      },
+      {
+        "text": " No Time To Explain's Time-slip Portal",
+        "style": "font-weight:bold;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ", and ",
+        "style": "font-weight:bold;font-style:italic;"
+      },
+      {
+        "text": "Threadlings ",
+        "style": "font-weight:bold;font-style:italic;color:#b6d7a8;"
+      },
+      {
+        "text": "deal 50% Decreased Damage.",
+        "style": "font-weight:bold;font-style:italic;"
+      },
+      {
+        "text": "Unable to use Weapon, Abilities, or perform revives. Cannot pick up ammo or Orbs of Power.",
+        "style": "font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Upon exiting ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Weavewalk",
+        "style": "font-weight:bold;font-style:italic;color:#b6d7a8;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grants ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Woven Mail",
+        "style": "font-weight:bold;color:#93c47d;"
+      },
+      {
+        "text": " to the user and ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "allies ",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": "within ? meters.Duration scales from 2 seconds, up to a maximum of 20 seconds after being in ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Weavewalk ",
+        "style": "font-weight:bold;color:#b6d7a8;"
+      },
+      {
+        "text": "for ? seconds.",
+        "style": "font-weight:bold;"
+      }
+    ]
+  },
+  "cell_notes": {},
+  "rendered_rows": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79,
+    80,
+    81,
+    82,
+    83,
+    84,
+    85,
+    86,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    94,
+    95,
+    96,
+    97,
+    98,
+    99,
+    100,
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110
+  ],
+  "notes_availability": "Public HTML does not expose all spreadsheet cell notes or formulas."
+}

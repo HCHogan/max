@@ -1,0 +1,43 @@
+{
+  "merged_ranges": [
+    "A1:B1",
+    "C1:I1",
+    "J1:O1",
+    "P1:R1"
+  ],
+  "hyperlinks": {
+    "B3": "https://www.light.gg/db/items/2485400469/biting-winds/",
+    "B4": "https://www.light.gg/db/items/1094998581/",
+    "B5": "https://www.light.gg/db/items/911019136/point-of-the-stag/",
+    "B6": "https://www.light.gg/db/items/1770490683/",
+    "B7": "https://www.light.gg/db/items/3621336854/",
+    "B8": "https://www.light.gg/db/items/2631466936/fortunate-star/",
+    "B9": "https://www.light.gg/db/items/2291392465/",
+    "B10": "https://www.light.gg/db/items/3638723317/",
+    "B11": "https://www.light.gg/db/items/471764396/",
+    "B12": "https://www.light.gg/db/items/3388655311/tyranny-of-heaven/",
+    "B13": "https://www.light.gg/db/items/1054567917/",
+    "B14": "https://www.light.gg/db/items/3667861447/",
+    "B15": "https://www.light.gg/db/items/3481382332/",
+    "B16": "https://www.light.gg/db/items/1175295126/",
+    "B17": "https://www.light.gg/db/items/2838279629/",
+    "B18": "https://www.light.gg/db/items/3710082365/",
+    "B19": "https://www.light.gg/db/items/3849444474/",
+    "B20": "https://www.light.gg/db/items/720351795/",
+    "B21": "https://www.light.gg/db/items/45643573/",
+    "B22": "https://www.light.gg/db/items/2591241074/",
+    "B23": "https://www.light.gg/db/items/232928045/",
+    "B24": "https://www.light.gg/db/items/1399109800/",
+    "B25": "https://www.light.gg/db/items/3472875143/",
+    "B26": "https://www.light.gg/db/items/2513965917/",
+    "B27": "https://www.light.gg/db/items/2848549302/",
+    "B28": "https://www.light.gg/db/items/690341468/whispering-slab/",
+    "B29": "https://www.light.gg/db/items/3460122497/",
+    "B30": "https://www.light.gg/db/items/3165143747/"
+  },
+  "cell_notes": {},
+  "formulas": {},
+  "rich_text": {},
+  "hidden_rows": [],
+  "drawings_present": true
+}

@@ -1,0 +1,2956 @@
+,[PVP-Specific],,Exotic Weapon Documentation,,,PVE-Specific,,
+Kinetic Weapons,,,,Energy Weapons,Power Weapons,,,
+Weapons don't inherit frame bonuses unless the benefits are explicitly listed.,,,,,,,,
+,,"Exotic Weapon Catalysts are displayed with ↑Yellow.
+Traits that are added via Catalysts use the NON-ENHANCED (BASE) values.",,,,,,
+Kinetic Slot Weapons,,,,,,,,
+"Ace of Spades
+
+Memento Mori
+Firefly
+↑Funeral Pyre",,,"Kinetic Adaptive Hand Cannon
+
+Radar remains active while ADS.
+
+Enhanced Firefly deals a maximum of 436 [80?] Damage, down to a minimum of 20% [?] Damage over 7.5 meters, with Damage Falloff Start at 3.75m.
+
+Upon finishing a reload within 3.6 seconds of a kill:
+Grants x6 Memento Mori bullets.
+Firing consumes a stack of Memento Mori per shot, granting 68% [29%] increased damage and 15% Decreased Damage Falloff Distance.
+Memento Mori is removed on stow. Reload Trigger persists through stow.
+
+↑Funeral Pyre:
+50% Increased Firefly Damage while Memento Mori is active.",,,,,
+"Ager's Scepter
+
+Ager's Call
+Rega's Refrain
+↑Will Given Form",,,"Stasis Adaptive Trace Rifle
+Intrinsically has a 1.3x PVE Bonus over Legendary Trace Rifles.
+
+Kills trigger a Stasis Burst, inflicting x100 [x50] Slow Stacks to enemies within 10 meters.
+Stasis Kills refill 10 Ammo.
+
+↑Will Given Form: Hold [Reload] to activate Alternate Firing Mode while at Full Super Energy.
+Immediately drains 20% Super Energy, then constantly drains 4% Super Energy per Second.
+Overflows magazine to 192 from reserves, and grants 80% increased damage. 
+Hits inflict x20 [x0] Slow Stacks for 4+0 seconds 
+Effect lasts until Magazine is emptied, Super Energy runs out, or if Ager's Scepter is stowed.
+No, it does not benefit from Super Stat >100, or any other Super Ability Damage increase!",,,,,
+"Alethonym
+
+Harvester Spike
+Vestigial Alchemy
+↑One For All",,,"Stasis Micro-Missile Grenade Launcher Rifle
+Grants Lightweight Frame bonuses. Deals 40% increased damage against Rank-and-File Combatants (compared to Exotic Primary's 30%)
+
+Fires Harvester Spikes in a straight line, dealing 43 [39] Impact Damage, and up to 697 [91] Explosive Damage, down to 30% damage over 5 meters.
+Minibosses, Champions, and Bosses become impaled on direct hits, being dealt 79 Damage every 0.8 seconds up to 6 times over 4 seconds. 
+Impaled Enemies trigger the Harvester Spike Explosion on the sixth tick, removing the impaled projectile.
+Impale Damage is non-lethal. There is no limit to the amount of simultaneous impales on a single enemy.
+
+Kills create a floating Vestige that home in towards the user. Picking up a Vestige grants Vestigial Alchemy Energy.
+Picking up 7 Vestiges totals 50% Vestige Energy. Requires an additional 10 Vestiges (17 Total) to reach 100% Energy.
+Impaled Minibosses, Champions, and Bosses spawn a Vestige every time Impale damage ticks, spawning up to 6 Vestiges on a single shot.
+
+Holding [Reload] while Vestigial Alchemy is at least at 50% Energy toggles between Firing Modes.
+50%–99% Vestigial Energy: Regular Fire -> Special Ammo Mode | 100% Vestigial Energy: Regular Fire -> Special Ammo Mode -> Heavy Ammo Mode
+Ammo-Loaded Shots deplete Vestigial Alchemy Energy, and always explode on hit, meaning they cannot impale Combatants.
+
+Special Ammo Mode: Causes the next shot to spawn a Special Ammo Brick for the user and their allies. Consumes 50% Vestigial Energy.
+Special Vestige Ammo Bricks grant 10% of Total Reserves and are affected by Scavenger mods.
+
+Heavy Ammo Mode: Causes the next shot to spawn a Heavy Ammo Brick for the user and their allies. Consumes 100% Vestigial Energy.
+Heavy Vestige Ammo Bricks grant 10% of Total Reserves and are affected by Scavenger mods.
+
+↑Catalyst:
+Grants the One For All trait.",,,,,
+"Arbalest
+
+Compouding Force
+Disruption Break
+↑Genesis",,,"Special Ammo Kinetic Precision Linear Fusion Rifle
+
+Fires a single shield-piercing Precision Slug that deals 582 [132] Kinetic Damage with a 3.44x [4.3x] Precision Multiplier.
+Shield-Piercing Slug instantly destroys Barrier Champion's Shield and Combatant Elemental Shields on hit, inflicting them with Disruption Break.
+
+Kinetic Vulnerability from Disruption Break applies to Arbalest.
+
+↑Catalyst:
+Passively grants +20 Handling, +1 Magazine Size (5 -> 6), and the Genesis trait.
+Effectively makes all Shield Breaks refill the magazine.",,,,,
+"Bad Juju
+
+String of Curses
+Hip-Fire Grip
+↑Unending Curse",,,"Kinetic Lightweight Pulse Rifle
+
+Kills refill Magazine and grant a stack of String of Curses for 5.5 seconds, up to a maximum of 5 stacks.
+String of Curses grants increased damage and additional Super Energy on kill.
+String of Curses persists through stow.
+
+String of Curses
+20% | 40% | 60% | 80% | 100% Increased Damage
+10% | 20% | 30% | 40% | 50% Increased Damage
+0.8% | 1.1% | 1.4% | 1.7% | 2% Additional Super Energy
+
+Upon scoring 3 kills within 7.5? seconds of each without reloading or stowing Bad Juju:
+Triggers a Cursed Explosion, dealing up to 305 [?] Kinetic Damage over ? meters.
+Explosion Kills count towards the kill counter. String of Curses damage buff applies to the Explosion Damage.
+
+↑Unending Curse:
+String of Curses duration is increased to 7.5 seconds.",,,,,
+"Barrow-Dyad
+
+Panic Response I–V
+Taken Divergence
+↑Craftable Trait",,,"Craftable Strand Aggressive Submachine Gun
+Behaves differently depending on the current Path.
+
+Automatically refills magazine-based Ammo every 0.2 seconds while not firing, refilling up to 34 Ammo over 4.85 seconds.
+1-2 Ammo = 4 Refill per tick | 3-8 Ammo = 3 Refill | 9-16 Ammo = 2 Refill | 17 or higher = 1 Refill
+Firing delays refilling to 0.285 seconds. Can fire permanently at 1 Ammo at 240?RPM. Refills to 34 Ammo to not prevent reloading.
+
+Dealing damage charges Blight at a rate of 2% Blight per damage instance, reaching 100% Blight after dealing damage 50 times.
+Blight decays at a rate of 3.33% every 1.2 seconds after not firing for 1.3 seconds, fully decaying after 41.1 seconds.
+Grants increased Reload Speed based on the amount of Blight Seekers prepared.
+Blight charge persists through stow, and decays normally.
+
+On Reload:
+Triggers Panic Response, converting all stored Blight into Blighted Seekers, at a rate of 1 Seeker for every 16.7% Blight, up to a maximum of 6 Seekers.
+Always rounds up to the nearest Seeker number. Eg: 1% Blight = 1 Seeker, 52% = 4 Seekers, 84% = 6 Seekers. 
+Blight Seekers are fired at a rate of 450RPM Hipfire | 720RPM ADS, overwriting regular shots.
+Panic Response lasts for 7 seconds, and persists through stow.
+
+Taken Resolution
+Dealing damage to 3 enemies within ? seconds of each grants 50% Blight.
+Blighted Seekers deal 173 [6.85 Guardians | 81 Constructs] Damage over 3? meters on hit.
+Blight Seekers pierce through enemies, seeking a maximum of 2 additional enemies within 10? meters of each.
+Seekers can re-target enemies already hit by them.
+
+Taken Ambition
+Scoring 12 damage instances within 1 seconds of each on a single enemy or construct grants 22% Blight. Due to rounding, dealing damage 24 times is enough to grant 6 Seekers.
+Blighted Seekers explode on impact, dealing 45 [9?] Impact Damage and 542 [21?] Explosive Damage over 0.25? meters.
+
+↑Selectable Retrofit:
+Grants the option to slot-in High-Impact Reserves, Hatchling, One For All, or Target Lock trait equivalents.",,,,,
+"Bastion
+
+Saint's Fists
+Breakthrough
+↑Cast No Shadows",,,"Kinetic Fusion Rifle
+
+Fires a 3-round burst of 7 pellets each.
+Deals 136 [31.2] damage per pellet x 7 = 952 [218.4] per burst x 3 = 2,856 [655.2] damage per Ammo spent.
+
+Upon scoring 14 pellets in a burst:
+300% [100%] increased Melee Damage for the next Melee Hit within 3 seconds.
+
+Upon dealing Melee Damage:
+35% increased damage, +? Reload Speed, and 0.85x Charge Time Multiplier for 8.5 seconds.
+Additional Melee Damage refreshes Saint's Fury duration. 
+Buff is removed on stow.
+
+↑Catalyst: Grants the Cast No Shadows Origin Trait",,,,,
+"Cerberus +1
+
+Four-Headed Dog
+Spread Shot Package
+↑Focused Fire",,,"Kinetic Quad-Barrel High-Impact Auto Rifle
+Deals 85% of the damage of a High-Impact Auto Rifle.
+Has reverse damage falloff at close ranges for both firing modes.  Deals 75% decreased damage to Stasis Crystals.
+
+Each shot fires 4 evenly spread pellets in a triangular shape, with one always landing within the Accuracy Cone.
+Each pellet deals up to 44 [20.4] damage with a 1.77x Precision Multiplier.
+ADS grants -25% Pellet Spread.
+
+Decreases damage dealt the closer an enemy is, up to a maximum of 16.67% Decreased Damage at point blank, scaling up to base damage at 14 metres. 
+The ADS Damage Falloff Scalar of 1.6x increases the minimum distance to reach base damage to 22 meters.
+
+↑Focused Fire: Hold [Reload] within 7 seconds of a kill to activate Focused Fire. Green Light displays when it's possible to swap firing modes.
+50% [10%] increased damage and -30% Pellet Spread for 7 seconds.
+Additional Weapon Kills while Focused Fire is active refresh its duration.
+Focused Fire and Trigger Condition are removed on stow. ",,,,,
+"The Chaperone
+
+Precision Slug
+The Roadborn
+↑Triple Tap",,,"Kinetic Rapid-Fire Slug Shotgun
+Grants Lightweight Frame bonuses. Passively has 5% Increased Damage Falloff Distance.
+
+Fires a single Precision Slug that deals 737 [?] Damage with a 1.76x Precision Multiplier.
+
+Upon scoring a Precision Kill, or 2 Precision Hits within ? seconds of each:
+Grants Roadborn for 10 seconds. 
+Scoring additional Precision Hits extends the buff duration by +3 seconds, up to 10 seconds.
+Buff persists through stow.
+
+Roadborn:
+22% Increased Precision Damage, 0.58x Fire Recovery Delay, and 15% Total Increased Damage Falloff Distance
+ +20 Stability, +40 Reload Speed, 0.75x Reload Duration Multiplier, 0.56x Handling Duration Multiplier.
+
+↑Catalyst: Grants the Triple Tap trait.",,,,,
+"Conditional Finality
+
+Split Decision 
+Paracausal Pellets
+↑Heal Clip
+↑Rimestealer",,,"Stasis + Solar Aggressive Shotgun
+Reloads both shells at once.
+ Counts as a weapon for Harmonic Resonance, and benefits from the Handling and Reload Speed Increase from it.
+
+While Ammo = 2:
+Deals Stasis Damage. ▲ Pattern Spread.
+Scoring a hit with 10 out of the 12 pellets inflicts freeze.
+Benefits from Stasis Mods.
+
+While Ammo = 1 or 0:
+Deals Solar Damage. ⬤ Pattern Spread.
+Scoring a hit with 10 out of the 12 pellets triggers an ignition.
+Benefits from Solar Mods.
+
+↑Catalyst: Grants the Heal Clip and Rimestealer traits.",,,,,
+"Crimson
+
+Banned Weapon 
+Cruel Remedy
+↑To the Pain",,,"Kinetic 3-Round Burst Aggressive Hand Cannon
+
+Allegedly shoots an illegal burst of 3 bullets, each dealing 67 [18] damage with a 1.85x Precision Multiplier.
+
+Kills restore 32 HP and begin Health Regeneration.
+Precision Kills refill the Magazine.
+
+↑Catalyst: Passively grants +20 Range and the To The Pain trait.",,,,,
+"Cryosthesia 77K
+
+LN2 Burst
+Liquid Cooling
+↑Cold Efficiency",,,"Stasis Precision Sidearm
+
+Kills grant LN2 Burst Ready, enabling a Charged Shot Reload.
+LN2 Burst Ready persists through stow.
+
+Hold [Reload] while LN2 Burst Ready is active to perform a special reload that loads up a Charged Shot.
+Charged Shot requires briefly charging for 0.53 seconds, and instantly freezes on direct hit. Enemies within 6? metres are applied freeze [x50 Slow].
+Firing the Charged Shot, or stowing while Charged Shot is active reverts the firing mode to Sidearm Mode.
+
+↑Cold Efficiency:
+Scoring a Frozen Enemy Kill refills the Magazine.",,,,,
+"Cull's Shadow
+
+Soulburn
+Soulforge
+Blades of Unmaking
+↑Selectable Trait",,,"Kinetic Aggressive Fusion Rifle
+Counts as a Weapon of Sorrow. 
+The last Exotic Weapon added to Destiny 2.
+
+Replaces Melee Ability with the weapon's Frontal Blades capable of performing a swift two-hit combo with an extended 7 meter lunge.
+Each strike deals ? [84] Kinetic Damage. Frontal Blades deal 50% increased Melee Damage on Corrupted Enemies.
+Frontal Blade Damage scales with Melee Stat and Melee Damage Buffs. It is NOT a Glaive Melee.
+
+Upon scoring 2 Frontal Blade Strikes within 2? seconds of each or a Frontal Blade Kill:
+Grants a stack of Soulfire Charges, up to a maximum of 6 stacks and restores 40 HP.
+Stacks are only consumed upon firing or on death.
+
+Fires an increasingly wider 3 round burst of 4 projectiles each.
+Projectiles deal 143 [?] Kinetic Damage.
+Consumes a stack of Soulfire Charge to inflict Potent Corruption on enemies.
+Potent Corruption deals 65 [?] Kinetic Damage every 0.5 seconds, ramping up by ~8.7% per tick over 20 ticks, up to a final tick of 300 [?] Damage, totalling 2,985 [?] Damage.
+
+Soulfire Charge's Potent Corruption causes enemies to create a Soulfire Crystal on death.
+
+Soulfire Crystals are Constructs with 400? HP that linger for 15 seconds, exploding upon being reduced to 0 HP.
+Soulfire Crystal Explosion deals up to 1,065 [?] Kinetic Damage over 8 meters, down to 75% Damage.
+
+↑Catalyst grants 4 selectable traits:
+Soulfire Succor | Destroying Soulfire Crystals with Frontal Blades grants a Soulfire Charge and refills +1 Ammo.
+
+Soulfire Rancor | Soulfire Crystals explode when an enemy is within 7 meters, dealing 5% increased damage and inflicting the aforementioned Potent Corruption.
+
+Soulfire Zeal | Soulfire Crystal Explosions within 15 meters grant maximized movement speed and 20?% Damage Resist for +7 seconds, up to 20 seconds.
+
+Soulfire Skewer | Soulfire Crystal Explosions within 15 meters grant Frontal Blades the ability to inflict Corruption for +7 seconds, up to 20 seconds.
+Corruption deals 16 per tick every 0.5 seconds up to 10 times per infliction and can stack.",,,,,
+"Dead Man's Tale
+
+Cranial Spike I–IV
+Craftable Trait
+↑Dark-Forged Trigger",,,"Craftable Kinetic Aggressive Scout Rifle
+Loads 2 bullets at a time
+
+Precision Hits grant a stack of Cranial Spike for 4 seconds, up to a maximum of 5 stacks.
+Stacks persist through stow.
+
+Cranial Spike x1 | +8 Range, +2 Stability, 0.97x Reload Duration Multiplier, +4 Aim Assist, +1 Ammo Loaded, and 3.4% increased damage against Combatants.
+Cranial Spike x2 | +16 Range, +4 Stability, 0.94x Reload Duration Multiplier, +8 Aim Assist, +2 Ammo Loaded, and 6.8% increased damage against Combatants.
+Cranial Spike x3 | +24 Range, +6 Stability, 0.91x Reload Duration Multiplier, +12 Aim Assist, +3 Ammo Loaded, and 10.2% increased damage against Combatants.
+Cranial Spike x4 | +32 Range, +8 Stability, 0.89x Reload Duration Multiplier, +16 Aim Assist, +4 Ammo Loaded, and 13.6% increased damage against Combatants.
+Cranial Spike x5 | +40 Range, +10 Stability, 0.86x Reload Duration Multiplier, +20 Aim Assist, +5 Ammo Loaded, and 17% increased damage against Combatants.
+
+↑Dark-Forged Trigger:
+Passively grants 0.92x Hipfire Fire Recovery Delay, -50% Hipfire Accuracy Cone Size, and -?x Hipfire Accuracy Cone Growth. 
+Prefers Crits over Bodyshots if Precision AA Cone overlaps.
+24% [15%] increased Hipfire Damage while at x5 Cranial Spike.
+Adds up to a 45% Damage Buff against Combatants while Hipfiring.",,,,,
+"Euphony
+
+Unwound
+Spindle
+↑Enlightened Action",,,"Special Ammo Strand Adaptive Burst Linear Fusion Rifle
+
+Fires a 3-round burst, with each shot dealing 174 [39] Damage with a 3.43x Precision Multiplier.
+
+Scoring 6 hits within ? seconds of each spawns 3 Threadlings.
+Scoring a Precision Kill spawns 1 Threadling.
+
+Threadling hits grant a stack of Spindle, up to x25 stacks for 10 seconds.
+ Spindle grants 2% increased damage, +? Handling, and +? Reload Speed per stack, up to 50% increased damage, +? Handling, and +? Reload Speed at x25 stacks.
+Additional Threadling or Euphony Hits refresh the Spindle duration.
+Spindle can be stacked and remains active while stowed.
+
+↑Catalyst: Grants the Enlightened Action trait.",,,,,
+"Final Warning
+
+All At Once
+Pick Your Poison
+↑String Theory",,,"Strand Rapid-Fire Sidearm
+Projectiles despawn after 50 metres.
+
+Fires projectiles that deal 118 [25] damage with a 1.6x Precision Multiplier and have different behaviors depending on whether it is hipfired or aimed-down-sights.
+
+While holding down the trigger:
+Enemies within 24 metres are marked over 0.5 seconds for 2 seconds, and gradually charges up a 10-round burst over 0.9 seconds. Burst-Fire has +30 Stability.
+Fully-Charged Burst Hits inflict Unravel to marked enemies.
+
+While Hipfiring:
+Shoots slower-moving Tracking Rounds which aggressively seek marked enemies.
+Marked Enemies receive 20% Increased Bodyshot Damage.
+
+While ADS:
+Shoots hitscan projectiles.
+ Marked Enemies receive 100% Increased Precision Damage.
+
+↑String Theory:
+10% increased damage towards Marked Enemies. Marked Miniboss and Boss Combatants only receive 5% increased damage.
+Hits against Marked Enemies have a chance to refill 1 Ammo.
+Rank-and-File and Elites = ~85% | Minibosses+ = 25%",,,,,
+"Forerunner
+
+Full Stop
+Pace Yourself
+↑The Rock",,,"Special Ammo Kinetic Sidearm
+
+Fires extended-range, heavy-caliber rounds that deal 118 [42] damage with a 5.2x [1.85x] Precision Multiplier. 
+
+Firing semiautomatically grants -33?% Recoil, -?% Accuracy Cone Growth and -?% Accuracy Cone Size. Impossible to obtain Accuracy numbers due to the gun's reticle.
+
+↑The Rock: Hold [Reload] within 4 seconds of a Weapon Kill, while having at least 4 Ammo to replaces Grenade Ability with a Kinetic-Damage Fragmentation Grenade.
+Fragmentation Grenade deals up to 1863 [181] damage in a 9 metre radius and follows a Medium Arc Trajectory.
+Explosion deals a minimum of 20% damage at maximum falloff. Explosion deals 75?% Decreased Self-Damage. 
+Has a 0.6 second fuse timer that begins as soon as movement is slowed enough.
+Fragmentation Grenade counts as a Grenade Ability, and will activate any effect associated with Grenade Kills or Grenade Ability Usage.
+The Rock persists through stow, and is only removed on Grenade Usage.",,,,,
+"Hawkmoon
+
+Paracausal Shot
+Randomly Rolled Trait
+↑Hunter's Trance",,,"Kinetic Adaptive Hand Cannon
+
+Precision Hits or Kills grants a stack of Paracausal Charge.
+Paracausal Charge grants increased damage against Combatants. based on the amount of stacks.
+x1 = 21% | x2 = 36.5% | x3 = 47.6% | x4 = 55.3% | x5 = 59.8% | x6 = 63.2% | x7 = 66.3%
+Paracausal Charge stacks are removed on reload, upon fully refilling the magazine, or upon stowing while at either 1 Ammo left, or while at Paracausal Charge ≥6 stacks.
+
+The Final Round in the magazine consumes all Paracausal Charge stacks to deal increased damage based on the amount of stacks. 
+The damage buff from Paracausal Charge does NOT apply to the Final Round damage.
+
+Paracausal Shot's Final Round Damage Increase:
+292% | 300% | 340% | 425% | 667% | 1071% | 1736%
+30% | 33% | 45.7% | 80.5% | 154.3% | 288% | 508.6%
+Weapon can get different rolls from Xûr.
+
+↑Hunter's Trance:
+Passively grants +1 Magazine Size (8 -> 9).
+Grants increased Range, Handling, and Reload Speed as Paracausal Shot stacks increase.
++8 | +14 | +22 | +26 | +28 | +29 | +30 Range
++? | +? | +? | +? | +? | +? | +? Handling
++15 | +25 | +35 | +40 | +50 | +50? | +50? Reload Speed",,,,,
+"Huckleberry
+
+Ride The Bull
+""Yeehaw"" Rampage
+↑Bull Rider",,,"Kinetic Aggressive Submachine Gun
+
+While holding down the trigger:
+Grants a stack of Ride The Bull every 0.833 seconds, up to 2 stacks.
+Ride The Bull x1 grants 0.9x Fire Recovery Delay and +?% Recoil.
+Ride The Bull x2 grants 0.8x Fire Recovery Delay and +?% Recoil.
+Ride The Bull is removed upon releasing the trigger.
+
+Kills refill Magazine and grant a stack of ""Yeehaw"" Rampage for 3.5 seconds.
+20% | 41% | 66% Increased Damage
+10% | 21% | 33% Increased Damage
+
+↑Bull Rider:
+Grants the Kinetic Tremors trait, requiring 14 hits to trigger, with each shockwave dealing 215 [20] Damage, scaling with Weapon Damage Buffs.",,,,,
+"Izanagi's Burden
+
+Honed Edge
+No Distractions
+↑Peerless Edge",,,"Kinetic Adaptive Sniper Rifle
+
+Hold [Reload] to perform a slower Reload that consumes up to 4 Ammo and grants a single, high-damage Honed Edge shot that deals up to ↑7739 Precision Damage.
+Honed Edge persists through stow until it is fired.
+
+Honed Edge x2 = 12% [20%] Increased Damage and +1.92 Precision Multiplier. Total: 79% [91%]
+Honed Edge x3 = 25% [45%] Increased Damage and +2.74 Precision Multiplier. Total: 131% [167%]
+Honed Edge x4 = 112% [165%] Increased Damage and +2.74 Precision Multiplier. Total: 291% [389%]
+↑Peerless Edge x4 = 155% [218%] Increased Damage and +2.74 Precision Multiplier. Total: 370% [487%]
+Honed Edge's Reload Animation Speed is the same as a regular reload's.
+
+↑Peerless Edge:
+Honed Edge x4's Damage Increase is multiplied by 1.2x.",,,,,
+"The Jade Rabbit
+
+The Fate of All Fools
+Shoot To Loot
+Firefly",,,"Kinetic High-Impact Scout Rifle
+
+Upon scoring 3 Precision Hits within 2 seconds of each or a Precision Kill:
+Refills Magazine and grants 1 stack of Fate of All Fools, up to a maximum of 15 stacks.
+Fate of All Fools persists through stow.
+
+Fate of All Fools:
+Landing a Non-Precision Hit consumes a stack to make it deal the same damage as a Precision Hit.
+Grants 100% increased Firefly damage.
+
+↑Catalyst: Passively grants +30 Stability.
+Holding [Reload] consumes all Fate of All Fools stacks, granting a single Fated Micro-Missile that deals increased damage based on the number of stacks consumed.
+Micro-Missile deals 122 [?] Impact Damage and 171 [?] Explosive Damage, down to 45% damage over 8 meters at 1 stack. 
+x2 = 151 + 456 | x3 = 179 + 575 | x4 = 196 + 662 | x5 = 213 + 733 | x10 = 264 + 954 | x15 = 281 + 1023
+Can also be used to rocket jump without any self-damage, weeeeeeeeeee!",,,,,
+"Khvostov 7G-0X
+
+The Right Choice
+Eyes Up, Guardian
+Shoot to Loot
+↑Attrition Orbs",,,"Kinetic Adaptive Auto Rifle
+
+Picking up an Orb of Power grants x7 stacks of Eyes Up, Guardian. (A full magazine worth of enhanced ricochets)
+Eyes Up, Guardian stacks persist through stow.
+
+Every shot in the magazine divisible by 7 fires a ricochetting bullet that deals 252.52% [5% Guardians | 252.52% Constructs] increased damage with +50% Auto Aim Cone Size.
+Rounds that ricochet off of enemies bounce towards the closest enemy within 8? [5?] meters, dealing 108 [4.6] damage.
+
+Firing a ricochetting round while Eyes Up, Guardian is active consumes a stack, enhancing the ricochetting bullet.
+Enhanced Ricochetting Bullets bounce up to 7 times between enemies within 12? [?] meters. Enemies can only be damaged twice by the same ricochetting bullet.
+
+↑Catalyst: Grants the Attrition Orbs trait.",,,,,
+"The Last Word
+
+Fan Fire
+Hip-Fire Grip
+↑Killing Wind
+↑Envious Assassin",,,"Kinetic Hand Cannon
+
+Fires at 225RPM full-auto, with each shot dealing 175 [43] Damage with a 1.79x Precision Multiplier.
+Hip-Fired Precision Hits deal 88% [?%] increased damage. 
+
+Hipfired Hits grant a stack of Fan Fire for 4 seconds, up to 4 stacks.
+Fan Fire stacks are removed on reload, ADS, or stow.
+
+Fan Fire:
++5 | +10 | +15 | +20 Reload Speed
+ -5% | -10% | -15% | -20% Accuracy Cone Size
+
+↑Catalyst: Grants the Killing Wind and Envious Assassin traits.",,,,,
+"Lumina
+
+Noble Rounds
+Blessing of the Sky
+↑Resonant Virtue",,,"Kinetic Adaptive Hand Cannon
+
+Kills create a floating Remnant that homes in towards the user while within 15 metres. 
+Remnants refill 4 Ammo and grant 1 Noble Round on pickup, up to a maximum of 6 Noble Rounds. Boots of the Assembler' Noble Seekers grant 1 Noble Rounds.
+Noble Round stacks persist through stow.
+
+Hipfiring releases a Noble Round, which aggressively seeks the closest ally.
+Noble Rounds restore 90 HP to the ally, and grant Blessing of the Sky to both the wielder and the ally.
+
+Blessing of the Sky:
+35% [15%] increased damage and +100 Class Stat for 11 seconds.
+
+↑Resonant Virtue:
+Kills now create 2 Remnants.",,,,,
+"Malfeasance
+
+Explosive Shadow
+Taken Predator
+↑Vorpal Weapon",,,"Kinetic Precision Hand Cannon
+
+Hits embed Explosive Slugs on the enemy for 6 seconds. Slugs expire harmlessly individually.
+Embedding 5 slugs on an enemy causes the slugs to explode, each dealing 216 [45] damage per slug.
+Embedded slugs also explode on death.
+
+Deals 25% Increased damage against Gambit Invaders and Taken Combatants.
+Deals 25% Increased damage against Combatants that are directly struck by Witherhoard's Blight.
+
+↑Catalyst:
+Passively grants +20 Range and the Vorpal Weapon trait.",,,,,
+,,,,,,,,
+"MIDA Multi-Tool
+
+MIDA Multi-Tool
+MIDA Software Package
+MIDA Radar
+↑Vital Intel",,,"Kinetic Lightweight Scout Rifle
+Grants Lightweight Frame bonuses. MIDA Synergy Weapons inherit the Movement Bonus.
+
+Grants 12.5% Increased Movement Speed while readied.
+
+Radar remains active while ADS.
+
+Scoring kills with MIDA Multi-tool and other weapons with MIDA Synergy traits progresses the 4-stage Software Update counter.
+Primary MIDA Weapons grant 15% [100%] Current Stage Progress (3.6% [25%] towards maximum)
+Special MIDA Weapons = 10% [50%] Current Stage Progress (2.5% [12.5%] towards maximum)
+Dying sets the Software Update counter to the beginning of the previous stage.
+
+Software Update: Incremental buffs that stack with the previous stages. Combatant Damage Buff is the total increase.
+Chip | 0.75x Handling Duration Multiplier and 4.8% increased damage towards Combatants.
+Barrel | +15 Range and +15 Stability and 9.6% increased damage towards Combatants.
+Optics | 15% Increased Aim Assist Falloff Distance, 5% Increased Auto Aim Cone Angle, and 14.4% increased damage towards Combatants.
+Ammo | Shots explode on impact, dealing an additional instance of up to 22 [7] Damage, down to 0% Damage over 3 meters and 14.4% increased damage towards Combatants.
+
+↑Vital Intel: While an enemy is within 15 meters:
+Enhanced Radar, +20 Reload Speed, and 0.85x Reload Duration Multiplier.
+ Buff lingers for 4 seconds once criteria isn't met, even if stowed.",,,,,
+"Monte Carlo
+
+Monte Carlo Method
+Markov Chain
+↑Bayonet Locked",,,"Kinetic Adaptive Auto Rifle
+
+Hits grant 2% Melee Energy.
+Kills grant a stack of Markov Chain for 4.5 seconds, up to 5 stacks, and have a 25% chance to grant 100% Fixed Melee Ability Energy. 
+Melee Kills refill magazine and grant 5 stacks.
+
+Markov Chain:
+13% | 26% | 39% | 52% | 65% Increased Damage
+6.6% | 13.2% | 19.8% | 26.4% | 33% Increased Damage
+
+↑Bayonet Locked: Hold [Reload] while at Markov Chain x5 to replace Melee Ability with a Bayonet for a single Melee Attack. Bayonet counts as an Unpowered Melee Attack.
+Bayonet Melee Attacks deal 2,495 [140] Kinetic Melee Damage, grant 50% Fixed Melee Ability Energy, and increase the Melee Lunge Distance to 7 metres.
+Bayonet Ready persists through stow.",,,,,
+"Necrochasm
+
+Cursebringer
+Desperation
+↑One for Thrall",,,"Kinetic Rapid-Fire Auto Rifle
+Counts as a Weapon of Sorrow.
+
+On Precision Kill, or upon scoring a Cursed Thrall Explosion Kill, or upon killing a Corrupted Enemy:
++70? Reload Speed and 0.9?x Reload Duration Multiplier for ? seconds.
+Triggers a Cursed Thrall Explosion, dealing up to 630 [130?] Arc Damage, down to 10% damage and inflicting Corruption over a 8 meter radius. 
+Cursed Thrall Explosion Kills refill Magazine.
+Corruption deals 18 [0.4?] Kinetic Damage every 0.5 seconds for 3.5 [2] seconds.
+Cursed Thrall Explosion and Corruption Damage scale with Combatant Rank Multipliers.
+Fun Fact: Cursed Thrall (Hive Combatants) deal 250 damage against Combatants.
+
+Upon finishing a reload within ? seconds of a Precision Kill, or upon scoring a Cursed Thrall Explosion Kill:
+0.8x Fire Recovery Delay Multiplier, +6? Stability, +10-15? Aim Assist for 7 seconds.
+
+↑One for Thrall:
+Damaging 3 enemies within 3 seconds of each grants 35% increased damage, +? Range, and +? Aim Assist for 10 seconds.
+One For Thrall can be reactivated by damaging 3 enemies again, and persists through stow. ",,,,,
+"New Land Beyond
+
+The Master
+Bullseye Bolster
+Snapshot Sights
+↑Top Tier Mastery",,,"Kinetic Bolt-Action Sniper Rifle.
+
+Fires a bullet that deals 970 [155] Kinetic Damage with a 2.75x Precision Multiplier, followed by a rechamber that scales based on the Reload Speed.
+Rechamber animation can be skipped following the ""clink"" noise by sprinting, allowing for considerably faster fire rate.
+
+Rechamber Speed:
+Base Rechamber Speed allows firing every 1.834 seconds.
+Bullseye Bolster allows firing every 1.49 seconds.
+100 Reload Speed allows firing every 1.35 seconds.
+ 100 Reload Speed + Bullseye Bolster allows firing every 1.275 seconds.
+100 Reload Speed + Rechamber Cancelling + Bullseye Bolster allows firing every ~1.05 seconds.
+
+Upon scoring a Precision Hit:
+Grants a stack of The Master, up to a maximum of 100 until death.
++? Stability, +? Handling, +40 Reload Speed, +? Aim Assist, and 0.95x Fire Recovery Delay? for 3 seconds or until firing and not scoring a Precision Hit.
+
+The Master:
+Grants increased Precision Damage, up to 70% at 20 stacks. 
+15.7% | 22.2% | 27% | 31.3% | 35% x5
+38.4% | 41.4% | 44.3% | 47% | 49.5% x10
+51.9% | 54.2% | 56.5% | 58.6% | 60.7% x15
+62.64% | 64.56% | 66.42% | 68.23% | 70% x20
+Renames to The Grandmaster upon reaching 20 stacks, slowly increasing up to 73% over 100 stacks. Shots visually explode while at 20+ stacks.
+ Transforms into THE GRANDERMASTER at 100 stacks. Transforms into The Chief Master at 999 stacks.
+
+↑Top Tier Mastery: While at >20 Master stacks:
+Magazine is constantly refilled, effectively removing reloading requirements.
+Bullseye Bolster duration is increased to ? seconds.",,,,,
+"New Malpais
+
+Atomizing Rounds
+Suspending Blast
+↑Unraveling Blast",,,"Strand Special Ammo Micro-Missile Pulse Rifle
+Hold [Reload] to manually detonate all embedded projectiles.
+
+Fires a 3-round burst of sticky projectiles that embed themselves to enemies and surfaces they hit, each dealing 271 [2] Impact Damage.
+Projectiles detonate upon holding [Reload] or after being embed for 6 seconds, detonating for up to 321 [60] Explosive Damage over 6 meters.
+
+Manually triggering the detonation of 6 embedded projectiles on a single enemy inflicts Suspension.
+
+↑Unraveling Blast: Explosive Damage from Enemy-Embedded Projectiles now inflicts Unravel.",,,,,
+"No Time to Explain
+
+Rewind Again
+Feeding Frenzy
+↑Blast from the Side",,,"Kinetic High-Impact Pulse Rifle.
+
+Precision Hits and Hits against enemies affected by Stasis grant a stack of Rewind Again and refill 1 Ammo.
+Reaching 10 stacks summons a Time-slip Portal for 9 seconds. Precision Hits extend its duration by 1 second.
+Rewind Again stacks persist through stow.
+
+Time-slip Portal:
+ Shoots a burst of 3 bullets every 1.25 seconds towards enemies within 50 metres that are near the reticle.
+Each bullet deals 49 [10.2] damage, has no damage falloff, inherits No Time To Explain's Shield-Piercing, and scales with Combatant Rank Multipliers.
+Time-slip Portal is removed on stow.
+
+↑Blast from the Side: 
+Timebuddy Portal burst delay is decreased to 0.85 seconds.",,,,,
+"Osteo Striga
+
+Screaming Swarm
+Toxic Overload
+↑Osteo Striga Catalyst",,,"Craftable Kinetic Precision Submachine Gun
+Counts as a Weapon of Sorrow.
+
+Fires slow, seeking projectiles that deal ~10.8% increased damage over a Precision Submachine Gun's.
+
+Scoring 14 Hits or 7 Precision Hits within 3 seconds of each or scoring a kill triggers a Potent Corruption Burst centered on the enemy, corrupting enemies within 5 metres.
+
+Potent Corruption mechanics are identical to Necrotic Grips. Incurs a 2-second cooldown between corruption bursts on death.
+Osteo Striga's Potent Corruption is affected by Buffs, Debuffs, Exotic Primary Rank-and-File Bonus, and the Kinetic Damage Bonus. 
+Reinflicting Potent Corruption resets the stacking damage.
+
+↑Osteo Striga Catalyst:
+Passively grants +20 Stability and +30 Reload Speed.
+ Corruption Kills refill 100% of Magazine, and can overflow up to 300% Increased Magazine Capacity.
+Incurs a 0.5 seconds cooldown between Ammo Overflows.",,,,,
+"Outbreak Perfected
+
+The Corruption Spreads
+Craftable Trait
+Parasitism
+↑Disease Vector",,,"Craftable Kinetic Lightweight Pulse Rifle
+Uses Auto Rifle Recoil Animations.
+
+Scoring 12 Hits within 1? seconds of each spawns 2–3 nanites.
+Precision Kills spawn 9 nanites. 
+
+Nanites:
+Tracking Projectiles that chase after enemies within ? meters, dealing 77 [13] damage on impact and embedding themselves for 9 seconds. 
+Nanites that haven't embedded on an enemy begin disappearing after 3 seconds. Embedding additional nanites refreshes the duration to 9 seconds.
+
+Outbreak Perfected deals increased damage to enemies with nanites based on the amount of nanites.
+x1 = 30% [15%] | x2 = 60% [30%] | x3 = 90% [45%] | x4 = 120% [75%] | x5 = 150% [?%] | x100 = 300% [?%]
+Each Nanite after the fifth increases the damage buff by 2.1%, up to 300% [?%] at x100 Nanites.
+Nanited Enemies are highlighted on Outbreak's scope. Does not work for all ornaments.
+
+↑Disease Vector:
+25% Increased Nanite impact damage.
+Nanited Enemies release 4 Disease Vector Nanites on death.
+Disease Vector Nanites deal 13 [?] damage.",,,,,
+"Praxic Blade
+Technically-Not-A-Lightsaber
+
+Ranged Weapon
+Cormorant Reversal
+Cormorant Combo",,,"Special Ammo Shield-Piercing Lightsaber Sword
+Modifiable Tangs, Grips, Traits, Mods, and Catalysts.
+Deals 50% increased damage towards Combatant Shields, and 200% increased damage towards Barrier Shields.
+Defensive Form for base damage values against Elites, as it has no damage bonuses.
+
+[Light Attack] performs a Melee Combo, with each hit dealing 479 [256] Kinetic Damage. Melee Attacks can discharge Bolt Charge.
+Using [Heavy Attack] after performing 3 [Light Attacks] executes a Cormorant Combo.
+Cormorant Combo deals 689 [368] Kinetic Damage, followed by 3 damage instances of 417 [220] Kinetic Damage each, totalling 1940 [☠️] damage.
+
+[Heavy Attack Press] performs a Ranged Attack, throwing the blade forward up to 50 meters away, homing towards up to 3 enemies before returning.
+Deals 945 [174] Kinetic Damage per hit. Damage is reduced by 80% when returning. Attacking recalls the blade.
+
+[Heavy Attack Hold] throws the blade on a straight path forward, dealing 100% increased damage. [Heavy Attack Release] to recall the blade.
+
+[Blocking] grants 100% [~46%] Damage Resist against all damage in a ?° cone.
+Blocking a hit retaliates by reflecting a Crystal-Color Matching Bolt that deals 255 [50] Kinetic Damage towards the reticle.
+
+-------------
+
+Balanced Form | Scoring 3 Melee Attack Kills within 5 seconds of each grants +1 Ammo, restores 65 HP, and begins Health Regeneration. 
+Deals 10% increased damage against Rank-and-File and Elite Combatants. Technically 11.2% due to impact stat shift.
+
+Defensive Form | Blocking an attack within 1 seconds of beginning to block grants 20% increased damage for 2 seconds.
+Blocking ? attacks within ? seconds of each attack grants +1 Ammo, up to once per second.
+
+Offensive Form | Scoring 3 damage instances within ? seconds of each grants +1 Ammo.
+Deals 15% increased damage against Bosses and Vehicles.",,,,,
+"Praxic Blade 2:
+Attack of the Cores
+
+Power Cores
+Catalysts",,,"
+Cores grant an Elemental Effect based on the element of the equipped Super Ability:
+Solar Effects that are initially applied by Praxic Blade deal 5% increased damage and their damage can be increased by Weapon Buffs.
+
+Impact Core [On Melee Damage Instance] = x1 Bolt Charge | x25?+10? Scorch | Weaken for 6s | x40? Slow for ?s | Sever for 10s
+Refraction Core [On Reflect Bolt Hit] =  x1 Bolt Charge | x10+7? Scorch | Weaken for ?s | x20 Slow for ?s | Sever for ?s
+Gyro Core [On Ranged Hit] = x1 Bolt Charge | x35?+15? Scorch | Weaken for 6s | x50? Slow for ?s | Sever for ?s
+
+↑Slottable Catalysts:
+↑Echoing Blade = Thrown Blade can home towards up to 5 enemies, up from 3.
+↑Upper Hand = 30% Increased Ranged/Reflect Damage against enemies that are at least 3? meters beneath the user. Does NOT require being grounded.
+↑Hyperblade = Reflecting grants Amplified for 15 seconds and 100?% Increased Lunge Distance for the next Melee Swing. Hyperblade is removed on stow.
+↑Energy Conduit = Catching the thrown blade begins Health Regeneration and restores ? Health per Ranged Hit scored in the throw, up to ? HP for 10 hits.",,,,,
+"Quicksilver Storm
+
+Missile Tracers
+Grenade Chaser
+↑Nano-entanglement",,,"Kinetic ↑Strand Rapid-Fire Auto Rifle
+ Damage Numbers are for Strand Versions.
+
+Scoring 10 hits loads up a Tracking Micro-Missile, which will overwrite a regular bullet when firing. Hit Counter persists through stow, and is removed on reload. 
+Tracking Micro-Missile aggressively tracks enemies, dealing 5 [2.7] Impact Damage, and up to 155 [20 Guardians | 80 Constructs] Explosive damage on impact. 
+Tracking Missile Hits grant a stack of Grenades Prepped for Grenade Launcher Mode, up to 3 Grenades Prepped.
+Grenade Prepped stacks and hit counter persist through stow. Missile cannot travel further than 50 metres.
+
+Grenade Launcher Mode:
+Hold [Reload] to swap into Grenade Launcher Mode once a Grenade Prepped stack is gained. Firing Mode persist through stow.
+Firing consumes a stack to fire a Grenade that deals 30 [14 Guardians | 81 Constructs] Impact Damage, and up to 1,278 [120 Guardians | 960 Constructs] Explosive Damage, down to 30% Damage over a 5 metre radius. 
+Grenade deals no self-damage. Automatically queues up a reload to load the next grenade after firing. If out of grenades, it will instead perform a regular reload.
+
+↑Nano-entanglement:
+Converts the Damage Type to Strand. No longer receives Kinetic Damage Bonus.
+Grenade Launcher Mode Kills create a Tangle.",,,,,
+"Rat King
+
+Rat Pack 
+Vermin 
+↑Infestation",,,"Kinetic Rapid-Fire Sidearm
+
+Upon finishing a reload within 3 seconds of a kill:
+Grants Invisibility for 5.8 seconds.
+
+Grants a stack of Rat Pack per ally with a readied Rat King within 20 metres, up to a maximum of 5 stacks.
+Rat Pack decreases Fire Recovery Delay and increases Magazine Size.
+
+Rat Pack:
+- | 0.87x | 0.8x | 0.7x | 0.6x Fire Recovery Delay
+- | +2 | +4 | +6 | +9 Magazine Size
+
+↑Infestation:
+Passively grants +20 Aim Assist and +20 Recoil Direction.
+Finishing a reload within 6 seconds of a kill begins Health Regeneration and restores ~2 HP.",,,,,
+"Revision Zero
+
+Hunter's Trace I–IV
+Craftable Trait
+Burst Mode
+↑Craftable Refit",,,"Craftable Kinetic Pulse Rifle
+Selectable Origin Traits, between Heavy Burst Frames and Aggressive Burst Frames. 
+
+Scoring 12 Precision Hits grants a stack of Targeting Data, up to 4 stacks after 48 Precision Hits.
+
+Hunter's Trace:
+Hold [Reload] while at least one stack of Targeting Data is loaded to swap into Hunter's Trace. Ammo loaded is equal to the amount of Targeting Data stacks acquired.
+Replaces the 18 Zoom Scope with a 50 Zoom Scope. Fires with perfect accuracy, and has a Red Sniper Rifle Glint.
+Fires High-Damage Hunter's Trace Rounds that deal 564 [158] Damage with a 3.25x Precision Multiplier at 72RPM and inherit the Shield-Piercing effect.
+Scoring a Hunter's Trace hit triggers a Kinetic Shockwave that deals up to 322 [20] Damage, down to 0% damage, and exhausts for 5 seconds over 6 meters.
+Hunter's Trace persists through stow and can only be deactivated by fully emptying the magazine or dying.
+Exhaust reduces Combatant Damage Output by 25%.
+
+↑Selectable Retrofit:
+Grants the option to slot-in Feeding Frenzy, Fourth Time's The Charm, Outlaw, or Under Pressure trait equivalents. Fourth Time's The Charm allows firing up to 6 Sniper Shots.",,,,,
+,,,,,,,,
+"Sturm
+
+Accomplice 
+Storm and Stress
+↑Helping Hands",,,"Kinetic Aggressive Hand Cannon
+
+Kills refill Energy Weapons Magazine and grant +1 Increased Together Forever Base Magazine Capacity, up to a maximum of 100% Increased Base Magazine Capacity.
+
+ Together Forever Weapons Kills load an Overcharged Round.
+Scoring multiple Together Forever Weapon Kills within 3 seconds of each loads additional rounds, up to a maximum of 25 loaded rounds.
+2 Rapid Kills = +2 Overcharged Rounds per kill | 3+ Rapid Kills and onwards = +3 Overcharged Rounds per kill.
+Overcharged Rounds persist through stow and are lost on death.
+
+Firing consumes an Overcharged Round to deal increased damage.
+Rank-and-File and Elites = 300% increased damage | Mini-bosses and Champions = 280% | Bosses = 260% | Guardians = 75% 
+
+↑Helping Hands: Passively grants +20 Range and +40 Handling.
+Overcharged Round Kills grants 2 stacks of Definitely-Not-Shot Swap, up to a maximum of 6 stacks.
+ 
+Upon stowing Sturm or a Together Forever Weapon:
+Consumes a stack of Helping Hands, granting 0.5x Ready/Stow Duration Multiplier. ",,,,,
+"SUROS Regime
+
+SUROS Legacy
+Selectable Trait
+↑SUROS Ascendance",,,"Kinetic Adaptive Auto Rifle
+Selectable Trait between Dual Speed Receiver and Spinning Up. 
+Hold [Reload] to swap shooting modes.
+
+Kills have a 25% chance to begin Health Regeneration and restore 20HP.
+
+Dual Speed Receiver turns the weapon into a High-Impact Auto Rifle Frame with +3 Zoom and +30 Range while ADS.
+Scoring kills while Dual Speed Receiver ADS is active grants 1.?x Heavy Ammo Progress Multiplier.
+
+Spinning Up grants 0.83x to 0.67x Fire Recovery Delay while holding down the trigger. 
+RPM increases every 12 bullets while holding down the trigger. Releasing the trigger resets the buff.
+Scoring kills while Spinning Up is active grants 1.?x Special Ammo Progress Multiplier.
+
+As magazine progressively decreases below 50%, down to 0%:
+5% to 10% increased damage.
+
+↑SUROS Ascendance:
+Passively grants +50 Recoil Direction.
+Kills have a 50% chance to restore health.",,,,,
+"Sweet Business
+
+Payday
+Business Time
+↑Serious Business",,,"Kinetic Minigun High-Impact Auto Rifle
+
+Rapidly shoots bullets that deal 41 [16.45] damage with a 1.51x Precision Multiplier.
+
+On Ammo Brick Pickup: 
+Refills magazine.
+
+While holding down the trigger:
+Spins up the weapon, gradually granting up to 0.4x Fire Recovery Delay and +? Range over 1.38 seconds.
+-15% Hipfire Accuracy Cone Size while fully spun up.
+
+Fires an explosive round every 18 shots, dealing 56 [21] damage over 4 meters with no damage falloff. 
+Explosive Shot requirement is lowered to 8 while fully spun up.
+
+↑Serious Business:
+25% Flinch Resistance while fully spun up.",,,,,
+"The Navigator
+
+Protective Weave
+Weft Cutter
+↑Gordian Knot",,,"Strand Adaptive Trace Rifle
+
+Upon scoring 8 hits within 1 second of each on an ally:
+Ally restores 60HP, begins Health Regeneration, and is granted Woven Mail. Wielder is granted Woven Mail and generates 5 Ammo.
+If Shields are healed, then Shields will recharge, otherwise only up to Critical Health.
+
+Upon scoring 20 hits within 1 second of each:
+Inflicts sever, and grants the wielder Woven Mail.
+
+While Woven Mail is active:
+25% [5%] increased damage and +40 Ammo Generation.
+
+↑Gordian Knot. Hold [Reload] to swap into Grapple Tangle Firing Mode. 
+Grapple Tangle Mode shoots a Grapple Tangle up to 23.5 meters away at the cost of 1 Ammo.
+Shows a preview of the Grapple Tangle impact spot while Alternate Fire Mode is active.
+Incurs a 30 second cooldown before Alt Fire can be activated upon creating a Grapple Tangle. Must land on the ground for the timer to begin. Stowing swaps back to Trace Rifle Mode.",,,,,
+"Thorn
+
+Mark of the Devourer
+Soul Devourer
+↑Refined Soul",,,"Kinetic Adaptive Hand Cannon 
+Counts as a Weapon of Sorrow.
+
+Direct hits corrupt, dealing 30 [0.4] Kinetic Damage after a 0.3 seconds delay, every 0.5 seconds 4 times, dealing up to 120 [1.6] Kinetic Damage over 2 seconds.
+Corruption can be stacked.
+
+Kills create a floating Remnant that home in towards the user while within 15 metres.
+Remnants refill 4 Ammo, overflowing up to 40 Ammo, and grant Soul Devourer for an initial duration of 7 seconds on pickup.
+Soul Devourer increases Corruption Damage by 200% [1750?%].
+Picking up additional Remnants extend the duration of Soul Devourer by +7 seconds, up to 11 seconds.
+Soul Devourer persists through stow.
+
+↑Refined Soul: Passively grants +15 Range, +5 Stability, and +5 Airborne Effectiveness.
+Scoring a kill or picking up a Remnant grant Refined Soul for 7 seconds.
+Refined Soul grants additional +10? Range, +15? Handling, and +50 Mobility.
+Picking up additional Remnants, or scoring additional kills extend the duration of Refined Soul by +7 seconds, up to 11 seconds.
+Refined Soul remains active while stowed.",,,,,
+"Touch of Malice
+
+Touch of Malice
+Charged With Blight
+↑Touch of Mercy
+↑Precision Instrument",,,"Kinetic Rapid-Fire Scout Rifle
+Hold [Reload] to trigger Blight Launcher once charged. Swap Speed is tied to Reload Speed.
+Counts as a Weapon of Sorrow.
+
+Scoring Precision Hits grants a stack of Charged With Blight, up to a maximum of 10 stacks.
+Charged With Blight grants up to +? Stability and +? Reload Speed at 10 stacks.
+Blight Launcher Mode can be toggled once at 10 stacks. Does not refill the magazine.
+
+Upon reaching 100% Counter Progress through Weapon Kills within 5 seconds of each:
+ Rank-And-File = 50% | Elites/Minibosses/Bosses = 100% | Guardians = 66.7%.
+Begins Health Regeneration and restores 105 HP.
+
+While Magazine = 1:
+132% [30%] increased damage, drains 7 HP per shot, and refunds itself. Health Drain is not lethal.
+Blight Launcher's Damage benefits from the Final Round's Damage Increase. Health Drain is affected by Damage Resist.
+
+Blight Launcher:
+Shoots a slow moving Blight that deals 220 [113] Arc Damage on direct impact, and has a damaging field that deals 3 damage, blinds and corrupts enemies.
+Corrupt deals 27 [0.375?] Kinetic Damage every 0.5 seconds for 3.5 [2] seconds a total of 7 [4] times.
+Enemies hit by the Blight receive 50% increased damage taken from Weapons of Sorrow for 5 seconds.
+Entering Blight Launcher Mode begins Health Regeneration and restores 105 HP.
+
+↑Touch of Mercy:
+Grants the Precision Instrument trait.
+Precision Instrument lasts long enough to trigger Blight Launcher, shoot it, and then keep firing normally.",,,,,
+"Traveler's Chosen
+
+Gathering Light
+Gift of the Traveler
+↑Osmosis
+↑Surplus",,,"Kinetic Adaptive Sidearm
+
+Kills grants a stack of Gathering Light, up to a maximum of 10 stacks.
+Gathering Light grants +15 Handling, +15 Reload Speed, and +2 Aim Assist per stack.
+Gathering Light stacks persist through stow.
+
+Holding [Reload] will trigger a special reload animation, consuming all stacks of Gathering Light to provide Ability Energy.
+Grants 10% Grenade, Melee, and Class Ability Energy per Gathering Light stack
+
+↑Catalyst:
+Passively grants +2 Magazine Size (15 -> 17), the Osmosis trait, and the Surplus trait.",,,,,
+"Verglas Curve
+
+Hail Barrage
+Hail Storm
+↑Shiver Quiver",,,"Stasis Lightweight Bow
+Grants Lightweight Frame bonuses.
+
+Kills grant a stack of Hail Barrage, up to a maximum of 5 stacks.
+Hipfiring releases every stored Hail Barage Arrow in a volley, spread out evenly. 
+Hail Barrage stacks persist through stow.
+
+Hail Barrage Arrows create a Large Stasis Crystal on impact, and inflict x100 [x60 for 1+1 seconds] Slow on direct hit.
+
+Deals 50% increased damage against Frozen Enemies and Stasis Crystals. Stacks multiplicatively with Whisper of Rending and Frozen Enemy Multipliers.
+
+↑Shiver Quiver:
+0.65x Draw Time Multiplier for 5 seconds upon inflicting freeze or slow.",,,,,
+"Vigilance Wing
+
+Harsh Truths
+Last Stand
+↑Ensemble",,,"Kinetic 5-Round Burst High-Impact Pulse Rifle
+
+Shoots a burst of 5 bullets, each dealing 41 [16] damage with a 1.63x Precision Multiplier.
+Only weapon in the game with deterministic recoil.
+
+On Ally Death within 24 metres:
++20 Mobility, increases Sprint Speed from 8 m/s to 8.5m/s, and increases Slide Distance from 6.5 meters to 8.5 meters for 6 seconds.
+Begins Health Regeneration.
+
+While Last Guardian Standing or Solo: 
++100 Health Stat, +X Handling, and +30? Reload Speed.
+
+↑Catalyst:
+Grants the Ensemble trait.",,,,,
+"Wicked Implement
+
+ Creeping Attrition
+Tithing Harvest
+↑Hadopelagic Tribute
+↑Headstone",,,"Stasis Rapid-Fire Scout Rifle
+
+Scoring 4 Precision Hits within 4.5 seconds of each grants Creeping Attrition for 4.5 seconds. 
+Additional Precision Hits refresh the duration of Creeping Attrition.
+Creeping Attrition is removed on stow.
+
+While Creeping Attrition is active:
+Precision Hits inflict x40 [x20] Slow for 4+4 [4+2] seconds. 
+
+Scoring a Precision Kill or shattering a Stasis Crystal creates a Small Stasis Shard that returns to the wielder.
+ Incurs a 2 second cooldown between spawning shards.
+
+Collecting a Stasis Shard or destroying a Stasis Crystals refills the Magazine.
+
+↑Hadopelagic Tribute: 
+Stasis Shards additionally overflow +5 Ammo on pickup, overflowing up to 100% Increased Magazine Capacity, and the Headstone trait.",,,,,
+"Wish-Ender
+
+Queen's Wrath
+Broadhead
+↑One For All",,,"Kinetic Lightweight Combat Bow
+
+[ADS] while fully-drawn grants Truesight, displaying enemy silhouettes through walls up to 64 metres away.
+Truesight lasts until no longer ADS, or after 3 seconds of being active. Must fully redraw to reactivate the perk.
+
+Arrows deal a total of 1,164 [159] damage split into 3 [2] different damage instances.
+The initial arrow impact deals up to 276 [129] damage with a 1.79x Precision Multiplier.
+The two [one] instances from Broadhead deal up to 444 [28.75] damage and are not affected by Precision Hits.
+Draw Strength affects the damage of all damage instances.
+
+25% Increased damage against Combatants stuck by Witherhoard's Blight. 
+10% Increased damage against Taken Combatants.
+
+↑Catalyst: Grants the One For All trait.",,,,,
+"Wish-Keeper
+
+Snareweaver I–IV
+Silkbound Slayer
+↑Craftable Traits",,,"Craftable Strand Precision Bow
+
+Precision Hits and Kills charge up Snareweaver Arrows. Snareweaver requires 6 charges to be activated.
+Precision Hits = 1 | Rank-and-File = 1 | Elite+ = 2 | Guardian = 3
+When fully charged, hipfire to shoot a Snareweaver Arrow.
+
+Snareweaver Arrow:
+Hitting an enemy directly releases a snare underneath them and inflicts suspend.
+Creates a snare with 6 linked traps in a ⏏ shape on impact. Traps last 15 seconds and have 10 HP. 
+Enemies that come into contact with the linked traps are dealt 341 [5] damage and become suspended.
+Suspending 2 enemies breaks a beam. A snare can suspend up to 6 enemies. 
+Incurs a 5 second cooldown between repeated suspensions on a single enemy.
+
+Deals 50% [20%] increased damage against Suspended enemies.
+Bodyshot Hits against Suspended enemies deal an additional 50% increased damage. Displays as yellow numbers, but will not be counted as Precision Hits.
+Precision Hits against Suspended Elite Combatants deal 701 damage while Bodyshots deal 806 damage.
+
+Upon suspending an enemy, or upon damaging a Suspended enemy with this weapon:
++100 Reload Speed and 0.7x Draw Time Multiplier for ? seconds.
+
+↑Catalyst grants multiple craftable traits:
+Enduring Snare Refit increases Snareweaver Trap duration by +10 seconds, to 25 seconds.
+Multi-threaded Snare Refit increases the maximum amount of suspensions per trap to 3, totalling a maximum of 18 suspensions. 
+Hatchling trait or the Vorpal Weapon trait.",,,,,
+"Witherhoard
+
+Primeval's Torment
+Break the Bank
+↑Silent Alarm",,,"Kinetic Breech-Loaded Grenade Launcher
+
+Fires projectiles that detonate upon impacting the floor, dealing up to 172 [51] damage over 6 meters, down to 0% damage, and creating blighted ground on impact.
+Blighted Ground lasts for 4.5 seconds and covers a 4.5 metre radius upon landing on the ground.
+ Enemies take 86 [40] damage every 0.3 seconds while standing over blighted ground.
+
+Direct hits deal 52 [10] impact damage and blight the enemy, dealing 172 [80] damage every 0.6 seconds for 9.5 seconds.
+Direct hits against Blighted Enemy increases the impact damage to 773 [?] damage.
+Blighted Enemies drop a Witherhoard projectile underneath them on death.
+
+Enemies can only simultaneously take damage from directly being Blighted and standing over blighted ground.
+
+Malfeasance and Wish-Ender deal 25% increased damage against Blighted Enemies.
+
+↑Silent Alarm:
+Passively grants +40 Handling and automatically refills after being stowed for 2 seconds.",,,,,
+Energy Slot Weapons,,,,,,,,
+"Borealis
+
+The Fundamentals 
+Ionic Return
+↑Shield Disorient",,,"Multi-Element Aggressive Sniper Rifle
+[Reload] switches between the Arc, Solar, and Void Elements.
+Chosen element persists through stow and death. Defaults to Void Element.
+
+Grants 30% [10%] increased damage for 10 seconds upon inflicting or receiving an Elemental Effect that matches the currently selected Element.
+
+Breaking a Matching Shield refills the Magazine and grants 5 stacks of Ionic Return, up to a maximum of 5 stacks.
+Guardians in their Super Ability count as having an Elemental Shield that matches the element of their Super.
+
+ Ionic Return:
+Consumes a stack upon firing.
+15% increased damage and 19% increased Precision Damage. 
+37% total increased Precision damage over base.
+Ionic Return shots persist through stow and reloads.
+
+↑Catalyst:
+Passively grants +20 Reload Speed and the Shield Disorient trait.",,,,,
+"Buried Bloodline
+
+Hungering Quarrel
+Violent Reanimation
+↑Splitvein Lineage",,,"Void Rocket-Assisted Frame Sidearm
+
+Fires two tracking bolts per shot, each dealing 249 [42.3] Void Damage with a 1.2x Precision Multiplier.
+
+Each bolt restores 11 HP upon scoring a hit.
+
+Kills progress a counter that grants Devour upon reaching 100%. Counter has no timer. Kills will not count while Devour is active.
+Rank-And-File = 25% | Elite+ = 100% | Guardians = 25%
+
+↑Splitvein Lineage: 
+While Devour is active:
+Hits inflict Weaken for 5 [?] seconds.
++? Reload Speed and 0.?x Reload Duration Multiplier.",,,,,
+"Centrifuse
+
+Overcharge Capacitor
+Regenerative Motion
+↑Static Buildup",,,"Arc Precision Auto Rifle
+
+Refills 10% Ammo every 0.34 seconds while sprinting.
+
+Sprinting, sliding, and shooting builds up charge, granting up to +? Range and +? Reload Speed. 
+Shooting = +20%/s after firing 3 rounds automatically | Sliding = +10% Charge per slide.
+Sprinting = +20% Charge/s after a 0.25 second delay. Movement Speed must be above ~6m/s to build up charge.
+Charge decays at a rate of -33% per second after not doing any of those actions for 1.1 seconds. Manual Reloads instantly empty the charge.
+
+Kills while at ≥40% Charge cause the enemy to explode, dealing up to 95 [76] Damage, down to 30% damage, and blind enemies for 10 seconds in a 7 meter radius.
+Explosions triggered while at 100% Charge deal 189 [?] Damage, down to 40% damage, and blind enemies for 10 seconds in a 8 meter radius.
+
+↑Static Buildup:
+Passively generates 7% Charge per second and removes Passive Decay while Amplified.
+ Passive Charge is additive to Active Charge. Manual Reloads still empty the charge.",,,,,
+"Choir of One
+
+Command Frame
+Fanatical Lance
+↑Craftable Trait",,,"Craftable Special Ammo Void Command Frame Auto Rifle
+Projectiles despawn after 100 meters.
+
+Fanatical Lance is mechanically identical to Radiolaria Transponder, with massively increased damage.
+Explosion deals up to 239 [?] Void Damage, down to 0% damage over 7.5 meters.
+Radiolaria Pool deals 123 [?] Arc Damage every second up to 5 times over 3 meters.
+
+While hipfiring:
+Shoots a single splitting projectile at the cost of 5 Ammo that spread into 5 slow-moving projectiles in a + pattern after 7.5 meters.
+Initial projectile deals 98 [31] impact damage, and up to 849 [213] explosive damage, down to 30% damage over 3 meters.
+Split projectiles each deal 17 [6] impact damage, and up to 170 [43] explosive damage, down to 30% damage over 3 meters.
+Splits into fewer projectiles if Magazine <5. Does not deal self-damage.
+
+While ADS:
+Fires hitscan projectiles at the cost of 1 Ammo, with each dealing 243 [40.25] damage with a 1.79x Precision Multiplier. 
+
+↑Catalyst:
+Grants the option to slot-in Destabilizing Rounds, Onslaught, and Subsistence trait equivalents.",,,,,
+"Cloudstrike
+
+Mortal Polarity
+Stormbringer
+↑Triple Tap",,,"Arc Rapid-Fire Sniper Rifle
+
+Upon scoring 3 Precision Hits within 6 seconds of each:
+Grants x1 Bolt Charge.
+Calls down a focused lightning strike that deals damage after 1.1 seconds, followed by a barrage of bolts after 0.5 seconds.
+Focused Lightning Strikes deals up to 973 [300] damage, down to 0% damage over 7 meters.
+Bolt Barrage releases 4 bolts spread out in an X pattern over the target, dealing up to 584 [180] damage, down to 25% damage over 5 meters and inflicting strong knockback. 
+Enemies can only be hurt once per barrage. Precision Hit Counter is reset on stow. Bolt Barrage can deal severe self-damage.
+
+Precision Kills instantly calls down a focused lightning strike and grant x5 Bolt Charge.
+
+↑Catalyst:
+Passively grants +25 Handling and the Triple Tap trait.",,,,,
+"Coldheart
+
+Cold Fusion
+Longest Winter
+↑Supercharged Magazine",,,"Arc Adaptive Trace Rifle
+
+Steadily grants up to 80% increased damage as Energy is accumulated.
+All energy is removed over 0.2 seconds after not generating energy for 1.05 seconds.
+
+Upon dealing damage:
+Grants 40% Energy/s for 1 second. 
+Initial Charge has a 0.267 second delay before it starts incrementing. Not generating Energy for 1.05 seconds will remove all Energy over 0.2 seconds.
+
+Upon picking up an Ionic Trace:
+Slowly grants 50% Energy over 0.5 seconds.
+
+While in the maximum damage state:
++100 Stability and +100 Reload Speed.
+Hits spawn an Ionic Trace up to once every 2 seconds.
+
+↑Catalyst:
+Passively grants +20 Stability, +20 Reload Speed, and the Supercharged Magazine trait.",,,,,
+"Collective Obligation
+
+Void Leech
+Umbral Sustenance
+↑Repulsor Brace",,,"Void Adaptive Pulse Rifle
+
+Scoring 27 hits leeches Void Debuffs in the order of Volatile -> Weaken -> Suppression. 
+Scoring a hit against an enemy affected by Void Debuffs, or being afflicted with a Void Debuff instantly leeches said debuffs for Void Leech Mode.
+
+Void Leech Mode:
+Scoring a hit charges 1.3% Energy (76 hits).  Hits against Void-Debuffed Enemies charge 16.7% Energy (6 hits). 
+Scoring a kill against an enemy affected by Void Debuffs or being afflicted with a Void Debuff instantly charges Void Leech Mode.
+Leeched Void Debuffs persist through stow. Void Leech Mode cannot be charged by self-applied debuffs.
+
+Once charged, hold [Reload] to activate Void Leech for 15 [10] seconds.
+Hits will inflict the Void Debuffs that were leeched and grants 20% increased damage.
+
+Receiving Void Buffs refills Magazine. Reactivating Devour through kills also refills the magazine.
+
+↑Catalyst: Grants the Repulsor Brace trait.",,,,,
+"Dead Messenger
+
+Trinary Vision
+The Fundamentals
+Craftable Trait
+↑Turnabout",,,"Craftable Multi-Element Wave Frame Grenade Launcher
+[Reload] switches between between the Arc, Solar, and Void Elements.
+Chosen element persists through stow and death. Defaults to Void Element.
+
+Grants 30% [10%] increased damage for 10 seconds upon inflicting or receiving an Elemental Effect that matches the currently selected Element.
+
+Projectiles create 3 elemental waves, each dealing 581 [?] damage in an arc upon collision with the ground.
+Elemental Waves can [can't] deal overlapping damage and travel 12 meters.
+
+↑Catalyst:
+Grants the Turnabout trait.",,,,,
+"Delicate Tomb
+
+Traitor's Vessel
+Tempest Cascade
+↑Ionic Interment",,,"Arc Rapid-Fire Fusion Rifle
+Fires a 16-bolt burst. ADS overlaps each bolt into 2.
+
+Hipfired Bolts deal 20% increased damage.
+
+Kills have a chance to spawn an Ionic Trace. 
+Rank-And-File = 10% | Elites+ = 100% | Guardians = 100%
+
+Picking up an Ionic Trace grants Tempest Cascade.
+Tempest Cascade grants the next shot 100% [7%] increased damage and Jolt on hit.
+Tempest Cascade can be triggered while stowed, and persists through stow.
+
+↑Ionic Interment:
+Refills 4 Ammo upon picking up an Ionic Trace.",,,,,
+"Devil's Ruin
+
+Close The Gap
+Pyrogenesis
+↑Collective Action",,,"Solar Adaptive Sidearm
+
+Kills spawn a Firesprite.
+Picking up a Firesprite grants Pyrogenesis Available.
+
+Hits against Suspended Enemies inflict x20+10 Scorch.
+Killing a Suspended Enemy triggers an ignition.
+
+Hold [Reload] while Pyrogenesis Available is active to perform a special reload that grants Pyrogenesis Ready.
+Pyrogenesis Available and Ready persists through stow.
+
+Pyrogenesis:
+Continuous beam that charges over 0.5 seconds.
+Deals 104 [22] Damage with a 1.6x Precision Multiplier, as well as inflicting x20+10 Scorch per hit up to 16 times over 0.95 seconds at 900RPM.
+Laser Kills trigger an ignition.
+Magazine is refilled upon firing Pyrogenesis.
+
+↑Catalyst: Grants the Collective Action trait.",,,,,
+"Divinity
+
+Judgment
+Penance
+↑Focused Fury
+↑Jolting Feedback",,,"Arc Trace Rifle
+Deals half the damage of a regular Trace Rifle.
+
+Fires a continuous beam that deals 21 [7.5] Arc Damage with a 1.38x Precision Multiplier at 900RPM.
+
+Scoring 10 [5] hits within 0.15 seconds of each weakens, increasing damage taken by 15% [15%], and inflicting censured, creating a Precision Cage for 1.25 seconds. 
+Shots that hit the Precision Cage are converted into into Precision Hits, but do not count as Weakspot Hits.
+Weapons that cannot deal Precision Damage, such as Rocket Launchers and Fusion Rifles do not benefit from Precision Hits.
+Divinity's weaken increases Divinity Damage by 30%.
+
+ Enemies that remain in the Precision Field for 3.75 seconds suffer from Penance, receiving 1,735 [520] damage. Damage assumes the weaken, of course. 
+Penance's timer is set to 3 seconds after the initial strike.
+
+↑Catalyst: Grants the Focused Fury and Jolting Feedback traits. 
+Penance damage is Weapon Damage and will be increased.",,,,,
+"Duality
+
+Compression Chamber
+On Black Wings",,,"Solar Precision Pellet and Pinpoint Slug Revolver Shotgun
+Hipfire shoots pellets, while ADS shoots slugs. Passively has 5% Increased Damage Falloff Distance.
+Reloads its entire magazine at once.
+
+Hipfiring | Fires a spread of 12 pellets, each dealing 104 [?] damage with a 1.1x Precision Multiplier.
+Scoring a Pellet Kill or 10 Pellet Hits in one shot grants a stack of On Black Wings for 10.5 seconds, up to a maximum of 3 stacks.
+Retriggering On Black Wings refreshes its duration.
+
+ADS | Fires a single Precision Slug that deals 1,081 [?] damage with a 1.75x Precision Multiplier.
+Slug Precision Hits refresh the On Black Wings duration to 10.5 seconds.
+
+On Black Wings x1 = +3.5% [?%] Pellet Precision Damage | +15.6% [?%] Slug Precison Damage | +? Reload Speed
+On Black Wings x2 = +8.8% [?%] Pellet Precision Damage | +39% [?%] Slug Precision Damage | +? Reload Speed
+On Black Wings x3 = +12.4% [?%] Pellet Precision Damage | +54.7% [?%] Slug Precision Damage | +? Reload Speed
+On Black Wings persists through stow.
+
+↑Catalyst:
+Passively grants +20 Range and increases Magazine by 2 (6 -> 8).",,,,,
+"Edge of Action
+
+Remote Shield
+Destabilizing Rounds
+↑Repulsor Brace",,,"Craftable Void Adaptive Glaive
+
+After scoring 6 Hits, either through Projectile or Melee Damage:
+Hold [Reload] to prepare a Gumdrop Protective Shield for the next shot, refilling the Magazine, and generating +1 Ammo.
+Projectile hits grant 2 stacks.
+
+Remote Shield:
+Lasts 20 seconds and has 2,400 Construct HP with 85% Damage Resist against non-Boss Combatants, and 15% Damage Resist against Bosses.
+Remote Shield blocks incoming and outgoing projectiles, preventing damage from the outside.
+While in the Protective Shield: 45 HP Void Overshield for 10+5 seconds at a rate of once per second and Remote Shield for 10 seconds.
+Remote Shield Buff | +? Handling, +? Reload Speed, and 5% Increased Weapon Damage. Buff duration is refreshed while inside. 
+Helm of Saint-14 Interaction | Remote Shield allows triggering The Saint's Suppression Burst with the same conditionals.
+Remote Shield's Overshield gains and weapon buffs persist where it was created even if the shield is broken.
+
+↑Catalyst: Grants the Repulsor Brace trait.",,,,,
+"Edge of Concurrence
+
+Lightning Seeker
+Jolting Feedback
+↑Eddy Current",,,"Craftable Arc Rapid-Fire Glaive
+
+After scoring 6 Hits, either through Projectile or Melee Damage:
+Hold [Reload] to prepare a Lightning Seeker for the next shot, refilling and overflowing the magazine by +1, and generating +1 Ammo.
+Projectile hits grant 2 stacks.
+
+Lightning Seeker chases after the closest enemy within 32 metres, dealing 1634 [a lot] damage, inflicting Jolt, and releasing Chain Lightning on impact.
+Chain Lightning damages up to 4 enemies within 10 metres, dealing 65 damage to each enemy.
+
+↑Catalyst: Grants the Eddy Current trait.",,,,,
+"Edge of Intent
+
+Healing Turret
+Incandescent
+↑Heal Clip",,,"Craftable Solar Aggressive Glaive
+
+After scoring 6 Hits, either through Projectile or Melee Damage:
+Hold [Reload] to prepare a Healing Turret for the next shot, refilling and overflowing the magazine by +1, and generating +1 Ammo.
+Projectile hits grants 2 stacks.
+
+Healing Turret lasts 9 seconds and releases a Healing Seeker every 3 seconds to the user and allies within 30 meters if they're not at Full Health.
+A Healing Turret can release up to 3 Healing Seekers over its lifetime.
+
+Healing Seekers bestow x1 Cure and x1 Restoration for 4+2 [3+1.5] seconds in a 7.5 metre radius.
+While Touch of Flame is equipped by the wearer and ONLY for the wearer | Seekers bestow x2 Cure and x2 Restoration for 4+2 [?+?] seconds.
+
+↑Catalyst: Grants the Heal Clip trait.",,,,,
+"Ergo Sum
+
+Transcendent Duelist
+↑Transcendent Steel",,,"Special Ammo Sword
+Drops with a random Sword Frame and Exotic Intrinsic. Impact Stat has no effect on perk damage.
+
+Kills grant an additional 2.5% Light Transcendent Energy and 2.5% Dark Transcendent Energy.
+
+While Transcendent:
+44% increased damage and +50 Charge Rate.
+Exotic Intrinsic Effects (Wolfpack, Perfect Fifth, Arc Conductor, Unplanned Reprieve, etc) are instead granted 20% increased damage.
+Dealing any Sword Damage triggers the increased Prismatic Grenade Regeneration Speed.
+Extends Transcendent duration by an additional ?% kill.
+
+↑Transcendent Steel:
++3 [+1] Ammo upon scoring a Prismatic Grenade Hit. 
+Ammo Generation is on specific parts of each Prismatic Grenade. TBD.",,,,,
+"Ergo Sum
+
+Any Element",,,"Gathering Light
+Kills grant a stack of Gathering Light.
+Gathering Light grants 10%? Increased Lunge Distance, +? Guard Resistance, and +? Guard Endurance.
+Stowing the weapon consumes all stacks, granting 10% Grenade, Melee, and Class Ability Energy per stack.
+
+Wolfpack Rounds
+Powered Grounded Heavy Attacks grant Pack Hunter for 10 seconds to Legendary Swords and other Ergo Sum wielders. 
+ Wolfpack Rounds are released loosely around their spawn location and track towards enemies, dealing 30 [11] impact and up to 64 [23] explosive damage.
+Wolfpack Rounds counts as Sword-Matching Weapon Damage can be increased through Damage Perks and Buffs. Wolfpack Hits count as Sword Hits.
+
+Grounded and Airborne Powered Light attacks release 1 Wolfpack Round, while Grounded Powered Heavy Attacks release 3 Wolfpack Rounds.
+Airborne Heavy Attacks do not spawn any Wolfpack Rounds.
+
+Caster: Releases 3 Wolfpack Rounds around the projectile impact area.
+Lightweight & Adaptives: No effect on the Heavy Attack that triggers Pack Hunter. Heavy Attacks while Pack Hunter is active release 3 Wolfpack Rounds forward.
+Vortex: Releases 3 Wolfpack Rounds as the Heavy Attack animation finishes.
+Wave: Releases 3 Wolfpack Rounds at the end of the shockwave. Homing Strike does not release any Wolfpack Rounds.",,,,,
+"Ergo Sum
+
+Arc Element",,,"Continuation of the Ergo Sum Exotic, for traits that are only available on Arc Element variations.
+
+Arc Conductor
+Powered Heavy Attacks grant Arc Conductor for 6 seconds.
+Arc Conductor grants 50% [15%] Arc Damage Resist.
+While Arc Conductor is active, releases chain lightning to enemies within ? metres.
+Chain Lightning deals 171 [26] Arc Damage every 0.25 seconds. Repeated strikes on a single target occur every 1.5 seconds.
+ Lightning is treated as a Sword Projectile for Damage Scaling purposes. Buff is removed on stow.
+
+Stormbringer
+Upon scoring 3 kills within 3? seconds of each:
+Calls down a focused lightning strike that deals damage after 1.1 seconds, followed by a barrage of bolts after 0.5 seconds.
+Focused Lightning Strikes deals up to 382 [lol] damage, down to 0% damage over 7 meters.
+Bolt Barrage releases 4 bolts spread out in an X pattern over the target, dealing up to 426 [idk] damage, down to 25% damage over 5 meters. 
+Enemies can only be hurt once per barrage.",,,,,
+"Ergo Sum
+
+Solar Element",,,"Continuation of the Ergo Sum Exotic, for traits that are only available on Solar Element variations.
+
+The Perfect Fifth
+Scoring 5 hits attaches an explosive to the enemy, dealing up to 237 [64] damage, down to 30% damage and inflicting x40+20 Scorch over 5 meters.
+Solar Effects that are initially applied by The Perfect Fifth deal 41.7% increased damage, which gets further increased to 78.5% during Transcendence.
+
+Sacred Flame
+Powered Heavy Attack Hits inflict Sacred Flame to enemies.
+Enemies affected by Sacred Flame explode on Light Attack or upon death, dealing up to 136 [?] damage over 5 meters.
+Sacred Flame explosion does not receive the Ergo Sum's Transcendence damage buff.",,,,,
+"Ergo Sum
+
+Void Element",,,"Continuation of the Ergo Sum Exotic, for traits that are only available on Void Element variations.
+
+Unplanned Reprieve
+Powered Heavy Attacks release multiple Telesto bolts around it, each dealing up to 68 OR 117 [83] explosive damage. Damage is random? Kinda fitting, no?
+Aggressive: Spreads out 8 bolts ahead of the caster.
+Caster: Drops 6 bolts near the projectile impact area, towards the caster.
+Lightweight: Releases 7 bolts in an arc in front of the caster.
+Vortex: Shoots out 10 bolts around the caster.
+Wave: Spawns 8 bolts around the end of the wave.
+
+Insectoid Robot Grenades
+Kills spawn an Insectoid Robot that chases after enemies, exploding when near an enemy, dealing up to 284 [?] damage, down to 45% damage over 3 meters. No self-damage.",,,,,
+"Eriana's Vow
+
+Looks Can Kill
+Death At First Glance
+↑More to Give",,,"Special Ammo Solar Hand Cannon
+
+Fires a single Shield-Piercing bullet that deals 674 [77] Damage with 1.6x Precision Multiplier.
+
+Death At First Glance grants 32.5% increased damage and highlight targets while ADS for the first scoped shot.
+Precision Hits and Hits against Combatant Shields maintain Death At First Glance. 
+Death At First Glance reactivates after 3 seconds of not firing.
+
+Breaking a Solar Shield or Barrier Champion's Shield triggers an Ignition.
+Guardians in their Super Ability count as having an Elemental Shield that matches the element of their Super.
+Deals 67% increased damage against Barrier Champions.
+Ignition damage is also increased by 67% against the Barrier Champion.
+
+↑More to Give:
+Passively grants +3 Magazine Size (6 -> 9) and an Auto-Loading Holster trait equivalent.",,,,,
+"Ex Diris
+
+Corrupted Nucleosynthesis
+Loyal Moths
+↑Berserk Rush",,,"Arc Moth-Grenade Launcher 
+Does not require reloading. Moths count as Weapon Damage.
+
+Shoots arcing projectiles that deal 422 [21] impact damage, and up to 355 [119] explosive damage, down to 30% damage over a 4.5 meter radius.
+
+Builds up 25% Enrage on hit, gradually granting up to 0.6x Fire Recovery Delay.
+Reaching Critical Health maxes out Enrage.
+Charge decays over 9.5 seconds. Charge doesn't decay while at Critical Health.
+
+Upon scoring a kill, or 2 Direct Hits within ? seconds of each: 
+Creates a Loyal Arc Moth, which seeks the closest enemy and detonates on contact.
+Arc Moth deals up to 596 [31 Guardians | 201 Constructs] explosive Arc Weapon Damage over 7 meters, down to ?% damage and blinding.
+Moths don't deal self-damage. Incurs a 3 second cooldown between Moth spawns.
+Mothkeeper's Wraps creates a Loyal Void Moth alongside the Loyal Arc Moth. Loyal Void Moths grant 22.5HP Void Overshield to the nearest ally.
+
+↑Berserk Rush:
+Grants Amplified on kill. 
+Hits while Amplified grant 50% Enrage on hit.",,,,,
+"Fighting Lion
+
+Delayed Gratification
+Thin The Herd
+↑Chimera",,,"Primary Ammo Void Breech-Loaded Grenade Launcher.
+Grants Lightweight Frame bonuses.
+
+Fires bouncing grenades that can be remotely detonated after ~0.3 seconds.
+Grenades deal 142 [?] Impact Damage and up to 559 [?] Explosive Damage, down to 30% Damage over 4.5 meters.
+Direct Hits trigger a Volatile Burst, inflicting Volatile to enemies within 7.5 meters.
+
+Dealing damage grants +70 Reload Speed for 7 seconds
+Deals 24.5% Increased Impact Damage against Combatant Shields.
+
+Scoring a Non-Fighting Lion kill within 6 seconds before OR after dealing damage with Fighting Lion refills the magazine.
+
+↑Chimera:
++30 Reload Speed as well as the Chimera trait.
+Chimera grants +100 Handling and -30% Accuracy Cone Size to Kinetic Slot and Power Slot Weapons for 3 seconds after shooting.",,,,,
+"Graviton Lance
+
+Black Hole
+Cosmology
+↑Turnabout
+↑Vorpal Weapon",,,"Heavy Burst Void Pulse Rifle.
+Decreased RPM of 300 instead of the usual Heavy Burst's 324RPM.
+
+The 1st round of a burst deals 15% decreased damage but has no recoil.
+The 2nd round of a burst deals 35.3% increased damage, has no damage falloff, and has recoil.
+Total damage per burst matches that of a Heavy Burst Pulse Rifle.
+
+Kills fling enemies backwards and trigger a Void Explosion that deals up to 470 [100] damage, down to 0% damage over 7 meter radius and releases 2 seeking Void orbs.
+Seeking Void Orbs each deal up to 51 [20?] damage on explosion.
+
+↑Catalyst:
+Passively grants +20 Range, the Turnabout trait, and the Vorpal Weapon trait.",,,,,
+"Graviton Spike
+
+Temporal Manipulation I–IV
+Temporal Anomaly
+↑Craftable Traits",,,"Craftable Arc + Stasis Modal Hand Cannon
+[Reload] to swap between 150RPM Arc Firing Mode and 95RPM Stasis Firing Mode, refilling 3 Ammo.
+
+Scoring a combined total of 3 Kills and Precision Hits within 7 seconds of each grants Overcharge to the opposite element.
+Overcharge progress persists through stow and reload, but is cleared upon swapping firing modes.
+Overcharge begins passively draining at a rate of -4.5% per second upon fully charging, even while stowed. 
+
+150RPM Arc Mode:
+Fires bullets that deal 141 [42.03] Damage with a 1.85x Precision Multiplier.
+
+Arc Overcharge:
+Kills and Precision Hits call down a lightning strike, dealing up to 262, down to 0% damage over 2 meters + 240 over 5 meters = 502 [21 + 21 = 42] Arc Damage.
+Each Precision Hit consumes 34% Arc Overcharge. Hitting Stasis Crystals will consume 34% Arc Overcharge to call down a lightning strike on them.
+
+95RPM Stasis Mode:
+Fires explosive bullets that deal 185 [43.2] Impact Damage and up to 149 [21.02] Explosive Damage, down to 0% damage over 3 meters with a 1.85x Precision Multiplier.
+
+Stasis Overcharge:
+ Kills and Precision Hits trigger a Stasis Explosion that deals up to 126 [?] Damage, down to 0% damage over 7 meters and create 2 seekers perpendicular to the target.
+Seekers spawn a Medium Stasis Crystal rotated 45 degrees away from the enemy after traveling 4 meters, forming a \  / shape.
+Each Precision Hit consumes 34% Stasis Overcharge.
+
+↑Catalyst grants multiple craftable traits:
+Temporal Alignment Refit grants 20% [?%] increased damage for 16 seconds upon triggering both Arc and Stasis overcharge. 
+Triggering the buff has no time limit, and the buff can be refreshed by overcharging both modes in the same order it was activated in.
+Other options include the Rapid Hit trait, the Subsistence trait, and the Transcendent Moment trait.",,,,,
+"Hard Light
+
+Volatile Light 
+The Fundamentals
+↑Light Touch",,," Multi-Element Adaptive Auto Rifle
+[Reload] switches between the Arc, Solar, and Void Elements.
+Chosen element persists through stow and death. Defaults to Void Element.
+
+Grants 30% [10%] increased damage for 10 seconds upon inflicting or receiving an Elemental Effect that matches the currently selected Element.
+
+Damage Falloff End stops at 0.7x instead of the usual 0.5x for Auto Rifles.
+
+Bullets can ricochet up two times from sharper angles.
+Bullets that have ricochet at least once deal 100% [35%] increased damage.
+
+↑Catalyst:
+Passively grants +25 Stability and the Light Touch trait.",,,,,
+"Heirloom
+
+Bolt Thrower
+Bullwhacker
+↑Incandescent
+
+Boltcaster <3",,,"Solar Combat Crossbow Balanced Heat Blaster
+Passively dissipates 15 Heat per second. Has the Perfect Vent Balanced Heat Weapon Mechanic.
+
+Fires explosive bolts that explode on impact and generate 130 Heat per shot.
+Bolts deal 406 [70] Impact Damage with a 1.1x Precision Multiplier and up to 539 [40] Explosive Damage, down to 50% Explosive Damage over 4 meters on impact.
+
+Aiming Down Sights generates 30 Heat every 0.3 seconds and increases the Charge Level up to 3 times.
+Charge Levels increase the damage and explosive radius of the next shot fired.
+
+Charged Shots:
+x1 | 602 [71] Impact Damage, 631 [41] Explosive Damage, ↑and x20+0 Scorch over 5 meters after 0.5 seconds of charging. Generates 200 Heat upon firing.
+x2 | 897 [80] Impact Damage, 688 [49] Explosive Damage, ↑and x40+0 Scorch over 6 meters after 1.2 seconds of charging. Generates 300 Heat upon firing.
+x3 | 1,216 [106] Impact Damage, 1032 [81] Explosive Damage, ↑and x60+0 Scorch over ~9.5 meters after 1.8 seconds of charging. Generates 340 Heat upon firing.
+
+↑Heirloom Catalyst:
+Direct Hits with charged shots inflict x20 Scorch per Charge Level.
+Deals 10% increased damage against Scorched Enemies.
+Grants the Incandescent trait.",,,,,
+,,,,,,,,
+"Hierarchy of Needs
+
+Guidance Ring
+Apollonic Tangent
+↑Panoptic Tessellation",,,"Solar Lightweight Combat Bow
+Unique Damage Profile similar to Precision Bows that uses Lightweight Draw Curves.
+
+Scoring a Precision Hit or a Kill grants a Guidance Ring charge, up to a maximum of 3 charges. 
+Guidance Ring charges persist through stow.
+
+Guidance Ring:
+Spawned by firing a fully-drawn hipfired shot while at x3 Guidance Ring Charges.
+ Guidance Ring lasts for 20 seconds and rotates to face its owner. Only 3 Guidance Ring may exist at once across all players. Only 1 Ring per user.
+Arrows release explosive seeking projectiles for each Guidance Ring they pass through, up to a maximum of 6 Seekers per shot.
+Precision Hits guide the Seekers towards the hit enemy.
+Bows require a half-draw minimum to release seekers.
+
+Seeking Projectiles:
+Seeker Damage and Quantity varies per source, but they always inflict x15+5 Scorch over 4 meters, and deal a minimum of 20% Damage over 4 meters.
+Seeker Damage is counted as Matching Weapon Explosive Damage and will be increased by Weapon Buffs/Surges. Surges must match the Weapon's element!
+Seekers can benefit from Volatile Rounds, Unraveling Rounds, and more!
+
+Hierarchy of Needs releases 3 Seekers, each dealing up to 193 [15?] Damage.
+Primary Ammo Bows (Including non-listed Exotics) release 2 Seekers, each dealing up to 138 Weapon-Matching Damage. Ticuu's Hipfire releases 3 Seekers.
+Trinity Ghoul = 3 x 179 | Wish-Ender = 2 x 167 | Buried Bloodline = 2 x 120 | Heirloom = 2 x 40
+Crossbows = 2 x 153 Matching | Leviathan's Breath = 2 x 18
+
+Shadowshot: Moebius Quiver = 3 x 136 per volley | Shadowshot: Deadfall = 6 x 136 per usage
+Shadowshot Seekers are counted as Void Super Damage and DON'T scale with Weapon Buffs! They scale with Super Buffs!
+
+↑Panoptic Tessellation: Upon deploying a Guidance Ring or scoring a hit with a seeking projectile:
+ -40% Hipfire Accuracy Cone Size, 0.5x Draw Time Multiplier, 100? Reload Speed, and 0.?x Reload Duration Multiplier for 5 seconds.
+ Scoring additional seeker hits or redeploying a Guidance Ring refreshes the buff duration.",,,,,
+"Ice Breaker
+
+No Backpack
+Ice Breaker
+↑Icing-Breaker",,,"Solar Aggressive Sniper Rifle
+Does not hold reserve ammo. Only has an automatically refilling magazine.
+
+Deals 789 [142] Damage with a 3.5x Precision Multiplier.
+
+Kills or assists scored with any other weapon or ability generate Ammo.
+Rank-and-File = +1 Ammo every 2 Kills | Elite = +2 Ammo | Miniboss+ = +3 Ammo | Guardians = +? Ammo
+
+Non-Precision Kills, or shattering a Stasis Crystal triggers a Solar Explosion, dealing up to 453 [40] Damage, down to 50% over 7 meters. 
+Scoring a Precision Kill or shattering a Frozen Enemy triggers an ignition.
+
+↑Icing Breaker:
+Hits against enemies affected by Stasis Debuffs generates +1 Ammo:
+Every 10? seconds, the first hit always generates Ammo. Every other hit generates Ammo.",,,,,
+"Jötunn
+
+Charge Shot
+Shield Disorient
+↑Cornered
+↑Incandescent",,,"Solar Toaster Fusion Rifle
+
+Fires a tracking explosive projectile that explodes on impact.
+Projectile deals 1,184 [?] Impact Damage and up to 269 [?] Explosive Damage, down to 0% damage over 7 meters.
+
+Explosion creates a lingering burning spot that deals 46 [8] damage every 0.25 seconds up to 7 times.
+
+↑Catalyst:
+Grants the Cornered trait and the Incandescent trait.",,,,,
+"Le Monarque
+
+Poison Arrows
+Snapshot Sights
+↑Unrelenting",,,"Void Lightweight Combat Bow
+Grants Lightweight Frame bonuses.
+
+Perfectly-drawn arrows poison enemies.
+Perfectly-drawn Precision Hits trigger a poison burst, poisoning enemies within 5 metres.
+
+Poison:
+Begins dealing damage after 0.55 seconds of being inflicted.
+Deals 70 [2.5] Void Damage every 0.25 seconds up to 6 times over 1.35 seconds, totalling 420 [15] damage.
+
+↑Catalyst:
+Passively grants +30 Stability, +20 Reload Speed, and the Unrelenting trait.",,,,,
+"Lodestar
+
+Starlight Beam
+Arc Alignment
+Phase Converter
+↑Supercharged Matrix",,,"Primary Ammo Burst-Fire Arc Trace Rifle
+Hold [Reload] to quickly activate Arc Alignment once it is fully charged. 
+Arc Alignment can be cancelled by holding [Reload] to preserve the remaining charge.
+
+Hipfire | Becomes an Adaptive Trace Rifle that deals 34 [?] Damage with a 1.35x Precision Multiplier.
+Deals 80% of the damage of a Special Ammo Adaptive Trace Rifle.
+
+While ADS | Becomes a Rapid-Fire Pulse Rifle.
+30% increased damage against Arc-Debuffed Enemies.
+Killing an Arc-Debuffed Enemy causes them to explode on death, dealing up to 100 [?] Arc Damage, down to 0% damage, and inflicting blind over 8 meters.
+
+Scoring Arc Hits charges up Arc Alignment.
+Hipfire Mode = 1% Charge | ADS Mode = 3% Charge | Non-Lodestar Arc Damage Instances = 1% Charge
+
+Arc Alignment:
+Automatically refills the magazine upon triggering and grants -75%? Recoil.
+Drains at a rate of ~14% Energy per second, ending after 7 seconds. Drain persists through stow.
+Hipfire inflicts Jolt on hit.
+ADS reduces drain rate by 67%, down to 5% per second, increasing the duration to a maximum of 20 seconds.
+
+↑Supercharged Matrix:
+ While Amplified:
++? Reload Speed, +10? Aim Assist, and ?% Decreased ADS Movement Speed Penalty..",,,,,
+"Lord of Wolves
+
+Shrapnel Launcher
+Release the Wolves
+↑Fang and Claw",,,"Solar Burst Shotgun
+Reloads its entire magazine at once.
+
+Fires in short-range 5-round bursts.
+
+While hipfiring (Release The Wolves):
+Deals 204 [39.9] Solar Damage per bullet with a 1.56x Precision Multiplier.
+-? Range, 0.4?x Fire Recovery Delay, and +200?% Accuracy Cone Size. Becomes automatic.
+
+While ADS:
+Deals 147 [21] Solar Damage per bullet with a 1.8x Precision Multiplier.
+
+↑Fang and Claw. Passively grants +20 Stability, +60 Reload Speed and .85x Reload Duration Multiplier:
+Hipfire | Shots inflict x10+5 Scorch upon dealing damage. Incurs a 0.5? second cooldown between Scorch applications.
+ADS | Kills trigger a Scorching Explosion, inflicting x30+10 Scorch to enemies within 8? meters.
+Solar Effects that are initially applied by Lord of Wolves deal 53% increased damage and its damage can be increased by Weapon Buffs.",,,,,
+"Lorentz Driver
+
+Lagrangian Sight
+EM Anomaly
+↑Jump Driver",,,"Special Ammo Void Precision Linear Fusion Rifle
+
+Fires a single Precision Bolt that deals 506 [132] Void Damage with a 3.44x [4.3x] Precision Multiplier.
+
+Precision Kills trigger an implosion that pulls ""low weight enemies"" and pushes ""high weight enemies"" within 9 [?] metres and then explodes, dealing up to 341 [?] damage.
+
+While at least 3 non-Miniboss+ enemies are within 50 meters: 
+Targets the farthest enemy, marking them through walls [highlighting them] until either killed or over 80 meters away.
+Marked Enemies spawn a Telemetry Pattern on death.
+Incurs a 7 second cooldown between marking enemies. 
+
+ Telemetry Patterns:
+Pickups that grant +1 Ammo and last up to 60 seconds on the ground.
+Telemetry Patterns stacks are removed on death.
+
+Upon picking up x3 Telemetry Patterns | Grants Lagrangian Sight for 30 seconds and +6 Ammo.
+Picking up additional Telemetry Patterns refresh the buff duration to 30 seconds. 
+
+Lagrangian Sight grants 50% [87.5%] increased damage, +30 Handling, and +35 Reload Speed. 
+Precision Multiplier against Guardians is decreased to 3.44x while Lagrangian Sight is active.
+
+↑Jump Driver:
+Passively grants an Enhanced Radar while Lorentz Driver is readied.
+While at x3 Telemetry Patterns, any kill triggers an implosion.",,,,,
+"Merciless
+
+Conserve Momentum
+Impetus
+↑Heal Clip",,,"Solar High-Impact Fusion Rifle
+
+Kills grant .66x Reload Duration Multiplier for 6 seconds.
+
+Hits grant a stack of Conserve Momentum for 5 seconds, up to a maximum of 15 stacks.
+ Additional hits refresh the Conserve Momentum duration. Buff persists through reloads.
+
+Conserve Momentum:
+Decreases Charge Time and Damage.
+Begins at 0.93x Charge Time Multiplier and 0.84% decreased damage.
+Scales down to 0.2x Charge Time Multiplier (216ms) and 11.93% decreased damage after 15 (3 bursts) hits. 
+
+Upon finishing a reload within 6 seconds of a kill:
+50% increased damage for 4.5 seconds.
+Damage buff persists through stow.
+
+↑Catalyst:
+Passively grants +40 Range, +40 Stability, and the Heal Clip trait.",,,,,
+"Polaris Lance
+
+The Perfect Fifth
+Zen Moment
+↑Dragonfly",,,"Solar High-Impact Scout Rifle
+
+Precision Hits refill 1 Ammo.
+
+Scoring 4 Precision Hits readies an Explosive Solar Round that deals up to 215 [78] damage, down to 0% damage and inflicts x40+20 Scorch to enemies within 4 metres. 
+Reloading or not shooting after 6 seconds of reading the Explosive Solar Round resets the Precision Hit Counter. Precision Hit Counter persists through stow.
+
+↑Catalyst:
+Grants the Dragonfly trait.",,,,,
+"Prometheus Lens
+
+Prismatic Inferno
+Flame Refraction
+↑Incandescent",,,"Solar Trace Rifle
+
+After 0.45 seconds of holding down the trigger:
+Creates an expanding Scorching Field, that fully expands to a 1 metre radius over 4 seconds.
+Scorching Field deals 19 [6] damage every 0.1 seconds. 
+
+Upon scoring 20 damage instances (including Scorching Field) within 1.5 seconds of each:
+Inflicts x20+10 Scorch.
+Solar Effects that are initially applied by Prometheus Lens deal 15.5% increased damage.
+
+Kills refill 75 Ammo.
+
+↑Catalyst:
+Passively grants +20 Stability, +20 Handling, and the Incandescent trait.",,,,,
+"Red Death Reformed
+
+Redemption
+Inverse Relationship
+↑Helping Hand",,,"Solar High-Impact Pulse Rifle
+Uses Auto Rifle Recoil Animations. Cure x2 is downgraded to x1 on the wielder if On Your Mark x10 is active.
+
+Upon scoring a Weapon Kill:
+Grants Cure x2, +100 Reload Speed, and 0.8x Reload Duration Multiplier for ? seconds. 
+Finishing a reload within ? seconds of a kill grants Cure x? to allies within ? metres.
+
+Scoring hits grants increased Handling, Flinch Resist, and Movement Speed for 3 seconds. Stacks up to 6? times.
+x1 = +? Handling | ?% Flinch Resist | ?% Increased Movement Speed 
+x2 = +? | ?% | +?% | x3 = +? | ?% | +?% | x4 = +? | ?% | +?% | x5 = +? | ?% | +?% | x6 = +? | ?% | +?%
+
+Deals increasingly higher damage as Shield HP is decreased.
+10% [2%] while Shield HP is <114 | 20% [4%] while Shield HP is <60 | 40% [6%] while Shield HP is 0.
+
+↑Helping Hand:
+Scoring 2 [1?] Weapon Kills grants Red Death Charged.
+Kill counter, and Red Death Charged buff both persist through stow.
+
+Upon scoring a Weapon Kill while Red Death Charged is active:
+Triggers a healing burst and spawns a Restoration Orb on top of the user.
+Healing Burst bestows Cure x2 to allies within 7.5? meters. Restoration Orb grants Restoration x2 for 4+2 seconds.
+User does not benefit from the Healing Burst as Cure has a cooldown, but will receive Restoration.",,,,,
+"Riskrunner
+
+Arc Conductor
+Superconductor
+↑Chain Reaction",,,"Arc Adaptive Submachine Gun
+
+Receiving Arc Damage activates Arc Conductor for 6 seconds.
+Scoring additional Direct Impact Kills extends the Arc Conductor buff duration by +3 seconds, up to 6 seconds.
+Buff can be activated while stowed, and persists through stow.
+
+Arc Conductor:
+Firing has a 33?% chance to fully refill the magazine.
+10% increased damage, +100 Handling, and 50% [15%] Arc Damage Resist.
+Scoring 2–3 hits within 0.2 seconds of each causes the enemy to release weak chain lightning.
+Weak Chain Lightning deals 21 [?] damage to the closest enemy within 8 metres.
+Enemies hit by Weak Chain Lightning release additional Strong Chain Lightning that deals 28 [?] damage.
+Strong Chain Lightning can chain between up to 4 enemies, but only targets enemies within 8 metres that haven't been hit by Strong Chain Lightning in 0.33 seconds.
+
+↑Catalyst:
+Passively grants +30 Range and the Chain Reaction trait.
+Chain Reaction: Target explodes, dealing up to 114 [?] Arc Damage in a 3 meter radius.
+Chain Reaction can self-proc Arc Conductor.",,,,,
+"Ruinous Effigy
+
+Transmutation
+Evolution
+↑Deconstruction",,,"Void Adaptive Trace Rifle
+Intrinsically has a 1.4x PVE Bonus over Legendary Trace Rifles.
+
+Kills collapse enemies into Transmutation Spheres with 30 Ammo. Spheres can remain on the ground for up to 30 seconds. 
+
+Transmutation Spheres are pickupable objects that are able to use Light Attacks, Heavy Attacks, and Guard/Drain. Dropping a Transmutation Sphere immediately despawns it.
+Ammo is passively drained at a rate of 1 Ammo Per Second. Attacking or Guarding disables passive drain until the Attack Animation is finished or until no longer Guarding.
+
+Transmutation Spheres:
+They are considered Generic Void Weapons, and their damage can be increased through Weapon Damage Buffs, as well as Activity Surges and other generic Void Damage buffs. 
+They are also able to inflict Volatile through Volatile Rounds. 
+Spheres will not trigger, nor be affected by any effect related to Melee Abilities, Void Abilities, Trace Rifles, or Weapon Surge Mods.
+
+Light Attacks | Lunges forward, dealing 270 [150] damage, disorienting Combatants and consuming 1 Ammo. Airborne Attacks deal 25% decreased damage. Can attack twice every second.
+
+Heavy Attacks | Slams the Sphere onto the ground, detonating it, dealing 1350 [300 Guardians | 1500 Constructs] damage without falloff and inflicting suppression to enemies within 5? metres. 
+Damage is unaffected by the Ammo Remaining.
+
+Guarding | Projects a draining field over a ? metre radius, dealing 28 [12] damage and restoring 5 HP per enemy hit every 0.3 seconds.
+Grants 80% [50%] Damage Resist and prevents knockback while guarding. Combatants inside the draining field are disoriented.
+Ammo Drains at a rate of 1 Ammo every 0.25 seconds. The last remaining 3 Ammo drain at a rate of 1 Ammo every 0.5 seconds until 1 Ammo is left.
+
+Guarding while at 1 Ammo inflicts Transfiguration, dealing increasingly higher self-damage every 0.7 seconds until no longer Guarding or death. 
+Self-Damage inflicted maxes out at 100 damage per tick and ignores all Damage Resist. Will eventually outright kill after enough time.
+
+↑Deconstruction:
+Upon scoring a Transmutation Sphere Kill or upon damaging a Miniboss+ with a Transmutation Sphere:
+30% [15%] increased damage for 7 seconds.",,,,,
+"Skyburner's Oath
+
+Slug Rifle
+For The Empire
+↑Incandescent
+↑Burning Ambition",,,"Solar High-Impact Cabal Slug Rifle
+
+Hip-fire | Fires arcing projectiles that deal 43 [22] impact damage with a 2.97x Precision Multiplier and up to 55 [22] splash damage, down to 0% damage, inflicting x5+5 Scorch over a 3.5 meter radius.
+ADS | Fires hitscan explosive projectiles that deal the aforementioned damage over 3 meters.
+
+Deals 11% Increased Damage against Cabal Combatants, and pierces Phalanx Shields.
+
+↑Catalyst:
+Passively grants +20 Reload Speed, the Incandescent trait, and the Burning Ambition trait.
+Burning Ambition scorches on the 6th direct hit. Accumulates x100 Scorch after 10 (6 w/Ashes) consecutive full-auto hipfired shots.",,,,,
+"Slayer's Fang
+
+Nightsworn Sight I–IV
+Heart Piercer
+↑Craftable Refit",,,"Craftable Void Pinpoint Slug Frame Shotgun
+Reloads its entire magazine at once.
+
+Fires Slug Rounds that deal 638 [?] Damage with a 1.75x Precision Multiplier that release 7 bouncing, tracking submunitions on impact.
+Submunitions deal 99 [5.03] Void Damage, bounce up to 3 times, and are unaffected by damage falloff.
+Submunitions deal 18% decreased damage on the first bounce, and 42.5% decreased damage on every bounce afterwards.
+Directly impacting an enemy will score a hit with every submunition
+
+Submunitions can be redirected towards the nearest enemy within 5? meters inside a 45? degree cone pointed in the direction of the the bounce.
+ If the submunitions impact a surface, the redirection angle is increased to 360 degrees to enemies within 5 meters.
+
+Scoring a kill or picking up a Void Breach grants Nightsworn Sight for 7 seconds and Truesight for 3 seconds.
+Buff persists through stow. Allies with Slayer's Fang within ? meters also receive the buff upon scoring a kill.
+
+While Nightsworn Sight is active:
+ 15% increased Precision Damage and +? Reload Speed.
+Submunition inflict Weaken, and bounce up to 4 times with higher tracking strength at the cost of 18% decreased damage.
+Refills 2 Ammo every 4 seconds.
+Deals 10% increased damage towards Fallen and Scorn Combatants.
+
+↑Catalyst:
+Grants the option to slot-in Repulsor Brace, Stats for All, Cascade Point, and Loose Change trait equivalents.",,,,,
+"Still Hunt
+
+Cayde's Retribution
+Golden Munitions
+Sharpshooter
+↑Lucky Shot",,,"Solar Adaptive Sniper Rifle
+Hold [Reload] to cast Golden Gun once it is fully charged, refilling the magazine and generating 3 Ammo, or 1 if Celestial Nighthawk is equipped.
+
+Scoring Precision Hits and picking up Orbs of Power charge up Golden Gun Mode. 
+Precision Hits = 16.7% | Orbs of Power = 8.34%
+Super Charge can be obtained while stowed, and persists through both stow and death. Rally Flags fully charge up Golden Gun Mode.
+
+Sharpshooter passively grants +? Aim Assist, 0.?x ADS Duration Multiplier, and ?% Flinch Resist.
+
+Golden Gun Mode:
+Has 3 Ammo and a hipfire reticle. Lasts for 16? seconds, and persists when stowed. 
+Increases the Sharpshooter bonuses to +? Aim Assist, 0.?x ADS Duration Multiplier, ?% Flinch Resist, 18% Increased Aim Assist Falloff Distance and -60%? Accuracy Cone Size.
+Deals 666 [238] damage with a 2x Precision Multiplier against Bosses.
+Successive Precision Hits grant increased damage.
+45% Increased Damage for the 2nd shot and 90% increased Damage for the 3rd shot.
+Deals 5,820 damage over 3 Precision Hits againt Bosses.
+Becoming suppressed deactivates Golden Gun Mode. Golden Gun Mode is NOT a Super Ability for any purposes.
+
+Celestial Nighthawk alters Golden Gun Mode.
+Decreases Ammo to 1.
+Deals ??? [1061] Precision Damage against Bosses.
+Celestial Nighthawk grants ?% increased damage over the base version, assuming 3 precision hits.
+
+↑Catalyst: Grants the Lucky Shot trait.",,,,,
+"Sunshot
+
+Sunburn
+Sun Blast
+↑Loose Change",,,"Solar 150RPM Hand Cannon.
+Intrinsic Explosive Payload.
+
+Fires an explosive bullet that deals 71 [24] Impact Damage with a 2.68x Precision Multiplier and up to 83 [24] Explosive Damage, down to 0% damage over 3 meters.
+
+Scoring a direct hit on enemies causes them to be visually highlight for 1 second.
+
+Kills cause the target to explode, dealing up to 432 [160] damage, down to 40% damage and inflicting x10+5 Scorch over a 6 metre radius.
+
+↑Catalyst:
+Passively grants +30 Range, +20 Stability, and Loose Change.",,,,,
+"Symmetry
+
+Revolution
+Dynamic Charge
+↑Electric Styx
+↑Eddy Current",,,"Arc Rapid-Fire Scout Rifle. 
+Hold [Reload] to switch to the Arc Seeker Mode.
+
+Arc Seeker Mode:
+Fires tracking bolts that deal up to 76 [50 Guardians | 25 Constructs] splash damage, down to 0% damage over a 3 meter radius at the cost of 2.6x Fire Recovery Delay.
+Tracks to enemies within the aim-assist cone. Deals no self-damage.
+Switching to Arc Seeker refills the magazine by an amount equal to Dynamic Charge stacks.
+
+Precision Hits and Kills grant a stack of Dynamic Charge, up to a maximum of 15 stacks.
+Dynamic Charge stacks each grant 30% [complicated, x3 = 3 STK and x7+ = 2STK | 30% Constructs] increased damage and increased splash radius to Arc Seeker mode.
+x10 = 4 meter radius | x20 = 7 meter radius
+Dynamic Charge stacks persist through stow.
+
+Hits with Arc Seekers grant x2 Bolt Charge and are able to discharge Bolt Charge as long as Dynamic Charge stacks are at least at x1.
+Having x10 or higher Dynamic Charge stacks increases Bolt Charge stack gain to x3. Arc Seekers are unaffected by Spark of Frequency's +1 Bolt Charge gains.
+Bolt Discharge triggered via Arc Seeker Hits count as Scout Rifle Primary Weapon Damage and are scaleable with both Combatant Scalars and Weapon Buffs.
+Storm's Keep (and Well of Radiance's Caster) cause Bolt Discharge to occur twice simultaneously, with one counting as Weapon Damage and the other being a regular discharge.
+Stacks multiplicatively with Flashover's 50% increase. 
+Casting Well of Radiance while behind a Storm's Keep Barricade will trigger 1 Symmetry Discharge and 2 Regular Discharges.
+
+↑Electric Styx:
+Dynamic Charge can now stack up to x20.
+Passively grants +10 Handling, +10 Reload Speed, and the Eddy Current trait. ",,,,,
+"Tarrabah
+
+Ravenous Beast 
+Bottomless Appetite
+↑Ambitious Assassin",,,"Solar Aggressive Submachine Gun.
+Hold [Reload] to quickly activate Ravenous Beast once it is fully charged.
+
+Ravenous Beast Charge:
+Damage instances grant 2% [5%] Charge. 
+Hits against Scorched Enemies grant 3% [6.7%] Power.
+Kills grant 10% Charge. 
+Grants 1% Charge per damage instance taken. 
+Stowing Tarrabah removes 50% Power. Eg: 70% -> 20%
+
+Ravenous Beast Effects: Magazine gets refilled instantly on activation.
+187% [120%] increased Bodyshot Damage, 99% [52.7%] increased Precision Damage, and 0.8x Fire Recovery Delay.
+ +100 Handling, +100 Reload Speed, and 0.8x Reload Duration Multiplier.
++100 Mobility, and increases Slide Distance from 6.5 meters to 8.5 meters.
+50% [15%] Solar Damage Resist.
+
+Ravenous Beast lasts for 8 seconds. Hits increase the buff duration by 0.05 [0.06] seconds. 
+Hits against Rank-And-File and Elite Combatants increase the duration by 0.3 seconds per hit while the buff timer is ≤3 seconds.
+
+↑Catalyst: Grants the Ambitious Assassin trait.",,,,,
+"Telesto
+
+Unplanned Reprieve
+Harbinger's Pulse
+↑Deeper Pockets",,,"Void Sticky Fusion Rifle
+
+Fires 7 sticky, proximity detonated bolts, each dealing up to 236 [47] Void Damage, down to 12.5% damage over 4 meters each.
+Bolts last up to 5 seconds on surfaces, automatically detonate once an enemy is within 3 meters, and cannot be destroyed.
+
+Scoring 3 Void Kills within 4.5 seconds of each triggers Harbinger's Pulse, fully refilling Telesto's Magazine.
+Telesto Kills count as 2 Kills.
+
+↑Deeper Pockets:
+Passively grants +3 Magazine Size (4 -> 7) and +40 Ammo Generation.
+
+↑Harbinger Seethe:
+Hold [Reload] to smack Telesto, priming Harbinger Seethe once Harbinger's Pulse has been triggered 3 times.
+The next direct hit creates a portal over the target that releases 22 Telesto bolts over 2.25 seconds.",,,,,
+"Tessellation
+
+Property: Undecidable
+Property: Irreducible
+↑Property: Unavoidable",,," Grenade-Matching Adaptive [Weapon|Instrument|Topology] Fusion Rifle
+[Reload] transforms the next shot into a Grenade-Matching explosive [Projectile|Shape|Language] at the cost of a Grenade Ability Charge. 
+Takes 2.3 seconds to transform and refills the magazine.
+Can utilize Transcendence Grenades at the cost of a Grenade Ability Charge. Can utilize Song of Flame Wisp Grenades at no cost.
+Always uses the element of the current Grenade Ability, regardless of overrides.
+
+Kills grant 20% Grenade Energy and an additional 2.5% Light Transcendent Energy and 2.5% Dark Transcendent Energy.
+
+Explosive [Projectile|Shape|Language]:
+Behaves like a rocket, detonating on impact. Deals 250 [57] impact damage, up to 3,552 [166] explosive damage, down to 25% damage at 7 meters.
+Kills detonate enemies, triggering a Grenade-Matching Chain Reaction explosion.
+Deals 19% increased damage while Transcendence is active.
+Explosive shot can be stowed.
+
+↑Property: Unavoidable:
+Explosive [Projectile|Shape|Language] impact triggers a delayed detonation after 0.2? seconds.
+Enemies within 10 meters of the impact are dealt up to 188 [10] damage and are [afflicts|burdens|cursed| with Elemental Debuffs based on the Grenade Ability Element.
+
+Arc = Blind | Solar = x70+10 Scorch with 5% increased Solar Effect damage | Void = Weaken for 6 [2.5] seconds.
+Stasis = x80 Slow for 6+1 [0.5] seconds. | Strand = Sever for 5+2.5",,,,,
+"The Fourth Horseman
+
+Thunderer
+Broadside
+↑And Its Name Was Death",,,"Arc Automatic 300RPM Shotgun
+
+Fires 12 pellets in full-auto, with each pellet dealing 84 [?] Damage with a 1.1x Precision Multiplier
+Each successive shot fired within 0.5 seconds of each has increasingly higher damage and a wider pellet spread.
+2nd shot | 17.7% increased damage and +25% Pellet Spread.
+3rd shot | 36.5% increased damage and +33% Pellet Spread.
+4th shot | 56.5% increased damage and +33% Pellet Spread.
+5th shot | 77.5% increased damage and +33% Pellet Spread.
+
+Kills refill Ammo.
+RnF Combatants = 1 Ammo | Elites = 0 Ammo?? | Miniboss+ = 5 Ammo
+
+↑And Its Name Was Death:
+Passively grants +40 Reload Speed and +1 Magazine Size (4 -> 5).",,,,,
+"The Manticore
+
+Soaring Fang
+Swooping Talons
+↑Flying Monster",,,"Void Lightweight Submachine Gun
+ Grants Lightweight Frame bonuses.
+
+Hits while grounded charge 1.5% of Antigrav Repulsors. Kills while grounded charge 10% of Antigrav Repulsors.
+
+Upon dealing damage while being Airborne for at least 0.5 seconds:
+Activates Hover Mode for 3 seconds, fully negating airborne penalties and allowing aerial horizontal movement at a fixed speed of 5.5 metres per second.
+Holding [Reload] will perform a Special Reload that quickly deactivates Hover Mode. Stowing Manticore will also deactivate Hover Mode.
+
+While in Hover Mode:
+ Hits drain 1% of Antigrav Repulsors, adding +0.3 seconds to the duration, up to a maximum of 3 seconds. Combatants are less accurate at targeting the wearer.
+10% [2%] increased damage every 0.6 seconds, up to 100% [20%] increased damage after 6 seconds.
+ Damage Increase is reset upon leaving Hover Mode.
+
+↑Flying Monster:
+Scoring an Airborne Kill refills 12 Manticore Ammo and grants a 15HP Void Overshield for 6 seconds. 
+Scoring 5 damage instances against Non-Rank-and-File Enemies while Airborne refills 12 Manticore Ammo and grants a 15HP Void Overshield for 6 seconds.
+Incurs a 1 second cooldown before hits count again. Touching the ground resets the damage instance counter. Works while stowed :)",,,,,
+"Third Iteration
+
+Tri-Planar Mass
+Modified Heatsink
+Amalgamation Rounds
+↑Aberrant Combustion",,,"Void Battery-Powered Lightweight Scout Rifle
+
+Fires a narrow Spread Shot of 4 Void Projectiles, each dealing 29 [14] Damage with a 1.69x Precision Multiplier.
+
+Refills 1 Ammo every 5 seconds. Firing resets the timer. Works even while stowed, but not while actively venting.
+[Reload] actively vents the core, increasing the refill rate. Active Refill Rate and Reload Animation scales with Reload Speed.
+
+[ADS] without firing gradually compresses the spread into an Amalgamation Round over 1 second.
+Amalgamation Rounds deal 290% [18%] Increased Damage and highlight the enemy for the entire team for 5 seconds.
+Amalgam Round is still 4 Void Projectiles that each have the stated damage increase!
+
+Third Iteration deals 95% [6.7%] increased Spread Shot damage and 30% [6.7%] increased Amalgamation Round Damage to Highlighted Enemies.
+
+On Marked Enemy Kill or Amalgamation Round Precision Kill:
+Void Invisibility for 7+3.5 seconds and Truesight for 4 seconds.
+
+↑Aberrant Combustion: On Amagalmation Round Precision Kill:
+Target explodes (twice, lol) in a Void Blast, inflicting weaken over 8 meters and then dealing up to 140 [?] Damage, down to 20% Damage over 5 meters.",,,,,
+"Ticuu's Divination
+
+Sacred Flame
+Causality Arrows
+↑Causality Quiver",,,"Solar Tracking Lightweight Bow
+
+Drawing from the hip tracks up to 3 enemies, splitting 3 arrows amongst all marked targets on release.
+Each arrow deals up to 29 [?] Damage and inflicts Sacred Flame on hit for 10 [5] seconds. 
+Enemies afflicted by Sacred Flame explode upon being hit by aimed shots or upon death, dealing up to 295 [137] damage, down to 50% damage over 5.5 meters.
+
+ Perfectly Drawn Precision Hits that trigger Sacred Flame explosions deal 100% increased explosion damage.
+
+↑Causality Quiver:
+Sacred Flame detonations grant a stack of Causality Quiver for 5.5 seconds, up to a maximum of 6 stacks.
+Causality Quiver grants increased impact damage. Does not increase Sacred Flame detonation damage.
+Inflicting Sacred Flame, detonating Sacred Flame, or damaging an enemy unaffected by Sacred Flame refreshes the Causality Quiver duration.
+
+Causality Quiver Damage Increases:
+16% | 31% | 49% | 67.5% | 87% | 87% 
+3.6% | 11% | 12% | 16% | 23% | 23%",,,,,
+"Tommy's Matchbook
+
+Ignition Trigger
+Heat Sink
+↑Heat of the Moment",,,"Solar Rapid-Fire Auto Rifle
+
+While hipfiring:
+Grants massively decreased Accuracy Cone Size and Accuracy Cone Growth.
+Does not receive the -50% Recoil from crouching. Instead, it is triggered by starting to hipfire. The reduction carries over to ADS if the trigger is held after initially hipfiring.
+
+Ignition Trigger:
+Initially triggered by firing 20 rounds within 0.125 seconds of each.
+While active, holding down the trigger builds up 20% Heat per second. Constantly drains at -25% Heat per second while not firing.
+Grants 99% [50%] increased damage and -3% Accuracy Cone Size while active.
+Drains 15 HP from the wielder every 0.4 seconds until reaching Critical Health. Drain is decreased to 7.5 HP per tick while hipfiring.
+Self-Damage bypasses Void Overshield and does not deal damage to it.
+
+↑Heat of the Moment: While Ignition Trigger is active:
+Weapon Kills grant Cure x1.
+Every 5th shot applies x15+5 [x10+10] Scorch.",,,,,
+"Trespasser
+
+Unrepentant
+Be The Danger
+↑Tunnel Vision",,,"Arc Adaptive Burst Sidearm
+
+Upon finishing a reload within ? seconds of a kill:
+Grants Unrepentant for 10 seconds.
+Kill trigger persists through stow. Unrepentant is removed on stow.
+
+Unrepentant:
+Increases the length of the next burst, firing an extended 6-round burst that deals 200% increased damage.
+Unrepentant kills fully refill magazine and reactivate the perk. Counts as a true reload, activating on-reload effects, such as Tunnel Vision from the Catalyst. 
+
+↑Catalyst:
+Grants the Tunnel Vision trait.",,,,,
+"Trinity Ghoul
+
+Split Electron
+Lightning Rod
+↑Forked Lightning",,,"Arc Precision Split-Arrow Bow 
+
+Fires 3 split arrows, each dealing 122 [?] with a 1.25x Precision Multiplier.
+
+Precision Kills grant Lightning Rod.
+Lightning Rod arrows explode on impact, dealing up to 13 [10] damage in a tiny radius, and chain electricity, dealing 194 [50.3] damage to enemies within 8 metres.
+Lightning Row persists through stow.
+
+↑Forked Lightning:
+Grants +30 Draw Time.
+Decreases Draw Time from 733ms to 633ms.
+Lightning Rod now triggers by scoring any Arc Kill.",,,,,
+"Turncoat
+
+Latent Power
+Power Surge
+↑Void Mastery",,,"Void Adaptive Hand Cannon
+
+Upon scoring 2 hits within 3 seconds of each:
+The next shot fired within 3 seconds has an Explosive Payload.
+Explosive Payload deals up to 122 [?] Damage, down to 50% damage over 4 meters.
+
+Scoring direct hits charges up Latent Power.
+Hits = 4% | Precision Hits = 8% | Explosive Payload = +8?% | Kill = +25?%
+Minimum of 9 Precision Hits + 1 Bodyshot required to charge without a kill.
+
+Unleashed Power:
+Hold [Reload] to empower the weapon once fully charged. Initiating a reload or stowing Turncoat while empowered to finish the effect earlier.
+Refills Magazine, increases Fire Rate to 225RPM, massively improves Hip-Fire Accuracy, Stability, and Aim Assist, and grants unlimited ammo for up to 13 seconds.
+Every shot fires an Explosive Payload that deals 87 [?] Damage.
+Inflicts Weaken for 6 [?] seconds on hit.
+Transforms into Overwhelming Power after 3 seconds, dealing ~13 Self-Damage every second until the buff runs out.
+Rocket Launcher and Micro-Missile Damage is increased by 30%. Hazardous Propulsion Rockets receive 200% increased damage. It simply does what it wants.
+
+↑Void Mastery: 
+On Empowerment End: 
+Void Overshield for 10+5 seconds.
+Void Overshield scales based on how long Unleashed Power lasted, at a rate of ~3 OS per second active, up to 40 OS after 13 seconds.",,,,,
+"Wavesplitter
+
+Harmonic Laser
+Supercharged Battery
+↑Attrition Orbs
+↑Detonator Beam",,,"Void Adaptive Trace Rifle
+
+While holding down the trigger:
+Cycles between Low, Medium, and High Power Levels. Cycle resets after not firing for 0.1 seconds.
+Low-Power deals base damage. Medium-Power deals 32.2% [3%] increased damage. High-Power deals 68.7% [6.25%] increased damage.
+
+Wavesplitter Power Level Cycle:
+Med 0.5s -> Low 1s -> High 1s -> Med 1.5s -> Low 1.5s -> Med 2s -> High 1.25s -> Low 1.25s -> Repeat
+
+On Orb of Power Pickup:
+Grants Supercharged Battery for 10 seconds and fully refills the magazine. 
+Picking up additional Orbs of Power extends the duration of Supercharged Battery by +10 seconds, up to 20 seconds.
+Supercharged Battery can be activated while stowed, and persists through stow.
+
+Supercharged Battery:
+Power Level to High.
+Scoring 12 hits on a single target without releasing the trigger inflicts Suppression for 7 seconds.
+
+↑Catalyst: +10 Range, +30 Ammo Generation, the Attrition Orbs trait, and the Detonator Beam trait.",,,,,
+"Vex Mythoclast
+
+Timeless Mythoclast
+Temporal Unlimiter
+↑Calculated Balance",,,"Primary Solar Fusion Rifle.
+Behaves like a High-Impact Auto Rifle. Counts ONLY for Fusion Rifle related interactions.
+
+Fires individual Fusion Bolts at 400RPM Full-Auto from a different timeline in Auto Rifle Mode.
+Fusion Bolts deal 66 [?] Damage with a 1.8x Precision Multiplier.
+
+Upon emptying the Magazine:
+Refills 80% of all damage instances scored. Always rounds up. Counter persists through stow.
+Requires scoring at least 9 hits for refill to activate. Always rounds up. 
+No cooldown preventing hits from counting, unlike Rewind Rounds.
+
+Kills in Auto Rifle Mode grants Overcharge stacks, up to a maximum of 6 stacks.
+Tier 1 and T2 Combatants = 1 | T3 and T4 = 2 | Guardians = 2
+
+Linear Rifle Overcharge Mode: Hold [Reload] while at 6 Overcharge stacks to swap into Overcharge Mode.
+Fires Linear Fusion Shots that deal 461 [168] damage with a 3.2x Precision Multiplier.
+Linear Fusion Precision Kills trigger an ignition that deals 5% increased damage.
+Each shot fired consumes 2 Overcharge Charges, allowing up to 3 shots per activation.
+Overcharge is removed on stow. Fully refills magazine on deactivation.
+
+↑Calculated Balance:
+On Weapon Kill or upon scoring 15 hits within 3 seconds of each:
+20% increased damage, +20? Stability, and -20% Accuracy Cone Size for 5 seconds for Auto Rifle Mode.
+Damage buff persists through stow.",,,,,
+"Vexcalibur
+
+M1R Distribution Matrix I–IV
+Perpetual Loophole
+↑Craftable Trait",,,"Craftable Void Rapid-Fire Glaive
+Projectile Hits grant 8% Weapon Energy per bolt.
+
+Fires a spread of 5 bolts in an alternating + x pattern, each dealing 138 [28.85] damage.
+Deals 25% increased projectile damage towards Vex Combatants. Melee Attacks disorient Non-Boss Vex Combatants.
+
+While Blocking with Weapon Energy:
+Gradually grants Void Overshield at a rate of 14 Overshield HP per second to the user and allies within 15 metres. Overshield lasts for 8+4 seconds.
+Uniquely has 50% Damage Resist against Primary and Melee Damage from Guardians, compared to other Glaive's 30% against Primary and Melee Damage.
+
+While any kind of Overshield is active:
+Glaive Melee Attacks deal 20% increased damage. 
+Glaive Melee Kills fully refill Void Overshield health and duration to 10+2 seconds and grant 100% Weapon Energy.
+
+↑Catalyst:
+Grants the option to slot-in Immovable Object, Grave Robber, and Replenishing Aegis trait equivalents.",,,,,
+Power Weapons,,,,,,,,
+"Anarchy
+
+Arc Traps
+Impromptu Ammunition
+↑Jolting Feedback",,,"Arc Rapid-Fire Trap Grenade Launcher
+
+Fires Arc Bolts that stick to surfaces or enemies for up to 30 seconds. Up to 6 Arc Bolts can be simultaneously placed per Guardian.
+Bolts that are within 15 metres of others will create an electrified tripwire between each linked bolt.
+ Arc Bolts that are linked will all simultaneously trigger.
+Bolts will not link to an ally's Anarchy Bolts.
+
+Arc Bolts:
+Deal ticks of 218 [35] damage every 0.5 seconds, down to 30% damage over a 4 meter radius for 10 seconds once triggered by detecting an enemy within 5 meters.
+Linked Arc Bolts deal 435 [?] damage every 0.5 seconds to enemies touching the tripwire. Linked Arc Bolts only damage enemies in the tripwires.
+Explode after 10 seconds of being triggered, or upon expiring, dealing 223 [40] damage, down to 50% damage over 4 meters.
+Bolts created by allies do not interfere with damage, allowing each Guardian to deal their own independent damage.
+
+↑Catalyst: Grants the Jolting Feedback trait.
+Jolts on the 4th damage instance, 3 if Amplified.",,,,,
+"Black Talon
+
+Crow's Wings
+Duelist's Trance
+Tireless Blade
+↑Reversal",,,"Void Projectile Sword
+
+Unique Heavy Ranged Attack: 
+Fires an explosive projectile, dealing 693 x 2 = 1386 [456? x 2] damage and inflicting Suppression over 3 meters, at the expense of 3 Ammo and 50% Sword Energy.
+Dealing damage to a Suppressed Enemy with the Explosive Projectile inflicts Suppresion to enemies within 8 meters.
+Two projectiles can be fired in quick succession with any amount of Sword Energy.
+Projectile Attacks while at 0% Sword Energy deal 455 [152] damage, only deal direct impact damage, and only cost 1 Ammo.
+Projectile Attacks deal 30% increased damage towards Rank-And-File Combatants.
+
+↑Reversal: Effect does not trigger.
+BUNGIE'S INTENT: Upon scoring a hit against Void-Debuffed Enemies:
+10% | 20% | 30% increased damage until... a menu is open for at least a few seconds??. 
+Effect scales with the amount of Void Debuffs on the enemy, maxing out at 3 debuffs.",,,,,
+"D.A.R.C.I.
+DARCI
+Personal Assistant 
+Target Acquired
+↑Networked Targeting",,,"Arc Rapid-Fire Sniper Rifle
+Utilizes Scout Rifle Animations, granting peripheral vision unlike other Sniper Rifles.
+
+Upon aiming at an enemy for 0.5 seconds while scoped-in:
+Highlights the enemy and displays Health and Shield Percentages, distance from target, and Power Level information.
+Grants Target Acquired while an enemy is highlighted.
+Highlight persists for 1 second after being off-target. Only highlights enemies within 150 metres.
+
+Target Acquired:
+Grants 18.35% increased damage, 31.34% increased Precision Damage, +? Aim Assist, -50% Recoil, -50% Accuracy Cone Size, and 50% Flinch Resistance.
+Scoring a hit while Target Acquired is active inflicts Jolt.
+
+↑Networked Targeting and passively grants +20 Stability:
+Hits while Target Acquired is active grant a stack of Networked Targeting for 10.5 seconds, up to a maximum of 5 stacks to the wielder and allies with Non-Exotic Sniper Rifles within 15 meters.
+Bestowing x5 Networked Targeting stacks to an ally grants 15% increased DARCI damage.
+
+Networked Targeting Bonuses:
++? | +? | +? | +? | +? Stability
++? | +? | +? | +? | +? Handling
++? | +? | +? | +? | +? Aim Assist
+2.8% | 6.1% | 9.1% | 12.5% | 15.9% Increased Precision Damage
+?% | ?% | ?% | ?% | ?% Flinch Resist",,,,,
+"Deathbringer
+
+Dark Deliverance
+Dark Descent
+↑Dead Weight",,,"Void High-Impact Rocket Launcher
+ 
+Fires a slow-moving Void Orb that can be detonated midair by releasing [Fire], exploding on impact otherwise.
+
+Detonation releases 7 Void Orbs that slowly descend and track enemies.
+Void Orbs initially deal up to 211 [224] damage over ? meters, with their damage increasing based on how long they've existed.
+Damage linearly increases up to 182.5% [47.7%] increased damage over 3 seconds. Maximum damage is indicated by Yellow Damage Numbers.
+Void Orbs do not deal self-damage.
+
+↑Dead Weight:
+Void Orbs' initial damage is increased by 63%, reducing the time needed to reach maximum damage to 2 seconds.",,,,,
+"Deterministic Chaos
+
+Heavy Metal
+Vexadecimal
+↑Target Lock",,,"Void High-Impact Machine Gun
+
+While holding down the trigger:
+Every 4th shot fires a Heavy Metal projectile that inflicts Volatile.
+Every 4th Heavy Metal (16th shot) fires a Vexadecimal projectile that has increased recoil.
+Every 2nd Vexadecimal Projectile (32nd shot) inflicts Weaken.
+
+Releasing the trigger after firing a Vexadecimal projectile refills 12 Ammo.
+Optimizing the Ammo Refill actively makes inflicting weaken impossible.
+
+↑Catalyst: Grants the Target Lock trait.
+Target Lock timer persists long enough to trigger the refill from firing a Vexadecimal projectile.
+However, due to the aforementioned bug, it only triggers every 32 consecutive shots without stopping to actually weaken.
+So... every trait of this weapon is antisynergistic with each other :')",,,,,
+"Dragon's Breath
+
+Composite Propellant
+High Octane
+↑Pyromancer",,,"Solar High-Impact Rocket Launcher
+Uses a Fuel Counter to strengthen the effects of the Rocket. Always has x1 Fuel.
+
+Passively gains 1 Fuel every 6 seconds, up to a maximum of 5 Fuel after 24 seconds. Ignitions within ? metres grant 2 Fuel. Reaching 5 Fuel refills the weapon. 
+Shooting consumes all Fuel and halts passive Fuel generation for 3 seconds.
+
+Rockets leave an Incendiary Trail as they travel.
+Rockets embed themselves on direct impact, triggering small explosive bursts every 0.75 seconds that deal 70 [15] damage and release 3 Incendiary Pools each time.
+Fuel increases the embed duration of the rocket, allowing it to Scorch more and spreading more Incendiary Pools, as well as granting it increased explosive damage.
+
+Incendiary Pools deal 41 [74] damage and inflicts x40+20 Scorch every ? seconds in a ? meter radius for ? seconds.
+Rockets' Incendiary Trail inflicts inflicts x50+20 Scorch.
+
+1 | 2 | 3 | 4 | 5 Fuel Stacks
+1.5s | 2.25s | 3s | 3.75s | 4.5s Embed Duration
+0% | 7.1% | 14.3% | 21.4% | 28.6% Increased Explosive Damage
+3 | 6 | 9 | 12 | 15 Total Incendiary Pools
+
+↑Pyromancer:
+Time between passively gaining stacks of Fuel is decreased to 3 seconds, reaching 5 Fuel after 15 seconds. (It's not 12 seconds as shooting halts passive fuel generation for 3 seconds).
+Kills spawn Firesprites without any cooldown between each pickup.",,,,,
+"Eyes of Tomorrow
+
+Eyes on All
+Adaptive Ordnance
+↑Blast Distributor
+↑Demolitionist
+",,,"Solar Homing Volley Rocket Launcher
+
+Fires 6 Rockets per Volley, with each Rocket exploding on proximity to an enemy, individually dealing up to 1,015 [215] Splash Damage over ~9 meters.
+
+ADS over an enemy to mark them, up to 6 enemies.
+Rocket Volley is split across all the marked enemies.
+
+Killing 4 or more enemies with a single volley grants Adaptive Ordnance.
+ Adaptive Ordnance generates 1 Ammo and grants the next full volley 50% increased damage.
+Stowing Eyes of Tomorrow before the sixth rocket is fired preserves Adaptive Ordnance.
+
+↑Catalyst: Grants the Blast Distributor and Demolitionist traits.",,,,,
+"Fafnir
+Orpheus Mark 6
+
+Quantum Nova
+Subatomic Distortion
+↑No Distractions",,,"Void Linear Fusion Rifle
+Hold [Reload] to trigger Quantum Nova while having Ammo in reserves.
+
+Hits deal 368 [?] Damage with a 3.44x Precision Multiplier.
+Hits lacerate enemies, dealing 344 [?] Damage 3 times (1032 [☠️]) after 0.75 seconds.
+Deals a total of 2297 [📁.zip] Damage on a Precision Hit.
+
+Quantum Nova:
+Consumes up to 9 Ammo in reserves to grant Quantum Nova for up to 20 seconds. Also refills the magazine.
+1 Ammo = 4 seconds | 3 Ammo = 8s | 6 Ammo = 14s | 9 Ammo = 20s
+Deals 1,420 [?] Damage and inflicts a 30% [?%] Weaken for 5 seconds over 10 meters upon triggering Quantum Nova, regardless of ammo consumption.
+Timer is paused while stowed. Buff can be retriggered to extend its duration.
+
+Hits while Quantum Nova is active inflict a stronger weaken that increases damage received by 30% [?%] for 5 seconds.
+
+↑Catalyst: Grants the No Distractions trait.",,,,,
+"Finality's Auger
+
+Ruinscribe's Forge
+Ruinscribe's Beacon
+↑Bait and Switch",,,"Solar Turret-Placing Precision Linear Fusion Rifle
+Hold [Reload] to switch between Create Turret Mode and Regular Linear Fusion Mode.
+
+While in Create Turret Mode:
+Firing consumes 3 Ammo, shooting a projectile that creates on impact Ruinscribe Turret and changing the firing mode to Ruinscribe Turret Mode.
+Automatically refills magazine after creating a turret.
+
+Ruinscribe Turret Mode:
+Firing paints enemies within a 6 meter radius if targeted at a surface, or paints the enemy it is pointed at for 30 seconds.
+Does not utilize ammo to marks surfaces or enemies in Ruinscribe Turret Mode, and can be used even at 0 Ammo.
+Marks persist through Turret despawn or death.
+
+Ruinscribe Turret:
+Missile Turret that lasts for 25 seconds with a maximum targeting range of 70 meters. Turret has ? Construct HP.
+Fires missiles that deal up to 359 [131] Solar Damage over 4 meters every 2 seconds. Targets the closest enemy in range.
+Turret prioritizes Painted Enemies, firing a 3-Round Salvo towards the target, with each missile dealing up to 137 x 2 = 274 [55 x ? = ?] Solar Damage every 1.65 seconds.
+Turret CAN self-destruct if hit by enough of its own missiles.
+
+↑Catalyst:
+Grants the Bait and Switch trait.",,,,,
+"Gjallarhorn
+
+Wolfpack Rounds
+Pack Hunter
+↑More Wolves",,,"Solar Homing Rocket Launcher
+
+Rockets release 8 Homing Cluster Missiles on explosion.
+Cluster Missiles deal the same damage type as the Rocket Launcher that fired it. Cluster Damage is unaffected by Rocket Frame.
+
+While within 15 metres of allies:
++50 Handling, +50 Reload Speed, and 0.9x Reload Duration Multiplier.
+
+After shooting:
+Allies within 15 metres receive Pack Hunter for 15 seconds, granting them Wolfpack Rounds for Non-Exotic Rocket Launchers.
+Pack Hunter persists through stow.
+
+↑More Wolves:
+Passively grants +1 Magazine Size (1 -> 2).
+Wolfpack Rounds Kills release an additional faster, homing rocket that deals 126.5% increased damage. 
+Damage dealt by the More Wolves rocket is displayed in Yellow Damage Numbers and follows Wolfpack Rounds damage scaling.",,,,,
+"Grand Overture
+
+Wrath of the Colosssus
+Omega Strike
+↑Grand Overture Catalyst",,,"Arc Slug & Missile Launcher 
+
+Slug Launcher slowly charges up over 1 second.
+Slugs deal 1243 [259] damage and grant a stack of Missiles Loaded, up to a maximum of 20 stacks.
+
+Missile Volley:
+Hold [Reload] while at least one stack of Missiles Loaded is obtained to swap into Volley Firing Mode.
+Fires Tracking Missiles in 5-round bursts which consume Missile Loaded stacks instead of ammo.
+Missiles deal 250 [52] impact damage and up to 888 [185] explosive damage on hit.
+Missile Volley persists through stow and can only be deactivated by running out of Missile Loaded stacks or dying 
+
+↑Grand Overture Catalyst:
+Passively grants +20 Stability and +20 Handling.
+ Missiles blind Combatants on hit. Missile Kills make enemies explode, dealing up to ? [?] damage in a ? radius.",,,,,
+"Heartshadow
+
+Exhumation
+Shot in the Dark
+↑Wraithwalk",,,"Void Projectile Sword
+
+Grants Shot in the Dark after being invisible for 0.25 seconds, for 2.5 seconds after Invisibility ends, or upon scoring a kill while Shot in the Dark is active.
+
+Shot in the Dark:
+25% increased damage and hits inflict Weaken for 6 [3] seconds.
+Kills grant Void Invisibility for 6.3 secods.
+
+Powered Grounded Heavy Attacks:
+Consume 3 Ammo and grant Void Invisibility for 6.3 seconds.
+Release a fan of 4 tracking Void Orbs up to ? meters forward, each dealing 507 [363] damage on detonation. 
+Orbs have no damage falloff. Orbs deal an additional 30% increased damage towards Rank-And-File Combatants.
+
+↑Wraithwalk:
+Passively grants +6 Reserves (50 -> 56).
+50?% Increased Movement Speed while Shot in the Dark is active.",,,,,
+"Heir Apparent
+
+Heavy Slug Thrower
+Armor of the Colossus
+↑Legion's Bulwark",,,"Solar Rapid-Fire Machine Gun
+[Aim-Down-Sights] to Spin up. Can only be fired after being spun up for 1.5 seconds.
+
+While at Full HP and fully spun up:
+Grants an Arc Shield over 1 second. 
+
+Arc Shield:
+Has a durability of 80 HP. Shield's durability recharges over 1 second after 2 seconds of not receiving damage if Shield HP is at full.
+Provides immunity to Precision Damage, 50% Damage Resist against Kinetic Damage, and 15% Damage Resist against Non-Arc Elemental Damage.
+Detonates when destroyed with Arc Damage, dealing 130 damage to the wielder and their nearby allies.
+
+↑Legion's Bulwark:
+Arc Shield is granted 75% [25%] Damage Resist.
+Arc Shield refills 50% of Magazine upon being destroyed.",,,,,
+"Legend of Acrius
+
+Shock Blast
+Long March
+↑Deeper Pockets
+↑Trench Barrel",,,"Arc Pellet Shotgun
+Reloads faster than it shoots, firing always at its maximum fire rate if reload cancels are used.
+
+Fires 15 pellets in a wide spread which dissipate after 18 metres. Pellets have no damage falloff and can overpenetrate an unlimited amount of enemies.
+Hits against grounded [all] enemies deal an additional damage instance that inflicts 135.2 [150] damage.
+
+While Magazine has least 1 Ammo:
+Increases Outer Ring Radar Range to a maximum of 80 metres.
+
+↑Deeper Pockets:
+Passively grants +40 Reload Speed, +2 Magazine Size (4 -> 6) and +50 Ammo Generation, as well as the Trench Barrel trait.",,,,,
+"Leviathan's Breath
+
+Big-Game Hunter
+Leviathan's Sigh
+↑Colossal Quiver
+↑Archer's Tempo^2",,,"Comically Large Void Bow
+
+Fully-drawn arrows deal 800 [death] Impact Damage with a 1.6x Precision Multiplier and create a concussive blast on impact.
+Concussive Blast deals up 701 [death] Explosive Damage, inflicts Volatile, and heavily knocks enemies.
+
+↑Colossal Quiver:
+Passively grants +5 Total Ammo (9 -> 14), +80 Ammo Generation, and an unique version of Archer's Tempo that grants 0.563x Draw Time Multiplier. (0.75^2, technically)",,,,,
+"Microcosm
+
+Paracausal Beam
+Paracausal Imbuement
+↑Stopping Power
+↑Thresh",,,"Kinetic Trace Rifle
+
+Fires a continuous beam at 900RPM that deals 101 [?] Damage with a 1.35x Precision Multiplier.
+Deals massively increased damage to Combatant Shields.
+
+Kills grant bonus Super Energy, scaling with Enemy Tier.
+ Tier 1 Combatant = ?% | T2 = ?% | T3 = ?% | T4 = ?% | Guardian = ?% 
+
+On Super Ability Cast | Refills Weapon.
+On Super Ability End: Paracausal Imbuement | 20% increased damage for 20 seconds.
+Paracausal Imbuement persists through stow.
+
+↑Catalyst: Grants the Stopping Power and Thresh traits.",,,,,
+"One Thousand Voices
+1KV
+Ahamkara's Eye
+Unforeseen Repercussions
+↑Fall From Grace",,,"Solar Fusion Rifle
+
+Shoots out a beam that ticks 10 times and marks 9 delayed explosion spots along its 0.6 seconds duration, each initially dealing 22 [11] damage. 
+The last beam tick does not mark an explosion.
+
+Marked spots detonate after 0.7 seconds of being created, each dealing up to 281 [100] damage and inflicting x10+5 Scorch over ? meters.
+Solar Effects that are initially applied by One Thousand Voices deal 31.6% increased damage.
+
+↑Fall From Grace:
+Each detonation releases a Taken Seeker that aggressively targets enemies, dealing 84 [?] Impact Damage as well as 22 additional DoT ticks.
+Each tick deals 13 [?] damage every 0.25 seconds for 5.65 seconds, dealing a total of ? [?] damage.
+An enemy can be afflicted by up to ~5 seekers at once.
+Blighted Enemies (Witherhoard Direct Hit)  receive 100% increased tick damage.
+
+Has no interactions with Malfeasance or Wish-Ender. ",,,,,
+"Salvation's Grip
+
+Cryocannon
+Shatter Shot
+↑Rimestealer",,,"Stasis Grenade Launcher
+
+Deals 25% increased damage to Frozen Enemies and always destroys Stasis Crystals.
+Damage Buff stacks with Frozen Enemy Modifiers.
+
+Uncharged Shots fire Stasis Grenades that destroy Stasis Crystals on hit.
+Shattering 3 crystals within ? seconds of each with uncharged shots refills the magazine. 
+Destroying a large amount of Stasis Crystals does not result in all of them exploding instantly for performance reasons. 
+
+Charged Shots create Stasis Crystals in a ▼ shape.
+Salvation's Grip's Stasis Crystals deal up to 183 [?] Stasis Weapon Damage, down to 60% damage over 8 meters upon being shattered.
+Creates a Small Crystal on impact, with 2 Medium Crystals spread out in a V formation, followed by 3 Large Crystals diagonally, with the middle one being behind the Small Crystal.
+Displays a preview of where the projectile will land while [Fire] is held.
+
+↑Catalyst:
+Grants the Rimestealer trait.",,,,,
+"Service of Luzaku
+
+Dichotomous Thinking🤔
+Meaning-Making
+↑Disorganized Attachment",,,"Strand Support High-Impact Machine Gun
+Shares MOST Healing Mechanics with Support Frame Auto Rifles. Threadlings from Rapid Healing and Nests both count as Weapon Damage.
+
+Scoring a hit grants 10% Healing Charge. Does NOT get charge from damage from other sources, nor is it scaled by damage.
+Hipfired Healing Shots do not consume ammo, expend 2% Healing Charge to restore 30 HP, and refill 2 Ammo at an increased 600 RPM.
+
+Upon scoring 5 healing hits within 1 second of each on allies or Teeming Nests:
+The next healing hits within 1 seconds of each on allies spawns 1 Threadling on them, and applies Support Frame Boost to the user and the targeted ally.
+Rapid Healing a Teeming Nest ADDITIONALLY fully restores its health and also triggers Support Frame Boost.
+
+Kills create a Teeming Nest.
+Scoring a kill within 30 meters of a Teeming Nest instead spawn a Threadling on Enemy Death Location.
+
+Teeming Nest: 300 Construct HP. Lasts for 17.5 seconds, constantly draining 6.7% (-20) HP per second 1.5 seconds after reaching Full Health.
+Gives birth to a Threadling every 5 seconds.
+Can be targeted by Service of Luzaku, restoring 11.5% (+1.5s) HP per shot.
+
+↑Disorganized Attachment:
+Nests become harvestable after giving birth to a total of 6 Threadlings.
+Harvesting a Nest destroys it to grant a Throwable Tangle.",,,,,
+"Sleeper Simulant
+
+Dornröschen
+Moving Target
+↑Accelerated Coils
+↑Deeper Pockets",,,"Solar Linear Fusion Rifle
+
+Fires overpenetrating shots that deal 1.802 [death lol] Solar Damage with a 1.38x Precision Multiplier.
+Shots pierce through unlimited enemies and refract upon impacting a surface, splitting into 5 lasers that deal 369 [145] damage.
+Bosses take 18 damage from each refracted laser.
+
+↑Deeper Pockets and Accelerated Coils:
+Passively grants +2 Reserves (14 -> 16) and decreases Charge Time by 250ms (1024ms -> 774ms)
+Charge Time Reduction does not decrease damage.",,,,,
+"Parasite
+
+Worm's Hunger
+Worm Byproduct
+↑Envious Arsenal",,,"Solar Worm Launcher
+
+Kills grant stacks of Worm's Hunger, up to a maximum of 20 stacks.
+Tier 1 and T2 Combatants = 1 | T3 and T4 = 4 | Minibosses and Bosses = 5 | Guardians = 5
+
+Worm's Hunger grants 10% increased damage and ?% larger Blast Radius per stack, up to 200% increased damage and ?% larger blast radius.
+Worm's Hunger stacks persist through stow.
+
+Receiving self-damage from the explosion grants the Worm Byproduct buff, increasing damage from other weapons by 15% for 10 seconds.
+Deals a lot?% decreased self-damage. Worm Byproduct persists through stow. (obviously)
+
+↑Catalyst: Grants the Envious Arsenal trait.",,,,,
+"The Colony
+
+Insectoid Robot Grenades
+Serve the Colony
+↑Deeper Pockets",,,"Void Arachnid-Grenade Launcher
+Intrinsic Auto-Loading Holster equivalent.
+
+Fires small, seeking arachnids that detonate on proximity to target. 
+Arachnids can crawl on surfaces, and detonate after 2.5 seconds of landing on a surface.
+
+Spawns additional arachnids on kills, depending on the Enemy Rank.
+Rank-and-File = 2 | Elite = 3 | Miniboss+ = 6 | Guardians = 1
+
+↑Deeper Pockets:
+Passively grants +1 Magazine Size (7 -> 8).",,,,,
+"The Lament
+
+Banshee's Wail
+Revved Consumption
+Tireless Blade
+↑Burning Ambition",,,"Solar Chainsaw Sword
+
+Restores 7HP per damage instances.
+
+Banshee's Wail:
+[Block] revs the blade, granting Banshee's Wail x1.
+Hits while revved grant a stack of Banshee's Wail, up to x9 after 8 hits.
+Banshee's Wail stacks are removed upon no longer attacking, running out of Sword Energy, or upon performing a Heavy Attack.
+
+Revved Light Attack Strikes: Consume 20% Sword Energy per swing.
+Deal 539 [389] Direct Damage, followed by two additional instances of 135 [95] Damage after 0.1 second.
+Revved Light Attack Strikes after the first attack animation deal 33% increased direct damage.
+
+Revved Heavy Attacks: Empties remaining Sword Energy.
+Consume 2 Ammo to deal 2 hits of 198 [152] Damage each within 0.1 seconds of one another, ending with a strike that deals 1,054 [811] damage.
+Performing a Revved Heavy Attacks consumes all Banshee's Wail stacks to deal increased damage based on the amount of stacks it consumed.
+x1-x3 = Base Damage | x4-x6 = 54% Increased Damage | x7-x9 = 109% Increased Damage.
+
+↑Catalyst: Grants the Burning Ambition trait.
+Allows Scorch to be inflicted from a single Revved Light/Heavy Attack.
+Scorch ticks also restore 7HP.",,,,,
+"The Prospector
+
+Excavation
+F.A.T.S (Full Auto)
+Chain Reaction
+↑Deeper Pockets
+↑Danger Zone",,,"Arc Drum-Loaded Grenade Launcher
+
+Grenades explode into 3 Cluster Bombs, each dealing up to 158 [50] damage over 4? meters.
+
+↑Deeper Pockets:
+Passively grants +40 Blast Radius, +50 Reload Speed, and the Danger Zone trait.",,,,,
+"The Queenbreaker
+
+Wire Rifle
+Marksman OR Combat Sights
+Hip-fire Grip OR Quickdraw
+↑Rewind Rounds",,,"Arc Linear Fusion Rifle
+Selectable Perks, between Marksman Sights | Combat Sights, and Hip-Fire Grip | Quickdraw. 
+Hold [Reload] to quickly swap between Sights.
+
+While Marksman Sights are equipped:
+Grants +15 Range, +10 Zoom, and sets charge time to 0.633 seconds. 
+Right-Side Scope displays ammo (Yellow Bar on the right) and charge level (Yellow circle on the right).
+
+Shoots a single chaining bolt that deals 439 [180] Arc Damage with a 3.44x Precision Multiplier and inflicts blinds.
+Hits chain up to 5 times towards the closest enemy within 10 meters, dealing 347 [?] Arc Damage and blinding. 
+Enemies can only be damaged once per chain.
+
+While Combat Sights are equipped:
+Grants +10 Handling, +40 Aim Assist, sets charge time to 0.533 seconds and fires in 3-Round Bursts. 
+Left-Side Scope displays ability energy. Left icon is Grenade. Right Icon is Melee. Wheel is Super.
+
+Shoots a 3-Bolt Burst, dealing 191 x 3 = 573 [79 x 3 = 237] Arc Damage with a 3.44x Precision Multiplier per shot
+Scoring 6 Hits within ? seconds of each grants Charge Accelerant for 5.5 seconds.
+
+Charge Accelerant | 0.6x Charge Time Multiplier.
+Charge Accelerant does not decrease damage per shot. Buff can be refreshed.
+
+Catalyst:
+Grants the Rewind Rounds trait.",,,,,
+"The Wardcliff Coil
+
+Mad Scientist
+Mechanized Autoloader
+↑Pinpoint Guidance Module",,,"Arc Volley Rocket Launcher
+
+Shoots a volley of 8 wildly imprecise rockets, each dealing 107 [22] impact and up to 1500 [300] explosive damage over ? meters.
+
+Grants x1 Bolt Charge to the user and allies within ? meters for every 2 Rockets fired.
+
+On Heavy Ammo Brick Pickup: 
+Refills Magazine.
+
+↑Pinpoint Guidance Module:
+Passively grants slight tracking to the rockets.",,,,,
+"Thunderlord
+
+Reign Havoc
+Lightning Rounds
+↑Return Stroke",,,"Arc Adaptive Machine Gun
+Intrinsic Dynamic Sway Reduction, and reticle moves drastically less, akin to Zen Moment without needing hits.
+
+While holding down the trigger:
+0.75x Fire Recovery Delay after initially firing 13 rounds.
+0.6x Fire Recovery Delay after firing a total of 26 shots.
+Triggers a Lightning Strike every 10 hits or on kill, dealing up to 232 [65] damage in a 5 meter radius and granting x1 Bolt Charge.
+
+↑Return Stroke:
+Lightning Strikes refill 5 Ammo.",,,,,
+"Tractor Cannon
+
+Repulsor Force
+Scientific Method
+↑Deeper Pockets",,,"Void Blast Shotgun
+
+Void Blast deals up to 491 x 2 [??] damage and knocks enemies back, down to a minimum of 10% damage over 10 meters.
+Knockback has no effect on Minibosses and Bosses and scales with distance/enemy mass.
+
+Void Blast hits inflict suppression and a stronger weaken that increases damage received by 30% for 10 seconds.
+Hits grant Scientific Method for 5 seconds, granting +35 Handling and Maximized Movement Speed.
+Scientific Method remains active while stowed and cannot be refreshed.
+
+↑Deeper Pockets:
+Passively grants +3 Magazine Size (4 -> 7) and +3 Reserves (15 -> 18)",,,,,
+"Truth
+
+Prototype Trueseeker 
+Grenades and Horseshoes
+↑Reaper's Tithe",,,"Void Airburst Homing 3-Shot Rocket Launcher
+
+Rockets lock-on to targets by aiming, and aggressively track locked-on enemies.
+Truth Rockets deal up to 1821 [?] Damage over 11 meters, down to 0% damage, and have proximity detonation, automatically exploding within 2 metres from enemies.
+Rockets cannot deal Impact Damage due to Proximity Detonation.
+
+Dealing damage with 3 rockets without reloading generates +1 Ammo.
+Finishing a reload after having dealt damage with 3 rockets grants Prototype Trueseeker.
+
+Prototype Trueseeker:
+Lasts until reloading or after dealing damage with 3 different rockets.
+0.2x Fire Recovery Delay, +? Stability, massively improved tracking, and rockets explode into 8? Cluster Bombs on detonation.
+Cluster Bombs each deal 177 [?] damage over 3 meters.
+
+↑Catalyst: Grants the Reaper's Tithe trait.",,,,,
+"Two-Tailed Fox
+
+Twintails
+Play with Your Prey
+↑Third Tail",,," Void + Solar + ↑Arc Homing Burst-Fire Rocket Launcher
+
+Fires a burst of 2 ↑3 Rockets at the cost of 1 Ammo.
+Each rocket deals 405 [?] impact damage and up to 1,419 [?] splash damage, down to 0% damage over 9 meters.
+
+First rocket deals Void Damage and inflicts Suppression.
+Second rocket deals Solar Damage and inflicts x60+30 Scorch. 
+
+↑Third Tail:
+Alters the two-burst into a three-burst fire, firing an additional Arc Rocket at the end of the burst.
+The third rocket deals deals 102 [22] Impact Damage, up to 355 [76] Explosion Damage, and inflicts Jolt.",,,,,
+"Whirling Ovation
+
+Coronal Culmination
+Anticipation
+↑Filled Determination",,,"Strand + Solar Chargeable Rocket Launcher
+Counts as a Strand Weapon for most purposes.
+
+Holding [Fire] charges the weapon, increasing its damage the longer it is held, maxing out at 4.85 seconds.
+Releasing [Fire], or holding down the trigger for 0.4 seconds upon reaching 100% Charge shoots the weapon, fully emptying the Anticipation meter. 
+Does not require reloading unless picking up an Ammo Brick while fully empty.
+
+Anticipation:
+Meter that charges over 160 seconds at base, which decreases the time needed to charge the weapon.
+Dealing Kinetic Slot and Energy Slot Weapon Damage speeds up the rate at which Anticipation is filled, down to a minimum of 3 seconds to reach 100% Anticipation.
+0% Anticipation = 4.85 seconds | 20% Anticipation = 4.25s | 40% Anticipation = 3.75s
+60% Anticipation = 3.15 seconds | 80% Anticipation = 2.5s | 100% Anticipation = 2s.
+Can't build up Anticipation while in the Fire Recovery Delay state.
+
+Coronal Culmination:
+<33% Charge | Fires a rapidly accelerating Strand Projectile that deals 1,076 [218] Strand Damage on impact.
+
+34%–66% Charge | Projectile deals 1,663 [337] Damage. An additional Solar Explosion occurs after ? seconds, dealing up to 1,640 [255] Damage over 10 meters
+Deals up to 3,303 damage per shot, 207% more damage than the previous charge level. 
+
+67%–99% Charge | Projectile deals 2,251 [455] Damage. Solar Explosion deals up to 2,216 [345] Damage over 10 meters
+Deals up to 4,467 damage per shot, 35% more damage than the 2nd charge level.
+
+100% Charge | Projectile deals 3,360 [680] Damage. Solar Explosion deals up to 3,368 [523] Damage over 10 meters. Autofires after 0.4 seconds of reaching 100%.
+Deals up to 6,728 damage per shot, 50% more damage than the 3rd charge, and 104% more damage than the 2nd charge level.
+
+Strand Projectile benefits from Strand Weapon Surges. Solar Explosion benefits from Solar Weapon Surges.
+
+↑Filled Determination:
+Fully charged shots pierce through Rank-and-File and Elite Combatants, and create a Solar Grenade that lasts for ? seconds.
+Solar Grenade benefits from Touch of Flame, but not Sunbracers.",,,,,
+"Whisper of the Worm
+
+White Nail
+Craftable Trait
+↑Whispered Breathing",,,"Craftable Solar Aggressive Sniper Rifle
+
+Scoring 3 Precision Hits within 2.5 seconds of each refills the magazine, generating 1 ammo and pulling 2 ammo from reserves.
+
+↑Whispered Breathing:
+Grants Whispered Breathing after 1.2 seconds of ADS without shooting, until no longer ADS.
+Whispered Breathing grants 35% Increased Precision Damage and grants 10.777% increased damage against Combatants.",,,,,
+"Winterbite
+
+Big Frigid Glaive
+Weighted Edge
+Tilting at Windmills
+↑Rimestealer",,,"Stasis Aggressive Glaive
+Gains 25% Weapon Energy on each Freeze Orb hit.
+
+Freeze Orb fires Explosive Projectiles every 0.5 seconds towards non-frozen enemies within 10 metres of it.
+Explosive Projectiles inflict Freeze over a 3? meter radius and deal up to 60 [11] damage on impact.
+
+Freeze Orb detonates on impact, dealing 1282 [250] damage and inflicting x60 Slow in a 10 metre radius.
+Freeze Orb moves at a speed of 9.5 metres per second and has a maximum lifetime of ? seconds, being able to travel up to ? metres.
+
+While Magazine is loaded with at least 1 Ammo:
+Melee Attacks deal 50% increased damage and inflict x40 Slow for ?+? [1.5+0] seconds.
+Boss Combatants only receive 20% increased damage.
+
+↑Catalyst: Grants the Rimestealer trait.",,,,,
+"Wolfsbane
+
+Resurgence Directive
+Nano-Assault
+",,,"Solar Heavy Axe
+Uses Twilight Arsenal's Axes Animations. Sword Energy is visibly displayed in the Melee Ability icon.
+
+Light Attacks deal 470 [377] Damage grant 30% Sword Energy and spawn 3 Quicksilver Nanites every 3 attacks or on kill.
+Heavy Attacks, while having at least 10% Sword Energy, consume 3 Ammo to launch a Solar Wave that travels 10 meters forward, dealing 675 [301] Damage.
+Airborne Heavy Attacks consume 2 Ammo and always send out a Solar Wave, regardless of Sword Energy.
+Wolfsbane deals up to 25% increased damage against enemies with Outbreak Perfected's Nanites.
+
+Quicksilver Nanites restore ? HP on pickup and grant ~4.5% Nano-Assault progress, requiring 21 Nanites to max out.
+Hold [Reload] upon reaching 100% Nano-Assault to trigger Overclock.
+Quicksilver Nanites generated from attacks against ~~ A F F L I C T E D enemies with Outbreak Perfected Nanites grant ?% increased Nano Assault progress.
+
+Overclock | Enhanced Offensive Capabilities for 12 seconds.
+Generates +14 Ammo, 25% increased damage, and 30% Sword Energy/s.
+Heavy Attacks always launch a Solar Wave.
+Fully Charged Heavy Attacks's Solar Wave explodes, dealing 421?? [376] Damage over ? meters and create a Swarm-Nado. Explosion has no falloff.
+Swarm-Nado deals 55? [55] Damage every 0.3 seconds over 5? meters for 3 seconds.
+
+Grants Damage Resist for 5 seconds upon scoring Light Attack Hits within 3? seconds of each.
+Damage Resist strength and hit requirements are variable, with both being determined by the equipped handle.
+Unyielding = 15% DR after 2 hits | Rampager's = 20% DR after 3 hits | Tenacious = 25% DR after 4 hits
+Can be triggered even without Ammo. Can be refreshed by retriggering the Damage Resist effect.
+
+↑Selectable Retrofit:
+Grants the option to slot-in Relentless Strikes, Attrition Orbs, Burning Ambition, and SUBROUTINE: ~RECURSION.
+~RECURSION | Nanites restore an additional ? HP per stack of Nano-Assault. Spawns ? Nanites nearby every ? damage taken while Nano-Assault is active with a 2s CD.",,,,,
+"Worldline Zero
+
+Tesseract
+Infinite Guard
+Tireless Blade
+↑Another Dimension",,,"Arc Adaptive Sword
+
+After sprinting for 1 second, while at 100% Sword Energy:
+Grants Temporal Sprint until no longer sprinting.
+ 
+Tesseract:
+Grounded Powered Heavy Attack while Temporal Sprint is active launch a Heavy Blink Attack.
+Heavy Blink Attacks drain 50% Sword Energy and consume 3 ammo.
+Teleports the user 10 metres forward, dealing up to 530 [353] damage 7 times to enemies that are within 2 metres of the teleport path.
+Scoring a Tesseract kill allows performing another Heavy Blink Attack within ? seconds that consume ? Ammo and drain 10% Sword Energy.
+
+↑Another Dimension:
+Temporal Sprint is granted after sprinting for 0.5 seconds.",,,,,
+"Xenophage
+
+Pyrotoxin Rounds
+Rangefinder
+↑Chain Reaction
+↑Rampage",,,"Solar Explosive Machine Gun
+
+Fires Explosive Rounds that deal 262 [75?] Impact Damage and up to 898 [75?] Explosive Damage, down to 0% damage at 4.5 meters.
+
+Recommended to hold down the trigger, as tapfiring reduces firerate.
+This behavior is shared with most Automatic Weapons.
+
+↑Catalyst: Grants the Chain Reaction and Rampage traits.",,,,,

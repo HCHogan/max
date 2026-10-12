@@ -1,0 +1,238 @@
+,,,,,,,,
+,"ALL SHELL UNIQUE CORES
+AS OF MARATHON v1.1.0 (Season 2, June)",,,,,,,
+,,,,,,,,
+,ASSASSIN,DESTROYER,RECON,SENTINEL,THIEF,TRIAGE,VANDAL,
+1,MINUS SIGHTS,COUNTER ATTACK,EARLY WARNING SYSTEM,EMINENT DOMAIN,BREAK AND ENTER,DOUBLE DOSE,CALLING CARD,
+,"After aiming down sights for a short time, you become invisible at the cost of generating heat.","When Riot Barricade takes damage, you periodically release a retaliatory missile at your attacker.",You receive an alert on your HUD when a hostile Runner is nearby.,Runner grenades neutralized by your Defender System fall to the floor and become lootable.,Gain a second charge for your Grapple Device.,The benefits of consumables shared with crewmates by your Shareware.exe are increased.,Disrupt Cannot also Hacks targets caught in the blast.,
+,,"Acts like Search & Destroy's missile
+(can Immobilize)",Bottom right of HUD,"Includes Chem, EMP, Flechette, Frag, Heat, and Smoke grenades",,25% → 50%,8s Hack,
+2,SHADOW STRIKE,IMPACT SIPHONS,INTUITION,THREAT ASSESSMENT,PARTNER IN CRIME,SAMARITAN,MICROJET EFFICIENCY,
+,Your Utility Knife deals greatly increased damage when attacking from invisibility.,Incoming damage dealt to your Riot Barricade is returned to you as shield energy.,Your Interrogation now triggers when you down a hostile runner.,Your motion system shows the elevation of detected targets.,"While not being piloted, your Pickpocket Drone periodically releases a pulse that pings nearby hostiles.",Sharing a consumable with your Shareware.exe reduces the cooldown of your next Med-Drone.,Gain an additional charge for your Microjets that generates less heat.,
+,"+100 Melee
+(no additional damage;
+does not go over 100 Melee)","Converted to Shield;
+does not affect Health",,,10m radius; pulses ever 5s,,,
+3,AMBUSH,BULLRUSH,CLUSTER PAYLOAD,BANDOLIER,CASE THE JOINT,MED-DRONE OVERCHARGE,ADRENAL CORE,
+,Camouflage granted by your Active Camo and Shroud has increased duration.,Your Riot Barricade does not passively drain energy while you perform your Tactical Sprint.,"Your Tracker Drone detonates into shrapnel submunitions that explode on impact, dealing additional damage.","Gain a second charge for your
+Snare Mine.",Your X-Ray Visor has increased vision range.,Your Med-Drone heals crewmates members more quickly and efficiently.,"While Amplified, your movement abilities generate even less heat. Using a Cardio Kick extends Amplify's duration.",
+,"Active Camo: 15s → 18s
+Shroud: 2s → 5s",,,,"Base range: 40m → 50m
+Color range: 20m → 30m",2HP/s → 4HP/s,Refreshes Amplified to full duration (30s); Depleted Cardio Kick has no effect,
+4,GUERRILLA,INTAKE VENTS,ECHO CHAMBER,EXPLOSIVES EXPERT,HIDEOUT,NO GOOD DEED,HIGH-OCTANE PROPELLANT,
+,Your Active Camo and Shadow Dive recharge more quickly while in smoke.,Your Tactical Sprint generates less heat.,Your Echo Pulse releases additional pulses. Defeating hostiles recently pinged by your Echo Pulse returns prime ability energy.,Your Snare Mine has increased detection range and when triggered sends out an additional salvo.,"While piloting your Pickpocket Drone, you become invisible.",You receive a burst of healing when your Med-Drone attaches to a crew member.,Your Microjets propel you further upward.,
+,,35% less Heat,5 → 7,3m → 5m,,"34HP Health;
+does not affect Shield",,
+5,FLEXWEAVE CASING,ANKLE BREAKER,HUNTER KILLER,ACTIVE RECON,HIT AND RUN,ELECTRON RECAPTURE SINKS,BLAST OFF,
+,You move faster and ready your weapons more quickly while invisible.,Your Thruster generates less heat while a hostile is nearby.,"Each target pinged by your Echo Pulse briefly grants a stacking bonus to your weapons'equip speed, reload speed, and stability.",Your Prey Tracker has an increased duration.,Striking a target with a melee or knife attack immediately after grappling Hacks them and knocks random loot items from their backpack.,"While your Battery Overcharge is active, defeating a hostile or downing a Runner with a volt weapon instantly restores a portion of the weapon's charge.","Knockback no longer deals self-damage, instead propelling you away from the blast.",
+,+50 Agility,,,15s → 20s,"Within 5s
+10s Hack",,,
+6,PATIENCE,LOCK 'N LOAD,ON THE TRAIL,SAFE SPACE,KEEN EYE,FRIENDLY FACE,CUT TO THE CHASE,
+,"While stationary, your invisibility timer is paused at the cost of generating heat.",Your weapons ready and reload more quickly and receive less flinch from incoming fire.,The trail left by your Stalker Protocol lasts much longer. Defeating hostiles affected by your Stalker Protocol reduces your generated heat.,Your Defender System protects a larger area.,Hacking a hostile with your X-Ray Visor extends its duration.,"When your Med-Drone attaches to a crew member, it cleanses any active status effects.",Disrupt Cannon takes less time to overcharge.,
+,,,15s → 20s,"Intercept 6m → 8m
+Weapon boost 6m → 8m",+7s extension,,2s → 1s,
+7,SAFE LANDINGS,MYRMIDON,PREDATOR,WELLNESS BEACON,PREMIUM PACKAGE,HYPOCRITIC OATH,MECHANIZED HOLSTERS,
+,Your Shadow Dive knocks nearby hostiles away when you land and creates a longer-lasting smoke field.,"After using your Thruster, your Melee Damage is temporarily increased.",Gain increased sprint speed and heat cooldown rate when your Tracker Drone attacks a target. Your Tracker Drone Overheats targets for an increased duration.,While standing near your Defender System you and your allies use medical items more quickly.,Your Pickpocket Drone has increased lifetime and is more resistant to incoming damage.,Damaging a hostile with your Reboot+ reduces the cooldown of your next Reboot+.,Your Power Slide reloads your ballistic weapons from reserves and recharges a portion of your volt weapons' current battery.,
+,4s → 10s,"+100 Melee
+(no additional damage;
+does not go over 100 Melee)","+50 Heat Capacity
++60 Agility
+8s → 10s Overheat","Standing within 15m
+50% quicker usage",60s → 90s,,,
+8,BREATHING SPACE,BOMBARDIER,BAD COP,HURT LOCKER,BOUTIQUE,FRESH INSTALL,LOW PROFILE,
+,Your Shroud increases your weapons' reload speed while in any smoke field.,Defeating hostiles while your Search and Destroy is active extends its duration.,Performing a finisher grants tactical and prime ability energy.,"Taking explosive damage grants
+you a small amount of  Prime Ability energy. Healing is interrupted when you receive damage.",The Finer Things also grants weapon reload speed and Agility based on the number of items in your Backpack.,"Crew members revived by your Reboot+ have increased ability regeneration, Agility, and Heat Capacity for a short time.",You gain the effects of Signal Jammer while Power Sliding.,
+,,+1.5s per kill (any),,,"+1 Agility for every slot occupied
+(e.g. +40 for 24XS backpack)",,,
+9,GHOST PROTOCOL,BOMBING RUN,EYE IN THE SKY,REVERSAL,CRIME SPREE,HIGH VOLTAGE,OUT OF DODGE,
+,Any smoke field you create lasts longer before dissipating.,Each successive homing missile in your Search and Destroy volley deals increased damage.,UESC Target Acquisition Devices (TADs) that you access remain active for longer and release additional ping pulses.,Defeating an Immozibilized target heals you over time. Interrupted when you receive damage.,Each container you open increases your Loot Speed. This increase resets when you're downed.,Defeating hostiles affected by EMP reduces the cooldown of your next Battery Overcharge.,"When your shields break, your generated heat is immediately cleared.",
+,"Smoke Screen: 20s → 20s (n/c)
+Shadow Dive: 4s → 10s
+Smoke Grenade: 30s → 40s",,TAD pulses: 5 → 10,Recovers both Health and Shield over 7s,+1 Loot Speed for every unopened container,,Also clears Overheat,
+10,PROWL KIT,HEAVY ORDNANCE,HOT PURSUIT,SAFEGUARD,GREED IS GOOD,OUNCE OF PREVENTION,TAG!,
+,Your movement speed is increased while crouched. This bonus is further increased while invisible.,Defeating hostiles with explosive damage reduces the cooldown of your next Search and Destroy.,Your Tracker Drone travels faster and further before automatically detonating.,Your Defender System intercepts additional grenades before expiring.,"When your backpack is completely full, your sprint speed and slide distance are increased.",Your Med-Drone increases Hardware and Firewall of crew members while attached.,Disrupt Cannon deals additional damage and pings targets caught in the blast.,
+,"+100 Agility
+30% Crouch Speed",,,9 → 12,,+30 to both Hardware and Firewall,,
+,,,,,,,,
+,,,,,,,,
+,"ALL WEAPON PRESTIGE MODS
+AS OF MARATHON v1.1.0 (Season 2, June)",,,,,,,
+,PISTOLS,,,,SHOTGUNS,,,
+WEAPON,V11 PUNCH,CE TACTICAL SIDEARM,MAGNUM MC,D54 BATTLE PISTOL,MISRIAH 2442,V85 CIRCUIT BREAKER,WSTR COMBAT SHOTGUN,WEAPON
+SLOT,"VOLT ARRAY
+Thermal Surge Battery","BARREL
+Ghost Muzzle","OPTIC
+Pistol Scope","SHIELD
+Daredevil Stock","GRIP
+Full-Auto Selector","VOLT CELL
+Overclocked Delimiter","UNDERBARREL
+MIPS Slug Converter",SLOT
+"BONUS
+STATS","- 0.52s Reload Speed
+- 2.0% Volt Drain","- 1.13° Hipfire Spread
+- 2.0% Weight
+- 18.0% Recoil
++ 0.22° Aim Assist","+ 1.1x Zoom
+- 0.20s ADS Speed",- 0.30° ADS Spread,"+ -0.12s ADS Speed
+- 1.25° Spread Angle","+ ? Magazine
++ ?s Reload Speed","+ 57rpm Rate of Fire
+- 9.0% Recoil
++ 0.50° Aim Assist
++ 1.0m Range
+- 0.63° Spread Angle","BONUS
+STATS"
+UNIQUE ATTRIBUTE,"Thermal Surge Battery
+Charged shots track towards and Overheat hostiles","Spiderbite Suppressor
+Silences this weapon's shots. Eliminations with this weapon cause you to become briefly Invisible","Shield Surge Optic
+High zoom optic. Precision hits with this weapon restore a small amount of shields","Prize Fighter
+[Special BIND] Press: Toggle stock. While the stock is folded, elimating hostiles builds stacks and improves firing from the hip. While the stock is unfolded stacks are converted to a super burst upon firing and improves ADS speed and ADS accuracy","Full-Auto Selector
+When fired from the hip: fires full auto, has increased pellet spread, and massively increased stability. When fired from ADS: massively increased range and much tighter pellet spread, but does NOT fire full auto","Delimited Charge
+Adds a third level of charge. When fully charged, this weapon has greatly reduced spread, increased damage, and its projectiles ricochet and pierce hostiles","MIPS Slug Converter
+[Special BIND] Press: Convert shells to a high-powered slug projectile",UNIQUE ATTRIBUTE
+,,,,,,,,
+,MACHINE GUNS,,,SNIPER RIFLES,,,,
+WEAPON,RETALIATOR LMG,DEMOLITION HMG,CONQUEST LMG,OUTLAND,V99 CHANNEL RIFLE,LONGSHOT,,WEAPON
+SLOT,"SHIELD
+Circuit Shield","SHIELD
+Overclocked Shield","MAGAZINE
+Infiinity Belt","BARREL
+Outland Suppressor","OPTIC
+Charge-Coupled Optic","MAGAZINE
+Kingmaker Mag",,SLOT
+"BONUS
+STATS",- 10.0% Recoil,"- 4.5% Weight
+- 6.1% Recoil","-1.55s Reload Speed
++ 70 Magazine","- 20.0% Recoil
++ 15.0m Range",- 0.10° ADS Spread,"-1.13s Reload Speed
++ 9 Magazine",,"BONUS
+STATS"
+UNIQUE ATTRIBUTE,"Circuit Shield
+[Special BIND] Press: Activate an energy shield that absorbs incoming damage. Damage absorbed by this shield refunds ammo back to the magazine","Overclocked Shield
+[Special BIND] Press: Activate an energy shields that absorbs incoming damage. When this shield is active, aiming down sights grants an increased rate of fire","Infinity Mag
+Eliminations grant ammo directly into the magazine and increase rate of fire for a short duration","Silent Shot
+Shots fired from this weapon are suppressed","Photometric Amplifier
+Charge rate is increased while aiming at a target","Pure Skill
+Headshots increase rate of fire. Stacks up to three times",,UNIQUE ATTRIBUTE
+,,,,,,,,
+,SUBMACHINE GUNS,,,,,RAILGUNS,,
+WEAPON,COPPERHEAD RF,BULLY SMG,V22 VOLT THROWER,BRRT SMG,KKV-9SD,V00 ZEUS RG,ARES RG,WEAPON
+SLOT,"BARREL
+Triple Barrel","MAGAZINE
+Rodeo Mag","VOLT DAMPENER
+Overcharge Lens","BARREL
+Flechette Split Action","MAGAZINE
+Flechette Drum","GENERATOR
+Overclocked Generator","MAGAZINE
+Impact Shockwave",SLOT
+"BONUS
+STATS","- 6.3 Firepower
+- 4.5 Damage
+- 1.36° Hipfire Spread
+- 22.5% Weight","+ 60rpm Rate of Fire
+- 14.4% Recoil
++ 49 Magazine","- 0.16° Hipfire Speed
++ 1.00° Aim Assist
++ 2.0m Range","- 0.06° Hipfire Spread
+- 0.09s Equip Speed
+- 39.2% Recoil","- 0.32s Reload Speed
++ 64 Magazine","- 4.10° Hipfire Spread
+- 80.0% Recoil
+- 0.55s Charge Time","+ 5m Range
++ 2 Magazine","BONUS
+STATS"
+UNIQUE ATTRIBUTE,"Triple Barrel
+Fires three shots simultaneously in a fan pattern","Rodeo Mag
+This weapon's fire rate greatly increases over time","Reactive Burst
+Consecutive hits on target create an explosive burst on the target","Hypertemporal Shot
+Fire all 5 rounds of a burst at once in a tight spread","Splinter-Link Rounds
+Breaking a hostile's shield generates a strong healing effect. This effect is increased while you have no nearby allies","Spartan Laser
+This weapon fires two projectiles per trigger pull","Impact Shockwave
+Rounds from this weapon explode on impact, dealing splash damage and knocking targets back",UNIQUE ATTRIBUTE
+,,,,,,,,
+,ASSAULT RIFLES,,,,,,,
+WEAPON,OVERRUN AR,V75 SCAR,IMPACT H-AR,M77 ASSAULT RIFLE,,,,WEAPON
+SLOT,"MAGAZINE
+Adaptive Mag","VOLT ARRAY
+Ram-page Mag","MAGAZINE
+Stopping Mag","MAGAZINE
+Interval Mag",,,,SLOT
+"BONUS
+STATS","Becomes a 3-burst rifle
+- 0.24s Reload Speed
++ 30 Magazine","+ 300rpm Rate of Fire
+- 0.44s Reload Speed
+- 1.1% Volt Drain","- 1.13s Reload Speed
++ 36 Magazine","- 0.14° ADS Spread
++ 0.05° Aim Assist
+- 0.50s Reload Speed
++ 2.0m Range
++ 18 Magazine",,,,"BONUS
+STATS"
+UNIQUE ATTRIBUTE,"Select Fire
+[Special BIND] Press: Toggle burst-fire mode. Body shots increase precision and aim assist for a short time","SM-5 Ragnarok
+Rate of fire no longer decreases as heat builds and projectiles ricochet off surfaces, tracking nearby targets","Hot Rounds
+Fires charged rounds that generate heat of targets","Interval Mag
+Land precision hits with iron sights to build stacks. [Special BIND] Press: Equip a midrange scope, slowing rate of fire but increasing stability, range, and precision damage, draining stacks over time",,,,UNIQUE ATTRIBUTE
+,,,,,,,,
+,PRECISION RIFLES ,,,,,,,
+WEAPON,HARDLINE PR,REPEATER HPR,V66 LOOKOUT,BR33 VOLLEY RIFLE,TWIN TAP HBR,STRYDER M1T,,WEAPON
+SLOT,"MAGAZINE
+Adrenal Feedback Rounds","OPTIC
+Lever Overhaul Interface","ION DAMPENER
+Sonar Shot","BARREL
+Lockout Muzzle Brake","OPTIC
+Q-Tap Regen Optic","OPTIC
+Vital Intel",,SLOT
+"BONUS
+STATS",+18 Magazine,"- 1.27° Hipfire Spread
+- 0.13s ADS Speed
+- 0.16s Reload Speed
++ 0.9x Zoom","- 37% Recoil
++ 17.0m Range","- 1.80° Hipfire Spread
+- 18.0% Weight","Becomes a 4-burst rifle
+- 8.9 Firepower    - 5.0 Damage
+- 0.10 Precision
+- 0.07s ADS Speed     - 6.3% Recoil
++ 10.0m Range     + 1.1x Zoom","- 0.15s Equip Speed
+- 0.07s ADS Speed",,"BONUS
+STATS"
+UNIQUE ATTRIBUTE,"Adrenal Feedback Rounds
+Precision hits reduce your shell's heat and grants a stack of Micro-Adrenaline. These stacks increase your shell's Heat Capacity and Agility for a short duration","Lever Focus
+Shots on target to increase fire rate. This degrades when a shot misses","Sonar Shot
+Precision eliminations or downs trigger a sonar pulse, revealing nearby hostiles if present","Lockout Muzzle Brake
+While firing from the hip, this weapon has greatly increased accuracy, stability, and range","Q-Tap Regen Optic
+Landing 4 precision hits in rapid succession starts health regeneration","Threat Detector
+Enables Proximity Sensor on radar. When hostiles are nearby, this weapon has increased handling, aim assist, and equip speed",,UNIQUE ATTRIBUTE
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,TBC,,,,,,,
+WEAPON,,,,,with,w/o,,
+SLOT,"tbc
+tbc","tbc
+tbc",,,2407,,,
+"BONUS
+STATS",tbc,tbc,,,,,,
+UNIQUE ATTRIBUTE,"tbc
+tbc","tbc
+tbc",,,,,,
+,,,,,,,,
+,,,,,,,,
+,,,,,,,,
+,,with,w/o,,,,,
+,,2407,2109,,,,,
+,,2357,2059,,,,,
+,,10s pulse,10s pulse,,,,,
+,,,,,,,,
+,,10,5,,,,,
+,,,2019,,,,,
+,,,1844,,,,,
+,,,128s lockout,,,,,
+,,,,,,,,
+,,,,,,,,
+,Vandal,Triage,,,,,,
+,Calling Card (Hack duration),Fresh Install (Prime/Tactical/Agility/Heat Capacity),,,,,,
+,Adrenal Core (Amplify extension),,,,,,,

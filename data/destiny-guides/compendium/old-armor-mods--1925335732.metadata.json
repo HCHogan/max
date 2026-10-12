@@ -1,0 +1,5003 @@
+{
+  "merged_ranges": [
+    "B1:J1",
+    "K1:V1",
+    "W1:AE1",
+    "AF1:AK1",
+    "B2:C2",
+    "E2:F2",
+    "H2:I2",
+    "K2:L2",
+    "N2:O2",
+    "Q2:R2",
+    "T2:U2",
+    "W2:X2",
+    "Z2:AA2",
+    "AC2:AD2",
+    "AF2:AG2",
+    "AI2:AJ2",
+    "B3:J3",
+    "H6:H7",
+    "I6:I7",
+    "J6:J7",
+    "K10:K11",
+    "L10:L11",
+    "M10:M11",
+    "AF19:AG19",
+    "B32:AK32",
+    "B33:D33",
+    "E33:G33",
+    "H33:J33",
+    "K33:M33",
+    "D36:D37",
+    "G36:G37",
+    "J37:J39",
+    "M37:M38",
+    "G38:G39",
+    "D39:D41",
+    "M39:M40",
+    "G40:G41",
+    "J40:J41",
+    "M41:M42",
+    "J42:J43"
+  ],
+  "hyperlinks": {
+    "W1": [
+      {
+        "text": "Don't know how Warmind Cells and Elemental Wells work? Click here to be redirected to Game Mechanics.",
+        "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1925335732#gid=1800463143"
+      }
+    ],
+    "J6": [
+      {
+        "text": "",
+        "url": "https://www.google.com/url?q=https://docs.google.com/spreadsheets/d/1i1KUwgVkd8qhwYj481gkV9sZNJQCE-C3Q-dpQutPCi4/edit%23gid%3D1048311855&sa=D&source=editors&ust=1791770089939380&usg=AOvVaw2FSBGl2OoM_z9cwBJwneDj"
+      },
+      {
+        "text": "How does Damage Resist wor",
+        "url": "https://www.google.com/url?q=https://docs.google.com/spreadsheets/d/1i1KUwgVkd8qhwYj481gkV9sZNJQCE-C3Q-dpQutPCi4/edit%23gid%3D1048311855&sa=D&source=editors&ust=1791770089939431&usg=AOvVaw30fVDxsiwa4pkN_ttIlK84"
+      }
+    ]
+  },
+  "images": {
+    "C4": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWnOZmxxV0d11pDuC8cY6vk-HPQZNACYeCFnPlzWL9_qml6MZLFWMh5mfVo9c0D6-u1cJMC3FnUOjsD-W66jHo0B1qshQzXIF-VqhXiYP0OPCu9YGxPDi6pKJgSydzb9mJVamAJHcWisIm9Z9WdDBR28ogBdpYZJHc=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F4": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbqHqQvY4XuLLF3tTcZm-n8sl17uWZacVhPmZoKvIAp7Jdm9-8ti19JtkZpzcaUjQoYED9t4k6kUGRGPeORTpXq5YlESJ9huGf-gC0OinzarSaYPDsM5FEXeWBU-A4VGF86UmMLW10j8HobAaN_lZ8AntLyZnoX6gn7=w64-h149",
+        "alt": ""
+      }
+    ],
+    "I4": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUGlWr-WVmr8E-tVhflEverumzBguKWS2e1HPD6YoPVL9bk8FLlP2FsFkZ-sYN9RXNx1_FUCjCNoPOOveIpk41hpfbG9bfLoq9XYd9QFtM3IzLPPF8loVjEBVgxg2ncmG3qp34EdbpvlZURQ-kGsKT6poAuKxkcqw=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L4": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYB8aHauzroqAholXvVt18SD8qGX4_7QU2xZbZ4d61Sp2mG0gMWRdLY2ejOsEw-Olud3Z5ZXnRunIplM4t9_8kSd6hI1O65baLZPiG-VR0J7Htz3hU3ebGrLWH8_XOdBNLLg97i49X-2aK7SpWPOk4K8QNQiRYJjoC6=w64-h149",
+        "alt": ""
+      }
+    ],
+    "O4": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbv998Nn9LFJ_Vv2gC7Q82kUAPzOSTnxfpvCCHCqNnkrBopOKHgMC2Ue3YkDQU_iHjuaATec5Nsl7kpXiiKSbxPnPoKkYl98-iz0jlyQ2dvCQcKH3gVuon4yxaDPDaJs6J7boJk880svTHyDQlV0PKiWZGpU8PZ7g=w64-h149",
+        "alt": ""
+      }
+    ],
+    "R4": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWot9zCaecR21-HdQh8p9G_rnx5emtPryOLT3hnnsW8UtK6g50Qgch84-FZf1BN18unh3A8EarEnGtsPJo_kbgNKcK9uXswYnM4DYH77qFqBW4JG3UW5ZFtd8vKswaYfgoKzNAVyoz5Z2dHOSO7sXVopN4hCmoDMpCt6qs=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "U4": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZZO94q0g8apXNBs57k3EGFkzw-49Lv4wAtPgyfmvl9w0b_Rs0mNelnS7GXVuHMk9-cMPFkP8DWajnI_EnMeCEL_LxHVr9hdY5oLJ04D4oPL0eIYVHkS8dMm2x7aTynkTo-JuwmYHUI2nCpo23_AmslaKDIBqkmCFSO=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X4": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLa4geLoFBVxRyaHORGQWmp8D3bLVpO66MFqOOmoQXZaTjGW01SHbMuZHU5lebf2hFPSMWOUhlXBksqARc3QcPw3DyvKyGpW0peOM3XIgfFXWsddJ3YYfyewAUe-qUyvUYlCzyNpBi_eTdVv78tz6Sm73KodwblRAg=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AA4": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU0AtMTIrH38_aUl7ZcBwjkowwdqcdOfXwXcQQZ5fN1TUeW9mkZfxQVFE0MesSA12A1L1aqJuQkEACCqhqBLLO9P8bzn8Kot0j2UGIENfkPDkK5poBY1NJKNs0JDBkz7kYbeTxVDx-tCvZiMC756VbXgMddMPKz3YXiHmA=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AD4": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVBBr7rbeBkQjdkgfbvLxk2UBONfi8cqVFR5FLw0VbHC1Lr406UrNNINL4KCYyO_awZ1J5j_q35NZCAHcJSUyGBQGJih33P66wCFigKx6ijPLckzRktihDKA4tbmesKR40Rs77VMmzNHqjWPU2ynHpPC-L53jHcyrmg62s=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG4": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXrrZRUkBHasI7HyNLaCRAEiZUIV6mi2xn25AXr9kFvGduXsGVrh2XoTOSrFVuqGCbmM0VFUrIv5fZTfTgZvIF4UIDbvI8aWkbSV5E17IgWCX8PTHWT5SmEu9SBuVQ0vejuzqR5XDV8ec_f4xj57IrYbXcrkhTjf4I4BaBd=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AH4": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXXkFoX-_X2mfF8LfLGCqCfEp5-0ITHQl56uMAA0AFgK-gaGQ83bf0P2kwnluMgw5MKwKBYAEpMezzba3KbdD10fNunAwY8aA_cbd9HiyCDoESH-d8AUzzOs1odJN791ulw06NkDntziLv0nXBZklqLmN7a_U07wDJpbCiM=s310-w310-h149",
+        "alt": ""
+      }
+    ],
+    "AJ4": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXXfsEowemGordUAOPld44KVPRua5_kjcPKB2CTxcbxOQrNVlQig4B8mw35S1cgCWuEz7SIjVCdv-MCDQsE5mvELY0pezTVPvL0DTZJaLQUQGttD5Op9-orIwQKo17cfTLvKzh2TXXwToI2UaYZManS6asB3vm3lKBvQxG5=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AK4": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVgiDJWuuckeZFXw8TMsghT7wmK293vR9-sJy3wC4KvP0-XKQuJDj3cyNI3p4KRE-913xnInPNx4coVm62MLdCeh6h0NDXkkcq3QUCqJiUaMy3iS7rNqSowhSA3xvvBjm0zKoVF7kvlDMHv-xxLWRdMIbP-12TwTnXm8Qov=s310-w310-h149",
+        "alt": ""
+      }
+    ],
+    "C5": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYLty1L-SybGtgieDLddGsF4h53M081F3mpmnWKmun9xIT29L4lhAtBP_Ncj9SNun1vf664xhGphK-3CupQ5K9YeesZ-GVWBue3VKOM_P4hjalyf7eNUjcVVwN_Bej7HX3kHxPXKuDKu8E-BST-S9qEIKNayAxiYMDK=w64-h149",
+        "alt": ""
+      }
+    ],
+    "F5": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVWGa06-lvJfBIiYQTtr9MyviMjD8EN1xkAeOLauT2G1O1OoF9OT5SpH_GRSc1EPkIFNb_bZ652Jp4Ni9UZYgzgq-MdCj_fnia_5dU6x_O7ocMRVDW6it9WkIaa25d6spKfwVKlZCRDLArEzVFj6GaUhQ8hVc6_uQ=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I5": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVNvFoudH_Uv3UkzkBJ_SxTizGkDMbqoc8eQ083j1-v7MlWIz6kw33xmMKUxhOC9yMGcGl7pF05zBsLn-8ye7E5P7NHDx9FDKF-fd5lh67trbVlKMHrjUFU47aC8AVozD1kR4tFa82ZbCgKaDUdc3ulmTwq7RwCepI=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L5": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLatxMCFiYzk4_FNlpE2GsjVdCDznfHSBpOTVkwZMCvOP44ZnEl06lWN_w1fhaTbAyfJoQPXl9jIhUqAPYu-J2Gyet0PbNDDm1I_PLq5CrBh9g1te6XqNIrFoKCZQKapvkyGRZBfYw9RS7t9fka_Zf-8BdVN2bcuUA=w64-h149",
+        "alt": ""
+      }
+    ],
+    "O5": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLb3WJl17cAoRFiLKZfYiKRTU2DVabFkEqDeArC4t7CEKM6kvvs-6CwJMVEroMU87obXjUWnywP9e0LGOvtJKjBoC3R47mUq2j9tX7Qnb3G8u4OmZ2KmfRNq5ydJOcqqHTt-LTbXlKcHJZ2w8FaTueeKygVmgw1rtWVQ=w64-h149",
+        "alt": ""
+      }
+    ],
+    "R5": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbeUxWi_UrCSDV12wpbzw0o-y0F0lKQaGkLsQOlgNpYL5LqEEf_hNT3jSyf8RhbAcm7Fi7X23-j5Hj0Q4DsOu5oodtAZMOGn9JjdPt99-rWyYIqWglncXu9s50CpFcG9E3wYSO_jpQNEpZ-Zm8Jio-8vEcucCRWHPgJ=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U5": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLY6ZUyGNLkV_LshzH5JCVBK-CVBxAD2iAgHksGFDzRV4Tp7tZkHfkUNuNnhOdk2v97SNsPLxrOwhQ2iOFXiEO5JyjWEBiNS7mcfZIZgeajcRC_rqACXk8kydlKt-MbBw5lhznasKMmBJwmp34dxbN45ol-Ik5EbSA=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X5": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZRWIA1T8CvM-ogwxfO9GrMTZvSm-X5_M_Ne02XapmOSSBvGDNBKaQo9CZBFHzuhl9NffPHxgztJGdpq6E0_iQaeQC4SLo4HTCEOg_N6w-e4Gb9SBv9WYi-AhBaZY55V_-qMbc6X1mpltrl1uRPPn6txItmy-gi0BEB=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AA5": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX37cPaeOL46dyIihIV4lnoGAoagnBNhMyekeqUUUFSCigtHYjmNsIEPx9-p0QpGsAOIgtxrJ8ptFkA0EjpzrUGDw-8Bj04FYR2VFnaCV2DpKeVtazAQY2B3feaNbOCDtVbz2Dx2UyftI1fHi4UD1vcXcLs8XSLCM2eZ6g=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AD5": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV1AMfvnh7u_1CHidEB61UUOLKJmULTCADGOmp5PRVXQVUtCvh5nAdWjS2BOTG5OHEAxdWYjDx9mZyuWq_JljFc2oYCls_AJhD-o6V3qo0fkUtjDoK-eH6IL8YE8eupRIr5WC5sgJ0gw8kwwmfB_EjXrlyX_L7_hrfMC0qH=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG5": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXqknmPQayoshBOIGXaJqDjMhkc4wszMwnSYlrmel6Wm1eZo1R4bwKW9pQq4mW8uZ_s0K7bLA3sJo5GzRv8i4JlXl8692KLs7Q4GrbhGK3B1FDJNcIPvb-Of-JZ4B6Q1oDR0QRZxohKePCUvPxq-N7g1OxvqbEqglOPr8UG=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ5": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX5j7snp5myTrTre7Q4Uat6Opmo0hTrrWNbzFJL_cA83dAkC4a0OgUDBK1nrwrMl5lTPQvbqm_hcfDmIvSC0y1uwSOGTHhF6WpKS-5plc8vW5oLwOyGrhJZmWnOVg03800GATpkx7nL1RxcfQ6FcKnHOehQ3bzHRrA=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C6": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZFLHxN3oo9abULKAuCoLMeYoxj8K2DCQxvUcWcMo8CZ0apMcnUr3ppwmj18qzBORdqhPVhEWCHnmejRIp-VvmBm1v4HQ5RoZTvRiY6vZTMRAF4g-BskBXKh0C6WNme3RK0dozUHCdRcAZaFVBy6rwrrrd9KM6INMFr=w64-h149",
+        "alt": ""
+      }
+    ],
+    "F6": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZZ1iYuUz_7Pz642SBZx9Nb9TqQkmBlGU3WWlXqdYKeCJPQbejHnj_MUMQ_vcjHw7BA77KhB1MVUEOSxK3KTckHysNTwTwRWdFr41PP9ynWzIdGQIhszxIHEsljeZcelVQIRhBZbtoWQowLDsMqBKhy44t4SNs4SKq1=w64-h149",
+        "alt": ""
+      }
+    ],
+    "I6": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZf-CgpR2UAp1H0ltccaLai0wl_3rpIUty4SXOM1LD7mInaQumjDIuFfoOX4TuYNycj4sJOfQTYQfIGgIxUQAf2K1ySTdgDfDkwS6h8WGZAHPqwIsCnxYW3hyuGdRgX2olZ_xEqQ4ca-oRMekCGSDakudsrceQ2ux9C=w64-h299",
+        "alt": ""
+      }
+    ],
+    "L6": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYPTgooQD4Vq_mYAtBJq3kqENzixoBJTgdx_HItsNMQi37GR6O2qeKbMh0wqG50AIFY_saOA8qHkFlCiOK2DXpkQ-MYB0r_WeAz6IJgO4HAQPZNk0ZgSZU2FhaMCfKyU03qKP2rzNIHA_jrHR9xHGTqPEIeXn0zu63d=w64-h149",
+        "alt": ""
+      }
+    ],
+    "O6": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYu_JyOdSx6AW7EmDii28BiOXKk8CKdcc4a2PHTbaYxIYLVdeTgIQj1DVOiTYXbEMWm6i7koQthuNR3_K4KES9OINvgs0mVHV5HnbARwlDOR4PpV_Mz_y6-vtNTgUsiQ6rifhD55MGiRPwJ8ImhC0O8gWMl4psuoAv7=w64-h149",
+        "alt": ""
+      }
+    ],
+    "R6": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYAyE3Jmdqj65RXh5jqX63T9eASgxh5q1acMvituakSwMVnkStsHuKznFFe1fm6PgDoi44pxwYM1Wz5nc5fZGinYsC43S3GkdZEywsoBsEk0spfTeqQ03FLb-pEFGUHmhtjR8iYCML02lXZK_zxdh8bCFmlJyX5KA1s=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U6": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLb7j6pv_VoQbzMyUwXUjgbN3D3ZkfWlD4lbKXrRvXZikvRCqLkj07_8X1VgMEhdW-VIljtBhOre4fepMS6-JP1iPUr5plre2JmEAXum3XN08eS6uyfiqfY5DkceNvdYIHL6Y_uS3Me2EXlIG1KdHl8h0HNDYGYXxQ8s=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X6": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbwmYnIRrnVa26FNaeS2cpcS3avgtALMki1mMFJxgieTLRwXMrxasPYKWalWZ-oBOd8QlXmPGDuUuZ-HGSzNF3ovbsTeIbRn9WJaIEkBpnUVWtkLq0v89CfMaf0QA1GLTfzfI3rLw5rfgEehvkzQKPr9dUIN1zMcRpX=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AA6": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU-3mEwzUNpIzIoae6zcEzLaCQwD6tII5YNiCeeJ_DYUIceLPYXk-Noro7RcBkeYOEHyNRnFEPyl_koJbyf64MfaAaEuydWFXk5SaGfza3-ren44XhDVhtpc0NXntrp9FmXt2Gn8dLBKBo-p1MSeDzlMaYxOD227tzvwUly=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AD6": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWzIHXPtSXqF8aH3vLry7npoBDfqiDeeEM66bs0Nktr7aXu1oE114E8zHKGKIuphGWrCtXZDBanH2AbofCtgei92CPkFxvdVBJqST-4whQPH2poFZcmVJnUzabnXHH4neDB-nQPKazMFtIZOrURtt7r0KLRHT8SbobyqUNl=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG6": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU-Ac6yszknjzIeOf98_seGVs_lUNOPN82NgQ8D5ufIdL2cMEkR0OWRImxOLqHKc99FsO_CMtqr-f8nmcqVNjHxhFBP8JnVfC5Vz1cSimbfLKGed5-bynuFMwMkCPJjH6YlwPL2Xp7SK7aN2Si4I_048K7SWRLdmDbG3nF4=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ6": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xW6LumGG06a2RRbXXkvuTSE-hyKqDWBJwJ7MRCPb9ttpl9NUhYz7ArSM5GVAwXYKiq8CyuuYYtBfz7nur3nV_01kX12bWcMZ6CcV0INe2qsThxjWtzA4naLMTMVTZwyMwj8MD1M2t-cLGEuoSxhUI5CCX61synPMZY=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C7": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZThdjarFQVRHg35trmX5eOQryEtiPirP41GeO_Ub1PM7b79M3AqiM7MZZfcceSX4NYykL_LfbTGi07pP59j8xnZWkuLX9TAnDkDdZjNitwwaWgIjGlVmslQp6mbtKSXmkyD2RtboHa0vMrGnbRjUnMFQIqHFwUlocJ=w64-h149",
+        "alt": ""
+      }
+    ],
+    "F7": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZdx1ocUpF6SPdH1MubFM-uQ8VcsuhLIxQAUJjWU8J66McD7R_oNwerNGszXoSfTw4t-pTJkfAC3LM7ecMiFMXcXPaFvfspD4MUgOmiywbGNGKc9gEDf4wWmHpgUkVSms3jgZMEBXO9o7oCyd9Ouay9nBTdOE8sKBtV=w64-h149",
+        "alt": ""
+      }
+    ],
+    "L7": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbbk4T9ipmpUpvAb5U_ztAP5lqSDQBkOSaWG0HyMbIJEumymBuGvLMT8suLxmHoYt-H6yZukq8v7AVM2PpsPtyhEcP8E3FZAg7p_DIZyVyB4jbHMuUG-Kn5dt5ynVXU2qG4ZpxMrd1D-pxc0lQbBzse68eSzoDVZkSA=w64-h149",
+        "alt": ""
+      }
+    ],
+    "O7": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZXHkoS3fdTSKXN44l-8IXY9vWxwaONozEviBqU8WiKV7jM_DyRM8PZiVtE-CquJDYF_QhSz_f0OKg_zuKSiXgiF8-kbLxcgfTi37rt3VZofM4pKmLRTHTYnTMu9aj7shKWnzKLkdSBETv_NzrStaUruBzSqgpsTN01=w64-h149",
+        "alt": ""
+      }
+    ],
+    "R7": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYUc8lylYbCzmydbY5R9vIdjY9kaLOoOCPZzj5CgtW607eyBfIFeGCzqqzo0ssZO9MKBdt9jlaTKldhs4sIt57ywV-oalzuciHoNIeZSiy3jcKNvv4Jg_cI-LvC6zjGIAxxJ1Qn32hI_yIE7T-KYOMp3e9duTOiAw=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U7": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYgqPR76DXGMObW-Z-Jh0sWC6OLJRMFBYT8bni8JL037HDmvafzTTEXiI7IdWEc0VyQ-D_HEshZPJxBkhJZzpZCEGaz6gXohe4eQYhFotLzSRa7A2eHondD7jBVCEx_85MJ-8U_xpXaBXKMGP6ssQiyI6VbO2BAyDJI=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X7": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYaihT1Ma11gPoph0B2uHuN7KoQerIGTY9jW0LiNSe5gWpkPkiwpvDnJvzfDVy4K7ALCLrcm2dOB83nhy4amVP43mFcUENQ1cpRu30xMzfxuHaUR4EU4CcGtGwYJtx2JFvfa1skOpewLLINYXaPu78prvmD_8nB8G6g=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AA7": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVkrmeIfmEwjsGZGmOOxXS7g2e07WxIrGUWhuupmyxgj5yw9SvQ56XC5VHxDR2cnRYywCuGTJJwcGu-JQkQaNruY04EaDpBUl4DzSwgPCU8aS3BCjj74rlEReHgG6x4U3Y-E-cIj5zpB6TGi_8CMBarhWEhxv6PGtocMRt5=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AD7": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXX2nzeQpigPZvW5hF47BTBJG_Eg8UHWin2Zta-8Jomt8hS9riaIuC9vFTI9CuD67Hpt_puTcvGvaFFdHMrkiwiwwvWNk6WSKXlpT6Qos6jre0dGL9lrF2ywdx-i4qCmgn6Xg6rjHXT58tK4xsofHgAw3ziuNInWtToq94=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG7": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXwuD_366eLgLdMfo_-pAPdRN0MmvULZNsE_xShyfIija7lBjc65vREob1wi7yfWn_9dZEeb6qQ2IqkT5fAXJxlDl971fEirGL7YEniu6uC0aU2SEKLEPwvZBj5-02KSGW9wRpUDMNAdl61Ygumskd_jVeOK5rDUuOy_eDv=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ7": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xW7NY4Sc-E4riTMntQBBt3UCCcEGgmOnZ5y_notFvY7WHpZKAu_bl-7ImFUshk52TslxwLPUQTd9OT58ba0GrOGvNPwrchUrM81zxiDR6GOYLuq160-hyNH9MJeeDK_MbAplYgRDnrVlOYjYMv3nSPnujG180RmeQ=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C8": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVRrrcDeQPp-hW4RvZPl6tkNENruE1PvWuCzZOYYoJbONas2ropeSNWBCtzOJlkccC-HmaGvztDawX-pj5_UKpJiarDDeGxlOytlrYOqlg2yACR98QdpMyrR4lti3rmxaXiMzggkCfM6E1iIhGT8_6YncN7SyooDh1iTMjv=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F8": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYTLK7gU3K_85jAaNyPj2nU_4lwv4JR-t1VJepG55Sf687y07EV8j1SNa5gJFj-PZo_qy4XKusSHwXeMAXdud5Kr9tBrnO2D8QQFE5j-NFLTqSTSgLFmVgjf_49Dju2hf1msPw7tPeusiW5tf4fETvDtikxKYTW4g6L=w64-h149",
+        "alt": ""
+      }
+    ],
+    "L8": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbLcTjTRQF79hMpAyRu4rRLy5chlp1sxmNGt_echul2z20cwQ1hoAkPF1WQHAHVj9zxC8k0KKvKtD2eJWRrAstbW1a2uRTkjWsMfDpvGroTqJ4xHQxNnv_emptanZek6GYIe4qfbYvov2EYGeYlPjpj6APBUSypZw=w64-h149",
+        "alt": ""
+      }
+    ],
+    "O8": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLa_UnH-bZp3jZ0cruC32RrnPkPoc6n_ZIv8o3Xkk90auR4EwfbNjPs8LBxDgJ2SiJEiVLWPCMURbmunTSw2zBYAMk4alZy7sDcLm8WwDpYbCwng22whvedmEt-PK937nBTPlaip3XbNuhJSeggQdBze9HAHbT2-hhST=w64-h149",
+        "alt": ""
+      }
+    ],
+    "R8": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbE5V4UkFXgtqH38K1c4BK0uARb6BNBljIJAblStteo70gCI9TRZx_BxzG7Pwn8lcBT2hq4zDfqQkVfAMdLI0k_IsZGHFc-MMRM-8pSsQBcLJ62zMZsKYjeLpQptxOkeYga9HuOHtmyrLmiMt1TaxhclrNuhoUMUQ=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U8": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbWAhrv4_pvDKI7jbA7XKbd6Nf5ns05hYMQZXMA3-VwHFhTpsvALWLSOt0_rOT7YqA01MiFRuGbIY2i_t23DdXYUeMW96zfvgiQT4pAOPjBei4J1k-c9XBsfItBo2Yf6-y25ZNHFOQdOCjo5GZ7WGQzaljZI7J6MA=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X8": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaT1QTnTiM2geTD-gCpzLO3-PRBCe3o-UG4kRHamd_WGUJXv45FktTV0d_15bL6WTBalbnChMCBNF_JDBxj765E4uKmh2TqXkqQXBimA4sbOp0pmSDjaZNGsHzDYAb9ENOcbpEp1w_GB9EKsG0QNZz5xLATJAOVuh2E=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AA8": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVB9_N3xV9a-mjowl-D1NYEGbbaC0HG0cosmr-BlpT9FaDlvxuzReINNLEp2PaLkQnL0kXU7-HdiANg34-8z0bAF8MfOVAK4lw6FF65Vfs8aVIMY2ud9WUfmnu5F38iG0zknqvCjegp2KXU3wHv9Og0RHwbeXqaqxWQzXMQ=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AD8": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX-zm2RUiDbOnNqngA4bHiOF72WqZFeLvM2-TxjJzeEYcICcuILp1EkxYJmF2GKfTZqj3jXSKwuuMlxFzV7ggUh0vdrlPdJGCmRqiHKj26zFGrttBzDth7343VVYgib_1l_B6QIot-vvHwKoQmoxUgQM8vjzbcDwuJXES1w=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG8": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVZ_XrlCoR8ZDuvHa-IfHXXkoMeITqejn7oMhAeptFqpFvZCGmoPa--eHmBqvqY6_xyJZ6l1bq6KWgH7I_sa6PxT7Blhvb2krk3AOHIAQRQoH6NkFFGIZ2xjRW_ioIurXbyagre_RmSwzhBhGSFU0c81XZwkiCM-Y48Ge8a=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ8": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUA13YLrJQfW3Ma8JgLRhoeeBxIvjEzNxKPkO2bFs01NasS-YnjpxUkXHptaYJQG2Dv5g6Stn_fhvqUaYosX_mXeswWjyO208bDgWUtEO9TaZMuh6ocQ7CrGKPTKtMzD1DqHzpAtZz8iZJ4fliCbCFiS5OesBHMoGU=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C9": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWmWsi7Ddn52UCt7SjeAAPIGZXxBbdV4RHH7BLiLkXcD8b869Ya3Rq1y0QNP5Ob2_nXr8cpnMGYYYYVKyYbhs9aiGKYJLdMFCRYKOAyH3fFOnREXNm977ogLjNA2df2nvQKtGSzHGxpKXQhlo1rSfn7RSMadr0qH-Wn03vQ=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F9": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaM57fSeG6pHwt2dGIzgzJ8Ox0le9M_ns95x7Fp6NTjDaQO1738YmhSbVXYgumOPBKC3xe_vBu1K-zP7YSg2M69Ft3rjG6bWNMt8QIH76jtLtqrcLkEvbt47P1OYxE2GK3vdqdeuayOfN8KAg8tL9pMjQwpYxbTRvv3=w64-h149",
+        "alt": ""
+      }
+    ],
+    "L9": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZm5delSQ97NwwadU-gNWCVKqFvz89pau2aPGPHMN1Gl6AFbpPM20so7JvXIksVhUyWGASFpMLRwIe0h8YXSPJTttK7AkPcV35cztFjKoYMFo378yh6ylv3VIii9X4j1q_u1ADsNnL9G9vZ4XfLT5eygosA49yzSid1=w64-h149",
+        "alt": ""
+      }
+    ],
+    "O9": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZi6-5tCXYgJa03Vllot5Pb1oq47rREIMin9EGKrCYC9NNxCJ_ggS7JIJ-iUtMHBByTtDTnZbhP5bioWTb3Efs6cjIQDeDHe1eX_kJJD89xt2tBYgJN3kyjLCfl7yD7i9_wG53E9Z-Ac0Kh4eeD1zP-oprXDtDNxdlM=w64-h149",
+        "alt": ""
+      }
+    ],
+    "R9": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZO80GZMCK-wNl9d5TA2SyXNKWjXWuZHMH0muUfLG1UzCDoxQO0UlNuTVAHJSnQJfAfi72b4zjZOhbzHejL-mHz4zCi1BNjZ51T7HoZT8oGNc09eiBJ1FBx8vVhZJSuWTwiT8tyZxirXQCf5inqXpFbciNuN_YDnvtv=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U9": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZPoUw9prPjH18PpDDlhHm782GaQ9mxQnr5eGqxB3-2YNfuenIMLTiiZpLSrm8IGzdrP6Kqe8zPdtx3Ds-vii6SddTawN5YxDHhEzwDYDbZj__V8DvKDJqd703XvqpqgJZE7NnIjzY2axO5DkBfeQdvUrruBHET9oq4=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X9": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYn4j9uqdPfzx84TBWecHXCGoYHg5FdncoflFtNijix5KcXlVvgVMSlhuLHrO-pejdtk6UEjy89Azm55IC96MKb3TrkMtD2_ZTHH0EiISXb84idNrzR-NZhb4-f2k2FYBd2--sIAsYsCBRcb5apgDy1fj5XHWsmL5Gd=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AA9": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXCNMjuTWdnvc-_Et2M5p7qfqgN1_Z0QDLKSSP11zyqlLFLPbvdoQrdZYFQ_0yILjOWjb3pDROF3PjDh3VSfx-SOPLFv6Os7MOjx8ovH5yDadlAG7g-mUEuHvbvrfojBbBTLfztp_tCSQrLRO5C4TMip5uvVZeNrGtdPSIy=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AD9": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUy1xTqeaxZ6-VmkjbPpzelURu2h4Rpt_9iFGQZ2RRB-V9dSVdaQc-0T4zyNXcibqfbNlmbDzxNZFnWkSEOj3x004qg4P3-CRvo0GiJC9KO5piUMaEk4doZPetx7E69HiLSgU-01GnJjJF71VQ_6mTknvmSeErH8VFarHk=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG9": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVuiYo2TFQmjyMnHMhB2wj5gD2SdxS-ZiErjIJzqPDPDSHNXDa32RD97Oqpw2bKBklIiCtId2eKc9_oE9bSEOMrkdlBac7fhA_h3R_1REVFMs8U_1_4G96k1zhT-SvPkAipR4gNyjvaf3vKaunpX7nZZxPb2k642sVeJZmJ=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AH9": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX9e29SOLeYpIRJUwsL5q4zl46XmpGRBnVo_y_WDBK29DtRds1nD2vB-udbQArMto42aqgkUBSRMciqHJa0c_a7pcGytOXVpPs3BWXLD6MAwtHc-Ew2mssORQZYH3On49ZeauolSz-NfAsYs7TezHFHiVyrXMu0BH_icwQU=s310-w310-h149",
+        "alt": ""
+      }
+    ],
+    "AJ9": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWpI2Is5L9PI9cM7xOs78JdQDtqkngCKW4IgRjfy0kAQqkLYUu_q_f40TSwexnHyPD6_QUZggLDYCTLEAjvbx7rL6KcZG2hVYl2oc1drhUOfZSWfabzvf3GBYJ-g1BgUdSKl58mhLR3waXabqxCnCZDhFt9DfddKhc=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AK9": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXjOPOPBtzFBEhOGsqDpg55E6PSIpTDVl-EeJE-cX-mD78453lAr0d7d8ldalPF51ICpxPL3RrFaMgIbge5HdUirJy0j1Ry-B6VfxPVdDY58O8PDnRPykdnUhzxNBTBo5-NL2Jt9d31Ns3Y4i4A41KGndfhu2Sq8-LApU4=s310-w310-h149",
+        "alt": ""
+      }
+    ],
+    "C10": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXL5ztFV7-cb7nh3MpvWFlMzNlpAZkkiCssvoJz7g9dXIs3C4Ih5d-iwVpLHmwIGXQaDURgPMZE-FxnXLUYK88mrAMEwRim-7Tsi7B6Pw4Fi3WIgDf4secgChjlhPXJUSCjbI6KFeCneIm6Pm_JhSJ3Dt8yaInvaWw=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F10": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUV8206qxwiy-j6iGIka9NppnIU8nhkny_bwePo4Pj7ATJzfdelfhpvuwTyADmHwVU-7JUhqWZUbwaX4ooXcZqeLWkQTNbBf4UWX_biUotuRzEz3uTEPZTblue3HXtsX_VO-xAxQuhd5AMBT1QfG9Z8eXiYBNL-2Ug=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L10": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVw9MMdGkK0eMOxSE-3VejlQRIS1o_5qSsY5IrfwznSEvzqLo6s704unn-zLALEt0v6bU1W8C7yCiB13LXDE71QVWW1IXlhs2Y8yflJzXWLEJJAyqxt_qjpvD5INk0XzYVkM8yRk3cZzrUOQ3Ie2spuq3kTQIhfTSc=s299-w64-h299",
+        "alt": ""
+      }
+    ],
+    "O10": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaPkJScj7pzDlFPFS19jOJtp6b0Xy508SCVNLWLI-9M9pHUY2N3ZLd7eyq91wRt_c27EoOrniWS5AfhoIcpGpaOwYmyjlBn7UKiQO7O9bSPOyPd6NfFbCVcPRXiaiOxGUw6A-nGmzcA7xyJKPyVJamSWdcu2QkS7DzZ=w64-h149",
+        "alt": ""
+      }
+    ],
+    "R10": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYZ1uVYSTWT80_lotHUUV_9oNrjBDCp7iJ2U_FMCYMVV9SVrGSEVp-ikY-71uU0o3N4JPXIxVF0_OUrPVNfpAzd20m3Mjn5q8Sro8gE4JY2rZC45ao8eGznpyszSeHzhItI1GgKUnLfFMnU8ZzEsHarO97NsexTz2E4=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U10": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLY6Xzkc-ltqJA440eSkEs4SqYlFh849KOufp5ojkxbamZ6rnejIQoWTXjNvmD_eltIY34zhDpzOn82GQ8t993B6F2LvMvgHlE6tJvmTeW8qnVnTWTM7RG0-QSOtkYZpG-MRMJ5U9o0fs9Q84XsCxAhzuzcHji42O0E3=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X10": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLajMekGl_M_0whIo1gnQBGBNt7B8VTlR-k4R6Oy7gHKy_RhvwQTN9A3ucFw_BijkJD2QIR073oVpAUL8nG58WWhaMLVb6niQXQVeDEMmsb-KCfX2WxyySs4DEQYW-9UNMJ-b0ft6P8japPa_Rw4KYmKP8LbpYG-KP5J=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AA10": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWU5HjD_GW6xi6LaWk0to49ZpUsQR4N87J1oLtY0Oafa7FMY0aOZ6dfNE1e1454PWtNMgu9oEAni6779g9o87MMLGsLMEvSn6saLeIFE_DpSra2AAsWzTCZHHJZ1hXyhAD9Jq7CHIa4n6v89ygCal-e8JnnD2eaW-L-24Ea=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AD10": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXO9m_t1PX06RDEAX2xLC_zs4I4KRzY2Wt2lo1tUzW2w0bJulIIwqpiuRFXZBPJdEJUDeXGta7vKp16nCt8F5VjE9EFRf7Sb1BOxISxz2adNfWoCAX2TJZ1aRicrC8pIuJ_Ac1LSYhp7C_y6XS-sKe_myD5Cp2CslR-X-lu=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG10": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbVNYc5C7QeOYzTStIQIP1a3SrTSKkkKj0nVap3K1BGC-nQQUluScVkNZa2cCugphIxYxXcug5hKQ_XxZ0O8Fy2wM3vnESLA4aOU31_plcu3mV03M0uaytauyhYQ_l5NozD4D65eKCBysJaOhQUGd9rMbzSBoJyfw6V=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ10": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVPwmwXK-2xMCDX6QU8m4HW_0G-nBdbiivpXYeNNhkaaty9iIeJ3NdZ26t23qn6SFjCMrCCuw9Yo9WR6TxKfjWTkCL5ubDdm_xuiJGfvYkniTVqYYI56fOyOPhVaKQ-ROvEf1Y1moGlLVWQcbXvYrL2rql5MGXDuQM=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F11": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZ7UHycdTwFzMbTT0gQmSLdB2-jftz2U_YS18ksMXnt7bzMnfYXNGMvwWbcF5OCNUOCtwIomylb0Yrel1E_UnkrkrSlK7VvI6pOP5mzyNcoIC70IHEub0DVckCeF8zVcU5K-jk7kHzovdM5s1yiBweUtYybv2Df2kyJ=w64-h149",
+        "alt": ""
+      }
+    ],
+    "O11": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLb1Mlp6Wnv1MlGOCjPM3LjDfWUpjg-Evav45QpLM6JZLCe283WqeEY01xW5bTh0Znu-SUtL3us1OsCmvJ8-cvhtXkqVaFIxHkxP88zcBcFueZPmE-fIcGpiMOn4vU_zw4yFps7OBfW74tS-8-kKZYkX5RB6UJ6_P4Ik=w64-h149",
+        "alt": ""
+      }
+    ],
+    "R11": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbRDeWhZ1smZVPHoMzmJu3Sjm_-ZpK-LplCdVXjQr7_0y9HjbHvK-2IKox_VHhyyVYemuJASM0e-XLfBhcxnvUNXOf8CX65LU39C7RJEBiUHIQIxCzYF5lyDzj16qj7P5akUGEShzXf7mszszEJW373blGqLYAMYSGq=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U11": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbbNJFcmq-zypIYM7ZECBwdAshrMQyoD6nSAWF1v-Btfgpz3zHX-ST8WjZplXD__Y1V2ASIC5Z1fyvDY-w7yc6M-ds6EBuZ8ET1Xy9TwbYMwfXnIk7sXsgUMHQ_NeYX72GxDiSeEkxraY6K238C45sgMlMvCvWrDRxD=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X11": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZecPuo9rPQ8xBHfCqqWGYKgalg-8CRIgWvWTimS_L273dguDppRH4aZAz2a1JK9sNgbZfDVCRsOezfv0UBNdijswN78s_dQy57gpj9xLXm3Fcj4oHTNXsC9PwR2cIjmjmYNBUJV0Mc0zjCbectpkJV_8wxcfERkv2e=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AA11": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXVJRUAXoRsRnTXCOQlj_N2oZrWXaHpfvgFNsPpH0-74vrngKE6KwrkQqWCk7vWXivH4NflzUIZoKbByTfs5qivqLAxGydlgJRlN-QRX2OSdcP180vhG3l2_x7fg721eyB6lspmprGCVL8_bUURrQ1MTJ30rmBQRCAVK88C=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AD11": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVeK0DQG9hzyL69S-2aHrVa3zNpk6K89IY24aoVLFWfkfQCNdBB8VG6_p74HS5z1NJT8W1vBsmvW0A_B9LqopJEFnS2W29XESwY4mLZntlCCnXL1aTjBwodlADwJfp1l2Ob86_AFdjehQFDB9ED-zZnAuaFP8vHooenoBUR=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG11": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLY3ENotXlWRi4JAKuDFyu4MzpVqz6yxV5KaGc55PrUvMlPXDJYutJe2BeeC6OjgyEJyrQhtv01x-i2D69fwhgBf69h9fmQU2h6ddaq-evDLoIqLD2MNK9i0bcsqykfEBQLORaBrX14qdyYRmkUvZpbs0u9vbtJYxQ=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ11": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUEEJA2JlKbLg1hv2bzs_uRoNr39i7dtC9NXPYlN2jDRJehkl9KLV12uhy7qvXfcn8Y2G0a6KOFRNc8R28z6u-ztcWX2RhqF3XRUQ5qVsjnsfS5ZLTeY6Er5uzgvlbbuu1Qlmw2bYSlJ4NYVNz-NEizlFMELwiag9A=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F12": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaDis03rXvMc_XnmP7ZwTeY_NTyd2O-0_HaXz5KCLzgeJQPB58C-bWvZxWknErtOA4rTsfrvGIjlYDbmj2IXJAB044r0gBeIBnMX0QtxhboFtEODaMfeSrluJ3BBA7uywhj7ARbS4m_UPcmSGvs9v1N8vFytK1X9Hnk=w64-h149",
+        "alt": ""
+      }
+    ],
+    "L12": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWXHJOeQfT8knbs-omCWLuhPqDm9dUyB1WPeXi2CkNLW75TEl1XzsnQziUnl_Nc-eq5gVlgppVX5D0VkMqjcx0teTfOBQCF_VUWLn8c9XKCCcHg88ZN34urxZV-nzcudjYgeyY_jjvg-te_BChGL5b6egTnwWoV568=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "O12": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUJBLhMYnlFPL4eFAZ3ihnRRyZlpK7vjyyJ05cXiwwrrCkFSbanJkLk-JrEatgENMsVvnPZS45uxHnvjBYNp4MPR7S5dJ0YGVj_N3VzBvzYKTUJ0SAcBT3TOZqrUEVV6djbLx_wJeKmjJA_fNHSfgQUC6dvUZSNXuecpMhF=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "R12": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLY0XzbAfYiLE4ZQnG40UCChvb3edX46eVRAxENL5SfR2utb4tz5fiUW9CmPhYPXcCU2qDU_etC_RMHFbu3yC6JO73fmqKF1HzipkdIgjfb1xyEo2B9BMKq08nTsxw4aBs1WdoOHVEOtVzIqpURBLiBq-LMTqXHNXQ=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U12": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYlo4MLyfRqVNrCv21Bi1GaRqvfJfmYo06Vx0XoPBdpH_EjaEkOF5cMi7tAjgCf-KYWYH6SoLqJamyULjILsR2U7ae8CmkOi9hXn0WdWo-kNXeQUSp1kqbwj7Kt85yFJDwQ5HdWPWDcVov73GI4615H1MggpcX_9Q=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X12": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbGsQeEGZL683vK9yeSB7RiusB63KlqyybZ1ZdD3mXItKBYOWZcqG_uz0uBoUfhSedDfhOu6Ec-KriHQ1M2jYqteGvjH_TgrNnPJ26h0T6T9BUmGJxKeHLmWwIeBk1ga-N3fW43jptl2I0CAfUvpi5q9chDMwgs0w=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AA12": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX4m_sI-4slFL5v1enmvUos-uRRTBN2GxdifuR4wCMEck1iX_gFvHCQHIAJtmmJ1gZ3EQBWGpmbCELR6xJD6SFYtYr_zrD71c_xDofWDR22LVzwUrHkmOWA2X2ksbyxZ1YIATjprggK_kWNzHl_jN7zMBK5Iaf2lN5rni_N=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AD12": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXmAM4CsUgH3mrmaTYiVBXbRa66rxkh2-NoMEZ3mJ5yTUUQYsFnwVB1jOFS7W1XJcoL5_G8vRkcCebt57TF2GLltVmUDJ5Al4rrx2vhWvFyqSuEbFfx27z-IEF5C515hp3q9YGxKxuwOl5mA15WVWpKB7SUwDhryPAN2a9H=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG12": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYjS5MwDT5TMUwPLDLWEd5WqYQgk_a-Ph-3hyXPnacSeE1EpCjrp0wxYeHJlz4CL9eZVEvO8A2EPSNoVHWLqHoctKOhGOVmZZyjBOEi-s0Bjdi7Kp5r_08hnJjpwMljNfQ-kxV84wi3YGLxopiwPYd-Mkw1J8j0LZpl=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ12": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVnaMHzxzshQHH--ft5o025AHo4d0OXJlfRL1tIXc2hZEdKWHhMAGwUSjWeOJSd6NapQD6vD8C4IBnRGX9GcYMRxgBrBXD_5hKHuX9WAXJpsLw9pC2abWs9hGcQEcp6L9p9AgGrvT3hZnol3Pkl_LY-uWawcpRTQw=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L13": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXvQWC_vlQ4yRuDjUP0VnlFMriM4TwR4dBd9OYs-q3IUTr8RyZWD_s_OMYADmSh1dLY65nBa2wdJG2HHXFkHzk0zI5DI3dWWcNOFntqpkGSNiRiu8nW8lweG7TJBC4SxmHvhyVS8-6cW7BFQZOKvSiT0oDFxlFsu4r87n4U=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "O13": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaXu0EHdVc2JfPqIPNQKkGZdm44ENgulCYc81oqfXk6FBd4jab_vXqTzk6Sr6O2Qf7XQCvo7QTuD5N1coM6uSpNOQJzju4_UldaWkTLW7uh6ao4JuAjh-QQnt6ptwmqTuDtVa2gIM9SVRkS9J7ENTKoq2ATX_UKTg=w64-h149",
+        "alt": ""
+      }
+    ],
+    "R13": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZ-64Ohy9u4y134yiXR7xnasszZ9znbsN5w3bQiNgevJ_Rn39TYoKj8PuzmSqGioqqPxDXuO2NCHJH9uz94rUMaG673W8ChqAPZPmOeAajXxf27QlzM0J1i21tJQsdNOb-AIGvMdDrHsrZJoiphGDl-tFoazXJT2A=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U13": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZnNB-PUos5rlfDV0Q-NQ-V7Vh13aY6NBfweiOg2KWwwJD4HeaZVA2FIQkZcWpTxCUhd_aH4dvP_j1hGakilOrUugzAm-Bm2HIMSnORpXO-g4D1oErmV017Mt8vhVv6StMxHVzG51UDReV9NOrWZ-aMiWpuJ75ZHQ=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X13": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZWQss8T4yighfLwyvVQUewnVTPC3WjRDCXXphq6Sdd-V5zg4dWxx5z5-FMli1y3I4vi_JpmJppkcc-BYKd4bNABuov2CLZAB5mXibSUVxPbU1nWivJyTyo1qzIPVwScxeSaXvZENap_5inKLc_dyCU-RTEN2P2DeKy=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AA13": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWwGpNki1xPwEGfILR3h5daY9q8M3PqYVSJrsXp0Q5U3U2lkowHmqZ-Je5Dveun5RaHXZ8LCRx6-845tYWcc_rWKuV8eCCuOC2KHJbhaMFsM4Rb2C-buDfVcNwlMl11KykaLigwnedPXq5fgsH27q6JDk42t78MuXp66hc=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AD13": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWrIqS6ln1SYjWO_cs-QjipNwqvEHfh2Wy0AlRuTPamvAv_xzi8lyAhW2Ndms6w4d516pgjrN3fTFXoB0VeHQGdq7KdJwR3oS_FaOulxgTj10E3xDS4dBlKiGqjEOJhg-5iGnMd6E4Y94ipT4Mio6fGStOUTTx2QSXYw1nm=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG13": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLacaY8KjTEE_8Tmnkak_noJ5XBlu9WAwyWSL75EZ657o0J9k9lBa3awxOkvaL4sReBJ4pwM9g0D8U9sOvwXWfstO0gdh3SCXlzeyjBWoICfiVJbA_7DON0YsUpQV9plhJO3VwCPhE4z0V6PGuzNplMOvbnjG-U5xQ=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ13": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU4Cf43aNmrXGyqcN88N2qewwXbz3R5Y7jA8PgB76knqz0AbDYnwfm_p8mfd7yg3ljsrm7MD30Mt7RauY4_042OwtuIkHBX-_pFnzzx8hBEBu7U5Kp_Gs5R8TxIjyFetiTUq0wam2E312CwpYpJxO9J80FC51P_Xy4=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "O14": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLanDdMhuqxBrUrcPVFIvsjUJSLFc99aCum-q8FOVN7pUe5yYyFS2Vubrp-okHUIUujYvI2NXs2r076nDYKtyAF5W3ScWWMTMrUB_3M0nNWymULxRmv4OIHi1MapA8xT37OFySV39igm0YjJ4CyNXz2kxP0mXk2uoDfd=w64-h149",
+        "alt": ""
+      }
+    ],
+    "R14": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZubOIw16UTMtm_3lEzyMADNh7KgrELcYTpAiIL6A50dl_xz6mv2B0t5f3JDu6t6kYG4BiFUMugdMQSi6RrwU0-o2iDNWmt5wWldAFeoISD-tNPwaZpYezp38S6vmPPM52zwLoHyOKvEW88G0Q3tB3Xe99DEGGO8w=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U14": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZff-zdgKpA65gON4o_Sx6XH1TslszPt0w8fUCGEm53xkXU99GmuJNw0gMSSiSs2rijmkd5Z69vhAO0QwtUvCzMuuuE1nIYush8PHr62UKZLB_06RX16S8MzlC5vAWtj0Tc8ancm4hc93hLqbOtJbpgTngeGIF9G5Z4=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X14": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLamD9ikU9IHBRrS3KCgSuyI1-fBt1A8VFCdoewBgqhhdo9yXnFtxfCA2nA3jrXWrj01OKyLqv2MUDi49_tGO_5VGVPs2e-VWV7e40bRVwpAKMtgwrZ1uZ92pWUSnARPDCilRYWNDY4mNQix1rmRTE0UeYDeResEGYqe=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AA14": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUCnMJHCz2rUCDcVrQpSSpgke9z3NGLpc3BtKNcCid8h4NXw9BUXSCp6QBOf8o9A_nYMgFtegcijIuyxKX1p4131-9XOBU8k2gVqz_9FnwgbWCc6Vzn23erF_07OqetCjHYpZJv9JtRdzKyDgKAB742g5PgjkhNft5Yepoj=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AD14": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWcveOalglQSdt07NemZVVgesxHiuSSSd_pblZf7M-QkmHbIVNmrqL2z9zdIVlHg99B3BhDDE6bz4-RUNP5YiH25JOebANdDRgKPECB9hk_Fh2eYnlzV-HngD0H-GdNgDGGqDQffVqdl5wDbj9KKOyaSG65An0KEEOBadU=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG14": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZpwPOfcYqS7JeTIRl1PVBW9_EQhAdeTsV6Bs_OJ_6HWJPfvvxg0pzwUxCemCrApBg66dZvaCZqxQweGwIrHg11ICFnxoeLL3qoHKC1NwdDw6oQAjMQaBMY7gfdQDX0AQQdAef0CGPhNEQDv0GhJ_ZFtVkXo8Mh1gF_=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ14": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWg7236mV9hg1Lv9EVWLQTJkjZ87AeR7PHTFeD2mI_gi8Mn2z4daONQpPXHmqrvM9EILhTOlGgdpTlCxCA2z6i8CXmJZ1o1yxad-EbwCSpESuu4tE9VL8_YyYiUshujb92ju5i6qZ44rMUsiEqrE5_5dUkZbL3Lyhdr0X69=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AK14": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVFQ9_54cEzL9ooA6BrGXeu9RDyQckbg_N4eLkvGXeWCy817GOVOafrUOJQiIKrNljYY8vrkDXs856PUJuTvEPOX166CYyWM05LcsmkUu1xpOkonnqUOpmz81AVrr1CxiBXWq4tXLJabdkH6Z4vYKlKwfBcysdze9REC8cP=s310-w310-h149",
+        "alt": ""
+      }
+    ],
+    "O15": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU2ZQglRovpmGwLhkZvbeR9UIWnjJBUqTqF0GpoXaOGDqWHZQd7SOZoYU2gKVmwlZVnd-gOjccxaFJhlOfyDAaUVhAJBEEYllWxY43NYfPXX8phdZTxFqqgRt2_tmbruT8LwaOCgCASYlUgcGwkb1kcIUDwmRpBSUIT7bp3=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "R15": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbTzNHP-rvyzIIIu8145WDj480rtm0pIe_RLj7VfK2BiPRpD31p_nPGqWGvMZgHW5kCMRh9sD4hymMW7Rf-QQKBHHmTsoV542OSZACkl_ozJ4hpGg31SD_7Mf_htbJxV6So2H_1WyzG9b4YBA-eQgi3-AS27OBFV8eS=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U15": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYK0-04XKoKdmEgWBi9yaQC4JfrbU3_NVsNshZvGLANIdEQhISvdWEmCbr4nh7Avd_VhzWb_3vaH-of1xdkH9FE5oKXIBtlrNo-fcdkLMCGrmi4LjL0DzqvWukGm_4HbZi-s2yBVDHtQYb-8VmI2HQqabWdrcFEwg=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X15": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZ0YNUvVjlhI4qGMFLWqi0M7axqog2puOEg0aBdiRMLW2IG1EwF58ytx_GzMBR3phak9jjAS5ktkieqsK-2bF4Frj502r2Mfzpt2XzGEX0LaQMGKPAmXngPlhHNdwVF-qDekHUx4sSDcnJOSiWVlsbdCllxCxdT7s1K=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AA15": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV3M9f7DRfRebHeFbT15z0aiKpRJVKC753ARecTwSAx1K6AcF2Eptugw7TJgWpM5-fxiQPEYy_AidCW9RAmDXlSSv7e91-L0vsivdBHYSnCeEt5AXZHQJIQNdIIoTTQ6ne5LyFWFdSXSvXmwXNtxTGZ-djVGQUzSthcPwOv=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AD15": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUBaqf59m4FnPa1ilkuDeLMS1yGpYaFeDkxCtGN2Q3RF9N2WoRV-WYXinWvMl38N_RrG0eBi24kg3lWdejIzgnSOrXJD6J7_g7T8qD4sj0Lck-Z0yzl3k4Z3zKK0852kjTmB3aizD7WlOVVxGEpZAjUBym_Zxa66V3Qt3s=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG15": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLa83Cz6eAL9rupccxPHf-UKC4S5c75V-x345Dy0PK9Q96L57NSJTw6rsSX0qJ0GOe0FcvSpX2eVBomZmYUMuwX8JU42HEyTyKACzoa9FfJmDGH1fYn7b4QfWfMGg0fnnpUAPkqjt-YMLzCFTFmO9Z40YDOweZkS2w=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ15": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWb89QB_6xIZqlw1L8fmhA0OesM27yyRg6s-IMH77YPoQmTqZxdqU4gxcuddjaH2o-3iDHafATJXsvsDijmQduOKsrQ7CGA7WDEzIPg9_LsDhZeeK6nxQNLWk1__zWnqVv4xC7HKcoX8NCtIgdUlr9tjS5SjkM0N3Iel-H-=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "O16": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVdztQis29axg480SeVwoiTj0hzZmLe5XYjgqHZwXTkC3Gf30BAsWReJXzeTHLO9I3DGZDEP17RRlj6N4GplmmBsarQJw4ukFTH0VyXtnoD1pnmFE0-8KhwB80T-BBR6bBVZkYOmSHSjfwqQi9OD8GNUa3E_-ctMGZxShE=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "R16": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZkvWpiMvESFZ3qHTOawYZGT-3wV4YFDLXmTRrQIf5RdNYWhdroQB-xiWawdAjBba4Wj6VY9caq413ku4xn2KBh2fI2B8DNEFVi2_rdHUAaGtgkBUWb-4aIs4pdu7t71cEiZz372Sw7vCWfpf6qh0kuft7Dz9AHioqA=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U16": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLa9PrPpANizJe3TGunmVC8VswMmAc5NUWI0GEuuC7_hnv3MK-vvuabrdrDrPOjRUx8zMW46ENptIZN9sXZYkS4HGChEFl-G9ZUga_puXB0GwPF1ArPzRrm6J26IBMnWee9TYqLScZak-pPvGcF0xqblSJaL9bI2VE19=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X16": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbxaYR50ZBFdyGeclKvqzJWylWkRDRfl0tcuenGNRbhpmbTyg3N2nIyMOg6VJz5epFZ-tXu0HxuxzMhY29fB6kaLOV_jOx7oAyWisguzcp0rjjQWFDKxhjjO_i3vhG8w_HxifR40Gz68E4x87BvCcuQjfP5j3rcdA=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG16": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYzGZ381S_n_abi5sdKpqr8ndjT_lDRerRJkUCtngx6XC9TwDt2MWhmC4-LC_PGiJmujI_WSaHYsmESy01OV1mouX41NYhHKvUrEPkTL9wPzG229aTsAAEyW_Ek7mbyGpxxMceeu3tr8BhtjwiNvKum4fkgg_uD84Kt=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ16": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWL6aVshm0j8Q5Caho4lmrXe68XAFnLYNnLSfwdGCntgEXJB0mCpD8sNGV_usEv7utLZ_RKF8ohABLv65CZc8sWDfTsXhwbMQ8cAGZKAx88WTHD1boEHjdAwFd5ZYc4t7T-7AveWx5p-cq1qslgcJkAvspM5B_F9kReAbS6=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "R17": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZH6E86RGwJwdOkJFzb_efPPxPkWWTmd9Sqmr4FmuIHXUV1a7XYOlbIdXh4Q7xIma5f4CfPB6BJybm1mK-umM2uUzMKPsKR64yN4I0TuEHA7jgI-eaHa1Y6nJLs7RAglSh4f6jlDsdwz7LogTOMEvlnOv3NhkonVJiw=w64-h149",
+        "alt": ""
+      }
+    ],
+    "U17": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZ7Nzatw1wk93P_9lYQg-KieBZl3E8VO3u6Bzu-P0aVbUT-Lkm2LgpWsfA7s6AYRt5pqGEgPfL8iAUCzvexNR924jWaLzHcmPJJKlY02hs1oYQwH6BIYa5i9kf8eW_2BuU2Bclk_4ClkQtQw619-VYZScM-llK_Kg=w64-h149",
+        "alt": ""
+      }
+    ],
+    "X17": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbw4BL7tDm8UZhWhLadDrU-xYVHPOb4OE-NxoJt5_Q2oz6Z8r4J-D4gQgLDdHZ9sIGB-WY0yJ4yZu5x3bG7h39IsW23pTyt3lNqm_cKslFZRWdDZlY6trt1a5WwG6IyPTjMciDAUKZfTVY8mVFmKolfLAZGHH0azyXR=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG17": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZ5Or9nrb6vlos3q0KSccKYh0CaepNGulymctMApQesV6HdeHVru97CsqtzmxVv2-MQE_NOrR4PRB9qmFNV2iOXH2r87IfgAO5z92XiRnnRQhp-IifIfkynXOY7IsHu2QB9ulsK-pGFXbsBi_CV54zOPw3ZSL9AKOW1=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ17": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXEk2EZccnD5hMs9wN1ADDaFGxXmYsuFWXAvMxl1gSAA74hTzjyfH_299olIT_KSF-1aaLpW_pYRAJyvqP816mDixATDhWrPFhMOXDDwhj8ab1PFtHKZ7qoIEfeWLkidcUqMG-E61wRSpg_dDdpRDj6dUgYPzIO3EM=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AK17": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX1lofQ02TfQ-Vx-7Uu6q58bUzqdkUXRswUWH6_yvP4vBTiim-WAn-N3ltkaF6f1NUBfX4Rhx1TJf_LdxGOuvvVAOIOndPWpojXR1rSD9nYOg8X8ZhBvtlAiIgIfvwU_xzdL8OhMB_aPVt1gCfcMQ7l36gu7MHD5l7eNgQ=s310-w310-h149",
+        "alt": ""
+      }
+    ],
+    "X18": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLakLeluZh-UQul2qI-QTo5FSuI-j-dsjEyVgVOGvVxOgG2mVEwr2bfsb1HdWOJLPG2cKH9ANQgDVo0JeP6hxA69fdm5gi-I0j8wUVqX5UGXvo3z5kRzEfxL4M45D6zYoKSkUrIn6kNYv1q1Q6mrM05MR8R4p_eVmXcE=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG18": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZrDcSwgDAB1_gejkIIvxMU14o-a-7Zdoj5OJ1mKFBz-00IRiINjN-Cbh4tN0ZMs8C6XG7z90lj77sgLkOeIiARBjUarK-jNGuC0yDpjq-AxowNKaSagi49M4At07Kq2bO86388vReKgMcjO7TEW9DpqD5SSQLMgA=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ18": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXdINfH9WdiNg7YeqEGGybLfOXiLXzSUvx6owuMoca2NwawZZhqHgRPHFLyWG5pFqBoIlm9tX_n_4LJ-fnRXJh4edHfMrErdNQNEzejXiSR_9c-3PKExUK_IgY8IBUvqi6nFnchtdK2Ex_w1eX_cxgDEjt7J1OYZOXJ-n7K=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "X19": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaele56TvPzIQHhb2fgEq9pugmlXJZlbhKhmjBLnQ07CT6qFFd55tj6unOPEc6owzBbQMZ0JvNoGCeXxrnmZ8Xqsu3KqUC4YA9Bc1S1dreO-ngrloRqAHo_Yn3ovz4xPj8desf8P94YxyRFuuwZniyw2FKp2m31OCnl=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AH19": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXf_H-w_UOENEaDFWO3PhwkCu-fulYT-weakdqcDFheLbEmaKkRqiuI1qhUask496p4yHlb500Ny6JehETbt-ZgTJgGxl-HP0teGyXoEXQ4lfxu380sAKbC13xKsbMqUs7IrhUvX3DxYfIckr9FDPbDrbfmeVCwDuc=s310-w310-h149",
+        "alt": ""
+      }
+    ],
+    "AJ19": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWApUEWJad_7YtGlJTeS7rZ04fPAXpl9vgQGFRoylilohPKWxNlqsVx8bEAwN_u0o8hZBn32cJQOHjv50JmvH9k1NiEolrPlvHAyOCgsniO7lrcrt3Gx_MUYYobLUreY5blE42d12KsttLq_tNrRkvElLdSzWF8OQg=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "X20": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLY30LzraeyDzI7TfYfHZc1P6pwxuzQwf70y4GDkrE6Z391aiC6LwHMT1Fm_16nOoPfwOZFq-cpiETUL_wS_k85p7v3f1pe9Ddd_yq_GvJPFOr-texrGL6beb2AeX3Alj8fH6t0djRjnp482Ecm5SrUGTxkQ3XW18Q=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG20": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVG6zb3UIyqBVR-t0m7EbkWwAxjgOpt-OfnzycuIzS5hO3uFBN81c5zGy7NplqL8mmIUFMqD0IOqwC9v3ppVcoca-a8uGzg_wENLGgOYjwTpskZTMG7PV__D1i3T9_XPPaVRshmTEQZ5WwAnacQ3MBOpC_mL4MOMvw=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ20": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU2faFj63UxkJidTBrbKm8OlKwhICVlr9iGJY1LhI-WBG5dT8QuKSKDMU_EGo5vj6Bak4wralJni-d7caTZFP_i2g5yKR9W_K_s-nfbJPCcSGNb8ILx6s6BQa_Svg5Ob369GxRlsinJxsJSU0UMAIsaaFx0QoDS-Bw=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "X21": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbIk0KRtgKk3cdJFnMrUd62xj2m0VWKfn9XUEVdNFpI6oGu9ktaRy9DT3fyV--vE4I64USHQDH0Q-XhMjC2U3qrk3uMvFM2zjOMBw0X2gE98LaLeTtrFItxVG86s-SNPgA__EtBsKWyc02AfsTXgtJbifBNkb29NzfE=w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG21": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWf3ZjciwGcO7szGniAKcbM7mK3ML61rf04Xti1lda3B32C0lsws2W5JQSQToAWugBKtPLtZTwOP79qEamMHI-9QAcBHgluupIjR1GM0DHp3hMmrMVJ8lG5Gvl8GvesvSOGSBXYxO-hnerPLb7tHLKFl7birJAWp8U=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ21": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV_tRoQuvV0-3UDprmeXmkeJe0rYRJzDpK4-6fUZShMnqJBAEkddPFKccooqlaRve9jfX0z3fzEJ0No9HaMyfxkdkxwIDcWLtAmuMCn8L4vCod5uLNmnCGtSNHTLm1SXR2sjVtQ2CzupY-hl-sto9VgoAeAtRRqMeY=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "X22": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXkrmCJEPBjXHsTbXlxTPMGGdM4piXPaP7eTj1uEqlA9MD-8m8H334upxmcO0j7HsCoTikluUXR_D20NlX0bf4adj2SEl0KrRU5WsA6ks7uwrGCySG3rnTrfpQzZ-cbRITSX-dNwPzsi5qXfIqf12pzGroL69pLgjnsD2nF=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG22": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWyloe8WnaKO_KYwGjgVyRxsde3L0FHt8PAfrWdZt-jG7e32FCt8ZHMJvtC_R4j_fgnAeN5z4W3MK1EW0jz3IV2RGhqTppuw047LfJKuRgqz0pm_2J1mnl0JIzYPofOrtox8q6E-Vf7Qy1c81WaOf5izjovJNfk7Kw=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ22": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV4n1dsi1kCwCNL35nGkjayZ8Hb9CNaUztHHOxohEsVUM6LWrrMaH0_EYu43tLq3L57_y7KhWX9aUvD6DcNBSuldKKYj03Bh9aqyb9PMdDdyWaEKEoyobdxrP3GlxC97gg8KSM2wWWEeavVOyjqu_4-2VH8oarnUM0=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AK22": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV3FrX-jfGfedZu4i2RP_qlSXQqSPqHyWawezVTe9_4TE1kDO9iPtq0obaA3RbXjAEmN5zOBMjLzHWo2Bra_0WFwIJM5lXDDVxMw5MT1-pJfBUaKtMk1_CW_o1idmEcbT7Zc27OIXjtpzn3LrTiiGggjCugjwYFlUdzeenX=s310-w310-h149",
+        "alt": ""
+      }
+    ],
+    "AG23": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV7GBzwLB-DQLimp-PcLgLfAwvNj_cCeL4w47brwJZuf0sm63D2VSPV3199IsLSklllbKwGaY7dL-QDxQFEk55FuzIQRK-2msdBOSMCwVL3ydyPNV5ZFs-iMZ8SydJowXH7cQAnkpknUTCMj5QGTZhZ9QKJS0xRtQ=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ23": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV4LGVEBeZfzHfs388sOs0jn1qNOjjYHChbivGmbs_cH58MxdqxJbocvbevYkbj12S7FI79X79oCts0fF_xJLJkunV6FmF5WtJ9n3-2bmmMoNMdWBMCLBY-r0SJxa0xXhcfGOCmZXq0omCtcCAYL-peeH1cpTQelv4=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG24": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXHKSOqC55O-dRTmbo_ySEvt-WSRNIsZVHXnIJJKLnSJOsEASabIdMGH2fxSpW8vBTs3gm0KWpq6HHCYswCulYg5zN3CrZZFa7h9ItjLTXFConysFSaDZkKodBciYezkujTWWsQ8ReTpNgrS5qTXXjBbw5B81IVUg=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ24": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVBgcPh-SGnRfl0RW0xHtOejYib2LoaTYgLgwnylZKvCjydPHPTfZLir5a59FWx4p6OlbBE27Ku9ufL9w5hWpIvgg3OA0BJBU44ZLhDil7g2VvEJvRkKlj1sGDiaKPWk_8xfFK6y5MDSYLPfOO0i2hoSEbZetWa4E4=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG25": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXlElFMxXR18R0L_6pfrlXPT382DMH_A4U1-OJC7hPpwDfadFjxNYSrgERbxZnmYnLmj9w1d6qeqdINIHzeJ-pi8taZVzBaDOPAv1fPpnviTbnmfdaRt1TiQPZgS_3UpFuBeBqu0j_CPyI65DVxATzF4px8bTy5iSI=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ25": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVioBi3EAPqKXqoRpM4aCmVfzmve86NhsVuizrabxSSV6RiU7gsmU3EwU1PKWtvjTqaDBh492W_NE4BWkwndR_6vKsiocACLxfLrcdqTyDa_B_NfaW9d0VG-GXZRnU525CVHsDf9FqfT5Qqr1FDiGTQZW8sxJFu8-4=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG26": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU_0HCPTJde5O4QZuQJvIDwdQCQIcKBCRqIPGMo_Da3SxkvfQx47kFP2ffkSr3Y1yIYEomnk3tGABbitmIGeEJXjL9IDqxYLi2Qv6aWdWq79Zq5QwdBSWXafKB4Cs78AHIvC5VeDAnf2-zau6EVDqBgTyYv30cTug=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AJ26": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xW6FpsUox5XX3N9SKLnXW4vGPU78M590djDSZqCDIdgWoXtHkvoI_0Cls5Pbwzp89M1miTUtR-VC9m_lxp9x0eSVDiRZZ3-q4a17wuNei1ioDGlm1mr50bW82s1g1y9ZH-4MfSrvLa13GncvS9ETmWyWystFcpnRw=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG27": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXTzl5wGYFQEQVVEmYGFkJondVWyAkhd8aYxSIusqcLcPVlI8ehAAdZCTZHDNHmdwaRMBVlEBa4PhNQ8vdabcRpYtlIbj9-monL2kbnCXNhD5kBHN-Tfsx5aDHM3nO0NlsJ2HrwBtjJ58QCdb_BQ3-fTa0BPf_XZR4=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG28": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU2mGLq5t0BLlC8HlTFlRbOeJxOFm3uejYPQ2MAQlktgDpEHohwMozSaWvqmmDkYQOzfF_j924Pq2Om_Cbw74pAHVGJCe0YghztDnd6egkL4el4BFiFSzUTvC_ixYlI3uF6QoZh7EkHonrgAzuEHDFNffq85yxrzA=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG29": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV5KPFACXXhmBHWzejHc1pKiMrHtOGt4sE-FCbb3KyvopeUou6C2d2siZHamZjWorhMm6IMWARwszsTF8XCVtrSI6xFq-PvZj8jgP2QGGkoC3BzRqbrBOTHHWRY9jVECSz52-6LQPdjPwrRpjaOxNnX1_u5RVL1_A=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "AG30": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXItH3DSAOq4d_Dg6OVtGFAD30HXvLNAkSd4rI-1W_VKi7mEp_lujN-w_vJ3kX_3QnCNZW3ATel81N3HQqRmCMg1QUji7UTLIpLMzXz0wS_Tf8mLB3t0wi1UK5wsqUr-0hRyxDoYSvBedXkbiA8Qtr1stq_lllUxWY=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C34": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVKmMeLSy5ucEKuHYRv5EjbX-JTM1UtZLjw7GMUIiTKbdiWwiIzWZ8trTfp27vknPOQqA9CgosGyanJoF9yD2WszBuPbi4Gkojhr5fiJ14WVFkLQIpPDLRmZnbaBAHbo2K5mmD9yAwFXO9xQreWzaoUny9tzuoeYiqu449z=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F34": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZ5wkfL9W2v6CifWIJIfhVgB8OqDY2q9p_JUdDsgCP8V7UOJwYZW12FZa0_RH0BXjkdwu_gi3CmboW3aK4ao80jxjgDhBHsxNFPhcFoKwZwl-YFxADN4VCnQQBaNd-JCEMINgOLcaraJFu5FCpVu30zdRdHiWLzew=w64-h149",
+        "alt": ""
+      }
+    ],
+    "I34": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xW1kxgc7hc3rvkY2f-d7llTSAP_xQGeCaBVq4-Gelk5i8jld-QzhGJbDgZ93VKGa7Zb2IFVcZoiSFgtTplKwB0ULO9nVyc_gpPejkTBhIJ8h9zv9f3gj-UY8n4ZIXRqPzjJhuTBGZOLd9nNNHhjdv-_5MVxqf5CAeHHaf4i=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L34": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUqjtCNEiBOOfLtehZin8vNf8Ztb2UU3vDcPz2LanqqqCsgeAGyz6g9EbZV5hN4SZOg5S-g7ZEdMABA4TK1sgUw4-RHTs42ZWPIJ1Tp11yZtAy1-NjFI3Z73WiBMjaZrPPmGkT77GKQ6qE9ntzFOE31b5KuFyIc6P1T66zJ=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C35": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVMOheDIHEM7drZyXsSRDpq1T3wZw9JCMptzMdBeJE4zb7ro1aaD6Zg5BXFoshd40mL59YAdN0GDxQHAaz332wTwNVZ4R9LESwkN3ENnDdttFQdoXTPBwlmxZhWjRmkdUwlrLvW6rZJEZAROwqoiQE3bj8lkFM0MAOE8oRL=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F35": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYJ-gA6WQlK4pFKiHf5j2HaeA3P5sgZCGTxwA2K6JTdH_qZyKDte-qegtHaHmCt-bAPaSokPPLIIunUzwzz1nNGrkAEiM90yySlFywTYxx7tEeB5wAcQ4cMC92XQPB7Jcdjbt1xJ3UN-man2y1CWWclZKlDi4Ak-w=w64-h149",
+        "alt": ""
+      }
+    ],
+    "I35": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVodmBEMJk4qTwsUf-nGZ7q1H-LQhjyCDfm5smAoongb5l61BN5_XQ_KLO4xOdtPnKraKggTvFHDjst_9SxVPvWS6CTLNpphkg52MOtmxivMEWQX7hjFzaGC30vZQEC_33nrQAekSBW6K25P-TTDg5s8nB4jjMmGLcQEqdZ=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L35": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWMuScxXNYVpZSI9Ii3adkqq_JJ7O3QMVWOMa4NXcpbfiO4sOLJcMJIBHfAcoc_vrr7dIxVWlSQXdgErM-5WxQY3ov--6eB7oyKY0grvaZLf4g5tswIdjPa9GZ0WwFdyC0eP3C506HOAmJ7cWxbQI_xl12sMPWL9KUKAnrX=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C36": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXCaB0mZ2qd8rldne_tu05xGl1qQ1XiAHhWvsEJelad8QPVukBWWapfveQwfqRdfZdWWjXJG4LauQCzTEKhtyFx0dOj-oSJYzwqZdPwbW6G9VqguqBunQSvG5jaLdpYp63S2zdZSDXX3TSw3yGtmecZVDhcXtUxXxaYvNk=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F36": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV26rabb2k2UFu17M_XsOqlm_TTv8R00M3GTtKnU0LwTng5cx0cQTv59AWp0o-FWUe7ZwfohlMNvluB2WIpW24jCUkIf40fPFFQvo-Uhj_NrJ24cFOSATz3_S_2rFEBkARoqWAqhq1ml2k6cza6tuUJm3t9qsky7_SnslM-=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I36": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU7igTDm_4FyIyxuKg7Y1MJLfTnpCdzG2C-VeC3OUBSVaCktvmKJkFSaHYhj7oO2URUG6oFJU_h5X-AM58_LHEm8aRRyWuzWie7SdzAc4xfJGV58DbxQ1KSYVF3b-YTHKsrvg3FoR54vvFMQu2dczWjdI3QK_peLJM=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L36": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXT5ztzEXRNauDILnmrQp5aH1nLvctEjDZJ5yAPJJBuMm15QHSFCB1KufSdrUCOsv7-1LvuAc76r-Hc-WHHL1gwj86wwpqbXyNO2XNvtjkO-VnNSWZJjnhTpfNnk_N3qzZu68S-km-xJjfJSBT09NViebFu_BC_eZFlJ98=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C37": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXCaB0mZ2qd8rldne_tu05xGl1qQ1XiAHhWvsEJelad8QPVukBWWapfveQwfqRdfZdWWjXJG4LauQCzTEKhtyFx0dOj-oSJYzwqZdPwbW6G9VqguqBunQSvG5jaLdpYp63S2zdZSDXX3TSw3yGtmecZVDhcXtUxXxaYvNk=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F37": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV7YmiPyFdhTb4ARztLoKl-RqgD3OFBvQnf7554awr4aGb2DGQabY-IYy8wTJZ0iYVyDeiOvzuLluFNUyRdnqf9KS_yr_5395WAy1ytq8Ujoxf5yNQKHiEuucMfGcJyNSDN8wVjQYH_i87fJvBE_wAojkuQ1BU6FcMDc9o=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I37": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXCaB0mZ2qd8rldne_tu05xGl1qQ1XiAHhWvsEJelad8QPVukBWWapfveQwfqRdfZdWWjXJG4LauQCzTEKhtyFx0dOj-oSJYzwqZdPwbW6G9VqguqBunQSvG5jaLdpYp63S2zdZSDXX3TSw3yGtmecZVDhcXtUxXxaYvNk=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L37": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV26rabb2k2UFu17M_XsOqlm_TTv8R00M3GTtKnU0LwTng5cx0cQTv59AWp0o-FWUe7ZwfohlMNvluB2WIpW24jCUkIf40fPFFQvo-Uhj_NrJ24cFOSATz3_S_2rFEBkARoqWAqhq1ml2k6cza6tuUJm3t9qsky7_SnslM-=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C38": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVIucPPMYpoN1n_K9d5Jrni_K_iifSjzQSDi5MVj0UOE2Fryhv_4RPVXsHVln57XH7_J7sa5RGpXUjNrLfOY5gjH0AzoSBykhHmoBN7LXKCXAJcuYtqYptE-qRM-Qm0RomRg7UYw1CF1zKaDCJ4o_txiVwn0rNhGYdhY4M=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F38": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVIucPPMYpoN1n_K9d5Jrni_K_iifSjzQSDi5MVj0UOE2Fryhv_4RPVXsHVln57XH7_J7sa5RGpXUjNrLfOY5gjH0AzoSBykhHmoBN7LXKCXAJcuYtqYptE-qRM-Qm0RomRg7UYw1CF1zKaDCJ4o_txiVwn0rNhGYdhY4M=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I38": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX4a0eC3ybCzZwmkJ7-klSNUI2XtDdu8YX1RAQb74v9cbQ2KB_7NpyrSbgSYeiFUq63g1_KFfwobcwSzB9G9NI2qiUwWNDt_kI7wqwaxxuUgCniQWv2cC9aocFojvccxYLACqwy8F95A3Z8V-lH6IS7fMdXkhH40Rarnqku=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L38": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVTnAhcfgjL9Rcnz-7lBDenclLkEX3lYt6H90kucA0sDyvATbdA-UgKWsK2PtgzKCsX0k0R4PhaCR030scS_Dmwq9U50CUEM32_1EkWxvzBP7SqC-0WqLFXu9gHqDgtUyDHCLSzTD5K9v6i15QBsdXDrnL7NBda0EmZLKaa=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C39": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXp1wqy35ezYbJwC1nU2d2KFnRTyVAHGqH6mPtGRHJY49IgdxEll8SFai3skcv_edZZgRMavay9c4aFWH7eqUnxZrsguPI2DkuTlVuXegv52rdVUvLIw41x7SzjPKbcPe6Cffyh213AIkA9n7fbodf-PWoE8GCr1cY7JsMt=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F39": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVjs3-u7hub3-GsA5FUtgUjnutppQS0iQYSbhpl_u0OB0dRy2USkYy-tebm0pHNCHSSWRbtY5eUgREXwHQkfsdUOnRlVplqTut8Ch_VriQAM6EL4viIo_t3GoVMd7hSJUtW1tXJmm0n4IKzORjq7hDg4SdJLAh1Zmz2o2O8=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I39": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWUb8KhYi0rWb5xrOWvU3cTyC5Iq4h5PyD5czy6thMUx26BKrGkSaCOcZCLHGw8vfCps3BkYU3GYGlaeDF1U-bDhJu6VuilRLbkbzuR2b1K0lwBgzjypFVJxj0IlydAhswS9sTkHUvDQD10oMws5gy--929sHNjuQykJgU=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L39": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVIucPPMYpoN1n_K9d5Jrni_K_iifSjzQSDi5MVj0UOE2Fryhv_4RPVXsHVln57XH7_J7sa5RGpXUjNrLfOY5gjH0AzoSBykhHmoBN7LXKCXAJcuYtqYptE-qRM-Qm0RomRg7UYw1CF1zKaDCJ4o_txiVwn0rNhGYdhY4M=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C40": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWtX9gPwFpi5D7qb2dSJiB1luMd8xvifSteWf6nRGO0uQlsLIIfWilaqLdP1h6--CR5ShJjVlX151bPhw5XSlk1qtUr4LOxpNhfenwEcafSiss35Qqwrz93TGZDhp1vBT2CUjxpb5NBXUiUDwFh6k5wF1AwezEu3WkOCIY=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F40": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXp1wqy35ezYbJwC1nU2d2KFnRTyVAHGqH6mPtGRHJY49IgdxEll8SFai3skcv_edZZgRMavay9c4aFWH7eqUnxZrsguPI2DkuTlVuXegv52rdVUvLIw41x7SzjPKbcPe6Cffyh213AIkA9n7fbodf-PWoE8GCr1cY7JsMt=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I40": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXNGgJLpAw-QDlZNhVyaE8qi_pFMTRko2PgrLLG6AGbn1-wu-m4pgczYp4Pt5hnheDCKr7hCEW-FzkhxX45ZHrR8yPfS0a5u8zL9A1diNkcN5yE8GxTilWFsN-mpNi4j7Tq_3pWvfF7yyn85sJ_AGnBg--uenTbHifBCrOs=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L40": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWNYKoaBfShEqHyjkpW0gD7ydFTFQUxjNfitdsyWVjnqAhMDxxg6_A4MrTdPxVYTxHWMmXguRRJJmi9hjNuUVqFgwrKikRfA1dmCpPCWqz4591jec0mUMX1dJ74V_V8LJ-IWqlxPLjmKB37R_SdrwhDHp33PWH6fFa1BNo=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C41": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUMOwzgKZ6jmRtYYWcY6k9iOpgd6PqmKzu33n4N3zqyIpCklAfeiapl-nR3IfhZeOtHXx9ZSxJtesnopIW35Xu6c_qoFMFQAND_7wodFsqACtHybU3tJbvbLy4i5lIpALD2n0MmspS0uYV890waADXBO1bBB2GT2xsjf80=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F41": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVY2EXCcqcy1umaZCtm_dzcnN_YvTtFShRrs9AefG3fO5fMeCC4zGqD6Nwlq3QqD_VmsxWDqkFYOPXt09Go38luQB8_zbHIx2fP5PFBhbM1zN7CqzlE46NMEDyXkIAGYeYttLwK3RKQqf1byKef_-iJyl7X4em9Hhvqqnw=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I41": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWUgTnwhRUVODWVlVcP4VLVVINZC8fggBOdb6eTtxzVyX65aRShG5Xt3SI9cHYF5a-V_ucDgPBqR5ixXUQ_hsmfzKx1z7_CFD5Fe9MrHLXM4M43xMLfn-glHSc5EhsLvBwwQP8xtrXMi8vGwu9F5RB-JgfZzSgxxyAgzWOM=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L41": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUllBg4ZS4tHIaqOGIeVVINQAPK4jSWil1TbG4BeWxL2jiTYEzPV2A5zJK_rm9didX2tCe279AzGP5az6sV7G1VcRPc3p0Q9riHXINYAMxJZuAWi3YlHgmdXxGNfwAIbTUEL6iS65vkegsYpbWlhpr3tZ2XkPf26CLGz2o=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C42": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV9AF_sjRkqJ_Kx0jpWciBKa_McEAmN7lvfv2Gjcjx2Fq4j6XDD55QN-HGDkpB8onoSIuTol-f15Sk5AVUF1RQeeFyqQFO9qTuCvozzArjE4AYWXPPuU0EOwLWRIwtXcVCDyotKRkyBII--bj1Ggj9eouNBLyJZXIRD1Ps0=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F42": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVRuA-tuw43NAgG9GeUZyL2H1N2Mi-7O_AANqW1jZ5C5SB_rO2vOQeIdqU3APMVWfmZgtfJBCdp2pEiBm8uNYl-hJbuYOxUjNSyEgBP88IAddN5qEEttJn0g3dLjVj1y5SyQq5Fg_BtjnTSffAHcina9AyijplClSRMW7s=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I42": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUMOwzgKZ6jmRtYYWcY6k9iOpgd6PqmKzu33n4N3zqyIpCklAfeiapl-nR3IfhZeOtHXx9ZSxJtesnopIW35Xu6c_qoFMFQAND_7wodFsqACtHybU3tJbvbLy4i5lIpALD2n0MmspS0uYV890waADXBO1bBB2GT2xsjf80=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L42": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWtX9gPwFpi5D7qb2dSJiB1luMd8xvifSteWf6nRGO0uQlsLIIfWilaqLdP1h6--CR5ShJjVlX151bPhw5XSlk1qtUr4LOxpNhfenwEcafSiss35Qqwrz93TGZDhp1vBT2CUjxpb5NBXUiUDwFh6k5wF1AwezEu3WkOCIY=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C43": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXtYqo_UjFsRDNYa2Ef_S3wZ9H7XzHEnngiUhxk2UPR_VSX0Hp9YqW1jciMFs7jVRgCCBEjaJB6qaHZyvFIi4F5seIUrtB0ByfOHSnCbekhmJlXmTf6m3AWQFhv9GxZJDKVH3EYyeY6p1kqblGUKx82GaHoqA9btupO53ht=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F43": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU0km94ex26GzdWZ8fO0JxMzBM0LJxrNrRGd4V3C7fXi9aD0beA8EiyISuu9wKuCgTp_XkVtak1cQeKzaUiOj69OLUXAkyQlmbpRcFij0JaJ6u7mVDDPwCQKBeHise1WVwYu12wpktbngVlqfk7y6g2oQUv9iP_JlxZ_V0p=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I43": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWFIxpEnUhtdkOmKS_DxJ2H54afONpJIw-NAAGMQK5nZE5BXcPVfgruWy2g7BoMMg6nk-PzR3Has38rL2VG8EcBVOArAhReugnd698hXpvGsZ7xwUEwNBeoIq4wgqSzgJE9NVL3icuvWSa2GQyiWkW6jZitcIQgm2AbhLs=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L43": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU062eGCm9fuOcQhaFB0i-dw0RV_jaAAIWVP6HdVaBXpLLWy71uk98FKEeYfSceJflAsKv7cOiEGGXxAIQDD9LkdHBbUCS3O0OuMGkqJKRdW69N441t7l8jt-BJen85dqbv4F71aUoL3zJK33NqevideEB_0qRbhsLCW8yW=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C44": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUM1geAeNySDlmyrAMf-tp_Y8M8J2Rf0kkqF3-3I56n6W9p3vgLY5N8l7qgpetCUQRnCBOjCWuwylzB9nh41OtlDecWkoueeNsFoJZoDLM3v_ARd8c-k_6nkFVdEhHBbFax9ZIhbk3CT-VWTTZWwOSJIHRZCTRGxGk=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F44": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXNZlLuwVl-DvZOQ0PXDeuMdp9UJLo04zCg-mmsgqCCs4bfE_T5txNK5_uxeFUrZrfSpMZvHr9MJU4sO0NP4Y1C7ELwP10DO-JGOu3YRlJh09TnIl33nK264nQ3YCKOCMpdejKepoisMe5vdGEYDLT7el9aMVTka-vdtP1V=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I44": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV9AF_sjRkqJ_Kx0jpWciBKa_McEAmN7lvfv2Gjcjx2Fq4j6XDD55QN-HGDkpB8onoSIuTol-f15Sk5AVUF1RQeeFyqQFO9qTuCvozzArjE4AYWXPPuU0EOwLWRIwtXcVCDyotKRkyBII--bj1Ggj9eouNBLyJZXIRD1Ps0=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L44": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV4dyIshPkqXCogcJMkHM51J5-bBRLQYAOsJZjeRMgXw3dFcpu947aQbF45vI9L6CQinWJq2PexYo5rlAq8NIdfboubSmlnty-um-C9xa9HYT8_LS_d30Crma7_XJ7ODGSR1gSV43L34ghFv4478x-1FCrqGeeLHPQqmto2=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C45": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU7igTDm_4FyIyxuKg7Y1MJLfTnpCdzG2C-VeC3OUBSVaCktvmKJkFSaHYhj7oO2URUG6oFJU_h5X-AM58_LHEm8aRRyWuzWie7SdzAc4xfJGV58DbxQ1KSYVF3b-YTHKsrvg3FoR54vvFMQu2dczWjdI3QK_peLJM=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F45": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUSuY-ObXsxsmAhQypoV1ypZEpSnZ1qb9Psji_ltxmN7GA-QOl_Qv7ZJM5KAMx5uvg8VCFhKJ1v-5WYXjPA6HmKHcEfUvUXIAdsLB2dtrb-_Q0-c6VEuvV1sW3vLZK3nxw9WMToOnf1B1xxRWZMeqTRejqYbbGX6lR3xVEc=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I45": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV9pf2PCeRBIfpPHX9PyRZUp1_A2TtdBFLoSRrAObdE8qFeCum0hcXa7lGAldSxg_czymb4FtSUAMKcebj--XMLMK60_NqM8cJbMg6KMq_0gRCZLGgg4g79a_QrhHwIJ1raiKJpca1PUw31TEZ9fe6K2wBSEIvS2Syr4TDj=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L45": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXEkHrW5PIiNZkl2qW_bp8J2rBYzNp9Kxj3yUBnEyjefsXIdfvPk5f4mPMTQxIE9nKcqypfIgKn8HkcEZjCnR1KqPdjOOIiWBrx1OlvtPK-ul58AQ73b5GS9Mu0pN07flEWj_Rv_Te9aLIkHNK18wgD4rYC51wY3w4T5j3k=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C46": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUnHlz9H_cuQk6Es1b3peHdKcLIsu7QdBTjftGrF-WjwztzCFatZ_BJAWHZJoy7E8ARLu6LiDSJ_d8NrdSjivyftk0FfxuXUrKCdvCpD5aBFQvjvp19LLt4sGsCP9bKL15JkaHK-lBZR9ShfnV2ZAmi8BvbrIZPUP4=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F46": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU7te48xiqDqEnYw6vLtDjNJEwB8_T2K19EvB2qFDEJ8byCvVx6pHEgF3K7TxZZ2jIsO1m_ypj-7_xL-1-KFdEh03Fz2cFKLZ0f-LCahvqVPstjQbOzpO2beRg5xGWQy9OLzp3fTtW7gZzv-_ojMtsi5POnrVO_G5WkLxGX=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I46": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWk2MyTQd43PeyjAviLWVJfJLM3WJdocWs5Af3g4otnsBgujZEy_C_bvT9LoJi3Xy1NmRJ36byHcyNJs_D6mCHzweyv0WljeneVjYs0JdbZfKcIdnSF13PzPx3xlsWXFr1UcSTHHNHCd1osjrSiEbc-aJXOQhRNlk_BhLw=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L46": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXE6KeEVZGvRof4g9Xk--SCw7_U5muRJsousQAy0ROSleRXePRDpMcASfRZHBVnTvG0cMQY3AtAyqkDBO74yoT_rcnQWcOlo1Zi62EfL6b_m0lc-Nq-XZcXv5rSxeGms_-hglYcr2iZxhbDW66-3jhKYSKI587_dlNK_U6W=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C47": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWOLdy_Z3Bxc0wKjADS1O8RHnoZfM7u0EWISLl1h9_DtGH9A7fd2Z1e99nnDQoI--fUT3NUtgNH7WLngnI0DSnhYeA3brB9h_Bc21dmV-l7LvTjCpO7DaIZvltGomu8A1LZ61Eygz1LavkO_XG1F683ig0ExZ7GFg=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F47": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX0grtGi31tU_cwP2BIJj8_WecydGLt3wJJmIFro-PaKLxxXO62wFxKyEJtzwYD0vU_RG5q-HeTH6IzxYua8YbFVcm_LQKiYdirffL5aL-WtFM1LQmZEHQDUDrH4LGz4vupMQ7h8qlH4rfcGLxKwWk6fELmMpcyyIc1w-Z5=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I47": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUjaPqNPh7zRaRqDQdPner9zDEEBFclmHiaQkiwsoYVIlF5JJK30qbkYDCvP3KYvsJqQvdGozCWhD01Kcyryyd6CmYJn5jrtfNdpBA4iV5yEDIj-bGT8IXLQyNizwWbjxiRyVChML8U1hAOOzLPZBhQHdz1St4EWhcSxw4=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L47": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU6oLzTjXf8tcDdpVOxnnfnTxZHeKnUfKeHVdB5IeLNV8nBb3_DeLC2TUI50zRQQjwkBGegXZcihvMZASPj2JOrZBYvRgJj5Fh3F3-ahr9-vwzRSVQJuqFGQFWiw6mJ5Sm9PQYYI6Mln4mERjYO0OhQkJ9ZhvL3kuG0QdA=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C48": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU5_85oklTGtHq2R1mjv7xapeSNsqCTDILy_YhiW8RgiG66OfuPVFgBv_QsbW5o79vOdF76Vhy4qonVo3n1l39gCDeyGpqN0VLXEhgAKLffOpPZnQ5mBpi3X4489HxMYxK2qYDSecwxPCYlSOO7_tI-HRO53fzNCg=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F48": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXXpEz8u-jXAHekPT6vqj_S5w5AYJZ3uuI2S568lJnIrXMYIoJ0UXN098x0Y-TxfwioOG32WIeCqJBx4BKQRSimi0AIK7bT4wNCCmpZzh73s5lgO6xYtEuVWH2DN9hPmod0AOwf3whYxkMDZAJfWHT0znObisiwfEHVyshZ=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I48": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUgQY7nmmYmW7FvhlIdsVRr3mSTagzzJnyQuiyX4wGGyn-tose4U9ysMHAs9UHGWSCdUi51bsDw4sJ-X97VMNrNf06jmWhRveJqNDhqkBDSJUdo91ttIHnmv2Be5ytvDPf-JOp7F-t2TN36xEHQ4aFSz1uJ6dHelIRfoF0G=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L48": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWY-IJmrLow2L_9CEnz1PMqfcwppwzNPlZUIspfjavCrxzAJc1jss4uXyd7j_L2RgrHbT7_fNY2NpPM7apsXXSst-rjTYKPAsuFNea2XVCxO9pkeNSSBLjjsTrQ9-c0X5IppgOtwQKmCWNqVcKz7YeoHzfsbJST_rLZz7ng=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C49": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX2FSoQDLZmHMBsS6VYs1Ju9T0Pn8KCmBYZgLzautDwRoU13_ruiOLQ2pQd8gTFw6xUMTRmEEx8M_3tTOHkl3zTigPb3l3it7MUyf8tbd70In7tSaUQIRADgcjHx8ayYGNs63GENDXpjA_CAzYKRLms1kqZsUGBS5wkduSN=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F49": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXWvbG1djaCAdfhoHBe_93jmsUQ8WfjGoSBNr7rtAUt3IOsEWucuX0MQTPZHkAQcydeQkGbN6sZ3gtYKLr6kwNosb6_QA6uMNA2x9AjqHazUy3vb62CabrMRgew9spHwrO2UjM2Mye1AtJl9bkwHhvidhjxnvLDn3tR-PPv=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "I49": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVl-y_gR8wcmLWkf7l6NiFCk7GEdtt8_hZ7hchns6C2CdUfi2h0aZd1czyKhCnfIMGKryAKMuDadmTmQ8aLkHS999h9R10KbDdiKbT-8a0Ab6dMLaGpLYZR_KpGXgsFh8Ea6mdCF_vU0VrOcRt2l-xHQvPEUFjzvhnPiLU=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L49": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUnHlz9H_cuQk6Es1b3peHdKcLIsu7QdBTjftGrF-WjwztzCFatZ_BJAWHZJoy7E8ARLu6LiDSJ_d8NrdSjivyftk0FfxuXUrKCdvCpD5aBFQvjvp19LLt4sGsCP9bKL15JkaHK-lBZR9ShfnV2ZAmi8BvbrIZPUP4=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C50": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXJx1adPDecYaSYv8iH3OxkbCE7L3aqzpbUiw8xT9lovSpZdJoScz5UHw8T8lUu3Vkl40PIaA1CdiM6oIloyXdA0edk_CheSz5G3hNpUE5DLhzWm5OSpo2EEg8_dxmzXrm6IXsTMKBPxZGJdFspxeChl48JCgWspeBwbnn9=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F50": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLazwPSaqtJ_gur_-LxrfS86-yS_qWDb_hfKisBJh8Nphh32hsClKqmQq4Zrwb0DVcBrqGrts19wmb8TX56loaZc7Rz-31_1wHBW6IcX3rN9ifX9nGWLtqtDiyL117lv9KiamBYFP44QZrCjypIb0P2YjhIFZVAgQnDw=w64-h149",
+        "alt": ""
+      }
+    ],
+    "I50": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVwZb2eDohzP-BbhnMkkOSIGp6Jj-4X6073mWHCaY5Fyu2WJgLfeB-Onh0jw_kJ-jxm7jjv05RXjMo4VIO8kIdGkWafhS16xT-3lBEcjqDJ6VWqrN1lpR9JJBell-zjciGBA2-M1c5inQEvaCu_XcUKzpgWHGXym4-f0PVs=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L50": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV31KWx-_MYPwvrC1IzPVDRHzzdrAb8xYaf7yW8BEQwtljRegz4IVntYOKWmFCc-QlVNLynidvXG6PVrFJd3B6BpQVtctRV-2YOJQJLWGQhTYhW3UVR_nVVcnpOar3zXHOxgYr-xuR73o1k-aklrLLfoP20AY71OPw7kED4=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "C51": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXCBOMuF5Z_iL6EsOcL7nopmoGndHOnlFFDJ7T0cHJXpK-GK-sDhouPY_il2TehaA_556PQDYBVV1ZQ1ooNKL9ntIA3ipzciBoivsIbMWpXeZjVHfnnoRCmuGSVXMIzWxUAW47EnPgURTWElXPZX-EVUNeaE6qLKQGtcmbX=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F51": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaY34moJCI57MPdZoDGrGppJCrenMsVWe9DoIIpBz-5XgQJTakslw4K7BLUrMeqnactNEkxSSzPOD3jMMmMCJm0t8y9GGTBzjynhg7r-gqGeCwL4FCFKRBZC5dsLX4dYhEA6D-Fj3I1OEn7zCuoLGxWr_ADkiznf8wH=w64-h149",
+        "alt": ""
+      }
+    ],
+    "I51": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXZ8iiA7KCMJAxfA-XWK_S4d9iOK2CtI-3Mw3g50I29IhK3BcWfpVjn2sgbAb3lZ9Z94nV0eEYf6H1jmkQ_2U6vIUax0V9xZ53yEe3ryndwBEIVx7-6EUEXZCXJVBE1IfPdYCLpksMhR-apMpjynRisdDy2ujYIvHlAFc5y=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L51": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXgmwi0_6ftsx3NcR1GyPRFfi03Gljp7NPTLxi_qSnKmqlQP0SbyCDBBhHUBamC9jxu4bngbEMTqCN5KoZMLhiTysQznIXQGFmCupq8KZzr37E7Yh3EBKjuAIWzgl9JeKADtZuQemaj4PlI_0IGxPDc3VvxlRSxAKL-ZoNW=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L52": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVV0BxxqVnEl_7hQt3wuxXUEqlqvLQ_9v6gxVqLAtOHGqQ7c62ziS6R-J4HKpIxJC5g8jLa7lq6nZv_NxBjCGnmGLiw6Lm7dk24ukmkdxW33DqwcG0GUilMPfO7R20FqRl3go9AlkMmxPtWADppJhCqCG8ZmJNq62dF3HA=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L53": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV8-ZtWL6jMzvtKyci8TRf5AWY9Ze4GiJa_YVrVj2-eFJDClu-FcIf-4kHJ_9MM_tMijD4qcx_xTAMFZB_ftER99IntCIsuEvF_8W6PVgBCKEDoW0IqSxIHtkq3QZYaqEIenG_7F-kOZKU-6sSXor8cHcHlcuHJHy_-krB0=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "L54": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUrxqse5XNXq2sgjU9jwqT_KuMDoi0cE9UPu-RStaUZJt54OxYPlun014NlcOdvKcXw42ucImFp9wpyuJ22ru9EFBxqFFA_qu1vqrSeq95dLr7XlmLjpqQWh3qLw36FUfVTkl1z7RhfnAkk4RUoYBDQJRcJ4-oR6e5BwNIi=s149-w64-h149",
+        "alt": ""
+      }
+    ]
+  },
+  "rich_text": {
+    "B1": [
+      {
+        "text": "Artifice Armor",
+        "style": "font-style:italic;color:#b2d6d7;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;color:#34f1f1;"
+      },
+      {
+        "text": "possess an unique",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;color:#a2c4c9;"
+      },
+      {
+        "text": "Artifact Mod Slot",
+        "style": "font-style:italic;color:#b2d6d7;"
+      },
+      {
+        "text": ", which allows Triple Stacking, despite effects generally not stacking past two copies.",
+        "style": "font-style:italic;"
+      }
+    ],
+    "D4": [
+      {
+        "text": "Counter Percentage per Kill:",
+        "style": "color:#a7a7a7;"
+      },
+      {
+        "text": "Power: 3.3% [4.4%] to 4.5% [6.6%]. Average of 26 [20] Kills.",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Special: 4.4% [6.6%] to 5.6% [11%]. Average of 20 [15] Kills.",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Primary Weapons Kills have a 1.25x Multiplier to Counter.",
+        "style": "color:#a7a7a7;"
+      },
+      {
+        "text": "Exotic Primary Weapons have a 1.67x Multiplier to Counter.",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "G4": [
+      {
+        "text": "Grenade Damage:",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "12.5% [17.5%] in PVP.",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Incurs a 7 second cooldown after activation.",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "M4": [
+      {
+        "text": "Orb of Power",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "3.2% [7.5%] Grenade Ability Energy",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "3.7% [8.5%] Melee Ability Energy",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "4% [10.6%] Class Ability Energy",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "P4": [
+      {
+        "text": "Class Ability",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Grenade Ability Energy",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Hunters: 14% [18%]",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": " ",
+        "style": "color:#386792;"
+      },
+      {
+        "text": "| 5% [8%]",
+        "style": "color:#df4545;"
+      },
+      {
+        "text": "Titans: 16% [20%]",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a23030;"
+      },
+      {
+        "text": "| 6% [9%]",
+        "style": "color:#df4545;"
+      },
+      {
+        "text": "Warlocks: 25% [30%]",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " | 10% [15%]",
+        "style": "color:#df4545;"
+      }
+    ],
+    "S4": [
+      {
+        "text": "If ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": ":",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": " Increased Rocket Launcher Damage and grants +50 Reload Speed.",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "20% | 25% | 35% | 40% Increased damage",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Damage increase is dependent on copies.",
+        "style": "color:#f9cb9c;"
+      }
+    ],
+    "V4": [
+      {
+        "text": " ",
+        "style": "color:#38761d;"
+      },
+      {
+        "text": "2 Precision Kills",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": " ",
+        "style": "color:#38761d;"
+      },
+      {
+        "text": "-10 Discipline.",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "Y4": [
+      {
+        "text": "On Warmind Cell Collection:",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Warmind Cell Counter.",
+        "style": "color:#c8614c;"
+      }
+    ],
+    "AB4": [
+      {
+        "text": "Elemental Well Spawning Mods",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Counts as an additional copy by itself.",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "Each copy spawns an additional Elemental Well.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AE4": [
+      {
+        "text": "2 Arc ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Elemental Wells.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "D5": [
+      {
+        "text": "Super Gains",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Grenade Kills",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "M5": [
+      {
+        "text": "Orb of Power",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Begins Health Regeneration",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": ".",
+        "style": "color:#e06666;"
+      }
+    ],
+    "P5": [
+      {
+        "text": "25% Super Energy,",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "115HP Overshield",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": " ",
+        "style": "color:#3c78d8;"
+      },
+      {
+        "text": "Unique Overshield",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": " ",
+        "style": "color:#3c78d8;"
+      }
+    ],
+    "S5": [
+      {
+        "text": "CWL ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "by killing ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "2 enemies within 5 seconds of each ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "with ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Grenade Launchers/Rocket Launchers.",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "+1 CWL per Copy.",
+        "style": "color:#f9cb9c;"
+      }
+    ],
+    "V5": [
+      {
+        "text": "3",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": " ",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Precision Kills",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "-10 Strength.",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "Y5": [
+      {
+        "text": "On Warmind Cell Destruction:",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "burn",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "AB5": [
+      {
+        "text": "Weapon Kills with a Matching Element",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Elemental Well.",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Elemental Well",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Elemental Well.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AE5": [
+      {
+        "text": "Class Ability Cast",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Void ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Elemental Well.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AK5": [
+      {
+        "text": "Vex Relay",
+        "style": "color:#a2c4c9;"
+      }
+    ],
+    "D6": [
+      {
+        "text": "Using Class Ability while within 15 metres of an enemy grants",
+        "style": "color:#a8a1c8;"
+      },
+      {
+        "text": "Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Hunters: 2.5% [4%]",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "Titans: 3% [5%]",
+        "style": "color:#cc4125;"
+      },
+      {
+        "text": "Warlocks: 5% [8%]",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Numbers are currently only valid for PvE.",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "J6": [
+      {
+        "text": "Elemental Mods reduce Matching Elemental damage.",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Sniper reduces damage from >29 metres.",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Melee reduces damage from <4 metres.",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "ONLY APPLIES IN PVE.",
+        "style": "font-size:10pt;text-decoration:underline;text-decoration-skip-ink:none;-webkit-text-decoration-skip:none;color:#a4c2f4;"
+      },
+      {
+        "text": "How does Damage Resist wor",
+        "style": "text-decoration:underline;text-decoration-skip-ink:none;-webkit-text-decoration-skip:none;color:#b6d7a8;"
+      },
+      {
+        "text": "k?",
+        "style": "text-decoration:underline;text-decoration-skip-ink:none;-webkit-text-decoration-skip:none;color:#b6d7a8;"
+      }
+    ],
+    "M6": [
+      {
+        "text": "Orb of Power",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "12% [18%] Grenade Ability Energy.",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "P6": [
+      {
+        "text": "Using ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Class Ability",
+        "style": "font-size:8pt;color:#b4a7d6;"
+      },
+      {
+        "text": " ",
+        "style": "font-size:8pt;color:#999999;"
+      },
+      {
+        "text": "while within 15 metres of an enemy grants ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Super",
+        "style": "font-size:8pt;color:#ffd966;"
+      },
+      {
+        "text": ", ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Grenade",
+        "style": "font-size:8pt;color:#e0a261;"
+      },
+      {
+        "text": ", ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Melee",
+        "style": "font-size:8pt;color:#4fa4a8;"
+      },
+      {
+        "text": ", and ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Class Ability",
+        "style": "font-size:8pt;color:#b4a7d6;"
+      },
+      {
+        "text": " Energy.",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Hunters",
+        "style": "font-size:7pt;color:#6d9eeb;"
+      },
+      {
+        "text": "2.4% [3.6%] Super",
+        "style": "font-size:7pt;color:#ffd966;"
+      },
+      {
+        "text": " | ",
+        "style": "font-size:7pt;"
+      },
+      {
+        "text": "12% [13%] Grenade",
+        "style": "font-size:7pt;color:#e0a261;"
+      },
+      {
+        "text": " 5% [8%] Melee",
+        "style": "font-size:7pt;color:#79bec3;"
+      },
+      {
+        "text": " | ",
+        "style": "font-size:7pt;"
+      },
+      {
+        "text": "6% [8%] Class Ability",
+        "style": "font-size:7pt;color:#b4a7d6;"
+      },
+      {
+        "text": "Titans",
+        "style": "font-size:7pt;color:#e06666;"
+      },
+      {
+        "text": "2.4% [3.6%] Super",
+        "style": "font-size:7pt;color:#ffd966;"
+      },
+      {
+        "text": " | ",
+        "style": "font-size:7pt;"
+      },
+      {
+        "text": "12% [15%] Grenade",
+        "style": "font-size:7pt;color:#e0a261;"
+      },
+      {
+        "text": " 8% [10%] | Melee",
+        "style": "font-size:7pt;color:#79bec3;"
+      },
+      {
+        "text": " | ",
+        "style": "font-size:7pt;"
+      },
+      {
+        "text": "6% [8%] Class Ability",
+        "style": "font-size:7pt;color:#b4a7d6;"
+      },
+      {
+        "text": "Warlocks",
+        "style": "font-size:7pt;color:#dbb42c;"
+      },
+      {
+        "text": "3.6% [6%] Super",
+        "style": "font-size:7pt;color:#ffd966;"
+      },
+      {
+        "text": " | ",
+        "style": "font-size:7pt;"
+      },
+      {
+        "text": "5% [8.2%] Grenade",
+        "style": "font-size:7pt;color:#e0a261;"
+      },
+      {
+        "text": " 5% [8.3%] Melee",
+        "style": "font-size:7pt;color:#79bec3;"
+      },
+      {
+        "text": " | ",
+        "style": "font-size:7pt;"
+      },
+      {
+        "text": "3% [6%] Class Ability",
+        "style": "font-size:7pt;color:#b4a7d6;"
+      }
+    ],
+    "S6": [
+      {
+        "text": "CWL ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "-10 to Class Recharge Stat.",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "V6": [
+      {
+        "text": "Duration increases with CWL Stacks.6/10/13/16/20 seconds.",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "-10 Strength.",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "Y6": [
+      {
+        "text": "Warmind Cell",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "Suppresses ",
+        "style": "color:#8e7cc3;"
+      },
+      {
+        "text": "Reduces damage dealt to Warmind Cells by 50%.",
+        "style": "color:#c8614c;"
+      }
+    ],
+    "AB6": [
+      {
+        "text": "On Elemental Well Pickup:",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Become CWLx2 CWL Stacks",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Elemental Well",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Subclass Element.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AE6": [
+      {
+        "text": "Elemental Wells",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AK6": [
+      {
+        "text": "Vex Cube",
+        "style": "color:#a2c4c9;"
+      }
+    ],
+    "D7": [
+      {
+        "text": " Super Gains",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Melee Kills",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Does not work in PVP.",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "G7": [
+      {
+        "text": "Upon dealing",
+        "style": "color:#a8a1c8;"
+      },
+      {
+        "text": " ",
+        "style": "color:#4fa4a8;"
+      },
+      {
+        "text": "Melee Damage:",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "10% [15%] in PvP.",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Incurs a 7 second cooldown after activation.",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "M7": [
+      {
+        "text": "Orb of Power",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "P7": [
+      {
+        "text": "20% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Grenade Ability",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": ".",
+        "style": "color:#f9cb9c;"
+      }
+    ],
+    "S7": [
+      {
+        "text": "CWL Stacks",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "+1 Stack per Copy. Max of 5 CWL Stacks.",
+        "style": "color:#f9cb9c;"
+      }
+    ],
+    "T7": [
+      {
+        "text": "Arc Synergy:Ever Ready",
+        "style": "font-size:8pt;"
+      }
+    ],
+    "V7": [
+      {
+        "text": "CWL ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "+25 Handling to Fusion Rifles, Shotguns, Sidearms, and Submachine Guns.",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "In-Game mentions Swords, but it should be Sidearms.",
+        "style": "color:#a2c4c9;"
+      }
+    ],
+    "Y7": [
+      {
+        "text": "On Warmind Cell ",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "Collection ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "or Destruction:",
+        "style": "color:#c8614c;"
+      }
+    ],
+    "AB7": [
+      {
+        "text": "Super Ability ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Matching Elemental Well.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AE7": [
+      {
+        "text": "Combatant Shield using a weapon that matches the Shield's Element:",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Elemental Well that matches the Shield Element.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "D8": [
+      {
+        "text": "Super Abilities",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Orbs of Power",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "G8": [
+      {
+        "text": "Grenade Ability",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Grenade Ability Energy",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "15% [25%] Grenade Ability Energy",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "6% [12.5%] in PvP.",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "M8": [
+      {
+        "text": "Orb of Power",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "10% [15%] Melee Ability Energy.",
+        "style": "color:#79bec3;"
+      }
+    ],
+    "P8": [
+      {
+        "text": "10% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "fully heal",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "S8": [
+      {
+        "text": "10% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": ".",
+        "style": "color:#93c47d;"
+      }
+    ],
+    "T8": [
+      {
+        "text": "Arc Synergy:Stat Increase",
+        "style": "font-size:8pt;"
+      }
+    ],
+    "V8": [
+      {
+        "text": "Super ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "2x CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Passively grants ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "+20 Strength.",
+        "style": "color:#79bec3;"
+      }
+    ],
+    "Y8": [
+      {
+        "text": "On Warmind Cell Detonation:",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "Restores 150 HP to all allies ",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "AB8": [
+      {
+        "text": "Grenade Ability",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Matching Elemental Well.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AE8": [
+      {
+        "text": "Super Ability",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "3 Stasis Elemental Wells",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": " ",
+        "style": "color:#3c78d8;"
+      },
+      {
+        "text": "Does not function in PvP Gamemodes.",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "AH8": [
+      {
+        "text": "Taken Combatants.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " And no, ",
+        "style": "font-size:7pt;"
+      },
+      {
+        "text": "Witherhoard ",
+        "style": "font-size:7pt;color:#ffd966;"
+      },
+      {
+        "text": "does not make them \"taken\".",
+        "style": "font-size:7pt;"
+      }
+    ],
+    "AK8": [
+      {
+        "text": "[?] HP Overshield",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "D9": [
+      {
+        "text": "Orb of Power",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Small Orbs of Power",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "2.5% [3.25%] Super Energy.",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "G9": [
+      {
+        "text": "Melee Damage:",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "20% [30%] Grenade Energy.",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " 10% [15%] in PvP.",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Incurs a 7 second cooldown after activation.",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "M9": [
+      {
+        "text": "Orb of Power",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Recover 70 Health.",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "P9": [
+      {
+        "text": "16.7% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Melee Ability.",
+        "style": "color:#79bec3;"
+      }
+    ],
+    "S9": [
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": " ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Stacks",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Grenade Usage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": ".",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Super Energy Granted5.7% | 8.2% | 15.6% | 26% | 40%",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "-10 Discipline.",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "T9": [
+      {
+        "text": "Arc Synergy:Finisher Bulwark",
+        "style": "font-size:8pt;"
+      }
+    ],
+    "V9": [
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Arc Pulse",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "55 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Finishers grant a ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "200 HP Overshield",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": " for the duration of the finisher (+0.3s).",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Finishers grant 60% Damage Resist, totalling an ",
+        "style": "font-size:7pt;"
+      },
+      {
+        "text": "500eHP Overshield.",
+        "style": "font-size:7pt;color:#d5a6bd;"
+      }
+    ],
+    "Y9": [
+      {
+        "text": "Warmind Cell's Effect Range",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "Warmind Detonation",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": " ",
+        "style": "color:#351c75;"
+      },
+      {
+        "text": "near Warmind Cells.",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Warmind Detonation/Effect Radius6 metres -> 16 metres",
+        "style": "color:#c8614c;"
+      }
+    ],
+    "AB9": [
+      {
+        "text": "Stasis Shards ",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": " Stasis ",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "Elemental Wells",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": " ",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "Does not grant Elemental Well's Ability Energy on Pickup.",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "Incurs a 6 second cooldown after picking up a Shard.",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Does not function in PvP Gamemodes.",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "AE9": [
+      {
+        "text": "Arc ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Elemental Well",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "30% Increased Melee Damage",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "(+5 per Well).",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Buff is consumed on Hit",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": ". ",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "Max Duration of 30s.Does not apply to Ranged Melee Attacks.",
+        "style": "color:#c27ba0;"
+      }
+    ],
+    "G10": [
+      {
+        "text": "Loader's +Reload Speed applies after all Weapon Stat Changes. Weapons with negative Reload Speed will be set to the minimum Reload Speed granted by the Loader.",
+        "style": "font-size:8pt;"
+      }
+    ],
+    "M10": [
+      {
+        "text": "Ammo Bricks grant an additional 3-5% of Maximum Reserves on pickup.Guarantees a minimum of 1% reserves or 1 ammo, whichever value is greater.",
+        "style": "font-size:9pt;"
+      },
+      {
+        "text": "By default, Ammo Bricks average 25% to 33% of Reserves.Works with Ammo Finder Bricks in full effect.",
+        "style": "font-size:9pt;"
+      },
+      {
+        "text": "Grand Overture",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Has no effect in PVP Game Modes.",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "P10": [
+      {
+        "text": "Class Ability",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Melee Ability Energy.",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Hunters: 12% [16%]",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "Titans: 16% [20%]",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Warlocks: 20% [25%] ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Needs PvP retesting zzzz",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "S10": [
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Void Kills",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Special Ammo Finder Brick.",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Higher Stacks reduce the amount of kills needed.",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "19/10/7/5/4 Kills.",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "-10 Intellect.",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "V10": [
+      {
+        "text": "CWL ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Matching Elemental Shield.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "Y10": [
+      {
+        "text": "Warmind Cell.",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "Global Reach",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "Warmind's Longevity",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Warmind Cell",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "Warmind Cells",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "Warmind Cell",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": " ",
+        "style": "color:#45818e;"
+      },
+      {
+        "text": "\"On Collection\"",
+        "style": "color:#a2c4c9;"
+      }
+    ],
+    "AB10": [
+      {
+        "text": "Elemental Well Mods",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Counts as an additional copy by itself.",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "Base Duration of 6s -> 9 | 12 | 15 | 18Base Duration of 11s -> 14 | 17 | 21 | 31Base Duration of 30s -> 35 | 40 | 47 | 61",
+        "style": "color:#c27ba0;"
+      }
+    ],
+    "AE10": [
+      {
+        "text": "Solar ",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Elemental Well",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "13 HP every second",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Restores 2 HP every 667ms",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Solar ",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Elemental Wells",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AH10": [
+      {
+        "text": "Glyphkeeper ",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Grenade",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "AK10": [
+      {
+        "text": "Grenade Kills",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Power Ammo",
+        "style": "color:#d9d2e9;"
+      },
+      {
+        "text": "Power Ammo Brick.",
+        "style": "color:#d9d2e9;"
+      }
+    ],
+    "G11": [
+      {
+        "text": "Melee Ability",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Melee Ability Energy",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "15% [25%] Melee Ability Energy.",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "6% [12.5%] in PvP.",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "P11": [
+      {
+        "text": "Hunters: 4.8% [7.2%]",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "Titans: 6% [9%]",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Warlocks: 10% [15%]",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Needs PvP retesting zzz",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "S11": [
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Grenade Energy",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Grenade Usage.",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Grenade ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "15% Grenade Ability per Copy.",
+        "style": "color:#f9cb9c;"
+      }
+    ],
+    "V11": [
+      {
+        "text": "additional CWL Stack",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "CWL.",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "-10 Recovery.",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "Y11": [
+      {
+        "text": "Warmind Detonation",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "CWL.",
+        "style": "color:#93c47d;"
+      }
+    ],
+    "AB11": [
+      {
+        "text": "Elemental Wells",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Counts as an additional copy by itself.",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "Total Duration:",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "25 | 40 | 50 | 60 seconds.",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "Elemental Wells",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AE11": [
+      {
+        "text": " ",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Solar ",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Elemental Well:",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Grenade Ability Energy.",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Additional copies increase ",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Grenade Energy",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " gains.",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "10% | 14.6% | 17% | 19.6% Energy per Well.",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "AH11": [
+      {
+        "text": "Pervading Darkness",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "25% | 50% | 75% | 125% Increased Grenade Ability Damage",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "50% | 100% | 150% | 200% | 250% Additional Base Grenade Regeneration Rate.",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "AK11": [
+      {
+        "text": "Taken Combatant",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "G12": [
+      {
+        "text": "Grenade Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "20% [30%] Melee Energy.",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "10% [15%] in PvP.",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Incurs a 7 second cooldown after activation.",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "P12": [
+      {
+        "text": "10% Super",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " Energy",
+        "style": "color:#fdd24d;"
+      }
+    ],
+    "S12": [
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Heal ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Grenade Kill.",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Grenade Kill.",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "25% of Maximum Health per Copy.",
+        "style": "color:#f9cb9c;"
+      }
+    ],
+    "T12": [
+      {
+        "text": "Arc Synergy:Uncatchable",
+        "style": "font-size:8pt;"
+      }
+    ],
+    "V12": [
+      {
+        "text": "Melee ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Orb of Power",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "25% Damage Resist against Combatants while Sprinting",
+        "style": "color:#a2c4c9;"
+      }
+    ],
+    "Y12": [
+      {
+        "text": "Warmind Cell ",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "CWL.",
+        "style": "color:#93c47d;"
+      }
+    ],
+    "AB12": [
+      {
+        "text": "Explosive Damage:",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Solar ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Elemental Well.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AE12": [
+      {
+        "text": " ",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Solar ",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Elemental Well:",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Ability Energy to the least-charged Ability.",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "Additional copies increase Energy gains.",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "10% | 14.6% | 17% | 19.6% Energy per Well.",
+        "style": "color:#6fa8dc;"
+      }
+    ],
+    "AH12": [
+      {
+        "text": "Glyphkeeper ",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Grenade",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "M13": [
+      {
+        "text": "Orb of Power",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "P13": [
+      {
+        "text": " 10% Super Energy",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "Q13": [
+      {
+        "text": "Arc Synergy:Lock and Load",
+        "style": "font-size:8pt;"
+      }
+    ],
+    "S13": [
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "50% Melee Energy",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Powered Melee",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Melee Use",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "While surrounded by 3+",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Kills with Fusion RIfles, Shotguns, Sidearms, and SMGs, ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "generates 1 Special Ammo ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "to the aformentioned stowed weapon's reserves.",
+        "style": "color:#a2c4c9;"
+      }
+    ],
+    "V13": [
+      {
+        "text": "maximum CWL Stacks",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "+2 per Copy. Max of 5 CWL Stacks.",
+        "style": "color:#f9cb9c;"
+      }
+    ],
+    "Y13": [
+      {
+        "text": "Warmind Detonation",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "Orb of Power.",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "AB13": [
+      {
+        "text": "On Matching Elemental Well Pickup:",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Weapons with Matching Subclass Element",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a64d79;"
+      },
+      {
+        "text": "Stacks with everything.",
+        "style": "color:#c27ba0;"
+      }
+    ],
+    "AE13": [
+      {
+        "text": " ",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Arc ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Elemental Well:",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Melee Ability Energy.",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Additional copies increase Energy gains.",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "10% | 14.6% | 17% | 19.6% Energy per Well.",
+        "style": "color:#a2c4c9;"
+      }
+    ],
+    "AH13": [
+      {
+        "text": "Glyphkeeper",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Grenade",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Class",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Super ",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "AK13": [
+      {
+        "text": "Grenade Ability.",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "P14": [
+      {
+        "text": "33% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Special Ammo Brick",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": " ",
+        "style": "color:#38761d;"
+      }
+    ],
+    "S14": [
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": " 15% against Guardians.",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "V14": [
+      {
+        "text": "CWL:",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "40%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[35%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "5 Bonus Damage Shots per CWL Stack.",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Bonus Damage Shots are only used up on hits.",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "-10 Intellect.",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "Y14": [
+      {
+        "text": "On Warmind Cell Collection:",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Shocked ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Shocked ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "non-Shocked",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Functions like ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Dunemarchers",
+        "style": "color:#a2c4c9;"
+      }
+    ],
+    "AB14": [
+      {
+        "text": "On Matching Elemental Well Pickup:",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Intellect ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Tier 10",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "AE14": [
+      {
+        "text": "Void ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Elemental Well:",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Void ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Elemental Wells",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AH14": [
+      {
+        "text": "Glyphkeeper ",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Grenade",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "P15": [
+      {
+        "text": "10% Super Energy",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "S15": [
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Reviving ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "[?]HP.",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "+HP per Copy.",
+        "style": "color:#f9cb9c;"
+      }
+    ],
+    "V15": [
+      {
+        "text": "CWL ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "+X seconds per Copy.",
+        "style": "color:#f9cb9c;"
+      }
+    ],
+    "Y15": [
+      {
+        "text": "Warmind Cell",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "weakened",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "10% Increased Weapon Damage.",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "Stacks with everything.",
+        "style": "color:#c8614c;"
+      }
+    ],
+    "AB15": [
+      {
+        "text": "Powered Melee Ability ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Matching Elemental Well.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AE15": [
+      {
+        "text": "Void ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Elemental Well:",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Class Ability Energy.",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Additional copies increase Energy gains.",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "10% | 14.6% | 17% | 19.6% Energy per Well.",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "AH15": [
+      {
+        "text": "Glyphkeeper ",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Grenade",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "P16": [
+      {
+        "text": "Class Ability",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Class Ability Energy",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "15% [25%] Class Ability Energy",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Needs PvP retesting zzz",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "Q16": [
+      {
+        "text": "Arc Synergy:Replenishing Guard",
+        "style": "font-size:8pt;"
+      }
+    ],
+    "S16": [
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Grants +50 Charge Rate to Swords.",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Effectively reduces Charge Time by 1.07 seconds.",
+        "style": "color:#a2c4c9;"
+      }
+    ],
+    "T16": [
+      {
+        "text": "Arc Synergy:Pulse Rifle Scavenger",
+        "style": "font-size:8pt;"
+      }
+    ],
+    "V16": [
+      {
+        "text": "CWL ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Drops a Special Ammo Finder Brick for Allies every 6-8 kills with Pulse Rifle.",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Displayed by Ammo Finder buff.",
+        "style": "color:#a2c4c9;"
+      }
+    ],
+    "Y16": [
+      {
+        "text": "Warmind Cell Detonation",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "200 to 38 Solar Damage in a [6?] metre radius.",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "AH16": [
+      {
+        "text": "Pervading Darkness",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "Q17": [
+      {
+        "text": "Arc Synergy:Stat Increase",
+        "style": "font-size:8pt;"
+      }
+    ],
+    "S17": [
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "CWL ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "CWL",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Passively grants +20 Mobility.",
+        "style": "color:#a2c4c9;"
+      }
+    ],
+    "V17": [
+      {
+        "text": "CWL ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Orb of Power",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Super",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "Y17": [
+      {
+        "text": "On Warmind Cell Collection:",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Grants a 100[?] HP Overshield for 20 seconds.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "AH17": [
+      {
+        "text": "Pervading Darkness",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "[?%] | [?%] | [?%] | [?%] | [?]% Additional Base Class Regeneration Rate.",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "Y18": [
+      {
+        "text": "On Warmind Cell Collection:",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "50% Melee Ability Energy.",
+        "style": "color:#79bec3;"
+      }
+    ],
+    "AH18": [
+      {
+        "text": "Pervading Darkness",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Counts as a regular Empowering buffs.",
+        "style": "color:#cc4125;"
+      }
+    ],
+    "AK18": [
+      {
+        "text": "Nightmare Bosses.",
+        "style": "color:#cc4125;"
+      }
+    ],
+    "Y19": [
+      {
+        "text": "On Warmind Cell Collection:",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "CWL.",
+        "style": "color:#93c47d;"
+      }
+    ],
+    "AK19": [
+      {
+        "text": "Nightmare Bosses",
+        "style": "color:#cc4125;"
+      },
+      {
+        "text": "Nightmare Bosses have an innate 50% Damage Reduction against Super Damage.",
+        "style": "color:#a61c00;"
+      }
+    ],
+    "Y20": [
+      {
+        "text": "Warmind Cell",
+        "style": "color:#c8614c;"
+      }
+    ],
+    "AH20": [
+      {
+        "text": "Oracles",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "AK20": [
+      {
+        "text": "Solar ",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Nightmare",
+        "style": "color:#cc4125;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a61c00;"
+      },
+      {
+        "text": "Combatant Shields",
+        "style": "color:#f9cb9c;"
+      }
+    ],
+    "Y21": [
+      {
+        "text": "Solar AoE Damage",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": " ",
+        "style": "color:#d5733e;"
+      },
+      {
+        "text": "Warmind Cell Counter.",
+        "style": "color:#c8614c;"
+      }
+    ],
+    "AH21": [
+      {
+        "text": "Super Energy",
+        "style": "color:#fdd24d;"
+      },
+      {
+        "text": ".",
+        "style": "color:#fdd24d;"
+      },
+      {
+        "text": "X% per Copy.",
+        "style": "color:#fdd24d;"
+      }
+    ],
+    "AK21": [
+      {
+        "text": "Grenade ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Melee",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": " ",
+        "style": "color:#4fa4a8;"
+      },
+      {
+        "text": "Nightmare Bosses.",
+        "style": "color:#cc4125;"
+      }
+    ],
+    "Y22": [
+      {
+        "text": "Warmind Cells",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": " ",
+        "style": "color:#cc4125;"
+      }
+    ],
+    "AH22": [
+      {
+        "text": "X%",
+        "style": "color:#fdd24d;"
+      },
+      {
+        "text": " ",
+        "style": "color:#fdd24d;"
+      },
+      {
+        "text": "Super Energy",
+        "style": "color:#fdd24d;"
+      },
+      {
+        "text": ".",
+        "style": "color:#fdd24d;"
+      },
+      {
+        "text": "X% per Copy.",
+        "style": "color:#fdd24d;"
+      }
+    ],
+    "AH23": [
+      {
+        "text": "Oracles",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "AH24": [
+      {
+        "text": "Oracles",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "AH25": [
+      {
+        "text": "sync plate",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "conflux",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "weaken ",
+        "style": "color:#a64d79;"
+      },
+      {
+        "text": "increasing damage taken by 30%.",
+        "style": "color:#a64d79;"
+      }
+    ],
+    "AH26": [
+      {
+        "text": "burst of healing",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "AH28": [
+      {
+        "text": "Melee Kills",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Orb of Power",
+        "style": "color:#fdd24d;"
+      },
+      {
+        "text": "Each Copy grants an additional X% Super per Orb.",
+        "style": "color:#fdd24d;"
+      }
+    ],
+    "AH29": [
+      {
+        "text": "Grenade Kills",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Orb of Power",
+        "style": "color:#fdd24d;"
+      },
+      {
+        "text": "Each Copy grants an additional X% Super per Orb.",
+        "style": "color:#fdd24d;"
+      }
+    ],
+    "AH30": [
+      {
+        "text": "Precision Kills",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Orb of Power",
+        "style": "color:#fdd24d;"
+      },
+      {
+        "text": "Each Copy grants an additional X% Super per Orb.",
+        "style": "color:#fdd24d;"
+      }
+    ],
+    "J34": [
+      {
+        "text": "Right Hook",
+        "style": "color:#ffe599;"
+      },
+      {
+        "text": "Runneth Over",
+        "style": "color:#b4c8ad;"
+      }
+    ],
+    "J35": [
+      {
+        "text": "Soul Drinker",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "healing",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Hot Swap",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": " ",
+        "style": "color:#cfe2f3;"
+      }
+    ],
+    "D36": [
+      {
+        "text": "Barrier Champions receive increased damage from Anti-Barrier Weapons.",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "Primary Ammo Weapons",
+        "style": "font-weight:normal;text-decoration:line-through;color:#cccccc;"
+      },
+      {
+        "text": "57% increased damage against ",
+        "style": "font-weight:normal;text-decoration:line-through;"
+      },
+      {
+        "text": "Shield",
+        "style": "font-weight:normal;text-decoration:line-through;color:#a4c2f4;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;text-decoration:line-through;"
+      },
+      {
+        "text": "Special Ammo Weapons",
+        "style": "font-weight:normal;text-decoration:line-through;color:#b6d7a8;"
+      },
+      {
+        "text": "8% increased damage.46% increased damage against ",
+        "style": "font-weight:normal;text-decoration:line-through;"
+      },
+      {
+        "text": "Shield",
+        "style": "font-weight:normal;text-decoration:line-through;color:#a4c2f4;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;text-decoration:line-through;"
+      },
+      {
+        "text": "Titan Barricades receive 30% increased Damage.",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Anti-Barrier Rounds ignore Hydra Shields, Hobgoblin Immunity, Phalanx Shields, and overpenetrate unlimited enemies",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "G36": [
+      {
+        "text": "Barrier Champions receive increased damage from Anti-Barrier Weapons.",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "Primary Ammo Weapons",
+        "style": "font-weight:normal;text-decoration:line-through;color:#cccccc;"
+      },
+      {
+        "text": "57% increased damage against ",
+        "style": "font-weight:normal;text-decoration:line-through;"
+      },
+      {
+        "text": "Shield",
+        "style": "font-weight:normal;text-decoration:line-through;color:#a4c2f4;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;text-decoration:line-through;"
+      },
+      {
+        "text": "Special Ammo Weapons",
+        "style": "font-weight:normal;text-decoration:line-through;color:#b6d7a8;"
+      },
+      {
+        "text": "8% increased damage.46% increased damage against ",
+        "style": "font-weight:normal;text-decoration:line-through;"
+      },
+      {
+        "text": "Shield",
+        "style": "font-weight:normal;text-decoration:line-through;color:#a4c2f4;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;text-decoration:line-through;"
+      },
+      {
+        "text": "Titan Barricades receive 30% increased Damage.",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Anti-Barrier Rounds ignore Hydra Shields, Hobgoblin Immunity, Phalanx Shields, and overpenetrate unlimited enemies",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "J36": [
+      {
+        "text": "Solar Melee Abilities",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "stagger ",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "J37": [
+      {
+        "text": "Shield-Piercing Weapons",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Barrier Champion's",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Shield",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "staggering ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Primary Ammo Weapons",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "Barrier's Shield",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Special Ammo Weapons",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Barrier Champion.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Barrier's Shield.",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Shield-Piercing Effects:",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Ignores Hydra Shields, Hobgoblin Immunity, and Phalanx Shields.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Titan Barricades are dealt 30% increased damage.",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "M37": [
+      {
+        "text": "Barrier Champions and their Shield.",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Shield-Piercing Effects:",
+        "style": "text-decoration:underline;text-decoration-skip-ink:none;-webkit-text-decoration-skip:none;color:#f9cb9c;"
+      },
+      {
+        "text": "Can damage and destroy ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Barrier Champion",
+        "style": "font-size:8pt;color:#f9cb9c;"
+      },
+      {
+        "text": " ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Shields",
+        "style": "font-size:8pt;color:#f9cb9c;"
+      },
+      {
+        "text": ", ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "stunning ",
+        "style": "font-size:8pt;color:#a4c2f4;"
+      },
+      {
+        "text": "the Champion. ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Barrier Shield",
+        "style": "font-size:8pt;color:#f9cb9c;"
+      },
+      {
+        "text": " receives increased damage, with the amount varying depending on the ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Activity Type",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": " and ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Difficulty",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": ".",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Unlimited enemy overpenetration.",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Ignores Hydra Shields, Hobgoblin Immunity, (Taken) Phalanx Shields, and Scorn Buckler Shields.",
+        "style": "font-size:8pt;color:#a4c2f4;"
+      },
+      {
+        "text": "Titan Barricades receive 30% increased damage.",
+        "style": "font-size:8pt;color:#ea9999;"
+      }
+    ],
+    "D38": [
+      {
+        "text": "Disruption",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "Combatants deal 25% less damage.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Ability Energy Recharge is 50% slower. Disables Restoration x2",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "G38": [
+      {
+        "text": "Disruption",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "Combatants deal 25% less damage.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Ability Energy Recharge is 50% slower. Disables Restoration x2",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D39": [
+      {
+        "text": "stagger ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "stagger ",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "M39": [
+      {
+        "text": "Overload Rounds",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Overload Shots",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Stunning an ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Overload Champion",
+        "style": "font-size:8pt;color:#b4a7d6;"
+      },
+      {
+        "text": " grants all Overload Scout Rifle users 35% increased damage with Scout Rifles against Champions for 10 seconds.",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Disruption Effects:",
+        "style": "text-decoration:underline;text-decoration-skip-ink:none;-webkit-text-decoration-skip:none;color:#b4a7d6;"
+      },
+      {
+        "text": "Overload Champions",
+        "style": "font-size:8pt;color:#b4a7d6;"
+      },
+      {
+        "text": " are stunned on hit.",
+        "style": "font-size:8pt;color:#a4c2f4;"
+      },
+      {
+        "text": "Combatants deal 25% decreased damage.",
+        "style": "font-size:8pt;color:#a4c2f4;"
+      },
+      {
+        "text": "Non-Super Ability Regeneration Rate is halved.",
+        "style": "font-size:8pt;color:#ea9999;"
+      },
+      {
+        "text": "Lasts ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "6.5 ",
+        "style": "font-size:8pt;color:#b4a7d6;"
+      },
+      {
+        "text": "seconds. Can be refreshed by reapplying ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Disruption",
+        "style": "font-size:8pt;color:#b4a7d6;"
+      },
+      {
+        "text": ".",
+        "style": "font-size:8pt;"
+      }
+    ],
+    "G40": [
+      {
+        "text": "stagger ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Unstoppable Shots",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "J40": [
+      {
+        "text": "Disruption",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Stunning ",
+        "style": "font-weight:normal;color:#a4c2f4;"
+      },
+      {
+        "text": "an ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Overload Champion",
+        "style": "font-weight:normal;color:#b4a7d6;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;color:#a4c2f4;"
+      },
+      {
+        "text": "grants all ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Overload Bow",
+        "style": "font-weight:normal;color:#a4c2f4;"
+      },
+      {
+        "text": " users 25% increased damage with Bows against all ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Champions ",
+        "style": "font-weight:normal;color:#a4c2f4;"
+      },
+      {
+        "text": "for 10 seconds.",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Overload Shots",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Disruption Effects:",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Overload Champions",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": " are stunned on hit.Combatants deal 25% decreased damage.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Non-Super Ability Regeneration Rate is halved.",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[[?",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "M41": [
+      {
+        "text": "Unstoppable Shots",
+        "style": "color:#c67676;"
+      },
+      {
+        "text": "Unstoppable Shots.",
+        "style": "color:#c67676;"
+      },
+      {
+        "text": "Stagger Effects:",
+        "style": "text-decoration:underline;text-decoration-skip-ink:none;-webkit-text-decoration-skip:none;color:#c67676;"
+      },
+      {
+        "text": "Unstoppable Champions",
+        "style": "font-size:8pt;color:#c67676;"
+      },
+      {
+        "text": " ",
+        "style": "font-size:8pt;color:#c96969;"
+      },
+      {
+        "text": "are stunned on hit.",
+        "style": "font-size:8pt;color:#a4c2f4;"
+      },
+      {
+        "text": "Unshielded ",
+        "style": "font-size:8pt;color:#d5a6bd;"
+      },
+      {
+        "text": "Combatants are staggered on hit.",
+        "style": "font-size:8pt;color:#a4c2f4;"
+      },
+      {
+        "text": "Tier 1 and 2 Rank-And-File Combatants can be stunlocked.",
+        "style": "font-size:8pt;color:#a4c2f4;"
+      },
+      {
+        "text": "Higher Tier Combatants have a cooldown between stagger.",
+        "style": "font-size:8pt;color:#a4c2f4;"
+      }
+    ],
+    "G42": [
+      {
+        "text": "While a Glaive is equipped:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Unstable Essence",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Stowing your Glaive halves your current Buff Duration.",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "J42": [
+      {
+        "text": "Unstoppable Shots",
+        "style": "color:#c67676;"
+      },
+      {
+        "text": "Unstoppable Shots.Stagger Effects:Unstoppable Champions",
+        "style": "color:#c67676;"
+      },
+      {
+        "text": " ",
+        "style": "color:#c96969;"
+      },
+      {
+        "text": "are stunned on hit.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Unshielded ",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Combatants are staggered on hit.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Tier 1 and 2 Rank-And-File Combatants can be stunlocked.Higher Tier Combatants have a cooldown between stagger.",
+        "style": "font-weight:normal;color:#a4c2f4;"
+      }
+    ],
+    "D43": [
+      {
+        "text": "Void Super",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Critical ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Devour ",
+        "style": "color:#8e7cc3;"
+      },
+      {
+        "text": "Super Ability",
+        "style": "color:#f1c232;"
+      }
+    ],
+    "G43": [
+      {
+        "text": "Solar ",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Void ",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "M43": [
+      {
+        "text": "Combatants",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "5% Damage Resist per Copy, up to 15%",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "D44": [
+      {
+        "text": "Suppressing ",
+        "style": "color:#8e7cc3;"
+      }
+    ],
+    "G44": [
+      {
+        "text": "Solar Class Ability:",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Restoration ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "x2 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[x1]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " ",
+        "style": "color:#df4545;"
+      },
+      {
+        "text": " 7 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[3]",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "J44": [
+      {
+        "text": "Arc ",
+        "style": "color:#76a5af;"
+      },
+      {
+        "text": "Solar ",
+        "style": "color:#f9cb9c;"
+      }
+    ],
+    "D45": [
+      {
+        "text": "Solar Melee Abilities",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "stagger ",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "G45": [
+      {
+        "text": "Solar ",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Exotic ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Solar Elemental Wells.",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "2 Powerful Combantants, or 3-4 Rank-and-File.",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Works with Bountiful Wells.",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "J45": [
+      {
+        "text": "Jolt ",
+        "style": "color:#76a5af;"
+      }
+    ],
+    "D46": [
+      {
+        "text": "Heavy Ammo Brick",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": " ",
+        "style": "color:#674ea7;"
+      },
+      {
+        "text": ".",
+        "style": "color:#674ea7;"
+      }
+    ],
+    "G46": [
+      {
+        "text": "Solar Grenades",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "disruption",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Never worked properly :(",
+        "style": "font-size:14pt;color:#dd7e6b;"
+      }
+    ],
+    "H46": [
+      {
+        "text": "Amped Up < Hype Train Conductor",
+        "style": "font-size:6pt;"
+      }
+    ],
+    "J46": [
+      {
+        "text": "Amplified ",
+        "style": "color:#67c9cf;"
+      }
+    ],
+    "M46": [
+      {
+        "text": "stunning ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Champion",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "stunned Champion ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Champions ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "marked",
+        "style": "color:#cc4125;"
+      }
+    ],
+    "D47": [
+      {
+        "text": "Void Grenades",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "disrupt ",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "G47": [
+      {
+        "text": "On ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Orb of Power",
+        "style": "font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": " Pickup:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Radiant ",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "J47": [
+      {
+        "text": "Upon using your ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Grenade Ability",
+        "style": "font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "150% Additional Grenade Base Recharge Rate",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Arc Kills",
+        "style": "color:#76a5af;"
+      }
+    ],
+    "M47": [
+      {
+        "text": "Void ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Stasis ",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "Disruption ",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "D48": [
+      {
+        "text": "suppresses ",
+        "style": "color:#8e7cc3;"
+      },
+      {
+        "text": "Requires 10% Weapon Energy to apply on Melee Hit.",
+        "style": "font-style:italic;"
+      }
+    ],
+    "G48": [
+      {
+        "text": "Radiant",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Solar ",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Precision Kills",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Ignition",
+        "style": "color:#ff9900;"
+      }
+    ],
+    "J48": [
+      {
+        "text": "Precision Hits",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "combatants ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "weakened, receiving 20% increased damage for 10 seconds.",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "Precision Hits needed to Activate:2 Hits:",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "4 Hits:",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "7 Hits:",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "OVERRIDES ALL OTHER DEBUFFS.",
+        "style": "color:#cc4125;"
+      }
+    ],
+    "M48": [
+      {
+        "text": "Arc ",
+        "style": "color:#76a5af;"
+      },
+      {
+        "text": "Stasis ",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "Stagger",
+        "style": "color:#c67676;"
+      }
+    ],
+    "D49": [
+      {
+        "text": "Suppression ",
+        "style": "color:#8e7cc3;"
+      },
+      {
+        "text": "Does not work against Guardians.",
+        "style": "font-style:italic;color:#df4545;"
+      }
+    ],
+    "G49": [
+      {
+        "text": "Upon Stunning a Champion:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "ignited",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "Health Regeneration",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "J49": [
+      {
+        "text": "Arc Grenades",
+        "style": "color:#76a5af;"
+      },
+      {
+        "text": "disruption.",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "M49": [
+      {
+        "text": "Lucent Hive Lightbearers",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Champions ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Heavy Ammo Brick",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": " ",
+        "style": "color:#674ea7;"
+      },
+      {
+        "text": ".",
+        "style": "color:#674ea7;"
+      }
+    ],
+    "D50": [
+      {
+        "text": "Suppression ",
+        "style": "color:#8e7cc3;"
+      },
+      {
+        "text": "weaken ",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "Combatants",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "15% ",
+        "style": "color:#c27ba0;"
+      }
+    ],
+    "G50": [
+      {
+        "text": "Ignitions ",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "24%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#4a86e8;"
+      },
+      {
+        "text": "[60]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "40",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+20",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Bonus damage has no falloff.",
+        "style": "font-style:italic;"
+      }
+    ],
+    "J50": [
+      {
+        "text": "While at ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Critical Health",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " or ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Amplified",
+        "style": "font-style:italic;color:#67c9cf;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Arc ",
+        "style": "color:#76a5af;"
+      },
+      {
+        "text": "Super ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Only affects damage ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "while ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "in ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Super",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ", resulting in lowered bonuses for ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Thundercrash ",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "and ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Gathering Storm.",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      }
+    ],
+    "M50": [
+      {
+        "text": "Matching Elemental Weapon Damage",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Matching Elemental Ability Damage",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Matching Elemental Ability Damage",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Matching Elemental Weapon Damage",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Does not function in PvP Gamemodes.",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D51": [
+      {
+        "text": "Void ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Elemental Well",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Volatile Rounds",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Volatile Rounds",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Void Weapon",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Volatile",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Unaffected by Elemental Time Dilation.",
+        "style": "font-style:italic;color:#a2b1c9;"
+      }
+    ],
+    "G51": [
+      {
+        "text": " Solar Ability Damage",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "weakened",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "J51": [
+      {
+        "text": "Scoring a Precision Hit",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": " Arc Effects",
+        "style": "color:#76a5af;"
+      },
+      {
+        "text": "Ionic Trace",
+        "style": "color:#d0e0e3;"
+      },
+      {
+        "text": ".",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Ionic Trace",
+        "style": "color:#d0e0e3;"
+      }
+    ],
+    "M51": [
+      {
+        "text": "Combatants ",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "M53": [
+      {
+        "text": "Weaken",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "increasing damage dealt to the Combatant by 15% for 10 seconds.",
+        "style": "color:#c27ba0;"
+      },
+      {
+        "text": "Damage Boost",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "cooldown ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "weaken ",
+        "style": "color:#c27ba0;"
+      }
+    ],
+    "M54": [
+      {
+        "text": "Become Charged With Light ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Champion",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "stunned",
+        "style": "color:#a4c2f4;"
+      }
+    ]
+  },
+  "cell_notes": {},
+  "rendered_rows": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55
+  ],
+  "notes_availability": "Public HTML does not expose all spreadsheet cell notes or formulas."
+}

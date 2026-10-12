@@ -1,0 +1,32 @@
+Fragments,Effect,Stat,,Super,Grenade,Melee,Class,Aspect,Exotic Class C1,Exotic Class C2
+Facet of Purpose,Orb = Amplified / Restoration / Frost Armor / Woven Mail / Overshield,-10 rec,Hunter,Storm's Edge,Arcbolt,Combination Blow,Marksman's Dodge,Ascension (3),Spirit of the Assassin,Spirit of the Star-Eater
+Facet of Hope,?% class regen when elemental buffed,N/A,,Golden Gun: Marksman,Swarm,Knife Trick,Gambler's Dodge,Gunpowder Gamble (3),Spirit of the Inmost Light,Spirit of the Synthoceps
+Facet of Ruin,Fissures + Eruption,+10 mob,,Silence and Squall,Duskfield,Withering Blade,Acrobat's Dodge,Winter's Shroud (3),Spirit of the Ophidian,Spirit of Verity
+Facet of Dawn,Torches except kill required for allied Radiant,-10 str,,Silkstrike,Grapple,Threaded Spike,,Threaded Specter (3),Spirit of the Dragon,Spirit of Cyrtarachne
+Facet of Protection,Resistance except enhanced while Transcendent,+10 str,,Shadowshot: Deadfall,Magnetic,Snare Bomb,,Stylish Executioner (2),Spirit of Galanor,Spirit of Gyrfalcon
+Facet of Balance,Light/Dark multikills = melee/grenade energy,,,,Hailfire Spike,,,,Spirit of the Foetracer,Spirit of the Liar
+Facet of Bravery,Instability + Propagation,,,,,,,,Spirit of Caliban,Spirit of the Wormhusk
+Facet of Defiance,Finisher = jolt / scorch / slow / sever / volatile,+10 rec,,,,,,,Spirit of Renewal,Spirit of the Coyote
+Facet of Dominance,Undermining + Shock,-10 dis,,,,,,,,
+Facet of Generosity,Orbs on Transcendent kills,,,,,,,,,
+Facet of Grace,Transcendence energy on kinetic damage and super kills,-10 res,Titan,Twilight Arsenal,Suppressor,Shield Throw,Rally Barricade,Unbreakable (3),Spirit of the Assassin,Spirit of the Star-Eater
+Facet of Justice,Expulsion except for any subclass and only while Transcendent,+10 int,,Thundercrash,Pulse,Thunderclap,Towering Barricade,Knockout (2),Spirit of the Inmost Light,Spirit of the Synthoceps
+Facet of Courage,?% Light ability damage to Dark-debuffed enemies,+10 dis,,Bladefury,Shackle,Frenzied Blade,Thruster,Drengr's Lash (3),Spirit of the Ophidian,Spirit of Verity
+Facet of Blessing,Leeching except Transcendent required for allied regen,,,Hammer of Sol,Thermite,Hammer Strike,,Consecration (3),Spirit of Severance,Spirit of Contact
+Facet of Mending,Resolve except Cure x2 while Transcendent,,,Glacial Quake,Glacier,Shiver Strike,,Diamond Lance (3),Spirit of Hoarfrost,Spirit of Scars
+Facet of Honor,Elemental objects give matching Transcendence energy,+10 str,,,Electrified Snare,,,,Spirit of the Eternal Warrior,Spirit of the Horn
+Facet of Sacrifice,Bonus Dark Transcendence energy on ability kills while Light buffed,+10 dis,,,,,,,Spirit of the Abeyant,Spirit of Alpha Lupi
+Facet of Devotion,Bonus Light Transcendence energy on kills on Dark-debuffed enemies,+10 str,,,,,,,Spirit of the Bear,Spirit of the Armamentarium
+Facet of Command,Domineering(?) except for freeze and suppress + shard on frozen kill,,,,,,,,,
+Facet of Awakening,Elemental multikills or super kills drop matching elemental pickups,+10 res,,,,,,,,
+Facet of Solitude,Isolation except increased duration(?) while Transcendent,,Warlock,Song of Flame,Healing,Incinerator Snap,Healing Rift,Hellion (3),Spirit of the Assassin,Spirit of the Star-Eater
+,,,,Nova Bomb: Cataclysm,Vortex,Pocket Singularity,Empowering Rift,Feed the Void (2),Spirit of the Inmost Light,Spirit of the Synthoceps
+Mod,Effect,,,Stormtrance,Storm,Chain Lightning,Phoenix Dive,Lightning Surge (3),Spirit of the Ophidian,Spirit of Verity
+Elemental Siphon,Rapid kinetic or super-matched kills make elemental pickups,,,Winter's Wrath,Coldsnap,Penumbral Blast,,Bleak Watcher (3),Spirit of the Stag,Spirit of Vesper
+Void Hegemony,Weakened kills give overshield if on Void or Prismatic,,,Needlestorm,Threadling,Arcane Needle,,Weaver's Call (3),Spirit of the Filaments,Spirit of Harmony
+Radiant Orbs,Orb pickups give radiant if on Solar or Prismatic,,,,Freezing Singularity,,,,Spirit of the Necrotic,Spirit of Starfire
+Galvanic Armor,DR while amplified if on Arc or Prismatic,,,,,,,,Spirit of Osmiomancy,Spirit of the Swarm
+Expanding Abyss,Increased Void damage to weakened targets,,,,,,,,Spirit of Apotheosis,Spirit of the Claw
+Shieldcrush,"Woven Mail, Frost Armor, Void Overshield: melee recharge/damage
+Amplified, Radiant: grenade recharge/damage",,,,,,,,,
+Transference,"Transcendent: grenade/melee damage, weapon kills refund Light/Dark energy after expiration",,,,,,,,,

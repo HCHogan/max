@@ -1,0 +1,69 @@
+Class,Subclass,#,Builds,,Survivability,,Damage,,Movement,,Total,Tier
+,,1.0,"Speaker's Sight healing grenade spam
+Sunbracers solar grenade spam",9.0,"Sustain: ToF healing grenade, Ember of Empyrean, Ember of Resolve, Phoenix Dive, Heat Rises
+DR: Well of Radiance, Song of Flame",10.0,"Abilities: ToF solar grenade
+Buff: Ember of Torches, Well of Radiance, Song of Flame
+Reloads: RoF Icarus Dash",8.0,"Heat Rises
+Icarus Dash
+Phoenix Dive
+Well skating",3.0,30,S
+,,17.0,"Gunpowder Gamble spam
+Synthoceps grapple melee
+Liar's Combination Blow",10.0,"Sustain: Stylish Executioner invisibility, Threaded Specter deaggro, Combination Blow healing, Facet of Purpose
+DR: Spirit of Renewal/Cyrtarachne, Transcendence, Facet of Protection, Winter's Shroud",9.0,"Abilities: Celestial Nighthawk Golden Gun - Marksman, Stylish Executioner Synthoceps grapple melee
+Buff: Facet of Dawn, Facet of Courage, Acrobat's Dodge
+Debuff: Snare Bomb",10.0,"Blink
+Grapple
+Ascension",1.0,30,S
+,,16.0,"Buddy spam (Hellion, Arc Soul, Bleak Watcher)
+Synthoceps Lightning Surge",6.0,"Sustain: Feed the Void, Phoenix Dive, healing grenade, Facet of Purpose
+DR: Song of Flame, Transcendence, Facet of Protection",8.0,"Abilities: Feast of Light x6 Nova Bomb - Cataclysm, Arcane Needle unravel, buddy damage
+Debuff: Facet of Dominance Freezing Singularity, vortex grenade
+Buff: Facet of Dawn, Facet of Courage, Song of Flame",10.0,Blink,1.0,25,A
+,,18.0,Synthoceps Consecration,9.0,"Sustain: Knockout healing, Facet of Purpose
+DR: Transcendence, Facet of Protection, Consecration",5.0,"Abilities: Cuirass Thundercrash, Feast of Light x6 Glacial Quake
+Buff: Facet of Dawn, Facet of Courage, Spirit of the Eternal Warrior
+Debuff: Twilight Arsenal",8.0,None,0.0,22,A
+,,15.0,Synthoceps/Wormgod grapple melee,7.0,"Sustain: Banner of War
+DR: Into the Fray pulses, Thread of Warding",5.0,"Abilties: Banner of War grapple melees
+Buff: Banner of War melee/sword increase
+Reloads: Thread of Ascent grapple",6.0,Grapple,1.0,19,A
+,,8.0,"Gyrfalcon's volatile weapons
+Omnioculus/Graviton chain invis
+Orpheus Rig tether spam",6.0,"Sustain: Vanishing Step, Stylish Executioner, Trapper's Ambush, Echo of Starvation, Echo of Obscurity
+DR: Omnioculus",8.0,"Abilities: Feast of Light x6 Shadowshot: Moebius Quiver
+Debuff: Shadowshot: Deadfall Tether, Echo of Undermining, Snare Bomb",4.0,None,0.0,18,B
+,,7.0,"Contraverse vortex grenade spam
+Briarbinds ability cycling",5.0,"Sustain: Feed the Void, Echo of Starvation, Echo of Obscurity",6.0,"Abilities: Nova Bomb - Cataclysm
+Debuff: Echo of Undermining, Child of the Old Gods",4.0,Blink,1.0,16,B
+,,11.0,Renewal duskfield DR,3.0,"DR: Renewal Frost Armor, Winter's Shroud",4.0,"Abilities: Feast of Light x6 Silence and Squall
+Reloads: Whisper of Impetus",7.0,"Shatterdive
+Shatter skating",2.0,16,B
+,,3.0,"Pyrogale Consecration
+Synthoceps throwing hammer",5.0,"Sustain: Healing grenade, Sol Invictus, Ember of Empyrean, throwing hammer Cure on hit
+DR: Consecration",6.0,"Abilties: Pyrogale Gauntlets Burning Maul
+Buff: Ember of Torches",4.0,None,0.0,15,B
+,,5.0,Cowl Combination Blow,4.0,"Sustain: Combination Blow healing
+DR: Spark of Resistance, Flow State",4.0,Abilities: Feast of Light x6 Gathering Storm,3.0,"Blink
+Ascension",1.0,12,C
+,,9.0,Peregrine shield bash,4.0,"Sustain: Bastion, Controlled Demolition, Offensive Bulwark, Echo of Starvation, Echo of Obscurity
+DR: Void Overshield, Ward of Dawn",5.0,"Abilities: Twilight Arsenal
+Debuff: Echo of Undermining, Twilight Arsenal
+Buff: Ward of Dawn",3.0,None,0.0,12,C
+,,2.0,Cowl knife trick,2.0,"Sustain: Healing grenade, Ember of Empyrean",3.0,"Abilities: Celestial Nighthawk Golden Gun - Marksman, Feast of Light x6 Blade Barrage
+Buff: Ember of Torches",6.0,None,0.0,11,C
+,,13.0,Weaver's Trance suspend,1.0,"DR: Thread of Warding, Weavewalk",2.0,"Abilities: Thread of Evolution Needlestorm
+Reloads: Thread of Ascent grapple",7.0,"Grapple
+Wanderer Tangles",1.0,11,C
+,,14.0,Whirling Maelstrom spam,3.0,"Sustain: Threaded Specter deaggro
+DR: Thread of Warding, Cyrtarachne's Facade",5.0,Reloads: Thread of Ascent grapple,1.0,Grapple,1.0,10,C
+,,4.0,"Vesper of Radius rift spam
+Fallen Sunstar ability spam",3.0,"Sustain: Arc Soul rift regen
+DR: Spark of Resistance",3.0,Abilities: Arc Soul rifts,2.0,None,0.0,8,D
+,,10.0,Osmiomancy turret spam,3.0,"Sustain: Whisper of Refraction rift regen
+DR: Ballidorse rift Frost Armor",3.0,Reloads: Whisper of Impetus,0.0,None,0.0,6,D
+,,6.0,HoIL pulse grenade spam,2.0,"Sustain: Knockout healing
+DR: Spark of Resistance",0.0,Abilities: Cuirass of the Falling Star Thundercrash,3.0,None,0.0,5,D
+,,12.0,HoIL crystal spam,0.0,"Sustain: Tectonic Harvest healing
+DR: Frost Armor",4.0,"Abilities: Synthoceps Glacial Quake
+Reloads: Whisper of Impetus",1.0,None,0.0,5,D

@@ -1,14 +1,58 @@
-命运2（Bungie API）：查发起人的仓库/角色/战绩/商人、按名字查装备和 perk、转移装备——碰到命运2账号相关的事先取这份
+命运2（Bungie API + 攻略）：查仓库/角色/战绩/商人、查武器与 perk、推荐输出配装、查增伤叠加、转移装备——命运2装备/攻略/账号问题先取这份
 
 # 身份和权限
 
-所有调用都以**发起人自己**的 Bungie 账号进行，宿主自动带上他的授权；你没办法、也不要尝试用别人的账号。
-- 先 `destiny_account`：拿到 bungie_name、membership_type、membership_id 和各角色 character_id/职业/光等。
+账号调用以**发起人自己**的 Bungie 账号进行，宿主自动带上他的授权；你没办法、也不要尝试用别人的账号。
+公开攻略工具 `destiny_guide` 不需要绑定账号；查发起人的库存/角色时先 `destiny_account`：
+拿到 bungie_name、membership_type、membership_id 和各角色 character_id/职业/光等。
 - `linked=false` 时，按返回的 login 告诉对方：私聊我发 `!destiny login`，在浏览器里登录 Bungie
   （Steam/PSN/Xbox/Epic 都行）点批准即可。绝不要在聊天里要 API key、密码、token 或授权码。
 - 查别人（群友、主播）只能看公开数据：先搜 Bungie 名拿 membershipId，再读公开组件。对方的仓库、
   背包、商人属于私有数据，没有对方授权看不到——如实说，不要编。
 - 64 位 id（membershipId、characterId、itemInstanceId）一律当字符串原样传递，别转成数字。
+
+# 攻略表格：destiny_guide
+
+宿主直接提供四份公开表格的 CSV 快照，不需要 sandbox、浏览器或临时下载。
+推荐武器/perk/输出配装、解释技能和增伤时，用它查依据，再与发起人的实际库存比较。
+
+- `destiny_guide({action: "index", source?, sheet?, offset?, limit?})`：目录、来源简介、分页 ID、
+  原表列坐标、schema/表头、预览、资料状态与获取时间。默认 20 个分页；有 `next_offset` 就继续。
+  `source` 是 court / compendium / endgame-analysis / boss-damage；`sheet` 必须用目录返回的 ID。
+- `destiny_guide({action: "read", sheet, offset?, limit?, columns?, language?})`：完整 CSV 记录；默认
+  `language="zh-chs"` 返回中文 `cells` 和英文 `original_cells`，`language="en"` 读英文原版。`cells` 的键是
+  A/B/C/AA 等原表列，省略空值，数值也为字符串（按单位解析；裸数值可用 Number，百分号/逗号/未知值先处理）。`metadata.merged_cells`
+  附合并范围、左上角坐标、所选语言的 value 和英文 original_value，说明的左上角在本页之外也能读到。
+  批注、链接、图片说明和 rich_text 保持原始英文，metadata.original_details_language="en"。
+- `destiny_guide({action: "find", query, source?, sheet?, columns?, offset?, limit?, case_sensitive?, include_legacy?})`：
+  query 是 POSIX 扩展正则，同时匹配中英文非空单元格，默认不区分大小写；例如
+  `{action: "find", sheet: "compendium/1662574278", columns: ["A"], query: "^(诱导推销|嫉妒军械库)$"}`。
+  支持 `|`、`.*`、`^`、`$`、字符类；不支持 PCRE lookaround 或 `(?i)`，区分大小写用 case_sensitive。
+  返回匹配记录、matched_columns、matched_languages、原表行号和来源；同一行中英文命中只计一次，
+  language 只控制返回语言，英文 query 也可返回中文。默认排除旧版/ignore/隐藏页，
+  要查它们可指定 sheet 或 include_legacy=true。`index` 会列出全部分页。
+  定位后 read 该行及邻近记录，获取表头、合并说明与完整条件。
+
+所有 action 的 offset 从 0 起：index 计分页，read 计 CSV 记录，find 计匹配记录；返回 row 是原表
+从 1 起的行号。按 next_offset 翻页，不要数文件中的换行；不要把一页结果说成完整搜索结果。
+limit 最多 200，max_chars 默认 60000；`too_large` 时提高 max_chars（run_code 中最多 3500000）
+或减少 columns，工具不会截掉半个单元格。可以在 run_code 里调用工具、按数值筛选和排序。
+
+装备、perk、套装等名称按官方 Manifest 的同 hash 中英文对照；社区说明是机器译文，
+snapshot.translation 记录翻译时间、Manifest 版本和方法。status=terms-only 时仅名称/术语已中文化，
+社区说明仍有英文；不要声称这些说明已有完整中文版。核对触发条件、歧义或陌生译名时看
+original_cells 或 language="en"；目录保留 title_en、languages 和相同的行列坐标。
+名称无法定位时 `destiny_lookup({kind: "item", search: 中文名})`，用 name_en 再查，同名版本用 hash 辨别。
+正则不理解“操作简单”等模糊需求：
+先 index 定位相关分页，再 read 候选的 Notes、触发方式、预热/切枪/队友要求，判断是否适合。
+
+资料导航：Court 看增伤分类与叠加；Compendium 看 perk/异域/技能的条件和数值；
+Endgame Analysis 看武器评价、推荐 perk、Set Bonuses，先读 Status 确认更新状态；
+Boss Damage 看 Sustained、Swap、Fireteam 和 Bosses 的测试条件。
+不同武器类别的 Tier 不能直接横比，两列推荐 perk 不能按行序配对；TtE 是打空弹药时间，
+不是短窗口伤害。保留模拟/实测、预先准备和队友条件，不把表中的前提当成玩家已经满足。
+snapshot.generated_at / fetched_at 是资料获取时间，适用补丁和未知值以原文为准；
+图片/图表不在 CSV 文字中。推荐附来源链接和关键条件；公开资料不是用户库存的证据。
 
 # 先用现成工作流
 

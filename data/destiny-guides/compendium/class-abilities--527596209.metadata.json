@@ -1,0 +1,748 @@
+{
+  "merged_ranges": [
+    "G1:I1",
+    "N1:O1",
+    "B2:D2",
+    "G2:I2",
+    "D3:L3",
+    "D5:M5",
+    "D7:M7",
+    "D9:M9",
+    "B19:D19",
+    "G19:I19",
+    "D20:L20",
+    "D22:M22",
+    "D24:M24",
+    "D26:M26",
+    "B38:D38",
+    "G38:I38",
+    "D39:L39",
+    "D41:M41",
+    "D43:M43",
+    "D45:M45"
+  ],
+  "hyperlinks": {
+    "N1": [
+      {
+        "text": "Support the Data Compendium",
+        "url": "https://www.google.com/url?q=https://www.patreon.com/DataCompendium&sa=D&source=editors&ust=1791770086821164&usg=AOvVaw08B7Bm-m3QUkSw0sCO7VvO"
+      }
+    ]
+  },
+  "images": {
+    "F2": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXi3HFr1AJ8RI4MLkhrhpT0neF0JklwlsBKk58NOA3dbncioKqNmfsYVwYt6DSBuuxnyHG5Pj3CTQ6lMTQELNsrwGSD4z2BEKueLf9TZV3oUXELVpdZHk2pApBkw_EyR-NbMHsMfzq2eavfV1c3T3qaAulKTXKXmDix1tI=s96-w96-h44",
+        "alt": ""
+      }
+    ],
+    "J2": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXi3HFr1AJ8RI4MLkhrhpT0neF0JklwlsBKk58NOA3dbncioKqNmfsYVwYt6DSBuuxnyHG5Pj3CTQ6lMTQELNsrwGSD4z2BEKueLf9TZV3oUXELVpdZHk2pApBkw_EyR-NbMHsMfzq2eavfV1c3T3qaAulKTXKXmDix1tI=s96-w96-h44",
+        "alt": ""
+      }
+    ],
+    "C3": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU2OEGl8BWn41O3N61hN80atYcbprfZA0hJig2l1vQE6-4McUs__BPMxEgKsEaIbN6ZbalgNdU3_PWssiKRRUBI9LD0Zgb_su2SKw3hqwonkvGVBY0xmL7dxMBSgZD7_WeTrLdLYEWdtBua-UhCAZwuQLO4qG83DiAEr3o=s89-w64-h89",
+        "alt": ""
+      }
+    ],
+    "M3": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU2OEGl8BWn41O3N61hN80atYcbprfZA0hJig2l1vQE6-4McUs__BPMxEgKsEaIbN6ZbalgNdU3_PWssiKRRUBI9LD0Zgb_su2SKw3hqwonkvGVBY0xmL7dxMBSgZD7_WeTrLdLYEWdtBua-UhCAZwuQLO4qG83DiAEr3o=s89-w64-h89",
+        "alt": ""
+      }
+    ],
+    "C5": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWR9MJDblk23-a23cMDeNEvVRAT6KjSv7lpYCqIZycD6SC-ENxXHNviA95Ha6h4B8inoe7o5u_OeSyosmCW60ifi_tQiyFeRPiLIDGFIjDUJvF8g63BZ_LPyxDq8XVaZXX_c4SxjFdyPSasoZyMYu1jQWNexPHO8uKyFRU3=s64-w64-h59",
+        "alt": ""
+      }
+    ],
+    "C7": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVJieXNrM1V3Ozn_MRxzUBWwZCntKBGNcvT2E9lnlpXU5eBjH_qVTtIVhB-h_r1kK-PhA_7fYFU2KpNE16vI2Q1Xv4F9UrF-DPyKnaP0GP5Fuz3ofdmpAGcuuQTXQZnfKT_GEjYckF9EMKMLjPAHkS_kDXdpsJFEVTdcjL4=s74-w64-h74",
+        "alt": ""
+      }
+    ],
+    "C9": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXbGVCyZ_j8s2rUoG2KnglkLeoqNP_Llhc6yMZfyDDXtBCRkALlEzd7WKsQFmdHdAaz37WlNimbqTcGRfpCbHQWFK0-ZN4AG9ndioPh2keRLU23AV1rCYcBl-uQ2OQJEfHeaLgkzAKfb2xGTxCYz9hqp86xQe2zPPKSp6qk=s74-w64-h74",
+        "alt": ""
+      }
+    ],
+    "F19": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUBY1xMU9-VXOqYrECK5i9inECT545HK8Hdt-gOJCqrkjIJ-hZzAmDsbCITHBqgaSRtED_hf78FJs74Gngc4NwDCyFs7pYcOJAhuOy5-JlYm2NY5m8ScdQYMg3SZ8UJvNOY-vkaCn_fPuf8CthKHmyVhbx1svZax2Sk9x_i=s96-w96-h44",
+        "alt": ""
+      }
+    ],
+    "J19": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUBY1xMU9-VXOqYrECK5i9inECT545HK8Hdt-gOJCqrkjIJ-hZzAmDsbCITHBqgaSRtED_hf78FJs74Gngc4NwDCyFs7pYcOJAhuOy5-JlYm2NY5m8ScdQYMg3SZ8UJvNOY-vkaCn_fPuf8CthKHmyVhbx1svZax2Sk9x_i=s96-w96-h44",
+        "alt": ""
+      }
+    ],
+    "C20": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXeLrcKsPrDMnWNh_jZw5AbK-Qj_ybM1mKkfx_61fuEXMJ5mFGxz1hL7AZJk81w1ZiCnslMoU0XrET8zic9D0wYNMnGdvI0tHm1555Nd08cy74EVy-lXnk-KZmuhpkLxsJxqqP6FcMK_QW3fuaduxsQZKypB_EXpgqUJFZh=s89-w64-h89",
+        "alt": ""
+      }
+    ],
+    "M20": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXeLrcKsPrDMnWNh_jZw5AbK-Qj_ybM1mKkfx_61fuEXMJ5mFGxz1hL7AZJk81w1ZiCnslMoU0XrET8zic9D0wYNMnGdvI0tHm1555Nd08cy74EVy-lXnk-KZmuhpkLxsJxqqP6FcMK_QW3fuaduxsQZKypB_EXpgqUJFZh=s89-w64-h89",
+        "alt": ""
+      }
+    ],
+    "C22": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWkEzszKEoANgWgw-5gixuCac1Y2UC1KsrDBOFkVexLHIfwapH5TJiK8qxbYGVFnJ7h3cJR7yixQL10qzeCQU8MTyeOvnKHl4jVI4SwIVX1VWcg1lvaQpedPQFYnNXa5gLJjTLCwfq_U1eILNYGnA4uy7cqeRPHdW3lF-A=s164-w64-h164",
+        "alt": ""
+      }
+    ],
+    "C24": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX4xgay3Or99auzoWL98jm8fYyi8SnaaVXHk0VQSQm50ZYYfi_OUN99SRBgvKY3oY8hJjPyfmgoZKkxobpkRy7Um55lEFgYeTfHSZAVzUC13m34piDhmQlMA4neZxkVhqfAetGtCRUezXP9uWOruFs_fPf9BIw0NC1AnKGW=s74-w64-h74-s",
+        "alt": ""
+      }
+    ],
+    "C26": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUCAZw3xw3Hcd6Hp5NUVTWkLXOf1mZseJE64ABgjGjm0wRia7arbCFK_W-gNLqL4iqxO_PfD7eQ32ttL4Bm1VmbGPjVtPAk68orYmGWrIjrJltrF1Z7v6fZDvIYk6_ApWKP7ot9A0oxNGyZzZKB9dsa8KwYILuLK5Sm4qGE=s149-w64-h149",
+        "alt": ""
+      }
+    ],
+    "F38": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVszl1qB7fKzG061TN_NW2nymcL8qKJF4Ja1TD18xkp_fPHCAwAR7bo512UjMWKoPt4rMpLFuIr_NKdLVQPppdAbR8uTTFfGJlvmCh3l1KRmmwnACnly3cFb2OrfRtZA6Oa1R6edMuR3rWhACCTlJD7PN6ZCDEL0Lq5E0s=s96-w96-h44",
+        "alt": ""
+      }
+    ],
+    "J38": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVszl1qB7fKzG061TN_NW2nymcL8qKJF4Ja1TD18xkp_fPHCAwAR7bo512UjMWKoPt4rMpLFuIr_NKdLVQPppdAbR8uTTFfGJlvmCh3l1KRmmwnACnly3cFb2OrfRtZA6Oa1R6edMuR3rWhACCTlJD7PN6ZCDEL0Lq5E0s=s96-w96-h44",
+        "alt": ""
+      }
+    ],
+    "C39": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXs8W_5zC6N4KIjF69tYnuBaN2CWlYPurDEghmP5USdAZO-YeFV2Jpy7ZkGZFlKdVJuO3DaIEqP9gitmNJ6uEMwaKv49s5A5jQOap0DtcnYYoa575T9LFLgKcnGrEluvW7-KKjh6CdJFwrqkTL5Wg1WzHxJ7-omBusncfI=s89-w64-h89",
+        "alt": ""
+      }
+    ],
+    "M39": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXs8W_5zC6N4KIjF69tYnuBaN2CWlYPurDEghmP5USdAZO-YeFV2Jpy7ZkGZFlKdVJuO3DaIEqP9gitmNJ6uEMwaKv49s5A5jQOap0DtcnYYoa575T9LFLgKcnGrEluvW7-KKjh6CdJFwrqkTL5Wg1WzHxJ7-omBusncfI=s89-w64-h89",
+        "alt": ""
+      }
+    ],
+    "C41": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXfHsRxi4plF_C674ZA6olXQFqky5WJ28Nv_JzUOgiQGCRS7IUz_hK_kxfqWUMpu0xcYWU5FwP7wHtoCCB_xes3eD9A_Q2mASiXw8dfbpJyl6Yu3bjIYGT_SKOEjiKdGkclkt0sFjx1QQW0DtH9Oml6Kyz0QJMUBxrY7XJV=s119-w64-h119",
+        "alt": ""
+      }
+    ],
+    "C43": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV-hKkp-Dj24anKrvJS5cE5pTIryhAyOfdU8gF5u2rbx7uY1B6kIySNBOzUH6eurRfLjCecKSVyultBIba_b-G9f8kix7iGcjsuHcNeWXeCnunz77nI9JcBGA1aEXp-jbhPIiNzkYeBPwm9Yyw8WEVS4KpXKmhwXwBwrRiL=s119-w64-h119",
+        "alt": ""
+      }
+    ],
+    "C45": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX6GuTx2Xg0t2dV2Zmn3IuMsXhnSB1l74yf_sRMNcNBCoqcjmZ--qfAUn91vbyy7-Obcin2iawWre_ieJVQDGGOlJiatUAD2uMnL5m0nzLWwCWcPteuULigpxzAQWUwzWmCcQ3uMXtwZ-AoqH5i-4ejDczIKeOY-KH5cmY=s89-w64-h89",
+        "alt": ""
+      }
+    ]
+  },
+  "rich_text": {
+    "D3": [
+      {
+        "text": "Hunters ",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "Titans ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Warlocks",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " 100",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[70]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " 0.9x",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[0.95x]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Sprint Speed Increase is equivalent to that of an ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Exotic Armor-based Sprint Boost",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ", only being able to stack with a Lightweight Weapon.",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D5": [
+      {
+        "text": "allies ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Radiant",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "+5",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": "40 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[20]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Solar Damage",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "N5": [
+      {
+        "text": "56",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[148.4]",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D7": [
+      {
+        "text": "1%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "[0.35%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " Melee Ability Energy ",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": " Melee Stat",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "100%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " [35%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Melee Ability Energy",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "100 Melee Stat",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Dodging ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " Ability Energy",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Combatant Projectile Tracking",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Aim Assist against Guardians",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Dodge Animation",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "D9": [
+      {
+        "text": "Combatant Projectile Tracking",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Aim Assist against Guardians",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Dodge Animation",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "D20": [
+      {
+        "text": "Titans ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Hunters ",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "Warlocks",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "20%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[5%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " Increased Basic Melee Damage",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Increased damage is multiplicative.",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D22": [
+      {
+        "text": "20%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[20%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Barricade Placement",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Barricade ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": " ",
+        "style": "color:#ca8e6b;"
+      },
+      {
+        "text": "500 Construct HP. ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Barricades have 90% Damage Resist against Combatants, and ?% against Boss Combatants.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "barricade ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "?",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "non-lethal ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "While within ? meters behind the ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Rally Barricade",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "80% Damage Resist against Splash Damage from Combatants.Combatants up to ? meters in front of the barricade are taunted.",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "D24": [
+      {
+        "text": "Performs an evasive first-person dash that removes ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Combatant Projectile Tracking?",
+        "style": "font-weight:bold;color:#a4c2f4;"
+      },
+      {
+        "text": ", as well as ",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Aim Assist against Guardians",
+        "style": "font-weight:bold;color:#ea9999;"
+      },
+      {
+        "text": ".Quickly dashes 8 metres towards the currently held movement direction. Not inputting a movement direction will result in a 4 metre backwards dash.",
+        "style": "font-weight:bold;"
+      },
+      {
+        "text": "Only usable while on the ground.",
+        "style": "font-weight:bold;font-style:italic;"
+      }
+    ],
+    "D26": [
+      {
+        "text": "20%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[20%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Barricade Placement",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Barricade ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": " ",
+        "style": "color:#ca8e6b;"
+      },
+      {
+        "text": "500 Construct HP. ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Barricades have 90% Damage Resist against Non-Boss Combatants, and ?% against Boss Combatants.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "barricade ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "?",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "non-lethal ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "While within ? meters behind the ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Towering Barricade",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "80% Damage Resist against Splash Damage from Combatants",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Combatants up to ? meters in front of the barricade are taunted.",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "D39": [
+      {
+        "text": "Warlocks",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Titans ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Hunters",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "1.1x Grenade Regeneration Speed.",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "5%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "[2.5%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " Increased Grenade Ability Damage",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "D41": [
+      {
+        "text": "Empowering Rift",
+        "style": "color:#9fc5e8;"
+      },
+      {
+        "text": "Rift ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "20%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[15%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "260%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[104%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Grenade",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Melee",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "230%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[92%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Additional Base Class ",
+        "style": "color:#bba5f3;"
+      },
+      {
+        "text": "Rift ",
+        "style": "color:#9fc5e8;"
+      },
+      {
+        "text": "Ammo Generation Multiplier is additive to Ammo Finder Multipliers.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Rift Placement",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "D43": [
+      {
+        "text": "Healing Rift",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "restores ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "40",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "[35]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " HP per second",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Full Health ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Healing Rift",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "3 Overshield HP per second",
+        "style": "color:#7cadff;"
+      },
+      {
+        "text": "15 Overshield HP",
+        "style": "color:#7cadff;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Having Void Overshield prevents this from happening.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Overshield can stack with other overshields, such as Turnabout's OS and Class Stat OS. Overshield layers are determined by \"First In, First Out\".",
+        "style": "font-weight:normal;font-style:italic;color:#7cadff;"
+      },
+      {
+        "text": "Healing Rifts",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " cause the users to count as having ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Overshields ",
+        "style": "font-weight:normal;font-style:italic;color:#7cadff;"
+      },
+      {
+        "text": "for the purpose of ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "perk interactions",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Rift Placement",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "D45": [
+      {
+        "text": "Cure x2 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "allies",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "While ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Heat Rises",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " is active:",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Restoration x2 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "+1.5",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": "x40",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+20",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      }
+    ]
+  },
+  "cell_notes": {},
+  "rendered_rows": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    54
+  ],
+  "notes_availability": "Public HTML does not expose all spreadsheet cell notes or formulas."
+}

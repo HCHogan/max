@@ -1,0 +1,19 @@
+{
+  "merged_ranges": [
+    "A1:D1",
+    "H1:J1",
+    "K1:L2"
+  ],
+  "hyperlinks": {},
+  "cell_notes": {
+    "E4": "Izanagi's Burden, Jötunn, Le Monarque also count",
+    "F2": "always enhanced, details from https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/htmlview?pru=AAABoGOkx90*Ke9JPp6IMbjqukque-qi7g#",
+    "G2": "exemplary weapons that showcase origin trait effects",
+    "E58": "Conditional Finality also counts",
+    "E9": "Ace of Spades, Khvostov 7G-0X, Ergo Sum, Still Hunt, and Microcosm also count"
+  },
+  "formulas": {},
+  "rich_text": {},
+  "hidden_rows": [],
+  "drawings_present": true
+}

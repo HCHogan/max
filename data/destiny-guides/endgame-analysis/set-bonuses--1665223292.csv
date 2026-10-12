@@ -1,0 +1,268 @@
+INFO,,,,,,,,,ANALYSIS,,
+🖼️,#,Set,Season,Bonus,Pcs,Tags,Trigger,Effect,Description,#,Tier
+,,"Atheon's Memory
+Vault of Glass",29.0,Collective Power,4,damage,5 damage instances with subclass buff active,Orb of Power at feet (effective 5s ICD),"exclusive effect, great for extra super, Still Hunt, Argent mod facilitation, essentially Attrition Orbs without any setup",1.0,S
+,,"Exodus Down
+Nessus",29.0,Repurposed Charge,4,survivability,"gaining, losing, or spending Armor Charge","13% / 21% / 30% (up to 35%) DR, start/extensions are 3s per stack, 5? HP heal and starts crit health regen",probably most consistent build-agnostic survivability set bonus in the game,2.0,S
+,,"Promised
+Salvation's Edge",29.0,Stable Resonance,2,"survivability
+damage",elite+ kill,"25% DR and 7% damage for 12s, refreshable","excellent global DR for a 2pc., a little reliant on elite+ presence but very strong if applicable",3.0,S
+,,"TM Custom
+Spire of the Watcher",29.0,High Noon,4,damage,precision damage within ?s of weapon ready,7% damage for 3s (doubled for Tex weapons),"best-in-class damage booster set bonus, irreplaceable effect",4.0,S
+,,"CODA
+Prophecy",29.0,So Very Thin,4,"ability
+survivability","Light weapon kills
+Dark or kinetic weapon kills
+alternating weapon kills within ?s","22?% grenade energy
+22?% melee energy
+40% DR for 5s, refreshable on kill","easily the most consistent source of high DR if able to play around swapping polarities, excellent chunk gains too",5.0,S
+,9,"Smoke Jumper
+Solo/Fireteam Ops",27.0,"Ride Together, Die Together",2,survivability,orb pickup,40% DR decaying for 3s,"excellent pairing with Attrition Orbs / triple arm orb gen mod setups, a little build-dependent but solid regardless",6.0,A
+,,"Legacy's Oath
+Deep Stone Crypt",29.0,Augmented Servos,2,splash,powered melee kill,9m disorienting pulse,"probably best melee-focused set bonus in the game, effective DR from blind, constantly reprocable",7.0,A
+,,"Crystocrene
+Europa",29.0,Resupply,2,"ammo
+ability",kill (12s ICD),"additive 20% ammo progress for both types (effectively ~7x at 0, ~3-3.5x at 100) and Orb Of Power",probably currently bugged and works in combat; actually pretty decent and about doubles ammo gen if 5 kills/12s,8.0,A
+,,"Nezarec's Nightmare
+Root of Nightmares",29.0,Dream-Devourer,4,survivability,"elite+ finisher
+Devour","Devour
+20% DR","good for controllable environments for getting Devour on non-Devour subclasses, otherwise DR isn't that high",9.0,A
+,,"Pantheos Resplendent
+Pantheon",29.0,Well Prepared,2,ability,"ammo pickup
+Armor Charge (6 stacks)","Armor Charge
+10 Health per stack","enables infinite special finishers with Curative Orbs, works with Stacks on Stacks",10.0,A
+,,"Oryx's Memory
+King's Fall",29.0,Ascendant Escape,4,survivability,critical health after elite+ kill,"invisibility for 6-8s, no ICD",instant tracking break and invis when needed is very helpful,11.0,A
+,,"Deep Explorer
+Duality",29.0,Bittersweet,4,survivability,weapon stow,35 / 65 / 87.5 / 105 / 130 / 170 / 195 / full HP per stack,"in practice, a very large amount of healing uptime as long as you play around swapping weapons, have to forgo DR",12.0,A
+,3,"AION Adapter
+Kepler - Mythic",27.0,Force Absorption,2,survivability,"micro-missile, rocket, or GL kill",20% splash DR and 60% self explosive DR for 15s,"splash is a fair amount of incoming damage, but overshadowed by other more universal DR options",13.0,A
+,,"Oryx's Memory
+King's Fall",29.0,Iron Sharpens Iron,2,ammo,elite+ kill,"additive 12% special ammo progress, 7.5% heavy ammo progress","still pretty solid post-nerf in elite-heavy encounters, just not overpowered, worse than Europa 2pc. with lower elite presence",14.0,A
+,,"Great Hunt
+Last Wish",29.0,Taken Armaments,4,ammo,grenade kills,additive 10% heavy ammo progress,makes Getaway warlock an ammo printer with mod support,15.0,A
+,,"Techeun's Regalia
+Shattered Throne",29.0,Truth to Power,4,"survivability
+ability","dealing damage (1), kills (20-35), or finishers (60-90), up to 999 stacks","up to 15% DR, +50% grenade/melee regen, +35% class regen","consistent DR source that doesn't require much, but doesn't have a high ceiling and is tied to 4pc.",16.0,A
+,,"Sage Protector
+Equilibrium",28.0,Combat Meditation,2,ability,sword damage,"5% grenade and class
+10% if Blade Focus active","enables ability spam strategies using high hit count swords like casters and Ergo, also decent for neutral depending on build",17.0,A
+,,"Crota's Memory
+Crota's End",29.0,Power of the Son,4,survivability,"being in combat for 12s, ends when out of combat for 7s",?% flinch resist and 15% DR (increases to 25% at 24s like Chaos Reshaped),"high uptime DR with little thinking required, not best-in-class and 2pc. isn't universally useful",18.0,A
+,12,"Iron Panoply
+Iron Banner",27.0,Iron Conviction,4,"survivability
+ammo",critical health,"35 ammo gen, ?% flinch resist, 15?% DR within 15?m for 7s, refreshable","pretty decently high uptime DR and ammo gen as long as kill cycle is kept up, also 2pc. is not bad",19.0,B
+,,"Iron Battalion
+Iron Banner",29.0,Supercyclical,4,ability,kills in super,"5% super refund per kill, up to 6","insane Well uptime with Phoenix Protocol, potentially roam supers as well in non-boss encounters",20.0,B
+,,"Great Hunt
+Last Wish",29.0,Taken Barrier,2,survivability,grenade kill,10% DR for 7s (refreshable),"like Ferro but better uptime for specifically Getaway warlock, but there are better DR uptime set bonuses",21.0,B
+,,"Reverie Dawn
+Dreaming City",29.0,A Wish for Protection,2,survivability,taking ~55 HP within ~4s?,"Amplified effect, ? reload and ?% flinch resistance for 7s (5s ICD after expiry)","enemy accuracy drop effect is good but can be obtained through other means, easy to activate, ICD sucks, maybe for solo DPS?",22.0,B
+,,"Swordmaster
+Pinnacle Ops",28.0,Stesso Tempo,4,survivability,blocking damage with glaive or sword,"50% DR for 3s after dropping guard, refreshable by blocking again even without damage",very specific playstyle but very strong DR source if played around,23.0,B
+,,"TM Custom
+Spire of the Watcher",29.0,Old Martian Diplomacy,2,survivability,weapon stow after elite+ kill,"40? HP and 12m disorient pulse, <2s ICD","worse Duality 4pc. effect, pretty large disorient pulse radius, uptime isn't amazing but infinite stow",24.0,B
+,,"Yearning Echo
+Grasp of Avarice",29.0,Overflowing Coffers,4,"ability
+splash","orb/elemental pickup with stacks
+Tangle destruction with stacks
+critical health
+","?% more ability energy
+4.5x Tangle damage (5+ stacks)
+4 orbs shot forward (5+ stacks)
+","currently bugged and gives no super gains; potential for orb chaining, also usable with Whirling Maelstrom",25.0,B
+,,"Ferropotent
+Solo/Fireteam Ops",28.0,Rapid Repair,2,survivability,"shield healing (except orb pickup), once per full heal",10% DR and ?% flinch resist for 7s,"non-stackable low DR, sort of universal but full healing requirement limits uptime",26.0,B
+,20,"Techsec
+Solo/Fireteam Ops",27.0,Concussive Rounds,4,splash,elite+ kill or kinetic shield break,disorienting wave within 10m for 4.5s,"good with glaive melee builds and certain kinetic primaries, maybe High Albedo",27.0,B
+,21,"Twofold Crown
+Trials of Osiris",27.0,Crook and Flail,2,survivability,ammo brick pickup,70 HP,"Kinetic Synthesis is permanent now, so this becomes a lot more viable",28.0,B
+,,"Swordmaster
+Pinnacle Ops",28.0,Balestra,2,survivability,"sword, glaive, or melee damage",exhaust for 5s,potentially useful for melee builds/DPS,29.0,B
+,,"Promised
+Salvation's Edge",29.0,Resonance Redirection,4,"survivability
+damage",~600 weapon damage (+0) with Stable Resonance,8m exhausting explosion (2?s ICD),"exhaust blast has fairly small radius, uptime is about once every other kill",30.0,B
+,14,"Last Discipline
+Crucible",27.0,Power Loader,4,ammo,orb pickup,6% special progress,"strongly dependent on team environment, if built into can be used with strong non-Kinetic Synthesis options like Still Hunt",31.0,B
+,,"Thunderhead
+Neomuna",29.0,License to Thrill,2,survivability,grenade usage or Nanotech Tracer Missiles activation (10 stacks),12-30% melee (5m) DR for 15s,"perfectly suits grapple melee, Nanotech Tracer portion not really relevant unless Nanotech sword releases",32.0,B
+,17,"Disaster Corps
+Crucible",27.0,Pleas Heard,2,survivability,"auto rifle, scout rifle, or sidearm kill-reload within 3s","20 HP/s until interrupted by damage, firing, or casting ability, can be reactivated within time window","currently bugged and heals 5 HP/s; in practice decent sustain, like a pseudo-Heal Clip effect but worse",33.0,B
+,5,"Bushido
+Pinnacle Ops",27.0,Iaido,2,survivability,"weapon kill within 5s of reload or ready, 3s ICD, must reload/swap after ICD over",35 HP,"pretty small HP benefit, but easy to activate without any planning, reload/swap requirement a little annoying",34.0,B
+,11,"Iron Panoply
+Iron Banner",27.0,Vigilant Watch,2,"survivability
+stats","shield health below ? HP up to ? HP
+weapon kill at critical health, 5s ICD","up to ? stability and ? handling
+30 HP","slightly better than Bushido due to timing of healing, but HP amount is still very small",35.0,B
+,8,"Collective Psyche
+Desert Perpetual",27.0,Doppler Effect,4,ability,passive,"solar buffs and strand debuffs last 50% longer, 70% with Solace/Continuity","poor 2pc., can be good for extending sever and increasing Restoration duration on Prismatic or through Physic",36.0,C
+,,"Nezarec's Nightmare
+Root of Nightmares",29.0,Bad Dreams,2,ability,"3 subclass-debuffed kills, no ICD or rank requirement",Orb of Power,"free passive orb gen for most builds, but not amazing or particularly noticeable",37.0,C
+,4,"AION Adapter
+Kepler - Mythic",27.0,Reactive Shock,4,survivability,being hit by melee after Force Absorption,disorienting burst within ?m for 4.5s,"being hit by melee is already a very poor circumstance in endgame content, disorient effect is available for less",38.0,C
+,6,"Bushido
+Pinnacle Ops",27.0,Unfaltering Focus,4,survivability,"bow, shotgun, or sword kill","10% non-stackable DR for 7s, 2s extensions on trigger-matching damage up to 10s","despite being refreshable on-damage DR, 10% non-stackable is very low",39.0,C
+,2,"AION Renewal
+Kepler",27.0,Reactive Booster,4,survivability,"sprinting while critical, suspended, slowed, or frozen after Force Converter",Speed Booster,"only source of instant Speed Booster in the game, actually a decent escape tool but doesn't grant Amplified",40.0,C
+,19,"Techsec
+Solo/Fireteam Ops",27.0,Wrecker,2,damage,passive,"200% kinetic damage to shields/overshields, 15% kinetic damage to constructs","essentially just exists to make 4pc. function, otherwise not very useful outside edge cases like Calus final and boss Subjugators",41.0,C
+,,"Exodus Down
+Nessus",29.0,Emergency Electromagnet,2,survivability,critical health,"collects nearby orbs and ammo within 10?m, multiple orbs count as simultaneous for 4pc.",not particularly useful unless paired with 4pc. or mod setup,42.0,C
+,,"Crota's Memory
+Crota's End",29.0,Cursed Fist,2,splash,melee kill,"same radius as origin trait Cursed Thrall explosion, less damage (257 at +0)","extra explosions are nice, but damage is quite low and DSC 2pc. is definitely favored in endgame",43.0,C
+,,"Seventh Seraph
+Cosmodrome",29.0,Rasputin's Reprisal,4,"splash
+survivability",elite+/construct kills or Tangle destruction with Warmind Charges,"216/405 damage 10m solar explosion that heals allies for 25?/50 HP (construct/elite+), <1s ICD","probably best splash-focused set bonus, especially high uptime on crystal spam builds",44.0,C
+,,"Sage Protector
+Equilibrium",28.0,Blade Focus,4,damage,"guarding for 1.35s, then hitting within 1s","10% sword damage, 2x lunge for 7s","damage loss to activate effect, not really worth pairing with 2pc. effect either, basically just used for movement tech",45.0,C
+,,"Dark Age
+Warlord's Ruin",29.0,Healing Initiative,4,survivability,class ability with Initiative stacks,creates stackable 8s healing drone that deploys 10-50 HP pulses every 2s (5 total),"very cool concept, unfortunately healing doesn't last long and requires Initiative stacking, can't use Sage Protector",46.0,C
+,,"Iron Battalion
+Iron Banner",29.0,Primary Honing,2,"stats
+damage",passive,"? handling, ? reload, and up to 12% additional non-boss damage at 200 Weapons for primaries","probably the best non-boss damage booster out there, completely passive, also free stat boost for primary QoL, great 2pc. efficiency",47.0,C
+,,"Yearning Echo
+Grasp of Avarice",29.0,Untold Greed,2,"survivability
+stats",ammo/orb/elemental pickup or Tangle destruction (100 stacks),"up to ~15% DR at 25+ stacks and ? reload, 10 stacks lost on critical health","low uptime given requirements to get individual stacks, much simpler and more universal DR available at 2pc. level",48.0,C
+,,"Apostate's Blade
+Pit of Heresy",29.0,Regenerative Threshold,2,survivability,"finisher, then critical health",20 HP and starts health regen,"would be a lot better if it wasn't just 20 HP, finisher requirement not really worth given weak effect",49.0,C
+,,"Techeun's Regalia
+Shattered Throne",29.0,Queensfoil Rush,2,survivability,finisher,"200? HP overshield during, 7m slowing burst after","already generally quite safe during a finisher, slowing burst is okay, specific playstyle",50.0,C
+,1,"AION Renewal
+Kepler",27.0,Force Converter,2,survivability,"sprinting after micro-missile, rocket, or GL kill",Speed Booster after sprinting for 2.5s,"in theory a good escape tool, but activation period makes it much less reactive in practice, compare to constant DR",51.0,C
+,10,"Smoke Jumper
+Solo/Fireteam Ops",27.0,Too Old for This,4,"survivability
+ammo",elite+ finisher,16% additional special progress and 35 HP,"for finisher requirement, ammo increase is very disappointing compared to modern ammo-boosting set bonuses, HP isn't much",52.0,C
+,,"Apostate's Blade
+Pit of Heresy",29.0,Melee Conduction,4,damage,"melee hits with Radiant, Restoration, or Cure","28 damage 7m 30-40 scorch explosion on hit, 1s ICD","cool for buildcrafting, unfortunately splash isn't insane enough to outdo having constant DR",53.0,C
+,,"Thunderhead
+Neomuna",29.0,Lethal Weave,4,"ability
+ammo",unraveled kill,"10% grenade energy, +10% special ammo progress if grenade full","suits Prismatic hunter playstyle pretty well, have to forgo other 2pc. DR options, but potentially worth a look",54.0,C
+,,"Dreambane
+Moon",29.0,Nightmarish Resilience,4,survivability,8 weapon damage instances (0.45s ICD) within 3s of each or kill with Unstable Essence,"20 HP and begins health regen, 2s ICD","similar to PoH 2pc., except healing effect cannot be stowed and is mostly passive off of sprees",55.0,C
+,,"Flain
+Sundered Doctrine",29.0,Knit Together,4,survivability,Threadling hit within ?s of reaching critical health,~50? HP per hit,"sustain with Weaver's Call, 2pc., Euphony, and Horde Shuttle, but forgoing DR for travel-based critical healing",56.0,C
+,16,"Lustrous
+Solstice",27.0,Cauterize,4,survivability,3 solar kills with 3?s between,35 HP (?s ICD),"same HP as Bushido, just tied to kill counter CD rather than actual timer, also 4pc. instead",57.0,C
+,,"Luminopotent
+Solo/Fireteam Ops",29.0,Shock and Clear,4,ability,jolt or jolted kills,makes Ionic Trace (no ICD?),"good for Ionic Trace spam builds, seems to have essentially no cooldown, no DR or sustain from 2pc. though",58.0,C
+,,"Veritas
+Throne World",29.0,Lucent Transmutation,2,ability,finisher or 2 spaced powered melee kills,"elemental pickup based on Light subclass (5s ICD, Firesprite and Void Breach initiate global CD)","free Firesprite, Void Breach, or Ionic Trace on finisher, also gives higher ability uptime on any melee build",59.0,C
+,,"Taken King
+Ghosts of the Deep",29.0,Lucent Swarm,4,splash,"orb pickup
+2 ability kills","extends Ceremony to 30s
+spawns 60m tracking Arc moth for 8s","competes with DSC 2pc. except takes 4pc., forces useless 2pc., and also works with grenades",60.0,C
+,,"Ferropotent
+Solo/Fireteam Ops",28.0,Built From Scratch,4,ammo,ammo below ?%,"primary kills give +3% special progress, special kills give +2% heavy progress","very small ammo difference, also cannot generate surplus ammo if high reserves",61.0,C
+,,"Cyberserpent Null
+Gambit",29.0,Bountiful Munitions,4,ammo,kills with Adrenal Rush active,"?% special ammo progress, increased to ?% against elite+ and Taken","maybe the most universal special ammo generation set bonus, but not extremely significant and 2pc. sucks",62.0,C
+,,"Resonant Fury
+Vow of the Disciple",29.0,Siphoning Touch,4,survivability,"weapon hits or glaive melee hits (5 stacks, mag-based), then switching weapons",30 / 60 / 90 / 105 / 120 HP (based on stacks consumed),"mag-based means bow, rocket, or BGL-based damage can trigger very quickly on swap, however Duality 4pc. is better",63.0,C
+,,"Eutechnology
+Arena/Pinnacle Ops",29.0,Gift of the Ley Lines,2,ability,3 void kills within 5?s of each,Void Breach (?s ICD),"not the most universally valuable elemental pickup type, spree requirement is a little hefty",64.0,C
+,,"Triumphal Anthem
+Crucible",29.0,Scoot to Loot,2,refill,sliding,picks up ammo within 15m and gives 25 reload and 25 handling for ?s,"Gravity Well-type effect, not really sure where this would be useful outside of getting OoB ammo off hunter",65.0,C
+,,"Legacy's Oath
+Deep Stone Crypt",29.0,God-like Judgment,4,damage,critical health or super cast,"570 damage (+0) heat-seeking missile array, no ICD",entire missile array does the same damage as a single adaptive sniper shot,66.0,C
+,,"Veritas
+Throne World",29.0,Lucent Tithes,4,survivability,elite+ finisher,50? HP and 3 Void moths that give 22.5HP Void Overshield to allies each,"not the best reward for an elite+ finisher compared to other set bonuses, eHP gain is pretty decent",67.0,C
+,,"Flain
+Sundered Doctrine",29.0,Sinew Stitching,2,splash,any damage taken (25?% chance) or reaching critical HP,"Threadling spawn (5s ICD, separate for both triggers)","not the worst Threadling spawn source, has artifact synergy, but much better neutral set bonuses exist",68.0,C
+,24,"Uncaged Deviants
+Desert Perpetual - Epic",27.0,Superluminal Motion,4,survivability,super damage then movement,"30 HP/s for 10s, refreshable","not the worst for DPS, specifically for Well warlock, but there are definitely better options, especially for 4pc.",69.0,C
+,,"Reverie Dawn
+Dreaming City",29.0,A Wish Fulfilled,4,survivability,deaggro effect ending (any kill ends early),Cure x1,"held back immensely by 5s reproc ICD, also Cure x1 is not much healing given activation rate",70.0,C
+,,"Spacewalk
+Vesper's Host",29.0,Augmented Explosives,4,splash,grenade usage,?m disorienting pulse before detonation,"relatively weak subclass effect tied to a very long cooldown, also 2pc. sucks",71.0,D
+,,"Seventh Seraph
+Cosmodrome",29.0,Rasputin's Wrath,2,stats,"AoE, solar ability, Seventh Seraph, IKELOS, Outbreak, Sleeper kills (10 stacks)",3 Weapons and 3 Grenade per stack for 10s,"arguably the two best stats to have as a passive benefit, but still not that noticeable",72.0,D
+,,"Circuit
+Sparrow Racing League",29.0,Revving Up,2,survivability,"fast movement (10 stacks)
+sprinting for 2.5s at max stacks","+5% critical regen speed per stack (~1.63x speed, starts 0.5s faster)
+Speed Booster","takes way too long to stack through normal gameplay pattern, loses stacks very quickly, regen effect is decent but uptime not great",73.0,D
+,,"Wildwood
+EDZ",29.0,Watchtower,2,survivability,ADS precision kills,25% DR until ADS stopped,"not really practical in most PvE scenarios, non-stackable DR is available at this level in a broader application",74.0,D
+,,"CODA
+Prophecy",29.0,Between Poles,2,stats,"Light weapon kills (5 stacks)
+Dark or kinetic weapon kills (5 stacks)
+Polarity change removes stacks","8 Grenade per stack for 10s
+8 Melee per stack for 10s","most grenade/melee builds already invest into high stat, not really worth spending set bonus to do so",75.0,D
+,,"Kentarch 3
+Garden of Salvation",29.0,Network Upload,4,ability,weapon kills,?% melee energy to allies within ?m,basically just gives you Pugilist as a 4pc. set bonus,76.0,D
+,,"Pantheos Resplendent
+Pantheon",29.0,Down the Line,4,damage,"damaging miniboss+ enemies (10 stacks, 1s ICD, any damage)","15% damage to minor/elites, 1-2 stacks (minor/elite) removed on kill (1s window?)","reverse Redirection, 15% not that much and definitely an odd choice for a 4pc.",77.0,D
+,,"First Ascent
+Pale Heart",29.0,Stack 'Em Up,2,ability,kills of different elements (5 stacks),"1.2% Transcendence gains per stack for 24s, cannot refresh at 5 stacks","results in 15-20% Transcendence progress if requirements are fulfilled, gains do not progress further at 5 stacks",78.0,D
+,,"Thriving Survivor
+Lawless Frontier",28.0,Room Clearing,4,"stats
+ammo",3 heat or primary weapon kills with 4s between each,"40 Grenade, 40 Weapon, 40 ammo gen for heat/primary weapons for 10s","pretty solid stat bonuses, kill spree requirements are not the worst, held back by low impact 2pc.",79.0,D
+,,"Eutechnology
+Arena/Pinnacle Ops",29.0,Techeun's Foresight,4,splash,kill after Void Breach pickup,~3m / 87 damage (+0) void explosion (increased to ~5m / 173 damage if within 7s of pickup),"splash damage and radius are both underwhelming, also long effective cooldown between each explosion",80.0,D
+,,"Atheon's Memory
+Vault of Glass",29.0,Radiolaria Breach,2,"stats
+splash","orb pickup, then critical health, once per full heal","50 Health for 7.5s, drops 4 radiolaria pools around player in a clover pattern, ~5m radius","survivability effect is very weak, pools barely stagger enemies, not very effective overall",81.0,D
+,,"Resonant Fury
+Vow of the Disciple",29.0,Resonant Plating,2,survivability,taking miniboss+ melee damage,starts health regen,"regen can be immediately interrupted, combatant class + melee requirement is very strict",82.0,D
+,,"Triumphal Anthem
+Crucible",29.0,Shoot to Scoot,4,survivability,weapon damage,slides are 33% longer and give 50% DR while sliding,"gives Transversives slide, high DR while sliding, not really practical",83.0,D
+,,"Wildwood
+EDZ",29.0,Field Expertise,4,"stats
+damage",ADS precision kills (5 stacks),"up to ? reload, ? aim assist, 10% non-boss damage for 15s (ends early on body kills)","10% is almost unnoticeable for non-boss, also requires only crit kills",84.0,D
+,,"Spacewalk
+Vesper's Host",29.0,Augmented Armaments,2,damage,disoriented combatant,15% primary damage,"fairly situational, not many good pairings to activate disorient, 15% isn't really worth given setup",85.0,D
+,,"Circuit
+Sparrow Racing League",29.0,Dielectric Drift,4,splash,sliding with Speed Booster,jolts enemies in front,"jolt is a pretty easy effect to apply without this specific requirement, also has pretty mediocre 2pc. attached",86.0,D
+,,"Crystocrene
+Europa",29.0,From the Storm,4,survivability,being out of combat for 12s,Frost Armor buildup every 4?s until reentering combat,passive time requirement is extremely long and unlikely to activate in endgame content,87.0,D
+,,"Deep Explorer
+Duality",29.0,Built Bitter,2,stats,damage taken (? HP per stack),? reload per stack until stowed (up to 50? reload and 0.85x? reload duration),"essentially Bitterspite in set bonus form, not bad but just QoL stats",88.0,E
+,,"Kentarch 3
+Garden of Salvation",29.0,Network Admin,2,stats,"being within 15m of ally
+being within 15m of Network Admin","? handling and ? reload
+? Health","generally unnoticeable / QoL stats, even if pretty easy to activate",89.0,E
+,,"Cyberserpent Null
+Gambit",29.0,Adrenal Rush,2,stats,sprinting for 0.5s,"30 reload, 0.95x reload duration, and 40 handling for ?s, ?s extension on kill","free stats, very easy to activate, but no strongly tangible PvE impact",90.0,E
+,13,"Last Discipline
+Crucible",27.0,Terminal Velocity,2,stats,primary kill,20 reload and 0.95x reload duration for primaries for 6s,"free reload QoL for primary weapons, nothing beyond that",91.0,E
+,15,"Lustrous
+Solstice",27.0,Photogalvanic,2,stats,receiving healing without full HP,"20? handling, 10 reload, 0.85x reload duration, ?% flinch resist for solar weapons for 4s","QoL stats, pretty easy activation but solar-specific",92.0,E
+,,"Wild Anthem
+Crucible",28.0,Fanfare,2,stats,"<50% of magazine, non-empty magazine",15 reload and 0.95x reload duration,"basically free reload as long as you're not compulsive, bonus isn't really that big though",93.0,E
+,23,"Uncaged Deviants
+Desert Perpetual - Epic",27.0,Special Relativity,2,refill,ammo brick pickup,refills stowed specials,Shoot to Loot already does this,94.0,E
+,,"First Ascent
+Pale Heart",29.0,Burn 'Em Down,4,ability,using grenade during Transcendence,~6% grenade energy per Stack 'Em Up stack,"effect is pretty weak, and requirement is awful for one-time use",95.0,E
+,,"Dreambane
+Moon",29.0,Nightmarish Power,2,stats,elite+ kill,"30 Grenade and 30 Melee for 15s, refreshable",stats are of the less noticeable variety,96.0,E
+,,"Dark Age
+Warlord's Ruin",29.0,Taking Initiative,2,stats,"melee or sword hit (5 stacks, 8s each, decay one by one)",? handling and ? reload for 8s,like Adrenal Rush but more niche activation requirement,97.0,E
+,,"Luminopotent
+Solo/Fireteam Ops",29.0,Ionic Overclock,2,stats,Amplified,"? handling, ? reload, and ? vent speed for fusions, LFRs, and heat weapons","Eddy Current-esque effect, QoL stats but no major PvE impact",98.0,E
+,7,"Collective Psyche
+Desert Perpetual",27.0,Accretion,2,stats,"ammo brick pickup (20 stacks: special 1, heavy 3)","0.0125?x ready/stow duration per stack, up to 0.75x","very high swap animation multiplier, but purely QoL and no strong PvE benefit",99.0,E
+,,"Shrewd Survivor
+Lawless Frontier",28.0,Hotshot,4,PvP,kill with Reflex Action active,"15? stability, 20 reload, ? aim assist for Reflex Action weapons, 30 Weapons for 10s","only one helpful cooldown stat, limited to small weapon subset, and tied to a 4pc. at that",100.0,E
+,,"Per Audacia
+Crucible",29.0,Primary Chain,2,PvP,primary kill (? stacks),"? mobility, ? range, ? handling for primaries until death",handling is marginally helpful but benefit is very limited in PvE,101.0,E
+,,"Thriving Survivor
+Lawless Frontier",28.0,Opening Act,2,stats,grenade kill,? stability and ? vent/reload speed to heat/primary weapons for 15s,reload is nice but restricted to specific weapon types and activation requirement is much harder than most reload set bonuses,102.0,E
+,18,"Disaster Corps
+Crucible",27.0,Magnificent Duty,4,stats,critical health or healing critical ally,"20 range, 20 stability, 30 reload, 0.9x reload duration for auto rifles, scout rifles, and sidearms for 11s","trigger is definitely not that easy to come by, and reload is helpful but restricted",103.0,E
+,,"Per Audacia
+Crucible",29.0,Sublime Transit,4,PvP,passive,"? mobility, 6.25% sprint speed, 33% slide distance","gives Transversive Steps effect passively, should stack with one other movement boost (lightweight/exotic)?",104.0,E
+,,"Taken King
+Ghosts of the Deep",29.0,The Ceremony,2,stats,finisher or ally revive,"30 Super for 30s, refreshable","Super is one of less important stats to have during roam, pretty much unnoticeable",105.0,E
+,,"Wild Anthem
+Crucible",28.0,SUROS Harmony,4,PvP,reloading,"? handling and ?% flinch resist for 6s, SUROS Synergy weapons get 15 range","only handling on a 4pc. set bonus, basically unnoticeable",106.0,E
+,,"Shrewd Survivor
+Lawless Frontier",28.0,Reflex Action,2,PvP,"readying heat weapon, SMG, or hand cannon","50 handling, 0.6x ready, -2.5% accuracy cone for 1.5s, extends on damage","generally unnoticeable / QoL stats, even if pretty easy to activate",107.0,E
+,,"Cruel Electrum
+Trials of Osiris",29.0,Primary Survivor,2,PvP,ally death or solo,"? handling, ? reload, ? aim assist, ?% reduced flinch",technically helpful stats but requirements aren't really skill-sourced,108.0,F
+,,"New Demotic
+Trials of Osiris",28.0,Martingale,4,PvP,ally death or revive,? handling and ?x ADS duration for ?s,technically helpful stats but requirements aren't really skill-sourced,109.0,F
+,,"New Demotic
+Trials of Osiris",28.0,Paroli,2,PvP,sliding,?% flinch resist for ?s,does literally nothing in PvE,110.0,F
+,,"Cruel Electrum
+Trials of Osiris",29.0,Primary Phantom,4,PvP,primary kill,"removed from radar for ?s, ends upon readying non-primary",does literally nothing in PvE,111.0,F
+,22,"Twofold Crown
+Trials of Osiris",27.0,Gift of Sight,4,PvP,primary kill,enhanced radar for 5s,does literally nothing in PvE,112.0,F

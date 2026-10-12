@@ -1,0 +1,508 @@
+Go back to the top!,,,Arc Subclasses,,,,,,,,,,Support the Data Compendium,
+,,,,,,,,,,,,,,
+,Hunter,,,,,Titan,,,,,Warlock,,,
+,,,,,,,,,,,,,,
+,Glossary,,,,,,,,,,,,,
+,Amplified,,"Intrinsic Arc Subclass Buff
+Obtained by reaching 100% Counter Progress through Arc Kills within 6 seconds of each, or through Aspects.
+Rank-And-File = 25% | Elite = 50% | Miniboss+ = 100% | Guardians = 50%
+
+Amplified:
++50 Mobility, increases Slide Distance to 8.5 meters, +40 Handling, and 0.95x Handling Duration Multiplier for 15 seconds. 
+Combatants are less accurate at targeting the wearer and grants 15% Damage Resist against Combatants while active.
+While Amplified, sprinting for 2.5 seconds grants Speed Booster.
+
+Speed Booster:
+Maximizes Movement Speed, increased Slide Distance to 11 meters, 25% Increased Jump Height, and 15% Damage Resist against Combatants.
+Speed Booster lingers for 2 seconds until no longer sprinting, even after Amplified runs out.
+Performing a Speed Booster Slide permanently increases base Slide Distance from 6.5 meters to 8.5 meters until death.",,,,,,,,,,,
+,Bolt Charge,,"Upon scoring a Magazine-Based amount of Weapon Damage Instances within 5 seconds of each while Bolt Charge is active:
+The next damage instance from any source will grant a stack of Bolt Charge.
+Swapping weapons resets the counter. Can only gain up to 1 stack per simultaneous damage instance.
+
+Damage instances needed to gain a stack:
+(15% of Magazine, rounded down) + 1
+Swords and GLs: 2
+3-Ammo Snipers: 1
+
+Gaining a Bolt Charge stack grants 2.5% Melee Ability Energy per Bolt Charge stack obtained, generally granting 25% Melee Ability Energy over the 10 stacks needed to discharge.
+Acquiring over x10 stacks through abilities will still grant the corresponding Ability Gains (For example, being at x9 and acquiring x4 will still grant 10% Melee Energy)
+
+After 0.5 seconds of scoring an Ability Hit or dealing Unpowered Melee Damage while at x10 Bolt Charge stacks:
+Discharges an Arc Bolt over the damaged enemy, dealing up to 405 Bolt Splash + 270 Ground Splash = 675 Total [36 Bolt Splash + 30 Ground Splash] Arc Damage over ? meters.
+Does not count as Ability Damage, only as Generic Arc Damage.
+
+Triggers Discharge:
+Volatile Explosions | Freeze Shatter (Not auto-shatter on Bosses) | Tangle Explosions | Threadlings | Unraveling Threads | Suspend Snap on Bosses | Forerunner's The Rock
+
+Do NOT trigger Discharge:
+ Jolt's Chain Lightning | Scorch and Ignitions (from Non-Abilities) | Crystal Shatter (from Non-Abilities) | Gifted Conviction's Explosives",,,,,,,,,,,
+,Ionic Trace,,"Arc Elemental Pickup.
+
+Energizing Seekers that home in towards the user at a speed of 6m/s.
+Grants 11.25% Grenade, and Melee Ability Energy, and 13.5% Class Ability Energy on pickup. Allies do not receive Ionic Traces created by the user.",,,,,,,,,,,
+,Blind,,"Blinded Combatants are disoriented, rendering them unable to attack or use abilities for 10 seconds.
+
+Blinded Guardians have their HUD removed, screen whitened, and audio distorted for 3 seconds.
+
+Unstoppable Champions become Stunned upon being Blinded. ",,,,,,,,,,,
+,Jolted,,"Jolted Enemies will release chain lightning for 10 [5] seconds, dealing 119 [51] Arc Damage to all enemies within 12 meters upon taking 115 [45] damage. 
+Duration can be refreshed by reinflicting Jolt.
+ The damage from the hit that applies Jolt counts towards the damage threshold. Jolt has a 0.8 second cooldown between chain lightning activations.
+
+Guardians that release Chain Lightning do not receive chain damage unless it deals damage to other Guardians.
+
+Overload Champions become Stunned upon receiving Jolt damage.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Fragments,Icon,Information,,,,,,,,,,Stat Changes,
+,Amplitude,,"While Amplified:
+Scoring 2 kills within 4 seconds of each creates an Orb of Power that grants 2.5% Super Energy.
+Triggering Amplified through an Arc Kill will count the kill towards the 2-kill counter.
+Incurs a 10 second cooldown upon creating an Orb of Power. Kills during the cooldown do not count.",,,,,,,,,,-,
+,Beacons,,"Special and Heavy Ammo Arc Weapon Kills while Amplified create a blinding blast, inflicting Blind to enemies within 7.5 metres.",,,,,,,,,,-,
+,Brilliance,,"Precision Kills against Blinded Enemies trigger a Blinding blast, inflicting Blind to enemies within 7.5 metres.",,,,,,,,,,+10 Super,
+,Discharge,,"Arc Weapon Kills progress a counter that spawns an Ionic Trace upon reaching 100%.
+Rank-And-File = 34% | Elite = 67% | Miniboss+ = 100% | Guardians = 67%
+
+Picking up Ionic Traces grants x1 Bolt Charge.",,,,,,,,,,-10 Melee,
+,Feedback,,"Upon being physically struck by a Melee Attack:
+100% [50% | 15% while Knockout is active] Increased Melee Damage for the next Melee Hit within 5 seconds.
+Buff is not refreshable.",,,,,,,,,,+10 Health,
+,Focus,,"After 1.25 seconds of sprinting, while maintaining both sprint and a movement speed of at least 5m/s:
+150% [75%] Additional Base Class Ability Regeneration Rate.
+Deactivates once Class Ability has at least 1 charge readied.",,,,,,,,,,"-10 Weapons (Hunter)
+-10 Health (Titan)
+-10 Class (Warlock)",
+,Frequency,,"Upon scoring a Melee Hit:
++15 Stability, +50 Reload Speed, and 0.8x Reload Duration Multiplier for 5.25 seconds.
+
+While Amplified:
+(almost) All sources of Bolt Charge now grant an additional stack.
+In-game tooltip mentions increasing the fragment's effects, which is not true, at least for the Reload Speed bonuses.",,,,,,,,,,-,
+,Haste,,"After 1.25 seconds of sprinting, while maintaining both sprint and a movement speed of at least 5m/s:
+ Grants +50 Health Stat.",,,,,,,,,,-,
+,Instinct,,"While at Critical Health:
+Being damaged releases a burst of Arc Energy, dealing up to 46 [20] damage and inflicting Jolt to enemies within ? metres.
+Incurs a 15? second cooldown between activations.",,,,,,,,,,-,
+,Ions,,"Killing Jolted Enemies, or scoring a Bolt Charge Kill creates an Ionic Trace.
+Incurs a 10 second cooldown between Ionic Traces spawns.",,,,,,,,,,-,
+,Magnitude,,"Lightning Grenade fire an additional lightning bolt, increasing to a maximum of 5 bolts.
+ Pulse Grenade release an additional 2 pulses, increasing to a maximum of 8 pulses.
+ Storm Grenade release an additional barrage. Enhanced Storm's Roaming Storm lasts 1.5 seconds longer.",,,,,,,,,,-,
+,Momentum,,"Upon sliding over Ammo Bricks while not on Full Ammo of the respective type:
+Refills the equipped weapon and grants x3 Bolt Charge.",,,,,,,,,,-,
+,Recharge,,"Upon reaching Critical Health:
+400% [200%] Additional Base Grenade and Melee Ability Regeneration Rate.
+Buff lasts until Shields are fully restored.",,,,,,,,,,-,
+,Resistance,,"While within 15 metres of at least 3 enemies:
+25% [10%] Damage Resist.
+Lingers for 2 seconds. ",,,,,,,,,,+10 Melee,
+,Shock,,"Arc Grenades inflict Jolt on hit.
+
+Arc Soul and Ionic Sentries have a 4 second cooldown before being able to inflict Jolt again.",,,,,,,,,,-10 Grenade,
+,Volts,,Finishers grant Amplified and x1 Bolt Charge.,,,,,,,,,,+10 Class,
+,,,,,,,,,,,,,,
+,Grenade Abilities,,,,,,,,,,,,,
+,Numbers in [Smaller Parenthesis] are with Spark of Magnitude equipped!,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Arcbolt Grenade,,"Heavy Trajectory | Scan
+
+Scans and targets the closest enemy in Line of Sight within 12 meters upon impact, releasing Arc Lightning towards them after 1 second.
+After dealing damage, it chains to the closest enemy within 10 meters that hasn't been hit by Arc Lightning, repeating until it has damaged a maximum of 4 enemies.
+
+Arc Lightning deals 521 [85] damage.",,,,,,,,,,"Base Cooldown: 151.5 seconds
+
+Chunk Scalar: 0.75x",
+,,,,,,,,,,,,,,
+,Flashbang Grenade,,"Medium Trajectory
+
+Explodes after its speed is sufficiently reduced. Has a brief delay before it can explode.
+
+Explosion deals up to 684 [120] damage, down to 0% damage over a 7.5 meter radius, and inflicts blind to enemies within 10 meters for up to 5 [3] seconds.
+The user is immune to self-blind.",,,,,,,,,,"Base Cooldown: 131.7 seconds
+
+Chunk Scalar: 0.875x",
+,Touch of Thunder,,"Explodes an additional time on impact, dealing up to 684 [?] damage over 7.5 meters and inflicting blind to enemies within 5 meters.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Flux Grenade,,"Almost Straight Trajectory | Slight Projectile Tracking | Sticky
+
+Attaches to enemies or surfaces, exploding after 1.7 seconds.
+
+Explosion deals up to 901 [150] damage, down to 0% damage over a 6 meter radius on detonation.
+Sticking an enemy increases explosion damage by 66.7% to 1,500 [250] damage.",,,,,,,,,,"Base Cooldown: 105.4 seconds
+
+Chunk Scalar: 0.875x",
+,,,,,,,,,,,,,,
+,Lightning Grenade,,"Medium Trajectory | Wall-Mounted
+
+Attaches to surfaces and enemies, projecting a laser for 1 second before triggering.
+
+Emits a Lightning Bolt every 1.67 seconds, up to a maximum of 4+1 times.
+Lightning Bolts deal 373 [120] damage, up to a total of 1492 [1865] [480 [600]] damage.",,,,,,,,,,"Base Cooldown: 219.5 seconds
+
+Chunk Scalar: 0.5x",
+,Touch of Thunder,,"Grants an additional Grenade Ability Charge.
+Lightning Bolts after the first inflict Jolt on hit.
+Grants x5 Bolt Charge upon dealing damage, up to once per lightning bolt.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Pulse Grenade,,"Medium Trajectory
+
+Detonates on impact, dealing up to 156 [50] damage in a 6 meter radius.
+
+Periodically pulses every 0.7 seconds, dealing up to 249 [80] damage in a 6 meter radius an additional 5+2 times.
+Can deal up to a total of 1,245 [1,743] [530 [690]] damage.",,,,,,,,,,"Base Cooldown: 175.6 seconds
+
+Chunk Scalar: 0.625x",
+,Touch of Thunder,,"Pulse Grenade hits spawn an Ionic Trace and deal increased damage. Incurs a 1 second cooldown between Ionic Trace spawns.
+
+Pulse Damage Increases: 1st = 2% | 2nd = 9% | 3rd = 18.5% | 4th = 24% | 5th onwards = 25%",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Skip Grenade,,"Medium Trajectory | Seekers
+
+Splits on impact, releasing 4 seekers that chase after enemies.
+
+Seekers begin chasing enemies that come within 6 metres of them, exploding after dealing damage, or self-destructing after ~2 seconds if their velocity is low.
+
+Each projectile deals 24 [4] impact damage twice, then explodes for up to 90 [15] damage.
+Deals up to 552 [92] damage with all 4 seekers.",,,,,,,,,,"Base Cooldown: 151.5 seconds
+
+Chunk Scalar: 0.75x",
+,,,,,,,,,,,,,,
+,Storm Grenade,,"Medium Trajectory
+
+Calls down a focused strike on impact which hits after 0.85 seconds, dealing up to 440 [70] damage in a 7 meter radius.
+
+After 0.6 seconds of the initial strike:
+Calls down a barrage of bolts in a X pattern over 7 meters, dealing up to 311 [50] damage.
+Spark of Magnitude: Calls down a second barrage of bolts in an + pattern over 7 meters, dealing up to 311 [50] damage.
+Combatants can only be damaged once per barrage, up to a maximum of 751 [1062] damage.
+Guardians can only be hurt once by the barrage of bolts, regardless of pattern, for a maximum of 120 damage.",,,,,,,,,,"Base Cooldown: 175.6 seconds
+
+Chunk Scalar: 0.625x",
+,Touch of Thunder,,"Creates a roaming storm for 4+1.5 seconds after detonating, chasing after enemies at an initial speed of 2 [1.5] m/s, increasing to 4 [3] m/s after 1.3 seconds.
+ Roaming Storm fires lightning bolts underneath it that deal 158 [30] damage up to 11+4 times.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+Hunter,,,,,,Hunters,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Melee Abilities,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Combination Blow,,"Upon scoring a Melee Kill:
+Grants 100% Class Ability, restores 100 Health, and grants a stack of Combination Blow for 20 seconds, up to 3 stacks.
+Basic Melee Attacks count as Arc-Infused Melee Damage while Combination Blow is active.
+70 Class Stat is required for a full Gambler's Dodge refund.
+
+Combination Blow x1 | 133% [23%] Increased Melee Damage. Melee Kills restore 80 HP.
+Combination Blow x2 | 266% [51.3%] Increased Melee Damage. Melee Kills restore 60 HP.
+Combination Blow x3 | 400% [86%] Increased Melee Damage. Melee Kills restore 40 HP.",,,,,,,,,,"Base Cooldown: 58.1 seconds
+
+Chunk Scalar:  1x",
+,,,,,,,,,,,,,,
+,Disorienting Blow,,"Deals 162 [?] Impact Damage and up to 976 [?] Splash Damage, down to ?% damage over 7 meters.
+Inflicts Blind for 8.5 seconds to enemies within 9.6 meters on hit.
+
+Grants Amplified and x2 Bolt Charge on hit.",,,,,,,,,,"Base Cooldown: 118.8 seconds
+
+Chunk Scalar: 0.9x",
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Super Abilities,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Arc Staff,,"General Super Information
+Damage Resistance: 90% [53%]
+Base Duration: 20 seconds, or 5% Super Drain per Second
+
+Kills grant x1 Bolt Charge.
+
+Aerial and Grounded Light Attack | Drains 2.5% Super Energy.
+Hits deal 864 [?] damag up to 8 meters away.
+Grounded Attacks can be chained up to 3 hits.
+
+Grounded Heavy Attack | Drains 8% Super Energy
+Deals 1,264 [?] damage in a ~45° angle up to 8 meters away.
+
+Airborne Heavy Attack | Drains 8%? Super Energy
+Deals 1,264 [?] damage and inflicts blind over 7 meters away
+
+Palm Strike | Light-Light-Heavy Combo.
+Deals 2,950 [?] damage and inflicts blind in a ~45° angle up to 8 meters away.
+
+Guarding | Drains an additional ?% Super Energy per second.
+Fully blocks and reflects all attacks in a 180?° Angle, granting x1 Bolt Charge per attack reflected.
+Reflected Projectiles are redirected to the reticle and deal 100% increased damage against Combatants.
+
+Class Ability | Does not drain Super Energy.
+Perfoms an evasive dodge. Grants ?% [?%] Damage Resist while dodging. 
+ Allows the repeated usage of Ascension while the Aspect is equipped at the cost of ?% Super Energy.",,,,,,,,,,"Tier 2 Super
+
+556 seconds.",
+,,,,,,,,,,,,,,
+,Gathering Storm,,"General Super Information
+Damage Resistance: 90% [49%]
+
+Hurls forward an Arc Staff that explodes and embeds itself on whatever it hits on impact.
+Deals 544 [300] damage and inflicts jolt on impact. Explosion deals up to 608 [?] damage in a 10 meter radius.
+
+After 2 seconds, the Arc Staff gets struck by a lightning strike, dealing up to 1350 [500] damage in a 10 meter radius.
+
+After 1.2 seconds of being struck by lightning, the Staff emits a damaging field, dealing 446 [60] damage every 0.7 seconds in a 10 meter radius for 8 seconds.",,,,,,,,,,"Tier 3 Super
+
+500 seconds.",
+,,,,,,,,,,,,,,
+,Storm's Edge,,"General Super Information
+Damage Resistance: 90% [45%]
+Base Duration: ? seconds, or ?% Super Drain per Second.
+
+Throws out a homing knife, dealing 90 [?] impact damage and up to 171 [45?] radial damage to enemies within 3 meters on impact, teleporting to it afterwards.
+Performs a wide whirling strike after teleporting, dealing 1,440 x 2 [300?] damage to enemies within 6 metres.
+Consumes ?% Super Energy per knife thrown, up to 3 times per Super activation.",,,,,,,,,,"Tier 1 Super
+
+625 seconds.",
+,,,,,,,,,,,,,,
+,Aspect,,Information,,,,,,,,,,Fragment Slots,
+,,,,,,,,,,,,,,
+,Ascension,,"While Airborne and having a Class Ability Charge:
+[Air Move] consumes a Class Ability Charge to perform an upwards Arc Staff Twirl.
+Triggers the effects of the equipped Class Ability on usage. 
+
+Grants Amplified to the user and allies within 10 meters.
+Deals up to 181 [?] damage, as well as Jolting enemies within 10 metres.
+Aspect's Damage scales with Class Stat above 100, up to 65% [?%] at 200 Stat.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Flow State,,"Scoring a Jolted Enemy Kill grants Amplified. 
+
+While Amplified:
+200% Additional Base Class Ability Regeneration Rate, +50 Reload Speed, and 0.8x Reload Duration Multiplier.
+66% [32%] Damage Resist during Dodge Animation.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Lethal Current ,,"Direct Melee Hits on Jolted Enemies inflict Blind.
+
+On Class Ability Usage:
+Melee Lunge Distance is increased to 7 metres. 
+The next Melee/Tempest Strike Hit within 10 seconds inflicts Jolt and triggers a damaging aftershock, dealing 195 [?] damage to enemies within 6 metres.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Tempest Strike,,"Scoring a Jolted Enemy Kill grants x1 Bolt Charge.
+Does not stack alongside Dielectric's x1 Bolt Charge.
+
+While Sliding:
+[Melee Ability] performs an uppercut, launching an Arc Wave along the ground up to 22 metres away, dealing 739 [125] damage and inflicting Jolt.
+Grants 75% Damage Resist against Combatants for 4? seconds after usage. Unable to use during slide if user shoots.
+Can trigger Combination Blow effects, and benefits from its damage increase. Does not interact with Disorienting Blow.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+Titan,,,,,,Titans,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Class Abilities,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Thruster,,"Performs an evasive first-person dash that removes Combatant Projectile Tracking?, as well as Aim Assist against Guardians.
+
+Quickly dashes 8 metres towards the currently held movement direction. Not inputting a movement direction will result in a 4 metre backwards dash.",,,,,,,,,,"Base Cooldown: 52.1 seconds
+
+Chunk Scalar:  1x",
+,,,,,,,,,,,,,,
+,Melee Abilities,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Ballistic Slam,,"While Airborne, after sprinting for 0.03 seconds:
+Quickly descends and strikes the ground, dealing a minimum of 210 [65] damage with no falloff to enemies within 8 metres.
+Grants 3% Super Energy and x3 Bolt Charge per enemy hit.
+Damage scales with time spent falling. A maximum jump height diagonal slam deals ~1,000 damage
+Cannot perform a Melee Attack within 0.9 seconds of landing.",,,,,,,,,,"Base Cooldown: 164.6 seconds
+
+Chunk Scalar: 0.7x",
+,,,,,,,,,,,,,,
+,Seismic Strike,,"Shared with other Shoulder Charge Abilities:
+Requires sprinting for 1.25 seconds. Drains 15% Melee Ability Energy if no enemy is hit. Unable to use during slide if user shoots. 
+Guardians directly hit by Shoulder Charge have their Melee Lunge disabled for 0.5 seconds
+Lunges forward 6.8 meters, automatically targeting enemies in range.
+
+Hitting an enemy deals 1,073 [110] impact damage, as well as dealing 391 [40] radial damage and inflicting Blind for 8 [1.6] seconds to enemies within 6 meters.
+
+While Amplified:
+ Blind Radius is increased to 10 metres, and the Blind Duration is increased to 10 [3] seconds.",,,,,,,,,,"Base Cooldown: 131.7 seconds
+
+Chunk Scalar: 0.8x",
+,,,,,,,,,,,,,,
+,Thunderclap,,"Chargeable Melee Attack
+Deals 703 [120] damage in a 7.5 metre wide cone up to 16 metres away, gradually dealing up to 100% increased damage after charging for 2 seconds.
+Grants 80% Damage Resist against Combatants during the animation, and for ? seconds after usage. ",,,,,,,,,,"Base Cooldown: 131.7 seconds
+
+Chunk Scalar: 0.9x",
+,,,,,,,,,,,,,,
+,Super Abilities,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Fists of Havoc,,"General Super Information
+Damage Resistance: 90% [58%]
+Base Duration: 25 seconds, or 4% Super Drain per Second
+
+Light Attack | Drains 6% Super Energy.
+Hits deal 499 [?] damage and heavily knock enemies back.
+Scoring a Light Attack grants the next heavy attack hit 4 additional damage instances of 273 [?] damage each.
+
+Heavy Attack | Drains 12% Super Energy.
+Slams downwards, dealing 1619 [?] damage and inflicting blind in a 11 metre radius. Super Cast also slams, without the aftershocks
+Slam deals 4 additional damage instances of 273 [?] damage each if the user is in the animation for at least 1 second. Requires inputting a directional key.
+Creates up to 4 aftershocks, each dealing up to 292 [?] damage.",,,,,,,,,,"Tier 2 Super
+
+556 seconds.",
+,,,,,,,,,,,,,,
+,Thundercrash,,"General Super Information
+Damage Resistance: 90% [25%]
+Base Duration: Up to 4.5 seconds, or 22.2% Super Drain per Second
+
+Enemies that are very close when flying receive 150 [?] Collision Damage.
+
+Detonates on impact with a surface or enemy, dealing 180 [?] impact damage, as well as up to 8,260 [?] explosive damage over 10 meters.
+Explosion releases aftershocks 0.75 seconds after impact, dealing up to 108 [?] damage every second for 4 seconds. ",,,,,,,,,,"Tier 2 Super
+
+556 seconds.",
+,,,,,,,,,,,,,,
+,Aspect,,Information,,,,,,,,,,Fragment Slots,
+,,,,,,,,,,,,,,
+,Juggernaut ,,"While sprinting, while Movement Speed is above ~4m/s and with full Class Ability Energy:
+Grants a Frontal Overshield with 50 HP that absorbs damage, granting x1 Bolt Charge per attack blocked.
+Overshield receives 33% Damage Resist while Amplified, increasing its effective health to 75eHP.
+60% [10%] Splash Damage Resist, and 10% Damage Resist against Combatants while active.
+
+Overshield is able to fully absorb the last hit before being destroyed, depleting all Class Ability Energy.
+
+Stacks with other Overshields.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Knockout,,"On Melee Kill:
+Quickly restores a varying amount of Health over 0.1 seconds, begins Health Regeneration and grants Amplified.
+Rank-and-File = 50 HP | Elite = 75 HP | Miniboss+ = 100 HP | Guardian = 30 HP 
+
+Upon breaking an Enemy Shield, or dealing damage to an enemy below 30% HP:
+Grants Knockout for 6 seconds.
+
+Knockout:
+160% [30%] increased Basic/Glaive Melee Damage
+160% [20%] increased Charged Melee Damage
+Basic Melee Attacks count as Arc Powered Melee Hits.
+Increases Melee Lunge Distance against Combatants to 6 metres",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Storm's Keep,,"On Class Ability Usage:
+Grants x4 Bolt Charge. 
+Thruster grants x6 Bolt Charge.
+
+While behind the Barricade:
+Grants a stack of Bolt Charge every 0.6 seconds. 
+Bolt Charge can now trigger with Weapon Damage.
+Spark of Frequency does not increase the number of Bolt Charge stacks gained. Does not stack with multiple barricades.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Touch of Thunder,,"Enhances certain Grenade types:
+
+Flashbang: Explodes an additional time on impact, dealing up to 684 [?] damage, down to 0% damage over 7.5 meters, and inflicting blind to enemies within 5 meters.
+
+Lightning: Grants an additional Grenade Charge, lightning strikes after the first inflict jolt, and hits grant x5 Bolt Charge up to once per lightning bolt.
+
+Pulse: Damaging an enemy creates an Ionic Trace with a 1 second cooldown. Deals up to 25% increased damage as it lingers.
+1st = 2% | 2nd = 9% | 3rd = 18.5% | 4th = 24% | 5th onwards = 25%
+
+Storm: Creates a roaming storm for 4.5+1.5 seconds after detonating, chasing after enemies at an initial speed of 2 [1.5] m/s, increasing to 5.5 [3] m/s after 1.6 seconds.
+ Roaming Storm fires lightning bolts underneath it that deal 164 [30] damage up to 11+4 times.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+Warlocks,,,,,,Warlocks,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Melee Abilities,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Ball Lightning,,"Fires a Ball Lightning forward up to 35 meters away, releasing a lightning strike if an enemy is up to 4? meters under it, after reaching its maximum distance, or on impact.
+
+Lightning strike deals 271 [70] damage over 2? meters.
+Directly impacting an enemy will deal an additional 117 [30] damage.
+
+While Amplified:
+Creates 2 additional lightning strikes, each dealing 163 [?] damage.
+Deals up to 714 [240] damage upon scoring a direct hit alongside all 3 lightning strikes.",,,,,,,,,,"Base Cooldown: 164.6 seconds
+
+Chunk Scalar: 0.7x",
+,,,,,,,,,,,,,,
+,Chain Lightning,,"Melee Attack with an extended lunge distance of 6 meters.
+Arc Subclass Exclusive: Has 2 Ability Charges.
+
+Directly strikes an enemy, dealing 390 [100] damage, inflicting Jolt, and causing them to release chain lightning.
+Chain lightning deals 265 [54] damage to enemies within 9 metres, chaining towards enemies up to a maximum of 5 times. Cannot chain to the most recently targeted enemy.
+
+While Amplified:
+Releases two sets of chain lightning, each targeting a different enemy, doubling the maximum amount of enemies hit. Enemies can still only be hit once by chain lightning.",,,,,,,,,,"Base Cooldown: 131.7 seconds
+
+Chunk Scalar: 0.9x",
+,,,,,,,,,,,,,,
+,Super Abilities,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Chaos Reach,,"General Super Information
+Damage Resistance: 90% [55%]
+Base Duration: 4 seconds, or 25% Super Drain per Second
+Movement Speed: 4.5 meters per second.
+
+Channels a long range beam towards the reticle, dealing 378 [?] damage every 0.13 seconds. Does not deal damage for the first 0.67 seconds of the animation.
+Scoring 7 hits on an enemy summons a jolting lightning strike on the enemy's location, dealing 202 [?] damage.
+
+Partially refunds Super Energy on early deactivation, up to a maximum of 30% Super Energy if immediately cancelled.",,,,,,,,,,"Tier 4 Super
+
+Base Cooldown:
+455 seconds",
+,,,,,,,,,,,,,,
+,Stormtrance,,"General Super Information
+Damage Resistance: 90% [58%]
+Base Duration: 16 seconds, or 6.25% Super Drain per Second.
+
+On Super Cast:
+Deals up to 690 [?] damage in a 6 meter radius, knocking enemies back, and releases 5 Lightning Seekers around the caster.
+Lightning Seekers deal 440 [150] damage and inflict jolt for 16 seconds.
+
+Light Attack | Drains ?% Super Energy.
+Targets enemies within 12 meters, releasing chain lighting that deals 178 [90] damage every 0.34 seconds.
+Damage ramps up over time, increasing by 5% every 0.33 seconds, up to 65% increased damage after 3.33 seconds.
+ Damage Increase decays after 2 seconds of not dealing damage.
+
+Heavy Attack | Sprint
+Performs an Ionic Blink, consuming 6.25% Super Energy and teleporting up to 7 meters away towards the currently input movement direction.",,,,,,,,,,"Tier 2 Super
+
+Base Cooldown:
+556 seconds",
+,,,,,,,,,,,,,,
+,Aspect,,Information,,,,,,,,,,Fragment Slots,
+,,,,,,,,,,,,,,
+,Arc Soul,,"Rifts created by the user grant an Arc Soul to the user and allies that pass through it.
+Duration can be refreshed by stepping back into the Rift.
+
+Arc Buddy lasts 15 seconds and fires homing projectiles that deal 69 [11] Arc Grenade Damage in 3-round bursts at a rate of 100RPM towards enemies within 24 meters.
+Can trigger Grenade Ability interactions.
+
+Grants Additional Base Class Ability Regeneration Rate while within 15? metres of allies.
+x1 = 40% [20%] | x2 = 80% [40%] | x3 = 120% [60%]
+
+While Amplified:
+Arc Boi shoots bursts of 5 shots, increasing its overall RPM to 225RPM.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Electrostatic Mind,,"Arc Ability Kills and kills against enemies affected by Arc Elemental Debuffs create an Ionic Trace.
+Incurs a 1? second cooldown between Ionic Trace spawns.
+
+Ionic Traces grant Amplified on pickup.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Ionic Sentry,,"Arc Kills and Kinetic Kills charge up an Ionic Sentry. Readies at 6 Charges.
+Weapon = 1 [2] | Abilities = 2 [?]
+
+Replaces Grenade with an Ionic Sentry.
+Counts as an Arc Grenade Ability Damage, and will trigger Grenade Ability interactions.
+
+Ionic Sentry:
+Inflicts Blind for 10? [3?] seconds to enemies within 5 meters upon landing
+Automatically shoots a chaining bolt of lightning every second at enemies within 16 metres, dealing 202 [50] Arc Damage. 
+Chains towards an additional enemy within 6 meters of the initially struck target.
+Grants x1 Bolt Charge on hit.
+Lasts for 15 seconds and has ? Construct HP.
+User is immune to self-blind.
+
+Incurs a 6 second cooldown after activating. Kills while on cooldown don't give charges.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Lightning Surge,,"While Sliding:
+[Melee Ability] warps the user forward 10 meters, calling down 5 lightning bolts in a ⬠-shape 7 meters away from the exit point, and granting x1 Bolt Charge per enemy hit.
+Grants Amplified on usage. Does not grant any Bolt Charge past x1 unless hits are scored.
+Grants ?% Damage Resist against Combatants for ? seconds after usage. Unable to use during slide if user shoots.
+
+Lightning bolts deal 634 + 127 = 761 [105 + 47 = 152] damage simultaneously and inflict Jolt.",,,,,,,,,,,

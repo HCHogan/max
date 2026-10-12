@@ -1,0 +1,211 @@
+Date,Description
+2026-10-05,Fixed Anarchy timing in Sustained tab.
+2026-09-17,"Changed Bosses tab to reflect DP/EDP delta changes, started work on Rotations tab."
+2026-09-15,Fixed Twilight Arsenal values to use 200 Super correctly in Swap tab. Added New Malpais pre-stacked bursts to Swap tab. Added Rewind + TL Antedate to Swap tab.
+2026-08-28,Added Vex Mythoclast with Particle Reconstruction to Sustained and Swap tabs.
+2026-08-26,"Added bugged triple Bolt Charge Symmetry to Sustained tab, updated grapple melee timings to faster 1.15s cycle in Sustained and Swap tabs."
+2026-08-25,Added Whirling Maelstrom with Untold Greed x5 to Swap tab.
+2026-08-20,"Adjusted Combination Blow grapple melee with Conductive Cosmic Crystal and Arc Compounding in Sustained and Swap tabs, adjusted Thundercrash with Conductive Cosmic Needle in Swap tab."
+2026-08-19,"Completely finished artifact values, Sustained tab, Swap tab, and Abilities tab. Moved a bunch of old tabs into archive. Added Burning Ambition Terciopelo-4bl to Sustained tab."
+2026-08-18,Finished Abilities tab completely and updated artifact info in Weapons/Abilities tabs.
+2026-08-17,Finished Abilities tab minus artifact testing and Hammer of Sol shrapnel with Shieldcrush.
+2026-08-16,"Finished warlock, hunter, and almost all titan abilities in Abilities tab."
+2026-08-14,Finished almost all warlock abilities in Abilities tab.
+2026-08-12,Added Main Ingredient to Sustained tab.
+2026-08-11,Added tentative Duality swap exploit row to Sustained tab.
+2026-08-08,"Added Lament 2L1H, Incendiary Rifle Rounds + Solar Fulmination entries, Omniscient Eye, Heretic, and Cull's Shadow melee to Sustained tab."
+2026-07-30,Finished non-ability entries in Sustained tab.
+2026-07-29,"Completely finished Weapons tab, updated half of new Sustained tab."
+2026-07-23,Finished base value entries for all weapons except Lucky Pants / Peacekeepers options.
+2026-07-02,Finished legendary archetypes in new Weapons tab (for the second time).
+2026-06-25,"Began work on constructing the final structure of the entire sheet, beginning with new Weapons tab."
+2026-03-12,Added Something Something to Sustained tab.
+2026-03-03,Added Hellion to Swap tab.
+2026-02-01,Added New Land Beyond holster swap to Swap tab.
+2026-01-30,Added Shattershafts chunking to Historical tab.
+2026-01-29,Updated chunking values for every relevant Weapons tab entry.
+2026-01-22,"Added Contraverse chunking to Sustained tab and Historical tab, added pre-additive Verity grapples to Historical tab."
+2026-01-08,Updated New Land Beyond reserves in Sustained tab.
+2026-01-05,Updated bolt values in Weapons tab.
+2025-12-21,Updated New Malpais value in Weapons and Sustained tab.
+2025-12-17,Added Heirloom and Praxic Blade to Weapons and Sustained tab.
+2025-12-16,Updated Golden Gun Nighthawk and Needlestorm Mataiodoxia values in Abilities and Swap tabs.
+2025-12-14,Added Equilibrium legendary archetypes to Weapons tab and Sustained tab. Added Equilibrium bosses to Bosses tab.
+2025-12-08,Fixed Wolfsbane total in Sustained tab.
+2025-12-07,Added Winter's Wrath cancel cycle to Abilities and Swap tab.
+2025-12-04,Added and updated everything from this: https://www.bungie.net/7/en/News/Article/destiny_update_9_5_0
+2025-12-01,Added and updated Fireteam (S27) and Graphing (S27) tabs.
+2025-11-26,Added some Renegades weapons to Sustained and Swap tabs.
+2025-11-23,Updated Sustained and Swap tabs with new base values.
+2025-11-22,Finalized Weapons and Abilities tabs for The Edge of Fate.
+2025-11-11,"Added spread shot Cascade Point entry to Weapons tab, retired Tracker tab."
+2025-10-31,Finished Weapons tab.
+2025-10-22,Changed Arcane Embrace entry to use e. Aggregate Charge instead of e. Precision Instrument in Sustained tab.
+2025-10-17,Fixed dungeon 1 phase DPS values to account for 3 player instead of 6 player fireteam size.
+2025-10-15,Added include/exclude distinction for Tessellation values in Swap tab.
+2025-10-10,Updated Wolfsbane rows and added Outbreak modifier to Sustained tab.
+2025-10-08,"Updated Hellion, Arc Soul, and Ionic Sentry values in Sustained tab."
+2025-10-07,"Added Wolfsbane to Weapons, Sustained, and Swap tabs."
+2025-09-25,"Finished Day 1 DPS tabs, video soon."
+2025-09-24,Added Day 1 (S27) tabs and updated with titan rotations.
+2025-09-21,Updated Sustained and Swap tabs with new Temporal Blast values (and appropriate Armaments comparisons). Removed melee stat stacking with seasonal super entries in Swap tab.
+2025-09-19,"Added phase lengths to Desert Perpetual bosses in Bosses tab, also finished clearable DPS column."
+2025-09-17,Added ammoless aerial lightweight swords to Historical tab.
+2025-09-10,"Finished legendary archetypes in new Weapons tab, added New Malpais to Sustained tab."
+2025-09-09,"Added legendary fusion rifles, grenade launchers, glaives, hand cannons, linear fusion rifles, machine guns, pulse rifles, rocket launchers, scout rifles, and shotguns to new Weapons tab."
+2025-09-08,Added most bow and auto rifle entries to new Weapons tab.
+2025-09-03,Added Trachinus with bugged Assault Mag to Sustained and Swap tabs.
+2025-09-02,Updated Bosses tab.
+2025-08-30,Added Storm's Keep and a few more seasonal weapon options to Sustained tab.
+2025-08-29,Added Networked Targeting x5 to several more competitive sniper options in Sustained tab.
+2025-08-28,"Changed Throwing Hammer values to correctly include shotgun damage in Sustained tab, also adjusted Winterbite melee to include Weapons stat bonus."
+2025-08-26,"Removed Liar's options for grapple damage in Sustained and Swap tab, started work on new Weapons and Abilities tabs."
+2025-08-23,Finished Tracker tab for TFS > EoF changes.
+2025-08-18,Added a few extra seasonal rows in the Sustained and Swap tab after Temporal Blast testing.
+2025-08-15,Added a few temporary mod-based seasonal options in the Sustained tab.
+2025-08-12,"Updated SES Song of Flame and HHSN values in Abilities tab. Added Cascade spread shot and Eriana transfer values to Weapons and Swap tab. Added and updated a variety of grapple melee options to both Sustained and Swap tab, updated Wishful Ignorance values in Swap tab."
+2025-08-10,Updated Kinetic Tremors in FAQ.
+2025-08-09,Finished Sustained and Swap tab.
+2025-08-07,Finished Abilities tab.
+2025-08-01,Finished Weapons tab.
+2025-07-29,Updated Weapons tab up to snipers with new EoF numbers and added literally every single weapon damage source in the game. 
+2025-07-18,Added Realistic and Graphing (Realistic) tabs.
+2025-05-07,"Updated Lord of Wolves and Finality's Auger values, added New Land Beyond values."
+2025-04-27,"Added Kinetic Tremors + Elemental Honing Praedyth's Revenge to Swap tab, updated swords with Pack Hunter due to Relentless changes."
+2025-04-22,"Added S26 rotations, hid Day 1 (S26) tab since most information is better presented in fireteam/graphing tabs."
+2025-04-18,"Updated Raneiks health post-patch, FAQ tab, and Equipment tab. Hid Reference tab, since this function is mostly covered by the Endgame Analysis sheet's Archetypes tab."
+2025-04-13,Added Barrow-Dyad values to Sustained tab.
+2025-03-12,Fixed the true DPS value of Nova Bomb - Vortex in the Swap tab.
+2025-03-02,Added Ill Omen to Bolt Charge tab.
+2025-03-01,Finished Bolt Charge tab and added Redirection Posterity to Swap tab.
+2025-02-20,"Fixed slightly inaccurate adaptive fusion rifle, precision fusion rifle, rapid-fire machine gun, adaptive machine gun, and rocket sidearm values."
+2025-02-18,Added base Le Monarque damage to Weapons tab.
+2025-02-14,Added Redirection + Bait and Switch Unvoiced to Swap and Sustained tab.
+2025-02-11,Added Sundered Doctrine boss health to Bosses tab.
+2025-02-08,"Added Finality's Auger to Weapons and Sustained tab, changed Sustained tab to use Well buff instead of Lumina + support frame, added Elemental Honing x5 Unloved to Swap tab."
+2025-02-06,"Updated The Wardcliff Coil, Apex Predator, Deathbringer, Dragon's Breath, Parasite, The Prospector with non-RDM values, removed RDM Cold Comfort and Crux Termination IV from Sustained tab, removed Bipod swapping rows from Sustained tab, updated glaive melee values in Sustained and Abilities tab, added Praedyth's Revenge with Elemental Honing and Networked Targeting x5 to Sustained tab, added Day 1 (S26) tab."
+2025-02-05,"Updated damage/health values for S26 scalar, added/updated a lot of stuff."
+2025-01-22,Added Keen Thistle with TT/FTTC to Sustained tab.
+2025-01-21,Added link to Supertrack sheet to Super tab.
+2025-01-18,Updated Celestial Nighthawk Golden Gun values in Abilities and Swap tabs.
+2025-01-07,"Added Slayer's Fang to Weapons, Sustained, and Swap tabs."
+2024-12-25,Removed aerial spam Sentinel Shield combo and updated grounded spam damage in both Abilities and Swap tab.
+2024-12-15,"Added Rat King to Weapons and Sustained tab, added a lot of tests to Super tab."
+2024-12-06,"Made a few adjustments to Legend of Acrius, Grand Overture, and Tractor Trench rapid options in S25 ranking."
+2024-12-04,Finished Ranking tab for S25.
+2024-12-03,"Added first entries into Super tab, changed Izanagi's Burden swap DPS timing based on better reload cancel timings."
+2024-11-28,Added fireteam scaling values for wave frame swords in Sustained tab.
+2024-11-25,Added Winter's Wrath chunking to Historical tab.
+2024-11-24,Added Super tab.
+2024-11-23,Added Eriana's Vow 6 shot swap to Swap tab.
+2024-11-21,"Updated Winter's Wrath values, added Sentinel Shield with both combos, added Telesto, updated Unplanned Reprieve Ergo Sum values in Sustained tab."
+2024-11-19,Removed Arcane Embrace with Trench Barrel following Update 8.1.5.
+2024-11-10,Added Explosive Light comparisons for adaptive HGLs to Weapons tab.
+2024-11-09,"Added first pass of S25 rotation data to Ranking and Graphing tabs, added first pass of data to Scaling tab."
+2024-11-07,"Fixed Scintillation in Sustained tab to reflect perk swap patch, updated Reference and Sustained tabs with new reserve values, removed and adjusted some potential rotations in the Ranking tab."
+2024-11-05,Added Scaling tab.
+2024-11-02,Added Tomorrow's Arsenal to Sustained tab.
+2024-10-29,Added Arcane Embrace damage values and fixed heavy burst HC damage values.
+2024-10-14,Added Vesper's Host boss health values.
+2024-10-11,Added Ice Breaker damage values.
+2024-10-10,Updated Ex Diris and One Thousand Voices reserves.
+2024-10-09,"Added Alethonym, The Chaperone, and aggressive swords with Pack Hunter, updated Choir of One, adaptive/rapid HGLs, high-impact LMGs, Ex Diris, Prospector, Two-Tailed Fox, every Lucky Pants-related hand cannon, Pyrogale Burning Maul, Celestial Golden Gun, Thundercrash (three variants), SES Nova Bomb, Nova Warp, Ballidorse Winter's Wrath, Stylish Synthoceps grapple melees, and reserve values for some snipers, Leviathan's Breath, rocket sidearms, and traces."
+2024-10-08,Updated values with new S25 RAD scalar.
+2024-09-08,"Updated Pack Hunter values with proper explosive/impact distribution numbers and fixed some Surrounded scalars, updated Euphony numbers with proper threadling scaling."
+2024-08-27,Added Choir of One values and updated glaive melee values.
+2024-08-22,Updated some incorrect total damage values from update 8.0.5.
+2024-08-18,"Updated all total damage to reflect reserve changes from update 8.0.5 in Sustained and Reference tabs, also removed Envious > Cascade swap Edge Transit entry."
+2024-08-08,"Updated SoF w/ SES, Twilight Arsenal, Hammer of Sol, and glaive melee values in Abilities and Swap tabs."
+2024-07-24,Updated Still Hunt values with 8.0.0.8 nerf.
+2024-07-20,"Tweaked sword cycle timings, added some Ergo Sum rolls to Sustained tab."
+2024-07-19,Added third batch of Ergo Sum testing.
+2024-07-18,"Added Claws + Necrotic Song of Flame to Swap and Abilities tabs, also added Necrotic to Feast of Light x6 entries. Added Revision Zero (both modes) and Edge of Concurrence to Weapons and Sustained tab."
+2024-07-16,"Added second batch of Ergo Sum testing, updated Crux Termination IV entry to include Bipod swap reserves."
+2024-07-12,Started first batch of Ergo Sum testing in new tab.
+2024-07-11,Added Explosive Light Apex Predator 2 shots without Pack Hunter to Swap tab upon request.
+2024-07-10,"Added Bleak Watcher passive damage, updated unravel damage, added Sol Invictus testing, added a manual reload to Cenotaph Microcosm, added Chill Clip Chaos Reshaped Critical Anomaly to Swap tab, added Precision Instrument Sightline Survey to Weapons and Swap tab."
+2024-07-08,"Added Euphony with no Thread of Evolution or Ascent grenade reloads, updated Critical Anomaly Chill Clip value to account for final two shots missing shatter damage."
+2024-07-05,Added Relentless Strikes Pack Hunter interaction to FAQ tab.
+2024-07-04,Finished Swap tab.
+2024-07-03,Added Cold Steel Ill Omen to Sustained tab and updated Summum Bonum with Adept Impact.
+2024-07-02,"Updated some Sustained values, including Arc Soul, Hellion, Two-Tailed Fox, jolt, unravel, and Cornered + Surrounded Scintillation. Also updated some confusing headings in the Sustained and Swap tabs, and finished Abilities tab."
+2024-06-30,"Finished almost everything in Abilities tab (besides a few grenades), updated a lot of Swap tab values."
+2024-06-28,Finished Reference tab values.
+2024-06-28,"Added Final Warning, added Chill Clip aggressive sniper, updated Two-Tailed Fox post-surge change."
+2024-06-27,Finalized all raid and dungeon boss values.
+2024-06-26,"Added a couple more raid bosses, updated entire sheet's values to match new universal 25% damage boost."
+2024-06-25,"Added a couple raid bosses to Bosses tab with new health values, added Ergo Sum tab."
+2024-06-18,"Completely updated Single tab with modern values, completely updated Weapons tab, renamed Single tab to Sustained, updated Equipment tab, created Reference tab, updated all weapon images to cleaner versions."
+2024-05-31,Added The Other Half to Single tab.
+2024-05-26,Added Clown EL Crux with Lunafaction manual reloads to Single tab.
+2024-05-20,"Updated Morgeth and Riven crit value to 1.0 (Sleeper-exclusive DR provided wrong results), added Deathbringer scaling to FAQ."
+2024-05-19,Updated Equipment tab.
+2024-05-17,"Revamped Ranking tab completely, added Graphing tab."
+2024-05-14,Removed Mechaneer's bug from Swap tab (patched).
+2024-05-07,"Updated Wolfpacks tab with third round of testing, archived old data."
+2024-04-11,"Updated Single and Swap tabs with some new values (breech GLs, Final Warning with double Tricksleeves, and more), updated missing BRAVE images."
+2024-04-10,"Update 7.3.6:  Updated Whisper of the Worm and One Thousand Voices total damage, added Final Warning and The Last Word, updated breech GL damage, updated Forerunner."
+2024-03-27,"Brave Arsenal: added Brave versions of several weapons, including The Mountaintop and Edge Transit, as well as a temporary theoretical Izanagi Edge Transit rotation to Ranking tab."
+2024-03-05,"Update 7.3.5: adjusted total damage for many weapons, changed values for many weapons, fixed Pyrogale damage, added Arcane Needle, removed Frenzied Blade x2, modified Bait and Switch value, incorporated Envious Assassin nerf, added Prospector to Single tab."
+2024-01-30,Updated FAQ a bit and removed some unnecessary questions.
+2024-01-18,Fixed a small error with Surrounded adaptive rocket launcher total damage in the Single tab.
+2024-01-15,Added Precision Instrument Doomed Petitioner and grapple melee to Single tab.
+2024-01-04,"Updated most base melee values, added caster frames to Single and Weapons tab."
+2024-01-03,Added Warlord's Ruin boss health values.
+2023-12-24,Updated The Fourth Horseman cycle values in Single tab.
+2023-12-09,"Added rocket-assisted frame sidearm values, updated Incinerator Snap values."
+2023-12-07,Split Values tab into Weapons and Abilities.
+2023-12-05,Added Winterbite to Single and Values tab.
+2023-11-29,Added Slideshot Crux Termination IV and Controlled Burst Scatter Signal to Single tab.
+2023-11-28,"Removed Ballidorse Wrathweavers from FAQ, updated Izanagi's Burden, Whisper of the Worm, Cloudstrike, legendary sniper, glaive, and Celestial Nighthawk values, added Dragon's Breath, removed glaive projectile values."
+2023-10-21,"Added two quickswap rotations to Ranking tab, changed Apex to Surrounded in Ranking tab."
+2023-10-15,Changed Nox Perennial V reserves to 22 from 28 after supposed hotfix.
+2023-10-07,"Added Monte Carlo with Bayonet Locked and Worldline Zero with Temporal Sprint to Values tab, Lumina to Equipment tab, and Nanotech Tracer Rockets to FAQ tab."
+2023-09-30,Updated Equipment tab with pellet shotguns and HGLs.
+2023-09-29,Updated Warden's sniper Gjallarhorn rotation to use correct super.
+2023-09-25,Added Death's Razor to Swap tab.
+2023-09-24,Updated Nox Perennial V with new total reserves number in Single tab.
+2023-09-22,Updated The Eremite Reservoir Burst total damage value to account for final mag losing perk in Single tab.
+2023-09-21,Updated Equipment tab with S22 options.
+2023-09-20,Updated Crota scalar with more precise testing.
+2023-09-19,Updated Royal Executioner mag sequence to account for enhanced Reservoir Burst in Single tab.
+2023-09-13,"Removed double pellet Gjally (Weavewalk) rotation from Ranking tab, added Warden's Law to Values and Swap tab."
+2023-09-12,Updated Lament total damage values with 65 instead of 58 reserves in Single tab.
+2023-09-11,"Added Black Talon to Values and Single tab, added Heartshadow values to Values and Single tab."
+2023-09-10,Updated aerial light attack value for Goldtusk in Values and Single tab.
+2023-09-09,"Updated Foetracer Izi sniper Apex rotation to include 3/4 surge with RNG 11 Clown mag, readjusted incorrect Blade Barrage values in Ranking tab and updated Horseman Wendigo total time, added Goldtusk grounded 3L1H to Single tab."
+2023-09-08,Fixed erroneous Goldtusk aerial heavy value in Single tab.
+2023-09-07,"Updated BoW section in FAQ, Ranking, and Swap tabs, added double stacking BoW to Historical tab, removed grenades from Single tab, added Type column to Single tab, added Bequest light attacks only to Single tab."
+2023-09-06,Finished Historical tab.
+2023-09-05,"Completely redid Ranking tab and merged Sequencing tab into it, updated Malfeasance from 18 to 17 shot burst, added videos to every rotation, added titan BoW rotations to Ranking tab and titan BoW abilities to Swap tab."
+2023-09-04,Added Goldtusk to Single tab and Crota's End bosses to Bosses tab.
+2023-09-03,"Edited kinetic surge info into Golden Gun FAQ, removed Synthoceps from Equipment tab."
+2023-08-29,"Added Pyrogale vs. Cuirass to FAQ tab, added Tessellation to Values, Single, and Swap tabs."
+2023-08-28,Added Bait and Switch Supremacy to Swap tab.
+2023-08-27,"Renamed Timing tab to Single, added double stack Banner of War to Values tab."
+2023-08-26,"Added Banner of War Bladefury, One-Two Punch Frenzied Blade, and One-Two Punch Grapple Melee to Values tab."
+2023-08-25,"Merged Single and Timing tab together, also redid entire Timing tab, updated Malfeasance value from 15 to 18 shot burst."
+2023-08-24,"Updated all damage total-type columns to use comma formatting, updated FAQ to match new Pack Hunter testing, added Reconstruction manual reload to FAQ tab."
+2023-08-23,"Updated Izanagi's Burden, Golden Gun, Blade Barrage, threadling Grenade, Two-Tailed Fox, and Needlestorm in Values tab, updated all Sequencing rotations to use ideal timings, updated Wolfpacks tab with 7.2.0.1 change, added buffed Bipod to Wolfpacks tab.
+Redid almost every tab with 7.2.0.1 rocket update and new data, also redid Sequencing entirely with swap data."
+2023-08-22,Added Burning Maul w/ Pyrogale Gauntlets to Values tab.
+2023-08-21,"Edited Arc Soul values in FAQ and Single tab to accurately reflect 60s timing window, added debuff extension to FAQ tab, added Legend of Acrius to Trench Barrel section in FAQ tab, added Broodweaver grenades to FAQ tab."
+2023-08-20,Added Well conversion and No Backup Plans to FAQ tab.
+2023-08-19,"Added Trench Barrel to FAQ tab, added FPS-based damage to FAQ tab, finalized Arc Soul team damage results."
+2023-08-17,"Added Current News section to Home page, deleted Pack Hunter rockets from Values tab, added Cluster Bomb values to FAQ tab, added Experimental tab to theorycraft team DPS, cleaned up tab descriptions in Home tab, added Duality to FAQ tab."
+2023-08-16,"Moved old Wolfpacks tab to hidden, filled out remaining Wolfpack data."
+2023-08-15,"Added Ballidorse to Wolfpacks tab, removed A/S column, added % diff column, updated Malfeasance Blade Apex rotation with Cascade Point, added Malfeasance Impetus Apex rotation."
+2023-08-14,"Added Seventh Seraph CQC-12 to Equipment tab, added Cascade Point IKELOS_SG_V1.0.3 to Swap tab, added Golden Gun Well vs. Radiant testing to FAQ."
+2023-08-13,Added manually reloaded Cup-Bearer SA/2 to Timing and Single tabs.
+2023-08-12,Updated Wolfpacks tab with second round of testing.
+2023-08-11,"Removed graph from Single tab, updated Arc Soul base and Amplified damage, filled in Arc Soul vs. Needlestorm in FAQ."
+2023-08-10,"Finished half of new Pack Hunter testing, added Kinetic Tremors to FAQ."
+2023-08-08,"Updated ranking graph, added special GLs comp to FAQ, removed some bad prospective test exotics from Values tab."
+2023-08-07,"Added empty Wolfpacks (new) tab, added Notes column to Equipment tab."
+2023-08-06,"Added Equipment tab, added Cascade HGL, added double slug Parasite, added no Pack Izi slug Apex, updated Two-Tailed Fox values, added Duality values, added Duality slug Apex."
+2023-07-30,"Finished Swap tab and added Duration column, finished RDM vs. RoF vs. TDS testing."
+2023-07-24,Reworked Bosses tab and added kill examples.
+2023-07-18,"Updated Sequencing to more accurately reflect Threadling Grenade damage timing in the Ranking graph, updated Historical descriptions and added PD Sleeper."
+2023-07-17,Updated FAQ and added finished full boss health values in Bosses tab.
+2023-07-13,Split Components tab into Components and Swap.
+2023-07-12,"Video released, Conditional pellet Apex rotation modified to account for Heat Rises (2 dash), added FAQ, Bosses, and Historical tabs."

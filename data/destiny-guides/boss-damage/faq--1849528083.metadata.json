@@ -1,0 +1,15 @@
+{
+  "merged_ranges": [
+    "A1:C1"
+  ],
+  "hyperlinks": {
+    "C2": "https://www.youtube.com/watch?v=wv35fZOHRa8",
+    "C4": "https://www.youtube.com/shorts/4WHVahoC0YY",
+    "C14": "null!A1"
+  },
+  "cell_notes": {},
+  "formulas": {},
+  "rich_text": {},
+  "hidden_rows": [],
+  "drawings_present": true
+}

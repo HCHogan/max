@@ -1,0 +1,53 @@
+WEAPON,,INFO,,,,,,,PERKS,,,,,,ANALYSIS,,
+🖼️,Name,Season,Energy,Frame,Source,Stun,Ammo,⬆️,Barrel,Mag,MW,Perk 1,Perk 2,Origin Trait,Notes,#,Tier
+,Eyes Unveiled,29.0,Void,Precision,Pit of Heresy,,45.0,Yes,Fluted Barrel,Enhanced Battery,Charge Time,"Fourth Time's the Charm
+Mega Kill Clip","Elemental Honing
+Sword Logic
+Chain Reaction",Heretical Behavior,"best linear by far; double damage option, FTTC + sustained, insane origin",1.0,S
+,Cataclysmic,29.0,Solar,Precision,Vow of the Disciple,,37.0,Yes,Fluted Barrel,Enhanced Battery,Charge Time,Fourth Time's the Charm,"Aggregate Charge
+Elemental Honing
+Bait and Switch",Souldrinker,slightly better 2nd column than Eyes but definitely a step down,2.0,S
+,Reed's Regret,29.0,Stasis,Precision,Trials,,40.0,Yes,Fluted Barrel,Enhanced Battery,Charge Time,Triple Tap,"Focused Fury
+Firing Line",Veist Stinger,"best frame, higher total damage than any adaptive burst configuration, decent origin",3.0,A
+,Taipan-4fr,29.0,Void,Precision,Banshee,,33.0,Yes,Fluted Barrel,Enhanced Battery,Charge Time,Triple Tap,"Focused Fury
+Firing Line",Veist Stinger,functionally identical to Reed's with arguably worse surge match element,4.0,A
+,Line in the Sand,24.0,Arc,Precision,Xur,,28.0,Yes,Fluted Barrel,Enhanced Battery,Charge Time,"Clown Cartridge
+Demolitionist
+Deconstruct","Bait and Switch
+Firing Line",Cast No Shadows,"no ammo gen but still has better total than adaptive bursts, origin usable for refill",5.0,A
+,Briar's Contempt,29.0,Solar,Adaptive Burst,Root of Nightmares,,39.0,Yes,Arrowhead Brake,Enhanced Battery,Charge Time,Rewind Rounds,"Aggregate Charge
+Chaos Reshaped
+Surrounded",Harmonic Resonance,best adaptive burst with new perks,6.0,B
+,Stormchaser,29.0,Arc,Adaptive Burst,Duality,,32.0,Yes,Arrowhead Brake,Enhanced Battery,Charge Time,"Clown Cartridge
+Supercharged Magazine
+Jolting Feedback","Aggregate Charge
+Elemental Honing
+Gear Shift",Bitterspite,"pseudo-double damage perks, shame about the frame",7.0,B
+,Laser Painter,29.0,Strand,Precision,Gambit,,26.0,Yes,Fluted Barrel,Enhanced Battery,Charge Time,"Clown Cartridge
+Auto-Loading Holster",Focused Fury,Veist Stinger,no ammo gen and step down in damage perks vs. higher tier precisions,8.0,B
+,Sailspy Pitchglass,29.0,Arc,Precision,Xur,,26.0,Yes,Fluted Barrel,Enhanced Battery,Charge Time,Clown Cartridge,Focused Fury,Right Hook,basically Laser Painter with no ALH or Veist,9.0,B
+,Scintillation,29.0,Strand,Adaptive Burst,Zavala,,36.0,Yes,Arrowhead Brake,Enhanced Battery,Charge Time,"Rewind Rounds
+Slice","Bait and Switch
+Surrounded",Veist Stinger,worse damage perks than Briar,10.0,B
+,Suspectum-4fr,24.0,Stasis,Precision,Banshee,,32.0,Yes,Fluted Barrel,Enhanced Battery,Charge Time,Envious Assassin,"Precision Instrument
+High Ground
+Firing Line",Veist Stinger,"more inconvenient reload perk, but still has Veist and semi-relevant damage perks",11.0,C
+,Mistral Lift,28.0,Void,Adaptive Burst,Tenet of Bravery,,33.0,Yes,Arrowhead Brake,Enhanced Battery,Charge Time,"Envious Arsenal
+Reconstruction
+Withering Gaze","Bait and Switch
+Precision Instrument",Veist Stinger,no Rewind but still pretty solid setup for an adaptive burst,12.0,C
+,Doomed Petitioner,29.0,Void,Adaptive Burst,Starcrossed,,34.0,Yes,Arrowhead Brake,Enhanced Battery,Charge Time,"Reconstruction
+Attrition Orbs","Precision Instrument
+High Ground
+Surrounded",Dragon's Vengeance,basically Mistral with worse origin and no Bait,13.0,C
+,Willful Hamartia,29.0,Arc,Adaptive Burst,Trials,,37.0,Yes,Arrowhead Brake,Enhanced Battery,Charge Time,"Envious Assassin
+High-Impact Reserves","Bait and Switch
+Precision Instrument",Wild Card,"HIR in first column is unique, but otherwise not very good",14.0,C
+,Threaded Needle,13.0,Void,Precision,"Xur, Dares",,35.0,No,Fluted Barrel,Enhanced Battery,Charge Time,"Clown Cartridge
+Auto-Loading Holster",Frenzy,None,mediocre damage perk and no origin,15.0,D
+,Boomslang-4fr,27.0,Arc,Adaptive Burst,"Tenet of Bravery, Zavala",,31.0,Yes,Arrowhead Brake,Enhanced Battery,Charge Time,"Envious Arsenal
+Rapid Hit",Precision Instrument,Veist Stinger,"Envious Arsenal as only refill perk isn't great, PI is also pretty mediocre",16.0,D
+,Fire and Forget,29.0,Stasis,Adaptive Burst,Seraph's Shield,,33.0,Yes,Arrowhead Brake,Enhanced Battery,Charge Time,"Field Prep
+Surplus",Focused Fury,Veist Stinger,post-buff Focused Fury is good but held back by frame,17.0,D
+,Tarantula,13.0,Arc,Precision,Xur,,30.0,No,Fluted Barrel,Enhanced Battery,Charge Time,Field Prep,Box Breathing,None,Box Breathing is not a real sustained damage perk,18.0,E
+,Corsair's Wrath,12.0,Solar,Precision,"Xur, Dares",,26.0,No,Fluted Barrel,Enhanced Battery,Charge Time,Pulse Monitor,High-Impact Reserves,None,might as well be perkless,19.0,E

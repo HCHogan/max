@@ -1,0 +1,157 @@
+WEAPON,,INFO,,,,,,,,,,PERKS,,,ANALYSIS,,
+🖼️,Name,Season,Energy,Frame,Source,Stun,Ammo,⬆️,Barrel,Mag,MW,Perk 1,Perk 2,Origin Trait,Notes,#,Tier
+,VS Velocity Baton,29.0,Void,Area Denial,Vesper's Host,,69.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Repulsor Brace
+Demolitionist
+Unrelenting","Destabilizing Rounds
+Chain Reaction
+Attrition Orbs",Bray Legacy,"best element area denial with pretty much every relevant perk needed, excellent origin too",1.0,S
+,Ouster Engine,29.0,Stasis,Area Denial,Pinnacle Ops,,58.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Air Trigger
+Auto-Loading Holster
+Rimestealer","Chain Reaction
+Aggregate Charge
+Crystalline Corpsebloom",Accelerated Assault,"only area denial with Air Trigger for ammo, also has every perk imaginable for stasis",2.0,S
+,Gizmo Weft,28.0,Strand,Micro-Missile,Tenet of Bravery,,70.0,Yes,Quick Launch,"High-Velocity Rounds
+Spike Grenades
+Implosion Rounds","Reload
+Handling","Air Trigger
+Envious Arsenal
+Slice","Bipod
+Aggregate Charge
+Chain Reaction",Häkke Breach Armaments,best movement and swap GL,3.0,S
+,Psychopomp,29.0,Arc,Area Denial,Pit of Heresy,,70.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Auto-Loading Holster
+Impromptu Ammunition
+Rolling Storm","Aggregate Charge
+Voltshot
+Gear Shift",Heretical Behavior,"Aggregate Charge access on energy slot area denial, also has 8% damage origin trait",4.0,S
+,Festival Flight,27.0,Strand,Area Denial,Tenet of Bravery,,69.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Slice
+Demolitionist
+Envious Arsenal","Attrition Orbs
+One for All
+Hatchling",Dream Work,"best application of splash Sever of any Slice weapon, otherwise a pretty normal area denial",5.0,S
+,Theodolite,27.0,Arc,Micro-Missile,"Tenet of Bravery, Zavala",,69.0,Yes,Quick Launch,"High-Velocity Rounds
+Spike Grenades
+Implosion Rounds","Reload
+Handling",Reconstruction,Frenzy,Problem Solver,only energy movement GL option,6.0,A
+,Lost Signal,29.0,Stasis,Area Denial,Encore,,63.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Auto-Loading Holster
+Lead from Gold
+Strategist","One for All
+Wellspring
+Demolitionist",Radiolaria Transposer,mostly a downgrade from Ouster besides origin,7.0,A
+,Motif-41,28.0,Solar,Area Denial,"Tenet of Bravery, Banshee",,59.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling",Auto-Loading Holster,"Incandescent
+Vorpal Weapon
+Attrition Orbs",SUROS Synergy,"basically just for surge matching, worse than Baton otherwise",8.0,A
+,New Pacific Epitaph,29.0,Stasis,Wave,Ghosts of the Deep,,70.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Chain Reaction
+Unrelenting
+Air Trigger","Redirection
+Crystalline Corpsebloom
+Reaper's Tithe",Restoration Ritual,"one of the best Redirection users archetype-wise, but still not very meta",9.0,A
+,"Forbearance
+BRAVE version",29.0,Arc,Wave,Onslaught,,67.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Redirection
+Air Trigger
+Unrelenting","Chain Reaction
+Desperate Measures
+Voltshot",Indomitability,energy NPE with worse secondary perk options and an arguably better origin,10.0,A
+,Wilderflight,29.0,Void,Double Fire,Spire of the Watcher,,10.0,Yes,Quick Launch,"Spike Grenades
+Disorienting Grenades","Reload
+Handling","Envious Arsenal
+Auto-Loading Holster","Aggregate Charge
+Withering Gaze",Tex Balanced Stock,Gizmo swap damage equivalent in the energy slot,11.0,A
+,Permafrost,28.0,Stasis,Wave,Tenet of Bravery,,59.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Rimestealer
+Attrition Orbs
+Impromptu Ammunition","Crystalline Corpsebloom
+Reaper's Tithe",Dawning Surprise,"probably the better of the two Attrition wave frames, no Redirection but still decent",12.0,A
+,"Wilderflight
+RotN version",26.0,Void,Double Fire,Rite of the Nine,,10.0,Yes,Quick Launch,"Spike Grenades
+Disorienting Grenades","Reload
+Handling","Envious Arsenal
+Auto-Loading Holster","Bait and Switch
+Withering Gaze
+Lead from Gold",Gravity Well,"has better perks than normal version for blinding, but otherwise worse due to no Aggregate",13.0,B
+,Liturgy,29.0,Stasis,Double Fire,"World, Banshee",,29.0,Yes,Quick Launch,"Spike Grenades
+Disorienting Grenades","Reload
+Handling",Envious Arsenal,Chill Clip,Dark Ether Reaper,"basically just for applying slow, maybe for an Ice Breaker rotation, that's about it",14.0,B
+,Romantic Death,27.0,Void,Wave,Tenet of Bravery,,61.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling",Repulsor Brace,"Destabilizing Rounds
+Chain Reaction",Tenacity,"probably best wave frame perks and great origin, just not very meta due to sandbox",15.0,B
+,Forbearance,29.0,Arc,Wave,Vow of the Disciple,,67.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Rolling Storm
+Unrelenting
+Demolitionist","Chain Reaction
+Gear Shift",Souldrinker,"much less versatile than BRAVE version, just has Souldrinker",16.0,B
+,"New Pacific Epitaph
+RotN version",26.0,Stasis,Wave,Rite of the Nine,,70.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Lead from Gold
+Unrelenting","Redirection
+Chain Reaction
+Kill Clip",Gravity Well,"best used as an LFG Gravity Well vacuum, otherwise just worse than normal version",17.0,B
+,Salvager's Salvo,29.0,Arc,Lightweight,Pinnacle Ops,,70.0,Yes,Quick Launch,Spike Grenades,"Reload
+Handling","Trickle Charge
+Chain Reaction","Gear Shift
+Reaper's Tithe
+Voltshot",Accelerated Assault,solid perk combos and Trickle DPS niche but unfortunately a lightweight,18.0,B
+,Harsh Language,20.0,Void,Wave,Banshee,,57.0,No,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Field Prep
+Wellspring","Repulsor Brace
+Destabilizing Rounds",Field-Tested,"bad 1st column can be circumvented using artifact volatile sources, decent otherwise",19.0,B
+,Martyr's Retribution,24.0,Solar,Wave,Xur,,57.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Field Prep
+Heal Clip
+Auto-Loading Holster","Incandescent
+Kill Clip",Cast No Shadows,"solid wave frame with ammo gen through Field Prep, origin interaction is decent too",20.0,B
+,Lingering Dread,29.0,Stasis,Lightweight,Duality,,66.0,Yes,Quick Launch,Disorienting Grenades,"Reload
+Handling","Auto-Loading Holster
+Discord","Bipod
+Chill Clip
+Chain Reaction",Bitterspite,"also has Bipod, but unclear on usage, otherwise pretty decent blinding option",21.0,B
+,Tusk of the Boar,29.0,Strand,Wave,Iron Banner,,69.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling",Slice,"Chain Reaction
+Hatchling",Skulking Wolf,decent splash perks and origin but not very impactful compared to higher tier waves,22.0,B
+,Explosive Personality,29.0,Solar,Wave,Vox Obscura,,62.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Field Prep
+Auto-Loading Holster","Unrelenting
+One for All",Land Tank,excellent origin but pretty outdated perks otherwise,23.0,B
+,"The Mountaintop
+BRAVE version",29.0,Kinetic,Micro-Missile,Onslaught,,61.0,Yes,Quick Launch,"High-Velocity Rounds
+Spike Grenades
+Implosion Rounds","Reload
+Handling","Impulse Amplifier
+Auto-Loading Holster
+Lead from Gold","Frenzy
+Recombination",Indomitability,"Gizmo alternative, only special feature is Recombination",24.0,B
+,The Militia's Birthright,20.0,Kinetic,Lightweight,?,,61.0,No,Quick Launch,Disorienting Grenades,"Reload
+Handling","Lead from Gold
+Slideways",Auto-Loading Holster,Field-Tested,basically just a high QoL blinding option,25.0,C
+,Undercurrent,24.0,Arc,Wave,Zavala,,68.0,Yes,Quick Launch,High-Velocity Rounds,"Reload
+Handling","Field Prep
+Lead from Gold
+Demolitionist","Voltshot
+Attrition Orbs",Vanguard's Vindication,"AO paired with all utility perks, no really strong add clear setups and awful origin traits",26.0,C
+,Wild Style,29.0,Solar,Double Fire,Zavala,,49.0,Yes,Quick Launch,"Spike Grenades
+Disorienting Grenades","Reload
+Handling",Reconstruction,"Bait and Switch
+Surrounded",Tex Balanced Stock,"strict downgrade from Wilderflight unless surge matched, pretty restricted perks",27.0,C
+,Ignition Code,25.0,Kinetic,Lightweight,"Xur, Dares",,64.0,Yes,Quick Launch,Disorienting Grenades,"Reload
+Handling","Slideshot
+Lead from Gold",Frenzy,Splicer Surge,similar to Militia's but no ALH,28.0,C
+,Pardon Our Dust,29.0,Kinetic,Lightweight,Dares,,67.0,Yes,Quick Launch,Disorienting Grenades,"Reload
+Handling",Auto-Loading Holster,Demolitionist,Hot Swap,similar to Militia's but no slide reload,29.0,C
+,Orewing's Maul,6.0,Void,Lightweight,Iron Banner,,70.0,No,Quick Launch,Disorienting Grenades,"Reload
+Handling",Field Prep,Auto-Loading Holster,None,a little better than Empty Vessel,30.0,C
+,Empty Vessel,29.0,Solar,Lightweight,Zavala,,63.0,Yes,Quick Launch,Disorienting Grenades,"Reload
+Handling",Auto-Loading Holster,Demolitionist,Field-Tested,basically Pardon roll without enhancements,31.0,C
+,Deafening Whisper,12.0,Void,Wave,"Xur, Dares",,48.0,No,Quick Launch,High-Velocity Rounds,"Reload
+Handling",Lead from Gold,"Unrelenting
+Wellspring",None,no real modern wave frame perks,32.0,D
+,Prodigal Return,29.0,Arc,Lightweight,NODE.OVRD.AVALON,,64.0,Yes,Quick Launch,Disorienting Grenades,"Reload
+Handling",Lead from Gold,Voltshot,Noble Deeds,"no good refill perks, no good add clear perks, nothing",33.0,D
+,Truthteller,24.0,Void,Lightweight,Banshee,,65.0,Yes,Quick Launch,Disorienting Grenades,"Reload
+Handling",Grave Robber,Repulsor Brace,Field-Tested,genuinely one of the worst weapons produced in a season starting with 2x,34.0,D

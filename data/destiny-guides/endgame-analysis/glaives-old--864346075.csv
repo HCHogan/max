@@ -1,0 +1,9 @@
+WEAPON,,ARCHETYPE,,PERKS,,,,,TOTAL,
+Icon,Name,Frame,Score,Ammo,Reload,Utility,Damage,Score,Final,Tier
+,Unexpected Resurgence,Adaptive,2,,"Auto-Loading Holster, Impulse Amplifier, Replenishing Aegis",,"Frenzy, Unstoppable Force, Close to Melee",10,12,S
+,Greasy Luck,Rapid,1,Lead from Gold,"Impulse Amplifier, Replenishing Aegis",Immovable Object,"Close to Melee, Unstoppable Force",9.5,10.5,A
+,Ecliptic Distaff,Adaptive,2,,Replenishing Aegis,Immovable Object,Close to Melee,7,9,A
+,The Enigma,Adaptive,2,,"Impulse Amplifier, Grave Robber",Unrelenting,"Frenzy, Unstoppable Force",7,9,A
+,Judgment of Kelgorath,Aggressive,0,,Impulse Amplifier,"Immovable Object, Demolitionist, Pugilist","Close to Melee, Unstoppable Force",8,8,B
+,Lubrae's Ruin,Adaptive,2,,Grave Robber,"Immovable Object, Unrelenting",Unstoppable Force,6,8,B
+,Nezarec's Whisper,Adaptive,2,Lead from Gold,Impulse Amplifier,Demolitionist,"Frenzy, Unstoppable Force",4.5,6.5,C

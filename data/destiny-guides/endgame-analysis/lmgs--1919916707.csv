@@ -1,0 +1,268 @@
+WEAPON,,INFO,,,,,,,PERKS,,,,,,ANALYSIS,,
+🖼️,Name,Season,Energy,Frame,Source,Stun,Ammo,⬆️,Barrel,Mag,MW,Perk 1,Perk 2,Origin Trait,Notes,#,Tier
+,Corrective Measure,29.0,Void,Aggressive,Vault of Glass,,50.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+Extended Mag","Reload
+Handling","Demolitionist
+Destabilizing Rounds
+Redirection","Killing Tally
+Demoralize
+One for All",Timelost Magazine,"extremely strong artifact support, Demo access, great origin, great frame",1.0,S
+,Hammerhead,29.0,Void,Adaptive,Arena Ops,,40.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Demolitionist
+Rampage
+Destabilizing Rounds","Demoralize
+Desperate Measures
+Mega Kill Clip",Forge's Kin,"worse damage profile than Corrective, arguably worse origin, has barrier intrinsic though",2.0,S
+,Song of Ir Yût,29.0,Arc,Adaptive,Crota's End,,53.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+Extended Mag","Reload
+Handling","Demolitionist
+Jolting Feedback
+Unrelenting","Master of Arms
+Mega Kill Clip
+Cascade Point",Cursed Thrall,"worse synergy than void options, but still very strong with melee builds",3.0,S
+,Qua Vinctus IV,28.0,Strand,High-Impact,Crucible,,38.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+Extended Mag","Reload
+Handling","Demolitionist
+Slice
+Hatchling","Meganeura
+Tear",Accelerated Assault,"best overall strand LMG for QoL purposes, good with artifact",4.0,S
+,Pro Memoria,29.0,Strand,Aggressive,Pale Heart,,45.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Demolitionist
+Tear
+Hatchling","Desperate Measures
+Mega Kill Clip
+Collective Action",Dealer's Choice,"Dealer's Choice kit option, also strong damage profile and perk options, Tear + Supercharger option",5.0,S
+,Circular Logic,29.0,Strand,Adaptive,Neomuna,,51.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Demolitionist
+Firefly","Desperate Measures
+Hatchling
+Mega Kill Clip",Nanotech Tracer Missiles,"one of the weaker NTM weapon families, but still very good overall",6.0,S
+,Bane of Sorrow,29.0,Void,High-Impact,Pantheon,,44.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds","Reload
+Handling","Demoralize
+Dimensional Shift
+Destabilizing Rounds","Meganeura
+Mega Kill Clip
+Killing Tally",Elliptical Orbit,very strong void splash option if willing to drop reload perk,7.0,S
+,DIABLERETS 06,29.0,Strand,Rapid,Distortions,,33.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Hatchling
+Auto-Loading Holster
+Subsistence","Meganeura
+Redirection
+Killing Tally",Carrion Munitions,the strongest strand splash LMG ever,8.0,S
+,Commemoration,29.0,Void,Adaptive,Deep Stone Crypt,,55.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+Extended Mag","Reload
+Handling","Dragonfly
+Reconstruction
+Adaptive Munitions","Repulsor Brace
+Redirection
+Killing Tally",Bray Inheritance,"only Repulsor Brace LMG in existence, volatile easy to source from artifact",9.0,S
+,Temporal Clause,29.0,Solar,Aggressive,Nessus,,36.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Demolitionist
+Meganeura
+Incandescent","Mega Kill Clip
+Killing Tally
+Burning Ambition",Fail-deadly,"very potent double solar splash option, still has Demo though",10.0,S
+,Thermal Erosion,29.0,Solar,Rapid,Europa,,32.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Demolitionist
+Incandescent","Meganeura
+Mega Kill Clip
+Burning Ambition",Winterized Gear,"alternative to Temporal with worse origin, but Incandescent + Meganeura",11.0,S
+,Marcato-45,23.0,Strand,Adaptive,Banshee,,60.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+Extended Mag","Reload
+Handling","Demolitionist
+Slice","Hatchling
+Golden Tricorn
+Onslaught",Suros Synergy,"downgrade from Demo options in S due to origin and worse perk diversity, nice ammo gen though",12.0,A
+,Chain of Command,29.0,Stasis,Adaptive,Solo Ops,,54.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Headstone
+Overflow","Demolitionist
+Meganeura
+Killing Tally",Wild Card,"solid all around, has Headstone + Meganeura for pure splash if wanted",13.0,A
+,Ulterior Observation,27.0,Stasis,Aggressive,Kepler,,42.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Demolitionist
+Headstone","Dragonfly
+Killing Tally
+Rimestealer",Exhaustive Research,"stasis combo takes too many slots to work, still pretty decent frame + origin + perk combo",14.0,A
+,Qullim's Terminus,29.0,Stasis,High-Impact,King's Fall,,46.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+Extended Mag","Reload
+Handling","Demolitionist
+Unrelenting","Headstone
+Crystalline Corpsebloom
+Mega Kill Clip",Runneth Over,"several perks incentivize reload assist, but manual reload is improved by Runneth Over",15.0,A
+,"Terminus Horizon
+RotN version",26.0,Arc,High-Impact,Rite of the Nine,,48.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Demolitionist
+Dragonfly","Killing Tally
+Jolting Feedback
+Precision Instrument",Gravity Well,"probably the most plain LMG with Demo access, still decent though",16.0,A
+,Dawn Far Off,29.0,Solar,Aggressive,Tenet of Bravery,,35.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds","Reload
+Handling","Burning Ambition
+Subsistence
+Impromptu Ammunition","Meganeura
+Incandescent
+Redirection",Dream Work,solar double splash with some reload options,17.0,A
+,Terminus Horizon,29.0,Arc,High-Impact,Spire of the Watcher,,48.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds","Reload
+Handling","Meganeura
+Supercharged Magazine
+Trickle Charge","Gear Shift
+Mega Kill Clip
+Jolting Feedback",Tex Balanced Stock,"pretty lethal with Meganeura + Gear Shift, otherwise Supercharged/Trickle for reload",18.0,A
+,Seventh Seraph SAW,29.0,Arc,High-Impact,Cosmodrome,,40.0,Yes,"Arrowhead Brake
+Fluted Barrel",Seraph Rounds,"Reload
+Handling","Supercharged Magazine
+Trickle Charge
+Collective Demolition","Meganeura
+Jolting Feedback
+Mega Kill Clip",Eyes Up,like Terminus but no Meganeura in first column,19.0,A
+,Unwavering Duty,27.0,Solar,Adaptive,Trials,,58.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Incandescent
+Auto-Loading Holster
+Rampage","Burning Ambition
+Killing Tally",Roar of Battle,less lethal combos than Dawn Far Off and worse origin and frame,20.0,A
+,Archon's Thunder,29.0,Stasis,High-Impact,Iron Banner,,41.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+Extended Mag","Reload
+Handling","Rimestealer
+Envious Assassin
+Air Trigger","Headstone
+Desperate Measures
+Killing Tally",Skulking Wolf,"decent frame, solid origin, and typical stasis combo with okay alternative perks",21.0,B
+,Avalanche,25.0,Solar,Adaptive,Dawning,,40.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Dragonfly
+Auto-Loading Holster
+Rewind Rounds","Incandescent
+Golden Tricorn",Dawning Surprise,"weaker double splash with ALH access, no excellent roam damage perks",22.0,B
+,Recurrent Impact,29.0,Stasis,Rapid,Vox Obscura,,43.0,Yes,"Arrowhead Brake
+Fluted Barrel",Alloy Magazine,"Reload
+Handling","Subsistence
+Field Prep","Headstone
+One for All",Land Tank,very mediocre perks but Land Tank is an excellent origin trait,23.0,B
+,Bitter End,28.0,Arc,Balanced,Equilibrium,,12.0,Yes,"Arrowhead Brake
+Fluted Barrel","Enhanced Heatsink
+Ionized Heatsink","Reload
+Handling","Trickle Charge
+Gutshot Straight
+Cooling Baubles","Jolting Feedback
+Killing Tally
+Rolling Storm",Imperial Allegiance,"awful ammo gen stat, disappointing first column given heat capability, mediocre origin",24.0,B
+,Speleologist,29.0,Solar,Rapid,Encore,,29.0,Yes,"Arrowhead Brake
+Fluted Barrel",Alloy Magazine,"Reload
+Handling","Envious Assassin
+Heal Clip
+Deconstruct","Incandescent
+Killing Tally
+One for All",Radiolaria Transposer,"excellent origin trait, just very lacking in first column support",25.0,B
+,A Fine Memorial,29.0,Arc,Adaptive,Moon,,46.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Auto-Loading Holster
+Wellspring
+Impromptu Ammunition
+","Meganeura
+Gear Shift
+Jolting Feedback",Loss,"awful origin, decent second column, everything else just okay",26.0,B
+,21% Delirium,29.0,Arc,Rapid,Gambit,,45.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Overflow
+Trickle Charge
+Reconstruction","Gear Shift
+Jolting Feedback
+Killing Tally",Gun and Run,"very solid reload assists, just not the best archetype",27.0,B
+,Watchful Eye,29.0,Arc,Aggressive,Xur,,36.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds
+Extended Mag","Reload
+Handling","Overflow
+Field Prep
+Wellspring","Jolting Feedback
+Killing Tally
+Elemental Honing",Runneth Over,basically Delirium with worse reload assists and better archetype,28.0,B
+,Qua Xaphan V,22.0,Void,High-Impact,Gambit,,42.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds","Reload
+Handling","Field Prep
+Clown Cartridge","Rampage
+Cascade Point
+Dragonfly",Wild Card,"decent archetype and origin, just lacks reload support, only up here because void",29.0,C
+,Shattered Cipher,14.0,Void,Rapid,"Xur, Dares",,37.0,No,"Arrowhead Brake
+Fluted Barrel",Alloy Magazine,"Reload
+Handling","Auto-Loading Holster
+Field Prep","Rampage
+Surrounded",None,"worse archetype and no origin vs. Qua Xaphan, otherwise has ALH",30.0,C
+,Retrofit Escapade,29.0,Void,Rapid,Seraph's Shield,,29.0,Yes,"Arrowhead Brake
+Fluted Barrel",Alloy Magazine,"Reload
+Handling",Field Prep,"Rampage
+Golden Tricorn
+One for All",Ambush,trades ALH for an origin trait and more neutral perks vs. Retrofit,31.0,C
+,Fixed Odds,29.0,Solar,High-Impact,Duality,,37.0,Yes,"Arrowhead Brake
+Fluted Barrel",Alloy Magazine,"Reload
+Handling",Field Prep,"Incandescent
+Killing Tally",To Excess,"no reload assist in 1st column, origin trait is useless, otherwise okay",32.0,C
+,Qua Furor V,26.0,Stasis,Aggressive,Banshee,,39.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds","Reload
+Handling","Rimestealer
+Recycled Energy","Rampage
+Golden Tricorn
+Dragonfly",Wild Card,"awful first column, Rimestealer with no crystal source",33.0,D
+,Planck's Stride,29.0,Arc,Rapid,Xur,,36.0,Yes,"Arrowhead Brake
+Fluted Barrel",Alloy Magazine,"Reload
+Handling",Grave Robber,"Swashbuckler
+One for All",Right Hook,melee specialist single target machine gun in 2026,34.0,D
+,Eleatic Principle,29.0,Arc,Rapid,Xur,,43.0,Yes,"Arrowhead Brake
+Fluted Barrel","Alloy Magazine
+High-Caliber Rounds","Reload
+Handling",Eddy Current,"Golden Tricorn
+Harmony",Head Rush,buffed Head Rush cannot save you,35.0,D
+,THE SWARM,20.0,Arc,High-Impact,Zavala,,49.0,No,"Arrowhead Brake
+Fluted Barrel",Alloy Magazine,"Reload
+Handling",Feeding Frenzy,"Golden Tricorn
+Dragonfly",Vanguard's Vindication,bare minimum of what can be on a machine gun,36.0,D

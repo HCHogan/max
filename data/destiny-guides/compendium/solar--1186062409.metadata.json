@@ -1,0 +1,6796 @@
+{
+  "merged_ranges": [
+    "A1:C1",
+    "D1:M1",
+    "N1:O1",
+    "B3:D3",
+    "G3:I3",
+    "L3:N3",
+    "B5:N5",
+    "D6:N6",
+    "D7:N7",
+    "D8:N8",
+    "D9:N9",
+    "D10:N10",
+    "D11:N11",
+    "D12:N12",
+    "D14:M14",
+    "D15:M15",
+    "D16:M16",
+    "D17:M17",
+    "D18:M18",
+    "D19:M19",
+    "D20:M20",
+    "D21:M21",
+    "D22:M22",
+    "D23:M23",
+    "D24:M24",
+    "D25:M25",
+    "D26:M26",
+    "D27:M27",
+    "D28:M28",
+    "D29:M29",
+    "D30:M30",
+    "B32:N32",
+    "D34:M34",
+    "N34:N35",
+    "D35:M35",
+    "D37:M37",
+    "N37:N38",
+    "D38:M38",
+    "D40:M40",
+    "N40:N41",
+    "D41:M41",
+    "D43:M43",
+    "D45:M45",
+    "N45:N46",
+    "D46:M46",
+    "D48:M48",
+    "D50:M50",
+    "D52:M52",
+    "B54:D54",
+    "G54:I54",
+    "G56:I56",
+    "B58:N58",
+    "D60:M60",
+    "B62:N62",
+    "D64:M64",
+    "D66:M66",
+    "D68:M68",
+    "D70:M70",
+    "B73:N73",
+    "D75:M75",
+    "D77:M77",
+    "D79:M79",
+    "B81:C81",
+    "D81:M81",
+    "D83:M83",
+    "D85:M85",
+    "D87:M87",
+    "D89:M89",
+    "G91:I91",
+    "G93:I93",
+    "B95:N95",
+    "D97:M97",
+    "D99:M99",
+    "B101:N101",
+    "D103:M103",
+    "D105:M105",
+    "D107:M107",
+    "B109:C109",
+    "D109:M109",
+    "D111:M111",
+    "D113:M113",
+    "D115:M115",
+    "D117:M117",
+    "G119:I119",
+    "G121:I121",
+    "B123:N123",
+    "D125:M125",
+    "B127:N127",
+    "D129:M129",
+    "D131:M131",
+    "B133:N133",
+    "D135:M135",
+    "D137:M137",
+    "D139:M139",
+    "B142:C142",
+    "D142:M142",
+    "D144:M144",
+    "D146:M146",
+    "D148:M148",
+    "D150:M150"
+  ],
+  "hyperlinks": {
+    "A1": [
+      {
+        "text": "Go back to the top!",
+        "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1186062409#rangeid=1622386151"
+      }
+    ],
+    "N1": [
+      {
+        "text": "Support the Data Compendium",
+        "url": "https://www.google.com/url?q=https://www.patreon.com/DataCompendium&sa=D&source=editors&ust=1791770085681124&usg=AOvVaw0xUb-Vzo4yMM6lowqG1JzA"
+      }
+    ],
+    "B3": [
+      {
+        "text": "Hunter",
+        "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1186062409#rangeid=271530187"
+      }
+    ],
+    "G3": [
+      {
+        "text": "Titan",
+        "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1186062409#rangeid=331697527"
+      }
+    ],
+    "L3": [
+      {
+        "text": "Warlock",
+        "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1186062409#rangeid=1431672841"
+      }
+    ],
+    "D115": [
+      {
+        "text": "For the sake of vertical screen accessibility, go to Song of Flame's section.",
+        "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1186062409#rangeid=550859985"
+      }
+    ]
+  },
+  "images": {
+    "C6": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWBig8c9PZRhewPLeGPzX84gdlfv3egPOxGkmJyuT_x9faQMn0UMrs8-ilY_02jedwxRT1UPPR7ps5MJZ92ZaWIbBREeObcCFjNR6kDNS3Eb1XrbJDEZSVcF97XwOBOjEBAHhVSOW88SnKwM-7hRF0DV6gpoMYW2upCjuvJ=s74-w59-h74",
+        "alt": ""
+      }
+    ],
+    "C7": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUyPuDOT6kBFGC8gw6kSJzEjgyLP_-a7ZL4zOPA8N9UeiedufaQZCK1_9RGabBJ75Rvq1Qa9YNcXbqJ7PRACk2z5CNPK2qC9x4aDSmdwoF4Txv27dNAdsn_Rz2I90xHm0AtmYzAkSDfKtNdmj98GsaRHijSqxkGCCrXBSVk=s74-w59-h74",
+        "alt": ""
+      }
+    ],
+    "C8": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLbKpDCqiOB-lS32wFjcyMuaiOcQVtwo3Z12-y5CyKQo7z002jjMkkKKwJneucvTzY-5LgLrmMuQSdQB0O-fmSq7N7hnt2yKbN_1D_vTC7nvCzvcw1GIjvTSpsd1vGvHJHVmBKVKN-Y3UPHqccbWp5spJpZxihmXKqLD1gA=w59-h104",
+        "alt": ""
+      }
+    ],
+    "C9": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWVXKRiU_tFw4Jl7j0m4_DJ49i6OyhjHKizmFG0oGh---5TiCcu5QBunNWe5o1mrE_WfUD8zjty77tPCqCPXavsF1_ccHibEUnYg2uA2Xc-kGQucEMsfQ7kU4rh8VvlrccUbjrOo1Zz2vKu4TCXEpbGUUPJ5BId2CaxCsk6=s149-w59-h149",
+        "alt": ""
+      }
+    ],
+    "C10": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYeL12ZvJuXE_kjDwehqBbhKN3WS5_GKaQyjtNQDUS8QkonY_elJKQKW0GNRkF4SlAo3-C_KT4S8h3yPykIvOGTqqVTlo8p3Aph_5VPlKco3WHD4D7AVXfy_YEKtsliFo74vYnJ60OdnIsHON0rx2BdIWMHLGK5vqlVhjA=w59-h134",
+        "alt": ""
+      }
+    ],
+    "C11": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV5FBvD1pBo1Ngij9qIF-qkHi3a0QVQ-hiqTLsf8LJeNqF5CeKTiNapAU8aJ8KyyKkrUB823OmIOYUpXNk0TG0CQ8ds8db6fKCslkkN9Q0WhGLa1AEyefAUeq0ypUUmZGFp7H6m5vw0pwv7m4NxjXHijKRxWBriGjyi9Ng=s194-w59-h194",
+        "alt": ""
+      }
+    ],
+    "C12": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVKIydhuutVwmaBfNihbjqYCihXzVHFLXLntW2y3YQyXPG7a2Yx1ORlniKAU8NPajuniHme8xzRwoTjjTBL-hRedmzcDSJhs75b4i3hEL-HnzsXU8DljMLUAvgkpsex_DUIP0KsNJRLGlG8UO9yiO9szxkTvZzDGEsrTJu3=s179-w59-h179",
+        "alt": ""
+      }
+    ],
+    "C15": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUZdexo7ds0gJNp9m2H9ViL2hxOrlAq53Kjmu92awyKyxv_FI404jr7c11QFQefXRdFZbjTkvmMUFZCOxxJhzGwXGuzynLAJ0UjNC6rmWvRDs-KVet8KKTxaukb8uJjLnU1_icmbF4C_G4LxJuKeltXjMSAhMzVW-czAALc=s89-w59-h89",
+        "alt": ""
+      }
+    ],
+    "C16": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX0A_afcAP251uqz9r8tQA4n21R2GThuO--O4-UqkJWD1YNyWwJbPCqHwEBcflfvkMtU0B_i2lmVqV4yMtV_eEqjdMSd9t-w1w8LhUlZCEKlxUn1j3O7AFfvGZ3iHqxEV4OnX_iB9PkZFgvjl4IYc9RHW3UeYMC35WScNpD=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C17": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX2N4qrz60dAJRYEPxJW-mTDDChu2837U43J7BcaSZeBD5euQ_vGo05R_yhDhyp4J7g6f00OvRCfYOEw2-hfF_MLdTsfSbK3uZzUhSqlgt3cQUFXcX8AbOVkv-fJD2PgTMD3ELJaUiZZsSTVAvG3m33RNm8KsCprUHlmOU=s149-w59-h149",
+        "alt": ""
+      }
+    ],
+    "C18": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWoPTTtcp7FF2e0OH-pyH-HeiWe7qXJ2ESR0fRaQzmRE-eP8lvHMyaP4GVsOz5lWFtFifZmjuL24AD1u2fcGuwYOCuPZX0T8q2yUaX961yiKEybTpdwa6TnDOVkdTYE7h18R2hWoQ2CZaskM-dH6kW_3se-IIj2PpInS-U=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C19": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWojFqW8CuulARXv5Hel1CMZhkz7h6ApfrtDVuz4vknHg9VjT0FnPi05X7yHwt4Yy6e1mwuslr3CqIOmbxUV3n5qBDpw8A0DqCLHXUwQk1iR-x3PPcAUqxDKZGwf1aJFDDJd5U5oH0z7tJ6vowNyZGFeYzTNtZjH4t_2hSE=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C20": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXzuRv_UcZeBhcGIucZYmZPGLqt6oPRVaiysrH89Bc6WxGP1EAHfFarGdAWDiNACwHALsYgmRSaoKRi3GNOV7y8ZbMupINvpOQkp3Xi5DH67u-_82OMIlgKPve1FxPGXaR61q0sfm2-sqb_3W__17Ggz7dZSyc4s3Bj20wf=s74-w59-h74",
+        "alt": ""
+      }
+    ],
+    "C21": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXDRUdXIsWDmVIhqYJE3vJ0MOfFkJO5GsNzyM1J_vFH1ZdDtsJ_T2pRW_WKRLyBcHqdxtr4RYMSWdfi_9jebGlX2LSsKHwK4F1nWsrLkx1WO_PXee-lCtBuAxnV5THo5koeWU14GlztChnwTR1AkNqTMtlF8PJj24EntWQO=s74-w59-h74",
+        "alt": ""
+      }
+    ],
+    "C22": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXD2Oa8aqivJeII7gwotC5tSDJMeZYzHYGZJ0WeKSxfVQQEZwQ93wTTvFIM3d5ZdkUMXWttayJDXQdSsBS7-2meCJF-WVDNpw8ooMdE00vgcVC3yDzRb26x9FlG1-H4nXcL3dUh4jn6z5ooKF3j8XtgW7bJLEU9-eIgJSE=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C23": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUnnU75ozgZCZR0pXV6LRtDVI1-y7hNHsMiX18Zug3bkGe_gyeDXZts4QDJ3lmgu1CBBykjAbdQMnL7vyBMLI0yRogkJUfCwUGsM59zAIVLWaOi1BckWAxnUn3vbl2xLW6y2yrcuvFQZDTKCNXGAuv5HCR_MVj4A9rd1JoG=s119-w59-h119",
+        "alt": ""
+      }
+    ],
+    "C24": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUodLOnHjER2-s2Xi9keg91kLZx0_W7tPdzqV-14VKPoU1ptZbMt8x1bRwT6XVy6OkdMkfwpq4O1YApSxkL6yBv5dQ-6bCfLkHu7cV1zYI-rVQdUqxIUOBhHulPeNvkUYgrWBkt0m1uPIfvZqAh4jqsQzFzyhw5yJARHrU=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C25": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUzXzqSHzAwlehnZzMee6Mt286PwfLGrttwexOb-JOYELuleU_Lb5FQ02bRIsZuQ4G4cIV2oVojt7V_XWNLi9P4OGce_qJSu6Lp612lxX9IaKebsaDXIyVbHc034D4-gD534v3Wppg8m03x2hMdZ9YpOteH00k40sHK7lum=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C26": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWTTZryPeI7hk_sItYMTPvkuS-dplj4_RDyHPrE5QmbUidM3nwCA4bJUTLTqnQRPXgA5YZmDIssMS_M1w7e1Le_TsCDOI9DQqIa8sKaTQcCCx4hTkTJ47OlzP3wu-s7OZwP27A0cMhyGA5h6NumJ4ugJhhPkTMSjXEF30k=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C27": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUB2NfEGXo8v6H9PxbGDIL2cZ5oxkN2vNv425L17ZC3AppircWPRpRALXIH2xZt-QGmirPASONIshxGu84Aa_itZXO8b59fSKNM9XTrojXtZRXnsDFJ4rfKW8FVBvT4DV_3t2lXarvkvaf7fKc1oy-npm2WPDsvhep5_-6T=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C28": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xW2X3OV-jDMVW4Q0ntI9R5T78UxzmWKsZaOmi1RnoECTRGe-2sKPoS7pQjMmgI4G4NMo2RcIWMdGlvAyeSUtIT-4GgfmLD43o-CoNgyIaBHwd4tZR0PnOcEBRXtVuFPXMaiNNnNMHDU9F4M9L3QvDAVFmdu4OxJ8FxqXHw=s89-w59-h89",
+        "alt": ""
+      }
+    ],
+    "C29": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVldEqjauUn--PQsCgii3y1uVy6xNA_2UrQ6p8_UIdQyrGdrcKD-uFHjgkoPAkQ5gcnQQxYtdMNEIM88Ytmk3vJkwIGI1Dv0ihcHNm517BSZxMJEggcXB-M6SyXopvdGrBF2XDT8RXP_E-B9EEsNKgzR5XX2YqMEnY58Sw=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C30": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXf34jUs9Wfo8_2_3dimhJv04BtFjzWLUDUhqo-LXnqdEl8HtQLxhfUz3lTbc3M5XyTuG0Sc4c9egqJNxVCT3Qe9yBPeciwaAF3wNZN1HX9fqdm_fGxZNyHNgnyuLvtUaoF3S9BH6s4D-ZPhTwV3rbBO1siI0VgSVYQnzKf=s59-w59-h59",
+        "alt": ""
+      }
+    ],
+    "C34": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX3TnxhHlpkG4FMaEWxQW2jshIm1tG_EBGjTnMPe-iHGZ3_-8Fh6XkWYN1Mnrh7ngjr4fy6rcSWt8nZSU1RW41iCVIfzNmS2RTLbbZvlZl7Xj1WFhOSKWi6sIT4W-ZPPVF0SQuSd0K7mlHJlAYVWU56skfLcxAy10DWnf73=s104-w59-h104",
+        "alt": ""
+      }
+    ],
+    "C35": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLabW7zyJy2gAm0A9Sq-c84KjkHuFk6dIIsau2oZ1C2Bq07hG8itTtVCl9aABpJ5McSYniNDgzGbSIrpPwCg66SBeQKGhlO7lQbvXpy03F-KBTjicwfR5EqwxQjscw37qFxB5Dmw3dCJxCBX7PdkoNUs4rB3qGBzqyuW=w59-h44",
+        "alt": ""
+      }
+    ],
+    "C37": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWI-1AjBy3KLUhBeh-yz_lPDftnSNKx5CpRQlo3mYDJgPGehA9OpnZy6oAEi-DtpjEy0JZzoq--aYqslrp3BXn2IFjYlVdf7nxkk-cUbt_UdZtmOhdiljHi7L99919VzHHPCRN0ylE33M_pS-jvSSiVnpF2ILl6KMMVbdQ=s104-w59-h104",
+        "alt": ""
+      }
+    ],
+    "C38": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLabW7zyJy2gAm0A9Sq-c84KjkHuFk6dIIsau2oZ1C2Bq07hG8itTtVCl9aABpJ5McSYniNDgzGbSIrpPwCg66SBeQKGhlO7lQbvXpy03F-KBTjicwfR5EqwxQjscw37qFxB5Dmw3dCJxCBX7PdkoNUs4rB3qGBzqyuW=w59-h44",
+        "alt": ""
+      }
+    ],
+    "C40": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWImSUYIl2xNJyC2X4TvQ5up34N30dtnGAFHfsPAgprakK8aKDisZnYavXUp4wneg93SXrgVooXG9flANY0g0tLBR4d4BIpq1cIJg5FMJCKqj0tIAuxAhQAobxdriZavfGpbd-FVxXFdpVc_pSSDpNIgru3NZoF1yvysTs=s104-w59-h104",
+        "alt": ""
+      }
+    ],
+    "C41": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLabW7zyJy2gAm0A9Sq-c84KjkHuFk6dIIsau2oZ1C2Bq07hG8itTtVCl9aABpJ5McSYniNDgzGbSIrpPwCg66SBeQKGhlO7lQbvXpy03F-KBTjicwfR5EqwxQjscw37qFxB5Dmw3dCJxCBX7PdkoNUs4rB3qGBzqyuW=w59-h44",
+        "alt": ""
+      }
+    ],
+    "C43": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUT-hT8szU_dMJHxMpS9FFmflIMYz_BsH5IEW3Yn1HtXv65c5I93r27ihpuD5XQHQMLXUXK8WYPStCu5wAJtVMttF5gYXPBnd7EyjZrBIr4dUNWg7Gzfc3yvDN-zwgaTKozyaZyI9qRbDRcLsWX3hFgYtXqbI7_Ma6HLWxm=s119-w59-h119",
+        "alt": ""
+      }
+    ],
+    "C45": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWegTJaF0lrV-uGgZvqzGXFoBDJtJU_AGK7Sq8AO9cBoQbrFQXAK_DWvKFab3nBBDfGAiwbnt4lBQEgR4_x0lP03oWc9KLhd3mDhh1H-BJl_7EVSaM2J8Exbe4qH4XLM0_GAaVxnXdyJLsEnw3vGKVdfVK1OE0eNdAkBbE5=s164-w59-h164",
+        "alt": ""
+      }
+    ],
+    "C46": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLabW7zyJy2gAm0A9Sq-c84KjkHuFk6dIIsau2oZ1C2Bq07hG8itTtVCl9aABpJ5McSYniNDgzGbSIrpPwCg66SBeQKGhlO7lQbvXpy03F-KBTjicwfR5EqwxQjscw37qFxB5Dmw3dCJxCBX7PdkoNUs4rB3qGBzqyuW=w59-h44",
+        "alt": ""
+      }
+    ],
+    "C48": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU1sHxqM5vkbgKZ_OKGxtW80d8YWee24WXGEVOQZGcfjhUahTpoA9JJ97zbGslSWrUB18S4p87mO_RzoMC5kNVz_Jcuy1r9CfiMxG-VpRxxNJvTvGqDEgMiai8P_2781LDNRtzby9dUydWlyDXSeuFtIwJHW7NbLU7PSQqQ=s134-w59-h134",
+        "alt": ""
+      }
+    ],
+    "C50": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXO5epM8AnqEYrLgw7Z5G8Tt-ESbO1T9TA7gwDEofT4raQC30gHdqBtQgDTNlKFZdgfvep2wa0Ao3N9vtg4VoSRCSLUf2P-4ztacewevvq6JLCfj8rU5URyOXoF9DixEAa3HH1b40WEjv9nWh1f_-7y1Ft_Us73XEo4EhY=s119-w59-h119",
+        "alt": ""
+      }
+    ],
+    "C52": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXD8TFgK38cpLNkO0qLa1Icv9fzfNcKyi1r2LCgM_Kh_3anLdwegFL2dvEWcoOFdQ75Rw1WiQOd6ug3A2SpkkzmP_WI4d_eMSqBc15NEEauWn9iiGsDTePPx5LXfXYTLMpn5hyEl5iax8KUdlRYa6pfUSt_ce9GaVV9wfQW=s134-w59-h134",
+        "alt": ""
+      }
+    ],
+    "G56": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUkt_uzvHmpH3ZMW4TY1gsOx_OhsKlBVm487XW3JHLIhcr268BmVFCQ_c_kH1w-y3zStgbqDfapYFM1XWiPLK-CArAt4yoaBU_lDB4G4C9DmwCEHkf_SNVrs0hOwmr77gJ-sS_Efx6plDS0jhl_R4AnYVKEho1l7mw=s290-w290-h79",
+        "alt": ""
+      }
+    ],
+    "C60": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWR9MJDblk23-a23cMDeNEvVRAT6KjSv7lpYCqIZycD6SC-ENxXHNviA95Ha6h4B8inoe7o5u_OeSyosmCW60ifi_tQiyFeRPiLIDGFIjDUJvF8g63BZ_LPyxDq8XVaZXX_c4SxjFdyPSasoZyMYu1jQWNexPHO8uKyFRU3=s74-w59-h74",
+        "alt": ""
+      }
+    ],
+    "C64": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX_4wZYbSyJJy9ClUX4ItpI6Mzgif5HwoWLYpSBh1GIG9XG-JYA4p1Ll-rdut5t6IiTApd3GNndRcFeF1ijcEQM2jwFoGc8Euk8rD4XukqpGOHPvWAzoq0KMTRv30jVxlSDpB9YuAu9N91tA7zXxw2rzT6oDhgLN-09zmA=s89-w59-h89",
+        "alt": ""
+      }
+    ],
+    "C66": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVbnKEsQYT_tIPyd1NzN2AVbvfe6zqoOy6F4LxOnYXVr7iqGs8JacSS6ksNbVrGN1BRUJ6A-n78DeFfDRHnAf9oPzpfjirjxgo4iZvKcK2UZwY_wK9WLRpJzh7xDK3FA-ET_WRD3hwXNm6AtX6RrIZoUmcp4VbqFjfHPv4=s119-w59-h119",
+        "alt": ""
+      }
+    ],
+    "C68": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUcZfwN49aQdAuF2Q96zSO6qFBcIyH576H0mQbB2k_nmHMX81CPC6j3pAEgu9vP0Xb5xINuv6VUT4xLTO8ikJ7Xi8TX6QRNMiK81vJFkOCITmIWQE7Fb5bP2VBoKlzdwIM_StrBz0QfYL84vEpYVtWmsQLtwngl5r1yt21F=s89-w59-h89",
+        "alt": ""
+      }
+    ],
+    "C70": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXweIfkKdUAJG69p3yKLqOhL-KzTk20DiQfT1mkSfnxSPTY7rSikNBJqCAH9foEus34JW5TbUDLzmobccpoRBG0jmD4u4eWxNSrmCQFnC0gv5cCTW9JvNcG3rNvypr-A_MsMzMJfz6XrKRfqshoySRTIxFtBFdeNpU0ltSc=s104-w59-h104",
+        "alt": ""
+      }
+    ],
+    "C75": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXkMqfz-XFar4uRps4SDHJZOfDwPWk7egxcbYvJ2nyjhySxaQpZ_2KHFCWCg3RxMXohOe9fwnxiL0mENKY1ojMz44IdZyZTRCCaLN3TDL_EOlLfGaoxomwyKZp8e3cnwaJm95lgxwjeqPhxlkyiSpdpWaCPkXy8svL_Rc0=s149-w59-h149",
+        "alt": ""
+      }
+    ],
+    "C77": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVRbpjIDoTbixfGgt5GBhNogIz579JB4X1qQIHtkgNRgJf4CsHeaBBo2x13mouygtEXL1_-JRByq89p9MhglJ0wCtWtbP1lv5igq7jFg-3Ep44_wF62AP7sgqteOH8nWghElmmaZ7gepTg3Dv0ic_L_fYWmEQNdENDxcnd0=s194-w59-h194",
+        "alt": ""
+      }
+    ],
+    "C79": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUh4XNWDrW7zVAIroxEpvS5WAoMk1Ax8Mq7VuVss-Be5rAU9Tx7zO6S3vfts6ZGi0TTQX-BL7h81dxcxNzULrEMT3cejylGzryiiFeTBvhDRn1QENS7iPDW7nqQTIrHB6y2iGDc8rS_3VI8tiATvF5kVpLMl4QCrxNOk669=s254-w59-h254",
+        "alt": ""
+      }
+    ],
+    "C83": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWKLb8Wj4sxee1Stdyb-ybVx9MLFKBQOyO5dRnygSNRaAd3fqyuUL_2ReJlGFoznS8TzzFhiGu_GMM5ApYGfP65WNOitZNcC3-4Pyp16w9WJXYoUwij9L8ivD8_Tf12HrjkE8pQVEmPEOKSB4Qk488skXLCLgviFDhiu2Y=s209-w59-h209",
+        "alt": ""
+      }
+    ],
+    "N83": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h209",
+        "alt": ""
+      }
+    ],
+    "C85": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVw1u338LmdxO9NYAF9xP2Y4Dmv9ZMX55eAj0NQRQoYHf6qTXjrKT3f_4jfwpmyNPsRx1HUfw0b33dwE_OfPt2pl6afZnEwffALHmnKCHON3hC1s2VuHfxarT3i6mgmldpLu5NM6F10g1LO8NQe3O5wBB88XrsX0_RCJY1z=s134-w59-h134",
+        "alt": ""
+      }
+    ],
+    "N85": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h134",
+        "alt": ""
+      }
+    ],
+    "C87": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWOxV-jc9lLA3qxTYqknM9116-L6tK-RvKmyhoGOPxvo-pnRUgVSwYPS-V6Uvq23YBq1S14hf_k1C-pFWx-VUOoNC0tiDQ_0qAYWLUa5VBrtLtxErW9h93Fz5uEtvllgCkJDQsYo8SvoiFFsguImp63Ys98l4gdIh07vSxP=s149-w59-h149",
+        "alt": ""
+      }
+    ],
+    "N87": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h149",
+        "alt": ""
+      }
+    ],
+    "C89": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWzSMbzQF_Az263Gbi4uo80BrJ9ZddVkuBZi_UXAVMvBiMsD9k0aVqTMDRrBuKU5fvu-TP2nGGM0vSBMDgeGa7b5uoMYnKeQ3Q27lVWEudOddRqR1TQyIVJroJfg3z06YwtlFXnMLrGyBDMd2L_30i0QbAoo7M1qge1chtL=s209-w59-h209",
+        "alt": ""
+      }
+    ],
+    "N89": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaPv1m7vcb2tvUbcG5v0I4TYrh5NIEOEd1T6MsPNutwdDRxBiCz8uOJNL43uvjRxpC3unAr9xzSEZAdDQsAG3cWqFklWmAPXdjSLEhxZ8m-PplqIpb5OqZZ1U85fwGI1sd9oWqwQB93Gwrh7t-UsfVEBMue-CKgz1ySBAg=w100-h209",
+        "alt": ""
+      }
+    ],
+    "G93": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUXpYj1nK8IyLIlaIlr4Mgo54vJYROfbMbXCsv8xPPMg-xOiw5TatIJ497Owq9aMvY2nl3ps21SUYQqqW_paEZWKQsPwEzet3AMap3hr0eBo_EHNXDdU1G0XT4rgRXT9J7BkxXWETqdAHPyAxqtxlgCvbDAO14eqwM=s290-w290-h79",
+        "alt": ""
+      }
+    ],
+    "C97": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVUDqnLkuqnw7qI-lyud7mShz6yFD5VwNV8fjCFxADT-xZg7_VjssXNtsJ8JRVu4Fy3FCkb3fm2iOYn4hfXmr0jgzFxHr2fLPEkcFoGTq6O_B4aPYVTHdEzf2fNQaYh8GabCNi91fYEcVybO2diK7jkgxTGJcj4IzKlpIk=s149-w59-h149",
+        "alt": ""
+      }
+    ],
+    "C99": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV7FD2Ckw6dAx321-K813RdPt-JvHAB2kECGvVKvkD9oxFsgiKRmW-JnttYGgg8SvwWsJjVlj4jgS48IwdLvL245yMDe9AqBAPhq-n6Prbq9XqAF6-cnoqKybNLeW7dWOACAZgyoqzwEEUfLFpZzAhHwLOHMxHJVizta34=s134-w59-h134",
+        "alt": ""
+      }
+    ],
+    "C103": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWIVDrQQG2FEFUFAXgD5OlrQvitBnJgncM1P-md3FiL43aZ9Q219pwrBJyoieWqD4MKskwRdetVCcio5I1ADGbaVs0x7NJPzIMBUWgb9d6zxCIDQT9C7pMnRX5lEMFonpMv62rLCET0FF8JywD16YB-04QXbcAjBleWZSs8=s239-w59-h239",
+        "alt": ""
+      }
+    ],
+    "C105": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXK7w3bZ5wttUNKRU_QTRPIP-aywUTO4jdy2r4jiDnLGlVUMgdqfKyI7OHv45vyChU4quV0k-Xea-rw1uzwBrpefepwGXMeZ24BV14ZDWWKUddIhgm-6ecQMhdqGvguEf9T3CvsFAiSaSWAqY40fy6GGqYdN_TzO_uBAQRi=s299-w59-h299",
+        "alt": ""
+      }
+    ],
+    "C107": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV60KieugjbTQS51zF3s3ymUC0tA6PnxbvMrPWmBgpnSFXRlEbO6V8Zdbzbv1DT_L4rg0EhueiKMbkQOGrtQnWfAEsm2rwtM-xa14lclmEv_mA9sw5RKHoYI0W15JxbmaxMai84Qa2YdDv4TZCdIdwFL_w-hdzzrOi5442h=s209-w59-h209",
+        "alt": ""
+      }
+    ],
+    "C111": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUGAADdZ1TmVKNcFvJAZ1ItLDB4dJqrJ6UTFKYuNcFHYk2o4emPP03qHAZ0x1oU04h7g3jE2ojPo0pnjUX3jvNOhMROhcYC9K8RcWY55TfLDnKiZShFG4dywvHQCccK03VtyoNPGYQrfxnaMAg1yLiZwNJDCZn_ot7RCBpW=s149-w59-h149",
+        "alt": ""
+      }
+    ],
+    "N111": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaPv1m7vcb2tvUbcG5v0I4TYrh5NIEOEd1T6MsPNutwdDRxBiCz8uOJNL43uvjRxpC3unAr9xzSEZAdDQsAG3cWqFklWmAPXdjSLEhxZ8m-PplqIpb5OqZZ1U85fwGI1sd9oWqwQB93Gwrh7t-UsfVEBMue-CKgz1ySBAg=w100-h149",
+        "alt": ""
+      }
+    ],
+    "C113": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWH5QOedMZQJCdPApJ2FfyqNYM5pWtmVchq0_BYqSSqiEejUH7B17if08s-_BiENVJ2vYgagtZz0z8HF-EkugJT1r8K5bJ8K8yRPgso7Potee0rsqi6V3FWVHh4EXBwqYiJccOaM-5Ee4whIcEifr9WtiyG90mjLsdXDQkf=s149-w59-h149",
+        "alt": ""
+      }
+    ],
+    "N113": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h149",
+        "alt": ""
+      }
+    ],
+    "C115": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWZ1SoFzeDEbXVXVJbQueYfP9ux5ZDjroeoPz1rOW6uWZL8P1j5DqjJvk84MgZBGtaWFgvZVGihNAFmzj7jsjNoAqxGWLNLE36LKrTCocxh3wri8AL7WzWarNiBN5m3tYPxNBWIDF8uQX6oRRe8H59IfkPOjnDPa7VwYP9l=s419-w59-h419",
+        "alt": ""
+      }
+    ],
+    "N115": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaPv1m7vcb2tvUbcG5v0I4TYrh5NIEOEd1T6MsPNutwdDRxBiCz8uOJNL43uvjRxpC3unAr9xzSEZAdDQsAG3cWqFklWmAPXdjSLEhxZ8m-PplqIpb5OqZZ1U85fwGI1sd9oWqwQB93Gwrh7t-UsfVEBMue-CKgz1ySBAg=w100-h419",
+        "alt": ""
+      }
+    ],
+    "C117": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xV60KieugjbTQS51zF3s3ymUC0tA6PnxbvMrPWmBgpnSFXRlEbO6V8Zdbzbv1DT_L4rg0EhueiKMbkQOGrtQnWfAEsm2rwtM-xa14lclmEv_mA9sw5RKHoYI0W15JxbmaxMai84Qa2YdDv4TZCdIdwFL_w-hdzzrOi5442h=s134-w59-h134",
+        "alt": ""
+      }
+    ],
+    "N117": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h134",
+        "alt": ""
+      }
+    ],
+    "G121": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVI5m22UwCTDDp9UOcLmERi9FeIYIZV_v-l8k3BkzTvvnRR6e1K6sVxUNrM5BBG0iSkR4qr1Y_dp1GeBfEjTp1GbOtODqcu8Bk6PLkf3DqEe_To5-SswvYF8z6WmogRXggDleiNaW_Ukuq8w-3Ki6JJHO_Daf_JOBs=s290-w290-h79",
+        "alt": ""
+      }
+    ],
+    "C125": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX6GuTx2Xg0t2dV2Zmn3IuMsXhnSB1l74yf_sRMNcNBCoqcjmZ--qfAUn91vbyy7-Obcin2iawWre_ieJVQDGGOlJiatUAD2uMnL5m0nzLWwCWcPteuULigpxzAQWUwzWmCcQ3uMXtwZ-AoqH5i-4ejDczIKeOY-KH5cmY=s89-w59-h89",
+        "alt": ""
+      }
+    ],
+    "C129": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWag7X0QqssVu4kZAqQc479UOMsxV7j9lEKqydqLkzl61M2kIbm3kPNgbOWra2lST028pJIpA8c0sq7EHdQHtXYQl5pKpio2KPjZHWvlLST23fPOV7n0dx2WLwOmlwY4attwuRT9eh5T7XORolFlw-4r7DGaSDBGdbu1CUu=s89-w59-h89",
+        "alt": ""
+      }
+    ],
+    "C131": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWP-ufHcDJly8M1SeuDBfxPixcO_JKySkcx_misM4KKzqALtWf2UOKAVqNCAC2f4Rbbldr6kkT_6kKm9t2CmflXJx1MDYeq5l75OkgDgk-82oyxQuSwANdJmdrA1c4JxfMV3BtZTdL9sAJy5Rg_dLrvz42lx0v0excQpU6U=s89-w59-h89",
+        "alt": ""
+      }
+    ],
+    "C135": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xUG-bbZmq5koGuqvaeKOZ6LzxHnuc8o6apmFzS3HNifVJOhNSEEPfj9eBSveY7ezHypWTWJpyN7TsKzzFUFESvzXlg-vobPFUz5pMZPMr1s6-YxaGWl5gd8_joAQmccudNmhLlKEs9yviNW5V2vfHs24qrPnlyUHxEvSPcr=s524-w59-h524",
+        "alt": ""
+      }
+    ],
+    "C137": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVqJGppjs-p7oLsaEXvdoQMO5ZQKIHPyvcxgOwLLNKS_-u8R9Uowni1nnEMJX7bkPIrmGse6feZyK4_8XQ1QDAovHwxp7zqT6edM1UW2mRDsepnXYUVkXWRZ2D8F60OhToit0_06PN8OCnWN-_tFUB_7NHYWkl-AthqvZGR=s239-w59-h239",
+        "alt": ""
+      }
+    ],
+    "C139": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWKxMGHL4LoJF0SBVjm4cEo2ur7_q1ToRWfK1gvDrVBU9n2qPjAs9ea6-K0HhnqCASJkfNZLSyqsotwmZR1horZXwgDbDC7Bfr2kwlDkVKCwifFSfAhgkJgWUUiK7TVlEfk_gSTebRPqHuhgjIlLl6HRZNi-kgop5VyGz-3=s224-w59-h224",
+        "alt": ""
+      }
+    ],
+    "C144": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLYWY5bsdsBD1XUSjyAxjJ-vQSHp-wG162HLuVDSGeT4gYx9mqR7weylWMKAfayArsrxaf7D2FokJIInzPswQm97szxC2VZgOoWE6v2n5hlgIgiDV73d8gmpj47AIZtYLfE0OODkJLY3Rhog33AZtg34cz3JyB4pqzx6=w59-h269",
+        "alt": ""
+      }
+    ],
+    "N144": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h269",
+        "alt": ""
+      }
+    ],
+    "C146": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU78EJ6ZroLXq1aJCHNguowRHC1iGcaulQJ_hRyTi66kfQYojInd25NhKldnyqtURofTjO1PlYH6kpm5egy6gN4ZPdHhZwSegI6rodwq5yijouIpvqxoDJ9eG-dljn2Ugf4N9n2lzAn5kLUkud4WGHWDUipt1cJ-eXwxvqj=s119-w59-h119",
+        "alt": ""
+      }
+    ],
+    "N146": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h119",
+        "alt": ""
+      }
+    ],
+    "C148": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaI8dknq4xuy_qkKwGqlvQT5bA-1f7yIf8HfPml_Wm3KKXKByKRLBZO4rUeRf4-FZ8OkHNWbLGMeegj6MI3k3Cv06YN7-rG1PIl4jLmERLQwLFux69Ys5p4sjO5dr86CFhy6IWB8QbK6fnfei0NImTwUQOIdA6fuA=w59-h164",
+        "alt": ""
+      }
+    ],
+    "N148": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLaPv1m7vcb2tvUbcG5v0I4TYrh5NIEOEd1T6MsPNutwdDRxBiCz8uOJNL43uvjRxpC3unAr9xzSEZAdDQsAG3cWqFklWmAPXdjSLEhxZ8m-PplqIpb5OqZZ1U85fwGI1sd9oWqwQB93Gwrh7t-UsfVEBMue-CKgz1ySBAg=w100-h164",
+        "alt": ""
+      }
+    ],
+    "C150": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLabW7zyJy2gAm0A9Sq-c84KjkHuFk6dIIsau2oZ1C2Bq07hG8itTtVCl9aABpJ5McSYniNDgzGbSIrpPwCg66SBeQKGhlO7lQbvXpy03F-KBTjicwfR5EqwxQjscw37qFxB5Dmw3dCJxCBX7PdkoNUs4rB3qGBzqyuW=w59-h119",
+        "alt": ""
+      }
+    ],
+    "N150": [
+      {
+        "url": "https://docs.google.com/sheets-images-rt/AO43MLZS3DSBDbmqZGA8xVdINImQMuxDTR-XmuJrCAlY_m53tUqKJ99vNW6WXDOyl2OXmHtN78QooLQMtIMniLO4LEytEYAF4WfOOLwtDZwwTVc5UNzdKJ5haUyMZaNpIfjFzi7U0gEYOrVzZHJIht0U_lj5xGv96sI0vD1Notg=w100-h119",
+        "alt": ""
+      }
+    ]
+  },
+  "rich_text": {
+    "D6": [
+      {
+        "text": "Restores ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "60 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[30]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " HP ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Cure ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Incurs a 1 second cooldown between Cure activations. Additional activations will not recover health.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      }
+    ],
+    "D7": [
+      {
+        "text": "Solar Elemental Pickup",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "11.25% Grenade Ability Energy",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Allies ",
+        "style": "font-weight:normal;font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": "do not receive ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Firesprites",
+        "style": "font-weight:normal;font-style:italic;color:#f9cb9c;"
+      },
+      {
+        "text": " created by the user.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Lasts 25 seconds before disappearing. ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Incurs a 5 second cooldown between Firesprite spawns.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      }
+    ],
+    "D8": [
+      {
+        "text": "20% ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[10%] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": ". ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Also affects ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Golden Gun's Damage.",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "Radiant ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Damage Buff effect is increased to 30% against Champions.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Well of Radiance's",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " 25% overrides the 30% against Champions.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      }
+    ],
+    "D9": [
+      {
+        "text": "restores health",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "x1 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "35",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "[17.5]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " HP/s",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "x2 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "50 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[25]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " ",
+        "style": "color:#666666;"
+      },
+      {
+        "text": "HP/s",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Healing Effect ",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "does not stack with ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Healing Rift.",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "Restoration ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "highest Restoration stack",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Eg: If the maximum ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Restoration ",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "duration achieved was 15 seconds, a ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Phoenix Dive",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " or ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Healing Grenade",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " will refresh it to 15 seconds.Using a ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Phoenix Dive",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " after using a ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Healing Grenade",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " will refresh its duration to 4",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "+2",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " seconds.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Empyrean and Mercy are both duration extenders, and do not count as reapplying Restoration. Extending a Solar Effect that is at >15 seconds will set it to 15 seconds.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      }
+    ],
+    "D10": [
+      {
+        "text": "Explosion ",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "676 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[120 Guardians | 250 Construct]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Solar Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "without ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[with] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Ignitions ",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "incur a 1.6 second cooldown before",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Scorch ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "can be reapplied",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Ignition",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "initial Scorch source",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Eg: ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Verity's Brow x5",
+        "style": "font-weight:normal;font-style:italic;color:#fdd24d;"
+      },
+      {
+        "text": " + ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Fusion Grenade ",
+        "style": "font-weight:normal;font-style:italic;color:#f9cb9c;"
+      },
+      {
+        "text": "= ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "100% Increased Ignition Damage.",
+        "style": "font-style:italic;color:#ff9900;"
+      },
+      {
+        "text": "Melee Damage Buffs do not scale Ignition nor Scorch damage.",
+        "style": "font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Unstoppable Champions",
+        "style": "color:#c67676;"
+      },
+      {
+        "text": "Stunned ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Ignition damage",
+        "style": "color:#ff9900;"
+      }
+    ],
+    "D11": [
+      {
+        "text": "Scorched Enemies",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Scorch-stack based damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "scorched ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Scorch ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "x100 Scorch ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " Ignition.",
+        "style": "color:#e69138;"
+      },
+      {
+        "text": "The 2nd Scorch tick has a 0.93s delay for some reason.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Scorch Stack Damage Scaling per Tick:",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "2.7 + (0.175 * Scorch Stacks) | Non-Boss Combatants receive 20% increased damage.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " x1 = 3 | x30 = 5 | x50 = 6.5 | x60 = 7.21 | x80 = 8.64 | ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Scorch Damage is ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "non-lethal",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": ".",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "x60 Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Yellow Damage Numbers.",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Scorch Decay:",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "Scorch duration and decay rate is difficulty-dependent.  ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Scorch lasts for 2.3 seconds, then decreases by x1 stacks every 0.04 seconds (-25/s)",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D12": [
+      {
+        "text": "Solar Effect ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "(",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Scorch ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Ignition",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": ")",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": " ",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "damage can be increased through ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "and ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Exotics",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": ", but the source used for ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "scorching",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;color:#f6b26b;"
+      },
+      {
+        "text": "will determine what it will be counted as. Inflicting a ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Solar Effect ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "with a ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": ", such as with ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Incandescent/Burning Ambition ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "or through ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Exotic Weapons",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " such as ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Tommy's Matchbook",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " or ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Conditional Finality, ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "will result in ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Solar Effects",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " counting as ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": ", benefitting from ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Weapon Buffs ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Activity Modifiers",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": " ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "that ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "exclusively benefit Weapons",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": ", such as other ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": ", ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Weapon Stat",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": ", ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Radiant",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": ", and ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Solar Weapon Surges",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": ".",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "New Gear Bonus is applied permanently to all Weapons, so all ",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "Solar Effect Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " against ",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "Combatants ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "will always be 5% higher than expected, on top of ",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "Combatant Rank Scalars",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": ".",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "Inflicting ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Solar Effects",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " through ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "such as ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Fusion Grenades",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " and ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Well of Radiance",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " will result in the ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Solar Effects",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " counting as ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Solar Ability Damage",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": ", with their damage only being increased by ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Grenade",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;color:#e0a261;"
+      },
+      {
+        "text": "(Verity's Brow)",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "and ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Super",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "(Heart of the Flame)",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#96d5de;"
+      },
+      {
+        "text": " respectively. ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Melee Damage Buffs and 100+ Melee Stat do not increase Solar Effect Damage.",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Effects that ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": " Ability Damage",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "will benefit all ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Solar Effects",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " that are initially applied through ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Solar Abilities",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Activity Modifiers",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": " that increase ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Solar Damage",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": ", such as ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Solar Surge",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": ", will also apply to ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Solar Effects",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": ", ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;"
+      }
+    ],
+    "D15": [
+      {
+        "text": "Scorch Stacks",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "50%",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Eg: x3 -> x5 | x40 -> x60.",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "Every source of ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Scorch ",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "will have its base number alongside ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Ember of Ashes'",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " benefit in ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "smaller text",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " next to the regular stack amount.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Eg: x40",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "+20",
+        "style": "font-size:7pt;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Certain sources of ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Scorch ",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "do not follow the ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "50% increase",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": ", such as ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Caliban's Hand",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "(x60",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "+0",
+        "style": "font-size:7pt;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": ")",
+        "style": "font-size:5pt;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": ", ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Tommy's Matchbook",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "(x15",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "+5",
+        "style": "font-size:7pt;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": ")",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": ", ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Skyburner's Oath",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "(x5",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "+5",
+        "style": "font-size:7pt;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": ")",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": ", among others.",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D16": [
+      {
+        "text": "Solar ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Super Ability",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " ",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Currently only works with ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Blade Barrage Knives",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ", ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Daybreak Projectiles",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ". and ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Song of Flame Projectiles",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "?",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D17": [
+      {
+        "text": "Upon bestowing ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "cure",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": ", ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "radiant",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ", ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "restoration",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": ", or ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "reviving",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "an ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "ally:",
+        "style": "font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": "Grenade",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Melee",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Class ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "7",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[4]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Triggers ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Benevolence",
+        "style": "font-size:8pt;color:#f9cb9c;"
+      },
+      {
+        "text": ":",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Well of Radiance",
+        "style": "font-size:8pt;color:#ffd966;"
+      },
+      {
+        "text": " | ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Healing Rifts ",
+        "style": "font-size:8pt;color:#dd7e6b;"
+      },
+      {
+        "text": "| ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Lumina/Boots of the Assembler's Noble Seekers ",
+        "style": "font-size:8pt;color:#ffd966;"
+      },
+      {
+        "text": "| ",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": "Edge of Intent's Seekers ",
+        "style": "font-size:8pt;color:#ffd966;"
+      },
+      {
+        "text": "|",
+        "style": "font-size:8pt;"
+      },
+      {
+        "text": " Precious Scars On-Kill | ",
+        "style": "font-size:8pt;color:#ffd966;"
+      },
+      {
+        "text": "Solar Support Frame's",
+        "style": "font-size:8pt;color:#f6b26b;"
+      },
+      {
+        "text": " ",
+        "style": "font-size:8pt;color:#f9cb9c;"
+      },
+      {
+        "text": "Restoration Burst",
+        "style": "font-size:8pt;color:#dd7e6b;"
+      },
+      {
+        "text": "Can self-trigger ",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "Benevolence ",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": "with Empowering/Well of Radiance Seekers from Assembler Boots.",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "Do NOT trigger Benevolence",
+        "style": "font-size:8pt;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": ":",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": " ",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Empowering Rifts",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": " | ",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Crest of Alpha Lupi's Healing Pulse",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " | ",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Mothkeeper's",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " ",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Overshield Moth",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;color:#d5a6bd;"
+      },
+      {
+        "text": " | ",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Non-Solar",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": " ",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Support Frame Auto Rifles",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " | Armor Mods & Perks | ",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "4 Piece Healing Initiative",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;color:#5bb661;"
+      }
+    ],
+    "D18": [
+      {
+        "text": "Ignition Kills",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "Grenade Ability Energy",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Enemy Rank",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "T1 Combatant ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "8% ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "T2 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "12.25% ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "|",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;color:#e0a261;"
+      },
+      {
+        "text": "T3 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "16.5% ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " T4 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "25% ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Guardians = ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "20.75%",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "D19": [
+      {
+        "text": "Ignitions ",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "x40",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+20",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "explosion",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "Does not apply to the ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "ignited ",
+        "style": "font-weight:normal;font-style:italic;color:#ff9900;"
+      },
+      {
+        "text": "enemy.",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D20": [
+      {
+        "text": "Solar ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Super Kills",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " ",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "ignition",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "Firesprite",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Well of Radiance",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " makes all of the ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Caster's ",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "Weapon Damage",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " count as ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Super Ability Damage",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ". ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Solar Weapons Kills ",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "will count as ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Solar ",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "Super Kills",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D21": [
+      {
+        "text": "Solar Kills",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Restoration",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Radiant ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Scoring a Solar Kill while a Solar Effect's timer is >15 seconds will lower it to 15 seconds. ",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Eg: Stronghold + Solace + Doppler Efect = 26 seconds -> 15 seconds.",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "T1 Combatant",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "T2 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "T3 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "T4 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Guardians ",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D22": [
+      {
+        "text": "Ignitions ",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "8 -> 10 meters.",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D23": [
+      {
+        "text": "On ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Firesprite",
+        "style": "font-style:italic;color:#f9cb9c;"
+      },
+      {
+        "text": " Pickup:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Restoration x1 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "+1",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": "Restoration ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "2",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "+1",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": "Picking up a Firesprite while a Solar Effect's timer is >15 seconds will lower it to 15 seconds.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": " Eg: Stronghold + Solace + Doppler Efect = 26 seconds -> 15 seconds",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "On ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Ally",
+        "style": "font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": " Revival",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Restoration x1",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "+2.5",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "allies ",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "D24": [
+      {
+        "text": "Grenade Kills",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Cure x1.",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "D25": [
+      {
+        "text": "Scorched enemies",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Melee Ability Energy",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Enemy Rank",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " Firesprite",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "T1 Combatant ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "8%",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "T2 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "15% ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "T3 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "17.5% ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "T4 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "25% ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": " ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Guardians ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "20%",
+        "style": "color:#79bec3;"
+      }
+    ],
+    "D26": [
+      {
+        "text": "400% Additional Base Class Ability Regeneration Rate",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Scorch ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Only triggers upon inflicting Scorch to a non-scorched enemy.",
+        "style": "font-style:italic;color:#e06666;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Will not activate if the enemy dies from the hit that would have Scorched.",
+        "style": "font-style:italic;color:#e06666;"
+      }
+    ],
+    "D27": [
+      {
+        "text": "Restoration ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Radiant ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Sources of ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Solar Effects",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " will have their base duration alongside ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Ember of Solace's",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " benefit in smaller text. Eg: ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "10",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "+5",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " Radiant",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ", or ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "4",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "+2",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " Restoration",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D28": [
+      {
+        "text": "Solar Weapon Kills",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "stack",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Ember of Tempering",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "allies ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "3 stacks",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Ember of Tempering",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Solar Weapon Kills",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Firesprite",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "+20 | +40 | +60 Health Stat ",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "D29": [
+      {
+        "text": "Powered Melee Hits",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Radiant ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "+4",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "allies",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "D30": [
+      {
+        "text": "Ignitions ",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "Orb of Power ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " 2.5% Super Energy.",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Incurs a 10 second cooldown upon creating an ",
+        "style": "font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Orb of Power.",
+        "style": "font-style:italic;color:#ffd966;"
+      }
+    ],
+    "D34": [
+      {
+        "text": "Heavy Trajectory | Scan",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "bolt ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Solar Light",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Solar Light Bolts ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "337 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[65] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x20",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+10",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "D35": [
+      {
+        "text": "↑5 ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "↑12",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " ",
+        "style": "color:#93c47d;"
+      }
+    ],
+    "D37": [
+      {
+        "text": "Light Trajectory | Slightly Homing | Sticky",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "738 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[130]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x40",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+20",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "D38": [
+      {
+        "text": "851 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[50]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "1,589",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[180]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x40",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+20",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "D40": [
+      {
+        "text": "Very Light Trajectory | ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Strong Ally Homing",
+        "style": "font-weight:normal;font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": "Cure x1 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "allies",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Restoration Orb",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Restoration Orb",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Restoration x1 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "+2",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": "Orb ",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "has a 7.5 meter pickup radius, and ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "100 HP",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D41": [
+      {
+        "text": "Cure ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "↑x2",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "allies",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Restoration Orb",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "↑x2 ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Restoration",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": " ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+2",
+        "style": "font-size:7pt;color:#f6b26b;"
+      }
+    ],
+    "D43": [
+      {
+        "text": "Medium Trajectory",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Has a brief delay before it can explode.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Explosion ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "814 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[130]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x60",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+30",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "1202 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[173]",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D45": [
+      {
+        "text": "Medium Trajectory | DoT Field",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "63 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[20]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x17",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "+4.5",
+        "style": "font-size:7pt;color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "[x10",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "+10",
+        "style": "font-size:7pt;color:#ea9999;"
+      },
+      {
+        "text": "]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " Scorch ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Solar Flare",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Solar Flare:",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "78 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[25]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "1,014",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[325]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Does not Scorch within its DoT Field, it inflicts up to ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "x17",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+13",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " to Combatants inside the Solar Flare when it expires, although it's inconsistent.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Inflicts ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x1 Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " after 0.75 seconds, followed by ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x7.5",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+2.5",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " every 0.533 seconds, up to ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x53",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+27",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " over its duration.",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Solar Flare",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " only begin dealing damage or inflicting ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "scorch ",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "after 1 second of being created.",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D46": [
+      {
+        "text": "Solar Grenade ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " ↑6 ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Solar Flare",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Magma Orbs",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "125 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[50]",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D48": [
+      {
+        "text": "Medium Trajectory | Seekers",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "drones",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Drones ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "drone ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "58 + 54",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[8 + 8] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x5",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+3",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "1,008 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[144] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x45+",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "27 ",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": "Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "drones",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "D50": [
+      {
+        "text": "Medium Trajectory",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Solar Wave ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Solar Waves",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "246+206",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[80 + 50]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x10",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+10",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "1,808 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[360]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x40",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+40",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Solar Waves ",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "D52": [
+      {
+        "text": "Medium Trajectory | Wall-Mounted | Sticky",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Sticking to a non-surface immediately triggers the Tripmine.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Scanning Cone extends up to 10 meters away, with a radius of 7 meters.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "805",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[140]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x40",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+20",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "D60": [
+      {
+        "text": "allies ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Radiant",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "+5",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": "40 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[20]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Solar Damage",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "N60": [
+      {
+        "text": "56",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[148.4]",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D64": [
+      {
+        "text": "Solar Knives",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "knife ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "257 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[38]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "1.3x Precision Multiplier",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "x20",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+10",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "1,002",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[147]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x60",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+30",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": "Scorch ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Precision Hits",
+        "style": "color:#f1c232;"
+      }
+    ],
+    "D66": [
+      {
+        "text": "2 Melee Ability Charges",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Lightweight Knife",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Precision Hits",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Radiant ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Lightweight Knife ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "408",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[100]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "1.5x Precision Multiplier",
+        "style": "color:#f1c232;"
+      }
+    ],
+    "D68": [
+      {
+        "text": "Explosive Knife",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Proximity Knife ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Explody Knife",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "306 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[20] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "1.3x Precision Multiplier",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": " 405 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[100]",
+        "style": "color:#ea9999;"
+      }
+    ],
+    "D70": [
+      {
+        "text": "Weighted Knife",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Animation takes 1.55 seconds to complete.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": " Precision Kill",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Class Ability Charge",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Scorched enemy",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "ignition",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "Weighted Knife",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "571 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[140]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "1.5x Precision Multiplier",
+        "style": "color:#f1c232;"
+      }
+    ],
+    "D75": [
+      {
+        "text": "General Super Information",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "90?%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[49%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Knock 'Em Down adds an additional 3 knives to each fan, totalling 20 knives.",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " 99",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[not much?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " 560 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[generally dead?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x?",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "+?",
+        "style": "font-size:7pt;color:#e0a261;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "8,512 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[death]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "(",
+        "style": "font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": "12160 ",
+        "style": "font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": "[deathx1.43]",
+        "style": "font-style:italic;color:#ea9999;"
+      },
+      {
+        "text": " with Knock'Em Down)",
+        "style": "font-style:italic;color:#e0a261;"
+      }
+    ],
+    "D77": [
+      {
+        "text": "General Super Information",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "60%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[0%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "+Knock'Em Down",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "66%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[15%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "8.34% Super Drain",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "6 Shot Golden Gun",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "1453 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[393] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " x40",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "+10",
+        "style": "font-size:7pt;color:#e0a261;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Precision Hits",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Damage Falloff begins at 26m and ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "decreases down to 34.5% damage",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": " at 100m. ADS Zoom has no effect on damage falloff (1x ADS scalar).",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": " Radiant's damage bonus affects its damage output.",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "Super Kills ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "~80% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "~10%",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "~12% Super Energy",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "D79": [
+      {
+        "text": "General Super Information",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "60%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[0%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "8.34% Super Drain",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " +Knock'Em Down",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "6.25% Super Drain",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "3 Shot Golden Gun",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "1574 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[426]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x40",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "+10",
+        "style": "font-size:7pt;color:#e0a261;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "2x Precision Multiplier",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": " Radiant's damage bonus affects its damage output.",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "On ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Precision Hit:",
+        "style": "font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": " ",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Line'Em Up",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "2 stacks",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "2 Orbs of Power",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Super End",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Line'Em Up x1 | ",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "25?% Decreased Passive Super Drain.",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Line'Em Up x2 | ",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "50?% Decreased Passive Super Drain",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Precision Hit",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": " Orbs of Power Super Gains:",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Non-Boss Combatants",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " 3.57% Super Energy ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Boss Combatants",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " 2.85% Super Energy ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Boss",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " Star-Eater Scales ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " 2.5% Super Energy",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "D83": [
+      {
+        "text": "◇mark ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Class Ability",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Crackshot Dodge",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "overrides Class Ability Cooldown",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Marksman's Dodge",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Triggers the effects of the equipped ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Class Ability",
+        "style": "font-weight:normal;font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": " on usage.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Crackshot Dodge",
+        "style": "font-weight:normal;font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": " can be used midair, triggering a burst of speed.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "No interaction with Celestial Nighthawk :(",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "On ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Crackshot Dodge",
+        "style": "font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": " 3 Scorching Shots",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "RPM varies based on FPS, lower framerate = slower same animation duration",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Scorching Shots",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "354 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[21]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "x20",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "+10",
+        "style": "font-size:7pt;color:#e0a261;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "3 Scorching Shots",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Cure x1",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Radiant ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "20% Increased Crackshot Damage against Combatants",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Damage scales with ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Class Stat",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": " above ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "100",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ", up to ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "65%",
+        "style": "font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "[10%]",
+        "style": "font-style:italic;color:#ea9999;"
+      },
+      {
+        "text": " at ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "200 Stat",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ". ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Acrobat Dodge's Radiant",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " applies before ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Crackshot ",
+        "style": "font-weight:normal;font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": "is fired.",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D85": [
+      {
+        "text": " ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Improvised Explosive",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "6 Charges",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Weapon ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "1",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " [2]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e84a4a;"
+      },
+      {
+        "text": "Ignition ",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "Scorch ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "3",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e84a4a;"
+      },
+      {
+        "text": "[4] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Abilities ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Super ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Grenade ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Ignition-on-a-Stick",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": " ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "ignition",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "dynamite ",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "50%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[5%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "9 homing submunitions",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "80",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Incurs a 6 second cooldown after activating. Kills while on cooldown don't give charges.",
+        "style": "font-style:italic;color:#e06666;"
+      }
+    ],
+    "D87": [
+      {
+        "text": "While ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Radiant",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "Powered Melee Ability Kills ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "100% Fixed",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Melee Ability",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Activating ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Radiant ",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "from the same hit that kills ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "will ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "refund ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Melee Ability",
+        "style": "font-weight:normal;font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Enhances Super Abilities:Marksman Golden Gun",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Deadshot Golden Gun",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Blade Barrage",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "x1 Cure",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Super Activation",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "D89": [
+      {
+        "text": "Upon scoring ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Precision Kills",
+        "style": "font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": ", ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Precision Hits",
+        "style": "font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": ", or using ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Class Abilities",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "allies",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "stacks ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " On Your Mark",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "10 stacks",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Precision Kills",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Precision Hits",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e69138;"
+      },
+      {
+        "text": "2 stacks",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Class Ability usage",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "1 stack",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Precision Hits",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "1 stacks ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "[and incur a 1 second cooldown between gaining stacks against Guardians.]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Class Ability Usage",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "stack",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "On Your Mark ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "On Your Mark:",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+5 Weapon Stat",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "stack",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "+50 Weapon Stat",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "While at ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "x10 On Your Mark",
+        "style": "font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "On Your Mark",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Restoration x1 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "+1.5",
+        "style": "font-size:7pt;color:#f6b26b;"
+      }
+    ],
+    "D97": [
+      {
+        "text": "Shared with other ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Shoulder Charge ",
+        "style": "font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": "Abilities:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Requires sprinting for 1.25 seconds. Drains ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "15% Melee Ability Energy",
+        "style": "font-weight:normal;font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": " if no enemy is hit. ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Unable to use during slide if user shoots.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Guardians directly hit by Shoulder Charge have their Melee Lunge disabled for 0.5 seconds",
+        "style": "font-weight:normal;font-style:italic;color:#ea9999;"
+      },
+      {
+        "text": "Lunges forward 6.8 meters, automatically targeting enemies in range.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "878 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[90]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "impact damage ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "x40",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+20",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "586 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[60]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "radial damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Hammer Strike",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "ignition",
+        "style": "color:#e69138;"
+      }
+    ],
+    "D99": [
+      {
+        "text": " Solar Hammer",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "539 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[90]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Multiplicative to everything.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Base ",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "6%",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "12%",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "18%",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "24%",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "30%",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "36% increased Throwing Hammer Damage",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Hammer",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "121.5% Melee Ability Energy",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "hammer",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Cure x1",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "325",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[60]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Explosion counts as ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Melee Damage",
+        "style": "font-weight:normal;font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D103": [
+      {
+        "text": "General Super Information",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "90% ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[53%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "4% Super Drain per Second",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Sol Invictus creates a Sunspot on cast if grounded, and reduces Passive Drain by 40%, increasing duration to 42 seconds, or 2.4% Super Drain per second.",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "Light Attack | ",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Drains 4% Super Energy.",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "111",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Cyclone",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Can only spawn 1 ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Cyclone ",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "per ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Super Activation",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Heavy Attack | ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Drains 8% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "276 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Cyclone",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Cyclones ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "24 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[16] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x3",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+2",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "D105": [
+      {
+        "text": "General Super Information",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " 90%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[51%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "4.75% Super Drain per Second",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Drains 12% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Hammer ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "445 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Hammer Throws",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "4 shrapnel",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "396 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Hammers ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "flares up ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Shrapnel ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " 5",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Phoenix Cradle Interaction:",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Passive Drain",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "20%",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "26.25 seconds",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "3.81% Super Drain per second",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " 7.5% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Hammer Throws",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Loreley Splendor Helm Interaction:",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Passive Drain",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "40%,",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "35 seconds",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "3.63% Super Drain per second",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "8.2% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Hammer Throws",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Both Exotic Interactions assume 100% Sol Invictus buff uptime, which is not always possible.",
+        "style": "font-style:italic;color:#e06666;"
+      }
+    ],
+    "D107": [
+      {
+        "text": "General Super Information",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " 90%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[51%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "6.06% Super Drain per Second",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Sunspot ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "cast ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Drains 9% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Hammer ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "483 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Sunspot ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Hammer Throws",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "3 shrapnel",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "429",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Sol Invictus Sunspot Buff Effects:",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Passive Drain by 40%",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "27.5 seconds",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "3.63% Super Drain per second",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " 5.5% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Hammer Throws",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "D111": [
+      {
+        "text": "While ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "sliding:",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "[Melee Ability]",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Solar Energy ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "40 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[30]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x40",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+20",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Only consumes 50% ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Melee Ability Energy ",
+        "style": "font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": "if the slam is not activated. ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Unable to use during slide if user shoots.",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "While ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "airborne ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "from the ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Consecration",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Melee Ability",
+        "style": "font-style:italic;color:#79bec3;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "[Melee Ability]",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "wave ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "shatters ",
+        "style": "color:#3c78d8;"
+      },
+      {
+        "text": "crystals",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "486 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[120]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Non-Scorched Enemies",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Scorched Enemies ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "472.5",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " [50]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "ignition",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "Non-Melee Damage",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Melee Animation",
+        "style": "color:#79bec3;"
+      }
+    ],
+    "D113": [
+      {
+        "text": "Solar Ability Kills",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Ignition Kills ",
+        "style": "color:#ff9900;"
+      },
+      {
+        "text": "Roaring Flames",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "3 stacks",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Solar Ability",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Roaring Flames",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Solar Ability Damage",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "67% | 133% | 200% Increased Melee Damage.",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "20%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " [13%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " 44% ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[28%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " 73%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " [44%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Grenade ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Super ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Unpowered Melee Hits",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Roaring Flames",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "x30",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+10",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Powered Melee Hits.",
+        "style": "color:#79bec3;"
+      }
+    ],
+    "D115": [
+      {
+        "text": " ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Barricade Placement ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Class Ability",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Remote Detonator",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Remote Detonator",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "barricade ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "explosion ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Explosion ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Barricade Boost",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "one's own explosion",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Hammer Strike",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Remote Detonator Usage",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Class Ability Usage ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "will not grant Overshield at >100 Class stat",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "On ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Towering Barricade Placement",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ": ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " Barricade",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Barricade Contact Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "328 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "x20",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "+10",
+        "style": "font-size:7pt;color:#e0a261;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Contact Damage can only trigger once every 2 seconds on the same enemy.",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "While behind a ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Rally Barricade",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Scorching Rounds",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Kinetic ",
+        "style": "color:#999999;"
+      },
+      {
+        "text": "Solar ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "For the sake of vertical screen accessibility, go to Song of Flame's section.",
+        "style": "font-style:italic;text-decoration:underline;text-decoration-skip-ink:none;-webkit-text-decoration-skip:none;color:#6d9eeb;"
+      },
+      {
+        "text": "While a ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Barricade ",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": "is active:",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Barricade-dependent",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "(",
+        "style": "font-size:7pt;font-style:italic;"
+      },
+      {
+        "text": "34% Towering | 10% Rally",
+        "style": "font-size:7pt;font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ")",
+        "style": "font-size:7pt;font-style:italic;"
+      },
+      {
+        "text": "Shieldbrust ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "additional progress",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "1 second charged",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Shieldburst Detonation",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Explosion ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "550 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "x50",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "+25",
+        "style": "font-size:7pt;color:#e0a261;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Self Damage is reduced to ? Damage",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Solar Shrapnel ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "71 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "x5",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "+5",
+        "style": "font-size:7pt;color:#e0a261;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Shieldburst ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "increased explosion damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "50% increased damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "While at ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "100% Shieldburst Progress",
+        "style": "font-weight:normal;font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": "Explosion",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " 3 Solar Waves",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Solar Waves",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "141 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Solar Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Aspect's Damage",
+        "style": "font-weight:normal;font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": " scales with ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Class Stat",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": " above ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "100",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ", up to ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "65%",
+        "style": "font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "[?%]",
+        "style": "font-style:italic;color:#ea9999;"
+      },
+      {
+        "text": " at ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "200 Stat",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D117": [
+      {
+        "text": "Solar Ability Kills",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Scorched",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Hammer of Sol",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Sunspot",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Sunspot ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Sunspots ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Sol Invictus",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Restoration x1",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "+2.5",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": "Sol Invictus",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": " ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Grenade ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Melee ",
+        "style": "color:#67c9cf;"
+      },
+      {
+        "text": "40% Decreased Passive Super Drain.",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Sunspots ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "60",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " [22]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " ",
+        "style": "color:#df4545;"
+      },
+      {
+        "text": "x5",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+3",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "D125": [
+      {
+        "text": "Cure x2 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "allies",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "While ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Heat Rises",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " is active:",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Restoration x2 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "+1.5",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": "x40",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+20",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "D129": [
+      {
+        "text": "Solar blasts",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Solar blasts",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "150",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[35]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x10",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+5",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "450",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[105]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x30",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+15",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "3 Solar blasts",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "D131": [
+      {
+        "text": "burning sparks",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Sparks",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "90",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[27?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x20",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "+10",
+        "style": "font-size:7pt;color:#a4c2f4;"
+      },
+      {
+        "text": " [x10",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "+5",
+        "style": "font-size:7pt;color:#ea9999;"
+      },
+      {
+        "text": "]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " ",
+        "style": "color:#df4545;"
+      },
+      {
+        "text": "Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "450",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[135?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x100",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "+50",
+        "style": "font-size:7pt;color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "font-size:7pt;"
+      },
+      {
+        "text": "[x50",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "+25",
+        "style": "font-size:7pt;color:#ea9999;"
+      },
+      {
+        "text": "]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "5 burning sparks",
+        "style": "color:#f6b26b;"
+      }
+    ],
+    "D135": [
+      {
+        "text": "General Super Information",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "90%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[~50?%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "4% Super Drain per Second",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Song of Flame:Caster ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "+100 Grenade",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "+100 Melee",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "+100 Class",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Radiant ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Scorching Rounds",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Caster ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Super Kills",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Weapon damage does not count as Ability damage",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Allies ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "30% ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Scorching Rounds",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Grenade",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Melee",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Class",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Grants full ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Grenade ",
+        "style": "font-weight:normal;font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": "and ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Melee ",
+        "style": "font-weight:normal;font-style:italic;color:#89cdd1;"
+      },
+      {
+        "text": "Ability Charges on ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Super End",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Scorching Rounds:",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Kinetic ",
+        "style": "color:#999999;"
+      },
+      {
+        "text": "Solar ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "stack amount ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "cooldown between Scorching Round triggers ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "x5+0 Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "0.2 seconds",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "x5+5 Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "0.2 seconds",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Machine Guns",
+        "style": "color:#a481e1;"
+      },
+      {
+        "text": "x10+5 Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "0.3 seconds",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "x15+5 Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "0.4 seconds",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Fusion Rifles",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Glaive (Melee/Projectile)",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Shotgun ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Sniper Rifle",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "x20+10 Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "0.6? seconds ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Heavy Grenade Launchers",
+        "style": "color:#a481e1;"
+      },
+      {
+        "text": "Special Grenade Launchers",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Linear Fusion Rifles",
+        "style": "color:#a481e1;"
+      },
+      {
+        "text": "(+Arbalest)",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "Rocket Launchers",
+        "style": "color:#a481e1;"
+      },
+      {
+        "text": "Hitting multiple enemies at once only scorches one of them.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Grenade Ability: ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Drains 4.8% Super Energy, and has a 2 second cooldown between usages.",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Solar Wisp ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "647 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "x40+20 Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Wisps ",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "have ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "? HP",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Wisp ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "4 Wisps",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "wisp ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "10% less damage",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Consuming a ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Solar Wisp",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " while ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Heat Rises",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " is equipped grants ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Cure x3",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " and ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Restoration x2",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " for ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "4",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "+2",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " seconds to the user and their ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "allies ",
+        "style": "font-weight:normal;font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": "within 9 meters.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Melee Ability:",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;font-style:italic;color:#89cdd1;"
+      },
+      {
+        "text": "Drains 2.4% Super Energy, and has a 1.75 second cooldown between usages.",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Celestial Fire ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "5 Solar blasts",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "246 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[87]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "x10+5 Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "[Auto Melee]",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": " Melee Lunge Distance",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "1,224 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "x60+30 Scorch",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Melee Ability Charge",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Incinerator Snap",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "7 Solar Sparks",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "139 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[41]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "x20+10",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "[x10+5]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " Scorch.",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "[Auto Melee]",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Melee Lunge Distance",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Powered Melee",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "899 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[456] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "x60+30 Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": " ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Melee Ability Charge",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Class Ability: ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Drains 6% Super Energy, and has a 2.85 second cooldown between usages.",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Class Ability",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Super Energy",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "D137": [
+      {
+        "text": "General Super Information",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "90%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[51%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "4.167% Super Drain per Second",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Light Attack",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "6.5% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Daybreak Projectile",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Daybreak Projectile",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "426",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Impact Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "598",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Splash Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": " x50",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "+0",
+        "style": "font-size:7pt;color:#e0a261;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "streak of flames",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Flame streaks ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Daybreak Projectile",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "292",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Allows the usage of an enhanced Icarus Dash without cooldown that drains 4.2% Super Energy per usage.",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Phoenix Dive",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "642 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[220?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "292 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[?]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "x60",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+30",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Deals 45% damage at max falloff.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Phoenix Dive ",
+        "style": "font-weight:normal;font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": "damage is enhanced by ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Super Damage Increases",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D139": [
+      {
+        "text": "Well of Radiance",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "restoring 300HP ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "caster",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "40+20 Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "3 Orbs of Power",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "3.6% Super Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Super Duration",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Super Stat",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "40 seconds",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "200 Super",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Well of Radiance:",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "800 HP.",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "frozen ",
+        "style": "color:#3d85c6;"
+      },
+      {
+        "text": "Stasis Shatter",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "aura ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "caster",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "allies",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "aura ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Radiant ",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "+4",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Combatants",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "0.25x Damage",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Well of Radiance",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Well of Radiance:",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "20% Damage Resist against Combatants",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "(10% vs Boss Combatants)",
+        "style": "font-style:italic;color:#9fc5e8;"
+      },
+      {
+        "text": "immunity to Stasis Effects",
+        "style": "color:#3d85c6;"
+      },
+      {
+        "text": "restores 50HP/s.",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Guardians receive 50% Damage Resist against ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Special ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "and ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Power ",
+        "style": "color:#a481e1;"
+      },
+      {
+        "text": "Weapons, as well as Abilities. ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Primary Weapons",
+        "style": "color:#999999;"
+      },
+      {
+        "text": " remain at 40% Damage Resist.",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Removes any active ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Restoration",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " effect. Weapon Damage dealt by the ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Caster ",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "is counted as ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Super Ability Damage",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ". ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Caster ",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "can spawn up to ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "5 Orbs",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " from scoring kills within the ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Well",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D144": [
+      {
+        "text": "Melee Energy",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Tier 1 Combatant ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "20%",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": " ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "T2 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "25%",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": " ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": " ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "T3 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "35% | ",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "T4 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "50%",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": " ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": " ",
+        "style": "color:#79bec3;"
+      },
+      {
+        "text": "Guardians = ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "50%",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "[Grenade]",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Grenade Ability Charge",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Heat Rises",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Cure x2",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "allies ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Consuming a ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Healing Grenade",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "increases ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Cure ",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "to ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "x3",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": ". Consuming a ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Touch of Flame",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " Healing Grenade",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " additionally grants ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Restoration x1",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "for ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "4",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "+2",
+        "style": "font-size:7pt;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "seconds.Consuming a ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Song of Flame' Wisp",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " releases a burst of ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Cure x3",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " and grants ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Restoration x2",
+        "style": "font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": " for ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "4",
+        "style": "font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "+2",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " seconds to the user and their ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "allies ",
+        "style": "font-weight:normal;font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": "within 9 meters.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Heat Rises",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Combatants are less accurate at targeting the wearer while active.",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "and marks the user's location on radar to Guardians within 25 meters.",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Balanced Glide: Strong Directional and Initial Burst | Burst Glide: Strong Directional Control | Strafe Glide: Strong Initial Burst.",
+        "style": "color:#f9cb9c;"
+      },
+      {
+        "text": "Heat Rises",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Tier 1 Combatant",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "+5 seconds",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "T2 & T3 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "+10 seconds",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "T4 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "+15 seconds",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Guardians ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "+5 seconds",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Grenade ",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "D146": [
+      {
+        "text": "On ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Class Ability Usage",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ":",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Hellion",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Hellion:",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "scorching Solar projectiles ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Solar projectiles",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "217 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[38]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Solar Grenade Ability Damage ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "x30",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+10",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Can trigger ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Grenade Ability",
+        "style": "font-weight:normal;font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": " interactions. ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Hellion-inflicted Solar Effects",
+        "style": "font-weight:normal;font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "are not",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": " scaled by ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Grenade Damage",
+        "style": "font-weight:normal;font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D148": [
+      {
+        "text": "that travels ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": " ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Distance is increased by 25% while in ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Daybreak",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Incurs a 4 second cooldown after usage.",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "While ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Heat Rises ",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": "is ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "active",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": ", or during the ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Song of Flame",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "Super Ability",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " while the ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Incinerator Snap",
+        "style": "font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Melee Ability",
+        "style": "font-style:italic;color:#89cdd1;"
+      },
+      {
+        "text": " is ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "equipped",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "increases cooldown ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Does not grant 2 charges while in Song of Flame if the Celestial Fire Melee Ability is equipped.  ",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "¯\\_(ツ)_/¯",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Upon reaching ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "100% Counter Progress",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " through ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Weapon ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "or ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Super",
+        "style": "font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": " Kills",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " while ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Airborne ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "within ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "5 seconds",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " of ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "each",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Rank-And-File = 34% | Elites = 67% | Bosses = 100% ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Guardians = 67%.",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Cure x1",
+        "style": "color:#dd7e6b;"
+      }
+    ],
+    "D150": [
+      {
+        "text": "Enhances certain Grenade types:",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Healing Grenades",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Cure x2 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Restoration x2 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "+2",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": "Firebolt Grenades ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Solar Grenades",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Magma Orbs",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "125 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[50]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Magma Orbs",
+        "style": "font-weight:normal;font-style:italic;color:#f6b26b;"
+      },
+      {
+        "text": " do not have damage falloff.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Fusion Grenades",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "851 ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[50] ",
+        "style": "color:#ea9999;"
+      }
+    ]
+  },
+  "cell_notes": {},
+  "rendered_rows": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79,
+    80,
+    81,
+    82,
+    83,
+    84,
+    85,
+    86,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    94,
+    95,
+    96,
+    97,
+    98,
+    99,
+    100,
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110,
+    111,
+    112,
+    113,
+    114,
+    115,
+    116,
+    117,
+    118,
+    119,
+    120,
+    121,
+    122,
+    123,
+    124,
+    125,
+    126,
+    127,
+    128,
+    129,
+    130,
+    131,
+    132,
+    133,
+    134,
+    135,
+    136,
+    137,
+    138,
+    139,
+    141,
+    142,
+    143,
+    144,
+    145,
+    146,
+    147,
+    148,
+    149,
+    150,
+    151
+  ],
+  "notes_availability": "Public HTML does not expose all spreadsheet cell notes or formulas."
+}

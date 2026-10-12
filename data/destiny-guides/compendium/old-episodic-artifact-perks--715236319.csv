@@ -1,0 +1,958 @@
+"Archive of Artifact Perks, released during Episodes.",,,,,,,,,,,,,,,
+,,,,"Looking for the even older Artifact Mods/Perks during the Seasonal episodes? 
+Head over to the OLD Seasonal Artifact Perks tab.",,,,,,,,,,,
+,,,,,,,,,,,,,,,
+,Renegades,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,
+,,Anti-Barrier Hand Cannon,,,"Impact, Shock, Gravity",,,Press The Advantage,,,Dielectric,,,Elemental Orbs: Arc,
+,"For Hand Cannons without an intrinsic Breaker Type:
+
+Passively grants Shield-Piercing Rounds.",,,"Grants the ability to equip the following mods:
+
+Kinetic + Arc Siphon [3 Energy]
+
+Kinetic + Void Siphon [3 Energy]",,,"Upon breaking a Combatant's Shield:
+
++20? Stability, +20? Handling, and +20 Reload Speed for 10 seconds.
+Swords receive +? Guard Resistance.",,,"On Arc-Debuffed Enemy Kill:
+
+Grants x1 Bolt Charge.
+
+Upon scoring 3 Arc-Debuffed Enemy Kills within 6 seconds of each:
+Spawns an Orb of Power that grants 7.15% Super Energy.
+Restores 40 HP.",,,"Arc Weapon Kills progress a counter, spawning an Arc Elemental Orb upon reaching 100%.
+
+Arc Elemental Orb:
+Can be picked up and thrown.
+Deal 450 [101] damage and apply Jolt.
+
+For more information, head to Game Mechanics.",,
+,,,,,,,,,,,,,,,
+,,Anti-Barrier Sniper Rifle,,,Gravitic-Voltaic Charge,,,Kinetic Synthesis,,,Armorsmith,,,Kinetic Rupture,
+,"For Sniper Rifles without an intrinsic Breaker Type:
+
+Passively grants Shield-Piercing Rounds.",,,"While an Arc or Void Super Ability is equipped:
+
+Grants +1 Maximum Armor Charge Stacks.
+Stacks alongside Charged Up.",,,"Dealing Kinetic Weapon Damage and scoring Kinetic Weapon Kills progress a counter, spawning an unique Kinetic Ammo Brick upon reaching 100%.
+Counter lasts 15s and is refreshed upon dealing Kinetic Weapon Damage.
+
+Each damage point grants 0.0265% progress, requiring 3770 damage to spawn a brick.
+RnF Kill = 8% | Elite = 15% | Miniboss = 25%
+Damage requirement IGNORES Power-Delta, but considers ACTUAL DAMAGE DEALT.
+This means it requires the same ""hits"" regardless of delta.
+
+Upon collecting a Kinetic Ammo Brick:
+Refills equipped Kinetic Damage Weapons and generates Special/Power Ammo.
+5% Special and 5% Heavy Ammo Progress.
+
+Kinetic Ammo Generation is unaffected by Scavenger Bricks.
+Generates 33% of Magazine, rounded up, with certain exceptions.
+Counts for Ammo Pickup effects.
+
+Bastion = +1 Ammo | Microcosm = +24 Ammo.",,,"Upon breaking a Combatant's Shield:
+
+10% [2.5%] Damage Resist (Resist x1) for 6 seconds.
+100% Increased Melee Damage for 6 seconds.",,,"Upon scoring enough Kinetic Weapon Damage Instances against Elite+? Combatants:
+Spawns a Kinetic Rupture for ? seconds.
+
+Kinetic Ruptures can be damaged, activating after ? seconds of being dealt damage.
+
+Kinetic Rupture explosion damage is equal to %%% of the damage it received and staggers combatants.",,
+,,,,,,,,,,,,,,,
+,,Overload Pulse Rifle,,,Expert Handling,,,Reload at Range,,,Counter Energy,,,Sniper's Meditation,
+,"For Pulse Rifles without an intrinsic Breaker Type:
+
+Scoring 2 hits grants Overloading Rounds for 6 seconds.
+Buff cannot be retriggered until after 2 seconds of expiring. 
+Buff is removed on stow.",,,"On Weapon Kill:
+
+Grants a stack of Expert Handling, up to ? stacks.
+Reload or stow removes all stacks.
+
+Expert Handling:
+x1 | +5? Stability | +5 Guard Endurance
+x2 | +15? Stability | +15 Guard Endurance
+x3 | +20? Stability | +20 Guard Endurance",,,"Upon scoring a Precision Hit with a Bow or Sniper Rifle:
+
+Grants a stack of Reload at Range for ? seconds, up to ? stacks.
+
+Reload at Range:
+x1 | +? Reload Speed
+x2 | +? Reload Speed
+x3 | +? Reload Speed",,,"Whenever a Champion gets stunned:
+
+Grants 25% Ability Energy to the least-charged Ability.
+Excludes Super Abilities, obviously.",,,"On Sniper Rifle Direct Hit:
+Grant a stack of Sniper's Meditation for 7 seconds.
+Heavy Sniper Rifle hits grant 2 stacks.
+Sniper's Meditation Buff persists through stow.
+
+Sniper's Meditation 
+Increased Damage, Stability, and Reload Speed.
+3% | 6% | 9% | 12 | 15% Increased Damage
++? | +? | +? | +? | +? Stability
++15 | +30 | +35 | +40 | +45 Reload Speed",,
+,,,,,,,,,,,,,,,
+,,Overload Submachine Gun,,,Fastest Draw,,,Riposte,,,Combination Argent Blade,,,Sword Storm Combo,
+,"For Submachine Guns without an intrinsic Breaker Type:
+
+Sustained Fire for 0.6 seconds grants Overloading Shots until no longer firing for 0.6 seconds.",,,"Upon scoring a Precision Hit within ? seconds of reloading or readying the weapon:
+
+?% Flinch Resist for ? seconds.
+Buff cannot be refreshed.
+In-Game Description is wrong, it isn't exclusive to the first shot.",,,"After guarding with a Sword:
+
+Grants Unstoppable Shots for 3 seconds.",,,"Upon attacking, then waiting for 0.5 seconds before attacking once again:
+Grants Argent Blade for 5 seconds.
+Buff cannot be refreshed.
+
+Argent Blade:
+15% Increased Sword Damage
++100 Charge Rate",,,"Upon doing 3 Light Attacks followed by a Heavy Attack:
+Grants Sword Storm Combo for 5 seconds.
+Scoring additional Sword Kills refresh the buff.
+
+Sword Storm Combo:
+Automatically deals 103 [?] Sword Kinetic Damage and disorients on hit for 3 seconds every 0.53 seconds over 6 meters around the user.
+Deals up to 15% more damage at <4 meters.",,
+,,,,,,,,,,,,,,,
+,,Unstoppable Bow,,,Elemental Siphon,,,Power from Pain,,,Singularity Blade,,,Void Infestation,
+,"For Bows without an intrinsic Breaker Type:
+
+Holding Full-Draw for 1 second grants Unstoppable Shot.
+
+Crossbows are passively granted Unstoppable Shots after being readied and loaded for 1 second.",,,"Upon scoring 3 kills within 3? seconds of each using a Kinetic Weapon or a Super-Element Matching Weapon:
+
+Creates an Elemental Pickup that matches the equipped Super Ability's element.",,,"Upon scoring 3 Consecutive Weakened Enemy Kills within 4 seconds of each:
+
+Grants Devour for 5+2.5 seconds.
+
+Hits that would've inflicted Weaken will also count even if they instantly kill an enemy.",,,"While a Void Buff is active:
+Devour, Invisibility, or Overshield.
+Melee and Sword Hits inflict Weaken for 6 seconds.
+Checks on-hit, instead of snapshotting on-usage.
+
+On Melee or Sword Kill while a Void Buff is active:
+Triggers a Weakening Burst, inflicting Weaken to enemies within 4 meters for 6 seconds.",,,"Upon killing a Weakened Enemy:
+
+Spawns a tracking projectile that seeks enemies within 15 meters.
+
+Projectile deals 87 [?] Void Damage and inflicts Weaken over ? meters.",,
+,,,,,,,,,,,,,,,
+,,Anti-Barrier Bow,,,Light-Forged Lead,,,Pack Tactics,,,That Fresh Bullet Smell,,,Iron Lord's Vigor,
+,"For Bows without an intrinsic Breaker Type:
+
+Passively grants Shield-Piercing Rounds.",,,"For Kinetic Weapons:
++15 Ammo Generation Stat.
+
+On Orb of Power Pickup:
+Bonus is increased to +30 Ammo Generation for 8 seconds.",,,"Dealing Threadling Damage grants a stack of Pack Tactic for ? seconds, up to a maximum of 2 stacks.
+
+Pack Tactics x1 | 15% increased Threadling Damage.
+
+Pack Tactics x2 | 30% Increased Threadling Damage.
+Threadling Damage stuns Unstoppable Champions.
+
+",,,"On Ammo Pickup:
+
+Grants x2 Kinetic Weapon Surge for 11 seconds.
+
+Does not stack with Kinetic Weapon Surge Mods.
+x3/x4 Kinetic Weapon Surge is prioritized over it.",,,"While wielding a sword:
+25% Damage Resist
+
+Upon scoring 3 Sword Kills within 3? seconds of each:
+Grants +3 Ammo.",,
+,,,,,,,,,,,,,,,
+,,Overload Sword,,,Threadling Proliferation,,,Semi-Auto Striker,,,Energy Acceleration,,,Argent Quiver,
+,"For Swords without an intrinsic Breaker Type:
+
+Passively grants Overloading Shots.",,,"Upon dealing 33% of the Enemy's Health with Strand Weapons within ? seconds of each damage instance:
+Spawns a Threadling.
+Incurs a 3? cooldown between Threadling spawns and additional damage counting.
+Cooldown is per-Guardian, not per-enemy.
+
+Combatant Shields are not included in the 33% Health Pool, but damage dealt to them will be taken into account.
+Guardian Shields are included however.
+
+Killing a Strand-Debuffed Enemy with a Strand Weapon spawns 2 Threadlings.",,,"While at <2 Armor Charges:
+
+Upon scoring multiple Precision Hits within ? seconds of each with Bows, Sniper Rifles, or Scout Rifles :
+
+Grants an Armor Charge.
+
+Precision Hit Requirement:
+Scouts = 5 | Bows = 3 | Snipers = 2",,,"Upon scoring 2 Explosive Damage Instances with Micro-Missiles or a Micro-Missile Kill:
+
+Target releases a Kinetic Shockwave that deals 120 [20] Kinetic Damage over 7 meters.
+Shockwave has no falloff.
+Incurs a ? second cooldown between activations.",,,"While Armor Charge is active:
+
+Reloading a bow grants 3 stacks of Godslayer Broadheads.
+Stowing removes all stacks.
+
+Upon firing while Godslayer Broadhead is active:
+Consumes 1 stack of Godslayer Broadheads to grant increased damage and +? Reload Speed.
+
+Primary = 35% increased damage to Combatants.
+Heavy = 25% increased damage to Combatants.",,
+,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,
+,Edge of Fate,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,
+,,Anti-Barrier Scout and Pulse,,,"Flame, Fiber, and Freeze",,,Fever and Chill,,,Threaded Blast,,,Radiant Shrapnel,
+,"For Pulses and Scouts without an intrinsic Breaker Type:
+
+Passively grants Shield-Piercing Rounds.",,,Grants the ability to equip Solar/Strand and Solar/Stasis Siphon mods that cost 3 Energy. ,,,"Upon scoring multiple Precision Hits or 3 kills within 3 seconds of each:
+Solar Weapons | Grants Radiant for 10+5 seconds.
+Stasis Weapons: Grants a stack of Frost Armor for 9 seconds.
+
+Precision Hits trigger:
+ (25% of Magazine Size) + 1, rounded down
+
+Mag to Crits Requirement: 
+Bows = 3 Crits | 3 Mag = 1 Crit
+4–7 Mag = 2 Crits | 8–11 Mag = 3 Crits
+ 12–15 Mag = 4 Crits | 16–19 Mag = 5 Crits
+20–23 Mag = 6 Crits | 24-27 Mag = 7 Crits
+28–31 Mag = 8 Crits | 32–35 Mag = 9 Crits
+36–39 Mag = 10 Crits | 40–43 Mag = 11 Crits",,,"Upon destroying a Tangle with Strand Damage:
+
+Explosion has an additional damage instance that deals up to ~285 [?] Damage over 15 metres.",,,"Upon scoring any Weapon Damage Instance against a Combatant while Radiant, or upon killing a Scorched Combatant with a Weapon:
+
+Target releases 1 Solar Shrapnel that deals 54 [?] Impact Damage and up to 289 [20] Explosive Damage, inflicting x20+0 Scorch over ? meters.
+
+Incurs a 1 second cooldown between Shrapnel spawns.
+
+Shrapnel is slightly homing, and often misses the enemy it spawns on.",,
+,,,,,,,,,,,,,,,
+,,Unstoppable Sidearm and Hand Cannon,,,Diviner's Discount,,,Elemental Benevolence,,,Cauterized Darkness,,,Shieldcrush,
+,"For Hand Cannons and Sidearms without an intrinsic Breaker Type:
+
+ADS for 1 second without firing grants Unstoppable Shots until no longer ADS.",,,Ammo Scavenger Mods are reduced to 1 cost.,,,"Upon bestowing an Elemental Buff to allies:
+Grants ~15?% Class Ability Energy.
+
+Incurs a ? second cooldown PER ALLY after activation.",,,"Against Darkness-debuffed Non-Boss Combatants:
+
+30% Increased Solar Damage dealt.",,,"While Frost Armor, Void Overshield, or Woven Mail are active:
+?% [?%] Additional Base Melee Recharge Rate
+ 50% [5%] Increased Powered Melee Damage.
+most Overshields work, not just Void Overshield :)
+
+While Amplified or Radiant are active:
+?% [?%] Additional Base Grenade Recharge Rate
+25% [5%] Increased Grenade Damage.
+
+Grapple Melee instead receives 12% Increased Damage for each half of the perk.",,
+,,,,,,,,,,,,,,,
+,,Unstoppable Sniper Rifle,,,One With Frost,,,Frost Renewal,,,Elemental Daze,,,Elemental Overdrive,
+,"For Sniper Rifles without an intrinsic Breaker Type:
+
+ADS for 1 second grants Unstoppable Shots until no longer ADS.",,,"While Frost Armor is active:
+
+For Stasis Weapons:
++15? Stability and +20 Reload Speed.
+Swords receive +? Guard Resistance.",,,"On Shield Break, while Frost Armor is active:
+
+Releases a Stasis Burst over ? meters.
+Stasis Burst freezes enemies and grants x? Frost Armor to the user and allies.",,,"Upon stunning a Champion with an Elemental Weapon:
+
+Triggers an Elemental-Matching Explosion that deals up to 361 Elemental Damage within ? meters.
+Enemies within ~8 meters receive a matching debuff.
+
+Arc: Jolt
+Solar: Ignition
+Void: Volatile
+Stasis: Instant Freeze+Shatter (only to the Champion)
+Strand: Sever",,,"Upon picking up a Elemental Pickup:
+
+10% [?%] Increased Damage for 7 seconds to Pickup-Matching Weapons.
+
+Visually shows up as [Element] Weapon Boost, just like Surge Mods.",,
+,,,,,,,,,,,,,,,
+,,Overload Shotgun,,,Tightly Woven,,,Reciprocal Draw,,,Shoulder to Shoulder,,,Tangled Web,
+,"For Shotguns without an intrinsic Breaker Type:
+
+Passively grants Overloading Shots.",,,"While Woven Mail is active:
+
++20 Grenade and +20 Class Armor Stats.",,,"Upon scoring 3 Non-Sidearm Weapon Kills within ? seconds of each:
+Grants Reciprocal Draws Ready!
+
+Upon readying a Sidearm while the buff is active:
+Grants increased Sidearm damage for 6 seconds.
+35% [?%] increased Primary Ammo Sidearm Damage.
+15% [?%] increased Special Ammo Sidearm Damage.",,,"Upon dealing sustained Precision Damage while within 15 meters of 2 allies:
+
+25% Damage Resist (Resist x2) for 10? seconds",,,"Upon killing a Strand-Debuffed Combatant:
+
+Triggers a Suspending Blast.
+Only triggers when a Tangle is created.",,
+,,,,,,,,,,,,,,,
+,,Overload Rapid Fire,,,Rapid Precision Rifling,,,Refresh Threads,,,Elemental Coalescence,,,Frigid Glare,
+,"For Auto Rifles and SMGs without an intrinsic Breaker Type:
+
+Sustained Fire for 0.6 seconds grants Overloading Shots until no longer firing.",,,"Upon scoring 3? Precision Hits or ? Kills with Scout Rifles:
+
++? Reload Speed and +? Flinch Resist.",,,"Upon picking up a Super-Matching Elemental Pickup:
+
+Grants ?% Ability Energy to the least-charged Ability.
+Also triggers with Tangles on Strand.",,,"Upon scoring 4 to 7 Kills:
+Spawns a Super-Matching Elemental Pickup.",, ,"Upon scoring a Precision Kill with a Stasis Weapon while Frost Armor is active:
+
+Target triggers a Freezing Burst, inflicting Freeze to enemies within ~6 meters.",,
+,,,,,,,,,,,,,,,
+,,Anti-Barrier Bow,,,Light-Forged Lead,,,Pack Tactics,,,That Fresh Bullet Smell,,,Iron Lord's Vigor,
+,"For Bows without an intrinsic Breaker Type:
+
+Passively grants Shield-Piercing Rounds.",,,"For Kinetic Weapons:
++15 Ammo Generation Stat.
+
+On Orb of Power Pickup:
+Bonus is increased to +30 Ammo Generation for 8 seconds.",,,"Dealing Threadling Damage grants a stack of Pack Tactic for ? seconds, up to a maximum of 2 stacks.
+
+Pack Tactics x1 | 15% increased Threadling Damage.
+
+Pack Tactics x2 | 30% Increased Threadling Damage.
+Threadling Damage stuns Unstoppable Champions.
+
+",,,"On Ammo Pickup:
+
+Grants x2 Kinetic Weapon Surge for 11 seconds.
+
+Does not stack with Kinetic Weapon Surge Mods.
+x3/x4 Kinetic Weapon Surge is prioritized over it.",,,"While wielding a sword:
+25% Damage Resist
+
+Upon scoring 3 Sword Kills within 3? seconds of each:
+Grants +3 Ammo.",,
+,,,,,,,,,,,,,,,
+,,Overload Sword,,,Threadling Proliferation,,,Semi-Auto Striker,,,Energy Acceleration,,,Argent Quiver,
+,"For Swords without an intrinsic Breaker Type:
+
+Passively grants Overloading Shots.",,,"Upon dealing 33% of the Enemy's Health with Strand Weapons within ? seconds of each damage instance:
+Spawns a Threadling.
+Incurs a 3? cooldown between Threadling spawns and additional damage counting.
+Cooldown is per-Guardian, not per-enemy.
+
+Combatant Shields are not included in the 33% Health Pool, but damage dealt to them will be taken into account.
+Guardian Shields are included however.
+
+Killing a Strand-Debuffed Enemy with a Strand Weapon spawns 2 Threadlings.",,,"While at <2 Armor Charges:
+
+Upon scoring multiple Precision Hits within ? seconds of each with Bows, Sniper Rifles, or Scout Rifles :
+
+Grants an Armor Charge.
+
+Precision Hit Requirement:
+Scouts = 5 | Bows = 3 | Snipers = 2",,,"Upon scoring 2 Explosive Damage Instances with Micro-Missiles or a Micro-Missile Kill:
+
+Target releases a Kinetic Shockwave that deals 120 [20] Kinetic Damage over 7 meters.
+Shockwave has no falloff.
+Incurs a ? second cooldown between activations.",,,"While Armor Charge is active:
+
+Reloading a bow grants 3 stacks of Godslayer Broadheads.
+Stowing removes all stacks.
+
+Upon firing while Godslayer Broadhead is active:
+Consumes 1 stack of Godslayer Broadheads to grant increased damage and +? Reload Speed.
+
+Primary = 35% increased damage to Combatants.
+Heavy = 25% increased damage to Combatants.",,
+,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,
+,,Unstoppable Fusion,,,Overclock and Load,,,Hold the Line,,,Dreadful Finisher,,,Particle Reconstruction,
+,"For (Linear) Fusion Rifles without an intrinsic Breaker Type:
+
+ADS for 1 second grants Unstoppable Shots.
+Overcharge when said modifier is active.",,,"While Amplified or Bolt Charge is active:
+
+For Arc Weapons:
++? Handling and +15 Reload Speed.",,,"While within 15 meters of 3 enemies, while a Glaive or Machine Gun is readied:
+Grants Hold The Line.
+Stat Bonus lingers for 5 seconds once criteria is met. 
+Healing on Kill does not linger.
+
+Hold The Line:
+Machine Guns and Glaives are granted +? Stability and +30 Reload Speed.
+Weapon Kills restore 55 HP. Includes Glaive Melee.",,,"Finishing Elite or Miniboss Combatants spawns 1 Special Ammo Bricks for the user and their allies.
+
+Finishing Subjugators, Tormentors, and Champions spawns 2 Special Ammo Bricks for the user and their allies.
+One of the bricks grants reduced ammo.
+The other is a regular Ammo Brick?.
+
+Spawned Ammo Bricks grant 5?% of Total Reserves and are affected by Scavenger mods",,,"Linear (Fusion Rifle) hits Inflict an unique stacking weaken that increase (Linear) Fusion Rifle damage.
+
+ (Linear) Fusion Rifle Damage Increase:
+5% | 10.25% | 15.8% | 21.6% | 27.6%
+30% Weaken overrides Particle Reconstruction weaken.
+Divinity's Cage also overrides it down to 15%.
+
+Upon scoring (50% of Magazine, rounded down, +1) as hits:
+Refills 10% of Magazine.
+Incurs a 1? second cooldown before hits count again.",,
+,,,,,,,,,,,,,,,
+,,Overload Machine Gun,,,Deep Alchemy,,,Dielectric,,,Maligned Harvest,,,Elemental Supercharger,
+,"For Machine Guns without an intrinsic Breaker Type:
+
+Passively grants Overloading Shots.
+Overcharge when said modifier is active.",,,"Subjugation is enhanced.
+Hand Cannon and Scout Rifle explosion rate is halved to once per burst and every 2 bullets, respectively.
+
+Upon dealing damage:
++? Stability and +10 Reload Speed for 3 seconds.
+
+Weapons with the Subjugation Origin Trait become overcharged when said modifier is active.",,,"On Arc-Debuffed Enemy Kill:
+
+Grants x1 Bolt Charge.
+
+⟁ BOOST
+Upon scoring 3 Arc-Debuffed Enemy Kills within 6 seconds of each:
+Spawns an Orb of Power that grants 7.15% Super Energy.
+Restores 40 HP.",,,"Upon inflicting Volatile 4? times within ? seconds of each: 
+
+The next Void Damage Instance within 10 seconds releases a weakening burst, applying Weaken to enemies within 5? metres.
+
+⟁ BOOST
+Inflicting Weaken grants 25 Void Overshield HP for 10+5 seconds.
+Only triggers once per source of weaken. 
+Eg: Smoke Bomb won't repeatedly trigger it.",,,"Upon killing Exhausted or Severed Enemies with Super-Matching Weapons:
+
+Grants +1?% Additional Super Ability Energy.",,
+,,,,,,,,,,,,,,,
+,,Piercing Sidearms,,,Volatile Marksman,,,King's Vestige,,,Flashover,,,Heavy Ordnance Regeneration,
+,"For Sidearms without an intrinsic Breaker Type:
+
+Passively grants Shield-Piercing Rounds.
+Overcharge when said modifier is active.",,,"Upon scoring multiple Precision Hits within 3 seconds of each, or upon scoring 3 kills within 3 seconds of each with Void Weapons:
+
+Grants Volatile Rounds for 10 [6] seconds.
+
+Precision Hits trigger for Volatile Rounds: 
+ (25% of Magazine Size) + 1, rounded down.
+Bows: 2
+
+⟁ BOOST
+Volatile detonations grant 10% Class Ability Energy.
+Incurs a 0.1 second cooldown between activations.",,,"Upon killing an Elite+ Taken Combatant:
+The next hit releases 3 seeking Taken projectiles.
+
+Taken Projectiles:
+Each seeker deals 300 Elemental? Damage.
+Inflict disruption and exhaustion. ",,,"Upon reaching x10 Bolt Charge:
+Grants Amplified for 15 seconds.
+
+Bolt Charge Discharge:
+Deals 150% increased damage.
+450 Bolt Splash + 300 Floor Splash = 750 Total --> 750 + 1125 = 1875
+Doesn't increase damage against Guardians.",,,"Upon scoring 8 Machine Gun damage instances, or 2 Rocket Launcher damage instances within 7 seconds of each:
+
+Grants Resist x2 and additional Grenade and Melee Ability Regeneration Rate.
+
+25% [5%] Damage Resist (Resist x2) for 15.5 seconds
+85% Additional Base Grenade and Melee Ability Regeneration Rate for 9.5 seconds.
+
+⟁ BOOST
+While Heavy Ordnance is active:
+Killing Elite+ Combatants disorients Rank-and-File Combatants within ? meters.",,
+,,,,,,,,,,,,,,,
+,,Anti-Barrier Sniper Rifle,,,Legend Incarnate,,,Disruptor Spike,,,Horde Shuttle,,,Defibrillating Blast,
+,"For Sniper Rifles without an intrinsic Breaker Type:
+
+Passively grants Shield-Piercing Rounds.
+Overcharge when said modifier is active.",,,"Weapons with the Timelost Magazine Origin Trait are granted increased damage while the Timelost Magazine perk is active.
+
+Damage Increases:
+Primaries: 20%
+Special: 15%
+Power: 10%
+
+Timelost Weapons also become overcharged when said modifier is active.",,,"Exhaustion and Sever inflicted by the user against Combatants are enhanced.
+
+Enhanced Exhaustion decreases damage by 35%.
+Exhaustion is 25% decreased damage by default.
+
+Enhanced Sever decreases damage by 52%.
+Sever is 40% decreased damage by default.",,,"Dealing enough Weapon Damage to an Unraveled Enemy spawns a Threadling.
+
+Rank-and-File: 80 damage.
+Elite: 180 damage.
+Minibosses: 200 damage.
+Bosses: 420 damage.
+Guardians: 100 damage.
+
+Incurs a 0.5 second cooldown between Threadlings.
+
+⟁ BOOST
+Threadlings inflict Sever upon dealing damage.",,,"Upon stunning a Champion:
+Grants x10 Bolt Charge.
+
+Bolt Discharge's Bolt Splash damage portion now inflicts Jolt.
+
+Upon triggering a Bolt Discharge:
+Restores ~55 HP.
+Begins Critical Health regeneration
+Does not begin recharging Shields.",,
+,,,,,,,,,,,,,,,
+,,Unstoppable Glaive,,,Unraveling Orbs,,,Photonic Flare,,,No Bell,,,Void Flux,
+,"For Glaives without an intrinsic Breaker Type:
+
+Passively grants Unstoppable Rounds.
+Overcharge when said modifier is active.
+
+Works for both Glaive Melee and Projectiles.",,,"On Orb of Power or Tangle Throw:
+
+Grants Unraveling Rounds for 14 [?] seconds.
+
+⟁ BOOST
+Strand Weapons deal 5% increased damage towards Strand-Debuffed Enemies.",,,"Upon killing an Exhausted or Severed Enemy with Arc Damage:
+
+Triggers a blinding burst, blinding enemies within 5? meters.
+Incurs a 6? second cooldown between activations.",,,"Upon scoring ? Glaive Melee Kills within ? seconds of each:
+Grants +2 Ammo to Special Ammo Glaives.
+
+Upon blocking damage with a Glaive Shield:
+85% [?%] increased Glaive Melee Damage for 6 seconds.
+Also triggers if an Ally shoots the shield.",, ,"On Weakened Enemy Kill with a Void Weapon:
+
+Inflicts Volatile to enemies within ? meters.
+Elite+? Combatants and Guardians? increase the radius to ? meters.",,
+,,,,,,,,,,,,,,,
+,,Overload Trace Rifle,,,Beam Medic,,,Elemental Siphon,,,Harsh Refraction,,,Limit Break,
+,"For Trace Rifles without an intrinsic Breaker Type:
+
+Sustained Fire for 0.6 seconds grants Overloading Shots.
+Overcharge when said modifier is active.",,,"Upon scoring ? Trace Rifle Kills within ? seconds of each:
+
+Restores ? HP to the user and allies within ? meters.
+Elite+ Combatants restore ? HP.",,,"Upon scoring 3 kills within 3? seconds of each using a Kinetic Weapon or a Super-Element Matching Weapon:
+
+Creates an Elemental Pickup that matches the equipped Super Ability's element.
+
+⟁ BOOST
+Upon collecting an Elemental Pickup:
+Grants 3% [1%] Element-Matching Super Ability.
+Incurs a 2 second cooldown between additional Ability gains.",,,"Upon scoring 3 Trace Rifle hits against enemies affected by Element-Matching Debuffs:
+Grants increased Trace Rifle damage for 4 seconds.
+
+Legendary Trace Rifles = 50% increased damage
+Exotic Special Traces / Lodestar = 35% increased damage
+
+Microcosm deals 20% increased damage after scoring 4 hits against enemies affected by ANY Elemental Debuff.
+
+Arc = ↓Blind ↓Jolt
+Solar = ↓Scorch ↓Ignition
+Void = ↓Suppression ↓Volatile ↓Weaken
+Stasis = ↓Slow ↓Freeze ↓Shatter
+Strand = ↓Sever ↓Suspend ↓Unravel",,,"On Super Cast, while at Critical Health or affected by an Element-Matching Buff:
+
+30% Increased Super Ability Damage.
+One-Off Supers are only buffed for 8 seconds.
+Roaming Supers are buffed until it runs out.
+
+Arc = ↑Amplified ↑Bolt Charge
+Solar = ↑Cure ↑Radiant ↑Restoration
+Void = ↑Devour ↑Invisibility ↑Void Overshield
+Stasis = ↑Frost Armor
+Strand = ↑Woven Mail",,
+,,,,,,,,,,,,,,,
+,,Unstoppable Rocket Launcher,,,Vile Weave,,,Perpetual Destruction,,,Gold from Lead,,,To Shreds you say?,
+,"Upon readying or reloading a Rocket Launcher without an intrinsic Breaker Type:
+
+Grants Unstoppable Rounds for 4 seconds.
+
+Passively grants Overcharge when said modifier is active.",,,"Tangles inflict sever for ?+? seconds upon dealing damage.
+
+On Tangle Pickup:
+Decreases the Tangle Cooldown by 1 second.",,,"Non-Exotic Rocket Launcher Kills within 2-3? seconds of each progress a counter.
+Rank-and-File = 25% | Elite = 34% | Miniboss = 100%
+
+Upon reaching 100% Counter Progress:
+Grants 10% Heavy Ammo, rounded up.
++? Reload Speed and 0.?x Reload Duration Multiplier for 10 seconds.
+Not affected by Scavenger Mods.
+
+Rockets with ≤10 Total Ammo are granted 1 Ammo.
+Rockets with ≥11 Total Ammo are granted 2 Ammo.",,,"Upon picking up 3–4 Special Ammo Bricks:
+Grants 8% Heavy Ammo, rounded up.
+Pickup Counter is reset on death.
+Not affected by Scavenger Mods.
+Ammo Finder Bricks count as well.
+
+Does not function in the Crucible.",,,"Dealing damage within ? seconds of each damage instance against Severed Enemies inflicts Unravel.
+
+Damage needed to inflict Unravel: 
+Complicated. As. Hell!
+
+On Severed Enemy Kill:
+Releases 3 pulses from where the enemy died, restoring 15 HP and granting Woven Mail for 10 seconds to the user and allies within 10? metres every 2 seconds.
+
+⟁ BOOST
+Unraveling Projectiles deal 10% increased damage.
+Severed Enemies instead receive 25% increased damage from Unraveling Projectiles.",,
+,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,
+,,Anti-Barrier Scout Rifle,,,One With Frost,,,Wind Chill,,,Armor of Eramis,,,Brain Freeze,
+,"For Scout Rifles without an intrinsic Breaker Type:
+
+Passively grants Shield-Piercing Rounds.
+Overcharged when said modifier is active.",,,"While Frost Armor is active:
+
+For Stasis Weapons:
++15? Stability and +20 Reload Speed.
+Swords receive +? Guard Resistance.",,,"Upon scoring multiple Precision Hits within 3 seconds of each with Stasis Weapons:
+
+Grants a stack of Frost Armor.
+Triggering Wind Chill with a Dark Ether Reaper Weapon grants 2 stacks of Frost Armor.
+
+Precision Hits trigger for Frost Armor:
+(30% of Magazine, rounded down) + 1
+
+⟁ BOOST
+ Stasis Weapon Damage against Slowed Enemies have a ?% chance to spawn a Stasis Shard.",,,"While Frost Armor is active, and at Critical Health:
+
+Being damaged by Combatants releases a freezing burst, freezing enemies within ? metres.
+
+⟁ BOOST
+ Freezing Burst now inflicts Freeze over ? meters.",,,"Frozen Enemies apply x? Slow to enemies within 4? meters that aren't affected by Stasis Debuffs.
+
+Dark Ether Reaper Weapons deal 6% increased damage to Frozen Enemies.",,
+,,,,,,,,,,,,,,,
+,,Overload Submachine Gun,,,Killing Breeze,,,Crystalline Converter,,,Hail The Storm,,,Supernova,
+,"For Submachine Guns without an intrinsic Breaker Type:
+
+Sustained Fire for 0.6 seconds grants Overloading Shots.
+Overcharge when said modifier is active.",,,"Upon scoring 3 Weapon Kills within 3 seconds of each:
+Grants +? Mobility for 5 seconds.
+Buff can be refreshed by retriggering it.
+
+Dark Ether Reaper Weapon Kills count as 3 kills.",,,"Picking up Stasis Shards progresses the Crystalline Converter Counter.
+
+On Powered Stasis Melee Hit:
+Consumes the Crystalline Converter Counter.
+Spawns Crystals based on the amount of Shards picked up.
+8 | 12 | 15 Shards Pickups
+1 | 2 | 3 Crystals Spawned
+
+⟁ BOOST
+On Class Ability Usage:
+The next Stasis Weapon Kill spawns a Stasis Shard.",,,"Upon shattering a Stasis Crystal:
+
+Releases 5 Homing Ice Shards in a * pattern, each dealing 50 damage and applying x? [x10] Slow for ? seconds.
+Shards are spread uniformally, with one shard going towards the closest enemy and the others spreading.
+
+⟁ BOOST
+Enemy Shatters deal 12.5% [?%] increased damage.
+Crystal Shatters deal 25% [?%] increased damage.",,,"On Void Breach Pickup: 
+
+The next Void Damage Instance within 10 seconds releases a weakening burst, applying Weaken to enemies within 5? metres.",,
+,,,,,,,,,,,,,,,
+,,Unstoppable Pulse Rifle,,,Enhanced Ether Generator,,,Total Carnage,,,Debilitating Wave,,,Conductive Cosmic Crystal,
+,"For Pulse Rifles without an intrinsic Breaker Type:
+
+ADS for 1 second grants Unstoppable Shots.
+Overcharge when said modifier is active.",,,"Dark Ether Reaper is enhanced.
+
+Spawns an additional Dark Ether Charge.
+80% Increased Magazine Size upon interacting with a Dark Ether Charge.
+
+Weapons with the Dark Ether Reaper Origin Trait become overcharged when said modifier is active.",,,"Upon finishing an Elite+ Combatant:
+
+10% Damage Resist (Resist x1) for ? seconds.
+
+Effect is enhanced while wearing 2 or more Shadestalker Armor Pieces:
+
+25% Damage Resist (Resist x2) for 10 seconds.
+Begins Critical Health Regeneration. Not Shields.",,,"Upon finishing a Combatant:
+
+Triggers a wave, dealing 180 Super-Element Matching Damage up to 15? meters away.
+Wave travels in the direction of the finisher.
+
+⟁ BOOST
+Equipping an Arc, Void, or Stasis Super makes the wave inflict a Super-Matching Elemental Debuff.
+
+Arc = Blind
+Void = Weaken
+Stasis = Slow",,,"Arc Abilities, Void Abilities, and Dark Ether Reaper Weapons deal 5% increased damage against enemies affected by Stasis Debuffs.
+
+⟁ BOOST
+Damage Buff is increased.
+Abilities = 8%
+Dark Ether Weapons = 10%",,
+,,,,,,,,,,,,,,,
+,,Anti-Barrier Shotgun ,,,Fell The Revenant,,,Power from Pain,,,Concussive Reload,,,Served Cold,
+,"For Shotguns without an intrinsic Breaker Type:
+
+Passively grants Shield-Piercing Rounds.
+Overcharge when said modifier is active.",,,"Passively grants increased weapon damage towards Scorn Combatants based on the amount of 
+Shadestalker Armor equipped.
+
+Weapon Damage Increase as Armor is equipped:
+x0 = 3% | x1 = 6% | x2 = 9% | x3 = 12% | x4 = 15%",,,"Upon scoring 3 Weakened Enemy Kills within ? seconds of each:
+
+Grants Devour for 5+2.5 seconds.
+
+⟁ BOOST
+Power from Pain additionally spawns a Void Breach.",,,"After damaging a Boss, Champion, or breaking a Combatant's Shield with a Grenade Launcher:
+
+Inflicts Weaken for 20? seconds.
+Debuff is not refreshable by Grenade Launchers.
+Incurs a ? second cooldown between inflicting Weaken.
+
+⟁ BOOST
+Concussive Reload additionally refills stowed weapons.
+Incurs a ? second cooldown between refills.",,,"Stasis Shards additionally grant 10% Class Energy.
+
+Void Breaches additionally grant ?% Melee Energy.",,
+,,,,,,,,,,,,,,,
+,,Overload Breechloaded Grenade Launcher,,,Rapid Impacts,,,Trace Evidence,,,Retinal Burn,,,Kinetic Impacts,
+,"For Primary and Special Breechloaded Grenade Launchers without an intrinsic Breaker Type:
+
+Passively grants Overloading Shots.
+Overcharge when said modifier is active.",,,"Upon dealing Grenade Launcher Damage:
+
+Grants a stack of Rapid Impacts for 5 seconds, up to a maximum of 5 stacks.
+
+Rapid Impacts:
++5 | +10 | +15? | +20? | +30 Reload Speed
+0.99x | 0.99x | 0.98x | 0.96x | 0.94x Duration Multiplier",,,"Upon scoring 2 Precision Hits within 1? seconds of each against Arc-Debuffed Enemies, or upon scoring 3 Arc-Debuffed Enemy Kills within ? second of each:
+
+Spawns an Ionic Trace.
+Incurs a 4 second cooldown between Ionic Trace spawns.
+
+⟁ BOOST
+Picking up an Ionic Trace grants an Armor Charge.",,,"Upon scoring 2 Precision Hits against Non-Blinded Combatants within ? seconds of each, while Armor Charge is active with an Arc Weapon:
+
+Consumes x1 Armor Charge.
+Blinds for ? seconds
+
+⟁ BOOST
+Retinal Burn now triggers a blinding burst, inflicting the debuff to enemies over a ? meter radius.",,,"Upon scoring 5 Hits within 1? seconds of each with a Power Grenade Launcher:
+
+Triggers a single Shockwave underneath the enemy.
+Shockwave deals up to 217x2 = 435 Kinetic Damage and staggers Unstoppable Champions.
+Does literally no damage in PVP
+
+Incurs a ? second cooldown before additional hits count.
+
+Anarchy can trigger Kinetic Impacts 3 times with a single bolt.",,
+,,,,,,,,,,,,,,,
+,,"Authorized Mods: 
+Melee",,,Emergency Flare,,,The Thick of It,,,Curative Orbs,,,Arc Compounding,
+,"Melee Mods are reduced to 1 cost.
+
+Mods affected:
+Hands-On
+Focusing Strike
+Momentum Transfer
+Font of Vigor
+Heavy Handed
+Melee Kickstart",,,"Upon triggering Emergency Reinforcement:
+Consumes all but 1 Armor Charge.",,,"Upon scoring 3 Kills within ? seconds of each while within 15? meters of 3? enemies:
+
+Grants 1 Armor Charge.
+
+⟁ BOOST
+While within 15? meters of 3? enemies:
+
++? Handling
++? Charge Rate",,,"Upon first breaking a Combatant Shield, or a Supering Guardian's Shield:
+
+Creates an Orb of Power that grants 7.15% Super Energy.
+Finishers on Combatants that didn't trigger the effect will also spawn an Orb of Power.
+
+⟁ BOOST
+Upon picking up an Orb of Power, an Elemental Pickup, or a Tangle:
+Restores 40 HP.",,,"15% [7.5%] increased Arc Damage against Blinded Enemies.
+
+Flashbang Grenades against Bosses do not trigger the Arc Damage Increase, all other sources of Blind do.",,
+,,,,,,,,,,,,,,,
+,,"Authorized Mods: 
+Grenade",,,Frenzied Hunger,,,Finders Keepers,,,Void Renewal,,,Old God's Rite,
+,"Grenade Mods are reduced to 1 cost.
+
+Mods affected:
+Ashes to Assets
+Firepower
+Impact Induction
+Bolstering Detonation
+Grenade Kickstart",,,"While Devour is active:
+
+Scoring 3 Kills within ? seconds of each grants +15? Handling and +15 Reload Speed for 10 seconds.",,,"Grants 1 Armor Charge upon picking up 2 Special Ammo Bricks, or 1 Heavy Ammo Brick.
+Counter resets upon triggering.",,,"While Devour is active:
+
+Void Weapon Kills progress a counter that spawns a Void Breach upon reaching 100%.
+RnF = 16.7% | Elite = 34% | Miniboss+ = 50% | Guardians = ?%
+
+⟁ BOOST
+Picking up a Void Breach refills Shotguns and Grenade Launchers.",,,"On Void Breach Pickup: 
+
+The next Void Weapon Damage Instance within 10 seconds creates a Void Portal.
+
+Void Portal releases 6 Homing Void Orbs. 
+
+Void Orbs deal 2 [?] Impact Damage, and up to 68 [?] Splash Damage over ? meters.
+
+",,
+,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,
+,,Anti-Barrier Pulse Rifle,,,Logic Reductor,,,Elemental Siphon,,,Counter Energy,,,Prismatic Transfer,
+,"For Pulse Rifles without an intrinsic Breaker Type:
+
+Grants Shield-Piercing Rounds and Overcharge when said modifier is active.",,,"Radiolaria Transposer Weapons deal 5% increased damage to Vex Combatants.
+
+Radiolaria Pools created by Radiolaria Transposer have ?% increased duration.",,,"Upon scoring 3 kills within 3 seconds of each using a Kinetic Weapon or a Super-Element Matching Weapon:
+
+Creates an Elemental Pickup that matches the equipped Super Ability's element.",,,"Whenever a Champion gets stunned:
+
+Grants 25% Ability Energy to the least-charged Ability.",,,"On Super Cast:
+
+Allies within 15 meters with a Super Element different from the caster's receive 20% [10%] increased damage for 10 [5] seconds.
+Damage buff is not refreshable.
+
+Doesn't stack with Radiant or other similar empowering buffs.",,
+,,,,,,,,,,,,,,,
+,,Unstoppable Sidearm,,,Overcharged Armory,,,Overload Sword,,,Blade Stamina,,,Argent Blade,
+,"For Sidearms without an intrinsic Breaker Type:
+
+ADS without shooting for 1 second grants Unstoppable Shots.
+Overcharge when said modifier is active.",,,"Weapons with the following Origin Traits are overcharged when said modifier is active.
+
+Collective Purpose
+Dealer's Choice
+Radiolaria Transposer
+Sundering",,,"For Swords without an intrinsic Breaker Type:
+
+Scoring a hit grants Overloading Hits for 3 seconds.
+Buff persists through stow.
+Overcharge when said modifier is active.",,,"Scoring 3 Combatant Kills within 5 seconds of each with a Sword grants +3 Ammo.
+
+Ammo Generation also works on Ergo Sum.",,,"Dealing Sword Damage consumes an Armor Charge to grant Argent Blade for 5 seconds.
+
+Argent Blade:
+15% Increased Sword Damage
++100 Charge Rate.
+Stacks with other buffs.
+
+Does not consume additional Armor Charges while Argent Blade is active ",,
+,,,,,,,,,,,,,,,
+,,Unstoppable Scout Rifles,,,"Authorized Mods: 
+Elemental Charge",,,Creeping Chill,,,Void Hegemony,,,Expanding Abyss,
+,"For Scout Rifles without an intrinsic Breaker Type:
+
+ADS without shooting for 1 second grants Unstoppable Shots.
+Overcharge when said modifier is active.",,,Elemental Charge Mod is reduced to 1 cost.,,,"Stasis Weapon Kills against Frozen or Slowed Enemies triggers a Slowing Burst.
+
+Slowing Burst applies x20 Slow for 2?+? seconds to enemies within 6? meters.",,,"While a Void or Prismatic Subclass is equipped:
+
+Killing Weakened Enemies grants 15 Overshield HP.",,,"Grants the user increased Void Damage towards Weakened Enemies.
+
+7.5% -> 10% (2.3% increased damage)
+15% -> 25% (8.7% increased damage)
+30% -> 35% (3.8% increased damage)
+
+Divinity's Weaken is unaffected.",,
+,,,,,,,,,,,,,,,
+,,Overload Hand Cannon,,,Saint's Inspiration,,,Press The Advantage,,,Radiant Orbs,,,Shieldcrush,
+,"For Hand Cannons without an intrinsic Breaker Type:
+
+Scoring 2 Hits within 2 seconds of each grants Overloading Shots for 6 seconds. 
+Reloading removes the buff and resets Hit Counter.
+Overcharge when said modifier is active.",,,"Ammo refilled by Cast No Shadows can overflow, up to 100% Increased Magazine Capacity.",,,"Upon breaking a Combatant's Shield:
+
++20? Stability, +20? Handling, and +20 Reload Speed for 10 seconds.
+Swords receive +? Guard Resistance.",,,"While a Solar or Prismatic Subclass is equipped:
+
+Orbs of Power grant Radiant.",,,"While Frost Armor, Void Overshield, or Woven Mail are active:
+25% [10%] Additional Base Melee Recharge Rate
+ 25% [5%] Increased Powered Melee Damage.
+
+While Amplified or Radiant are active:
+25% [10%] Additional Base Grenade Recharge Rate
+25% [5%] Increased Grenade Damage.
+
+Grapple Melee instead receives 12% Increased Damage for each half of the perk.",,
+,,,,,,,,,,,,,,,
+,,Anti-Barrier Submachine Guns,,,Winning Hand,,,Threaded Blast,,,Galvanic Armor,,,Transference,
+,"For Submachine Guns without an intrinsic Breaker Type:
+
+Grants Shield-Piercing Rounds and Overcharge when said modifier is active.",,,"Upon scoring a Precision Kill or 3 kills within ? seconds of each with Dealer's Choice Weapons:
+
+Triggers a Solar Explosion that deals up to 200 [?] Damage over ? meters.
+
+Equipping multiple Dealer's Choice weapons increases the explosion damage.
+x2 = 250 [?] | x3 = 300 [?].",,,"Upon destroying a Tangle with a Strand Weapon:
+
+Explosion has an additional damage instance that deals 240 [?] damage over a 12? metre radius.",,,"While an Arc or Prismatic Subclass is equipped:
+
+30% Damage Resist while Amplified.",,,"While Transcendent:
+10% Increased Grenade and Melee Damage.
+
+After Transcendence ends:
+Grants 2.5% Light and Darkness Energy per Weapon Kill, up to 50% after 20 kills.",,
+,,,,,,,,,,,,,,,
+,,Anti-Barrier Sniper Rifle,,,"Authorized Mods: 
+Scavenger",,,Incendiary Rifle Rounds,,,Solar Fulmination,,,Sniper's Meditation,
+,"For Sniper Rifles without an intrinsic Breaker Type:
+
+Grants Shield-Piercing Rounds and Overcharge when said modifier is active.",,,Ammo Scavenger Mods are reduced to 1 cost.,,,"Upon scoring a Solar Sniper Rifle Precision Hit:
+Applies x30+15 Scorch.
+
+Unaffected by Weapon Frame or Ammo Type.",,,"Ignitions deal an additional damage instance.
+
+Fulmination deal 190 [30] Solar Damage in a 12? meter radius. 
+Fulminations count as Ignitions and don't [do?] have damage falloff.
+
+While Ember of Char is equipped:
+Fulminations apply an additional x40+20 Scorch.",,,"On Sniper Rifle Direct Hit:
+Grant a stack of Sniper's Meditation for 7 seconds.
+Heavy Sniper Rifle hits grant 2 stacks.
+Sniper's Meditation Buff persists through stow.
+
+Sniper's Meditation 
+Grants increased damage, Stability, and Reload Speed.
+3% | 6% | 9% | 12 | 15% Increased Impact Damage
++? | +? | +? | +? | +? Stability
++15 | +30 | +35 | +40 | +45 Reload Speed
+
+Damage Buff only applies to the impact portion of a hit, except for Still Hunt's Golden Gun Shots.
+For example:
+Kinetic Tremors and Cloudstrike's Stormbringer WON'T benefit.
+Izanagi's Honed Edge and DARCI's Target Acquired WILL benefit.",,
+,,,,,,,,,,,,,,,
+,,Overload Auto Rifle,,,"Authorized Mods: 
+Charged Up",,,Sustained Fire,,,Targeting Autoloader,,,Shock and Awe,
+,"For Auto Rifles without an intrinsic Breaker Type:
+
+Sustained Fire for 0.8 seconds grants Overloading Shots.
+Overcharge when said modifier is active.",,,Charged Up Mod is reduced to 1 cost.,,,"Upon scoring 10 Auto Rifle Hits within 1.5 seconds of each against a single Combatant:
+
+40% Damage Resist (Resist x3) for 6 seconds.
+Self-damage uses the PVP value of 7.5% DR.
+ Buff is refreshable and persists through stow.
+
+Can technically work against Guardians, granting 7.5% Damage Resist, but only in Gambit or Fortress.",,,"Auto Rifle Combatant Kills progress a Counter.
+Kills grant 50% Counter Progress.
+Kills while within 15 meters of 3 enemies grants 100% Progress.
+Kills while at 5 stacks grant 100% Progress.
+Counter Progress persists through stow.
+
+Upon reaching 100% Counter Progress:
+Grants a stack of Targeting Autoloader for 15 seconds, up to a maximum of 5 stacks.
+Buff is refreshable.
+
+Targeting Autoloader:
+Refills 20% | 20% | 30% | 40% | 40% of Magazine
+10% | 13% | 16% | 18% | 20% Increased Auto Rifle Damage.
+Stacks with other buffs.
+Buff is removed upon readying a non-Auto Rifle Weapon.",,,"While an Arc or Prismatic Subclass is equipped, while Amplified: 
+
+Arc Kills trigger a lightning burst, dealing up to 141 [?] Arc Damage and jolting in a ? metre radius.
+
+Incurs a 5 second cooldown between activations.",,
+,,,,,,,,,,,,,,,
+,"Looking for previous Seasonal Artifact perks?
+Head over to the OLD Artifact Perks tab.",,,,,,,,,,,,,,

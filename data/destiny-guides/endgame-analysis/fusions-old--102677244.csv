@@ -1,0 +1,39 @@
+WEAPON,,ARCHETYPE,,AFFINITY,,PERKS,,,,,COMPETITION,,TOTAL,
+Icon,Name,Frame,Score,Type,Score,Ammo,Reload,Utility,Damage,Score,Role,Score,Final,Tier
+,The Eremite,High-Impact,1,Solar,0.5,Lead from Gold,Envious Assassin,None,"Cornered, Controlled Burst, Reservoir Burst",6,"Energy damage
+Energy utility",2.0,9.5,S
+,Loaded Question,High-Impact,1,Arc,0,None,"Auto-Loading Holster, Overflow, Envious Assassin",Demolitionist,"Controlled Burst, Reservoir Burst, Frenzy",6,"Energy damage
+Energy utility",2.0,9,S
+,Riptide,Rapid,1.5,Stasis,0,"Lead from Gold, Field Prep",Auto-Loading Holster,"Chill Clip, Demolitionist","Frenzy, Vorpal Weapon, Cornered",4.5,"Kinetic damage
+Kinetic utility",2.0,8,S
+,Nox Perennial V,High-Impact,1,Strand,0,Lead from Gold,Envious Assassin,None,Controlled Burst,4.5,Kinetic damage,2.0,7.5,A
+,Midha's Reckoning,High-Impact,1,Arc,0,Field Prep,Runneth Over,None,"Cornered, Surrounded, Vorpal Weapon, Reservoir Burst",4.5,"Energy damage
+Energy utility",1.0,6.5,A
+,Techeun Force,Adaptive,0.5,Arc,0,None,"Envious Assassin, Rewind Rounds, Slideways, Reconstruction",None,"High-Impact Reserves, Controlled Burst",4,Energy damage,2.0,6.5,A
+,Royal Executioner,Adaptive,0.5,Solar,0.5,Lead from Gold,Envious Assassin,None,Reservoir Burst,4,"Energy damage
+Energy utility",1.0,6,A
+,Cartesian Coordinate,Rapid,1,Solar,0.5,Lead from Gold,Slideways,None,"Vorpal Weapon, High-Impact Reserves",2,Energy damage,2.0,5.5,A
+,Dream Breaker,Adaptive,0.5,Solar,0.5,Lead from Gold,Slideways,None,"High-Impact Reserves, Frenzy, Surrounded, Cornered",3,Energy damage,1.0,5,B
+,Glacioclasm,High-Impact,1,Void,0,None,"Slideshot, Subsistence",None,"Reservoir Burst, High-Impact Reserves",2.5,"Energy damage
+Energy utility",1.0,4.5,B
+,Null Composure,Rapid,1.5,Void,0,None,None,None,"Reservoir Burst, High-Impact Reserves",2,Energy utility,1.0,4.5,B
+,Pressurized Precision,Adaptive,0.5,Strand,0,Discord,Auto-Loading Holster,None,"High-Impact Reserves, Vorpal Weapon, Cornered",3,"Kinetic damage
+Kinetic utility",1.0,4.5,B
+,Deliverance,Precision,0,Stasis,0,None,None,"Demolitionist, Chill Clip","Cornered, Surrounded, Bait and Switch",3,"Kinetic utility
+Kinetic damage",1.0,4,B
+,Iota Draconis,High-Impact,1,Solar,0.5,Lead from Gold,None,None,"Cornered, Frenzy, High-Impact Reserves",1.5,Energy damage,1.0,4,B
+,Iterative Loop,Rapid,1.5,Arc,0,Lead from Gold,None,"Voltshot, Demolitionist",Nanotech Tracer Missiles,1.5,Energy utility,1.0,4,B
+,Aurvandil FR6,High-Impact,0,Stasis,0,None,"Reconstruction, Slideways, Subsistence","Chill Clip, Demolitionist",None,2.5,Kinetic utility,1.0,3.5,C
+,Zealot's Reward,Rapid,1,Void,0,None,Auto-Loading Holster,None,High-Impact Reserves,1.5,Energy damage,1.0,3.5,C
+,Trinary System,Adaptive,0.5,Solar,0.5,None,"Auto-Loading Holster, Slideshot, Slideways",Demolitionist,High-Impact Reserves,2,Energy damage,0.0,3,C
+,Burden of Guilt,Adaptive,0.5,Stasis,0,None,None,Chill Clip,"High-Impact Reserves, Vorpal Weapon",2,Kinetic utility,0.0,2.5,C
+,Exile's Curse,High-Impact,1,Arc,0,None,Slideshot,None,"Vorpal Weapon, High-Impact Reserves",1.5,Energy damage,0.0,2.5,C
+,Hollow Words,Precision,0,Arc,0,Lead from Gold,Slideways,None,"Vorpal Weapon, Surrounded",2.5,Energy damage,0.0,2.5,C
+,Snorri FR5,Precision,0,Void,0,None,None,None,"Frenzy, Reservoir Burst, High-Impact Reserves",2.5,Energy damage,0.0,2.5,C
+,The Wizened Rebuke,High-Impact,1,Arc,0,None,None,Voltshot,"Vorpal Weapon, High-Impact Reserves",1.5,Energy damage,0.0,2.5,C
+,Timelines' Vertex,Adaptive,0.5,Solar,0.5,"Lead from Gold, Field Prep",Auto-Loading Holster,Demolitionist,None,1.5,Energy damage,0.0,2.5,C
+,PLUG ONE.1,Precision,0,Arc,0,None,None,None,"Reservoir Burst, Cornered",2,Energy utility,0.0,2,D
+,Main Ingredient,Precision,0,Arc,0,None,Auto-Loading Holster,None,High-Impact Reserves,1.5,Energy damage,0.0,1.5,D
+,Likely Suspect,Rapid,1,Void,0,None,Slideways,None,None,-0.5,Energy damage,0.0,0.5,D
+,The Epicurean,Precision,0,Void,0,None,None,None,Cornered,0.5,Energy damage,0.0,0.5,D
+,Coriolis Force,Aggressive,0,Void,0,None,Slideways,None,None,-0.5,Energy damage,0.0,-0.5,D

@@ -17,6 +17,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Max.Bungie.Shapes (describeEndpoint, describeType)
+import Max.Destiny.Guides (parseGuideRequest, queryGuides)
 import Max.Effects.Destiny
 import Max.Effects.Tools
   ( Tool (..),
@@ -26,10 +27,45 @@ import Max.Effects.Tools
     ToolRunner (..),
   )
 import Max.Tool.Protocol (readResult)
-import Max.Tools.Schema (boundedIntegerParam, enumParam, noArguments, paramOfType, stringParam, toolObject, withKeys)
+import Max.Tools.Schema (boolParam, boundedIntegerParam, enumParam, noArguments, paramOfType, stringArrayParam, stringParam, toolObject, withKeys)
 
 destinyToolsFor :: (Destiny :> es) => [Tool es]
-destinyToolsFor = [accountTool, itemsTool, readTool, writeTool, lookupTool, shapeTool]
+destinyToolsFor = [accountTool, itemsTool, readTool, writeTool, lookupTool, shapeTool, guideTool]
+
+guideTool :: Tool es
+guideTool =
+  Tool
+    { toolName = "destiny_guide",
+      toolDescription =
+        T.unwords
+          [ "查阅随 Max 打包的四份命运2攻略表格快照，不需要登录或沙箱。",
+            "index 分页列出来源、表格 ID、简介、schema/表头和版本状态；",
+            "read 默认返回中文及 original_cells 英文，language=en 可读英文；附合并单元格说明。",
+            "find 用 POSIX 扩展正则同时匹配中英文单元格，每行只返回一次，默认忽略大小写。",
+            "snapshot.translation.status=terms-only 表示仅术语已中文化，社区说明尚未完整翻译。",
+            "sheet 必须用 index 返回的 ID；offset 从 0 开始，返回 row 是原表 1 起的行号。",
+            "find 的 offset 计匹配记录，默认排除旧版/ignore/隐藏页，指定 sheet 则读取该页。",
+            "模糊推荐需求先 index 定位相关分页，再 read 阅读说明和条件；正则不提供语义搜索。"
+          ],
+      toolSchema =
+        toolObject
+          [ ("action", enumParam ["index", "read", "find"] "查目录、读记录、正则搜索"),
+            ("source", stringParam "可选来源 ID：court / compendium / endgame-analysis / boss-damage"),
+            ("sheet", stringParam "分页 ID，如 compendium/1662574278；read 必填"),
+            ("query", withKeys ["minLength" .= (1 :: Int), "maxLength" .= (512 :: Int)] (stringParam "find 必填，POSIX 扩展正则，如 Bait and Switch|Envious Arsenal；不支持 PCRE 的 (?i)/lookaround")),
+            ("columns", withKeys ["maxItems" .= (100 :: Int)] (stringArrayParam "可选原表列，如 [A,C]；省略则读/搜全部列")),
+            ("offset", withKeys ["minimum" .= (0 :: Int), "default" .= (0 :: Int)] (paramOfType "integer")),
+            ("limit", boundedIntegerParam 1 200 20),
+            ("max_chars", boundedIntegerParam 1000 readBudget 60000),
+            ("language", withKeys ["default" .= ("zh-chs" :: Text)] (enumParam ["zh-chs", "en"] "返回语言，默认简体中文；find 始终检索中英文")),
+            ("case_sensitive", boolParam "find 是否区分大小写，默认 false"),
+            ("include_legacy", boolParam "find 是否包含旧版/ignore/隐藏页，默认 false；index 总会列出它们")
+          ]
+          ["action"],
+      toolRunner = OutcomeRunner $ \raw -> case parseEither (withObject "destiny_guide arguments" parseGuideRequest) raw of
+        Left err -> pure (rejected err)
+        Right request -> pure (readResult (queryGuides request))
+    }
 
 accountTool :: (Destiny :> es) => Tool es
 accountTool =

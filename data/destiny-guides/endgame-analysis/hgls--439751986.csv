@@ -1,0 +1,102 @@
+WEAPON,,INFO,,,,,,,PERKS,,,,,,ANALYSIS,,
+🖼️,Name,Season,Energy,Frame,Source,Stun,Ammo,⬆️,Barrel,Mag,MW,Perk 1,Perk 2,Origin Trait,Notes,#,Tier
+,"Edge Transit
+BRAVE version",29.0,Void,Adaptive,Onslaught,,38.0,Yes,Quick Launch,"Spike Grenades
+Sticky Grenades",Handling,"Cascade Point
+Envious Arsenal
+Chain Reaction","Explosive Light
+Bait and Switch
+Elemental Honing",Indomitability,"sticky + Cascade + EL still the highest legendary heavy burst in the game, otherwise has good perks",1.0,S
+,VS Chill Inhibitor,29.0,Stasis,Rapid,Vesper's Host,,50.0,Yes,Quick Launch,Spike Grenades,Handling,"Cascade Point
+Envious Arsenal","Aggregate Charge
+Explosive Light
+Surrounded",Bray Legacy,"no sticky access, has better perks and origin than Edge Transit otherwise",2.0,S
+,The Ever-Present,27.0,Strand,Rapid,Epic Desert Perpetual,,49.0,Yes,Quick Launch,"Spike Grenades
+Mini Frags",Handling,Envious Arsenal,"Aggregate Charge
+Elemental Honing
+Bait and Switch",Frame of Reference,core Envious + good sustain perks on best frame,3.0,S
+,Koraxis's Distress,29.0,Strand,Rapid,Root of Nightmares,,50.0,Yes,Quick Launch,"Spike Grenades
+Mini Frags",Handling,"Envious Arsenal
+Reconstruction
+Chain Reaction","Chaos Reshaped
+Surrounded
+Bait and Switch",Harmonic Resonance,like the Ever-Present with Surrounded and worse origin trait,4.0,S
+,Love and Death,29.0,Solar,Compressed Wave,Moon,,40.0,Yes,Quick Launch,High-Velocity Rounds,Handling,"Cascade Point
+Envious Arsenal
+Impromptu Ammunition","Aggregate Charge
+Bait and Switch
+Chain Reaction",Loss,"potential for greatness on impact-compatible bosses, EL does nothing, good for adds",5.0,S
+,Outrageous Fortune,27.0,Solar,Rapid,"Tenet of Bravery, Zavala",,40.0,Yes,Quick Launch,Spike Grenades,Handling,"Envious Arsenal
+Incandescent","Bait and Switch
+Explosive Light",Problem Solver,best frame + good sustained origin + Envious Arsenal and core damage perks,6.0,A
+,Doomsday,29.0,Arc,Adaptive,Gambit,,33.0,Yes,Quick Launch,Spike Grenades,Handling,"Envious Arsenal
+Attrition Orbs","Bait and Switch
+Explosive Light
+Chain Reaction",Gun and Run,like Outrageous but worse origin,7.0,A
+,Bitter/Sweet,25.0,Arc,Adaptive,"Xur, Kell's Fall?",,29.0,Yes,Quick Launch,Spike Grenades,Handling,"Envious Arsenal
+Attrition Orbs","Bait and Switch
+Explosive Light",Dark Ether Reaper,like Outrageous but worse frame and situationally decent origin,8.0,A
+,Cataphract GL3,28.0,Strand,Adaptive,Trials,,55.0,Yes,Quick Launch,Spike Grenades,Handling,"Envious Arsenal
+Envious Assassin","Bait and Switch
+Explosive Light
+Chain Reaction",Roar of Battle,like Bitter/Sweet but worse origin and Envious Assassin niche,9.0,A
+,Wicked Sister,25.0,Strand,Adaptive,Zavala,,24.0,Yes,Quick Launch,Spike Grenades,Handling,"Envious Arsenal
+Slice","Bait and Switch
+Explosive Light
+High Ground",Nadir Focus,like Bitter/Sweet but worse origin and Slice for some reason,10.0,A
+,Regnant,29.0,Void,Adaptive,NODE.OVRD.AVALON,,34.0,Yes,Quick Launch,"Sticky Grenades
+Spike Grenades",Handling,"Envious Assassin
+Auto-Loading Holster","Explosive Light
+Cascade Point",Noble Deeds,"only niche is sticky EL stacking, something already covered by Edge Transit",11.0,A
+,Canis Major,29.0,Solar,Rapid,Shattered Throne,,36.0,Yes,Quick Launch,"Spike Grenades
+Mini Frags",Handling,"Reconstruction
+Rampage
+Incandescent","Aggregate Charge
+Bait and Switch
+Chain Reaction",Ignoble Deeds,"no Envious Arsenal but damage perks are pretty solid, also has niche double damage",12.0,A
+,Dimensional Hypotrochoid,29.0,Stasis,Compressed Wave,Neomuna,,32.0,Yes,Quick Launch,High-Velocity Rounds,Handling,"Envious Arsenal
+Envious Assassin
+Rimestealer","Bait and Switch
+One for All
+Crystalline Corpsebloom",Nanotech Tracer Missiles,strictly worse than Love and Death despite nice origin,13.0,B
+,Tarnation,29.0,Arc,Rapid,Throne World,,33.0,Yes,Quick Launch,"Spike Grenades
+Sticky Grenades",Handling,"Envious Assassin
+Clown Cartridge
+Attrition Orbs","Bait and Switch
+Explosive Light
+Chain Reaction",Psychohack,"no Envious Arsenal, sustained perks aren't the best, Psychohack is decent though",14.0,B
+,Hullabaloo,29.0,Arc,Compressed Wave,Tenet of Bravery,,27.0,Yes,Quick Launch,High-Velocity Rounds,Handling,"Envious Arsenal
+Envious Assassin
+Field Prep","One for All
+Golden Tricorn
+Chain Reaction",Classy Contender,worse than Dimensional overall due to origin,15.0,B
+,Cry Mutiny,29.0,Solar,Adaptive,Solo Ops,,48.0,Yes,Quick Launch,Spike Grenades,Handling,"Incandescent
+Demolitionist","Aggregate Charge
+Surrounded
+Mega Kill Clip",Vanguard Determination,"interesting roam perks, has to rely on Demo for reload with good damage perks",16.0,B
+,Acosmic,29.0,Void,Rapid,Tenet of Bravery,,50.0,Yes,Quick Launch,"Spike Grenades
+Mini Frags",Handling,"Clown Cartridge
+Withering Gaze","Bait and Switch
+Explosive Light
+Chain Reaction",Nadir Focus,sacrifices good refill perks for Withering Gaze,17.0,B
+,Marsilion-C,20.0,Solar,Rapid,Banshee,,30.0,Yes,Quick Launch,Spike Grenades,Handling,Envious Assassin,"Explosive Light
+Full Court
+Cascade Point",Häkke Breach Armaments,"no good refill perks, serviceable damage perks",18.0,C
+,Wendigo GL3,29.0,Arc,Adaptive,Zavala,,43.0,Yes,Quick Launch,Spike Grenades,Handling,"Auto-Loading Holster
+Clown Cartridge","Explosive Light
+Cascade Point",Problem Solver,loses Full Court as a sustained damage perk for better refill perks than Marsilion,19.0,C
+,Swarm of the Raven,21.0,Void,Rapid,Iron Banner,,31.0,No,Quick Launch,Spike Grenades,Handling,"Auto-Loading Holster
+Clown Cartridge","Full Court
+Cascade Point",Skulking Wolf,like Wendigo with Full Court and worse origin,20.0,C
+,Interference VI,10.0,Arc,Adaptive,"Xur, Dares",,36.0,No,Quick Launch,Spike Grenades,Handling,"Auto-Loading Holster
+Clown Cartridge",Full Court,None,only has Full Court and no origin,21.0,C
+,Typhon GL5,16.0,Stasis,Adaptive,Banshee,,45.0,No,Quick Launch,Spike Grenades,Handling,Demolitionist,Explosive Light,Omolon Fluid Dynamics,very niche perk combo that doesn't benefit second mag,22.0,C
+,Memory Interdict,14.0,Void,Adaptive,Xur,,23.0,No,Quick Launch,Spike Grenades,Handling,"Auto-Loading Holster
+Clown Cartridge","Rampage
+Chain Reaction",None,no real sustained damage perk,23.0,D
+,Crowd Pleaser,12.0,Void,Adaptive,Gambit,,22.0,No,Quick Launch,Spike Grenades,Handling,"Clown Cartridge
+Grave Robber","Rampage
+Chain Reaction",Gun and Run,bad refill perks and no sustained damage perks,24.0,D
+,Blast Battue,12.0,Arc,Adaptive,Xur,,48.0,No,Quick Launch,Spike Grenades,Handling,Clown Cartridge,"Rampage
+Chain Reaction",None,same as Memory Interdict but no ALH,25.0,D
+,Berenger's Memory,11.0,Void,Rapid,Xur,,28.0,No,Quick Launch,Spike Grenades,Handling,Clown Cartridge,Rampage,None,almost no perks that do anything,26.0,D

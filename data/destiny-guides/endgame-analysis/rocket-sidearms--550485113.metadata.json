@@ -1,0 +1,23 @@
+{
+  "merged_ranges": [
+    "A1:B1",
+    "C1:I1",
+    "J1:O1",
+    "P1:R1"
+  ],
+  "hyperlinks": {
+    "B3": "https://www.light.gg/db/items/924095500/lotus-eater/",
+    "B4": "https://www.light.gg/db/items/2662459958/high-albedo/",
+    "B5": "https://www.light.gg/db/items/4049127142/",
+    "B6": "https://www.light.gg/db/items/2554513694/",
+    "B7": "https://www.light.gg/db/items/2198166292/",
+    "B8": "https://www.light.gg/db/items/247984828/tinashas-mastery/",
+    "B9": "https://www.light.gg/db/items/3947966653/",
+    "B10": "https://www.light.gg/db/items/738446555/"
+  },
+  "cell_notes": {},
+  "formulas": {},
+  "rich_text": {},
+  "hidden_rows": [],
+  "drawings_present": true
+}

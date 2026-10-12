@@ -1,0 +1,332 @@
+Go back to the top!,,,Prismatic Subclasses,,,,,,,,,,Support the Data Compendium,
+,,,,,,,,,,,,,,
+,Hunter,,,,,Titan,,,,,Warlock,,,
+,,,,,,,,,,,,,,
+,Glossary,,,,,,,,,,,,,
+,Transcendence,,"Unique ability obtained upon utilizing enough Light and Darkness damage types.
+Kinetic Damage fills both Light and Darkness bars at 50% decreased rate. Overkill Damage isn't counted for Transcendence gains.
+Having one full Alignment bar makes Kinetic Damage fill the remaining bar with at 40% decreased rate.
+
+Dealing damage, alongside applying Elemental Effects grants Transcendence Energy. 
+Applying Elemental Effects, both buffs and debuffs, grant Transcendence Energy to their corresponding alignment.
+
+Transcendence:
+Instantly recharges 2 Grenade and Melee Ability Charges on activation.
+Replaces Grenade Ability with an unique class-specific Prismatic Grenade Ability with Light and Darkness damage types.
+Grants 5% Increased Weapon Damage, an additional 10% Grenade and Melee Regeneration Speed, and 20% [5%] Damage Resist for 20 seconds.
+Damage Increase stacks with everything.
+
+Dealing Grenade Ability Damage while Transcendent increases the Melee Regeneration Speed to 35% Fixed Melee Ability Energy per second for 2 seconds.
+Dealing Melee Ability Damage while Transcendent increases the Prismatic Grenade Regeneration Speed to 35% Prismatic Grenade Ability Energy per second for 2 seconds.
+
+Kills while Transcendent extend its duration, with the amount extended decreasing as more kills are scored.
+Tier 1 and T2 Combatants = 5% | T3 and T4 = 10% | T3 Elites, Minibosses and Bosses = 15% | Guardians = ?%
+Each kill after the first gets a cumulative 0.9?x penalty to the duration extension.",,,,,,,,,,,
+,Elemental Effects,,"Elemental Effects include all of the verbs that subclasses apply that can either positively (Buff) or negatively (Debuff) affect a target.
+
+Equipping any Arc Ability or Aspect allows Amplified to be activated by scoring multiple Arc Kills. Thruster does not count as an Arc Ability.
+Equipping any Strand Ability or Aspect allows the creation of Tangles, and Warlocks are able to possess Perched Threadlings.
+
+Light Subclass Verbs:
+Arc = ↑Amplified ↑Bolt Charge ↓Blind ↓Jolt | Ionic Trace
+Solar = ↑Cure ↑Radiant ↑Restoration ↓Scorch ↓Ignition | Firesprites
+Void = ↑Devour ↑Invisibility ↑Void Overshield ↓Suppression ↓Volatile ↓Weaken | Void Breach
+
+Darkness Subclass Verbs:
+Stasis = ↑Frost Armor ↓Slow ↓Freeze ↓Shatter | Stasis Shards
+ Strand = ↑Woven Mail ↓Sever ↓Suspend ↓Unravel | Tangle",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,"Movement Abilities and Class Abilities that are normally subclass-restricted can be freely picked.
+
+Hunters are able to use Blink and Acrobat's Dodge.
+Titans have Thruster.
+Warlocks can equip Blink and Phoenix Dive.",,,,,,,,,,,
+,,,Crucible Exclusive Tweaks,,,,,,,,,,,
+,,,"Grenade, Melee, and Class Abilities are penalized with 0.85x Regeneration Speed, as well as 0.8x Ability Chunk Gains.
+The Regeneration Speed Penalty stacks with the Crucible's Baseline 0.8x Regeneration Speed Penalty, resulting in these abilities having 0.68x Regeneration Speed over baseline.
+
+Additionally, Super Abilities are penalized with 0.95x Regeneration Speed., which stacks with Baseline's 0.75x Regeneration Speed Penalty, resulting in 0.71x Regeneration Speed.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Fragments,Icon,Information,,,,,,,,,,Stat Changes,
+,Awakening,,"Killing 3 enemies with Elemental Damage within 6 seconds of each, or a Super Kill spawns an Element-Matching Elemental Pickup.
+Elemental Pickup is determined by the Damage Type of the final kill.
+
+Incurs a 5 second cooldown between spawning the same Non-Tangle Elemental Pickups.
+Kills with the element of the spawned pickup while the cooldown is active do not count towards spawning another Elemental Pickup.",,,,,,,,,,+10 Health,
+,Balance,,"Killing 3 enemies within 3 seconds of each with Light Damage grants 10% Melee Energy.
+
+Killing 3 enemies within 3 seconds of each with Dark Damage grants 10% Grenade Energy.",,,,,,,,,,-,
+,Blessing,,"Melee Kills begin health regeneration. 
+Effect applies to allies within ? metres while Transcendent.",,,,,,,,,,-,
+,Bravery,,"Grenade Kills grant Volatile Rounds to Void Weapons for 11.25 [7.5] seconds.
+
+Powered Melee Kills grant Unraveling Rounds to Strand Weapons for 11.25 [7.5] seconds.",,,,,,,,,,-,
+,Command,,"Suppressing or Freezing an enemy refills the readied weapon and grants +20? Stability, +? Aim Assist, and +40 Airborne Effectiveness for 11 seconds. 
+Incurs a 4 second cooldown before it can be reactivated.
+
+Killing Frozen or Suppressed Enemies spawns a Stasis Shard or Void Breach respectively.",,,,,,,,,,-,
+,Courage,,"Against enemies inflicted with Stasis or Strand Elemental Debuffs:
+Light Abilities deal 10% increased damage.
+Light Powered Melee Abilities deal 50% [10%] increased damage.",,,,,,,,,,+10 Grenade,
+,Dawn,,"Powered Melee Hits grant Radiant for 5 seconds.
+
+Powered Melee Kills grant Radiant for 5 seconds to the user and allies within ? metres.",,,,,,,,,,-10 Melee,
+,Defiance,,"Finishers trigger an Elemental Detonation that deals 135 Super-Matching Elemental Damage and applies a Super-Matching Elemental Debuff to enemies within 7 meters.
+Arc = Jolt | Solar = x40 Scorch | Void = Volatile 
+Stasis = x? Slow for ? seconds | Strand = Sever",,,,,,,,,,+10 Class,
+,Devotion,,"Killing enemies affected by Stasis or Strand Elemental Debuffs grants additional Light Transcendence Energy.
+Rank-and-File = 1% | Elites = 3% | Minibosses+ = 5% | Guardians = ?%",,,,,,,,,,+10 Melee,
+,Dominance,,"Void Grenade Ability Damage inflicts Weaken for 6 [?] seconds.
+
+Arc Grenade Ability Damage inflicts Jolt.
+Arc Soul has a 4 second cooldown before being able to inflict Jolt again.",,,,,,,,,,-10 Grenade,
+,Generosity,,"Kills while Transcendent progress a counter that spawns Orbs of Power that grant 7.15% Super Energy for allies at specific thresholds.
+Up to a maximum of 4 Orbs of Power can be spawned per Transcendence activation.
+
+Tier 1 Combatant = 10% | T2 = 15% | T3 = 20% | T4 = 34% | Minibosses = 40% | Bosses = 50% | Guardians = ?%
+Orbs of Power are spawned at the 30% (1st) | 50% (2nd) | 70% (3rd) | 100% (4th) thresholds.",,,,,,,,,,-,
+,Grace,,"Kinetic Weapon Kills grant an additional 2% [?%] Transcendence energy.
+
+Super Kills grant an additional 2% [?%] Transcendence Energy to the user and allies within ? metres.",,,,,,,,,,-10 Health,
+,Honor,,"Picking up Elemental Pickups or destroying a Tangle grants additional Transcendence Energy of the matching alignment.
+
+Ionic Traces, Firesprites, Void Breaches = 7.5% Light Energy 
+Stasis Shards = 5% Darkness Energy | Tangles = 10% Darkness Energy",,,,,,,,,,+10 Melee,
+,Hope,,"Grants Additional Base Class Ability Regeneration Rate based on the amount of active Elemental Buffs.
+x1 = 40% | x2 = 60%",,,,,,,,,,-,
+,Justice,,Ability Kills while Transcendent trigger an explosion that deals up to 130 [?] Ability-Matching damage over ? meters,,,,,,,,,,+10 Super,
+,Mending,,"Grenade Ability Kills grant Cure x1.
+Prismatic Grenade Kills grant Cure x2.",,,,,,,,,,-,
+,Protection,,"While within 15 metres of 3 enemies:
+15% [?%] Damage Resist.
+In-Game Description is erroneous, the effect does NOT become increased while Transcendent. 
+Instead, the 15% DR from Protection stacks with Transcendence's 20%, totalling 32% DR.",,,,,,,,,,+10 Melee,
+,Purpose,,"Orbs of Power grant Elemental Buffs on pickup, based on the equipped Super.
+
+Arc: x1 Bolt Charge.
+Solar: Restoration x1 for 5 seconds.
+Void: 22.5 HP Overshield for 5 seconds.
+Stasis: x2 Frost Armor for 5 seconds.
+Strand: Woven Mail for 5 seconds.",,,,,,,,,,-10 Class,
+,Ruin,,"Shattering enemies or destroying Crystals deals an additional damage instance, dealing up to 25 [9] damage in a 10 [8] metre radius. 
+Falloff decreases damage dealt down to a minimum of 17 [4] damage at the maximum falloff distance.
+
+Ignitions have 25% increased radius.",,,,,,,,,,+10 Weapons,
+,Sacrifice,,"Ability Kills while affected by an Arc, Solar, or Void Elemental Buff grant an additional 1% [?%] Darkness Transcendence Energy.",,,,,,,,,,+10 Grenade,
+,Solitude,,"Upon scoring a Magazine-Based amount of Precision Hits within 3 seconds of each:
+The next damage instance from any source within 3 seconds will emit a Severing Burst.
+Sever Burst inflicts Sever to enemies within 3 metres. Radius is increased to 6 meters while Transcendent.
+Incurs a 4 second cooldown upon Severing. Precision Hits during the cooldown will not be counted.
+
+Precision hits required to prepare the Severing Burst:
+20% of Magazine + 1, rounded down.
+Bows: 2 hits
+The Precision Hit that prepares the Severing Burst can't trigger the effect through simultaneous damage instances. Trinity Ghoul and the Explosive Payload perk, for example.",,,,,,,,,,-,
+,,,,,,,,,,,,,,
+Hunter,-,,,-,-,Hunters,,,-,-,-,-,-,-
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Hailfire Spike,,"Prismatic Grenade
+
+Attaches to surfaces or enemies, releasing a torrent of Stasis and Solar energy in a cone up to ? meters away.
+
+Erupts into a slowing storm, dealing up to 78 [?] damage upon erupting.
+Slowing storm deals 15.6 [?] Stasis Damage and inflicts x13? Slow every 0.25 seconds for 3.45 seconds.
+
+After 3.45 seconds of attaching, it releases a scorching cyclone that deals 39 [?] Solar Damage and inflicts x10 Scorch every 0.25 seconds for 4 seconds.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,"Shared Abilities
+
+Class Abilities and Movement Abilities are all shared with the original Subclass.",,,,,,,,,,,,,
+,,,Arcbolt Grenade,,Swarm Grenade,,Magnetic Grenade,,Duskfield Grenade,,Grapple,,,
+,,,Combination Blow,,Knife Trick,,Snare Bomb,,Withering Blade,,Threaded Spike,,,
+,,,,,,,,,,,,,,
+,Aspects,,Information,,,,,,,,,,Fragment Slots,
+,,,,,,,,,,,,,,
+,Ascension,,"While Airborne and having a Class Ability Charge:
+[Air Move] consumes a Class Ability Charge to perform an upwards Arc Staff Twirl.
+Triggers the effects of the equipped Class Ability, as well as Threaded Specter if equipped on usage.
+
+Grants Amplified to the user and allies within 10 meters.
+Deals up to 181 [30] damage, as well as Jolting enemies within 10 metres.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Gunpowder Gamble,,"Kills charge up an Improvised Explosive. Readies at 6 Charges.
+Weapon = 1 [2] | Elemental-Debuff = 3 [4] | Abilities = 4 | Super = 6
+
+Replaces Grenade with an Ignition-on-a-Stick that causes an ignition that deals 50% increased damage upon being shot or after 3 seconds.
+Shooting the dynamite increases its damage by 50% [5%], its radius by ?% to ? meters, and releases 9 homing submunitions, with each dealing up to 80 [?] Damage.
+Only triggers Grenade-Effects when it automatically detonates, and not when shot.
+
+Incurs a 6 second cooldown after activating. Kills while on cooldown don't give charges.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Stylish Executioner,,"Killing enemies affected by any Elemental Debuff grants Invisibility for 8 seconds, and Truesight for 4 seconds.
+
+While invisible, and for 0.5 seconds after leaving Invis from activating Stylish Execution:
+Melee Attacks deal 300% [20%] increased damage, weaken enemies for 5 [2.5] seconds, and have their Melee Lunge Range extended to ? metres.
+
+Applies ""Too Stylish"" after Stylish Executioner is triggered, preventing additional Stylish Execution activations for 2 [12] seconds.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Winter's Shroud,,"Upon inflicting Slow to an enemy:
+Grants 300% [150%] Additional Base Class Ability Regeneration Rate for 3 seconds.
+
+On Class Ability Usage:
+Inflicts x60 [x40] Slow for 8 [1.5] seconds to enemies within 9 [8] metres.
+Grants 50% Damage Resist against Combatants for 4? seconds.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Threaded Specter,,"On Class Ability Usage:
+Spawns a Strand Decoy. 
+
+Decoy has 175 HP and lasts for up to 12 seconds. Combatants are lured to attack it and has 70% Damage Resist against Combatants. 
+Allies and Caster deal 150% increased Ability and Weapon Damage towards it.
+Decoy always counts as hostile and can be damaged by allies, enemies, and the caster. Does not activate any On-Kill effect.
+
+Upon losing all HP or when an enemy is within ? metres:
+ Deals up to 479 [60 Guardians | 121 Objects] damage in a ? metre radius.
+Explosions triggered by enemies being near it spawn 2 Threadlings.
+
+Passively applies 0.6x Class Ability Regeneration Speed while equipped unless Acrobat's Dodge is equipped.
+",,,,,,,,,,,
+,,,,,,,,,,,,,,
+Titan,-,-,-,-,-,Titans,,,-,-,-,-,-,-
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Electrified Snare,,"Prismatic Grenade
+
+Explosive charged with Arc and Strand energy.
+Explodes in a supercharged suspending burst, dealing up to 105 [?] damage, and inflicting Suspension to enemies within ? meters.
+Suspended Enemies are dealt ? damage every ? seconds for ? seconds, and are inflicted Jolt.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,"Shared Abilities
+
+Class Abilities and Movement Abilities are all shared with the original Subclass.",,,,,,,,,,,,,
+,,,Pulse Grenade,,Thermite Grenade,,Suppressor Grenade,,Glacier Grenade,,Shackle Grenade,,,
+,,,Thunderclap,,Hammer Strike,,Shield Throw,,Shiver Strike,,Frenzied Blade,,,
+,,,,,,,,,,,,,,
+,Aspects,,Information,,,,,,,,,,Fragment Slots,
+,,,,,,,,,,,,,,
+,Knockout,,"On Melee Kill:
+Quickly restores a varying amount of Health over 0.1 seconds, begins Health Regeneration and grants Amplified.
+Rank-and-File = 50 HP | Elite = 75 HP | Miniboss+ = 100 HP | Guardian = 30 HP 
+
+Upon breaking an Enemy Shield, or dealing damage to an enemy below 30% HP:
+Grants Knockout for 6 seconds.
+
+Knockout:
+160% [30%] increased Basic/Glaive Melee Damage
+160% [20%] increased Charged Melee Damage
+Basic Melee Attacks count as Arc Powered Melee Hits.
+Increases Melee Lunge Distance against Combatants to 6 metres",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Consecration,,"While sliding:
+[Melee Ability] launches a wave of Solar Energy 20 meters forward, dealing 40 [30] damage and inflicting x40 Scorch. 
+Only consumes 50% Melee Ability Energy if the slam is not activated. Unable to use during slide if user shoots.
+
+While airborne from the Consecration Melee Ability:
+[Melee Ability] slams the ground, creating a second, wider wave that travels 20 meters forward, shatters crystals, and deals 486 [120] damage to Non-Scorched Enemies.
+Hits against Scorched Enemies with the second wave deal 472.5 [50] damage and trigger an ignition.
+
+Grants 25% Damage Resist against Non-Melee Damage while in the Melee Animation.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Unbreakable,,"Hold [Grenade] to summon a Void Shield. Can be summoned while Hammer of Sol or Glacial Quake are active.
+Overrides Grenade Ability Cooldown to 152 seconds at base while equipped.
+
+Void Shield:
+Grants 95?% [64%] Damage Resist against blocked damage, and taunts Combatants in front of the user. Combatants that come into contact with the shield become disoriented.
+Generates 10 Void Overshield HP/s that lasts 5+2.5 seconds while draining 7.5% Grenade Energy/s.
+Blocking damage decreases Forward Movement Speed by 50?% for 0.5? seconds.
+Blocking damage grants Grenade Energy. Energy gains are progressively reduced (over time) OR (as Unbreakable gains damage)?, down to ?% Energy after ? seconds.
+Void Shield has no Movement Speed Penalties, only restricting mantling. Sprinting cancels Void Shield.
+
+Releasing [Grenade] or running out of Grenade Energy releases a frontal blast, consuming 50% Grenade Energy and dealing damage up to 11 meters away.
+Deals a minimum of 430 [64?] Grenade Damage for not blocking any damage, scaling to 1584 [178?] damage after receiving a lot [?] blocked damage.
+
+Unbreakable Kills grant Devour for 10+5 seconds.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Diamond Lance,,"Creates a Stasis Lance upon scoring 1 [3] Stasis Weapon Kills, an Ability Kill, or a Shatter Kill.
+Knockout-Infused Unpowered Melee Guardian Kills will not create a Stasis Lance.
+
+Stasis Lance is a single-use weapon that can be picked up while it is within 3 meters and can held for up to 10 seconds.
+Remains for up to 25 seconds on the ground.
+
+[Fire] throws the Stasis Lance, freezing enemies within 5 metres of the impact, shattering crystals on direct impact, and dealing 150 [45] damage. 
+[Melee] slams the Stasis Lance, freezing enemies within 8 [6.75?] metres, dealing up to 200 [90] damage, and bestowing the user and their allies within ? meters x2 Frost Armor.
+Diamond Lances instantly shatter Stasis Crystals upon damaging them.
+Diamond Lance Damage is considered Generic Stasis Ability Damage. Not Grenade nor Melee Damage.
+
+Incurs a 7 [17] second cooldown after spawning a Stasis Lance before another can be spawned.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Drengr's Lash,,"On Barricade Placement:
+Unleashes a Strand Lash forward that travels up to 30 metres away.
+Strand Lash tracks enemies in its path, dealing 60 [30] damage and suspending on hit.
+
+On Thruster Class Ability Usage:
+Creates a Strand Knot that explodes after ? seconds, dealing up to 60 [30] damage and suspending in a ? meter radius.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+Warlocks,-,-,-,-,-,Warlocks,,,-,-,-,-,-,-
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Freezing Singularity,,"Prismatic Grenade
+
+Deals up to 70 [26] Void Damage on impact, pulling enemies within 12 meters towards it, and creating a miniature black hole orbited by a halo of slowing ice.
+
+The slowing field deals 18 [4] Stasis Damage and inflicts x13? Slow every 0.25 seconds for 3.65 seconds to enemies within 6 meters.
+
+After 5 seconds of impacting, the black hole implodes, infliction suppression and dealing up to 570 [150] Void Damage to enemies within 7 meters. ",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,"Shared Abilities
+
+Class Abilities and Movement Abilities are all shared with the original Subclass.",,,,,,,,,,,,,
+,,,Storm Grenade,,Healing Grenade,,Vortex Grenade,,Coldsnap Grenade,,Threadling Grenade,,,
+,,,Chain Lightning,,Incinerator Snap,,Pocket Singularity,,Penumbral Blast,,Arcane Needle,,,
+,,,,,,,,,,,,,,
+,Aspects,,Information,,,,,,,,,,Fragment Slots,
+,,,,,,,,,,,,,,
+,Lightning Surge,,"While Sliding:
+[Melee Ability] warps the user forward 10 meters, calling down 5 lightning bolts in a ⬠-shape 7 meters away from the exit point, and granting x1 Bolt Charge per enemy hit.
+Grants Amplified and x1 Bolt Charge on usage. Does not grant any Bolt Charge past x1 unless hits are scored.
+Grants ?% Damage Resist against Combatants for ? seconds after usage. Unable to use during slide if user shoots.
+
+Lightning bolts deal 634 + 127 = 761 [105 + 47 = 152] damage simultaneously and inflict Jolt.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Hellion,,"On Class Ability Usage:
+Grants Hellion for 20 seconds.
+
+Hellion:
+Lobs scorching Solar projectiles every 1.35 seconds towards enemies up to 40 meters away.
+Solar projectiles deal up to 217 [38] Solar Grenade Ability Damage and inflict x30 Scorch per hit in a 4 meter radius.
+Can trigger Grenade Ability interactions. Hellion-inflicted Solar Effects are not scaled by Grenade Damage.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Feed the Void,,"Grants Enhanced Devour upon scoring an Ability Kill, Frozen Enemy Shatter Kill, Volatile Explosion Kill, or a Tangle Kill. 
+Devour becomes Enhanced Devour.
+
+Enhanced Devour:
+Restores 140 HP on activation and grants Enhanced Devour for 10 seconds. Reactivating Enhanced Devour restores 140 HP and refreshes 5 seconds.
+Scoring a kill while Enhanced Devour is active restores 140 HP, grants doubled Grenade Ability Energy, and refreshes 5 seconds of its duration.
+
+Grenade Ability Energy on Kill:
+Tier 1 Combatant = 15% | T2 = 23.2% | T3 = 27.5% | T4 = 40% | Guardians = 40%",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Bleak Watcher,,"Hold [Grenade] to convert the Grenade Ability into a Stasis Turret. 
+Overrides Grenade Cooldown to 159.6 seconds. Ability Chunk Scalars inherit the currently equipped Grenade Ability's Multiplier.
+
+Stasis Turret:
+Automatically shoots a burst of 5 seeking projectiles over 0.7 seconds every 2 seconds at enemies within 35 metres, inflicting x20 [x10] Slow for 4.5 [2] seconds per hit. 
+Lasts for 25 seconds, has 150 Construct HP, and 67% Damage Resist until it has fired.
+Bleak Watcher damage counts as Stasis Grenade Ability Damage.",,,,,,,,,,,
+,,,,,,,,,,,,,,
+,Weaver's Call,,"Threadling damage instances grant 10% Class Ability Energy.
+
+Dealing an accumulated total of 700 [?] damage grants a Perched Threadling.
+Incurs a 2 second cooldown before additional threadlings can be generated. Cannot generate more than 1 Threadling at a time. 
+Damage requirement is based on the displayed damage numbers, and is penalized by Power Level Delta.
+
+On Class Ability Usage:
+Creates 3 Threadlings, and deploys all Perched Threadlings.
+
+Kills progress a counter that grants a Perched Threadling upon reaching 100%.
+ Miniboss and below = 34% | Boss = 100% | Guardians = 67%",,,,,,,,,,,

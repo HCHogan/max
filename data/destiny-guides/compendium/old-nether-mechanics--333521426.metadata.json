@@ -1,0 +1,1990 @@
+{
+  "merged_ranges": [
+    "A1:C1",
+    "G1:I1",
+    "B2:N2",
+    "G3:I3",
+    "N3:O3",
+    "C4:M4",
+    "C6:M6",
+    "C7:D7",
+    "F7:M7",
+    "C8:D8",
+    "F8:M8",
+    "C9:D9",
+    "F9:M9",
+    "C10:D10",
+    "F10:M10",
+    "C11:D11",
+    "F11:M11",
+    "C13:M13",
+    "C14:M14",
+    "C16:M16",
+    "C17:M17",
+    "C18:M18",
+    "D19:L19",
+    "D20:L20",
+    "D21:L21",
+    "D22:L22",
+    "D23:L23",
+    "D24:L24",
+    "D25:L25",
+    "D26:L26",
+    "D27:L27",
+    "C28:M28",
+    "D29:L29",
+    "D30:L30",
+    "D31:L31",
+    "D32:L32",
+    "D33:L33",
+    "D34:L34",
+    "D35:L35",
+    "D36:L36",
+    "D37:L37",
+    "D38:L38",
+    "D39:L39",
+    "D40:L40",
+    "C41:M41",
+    "D42:L42",
+    "D43:L43",
+    "D44:L44",
+    "D45:L45",
+    "D46:L46",
+    "D47:L47",
+    "D48:L48",
+    "D49:L49",
+    "C51:M51",
+    "N51:O51",
+    "C53:M53",
+    "C54:M54",
+    "E55:M55",
+    "E56:M56",
+    "E57:M57",
+    "E58:M58",
+    "E59:M59",
+    "E60:M60",
+    "E61:M61"
+  ],
+  "hyperlinks": {
+    "A1": [
+      {
+        "text": "Go back to the top!",
+        "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=333521426#rangeid=1389170215"
+      }
+    ]
+  },
+  "images": {
+    "F3": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWdPICsGpBHdbw1YiyOTrwlHZUQmpI_BoZ6y8tAE8ixl5HQ39XV81TQBtn-WDy0Sh2oIZHr3yzZDJ642EGgj_w_oPO6DdEBs8wKcLZbz78Qz6e8ARcMjL8qu4xf4MsUsUYfwo5998rIKMSfrNF6AFJ_dDpeMr_3VIKER_70=s100-w100-h44",
+        "alt": ""
+      }
+    ],
+    "J3": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWdPICsGpBHdbw1YiyOTrwlHZUQmpI_BoZ6y8tAE8ixl5HQ39XV81TQBtn-WDy0Sh2oIZHr3yzZDJ642EGgj_w_oPO6DdEBs8wKcLZbz78Qz6e8ARcMjL8qu4xf4MsUsUYfwo5998rIKMSfrNF6AFJ_dDpeMr_3VIKER_70=s100-w100-h44",
+        "alt": ""
+      }
+    ],
+    "E7": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWdAgzm3jkl4CwtU_ELxoe6nzUq16GirNLOFUyVXVgiYhBAfGJdhrSTpoEOTNYRfAlXKfpV1Z3w77Qf-htqgRA-Qk_TXu_N1W7JMtsZ3DE3DMv385xCx7x8FgTevoRJDCXkLy9iawkE_yTIMFl3GJkRbif4u6yBVgRfp8GE=s100-w100-h89",
+        "alt": ""
+      }
+    ],
+    "E8": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWXDOJedIt9hKe7YgOJYfMp0lUR3tr0kxzj-Lo-2rIdhjtQe77WeX4mdPoc9sHfPMnr5Vf2Z0UdhqGhzg26wtzzmhC_OnY5D2vnAFjm3GgWdDXm7MBUWoP0_BYPlio6hia41bF21vyPXBTw8fhS53G_UFHbiPanf1sDP9wN=s100-w100-h74",
+        "alt": ""
+      }
+    ],
+    "E9": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU7s8FcCY-wkQITZnfEVbCWCbH6sSUjhbMxYJ5liOPyjK_yaqnoeKPExHHAJQvKw5gN89UH_CCTMTVa6RxkDULNNoCzjbMj6Xvvzn7b-8wyA4Bjm20xv7kY2GO0b2n9pGFRMLJZbo_SS5DDpWkCbVppaapVp3VfYFI-k3M=s329-w100-h329",
+        "alt": ""
+      }
+    ],
+    "E10": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXWJ_LC-ZC2lE60hwSK7ephOYgYx-rLUj2LCV-532LptW4Hk1-_eewMFF3-EPonmtPJA_YSLHSZaZJ86L91gKcEuASWAlz6lsTYyTXBSj5P-3R76oTvf6QCJ7HoFE3vR_0iDO2kiI7nmDfkE1BQunrDxHQvPRJrlrbBGdo=s209-w100-h209",
+        "alt": ""
+      }
+    ],
+    "E11": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xU0allSH4mkPE0wRoIWDH5MrqSZbCA2Fpyfms8fKve-ORw8AnjZfZg55lEN3B7Pvk0lua_JcaY2ATKt1_BzGdQhZZ29XF8DVtptm7gE1aQdkbbCaux4yKouEBagqlaykLx1hmAaoBPusDDSysxSHDrmr9YGTCowZ37PdJb3=s100-w100-h89",
+        "alt": ""
+      }
+    ],
+    "M42": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX0bOJT00V15r3H57P95pTJ8PpnqR4-fmbCcdg8IMw1LFltER1BxF7mSDfekx2IIEo2zBdnzWnTubcWaJNghiC2-qamJHj0se_FX2fIEiIaAUcyBiPjO8a3UFkp36-x-usNa9IcR9sanhZZW7dyiHBQzXUpgqObohe-Oddy=s100-w100-h89",
+        "alt": ""
+      }
+    ],
+    "M43": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX0bOJT00V15r3H57P95pTJ8PpnqR4-fmbCcdg8IMw1LFltER1BxF7mSDfekx2IIEo2zBdnzWnTubcWaJNghiC2-qamJHj0se_FX2fIEiIaAUcyBiPjO8a3UFkp36-x-usNa9IcR9sanhZZW7dyiHBQzXUpgqObohe-Oddy=s100-w100-h74",
+        "alt": ""
+      }
+    ],
+    "M44": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX0bOJT00V15r3H57P95pTJ8PpnqR4-fmbCcdg8IMw1LFltER1BxF7mSDfekx2IIEo2zBdnzWnTubcWaJNghiC2-qamJHj0se_FX2fIEiIaAUcyBiPjO8a3UFkp36-x-usNa9IcR9sanhZZW7dyiHBQzXUpgqObohe-Oddy=s100-w100-h74",
+        "alt": ""
+      }
+    ],
+    "M45": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX0bOJT00V15r3H57P95pTJ8PpnqR4-fmbCcdg8IMw1LFltER1BxF7mSDfekx2IIEo2zBdnzWnTubcWaJNghiC2-qamJHj0se_FX2fIEiIaAUcyBiPjO8a3UFkp36-x-usNa9IcR9sanhZZW7dyiHBQzXUpgqObohe-Oddy=s100-w100-h59",
+        "alt": ""
+      }
+    ],
+    "M46": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX0bOJT00V15r3H57P95pTJ8PpnqR4-fmbCcdg8IMw1LFltER1BxF7mSDfekx2IIEo2zBdnzWnTubcWaJNghiC2-qamJHj0se_FX2fIEiIaAUcyBiPjO8a3UFkp36-x-usNa9IcR9sanhZZW7dyiHBQzXUpgqObohe-Oddy=s100-w100-h74",
+        "alt": ""
+      }
+    ],
+    "M47": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX0bOJT00V15r3H57P95pTJ8PpnqR4-fmbCcdg8IMw1LFltER1BxF7mSDfekx2IIEo2zBdnzWnTubcWaJNghiC2-qamJHj0se_FX2fIEiIaAUcyBiPjO8a3UFkp36-x-usNa9IcR9sanhZZW7dyiHBQzXUpgqObohe-Oddy=s100-w100-h74",
+        "alt": ""
+      }
+    ],
+    "M48": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX0bOJT00V15r3H57P95pTJ8PpnqR4-fmbCcdg8IMw1LFltER1BxF7mSDfekx2IIEo2zBdnzWnTubcWaJNghiC2-qamJHj0se_FX2fIEiIaAUcyBiPjO8a3UFkp36-x-usNa9IcR9sanhZZW7dyiHBQzXUpgqObohe-Oddy=s179-w100-h179",
+        "alt": ""
+      }
+    ],
+    "M49": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX0bOJT00V15r3H57P95pTJ8PpnqR4-fmbCcdg8IMw1LFltER1BxF7mSDfekx2IIEo2zBdnzWnTubcWaJNghiC2-qamJHj0se_FX2fIEiIaAUcyBiPjO8a3UFkp36-x-usNa9IcR9sanhZZW7dyiHBQzXUpgqObohe-Oddy=s100-w100-h59",
+        "alt": ""
+      }
+    ],
+    "D55": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xVZHt17zlpVfpvA7LeiPDviudW7cBxXEjjf_709ROMgxwgDQkWm_qrEZWocQC1g7jrBWVJJPlLLkkV2Q1oyRkF87w2p6PTNDEEhZLci3LpoTvd8a1anX7oHSaTXfY6IfxruX3M6bcQslTU9Tr9cf6upNgxrcBxizBgNpgP7=s100-w100-h59",
+        "alt": ""
+      }
+    ],
+    "D56": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xXcBelWR6ZX4hjuoioQIbcPyDzya8SMDnaIjVz8EeIbN5qBbGVNS80qj9JW3rFr-uYyqD2z4PP3GwF9Aty5qz1f4rYtBaoi7OCDoZonCu-IYFbMXcgx3iEUfrukst3kDSkNEdnR07kPg1_behBSM0F9AMcMw_WxmwlODWZT=s100-w100-h59",
+        "alt": ""
+      }
+    ],
+    "D57": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xX32ijwjr0CnFAC-ih8rdgdq4J29QlmgsYBXOx4qyMUQB2wM-c8uM6tLIj1H8exHBphL9h_da7hAlTKwRiY14PMt8fZiqVa0VcUzIGJMV-lz0IpOANR_jGilMNTfe21rtU-Dk1beRM5lz5l65tjVdQ5SGaUOvZYYf5ExuYQ=s100-w100-h59",
+        "alt": ""
+      }
+    ],
+    "D58": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWVFWmrKj8CIAbSulVloakS_l0Z2K8RgRIRFBbrw2Hcv1kKO_3OqblsRi1gI8KInSrNZfGfk75YjAgd7hlRfm2PTQxbKEE5PCv5lUTHWiUP-v_w17sdBB9JQNhb4UxE_OZYz9EVj4RCuaOFYsLMq9NSYmBmW3uvJTLyvEc=s100-w100-h59",
+        "alt": ""
+      }
+    ],
+    "D59": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWXU2RgCeTyDZ4s95g3BOX-ZwcqrHuG089mvl_p6NZHnc8AoB56MrjV59wjDNuxNyY6SKCZ9krI_3opr5M-pphifcRUKKqS13m7qD2lsShRIi_r2MYX4P7lzp5InWlbmqetWm-1XSohcgsyUxi91zNdjuA4MPBQg4FuT0g=s100-w100-h59",
+        "alt": ""
+      }
+    ],
+    "D60": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWUtavq9q4j3Lttapzeh1ijS9DCjdFF5x1KG2f0PoVeLlKWwVuP3D0_qApVpX0PBUZYmMsIAbOfXYxenGb_EZWOBDckDkjH2VVevfliN2_F4SG-S_Lh4fGPr7UhUEifN1A67P2IbXYnUDQJY1PAdPuFJVVaT6qXI7OJvMg=s100-w100-h59",
+        "alt": ""
+      }
+    ],
+    "D61": [
+      {
+        "url": "https://lh3.googleusercontent.com/docsubipk/AP9E6xWk2wZ4UCXf1s6WXR2IjduU1ouOUoUPZ2vFc_8F4-sulpvWGpHOmNES6D_Jg5mmEUC6_v27FNGn9HcvI1PiEDz8fWaLrNhWej_Oy6gED-pLhdrUUJbn-zoALdoVNvyzi_wPD6sHjMHrYb8VS50CxEJI6I8c1QXdjtVLa7ql=s100-w100-h59",
+        "alt": ""
+      }
+    ]
+  },
+  "rich_text": {
+    "C6": [
+      {
+        "text": "Heresy Mods",
+        "style": "color:#85cab7;"
+      },
+      {
+        "text": "Heretical ",
+        "style": "color:#85cab7;"
+      },
+      {
+        "text": "Arrivals Reprised",
+        "style": "color:#b7815f;"
+      }
+    ],
+    "C7": [
+      {
+        "text": "Equippable on Fusion Rifles, Grenade Launchers, Sidearms, SMGs, and Swords.",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;"
+      }
+    ],
+    "F7": [
+      {
+        "text": "Overcharge ",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "C8": [
+      {
+        "text": "Equippable on Auto Rifles, Bows, Pulse Rifles, Linear Fusions, and Machine Guns.",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;"
+      }
+    ],
+    "F8": [
+      {
+        "text": "Overcharge ",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "C9": [
+      {
+        "text": "Power of Ambition",
+        "style": "color:#85cab7;"
+      },
+      {
+        "text": "Equippable on Fusion Rifles, Grenade Launchers, Glaives, Sidearms, SMGs, and Swords.",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;"
+      }
+    ],
+    "F9": [
+      {
+        "text": "Blight Rounds",
+        "style": "color:#85cab7;"
+      },
+      {
+        "text": "100% progress",
+        "style": "color:#85cab7;"
+      },
+      {
+        "text": "Counter Progress per damage instance:",
+        "style": "color:#85cab7;"
+      },
+      {
+        "text": "Grenade Launcher",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Submachine Gun",
+        "style": "color:#b7b7b7;"
+      },
+      {
+        "text": "Fusion Rifle",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Sidearm ",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "Glaive Melee",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Glaive Projectile",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Upon reaching ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "100% Counter Progress",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Blight Rounds",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Buff cannot be refreshed",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": ".While ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Blight Rounds",
+        "style": "font-style:italic;color:#85cab7;"
+      },
+      {
+        "text": " is active:",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Blighted.",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Glaive Melee",
+        "style": "font-weight:normal;font-style:italic;color:#89cdd1;"
+      },
+      {
+        "text": " ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "cannot ",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "inflict ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Blight",
+        "style": "font-weight:normal;font-style:italic;color:#a2c4c9;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Blighted ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "5",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[8]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Element-Matching Weapon Damage",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Blighted duration",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Blight damage ticks",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "45 ticks.",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Blighted ",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": "Disruption",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "stunning ",
+        "style": "color:#9fc5e8;"
+      },
+      {
+        "text": "Overload Champions",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "exhausting",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "DoT against Combatants scales with Combatant Rank Modifiers and other buffs.",
+        "style": "font-weight:normal;font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": "Overcharge ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "No interactions with ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Necrotic Grips",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ", or any other ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Poison",
+        "style": "font-weight:normal;font-style:italic;color:#6aa84f;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "C10": [
+      {
+        "text": "Equippable on Auto Rifles, Bows, Pulse Rifles, Linear Fusions, and Machine Guns.",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;"
+      }
+    ],
+    "F10": [
+      {
+        "text": "Upon ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "scoring multiple direct hits",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " within ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "? seconds",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " of ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "each",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "seeking Taken projectile",
+        "style": "color:#85cab7;"
+      },
+      {
+        "text": "39.4",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": " [16] ",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Element-Matching Damage",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "staggers ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Unstoppable Champions",
+        "style": "color:#c67676;"
+      },
+      {
+        "text": "Damage against Combatants scales with Combatant Rank Modifiers and counts as Weapon Damage.",
+        "style": "font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": "Overcharge ",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "C11": [
+      {
+        "text": "Equippable on any Heretical or Arrivals Reprised Weapon.",
+        "style": "font-size:8pt;font-weight:normal;font-style:italic;"
+      }
+    ],
+    "F11": [
+      {
+        "text": "15% increased damage towards Dread and Taken Combatants",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Overcharge ",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "C14": [
+      {
+        "text": "+75 Health (145)",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "+300 Shields (415 - 430)",
+        "style": "color:#7cadff;"
+      },
+      {
+        "text": "total health pool",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "560 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "(T0 Resilience)",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "575 HP",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "(T10 Resilience)",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#dd7e6b;"
+      },
+      {
+        "text": "no health regeneration",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": " ",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "restoring",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": " ",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "HP",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "/",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "Gaining Overshields ",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "are ",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "reduced",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": " by ",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "70%",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": ".",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "Revive Tokens",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Activity Difficulty",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Explore = 18 | Advanced+ = 9",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Revive Tokens",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "pots ",
+        "style": "color:#ead1dc;"
+      },
+      {
+        "text": "Famine Modifier",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Special ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Heavy ",
+        "style": "color:#a481e1;"
+      },
+      {
+        "text": "pots",
+        "style": "color:#ead1dc;"
+      },
+      {
+        "text": "Health Orbs",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Combatants ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "pots",
+        "style": "color:#ead1dc;"
+      },
+      {
+        "text": "Health Orbs",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "restore ? HP",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Power Level ",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "0 PL Delta",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "difficulty",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "(Defeating the boss) ",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "PL Delta",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Explore ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "-10⚔️",
+        "style": "color:#f4cccc;"
+      },
+      {
+        "text": "Advanced ",
+        "style": "color:#6d9eeb;"
+      },
+      {
+        "text": "-10⚔️",
+        "style": "color:#f4cccc;"
+      },
+      {
+        "text": "-20⚔️",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Expert ",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "-20",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": " -40💀",
+        "style": "color:#e06666;"
+      }
+    ],
+    "C17": [
+      {
+        "text": "Minor Boons",
+        "style": "color:#c9daf8;"
+      },
+      {
+        "text": "High-Value Targets",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Minor Boon pickup",
+        "style": "color:#c9daf8;"
+      },
+      {
+        "text": "1 stack ",
+        "style": "color:#c9daf8;"
+      },
+      {
+        "text": "3 stacks ",
+        "style": "color:#c9daf8;"
+      },
+      {
+        "text": "Faded Scroll",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "10 stacks",
+        "style": "color:#c9daf8;"
+      },
+      {
+        "text": "Major ",
+        "style": "color:#b6d7a8;"
+      },
+      {
+        "text": "Once picked up, a boon cannot be obtained again in a single activity.",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D19": [
+      {
+        "text": "100% Additional Class Ability Recharge Rate ",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "per stack.",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "100% | 200% | 300% | 400% | 500% | 600% | 700% | 800% | 900% | 1000% Additional Base Class Ability Recharge Rate",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "D20": [
+      {
+        "text": "100% Additional Grenade Ability Recharge Rate ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "per stack.",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "100% | 200% | 300% | 400% | 500% | 600% | 700% | 800% | 900% | 1000% Additional Base Class Ability Recharge Rate",
+        "style": "color:#e0a261;"
+      }
+    ],
+    "D21": [
+      {
+        "text": "Stasis ",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "Strand ",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "stack",
+        "style": "color:#b45f06;"
+      }
+    ],
+    "D22": [
+      {
+        "text": "10% increased ",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "Arc",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": ", ",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "Solar",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": ", and ",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "Void ",
+        "style": "color:#bba5f3;"
+      },
+      {
+        "text": "Damage against enemies per ",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "stack",
+        "style": "color:#a2c4c9;"
+      },
+      {
+        "text": ".10% | 20% | 30% | 40% | 50% | 60% | 70% | 80% | 90% | 100% increased damage.",
+        "style": "color:#cccccc;"
+      }
+    ],
+    "D23": [
+      {
+        "text": "Elemental Pickups",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "Breaking a pot or ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "shattering ",
+        "style": "font-weight:normal;font-style:italic;color:#3c78d8;"
+      },
+      {
+        "text": "a ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Stasis Crystal",
+        "style": "font-weight:normal;font-style:italic;color:#6fa8dc;"
+      },
+      {
+        "text": " also counts as a kill.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Elemental Pickup",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "D24": [
+      {
+        "text": "per stack.",
+        "style": "color:#cccccc;"
+      }
+    ],
+    "D25": [
+      {
+        "text": "Restorative Light",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Orbs",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Breaking a pot or ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "shattering ",
+        "style": "font-weight:normal;font-style:italic;color:#3c78d8;"
+      },
+      {
+        "text": "a ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Stasis Crystal",
+        "style": "font-weight:normal;font-style:italic;color:#6fa8dc;"
+      },
+      {
+        "text": " also counts as a construct kill.",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Restorative Light Orb",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Restorative Light Orbs begin health regeneration...which have been rendered useless as of 8.2.0.1 since health regeneration no longer works, oops?",
+        "style": "font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Restorative Light Orbs",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Runic Enhancement upgrades",
+        "style": "color:#92c1ac;"
+      }
+    ],
+    "D26": [
+      {
+        "text": "Damage Resist",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Miniboss and Boss Combatants",
+        "style": "color:#9fc5e8;"
+      },
+      {
+        "text": "?% | ?% | ?% | ?% | ?% | ?% | ?% | ?% | ?% | ?% Damage Resist.",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "D29": [
+      {
+        "text": "Damage Resist",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Episodic Armor",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "x1",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "?%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "x2",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "?%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "x3",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "?%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "x4",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "?%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "x5",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "?%",
+        "style": "color:#a4c2f4;"
+      }
+    ],
+    "D30": [
+      {
+        "text": "After 1 second of ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "sprinting",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": ", while maintaining both sprint and a movement speed of at least 5m/s:",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": " Amplified",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "While ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Amplified",
+        "style": "font-style:italic;color:#89cdd1;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Melee Hits",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "lightning storm",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "? Arc Damage",
+        "style": "color:#89cdd1;"
+      }
+    ],
+    "D31": [
+      {
+        "text": "After ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "sprinting ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "for ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "? seconds",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Solar Wave",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "540 Solar Damage",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "x60",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "+30",
+        "style": "font-size:7pt;color:#f6b26b;"
+      },
+      {
+        "text": " Scorch",
+        "style": "color:#f6b26b;"
+      },
+      {
+        "text": "Solar Wave",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "4 Shrapnel ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "82.5 Solar Damage",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Has no damage falloff.",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D32": [
+      {
+        "text": "After ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "1 second",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " of ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "sprinting",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": ", while ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "maintaining ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "both ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "sprint ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "and",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": " ",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "a ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "movement speed of at least 5m/",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": "s:",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": " x1 Bolt Charge",
+        "style": "color:#89cdd1;"
+      }
+    ],
+    "C33": [
+      {
+        "text": "Classical ",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "D33": [
+      {
+        "text": "On ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Class Ability Usage",
+        "style": "font-style:italic;color:#b4a7d6;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Restores 70 HP ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "allies ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Already accounts for the Nether penalty.",
+        "style": "font-weight:normal;font-style:italic;color:#5db69e;"
+      }
+    ],
+    "D34": [
+      {
+        "text": "On ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Finisher",
+        "style": "font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Restores 70 HP ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "allies ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "Already accounts for the Nether penalty.",
+        "style": "font-weight:normal;font-style:italic;color:#5db69e;"
+      }
+    ],
+    "D35": [
+      {
+        "text": "On ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Finisher",
+        "style": "font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Strand Grenade",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "300 Strand Damage",
+        "style": "color:#63d275;"
+      },
+      {
+        "text": "? Unraveling Threads",
+        "style": "color:#6aa84f;"
+      }
+    ],
+    "D36": [
+      {
+        "text": "On ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Finisher",
+        "style": "font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Void Grenade",
+        "style": "color:#bba5f3;"
+      },
+      {
+        "text": "575 Void Damage",
+        "style": "color:#bba5f3;"
+      },
+      {
+        "text": "Volatile",
+        "style": "color:#d5a6bd;"
+      }
+    ],
+    "D37": [
+      {
+        "text": "On ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Finisher",
+        "style": "font-style:italic;color:#a4c2f4;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Kinetic Fragmentation Grenade",
+        "style": "color:#999999;"
+      },
+      {
+        "text": "Mechanically identical to Forerunner's The Rock.",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D38": [
+      {
+        "text": "3 Ability Kills",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": " ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "(",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Grenade",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#e0a261;"
+      },
+      {
+        "text": ", ",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Melee",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#89cdd1;"
+      },
+      {
+        "text": ", or ",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Super",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": ")",
+        "style": "font-size:7pt;font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Special Ammo Finder Brick",
+        "style": "color:#93c47d;"
+      }
+    ],
+    "C39": [
+      {
+        "text": "Refreshing ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "Fireams",
+        "style": "color:#a481e1;"
+      }
+    ],
+    "D39": [
+      {
+        "text": "Grenade ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Melee",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "Special Ammo Weapon Kill",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "?% Super Ability Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Power Ammo Weapon Kill",
+        "style": "color:#a481e1;"
+      }
+    ],
+    "D40": [
+      {
+        "text": "After ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "1 second",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": " of ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "sprinting",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": ", while maintaining both sprint and a movement speed of at least 5m/s:",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Stasis Wave",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "? Stasis Damage",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "1 Medium Crystal",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "2? Small Crystals",
+        "style": "color:#6fa8dc;"
+      }
+    ],
+    "D42": [
+      {
+        "text": "CORRUPTION",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Total HP ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "65%.",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Critical Health",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "decreased ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "30 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Shields ",
+        "style": "color:#7cadff;"
+      },
+      {
+        "text": "decreased ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "345",
+        "style": "color:#7cadff;"
+      },
+      {
+        "text": "Fragile Strength",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Sharpshooter's Burden",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Total HP ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "72%",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Health ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "90",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Shields ",
+        "style": "color:#7cadff;"
+      },
+      {
+        "text": "70",
+        "style": "color:#7cadff;"
+      }
+    ],
+    "D43": [
+      {
+        "text": "Total Health",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Critical Health",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": " is ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "increased ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "by ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "45 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "while ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "Shields ",
+        "style": "color:#7cadff;"
+      },
+      {
+        "text": "are ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "increased ",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": "by ",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "140",
+        "style": "color:#7cadff;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;"
+      },
+      {
+        "text": "CORRUPTION",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "6.5?% Decreased Movement Speed",
+        "style": "color:#e06666;"
+      }
+    ],
+    "D44": [
+      {
+        "text": "Health ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Minor Boon stacks",
+        "style": "color:#b9c9e5;"
+      },
+      {
+        "text": "+? Health",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "? Minor Boon stacks",
+        "style": "color:#b9c9e5;"
+      },
+      {
+        "text": "CORRUPTION",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Major ",
+        "style": "color:#b6d7a8;"
+      }
+    ],
+    "D45": [
+      {
+        "text": "Grenade",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Class ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "CORRUPTION",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "?% Decreased Super Ability Regeneration Rate",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "D46": [
+      {
+        "text": "50% Increased Kinetic Damage",
+        "style": "color:#999999;"
+      },
+      {
+        "text": "CORRUPTION",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Kinetic Damage Kill",
+        "style": "color:#999999;"
+      },
+      {
+        "text": "drains ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "100% Super Ability Energy",
+        "style": "color:#ffd966;"
+      },
+      {
+        "text": "Yes, ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "ALL ",
+        "style": "font-weight:normal;font-style:italic;color:#ffd966;"
+      },
+      {
+        "text": "of it.",
+        "style": "font-weight:normal;font-style:italic;"
+      }
+    ],
+    "D47": [
+      {
+        "text": "25% Increased Elemental Damage.",
+        "style": "color:#d5a6bd;"
+      },
+      {
+        "text": "CORRUPTION",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": " ",
+        "style": "color:#cccccc;"
+      },
+      {
+        "text": "drains 20% ",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Grenade ",
+        "style": "color:#e0a261;"
+      },
+      {
+        "text": "Class ",
+        "style": "color:#b4a7d6;"
+      }
+    ],
+    "D48": [
+      {
+        "text": "Increased Precision Damage",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Tends to ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "increase Precision Damage",
+        "style": "font-weight:normal;font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": " by ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "~15%",
+        "style": "font-weight:normal;font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": " on most ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Primary Weapons",
+        "style": "font-weight:normal;font-style:italic;color:#999999;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Precision Damage Increase Calculation",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "(((Crit Ratio - 1 ) x 1.5) + 1)",
+        "style": "color:#f1c232;"
+      },
+      {
+        "text": "Resulting ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Crit Ratio",
+        "style": "font-weight:normal;font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": " is then rounded to the nearest valid ratio, up to a maximum of",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": " 5.99x Crit Ratio",
+        "style": "font-weight:normal;font-style:italic;color:#f1c232;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "CORRUPTION",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Total Health ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "20%",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Critical Health",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "decreased ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "30 ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Shields ",
+        "style": "color:#7cadff;"
+      },
+      {
+        "text": "decreased ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "85",
+        "style": "color:#7cadff;"
+      },
+      {
+        "text": "Fragile Strength",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Sharpshooter's Burden",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Total HP",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "72%",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "Health ",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "90",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Shields ",
+        "style": "color:#7cadff;"
+      },
+      {
+        "text": "70",
+        "style": "color:#7cadff;"
+      }
+    ],
+    "D49": [
+      {
+        "text": "CORRUPTION",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "-15 Reload",
+        "style": "color:#e06666;"
+      },
+      {
+        "text": "1.1x Reload Duration Multiplier",
+        "style": "color:#e06666;"
+      }
+    ],
+    "C54": [
+      {
+        "text": "Revenant (Season 25) ",
+        "style": "color:#bc3942;"
+      },
+      {
+        "text": "Volatile Tonics",
+        "style": "color:#c8614c;"
+      },
+      {
+        "text": "Artifact Perks",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": "⟁Boosted Effects",
+        "style": "color:#5ba66a;"
+      }
+    ],
+    "E55": [
+      {
+        "text": "While ",
+        "style": "font-weight:normal;font-style:italic;color:#cccccc;"
+      },
+      {
+        "text": "Amplified ",
+        "style": "font-style:italic;color:#89cdd1;"
+      },
+      {
+        "text": "is ",
+        "style": "font-weight:normal;font-style:italic;color:#cccccc;"
+      },
+      {
+        "text": "active",
+        "style": "font-style:italic;color:#cccccc;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;color:#cccccc;"
+      },
+      {
+        "text": "5%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[2%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Primary Ammo",
+        "style": "color:#999999;"
+      },
+      {
+        "text": " Arc Weapon Damage",
+        "style": "color:#89cdd1;"
+      },
+      {
+        "text": ".",
+        "style": "color:#cccccc;"
+      }
+    ],
+    "E57": [
+      {
+        "text": "While ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Frost Armor",
+        "style": "font-style:italic;color:#6fa8dc;"
+      },
+      {
+        "text": " is active:",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "5%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[2%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Primary Ammo",
+        "style": "color:#999999;"
+      },
+      {
+        "text": " Stasis Weapon Damage",
+        "style": "color:#6fa8dc;"
+      }
+    ],
+    "E58": [
+      {
+        "text": "Finishers ",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "begin Critical Health regeneration",
+        "style": "color:#dd7e6b;"
+      },
+      {
+        "text": "Cannot restore ",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      },
+      {
+        "text": "Shield HP",
+        "style": "font-style:italic;color:#7cadff;"
+      },
+      {
+        "text": ".",
+        "style": "font-weight:normal;font-style:italic;color:#e06666;"
+      }
+    ],
+    "E59": [
+      {
+        "text": "5% Class Ability Energy",
+        "style": "color:#b4a7d6;"
+      },
+      {
+        "text": "Stasis Crystal ",
+        "style": "color:#6fa8dc;"
+      },
+      {
+        "text": "Shatter",
+        "style": "color:#3c78d8;"
+      }
+    ],
+    "E60": [
+      {
+        "text": "+50 Intellect",
+        "style": "color:#ffd966;"
+      }
+    ],
+    "E61": [
+      {
+        "text": "While ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "Devour ",
+        "style": "font-style:italic;color:#8e7cc3;"
+      },
+      {
+        "text": "is ",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "active",
+        "style": "font-style:italic;"
+      },
+      {
+        "text": ":",
+        "style": "font-weight:normal;font-style:italic;"
+      },
+      {
+        "text": "5%",
+        "style": "color:#a4c2f4;"
+      },
+      {
+        "text": "[2%]",
+        "style": "color:#ea9999;"
+      },
+      {
+        "text": "Special Ammo",
+        "style": "color:#93c47d;"
+      },
+      {
+        "text": " Void Weapon Damage",
+        "style": "color:#bba5f3;"
+      }
+    ]
+  },
+  "cell_notes": {},
+  "rendered_rows": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62
+  ],
+  "notes_availability": "Public HTML does not expose all spreadsheet cell notes or formulas."
+}

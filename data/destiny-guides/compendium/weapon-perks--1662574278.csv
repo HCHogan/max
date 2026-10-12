@@ -1,0 +1,2509 @@
+"Gear Perks, Traits, and Mods",,,,,
+Weapon Traits,,Weapon Mods,Intrinsic Traits,Crossbow/Glaive/Sword Info,Origin Traits
+Perk,,Description,,,
+,,"Enhanced Traits are shown in ↑Yellow.
+
+Smaller + signs are color-coded for Subclass-specific fragment interactions.
+For example: 5+2 seconds of Restoration for Ember of Solace, x30+15 Scorch for Ember of Ashes, and 10+5 seconds for Echo of Persistence.",,,
+Weapon Traits,,,,,
+Accelerated Heatsink,,"Passively grants +25 Cooling Efficiency stat ↑and +2 Reload Speed at the downside of 2% decreased damage.
+
+How do Heat Weapons work?",,,
+Adagio,,"On Weapon Kill:
+30% (27% Hand Cannons) increased damage, +10 Range, and 1.2x Fire Recovery Delay/Charge Time Multiplier/Draw Time Multiplier for 7 ↑8 seconds.
+Buff is removed on stow.",,,
+Adaptive Munitions,,"Upon damaging a Non-Matching Shield or a Barrier Champion Shield: 
+Stacking damage increase against Combatant Shields.
+Buff is removed upon hitting a Matching Shield or an Unshielded Combatant.
+
+???% ↑???% per hit, up to ???% ↑???%: Fusion Rifles.
+10% ↑14% per hit, up to 50% ↑69.5%: Auto Rifles, Machine Guns, Pulse Rifles, and Trace Rifles.
+ 22% ↑31% per hit, up to 44.5% ↑61.5%: Linear Fusion Rifles.
+25% ↑34.5% per hit, up to 50% ↑69.5%: Bows, Glaives, Hand Cannons, and Scout Rifles.",,,
+Adhesive Ordnance,,"Upon picking up an Ammo Brick:
+Generates +1 Ammo.
+The next shot fired adheres a Sticky Bomb on impact. 
+Can trigger from Kinetic Synthesis Ammo Bricks.
+
+Sticky Bomb detonates after 0.8 seconds, dealing varying [70 ↑77] Kinetic Damage and inflicting Exhaust over 6 meters, down to 50% Damage at the furthest point.
+Damage against Combatants scales with Combatant Rank Modifiers and counts as Kinetic Weapon Damage.
+Hand Cannon, Scout Rifle: 766 ↑843
+Sniper Rifle: 1,044 ↑1,149",,,
+Adrenaline Junkie,,"On Weapon or Grenade Kill:
+6.7% | 13.3% | 20% | 26.6% | 33.3% increased damage and +20 Handling for 4.5 ↑5 seconds. Grenade Kills grant 5 stacks, even if stowed.
+Additional Weapon or Grenade Kills refresh the buff duration.
+Buff can be triggered while stowed and persists through stow.",,,
+Aggregate Charge,,"Against Elementally-Debuffed Enemies:
+10% ↑11% | 20% ↑22% | 30% ↑33% increased damage. 
+Effect scales with the amount of unique debuffs on the enemy, maxing out at 3 unique debuffs.
+
+Unique Debuff List:
+Blind - Jolt | Scorch - Ignition | Suppression - Volatile - Weaken | Slow - Freeze - Shatter | Sever - Suspend - Unravel",,,
+Air Assault,,"Passively grants +10 ↑12 Airborne Effectiveness.
+
+On Weapon Kill:
++30 ↑32 Airborne Effectiveness per stack for 5 seconds, up to a maximum of 2 stacks. Airborne Kills grant 2 stacks.
+Additional Weapon Kills refresh the buff duration.
+Buff is removed on stow.",,,
+Air Trigger,,"Passively grants +20 ↑+30 Ammo Generation.
+
+While Airborne:
++30 ↑35? Reload Speed, 0.8x Reload Duration Multiplier, -15?% ↑-20?% Accuracy Cone Size, and -20?% Auto Aim Cone Size.",,,
+All-Star,,"Upon picking up an Ammo Brick:
+Refills Magazine.
+35% [15%] Increased Damage and +100? Reload Speed for 6 ↑7 seconds.
+Additional Kinetic Synthesis Bricks or Special Ammo Bricks extend the buff duration by 7 seconds, up to 10 seconds.
+Timer only ticks down while the weapon with All-Star is readied.
+
+Picking up a Heavy Ammo Brick grants 9 ↑10 seconds of All-Star.",,,
+Alloy Magazine,,"Upon starting a reload, while at or below 50% Magazine Capacity:
+Linearly grants up to 0.8x ↑0.75x Reload Duration Multiplier.
+Perk dynamically scales from 0.9x ↑0.85x Reload Duration Multiplier at 50% Magazine, up to 0.8x ↑0.75x Reload Duration Multiplier at 0% Magazine.",,,
+Ambitious Assassin,,"Upon finishing a reload after scoring Weapon Kills:
+Overflows Magazine from reserves based on the amount of kills achieved, up to a maximum of 150% Increased Magazine Capacity. 
+Always rounds magazine up. Kill Counter persists through stow.
+
+Primary Weapons: 20% Increased Magazine Capacity per Kill.
+Special Weapons | Power Weapons: 10% Increased Magazine Capacity per Kill.
+
+↑Passively grants +5 Reload Speed.",,,
+Ancillary Ordinance,,"Upon scoring 3 Elemental Kills within 4 seconds of each, or upon killing an Elementally-Debuffed Enemy:
+Grants a stack of Ancillary Ordinance, up to a maximum of 4? ↑5 stacks.
+Kills can be scored through any means. 
+Scoring a Kinetic Weapon Kill against an Elementally-Debuffed Enemy will also instantly spawn a Micro-Missile. Try it with Unravel or Scorching Rounds!
+
+Upon scoring a Direct Weapon Kill while having stacks of Ancillary Ordinance:
+Consumes a stack of Ancillary Ordinance to spawn a homing Kinetic Micro-Missile over the Enemy Death Location.
+Micro-missile aggressively tracks the closest enemy within 30 meters, exploding on impact, dealing varying [100] Kinetic Damage over a tiny radius.
+
+Micro-Missile Damage:
+Primary Weapons: 383
+Shotgun: 435
+Micro-Missile Sidearm (High Albedo): 348
+Grenade Launcher (Mountaintop): 292
+Heavy Sniper Rifle: 76",,,
+Archer's Gambit,,"On Hipfired Precision Hit:
++100? Reload Speed, 0.x? Reload Duration Multiplier, and 0.4x Draw Time Multiplier for 4 ↑5 seconds.
+Scoring additional Hipfired Precision Hits extends the buff duration by +4 seconds, up to 8 ↑? seconds.
+Buff persists through stow.",,,
+Archer's Tempo,,"On Precision Hit:
+0.75x Draw Time Multiplier for 3 ↑4 seconds.
+Buff is removed on stow.",,,
+Armor-Piercing Rounds,,"Grants 5% increased damage against Combatant Elemental Shields and Barrier Champion's Shield.
+
+Bullets overpenetrate enemies once.
+
+Passively grants +5 ↑+7 Range.",,,
+Assassin's Blade,,"On Weapon Kill:
+15% Increased damage and maximizes Movement Speed for 5 ↑5.5 seconds.
+Additional Weapon Kills refresh the buff duration.
+ Buff remains active while stowed.",,,
+Attrition Orbs,,"Upon scoring a Magazine-Based amount of damage instances within 5 seconds of each:
+The next damage instance creates an Orb of Power that grants 0.87% ↑1.1% Super Energy.
+Counter persists through stow.
+
+Damage instances required to make the next damage instance spawn an Orb of Power:
+55.55% of Magazine + 1, rounded down.
+Bows: 4 | Swords: 5 | Grenade Launchers: 3 | Rocket Launchers: 2 | Area-Denial Grenade Launchers: 26
+Support Auto Rifles healing hits on injured teammates count as 2 hits. (33.5% of Magazine + 1), rounded down on healing hits on damaged allies.
+Scorch ticks from Weapon Perks do not count.
+ Incurs a 0.5 second cooldown upon spawning an Orb. Damage instances during the cooldown will not be counted.",,,
+Auto-Loading Holster,,"Upon being stowed for 3.5 ↑3.3 seconds:
+Refills Magazine.",,,
+Backup Plan,,"Upon readying:
+20% decreased damage, +100 Handling, and 0.7x Charge Time Multiplier for 2 ↑2.5 seconds.
+Linear Fusion Rifle exclusive: Shooting refreshes the buff duration.
+Weapon must be stowed for 3 seconds before it can be reactivated.",,,
+Bait and Switch,,"Upon scoring a damage instance with each equipped weapon within 7 seconds of the last damage instance:
+30% increased damage for 10 ↑11 seconds. 
+Buff cannot be refreshed until its duration expires. Damage Timer is disabled while the perk is active. Buff persists through stow.",,,
+Barrel Constrictor,,"On Weapon Kill:
+-20% Pellet/Projectile Spread for 7.5 ↑8.5 seconds.
+Buff cannot be refreshed. Buff persists through stow.",,,
+Beacon Rounds,,"On Weapon Kill:
+Grants a stack of Beacon Rounds for 6 ↑7 seconds, up to a maximum of 4 stacks.
+Dealing additional damage extends the buff duration to 4 seconds if the duration is <4 seconds.
+Buff can be activated while stowed, and persists through stow.
+
+Beacon Rounds:
++15 Reload Speed, 0.9x Reload Duration Multiplier, and 45% Increased Projectile Tracking Cone Size.
+Additional stacks only increase the strength of the projectile tracking. Projectile Tracking is only in effect when the Targeted Reticle is active.",,,
+Bewildering Burst,,"Upon finishing a reload within ? seconds of a Kill:
+Grants Bewildering Burst for 6 ↑7 seconds.
+
+The next direct hit while Bewildering Burst is active launches a Flashbang above the enemy that explodes after 0.85 seconds.
+Flashbang deals 10 [4] Kinetic Damage and inflicts disorient to enemies within 10 meters for 3.5 ↑? [1 ↑1.25] seconds.
+Buff persists through stow.",,,
+Binary Orbit,,"Upon scoring an Opposing Alignment Elemental Kill:
+25% increased damage for 8.5 ↑10.5 seconds.
+Additional Kills with Opposing-Alignment sources refresh the buff duration.
+Buff can be activated while stowed, and persists through stow.
+
+Arc, Solar, or Void Kill --> Kinetic, Stasis and Strand Weapons receive buff.
+ Kinetic, Stasis, or Strand Kill -->  Arc, Solar, and Void Weapons receive buff.",,,
+Bipod,,"Passively grants the following:
++1 Magazine Capacity, +5 Reserves, and 0.75x Fire Recovery Delay
+25% decreased damage, -30 ↑-25 Blast Radius, and -20 ↑-15 Reload Speed.
+Wolfpack Rounds and all other perk effects, such as Cluster Bombs and Hatchling, are affected by the damage penalty.",,,
+Blast Distributor,,"Upon dealing Weapon Explosive Damage:
++10 ↑+13 Grenade Stat per stack for 5 seconds, up to a maximum of +50 ↑+65 Grenade Stat at 5 stacks.
+Buff remains active through stow.",,,
+Blunt Execution Rounds,,"Upon dealing Melee Damage while within 15 metres of an enemy:
+500% [100%] increased damage and +100 Handling for the next burst within 10 ↑11 seconds.
+Incurs a 4 second cooldown after buff expires before it can be reactivated. 
+Buff can be triggered while stowed, but is removed on stow if active.
+
+Any Powered Melee which requires sprinting, sliding, or performs a slam will not activate Blunt Execution Rounds.",,,
+Bolt Scavenger,,"Upon picking up a Crossbow Bolt:
++? Handling and +? Reload Speed for 15 ↑16? seconds.",,,
+Bottomless Grief,,"Passively grants +30 Magazine Stat.
+
+While Last Guardian Standing:
+On Weapon Kill:
+Refills Magazine.",,,
+Box Breathing,,"After 1.5 ↑1.4 seconds of ADS without firing while Magazine is >0:
+10% Increased Aim Assist Falloff Distance and 40% increased Weakspot Damage for the next shot while ADS. 
+Heavy Sniper Rifles and Glaives receive 30% increased Weakspot Damage instead.
+Timer starts as soon as the Aim Down Sights input is pressed.
+
+Weakspot damage? Least convoluted way
+Buffs ""Precision Hits"" against Shielded Combatants and works on weapons without Precision Multipliers as long as they hit the weakspot.
+Weakspot Buffs do not work on a Divinity Bubble",,,
+Built To Blast,,"While Void Overshield, Frost Armor, or Woven Mail are active:
++30? Stability, +? Aim Assist, and ?% Flinch Resist
+
+↑Buff lingers for 2 seconds once criteria isn't met. ",,,
+,,,,,
+Burning Ambition,,"Upon scoring a Magazine-based amount of direct hits within 2 seconds of each:
+The next direct hit inflicts Scorch within 2 seconds.
+Hit counter persists through stow. Hits do not have to be on the same target.
+Scorch inflicted by Burning Ambition counts as Weapon Damage.
+
+Hits needed to prepare Scorching Shot:
+55% of Magazine, rounded down.
+Bow: ↑2 | Sword: 2 ↑1
+Linear FR | Precision: ↑1, Burst: ↑2?
+Rocket Sidearm: ↑3 Missiles
+Scouts | Precision: ↑5, Rapid: ↑8
+Fusion Rifles: ↑11 Bolts
+MGs | Adaptive: ↑13, Aggressive: ↑19, Rapid: ↑28?
+Autos | Heat, Precision: ↑14 | Adaptive, Support: ↑19 | Rapid: ↑23
+Trace Rifle: ↑29
+
+Scorching Shot and direct hits against Scorched Enemies inflict Scorch.
+Primary Weapons inflict x10+5 [x4+5? against Scorched Guardians] Scorch.
+Special and Power Weapons inflict x20+10 Scorch.
+Incurs a 0.5 second cooldown upon inflicting Scorch before additional Scorch can be inflicted. Cooldown is GLOBAL, not per-enemy.",,,
+Butterfly,,"After 1.5 ↑1.4 seconds of ADS without firing while Magazine is >0:
+The next Direct Damage Kill cause targets to explode on death, dealing varying [?] Weapon-Matching Damage over ~8 meters, down to 30% damage.
+On Rocket Launcher (Crux Celeritas IV): Explosive Damage Kills count, but the kill must be scored while still ADS.
+Timer starts as soon as the Aim Down Sights input is pressed. Buff is removed after no longer ADS, or upon scoring a kill.
+Perk can retrigger after 1.4 seconds of ADS without firing as long as the weapon is loaded.
+
+Butterfly Maximum Damage:
+Scout Rifle: ?
+Bow: 453
+Trace Rifle: 473 
+Shotgun: 590
+Sniper Rifle: ?
+Glaive: ?
+Crossbow: 836
+Linear Fusion Rifle: 689
+Rocket Launcher: 836",,,
+Cascade Point,,"Upon scoring multiple Precision Hits within 5 seconds of each with a different weapon or upon scoring a kill with a different weapon:
+Grants Cascade Point Ready for 5 seconds.
+
+Upon readying the weapon while Cascade Point Ready is active:
+Grants Cascade Point for 2.5 ↑2.75 seconds.
+Cascade Point grants 0.7x Fire Recovery Delay for Machine Guns and Submachine Guns, and 0.6x Fire Recovery Delay for everything else.
+
+Precision Hits work on a Counter System, granting Cascade Point Ready upon reaching 100%.
+2 Precision Hits: Bows, Linear Fusion Rifles, Shotguns, and Sniper Rifles.
+4 Precision Hits: Hand Cannons, Scout Rifles, and Sidearms.
+6 Precision Hits: Auto Rifles, Machine Guns, Pulse Rifles, Submachine Guns, and Trace Rifles. ",,,
+Celerity,,"Passively grants +20 Handling and +20 Reload Speed.
+
+While Last Guardian Standing:
++100 Handling, +100 Reload Speed, +? Aim Assist, 50% Flinch Resist, increased accuracy, stronger scope highlight, and enables radar while ADS.",,,
+Chain Reaction,,"On Weapon Kill:
+Target explodes, dealing varying [Special = 44.8? ↑49.3? | Power = 72.8 ↑80?] Weapon-Element Matching Damage, down to 0% damage.
+Rocket Pulse: 158 ↑174 | Breech GL: 189 ↑208 | Shotgun, Area Denial GL: 236 ↑260 | Glaive: 284 ↑313 | 2.4m No Falloff, 6m Maximum Falloff on Special Weapons
+Wave GL, MG, Sword: 352 ↑387 | Drum GL, LFR: 448 ↑493 | RL: 543 ↑598  | 3m No Falloff, 7m Maximum Falloff for Power Weapons.
+
+↑Passively grants +20 Guard Endurance to Swords.",,,
+Chaos Reshaped,,"After having maintained a state of dealing or receiving damage every 5 seconds for at least 12 ↑11.5 seconds:
+Chaos Reshaped x1 | 20% Increased damage for 7 seconds. 
+Dealing or receiving damage refreshes the buff duration. 
+Buff can be activated while stowed, and persists through stow.
+
+After maintaining Chaos Reshaped x1 for an additional 12 ↑11.5 seconds:
+Chaos Reshaped x2 | 35% Increased damage for 7 seconds and triggers a healing effect while active.
+Dealing or receiving damage refreshes the buff duration. 
+Buff can be activated while stowed, and persists through stow.
+
+Chaos Reshaped x2 Healing Effect
+Charges up a Healing-over-time effect at a rate of 5 HP/s while readied, AUTOMATICALLY TRIGGERING after charging 35 HP (7 seconds) or upon stowing the weapon.
+The Healing Effect restores 5 HP/s equal to the charge built, effectively becoming constant if the weapon is readied for 7 seconds.
+Healing Effect prevents HP gains from non-Chaos Reshaped x2 sources above (200 - Healing Charge Built) Maximum HP if active.
+ Healing Effect is not visually reduced by Brawn's Healing Penalties, resulting in a rubberbanding health bar as it triggers.
+  In practice, just takes this as a 5HP/s effect, as the missing ""already restored HP"" is covered by the Healing Effect anyway.
+I KEEP SEEING MORE POSTS ABOUT THIS. IT'S GETTING BLOWN WAY OUT OF PROPORTION
+
+↑Reduces the time needed in-combat to grant a stack of Chaos Reshaped to 11.5 seconds.",,,
+Chill Clip,,"While at or above 50% ↑40% Magazine Capacity:
+Direct Hits trigger a Stasis Burst, inflicting x60 Slow for 4+4 [1.5+0.5] seconds to enemies within 4? meters.
+Rapid-Fire Fusion Rifles and Rocket Sidearms inflict x40 Slow.
+Can only trigger once per shot.",,,
+Circle of Life,,"Upon triggering Support Frame Boost:
+25% [12.5%] increased damage for 10 ↑11 seconds.
+Buff persists through stow.",,,
+Close To Melee,,"Upon scoring a Glaive Projectile Kill:
+60% [30%] increased Glaive Melee Damage for 10 ↑11 seconds.
+Buff persists through stow.
+
+Dealing additional Projectile or Melee Damage extends the buff duration by +5 seconds, up to 10 ↑11 seconds.",,,
+Closing Time,,"As Magazine decreases below 50%, down to 0%:
+ Grants +10 ↑+? Range, +30? ↑+? Handling, 0.9x? Handling Duration Multiplier, and -5%? ↑-%? Accuracy Cone Size at 50% Magazine.
+Dynamically scales up to +20 ↑+? Range, +50? ↑+? Handling, 0.8x? Handling Duration Multiplier, and -10%? ↑-?% Accuracy Cone Size at 0% Magazine.
+
+Special Weapons receive halved benefits.",,,
+Clown Cartridge,,"Upon finishing a reload:
+Randomly grants between 10% ↑13% to 50% Increased Magazine Capacity. Always rounds up.
+Averages out to 30% ↑31.5% Increased Magazine Capacity.",,,
+Cluster Bomb,,"Releases 8 Cluster Bombs on impact.
+Cluster Bombs explode on impact, each dealing up to 150 ↑165 [11 ↑12] damage with no falloff over 4 meters.",,,
+Cold Steel,,"Powered Sword Hits inflict Slow for 4.25+? [1.5+?] seconds.
+
+Light Attacks inflict x40 Slow.
+Heavy Attacks inflict x60 Slow.
+Flash Counter's disorienting blast inflicts x60 Slow.
+
+↑Passively grants +10 Ammo Capacity (Swords) and +10 Magazine Stat (Identical to Tactical Mag)",,,
+Collective Action,,"On Elemental-Pickup Interaction:
+30% ↑33% [10% ↑11%] increased damage for an Elemental-Pickup based duration.
+
+Firesprites and Void Breaches grant +8 seconds. 
+Ionic Traces, Stasis Shards, and both the Pickup AND Explosion of Tangle/Arc Elemental Orb grant +4 seconds. 
+Additional pickups extend the buff duration by their corresponding duration, up to 16 seconds.
+Buff can be activated while stowed, and persists through stow.",,,
+Collective Demolition,,"On Elemental-Pickup Interaction:
+Scoring hits grants ↑increased Grenade Ability Energy for an Elemental-Pickup based duration.
+
+Firesprites and Void Breaches grant +8 seconds. 
+Ionic Traces, Stasis Shards, and both the Pickup AND Explosion of Tangles/Arc Elemental Orbs grant +4 seconds. 
+Additional pickups extend the buff duration by their corresponding duration, up to 16 seconds.
+Buff can be activated while stowed, and persists through stow.
+
+Grenade Ability Gains:
+PENDING AT SOME POINT :)
+PENDING AT SOME POINT :)
+PENDING AT SOME POINT :)",,,
+Collective Pugilism,,"On Elemental-Pickup Interaction:
+Scoring hits grants ↑increased Melee Ability Energy. for an Elemental-pickup based duration.
+
+Firesprites and Void Breaches grant +8 seconds. 
+Ionic Traces, Stasis Shards, and both the Pickup AND Explosion of Tangles/Arc Elemental Orbs grant +4 seconds. 
+Additional pickups extend the buff duration by their corresponding duration seconds, up to 16 seconds.
+Buff can be activated while stowed, and persists through stow.
+
+Melee Ability Gains:
+Spreadshot HC: 0.5% ↑0.55%
+Burst Sidearm: 0.78% ↑0.86%
+Fusion Rifle: 1.15% ↑1.27%
+Rocket Pulse: 1.95% ↑2.15%
+Sidearm: 2.34% ↑2.57%
+Scout: 3.34% ↑3.67%
+Rocket Launcher: 12.9% ↑14.2%",,,
+Compulsive Reloader,,"While above 50% Magazine Capacity:
++50 ↑55 Reload Speed and 0.95x Reload Duration Multiplier.",,,
+Controlled Burst,,"Upon scoring a hit with every bolt in the burst, or upon scoring a Weapon Kill:
+20% increased damage and 0.9x Charge Time Multiplier for 2 ↑2.5 seconds.
+Buff persists through stow.",,,
+Cooling Baubles,,"Upon collecting an Elemental Pickup or Orb of Power:
+Dissipates -33?% ↑-35% Heat.",,,
+Cornered,,"While within 15 metres of 2 enemies:
+0.85x Charge/Draw Time Multiplier ↑and +10 Stability.
+Buff lingers for 1.5 seconds once criteria isn't met.
+
+↑Passively grants +5 Stability.",,,
+Counterattack,,"Upon receiving damage within 0.5 seconds of starting to guard:
+50% increased damage for 2 ↑3 seconds.",,,
+Crystalline Corpsebloom,,"On Weapon Kill:
+Grants Crystalline Corpsebloom for 4 seconds.
+
+While Crystalline Corpsebloom is active:
+Weapon Kills cause the enemy to release a Stasis Seeker on death.
+Stasis Seeker travels 3? meters in a random direction, spawning a Medium? ↑Large Stasis Crystal upon expiring.",,,
+Danger Zone,,"While within 15 metres of 3 enemies:
+?% Increased Blast Radius and decreased self damage.
+Buff lingers for 3.5 seconds once criteria isn't met.
+
+Grenade Launchers: 40% Decreased Self Damage.
+Rocket Launchers and Rocket Sidearms: 99.99% Decreased Self Damage, and allows Rocket Jumping.
+
+↑Passively grants +5 Blast Radius.",,,
+Deconstruct,,"Upon scoring a Magazine-Based amount of hits within 6 seconds of each:
+40% increased damage against Constructs and Vehicles for 5 ↑6 seconds. Additional hits while the perk is active will refresh the duration of the damage buff.
+Refills 10% Ammo, rounded up.
+Ammo Refill has no cooldown and can be triggered repeatedly by scoring the needed hits again.
+
+Hits required to activate:
+50% [25% Primary] of Magazine + 2, rounded down | Bows: 3 Hits
+Hits against Constructs/Vehicles progress Primary Weapons by 1.5x and Special Weapons by 2x.
+
+Wave Frame Grenade Launchers:
+3 Hits. Direct Hits count as 2 hits. Doesn't receive bonus progress against Constructs/Vehicles.",,,
+Delicate Tuning,,"As Heat increases from 0%, up to 50%:
+Grants up to +? ↑22? Range, +? ↑+? Handling, and -?% ↑-?% Accuracy Cone Growth at 0% Heat.
+Buff dynamically scales from 100% effect at 0% Heat, down to 50% effect at 50% Heat.",,,
+Demolitionist,,"On Weapon Kill:
+Grants 10% ↑11% Grenade Ability Energy. 
+ Fusion Rifles, Glaives, Shotguns, and Sniper Rifles grant 20% ↑22% Grenade Ability Energy.
+
+ Grenade Ability Usage refills Magazine. 
+Incurs a 3 second cooldown between Magazine Refills.",,,
+Demoralize,,"On Precision Kill: 
+Target triggers a Void Burst, inflicting Weaken to enemies within 7 meters.
+Incurs a 1.5? ↑1 second cooldown between activations.",,,
+Desperado,,"Upon finishing a reload within 5.2 seconds of scoring either a Precision Kill or 3 Kills within 3 seconds of each:
+0.7x Fire Recovery Delay for 6 ↑7 seconds.
+Buff can be refreshed by reactivating the perk. Buff is removed on stow.",,,
+Desperate Measures,,"On Weapon Kill:
+Desperate Measures x1 | 10% increased damage for 7 ↑7.5 seconds. Additional Weapon Kills refresh the buff duration.
+
+On Grenade or Melee Kill:
+Desperate Measures x2 | 20% increased damage for 7 ↑7.5 seconds. Additional Weapon Kills refresh the buff duration.
+
+Upon scoring an additional Grenade or Melee Kill while Desperate Measures x2 is active:
+Desperate Measures x3 | 30% increased damage for 7 ↑7.5 seconds. Additional Weapon, Grenade, and Melee Kills refresh the buff duration.
+
+Buff can be activated while stowed, and persists through stow.",,,
+Destabilizing Rounds,,"On Weapon Kill:
+Target triggers a Void Burst, inflicting Volatile to enemies within 7 metres.
+Grants Volatile Rounds for 3 ↑4.5 seconds.
+Incurs a 1.5 second cooldown upon activating.",,,
+Detonator Beam,,"Upon scoring 25 ↑20 hits within ? seconds of each:
+Triggers an explosion around the target, dealing 250 [100] Element-Matching Damage, decreasing to 50% damage over 8 meters.",,,
+Dimensional Shift,,"On Void Breach Pickup:
+Grants Dimensional Breach until the next Weapon Kill.
+Can be triggered and persists through stow.
+
+Upon scoring a Weapon Kill while Dimensional Breach is active:
+Weapon Kills grants 22.5 ↑25 Void Overshield for 8+4 seconds for the next 5? seconds.
+Additional Weapon Kills extend the buff duration to 5 seconds.",,,
+Discord,,"Upon readying a weapon within 5 seconds of scoring a kill with a different weapon:
+0.75x ADS Duration Multiplier, -25% Accuracy Cone Size, and +30 Airborne Effectiveness for 7 ↑8 seconds.
+Buff persists through stow.
+
+On Weapon Kill, while Discord is active:
+Refills Magazine on Primary Weapons | Refunds 1 Ammo per shot on Special and Power Weapons.",,,
+Disorienting Grenades,,"Passively grants -200 Blast Radius, 25% decreased damage, and 15% decreased explosion damage radius.
+
+Rank-and-File, Elite, and Miniboss Combatants within 6 metres of the explosion are disoriented for 4.5 seconds.
+Champions and Bosses can be considered disoriented but will not be impaired by its effects. Disorient radius cannot be altered.
+
+Guardians briefly lose their HUD and have their screen distorted for up to ? seconds. Duration varies depending on the distance from the blast.",,,
+Disruption Break,,"On Elemental, Barrier or Guardian Shield Break:
+Inflicts Kinetic Damage Vulnerability on the enemy, increasing Kinetic Damage Taken by 50% for 5.5 ↑? [5] seconds. Does not affect Stasis or Strand Damage.
+Stacks with all other Buffs and Debuffs (including itself).
+ Can be applied multiple times on a single enemy, with each stack having its own duration and stacking multiplicatively.",,,
+Dragonfly,,"On Precision Kill:
+Target explodes, dealing Ammo-Type Based [95.3] Weapon-Matching Damage over a 8 meter radius, down to a minimum of 0% Damage at the farthest point.
+Primary Ammo = 332 ↑365
+Special Ammo = 433 ↑477
+Heavy Ammo = 397 ↑438",,,
+Drop Mag,,"Passively grants +30 Reload Speed, 0.9x Duration Multiplier, and -20 Magazine Size Stat.",,,
+Dual Loader,,Reloading refills an extra 1 ↑2 Ammo at a time.,,,
+Duelist's Trance,,"On Sword Kill:
++60 ↑+65 Guard Efficiency, +60 ↑+65 Guard Resistance, +60 ↑+60 Guard Endurance, and +60 ↑+65 Charge Rate.
+Buff is removed on stow.",,,
+Dynamic Sway Reduction,,"While holding down the trigger:
+-?% ↑-?% Accuracy Cone Size, -10% ↑-12.5% Accuracy Cone Growth, and +1 Stability per shot.
+Stacks up to -?% Accuracy Cone Size, -100% Accuracy Cone Growth, and +10 Stability after firing 10 ↑8 shots.
+Effect at maximum strength removes all bullet spread and grants higher than initial accuracy.",,,
+Eager Edge,,"Upon readying a Sword:
+80% ↑100% Increased Lunge Distance for the next swing within 3 seconds. Airborne Lunge Distance is decreased by 20%.
+Incurs a 3 second cooldown after the buff is removed. Buff is removed on stow.",,,
+Eddy Current,,"After sprinting for 1.5 seconds while the weapon is readied:
++? Handling, 0.95x Handling Animation Multiplier, +20 Reload Speed, and 0.95x Reload Duration Multiplier for 3 ↑? seconds.
+Starting to sprint refreshes the buff duration.
+
+While Amplified:
+Grants the sprint bonuses passively, and increases the Reload Speed buff to +60 ↑+?.",,,
+Elemental Capacitor,,"Passively grants Stat Bonuses depending on the element of the equipped Super Ability.
+
+Solar: +50 ↑+55 Reload Speed.
+Arc: +50 ↑+55 Handling.
+Void: +20 ↑+25 Stability.
+ Stasis: +20 ↑+25 Recoil Direction and 20% Decreased ADS Movement Speed Penalty.
+Strand: +20 ↑+25 Airborne Effectiveness.",,,
+Elemental Honing,,"Dealing Elemental Damage grants a stack of Elemental Honing for 20 ↑23 seconds for each unique Element used, up to a maximum of 5 stacks by using 5 unique elements.
+Buff duration is refreshed upon gaining a stack, and cannot be refreshed once 5 stacks have been reached.
+Buff can be activated and persists through stow. Kinetic Damage does not trigger the buff.
+
+Elemental Honing x1 | 2.5% [1.25%] Increased Elemental Weapon Damage and 10% Increased Kinetic Weapon Damage.
+Elemental Honing x2 | 10% [5%] Increased Elemental Weapon Damage and 20% Increased Kinetic Weapon Damage.
+Elemental Honing x3 | 20% Increased Elemental Weapon Damage and 30% Increased Kinetic Weapon Damage.
+Elemental Honing x4 | 30% Increased Elemental Weapon Damage and 35% Increased Kinetic Weapon Damage.
+Elemental Honing x5 | 35% Increased Elemental Weapon Damage and 40% Increased Kinetic Weapon Damage.",,,
+En Garde,,"Upon readying a Sword:
+30% Increased damage for 1.5 ↑2? seconds.
+Incurs a 2? second cooldown after the buff is removed.",,,
+Encore,,"On Weapon Kill:
++5 Range, +8 Stability, and -1.25% Accuracy Cone Size per stack for 7 ↑7.5 seconds, up to a maximum of 4 stacks. Precision Kills grant 2 stacks.
+Additional Weapon Kills refresh the buff duration.
+Buff persists through stow.",,,
+Energy Transfer,,"While Guarding with a Sword:
+Every point of damage taken grants Class Ability Energy.
+
+1.5% ↑1.55% Class Ability Energy when Melee Damage is blocked.
+1% ↑1.25% Class Ability Energy when Non-Melee Damage is blocked.
+0.5% ↑0.625% Class Ability Energy when receiving Non-Blocked damage.",,,
+Enlightened Action,,"Upon scoring a hit:
+Grants stacks of Enlightened Action for 2 seconds, up to a maximum of 12.
+Enlightened Action grants an average of +4 Handling and Reload Speed per stack, up to +50 ↑+55? Handling and +50 ↑+55? Reload Speed.
+
+Enlightened Action:
++2 | +5 | +5 | +3 | +5 | +5 | +5 | +5 | +3 | +2 | +5 | +5 Handling and Reload Speed.
+
+Hand Cannon hits grant 3 stacks. Bow hits grant ? stacks.
+Automatic Weapons grant 1 stack per hit.",,,
+Ensemble,,"While an ally is within 15 metres:
++30 ↑+35 Handling and +40 ↑+45 Reload Speed.
+Buff lingers for 1.5 seconds once criteria isn't met.",,,
+Envious Arsenal,,"Upon dealing ANY damage with both other weapons, and then readying the weapon:
+Fully refills magazine.
+Damage-Over-Time effects also work.
+
+↑Passively grants +10 Ammo Generation.",,,
+Envious Assassin,,"Upon readying the weapon after scoring kills with a different weapon:
+Overflows Magazine from reserves based on the amount of kills achieved, up to 200% Increased Magazine Size.
+
+Primary Weapons: 10% ↑12.5% Increased Magazine Capacity per Kill.
+Special Weapons | Power Weapons: 20% ↑22.5% Increased Magazine Capacity per Kill.
+
+Each activation can grant up to 100% Increased Magazine Capacity if activated with a full magazine. Always rounds magazine up.
+ Can overflow based on the magazine size at the moment of swapping, i.e. if empty and after reaching the max bonus, magazine capacity will be fully refilled. ",,,
+Explosive Head,,"Bows deal 50% of their Non-Precision Direct Impact Damage as an Explosive Payload.
+Explosive Payload detonates after a distance-based timer, damaging enemies within 3 meters.
+Explosive Payload portion deals 30% increased damage and inflicts increased stagger against Combatants.
+
+Impact Damage's Precision Multiplier is increased to offset the Explosive Payload portion lacking the ability to score Precision Hits.
+New Ratio = (Base Ratio - 50%) / (1 - 50%)
+
+Overall Damage Increase:
+Damage is increased by 15% of the Weapon's Bodyshot Damage. Precision Damage Increase is equal to 15% / Precision Multiplier.
+Damage remains the same.
+
+↑Passively grants +5 Accuracy.",,,
+Explosive Light,,"On Orb of Power Pickup: 
+Grants a stack of Explosive Light, up to a maximum of 6 ↑7 stacks.
+Stacks can be obtained while stowed, and are lost on death.
+
+Firing consumes a stack of Explosive Light, granting increased damage, and setting the Blast Radius stat to 100.
+Grenade Launchers receive 60% increased explosive damage.
+Rocket Launchers receive 25% increased impact and explosive damage. Does not increase Wolfpack Rounds Damage.",,,
+Explosive Payload,,"Weapons deal 50% of their Non-Precision Direct Impact Damage as an Explosive Payload.
+Explosive Payload detonates on impact, damaging enemies within 3 meters.
+Explosive Payload portion deals 30% increased [7% decreased on Hand Cannons, ] damage and inflicts increased stagger.
+
+Impact Damage's Precision Multiplier is increased to offset the Explosive Payload portion lacking the ability to score Precision Hits.
+New Ratio = (Base Ratio - 50%) / (1 - 50%)
+
+Overall Damage Increase:
+Damage is increased by 15% of the Weapon's Bodyshot Damage. Precision Damage Increase is equal to 15% / Precision Multiplier.
+Bodyshot damage remains the same. Precision Damage remains ""roughly"" the same.
+
+↑Passively grants +5 Reload Speed.",,,
+Eye of the Storm,,"As Shield HP drops, initially triggering at 40 Shield HP, maxing out in effect at 0 Shield HP:
+Linearly grants up to +30 ↑+33 Handling, -40% ↑-44% Accuracy Cone Size, and -17% ↑-19% Accuracy Cone Growth.
+Buff dynamically scales from 0% effect at 80 Shield HP, up to 100% effect at 0 Shield HP (also known as Critical Health)
+ Buff lasts until Shields are restored to 80 Shield HP.",,,
+Feeding Frenzy,,"On Weapon Kill:
+Grants Reload Speed and Reload Duration Multiplier per stack for 3.5 seconds, up to a maximum of 5 stacks.
+Buff persist through stow.
+
++8 ↑+13 | +50 ↑+55 | +60 ↑+65 | +75 ↑+85 | +100 ↑+100 Reload Speed.
+0.975x | 0.9x | 0.87x | 0.84x | 0.8x Reload Duration Multiplier.",,,
+Field Prep,,"Passively grants +20 ↑+30 Ammo Generation.
+
+While Crouched:
++50 ↑+55? Reload Speed, 0.8x Reload Duration Multiplier, and 0.8x Ready/Stow Duration Multiplier.",,,
+Firefly,,"On Precision Kill:
+Target explodes, dealing up to 104 [80] Solar Damage in a 7.5 metre radius, and grants +50 +55 Reload Speed for 6 seconds. 
+Reload Buff persists through stow. Damage against Combatants scales differently by Weapon Type and Combatant Rank :)",,,
+Firing Line,,"While within 15 metres of 2 allies:
+20% Increased Precision Damage.
+
+↑+10 Handling while perk is active.",,,
+Firmly Planted,,"While Crouched:
++20 ↑+25 Stability, +30 ↑+35 Handling, -40% Accuracy Cone Size, -17% Accuracy Cone Growth, and -80% Recoil Yaw (Horizontal Recoil)
+[Fusion Rifles] 10 ↑+13 Stability, +15 ↑+18 Handling, -20% Accuracy Cone Size, -8.5% Accuracy Cone Growth, and -40% Recoil Yaw (Horizontal Recoil)",,,
+Flash Counter,,"Upon receiving damage while guarding:
+Triggers a Frontal Blast, dealing up to 110 [?] Weapon-Matching Damage and disorienting Combatants in a large cone up to ~8? meters away for 5 ↑6 seconds.
+Damage scales from 75 [14] at point-blank, up to 110 [45] at ? meters. Concussion strength against Guardians scale similarly with distance.
+Damage against Combatants scales with Combatant Rank Modifiers and counts as Weapon Damage.
+Incurs a 2.5 second cooldown between activations.",,,
+Focused Fury,,"Upon scoring 35% of Magazine rounded up, as Precision Hits:
+25% increased damage for 11 ↑12 seconds. Precision counter is reset on stow or reload.
+Buff can be refreshed while active, and persists through stow. Does not increase the damage of Explosive Damage Perks.",,,
+Fourth Time's The Charm,,"Scoring 4 Precision Hits within 2 ↑3 seconds of each generates 2 Ammo to Magazine.
+Ammo Generation cannot generate ammo past Base Magazine Size.
+Timer between hits persists through stow.",,,
+Fragile Focus,,"Grants +20 Range while Shields are active.
+Deactivates upon reaching Critical Health.
+
+ Reactivates after 1↑0.5 seconds of Shield HP being restored to full.",,,
+Frenzy,,"After having maintained a state of dealing or receiving damage every 5 ↑5.5 seconds for at least 12 seconds:
+15% Increased damage, +100 Handling, and +100 Reload Speed for 7 seconds. 
+Dealing or receiving damage refreshes the buff duration.
+Buff can be activated while stowed, and persists through stow.",,,
+Full Auto Trigger System,,"Passively grants 0.9x Fire Recovery Delay on Shotguns.
+The perk version of the ""Full Auto Firing"" setting in Gameplay on every other Weapon Type.
+
++And I guess it grants +5 Stability on The Last Dance, The Last Perdition, and Lonesome.",,,
+Full Choke,,"While ADS:
+-3.25% Pellet Spread.
+Reduces Precision Damage Multiplier from 1.1078x to 1.0294x, or a 7.6% Precision Damage Penalty.
+
+↑Passively grants +2 Handling.",,,
+Full Court,,"After 0.2 seconds of the projectile being fired:
+Up to 35% Increased Explosive and Burn (DoT) Damage based on the projectile lifetime.
+Linearly scales from 0% increased damage at 0.2 seconds, up to 35% increased damage at 1.1 seconds of projectile lifetime
+
+↑Passively grants +5 Blast Radius.",,,
+Gear Shift,,"Upon finishing a reload within ? seconds of a Weapon Kill or becoming Amplified:
+Grants a stack of Gear Shift for ↑15 seconds, up to a maximum of 5 stacks.
+Buff can be triggered and persists through stow.
+
+Gear Shift x1 | 15% Increased Weapon Damage.
+Gear Shift x2 | 20% Increased Weapon Damage
+Gear Shift x3 | 25% Increased Weapon Damage
+Gear Shift x4 | 30% Increased Weapon Damage
+Gear Shift x5 | 35% Increased Weapon Damage",,,
+Genesis,," Energy Weapons generate 1 Ammo against Matching Combatant Elemental Shields per hit.
+
+Upon breaking a Combatant, Barrier, or Guardian Shield:
+ Refills magazine.
+
+↑Passively grants +5 Handling.",,,
+Golden Tricorn,,"On Weapon Kill:
+Golden Tricorn x1 | 15% Increased damage for 7 seconds. 
+Additional Weapon Kills refresh the buff duration to 7 ↑8 seconds.
+Buff is removed on stow.
+
+On Grenade or Powered Melee Kill, while the buff is active, if the Weapon's Element matches the Grenade or Melee Element, respectively:
+Golden Tricorn x2 | 50% increased damage for 10 seconds.
+ Additional Grenade or Powered Melee Kills refresh the buff duration to 10 seconds.
+Buff is removed on stow.",,,
+Grave Robber,,"Upon dealing Powered Melee Damage, or upon scoring a Melee Kill:
+Refills Magazine.
+Incurs a 3 second cooldown between Magazine Refills.
+
+↑Passively grants +5 Handling.",,,
+Gutshot Straight,,"While ADS:
+ -15% ↑-10%? Auto Aim Cone Size and increased Non-Precision Non-Weakspot Damage,
+
+20% Increased Non-Precision Damage: Auto Rifles, Bows, Hand Cannons, Scout Rifles, and Sniper Rifles.
+10% Increased Non-Precision Damage: Machine Guns, Pulse Rifles, Sidearm, Submachine Guns, and Trace Rifles.",,,
+Harmony,,"Upon readying a weapon within 3 seconds of getting a kill with a different weapon:
+20% Increased damage and +15 Handling for 7 ↑8 seconds.
+Buff persists through stow.",,,
+Hatchling,,"Upon scoring a Precision Kill OR 3 kills within 3 seconds of each:
+Spawns 1 ↑2 (at a 10?% chance) Threadling on Enemy Death Location. ",,,
+Headseeker,,"Upon dealing direct non-Precision Weapon Damage:
+Grants increased Precision Damage and 3?% Increased Auto Aim Cone Size for 0.55 seconds. 
+Dealing additional Non-Precision Damage refreshes the buff duration.
+The perk actually multiplies the Precision Bonus by 1.2x, but the actual Precision Damage Increase results are easier to explain.
+
+Precision Damage Increase per Intrinsic Frame:
+Adaptive Pulse = 7.1% | Aggressive Pulse = 10% | Heavy Burst Pulse = 9.5%
+High-Impact Pulse = 8.74% | Lightweight Pulse = 6.3% | Rapid-Fire Pulse = 10.3%
+Adaptive Burst Sidearm = 8.46% | Heavy Burst Sidearm = 7.36%
+Precision Scout Rifle = 8.66%
+Heavy Burst Hand Cannon = 7% increased Weakspot Damage.
+
+↑Passively grants +5 Stability.
+
+What even is a Weakspot? How is it different from a Precision Hit?
+Weakspot Hits that do not register as a Precision Hit can still benefit or trigger Weakspot effects, such as Headseeker, or Heavy Burst Hand Cannon's intrinsic 9.5% Weakspot Damage Buff.
+Similarly, Precision Hits are not always scored on Weakspots, and may not trigger Weakspot effects.
+One such example are Shielded Combatants. Weakspot Damage Increases will work when other Precision Hit Increases wouldn't.",,,
+Headstone,,"On Precision Kill:
+Creates a Stasis Crystal on Enemy Death Location. 
+
+Tier 1 and Tier 2 Combatants = Medium ↑Large Crystal
+ Tier 3 and Tier 4 Combatants = Large Crystal 
+Guardians = Large Crystal
+
+Incurs a 5 second cooldown if 5 Stasis Crystals are created within ? seconds of the first.",,,
+Heal Clip,,"Upon finishing a reload within 5.3? ↑? seconds of a Kill:
+Grants x2 Cure.
+Allies within 15 metres receive x1 Cure.",,,
+Heating Up,,"On Weapon Kill:
+Grants a stack of Heating Up for 5.5 ↑6.5 seconds, up to a maximum of 2 stacks. 
+Buff persists through stow.
+
+Heating Up x1 | +15 Stability, +20 Recoil Direction, -15% Accuracy Cone Size, and -15% Accuracy Cone Growth.
+Heating Up x2 | +30 Stability, +40 Recoil Direction, -25% Accuracy Cone Size, and -25% Accuracy Cone Growth.",,,
+High Ground,,"On Weapon Kill:
+Grants 1 [2] stacks of High Ground.
+
+Upon dealing damage while 2? [5 on Primaries | 2 on Special and Power weapons] meters above an enemy, while grounded:
+Grants 3 [1 on Primary Weapons | 3 on others] stacks of High Ground. 
+The shot that triggers High Ground does receive the damage increase.
+
+High Ground:
+10% [5%] | 17.5% [10%] | 25% [15%] Increased Damage for 7 seconds.
+Dealing additional damage while above an enemy, or scoring a kill refreshes the buff duration.
+Buff persists through stow.
+
+↑Passively grants +5 Reload Speed.",,,
+High-Caliber Rounds,,"Passively grants +5 ↑+7 Range.
+
+Hits inflict increased Flinch on Enemies.
+Tier 1 and Tier 2 Rank-and-File can be repeatedly staggered. Higher Tier Combatants stagger quicker.
+ Flinch against Guardians varies based on Weapon Damage and Weapon Archetype. Flinch Increase ranges between 5% to 10%",,,
+High-Impact Reserves,,"As Magazine decreases below 50% ↑55%, down to maximum effect at 7.5% Magazine:
+12.1% [3%] to 25.6% [6%] Increased direct damage. 
+Does not increase the damage of Explosive Damage Perks.",,,
+Hip-Fire Grip,,"While hipfiring:
+20% Increased Aim Assist Falloff Distance, Reticle Stickiness Falloff Distance, and Damage Falloff Distance.
++15 Aim Assist, +2.7° Precision Angle Threshold, -30% Accuracy Cone Size and +25 Stability.
+Precision Angle Threshold does not prefer Precision Hits over Body Hits if both cones overlap.
+
+Shotguns, Sniper Rifles, Fusion Rifles, and The Last Word do not benefit from Damage Falloff Increases.
+Precision Angle Threshold cannot exceed regular Aim Assist Cone Size.
+
+↑Stronger effect. Accuracy Cone Size remains unchanged.",,,
+Immovable Object,,"While blocking and stationary:
+Glaive Projectile Hits grant +90% ↑+100% increased Weapon Energy.
+Glaive Projectiles hits grant 25% Weapon Energy by default.",,,
+Impact Casing,,Passively grants 10% Increased Rocket Impact Damage and +10 ↑+12 Stability.,,,
+Impromptu Ammunition,,"On Weapon Kill:
+Grants 1.15x Special Ammo Progress and 1.1x Heavy Ammo Progress for 5 ↑5.5 seconds.
+Ammo Generation Multiplier is additive to Ammo Finder (Armor Mods) Multipliers.
+
+Scoring additional Weapon Kills extends the buff duration to 7 ↑7.5 seconds.",,,
+Impulse Amplifier,,"Passively grants +20 ↑+25 Reload Speed, 0.85x Reload Duration Multiplier, and Increased Projectile Velocity,
+Rocket Launchers are instead granted 0.8x Reload Duration Multiplier, alongside the usual bonuses.
+
+Projectile Velocity Increase:
+Rocket Launchers: 10% Increased Projectile Velocity Speed.
+Support Auto Rifles: 15% Increased Projectile Velocity Speed.
+Rocket Sidearm: 25% Increased Projectile Velocity Speed.",,,
+Incandescent,,"On Weapon Kill:
+Target explodes, dealing up to 30 Solar Damage and inflicting x30+10 ↑+15 Scorch over 4 meters.
+Elite+ Combatants and Guardians trigger a stronger explosion that inflicts x40+10 ↑x45+15 Scorch over 8 meters.
+Damage from the Scorching Explosion and Scorch can be increased through Weapon Damage Buffs and Debuffs and are unaffected by Combatant Rank Multipliers.
+
+↑Increases the number of Scorch Stacks applied.",,,
+Invisible Hand,,"Upon consecutively missing multiple shots within 2.5 seconds of each:
+Grants +25? Stability for 2.5 seconds. Additional misses refresh the buff duration.
+Buff is removed after 1? ↑? seconds of failing to miss.
+
+Misses in a row required:
+Auto Rifles and Submachine Guns: 10 misses.
+Pulse Rifle: 9 misses.
+Hand Cannons: 4 misses.
+Linear Fusion Rifle: 2 misses.
+↑Buff is removed within ? seconds of scoring a hit.",,,
+Iron Gaze,,Passively grants +20 Aim Assist and -20 ↑-15 Range.,,,
+Iron Grip,,Passively grants +20 Stability and -20 ↑-15 Reload Speed.,,,
+Iron Reach,,Passively grants +20 Range and -20 ↑-15 Stability,,,
+Jolting Feedback,,"Upon scoring multiple direct hits within 3 seconds of each:
+The next direct hit inflicts Jolt. 
+Being Amplified reduces the amount of hits needed to trigger Jolting Feedback.
+Hit counter persists through stow. Hits do not have to be on the same target.
+
+Direct Hits needed to grant Jolting Shot | Amplified:
+SMGs, Traces: 18 ↑17 | 13
+Machine Gun: 16 ↑14 | 11
+Auto Rifle: 15 ↑14 | 11
+Pulse Rifles: ↑11 | 9
+Sidearm: ↑9 | 7
+HCs (+Uncivil): 7 ↑4 | 2
+Scout Rifles: ↑4 | 2
+Bow: ? ↑2 | 1
+Rocket Pulse: ↑7 | 5
+Sword: 7 ↑4 | 3
+Rocket Sidearm: ? ↑3 | 2
+Glaive: 4 ↑3 | 3
+Linear Fusion Rifle: 4? ↑3 | 2
+Heavy Grenade Launcher: 3 ↑2 | 2
+Shotguns, Snipers: ↑2 | 1",,,
+Keep Away,,"While no enemies are within 15 metres:
+ +10 Range, +30 ↑+35 Reload Speed, and -5?% ↑-?% Accuracy Cone Growth.",,,
+Kickstart,,"Upon sliding, after sprinting for 1.5 seconds:
+15% Increased damage and 0.8x Charge Time for ? ↑? seconds. 
+
+↑Buff duration is increased to ? seconds.",,,
+Kill Clip,,"Upon finishing a reload within 3.6 seconds of a Weapon Kill:
+25% Increased damage for 5 ↑5.5 seconds. 
+Buff can be refreshed through additional activations.
+Buff is removed on stow. Does not increase the damage of Explosive Damage Perks.
+
+↑Buff duration is increased to 5.5 seconds.",,,
+Killing Tally,,"On Weapon Kill:
+Grants a stack of Killing Tally, up to 3 stacks. 
+Stacks are removed on stow or reload.
+
+Killing Tally:
+10% | 20% | 30% increased damage
+5% | 10% | 15% increased damage
+
+↑Passively grants +10 Magazine Stat (Identical to Tactical Mag).",,,
+Killing Wind,,"On Weapon Kill:
++20 Range, +50 Mobility, +40 Handling, and 5% Increased Damage Falloff Distance for 5 ↑5.5 seconds.
+Scoring additional Weapon Kills extends the buff duration by +5 seconds, up to 8 seconds.
+Buff is removed on stow.
+
+↑Initial buff duration is increased to 5.5 seconds.",,,
+Kinetic Tremors,,"After 0.25 seconds of scoring multiple direct hits within 3 seconds of each against a single enemy:
+Emits 3 shockwaves underneath the enemy at the place of activation, at a rate of one per second.
+Each Shockwave deals up to 90 [20] Kinetic Damage over a 6 metre radius. Shockwave hits count as weapon damage.
+Kinetic Tremors cannot be re-triggered on the same enemy within 2 seconds of the last shockwave.
+Hit counter persists through stow.
+
+Tremor Damage against Combatants:
+Shockwave damage is based off of the Combatant Rank it is initially triggered on. 
+Deals 33.3% increased damage if triggered on an Miniboss or Boss.
+Damage is affected by Kinetic Bonus Damage and scales with Combatant Rank Modifiers. 
+
+Hits needed to activate:
+Submachine Guns: 14 ↑13
+Auto Rifles: 12 ↑11
+ Pulse Rifles: 11 ↑10
+Non-Burst Sidearms: 8 ↑7
+180RPM Hand Cannons and Scout Rifles: 6 ↑5
+120RPM and 150RPM Scout Rifles | 140RPM Hand Cannons : 5 ↑4
+Micro-Missile Sidearm: 4 ↑3
+Bows and Sniper Rifles: 3 ↑2",,,
+Lasting Impression,,"Passively grants +50 Blast Radius.
+
+Rockets attach on impact, detonating after 3 seconds, dealing an additional 35% Explosive Damage.
+
+↑Passively grants an additional +5 Blast Radius.",,,
+Lead from Gold,,"On Heavy Ammo Brick Pickup:
+Grants 25% ↑35% of Special Ammo Reserves.
+Equipping two Special Weapons halves the amount of ammo granted to each to 12.5% ↑17.5%.
+Buff can be activated while stowed
+
+↑Increases the amount of Special Ammo received to 35%.",,,
+Lead from Light,,"On Orb of Power Pickup: 
+Grants a stack of Lead from Light, up to ? stacks.
+
+Weapon Kills consume a stack of Lead From Light to grant 1.25x Special Ammo Generation Multiplier.
+
+↑Maximum Lead from Light stacks are increased to 6.",,,
+Light Touch,,"While Amplified, Radiant, or Devour is active:
++? Handling, +Reload Speed, 0.?x ADS Duration Multiplier.",,,
+Lone Wolf,,"Passively grants +5 ↑+6 Aim Assist, 0.9x ↑0.85x ADS Duration Multiplier, and +15 ↑+16 Airborne Effectiveness.
+
+While no allies are within 15 meters:
+Bonuses are doubled to +10 ↑+11 Aim Assist, 0.8x ↑0.75x ADS Duration Multiplier, and +30 ↑+32 Airborne Effectiveness.
+Buff appears as active on the weapon buff display.
+
+↑+6 Aim Assist, 0.85x ADS Duration Multiplier, and +16 Airborne Effectiveness.
++11 Aim Assist, 0.75x ADS Duration Multiplier, and +32 Airborne Effectiveness while no allies are within 15 meters.",,,
+Loose Change,,"Upon inflicting an Elemental Debuff:
++50 Reload Speed, +20 Aim Assist, and 20% Decreased ADS Movement Speed Penalty for 9 ↑10 seconds.
+Reactivating the perk refreshes the buff duration.
+Buff can be activated while stowed, and persists through stow.
+
+↑Buff duration is increased to 5 seconds.",,,
+Lucky Shot,,"Upon finishing a reload within ? seconds of a Precision Kill:
+Grants Lucky Shot Ready.
+Buff persists through stow.
+
+Upon scoring a Precision Hit while Lucky Shot is readied:
+ Grants Lucky Shot for 7 seconds.
+Precision Hits refill +1 Ammo while Lucky Shot is active.",,,
+Magnificent Howl,,"Scoring a Precision Kill grants a stack of Precision Final Blows, up to 10 stacks. 
+Stacks are consumed on reload, and persist through stow. Cannot gain stacks while Magnificent Howl is active.
+
+Upon finishing a reload while having Precision Final Blows stacks:
+Converts all Precision Final Blow stacks into Magnificent Howl stacks.
+Firing consumes a stack of Magnificent Howl per shot, granting 50% ↑55% increased damage and ?% Increased Damage Falloff Distance.  
+Scoring a Precision Kill while Magnificent Howl is active grants x1 Magnificent Howl stacks.
+Magnificent Howl stacks persist through stow.
+
+↑Magnificent Howl Damage Buff is increased to 55%.",,,
+Master of Arms,,"Upon scoring a Weapon Kill with any weapon:
+Master of Arms x1 | 15% Increased Damage for 7 ↑8? seconds. Timer starts on Weapon Kill.
+Buff persists through stow.
+
+Upon scoring a Weapon Kill with any weapon, while Master of Arms x1 is active:
+Master of Arms x2 | 25% Increased Damage for 4 ↑5? seconds. Timer starts on Weapon Kill.
+Additional Kills with any weapon refresh the Master of Arms duration. Buff drops down to x1 Master of Arms upon expiring.
+Buff persists through stow.
+
+↑Buff duration is increased. x1 to 8 seconds, and x2 to 5? seconds.",,,
+Mega Kill Clip,,"Upon finishing a reload within ? seconds of a Weapon Kill:
+40% Increased damage for ? ↑3 + (2 x Kills) seconds, up to a maximum of 20 seconds.
+Finishing a reload within ? seconds of the last Weapon Kill extends the buff duration by ↑+3 + (2 x Kills) seconds to the timer, up to 20 seconds.
+Kill counter persists through stows. Kill counter is reset upon finishing a reload. Can be procced multiple times as long as the reload is finished within ? seconds of the last kill.
+
+↑Buff duration is increased.",,,
+Meganeura,,"Upon scoring a Precision Hit:
+Grants a stack of Meganeura for 3.5 ↑4 seconds, increasing up to a maximum of 3 stacks.
+Buff persists through stow.
+
+On Precision Kill:
+Target explodes, dealing varies [95.3] Weapon-Matching Damage over a 7.5 meter radius, down to a minimum of 50% Damage at the farthest point.
+Explosion Damage is increased by the amount of Meganeura stacks.
+x1 = Dragonfly | x2 = 40% [?%] | x3 = 67.7% [?%]
+Damage against Combatants scales differently by Weapon Type and Combatant Rank :)
+
+Meganeura Damage:
+Primary Weapons = 378 | 530 | 634
+Heat Primary Weapons = 551 (634/1.15 lol)
+Sniper Rifle = 493 | 691 | 827
+Machine Gun = 452 | 541 | 758",,,
+Melee Momentum,,"On Glaive Melee Kill:
+Grants Weapon Energy and ?% Increased Movement Speed while Blocking for 10 seconds.
+Rank-and-File = 16.7% ↑?% Energy | Elite = ?% ↑?% | Miniboss = 50% ↑?% | Guardian = ?% ↑?%
+
+↑Increased Weapon Energy on Melee Kill.",,,
+Moving Target,,"While ADS:
++10 ↑+11? Aim Assist. 
+10% Decreased ADS Movement Speed Penalty.
+
+↑Aim Assist bonus is increased by an unknown amount.",,,
+Mulligan,,"On Miss:
+Primary Weapons have a 35% ↑40% chance to generate 1 Ammo.
+Special Weapons and Power Weapons have a 20% ↑25%? chance to generate 1 Ammo.
+
+↑Primary Weapons have a 40%? chance to generate ammo. 
+Special Weapons and Power Weapons have a 25%? chance to generate ammo.",,,
+Multikill Clip,,"Upon finishing a reload within 3.6 seconds of a Weapon Kill:
+17% | 33% | 50% increased damage for 5 ↑5.5 seconds if 1 | 2 | 3+ enemies were killed within 3.5 seconds of each.
+Buff is overwritten every time it is reactivated.
+Buff is removed on stow. Kill counter persists through stow.
+
+↑Buff duration is increased to 5.5 seconds.",,,
+No Distractions,,"After 1 ↑0.9 seconds of ADS without firing:
+ 35% Flinch Resist while ADS.
+Timer starts as soon as the ADS input is pressed.
+
+↑ADS timer is decreased to 0.9? seconds.",,,
+Offhand Strike,,"On Weapon Kill, and only while hipfiring:
+45% Increased Damage Falloff Start and End Distance, ?% Increased Aim Assist Falloff Start and End Distance.
++30 Stability, -95%? Accuracy Cone Size, -95%? Accuracy Cone Growth, and +~3° Precision Angle Threshold for 7 ↑+8 seconds.
+Precision Angle Threshold cannot exceed regular Aim Assist Cone Size.
+Buff is removed on stow.
+
+↑Buff duration is increased to 8 seconds.",,,
+One For All,,"Upon damaging 3 separate enemies within 3 seconds of each:
+35% Increased damage for 10 ↑11 seconds.
+Buff cannot be refreshed until its duration expires. Buff persists through stow.
+
+↑Buff duration is increased to 11 seconds.",,,
+One-Two Punch,,"Upon scoring a hit with 12 ↑10 pellets:
+Shotgun: 150% [100%] | Hand Cannon: 75% [50%] increased Melee Damage for the next Melee Hit within 3 seconds.
+Buff is removed on stow.
+
+One-Two Punch does not stack with the passive Melee Damage Increase against Frozen non-Boss targets. The higher buff of the two takes precedence.
+
+↑Pellet Activation Requirement is decreased from 12 to 10.",,,
+Onslaught,,"On Weapon Kill:
+Grants a stack of Onslaught, increasing Fire Rate and Reload Speed per stack for 4.5 ↑5? seconds, up to a maximum of 3 stacks.
+Additional Weapon Kills refresh the buff duration.
+Buff persists through stow.
+
+Onslaught:
+1.2x | 1.4x | 1.6x Fire Rate.
++15 | +25 | +35 Reload Speed.
+
+↑Buff duration is increased to 5? seconds.",,,
+Opening Shot,,"Grants the following bonuses for the first shot (of the burst):
+Primary/Power Weapons: +25 +30 Range, +20 +25 Aim Assist, -5% Accuracy Cone Size, and -10% Accuracy Cone Growth.
+Special Weapons: +13 ↑+15 Range, +10 +13 Aim Assist, -2.5% Accuracy Cone Size, and -5% Accuracy Cone Growth.
+Incurs a 3 second cooldown after shooting.
+
+↑Grants additional Aim Assist and Range.",,,
+Osmosis,,"On Grenade Ability Usage:
+Refills 50% of Magazine
+Changes Weapon Element to match Equipped Grenade-Element until stowed.
+Kinetic Damage Weapons lose their Combatant Damage Bonus. Can only refill once per activation until weapon is stowed.
+Effects that replace Grenade Abilities will trigger Osmosis, replacing the weapon's element with the currently equipped grenade.
+
+↑Passively grants +5 Handling.",,,
+Outlaw ,,"On Precision Kill:
++70 Reload Speed, and 0.9x Reload Duration Multiplier for 6 ↑7 seconds.
+Buff is removed on stow.
+
+↑Buff duration is increased to 7 seconds.",,,
+Overclocked Heatsink,,"Passively grants 2% increased damage ↑and +2 Handling at the downside of -10 Cooling Efficiency Stat.
+
+How do Heat Weapons work?",,,
+Overflow,,"On Special or Heavy Ammo Brick Pickup:
+Refills Magazine and grants 100 ↑120% Increased Magazine Capacity. 
+Buff can be activated while stowed.
+
+↑Ammo Brick Pickup grants 120% Increased Magazine Capacity.",,,
+Paracausal Affinity,,"Upon scoring an Alignment-matching Elemental Kill:
+20% increased damage for 6 ↑7 seconds.
+Additional Kills with Alignment-matching sources refresh the buff duration.
+Buff can be activated while stowed, and persists through stow.
+
+Light Alignment = Arc, Solar, and Void.
+ Darkness Alignment = Stasis and Strand.
+
+↑Buff Duration is increased to 7 seconds.",,,
+Perfect Float,,"After having maintained a state of dealing or receiving damage every 3 ↑3.5 seconds for at least 6 seconds:
++30 Airborne Effectiveness and 35% Flinch Resist for 10 ↑12 seconds. 
+Dealing or receiving damage refreshes the buff duration.
+Buff can be activated while stowed, and persists through stow.
+
+↑Damage Timer is increased to 3.5 seconds. Buff duration is increased to 12 seconds.",,,
+Permeability,,"On Class Ability Usage:
+Refills 50% of Magazine and changes Weapon Element to match Super-Element until stowed.
+Can only refill once per activation until weapon is stowed.
+
+↑Passively grants +5 Handling.",,,
+Perpetual Motion,,"While maintaining a movement speed of at least 2 meters per second:
+Grants x1 Perpetual Motion after 2 seconds, and x2 Perpetual Motion after 10 ↑9 seconds.
+Buff can be activated while stowed, and persists through stow, as long as criteria is met. Buff lingers for 0.5 seconds once criteria isn't met.
+
+Perpetual Motion x1 | +10 Stability, +10 Handling, and +10 Reload Speed.
+Perpetual Motion x2 | +20 Stability, +20 Handling and +20 Reload Speed.
+
+↑Perpetual Motion x2 is activated in 9 seconds.",,,
+Phase Magazine,,"Sets the Submachine Gun's Damage and Magazine Profile into that of a Precision Frame's.
+Does not change the intrinsic Frame bonus.",,,
+Physic,,"Upon triggering Support Frame Boost:
+Grants the Support Auto Element-Matching buff to the user and the targeted ally.
+
+↑Enhanced effect:
+Arc: Amplified for 5 seconds
+Solar: Restoration x1 for 5+2.5 sconds.
+Stasis: x2 Frost Armor for the user AND ally for 5 seconds.
+Strand: User releases 4 Unraveling Threads.",,,
+Precision Instrument,,"Upon scoring a Direct Weapon Hit:
+Grants a stack of Precision Instrument, up to a maximum of 6 stacks for 1.1 seconds. Lasts 2.1 seconds on weapons with Draw/Charge Time.
+Additional Direct Weapon Hits refresh the buff duration. All stacks are removed upon missing.
+Buff persists through stow.
+
+Adaptive Burst Linear Fusion Rifle exclusive: Requires 2 hits per stack. All stacks are removed upon missing, except when it doesn't :)
+Heavy Burst Frame exclusive: Can only get 1 stack per burst.
+
+4.17% | 8.34% | 12.5% | 16.7% | 20.83% | 25% Increased Precision Damage.
+↑5% | 10% | 15% | 20% | 25% | 30% Increased Precision Damage.
+Also increases Weakspot Damage (Precision Hits against Shielded Combatants)",,,
+Proximity Power,,"On Weapon Kill while within 15 meters of an enemy:
++15 ↑+18 Melee Stat per stack for 10 seconds, up to a maximum of +45 ↑+54 Melee Stat at 3 stacks.",,,
+Pugilist,,"On Weapon Kill:
+Grants 10% ↑11% Melee Ability Energy.
+Fusion Rifles, Glaives, Shotguns, and Sniper Rifles grant 20% ↑22% Melee Ability Energy.
+
+Upon dealing Melee Damage:
++35 Handling for 3 seconds.",,,
+Pulse Monitor,,"Upon reaching 30% ↑35%? Shield HP:
+Refills Weapon. Grants +50 Handling, and 0.95x Ready/Stow Animation Duration Multiplier.
+Buff lasts until Shield HP is restored above 30% ↑35%?, then lingers for 1 second.
+Buff can be activated while stowed, and persists through stow.",,,
+Quickdraw,,"Upon readying:
++100 Ready/Stow Handling, and 0.95x Ready Animation Duration Multiplier for 1 second, or until ADS.
+
+↑Passively grants +5 Handling.",,,
+Rampage,,"On Weapon Kill:
+10% | 21% | 33.1% increased damage for 4.5 ↑5 seconds.
+Additional Weapon Kills refresh the buff duration. Stacks decay one at a time.
+Buff persists through stow.",,,
+Rangefinder,,"While ADS:
++10 Range, 10% Increased Zoom and 5% Increased Projectile Velocity.
+
+↑Passively grants +5 Handling",,,
+Rapid Hit,,"Upon scoring a Precision Hit:
+Grants a stack of Rapid Hit for 2 seconds, up to a maximum of 5 stacks.
+Rapid Hit grants Stability, Reload Speed, and Reload Duration Multiplier.
+Triggers on any yellow damage number, such as bodyshots on Weakened Enemies.
+Buff persists through stow.
+
++2? | +12? | +14? | +18? | +25 Stability
++5 | +30 | +35 | +42 | +60 Reload Speed
+0.99x | 0.96x | 0.95x | 0.945x | 0.92x Duration Multiplier
+
+↑Stronger Effect.",,,
+Reaper's Tithe,,"Grants stacks of Reaper's Tithe based on the amount of simultaneously killed enemies, up to a maximum of 4 stacks.
+2 enemies = x2 | 3 enemies = x3 | 4 enemies = x4
+Allows a grace period of 1 second between kills past the 2nd one.
+
+Reaper's Tithe:
+20% | 30% | 40% Increased Weapon Damage for 15 ↑17 seconds. Timer only begins after firing.
+Additional Weapon Kills extends the buff duration by +6 seconds, up to 15 ↑17 seconds.
+Scoring a higher amount of simultaneous kills than the currently active stack amount will not ""upgrade"" the damage buff.",,,
+Reciprocity,,"Upon scoring a Support Frame Healing Hit on an ally:
+Restores 3 ↑3.5 HP to the user.",,,
+Recombination,,"Upon scoring an Elemental Kill:
+Grants a stack of Recombination, granting 10% ↑12.5% [5% ↑6.25%] increased damage for the next shot per stack, up to a maximum of 10 ↑8 stacks.
+Stacks can be obtained while stowed, and persist through stow.
+
+Damage Increase for the next shot:
+10% | 20% | 30% | 40% | 50% | 60% | 70% | 80% | 90% | 100%.
+↑12.5% | 25% | 37.5% | 50% | 62.5% | 75% | 87.5% | 100%
+
+5% | 10% | 15% | 20% | 25% | 30% | 35% | 40% | 45% | 50%.
+↑6.25% | 12.5% | 18.75% | 25% | 31.25% | 37.5% | 43.75% | 50%",,,
+Reconstruction,,"Every 6 ↑5.5 seconds, after not shooting for 6 ↑5.5 seconds:
+ Refills 25% of Magazine Capacity.
+Refill can overflow magazine up to 100% Increased Magazine Capacity.
+Buff can be activated while stowed, and persists through stow.",,,
+Recycled Energy,,"Upon manually loading Ammo within ? seconds of a Weapon Kill:
+Grants Ability Energy to the least-charged Ability based on the amount of kills.
+5.7% | 8% | 9.7% | 13.3% | 20%
+↑6% | 7.5% | 9.5% | 13.5% | 22%",,,
+Redirection,,"Upon scoring a hit against Rank-And-File Combatants:
+Grants 2 stacks of Redirection, up to a maximum of 30 stacks.
+Stacks persist through stow.
+
+Upon scoring a hit against an Elite, Miniboss, Boss, or Vehicle:
+Consumes up to 3 ↑2 stacks, granting 33% ↑50% increased damage per stack, up to 100% at 3 ↑2 stacks.
+Stacks are consumed even on Immune Hits.",,,
+Relentless Strikes,,"Upon scoring 3 Powered Sword Hits within 2 ↑3 seconds of each:
+Generates +1 Ammo.",,,
+Replenishing Aegis,,"While guarding with a Glaive:
+Refills 1 Ammo upon receiving damage.
+Incurs a 1 ↑? second cooldown upon activating.",,,
+Repulsor Brace,,"On Weapon Kill against a Void-Debuffed Enemy:
+Grants Void Overshield for 8+4 ↑9+4.5 seconds.",,,
+Reservoir Burst,,"Passively grants +30 Magazine Size.
+
+While at or above 100% Magazine Capacity:
+Grants 30% ↑33% Increased damage.
+Direct Damage Kills cause enemies to explode on death, dealing varying [162] Elemental Damage in a ? metre radius.
+Damage against Combatants scales with Combatant Rank Modifiers. Linear Fusion Rifles have an additional 1.3x multiplier against Combatants.
+
+Reservoir Burst Explosion Damage:
+High-Impact Fusion: 623? (OLD Loaded Question)
+Precision Fusion: 623
+Rapid Fusion: 637
+Aggressive Fusion: 758
+Precision LFR: 308
+Adaptive Burst LFR: 410",,,
+Reverberation,,"On Weapon Kill:
++100 Blast Radius for 5.5 ↑6 seconds. 
+Scoring Additional Weapon Kills refresh the buff duration.
+Does not affect Area Denial Frame DoT Fields.
+Buff persists through stow?",,,
+Reversal of Fortune,,"Upon missing twice within 6 seconds of each shot:
+Generates 1 Ammo.",,,
+Rewind Rounds,,"Upon emptying the Magazine:
+Refills 60% ↑70% of all damage instances scored. Always rounds up. Counter persists through stow.
+Requires shooting at least 28.5% of the Magazine Capacity for refill to activate. Always rounds up.
+Hits within 1? seconds of triggering the refill do not count. Displayed by the active buff indicator.
+
+Adaptive Burst Linear Fusion Rifle Behavior:
+Counts each bolt individually. Refill Amount is 14% of damage instances scored.",,,
+Ricochet Rounds,,"Passively grants +5 ↑+6 Range and +10 ↑+11 Stability.
+
+Bullets are guaranteed to ricochet off of surfaces.",,,
+Rimestealer,,"Upon shattering a crystal or killing a Frozen Enemy:
+Grants 1 ↑2 stacks of Frost Armor.
+Can also trigger with Glaive Melee.",,,
+Rolling Storm,,"On Weapon Kill:
+Grants x1 Bolt Charge.
+
+On Weapon Kill, while Amplified:
+Grants x2 Bolt Charge.
+
+↑Weapon Kills while Bolt Charge isn't active grant an additional Bolt Charge stack.",,,
+Seraph Rounds,,"Passively grants +3 ↑+4 Range and +7 ↑+8 Stability.
+
+Combines the penetration from Armor-Piercing Rounds, the guaranteed ricochets from Ricochet Rounds, and the flinch increase from High-Caliber Rounds.",,,
+Sharp Harvest,,"Upon scoring 3 Powered Sword Direct Hits within 1.5 ↑2 seconds of each:
+ Grants 5% Special Ammo Reserves.
+Equipping two Special Weapons halves the amount of ammo granted to 2.5%.",,,
+Shattering Blade,,"If Heavy Attack consumes all remaining Heavy Ammo:
+67% Increased damage for Grounded Heavy Attack.",,,
+Shield Disorient,,"On Matching Combatant Elemental Shield Break:
+Enemies within 7 metres become disoriented for 5 seconds",,,
+Shoot to Loot,,"Upon scoring a hit on a Special or Heavy Ammo Brick:
+Picks up Ammo and refills all equipped weapons.
+Triggers Ammo Pickup effects. Only activates if picking up ammo is possible by not having full Ammo.
+Can also pick up Orbs of Power without any additional effect. Splash Damage can also trigger Shoot To Loot.
+
+↑Passively grants +5 Range.",,,
+Shot Swap,,"On Weapon Kill:
+Grants 2 stacks of Shot Swap, up to a maximum of 6 stacks.
+ 
+Upon readying or stowing the weapon:
+Consumes a stack on stow.
+Grants +100 Ready/Stow Handling and 0.7x ↑0.65x Ready/Stow Duration Multiplier. ",,,
+Sleight of Hand,,"Upon readying the weapon after getting kills with other weapons and abilities while this weapon is stowed:
+Grants a stack of Sleight of Hand for 8.5 ↑9 seconds, up to a maximum of 3 stacks.
+Buff is removed on stow.
+
+Sleight of Hand x1 = +10 Stability, +10 Handling, and +10 Reload Speed.
+Sleight of Hand x2 = +20 Stability, +20 Handling, and +20 Reload Speed.
+Sleight of Hand x3 = +30 Stability, +30 Handling, and +30 Reload Speed.",,,
+Slice,,"On Class Ability Usage:
+The next 5 damage instances on non-Severed Enemies within 8 ↑9 seconds of each inflict sever.
+Scoring a damage instance on a non-Severed Enemy refreshes the buff duration.
+Buff can be activated while stowed, and persists through stow.
+If the severing hit kills an enemy, the perk will not trigger nor consume a stack. Can inflict Sever on Immune Enemies.",,,
+Slickdraw,,"Passively grants +100 Handling, 0.95x Ready Animation Duration Multiplier, and -20% ↑-15%? Auto Aim Cone Size.",,,
+Slideshot,,"Upon Sliding:
+Refills 15% of Magazine, and grants +20 ↑+22 Range, and +20? +22? Stability for 2.5 seconds. Only affects the first shot.
+Incurs a 0.3 seconds cooldown after activation. Can be activated multiple times in one slide. Buff is removed on stow.",,,
+Slideways,,"Upon Sliding:
+Refills 15% of Magazine/Dissipates 15% Heat, and grants +15? ↑+17? Stability and +30 ↑+33? Handling for 3 seconds. 
+Incurs a 0.5 seconds cooldown after activation. Buff is removed on stow.",,,
+Smoothbore,,Passively grants +15 ↑+17 Range and +7.5% Pellet Spread.,,,
+Snapshot Sights,,"0.5x ADS Duration Multiplier on Primary Weapons
+0.8x ADS Duration Multiplier on Special and Power? Weapons
+
+↑Passively grants +5 Stability.",,,
+Sneak Bow,,"Passively grants +15 Ammo Generation.
+
+While Crouched:
+Prevents Radar Ping when firing and increases Arrow Hold Time by 25%.
++? ↑+? Reload Speed, 0.8x Reload Duration Multiplier, ↑and +? Stability. ",,,
+Spike Grenades,,"Grants 12.12% | 12.5% increased Grenade Impact Damage and +10 ↑+12 Stability.
+Due to the Impact Damage being tied to the Blast Radius Stat on Grenade Launchers, a lower Blast Radius will provide higher overall damage. 
+Explosive Light increases Blast Radius to 100, decreasing the effect of Spike Grenades.
+
+Breech-Loaded Grenade Launchers
+0 Blast Radius = ?% total increased damage 
+100 Blast Radius = 2.5% total increased damage.
+
+Drum-Loaded Grenade Launchers
+0 Blast Radius = ?% total increased damage
+ 100 Blast Radius = 1% total increased damage.",,,
+Stats for All,,"After Damaging 3 Separate Enemies within 3 seconds of each:
++10 Range, 5% Increased Damage Falloff Distance, +10 Stability, +35 Handling, +35 Reload Speed, and 0.95x Reload Duration Multiplier for 10 ↑+11 seconds.
+Buff cannot be refreshed until its duration expires. Buff persists through stow.",,,
+Steady Hands,,"On Weapon Kill:
++100 Handling and 0.825x Handling Duration Multiplier for all equipped weapons for 8.5 ↑9.5 seconds.
+Additional Weapon Kills refresh the buff duration to 6.5 seconds.
+Buff remains active while stowed.",,,
+Sticky Grenades,,"Grenades stick to surfaces for up to 10 seconds on impact, and detonate once an enemy is within ? meters.
+Explosive Light increases Blast Radius to 100, increasing the effect of Sticky Grenades.
+
+Grants 30% Increased Explosive Damage and 85% Decreased Impact Damage.
+20 Blast Radius = -6% total decreased damage.
+48 Blast Radius = Unchanged damage.
+100 Blast Radius = 11% total increased damage.
+
+↑Passively grants +2 Reload Speed",,,
+Stopping Power,,"Increased Stagger Force against Combatants.
+Stagger inflicted is based on the Activity Difficulty.
+
+Upon damaging an Enemy at <30?% ↑<33% Health:
++? Aim Assist for 2 seconds.
+Grants increased damage based on 3 different Health thresholds.
+7% increased damage at <30% <↑33% Health | 10% at <23% Health | 15% increased damage at <18% Health.
+Shields are ignored, meaning Guardians only receive extra damage if they're under 33 HP. 
+Shielded Enemies are susceptible to the damage buff if their Health is under the aforementioned thresholds.",,,
+Strategist,,"On Weapon Kill:
+Grants 10% ↑11% Class Ability Energy.
+Fusion Rifles, Glaives, Shotguns, and Sniper Rifles grant 20% ↑22% Class Ability Energy.
+
+On Class Ability Usage:
++? Stability for ? seconds.",,,
+Subsistence,,"On Weapon Kill:
+Refills 10% ↑20% of Magazine.
+Submachine Guns and Auto Rifles refill 17% ↑20% of Magazine.",,,
+Successful Warm-Up,,"On Weapon Kill:
+0.625x Charge/Draw Time Multiplier for 6 seconds. 
+Additional Weapon Kills extends the buff duration by +4 ↑+5 seconds, up to 20 seconds.
+Buff is removed on stow.",,,
+Supercharged Magazine,,"While Amplified:
+Refills 5% of Magazine every 1.5 seconds.
+
+While Speed Booster is active:
+Refills 5% of Magazine every 0.25 seconds. 
+Can grant up to 100% Increased Magazine Capacity through refilling.
+
+Both effects work while stowed.
+
+↑Passively grants +15 Magazine Stat.",,,
+Surplus,,"Grants Stat Bonuses based on the amount of Powered Ability Charges.
+
+x1 Ability Charges = +5 Stability, +5 Handling, and +10 Reload Speed.
+x2 Ability Charges = +15 Stability, +25 Handling, and +25 Reload Speed.
+x3 Ability Charges = +25 Stability, +60 Handling, and +60 Reload Speed.
+
+↑Stronger Effect.",,,
+Surrounded,,"While within 15 meters of 3 enemies:
+40% ↑47% Increased Damage. Swords are granted 35% ↑41.8% Increased Damage.
+Rocket Launchers and Grenade Launchers are granted 35% ↑41.8% Increased Explosive Damage and 40% ↑47% Increased Impact Damage.
+Wolfpack Rounds are granted 35% ↑41.8% Increased Explosive Damage. ↑Wolfpack Round Impact Damage is increased by 5%.
+ Buff lingers for 1.5 seconds once criteria isn't met.",,,
+Swap Mag,,Passively grants 0.9x ↑0.?x Ready/Stow Duration Multiplier.,,,
+Swashbuckler,,"On Weapon or Melee Kill:
+6.7% | 13.3% | 20% | 26.6% | 33.3% Increased Damage for 4.5 ↑6.5 seconds. Melee Kills grant 5 stacks.
+Additional Weapon or Melee Kills refresh the buff duration.
+Buff is removed on stow.",,,
+Sword Logic,,"On Weapon Kill:
+Grants stacks of Sword Logic. The number of stacks gained is tied to the highest Enemy Rank killed in the current activation of Sword Logic.
+Rank-and-File Combatants = x1 | Elite = x2 | Champions, Minibosses = x3 | Boss = x4 | Guardians = x2 | Guardians in Super = x4 
+
+Sword Logic x1 | 15% Increased Damage for 5.5 ↑6.5 seconds.
+Sword Logic x2 | 25% [15%] Increased Damage for 7.5 ↑8.5 seconds.
+Sword Logic x3 | 35% Increased Damage for 10.5 ↑11.5 seconds.
+Sword Logic x4 | 50% Increased Damage for 15.5 ↑16.5 seconds.
+
+Additional Weapon Kills refresh the buff duration to the duration tied to the highest Enemy Rank killed.
+Buff persists through stow. Does not increase the damage of Explosive Damage Perks.",,,
+Sympathetic Arsenal,,"Passively grants +20 Reload Speed.
+
+Upon finishing a reload within 3.6 ↑? seconds of a Weapon Kill:
+Refills stowed weapons.",,,
+Tap The Trigger,,"Firing grants Tap The Trigger for 0.6 ↑0.76 seconds.
+Buff cannot be refreshed while it is active, and Automatic Weapon must stop firing to retrigger the buff.
+Semi-Automatic and Burst Weapons are able to retrigger the perk on the next shot once it expires.
+
+Tap The Trigger:
++40 ↑+? Stability, -50% ↑+?% Recoil, and -10% ↑-?% Accuracy Cone Size.
+[Fusion Rifles Only] +10 ↑+? Stability, -12.5% ↑-?% Recoil, and -2.5% ↑-?% Accuracy Cone Size.
+The initial shot does not benefit.",,,
+Target Lock,,"Damage instances within 0.2 seconds of each without missing increments a Magazine-capacity based counter towards a damage increase.
+
+Upon scoring >12.5% of Magazine as hits. 
+Grants a continuously increasing damage buff as further hits are scored, up to 110.33% of the Magazine capacity.
+Visual Buff Stacks to Magazine Thresholds:
+x2 = >35.5% | x3 = >54.5% | x4 = >74.5% | x5 = >110.33%
+
+Initially grants 16.7% ↑18.8% [10.46% ↑12.54%] increased damage that ramps up to 40% ↑45% [25% ↑30%] increased damage after scoring >110.33% of Magazine as hits
+Grants an average of 25% ↑28.3% [15.85% ↑19.02%] increased damage over an entire Magazine assuming no misses or ammo refill/generation.
+
+↑Damage Increase begins at 18.8% [12.54%] and ends at 45% [30%]. Results in a 28.3% [19.02%] Average Damage Increase over a full Magazine.
+
+Target Lock Calculator, courtesy of Clarity.",,,
+Tear,,"On Precision Kill: 
+Inflicts sever to enemies within ? meters for 10+5 seconds.
+Incurs a ? ↑? second cooldown between activations.",,,
+Thermal Atomization,,"As Heat increases from 50%, up to 100%:
+8.25% [3.5?%] to ~14% [?%] Increased Impact Damage.
+Does not increase the damage of Explosive Damage...High-Impact Reserves | Rev.1
+
+Direct Damage kills cause targets explode on death, dealing Weapon-Matching Damage up to 7.5 meters away, down to a minimum of 0% Damage.
+HC: 74 lmao [77?] Damage | SMG: 289 [?] Damage | Sniper: 552 [?] Damage ",,,
+Threat Detector,,"Grants a stack of Threat Detector for each enemy within 15 meters, up to a maximum of 2 stacks.
+
+Threat Detector x1 | +15? ↑19? Stability, +25 ↑+28? Handling, 0.9x Handling Animation Duration Multiplier, and +18 ↑+19 Reload Speed.
+Threat Detector x2 | +40? ↑+44? Stability, +100 Handling, 0.81x Handling Animation Duration Multiplier, and +60 ↑+63 Reload Speed.",,,
+Threat Remover,,"Upon scoring a hit with 11 ↑10? pellets:
++? Stability, +? Handling, 0.x? Handling Duration Multiplier, and +60 Reload Speed for 7 seconds.",,,
+Thresh,,"On Weapon Kill:
+Grants an additional 1% ↑1.33% Super Ability Energy.
+ Fusion Rifles, Glaives, Shotguns, and Sniper Rifles grant an additional 1.5% ↑2% Super Ability Energy.",,,
+Tilting at Windmills,,"Upon blocking damage with the Glaive Shield:
+25?% Increased Movement Speed while Blocking for 4 ↑5 seconds until no longer blocking, or when Weapon Energy depletes.",,,
+Timed Payload,,"Weapons deal 55% of their Non-Precision Direct Impact Damage as a Timed Payload.
+Timed Payload detonates after 0.6 seconds of impact, damaging enemies within ? meters.
+Timed Payload portion deals 30% increased damage and inflicts increased stagger against Combatants.
+
+Impact Damage's Precision Multiplier is increased to offset the Timed Payload portion lacking the ability to score Precision Hits.
+New Ratio = (Base Ratio - 55%) / (1 - 55%)
+
+Overall Damage Increase:
+Damage is increased by 16.5% of the Weapon's Bodyshot Damage. Precision Damage Increase is equal to 16.5% / Precision Multiplier.
+Bodyshot damage remains the same. Precision Damage remains ""roughly"" the same.
+
+↑Passively grants +5 Stability.",,,
+Tireless Blade,,"Upon scoring 2 Powered Sword Kills:
+Generate +1 Ammo ↑with a ?% chance of granting +2 Ammo.
+The first kill upon spawning will trigger the buff. Counter persists through stow.
+
+↑?% Chance to grant +2 Ammo instead of +1 Ammo.",,,
+To The Pain,,"While this weapon is readied:
+Grants a stack of To The Pain for every 30 damage taken, up to 10 stacks after receiving 300 damage.
+Stacks are removed on stow.
+
+To The Pain grants +? Handling and +2 Aim Assist per stack, up to +? ↑+? Handling and +20 ↑+22? Aim Assist at 10 stacks.
++? | +? | +? | +? | +? | +? | +? | +? | +? | +? Handling
++2 | +4 | +6 | +8 | +10 | +12 | +14 | +16 | +18 | +20 Aim Assist",,,
+Tracking Module,,"While ADS and targeting an enemy:
+Rockets track enemies [with diminshed effectiveness]
+
+Tracking persists for 1 second after not aiming at the enemy.
+
+↑Passively grants +5 Blast Radius.",,,
+Transcendent Moment,,"On Weapon Kill:
+Grants a Weapon Alignment-Based buff for 7 seconds.
+Additional Kills refresh the buff duration.
+Buff persists through stow.
+
+Light Weapons (Arc, Solar, and Void) trigger Transcendent Light | +? ↑+? Stability and +? ↑+20? Handling
+Dark Weapons (Stasis and Strand) trigger Transcendent Dark | ↑+20 Range and +? ↑+20 Aim Assist
+
+While Transcendence is active: 
+Transcendent Moment | Grants both alignment buffs passively until Transcendence ends.",,,
+Trench Barrel,,"Upon dealing Melee Damage:
+50% Increased damage, +30 ↑+35? Handling, and +30? ↑+35? Reload Speed for the next 3 shots within 5 seconds.
+Buff is removed on stow.",,,
+Trickle Charge,,"Upon receiving a Bolt Charge stack:
+Refills ?% ↑10% of Magazine.
+Does NOT dissipate heat.
+
+Upon discharging Bolt Charge:
+Refills ?% ↑20% of Magazine / Dissipates ↑100% Heat.
+Trickle Charge will refill/dissipate stowed weapons.",,,
+Triple Tap,,"Scoring 3 Precision Hits within 2 ↑3 seconds of each generates 1 Ammo to Magazine.
+Ammo Generation cannot generate ammo past Base Magazine Size.
+Timer between hits persists through stow.",,,
+Tunnel Vision,,"Upon finishing a reload within 3.6 seconds of a Weapon Kill:
++20 Aim Assist, -?% Accuracy Cone Growth, and +? ADS Handling for 5 ↑6 seconds.
+Buff duration can be refreshed through additional activations.",,,
+Turnabout,,"Upon breaking a Combatant's Elemental Shield or a Guardian's Shield while in Super:
+Grants a 50 HP Overshield for 10 ↑11.5 seconds.
+Damage dealt to Overshields does not stop Health Regeneration.
+
+Overshield can stack with other overshields, such as Void Overshield and Class Stat Overshield. Overshield layers are determined by ""First In, First Out"".",,,
+Under Pressure,,"As Magazine decreases below 50%, down to 0%:
+ Linearly grants -12.5% to -25% ↑-30%? Accuracy Cone Size, and up to +30? ↑+? Stability.",,,
+Under-Over,,"Passively increases direct damage dealt against shielded enemies.
+Does not increase the damage of Explosive Damage Perks.
+
+50% ↑55% Increased Damage against Combatant Elemental Shields and Barrier Champion Shields.
+125% ↑140% Increased Damage against Combatant Overshields.
+
+20% ↑22% Increased Damage against Guardian Overshields.
+20% ↑22% Increased Bodyshot Damage against Guardians with Woven Mail.",,,
+Unrelenting,,"Upon reaching 100% Counter Progress through Weapon Kills within 5 seconds of each:
+Rank-And-File = 34% | Elites/Minibosses/Bosses = 100% | Guardians = 67%.
+
+Begins Health Regeneration and restores 65 ↑70 HP.",,,
+Unstoppable Force,,"Upon blocking damage with Glaive Shield:
+20% increased projectile damage for 4 ↑5 seconds, or until no longer blocking.
+Blocking additional damage refreshes the buff duration.",,,
+Valiant Charge,,"Upon guarding against a hit...or receiving healing from an ally while guarding?:
+80% Increased Lunge Distance for the next swing within 1 ↑1.5 second.
+Guarding against additional hits refreshes the buff duration.",,,
+Voltshot,,"Upon finishing a reload within 5.3 seconds of a Weapon Kill:
+The next Weapon Hit within 7 ↑8 seconds inflicts jolt. 
+Reload timer and buff both persist through stow. Jolt is not counted as Weapon Damage.",,,
+Vorpal Weapon,,"Passively increases damage dealt towards Miniboss, Champion, Boss, and Vehicle Combatants, as well as Guardians in their Super Ability.
+
+Damage Increases:
+Primary Weapons: 20% | 60%
+Special Weapons: 15% | 20%
+Power Weapons: 10% | 20%
+
+↑Passively grants +5 Stability and +5 Guard Resistance (Swords).",,,
+Well-Rounded,,"Grenade Ability Usage and Powered Melee Hits grants a stack of Well-Rounded for 15 seconds, up to a maximum of 2 stacks. Super Ability Cast grants two stacks.
+Additional Grenade Ability Usage, Powered Melee Hits, or Super Ability Casts refresh the buff duration.
+Buff persists through stow.
+
+Well-Rounded:
+x1 = +10 ↑+12? Range, +10 ↑+12? Stability, and +10 ↑+12? Handling.
+x2 =  +20 ↑+24? Range, +20 ↑+24? Stability, and +20 ↑+24? Handling.",,,
+Wellspring,,"On Weapon Kill:
+Grants 8% ↑9% Ability Energy split equally amongst all uncharged abilities.
+On Abilities with multiple charges, once the ability has at least one full charge it will count as charged and will only receive a third of the regular Ability Energy per kill.",,,
+Whirlwind Blade,,"On Powered Sword Hit:
+3% | 6% | 9% | 12% | 15% | 18% | 21% | 24% | 27% | 30% Increased damage for 3.5 ↑4 seconds.
+Additional Powered Sword Hits refresh the buff duration.
+Blocking or stowing removes all stacks.",,,
+Withering Gaze,,"After 1.5 ↑1.4 seconds of ADS without firing while Magazine is >0:
+The next direct damage shot fired while ADS inflicts weaken.
+Timer starts as soon as the Aim Down Sights input is pressed, and is reset upon scoring a hit.
+The weakening shot benefits from the 7.5% damage increase against Guardians.",,,
+Zen Moment,,"On Hit:
+ Grants ?% Flinch Resist, -15?% Visual Weapon Shake and -15?% Reticle Bounce per stack for 1 second, up to 5? stacks. 
+Has no effect on actual recoil/camera movement, despite the in-game perk description.
+
+Pulse Rifles and Sidearms grant 1.5x as many stacks per hit, only needing ? hits to be at maximum effect.
+ Hand Cannons and Scout Rifles grant 2x as many stacks per hit, only needing ? hits to be at maximum effect.
+
+↑Passively grants +5 Stability.",,,
+"For in-depth Damage Stacking info, check out Court's Modifier Database ",,"Reload Perk Notes:
+
+Generate = Grants Ammo to Magazine out of thin air, up to its Base Magazine Size. Does not work with Overflown Magazines.
+
+Overflow = Increases Base Magazine Capacity by a certain amount, rounded up.
+
+Refill = Reload, but does not have an animation and doesn't proc on-reload perks. Pulls from reserves on Special and Power Weapons.
+For Heat Weapons, it will instead be ""Dissipates X Heat"" to discern it from manual venting
+
+Reload = Procs on-reload perks. Manual Reload, Marksman's Dodge, and Dragon's Shadow all count as regular reloads.
+For Heat Weapons, finishing a manual vent will count as a regular reload.",,,
+Weapon Mods,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+Enhanced Weapon Mods are equippable only on Tier 4 and Tier 5 Weapons.,,,,,
+Abundant Ammo,,+10 ↑+12 Ammo Generation.,,,
+Aerodynamics,,+6 ↑+7 Blast Radius and +6 ↑+7 Velocity.,,,
+Anti-Flinch,,15% ↑20%? Flinch Resist.,,,
+Backup Mag,,"+30 ↑+40 Magazine Stat.
+Complicated, think of it as an equivalent to Extended Mag ↑+Tactical Mag.",,,
+Ballistics,,+6 ↑+7 Range and +6 ↑+7 Stability.,,,
+Bandolier,,+5 ↑+7 Ammo Generation and +15 ↑+17 Magazine Stat.,,,
+Counterbalance Stock,,+15 ↑+35 Recoil Direction.,,,
+CQC Optics: High,,+1 Zoom.,,,
+CQC Optics: Low,,-1 Zoom.,,,
+Edge,,+6 ↑+7 Charge Rate and +6 ↑+7 Guard Resistance.,,,
+Enhanced Accuracy,,+10 Accuracy.,,,
+Enhanced Blast Radius,,+10 Blast Radius.,,,
+Enhanced Charge Time,,"-40ms Charge Time.
+Does not reduce damage. Does not display in the stats.",,,
+Enhanced Draw Time,,-40ms Draw Time.,,,
+Enhanced Handling,,+10 Handling.,,,
+Enhanced Impact,,+5 Impact.,,,
+Enhanced Persistence,,+10 Persistence.,,,
+Enhanced Projectile Speed,,+10 Velocity.,,,
+Enhanced Range,,+10 Range.,,,
+Enhanced Reload,,+10 Reload.,,,
+Enhanced Shield Duration,,+10 Shield Duration.,,,
+Enhanced Stability,,+10 Stability.,,,
+Flight,,+6 ↑+7 Persistence and +6 ↑+7 Velocity.,,,
+Freehand Grip,,"-30% ↑-30% Hipfire Accuracy Cone Size.
+0.95x ↑0.?x Ready Animation Duration Multiplier.",,,
+Icarus Grip,,+15 Airborne Effectiveness ↑and +5 Handling.,,,
+Marksman Optics: High,,+2 Zoom.,,,
+Marksman Optics: Low,,-2 Zoom.,,,
+Quick Access Sling,,0.9x ↑0.?x Ready/Stow Animation Duration Multiplier.,,,
+Radar Booster,,"Maximum Radar Distance increased by 8 metres.
+Increases the radar range from 48 meters to 56 meters.",,,
+Radar Tuner,,"Radar returns instantly after no longer ADS.
+Radar normally returns after 1.5 seconds.
+↑Adds the benefits of Radar Booster.",,,
+Sprint Grip,,"After sprinting for 1.5 seconds:
++35 ↑+? ADS and Ready Speed Handling until no longer sprinting.",,,
+Stunloader,,"Upon stunning a Champion:
+Refills 50% ↑60% of Magazine.",,,
+Synergy,,"Upon reaching 100% Counter Progress by scoring Weapon Kills:
+Rank-And-File = 8.34% ↑12.5% | Elite = 16.7% ↑20% | Miniboss = 34% | Boss = 50% | Guardians = 16.7% ↑25?%
+Spawns a Weapon-Matching Elemental Pickup. Kinetic Weapons spawn an Orb of Power that grants 7.15% Super Energy.
+Kill counter persists through stow. Simultaneous Kills that exceed the counter dont progress into the next counter.
+ ↑Enhanced Synergy does not trigger nor is it affected by the global cooldown of pickups.
+
+All of the following applies only to BASE Synergy.
+Synergy ignores the global cooldown for Pickups, but will trigger the global cooldown upon spawning one. Synergy has its own cooldown depending on the spawned Pickup:
+Ionic Traces = 0 seconds | Firesprites, Void Breaches, and Stasis Shards = 5 seconds | Tangles = 12 seconds
+Kills during Synergy's cooldown do not contribute to the activation.",,,
+Tactical,,+6 ↑+7 Handling and +6 ↑+7 Reload Speed.,,,
+Targeting Adjuster,,+5 ↑+7 Aim Assist.,,,
+Tension,,+6 ↑+7 Draw Time and +6 ↑+7 Accuracy.,,,
+Intrinsic Traits,,,,,
+Adaptive Burst,,Fires 3-round bursts.,,,
+Adaptive Frame,,No intrinsic bonuses whatsoever.,,,
+"Adaptive Frame
+(Rocket Launchers)",,"Deals 10% increased damage over High-Impact Rocket Launchers.
+1 Impact : 3.5 Explosive Damage Ratio. 50.5 RPM",,,
+Aggressive Burst,,Fires 4-round bursts.,,,
+Aggressive Frame,,No intrinsic bonuses whatsoever.,,,
+"Aggressive Frame
+(Fusion Rifles)",,"Fires a 3-round burst of 4 pellets each in an increasingly wider spread.
+Deals 113 [28.8] damage per pellet x 4 = 452 [115.2] per burst x 3 = 1356 [345.6] damage per ammo spent.",,,
+"Aggressive Frame
+(Rocket Launchers)",,"Deals 10% increased damage over High-Impact Rocket Launchers.
+1 Impact : 3.5 Explosive Damage Ratio. 54.5 RPM",,,
+"Aggressive Frame
+(Scout Rifles)",,Reloads two ammo at a time.,,,
+"Aggressive Frame
+(Shotguns)",,"Upon scoring a Kill:
+0.75x Fire Recovery Delay for 4 seconds.",,,
+Area Denial Frame,,"Shoots a burst of 5 projectiles at the cost of 1 Ammo.
+
+Projectiles create a lingering damage field after 0.5 seconds of impacting.
+
+Damaging Field deals damage every 0.25 seconds for 5.65 seconds, dealing 52.5 [?] damage up to 22 times per field.
+Enemies can only receive damage from a single field at a time.",,,
+Balanced Heat Weapon,,"Firing generates Heat equal to the Heat Generated stat. 
+Passively dissipates Heat equal to the displayed Cooling Efficiency value each second, even while stowed.
+Reaching 1000 Heat triggers Overheat, forcing a Manual Vent and rendering the weapon unusable until its Heat is ≤150.
+
+Upon beginning a Manual Vent while Heat is ≥875:
+2x Vent Rate Multiplier.
+
+Primary Ammo Balanced Heat Weapons intrinsically deal 20% Increased Impact Damage to Elites, Mini-bosses, Bosses, and Vehicles.
+
+Additional information regarding Heat Weapons.",,,
+Double Fire,,Fires 2 rounds at a slight offset from the reticle at the cost of 1 Ammo. ,,,
+Dynamic Heat Weapon,,"Firing generates Heat equal to the Heat Generated stat. 
+Passively dissipates Heat equal to the displayed Cooling Efficiency value each second, even while stowed.
+Reaching 1000 Heat triggers Overheat, forcing a Manual Vent and rendering the weapon unusable until its Heat is ≤150.
+
+Upon cancelling a Manual Vent while Heat is ≤125:
+Dynamic Heat Limiter | -50% Heat Generation for 5 seconds or until stowing the weapon.
+Triggering Dynamic Heat Limiter through reload or sprint after having dealt damage will freeze the timer until shooting.
+
+Primary Ammo Dynamic Heat Weapons intrinsically deal 15% Increased Impact Damage to Rank-and-File, and 38% Increased Impact Damage to Elites, Mini-bosses, Bosses, and Vehicles.
+Additionally, they deal 2.5% increased direct damage to Guardians.
+
+Additional information regarding Heat Weapons.",,,
+Heavy Burst,,"Fires 2-round burst.
+Grants 10?% Flinch Resist when ADS.",,,
+"Heavy Burst
+(Hand Cannon)",,"Fires a 2-round burst that deals 9.5% Increased Weakspot Damage. 
+Not to be confused with Precision Damage, as they are independent of each other, such as shooting a Divinity Cage, or scoring a hit on a weakspot while not being within the Precision Angle Cone.
+Grants 10% Flinch Resist when ADS.",,,
+High-Impact Frame,,"While moving at or below 2.8 metres per second and ADS:
+-20% Accuracy Cone Size and -17% Accuracy Cone Growth.
+Can also work while airborne if the movement speed criteria is met.",,,
+"High-Impact Frame
+(Rocket Launchers)",,"Baseline damage for Rocket Launchers.
+1 Impact : 8.7 Explosive Damage Ratio. 46.5 RPM",,,
+Legacy PR-55 Frame,,"While hipfiring:
++30? Stability, +1? Precision Angle Threshold, -70?% Accuracy Cone Size, and -?% Accuracy Cone Growth.",,,
+Lightweight Frame,,"Passively grants +20 Mobility, and 6.25% Forward Movement Speed Bonus.",,,
+"Micro-Missile Frame
+(Special Grenade Launchers)",,"Passively grants +20 Mobility, and 6.25% Forward Movement Speed Bonus.
+Deals 50% Decreased Self Damage.",,,
+"Micro-Missile Frame
+(Pulse Rifles and Sidearms)",,"Uses Special Ammo. 
+Shoots micro-missiles that track locked-on enemies.",,,
+MIDA Synergy,,"SMG: Behaves like a Lightweight SMG | Shotgun: Behaves like a Precision Shotgun
+Forward Movement Speed Bonus is increased to 10% while MIDA Multi-Tool is equipped.",,,
+Precision Frame,,"-20% Recoil Yaw (Horizontal Recoil).
+Fusion Rifles only receive -10% Recoil Yaw.",,,
+"Precision Frame
+(Rocket Launchers)",,"Intrinsic Tracking Module
+Deals 5% decreased damage over High-Impact Rocket Launchers.
+1 Impact : 3.5 Explosive Damage Ratio. 42.5 RPM",,,
+"Precision Frame 
+(Hand Cannon)",,"+25 Airborne Effectiveness, 10% Decreased ADS Movement Speed Penalty, and -20% Recoil Yaw (Horizontal Recoil).",,,
+Rapid-Fire Frame,,"Upon starting a reload while magazine is empty:
+0.8x Reload Duration Multiplier.",,,
+"Rapid-Fire Frame
+(Shotguns)",,Passively grants 0.8x Reload Duration Multiplier.,,,
+"Shot Package
+(Felwinter's Lie)",,"While ADS:
+-2.5% Pellet Spread.
+
+Otherwise identical to an Aggressive Frame Shotgun",,,
+Spread Shot,,"Fires a spread of 12 pellets, each dealing ? [10] damage with a 1.2x Precision Multiplier.
+Pellets disappear after 25 meters, and deal a minimum of 0.33x damage at Maximum Damage Falloff.",,,
+Support Frame,,"Shoots slow, tracking projectiles that travel at a speed of 40m/s. Projectiles do not have a distance limit, but will eventually lose their tracers.
+ Has 50% Increased Aim Assist Falloff Distance at 0 Range, down to 25% at 100 Range, compared to a regular Auto Rifle.
+
+Dealing ANY (really, ANY!) damage generates Weapon Energy, at a rate of 1% Energy for every 4 [3.6] damage dealt, reaching 100% Charge after dealing 400 [360] damage.
+Dealing damage with the Support Auto Rifle doubles the Weapon Energy gains, generating 1% Energy for every 2 [1.8] damage, requiring 200 [180] damage to fully charge.
+
+Looking near an ally within range widens the reticle. Hipfiring while an ally is in healing range will shoot healing projectiles that have much stronger tracking.
+Consumes 2% Weapon Energy per healing shot fired towards an ally, restoring 13.3 HP to them on impact.
+Targeting Range = 28 + (0.1 x Range Stat) meters, up to 38 Meters at 100 Range.
+If multiple allies are targeted, then the healing shots will alternate between allies.
+
+Upon scoring 5 healing hits within 1 second of each on allies:
+The next healing hits within 1 seconds of each on allies bestows them with an Element-Matching Effect, and applies Support Frame Boost to the user and the targeted ally.
+Support Frame Boost grants 10% increased weapon damage for 6 seconds. Stacks with everything.
+Arc Support Frames bestow Amplified for 7 seconds to the targeted ally.
+Solar Support Frames bestow Restoration x1 for 4+2 seconds to the targeted ally.
+Void Support Frames bestow 15 Void Overshield for 10+5 seconds to the targeted ally. 
+Strand Support Frames cause the targeted ally to release 4 Unraveling Projectiles.
+Stasis Support Frames bestow a stack of Frost Armor for 5 seconds to the targeted ally.
+
+Only triggers On-Heal Effects upon applying Rapid Healing. Shots that restore missing health count for ""on-hit"" related interactions.
+Incurs a 1.5 second cooldown upon applying the Support Frame Boost before additional healing hits count towards the Support Frame Boost on the same ally.",,,
+Together Forever,,"Weapon Kills refill Sturm and grant it an Overcharged Bullet with increased damage, up to 25 Sturm Overcharge stacks.
+Scoring an additional Weapon Kill within 3 seconds of the first grants 3 Sturm Overcharge stacks.
+Further Weapon Kills within ? seconds of the last grant 5 Sturm Overcharge stacks.",,,
+Heavy Crossbow Information,,,,,
+Bolts,,"Bolts deal 1192 [?] damage with a 1.34x Precision Multiplier.
+Bolts embed themselves on impact for a Persistence-stat based duration and can be picked up to recover 1 Ammo.
+Picking up a Bolt also picks up all other bolts within 2? meters of the Guardian.
+
+Bolt Pickupable Duration = 20 + (Stat * 0.3) seconds",,,
+Charged Bolts,,"Bolts attached to targets deal 55 [?] Damage every ? seconds up to 19 times, dealing up to 1102 [?] damage over ? seconds.
+Damage does not stack with additional bolts.
+
+↑Passively grants +2 Handling.",,,
+Explosive Bolts,,"Bolts deal 548 [?] Impact Damage with a 1.34x Precision Multiplier and explode after 1 second, dealing up to 736 [?] Explosive Damage over 5? meters.
+
+↑Passively grants +2 Ammo Generation.",,,
+Heavy Bolts,,"Bolts deal 10% increased damage, but are slower and have a heavily arced trajectory.
+Heavily limits the ability to score a Precision Hit on distant enemies due to Aim Assist altering the trajectory.
+
+↑Passively grants +2 Velocity.",,,
+Serrated Bolts,,"Recovering a bolt embedded in an enemy deals 303 [?] damage.
+
+↑Passively grants +2 Persistence.",,,
+Spring-Auger Bolts,,"Bolts release an impulse after 1? second of impacting, dealing 16 [?] Damage and staggering enemies within 2.5 meters.
+
+↑Passively grants +2 Reload Speed.",,,
+Glaive Information,,,,,
+Melee Attacks,,"[Melee] while a Glaive is readied lunges towards enemies up to 7 meters away, dealing 227 [97.04] damage. 
+Can be chained into a 3-hit combo with a 0.467s delay between hits. Animation delay after combo ends can be skipped by [ADS]
+The final hit of the combo deals 78.5% [88.8%] increased damage.
+
+Glaive Melee Attacks are treated as Kinetic Damage Unpowered Melee Attacks.
+Weapon Damage Buffs don't buff Melee Attacks. Doesn't benefit from Titan's Melee Damage Intrinsic.",,,
+Projectile Attacks,,"Glaive Projectile Attacks are treated as Weapon Damage, and will benefit from any generic or weapon-specific damage increases.
+
+Prevents Melee Attacks for 0.2 seconds after shooting.",,,
+Weapon Energy & Shield,,"Scoring a Ranged Projectile Hit grants 25% Weapon Energy by default.
+Glaives passively generate 1% Weapon Energy per second while readied.
+
+[ADS] with a Glaive projects a frontal shield that grants Damage Resist against attacks that strike it, at the cost of draining Weapon Energy and a Movement Speed Penalty.
+Base Glaive Block Movement is normally 0.85x without Weapon Energy, and 0.66x with Weapon Energy.
+The time to raise the shield is based off of Handling and ADS Speed values.
+
+Glaive Shield:
+97.5% Damage Resist against Combatants.
+50% Damage Resist against Guardians. Primary Ammo Weapons and Melee Attacks are only granted 30% Damage Resist.
+Vexcalibur uniquely has 50% Damage Resist against all damage from Guardians.
+
+Weapon Energy Drain Rate:
+0 SD = 6.5s | 50 SD = 12s | 100 SD = 18? seconds
+Drain Rate = 6.5 + (Shield Duration x ~0.1) ",,,
+Sword Guard Information,,,,,
+Sword Guarding,,"[Guard] projects an energy shield in front of the user that constantly drains over time, the rate of which is determined by Guard Endurance.
+Applies a 0.85x Movement Speed Multiplier while guarding.
+
+Attacks that strike the shield deal decreased damage, with the damage resistance being determined by Guard Resistance.
+Scales from 82.5% [52.5%] to 95% [65%] Damage Resist based on the Guard Resistance stat.",,,
+Charge Rate,,"Charge Rate determines the delay before Sword Energy is regenerated, and the rate at which it is regenerated.
+ Using any Sword Energy restarts Energy Regeneration Delay, regardless of which equipped Sword drained it.
+
+Sword Energy Regeneration Delay, in seconds:
+10 CR = 2.65s | 30 CR = 2.45s | 40 CR = 2.25s | 70 CR = 1.65s | 100 CR = 1.05s
+
+Sword Energy Regeneration Rate = 1.35 - (Charge Rate x 0.01)",,,
+Guard Endurance,,"Sword Guard passively drains Sword Energy. Guarding against any damage pauses passive drain for ? seconds.
+
+Sword Energy Drain, in seconds:
+0 GE = 2.5s | 40 GE = 5s | 60 GE = 6.35s | 90 GE = 9s | 100 GE = 12.5s
+Stronghold and Infinite Guard Swords do not drain any Sword Energy.",,,
+Guard Resistance,,"Guard Resistance determines the amount of Damage Resist the Sword Guard provides against blocked attacks.
+Internally, this is the Stability stat, which means that effects that increase Stability, such as Rally Barricade, will increase the Damage Resist.
+
+Guard Damage Resist = 82.5% [52.5%] at 0 Resistance to 95% [65%] at 100 Resistance. 
+Damage Resist = ???????? | 52.5 + (0.125 x Stat)",,,
+Origin Traits,,,,,
+"Accelerated Assault
+
+Shiny Renegade Drops
+Vanguard Alerts",,"Upon scoring a total of 3 damage instances, with a maximum of 1.2 seconds between each hit:
+Refills 10% of Magazine/Dissipates 10% Heat.
+5% ↑6% [?%] increased damage for 4 seconds.
+Only counts a hit up to once every 0.8s, meaning the perk takes AT LEAST 1.6 seconds to trigger.
+
+For Single-Shot Weapon | Upon scoring a total of 3 hits, with a maximum of 4 seconds between each hit:
+ 5% ↑6% [?%] increased damage and +? Reload Speed for 8 seconds.
+Dealing Additional Damage extends the buff duration by +4 seconds, up to 4 seconds. Cannot extend beyond 4s timer left.
+Only counts a hit up to once every 1.2?s, meaning the perk takes AT LEAST ? seconds to trigger.
+
+Dealing damage extends the buff duration to 2 seconds if the Accelerated Assault buff timer is ≤2 seconds.
+
+Has no effect on Swords.",,,
+"Advanced Reflexes
+
+Dreaming City Reprises
+Destination",,"Upon ADS or Guarding within 1 second of receiving damage:
+5% increased damage, +30 Mobility, +40 Handling, and +35 Charge Rate for 7.5 ↑+? seconds.
+Buff cannot be refreshed until its duration expires. Buff persists through stow.",,,
+"Air-Cooled Core
+
+Lawless Frontier
+Destination",,"While at Full Magazine or Heat <=10%?:
++? ↑+? Handling and ?% ↑?% Decreased ADS Movement Speed Penalty.
+
+Upon sprinting for 0.5 seconds:
++? Reload/Vent Speed for 6? seconds",,,
+"Alacrity
+
+Trials of Osiris
+Ritual",,"While 1 ally is dead:
++10 Range, +10 Stability, +25 Reload Speed, and +5 Aim Assist.
+
+While 2 allies are dead or while Solo:
++20 Range, +20 Stability, +50 Reload Speed, and +10 Aim Assist.
+Does not work in the Rumble Crucible Playlist.",,,
+"Ambush
+
+Season of the Seraph",,"After having maintained a state of not dealing or receiving damage for at least 5 seconds:
++20 ↑+22? Range, +20 ↑+22? Handling, and Increased Damage against Combatants for 2 seconds after dealing or receiving any damage.
+Bows additionally receive a 0.85x ↑0.7x Draw Time Multiplier while active.
+
+Damage Increase:
+Linear Fusion: 8.88%
+Bow, Glaive, Machine Gun, Pulse Rifle, and Trace Rifle: 10.78%",,,
+"Bitterspite
+
+Duality Dungeon",,"While this weapon is readied:
+Grants a stack of Bitterspite for every 20 damage taken, up to 5 stacks after receiving 100 damage.
+
+Bitterspite:
++10 ↑+? | +20 +↑? | +30 ↑+? | +40 ↑+? | +50 ↑+55? Reload Speed.
+0.97x | 0.96x | 0.95x | 0.92x | 0.9x Reload Duration Multiplier.
+Stacks are consumed upon reloading.",,,
+"Bray Inheritance
+
+Deep Stone Crypt
+Raid",,"Grants Grenade, Melee, and Class Ability Energy per damage instance.
+
+Posterity: 0.45% ↑?% | Trustee: 0.35% ↑?%
+Heritage: 0.85% ↑?% | Succession: 1.5% ↑?%
+Bequest: 2% ↑?% | Commemoration: 0.4% ↑?%",,,
+"Bray Legacy
+
+Vesper's Host Weapons
+Dungeon
+
+Reclamation Weapons",,"Grants Ability Energy to the most-charged Ability per damage instance. Excludes instances from Explosive Perks/Micro Missiles.
+Does not grant any Ability Energy to abilities with multiple charges as long as it has 1 Charge. 
+
+Ability Energy Gains per damage instance:
+
+Vesper's Host Weapons
+Adaptive Auto Rifle (VS Pyroelectric Propellant) = 0.25% ↑?%
+Area-Denial Grenade Launcher (VS Velocity Baton) = 0.36% ↑?%
+Adaptive Fusion Rifle (VS Gravitic Arrest) = 0.43% ↑?%
+Rapid-Fire Grenade Launcher (VS Chill Inhibitor) = 5.8% ↑?%
+
+Reclamation Weapons
+Rapid-Fire Auto Rifle (Ahab Char) = 0.19% ↑0.24%
+High-Impact Scout Rifle (Jurisprudent) = ?% ↑?%
+Lightweight Sidearm (Faustus Decline) = 0.75% ↑0.94%
+Rapid-Fire Sniper Rifle (Shortline Dissident) = ?% ↑?%
+Sword (Eighty-Six) = 11.6% ↑14.5%
+Rocket Launcher (Haliaetus) = 17% ↑?% ",,,
+"Carrion Munitions
+
+Distortion Weapons",,"On Elite+ Weapon Kill:
+Spawns an insectoid robot that chases after enemies within 25 meters.
+Insectoid deals up to varying [?] Weapon Matching-Damage on explosion over 5 meters.
+Incurs a 0.5? second cooldown between Insectoid spawns. Insectoid kill cannot spawn more insectoids.
+
+Insectoid Damage:
+Auto Rifle and SMG = 627 [?] Damage
+Hand Cannon = 721 [?] Damage
+Sniper Rifle = 817 [?] Damage
+Fusion Rifle = 940 [?] Damage
+Machine Gun = 749 [?] Damage",,,
+"Cast No Shadows
+
+Season of Dawn Reprises",,"Upon dealing Melee Damage:
+Refills 20% of Magazine. No cooldown.
++? ↑+? Handling for ? seconds.",,,
+"Classy Contender
+
+Guardian Games
+Event",,"On Weapon Kill:
+Grants 5% ↑6%? Class Ability Energy.",,,
+"Collective Purpose
+
+Salvation's Edge
+Raid",,"Grants a stack of Collective Purpose per ally within 15 meters.
+
+Collective Purpose grants +5? Range, +5 Handling, a Draw Time Multiplier, and +5 Charge Rate per stack.
+
+Collective Purpose x1 | +5? ↑+6? Range, +5? ↑+? Handling, 0.97x Draw Time Multiplier, and +5 ↑+? Charge Rate.
+Collective Purpose x2 | +? ↑+? Range, +15 ↑+? Handling, 0.95x Draw Time Multiplier, and +5 ↑+? Charge Rate.
+Collective Purpose x3 | +? ↑+? Range, +? ↑+? Handling, 0.925x Draw Time Multiplier, and +5 ↑+? Charge Rate.
+Collective Purpose x4 | +? ↑+? Range, +? ↑+? Handling, 0.9x Draw Time Multiplier, and +5 ↑+? Charge Rate.
+Collective Purpose x5 | +? ↑+? Range, +? ↑+? Handling, 0.?x Draw Time Multiplier, and +5 ↑+? Charge Rate.",,,
+"Contending Cascade
+
+Call To Arms
+Event",,"Grants a stack of Contending Cascade for each kill scored within 4 seconds of each from any source, up to a maximum of 12 ↑10 stacks.
+Renames to Crowning Cascade upon reaching 12 ↑10 stacks.
+Stacks are lost on death.
+
+Contending Cascade grants increased Handling and Reload Speed, up to a maximum of +? Handling and +? Reload Speed at 12 ↑10 stacks.
+Scoring a Weapon Kill while Crowning Cascade is active triggers an Elemental Explosion, dealing 102 GL | 258 Bow [?] Damage, down to 0% damage over 7 meters.
+
+↑The requirement to be impressed is lowered to 10 rapid kills.",,,
+"Crossing Over
+
+Prophecy Reprises
+Dungeon",,"For the top 50% of the Magazine:
+Linearly grants +10 ↑+12? Range and +? ↑+15? Handling, down to +5 ↑+? Range and +? ↑+? Handling.
+
+For the bottom 50% of the Magazine:
+Linearly grants 1.5% ↑2.1% increased damage, up to +3% ↑+4% increased damage.",,,
+"Cursed Thrall
+
+Crota's End
+Raid",,"On Melee Kill:
+Weapon Kills cause the enemy to explode, dealing up to 123.5 [?] Weapon-Element Matching damage over a 4.5? metre radius for 7.5 ↑8.5? seconds.
+Damage against Combatants scales with Combatant Rank Modifiers.",,,
+"Dark Ether Reaper
+
+Episode: Revenant",,"Upon reaching 100% Counter Progress by scoring Weapon Kills:
+Rank-And-File = 25% ↑34?% | Elite+ = 100% | Guardians = 25% ↑?%
+Counter persists through stow.
+
+ Spawns an Element-Matching Dark Ether Charge that floats in the air for 5? seconds before expiring.
+Dark Ether Charges can be detonated by either shooting at them or coming into contact with them.
+Dark Ether Charges deal up to 386 [50] Element-Matching Weapon Damage over 3? meters. 
+Damage against Combatants scales with Combatant Rank Modifiers. Kills with Dark Ether Charges progress the counter.
+Dark Ether Charge damage counts as Weapon Damage. Damage is always attributed to the creator, regardless of who destroys the Dark Ether Charge.
+ 
+Upon interacting with a Dark Ether Charge:
+Refills the Magazine.
+Grants 40% Increased Magazine Capacity of all equipped Dark Ether Reaper Weapons.
+Magazine increases are rounded up.
+
+Dark Ether Charge Progress is paused if a Dark Ether Charge has spawned.",,,
+"Dawning Surprise
+
+Dawning
+Event",,"Upon reaching 100% Counter Progress by scoring Weapon Kills:
+Rank-And-File = 16.7% ↑20% | Elites, Minibosses, and Bosses = 50% | Guardians = 16.7% ↑20%
+
+Spawns a 📦Box-Shaped Dawning Gift for the user and their allies, which remains on the ground for up to 10 seconds.
+
+Dawning Gift:
+On Pickup | 10% Grenade, Melee, and Class Ability Energy, restores 22 HP and begins Health Regeneration.",,,
+"Dealer's Choice
+
+The Pale Heart
+Destination",,"Weapon Kills grant additional Super Ability Energy.
+Equipping additional Dealer's Choice Weapons increases the amount of Super Ability Energy gained.
+
+x1 = +0.3% ↑+?% | x2 = +1.6% ↑+?% | x3 = +3% ↑+?% Super Ability Energy.
+
+The following Exotic Weapons count as additional Dealer's Choice Weapons, but do not benefit from the Super Ability Energy gains.
+Ace of Spades | Khvostov 7G-0X
+Ergo Sum | Still Hunt
+Microcosm",,,
+"Disaster Plan
+
+Season of the Deep
+Gambit Prime Reprises",,"Upon firing/swinging, after picking up an Ammo Brick:
++15 Range and 15% Flinch Resist for 1.5 seconds. 
+Swords receive +100 Charge Rate for 1.5 seconds.",,,
+"Dragon's Vengeance
+
+Season of the Wish",,"Upon reaching Critical Health, or on Ally Death:
+Refills magazine. 
++5 ↑+? Range, +10? +↑? Handling, and 0.975x ↑0.?x Charge/Draw Time Multiplier for 11 seconds.",,,
+"Dream Work
+
+Solstice
+Event",,"Upon scoring an assist, or scoring a kill on an enemy damaged by an ally, up to once per reload:
+Refills 66% of Magazine and grants +? Reload Speed for ? seconds. 
+Bows are additionally granted 0.?x Draw Time Multiplier.
+Refill can overflow, up to 66% Increased Magazine Capacity. 
+Buff can be triggered while stowed if the weapon did damage. ",,,
+"Elliptical Orbit
+
+Pantheon",,"Passively grants Inner Orbit.
+Inner Orbit | +? Stability, +? Reload Speed, and ?% Flinch Resist.
+
+Upon sprinting for 1.5 seconds:
+Replaces Inner Orbit with Outer Orbit for 3 seconds.
+Sprinting for ANY amount of time will refresh the buff duration, and can trigger while stowed.
+
+Outer Orbit | +? ↑+45? Ammo Generation stat.",,,
+"Exhaustive Research
+
+Kepler
+Destination
+",,"Upon ADS near an enemy within 60 meters without firing:
+Loads up a Micro-Missile over 0.6 seconds.
+
+Micro-Missile replaces a regular shot, releasing a Weapon-Matching Missile that deals Ammo Type-Based Explosive Damage, down to 0% damage over 3 meters.
+435 ↑479 [50] Primary | 710 ↑781 [75] Special | 651 ↑716 [62.5] Heavy.
+Incurs a 5.5 second cooldown after firing a missile before it is able to load another rocket.",,,
+"Explosive Pact
+
+Last Wish Reprises
+Raid",,"Grenade Ability Usage or scoring a Grenade Kill grants a stack of Explosive Pact, up to 5 stacks for 7.5 seconds
+Healing Grenades grant a stack each time the Healing Orb is picked up, either by allies or the caster.
+
+ Each stack of Explosive Pact grants +Stability, +Reload Speed, and Reload Duration Multiplier for 7.5 seconds.
+Buff can be activated while stowed, and persists through stow.
+
+Explosive Pact:
++? ↑+? | +? ↑+? | +? ↑+? | +? ↑+? | +? ↑+? Stability
++8 ↑+? | +16 ↑+? | +20 ↑+? | +24 ↑+? | +44 ↑+? Reload Speed
+0.98x | 0.98x | 0.975x | 0.96x | 0.945x Reload Duration Multiplier",,,
+"Extrovert
+
+Season of the Haunted",,"After 0.25 seconds of scoring a Weapon Kill while within 15 metres of 3 enemies or a Nightmare:
+Restores 60 ↑+? HP.
+Glaive Melee Kills can also trigger the effect.
+
+Incurs a 3 second cooldown after activation.",,,
+"Eyes Up
+
+Cosmodrome
+Destination",,"After having maintained a state of dealing or receiving damage for at least ??? seconds:
+Scoring a kill within 3? seconds of dealing or receiving damage grants Eyes Up x1 for 8 seconds.
+No idea, inconsistent :) Definitely kill based though!
+
+Additional Kills grant a stack of Eyes Up for 8 seconds, up to a maximum of 15 stacks.
+Additional Weapons Kills while Eyes Up is active extend the buff duration by +4 seconds, up to a maximum 25 seconds.
+Buff persists through stow.
+
+Eyes Up grants +Range, +Reload Speed, and increased damage against Combatants.
+Initially grants 1.5% increased damage, scaling up to 5%.",,,
+"Fail-Deadly
+
+Nessus
+Destination",,"Each Damage Instance scored grant a stack of Fail-Deadly.
+Maximum stack amount is equal to the Magazine.
+Rocket Launcher maximum stack is 2x its Magazine Capacity. Requires x2 for 2 (3 if Bipod) Rockets. x4 allows 4 Rockets with Bipod.
+
+Fail-Deadly grants up to 100% increased Base Magazine Capacity, +15 ↑+? Range, and +5 ↑+? Aim Assist at maximum stacks.
+All stacks are removed upon scoring a kill with the weapon.
+Buff persists through stow.
+Base Magazine Increases change the base value, meaning it stacks with Increased Magazine Capacity effects like Overflow and increases the amount of Shells loaded for Shotguns.
+This also means it changes mag-based effects such as gaining Bolt Charge.",,,
+"Featherweight
+
+Sparrow Racing League
+Activity",,"Upon scoring Featherweight Weapon Kills:
+Grants a stack of Featherweight for 10 seconds, up to 10 stacks.
+Stacks are shared across different Featherweight weapons.
+
+Featherweight grants ?% ↑?% Increased Movement Speed per stack, up to ?% ↑?% Increased Movement Speed",,,
+"Field-Tested
+
+Field-Forged Foundry",,"Scoring Hits and Kills progress a Counter, which grants stacks of Field Test at certain thresholds, up to a maximum of 5 stacks. 
+Field Test grants +Range, +Stability, +Handling, and +Reload Speed, or +Charge Rate and +Guard Resistance for Swords.
+Buff is only removed on death.
+
+Field Test Stat Bonuses:
++3 | +6 | +9 | +12 | +20 Range
++? | +? | +? | +? | +30? Stability
++? | +? | +? | +? | +? Handling
++5 | +10 | +20 | +35 | +50 Reload Speed
++5 | +10 | +20 | +35 | +55 Charge Rate
++5 | +10 | +20 | +30 | +40 Guard Resistance
+
+Counter Points needed to reach x1 | x2 | x3 | x4 | x5 Stacks:
+ x51 | x151 | x351 | x651 | x1001 
+x26 | x76 | x176 | x326 | x501
+x11 | x31 | x71 | x131 | x201
+
+Counter Information:
+Each damage instance counts as 1 hit. Kills count as multiple hits, with the amount varying across Weapon Archetypes and Combatant Rank.
+
+Kills for Counter:
+Tier 1 and T2 Rank-and-File = x1 | T3+ Combatants = x4 | T1 Elites = x5 | Guardians = x10
+
+Primary Weapons and Shotguns receive x5 Points from kills.
+Snipers receive x4 Points from hits, and 2.5x from kills.
+Breech-Loaded Grenade Launchers receive x2 Points from kills.",,,
+"Fleet Footed
+
+Trials of Osiris
+Ritual",,"Upon dealing damage:
+Fleet Footed x1 | +15 Airborne Effectiveness and ?% Increased Movement Speed for 5 ↑6 seconds.
+Dealing additional Weapon Damage refreshes the buff duration.
+
+On Weapon Kill:
+Fleet Footed x2 | +30 Airborne Effectiveness and ?% Increased Movement Speed for 5 ↑6 seconds.
+Dealing additional Weapon Damage refreshes the buff duration.
+Buff is removed on stow.",,,
+"Forge's Kin
+
+Black Armory Reprises",,"Upon scoring a Weapon Kill with a Black Armory Weapon, or readying a Black Armory Weapon within 7 seconds of scoring any Weapon Kill:
+Grants Forge's Kin for a varying duration.
+Timer only begins upon readying the weapon. Timer cannot be refreshed until it expires.
+Equipping additional Black Armory Weapons enhances the effect of Forge's Kin.
+
+Forge's Kin x1 | +? ↑+15? Reload Speed and +? Ammo Generation for 5 seconds.
+Forge's Kin x2 | 5% ↑7% increased damage against Combatants, +? Reload Speed and +? Ammo Generation for 7 seconds.
+Forge's Kin x3 | 10% ↑13% increased damage against Combatants, +? Reload Speed and +? Ammo Generation for 9 seconds.
+
+The following Exotic Weapons count as additional Black Armory Weapons, but do not benefit from Forge's Kin.
+ Izanagi's Burden | 🍞Jötunn🍞 | 🦋Le Monarque🦋",,,
+"Frame of Reference
+
+Desert Perpetual
+Raid",,"On Weapon Kill:
+Grants a stack of Frame of Reference for 8 seconds, up to a maximum of 5 stacks.
+Additional Weapon Kills refresh the buff duration.
+Frame of Reference timer is paused while stowed. Remaining duration is rounded up to the nearest second.
+
+Frame of Reference x1 | 1.45% Increased Weapon Damage, +? ↑+? Range, and +? ↑+? Reload Speed.
+Frame of Reference x2 | 2.8% Increased Weapon Damage, +? ↑+? Range, and +? ↑+? Reload Speed.
+Frame of Reference x3 | 4.2% Increased Weapon Damage, +? ↑+? Range, and +? ↑+? Reload Speed.
+Frame of Reference x4 | 5.6% Increased Weapon Damage, +? ↑+? Range, and +? ↑+? Reload Speed.
+Frame of Reference x5 | 7% Increased Weapon Damage, +? ↑+? Range, and +? ↑+? Reload Speed.",,,
+"Gravity Well
+
+Rites of the Nine",,"Upon finishing a reload:
+Pick ups Ammo Bricks within 15 meters.
+Triggers On-Ammo Pickup Synergies. Will also pick up Motes and Crests.",,,
+"Gun and Run
+
+Gambit
+Ritual",,"On Weapon Kill:
+Grants a stack of Gun and Run for 10 ↑11 seconds, up to a maximum of 3 stacks.
+If Gun and Run expires, the next Weapon Kill will instead grant however many stacks were previously held.
+
+While sprinting for at least 0.75 seconds while Magazine isn't full:
+Consumes a stack, refilling 25% of Magazine every 0.85 seconds and refreshes the buff duration. 
+Bows receive 0.85x Draw Time Multiplier for ? seconds.
+Does nothing for Swords (Chivalric Fire)",,,
+"Hakke Breach Armaments
+
+Häkke
+Foundry",,"Passively grants increased damage against Vehicles, Turrets, and Constructs.
+
+15% ↑20% Increased Damage against Vehicles (such as Cyclops, Shriekers, and Tanks).
+30% ↑35% Increased Damage against Turrets and Constructs.
+45?% Increased Damage against Stasis Crystals.",,,
+"Harmonic Resonance
+
+Root of Nightmares
+Raid
+
++Epochal Integration",,"Equipping more than one Root of Nightmares Weapon grants increased Handling, Reload Speed, and damage towards enemies wielding Light and Darkness.
+
+List of enemies affected: 
+Dread Combatants (+Nezarec) and Lucent Hive Lightbearers | Guardians in their Super Ability or Transcending?. DOES NOT DO ANYTHING TO GUARDIANS.
+
+Two Weapons | +10 ↑+? Handling, 0.95x Reload Duration Multiplier, and 3.33% increased damage.
+Three Weapons | +20 ↑+? Handling, +20 ↑+? Reload Speed, 0.95x Reload Duration Multiplier, and 10% increased damage.",,,
+"Head Rush
+
+Season of the Witch",,"Upon standing up after crouching for 2 seconds, or after sliding:
+15% Increased damage against Hive Combatants, +30? ↑+? Handling, and +30? ↑+? Reload Speed for 5 seconds.
+Buff can be triggered while stowed and persists through stow.",,,
+"Heretical Behavior
+
+Pit of Heresy
+Nether Heretical Weapons",,"Upon scoring a total of 4 hits within 3 seconds of each, counted up to once every 0.4 seconds:
+Grants Heretical Behavior for 8 ↑10 seconds.
+Being revived grants Heretical Behavior for 21 ↑26 seconds.
+Buff can be refreshed to its highest reached duration by retriggering it.
+Glaive Melee requires 8 hits. Support Auto Healing Hits count but require 8 as well.
+
+Heretical Behavior:
+8% Increased Damage against Combatants, +50?? Handling, +50?? Reload Speed with 0.8x??? Reload Duration Multiplier.",,,
+"Hot Swap
+
+Dares of Eternity",,"Upon readying the gun after receiving any damage within ? seconds:
++30 ↑+35 Handling for 4 seconds.
++100 Guard Resistance, +100? Guard Endurance, and +100 Charge Rate for 4 seconds on Swords.
+Buff persists through stow.",,,
+"Ignoble Deeds
+
+Shattered Throne
+Dungeon",,"Upon inflicting an Elemental Debuff:
+Grants x2 Ignoble Deeds, up to a maximum of 10 stacks. 
+Scoring a kill consumes 1 [2] stacks of Ignoble Deeds.
+Buff can be activated while stowed, and persists through stow.
+
+Ignoble Deeds grants +30? ↑+35? Handling and +30? ↑+35? Reload Speed. Swords receive +20? ↑+? Charge Rate.",,,
+"Imperial Allegiance
+
+Equilibrium 
+Dungeon",,"Grants a stack of Imperial Allegiance per ally within 15 meters, up to a maximum of 3 stacks.
+
+Imperial Allegiance grants 1.035x Cooling Multiplier, and +? Charge Rate per stack.
+Additonally, each stack grants 3.5% [?%] increased damage while above 50% Heat/below ?% Sword Energy.
+
+Imperial Allegiance x1 | 1.035x Cooling Multiplier, +? Charge Rate, and 3.5% [?%] increased damage.
+Imperial Allegiance x2 | 1.07x Cooling Multiplier, +? Charge Rate, and 7% [?%] increased damage.
+Imperial Allegiance x3 | 1.105x Cooling Multiplier, +? Charge Rate, and 10.5% [?%] increased damage.",,,
+"Indomitability
+
+Brave Foundry
+Onslaught",,"While a Light Super Ability is equipped:
+Weapon Kills grant 5% ↑6%? Grenade Ability Energy.
+
+While a Darkness Super Ability is equipped:
+Weapon Kills grant 5% ↑6%? Melee Ability Energy.",,,
+"Land Tank
+
+Season of the Risen",,"On Weapon Kill:
++10 Health Stat and 5% ↑+?% Damage Resist against Combatants per stack for 5 seconds, up to a maximum of 3 stacks.
+Buff remains active while stowed.",,,
+"Loss
+
+Moon Reprises",,"Upon reaching Critical Health or on Ally Death:
+Grants a stack of Loss, up to a maximum of 10 stacks.
+Loss grants up to +35 Stability, +? Handling, and +? Aim Assist.
+Stacks persist until death. Can trigger while stowed.
+
+Loss:
++6 | +14 | +19 | +23 | +27 | +29 | +31 | +33 | +34 | +35 Stability.
++? | +? | +? | +? | +? | +? | +? | +? | +? | +? Handling.
++? | +? | +? | +? | +? | +? | +? | +? | +? | +? Aim Assist",,,
+"Nadir Focus
+
+NADIR
+Foundry",,"Upon firing a weapon or swinging a sword:
+Grants stacks of Nadir Focus for 2 seconds, up to a weapon type-based amount.
+Nadir Focus linearly grants up to +10 ↑+? Range, -7.5%? ↑-?% Accuracy Cone Size, ?% ↑?% Increased Projectile Velocity, and ?% ↑? Increased Sword Lunge Distance.
+Firing or swinging refreshes the buff duration. 
+Buff is removed on stow. Stack amount varies 
+
+NADIR Focus
+Auto Rifles | Submachine Guns =  Reach maximum stacks after 11 shots.
+Sidearms = Reach maximum stacks after 5 shots.
+Hand Cannons | Scout Rifles = Reach maximum stacks after 4 shots.
+
+Swords = Reach maximum stacks after 5 swings.
+20% | 40% | 60% | 80% | 100% Increased Sword Lunge Distance
+
+Grenade Launchers = Reach maximum stacks after ? shots.
+?% | ?% | ?% | ?% Increased Projectile Velocity",,,
+"Nail, Meet Hammer
+
+Renegades
+Arms Week Event",,"Passively grants 8% increased damage towards Combatant Shields.
+
+Upon breaking a Combatant Shield:
+Primary and Power Weapons grant 8% Special Ammo Progress.
+Special Weapons grant 8% Heavy Ammo Progress.",,,
+"Nano-Munitions
+
+Season of the Wish
+Undying Reprises",,"While within 15 metres of an ally:
+Grants a stack of 1 Nano-Munitions every 3 seconds, up to x7 Nano-Munitions after 21 ↑10.5 seconds. 
+Consumes a stack of 1 Nano-Munitions to grant a 25% ↑?% Emergency Refill. Consuming a stack restarts the timer. Magazine Refill is rounded up.
+Readying a Power Weapon consumes all stacks, refilling the magazine by 25% ↑?% per stack consumed.",,,
+"Nanotech Tracer Missiles
+
+Neomuna
+Destination",,"Upon scoring a Magazine-based amount of hits within 6 seconds of each:
+Automatically shoots a Tracking Missile that matches Weapon's Damage Type. 
+Missile deals 22.4 [14] Impact Damage and 24 [15] Explosive Damage on hit.
+Damage against Combatants scales with the Weapon Type, as well as Combatant Rank Multipliers.
+Grenade Launcher: 25% Increased Damage
+ Machine Gun: 50% Increased Damage 
+Sniper Rifle: 100% Increased Damage
+Fusion Rifle and Shotgun: 150% Increased Damage
+
+Hits required to trigger Tracking Missile:
+Hand Cannon, Pulse Rifle, and Submachine Gun: 40% of Magazine + 1.
+Fusion Rifle: ?% of Magazine.
+Shotgun: 5 at Close Range, 4–3 at Medium Range.
+Sniper Rifle: 40% of Magazine + 2.
+Grenade Launcher: 30% of Magazine.
+Machine Gun: 25% of Magazine + 1.
+
+Incurs a cooldown between firing a missile and additional hits counting towards the next missile.
+Primary Weapons = ~2 ↑? seconds.
+Power Weapons = 3 ↑1.5 seconds",,,
+"Noble Deeds
+
+Season of Defiance",,"Upon buffing an ally through Healing, Revives, Empowerment, or with a Subclass Verb:
+Grants x10 Noble Deeds, up to a maximum of 10 stacks. 
+Scoring a kill consumes 1 [2] stacks of Noble Deeds.
+Buff can be activated while stowed, and persists through stow.
+
+Noble Deeds | +30 ↑+? Handling and +30 ↑+? Reload Speed. Swords receive +20 Charge Rate.",,,
+"Omolon Fluid Dynamics
+
+Omolon
+Foundry",,"For the top 50% of the Magazine:
+ Up to +20 ↑+? Stability and +30 ↑+? Reload Speed.
+Benefits are linearly decreased as Magazine reaches 50%.",,,
+"One Quiet Moment
+
+Crucible
+Ritual",,"After having maintained a state of not dealing or receiving damage for 1 seconds:
+One Quiet Moment x1 | +10 Handling, +20 Reload Speed, and 0.975x Reload Duration Multiplier. 
+Swords grant up to 12.5% Increased Movement Speed.
+
+After having maintained a state of not dealing or receiving damage for 2 seconds:
+One Quiet Moment x2 | +20 Handling, +40 Reload Speed, and 0.95x Reload Duration Multiplier. 
+Swords grant up to 25% Increased Movement Speed.
+
+One Quiet Moment stacks disappear upon stowing.",,,
+"Paracausal Fluid
+
+Season of Arrivals Reprises",,"Upon dealing damage:
+Grants Paracausal Fluid for 3 seconds.
+Buff remains active through stow.
+
+Paracausal Fluid | +? ↑+? Handling, +50 Mobility, and +90 ↑+? Charge Rate.",,,
+"Photoinhibition
+
+Garden of Salvation
+Raid",,"Passively increases damage against shielded enemies.
+
+34.3% Increased Damage against Combatant Elemental Shields and Barrier Champion Shields.
+21.6% ↑?% Increased Damage against Combatant Overshields.
+15.6% ↑?% Increased Damage against Guardian Overshields.
+
+Upon breaking a Combatant Shield:
+Disorients for 5 seconds.
+
+Upon breaking a Matching Combatant Shield:
+Disorients enemies within ? meters for ? seconds.",,,
+"Problem Solver
+
+Pinnacle Ops
+Portal Playlist",,"Upon scoring multiple direct hits within 5 seconds of each against a Champion, Miniboss, or Boss Combatant:
+Inflicts Exhaust for 5 seconds, reducing Combatant Damage Output by 25%.
++50? Reload Speed and +50? Handling for 10 ↑12.5 seconds.
+Exhaust and buff can be refreshed by retriggering the perk. Buff persists through stow.
+
+Hit Requirement:
+Fusion Rifle: 12
+Rocket Pulse: 11
+Bow & both GLs: 3",,,
+"Psychohack
+
+Throne World
+Destination",,"Upon scoring multiple hits within 3 seconds of each against an enemy:
+Inflicts Exhaust for ? ↑? seconds, reducing Combatant Damage Output by 25%.
+
+Hit Requirement:
+3 Hits: Bow, Glaive (Projectile/Melee), Grenade Launcher, Rocket Launcher, Sniper Rifle
+7 Hits: Scout Rifle
+12 Hits: Sidearm
+13 Hits: Submachine Gun
+14 Hits: Fusion Rifle
+16 Hits: Auto Rifle",,,
+"Radiolaria Transposer
+
+Episode: Echoes",,"Upon reaching 100% Counter Progress by scoring Weapon Kills within 8 seconds of each:
+Rank-And-File = 34% | Elite+ = 100% | Guardians = ?%
+Stowing the weapon resets the Counter.
+
+Target explodes, dealing up to 67.5 [?] damage over 3? meters, and creating a Radiolaria Pool under them.
+Radiolaria Pools deal 15 [?] Arc Damage every 0.65 seconds over ? meters for ? ↑? seconds, up to 3? times.
+Damage against Combatants scales with Combatant Rank Modifiers. Counts as Weapon Damage, and is affected by Damage Buffs.",,,
+"Rasputin's Arsenal
+
+Season of the Seraph:
+IKELOS_v1.0.3
+Seraph",,"On Elemental, Barrier Champion, or Guardian Shield Break:
+Refills 50% ↑60% of Magazine.",,,
+"Restoration Ritual
+
+Ghosts of the Deep
+Dungeon",,"On Ally Revival or Finisher:
+Refills Magazine.
+Grants Restoration Ritual.
+Consumes Restoration Ritual when Magazine reaches 0 Ammo, refilling the magazine.
+Buff persists through stow.
+
+↑Passively grants +5 Handling.",,,
+"Right Hook
+
+Season of Plunder",,"Upon dealing Melee Damage:
+ +10 ↑+12? Range and +10 ↑+12? Aim Assistance for 10 seconds
+Additional Melee Damage extends the duration by +10 seconds, up to 20 seconds.
+Buff persists through stow.",,,
+"Roar of Battle
+
+Crucible
+Ritual",,"After having maintained a state of dealing or receiving damage every 0.65 seconds for 2 seconds:
++20 Stability and +20 Handling for 6 ↑7 seconds.
+Dealing or receiving additional damage refreshes the buff duration.",,,
+"Runneth Over
+
+King's Fall 
+Raid
+
+Shiny Heretical Weapons",,"Upon finishing a reload while within 15 metres of allies:
+Increases Magazine Capacity by 10% ↑?% for each ally nearby.
+Bows receive 0.925x | 0.85x | 0.825x | 0.8x | 0.75x Draw Time Multiplier based on the amount of allies.
+Swords receive +? | +? | +? | +? | +? Charge Rate based on the amount of allies.",,,
+"Search Party
+
+Festival of the Lost 
+Event",,"While no allies are within 15 metres: 
+0.85x ↑? ADS Duration Multiplier and 10% ↑?% Decreased ADS Movement Penalty.",,,
+"Skulking Wolf
+
+Iron Banner
+Ritual",,"Upon scoring a Weapon Kill while HP ≤90: 
+Grants Enhanced Radar, combatants become less accurate at targeting the user, and prevents passively pinging enemy radar for 10 ↑11 seconds. 
+Shooting will ping enemy radar for 2 seconds. Blue Radar Blip inaccurately shows that it's only visible for 0.75 seconds.
+Buff remains active while stowed.",,,
+"Souldrinker
+
+Vow of the Disciple
+Raid",,"Upon finishing a reload:
+Restores Health based on the amount of hits scored, relative to the Magazine Size.
+ Scoring 100% of Magazine as Hits restores 50 ↑55 HP.
+ Each Grenade Launcher damage instance counts as 50% of Magazine. Glaive Melee Attacks do not count.
+Hit counter persists through stow.",,,
+"Splicer Surge
+
+Season of the Splicer
+Reprises",,"Upon finishing a reload after having dealt damage:
+Grants a stack of Splicer Surge, up to 3 stacks.
+Buff is removed on stow.
+
+Splicer Surge x1 = +10? ↑+? Handling, +10 ↑+? Reload Speed, and 0.967x Reload Duration Multiplier.
+Splicer Surge x2 = +20? ↑+? Handling, +20 ↑+? Reload Speed, and 0.934x Reload Duration Multiplier.
+Splicer Surge x3 = +45? ↑+? Handling, +45 ↑+? Reload Speed, and 0.9x Reload Duration Multiplier.",,,
+"Stunning Recovery
+
+Nightfall
+Ritual",,"Upon Stunning a Champion:
+Refills Magazine, restores 60 HP, and begins Health Regeneration.",,,
+"Subjugation
+
+Sundered Doctrine
+Dungeon",,"Perk behavior changes depending on the enemy rank when dealing damage:
+
+Against Rank-and-File and Elite Combatants: 
+Shots explode on hit, dealing 6.5 (32.5 ↑? on Shotgun) additional damage as an Explosive Payload, damaging enemies within 3? meters.
+Trace Rifle: Once every 4 hits, after 4 hits.
+Damage against Combatants scales with Combatant Rank Modifiers and counts as Weapon Damage.
+↑Explosion Damage is 25% higher.
+
+Against Champions, Minibosses, and Bosses:
+Inflicts Exhaust for 5 seconds on hit, reducing Combatant Damage Output by 25%.
+
+Guardians:
+?% Flinch Resist for ? ↑? seconds.",,,
+"Sundering
+
+Warlord's Ruin
+Dungeon",,"Upon destroying a Vehicle Combatant, Construct, or breaking a Shield:
++40 ↑+? Reload Speed, 0.95x Reload Duration Multiplier, and 0.9x ↑0.?x Draw Time Multiplier for 7 seconds.
+Buff persists through stow.",,,
+"Suros Synergy
+
+SUROS
+Foundry",,"Upon finishing a reload:
++40 ↑+45? Handling and 20% Flinch Resist for 6 seconds.
+Buff cannot be refreshed until its duration expires. Buff persists through stow.",,,
+"Tenacity
+
+Reclamation Weapons",,"On Weapon Kill, while within 15 meters of an enemy:
+Grants a stack of Tenacity, up to a maximum of 20 stacks.
+Stacks persist until death.
+
+Each Tenacity stack grants 0.5% increased damage, Handling and Reload Speed.
+Grants up to 10% increased damage, +50 ↑+55? Handling, and +50 ↑+55? Reload Speed at 20 stacks.",,,
+"Tex Balanced Stock
+
+Tex Mechanica
+Foundry",,"Upon scoring 4 Hipfire Hits within 4? seconds of each:
+Grants Tex Balanced Stock for 4 seconds. Scoring additional hipfired hits refresh the buff duration.
+
+Tex Balanced Stock:
++20 ↑+? Range, +20 ↑+? Handling, +20 ↑+? Reload Speed, 0.9x ↑0.?x Reload Duration Multiplier
++1.5° Hip-Fire Precision Angle Threshold, 10% ↑?% Decreased ADS Movement Speed Penalty, and 35% Increased Stagger Force.
+Buff persists through stow.",,,
+"Timelost Magazine
+
+Vault of Glass
+Raid",,"Weapon Kills grant additional +1?% ↑+?% Super Ability Energy.
+
+On Super Ability End:
+Refills Magazine.
+100% Increased Base Magazine Capacity for 20 ↑+21 seconds. Found Verdict reloads 2 shells at a time.
+Base Magazine Increases change the base value, meaning it stacks with Increased Magazine Capacity effects like Overflow.
+This also means it changes mag-based effects such as gaining Bolt Charge.
+Buff can be activated while stowed, and persists through stow.",,,
+"To Excess
+
+Season of the Haunted
+Menagerie Reprises",,"Upon scoring a Weapon Kill while Super Ability is charged:
++20 ↑+25 Grenade and +20 ↑+25 Melee for 12 seconds.
+Buff persists through stow.",,,
+"Unburied Treasure
+
+Grasp of Avarice
+Dungeon",,"Upon readying the weapon:
+Up to +10 Range and -?% Accuracy Cone Size for ? ↑~0.5 seconds, scaling down to +5 Range and -?% Accuracy Cone Size after ? ↑1 second.
+Scales down to no benefits? over the remaining ? ↑3.5 seconds of the buff duration.
+Swords receive ?% Increased Lunge Distance.
+Buff is removed on stow.
+
+ Incurs a 3 second cooldown once the buff is removed before it can be retriggered.",,,
+"Unsated Hunger
+
+Season of the Deep
+Reckoning Reprises",,"While Grenade, Melee, and Class Abilities are all uncharged:
++20 ↑+? Stability, +60 ↑+? Handling, +60 ↑+? Reload Speed. 
+Swords receive +50 ↑+? Charge Rate and +40 ↑+? Guard Endurance.",,,
+"Vanguard Determination
+
+Vanguard
+Ritual",,"Upon scoring a Weapon Kill within 20 seconds of Class Ability Usage:
+Grants a stack of Vanguard's Determination for 10 ↑12.5 seconds, up to a maximum of 3 stacks.
+Scoring additional Weapon Kills within 20 seconds of Class Ability Usage refreshes the buff duration.
+Buff remains active through stow, and stacks are shared across different weapons with the Vanguard's Determination trait.
+
+Vanguard's Determination | 2% | 4% | 6% Damage Resist.",,,
+"Vanguard's Vindication
+
+Vanguard
+Ritual",,"On Weapon Kill:
+Restores 10 HP.",,,
+"Veist Stinger
+
+Veist
+Foundry",,"Hits have a chance to activate Veist Stinger for 7 seconds, granting different bonuses based on the Weapon Archetype.
+
+Veist Stinger:
+Refills 25% of Magazine and 10% ↑?% Decreased ADS Movement Speed Penalty.
+Bows are additionally granted 0.85x ↑0.8x Draw Time Multiplier, but do not receive the Magazine Refill.
+Swords are granted +? ↑+? Charge Rate.
+
+Veist Stinger Activation Chances:
+2%: Auto Rifles and Submachine Guns.
+4%: Sidearms
+10%: Bows, Linear Fusion Rifles, and Sniper Rifles
+
+Incurs a 4 second cooldown between reactivations.",,,
+"Veteran's Wisdom
+
+EDZ Weapons",,"Upon scoring a Precision Kill OR 3 Weapon Kills within 3 seconds of each:
+Triggers a Kinetic Shockwave at Enemy Death Location.
+Kinetic Shockwave deals damage over 8 ↑9 meters without falloff, and inflicts Exhaust for 10 seconds, reducing Combatant Damage Output by 25%.
+
+Kinetic Shockwave Damage:
+Auto Rifle, Pulse Rifle = 20
+SMG = ?
+Sniper = 23
+Fusion Rifle = ?
+Sword = ?",,,
+"Wild Card
+
+Cassoid
+Foundry",,"Kills release a varying amount of Telesto Bolts on top of where the enemy died. Bolt Quantity is tied to Enemy Rank.
+Rank-and-File = 1 | Elites = 3 | Minibosses = ? | Bosses and Champions = 7 | Guardians = 3
+Incurs a 6 ↑5 second cooldown between additional Bolt spawns. 
+
+Bolts:
+Identical to Telesto Bolts in behavior, exploding on proximity or contact, dealing up to 39.5 damage and last up to 10.5 seconds after embedding onto a surface.
+Damage against Combatants scales with Combatant Rank Modifiers.",,,
+"Willing Vessel 
+
+Episode: Heresy",,"Dealing damage or scoring kills increments a Damage based counter towards stat bonuses.
+100% Counter is displayed as x5 Willing Vessel. Counter constantly decreases by 2.2?% every 1? seconds.
+
+Visual Buff Stacks to Damage Thresholds:
+Auto: ? | ? | ? | ? | ?
+Bow: ~180 | ~750 | ? | ? | ?
+Sidearm: ? | ? | ? | ? | ?
+SMG : ? | ? | ? | ? | ?
+Fusion Rifle: ? | ? | ? | ? | ?
+Glaive: ? | ? | ? | ? | ?
+GL: I | don't | think | so | lmao
+LFR: ~380 | ~1750 | ~3450 | ~4150 | ~6200
+MG: ~385 | ? | ? | ? | ?
+Sword: ? | ? | ? | ? | ?
+
+Grants a continuously increasing Stability, Handling, Reload Speed, and Charge Rate stat bonus as more damage/kills are scored.
+Stat Bonuses (at the start of the stack):
+x1 = +? Stability, +? Handling, +2? Reload Speed, 0.?x Draw/Charge Time Multiplier, and +20 Charge Rate
+x2 = +? Stability, +? Handling, +5 Reload Speed, 0.?x Draw/Charge Time Multiplier, and +40 Charge Rate
+x3 = +? Stability, +? Handling, +10 Reload Speed, 0.?x Draw/Charge Time Multiplier, and +50 Charge Rate
+x4 = +? Stability, +? Handling, +25 Reload Speed, 0.?x Draw/Charge Time Multiplier, and +70 Charge Rate
+x5 = +20? ↑+? Stability, +30? ↑+? Handling, +30 ↑+? Reload Speed, 0.85x ↑0.?x Draw/Charge Time Multiplier, and +80 ↑+? Charge Rate
+
+This is basically Target Lock's S Curve mixed with Field-Tested on top of being actually damage based, so it is much harder to test, sorry!",,,
+"Winterized Gear
+
+Europa
+Destination",,"Grants Winterized Gear Ready.  
+Transforms into Winterized Gear x3 upon dealing or receiving damage.
+Winterized Gear Ready is reacquired 12 seconds after Winterized Gear expires.
+
+Winterized Gear x3 = +? ↑+? Stability, +? ↑+? Handling, and +? ↑+? Reload Speed for 5 seconds.
+Winterized Gear x2 = +? ↑+? Stability, +? ↑+? Handling, and +? ↑+? Reload Speed for 5 seconds.
+Winterized Gear x1 = +? ↑+? Stability, +? ↑+? Handling, and +? ↑+? Reload Speed for 5 seconds.",,,

@@ -1,0 +1,18 @@
+{
+  "merged_ranges": [],
+  "hyperlinks": {},
+  "cell_notes": {
+    "E1": "N: neutral\nS: swap\nH: hybrid\nM: movement",
+    "F1": "Exotic effect potency, within type context",
+    "G1": "Loadout flexibility",
+    "H1": "Potential for optimal play under time pressure",
+    "I1": "Boss damage use",
+    "J1": "Low power content"
+  },
+  "formulas": {
+    "C80": "\"+165% melee, +50% super damage in 15m of 3 enemies\""
+  },
+  "rich_text": {},
+  "hidden_rows": [],
+  "drawings_present": true
+}

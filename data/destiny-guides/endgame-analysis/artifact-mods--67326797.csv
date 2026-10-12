@@ -1,0 +1,253 @@
+INFO,,,,,,,ANALYSIS,
+🖼️,Artifact,Mod,Tier,Tags,Trigger,Effect,Description,Tier
+,Encrypted Data Disk,Blinding Jolts,II,roam,jolted kill,blind within 8m for 10s,"affected by Dominance/Shock nerf, but on paper very strong with constant jolt sources like Voltshot",S
+,Encrypted Data Disk,Kinetic Synthesis,I,"DPS
+roam","3770 kinetic damage dealt or 12.5 kinetic kills (counter), 75% less progress for A499",refills kinetic weapons and generates 33% of mag as ammo,gives certain weapons infinite total (Chaperone catalyst is useless),S
+,Encrypted Data Disk,Sniper's Meditation,III,DPS,"sniper hit (5 stacks, heavy gives 2)","2.8-15% sniper damage, ? stability, 15-45 reload for 7s, stowable",15% boost to Still Hunt and A499 and Praedyth's and Conspiracy count me in,S
+,Encrypted Data Disk,Dielectric,II,roam,"arc-debuffed kill
+3 arc-debuffed kills within 6s of each","Bolt Charge
+7.15% orb, 40 HP","Bolt Charge on all jolt builds that don't have access, also free orbs",A
+,Encrypted Data Disk,Singularity Blade,II,"roam
+DPS","melee or sword hit with void buff
+melee or sword kill with void buff","weaken applied on hit
+weaken burst within 4m","great for debuff extension, unfortunately void buffs are some of the hardest to keep up during damage, good neutral though",A
+,Encrypted Data Disk,Sticker Shock,III,"DPS
+roam","passive
+flux, fusion, magnetic kill","60% flux, 30% fusion, 22.5% magnetic damage
+4 30m kinetic missiles on body","would have been good before this meta, unfortunately not enough to boost grenades into DPS meta",A
+,Encrypted Data Disk,Sword Storm Combo,III,"DPS
+roam",3 light 1 heavy sword combo,"disorienting damaging aura for 3s, does slightly more damage at edges, refresh on kill",ends up being a 6-8% DPS increase for good swords in exchange for changing combo,A
+,Encrypted Data Disk,Combination Argent Blade,II,"DPS
+roam",waiting 0.5s between sword attacks,"15% sword damage and 100 charge rate for 5s, not refreshable",having to wait to activate in exchange for no Armor Charge cost is lowkey not worth it,B
+,Encrypted Data Disk,Counter Energy,II,roam,Champion stun,25% energy to least-charged ability,decent neutral but restricted application and not that noticeable,B
+,Encrypted Data Disk,Fierce Proxemics,I,roam,finisher,~20% grenade and melee,not terrible but not really that potent in the grand scheme of things,B
+,Encrypted Data Disk,Kinetic Rupture,III,DPS,? kinetic damage to elite+,"spawns rupture on enemy, can be broken to do ?% damage (weapon-dependent)","only really worth shooting with Izanagi's Burden, doesn't count as crit",B
+,Encrypted Data Disk,Power from Pain,I,roam,3 consecutive weakened kills within 4s of each (weaken on killing blow counts),"Devour for 5-7.5s, Void Breach","would be better on NPA, honestly not that great given high weaken kill requirement",B
+,Encrypted Data Disk,Precision Equity,II,roam,"precision kills (counter to x10: minor: 1, elite: 2, miniboss: 5, champ+: 10)",12.5% orb that gives global x2 surge for 11s,"while that is a really big orb, 10 counter requirement is pretty rough",B
+,Encrypted Data Disk,Reload at Range,I,DPS,bow or sniper crit (5 stacks),? reload per stack for 5s,helps a lot with A499 during damage,B
+,Encrypted Data Disk,Tazer Tag,III,roam,arc melee damage,"jolt on hit, small DoT applied (~800 over 8.75s)","damage is okay but DoT takes way too long, jolt on hit is decent depending on melee",B
+,Encrypted Data Disk,Void Infestation,III,roam,weakened kill,15m tracking weakening 87 damage projectile,not bad for chaining weakens for Power from Pain,B
+,Encrypted Data Disk,Armorsmith,II,"roam
+DPS",breaking enemy shield,"Resist x1, +100% melee damage for 6s","applies on finisher, but still not that great given generic resist override",C
+,Encrypted Data Disk,Elemental Orbs: Arc,III,roam,4 arc weapon kills,spawns 450 damage jolting orb,orb does no damage and requires melee range pickup,C
+,Encrypted Data Disk,Press the Advantage,I,roam,breaking enemy shield,"20? stability, 20? handling, 20 reload, ? guard resistance for 10s",stats that do very little in PvE tied to a specific condition,C
+,Encrypted Data Disk,Rapid Remedy,I,roam,3 machine gun kills within 3s of each,15 HP and begins crit health regen,way worse than Hold the Line,C
+,Encrypted Data Disk,Riposte,I,roam,sword guard,Unstoppable on hits for 3s,currently does nothing due to inability to override sword intrinsic stun,D
+,Hunter's Journal,Sniper's Meditation,III,DPS,"sniper hit (5 stacks, heavy gives 2)","2.8-15% sniper damage, ? stability, 15-45 reload for 7s, stowable",15% boost to Still Hunt and A499 and Praedyth's and Conspiracy count me in,S
+,Hunter's Journal,Solar Fulmination,II,roam,ignition,"extra 190 damage instance, 40-60 extra scorch if Char is equipped",upgrades ignition builds significantly,S
+,Hunter's Journal,Argent Blade,III,"DPS
+roam",sword damage with Armor Charge,consumes one Armor Charge to give 15% sword damage and 100 charge rate for 5s,would be higher if swords were good enough for this to matter,A
+,Hunter's Journal,Energy Diffusion Substrate,I,roam,passive,5?% DR,free DR at tier I level,A
+,Hunter's Journal,Radiant Orbs,II,"roam
+DPS",orb pick up with solar or Prismatic equipped,Radiant for 10-15s,"good for general content, but especially great for more optimized runs",A
+,Hunter's Journal,Shieldcrush,III,"DPS
+roam","Frost Armor, Void Overshield, or Woven Mail
+Amplified or Radiant","?% melee recharge, 50% powered melee damage
+?% grenade recharge, 25% grenade damage
+grapple melee gets 12% from both halves","free ability regen for existing, damage boosts are nice too (much lower impact on grapple now)",A
+,Hunter's Journal,Sustained Fire,I,roam,10 auto rifle hits within 1.5s of each on one enemy (also works with support auto healing),"Resist x2 for 6s, stowable","skews primary selection towards auto, essentially free DR in harder content (for hit requirement)",A
+,Hunter's Journal,Targeting Autoloader,II,roam,"auto rifle kills (5 stacks, hallf stack if not within 15m of 3 enemies or at 5 stacks)","20-40% of mag refilled, 10-20% stackable auto rifle damage, buff removed on non-auto rifle ready","no other primary is getting the treatment autos are getting this patch, doubled Subsistence + extra damage perk",A
+,Hunter's Journal,Elemental Siphon,I,roam,3 kinetic or super-matched weapon kills within 3?s of each,super-matched elemental pickup,"worse version that doesn't give super, still decent in most builds",B
+,Hunter's Journal,Blade Stamina,II,roam,3 sword kills within 5s of each,3 ammo (2 for Praxic/Ergo),swords don't really need the ammo that much but why not,B
+,Hunter's Journal,Counter Energy,II,roam,Champion stun,25% energy to least-charged ability,decent neutral but restricted application and not that noticeable,B
+,Hunter's Journal,Creeping Chill,I,roam,stasis-debuffed stasis kill,6?m 20 slow burst,"requirement is a little tight, but effect is good if building into it",B
+,Hunter's Journal,Expanding Abyss,III,DPS,weakened enemy,3.8% / 8.7% void damage (30% / 15% weaken),"technically a free damage increase but very minor, not on the artifacts that boost the best void weapons",B
+,Hunter's Journal,Incendiary Rifle Rounds,I,DPS,solar sniper crit,30-45 scorch,"quite niche, basically just for Still Hunt on the worse of the two Sniper's artifacts, maybe pair with Fulmination?",B
+,Hunter's Journal,Shock and Awe,III,roam,Amplified arc kill with arc or Prismatic equipped,"8m jolting 126 damage arc burst, 5s ICD","free splash, ICD holds it back from being better",B
+,Hunter's Journal,Void Hegemony,II,roam,weakened kill with void or Prismatic equipped,15 HP Void Overshield,"smallish overshield, rest of artifact doesn't really provide weaken sources though",B
+,Hunter's Journal,Transference,III,"roam
+DPS","Transcendent
+after Transcendence ends","10% grenade/melee damage
+4.2% light/darkness energy for next 12 weapon kills",not really a highly desirable effect,C
+,Hunter's Journal,Press The Advantage,I,roam,breaking enemy shield,"20? stability, 20? handling, 20 reload, ? guard resistance for 10s",stats that do very little in PvE tied to a specific condition,C
+,Hunter's Journal,Threaded Blast,I,roam,Tangle destruction with strand damage,extra ~285 damage 15m explosion,long effective cooldown on not the most amazing effect,C
+,Hunter's Journal,Prismatic Transfer,III,DPS,super cast,allies within 15m with a different super element get 20% non-stackable damage for 10s,can't find a reason to ever use this,D
+,Hunter's Journal,Bad Amplitude,II,roam,arc ability Champion damage,inflicts jolt,almost unnoticeable,D
+,Implement of Curiosity,Argent Quiver,III,"DPS
+roam",reloading bow with Armor Charge,"consumes one Armor Charge to give 3 bow shots of 35% stackable damage (25% for heavy), stowing removes stacks","25% boost to Levi count me in, unfortunately not as good for Envious crossbow due to swap removal",S
+,Implement of Curiosity,Elemental Overdrive,III,roam,elemental pickup,22% stackable boost to matching damage for 7s,"insane damage boost if setup is available, solid for roam too",S
+,Implement of Curiosity,Cauterized Darkness,II,roam,"darkness-debuffed non-bosses, one target at a time","75% solar damage (2s ICD, might need additional debuff application)","75% is insane, but application conditions are definitely annoying in practice",A
+,Implement of Curiosity,Elemental Benevolence,I,"roam
+DPS",elemental buffing ally,"15?% class energy, 3?s ICD per ally","pretty decent in larger fireteams, even if class is arguably least useful ability to gen",A
+,Implement of Curiosity,Energy Acceleration,II,roam,2 explosive damage instances with micro-missiles or micro-missile kill,"120 damage 7m Unstoppable kinetic shockwave, 2?s ICD",basically a free third splash perk for rocket pulses and sidearms,A
+,Implement of Curiosity,Horde Shuttle,I,roam,"10% enemy health weapon damage to unraveled enemy
+passive","Threadling on 0.5s ICD
+Threadlings sever","must-have for any Threadling build, also good for grapple neutral",A
+,Implement of Curiosity,Iron Lord's Vigor,III,"roam
+DPS","sword readied
+3 sword kills within 3?s of each","25% DR
+3 ammo (2 for Praxic/Ergo)","ammo economy decent, DR should stack",A
+,Implement of Curiosity,Pack Tactics,I,"DPS
+roam",Threadling damage (infinite stacks),15% / 30% / ... Unstoppable Threadling damage (huge dropoff after x2) for 10s,like Thunderous Retort for Needlestorm and also boosts Threadling neutral,A
+,Implement of Curiosity,Semi-Auto Striker,I,DPS,"5 scout, 3 bow, or 2 sniper hits with <2 Armor Charge",Armor Charge,"pairs great with Argent Quiver, otherwise just decent for neutral",A
+,Implement of Curiosity,Shieldcrush,III,"DPS
+roam","Frost Armor, Void Overshield, or Woven Mail
+Amplified or Radiant","?% melee recharge, 50% powered melee damage
+?% grenade recharge, 25% grenade damage
+grapple melee gets 12% from both halves","free ability regen for existing, damage boosts are nice too (much lower impact on grapple now)",A
+,Implement of Curiosity,Shoulder to Shoulder,II,DPS,sustained precision damage within 15m of 2 allies,Resist x2 for 10?s,free DR for any sort of fireteam precision-based damage,A
+,Implement of Curiosity,Elemental Daze,II,roam,non-kinetic Champion stun,280? damage 8m weapon-matched elemental effect explosion,decent damage and splash but restricted application and not amazing,B
+,Implement of Curiosity,Fever and Chill,I,"roam
+DPS",25% mag + 1 rounded down landed (bow needs 3) with solar or stasis weapons,Radiant for 10-15s or Frost Armor x1 for 9s,pretty decent especially for getting Radiant but other equivalents like Radiant Orbs are better,B
+,Implement of Curiosity,Frigid Glare,III,roam,stasis crit kill with Frost Armor,6m freezing explosion,steep requirement but solid effect,B
+,Implement of Curiosity,Frost Renewal,I,roam,critical health with Frost Armor,12m freezing burst and 1x Frost Armor to allies,"fairly solid defensive effect all things considered, just build-dependent",B
+,Implement of Curiosity,Radiant Shrapnel,III,roam,10% enemy health weapon damage while Radiant or scorched kill,"343 damage 20 scorch shrapnel released, 1s ICD","shrapnel tracking is pretty bad, but pretty simple stagger activation requirement",B
+,Implement of Curiosity,Refresh Threads,I,roam,super-matching elemental pickup,20?% energy to least-charged ability,good general ability regen mod,B
+,Implement of Curiosity,Tangled Web,III,roam,strand-debuffed kill that results in Tangle creation,?m suspending explosion,decent effect but unfortunately locked to long Tangle cooldown,B
+,Implement of Curiosity,That Fresh Bullets Smell,II,"roam
+DPS",ammo pickup,x2 kinetic surge for 11s (x3 for heavy pickup),"would be a lot better if available with Kinetic Synthesis, otherwise just okay",B
+,Implement of Curiosity,Elemental Coalescence,II,roam,10-14 kills,super-matched elemental pickup,way too many kills just for one pickup,C
+,Implement of Curiosity,Threaded Blast,II,roam,Tangle destruction with strand damage,extra ~285 damage 15m explosion,long effective cooldown on not the most amazing effect,C
+,NPA Repulsion Regulator,Shatter Orbs,I,roam,matching shield break,7.15% orb,enables super spam / special finisher loop,S
+,NPA Repulsion Regulator,Thunderous Retort,I,DPS,critical health or Amplified,30% arc super damage (only applies while in super),specialized super damage boost (instead of Limit Break),S
+,NPA Repulsion Regulator,Bricks from Beyond,II,roam,3 elite+ void weapon kills,50?% heavy ammo progress for allies within ?m,another helping of heavy ammo gen on top of the many other sources of plentiful ammo fountains in the sandbox,A
+,NPA Repulsion Regulator,Passive Aggressive Guard,III,roam,glaive readied,50% DR within ?m,free DR that should stack with Swordmaster during glaive block,A
+,NPA Repulsion Regulator,Sustained Fire,I,roam,10 auto rifle hits within 1.5s of each on one enemy (also works with support auto healing),"Resist x2 for 6s, stowable","skews primary selection towards auto, essentially free DR in harder content (for hit requirement)",A
+,NPA Repulsion Regulator,Targeting Autoloader,II,roam,"auto rifle kills (5 stacks, hallf stack if not within 15m of 3 enemies or at 5 stacks)","20-40% of mag refilled, 10-20% stackable auto rifle damage, buff removed on non-auto rifle ready","no other primary is getting the treatment autos are getting this patch, doubled Subsistence + extra damage perk",A
+,NPA Repulsion Regulator,Suppressing Glaive,II,roam,glaive projectile damage,Suppression for 10s,no ICD on one of the strongest enemy disablers in the game,A
+,NPA Repulsion Regulator,Volatile Flow,I,roam,orb pickup,Volatile Rounds for 9s,free Volatile Rounds,A
+,NPA Repulsion Regulator,Conductive Cosmic Needle,III,DPS,strand-debuffed enemy,5% arc and void ability damage,"in isolation a good boss DPS effect but given that there are no other global boosters in this artifact, not so great",B
+,NPA Repulsion Regulator,Counter Charge,II,roam,Champion stun,Armor Charge,decent neutral but restricted application and not that noticeable,B
+,NPA Repulsion Regulator,Lightning Strikes Twice,III,roam,arc grenade ability usage,"130% grenade recharge, arc kills extend by 3s up to 20s",wouldn't this be so cool if it was paired with Sticker Shock,B
+,NPA Repulsion Regulator,Protective Breach,II,roam,Void Breach pickup,45 Void Overshield for 10-15s,really nice overshield but Void Breaches aren't commonplace enough to warrant A,B
+,NPA Repulsion Regulator,Shock and Awe,III,roam,Amplified arc kill with arc or Prismatic equipped,"8m jolting 126 damage arc burst, 5s ICD","free splash, ICD holds it back from being better",B
+,NPA Repulsion Regulator,Supernova,III,roam,Void Breach pickup,next void damage within 10s creates 5?m weaken burst,"mostly exists to synergize with other void artifact mods, not amazing in isolation",B
+,NPA Repulsion Regulator,Unto the Breach,I,roam,void-debuffed kill with void equipped,Void Breach,easy Void Breach access for insane void artifact,B
+,NPA Repulsion Regulator,Void Weapon Channeling,III,roam,void weapon kill with at least 1 charged void ability,gives up to 4 void weapon surge stacks for every charged void ability for 11s,little build-dependent but still very easy access to roam surges,B
+,NPA Repulsion Regulator,Improved Unraveling,I,"DPS
+roam",passive,15% unraveling thread damage,not really a difference maker,C
+,NPA Repulsion Regulator,Overload Grenades,II,roam,void grenade damage,Overload,"1/3 of the sandbox now Overloads, very unneeded",C
+,NPA Repulsion Regulator,Squad Goals,III,roam,"finisher with super-matched elemental buff (Amplified, Devour, or Woven Mail)","shares Amplified, Devour, and Woven Mail with allies within ?m",sounds cool but isn't really that useful in practice,C
+,NPA Repulsion Regulator,Strand Soldier,II,roam,Woven Mail on strand,Unraveling Rounds for 8s,"significantly lower value in a post-universal stun world, also would be a lot better on a strand artifact",C
+,NPA Repulsion Regulator,Amped Up,I,roam,arc or Prismatic equipped,Amplified duration to 20s,"hard to notice, Amplified is almost always up",C
+,Queensfoil Censer,Argent Ordnance,III,"DPS
+roam",firing rocket with Armor Charge,"consumes one Armor Charge to give 15% rocket damage, ? reload, 0.?x reload duration for 4.5s",15% boost to Truth and Hezen count me in,S
+,Queensfoil Censer,Blast Radius,I,roam,2 GL or rocket kills within ?s of each,Armor Charge,excellent Armor Charge source that pairs well with a variety of charge consumption mods,S
+,Queensfoil Censer,Solo Operative,III,"DPS
+roam","crit kills while solo (25 stacks, lost on death)",1.2% weapon damage per stack (up to 30%),"higher global stacking boost than anything else, just needs work to stack",S
+,Queensfoil Censer,Hail The Storm,III,"roam
+DPS","stasis crystal shatter
+passive","5 homing 46 damage ? slow ice shards
+12.5% enemy shatter damage, 25% crystal shatter damage","helps with chaining freezes in stasis builds, also a super damage boost for Glacial Quake",A
+,Queensfoil Censer,Heart of the Flame,I,DPS,solar super cast (scales up to 5 nearby allies),"gives allies within 15m Radiant, up to 15% super damage (Well caster gets buff for 5s)",worse than Limit Break in most cases but situationally useful due to instant Radiant and Well potential,A
+,Queensfoil Censer,Horde Shuttle,III,roam,"10% enemy health weapon damage to unraveled enemy
+passive","Threadling on 0.5s ICD
+Threadlings sever","must-have for any Threadling build, also good for grapple neutral",A
+,Queensfoil Censer,Perpetual Destruction,II,roam,"non-exotic rocket kills (counter: 4 minors, 3 elites, 1 miniboss+)","10% heavy ammo rounded up, ? reload and 0.?x reload duration for 10s",excellent for Bipod Pack rocket spamming,A
+,Queensfoil Censer,To Shreds,III,"roam
+DPS","6 severed weapon damage instances
+severed kill","inflicts unravel
+makes Into the Fray triple Woven Mail + 15 HP pulses on kill location","first effect is sort of useless, second effect is great",A
+,Queensfoil Censer,Wished Into Being,I,roam,ability kill with >80% super but not charged,"3 7.14% orbs, ?s ICD",basically gives 25% faster super if ability kills are being spammed,A
+,Queensfoil Censer,Anti-Champion Nosecone,II,roam,passive,33% rocket damage to Champions,limited applicability but obviously good if doing some sort rocket spam strat in a conquest or something similar,B
+,Queensfoil Censer,Creeping Chill,II,roam,stasis-debuffed stasis kill,6?m 20 slow burst,"requirement is a little tight, but effect is good if building into it",B
+,Queensfoil Censer,Fever and Chill,I,"roam
+DPS",25% mag + 1 rounded down landed (bow needs 3) with solar or stasis weapons,Radiant for 10-15s or Frost Armor x1 for 9s,pretty decent especially for getting Radiant but other equivalents like Radiant Orbs are better,B
+,Queensfoil Censer,Frigid Glare,III,roam,stasis crit kill with Frost Armor,6m freezing explosion,steep requirement but solid effect,B
+,Queensfoil Censer,Kindling Trigger,I,roam,"Radiant solar weapon damage to non-scorched combatants, doesn't work in Well?",30-45 scorch,"guarantees base-scaled ignition, maybe decent for solar add clear stagger",B
+,Queensfoil Censer,Pillar of Ice,II,roam,frozen kill,stasis crystal (2 if boss kill),effort:crystal ratio is pretty good on this one,B
+,Queensfoil Censer,Rays of Precision,III,roam,Radiant solar crit kills,ignition,basically a very powerful Firefly for solar weapons,B
+,Queensfoil Censer,Revitalizing Blast,II,roam,Champion stun,ignition,satisfying and can chain into more ignitions but not really that impactful,B
+,Queensfoil Censer,Unraveling Orbs,II,"roam
+DPS",orb pickup or Tangle throw,Unraveling Rounds for 14s,synergizes with unravel requirements on other mods,B
+,Queensfoil Censer,Torch,I,roam,darkness-debuffed non-bosses,5% weapon damage,almost unnoticeable,C
+,Queensfoil Censer,Armorsmith,I,"roam
+DPS",breaking enemy shield,"Resist x1, +100% melee damage for 6s","applies on finisher, but still not that great given generic resist override",C
+,Queensfoil Censer,Dragon's Bite,II,roam,3 shield breaks using strand or stasis weapon,suspend or freeze,mediocre effect for 3 separate shield breaks,C
+,Slayer Baron Apothecary Satchel,Curative Orbs,II,roam,"first breaking an enemy shield
+orb, elemental pickup, or Tangle destruction","7.15% orb
+40 HP","enables super spam / special finisher loop, better than Shatter due to less restrictive conditions and heal",S
+,Slayer Baron Apothecary Satchel,Arc Compounding,III,DPS,blinded enemy,15% arc damage,"would be better if there was another global booster in this artifact, or if arc weapons were better",A
+,Slayer Baron Apothecary Satchel,Hail The Storm,II,"roam
+DPS","stasis crystal shatter
+passive","5 homing 46 damage ? slow ice shards
+12.5% enemy shatter damage, 25% crystal shatter damage","helps with chaining freezes in stasis builds, also a super damage boost for Glacial Quake",A
+,Slayer Baron Apothecary Satchel,Total Carnage,I,roam,elite+ finisher,"Resist x2 for 11s, 100 HP, starts health regen","elite+ requirement can be annoying, but effect is pretty strong",A
+,Slayer Baron Apothecary Satchel,Debilitating Wave,II,roam,finisher,"15m 180 super-matched wave, blind/weaken/slow if on arc/void/stasis",decent finisher mod in probably the strongest finisher spam sandbox ever,B
+,Slayer Baron Apothecary Satchel,Conductive Cosmic Crystal,III,DPS,stasis-debuffed enemy,5% arc and void ability damage,"in isolation a good boss DPS effect but given that there are no other global boosters in this artifact, not so great",B
+,Slayer Baron Apothecary Satchel,Crystalline Converter,I,roam,"8 / 12 / 15 Stasis Shard pickups, then powered stasis melee hit
+stasis weapon kill after class ability","1 / 2 / 3 crystals spawned
+Stasis Shard spawned","pretty steep requirement, builds that benefit from crystals already spawn plenty of them",B
+,Slayer Baron Apothecary Satchel,Frost Renewal,II,roam,critical health with Frost Armor,12m freezing burst and 1x Frost Armor to allies,"fairly solid defensive effect all things considered, just build-dependent",B
+,Slayer Baron Apothecary Satchel,Power from Pain,I,roam,3 consecutive weakened kills within 4s of each (weaken on killing blow counts),"Devour for 5-7.5s, Void Breach","would be better on NPA, honestly not that great given high weaken kill requirement",B
+,Slayer Baron Apothecary Satchel,Retinal Burn,II,"DPS
+roam",2 arc non-blinded crits within ?s of each with Armor Charge,consumes one Armor Charge to trigger ?m blinding burst for ?s,basically just exists to pair with Arc Compounding,B
+,Slayer Baron Apothecary Satchel,Served Cold,III,roam,"Stasis Shard pickup
+Void Breach pickup","10% class energy
+10% melee energy",just supplements what pickups already do,B
+,Slayer Baron Apothecary Satchel,Supernova,III,roam,Void Breach pickup,next void damage within 10s creates 5?m weaken burst,"mostly exists to synergize with other void artifact mods, not amazing in isolation",B
+,Slayer Baron Apothecary Satchel,The Thick of It,I,roam,"3 kills within ?s of each within 15?m of 3 enemies
+within 15?m of 3 enemies","Armor Charge
+? handling and ? charge rate","decent way of getting easy Armor Charge, other benefits are not really significant besides maybe on Ergo",B
+,Slayer Baron Apothecary Satchel,Trace Evidence,I,"roam
+DPS","2 arc-debuffed crits within 1?s of each or 3 arc-debuffed kills within ?s of each
+Ionic Trace pickup
+","Ionic Trace (4s ICD)
+Armor Charge","free traces and Armor Charge, not the greatest uptime but still not bad",B
+,Slayer Baron Apothecary Satchel,Void Renewal,II,roam,"void weapon kills with Devour (counter: 6 minors, 3 elites, 2 miniboss+)
+Void Breach pickup","Void Breach
+? handling, ? reload, refills shotguns/GLs",counter definitely a bit steep for just one Void Breach,B
+,Slayer Baron Apothecary Satchel,Weakened Clear,II,"DPS
+roam",boss/champ GL damage or GL enemy shield break,"15% weaken for 20?s, non-refreshable, non-extensible, refills stowed weapons (10?s ICD)","very long weaken but doesn't interact with extensions, refill has a long ICD",B
+,Slayer Baron Apothecary Satchel,Wind Chill,I,roam,"30% mag + 1 rounded down landed withins 3s of each with stasis weapons
+stasis weapon slowed/frozen damage","Frost Armor
+?% chance to spawn Stasis Shard","decent neutral, also has boss damage applications if using stasis weapons",B
+,Slayer Baron Apothecary Satchel,Kinetic Impacts,III,DPS,5 GL hits within 1?s of each,"372 damage kinetic Unstoppable shockwave, ?s ICD","minuscule DPS increase for GLs, doesn't stack across fireteam",C
+,Slayer Baron Apothecary Satchel,Brain Freeze,III,roam,enemy freeze,~4?m radius nerfed slow mini duskfield for duration of freeze,mini duskfield slow stacks are extremely slow and does almost no damage,C
+,Slayer Baron Apothecary Satchel,Old God's Rite,III,roam,Void Breach pickup,next void damage within 10s creates 8 ~10m 334 damage homing void orbs,orbs have horrible tracking and are very gimmicky,C
+,Slayer Baron Apothecary Satchel,Killing Breeze,I,roam,3 weapon kills within 3s of each,"? mobility for 5s, refreshable",does next to nothing in PvE,D
+,Tablet of Ruin,Elemental Supercharger,III,roam,exhausted or severed super-matched kill,2?% super energy,"best super generation, works with all Overload weapons",S
+,Tablet of Ruin,Limit Break,III,DPS,super cast at critical health or with super-matched buff,15% super damage (8s duration for burst supers),generic super damage boost,S
+,Tablet of Ruin,Defibrillating Blast,III,"DPS
+roam","Champion stun
+Bolt Charge discharge","x10 Bolt Charge
+inflicts jolt, gives ~55 HP, starts crit health regen",free damage sustain with Storm's Keep,A
+,Tablet of Ruin,Dielectric,I,roam,"arc-debuffed kill
+3 arc-debuffed kills within 6s of each","Bolt Charge
+7.15% orb, 40 HP","Bolt Charge on all jolt builds that don't have access, also free orbs",A
+,Tablet of Ruin,Elemental Siphon,I,roam,"3 kinetic or super-matched weapon kills within 3?s of each
+super-matched elemental pickup","super-matched elemental pickup
+5% super, 2s ICD","better version with super gains, especially good with pickup spam builds",A
+,Tablet of Ruin,Flashover,II,"DPS
+roam","reaching x10 Bolt Charge
+passive","Amplified for 15s
+50% increased Bolt Charge damage",given meta direction Flashover didn't need this much of a nerf but still a decent overall effect,A
+,Tablet of Ruin,Gold from Lead,II,roam,5-6 special brick pickups,"8% heavy ammo, rounded up",another helping of heavy ammo gen on top of the many other sources of plentiful ammo fountains in the sandbox,A
+,Tablet of Ruin,Harsh Refraction,II,"DPS
+roam",3 matching debuffed trace rifle hits ,"50% trace damage for 4s (35% for exotic special/Lodestar, 20% for Microcosm after 4 hits)",good for trace add clear,A
+,Tablet of Ruin,Heavy Ordnance Regeneration,III,"roam
+DPS",8 LMG or 2 rocket damage instances within 7s of each,"Resist x2 for 15.5s, 85% base grenade/melee regen for 10s, elite+ kills disorient minors within ?m",free generic DR when doing rocket DPS or LMG add clear,A
+,Tablet of Ruin,Hold the Line,I,roam,within 15m of 3 enemies with glaive or LMG readied,"? stability, 30 reload, weapon kills (including glaive melee) give 55 HP",free healing when doing LMG add clear,A
+,Tablet of Ruin,Horde Shuttle,II,roam,"10% enemy health weapon damage to unraveled enemy
+passive","Threadling on 0.5s ICD
+Threadlings sever","must-have for any Threadling build, also good for grapple neutral",A
+,Tablet of Ruin,Maligned Harvest,II,"roam
+DPS","inflicting volatile 4 times within ?s of each
+inflicting weaken (once per source)","next void damage within 10s creates 5?m weaken burst
+25 HP Void Overshield for 10-15s",excellent void build component,A
+,Tablet of Ruin,Particle Reconstruction,III,"DPS
+roam","fusion/LFR hits (5 stacks)
+50% fusion/LFR mag + 1 rounded down landed","5% / 10.25% / 15.8% / 21.6% / 27.6% fusion/LFR damage for ?s
+10% mag refill, hits have 1s ICD
+","best-in-class artifact debuff for non-Felwinter solos, also has a Rewind Rounds effect",A
+,Tablet of Ruin,Perpetual Destruction,I,roam,"non-exotic rocket kills (counter: 4 minors, 3 elites, 1 miniboss+)","10% heavy ammo rounded up, ? reload and 0.?x reload duration for 10s",excellent for Bipod Pack rocket spamming,A
+,Tablet of Ruin,To Shreds,III,"roam
+DPS","6 severed weapon damage instances
+severed kill","inflicts unravel
+makes Into the Fray triple Woven Mail + 15 HP pulses on kill location","first effect is sort of useless, second effect is great",A
+,Tablet of Ruin,No Bell,II,"DPS
+roam","2 special glaive melee kills within 3?s of each
+blocking damage with glaive shield","2 ammo to special glaives
+additive 85% glaive melee damage for 6s",definitely a lot worse now that melee bonus isn't multiplicative,B
+,Tablet of Ruin,Vile Weave,II,roam,"Tangle detonation
+Tangle pickup","sever for ?s
+Tangle cooldown reduced by 4s",decent sever chaining effect on the best strand artifact,B
+,Tablet of Ruin,Void Flux,III,roam,weakened void weapon kill,?m volatile burst (?m for elite+ kill),not the strongest effect given the requirements but not bad,B
+,Tablet of Ruin,Volatile Marksman,I,"roam
+DPS","25% mag + 1 rounded down landed (bow needs 2) or 3 kills within 3s of each with void weapon
+volatile detonation
+","Volatile Rounds for 10s
+10% class energy",worse than Volatile Flow outside of damage,B
+,Tablet of Ruin,Unraveling Orbs,I,"roam
+DPS",orb pickup or Tangle throw,Unraveling Rounds for 14s,synergizes with unravel requirements on other mods,B
+,Tablet of Ruin,Photonic Flare,I,roam,exhausted or severed arc kill,"5?m blinding burst, 6?s ICD",not the worst effect but ICD is very noticeable,C

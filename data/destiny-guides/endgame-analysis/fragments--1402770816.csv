@@ -1,0 +1,142 @@
+INFORMATION,,,,,,,ANALYSIS,,,KEY,
+🖼️,Name,Subclass,Tags,Trigger,Effect,Stats,Usage,#,Tier,,
+,Facet of Purpose,Prismatic,survivability,orb pickup (super-based),"x1 Bolt Charge (arc), Restoration x1 for 5s (solar), 22.5 HP Void Overshield for 5s (void), x2 Frost Armor for 5s (stasis), Woven Mail for 5s (strand)",-10 Class,not very good on some supers but insane on the supers that matter (solar/void),1.0,S,S,"build essentials, incredibly powerful for damage or survivability"
+,Echo of Starvation,Void,survivability,orb or void breach pickup,Devour for 5-7.5s,-10 Class,free heal and one of the strongest survivability effects on every orb pickup,2.0,S,A,"very strong and useful effects, but more on the supportive side"
+,Spark of Resistance,Arc,survivability,within 15m of 3 enemies,"25% DR, lingers for 2s",+10 Melee,free stackable 25% DR pretty much whenever it's needed,3.0,S,B,"core parts of specific builds or scenarios, not always applicable"
+,Ember of Benevolence,Solar,regen,"reviving, Cure, Radiant, or Restoration to ally",+300% grenade/melee/class regen for 7s,-10 Grenade,basically permanently active massive regen buff on competent solar builds,4.0,S,C,can be useful but in very niche builds or situations
+,Facet of Courage,Prismatic,damage,passive,10% light ability damage and +50% light melee damage to darkness-debuffed enemies,+10 Grenade,"free 10% to some of the strongest supers in the game, also works with some melee strategies",5.0,S,D,technically beneficial but poor uptime or not very noticeable
+,Thread of Evolution,Strand,damage,passive,"threadlings move 30% faster, ?% further, and gain 33% damage",+10 Super,"same logic as Courage — ~8% to super, free 33% increase to Weaver's Call too",6.0,S,F,generally not helpful in PvE
+,Whisper of Rime,Stasis,survivability,passive,"increases Frost Armor max to x7 (50% DR), stack duration to 6s",/,"max DR from 31.25 to 50%, increases uptime too",7.0,A,,
+,Spark of Beacons,Arc,"splash
+survivability",special/heavy arc weapon kills while Amplified,7.5m blinding burst,/,"no ICD blind on every kill if conditions met, insane uptime",8.0,A,,
+,Echo of Vigilance,Void,survivability,kill while critical health (8s ICD),Void Overshield for 5-7.5s,/,quite possibly the best emergency kill fragment for survivability,9.0,A,,
+,Facet of Protection,Prismatic,survivability,within 15m of 3 enemies,"15% DR, lingers for 2s",+10 Melee,downgrade from Resistance but still free 15% DR,10.0,A,,
+,Thread of Generation,Strand,regen,dealing damage,?% grenade (varies),-10 Grenade,custom on-hit formula is mysterious but usually ends up giving a lot of grenade energy,11.0,A,,
+,Echo of Obscurity,Void,survivability,finisher,Invisibility for 5-7s,+10 Class,"by far the best finisher fragment effect, great for resetting aggression during combat",12.0,A,,
+,Facet of Dominance,Prismatic,"damage
+splash","void grenade damage
+arc grenade damage (4s ICD for Arc Soul)","weaken for 6s on hit
+jolt on hit",-10 Grenade,"same logic as Undermining — jolt frequency nerf is notable, but still deserving of A",13.0,A,,
+,Echo of Undermining,Void,damage,void grenade damage,weaken for 6s on hit,-10 Grenade,"neutral 15% increase to all damage if high uptime, debuff extension available too",14.0,A,,
+,Ember of Torches,Solar,damage,powered melee hit,Radiant for 8-12s to allies within 8m,-10 Grenade,constant Radiant uptime on applicable subclasses,15.0,A,,
+,Ember of Char,Solar,splash,ignition,40-60 scorch to enemies within ?m,+10 Grenade,must-have for chaining ignitions with Fulmination and other ignition components,16.0,B,,
+,Whisper of Shards,Stasis,regen,stasis crystal shatter,"+500% grenade regen for 6s, extensions up to 11s",/,"most offensive stasis builds are melee-focused and have no uptime issues, usable for defensive builds",17.0,B,,
+,Whisper of Conduction,Stasis,survivability,passive,stasis shards within 15m pulled to user after 1s,"+10 Health
++10 Super",purely QoL but of the best sort; pretty nice on stasis titan/hunter,18.0,B,,
+,Ember of Singeing,Solar,regen,scorching non-scorched enemy,+400% class regen for 3s,/,"very solid and high uptime class regen, also class as valuable as some other abilities",19.0,B,,
+,Ember of Ashes,Solar,"damage
+splash",passive,1.5x scorch stacks (some exceptions),/,core pick for Dawn Chorus and other scorch builds,20.0,B,,
+,Spark of Shock,Arc,"splash
+damage",arc grenade damage (4s ICD for Arc Soul/Ionic Sentry),jolt on hit,-10 Grenade,"like Dominance without debuff/weaken, basically just for Arc Soul/Ionic Sentry and maybe Shinobu",21.0,B,,
+,Whisper of Torment,Stasis,regen,taking damage (1s ICD),7% grenade (12% with Frost Armor),-10 Grenade,"free grenade returns, fairly significant given Frost Armor uptime due to artifact and stepped timer change",22.0,B,,
+,Whisper of Impetus,Stasis,refill,powered melee damage (5s ICD),"refills all weapons, 40 handling for 5s",+10 Health,"restricted by poor stasis melee choices outside of stasis hunter, but still very potent for refills",23.0,B,,
+,Thread of Warding,Strand,survivability,orb pickup,Woven Mail for 5s,-10 Health,duration nerf hurts but still pretty high Woven Mail uptime given orb sandbox,24.0,B,,
+,Thread of Ascent,Strand,refill,grenade usage (4s ICD),"refills readied weapon, 40? handling, 40? reload, 0.925x reload duration, 30 AE for 15s",+10 Weapons,"same ICD as Domineering and Command with much easier requirement, especially with Generation",25.0,B,,
+,Facet of Hope,Prismatic,regen,elemental buffs (2 stacks),+40/60% class regen,/,minor class regen increase but high uptime makes this a good filler pick for DPS or general roam,26.0,B,,
+,Facet of Dawn,Prismatic,damage,"powered melee hit
+powered melee kill","Radiant for 5s
+Radiant for 5s for allies within ?m",-10 Melee,"much worse uptime than Torches, also requires kill for allied benefit",27.0,B,,
+,Ember of Searing,Solar,"regen
+pickup",scorched kill,"8-25% melee (rank-based), firesprite",+10 Class,guarantees melee recovery without Heat Rises for warlock scorch builds,28.0,B,,
+,Echo of Persistence,Void,survivability,passive,"Devour/Void Overshield get 1.5x duration, Invisibility gets 1.4x duration","-10 Weapons (H)
+-10 Health (T)
+-10 Class (W)",extended Devour and Overshield always at least a little helpful,29.0,B,,
+,Ember of Solace,Solar,survivability,passive,Restoration/Radiant gain 1.5x duration,/,more realistic survivability extension compared to Empyrean in current sandbox,30.0,B,,
+,Thread of Fury,Strand,regen,tangle damage (1?s ICD),10-30% melee (rank-based),-10 Melee,"despite ICD, simultaneous hits work, tangle blast radius makes this give a lot of melee energy",31.0,B,,
+,Facet of Generosity,Prismatic,pickup,"transcendent kills (2-10 kills, rank-based)",up to 4 7.15% super orbs (at 3/5/7/10 minor kills),/,very strong for super chaining optimization in planned scenarios,32.0,B,,
+,Facet of Solitude,Prismatic,damage,"(20% of mag + 1 rounded down, 2 for bows) crits within 2s of each (4s ICD)",3m (6m while Transcendent) severing burst on next hit,/,easy boss sever application source for survivability,33.0,B,,
+,Thread of Isolation,Strand,damage,"multiple crits within 2s of each (archetype-based, 4s ICD)",?m severing burst,/,easy boss sever application source for survivability,34.0,B,,
+,Spark of Frequency,Arc,damage,"dealing melee damage
+Amplified","15 stability, 50 reload, 0.8x reload duration for 5.25s
++1 stack to Bolt Charge sources",/,doubled Bolt Charge for neutral arc builds,35.0,B,,
+,Whisper of Hunger,Stasis,damage,stasis shard pickup,+60% more melee,-20 Melee,pretty noticeable melee gains but additive nature means GoA armor can be used instead,36.0,B,,
+,Spark of Discharge,Arc,pickup,"3 minors/2 elites/1 miniboss+ arc weapon kills
+ionic trace pickup","ionic trace
+x1 Bolt Charge",-10 Melee,"helps with arc warlock ionic trace ability cycling, not extremely noticeable but additive benefit with high uptime",37.0,B,,
+,Whisper of Chains,Stasis,pickup,3 minors/2 elites/1 miniboss+ kill with Frost Armor (1?s ICD),small stasis shard,+10 Class,"good stasis builds don't really notice occasional extra shard, but free additive benefit",38.0,B,,
+,Facet of Command,Prismatic,"refill
+pickup","freezing/suppressing enemy (4s ICD)
+frozen/suppressed kill","refills readied weapon, 20? stability, ? AA, 40 AE for 11s
+stasis shard/void breach",/,"has some interesting applications for micro-optimization for rotations, also has some neutral benefits",39.0,C,,
+,Echo of Domineering,Void,"refill
+pickup","suppressing enemy (4s ICD)
+suppressed kill","refill, +30 Weapons, 4% forward movespeed for 10s
+void breach",+10 Grenade,"interesting DPS applications for weapons like Truth and A499, also a breach source",40.0,C,,
+,Whisper of Durance,Stasis,survivability,passive,slow and some stasis abilities get more duration (varies),+10 Melee,"sadly not really impactful on the best stasis builds, good on warlock and for some duration abilities like Squall",41.0,C,,
+,Facet of Ruin,Prismatic,splash,"enemy/crystal shatter
+passive","extra staggering 25 damage 10m instance
+ignitions gain 2m radius (1.25x)",+10 Weapons,"marginally helpful for Prismatic GPG, Consecration, and Bleak Watcher builds",42.0,C,,
+,Facet of Mending,Prismatic,survivability,"grenade kill
+prismatic grenade kill","Cure x1
+Cure x2",/,"more incentive to run prismatic GPG over solar, but largely the same given poor lethality on prismatic grenades",43.0,C,,
+,Ember of Resolve,Solar,survivability,grenade kill,Cure x1,/,"solar grenade builds are too low uptime for this to really be useful, also only Cure x1",44.0,C,,
+,Whisper of Rending,Stasis,damage,passive,"2x primary damage to stasis crystals, 1.5x primary damage to frozen enemies",/,strong damage increase but very niche situations for application (basically just Fighting Lion),45.0,C,,
+,Echo of Reprisal,Void,regen,kills while 3+ enemies within 8m (1s ICD),0.3%/0.65%/1%/1.6%/2.3% more super (3/4/5/6/7 enemies),/,"actually very potent additive super farming effect, but high enemy requirement makes this an unlikely pick",46.0,C,,
+,Ember of Empyrean,Solar,survivability,solar kill,extends Restoration/Radiant by 1.5-6s (rank-based),-10 Health,"has issues with resetting some longer sources of Restoration, otherwise extension nerf hit pretty hard",47.0,C,,
+,Whisper of Refraction,Stasis,regen,stasis-affected kill,9-50% class (rank-based),/,much easier requirement than Mind but class ability generally unneeded on stasis builds off hunter,48.0,C,,
+,Spark of Magnitude,Arc,damage,passive,"lightning grenade gets 1 more bolt, pulse grenade gets 2 more pulses, storm grenade gets additional strike (1.5s longer roam when enhanced)",/,"can be used with arc grenade spam builds, but they aren't really meta in current sandbox",49.0,C,,
+,Facet of Blessing,Prismatic,survivability,melee kill,health regen (applies to allies within ?m while transcendent),/,"same issues as Leeching, allied benefit doesn't really do anything either, can bypass Brawn",50.0,C,,
+,Echo of Leeching,Void,survivability,melee kill,health regen for allies within ?m,+10 Health,"health regen tends to be immediately interrupted in combat, can bypass Brawn",51.0,C,,
+,Echo of Cessation,Void,"splash
+pickup","finisher
+volatile kill","?m volatile burst
+void breach",/,"all benefits easy to obtain from artifact instead, finisher knockback is cool though",52.0,C,,
+,Facet of Sacrifice,Prismatic,regen,light-buffed ability kill,+1% darkness transcendence,+10 Grenade,only transcendence fragment that really gets used given light ability spam frequency,53.0,C,,
+,Ember of Blistering,Solar,regen,ignition kill,8-25% grenade (rank-based),/,ignition kills can be frequent but 8% for a T1 combatant is pretty terrible,54.0,C,,
+,Ember of Eruption,Solar,splash,passive,ignitions gain 2m radius (1.25x),+10 Melee,honestly not that noticeable but not a bad filler fragment for ignition builds,55.0,C,,
+,Ember of Mercy,Solar,survivability,"firesprite pickup
+ally revive","Restoration x1 for 2-3s (additive)
+Restoration x1 for 5-7.5s to allies within ?m",+10 Health,"definitely helpful for weapon/firesprite-focused solar builds, not very meta though",56.0,C,,
+,Echo of Remnants,Void,damage,passive,"axion bolt gets 1.?x duration, void spike/void wall gets 1.5x duration, vortex gets 1.25x duration (1.55x for enhanced)",/,one of the least noticeable grenade duration fragments given current build meta,57.0,C,,
+,Echo of Provision,Void,regen,grenade damage (once per instance),8% melee (3% for scatter/spike/voidwall/vortex),+10 Grenade,"most void melees are borderline useless, on-hit requirement is decent though",58.0,C,,
+,Spark of Amplitude,Arc,pickup,2 kills within 4s of each while Amplified (10s ICD),2.5% super orb,/,"one of the easiest free orb sources, still has 10s ICD though",59.0,C,,
+,Echo of Harvest,Void,pickup,weakened kill (10s ICD),"2.5% super orb, void breach",/,"easy conditions to meet for free orb/breach, but long ICD",60.0,C,,
+,Spark of Feedback,Arc,damage,taking melee damage,"+100% melee damage for next melee within 5s, not refreshable",+10 Health,"small situational additive damage bonus, still probably good on some arc melee builds but not essential",61.0,C,,
+,Facet of Awakening,Prismatic,pickup,3 elemental kills within 6s of each or super kill (5s ICD),matching elemental pickup,+10 Health,"3 kill requirement for one pickup, still has ICD, element requirement",62.0,C,,
+,Facet of Balance,Prismatic,regen,3 kills within 3?s of each with light/dark damage,10% melee/grenade,/,"mediocre energy returns for triple kill requirement, still okay for neutral",63.0,C,,
+,Spark of Ions,Arc,pickup,jolted/Bolt Charge kill (10s ICD),ionic trace,/,easy to activate on competent arc builds but ICD holds it back a lot,64.0,C,,
+,Ember of Combustion,Solar,splash,solar super kill,"ignition, firesprite",+10 Melee,cool interaction with Well but useless otherwise,65.0,C,,
+,Whisper of Fractures,Stasis,survivability,melee enemy shatter,x1 Frost Armor,/,"unneeded extra Frost Armor source given artifact and raw crystal spam, unusable on other stasis builds",66.0,D,,
+,Whisper of Bonds,Stasis,pickup,frozen kill (10s ICD),2.5% super orb,-10 Super,not that hard to activate on stasis but still not great given stat drop and no pickup creation,67.0,D,,
+,Echo of Exchange,Void,regen,melee kill,7.5-25% grenade (rank-based),+10 Melee,"void melee kills not very frequent, and returns aren't even that great",68.0,D,,
+,Ember of Wonder,Solar,pickup,2 ignition kills within ?s of each (10s ICD),2.5% super orb,+10 Health,arguably worst condition + no pickup return of 10s ICD fragments,69.0,D,,
+,Facet of Grace,Prismatic,regen,"kinetic weapon kills
+super kills","+2% transcendence
++2% transcendence to allies within ?m",-10 Health,"acceptable with kinetic weapon builds but still not really that helpful, 2% isn't that much",70.0,D,,
+,Whisper of Chill,Stasis,pickup,3 minors/2 elites/1 miniboss+ stasis weapon kill (5?s ICD),small stasis shard,/,ICD sucks especially when most stasis builds are ability-focused and not weapon-focused,71.0,D,,
+,Facet of Bravery,Prismatic,splash,"grenade kill
+powered melee kill","Volatile Rounds to void weapons for 11.25s
+Unraveling Rounds to strand weapons for 11.25s",/,artifact usually provides these benefits if correct mods are chosen,72.0,D,,
+,Echo of Instability,Void,splash,grenade kill,Volatile Rounds to void weapons for 11.25s,+10 Melee,generally useless given likely artifact choice on void builds,73.0,D,,
+,Whisper of Fissures,Stasis,damage,enemy/crystal shatter,extra staggering 25 damage 10m instance,/,"only potentially helpful for Bleak Watcher chain shatters, otherwise usually detrimental due to knockback",74.0,D,,
+,Echo of Expulsion,Void,splash,void ability kill,160 damage 7m explosion,+10 Super,would be good on other subclasses but void has trouble with refreshable single target ability kills,75.0,D,,
+,Facet of Justice,Prismatic,splash,ability kills while transcendent,130? damage ?m explosion,+10 Super,strongly dependent on whether build can produce consistent ability kills without normal grenade,76.0,D,,
+,Thread of Rebirth,Strand,splash,3 minors/2 elites/1 miniboss+ strand weapon kills,1-3 threadlings (rank-based),/,free extra threadlings but strand weapon requirement makes this much less appealing,77.0,D,,
+,Spark of Momentum,Arc,refill,sliding over brick without full ammo,"equipped weapon refill, x3 Bolt Charge",/,"refills only one weapon, has to be played around, Bolt Charge benefit is whatever",78.0,D,,
+,Ember of Tempering,Solar,pickup,solar weapon kill (3 stacks),"20 AE, 20/40/60 Health, firesprite on solar weapon kill to allies within 15m for 8s",-10 Class,"consistent firesprite source without ability conditions, other benefits are useless though",79.0,D,,
+,Thread of Propagation,Strand,splash,powered melee kill,Unraveling Rounds to strand weapons for 8s,+10 Melee,"same problem as Bravery, can be sourced from artifact easily",80.0,D,,
+,Thread of Wisdom,Strand,pickup,suspended kill (10s ICD),2.5% super orb,/,"one of the more annoying 10s ICD orb sources, especially given not all strand builds suspend",81.0,D,,
+,Thread of Mind,Strand,regen,suspended kill (1?s ICD),10-30% class (rank-based),/,poor uptime requirement for worst ability return choice,82.0,D,,
+,Facet of Devotion,Prismatic,regen,darkness-debuffed kill,1-5% light transcendence energy (rank-based),+10 Melee,light transcendence generally not the missing energy type on transcendence-reliant builds,83.0,D,,
+,Facet of Honor,Prismatic,regen,elemental pickup/tangle destruction,"7.5% light transcendence (5% darkness for stasis shard, 10% darkness for tangle)",+10 Melee,desirable darkness energy sources not really available for builds that want transcendence uptime,84.0,D,,
+,Thread of Finality,Strand,splash,finisher,1-3 threadlings (rank-based),+10 Class,pretty poor returns unless build entirely revolves around finishers,85.0,D,,
+,Facet of Defiance,Prismatic,splash,finisher,135 super-matched (jolt/x40 scorch/volatile/x? slow/sever) damage 6?m explosion,+10 Class,"pretty small radius, usefulness dependent on equipped super",86.0,D,,
+,Thread of Continuity,Strand,survivability,passive,strand debuffs get 1.5x duration (some exceptions),/,"unravel and suspend duration increases generally irrelevant, sever extension is nice but really significant",87.0,D,,
+,Ember of Beams,Solar,damage,passive,stronger solar super ability tracking,+10 Super,questionable if this even does anything,88.0,D,,
+,Spark of Brilliance,Arc,"splash
+survivability",blinded crit kills,7.5m blinding burst,+10 Super,just worse than Beacons in every way,89.0,D,,
+,Echo of Dilation,Void,PvP,passive,"crouch speed set to 4m/s, enhanced radar","+10 Weapons
++10 Super",basically just for stats,90.0,D,,
+,Whisper of Hedrons,Stasis,PvP,freezing enemy,"? handling, 30 Health for 11s",/,constant handling increase but realistically never worth the slot,91.0,F,,
+,Whisper of Reversal,Stasis,survivability,dealing or receiving melee damage with Frost Armor,x10? Slow to enemy for ?-?s,/,basically useless defensive effect given melee damage requirement,92.0,F,,
+,Spark of Volts,Arc,"survivability
+splash",finisher,"Amplified, x1 Bolt Charge",+10 Class,probably worst finisher fragment reward,93.0,F,,
+,Spark of Recharge,Arc,regen,critical health,+400% grenade/melee regen until shields restored,/,strong regen effect but requirement is a non-starter for endgame,94.0,F,,
+,Thread of Transmutation,Strand,pickup,weapon kill with Woven Mail,tangle,+10 Melee,"tangles already being created as soon as global CD expires, doesn't really change anything",95.0,F,,
+,Spark of Focus,Arc,regen,sprinting at >5m/s for 1.25s,"+150% class regen, deactivates once >1 charge","-10 Weapons (H)
+-10 Health (T)
+-10 Class (W)",terrible requirement for mediocre class regen,96.0,F,,
+,Spark of Instinct,Arc,"splash
+survivability",taking damage at critical health (15?s ICD),46 damage jolting ?m burst,/,worse ICD than Vigilance while providing a much worse effect,97.0,F,,
+,Thread of Binding,Strand,splash,super kill,108 damage 6m suspending burst,+10 Health,insanely situational for what ends up being a pretty useless effect given super lethality,98.0,F,,
+,Spark of Haste,Arc,PvP,sprinting at >5m/s for 1.25s,+50 Health,/,Health only when running is laughable especially given most builds run 0 Health,99.0,F,,

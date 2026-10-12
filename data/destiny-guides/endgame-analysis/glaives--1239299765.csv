@@ -1,0 +1,81 @@
+WEAPON,,INFO,,,,,,,,PERKS,,,,,,ANALYSIS,,
+🖼️,Name,Season,Energy,Frame,Source,Stun,Ammo,Shield,⬆️,Barrel,Mag,MW,Perk 1,Perk 2,Origin Trait,Notes,#,Tier
+,Ecliptic Distaff,29.0,Void,Adaptive,Solo Ops,,41.0,47.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Repulsor Brace
+Disruption Break
+Immovable Object","Chaos Reshaped
+Close to Melee
+Withering Gaze",Vanguard Determination,"better general use case origin than Heron, also has Chaos access and Withering Gaze for some reason",1.0,S
+,The Heron,28.0,Void,Aggressive,Tenet of Bravery,,52.0,39.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Repulsor Brace
+Disruption Break
+Overflow","Redirection
+Close to Melee
+Unrelenting","Nail, Meet Hammer","excellent synergy with Suppressing Glaive for stacking Void Overshield with block DR, has melee combo",2.0,S
+,Forthcoming Deviance,29.0,Void,Rapid,Salvation's Edge,,65.0,28.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Repulsor Brace
+Disruption Break
+Reconstruction","Chaos Reshaped
+Close to Melee
+Destabilizing Rounds",Collective Purpose,basically just worse than top 2 glaives due to frame and origin,3.0,S
+,Refusal of the Call,29.0,Strand,Adaptive,Pit of Heresy,,44.0,44.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Slice
+Close to Melee
+Chain Reaction","Chaos Reshaped
+Replenishing Aegis",Heretical Behavior,"probably best kinetic slot defensive glaive, Slice + Chaos is great and has 2 origins for roam vs. boss",4.0,S
+,Rake Angle,29.0,Stasis,Aggressive,Zavala,,31.0,42.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Overflow
+Lead from Gold
+Rimestealer","Chill Clip
+Close to Melee",Problem Solver,"Chill Clip surprisingly useful for acting as a damage perk, good QoL otherwise + origin for elite+",5.0,S
+,Lubrae's Ruin,29.0,Solar,Adaptive,Vow of the Disciple,,40.0,40.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Close to Melee
+Frenzy
+Immovable Object","Chaos Reshaped
+Surrounded
+Unrelenting",Souldrinker,"lacks some defensive utility, Souldrinker doesn't work on melee hits and thus has low uptime",6.0,A
+,Nezarec's Whisper,29.0,Arc,Adaptive,Presage,,50.0,42.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Demolitionist
+Lead from Gold
+Impulse Amplifier","Frenzy
+Adaptive Munitions",Extrovert,"very outdated perk pool, but Extrovert is pretty decent and still defensively functions",7.0,A
+,Judgment of Kelgorath,29.0,Solar,Aggressive,Seraph's Shield,,35.0,25.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Overflow
+Demolitionist
+Pugilist","Close to Melee
+Surrounded
+Wellspring",Ambush,Demo/Pugilist + Wellspring is one of the highest ability chunk regen sources in the game,8.0,A
+,The Enigma,29.0,Void,Adaptive,The Enclave,,45.0,45.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Grave Robber
+Lead from Gold","Close to Melee
+Unrelenting",Psychohack,"still usable despite dated perk pool, Psychohack is great to have on a defensive tool",9.0,A
+,Greasy Luck,29.0,Solar,Rapid,Ghosts of the Deep,,64.0,18.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Chaos Reshaped
+Reconstruction
+Heal Clip","Close to Melee
+Chain Reaction
+Incandescent",Restoration Ritual,sacrifices too much in shield duration for having essentially the same roll as Lubrae,10.0,A
+,"Greasy Luck
+RotN version",26.0,Solar,Rapid,Rite of the Nine,,64.0,18.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Reconstruction
+Lead from Gold
+Heal Clip","Close to Melee
+Redirection
+Incandescent",Gravity Well,"has some utility as an LFG + Gravity Well ammo pickup option, otherwise outclassed",11.0,A
+,Albedo Wing,29.0,Arc,Aggressive,Tenet of Bravery,,35.0,30.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Grave Robber
+Strategist
+Air Trigger","Close to Melee
+Demolitionist
+Lead from Gold",Dawning Surprise,"worse overall than Kelgorath for chunk gains, other perks not great",12.0,B
+,Backfang,29.0,Arc,Rapid,Gambit,,65.0,27.0,Yes,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Immovable Object
+Lead from Gold
+Impulse Amplifier","Close to Melee
+Surrounded
+Unrelenting",Gun and Run,"very mediocre overall, worst frame and no special perks or origin",13.0,B
+,Unexpected Resurgence,21.0,Arc,Adaptive,Trials,,51.0,50.0,No,Auxiliary Reserves,"Alloy Magazine
+Swap Mag",Shield Duration,"Auto-Loading Holster
+Impulse Amplifier","Close to Melee
+Frenzy
+Surrounded",Alacrity,ALH is rare on a glaive but nothing else here really stands out besides high shield duration,14.0,B
