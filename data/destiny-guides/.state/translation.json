@@ -3,10 +3,10 @@
   "language": "zh-chs",
   "status": "complete",
   "pending_text_cells": 0,
-  "generated_at": "2026-10-13T12:01:12+00:00",
+  "generated_at": "2026-10-13T13:58:01+00:00",
   "manifest_version": "244213.26.06.29.2000-1-bnet.65864",
   "original_snapshot": "2026-10-13T08:16:24+00:00",
-  "method": "Official names matched by Bungie definition hash; frame labels use official frame names; community prose machine-translated: 19877 unchanged lines reuse earlier translations, 8 use reviewed lines from .state/translation-overrides.json, 165 new lines by gpt-5.6-luna. Not an official translation of the guides.",
+  "method": "Official names matched by Bungie definition hash; frame labels use official frame names; community prose machine-translated: 19876 unchanged lines reuse earlier translations, 9 use reviewed lines from .state/translation-overrides.json, 165 new lines by gpt-5.6-luna. Not an official translation of the guides.",
   "validation": "Original SHA-256, row/column coordinates, empty cells, numeric tokens, URLs, newlines and protected tokens checked; original English retained for review.",
   "frames": {
     "Adaptive": "适配",
@@ -806,7 +806,7 @@
       "zh_path": "archive/zh/boss-damage/weapons-old.csv",
       "title": "Weapons (old)",
       "title_zh": "武器（旧）",
-      "sha256": "66058149ff90fb62bbee2d0326148ba84788e58dbf4d3eecf577cca25262e93f",
+      "sha256": "01f36ff6411b27f499c03cfa749bc840223b8bb34d0a6a8cf4c72f07ba3effdc",
       "original_sha256": "bb168593f389c5238c5cc054e7b7e723a17e144f80c6cb2e1b8c617c02fcff93"
     },
     {
@@ -815,7 +815,7 @@
       "zh_path": "zh/boss-damage/weapons.csv",
       "title": "Weapons",
       "title_zh": "武器",
-      "sha256": "ee5c1972b1aa67f4d4c878be3ce3f3ebda0712b437966f0e05facf7153f2ea0d",
+      "sha256": "d9934dbd7017403c7e00947662257454ae12c3b963183e06f0fee8952e265977",
       "original_sha256": "e187eaf01a920ed47ec3b793a68603ace1bcc7bdfb3a19054ca3b3ff1670f1b0"
     },
     {
