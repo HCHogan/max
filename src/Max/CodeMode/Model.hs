@@ -14,8 +14,8 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent (Concurrent)
-import Max.CodeMode.Execution (CodeModeResult (..), codeModeInvocation, runWasmProgram)
-import Max.CodeMode.JavaScript (javaScriptLimits, javaScriptRuntimeVersion, runJavaScriptWith, workflowProgram)
+import Max.CodeMode.Execution (CodeModeResult (..), WasmProgram (..), codeModeInvocation, runWasmProgram)
+import Max.CodeMode.JavaScript (javaScriptLimits, javaScriptProgramWith, javaScriptRuntimeVersion, workflowProgram)
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools
 import Max.Skill.Workflow (ResolvedWorkflow (..), callableWorkflows, resolveWorkflow)
@@ -92,7 +92,7 @@ executeModelBatch enabled loaded session hooks catalog requests
             request.trName == "run_code",
             Object fields <- request.trArguments,
             Right (Left (source, args)) <- submission fields -> do
-              result <- runJavaScriptWith session hooks catalog (callableWorkflows javaScriptRuntimeVersion loaded catalog) source args
+              result <- runWasmProgram session hooks catalog javaScriptLimits (submitted request (javaScriptProgramWith catalog (callableWorkflows javaScriptRuntimeVersion loaded catalog) source args))
               pure (ToolBatch [codeModeInvocation result] result.cmOverBudget)
         [request]
           | enabled,
@@ -108,10 +108,11 @@ executeModelBatch enabled loaded session hooks catalog requests
                       hooks
                       resolved.rwCatalog
                       javaScriptLimits
-                      (workflowProgram resolved.rwCatalog (callableWorkflows javaScriptRuntimeVersion loaded resolved.rwCatalog) reference resolved.rwVersion resolved.rwWorkflow args)
+                      (submitted request (workflowProgram resolved.rwCatalog (callableWorkflows javaScriptRuntimeVersion loaded resolved.rwCatalog) reference resolved.rwVersion resolved.rwWorkflow args))
                   pure (ToolBatch [codeModeInvocation result] result.cmOverBudget)
         _ -> pure (ToolBatch (map (const (reject "invalid_code_submission" (rejection requests))) requests) False)
   where
+    submitted request program = program {wpCallId = Just request.trCallId}
     -- {code} or {code, args}: ad-hoc code, args bound like a workflow's input.
     -- {workflow} or {workflow, args}: a loaded workflow, args defaulting to {}.
     submission fields

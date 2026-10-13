@@ -80,11 +80,14 @@ data WasmProgram = WasmProgram
     wpInput :: !(Maybe ByteString),
     wpEvidence :: !Value,
     wpOutputContract :: !(Maybe Contract),
-    wpWorkflow :: !(Maybe Value)
+    wpWorkflow :: !(Maybe Value),
+    -- | The model's run_code call id. Journaling under it lets a compacted
+    -- result's context_resume(call_id=…) locator find this program's row.
+    wpCallId :: !(Maybe Text)
   }
 
 runWasmTools :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> WasmLimits -> ByteString -> Eff es CodeModeResult
-runWasmTools session hooks catalog limits binary = runWasmProgram session hooks catalog limits (WasmProgram binary Nothing Null Nothing Nothing)
+runWasmTools session hooks catalog limits binary = runWasmProgram session hooks catalog limits (WasmProgram binary Nothing Null Nothing Nothing Nothing)
 
 -- | Orchestration enters outside the leaf gate. Registering this as a leaf Tool
 -- runner would recursively acquire that gate and deadlock.
@@ -190,9 +193,11 @@ runAdmittedProgram session hooks catalog limits program install suspend = do
   seen <- liftIO (newTVarIO Set.empty)
   buffered <- liftIO (newTVarIO [])
   reference <- liftIO (newTVarIO label)
+  -- Leaf calls keep the session label prefix; only the program row carries
+  -- the model-facing id.
   let start =
         JournalStart
-          label
+          (fromMaybe label program.wpCallId)
           "host:wasm/v2"
           2
           "max-wasm-abi-v2"

@@ -118,6 +118,7 @@ programWithInput catalog callable source args contract workflow =
     )
     contract
     workflow
+    Nothing
   where
     names = [entry.ctDefinition.tdRef.unToolRef | entry <- catalog, entry.ctDefinition.tdRef /= ToolRef "run_code"]
     argument = maybe "" (LBS.toStrict . encode . TE.decodeUtf8 . LBS.toStrict . encode) args

@@ -596,6 +596,22 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     sourceRows <- withDb pool $ query "SELECT normalized_input->'program'->>'source' FROM execution_journal WHERE turn_id=? AND tool_ref='host:wasm/v2'" (Only turn.atrTurnId)
     sourceRows `shouldBe` [Only source]
 
+  -- Compaction stubs a run_code result as context_resume(turn, call_id=<model
+  -- call id>); the program row must be findable by that id.
+  it "journals a model run_code program under the model's call id" $ do
+    (jobs, turn, runtime) <- fixture
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [echoTool])
+    result <- withHost pool . runTools registry $ do
+      session <- newExecutionSession Nothing
+      executeModelBatch True Map.empty session (hostHooks jobs runtime) (views registry) [ToolRequest "run_code-1" "run_code" (object ["code" .= ("return await tools.echo({value: 1});" :: Text)])]
+    map (outcomeName . (.tiOutcome)) result.tbInvocations `shouldBe` ["succeeded"]
+    rows <- withDb pool $ query "SELECT tool_ref, call_id FROM execution_journal WHERE turn_id=? ORDER BY execution_ordinal" (Only turn.atrTurnId)
+    case rows :: [(Text, Text)] of
+      [("host:wasm/v2", program), ("echo", leaf)] -> do
+        program `shouldBe` "run_code-1"
+        leaf `shouldSatisfy` T.isPrefixOf "wasm:"
+      other -> expectationFailure (show other)
+
   it "retains committed JavaScript leaves and partial failure evidence without replay" $ do
     (jobs, turn, runtime) <- fixture
     count <- newIORef (0 :: Int)
@@ -698,8 +714,8 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
         [ToolRequest "saved-code" "run_code" (object ["workflow" .= ("saved/run" :: Text), "args" .= args])]
     map (outcomeName . (.tiOutcome)) result.tbInvocations `shouldBe` ["outcome-unknown"]
     states turn `shouldReturn` [("use_skill", "succeeded"), ("host:wasm/v2", "outcome-unknown"), ("echo", "committed")]
-    evidence <- withDb pool $ query "SELECT normalized_input->'program'->'workflow'->>'version', normalized_input->'program'->>'source' FROM execution_journal WHERE turn_id=? AND tool_ref='host:wasm/v2'" (Only turn.atrTurnId)
-    evidence `shouldBe` [(pinned.slVersion, workflow.wfSource)]
+    evidence <- withDb pool $ query "SELECT call_id, normalized_input->'program'->'workflow'->>'version', normalized_input->'program'->>'source' FROM execution_journal WHERE turn_id=? AND tool_ref='host:wasm/v2'" (Only turn.atrTurnId)
+    evidence `shouldBe` [("saved-code" :: Text, pinned.slVersion, workflow.wfSource)]
 
   it "refuses the loser before effect when sessions race for the last shared call" $ do
     (jobs, turn, runtime) <- fixture

@@ -56,7 +56,7 @@ import Max.Tools.Schema
     toolObject,
   )
 import Max.Tools.SelfSource (selfSourceTools)
-import Max.Turn.Types (ParsedTurnHandle (..), parseTurnHandle)
+import Max.Turn.Types (ParsedTurnHandle (..), parseTurnHandle, turnHandleText)
 import OneBot.Types (UserId (..))
 
 builtinsFor ::
@@ -227,10 +227,15 @@ contextResumeTool dc =
             result <- case (parsed, callId) of
               (ParsedTurn ordinal, Nothing) -> expandTurnTrace ordinal after limit (budget * 3)
               _ -> expandTurnResult turn callId after (min (budget * 2) (if limit == 40 then 6000 else limit))
-            pure $ maybe (Left "turn/result not found, ambiguous, or not visible") (Right . withNext turn callId limit) result
+            pure $ maybe (Left (missing parsed callId)) (Right . withNext turn callId limit) result
     }
   where
     budget = readPageTokens (toolContextLimits dc) (toolMultimodal dc)
+    -- A call id can miss (e.g. run_code_resume has no row of its own); the
+    -- trace lists every result handle, so point there instead of a re-run.
+    missing parsed callId = case (parsed, callId) of
+      (ParsedTurn ordinal, Just _) -> "turn/result not found, ambiguous, or not visible；先读 context_resume(turn=" <> turnHandleText ordinal <> ") 的轨迹，再用其中的 t#n:rm 结果句柄，不要重跑原调用"
+      _ -> "turn/result not found, ambiguous, or not visible"
     parseArgs o = do
       turn <- o .: "turn"
       callId <- o .:? "call_id"
