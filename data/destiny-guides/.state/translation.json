@@ -3,10 +3,10 @@
   "language": "zh-chs",
   "status": "complete",
   "pending_text_cells": 0,
-  "generated_at": "2026-10-13T08:20:12+00:00",
+  "generated_at": "2026-10-13T12:01:12+00:00",
   "manifest_version": "244213.26.06.29.2000-1-bnet.65864",
   "original_snapshot": "2026-10-13T08:16:24+00:00",
-  "method": "Official names matched by Bungie definition hash; frame labels use official frame names; community prose machine-translated: 20043 unchanged lines reuse earlier translations, 7 use reviewed lines from .state/translation-overrides.json, 0 new lines by Google Translate public web endpoint. Not an official translation of the guides.",
+  "method": "Official names matched by Bungie definition hash; frame labels use official frame names; community prose machine-translated: 19877 unchanged lines reuse earlier translations, 8 use reviewed lines from .state/translation-overrides.json, 165 new lines by gpt-5.6-luna. Not an official translation of the guides.",
   "validation": "Original SHA-256, row/column coordinates, empty cells, numeric tokens, URLs, newlines and protected tokens checked; original English retained for review.",
   "frames": {
     "Adaptive": "适配",
@@ -779,7 +779,7 @@
       "zh_path": "zh/boss-damage/changelog.csv",
       "title": "Changelog",
       "title_zh": "更新记录",
-      "sha256": "95712a1f5993a0d8b789c80b3be00586b4ba83e9107220408775a18d9f7ddd50",
+      "sha256": "04d4620cae6c1dfb3ceb8bdb28a4f3fc9dc47bb1899d8e5a8030596391044aff",
       "original_sha256": "2ea9e64d2b6fb88cdd68cafa0b57061f40fe8950a3b4b9f7a0100b3558b2c0f7"
     },
     {
@@ -806,7 +806,7 @@
       "zh_path": "archive/zh/boss-damage/weapons-old.csv",
       "title": "Weapons (old)",
       "title_zh": "武器（旧）",
-      "sha256": "5a3c4670c5a09652f9e170ef4ada1e504c660d796214f95b93e5117d5d4723af",
+      "sha256": "66058149ff90fb62bbee2d0326148ba84788e58dbf4d3eecf577cca25262e93f",
       "original_sha256": "bb168593f389c5238c5cc054e7b7e723a17e144f80c6cb2e1b8c617c02fcff93"
     },
     {
@@ -815,7 +815,7 @@
       "zh_path": "zh/boss-damage/weapons.csv",
       "title": "Weapons",
       "title_zh": "武器",
-      "sha256": "c808bd33f0c6cf385934c8027c9b921486308dcee7adc317822f9973aeab6643",
+      "sha256": "ee5c1972b1aa67f4d4c878be3ce3f3ebda0712b437966f0e05facf7153f2ea0d",
       "original_sha256": "e187eaf01a920ed47ec3b793a68603ace1bcc7bdfb3a19054ca3b3ff1670f1b0"
     },
     {
@@ -833,7 +833,7 @@
       "zh_path": "archive/zh/boss-damage/scaling-old.csv",
       "title": "Scaling (old)",
       "title_zh": "伤害缩放（旧）",
-      "sha256": "72739db57c59b482f1cca9e521cb2b7892354cac346dc8ab04324c9e631acce4",
+      "sha256": "03ba40bb6353fde0307e41a3deb762f3ed1ff3ba5955cbe766c0f073a450c6fb",
       "original_sha256": "2c34102a7adbace47a07cded01987a7209b35c0d54fc842a7349fcb0daaaaac8"
     },
     {
@@ -869,7 +869,7 @@
       "zh_path": "zh/boss-damage/sustained.csv",
       "title": "Sustained",
       "title_zh": "持续输出",
-      "sha256": "3f2996d6e04fafd148b07a5240501294b73090b7d989a474b8211e173a473e34",
+      "sha256": "8ae66866ef0c330025d4a15bba42b5d7b93cbd25136729503633d486ba706882",
       "original_sha256": "dc529818c808c38093208a1945533cdfd152f03ea5fdb2f6c6559b9fb556f8be"
     },
     {
@@ -896,7 +896,7 @@
       "zh_path": "zh/boss-damage/swap.csv",
       "title": "Swap",
       "title_zh": "切枪",
-      "sha256": "031dccb452c5cccb5eca20865ffdcfaf58a777dfa2a93ee518dca39e2894d5d1",
+      "sha256": "9bc3c9d4b4101d7ed0ebc5da99a0b6bfa2a97aaa5b5c1912ed9511bac50f0559",
       "original_sha256": "fc267a7d0d55faf47dcb28fea1b98469b35fa428bd4e35a9c408490f858429e4"
     },
     {
@@ -905,7 +905,7 @@
       "zh_path": "archive/zh/boss-damage/sustained-old.csv",
       "title": "Sustained (old)",
       "title_zh": "持续输出  (旧)",
-      "sha256": "74be0cb246a13cf923600d13a819b016fcb4be96af847847fe1b02b65f65dafe",
+      "sha256": "ea52f0bc2bc76df8684e3efb5c2c92aa25e0ba8aff5dc4e6be38534594543a19",
       "original_sha256": "0da7ad58fc8fecca4be594237da4ba5d64010a8f6235d8803c5331b277257eeb"
     },
     {
@@ -914,7 +914,7 @@
       "zh_path": "archive/zh/boss-damage/swap-old.csv",
       "title": "Swap (old)",
       "title_zh": "切枪  (旧)",
-      "sha256": "481b6c9f8d876a964428db8d899184dbd1472e8b3e6345ac088cc5f77475f65d",
+      "sha256": "3a4f3bc2893c5496fa3bca821ff0b9e5de6c893004a91fa52d953fef19a7fbe9",
       "original_sha256": "be0e75eb3644bdba897162e4db8adf239f9bed769dcbc7ecd19db7bdc7ff6390"
     },
     {
@@ -950,7 +950,7 @@
       "zh_path": "archive/zh/boss-damage/super-old.csv",
       "title": "Super (old)",
       "title_zh": "超能（旧）",
-      "sha256": "c22ad3566cc81e75438168fe72311430530586dbf52789512433034df8a900c7",
+      "sha256": "e50911faeb71c1fa807fa12fde2a7732e60ddcbe9249c75edcef7a5d9562ab81",
       "original_sha256": "da6e5cfb2b2d875e4a729b96e4baa7592de79ac1a5a37ab8b74025995a35a21e"
     },
     {
@@ -977,7 +977,7 @@
       "zh_path": "zh/boss-damage/testing.csv",
       "title": "Testing",
       "title_zh": "测试",
-      "sha256": "5368b61afc9938a1c2cf837517927c73e8679098e6b07c6e3cc1587dda822bdf",
+      "sha256": "e3c2c7721fcfdea92526421c121cdde1f91e1f79ced10575aa542aa5ed9d725c",
       "original_sha256": "70396244b670864d94310b61041d3b276d8393d73380c9ed9a16a2078fa186f0"
     }
   ]
