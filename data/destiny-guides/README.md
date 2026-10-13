@@ -1,72 +1,87 @@
-# Destiny 攻略表格快照
+# 命运2 攻略表格（沙箱里是 /data/destiny）
 
-四份公开工作簿按分页保存为 UTF-8 CSV，供后续宿主侧 `index/read/find` 工具使用。
-`index.json` 列出来源、分页名称和 ID、相对路径、获取方式、行列数、校验和、
-原表链接，以及原始列坐标和可识别的表头。资料包在构建时嵌入 Max，加载
-destiny skill 后通过 `destiny_guide` 查阅，不依赖 sandbox、联网或个人账号授权。
+四份公开 Google 表格的只读快照，随 Max 部署更新，不是实时数据。每个分页的获取时间
+在 catalog.tsv 的 fetched_at；适用的游戏版本以表格自己的说明为准。
 
-## 宿主工具
+## 先看这两个文件
 
-- `action=index` 分页列出表格、来源说明和 schema，可按 source 或 sheet 限定。
-- `action=read` 按 CSV 记录分页读取，附相关批注、链接、文字格式和合并单元格原文。
-- `action=find` 用 POSIX 扩展正则匹配非空单元格，默认忽略大小写；返回原表行号和来源。
-  同时检索中英文，同一行只返回一次，matched_languages 说明在哪种语言命中。
-  默认排除历史/ignore/隐藏页，显式 sheet 或 include_legacy 可查询这些分页。
-- offset 从 0 起，read 计 CSV 记录，find 计匹配记录。按 next_offset 继续；响应预算
-  只缩短页长，不截断单元格。columns 使用原表 A/B/AA 等列坐标。
-- 获取日期、快照哈希与原表标注的适用版本共同用于判断资料是否合适；目录中
-  unspecified 的分页不能据此认定适用于当前补丁。
+- `catalog.tsv`：每个分页一行：path、source、title（英文原名）、title_zh、status、rows、
+  columns、header_rows（可能的表头行号）、fetched_at、url（原表链接，引用时附上）。
+  status 为 current 的是当前分页，hidden/historical/ignore 的在 archive/。
+- `names.tsv`：英文 ⇄ 官方中文名。kind 为 item/perk/set/… 的来自官方 Manifest，hash 可交给
+  destiny_lookup；frame 是框架短名（High-Impact = 高冲击力）；editorial 是这份资料的通用译法，
+  不是官方名称。
 
-## 数据格式
+## 目录
 
-- 原版 CSV 路径保持不变；`zh-chs/<source>/*.csv` 是对应的中文副本，行列坐标完全相同。
-  工具默认返回中文及 original_cells 英文，language=en 返回英文；language 不限制搜索语言。
-- `zh-chs/index.json` 绑定每份译文和原文的 SHA-256，并记录官方 Manifest 版本、翻译方法和时间。
-  官方名称按同 hash 配对；`zh-chs/glossary.json` 保存用到的定义类型和 hash。无法消除的同名歧义
-  不强行选官方名称。status=terms-only 表示术语草稿，社区说明仍有英文；status=complete 才表示
-  完成全部文字的机器翻译。完整译文不是官方攻略译本；以英文原文核对条件。
-- 自动检查原文哈希、空单元格、行列、数字、链接、换行和占位符。中文说明保留数值和未知值标记；
-  原始批注、链接文字和 rich_text 仍为英文，工具标明 original_details_language=en。
+- `en/<source>/<sheet>.csv`：原文，当前分页。数值、条件、例外以这里为准。
+- `zh/<source>/<sheet>.csv`：中文副本，行列坐标与 en 完全相同，同一格可直接对照。
+- `archive/{en,zh}/<source>/…`：隐藏、旧版（old/outdated）和 ignore 分页，查历史时才看。
+- `meta/<source>/<sheet>.json`：merged_ranges、cell_notes（作者批注）、hyperlinks、formulas、
+  hidden_rows，坐标为 A1 写法。
 
-- CSV 保留原表网格：第一个 CSV 记录对应原表第 1 行，第一列对应 A 列，
-  不添加合成表头或行号列。仅裁掉末尾空行。
-- 说明中的换行和逗号按 CSV 规则转义。读取时必须使用 CSV 解析器，
-  不能把文件物理行号当成原表行号。
-- 合并单元格的文字只保存在左上角；合并范围在同名 `.metadata.json` 中。
-  HTML 未渲染的行保留为空行，`rendered_rows` 记录实际读取的行。
-- XLSX 来源保存公式的缓存计算结果，日期转换为 ISO 日期；数值未重新计算，
-  百分数、缩放和单位应结合原表表头理解。公式、可获取的批注和链接另存元数据。
-- HTML 来源保存公开页面显示的文字、链接、图片地址和行内文字格式。
-  HTML 无法提供全部公式和批注；图片和图表的内容不在 CSV 中。
-- `schema.layout=raw_spreadsheet_grid` 表示原始网格，并不是归一化实体表。
-  `header_rows` 是按表头词识别的导航提示；并排表格、分节标题和原始说明仍需读取。
+| source | 内容 |
+|---|---|
+| court | 增伤/减益分类与叠加规则、勇士应对、催化、Banes、微型导弹 |
+| compendium | perk、异域武器/护甲、模组、子职业技能和机制的具体数值、触发条件与例外 |
+| endgame-analysis | 终局武器评级与推荐 perk、框架 archetypes、套装、技能/神器评价；先看 status.csv 的更新状态 |
+| boss-damage | Boss 伤害测试：sustained 持续输出、swap 切枪、fireteam 配队、bosses 的测试条件 |
 
-## 版本与资料状态
+## CSV 约定
 
-所有公开可发现的分页都会保存，包括隐藏页、旧版、历史数据和 `ignore` 页。
-`source_status` 只根据分页名称标记 `historical`、`ignore` 或 `unspecified`；
-`unspecified` 不保证资料适用于当前游戏版本。`fetched_at` 是获取时间，
-原表标注的更新日期和测试版本仍以表格内容为准。
+- 原表网格，没有加表头：文件第 N 行就是原表第 N 行，第 1 列是 A 列。`rg -n`、`sed -n 'Np'`
+  给出的行号可以直接当原表行号引用。
+- 单元格内的换行写成 `\n`，反斜杠写成 `\\`。
+- 数值按原表的显示格式写（`26.83%`、`1028.960`），但不带千分位逗号；court 和 compendium
+  来自网页，保留网页上的文字。`N/A`、`INF`、`?` 是原表的值。
+- 合并单元格的文字只在左上角一格；表格可能并排或分节，表头不一定在第 1 行，先看
+  header_rows 或用 `head` 看前几行。图片和图表不在 CSV 里。
 
-Endgame Analysis 的 Status 页解释了各分页更新状态。不同武器类别的 Tier
-不能直接横向比较，两列推荐 perk 也不能按行序直接配对。Boss Damage 的
-Sustained、Swap 和 Bosses 页应连同测试条件阅读。
-
-## 更新
-
-宿主运行 `scripts/fetch-destiny-guides.py`，需要 Python 3、curl、openpyxl
-和 beautifulsoup4。程序优先下载公开 XLSX；无法导出时读取公开 HTML 分页。
-原始下载缓存位于 Git 忽略的 `var/destiny-guides-import/`。全部分页获取、
-解析成功后才更新本目录。更新后需要重新构建并部署 Max，运行中的快照保持不变。
+## 读法
 
 ```sh
-python3 scripts/fetch-destiny-guides.py
-python3 scripts/translate-destiny-guides.py
+cd /data/destiny
+rg -i 'cataclysmic' en                          # 文件:行号:内容，一行就是原表一行
+sed -n '1,3p;40p' en/endgame-analysis/lfrs.csv  # 表头和第 40 行
+```
+
+```python
+import csv
+
+def load(path):
+    """rows[N-1] 是原表第 N 行，row[0] 是 A 列。"""
+    with open(path, encoding="utf-8") as f:
+        return [[c.replace("\\\\", "\0").replace("\\n", "\n").replace("\0", "\\") for c in row]
+                for row in csv.reader(f)]
+
+def col(letters):
+    """'A' -> 0, 'AK' -> 36"""
+    n = 0
+    for ch in letters:
+        n = n * 26 + ord(ch) - 64
+    return n - 1
+```
+
+用 pandas 时：`pd.read_csv(path, header=None, dtype=str, keep_default_na=False)`，否则 N/A 会被读成空值。
+
+## 中文译文
+
+- zh/ 里的社区说明是机器翻译，不是官方攻略译本；装备、perk、套装等名称按官方 Manifest 的
+  同 hash 中文名替换，框架短名按官方框架名。
+- 数值、条件、例外和测试前提以 en 为准，zh 与 en 有出入时以 en 为准。
+- boss-damage 的 `e.` 前缀表示强化（Enhanced），`e. Target Lock` 是强化目标锁定；部分旧译文
+  把它误译成“例如”。
+
+## 更新（维护者）
+
+```sh
+python3 scripts/fetch-destiny-guides.py        # 需要 openpyxl、beautifulsoup4
+python3 scripts/translate-destiny-guides.py    # 只翻译新出现的行；--plan 先看要翻译多少
 python3 scripts/translate-destiny-guides.py --check
 ```
 
-翻译生成器使用 Python 标准库和 curl，缓存位于 Git 忽略的 var/destiny-guides-translation。
-它仅在资料生成时联网；默认公共翻译接口可能限流，可用 --llm-config 配置文件路径 --profile 名称
-切换到已配置的 Max 模型（需要 PyYAML），或用 --llm-env 读取 MAX_LLM_* 环境变量；不会打印密钥。
---terms-only 可先生成明确标注的术语草稿。运行时直接检索内嵌的两种语言。更新英文后须重新生成中文，
-宿主会拒绝原文哈希不一致的旧译文。新的 Manifest 可删除缓存中的 manifest.json 后重新获取。
+fetch 会先把现有中英对照收进 `var/destiny-guides-translation`，没变的行不会重新翻译。
+翻译服务默认是 Google 公共接口，质量较差；`--llm-config <Max 配置> --profile <名称>` 或
+`--llm-env` 改用 Max 已配置的模型。人工核对过的行写进 `.state/translation-overrides.json`，
+优先于机器翻译；`--retranslate REGEX` 重新翻译匹配的行。`.state/` 是生成器的内部记录，
+不会挂进沙箱。更新后重新构建并部署 Max，各群沙箱会在下次使用时围着原 /work 重建一次。

@@ -128,6 +128,11 @@ pkgs.testers.runNixOSTest {
         machine.fail(f"runuser -u max-service -- mv {view} /var/lib/max/media/views/moved")
         machine.fail("runuser -u max-service -- ln -s / /var/lib/max/media/views/-101")
 
+    with subtest("reference data is mounted read-only under /data"):
+        machine.succeed(execute + "test -s /data/destiny/catalog.tsv")
+        machine.succeed(execute + "test ! -e /data/destiny/.state")
+        machine.fail(execute + "touch /data/destiny/forged")
+
     with subtest("commands overlap and cancelling one leaves its sibling running"):
         survivor = "touch /work/parallel-ready; while ! test -e /work/parallel-release; do sleep 0.1; done; echo survivor"
         machine.succeed(execute + "sh -c " + shlex.quote(survivor) + " >/tmp/max-survivor.log 2>&1 &")

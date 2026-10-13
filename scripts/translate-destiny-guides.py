@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""Build zh-chs CSV copies without changing the English guide snapshot.
+"""Build the zh/ copies, names.tsv and catalog.tsv for the Destiny guide data.
 
 Python standard library + curl (PyYAML for --llm-config). Official names are
-paired by definition hash in Bungie's en/zh-chs Manifest. Community prose uses
-a configured Max model, or Google's public translation endpoint (machine
-translation, not official game text). Protected
-tokens preserve names, numbers, URLs, newlines and uncertainty markers. The
-resumable translation cache is local; Max never calls a translation service.
+paired by definition hash in Bungie's en/zh-chs Manifest; bare frame labels in
+weapon tables use the official frame names. Community prose uses a configured
+Max model, or Google's public translation endpoint (machine translation, not
+official game text). Protected tokens preserve names, numbers, units, URLs,
+newlines and uncertainty markers. Lines translated before are reused from the
+local cache, which fetch-destiny-guides.py fills from the checked-in copies;
+Max itself never calls a translation service.
 """
 
 import argparse
 import collections
 import concurrent.futures
-import csv
-import hashlib
 import json
 import os
 import re
-import sqlite3
+import shutil
 import subprocess
 import tempfile
 import time
@@ -27,18 +27,30 @@ import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
+from destiny_guide_files import (GLOSSARY, OVERRIDES, SOURCES_INDEX, TRANSLATION_INDEX, digest, frame_line,
+                                 grid_bytes, harvest_memory, open_memory, read_grid, zh_path)
+
 
 ROOT = Path(__file__).resolve().parent.parent
 KINDS = ["DestinyInventoryItemDefinition", "DestinySandboxPerkDefinition",
          "DestinyEquipableItemSetDefinition", "DestinyClassDefinition",
          "DestinyDamageTypeDefinition", "DestinyStatDefinition", "DestinyBreakerTypeDefinition"]
-NUMERIC_VALUE = r"(?:\d[\d,]*(?:\.[\d?]+)?(?:[eE][+-]?\d+)?\?*|\?+)(?:%|x|×)?"
+# A seconds suffix (6s, 15.8s) is part of the value; translation used to drop it.
+NUMERIC_VALUE = r"(?:\d[\d,]*(?:\.[\d?]+)?(?:[eE][+-]?\d+)?\?*|\?+)(?:%|x|×|s(?![A-Za-z]))?"
 NUMERIC_EXPRESSION = r"(?<![A-Za-z0-9])[-+↑↓~<>≤≥=]*" + NUMERIC_VALUE + r"(?:\s*[-+↑↓~/|<>≤≥=]+\s*[-+]?" + NUMERIC_VALUE + r")*"
 PROTECTED = re.compile(r"ZXQT\d+QXZ|https?://[^\s]+|@[\w.-]+|\n|(?<![\w])[A-Za-z_]{1,32}\d+[A-Za-z0-9_.+-]*|" + NUMERIC_EXPRESSION + r"|[%~?↑↓≤≥≈]")
 TOKEN = re.compile(r"ZXQT\d+QXZ")
 SEGMENT = re.compile(r"ZXQSEG(\d+)QXZ")
+# Kept verbatim. N/A and INF are cell values that numeric code must recognise.
 TECHNICAL = {"PvE": "PvE", "PvP": "PvP", "PVE": "PvE", "PVP": "PvP", "DPS": "DPS",
-             "TtE": "TtE", "RPM": "RPM", "DIM": "DIM", "API": "API", "HP": "HP"}
+             "TtE": "TtE", "RPM": "RPM", "DIM": "DIM", "API": "API", "HP": "HP",
+             "N/A": "N/A", "n/a": "n/a", "INF": "INF"}
+KIND_NAMES = {"DestinyInventoryItemDefinition": "item", "DestinySandboxPerkDefinition": "perk",
+              "DestinyEquipableItemSetDefinition": "set", "DestinyClassDefinition": "class",
+              "DestinyDamageTypeDefinition": "damage", "DestinyStatDefinition": "stat",
+              "DestinyBreakerTypeDefinition": "breaker"}
+# Outputs this script owns; the English side belongs to fetch-destiny-guides.py.
+MANAGED = ["zh", "archive/zh", "names.tsv", "catalog.tsv", TRANSLATION_INDEX.as_posix(), GLOSSARY.as_posix()]
 # Editorial terms are kept separate from the official-name dictionary.
 EDITORIAL = {"Perk": "特性", "Perks": "特性", "Enhanced": "强化", "Boss": "首领",
              "Bosses": "首领", "Champions": "勇士", "Sustained": "持续输出", "Swap": "切枪",
@@ -97,10 +109,6 @@ EDITORIAL.update({
     "Updated": "更新时间", "Pcs": "件数", "Total": "总计", "Energy": "能量", "Season": "赛季",
 })
 LLM = None
-
-
-def digest(data):
-    return hashlib.sha256(data).hexdigest()
 
 
 def dump(path, value):
@@ -256,7 +264,8 @@ def translate_model(batch):
         "tokens 提供它的含义（官方名称、数字、链接、换行等），便于理解。输出必须保留每一个占位符"
         "一次，不展开、不修改、不新增占位符，不把 tokens 的数字/名称另行写入文本。换行由占位符表示，"
         "不要增加实际换行；链接占位符两侧保留空格。不得新增阿拉伯数字，one/two 等英文数词用中文数词翻译。"
-        "text 中已有的中文术语请沿用。术语词典外无法确认官方译名的游戏专名保留英文，"
+        "text 中已有的中文术语请沿用。表格用 e. 前缀表示强化版（Enhanced），e. Target Lock 译为强化目标锁定，"
+        "不是“例如”。术语词典外无法确认官方译名的游戏专名保留英文，"
         "普通说明和表头完整译为中文，使用自然中文语序，如伤害提高XYZ。按完整原文翻译，"
         "可调整中文语序。仅返回 JSON 对象 {\"translations\":[\"译文0\",\"译文1\",...]}，顺序和数量与输入相同。"
     )
@@ -330,6 +339,95 @@ def translate_retry(batch):
     raise RuntimeError(f"Cannot validate translation for cell {digest(batch[0][0].encode())[:16]}: {batch[0][0][:120]!r}")
 
 
+def frame_names(official):
+    """Bare frame labels -> official short names, e.g. High-Impact -> 高冲击力."""
+    frames = {}
+    for name, values in official.items():
+        names = {value["zh_chs"] for value in values}
+        if name.endswith(" Frame") and len(names) == 1 and next(iter(names)).endswith("框架"):
+            frames[name[: -len(" Frame")]] = next(iter(names))[: -len("框架")]
+    return frames
+
+
+def tsv(fields):
+    return "\t".join(re.sub(r"[\t\r\n]+", " ", str(field)) for field in fields) + "\n"
+
+
+def sheet_status(sheet):
+    if sheet["current"]:
+        return "current"
+    return sheet["source_status"] if sheet["source_status"] != "unspecified" else sheet["visibility"]
+
+
+def build_catalog(index, records):
+    """catalog.tsv: the first file to read; current sheets first per workbook."""
+    titles = {record["path"]: record["title_zh"] for record in records}
+    lines = [tsv(["path", "source", "title", "title_zh", "status", "rows", "columns", "header_rows", "fetched_at", "url"])]
+    for source in index["sources"]:
+        for sheet in sorted(source["sheets"], key=lambda sheet: not sheet["current"]):
+            lines.append(tsv([sheet["path"], source["id"], sheet["title"], titles[sheet["path"]], sheet_status(sheet),
+                              sheet["rows"], sheet["columns"], ",".join(map(str, sheet["header_rows"])),
+                              sheet["fetched_at"], sheet["source_url"]]))
+    return "".join(lines).encode("utf-8")
+
+
+def build_names(glossary):
+    """names.tsv: English term -> official (or editorial) Chinese, with hashes."""
+    rows = []
+    for name, values in glossary["official_terms"].items():
+        by_name = collections.defaultdict(list)
+        for value in values:
+            by_name[value["zh_chs"]].append(value)
+        for zh, group in by_name.items():
+            kinds = sorted({KIND_NAMES.get(value["kind"], value["kind"]) for value in group})
+            rows.append((name, zh, ",".join(kinds), ",".join(value["hash"] for value in group)))
+    rows += [(name, zh, "frame", "") for name, zh in glossary["frame_terms"].items()]
+    rows += [(name, zh, "editorial", "") for name, zh in glossary["editorial_terms"].items() if name != zh]
+    rows.sort(key=lambda row: (row[0].casefold(), row[0], row[2], row[1]))
+    return "".join(tsv(row) for row in [("en", "zh", "kind", "hash")] + rows).encode("utf-8")
+
+
+def check(data):
+    """Validate the installed copies without network access."""
+    index = json.loads((data / SOURCES_INDEX).read_text())
+    local = json.loads((data / TRANSLATION_INDEX).read_text())
+    glossary = json.loads((data / GLOSSARY).read_text())
+    terms = {name: render_term(name, values) for name, values in glossary["official_terms"].items()}
+    terms.update(glossary["editorial_terms"])
+    matcher = term_matcher(terms)
+    records = {record["path"]: record for record in local["sheets"]}
+    expected_files = set()
+    for source in index["sources"]:
+        for sheet in source["sheets"]:
+            record = records.pop(sheet["path"])
+            raw = (data / sheet["path"]).read_bytes()
+            translated = (data / record["zh_path"]).read_bytes()
+            assert digest(raw) == sheet["sha256"] == record["original_sha256"], sheet["path"]
+            assert digest(translated) == record["sha256"], record["zh_path"]
+            assert record["zh_path"] == zh_path(sheet["path"])
+            expected_files.update([sheet["path"], record["zh_path"], sheet["meta_path"]])
+            a, b = read_grid(data / sheet["path"]), read_grid(data / record["zh_path"])
+            assert raw.count(b"\n") == len(a) == len(b) == sheet["rows"], sheet["path"]
+            for left, right in zip(a, b):
+                assert len(left) == len(right) == sheet["columns"], sheet["path"]
+                for en, zh in zip(left, right):
+                    assert bool(en) == bool(zh)
+                    assert en.count("\n") == zh.count("\n")
+                    expected = matcher.sub(lambda m: terms[m[0]], en)
+                    assert collections.Counter(re.findall(r"\d+(?:[.,]\d+)*%?", expected)) == collections.Counter(re.findall(r"\d+(?:[.,]\d+)*%?", zh)), (sheet["path"], en, zh)
+                    markers = "%?~↑↓≤≥≈"
+                    assert collections.Counter(c for c in expected if c in markers) == collections.Counter(c for c in zh if c in markers), (sheet["path"], en, zh)
+                    assert re.findall(r"https?://[^\s]+", en) == re.findall(r"https?://[^\s]+", zh)
+                    assert not TOKEN.search(zh) and not SEGMENT.search(zh)
+    assert not records, sorted(records)
+    installed = {path.relative_to(data).as_posix() for top in ["en", "zh", "archive", "meta"]
+                 for path in (data / top).rglob("*") if path.is_file()}
+    assert installed == expected_files, sorted(installed ^ expected_files)
+    assert (data / "catalog.tsv").read_bytes() == build_catalog(index, local["sheets"]), "catalog.tsv is stale"
+    assert (data / "names.tsv").read_bytes() == build_names(glossary), "names.tsv is stale"
+    print(f"Validated {len(local['sheets'])} bilingual CSVs: hashes, coordinates, empty cells, numbers, URLs, newlines, catalog and names")
+
+
 def main():
     global LLM
     parser = argparse.ArgumentParser(description=__doc__)
@@ -339,39 +437,14 @@ def main():
     parser.add_argument("--llm-config", type=Path, help="Existing Max YAML config; requires PyYAML; never prints credentials")
     parser.add_argument("--profile", help="Max LLM profile (defaults to llm.default)")
     parser.add_argument("--llm-env", action="store_true", help="Use MAX_LLM_API_KEY/BASE_URL/MODEL/PROTOCOL")
-    parser.add_argument("--terms-only", action="store_true", help="Build an explicitly marked terminology draft; leave community prose in English")
+    parser.add_argument("--terms-only", action="store_true", help="Build an explicitly marked terminology draft; leave new community prose in English")
+    parser.add_argument("--no-memory", action="store_true", help="Translate every line again instead of reusing earlier translations")
+    parser.add_argument("--retranslate", type=re.compile, metavar="REGEX", help="Translate lines matching REGEX again instead of reusing earlier translations")
+    parser.add_argument("--plan", action="store_true", help="Report the lines that would need translation, without translating or writing")
     parser.add_argument("--check", action="store_true", help="Validate installed copies without network access")
     args = parser.parse_args()
-    index = json.loads((args.data / "index.json").read_text())
     if args.check:
-        local = json.loads((args.data / "zh-chs/index.json").read_text())
-        glossary = json.loads((args.data / local["glossary_path"]).read_text())
-        terms = {name: render_term(name, values) for name, values in glossary["official_terms"].items()}
-        terms.update(glossary["editorial_terms"])
-        matcher = term_matcher(terms)
-        sheets = {s["id"]: s for source in index["sources"] for s in source["sheets"]}
-        for item in local["sheets"]:
-            sheet = sheets.pop(item["id"])
-            raw = (args.data / sheet["path"]).read_bytes()
-            translated = (args.data / item["path"]).read_bytes()
-            assert digest(raw) == sheet["sha256"] == item["original_sha256"]
-            assert digest(translated) == item["sha256"]
-            a = list(csv.reader(raw.decode().splitlines(keepends=True)))
-            b = list(csv.reader(translated.decode().splitlines(keepends=True)))
-            assert len(a) == len(b) == sheet["rows"]
-            for left, right in zip(a, b):
-                assert len(left) == len(right) == sheet["columns"]
-                for en, zh in zip(left, right):
-                    assert bool(en) == bool(zh)
-                    assert en.count("\n") == zh.count("\n")
-                    expected = matcher.sub(lambda m: terms[m[0]], en)
-                    assert collections.Counter(re.findall(r"\d+(?:[.,]\d+)*%?", expected)) == collections.Counter(re.findall(r"\d+(?:[.,]\d+)*%?", zh)), (item["id"], en, zh)
-                    markers = "%?~↑↓≤≥≈"
-                    assert collections.Counter(c for c in expected if c in markers) == collections.Counter(c for c in zh if c in markers), (item["id"], en, zh)
-                    assert re.findall(r"https?://[^\s]+", en) == re.findall(r"https?://[^\s]+", zh)
-                    assert not TOKEN.search(zh) and not SEGMENT.search(zh)
-        assert not sheets
-        print(f"Validated {len(local['sheets'])} bilingual CSVs: hashes, coordinates, empty cells, numbers, URLs and newlines")
+        check(args.data)
         return
     if args.terms_only and (args.llm_config or args.llm_env):
         parser.error("--terms-only cannot be combined with a translation model")
@@ -393,32 +466,45 @@ def main():
     terms.update(EDITORIAL)
     terms.update(TECHNICAL)
     matcher = term_matcher(terms)
-    catalog, texts = [], set()
+    frames = frame_names(official)
+    index = json.loads((args.data / SOURCES_INDEX).read_text())
+    db = open_memory(args.cache)
+    # A rerun without a fetch reuses the copies it is about to replace.
+    harvest_memory(args.data, db)
+    memory = {} if args.no_memory else dict(db.execute("SELECT original, translated FROM memory"))
+    overrides = json.loads((args.data / OVERRIDES).read_text()) if (args.data / OVERRIDES).exists() else {}
+    catalog, units, used_frames = [], set(), set()
     for source in index["sources"]:
         for sheet in source["sheets"]:
             raw = (args.data / sheet["path"]).read_bytes()
-            assert digest(raw) == sheet["sha256"], sheet["id"]
-            rows = list(csv.reader(raw.decode().splitlines(keepends=True)))
-            catalog.append((sheet, rows))
-            texts.add(sheet["title"])
-            texts.update(value for row in rows for value in row)
-    # Models translate one source line per entry. Empty lines stay empty and
-    # join back into the exact cell grid, without asking a model to count or
-    # preserve dozens of opaque paragraph separators.
-    units = {line for text in texts for line in text.split("\n")} if LLM else texts
-    provider = LLM["model"] if LLM else "Google Translate public web endpoint"
-    cache_key = digest(json.dumps([terms, provider, "source-lines-v2" if LLM else "readable-mechanics-v1"], sort_keys=True, ensure_ascii=False).encode())
-    db = sqlite3.connect(args.cache / "translations.sqlite")
-    db.execute("CREATE TABLE IF NOT EXISTS translations (version TEXT, original TEXT, translated TEXT, PRIMARY KEY(version,original))")
-    translated = dict(db.execute("SELECT original,translated FROM translations WHERE version=?", (cache_key,)))
-    pending, used = [], set()
+            assert digest(raw) == sheet["sha256"], sheet["path"]
+            rows = read_grid(args.data / sheet["path"])
+            catalog.append((source, sheet, rows))
+            units.add(sheet["title"])
+            for row in rows:
+                for value in row:
+                    for line in value.split("\n"):
+                        if frame_line(source["id"], line, frames):
+                            used_frames.add(line.strip())
+                        else:
+                            units.add(line)
+    # One unit per source line: empty lines stay empty and join back into the
+    # exact cell grid, and a changed cell reuses its unchanged lines.
+    translated, pending, used, reused, corrected = {}, [], set(), 0, set()
     for text in sorted(units):
         used.update(m[0] for m in matcher.finditer(text))
-        if text in translated:
+        if not text.strip():
+            translated[text] = text
             continue
         prepared, values = protect(text, terms, matcher)
-        if not re.search(r"[a-zA-Z]", TOKEN.sub("", prepared)):
-            translated[text] = restore(prepared, values, text, prepared) if text.strip() else text
+        if text in overrides:
+            translated[text] = overrides[text]
+            corrected.add(text)
+        elif not re.search(r"[a-zA-Z]", TOKEN.sub("", prepared)):
+            translated[text] = restore(prepared, values, text, prepared)
+        elif text in memory and not (args.retranslate and args.retranslate.search(text)):
+            translated[text] = memory[text]
+            reused += 1
         elif args.terms_only:
             translated[text] = restore(prepared, values, text, prepared)
             pending.append((text, prepared, values))
@@ -435,34 +521,43 @@ def main():
         size += item_size
     if batch:
         batches.append(batch)
-    print(f"Official manifest {version}; {len(texts)} unique cells/titles, {len(units)} units; {len(pending)} need prose translation in {len(batches)} batches", flush=True)
+    provider = LLM["model"] if LLM else "Google Translate public web endpoint"
+    print(f"Official manifest {version}; {len(units)} unique lines; {reused} reused; {len(corrected)} reviewed; {len(pending)} need prose translation in {len(batches)} batches", flush=True)
+    for text in sorted(set(overrides) - corrected):
+        print("Unused override (English line no longer present): " + json.dumps(text, ensure_ascii=False), flush=True)
+    if args.plan:
+        for text, _, _ in pending:
+            print("  " + json.dumps(text, ensure_ascii=False))
+        print("Frame labels:", json.dumps({name: frames[name] for name in sorted(used_frames)}, ensure_ascii=False))
+        return
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=args.workers)
     try:
         futures = [pool.submit(translate_retry, batch) for batch in batches]
         for number, future in enumerate(concurrent.futures.as_completed(futures), 1):
             results = future.result()
             translated.update(results)
-            db.executemany("INSERT OR REPLACE INTO translations VALUES(?,?,?)", [(cache_key, en, zh) for en, zh in results])
+            db.executemany("INSERT OR REPLACE INTO memory VALUES(?,?)", results)
             db.commit()
             if number % 5 == 0 or number == len(batches):
-                print(f"Translated {number}/{len(batches)} batches ({len(translated)}/{len(units)} units)", flush=True)
+                print(f"Translated {number}/{len(batches)} batches", flush=True)
     except BaseException:
         pool.shutdown(wait=False, cancel_futures=True)
         raise
     else:
         pool.shutdown(wait=True)
     db.close()
-    if LLM:
-        translated = {text: "\n".join(translated[line] for line in text.split("\n")) for text in texts}
+
+    def localize(source_id, value):
+        return "\n".join(frame_line(source_id, line, frames) or translated[line] for line in value.split("\n"))
+
     with tempfile.TemporaryDirectory(prefix="max-destiny-zh-") as temp:
         stage = Path(temp)
         records = []
-        for sheet, rows in catalog:
-            path = stage / sheet["path"]
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("w", encoding="utf-8", newline="") as handle:
-                csv.writer(handle, lineterminator="\n").writerows([[translated[value] for value in row] for row in rows])
-            raw = path.read_bytes()
+        for source, sheet, rows in catalog:
+            target = stage / zh_path(sheet["path"])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            raw = grid_bytes([[localize(source["id"], value) for value in row] for row in rows])
+            target.write_bytes(raw)
             title = translated[sheet["title"]]
             if args.terms_only:
                 title = re.sub(r"\bOLD\s+", "旧版：", title)
@@ -470,23 +565,31 @@ def main():
                                "(Old)": "（旧版）", "(old 2)": "（旧版 2）", "(ignore)": "（忽略）",
                                "(breech)": "（后膛装填）", "(drum)": "（弹鼓）"}.items():
                     title = title.replace(en, zh)
-            records.append({"id": sheet["id"], "title": title,
-                            "path": "zh-chs/" + sheet["path"], "sha256": digest(raw), "bytes": len(raw),
-                            "original_sha256": sheet["sha256"]})
-        dump(stage / "glossary.json", {"manifest_version": version, "source": "https://www.bungie.net/Platform/Destiny2/Manifest/",
-                                      "official_terms": {name: official[name] for name in sorted(used) if name in official and name not in EDITORIAL and name not in TECHNICAL},
-                                      "editorial_terms": {name: terms[name] for name in sorted(used) if name in EDITORIAL or name in TECHNICAL}})
-        method = ("Terminology draft: official names matched by Bungie definition hash; editorial terms substituted; community prose remains English pending translation."
-                  if args.terms_only else f"Official names matched by Bungie definition hash; community prose machine-translated with {provider}. Not an official translation of the guides.")
-        dump(stage / "index.json", {"format_version": 1, "language": "zh-chs", "status": "terms-only" if args.terms_only else "complete",
-                                   "pending_text_cells": len(pending) if args.terms_only else 0, "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                                   "manifest_version": version, "original_snapshot": index["generated_at"],
-                                   "glossary_path": "zh-chs/glossary.json", "method": method,
-                                   "validation": "Original SHA-256, row/column coordinates, empty cells, numeric tokens, URLs, newlines and protected tokens checked; original English retained for review.",
-                                   "sheets": records})
-        import shutil
-        shutil.copytree(stage, args.data / "zh-chs", dirs_exist_ok=True)
-    print(f"Wrote {len(records)} Chinese CSV copies; English originals unchanged", flush=True)
+            records.append({"source": source["id"], "path": sheet["path"], "zh_path": zh_path(sheet["path"]),
+                            "title": sheet["title"], "title_zh": title, "sha256": digest(raw), "original_sha256": sheet["sha256"]})
+        glossary = {"manifest_version": version, "source": "https://www.bungie.net/Platform/Destiny2/Manifest/",
+                    "official_terms": {name: official[name] for name in sorted(used) if name in official and name not in EDITORIAL and name not in TECHNICAL},
+                    "editorial_terms": {name: terms[name] for name in sorted(used) if name in EDITORIAL or name in TECHNICAL},
+                    "frame_terms": {name: frames[name] for name in sorted(used_frames)}}
+        dump(stage / GLOSSARY, glossary)
+        method = ("Terminology draft: official names matched by Bungie definition hash; editorial terms substituted; new community prose remains English pending translation."
+                  if args.terms_only else f"Official names matched by Bungie definition hash; frame labels use official frame names; community prose machine-translated: {reused} unchanged lines reuse earlier translations, {len(corrected)} use reviewed lines from {OVERRIDES.as_posix()}, {len(pending)} new lines by {provider}. Not an official translation of the guides.")
+        dump(stage / TRANSLATION_INDEX, {"format_version": 2, "language": "zh-chs", "status": "terms-only" if args.terms_only else "complete",
+                                         "pending_text_cells": len(pending) if args.terms_only else 0,
+                                         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                         "manifest_version": version, "original_snapshot": index["generated_at"], "method": method,
+                                         "validation": "Original SHA-256, row/column coordinates, empty cells, numeric tokens, URLs, newlines and protected tokens checked; original English retained for review.",
+                                         "frames": glossary["frame_terms"], "sheets": records})
+        (stage / "names.tsv").write_bytes(build_names(glossary))
+        (stage / "catalog.tsv").write_bytes(build_catalog(index, records))
+        for relative in MANAGED:
+            target = args.data / relative
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+        shutil.copytree(stage, args.data, dirs_exist_ok=True)
+    print(f"Wrote {len(records)} Chinese CSV copies, names.tsv and catalog.tsv; English originals unchanged", flush=True)
 
 
 if __name__ == "__main__":

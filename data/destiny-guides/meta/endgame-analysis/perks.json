@@ -1,0 +1,17 @@
+{
+ "merged_ranges": [
+  "A1:B1",
+  "C1:G1",
+  "H1:K1",
+  "L1:M2"
+ ],
+ "hyperlinks": {},
+ "cell_notes": {
+  "F2": "damage values and details sourced from https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1662574278#gid=1662574278",
+  "E64": "see https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1662574278#gid=1662574278 for specific archetype info",
+  "E40": "see https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1662574278#gid=1662574278 for detailed info"
+ },
+ "formulas": {},
+ "hidden_rows": [],
+ "has_images": true
+}

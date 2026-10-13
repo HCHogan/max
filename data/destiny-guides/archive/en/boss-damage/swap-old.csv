@@ -1,0 +1,174 @@
+Name,Type,Icon,Base,#,Perk,Surge,Buff,Debuff,200,Total,Ready,Fire,Stow,swap\nTime,total\nTime,swap\nDPS,true\nDPS
+"Golden Gun - Marksman\nCelestial Nighthawk, Radiant, Facet of Courage, pre-popped",super,,14407,1,,,1.320,1.300,1.450,35847,/,/,/,0.816,0.816,43931,43931
+"Still Hunt\nCayde's Retribution, Celestial Nighthawk, pre-popped",burst,,7158,1,,1.220,1.250,1.300,1.150,16319,0.000,0.000,0.417,0.417,0.417,39133,39133
+Whirling Ovation\npre-charged,burst,,5751,1,,1.135,1.250,1.300,1.100,11667,0.200,0.000,0.317,0.517,0.517,22566,22566
+Parasite\nWorm's Hunger x20,burst,,2032,1,3.000,1.220,1.250,1.300,1.100,13293,0.350,0.000,0.316,0.666,0.666,19959,19959
+"High-impact bow\nHeavy Bolts, High Ground x3 (A Good Shout), Moebius Quiver",swap,,1659,1,1.250,1.220,3.125,1.300,1.100,11309,0.183,0.000,0.416,0.599,0.599,18879,18879
+"Golden Gun - Marksman\nCelestial Nighthawk, Radiant, Facet of Courage",super,,14407,1,,,1.320,1.300,1.450,35847,/,/,/,1.930,1.930,18574,18574
+"Blade Barrage\nKnock 'Em Down, Feast of Light x6",super,,18659,1,,,,1.300,1.450,35172,/,/,/,2.200,2.200,15987,15987
+Izanagi's Burden\nexcludes re-hone time,burst,,3197,1,,1.220,1.250,1.300,1.150,7290,0.216,0.000,0.250,0.466,0.466,15643,15643
+"Grapple melee\nOne-Two Punch, Biotic Enhancements, Combination Blow x3, Facet of Courage",melee,,778,1,,,8.965,1.300,2.145,19451,0.000,1.500,0.000,1.500,1.500,12967,12967
+"Needlestorm\nStylostixis, Thread of Evolution",super,,15693,1,,,,1.300,1.442,29425,/,/,/,1.780,2.370,16531,12416
+"Nova Bomb - Cataclysm\nFeast of Light x6, Facet of Courage",super,,13932,1,,,1.100,1.300,1.450,28888,/,/,/,1.780,2.370,16229,12189
+Grand Overture\nMissiles Loaded x20,burst,,469,20,,1.220,1.250,1.300,1.100,20470,0.350,1.250,0.250,1.850,1.850,11065,11065
+Needlestorm\nFeast of Light x6,super,,13406,1,,,,1.300,1.450,25269,/,/,/,1.780,2.370,14196,10662
+"Golden Gun - Marksman\nFeast of Light x6, Radiant, Facet of Courage",super,,13023,1,,,1.320,1.300,1.450,32403,/,/,/,3.130,3.130,10352,10352
+"Dynamic hand cannon - 180RPM special\nprimed with 2 Crimson bursts, 15 shot burst, e. Precision Instrument (Uncivil Discourse), Accelerated Assault, Illegally Modded Holster",LP,,28208,1,,1.220,1.250,1.300,1.150,64310,0.083,5.800,0.133,6.016,6.449,10690,9972
+Blade Barrage\nKnock 'Em Down,super,,11372,1,,,,1.300,1.450,21436,/,/,/,2.200,2.200,9744,9744
+"Shadowshot: Moebius Quiver\nFeast of Light x6, full bow charge, both volleys, assumes no other debuff",super,,17539,1,,,,,1.450,25432,/,/,/,2.650,2.650,9597,9597
+"Dynamic hand cannon - 180RPM special\n17 shot burst, e. Precision Instrument (Uncivil Discourse), Accelerated Assault, Illegally Modded Holster",LP,,25319,1,,1.220,1.250,1.300,1.150,57724,0.083,5.584,0.133,5.800,6.233,9952,9261
+"Pinpoint slug shotgun\nRedirection + Elemental Honing x5 (Unvoiced), 1 shot",swap,,712,1,2.700,1.220,1.250,1.300,1.150,4384,0.183,0.000,0.300,0.483,0.483,9076,9076
+Needlestorm\nThread of Evolution,super,,11103,1,,,,1.300,1.450,20929,/,/,/,1.780,2.370,11758,8831
+Ice Breaker\nshatter ignition,swap,,1993,1,,1.220,1.250,1.300,1.150,4544,0.200,0.000,0.317,0.517,0.517,8789,8789
+"Glacial Quake\nheavy attacks, Facet of Ruin, Feast of Light x6",super,,60013,1,,,,1.300,1.450,113125,/,/,/,12.880,12.880,8783,8783
+"Glacial Quake\nHowl of the Storm, Whisper of Fissures, Biotic Enhancements",super,,40845,1,,,,1.300,1.450,76993,/,/,/,8.967,8.967,8586,8586
+Legend of Acrius\nbody,swap,,1668,1,,1.220,1.250,1.300,1.100,3637,0.217,0.000,0.217,0.434,0.434,8380,8380
+"Adaptive grenade launcher\nSticky Grenades, e. Cascade Point + e. Explosive Light (Edge Transit), 7 shots",burst,,1257,7,,1.220,1.250,1.300,1.100,19189,0.183,1.829,0.333,2.345,2.345,8184,8184
+Nova Bomb - Cataclysm\nFacet of Courage,super,,9287,1,,,1.100,1.300,1.450,19257,/,/,/,1.780,2.370,10819,8125
+"Grapple melee\nBanner of War, Biotic Enhancements, One-Two Punch",melee,,778,1,,,5.150,1.300,2.145,11174,0.000,1.500,0.000,1.500,1.500,7449,7449
+"Rapid-fire grenade launcher\nSpike Grenades, e. Cascade Point + e. Explosive Light (VS Chill Inhibitor), 8 shots",burst,,641,8,1.460,1.220,1.250,1.300,1.100,16314,0.183,1.680,0.333,2.196,2.196,7429,7429
+"New Land Beyond\nThe Master x20, Kinetic Holster",swap,,979,1,1.700,1.170,1.250,1.300,1.150,3640,0.167,0.000,0.350,0.517,0.517,7040,7040
+"Twilight Arsenal\nFeast of Light x6, Facet of Courage",super,,12172,1,,,1.100,1.300,1.450,25239,/,/,/,3.630,3.630,6953,6953
+Parasite,swap,,2032,1,,1.220,1.250,1.300,1.100,4431,0.350,0.000,0.316,0.666,0.666,6653,6653
+"Still Hunt\nCayde's Retribution, pre-popped",burst,,4992,1,,1.220,1.250,1.300,1.150,11381,0.000,1.317,0.400,1.717,1.717,6629,6629
+"Rapid-fire grenade launcher\nSpike Grenades, e. Cascade Point + Bait and Switch (VS Chill Inhibitor), 8 shots",burst,,641,8,1.263,1.220,1.250,1.300,1.100,14108,0.183,1.680,0.333,2.196,2.196,6424,6424
+"The Fourth Horseman\nfull mag, body",burst,,3924,1,,1.220,1.250,1.300,1.150,8945,0.216,0.783,0.400,1.399,1.399,6394,6394
+"Shadowshot: Moebius Quiver\nOrpheus Rig, full bow charge, all 3 volleys, assumes no other debuff",super,,17764,1,,,,,1.450,25758,/,/,/,4.070,4.070,6329,6329
+"Adaptive grenade launcher\nSpike Grenades, Cascade Point + Bait and Switch (Edge Transit), 8 shots",burst,,745,8,1.263,1.220,1.250,1.300,1.100,16414,0.183,2.134,0.333,2.650,2.650,6195,6195
+"Tessellation\nProperty: Irreducible, excludes re-proc time, Transcendent but excludes 5%",burst,,2979,1,,1.220,1.250,1.300,1.150,6791,0.833,0.000,0.300,1.133,1.133,5994,5994
+"Micro-missile grenade launcher\nImplosion Rounds, Recombination x10 (The Mountaintop), 1 shot",swap,,801,1,2.000,1.220,1.250,1.300,1.150,3650,0.266,0.000,0.350,0.616,0.616,5925,5925
+"Shadowshot: Moebius Quiver\nFeast of Light x6, both volleys, assumes no other debuff",super,,10517,1,,,,,1.450,15249,/,/,/,2.650,2.650,5754,5754
+"Glacial Quake\nheavy attacks, Whisper of Fissures",super,,38969,1,,,,1.300,1.450,73457,/,/,/,12.880,12.880,5703,5703
+"Conditional Finality\nbody, average across both shots",swap,,1231,1,,1.150,1.250,1.300,1.150,2644,0.150,0.000,0.317,0.467,0.467,5663,5663
+"Glacial Quake\nHowl of the Storm, Whisper of Fissures",super,,26489,1,,,,1.300,1.450,49931,/,/,/,8.967,8.967,5568,5568
+Twilight Arsenal\nFacet of Courage,super,,9738,1,,,1.100,1.300,1.450,20191,/,/,/,3.630,3.630,5562,5562
+"Thermite grenade\nRoaring Flames x3, Empowered Grenade x2, Ember of Ashes",grenade,,6883,1,1.350,,1.730,1.300,1.650,34480,/,/,/,1.283,6.283,26875,5488
+"Thundercrash\nCuirass of the Falling Star, Facet of Courage",super,,15987,1,,,1.100,1.300,1.450,33149,/,/,/,1.980,6.250,16742,5304
+"Slayer's Fang\nincludes submunitions, Cascade Point, 6 shots",burst,,1149,6,,1.220,1.250,1.300,1.150,15723,0.183,2.500,0.333,3.016,3.016,5213,5213
+"Aggressive rocket launcher\nFrame of Reference x5, e. Overflow + e. Reaper's Tithe (The When and Where), Pack Hunter, 3 shots",burst,,2312,3,1.498,1.220,1.250,1.300,1.100,22661,0.233,2.166,0.400,2.799,4.399,8096,5151
+Duality\nprecision,swap,,981,1,,1.220,1.250,1.300,1.150,2235,0.117,0.000,0.317,0.434,0.434,5151,5151
+"Still Hunt\nCayde's Retribution, Celestial Nighthawk",swap,,5110,1,,1.220,1.250,1.300,1.150,11651,1.900,0.000,0.417,2.317,2.317,5029,5029
+"Rapid-fire sniper\nVorpal Weapon + Bait and Switch (Conspiracy Honed), 3 shots",swap,,642,3,1.495,1.220,1.250,1.300,1.150,6566,0.166,0.832,0.316,1.314,1.314,4997,4997
+"Adaptive grenade launcher\nSpike Grenades, Cascade Point (Edge Transit), 8 shots",burst,,745,8,,1.220,1.250,1.300,1.100,13001,0.183,2.134,0.333,2.650,2.650,4907,4907
+Izanagi's Burden\nincludes re-hone time,swap,,3197,1,,1.220,1.250,1.300,1.150,7290,0.216,0.000,1.284,1.500,1.500,4860,4860
+"Eriana's Vow\nprimed with 3 heavy burst HC bursts, 7 shots, Illegally Modded Holster",LP,,12256,1,,1.220,1.250,1.300,1.150,27943,0.100,5.467,0.333,5.900,5.900,4736,4736
+"Hammer of Sol\nFeast of Light x6, Facet of Courage, max distance",super,,22176,1,,,1.100,1.300,1.450,45982,/,/,/,9.080,9.980,5064,4607
+"Glacial Quake\nlight attacks, Prismatic, Facet of Ruin, Feast of Light x6, Knockout",super,,31708,1,,,,1.300,1.450,59770,/,/,/,13.230,13.230,4518,4518
+"The Last Word\n2 mags with Marksman reload, Illegally Modded Holster",LP,,10567,1,,1.220,1.250,1.300,1.150,24090,0.166,4.950,0.250,5.366,5.366,4489,4489
+Ice Breaker,swap,,1016,1,,1.220,1.250,1.300,1.150,2317,0.200,0.000,0.317,0.517,0.517,4481,4481
+"Stormtrance\nAscending Amplitude, Facet of Courage",super,,28785,1,,,1.100,1.300,1.450,59686,/,/,/,13.550,13.550,4405,4405
+Whirling Ovation\nmax Anticipation,swap,,5751,1,,1.135,1.250,1.300,1.100,11667,2.417,0.000,0.233,2.650,2.650,4403,4403
+"Daybreak\nDawn Chorus, Ember of Ashes, grounded",super,,22874,1,,,,1.300,1.450,43117,/,/,/,9.800,9.800,4400,4400
+"Flechette Storm\n11 volleys, Banner of War, Wish-Dragon's Talons, Insatiable",melee,,545,11,,,3.009,1.300,1.300,30509,0.000,6.971,0.000,6.971,6.971,4377,4377
+"Spread shot hand cannon\ne. Cascade Point + Vorpal Weapon (Aureus Neutralizer), 14 shot burst, Illegally Modded Holster",LP,,9939,1,1.200,1.220,1.250,1.300,1.150,27191,0.083,5.900,0.250,6.233,6.233,4362,4362
+"Aggressive shotgun\nbody, Frenzy (Ragnhild-D), 1 shot",swap,,749,1,1.150,1.220,1.250,1.300,1.150,1963,0.150,0.000,0.300,0.450,0.450,4362,4362
+"Double fire grenade launcher\nSpike Grenades, Bait and Switch (Wild Style), 1 shot",swap,,784,1,1.300,1.220,1.250,1.300,1.150,2323,0.200,0.000,0.333,0.533,0.533,4359,4359
+"Storm's Edge\nFeast of Light x6, Facet of Courage, all three casts",super,,16018,1,,,1.100,1.300,1.450,33214,/,/,/,7.680,7.680,4325,4325
+"Chaos Reach\nGeomag Stabilizers, Sol Invictus",super,,26143,1,,,,1.300,1.450,49280,/,/,/,11.704,11.704,4210,4210
+"Adaptive grenade launcher\nSpike Grenades, Bait and Switch (Edge Transit), 8 shots",swap,,745,8,1.300,1.220,1.250,1.300,1.100,16901,0.183,3.556,0.333,4.072,4.072,4151,4151
+"Storm's Edge\nFeast of Light x6, Facet of Courage, per cast",super,,5339,1,,,1.100,1.300,1.450,11071,/,/,/,2.683,2.683,4126,4126
+Chaos Reach\nGeomag Stabilizers,super,,18910,1,,,,1.300,1.450,35645,/,/,/,8.670,8.670,4111,4111
+The Prospector\nfull mag,burst,,740,6,,1.220,1.250,1.300,1.100,9676,0.200,1.834,0.333,2.367,2.367,4089,4089
+"Fists of Havoc\nlight heavy cycle, Biotic Enhancements",super,,19258,1,,,,1.300,1.450,36301,/,/,/,9.017,9.017,4026,4026
+"Bladefury\nHLLLHLLLLHLLLHL, Banner of War, Biotic Enhancements, Thread of Continuity",super,,21738,1,,,,1.300,1.450,40976,/,/,/,10.420,10.420,3932,3932
+"Adaptive rocket launcher\nBait and Switch (Apex Predator), Pack Hunter, Reconstruction start, 2 shots",swap,,2312,2,1.300,1.220,1.250,1.300,1.100,13111,0.183,1.166,0.333,1.682,3.349,7795,3915
+"Pinpoint slug shotgun\nFrenzy (Sojourner's Tale), 1 shot",swap,,712,1,1.150,1.220,1.250,1.300,1.150,1867,0.183,0.000,0.300,0.483,0.483,3866,3866
+"Rapid-fire shotgun\nbody, Cascade Point (IKELOS_SG_V1.0.3), 8 shots",burst,,497,8,,1.220,1.250,1.300,1.150,9067,0.216,1.820,0.316,2.352,2.352,3855,3855
+"Sentinel Shield\nBiotic Enhancements, Controlled Demolition, aerial lights",super,,16653,1,,,,1.300,1.450,31391,/,/,/,8.333,8.333,3767,3767
+"Rapid-fire shotgun\nbody, e. Surrounded (IKELOS_SG_V1.0.3), 8 shots",swap,,497,8,1.470,1.220,1.250,1.300,1.150,13329,0.216,3.033,0.316,3.565,3.565,3739,3739
+"Eriana's Vow\n1 mag, Illegally Modded Holster",LP,,9261,1,,1.220,1.250,1.300,1.150,21114,0.083,5.333,0.333,5.749,5.749,3673,3673
+"Choir of One\nprojectile mode, one mag, no reload",swap,,542,5,,1.220,1.250,1.300,1.150,6176,0.283,1.067,0.333,1.683,1.683,3670,3670
+"Winter's Wrath\nFeast of Light x6, light-heavy cycle, Facet of Ruin",super,,29570,1,,,,1.300,1.409,54171,/,/,/,14.970,14.970,3619,3619
+Grapple melee\nOne-Two Punch,melee,,778,1,,,2.500,1.300,2.145,5424,0.000,1.500,0.000,1.500,1.500,3616,3616
+"Bequest\nheavy attack, Jagged Edge, En Garde, Pack Hunter",sword,,1718,1,1.300,1.220,1.250,1.300,1.100,4870,0.350,0.233,0.783,1.366,1.366,3565,3565
+"Malfeasance\n17 shot burst, blighted, Illegally Modded Holster",LP,,9739,1,,1.220,1.250,1.300,1.150,22203,0.083,5.584,0.450,6.117,6.233,3630,3562
+"Bladefury\nHLLLLL, Banner of War, Biotic Enhancements, Thread of Continuity",super,,19856,1,,,,1.300,1.450,37429,/,/,/,10.617,10.617,3525,3525
+"Winter's Wrath\nFeast of Light x6, light-heavy cancel cycle, Facet of Ruin",super,,32387,1,,,,1.300,1.409,59333,/,/,/,16.933,16.933,3504,3504
+"Shadowshot: Moebius Quiver\nOrpheus Rig, all 3 volleys, assumes no other debuff",super,,9789,1,,,,,1.450,14194,/,/,/,4.070,4.070,3487,3487
+Magnetic grenade\nChaos Accelerant,grenade,,3501,1,,,,1.300,1.650,7510,/,/,/,2.167,2.167,3466,3466
+"Lightning Surge\nBiotic Enhancements, Facet of Courage",melee,,1114,1,,,3.150,1.300,1.300,5929,0.000,1.717,0.000,1.717,1.717,3453,3453
+"Hawkmoon\nprimed with 3 heavy burst HC bursts, 9 shots, Paracausal Shot, Illegally Modded Holster",LP,,7835,1,,1.220,1.250,1.300,1.150,17864,0.100,4.833,0.267,5.200,5.200,3435,3435
+"Heavy burst hand cannon\ne. Precision Instrument (Agape), 13 bursts, Illegally Modded Holster",LP,,8958,1,,1.220,1.250,1.300,1.150,20424,0.100,5.568,0.283,5.951,5.951,3432,3432
+"Silkstrike\nlight attack spam, Feast of Light x6",super,,20891,1,,,,1.300,1.450,39379,/,/,/,11.480,11.480,3430,3430
+Thundercrash\nFacet of Courage,super,,10315,1,,,1.100,1.300,1.450,21389,/,/,/,1.980,6.250,10802,3422
+"Micro-missile grenade launcher\nImplosion Rounds, Elemental Honing x5 (Theodolite), 1 shot",swap,,801,1,1.150,1.220,1.250,1.300,1.150,2099,0.266,0.000,0.350,0.616,0.616,3407,3407
+"Aggressive sniper\nFiring Line (Occluded Finality), 1 shot",swap,,692,1,1.200,1.220,1.250,1.300,1.150,1893,0.183,0.000,0.383,0.566,0.566,3345,3345
+"Hawkmoon\n9 shots, Paracausal Shot, Illegally Modded Holster",LP,,5489,1,,1.220,1.250,1.300,1.150,12514,0.083,3.467,0.267,3.817,3.817,3279,3279
+"Song of Flame\nFeast of Light x6, wisp/snap cycling, Facet of Courage",super,,27534,1,,,,1.300,1.450,51902,/,/,/,15.920,15.920,3260,3260
+"Lightweight shotgun\nbody, Vorpal Weapon (Xenoclast IV), 1 shot",swap,,617,1,1.150,1.220,1.250,1.300,1.150,1616,0.166,0.000,0.333,0.499,0.499,3239,3239
+"Stormtrance\nFeast of Light x6, Facet of Courage",super,,20723,1,,,1.100,1.300,1.450,42968,/,/,/,13.550,13.550,3171,3171
+Still Hunt\nCayde's Retribution,swap,,4992,1,,1.220,1.250,1.300,1.150,11381,1.900,1.317,0.400,3.617,3.617,3147,3147
+"Spectral Blades\nlight attack spam, Feast of Light x6",super,,21431,1,,,,1.300,1.450,40397,/,/,/,12.920,12.920,3127,3127
+"Burning Maul\nheavy attacks, Roaring Flames x3, Sol Invictus, Ember of Ashes, Biotic Enhancements",super,,29804,1,,,,1.300,1.450,56181,/,/,/,13.570,18.350,4140,3062
+"Adaptive rocket launcher\nBait and Switch (Apex Predator), Pack Hunter, 1 shot",swap,,2312,1,1.300,1.220,1.250,1.300,1.100,6555,0.183,0.000,0.416,0.599,2.183,10944,3003
+Ex Diris,swap,,677,1,,1.220,1.250,1.300,1.150,1543,0.216,0.000,0.250,0.466,0.516,3311,2990
+Thermite grenade\nEmber of Ashes,grenade,,6883,1,,,,1.300,1.650,14763,/,/,/,1.283,5.100,11507,2895
+Arc Staff\nRaiden Flux,super,,25496,1,,,,1.300,1.450,48060,/,/,/,16.800,16.800,2861,2861
+"Malfeasance\n17 shot burst, Illegally Modded Holster",LP,,7756,1,,1.220,1.250,1.300,1.150,17683,0.083,5.584,0.450,6.117,6.233,2891,2837
+"Rapid-fire slug shotgun\ne. Precision Instrument (Trachinus), 8 shots",swap,,645,8,1.169,1.220,1.250,1.300,1.150,13741,0.233,4.431,0.250,4.914,4.914,2796,2796
+"Song of Flame\nClaws of Ahamkara + Necrotic Grip, snap spam, Facet of Courage",super,,27228,1,,,,1.300,1.450,51325,/,/,/,18.917,18.917,2713,2713
+"Winter's Wrath\nBallidorse Wrathweavers, light-heavy cancel cycle, Whisper of Fissures",super,,26546,1,,,,1.300,1.328,45841,/,/,/,16.933,16.933,2707,2707
+"Caster sword\nheavy attack, Jagged Edge, En Garde (Ill Omen), Pack Hunter",sword,,1627,1,1.300,1.220,1.250,1.300,1.100,4611,0.550,0.000,1.167,1.717,1.717,2686,2686
+"Winter's Wrath\nBallidorse Wrathweavers, light-heavy cycle, Whisper of Fissures",super,,23244,1,,,,1.300,1.328,40139,/,/,/,14.970,14.970,2681,2681
+"Fists of Havoc\nheavy attacks, Biotic Enhancements",super,,14974,1,,,,1.300,1.450,28226,/,/,/,10.600,10.600,2663,2663
+"Precision hand cannon\n17 shot burst, e. Precision Instrument (Sightline Survey), Illegally Modded Holster",LP,,7079,1,,1.220,1.250,1.300,1.150,16138,0.083,5.584,0.450,6.117,6.233,2638,2589
+"Exodus Rockets\none volley, Thruster",swap,,3242,1,,,,1.300,,4215,0.000,0.717,0.000,0.717,1.633,5878,2581
+"Crimson\n1 mag, Illegally Modded Holster",LP,,4106,1,,1.220,1.250,1.300,1.150,9362,0.100,3.200,0.250,3.550,3.633,2637,2577
+"Sentinel Shield\nBiotic Enhancements, Controlled Demolition, grounded spam",super,,15596,1,,,,1.300,1.450,29398,/,/,/,11.670,11.670,2519,2519
+"Tessellation\nProperty: Irreducible, includes re-proc time, Transcendent but excludes 5%",burst,,2979,1,,1.220,1.250,1.300,1.150,6791,0.833,0.000,1.917,2.750,2.750,2469,2469
+"Choir of One\nprojectile mode, one mag, reload",swap,,542,5,,1.220,1.250,1.300,1.150,6176,0.283,1.917,0.333,2.533,2.533,2438,2438
+Scatter grenade\nChaos Accelerant,grenade,,2348,1,,,,1.300,1.650,5037,/,/,/,2.167,2.167,2324,2324
+"Solar grenade\nfour grenades, melee kill included, Sunbracers, Touch of Flame, Ember of Ashes",grenade,,11115,1,,,,1.300,1.650,23842,/,/,/,5.400,10.267,4415,2322
+Gathering Storm\nFeast of Light x6,super,,13307,1,,,,1.300,1.450,25084,/,/,/,1.720,10.900,14584,2301
+"Final Warning\n15 shot half charge auto into tap fire burst, catalyst",swap,,220,15,,1.220,1.250,1.300,1.150,7508,1.000,1.867,0.467,3.334,3.334,2252,2252
+"Burning Maul\nPyrogale Gauntlets, Roaring Flames x3, Sol Invictus",super,,11691,1,,,,1.300,1.450,22038,/,/,/,2.950,10.180,7470,2165
+Gjallarhorn\n2 shots,swap,,1716,2,,1.220,1.250,1.300,1.100,7484,0.216,1.300,0.300,1.816,3.516,4121,2128
+"Tripmine grenade\nYoung Ahamkara's Spine, Ember of Ashes",grenade,,1335,1,,,,1.300,1.650,2864,/,/,/,1.283,1.367,2232,2095
+Whirling Ovation\nno Anticipation,swap,,5751,1,,1.135,1.250,1.300,1.100,11667,5.700,0.000,0.233,5.933,5.933,1966,1966
+"Rapid-fire sniper\ne. Kinetic Tremors + Elemental Honing x5 (Praedyth's Revenge), 2 shots",swap,,428,2,2.209,1.220,1.250,1.300,1.150,4311,0.166,0.416,0.316,0.898,2.298,4800,1876
+"Hammer of Sol\nRoaring Flames x3, Sol Invictus, Ember of Ashes, Biotic Enhancements",super,,26600,1,,,,1.300,1.450,50140,/,/,/,12.080,27.280,4151,1838
+Twilight Arsenal\naxe heavy attack,super,,2081,1,,,,1.300,,2705,/,/,/,1.483,1.483,1824,1824
+Tractor Cannon,swap,,422,1,,1.220,1.250,1.300,1.100,920,0.233,0.000,0.283,0.516,0.516,1783,1783
+Flux grenade,grenade,,1827,1,,,,1.300,1.650,3919,/,/,/,1.283,2.200,3055,1781
+"Rapid-fire fusion\nCharge MW, Accelerated Coils, Vorpal Weapon (Cartesian Coordinate), 1 shot",swap,,709,1,1.150,1.220,1.250,1.300,1.150,1858,0.566,0.200,0.283,1.049,1.049,1771,1771
+Scatter grenade,grenade,,1166,1,,,,1.300,1.650,2501,/,/,/,1.283,1.450,1949,1725
+Gjallarhorn\n1 shot,swap,,1716,1,,1.220,1.250,1.300,1.100,3742,0.216,0.000,0.300,0.516,2.216,7252,1689
+Incinerator Snap\nEmber of Ashes,melee,,1143,1,,,,1.300,1.300,1931,0.000,1.183,0.000,1.183,1.183,1632,1632
+Nova Bomb - Vortex,super,,9209,1,,,,1.300,1.450,17358,/,/,/,1.520,10.980,11420,1581
+Axion Bolt\nChaos Accelerant,grenade,,1597,1,,,,1.300,1.650,3425,/,/,/,2.167,2.167,1580,1580
+Electrified Snare\nFacet of Courage,grenade,,1247,1,,,,1.300,1.650,2675,/,/,/,1.283,1.700,2085,1573
+Song of Flame\nsnap spam,super,,16677,1,,,,1.300,1.450,31436,/,/,/,20.300,20.300,1549,1549
+"Fusion grenade\nTouch of Flame, Ember of Ashes",grenade,,1890,1,,,,1.300,1.650,4053,/,/,/,1.283,2.717,3159,1492
+Threadling grenade\nThread of Evolution,grenade,,1177,1,,,,1.300,1.650,2524,/,/,/,1.283,1.700,1967,1485
+"Throwing Hammer\nRoaring Flames x3, Biotic Enhancements",melee,,370,1,,,4.650,1.300,1.300,2907,0.000,2.066,0.000,2.066,2.066,1407,1407
+Gathering Storm,super,,8124,1,,,,1.300,1.450,15314,/,/,/,1.720,10.900,8903,1405
+Cloudstrike\n3 shots,swap,,633,3,,1.220,1.250,1.300,1.150,4328,0.183,0.866,0.300,1.349,3.249,3208,1332
+"Silence and Squall\nFeast of Light x6, Facet of Ruin",super,,12663,1,,,,1.300,1.268,20874,/,/,/,2.180,16.470,9575,1267
+Tripmine grenade\nEmber of Ashes,grenade,,1276,1,,,,1.300,1.650,2736,/,/,/,1.283,2.400,2133,1140
+"Silence and Squall\nWhisper of Fissures, Whisper of Durance, Feast of Light x6",super,,14565,1,,,,1.300,1.233,23346,/,/,/,2.170,20.620,10759,1132
+Threadling grenade,grenade,,885,1,,,,1.300,1.650,1898,/,/,/,1.283,1.700,1479,1116
+Twilight Arsenal\naxe light attack spam,super,,5579,1,,,,1.300,,7252,/,/,/,6.617,6.617,1096,1096
+"Pulse grenade\nTouch of Thunder, Spark of Magnitude, Empowered Grenade x2",grenade,,2218,1,,,1.350,1.300,1.650,6423,/,/,/,1.283,6.083,5006,1056
+Dragon's Breath\nEmber of Ashes,swap,,3218,1,,1.220,1.250,1.300,1.100,7017,0.233,0.000,0.300,0.533,7.017,13165,1000
+Void wall\nEcho of Remnants,grenade,,3337,1,,,,1.300,1.650,7158,/,/,/,1.283,7.200,5579,994
+"Finality's Auger\nassumes pre-loaded turret, painted target, Bait and Switch, Ruinscribe Turret Mode",swap,,589,14,1.300,1.220,1.250,1.300,1.100,23373,0.000,2.183,0.000,2.183,25.733,10707,908
+Silence and Squall\nFacet of Ruin,super,,8988,1,,,,1.300,1.268,14816,/,/,/,2.180,16.470,6796,900
+Anarchy\ntwo traps,swap,,2092,2,,1.220,1.250,1.300,1.100,9123,0.250,0.383,0.366,0.999,10.449,9133,873
+"Silence and Squall\nWhisper of Fissures, Whisper of Durance",super,,10886,1,,,,1.300,1.233,17448,/,/,/,2.170,20.620,8041,846
+Pulse grenade\nFacet of Courage,grenade,,1471,1,,,1.100,1.300,1.650,3470,/,/,/,1.283,4.417,2705,786
+"High-impact bow\nCharged Bolts, e. Aggregate Charge (Submersion), Guidance Ring x3",swap,,2598,1,1.330,1.220,1.250,1.300,1.100,7534,0.183,0.000,0.416,0.599,9.900,12578,761
+Arcane Needle,melee,,454,1,,,,1.300,1.300,767,0.000,1.067,0.000,1.067,1.067,719,719
+"Storm grenade\nTouch of Thunder, Spark of Magnitude, Empowered Grenade x2",grenade,,1745,1,,,1.350,1.300,1.650,5052,/,/,/,1.283,7.200,3938,702
+Vortex grenade\nFacet of Courage,grenade,,1120,1,,,1.100,1.300,1.650,2642,/,/,/,1.283,4.083,2059,647
+"Solar grenade\nSunbracers, Touch of Flame, Ember of Ashes",grenade,,2779,1,,,,1.300,1.650,5960,/,/,/,1.283,9.417,4646,633
+Hellion\nEmber of Ashes,grenade,,459,15,,,,1.300,1.306,11688,/,1.150,/,0.816,20.000,14324,584
+Solar grenade\nEmber of Ashes,grenade,,1242,1,,,,1.300,1.650,2664,/,/,/,1.283,4.833,2076,551
+"High-impact bow\nCharged Bolts, e. Aggregate Charge x3 (Submersion)",swap,,1835,1,1.330,1.220,1.250,1.300,1.100,5321,0.183,0.000,0.416,0.599,9.900,8883,537
+"Hailfire Spike\nFacet of Courage, Facet of Ruin",grenade,,2171,1,,,,1.300,1.650,4656,/,/,/,1.283,9.500,3629,490
+"Area denial grenade launcher\nElemental Honing x5 (Festival Flight), 1 shot",swap,,1079,1,1.150,1.220,1.250,1.300,1.150,2830,0.167,0.000,0.283,0.450,6.000,6289,472
+Witherhoard\ndirect impact,swap,,1948,1,,1.220,1.250,1.300,1.150,4442,0.300,0.000,0.266,0.566,10.166,7848,437
+"Freezing Singularity\nFacet of Courage, Facet of Ruin",grenade,,1263,1,,,,1.300,1.650,2710,/,/,/,1.283,6.300,2112,430
+Witherhoard\nground,swap,,951,1,,1.220,1.250,1.300,1.150,2169,0.300,0.000,0.266,0.566,5.066,3833,428
+"Solar grenade\nTouch of Flame, Ember of Ashes",grenade,,1630,1,,,,1.300,1.650,3496,/,/,/,1.283,9.417,2725,371
+Storm grenade\nFacet of Courage,grenade,,911,1,,,1.100,1.300,1.650,2150,/,/,/,1.283,7.200,1676,299
+"Ergo Sum\ncaster frame, heavy attack, The Perfect Fifth, Ember of Ashes, Pack Hunter",swap,,?,1,,1.220,1.250,1.300,1.150,2,0.550,0.000,1.183,1.733,1.733,1,1

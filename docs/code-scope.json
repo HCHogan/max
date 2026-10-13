@@ -288,7 +288,6 @@
       "src/Max/Bungie/Types.hs",
       "src/Max/CliProxy.hs",
       "src/Max/Destiny/ToolRuntime.hs",
-      "src/Max/Destiny/Guides.hs",
       "src/Max/Faces.hs",
       "src/Max/File/Types.hs",
       "src/Max/Files.hs",

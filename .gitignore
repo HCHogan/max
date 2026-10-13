@@ -31,3 +31,4 @@ max.yaml
 # skills) — per-machine tooling, never part of the project.
 .claude/
 .agents/
+__pycache__/

@@ -42,7 +42,9 @@
             && b != ".devenv"
             && b != ".direnv"
             && b != ".napcat"
-            && b != "var";
+            && b != "var"
+            # Sandbox reference data (services.max.sandbox.data), not a build input.
+            && b != "destiny-guides";
         };
 
       maxPackage =
@@ -121,6 +123,15 @@
             services.max.sandbox.package = lib.mkDefault (sandboxSystem pkgs.stdenv.hostPlatform.system config.services.max.sandbox.extraModules)
             .config.system.build.toplevel;
             services.max.sandbox.nixpkgs = lib.mkDefault nixpkgs.outPath;
+            # Only this directory, so unrelated commits keep the store path and
+            # do not recreate sandboxes; .state is generator bookkeeping.
+            services.max.sandbox.data.destiny = lib.mkDefault (
+              builtins.path {
+                name = "max-destiny-guides";
+                path = ./data/destiny-guides;
+                filter = path: type: baseNameOf path != ".state";
+              }
+            );
             services.max.browser.package =
               lib.mkDefault
                 self.packages.${pkgs.stdenv.hostPlatform.system}.max-browser;

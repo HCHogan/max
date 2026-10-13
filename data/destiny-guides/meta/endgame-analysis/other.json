@@ -1,0 +1,24 @@
+{
+ "merged_ranges": [
+  "A1:B1",
+  "C1:I1",
+  "J1:O1",
+  "P1:R1"
+ ],
+ "hyperlinks": {
+  "B3": "https://www.light.gg/db/items/3661051060/refurbished-a499/",
+  "B4": "https://www.light.gg/db/items/1361871430/",
+  "B5": "https://www.light.gg/db/items/1715391576/mint-retrograde/",
+  "B6": "https://www.light.gg/db/items/3615748501/a-good-shout/",
+  "B7": "https://www.light.gg/db/items/3556730800/",
+  "B8": "https://www.light.gg/db/items/3524386983/submersion/",
+  "B9": "https://www.light.gg/db/items/3146657389/",
+  "B10": "https://www.light.gg/db/items/1553681400/opaque-hourglass/"
+ },
+ "cell_notes": {
+  "H9": "140 Heat Generated\n100 Cooling Efficiency"
+ },
+ "formulas": {},
+ "hidden_rows": [],
+ "has_images": true
+}

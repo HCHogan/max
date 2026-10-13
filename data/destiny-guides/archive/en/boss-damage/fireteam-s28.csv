@@ -1,0 +1,21 @@
+Info,,,,,,,,,Damage @ x seconds,,,,,,,,DPS,,Notes
+#,NAME,,,,,,,,10s,20s,30s,40s,50s,60s,70s,80s,30s,60s,Notes
+1,Divinity,W,/,/,/,/,/,/,3210,6440,9670,12900,16130,19365,22590,25845,322,323,reference
+2,Finality rocket pulse,W,https://dim.gg/ssk6rma/Equipped,Y,,,,,21642,39714,52460,63431,81503,92469,105221,105516,1749,1541,similar total to Parasite but worse DPS
+3,Finality sniper,W,https://dim.gg/jvqjhra/Equipped,Y,,,,,21642,39714,50685,72307,90379,99570,121197,137468,1690,1659,infinite total but crit requirement
+4,Parasite rocket pulse,W,https://dim.gg/6fu4o7y/Equipped,Y,,,,,25192,43264,54235,68757,88604,103120,,100190,1808,1719,solid without Divinity
+5,Levi rocket pulse,H,https://dim.gg/ou6fd3q/Equipped,Y,,,,,21642,45039,57786,65207,72627,83593,,103741,1926,1393,not really worth for longer phases
+6,LoW Submersion,H,https://dim.gg/bgn7xni/Equipped,Y,,,,,32293,52140,63111,74082,88604,119096,146049,158770,2104,1985,surprisingly good but probably not worth neutral cost
+7,A499 hipfire,W,https://dim.gg/lv5iqra/Equipped,Y,,,,,30518,61016,82638,104260,131207,154599,172676,192498,2755,2577,probably disabled
+8,A499 StL,W,https://dim.gg/lv5iqra/Equipped,Y,,,,,26968,50365,63111,74082,97479,113771,131848,148119,2104,1896,convoluted with Izi; probably better to focus sniper
+9,A499 regular,W,https://dim.gg/lv5iqra/Equipped,Y,,,,,30518,52140,66661,86508,109906,124422,146049,162321,2222,2074,the go-to ranged option for now
+10,A499 Rupture,W,https://dim.gg/lv5iqra/Equipped,Y,,,,,34068,62791,70212,90059,111681,133298,154925,194273,2340,2222,"probably disabled, lots of human error (model-specific)"
+11,A499 Uncivil,H,https://dim.gg/cozwfli/Equipped,Y,,,,,32293,46814,75537,90059,115231,127972,142499,162321,2518,2133,"probably disabled, also not very good example"
+12,A499 Still Hunt,H,https://dim.gg/t56h3sq/Equipped,Y,,,,,39394,52140,73762,82958,93929,108446,,114392,2607,1807,just easier to focus on A499
+13,Wolfsbane,W,https://dim.gg/zbz7kyq/Equipped,Y,,,,,19867,36164,47135,61656,79728,94244,103446,117942,1808,1571,~1800 @ 60s if Tractor extension available
+14,Ergo Synanceia,W,https://dim.gg/j4bveta/Equipped,N,,,,,21302,39053,51479,63905,85207,97633,115385,127811,1953,1627,~1800 @ 60s if Tractor extension available
+15,Praxic Blade - void,W,https://dim.gg/vv2t4la/Equipped,N,,,,,17751,30178,42604,55030,67456,76331,88757,101183,1509,1272,theoretically ~1438 if used to extend Tractor
+16,,W,https://dim.gg/vv2t4la/Equipped,N,,,,,17751,31953,42604,58580,72781,83432,97633,111834,1598,1391,only tested because someone asked
+17,Praxic Blade - solar,W,https://dim.gg/vv2t4la/Equipped,N,,,,,17751,33728,46154,60355,76331,90533,102959,118935,1686,1509,best of the bunch even without a damage super
+18,Still hunt sniper,H,https://dim.gg/3dtm5sa/Support,Y,,,/,,28743,41489,56010,66982,76178,85369,91019,93090,2074,1423,pretty solid for short phases
+All testing was performed in the Shooting Range (Ultimate) with Well (no Assembler) and no other modifiers.,,,,,,,,,,,,,,,,,,,

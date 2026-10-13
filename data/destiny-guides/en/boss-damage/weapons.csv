@@ -1,0 +1,420 @@
+INFORMATION,,,,,,,VISUAL,,,,,HEALTHBAR,,,,,,,,VERIFICATION,,,
+🖼️,Type,Subtype,crit\nShot,body\nShot,other\nTicks,Modifiers,Boss,Wipe,#,Full Modifiers,visual\nValue,Boss,#,Type,HP1,HP2,%,Full Modifiers,healthbar\nValue,Patch,Crit,Ratio,Deviation
+,Auto rifle,Adaptive frame,416,237,,,S,416,1,15.09,27.574,/,/,/,/,/,/,/,/,9.7.0,1.755,N/A,N/A
+,Auto rifle,Balanced heat weapon - 450RPM primary,596,352,,,S,596,1,15.09,39.505,/,/,/,/,/,/,/,/,9.7.0,1.693,N/A,N/A
+,Auto rifle,Centrifuse,518,306,,,S,518,1,15.09,34.335,/,/,/,/,/,/,/,/,9.7.0,1.693,N/A,N/A
+,Auto rifle,Cerberus+1,398,222,597/333 Focused Fire,point blank,C,398,1,4.30,92.599,/,/,/,/,/,/,/,/,9.7.0.3,1.793,N/A,N/A
+,Auto rifle,Choir of One,3945,2199,,hitscan,S,3945,1,15.09,261.488,/,/,/,/,/,/,/,/,9.7.0,1.794,N/A,N/A
+,Auto rifle,Choir of One,1688,1688,195 split,projectile - point blank,C,37660,20,3.31,569.527,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Auto rifle,Choir of One,338,338,33 secondary,projectile - spaced (~9m),C,196797,90,3.31,661.364,C,90,B,100.000000,86.272189,13.727811,3.31,692.013,9.7.0.3,1.000,1.046,5.138
+,Auto rifle,Hard Light,416,237,540/308 The Fundamentals,,S,416,1,15.09,27.574,/,/,/,/,/,/,/,/,9.7.0,1.755,N/A,N/A
+,Auto rifle,High-impact frame,603,336,,,S,626,1,15.09,41.493,/,/,/,/,/,/,/,/,9.7.0,1.795,N/A,N/A
+,Auto rifle,Khvostov 7G-0X,416,237,1464/835 ricochet,average - with ricochetting bullets,S,4376,7,15.09,41.437,/,/,/,/,/,/,/,/,9.7.0,1.755,N/A,N/A
+,Auto rifle,Monte Carlo,416,237,,,S,416,1,15.09,27.574,/,/,/,/,/,/,/,/,9.7.0,1.755,N/A,N/A
+,Auto rifle,Necrochasm,353,208,476/281 One for Thrall,,S,353,1,15.09,23.398,/,/,/,/,/,/,/,/,9.7.0,1.697,N/A,N/A
+,Auto rifle,Precision frame,518,306,,,S,518,1,15.09,34.335,/,/,/,/,/,/,/,/,9.7.0,1.693,N/A,N/A
+,Auto rifle,Quicksilver Storm,7330,7330,210 secondary,Grenades Prepped,S,7540,1,15.09,499.777,/,/,/,/,/,/,/,/,9.7.0,1.000,N/A,N/A
+,Auto rifle,Quicksilver Storm,353,208,1222/71 rocket,average - with tracking rockets,S,5882,14,15.09,27.849,/,/,/,/,/,/,/,/,9.7.0,1.472,N/A,N/A
+,Auto rifle,Rapid-fire frame,353,208,,,S,353,1,15.09,23.398,/,/,/,/,/,/,/,/,9.7.0,1.697,N/A,N/A
+,Auto rifle,Support frame,404,288,,,S,404,1,15.09,26.778,/,/,/,/,/,/,/,/,9.7.0,1.403,N/A,N/A
+,Auto rifle,SUROS Regime,132,74,146/81 max,average - Dual Speed Receiver,C,4913,36,3.31,41.277,/,/,/,/,/,/,/,/,9.7.0.3,1.784,N/A,N/A
+,Auto rifle,SUROS Regime,86,52,94/58 max,average - Spinning Up,C,3186,36,3.31,26.767,/,/,/,/,/,/,/,/,9.7.0.3,1.654,N/A,N/A
+,Auto rifle,Sweet Business,98,64,87 explosive,average - with explosive rounds,C,16179,150,3.31,32.623,/,/,/,/,/,/,/,/,9.7.0.3,1.460,N/A,N/A
+,Auto rifle,Tommy's Matchbook,78,46,"154/91 ramped, 2345 ignition",average - with ignition,C,18928,100,3.31,57.249,/,/,/,/,/,/,/,/,9.7.0.3,1.429,N/A,N/A
+,Bow,Heirloom,1286,1161,"1543 secondary, 87/91 seeker (1)",uncharged,C,2829,1,3.31,855.652,/,/,/,/,/,/,/,/,9.7.0.3,1.046,N/A,N/A
+,Bow,Heirloom,1909,1724,"1806 secondary, 2345 ignition, 87/91 seeker (1)\n2005/1896 scorched","average - 1/3 charge, with ignition, catalyst",C,22069,5,3.31,1334.987,/,/,/,/,/,/,/,/,9.7.0.3,1.052,N/A,N/A
+,Bow,Heirloom,3857,3482,"1970 secondary, 2345 ignition, 87/91 seeker (1)\n4050/2068 scorched","average - 2/3 charge, with ignition, catalyst",C,20781,3,3.31,2095.123,/,/,/,/,/,/,/,/,9.7.0.3,1.069,N/A,N/A
+,Bow,Heirloom,3857,3482,"2955 secondary, 2345 ignition, 87/91 seeker (1)\n4050/3102 scorched","average - fully charged, with ignition, catalyst",C,16585,2,3.31,2508.129,/,/,/,/,/,/,/,/,9.7.0.3,1.058,N/A,N/A
+,Bow,Hierarchy of Needs,735,460,"2345 ignition, 485 seeker (3)","average - 2 rings, fireteam scaling",C,39925,9,3.31,1341.735,/,/,/,/,/,/,/,/,9.7.0.3,1.598,N/A,N/A
+,Bow,Hierarchy of Needs,735,460,"2345 ignition, 485 seeker (3)",average - one ring,C,18188,6,3.31,916.849,/,/,/,/,/,/,/,/,9.7.0.3,1.598,N/A,N/A
+,Bow,High-impact frame,5564,4156,"423 seeker (2), 2243 ignition",Spring-Auger Bolts,C,5564,1,3.16,1759.368,/,/,/,/,/,/,/,/,9.7.0.2,1.339,N/A,N/A
+,Bow,High-impact frame,6062,4513,,Heavy Bolts,C,6062,1,3.16,1916.838,/,/,/,/,/,/,/,/,9.7.0.2,1.343,N/A,N/A
+,Bow,High-impact frame,5511,4878,,Explosive Bolts,C,5511,1,3.16,1742.609,/,/,/,/,/,/,/,/,9.7.0.2,1.130,N/A,N/A
+,Bow,High-impact frame,6556,5148,1045 retrieval,"Serrated Bolts, with retrieval",C,6556,1,3.16,2073.043,/,/,/,/,/,/,/,/,9.7.0.2,1.274,N/A,N/A
+,Bow,High-impact frame,6708,5300,63 tick,Charged Bolts,C,57819,10,3.16,1828.269,C,10,C,100.000000,95.739645,4.260355,3.16,2020.722,9.7.0.2,1.266,1.105,20.576
+,Bow,High-impact longbow frame,848,651,"347 seeker (2), 2345 ignition",,C,848,1,3.31,256.484,/,/,/,/,/,/,/,/,9.7.0.2,1.303,N/A,N/A
+,Bow,Le Monarque,667,418,"107 poison, 347 seeker (2)",average - with poison,C,19545,15,3.31,394.102,/,/,/,/,/,/,/,/,9.7.0.3,1.236,N/A,N/A
+,Bow,Leviathan's Breath,2822,1766,"3824 splash, 216 volatile, 50 seeker (2)",,C,41178,6,3.16,2170.119,/,/,/,/,/,/,/,/,9.7.0.3,1.182,N/A,N/A
+,Bow,Lightweight frame,690,432,"347 seeker (2), 2345 ignition",,C,690,1,3.31,208.696,/,/,/,/,/,/,/,/,9.7.0.2,1.597,N/A,N/A
+,Bow,Precision frame,707,542,"347 seeker (2), 2345 ignition",,C,707,1,3.31,213.837,/,/,/,/,/,/,/,/,9.7.0.2,1.304,N/A,N/A
+,Bow,Ticuu's Divination,690,432,"44 hipfire, 893 marked, 347 seeker (3/2)\n81 hipfire, 893/1293 marked","average - alternating modes, 6 stacks",C,14574,12,3.31,367.335,/,/,/,/,/,/,/,/,9.7.0.3,1.696,N/A,N/A
+,Bow,Trinity Ghoul,241,185,347 seeker (3),,C,723,1,3.31,218.677,/,/,/,/,/,/,/,/,9.7.0.3,1.303,N/A,N/A
+,Bow,Verglas Curve,690,432,347 seeker (2),,C,690,1,3.31,208.696,/,/,/,/,/,/,/,/,9.7.0.3,1.597,N/A,N/A
+,Bow,Wish-Ender,619,345,"555 pierce, 773/694 blighted, 347 seeker (2)",,C,1729,1,3.31,522.949,/,/,/,/,/,/,/,/,9.7.0.3,1.188,N/A,N/A
+,Bow,Wish-Keeper,848,651,"619/1407 trap, 1272 suspended, 416 seeker (2)",Vorpal Weapon,C,848,1,3.31,256.484,/,/,/,/,/,/,/,/,9.7.0.3,1.303,N/A,N/A
+,Fusion rifle,Adaptive frame,2954,2954,,"Charge MW, Accelerated Coils",C,2954,1,3.31,893.459,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Fusion rifle,Aggressive frame,2892,2892,,"Charge MW, Accelerated Coils",C,2892,1,3.31,874.707,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Fusion rifle,Bastion,250,250,339 Fury,,C,21048,4,3.31,1591.531,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,Cull's Shadow,224,224,,,C,16128,6,3.31,813.006,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,Cull's Shadow,224,224,"102 min, 471 max",average - with corruption,C,21737,6,3.31,1095.753,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,Cull's Shadow,224,224,"102 min, 471 max",with corruption,C,7230,1,3.31,2186.767,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,Delicate Tomb,184,184,,hipfire,C,52992,18,3.31,890.435,C,18,B,100.000000,98.224852,1.775148,3.31,447.422,9.7.0.3,1.000,0.502,-14.852
+,Fusion rifle,Delicate Tomb,154,154,,ADS,C,44352,18,3.31,745.255,C,18,B,100.000000,98.579882,1.420118,3.31,357.938,9.7.0.3,1.000,0.480,-12.985
+,Fusion rifle,High-impact frame,4095,4095,,"Charge MW, Accelerated Coils",C,4095,1,3.31,1238.563,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Fusion rifle,Jötunn,2508,2508,"570 secondary, 97 tick",average - successive shots,C,34660,10,3.31,1048.318,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,Merciless,764,764,1145 Impetus,"Conserve Momentum x15, full mag",C,30560,1,3.31,9243.100,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,Merciless,848,848,,"Conserve Momentum x0, full mag",C,31231,1,3.31,9446.049,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,One Thousand Voices,639,639,"50 impact, 2814 ignition",average,C,31106,4,3.16,2458.972,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,One Thousand Voices,639,639,"50 impact, 2814 ignition",average - Ember of Ashes,C,36499,4,3.16,2885.296,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,One Thousand Voices,639,639,"50 impact, 2814 ignition, 25 tick, 192 missile",average - catalyst,C,85319,8,3.16,3372.292,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,One Thousand Voices,639,639,"50 impact, 2814 ignition, 25 tick, 192 missile","average - Ember of Ashes, catalyst",C,95256,8,3.16,3765.059,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,One Thousand Voices,639,639,"50 impact, 2814 ignition, 50 tick, 192 missile","average - blighted, catalyst",C,86799,8,3.16,3430.791,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,One Thousand Voices,639,639,"50 impact, 2814 ignition, 50 tick, 192 missile","average - Ember of Ashes, blighted, catalyst",C,96156,8,3.16,3800.632,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,Precision frame,3374,3374,,"Charge MW, Accelerated Coils",C,3374,1,3.31,1020.491,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Fusion rifle,Rapid-fire frame,2655,2655,,"Charge MW, Accelerated Coils",C,2655,1,3.31,803.025,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Fusion rifle,Telesto,500,500,17 impact,,C,25333,7,3.31,1094.594,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,Tessellation,8962,8962,399/529 secondary,"Property: Irreducible, Transcendent, Transcendence bonus included",C,9890,1,3.31,2991.304,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,Tessellation,7528,7528,399/529 secondary,Property: Irreducible,C,8456,1,3.31,2557.580,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,Tessellation,431,431,,,C,3017,1,3.31,912.514,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Fusion rifle,Vex Mythoclast,1409,785,1691/943 Calculated Balance,,S,1409,1,15.09,93.393,/,/,/,/,/,/,/,/,9.7.0,1.795,N/A,N/A
+,Fusion rifle,Vex Mythoclast,17616,5495,,Temporal Unlimiter,S,17616,1,15.09,1167.649,/,/,/,/,/,/,/,/,9.7.0,3.206,N/A,N/A
+,Glaive,Adaptive frame,1595,1595,,projectile,C,1595,1,3.31,482.420,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Glaive,Aggressive frame,1831,1831,,projectile,C,1831,1,3.31,553.800,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Glaive,Edge of Action,1595,1595,,projectile,C,1595,1,3.31,482.420,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Glaive,Edge of Concurrence,4502,4502,"228 jolt, 14 secondary",Lightning Seeker,C,4516,1,3.31,1365.898,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Glaive,Edge of Concurrence,1390,1390,228 jolt,projectile,C,1390,1,3.31,420.416,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Glaive,Edge of Intent,1831,1831,,projectile,C,1831,1,3.31,553.800,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Glaive,Rapid-fire frame,1390,1390,,projectile,C,1390,1,3.31,420.416,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Glaive,Vexcalibur,379,379,,projectile,C,1895,1,3.31,573.157,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Glaive,Winterbite,4262,4262,"829 shatter, 3589 auto","average - projectile, with shatter",C,83621,18,3.16,1468.968,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,Adaptive frame,4384,4384,,"Sticky Grenades, Explosive Light",C,4384,1,3.16,1386.245,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Adaptive frame,2979,2979,,"Sticky Grenades, Explosive Light, Overwhelming Power",C,3012,1,1.68,1795.529,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Adaptive frame,2599,2599,,Spike Grenades,C,2599,1,3.16,821.818,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Adaptive frame,3790,3790,,"Spike Grenades, Explosive Light",C,3790,1,3.16,1198.419,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Adaptive frame,2516,2516,,,C,2516,1,3.16,795.573,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Adaptive frame,2508,2508,,Sticky Grenades,C,2508,1,3.16,793.043,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Alethonym,1589,1589,"337 impact, 237 tick",average,C,43287,15,3.31,872.832,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,Anarchy,868,868,"67 impact, 228 jolt, 446 explosion","average - per trap, double stick, Jolting Feedback",C,21306,2,3.16,3368.538,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,Area denial frame,3759,3759,,,C,3759,1,3.31,1136.938,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Compressed wave frame,2544,2544,547 impact,,C,2544,1,3.16,804.427,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Dead Messenger,1525,1525,1982 The Fundamentals,,C,4575,1,3.31,1383.743,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,Double fire frame,2672,2672,,Hard Launch,C,2672,1,3.31,808.166,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Double fire frame,2776,2776,,"Hard Launch, Spike Grenades",C,2776,1,3.31,839.622,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Ex Diris,1108,1108,"929 secondary, 1564 moth",average - with moth,C,68930,30,3.31,694.946,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,Fighting Lion,1529,1529,"388 secondary, 216 volatile",average - with volatile damage,C,40510,20,3.31,612.628,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,Lightweight frame,2014,2014,,"Confined Launch, Implosion Rounds",C,2014,1,3.31,609.149,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Lightweight frame,2080,2080,,"Confined Launch, Spike Grenades",C,2080,1,3.31,629.112,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Micro-missile frame,2800,2800,,"Hard Launch, Implosion Rounds",C,2800,1,3.31,846.881,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Micro-missile frame,2820,2820,,"Hard Launch, Spike Grenades",C,2820,1,3.31,852.930,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Parasite,4946,4946,"1801 impact, 14836/5383 x20",,C,6747,1,3.16,2133.439,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,Rapid-fire frame,2101,2101,,,C,2101,1,3.16,664.348,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Rapid-fire frame,2223,2223,,Spike Grenades,C,2223,1,3.16,702.925,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Rapid-fire frame,1948,1948,,"Sticky Grenades, Explosive Light",C,1977,1,1.68,1178.539,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Rapid-fire frame,2533,2533,,"Sticky Grenades, Explosive Light, Overwhelming Power",C,2562,1,1.68,1527.273,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Salvation's Grip,1887,1887,627 impact,   ,C,2514,1,3.16,794.941,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,Salvation's Grip,524,524,insane number variance,average - charged,C,47896,12,3.16,1262.082,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,Salvation's Grip,655,655,insane number variance,"average - charged, Hail the Storm",C,54080,12,3.16,1425.033,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,The Colony,2493,2493,144 impact,direct impact,C,2637,1,3.16,833.834,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,The Prospector,1640,1640,"492 impact, 424/30 submunition","average - direct impact, standard target model",C,58926,18,3.16,1035.152,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,Wave frame,1525,1525,692 impact,,C,1525,1,3.31,461.248,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Grenade launcher,Witherhoard,118,118,391 tick,direct impact,C,6765,1,3.31,2046.125,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Grenade launcher,Witherhoard,391,391,196 tick,ground pool,C,3412,1,3.31,1031.985,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Hand cannon,Ace of Spades,1452,810,2442/1361 Memento Mori,,S,1452,1,15.09,96.244,/,/,/,/,/,/,/,/,9.7.0,1.793,N/A,N/A
+,Hand cannon,Adaptive frame,1452,810,,,S,1452,1,15.09,96.244,/,/,/,/,/,/,/,/,9.7.0,1.793,N/A,N/A
+,Hand cannon,Aggressive frame,1641,886,,,S,1641,1,15.09,108.771,/,/,/,/,/,/,/,/,9.7.0,1.852,N/A,N/A
+,Hand cannon,Crimson,607,328,,burst,S,1821,1,15.09,120.702,/,/,/,/,/,/,/,/,9.7.0,1.851,N/A,N/A
+,Hand cannon,Dynamic heat weapon - 180RPM primary,1698,1090,,,S,1698,1,15.09,112.549,/,/,/,/,/,/,/,/,9.7.0,1.558,N/A,N/A
+,Hand cannon,Dynamic heat weapon - 180RPM special,957,240,,,C,957,1,3.31,289.452,/,/,/,/,/,/,/,/,9.7.0,3.988,N/A,N/A
+,Hand cannon,Dynamic heat weapon - 180RPM special,957,240,,"Illegally Modded Holster, 18 shots, e. Precision Instrument, e. Accelerated Assault",C,47035,1,3.17,14818.841,/,/,/,/,/,/,/,/,9.7.0.3,3.988,N/A,N/A
+,Hand cannon,Dynamic heat weapon - 180RPM special,957,240,1342 Crimson 2 bursts,"Illegally Modded Holster, 15 shots, e. Precision Instrument, pre-stacked using Crimson, e. Accelerated Assault",C,46352,1,3.17,14603.655,/,/,/,/,/,/,/,/,9.7.0.3,3.988,N/A,N/A
+,Hand cannon,Eriana's Vow,1624,1016,1226/767 no DAFG,Death At First Glance,C,1624,1,3.31,491.191,/,/,/,/,/,/,/,/,9.7.0.3,1.598,N/A,N/A
+,Hand cannon,Eriana's Vow,1624,1016,2547 Vorpal 3 bursts,"Illegally Modded Holster, Death At First Glance, 7 shots, pre-stacked using heavy burst",C,40434,1,3.17,12739.130,/,/,/,/,/,/,/,/,9.7.0.3,1.598,N/A,N/A
+,Hand cannon,Eriana's Vow,1624,1016,,"Illegally Modded Holster, Death At First Glance, full mag",C,30473,1,3.17,9600.819,/,/,/,/,/,/,/,/,9.7.0.3,1.598,N/A,N/A
+,Hand cannon,Graviton Spike,2665,1810,807 secondary,stasis mode,S,2665,1,15.09,176.645,/,/,/,/,/,/,/,/,9.7.0,1.472,N/A,N/A
+,Hand cannon,Graviton Spike,1416,764,,arc mode,S,1416,1,15.09,93.857,/,/,/,/,/,/,/,/,9.7.0,1.853,N/A,N/A
+,Hand cannon,Graviton Spike,489,264,"489/213/180 stasis, 373 arc","average - overcharging both modes, typical boss model, Temporal Alignment",C,37850,24,3.31,477.001,/,/,/,/,/,/,/,/,9.7.0.3,1.472,N/A,N/A
+,Hand cannon,Hawkmoon,1452,810,"26662 final shot, 1756 / 1982 / 2142 / 2252 / 2325 / 2376 / 2419 Paracausal Charge",,S,1452,1,15.09,96.244,/,/,/,/,/,/,/,/,9.7.0,1.793,N/A,N/A
+,Hand cannon,Hawkmoon,1452,810,,"Illegally Modded Holster, Paracausal Shot, full mag",C,14638,1,3.17,4611.846,/,/,/,/,/,/,/,/,9.7.0.3,1.793,N/A,N/A
+,Hand cannon,Hawkmoon,1452,810,3978 Vorpal 4 bursts,"Illegally Modded Holster, Paracausal Shot, full mag, pre-stacked using heavy burst",C,25193,1,3.17,7937.303,/,/,/,/,/,/,/,/,9.7.0.3,1.793,N/A,N/A
+,Hand cannon,Heavy burst frame,961,437,,burst,S,1922,1,15.09,127.397,/,/,/,/,/,/,/,/,9.7.0,2.199,N/A,N/A
+,Hand cannon,Heavy burst frame,961,437,,"Illegally Modded Holster, 13 bursts, e. Precision Instrument",C,22065,1,3.17,6951.796,/,/,/,/,/,/,/,/,9.7.0.3,2.199,N/A,N/A
+,Hand cannon,Heavy burst frame,961,437,,"Illegally Modded Holster, 13 bursts",C,17678,1,3.17,5569.628,/,/,/,/,/,/,/,/,9.7.0.3,2.199,N/A,N/A
+,Hand cannon,Lumina,1452,810,,,S,1452,1,15.09,96.244,/,/,/,/,/,/,/,/,9.7.0,1.793,N/A,N/A
+,Hand cannon,Malfeasance,338,217,280 slug,"average - with slugs, Vorpal Weapon",C,3090,5,3.31,186.919,/,/,/,/,/,/,/,/,9.7.0.3,1.243,N/A,N/A
+,Hand cannon,Malfeasance,338,217,,"Illegally Modded Holster, 17 shots, with slugs, blighted, Vorpal Weapon",C,25900,1,3.17,8160.050,/,/,/,/,/,/,/,/,9.7.0.3,1.558,N/A,N/A
+,Hand cannon,Malfeasance,338,217,,"Illegally Modded Holster, 17 shots, with slugs, Vorpal Weapon",C,20726,1,3.17,6529.931,/,/,/,/,/,/,/,/,9.7.0.3,1.558,N/A,N/A
+,Hand cannon,Precision frame,1284,824,,,S,1284,1,15.09,85.108,/,/,/,/,/,/,/,/,9.7.0,1.558,N/A,N/A
+,Hand cannon,Precision frame,1284,824,,"Illegally Modded Holster, 17 shots",C,13907,1,3.17,4381.537,/,/,/,/,/,/,/,/,9.7.0.3,1.558,N/A,N/A
+,Hand cannon,Precision frame,1284,824,,"Illegally Modded Holster, 17 shots, e. Precision Instrument",C,17655,1,3.17,5562.382,/,/,/,/,/,/,/,/,9.7.0.3,1.558,N/A,N/A
+,Hand cannon,Spread shot frame,663,552,,,C,663,1,3.31,200.529,/,/,/,/,/,/,/,/,9.7.0.2,1.201,N/A,N/A
+,Hand cannon,Spread shot frame,663,552,,"Illegally Modded Holster, 14 shots, Cascade Point start",C,37225,1,4.13,9021.666,/,/,/,/,/,/,/,/,9.7.0.3,1.201,N/A,N/A
+,Hand cannon,Spread shot frame,663,552,,"Illegally Modded Holster, 10 shots",C,19354,1,4.13,4690.417,/,/,/,/,/,/,/,/,9.7.0.3,1.201,N/A,N/A
+,Hand cannon,Sturm,1641,886,5907/3188 Overcharged Rounds,,S,1728,1,15.09,114.538,/,/,/,/,/,/,/,/,9.7.0,1.852,N/A,N/A
+,Hand cannon,Sunshot,1527,879,497 splash,,S,1306,1,15.09,86.566,/,/,/,/,/,/,/,/,9.7.0,1.737,N/A,N/A
+,Hand cannon,The Last Word,2647,783,1404 ADS,hipfire,S,2647,1,15.09,175.452,/,/,/,/,/,/,/,/,9.7.0,3.381,N/A,N/A
+,Hand cannon,The Last Word,2647,783,,"Illegally Modded Holster, hipfire, 1 mag, Envious Assassin",C,39809,1,3.17,12542.218,/,/,/,/,/,/,/,/,9.7.0.3,3.381,N/A,N/A
+,Hand cannon,The Last Word,2647,783,,"Illegally Modded Holster, hipfire, 1 mag",C,9132,1,3.17,2877.127,/,/,/,/,/,/,/,/,9.7.0.3,3.381,N/A,N/A
+,Hand cannon,Thorn,319,178,"32 poison, 96 Soul Devourer",average - with poison,C,4023,9,3.31,135.198,/,/,/,/,/,/,/,/,9.7.0.3,1.532,N/A,N/A
+,Hand cannon,Thorn,319,178,"32 poison, 96 Soul Devourer","Illegally Modded Holster, with poison, Soul Devourer, 14 shots",C,16851,1,3.17,5309.074,/,/,/,/,/,/,/,/,9.7.0.3,1.532,N/A,N/A
+,Hand cannon,Turncoat,319,178,307 explosion,average,C,5056,12,3.31,127.435,/,/,/,/,/,/,/,/,9.7.0.3,1.552,N/A,N/A
+,Hand cannon,Turncoat,366,204,252 explosion,Overwhelming Power,C,618,1,3.80,162.538,/,/,/,/,/,/,/,/,9.7.0.3,1.355,N/A,N/A
+,Linear fusion rifle,Adaptive burst frame,4980,1449,,"burst, Charge MW, Accelerated Coils",C,4980,1,3.16,1574.704,/,/,/,/,/,/,/,/,9.7.0.2,3.437,N/A,N/A
+,Linear fusion rifle,Arbalest,3591,1044,,,C,3591,1,3.31,1086.125,/,/,/,/,/,/,/,/,9.7.0.3,3.440,N/A,N/A
+,Linear fusion rifle,Euphony,1452,422,"976 threadling, 1298 Evolution","burst, without threadlings",C,4356,1,3.31,1317.505,/,/,/,/,/,/,/,/,9.7.0.3,3.441,N/A,N/A
+,Linear fusion rifle,Fafnir,4408,1281,"1196 detonation, 4949 Quantum Nova",,C,7996,1,3.16,2528.379,/,/,/,/,/,/,/,/,9.7.0.3,3.441,N/A,N/A
+,Linear fusion rifle,Finality's Auger,4041,1175,,Linear Fusion Mode,C,4041,1,3.16,1277.787,/,/,/,/,/,/,/,/,9.7.0.3,3.439,N/A,N/A
+,Linear fusion rifle,Finality's Auger,359,359,944 unmarked,"Ruinscribe Turret Mode, marked, entire turret duration",C,30095,1,3.16,9516.206,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Linear fusion rifle,Lorentz Driver,3591,1044,,,C,3591,1,3.31,1086.125,/,/,/,/,/,/,/,/,9.7.0.3,3.440,N/A,N/A
+,Linear fusion rifle,Precision frame,3840,1116,,"Charge MW, Accelerated Coils",C,3840,1,3.16,1214.229,/,/,/,/,/,/,/,/,9.7.0.2,3.441,N/A,N/A
+,Linear fusion rifle,Sleeper Simulant,7364,5327,,,C,7364,1,3.16,2328.538,/,/,/,/,/,/,/,/,9.7.0.3,1.382,N/A,N/A
+,Linear fusion rifle,The Queenbreaker,4762,1384,,Marksman Sights,C,4762,1,3.16,1505.771,/,/,/,/,/,/,/,/,9.7.0.3,3.441,N/A,N/A
+,Linear fusion rifle,The Queenbreaker,2073,603,,"burst, Combat Sights",C,6219,1,3.16,1966.482,/,/,/,/,/,/,/,/,9.7.0.3,3.438,N/A,N/A
+,Machine gun,Adaptive frame,1446,1032,,,S,1446,1,14.43,100.202,/,/,/,/,/,/,/,/,9.7.0,1.401,N/A,N/A
+,Machine gun,Aggressive frame,1167,895,,,S,1167,1,14.43,80.869,/,/,/,/,/,/,/,/,9.7.0,1.304,N/A,N/A
+,Machine gun,Balanced heat weapon - 900RPM power,827,634,,,S,827,1,14.43,57.308,/,/,/,/,/,/,/,/,9.7.0,1.304,N/A,N/A
+,Machine gun,Deterministic Chaos,485,336,280/1 volatile,"average - with volatile damage, excludes weaken",C,24966,48,4.11,126.513,/,/,/,/,/,/,/,/,9.7.0.3,1.401,N/A,N/A
+,Machine gun,Deterministic Chaos,485,336,"280/1 volatile, 674 max TL x4","average - with volatile damage, excludes weaken, Target Lock, single mag",C,30738,48,4.11,155.762,/,/,/,/,/,/,/,/,9.7.0.3,1.406,N/A,N/A
+,Machine gun,Grand Overture,1279,1279,280 impact,"Missile Loaded, Volley Ready",C,31180,20,3.16,492.964,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Machine gun,Grand Overture,1790,1790,,,C,1790,1,3.16,566.008,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Machine gun,Heir Apparent,809,671,,,S,809,1,14.43,56.061,/,/,/,/,/,/,/,/,9.7.0,1.206,N/A,N/A
+,Machine gun,High-impact frame,1701,1181,,,S,1701,1,14.43,117.873,/,/,/,/,/,/,/,/,9.7.0,1.440,N/A,N/A
+,Machine gun,Rapid-fire frame,827,634,,,S,827,1,14.43,57.308,/,/,/,/,/,/,/,/,9.7.0,1.304,N/A,N/A
+,Machine gun,Service of Luzaku,2262,1570,,,S,2262,1,14.43,156.748,/,/,/,/,/,/,/,/,9.7.0,1.441,N/A,N/A
+,Machine gun,Thunderlord,304,217,,"average - with lightning strikes, excludes Bolt Charge",C,43912,127,3.04,113.888,/,/,/,/,/,/,/,/,9.7.0.3,1.336,N/A,N/A
+,Machine gun,Xenophage,1804,1804,525 secondary,,C,2329,1,3.16,736.443,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Pulse rifle,Adaptive frame,585,353,,burst,S,1755,1,15.09,116.327,/,/,/,/,/,/,/,/,9.7.0,1.657,N/A,N/A
+,Pulse rifle,Aggressive burst frame,485,249,,burst,S,1940,1,15.09,128.590,/,/,/,/,/,/,/,/,9.7.0,1.948,N/A,N/A
+,Pulse rifle,Bad Juju,482,302,579 / 675 / 771 / 868 / 964 String of Curses,burst,S,1446,1,15.09,95.846,/,/,/,/,/,/,/,/,9.7.0,1.596,N/A,N/A
+,Pulse rifle,Balanced heat weapon - 540RPM primary,513,286,,burst,S,1539,1,15.09,102.010,/,/,/,/,/,/,/,/,9.7.0,1.794,N/A,N/A
+,Pulse rifle,Collective Obligation,585,353,,burst,S,1755,1,15.09,116.327,/,/,/,/,/,/,/,/,9.7.0,1.657,N/A,N/A
+,Pulse rifle,Dynamic heat weapon - 540RPM primary,590,329,,burst,S,1770,1,15.09,117.322,/,/,/,/,/,/,/,/,9.7.0,1.793,N/A,N/A
+,Pulse rifle,Graviton Lance,2101,1134,,"burst, Vorpal Weapon",S,2198,1,15.09,145.691,/,/,/,/,/,/,/,/,9.7.0,1.853,N/A,N/A
+,Pulse rifle,Heavy burst frame,782,421,,burst,S,1564,1,15.09,103.667,/,/,/,/,/,/,/,/,9.7.0,1.857,N/A,N/A
+,Pulse rifle,High-impact frame,619,345,,burst,S,1857,1,15.09,123.088,/,/,/,/,/,/,/,/,9.7.0,1.794,N/A,N/A
+,Pulse rifle,Lightweight frame,482,302,,burst,S,1446,1,15.09,95.846,/,/,/,/,/,/,/,/,9.7.0,1.596,N/A,N/A
+,Pulse rifle,Micro-missile frame,2622,2358,276 Energy Acceleration,burst,C,2622,1,3.31,793.043,/,/,/,/,/,/,/,/,9.7.0.2,1.112,N/A,N/A
+,Pulse rifle,New Malpais,534,443,"524/90 explosion, 1173 suspend","average - 3 bursts, includes suspend, excludes unravel",C,11505,3,3.31,1159.924,/,/,/,/,/,/,/,/,9.7.0.3,1.077,N/A,N/A
+,Pulse rifle,No Time to Explain,619,345,385 Time Chasm,burst,S,1857,1,15.09,123.088,/,/,/,/,/,/,/,/,9.7.0,1.794,N/A,N/A
+,Pulse rifle,Outbreak Perfected,423,265,132 nanite,average per burst - max nanites,C,45963,26,3.31,534.687,/,/,/,/,/,/,/,/,9.7.0.3,1.366,N/A,N/A
+,Pulse rifle,Outbreak Perfected,106,67,"318/194 end, 132 nanite","average per burst - no nanites, Appended Mag, up to Rewind end",C,34218,26,3.31,398.057,/,/,/,/,/,/,/,/,9.7.0.3,1.487,N/A,N/A
+,Pulse rifle,Rapid-fire frame,446,249,,burst,S,1338,1,15.09,88.687,/,/,/,/,/,/,/,/,9.7.0,1.791,N/A,N/A
+,Pulse rifle,Red Death Reformed,619,345,866/483 low health,"burst, undamaged",S,1857,1,15.09,123.088,/,/,/,/,/,/,/,/,9.7.0,1.794,N/A,N/A
+,Pulse rifle,Revision Zero,17264,5320,4041 shockwave,"Hunter's Trace, Vorpal Weapon, includes shockwave",S,21305,1,15.09,1412.168,/,/,/,/,/,/,/,/,9.7.0,3.245,N/A,N/A
+,Pulse rifle,Revision Zero,1149,620,,"burst - heavy 2-burst mode, Vorpal Weapon",S,2298,1,15.09,152.319,/,/,/,/,/,/,/,/,9.7.0,1.853,N/A,N/A
+,Pulse rifle,Revision Zero,582,299,,"burst - light 4-burst mode, Vorpal Weapon",S,2328,1,15.09,154.308,/,/,/,/,/,/,/,/,9.7.0,1.946,N/A,N/A
+,Pulse rifle,Vigilance Wing,521,322,,burst,S,2605,1,15.09,172.668,/,/,/,/,/,/,/,/,9.7.0,1.618,N/A,N/A
+,Rocket launcher,Aggressive frame,6260,6260,,,C,6260,1,3.16,1979.447,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Rocket launcher,Aggressive frame,6399,6399,,Impact Casing,C,6399,1,3.16,2023.399,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Rocket launcher,Aggressive frame,6399,6399,490/36 cluster,"Impact Casing, Cluster Bomb, standard boss model",C,143384,18,3.16,2518.823,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Rocket launcher,Aggressive frame,6399,6399,142/66 wolfpack,"Impact Casing, Pack Hunter",C,72567,9,3.16,2549.565,C,9,C,100.000000,95.147929,4.852071,3.16,2557.086,9.7.0.2,1.000,1.003,0.724
+,Rocket launcher,Deathbringer,1762,1762,,max height,C,12334,1,3.16,3900.079,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Rocket launcher,Dragon's Breath,595,595,"207 tick, 2243 ignition, 4649 explosion","average - loaded, Composite Propellant x5",C,94255,8,3.16,3725.494,C,8,B,100.000000,93.372781,6.627219,3.16,3929.181,9.7.0.3,1.000,1.055,2.903
+,Rocket launcher,Eyes of Tomorrow,1425,1425,2137 Adaptive Ordnance,volley,C,8550,1,3.16,2703.557,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Rocket launcher,Gjallarhorn,3874,3874,"446 impact, 142/66 wolfpack",,C,47872,8,3.16,1892.174,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Rocket launcher,High-impact frame,5820,5820,,Impact Casing,C,5820,1,3.16,1840.316,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Rocket launcher,High-impact frame,5760,5760,,,C,5760,1,3.16,1821.344,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Rocket launcher,High-impact frame,5820,5820,490/36 cluster,"Impact Casing, Cluster Bomb, standard boss model",C,163530,22,3.16,2350.413,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Rocket launcher,High-impact frame,5820,5820,142/66 wolfpack,"Impact Casing, Pack Hunter",C,82258,11,3.16,2364.585,C,11,C,100.000000,94.437870,5.562130,3.16,2398.331,9.7.0.2,1.000,1.014,3.969
+,Rocket launcher,Precision frame,5407,5407,,,C,5407,1,3.16,1709.723,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Rocket launcher,Precision frame,5527,5527,,Impact Casing,C,5527,1,3.16,1747.668,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Rocket launcher,Precision frame,5527,5527,490/36 cluster,"Impact Casing, Cluster Bomb, standard boss model",C,145319,22,3.16,2088.667,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Rocket launcher,Precision frame,5527,5527,142/66 wolfpack,"Impact Casing, Pack Hunter",C,79035,11,3.16,2271.937,C,11,C,100.000000,94.674556,5.325444,3.16,2296.275,9.7.0.2,1.000,1.011,2.862
+,Rocket launcher,The Wardcliff Coil,886,886,64 impact,"average - volley, excludes Bolt Charge",C,7600,1,3.16,2403.162,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Rocket launcher,Truth,5682,5682,,,C,5682,1,3.16,1796.680,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Rocket launcher,Truth,5682,5682,490/36 cluster,average - Prototype Truthseeker,C,62028,9,3.16,2179.289,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Rocket launcher,Truth,7955,7955,686/50 cluster,"average - Prototype Truthseeker, Reaper's Tithe x4",C,119734,12,3.16,3155.046,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Rocket launcher,Two-Tailed Fox,2878,2878,"822 impact, 2243 ignition",average,C,20191,2,3.16,3192.253,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Rocket launcher,Whirling Ovation,3211,3211,,no charge,C,3211,1,3.16,1015.336,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Rocket launcher,Whirling Ovation,10020,10020,10044 strand,full charge,C,20064,1,3.16,6344.348,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Rocket launcher,Whirling Ovation,6712,6712,6609 strand,2/3 charge,C,13321,1,3.16,4212.174,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Rocket launcher,Whirling Ovation,4962,4962,4891 strand,1/3 charge,C,9853,1,3.16,3115.573,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Scout rifle,Aggressive frame,2063,1216,,,S,2063,1,15.09,136.743,/,/,/,/,/,/,/,/,9.7.0,1.697,N/A,N/A
+,Scout rifle,Balanced heat weapon - 260RPM primary,1058,543,,,S,1085,1,15.09,71.918,/,/,/,/,/,/,/,/,9.7.0,1.948,N/A,N/A
+,Scout rifle,Dead Man's Tale,2847,1679,"2959 / 3033 / 3145 / 3219 / 3331 Cranial Spike, 4130 hip-fire",Vorpal Weapon,S,2847,1,15.09,188.709,/,/,/,/,/,/,/,/,9.7.0,1.696,N/A,N/A
+,Scout rifle,High-impact frame,1458,726,,,S,1458,1,15.09,96.641,/,/,/,/,/,/,/,/,9.7.0,2.008,N/A,N/A
+,Scout rifle,Lightweight frame,1114,657,,,S,1114,1,15.09,73.840,/,/,/,/,/,/,/,/,9.7.0,1.696,N/A,N/A
+,Scout rifle,MIDA Multi-Tool,1114,657,1281/167 High-Power Ammo (755 body),,S,1114,1,15.09,73.840,/,/,/,/,/,/,/,/,9.7.0,1.696,N/A,N/A
+,Scout rifle,Polaris Lance,320,159,"310 Perfect Fifth, 2345 ignition","average - with ignitions, Ember of Ashes",C,6309,10,3.31,190.820,/,/,/,/,/,/,/,/,9.7.0.3,2.013,N/A,N/A
+,Scout rifle,Polaris Lance,320,159,"310 Perfect Fifth, 2345 ignition",average - with ignition,C,8417,15,3.31,169.719,/,/,/,/,/,/,/,/,9.7.0.3,2.013,N/A,N/A
+,Scout rifle,Precision frame,1194,665,,,S,1194,1,15.09,79.142,/,/,/,/,/,/,/,/,9.7.0,1.795,N/A,N/A
+,Scout rifle,Rapid-fire frame,920,472,,,S,920,1,15.09,60.981,/,/,/,/,/,/,/,/,9.7.0,1.949,N/A,N/A
+,Scout rifle,Skyburner's Oath,264,88,114 impact,"ADS, Cabal",C,378,1,3.31,114.329,/,/,/,/,/,/,/,/,9.7.0.3,1.871,N/A,N/A
+,Scout rifle,Skyburner's Oath,265,89,"114 impact, 2580 ignition","average - hipfire, with ignitions, Burning Ambition, Cabal",C,6641,10,3.31,200.862,/,/,/,/,/,/,/,/,9.7.0.3,2.978,N/A,N/A
+,Scout rifle,Skyburner's Oath,265,89,"114 impact, 2580 ignition","average - hipfire, with ignitions, Ember of Ashes, Burning Ambition, Cabal",C,4648,5,3.31,281.164,/,/,/,/,/,/,/,/,9.7.0.3,2.978,N/A,N/A
+,Scout rifle,Symmetry,4558,4558,3851/2567 Bolt Charge,"Arc Seeker Mode, Dynamic Charge x10",C,571,1,3.31,172.703,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Scout rifle,Symmetry,4558,4558,,"Arc Seeker Mode, Dynamic Charge x20",S,4558,1,15.09,302.120,/,/,/,/,/,/,/,/,9.7.0,1.000,N/A,N/A
+,Scout rifle,Symmetry,920,472,,,S,920,1,15.09,60.981,/,/,/,/,/,/,/,/,9.7.0,1.949,N/A,N/A
+,Scout rifle,The Jade Rabbit,1458,726,1451 Fate of all Fools,,S,1458,1,15.09,96.641,/,/,/,/,/,/,/,/,9.7.0,2.008,N/A,N/A
+,Scout rifle,The Jade Rabbit,12384,10171,7979 splash,Fated Missile x15,S,10171,1,15.09,674.169,/,/,/,/,/,/,/,/,9.7.0,1.218,N/A,N/A
+,Scout rifle,Third Iteration,1699,1002,3310/1952 marked,precision,S,1699,1,15.09,112.616,/,/,/,/,/,/,/,/,9.7.0,1.696,N/A,N/A
+,Scout rifle,Third Iteration,6625,3906,8603/5073 marked,Amalgamation Round,S,6625,1,15.09,439.128,/,/,/,/,/,/,/,/,9.7.0,1.696,N/A,N/A
+,Scout rifle,Touch of Malice,920,472,"2135/1094 final, 4002/1641 blighted e. PI final",,S,920,1,15.09,60.981,/,/,/,/,/,/,/,/,9.7.0,1.949,N/A,N/A
+,Scout rifle,Touch of Malice,414,414,46 tick,blight,C,740,1,3.31,223.819,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Scout rifle,Wicked Implement,202,104,829 shatter,average - with manual shatters,C,18512,60,3.31,93.318,/,/,/,/,/,/,/,/,9.7.0.3,1.942,N/A,N/A
+,Shotgun,Aggressive frame,3699,3339,,body,C,3339,1,3.31,1009.905,/,/,/,/,/,/,/,/,9.7.0.2,1.108,N/A,N/A
+,Shotgun,Conditional Finality,4376,3950,"3950 stasis body, 4148 solar body, 1077 shatter, 3049 ignition","average - body, both modes",C,56424,12,3.31,1422.155,C,12,B,100.000000,96.094675,3.905325,3.31,1476.493,9.7.0.3,1.071,1.038,1.214
+,Shotgun,Duality,3952,3567,,"hipfire, body",C,3567,1,4.30,829.897,/,/,/,/,/,/,/,/,9.7.0.3,1.108,N/A,N/A
+,Shotgun,Duality,4173,2378,4826/5805/6458 On Black Wings,ADS,C,4173,1,3.31,1262.155,/,/,/,/,/,/,/,/,9.7.0.3,1.755,N/A,N/A
+,Shotgun,Heavy burst frame,3204,1826,,burst,C,3204,1,3.31,969.074,/,/,/,/,/,/,/,/,9.7.0.2,1.755,N/A,N/A
+,Shotgun,Legend of Acrius,7848,7084,1099 ground,body,C,8183,1,4.11,1990.392,/,/,/,/,/,/,/,/,9.7.0.3,1.093,N/A,N/A
+,Shotgun,Lightweight frame,2911,2627,,,C,2911,1,3.31,880.454,/,/,/,/,/,/,/,/,9.7.0.2,1.108,N/A,N/A
+,Shotgun,Lord of Wolves,543,348,2657 ignition,average - includes ignition/scorch,C,70866,120,3.17,186.059,/,/,/,/,/,/,/,/,9.7.0.3,1.493,N/A,N/A
+,Shotgun,Lord of Wolves,543,348,2657 ignition,"average - includes ignition/scorch, Ember of Ashes",C,54680,90,3.17,191.416,/,/,/,/,/,/,/,/,9.7.0.3,1.473,N/A,N/A
+,Shotgun,Pinpoint slug frame,2587,1474,,,C,2587,1,3.31,782.457,/,/,/,/,/,/,/,/,9.7.0.2,1.755,N/A,N/A
+,Shotgun,Precision frame,3040,2744,,body,C,2744,1,3.31,829.943,/,/,/,/,/,/,/,/,9.7.0.2,1.108,N/A,N/A
+,Shotgun,Rapid-fire frame,1968,1777,,body,C,1777,1,3.31,537.467,/,/,/,/,/,/,/,/,9.7.0.2,1.107,N/A,N/A
+,Shotgun,Rapid-fire slug frame,2475,1410,,,C,2475,1,3.31,748.582,/,/,/,/,/,/,/,/,9.7.0.2,1.755,N/A,N/A
+,Shotgun,Slayer's Fang,2461,1403,218 submunition\n3254/250 Nightsworn,"average - includes submunitions, Nightsworn ticks include weaken",C,35883,9,3.31,1205.898,/,/,/,/,/,/,/,/,9.7.0.3,1.361,N/A,N/A
+,Shotgun,The Chaperone,2475,1410,3028 The Roadborn,,C,2475,1,3.31,748.582,/,/,/,/,/,/,/,/,9.7.0.3,1.755,N/A,N/A
+,Shotgun,The Fourth Horseman,2905,2622,3085/3578/4102/4655 body,"body, full mag",C,18042,1,4.30,4197.644,/,/,/,/,/,/,/,/,9.7.0.3,1.108,N/A,N/A
+,Shotgun,Tractor Cannon,1074,1074,,body,C,12888,6,4.11,522.469,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sidearm,Adaptive burst frame,763,412,,burst,S,2289,1,15.09,151.723,/,/,/,/,/,/,/,/,9.7.0,1.852,N/A,N/A
+,Sidearm,Adaptive frame,1185,741,,,S,1185,1,15.09,78.546,/,/,/,/,/,/,/,/,9.7.0,1.599,N/A,N/A
+,Sidearm,Buried Bloodline,533,442,,,C,1066,1,3.31,322.420,/,/,/,/,/,/,/,/,9.7.0.3,1.206,N/A,N/A
+,Sidearm,Cryosthesia 77K,1316,824,,,S,1316,1,15.09,87.229,/,/,/,/,/,/,/,/,9.7.0,1.597,N/A,N/A
+,Sidearm,Devil's Ruin,1185,741,,,S,1185,1,15.09,78.546,/,/,/,/,/,/,/,/,9.7.0,1.599,N/A,N/A
+,Sidearm,Devil's Ruin,415,260,3049 ignition,"Pyrogenesis, Collective Action",C,10143,1,3.31,3067.826,/,/,/,/,/,/,/,/,9.7.0.3,1.440,N/A,N/A
+,Sidearm,Devil's Ruin,319,200,2345 ignition,Pyrogenesis,C,7798,1,3.31,2358.563,/,/,/,/,/,/,/,/,9.7.0.3,1.439,N/A,N/A
+,Sidearm,Dynamic heat weapon - 360RPM primary,1349,844,,,S,1349,1,15.09,89.416,/,/,/,/,/,/,/,/,9.7.0,1.598,N/A,N/A
+,Sidearm,Final Warning,762,239,,ADS charged mark,C,762,1,3.31,230.473,/,/,/,/,/,/,/,/,9.7.0.3,3.188,N/A,N/A
+,Sidearm,Final Warning,363,228,,ADS tap fire,C,363,1,3.31,109.792,/,/,/,/,/,/,/,/,9.7.0.3,1.592,N/A,N/A
+,Sidearm,Forerunner,5079,5079,141 impact,"The Rock, excludes impact",C,5079,1,3.31,1536.181,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sidearm,Forerunner,985,189,,,C,985,1,3.31,297.921,/,/,/,/,/,/,/,/,9.7.0.3,5.212,N/A,N/A
+,Sidearm,Heavy burst frame,1020,638,,burst,S,2040,1,15.09,135.218,/,/,/,/,/,/,/,/,9.7.0,1.599,N/A,N/A
+,Sidearm,Lightweight frame,1020,638,,,S,1020,1,15.09,67.609,/,/,/,/,/,/,/,/,9.7.0,1.599,N/A,N/A
+,Sidearm,Micro-missile frame,982,886,433 Kinetic Tremors,,C,982,1,3.31,297.013,/,/,/,/,/,/,/,/,9.7.0.2,1.108,N/A,N/A
+,Sidearm,Precision frame,1316,824,,,S,1316,1,15.09,87.229,/,/,/,/,/,/,/,/,9.7.0,1.597,N/A,N/A
+,Sidearm,Rapid-fire frame,823,515,,,S,823,1,15.09,54.551,/,/,/,/,/,/,/,/,9.7.0,1.598,N/A,N/A
+,Sidearm,Rat King,1185,741,,,S,1185,1,15.09,78.546,/,/,/,/,/,/,/,/,9.7.0,1.599,N/A,N/A
+,Sidearm,Traveler's Chosen,1185,741,,,S,1185,1,15.09,78.546,/,/,/,/,/,/,/,/,9.7.0,1.599,N/A,N/A
+,Sidearm,Trespasser,763,412,2296/1239 Unrepentant,,S,2289,1,15.09,151.723,/,/,/,/,/,/,/,/,9.7.0,1.852,N/A,N/A
+,SMG,Adaptive frame,408,247,,,S,408,1,15.09,27.044,/,/,/,/,/,/,/,/,9.7.0,1.652,N/A,N/A
+,SMG,Adaptive frame,408,247,,"average - Peacekeepers, e. Rewind Rounds, e. Target Lock, 47 mag",C,17440,93,3.17,59.082,/,/,/,/,/,/,/,/,9.7.0.3,1.652,N/A,N/A
+,SMG,Adaptive frame,408,247,,"average - Peacekeepers, 47 mag",C,6097,47,3.17,40.870,/,/,/,/,/,/,/,/,9.7.0.3,1.652,N/A,N/A
+,SMG,Aggressive burst frame,564,322,,burst,S,2256,1,15.09,149.535,/,/,/,/,/,/,/,/,9.7.0,1.752,N/A,N/A
+,SMG,Aggressive burst frame,564,322,,"average - Peacekeepers, 64 mag",C,11832,64,3.17,58.245,/,/,/,/,/,/,/,/,9.7.0.3,1.752,N/A,N/A
+,SMG,Aggressive frame,511,292,,,S,511,1,15.09,33.871,/,/,/,/,/,/,/,/,9.7.0,1.750,N/A,N/A
+,SMG,Aggressive frame,511,292,,"average - Peacekeepers, 39 mag",C,6227,39,3.17,50.301,/,/,/,/,/,/,/,/,9.7.0.3,1.750,N/A,N/A
+,SMG,Aggressive frame,511,292,,"average - Peacekeepers, e. Rewind Rounds, e. Target Lock, 35 mag",C,16223,70,3.17,73.015,/,/,/,/,/,/,/,/,9.7.0.3,1.750,N/A,N/A
+,SMG,Balanced heat weapon - 900RPM primary,494,261,,,S,494,1,15.09,32.744,/,/,/,/,/,/,/,/,9.7.0,1.893,N/A,N/A
+,SMG,Balanced heat weapon - 900RPM primary,494,261,,"average - Peacekeepers, e. Target Lock, e. Accelerated Assault, Cooling Efficiency MW",C,20216,85,3.17,74.933,/,/,/,/,/,/,/,/,9.7.0.3,1.893,N/A,N/A
+,SMG,Barrow-Dyad,112,64,,"average - Taken Ambition, with Blighted Seekers, Peacekeepers, Target Lock",C,17381,39,3.17,140.412,/,/,/,/,/,/,/,/,9.7.0.3,1.261,N/A,N/A
+,SMG,Barrow-Dyad,112,64,1172/97 seeker,"average - Taken Ambition, with Blighted Seekers, Target Lock",C,13171,39,3.17,106.401,/,/,/,/,/,/,/,/,9.7.0.3,1.178,N/A,N/A
+,SMG,Lightweight frame,430,227,,,S,430,1,15.09,28.502,/,/,/,/,/,/,/,/,9.7.0,1.894,N/A,N/A
+,SMG,Lightweight frame,430,227,,"average - Peacekeepers, 47 mag",C,6482,47,3.17,43.453,/,/,/,/,/,/,/,/,9.7.0.3,1.894,N/A,N/A
+,SMG,Osteo Striga,134,84,461 max tick,"average - with successive poison, Peacekeepers",C,34966,136,3.17,81.003,/,/,/,/,/,/,/,/,9.7.0.3,1.595,N/A,N/A
+,SMG,Osteo Striga,139,87,491 max tick,average - with successive poison,C,27848,136,3.31,61.933,/,/,/,/,/,/,/,/,9.7.0.3,1.340,N/A,N/A
+,SMG,Precision frame,572,358,,,S,572,1,15.09,37.914,/,/,/,/,/,/,/,/,9.7.0,1.598,N/A,N/A
+,SMG,Precision frame,572,358,,"average - Peacekeepers, 39 mag",C,6966,510,3.17,4.304,/,/,/,/,/,/,/,/,9.7.0.3,1.598,N/A,N/A
+,SMG,Riskrunner,408,247,,,S,408,1,15.09,27.044,/,/,/,/,/,/,/,/,9.7.0,1.652,N/A,N/A
+,SMG,Riskrunner,99,60,90/54 base,"Arc Conductor, no chains",C,99,1,3.31,29.943,/,/,/,/,/,/,/,/,9.7.0.3,1.650,N/A,N/A
+,SMG,Riskrunner,99,60,,"average - Arc Conductor, Peacekeepers",C,12200,82,3.17,46.875,/,/,/,/,/,/,/,/,9.7.0.3,1.650,N/A,N/A
+,SMG,Tarrabah,511,292,,,S,511,1,15.09,33.871,/,/,/,/,/,/,/,/,9.7.0,1.750,N/A,N/A
+,SMG,Tarrabah,846,838,,Ravenous Beast,S,846,1,15.09,56.076,/,/,/,/,/,/,/,/,9.7.0,1.010,N/A,N/A
+,SMG,Tarrabah,846,838,,"average - Ravenous Beast, Peacekeepers",C,27879,105,3.17,83.652,/,/,/,/,/,/,/,/,9.7.0.3,1.010,N/A,N/A
+,SMG,The Huckleberry,112,64,563 Kinetic Tremors,average - Bull Rider,C,11218,70,3.31,48.471,/,/,/,/,/,/,/,/,9.7.0.3,1.428,N/A,N/A
+,SMG,The Huckleberry,112,64,,"average - Bull Rider, Peacekeepers",C,6120,35,3.17,55.090,/,/,/,/,/,/,/,/,9.7.0.3,1.428,N/A,N/A
+,SMG,The Manticore,94,50,,average - Hover Mode,C,14407,104,3.31,41.899,/,/,/,/,/,/,/,/,9.7.0.3,1.881,N/A,N/A
+,SMG,The Manticore,94,50,,"average - Hover Mode, Peacekeepers",C,23821,104,3.17,72.164,/,/,/,/,/,/,/,/,9.7.0.3,1.881,N/A,N/A
+,Sniper rifle,Adaptive frame,2177,671,571 Kinetic Tremors,,C,2177,1,3.31,658.450,/,/,/,/,/,/,/,/,9.7.0.2,3.244,N/A,N/A
+,Sniper rifle,Aggressive frame,2752,787,571 Kinetic Tremors,,C,2752,1,3.31,832.363,/,/,/,/,/,/,/,/,9.7.0.2,3.497,N/A,N/A
+,Sniper rifle,Borealis,2752,787,3578/1023 The Fundamentals,,C,2752,1,3.31,832.363,/,/,/,/,/,/,/,/,9.7.0.3,3.497,N/A,N/A
+,Sniper rifle,Cloudstrike,1486,432,1333/800 lightning,average - with lightning strikes,C,75912,36,3.17,664.356,C,36,C,100.000000,94.437870,5.562130,3.17,730.168,9.7.0.3,3.440,1.099,4.236
+,Sniper rifle,D.A.R.C.I.,2433,538,"2517/2592/2668 shot, 1563/455 base, 228 jolt","average - Target Acquired, Networked Targeting x5, with spaced jolt",C,96800,35,3.16,874.534,/,/,/,/,/,/,/,/,9.7.0.3,4.522,N/A,N/A
+,Sniper rifle,D.A.R.C.I.,2433,538,"2517/2592/2668 shot, 1563/455 base, 228 jolt","average - Target Acquired, Networked Targeting x5, with spaced jolt, first mag",C,56694,21,3.16,853.665,/,/,/,/,/,/,/,/,9.7.0.3,4.522,N/A,N/A
+,Sniper rifle,Disruption weapon,6276,2278,,,C,6276,1,3.16,1984.506,/,/,/,/,/,/,/,/,9.7.0.2,2.755,N/A,N/A
+,Sniper rifle,Dynamic heat weapon - 140RPM special,2229,648,,,C,2229,1,3.31,674.178,/,/,/,/,/,/,/,/,9.7.0.2,3.440,N/A,N/A
+,Sniper rifle,High-impact frame,3402,1235,,,C,3402,1,3.31,1028.960,/,/,/,/,/,/,/,/,9.7.0.2,2.755,N/A,N/A
+,Sniper rifle,Ice Breaker,4248,1214,"829 shatter, 2345 ignition","shatter ignition, includes shatter and frozen bonuses",C,8251,1,3.31,2495.577,/,/,/,/,/,/,/,/,9.7.0.3,3.499,N/A,N/A
+,Sniper rifle,Ice Breaker,4045,1156,,,C,4045,1,3.31,1223.440,/,/,/,/,/,/,/,/,9.7.0.3,3.499,N/A,N/A
+,Sniper rifle,Izanagi's Burden,2177,671,,,C,2177,1,3.31,658.450,/,/,/,/,/,/,/,/,9.7.0.3,3.244,N/A,N/A
+,Sniper rifle,Izanagi's Burden,9860,1708,"3681 x2, 4853 x3, 21546 Kinetic Rupture",Honed Edge x4,C,147900,15,3.31,2982.231,C,15,C,100.000000,87.692308,12.307692,3.31,3722.553,9.7.0.3,5.773,1.248,20.683
+,Sniper rifle,New Land Beyond,3402,1235,5855/5856/5857/5858/5860 x75+,no stacks,C,68040,20,3.31,1028.960,C,20,C,100.000000,94.911243,5.088757,3.31,1154.349,9.7.0.3,2.755,1.122,4.671
+,Sniper rifle,Rapid-fire frame,1486,432,571 Kinetic Tremors,,C,1486,1,3.31,449.452,/,/,/,/,/,/,/,/,9.7.0.2,3.440,N/A,N/A
+,Sniper rifle,Still Hunt,4422,2201,"6412 2nd, 8402 3rd","Cayde's Retribution, all three shots",C,19236,1,3.31,5818.072,/,/,/,/,/,/,/,/,9.7.0.3,2.009,N/A,N/A
+,Sniper rifle,Still Hunt,26469,13170,,"Cayde's Retribution, Celestial Nighthawk",C,26469,1,3.17,8339.319,/,/,/,/,/,/,/,/,9.7.0.3,2.010,N/A,N/A
+,Sniper rifle,Still Hunt,2177,671,,,C,2177,1,3.31,658.450,/,/,/,/,/,/,/,/,9.7.0.3,3.244,N/A,N/A
+,Sniper rifle,Whisper of the Worm,3956,838,2687/768 body,Whispered Breathing,C,3956,1,3.16,1250.909,/,/,/,/,/,/,/,/,9.7.0.3,4.721,N/A,N/A
+,Sword,Adaptive frame,1350,1350,81/172 wolfpack,"Jagged Edge, 70 impact, light",C,1350,1,3.16,426.877,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Adaptive frame,4614,4614,,"Jagged Edge, 70 impact, heavy",C,69210,15,3.16,1458.972,C,15,C,100.000000,95.266272,4.733728,3.16,1496.831,9.7.0.2,1.000,1.026,6.072
+,Sword,Adaptive frame,1398,1398,,"Jagged Edge, Enhanced Impact, 74 impact, light",C,1398,1,3.16,442.055,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Adaptive frame,4778,4778,,"Jagged Edge, Enhanced Impact, 74 impact, heavy",C,71670,15,3.16,1510.830,C,15,C,100.000000,95.029586,4.970414,3.16,1571.672,9.7.0.2,1.000,1.040,9.758
+,Sword,Adaptive frame,1327,1327,,"Enduring Blade, Enhanced Impact, 68 impact, light",C,1327,1,3.16,419.605,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Adaptive frame,4535,4535,,"Enduring Blade, Enhanced Impact, 68 impact, heavy",C,63490,14,3.16,1433.992,C,14,C,100.000000,95.621302,4.378698,3.16,1483.466,9.7.0.2,1.000,1.035,7.405
+,Sword,Adaptive frame,1277,1277,,"Enduring Blade, 64 impact, light",C,1277,1,3.16,403.794,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Adaptive frame,4365,4365,,"Enduring Blade, 64 impact, heavy",C,65475,15,3.16,1380.237,C,15,C,100.000000,95.502959,4.497041,3.16,1421.989,9.7.0.2,1.000,1.030,6.696
+,Sword,Adaptive frame - Bequest,1474,1474,,"Jagged Edge, 80 impact, light",C,1474,1,3.16,466.087,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Adaptive frame - Bequest,5038,5038,,"Jagged Edge, 80 impact, heavy",C,70532,14,3.16,1593.043,C,14,C,100.000000,95.147929,4.852071,3.16,1643.841,9.7.0.2,1.000,1.032,7.604
+,Sword,Aggressive frame,1986,1986,,"Jagged Edge, 80 impact, light",C,1986,1,3.16,627.984,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Aggressive frame,5957,5957,,"Jagged Edge, 80 impact, heavy",C,5957,1,3.16,1883.636,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Aggressive frame,2059,2059,,"Jagged Edge, Enhanced Impact, 83 impact, light",C,2059,1,3.16,651.067,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Aggressive frame,6177,6177,,"Jagged Edge, Enhanced Impact, 83 impact, heavy",C,6177,1,3.16,1953.202,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Aggressive frame,1949,1949,,"Enduring Blade, Enhanced Impact, 78 impact, light",C,1949,1,3.16,616.285,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Aggressive frame,5848,5848,,"Enduring Blade, Enhanced Impact, 78 impact, heavy",C,5848,1,3.16,1849.170,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Aggressive frame,1876,1876,,"Enduring Blade, 74 impact, light",C,1876,1,3.16,593.202,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Aggressive frame,5628,5628,,"Enduring Blade, 74 impact, heavy",C,5628,1,3.16,1779.605,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Black Talon,1242,1242,,light,C,1242,1,3.16,392.727,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Black Talon,1862,1862,,single projectile,C,3724,1,3.16,1177.549,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Caster frame,1327,1327,,"Jagged Edge, 68 impact, light",C,1327,1,3.16,419.605,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Caster frame,4650,4650,,"Jagged Edge, 68 impact, heavy",C,60450,13,3.16,1470.356,C,13,C,100.000000,95.739645,4.260355,3.16,1554.401,9.7.0.2,1.000,1.057,11.682
+,Sword,Caster frame,1373,1373,,"Jagged Edge, Enhanced Impact, 72 impact, light",C,1373,1,3.16,434.150,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Caster frame,4810,4810,,"Jagged Edge, Enhanced Impact, 72 impact, heavy",C,62530,13,3.16,1520.949,C,13,C,100.000000,95.621302,4.378698,3.16,1597.579,9.7.0.2,1.000,1.050,10.651
+,Sword,Caster frame,1302,1302,,"Enduring Blade, Enhanced Impact, 66 impact, light",C,1302,1,3.16,411.700,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Caster frame,4560,4560,,"Enduring Blade, Enhanced Impact, 66 impact, heavy",C,59280,13,3.16,1441.897,C,13,C,100.000000,95.857988,4.142012,3.16,1511.224,9.7.0.2,1.000,1.048,9.636
+,Sword,Caster frame,1252,1252,,"Enduring Blade, 62 impact, light",C,1252,1,3.16,395.889,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Caster frame,4380,4380,,"Enduring Blade, 62 impact, heavy",C,56940,13,3.16,1384.980,C,13,C,100.000000,96.094675,3.905325,3.16,1424.868,9.7.0.2,1.000,1.029,5.544
+,Sword,Ergo Sum,997,997,see base values here (courtesy of SpiderReviver),"Jagged Edge, 64 impact, light",C,997,1,3.31,301.550,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Ergo Sum,2990,2990,,"lightweight frame, Jagged Edge, 64 impact, heavy",C,2990,1,3.31,904.348,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Ergo Sum,1410,1410,3799 ignition,"The Perfect Fifth, caster frame, Pack Hunter, Transcendent, Enduring Blade, 58 impact, 1H2L",C,39146,3,3.31,3946.667,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Ergo Sum,1436,1436,3799 ignition,"The Perfect Fifth, caster frame, Pack Hunter, Transcendent, Jagged Edge, 62 impact, 1H2L",C,39654,3,3.31,3997.883,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Ergo Sum,3229,3229,,"Unplanned Reprieve, wave sword frame, Pack Hunter, Transcendent, Jagged Edge, 62 impact, heavy",C,38426,4,3.31,2905.558,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Ergo Sum,4306,4306,,"Unplanned Reprieve, lightweight frame, Pack Hunter, Transcendent, Jagged Edge, 62 impact, 1H2L",C,34300,3,3.31,3458.097,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Ergo Sum,890,890,,"Unplanned Reprieve, vortex frame, Pack Hunter, Transcendent, Tempered Edge, 61 impact, heavy",C,40774,4,3.31,3083.100,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Heartshadow,1277,1277,,light,C,1277,1,3.16,403.794,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Heartshadow,2334,2334,2248 min,"heavy, Shot in the Dark, weaken excluded",C,11326,1,4.11,2754.880,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Lightweight frame,2531,2531,,"Jagged Edge, 70 impact, heavy, aerial",C,2531,1,3.16,800.316,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Lightweight frame,4049,4049,,"Jagged Edge, 70 impact, heavy",C,4049,1,3.16,1280.316,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Lightweight frame,844,844,,"Jagged Edge, 70 impact, light, aerial",C,844,1,3.16,266.877,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Lightweight frame,2621,2621,2243 ignition (70 impact),"Jagged Edge, Enhanced Impact, 74 impact, heavy, aerial",C,2621,1,3.16,828.775,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Lightweight frame,4194,4194,,"Jagged Edge, Enhanced Impact, 74 impact, heavy",C,4194,1,3.16,1326.166,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Lightweight frame,874,874,,"Jagged Edge, Enhanced Impact, 74 impact, light, aerial",C,874,1,3.16,276.364,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Lightweight frame,2488,2488,,"Enduring Blade, Enhanced Impact, 68 impact, heavy, aerial",C,2488,1,3.16,786.719,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Lightweight frame,3981,3981,,"Enduring Blade, Enhanced Impact, 68 impact, heavy",C,3981,1,3.16,1258.814,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Lightweight frame,830,830,,"Enduring Blade, Enhanced Impact, 68 impact, light, aerial",C,830,1,3.16,262.451,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Lightweight frame,2394,2394,,"Enduring Blade, 64 impact, heavy, aerial",C,2394,1,3.16,756.996,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Lightweight frame,3830,3830,,"Enduring Blade, 64 impact, heavy",C,3830,1,3.16,1211.067,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Lightweight frame,798,798,,"Enduring Blade, 64 impact, light, aerial",C,798,1,3.16,252.332,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Praxic Blade,1389,1389,2004/1211 heavy,"3L1H, Offensive Form, Forceful Blade III",C,11015,1,3.31,3331.569,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Praxic Blade,1389,1389,"2004/1211 heavy, 2345 ignition","average - 3L1H, Offensive Form, Forceful Blade III, Impact Core (solar), Ember of Ashes",C,96824,7,3.31,4183.592,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Praxic Blade,1389,1389,"2004/1211 heavy, 2345 ignition","average - 3L1H, Offensive Form, Forceful Blade III, Impact Core (solar)",C,94316,7,3.31,4075.225,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Praxic Blade,5310,5310,"1055 return, 2345 ignition","average - double hit throw, Offensive Form, Forceful Blade III, Gyro Core (solar)",C,56316,4,3.31,4258.299,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Praxic Blade,5310,5310,"1055 return, 2345 ignition","average - double hit throw, Offensive Form, Forceful Blade III, Gyro Core (solar), Upper Hand",C,17500,1,3.31,5293.006,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,The Lament,1449,1449,"1449 light, 875 secondary",heavy,C,4949,1,3.16,1564.901,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,The Lament,1449,1449,"363 secondary, 1931 2nd, 5921/1111 heavy",average - 2L1H1R,C,86544,6,3.16,4560.949,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,The Lament,1449,1449,"363 secondary, 1931 2nd, 5921/1111 heavy, 2243 ignition","average - 2L1H1R, Burning Ambition",C,96354,6,3.16,5077.945,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,The Lament,1449,1449,"363 secondary, 1931 2nd, 5921/1111 heavy, 2243 ignition","average - 2L1H1R, Burning Ambition, Ember of Ashes",C,67166,4,3.16,5309.565,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,The Lament,1666,1666,"417 secondary, 2221 2nd, 6809/1277 heavy, 2580 ignition","average - 2L1H, Burning Ambition",C,65300,4,3.64,4488.744,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,The Lament,1666,1666,"417 secondary, 2221 2nd, 6809/1277 heavy, 2580 ignition","average - 2L1H, Burning Ambition, Ember of Ashes",C,65259,4,3.64,4485.925,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,The Lament,1449,1449,"363 secondary, 1931 2nd/3rd, 4526/905 heavy, 2243 ignition\n","average - 3L1H1R, Burning Ambition",C,70771,4,3.16,5594.545,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,The Lament,1449,1449,"363 secondary, 1931 2nd/3rd, 4526/905 heavy, 2243 ignition\n","average - 3L1H1R, Burning Ambition, Ember of Ashes",C,70499,4,3.16,5573.043,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,The Lament,1449,1449,"363 secondary, 1931 2nd/3rd/4th, 4526/905 heavy, 2243 ignition\n","average - 4L1H1R, Burning Ambition",C,81261,4,3.16,6423.794,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,The Lament,1449,1449,"363 secondary, 1931 2nd/3rd/4th, 4526/905 heavy, 2243 ignition\n","average - 4L1H1R, Burning Ambition, Ember of Ashes",C,81548,4,3.16,6446.482,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Vortex frame,4980,4980,,"Jagged Edge, 68 impact, heavy",C,59760,12,3.16,1574.704,C,12,C,100.000000,95.976331,4.023669,3.16,1590.383,9.7.0.2,1.000,1.010,2.012
+,Sword,Vortex frame,5148,5148,,"Jagged Edge, Enhanced Impact, 72 impact, heavy",C,61776,12,3.16,1627.826,C,12,C,100.000000,95.857988,4.142012,3.16,1637.159,9.7.0.2,1.000,1.006,1.197
+,Sword,Vortex frame,4884,4884,,"Enduring Blade, Enhanced Impact, 66 impact, heavy",C,58608,12,3.16,1544.348,C,12,C,100.000000,96.094675,3.905325,3.16,1543.607,9.7.0.2,1.000,1.000,-0.095
+,Sword,Vortex frame,4698,4698,,"Enduring Blade, 62 impact, heavy",C,56376,12,3.16,1485.534,C,12,C,100.000000,96.213018,3.786982,3.16,1496.831,9.7.0.2,1.000,1.008,1.449
+,Sword,Wave sword frame,6407,6407,,"Jagged Edge, 70 impact, heavy slash",C,89698,14,3.16,2025.929,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Wave sword frame,6567,6567,,"Jagged Edge, Enhanced Impact, 74 impact, heavy slash",C,78804,12,3.16,2076.522,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Wave sword frame,6330,6330,,"Enduring Blade, Enhanced Impact, 68 impact, heavy slash",C,6330,1,3.16,2001.581,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Wave sword frame,6164,6164,,"Enduring Blade, 64 impact, heavy slash",C,6164,1,3.16,1949.091,/,/,/,/,/,/,/,/,9.7.0.2,1.000,N/A,N/A
+,Sword,Wolfsbane,1816,1816,"2383/1955/1676/1383 heavy, 258 tick, 2804 ignition","Honed Edge, Jagged Edge, Nano-Assault HLLHLLHLLHLLH",C,79855,1,3.16,25250.593,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Wolfsbane,1816,1816,"2383/1955/1676/1383 heavy, 258 tick, 2804 ignition","Honed Edge, Jagged Edge, Nano-Assault HLLHLLHLLHLLH, Burning Ambition, includes ignition",C,87761,1,3.16,27750.514,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Wolfsbane,1453,1453,2243 ignition,"average - Honed Edge, Jagged Edge, light, Burning Ambition, includes ignition",C,19887,12,3.16,524.032,/,/,/,/,/,/,/,/,9.7.0.3,1.000,N/A,N/A
+,Sword,Worldline Zero,1345,1345,"1242 light, 1242/750 heavy","Temporal Sprint, heavy",C,75320,8,3.16,2977.075,C,8,B,100.000000,94.674556,5.325444,3.16,3157.378,9.7.0.3,1.000,1.061,2.570
+,Trace rifle,Adaptive frame,432,322,,,S,432,1,15.09,28.634,/,/,/,/,/,/,/,/,9.7.0,1.342,N/A,N/A
+,Trace rifle,Ager's Scepter,561,418,,,S,561,1,15.09,37.185,/,/,/,/,/,/,/,/,9.7.0,1.342,N/A,N/A
+,Trace rifle,Ager's Scepter,222,165,,average - Will Given Form,C,51358,194,3.31,80.070,/,/,/,/,/,/,/,/,9.7.0.3,1.274,N/A,N/A
+,Trace rifle,Ager's Scepter,299,223,,"average - Will Given Form, Harsh Refraction",C,64980,194,3.31,101.308,/,/,/,/,/,/,/,/,9.7.0.3,1.249,N/A,N/A
+,Trace rifle,Coldheart,95,71,170/127 max,average - no initial trace,C,23601,202,3.31,35.338,/,/,/,/,/,/,/,/,9.7.0.3,1.338,N/A,N/A
+,Trace rifle,Divinity,48,36,"62/77 debuffed, 2927/3658 Penance, 262 jolt","average - Penance, excludes debuff, Jolting Feedback, Focused Fury",C,30990,194,3.31,48.315,/,/,/,/,/,/,/,/,9.7.0.3,1.333,N/A,N/A
+,Trace rifle,Lodestar,715,386,929 Phase Converter,"ADS, burst",S,2145,1,15.09,142.178,/,/,/,/,/,/,/,/,9.7.0,1.852,N/A,N/A
+,Trace rifle,Lodestar,367,273,,hipfire,S,367,1,15.09,24.326,/,/,/,/,/,/,/,/,9.7.0,1.344,N/A,N/A
+,Trace rifle,Microcosm,262,195,314/234 Paracausal Imbuement,,C,262,1,3.16,82.846,/,/,/,/,/,/,/,/,9.7.0.3,1.344,N/A,N/A
+,Trace rifle,Prometheus Lens,84,62,2580 ignition,"average - with ignition, Ember of Ashes",C,8911,67,3.31,40.227,/,/,/,/,/,/,/,/,9.7.0.3,1.198,N/A,N/A
+,Trace rifle,Prometheus Lens,84,62,2580 ignition,average - with ignition,C,11460,95,3.31,36.486,/,/,/,/,/,/,/,/,9.7.0.3,1.223,N/A,N/A
+,Trace rifle,Ruinous Effigy,605,451,,,S,605,1,15.09,40.101,/,/,/,/,/,/,/,/,9.7.0,1.341,N/A,N/A
+,Trace rifle,Ruinous Effigy,133,99,"777 light, 3882 slam, 153/114 Deconstruction",,C,133,1,3.31,40.227,/,/,/,/,/,/,/,/,9.7.0.3,1.343,N/A,N/A
+,Trace rifle,The Navigator,432,322,540/402 Protective Weave,,S,432,1,15.09,28.634,/,/,/,/,/,/,/,/,9.7.0,1.342,N/A,N/A
+,Trace rifle,Wavesplitter,125,94,"95/71 min, 160/119 max, 610 Detonator","average - power cycling, Detonator Beam",C,14265,100,3.31,43.146,/,/,/,/,/,/,/,/,9.7.0.3,1.263,N/A,N/A
+,Trace rifle,Wavesplitter,160,119,516 body,"average - Supercharged Battery, Detonator Beam",C,32270,175,3.31,55.773,/,/,/,/,/,/,/,/,9.7.0.3,1.286,N/A,N/A
+"Tests are performed using Well of Radiance + 200 Weapons. Surges included for non-Savathun tests, Full Throttle x100 for Carl tests.",,,,,,,,,,,,,,,,,,,,,,,

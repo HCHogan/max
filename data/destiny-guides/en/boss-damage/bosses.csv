@@ -1,0 +1,63 @@
+NAME,,,INFO (click for sheet link),,,,,,,,,,,,,
+#,Activity,Boss,ingame\nHealth,effective\nHealth,Notes,Model,Species,Mechanics,Setup,Adds,Range,Phase,clearable\nDPS,1 phase\nDPS,1 phase\nDescription,Mods
+1,Last Wish,Kalli,299440,149720,2x impact damage to head hitbox,Techeun,Taken,Plate trapping,Medium,Few\nClose,Close,72,116,347,30s middle damage,Transcendent Blessing\nRiven's Curse
+2,Last Wish,Shuro Chi,253511,126756,2x impact damage to head hitbox,Techeun,Taken,Six breaks,Short,No,Close to medium,12.883,273,273,per break,Transcendent Blessing\nRiven's Curse
+3,Last Wish,Morgeth,125126,125126,"40% DR to Sleeper, 45% DR to snipers, 55% DR to shotguns",Ogre,Taken,N/A,Long,Many\nMedium,Close,30,232,695,30s damage,Transcendent Blessing\nRiven's Curse
+4,Last Wish,Riven,170255,170255,"40% DR to Sleeper, 45% DR to snipers, 55% DR to shotguns\nFace hitbox visually takes 2x damage",Ahamkara,Taken,Sending,Medium,Many\nClose,Close,14.95,N/A,1898,bottom floor damage,Transcendent Blessing\nRiven's Curse
+5,Garden of Salvation,Consecrated,153455,153455,,Harpy,Vex,"Twelve eyes, backwards movement, projectile avoidance, temporary relay",Medium,No,Close to medium,20.733,411,1234,,Enhanced Relay Defender
+6,Garden of Salvation,Sanctified,196586,196586,shoot bottom half of crit for consistency\nDivinity bubble appears under feet,Minotaur,Vex,"Two/three person tether, persistent relay, ground vs. air hitbox",Long,Few\nClose,Far,17.417,627,1881,"includes ground, single tether",Enhanced Relay Defender
+7,Deep Stone Crypt,Crypt Security,12117,12117,"takes base value damage (no scalars)\nproxy boss (crits, surges, most debuffs, some perks, and some buffs don't work)",Object,Fallen,"Random fuse order, two chamber room",Long,Many\nClose,Close,Variable,N/A,N/A,,No
+8,Deep Stone Crypt,Atraks,76035,76035,"proxy boss (crits, surges, most debuffs, some perks, and some buffs don't work)",Baron,Fallen,"Scanner call, clone disappearance, proxy boss",None,Few\nClose,Close,2.3,390,4683,one floor,No
+9,Deep Stone Crypt,Taniks,277639,277639,,Captain,Fallen,"Add clear-gated start, shock field",None,No,Medium,14,104,936,one boop,No
+10,Vault of Glass,Templar,182640,182640,takes reduced explosive damage outside of raised state (Ritual of Negation),Standard,Vex,"Relic super, detains, teleport blocks",None,No,Close to medium,15,N/A,2029,no teleport,No
+11,Vault of Glass,Atheon,247148,49430,currently takes 5x damage\nnormally takes 3x grenade damage,Minotaur,Vex,"Final wave of oracles, Time's Vengeance",Long,Many\nVaries,Close,30,92,275,,No
+12,Vow of the Disciple,Caretaker,663786,331893,"2x damage on plate\n""fake"" 25% boost past threshold",Abomination,Scorn,"Pervading Darkness missiles, plate damage, post-threshold timer",Medium,Many\nClose,Close,7.5,697,6269,constant pace one plate one floor,Into the Light
+13,Vow of the Disciple,Rhulk,397638,397638,exploding crits are purely visual,Subjugator,Lubraean,"Four crits, Pervading Darkness beams, roaming position",Long,Many\nFar,Medium,36,614,1841,,Into the Light
+14,King's Fall,Warpriest,480831,480831,,Knight,Hive,"Brand Claimers, glyph reading",Long,No,Close,45,594,4452,zero knight,No
+15,King's Fall,Golgoroth,409156,409156,Unstable Light does 13501 (+0),Ogre,Hive,"Golgoroth's Gaze, Pools of Reclaimed Light",Long,Many\nVaries,Close to medium,20,189,3410,one bubble,No
+16,King's Fall,Daughters,167594,167594,,Wizard,Hive,"Brand Claimers, lethal raised boss platform",Long,Many\nMedium,Medium,Variable,N/A,N/A,,No
+17,King's Fall,Oryx,423189,423189,setpiece boss (projectile tracking and tethering don't work),N/A,Hive,Corrupted Lights,Long,Many\nVaries,Far,24.783,711,2846,,No
+18,Root of Nightmares,Explicator,295535,295535,,Incendior,Cabal,"Alternating buff plates, post-threshold timer",Long,No,Close to medium,10,547,4926,two plate,Focused Light\nFocused Darkness
+19,Root of Nightmares,Nezarec,262082,262082,,Tormentor,N/A,"Suppressing melee attack, teleports",Short,No,Close,30,485,1456,,Focused Light\nFocused Darkness
+20,Crota's End,Ir Yut,288027,288027,,Wizard,Hive,"Dark Procession, teleports",Long,Many\nVaries,Close to medium,45,356,1067,,No
+21,Crota's End,Crota,480445,480445,takes 35% more damage from swords,Knight,Hive,"Relics, slam attack",Long,Many\nVaries,Close to medium,30,890,2669,,No
+22,Salvation's Edge,Herald,391079,391079,,Captain,Taken,Resonance dunks,Short,Many\nFar,Close to medium,30,724,2173,,No
+23,Salvation's Edge,Witness,543552,543552,setpiece boss (projectile tracking and tethering don't work),N/A,N/A,"Glyphbreaker, dynamic wave attacks",Long,Many\nFar,Far,45,671,2013,,No
+24,Desert Perpetual,Agraios,530451,530451,,Hobgoblin,Vex,"Teleports, accelerator rings, laser detain",Long,Many\nVaries,Varies,91.5,322,966,,No
+25,Desert Perpetual,Epoptes,537446,537446,,Hydra,Vex,Rotating eye lights,Medium,Many\nMedium,Close to medium,90.9,328,985,,No
+26,Desert Perpetual,Iatros,250154,250154,has 35% DR against non-super damage,Wyvern,Vex,Diastole pulses,Long,Many\nVaries,Close to medium,45.65,304,913,,No
+27,Desert Perpetual,Koregos,756068,756068,not a construct\nSurrounded/Biotic can be obtained by jumping a little,Harpy,Vex,"Chronon refresh, rotating lasers",Medium,Few\nMedium,Close,80,583,1750,,No
+28,Desert Perpetual - Epic,Agraios,339461,339461,,Hobgoblin,Vex,"Teleports, accelerator rings, laser detain, clone final",Long,Many\nVaries,Close to far,?,#VALUE!,N/A,,No
+29,Desert Perpetual - Epic,Epoptes,554669,554669,,Hydra,Vex,"Teleports, rotating shields",Medium,Many\nClose,Medium,?,#VALUE!,N/A,,No
+30,Desert Perpetual - Epic,Iatros,272822,272822,has 35% DR against non-super damage,Wyvern,Vex,Diastole pulses,Medium,Few\nVaries,Close,?,#VALUE!,N/A,,No
+31,Desert Perpetual - Epic,Koregos,761063,761063,,Harpy,Vex,"Rotating lasers, interact crystals",Long,No,Close,?,#VALUE!,N/A,,No
+32,Pantheon,Argos,546424,546424,,Hydra,Vex,Detain diamond,Medium,Few\nMedium,Medium to far,?,#VALUE!,N/A,,No
+33,Pantheon,Warpriest,868185,868185,,Knight,Hive,Brand claimers,Short,Many\nMedium,Medium,?,#VALUE!,N/A,,No
+34,Pantheon,Gahlran,494519,494519,,Bather,Cabal,Stun arms,Short,Few\nClose,Medium,?,#VALUE!,N/A,,No
+35,Pantheon,Consecrated,387082,387082,,Harpy,Vex,"Twelve eyes, backwards movement, projectile avoidance, temporary relay",Short,No,Medium to far,?,#VALUE!,N/A,,No
+36,Pantheon,Calus,13122129,820133,,?,Cabal,"Four plates, Force of Will",Short,Few\nClose,Medium,?,#VALUE!,N/A,,No
+37,Pantheon,Morgeth,794380,794380,,Ogre,Taken,N/A,Long,Many\nClose,Close to medium,?,#VALUE!,N/A,,?
+38,Pantheon,Insurrection Prime,515675,515675,,Brig,Fallen,Phase synergy,Long,Few\nMedium,Medium to far,?,#VALUE!,N/A,,No
+39,The Shattered Throne,Vorgeth,23163,23163,,Ogre,Taken,Petitioner's Burden,Short,Few\nFar,Close,30,86,257,,Transcendent Blessing\nRiven's Curse
+40,The Shattered Throne,Dul Incaru,214959,214959,takes elite scaling (see: Wardcliff),Wizard,Taken,Finite Thought,None,Many\nMedium,Close,45,531,1592,,Transcendent Blessing\nRiven's Curse
+41,Pit of Heresy,Zulmak,61752,61752,,Knight,Hive,Heinous Rite,Short,Many\nClose,Close,50,137,412,,No
+42,Prophecy,Phalanx\nEcho,49678,49678,,Standard,Taken,N/A,Short,Many\nClose,Close,50,110,331,,No
+43,Prophecy,Kell\nEcho,105803,105803,wipe screen reports 2x more damage,Standard,Taken,N/A,Short,Few\nFar,Far,105,112,336,,No
+44,Grasp of Avarice,Phry'zhia,101053,101053,,Ogre,Hive,N/A,Long,Many\nClose,Close to medium,30,374,1123,,No
+45,Grasp of Avarice,Avarokk,111700,111700,,Captain,Fallen,N/A,Long,Many\nMedium,Medium,28,443,1330,,No
+46,Duality,Gahlran,133133,133133,Unstable Essence: +50% damage,Ceremonial Bather,Cabal,Unstable Essence,None,Few\nClose,Close,60,247,740,,No
+47,Duality,Ka'hok\nEmonut\nUroa,21905,21905,excludes elemental shield,Legionary\nIncendior\nCenturion,Cabal,N/A,None,Many\nClose,Close,N/A,N/A,N/A,,No
+48,Duality,Caiatl,117486,117486,90% DR without Waking Resonance\n1.5x to crit multiplier (see formula),N/A,Cabal,Bells,Short,Few\nVaries,Close,12,363,3264,one bell,No
+49,Spire of the Watcher,Akelous,112294,112294,,Harpy,Vex,"Twelve eyes (part of phase), backwards movement, projectile avoidance",Medium,Few\nVaries,Close to medium,27.817,449,1346,,No
+50,Spire of the Watcher,Persys,148907,148907,,Wyvern,Vex,N/A,Long,Few\nClose,Close to medium,22.967,720,2161,,No
+51,Ghosts of the Deep,Ecthar,180621,180621,"excludes shield, ~10800 health",Knight,Lucent Hive,Piercing Light,Short,Few\nMedium,Close to medium,40,502,1505,,No
+52,Ghosts of the Deep,Simmumah,144404,144404,"excludes shield, ~10800 health",Wizard,Lucent Hive,Piercing Light,Short,Many\nVaries,Far,45,357,1070,,No
+53,Warlord's Ruin,Rathil,112393,112393,,Chieftain,Scorn,N/A,Medium,Few\nClose,Close,20,624,1873,,No
+54,Warlord's Ruin,Locus,239073,239073,,Ogre,Taken,Flame damage locations,Medium,Many\nClose,Close to medium,15,443,5313,one flame,No
+55,Warlord's Ruin,Hefnd,254999,254999,,Chimera,Taken,N/A,Medium,Many\nClose,Medium,20,472,4250,one floor,No
+56,Vesper's Host,Raneiks,224291,106795,~65% global DR\nsplit bodies but not proxy,Servitor,Fallen,DR with split body,Long,Many\nClose,Close,15,791,2373,,No
+57,Vesper's Host,Puppeteer,325278,325278,,Captain,Fallen,"Core dunk, teleports",Long,Few\nClose,Medium to far,95,380,1141,,No
+58,Sundered Doctrine,Zoetic Lockset,205547,205547,"proxy boss (crits, surges, most debuffs, some perks, and some buffs don't work)",Shrieker,Dread,Randomly opening split body,Long,Varies\nMedium,Far,81.567,280,840,,No
+59,Sundered Doctrine,Kerrev,296370,296370,,Weaver,Dread,N/A,Long,Few\nMedium,Close to medium,45.2,729,2186,,No
+60,Equilibrium,Harrow,206963,206963,,Ceremonial Bather,Cabal?,Fuse extension,Long,Many\nClose,Close,33.167,693,2080,no extension,No
+61,Equilibrium,Sere,143884,143884,,Dredgen,Human,Compel vs. kill\nArc inversion attack,Long,Many\nClose,Close to medium,37.45,427,1281,five compels,No

@@ -1,0 +1,81 @@
+ARCHETYPE,,,,INFO,,,,,,,,,,,,,,,,TIER
+Icon,Weapon,Frame,Ammo,minor\nDPS,elite\nDPS,boss\nDPS,boss\nper-Shot,Cycle,Ammo,minor\nScalar,elite\nScalar,average\nBrick,minor\nTotal,boss\nTotal,minor\nBrick,boss\nBrick,ADS falloff\nRange,average\nReload,Example,Tier
+,Breech grenade launcher,Area Denial,Special,11429,9600,9143,54859,6,25,1.25,1.05,7.95,1714344,1371475,545161,436129,N/A,2.28,Lost Signal,S
+,Drum grenade launcher,Rapid-Fire,Power,132294,95143,90613,36245,0.4,39,1.46,1.05,11.60,2063790,1413555,613845,420442,N/A,3.57,Koraxis's Distress,S
+,Rocket launcher,Aggressive\nPack Hunter,Power,115856,100276,52307,116802,2.233,11,1.28,1.06,4.25,2845773,1284822,635403,496409,N/A,2.97,Cold Comfort,S
+,Shotgun,Rapid-Fire,Special,83345,74951,59961,25963,0.433,31,1.39,1.25,10.33,1118746,804853,372795,268198,4.77,N/A,IKELOS_SG_V1.0.3,S
+,Sidearm,Rocket-Assisted,Special,42677,38077,25555,15742,0.616,55,1.67,1.49,18.54,1445899,865808,487399,291856,?,1.91,The Call,S
+,Breech grenade launcher,Micro-Missile,Special,75682,63573,60546,40384,0.667,25,1.25,1.05,7.95,1262000,1009600,401316,321053,N/A,2.16,The Mountaintop,A
+,Drum grenade launcher,Adaptive,Power,119898,86228,82122,41718,0.508,31,1.46,1.05,9.51,1888157,1293258,579238,396738,N/A,3.20,Edge Transit,A
+,Machine gun,Adaptive,Power,69731,55785,35759,4756,0.133,500,1.95,1.56,149.25,4637100,2378000,1384174,709833,47.67,4.84,Commemoration,A
+,Machine gun,Aggressive,Power,75777,60622,38860,3886,0.1,590,1.95,1.56,176.13,4470843,2292740,1334660,684441,47.21,5.02,Pro Memoria,A
+,Machine gun,High-Impact,Power,67269,53815,34497,5761,0.167,498,1.95,1.56,148.68,5594507,2868978,1670264,856545,47.85,5.22,Fixed Odds,A
+,Rocket launcher,Adaptive\nPack Hunter,Power,115856,100276,52307,116802,2.233,10,1.28,1.06,4.00,2587066,1168020,598026,467208,N/A,3.19,Apex Predator,A
+,Sword,Adaptive\nPack Hunter,Power,84504,66923,56714,131407,2.317,77,1.49,1.18,30.45,2512721,1686390,993667,666891,N/A,N/A,The Other Half,A
+,Sword,Caster\nPack Hunter,Power,86017,68121,57730,140456,2.433,77,1.49,1.18,30.45,2685753,1802519,1062093,712814,N/A,N/A,Ill Omen,A
+,Sword,Wave\nPack Hunter,Power,100306,79437,67320,153691,2.283,77,1.49,1.18,30.45,2938828,1972368,1162173,779982,N/A,N/A,Summum Bonum,A
+,Auto rifle,Support,Primary,19740,16652,11028,N/A,N/A,N/A,1.79,1.51,N/A,INF,INF,N/A,N/A,26.20,1.56,No Hesitation,B
+,Breech grenade launcher,Double Fire,Special,74039,62192,59231,39507,0.667,25,1.25,1.05,7.95,1234594,987675,392601,314081,N/A,2.57,Wilderflight,B
+,Breech grenade launcher,Wave,Special,42005,35284,33604,22414,0.667,25,1.25,1.05,7.95,700438,560350,222739,178191,N/A,2.10,Forbearance,B
+,Hand cannon,Adaptive,Primary,22426,21972,9079,N/A,N/A,N/A,2.47,2.42,N/A,INF,INF,N/A,N/A,29.40,2.64,Midnight Coup,B
+,Hand cannon,Heavy Burst,Primary,24803,24301,10042,N/A,N/A,N/A,2.47,2.42,N/A,INF,INF,N/A,N/A,31.56,3.02,Warden's Law,B
+,Hand cannon,Lightweight,Primary,22426,21972,9079,N/A,N/A,N/A,2.47,2.42,N/A,INF,INF,N/A,N/A,29.80,2.47,Rose,B
+,Hand cannon,Precision,Primary,25412,24897,10288,N/A,N/A,N/A,2.47,2.42,N/A,INF,INF,N/A,N/A,29.26,2.57,Posterity,B
+,Machine gun,Rapid-Fire,Power,79281,63424,40657,2724,0.067,742,1.95,1.56,221.82,3941356,2021208,1178263,604238,46.42,4.58,Retrofit Escapade,B
+,Pulse rifle,Heavy Burst,Primary,26650,17536,11537,N/A,N/A,N/A,2.31,1.52,N/A,INF,INF,N/A,N/A,37.27,2.04,Nullify,B
+,Rocket launcher,High-Impact\nPack Hunter,Power,108465,93879,48970,109351,2.233,13,1.28,1.06,4.85,3148642,1421563,678851,530352,N/A,3.34,Semiotician,B
+,Rocket launcher,Precision\nPack Hunter,Power,102841,89011,46431,103681,2.233,13,1.28,1.06,4.85,2985381,1347853,643652,502853,N/A,3.52,Palmyra-B,B
+,Shotgun,Aggressive,Special,57570,51771,41417,41417,1,26,1.39,1.25,8.89,1496810,1076842,511794,368197,4.62,N/A,Found Verdict,B
+,Sniper rifle,Rapid-Fire,Special,165974,114013,50448,21844,0.433,41,3.29,2.26,13.37,2946537,895604,960859,292054,N/A,2.72,The Supremacy,B
+,Sword,Aggressive\nPack Hunter,Power,70347,55711,47213,152639,3.233,68,1.49,1.18,26.90,3093077,2075890,1223585,821198,N/A,N/A,Throne-Cleaver,B
+,Sword,Lightweight\nPack Hunter,Power,76313,60436,51217,23867,0.466,90,1.49,1.18,35.14,3200565,2148030,1249643,838686,N/A,N/A,Goldtusk,B
+,Drum grenade launcher,Compressed Wave,Power,108711,78182,74459,38421,0.516,31,1.46,1.05,9.51,1738934,1191051,533460,365384,N/A,3.25,Hullabaloo,C
+,Fusion rifle,Rapid-Fire,Special,40553,37900,37900,36005,0.95,29,1.07,1.00,9.03,1117235,1044145,347884,325125,15.05,2.05,Cartesian Coordinate,C
+,Pulse rifle,Adaptive,Primary,24901,16385,10780,N/A,N/A,N/A,2.31,1.52,N/A,INF,INF,N/A,N/A,34.61,2.00,Smite of Merain,C
+,Pulse rifle,Aggressive Burst,Primary,24171,15905,10464,N/A,N/A,N/A,2.31,1.52,N/A,INF,INF,N/A,N/A,37.27,2.16,Blast Furnace,C
+,Pulse rifle,Legacy PR-55,Primary,24099,15857,10432,N/A,N/A,N/A,2.31,1.52,N/A,INF,INF,N/A,N/A,33.57,1.68,BxR-55 Battler,C
+,Pulse rifle,Lightweight,Primary,24319,16002,10528,N/A,N/A,N/A,2.31,1.52,N/A,INF,INF,N/A,N/A,31.41,1.76,Chattering Bone,C
+,Pulse rifle,Rapid-Fire,Primary,25579,16831,11073,N/A,N/A,N/A,2.31,1.52,N/A,INF,INF,N/A,N/A,31.54,2.21,Darkest Before,C
+,Shotgun,Heavy Burst,Special,66717,59997,47998,39982,0.833,46,1.39,1.25,14.61,1278225,919586,405975,292069,?,?,Arcane Embrace,C
+,Shotgun,Lightweight,Special,68261,61386,49109,34376,0.7,22,1.39,1.25,7.69,1051218,756272,367449,264351,5.06,N/A,Wastelander M5,C
+,Shotgun,Pinpoint Slug,Special,60566,54466,43573,36296,0.833,25,1.39,1.25,8.58,1261286,907400,432873,311420,9.33,N/A,Heritage,C
+,Sniper rifle,Aggressive,Special,139365,95734,42360,35286,0.833,27,3.29,2.26,9.40,3134455,952722,1091255,331688,N/A,3.20,Succession,C
+,Sword,Vortex\nPack Hunter,Power,74274,58821,49848,137083,2.75,77,1.49,1.18,30.45,1965942,1319424,777441,521772,N/A,N/A,Falling Guillotine,C
+,Trace rifle,Adaptive,Special,26367,28235,20761,1391,0.067,687,1.27,1.36,298.48,1213634,955617,527286,415186,35.54,2.03,Retraced Path,C
+,Auto rifle,Adaptive,Primary,19672,16595,10990,N/A,N/A,N/A,1.79,1.51,N/A,INF,INF,N/A,N/A,25.20,1.76,The Summoner,D
+,Auto rifle,Lightweight,Primary,21251,17927,11872,N/A,N/A,N/A,1.79,1.51,N/A,INF,INF,N/A,N/A,24.00,1.79,The Riposte,D
+,Auto rifle,Rapid-Fire,Primary,21251,17927,11872,N/A,N/A,N/A,1.79,1.51,N/A,INF,INF,N/A,N/A,24.00,1.83,Rufus's Fury,D
+,Bow,Lightweight,Primary,18437,12537,9218,N/A,N/A,N/A,2.00,1.36,N/A,INF,INF,N/A,N/A,N/A,N/A,Tyranny of Heaven,D
+,Bow,Precision,Primary,17575,11951,8788,N/A,N/A,N/A,2.00,1.36,N/A,INF,INF,N/A,N/A,N/A,N/A,Point of the Stag,D
+,Breech grenade launcher,Lightweight,Special,55976,47020,44781,29869,0.667,25,1.25,1.05,7.95,933406,746725,296823,237459,N/A,2.12,Salvager's Salvo,D
+,Drum grenade launcher,Precision,Power,99647,71664,68252,40951,0.6,31,1.46,1.05,9.51,1853442,1269481,568588,389444,N/A,3.02,Penumbra GSm,D
+,Fusion rifle,Adaptive,Special,38321,35814,35814,39395,1.1,29,1.07,1.00,9.03,1222427,1142455,380638,355737,16.00,2.22,Techeun Force,D
+,Fusion rifle,Aggressive,Special,35569,33242,33242,40987,1.233,29,1.07,1.00,9.03,1271827,1188623,396020,370113,15.68,2.23,Coriolis Force,D
+,Fusion rifle,High-Impact,Special,36205,33837,33837,48657,1.438,29,1.07,1.00,9.03,1509827,1411053,470129,439373,16.63,2.49,The Eremite,D
+,Glaive,Adaptive,Special,39245,26163,26163,23547,0.9,36,1.50,1.00,13.36,1271538,847692,471882,314588,18.00,2.72,The Enigma,D
+,Glaive,Rapid-Fire,Special,38186,25457,25457,18660,0.733,36,1.50,1.00,13.36,1007640,671760,373946,249298,17.84,2.35,Greasy Luck,D
+,Linear fusion rifle,Adaptive Burst,Power,60243,71196,45638,63118,1.383,29,1.32,1.56,9.40,2416157,1830422,783168,593309,N/A,2.41,Scintillation,D
+,Linear fusion rifle,Precision,Power,58960,69679,44666,43907,0.983,30,1.32,1.56,9.69,1738717,1317210,561606,425459,N/A,2.42,Cataclysmic,D
+,Pulse rifle,High-Impact,Primary,23806,15664,10306,N/A,N/A,N/A,2.31,1.52,N/A,INF,INF,N/A,N/A,35.61,2.11,The Messenger,D
+,Shotgun,Precision,Special,60120,54065,43252,36029,0.833,25,1.39,1.25,8.58,1252008,900725,429689,309129,5.68,N/A,Retold Tale,D
+,Sidearm,Adaptive,Primary,25891,23100,15503,N/A,N/A,N/A,1.67,1.49,N/A,INF,INF,N/A,N/A,14.93,1.80,Buzzard,D
+,Sidearm,Adaptive Burst,Primary,28536,25460,17087,N/A,N/A,N/A,1.67,1.49,N/A,INF,INF,N/A,N/A,14.78,1.80,Peacebond,D
+,Sidearm,Lightweight,Primary,25566,22810,15309,N/A,N/A,N/A,1.67,1.49,N/A,INF,INF,N/A,N/A,14.50,1.57,Heliocentric QSc,D
+,Sidearm,Precision,Primary,25728,22955,15406,N/A,N/A,N/A,1.67,1.49,N/A,INF,INF,N/A,N/A,16.22,1.85,Boudica-C,D
+,Sidearm,Rapid-Fire,Primary,26366,23525,15788,N/A,N/A,N/A,1.67,1.49,N/A,INF,INF,N/A,N/A,14.16,1.66,Mykel's Reverence,D
+,Sniper rifle,Adaptive,Special,145960,100264,44365,28837,0.65,31,3.29,2.26,10.49,2941086,893947,995225,302500,N/A,3.00,Beloved,D
+,Auto rifle,High-Impact,Primary,19345,16319,10807,N/A,N/A,N/A,1.79,1.51,N/A,INF,INF,N/A,N/A,35.91,2.08,Abyss Defiant,E
+,Auto rifle,Precision,Primary,19320,16298,10794,N/A,N/A,N/A,1.79,1.51,N/A,INF,INF,N/A,N/A,29.40,1.94,Shadow Price,E
+,Fusion rifle,Precision,Special,32961,30805,30805,37982,1.233,29,1.07,1.00,9.03,1178581,1101478,366986,342977,17.21,2.28,Deliverance,E
+,Glaive,Aggressive,Special,40128,26752,26752,26752,1,36,1.50,1.00,13.36,1444608,963072,536110,357407,18.88,2.94,Judgment of Kelgorath,E
+,Scout rifle,Lightweight,Primary,19803,12171,10314,N/A,N/A,N/A,1.92,1.18,N/A,INF,INF,N/A,N/A,72.10,1.88,Night Watch,E
+,Scout rifle,Precision,Primary,19487,11976,10149,N/A,N/A,N/A,1.92,1.18,N/A,INF,INF,N/A,N/A,75.87,2.14,Hung Jury SR4,E
+,Scout rifle,Rapid-Fire,Primary,21707,13341,11306,N/A,N/A,N/A,1.92,1.18,N/A,INF,INF,N/A,N/A,67.71,2.37,Randy's Throwing Knife,E
+,Sidearm,Heavy Burst,Primary,25520,22769,15281,N/A,N/A,N/A,1.67,1.49,N/A,INF,INF,N/A,N/A,15.50,1.87,Breachlight,E
+,SMG,Adaptive,Primary,18865,18314,13770,N/A,N/A,N/A,1.37,1.33,N/A,INF,INF,N/A,N/A,18.33,1.81,Parabellum,E
+,SMG,Aggressive,Primary,19129,18571,13963,N/A,N/A,N/A,1.37,1.33,N/A,INF,INF,N/A,N/A,18.42,2.22,IKELOS_SMG_V1.0.3,E
+,SMG,Lightweight,Primary,19838,19259,14481,N/A,N/A,N/A,1.37,1.33,N/A,INF,INF,N/A,N/A,18.06,2.15,The Recluse,E
+,SMG,Precision,Primary,18958,18405,13838,N/A,N/A,N/A,1.37,1.33,N/A,INF,INF,N/A,N/A,19.79,2.29,Shayura's Wrath,E
+,Hand cannon,Aggressive,Primary,21950,21506,8887,N/A,N/A,N/A,2.47,2.42,N/A,INF,INF,N/A,N/A,35.78,3.03,Igneous Hammer,F
+,Scout rifle,Aggressive,Primary,18896,11613,9842,N/A,N/A,N/A,1.92,1.18,N/A,INF,INF,N/A,N/A,78.38,4.22,Timeworn Wayfarer,F
+,Scout rifle,High-Impact,Primary,20400,12538,10625,N/A,N/A,N/A,1.92,1.18,N/A,INF,INF,N/A,N/A,83.71,2.36,Transfiguration,F

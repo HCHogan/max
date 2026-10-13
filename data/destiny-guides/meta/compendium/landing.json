@@ -1,0 +1,285 @@
+{
+ "merged_ranges": [
+  "H1:P1",
+  "B2:F7",
+  "H2:P3",
+  "R2:W2",
+  "R3:W10",
+  "G4:G6",
+  "H4:H6",
+  "I4:I6",
+  "J4:J6",
+  "K4:K6",
+  "L4:L6",
+  "M4:M6",
+  "N4:N6",
+  "O4:O6",
+  "P4:P6",
+  "H7:P7",
+  "B8:F8",
+  "H8:H10",
+  "I8:I10",
+  "J8:J10",
+  "K8:M10",
+  "N8:N10",
+  "O8:O10",
+  "P8:P10",
+  "B10:C10",
+  "D10:E10",
+  "F10:F11",
+  "B11:E11",
+  "H11:J12",
+  "K11:M12",
+  "N11:P12",
+  "R11:W14",
+  "B13:C13",
+  "D13:E13",
+  "F13:F14",
+  "H13:P14",
+  "B14:E14",
+  "R15:W15",
+  "B16:E16",
+  "F16:F17",
+  "H16:H17",
+  "I16:P17",
+  "B17:E17",
+  "C22:E22",
+  "F22:K22",
+  "M22:R22",
+  "S22:U22",
+  "J24:N24",
+  "S25:T25",
+  "D26:H26",
+  "J26:N26",
+  "P26:R26",
+  "S26:T26",
+  "D29:H29",
+  "J29:N29",
+  "P29:T29",
+  "D32:H32",
+  "J32:N32",
+  "P32:T32",
+  "D35:H35",
+  "J35:N35",
+  "P35:T35",
+  "F37:H37",
+  "K37:M38",
+  "P37:R37",
+  "E38:I38",
+  "O38:S38"
+ ],
+ "hyperlinks": {
+  "H1": [
+   {
+    "text": "Please, click here",
+    "url": "https://www.google.com/url?q=https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4&sa=D&source=editors&ust=1791882953743504&usg=AOvVaw3_fcC0rp6MxXVwxfCz71YM"
+   }
+  ],
+  "B2": [
+   {
+    "text": "Support the Data Compendium through Patreon donations.",
+    "url": "https://www.google.com/url?q=https://www.patreon.com/DataCompendium&sa=D&source=editors&ust=1791882953743990&usg=AOvVaw0crp5Hy6laezBFsrkAwir9"
+   }
+  ],
+  "B10": [
+   {
+    "text": "Damage Scaling",
+    "url": "https://www.google.com/url?q=https://docs.google.com/spreadsheets/d/1b57Hb8m1L3daFfUckQQqvvN6VOpD03KEssvQLMFpC5I/edit%23gid%3D1386975095&sa=D&source=editors&ust=1791882953748955&usg=AOvVaw0L3gKuZwfGoHwD_CZmRvxK"
+   }
+  ],
+  "D10": [
+   {
+    "text": "Ammo Database",
+    "url": "https://www.google.com/url?q=https://docs.google.com/spreadsheets/d/1l3xBHFa6ZMe86e13segg8f-RB8vLNerYEgNC_Aq3kLc&sa=D&source=editors&ust=1791882953749033&usg=AOvVaw0vjUHI7weZFGwqq0hH3YdO"
+   }
+  ],
+  "B13": [
+   {
+    "text": "Boss Damage",
+    "url": "https://www.google.com/url?q=https://docs.google.com/spreadsheets/d/1_5wtBjRYHHxuF4oJKDb_iOGZs-wTkzB6RYbnyNLbuz4&sa=D&source=editors&ust=1791882953750406&usg=AOvVaw1haw8sC8aZoqulFZwFq9ye"
+   }
+  ],
+  "D13": [
+   {
+    "text": "Endgame Analysis",
+    "url": "https://www.google.com/url?q=https://docs.google.com/spreadsheets/d/1JM-0SlxVDAi-C6rGVlLxa-J1WGewEeL8Qvq4htWZHhY&sa=D&source=editors&ust=1791882953750509&usg=AOvVaw0NpevpEn2GejTgFQy3UWMA"
+   }
+  ],
+  "B16": [
+   {
+    "text": "PVP Weapon Stat Breakpoints",
+    "url": "https://www.google.com/url?q=https://docs.google.com/spreadsheets/d/1FWMC-Vd_bGEoRkkrn3drWIORCFYyWQVMNlMasa4OE6I&sa=D&source=editors&ust=1791882953751463&usg=AOvVaw2Yd6supzQ0QyB1GSwRE0ZB"
+   }
+  ],
+  "M22": [
+   {
+    "text": "MossyMax's Spreadsheet",
+    "url": "https://www.google.com/url?q=https://docs.google.com/spreadsheets/d/1b57Hb8m1L3daFfUckQQqvvN6VOpD03KEssvQLMFpC5I/edit%23gid%3D1386975095&sa=D&source=editors&ust=1791882953752969&usg=AOvVaw1sbkQnwKZ5Qe9ZDPmwj6aK"
+   }
+  ],
+  "D26": [
+   {
+    "text": "Weapon Perks",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1662574278"
+   },
+   {
+    "text": "",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1662574278"
+   }
+  ],
+  "J26": [
+   {
+    "text": "Armor Perks",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1287885342"
+   }
+  ],
+  "P26": [
+   {
+    "text": "Armor Mods",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1934379638"
+   }
+  ],
+  "S26": [
+   {
+    "text": "Artifacts Perks",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=473308249"
+   }
+  ],
+  "D29": [
+   {
+    "text": "Arc Subclasses",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=618967225"
+   },
+   {
+    "text": "",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=618967225"
+   },
+   {
+    "text": "",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=618967225"
+   }
+  ],
+  "J29": [
+   {
+    "text": "Solar Subclasses",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1186062409"
+   },
+   {
+    "text": "",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1186062409"
+   },
+   {
+    "text": "",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1186062409"
+   }
+  ],
+  "P29": [
+   {
+    "text": "Void Subclasses",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1907852650"
+   },
+   {
+    "text": "",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1907852650"
+   },
+   {
+    "text": "",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1907852650"
+   }
+  ],
+  "D32": [
+   {
+    "text": "Stasis Subclasses",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1088259962"
+   }
+  ],
+  "J32": [
+   {
+    "text": "Strand Subclasses",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1870531554"
+   }
+  ],
+  "P32": [
+   {
+    "text": "Class Abilities",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=527596209"
+   }
+  ],
+  "D35": [
+   {
+    "text": "Prismatic Subclasses",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1918152785"
+   }
+  ],
+  "J35": [
+   {
+    "text": "Exotic Class Perks",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=20898389"
+   }
+  ],
+  "P35": [
+   {
+    "text": "Game Mechanics",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1800463143"
+   }
+  ],
+  "E38": [
+   {
+    "text": "Exotic Weapons",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=441434520"
+   }
+  ],
+  "O38": [
+   {
+    "text": "Exotic Armors",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1500097863"
+   },
+   {
+    "text": "",
+    "url": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120#gid=1500097863"
+   }
+  ]
+ },
+ "cell_notes": {},
+ "rendered_rows": [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12,
+  13,
+  14,
+  15,
+  16,
+  17,
+  21,
+  22,
+  23,
+  24,
+  25,
+  26,
+  27,
+  28,
+  29,
+  30,
+  31,
+  32,
+  33,
+  34,
+  35,
+  36,
+  37,
+  38,
+  39,
+  40
+ ],
+ "has_images": true,
+ "notes_availability": "Public HTML does not expose all spreadsheet cell notes or formulas."
+}

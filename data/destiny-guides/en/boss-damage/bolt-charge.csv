@@ -1,0 +1,25 @@
+Source,Modifiers (assume max reload),per stack\nTime,per second\nStacks,base\nDPS,bolt charge\nDPS,DPS\nincrease,Flashover\nDPS,Flashover\nincrease
+Storm's Keep,"six barricades, tested with gaps",0.092,10.914,N/A,61557,N/A,153893,N/A
+Thunderlord,"5x Storm's Keep, Ionic Sentry, Spark of Frequency",0.146,6.870,N/A,38746,N/A,96866,N/A
+Thunderlord,Spark of Frequency,0.170,5.900,N/A,33275,N/A,83188,N/A
+Le Monarque,"sustained hits, Volatile Rounds",0.176,5.677,36487,32020,87.76%,80051,219.40%
+Ergo Sum,"Unplanned Reprieve, lightweight frame",0.198,5.056,182957,28517,15.59%,71292,38.97%
+Ergo Sum,"The Perfect Fifth, caster frame",0.200,5.000,158057,28199,17.84%,70498,44.60%
+Wardcliff Coil,"four allies, Spark of Frequency",0.214,4.678,81182,26387,32.50%,65967,81.26%
+Hezen Vengeance,"Pack Hunter, consecutive rockets, no Bipod",0.217,4.616,279354,26037,9.32%,65093,23.30%
+Ill Omen,"Pack Hunter, 1H2L spam",0.219,4.567,161937,25757,15.91%,64394,39.76%
+Le Monarque,sustained hits,0.243,4.108,31300,23172,74.03%,57931,185.09%
+Wardcliff Coil,Spark of Frequency,0.285,3.509,81182,19790,24.38%,49475,60.94%
+Alethonym,maximum tick rate with repeated embeds,0.308,3.243,61752,18290,29.62%,45725,74.05%
+Cloudstrike,Spark of Frequency,0.308,3.243,154630,18290,11.83%,45725,29.57%
+Bequest,"Pack Hunter, 1H2L spam",0.317,3.157,176214,17808,10.11%,44521,25.27%
+Goldtusk,"Pack Hunter, light attack spam",0.360,2.778,132700,15667,11.81%,39168,29.52%
+Lost Signal,,0.489,2.046,20950,11538,55.07%,28845,137.68%
+Witherhoard,ground pool,0.498,2.010,20756,11335,54.61%,28339,136.53%
+Ionic Sentry,Spark of Frequency,0.500,2.000,12093,11280,93.28%,28201,233.21%
+Dragon's Breath,,0.515,1.943,174682,10960,6.27%,27399,15.69%
+Finality's Auger,"Ruinscribe Turret, painted",0.561,1.783,41842,10054,24.03%,25134,60.07%
+Storm's Keep,one barricade,0.600,1.667,N/A,9400,N/A,23501,N/A
+Anarchy,two traps,0.763,1.310,45520,7388,16.23%,18471,40.58%
+Witherhoard,direct stick,1.130,0.885,20264,4991,24.63%,12478,61.58%
+Lord of Wolves,hip-fire,1.150,0.870,275615,4905,1.78%,12261,4.45%

@@ -1,0 +1,17 @@
+{
+ "merged_ranges": [
+  "D2:D41",
+  "A38:C38",
+  "A39:C39",
+  "A40:C40",
+  "A41:C41"
+ ],
+ "hyperlinks": {
+  "A39": "https://docs.google.com/spreadsheets/d/1WaxvbLx7UoSZaBqdFr1u32F2uWVLo-CJunJB4nlGUE4/edit?gid=1038486120",
+  "A40": "https://docs.google.com/spreadsheets/d/1l3xBHFa6ZMe86e13segg8f-RB8vLNerYEgNC_Aq3kLc/"
+ },
+ "cell_notes": {},
+ "formulas": {},
+ "hidden_rows": [],
+ "has_images": true
+}

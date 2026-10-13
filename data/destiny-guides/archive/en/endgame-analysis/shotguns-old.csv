@@ -1,0 +1,44 @@
+WEAPON,,ARCHETYPE,,AFFINITY,,RELEVANT PERKS,,,,,COMPETITION,,TOTAL,
+Icon,Name,Frame,Score,Type,Score,Swapping,Ammo,Reload,Damage,Score,Role,Score,Final,Tier
+,Dead Weight,Rapid,3,Arc,0,"Ensemble, Surplus","Field Prep, Lead from Gold","Grave Robber, Auto-Loading Holster","Surrounded, Frenzy, One-Two Punch, Trench Barrel, Vorpal Weapon",6.5,Energy utility,2,11.5,S
+,IKELOS_SG_V1.0.3,Rapid,3,Solar,1,Threat Detector,None,Grave Robber,"Vorpal Weapon, Surrounded, Cascade Point, One-Two Punch, Trench Barrel",5.5,Energy utility,2,11.5,S
+,Xenoclast IV,Lightweight,2,Arc,0,Surplus,"Lead from Gold, Field Prep","Grave Robber, Auto-Loading Holster","One-Two Punch, Trench Barrel, Vorpal Weapon, Surrounded",7,Energy utility,2,11,S
+,Until Its Return,Rapid,3,Strand,0,"Ensemble, Threat Detector",None,Auto-Loading Holster,"Trench Barrel, Cascade Point, Surrounded, Vorpal Weapon",5.5,Kinetic utility,2,10.5,S
+,One Small Step,Rapid,3,Kinetic,1,Surplus,Lead from Gold,Auto-Loading Holster,"One-Two Punch, Trench Barrel",3.5,Kinetic utility,2,9.5,A
+,The Deicide,Rapid,3,Void,0,Surplus,Lead from Gold,Grave Robber,"One-Two Punch, Vorpal Weapon",4,Energy utility,2,9,A
+,Basso Ostinato,Rapid,3,Void,0,None,Lead from Gold,"Grave Robber, Envious Assassin","Trench Barrel, One-Two Punch",3.5,Energy utility,2,8.5,A
+,Fortissimo-11,Slug,1,Kinetic,1,"Surplus, Threat Detector","Lead from Gold, Fourth Time's the Charm",None,"Focused Fury, Frenzy, Surrounded, Vorpal Weapon",4.5,Kinetic utility\nKinetic swap,2,8.5,A
+,Imperial Decree,Aggressive,2,Kinetic,1,"Threat Detector, Surplus",None,Auto-Loading Holster,"Surrounded, Trench Barrel",3.5,Kinetic swap,2,8.5,A
+,Heritage,Slug,1,Kinetic,1,Threat Detector,None,"Reconstruction, Auto-Loading Holster","Recombination, Focused Fury",4,Kinetic utility\nKinetic swap,2,8,A
+,Ragnhild-D,Aggressive,2,Kinetic,1,Ensemble,None,Auto-Loading Holster,"One-Two Punch, Frenzy",3,Kinetic swap,2,8,A
+,The Comedian,Aggressive,2,Void,1,Ensemble,Lead from Gold,None,"Trench Barrel, Vorpal Weapon",3,Energy swap,2,8,A
+,Seventh Seraph CQC-12,Lightweight,2,Solar,1,Quickdraw,Lead from Gold,Auto-Loading Holster,"Vorpal Weapon, Trench Barrel",3.5,Energy utility,1,7.5,B
+,Sojourner's Tale,Slug,1,Solar,1,"Threat Detector, Quickdraw",None,Auto-Loading Holster,"Frenzy, Surrounded",3.5,Energy swap,2,7.5,B
+,A Sudden Death,Aggressive,2,Arc,0,"Threat Detector, Surplus",Field Prep,Grave Robber,"Frenzy, One-Two Punch, Surrounded",4,Energy swap,1,7,B
+,Astral Horizon,Aggressive,2,Kinetic,1,"Surplus, Threat Detector",None,None,"One-Two Punch, Vorpal Weapon, Cascade Point",3,Kinetic swap,1,7,B
+,Mindbender's Ambition,Aggressive,2,Solar,1,"Threat Detector, Surplus",None,None,"One-Two Punch, Vorpal Weapon",2,Energy swap,2,7,B
+,Wastelander M5,Lightweight,2,Kinetic,1,None,Lead from Gold,None,"One-Two Punch, Trench Barrel, Vorpal Weapon",3,Kinetic utility,1,7,B
+,Without Remorse,Lightweight,2,Solar,1,Threat Detector,Field Prep,None,"One-Two Punch, Vorpal Weapon",3,Energy utility,1,7,B
+,Found Verdict,Aggressive,2,Arc,0,Surplus,None,"Rewind Rounds, Auto-Loading Holster","One-Two Punch, Frenzy, Vorpal Weapon",2.5,Energy swap,2,6.5,C
+,Hand in Hand,Aggressive,2,Arc,0,Ensemble,None,None,"Trench Barrel, Cascade Point, One-Two Punch",3.5,Energy utility,1,6.5,C
+,Riiswalker,Lightweight,2,Kinetic,1,"Quickdraw, Surplus",None,None,Vorpal Weapon,1.5,Kinetic swap,2,6.5,C
+,Deadpan Delivery,Aggressive,2,Arc,0,Surplus,None,None,"One-Two Punch, Frenzy, Trench Barrel",3,Energy swap,1,6,C
+,Felwinter's Lie,Aggressive,2,Solar,1,Surplus,None,None,Vorpal Weapon,1.5,Energy swap,1,5.5,C
+,Nessa's Oblation,Slug,1,Void,0,None,Fourth Time's the Charm,"Envious Assassin, Reconstruction","Frenzy, Vorpal Weapon, Focused Fury",3.5,Energy swap,1,5.5,C
+,Swordbreaker,Lightweight,2,Strand,0,Threat Detector,None,None,"Surrounded, One-Two Punch",2.5,Energy utility,1,5.5,C
+,Compass Rose,Precision,0,Solar,1,"Surplus, Quickdraw",Lead from Gold,Grave Robber,"Trench Barrel, Vorpal Weapon, Cascade Point",4,Energy utility,0,5,C
+,"First In, Last Out",Slug,1,Arc,0,None,None,Auto-Loading Holster,"Vorpal Weapon, Surrounded",3,Energy swap,1,5,C
+,No Reprieve,Slug,1,Stasis,0,Surplus,Triple Tap,None,"Surrounded, Focused Fury",3,Kinetic swap,1,5,C
+,Wishbringer,Rapid,3,Solar,1,Threat Detector,Field Prep,Grave Robber,None,1,Energy utility,0,5,C
+,Gunnora's Axe,Slug,1,Arc,0,"Slickdraw, Threat Detector, Surplus",None,Auto-Loading Holster,Vorpal Weapon,2.5,Energy swap,1,4.5,C
+,Retold Tale,Precision,0,Void,0,"Quickdraw, Surplus","Field Prep, Lead from Gold",None,"One-Two Punch, Surrounded, Vorpal Weapon",4.5,Energy utility,0,4.5,C
+,Last Man Standing,Aggressive,2,Solar,1,Threat Detector,None,None,One-Two Punch,1,Energy swap,0,4,D
+,Toil and Trouble,Aggressive,2,Kinetic,1,Threat Detector,Field Prep,None,None,0,Kinetic swap,0,3,D
+,Bonechiller,Slug,1,Void,0,Surplus,"Lead from Gold, Triple Tap",Auto-Loading Holster,None,1.5,Energy swap,0,2.5,D
+,Retrofuturist,Lightweight,2,Void,0,Quickdraw,None,None,Trench Barrel,0.5,Energy utility,0,2.5,D
+,Blasphemer,Slug,1,Kinetic,1,"Quickdraw, Threat Detector, Surplus",Fourth Time's the Charm,None,None,0,Kinetic swap,0,2,D
+,Reckless Endangerment,Lightweight,2,Kinetic,1,None,None,None,None,-1,Kinetic swap,0,2,D
+,Fractethyst,Precision,0,Stasis,0,"Quickdraw, Ensemble",Lead from Gold,None,Trench Barrel,1.5,Kinetic utility,0,1.5,D
+,Matador 64,Precision,0,Arc,0,Threat Detector,Lead from Gold,None,One-Two Punch,1.5,Energy utility,0,1.5,D
+,Prophet of Doom,Precision,0,Arc,0,None,None,None,One-Two Punch,1,Energy utility,0,1,D
+,The Inquisitor,Slug,1,Arc,0,None,Fourth Time's the Charm,None,None,-0.5,Energy swap,0,0.5,D

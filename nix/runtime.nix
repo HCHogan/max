@@ -122,6 +122,16 @@ in
           Changing it recreates sandboxes around their work volumes on next use.
         '';
       };
+      data = lib.mkOption {
+        type = lib.types.attrsOf lib.types.path;
+        default = { };
+        example = lib.literalExpression ''{ destiny = ./data/destiny-guides; }'';
+        description = ''
+          Read-only reference data bound into every command sandbox at
+          /data/<name>. Use content-addressed store paths: a changed path
+          recreates sandboxes around their work volumes on next use.
+        '';
+      };
     };
     browser = {
       enable = lib.mkOption {
@@ -250,6 +260,7 @@ in
             # The conversation's view, through a broker-owned link in the volume.
             "--bind-ro=${runtime.stateDirectory}/volumes/max-sb-%i-data/chat:/chat"
           ]
+          ++ lib.mapAttrsToList (name: path: "--bind-ro=${path}:/data/${name}") cfg.sandbox.data
           ++ lib.optionals (cfg.sandbox.renderDevice != null) [
             # Render nodes are world-accessible, so the user namespace needs no
             # mapping; the driver link must match the host's kernel driver.

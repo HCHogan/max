@@ -59,42 +59,31 @@ fall back to Bungie's per-entity endpoint.
 
 ## Guide snapshots
 
-After loading the destiny skill, `destiny_guide` reads the four community guide
-workbooks packaged in `data/destiny-guides/`. It needs neither a player's linked
-account nor a command sandbox. It follows the existing Bungie configuration and
-conversation opt-in gates.
+The four community guide workbooks live in `data/destiny-guides/` and are
+bound read-only into every command sandbox at `/data/destiny`
+(`services.max.sandbox.data.destiny`, a store path of that directory only,
+without `.state/`). The destiny skill points the model there; it reads them
+with `rg`, `sed` and Python through `sandbox_exec`, so no host tool or linked
+account is involved. `data/destiny-guides/README.md` documents the layout for
+the model: `catalog.tsv`, `names.tsv`, `en/`, `zh/`, `archive/` and `meta/`.
 
-- `action=index` lists sources, worksheet IDs, raw-grid schemas, previews and
-  source status; filter with `source` or `sheet` and continue with `next_offset`.
-- `action=read` reads CSV records by zero-based `offset`, returning one-based
-  spreadsheet row numbers and cells keyed by A/B/AA. Its metadata includes the
-  complete text of relevant merged cells, even when their anchor is outside
-  the requested page.
-- `action=find` uses a POSIX extended regex per nonempty cell, case-insensitive
-  by default. `columns` can restrict the search. Legacy/ignore/hidden sheets are
-  excluded unless a sheet is explicitly selected or `include_legacy=true`.
+CSV line N is spreadsheet row N: in-cell newlines are written as `\n`.
+XLSX-backed numbers are written as the sheet displays them, without thousands
+separators; HTML-backed workbooks keep the displayed text. `zh/` mirrors the
+English coordinates; official names come from the Manifest by definition hash,
+bare frame labels in Court and Endgame Analysis use the official frame names,
+and `N/A`, `INF` and values such as `6s` stay verbatim.
 
-Cells are strings and retain author notes and test conditions. A response budget
-shortens a page rather than truncating a cell; an oversized single record returns
-`too_large`. Fetch dates are not game-patch certification. Figures and charts
-are not transcribed into CSV text. For fuzzy recommendations, inspect relevant
-worksheets and their conditions rather than treating regex as semantic search.
-
-Chinese copies live under `data/destiny-guides/zh-chs`; original English files
-are retained. Official names are matched by Manifest definition hash. The
-translation index reports `status=terms-only` for a terminology draft whose
-community prose remains English, or `status=complete` after prose translation.
-The tool defaults to Chinese with `original_cells`
-for review; `language=en` returns English. Regex search always checks both
-languages and counts each matching spreadsheet row once. Original metadata
-details remain English, while merged cell values follow the selected language.
-
-Refresh with `scripts/fetch-destiny-guides.py`, then
-`scripts/translate-destiny-guides.py` and its `--check`, then rebuild and deploy Max.
-The host checks that each Chinese CSV is bound to the current English SHA-256;
-stale translations are rejected. Translation services are only used by the
-offline generator, never by the running bot.
-The running process keeps its immutable snapshot and reports a bundle hash.
+Refresh with `scripts/fetch-destiny-guides.py` (openpyxl, beautifulsoup4),
+then `scripts/translate-destiny-guides.py` and its `--check`. Fetch first
+harvests the checked-in line pairs into `var/destiny-guides-translation`, so
+only new lines are translated; `--plan` lists them. The default public
+translation endpoint is poor; use `--llm-config`/`--profile` or `--llm-env`.
+Reviewed lines go in `.state/translation-overrides.json` and win over cached
+and machine translations; `--retranslate REGEX` bypasses the cache for
+matching lines. Translation services are only used by the offline generator.
+A changed data directory changes the sandbox unit, so each conversation's
+sandbox is recreated around its `/work` on next use after deploy.
 
 ## API shapes
 

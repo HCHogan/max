@@ -16,7 +16,8 @@ sandbox_destroy、群里 !clear --all、连续 14 天没用触发 TTL 清理；�
 NixOS 系统和网络是宿主策略，不交给调用者选择：命令固定在
 宿主预构建的 NixOS 沙箱里以 uid 1000、无 Linux capability、no-new-privileges 运行，
 有 CPU/内存/PID 上限；根文件系统只读，只有 /work 和有大小上限的临时目录可写，
-/chat 只读。
+/chat 只读。/data 下是宿主随 Max 部署提供的只读参考资料（如 /data/destiny 命运2攻略表格），
+每个目录的 README.md 说明格式。
 普通群的 max-sandbox 网络允许访问公网 IPv4，可以 curl、git clone、调用公开 API、
 下载项目依赖；普通群无法访问宿主机、内网、链路本地、Tailscale 地址和其他沙箱，IPv6 关闭。
 已开启运维功能的群使用共享 maxops 内网；SSH、fleet 和部署方法见 operations 技能。
