@@ -313,7 +313,9 @@
       "src/Max/Tools/Search/Types.hs",
       "src/Max/Tools/SelfSource.hs",
       "src/Max/Tools/Stickers.hs",
-      "src/Max/Tools/Video.hs"
+      "src/Max/Tools/Video.hs",
+      "src/Max/Tools/YouTube.hs",
+      "src/Max/YouTube.hs"
     ],
     "isolation": [
       "src/Max/Browser/Client.hs",

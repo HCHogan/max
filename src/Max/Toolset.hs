@@ -88,6 +88,7 @@ import Max.ToolContext
     withToolSkillLoads,
   )
 import Max.Tools.Bilibili (bilibiliToolsFor)
+import Max.Tools.YouTube (youtubeToolsFor)
 import Max.Turn.Continuity (toolCatalogFingerprint)
 import OneBot.Types (GroupId (..), isPrivateChat)
 
@@ -187,6 +188,7 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
         <> taskTools env.beJobs dc
         <> skillToolsWithRuntime env.beSkills dc prepareSkill bindPackages
         <> bilibiliToolsFor env.beTimeZone dc (videoStreamAttachment dc)
+        <> youtubeToolsFor
         <> sandboxToolsWithRuntime (toolGroupId dc) env.beSandboxes
         <> fileToolsWithDatabase dc env.beSandboxes
         <> [t | toolStickers dc && env.beEmbeddingEnabled, t <- stickerToolsWithDatabase]
@@ -335,6 +337,7 @@ toolInventory =
     -- shared attachment order/budget; independent turns have independent
     -- ToolOutput interpreters and still run concurrently.
     always (statefulReadTool "view_bilibili" ["network.bilibili", "tool.media"] [CurrentConversation]),
+    always (readTool "view_youtube" ["network.youtube"] [CurrentConversation]),
     -- Sandbox tools act on the group's sandbox, started on first use. These
     -- definitions keep their earlier fingerprints so standing grants still match.
     -- Allow the container's 600s command timeout plus 60s for the runtime client.

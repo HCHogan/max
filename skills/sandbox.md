@@ -76,6 +76,7 @@ path 都是沙箱里的真实路径。read_file 读文本文件开头（默认 1
 两者只是省一次 sandbox_exec，heredoc、重定向照样能用。
 要亲眼看沙箱里的图片或视频（/chat 里的群文件、/work 里抽的帧、拼的图、转码结果），
 直接用 view_image / view_video 传 path，不用先发到群里；视频超过 64MB 先在沙箱里裁剪或缩小。
+网上的视频用 yt-dlp 下载到 /work 再看，命令见 web 手册。
 
 # 群文件进出
 

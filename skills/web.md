@@ -1,4 +1,4 @@
-看网页和链接的用法：B站视频、知乎、通用隐身浏览器的流程与限制
+看网页和链接的用法：B站、YouTube、其他视频站（沙箱 yt-dlp 下载后自己看）、知乎、通用隐身浏览器的流程与限制
 
 # B站（view_bilibili）
 
@@ -8,6 +8,41 @@ url 接受完整链接、BV号、b23.tv 短链、[card:] 卡片里的链接。�
 真的看一眼，别只凭标题和评论下结论。只关心数据或评论区风向时传 with_video=false
 省流。480p 有 70MB 预算（约 30-35 分钟），超了附不上，自动退化为只有文本信息——
 这不是失败，文本部分照常可用。
+
+# YouTube（view_youtube）
+
+url 接受 watch / youtu.be / shorts / live 链接或 11 位视频 ID。返回标题、频道、时长、
+播放量、简介，加带时间戳的字幕全文：默认原声语言（自动字幕也算），lang 可指定，
+没有那种字幕就退回原声字幕，要中文自己翻。一次最多 max_chars 字（默认 30000，
+英文大约 30 分钟），被截断时把 next_start_seconds 传给 start_seconds 接着读。
+不要拿视频 ID 去 web_search 拼凑内容，也不要开浏览器扒字幕。没有字幕或者要看
+画面，走下一节。
+
+# 其他视频站、要看画面（沙箱 yt-dlp + view_video）
+
+view_video 的 path 能看沙箱里的任何视频文件（仅多模态档位），所以 yt-dlp 支持的
+站（YouTube、X、TikTok/抖音、Instagram、Vimeo、Twitch 回放等）都可以先下载再
+自己看。先 use_skill sandbox，然后 sandbox_exec 带 packages=["yt-dlp", "deno",
+"ffmpeg"]、timeout=300（deno 是 YouTube 要的 JS 运行时，ffmpeg 合并音视频）：
+
+```sh
+yt-dlp -S 'res:480,vcodec:h264,acodec:m4a' --merge-output-format mp4 --no-playlist \
+  -o '/work/video/%(id)s.%(ext)s' '<链接>'
+```
+
+再用 view_video、path=/work/video/<id>.mp4 看。要点：
+
+- 只要信息不要画面：`yt-dlp --skip-download --print '%(title)s|%(channel)s|%(duration_string)s|%(view_count)s|%(upload_date)s' '<链接>'`；
+  `-J` 给完整 JSON，很大，重定向进文件再取字段。
+- 附件里不一定有声音（按视觉预算重新编码时会去掉音轨），讲了什么以字幕为准：
+  YouTube 用 view_youtube；其他站加 `--write-subs --write-auto-subs --sub-langs 'zh.*,en.*' --skip-download`。
+  YouTube 的字幕走 yt-dlp 会被 429，不要在这上面重试。
+- view_video 的单个文件上限 64MB，480p 大约 40 分钟。更长的下 360p（res:360），
+  或者用 ffmpeg 截出要看的那段（`-ss 开始 -to 结束 -c copy`）；只关心某一段时
+  用 view_video 的 start_seconds/end_seconds。太长的视频会压成快进概览。
+- 要登录、年龄限制、地区限制的视频匿名下不了（报错里有 Sign in / login /
+  not available），如实说，不要换着参数反复重试。
+- 图片同理：沙箱里下载或生成的图片用 view_image 的 path 看。
 
 # 知乎（view_zhihu）
 

@@ -6,6 +6,7 @@ module Max.Effects.Http
     getBytes,
     getQQMedia,
     getBytesWith,
+    postBytesWith,
     getBilibiliMedia,
     getFinalUrl,
     DownloadError (..),
@@ -32,7 +33,10 @@ import Max.HttpRuntime
     withStreamingResponse,
   )
 import Network.HTTP.Client
-  ( redirectCount,
+  ( RequestBody (RequestBodyBS),
+    method,
+    redirectCount,
+    requestBody,
     requestHeaders,
   )
 import Network.HTTP.Types.Header (hContentType, hLocation)
@@ -50,6 +54,9 @@ data DownloadError
 
 data Http :: Effect where
   GetBytes :: DownloadSource -> Text -> [(Text, Text)] -> Int -> Http m (Either DownloadError (ByteString, Text))
+  -- | POST a request body, read the response like 'GetBytes'. For JSON
+  -- APIs (YouTube's player endpoint) that have no GET form.
+  PostBytes :: Text -> [(Text, Text)] -> ByteString -> Int -> Http m (Either DownloadError (ByteString, Text))
   -- | Resolve one hop of redirection: the response's @Location@
   -- header.  Some link shorteners (b23.tv) are only readable this way.
   GetFinalUrl :: Text -> Http m (Either DownloadError Text)
@@ -59,7 +66,8 @@ type instance DispatchOf Http = Dynamic
 -- | Interpret downloads through the process-wide transport runtime.
 runHttp :: (IOE :> es) => HttpRuntime -> Eff (Http : es) a -> Eff es a
 runHttp runtime = interpret $ \_ -> \case
-  GetBytes source url headers limit -> liftIO (downloadIO runtime (downloadPool source) url headers limit)
+  GetBytes source url headers limit -> liftIO (downloadIO runtime (downloadPool source) url headers Nothing limit)
+  PostBytes url headers body limit -> liftIO (downloadIO runtime StandardPool url headers (Just body) limit)
   GetFinalUrl url -> liftIO (finalUrlIO runtime url)
 
 -- | Fetch @url@, streaming-read body up to @limit@ bytes; reject if
@@ -77,6 +85,11 @@ getQQMedia url limit = send (GetBytes QQMedia url [] limit)
 getBytesWith :: (Http :> es) => Text -> [(Text, Text)] -> Int -> Eff es (Either DownloadError (ByteString, Text))
 getBytesWith url headers limit = send (GetBytes WebDownload url headers limit)
 
+-- | 'getBytesWith' as a POST carrying @body@; set its @Content-Type@ in
+-- @headers@.
+postBytesWith :: (Http :> es) => Text -> [(Text, Text)] -> ByteString -> Int -> Eff es (Either DownloadError (ByteString, Text))
+postBytesWith url headers body limit = send (PostBytes url headers body limit)
+
 -- | Bilibili CDN media download, distinct from its ordinary JSON API calls.
 getBilibiliMedia :: (Http :> es) => Text -> [(Text, Text)] -> Int -> Eff es (Either DownloadError (ByteString, Text))
 getBilibiliMedia url headers limit = send (GetBytes BilibiliMedia url headers limit)
@@ -85,18 +98,21 @@ getBilibiliMedia url headers limit = send (GetBytes BilibiliMedia url headers li
 getFinalUrl :: (Http :> es) => Text -> Eff es (Either DownloadError Text)
 getFinalUrl url = send (GetFinalUrl url)
 
-downloadIO :: HttpRuntime -> HttpPool -> Text -> [(Text, Text)] -> Int -> IO (Either DownloadError (ByteString, Text))
-downloadIO _ _ _ _ limit | limit <= 0 = pure (Left (InvalidDownloadLimit limit))
-downloadIO runtime pool url headers limit =
+downloadIO :: HttpRuntime -> HttpPool -> Text -> [(Text, Text)] -> Maybe ByteString -> Int -> IO (Either DownloadError (ByteString, Text))
+downloadIO _ _ _ _ _ limit | limit <= 0 = pure (Left (InvalidDownloadLimit limit))
+downloadIO runtime pool url headers body limit =
   parseRequestEither (T.unpack url) >>= \case
     Left failure -> pure (Left (DownloadTransport failure))
     Right request0 -> do
-      let request =
+      let withHeaders =
             request0
               { requestHeaders =
                   requestHeaders request0
                     <> [(CI.mk (TE.encodeUtf8 key), TE.encodeUtf8 value) | (key, value) <- headers]
               }
+          request = case body of
+            Nothing -> withHeaders
+            Just bytes -> withHeaders {method = "POST", requestBody = RequestBodyBS bytes}
       runBuffered runtime pool limit statusPreviewBytes request >>= \case
         Left failure -> pure (Left (DownloadTransport failure))
         Right response -> pure $ do

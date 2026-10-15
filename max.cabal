@@ -483,12 +483,14 @@ library
         Max.Tools.Skills
         Max.Tools.Stickers
         Max.Tools.Video
+        Max.Tools.YouTube
         Max.Util
         Max.WechatHook
         Max.Runtime.Broker
         Max.Runtime.Client
         Max.Runtime.Protocol
         Max.Worker
+        Max.YouTube
     other-modules:
         Max.SelfSource.Embed
         Max.LLM.Configuration
@@ -816,6 +818,7 @@ test-suite max-test
         Max.Turn.TypesSpec
         Max.UtilSpec
         Max.WorkerSpec
+        Max.YouTubeSpec
         Max.FetchQueueSpec
         Max.Http.JsonSpec
     build-depends:

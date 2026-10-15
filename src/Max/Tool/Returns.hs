@@ -52,6 +52,7 @@ returnTypes =
       ("agent_ask", "{author: number; source_message: number | null; body: string}；body 是上级的回答。原生等待被中断时返回执行句柄，可用 execution_wait 等待。"),
       ("use_skill", "{skill: string; loaded: string[]; already_loaded?: boolean; versions: {[name: string]: string}; availability: {skill: string; details: {tools: string[]; unavailable: string[]; reason?: string}}[]; instructions: string}"),
       ("view_bilibili", "{bvid: string; title: string; up: string; duration: string; pubdate: string; desc: string; stats: {view: number; like: number; coin: number; favorite: number; danmaku: number; reply: number; share: number}; top_comments: {user: string; likes: number; text: string}[] | string; parts?: number; video_attached: boolean; video_note?: string}"),
+      ("view_youtube", "{video_id: string; title: string; channel: string; duration: string; views: number | null; description: string; live?: true; transcript?: {lang: string; name: string; auto: boolean; text: string; translated_from?: string; next_start_seconds?: number}; transcript_note?: string; other_langs?: string[]}"),
       ("sandbox_exec", "{exit_code: number; stdout: string; stderr: string; truncated: boolean; spill_truncated: boolean; full_output_file?: string}"),
       ("nix_search", "{results: string; truncated?: boolean; note?: string}"),
       ("sandbox_destroy", "{ok: true}"),

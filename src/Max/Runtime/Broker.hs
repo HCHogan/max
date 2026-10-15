@@ -574,6 +574,12 @@ handleRequest broker socket handles@(_, output, _) request = do
             "build",
             "--extra-experimental-features",
             "nix-command flakes",
+            -- The broker runs without CAP_SETUID, so a local-store build
+            -- cannot switch to a build user ("setting uid: Operation not
+            -- permitted"). The daemon builds anything not substituted, such
+            -- as a python3.withPackages environment.
+            "--store",
+            "daemon",
             "--impure",
             "--out-link",
             roots </> digest expression,

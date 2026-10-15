@@ -72,6 +72,7 @@ taskGrants profile parent = Map.filterWithKey (\name _ -> name `elem` allowed) p
         "view_video",
         "view_avatar",
         "view_bilibili",
+        "view_youtube",
         "use_skill",
         "agent",
         "agent_status",
