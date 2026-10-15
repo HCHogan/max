@@ -83,7 +83,7 @@ execTool =
     { toolName = "sandbox_exec",
       toolDescription =
         T.unwords
-          [ "Run a shell command in this group's sandbox (verbatim 'sh -c' in /work, wallclock",
+          [ "Run a shell command as root in this group's NixOS VM sandbox (verbatim 'sh -c' in /work, wallclock",
             "timeout, exit_code 0 = success). /work persists; /chat is a read-only mirror of this chat's files and media.",
             "Independent commands may run concurrently; coordinate shared paths and ports. Output capped ~16 KiB per",
             "stream; when 'truncated' is true a bounded output spill is saved",
@@ -91,7 +91,7 @@ execTool =
             "also reached its safety cap — inspect it instead of re-running.",
             "Public internet access is available. Operations-enabled groups also have Tailscale access; otherwise host, private-network and peer-sandbox",
             "connections are blocked. External writes still need task authorization.",
-            "Tools not preinstalled: list nixpkgs attributes in 'packages'",
+            "Tools not preinstalled: 'nix shell nixpkgs#<attr> -c ...' (nixpkgs is pinned) or list attributes in 'packages'",
             "(first use downloads — raise timeout_seconds to 120-300)."
           ],
       toolSchema =
@@ -207,9 +207,9 @@ destroyTool =
   Tool
     { toolName = "sandbox_destroy",
       toolDescription =
-        "Delete this group's sandbox and everything in /work (downloaded \
-        \packages survive in the shared store).  The next sandbox call starts \
-        \a fresh one.  Other tasks in the group share it.",
+        "Delete this group's sandbox VM, everything in /work and the packages \
+        \it installed.  The next sandbox call starts a fresh one.  Other tasks \
+        \in the group share it.",
       toolSchema = noArguments,
       toolRunner = LegacyRunner $ \_args -> do
         destroyed <- destroySandbox

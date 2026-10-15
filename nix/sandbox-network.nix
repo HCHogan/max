@@ -1,4 +1,6 @@
-# Native nspawn public egress. Isolated bridge ports prevent sibling traffic.
+# Sandbox public egress. Each sandbox VM's qemu opens its user-mode network
+# sockets in a per-sandbox namespace on this bridge; isolated bridge ports
+# prevent sibling traffic.
 {
   config,
   lib,

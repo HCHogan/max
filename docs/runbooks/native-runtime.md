@@ -9,11 +9,18 @@ unit properties, mounts, arbitrary Nix expressions or privileged host file paths
 The client opens copied files with its own permissions and streams through pipes;
 the broker rejects other descriptor types, including Unix sockets.
 
-`max-sandbox@<conversation>-s<number>.service` launches the prebuilt NixOS system
-from `nix/sandbox-guest.nix` with systemd-nspawn. A corresponding
-`max-sandbox-<conversation>-s<number>` appears in `machinectl`. User namespaces
-map the guest away from host root; commands run as sandbox uid 1000 in bounded
-transient guest units. Each command gets its own transient unit, timeout and output streams. Independent
+`max-sandbox@<conversation>-s<number>.service` runs the microvm.nix runner of
+`nix/sandbox-guest.nix`: cloud-hypervisor boots the guest kernel directly, in
+the sandbox's network namespace, with a tap that the unit masquerades onto the
+namespace's eth0. `max-sandbox-virtiofsd@` serves its four virtiofs shares:
+the host store and `/chat` and a `meta` directory read-only (enforced by
+virtiofsd), and `/work` with guest root translated to uid 1000. The guest's
+writable store overlay, Nix database and profiles live on its own disk,
+`volumes/<name>-data/nix.img`. Both units start in `roots/<name>`, which the
+broker prepares on each start with links to the volume and the meta files
+(resolvers and the broker's SSH public key). The broker runs commands as the
+VM's root over SSH through the hybrid vsock socket `roots/<name>/notify.vsock`
+(systemd-ssh-proxy's `vsock-mux/`), each in a bounded transient guest unit. Each command gets its own transient unit, timeout and output streams. Independent
 commands and tasks can share one sandbox concurrently; disconnecting one client
 stops only its own guest command unit. Deletion and policy replacement close
 admission and wait for active users. Callers coordinate shared files and ports;
@@ -23,7 +30,7 @@ a workspace observation can include concurrent changes, not only that call's eff
 resource limits, a private temporary directory and per-instance state. Its Nix
 package supplies Camoufox, MCP, fonts, extensions, GeoIP data, Xvfb and the HTTP
 gateway. The gateway binds a kernel-assigned loopback port and publishes it only
-after listening. Browser services do not appear in `machinectl`. The Haskell
+after listening. The Haskell
 registry owns running job workspaces and revokes access on completion or
 cancellation. Restart discards those sessions. Explicitly saved,
 owner-scoped browser profiles retain allowed authentication data.
@@ -114,13 +121,14 @@ DOCKER-USER forwarding rules coexist with this earlier filter. Max does not
 enable Docker or grant its user membership in the Docker group.
 The network unit prepares a shared `/run/netns` mount. Daemons that bind their
 own namespaces, such as DAE, should start after `max-sandbox-network.service` so
-later sandbox creation cannot hide an earlier namespace mount. The nspawn
-template preserves the broker's DNS configuration instead of copying a host
-loopback resolver into the private network. Enabled operations conversations
+later sandbox creation cannot hide an earlier namespace mount. The broker
+passes each VM its resolvers as the `network.dns` credential, because qemu's
+user-mode DNS would proxy to a host loopback resolver the namespace cannot
+reach. Enabled operations conversations
 instead share the dedicated namespace described in [SSH operations](ssh-operations.md).
 They can reach the fleet and approved subnets; public-only isolation does not
-apply to that mode. Work directories remain separate, but localhost and ports
-are shared across operations sandboxes.
+apply to that mode. Each operations sandbox is still its own VM with its own
+work directory.
 
 ## Validation
 
@@ -139,11 +147,12 @@ nix build .#checks.x86_64-linux.state-migration
 nix build .#checks.x86_64-linux.operations
 ```
 
-The native-runtime VM check exercises actual nspawn registration, caller uid,
-store and namespace protection, client-disconnect cancellation, package roots,
+The native-runtime VM check exercises actual nested sandbox VMs: machined
+registration, root commands over vsock, the pinned writable guest store,
+client-disconnect cancellation, package roots,
 public/private networking, durable work, legacy-volume refusal, target lifecycle,
-and real browser workspace acceptance. It permits software emulation when KVM
-is unavailable. Fresh-DB tests and VM checks do not establish production health.
+and real browser workspace acceptance. It needs KVM with nested
+virtualization. Fresh-DB tests and VM checks do not establish production health.
 
 Also exercise real public navigation on the destination host. During h610
 validation, domestic DNS returned a reserved Google IPv6 address and incorrect

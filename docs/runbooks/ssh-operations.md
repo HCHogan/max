@@ -37,16 +37,16 @@ retain public-only networking.
 Skill visibility is not network authorization. The broker selects `maxops` for
 all sandboxes owned by an enabled conversation, even before `operations` is
 loaded. Shell and SSH work both use the sandbox task profile; it is not a
-read-only SSH boundary. Shared namespaces also share localhost and
-ports, so local services should bind dynamic ports. Work directories stay separate.
+read-only SSH boundary. Each operations sandbox is its own VM with its own work directory.
 
 ## Native lifecycle
 
 `max-ops-network.service` owns `/run/netns/maxops`, a veth uplink on
-`10.232.0.0/30`, and the associated forwarding/NAT policy. Each operations sandbox
-has a bind-mounted reference under its existing `/run/netns/max-sb-…` name.
-Destroying a sandbox releases only its reference. Adoption checks both policy
-metadata and the running container's network namespace identity.
+`10.232.0.0/30`, the `max-ops-sb` bridge on `10.233.0.0/16`, and the NAT that
+masquerades the bridge onto the tailnet and the uplink. Each operations sandbox
+has its own `/run/netns/max-sb-…` namespace whose eth0 is an isolated port on
+that bridge. Destroying the sandbox removes the port; recreating maxops removes
+every port, and adoption then rebuilds those sandboxes.
 
 `max-ops-tailscaled.service` joins the shared network with
 `NetworkNamespacePath`. Its state is `/var/lib/max/tailscale`, its socket is under
@@ -63,7 +63,7 @@ interface, so a stopped dedicated client cannot borrow the host node's identity.
 Both services are wanted by and part of `max-stack.target`, with resources in
 `max.slice`. The sandbox template is ordered after the dedicated network/client,
 so stack shutdown stops consumers before releasing the shared namespace. Network
-shutdown also releases remaining sandbox references to that namespace. After
+shutdown also removes the sandboxes' bridge ports. After
 stopping the target, wait for the network service to become inactive before
 assuming namespace cleanup has finished. Restarting
 `max.service` leaves these services running. Restarting the Tailscale service

@@ -147,14 +147,16 @@ data PersistedSandbox = PersistedSandbox
   }
 
 -- | Reconcile database rows against external resources.  A volume is the
--- durable unit: if it survives but the container does not, rebuild the
--- container around it; if the volume is gone, mark the row destroyed.  Names
--- in Max's namespace with no database owner are pre-E0/orphan resources and
--- are reclaimed.
+-- durable unit: a sandbox whose VM is stale, stopped, missing or idle keeps its
+-- registration and volume and starts again on next use; if the volume is gone,
+-- mark the row destroyed.  Names in Max's namespace with no database owner are
+-- pre-E0/orphan resources and are reclaimed.
 reconcileSandboxes :: SandboxRegistry -> IO ()
 reconcileSandboxes reg = do
   let pool = reg.srDbPool
   now <- getCurrentTime
+  -- Every use moves expires_at a full TTL ahead, so this measures from the last use.
+  let idle row = addUTCTime (sandboxIdle - sandboxTtl) row.psExpiresAt <= now
   rows <- loadPersisted pool
   containers <- Set.fromList <$> listContainersByPrefix namePrefix
   volumes <- Set.fromList <$> listVolumesByPrefix namePrefix
@@ -180,11 +182,11 @@ reconcileSandboxes reg = do
             case containerState of
               RuntimeContainerRunning -> do
                 currentPolicy <- inspectContainerPolicy row.psContainer row.psNetwork
-                if currentPolicy && persistedPolicyCurrent row
+                if currentPolicy && persistedPolicyCurrent row && not (idle row)
                   then adoptPersisted reg pool row
-                  else rebuildPersisted reg pool row
-              RuntimeContainerStopped -> rebuildPersisted reg pool row
-              RuntimeContainerMissing -> rebuildPersisted reg pool row
+                  else parkPersisted reg pool row
+              RuntimeContainerStopped -> parkPersisted reg pool row
+              RuntimeContainerMissing -> parkPersisted reg pool row
               RuntimeContainerUnavailable detail ->
                 markSandboxUnknown pool row.psId detail
   for_ (Set.toList (containers `Set.difference` knownContainers)) runRm
@@ -216,19 +218,19 @@ adoptPersisted reg pool row = do
   atomically (modifyTVar' reg.srEntries (Map.insertWith (\new old -> old {seNetwork = new.seNetwork, seImage = new.seImage}) entry.seId entry))
   markSandboxActive pool row.psId
 
-rebuildPersisted :: SandboxRegistry -> DbPool -> PersistedSandbox -> IO ()
-rebuildPersisted reg pool row = do
-  selected <- networkForGroup (fromIntegral row.psGroup)
-  case selected of
-    Left detail -> markSandboxUnknown pool row.psId detail
-    Right network -> do
-      let secured = (securePersisted row) {psNetwork = network}
-      -- A stopped container still owns its name; preserve its durable volume.
-      runRm row.psContainer
-      updateSandboxRuntime pool secured
-      runRun secured.psContainer secured.psImage secured.psVolume secured.psNetwork >>= \case
-        Right _ -> adoptPersisted reg pool secured >> reg.srBackfill (GroupId secured.psGroup)
-        Left detail -> markSandboxUnknown pool row.psId detail
+-- | Stop a stale, stopped or idle VM and keep the sandbox registered around
+-- its retained volume; its next use starts it again through 'prepareEntry'.
+-- Booting every VM up front would hold Max's startup and the host's memory.
+parkPersisted :: SandboxRegistry -> DbPool -> PersistedSandbox -> IO ()
+parkPersisted reg pool row = do
+  runRm row.psContainer
+  let parked =
+        row
+          { psImage = defaultCreateOpts.scoImage,
+            psNetwork = if row.psNetwork `elem` [sandboxNetwork, "maxops"] then row.psNetwork else sandboxNetwork
+          }
+  updateSandboxRuntime pool parked
+  adoptPersisted reg pool parked
 
 --------------------------------------------------------------------------------
 -- Create options.
@@ -530,6 +532,11 @@ allocateSandbox reg (GroupId rawGroup) opts now = withConn reg.srDbPool $ \conn 
 sandboxTtl :: NominalDiffTime
 sandboxTtl = 14 * 24 * 60 * 60
 
+-- | An unused sandbox VM is shut down after this long (checked hourly). Its
+-- commands are bounded to an hour, so none can still be running.
+sandboxIdle :: NominalDiffTime
+sandboxIdle = 2 * 60 * 60
+
 loadPersisted :: DbPool -> IO [PersistedSandbox]
 loadPersisted pool = withConn pool $ \conn -> do
   rows <-
@@ -567,13 +574,6 @@ persistedPolicyCurrent :: PersistedSandbox -> Bool
 persistedPolicyCurrent row =
   row.psImage == defaultCreateOpts.scoImage
     && row.psNetwork `elem` [sandboxNetwork, "maxops"]
-
-securePersisted :: PersistedSandbox -> PersistedSandbox
-securePersisted row =
-  row
-    { psImage = defaultCreateOpts.scoImage,
-      psNetwork = defaultCreateOpts.scoNetwork
-    }
 
 updateSandboxRuntime :: DbPool -> PersistedSandbox -> IO ()
 updateSandboxRuntime pool row = withConn pool $ \conn -> do

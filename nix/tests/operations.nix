@@ -85,8 +85,8 @@ pkgs.testers.runNixOSTest {
   nodes.machine = { config, lib, ... }: {
     imports = [ maxModule ];
     system.stateVersion = "26.05";
-    virtualisation.memorySize = 3072;
-    virtualisation.cores = 2;
+    virtualisation.memorySize = 4096;
+    virtualisation.cores = 4;
     networking.firewall.enable = false;
     security.pki.certificateFiles = [ "${tlsCert}/cert.pem" ];
     services.tailscale = {
@@ -99,6 +99,7 @@ pkgs.testers.runNixOSTest {
       package = testPackage;
       browser.enable = false;
       postgres.enable = false;
+      sandbox.memory = 1024;
       operations = {
         enable = true;
         allowedGroups = [
@@ -146,15 +147,19 @@ pkgs.testers.runNixOSTest {
     machine.succeed(execute(first, "echo durable > /work/keep"))
     machine.wait_until_succeeds(execute(first, "ssh fleet 'sudo -n id -u' | grep -x 0"), timeout=120)
     machine.wait_until_succeeds(execute(first, "curl -fsS --max-time 10 http://10.66.0.1:8090/probe | grep route-ok"), timeout=90)
-    assert machine.succeed(cli + f"policy {first}").strip() == "8 maxops 1"
-    machine.succeed("test /run/netns/maxops -ef /run/netns/" + first)
+    assert machine.succeed(cli + f"policy {first}").strip() == "9 maxops 1"
+    # Its own namespace, joined to maxops through an isolated bridge port.
+    machine.fail("test /run/netns/maxops -ef /run/netns/" + first)
+    machine.succeed("bridge -n maxops link show | grep -F 'master max-ops-sb'")
     machine.fail(execute(first, "test -S /run/max-ops-tailscale/tailscaled.sock"))
     host_id = machine.succeed("tailscale status --json | jq -r .Self.ID").strip()
     ops_cli = "tailscale --socket=/run/max-ops-tailscale/tailscaled.sock "
     ops_id = machine.succeed(ops_cli + "status --json | jq -r .Self.ID").strip()
     assert host_id != ops_id
     machine.succeed(cli + f"remove {second}")
-    machine.succeed(execute(first, "ssh fleet 'sudo -n true'"))
+    # Removing a sibling's bridge port is a link change inside maxops; one run
+    # saw quad-100 stop answering for a few seconds right after it.
+    machine.wait_until_succeeds(execute(first, "ssh fleet 'sudo -n true'"), timeout=90)
     machine.succeed("systemctl restart max.service")
     machine.succeed(execute(first, "cat /work/keep | grep durable"))
     fleet_ip = control.succeed("tailscale ip -4").strip()
@@ -168,7 +173,7 @@ pkgs.testers.runNixOSTest {
     assert machine.succeed(cli + "network 123").strip() == "max-sandbox"
     create(first, "max-sandbox")
     machine.succeed(execute(first, "cat /work/keep | grep durable"))
-    assert machine.succeed(cli + f"policy {first}").strip() == "8 max-sandbox 1"
+    assert machine.succeed(cli + f"policy {first}").strip() == "9 max-sandbox 1"
     machine.succeed("systemctl stop max-stack.target", timeout=120)
     machine.wait_until_succeeds("test ! -e /run/netns/maxops", timeout=60)
     machine.succeed("systemctl is-active tailscaled")

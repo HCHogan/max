@@ -157,6 +157,29 @@
         "type": "github"
       }
     },
+    "microvm": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "spectrum": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1791551030,
+        "narHash": "sha256-jTx3O3MKqPjv+cDfBFQ5zlKECBEwzF91scC+mSumZyE=",
+        "owner": "astro",
+        "repo": "microvm.nix",
+        "rev": "f13928fe9900e91709d7ce581eefa47eaafa79e1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "astro",
+        "repo": "microvm.nix",
+        "type": "github"
+      }
+    },
     "nix": {
       "inputs": {
         "flake-compat": [
@@ -278,6 +301,7 @@
     "root": {
       "inputs": {
         "devenv": "devenv",
+        "microvm": "microvm",
         "nixpkgs": "nixpkgs_2",
         "systems": "systems"
       }

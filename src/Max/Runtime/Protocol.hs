@@ -80,9 +80,10 @@ runtimeProtocolVersion = 1
 
 -- Bump when the broker's sandbox isolation contract changes. Persisted
 -- instances must match both this version and the host module generation.
--- Version 8 binds the conversation's read-only /chat view.
+-- Version 8 binds the conversation's read-only /chat view. Version 9 runs
+-- the sandbox as a cloud-hypervisor microVM whose commands run as its root.
 sandboxPolicyVersion :: Text
-sandboxPolicyVersion = "8"
+sandboxPolicyVersion = "9"
 
 -- | Every stream is an anonymous pipe created by the client. Reject sockets,
 -- devices and regular files before any privileged helper can inherit them.

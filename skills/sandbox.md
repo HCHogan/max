@@ -5,23 +5,25 @@
 每个群一个沙箱，第一次用任何沙箱工具时自动启动，不用创建也不用传 id；群里的
 `!` 命令也在同一个沙箱里跑。它跨 dispatch 存活，销毁只有三种情况：
 sandbox_destroy、群里 !clear --all、连续 14 天没用触发 TTL 清理；销毁后下一次调用会
-起一个空的新沙箱。bot 重启后会按数据库记录接回原来的 /work 卷；旧策略或停止的容器
-会围着原卷重建。同群的其他并发任务共享这个沙箱；
+起一个空的新沙箱。VM 闲置约 2 小时会自动关机，bot 重启或策略更新后也先不开机；下次
+调用时再围着原来的 /work 和 /nix 开机，那一次会慢十几秒。关机会停掉在 VM 里起的
+后台服务。同群的其他并发任务共享这个沙箱；
 同一个沙箱支持多条 sandbox_exec 并发，后台任务不会独占整个沙箱。没有数据依赖的
 命令可同批提交；命令之间有先后依赖就分轮执行。每条命令的超时、取消、stdout/stderr
 各自独立，/work、临时文件和端口仍然共享，同一路径的修改要自己协调。删除或策略重建
 会等正在使用它的命令结束；不要靠删除 sandbox 取消某一条命令。文件系统观察可能包含
 并发任务的变化，不能把所有变化都归因于当前命令。它是有期限的工作区，不是长期存储：
 重要产物尽快发出去。
-NixOS 系统和网络是宿主策略，不交给调用者选择：命令固定在
-宿主预构建的 NixOS 沙箱里以 uid 1000、无 Linux capability、no-new-privileges 运行，
-有 CPU/内存/PID 上限；根文件系统只读，只有 /work 和有大小上限的临时目录可写，
-/chat 只读。/data 下是宿主随 Max 部署提供的只读参考资料（如 /data/destiny 命运2攻略表格），
-每个目录的 README.md 说明格式。
+沙箱是宿主给这个群开的一台 NixOS 虚拟机（cloud-hypervisor），系统和网络是宿主策略，
+不交给调用者选择。命令在 VM 里以 root 运行，可以随便装东西、改系统、开服务；VM 有
+CPU 和内存上限，没有 GPU。根目录 / 是内存盘，VM 重启（策略更新、宿主重启、销毁重建）
+就清空；持久的只有 /work（宿主上的工作卷）和 /nix（这台 VM 自己的磁盘，装的包、
+Nix 数据库和 profile 都在里面）。/chat 只读。/data 下是宿主随 Max 部署提供的只读参考
+资料（如 /data/destiny 命运2攻略表格），每个目录的 README.md 说明格式。
 普通群的 max-sandbox 网络允许访问公网 IPv4，可以 curl、git clone、调用公开 API、
 下载项目依赖；普通群无法访问宿主机、内网、链路本地、Tailscale 地址和其他沙箱，IPv6 关闭。
+外面也连不进 VM：在里面起的服务只有 VM 自己能访问。
 已开启运维功能的群使用共享 maxops 内网；SSH、fleet 和部署方法见 operations 技能。
-共享网络中的临时服务使用动态端口。
 加载技能只提供说明和工具，不改变群的网络策略。/work 中的代码和文件跨升级保留，
 读取旧 checkout 前先核对版本，不能拿它推断当前 Max 的能力。
 联网不等于获得对外写入权限：发布、上传、修改远端数据仍须符合任务授权。
@@ -29,39 +31,33 @@ NixOS 系统和网络是宿主策略，不交给调用者选择：命令固定�
 
 # 装软件（nix，不是 apt）
 
-NixOS 沙箱预装的是一套接近 Ubuntu 默认的基础环境，直接可用不必再传 packages：
+NixOS 沙箱预装的是一套接近 Ubuntu 默认的基础环境：
 bash/coreutils/sed/awk/grep/find/diff/patch/file/tree/bc、tar/gzip/xz/bzip2/zstd/
 zip/unzip、curl/wget/openssl/rsync/socat/nc、ip/ss/ping/dig、ps/top/lsof/pstree、
-git/ssh/scp/vim/nano、python3/perl、jq/rg/make。除此之外的工具都按需取。不要 apt/yum
-（沙箱里没有这些包管理器的数据库）。要用没预装的工具，把 nixpkgs
-attribute 传给 sandbox_exec 的 packages 参数：宿主 broker 根据固定 nixpkgs 版本构建，
-为沙箱保存 GC roots，随后把返回的只读 store 路径放进
-这一条命令的 PATH，无需安装，一次最多 32 个。真正的 `sh -c` 在有公网访问能力的
-非 root 沙箱里执行。沙箱只读共享宿主 /nix/store，没有宿主 Nix daemon socket 或数据库；
-不要自行修改共享 store。停止实例保留 /work 和 GC roots，销毁沙箱才移除它们。
+git/ssh/scp/vim/nano、python3/perl、jq/rg/make。不要 apt/yum（没有这些包管理器）。
+
+VM 里是完整的 Nix：有自己的 nix-daemon 和可写 store，flakes 已开启。nixpkgs 钉在
+和宿主相同的版本上（registry 的 nixpkgs 和 `<nixpkgs>` 都指向它），用的时候不会再去
+下载一份新的 nixpkgs。按用途选：
+
+- 一条命令临时要用：`nix shell nixpkgs#ffmpeg nixpkgs#imagemagick -c ffmpeg ...`；或者把
+  attribute 传给 sandbox_exec 的 packages 参数（宿主预先构建好，只放进这一条命令的
+  PATH，一次最多 32 个）。
+- 以后一直要用：`nix profile install --profile /nix/var/nix/profiles/default nixpkgs#xxx`，
+  这个 profile 在 PATH 里，重启后还在。
+- nixpkgs 里没有或要改：`nix build --impure --expr 'with import <nixpkgs> {}; ...'`、
+  override、自己写 flake 都可以，构建在 VM 里进行，占 VM 的 CPU 和 /nix 磁盘。
+
 attribute 名用 nix_search 查（regex 匹配名字和描述，最多回 30 条，如 'ffmpeg'、
-'python.*opencv'、'^nodejs$'；空结果就放宽 regex）。包 store 全沙箱共享：某个包
-第一次用要下载，那一次把 timeout_seconds 提到 120-300；下过之后所有沙箱瞬时可用。
-
-宿主开放了 GPU 时沙箱里有 /dev/dri/renderD128（`test -e` 一下）。这时 nixpkgs 的
-ffmpeg 可以用 VA-API 硬件编解码，驱动已经配好，不用设任何环境变量：
-
-- 转码（全程 GPU）：`ffmpeg -hwaccel vaapi -hwaccel_device /dev/dri/renderD128
-  -hwaccel_output_format vaapi -i in.mp4 -vf scale_vaapi=w=1280:h=720 -c:v hevc_vaapi out.mp4`
-- 编码 CPU 产生的帧（lavfi、图片序列、CPU 滤镜的输出）：先上传到显存，
-  `ffmpeg -vaapi_device /dev/dri/renderD128 -i in -vf format=nv12,hwupload -c:v h264_vaapi out.mp4`
-- 硬件解码后接 CPU 滤镜：先 `hwdownload,format=nv12`。
-
-`-hwaccel` 只管解码；没有 hwupload 就把软件帧交给 `*_vaapi` 编码器会报
-"Impossible to convert between the formats"，这是命令写错，不是没驱动。strace 里初始化阶段的
-ENODEV/EPERM 是驱动探测的正常结果。硬件帧不会自动按旋转元数据转正，需要时自己加 transpose。
-按上面的写法仍报错再去掉这些参数走 CPU。
+'python.*opencv'、'^nodejs$'；空结果就放宽 regex）。某个包第一次用要下载，那一次把
+timeout_seconds 提到 120-300。
 
 Python 专门提醒：python3 本身已预装，标准库直接跑。第三方库把对应
 `python3Packages.<attr>` 放进 packages；宿主会把同一次调用里的这些库收成一个
 `python3.withPackages` 环境，所以命令中的 python3 可以直接 import。例如
-packages=["python3Packages.openpyxl"]。需要 PyPI 的特定版本时，可以在 /work 中创建
-独立 venv 并联网安装；不要修改全局 Python 环境。
+packages=["python3Packages.openpyxl"]。也可以
+`nix shell --impure --expr 'with import <nixpkgs> {}; python3.withPackages (ps: [ ps.openpyxl ])'`。
+需要 PyPI 的特定版本时，在 /work 中创建独立 venv 并联网安装。
 
 # 跑命令
 

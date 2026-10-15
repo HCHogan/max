@@ -72,8 +72,7 @@ in
     };
     services.max.sandbox.extraModules = [
       {
-        # The shared read-only store has unmapped ownership in the guest userns;
-        # OpenSSH rejects systemd's included proxy file. Fleet SSH uses TCP directly.
+        # Fleet SSH uses TCP directly.
         programs.ssh.systemd-ssh-proxy.enable = false;
         programs.ssh.extraConfig = ''
           Host * *.${ops.domain}
@@ -85,7 +84,7 @@ in
           Host * !*.*
             HostName %h.${ops.domain}
         '';
-        systemd.tmpfiles.rules = [ "d /work/.ssh 0700 sandbox sandbox -" ];
+        systemd.tmpfiles.rules = [ "d /work/.ssh 0700 root root -" ];
       }
     ];
     systemd.services.max-ops-network = {
@@ -103,6 +102,8 @@ in
       before = [ "max-ops-tailscaled.service" ];
       path = [
         pkgs.iproute2
+        pkgs.nftables
+        pkgs.procps
         pkgs.util-linux
       ];
       serviceConfig = {
@@ -124,11 +125,34 @@ in
         ip -n maxops link set max-ops-peer up
         ip -n maxops link set lo up
         ip -n maxops route replace default via 10.232.0.1
+        # Each operations sandbox VM has its own namespace with a port on this
+        # bridge (the broker adds it); maxops masquerades them onto tailscale0
+        # and its uplink, whose host rules accept only 10.232.0.2.
+        if ! ip -n maxops link show max-ops-sb >/dev/null 2>&1; then
+          ip -n maxops link add name max-ops-sb type bridge
+        fi
+        ip -n maxops address replace 10.233.0.1/16 dev max-ops-sb
+        ip -n maxops link set max-ops-sb up
+        ip netns exec maxops sysctl -qw net.ipv4.ip_forward=1
+        ip netns exec maxops nft -f - <<EOF
+        table ip max-ops-sandboxes
+        delete table ip max-ops-sandboxes
+        table ip max-ops-sandboxes {
+          chain input {
+            type filter hook input priority filter; policy accept;
+            iifname "max-ops-sb" ct state established,related accept
+            iifname "max-ops-sb" drop
+          }
+          chain postrouting {
+            type nat hook postrouting priority srcnat; policy accept;
+            ip saddr 10.233.0.0/16 oifname != "max-ops-sb" masquerade
+          }
+        }
+        EOF
       '';
+      # Deleting the namespace also removes the sandboxes' bridge ports; the
+      # broker rebuilds those sandboxes on next use.
       preStop = ''
-        for alias in /run/netns/max-sb-*; do
-          if test "$alias" -ef /run/netns/maxops; then ip netns del "''${alias##*/}"; fi
-        done
         ip netns del maxops
         ip link del max-ops-host 2>/dev/null || test ! -e /sys/class/net/max-ops-host
       '';

@@ -30,14 +30,15 @@ let
 in
 pkgs.testers.runNixOSTest {
   name = "max-native-runtime";
-  requiredFeatures.kvm = false;
+  # The sandboxes are nested cloud-hypervisor VMs.
+  requiredFeatures.kvm = true;
   globalTimeout = 1800;
   nodes.machine = { config, lib, ... }: {
     imports = [ maxModule ];
     system.stateVersion = "26.05";
-    virtualisation.memorySize = 4096;
+    virtualisation.memorySize = 6144;
     virtualisation.diskSize = 8192;
-    virtualisation.cores = 2;
+    virtualisation.cores = 4;
     environment.systemPackages = [
       pkgs.python3
       pkgs.iproute2
@@ -58,6 +59,8 @@ pkgs.testers.runNixOSTest {
       package = testPackage;
       postgres.enable = false;
       sandbox.nameservers = [ "8.8.8.8" ];
+      sandbox.memory = 1024;
+      sandbox.diskSize = 4;
     };
     systemd.services."max-browser@".environment = {
       NODE_ENV = "test";
@@ -86,23 +89,27 @@ pkgs.testers.runNixOSTest {
     except Exception:
         print(machine.succeed("journalctl -u max-runtime -u 'max-sandbox@*' --no-pager -n 120"))
         raise
-    machine.succeed("machinectl show max-sandbox--100-s1 -p Leader | grep -E 'Leader=[1-9]'")
+    machine.succeed("systemctl is-active max-sandbox-virtiofsd@-100-s1.service")
     # Creating the first sandbox must not hide an earlier daemon's namespace.
     machine.succeed("umount /run/netns/max-foreign-fixture; rm /run/netns/max-foreign-fixture")
     try:
-        assert machine.succeed(execute + "id -u").strip() == "1000"
+        assert machine.succeed(execute + "id -u").strip() == "0"
     except Exception:
-        print(machine.succeed("journalctl --machine=max-sandbox--100-s1 --no-pager -n 80"))
+        print(machine.succeed("journalctl -u 'max-sandbox@-100-s1' -u 'max-sandbox-virtiofsd@-100-s1' --no-pager -n 120"))
         raise
-    assert machine.succeed(cli + f"policy {name}").strip() == "8 max-sandbox 1"
+    assert machine.succeed(cli + f"policy {name}").strip() == "9 max-sandbox 1"
 
-    with subtest("store, host paths and namespaces are protected"):
-        machine.fail(execute + "touch /nix/store/max-test-write")
-        machine.fail(execute + "cat /etc/shadow")
-        machine.fail(execute + "unshare -m true")
-        machine.succeed(execute + "test ! -S /nix/var/nix/daemon-socket/socket")
-        machine.succeed(execute + "sh -c 'findmnt -no OPTIONS /nix/store | grep -w ro'")
+    with subtest("the VM's root cannot write host paths; its own Nix is pinned"):
+        # Remounting a read-only share does not help: virtiofsd enforces it.
+        machine.succeed(execute + "sh -c 'mount -o remount,rw /nix/.ro-store; ! touch /nix/.ro-store/max-test-write'")
+        machine.succeed("test ! -e /nix/store/max-test-write")
+        machine.succeed(execute + "test ! -e /var/lib/max")
+        machine.succeed(execute + "test -S /nix/var/nix/daemon-socket/socket")
+        assert machine.succeed(execute + "nix-instantiate --eval -E '<nixpkgs>'").strip() == "${nixpkgs.outPath}"
         machine.succeed(execute + "sh -c 'echo durable > /work/keep; git --version; python3 --version; jq --version'")
+        # Guest root writes as the volume's owner, and cannot create devices.
+        machine.succeed(f"test $(stat -c %u:%g /var/lib/max/runtime/volumes/{volume}/work/keep) = 1000:1000")
+        machine.fail(execute + "mknod /work/disk b 8 0")
         machine.succeed("systemd-run --quiet --pipe --wait --collect --uid=max-service -p PrivateUsers=yes -p NoNewPrivileges=yes -p RestrictNamespaces=yes max-runtime status " + name)
         machine.succeed("chmod 666 /run/max-runtime/control.sock")
         status, _ = machine.execute("runuser -u nobody -- max-runtime list max-sb-")
@@ -122,16 +129,19 @@ pkgs.testers.runNixOSTest {
         machine.succeed("runuser -u max-service -- sh -c " + shlex.quote(fill))
         assert machine.succeed(execute + "cat " + shlex.quote("/chat/" + entry)).strip() == "chat bytes"
         machine.fail(execute + "touch /chat/forged")
-        machine.fail(execute + "sh -c " + shlex.quote("echo forged > /chat/" + entry))
+        machine.fail(execute + "sh -c " + shlex.quote("mount -o remount,rw /chat; echo forged > /chat/" + entry))
         machine.succeed("grep -qx 'chat bytes' /var/lib/max/media/objects/fixture")
         # Max may change a view's entries but never the view the unit binds.
         machine.fail(f"runuser -u max-service -- mv {view} /var/lib/max/media/views/moved")
         machine.fail("runuser -u max-service -- ln -s / /var/lib/max/media/views/-101")
 
-    with subtest("reference data is mounted read-only under /data"):
+    with subtest("reference data is under /data and the host copy stays read-only"):
         machine.succeed(execute + "test -s /data/destiny/catalog.tsv")
         machine.succeed(execute + "test ! -e /data/destiny/.state")
-        machine.fail(execute + "touch /data/destiny/forged")
+        data = machine.succeed(execute + "readlink -f /data/destiny").strip()
+        # The guest store is an overlay, so this lands in the VM's own layer.
+        machine.execute(execute + "touch /data/destiny/forged")
+        machine.succeed(f"test ! -e {data}/forged")
 
     with subtest("commands overlap and cancelling one leaves its sibling running"):
         survivor = "touch /work/parallel-ready; while ! test -e /work/parallel-release; do sleep 0.1; done; echo survivor"
@@ -171,7 +181,7 @@ pkgs.testers.runNixOSTest {
         invocation = machine.succeed(f"systemctl show {unit} -p InvocationID --value").strip()
         machine.succeed("/run/current-system/specialisation/browser-template/bin/switch-to-configuration test")
         assert machine.succeed(f"systemctl show {unit} -p InvocationID --value").strip() == invocation
-        assert machine.succeed(cli + f"policy {name}").strip() == "8 max-sandbox 1"
+        assert machine.succeed(cli + f"policy {name}").strip() == "9 max-sandbox 1"
 
     with subtest("Max restart preserves the sibling sandbox; manual replacement fails adoption"):
         invocation = machine.succeed(f"systemctl show {unit} -p InvocationID --value").strip()
@@ -216,7 +226,9 @@ pkgs.testers.runNixOSTest {
         machine.succeed(cli + f"create {peer} nixos-sandbox-v1 {peer}-data max-sandbox")
         machine.succeed(cli + f"exec {peer} python3 -m http.server 8080 --directory /work >/tmp/peer-http.log 2>&1 &")
         peer_ip = machine.succeed(f"jq -r .address /var/lib/max/runtime/instances/{peer}.json").strip()
-        machine.wait_until_succeeds(f"curl -fsS --max-time 3 http://{peer_ip}:8080/")
+        machine.wait_until_succeeds(cli + f"exec {peer} curl -fsS --max-time 3 http://127.0.0.1:8080/")
+        # Nothing connects into a VM, from the host or from a sibling.
+        machine.fail(f"curl -fsS --max-time 3 http://{peer_ip}:8080/")
         machine.fail(curl + f"http://{peer_ip}:8080/")
         machine.succeed("systemctl reload nftables; systemctl restart max-sandbox-network")
         # Restarting the required network unit restarts its dependents. Wait

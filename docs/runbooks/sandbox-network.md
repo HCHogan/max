@@ -2,9 +2,11 @@
 
 The native broker selects networking from the sandbox's canonical conversation.
 Tool arguments cannot select a network, and loading a skill does not change it.
-Both modes use the same prebuilt NixOS guest with systemd-nspawn, a non-root
-command user, dropped capabilities, resource limits, a read-only root and a
-persistent `/work` volume. Max does not require Docker.
+Both modes use the same microvm.nix guest, booted by cloud-hypervisor with
+resource limits and a persistent `/work` volume. Every sandbox has its own
+network namespace; the VM's tap there is masqueraded onto the namespace's eth0,
+so the policies below apply to the VM's traffic, and nothing can connect into
+the VM. Max does not require Docker.
 
 | Mode | Selection | Connectivity |
 | --- | --- | --- |
@@ -23,27 +25,28 @@ forwarding compatibility rules coexist with the earlier nftables filter.
 The module enables `services.max.sandboxNetwork.enable` by default. Disabling
 it requires an equivalent externally managed network; the runtime does not
 fall back to an unrestricted bridge. The network service prepares the shared
-`/run/netns` mount before the broker and nspawn instances use it.
+`/run/netns` mount before the broker and sandbox VMs use it.
 
 ## Operations conversations
 
 The `operations` skill loads sandbox tools after checking the broker's group
-policy. Sandboxes in enabled groups share `/run/netns/maxops`, using the
-separate `max-ops-tailscaled.service` identity. Ordinary `ssh hostname` selects
+policy. Sandboxes in enabled groups egress through `/run/netns/maxops`, using
+the separate `max-ops-tailscaled.service` identity: each sandbox's namespace has
+a port on the `max-ops-sb` bridge inside maxops (10.233.0.0/16), which maxops
+masquerades onto its tailnet and uplink. Ordinary `ssh hostname` selects
 `max` on the fleet target. `maxops` is the client/node name, not an SSH server.
 The guest receives neither the daemon socket nor the preauthkey or node state.
 
-All operations sandboxes share localhost and ports. Use dynamic ports for
-local services; filesystem/work-volume separation does not imply network
-separation in this mode. A task's profile cannot make shell access read-only
+Each operations sandbox is still its own VM; the bridge ports are isolated
+from each other and from maxops itself. A task's profile cannot make shell access read-only
 or change its conversation's network. Lifecycle, routing, DNS and revocation
 are specified in [SSH operations](ssh-operations.md).
 
 ## Adoption and durable work
 
 The broker compares policy metadata and the actual running namespace identity.
-Outdated or stopped instances are rebuilt around their retained `/work`; deleting
-one operations sandbox releases only its reference to the shared namespace.
+Outdated or stopped instances are rebuilt around their retained `/work`, as is
+an operations sandbox whose bridge port vanished with a recreated maxops.
 Migration 113 permits `maxops` in the database network-mode constraint, while
 historical modes remain readable. Upgrading the runtime does not fetch Git or
 rewrite files inside retained workspaces.

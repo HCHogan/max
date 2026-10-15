@@ -6,6 +6,13 @@
     # haskellPackages compiler is GHC 9.10.3.
     nixpkgs.url = "github:NixOS/nixpkgs/21a67dc470149f337cecafbe965d8d252a390518";
     devenv.url = "github:cachix/devenv/v2.3";
+    # Builds and runs the command sandbox VMs (cloud-hypervisor).
+    microvm = {
+      url = "github:astro/microvm.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+      # Only its graphics overlay uses spectrum; never fetch it.
+      inputs.spectrum.follows = "nixpkgs";
+    };
     systems.url = "github:nix-systems/default";
   };
 
@@ -15,6 +22,7 @@
       nixpkgs,
       devenv,
       systems,
+      microvm,
       ...
     }:
     let
@@ -23,7 +31,17 @@
         system: extraModules:
         nixpkgs.lib.nixosSystem {
           inherit system;
-          modules = [ ./nix/sandbox-guest.nix ] ++ extraModules;
+          modules = [
+            microvm.nixosModules.microvm
+            ./nix/sandbox-guest.nix
+            # nix shell/run/build in the guest resolve nixpkgs to Max's own pin
+            # instead of downloading a fresh nixpkgs for each command.
+            {
+              nix.registry.nixpkgs.flake = nixpkgs;
+              nix.nixPath = [ "nixpkgs=${nixpkgs}" ];
+            }
+          ]
+          ++ extraModules;
         };
 
       # Source tree for the nix build, minus the fat dev directories
@@ -105,7 +123,7 @@
         // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           camoufox-browser = (import ./nix/camoufox-browser.nix { inherit pkgs; }).bundle;
           max-browser = import ./nix/browser.nix { inherit pkgs; };
-          max-sandbox = (sandboxSystem system [ ]).config.system.build.toplevel;
+          max-sandbox = (sandboxSystem system [ ]).config.microvm.declaredRunner;
         }
       );
 
@@ -121,7 +139,7 @@
             imports = [ ./nix/module.nix ];
             services.max.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.max;
             services.max.sandbox.package = lib.mkDefault (sandboxSystem pkgs.stdenv.hostPlatform.system config.services.max.sandbox.extraModules)
-            .config.system.build.toplevel;
+            .config.microvm.declaredRunner;
             services.max.sandbox.nixpkgs = lib.mkDefault nixpkgs.outPath;
             # Only this directory, so unrelated commits keep the store path and
             # do not recreate sandboxes; .state is generator bookkeeping.

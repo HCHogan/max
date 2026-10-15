@@ -30,52 +30,88 @@ let
       )
     );
   brokerConfig = pkgs.writeText "max-runtime.json" (
-    builtins.toJSON (
-      {
-        user = "max-service";
-        stateDirectory = runtime.stateDirectory;
-        gcRootsDirectory = "${runtime.stateDirectory}/gcroots";
-        legacyVolumeDirectory = "/var/lib/docker/volumes";
-        nixpkgs = toString cfg.sandbox.nixpkgs;
-        system = pkgs.stdenv.hostPlatform.system;
-        bridge = "max-sb-native";
-        subnet = "10.231.0.0/16";
-        gateway = "10.231.0.1";
-        dns = cfg.sandbox.nameservers;
-        operationsGroups = lib.optionals cfg.operations.enable cfg.operations.allowedGroups;
-        inherit operationsDns;
-        # Max fills each conversation's view; the broker owns the directories.
-        chatViews = "${cfg.mediaDirectory}/views";
-        # Each backend adopts only its own effective template. A browser package
-        # change must not invalidate unrelated, running command sandboxes.
-        generations =
-          lib.optionalAttrs cfg.sandbox.enable { sandbox = instancePolicy "sandbox"; }
-          // lib.optionalAttrs cfg.browser.enable { browser = instancePolicy "browser"; };
-        commands = {
-          systemctl = "${config.systemd.package}/bin/systemctl";
-          systemd-run = "${config.systemd.package}/bin/systemd-run";
-          ip = "${pkgs.iproute2}/bin/ip";
-          bridge = "${pkgs.iproute2}/bin/bridge";
-          nix = "${pkgs.nix}/bin/nix";
-          mount = "${pkgs.util-linux}/bin/mount";
-        };
-      }
-      // lib.optionalAttrs (cfg.sandbox.renderDevice != null) {
-        # Command units get this node back inside their private /dev.
-        renderDevice = cfg.sandbox.renderDevice;
-      }
-    )
+    builtins.toJSON {
+      user = "max-service";
+      stateDirectory = runtime.stateDirectory;
+      gcRootsDirectory = "${runtime.stateDirectory}/gcroots";
+      legacyVolumeDirectory = "/var/lib/docker/volumes";
+      nixpkgs = toString cfg.sandbox.nixpkgs;
+      system = pkgs.stdenv.hostPlatform.system;
+      bridge = "max-sb-native";
+      subnet = "10.231.0.0/16";
+      gateway = "10.231.0.1";
+      dns = cfg.sandbox.nameservers;
+      operationsGroups = lib.optionals cfg.operations.enable cfg.operations.allowedGroups;
+      inherit operationsDns;
+      # Max fills each conversation's view; the broker owns the directories.
+      chatViews = "${cfg.mediaDirectory}/views";
+      # Each backend adopts only its own effective template. A browser package
+      # change must not invalidate unrelated, running command sandboxes.
+      generations =
+        lib.optionalAttrs cfg.sandbox.enable { sandbox = instancePolicy "sandbox"; }
+        // lib.optionalAttrs cfg.browser.enable { browser = instancePolicy "browser"; };
+      # The key the broker logs into every sandbox VM with; the public half
+      # reaches each guest through its meta share.
+      sshKey = "${runtime.stateDirectory}/ssh/id_ed25519";
+      # Operations sandboxes reach the maxops namespace through this bridge.
+      operationsBridge = "max-ops-sb";
+      operationsGateway = "10.233.0.1";
+      commands = {
+        systemctl = "${config.systemd.package}/bin/systemctl";
+        systemd-run = "${config.systemd.package}/bin/systemd-run";
+        ssh = "${pkgs.openssh}/bin/ssh";
+        ssh-proxy = "${config.systemd.package}/lib/systemd/systemd-ssh-proxy";
+        ip = "${pkgs.iproute2}/bin/ip";
+        bridge = "${pkgs.iproute2}/bin/bridge";
+        nix = "${pkgs.nix}/bin/nix";
+        mount = "${pkgs.util-linux}/bin/mount";
+      };
+    }
   );
   client = cfg.package;
-  guestInit = pkgs.writeScript "max-sandbox-init" ''
-    #!${pkgs.runtimeShell} -e
-    trap 'exit 0' SIGRTMIN+3
-    umask 0022
-    set +e
-    source ${cfg.sandbox.package}/init
+  runner = cfg.sandbox.package;
+  # Runs inside the sandbox's namespace before the VM: the guest's tap,
+  # masqueraded onto the namespace's eth0, so the host's egress policy sees
+  # the namespace's own address.
+  vmNetwork = pkgs.writeShellScript "max-sandbox-vm-network" ''
+    set -eu
+    ip link del vm0 2>/dev/null || true
+    ip tuntap add name vm0 mode tap $(cat ${runner}/share/microvm/tap-flags)
+    ip address add 10.0.2.1/30 dev vm0
+    ip link set vm0 up
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+    nft -f - <<EOF
+    table ip max-vm
+    delete table ip max-vm
+    table ip max-vm {
+      chain forward {
+        type filter hook forward priority filter; policy drop;
+        iifname "vm0" oifname "eth0" accept
+        iifname "eth0" oifname "vm0" ct state established,related accept
+      }
+      chain input {
+        type filter hook input priority filter; policy accept;
+        iifname "vm0" ct state established,related accept
+        iifname "vm0" drop
+      }
+      chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname "eth0" masquerade
+      }
+    }
+    EOF
   '';
 in
 {
+  imports = [
+    (lib.mkRemovedOptionModule [
+      "services"
+      "max"
+      "sandbox"
+      "renderDevice"
+    ] "Sandboxes are VMs now and cannot share the host's render node.")
+  ];
+
   options.services.max = {
     runtime.stateDirectory = lib.mkOption {
       type = lib.types.str;
@@ -90,7 +126,22 @@ in
       };
       package = lib.mkOption {
         type = lib.types.package;
-        description = "Prebuilt container-mode NixOS system closure.";
+        description = "microvm.nix runner (config.microvm.declaredRunner) of the sandbox guest.";
+      };
+      memory = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 4096;
+        description = "Guest RAM in MiB. Pages are allocated on use and freed pages return to the host.";
+      };
+      cpus = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 2;
+        description = "Guest vCPUs; the VM's CPU quota matches.";
+      };
+      diskSize = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 32;
+        description = "Size in GiB of each sandbox's sparse disk, which holds its writable Nix store.";
       };
       extraModules = lib.mkOption {
         type = lib.types.listOf lib.types.deferredModule;
@@ -109,27 +160,15 @@ in
         ];
         description = "Public DNS servers reachable through the sandbox egress policy.";
       };
-      renderDevice = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        example = "/dev/dri/renderD128";
-        description = ''
-          DRM render node shared with every command sandbox, for VA-API and
-          Vulkan tools such as `ffmpeg -hwaccel vaapi`. The node and the host's
-          /run/opengl-driver are bound into each container, and each command
-          unit gets the node back inside its private /dev. Sandboxes run
-          untrusted commands, so this also exposes the host GPU driver to them.
-          Changing it recreates sandboxes around their work volumes on next use.
-        '';
-      };
       data = lib.mkOption {
         type = lib.types.attrsOf lib.types.path;
         default = { };
         example = lib.literalExpression ''{ destiny = ./data/destiny-guides; }'';
         description = ''
-          Read-only reference data bound into every command sandbox at
-          /data/<name>. Use content-addressed store paths: a changed path
-          recreates sandboxes around their work volumes on next use.
+          Reference data at /data/<name> in every command sandbox, a link into
+          the host store the guest already shares read-only. Use store paths:
+          a changed path rebuilds the guest, and sandboxes restart around their
+          volumes on next use.
         '';
       };
     };
@@ -147,7 +186,6 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    boot.enableContainers = lib.mkIf cfg.sandbox.enable true;
     systemd.targets.max-stack = {
       description = "Max application stack";
       wantedBy = [ "multi-user.target" ];
@@ -200,6 +238,12 @@ in
       ]
       ++ lib.optional cfg.sandbox.enable "max-sandbox-network.service";
       serviceConfig = {
+        ExecStartPre = pkgs.writeShellScript "max-runtime-ssh-key" ''
+          set -eu
+          mkdir -p -m 0700 ${runtime.stateDirectory}/ssh
+          test -s ${runtime.stateDirectory}/ssh/id_ed25519 || \
+            ${pkgs.openssh}/bin/ssh-keygen -q -t ed25519 -N "" -C max-runtime -f ${runtime.stateDirectory}/ssh/id_ed25519
+        '';
         ExecStart = "${cfg.package}/bin/max-runtime --serve ${brokerConfig}";
         User = "root";
         Slice = "max.slice";
@@ -216,70 +260,81 @@ in
           "AF_INET"
           "AF_INET6"
           "AF_NETLINK"
+          # systemd-ssh-proxy reaches sandbox VMs over vsock.
+          "AF_VSOCK"
         ];
       };
     };
 
+    # The host's sizing and reference data, applied to the guest build.
+    services.max.sandbox.extraModules = [
+      {
+        microvm.mem = cfg.sandbox.memory;
+        microvm.vcpu = cfg.sandbox.cpus;
+        maxSandbox.diskSize = cfg.sandbox.diskSize * 1024;
+        # Store paths, which the guest already sees through its store share.
+        systemd.tmpfiles.rules = lib.mapAttrsToList (
+          name: path: "L+ /data/${name} - - - - ${path}"
+        ) cfg.sandbox.data;
+      }
+    ];
+
+    # Both units start in the per-boot directory the broker prepares, where
+    # the runner's relative share sources, sockets and volume resolve.
+    systemd.services."max-sandbox-virtiofsd@" = lib.mkIf cfg.sandbox.enable {
+      description = "Max sandbox VM %i file shares";
+      partOf = [ "max-sandbox@%i.service" ];
+      before = [ "max-sandbox@%i.service" ];
+      restartIfChanged = false;
+      serviceConfig = {
+        # microvm.nix's supervisor notifies once every virtiofsd runs.
+        Type = "notify";
+        NotifyAccess = "all";
+        Slice = "max-sandbox.slice";
+        WorkingDirectory = "${runtime.stateDirectory}/roots/max-sb-%i";
+        ExecStart = "${runner}/bin/virtiofsd-run";
+        KillMode = "mixed";
+        TimeoutStopSec = 15;
+        Restart = "no";
+      };
+    };
+
     systemd.services."max-sandbox@" = lib.mkIf cfg.sandbox.enable {
-      description = "Max NixOS sandbox %i";
+      description = "Max sandbox VM %i";
       partOf = [ "max-stack.target" ];
+      bindsTo = [ "max-sandbox-virtiofsd@%i.service" ];
       requires = [ "max-sandbox-network.service" ];
       after = [
         "max-sandbox-network.service"
+        "max-sandbox-virtiofsd@%i.service"
       ]
       ++ lib.optionals cfg.operations.enable [
         "max-ops-network.service"
         "max-ops-tailscaled.service"
       ];
       restartIfChanged = false;
+      path = [
+        pkgs.iproute2
+        pkgs.nftables
+      ];
       serviceConfig = {
+        # The runner relays the guest's readiness from its vsock.
         Type = "notify";
         NotifyAccess = "all";
-        Delegate = true;
         Slice = "max-sandbox.slice";
-        # Join before nspawn creates its user namespace. A later setns into a
-        # host-owned netns would fail after losing capabilities in the parent.
         NetworkNamespacePath = "/run/netns/max-sb-%i";
-        ExecStart = lib.concatStringsSep " " (
-          [
-            "${config.systemd.package}/bin/systemd-nspawn"
-            "--keep-unit"
-            "--register=yes"
-            "--notify-ready=yes"
-            "--kill-signal=SIGRTMIN+3"
-            "--machine=max-sandbox-%i"
-            "--directory=${runtime.stateDirectory}/roots/max-sb-%i"
-            "--private-users=pick"
-            "--private-users-ownership=auto"
-            # The broker supplies DNS reachable from the private network namespace.
-            "--resolv-conf=off"
-            # Store files are world-readable and immutable. No ownership mapping
-            # is needed here, and omitting it also supports VM/9p-backed stores.
-            "--bind-ro=/nix/store:/nix/store"
-            "--bind=${runtime.stateDirectory}/volumes/max-sb-%i-data/work:/work:idmap"
-            # The conversation's view, through a broker-owned link in the volume.
-            "--bind-ro=${runtime.stateDirectory}/volumes/max-sb-%i-data/chat:/chat"
-          ]
-          ++ lib.mapAttrsToList (name: path: "--bind-ro=${path}:/data/${name}") cfg.sandbox.data
-          ++ lib.optionals (cfg.sandbox.renderDevice != null) [
-            # Render nodes are world-accessible, so the user namespace needs no
-            # mapping; the driver link must match the host's kernel driver.
-            "--bind=${cfg.sandbox.renderDevice}"
-            "--bind-ro=/run/opengl-driver"
-          ]
-          ++ [
-            "--tmpfs=/tmp:mode=1777,size=512M"
-            "--tmpfs=/home/sandbox:mode=0700,uid=1000,gid=1000,size=256M"
-            (toString guestInit)
-          ]
-        );
+        WorkingDirectory = "${runtime.stateDirectory}/roots/max-sb-%i";
+        ExecStartPre = "${vmNetwork}";
+        ExecStart = "${runner}/bin/microvm-run";
+        ExecStop = "${runner}/bin/microvm-shutdown";
         KillMode = "mixed";
-        TimeoutStartSec = 90;
+        TimeoutStartSec = 120;
         TimeoutStopSec = 30;
-        MemoryMax = "4G";
+        # Guest RAM plus cloud-hypervisor's own.
+        MemoryMax = "${toString (cfg.sandbox.memory + 512)}M";
         MemorySwapMax = 0;
-        CPUQuota = "200%";
-        TasksMax = 512;
+        CPUQuota = "${toString (cfg.sandbox.cpus * 100)}%";
+        TasksMax = 1024;
         Restart = "no";
       };
     };

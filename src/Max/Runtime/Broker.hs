@@ -16,7 +16,6 @@ import Data.Aeson
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
-import Data.Either (fromRight)
 import Data.Int (Int64)
 import Data.List (sort)
 import Data.Map.Strict qualified as Map
@@ -68,9 +67,12 @@ data Configuration = Configuration
     -- | Root of the per-conversation /chat views. Max populates each view with
     -- hardlinks into its object store; the broker owns the directories.
     chatViews :: FilePath,
-    -- | DRM render node bound into every sandbox container. Command units
-    -- keep PrivateDevices and get only this node back.
-    renderDevice :: Maybe FilePath
+    -- | Private key the broker logs into sandbox VMs with; the guest gets
+    -- the public half in its meta share.
+    sshKey :: FilePath,
+    -- | Bridge inside the maxops namespace that operations sandboxes join.
+    operationsBridge :: String,
+    operationsGateway :: String
   }
   deriving stock (Generic)
   deriving anyclass (FromJSON)
@@ -144,18 +146,10 @@ networkCurrent broker name
   | name.instanceKind /= SandboxRuntime = pure True
   | instanceNetwork broker name /= "maxops" = pure True
   | otherwise = do
-      let (namespace, _, _) = networkNames name
-      state <- unitState broker name
-      result <- try @IOException $ do
-        expected <- Posix.getFileStatus "/run/netns/maxops"
-        actual <- Posix.getFileStatus ("/run/netns/" <> namespace)
-        running <-
-          if field "ActiveState" state == "active"
-            then Just <$> Posix.getFileStatus ("/proc/" <> T.unpack (field "MainPID" state) <> "/ns/net")
-            else pure Nothing
-        let same status = Posix.deviceID expected == Posix.deviceID status && Posix.fileID expected == Posix.fileID status
-        pure (same actual && maybe True same running)
-      pure (fromRight False result)
+      -- Recreating maxops destroys the bridge port, and the sandbox with it.
+      let (_, interface, _) = networkNames name
+      (code, _, _) <- control broker "ip" ["-n", "maxops", "link", "show", "dev", interface] 45 1048576
+      pure (code == 0)
 
 decodeOutput :: BS.ByteString -> Text
 decodeOutput = TE.decodeUtf8With lenientDecode
@@ -300,28 +294,44 @@ reserveAddress broker name = withMVar broker.addresses $ \_ -> do
     value : _ -> pure value
     [] -> failure 125 "sandbox address pool exhausted"
   generation <- instanceGeneration broker name
-  let record = Metadata name.fullName generation sandboxPolicyVersion (Just address) Nothing (Just "max-sandbox")
+  let record = Metadata name.fullName generation sandboxPolicyVersion (Just address) Nothing (Just (instanceNetwork broker name))
   saveMetadata broker name record
   pure record
 
+-- | The sandbox's own namespace with eth0 at @address@. Ordinary sandboxes
+-- join the host's isolated sandbox bridge; operations sandboxes join a bridge
+-- inside the shared maxops namespace, at the same host part of 10.233/16.
 prepareNetwork :: Broker -> InstanceName -> String -> IO ()
 prepareNetwork broker name address = do
   let (namespace, interface, peer) = networkNames name
       ip arguments = void (controlOK broker "ip" arguments 45)
       optional arguments = void (control broker "ip" arguments 45 1048576)
+      operations = instanceNetwork broker name == "maxops"
+      hostPart = drop 2 (T.splitOn "." (T.pack address))
+      (local, gateway)
+        | operations = (T.unpack (T.intercalate "." ("10" : "233" : hostPart)), broker.configuration.operationsGateway)
+        | otherwise = (address, broker.configuration.gateway)
   optional ["netns", "del", namespace]
   optional ["link", "del", interface]
+  optional ["-n", "maxops", "link", "del", interface]
   ip ["netns", "add", namespace]
   ip ["link", "add", interface, "type", "veth", "peer", "name", peer]
   ip ["link", "set", peer, "netns", namespace]
-  ip ["link", "set", interface, "master", broker.configuration.bridge]
-  void (controlOK broker "bridge" ["link", "set", "dev", interface, "isolated", "on"] 45)
-  ip ["link", "set", interface, "up"]
+  if operations
+    then do
+      ip ["link", "set", interface, "netns", "maxops"]
+      ip ["-n", "maxops", "link", "set", interface, "master", broker.configuration.operationsBridge]
+      void (controlOK broker "bridge" ["-n", "maxops", "link", "set", "dev", interface, "isolated", "on"] 45)
+      ip ["-n", "maxops", "link", "set", interface, "up"]
+    else do
+      ip ["link", "set", interface, "master", broker.configuration.bridge]
+      void (controlOK broker "bridge" ["link", "set", "dev", interface, "isolated", "on"] 45)
+      ip ["link", "set", interface, "up"]
   ip ["-n", namespace, "link", "set", peer, "name", "eth0"]
   ip ["-n", namespace, "link", "set", "lo", "up"]
-  ip ["-n", namespace, "addr", "add", address <> "/16", "dev", "eth0"]
+  ip ["-n", namespace, "addr", "add", local <> "/16", "dev", "eth0"]
   ip ["-n", namespace, "link", "set", "eth0", "up"]
-  ip ["-n", namespace, "route", "add", "default", "via", broker.configuration.gateway]
+  ip ["-n", namespace, "route", "add", "default", "via", gateway]
 
 stopInstance :: Broker -> InstanceName -> IO ()
 stopInstance broker name = do
@@ -335,6 +345,7 @@ stopInstance broker name = do
     let (namespace, interface, _) = networkNames name
     void (control broker "ip" ["netns", "del", namespace] 45 1048576)
     void (control broker "ip" ["link", "del", interface] 45 1048576)
+    void (control broker "ip" ["-n", "maxops", "link", "del", interface] 45 1048576)
   -- /work is outside the expendable root. Never remove its data on stop.
   ignoreMissing (removePathForcibly (rootPath broker name))
   ignoreMissing (removeFile (metadataPath broker name))
@@ -364,30 +375,25 @@ startInstance broker name = withInstance broker name $ do
         Posix.setOwnerAndGroup work 1000 1000
         -- The unit binds this link, so its target must exist before every start.
         prepareChatView broker name volume
-        forM_ ["", "etc", "usr", "usr/bin", "var", "run", "work", "chat", "nix", "nix/store"] $ \directory -> do
-          createDirectoryIfMissing True (root </> directory)
-          Posix.setFileMode (root </> directory) 0o755
-        forM_ ["etc/os-release", "etc/machine-id"] $ \file -> do
-          BS.writeFile (root </> file) ""
-          Posix.setFileMode (root </> file) 0o644
-        let nameservers = if instanceNetwork broker name == "maxops" then broker.configuration.operationsDns else broker.configuration.dns
-        TIO.writeFile (root </> "etc/resolv.conf") (T.unlines (map ("nameserver " <>) nameservers))
-        Posix.setFileMode (root </> "etc/resolv.conf") 0o644
-        if instanceNetwork broker name == "maxops"
-          then do
-            void (controlOK broker "systemctl" ["start", "max-ops-network.service", "max-ops-tailscaled.service"] 120)
-            let (namespace, _, _) = networkNames name
-                target = "/run/netns/" <> namespace
-            -- This is a private alias; deleting it never deletes the shared netns.
-            BS.writeFile target ""
-            void (controlOK broker "mount" ["--bind", "/run/netns/maxops", target] 45)
-            let record = Metadata name.fullName generation sandboxPolicyVersion Nothing Nothing (Just "maxops")
-            saveMetadata broker name record
-            pure record
-          else do
-            record <- reserveAddress broker name
-            forM_ record.address (prepareNetwork broker name)
-            pure record
+        -- The per-boot directory both units start in: the runner's relative
+        -- share sources, its disk and the guest's meta share. Stop removes it.
+        createDirectoryIfMissing True root
+        Posix.setFileMode root 0o700
+        forM_ ["work", "chat", "nix.img"] $ \entry ->
+          Posix.createSymbolicLink (volume </> entry) (root </> entry)
+        let meta = root </> "meta"
+            nameservers = if instanceNetwork broker name == "maxops" then broker.configuration.operationsDns else broker.configuration.dns
+        createDirectory meta
+        Posix.setFileMode meta 0o755
+        publicKey <- BS.readFile (broker.configuration.sshKey <.> "pub")
+        BS.writeFile (meta </> "authorized_keys") publicKey
+        TIO.writeFile (meta </> "dns") (T.unwords nameservers)
+        forM_ ["authorized_keys", "dns"] $ \file -> Posix.setFileMode (meta </> file) 0o644
+        when (instanceNetwork broker name == "maxops") $
+          void (controlOK broker "systemctl" ["start", "max-ops-network.service", "max-ops-tailscaled.service"] 120)
+        record <- reserveAddress broker name
+        forM_ record.address (prepareNetwork broker name)
+        pure record
     void (controlOK broker "systemctl" ["start", instanceUnit name] 120)
     started <- unitState broker name
     unless (field "ActiveState" started == "active") (failure 125 "instance did not become active")
@@ -398,10 +404,11 @@ instanceNames broker = do
   files <- sort <$> listDirectory (broker.configuration.stateDirectory </> "instances")
   forM [file | file <- files, takeExtension file == ".json"] $ checkedName Nothing . T.pack . dropExtension
 
--- The Unix socket is also the cancellation lease. Closing it stops the guest
--- transient unit, rather than merely terminating the systemd-run client.
-execute :: Broker -> Socket.Socket -> (Handle, Handle, Handle) -> [String] -> Int -> Maybe (String, String) -> IO Int
-execute broker socket streams command seconds guest = withCopies streams $ \(input, output, errors) -> case command of
+-- The Unix socket is also the cancellation lease. Closing it runs the cancel
+-- helper, which stops the guest's transient unit rather than merely
+-- terminating the client that started it.
+execute :: Broker -> Socket.Socket -> (Handle, Handle, Handle) -> [String] -> Int -> Maybe (Text, [String]) -> IO Int
+execute broker socket streams command seconds cancelWith = withCopies streams $ \(input, output, errors) -> case command of
   [] -> failure 125 "empty broker command"
   executable : arguments -> withCreateProcess
     (proc executable arguments)
@@ -412,8 +419,8 @@ execute broker socket streams command seconds guest = withCopies streams $ \(inp
       }
     $ \_ _ _ process -> do
       let cancel = do
-            forM_ guest $ \(machine, unit) ->
-              void (trySyncIO (control broker "systemctl" ["--machine=" <> machine, "stop", unit] 15 1048576))
+            forM_ cancelWith $ \(helper, helperArguments) ->
+              void (trySyncIO (control broker helper helperArguments 15 1048576))
             killProcessTree process
           run = do
             completed <- timeout (seconds * 1000000) (race (waitForProcess process) (SocketIO.recv socket 1))
@@ -439,14 +446,13 @@ guestExec broker name arguments socket handles = do
   validNetwork <- networkCurrent broker name
   require (record.generation == generation && record.network == Just (instanceNetwork broker name) && validNetwork) "sandbox policy changed; recreate the sandbox around its existing work volume"
   identifier <- UUID.toString <$> UUID.nextRandom
+  login <- guestShell broker name
   let unit = "max-exec-" <> identifier <> ".service"
-      machine = instanceMachine name
+      -- Commands run as the VM's root. The unit gives each one a lifetime
+      -- bound and a name the cancel path can stop.
       command =
-        [ tool broker "systemd-run",
-          "--machine=" <> machine,
+        [ "/run/current-system/sw/bin/systemd-run",
           "--unit=" <> unit,
-          "--uid=sandbox",
-          "--gid=sandbox",
           "--working-directory=/work",
           "--pipe",
           "--wait",
@@ -455,24 +461,50 @@ guestExec broker name arguments socket handles = do
           "--service-type=exec",
           "--property=RuntimeMaxSec=3600",
           "--property=TimeoutStopSec=5",
-          "--property=NoNewPrivileges=yes",
-          "--property=CapabilityBoundingSet=",
-          "--property=ProtectSystem=strict",
-          "--property=ReadWritePaths=/work /tmp /home/sandbox",
-          "--property=PrivateDevices=yes",
-          "--property=RestrictSUIDSGID=yes",
-          "--property=RestrictNamespaces=yes",
-          "--property=ProtectControlGroups=yes"
+          "--setenv=HOME=/root",
+          "--setenv=PATH=/run/wrappers/bin:/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin",
+          "--",
+          "/run/current-system/sw/bin/env",
+          "--"
         ]
-          <> concat [["--property=BindPaths=" <> device, "--property=DeviceAllow=" <> device <> " rw"] | Just device <- [broker.configuration.renderDevice]]
-          <> [ "--setenv=HOME=/home/sandbox",
-               "--setenv=PATH=/run/current-system/sw/bin:/bin",
-               "--",
-               "/run/current-system/sw/bin/env",
-               "--"
-             ]
           <> map T.unpack arguments
-  execute broker socket handles command 3660 (Just (machine, unit))
+      cancel = login <> [remoteCommand ["/run/current-system/sw/bin/systemctl", "stop", unit]]
+  execute broker socket handles (tool broker "ssh" : login <> [remoteCommand command]) 3660 (Just ("ssh", cancel))
+  where
+    -- ssh joins its arguments into one line for the guest's login shell.
+    remoteCommand = T.unpack . T.unwords . map (shellQuote . T.pack)
+
+-- | ssh arguments, up to the remote command, that reach the running VM: its
+-- sshd on vsock port 22 through cloud-hypervisor's hybrid vsock socket, which
+-- systemd-ssh-proxy speaks as vsock-mux.
+guestShell :: Broker -> InstanceName -> IO [String]
+guestShell broker name = do
+  let socket = rootPath broker name </> "notify.vsock"
+  ready <- Posix.fileExist socket
+  unless ready (failure 125 "sandbox VM has no vsock socket")
+  pure
+    [ "-F",
+      "none",
+      "-i",
+      broker.configuration.sshKey,
+      "-o",
+      "StrictHostKeyChecking=no",
+      "-o",
+      "UserKnownHostsFile=/dev/null",
+      "-o",
+      "LogLevel=ERROR",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ConnectTimeout=15",
+      "-o",
+      "ProxyCommand=" <> tool broker "ssh-proxy" <> " %h %p",
+      "-o",
+      "ProxyUseFdpass=yes",
+      "-T",
+      "root@vsock-mux" <> socket,
+      "--"
+    ]
 
 browserPort :: Broker -> InstanceName -> IO Int
 browserPort broker name = do
@@ -653,7 +685,7 @@ runRuntimeBroker path = do
   unless (uid == 0) (failure 77 "runtime broker must run as root")
   configuration <- BS.readFile path >>= either (failure 125 . T.pack) pure . eitherDecodeStrict'
   require (configuration.subnet == "10.231.0.0/16" && configuration.gateway == "10.231.0.1") "unsupported sandbox address pool"
-  forM_ ["systemctl", "systemd-run", "ip", "bridge", "nix", "mount"] $ \command ->
+  forM_ ["systemctl", "systemd-run", "ssh", "ssh-proxy", "ip", "bridge", "nix", "mount"] $ \command ->
     require (maybe False (T.isPrefixOf "/nix/store/" . T.pack) (Map.lookup command configuration.commands)) "broker executables must be store paths"
   account <- getUserEntryForName configuration.user
   locks <- newMVar Map.empty
