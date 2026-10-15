@@ -16,11 +16,16 @@ namespace's eth0. `max-sandbox-virtiofsd@` serves its four virtiofs shares:
 the host store and `/chat` and a `meta` directory read-only (enforced by
 virtiofsd), and `/work` with guest root translated to uid 1000. The guest's
 writable store overlay, Nix database and profiles live on its own disk,
-`volumes/<name>-data/nix.img`. Both units start in `roots/<name>`, which the
+`volumes/<name>-data/nix.img`, which grows to `sandbox.diskSize` at boot. VMs
+default to 4 vCPUs and 8 GiB. The VM unit starts alongside the share daemons
+(cloud-hypervisor retries their sockets) and is ready once the guest's
+`max-sandbox-ready` reports that commands can run, about 4.5s after start.
+Loading the sandbox skill starts the VM in the background. Both units start in `roots/<name>`, which the
 broker prepares on each start with links to the volume and the meta files
 (resolvers and the broker's SSH public key). The broker runs commands as the
 VM's root over SSH through the hybrid vsock socket `roots/<name>/notify.vsock`
-(systemd-ssh-proxy's `vsock-mux/`), each in a bounded transient guest unit. Each command gets its own transient unit, timeout and output streams. Independent
+(systemd-ssh-proxy's `vsock-mux/`), multiplexed over one persistent connection
+(`roots/<name>/ssh.mux`), each in a bounded transient guest unit. Each command gets its own transient unit, timeout and output streams. Independent
 commands and tasks can share one sandbox concurrently; disconnecting one client
 stops only its own guest command unit. Deletion and policy replacement close
 admission and wait for active users. Callers coordinate shared files and ports;

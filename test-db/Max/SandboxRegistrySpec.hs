@@ -74,6 +74,18 @@ spec pool = before_ (truncateAll pool) $ describe "concurrent sandbox registry" 
       fmap (.erStdout) used `shouldBe` Right "used"
       calls >>= (`shouldBe` "remove max-sb-42-s1\ncreate max-sb-42-s1\n")
 
+  it "prewarms a parked sandbox in the background, so the first command finds it running" $
+    fixtureFor pool "now()+interval '14 days'-interval '3 hours'" (const (pure ())) $ \registry directory -> do
+      let calls = readFile (directory </> "calls")
+          started = do
+            logged <- calls
+            unless ("create" `elem` map (take 6) (lines logged)) (threadDelay 10000 >> started)
+      prewarmSandbox registry (GroupId 42)
+      timeout 3000000 started `shouldReturn` Just ()
+      used <- execInSandbox registry (GroupId 42) (SandboxId "s1") [] "printf used" 5
+      fmap (.erStdout) used `shouldBe` Right "used"
+      calls >>= (`shouldBe` "remove max-sb-42-s1\ncreate max-sb-42-s1\n")
+
 waitForFile :: FilePath -> IO ()
 waitForFile path = do
   exists <- doesFileExist path

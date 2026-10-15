@@ -11,6 +11,7 @@ module Max.Toolset
   )
 where
 
+import Control.Monad (when)
 import Data.Aeson (object, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, isNothing)
@@ -68,6 +69,7 @@ import Max.Monitor.ToolRuntime
   )
 import Max.Pin.ToolRuntime (pinToolsWithDatabase)
 import Max.Platform.Types (noAdvertisedCaps)
+import Max.Sandbox.Registry (prewarmSandbox)
 import Max.Sandbox.Runtime (networkForGroup)
 import Max.Sandbox.ToolRuntime (sandboxToolsWithRuntime)
 import Max.Search.Runtime (searchToolsWithRuntime)
@@ -154,7 +156,12 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
         _ -> Left "当前群未开启 SSH 运维网络"
     prepareSkill "codemode" =
       pure (Right (Just (object ["availability" .= object ["tools" .= (["run_code"] :: [Text]), "unavailable" .= ([] :: [Text])]])))
-    prepareSkill name =
+    prepareSkill "sandbox" = do
+      -- Operations loads this too, so both start booting the VM here.
+      when ("sandbox_exec" `Set.member` allowedRefs) (prewarmSandbox env.beSandboxes (toolGroupId dc))
+      bundleAvailability "sandbox"
+    prepareSkill name = bundleAvailability name
+    bundleAvailability name =
       pure
         ( Right
             ( Just

@@ -19,6 +19,7 @@ module Max.Sandbox.Registry
     -- * Operations
     createSandbox,
     ensureSandbox,
+    prewarmSandbox,
     listSandboxesForGroup,
     listSandbox,
     execInSandbox,
@@ -33,7 +34,9 @@ module Max.Sandbox.Registry
   )
 where
 
+import Control.Concurrent (forkIO)
 import Control.Concurrent.STM
+import Control.Exception (SomeException, try)
 import Control.Monad (void, when)
 import Data.ByteString qualified as BS
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
@@ -311,6 +314,14 @@ ensureSandbox reg gid =
         current >>= maybe (createSandbox reg gid defaultCreateOpts) (pure . Right)
   where
     current = listToMaybe . sortOn (.seId) <$> listSandboxesForGroup reg gid
+
+-- | Start the group's sandbox in the background, so its VM boots while the
+-- model writes the first command, which then waits only for what remains.
+-- Failures resurface on that command.
+prewarmSandbox :: SandboxRegistry -> GroupId -> IO ()
+prewarmSandbox reg gid =
+  void . forkIO . void . try @SomeException $
+    ensureSandbox reg gid >>= mapM_ (prepareEntry reg gid)
 
 --------------------------------------------------------------------------------
 -- Lookup.

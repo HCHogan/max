@@ -501,6 +501,15 @@ guestShell broker name = do
       "ProxyCommand=" <> tool broker "ssh-proxy" <> " %h %p",
       "-o",
       "ProxyUseFdpass=yes",
+      -- Later commands reuse one connection instead of a fresh handshake and
+      -- sshd each (~190ms). The master detaches from the command's process
+      -- group and exits with the VM.
+      "-o",
+      "ControlMaster=auto",
+      "-o",
+      "ControlPath=" <> rootPath broker name </> "ssh.mux",
+      "-o",
+      "ControlPersist=600",
       "-T",
       "root@vsock-mux" <> socket,
       "--"

@@ -101,6 +101,15 @@ let
     }
     EOF
   '';
+  # The runner creates missing images at the configured size; existing ones
+  # grow here and the guest resizes its file system online.
+  growDisk = pkgs.writeShellScript "max-sandbox-grow-disk" ''
+    set -eu
+    size=${toString (cfg.sandbox.diskSize * 1024 * 1024 * 1024)}
+    if [ -e nix.img ] && [ "$(${pkgs.coreutils}/bin/stat -L -c %s nix.img)" -lt "$size" ]; then
+      ${pkgs.coreutils}/bin/truncate -s "$size" nix.img
+    fi
+  '';
 in
 {
   imports = [
@@ -130,18 +139,18 @@ in
       };
       memory = lib.mkOption {
         type = lib.types.ints.positive;
-        default = 4096;
+        default = 8192;
         description = "Guest RAM in MiB. Pages are allocated on use and freed pages return to the host.";
       };
       cpus = lib.mkOption {
         type = lib.types.ints.positive;
-        default = 2;
+        default = 4;
         description = "Guest vCPUs; the VM's CPU quota matches.";
       };
       diskSize = lib.mkOption {
         type = lib.types.ints.positive;
-        default = 32;
-        description = "Size in GiB of each sandbox's sparse disk, which holds its writable Nix store.";
+        default = 128;
+        description = "Size in GiB of each sandbox's sparse disk, which holds its writable Nix store. Existing disks grow to it at their next boot.";
       };
       extraModules = lib.mkOption {
         type = lib.types.listOf lib.types.deferredModule;
@@ -287,13 +296,15 @@ in
       before = [ "max-sandbox@%i.service" ];
       restartIfChanged = false;
       serviceConfig = {
-        # microvm.nix's supervisor notifies once every virtiofsd runs.
-        Type = "notify";
-        NotifyAccess = "all";
+        # cloud-hypervisor retries its share sockets until they appear, so the
+        # VM starts alongside instead of after microvm.nix's supervisor, which
+        # takes 2s to report the daemons running.
+        Type = "exec";
         Slice = "max-sandbox.slice";
         WorkingDirectory = "${runtime.stateDirectory}/roots/max-sb-%i";
         ExecStart = "${runner}/bin/virtiofsd-run";
-        KillMode = "mixed";
+        # The supervisor alone waits seconds for its listener to exit.
+        KillMode = "control-group";
         TimeoutStopSec = 15;
         Restart = "no";
       };
@@ -324,7 +335,10 @@ in
         Slice = "max-sandbox.slice";
         NetworkNamespacePath = "/run/netns/max-sb-%i";
         WorkingDirectory = "${runtime.stateDirectory}/roots/max-sb-%i";
-        ExecStartPre = "${vmNetwork}";
+        ExecStartPre = [
+          "${growDisk}"
+          "${vmNetwork}"
+        ];
         ExecStart = "${runner}/bin/microvm-run";
         ExecStop = "${runner}/bin/microvm-shutdown";
         KillMode = "mixed";
