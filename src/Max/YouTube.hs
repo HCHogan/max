@@ -28,7 +28,7 @@ import Data.Char (isAlphaNum, isSpace, ord, toLower)
 import Data.Foldable (asum)
 import Data.Int (Int64)
 import Data.List (findIndex, sortOn)
-import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
@@ -250,7 +250,7 @@ parseTranscript v = case parseEither events v of
   where
     events = withObject "timedtext" $ \o -> do
       es <- o .:? "events" .!= []
-      mapMaybe id <$> traverse cue es
+      catMaybes <$> traverse cue es
     cue = withObject "event" $ \e -> do
       start <- e .:? "tStartMs" .!= 0
       segs <- e .:? "segs" .!= []

@@ -36,7 +36,8 @@ import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust, mapMaybe)
+import Data.Either (fromRight)
+import Data.Maybe (catMaybes, fromMaybe, isJust)
 import Data.Scientific (toBoundedInteger)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -185,7 +186,7 @@ decodeDevalue = \case
       _ -> Left "机器人列表的引用不是整数"
 
 parseBots :: Value -> Either Text [CheckpointBot]
-parseBots = first (("机器人列表格式变了：" <>) . T.pack) . parseEither (withArray "bots" (fmap (mapMaybe id) . traverse bot . toList))
+parseBots = first (("机器人列表格式变了：" <>) . T.pack) . parseEither (withArray "bots" (fmap catMaybes . traverse bot . toList))
   where
     bot :: Value -> Parser (Maybe CheckpointBot)
     bot = withObject "bot" $ \o -> do
@@ -193,9 +194,9 @@ parseBots = first (("机器人列表格式变了：" <>) . T.pack) . parseEither
       membership <- o .: "membershipId"
       parsed <-
         CheckpointBot name membership
-          <$> (fromMaybe 0 <$> o .:? "activityHash")
-          <*> (fromMaybe 0 <$> o .:? "encounter")
-          <*> (fromMaybe False <$> o .:? "premium")
+          <$> (o .:? "activityHash" .!= 0)
+          <*> (o .:? "encounter" .!= 0)
+          <*> (o .:? "premium" .!= False)
       -- The id becomes a Bungie path segment and the name a chat command.
       pure (parsed <$ guard (validId membership && T.length name <= 40 && T.all (\c -> c /= '\n' && c /= '\r') name))
     validId t = not (T.null t) && T.length t <= 20 && T.all isDigit t
@@ -231,10 +232,10 @@ parseActivityTable bundle = case T.breakOn "{0:{name:\"\"," bundle of
     entry = withObject "activity" $ \o ->
       CheckpointActivity
         <$> o .: "name"
-        <*> (fromMaybe 0 <$> o .:? "difficultyTier")
-        <*> (fromMaybe [] <$> o .:? "encounterList")
-        <*> (fromMaybe 0 <$> o .:? "fireteamSize")
-        <*> (fromMaybe 0 <$> o .:? "displayOrder")
+        <*> (o .:? "difficultyTier" .!= 0)
+        <*> (o .:? "encounterList" .!= [])
+        <*> (o .:? "fireteamSize" .!= 0)
+        <*> (o .:? "displayOrder" .!= 0)
 
 type JsParser = Parsec Void Text
 
@@ -311,7 +312,7 @@ checkpointReport names found =
       <> ["unverified" .= [object (describe bot <> ["error" .= err]) | (bot, err) <- failed] | not (null failed)]
       <> ["note" .= ("没读到网站的活动表，关卡名和队伍上限缺失（" <> err <> "）") | Left err <- [found.cpTable]]
   where
-    table = either (const Map.empty) id found.cpTable
+    table = fromRight Map.empty found.cpTable
     available = [(bot, n) | bot <- found.cpBots, Just (Right (Just n)) <- [Map.lookup bot.cbMembershipId found.cpParties]]
     failed = [(bot, err) | bot <- found.cpBots, Just (Left err) <- [Map.lookup bot.cbMembershipId found.cpParties]]
     order bot = maybe (maxBound, 0) (\a -> (a.caOrder, bot.cbEncounter)) (Map.lookup bot.cbActivity table)

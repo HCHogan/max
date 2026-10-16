@@ -157,7 +157,11 @@ registration, root commands over vsock, the pinned writable guest store,
 client-disconnect cancellation, package roots,
 public/private networking, durable work, legacy-volume refusal, target lifecycle,
 and real browser workspace acceptance. It needs KVM with nested
-virtualization. Fresh-DB tests and VM checks do not establish production health.
+virtualization. GitHub's hosted runners are VMs themselves, where a sandbox
+microVM inside the test VM does not finish booting, so CI only builds the
+`sandbox-network` and `operations` drivers. Run those two checks on a KVM host
+such as tank before deploying a runtime change. Fresh-DB tests and VM checks do
+not establish production health.
 
 Also exercise real public navigation on the destination host. During h610
 validation, domestic DNS returned a reserved Google IPv6 address and incorrect

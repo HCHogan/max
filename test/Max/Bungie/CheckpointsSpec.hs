@@ -5,6 +5,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.Either (isLeft)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Max.Bungie.Checkpoints
 import Test.Hspec
@@ -120,7 +121,7 @@ spec = describe "Max.Bungie.Checkpoints" $ do
       other -> expectationFailure (show other)
   where
     json :: LBS.ByteString -> Value
-    json raw = maybe (error "invalid fixture") id (decode raw)
+    json raw = fromMaybe (error "invalid fixture") (decode raw)
     rows o = case KeyMap.lookup "checkpoints" o of
       Just (Array xs) -> Just [r | Object r <- foldr (:) [] xs]
       _ -> Nothing
