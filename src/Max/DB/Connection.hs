@@ -16,7 +16,7 @@ import Data.ByteString.Char8 qualified as BSC
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, destroyResource, newPool, putResource, setNumStripes, takeResource)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL)
+import Database.PostgreSQL.Simple (Connection, close, connectPostgreSQL, execute_)
 import System.Timeout (timeout)
 
 data DbConfig = DbConfig
@@ -32,10 +32,19 @@ newDbPool cfg =
   newPool $
     setNumStripes (Just 1) $
       defaultPoolConfig
-        (connectPostgreSQL (BSC.pack (T.unpack cfg.url)))
+        connect
         close
         60.0
         cfg.maxConns
+  where
+    connect = do
+      conn <- connectPostgreSQL (BSC.pack (T.unpack cfg.url))
+      -- A caller that times out or is cancelled destroys its connection, but
+      -- the server only notices a closed client when it next writes to it, so
+      -- a long query would keep running and holding its locks.  Polling the
+      -- socket ends such a query within ten seconds of the disconnect.
+      _ <- execute_ conn "SET client_connection_check_interval = '10s'" `onException` close conn
+      pure conn
 
 closeDbPool :: DbPool -> IO ()
 closeDbPool = destroyAllResources

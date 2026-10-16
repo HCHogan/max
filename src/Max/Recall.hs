@@ -440,9 +440,15 @@ toHit now candidate =
       rhPermanent = candidate.rcPermanent
     }
 
+-- Both candidate queries keep their parameters in one 'input' row that every
+-- branch references.  PostgreSQL materializes a CTE referenced more than once,
+-- hiding the constants from the planner: since agent_messages joins
+-- message_projections, a large conversation was then estimated at two rows and
+-- the semantic search ran for hours in a nested loop.  NOT MATERIALIZED lets
+-- the planner fold the parameters in (one second on 34k embedded messages).
 lexicalCandidatesSql :: Query
 lexicalCandidatesSql =
-  "WITH input AS ( \
+  "WITH input AS NOT MATERIALIZED ( \
   \  SELECT ?::bigint AS conversation_id, ?::text AS query_text, ?::text[] AS query_terms, ?::int AS candidate_limit, ?::text[] AS kinds, ?::timestamptz AS from_time, ?::timestamptz AS until_time, ?::bigint AS sender \
   \), memory_candidates AS ( \
   \  SELECT 'memory'::text AS source, \
@@ -543,7 +549,7 @@ lexicalCandidatesSql =
 
 semanticCandidatesSql :: Query
 semanticCandidatesSql =
-  "WITH input AS ( \
+  "WITH input AS NOT MATERIALIZED ( \
   \  SELECT ?::bigint AS conversation_id, ?::text AS model_id, ?::int AS dimensions, \
   \         ?::vector AS query_vector, ?::int AS candidate_limit, ?::text[] AS kinds, ?::timestamptz AS from_time, ?::timestamptz AS until_time, ?::bigint AS sender \
   \), compatible_memories AS MATERIALIZED ( \
