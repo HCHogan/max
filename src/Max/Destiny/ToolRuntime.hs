@@ -23,6 +23,7 @@ import Effectful
 import Effectful.Log (Log, logInfo)
 import Effectful.PostgreSQL (WithConnection)
 import Max.Bungie.Account
+import Max.Bungie.Checkpoints (checkpointActivities, checkpointReport, fetchCheckpoints)
 import Max.Bungie.Api
 import Max.Bungie.Client
 import Max.Bungie.Definitions (kindAliases, resolveKind, unsignedHash)
@@ -37,7 +38,7 @@ import Max.Tools.Destiny (destinyToolsFor)
 
 destinyToolsWithRuntime :: (WithConnection :> es, Log :> es, IOE :> es) => BungieRuntime -> ToolContext -> [Tool es]
 destinyToolsWithRuntime runtime context =
-  map (hoistTool (runDestiny account readCall writeCall lookupCall searchCall itemsCall)) destinyToolsFor
+  map (hoistTool (runDestiny account readCall writeCall lookupCall searchCall itemsCall checkpointsCall)) destinyToolsFor
   where
     principal = toolAuthorPrincipalId context
 
@@ -160,6 +161,15 @@ destinyToolsWithRuntime runtime context =
                             "count" .= length rows,
                             "items" .= rows
                           ]
+
+    -- Public data only: the site's list and the bots' public profiles.
+    checkpointsCall =
+      liftIO (fetchCheckpoints runtime.brHttp runtime.brConfig runtime.brCheckpoints) >>= \case
+        Left err -> pure (Left err)
+        Right found -> do
+          (activities, _) <- lookupDefinitions runtime "DestinyActivityDefinition" (checkpointActivities found)
+          let names = Map.mapMaybe (\v -> case lookupPath ["name"] v of Just (String t) -> Just t; _ -> Nothing) activities
+          pure (Right (checkpointReport names found))
 
     searchCall rawKind term limit = case traverse resolveKind rawKind of
       Left err -> pure (Left err)

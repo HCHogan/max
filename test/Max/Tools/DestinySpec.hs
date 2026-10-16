@@ -103,3 +103,4 @@ spec = describe "Max.Tools.Destiny" $ do
         (\kind hashes -> pure (Right (object ["lookup" .= kind, "hashes" .= hashes])))
         (\_ term limit -> pure (Right (object ["search" .= term, "limit" .= limit])))
         (\kind -> pure (Right (object ["kind" .= kind, "items" .= ([] :: [Value])])))
+        (pure (Right (object ["checkpoints" .= ([] :: [Value])])))

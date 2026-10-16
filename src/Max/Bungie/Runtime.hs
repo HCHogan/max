@@ -10,6 +10,7 @@ where
 import Control.Concurrent.MVar (MVar, newMVar)
 import Data.Text (Text)
 import Max.Browser.Vault (BrowserVault)
+import Max.Bungie.Checkpoints (CheckpointCache, newCheckpointCache)
 import Max.Bungie.Types (BungieConfig)
 import Max.HttpRuntime (HttpRuntime)
 
@@ -24,12 +25,14 @@ data BungieRuntime = BungieRuntime
     -- concurrent refreshes would invalidate each other.
     brRefreshGate :: !(MVar ()),
     -- | Serializes item actions; Bungie throttles them per account.
-    brWriteGate :: !(MVar ())
+    brWriteGate :: !(MVar ()),
+    -- | d2checkpoint.com's activity table.
+    brCheckpoints :: !CheckpointCache
   }
 
 newBungieRuntime :: BungieConfig -> HttpRuntime -> BrowserVault -> Text -> IO BungieRuntime
 newBungieRuntime config http vault publicBase =
-  BungieRuntime config http vault (publicBase <> callbackPath) <$> newMVar () <*> newMVar ()
+  BungieRuntime config http vault (publicBase <> callbackPath) <$> newMVar () <*> newMVar () <*> newCheckpointCache
 
 -- | Served by the admin listener next to @/hooks/@; the reverse proxy must
 -- forward it without SSO.

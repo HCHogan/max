@@ -164,6 +164,7 @@ library
         Max.Bungie.Account
         Max.Bungie.Api
         Max.Bungie.Callback
+        Max.Bungie.Checkpoints
         Max.Bungie.Client
         Max.Bungie.Definitions
         Max.Bungie.Items
@@ -725,6 +726,7 @@ test-suite max-test
         Max.CliProxySpec
         Max.BilibiliSpec
         Max.Bungie.ApiSpec
+        Max.Bungie.CheckpointsSpec
         Max.Bungie.DefinitionsSpec
         Max.Bungie.ItemsSpec
         Max.Tools.DestinySpec

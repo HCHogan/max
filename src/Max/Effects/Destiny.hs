@@ -12,6 +12,7 @@ module Max.Effects.Destiny
     destinyLookup,
     destinySearch,
     destinyItems,
+    destinyCheckpoints,
     runDestiny,
   )
 where
@@ -44,6 +45,7 @@ data Destiny :: Effect where
   DestinyLookup :: Text -> [Int64] -> Destiny m (Either Text Value)
   DestinySearch :: Maybe Text -> Text -> Int -> Destiny m (Either Text Value)
   DestinyItems :: Text -> Destiny m (Either Text Value)
+  DestinyCheckpoints :: Destiny m (Either Text Value)
 
 type instance DispatchOf Destiny = Dynamic
 
@@ -68,6 +70,10 @@ destinySearch kind term limit = send (DestinySearch kind term limit)
 destinyItems :: (Destiny :> es) => Text -> Eff es (Either Text Value)
 destinyItems kind = send (DestinyItems kind)
 
+-- | d2checkpoint.com's bots that Bungie shows holding a checkpoint now.
+destinyCheckpoints :: (Destiny :> es) => Eff es (Either Text Value)
+destinyCheckpoints = send DestinyCheckpoints
+
 runDestiny ::
   Eff es Value ->
   (Text -> Value -> Maybe Value -> Bool -> Eff es (Either Text Value)) ->
@@ -75,12 +81,14 @@ runDestiny ::
   (Text -> [Int64] -> Eff es (Either Text Value)) ->
   (Maybe Text -> Text -> Int -> Eff es (Either Text Value)) ->
   (Text -> Eff es (Either Text Value)) ->
+  Eff es (Either Text Value) ->
   Eff (Destiny : es) a ->
   Eff es a
-runDestiny account readCall writeCall lookupCall searchCall itemsCall = interpret $ \_ -> \case
+runDestiny account readCall writeCall lookupCall searchCall itemsCall checkpointsCall = interpret $ \_ -> \case
   DestinyAccount -> account
   DestinyRead path query body fresh -> readCall path query body fresh
   DestinyWriteCall path body -> writeCall path body
   DestinyLookup kind hashes -> lookupCall kind hashes
   DestinySearch kind term limit -> searchCall kind term limit
   DestinyItems kind -> itemsCall kind
+  DestinyCheckpoints -> checkpointsCall

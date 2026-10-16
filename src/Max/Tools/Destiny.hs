@@ -29,7 +29,7 @@ import Max.Tool.Protocol (readResult)
 import Max.Tools.Schema (boundedIntegerParam, enumParam, noArguments, paramOfType, stringParam, toolObject, withKeys)
 
 destinyToolsFor :: (Destiny :> es) => [Tool es]
-destinyToolsFor = [accountTool, itemsTool, readTool, writeTool, lookupTool, shapeTool]
+destinyToolsFor = [accountTool, itemsTool, readTool, writeTool, lookupTool, shapeTool, checkpointsTool]
 
 accountTool :: (Destiny :> es) => Tool es
 accountTool =
@@ -238,6 +238,19 @@ shapeTool =
         (Just p, Nothing) -> pure (Left (p, components, budget))
         (Nothing, Just n) -> pure (Right (n, budget))
         _ -> fail "path 和 type 二选一"
+
+checkpointsTool :: (Destiny :> es) => Tool es
+checkpointsTool =
+  Tool
+    { toolName = "destiny_checkpoints",
+      toolDescription =
+        T.unwords
+          [ "d2checkpoint.com 的进度机器人：现在挂着哪个突袭/地牢的第几关、火力战队几个人、",
+            "加入命令。每个都用 Bungie 公开数据核实过在那个活动里，不需要绑定账号。"
+          ],
+      toolSchema = noArguments,
+      toolRunner = OutcomeRunner (const (readResult <$> destinyCheckpoints))
+    }
 
 rejected :: String -> ToolOutcome
 rejected err = ToolRejected (ToolFault "invalid_arguments" (T.pack err) RetrySafe)
