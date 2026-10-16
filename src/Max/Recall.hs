@@ -45,7 +45,6 @@ data RecallCorpus
   = RecallMemories
   | RecallEpisodes
   | RecallMessages
-  | RecallPins
   | RecallCaptions
   deriving stock (Show, Eq, Ord, Enum, Bounded)
 
@@ -71,7 +70,6 @@ data RecallCandidate = RecallCandidate
     rcImportance :: !Double,
     rcLexicalScore :: !(Maybe Double),
     rcSemanticScore :: !(Maybe Double),
-    rcPinned :: !Bool,
     rcPermanent :: !Bool
   }
   deriving stock (Show, Eq)
@@ -80,7 +78,6 @@ instance FromRow RecallCandidate where
   fromRow =
     RecallCandidate
       <$> field
-      <*> field
       <*> field
       <*> field
       <*> field
@@ -255,7 +252,6 @@ corpusText = \case
   RecallMemories -> "memory"
   RecallEpisodes -> "episode"
   RecallMessages -> "message"
-  RecallPins -> "pin"
   RecallCaptions -> "caption"
 
 -- | Merge duplicate representations, rank with bounded weak boosts, and apply
@@ -359,7 +355,6 @@ mergeCandidate left right =
     { rcLexicalScore = maxMaybe left.rcLexicalScore right.rcLexicalScore,
       rcSemanticScore = maxMaybe left.rcSemanticScore right.rcSemanticScore,
       rcImportance = max left.rcImportance right.rcImportance,
-      rcPinned = left.rcPinned || right.rcPinned,
       rcPermanent = left.rcPermanent || right.rcPermanent
     }
   where
@@ -389,7 +384,6 @@ scoreCandidate now candidate =
   primary
     + 0.15 * secondary
     + 0.12 * clampScore candidate.rcImportance
-    + (if candidate.rcPinned then 0.12 else 0)
     + (if candidate.rcPermanent then 0.08 else 0)
     + recencyBoost
   where
@@ -418,13 +412,11 @@ sourceQuota resultLimit source = case source of
   "memory" -> max 1 ((resultLimit + 3) `div` 4)
   "episode" -> max 1 ((resultLimit + 3) `div` 4)
   "message" -> max 1 ((resultLimit + 2) `div` 3)
-  "pin" -> max 1 ((resultLimit + 5) `div` 6)
   "caption" -> max 1 ((resultLimit + 4) `div` 5)
   _ -> 1
 
 sourcePriority :: Text -> Int
 sourcePriority = \case
-  "pin" -> 5
   "caption" -> 4
   "episode" -> 3
   "memory" -> 2
@@ -445,7 +437,6 @@ toHit now candidate =
       rhScore = scoreCandidate now candidate,
       rhLexicalScore = candidate.rcLexicalScore,
       rhSemanticScore = candidate.rcSemanticScore,
-      rhPinned = candidate.rcPinned,
       rhPermanent = candidate.rcPermanent
     }
 
@@ -453,11 +444,6 @@ lexicalCandidatesSql :: Query
 lexicalCandidatesSql =
   "WITH input AS ( \
   \  SELECT ?::bigint AS conversation_id, ?::text AS query_text, ?::text[] AS query_terms, ?::int AS candidate_limit, ?::text[] AS kinds, ?::timestamptz AS from_time, ?::timestamptz AS until_time, ?::bigint AS sender \
-  \), pins AS ( \
-  \  SELECT DISTINCT pin.value::bigint AS canonical_message_id \
-  \  FROM sessions AS session \
-  \  JOIN input ON input.conversation_id = session.group_id \
-  \  CROSS JOIN LATERAL jsonb_array_elements_text(session.pinned) AS pin(value) \
   \), memory_candidates AS ( \
   \  SELECT 'memory'::text AS source, \
   \         'memory:' || memory.id::text AS dedup_key, \
@@ -469,7 +455,7 @@ lexicalCandidatesSql =
   \         GREATEST((SELECT count(*) FILTER (WHERE position(term in lower(memory.content))>0)::double precision / GREATEST(cardinality(input.query_terms),1) FROM unnest(input.query_terms) term), similarity(memory.content, input.query_text), \
   \           CASE WHEN position(lower(input.query_text) in lower(memory.content)) > 0 THEN 1 ELSE 0 END \
   \         )::double precision AS lexical_score, \
-  \         NULL::double precision AS semantic_score, false AS is_pinned, \
+  \         NULL::double precision AS semantic_score, \
   \         (memory.lifecycle = 'permanent') AS is_permanent \
   \  FROM memories AS memory CROSS JOIN input \
   \  LEFT JOIN LATERAL ( \
@@ -493,7 +479,7 @@ lexicalCandidatesSql =
   \         GREATEST((SELECT count(*) FILTER (WHERE position(term in lower(episode.summary))>0)::double precision / GREATEST(cardinality(input.query_terms),1) FROM unnest(input.query_terms) term), similarity(episode.summary, input.query_text), \
   \           CASE WHEN position(lower(input.query_text) in lower(episode.summary)) > 0 THEN 1 ELSE 0 END \
   \         )::double precision AS lexical_score, \
-  \         NULL::double precision AS semantic_score, false AS is_pinned, false AS is_permanent \
+  \         NULL::double precision AS semantic_score, false AS is_permanent \
   \  FROM conversation_compartments AS episode CROSS JOIN input \
   \  WHERE episode.conversation_id = input.conversation_id AND episode.state = 'active' \
   \    AND 'episode'=ANY(input.kinds) AND input.sender IS NULL AND ((input.from_time IS NULL AND input.until_time IS NULL) OR EXISTS(SELECT 1 FROM agent_messages src WHERE src.group_id=episode.conversation_id AND src.ingest_seq BETWEEN episode.start_ingest_seq AND episode.end_ingest_seq AND (input.from_time IS NULL OR src.received_at>=input.from_time) AND (input.until_time IS NULL OR src.received_at<input.until_time))) \
@@ -502,15 +488,15 @@ lexicalCandidatesSql =
   \  ORDER BY lexical_score DESC, occurred_at DESC, episode.id \
   \  LIMIT (SELECT candidate_limit FROM input) \
   \), message_candidates AS ( \
-  \  SELECT CASE WHEN pins.canonical_message_id IS NULL THEN 'message' ELSE 'pin' END::text AS source, \
+  \  SELECT 'message'::text AS source, \
   \         'message:' || message.canonical_message_id::text AS dedup_key, left(message.rendered_text, 800) AS snippet, \
   \         message.received_at AS occurred_at, message.author_principal_id AS principal_id, message.canonical_message_id, \
   \         NULL::uuid AS episode_handle, NULL::bigint AS memory_id, 0::double precision AS importance, \
   \         GREATEST((SELECT count(*) FILTER (WHERE position(term in lower(message.rendered_text))>0)::double precision / GREATEST(cardinality(input.query_terms),1) FROM unnest(input.query_terms) term), similarity(message.rendered_text, input.query_text), \
   \           CASE WHEN position(lower(input.query_text) in lower(message.rendered_text)) > 0 THEN 1 ELSE 0 END \
   \         )::double precision AS lexical_score, \
-  \         NULL::double precision AS semantic_score, (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
-  \  FROM agent_messages AS message CROSS JOIN input LEFT JOIN pins USING (canonical_message_id) \
+  \         NULL::double precision AS semantic_score, false AS is_permanent \
+  \  FROM agent_messages AS message CROSS JOIN input \
   \  WHERE message.group_id = input.conversation_id AND NOT message.is_synthetic \
   \    AND 'message'=ANY(input.kinds) AND (input.from_time IS NULL OR message.received_at>=input.from_time) AND (input.until_time IS NULL OR message.received_at<input.until_time) AND (input.sender IS NULL OR message.author_principal_id=input.sender) \
   \    AND message.kind IN ('chat', 'system') \
@@ -541,9 +527,8 @@ lexicalCandidatesSql =
        \         GREATEST((SELECT count(*) FILTER (WHERE position(term in lower(media.description))>0)::double precision / GREATEST(cardinality(input.query_terms),1) FROM unnest(input.query_terms) term), similarity(media.description, input.query_text), \
        \           CASE WHEN position(lower(input.query_text) in lower(media.description)) > 0 THEN 1 ELSE 0 END \
        \         )::double precision AS lexical_score, \
-       \         NULL::double precision AS semantic_score, (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
+       \         NULL::double precision AS semantic_score, false AS is_permanent \
        \  FROM media JOIN agent_messages AS message USING (canonical_message_id) CROSS JOIN input \
-       \  LEFT JOIN pins USING (canonical_message_id) \
        \  WHERE message.group_id = input.conversation_id \
        \    AND 'message'=ANY(input.kinds) AND (input.from_time IS NULL OR message.received_at>=input.from_time) AND (input.until_time IS NULL OR message.received_at<input.until_time) AND (input.sender IS NULL OR message.author_principal_id=input.sender) \
        \    AND (position(lower(input.query_text) in lower(media.description)) > 0 \
@@ -561,11 +546,6 @@ semanticCandidatesSql =
   "WITH input AS ( \
   \  SELECT ?::bigint AS conversation_id, ?::text AS model_id, ?::int AS dimensions, \
   \         ?::vector AS query_vector, ?::int AS candidate_limit, ?::text[] AS kinds, ?::timestamptz AS from_time, ?::timestamptz AS until_time, ?::bigint AS sender \
-  \), pins AS ( \
-  \  SELECT DISTINCT pin.value::bigint AS canonical_message_id \
-  \  FROM sessions AS session \
-  \  JOIN input ON input.conversation_id = session.group_id \
-  \  CROSS JOIN LATERAL jsonb_array_elements_text(session.pinned) AS pin(value) \
   \), compatible_memories AS MATERIALIZED ( \
   \  SELECT memory.*, evidence.source_episode_id AS recall_episode_id, \
   \         evidence.source_canonical_message_id AS recall_message_id, input.query_vector, input.candidate_limit \
@@ -589,7 +569,7 @@ semanticCandidatesSql =
   \         (SELECT expand_handle FROM conversation_compartments WHERE id=memory.recall_episode_id AND conversation_id=(SELECT conversation_id FROM input)) AS episode_handle, memory.id AS memory_id, \
   \         0::double precision AS importance, NULL::double precision AS lexical_score, \
   \         (1 - (memory.embedding <=> memory.query_vector))::double precision AS semantic_score, \
-  \         false AS is_pinned, (memory.lifecycle = 'permanent') AS is_permanent \
+  \         (memory.lifecycle = 'permanent') AS is_permanent \
   \  FROM compatible_memories AS memory \
   \  ORDER BY memory.embedding <=> memory.query_vector, memory.updated_at DESC, memory.id \
   \  LIMIT (SELECT candidate_limit FROM input) \
@@ -605,7 +585,7 @@ semanticCandidatesSql =
   \         NULL::bigint AS principal_id, NULL::bigint AS message_id, episode.expand_handle AS episode_handle, \
   \         NULL::bigint AS memory_id, episode.importance, NULL::double precision AS lexical_score, \
   \         (1 - (episode.embedding <=> episode.query_vector))::double precision AS semantic_score, \
-  \         false AS is_pinned, false AS is_permanent \
+  \         false AS is_permanent \
   \  FROM compatible_episodes AS episode \
   \  ORDER BY episode.embedding <=> episode.query_vector, occurred_at DESC, episode.id \
   \  LIMIT (SELECT candidate_limit FROM input) \
@@ -620,14 +600,14 @@ semanticCandidatesSql =
        \    AND message.embedding_model = input.model_id AND message.embedding_dimensions = input.dimensions \
        \    AND 'message'=ANY(input.kinds) AND (input.from_time IS NULL OR message.received_at>=input.from_time) AND (input.until_time IS NULL OR message.received_at<input.until_time) AND (input.sender IS NULL OR message.author_principal_id=input.sender) \
        \), message_candidates AS ( \
-       \  SELECT CASE WHEN pins.canonical_message_id IS NULL THEN 'message' ELSE 'pin' END::text AS source, \
+       \  SELECT 'message'::text AS source, \
        \         'message:' || message.canonical_message_id::text AS dedup_key, left(message.rendered_text, 800) AS snippet, \
        \         message.received_at AS occurred_at, message.author_principal_id AS principal_id, message.canonical_message_id, \
        \         NULL::uuid AS episode_handle, NULL::bigint AS memory_id, 0::double precision AS importance, \
        \         NULL::double precision AS lexical_score, \
        \         (1 - (message.embedding <=> message.query_vector))::double precision AS semantic_score, \
-       \         (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
-       \  FROM compatible_messages AS message LEFT JOIN pins USING (canonical_message_id) \
+       \         false AS is_permanent \
+       \  FROM compatible_messages AS message \
        \  ORDER BY message.embedding <=> message.query_vector, message.received_at DESC, message.canonical_message_id \
        \  LIMIT (SELECT candidate_limit FROM input) \
        \) \

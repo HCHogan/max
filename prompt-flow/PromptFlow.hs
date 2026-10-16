@@ -129,7 +129,7 @@ renderPromptFlow =
       "             Chat Completions   Anthropic Messages   Responses API",
       "```",
       "",
-      "这里用固定的多模态群聊 fixture：群历史、pin、引用文件、两类 memory、",
+      "这里用固定的多模态群聊 fixture：群历史、引用文件、两类 memory、",
       "带来源的 episode 摘要、技能索引、当前图片/视频都存在。工具表刻意只保留 `view_image` 和",
       "`view_video`，让 JSON 仍可阅读；这两个 schema 直接取自工具实现，不是文档副本。",
       "第一轮模型调用 `view_image(message_id=7405)`，第二轮展示 agent 追加",
@@ -419,7 +419,6 @@ promptFixture =
       compartments = fixtureCompartments,
       historyTurns = False,
       inFlight = Set.empty,
-      pinnedItems = [history 7301 5 "老张" 19 2 "本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个"],
       replyCtx = Just (quotedMessage, [quotedFile], []),
       triggerForward = [],
       multimodal = True,
@@ -522,7 +521,6 @@ contextSearchFixture =
           rhScore = 0.94,
           rhLexicalScore = Just 0.71,
           rhSemanticScore = Just 0.91,
-          rhPinned = False,
           rhPermanent = False
         },
       RecallHit
@@ -537,7 +535,6 @@ contextSearchFixture =
           rhScore = 0.86,
           rhLexicalScore = Just 0.62,
           rhSemanticScore = Just 0.84,
-          rhPinned = False,
           rhPermanent = False
         }
     ]
@@ -615,7 +612,6 @@ fixtureSession =
       model = "kimi-k2.7-code",
       persona = Nothing,
       clearedAt = Nothing,
-      pinned = [7301],
       debugOverride = Nothing,
       stickerOverride = Nothing,
       proactiveOverride = Nothing,

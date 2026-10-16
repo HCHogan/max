@@ -240,7 +240,6 @@ data RecallCandidateFixture = RecallCandidateFixture
     rcfLexical :: !(Maybe Double),
     rcfSemantic :: !(Maybe Double),
     rcfImportance :: !Double,
-    rcfPinned :: !Bool,
     rcfPermanent :: !Bool,
     rcfAgeDays :: !Double,
     rcfPrincipal :: !(Maybe Int64)
@@ -255,7 +254,6 @@ instance FromJSON RecallCandidateFixture where
       <*> o .:? "lexical"
       <*> o .:? "semantic"
       <*> (fromMaybe 0 <$> o .:? "importance")
-      <*> (fromMaybe False <$> o .:? "pinned")
       <*> (fromMaybe False <$> o .:? "permanent")
       <*> (fromMaybe 0 <$> o .:? "age_days")
       <*> o .:? "principal_id"
@@ -571,7 +569,6 @@ recallCandidate now fixture =
       rcImportance = fixture.rcfImportance,
       rcLexicalScore = fixture.rcfLexical,
       rcSemanticScore = fixture.rcfSemantic,
-      rcPinned = fixture.rcfPinned,
       rcPermanent = fixture.rcfPermanent
     }
 

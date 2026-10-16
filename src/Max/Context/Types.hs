@@ -41,7 +41,7 @@ import Max.Session.Types (Session)
 data PromptInputs = PromptInputs
   { -- | Persona from 'AppConfig' — used when 'session.persona' is 'Nothing'.
     defaultPersona :: !Text,
-    -- | The active session record (carries persona override + pin list).
+    -- | The active session record (carries the persona override).
     session :: !Session,
     -- | The @\@-bot@ message that triggered this turn.
     triggerMessage :: !DispatchMessage,
@@ -67,8 +67,6 @@ data PromptInputs = PromptInputs
     -- | Messages currently answered by another dispatch. Exclude them from the
     -- prompt to avoid duplicate answers before those turns publish their replies.
     inFlight :: !(Set Int64),
-    -- | Resolved pin list (preserves the user's pin order).
-    pinnedItems :: ![HistoryItem],
     -- | If the trigger replied to a message: that message, the files
     -- attached to it (so the model can address them by file_id), and
     -- — when the quoted message is a 转发聊天记录 — its stored

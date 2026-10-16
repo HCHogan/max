@@ -7,7 +7,6 @@ module Max.Session.Types
   )
 where
 
-import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import OneBot.Types (GroupId)
@@ -24,13 +23,8 @@ data Session = Session
     persona :: !(Maybe Text),
     -- | Watermark set by @!clear@.  When 'Just', chronological context
     -- older than this is excluded from the prompt.  'Nothing' means no
-    -- filtering.  Pinned messages
-    -- (see 'pinned') bypass this entirely.  Survives across restarts.
+    -- filtering.  Survives across restarts.
     clearedAt :: !(Maybe UTCTime),
-    -- | Explicit message_ids the user pinned via @!pin@.  These get
-    -- included in every prompt regardless of 'clearedAt'.  Order
-    -- preserved (display reflects user's pin order).
-    pinned :: ![Int64],
     -- | Per-session debug override, set by @!debug on@/@off@.
     -- 'Nothing' means follow @AppConfig.debug@.  When effective
     -- debug is on, tool calls are announced in the group.

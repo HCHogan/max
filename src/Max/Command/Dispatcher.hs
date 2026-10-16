@@ -9,7 +9,6 @@ module Max.Command.Dispatcher
   )
 where
 
-import Control.Applicative ((<|>))
 import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
 import Control.Monad (forM_)
 import Data.Int (Int64)
@@ -31,7 +30,7 @@ import Max.Command.Help (helpText)
 import Max.Command.Types
 import Max.Command.Version (readHostUptime, readOsPretty, versionCard)
 import Max.ConversationScope (conversationScopeFor, conversationStorageId)
-import Max.DB.History (HistoryItem (..), MessageCursor (..), bestName, fetchMessageInScope, fetchMessagesByIdsInScope)
+import Max.DB.History (MessageCursor (..))
 import Max.DB.Stickers qualified as Stickers
 import Max.Env (BotEnv (..))
 import Max.EpisodeScheduler (queueCompact)
@@ -98,10 +97,6 @@ data DispatchResult
   deriving stock (Show, Eq)
 
 -- | Run one command and produce a 'DispatchResult'.
---
--- @replyTarget@ is the @message_id@ extracted from the trigger
--- message's @SegReply@ (if any) — lets bare @!pin@ / @!unpin@ refer
--- to the message the user replied to without typing an id.
 execute ::
   ( Log :> es,
     WithConnection :> es,
@@ -113,10 +108,9 @@ execute ::
   GroupId ->
   UserId -> -- the command's sender (permission scope for !memory rm)
   PrincipalId -> -- the same sender as a person, for memory scoping
-  Maybe Int64 -> -- replyTarget canonical message id, if the command was a reply
   Command ->
   Eff es DispatchResult
-execute t gid uid senderPrincipal replyTarget cmd = do
+execute t gid uid senderPrincipal cmd = do
   env :: BotEnv <- ask
   catalog :: ModelCatalog <- ask
   let conversation = conversationScopeFor gid
@@ -221,37 +215,6 @@ execute t gid uid senderPrincipal replyTarget cmd = do
           updateSession t (\sess -> (Session.unclear sess, ()))
           ack
     --
-    Pin mExplicitId -> do
-      let mTarget = mExplicitId <|> replyTarget
-      case mTarget of
-        Nothing ->
-          reply "用法：引用要 pin 的那条消息发 !pin，或者 !pin <message_id>"
-        Just mid -> do
-          mMsg <- fetchMessageInScope conversation mid
-          case mMsg of
-            Nothing -> reply $ "找不到 message_id=" <> tshow mid
-            Just _ -> do
-              updateSession t (\s -> (Session.addPin mid s, ()))
-              logInfo "session: pinned" $ object ["message_id" .= mid]
-              ack
-    Unpin UnpinAll -> do
-      updateSession t (\s -> (Session.removeAllPins s, ()))
-      ack
-    Unpin (UnpinOne mid) -> do
-      updateSession t (\s -> (Session.removePin mid s, ()))
-      ack
-    Unpin UnpinReply -> case replyTarget of
-      Nothing -> reply "用法：引用要 unpin 的那条消息发 !unpin，或者 !unpin <id> / !unpin all"
-      Just mid -> do
-        updateSession t (\s -> (Session.removePin mid s, ()))
-        ack
-    Pins -> do
-      s <- liftIO (Session.readSession t)
-      case s.pinned of
-        [] -> reply "没有 pin 任何消息"
-        ids -> do
-          items <- fetchMessagesByIdsInScope conversation ids
-          reply (formatPins items)
     --
     PsLocal -> do
       now <- liftIO getCurrentTime
@@ -449,7 +412,6 @@ execute t gid uid senderPrincipal replyTarget cmd = do
           "  debug: " <> onOff env.beDebugDefault s.debugOverride,
           "  sticker: " <> onOff env.beStickerDefault s.stickerOverride,
           "  proactive: " <> onOff (isJust env.beIntent) s.proactiveOverride,
-          "  pin: " <> tshow (length s.pinned) <> " 条",
           "  记忆: " <> tshow memCount <> " 条",
           "  任务: " <> tshow (length tasks) <> " 个在跑",
           "  !clear 水位: " <> maybe "无" (T.pack . show) s.clearedAt
@@ -645,26 +607,6 @@ formatExecResult er =
    in case body of
         [] -> "(无输出)"
         parts -> T.intercalate "\n" parts
-
---------------------------------------------------------------------------------
--- !pins formatting.
-
-formatPins :: [HistoryItem] -> Text
-formatPins [] = "没有 pin 任何消息"
-formatPins items =
-  T.unlines $
-    "pinned:" : map oneLine items
-  where
-    oneLine h =
-      "  "
-        <> tshow h.canonicalId
-        <> "  "
-        <> bestName h
-        <> "  "
-        <> trunc 60 h.renderedText
-    trunc n t
-      | T.length t <= n = t
-      | otherwise = T.take n t <> "…"
 
 --------------------------------------------------------------------------------
 -- !ps formatting.

@@ -55,7 +55,6 @@ PURE = {
     "Max.Memory.Policy",
     "Max.Lingo.Types",
     "Max.Lingo.Policy",
-    "Max.Pin.Policy",
     "Max.Blob.Reference",
     "Max.Time.Parse",
 }
@@ -188,7 +187,7 @@ def check_imports():
         dependencies = set(IMPORT.findall(source))
         if relative != "src/Max/MemoryStore.hs" and re.search(r"\bcreateMemory\b", source):
             errors.append(f"{relative}: memory creation bypasses shared admission")
-        domain_tools = {"src/Max/Tools/Skills.hs", "src/Max/Tools/Search.hs", "src/Max/Tools/Sandbox.hs", "src/Max/Tools/Browser.hs", "src/Max/Tools/Files.hs", "src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Hooks.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Pins.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs", "src/Max/Tools/Destiny.hs"}
+        domain_tools = {"src/Max/Tools/Skills.hs", "src/Max/Tools/Search.hs", "src/Max/Tools/Sandbox.hs", "src/Max/Tools/Browser.hs", "src/Max/Tools/Files.hs", "src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Hooks.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs", "src/Max/Tools/Destiny.hs"}
         resource_tools = {"src/Max/Tools/Files.hs", "src/Max/Tools/Browser.hs"}
         if relative in domain_tools | resource_tools:
             if any(dependency.startswith(("Max.DB.", "Max.Platform.Store.")) for dependency in dependencies) or dependencies & {"Effectful.PostgreSQL", "Max.Platform.Store", "Max.Session", "Max.Reply.Resolve", "Max.Reply.Caption", "Max.Task.ToolRuntime", "Max.Monitor.ToolRuntime", "Max.Memory.ToolRuntime", "Max.MemoryStore", "Max.EpisodeStore", "Max.Recall", "Max.Prompt", "Max.Conversation.ToolRuntime", "Max.Monitor", "Max.Tools"}:
@@ -252,7 +251,6 @@ import Max.Effects.ToolOutput
 import Max.Effects.Tools
 import Max.Effects.MediaQuery (MediaQuery, readImages)
 import Max.Effects.StickerQuery (StickerQuery)
-import Max.Effects.PinControl (PinControl, pinMessage)
 import Max.Effects.ConversationQuery (ConversationQuery, readMessage)
 import Max.Effects.MemoryQuery (MemoryQuery)
 import Max.Effects.MemoryQuery qualified as MemoryQuery
@@ -330,8 +328,6 @@ loadSkills :: ToolControl :> es => Eff es ()
 loadSkills = activateSkills []
 readMedia :: MediaQuery :> es => Eff es ()
 readMedia = () <$ readImages 1 Nothing
-editPins :: PinControl :> es => Eff es ()
-editPins = () <$ pinMessage 1
 readTasks :: TaskQuery :> es => Eff es ()
 readTasks = () <$ TaskQuery.listTasks
 startOwnedTask :: TaskControl :> es => Eff es ()
@@ -367,8 +363,6 @@ NEGATIVE = {
     "media query cannot resolve host paths": ("BlobHost", "bad :: MediaQuery :> es => BlobRef -> Eff es FilePath\nbad = resolveBlobHostPath"),
     "media query cannot use arbitrary IO": ("IOE", 'bad :: MediaQuery :> es => Eff es ()\nbad = liftIO (pure ())'),
     "sticker query cannot publish": ("Outbound", "bad :: StickerQuery :> es => OutboundRequest -> Eff es ()\nbad request = () <$ sendRecorded request"),
-    "conversation query cannot edit pins": ("PinControl", 'bad :: ConversationQuery :> es => Eff es ()\nbad = () <$ pinMessage 1'),
-    "pin control cannot use arbitrary IO": ("IOE", 'bad :: PinControl :> es => Eff es ()\nbad = liftIO (pure ())'),
     "conversation query cannot use arbitrary IO": ("IOE", 'bad :: ConversationQuery :> es => Eff es ()\nbad = liftIO (pure ())'),
     "memory query cannot save": ("MemoryControl", 'bad :: MemoryQuery :> es => Eff es ()\nbad = () <$ saveMemory ConversationMemory "fact"'),
     "memory query cannot use arbitrary IO": ("IOE", 'bad :: MemoryQuery :> es => Eff es ()\nbad = liftIO (pure ())'),

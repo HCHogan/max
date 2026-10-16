@@ -15,7 +15,6 @@ import Max.DB.History
     MessageCursor (..),
     fetchForwardChildrenInScope,
     fetchMessageInScope,
-    fetchMessagesByIdsInScope,
     fetchNewestPromptPageBefore,
     fetchRecentInGroup,
     fetchTranscriptAfter,
@@ -146,29 +145,6 @@ spec pool = before_ (truncateAll pool) $
         elsewhere <- insertRawMessage pool 1001 (groupId + 1) memberA botId (timeAt 9) (Just "Alice") "secret"
         m <- withDb pool $ fetchMessageInScope scope elsewhere
         m `shouldSatisfy` isNothing
-
-    describe "fetchMessagesByIdsInScope" $ do
-      it "returns rows in the requested order (not DB order)" $ do
-        a <- insertRawMessage pool 1001 groupId memberA botId (timeAt 9) Nothing "a"
-        b <- insertRawMessage pool 1002 groupId memberA botId (timeAt 10) Nothing "b"
-        c <- insertRawMessage pool 1003 groupId memberA botId (timeAt 11) Nothing "c"
-        rows <- withDb pool $ fetchMessagesByIdsInScope scope [c, a, b]
-        map (.canonicalId) rows `shouldBe` [c, a, b]
-
-      it "silently drops unknown ids without failing" $ do
-        a <- insertRawMessage pool 1001 groupId memberA botId (timeAt 9) Nothing "a"
-        rows <- withDb pool $ fetchMessagesByIdsInScope scope [9999, a, 8888]
-        map (.canonicalId) rows `shouldBe` [a]
-
-      it "returns [] for empty input without hitting the DB" $ do
-        rows <- withDb pool $ fetchMessagesByIdsInScope scope []
-        map (.canonicalId) rows `shouldBe` []
-
-      it "drops ids owned by another conversation" $ do
-        visible <- insertRawMessage pool 1001 groupId memberA botId (timeAt 9) Nothing "visible"
-        secret <- insertRawMessage pool 1002 (groupId + 1) memberB botId (timeAt 10) Nothing "secret"
-        rows <- withDb pool $ fetchMessagesByIdsInScope scope [visible, secret]
-        map (.canonicalId) rows `shouldBe` [visible]
 
     describe "fetchForwardChildrenInScope" $ do
       it "does not expand a forward container owned by another conversation" $ do

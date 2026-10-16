@@ -67,7 +67,7 @@ collectHistory request = withReadSnapshot $ do
 -- | Collect only the newest token-sized raw tail.  SQL pages are walked
 -- backward so an arbitrarily old ledger never has to enter memory merely to
 -- be dropped by ContextPolicy. Trim the final I/O page to the actual token
--- target; the overall prompt planner still protects current input and pins.
+-- target; the overall prompt planner still protects current input.
 fetchBoundedPromptTail ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->

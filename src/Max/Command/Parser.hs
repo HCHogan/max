@@ -257,20 +257,6 @@ classify verb raw@(RawArgs pos flags) = case verb of
   "compact" -> if null pos && Map.null flags then Compact else Unknown verb raw
   "clear" -> if "all" `Map.member` flags then ClearAll else Compact
   "unclear" -> Unclear
-  "pin" -> case pos of
-    [] -> Pin Nothing
-    [s] -> case parseInt64 s of
-      Just n -> Pin (Just n)
-      Nothing -> Unknown verb raw
-    _ -> Unknown verb raw
-  "unpin" -> case pos of
-    [] -> Unpin UnpinReply
-    ["all"] -> Unpin UnpinAll
-    [s] -> case parseInt64 s of
-      Just n -> Unpin (UnpinOne n)
-      Nothing -> Unknown verb raw
-    _ -> Unknown verb raw
-  "pins" -> Pins
   "btw" -> Btw (T.unwords pos)
   "feedback" -> Feedback (T.unwords pos)
   "fb" -> Feedback (T.unwords pos)

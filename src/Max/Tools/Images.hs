@@ -1,7 +1,7 @@
 -- |
 -- On-demand loading of context images.  The prompt builder inlines
 -- only the images the user is plausibly pointing at (reply target /
--- trigger / pins); everything else in the group history renders as an
+-- trigger); everything else in the group history renders as an
 -- @[image#\<id\>]@ marker, and this tool is how the model turns such a
 -- marker back into pixels — same injection channel (and per-dispatch
 -- budget) as @view_avatar@.  A sandbox path shows a file directly: a group

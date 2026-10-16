@@ -84,7 +84,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
          | outputCaps.canFace
          ]
       <> [ if multimodal'
-             then "  [image#7405.0: 简介]        — 群历史里的图片，默认不加载；多数时候看简介就够，要看原图用 view_image 传这两个数字。当前消息/引用/pin 的图直接附在消息末尾（正文里显示 [image]）"
+             then "  [image#7405.0: 简介]        — 群历史里的图片，默认不加载；多数时候看简介就够，要看原图用 view_image 传这两个数字。当前消息/引用的图直接附在消息末尾（正文里显示 [image]）"
              else "  [image#7405.0: 简介] / [image] — 图片（你看不到原图，看简介或请用户描述）",
            if multimodal'
              then "  [video#7407.0: 首帧简介](29 秒) — 群里的视频；(29 秒) 是实测时长，以它为准（抽帧看视频容易把时长感知错）。被引用或就是当前消息时附给你，其余用 view_video 传这两个数字看；太长的会压成快进概览（标签写明倍速），要细看某段用 start_seconds/end_seconds"

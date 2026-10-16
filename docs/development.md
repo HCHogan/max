@@ -62,9 +62,7 @@ roster, whose identity evidence is scoped to the endpoint even when multiple
 rooms share the bot account. Migration 097 backfills canonical speakers, mentions,
 turn initiators and the bot identity; the populated-upgrade fixture checks
 foreign identities remain invisible and original messages remain unchanged.
-PinControl exposes only pin edits and checks authority after both session
-locks, in the CAS transaction. Database tests cover scope isolation, competing
-pins, expired writers and cache rollback. Images use a host-supplied preparation
+Database tests cover scope isolation and session cache rollback. Images use a host-supplied preparation
 callback; file captions use the shared canonical resolver from assembly. Browser
 and Runtime tools retain explicit resource IO but cannot import raw stores.
 Compiler fixtures also deny publication, host paths and raw IO to read clients.
@@ -128,7 +126,7 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.HistorianSpec` / DB counterpart — token-sized episode prefixes, explicit
   identity provenance, structured-call publication, and raw-output retention
 - `Max.PromptIntegrationSpec` (DB) — read-only prompt assembly, immediate
-  visibility of new summaries, preview parity, bounded history, pins and replies
+  visibility of new summaries, preview parity, bounded history and replies
 - `Max.EpisodeStoreSpec` — strict capture schema, evidence validation,
   source-hash/CAS rollback, rebuild/backfill, and proposal isolation
 - `Max.EpisodeSchedulerSpec` — quiet-period scheduling, retry and input races
@@ -217,7 +215,7 @@ gap annotations for partial backfill, and exercise the all-conversation
 compartment-to-raw-tail reader end to end. EpisodeStore cases additionally
 page opaque `context_expand` handles over the exact raw range, deny the same
 handle from another conversation, and verify that a superseded projection's
-handle remains expandable. `Max.RecallSpec` builds memory, episode, raw, pin, and caption candidates in a
+handle remains expandable. `Max.RecallSpec` builds memory, episode, raw, and caption candidates in a
 real conversation, checks lexical and compatible-pgvector fusion, exercises
 provenance/message dedup and source quotas, and probes the same queries from a
 foreign conversation. The pure Recall spec separately fixes quota, overflow,

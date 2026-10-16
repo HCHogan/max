@@ -3,7 +3,7 @@ module Max.Command.ParserSpec (spec) where
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.Command.Parser (parseCommand)
-import Max.Command.Types (Command (..), UnpinTarget (..))
+import Max.Command.Types (Command (..))
 import Test.Hspec
 
 -- | Convenience: assert that an input parses to a specific 'Command'.
@@ -109,18 +109,11 @@ spec = do
       "!clear -ax" `parsesTo` Compact
     it "unclear" $ "!unclear" `parsesTo` Unclear
 
-  describe "!pin / !unpin / !pins" $ do
-    it "pin bare → reply target" $ "!pin" `parsesTo` Pin Nothing
-    it "pin with id" $ "!pin 42" `parsesTo` Pin (Just 42)
-    it "pin with negative id" $ "!pin -1" `parsesTo` Pin (Just (-1))
-    it "pin with garbage falls through" $
-      case parseCommand "!pin xyz" of
-        Right (Just (Unknown "pin" _)) -> pure ()
-        other -> expectationFailure $ "expected Unknown pin, got: " <> show other
-    it "unpin bare → reply target" $ "!unpin" `parsesTo` Unpin UnpinReply
-    it "unpin all" $ "!unpin all" `parsesTo` Unpin UnpinAll
-    it "unpin with id" $ "!unpin 42" `parsesTo` Unpin (UnpinOne 42)
-    it "pins" $ "!pins" `parsesTo` Pins
+  describe "retired !pin / !unpin / !pins" $
+    it "parse as unknown commands" $
+      case traverse parseCommand ["!pin 42", "!unpin all", "!pins"] of
+        Right [Just (Unknown "pin" _), Just (Unknown "unpin" _), Just (Unknown "pins" _)] -> pure ()
+        other -> expectationFailure $ "expected unknown pin commands, got: " <> show other
 
   describe "!btw" $ do
     it "joins words" $ "!btw 别忘了 加 typeclass" `parsesTo` Btw "别忘了 加 typeclass"
@@ -165,7 +158,7 @@ spec = do
     it "tolerates extra spaces after the bang" $ "!   pwd" `parsesTo` Shell [] "pwd"
     it "tolerates leading spaces before the bang" $ "  ! whoami" `parsesTo` Shell [] "whoami"
     it "bang-space with empty body is not a command" $ notACommand "!   "
-    it "bang-verb (no space) stays structured" $ "!pins" `parsesTo` Pins
+    it "bang-verb (no space) stays structured" $ "!ps" `parsesTo` PsLocal
     it "preserves internal newlines (multi-line)" $
       "! ls -al\ncd foo\ncat bar" `parsesTo` Shell [] "ls -al\ncd foo\ncat bar"
     it "peels leading +pkg tokens, single line" $

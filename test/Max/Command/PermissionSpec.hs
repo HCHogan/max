@@ -32,7 +32,6 @@ spec = do
       requiredCapability ModelShow `shouldBe` Nothing
       requiredCapability ModelList `shouldBe` Nothing
       requiredCapability PersonaShow `shouldBe` Nothing
-      requiredCapability Pins `shouldBe` Nothing
       requiredCapability (Btw "x") `shouldBe` Nothing
       requiredCapability MemoryList `shouldBe` Nothing
       requiredCapability (MemoryRm 1) `shouldBe` Nothing

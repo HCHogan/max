@@ -58,10 +58,7 @@ import Max.Intent (IntentState)
 import Max.Jobs qualified as Jobs
 import Max.MessageKind (MessageKind (KindCommand))
 import Max.ModelCatalog (ModelCatalog)
-import Max.Platform.Types
-  ( CanonicalMessageId (CanonicalMessageId),
-    Platform (PlatformQQ),
-  )
+import Max.Platform.Types (Platform (PlatformQQ))
 import Max.Prompt (TriggerOrigin (OriginDirect))
 import Max.Roster (GroupMember (mUserId), fetchGroupMembers)
 import Max.Session (loadSession)
@@ -175,8 +172,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
     dispatchAllowed env targetGid sourcePlatform cmd = do
       t <- loadSession env.beSessions env.beDefaultModel targetGid
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
-      let replyTarget = (\(CanonicalMessageId target) -> target) <$> gm.replyTo
-      result <- CmdDispatch.execute t targetGid gm.userId gm.authorPrincipalId replyTarget cmd
+      result <- CmdDispatch.execute t targetGid gm.userId gm.authorPrincipalId cmd
       case result of
         -- QQ group commands reply by DM, falling back to the group on failure.
         -- Private chats and other platforms reply inline.

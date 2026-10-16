@@ -3,11 +3,8 @@ module Max.SessionSpec (spec) where
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Max.Session
   ( Session (..),
-    addPin,
     clearAll,
     clearHistory,
-    removeAllPins,
-    removePin,
     unclear,
   )
 import OneBot.Types (GroupId (..))
@@ -22,7 +19,6 @@ emptySession =
       model = "deepseek-flash",
       persona = Nothing,
       clearedAt = Nothing,
-      pinned = [],
       debugOverride = Nothing,
       stickerOverride = Nothing,
       proactiveOverride = Nothing,
@@ -34,23 +30,6 @@ t0 = UTCTime (fromGregorian 2026 6 5) (secondsToDiffTime 0)
 
 spec :: Spec
 spec = do
-  describe "pin helpers" $ do
-    it "addPin appends, preserving order" $ do
-      let s = addPin 3 (addPin 2 (addPin 1 emptySession))
-      pinned s `shouldBe` [1, 2, 3]
-    it "addPin dedupes" $ do
-      let s = addPin 1 (addPin 2 (addPin 1 emptySession))
-      pinned s `shouldBe` [1, 2]
-    it "removePin removes the named id, leaves others" $ do
-      let s = removePin 2 (emptySession {pinned = [1, 2, 3]})
-      pinned s `shouldBe` [1, 3]
-    it "removePin on absent id is a no-op" $ do
-      let s = removePin 99 (emptySession {pinned = [1, 2, 3]})
-      pinned s `shouldBe` [1, 2, 3]
-    it "removeAllPins wipes the list" $ do
-      let s = removeAllPins (emptySession {pinned = [1, 2, 3]})
-      pinned s `shouldBe` []
-
   describe "clear / unclear watermark" $ do
     it "clearHistory sets the watermark, leaves model/persona alone" $ do
       let s = clearHistory t0 (emptySession {persona = Just "x", model = "m2"})
@@ -61,12 +40,10 @@ spec = do
       let dirty =
             emptySession
               { persona = Just "x",
-                pinned = [1, 2],
                 model = "m2"
               }
           s = clearAll t0 dirty
       persona s `shouldBe` Nothing
-      pinned s `shouldBe` []
       clearedAt s `shouldBe` Just t0
       model s `shouldBe` "m2" -- model survives
     it "unclear removes the watermark" $ do

@@ -17,9 +17,6 @@ module Max.Session
     clearHistory,
     clearAll,
     unclear,
-    addPin,
-    removePin,
-    removeAllPins,
     setDebugOverride,
     clearDebugOverride,
     setStickerOverride,
@@ -35,7 +32,6 @@ import Control.Concurrent.MVar (MVar, newMVar, putMVar, takeMVar)
 import Control.Concurrent.STM
 import Control.Exception (Exception)
 import Control.Exception qualified as Exception
-import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -177,21 +173,19 @@ maxSessionCASRetries = 8
 -- Pure helpers callable inside updateSession.
 
 -- | Stamp a 'clearedAt' watermark so the next prompt skips chronological
--- context older than now.  Pinned messages and explicit reply contexts survive.  No
+-- context older than now.  Explicit reply contexts survive.  No
 -- destructive truncation any more — the data lives in the messages
 -- table; @!unclear@ brings it all back.
 clearHistory :: UTCTime -> Session -> Session
 clearHistory now s = s {clearedAt = Just now}
 
--- | Stamp 'clearedAt' AND wipe per-session ephemera: persona override
--- and pins.  Leaves the model alone (use !model to change it
--- explicitly).
+-- | Stamp 'clearedAt' AND wipe the persona override.  Leaves the model
+-- alone (use !model to change it explicitly).
 clearAll :: UTCTime -> Session -> Session
 clearAll now s =
   s
     { persona = Nothing,
-      clearedAt = Just now,
-      pinned = []
+      clearedAt = Just now
     }
 
 -- | Remove the 'clearedAt' watermark.  The next prompt is allowed to
@@ -199,19 +193,6 @@ clearAll now s =
 -- earlier @!clear@.
 unclear :: Session -> Session
 unclear s = s {clearedAt = Nothing}
-
--- | Add a message id to the pin list.  Dedupes; preserves insertion
--- order (the pinned list reads in the order the user pinned).
-addPin :: Int64 -> Session -> Session
-addPin mid s
-  | mid `elem` s.pinned = s -- already pinned, no-op
-  | otherwise = s {pinned = s.pinned <> [mid]}
-
-removePin :: Int64 -> Session -> Session
-removePin mid s = s {pinned = filter (/= mid) s.pinned}
-
-removeAllPins :: Session -> Session
-removeAllPins s = s {pinned = []}
 
 -- | Set the debug override for this session (@!debug on@/@off@).
 setDebugOverride :: Bool -> Session -> Session

@@ -121,7 +121,7 @@ src/Max/Sandbox/   Per-group NixOS workspace lifecycle + registry
 src/Max/Browser/   Per-group camoufox host + per-turn MCP/browser lifecycle
 src/Max/MCP/       Minimal MCP client (Streamable HTTP)
 src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory,
-                   Images, Video, Bilibili, Stickers, Pins, Group, Monitor (automations),
+                   Images, Video, Bilibili, Stickers, Group, Monitor (automations),
                    Skills — progressive disclosure, SelfSource — bounded reads
                    of the allowlisted compile-time source snapshot)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
@@ -285,7 +285,7 @@ searchable but leave the prompt. Under the summary budget (one eighth of the
 input budget; see the model-scaled capacities in [context.md](context.md)), lower-importance, older episodes
 are compressed before being omitted. Missing or non-shorter tiers are skipped.
 The complete rendered prompt is then checked against the model budget, retaining
-protected pins, replies, the trigger, and media. Historical materialization and
+protected replies, the trigger, and media. Historical materialization and
 trace tables remain untouched and are no longer read.
 At Historian startup, exact oldest-first backfill jobs fill any raw gaps at or
 before migration 041's deployment baseline. Each token-sized range stops before
@@ -308,14 +308,14 @@ sources and messages beyond the cutoff. See [context.md](context.md) for exact
 pagination, failure, scheduling, and capacity semantics.
 
 `context_search` is the volatile unified-recall surface. It searches visible
-active/permanent memories, active episode summaries, raw messages, current
-session pins, and image/video captions. Lexical candidates use exact substring
+active/permanent memories, active episode summaries, raw messages, and
+image/video captions. Lexical candidates use exact substring
 or trigram similarity; compatible message, memory, and episode embeddings add
 semantic candidates. Conversation policy predicates and embedding
 model/dimension checks run in SQL before scoring. The pure selector merges
-lexical and semantic forms, collapses raw/pin/caption identities and
+lexical and semantic forms, collapses raw/caption identities and
 provenance-linked memory/episode identities, then applies per-source quotas
-before using spare capacity. Recency, episode importance, pins, and permanent
+before using spare capacity. Recency, episode importance, and permanent
 memory are bounded weak boosts rather than authorization inputs. If query
 embedding fails, the tool logs attention and returns lexical results instead
 of failing the turn. No recall result is injected automatically; the agent
@@ -558,10 +558,8 @@ roster reader. Known identities are recorded per endpoint at ingest or a
 contentless interaction; sharing a bot account does not reveal another room
 or authorize a foreign mention. Migration 097 reconstructs this projection
 from canonical senders/mentions, turn initiators and each endpoint's own account.
-PinControl allows pin/unpin only; its authorization runs after
-the local Session mutex and database row lock, immediately before the update
-in the same transaction. Session cache publication follows COMMIT and rejects
-nested transactions that could later roll back.
+Session cache publication follows COMMIT and rejects nested transactions
+that could later roll back.
 Image preparation is a host callback owning ffmpeg. Browser workspace ownership
 is established in Browser.ToolRuntime before native MCP tools run. The domain
 browser and file tools receive scoped `Browser` and `FileTransfer` operations. Their host interpreters own MCP sessions, output allocation,
@@ -759,8 +757,8 @@ inventory used to build the live catalog.
 `Max.Schema` parses tool schemas and workflow `Contract`s into a shared typed
 validation tree, retaining the original JSON for provider requests and hashes.
 The workflow dialect remains stricter. `Max.Tool.Arguments` combines an
-applicative argument parser with schema generation; skill loading, search and
-pins use it so their fields have one definition. Other legacy
+applicative argument parser with schema generation; skill loading and search
+use it so their fields have one definition. Other legacy
 tool schemas are parsed and checked at catalog construction.
 
 `OutcomeRunner` reports `ToolOutcome` directly, and hoisting preserves it.

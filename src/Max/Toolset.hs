@@ -67,7 +67,6 @@ import Max.Memory.ToolRuntime (memoryToolsWithDatabase)
 import Max.Monitor.ToolRuntime
   ( monitorToolsWithDatabase,
   )
-import Max.Pin.ToolRuntime (pinToolsWithDatabase)
 import Max.Platform.Types (noAdvertisedCaps)
 import Max.Sandbox.Registry (prewarmSandbox)
 import Max.Sandbox.Runtime (networkForGroup)
@@ -191,7 +190,6 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
         <> groupToolsWithDatabase dc
         <> imageToolsWithDatabase env.beTimeZone env.beSandboxes dc
         <> memoryToolsWithDatabase dc
-        <> pinToolsWithDatabase env.beSessions env.beDefaultModel dc
         <> taskTools env.beJobs dc
         <> skillToolsWithRuntime env.beSkills dc prepareSkill bindPackages
         <> bilibiliToolsFor env.beTimeZone dc (videoStreamAttachment dc)
@@ -324,8 +322,6 @@ toolInventory =
     always (writeTool "memory_update" ["memory.db"] [CurrentConversation]),
     always (writeTool "memory_forget" ["memory.db"] [CurrentConversation]),
     always (readTool "memory_list" ["memory.db"] [CurrentConversation]),
-    always (writeTool "pin_message" ["session.db"] [CurrentConversation]),
-    always (writeTool "unpin_message" ["session.db"] [CurrentConversation]),
     gated SkillsOnly (reflectTool "use_skill"),
     -- With wait, a call holds until its task reports; independent waits run
     -- concurrently so one round (or one code batch) can fan out.

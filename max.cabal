@@ -278,9 +278,6 @@ library
         Max.Effects.Destiny
         Max.Reply.Caption
         Max.Effects.MediaQuery
-        Max.Effects.PinControl
-        Max.Pin.Policy
-        Max.Pin.ToolRuntime
         Max.Effects.StickerQuery
         Max.Effects.BlobHost
         Max.Effects.Embedding
@@ -474,7 +471,6 @@ library
         Max.Tools.Images
         Max.Tools.Memory
         Max.Tools.Monitor
-        Max.Tools.Pins
         Max.Tools.Task
         Max.Tools.Sandbox
         Max.Tools.Schema

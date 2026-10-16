@@ -1,7 +1,6 @@
 -- | Command AST. Syntax is defined in Max.Command.Parser.
 module Max.Command.Types
   ( Command (..),
-    UnpinTarget (..),
     RawArgs (..),
     PosArg,
     Flag,
@@ -11,16 +10,6 @@ where
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
-
--- | What @!unpin@ should target.
-data UnpinTarget
-  = -- | '!unpin <id>'
-    UnpinOne !Int64
-  | -- | '!unpin' (no arg) — uses the SegReply on the trigger
-    UnpinReply
-  | -- | '!unpin all'
-    UnpinAll
-  deriving stock (Show, Eq)
 
 -- | A parsed and structured command.  Unknown commands are represented
 -- by 'Unknown' so the dispatcher can give a friendly "did you mean"
@@ -54,12 +43,6 @@ data Command
     ClearAll
   | -- | '!unclear' — remove the cleared_at watermark
     Unclear
-  | -- | '!pin [id]' — Nothing = use reply target
-    Pin !(Maybe Int64)
-  | -- | '!unpin [id|all]'
-    Unpin !UnpinTarget
-  | -- | '!pins'
-    Pins
   | -- | '!btw <text>' — a side question that leaves a running turn alone
     Btw !Text
   | -- | '!feedback <text>' / '!fb <text>' — hand a note to a running turn

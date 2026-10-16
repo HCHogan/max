@@ -1,7 +1,7 @@
 # Context compaction and navigation
 
 `!compact` immediately queues a historian capture with a fixed ingestion cutoff.
-It does not clear chat, memory, persona, pins, tools, or sandboxes. `!clear` is a
+It does not clear chat, memory, persona, tools, or sandboxes. `!clear` is a
 compatibility alias; the explicitly destructive `!clear --all` and legacy
 `!unclear` remain separate. Compaction requires the historian profile to be enabled.
 The acknowledgement means accepted, not already published. Work involving an
@@ -124,7 +124,7 @@ the requested prefix even when it is small. Quiet-period capture still waits ten
 minutes, while sustained traffic schedules a coalesced pressure check after one
 minute that subsequent messages cannot postpone. Background history checks use
 the session's text-only budget; prompt construction applies attachment reserves
-when needed. Final prompt selection still accounts for protected input, pins,
+when needed. Final prompt selection still accounts for protected input,
 media, and the total ceiling; these targets are not extra space outside it.
 
 Model switching changes injection/work sizes, never deletes data. Age, confidence,
@@ -136,7 +136,7 @@ importance policy under the model-sized summary budget.
 
 The prompt is ordered by how often each part changes, so the provider's prefix
 cache covers as much as possible: system prompt, then the tool definitions,
-then pins and episode summaries, then the append-only raw transcript, and
+then episode summaries, then the append-only raw transcript, and
 last the per-turn blocks (recent work turns, environment, memories, quoted
 context, current message). Ordinary foreground turns list the same tools
 whoever speaks; `create_automation` is visible to every initiator and still
@@ -157,7 +157,7 @@ whether the server keeps them depends on its own cache capacity.
 ## Three primitives
 
 `context_search({query, kinds?, from?, until?, sender?, limit?})` finds relevant
-message/episode/memory candidates. Pins and media captions are message attributes.
+message/episode/memory candidates. Media captions are message attributes.
 Each result carries a stable string `ref` and a ready-to-use `read` request. Filters
 apply before candidate limits. Search is ranked retrieval, not an exhaustive log
 export. `sender` is a canonical principal ID and limits results to messages and

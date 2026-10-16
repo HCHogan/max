@@ -44,7 +44,6 @@ import Max.Context.Types
         now,
         origin,
         outputCapabilities,
-        pinnedItems,
         recentTurns,
         replyCtx,
         session,
@@ -65,7 +64,6 @@ import Max.DB.History
     MessageCursor,
     fetchForwardChildrenInScope,
     fetchMessageInScope,
-    fetchMessagesByIdsInScope,
   )
 import Max.DB.Media (fetchMediaSegments)
 import Max.DB.TurnContinuity (recentTurnDigests)
@@ -177,7 +175,6 @@ collectContextSnapshot request now' history = do
   recentTurns' <- map (renderRecentTurn tz') <$> recentTurnDigests scope s.clearedAt now'
   let compartments' = history.selectedCompartments
       transcript' = history.selectedHistory
-  pinnedItems' <- fetchMessagesByIdsInScope scope s.pinned
   -- Bound the uncached memory block; older entries remain searchable.
   let memoryCap = memoryInjectCap request.prLimits request.prMultimodal
   groupMems <- listRecentMemories (groupMemoryNamespace scope) memoryCap
@@ -210,21 +207,19 @@ collectContextSnapshot request now' history = do
   let ctxIds =
         map (.canonicalId) $
           transcript'
-            <> pinnedItems'
             <> maybe [] (\(r, _, kids) -> r : kids) replyCtx0
   capMap <- stickerCaptionsFor ctxIds
   -- Media captions retain canonical handles for later tool lookup.
   mediaSegs <- fetchMediaSegments ctxIds
   let enrich = tagMediaMarkers mediaSegs . applyStickerCaptions capMap
       transcript'' = map enrich transcript'
-      pinnedItems'' = map enrich pinnedItems'
       replyCtx' = fmap (\(r, f, kids) -> (enrich r, f, map enrich kids)) replyCtx0
       replyItems = maybe [] (\(r, _, kids) -> r : kids) replyCtx'
-  -- Inline trigger, reply-target and pinned images; ambient images remain handles.
+  -- Inline trigger and reply-target images; ambient images remain handles.
   let transcriptCtx
         | multimodal' =
             let inlineIds =
-                  Set.fromList (mid : map (.canonicalId) (replyItems <> pinnedItems''))
+                  Set.fromList (mid : map (.canonicalId) replyItems)
              in [ if h.canonicalId `Set.member` inlineIds then h else tagImageMarkers mediaSegs h
                 | h <- transcript''
                 ]
@@ -263,16 +258,15 @@ collectContextSnapshot request now' history = do
         let expected = downloadableImageCount gm.body
         when (expected > 0) $ waitForTriggerImages mid expected
         -- Budget priority: the reply target is what the user is
-        -- pointing at, then pins (explicit user signals).  Ambient
-        -- recency is deliberately NOT a candidate any more — see the
-        -- marker-tagging pass above.
+        -- pointing at.  Ambient recency is deliberately NOT a candidate
+        -- any more — see the marker-tagging pass above.
         loadPromptImages
           vision
           (maybe maxBound (\limits -> limits.requestTokens - sum (mapMaybe (.piVisionTokens) videos')) vision)
           tz'
           mid
           (Set.fromList (map (.canonicalId) replyItems))
-          (dedupById (replyItems <> pinnedItems''))
+          (dedupById replyItems)
       else pure []
   pure $
     ContextSnapshot
@@ -287,7 +281,6 @@ collectContextSnapshot request now' history = do
               compartments = compartments',
               historyTurns = historyTurns',
               inFlight = inFlight',
-              pinnedItems = pinnedItems'',
               replyCtx = replyCtx',
               triggerForward = triggerKids,
               multimodal = multimodal',

@@ -31,7 +31,6 @@ data RecallHit = RecallHit
     rhScore :: !Double,
     rhLexicalScore :: !(Maybe Double),
     rhSemanticScore :: !(Maybe Double),
-    rhPinned :: !Bool,
     rhPermanent :: !Bool
   }
   deriving stock (Show, Eq)

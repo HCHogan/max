@@ -531,16 +531,6 @@ spec pool = before_ (truncateAll pool) $
       msgs <- withDbLog pool $ fst <$> buildContext (promptRequest s trigger)
       T.count "只此一次" (userBodyOf msgs) `shouldBe` 1
 
-    it "renders pinned messages in the [pinned] section" $ do
-      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "重要信息"
-      s <-
-        updateDbSession pool (GroupId groupRaw) "deepseek-flash" $ \current ->
-          current {pinned = [1001]}
-      msgs <- withDbLog pool $ fst <$> buildContext (promptRequest s trigger)
-      let ub = userBodyOf msgs
-      ub `shouldSatisfy` ("[pinned" `T.isInfixOf`)
-      ub `shouldSatisfy` ("重要信息" `T.isInfixOf`)
-
     it "renders reply context when trigger has SegReply" $ do
       quoted <- insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "被引用的话"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"

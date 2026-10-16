@@ -110,9 +110,9 @@ contextSearchTool tz =
     { toolName = "context_search",
       toolDescription =
         T.unwords
-          [ "统一搜索当前会话的长期记忆、episode 摘要、原始消息、pin 和媒体简介。",
+          [ "统一搜索当前会话的长期记忆、episode 摘要、原始消息和媒体简介。",
             "结果已经做 scope 过滤、混合排序、来源配额和同源去重；",
-            "结果 read 对象可以直接传给 context_read；搜索是相关候选，不保证穷举。kinds 为 message/episode/memory，pin 和媒体简介归入 message。日期筛选原文按接收时间、episode 按来源范围、memory 按更新时间；sender 只返回该人原话和个人记忆。"
+            "结果 read 对象可以直接传给 context_read；搜索是相关候选，不保证穷举。kinds 为 message/episode/memory，媒体简介归入 message。日期筛选原文按接收时间、episode 按来源范围、memory 按更新时间；sender 只返回该人原话和个人记忆。"
           ],
       toolSchema =
         toolObject
@@ -186,7 +186,6 @@ recallHitSummary tz hit =
       "score" .= hit.rhScore,
       "time" .= fmtDateHM tz hit.rhOccurredAt,
       "snippet" .= hit.rhSnippet,
-      "pinned" .= hit.rhPinned,
       "permanent" .= hit.rhPermanent,
       "match"
         .= object

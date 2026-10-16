@@ -15,14 +15,12 @@ module Max.DB.Session
 where
 
 import Control.Monad (void)
-import Data.Aeson (Result (..), Value, fromJSON, toJSON)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (FromRow, Only (..), (:.) (..))
 import Database.PostgreSQL.Simple.FromRow (field, fromRow)
-import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 -- Session lives in Max.Session; we avoid the circular import by
@@ -30,23 +28,12 @@ import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.Session.Types (Session (..))
 import OneBot.Types (GroupId (..))
 
-newtype Jsonb = Jsonb Value
-
-instance ToField Jsonb where
-  toField (Jsonb v) = toJSONField v
-
 -- | One row from @sessions@.
---
--- Note: jsonb columns deserialise via @postgresql-simple@'s built-in
--- 'Value' instance — DON'T wrap them in a Text/ByteString newtype
--- (jsonb has no FromField for those, you'll get @errHaskellType =
--- "Text"@).
 data Row = Row
   { rGroupId :: !Int64,
     rModel :: !(Maybe Text),
     rPersona :: !(Maybe Text),
     rClearedAt :: !(Maybe UTCTime),
-    rPinned :: !Value,
     rDebugOverride :: !(Maybe Bool),
     rStickerOverride :: !(Maybe Bool),
     rProactiveOverride :: !(Maybe Bool),
@@ -58,7 +45,6 @@ instance FromRow Row where
   fromRow =
     Row
       <$> field
-      <*> field
       <*> field
       <*> field
       <*> field
@@ -112,7 +98,7 @@ fetchRecord ::
 fetchRecord (GroupId gid) defaultModel = do
   rows <-
     query
-      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, effort_override, revision \
+      "SELECT group_id, model, persona, cleared_at, debug_override, sticker_override, proactive_override, effort_override, revision \
       \  FROM sessions \
       \  WHERE group_id = ?"
       (Only gid)
@@ -128,7 +114,7 @@ listSessions :: (WithConnection :> es, IOE :> es) => Text -> Eff es [Session]
 listSessions defaultModel = do
   rows <-
     query
-      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, effort_override, revision \
+      "SELECT group_id, model, persona, cleared_at, debug_override, sticker_override, proactive_override, effort_override, revision \
       \  FROM sessions ORDER BY group_id"
       ()
   pure (map ((.session) . rowToRecord defaultModel) (rows :: [Row]))
@@ -144,17 +130,16 @@ saveSessionCAS old new
   | old.session.groupId /= new.groupId = pure Nothing
   | otherwise = do
       let GroupId gid = new.groupId
-          pin = Jsonb (toJSON new.pinned)
           nextRevision = old.revision + 1
       changed <-
         execute
           "UPDATE sessions SET \
-          \   model = ?, persona = ?, cleared_at = ?, pinned = ?, \
+          \   model = ?, persona = ?, cleared_at = ?, \
           \   debug_override = ?, sticker_override = ?, proactive_override = ?, \
           \   effort_override = ?, \
           \   revision = ?, updated_at = now() \
           \ WHERE group_id = ? AND revision = ?"
-          ((new.model, new.persona, new.clearedAt, pin) :. (new.debugOverride, new.stickerOverride, new.proactiveOverride, new.effortOverride, nextRevision, gid, old.revision))
+          ((new.model, new.persona, new.clearedAt) :. (new.debugOverride, new.stickerOverride, new.proactiveOverride, new.effortOverride, nextRevision, gid, old.revision))
       pure $
         if changed == 1
           then Just (SessionRecord new nextRevision)
@@ -181,7 +166,6 @@ rowToRecord defaultModel r =
               _ -> defaultModel,
             persona = r.rPersona,
             clearedAt = r.rClearedAt,
-            pinned = decodeOrEmpty r.rPinned,
             debugOverride = r.rDebugOverride,
             stickerOverride = r.rStickerOverride,
             proactiveOverride = r.rProactiveOverride,
@@ -189,10 +173,3 @@ rowToRecord defaultModel r =
           },
       revision = r.rRevision
     }
-  where
-    -- Tolerate junk in jsonb columns (e.g. older shape we don't know
-    -- how to read) by silently falling back to empty.  Better than
-    -- crashing the dispatch and dropping the user's question.
-    decodeOrEmpty v = case fromJSON v of
-      Success xs -> xs
-      Error _ -> []

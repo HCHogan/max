@@ -228,7 +228,7 @@ spec = do
     -- an answer, so in the transcript it would read as a question
     -- nobody answered.
     it "records a malformed command as command" $
-      fst (rec' [SegText "!pin abc def ghi"]) `shouldBe` KindCommand
+      fst (rec' [SegText "!memory rm abc"]) `shouldBe` KindCommand
 
     it "records the shell escape as command" $
       fst (rec' [SegText "! ls -la"]) `shouldBe` KindCommand

@@ -114,7 +114,6 @@ emptySession =
       model = "deepseek-flash",
       persona = Nothing,
       clearedAt = Nothing,
-      pinned = [],
       debugOverride = Nothing,
       stickerOverride = Nothing,
       proactiveOverride = Nothing,
@@ -133,7 +132,6 @@ baseInputs =
       compartments = [],
       historyTurns = False,
       inFlight = Set.empty,
-      pinnedItems = [],
       replyCtx = Nothing,
       triggerForward = [],
       multimodal = False,
@@ -598,24 +596,6 @@ spec = do
       ub `shouldSatisfy` ("[09:00 Alice #7001]" `T.isInfixOf`)
       ub `shouldSatisfy` ("[09:00 Bob #7002]" `T.isInfixOf`)
       ub `shouldSatisfy` ("今天吃啥" `T.isInfixOf`)
-
-    it "places pinned messages in their own section, before the transcript" $ do
-      let pin = historyAt 8 6001 otherMemberId (Just "Bob") "重要的话"
-          inp = baseInputs {pinnedItems = [pin]}
-          (_, ub) = splitMessages (renderContext inp)
-          pinIdx = T.breakOnAll "[pinned" ub
-          ambIdx = T.breakOnAll "[recent messages]" ub
-      ub `shouldSatisfy` ("重要的话" `T.isInfixOf`)
-      length pinIdx `shouldBe` 1
-      length ambIdx `shouldBe` 1
-      -- ordering check: pin section starts before the transcript section
-      case (pinIdx, ambIdx) of
-        ([(p, _)], [(a, _)]) -> T.length p `shouldSatisfy` (< T.length a)
-        _ -> expectationFailure "expected one of each marker"
-
-    it "omits pin section entirely when no pins" $ do
-      let (_, ub) = splitMessages (renderContext baseInputs)
-      ub `shouldNotSatisfy` ("[pinned" `T.isInfixOf`)
 
     it "renders reply context with file table when reply message has files" $ do
       let replied = historyAt 8 5001 otherMemberId (Just "Bob") "看看这个文件"

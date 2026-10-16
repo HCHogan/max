@@ -30,17 +30,15 @@ scopeB = conversationScopeFor (GroupId groupB)
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
-  it "searches all five scoped corpora without collapsing distinct memory assertions" $ do
+  it "searches all four scoped corpora without collapsing distinct memory assertions" $ do
     seedRecallFixture pool
     hits <- withDb pool $ searchRecall (currentConversationRecall scopeA) "tea" Nothing 10
 
     sort (map (.rhSource) hits)
-      `shouldBe` ["caption", "episode", "memory", "memory", "message", "pin"]
+      `shouldBe` ["caption", "episode", "memory", "memory", "message", "message"]
     length (nub (map (.rhDedupKey) hits)) `shouldBe` length hits
-    [message | hit <- hits, hit.rhSource == "message", Just message <- [hit.rhMessageId]]
-      `shouldBe` [1001]
-    [message | hit <- hits, hit.rhSource == "pin", Just message <- [hit.rhMessageId]]
-      `shouldBe` [1002]
+    sort [message | hit <- hits, hit.rhSource == "message", Just message <- [hit.rhMessageId]]
+      `shouldBe` [1001, 1002]
     [message | hit <- hits, hit.rhSource == "caption", Just message <- [hit.rhMessageId]]
       `shouldBe` [1003]
     hits `shouldSatisfy` any (\hit -> hit.rhSource == "episode" && isJust hit.rhEpisodeHandle)
@@ -64,7 +62,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
 
     hits `shouldSatisfy` any (\hit -> hit.rhSource == "memory" && hit.rhSemanticScore == Just 1)
     hits `shouldSatisfy` any (\hit -> hit.rhSource == "episode" && hit.rhSemanticScore == Just 1)
-    hits `shouldSatisfy` any (\hit -> hit.rhSource `elem` ["message", "pin"] && hit.rhSemanticScore == Just 1)
+    hits `shouldSatisfy` any (\hit -> hit.rhSource == "message" && hit.rhSemanticScore == Just 1)
 
     crossScope <- withDb pool $ searchRecall (currentConversationRecall scopeB) "no lexical overlap" (Just queryEmbedding) 30
     crossScope `shouldBe` []
@@ -73,9 +71,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
     seedRecallFixture pool
     let policyA = currentConversationRecall scopeA
         policyB = currentConversationRecall scopeB
-        messageCorpora = Set.fromList [RecallMessages, RecallPins, RecallCaptions]
+        messageCorpora = Set.fromList [RecallMessages, RecallCaptions]
     messageHits <- withDb pool $ searchRecallIn policyA messageCorpora "tea" Nothing 30
-    sort (map (.rhSource) messageHits) `shouldBe` ["caption", "message", "pin"]
+    sort (map (.rhSource) messageHits) `shouldBe` ["caption", "message", "message"]
     messageHits `shouldSatisfy` all ((/= Nothing) . (.rhMessageId))
 
     memoryHits <- withDb pool $ searchRecallIn policyA (Set.singleton RecallMemories) "tea" Nothing 30
@@ -116,7 +114,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
 seedRecallFixture :: DbPool -> IO ()
 seedRecallFixture pool = do
   insertMessageWithCanonicalId pool 1001 groupA member botId testTime Nothing "tea raw message"
-  insertMessageWithCanonicalId pool 1002 groupA member botId testTime Nothing "tea pinned message"
+  insertMessageWithCanonicalId pool 1002 groupA member botId testTime Nothing "tea second message"
   insertMessageWithCanonicalId pool 1003 groupA member botId testTime Nothing "photo only"
   _ <-
     withDb pool $
@@ -130,7 +128,6 @@ seedRecallFixture pool = do
             draftEvidence = AdminEvidence (Just scopeA) "recall fixture"
           }
   withConn pool $ \conn -> do
-    _ <- execute_ conn "INSERT INTO sessions (group_id, pinned) VALUES (700, '[1002]'::jsonb)"
     _ <-
       execute_
         conn

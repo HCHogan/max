@@ -41,7 +41,7 @@ spec pool = before_ (truncateAll pool) $
         s <- withDb pool $ fetchOrInit testGroup "deepseek-flash"
         s.model `shouldBe` "deepseek-flash"
         s.persona `shouldBe` Nothing
-        s.pinned `shouldBe` []
+        s.effortOverride `shouldBe` Nothing
         s.debugOverride `shouldBe` Nothing
 
       it "is idempotent — second call returns the same row" $ do
@@ -55,7 +55,7 @@ spec pool = before_ (truncateAll pool) $
         let modified =
               record0.session
                 { persona = Just "猫娘",
-                  pinned = [101, 102, 103],
+                  effortOverride = Just "high",
                   clearedAt = Just t0,
                   debugOverride = Just True,
                   model = "deepseek-pro"
@@ -66,7 +66,7 @@ spec pool = before_ (truncateAll pool) $
           Just record1 -> record1.revision `shouldBe` record0.revision + 1
         reloaded <- withDb pool $ fetchRecordOrInit testGroup "deepseek-flash"
         reloaded.session.persona `shouldBe` Just "猫娘"
-        reloaded.session.pinned `shouldBe` [101, 102, 103]
+        reloaded.session.effortOverride `shouldBe` Just "high"
         reloaded.session.clearedAt `shouldBe` Just t0
         reloaded.session.debugOverride `shouldBe` Just True
         reloaded.session.model `shouldBe` "deepseek-pro"
@@ -75,11 +75,11 @@ spec pool = before_ (truncateAll pool) $
         stale <- withDb pool $ fetchRecordOrInit testGroup "deepseek-flash"
         first <- withDb pool $ saveSessionCAS stale (stale.session {persona = Just "first"})
         first `shouldSatisfy` isJust
-        second <- withDb pool $ saveSessionCAS stale (stale.session {pinned = [99]})
+        second <- withDb pool $ saveSessionCAS stale (stale.session {effortOverride = Just "low"})
         second `shouldSatisfy` isNothing
         reloaded <- withDb pool $ fetchRecordOrInit testGroup "deepseek-flash"
         reloaded.session.persona `shouldBe` Just "first"
-        reloaded.session.pinned `shouldBe` []
+        reloaded.session.effortOverride `shouldBe` Nothing
 
     describe "Max.Session write-through registry" $ do
       it "serializes concurrent mutations and reloads every committed field" $ do
@@ -88,17 +88,17 @@ spec pool = before_ (truncateAll pool) $
         _ <-
           concurrently
             (withDb pool $ updateSession handle (\s -> (s {persona = Just "cat"}, ())))
-            (withDb pool $ updateSession handle (\s -> (s {pinned = [41, 42]}, ())))
+            (withDb pool $ updateSession handle (\s -> (s {effortOverride = Just "medium"}, ())))
 
         cached <- readSession handle
         cached.persona `shouldBe` Just "cat"
-        cached.pinned `shouldBe` [41, 42]
+        cached.effortOverride `shouldBe` Just "medium"
 
         restarted <- newSessionRegistry
         reloadedHandle <- withDb pool $ loadSession restarted "deepseek-flash" testGroup
         reloaded <- readSession reloadedHandle
         reloaded.persona `shouldBe` Just "cat"
-        reloaded.pinned `shouldBe` [41, 42]
+        reloaded.effortOverride `shouldBe` Just "medium"
 
       it "refreshes and reapplies after another registry wins the CAS" $ do
         registryA <- newSessionRegistry
@@ -107,13 +107,13 @@ spec pool = before_ (truncateAll pool) $
         handleB <- withDb pool $ loadSession registryB "deepseek-flash" testGroup
 
         withDb pool $ updateSession handleA (\s -> (s {persona = Just "winner"}, ()))
-        withDb pool $ updateSession handleB (\s -> (s {pinned = [7]}, ()))
+        withDb pool $ updateSession handleB (\s -> (s {effortOverride = Just "xhigh"}, ()))
 
         restarted <- newSessionRegistry
         handle <- withDb pool $ loadSession restarted "deepseek-flash" testGroup
         reloaded <- readSession handle
         reloaded.persona `shouldBe` Just "winner"
-        reloaded.pinned `shouldBe` [7]
+        reloaded.effortOverride `shouldBe` Just "xhigh"
 
       it "cancels an unmasked transaction body without publishing or retaining its lock" $ do
         registry <- newSessionRegistry
@@ -159,7 +159,7 @@ spec pool = before_ (truncateAll pool) $
               result `shouldSatisfy` isLeft
               cachedAfter <- readSession handle
               cachedAfter.persona `shouldBe` cachedBefore.persona
-              cachedAfter.pinned `shouldBe` cachedBefore.pinned
+              cachedAfter.effortOverride `shouldBe` cachedBefore.effortOverride
 
               -- The failing writer released the handle lock; a valid write can
               -- immediately commit and publish.

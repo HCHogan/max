@@ -17,16 +17,14 @@ spec = describe "Max.Recall" $ do
     sort (map (.rhSource) hits)
       `shouldBe` ["episode", "episode", "memory", "memory", "message", "message"]
 
-  it "deduplicates raw, pin, and caption forms while preserving their best signals" $ do
-    let raw = (candidate "message" "message:7" 0.9) {rcSnippet = "raw"}
-        pinned = (candidate "pin" "message:7" 0.7) {rcSnippet = "pin", rcSemanticScore = Just 0.8, rcPinned = True}
+  it "deduplicates raw and caption forms while preserving their best signals" $ do
+    let raw = (candidate "message" "message:7" 0.9) {rcSnippet = "raw", rcSemanticScore = Just 0.8}
         caption = (candidate "caption" "message:7" 1) {rcSnippet = "caption"}
-        hits = selectRecallHits now 10 [raw, pinned, caption]
+        hits = selectRecallHits now 10 [raw, caption]
     hits `shouldSatisfy` \case
       [hit] ->
         hit.rhSource == "caption"
           && hit.rhSnippet == "caption"
-          && hit.rhPinned
           && hit.rhLexicalScore == Just 1
           && hit.rhSemanticScore == Just 0.8
       _ -> False
@@ -41,7 +39,7 @@ spec = describe "Max.Recall" $ do
     it "requires a strong primary signal and returns at most three hints" $ do
       let strongLexical = candidate "memory" "memory:lexical" 0.95
           strongSemantic = (candidate "episode" "episode:semantic" 0.1) {rcSemanticScore = Just 0.9}
-          boostedButWeak = (candidate "pin" "message:weak" 0.4) {rcPinned = True, rcPermanent = True, rcImportance = 1}
+          boostedButWeak = (candidate "message" "message:weak" 0.4) {rcPermanent = True, rcImportance = 1}
           additional = [candidate "message" ("message:" <> fromString (show n)) 0.99 | n <- [1 .. 4 :: Int]]
           hits = selectDirectAutoHints now DirectUserTurn (strongLexical : strongSemantic : boostedButWeak : additional)
       length hits `shouldBe` 3
@@ -66,7 +64,6 @@ candidate source key lexical =
       rcImportance = 0,
       rcLexicalScore = Just lexical,
       rcSemanticScore = Nothing,
-      rcPinned = False,
       rcPermanent = False
     }
 

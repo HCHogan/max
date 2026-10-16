@@ -54,7 +54,7 @@ canonical message ledger ────┬──▶ mirror deliveries: native wher
 - **Memory with an audit trail.** Conversation-scoped memories are
   versioned CAS records with evidence links and actor permissions. Historian
   proposes updates from conversation evidence; expiry follows recorded dates. Unified
-  recall spans memories, episodes, raw history, pins, and media captions,
+  recall spans memories, episodes, raw history, and media captions,
   lexical and semantic, with embedding provenance checked in SQL.
 - **It reads its own source.** An allowlisted snapshot of this repository
   ships inside the binary; the bot answers questions about itself by

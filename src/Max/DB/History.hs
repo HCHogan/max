@@ -20,7 +20,6 @@ module Max.DB.History
     fetchMessageWithCursorInScope,
     publishedTurnInScope,
     isTurnTriggerInScope,
-    fetchMessagesByIdsInScope,
     fetchForwardChildrenInScope,
     messageStatsDaily,
   )
@@ -30,7 +29,7 @@ import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Time (Day, UTCTime)
-import Database.PostgreSQL.Simple (In (..), Only (..), Query, (:.) (..))
+import Database.PostgreSQL.Simple (Only (..), Query, (:.) (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
@@ -308,26 +307,6 @@ fetchMessageInScope scope canonical = do
       )
       (conversationStorageId scope, canonical)
   pure (listToMaybe (rows :: [HistoryItem]))
-
--- | Bulk fetch by canonical message id.  Preserves the order of input ids
--- (which is what !pin expects — display the user's chosen order).
-fetchMessagesByIdsInScope ::
-  (WithConnection :> es, IOE :> es) =>
-  ConversationScope ->
-  [Int64] ->
-  Eff es [HistoryItem]
-fetchMessagesByIdsInScope _ [] = pure []
-fetchMessagesByIdsInScope scope ids = do
-  rows <-
-    query
-      ( "SELECT "
-          <> historyColumns
-          <> " FROM agent_messages WHERE group_id = ? AND canonical_message_id IN ?"
-      )
-      (conversationStorageId scope, In ids)
-  -- Re-order to match input.
-  let byId = [(r.canonicalId, r) | r <- rows :: [HistoryItem]]
-  pure [r | i <- ids, Just r <- [lookup i byId]]
 
 -- | Canonical children linked to a forwarded chat record, in wire order.
 -- Their @occurred_at@ is the original send time captured by the adapter;

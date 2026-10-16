@@ -122,7 +122,7 @@ buildContextObserved request = do
         ]
   let inputs = cpInputs plan
       visible = [history | history <- inputs.transcript, history.fromBot || Set.notMember history.canonicalId inputs.inFlight]
-      bodies = [(history.canonicalId, textFingerprint history.renderedText) | history <- visible <> inputs.pinnedItems]
+      bodies = [(history.canonicalId, textFingerprint history.renderedText) | history <- visible]
   pure ((renderContextPlan plan, contextRoster inputs), cursor, bodies)
 
 traceJson :: ContextTrace -> Value

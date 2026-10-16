@@ -805,7 +805,6 @@ recallCandidateJson candidate =
       "importance" .= candidate.rcImportance,
       "lexical_score" .= candidate.rcLexicalScore,
       "semantic_score" .= candidate.rcSemanticScore,
-      "pinned" .= candidate.rcPinned,
       "permanent" .= candidate.rcPermanent
     ]
 
@@ -823,7 +822,6 @@ recallHitJson hit =
       "score" .= hit.rhScore,
       "lexical_score" .= hit.rhLexicalScore,
       "semantic_score" .= hit.rhSemanticScore,
-      "pinned" .= hit.rhPinned,
       "permanent" .= hit.rhPermanent
     ]
 
@@ -943,7 +941,6 @@ sessionJson s =
       "model" .= s.model,
       "persona" .= s.persona,
       "cleared_at" .= s.clearedAt,
-      "pinned" .= s.pinned,
       "debug" .= s.debugOverride,
       "sticker" .= s.stickerOverride,
       "proactive" .= s.proactiveOverride,

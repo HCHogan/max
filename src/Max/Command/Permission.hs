@@ -44,5 +44,5 @@ requiredCapability = \case
   Kill _ -> Just ("kill", TierGroupAdmin)
   DestinySet _ -> Just ("destiny", TierGroupAdmin)
   -- everything else: queries, own-scope actions (!memory rm already
-  -- ownership-checks inside execute), sandboxed !shell, pins, btw
+  -- ownership-checks inside execute), sandboxed !shell, btw
   _ -> Nothing

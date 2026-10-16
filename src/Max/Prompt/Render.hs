@@ -81,7 +81,6 @@ import Max.Context.Types
         now,
         origin,
         outputCapabilities,
-        pinnedItems,
         recentTurns,
         replyCtx,
         session,
@@ -186,7 +185,6 @@ contextRoster pi' =
             [ (h.authorPrincipalId, bestName h)
             | h <-
                 pi'.transcript
-                  <> pi'.pinnedItems
                   <> maybe [] (\(r, _, _) -> [r]) pi'.replyCtx,
               not h.fromBot
             ]
@@ -321,7 +319,6 @@ renderContext pi' =
           envText
           backgroundBlock
           pi'.replyCtx
-          pi'.pinnedItems
           pi'.triggerForward
           pi'.triggerMessage
       -- Interleave source labels and media; merge the first label into the body
@@ -347,9 +344,9 @@ renderContext pi' =
 
 -- | Pure policy: enforce the selected model's token ceiling.  Learned lingo
 -- goes first under pressure, then optional active memories,
--- followed by the oldest unpinned raw transcript rows; explicit permanent
--- memories are the final degradable source.  Reply targets, pins, the current
--- message, environment, and attached media are protected here.
+-- followed by the oldest raw transcript rows; explicit permanent memories
+-- are the final degradable source.  Reply targets, the current message,
+-- environment, and attached media are protected here.
 planContext :: ContextLimits -> ContextSnapshot -> ContextPlan
 planContext limits snapshot =
   let budget = contextBudget limits (not (null (csInputs snapshot).images))
@@ -445,11 +442,6 @@ contextTrace budget inputs messages drops withinBudget =
       (replyContextTokens inputs.replyCtx)
       ContextIncluded
       "explicit reply target, attached file metadata, and quoted forward children",
-    ContextTrace
-      "pin"
-      (historyContentTokens inputs.pinnedItems)
-      ContextIncluded
-      "explicitly pinned source messages",
     ContextTrace
       "trigger_forward"
       (historyContentTokens inputs.triggerForward)
@@ -651,28 +643,17 @@ renderUser ::
   Text -> -- environment block (volatile; goes after the transcript)
   Maybe Text -> -- memory block (volatile; likewise)
   Maybe (HistoryItem, [FileRecord], [HistoryItem]) ->
-  [HistoryItem] -> -- pinned items, in user pin order
   [HistoryItem] -> -- trigger's own forward children (trigger IS a 转发)
   DispatchMessage ->
   [Text]
-renderUser tz' now' origin' compartments' recentTurns' continuationView' mTranscript envText mMemBlock replyCtx' pinnedItems' triggerFwd' gm =
-  -- Every part but the last is a cacheable prefix: pins and summaries change
-  -- rarely, the transcript only grows. Each ends in a newline and the next
+renderUser tz' now' origin' compartments' recentTurns' continuationView' mTranscript envText mMemBlock replyCtx' triggerFwd' gm =
+  -- Every part but the last is a cacheable prefix: summaries change rarely,
+  -- the transcript only grows. Each ends in a newline and the next
   -- starts with a bracket, so a cache boundary falls on a token boundary.
   [T.intercalate "\n" part <> "\n" | part <- [stable, transcript], not (null part)]
     <> [T.intercalate "\n" (dropWhile T.null volatile)]
   where
-   -- Pinned first so the model sees them as primary context
-   stable =
-    ( if null pinnedItems'
-        then []
-        else
-          [ "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]",
-            T.intercalate "\n" (map (renderHistoryLine tz') pinnedItems'),
-            ""
-          ]
-    )
-      <> renderCompartments tz' compartments'
+   stable = renderCompartments tz' compartments'
    transcript = case mTranscript of
           Nothing -> []
           Just [] -> ["[recent messages]", "(无历史消息)"]
