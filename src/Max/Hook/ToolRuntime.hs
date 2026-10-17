@@ -14,5 +14,5 @@ hookToolsWithDatabase context = map (hoistTool lower) hookTools
   where
     lower :: forall a. Eff (HookControl : HookQuery : es) a -> Eff es a
     lower action =
-      runHookQuery (toolConversationScope context) (toolMonitorArmingAllowed context) $
-        runHookControl (toolCallAuthority context) ((.atrTurnId) . turnOutputAgentTurn <$> toolTurnOutputContext context) (toolGroupId context) (toolAuthorPrincipalId context) (toolMonitorArmingAllowed context) action
+      runHookQuery (toolConversationScope context) $
+        runHookControl (toolCallAuthority context) ((.atrTurnId) . turnOutputAgentTurn <$> toolTurnOutputContext context) (toolGroupId context) (toolAuthorPrincipalId context) action

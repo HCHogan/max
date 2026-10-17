@@ -24,12 +24,10 @@ type instance DispatchOf HookControl = Dynamic
 setHook :: (HookControl :> es) => HookPatch -> Eff es (Either Text Value)
 setHook = send . SetHook
 
-runHookControl :: (WithConnection :> es, IOE :> es) => Maybe CallAuthority -> Maybe AgentTurnId -> GroupId -> PrincipalId -> Bool -> Eff (HookControl : es) a -> Eff es a
-runHookControl authority turn group@(GroupId gid) actor@(PrincipalId principal) administrator = interpret $ \_ -> \case
-  SetHook patch
-    | not administrator -> pure (Left "group_administrator_required")
-    | otherwise -> case turn of
-        Nothing -> pure (Left "caller_fenced")
-        Just current -> withTransaction $ do
-          allowed <- authorizeCallWithin authority current group actor
-          if allowed then DB.setHook gid principal patch else pure (Left "caller_fenced")
+runHookControl :: (WithConnection :> es, IOE :> es) => Maybe CallAuthority -> Maybe AgentTurnId -> GroupId -> PrincipalId -> Eff (HookControl : es) a -> Eff es a
+runHookControl authority turn group@(GroupId gid) actor@(PrincipalId principal) = interpret $ \_ -> \case
+  SetHook patch -> case turn of
+    Nothing -> pure (Left "caller_fenced")
+    Just current -> withTransaction $ do
+      allowed <- authorizeCallWithin authority current group actor
+      if allowed then DB.setHook gid principal patch else pure (Left "caller_fenced")

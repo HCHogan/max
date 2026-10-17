@@ -531,7 +531,8 @@ destructive to its designated test database and refuses to skip when unset.
 
 ## Message inbound hooks
 
-`set_hook` and `query_hooks` are built-in, conversation-bound administrator tools.
+`set_hook` and `query_hooks` are built-in, conversation-bound tools with no role
+check: Max decides on its own whether to set a rule.
 Only `message.inbound` is supported. Names are unique within the conversation;
 there are at most eight definitions, including disabled definitions. Reuse a name
 to replace an unused rule. Creation requires `event`, `source` and
@@ -610,15 +611,15 @@ each rule's effective action from the final `message_ignored` decision.
 state, frozen hook revisions, visibility/activation flags, effective visibility,
 and dispatch/error state. It does not execute or retry work.
 
-The tools require the host-bound administrator capability. Writes also recheck
-the active turn/call authority in the same transaction as publication. No tool
+Writes recheck the active turn/call authority in the same transaction as
+publication; the requester is recorded as the revision's actor. No tool
 argument selects another conversation or supplies authority. Raw audit records
-are available only through these administrative tools; ordinary context reads
-cannot retrieve ignored messages by guessing an ID.
+are available only through `query_hooks`; ordinary context reads cannot
+retrieve ignored messages by guessing an ID.
 
-If a rule blocks every administrator message, recover through the operator's
-PostgreSQL connection, outside the message path. Replace the group ID and name
-below. This publishes a disabled revision instead of rewriting old evidence:
+If a rule ignores every message, so nobody can ask Max to change it, recover
+through the operator's PostgreSQL connection, outside the message path. Replace
+the group ID and name below. This publishes a disabled revision instead of rewriting old evidence:
 
 ```sql
 BEGIN;

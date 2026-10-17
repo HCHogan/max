@@ -122,15 +122,14 @@ spec pool = beforeAll_ warmHookRuntime $ before_ (truncateAll pool) $ describe "
     first <- readHook (HookRuns Nothing Nothing Nothing Nothing 1)
     length (array "runs" first) `shouldBe` 1
     field "next_before" first `shouldSatisfy` (/= Null)
-  it "denies non-admin reads/writes and fenced callers at the capability boundary" $ do
+  it "lets any live caller manage hooks but fences callers without a turn or from another conversation" $ do
     (mid, actor) <- setup
     let p = patch "return {action:'pass'};"
-    withDb pool (Control.runHookControl Nothing Nothing (GroupId 900) (PrincipalId actor) False (Control.setHook p)) `shouldReturn` Left "group_administrator_required"
-    withDb pool (Control.runHookControl Nothing Nothing (GroupId 900) (PrincipalId actor) True (Control.setHook p)) `shouldReturn` Left "caller_fenced"
-    withDb pool (Query.runHookQuery scope False (Query.queryHooks HookList)) `shouldReturn` Left "group_administrator_required"
+    withDb pool (Control.runHookControl Nothing Nothing (GroupId 900) (PrincipalId actor) (Control.setHook p)) `shouldReturn` Left "caller_fenced"
+    withDb pool (Query.runHookQuery scope (Query.queryHooks HookList)) >>= (`shouldSatisfy` isRight)
     turn <- withDb pool (startAgentTurn (GroupId 900) (CanonicalMessageId mid) (PrincipalId actor))
-    withDb pool (Control.runHookControl Nothing (Just turn.atrTurnId) (GroupId 901) (PrincipalId actor) True (Control.setHook p)) `shouldReturn` Left "caller_fenced"
-    withDb pool (Control.runHookControl Nothing (Just turn.atrTurnId) (GroupId 900) (PrincipalId actor) True (Control.setHook p)) >>= (`shouldSatisfy` isRight)
+    withDb pool (Control.runHookControl Nothing (Just turn.atrTurnId) (GroupId 901) (PrincipalId actor) (Control.setHook p)) `shouldReturn` Left "caller_fenced"
+    withDb pool (Control.runHookControl Nothing (Just turn.atrTurnId) (GroupId 900) (PrincipalId actor) (Control.setHook p)) >>= (`shouldSatisfy` isRight)
   it "does not expose edits, forward children or attached files of ignored rows" $ do
     (_, actor) <- setup
     save actor (patch "return {action:'ignore'};") >>= (`shouldSatisfy` isRight)

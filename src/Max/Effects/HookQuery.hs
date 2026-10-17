@@ -19,8 +19,6 @@ type instance DispatchOf HookQuery = Dynamic
 queryHooks :: (HookQuery :> es) => Types.HookQuery -> Eff es (Either Text Value)
 queryHooks = send . QueryHooks
 
-runHookQuery :: (WithConnection :> es, IOE :> es) => ConversationScope -> Bool -> Eff (HookQuery : es) a -> Eff es a
-runHookQuery scope administrator = interpret $ \_ -> \case
-  QueryHooks request
-    | administrator -> DB.queryHooks (conversationStorageId scope) request
-    | otherwise -> pure (Left "group_administrator_required")
+runHookQuery :: (WithConnection :> es, IOE :> es) => ConversationScope -> Eff (HookQuery : es) a -> Eff es a
+runHookQuery scope = interpret $ \_ -> \case
+  QueryHooks request -> DB.queryHooks (conversationStorageId scope) request
