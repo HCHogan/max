@@ -35,7 +35,10 @@ module Max.Lingo.Policy
     promptJargonPool,
     promptJargonMatches,
     promptJargonWindow,
+    promptSelfWindow,
     sampleExpressions,
+    stylePhrases,
+    overusedPhrases,
     matchJargon,
   )
 where
@@ -365,24 +368,102 @@ parseContextualMeaning raw = do
 -- | One prompt samples 'promptExpressionSample' of the group's
 -- 'promptExpressionPool' most established expressions, and shows at most
 -- 'promptJargonMatches' known terms found in the last 'promptJargonWindow'
--- member lines.
-promptExpressionPool, promptExpressionSample, promptJargonPool, promptJargonMatches, promptJargonWindow :: Int
+-- member lines.  Max's own last 'promptSelfWindow' lines decide which habits
+-- are already in use: a wording in 'overuseLines' of them is named back as
+-- overused, at most 'promptOverusedMax' at a time.
+promptExpressionPool, promptExpressionSample, promptJargonPool, promptJargonMatches, promptJargonWindow, promptSelfWindow, overuseLines, promptOverusedMax :: Int
 promptExpressionPool = 200
-promptExpressionSample = 6
+promptExpressionSample = 4
 promptJargonPool = 500
 promptJargonMatches = 4
 promptJargonWindow = 40
+promptSelfWindow = 12
+overuseLines = 2
+promptOverusedMax = 3
 
 -- | Weighted sampling without replacement (Efraimidis–Spirakis), keyed by a
 -- hash of the seed so one trigger always renders the same sample: previews and
 -- the real turn agree, and a retry is not a different prompt.
-sampleExpressions :: Int64 -> Int -> [LingoExpression] -> [LingoExpression]
-sampleExpressions seed count =
-  take (max 0 count) . map snd . sortOn (Down . fst) . map keyed
+--
+-- A habit already in Max's own recent lines is left out, and variants of one
+-- wording (「难绷」, 「难绷了」) never share a sample.  Without both, a word a
+-- member used once in a while came back in most of Max's replies: the sample
+-- kept suggesting it, and every reply that took the suggestion became raw
+-- history the next turn copied.
+sampleExpressions :: Int64 -> Int -> [Text] -> [LingoExpression] -> [LingoExpression]
+sampleExpressions seed count selfLines =
+  pick (max 0 count) [] . map snd . sortOn (Down . fst) . map keyed . filter fresh
   where
+    said = map spokenKey selfLines
+    fresh expression = not (any (\phrase -> any (occursIn phrase) said) (stylePhrases expression.leStyle))
     keyed expression =
       let u = unitInterval (fnv1a (T.pack (show seed <> ":" <> show expression.leId)))
        in (log u / fromIntegral (max 1 expression.leHits), expression)
+    pick 0 _ _ = []
+    pick _ _ [] = []
+    pick n taken (expression : rest)
+      | any (\phrase -> any (overlaps phrase) taken) phrases = pick n taken rest
+      | otherwise = expression : pick (n - 1) (phrases <> taken) rest
+      where
+        phrases = stylePhrases expression.leStyle
+
+-- | Learned wordings that Max's own recent lines already repeat: present in
+-- at least 'overuseLines' of them, most repeated first, one per family.
+overusedPhrases :: [Text] -> [LingoExpression] -> [Text]
+overusedPhrases selfLines pool =
+  take promptOverusedMax . distinct [] . map fst . sortOn (\(phrase, lines') -> (Down lines', T.length phrase)) $
+    [(phrase, lines') | phrase <- candidates, let lines' = length (filter (occursIn phrase) said), lines' >= overuseLines]
+  where
+    said = map spokenKey selfLines
+    candidates = dedupOn id (concatMap (stylePhrases . (.leStyle)) pool)
+    distinct _ [] = []
+    distinct taken (phrase : rest)
+      | any (overlaps phrase) taken = distinct taken rest
+      | otherwise = phrase : distinct (phrase : taken) rest
+
+-- | The literal wording a learned style recommends, as a match key: each
+-- quoted span (「难绷」, “神了”), an empty bracket pair (句末加（）), or for an
+-- unquoted style the word after its verb (用 我去).  Single characters
+-- (「？」, 6) are ordinary speech, not a habit, and are left out.
+stylePhrases :: Text -> [Text]
+stylePhrases style = dedupOn id (filter ((>= 2) . T.length) (quoted <> brackets <> bare))
+  where
+    normalized = T.toCaseFold (normalizeBrackets style)
+    quoted = filter (not . T.null) (map T.strip (quotedSpans normalized))
+    brackets = ["（）" | "（）" `T.isInfixOf` normalized]
+    bare
+      | not (null quoted && null brackets) = []
+      | otherwise = case T.words normalized of
+          [phrase] -> [phrase]
+          (_verb : phrase : _) -> [phrase]
+          [] -> []
+
+quotedSpans :: Text -> [Text]
+quotedSpans text = case T.uncons (T.dropWhile (`notElem` openers) text) of
+  Nothing -> []
+  Just (open, rest) -> case T.break (closes open) rest of
+    (inside, after)
+      | T.null after -> []
+      | otherwise -> inside : quotedSpans (T.drop 1 after)
+  where
+    openers = "「『“‘\"'" :: String
+    closes open c = case open of
+      '「' -> c == '」'
+      '『' -> c == '』'
+      '‘' -> c == '’'
+      '\'' -> c == '\''
+      -- Models mix curly and straight double quotes within one style.
+      _ -> c `elem` ("”\"“" :: String)
+
+normalizeBrackets :: Text -> Text
+normalizeBrackets = T.replace "()" "（）"
+
+-- | One of Max's lines as 'stylePhrases' keys are matched against.
+spokenKey :: Text -> Text
+spokenKey = T.toCaseFold . normalizeBrackets . cleanLingoLine
+
+overlaps :: Text -> Text -> Bool
+overlaps a b = a `T.isInfixOf` b || b `T.isInfixOf` a
 
 unitInterval :: Word64 -> Double
 unitInterval h = (fromIntegral (h `shiftR` 11) + 0.5) / 9007199254740992

@@ -86,11 +86,13 @@ import Max.Images
 import Max.LLM.Types (ContentBlock (ImageDataUrl))
 import Max.Lingo.Policy
   ( matchJargon,
+    overusedPhrases,
     promptExpressionPool,
     promptExpressionSample,
     promptJargonMatches,
     promptJargonPool,
     promptJargonWindow,
+    promptSelfWindow,
     sampleExpressions,
   )
 import Max.Lingo.Types (LingoView (..))
@@ -200,6 +202,7 @@ collectContextSnapshot request now' history = do
           <> maybe [] (\(r, _, _) -> [r.renderedText]) replyCtx0
           <> [dispatchText gm]
       )
+      [h.renderedText | h <- transcript', h.fromBot]
   -- Context stickers the caption worker has already described read
   -- as [sticker#<id>: <caption>] instead of an opaque [sticker]
   -- marker — a non-multimodal model gets to "see" them, and a
@@ -298,21 +301,27 @@ collectContextSnapshot request now' history = do
       }
 
 -- | A weighted sample of the group's learned expressions, seeded by the
--- trigger so a preview and its turn agree, and the known jargon that the
--- member lines around this trigger actually used.
+-- trigger so a preview and its turn agree, the known jargon that the member
+-- lines around this trigger actually used, and the learned wordings Max's own
+-- recent lines already repeat.
 collectLingo ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->
   Int64 ->
+  -- | Member lines around the trigger.
+  [Text] ->
+  -- | Max's own lines in the transcript.
   [Text] ->
   Eff es LingoView
-collectLingo scope seed recentLines = do
+collectLingo scope seed recentLines ownLines = do
   expressions <- listExpressionCandidates scope promptExpressionPool
   known <- listKnownJargon scope promptJargonPool
+  let self = lastN promptSelfWindow ownLines
   pure
     LingoView
-      { lvExpressions = sampleExpressions seed promptExpressionSample expressions,
-        lvJargon = matchJargon promptJargonMatches (lastN promptJargonWindow recentLines) known
+      { lvExpressions = sampleExpressions seed promptExpressionSample self expressions,
+        lvJargon = matchJargon promptJargonMatches (lastN promptJargonWindow recentLines) known,
+        lvOverused = overusedPhrases self expressions
       }
   where
     lastN n xs = drop (length xs - n) xs

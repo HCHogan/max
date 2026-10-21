@@ -436,7 +436,8 @@ promptFixture =
               [ LingoExpression 7 "别人问了很基础的问题" "用 先看手册 带过去" 12 "先看手册第 12 章，看完再来问",
                 LingoExpression 3 "对离谱的接线表示震惊" "用 绷不住了" 5 "绷不住了，电源正负接反还能跑"
               ],
-            lvJargon = [LingoJargon "炸鸡" "把芯片或板子烧坏；群里自嘲用，不是吃的" 9]
+            lvJargon = [LingoJargon "炸鸡" "把芯片或板子烧坏；群里自嘲用，不是吃的" 9],
+            lvOverused = []
           },
       images =
         [ PromptImage "[↩ quoted message（22:45 阿飞）] 里的图片:" "data:image/jpeg;base64,cXVvdGVkLWltYWdl" Nothing,

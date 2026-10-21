@@ -84,18 +84,49 @@ spec = describe "Max.Lingo.Policy" $ do
         `shouldBe` Just (JargonInference Nothing False)
       parseGeneralMeaning "{\"meaning\": \" 经典 \"}" `shouldBe` Just "经典"
 
+  describe "stylePhrases" $ do
+    it "takes quoted spans, empty brackets, or the word after the verb" $ do
+      stylePhrases "用「难绷」" `shouldBe` ["难绷"]
+      stylePhrases "用“没绷住“" `shouldBe` ["没绷住"]
+      stylePhrases "「所以说」开头＋（）收尾" `shouldBe` ["所以说", "（）"]
+      stylePhrases "句尾加()" `shouldBe` ["（）"]
+      stylePhrases "用 我去" `shouldBe` ["我去"]
+      stylePhrases "用 Emmm" `shouldBe` ["emmm"]
+      stylePhrases "神了" `shouldBe` ["神了"]
+
+    it "drops single characters" $ do
+      stylePhrases "单独发一个“？”" `shouldBe` []
+      stylePhrases "直接发一个 6" `shouldBe` []
+
   describe "sampleExpressions" $ do
-    let pool = [LingoExpression i ("场景" <> tshowInt i) ("说法" <> tshowInt i) (fromIntegral (if i <= 5 then 40 else 1)) "例" | i <- [1 .. 50]]
+    let pool = [LingoExpression i ("场景" <> tshowInt i) ("说法" <> tshowInt i <> "号") (fromIntegral (if i <= 5 then 40 else 1)) "例" | i <- [1 .. 50]]
     it "is deterministic per seed and never repeats an entry" $ do
-      let picked = sampleExpressions 42 6 pool
-      picked `shouldBe` sampleExpressions 42 6 pool
+      let picked = sampleExpressions 42 6 [] pool
+      picked `shouldBe` sampleExpressions 42 6 [] pool
       length picked `shouldBe` 6
       length (Map.fromList [(e.leId, ()) | e <- picked]) `shouldBe` 6
 
     it "favours established expressions across seeds" $ do
-      let heavy = length [() | seed <- [1 .. 200], e <- sampleExpressions seed 6 pool, e.leId <= 5]
+      let heavy = length [() | seed <- [1 .. 200], e <- sampleExpressions seed 6 [] pool, e.leId <= 5]
       -- 5 of 50 entries carry 200 of 245 weight; uniform sampling would pick ~120.
       heavy `shouldSatisfy` (> 600)
+
+    it "leaves out habits Max's own recent lines already show" $ do
+      let picked = sampleExpressions 7 4 ["[↩#12] 拿鸡毛当令箭是吧（）", "这也太难绷了"] habits
+      map (.leStyle) picked `shouldMatchList` ["用“没绷住”", "用 我去"]
+
+    it "never puts two variants of one wording in a sample" $ do
+      let picked = [e.leStyle | seed <- [1 .. 50], e <- sampleExpressions seed 4 [] habits, "难绷" `T.isInfixOf` e.leStyle]
+          perSample = [length [() | e <- sampleExpressions seed 4 [] habits, "难绷" `T.isInfixOf` e.leStyle] | seed <- [1 .. 50]]
+      picked `shouldSatisfy` (not . null)
+      maximum perSample `shouldBe` 1
+
+  describe "overusedPhrases" $ do
+    it "names wordings in at least two recent lines, most repeated first, one per family" $
+      overusedPhrases ["难绷了（）", "难绷", "这也难绷()", "没绷住", "我去"] habits `shouldBe` ["难绷", "（）"]
+
+    it "is empty when Max varies its wording" $
+      overusedPhrases ["难绷", "没绷住", "我去（）"] habits `shouldBe` []
 
   describe "matchJargon" $ do
     let known = [LingoJargon "典" "反讽" 30, LingoJargon "ds" "DeepSeek" 12, LingoJargon "炸鸡" "烧坏板子" 5]
@@ -114,6 +145,17 @@ sources =
     LingoSource 2 102 10 "阿飞" False "对对对，你说的都对",
     LingoSource 3 103 20 "老张" False "又开始了，典",
     LingoSource 4 104 10 "阿飞" False "看这个 https://tokenhub.example.com/token [image#104.0: 截图]"
+  ]
+
+-- | A family of 难绷 variants, a bracket habit and two unrelated wordings.
+habits :: [LingoExpression]
+habits =
+  [ LingoExpression 1 "表示无语" "用「难绷」" 8 "难绷",
+    LingoExpression 2 "表示无语" "直接说“难绷”" 3 "难绷",
+    LingoExpression 3 "表示无语" "用 难绷了" 2 "难绷了",
+    LingoExpression 4 "被离谱内容整无语" "用“没绷住”" 8 "没绷住",
+    LingoExpression 5 "表示无语或轻蔑" "句末加（）" 9 "那确实（）",
+    LingoExpression 6 "表示惊讶" "用 我去" 5 "我去"
   ]
 
 tshowInt :: (Show a) => a -> Text

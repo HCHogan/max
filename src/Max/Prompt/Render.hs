@@ -22,6 +22,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
   ( breakOn,
+    concat,
     drop,
     intercalate,
     isInfixOf,
@@ -130,7 +131,8 @@ import Max.History.Types
 import Max.Lingo.Types
   ( LingoExpression (leExample, leSituation, leStyle),
     LingoJargon (ljMeaning, ljTerm),
-    LingoView (lvExpressions, lvJargon),
+    LingoView (lvExpressions, lvJargon, lvOverused),
+    nullLingoView,
   )
 import Max.LLM.Types
   ( ChatMessage (MsgAssistant, MsgSystem, MsgUser, MsgUserBlocks),
@@ -537,24 +539,29 @@ renderMemories tz' private senderName groupMems userMems
             else ("关于当前发言者 <" <> senderName <> ">（本会话）:") : map (memoryLine tz') userMems
         ]
 
--- | Learned lingo as reference, not instruction: habits to borrow
--- naturally and terms to understand.  Omitted when nothing was selected.
+-- | Learned lingo as reference, not instruction: habits whose tone and length
+-- to borrow, terms to understand, and the wordings Max has been repeating.
+-- Omitted when nothing was selected.
 renderLingo :: LingoView -> Maybe Text
 renderLingo view
-  | null view.lvExpressions && null view.lvJargon = Nothing
+  | nullLingoView view = Nothing
   | otherwise =
       Just . T.intercalate "\n" $
         section
-          "[群里的说话习惯 — 从群友聊天里学来的；顺手自然地用，别硬套，一次用一两个就够，别照抄原话]"
+          "[群里的说话习惯 — 从群友聊天里学来的，只作参考：学语气和长短，别照抄原话；偶尔顺手用一个就够，不用每次都用]"
           [ oneLine expression.leSituation <> "：" <> oneLine expression.leStyle <> "（群友原话：「" <> oneLine expression.leExample <> "」）"
           | expression <- view.lvExpressions
           ]
           <> section
             "[群里的黑话 — 最近聊天里出现了，这里是它在本群的意思]"
             [oneLine jargon.ljTerm <> "：" <> oneLine jargon.ljMeaning | jargon <- view.lvJargon]
+          <> overused
   where
     section _ [] = []
     section heading rows = heading : map ("  " <>) rows
+    overused
+      | null view.lvOverused = []
+      | otherwise = ["[你最近几条发言已经反复用了" <> T.concat ["「" <> oneLine phrase <> "」" | phrase <- view.lvOverused] <> "，这次换个说法，或者干脆不用]"]
 
 memoryLine :: TimeZone -> MemoryItem -> Text
 memoryLine tz' m =

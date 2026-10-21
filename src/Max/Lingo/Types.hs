@@ -30,16 +30,18 @@ data LingoJargon = LingoJargon
   }
   deriving stock (Show, Eq)
 
--- | What one prompt carries: a sample of expressions and the jargon terms the
--- recent conversation actually used.
+-- | What one prompt carries: a sample of expressions, the jargon terms the
+-- recent conversation actually used, and the learned wordings Max's own recent
+-- lines already keep repeating.
 data LingoView = LingoView
   { lvExpressions :: ![LingoExpression],
-    lvJargon :: ![LingoJargon]
+    lvJargon :: ![LingoJargon],
+    lvOverused :: ![Text]
   }
   deriving stock (Show, Eq)
 
 emptyLingoView :: LingoView
-emptyLingoView = LingoView [] []
+emptyLingoView = LingoView [] [] []
 
 nullLingoView :: LingoView -> Bool
-nullLingoView view = null view.lvExpressions && null view.lvJargon
+nullLingoView view = null view.lvExpressions && null view.lvJargon && null view.lvOverused

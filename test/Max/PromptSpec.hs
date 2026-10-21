@@ -400,9 +400,16 @@ spec = do
       upToLingo `shouldSatisfy` ("[memories — 背景备忘]" `T.isInfixOf`)
       upToLingo `shouldSatisfy` (not . ("[current message]" `T.isInfixOf`))
 
+    it "names the wordings Max keeps repeating, even with nothing sampled" $ do
+      let inp = baseInputs {lingo = emptyLingoView {lvOverused = ["难绷", "（）"]}}
+          (_, ub) = splitMessages (renderContext inp)
+      ub `shouldSatisfy` ("[你最近几条发言已经反复用了「难绷」「（）」，这次换个说法，或者干脆不用]" `T.isInfixOf`)
+      ub `shouldSatisfy` (not . ("[群里的说话习惯" `T.isInfixOf`))
+
     it "omits the lingo block when nothing was learned" $ do
       let (_, ub) = splitMessages (renderContext baseInputs)
       ub `shouldSatisfy` (not . ("[群里的" `T.isInfixOf`))
+      ub `shouldSatisfy` (not . ("反复用了" `T.isInfixOf`))
 
   describe "renderContext transcript" $ do
     -- The whole conversation is one system message plus one user
@@ -1058,3 +1065,4 @@ sampleLingo =
   LingoView
     [LingoExpression 1 "讽刺地赞同" "用 对对对" 12 "对对对，你说的都对"]
     [LingoJargon "典" "反讽，说事情离谱得很典型" 30]
+    []
