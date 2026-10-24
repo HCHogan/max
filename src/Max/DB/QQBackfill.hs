@@ -14,7 +14,7 @@ where
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Time (UTCTime)
-import Database.PostgreSQL.Simple.Types (Only (..))
+import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.Platform.Store.Endpoint (RegisteredEndpoint (..))
@@ -43,12 +43,15 @@ data QQBackfillResult = QQBackfillResult
   deriving stock (Eq, Show)
 
 -- | Enabled QQ endpoints already known to the canonical registry, newest
--- activity first.  Recovery never discovers/registers arbitrary QQ groups.
+-- activity first.  Recovery never discovers/registers arbitrary QQ groups,
+-- and skips groups outside the served list (empty = every group); private
+-- chats are always recovered.
 listQQBackfillEndpoints ::
   (WithConnection :> es, IOE :> es) =>
+  [Int64] ->
   Int ->
   Eff es [QQBackfillEndpoint]
-listQQBackfillEndpoints limit = do
+listQQBackfillEndpoints served limit = do
   rows <-
     query
       "SELECT e.endpoint_id, e.platform_account_id, e.conversation_id, \
@@ -66,9 +69,11 @@ listQQBackfillEndpoints limit = do
       \  ) latest ON true \
       \ WHERE a.platform = 'qq' AND a.enabled AND e.enabled \
       \   AND c.legacy_group_id IS NOT NULL \
+      \   AND (cardinality(?::bigint[]) = 0 OR c.conversation_kind = 'direct' \
+      \        OR c.legacy_group_id = ANY(?::bigint[])) \
       \ ORDER BY latest.received_at DESC NULLS LAST, e.endpoint_id \
       \ LIMIT ?"
-      (Only limit)
+      (PGArray served, PGArray served, limit)
   pure (toEndpoint <$> (rows :: [(Int64, Int64, Int64, Int64, Text, Maybe Text)]))
   where
     toEndpoint (endpointId, accountId, conversationId, legacyId, nativeAccountId, anchor) =

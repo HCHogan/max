@@ -1,5 +1,6 @@
 module Max.Handler.QQ
   ( handleEvents,
+    eventServed,
     IngestOutcome (..),
     ingestAllowsDownstream,
     recordAs,
@@ -100,6 +101,7 @@ import OneBot.Event
     HistoricalMessage (hmMessage, hmOccurredAt, hmRaw),
     HistoryParseFailureSummary (..),
     MessageNotice (mnGroupId, mnSelfId),
+    PokeEvent (pkGroupId),
     selectHistoryBefore,
     summarizeHistoryParseFailures,
   )
@@ -177,7 +179,11 @@ handleEvents q fetchSig mIntent clientRef = loop
     loop = do
       ev <- liftIO (atomically (readTQueue q))
       env <- ask @BotEnv
-      handle (mIntent >>= \intentState -> intentState <$ env.beIntent) ev
+      if eventServed env.beQQGroups ev
+        then handle (mIntent >>= \intentState -> intentState <$ env.beIntent) ev
+        else
+          logTrace "QQ event from a group outside qq_groups dropped" $
+            object ["group_id" .= fmap (\(GroupId g) -> g) (eventGroup ev)]
       loop
 
     handle activeIntent ev =
@@ -249,6 +255,22 @@ handleEvents q fetchSig mIntent clientRef = loop
           logInfo "friend request: auto-approving" $ object ["user_id" .= uidRaw]
           respondToFriendRequest flag AcceptFriend >>= either (logAttention_ . renderPlatformFailure) pure
 
+-- | Whether Max serves the conversation this event belongs to.  An unserved
+-- group's events are dropped before the ledger: nothing is stored, triggered,
+-- captioned or learned from them.  Private chats are always served, and so
+-- are events that belong to no conversation.  Empty serves every group.
+eventServed :: [Int64] -> Event -> Bool
+eventServed served ev = null served || maybe True groupServed (eventGroup ev)
+  where
+    groupServed gid@(GroupId raw) = isPrivateChat gid || raw `elem` served
+
+eventGroup :: Event -> Maybe GroupId
+eventGroup = \case
+  EvGroupMessage _ _ gm -> Just gm.groupId
+  EvMessageNotice _ notice -> Just notice.mnGroupId
+  EvPoke pk -> Just pk.pkGroupId
+  _ -> Nothing
+
 -- | Classify command syntax before persistence, including malformed commands.
 -- Reply-to-bot lookup and other dispatch decisions happen later.
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => Ingress -> T.Text -> Value -> GroupMessage -> Eff es IngestOutcome
@@ -314,7 +336,7 @@ emptyQQBackfillCounts :: QQBackfillCounts
 emptyQQBackfillCounts = QQBackfillCounts 0 0
 
 recoverQQHistory ::
-  (Log :> es, WithConnection :> es, IOE :> es) =>
+  (Log :> es, WithConnection :> es, Reader BotEnv :> es, IOE :> es) =>
   TVar ClientSlot ->
   Int ->
   Time.UTCTime ->
@@ -323,7 +345,8 @@ recoverQQHistory ::
 recoverQQHistory clientRef generation connectedAt fetchSig = do
   startedAt <- liftIO getCurrentTime
   let deadline = addUTCTime qqBackfillOverallSeconds startedAt
-  candidates <- listQQBackfillEndpoints (qqBackfillEndpointLimit + 1)
+  env <- ask @BotEnv
+  candidates <- listQQBackfillEndpoints env.beQQGroups (qqBackfillEndpointLimit + 1)
   let endpoints = take qqBackfillEndpointLimit candidates
       capped = length candidates > qqBackfillEndpointLimit
   logInfo "QQ history backfill started" $

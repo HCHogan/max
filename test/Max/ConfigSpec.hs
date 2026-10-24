@@ -168,6 +168,22 @@ spec = describe "startup configuration" $ do
   it "rejects an invalid worker count at startup" $
     withArgs ["--llm-api-key", "test-key", "--image-workers", "0"] $
       loadConfig `shouldThrow` anyIOException
+  it "serves the configured QQ groups plus any mirror group" $ do
+    config <- withArgs ["--llm-api-key", "test-key"] loadConfig
+    servedQQGroups config `shouldBe` []
+    listed <- withArgs ["--llm-api-key", "test-key", "--qq-groups", "111,222"] loadConfig
+    servedQQGroups listed `shouldBe` [111, 222]
+    withSystemTempFile "max-groups.yaml" $ \path handle -> do
+      hPutStr handle "llm:\n  default: main\n  profiles:\n    main:\n      api_key: test-key\nqq_groups: [111]\n"
+      hClose handle
+      fromFile <- withArgs ["--config-file", path] loadConfig
+      servedQQGroups fromFile `shouldBe` [111]
+    let matrixFlags = ["--matrix-homeserver", "https://matrix.example.test", "--matrix-access-token", "token", "--matrix-user-id", "@max:example.test", "--matrix-room-id", "!room:example.test", "--matrix-mirror-qq-group", "333"]
+    mirrored <- withArgs (["--llm-api-key", "test-key", "--qq-groups", "111,222"] <> matrixFlags) loadConfig
+    servedQQGroups mirrored `shouldBe` [111, 222, 333]
+    unrestricted <- withArgs (["--llm-api-key", "test-key"] <> matrixFlags) loadConfig
+    servedQQGroups unrestricted `shouldBe` []
+    validateConfig (listed {qqGroups = [111, 0]}) `shouldContain` ["qq_groups"]
   it "rejects incomplete Matrix settings" $
     withArgs ["--llm-api-key", "test-key", "--matrix-homeserver", "https://matrix.example.test"] $
       loadConfig `shouldThrow` anyIOException

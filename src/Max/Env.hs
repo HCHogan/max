@@ -38,6 +38,9 @@ data BotEnv = BotEnv
     beTimeZone :: !TimeZone,
     beTurnSilenceSeconds :: !Int,
     beOwners :: ![Int64],
+    -- | 'Max.Config.servedQQGroups': QQ groups whose events reach Max at
+    -- all.  Empty serves every group; private chats are never filtered.
+    beQQGroups :: ![Int64],
     beWebhookBaseUrl :: !(Maybe Text),
     beSearch :: !(Maybe SearchRuntime),
     -- | Present when a Bungie application is configured (destiny skill).

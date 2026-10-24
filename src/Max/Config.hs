@@ -10,6 +10,7 @@ module Max.Config
   ( AppConfig (..),
     loadConfig,
     validateConfig,
+    servedQQGroups,
     -- | Exposed so auxiliary executables (@max-intent-eval@) can
     -- compose their own flags on top of the full app config.
     appConfigParser,
@@ -29,11 +30,12 @@ import Autodocodec
     (.=),
   )
 import Control.Monad (unless, when)
+import Data.Containers.ListUtils (nubOrd)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone, minutesToTimeZone)
@@ -133,6 +135,9 @@ data AppConfig = AppConfig
     -- capability everywhere, plus the exclusive ones (!model, !grant…).
     -- Empty means no owner-tier commands work at all (safe default).
     owners :: ![Int64],
+    -- | QQ groups Max serves, as written; read it through 'servedQQGroups'.
+    -- Empty (the default) serves every group.
+    qqGroups :: ![Int64],
     -- | One Matrix room, optionally mirrored onto an explicit QQ group.
     matrix :: !(Maybe MatrixConfig),
     -- | Standalone iMessage group through an authenticated Tailscale bridge.
@@ -214,6 +219,17 @@ loadConfig = do
       ioError . userError . T.unpack $
         "invalid configuration fields: " <> T.intercalate ", " failures
 
+-- | The QQ group allowlist in force; empty serves every group.  A
+-- @mirror_qq_group@ is served even when @qq_groups@ leaves it out: the mirror
+-- is a conversation the operator configured on purpose, and dropping its QQ
+-- side would silently split it in half.
+servedQQGroups :: AppConfig -> [Int64]
+servedQQGroups cfg
+  | null cfg.qqGroups = []
+  | otherwise = nubOrd (cfg.qqGroups <> mirrors)
+  where
+    mirrors = catMaybes [cfg.matrix >>= (.mirrorQQGroup), cfg.imessage >>= (.mirrorQQGroup)]
+
 -- | Validate ranges and references without printing configuration secrets.
 validateConfig :: AppConfig -> [Text]
 validateConfig cfg =
@@ -230,6 +246,7 @@ validateConfig cfg =
       invalid "browser.grace_seconds" (cfg.browserGraceSeconds < 0),
       invalid "memory.timeout_seconds" (cfg.historianTimeoutSeconds <= 0),
       invalid "admin_call_retention_days" (cfg.adminCallRetentionDays < 0),
+      invalid "qq_groups" (any (<= 0) cfg.qqGroups),
       maybe [] validateAdmin cfg.admin,
       maybe [] validateBungie cfg.bungie,
       maybe [] (\embedCfg -> invalid "embedding.timeout_seconds" (embedCfg.ecTimeoutSeconds <= 0)) cfg.embedding,
@@ -482,6 +499,17 @@ appConfigParser usedRef =
           env "MAX_OWNERS",
           conf "owners",
           metavar "QQ[,QQ..]",
+          value []
+        ]
+    qqGroups <-
+      setting
+        [ help "QQ groups Max serves; events from any other group are dropped unread (empty = every group)",
+          reader (commaSeparatedList auto),
+          option,
+          long "qq-groups",
+          env "MAX_QQ_GROUPS",
+          conf "qq_groups",
+          metavar "GROUP[,GROUP..]",
           value []
         ]
     matrix <- subConfig "matrix" matrixParser

@@ -1,5 +1,7 @@
 module Max.DB.QQBackfillSpec (spec) where
 
+import Data.Foldable (for_)
+import Data.List (sort)
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..), execute, query)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb)
@@ -28,14 +30,22 @@ spec pool = before_ (truncateAll pool) $ describe "QQ reconnect backfill audit" 
           (Only ("41" :: Text))
       pure ()
 
-    [candidate] <- withDb pool (listQQBackfillEndpoints 10)
+    [candidate] <- withDb pool (listQQBackfillEndpoints [] 10)
     candidate.qbeEndpoint.compatibilityConversationId `shouldBe` 7777
     candidate.qbeNativeAccountId `shouldBe` "1000"
     candidate.qbeAnchorMessageSeq `shouldBe` Just "41"
 
+  it "recovers only served groups, and private chats regardless" $ do
+    for_ [GroupId 7777, GroupId 8888, GroupId (-4242)] $ \group ->
+      withDb pool (ensureQQEndpointFor (UserId 1000) group)
+    let recovered served =
+          sort . map (.qbeEndpoint.compatibilityConversationId) <$> withDb pool (listQQBackfillEndpoints served 10)
+    recovered [] `shouldReturn` [-4242, 7777, 8888]
+    recovered [8888] `shouldReturn` [-4242, 8888]
+
   it "records terminal counts without presenting the run as a durable cursor" $ do
     _ <- withDb pool (ensureQQEndpointFor (UserId 1000) (GroupId 7777))
-    [candidate] <- withDb pool (listQQBackfillEndpoints 10)
+    [candidate] <- withDb pool (listQQBackfillEndpoints [] 10)
     runId <- withDb pool (startQQBackfillRun 3 candidate testTime 100)
     withDb pool $
       finishQQBackfillRun

@@ -30,7 +30,7 @@ import Max.Browser.Runtime (browserMaintenance)
 import Max.Browser.Vault (loadBrowserVault)
 import Max.Bungie.Manifest (manifestWorker)
 import Max.Bungie.Runtime (newBungieRuntime)
-import Max.Config (AppConfig (..), loadConfig)
+import Max.Config (AppConfig (..), loadConfig, servedQQGroups)
 import Max.Conversation (newConversations)
 import Max.DB.AgentTurn (addAgentTurnUsage, reclaimInterruptedTurns)
 import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
@@ -183,6 +183,7 @@ main = do
                     beSessions = sessions,
                     beSkills = skillReg,
                     beOwners = cfg.owners,
+                    beQQGroups = servedQQGroups cfg,
                     beAdminTarget = adminTargets,
                     beWebhookBaseUrl = cfg.admin >>= (.acWebhookBaseUrl),
                     beTasks = tasks,
@@ -313,6 +314,8 @@ runApp httpRuntime cfg deliveryTransports applied eventQ fetchSig intentState lo
           "images_dir" .= T.pack cfg.imagesDir,
           "chat_views_dir" .= fmap T.pack cfg.chatViewsDir,
           "image_workers" .= cfg.imageWorkers,
+          -- An empty list serves every group.
+          "qq_groups" .= servedQQGroups cfg,
           -- Which file the settings came from, or that none was
           -- found.  Every value above can also come from a flag or an
           -- env var that silently outranks the file, so knowing the

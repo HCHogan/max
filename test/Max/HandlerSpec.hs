@@ -2,6 +2,7 @@
 
 module Max.HandlerSpec (spec) where
 
+import Data.Aeson (Value (Null))
 import Max.Command.Permission (PermTier (..))
 import Max.Handler.Access (rosterTier)
 import Max.Handler.Output
@@ -11,6 +12,7 @@ import Max.Handler.Output
   )
 import Max.Handler.QQ
   ( IngestOutcome (..),
+    eventServed,
     ingestAllowsDownstream,
     recordAs,
   )
@@ -20,7 +22,7 @@ import Max.Platform.QQ (qqIngestBody)
 import Max.Platform.Roster (GroupMember (..))
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.ReplySend (cleanModelText, stripBareMarkers, stripStickerText, stripThinkSpans)
-import OneBot.Event (GroupMessage (..), Sender (..))
+import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
@@ -35,6 +37,30 @@ spec = do
     it "recognizes restored administrator authority without borrowing another member's role" $ do
       rosterTier (UserId 7) (Just [GroupMember (UserId 7) Nothing Nothing "admin" Nothing]) `shouldBe` Just TierGroupAdmin
       rosterTier (UserId 7) (Just [GroupMember (UserId 8) Nothing Nothing "owner" Nothing]) `shouldBe` Just TierMember
+
+  describe "qq_groups allowlist" $ do
+    let message group =
+          EvGroupMessage "qq" Null $
+            GroupMessage
+              { selfId = UserId 1000,
+                groupId = GroupId group,
+                userId = UserId 2001,
+                messageId = MessageId 9000,
+                message = [SegText "hi"],
+                rawMessage = "hi",
+                sender = Sender (UserId 2001) Nothing Nothing
+              }
+        poke group = EvPoke (PokeEvent (UserId 1000) (GroupId group) (UserId 2001) (UserId 1000))
+    it "serves every group when the list is empty" $
+      eventServed [] (message 7777) `shouldBe` True
+    it "drops messages and pokes from groups outside the list" $ do
+      eventServed [7777] (message 7777) `shouldBe` True
+      eventServed [7777] (message 8888) `shouldBe` False
+      eventServed [7777] (poke 7777) `shouldBe` True
+      eventServed [7777] (poke 8888) `shouldBe` False
+    it "never filters private chats or connection events" $ do
+      eventServed [7777] (message (-2001)) `shouldBe` True
+      eventServed [7777] EvHeartbeat `shouldBe` True
 
   describe "durable ingest policy" $ do
     it "allows media/dispatch work only after the immutable ledger is durable" $ do

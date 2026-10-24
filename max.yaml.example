@@ -143,6 +143,18 @@ persona: |
 # owners: [10001, 10002]
 
 # ─────────────────────────────────────────────────────────────────────────────
+# QQ group allowlist.  When non-empty, Max serves only these groups: messages,
+# reactions, recalls and pokes from any other QQ group are dropped before the
+# ledger (nothing stored, no turn, no proactive classification) and reconnect
+# backfill skips them.  Private chats are never filtered, and a matrix/imessage
+# `mirror_qq_group` is always served.  Empty or omitted serves every group.
+# MAX_QQ_GROUPS=111,222 sets it from the environment instead — handy when the
+# group numbers themselves should stay out of a world-readable config file.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# qq_groups: [123456789, 987654321]
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Stickers.  The bot learns them from the groups it sits in; captioning makes
 # them retrievable (and thus sendable).  `enabled` is the config-level default
 # for whether it may post one — per-group override is !sticker on/off.
