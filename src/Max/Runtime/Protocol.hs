@@ -14,6 +14,7 @@ module Max.Runtime.Protocol
     instanceMachine,
     instanceGroup,
     sandboxNetworkForGroup,
+    parseOperationsGroups,
     parseRuntimeArgs,
     validAttributes,
     packageExpression,
@@ -32,7 +33,7 @@ import Data.Aeson (FromJSON, ToJSON, eitherDecodeStrict', encode)
 import Data.Bits (shiftL, shiftR, (.|.))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isSpace)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -140,6 +141,17 @@ sandboxNetworkForGroup :: [Int64] -> Int64 -> Text
 sandboxNetworkForGroup groups gid
   | gid > 0 && gid `elem` groups = "maxops"
   | otherwise = "max-sandbox"
+
+-- | The runtime operations groups file (a sops secret, so the ids stay out of
+-- the Nix store): positive group ids separated by commas or whitespace.  One
+-- malformed entry refuses the whole file rather than silently narrowing it.
+parseOperationsGroups :: Text -> Either Text [Int64]
+parseOperationsGroups =
+  traverse group . filter (not . T.null) . T.split (\c -> c == ',' || isSpace c)
+  where
+    group value = case readMaybe (T.unpack value) of
+      Just gid | gid > 0, T.pack (show gid) == value -> Right gid
+      _ -> Left "invalid operations groups file"
 
 parseVolumeName :: Text -> Either Text InstanceName
 parseVolumeName volume = do

@@ -12,12 +12,19 @@ job adapters and notification receiver have been removed.
 ```nix
 services.max.operations = {
   enable = true;
-  allowedGroups = [ 611798505 ];
+  allowedGroups = [ 123456789 ];
+  # Optional: more groups from a runtime secret, kept out of the Nix store.
+  allowedGroupsFile = config.sops.secrets.max-ops-groups.path;
   loginServer = "https://tailscale.example.com";
   authKeyFile = config.sops.secrets.max-ops-preauthkey.path;
   domain = "inner.example.com";
 };
 ```
+
+`allowedGroupsFile` holds group ids separated by commas or whitespace and is
+unioned with `allowedGroups`. max-runtime reads it once at start and refuses to
+start on a malformed entry, so give the secret
+`restartUnits = [ "max-runtime.service" ]`.
 
 Create a Headscale user and preauthkey, store the key with sops-nix, and authorize
 that user in the tailnet's network and Tailscale SSH policy. The production fleet

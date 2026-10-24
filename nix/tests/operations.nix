@@ -102,10 +102,9 @@ pkgs.testers.runNixOSTest {
       sandbox.memory = 1024;
       operations = {
         enable = true;
-        allowedGroups = [
-          123
-          456
-        ];
+        allowedGroups = [ 123 ];
+        # 456 comes from the runtime file, as a sops secret would supply it.
+        allowedGroupsFile = "/run/ops-groups";
         loginServer = "https://control:8080";
         domain = "fleet.test";
         authKeyFile = "/run/ops-preauthkey";
@@ -115,7 +114,8 @@ pkgs.testers.runNixOSTest {
       pkgs.jq
       pkgs.curl
     ];
-    specialisation.revoked.configuration.services.max.operations.allowedGroups = lib.mkForce [ 456 ];
+    systemd.tmpfiles.rules = [ "f /run/ops-groups 0400 root root - 456" ];
+    specialisation.revoked.configuration.services.max.operations.allowedGroups = lib.mkForce [ ];
   };
   testScript = ''
     import json, shlex
@@ -171,6 +171,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("/run/current-system/specialisation/revoked/bin/switch-to-configuration test", timeout=180)
     machine.fail(execute(first, "ssh fleet true"))
     assert machine.succeed(cli + "network 123").strip() == "max-sandbox"
+    assert machine.succeed(cli + "network 456").strip() == "maxops"
     create(first, "max-sandbox")
     machine.succeed(execute(first, "cat /work/keep | grep durable"))
     assert machine.succeed(cli + f"policy {first}").strip() == "9 max-sandbox 1"

@@ -22,6 +22,18 @@ in
       default = [ ];
       description = "QQ conversations whose sandboxes join maxops; all members may operate.";
     };
+    allowedGroupsFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Runtime file outside the Nix store (a sops-nix secret, say) with more
+        groups for {option}`allowedGroups`, separated by commas or whitespace,
+        so the group ids appear neither in the store nor in the configuration.
+        max-runtime reads it once at start and refuses to start on a malformed
+        entry; restart max-runtime.service when it changes (sops-nix
+        `restartUnits`).
+      '';
+    };
     loginServer = lib.mkOption {
       type = lib.types.str;
       description = "Headscale registration URL.";
@@ -45,6 +57,12 @@ in
           && lib.hasPrefix "/" ops.authKeyFile
           && !(lib.hasPrefix "/nix/store/" ops.authKeyFile);
         message = "SSH operations requires sandboxes and a runtime authKeyFile outside the Nix store.";
+      }
+      {
+        assertion =
+          ops.allowedGroupsFile == null
+          || (lib.hasPrefix "/" ops.allowedGroupsFile && !(lib.hasPrefix "/nix/store/" ops.allowedGroupsFile));
+        message = "services.max.operations.allowedGroupsFile must be an absolute runtime path outside the Nix store.";
       }
     ];
     networking.nftables.enable = true;

@@ -61,6 +61,9 @@ data Configuration = Configuration
     gateway :: String,
     dns :: [Text],
     operationsGroups :: [Int64],
+    -- | Runtime file with more operations groups, read once at startup;
+    -- see 'parseOperationsGroups'.
+    operationsGroupsFile :: Maybe FilePath,
     operationsDns :: [Text],
     generations :: Map.Map Text FilePath,
     commands :: Map.Map Text FilePath,
@@ -692,7 +695,11 @@ runRuntimeBroker :: FilePath -> IO ()
 runRuntimeBroker path = do
   uid <- getEffectiveUserID
   unless (uid == 0) (failure 77 "runtime broker must run as root")
-  configuration <- BS.readFile path >>= either (failure 125 . T.pack) pure . eitherDecodeStrict'
+  declared <- BS.readFile path >>= either (failure 125 . T.pack) pure . eitherDecodeStrict'
+  fileGroups <- case declared.operationsGroupsFile of
+    Nothing -> pure []
+    Just groupsFile -> BS.readFile groupsFile >>= either (failure 125) pure . parseOperationsGroups . decodeOutput
+  let configuration = declared {operationsGroups = declared.operationsGroups <> fileGroups}
   require (configuration.subnet == "10.231.0.0/16" && configuration.gateway == "10.231.0.1") "unsupported sandbox address pool"
   forM_ ["systemctl", "systemd-run", "ssh", "ssh-proxy", "ip", "bridge", "nix", "mount"] $ \command ->
     require (maybe False (T.isPrefixOf "/nix/store/" . T.pack) (Map.lookup command configuration.commands)) "broker executables must be store paths"

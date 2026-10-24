@@ -42,6 +42,7 @@ let
       gateway = "10.231.0.1";
       dns = cfg.sandbox.nameservers;
       operationsGroups = lib.optionals cfg.operations.enable cfg.operations.allowedGroups;
+      operationsGroupsFile = if cfg.operations.enable then cfg.operations.allowedGroupsFile else null;
       inherit operationsDns;
       # Max fills each conversation's view; the broker owns the directories.
       chatViews = "${cfg.mediaDirectory}/views";

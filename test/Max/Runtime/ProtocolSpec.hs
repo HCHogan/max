@@ -25,6 +25,11 @@ spec = do
       fmap instanceUnit (parseInstanceName "max-sb--812024380-s15") `shouldBe` Right "max-sandbox@-812024380-s15.service"
       fmap instanceMachine (parseInstanceName "max-sb--812024380-s15") `shouldBe` Right "max-sandbox--812024380-s15"
       fmap instanceUnit (parseInstanceName "max-br-728502470") `shouldBe` Right "max-browser@728502470.service"
+    it "reads an operations groups file and refuses any malformed entry" $ do
+      parseOperationsGroups "111,222\n 333\n" `shouldBe` Right [111, 222, 333]
+      parseOperationsGroups "" `shouldBe` Right []
+      forM_ ["111,abc", "0", "-5", "0111", "9223372036854775808", "111;222"] $ \value ->
+        parseOperationsGroups value `shouldSatisfy` isLeft
     it "refuses paths, unit escapes, extra arguments and noncanonical or overflowing identifiers"
       $ forM_
         [ "../../etc/passwd",

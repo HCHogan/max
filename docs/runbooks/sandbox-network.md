@@ -11,7 +11,7 @@ the VM. Max does not require Docker.
 | Mode | Selection | Connectivity |
 | --- | --- | --- |
 | `max-sandbox` | Ordinary conversations | Public IPv4 DNS/HTTP/HTTPS/Git; no host, private, link-local, Tailscale or peer access |
-| `maxops` | `services.max.operations.allowedGroups` when operations is enabled | Dedicated Tailscale identity, fleet and approved subnet routes, plus public egress |
+| `maxops` | `services.max.operations.allowedGroups` and `allowedGroupsFile` when operations is enabled | Dedicated Tailscale identity, fleet and approved subnet routes, plus public egress |
 
 ## Ordinary conversations
 
