@@ -28,8 +28,8 @@ spec = describe "Matrix adapter" $ do
   it "keeps the id-shaped display when no richer label was captured" $ do
     let lowered =
           lower matrixTextEnv $
-            Body [NMention (MentionIdentity (PrincipalIdentityId 7)) "1578034713"]
-    traverse loweredText lowered.chunks `shouldBe` Right ["@1578034713"]
+            Body [NMention (MentionIdentity (PrincipalIdentityId 7)) "5550100001"]
+    traverse loweredText lowered.chunks `shouldBe` Right ["@5550100001"]
 
   -- A client that sends markdown in the plain body writes the pill as
   -- [label](https://matrix.to/#/@user).  Matching only the label left the

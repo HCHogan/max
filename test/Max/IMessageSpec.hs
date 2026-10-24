@@ -59,7 +59,7 @@ spec = describe "iMessage adapter" $ do
                          "created_at" .= ("2026-08-03T12:00:00Z" :: String),
                          "reply_to_guid" .= ("PREVIOUS-GUID" :: String),
                          "thread_originator_guid" .= ("GUID-1" :: String),
-                         "mentioned_handles" .= (["hnkhgn@icloud.com"] :: [String]),
+                         "mentioned_handles" .= (["max01@example.com"] :: [String]),
                          "attachments"
                            .= [ object
                                   [ "attachment_id" .= ("abc123" :: String),
@@ -81,7 +81,7 @@ spec = describe "iMessage adapter" $ do
         message.guid `shouldBe` "GUID-41"
         message.replyToGuid `shouldBe` Just "PREVIOUS-GUID"
         message.threadOriginatorGuid `shouldBe` Just "GUID-1"
-        message.mentionedHandles `shouldBe` ["hnkhgn@icloud.com"]
+        message.mentionedHandles `shouldBe` ["max01@example.com"]
         -- Messages advances reply_to_guid along the conversation, while the
         -- thread originator remains the bubble selected by the user.
         iMessageReplyTarget message `shouldBe` Just "GUID-1"
@@ -140,7 +140,7 @@ spec = describe "iMessage adapter" $ do
     iMessageMediaFilename typed `shouldBe` "photo.bin"
 
   it "identifies a transport-account reply shape without making its mention direct" $ do
-    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" (Just 123456789) 1000
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["max01@example.com"] "Maxwell" (Just 123456789) 1000
         value =
           object
             [ "messages"
@@ -264,7 +264,7 @@ spec = describe "iMessage adapter" $ do
               "next_rowid" .= (43 :: Int),
               "has_more" .= False
             ]
-        cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" Nothing 1000
+        cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["max01@example.com"] "Maxwell" Nothing 1000
     page <- parseIMessagePage value `shouldSatisfyRight` const True
     case page.messages of
       [message] -> do
@@ -282,12 +282,12 @@ spec = describe "iMessage adapter" $ do
       `shouldBe` Right IMessageSendFailed
 
   it "redacts the bridge token from Show" $ do
-    let cfg = IMessageConfig "http://100.64.0.25:8787" "secret-token" "m1pro" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" Nothing 1000
+    let cfg = IMessageConfig "http://100.64.0.25:8787" "secret-token" "m1pro" "iMessage;+;chat" ["max01@example.com"] "Maxwell" Nothing 1000
     show cfg `shouldNotContain` "secret-token"
 
   it "binds a confirmed mention to the Apple handle, not the local display name" $ do
-    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" Nothing 1000
-        confirmed = mentionPage 45 "GUID-MENTION" (["hnkhgn@icloud.com"] :: [String])
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["max01@example.com"] "Maxwell" Nothing 1000
+        confirmed = mentionPage 45 "GUID-MENTION" (["max01@example.com"] :: [String])
         plain = mentionPage 46 "GUID-PLAIN" ([] :: [String])
         mentionPage :: Int -> String -> [String] -> Value
         mentionPage row guid handles =
@@ -316,7 +316,7 @@ spec = describe "iMessage adapter" $ do
       _ -> expectationFailure "expected one confirmed and one plain message"
 
   it "maps attributed UTF-16 ranges to semantic mentions without QQ-id guessing" $ do
-    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["1578034713"] "Maxwell" Nothing 1000
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["5550100001"] "Maxwell" Nothing 1000
         value =
           object
             [ "messages"
@@ -328,7 +328,7 @@ spec = describe "iMessage adapter" $ do
                          "text" .= ("👋 Maxwell hey" :: String),
                          "mentions"
                            .= [ object
-                                  [ "handle" .= ("1578034713" :: String),
+                                  [ "handle" .= ("5550100001" :: String),
                                     "display" .= ("Maxwell" :: String),
                                     "utf16_location" .= (3 :: Int),
                                     "utf16_length" .= (7 :: Int)
@@ -345,9 +345,9 @@ spec = describe "iMessage adapter" $ do
       [message] -> do
         let nodes = iMessageTextNodes cfg message
         nodes
-          `shouldBe` [NText "👋 ", NMention (NativeUserId "1578034713") "Maxwell", NText " hey"]
+          `shouldBe` [NText "👋 ", NMention (NativeUserId "5550100001") "Maxwell", NText " hey"]
         promptText (Body nodes) `shouldBe` "👋 @Maxwell hey"
-        message.mentionedHandles `shouldBe` ["1578034713"]
+        message.mentionedHandles `shouldBe` ["5550100001"]
       _ -> expectationFailure "expected one mentioned message"
 
   -- The bridge in production has never sent attributed ranges, only
@@ -355,7 +355,7 @@ spec = describe "iMessage adapter" $ do
   -- no caller, so the nodes said "plain text" and every @ went unanswered.
   -- These assert the wiring, not the predicate: they read the node list.
   it "recovers a rangeless mention and binds it to the registered account" $ do
-    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" Nothing 1000
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["max01@example.com"] "Maxwell" Nothing 1000
         page :: Int -> String -> [String] -> String -> Value
         page row guid handles text =
           object
@@ -381,7 +381,7 @@ spec = describe "iMessage adapter" $ do
 
     -- Messages puts the mention's display name inline; the node replaces it,
     -- and carries 'accountKey' because that is the identity with a principal.
-    confirmed <- nodesOf (page 48 "GUID-HANDLE" ["hnkhgn@icloud.com"] "Maxwell 走远了")
+    confirmed <- nodesOf (page 48 "GUID-HANDLE" ["max01@example.com"] "Maxwell 走远了")
     confirmed `shouldBe` [NMention (NativeUserId "mac-account") "Maxwell", NText " 走远了"]
 
     -- A typed @ carries no metadata at all.  The @ belongs to the mention, so

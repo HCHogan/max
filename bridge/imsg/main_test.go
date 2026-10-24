@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-const confirmedMentionBodyHex = "040B73747265616D747970656481E803840140848484124E5341747472696275746564537472696E67008484084E534F626A656374008592848484084E53537472696E67019484012B0B4D617877656C6C2068657986840269490107928484840C4E5344696374696F6E61727900948401690392849696265F5F6B494D4261736557726974696E67446972656374696F6E4174747269627574654E616D658692848484084E534E756D626572008484074E5356616C7565009484012A848401719DFF86928496961D5F5F6B494D4D657373616765506172744174747269627574654E616D658692849B9C9D9D0086928496961C5F5F6B494D4D656E74696F6E436F6E6669726D65644D656E74696F6E869284969611686E6B68676E4069636C6F75642E636F6D868697020492849899029299929A929E929F8686"
+const confirmedMentionBodyHex = "040B73747265616D747970656481E803840140848484124E5341747472696275746564537472696E67008484084E534F626A656374008592848484084E53537472696E67019484012B0B4D617877656C6C2068657986840269490107928484840C4E5344696374696F6E61727900948401690392849696265F5F6B494D4261736557726974696E67446972656374696F6E4174747269627574654E616D658692848484084E534E756D626572008484074E5356616C7565009484012A848401719DFF86928496961D5F5F6B494D4D657373616765506172744174747269627574654E616D658692849B9C9D9D0086928496961C5F5F6B494D4D656E74696F6E436F6E6669726D65644D656E74696F6E8692849696116D61783031406578616D706C652E636F6D868697020492849899029299929A929E929F8686"
 
 func TestFilterChatsRegistersOnlyAllowlistedChat(t *testing.T) {
 	s := &server{allowedChatGUID: "iMessage;+;allowed"}
@@ -280,10 +280,10 @@ func TestConfirmedMentionHandlesUsesIdentityNotDisplayText(t *testing.T) {
 		t.Fatal(err)
 	}
 	handles := confirmedMentionHandles(body)
-	if len(handles) != 1 || handles[0] != "hnkhgn@icloud.com" {
+	if len(handles) != 1 || handles[0] != "max01@example.com" {
 		t.Fatalf("unexpected confirmed mentions: %#v", handles)
 	}
-	if got := confirmedMentionHandles([]byte("Maxwell hey hnkhgn@icloud.com")); len(got) != 0 {
+	if got := confirmedMentionHandles([]byte("Maxwell hey max01@example.com")); len(got) != 0 {
 		t.Fatalf("plain text was promoted to a mention: %#v", got)
 	}
 }
@@ -291,11 +291,11 @@ func TestConfirmedMentionHandlesUsesIdentityNotDisplayText(t *testing.T) {
 func TestAddConfirmedMentionsKeepsIdentityAndAttributedRange(t *testing.T) {
 	message := map[string]any{}
 	addConfirmedMentions(message, []mentionSpan{
-		{Handle: "1578034713", Display: "Maxwell", UTF16Location: 3, UTF16Length: 7},
-		{Handle: "1578034713", UTF16Location: -1},
+		{Handle: "5550100001", Display: "Maxwell", UTF16Location: 3, UTF16Length: 7},
+		{Handle: "5550100001", UTF16Location: -1},
 	})
 	handles := message["mentioned_handles"].([]string)
-	if len(handles) != 1 || handles[0] != "1578034713" {
+	if len(handles) != 1 || handles[0] != "5550100001" {
 		t.Fatalf("unexpected handles: %#v", handles)
 	}
 	mentions := message["mentions"].([]mentionSpan)
@@ -326,7 +326,7 @@ func TestSanitizeMessagesAddsOnlyConfirmedMentionHandles(t *testing.T) {
 	if err := json.Unmarshal(sanitized, &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Messages) != 2 || len(result.Messages[0].MentionedHandles) != 1 || result.Messages[0].MentionedHandles[0] != "hnkhgn@icloud.com" {
+	if len(result.Messages) != 2 || len(result.Messages[0].MentionedHandles) != 1 || result.Messages[0].MentionedHandles[0] != "max01@example.com" {
 		t.Fatalf("confirmed mention was not enriched: %s", sanitized)
 	}
 	if len(result.Messages[1].MentionedHandles) != 0 {
