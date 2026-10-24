@@ -209,15 +209,15 @@ spec = do
   -- group as numbers.
   describe "QQ sender naming" $ do
     it "reads through an unset 群名片 to the nickname" $
-      (qqEnvelope endpointFixture epoch Null (groupMessage (Sender (UserId 2701137803) (Just "坎特洛特月亮公主") (Just "")))).senderDisplayName
-        `shouldBe` Just "坎特洛特月亮公主"
+      (qqEnvelope endpointFixture epoch Null (groupMessage (Sender (UserId 3000000004) (Just "示例昵称") (Just "")))).senderDisplayName
+        `shouldBe` Just "示例昵称"
 
     it "still prefers a card that is actually set" $
-      (qqEnvelope endpointFixture epoch Null (groupMessage (Sender (UserId 2701137803) (Just "坎特洛特月亮公主") (Just "月亮")))).senderDisplayName
-        `shouldBe` Just "月亮"
+      (qqEnvelope endpointFixture epoch Null (groupMessage (Sender (UserId 3000000004) (Just "示例昵称") (Just "示例名片")))).senderDisplayName
+        `shouldBe` Just "示例名片"
 
     it "leaves a nameless sender nameless rather than blank" $
-      (qqEnvelope endpointFixture epoch Null (groupMessage (Sender (UserId 2701137803) (Just "   ") (Just "")))).senderDisplayName
+      (qqEnvelope endpointFixture epoch Null (groupMessage (Sender (UserId 3000000004) (Just "   ") (Just "")))).senderDisplayName
         `shouldBe` Nothing
 
   describe "QQ canonical image normalization" $ do
@@ -267,14 +267,14 @@ spec = do
         (label, promptText (qqIngestBody segments))
           `shouldBe` (label, renderPlainText segments)
   where
-    endpointFixture = RegisteredEndpoint (EndpointId 1) (PlatformAccountId 1) (ConversationId 1) 1032949653
+    endpointFixture = RegisteredEndpoint (EndpointId 1) (PlatformAccountId 1) (ConversationId 1) 123456789
 
     epoch = UTCTime (fromGregorian 2026 8 7) 0
 
     groupMessage sender =
       GroupMessage
-        { selfId = UserId 2107570581,
-          groupId = GroupId 1032949653,
+        { selfId = UserId 1000000001,
+          groupId = GroupId 123456789,
           userId = sender.userId,
           messageId = MessageId 7,
           message = [SegText "在吗"],

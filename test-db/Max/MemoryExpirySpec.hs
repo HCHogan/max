@@ -15,12 +15,12 @@ import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "recorded memory expiry" $ do
-  let scope = conversationScopeFor (GroupId 1090284918)
+  let scope = conversationScopeFor (GroupId 123456789)
       namespace = groupMemoryNamespace scope
       actor = MemoryActor ActorHistorian Nothing Nothing
       evidence identifier = MessageEvidence scope Nothing identifier
       remember source = withDb pool (createMemory actor namespace (MemoryDraft "优惠截至 2026-01-01" MemoryActive Nothing (evidence source)))
-      sourceMessage = insertRawMessage pool 1 1090284918 1 99 testTime Nothing "优惠截至 2026-01-01"
+      sourceMessage = insertRawMessage pool 1 123456789 1 99 testTime Nothing "优惠截至 2026-01-01"
       schedule memory source (delay :: Int) =
         void . withDb pool $
           execute

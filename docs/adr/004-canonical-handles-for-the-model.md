@@ -34,7 +34,7 @@ media handles; plus `ingest_seq` as `context_expand`'s pagination cursors.
 
 | case | rule | shape in production |
 | --- | --- | --- |
-| QQ, numeric native id | passed through unchanged | `843665085` |
+| QQ, numeric native id | passed through unchanged | `987654321` |
 | bot-authored | `-nextval('synthetic_message_id_seq')` | `-5780` |
 | everything else | `platform_ids.mapped_id` (`-1000000000000 - nextval`) | `-1000000001164` |
 
@@ -72,7 +72,7 @@ Media is already keyed by (message, position). It is only keyed off the
 
 ### People are addressed by a platform number the model can invent
 
-The roster reads `成员对照（[@#QQ号] 即 @某人）：[@#2107570581]=好吧`. It is
+The roster reads `成员对照（[@#QQ号] 即 @某人）：[@#1000000001]=好吧`. It is
 QQ-shaped on every platform, and a plausible-looking number the model made
 up is accepted, minting a fake identity on the destination account (recorded
 in issue #13's lower-priority list).
@@ -91,7 +91,7 @@ and nothing ever merges them.
 
 That is the honest state, because **the physical human is not something the
 system can observe.** Nothing proves that `@hank:imdomestic.com` and QQ
-`843665085` are one person. The system can know accounts, plus assertions
+`987654321` are one person. The system can know accounts, plus assertions
 someone made about them.
 
 Two mechanisms are nevertheless written as if merging happened:
@@ -267,7 +267,7 @@ rendered, not stored.
 
 Stored summaries and memories are **not** invalidated: their prose carries
 no ids (checked — 193 compartments and 348 memories, zero real matches). The
-one exception is a memory whose text records `群内用户 好吧（QQ 2107570581）`,
+one exception is a memory whose text records `群内用户 好吧（QQ 1000000001）`,
 written by the extractor as a person's identity; that is a separate defect
 in the extractor's prompt, not a consequence of this change.
 

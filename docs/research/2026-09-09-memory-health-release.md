@@ -18,8 +18,8 @@ Historian schema 2 使用 `expected_version`，模型复制看到的版本，数
 
 | 生产记忆 | 修复前 | 修复后 | 证据与审计 |
 |---|---|---|---|
-| 534 | 主体 2783846439，v1，permanent | principal 982，v2，permanent | 唯一平台身份映射与原始消息作者一致；`backfill` mutation 记录原、新主体，正文不变 |
-| 536 | 主体 3526452465，v1，permanent | principal 784，v2，permanent | 同样经过唯一身份、来源、版本、容量和重复检查，正文不变 |
+| 534 | 主体 3000000001，v1，permanent | principal 982，v2，permanent | 唯一平台身份映射与原始消息作者一致；`backfill` mutation 记录原、新主体，正文不变 |
+| 536 | 主体 3000000002，v1，permanent | principal 784，v2，permanent | 同样经过唯一身份、来源、版本、容量和重复检查，正文不变 |
 | 579 | 停留在 9 月 5 日的招新信息，v1 | 采用 9 月 8 日更正，v2，active | 重读 162781、162856、163088、163653、163654；capture 1461 的重评应用成功 |
 
 memory 579 的六条更早提案（1276、1339、1352、1406、1415、1440）经过内容比较后记为 dismissed，防止旧状态覆盖新状态；原提案、摘要、引用和 Historian cursor 均保留。memory 595 涉及持续变化的沙盒部署状态，仍待结合当前事实重评，没有直接把旧的机器人自述写成今天的事实。
@@ -88,4 +88,4 @@ iMessage 在 06:45:38、06:47:09 UTC 仍记录 bridge 连接超时并等待恢�
 
 ## 后续证据勘误
 
-P1/P2 取样复核发现，先前对 memory 579 的“没有更晚消息”检查误把 legacy group ID 用于 `messages.conversation_id`。该群的 canonical conversation ID 为 46749，正确查询应使用 `messages.group_id=1090284918` 或 canonical ID。9 月 9 日已有后续的初试/复试讨论；9 月 8 日更正的五条原始证据仍成立，但不能将它称作截至验收时的最新完整状态。此前审计理由中的这一句也有此局限，不能改写不可变审计来掩盖。后续回放必须同时标注 legacy/canonical ID，并检查更晚的人类消息；本轮修正文档及测试，不改生产数据。
+P1/P2 取样复核发现，先前对 memory 579 的“没有更晚消息”检查误把 legacy group ID 用于 `messages.conversation_id`。该群的 canonical conversation ID 为 46749，正确查询应使用 `messages.group_id=123456789` 或 canonical ID。9 月 9 日已有后续的初试/复试讨论；9 月 8 日更正的五条原始证据仍成立，但不能将它称作截至验收时的最新完整状态。此前审计理由中的这一句也有此局限，不能改写不可变审计来掩盖。后续回放必须同时标注 legacy/canonical ID，并检查更晚的人类消息；本轮修正文档及测试，不改生产数据。

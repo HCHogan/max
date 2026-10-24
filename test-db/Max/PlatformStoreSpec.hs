@@ -1355,7 +1355,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         envelope =
           inboundBody endpoint.endpointId now "qq-mention-projection" $
             Body
-              [ NMention (NativeUserId "2291939848") "2291939848",
+              [ NMention (NativeUserId "3000000003") "3000000003",
                 NText " hello"
               ]
     result <- withDb pool (ingestEnvelope defaultIngestOptions envelope)
@@ -1372,11 +1372,11 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         \   ON pi.principal_identity_id = (m.canonical_content->'nodes'->0->>'identity')::bigint \
         \ WHERE m.canonical_message_id = ?"
         (Only (resultId result).unCanonicalMessageId)
-    -- The mention names the person; 2291939848 is the account it resolved
+    -- The mention names the person; 3000000003 is the account it resolved
     -- through, which only the identity row still knows about.
     case rows :: [(Text, Text, Text, Int64)] of
       [(rendered, display, native, principal)] ->
-        (rendered, display, native) `shouldBe` ("[mention#" <> tshow principal <> "] hello", "2291939848", "2291939848")
+        (rendered, display, native) `shouldBe` ("[mention#" <> tshow principal <> "] hello", "3000000003", "3000000003")
       other -> expectationFailure ("unexpected projection rows: " <> show other)
 
   it "enriches an identity first discovered through a bare mention" $ do
@@ -1395,14 +1395,14 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         ingestEnvelope
           defaultIngestOptions
           ( inboundBody endpoint.endpointId now "mention-before-profile" $
-              Body [NMention (NativeUserId "2291939848") "2291939848"]
+              Body [NMention (NativeUserId "3000000003") "3000000003"]
           )
     _ <-
       withDb pool $
         ingestEnvelope
           defaultIngestOptions
           ( (inbound endpoint.endpointId now "profile-arrives" "hello")
-              { senderNativeId = NativeUserId "2291939848",
+              { senderNativeId = NativeUserId "3000000003",
                 senderDisplayName = Just "张三"
               }
           )
@@ -1411,7 +1411,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         ingestEnvelope
           defaultIngestOptions
           ( inboundBody endpoint.endpointId now "mention-after-profile" $
-              Body [NMention (NativeUserId "2291939848") "2291939848"]
+              Body [NMention (NativeUserId "3000000003") "3000000003"]
           )
     rows <- withConn pool $ \conn ->
       query
@@ -1424,7 +1424,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         \ WHERE pi.platform_account_id = ? AND pi.native_user_id = ?"
         ( (resultId later).unCanonicalMessageId,
           endpoint.platformAccountId.unPlatformAccountId,
-          "2291939848" :: Text
+          "3000000003" :: Text
         )
     (rows :: [(Maybe Text, Maybe Text, Text)])
       `shouldBe` [(Just "张三", Just "张三", "张三")]

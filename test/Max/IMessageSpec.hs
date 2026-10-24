@@ -140,7 +140,7 @@ spec = describe "iMessage adapter" $ do
     iMessageMediaFilename typed `shouldBe` "photo.bin"
 
   it "identifies a transport-account reply shape without making its mention direct" $ do
-    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" (Just 611798505) 1000
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" (Just 123456789) 1000
         value =
           object
             [ "messages"
@@ -171,7 +171,7 @@ spec = describe "iMessage adapter" $ do
       _ -> expectationFailure "expected one message"
 
   it "does not infer a transport reply from an ordinary addressed sentence" $ do
-    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" [] "Maxwell" (Just 611798505) 1000
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" [] "Maxwell" (Just 123456789) 1000
         value =
           object
             [ "messages"

@@ -239,8 +239,8 @@ spec = do
       -- An ingest body knows the account, not the principal, and ADR 004
       -- spells a mention by principal.  @display is the same degradation the
       -- stored projection applies to a mention it cannot resolve.
-      promptText (qqIngestBody [SegAt (UserId 2291939848), SegText " 你好"])
-        `shouldBe` "@2291939848 你好"
+      promptText (qqIngestBody [SegAt (UserId 3000000003), SegText " 你好"])
+        `shouldBe` "@3000000003 你好"
       -- The QQ *segment* projection is a different thing and keeps its own
       -- wire spelling: it feeds the command parser, never the model.
       snd (rec' [SegAt (UserId 1000), SegText " !fb 改成 B 方案"])

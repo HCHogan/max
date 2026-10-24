@@ -22,9 +22,9 @@ spec :: Spec
 spec = do
   describe "runtime authority" $ do
     it "maps persistent positive and negative conversation identifiers to fixed units" $ do
-      fmap instanceUnit (parseInstanceName "max-sb--812024380-s15") `shouldBe` Right "max-sandbox@-812024380-s15.service"
-      fmap instanceMachine (parseInstanceName "max-sb--812024380-s15") `shouldBe` Right "max-sandbox--812024380-s15"
-      fmap instanceUnit (parseInstanceName "max-br-728502470") `shouldBe` Right "max-browser@728502470.service"
+      fmap instanceUnit (parseInstanceName "max-sb--987654321-s15") `shouldBe` Right "max-sandbox@-987654321-s15.service"
+      fmap instanceMachine (parseInstanceName "max-sb--987654321-s15") `shouldBe` Right "max-sandbox--987654321-s15"
+      fmap instanceUnit (parseInstanceName "max-br-123456789") `shouldBe` Right "max-browser@123456789.service"
     it "reads an operations groups file and refuses any malformed entry" $ do
       parseOperationsGroups "111,222\n 333\n" `shouldBe` Right [111, 222, 333]
       parseOperationsGroups "" `shouldBe` Right []
