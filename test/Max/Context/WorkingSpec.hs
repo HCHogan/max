@@ -4,7 +4,7 @@ import Data.Aeson (object, (.=))
 import Data.Either (isLeft)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Max.Context (estimateMessagesTokens)
+import Max.Context (estimateMessagesTokens, estimateTextTokens)
 import Max.Context.Working
 import Max.LLM.Types (ChatMessage (..), ContentBlock (..), TokenUsage (..), ToolCall (..))
 import Max.ModelCatalog (ContextLimits (..), contextLimitsForWindow)
@@ -36,6 +36,19 @@ spec = describe "recoverable working context" $ do
     Right stable <- pure (fitWorkingContext limits Nothing "id" "t#7" plan.wpSummary plan.wpMessages [])
     stable.wpCompacted `shouldBe` False
     map show stable.wpMessages `shouldBe` map show plan.wpMessages
+
+  it "sizes the tool-result watermarks from the model window" $ do
+    -- Six source reads, 90,000 characters in all.
+    let sources = [MsgUser "goal"] <> concat [roundOf (T.pack (show n)) "read" (T.replicate 15000 "x") | n <- [1 .. 6 :: Int]]
+        toolTokens plan = sum [estimateTextTokens text | MsgTool _ text <- plan.wpMessages]
+    wide <- either (fail . T.unpack) pure (contextLimitsForWindow 131072 Nothing False)
+    narrow <- either (fail . T.unpack) pure (contextLimitsForWindow 65536 Nothing False)
+    Right kept <- pure (fitWorkingContext wide Nothing "id" "t#7" "" sources [])
+    kept.wpCompacted `shouldBe` False
+    Right compacted <- pure (fitWorkingContext narrow Nothing "id" "t#7" "" sources [])
+    compacted.wpCompacted `shouldBe` True
+    toolTokens compacted `shouldSatisfy` (<= (narrow.maxInputTokens - narrow.toolRoundReserve) `div` 4)
+    map show compacted.wpMessages `shouldContain` map show (roundOf "6" "read" (T.replicate 15000 "x"))
 
   it "handles repeated provider call ids and a single oversized newest result" $ do
     let messages = [MsgUser "keep goal"] <> concat [roundOf "0" "read" (T.replicate 20000 "x") | _ <- [1 .. 6 :: Int]]

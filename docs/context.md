@@ -60,6 +60,13 @@ Startup rejects a budget above the text planning budget. For example
 `context_window: 262144` with `context_budget: 131072` keeps a 196,608-token
 turn ceiling while sizing the initial context from 131,072.
 
+Within a tool loop, a request is compacted before its model round when it
+exceeds `B` or its tool results alone exceed `B / 2` estimated tokens. Older
+results then become `context_resume` locators plus a short work record until the
+request fits `3B / 4` and its results `B / 4`. Messages, loaded skills and the
+newest round stay intact. Both marks follow the window, so a larger model keeps
+more of a long loop's reads at once.
+
 At startup Max also lists each OpenAI-protocol server's models and warns when a
 profile's configured window exceeds the context length the server reports
 (`context_length`, `max_context_length`, `max_model_len` or `context_window`).

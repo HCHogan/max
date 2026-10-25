@@ -97,6 +97,11 @@ mediaReserve limits messages
 -- pruned first; older complete protocol rounds may then be removed together.
 -- Every omission retains an explicit journal recovery locator. If protected
 -- material alone cannot fit, return an error before any model/effect call.
+--
+-- Tool results may fill half the planning ceiling before compaction and keep a
+-- quarter after it, so a larger model window holds more of the files a long
+-- loop reads at once. The wide gap keeps compaction, and with it a rewritten
+-- request prefix, rare.
 fitWorkingContext :: ContextLimits -> Maybe UsageAnchor -> Text -> Text -> Text -> [ChatMessage] -> [ToolSpec] -> Either Text WorkingProjection
 fitWorkingContext limits anchor identity turnHandle previous messages specs =
   fitWorkingContextWithTail limits anchor identity turnHandle previous messages specs []
@@ -106,15 +111,17 @@ fitWorkingContext limits anchor identity turnHandle previous messages specs =
 fitWorkingContextWithTail :: ContextLimits -> Maybe UsageAnchor -> Text -> Text -> Text -> [ChatMessage] -> [ToolSpec] -> [ChatMessage] -> Either Text WorkingProjection
 fitWorkingContextWithTail limits anchor identity turnHandle previous messages specs tailMessages =
   fmap (\plan -> plan {wpMessages = plan.wpMessages <> tailMessages}) $
-    if cost messages <= ceiling' && toolChars messages <= 60000
+    if cost messages <= ceiling' && toolTokens messages <= toolCeiling
       then Right (WorkingProjection messages previous (cost messages) hardLimit False)
       else finish (shrink indexed [] removable)
   where
     hardLimit = max 0 (limits.maxInputTokens - mediaReserve limits (messages <> tailMessages))
     ceiling' = max 0 (hardLimit - limits.toolRoundReserve)
     low = ceiling' * 3 `div` 4
+    toolCeiling = ceiling' `div` 2
+    toolLow = ceiling' `div` 4
     cost xs = requestTokens anchor identity (xs <> tailMessages) specs
-    toolChars xs = sum [T.length text | MsgTool _ text <- xs]
+    toolTokens xs = sum [estimateTextTokens text | MsgTool _ text <- xs]
     indexed = zip [0 :: Int ..] messages
     rounds = [(index, calls) | (index, MsgAssistantToolCalls _ calls) <- indexed]
     newest = case reverse rounds of (index, _) : _ -> index; [] -> -1
@@ -164,7 +171,7 @@ fitWorkingContextWithTail limits anchor identity turnHandle previous messages sp
     stub xs (index, cid, _, _) = [(at, if at == index then MsgTool cid ("[结果已移入工作记录；" <> locator cid <> "]") else m) | (at, m) <- xs]
     shrink xs notes [] = (xs, notes)
     shrink xs notes (target : rest)
-      | not (null notes) && cost (projected xs notes) <= low && toolChars (map snd xs) <= 30000 = (xs, notes)
+      | not (null notes) && cost (projected xs notes) <= low && toolTokens (map snd xs) <= toolLow = (xs, notes)
       | otherwise = shrink (stub xs target) (notes <> [note target]) rest
     -- Tool-round reserve is proactive headroom. Protected instructions may
     -- consume that headroom, but never the media/output-adjusted hard window.
