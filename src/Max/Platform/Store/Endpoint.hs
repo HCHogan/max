@@ -7,6 +7,7 @@ module Max.Platform.Store.Endpoint
     createConversation,
     platformForLegacyConversation,
     platformForLegacyMessage,
+    qqGroupAccountForLegacyConversation,
     registerEndpoint,
     ensureLegacyEndpoint,
     ensureConfiguredEndpoint,
@@ -117,6 +118,25 @@ platformForLegacyConversation legacyId = do
       \JOIN platform_accounts a USING (platform_account_id) \
       \WHERE c.legacy_group_id = ? AND e.enabled AND a.enabled \
       \ORDER BY CASE a.platform WHEN 'qq' THEN 0 ELSE 1 END, e.endpoint_id \
+      \LIMIT 1"
+      (Only legacyId)
+  pure (fromOnly <$> listToMaybe rows)
+
+-- | The QQ account behind a legacy conversation's enabled QQ group endpoint,
+-- if it has one.
+qqGroupAccountForLegacyConversation ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  Eff es (Maybe Text)
+qqGroupAccountForLegacyConversation legacyId = do
+  rows <-
+    query
+      "SELECT a.native_account_id FROM conversations c \
+      \JOIN conversation_endpoints e USING (conversation_id) \
+      \JOIN platform_accounts a USING (platform_account_id) \
+      \WHERE c.legacy_group_id = ? AND a.platform = 'qq' \
+      \  AND e.endpoint_kind = 'group' AND e.enabled AND a.enabled \
+      \ORDER BY e.endpoint_id \
       \LIMIT 1"
       (Only legacyId)
   pure (fromOnly <$> listToMaybe rows)

@@ -29,6 +29,8 @@ returnTypes =
       ("cancel_automation", "{ok: true; revision: number; pending_policy: string; admitted_tasks_cancelled: boolean}"),
       ("update_automation", "{ok: true; revision: number; pending_policy: string; admitted_tasks_cancelled: boolean}"),
       ("automation_history", "{handle: string; revision: number; instruction: string; status: \"armed\" | \"fired\" | \"cancelled\" | \"expired\"; overlap: string; queue_limit: number; next_fire: string | null; fires: {fire_id: number; definition_revision: number; scheduled_at: string; disposition: string; task_id: number | null; coalesced_into: number | null; admission_state: \"pending\" | \"dispatched\"; evidence: string; last_error: string | null}[]}"),
+      ("recall_message", "{ok: true; recalled: number} | {ok: false; recalled: number; failed: number; error: string}（recalled 是撤回的 QQ 消息条数，一条回复可能拆成几条发出）"),
+      ("mute_member", "{ok: true; seconds: number}（seconds 为 0 表示已解除禁言）"),
       ("group_members", "{member_count: number; total_matched: number; offset: number; members: {id: number; name: string; platforms: string[]; role?: string; title?: string; qq?: string}[]; group_name?: string; group_avatar_url?: string; member_avatar_url_pattern?: string}"),
       ("view_avatar", "{attached: boolean; note: string}（图片附在下一条消息里）"),
       ("view_image", "{attached: number; total?: number; path?: string; note: string}（图片附在下一条消息里）"),

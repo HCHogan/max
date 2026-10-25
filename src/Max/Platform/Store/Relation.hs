@@ -1,6 +1,7 @@
 module Max.Platform.Store.Relation
   ( compatibilityMessageIdForCanonical,
     nativeEventIdForCanonical,
+    qqCopiesInConversation,
     latestNativeEventId,
     nativeEventWasDeliveredTo,
     resolveReplyProjections,
@@ -46,6 +47,36 @@ nativeEventIdForCanonical (CanonicalMessageId canonical) = do
       "SELECT source_native_event_id FROM messages WHERE canonical_message_id = ?"
       (Only canonical)
   pure (NativeEventId (exactlyOne "nativeEventIdForCanonical" rows))
+
+-- | Every QQ copy of a canonical message inside the conversation behind a
+-- legacy group id: the event it arrived as, with its sender's native id, and
+-- each part Max delivered there (flagged, without a sender).  An arrival's
+-- own @source:@ delivery record is the arrival, not something Max sent.  A
+-- message from another conversation has no rows here, whatever its id.
+qqCopiesInConversation ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  CanonicalMessageId ->
+  Eff es [(Text, Bool, Maybe Text)]
+qqCopiesInConversation legacyGroup (CanonicalMessageId canonical) =
+  query
+    "SELECT copy.native_event_id, copy.delivered, sender.native_user_id FROM ( \
+    \ SELECT endpoint_id, native_event_id, false AS delivered, sender_identity_id \
+    \ FROM platform_events \
+    \ WHERE canonical_message_id = ? AND event_kind = 'message' \
+    \ UNION ALL \
+    \ SELECT endpoint_id, native_event_id, true, NULL::bigint \
+    \ FROM message_delivery_copies \
+    \ WHERE canonical_message_id = ? AND idempotency_key NOT LIKE 'source:%' \
+    \ ) copy \
+    \ JOIN conversation_endpoints e USING (endpoint_id) \
+    \ JOIN conversations c USING (conversation_id) \
+    \ JOIN platform_accounts a ON a.platform_account_id = e.platform_account_id \
+    \ LEFT JOIN principal_identities sender \
+    \   ON sender.principal_identity_id = copy.sender_identity_id \
+    \ WHERE c.legacy_group_id = ? AND a.platform = 'qq' \
+    \ ORDER BY copy.native_event_id"
+    (canonical, canonical, legacyGroup)
 
 latestNativeEventId ::
   (WithConnection :> es, IOE :> es) =>

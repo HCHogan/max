@@ -179,6 +179,7 @@ def check_imports():
         "src/Max/Platform/QQHistory.hs", "src/Max/Platform/Delivery.hs",
         "src/Max/WechatHook.hs", "src/Max/Effects/PlatformQuery.hs",
         "src/Max/Effects/PlatformInteraction.hs", "src/Max/Effects/PlatformAccount.hs",
+        "src/Max/Effects/PlatformModeration.hs",
     }
     read_only_platform = {"src/Max/Roster.hs", "src/Max/Tools/Group.hs", "src/Max/Files.hs", "src/Max/Forward.hs"}
     for path in (ROOT / "src").rglob("*.hs"):
@@ -187,7 +188,7 @@ def check_imports():
         dependencies = set(IMPORT.findall(source))
         if relative != "src/Max/MemoryStore.hs" and re.search(r"\bcreateMemory\b", source):
             errors.append(f"{relative}: memory creation bypasses shared admission")
-        domain_tools = {"src/Max/Tools/Skills.hs", "src/Max/Tools/Search.hs", "src/Max/Tools/Sandbox.hs", "src/Max/Tools/Browser.hs", "src/Max/Tools/Files.hs", "src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Hooks.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs", "src/Max/Tools/Destiny.hs"}
+        domain_tools = {"src/Max/Tools/Skills.hs", "src/Max/Tools/Search.hs", "src/Max/Tools/Sandbox.hs", "src/Max/Tools/Browser.hs", "src/Max/Tools/Files.hs", "src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Hooks.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs", "src/Max/Tools/Destiny.hs", "src/Max/Tools/Moderation.hs"}
         resource_tools = {"src/Max/Tools/Files.hs", "src/Max/Tools/Browser.hs"}
         if relative in domain_tools | resource_tools:
             if any(dependency.startswith(("Max.DB.", "Max.Platform.Store.")) for dependency in dependencies) or dependencies & {"Effectful.PostgreSQL", "Max.Platform.Store", "Max.Session", "Max.Reply.Resolve", "Max.Reply.Caption", "Max.Task.ToolRuntime", "Max.Monitor.ToolRuntime", "Max.Memory.ToolRuntime", "Max.MemoryStore", "Max.EpisodeStore", "Max.Recall", "Max.Prompt", "Max.Conversation.ToolRuntime", "Max.Monitor", "Max.Tools"}:
@@ -202,7 +203,7 @@ def check_imports():
             errors.append(f"{relative}: raw platform RPC outside an adapter/interpreter")
         if "Max.Effects.PlatformApi" in dependencies:
             errors.append(f"{relative}: retired broad platform effect")
-        if relative in read_only_platform and dependencies & {"Max.Effects.PlatformInteraction", "Max.Effects.PlatformAccount"}:
+        if relative in read_only_platform and dependencies & {"Max.Effects.PlatformInteraction", "Max.Effects.PlatformModeration", "Max.Effects.PlatformAccount"}:
             errors.append(f"{relative}: platform writes in a read-only consumer")
         if "Max.Effects.ToolControl" in dependencies and relative not in {
             "src/Max/Tools/Task.hs", "src/Max/Task/ToolRuntime.hs", "src/Max/Toolset.hs", "src/Max/Agent/Runtime.hs", "src/Max/Effects/Agent.hs",
@@ -271,6 +272,7 @@ import Max.Effects.TurnQuery (TurnQuery, resolveTurnResult)
 import Max.Task.Types (TaskProfile (Basic))
 import Max.Effects.PlatformQuery
 import Max.Effects.PlatformInteraction
+import Max.Effects.PlatformModeration
 import Max.Effects.PlatformAccount
 import Max.Effects.Outbound (Outbound, OutboundRequest, sendRecorded)
 import Max.Platform.Failure
@@ -340,6 +342,8 @@ query :: PlatformQuery :> es => Eff es (Either PlatformFailure GroupMeta)
 query = queryGroupMeta (GroupId 1)
 poke :: PlatformInteraction :> es => Eff es (Either PlatformFailure ())
 poke = pokeUser (GroupId 1) (UserId 2)
+moderate :: PlatformModeration :> es => Eff es (Either PlatformFailure ())
+moderate = muteMember (GroupId 1) (UserId 2) 60
 account :: PlatformAccount :> es => Eff es (Either PlatformFailure ())
 account = respondToFriendRequest "flag" AcceptFriend
 publish :: Outbound :> es => OutboundRequest -> Eff es ()
@@ -383,6 +387,10 @@ NEGATIVE = {
     "platform query cannot poke": ("PlatformInteraction", "bad :: PlatformQuery :> es => Eff es (Either PlatformFailure ())\nbad = pokeUser (GroupId 1) (UserId 2)"),
     "platform query cannot administer an account": ("PlatformAccount", 'bad :: PlatformQuery :> es => Eff es (Either PlatformFailure ())\nbad = respondToFriendRequest "flag" AcceptFriend'),
     "platform query cannot publish content": ("Outbound", "bad :: PlatformQuery :> es => OutboundRequest -> Eff es ()\nbad request = () <$ sendRecorded request"),
+    "platform query cannot moderate": ("PlatformModeration", "bad :: PlatformQuery :> es => Eff es (Either PlatformFailure ())\nbad = muteMember (GroupId 1) (UserId 2) 60"),
+    "platform interaction cannot moderate": ("PlatformModeration", "bad :: PlatformInteraction :> es => Eff es (Either PlatformFailure ())\nbad = muteMember (GroupId 1) (UserId 2) 60"),
+    "platform moderation cannot poke": ("PlatformInteraction", "bad :: PlatformModeration :> es => Eff es (Either PlatformFailure ())\nbad = pokeUser (GroupId 1) (UserId 2)"),
+    "platform moderation cannot administer an account": ("PlatformAccount", 'bad :: PlatformModeration :> es => Eff es (Either PlatformFailure ())\nbad = respondToFriendRequest "flag" AcceptFriend'),
     "platform interaction cannot administer an account": ("PlatformAccount", 'bad :: PlatformInteraction :> es => Eff es (Either PlatformFailure ())\nbad = respondToFriendRequest "flag" AcceptFriend'),
     "platform account cannot query a roster": ("PlatformQuery", "bad :: PlatformAccount :> es => Eff es (Either PlatformFailure GroupMeta)\nbad = queryGroupMeta (GroupId 1)"),
     "content cannot resolve host paths": ("BlobHost", "bad :: Blob :> es => BlobRef -> Eff es FilePath\nbad = resolveBlobHostPath"),

@@ -285,6 +285,7 @@ library
         Max.Effects.LLM
         Max.Effects.PlatformAccount
         Max.Effects.PlatformInteraction
+        Max.Effects.PlatformModeration
         Max.Effects.PlatformQuery
         Max.Effects.Outbound
         Max.Effects.ToolDirectory
@@ -470,6 +471,7 @@ library
         Max.Tools.Group
         Max.Tools.Images
         Max.Tools.Memory
+        Max.Tools.Moderation
         Max.Tools.Monitor
         Max.Tools.Task
         Max.Tools.Sandbox
@@ -902,6 +904,7 @@ test-suite max-test-db
         Max.DB.QQBackfillSpec
         Max.PromptIntegrationSpec
         Max.PlatformCapabilitiesSpec
+        Max.ModerationSpec
         Max.PlatformStoreSpec
         Max.PublicationSpec
         Max.StreamingSpec

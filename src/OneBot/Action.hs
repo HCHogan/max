@@ -54,6 +54,12 @@ data Action
   | -- | 戳一戳 the user, in the conversation behind the (possibly
     -- pseudo) group id.
     SendPoke !GroupId !UserId
+  | -- | Recall a message.  OneBot names the message alone; the group only
+    -- routes the call to the account that sees it, since a copy Max
+    -- delivered has no ledger row of its own to route by.
+    DeleteMsg !GroupId !MessageId
+  | -- | 禁言 a member for this many seconds; 0 lifts it.
+    SetGroupBan !GroupId !UserId !Int
   | -- | Approve/refuse an incoming friend request (flag comes from
     -- the request event).  We auto-approve: being friends is what
     -- makes private query delivery reliable on QQ.
@@ -83,6 +89,8 @@ actionName = \case
   GetFriendMsgHistory {} -> "get_friend_msg_history"
   SetMsgEmojiLike {} -> "set_msg_emoji_like"
   SendPoke {} -> "send_poke"
+  DeleteMsg {} -> "delete_msg"
+  SetGroupBan {} -> "set_group_ban"
   SetFriendAddRequest {} -> "set_friend_add_request"
 
 actionParams :: Action -> Value
@@ -157,6 +165,14 @@ actionParams = \case
      in object $
           ["user_id" .= showT target]
             <> ["group_id" .= showT gid | not (isPrivateChat gid)]
+  DeleteMsg _ mid ->
+    object ["message_id" .= mid]
+  SetGroupBan gid uid seconds ->
+    object
+      [ "group_id" .= gid,
+        "user_id" .= uid,
+        "duration" .= seconds
+      ]
   SetFriendAddRequest flag approve ->
     object
       [ "flag" .= flag,

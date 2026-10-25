@@ -1,5 +1,5 @@
 -- | Bind conversation and turn reads before exposing built-in tool runners.
-module Max.Conversation.ToolRuntime (builtinsWithDatabase, groupToolsWithDatabase) where
+module Max.Conversation.ToolRuntime (builtinsWithDatabase, groupToolsWithDatabase, moderationToolsWithDatabase) where
 
 import Data.Time (TimeZone)
 import Effectful
@@ -10,6 +10,7 @@ import Max.Effects.ConversationQuery (ConversationQuery, runConversationQuery, r
 import Max.Effects.Embedding (Embedding)
 import Max.Effects.Http (Http)
 import Max.Effects.PlatformInteraction (PlatformInteraction)
+import Max.Effects.PlatformModeration (PlatformModeration)
 import Max.Effects.PlatformQuery (PlatformQuery)
 import Max.Effects.ToolOutput (ToolOutput)
 import Max.Effects.Tools (Tool, hoistTool)
@@ -18,6 +19,7 @@ import Max.Jobs qualified as Jobs
 import Max.ToolContext
 import Max.Tools (builtinsFor)
 import Max.Tools.Group (groupToolsFor)
+import Max.Tools.Moderation (moderationToolsFor)
 import Max.Turn.Types (AgentTurnRef (..), turnOutputAgentTurn)
 
 builtinsWithDatabase :: forall es. (Blob :> es, Embedding :> es, Log :> es, PlatformInteraction :> es, WithConnection :> es, IOE :> es) => Jobs.Jobs -> TimeZone -> ToolContext -> [Tool es]
@@ -28,3 +30,6 @@ builtinsWithDatabase jobs tz context = map (hoistTool lower) (builtinsFor tz con
 
 groupToolsWithDatabase :: (PlatformQuery :> es, Http :> es, Log :> es, ToolOutput :> es, WithConnection :> es, IOE :> es) => ToolContext -> [Tool es]
 groupToolsWithDatabase context = map (hoistTool (runConversationQuery (toolConversationScope context))) (groupToolsFor context)
+
+moderationToolsWithDatabase :: (PlatformModeration :> es, PlatformQuery :> es, Log :> es, WithConnection :> es, IOE :> es) => ToolContext -> [Tool es]
+moderationToolsWithDatabase context = map (hoistTool (runConversationQuery (toolConversationScope context))) (moderationToolsFor context)

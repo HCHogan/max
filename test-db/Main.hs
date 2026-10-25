@@ -52,6 +52,7 @@ import Max.LingoStoreSpec qualified as LingoStoreSpec
 import Max.MemoryCapabilitiesSpec qualified as MemoryCapabilitiesSpec
 import Max.MemoryExpirySpec qualified as MemoryExpirySpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
+import Max.ModerationSpec qualified as ModerationSpec
 import Max.PlatformCapabilitiesSpec qualified as PlatformCapabilitiesSpec
 import Max.PlatformStoreSpec qualified as PlatformStoreSpec
 import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
@@ -120,6 +121,7 @@ main = do
         RecallSpec.spec pool
         PromptIntegrationSpec.spec pool
         PlatformCapabilitiesSpec.spec pool
+        ModerationSpec.spec pool
         PlatformStoreSpec.spec pool
         PublicationSpec.spec pool
         StreamingSpec.spec pool

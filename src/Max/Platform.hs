@@ -45,6 +45,8 @@ actionAddress = \case
   GetFriendMsgHistory (UserId user) _ _ -> DirectAddress user
   SetMsgEmojiLike (MessageId message) _ _ -> MessageAddress message
   SendPoke (GroupId group) _ -> ConversationAddress group
+  DeleteMsg (GroupId group) _ -> ConversationAddress group
+  SetGroupBan (GroupId group) _ _ -> ConversationAddress group
   SetFriendAddRequest _ _ -> AccountAddress
 
 backendForPlatform :: Text -> [PlatformBackend] -> Maybe PlatformBackend

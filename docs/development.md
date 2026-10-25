@@ -29,8 +29,9 @@ policies, tool catalog, LLM codecs and AgentEvent protocol have a closed set of 
 imports. The tool directory has no executable registry. Compiler fixtures prove
 that blob content cannot resolve host paths, media producers cannot drain the
 queue, media consumers cannot produce, and directory-only clients cannot execute
-tools or arbitrary IO. Platform queries cannot poke, approve friends or publish
-content; account and interaction capabilities are also checked independently.
+tools or arbitrary IO. Platform queries cannot poke, approve friends, moderate or
+publish content; account, interaction and moderation capabilities are also
+checked independently.
 Directory clients cannot request loop control, and no JSON decoder exists for
 loop-control values. A positive fixture must compile before any denial counts
 as a pass.

@@ -26,6 +26,7 @@ import Max.CodeMode.JavaScript (javaScriptRuntimeVersion)
 import Max.Conversation.ToolRuntime
   ( builtinsWithDatabase,
     groupToolsWithDatabase,
+    moderationToolsWithDatabase,
   )
 import Max.Destiny.ToolRuntime (destinyToolsWithRuntime)
 import Max.Effects.Blob (Blob)
@@ -34,6 +35,7 @@ import Max.Effects.Embedding (Embedding)
 import Max.Effects.Http (Http)
 import Max.Effects.Outbound (Outbound)
 import Max.Effects.PlatformInteraction (PlatformInteraction)
+import Max.Effects.PlatformModeration (PlatformModeration)
 import Max.Effects.PlatformQuery (PlatformQuery)
 import Max.Effects.ToolControl (ToolControl)
 import Max.Effects.ToolOutput (ToolOutput)
@@ -108,6 +110,7 @@ allToolsFor ::
     Log :> es,
     PlatformQuery :> es,
     PlatformInteraction :> es,
+    PlatformModeration :> es,
     Outbound :> es,
     ToolOutput :> es,
     ToolControl :> es,
@@ -131,6 +134,7 @@ resolvedToolsFor ::
     Log :> es,
     PlatformQuery :> es,
     PlatformInteraction :> es,
+    PlatformModeration :> es,
     Outbound :> es,
     ToolOutput :> es,
     ToolControl :> es,
@@ -188,6 +192,7 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
         <> monitorToolsWithDatabase env.beJobs env.beTimeZone env.beWebhookBaseUrl dc
         <> hookToolsWithDatabase dc
         <> groupToolsWithDatabase dc
+        <> moderationToolsWithDatabase dc
         <> imageToolsWithDatabase env.beTimeZone env.beSandboxes dc
         <> memoryToolsWithDatabase dc
         <> taskTools env.beJobs dc
@@ -316,6 +321,10 @@ toolInventory =
     always (writeTool "set_hook" ["hook.db"] [CurrentConversation]),
     always (readTool "query_hooks" ["hook.db", "conversation.db"] [CurrentConversation]),
     gated GroupOnly (readTool "group_members" ["chat.roster"] [CurrentConversation, CurrentEndpoint]),
+    -- Moderation acts on the conversation's QQ group as Max's own account, at
+    -- Max's own judgement. The runners refuse non-QQ conversations.
+    gated GroupOnly (writeTool "recall_message" ["chat.moderation"] [CurrentConversation, CurrentEndpoint]),
+    gated GroupOnly (writeTool "mute_member" ["chat.moderation", "chat.roster"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_avatar" ["chat.avatar", "tool.media"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_image" ["conversation.db", "blob.store", "tool.media"] [CurrentConversation]),
     always (writeTool "memory_save" ["memory.db"] [CurrentConversation]),

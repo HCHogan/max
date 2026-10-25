@@ -389,7 +389,7 @@ Jobs belong to the process; a restart does not resume them.
 | Browser hosts and turn instances | ephemeral: each conversation's lightweight container host is destroyed on exit and reaped on boot; every turn's independent MCP transport and camoufox browse session is terminated when that turn finishes |
 
 Effect stack at the top of `runApp`:
-`IOE → Concurrent → Log → Http → BlobHost → Blob → WithConnection → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → PlatformAccount → PlatformInteraction → PlatformQuery → Embedding → Agent`.
+`IOE → Concurrent → Log → Http → BlobHost → Blob → WithConnection → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → PlatformAccount → PlatformModeration → PlatformInteraction → PlatformQuery → Embedding → Agent`.
 
 ### Sandbox concurrency
 
@@ -646,9 +646,11 @@ code from depending on transport secrets or growing catalog operations into the
 completion effect.
 
 `PlatformQuery` reads typed group metadata, members, file addresses and forward
-payloads. `PlatformInteraction` permits poke; `PlatformAccount` permits responding
-to friend requests and is only required at ingress. Roster and permission readers
-do not receive either write capability. Each interpreter routes through the same
+payloads. `PlatformInteraction` permits poke; `PlatformModeration` recalls and
+mutes in a QQ group, and finds a message's QQ copies inside the caller's
+conversation itself; `PlatformAccount` permits responding to friend requests and
+is only required at ingress. Roster and permission readers do not receive any
+write capability. Each interpreter routes through the same
 canonical endpoint ownership check; a missing foreign backend cannot fall back to
 QQ. The platform backends are fixed at startup.
 Raw `OneBot.Action` and response envelopes stay in the platform adapters and
