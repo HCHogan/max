@@ -27,12 +27,17 @@ import Max.Effects.LLM
 import Max.EpisodeScheduler (EpisodeRequest (..), EpisodeWork (..), newEpisodeScheduler, queueCompact, retryEpisodeAt)
 import Max.EpisodeStore
 import Max.Historian
-  ( historianPromptVersion,
+  ( Uncompacted (..),
+    historianPromptVersion,
     historianSchemaVersion,
     historianWorker,
     prepareOldestCoverageGap,
+    rawRetained,
+    uncompactConversation,
   )
+import Max.Context.Capacity (rawHighTokens)
 import Max.ModelCatalog (ContextLimits (..), ModelCapabilities (..), defaultContextLimits, mkModelCatalog)
+import Max.Prompt.History (fetchBoundedPromptTail)
 import Max.Tasks (newTaskRegistry)
 import Max.Util (tshow)
 import OneBot.Types (GroupId (..))
@@ -206,6 +211,34 @@ spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ d
         putMVar release ()
         timeout 3_000_000 (waitUntil $ (/= [old]) . map (.activeCompartmentId) <$> withDb pool (listActiveCompartments scope)) `shouldReturn` Just ()
     withDb pool (loadCursor scope historianCursor) `shouldReturn` end
+
+  it "uncompacts the newest summaries a quiet period would leave raw" $ do
+    -- About 1530 historian tokens each: four fit the 7000-token raw share.
+    forM_ [1001 .. 1006] $ \canonical ->
+      insertMessageWithCanonicalId pool canonical groupId member botId testTime Nothing (T.replicate 3000 "x")
+    let scope = conversationScopeFor (GroupId groupId)
+        tz = minutesToTimeZone 480
+        limits = defaultContextLimits {workingBudget = Just 28000}
+    publishRange pool scope (MessageCursor 0) (MessageCursor 2) [1001, 1002]
+    publishRange pool scope (MessageCursor 2) (MessageCursor 4) [1003, 1004]
+    publishRange pool scope (MessageCursor 4) (MessageCursor 6) [1005, 1006]
+
+    result <- withDb pool (uncompactConversation tz limits scope)
+    result.withdrawal `shouldBe` Withdrawal 2 4 1 (MessageCursor 2)
+    result.rawTokenLimit `shouldBe` 7000
+    withDb pool (loadCursor scope historianCursor) `shouldReturn` MessageCursor 2
+    states <- withDb pool $ query "SELECT start_ingest_seq, end_ingest_seq, state FROM conversation_compartments ORDER BY start_ingest_seq" ()
+    (states :: [(Int64, Int64, Text)]) `shouldBe` [(1, 2, "active"), (3, 4, "withdrawn"), (5, 6, "withdrawn")]
+    -- The restored messages are pending, not a gap, and a quiet-period
+    -- capture keeps every one of them raw.
+    withDb pool (findOldestBackfillGap scope) `shouldReturn` Nothing
+    (rawTail, overflow) <- withDb pool (fetchBoundedPromptTail scope (MessageCursor 2) 0 Nothing (rawHighTokens limits False))
+    overflow `shouldBe` False
+    map (.cursor) (rawRetained tz limits rawTail) `shouldBe` map MessageCursor [3 .. 6]
+
+    again <- withDb pool (uncompactConversation tz limits scope)
+    again.withdrawal `shouldBe` Withdrawal 0 0 1 (MessageCursor 2)
+    again.rawTokens `shouldBe` result.rawTokens
 
 -- | Publish a validated fixture without a model call.
 publishRange :: DbPool -> ConversationScope -> MessageCursor -> MessageCursor -> [Int64] -> IO ()

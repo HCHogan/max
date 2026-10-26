@@ -24,6 +24,7 @@ helpText Nothing =
       "  !persona <text>          设 persona override",
       "  !persona clear           回到默认 persona",
       "  !compact                 立即把此前聊天压缩为 episode；保留原文，!clear 是兼容别名",
+      "  !uncompact               撤回最近的摘要，让那段聊天以原文回到上下文（按当前 model 的额度）",
       "  !clear --all             清历史/侧记/persona override + 置水位线 + 销毁 sandbox",
       "  !unclear                 撤销水位线（恢复看 !clear 之前的群消息）",
       "  !btw <text>              另起一个问题，不打扰在跑的任务",
@@ -55,7 +56,7 @@ helpText Nothing =
       "",
       "flag 可用短形式：--all=-a、--deny=-d、--global=-g（可合并，如 -dg）。",
       "权限：!model/!effort/!debug/!sticker/!proactive/!kill --all 仅 bot 主人；",
-      "!persona/!compact/!clear --all/!kill/!destiny on|off 需群主/管理员（或被授权）；其余全员可用。",
+      "!persona/!compact/!uncompact/!clear --all/!kill/!destiny on|off 需群主/管理员（或被授权）；其余全员可用。",
       "群里发命令：结果私聊发你（加好友才收得到），群里只贴表情。"
     ]
 helpText (Just topic) =

@@ -6,6 +6,7 @@ module Max.DB.ConversationCursor
     lingoCursor,
     loadCursor,
     advanceCursor,
+    rewindCursor,
   )
 where
 
@@ -65,6 +66,29 @@ advanceCursor ::
   Eff es Bool
 advanceCursor scope (CursorKind name) (MessageCursor expected) (MessageCursor next)
   | next <= expected = pure False
+  | otherwise = do
+      changed <-
+        execute
+          "UPDATE conversation_cursors \
+          \  SET ingest_seq = ?, updated_at = now() \
+          \  WHERE conversation_id = ? \
+          \    AND cursor_name = ? \
+          \    AND ingest_seq = ?"
+          (next, conversationStorageId scope, name, expected)
+      pure (changed == 1)
+
+-- | Move back from exactly @expected@ to @next@, for a command that returns
+-- consumed messages to the consumer.  Same compare-and-swap as
+-- 'advanceCursor', in the other direction.
+rewindCursor ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  CursorKind ->
+  MessageCursor ->
+  MessageCursor ->
+  Eff es Bool
+rewindCursor scope (CursorKind name) (MessageCursor expected) (MessageCursor next)
+  | next >= expected = pure False
   | otherwise = do
       changed <-
         execute

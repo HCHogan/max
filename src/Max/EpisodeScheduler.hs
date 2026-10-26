@@ -15,6 +15,8 @@ module Max.EpisodeScheduler
     continueEpisodeAt,
     awaitDueEpisode,
     releaseEpisodeClaim,
+    claimEpisodeGroup,
+    releaseEpisodeGroup,
     episodePendingDeadline,
     episodeRetryCount,
     episodeIdleSeconds,
@@ -173,7 +175,19 @@ awaitDueEpisode scheduler = do
       awaitDueEpisode scheduler
 
 releaseEpisodeClaim :: EpisodeScheduler -> EpisodeWork -> IO ()
-releaseEpisodeClaim scheduler work = atomically $ do
-  let GroupId gid = episodeGroup work.request
+releaseEpisodeClaim scheduler work = releaseEpisodeGroup scheduler (episodeGroup work.request)
+
+-- | Hold a conversation's episodes for a command that edits them, as a worker
+-- claim does; due work for it waits until 'releaseEpisodeGroup'.  False while
+-- the historian is working on that conversation.
+claimEpisodeGroup :: EpisodeScheduler -> GroupId -> IO Bool
+claimEpisodeGroup scheduler (GroupId gid) = atomically $ do
+  active <- readTVar scheduler.claimed
+  if Set.member gid active
+    then pure False
+    else True <$ writeTVar scheduler.claimed (Set.insert gid active)
+
+releaseEpisodeGroup :: EpisodeScheduler -> GroupId -> IO ()
+releaseEpisodeGroup scheduler (GroupId gid) = atomically $ do
   modifyTVar' scheduler.claimed (Set.delete gid)
   modifyTVar' scheduler.version (+ 1)

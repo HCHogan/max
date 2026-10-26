@@ -17,6 +17,19 @@ Original messages remain available indefinitely under the existing storage polic
 Compaction creates sourced chronological episodes, not a cross-episode semantic
 merge. Consolidation/dreaming is intentionally deferred.
 
+`!uncompact` goes the other way for the newest episodes. It withdraws active
+compartments, newest first, while the newest messages still fit the raw tail a
+quiet-period capture keeps (`W / 4` of the conversation's current model, measured
+as the historian measures it). The withdrawn compartments' messages become raw
+tail again, and the historian cursor moves back to the end of the newest episode
+left, so they are pending rather than a coverage gap and the next idle capture
+finds nothing to take. Once chat grows the tail past the usual marks, compaction
+resumes. Withdrawn compartments keep their handles and evidence but leave the
+prompt, recall and the active-range exclusion. The command holds the
+conversation's scheduler claim while it runs and answers busy when the historian
+is working on that conversation. It needs the same group-admin `compact`
+capability as `!compact`.
+
 ## Capacity policy
 
 Configure only `context_window` on the selected profile: it is the **combined

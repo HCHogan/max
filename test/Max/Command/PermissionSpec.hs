@@ -23,6 +23,7 @@ spec = do
       requiredCapability (PersonaSet "猫") `shouldBe` Just ("persona", TierGroupAdmin)
       requiredCapability PersonaClear `shouldBe` Just ("persona", TierGroupAdmin)
       requiredCapability Compact `shouldBe` Just ("compact", TierGroupAdmin)
+      requiredCapability Uncompact `shouldBe` Just ("compact", TierGroupAdmin)
       requiredCapability (DestinySet True) `shouldBe` Just ("destiny", TierGroupAdmin)
       requiredCapability Unclear `shouldBe` Just ("clear", TierGroupAdmin)
       requiredCapability (Kill "t1") `shouldBe` Just ("kill", TierGroupAdmin)

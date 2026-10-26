@@ -304,7 +304,9 @@ another group or direct chat is indistinguishable from a nonexistent handle.
 `context_resume` reads previous turn traces and full tool results without
 restarting work or replaying effects. `!compact` queues a fixed-cutoff historian
 capture; each validated batch replaces its prefix atomically, preserving raw
-sources and messages beyond the cutoff. See [context.md](context.md) for exact
+sources and messages beyond the cutoff. `!uncompact` withdraws the newest
+episodes that fit the raw tail and rewinds the historian cursor in one locked
+transaction. See [context.md](context.md) for exact
 pagination, failure, scheduling, and capacity semantics.
 
 `context_search` is the volatile unified-recall surface. It searches visible

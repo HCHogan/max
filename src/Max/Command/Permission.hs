@@ -39,6 +39,7 @@ requiredCapability = \case
   PersonaSet _ -> Just ("persona", TierGroupAdmin)
   PersonaClear -> Just ("persona", TierGroupAdmin)
   Compact -> Just ("compact", TierGroupAdmin)
+  Uncompact -> Just ("compact", TierGroupAdmin)
   ClearAll -> Just ("clear", TierGroupAdmin)
   Unclear -> Just ("clear", TierGroupAdmin)
   Kill _ -> Just ("kill", TierGroupAdmin)

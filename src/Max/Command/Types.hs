@@ -39,6 +39,8 @@ data Command
     PersonaSet !Text
   | -- | '!compact' ('!clear' is a compatibility alias)
     Compact
+  | -- | '!uncompact' — return the newest summaries' messages to the raw tail
+    Uncompact
   | -- | '!clear --all' / '!clear -a'
     ClearAll
   | -- | '!unclear' — remove the cleared_at watermark

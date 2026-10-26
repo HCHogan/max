@@ -20,6 +20,7 @@ import Data.Text qualified as T
 import Data.Time (defaultTimeLocale, diffUTCTime, formatTime, getCurrentTime, utcToLocalTime)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
+import Effectful.Exception (finally)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.Reader.Dynamic (Reader, ask)
@@ -33,7 +34,9 @@ import Max.ConversationScope (conversationScopeFor, conversationStorageId)
 import Max.DB.History (MessageCursor (..))
 import Max.DB.Stickers qualified as Stickers
 import Max.Env (BotEnv (..))
-import Max.EpisodeScheduler (queueCompact)
+import Max.EpisodeScheduler (claimEpisodeGroup, queueCompact, releaseEpisodeGroup)
+import Max.EpisodeStore (Withdrawal (..))
+import Max.Historian (Uncompacted (..), uncompactConversation)
 import Max.Intent (IntentConfig (..))
 import Max.Jobs qualified as Jobs
 import Max.Lingo.Types (LingoExpression (..), LingoJargon (..))
@@ -53,7 +56,7 @@ import Max.MemoryStore
     listMemories,
     userMemoryNamespace,
   )
-import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, lookupModelCapabilities, modelProfileNames)
+import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities, modelProfileNames)
 import Max.Platform.Types (PrincipalId (..))
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), destroySandboxesForGroup, ensureSandbox, execInSandbox)
 import Max.Sandbox.Runtime (ExecResult (..))
@@ -95,6 +98,18 @@ data DispatchResult
     -- turn the note is aimed at.
     FeedbackNote !Text
   deriving stock (Show, Eq)
+
+uncompactReply :: Text -> Uncompacted -> Text
+uncompactReply model result
+  | w.withdrawnCompartments > 0 =
+      "已撤回最近 " <> tshow w.withdrawnCompartments <> " 段摘要，" <> tshow w.withdrawnMessages <> " 条消息回到原文；"
+        <> budget
+        <> "。空闲时不会再压缩它们，聊多了照常压缩。"
+  | w.remainingCompartments == 0 = "本群没有可撤回的摘要。"
+  | otherwise = "没有撤回摘要：" <> budget <> "，再撤回一段就会超出，空闲时又会被压缩。"
+  where
+    w = result.withdrawal
+    budget = "原文约 " <> tshow result.rawTokens <> " tokens，" <> model <> " 保留 " <> tshow result.rawTokenLimit
 
 -- | Run one command and produce a 'DispatchResult'.
 execute ::
@@ -197,6 +212,19 @@ execute t gid uid senderPrincipal cmd = do
             liftIO (queueCompact scheduler gid cutoff)
             reply "已请求立即压缩此前记录为 episode；只在校验并发布成功后替换上下文，原文始终保留。新消息不会并入本次压缩；涉及进行中任务的部分会等任务结束。"
           _ -> reply "无法确定压缩范围；上下文未改变。"
+    -- Withdraws only what the next quiet-period capture would leave raw, so
+    -- the restored messages stay raw until chat grows past them.
+    Uncompact -> case env.beEpisodeScheduler of
+      Nothing -> reply "未启用 historian，没有摘要可撤回。"
+      Just scheduler -> do
+        s <- liftIO (Session.readSession t)
+        let limits = maybe defaultContextLimits (.contextLimits) (lookupModelCapabilities s.model catalog)
+        claimed <- liftIO (claimEpisodeGroup scheduler gid)
+        if not claimed
+          then reply "historian 正在整理本群，稍后再试；摘要未改变。"
+          else do
+            result <- uncompactConversation env.beTimeZone limits conversation `finally` liftIO (releaseEpisodeGroup scheduler gid)
+            reply (uncompactReply s.model result)
     ClearAll -> do
       now <- liftIO getCurrentTime
       updateSession t (\s -> (Session.clearAll now s, ()))

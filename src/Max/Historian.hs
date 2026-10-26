@@ -7,9 +7,12 @@ module Max.Historian
     CaptureProcessResult (..),
     processCaptureRun,
     prepareOldestCoverageGap,
+    Uncompacted (..),
+    uncompactConversation,
 
     -- * Pure policy exposed for tests
     takeEpisodeByToken,
+    rawRetained,
     renderHistorianSourceLine,
     renderHistorianMessages,
     generateHistorianCapture,
@@ -78,7 +81,8 @@ import Max.MemoryStore
     userMemoryNamespace,
   )
 import Max.ModelCatalog
-  ( ModelCapabilities (..),
+  ( ContextLimits,
+    ModelCapabilities (..),
     ModelCatalog,
     contextInputBudget,
     defaultContextLimits,
@@ -217,8 +221,7 @@ historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler =
             if null tailRows && overflow
               then fmap (fmap (.cursor) . listToMaybe . (.items)) (fetchNewestPromptPageBefore scope cursor Nothing 0 Nothing 1)
               else pure Nothing
-          let retained = takeEpisodeByToken tz (rawLowTokens limits False) (reverse tailRows)
-              through = case reverse retained of
+          let through = case rawRetained tz limits tailRows of
                 oldest : _ -> MessageCursor (oldest.cursor.ingestSeq - 1)
                 [] -> fromMaybe cursor oversizedEnd
           if pressure && not overflow && rawTailTokens tailRows < rawHighTokens limits False
@@ -228,6 +231,41 @@ historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler =
               case window of
                 Nothing -> pure Nothing
                 Just selected -> prepareCaptureRun scope cursor selected.endCursor (request (if pressure then CaptureTokenPressure else CaptureIdle) profile)
+
+-- | What '!uncompact' returned to the raw tail, and the tail it left.
+data Uncompacted = Uncompacted
+  { withdrawal :: !Withdrawal,
+    rawTokens :: !Int,
+    rawTokenLimit :: !Int
+  }
+  deriving stock (Show, Eq)
+
+-- | Return the newest summaries' messages to the raw tail: withdraw active
+-- compartments, newest first, while the newest messages still fit the share
+-- of the working budget a quiet-period capture leaves raw, measured the way
+-- it measures.  That capture then finds nothing to take; once chat grows the
+-- tail past it, compaction resumes as usual.  The caller holds the
+-- conversation's scheduler claim so no capture is generating meanwhile.
+uncompactConversation ::
+  (WithConnection :> es, IOE :> es) =>
+  TimeZone ->
+  ContextLimits ->
+  ConversationScope ->
+  Eff es Uncompacted
+uncompactConversation tz limits scope = do
+  (newest, _) <- fetchBoundedPromptTail scope (MessageCursor 0) 0 Nothing (rawHighTokens limits False)
+  withdrawal <- case rawRetained tz limits newest of
+    oldest : _ -> withdrawCompartmentsFrom scope oldest.cursor
+    [] -> do
+      cursor <- loadCursor scope historianCursor
+      pure (Withdrawal 0 0 0 cursor)
+  let rawTail = [entry | entry <- newest, entry.cursor > withdrawal.historianAfter]
+  pure (Uncompacted withdrawal (sum (map (ledgerTokenCost tz) rawTail)) (rawLowTokens limits False))
+
+-- | The newest messages of an oldest-first tail that a quiet-period capture
+-- leaves raw, oldest first.
+rawRetained :: TimeZone -> ContextLimits -> [LedgerItem] -> [LedgerItem]
+rawRetained tz limits tailRows = reverse (takeEpisodeByToken tz (rawLowTokens limits False) (reverse tailRows))
 
 data EpisodeWindow = EpisodeWindow
   { endCursor :: !MessageCursor,

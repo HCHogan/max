@@ -32,6 +32,8 @@ module Max.EpisodeStore
     captureRunSourceMatches,
     publishCaptureRun,
     listActiveCompartments,
+    Withdrawal (..),
+    withdrawCompartmentsFrom,
     expandEpisode,
   )
 where
@@ -77,6 +79,7 @@ import Max.DB.ConversationCursor
   ( advanceCursor,
     historianCursor,
     loadCursor,
+    rewindCursor,
   )
 import Max.DB.ConversationLock (lockConversation)
 import Max.DB.History
@@ -1096,6 +1099,54 @@ listActiveCompartments scope =
     \   ON last_message.group_id = a.conversation_id AND last_message.ingest_seq = a.end_ingest_seq \
     \ ORDER BY a.start_ingest_seq, a.end_ingest_seq"
     (Only (conversationStorageId scope))
+
+-- | What 'withdrawCompartmentsFrom' returned to the raw tail.
+data Withdrawal = Withdrawal
+  { withdrawnCompartments :: !Int,
+    withdrawnMessages :: !Int,
+    remainingCompartments :: !Int,
+    -- | The historian cursor afterwards: the end of the newest active
+    -- compartment left, unchanged when nothing was withdrawn.
+    historianAfter :: !MessageCursor
+  }
+  deriving stock (Show, Eq)
+
+-- | Withdraw the active compartments that start at or after @from@ so their
+-- messages become the raw tail again, and rewind the historian to the newest
+-- compartment left so those messages are pending, not a coverage gap.  Takes
+-- the conversation lock publication takes, so a concurrent publish either
+-- lands first or fails its cursor check.
+withdrawCompartmentsFrom ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  MessageCursor ->
+  Eff es Withdrawal
+withdrawCompartmentsFrom scope from = withTransaction $ do
+  let conversationId = conversationStorageId scope
+  locked <- lockConversation conversationId
+  unless locked (publicationFailure "conversation no longer exists")
+  current <- loadCursor scope historianCursor
+  withdrawn <-
+    query
+      "UPDATE conversation_compartments SET state = 'withdrawn' \
+      \ WHERE conversation_id = ? AND state = 'active' \
+      \   AND start_ingest_seq >= ? AND end_ingest_seq <= ? \
+      \ RETURNING source_message_count"
+      (conversationId, from.ingestSeq, current.ingestSeq)
+  remaining <-
+    query
+      "SELECT count(*)::int, LEAST(?, COALESCE(max(end_ingest_seq), 0)) \
+      \ FROM conversation_compartments WHERE conversation_id = ? AND state = 'active'"
+      (current.ingestSeq, conversationId)
+  (left, newestEnd) <- case remaining :: [(Int, Int64)] of
+    [row] -> pure row
+    _ -> publicationFailure "active compartment count unavailable"
+  let counts = [count | Only count <- withdrawn :: [Only Int]]
+      after = if null counts then current else MessageCursor newestEnd
+  unless (null counts) $ do
+    rewound <- rewindCursor scope historianCursor current after
+    unless rewound (publicationFailure "historian cursor did not move back")
+  pure (Withdrawal (length counts) (sum counts) left after)
 
 -- | Expand an opaque episode handle inside the conversations authorized by
 -- the supplied read policy.  The handle is only a locator: the SQL predicate

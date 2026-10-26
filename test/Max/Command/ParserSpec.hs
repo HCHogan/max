@@ -108,6 +108,11 @@ spec = do
     it "a partly-unknown cluster (-ax) stays a value, so no --all" $
       "!clear -ax" `parsesTo` Compact
     it "unclear" $ "!unclear" `parsesTo` Unclear
+    it "uncompact" $ "!uncompact" `parsesTo` Uncompact
+    it "uncompact takes no arguments yet" $
+      case parseCommand "!uncompact 2d" of
+        Right (Just (Unknown "uncompact" _)) -> pure ()
+        other -> expectationFailure $ "expected Unknown uncompact, got: " <> show other
 
   describe "retired !pin / !unpin / !pins" $
     it "parse as unknown commands" $
