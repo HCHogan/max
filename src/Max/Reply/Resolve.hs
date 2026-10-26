@@ -4,6 +4,7 @@ module Max.Reply.Resolve
     prepareReplyChunk,
     resolveModelText,
     cleanModelText,
+    restoreLineBreaks,
     stripStickerText,
     stripBareMarkers,
     stripThinkSpans,
@@ -148,7 +149,21 @@ dedupeModelImages seen0 body =
 -- the same module as sending so streamed final text, progress narration, and
 -- the final remainder cannot drift into subtly different grammars.
 cleanModelText :: T.Text -> T.Text
-cleanModelText = T.strip . stripBareMarkers . stripStickerText . stripHallucinatedTokens . stripThinkSpans
+cleanModelText = T.strip . stripBareMarkers . stripStickerText . stripHallucinatedTokens . restoreLineBreaks . stripThinkSpans
+
+-- | Turn the transcript's line-break marker back into a line break.  History
+-- renders every newline inside a message as @ ⏎ @, and models copy that form
+-- into their own replies, where it would reach the chat as a literal symbol.
+restoreLineBreaks :: T.Text -> T.Text
+restoreLineBreaks t = T.intercalate "\n" (zipWith trim [0 ..] pieces)
+  where
+    pieces = T.splitOn "⏎" t
+    lastPiece = length pieces - 1
+    trim :: Int -> T.Text -> T.Text
+    trim i piece =
+      (if i < lastPiece then T.dropWhileEnd horizontal else id)
+        ((if i > 0 then T.dropWhile horizontal else id) piece)
+    horizontal c = c == ' ' || c == '\t'
 
 -- | Strip inline think blocks at the final publication boundary, including
 -- everything after an unclosed block. Partial reasoning must remain hidden even

@@ -12,6 +12,7 @@ module Max.ReplySend
     sendAndPersistReply,
     prepareReplyChunk,
     cleanModelText,
+    restoreLineBreaks,
     stripStickerText,
     stripBareMarkers,
     stripThinkSpans,
@@ -37,7 +38,7 @@ import Max.IR (Body, Phase (Canonical))
 import Max.MessageKind (MessageKind (KindChat))
 import Max.Platform.Types (CanonicalMessageId, PrincipalId)
 import Max.Reply (Chunk (..), planReply)
-import Max.Reply.Resolve (cleanModelText, messageImageNodes, stripBareMarkers, stripStickerText, stripThinkSpans)
+import Max.Reply.Resolve (cleanModelText, messageImageNodes, restoreLineBreaks, stripBareMarkers, stripStickerText, stripThinkSpans)
 import Max.Reply.Resolve qualified as Resolve
 import Max.Turn.Types (TurnOutputContext, nextTurnOutputLink)
 import OneBot.Types (GroupId)

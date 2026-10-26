@@ -21,7 +21,7 @@ import Max.MessageKind (MessageKind (..))
 import Max.Platform.QQ (qqIngestBody)
 import Max.Platform.Roster (GroupMember (..))
 import Max.Platform.Types (CanonicalMessageId (..))
-import Max.ReplySend (cleanModelText, stripBareMarkers, stripStickerText, stripThinkSpans)
+import Max.ReplySend (cleanModelText, restoreLineBreaks, stripBareMarkers, stripStickerText, stripThinkSpans)
 import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -193,6 +193,22 @@ spec = do
     it "handles the production shape, token straddle and all" $
       cleanModelText "<think>想玩巨剑狮子斩\n\n语气要自然\n\n我来插一句。[</think>\n\n↩#102541] 无赖专属"
         `shouldBe` "↩#102541] 无赖专属"
+
+  describe "restoreLineBreaks" $ do
+    -- 2026-10-23: gemini-3.8-flash put the transcript's marker into 7% of
+    -- one day's replies, copied from its own earlier lines in history.
+    it "turns the echoed transcript marker back into a line break" $
+      restoreLineBreaks "七点了； ⏎ 赶紧去睡吧。 ⏎ 难绷。" `shouldBe` "七点了；\n赶紧去睡吧。\n难绷。"
+
+    it "keeps an echoed blank line a paragraph break" $
+      restoreLineBreaks "第一段 ⏎  ⏎ 第二段" `shouldBe` "第一段\n\n第二段"
+
+    it "accepts the marker without its spaces and leaves other text alone" $ do
+      restoreLineBreaks "上⏎下" `shouldBe` "上\n下"
+      restoreLineBreaks "  缩进\n  保留  " `shouldBe` "  缩进\n  保留  "
+
+    it "runs inside cleanModelText" $
+      cleanModelText "结论： ⏎ 能用" `shouldBe` "结论：\n能用"
 
   describe "stripBareMarkers" $ do
     it "removes a bare [image] marker the model echoed" $
