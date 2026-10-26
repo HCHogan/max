@@ -44,9 +44,7 @@ response cannot crash sibling MCP sessions. A delayed-response fixture verifies
 this behavior during package builds, independently of browser launch timing.
 
 `max-napcat.service` uses the pinned community napcat.nix QQ integration and a
-bubblewrap launcher. `nix/napcat.nix` pins its QQ release next to NapCat, from
-the versions NapCat lists as supported, instead of following the host's nixpkgs.
-It keeps
+bubblewrap launcher. Its QQ version follows the fleet's pinned nixpkgs. It keeps
 account data in `/var/lib/max/napcat/{QQ,config}` and exposes only the outbox
 through a read-only bind. Short-lived upload files are group-readable by the
 separate `max-outbox` group. The default OneBot listener is `127.0.0.1:18080`;

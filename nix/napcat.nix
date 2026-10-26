@@ -3,51 +3,25 @@ let
   inherit (pkgs) lib;
   # Reuse the community project's QQ/NapCat integration, pinned as one input.
   source = builtins.fetchTarball {
-    url = "https://codeload.github.com/initialencounter/napcat.nix/tar.gz/a157f1524a594d7d78409f81d448145fe12218e7";
-    sha256 = "sha256-ac5ntKexwDJ50QvDXx0Q1HzlRv1SeS20/hJ32uXfhr0=";
+    url = "https://codeload.github.com/initialencounter/napcat.nix/tar.gz/cefa2c2832ad1a38cfcc3c3994c7101d7ec80ad3";
+    sha256 = "sha256-iHBAT/lr1vLoz2KqEs0Q886K5AC3x5gWWW91lVpT/Z4=";
   };
   upstream = pkgs.callPackage "${source}/src/napcat.nix" { };
-  # QQ is pinned here rather than taken from the host's nixpkgs, whose stable
-  # release lags months behind; NapCat 4.18.41 lists 3.2.34-53644 as
-  # supported. Hashes match nixpkgs' sources.nix for the same release.
-  qqVersion = "3.2.34-2026-09-24";
-  qqRelease =
-    {
-      x86_64-linux = {
-        url = "https://qqdl.gtimg.cn/qqfile/QQNTV2/9.9.36/release/9ee04bef/QQ_3.2.34_260924_amd64_01.deb";
-        hash = "sha256-Q2xl4d0oQi4SiiHL3bX+Ti5sB51/J/7CVB4BTTjMM24=";
-      };
-      aarch64-linux = {
-        url = "https://qqdl.gtimg.cn/qqfile/QQNTV2/9.9.36/release/9ee04bef/QQ_3.2.34_260924_arm64_01.deb";
-        hash = "sha256-GBuJXLVzVI45blS7BUjMqS/9wbGksBj6RVG7BiOF/co=";
-      };
-    }
-    .${pkgs.stdenv.hostPlatform.system};
-  # Tencent's download host answers 403 to an unsigned URL; its public signing
-  # endpoint returns a short-lived one, as nixpkgs' own fetcher does.
-  qqSource =
-    pkgs.runCommandLocal (baseNameOf qqRelease.url)
-      {
-        outputHash = qqRelease.hash;
-        outputHashMode = "flat";
-        nativeBuildInputs = [
-          pkgs.curl
-          pkgs.jq
-          pkgs.cacert
-        ];
-      }
-      ''
-        signedUrl=$(
-          curl -fsS --retry 3 -X POST "https://im.qq.com/http2rpc/gotrpc/noauth/trpc.qqntv2.urlsign.UrlSign/GetSign" \
-            -H "Content-Type: application/json" \
-            -H 'x-oidb: {"uint32_command":"0x9b8e","uint32_service_type":1}' \
-            -d '{"url":"${qqRelease.url}"}' | jq -er '.data.url'
-        )
-        curl -fL --retry 3 -o "$out" "$signedUrl"
-      '';
+  # Tencent removes old release URLs. This mirror has the identical bytes:
+  # keep nixpkgs' independently pinned hash, including on the fallback URL.
+  qqSource = pkgs.qq.src.overrideAttrs (old: {
+    urls =
+      old.urls
+      ++
+        lib.optional (pkgs.qq.version == "3.2.29-2026-05-28")
+          "https://github.com/Rodert/qq-versions/releases/download/qq-packages-20260528-3e8913a2/QQ_3.2.29_260528_${
+            if pkgs.stdenv.hostPlatform.isx86_64 then "amd64" else "arm64"
+          }_01.deb";
+  });
   napcat = upstream.patched.overrideAttrs {
+    # Keep the fleet's pinned QQ release; upstream otherwise downgrades QQ.
     src = qqSource;
-    version = "${qqVersion}-napcat-4.18.41";
+    version = "${pkgs.qq.version}-napcat-4.18.19";
     meta = pkgs.qq.meta // {
       mainProgram = "qq";
     };
