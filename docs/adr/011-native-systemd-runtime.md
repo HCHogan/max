@@ -34,7 +34,7 @@ The broker rejects socket, device and regular-file descriptors. Guest command
 units run as uid 1000 with bounded lifetime; disconnect cancels the corresponding
 unit. Per-instance locks permit unrelated conversations to proceed concurrently.
 
-NapCat uses the pinned napcat.nix integration with the pinned host QQ package,
+NapCat uses the pinned napcat.nix integration with a QQ release pinned beside it,
 bubblewrap isolation and retained account directories. A dedicated group allows
 read-only access to short-lived upload files without granting access to Max's
 other state.
