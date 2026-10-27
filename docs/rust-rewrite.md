@@ -20,7 +20,7 @@
 | 版本 | 内容 | 用途 |
 |---|---|---|
 | v1 | 见 [v1 范围](#v1-范围) | 只做审核和测试，不上线 |
-| v1 之后 | 工具、VM、浏览器、codemode、记忆等，怎么切分 **待定** | 同上 |
+| v1 之后 | 浏览器、记忆、后台 agent 等，怎么切分 **待定** | 同上 |
 | 上线 | [功能对齐清单](#功能对齐清单)全部完成，数据导入演练通过 | drop-in 替换 Haskell 版 |
 
 ### v1 范围
@@ -31,15 +31,17 @@
 - canonical ledger：入站和出站消息都落 Postgres。
 - 会话 actor、前台 turn、流式回复、steer、取消（`!kill`）。
 - LLM：Responses 和 Chat Completions 两种协议。
-- 自写的 agent loop。v1 带不带工具 **待定**。
+- 自写的 agent loop，带工具（2026-10-27 定）：纯 codemode，程序跑在群 VM 里，见[工具和 codemode](#工具和-codemode)。所以 v1 也要带上 VM 沙箱和 MCP 服务。开放哪几个 Max 工具 **待定**，先放一两个只读的，验证 MCP 通道。
+- 上下文投影：摘要块、原始尾巴、易变块，见[上下文投影](#上下文投影)。historian 是 services 下的独立 actor，进不进 v1 不牵连别的部分，**待定**。
 - 配置、日志、优雅关闭。
 
-不包含，但上线前都要做：镜像、codemode、浏览器、VM 沙箱、记忆和召回、后台 agent、自动化、媒体、admin。
+不包含，但上线前都要做：镜像、浏览器、记忆和召回、后台 agent、自动化、媒体、admin。
 
 ### 有意删除的功能
 
 - iMessage
 - WeChat hook
+- Inbound message hooks：先不做（2026-10-27）。以后要做的话不能放进 VM，因为每条消息都要跑；候选是声明式规则，Rust 的 `regex` 是线性时间的，不怕不可信的正则。
 
 2026-10-26 讨论时只决定带 QQ 和 Matrix，这两个有人用。其余删除项 **待补**。
 
@@ -51,18 +53,18 @@
 |---|---|---|
 | Conversation lifetime and history | 部分 | turn、队列、发起者反馈；重启后在时效内恢复挂起的 turn，崩溃时正在跑的记为 `Lost`，见[重启恢复](#重启恢复) |
 | Automations | — | |
-| Sandbox isolation | — | |
+| Sandbox isolation | 部分 | codemode 的运行环境；v1 要有按需启动、闲置关机、执行命令和 `/work` |
 | Attachment fan-out and QQ best-effort recovery | — | |
-| Persistence | 部分 | 只有 ledger |
+| Persistence | 部分 | ledger 和 turn 记录；新 schema 见 [schema](#schema) |
 | Canonical multi-platform conversations | 部分 | QQ + Matrix 共用一种[消息格式](#消息格式)；镜像 v1 不做，上线前要做 |
 | Triggering | ✓ | @ 和回复触发；intent 分类进不进 v1 **待定** |
 | Proactive triggering | — | |
-| Inbound message hooks | — | 依赖 codemode |
+| Inbound message hooks | — | 先不做，见[有意删除的功能](#有意删除的功能) |
 | QQ group allowlist | ✓ | |
 | Private chats | ✓ | |
 | Agent loop | ✓ | |
 | Background agents and feedback | — | pi + MCP，见[后台 agent](#后台-agent) |
-| Prompt shape and budget | 部分 | |
+| Prompt shape and budget | 部分 | 见[上下文投影](#上下文投影) |
 | Memory | — | |
 | Group lingo | — | |
 | Unified recall and vector search | — | |
@@ -70,13 +72,13 @@
 | LLM profiles | ✓ | |
 | Streaming | ✓ | |
 | Share cards | — | |
-| Images | — | |
+| Images | — | 工具结果里的图片见[多模态结果](#多模态结果) |
 | Group awareness | — | |
 | Moderation (QQ groups) | — | |
-| Browser | — | |
+| Browser | — | camoufox 搬进群 VM，见[浏览器](#浏览器) |
 | Replies | ✓ | |
-| Tools | — | |
-| Skills | — | turn 中途加载的工具只增不减，见[核心](#核心) |
+| Tools | 部分 | 纯 codemode，见[工具和 codemode](#工具和-codemode)；v1 开放哪几个 **待定** |
+| Skills | — | skill 只是文档，加载时只往上下文后面追加，tools 数组不变，见[纯 codemode](#纯-codemode) |
 | Destiny 2 (opt-in) | — | |
 | Commands | 部分 | `!kill` 等运行时命令 |
 | SSH fleet operations | — | |
@@ -99,10 +101,14 @@ v1 用到的：
 | 数据库 | sqlx（postgres、runtime-tokio、macros、migrate、chrono、uuid、json） | 0.9.0 | 编译期检查 SQL；`.sqlx` 离线元数据入库；迁移用 sqlx 自带的 |
 | 时间 | chrono | 0.4 | sqlx 0.9 不支持 jiff |
 | LLM | async-openai（responses、chat-completion、byot） | 0.42.2 | 只在 LLM 模块里用；破坏性小版本大约每月一个 |
-| HTTP/WS 服务 | axum（ws） | 0.8.9 | 接 NapCat 的 reverse WS；以后 admin 和 MCP 也挂在这里 |
+| HTTP/WS 服务 | axum（ws） | 0.8.9 | 接 NapCat 的 reverse WS 和 MCP 服务；以后 admin 也挂在这里 |
 | Matrix | matrix-sdk | 0.19.1 | 默认特性带 E2EE 和 sqlite store，要不要关掉 **待定**（见待讨论第 6 条） |
 | OneBot v11 | 自写 | — | kovi 是插件框架，形状不对；onebot_v11 2024-09 后停更 |
 | agent loop | 自写，sans-I/O | — | 调研结论见[核心](#核心) |
+| MCP | rmcp | 3.x | Max 的 MCP 服务，VM 里的程序通过它调 Max 的工具，见 [MCP 通道](#mcp-通道) |
+| 工具参数 schema | schemars | 1.2 | rmcp 本来就依赖它 |
+| codemode 运行时 | Node 和官方 MCP TypeScript SDK | — | 打进群 VM 的 guest 镜像，版本跟着钉住的 nixpkgs；runner 和 SDK 自写 |
+| VM | microvm.nix、cloud-hypervisor，命令走 vsock 上的 SSH | — | 沿用 Haskell 版的 guest 和网络配置 |
 | 测试 | cargo-nextest、insta、tokio test-util、`#[sqlx::test]` | 0.9.149 / 1.49 | |
 | 构建 | crane | — | 依赖单独缓存 |
 
@@ -112,9 +118,7 @@ v1 之后再加的：
 
 | 用途 | 选择 | 备注 |
 |---|---|---|
-| codemode | wasmtime 48 | LTS 版本，支持 24 个月；主线每月 20 号发一个大版本 |
-| MCP | rmcp 3.x | 后台 agent 回调用的 MCP 服务，以及 camoufox 客户端 |
-| 工具参数 schema | schemars 1.2 | rmcp 本来就依赖它 |
+| 浏览器 | camoufox（Playwright server 模式） | 跑在群 VM 里，见[浏览器](#浏览器) |
 | 向量 | pgvector 0.4.2 | 支持 sqlx < 0.10 |
 | 自动化 | croner 4 | |
 | token 估算 | tiktoken-rs 0.12 | |
@@ -163,6 +167,7 @@ groups_file = "/run/secrets/max/qq-groups"
 [llm]
 default = { model = "cliproxy/gpt-5.6-luna", effort = "xhigh" }
 intent = { model = "local/qwen3.5-4b" }
+historian = { model = "cliproxy/gpt-5.6-luna", effort = "medium" }
 
 # 第 1 层：怎么连
 [llm.providers.cliproxy]
@@ -198,7 +203,7 @@ v1 只定义它用得到的几节：database、qq、matrix、llm。其它节跟�
 
 任务的父子关系和生命周期见图：<https://claude.ai/artifact/KrciskAXJfMF2qTHF6hDbW>
 
-- root scope 下有两个子 scope：services（接入、平台 sender、MCP 服务等常驻任务）和 conversations（每个会话 actor 一个任务）。
+- root scope 下有两个子 scope：services（接入、平台 sender、MCP 服务、派生数据 worker、自动化调度器等常驻任务，见[三种角色](#三种角色)）和 conversations（每个会话 actor 一个任务）。
 - 会话 actor 持有队列、反馈收件箱和 Job 表，下面挂 turn 和 jobs 两个 scope。turn 同一时刻只有一个；job 挂在 jobs 下，能比发起它的 turn 活得长。
 - `Scope` 由 `JoinSet` 和 `CancellationToken` 组成（2026-10-27 去掉了 reaper、defer 和 Background）：
   - `spawn` 给子任务一个子令牌，同一个令牌也返回给调用方，用来单独取消这一个任务。比如 `!kill` 只取消当前 turn。
@@ -219,6 +224,27 @@ v1 只定义它用得到的几节：database、qq、matrix、llm。其它节跟�
 3. 排空：平台 sender 发完已提交的消息，有截止时间。
 4. root scope 结束。运行时用 `shutdown_timeout` 关，不直接 drop，因为 drop 会一直等 `spawn_blocking` 的线程。最外层由 systemd 的 `TimeoutStopSec` 兜底，到期杀掉整个服务的 cgroup。
 
+### 三种角色
+
+2026-10-27 定。运行时里的任务分三种，按它产出什么分：
+
+1. **主体**：会话 actor 和 turn。消费请求，产出回复。
+2. **派生数据 worker**：historian、lingo、embedding、caption、媒体下载和转发展开、记忆到期。输入是 ledger 或另一张派生表，输出是自己独占的一张表，只有它一个写者；从不碰 ledger 和 turn 记录，结果只在投影时被读。触发三种：入库通知、定时器或水位、启动和定期的缺口扫描。一个工作单元一个事务，失败记退避，不留半截；重启不存队列，靠扫描补。Haskell 版 9 月的简化最后也把这几个收敛成了"本地有界队列加缺数据扫描"。差别只在单元粒度：historian 和 lingo 是一段消息，embedding 一行，caption 一个文件，下载一个附件。写成一个框架，各 worker 只填三个函数：
+
+   ```rust
+   trait Derivation {
+       type Unit;
+       async fn scan(&self, db: &Db) -> Vec<Self::Unit>;              // 启动和定期：找缺的
+       fn on_message(&mut self, conv: ConversationId, id: MessageId); // 入库通知：重置计时器、算水位
+       async fn run(&self, unit: Self::Unit) -> Result<()>;           // 一个事务发布
+   }
+   ```
+
+   驱动器通用：tokio-util 的 `DelayQueue`、并发上限、按单元退避、自己的 `Scope`。入库通知是进程内的 broadcast，不像 Haskell 版用 `message_projections` 的标志位当队列；漏掉的由扫描补。
+3. **触发源**：产出的不是表，是 `TurnAccepted`，全部进会话 actor 的同一个入口（[运行流程](#运行流程)第 2 步）。差别只在源头：
+   - 跟着消息来的，在每条消息的路径上判：@、回复、命令是同步规则；intent 分类是异步的小模型调用，有每小时上限，在 actor 里按消息 spawn，结果回来再入队，不阻塞别的消息；自动化的 ledger_match 是规则。
+   - 外部来的：cron、HTTP webhook、外部轮询、proactive 的闲置触发。services 下一个调度器，定义在 `automations` 表，到点给对应的会话 actor 发请求。调度器的形状和派生 worker 一样（常驻、定时器、独占写 `automation_fires`、启动时扫一遍），只是 `run` 的结果是发请求。细节等做自动化时补。
+
 ### 资源怎么结束
 
 2026-10-27 定。资源有两种结束方式，两种都是正常路径：
@@ -234,11 +260,11 @@ v1 只定义它用得到的几节：database、qq、matrix、llm。其它节跟�
 2. **外部资源优先把生命周期绑在连接或 fd 上。** 连接一断，对端自己收尾；崩溃时内核也会关 fd，所以连崩溃都能覆盖。
    - LLM 请求：drop 掉流就是断开连接。
    - pi：跑在 stdio 上，可以直接杀进程。
-   - VM 命令：guest 在连接断开时杀掉命令。
-   - 浏览器：CDP 的 `Target.createBrowserContext` 带 `disposeOnDetach`，调试会话断开时销毁 context。
+   - VM 命令：guest 在连接断开时杀掉命令。codemode 的 runner 也是一条 VM 命令，它的 MCP 会话在 `Drop` 里同步吊销。
+   - 浏览器：runner 被杀时，它到 Playwright server 的连接断开，它开的 browser context 跟着关掉。做浏览器时实测。
    - 杀进程要杀整棵树，用进程组或 cgroup。只杀直接子进程的话，孙进程还活着，还开着输出管道。
 3. **对端只认 API 调用的**：`Drop` 里 `try_send` 一条停止命令给持有那条连接的常驻服务，由它去调 API。它在 services scope 里，关机时按顺序关。
-4. **崩溃时 `Drop` 不会执行**：启动时按标签清理孤儿，包括 VM 里的命令和 pi 进程；MCP 的 job token 带过期时间。
+4. **崩溃时 `Drop` 不会执行**：启动时按标签清理孤儿，包括 VM 里的命令和 pi 进程。MCP 会话只存在内存里，进程没了就全部失效。
 5. **只有正常结束时要等结果或要报错的类型才有 `close`**，比如要拿退出码、要把待发消息发完、要提交事务。其它类型只有 `Drop`。
 6. **`close` 跟着所有权走。** 谁拥有，谁在自己正常路径的末尾调。拥有需要 close 的字段的结构体，自己也要有 `close`，按创建的反序关字段。`close` 拿 `self`，一个值只会在一个地方被 close。body 里的 `?` 不能跳过 `close`：先拿到结果，再 close，最后才处理结果。
 7. **`close` 自己被 drop 也要安全。** 中途任何一个 `await` 被丢掉，`Drop` 都还能按取消路径收拾。"已关完"的标记放在最后一步。
@@ -313,7 +339,7 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 |---|---|---|
 | `Scope::close(grace)` | `Scope` 里一次 | 关机时防卡死 |
 | turn 的墙钟上限 | `run_turn` 的 `select!` 里一个分支 | 防卡死 |
-| 工具调用上限 | 工具执行器里一次，具体工具里不写 | 防卡死 |
+| 工具调用上限 | 两处：`run_code` 一次运行一个；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
 | 网络客户端 | 配置里一次：LLM 客户端的连接和读超时、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳 | 防卡死 |
 | 先等再升级 | 按需 | 策略，比如 `close` 先给命令时间自己退出 |
 | 常驻服务里的等待表 | 每张表一次 | 防泄漏，比如 OneBot 的 echo 配对表。常驻服务外面没有取消替它兜底 |
@@ -349,7 +375,7 @@ ledger 是会话账本：所有平台上、所有人（包括 Max 自己）说�
 - 每条消息：会话、发送者、内容、原始 payload、平台 id、到达序号、时间。
 - Max 发出的每一段消息额外带 turn id 和段号。
 
-Max 在幕后做的事（模型怎么想、调了什么工具）不进 ledger。ledger 和 turn 之间只有三处引用：Max 发出的消息指向产生它的 turn；turn 指向触发它的消息；steer 输入引用对应的消息。以后 turn 的基础上下文从 ledger（加上记忆和摘要）投影出来，不读别的 turn 的 transcript。
+Max 在幕后做的事（模型怎么想、调了什么工具）不进 ledger。ledger 和 turn 之间只有三处引用：Max 发出的消息指向产生它的 turn；turn 指向触发它的消息；steer 输入引用对应的消息。以后 turn 的基础上下文从 ledger（加上记忆和摘要）投影出来，不读别的 turn 的 transcript，见[上下文投影](#上下文投影)。
 
 ### 消息格式
 
@@ -495,7 +521,7 @@ struct ModelOutput {
 
 ```rust
 struct Run {
-    spec: RunSpec,            // 不变：模型档、上限、基础工具、token 估算函数
+    spec: RunSpec,            // 不变：模型档、上限、这个 turn 能用的 Max 工具、token 估算函数
     base: Context,            // 不变：创建时传入的基础上下文
     transcript: Vec<Item>,    // 本 turn 产生的条目，只追加
     phase: Phase,             // 等模型、等工具、已结束
@@ -528,8 +554,8 @@ impl Run {
 
 核心负责的规则：
 
-- **构造请求**：请求由基础上下文、transcript 和当前活动工具组成。超出预算时，按确定的规则裁掉较早的工具输出；裁剪只作用在这一次请求上，不改 transcript。基础上下文在创建时已经裁到预算内。
-- **活动工具集**：spec 里的基础工具，加上 transcript 里已经加载的 skill 工具包。只增不减，由日志推出来，所以重放结果一致。格式不对或还没放开的工具调用，直接回错误结果，不交给驱动执行。
+- **构造请求**：请求由基础上下文、transcript 和固定的 `run_code` 工具组成。超出预算时，按确定的规则裁掉较早的工具输出；裁剪只作用在这一次请求上，不改 transcript。基础上下文在创建时已经裁到预算内。
+- **工具**：只有 `run_code`。程序能调哪些 Max 工具由 spec 定，整个 turn 不变，加载 skill 也不改变它，见[纯 codemode](#纯-codemode)。格式不对的调用直接回错误结果，不交给驱动执行。
 - **轮数和 token 上限。**
 - **steer 的时机**：等这一批工具结果都回来之后、下一次调模型之前。
 - **中断**：给还没回结果的工具调用补一条"已取消"的结果，保证历史合法。Responses 要求每个 `function_call` 都有对应的 output。
@@ -542,15 +568,16 @@ impl Run {
 
 - 把核心给的请求交给协议适配层降级成线上格式，用 async-openai 发出去、读流；可重试的错误由驱动重试。
 - 流式文本交给分段器，由 sender 发到群里，每段都落进 ledger。
-- 并发执行工具，把结果喂回核心。
+- 在群 VM 里并发跑 `run_code`，把结果喂回核心。模型输出流里一出现 `run_code` 调用，就开始启动群 VM。
 - 处理取消信号、停止信号和墙钟超时。
 - 这次运行结束时，写快照和结局，或者只写快照。
 
 协议适配层是无状态的，两次调用之间什么也不保留。降级只删条目或调整形状，不添加内容：
 
 - `source` 和当前模型对不上的 `opaque` 直接丢掉。turn 内的模型由 spec 固定，正常情况下总能对上，这条只是兜底。
-- **Responses**：本 turn 内的推理条目全部回传。skill 加载用客户端执行的 `tool_search`，需要 gpt-5.4 及以后的模型：`use_skill` 对应 `tool_search_call`，回 `tool_search_output` 时带上工具包。这几个条目和推理一样，作为不透明条目原样按位置回传。新工具注入在上下文末尾，缓存不受影响。
-- **Chat**：同一轮的几个条目拼回一条 assistant 消息；`reasoning_content` 在本 turn 的工具调用循环里回传。Chat 没有 tool search，skill 加载时只能把 tools 数组加长，每加载一次缓存失效一次；另一个选择是用固定的元工具 `call_tool(name, args)`。选哪个 **待定**，做工具时实测。
+- **Responses**：本 turn 内的推理条目全部回传。
+- **Chat**：同一轮的几个条目拼回一条 assistant 消息；`reasoning_content` 在本 turn 的工具调用循环里回传。
+- 工具结果里的图片和视频怎么降级，见[多模态结果](#多模态结果)。
 
 ### 会话 actor
 
@@ -565,17 +592,17 @@ impl Run {
 ### 运行流程
 
 1. **消息进来**：适配器归一化，写进 ledger，交给会话 actor。
-2. **判定**：触发规则包括 @、回复、命令和 intent 分类；自动化触发也走这个入口。
+2. **判定**：触发规则包括 @、回复、命令和 intent 分类；自动化触发也走这个入口。触发源见[三种角色](#三种角色)。
    - 是请求：写 `TurnAccepted`，放进内存队列。
    - 是当前 turn 发起者的反馈：交给 turn 的 steer 通道。
    - 都不是：它只作为上下文存在。
 3. **开始 turn**：没有 turn 在跑时，按排队规则取下一个没回复的请求：
-   1. 从 ledger 加上记忆和摘要，投影出基础上下文，裁到预算内。
+   1. 从 ledger 加上记忆和摘要，投影出基础上下文，裁到预算内，见[上下文投影](#上下文投影)。
    2. 写 `TurnStarted`（attempt 1）。
    3. 调 `Run::new(spec, base)`，在 turn scope 里起驱动。
 4. **循环**：驱动先取空 steer 通道，然后问 `next_step`。循环中途不写 turn 记录：
    - `CallModel`：发请求、读流，文本边流边分段发出；流结束后调 `model_output`。
-   - `RunTools`：并发执行，每个结果调一次 `tool_result`。
+   - `RunTools`：在群 VM 里并发跑这些 `run_code`，每个结果调一次 `tool_result`。
    - `Finished`：在一个事务里写快照和 `TurnFinished`，通知 actor 开下一个。
 5. **取消（`!kill`）**：见[取消](#取消)。
 6. **正常重启和启动**：见[重启恢复](#重启恢复)。
@@ -656,7 +683,7 @@ async fn drive(run: &mut Run, cx: &mut TurnCx, sig: &Signals) -> Result<End> {
 - **每个拥有 scope 的任务的最外层**：一处 `run_until_cancelled` 或 `select!`。
 - **有外部副作用、drop 不会自动停下的**：比如 VM 里的命令、pi 进程。生命周期绑在连接上，`Drop` 里只同步发起，见[资源怎么结束](#资源怎么结束)。
 - **不能只做一半的**：发消息交给平台 sender；数据库写入用事务，sqlx 的事务没提交就被 drop 会回滚。其余见 [cancellation safety](#cancellation-safety)。
-- **没有 `await` 点的长时间 CPU 计算**：drop 不掉。放进 scope 的 `spawn_blocking`，配一个取消标志；wasm 用 epoch 中断。
+- **没有 `await` 点的长时间 CPU 计算**：drop 不掉。放进 scope 的 `spawn_blocking`，配一个取消标志。
 
 ### 重启恢复
 
@@ -687,7 +714,7 @@ expired、lost 的请求和丢掉的 job 要不要在群里说一声 **待定**�
 
 ### 测试
 
-- 核心用同步单元测试，按剧本喂输入、检查输出，不需要 tokio 和 fake provider。至少覆盖：steer 的送达时机、中断时补齐结果、恢复时补"结果未知"、格式不对和还没放开的工具调用、轮数上限、活动工具集只增不减。
+- 核心用同步单元测试，按剧本喂输入、检查输出，不需要 tokio 和 fake provider。至少覆盖：steer 的送达时机、中断时补齐结果、恢复时补"结果未知"、格式不对的工具调用、轮数上限。
 - 每个核心测试结束时断言 `run == Run::replay(&run.snapshot())`，保证线上路径和重放路径一致。
 - 挂起和恢复：在每个阶段（等模型、工具批次跑到一半）做快照再 `resume`，断言结果补齐、能接着跑；恢复后的最终快照也要能从头重放。
 - 驱动用 tokio 的 `start_paused` 加 fake provider，测取消、停止、超时和宽限期。
@@ -707,11 +734,231 @@ expired、lost 的请求和丢掉的 job 要不要在群里说一声 **待定**�
 
 ### 待定
 
-- 基础上下文怎么存：存渲染后的内容，还是存"配方"（引用了哪些 ledger 条目、哪些摘要版本）加哈希、恢复时重算校验。我倾向前者，最简单，也不要求上下文投影可以复现。
+- ~~基础上下文怎么存~~：已定（2026-10-27），存渲染结果，见[上下文投影](#上下文投影)。
 - 保留期 N。
 - 裁剪规则：裁哪些工具输出、裁成什么样。
-- Chat 协议上 skill 加载用哪种方式。
 - 恢复窗口多长；expired、lost 的请求和丢掉的 job 要不要在群里说一声。
+
+## 上下文投影
+
+2026-10-27 定。参考了 [magic-context](https://github.com/cortexkit/magic-context) 的设计，取了四样：compartment 写一次、几层固定；importance 是衰减率；衰减曲线是确定性的，按序位算、不按墙钟；只在缓存本来就冷的时候发布。没有取它的 tag、`ctx_reduce`、caveman、m[0]/m[1] 那一套，那些是管单会话里跨 turn 堆积的工具输出的；我们的工具输出只活在一个 turn 的 transcript 里，下一个 turn 从 ledger 重新投影，这个问题不存在。
+
+Haskell 版的教训：原始尾巴是按 token 的滑动窗口，填满后每来一条消息就从头挤掉一条；摘要层级每轮按距今天数重算；caption 到了回头改旧行。三件事都让前缀缓存几乎每轮失效。historian 按 token 切段、一段一个摘要，不按话题。"上一轮做了什么"有四套机制（`[recent turns]`、续接摘要、`context_resume`、turn 内压缩），同一行消息有三种 token 算法。
+
+### 请求布局
+
+按变化频率排，每一块都在前一块之后：
+
+1. system：人设、规则、Max 工具的 TypeScript 声明、skill 索引。按会话固定。
+2. 工具：只有 `run_code`。
+3. 摘要块：活跃摘要按时间顺序，每条按[衰减](#衰减)选一层渲染。
+4. 原始尾巴：最新一条活跃摘要之后的所有消息，`[HH:MM 名字 #id]: 文本` 一行一条；换日插日期，间隔久了插间隔标记。Max 自己的消息和别人的一样是一行。
+5. 易变块：现在时间、名册、记忆、引用的消息和转发、触发消息、附图。
+
+基础上下文就是这五块，由会话 actor 在创建核心前投影一次（[运行流程](#运行流程)第 3 步），之后不变；transcript 接在后面。它是（摘要集合，尾巴范围，预算）的确定函数，但只在这一处算，恢复和重放都读快照里存的那份，所以快照里存渲染结果，不存配方（2026-10-27 定）。
+
+### 前缀稳定的规则
+
+目标：两次发布之间，前四块逐字节相同。
+
+- **尾巴的起点只在发布时移动。** 平时尾巴只增长。超过硬上限（高水位的两倍）才强制截断，那只在 historian 连续失败时发生。
+- **层级在发布时选定。** 衰减的三个输入（序位、importance、预算压力）都只在发布时变。`!model` 换了窗口会重算一次。
+- **不等 caption。** 有什么渲染什么；caption 到了那一行就变，接受这一次失效。不阻塞。Haskell 版会轮询等媒体 worker，图片最多 30 秒、视频 60 秒。
+- **一个会话同时只有一个 turn**，不需要藏起在途的触发消息。
+- 变的东西都在易变块里。
+
+### 预算
+
+默认值按窗口 C 推，封顶；配置可改，数值在 v1 里调：
+
+| 块 | 默认 |
+|---|---|
+| 尾巴高水位 | `min(C / 8, 32k)` |
+| 尾巴低水位 | 高水位的一半 |
+| 摘要块 | `min(C / 32, 8k)` |
+| 记忆块 | 2k |
+
+Haskell 版尾巴是 W/2，26 万的窗口上约 10 万 token 原始群聊，每轮都付。token 估算只有一个函数，所有地方共用。
+
+### historian
+
+- **独立的 actor**（2026-10-27 定）：[派生数据 worker](#三种角色) 之一，services 下的常驻任务，和会话 actor 没有共享状态。它收三种消息：入库路径发的"某会话来了一条消息"、`!compact`、`!uncompact`（带回信通道）。自己管每个会话的闲置计时器（tokio-util 的 `DelayQueue`）和在途的 capture；capture 跑在它自己的 `Scope` 里，同时最多几个 **待定**，提议 2。`summaries` 只有它一个写者，所以不需要 cursor 表、staged 状态和 CAS。和主体共用的只有数据库、消息行的渲染函数、token 估算和 LLM 客户端；正在跑的 turn 从 `turns` 表查，不问会话 actor。模型由 `[llm] historian = {model, effort}` 选。
+- **触发**：会话闲置 10 分钟且未覆盖的部分超过最小批量；尾巴超过高水位（热聊中，合并后最多一分钟一次）；`!compact`；启动时扫一遍缺口。
+- **范围**：从 cursor（最新一条活跃摘要的 `last_message_id`）到高水位，留出低水位的尾巴；不含正在跑的 turn 的触发消息及其之后的。`!compact` 不留尾巴。
+- **输入**：最近 4 条摘要的 p2、现有记忆、这一段消息（带 `#id` 和时间）、本地时间。
+- **输出**：JSON，`compartments[{first, last, title, kind, importance, p1, p2, p3}]`，以及记忆提案（v1 不做）。边界由模型定，一段里可以有多个。
+- **校验**：id 在范围内、连续、不重叠、合起来覆盖整段；各层长度上限。失败重试一次。
+- **discard-last**：至少两个时丢掉最后一个，下次连着后文重读，因为它没有后文、边界不可靠。`!compact` 和压力触发不丢。
+- **发布**：一个事务写 `summaries` 和 `summary_runs`。发布不影响正在跑的 turn，它的基础上下文已经固定；下一个 turn 投影时自然读到新摘要。关机时在途的 capture 直接 drop，事务回滚，什么都不留；启动扫缺口会补上。
+
+### 衰减
+
+三层（2026-10-27 定）：p1 全文、p2 简述、p3 一行。写一次，不再改。p3 值得留：模型知道"10 月 3 日聊过 X"就能 `context_read` 展开。渲染时每条选一层，用 magic-context 的曲线：
+
+```
+H = 24 · 2^((importance − 50) / 25) / max(p, 0.1)
+z = 序位 / H          序位从最新数起，最新是 0
+z < Z1 → p1；z < Z2 → p2；z < Z3 → p3；否则归档
+```
+
+`p` 是预算压力：按压力 1 算出的总成本除以摘要块预算。阈值 Z 取相邻两层实测平均 token 的几何平均，要按我们自己的层重算。归档的不渲染，还能搜、还能 `context_read`。缺层的（导入的单摘要只有 p1）向上取最近的一层。
+
+### summaries 表
+
+id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`（取自消息）、title、kind、importance（1–100）、p1、p2、p3、模型、`created_at`、status（active、withdrawn、superseded）、`superseded_by`。活跃的范围不重叠，用排他约束。模型句柄 `summary#<id>`。
+
+### 命令
+
+- `!compact`：立即 capture 到当前，尾巴留 0。
+- `!uncompact`：从最新往前把摘要标 withdrawn，直到尾巴回到低水位。cursor 跟着退。
+- `!clear --all`：只是消息 id 水位，之前的摘要和消息不进提示。
+
+### 砍掉的
+
+- `[recent turns]` 摘要、续接摘要、`context_resume` 和 turn 内的定位符压缩。turn 内只按[核心](#核心)的规则裁旧工具输出。以后要看上一轮做了什么，加一个读 turn 快照的 `turn_read(t#N)` 工具。
+- 自动注入检索结果。记忆只注入群记忆和触发者的个人记忆，其它靠模型调 `context_search`、`context_read`。这条沿用 Haskell。
+
+## schema
+
+2026-10-27 定：不沿用 Haskell 版的 schema，重新设计，上线时用导入程序一次性迁移。Haskell 版经过 135 个迁移，留下两套会话键（`conversation_id` 和 QQ 群号 `legacy_group_id`，后者没有外键，却被约 25 个模块当主键用）、三套消息 id、四份正文、31 张没有代码读的表，和互相撤销的迁移。只能从头来。
+
+### 约定
+
+- **一个实体一个键。** 会话只有 `conversation_id`，QQ 群号只出现在 `endpoints.native_id`。消息只有 `id`，就是到达顺序，模型句柄 `#id` 用它；平台原生 id 是属性，`(endpoint_id, native_id)` 唯一。人只有 `principal_id`，平台账号在 `identities`。
+- **JSONB 只放三种**：`nodes`、`raw`，和按设计整体存取的 blob（turn 快照、`opaque`、工具输出）。其它结构都是列。
+- ledger 和 turn 记录只追加（[原则](#原则) 1）；摘要、记忆是派生数据，允许 `status` 列。
+- 命名：PK 叫 `id`，外键 `<表>_id`，时间列用 `timestamptz`、叫 `*_at`。
+- 迁移从 1 号开始，上线前随意合并，上线后只追加。
+- 不做 source hash，不做 CAS cursor。Haskell 版的 `conversation_source_hash` 对 IR 做 sha256，IR 格式一改就要全库重打。
+
+### v1 的表
+
+| 区域 | 表 | 说明 |
+|---|---|---|
+| 平台 | `conversations` | kind（group、direct）、标题 |
+| | `endpoints` | 会话、平台、账号、`native_id`。v1 一个会话一个端点；镜像时一个会话多个。现在就分开（2026-10-27 定），免得再迁移 |
+| | `principals`、`identities` | 人，和他在各平台的账号。怎么对应见待讨论第 11 条 |
+| | `conversation_settings` | `!model`、`!effort`、`!persona`、`!proactive`、`!clear --all` 的消息 id 水位。可变 |
+| ledger | `messages` | 会话、端点、发送者、`native_id`、`sent_at`、`received_at`、kind（chat、command、event）、`reply_to`、`nodes`、`raw`、`text`（渲染后的文本，给搜索和全文索引）；Max 自己的消息带 `turn_id` 和段号。撤回、编辑、reaction 是 `kind = event` 的行，带 `target_id` 和文本兜底 |
+| 媒体 | `media` | 按 sha256 寻址：mime、大小、路径、尺寸、时长、caption |
+| | `message_media` | 消息、序号、sha256。`nodes` 里也引用 sha256，这张表给"这个群的图"这类查询用 |
+| turn | `turns`、`turn_attempts`、`turn_snapshots`、`turn_outcomes` | 见 [turn 记录](#turn-记录) |
+| | `llm_usage` | turn（可空）、用途（turn、intent、historian、caption）、provider、模型、强度、token、费用 |
+| 上下文 | `summaries` | 见 [summaries 表](#summaries-表) |
+| | `summary_runs` | 每次 historian 运行：输入范围、原始输出、校验错误、用量。有保留期 |
+| 记忆 | `memories` | v1 不做记忆，表先定：scope（会话或 principal）、类别、内容、importance、status、来源 summary、证据消息范围 |
+
+以后随功能加：`deliveries`（镜像）、`automations`、`stickers`、`lingo_*`、`bungie_*`、`destiny_*`、embedding 表（pgvector）。
+
+### 旧表的去向
+
+- `platform_events`：原始 payload 进 `messages.raw`。
+- `message_deliveries`、`message_delivery_parts`：镜像时再加 `deliveries`。
+- `message_projections`、`message_hook_*`、`agent_messages` 视图：hook 不做了。
+- `execution_journal`、`llm_calls`：turn 快照里就是模型的全部输入和输出。
+- `platform_ids`：没有兼容 id。
+- `conversation_cursors`：cursor 从 `summaries` 推出来。
+- `compartment_evidence`、`episode_memory_proposals`、`episode_memory_reviews`：搜索直接搜正文；记忆提案在 `summary_runs` 的输出里。
+- `memory_versions`、`memory_mutations`、`memory_evidence`：压成 `memories` 加一张只追加的 `memory_history`。
+- `skills`、`skill_versions`：skill 是文档，放文件。
+- `sandboxes`：VM 的生命周期在进程里。
+- `admin_timeline_revisions` 和那几个 NOTIFY 触发器：admin 以后再说。
+- 31 张死表（durable task、plan、workflow、browser workspace 等）：不导。
+
+### 导入
+
+- **消息 id 沿用旧的 `canonical_message_id`**（2026-10-27 定），新消息从最大值加一接着编。旧摘要和记忆正文里的 `#123`、`[image#123.0]` 句柄因此还有效。导入时校验它和 `ingest_seq` 的顺序一致；不一致就另加一列记顺序。
+- **全部消息都导**（2026-10-27 定），包括被 hook 忽略过的（`message_projections.context_visible = false`）。库里忠实保留群里的所有事实。
+- `canonical_content` 的 v2 nodes 转成新 `Node`；`raw` 从 QQ 的 `segments` 列取，Matrix 从 `platform_events.raw_payload` 取；`text` 重新渲染。
+- Max 自己的消息：`agent_turn_id` 加 `turn_chunk_index` 变成 turn id 和段号。旧 `agent_turns` 导成 `turns` 加 `turn_outcomes`，保留 `t#N`，没有快照。
+- `conversation_compartments` 只导 `active` 的；群号换成会话 id；importance 0..1 换成 1..100；单摘要时期的行只有 `summary`，放进 p1，其它层空着。句柄从 `episode:<uuid>` 换成 `summary#<id>`。
+- `sessions` 按[配置](#配置)里说的映射 profile 名；`memories` 只导 active 和 permanent 的当前版本。
+- 自动化、贴纸、lingo、Destiny 等各自功能做到时再导。
+- 规模：2026-09-05 有 149,395 条消息，每天增加 2–2.5k；导入是分钟级的事。
+
+## 工具和 codemode
+
+2026-10-27 定。
+
+### 纯 codemode
+
+- **模型只有一个工具 `run_code`。** tools 数组固定不变，请求前缀不会因为工具变化而失效。参数是 `{code, args?}`：`code` 是 async 函数体，`return` 的值就是结果。同一轮可以有多个 `run_code`，各跑各的。
+- **程序里调 Max 的工具**：`tools.<名字>(args)` 返回 Promise，`Promise.all` 就是并发。沿用 Haskell 版 SDK 的形状：`max.raw` 拿完整的成败结果，`max.cancel` 和 `max.race` 取消调用，`agent()` 派后台 agent。
+- **工具说明**：系统提示里放 Max 工具的 TypeScript 声明，带返回类型，内容固定。
+- **skill 只是文档。** `use_skill` 是普通的 Max 工具，返回说明书和相关工具的声明，和别的结果一样只往上下文后面追加。能调哪些工具由群和会话决定，一个 turn 里不变，不随 skill 加载变化。所以核心里没有"活动工具集"，Responses 的 `tool_search` 和 Chat 的元工具也都不需要。
+- **调用格式**：用最通用的 function tool，参数是 JSON。代码是原文还是转义进 JSON 字符串，取决于模型自己的工具调用格式：Claude 的字符串参数和 Qwen 3.5/3.6 的 XML 参数是原文；GPT 和 Gemini 要转义，Gemini 偶尔还会多转义一层（gemini-cli 专门写了修正代码）。aider 2024 年测过，代码包进 JSON 后，所有被测模型的通过率都下降了，幅度不一。暂不处理，见[待定事项](#待定事项)。
+- **代价**：所有工具都依赖 VM。VM 起不来就没有工具，模型还能纯文字回答；`!status` 要能看到 VM 的状态。前沿模型写 JS 没问题，qwen3.8-27b 这类本地模型要在 v1 里评测。
+
+### 在群 VM 里跑
+
+程序跑在群 VM 里的 Node 上，不用进程内的 JS 引擎（Haskell 版是 wasmtime 里的 QuickJS）。好处：
+
+- 和后台 pi 共享 `/work`，交接任务只要留文件；能直接读 `/chat` 里的图片和文件。
+- 浏览器直接写 Playwright，见[浏览器](#浏览器)。
+- Max 不用维护 JS 引擎、单步协议和 ABI。
+
+做法：
+
+- **每次运行一个新进程**：宿主通过 vsock 上的 SSH，在群 VM 里执行 `node /run/max/runner.js`。runner 和 SDK 打进 guest 镜像，只读。stdin 传程序、参数和会话 token；stdout 的最后一行是返回值；stderr 是 `console` 输出，作为日志带回。不做常驻进程，免得运行之间共享状态。
+- **启动**：VM 按需启动，约 4.5 秒后能执行命令（Haskell 版实测），闲置两小时关机。模型输出流里一出现 `run_code` 调用就开始启动 VM，和模型写代码的时间重叠；不用工具的 turn 不启动。
+- **限制**：VM 的 CPU、内存上限和网络策略；`run_code` 一次运行的墙钟上限；drop 时杀掉命令。不要求确定性，也没有 fuel。
+- **和核心的关系**：`run_code` 在核心眼里就是一次工具调用。程序里的 Max 工具调用不是核心的输入，结果里附一份内部调用的摘要，方便排查。Max 重启时还在跑的 `run_code` 随连接断开被杀，恢复时照常补"结果未知"。
+- **已知风险**：VM 里的命令都以 root 运行。之前的提示注入如果在 VM 里留下了常驻进程，它可以拿到 runner 的 token 或接上它的 fd，用这一轮的工具。影响范围就是这一轮模型本来就能调的工具，新增的只是跨 turn 的持久化。接受。
+- **测试**：runner 只认 stdio 和 MCP，测试里在本机跑 node，接 fake MCP 服务，不需要 VM。
+
+### MCP 通道
+
+VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 runner 和后台 pi 都是它的客户端，区别只在会话权限。
+
+- **通道**：cloud-hypervisor 的 hybrid vsock 里，guest 连主机的某个端口，会落到宿主上 `<vsock socket>_<端口>` 这个 unix socket，Haskell 版的就绪通知就走这条路。Max 在每个 VM 的这个位置监听一个端口，用 axum 加 rmcp 跑 Streamable HTTP。连进来的是哪个 VM，由 socket 路径决定。guest 里把 `127.0.0.1:7777` 转发到这个 vsock 端口，客户端都配 `http://127.0.0.1:7777/mcp`。IP 层照样连不到宿主，外面也照样连不进 VM。
+- **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群、允许的工具、在途的调用。
+
+  | 会话 | 能用的工具 | 生命周期 |
+  |---|---|---|
+  | `run_code` | 这个 turn 的工具，由 `RunSpec` 定 | 这一次运行 |
+  | 后台 job | 只读工具 | 这个 job |
+
+- **鉴权**：`Authorization: Bearer <token>`。token 所属的群必须和连进来的 VM 是同一个群。`tools/list` 只列出这个会话允许的工具。
+- **吊销是同步的**：从内存表里删掉会话，它在途调用的 future 一起 drop，所以可以放进 `Drop`。会话只存在内存里，Max 重启或崩溃后旧 token 全部失效，不需要过期时间。
+- **执行器**：所有调用都经过同一个执行器，负责 schema 校验、单次调用的超时、并发上限 64、输出大小上限，以及按会话限制有副作用的调用次数（代码里可以循环发送、撤回、禁言）。
+- **结果**：工具声明 `outputSchema`，成功结果放在 `structuredContent` 里，`tools.x()` 拿到的就是 JSON。失败设 `isError`，`max.raw` 需要的 outcome（rejected、failed-before-effect、outcome-unknown）和 retry 分类也放进 `structuredContent`。取消用 `notifications/cancelled`。
+- **工具注册表**：每个工具有名字、描述、参数类型（schemars 从参数结构体生成）、返回类型、副作用分类（只读、幂等、有副作用）和执行函数。副作用分类决定能不能重试、能不能给后台 job、中断后算不算"结果未知"。系统提示里的 TypeScript 声明也从注册表生成。
+
+### 多模态结果
+
+参考了 Codex、pi 和 Hermes 的做法。
+
+- **程序显式交图**，学 Codex code mode 的 `image()`：`max.image(src, {detail})`、`max.video(src, {start, end})`。`src` 是 VM 里的路径（`/work/…`、`/chat/…`）或消息句柄（`image#123.0`），不接受 http 地址。只有交了的才进上下文；截图、下载这类操作只产出文件。不需要单独的 `view_image` 工具。
+- **宿主自己取文件，不经过 MCP**：`/work` 是 virtiofs 共享，`/chat` 是内容库的硬链接，宿主都能直接读。宿主校验能否解码、按模型的上限缩放，按 hash 存进内容库，turn 记录里只存引用（原则 7）。要复制一份，是因为 `/work` 里的文件之后可能被改或被删。
+- **中立格式**：`ToolOutput { parts: Vec<Part>, error: bool }`，`Part` 是 `Text` 或 `Media(MediaRef)`，和消息里的 `Media` 节点共用一套渲染。
+- **在适配层降级**（原则 8）：
+  - Responses：放进 `function_call_output` 的数组，`input_text` 加 `input_image`。
+  - Chat：tool 消息里只放文字，带"图 1 见下"这类标记；这一轮所有 tool 消息之后跟一条 user 消息放图。有的 provider 不接受数组形式的 tool 内容，这样也避开了。
+  - 视频：模型配置的 `input` 里有 video，就用 `video_url` 扩展；否则抽帧成图。
+  - 看不了图的模型：用占位文字，不做辅助视觉模型。中途 `!model` 换成看不了图的模型，渲染时照样降级。
+- **预算**：
+  - 交图时就缩放到上限。
+  - 每次运行最多交 N 张。
+  - 同一张图（hash 相同）再交时只写"同上文图 x"。
+  - 组装请求时超出视觉 token 预算，从最旧的图开始换成"`[image#…` 已省略，需要时再 `max.image`]"，turn 记录不变（原则 6）。
+
+  Hermes 加这类预算的起因，是一个子 agent 在 15 分钟里把 5 张截图重新加载了 158 次。
+
+### 浏览器
+
+v1 不做。
+
+- camoufox 搬进群 VM，不再是单独的容器，按需以 Playwright server 模式启动。VM 的内存上限要放大到装得下 Firefox；不用浏览器的群不占这份内存。
+- 不再有 navigate、click 这类浏览器工具，程序里直接用 Playwright 连这个浏览器。SDK 附带一个快照助手，把页面上可交互的元素列成带 CSS 选择器的清单，沿用 Haskell 版 snapshot 的形状。
+- 每次运行开自己的 browser context，互不影响；要保留登录状态，用 Playwright 的 storageState 存到 `/work`。
+- 截图和下载直接落到 `/work`，要看就 `max.image`。
+
+### 待定事项
+
+- v1 开放哪几个 Max 工具。
+- 调 VM 用 `ssh` 命令（Haskell 版的做法）还是 russh。
+- 每次运行最多交几张图、视觉 token 预算多大。
+- 代码转义的问题（2026-10-27 记下，暂不决定）：要不要让 GPT 用 Responses 的 custom（freeform）工具直接写原文，Codex 的 code mode 就是这么做的，cliproxy 也已支持；Gemini 过度转义要不要在 runner 里兜底，比如原文解析失败、去掉多余转义后能解析时才用修正版。先看 v1 里转义出错的频率。
 
 ## 后台 agent
 
@@ -719,7 +966,7 @@ v1 之后做。
 
 - 每个 job 驱动群 VM 里的一个 pi 进程，通过 stdio 上的 RPC JSONL 通信。
 - Max 定义自己的 `AgentBackend` 接口：开任务、steer、中断、事件流、结束报告。按 codex app-server 也能实现的标准设计，但只实现 pi。
-- 领域工具走 MCP 回调。job 启动时登记一个绑定群和任务的 token，结束时吊销。MCP 服务按 token 鉴权，只开放只读工具，比如 `context_search`、`context_read`、`memory_list`。
+- 领域工具走 Max 的 MCP 服务，见 [MCP 通道](#mcp-通道)。每个 job 开一个会话，只开放只读工具，比如 `context_search`、`context_read`、`memory_list`；job 结束时吊销。pi 在 VM 里也能跑 codemode 的 runner，用 job 自己的会话批量调这些工具。
 - 会影响群的动作（发消息、发文件、撤回、禁言、建自动化）不给后台 agent。它的结果作为报告交回前台 turn，由前台决定怎么说。
 
 pi 适配器要处理的行为：
@@ -750,12 +997,13 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 - 取消：在每个 poll 点 drop 一次，见 [cancellation safety](#cancellation-safety)；正常路径的测试断言没有资源是因为连接断开而被杀的，以此抓漏调的 `close`。
 - 数据库测试用 `#[sqlx::test]`，每个测试一个临时库；本地用 devenv 起的 Postgres。
 - prompt 渲染用 insta 快照。是否取代 `max-prompt-flow` 生成的文档 **待定**。
+- codemode 的 runner 在本机跑 node，接 fake MCP 服务，不需要 VM。
 - 平台层用录下来的 NapCat 和 Matrix 事件做 fixture。fixture 里只用假的 QQ 号和 Matrix ID。
 
 ## 上线：drop-in 替换的条件
 
 - [功能对齐清单](#功能对齐清单)全部完成。
-- 写一个数据导入程序，把 Haskell 版数据库一次性导入新 schema。它要能重复跑，上线前先演练。
+- 写一个数据导入程序，把 Haskell 版数据库一次性导入新 schema，映射见 [schema 的导入](#导入)。它要能重复跑，上线前先演练。
 - NixOS module 的接口不保持兼容，tank 的 nix-config 跟着改，见[配置](#配置)。
 - 切换：在 `rust` 分支上 `git merge -s ours main`，保留 main 期间的 Haskell 历史、内容全部用 Rust 的；然后 main 快进到 `rust`，不 force push。main 最后一个 Haskell 提交打 tag `haskell-final`。
 - 回滚：Haskell 版保留到 Rust 版稳定为止；Rust 版上线后产生的新数据怎么处理 **待定**。
@@ -764,12 +1012,13 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 
 1. ~~代码放在哪~~：已定（2026-10-27），放在这个仓库的 `rust` 分支，见文首。
 2. 初始 crate 划分。
-3. v1 带不带工具；@ 以外的 intent 分类进不进 v1。
-4. 新 schema 的设计，以及从旧库导入的映射。
+3. ~~v1 带不带工具~~：已定（2026-10-27），带，见[工具和 codemode](#工具和-codemode)。@ 以外的 intent 分类进不进 v1 还没定。
+4. ~~新 schema 的设计，以及从旧库导入的映射~~：已定（2026-10-27），见 [schema](#schema)。
 5. ~~NixOS module 的接口要不要保持不变~~：已定（2026-10-27），不保持，见[配置](#配置)。
 6. Matrix 加密房间要不要支持。Haskell 版目前不支持，这决定了要不要开 matrix-sdk 的 E2EE 和 sqlite 特性。
 7. v1 的测试环境：测试用 QQ 号、测试群和测试 Matrix 房间。NapCat 能不能同时连两个 WS 客户端还没验证。
 8. Rust 工具链版本和 edition。
 9. 每个提交的大小上限。
-10. [数据和运行模型](#数据和运行模型)一节末尾的待定项：基础上下文的存法、保留期、裁剪规则、Chat 上的 skill 加载方式、恢复窗口和通知。
+10. [数据和运行模型](#数据和运行模型)一节末尾的待定项：保留期、裁剪规则、恢复窗口和通知。基础上下文的存法已定。
 11. 身份模型：principal 和各平台账号怎么对应。v1 的发送者和提及就要用到它；跨平台合并同一个人和镜像一起做。
+12. [工具和 codemode](#工具和-codemode) 一节末尾的待定项：v1 开放哪几个 Max 工具、调 VM 用 `ssh` 命令还是 russh、图片预算、代码转义。
