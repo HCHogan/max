@@ -1,9 +1,0 @@
-{
-  "historian": [
-    "src/Max/Historian.hs",
-    "src/Max/EpisodeStore.hs"
-  ],
-  "intent": [
-    "src/Max/Intent.hs"
-  ]
-}

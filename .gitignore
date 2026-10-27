@@ -1,34 +1,15 @@
-# Haskell
-dist-newstyle/
-.generated/
-.ghc.environment.*
-*.hi
-*.o
+# Rust
+/target/
 
-# Nix / devenv
+# Nix
 .direnv/
-.devenv/
-.devenv.flake.nix
-devenv.local.nix
-devenv.local.yaml
-.pre-commit-config.yaml
 result
 result-*
 
-# Secrets and runtime state
+# Secrets and local config
 .env
-.envrc.local
-.napcat/
-var/
 max.toml
-max.yaml
 
-# Editor
-.vscode/
-.idea/
-
-# Claude Code local state (settings.local.json, task locks, installed
-# skills) — per-machine tooling, never part of the project.
+# Claude Code local state — per-machine tooling, never part of the project.
 .claude/
 .agents/
-__pycache__/

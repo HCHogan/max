@@ -1,8 +1,0 @@
-TESTING,,INFORMATIONAL,,,,,,,,,REAL,,,,Notes
-Modifiers,Weapon,Base,Explosion,,Impact,,WP1,,WP2,,Actual,A/B,A/P,%,
-None [1],,74469,56676,N/A,17793,N/A,769,N/A,1646,N/A,94074,1.263,N/A,0.00,26% boost to base damage
-None [5],,74469,56676,N/A,17793,N/A,769,N/A,1646,N/A,94160,1.264,N/A,0.09,Pack Hunter scaling is identical with multiple players
-Bait and Switch [5],,96809,73679,1.300,23130,1.300,999,1.299,2141,1.301,119777,1.237,1.272,-2.15,Bait is not applied to the impact of the first rocket
-Explosive Light [5],,92951,70845,1.250,22106,1.242,769,1.000,1646,1.000,113351,1.219,1.204,-3.69,~20% per rocket
-Lasting Impression [5],,88638,70845,1.250,17793,1.000,769,1.000,2058,1.250,110353,1.245,1.172,-6.24,~17% per rocket
-"Taniks, Impact Casing, Boss Spec, Radiant Dance Machines, Season of the Wish (S23)",,,,,,,,,,,,,,,
