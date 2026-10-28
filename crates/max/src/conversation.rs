@@ -2,6 +2,7 @@
 //! of its core. See "会话 actor" in docs/rust-rewrite.md.
 
 mod actor;
+pub mod classify;
 pub mod ingest;
 pub mod model;
 pub mod project;

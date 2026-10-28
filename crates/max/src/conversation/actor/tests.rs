@@ -47,6 +47,7 @@ impl Harness {
             outbound: outbound_tx,
             offset: offset(),
             intent: intent::Config::default(),
+            context_lines: 15,
             max_run: Duration::from_secs(600),
             stop_grace: Duration::from_millis(200),
         });
@@ -256,4 +257,24 @@ async fn stopping_mid_call_suspends(pool: PgPool) {
     h.stop().await;
     assert_eq!(h.turns().await[0].1, None, "suspended, not finished");
     assert_eq!(h.count("select count(*) from turn_snapshots").await, 1);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_judged_wake_starts_a_core(pool: PgPool) {
+    let mut h = Harness::new(pool, 300).await;
+    let verdict = r#"{"trigger": true, "kind": "called", "reason": "在叫 Max", "dismiss": false}"#;
+    h.script.push(Answer::says(verdict));
+    h.script.push(Answer::says("来了"));
+    h.send(from_xiaoming(0, vec![text("max 你怎么看")]));
+    assert_eq!(h.said().await.1, "来了");
+    let volatile = h.request_tail(1);
+    assert!(
+        volatile.ends_with("max 你怎么看\n[判定 called：在叫 Max]\n"),
+        "{volatile}"
+    );
+    h.stop().await;
+    let intent = h
+        .count("select count(*) from llm_usage where purpose = 'intent'")
+        .await;
+    assert_eq!(intent, 1);
 }

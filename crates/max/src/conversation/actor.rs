@@ -23,7 +23,7 @@ use tracing::{debug, info, warn};
 
 use super::ingest;
 use super::project::{self, First, Projection};
-use super::{Event, Place, TaskId, model};
+use super::{Event, Place, TaskId, classify, model};
 use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
 use crate::scope::Scope;
@@ -36,6 +36,8 @@ pub struct Shared {
     pub outbound: UnboundedSender<Outgoing>,
     pub offset: FixedOffset,
     pub intent: intent::Config,
+    /// Rows of context the classifier reads before the ones it judges.
+    pub context_lines: u32,
     /// A core running longer than this is replaced at its next boundary.
     pub max_run: Duration,
     /// How long a restart waits for a model call or tool batch to end.
@@ -58,6 +60,8 @@ pub struct Conversation {
     seen: MessageId,
     core: Option<Active>,
     intent: Intent,
+    /// The classifier.
+    side: Scope,
     stopping: Option<Instant>,
     next_task: u64,
     mailbox: UnboundedSender<Event>,
@@ -117,6 +121,7 @@ impl Conversation {
             seen: head,
             core: None,
             intent,
+            side: Scope::new(),
             stopping: None,
             next_task: 0,
             mailbox,
@@ -309,14 +314,38 @@ impl Conversation {
                         }
                     }
                 }
-                // The classifier comes next; until then it has no opinion.
-                Decision::Classify { .. } => {
+                Decision::Classify { batch } => {
                     let now = std::time::Instant::now();
-                    decisions.extend(self.intent.verdict(None, now));
+                    match self.shared.models.intent() {
+                        Ok(chosen) => self.classify(chosen, batch, now),
+                        Err(error) => {
+                            warn!(%error, "no model to classify with");
+                            decisions.extend(self.intent.verdict(None, now));
+                        }
+                    }
                 }
             }
         }
         Ok(())
+    }
+
+    fn classify(&mut self, chosen: Chosen, batch: Vec<MessageId>, now: std::time::Instant) {
+        let persona = self.settings.persona.as_deref().unwrap_or(prompt::PERSONA);
+        let job = classify::Job {
+            pool: self.shared.pool.clone(),
+            place: Arc::clone(&self.place),
+            chosen,
+            persona: persona.to_owned(),
+            batch,
+            status: self.intent.status(now),
+            context_lines: i64::from(self.shared.context_lines),
+            offset: self.shared.offset,
+        };
+        self.next_task += 1;
+        let task = TaskId(self.next_task);
+        let mailbox = self.mailbox.clone();
+        self.side
+            .spawn(move |_| classify::classify(job, task, mailbox));
     }
 
     async fn start_core(&mut self, first: First) -> Result<()> {

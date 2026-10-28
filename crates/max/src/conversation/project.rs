@@ -290,7 +290,7 @@ pub fn delivery_mark(row: &Row) -> Mark {
     }
 }
 
-fn shown_line<P: max_core::render::People>(
+pub(super) fn shown_line<P: max_core::render::People>(
     render: &Render<'_, P>,
     message: &Message,
     mark: Mark,
@@ -326,7 +326,7 @@ fn joined<P: max_core::render::People>(
 
 /// The person behind every account the messages show: senders and the
 /// people they mention.
-async fn people<'m>(
+pub(super) async fn people<'m>(
     conn: &mut PgConnection,
     messages: impl Iterator<Item = &'m Message>,
     place: &Place,
