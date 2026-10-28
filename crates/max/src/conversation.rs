@@ -1,6 +1,7 @@
 //! A conversation's actor: the one writer of its timeline and the driver
 //! of its core. See "会话 actor" in docs/rust-rewrite.md.
 
+mod actor;
 pub mod ingest;
 pub mod model;
 pub mod project;
@@ -15,6 +16,8 @@ use max_core::item::{ModelOutput, ToolOutput};
 use max_core::message::Platform;
 use max_core::segment::Segment;
 use max_db::platform::{Account, ConversationKind};
+
+pub use actor::{Conversation, Outgoing, Shared};
 
 use crate::inbound::Inbound;
 

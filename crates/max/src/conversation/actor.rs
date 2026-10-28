@@ -1,0 +1,585 @@
+//! The actor's loop: commit, route, and drive the core. It awaits only the
+//! database; model calls run as tasks in the core's `io` scope and come
+//! back as events.
+
+use std::collections::{BTreeSet, HashSet, VecDeque};
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::{DateTime, FixedOffset, Utc};
+use color_eyre::eyre::Result;
+use max_core::ids::{MessageId, PrincipalId, TurnId};
+use max_core::intent::{self, Decision, Entry, EntryKind, Intent, Reason};
+use max_core::item::{ModelOutput, ToolOutput};
+use max_core::message::{Draft, DraftNode, Message};
+use max_core::prompt;
+use max_core::render::Mark;
+use max_core::run::{FailReason, Input, Run, RunSpec, Step, Wake};
+use max_db::platform::{self, Settings};
+use max_db::{PgPool, ledger, turns, usage};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::time::{Instant, sleep_until};
+use tracing::{debug, info, warn};
+
+use super::ingest;
+use super::project::{self, First, Projection};
+use super::{Event, Place, TaskId, model};
+use crate::inbound::Inbound;
+use crate::llm::{Chosen, Models};
+use crate::scope::Scope;
+use crate::tokens;
+
+/// What every conversation's actor shares.
+pub struct Shared {
+    pub pool: PgPool,
+    pub models: Arc<Models>,
+    pub outbound: UnboundedSender<Outgoing>,
+    pub offset: FixedOffset,
+    pub intent: intent::Config,
+    /// A core running longer than this is replaced at its next boundary.
+    pub max_run: Duration,
+    /// How long a restart waits for a model call or tool batch to end.
+    pub stop_grace: Duration,
+}
+
+/// Something Max said, committed, for the platform's sender.
+#[derive(Clone, Debug)]
+pub struct Outgoing {
+    pub place: Arc<Place>,
+    pub message: Message,
+}
+
+pub struct Conversation {
+    shared: Arc<Shared>,
+    place: Arc<Place>,
+    settings: Settings,
+    head: MessageId,
+    /// Everything up to here has been in a model request.
+    seen: MessageId,
+    core: Option<Active>,
+    intent: Intent,
+    stopping: Option<Instant>,
+    next_task: u64,
+    mailbox: UnboundedSender<Event>,
+}
+
+struct Active {
+    turn: TurnId,
+    ordinal: i32,
+    run: Run,
+    chosen: Chosen,
+    io: Scope,
+    live: HashSet<TaskId>,
+    /// What the model call in flight has said, segment by segment.
+    said: Vec<String>,
+    segments: i32,
+    /// The people the model has been shown.
+    roster: BTreeSet<PrincipalId>,
+    /// When the last row the core saw was sent, for date lines; at first,
+    /// when the core started.
+    last_at: Option<DateTime<Utc>>,
+    idle_since: Instant,
+    started: Instant,
+    /// The first inputs alone are over the limit: the core ends unstarted.
+    too_large: bool,
+}
+
+/// How a core ends.
+enum End {
+    Failed(FailReason),
+    /// Idle: its window ran out, or Max is stopping.
+    Idle,
+    /// Over its limits; the caller starts a new core with what is left
+    /// over.
+    Boundary,
+    /// Max is stopping and the core isn't idle.
+    Suspend,
+}
+
+impl Conversation {
+    pub async fn new(
+        shared: Arc<Shared>,
+        place: Arc<Place>,
+        mailbox: UnboundedSender<Event>,
+    ) -> Result<Self> {
+        let mut conn = shared.pool.acquire().await?;
+        let head = ledger::head(&mut conn, place.conversation)
+            .await?
+            .unwrap_or(MessageId(0));
+        let settings = platform::settings(&mut conn, place.conversation).await?;
+        let mut intent = Intent::new(shared.intent.clone());
+        intent.set_proactive(settings.proactive);
+        Ok(Self {
+            shared,
+            place,
+            settings,
+            head,
+            seen: head,
+            core: None,
+            intent,
+            stopping: None,
+            next_task: 0,
+            mailbox,
+        })
+    }
+
+    /// Until `Event::Stop` and the core is done with.
+    pub async fn run(mut self, mut mailbox: UnboundedReceiver<Event>) -> Result<()> {
+        loop {
+            let deadline = self.deadline();
+            tokio::select! {
+                event = mailbox.recv() => match event {
+                    Some(event) => self.handle(event).await?,
+                    None => self.stop(),
+                },
+                () = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => {
+                    self.timer().await?;
+                }
+            }
+            self.advance().await?;
+            if self.stopping.is_some() && self.core.is_none() {
+                return Ok(());
+            }
+        }
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        let core = self.core.as_ref().and_then(|a| {
+            if a.run.busy() {
+                self.stopping
+            } else if a.run.idle() {
+                Some(a.idle_since + a.chosen.idle_window)
+            } else {
+                None
+            }
+        });
+        [core, self.intent.deadline().map(Instant::from_std)]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    async fn handle(&mut self, event: Event) -> Result<()> {
+        match event {
+            Event::Inbound(inbound) => self.inbound(inbound).await,
+            Event::Said { task, segment } => {
+                let Some(a) = self.core.as_mut().filter(|a| a.live.contains(&task)) else {
+                    debug!(%task, "dropped a stale Said");
+                    return Ok(());
+                };
+                a.said.push(segment.source);
+                a.segments += 1;
+                let (turn, index) = (a.turn, a.segments);
+                let message = self.say(segment.draft, Some(turn), Some(index)).await?;
+                if let Some(a) = self.core.as_mut() {
+                    a.last_at = Some(message.at);
+                }
+                Ok(())
+            }
+            Event::ModelDone { task, out } => {
+                if !self.finished(task) {
+                    debug!(%task, "dropped a stale ModelDone");
+                    return Ok(());
+                }
+                match out {
+                    Ok(out) => self.model_output(out).await,
+                    Err(error) => {
+                        warn!(conversation = %self.place.conversation, %error, "the model call failed");
+                        self.end(End::Failed(FailReason::Model { error })).await
+                    }
+                }
+            }
+            Event::ToolDone { task, call, out } => {
+                if self.finished(task)
+                    && let Some(a) = self.core.as_mut()
+                    && let Err(rejected) = a.run.tool_result(call, out)
+                {
+                    warn!(turn = %a.turn, %rejected, "a tool result didn't fit");
+                }
+                Ok(())
+            }
+            Event::Verdict { verdict, .. } => {
+                let decisions = self.intent.verdict(verdict, std::time::Instant::now());
+                self.decide(decisions).await
+            }
+            Event::Stop => {
+                self.stop();
+                Ok(())
+            }
+        }
+    }
+
+    /// Whether `task` was the current core's, which no longer waits for it.
+    fn finished(&mut self, task: TaskId) -> bool {
+        self.core.as_mut().is_some_and(|a| a.live.remove(&task))
+    }
+
+    fn stop(&mut self) {
+        if self.stopping.is_none() {
+            self.stopping = Some(Instant::now() + self.shared.stop_grace);
+        }
+    }
+
+    async fn inbound(&mut self, inbound: Inbound) -> Result<()> {
+        let mut conn = self.shared.pool.acquire().await?;
+        let committed = ingest::inbound(
+            &mut conn,
+            &self.place,
+            &inbound,
+            Utc::now(),
+            self.shared.offset,
+        )
+        .await?;
+        drop(conn);
+        self.head = committed.message.id;
+        let kind = if committed.command {
+            EntryKind::Command
+        } else if committed.direct.is_some() {
+            EntryKind::Direct
+        } else {
+            EntryKind::Chatter
+        };
+        if !committed.command {
+            let mark = committed.direct.map_or(Mark::None, |direct| direct.mark());
+            self.feed(&[(committed.message.clone(), mark)]).await?;
+        }
+        let entry = Entry {
+            id: committed.message.id,
+            sender: committed.sender.identity,
+            kind,
+            text: committed.text.clone(),
+        };
+        let decisions = self.intent.observe(&entry, std::time::Instant::now());
+        self.decide(decisions).await
+    }
+
+    /// Rows from the timeline for a running core.
+    async fn feed(&mut self, rows: &[(Message, Mark)]) -> Result<()> {
+        let Some(a) = self.core.as_mut() else {
+            return Ok(());
+        };
+        let mut conn = self.shared.pool.acquire().await?;
+        let input = project::follow_up(
+            &mut conn,
+            &self.place,
+            rows,
+            &a.roster,
+            a.last_at,
+            a.chosen.window,
+            self.shared.offset,
+        )
+        .await?;
+        if let Input::Messages { people, .. } = &input {
+            a.roster.extend(people);
+        }
+        a.last_at = rows.last().map(|(message, _)| message.at).or(a.last_at);
+        if let Err(rejected) = a.run.input(input) {
+            warn!(turn = %a.turn, %rejected, "rows didn't fit the core");
+        }
+        Ok(())
+    }
+
+    async fn decide(&mut self, decisions: Vec<Decision>) -> Result<()> {
+        let mut decisions = VecDeque::from(decisions);
+        while let Some(decision) = decisions.pop_front() {
+            match decision {
+                Decision::Wake { ids, reason } => {
+                    if ids.iter().all(|id| *id <= self.seen) {
+                        debug!(?ids, "dropped a wake for rows a model has seen");
+                        continue;
+                    }
+                    let wake = Wake {
+                        ids,
+                        item: project::judged(&reason),
+                        reason,
+                        handed_over: None,
+                    };
+                    match self.core.as_mut() {
+                        Some(a) => {
+                            if let Err(rejected) = a.run.input(Input::Wake(wake)) {
+                                warn!(turn = %a.turn, %rejected, "a wake didn't fit the core");
+                            }
+                        }
+                        None => {
+                            let first = First {
+                                wakes: vec![wake],
+                                handed_over_by: None,
+                            };
+                            self.start_core(first).await?;
+                        }
+                    }
+                }
+                // The classifier comes next; until then it has no opinion.
+                Decision::Classify { .. } => {
+                    let now = std::time::Instant::now();
+                    decisions.extend(self.intent.verdict(None, now));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn start_core(&mut self, first: First) -> Result<()> {
+        if self.stopping.is_some() {
+            return Ok(());
+        }
+        let settings = &self.settings;
+        let chosen = self
+            .shared
+            .models
+            .turn(settings.model.as_deref(), settings.effort.as_deref())?;
+        let now = Utc::now();
+        let persona = settings.persona.as_deref().unwrap_or(prompt::PERSONA);
+        let projection = Projection {
+            place: &self.place,
+            system: prompt::system(persona),
+            window: chosen.window,
+            cleared_upto: settings.cleared_upto,
+            now,
+            offset: self.shared.offset,
+        };
+        let from = self.head;
+        let mut conn = self.shared.pool.acquire().await?;
+        let (context, inputs) = projection.base(&mut conn, from, &first).await?;
+        let started = turns::start(&mut conn, self.place.conversation, &inputs, from, now).await?;
+        drop(conn);
+        let spec = RunSpec {
+            model: chosen.tag.clone(),
+            window: chosen.window,
+            max_output: chosen.max_output,
+            max_tools: Vec::new(),
+        };
+        let base: u32 = context.items.iter().map(|item| item.tokens).sum();
+        let too_large = spec.limit(base) == 0;
+        let roster = context.roster.clone();
+        info!(conversation = %self.place.conversation, turn = %started.turn, ordinal = started.ordinal, model = %chosen.reference(), base, "a core starts");
+        self.core = Some(Active {
+            turn: started.turn,
+            ordinal: started.ordinal,
+            run: Run::new(spec, context, inputs),
+            chosen,
+            io: Scope::new(),
+            live: HashSet::new(),
+            said: Vec::new(),
+            segments: 0,
+            roster,
+            last_at: Some(now),
+            idle_since: Instant::now(),
+            started: Instant::now(),
+            too_large,
+        });
+        Ok(())
+    }
+
+    /// After every event: what the core does next, if nothing is in flight.
+    async fn advance(&mut self) -> Result<()> {
+        loop {
+            let Some(a) = self.core.as_mut() else {
+                return Ok(());
+            };
+            if a.run.busy() {
+                return Ok(());
+            }
+            if a.too_large {
+                self.end(End::Failed(FailReason::InputTooLarge)).await?;
+                continue;
+            }
+            if self.stopping.is_some() {
+                let how = if a.run.idle() {
+                    End::Idle
+                } else {
+                    End::Suspend
+                };
+                self.end(how).await?;
+                continue;
+            }
+            if a.run.at_limit() || a.started.elapsed() > self.shared.max_run {
+                let leftover = a.run.leftover();
+                if leftover.iter().any(|wake| wake.handed_over.is_some()) {
+                    self.end(End::Failed(FailReason::ContextExhausted)).await?;
+                    continue;
+                }
+                let first = First {
+                    wakes: leftover
+                        .into_iter()
+                        .map(|wake| Wake {
+                            handed_over: Some(a.turn),
+                            ..wake
+                        })
+                        .collect(),
+                    handed_over_by: Some(a.ordinal),
+                };
+                self.end(End::Boundary).await?;
+                self.start_core(first).await?;
+                continue;
+            }
+            match a.run.next_step() {
+                Step::CallModel(request) => {
+                    self.seen = self.head;
+                    self.next_task += 1;
+                    let task = TaskId(self.next_task);
+                    a.live.insert(task);
+                    let chosen = a.chosen.clone();
+                    let mailbox = self.mailbox.clone();
+                    a.io.spawn(move |_| model::call(chosen, request, task, mailbox));
+                    return Ok(());
+                }
+                // The tools need the group's VM, which comes later.
+                Step::RunTools(calls) => {
+                    for call in calls {
+                        let out = ToolOutput::text("工具还没接上，现在用不了。", true, 20);
+                        if let Err(rejected) = a.run.tool_result(call.id, out) {
+                            warn!(turn = %a.turn, %rejected, "a tool result didn't fit");
+                        }
+                    }
+                }
+                Step::Idle => return Ok(()),
+            }
+        }
+    }
+
+    async fn model_output(&mut self, out: ModelOutput) -> Result<()> {
+        let Some(a) = self.core.as_mut() else {
+            return Ok(());
+        };
+        a.said.clear();
+        a.idle_since = Instant::now();
+        let call = usage::Call {
+            conversation: Some(self.place.conversation),
+            turn: Some(a.turn),
+            purpose: usage::Purpose::Turn,
+            provider: &a.chosen.provider,
+            model: &a.chosen.model,
+            effort: a.chosen.effort.as_deref(),
+            usage: out.usage,
+            cost_micros: None,
+            at: Utc::now(),
+        };
+        let mut conn = self.shared.pool.acquire().await?;
+        usage::record(&mut conn, &call).await?;
+        if let Err(rejected) = a.run.model_output(out) {
+            warn!(turn = %a.turn, %rejected, "a model output didn't fit");
+        }
+        Ok(())
+    }
+
+    async fn timer(&mut self) -> Result<()> {
+        let now = Instant::now();
+        if let Some(a) = &self.core {
+            if a.run.busy() && self.stopping.is_some_and(|deadline| now >= deadline) {
+                self.end(End::Suspend).await?;
+            } else if a.run.idle() && now >= a.idle_since + a.chosen.idle_window {
+                self.end(End::Idle).await?;
+            }
+        }
+        let decisions = self.intent.tick(now.into_std());
+        self.decide(decisions).await
+    }
+
+    async fn end(&mut self, how: End) -> Result<()> {
+        let Some(mut a) = self.core.take() else {
+            return Ok(());
+        };
+        // Aborts the model call in flight: started now, not waited for.
+        drop(a.io);
+        if !a.said.is_empty() {
+            let text = a.said.join("\n\n");
+            let tokens = tokens::count(&text);
+            if let Err(rejected) = a.run.partial_output(text, tokens) {
+                warn!(turn = %a.turn, %rejected, "the partial output didn't fit");
+            }
+        }
+        let applied = match &how {
+            End::Failed(reason) => a.run.fail(reason.clone()),
+            End::Idle | End::Boundary | End::Suspend => Ok(()),
+        };
+        if let Err(rejected) = applied {
+            warn!(turn = %a.turn, %rejected, "the ending didn't fit");
+        }
+        let record = a.run.snapshot();
+        let now = Utc::now();
+        let mut conn = self.shared.pool.acquire().await?;
+        if matches!(how, End::Suspend) {
+            turns::snapshot(&mut conn, a.turn, 1, &record, self.head, now).await?;
+            info!(turn = %a.turn, "the core is suspended");
+        } else {
+            let outcome = a.run.outcome();
+            turns::finish(&mut conn, a.turn, 1, &record, self.head, &outcome, now).await?;
+            info!(turn = %a.turn, ?outcome, rounds = a.run.round(), "the core ends");
+        }
+        drop(conn);
+        if let End::Failed(reason) = how {
+            self.report_failure(&a.run, &reason).await?;
+        }
+        Ok(())
+    }
+
+    /// A short line under the latest direct trigger the run didn't get to;
+    /// a judged wake goes unanswered, as Max may stay quiet anyway.
+    async fn report_failure(&mut self, run: &Run, reason: &FailReason) -> Result<()> {
+        let trigger = run
+            .leftover()
+            .into_iter()
+            .filter(|wake| wake.reason == Reason::Direct)
+            .filter_map(|wake| wake.ids.last().copied())
+            .max();
+        let Some(trigger) = trigger else {
+            return Ok(());
+        };
+        let text = match reason {
+            FailReason::Model { .. } => "出错了，这条没回上。",
+            FailReason::ContextExhausted => "要读的东西太多，读不完，这条没回上。",
+            FailReason::InputTooLarge => "消息太长了，我读不下，换个短点的说法吧。",
+        };
+        let draft = Draft {
+            reply_to: Some(trigger),
+            nodes: vec![DraftNode::Text { text: text.into() }],
+        };
+        self.say(draft, None, None).await?;
+        Ok(())
+    }
+
+    /// Commits what Max says and hands it to the sender. The running core
+    /// isn't fed it: its own words are in its transcript, and words from
+    /// outside it, such as a command's answer, are in the next core's tail.
+    async fn say(
+        &mut self,
+        draft: Draft,
+        turn: Option<TurnId>,
+        segment: Option<i32>,
+    ) -> Result<Message> {
+        let mut conn = self.shared.pool.acquire().await?;
+        let (message, _) = ingest::said(
+            &mut conn,
+            &self.place,
+            draft,
+            turn,
+            segment,
+            Utc::now(),
+            self.shared.offset,
+        )
+        .await?;
+        drop(conn);
+        self.head = message.id;
+        let outgoing = Outgoing {
+            place: Arc::clone(&self.place),
+            message: message.clone(),
+        };
+        if self.shared.outbound.send(outgoing).is_err() {
+            warn!(message = %message.id, "the sender is gone");
+        }
+        let entry = Entry {
+            id: message.id,
+            sender: self.place.me.identity,
+            kind: EntryKind::Max,
+            text: String::new(),
+        };
+        let decisions = self.intent.observe(&entry, std::time::Instant::now());
+        // Max's own words never wake anyone.
+        debug_assert!(decisions.is_empty());
+        Ok(message)
+    }
+}
+
+#[cfg(test)]
+mod tests;
