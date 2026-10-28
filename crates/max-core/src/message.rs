@@ -21,7 +21,6 @@ pub enum Platform {
     /// QQ as the Haskell version saw it through NapCat, by QQ and group
     /// numbers. Only imported history has it; nothing sends there.
     QqLegacy,
-    Matrix,
 }
 
 /// One row of a conversation's timeline.

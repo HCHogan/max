@@ -202,7 +202,6 @@ async fn owners(pool: &PgPool, config: &Config) -> Result<BTreeSet<PrincipalId>>
     for (name, native_id) in config.owners()? {
         let platform = match name.as_str() {
             "qq" => Platform::Qq,
-            "matrix" => Platform::Matrix,
             other => bail!("an owner on a platform Max isn't on: {other:?}"),
         };
         // A name until they first write.

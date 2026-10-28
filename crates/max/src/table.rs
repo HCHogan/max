@@ -4,8 +4,7 @@
 //!
 //! A private chat gets a conversation the first time someone writes. A
 //! group needs `!bind`: until then its messages are dropped, all but the
-//! `!bind <码>` that binds it. v1 has QQ only; Matrix rooms will come from
-//! a list instead.
+//! `!bind <码>` that binds it.
 
 use std::collections::HashMap;
 use std::sync::Arc;

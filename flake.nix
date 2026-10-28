@@ -1,5 +1,5 @@
 {
-  description = "max — a group chat agent for QQ and Matrix";
+  description = "max — a group chat agent for QQ";
 
   inputs = {
     # The nixpkgs revision nix-config deploys with.

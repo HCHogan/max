@@ -8,7 +8,7 @@ async fn an_account_is_created_once(pool: PgPool) -> sqlx::Result<()> {
     let first = account(&mut conn, Platform::Qq, "10001", "小明").await?;
     let again = account(&mut conn, Platform::Qq, "10001", "小明改了名").await?;
     assert_eq!(first, again);
-    let elsewhere = account(&mut conn, Platform::Matrix, "10001", "小明").await?;
+    let elsewhere = account(&mut conn, Platform::QqLegacy, "10001", "小明").await?;
     assert_ne!(first.principal, elsewhere.principal);
     let name = sqlx::query_scalar!(
         "select display_name from principals where id = $1",
@@ -42,7 +42,7 @@ async fn two_conversations_meeting_a_newcomer_make_one_person(pool: PgPool) -> s
 async fn a_merged_person_reads_as_the_one_kept(pool: PgPool) -> sqlx::Result<()> {
     let mut conn = pool.acquire().await?;
     let kept = account(&mut conn, Platform::Qq, "10003", "小刚").await?;
-    let merged = account(&mut conn, Platform::Matrix, "@xiaogang:example.org", "小刚").await?;
+    let merged = account(&mut conn, Platform::QqLegacy, "20003", "小刚").await?;
     sqlx::query!(
         "update principals set merged_into = $1 where id = $2",
         kept.principal.0,
@@ -50,7 +50,7 @@ async fn a_merged_person_reads_as_the_one_kept(pool: PgPool) -> sqlx::Result<()>
     )
     .execute(&mut *conn)
     .await?;
-    let again = account(&mut conn, Platform::Matrix, "@xiaogang:example.org", "小刚").await?;
+    let again = account(&mut conn, Platform::QqLegacy, "20003", "小刚").await?;
     assert_eq!(again.principal, kept.principal);
     let people = principals(&mut conn, &[kept.identity, merged.identity]).await?;
     assert_eq!(

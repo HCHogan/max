@@ -42,9 +42,8 @@ tokio = "1.54"
 # without aborting it mid-await, and a whole subtree at once.
 tokio-util = "0.7.20"
 
-# HTTP for qqbot's REST calls and max-llm's model calls, streamed; matrix-sdk
-# uses it as well, so there is one copy. Its default TLS is rustls with the
-# system's roots.
+# HTTP for qqbot's REST calls and max-llm's model calls, streamed. Its
+# default TLS is rustls with the system's roots.
 reqwest = { version = "0.13", features = ["json", "stream"] }
 # The gateway's WebSocket client, on the same rustls and system roots.
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }

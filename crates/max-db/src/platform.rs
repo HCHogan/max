@@ -13,7 +13,6 @@ pub(crate) fn platform_name(platform: Platform) -> &'static str {
     match platform {
         Platform::Qq => "qq",
         Platform::QqLegacy => "qq_legacy",
-        Platform::Matrix => "matrix",
     }
 }
 

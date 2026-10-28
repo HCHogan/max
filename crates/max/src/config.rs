@@ -394,18 +394,14 @@ mod tests {
         );
 
         let owners = dir.join("owners");
-        fs::write(
-            &owners,
-            "# the owner\nqq:ABCDEF0123\n\n  matrix:@hank:example.org  \n",
-        )
-        .unwrap();
+        fs::write(&owners, "# the owner\nqq:ABCDEF0123\n\n  qq:0123ABCDEF  \n").unwrap();
         let mut config = with_llm("[database]\nurl = \"postgresql:///max\"").unwrap();
         config.owners_file = Some(owners);
         assert_eq!(
             config.owners().unwrap(),
             [
                 ("qq".to_owned(), "ABCDEF0123".to_owned()),
-                ("matrix".to_owned(), "@hank:example.org".to_owned())
+                ("qq".to_owned(), "0123ABCDEF".to_owned())
             ]
         );
         fs::remove_dir_all(&dir).unwrap();
