@@ -1,0 +1,8 @@
+data: {"id":"nf_hasbeI9PKrfcPgsaayAU","object":"chat.completion.chunk","created":0,"model":"gemini-3.8-flash-n","choices":[{"index":0,"delta":{"role":"assistant","content":null,"reasoning_content":"User requests the calculation of 2 to the power of 64. The directive specifies the use of a computational tool. The tool will need to calculate $2^{64}$, necessitating JavaScript's BigInt for accurate representation. The result must be converted to a string before returning.\n\n\n"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"nf_hasbeI9PKrfcPgsaayAU","object":"chat.completion.chunk","created":0,"model":"gemini-3.8-flash-n","choices":[{"index":0,"delta":{"role":"assistant","content":null,"reasoning_content":null,"tool_calls":[{"id": "call_4055080","index": 0,"type": "function","function": {"name": "run_code","arguments": "{\"code\": \"return (2n ** 64n).toString();\"}"}}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"nf_hasbeI9PKrfcPgsaayAU","object":"chat.completion.chunk","created":0,"model":"gemini-3.8-flash-n","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning_content":null},"finish_reason":"tool_calls","native_finish_reason":"stop"}],"usage":{"completion_tokens":201,"total_tokens":432,"prompt_tokens":231,"completion_tokens_details":{"reasoning_tokens":174}}}
+
+data: [DONE]
+

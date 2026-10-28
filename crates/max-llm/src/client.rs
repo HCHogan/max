@@ -5,12 +5,13 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
+use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use futures_util::{Stream, StreamExt};
-use max_core::item::{ModelOutput, Protocol};
+use futures_util::{Stream, StreamExt, stream};
+use max_core::item::{ModelOutput, ModelTag, Protocol};
 use max_core::run::Request;
 use sse_stream::{Sse, SseStream};
 use tokio::time::{Instant, Sleep, sleep, timeout};
@@ -59,18 +60,9 @@ impl Client {
     /// Sends the request, in the protocol of its model, and waits for the
     /// response to start.
     pub async fn call(&self, request: &Request, options: &Options) -> Result<Call, Error> {
-        let model = request.model.clone();
-        let (path, body, parser) = match model.protocol {
-            Protocol::Responses => (
-                "/responses",
-                responses::body(request, options),
-                Parser::Responses(responses::Parser::new(model)),
-            ),
-            Protocol::Chat => (
-                "/chat/completions",
-                chat::body(request, options),
-                Parser::Chat(chat::Parser::new(model)),
-            ),
+        let (path, body) = match request.model.protocol {
+            Protocol::Responses => ("/responses", responses::body(request, options)),
+            Protocol::Chat => ("/chat/completions", chat::body(request, options)),
         };
         let base = self.provider.base_url.trim_end_matches('/');
         let mut http = self.http.post(format!("{base}{path}")).json(&body);
@@ -116,24 +108,42 @@ impl Client {
             limit: idle,
             deadline: Box::pin(sleep(idle)),
         };
-        Ok(Call {
-            events: Box::pin(SseStream::from_bytes_stream(body)),
-            parser,
-            idle,
-            pending: VecDeque::new(),
-        })
+        let events = SseStream::from_bytes_stream(body);
+        Ok(Call::new(request.model.clone(), Box::pin(events), idle))
     }
 }
 
+type Events = Pin<Box<dyn Stream<Item = Result<Sse, sse_stream::Error>> + Send>>;
+
 /// A response on its way in.
 pub struct Call {
-    events: Pin<Box<dyn Stream<Item = Result<Sse, sse_stream::Error>> + Send>>,
+    events: Events,
     parser: Parser,
     idle: Duration,
     pending: VecDeque<Event>,
 }
 
 impl Call {
+    fn new(model: ModelTag, events: Events, idle: Duration) -> Self {
+        let parser = match model.protocol {
+            Protocol::Responses => Parser::Responses(responses::Parser::new(model)),
+            Protocol::Chat => Parser::Chat(chat::Parser::new(model)),
+        };
+        Self {
+            events,
+            parser,
+            idle,
+            pending: VecDeque::new(),
+        }
+    }
+
+    /// A response recorded earlier, read as if it were arriving.
+    pub fn replay(model: ModelTag, recorded: Vec<u8>) -> Self {
+        let body = stream::iter([Ok::<_, io::Error>(VecDeque::from(recorded))]);
+        let events = SseStream::from_bytes_stream(body);
+        Self::new(model, Box::pin(events), Duration::MAX)
+    }
+
     /// The next piece of the response, or `None` once no more is coming.
     pub async fn next(&mut self) -> Result<Option<Event>, Error> {
         loop {

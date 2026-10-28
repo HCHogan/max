@@ -1,0 +1,12 @@
+data: {"id":"pf_hapWABs-qvr0Phv2ioAg","object":"chat.completion.chunk","created":0,"model":"gemini-3.8-flash-n","choices":[{"index":0,"delta":{"role":"assistant","content":"2 的 64 次方是 **18,","reasoning_content":null},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"pf_hapWABs-qvr0Phv2ioAg","object":"chat.completion.chunk","created":0,"model":"gemini-3.8-flash-n","choices":[{"index":0,"delta":{"role":"assistant","content":"446,744,073,709,551,616**","reasoning_content":null},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"pf_hapWABs-qvr0Phv2ioAg","object":"chat.completion.chunk","created":0,"model":"gemini-3.8-flash-n","choices":[{"index":0,"delta":{"role":"assistant","content":"（即 1844 亿亿多，约 $1.84 \\times 10^{19","reasoning_content":null},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"pf_hapWABs-qvr0Phv2ioAg","object":"chat.completion.chunk","created":0,"model":"gemini-3.8-flash-n","choices":[{"index":0,"delta":{"role":"assistant","content":"}$）。","reasoning_content":null},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"pf_hapWABs-qvr0Phv2ioAg","object":"chat.completion.chunk","created":0,"model":"gemini-3.8-flash-n","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning_content":null},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"completion_tokens":171,"total_tokens":695,"prompt_tokens":524,"completion_tokens_details":{"reasoning_tokens":107}}}
+
+data: [DONE]
+
