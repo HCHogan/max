@@ -92,7 +92,13 @@ pub fn inbound(dispatch: &Dispatch, now: DateTime<Utc>) -> Option<Inbound> {
         quote_id: message.msg_idx().map(str::to_owned),
         sender: Person {
             native_user_id,
-            name: author.username.clone().unwrap_or_else(|| "某人".into()),
+            // A private message's author has no name at all; an empty one
+            // is no name either.
+            name: author
+                .username
+                .clone()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| "某人".into()),
             role,
         },
         at,

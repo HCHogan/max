@@ -117,7 +117,7 @@ fn a_group_message_with_everything() {
 fn a_private_voice_message() {
     let data = json!({
         "id": "ROBOT1.0_C2C1",
-        "author": { "user_openid": "USER1" },
+        "author": { "user_openid": "USER1", "username": "" },
         "content": "",
         "attachments": [{ "content_type": "voice", "asr_refer_text": "你好" }]
     });
