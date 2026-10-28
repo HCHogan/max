@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select id as \"id!\" from messages where endpoint_id = $1 and native_id = $2\n        union all\n        select message_id from deliveries where endpoint_id = $1 and native_id = $2\n        limit 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "df86f6125097211b36ff8260928eb16a7de942873698ea370c16230fc50a6c82"
+}

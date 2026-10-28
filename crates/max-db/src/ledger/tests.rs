@@ -1,5 +1,5 @@
 use max_core::ids::PrincipalId;
-use max_core::message::{Emote, Platform, Role};
+use max_core::message::{Emote, Role};
 use serde_json::json;
 use sqlx::PgPool;
 
@@ -51,7 +51,10 @@ async fn every_kind_of_row_reads_back_as_written(pool: PgPool) -> sqlx::Result<(
     let row = &rows[0];
     assert_eq!(row.message.sender, xiaoming);
     assert_eq!(row.message.raw, json!({ "message_id": 1 }));
-    assert_eq!((row.message.at, row.command), (at(1), false));
+    assert_eq!(
+        (row.message.at, row.command, row.delivery),
+        (at(1), false, None)
+    );
     assert_eq!(head(&mut conn, conversation).await?, Some(last));
     let endpoint = group.endpoint.id;
     assert_eq!(
@@ -84,6 +87,44 @@ async fn a_row_belongs_to_its_conversation(pool: PgPool) -> sqlx::Result<()> {
     );
     assert_eq!(row(&mut conn, other.conversation, id).await?, None);
     assert_eq!(head(&mut conn, other.conversation).await?, None);
+    Ok(())
+}
+
+#[sqlx::test]
+async fn deliveries_and_platform_ids(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let group = group(&mut conn, "group:30001").await?;
+    let max = sender(group.max, "Max", None);
+    let sent = commit(&mut conn, &group, &max, &said("一"), 0).await?;
+    let failed = commit(&mut conn, &group, &max, &said("二"), 1).await?;
+    commit(&mut conn, &group, &max, &said("三"), 2).await?;
+    let xiaoming = sender(group.xiaoming, "小明", None);
+    let inbound = commit(&mut conn, &group, &xiaoming, &said("四"), 3).await?;
+    let endpoint = group.endpoint.id;
+    let delivered = Sent::Delivered { native_id: "m1" };
+    record_delivery(&mut conn, sent, endpoint, &delivered, at(0)).await?;
+    let refused = Sent::Failed { error: "风控" };
+    record_delivery(&mut conn, failed, endpoint, &refused, at(1)).await?;
+    // Only the third, which never heard back, is unknown; and only once.
+    assert_eq!(mark_unknown(&mut conn, Platform::Qq, at(9)).await?, 1);
+    assert_eq!(mark_unknown(&mut conn, Platform::Qq, at(9)).await?, 0);
+    let rows = rows(&mut conn, group.endpoint.conversation, None, inbound).await?;
+    let deliveries: Vec<_> = rows.iter().map(|row| row.delivery).collect();
+    assert_eq!(
+        deliveries,
+        [
+            Some(Delivery::Sent),
+            Some(Delivery::Failed),
+            Some(Delivery::Unknown),
+            None
+        ]
+    );
+    assert_eq!(by_native_id(&mut conn, endpoint, "m1").await?, Some(sent));
+    assert_eq!(
+        by_native_id(&mut conn, endpoint, "n3").await?,
+        Some(inbound)
+    );
+    assert_eq!(by_native_id(&mut conn, endpoint, "n2").await?, None);
     Ok(())
 }
 

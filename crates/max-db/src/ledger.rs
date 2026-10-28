@@ -1,12 +1,12 @@
-//! The ledger: timeline rows.
+//! The ledger: timeline rows and what became of what Max sent.
 
 use chrono::{DateTime, Utc};
 use max_core::ids::{ConversationId, EndpointId, IdentityId, MessageId, TurnId};
-use max_core::message::{Content, Message, Node, Role, Sender};
+use max_core::message::{Content, Message, Node, Platform, Role, Sender};
 use sqlx::PgConnection;
 use sqlx::types::Json;
 
-use crate::platform::role;
+use crate::platform::{platform_name, role};
 use crate::unknown;
 
 fn role_name(role: Role) -> &'static str {
@@ -44,6 +44,17 @@ pub struct Row {
     pub message: Message,
     pub endpoint: EndpointId,
     pub command: bool,
+    /// For what Max sent to the row's endpoint: what became of it, once
+    /// known.
+    pub delivery: Option<Delivery>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    Sent,
+    Failed,
+    /// Max crashed before hearing back.
+    Unknown,
 }
 
 /// The columns a `Content` spreads over.
@@ -198,10 +209,18 @@ struct Raw {
     nodes: Json<Vec<Node>>,
     raw: serde_json::Value,
     turn_id: Option<i64>,
+    delivery: Option<String>,
 }
 
 impl Raw {
     fn row(self) -> sqlx::Result<Row> {
+        let delivery = match self.delivery.as_deref() {
+            None => None,
+            Some("sent") => Some(Delivery::Sent),
+            Some("failed") => Some(Delivery::Failed),
+            Some("unknown") => Some(Delivery::Unknown),
+            Some(other) => return Err(unknown("delivery status", other)),
+        };
         Ok(Row {
             message: Message {
                 id: MessageId(self.id),
@@ -224,6 +243,7 @@ impl Raw {
             },
             endpoint: EndpointId(self.endpoint_id),
             command: self.kind == "command",
+            delivery,
         })
     }
 }
@@ -240,8 +260,10 @@ pub async fn rows(
         r#"
         select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,
                m.sender_role, m.sent_at, m.kind, m.event, m.reply_to_id, m.target_id,
-               m.target_identity_id, m.nodes as "nodes: Json<Vec<Node>>", m.raw, m.turn_id
+               m.target_identity_id, m.nodes as "nodes: Json<Vec<Node>>", m.raw, m.turn_id,
+               d.status as "delivery?"
         from messages m
+        left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id
         where m.conversation_id = $1 and m.id > $2 and m.id <= $3
         order by m.id
         "#,
@@ -266,7 +288,8 @@ pub async fn row(
     Ok(rows(conn, conversation, Some(previous), id).await?.pop())
 }
 
-/// The row a platform id names in this endpoint.
+/// The row a platform id names in this endpoint: someone's message, or
+/// one Max sent.
 pub async fn by_native_id(
     conn: &mut PgConnection,
     endpoint: EndpointId,
@@ -274,7 +297,10 @@ pub async fn by_native_id(
 ) -> sqlx::Result<Option<MessageId>> {
     let id = sqlx::query_scalar!(
         r#"
-        select id from messages where endpoint_id = $1 and native_id = $2
+        select id as "id!" from messages where endpoint_id = $1 and native_id = $2
+        union all
+        select message_id from deliveries where endpoint_id = $1 and native_id = $2
+        limit 1
         "#,
         endpoint.0,
         native_id
@@ -282,6 +308,65 @@ pub async fn by_native_id(
     .fetch_optional(conn)
     .await?;
     Ok(id.map(MessageId))
+}
+
+/// What the platform said when Max sent a row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Sent<'a> {
+    Delivered { native_id: &'a str },
+    Failed { error: &'a str },
+}
+
+pub async fn record_delivery(
+    conn: &mut PgConnection,
+    message: MessageId,
+    endpoint: EndpointId,
+    sent: &Sent<'_>,
+    at: DateTime<Utc>,
+) -> sqlx::Result<()> {
+    let (status, native_id, error) = match sent {
+        Sent::Delivered { native_id } => ("sent", Some(*native_id), None),
+        Sent::Failed { error } => ("failed", None, Some(*error)),
+    };
+    sqlx::query!(
+        "insert into deliveries (message_id, endpoint_id, status, native_id, error, at)
+         values ($1, $2, $3, $4, $5, $6)",
+        message.0,
+        endpoint.0,
+        status,
+        native_id,
+        error,
+        at
+    )
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// At a sender's start: what Max committed on the platform's endpoints
+/// and never heard back about is marked unknown, not sent again.
+pub async fn mark_unknown(
+    conn: &mut PgConnection,
+    platform: Platform,
+    at: DateTime<Utc>,
+) -> sqlx::Result<u64> {
+    let done = sqlx::query!(
+        r#"
+        insert into deliveries (message_id, endpoint_id, status, at)
+        select m.id, m.endpoint_id, 'unknown', $2
+        from messages m join endpoints e on e.id = m.endpoint_id
+        where e.platform = $1 and m.sender_identity_id = e.self_identity_id
+          and m.native_id is null
+          and not exists (
+              select from deliveries d where d.message_id = m.id and d.endpoint_id = m.endpoint_id
+          )
+        "#,
+        platform_name(platform),
+        at
+    )
+    .execute(conn)
+    .await?;
+    Ok(done.rows_affected())
 }
 
 #[cfg(test)]
