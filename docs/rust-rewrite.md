@@ -528,15 +528,23 @@ struct TurnFinished { turn, outcome: Outcome, finished_at }
 struct RunRecord { core_version, spec: RunSpec, base: Context, first: Vec<Input>, inputs: Vec<Input> }
 
 enum Input {
+    CalledModel,                                     // 核心开始一次模型调用（next_step 返回 CallModel）
+    RanTools,                                        // 核心开始上一次输出里的工具批次
     ModelOutput(ModelOutput),                        // 见"条目"
-    PartialOutput { text: String },                  // 模型流到一半被打断时，已经发出去的文本
+    PartialOutput { text: String, tokens: u32 },     // 模型流到一半被打断时，已经发出去的文本；可以为空
     ToolResult { call: CallId, output: ToolOutput }, // 恢复时补的是"进程重启，结果未知"
     Messages { ids: Vec<MessageId>, item: Item },    // 时间线上的新消息和事件，引用 ledger，同时存核心看到的样子
-    JobResult { job: JobId, item: Item },            // job 只在内存里，报告正文只有这里有
-    AutomationFire { fire: FireId, item: Item },
-    Wake { ids: Vec<MessageId>, reason: Reason, item: Item }, // intent 叫醒核心；ids 是它涉及的消息，作废的 actor 已经滤掉了。直接触发的 item 为空
+    Wake(Wake),
     Interrupt { reason: String },
     Fail { reason: FailReason },
+    // 以后：JobResult { job, item }（job 只在内存里，报告正文只有这里有）、AutomationFire { fire, item }
+}
+
+struct Wake {
+    ids: Vec<MessageId>,          // 它涉及的消息，作废的 actor 已经滤掉了
+    reason: Reason,
+    item: Option<Item>,           // 给模型看的判定行；直接触发为空，消息行上已经标着
+    handed_over: Option<TurnId>,  // 撞上限没处理完、交接过来时，是哪个 turn 交的
 }
 
 enum Outcome { Answered, Silent, Interrupted, Failed(FailReason), Expired, Lost }
@@ -603,42 +611,49 @@ struct ModelOutput {
 
 ```rust
 struct Run {
-    spec: RunSpec,            // 不变：模型档、上限、这个 turn 能用的 Max 工具
-    base: Context,            // 不变：创建时传入的基础上下文，第一批输入在它的易变块里
-    transcript: Vec<Item>,    // 本 turn 产生的条目，只追加
-    phase: Phase,             // 等模型、等工具、空闲
-    round: u32,
-    outstanding: Vec<CallId>, // 还没回结果的工具调用
-    pending: Vec<Item>,       // 攒下的输入，下一次调模型前注入
+    spec: RunSpec,            // 不变：模型档、窗口、输出上限、这个 turn 能用的 Max 工具
+    base: Context,            // 不变：基础上下文的条目和名册，第一批输入在它的易变块里
     first: Vec<Input>,        // 第一批输入；已经渲染在 base 里，留着是为了算 leftover
     log: Vec<Input>,          // 喂过的所有输入
-    handled: Option<usize>,   // 最近一次 Idle 时 log 的长度：这之前交进来的都处理完了
+    transcript: Vec<Item>,    // 本 turn 产生的条目，只追加
+    pending: Vec<Input>,      // 攒下的消息和 Wake，下一次调模型时渲染成一个 [新消息] 块
+    in_flight: InFlight,      // 模型调用、工具批次，或者都没有
+    due: Vec<Call>,           // 上一次输出里格式正确、还没开始的工具调用
+    outstanding: Vec<CallId>, // 已开始、还没回结果的
+    model_due: bool,          // 开始时、工具结果回齐后、调用被打断后，没有触发也要调模型
+    measured: Option<(u32, usize)>, // provider 报的上一次请求加输出的 token 数，以及它覆盖到 transcript 的哪里
+    handled: Option<usize>,   // 核心最近一次变空闲时 log 的长度：这之前交进来的都处理完了
+    // 以及 ended、round
 }
 
 enum Step {
-    CallModel(Request),       // 请求由核心完整构造，之后不再改动
-    RunTools(Vec<ToolCall>),
-    Idle,                     // 没有工具在跑，攒着的输入里也没有触发；等还是结束由 actor 定
+    CallModel(Request),       // 请求由核心完整构造，之后不再改动：条目、两个工具、输出上限、名册
+    RunTools(Vec<Call>),      // 已经解析成 run_code 或 shell 的调用
+    Idle,                     // 没有在途的，也没有该做的；等还是结束由 actor 定
 }
 
 impl Run {
     fn new(spec: RunSpec, base: Context, first: Vec<Input>) -> Self;
-    fn replay(record: &RunRecord) -> Result<Self, ReplayError>; // 核心版本不同也算错误
-    fn resume(record: &RunRecord) -> Result<Self, ReplayError>; // 重放，再补"结果未知"
+    fn replay(record: &RunRecord) -> Result<Self, ReplayError>; // 核心版本不同、某条输入对不上状态，都是错误
+    fn resume(record: &RunRecord) -> Result<Self, ReplayError>; // 重放，再关掉挂起时在途的东西
     fn snapshot(&self) -> RunRecord;
     fn busy(&self) -> bool;                         // 有模型调用或工具在途；actor 只在它为假时问 next_step
-    fn next_step(&mut self) -> Step;
-    fn model_output(&mut self, out: ModelOutput);
-    fn partial_output(&mut self, text: String);
-    fn tool_result(&mut self, call: CallId, out: ToolOutput);
-    fn input(&mut self, batch: Input);              // 随时可塞，核心决定何时生效
-    fn interrupt(&mut self, reason: String);
-    fn fail(&mut self, reason: FailReason);
+    fn next_step(&mut self) -> Step;                // 开始调用或批次时记一条 CalledModel 或 RanTools
+    fn model_output(&mut self, out: ModelOutput) -> Result<(), Rejected>;
+    fn partial_output(&mut self, text: String, tokens: u32) -> Result<(), Rejected>;
+    fn tool_result(&mut self, call: CallId, out: ToolOutput) -> Result<(), Rejected>;
+    fn input(&mut self, input: Input) -> Result<(), Rejected>; // 只收 Messages 和 Wake，随时可塞，核心决定何时生效
+    fn interrupt(&mut self, reason: String) -> Result<(), Rejected>;
+    fn fail(&mut self, reason: FailReason) -> Result<(), Rejected>;
     fn at_limit(&self) -> bool;                     // transcript 加上攒着的输入超过上限，actor 在边界上换核心
-    fn leftover(&self) -> Vec<Input>;               // 没处理完的触发，强制边界时交给下一个核心
+    fn leftover(&self) -> Vec<Wake>;                // 没处理完的触发，强制边界时交给下一个核心
+    fn idle(&self) -> bool;                         // 没有在途的、没有该做的：现在结束不丢东西
     fn outcome(&self) -> Outcome;                   // 结束时由 actor 读取
 }
 ```
+
+- 和状态对不上的输入（没有模型调用在途时来的 `ModelOutput`、不认识的调用的结果、结束之后的任何输入）返回 `Rejected`，不应用、不进日志。
+- **开始调用也是输入**（2026-10-28 定，写核心时发现）：模型调用在途时到的消息不属于这次请求。只有输出没有"开始"的话，重放分不清哪些输入是开始之后才到的，所以 `next_step` 开始模型调用或工具批次时各记一条 `CalledModel`、`RanTools`，重放到这里做同样的事。"构造一条输入再 apply"的原则照旧。
 
 核心负责的规则：
 
@@ -653,12 +668,12 @@ impl Run {
   ```
 
   C 是模型窗口；输出预留是模型配置的 `max_output`，没配就取 C / 8（Haskell 版的做法）；余量吸收估算误差，提议 C 的 5%。transcript 加上攒着的输入超过核心上限后 `at_limit` 为真，actor 在下一个边界结束这次运行，没处理完的触发交给下一个核心（2026-10-27 定）。上限把攒着的输入算进去，所以一大批输入涌进来时，是换一个核心接着处理，不会把请求撑爆。例子：400k 窗口、`max_output` 128k 的模型，可用约 252k，基础上下文 100k 时核心上限 152k；只按 C / 2 算会给到 200k，请求就会超出 provider 允许的 272k 输入。
-- **处理完的定义**：模型看到一个输入之后，走到一次不调工具的输出（`Idle`），这个输入就处理完了，回没回话都算。`leftover` 返回第一批和之后交进来的输入里还没处理完的，加上还没交进去的；只取触发（`Wake`、job 结果、自动化），消息不取，它们在 ledger 里，下一个核心的尾巴里有。
-- **交接最多一次**（2026-10-28 定）：交接过来的触发带着标记。新核心又在没处理完它的时候撞上限，就不再交接，这个 turn 记 `Failed(ContextExhausted)`，在群里说明一句。否则像"读一条 30k 的消息"这种事，每个新核心都会重读一遍、再撞一次，无限循环下去。
+- **处理完的定义**：模型看到一个输入之后，走到一次不调工具的输出、核心变空闲，这个输入就处理完了，回没回话都算。标记在核心变空闲的那一刻打，不等 actor 下一次问 `next_step`（2026-10-28 改）：actor 在问之前会先看 `at_limit`，撞上限就换核心，按原来的写法，刚回答完的触发会被当成没处理完交出去、再回答一遍。`leftover` 返回第一批和之后交进来的输入里还没处理完的触发（`Wake`，以后还有 job 结果、自动化）；消息不取，它们在 ledger 里，下一个核心的尾巴里有。还没交进核心的（intent 里 hold 着的）由 actor 自己加上。
+- **交接最多一次**（2026-10-28 定）：交接过来的触发带着标记（`Wake.handed_over`，actor 交接时填上旧 turn）。新核心撞上限时，`leftover` 里有带标记的，就不再交接，这个 turn 记 `Failed(ContextExhausted)`，在群里说明一句。否则像"读一条 30k 的消息"这种事，每个新核心都会重读一遍、再撞一次，无限循环下去。
 - **输入的时机**：等这一批工具结果都回来之后、下一次调模型之前。一批输入里有触发（`Wake`、job 结果、自动化）才会引起调模型。消息本身不是触发，什么时候叫醒由 [intent](#intent) 定；只有消息就留着，到下一次调模型时一起进去。
 - **中断**：给还没回结果的工具调用补一条"已取消"的结果，保证历史合法。Responses 要求每个 `function_call` 都有对应的 output。
-- **恢复**：`resume` 先重放，再给还在等结果的工具调用各补一条 `ToolResult`"进程重启，结果未知"，交给模型判断。这几条走正常的输入方法、进日志，否则从最终快照重放时会出现"调用还没结果，后面却跟着下一次模型输出"。快照的日志允许以"还在等结果"结尾，这是合法的挂起状态，只有 `resume` 能从这里接着走。挂起时不补：快照只记停下那一刻的事实，没恢复的 turn 也就不会留下编出来的结果。
-- **空闲判断**：模型这一轮只输出文本、没有工具调用，攒着的输入里又没有触发，`next_step` 就返回 `Idle`。结束由 actor 定：空闲窗口到期、强制边界、`!kill`、失败。整次运行没发过话，结局就是 `Silent`。
+- **恢复**：`resume` 先重放，再关掉挂起时在途的东西：模型调用在途就补一条空的 `PartialOutput`，表示这次调用作废、要重新调；还在等结果的工具调用各补一条 `ToolResult`"进程重启，结果未知"，交给模型判断。上一次输出里还没开始的工具调用照常开始。这几条走正常的输入方法、进日志，否则从最终快照重放时会出现"调用还没结果，后面却跟着下一次模型输出"。快照的日志允许以"还在等结果"结尾，这是合法的挂起状态，只有 `resume` 能从这里接着走。挂起时不补：快照只记停下那一刻的事实，没恢复的 turn 也就不会留下编出来的结果。
+- **空闲判断**：模型这一轮只输出文本、没有工具调用，攒着的输入里又没有触发，`next_step` 就返回 `Idle`。结束由 actor 定：空闲窗口到期、强制边界、`!kill`、失败。整次运行没发过话，结局就是 `Silent`；发没发过话用分段器看模型写的文本，切出消息或表情就算。
 
 ### I/O 任务和协议适配
 
@@ -743,6 +758,9 @@ impl Conversation {
             return self.stop_core().await; // 空闲就结束，否则挂起
         }
         if a.run.at_limit() || a.started.elapsed() > self.max_run {
+            if a.run.leftover().iter().any(|wake| wake.handed_over.is_some()) {
+                return self.end(End::Failed(FailReason::ContextExhausted)).await; // 交接过一次的又没处理完
+            }
             return self.end(End::Boundary).await; // 旧核心结束，leftover 交给新核心
         }
         match a.run.next_step() {
@@ -1356,7 +1374,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 
 - 直接依赖集中写在 workspace 根 `Cargo.toml` 的 `[workspace.dependencies]` 里。新增依赖单独提交，并在提交里写理由。
 - 用 cargo-deny 检查许可证、重复版本和来源；安全公告用 cargo-audit 对 flake 里钉住的 advisory-db 查，Nix 的构建沙箱里没有网。
-- 每个提交都要能单独审完（2026-10-27 定）：手写的改动不超过 400 行，`Cargo.lock`、`.sqlx`、快照和 fixture 不算；一个提交只做一件事，单独拿出来也能编译、测试通过。
+- 每个提交都要能单独审完（2026-10-27 定）：手写的改动以 400 行左右为准，`Cargo.lock`、`.sqlx`、快照和 fixture 不算；按内容合理拆分，略超可以（2026-10-28 放宽）。一个提交只做一件事，单独拿出来也能编译、测试通过。
 - crate 数量保持少，按需再拆。初始划分见 [crate 划分](#crate-划分)。
 - 不写 legacy 和兼容代码，要删就删干净。
 - ADR 只记真正的取舍。
