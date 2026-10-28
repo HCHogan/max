@@ -160,7 +160,7 @@ v1 之后再加的：
 
 和 Codex、pi、Hermes 一样分三层。Haskell 版把三层揉成了一层：tank 上 23 个 profile 只有 7 个不同的地址，还有两对是同一个模型只差推理强度。
 
-1. **provider：怎么连。** 地址、协议（`responses` 或 `chat`）、认证、请求头、重试、超时、空闲窗口 `idle_window_secs`（默认 300，见[运行流程](#运行流程)）。同一个地址既要 chat 又要 responses，就写成两个 provider。空闲窗口按这家缓存的寿命定（2026-10-27 查）：OpenAI GPT-5.6 起默认至少 30 分钟、每次读续命；Anthropic 默认 5 分钟、可选 1 小时；Gemini 官方不给数，第三方估计 3–5 分钟；DeepSeek 几小时到几天；本地 vLLM、SGLang 只受显存限制。
+1. **provider：怎么连。** 地址、协议（`responses` 或 `chat`）、认证、请求头、重试、超时、NInfer 的缓存断点 `cache_breakpoints`、空闲窗口 `idle_window_secs`（默认 300，见[运行流程](#运行流程)）。同一个地址既要 chat 又要 responses，就写成两个 provider。空闲窗口按这家缓存的寿命定（2026-10-27 查）：OpenAI GPT-5.6 起默认至少 30 分钟、每次读续命；Anthropic 默认 5 分钟、可选 1 小时；Gemini 官方不给数，第三方估计 3–5 分钟；DeepSeek 几小时到几天；本地 vLLM、SGLang 只受显存限制。
 2. **模型：是什么。** 挂在 provider 下，表名就是发给 API 的模型 id。写上下文窗口、最大输出、输入模态、是否支持推理、默认采样参数。
 3. **选用：谁用哪个、怎么用。** 默认模型、各个角色（比如 intent）用的模型和推理强度。引用一律写成 `provider/模型`，按第一个 `/` 切开；provider 名里不能有 `/`。
 
@@ -369,7 +369,7 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 | `Scope::close(grace)` | `Scope` 里一次 | 关机时防卡死 |
 | 会话 actor 的到期时间 | actor 主循环里一个 `sleep_until`，到期时间取空闲窗口和停止宽限期里早的那个 | 策略：provider 的 `idle_window_secs`、关机的宽限期。turn 没有防卡死的墙钟：actor 只等数据库，模型调用和工具各有自己的上限。强制边界的墙钟是边界上的检查，不在这里 |
 | 工具调用上限 | 两处：`run_code`、`shell` 一次运行一个；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
-| 网络客户端 | 配置里一次：LLM 客户端的连接和读超时、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避 | 防卡死 |
+| 网络客户端 | 配置里一次：LLM 的 `stream_idle_timeout_secs`（响应头和之后的每一段都要在这个时间内到，整个调用不设上限）、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`max-llm` 里写死的连接超时，`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避 | 防卡死 |
 | 先等再升级 | 按需 | 策略，比如 `close` 先给命令时间自己退出 |
 | 常驻服务里的等待表 | 每张表一次 | 防泄漏，比如 sender 里等回执的表。常驻服务外面没有取消替它兜底 |
 
@@ -1463,7 +1463,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 2. **`max-core`**（2026-10-28 完成）：消息类型、渲染、分段器、核心和 intent 两个状态机、投影，全用 fake 测。两个状态机的签名在这一步定下来，写的时候改动的地方已经更新到[核心](#核心)和 [intent](#intent) 两节。
 3. **`max-db`**（2026-10-28 完成）：四个迁移覆盖 v1 表里平台、ledger、turn、用量和摘要几块（媒体和记忆随功能加），以及会话 actor、sender 和恢复要用的查询，全部用 `#[sqlx::test]` 测。写的时候定下的细节已经补进 [schema](#schema)。
 4. **`qqbot`**（2026-10-28 从 `onebot` 改，10-29 完成）：token、网关、事件和 REST 的类型、发送和撤回，fixture 里用假 openid。网关会话是不做 I/O 的状态机，断线、Resume、僵死连接和各个关闭码都在里面测；驱动用本地 WebSocket 服务测。`listen` 例子只连网关、打印事件，不发消息。
-5. **`max-llm`**：Responses 和 Chat，用录下来的响应测。
+5. **`max-llm`**（2026-10-29 完成）：Responses 和 Chat 两种协议的请求降级和流式解析，解析器不做 I/O。客户端一次只发一次，用 `Error::retryable` 给错误分类；重不重试由 `max` 的模型调用任务决定，因为只有它知道有没有已经说出去的文字。录了四家的真实响应做回放测试：cliproxy 的 gpt-5.6-luna 走 Responses，加密推理原样回传；cliproxy 的 Gemini、DeepSeek、taipan 上的 Qwen 走 Chat，带 `reasoning_content`。录的时候发现两件事：一是 Responses 默认把函数工具设成 strict，会把可选参数全变成必填，所以显式发 `strict: false`；二是 Gemini 会报推理 token 却不给推理内容，这部分不算进任何条目，因为条目的 token 是它下次再发时的花费。NInfer 的缓存断点做成 Chat 的选项：后面紧跟另一个 user 条目的 user 条目打断点，也就是基础上下文里易变块之前的那几块，已在 taipan 上验证。工具结果里的图片在第 9 步之前先降成"[图片省略]"。
 6. **tank 上的 `maxx`**：最小的 NixOS module、库和角色、sops 里的秘密，见[测试环境](#测试环境)。
 7. **`max`**：配置、会话表和会话 actor、I/O 任务、平台 sender 和 `deliveries`、QQ 适配和 `!bind`、命令、intent。做完第一次实机：测试群里纯文字对话，顺便实测 [QQ 官方机器人](#qq-官方机器人)里标了实测的几项。
 8. **Matrix**，带加密房间和 `matrix-bootstrap`。
