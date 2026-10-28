@@ -28,6 +28,8 @@ pub struct Config {
     pub llm: Llm,
     #[serde(default)]
     pub platforms: Platforms,
+    /// Without it, the tools tell the model there is no VM.
+    pub vm: Option<Vm>,
 }
 
 fn china() -> FixedOffset {
@@ -181,6 +183,63 @@ pub struct Qq {
     pub app_secret_file: PathBuf,
 }
 
+/// The groups' VMs; see "VM 进程". The NixOS module fills this in: the
+/// programs, and the taps it made.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Vm {
+    /// The guest's kernel, initrd and command line, as the flake's `guest`
+    /// writes them.
+    pub guest: PathBuf,
+    pub cloud_hypervisor: PathBuf,
+    pub virtiofsd: PathBuf,
+    /// mkfs.ext4, for a new VM's store disk.
+    pub mkfs: PathBuf,
+    /// Each conversation's VM keeps its files in a directory here.
+    pub dir: PathBuf,
+    /// One per VM that can run at a time.
+    pub slots: Vec<Slot>,
+    /// The resolvers a guest uses.
+    pub dns: Vec<String>,
+    #[serde(default = "cpus")]
+    pub cpus: u32,
+    #[serde(default = "memory")]
+    pub memory_mib: u32,
+    /// The disk that holds what the guest adds to the store.
+    #[serde(default = "disk")]
+    pub disk_gib: u32,
+    /// A VM stops after this long without a command.
+    #[serde(default = "vm_idle")]
+    pub idle_minutes: u64,
+}
+
+fn cpus() -> u32 {
+    2
+}
+
+fn memory() -> u32 {
+    4096
+}
+
+fn disk() -> u32 {
+    64
+}
+
+fn vm_idle() -> u64 {
+    120
+}
+
+/// A tap made for max, and the guest's address behind it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Slot {
+    pub tap: String,
+    /// The guest's, with its prefix, such as `10.235.0.2/30`.
+    pub address: String,
+    /// The host's end of the tap.
+    pub gateway: String,
+}
+
 impl Config {
     /// Reads and checks the file, without reading the secrets it names.
     pub fn load(path: &Path) -> Result<Self> {
@@ -192,6 +251,9 @@ impl Config {
     fn parse(text: &str) -> Result<Self> {
         let config: Self = toml::from_str(text)?;
         config.llm.check()?;
+        if let Some(vm) = &config.vm {
+            vm.check().wrap_err("in vm")?;
+        }
         Ok(config)
     }
 
@@ -246,6 +308,35 @@ impl Llm {
             .get_key_value(model_name)
             .ok_or_else(|| eyre!("{provider_name:?} has no model {model_name:?}"))?;
         Ok((provider_name, provider, model_name, model))
+    }
+}
+
+impl Vm {
+    fn check(&self) -> Result<()> {
+        ensure!(!self.slots.is_empty(), "no slots");
+        let mut taps: Vec<&str> = self.slots.iter().map(|slot| slot.tap.as_str()).collect();
+        taps.sort_unstable();
+        taps.dedup();
+        ensure!(
+            taps.len() == self.slots.len(),
+            "two slots have the same tap"
+        );
+        // The taps are multi-queue, which cloud-hypervisor opens as such
+        // only with two queue pairs or more, and it allows a pair per vCPU.
+        ensure!(self.cpus >= 2, "a VM needs two vCPUs at least");
+        ensure!(self.memory_mib >= 512, "too small a VM");
+        // They go on the guest's command line, which splits at spaces.
+        for word in self.dns.iter().chain(
+            self.slots
+                .iter()
+                .flat_map(|slot| [&slot.address, &slot.gateway]),
+        ) {
+            ensure!(
+                !word.is_empty() && !word.contains([' ', ',']),
+                "{word:?} isn't an address"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -363,6 +454,43 @@ mod tests {
         let loud = "[database]\nurl = \"postgresql:///max\"\n[log]\nlevel = \"loud\"";
         assert!(with_llm(loud).is_err());
         assert!(Config::parse("[database]\nurl = \"postgresql:///max\"").is_err());
+    }
+
+    #[test]
+    fn vms() {
+        let vm = r#"
+            [database]
+            url = "postgresql:///max"
+
+            [vm]
+            guest = "/nix/store/x-max-guest.json"
+            cloud_hypervisor = "/nix/store/x-cloud-hypervisor/bin/cloud-hypervisor"
+            virtiofsd = "/nix/store/x-virtiofsd/bin/virtiofsd"
+            mkfs = "/nix/store/x-e2fsprogs/bin/mkfs.ext4"
+            dir = "/var/lib/maxx/vm"
+            dns = ["223.5.5.5", "119.29.29.29"]
+            memory_mib = 8192
+
+            [[vm.slots]]
+            tap = "maxx-vm0"
+            address = "10.235.0.2/30"
+            gateway = "10.235.0.1"
+        "#;
+        let config = with_llm(vm).unwrap().vm.unwrap();
+        assert_eq!((config.cpus, config.memory_mib), (2, 8192));
+        assert_eq!(config.slots[0].tap, "maxx-vm0");
+
+        let twice = vm.replace(
+            "[[vm.slots]]",
+            "[[vm.slots]]\ntap = \"maxx-vm0\"\naddress = \"10.235.0.6/30\"\ngateway = \"10.235.0.5\"\n[[vm.slots]]",
+        );
+        let error = with_llm(&twice).unwrap_err();
+        assert!(format!("{error:#}").contains("same tap"), "{error:#}");
+        let spaced = vm.replace("223.5.5.5", "223.5.5.5 x");
+        assert!(with_llm(&spaced).is_err());
+        let one = vm.replace("memory_mib = 8192", "cpus = 1");
+        let error = with_llm(&one).unwrap_err();
+        assert!(format!("{error:#}").contains("two vCPUs"), "{error:#}");
     }
 
     #[test]
