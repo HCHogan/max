@@ -368,7 +368,7 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 | `Scope::close(grace)` | `Scope` 里一次 | 关机时防卡死 |
 | 会话 actor 的到期时间 | actor 主循环里一个 `sleep_until`，到期时间取空闲窗口和停止宽限期里早的那个 | 策略：provider 的 `idle_window_secs`、关机的宽限期。turn 没有防卡死的墙钟：actor 只等数据库，模型调用和工具各有自己的上限。强制边界的墙钟是边界上的检查，不在这里 |
 | 工具调用上限 | 两处：`run_code`、`shell` 一次运行一个；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
-| 网络客户端 | 配置里一次：LLM 客户端的连接和读超时、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳 | 防卡死 |
+| 网络客户端 | 配置里一次：LLM 客户端的连接和读超时、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避 | 防卡死 |
 | 先等再升级 | 按需 | 策略，比如 `close` 先给命令时间自己退出 |
 | 常驻服务里的等待表 | 每张表一次 | 防泄漏，比如 sender 里等回执的表。常驻服务外面没有取消替它兜底 |
 

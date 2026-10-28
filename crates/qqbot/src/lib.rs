@@ -5,10 +5,12 @@
 //! happens in the `max` crate.
 
 pub mod api;
+pub mod connection;
 pub mod event;
 pub mod gateway;
 pub mod message;
 
 pub use api::{Chat, Client, Credentials, Error};
+pub use connection::run;
 pub use event::{Dispatch, Event};
 pub use message::{Body, Outgoing, Reply, Sent};

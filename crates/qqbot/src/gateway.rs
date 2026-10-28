@@ -1,5 +1,5 @@
 //! The gateway session as a state machine: frames and time in, frames to
-//! send and events out. The driver in `connection` does the I/O.
+//! send and events out. [`crate::connection`] does the I/O.
 //!
 //! The protocol is Discord's: Hello gives the heartbeat interval, Identify
 //! starts a session and Resume picks one up after a dropped connection,

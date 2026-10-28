@@ -20,6 +20,10 @@ pub const TOKEN_URL: &str = "https://bots.qq.com/app/getAppAccessToken";
 /// valid for 60 seconds more.
 const REFRESH_BEFORE: Duration = Duration::from_secs(50);
 
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Between reads, not for the whole call.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Clone)]
 pub struct Credentials {
     pub app_id: String,
@@ -103,7 +107,7 @@ struct Token {
 }
 
 impl Client {
-    pub fn new(credentials: Credentials) -> Self {
+    pub fn new(credentials: Credentials) -> Result<Self, Error> {
         Self::with_urls(credentials, API_BASE, TOKEN_URL)
     }
 
@@ -111,14 +115,18 @@ impl Client {
         credentials: Credentials,
         base: impl Into<String>,
         token_url: impl Into<String>,
-    ) -> Self {
-        Self {
-            http: reqwest::Client::new(),
+    ) -> Result<Self, Error> {
+        let http = reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
+            .build()?;
+        Ok(Self {
+            http,
             base: base.into(),
             token_url: token_url.into(),
             credentials,
             token: Mutex::new(None),
-        }
+        })
     }
 
     /// A valid access token, fetched again shortly before it expires.
