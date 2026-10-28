@@ -157,8 +157,8 @@ pub struct Volatile {
     /// Rendered rows the context refers to but doesn't show, such as the
     /// target of a reply from before the tail.
     pub quoted: String,
-    /// The first inputs, rendered: trigger rows with their marks, judged
-    /// lines, and what the previous core left over.
+    /// The first inputs, rendered: trigger rows with their marks, and
+    /// judged lines.
     pub first: String,
 }
 
