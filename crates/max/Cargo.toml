@@ -15,6 +15,7 @@ clap.workspace = true
 color-eyre.workspace = true
 max-core.workspace = true
 max-db.workspace = true
+max-llm.workspace = true
 qqbot.workspace = true
 serde.workspace = true
 tiktoken-rs.workspace = true
@@ -25,4 +26,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

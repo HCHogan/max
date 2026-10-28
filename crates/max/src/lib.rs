@@ -3,5 +3,6 @@
 //! main.rs is a thin command line over this.
 
 pub mod config;
+pub mod llm;
 pub mod scope;
 pub mod tokens;
