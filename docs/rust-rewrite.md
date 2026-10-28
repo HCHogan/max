@@ -1089,7 +1089,8 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 - **消息 id 沿用旧的 `canonical_message_id`**（2026-10-27 定），新消息从最大值加一接着编。旧摘要和记忆正文里的 `#123`、`[image#123.0]` 句柄因此还有效。导入时校验它和 `ingest_seq` 的顺序一致；不一致就另加一列记顺序。
 - **全部消息都导**（2026-10-27 定），包括被 hook 忽略过的（`message_projections.context_visible = false`）。库里忠实保留群里的所有事实。
 - `canonical_content` 的 v2 nodes 转成新 `Node`；`raw` 从 QQ 的 `segments` 列取，Matrix 从 `platform_events.raw_payload` 取；`text` 重新渲染。
-- 老 QQ 的账号和端点导成平台 `qq_legacy`：官方接口给的是 openid，和 QQ 号、群号不在一个命名空间，对不上。新群用 `!bind <老群号>` 接到老会话上，时间线连续，见 [QQ 官方机器人](#qq-官方机器人)。老 QQ 号的人和群里新的 openid 各算各的人，不合并。
+- 老 QQ 的账号和端点导成平台 `qq_legacy`：官方接口给的是 openid，和 QQ 号、群号不在一个命名空间，对不上。新群用 `!bind <老群号>` 接到老会话上，时间线连续，见 [QQ 官方机器人](#qq-官方机器人)。
+- 老 QQ 号的人按昵称自动接上（2026-10-29 定，原来是各算各的人、不合并）：导入时留下每个老账号在每个老群里最后用的 QQ 昵称（旧 `messages` 的 `sender_nickname`，不是群名片）；表在做导入时定。接到老会话上的群里，一个新的 `member_openid` 第一次出现时，拿它的 `username`（官方接口给的也是 QQ 昵称）去对这个老群的老成员：恰好一个老成员的昵称一样，而且他还没被别的新账号认领，就把新账号并进他的 principal，保留老 id，旧摘要和记忆里的 `[mention#N]` 都接得上。重名、封号后改过昵称的不并，只记日志，先算新人；并错了可以撤，合并只是别名。冒名的风险（有人改成别人的昵称再第一次说话）接受。拿不到全群成员，没说过话的老成员要等他们第一次说话才接上，见 [QQ 官方机器人](#qq-官方机器人)的"没有的"。
 - 老的 reaction、戳一戳事件不导。
 - Max 自己的消息：`agent_turn_id` 加 `turn_chunk_index` 变成 turn id 和段号；它们的平台 id 写进 `deliveries`，状态 sent。否则 sender 启动时会把它们都补记成结果未知。旧 `agent_turns` 导成 `turns` 加 `turn_outcomes`，保留 `t#N`，没有快照。
 - `conversation_compartments` 只导 `active` 的；群号换成会话 id；importance 0..1 换成 1..100；单摘要时期的行只有 `summary`，放进 p1，其它层空着。句柄从 `episode:<uuid>` 换成 `summary#<id>`。
@@ -1105,7 +1106,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 2026-10-27 定。沿用 [ADR 004](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/adr/004-canonical-handles-for-the-model.md) 的三条判断：
 
 - **模型面对人，ledger 存账号。** 人是 principal，平台账号是 identity。消息的发送者和提及节点存 identity，因为平台认证的是那个账号；渲染给模型时再查到 principal。合并因此不碰 ledger。
-- **principal 只是"这几个账号是同一个人"的断言**，只能由人显式声明（以后的 `!link`，v1 只有 QQ 的 `!bind` 合并 owner 自己的账号），不从名字推断。除此之外 v1 一人一个账号；Haskell 版的 239 个 principal 也都是一人一个账号。
+- **principal 只是"这几个账号是同一个人"的断言**，只能由人显式声明（以后的 `!link`，v1 只有 QQ 的 `!bind` 合并 owner 自己的账号），不从名字推断。唯一的例外是老 QQ 号按昵称接上新 openid（2026-10-29 定），见[导入](#导入)。除此之外 v1 一人一个账号；Haskell 版的 239 个 principal 也都是一人一个账号。
 - **合并是别名，不改写。** `principals.merged_into` 指向保留的那个，被合并的行留作墓碑；读的时候用 `coalesce(merged_into, id)`，链深固定为 1，可以撤销。
 
 ### 表
@@ -1241,7 +1242,7 @@ enum Reason { Direct /* @、回复、私聊白名单 */, Judged { kind: Kind, no
   - 撤回：自己的消息 2 分钟内能撤（实测）；Max 是管理员时也能撤别人的。
   - 媒体要先上传拿 `file_info`，再发 `msg_type = 7`。实测可以直接传 base64，`file_info` 一天有效；`content` 是图片下面的说明文字，和图在同一条消息里。发文件（`file_type = 4`）实测回 50015014，发不了。v1 不做媒体。
   - 平台审核：内容违规会被拒（40034006），记成 `deliveries` 里的失败。机器人被封"暂不支持解封"。
-- **没有的**：reaction、戳一戳、编辑、群名片、发表情和文件；也没找到"有人撤回了消息"的事件，别人撤回的消息时间线上看不出来。禁言、群成员列表的接口 2026-08 才加，第三方反馈多数要白名单，v1 不用。
+- **没有的**：reaction、戳一戳、编辑、群名片、发表情和文件；也没找到"有人撤回了消息"的事件，别人撤回的消息时间线上看不出来。禁言、群成员列表的接口 2026-08 才加，第三方反馈多数要白名单，v1 不用。实测（2026-10-29）：成员列表 `GET /v2/groups/{group_openid}/members` 和单个成员 `…/members/{member_openid}` 都回 11253（应用无接口访问权限），maxx 不在白名单上，所以拿不到不说话的人的 openid。
 
 配置在 `[platforms.qq]`：`app_id_file`、`app_secret_file`。AppID 不算秘密，但它能找到这个机器人，和群号一样不进仓库。
 
