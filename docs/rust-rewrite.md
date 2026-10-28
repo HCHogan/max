@@ -30,7 +30,7 @@
 包含：
 
 - 平台：QQ（NapCat，OneBot v11 reverse WS）和 Matrix。两个一起做，免得[消息格式](#消息格式)长成 OneBot 的形状。Matrix 支持加密房间（2026-10-27 定），见 [Matrix 加密房间](#matrix-加密房间)。
-- 触发：@、回复 Max、戳一戳，以及 [intent 分类](#intent-分类)（2026-10-27 定进 v1）。私聊按白名单触发。命令不是触发，由会话 actor 自己处理。见[运行流程](#运行流程)第 2 步。
+- 触发：所有入账都经过 [intent](#intent)：@、回复 Max、戳一戳是它的规则，其它消息由小模型判（2026-10-27 定进 v1，10-28 改成所有消息都经过它）。私聊按白名单触发。命令不是触发，由会话 actor 自己处理。见[运行流程](#运行流程)第 2 步。
 - canonical ledger：入站和出站消息都落 Postgres。
 - 会话 actor、单一核心实例、输入投递、流式回复、取消（`!kill`）、失败时的 reaction。
 - LLM：Responses 和 Chat Completions 两种协议。
@@ -63,7 +63,7 @@
 | Persistence | 部分 | ledger 和 turn 记录；新 schema 见 [schema](#schema) |
 | Canonical multi-platform conversations | 部分 | QQ + Matrix 共用一种[消息格式](#消息格式)；镜像 v1 不做，上线前要做 |
 | Triggering | ✓ | @、回复、戳一戳触发；私聊按白名单 |
-| Proactive triggering | ✓ | [intent 分类](#intent-分类)，2026-10-27 定进 v1 |
+| Proactive triggering | ✓ | [intent](#intent)，2026-10-27 定进 v1 |
 | Inbound message hooks | — | 先不做，见[有意删除的功能](#有意删除的功能) |
 | QQ group allowlist | ✓ | |
 | Private chats | ✓ | 改成白名单：名单上的人私聊才触发，见[运行流程](#运行流程)第 2 步。Haskell 版私聊一律回复 |
@@ -260,7 +260,7 @@ systemd 要设 `KillMode=mixed`：SIGTERM 只发给主进程，VM 这些子进�
 
    驱动器通用：tokio-util 的 `DelayQueue`、并发上限、按单元退避、自己的 `Scope`。入账通知是会话 actor 提交之后发的进程内 broadcast，不像 Haskell 版用 `message_projections` 的标志位当队列；漏掉的由扫描补。
 3. **触发源**：产出的不是表，是输入，全部进会话 actor 的同一个入口（[运行流程](#运行流程)第 2 步）：有核心在跑就喂给它，没有就起一个核心。差别只在源头：
-   - 跟着消息来的，在每条消息的路径上判：@、回复、戳一戳是同步规则；intent 分类是异步的小模型调用，有每小时上限，由 actor spawn 在 `side` 里，判定回到信箱，按 `seen` 过滤（见 [intent 分类](#intent-分类)），不阻塞别的消息；自动化的 ledger_match 是规则。
+   - 跟着消息来的，全部由会话 actor 里的 [intent](#intent) 判：@、回复、戳一戳是它的同步规则，看起来没说完的先去抖几秒；其它消息过闸门，由小模型在 `side` 里异步判，有每小时上限，判定回到信箱，不阻塞别的消息。叫醒核心的 `Wake` 都按 `seen` 过滤。自动化的 ledger_match 是规则。
    - 外部来的：cron、HTTP webhook、外部轮询、proactive 的闲置触发。services 下一个调度器，定义在 `automations` 表，到点给对应的会话 actor 发请求。调度器的形状和派生 worker 一样（常驻、定时器、独占写 `automation_fires`、启动时扫一遍），只是 `run` 的结果是发请求。细节等做自动化时补。
 
 ### 资源怎么结束
@@ -420,12 +420,12 @@ actor 记着三个位置：
 |---|---|---|
 | `head` | 时间线的最后一条 | 起核心时取它作快照位置 |
 | `from` | 当前核心的快照位置 | 基础上下文只投影 `id <= from`，之后的每一条都喂给核心 |
-| `seen` | 进过模型请求的最后一条 | intent 的判定作不作废 |
+| `seen` | 进过模型请求的最后一条 | intent 的 `Wake` 作不作废 |
 
 由此直接得到：
 
 - **核心的输入不重不漏。** 起核心时 `from = head`；之后每入账一条，actor 就喂给核心，本 turn 自己说的话和做的动作除外，它们已经在 transcript 里。核心看到的就是"位置 `from` 的快照，加上之后的每一条"，由定义保证，不靠时序。
-- **`seen` 好维护。** actor 一入账就喂，核心发请求时会带上攒着的全部输入，所以发模型请求那一刻，请求里正好是 `..=head`，这时设 `seen = head`。`!kill` 和启动时也设 `seen = head`。用法见 [intent 分类](#intent-分类)的"判定的去处"。
+- **`seen` 好维护。** actor 一入账就喂，核心发请求时会带上攒着的全部输入，所以发模型请求那一刻，请求里正好是 `..=head`，这时设 `seen = head`。`!kill` 和启动时也设 `seen = head`。用法见 [intent](#intent) 的"`Wake` 的去处"。
 - **派生 worker 按会话记 cursor。** 一个会话里 id 的顺序就是提交顺序，往前推的 cursor 不会漏掉晚提交的小 id。不同会话之间没有这个保证，所以不用全局 cursor。
 - **恢复只要一个位置。** 挂起时记下当时的 `head`（快照的 `upto`），恢复后从它之后接着喂。
 
@@ -512,7 +512,7 @@ v1 的 ledger 已经存了原始 payload 和文本兜底；投递回执（`deliv
 
 ```rust
 // 触发起核心时。身份、触发和首次开始合在一条里（2026-10-27 合并了原来的 TurnAccepted）
-struct TurnStarted { turn, conversation, ordinal /* t#，给模型引用 */, trigger /* 消息、intent 判定、job 结果、自动化，或上一个 turn 交接过来的输入 */, from /* 快照位置，见“时间线” */, started_at }
+struct TurnStarted { turn, conversation, ordinal /* t#，给模型引用 */, trigger /* intent 的 Wake、job 结果、自动化，或上一个 turn 交接过来的输入 */, from /* 快照位置，见“时间线” */, started_at }
 // 恢复挂起的 turn 时。attempt 从 2 起，只是个标记
 struct TurnResumed { turn, attempt, resumed_at }
 // 这次运行结束时（turn 结束或挂起），把核心整个存下来
@@ -530,7 +530,7 @@ enum Input {
     Messages { ids: Vec<MessageId>, item: Item },    // 时间线上的新消息和事件，引用 ledger，同时存核心看到的样子
     JobResult { job: JobId, item: Item },            // job 只在内存里，报告正文只有这里有
     AutomationFire { fire: FireId, item: Item },
-    Intent { ids: Vec<MessageId>, item: Item },      // intent 的判定；ids 是它判的消息。作废的判定 actor 已经滤掉了
+    Wake { ids: Vec<MessageId>, reason: Reason, item: Item }, // intent 叫醒核心；ids 是它涉及的消息，作废的 actor 已经滤掉了。直接触发的 item 为空
     Interrupt { reason: String },
     Fail { reason: FailReason },
 }
@@ -548,7 +548,7 @@ enum Outcome { Answered, Silent, Interrupted, Failed(FailReason), Expired, Lost 
 | 正常重启时挂起 | 只写 `TurnSnapshot` |
 | 崩溃 | 什么都没写 |
 
-- **trigger 记在 `TurnStarted` 里**：@、回复、命令可以从消息本身重新判断，但 intent 分类和自动化触发不行。单一核心实例之后，触发来了就立刻起核心，"接受了但没起"这个状态不存在，所以不再单独记一条。
+- **trigger 记在 `TurnStarted` 里**：直接触发可以从消息本身重新判断，但判定、去抖合并了哪几条、自动化触发都不行。单一核心实例之后，触发来了就立刻起核心，"接受了但没起"这个状态不存在，所以不再单独记一条。
 - **只有一种快照**：结束的 turn 和挂起的 turn 存的是同一种 `RunRecord`，区别只在后面有没有跟一条结局。核心不在运行中途写库，所以也没有"库里一份、内存里一份"的问题。
 - **状态**：
   - 有 `TurnFinished`：已结束。
@@ -649,9 +649,9 @@ impl Run {
   ```
 
   C 是模型窗口；输出预留是模型配置的 `max_output`，没配就取 C / 8（Haskell 版的做法）；余量吸收估算误差，提议 C 的 5%。transcript 加上攒着的输入超过核心上限后 `at_limit` 为真，actor 在下一个边界结束这次运行，没处理完的触发交给下一个核心（2026-10-27 定）。上限把攒着的输入算进去，所以一大批输入涌进来时，是换一个核心接着处理，不会把请求撑爆。例子：400k 窗口、`max_output` 128k 的模型，可用约 252k，基础上下文 100k 时核心上限 152k；只按 C / 2 算会给到 200k，请求就会超出 provider 允许的 272k 输入。
-- **处理完的定义**：模型看到一个输入之后，走到一次不调工具的输出（`Idle`），这个输入就处理完了，回没回话都算。`leftover` 返回第一批和之后交进来的输入里还没处理完的，加上还没交进去的；只取触发（@、回复、戳一戳、判定、job 结果、自动化），闲聊不取，它们在 ledger 里，下一个核心的尾巴里有。
+- **处理完的定义**：模型看到一个输入之后，走到一次不调工具的输出（`Idle`），这个输入就处理完了，回没回话都算。`leftover` 返回第一批和之后交进来的输入里还没处理完的，加上还没交进去的；只取触发（`Wake`、job 结果、自动化），消息不取，它们在 ledger 里，下一个核心的尾巴里有。
 - **交接最多一次**（2026-10-28 定）：交接过来的触发带着标记。新核心又在没处理完它的时候撞上限，就不再交接，这个 turn 记 `Failed(ContextExhausted)`，在群里说明一句。否则像"读一条 30k 的消息"这种事，每个新核心都会重读一遍、再撞一次，无限循环下去。
-- **输入的时机**：等这一批工具结果都回来之后、下一次调模型之前。一批输入里有触发（@、回复 Max、戳一戳、intent 的判定、job 结果、自动化）才会引起调模型；只有闲聊就留着，到下一次调模型时一起进去。
+- **输入的时机**：等这一批工具结果都回来之后、下一次调模型之前。一批输入里有触发（`Wake`、job 结果、自动化）才会引起调模型。消息本身不是触发，什么时候叫醒由 [intent](#intent) 定；只有消息就留着，到下一次调模型时一起进去。
 - **中断**：给还没回结果的工具调用补一条"已取消"的结果，保证历史合法。Responses 要求每个 `function_call` 都有对应的 output。
 - **恢复**：`resume` 先重放，再给还在等结果的工具调用各补一条 `ToolResult`"进程重启，结果未知"，交给模型判断。这几条走正常的输入方法、进日志，否则从最终快照重放时会出现"调用还没结果，后面却跟着下一次模型输出"。快照的日志允许以"还在等结果"结尾，这是合法的挂起状态，只有 `resume` 能从这里接着走。挂起时不补：快照只记停下那一刻的事实，没恢复的 turn 也就不会留下编出来的结果。
 - **空闲判断**：模型这一轮只输出文本、没有工具调用，攒着的输入里又没有触发，`next_step` 就返回 `Idle`。结束由 actor 定：空闲窗口到期、强制边界、`!kill`、失败。整次运行没发过话，结局就是 `Silent`。
@@ -662,7 +662,7 @@ impl Run {
 
 - **模型调用**：一次 `CallModel` 一个任务。它持有模型客户端和分段器：把请求交给协议适配层降级成线上格式，用 async-openai 发出去、读流；流式文本切出一段就发 `Said`，流结束发 `ModelDone`。可重试的错误在任务里重试，前提是还没发过 `Said`；发过就不重试，直接报错，已入账的文本由 actor 记成 `partial_output`（2026-10-28 定）。否则重试会把发过的段落从头再发一遍，晚间丢包时最容易碰上。流里一出现 `run_code` 或 `shell` 调用，就通知 VM 服务启动群 VM。
 - **`run_code`、`shell`**：一个调用一个任务，在群 VM 里跑，结束发 `ToolDone`。同一批的几个并发跑，先跑完的先喂给核心。
-- **intent 分类**：挂在 `side` 里，结束发 `Verdict`，见 [intent 分类](#intent-分类)。
+- **intent 分类**：挂在 `side` 里，结束发 `Verdict`，见 [intent](#intent)。
 - **回执**：每个任务拿着一个回执（`Report`），正常结束时用它发结束事件；被 abort 或 panic 时，它在 `Drop` 里补发一条"没有结果"。所以每个任务恰好一个结束事件，和 `Said` 走同一个信箱，排在它们后面。
 - **过期事件**：每个任务有一个会话内递增、不复用的编号，事件都带着它。不是当前核心在途的任务发来的（`!kill`、失败、强制边界之后才到的）直接丢掉。
 
@@ -684,7 +684,7 @@ struct Conversation {
     head: MessageId,           // 见“时间线”
     seen: MessageId,
     core: Option<Active>,
-    intent: IntentState,       // 在途的分类、攒着的消息、每小时计数
+    intent: Intent,            // 纯状态机，见“intent”：hold、攒着的消息、在途的分类、计数
     side: Scope,               // intent 分类
     stopping: Option<Instant>, // 停止宽限期的到期时间
     // 配置（空闲窗口、墙钟 max_run）；数据库、sender、会话表的句柄；自己信箱的发送端，交给 I/O 任务
@@ -718,7 +718,7 @@ impl Conversation {
         loop {
             let ev = tokio::select! {
                 Some(ev) = mailbox.recv() => ev,
-                _ = sleep_until(self.deadline()) => Event::Timer, // 空闲窗口、停止宽限期里早的那个
+                _ = sleep_until(self.deadline()) => Event::Timer, // 空闲窗口、去抖、停止宽限期里最早的
                 _ = stop.cancelled(), if self.stopping.is_none() => Event::Stop,
             };
             self.handle(ev).await?; // 只 await 数据库
@@ -762,13 +762,12 @@ impl Conversation {
 
 1. **入账**：平台来的消息和事件、`Post`、Max 说出口的一段，先在一个事务里入账，`head` 前进，再发入账通知给[派生数据 worker](#三种角色)。`Said` 入账后交给平台 sender，不等回执，见[出站](#出站)。
 2. **路由**：
-   - 命令：一律由 actor 自己处理，从不进核心（2026-10-28 定）。所以 `!model` 不会变成模型的输入，`!kill` 也不用排在工具批次后面。命令消息本身照样入账，下一个核心的尾巴里看得到。
-   - 有核心：喂给它，不管是不是触发；本 turn 自己说的话和做的动作除外，它们已经在 transcript 里。经工具做的动作靠 `Post` 的 `origin` 认出来，见[出站](#出站)。job 结果、自动化触发、intent 的判定也一样。
-   - 没有核心：是触发就起一个（[运行流程](#运行流程)第 3 步）；不是就什么都不做，它在时间线上，下一个核心的基础上下文里有。
-   - 不是触发的消息过 intent 的闸门，见 [intent 分类](#intent-分类)。
+   - 命令：一律由 actor 自己处理，从不进核心（2026-10-28 定）。所以 `!model` 不会变成模型的输入，`!kill` 也不用排在工具批次后面。命令消息本身照样入账，下一个核心的尾巴里看得到。intent 也看得到它。
+   - 有核心：喂给它；本 turn 自己说的话和做的动作除外，它们已经在 transcript 里。经工具做的动作靠 `Post` 的 `origin` 认出来，见[出站](#出站)。job 结果、自动化也一样。
+   - [intent](#intent)：每条入账都交给 `intent.observe`，判定交给 `intent.verdict`，`Timer` 也调 `intent.tick`。返回的 `Wake` 先过 `seen`，涉及的消息都不超过 `seen` 就丢掉；否则有核心就喂一个 `Input::Wake`，没有就起一个（[运行流程](#运行流程)第 3 步）。`Classify` 在 `side` 里 spawn 小模型。没有核心也没有 `Wake` 时什么都不做，消息在时间线上，下一个核心的基础上下文里有。
    - `ModelDone`、`ToolDone` 喂给核心；任务编号不在 `live` 里的丢掉。
 
-`Stop` 只记下停止宽限期的到期时间。`Timer` 到了：空闲窗口到期就 `end(End::Expired)`，停止宽限期到期就 `end(End::Suspend)`，见[取消](#取消)。
+`Stop` 只记下停止宽限期的到期时间。`Timer` 到了：空闲窗口到期就 `end(End::Expired)`，停止宽限期到期就 `end(End::Suspend)`，见[取消](#取消)；去抖到期由 `intent.tick` 处理。
 
 另外两条：
 
@@ -779,7 +778,7 @@ impl Conversation {
 
 - 崩溃时正在跑的核心。正常重启时挂起的核心连同它攒着的输入都在快照里。
 - 后台 job。pi 的会话文件还留在 VM 里，但不会自动接上。
-- 计数，比如 intent 每小时上限，重启后清零。
+- intent 的全部状态：计数、接住率、被嫌烦清零；还在去抖的直接触发丢掉，没人回（2026-10-28 接受）。
 
 ### 运行流程
 
@@ -787,11 +786,11 @@ impl Conversation {
 
 1. **消息进来**：平台连接把消息或事件归一化成 `Inbound`，经会话表交给会话 actor；actor 在一个事务里把它转换成 `Message` 入账。平台连接不碰数据库。
    - 群白名单（2026-10-28 定）在会话表这一步拦：QQ 群号不在 `groups_file` 上、Matrix 房间不在 `rooms_file` 上的，直接丢掉，不建会话、不起 actor、不入账，只记 debug 日志。名单外的群里，命令和 owner 的消息也一样丢。别的会话或工具往名单外的群发 `Post`，也在这里拒掉，带回信通道的回一个错误。私聊不过这一道，由第 2 步的私聊白名单管。
-2. **判定**：触发是 @、回复 Max、戳一戳、intent 的判定、job 结果和自动化触发；其它消息不是。触发源见[三种角色](#三种角色)。命令不是触发，由 actor 自己处理，见[会话 actor](#会话-actor)。
-   - 有核心在跑：不管是不是触发，都喂给它。
-   - 没有核心：是触发就进第 3 步；不是就什么都不做。
-   - 私聊（2026-10-28 定）：只有白名单上的人，私聊里的消息才算触发，等同群里的 @。不在名单上的人私聊 Max，消息照样入账、命令照样执行，但不触发，也不做 intent 分类。Max 可以主动给任何人发私聊，比如群里命令的文字输出。白名单是 `private_file`，一行一个；群白名单 `groups_file`（第 1 步）也一样，为空就是谁都不服务，和 Haskell 版"为空就全服务"相反。测试期间私聊白名单为空，免得和 Haskell 版对同一条私聊各回一遍；命令会被两边各回一次，可以接受。
-3. **开始 turn**：快照位置 `from = head`。从 ledger（只读 `id <= from`）加上记忆和摘要，投影出基础上下文，裁到预算内，见[上下文投影](#上下文投影)；第一批输入在易变块里，只有触发，强制边界之后再加上一个核心没处理完的输入，闲聊都在尾巴里。第一批超过核心的上限（见[核心](#核心)的"轮数和 token 上限"）就不起核心，记 `Failed(InputTooLarge)`，在群里回一条简短的错误说明（2026-10-27 定）。否则写 `TurnStarted`（带 trigger 和 `from`），调 `Run::new(spec, base, first)`。
+2. **判定**（2026-10-28 改）：每条入账都交给 [intent](#intent)，由它决定什么时候叫醒核心：@、回复 Max、戳一戳立刻叫醒，看起来没说完的先等几秒；其它消息过闸门，由小模型判。job 结果和自动化不经过 intent，本身就是触发。触发源见[三种角色](#三种角色)。命令由 actor 自己处理，见[会话 actor](#会话-actor)。
+   - 有核心在跑：消息照样立刻喂给它，但只有触发才让它调模型。
+   - 没有核心：来了触发就进第 3 步；否则什么都不做。
+   - 私聊（2026-10-28 定）：只有白名单上的人，私聊里的消息才算触发，等同群里的 @。不在名单上的人私聊 Max，消息照样入账、命令照样执行，但 intent 不把它当直接触发，也不分类。Max 可以主动给任何人发私聊，比如群里命令的文字输出。白名单是 `private_file`，一行一个；群白名单 `groups_file`（第 1 步）也一样，为空就是谁都不服务，和 Haskell 版"为空就全服务"相反。测试期间私聊白名单为空，免得和 Haskell 版对同一条私聊各回一遍；命令会被两边各回一次，可以接受。
+3. **开始 turn**：快照位置 `from = head`。从 ledger（只读 `id <= from`）加上记忆和摘要，投影出基础上下文，裁到预算内，见[上下文投影](#上下文投影)；第一批输入在易变块里：叫醒它的触发，`Wake` 带着它涉及的消息（去抖时是同一个人的几条）；强制边界之后再加上一个核心没处理完的输入。其它消息都在尾巴里。第一批超过核心的上限（见[核心](#核心)的"轮数和 token 上限"）就不起核心，记 `Failed(InputTooLarge)`，在群里回一条简短的错误说明（2026-10-27 定）。否则写 `TurnStarted`（带 trigger 和 `from`），调 `Run::new(spec, base, first)`。
 4. **推进**：actor 每处理完一个事件，核心没有在途的 I/O，就问 `next_step`。中途不写 turn 记录：
    - `CallModel`：`seen = head`，spawn 模型调用任务。每个 `Said` 入账、交给 sender；`ModelDone` 时调 `model_output`。攒着的输入渲染成一个 `[新消息]` 块追加在请求末尾，见[后续输入](#后续输入)。
    - `RunTools`：这一批工具调用各 spawn 一个任务，在群 VM 里并发跑，每个 `ToolDone` 调一次 `tool_result`。
@@ -805,7 +804,7 @@ impl Conversation {
 
 2026-10-28 定，沿用 Haskell 版：
 
-- 核心接下一个触发（在第一批里，或者跑着时喂进来），就给触发消息加托腮；这个触发处理完（见[核心](#核心)的"处理完的定义"）就去掉。actor 每个事件之后对照核心的 `leftover()` 增减。
+- 核心接下一个触发（在第一批里，或者跑着时喂进来），就给触发消息加托腮；这个触发处理完（见[核心](#核心)的"处理完的定义"）就去掉。intent 开始 hold 一条直接触发时就先加上。actor 每个事件之后对照核心的 `leftover()` 和 intent 里 hold 着的增减。
 - turn 失败（provider 出错、`ContextExhausted`），还没处理完的触发都换成裂开，不发错误文字。`InputTooLarge` 例外，回一条简短的说明，因为换个说法重发就能解决。
 - `!kill`：去掉托腮，不换裂开，是有人主动停的。
 - 这些 reaction 是运行状态，和"正在输入"一样不进 ledger，由 actor 直接交给 sender。平台或会话不支持 reaction 的就不加。
@@ -877,7 +876,7 @@ async fn end(&mut self, how: End) -> Result<()> {
 - **最新一次 attempt 有快照**：挂起中。窗口内写 `TurnResumed`，调 `Run::resume`，交给会话 actor 接着驱动，`from` 取 `TurnStarted` 里的，快照的 `upto` 之后入账的消息照常喂进去；窗口外写 `Expired`。快照的核心版本和当前不同，也写 `Expired`，不做格式兼容。
 - **最新一次 attempt 之后没有快照**：崩溃时正在跑。写 `Lost`，不重跑。它已经发出去的消息还在 ledger 里，靠 turn id 能找到。
 - 恢复时重新校验触发者的权限。
-- 每个会话的 `seen` 从当时的 `head` 开始。
+- 每个会话的 `seen` 从当时的 `head` 开始，intent 的状态从空开始。
 
 expired、lost 的请求和丢掉的 job 要不要在群里说一声 **待定**。正常重启时，actor 可以在排空阶段通过 sender 发一条说明；崩溃时，可以在启动后根据 `Lost` 和 `Expired` 的 turn 补发。
 
@@ -889,10 +888,10 @@ expired、lost 的请求和丢掉的 job 要不要在群里说一声 **待定**�
 
 ### 核心和 actor 的测试
 
-- 核心用同步单元测试，按剧本喂输入、检查输出，不需要 tokio 和 fake provider。至少覆盖：输入的送达时机、只有闲聊不调模型、中断时补齐结果、恢复时补"结果未知"、格式不对的工具调用、轮数和 transcript 上限、强制边界时交出哪些输入、交接过一次的触发不再交接。
+- 核心和 intent 用同步单元测试，按剧本喂输入、检查输出，不需要 tokio 和 fake provider；intent 的时间由测试传入。intent 至少覆盖：直接触发立刻叫醒、去抖合并同一个人的几条、闸门、攒批、限流和被嫌烦。至少覆盖：输入的送达时机、只有闲聊不调模型、中断时补齐结果、恢复时补"结果未知"、格式不对的工具调用、轮数和 transcript 上限、强制边界时交出哪些输入、交接过一次的触发不再交接。
 - 每个核心测试结束时断言 `run == Run::replay(&run.snapshot())`，保证线上路径和重放路径一致。
 - 挂起和恢复：在每个阶段（等模型、工具批次跑到一半）做快照再 `resume`，断言结果补齐、能接着跑；恢复后的最终快照也要能从头重放。
-- 会话 actor 用 tokio 的 `start_paused` 加 fake provider、fake 工具和 fake sender，测取消、停止、宽限期、空闲窗口、强制边界、过期事件和 `seen` 对判定的过滤；在任意两个事件之间插 `!kill` 的遍历见 [cancellation safety](#cancellation-safety)。
+- 会话 actor 用 tokio 的 `start_paused` 加 fake provider、fake 工具和 fake sender，测取消、停止、宽限期、空闲窗口、强制边界、过期事件和 `seen` 对 `Wake` 的过滤；在任意两个事件之间插 `!kill` 的遍历见 [cancellation safety](#cancellation-safety)。
 - 协议适配层用录下来的 Responses 和 Chat 响应做 fixture，测推理条目和不透明字段原样往返。
 - 快照就是核心的输入序列，线上任何一次 turn 都能离线精确复现。
 
@@ -1115,20 +1114,56 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 - `!link`：设 `merged_into`，保留较小的 id，显示名由人定。命令消息本身就在 ledger 里，算审计记录。合并后，提及这个人的旧行渲染出来的 principal 会变，前缀失效一次，可以接受。
 - 跨平台的记忆和权限都跟着 `!link` 走，不单独做。
 
-## intent 分类
+## intent
 
-2026-10-27 定：v1 带。它判断没有 @ Max、没有回复 Max、也不是命令的消息，Max 要不要接话。行为沿用 Haskell 版（三类判定、闸门、限流，见 Haskell 版 `docs/features.md` 的 Proactive triggering），实现按[单一核心实例](#会话-actor)简化。
+2026-10-27 定进 v1，原来只判没有 @ Max 的消息。10-28 改：**所有入账都经过 intent**，@、回复这些也不绕过，由它决定什么时候叫醒核心。这样它看得到全部信息，规则和小模型判定在一处，去抖也自然放在这里。行为沿用 Haskell 版的部分（三类判定、闸门、限流）见 Haskell 版 `docs/features.md` 的 Proactive triggering。
 
-- **什么时候分类**：每条不是触发的消息都过一遍闸门，不管当前有没有核心、核心在做什么。闸门沿用 Haskell 版：文本里有"max"（不分大小写），或者 Max 3 分钟内在这个会话说过话，就分类；其它闲聊每个会话 15 分钟最多分类一次。手打的"@max"是纯文本，走的就是这条路（2026-10-20 定，不解析成提及）。
+intent 和[核心](#核心)一样是 `max-core` 里的纯状态机，是会话 actor 的一个字段：
+
+```rust
+// 同步、不碰 I/O、不读时钟，时间由 actor 传入
+impl Intent {
+    fn observe(&mut self, entry: &Entry, now: Instant) -> Vec<Decision>; // 每条入账都喂：别人的消息和事件、命令、Max 自己说的
+    fn verdict(&mut self, task: TaskId, upto: MessageId, v: Option<Verdict>, now: Instant) -> Vec<Decision>;
+    fn tick(&mut self, now: Instant) -> Vec<Decision>; // 去抖到期
+    fn deadline(&self) -> Option<Instant>;              // 并进 actor 的 deadline()
+}
+
+enum Decision {
+    Wake { ids: Vec<MessageId>, reason: Reason }, // 叫醒核心：有就喂一个 Input::Wake，没有就起一个
+    Classify { batch: Vec<MessageId> },           // actor 在 side 里 spawn 小模型
+}
+
+enum Reason { Direct /* @、回复、戳一戳、私聊白名单 */, Judged { kind: Kind, note: String } }
+```
+
+### 规则层
+
+- **直接触发**：@ Max、回复 Max、戳一戳，以及私聊里白名单上的人发的消息（见[运行流程](#运行流程)第 2 步）。不调小模型，不受上限和"被嫌烦"影响，默认立刻 `Wake`。
+- **去抖**（2026-10-28 定，来自 [DSH 调研](#调研dsh-和-qq-bridge)）：直接触发看起来没说完，比如以"但是、然后、我跟你讲、对了"这类词或"，、；："结尾，或者同一个人几秒内连发好几条，就先 hold，等这个人停下 8～12 秒再 `Wake`，最多等 20 秒左右。这期间他的后续消息并进同一个 `Wake`，一起作为核心的第一批；否则触发在易变块里、它的后半句却在尾巴里，顺序反了。托腮从 hold 开始就挂上。判断是纯函数，数值在 v1 里调。
+- **命令**不是触发，由 actor 执行；intent 只是看得到它，`!proactive off` 这类是负信号。
+- **Max 自己说的**也喂进来，用来算接住率。
+
+### 模型层
+
+- **什么时候分类**：不是直接触发、也不是命令的消息过闸门。闸门沿用 Haskell 版：文本里有"max"（不分大小写），或者 Max 3 分钟内在这个会话说过话，就分类；其它闲聊每个会话 15 分钟最多分类一次。手打的"@max"是纯文本，走的就是这条路（2026-10-20 定，不解析成提及）。热窗里的直接触发也进分类批次，只取 `dismiss`，触发本身不等它。
 - **攒批**：每个会话同时最多一个分类在途；在途时来的消息攒着，等它回来再一起分，取最新的 30 条。不用 Haskell 版 2 秒的去抖计时器。
-- **输入和输出**：人设的前 500 字、最近 `context_lines` 条消息（和尾巴同一种行格式）、待判的消息。输出一行 JSON：`trigger`、`kind`（called、followup、topic）、`reason`。拼提示词和解析输出都是 `max-core` 里的纯函数。
-- **判定的去处**（2026-10-28 改）：判定带着它判的最新一条消息的 id（`upto`）回到会话 actor 的信箱。`upto` 不超过 `seen` 的作废：这些消息已经在某次模型请求里，模型自己决定过了；`!kill` 之前判的也都这样作废。其余的判定要接话，就作为一个输入（`Input::Intent`，带它判的消息 id）进同一个入口：没有核心就起一个，trigger 记成这个判定；有核心就喂给它。所以核心空闲、闲聊还没进过请求时，判定会叫醒核心；核心因为空闲窗口结束了，判定会起一个新核心。判定在 `[新消息]` 块里是一行，如 `[判定 followup：在追问你刚才的回答]`。`seen` 见[时间线](#时间线)。
-- **限流**：沿用 Haskell 版。每个会话每小时最多 8 次，所有类别都算，按发出的判定计数；topic 类另有 300 秒冷却；每个会话用 `!proactive` 开关。计数在 actor 的内存里，重启清零。
+- **输入和输出**：人设的前 500 字、最近 `context_lines` 条消息（和尾巴同一种行格式）、一行"本群情况"、待判的消息。输出一行 JSON：`trigger`、`kind`（called、followup、topic）、`reason`、`dismiss`。分类任务自己读库拼输入；拼提示词和解析输出都是 `max-core` 里的纯函数。
+- **本群情况**（2026-10-28 定，参考 DSH 的参与度和反馈）：
+  - 参与度：Max 近 1 小时说了几次、群友多少条、近 5 分钟几条几个人。分类任务拼输入时从 ledger 现算，不存状态。
+  - 接住率：判定叫醒的那次运行发过话之后几分钟内，有没有人回复、引用或 @ Max。intent 记最近几次。
+  - 被嫌烦：分类输出 `dismiss` 表示有人在叫 Max 收敛。之后一段时间（提议 24 小时）不做 topic 类，每小时上限减半；直接触发不受影响；`!proactive on` 清掉，`!status` 看得到。
+- **`Wake` 的去处**：判定带着它判的最新一条消息的 id（`upto`）回到信箱，actor 交给 `intent.verdict`，要接话的变成 `Wake { reason: Judged }`。所有 `Wake`，包括去抖到期的直接触发，都过同一条规则：涉及的消息都不超过 `seen` 就作废。这些消息已经在某次模型请求里，模型自己决定过了；`!kill` 之前的也都这样作废。其余的作为一个输入（`Input::Wake`）进核心：没有核心就起一个，trigger 记成这个 `Wake`；有核心就喂给它。所以核心空闲、闲聊还没进过请求时，判定会叫醒核心；核心因为空闲窗口结束了，判定会起一个新核心。判定在 `[新消息]` 块里是一行，如 `[判定 followup：在追问你刚才的回答]`；直接触发不加行，消息行上本来就标着"@你""回复你的 #123"。`seen` 见[时间线](#时间线)。
+- **限流**：沿用 Haskell 版，只管判定，直接触发不算。每个会话每小时最多 8 次，所有类别都算，按发出的判定计数；topic 类另有 300 秒冷却；每个会话用 `!proactive` 开关。
 - **失败**：不重试，记日志后丢掉。intent 只是建议，消息都在 ledger 里；瞬时错误由 provider 自己的重试兜住，不再叠一层。Haskell 版在 provider 重试之外又重试最多 3 次。
 - **模型**：`[llm] intent` 选一个小模型。判定之后起的 turn 用会话自己的模型，和 @ 触发的一样，不按触发类型换模型或推理强度。
 - 每次分类记一条 `llm_usage`，用途是 intent。
 
-配置是 `[intent]` 一节：`max_per_hour`（默认 8）、`topic_cooldown_secs`（默认 300）、`context_lines`（默认 15），默认值和 Haskell 版相同。
+### 状态只在内存里
+
+2026-10-28 定：hold 着的触发、攒着的消息、计数、接住率、被嫌烦都在 actor 的内存里，重启清零，不建表。代价是关机或崩溃时还在 hold 的直接触发会丢，没人回；接受。
+
+配置是 `[intent]` 一节：`max_per_hour`（默认 8）、`topic_cooldown_secs`（默认 300）、`context_lines`（默认 15），默认值和 Haskell 版相同；去抖的几个数值也放在这一节。
 
 ## Matrix 加密房间
 
@@ -1377,7 +1412,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 
 ## 调研：DSH 和 qq-bridge
 
-2026-10-28 记。只是记录，不是待办。
+2026-10-28 记。只是记录，不是待办；后来采纳和否决的在条目里注明。
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）是 DeepSeek 2026 年 8 月开源的 agent harness。QQ 上流行的是社区插件 [qq-bridge](https://github.com/Derpyu520/qq-bridge)：走 OneBot v11，每个群一个只追加的 DSH 会话，主打"AI 仿真群友"。腾讯官方的 [dsh-qqbot](https://github.com/tencent-connect/dsh-qqbot) 被 @ 才回，群聊上没有设计。
 
@@ -1385,21 +1420,39 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 
 可能有用的做法，按在 Max 里的位置记：
 
-- **"没说完"去抖**（`src/v2-wait.js`）：触发消息以"但是、然后、我跟你讲、对了"这类词或"，、；："结尾，或者同一个人 15 秒内连发 3 条以上，先等 8～12 秒没人说话再回。在 Max 里是 actor 推迟核心的第一次 `CallModel`，复用 `Timer`；期间的消息照常喂进去，托腮挂着。
-- **时间感**（`src/bridge.js` 的 `buildTimeSenseLine`）：一行"现在几点、最新一条是多久前发的"，加三档规则：10 分钟内正常接；2 小时内别用"刚"这类实时口气；更久默认不回，要回先说"才看到"。起因是模型睡了几十分钟被叫醒，还把旧消息当成刚发的。在 Max 里放易变块；不能像它那样给尾巴每行加"多久前"，会破坏[前缀稳定](#前缀稳定的规则)。
-- **参与度**（`src/bridge.js` 的 `formatParticipationV2`）：确定性算出"你近 1 小时发言 N 次，群友 M 条，近 5 分钟 K 条、P 人"，附一句"这轮少说"或"别一个人撑场"。在 Max 里从 ledger 算，放易变块，也可以喂给 intent 判定器。
+- **"没说完"去抖**（`src/v2-wait.js`）：触发消息以"但是、然后、我跟你讲、对了"这类词或"，、；："结尾，或者同一个人 15 秒内连发 3 条以上，先等 8～12 秒没人说话再回。**已采纳**（2026-10-28），在 [intent](#intent) 的规则层。
+- **时间感**（`src/bridge.js` 的 `buildTimeSenseLine`）：一行"现在几点、最新一条是多久前发的"，加三档规则：10 分钟内正常接；2 小时内别用"刚"这类实时口气；更久默认不回，要回先说"才看到"。起因是模型睡了几十分钟被叫醒，还把旧消息当成刚发的。**否决**（2026-10-28）：qq-bridge 的问题出在模型自己管睡眠；Max 入账就处理，每条消息又都带着时间，模型自己会判断。
+- **参与度**（`src/bridge.js` 的 `formatParticipationV2`）：确定性算出"你近 1 小时发言 N 次，群友 M 条，近 5 分钟 K 条、P 人"，附一句"这轮少说"或"别一个人撑场"。**已采纳**（2026-10-28），是 intent 分类输入里"本群情况"的一部分，不进主模型的上下文。
 - **人设文案**（`dsh/agent-presets/qq-chat-v2/agent.cordis.yml`、`roles/小鲸鱼.md`）：一份"AI 味黑名单"（"首先、其次"、"希望对你有帮助"、"你们觉得呢"、每句都加"～"）配正反例；不当主持人（不总结话题、不劝架、不挨个回应）；潜水回来别假装一直在场；同一个人反复说同一件事，之后只接情绪；刚说完别马上补一条。和 Rust 无关，可以先在 Haskell 版的提示词上试。
-- **主动插话的反馈**：intent 触发的发言之后几分钟内，有没有人回复、引用或 @ Max，按群算成功率，用来调冷却，或者喂给判定器。可以做成一个派生 worker。
+- **主动插话的反馈**：intent 触发的发言之后几分钟内，有没有人回复、引用或 @ Max，按群算成功率，用来调冷却，或者喂给判定器。**已采纳**（2026-10-28），就是 intent 的接住率，只在内存里。
 - **记忆标来源**（[dsh-qq-bot-playbook](https://github.com/rentaoyan0628-collab/dsh-qq-bot-playbook) 第 07 篇）：分"对方说的"和"模型判断的"。还要在人设里写清什么时候该记：他们跑了两天，存了 1477 条原文，经历只记下 2 条。
 - **出站拦 secret**：发出去的内容含凭据、token 就拦。在 Max 里是 actor 入账 `Said` 前按已知的 secret 值过滤，VM 里的程序拿得到 MCP token。
 
 不借的：装傻和已读乱回、好感度数值、`reply_gate` 工具（`[silence]` 已经等价）、一代按空格分句。
 
+## 调研：判断模型
+
+2026-10-28 记。只是记录，不是待办。
+
+[Jev](https://docs.typesafe.ai/models)（TypeSafe AI，2026-09）是不自回归的判断模型：是非、选择、打分三种题，直接给概率；每百万输入 token $0.042，输出免费；只有美国的托管 API，闭源；官方说英文最好，中日韩能用但弱一些。
+
+暂不用它替代 intent 的小模型：
+
+- 省的钱不在瓶颈上。现在的小模型跑在自己的机器上，没有按次的费用；花钱的是误触发，每次白跑一个前沿模型的 turn。Haskell 版 7 月两天的日志：约 7,500 条没点名的消息，分类 2,051 次，触发 77 次。
+- 中文多人群聊上没有任何公开证据；英文测试里加了注入后判决翻转 22%，被测的评审模型里最高（[Braintrust](https://www.braintrust.dev/evals/jev-vs-gpt-eval-judges)）。
+- 每条闲聊都要发给一家美国公司；版本 30～60 天弃用，每次升级都要重评、重定阈值。
+
+可能有用的：
+
+- 小模型改读标签的 logprob（llama.cpp 的 `n_probs`），直接拿概率、设阈值，比生成 JSON 快得多；代价是没有 `reason`，判定那一行少了说明。
+- 评测集从 ledger 里建：真正 @ 或回复 Max 的消息去掉 @ 和引用，是"没打 @ 的点名"正例；判定触发后主模型回 `[silence]` 是弱负例，之后有人 `!proactive off` 或叫它闭嘴是强负例；再人工抽几百条难例。评测集是真实群聊，不进公开仓库。有了评测集，可以花几美分离线测一次 Jev。
+- 标签里最值的是"在不在跟 Max 说话"、"是不是在等 Max 回应"、"是不是嫌 Max 烦"；最后一个已经是 intent 的 `dismiss`。话题切换、值不值得记、情感、垃圾和注入检测不值得逐条判。
+
 ## 待讨论
 
 1. ~~代码放在哪~~：已定（2026-10-27），放在这个仓库的 `rust` 分支，见文首。
 2. ~~初始 crate 划分~~：已定（2026-10-27），见 [crate 划分](#crate-划分)。
-3. ~~v1 带不带工具~~：已定（2026-10-27），带，见[工具和 codemode](#工具和-codemode)。intent 分类也进 v1，见 [intent 分类](#intent-分类)。
+3. ~~v1 带不带工具~~：已定（2026-10-27），带，见[工具和 codemode](#工具和-codemode)。intent 分类也进 v1，见 [intent](#intent)。
 4. ~~新 schema 的设计，以及从旧库导入的映射~~：已定（2026-10-27），见 [schema](#schema)。
 5. ~~NixOS module 的接口要不要保持不变~~：已定（2026-10-27），不保持，见[配置](#配置)。
 6. ~~Matrix 加密房间要不要支持~~：已定（2026-10-27），支持，见 [Matrix 加密房间](#matrix-加密房间)。
