@@ -15,7 +15,7 @@ use max_core::message::{Draft, DraftNode, Message};
 use max_core::prompt;
 use max_core::render::Mark;
 use max_core::run::{FailReason, Input, Run, RunSpec, Step, Wake};
-use max_db::platform::{self, Settings};
+use max_db::platform::{self, ConversationKind, Settings};
 use max_db::{PgPool, ledger, turns, usage};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::{Instant, sleep_until};
@@ -25,6 +25,7 @@ use super::ingest;
 use super::project::{self, Projection};
 use super::{Event, Place, TaskId, classify, model};
 use crate::bind::Binds;
+use crate::historian::Notice;
 use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
 use crate::scope::Scope;
@@ -41,6 +42,8 @@ pub struct Shared {
     /// Max's owners, who may run every command.
     pub owners: BTreeSet<PrincipalId>,
     pub binds: Arc<Binds>,
+    /// None when no historian's model is configured.
+    pub historian: Option<UnboundedSender<Notice>>,
 }
 
 /// Something Max said, committed, for the platform's sender.
@@ -59,7 +62,7 @@ pub struct Conversation {
     seen: MessageId,
     core: Option<Active>,
     intent: Intent,
-    /// The classifier.
+    /// The classifier, and waiting on the historian for `!compact`.
     side: Scope,
     stopping: Option<Instant>,
     next_task: u64,
@@ -203,10 +206,22 @@ impl Conversation {
                 let decisions = self.intent.verdict(verdict, std::time::Instant::now());
                 self.decide(decisions).await
             }
+            Event::Compacted { command, result } => self.compacted(command, result).await,
             Event::Stop => {
                 self.stop();
                 Ok(())
             }
+        }
+    }
+
+    /// A row is committed: it is the head, and in a group the historian
+    /// hears of it.
+    fn committed(&mut self, id: MessageId) {
+        self.head = id;
+        if self.place.kind == ConversationKind::Group
+            && let Some(historian) = &self.shared.historian
+        {
+            let _ = historian.send(Notice::Said(Arc::clone(&self.place)));
         }
     }
 
@@ -241,7 +256,7 @@ impl Conversation {
         )
         .await?;
         drop(conn);
-        self.head = committed.message.id;
+        self.committed(committed.message.id);
         let kind = if committed.command {
             EntryKind::Command
         } else if committed.direct.is_some() {
@@ -559,7 +574,7 @@ impl Conversation {
         )
         .await?;
         drop(conn);
-        self.head = message.id;
+        self.committed(message.id);
         let outgoing = Outgoing {
             place: Arc::clone(&self.place),
             message: message.clone(),

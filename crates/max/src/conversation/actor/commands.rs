@@ -6,11 +6,13 @@ use std::fmt::Write;
 
 use max_core::message::{Platform, Role};
 use max_db::platform::ConversationKind;
+use tokio::sync::oneshot;
 
 use super::*;
 use crate::bind::Pending;
 use crate::command::{self, Command, HELP, Persona};
 use crate::conversation::ingest::Committed;
+use crate::historian::{Captured, Compacted};
 
 /// Who may run what. Commands that cost money or change how Max behaves
 /// everywhere are the owners'; those that change one conversation are
@@ -42,7 +44,9 @@ impl Conversation {
             Command::Model(None) | Command::Effort(None) | Command::Proactive(None) => Rank::Anyone,
             Command::Persona(Persona::Show) | Command::Clear { all: false } => Rank::Anyone,
             Command::Model(Some(argument)) if argument == "list" => Rank::Anyone,
-            Command::Kill | Command::Persona(_) | Command::Clear { .. } => Rank::Admin,
+            Command::Kill | Command::Persona(_) | Command::Clear { .. } | Command::Compact => {
+                Rank::Admin
+            }
             Command::Model(_) | Command::Effort(_) | Command::Proactive(_) | Command::Bind(_) => {
                 Rank::Owner
             }
@@ -54,7 +58,7 @@ impl Conversation {
                 "群主、管理员"
             };
             return self
-                .answer(committed, format!("这个命令只有{who}能用。"))
+                .answer(committed.message.id, format!("这个命令只有{who}能用。"))
                 .await;
         }
         let answer = match command {
@@ -79,18 +83,56 @@ impl Conversation {
                 self.save_settings().await?;
                 "好，之前的聊天不再进上下文。".to_owned()
             }
+            Command::Compact => match self.compact(committed.message.id) {
+                Some(answer) => answer,
+                None => return Ok(()),
+            },
             Command::Bind(argument) => self.bind(committed, argument.as_deref()).await?,
         };
-        self.answer(committed, answer).await
+        self.answer(committed.message.id, answer).await
     }
 
-    async fn answer(&mut self, to: &Committed, text: String) -> Result<()> {
+    /// Answers the command `to`, quoting it.
+    async fn answer(&mut self, to: MessageId, text: String) -> Result<()> {
         let draft = Draft {
-            reply_to: Some(to.message.id),
+            reply_to: Some(to),
             nodes: vec![DraftNode::Text { text }],
         };
         self.say(draft, None, None).await?;
         Ok(())
+    }
+
+    /// Hands `!compact` to the historian, which answers when it is done;
+    /// or the answer now, when it can't.
+    fn compact(&mut self, command: MessageId) -> Option<String> {
+        if self.place.kind == ConversationKind::Direct {
+            return Some("私聊不写摘要。".to_owned());
+        }
+        let Some(historian) = &self.shared.historian else {
+            return Some("没有配写摘要的模型。".to_owned());
+        };
+        let (reply, answer) = oneshot::channel();
+        let notice = Notice::Compact(Arc::clone(&self.place), reply);
+        if historian.send(notice).is_err() {
+            return Some("写摘要的服务停了。".to_owned());
+        }
+        let mailbox = self.mailbox.clone();
+        self.side.spawn(move |_| async move {
+            let result = answer
+                .await
+                .unwrap_or_else(|_| Err("the historian stopped".to_owned()));
+            let _ = mailbox.send(Event::Compacted { command, result });
+        });
+        None
+    }
+
+    pub(super) async fn compacted(&mut self, command: MessageId, result: Compacted) -> Result<()> {
+        let text = match result {
+            Ok(Captured::Published(count)) => format!("好，整理成了 {count} 段摘要。"),
+            Ok(Captured::Nothing) => "没有要整理的。".to_owned(),
+            Err(_) => "这次没整理成，等会儿再试试。".to_owned(),
+        };
+        self.answer(command, text).await
     }
 
     async fn save_settings(&mut self) -> Result<()> {
@@ -227,7 +269,7 @@ impl Conversation {
         } else {
             "绑好了，这个群从这里开始记。"
         };
-        self.answer(committed, text.to_owned()).await
+        self.answer(committed.message.id, text.to_owned()).await
     }
 
     /// In a private chat, a code to bind a QQ group with; in a group, the

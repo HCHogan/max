@@ -41,7 +41,7 @@ impl Setup {
             account,
             name: "maxx".into(),
         };
-        let table = Table::new(shared, HashMap::from([(Platform::Qq, me)]));
+        let table = Table::new(Arc::new(shared), HashMap::from([(Platform::Qq, me)]));
         let (inbound, rx) = mpsc::unbounded_channel();
         let (done_tx, done) = oneshot::channel();
         let mut scope = Scope::new();

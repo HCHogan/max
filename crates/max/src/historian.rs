@@ -31,6 +31,9 @@ use crate::conversation::project::{
 use crate::llm::{Chosen, Models};
 use crate::tokens;
 
+mod service;
+pub use service::{Compacted, Notice, run};
+
 /// The most one capture reads, in tokens of rendered rows. A longer
 /// stretch takes several captures.
 const BATCH: u64 = 24_000;

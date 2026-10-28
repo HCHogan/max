@@ -26,13 +26,14 @@ pub fn at(minute: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 29, 4, minute, 0).unwrap()
 }
 
-/// What actors share: a scripted model, and a sender that only queues.
+/// What actors share: a scripted model, a sender that only queues, and no
+/// historian.
 pub fn shared(
     pool: &PgPool,
     script: &Arc<Script>,
     idle_window_secs: u64,
     owners: BTreeSet<PrincipalId>,
-) -> (Arc<Shared>, UnboundedReceiver<Outgoing>) {
+) -> (Shared, UnboundedReceiver<Outgoing>) {
     let mut llm = config();
     for provider in llm.providers.values_mut() {
         provider.idle_window_secs = idle_window_secs;
@@ -49,8 +50,9 @@ pub fn shared(
         stop_grace: Duration::from_millis(200),
         owners,
         binds: Arc::default(),
+        historian: None,
     };
-    (Arc::new(shared), rx)
+    (shared, rx)
 }
 
 /// A QQ group with Max in it.

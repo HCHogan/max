@@ -11,7 +11,7 @@ pub(crate) mod testing;
 
 use std::fmt;
 
-use max_core::ids::{CallId, ConversationId, EndpointId};
+use max_core::ids::{CallId, ConversationId, EndpointId, MessageId};
 use max_core::intent::Verdict;
 use max_core::item::{ModelOutput, ToolOutput};
 use max_core::message::Platform;
@@ -20,6 +20,7 @@ use max_db::platform::{Account, ConversationKind};
 
 pub use actor::{Conversation, Outgoing, Shared};
 
+use crate::historian::Compacted;
 use crate::inbound::Inbound;
 
 /// What arrives in an actor's mailbox: everything that happens to a
@@ -47,6 +48,11 @@ pub enum Event {
     },
     /// The classifier's answer; None if it failed.
     Verdict(Option<Verdict>),
+    /// How the historian's `!compact` went, to answer the command.
+    Compacted {
+        command: MessageId,
+        result: Compacted,
+    },
     /// Max restarts: end the core, within a grace, then stop.
     Stop,
 }

@@ -18,6 +18,8 @@ pub enum Command {
     Clear {
         all: bool,
     },
+    /// `!compact`: summarize what was said, up to now.
+    Compact,
     /// `!bind`, `!bind <legacy group>` in a private chat, `!bind <code>` in
     /// a group.
     Bind(Option<String>),
@@ -59,6 +61,7 @@ pub fn parse(text: &str) -> Option<Command> {
         "clear" => Command::Clear {
             all: argument.as_deref() == Some("--all"),
         },
+        "compact" => Command::Compact,
         "bind" => Command::Bind(argument),
         _ => return None,
     })
@@ -73,6 +76,7 @@ pub const HELP: &str = "命令：
 !proactive  看主动接话；on、off（主人）
 !persona  看人设；!persona <文字> 设，!persona clear 回到默认（群主、管理员）
 !clear --all  之前的聊天不再进上下文（群主、管理员）
+!compact  把到现在的聊天整理成摘要（群主、管理员）
 !bind  私聊里拿绑定码，在新群里发 !bind <码> 绑定（主人）";
 
 #[cfg(test)]
@@ -105,6 +109,7 @@ mod tests {
         );
         assert_eq!(parse("!clear"), Some(Command::Clear { all: false }));
         assert_eq!(parse("!clear --all"), Some(Command::Clear { all: true }));
+        assert_eq!(parse("!compact"), Some(Command::Compact));
         assert_eq!(
             parse("!bind 123456"),
             Some(Command::Bind(Some("123456".into())))

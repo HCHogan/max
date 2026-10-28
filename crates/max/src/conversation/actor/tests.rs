@@ -11,6 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::*;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, shared, text};
+use crate::historian::Captured;
 use crate::inbound::InNode;
 use crate::llm::testing::{Answer, Script};
 
@@ -21,6 +22,8 @@ struct Harness {
     script: Arc<Script>,
     mailbox: UnboundedSender<Event>,
     outbound: UnboundedReceiver<Outgoing>,
+    /// What the historian hears.
+    notices: UnboundedReceiver<Notice>,
     done: Option<oneshot::Receiver<()>>,
     _scope: Scope,
 }
@@ -43,9 +46,11 @@ impl Harness {
             owners.insert(xiaoming.principal);
         }
         let script = Arc::new(Script::default());
-        let (shared, outbound) = shared(&pool, &script, idle_window_secs, owners);
+        let (mut shared, outbound) = shared(&pool, &script, idle_window_secs, owners);
+        let (historian, notices) = mpsc::unbounded_channel();
+        shared.historian = Some(historian);
         let (mailbox, rx) = mpsc::unbounded_channel();
-        let actor = Conversation::new(shared, place, mailbox.clone())
+        let actor = Conversation::new(Arc::new(shared), place, mailbox.clone())
             .await
             .unwrap();
         let (done_tx, done) = oneshot::channel();
@@ -59,6 +64,7 @@ impl Harness {
             script,
             mailbox,
             outbound,
+            notices,
             done: Some(done),
             _scope: scope,
         }
@@ -313,6 +319,35 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
         .count("select cleared_upto from conversation_settings")
         .await;
     assert!(cleared > 0);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn compact_is_answered_when_the_historian_is_done(pool: PgPool) {
+    let mut h = Harness::new(pool, 300).await;
+    h.send(from_xiaoming(0, vec![text("!compact")]));
+    assert_eq!(h.said().await.1, "这个命令只有群主、管理员能用。");
+    h.send(from_xiaohong(1, vec![text("!compact")]));
+    let mut said = 0;
+    let reply = loop {
+        let notice = tokio::time::timeout(PATIENCE, h.notices.recv())
+            .await
+            .expect("the historian heard nothing")
+            .unwrap();
+        match notice {
+            Notice::Said(_) => said += 1,
+            Notice::Compact(_, reply) => break reply,
+        }
+    };
+    // 小明's command, Max's answer, 小红's command.
+    assert_eq!(said, 3);
+    reply.send(Ok(Captured::Published(2))).unwrap();
+    let (answer, text) = h.said().await;
+    assert_eq!(text, "好，整理成了 2 段摘要。");
+    let Content::Message { reply_to, .. } = answer.content else {
+        unreachable!()
+    };
+    assert_eq!(reply_to, Some(MessageId(answer.id.0 - 1)));
+    h.stop().await;
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
