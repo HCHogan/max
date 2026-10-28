@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select outcome, failure, error from turn_outcomes where turn_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "outcome",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "turn_outcomes",
+            "name": "outcome"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "failure",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "turn_outcomes",
+            "name": "failure"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "turn_outcomes",
+            "name": "error"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "7ec608a439026bce21f10f34ffadbf8b662a417fcaee5c2d8694db155794ba86"
+}
