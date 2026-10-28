@@ -46,6 +46,9 @@ tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # Logging from library crates; max sets up the subscriber.
 tracing = "0.1"
+# The subscriber: max's logs, and qqbot's listen example, which shows
+# sessions starting and reconnecting.
+tracing-subscriber = "0.3"
 
 # Tests only.
 insta = "1.49"
