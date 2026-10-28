@@ -236,7 +236,7 @@ v1 只定义它用得到的几节：database、qq、matrix、llm、intent。其�
 
 关闭顺序：
 
-1. 停接入，不再产生新消息。
+1. 停接入，不再产生新消息。QQ 的网关连接这时存下 session id 和序号，见 [QQ 官方机器人](#qq-官方机器人)的"跨重启 Resume"。
 2. 每个会话 actor 收到停止：核心空闲就结束；否则在下一个边界挂起，宽限期到了还没到边界就关掉 `io` 再挂起（见[重启恢复](#重启恢复)）。然后关掉 `side` 和 `jobs`，actor 退出。内层的宽限期要比外层短。
 3. 排空：平台 sender 发完已入账的消息、记完回执，有截止时间。
 4. root scope 结束。运行时用 `shutdown_timeout` 关，不直接 drop，因为 drop 会一直等 `spawn_blocking` 的线程。最外层由 systemd 的 `TimeoutStopSec` 兜底，到期杀掉整个服务的 cgroup。
@@ -372,6 +372,9 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 | 网络客户端 | 配置里一次：LLM 的 `stream_idle_timeout_secs`（响应头和之后的每一段都要在这个时间内到，整个调用不设上限）、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`max-llm` 里写死的连接超时，`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避 | 防卡死 |
 | 先等再升级 | 按需 | 策略，比如 `close` 先给命令时间自己退出 |
 | 常驻服务里的等待表 | 每张表一次 | 防泄漏，比如 sender 里等回执的表。常驻服务外面没有取消替它兜底 |
+| 模型调用的重试退避 | 模型调用任务里一次：1、2、4、8 秒，只在还没说出任何话的时候重试，次数是 provider 的 `retries` | 策略 |
+| sender 等额度 | QQ sender 里一次：主动消息超了每分钟的额度就等到最早那条满一分钟 | 策略：等，不丢 |
+| 关机的各级宽限期 | `main` 里一处：接入 5 秒（存网关会话）、会话停止 20 秒（等模型调用，到期挂起）、会话表 25 秒、sender 排空 15 秒、运行时 10 秒，合起来在 systemd 的 60 秒以内 | 防卡死 |
 
 审查规则：`timeout(` 和 `sleep(` 只出现在上表这些地方。
 
@@ -508,7 +511,7 @@ v1 的 ledger 已经存了原始 payload 和文本兜底；投递回执（`deliv
 - **发不出去**：`deliveries` 记一行错误，投影时这条消息后面标"（没发出去）"，下一个核心的模型看得到。不回报给正在跑的核心：一个 turn 里接连发不出去，通常是平台断了，模型知道了也做不了什么。
 - **崩溃**：入账了但没有回执的消息，sender 启动时先补记成"结果未知"，投影时标"（可能没发出去）"。不重发，免得发两遍。
 - **echo**：平台把 Max 自己发的东西再推回来的，适配器直接丢掉。Matrix 发送时用 `max-<消息 id>` 做 transaction id，sync 回来带这个 id 的就是自己发的；QQ 的网关不推机器人自己发的消息。Max 自己的动作，平台通知如果还会推回来，actor 入账前看时间线上是不是已经有这次动作，有就不记。不是这个进程发的（比如有人拿 Max 的账号手动发），照常入账，发送者是 Max。
-- **经 `Post` 发**：不是模型文本输出的发送，都给目标会话的 actor 发 `Post`，由它入账：群里命令的文字输出发到发令人的私聊、程序里调工具发消息或撤回禁言（本群或别的群）、以后的自动化。要知道发没发成的（比如工具），`Post` 带一个回信通道，actor 把它交给 sender，sender 记完 `deliveries` 后回信；actor 自己不等。
+- **经 `Post` 发**：不是模型文本输出的发送，都给目标会话的 actor 发 `Post`，由它入账：程序里调工具发消息或撤回禁言（本群或别的群）、以后的自动化。命令的文字输出不经 `Post`：actor 自己入账，就在命令所在的会话里，引用那条命令（2026-10-29 改，原来提议发到发令人的私聊）。QQ 没法从群成员的 `member_openid` 找到这个人私聊的 `user_openid`，私聊也只有体验用户进得来。要知道发没发成的（比如工具），`Post` 带一个回信通道，actor 把它交给 sender，sender 记完 `deliveries` 后回信；actor 自己不等。
   - `Post` 带来源 turn `origin: Option<TurnId>`（2026-10-28 定）。MCP 服务从会话里取，命令输出和调度器的为空。actor 入账时把它记成这条消息的 `turn_id`。`origin` 是自己当前核心的 turn 就不喂给核心：`run_code` 结果里内部调用的摘要已经有了，再喂一次模型会看到两遍。别的 turn 发来的，比如群 A 的 turn 往群 B 说一句，照常喂给 B 的核心。
 
 ### turn 记录
@@ -813,7 +816,7 @@ impl Conversation {
 2. **判定**（2026-10-28 改）：每条入账都交给 [intent](#intent)，由它决定什么时候叫醒核心：@、回复 Max 立刻叫醒，看起来没说完的先等几秒；其它消息过闸门，由小模型判。job 结果和自动化不经过 intent，本身就是触发。触发源见[三种角色](#三种角色)。命令由 actor 自己处理，见[会话 actor](#会话-actor)。
    - 有核心在跑：消息照样立刻喂给它，但只有触发才让它调模型。
    - 没有核心：来了触发就进第 3 步；否则什么都不做。
-   - 私聊（2026-10-28 定）：只有白名单上的人，私聊里的消息才算触发，等同群里的 @。不在名单上的人私聊 Max，消息照样入账、命令照样执行，但 intent 不把它当直接触发，也不分类。Max 可以主动给任何人发私聊，比如群里命令的文字输出。Matrix 的白名单是 `private_file`，一行一个；房间白名单 `rooms_file`（第 1 步）也一样，为空就是谁都不服务，和 Haskell 版"为空就全服务"相反。QQ 不用这两个名单：私聊只有管理端里加的体验用户进得来，群要 `!bind`，见 [QQ 官方机器人](#qq-官方机器人)。
+   - 私聊（2026-10-28 定）：只有白名单上的人，私聊里的消息才算触发，等同群里的 @。不在名单上的人私聊 Max，消息照样入账、命令照样执行，但 intent 不把它当直接触发，也不分类。Max 可以主动给任何人发私聊（QQ 上只有体验用户）。Matrix 的白名单是 `private_file`，一行一个；房间白名单 `rooms_file`（第 1 步）也一样，为空就是谁都不服务，和 Haskell 版"为空就全服务"相反。QQ 不用这两个名单：私聊只有管理端里加的体验用户进得来，群要 `!bind`，见 [QQ 官方机器人](#qq-官方机器人)。
 3. **开始 turn**：快照位置 `from = head`。从 ledger（只读 `id <= from`）加上记忆和摘要，投影出基础上下文，裁到预算内，见[上下文投影](#上下文投影)；第一批输入在易变块里：叫醒它的触发，`Wake` 带着它涉及的消息（去抖时是同一个人的几条）；强制边界之后再加上一个核心没处理完的输入。其它消息都在尾巴里。第一批超过核心的上限（见[核心](#核心)的"轮数和 token 上限"）就不起核心，记 `Failed(InputTooLarge)`，在群里回一条简短的错误说明（2026-10-27 定）。否则写 `TurnStarted`（带 trigger 和 `from`），调 `Run::new(spec, base, first)`。
 4. **推进**：actor 每处理完一个事件，核心没有在途的 I/O，就问 `next_step`。中途不写 turn 记录：
    - `CallModel`：`seen = head`，spawn 模型调用任务。每个 `Said` 入账、交给 sender；`ModelDone` 时调 `model_output`。攒着的输入渲染成一个 `[新消息]` 块追加在请求末尾，见[后续输入](#后续输入)。
@@ -915,7 +918,7 @@ expired、lost 的请求和丢掉的 job 要不要在群里说一声 **待定**�
 - 核心和 intent 用同步单元测试，按剧本喂输入、检查输出，不需要 tokio 和 fake provider；intent 的时间由测试传入。intent 至少覆盖：直接触发立刻叫醒、去抖合并同一个人的几条、闸门、攒批、限流和被嫌烦。至少覆盖：输入的送达时机、只有闲聊不调模型、中断时补齐结果、恢复时补"结果未知"、格式不对的工具调用、轮数和 transcript 上限、强制边界时交出哪些输入、交接过一次的触发不再交接。
 - 每个核心测试结束时断言 `run == Run::replay(&run.snapshot())`，保证线上路径和重放路径一致。
 - 挂起和恢复：在每个阶段（等模型、工具批次跑到一半）做快照再 `resume`，断言结果补齐、能接着跑；恢复后的最终快照也要能从头重放。
-- 会话 actor 用 tokio 的 `start_paused` 加 fake provider、fake 工具和 fake sender，测取消、停止、宽限期、空闲窗口、强制边界、过期事件和 `seen` 对 `Wake` 的过滤；在任意两个事件之间插 `!kill` 的遍历见 [cancellation safety](#cancellation-safety)。
+- 会话 actor 用真的数据库（`#[sqlx::test]`）、剧本模型和只记录的 sender，测取消、停止、宽限期、空闲窗口、强制边界、过期事件和 `seen` 对 `Wake` 的过滤；在任意两个事件之间插 `!kill` 的遍历见 [cancellation safety](#cancellation-safety)。2026-10-29 改：actor 测试用真实时间，不用 `start_paused`。actor 在等 Postgres 的时候，暂停的时钟会自动跳到下一个到期时间，空闲窗口和去抖就提前到了。所以测试里的等待都很短，而且有上限；纯时间的逻辑（intent、sender 的额度）照样用 `start_paused`。
 - 协议适配层用录下来的 Responses 和 Chat 响应做 fixture，测推理条目和不透明字段原样往返。
 - 快照就是核心的输入序列，线上任何一次 turn 都能离线精确复现。
 
@@ -935,7 +938,7 @@ expired、lost 的请求和丢掉的 job 要不要在群里说一声 **待定**�
 - ~~基础上下文怎么存~~：已定（2026-10-27），存渲染结果，见[上下文投影](#上下文投影)。
 - 保留期 N。
 - 强制边界的数值：余量（提议 C 的 5%）和墙钟（提议 30 分钟）。
-- `!kill` 的权限：没有发起者了，提议群管理员加上这次运行里触发过的人。
+- ~~`!kill` 的权限~~：已定（2026-10-29），群主、管理员和 owner，见[权限](#权限)。
 - ~~裁剪规则~~：已定（2026-10-28），不裁剪，见[核心](#核心)的"构造请求"。
 - 恢复窗口多长；expired、lost 的请求和丢掉的 job 要不要在群里说一声。
 
@@ -1022,7 +1025,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 
 ### 命令
 
-- `!compact`：立即 capture 到当前，尾巴留 0。会话 actor 不等 historian：它把请求交出去，在 `side` 里 spawn 一个小任务等回信，拿到结果（压了哪一段、成没成）后，文字输出照常用 `Post` 发到发令人的私聊。historian 不认识私聊。
+- `!compact`：立即 capture 到当前，尾巴留 0。会话 actor 不等 historian：它把请求交出去，在 `side` 里 spawn 一个小任务等回信，拿到结果（压了哪一段、成没成）后，文字输出发回这个会话，和别的命令一样。historian 不认识私聊。
 - `!clear --all`：只是消息 id 水位，之前的摘要和消息不进提示。
 
 ### 砍掉的
@@ -1139,7 +1142,8 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 ### 权限
 
 - owners 写在 sops 文件里，一行一个 `平台:原生号`，启动时解析成 identity（没见过就建），按 principal 判权限。一个 owner 并进来的所有账号都有权限。QQ 只写私聊的 `user_openid`，群里的账号由 `!bind` 并进来，见 [QQ 官方机器人](#qq-官方机器人)。
-- 平台角色只看消息自带的 `sender_role`：命令消息本身就带着发送者当时的角色，不另外查平台。`!kill` 等命令要不要按角色限制，还在[待定](#待定)里。
+- 平台角色只看消息自带的 `sender_role`：命令消息本身就带着发送者当时的角色，不另外查平台。
+- 命令的权限沿用 Haskell 版（2026-10-29 定）：查看类（`!help`、`!status`、不带参数的 `!model` 等、`!model list`）谁都能用；只影响这个会话的（`!kill`、改人设、`!clear --all`）要群主、管理员或 owner；花钱或影响全局的（换模型、`!effort`、`!proactive`、`!bind`）只有 owner。没权限的回一句"这个命令只有……能用"。`!kill` 不回话。
 
 ### v1 不做、位置留好的
 
@@ -1205,7 +1209,7 @@ enum Reason { Direct /* @、回复、私聊白名单 */, Judged { kind: Kind, no
 2026-10-28 定：QQ 改用腾讯官方的机器人接口（QQ 开放平台，个人认证，机器人叫 maxx），不再用 NapCat 和 OneBot。原来的 QQ 号当天被腾讯封了；官方接口封的是机器人，不是账号，也不用再维护 NapCat 和扫码登录。老消息照样导入，见[导入](#导入)。下面是 2026-10-28 查文档和用凭证实测的结果，标了"实测"的等适配器能收发后在测试群里验证。
 
 - **连接**：AppID 和 AppSecret 换 access token（`bots.qq.com/app/getAppAccessToken`，有效约两小时；旧 token 最后一分钟才换得到新的，旧的再多活一分钟，所以到期前 50 秒换）。REST 走 `api.bot.qq.com`（2026-08 起的新域名，老的 `api.sgroup.qq.com` 也还通），调用带 `Authorization: QQBot <token>`；有的错误回 200，所以看 body 里的 `err_code`。事件走 WebSocket 网关，Max 主动连出去，tank 不需要公网入口。网关和 Discord 是一套：Hello 给心跳间隔，Identify 带 token 和 intents，断线后用 session id 和最后的序号 Resume；每天能新建 1500 次会话。不用 Webhook：它要公网 HTTPS 入口，而且和 WebSocket 二选一。2026-10-29 实测：`qqbot` 的 `listen` 例子从 Mac 连上网关，Identify 拿到 READY，心跳正常。
-- **跨重启 Resume**（2026-10-29 定）：关机时把网关的 session id 和最后的序号存进库，启动时先拿它们 Resume，不新建会话，这样重启那几秒里群里发的消息由服务端补发。新建会话不会补发（实测丢过一条）。Resume 窗口有多长要在第 7 步实测；超出窗口就只能新建会话，那段消息丢掉。为这个拆出一个常驻的平台进程、或者加 Redis 这类队列，都不划算：拆进程能换来的只有连接不断，Resume 做到了同样的事。
+- **跨重启 Resume**（2026-10-29 定）：关机时把网关的 session id 和最后的序号存进库，启动时先拿它们 Resume，不新建会话，这样重启那几秒里群里发的消息由服务端补发。新建会话不会补发（实测丢过一条）。Resume 窗口有多长要在第 7 步实测；超出窗口就只能新建会话，那段消息丢掉。实现（2026-10-29）：`qqbot` 把事件送进无界通道，丢掉连接的 future 时不会有已经计入序号、却还没送出的事件，所以接入停下后读完通道里剩下的，`Session::resumable` 的序号就是该接着的地方。补发的消息可能和停机前已经入账的重复，actor 按平台 id 丢掉已经入账的。为这个拆出一个常驻的平台进程、或者加 Redis 这类队列，都不划算：拆进程能换来的只有连接不断，Resume 做到了同样的事。
 - **进哪些群**：个人主体的机器人只能由创建者拉进他当群主或管理员的群。2026-10-28 定：只进这样的群，而且群主要在群设置里打开两个开关：
   - "接收群内全部消息"：所有消息都走 `GROUP_MESSAGE_CREATE`，@ Max 的也是，是不是 @ 看 `mentions`。不开只收 @。
   - "机器人主动发言"：Max 随时能发。不开只能在消息到达后 5 分钟内被动回复，每条最多 5 次，跑得久的 turn 发不出去。
@@ -1216,7 +1220,7 @@ enum Reason { Direct /* @、回复、私聊白名单 */, Judged { kind: Kind, no
   1. owner 私聊 Max 发 `!bind <老群号>`，或者不带群号的 `!bind`（新开一个会话）。Max 回一个 6 位码，10 分钟有效。
   2. owner 在新群里发 `!bind <码>`。这个群的端点挂到老群号对应的会话上（`qq_legacy` 端点所在的会话），时间线接着老消息往下走；同时把发令人在这个群的 identity 并进 owner 的 principal（设 `merged_into`），之后在这个群里认得出 owner。
 
-  码在内存里，重启就失效。一个群只绑一次，不支持改绑。没绑定的群里只认 `!bind <码>` 这一条命令。owners 文件里 QQ 只写私聊的 `user_openid`：第一次私聊 Max 后从日志里取。
+  码在内存里，重启就失效。一个群只绑一次，不支持改绑。没绑定的群里只认 `!bind <码>` 这一条命令；码不对就丢掉，只记日志，因为没有端点可以回话。绑上的那条 `!bind` 由会话表交给 actor（`Event::Bound`），照常入账，回一句"绑好了"，不当命令执行。一段老记录只能接到一个群上（2026-10-29 定）：一个会话只能有一个适配器在服务的端点，否则会有两个 actor 写同一条时间线。所以发码时查一次，用码时再查一次（同一个老群发过两个码的情况）。owners 文件里 QQ 只写私聊的 `user_openid`：第一次私聊 Max 后从库里的 `c2c:` 端点取。
 - **入站**：
   - 发送者：`username` 是 QQ 昵称，不是群名片（2026-10-29 实测），群名片拿不到。QQ 客户端里引用和 @ 显示的却是群名片，所以 Max 叫人用的名字可能和群里看到的不一样。2026-10-29 定：接受，只用昵称。`member_role` 是 owner、admin、member。
   - @：正文里写成 `<@member_openid>`，`mentions` 里也有，@ Max 的那一项带 `is_you: true`。开了全量消息，@ Max 的消息也走 `GROUP_MESSAGE_CREATE`（实测）。
@@ -1466,7 +1470,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 4. **`qqbot`**（2026-10-28 从 `onebot` 改，10-29 完成）：token、网关、事件和 REST 的类型、发送和撤回，fixture 里用假 openid。网关会话是不做 I/O 的状态机，断线、Resume、僵死连接和各个关闭码都在里面测；驱动用本地 WebSocket 服务测。`listen` 例子只连网关、打印事件，不发消息。
 5. **`max-llm`**（2026-10-29 完成）：Responses 和 Chat 两种协议的请求降级和流式解析，解析器不做 I/O。客户端一次只发一次，用 `Error::retryable` 给错误分类；重不重试由 `max` 的模型调用任务决定，因为只有它知道有没有已经说出去的文字。录了四家的真实响应做回放测试：cliproxy 的 gpt-5.6-luna 走 Responses，加密推理原样回传；cliproxy 的 Gemini、DeepSeek、taipan 上的 Qwen 走 Chat，带 `reasoning_content`。录的时候发现两件事：一是 Responses 默认把函数工具设成 strict，会把可选参数全变成必填，所以显式发 `strict: false`；二是 Gemini 会报推理 token 却不给推理内容，这部分不算进任何条目，因为条目的 token 是它下次再发时的花费。NInfer 的缓存断点做成 Chat 的选项：后面紧跟另一个 user 条目的 user 条目打断点，也就是基础上下文里易变块之前的那几块，已在 taipan 上验证。工具结果里的图片在第 9 步之前先降成"[图片省略]"。
 6. **tank 上的 `maxx`**（2026-10-29 完成）：`nixosModules.maxx` 按名字生成用户、Postgres 角色和库、目录、slice、target 和服务，配置文件在构建时跑 `max check-config`；`nixosModules.max` 是同一个 module 换成上线后的名字。`max` 现在只做三件事：迁移数据库，用 QQ 凭据问一次自己是谁，等 SIGTERM。QQ 的 AppID 和 secret 在 sops 的 `maxx/` 下。module 有一个 VM 测试，用和 tank 一样的 Postgres 16。部署时遇到两件事：一是 sqlx 0.9 不认 `postgresql://max@/max?host=…`（有用户名就不能是空主机），改成 `postgresql:///max?host=/run/postgresql&user=max`；二是 tank 的集群建在 glibc 2.40 上，系统现在是 2.42，`template1` 的 collation 版本对不上，新建库就失败，所以刷新了 `template1` 的版本记录（它里面没有用户对象）。同一天按 owner 的意思，把 `postgres`、`luckperms`、`minecraft`、`matrix-synapse` 几个库 `REINDEX DATABASE CONCURRENTLY` 加 `REINDEX SYSTEM` 后也刷新了。
-7. **`max`**：配置、会话表和会话 actor、I/O 任务、平台 sender 和 `deliveries`、QQ 适配和 `!bind`、命令、intent。做完第一次实机：测试群里纯文字对话，顺便实测 [QQ 官方机器人](#qq-官方机器人)里标了实测的几项。
+7. **`max`**（2026-10-29 代码完成，实机测试进行中）：配置、会话表和会话 actor、I/O 任务、平台 sender 和 `deliveries`、QQ 适配和 `!bind`、命令、intent。做完第一次实机：测试群里纯文字对话，顺便实测 [QQ 官方机器人](#qq-官方机器人)里标了实测的几项。工具在第 9 步之前一律回错误"工具还没接上，现在用不了。"；启动时没有结局的 turn 先一律关掉（挂起的记 `Expired`，崩溃时在跑的记 `Lost`），第 11 步再接着跑挂起的。这一步定下的：命令输出留在同一个会话（见[出站](#出站)）、命令权限（见[权限](#权限)）、actor 测试用真实时间（见[核心和 actor 的测试](#核心和-actor-的测试)）、一段老记录只接一个群（见 [QQ 官方机器人](#qq-官方机器人)）。tank 上的主模型是经 cliproxy 的 Gemini 3.8 Flash（Chat 协议），intent 用 h610 上的 qwen3.5-4b。
 8. **Matrix**，带加密房间和 `matrix-bootstrap`。
 9. **VM、MCP、codemode runner**。先在 tank 上验证 [VM 进程](#vm-进程)里列的几件事。第一个开放的工具是 `context_read`。
 10. **historian**。
