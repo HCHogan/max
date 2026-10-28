@@ -10,9 +10,9 @@ use max_core::run::Outcome;
 use tokio::sync::{mpsc, oneshot};
 
 use super::*;
-use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, offset, text};
+use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, shared, text};
 use crate::inbound::InNode;
-use crate::llm::testing::{Answer, Script, config};
+use crate::llm::testing::{Answer, Script};
 
 const PATIENCE: Duration = Duration::from_secs(5);
 
@@ -43,28 +43,7 @@ impl Harness {
             owners.insert(xiaoming.principal);
         }
         let script = Arc::new(Script::default());
-        let mut llm = config();
-        for provider in llm.providers.values_mut() {
-            provider.idle_window_secs = idle_window_secs;
-        }
-        let caller = Arc::clone(&script);
-        let models = Models::with_callers(&llm, move |_, _| {
-            Ok(caller.clone() as Arc<dyn crate::llm::Caller>)
-        })
-        .unwrap();
-        let (outbound_tx, outbound) = mpsc::unbounded_channel();
-        let shared = Arc::new(Shared {
-            pool: pool.clone(),
-            models: Arc::new(models),
-            outbound: outbound_tx,
-            offset: offset(),
-            intent: intent::Config::default(),
-            context_lines: 15,
-            max_run: Duration::from_secs(600),
-            stop_grace: Duration::from_millis(200),
-            owners,
-            binds: Arc::default(),
-        });
+        let (shared, outbound) = shared(&pool, &script, idle_window_secs, owners);
         let (mailbox, rx) = mpsc::unbounded_channel();
         let actor = Conversation::new(shared, place, mailbox.clone())
             .await
@@ -119,7 +98,7 @@ impl Harness {
 
     async fn turns(&self) -> Vec<(TurnId, Option<Outcome>)> {
         let mut conn = self.pool.acquire().await.unwrap();
-        let ids = sqlx::query_scalar!("select id from turns order by id")
+        let ids: Vec<i64> = sqlx::query_scalar("select id from turns order by id")
             .fetch_all(&mut *conn)
             .await
             .unwrap();
@@ -190,11 +169,19 @@ async fn an_at_wakes_a_core_that_answers(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn chatter_alone_wakes_nobody(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
+    let verdict = r#"{"trigger": false, "kind": "called", "reason": "闲聊", "dismiss": false}"#;
+    h.script.push(Answer::says(verdict));
     h.send(from_xiaoming(0, vec![text("今天好热")]));
     h.send(from_xiaoming(0, vec![text("今天好热")]));
     h.send(from_xiaohong(1, vec![text("是啊")]));
+    // The first chatter in a while goes to the classifier, which says no.
+    let deadline = Instant::now() + PATIENCE;
+    while h.script.calls() == 0 {
+        assert!(Instant::now() < deadline, "no classifier call");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     h.stop().await;
-    assert_eq!(h.script.calls(), 0);
+    assert_eq!(h.script.calls(), 1);
     assert!(h.turns().await.is_empty());
     assert_eq!(h.count("select count(*) from messages").await, 2);
 }

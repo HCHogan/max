@@ -1,13 +1,23 @@
 //! A QQ group and people in it, for the actor's tests.
 
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::time::Duration;
+
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
+use max_core::ids::PrincipalId;
+use max_core::intent;
 use max_core::message::{Node, Platform, Role};
+use max_db::PgPool;
 use max_db::platform::{self, ConversationKind};
 use serde_json::json;
 use sqlx::PgConnection;
+use tokio::sync::mpsc::{self, UnboundedReceiver};
 
-use super::Place;
+use super::{Outgoing, Place, Shared};
 use crate::inbound::{Chat, InNode, Inbound, Person};
+use crate::llm::testing::{Script, config};
+use crate::llm::{Caller, Models};
 
 pub fn offset() -> FixedOffset {
     FixedOffset::east_opt(8 * 3600).unwrap()
@@ -15,6 +25,36 @@ pub fn offset() -> FixedOffset {
 
 pub fn at(minute: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 29, 4, minute, 0).unwrap()
+}
+
+/// What actors share: a scripted model, and a sender that only queues.
+pub fn shared(
+    pool: &PgPool,
+    script: &Arc<Script>,
+    idle_window_secs: u64,
+    owners: BTreeSet<PrincipalId>,
+) -> (Arc<Shared>, UnboundedReceiver<Outgoing>) {
+    let mut llm = config();
+    for provider in llm.providers.values_mut() {
+        provider.idle_window_secs = idle_window_secs;
+    }
+    let caller = Arc::clone(script);
+    let models =
+        Models::with_callers(&llm, move |_, _| Ok(caller.clone() as Arc<dyn Caller>)).unwrap();
+    let (outbound, rx) = mpsc::unbounded_channel();
+    let shared = Shared {
+        pool: pool.clone(),
+        models: Arc::new(models),
+        outbound,
+        offset: offset(),
+        intent: intent::Config::default(),
+        context_lines: 15,
+        max_run: Duration::from_secs(600),
+        stop_grace: Duration::from_millis(200),
+        owners,
+        binds: Arc::default(),
+    };
+    (Arc::new(shared), rx)
 }
 
 /// A QQ group with Max in it.

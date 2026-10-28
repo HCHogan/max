@@ -137,7 +137,8 @@ async fn what_max_says_is_checked(pool: PgPool) {
             ],
         }
     );
-    let text = sqlx::query_scalar!("select text from messages where id = $1", mine.id.0)
+    let text: String = sqlx::query_scalar("select text from messages where id = $1")
+        .bind(mine.id.0)
         .fetch_one(&mut *conn)
         .await
         .unwrap();

@@ -67,11 +67,11 @@ async fn the_classifier_reads_the_context(pool: PgPool) {
     assert!(text.ends_with("]: 第3句"), "{text}");
     assert!(text.contains("[新消息]\n[12:02 小明 #"), "{text}");
     let mut conn = pool.acquire().await.unwrap();
-    let calls = sqlx::query_scalar!("select count(*) from llm_usage where purpose = 'intent'")
+    let calls: i64 = sqlx::query_scalar("select count(*) from llm_usage where purpose = 'intent'")
         .fetch_one(&mut *conn)
         .await
         .unwrap();
-    assert_eq!(calls, Some(1));
+    assert_eq!(calls, 1);
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
