@@ -20,6 +20,8 @@ thiserror = "2"
 
 # Our own crates.
 max-core = { path = "crates/max-core" }
+max-db = { path = "crates/max-db" }
+qqbot = { path = "crates/qqbot" }
 
 # Postgres for max-db: compile-time checked queries, migrations and
 # #[sqlx::test]. Only the features we use; no TLS, the database is local.

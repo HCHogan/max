@@ -8,3 +8,14 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+clap.workspace = true
+color-eyre.workspace = true
+max-db.workspace = true
+qqbot.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "signal", "macros"] }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
