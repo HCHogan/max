@@ -2,7 +2,7 @@
 
 > 状态：草案，2026-10-26 起草，边聊边补。标 **待定** 的条目还没有结论。
 >
-> 代码在这个仓库的 `rust` 分支上，本地 worktree 是 `~/Development/hs/max-rust`。分支起点打了 tag `haskell-base`（`a5de2e1`）；Haskell 版的代码和文档都在那里，文中指向旧文档的链接固定在这个提交上。
+> 代码在这个仓库的 `maxx` 分支上（2026-10-28 从 `rust` 改名），本地 worktree 是 `~/Development/hs/max-rust`。分支起点打了 tag `haskell-base`（`a5de2e1`）；Haskell 版的代码和文档都在那里，文中指向旧文档的链接固定在这个提交上。
 
 ## 目标
 
@@ -1435,7 +1435,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 - NixOS module 的接口不保持兼容，tank 的 nix-config 跟着改，见[配置](#配置)。
 - 测试期间新版在 tank 上叫 `maxx`，和 Haskell 版并行（见[测试环境](#测试环境)）。上线时停掉 Haskell 版的 `max` 那一套，由新版替换；名字是 module 的参数，改回 `max` 只动一处。
 - Haskell 版各群 VM 的 `/work` 迁到新版，见[导入](#导入)。
-- 切换：在 `rust` 分支上 `git merge -s ours main`，保留 main 期间的 Haskell 历史、内容全部用 Rust 的；然后 main 快进到 `rust`，不 force push。main 最后一个 Haskell 提交打 tag `haskell-final`。
+- 切换：在 `maxx` 分支上 `git merge -s ours main`，保留 main 期间的 Haskell 历史、内容全部用 Rust 的；然后 main 快进到 `maxx`，不 force push。main 最后一个 Haskell 提交打 tag `haskell-final`。
 - 回滚：Haskell 版保留到 Rust 版稳定为止；Rust 版上线后产生的新数据怎么处理 **待定**。
 
 ## 调研：DSH 和 qq-bridge
@@ -1478,7 +1478,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 
 ## 待讨论
 
-1. ~~代码放在哪~~：已定（2026-10-27），放在这个仓库的 `rust` 分支，见文首。
+1. ~~代码放在哪~~：已定（2026-10-27），放在这个仓库的 `maxx` 分支，见文首。
 2. ~~初始 crate 划分~~：已定（2026-10-27），见 [crate 划分](#crate-划分)。
 3. ~~v1 带不带工具~~：已定（2026-10-27），带，见[工具和 codemode](#工具和-codemode)。intent 分类也进 v1，见 [intent](#intent)。
 4. ~~新 schema 的设计，以及从旧库导入的映射~~：已定（2026-10-27），见 [schema](#schema)。

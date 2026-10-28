@@ -1,6 +1,6 @@
 # Repository instructions
 
-This branch (`rust`) is the Rust rewrite of Max. The design lives in
+This branch (`maxx`) is the Rust rewrite of Max. The design lives in
 `docs/rust-rewrite.md` and is updated as decisions are made. The Haskell
 version, with its docs and assets, is at tag `haskell-base`; bring a file
 back with `git restore --source=haskell-base -- <path>` when the feature
