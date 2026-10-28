@@ -1146,9 +1146,12 @@ intent 和[核心](#核心)一样是 `max-core` 里的纯状态机，是会话 a
 // 同步、不碰 I/O、不读时钟，时间由 actor 传入
 impl Intent {
     fn observe(&mut self, entry: &Entry, now: Instant) -> Vec<Decision>; // 每条入账都喂：别人的消息和事件、命令、Max 自己说的
-    fn verdict(&mut self, task: TaskId, upto: MessageId, v: Option<Verdict>, now: Instant) -> Vec<Decision>;
+    fn verdict(&mut self, v: Option<Verdict>, now: Instant) -> Vec<Decision>; // 在途那一批的结果，失败是 None
     fn tick(&mut self, now: Instant) -> Vec<Decision>; // 去抖到期
     fn deadline(&self) -> Option<Instant>;              // 并进 actor 的 deadline()
+    fn held(&self) -> impl Iterator<Item = MessageId>;  // hold 着的触发，挂着托腮
+    fn set_proactive(&mut self, on: bool);              // !proactive；打开时也清掉"被嫌烦"
+    fn status(&self, now: Instant) -> Status;           // !status 和"本群情况"里的计数、上限、接住率
 }
 
 enum Decision {
@@ -1175,7 +1178,7 @@ enum Reason { Direct /* @、回复、戳一戳、私聊白名单 */, Judged { ki
   - 参与度：Max 近 1 小时说了几次、群友多少条、近 5 分钟几条几个人。分类任务拼输入时从 ledger 现算，不存状态。
   - 接住率：判定叫醒的那次运行发过话之后几分钟内，有没有人回复、引用或 @ Max。intent 记最近几次。
   - 被嫌烦：分类输出 `dismiss` 表示有人在叫 Max 收敛。之后一段时间（提议 24 小时）不做 topic 类，每小时上限减半；直接触发不受影响；`!proactive on` 清掉，`!status` 看得到。
-- **`Wake` 的去处**：判定带着它判的最新一条消息的 id（`upto`）回到信箱，actor 交给 `intent.verdict`，要接话的变成 `Wake { reason: Judged }`。所有 `Wake`，包括去抖到期的直接触发，都过同一条规则：涉及的消息都不超过 `seen` 就作废。这些消息已经在某次模型请求里，模型自己决定过了；`!kill` 之前的也都这样作废。其余的作为一个输入（`Input::Wake`）进核心：没有核心就起一个，trigger 记成这个 `Wake`；有核心就喂给它。所以核心空闲、闲聊还没进过请求时，判定会叫醒核心；核心因为空闲窗口结束了，判定会起一个新核心。判定在 `[新消息]` 块里是一行，如 `[判定 followup：在追问你刚才的回答]`；直接触发不加行，消息行上本来就标着"@你""回复你的 #123"。`seen` 见[时间线](#时间线)。
+- **`Wake` 的去处**：判定回到信箱，actor 交给 `intent.verdict`。同时只有一个在途，intent 记着这一批，所以不用带任务 id；分类任务失败或 panic 也要回一个 `None`，否则这个会话再也不分类。要接话的变成 `Wake { reason: Judged }`，ids 是这一批里除直接触发以外的消息。所有 `Wake`，包括去抖到期的直接触发，都过同一条规则：涉及的消息都不超过 `seen` 就作废。这些消息已经在某次模型请求里，模型自己决定过了；`!kill` 之前的也都这样作废。其余的作为一个输入（`Input::Wake`）进核心：没有核心就起一个，trigger 记成这个 `Wake`；有核心就喂给它。所以核心空闲、闲聊还没进过请求时，判定会叫醒核心；核心因为空闲窗口结束了，判定会起一个新核心。判定在 `[新消息]` 块里是一行，如 `[判定 followup：在追问你刚才的回答]`；直接触发不加行，消息行上本来就标着"@你""回复你的 #123"。`seen` 见[时间线](#时间线)。
 - **限流**：沿用 Haskell 版，只管判定，直接触发不算。每个会话每小时最多 8 次，所有类别都算，按发出的判定计数；topic 类另有 300 秒冷却；每个会话用 `!proactive` 开关。
 - **失败**：不重试，记日志后丢掉。intent 只是建议，消息都在 ledger 里；瞬时错误由 provider 自己的重试兜住，不再叠一层。Haskell 版在 provider 重试之外又重试最多 3 次。
 - **模型**：`[llm] intent` 选一个小模型。判定之后起的 turn 用会话自己的模型，和 @ 触发的一样，不按触发类型换模型或推理强度。
