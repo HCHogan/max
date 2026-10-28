@@ -34,7 +34,7 @@
 - canonical ledger：入站和出站消息都落 Postgres。
 - 会话 actor、单一核心实例、输入投递、流式回复、取消（`!kill`）、失败时的 reaction。
 - LLM：Responses 和 Chat Completions 两种协议。
-- 自写的 agent loop，带工具（2026-10-27 定）：纯 codemode，程序跑在群 VM 里，见[工具和 codemode](#工具和-codemode)。所以 v1 也要带上 VM 沙箱和 MCP 服务。第一个开放的 Max 工具是读全文的 `context_read`，见[后续输入](#后续输入)；其它开放哪几个 **待定**。
+- 自写的 agent loop，带工具（2026-10-27 定）：纯 codemode 加一个 `shell`，都跑在群 VM 里，见[工具和 codemode](#工具和-codemode)。所以 v1 也要带上 VM 沙箱和 MCP 服务。第一个开放的 Max 工具是读全文的 `context_read`，见[后续输入](#后续输入)；其它开放哪几个 **待定**。
 - 上下文投影：摘要块、原始尾巴、易变块，见[上下文投影](#上下文投影)。historian 进 v1（2026-10-28 定）。
 - 重启恢复：正常重启时挂起的 turn 在窗口内接着跑（2026-10-28 定进 v1），见[重启恢复](#重启恢复)。
 - 配置、日志、优雅关闭。
@@ -81,7 +81,7 @@
 | Moderation (QQ groups) | — | |
 | Browser | — | camoufox 搬进群 VM，见[浏览器](#浏览器) |
 | Replies | ✓ | |
-| Tools | 部分 | 纯 codemode，见[工具和 codemode](#工具和-codemode)；v1 开放哪几个 **待定** |
+| Tools | 部分 | 纯 codemode 加 `shell`，见[工具和 codemode](#工具和-codemode)；v1 开放哪几个 **待定** |
 | Skills | — | skill 只是文档，加载时只往上下文后面追加，tools 数组不变，见[纯 codemode](#纯-codemode) |
 | Destiny 2 (opt-in) | — | |
 | Commands | 部分 | `!kill` 等运行时命令；由会话 actor 处理，不进核心 |
@@ -217,7 +217,7 @@ v1 只定义它用得到的几节：database、qq、matrix、llm、intent。其�
   - services：常驻任务。平台连接（QQ 的 OneBot 连接、Matrix 的 sync）、平台 sender、VM 服务、MCP 服务、派生数据 worker，以后的自动化调度器。见[三种角色](#三种角色)。
   - conversations：会话表，和每个会话一个 actor。会话表按端点找到会话的 actor，没有就建会话、起 actor；不在白名单上的群和房间直接丢掉，见[运行流程](#运行流程)第 1 步。actor 起来以后一直在，不按空闲退出。
 - 会话 actor 是这个会话唯一的控制线程，见[会话 actor](#会话-actor)。它的信箱是这个会话所有事件的唯一入口，它自己只 await 数据库。它下面挂三个 scope：
-  - `io`：当前核心在途的模型调用和 `run_code`。每个核心一个，`!kill`、失败和强制边界时整个关掉。
+  - `io`：当前核心在途的模型调用和工具调用（`run_code`、`shell`）。每个核心一个，`!kill`、失败和强制边界时整个关掉。
   - `side`：intent 分类这类不属于核心的调用。
   - `jobs`：后台 agent（v1 之后），能比发起它的核心活得长。
 - `Scope` 由 `JoinSet` 和 `CancellationToken` 组成（2026-10-27 去掉了 reaper、defer 和 Background）：
@@ -366,7 +366,7 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 |---|---|---|
 | `Scope::close(grace)` | `Scope` 里一次 | 关机时防卡死 |
 | 会话 actor 的到期时间 | actor 主循环里一个 `sleep_until`，到期时间取空闲窗口和停止宽限期里早的那个 | 策略：provider 的 `idle_window_secs`、关机的宽限期。turn 没有防卡死的墙钟：actor 只等数据库，模型调用和工具各有自己的上限。强制边界的墙钟是边界上的检查，不在这里 |
-| 工具调用上限 | 两处：`run_code` 一次运行一个；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
+| 工具调用上限 | 两处：`run_code`、`shell` 一次运行一个；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
 | 网络客户端 | 配置里一次：LLM 客户端的连接和读超时、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳 | 防卡死 |
 | 先等再升级 | 按需 | 策略，比如 `close` 先给命令时间自己退出 |
 | 常驻服务里的等待表 | 每张表一次 | 防泄漏，比如 OneBot 的 echo 配对表。常驻服务外面没有取消替它兜底 |
@@ -502,7 +502,8 @@ v1 的 ledger 已经存了原始 payload 和文本兜底；投递回执（`deliv
 - **发不出去**：`deliveries` 记一行错误，投影时这条消息后面标"（没发出去）"，下一个核心的模型看得到。不回报给正在跑的核心：一个 turn 里接连发不出去，通常是平台断了，模型知道了也做不了什么。
 - **崩溃**：入账了但没有回执的消息，sender 启动时先补记成"结果未知"，投影时标"（可能没发出去）"。不重发，免得发两遍。
 - **echo**：平台把 Max 自己发的东西再推回来的，适配器直接丢掉。Matrix 发送时用 `max-<消息 id>` 做 transaction id，sync 回来带这个 id 的就是自己发的；QQ 那个反向 WS 客户端设 `reportSelfMessage: false`，NapCat 不上报自己发的消息。Max 自己的动作，平台通知如果还会推回来（比如 QQ 的撤回通知），actor 入账前看时间线上是不是已经有这次动作，有就不记。不是这个进程发的（比如有人拿 Max 的账号手动发），照常入账，发送者是 Max。
-- **往别的会话发**：群里命令的文字输出发到发令人的私聊、工具里"在别的群说一句"、以后的自动化，都是给目标会话的 actor 发 `Post`，由它入账。要知道发没发成的（比如工具），`Post` 带一个回信通道，actor 把它交给 sender，sender 记完 `deliveries` 后回信；actor 自己不等。
+- **经 `Post` 发**：不是模型文本输出的发送，都给目标会话的 actor 发 `Post`，由它入账：群里命令的文字输出发到发令人的私聊、程序里调工具发消息或撤回禁言（本群或别的群）、以后的自动化。要知道发没发成的（比如工具），`Post` 带一个回信通道，actor 把它交给 sender，sender 记完 `deliveries` 后回信；actor 自己不等。
+  - `Post` 带来源 turn `origin: Option<TurnId>`（2026-10-28 定）。MCP 服务从会话里取，命令输出和调度器的为空。actor 入账时把它记成这条消息的 `turn_id`。`origin` 是自己当前核心的 turn 就不喂给核心：`run_code` 结果里内部调用的摘要已经有了，再喂一次模型会看到两遍。别的 turn 发来的，比如群 A 的 turn 往群 B 说一句，照常喂给 B 的核心。
 
 ### turn 记录
 
@@ -636,8 +637,8 @@ impl Run {
 
 核心负责的规则：
 
-- **构造请求**：请求由基础上下文、transcript 和固定的 `run_code` 工具组成，不裁剪（2026-10-28 定）。单条输入和工具结果各有上限（见[后续输入](#后续输入)），整体大小由下面的上限和强制边界控制，请求不会超出窗口。唯一的例外是图片，超出视觉预算时省略较早的，见[多模态结果](#多模态结果)。
-- **工具**：只有 `run_code`。程序能调哪些 Max 工具由 spec 定，整个 turn 不变，加载 skill 也不改变它，见[纯 codemode](#纯-codemode)。格式不对的调用直接回错误结果，不交给 actor 执行。
+- **构造请求**：请求由基础上下文、transcript 和固定的两个工具组成，不裁剪（2026-10-28 定）。单条输入和工具结果各有上限（见[后续输入](#后续输入)），整体大小由下面的上限和强制边界控制，请求不会超出窗口。唯一的例外是图片，超出视觉预算时省略较早的，见[多模态结果](#多模态结果)。
+- **工具**：`run_code` 和 `shell`，固定不变。程序能调哪些 Max 工具由 spec 定，整个 turn 不变，加载 skill 也不改变它，见[纯 codemode](#纯-codemode)。格式不对的调用直接回错误结果，不交给 actor 执行。
 - **token 数是数据**（2026-10-28 定）：核心不估算 token。基础上下文、每条输入、每个工具结果，都带着 `max` 估算好的 token 数进来；模型输出用 provider 返回的用量。算大小时以上一次请求 provider 报的输入 token 为准，再加上之后新增的条目，估算误差只落在这段增量上。数存在输入里，换了分词器也不影响重放。
 - **轮数和 token 上限**（2026-10-28 改）：
 
@@ -658,8 +659,8 @@ impl Run {
 
 会话 actor 把核心要做的 I/O spawn 成任务，挂在这个核心的 `io` scope 里，结果作为事件回到 actor 的信箱（2026-10-28 定，见[会话 actor](#会话-actor)）。任务之间、任务和 actor 之间不共享可变状态。
 
-- **模型调用**：一次 `CallModel` 一个任务。它持有模型客户端和分段器：把请求交给协议适配层降级成线上格式，用 async-openai 发出去、读流；流式文本切出一段就发 `Said`，流结束发 `ModelDone`。可重试的错误在任务里重试，前提是还没发过 `Said`；发过就不重试，直接报错，已入账的文本由 actor 记成 `partial_output`（2026-10-28 定）。否则重试会把发过的段落从头再发一遍，晚间丢包时最容易碰上。流里一出现 `run_code` 调用，就通知 VM 服务启动群 VM。
-- **`run_code`**：一个调用一个任务，在群 VM 里跑，结束发 `ToolDone`。同一批的几个并发跑，先跑完的先喂给核心。
+- **模型调用**：一次 `CallModel` 一个任务。它持有模型客户端和分段器：把请求交给协议适配层降级成线上格式，用 async-openai 发出去、读流；流式文本切出一段就发 `Said`，流结束发 `ModelDone`。可重试的错误在任务里重试，前提是还没发过 `Said`；发过就不重试，直接报错，已入账的文本由 actor 记成 `partial_output`（2026-10-28 定）。否则重试会把发过的段落从头再发一遍，晚间丢包时最容易碰上。流里一出现 `run_code` 或 `shell` 调用，就通知 VM 服务启动群 VM。
+- **`run_code`、`shell`**：一个调用一个任务，在群 VM 里跑，结束发 `ToolDone`。同一批的几个并发跑，先跑完的先喂给核心。
 - **intent 分类**：挂在 `side` 里，结束发 `Verdict`，见 [intent 分类](#intent-分类)。
 - **回执**：每个任务拿着一个回执（`Report`），正常结束时用它发结束事件；被 abort 或 panic 时，它在 `Drop` 里补发一条"没有结果"。所以每个任务恰好一个结束事件，和 `Said` 走同一个信箱，排在它们后面。
 - **过期事件**：每个任务有一个会话内递增、不复用的编号，事件都带着它。不是当前核心在途的任务发来的（`!kill`、失败、强制边界之后才到的）直接丢掉。
@@ -675,7 +676,7 @@ impl Run {
 
 会话 actor 是一个会话唯一的控制线程：既是[时间线](#时间线)唯一的写者，也是核心的驱动者。2026-10-26 定为普通 async 代码、状态不持久化；10-27 改成单一核心实例，一个会话同一时刻至多一个核心，没有请求队列；10-28 改成由 actor 直接驱动核心。
 
-核心是 actor 的一个字段。模型调用、`run_code`、intent 分类都 spawn 成 I/O 任务（见 [I/O 任务和协议适配](#io-任务和协议适配)），结果作为事件回到同一个信箱。actor 自己只 await 数据库，从不等模型、工具和网络，所以 `!kill` 总能立刻处理。一个会话只有这一个控制线程，也就没有两份状态要互相对齐。
+核心是 actor 的一个字段。模型调用、工具调用、intent 分类都 spawn 成 I/O 任务（见 [I/O 任务和协议适配](#io-任务和协议适配)），结果作为事件回到同一个信箱。actor 自己只 await 数据库，从不等模型、工具和网络，所以 `!kill` 总能立刻处理。一个会话只有这一个控制线程，也就没有两份状态要互相对齐。
 
 ```rust
 struct Conversation {
@@ -692,7 +693,7 @@ struct Active {
     turn: TurnId,
     run: Run,                  // 核心，接口见“核心”
     from: MessageId,           // 快照位置
-    io: Scope,                 // 在途的模型调用和 run_code
+    io: Scope,                 // 在途的模型调用和工具调用
     live: HashSet<TaskId>,     // 在途任务的编号；不在这里的事件都过期了
     said: String,              // 这次模型调用已经入账的文本，被打断时就是 partial_output
     idle_since: Instant,       // 上一次模型输出结束的时刻，空闲窗口从这里算
@@ -705,7 +706,7 @@ enum Event {
     ModelDone { task: TaskId, out: Result<ModelOutput, ModelError> },
     ToolDone { task: TaskId, call: CallId, out: ToolOutput },
     Verdict { task: TaskId, upto: MessageId, verdict: Option<Verdict> }, // upto：它判的最新一条
-    Post(Post),                                          // 别的会话、MCP 工具、调度器要往这里发
+    Post(Post),                                          // 别的会话、MCP 工具、调度器要往这里发；带来源 turn（origin）
     Stop,                                                // 正常重启
     Timer,                                               // 到期时间到了
     // 以后：JobDone、Fire
@@ -761,7 +762,7 @@ impl Conversation {
 1. **入账**：平台来的消息和事件、`Post`、Max 说出口的一段，先在一个事务里入账，`head` 前进，再发入账通知给[派生数据 worker](#三种角色)。`Said` 入账后交给平台 sender，不等回执，见[出站](#出站)。
 2. **路由**：
    - 命令：一律由 actor 自己处理，从不进核心（2026-10-28 定）。所以 `!model` 不会变成模型的输入，`!kill` 也不用排在工具批次后面。命令消息本身照样入账，下一个核心的尾巴里看得到。
-   - 有核心：喂给它，不管是不是触发；本 turn 自己说的话和做的动作除外，它们已经在 transcript 里。job 结果、自动化触发、intent 的判定也一样。
+   - 有核心：喂给它，不管是不是触发；本 turn 自己说的话和做的动作除外，它们已经在 transcript 里。经工具做的动作靠 `Post` 的 `origin` 认出来，见[出站](#出站)。job 结果、自动化触发、intent 的判定也一样。
    - 没有核心：是触发就起一个（[运行流程](#运行流程)第 3 步）；不是就什么都不做，它在时间线上，下一个核心的基础上下文里有。
    - 不是触发的消息过 intent 的闸门，见 [intent 分类](#intent-分类)。
    - `ModelDone`、`ToolDone` 喂给核心；任务编号不在 `live` 里的丢掉。
@@ -792,7 +793,7 @@ impl Conversation {
 3. **开始 turn**：快照位置 `from = head`。从 ledger（只读 `id <= from`）加上记忆和摘要，投影出基础上下文，裁到预算内，见[上下文投影](#上下文投影)；第一批输入在易变块里，只有触发，强制边界之后再加上一个核心没处理完的输入，闲聊都在尾巴里。第一批超过核心的上限（见[核心](#核心)的"轮数和 token 上限"）就不起核心，记 `Failed(InputTooLarge)`，在群里回一条简短的错误说明（2026-10-27 定）。否则写 `TurnStarted`（带 trigger 和 `from`），调 `Run::new(spec, base, first)`。
 4. **推进**：actor 每处理完一个事件，核心没有在途的 I/O，就问 `next_step`。中途不写 turn 记录：
    - `CallModel`：`seen = head`，spawn 模型调用任务。每个 `Said` 入账、交给 sender；`ModelDone` 时调 `model_output`。攒着的输入渲染成一个 `[新消息]` 块追加在请求末尾，见[后续输入](#后续输入)。
-   - `RunTools`：这一批 `run_code` 各 spawn 一个任务，在群 VM 里并发跑，每个 `ToolDone` 调一次 `tool_result`。
+   - `RunTools`：这一批工具调用各 spawn 一个任务，在群 VM 里并发跑，每个 `ToolDone` 调一次 `tool_result`。
    - `Idle`：什么都不做，之后入账的照样喂进去；只有闲聊的话 `next_step` 还是 `Idle`，窗口不重置。上一次模型输出结束后空闲满一个窗口（provider 的 `idle_window_secs`，默认 300 秒，2026-10-27 定）就结束。窗口内来了触发，模型还带着刚才的工具结果，追问不用重查。到期和触发同时到时，actor 总有一个先处理：先到期就结束，那条触发接着起新核心；先来触发就接着跑。两种结果都对。
    - **强制边界**：核心 `at_limit`，或者这次运行超过了墙钟（提议 30 分钟），就在这个边界换核心。旧核心写快照和结局；它没处理完的触发（`leftover`）作为新核心的第一批，开头一行交接说明，如 `[t#41 没做完就因为输入太多被结束了，下面是它没处理完的]`。说明里还列出旧核心最后一次空闲之后做过的有副作用的调用（发送、撤回、禁言这些，取自 `run_code` 结果里内部调用的摘要），免得新核心再做一遍。新核心的 `from` 是当前的 `head`，旧核心说过的话都在它的尾巴里，不会重答。每个触发最多交接一次，见[核心](#核心)。这就是我们的 compaction：不压 transcript，重新投影。
    - **失败**：`ModelDone` 带着错误。这次调用已经入账的文本记成 `partial_output`，调 `fail`，写快照和结局。
@@ -823,7 +824,7 @@ enum End {
 
 async fn end(&mut self, how: End) -> Result<()> {
     let Some(mut a) = self.core.take() else { return Ok(()) };
-    drop(a.io); // abort 在途的模型流和 run_code：同步发起，不等
+    drop(a.io); // abort 在途的模型流和工具调用：同步发起，不等
     if !a.said.is_empty() {
         a.run.partial_output(std::mem::take(&mut a.said)); // 被打断的那次模型调用已经入账的文本
     }
@@ -925,7 +926,7 @@ Haskell 版的教训：原始尾巴是按 token 的滑动窗口，填满后每�
 按变化频率排，每一块都在前一块之后：
 
 1. system：人设、规则、Max 工具的 TypeScript 声明、skill 索引。按会话固定。
-2. 工具：只有 `run_code`。
+2. 工具：`run_code` 和 `shell`，固定不变。
 3. 摘要块：活跃摘要按时间顺序，每条按[衰减](#衰减)选一层渲染。
 4. 原始尾巴：最新一条活跃摘要之后、到快照位置 `from` 为止的所有消息（第一批里的除外），`[HH:MM 名字 #id]: 文本` 一行一条；换日插日期，间隔久了插间隔标记。Max 自己的消息和别人的一样是一行，发不出去的带标记，见[出站](#出站)。
 5. 易变块：现在时间、[名册](#模型看到的)、记忆、引用的消息和转发、第一批输入（触发；强制边界之后还有上一个核心没处理完的输入；闲聊不在这里，在尾巴里）、附图。
@@ -938,7 +939,7 @@ Haskell 版的教训：原始尾巴是按 token 的滑动窗口，填满后每�
 
 - 消息行和尾巴同一种格式，触发的行标上"@你""回复你的 #123"，其它不标。第一次出现的人补一行名册。
 - job 结果是 `[job#3 完成] …`，自动化是 `[自动化 m#2 触发] …`。
-- **单条上限**（2026-10-27 定）：消息、job 结果、自动化结果共用一个上限，`min(C × 15%, 25k)` token，最低 2k；尾巴和第一批里的消息同样适用。超过的只渲染开头约 2,000 字，加一行"全文见 `#123`"，模型用读全文的工具 `context_read` 取，所以它是 v1 第一个开放的工具。它按页取，一页不超过单条上限，读一条超长消息不会一下把核心撑到上限。原文本来就在 ledger 或 job 记录里，不另存。VM 起不来时没有工具，模型只能看到摘录。`run_code` 的结果也按这个上限截，全文写成 VM 里的文件，结果里给路径，下一次 `run_code` 自己读。
+- **单条上限**（2026-10-27 定）：消息、job 结果、自动化结果共用一个上限，`min(C × 15%, 25k)` token，最低 2k；尾巴和第一批里的消息同样适用。超过的只渲染开头约 2,000 字，加一行"全文见 `#123`"，模型用读全文的工具 `context_read` 取，所以它是 v1 第一个开放的工具。它按页取，一页不超过单条上限，读一条超长消息不会一下把核心撑到上限。原文本来就在 ledger 或 job 记录里，不另存。VM 起不来时没有工具，模型只能看到摘录。`run_code` 和 `shell` 的结果也按这个上限截，全文写成 VM 里的文件，结果里给路径，下一次调用自己读。
 - 参考（2026-10-27 查）：Claude Code 的 Bash 输出约 3 万字符、Read 每次 2.5 万 token；Codex 的工具输出 1 万 token；OpenCode 和 pi 2,000 行或 50 KiB；Gemini CLI 4 万字符；Hermes 每条 10 万字符，按窗口缩到 15%。超出时它们都把全文留着，给模型路径或句柄。用户自己发的内容基本都不截。
 - **放不下就换核心**：不按条数折叠。攒着的输入连同 transcript 超过核心的上限，就在这个边界结束这次运行，没处理完的触发交给下一个核心，见[核心](#核心)和[运行流程](#运行流程)。
 - 系统提示里说清：一批里可能有几件要回应，也可能都不用，不用就什么都不输出；回应多个人时各自 reply。
@@ -1152,8 +1153,14 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 
 ### 纯 codemode
 
-- **模型只有一个工具 `run_code`。** tools 数组固定不变，请求前缀不会因为工具变化而失效。参数是 `{code, args?}`：`code` 是 async 函数体，`return` 的值就是结果。同一轮可以有多个 `run_code`，各跑各的。
+- **模型只有两个工具：`run_code` 和 `shell`。** tools 数组固定不变，请求前缀不会因为工具变化而失效；要守的是"固定"，不是"只有一个"。`run_code` 的参数是 `{code, args?}`：`code` 是 async 函数体，`return` 的值就是结果。同一轮可以有多个 `run_code`，各跑各的。
 - **程序里调 Max 的工具**：`tools.<名字>(args)` 返回 Promise，`Promise.all` 就是并发。沿用 Haskell 版 SDK 的形状：`max.raw` 拿完整的成败结果，`max.cancel` 和 `max.race` 取消调用，`agent()` 派后台 agent。
+- **`shell`**（2026-10-28 定）：跑终端命令不用从 JS 绕。只有 `run_code` 的话，每次都要写 `child_process`，非零退出直接抛异常，stderr 拿不到；命令套在 JS 字符串里再套进 JSON，转义多一层，模板字符串里的 `${VAR}` 还会先被 JS 吃掉。主流模型在 shell 工具上训练得最多，形状贴近它们熟悉的最好用。
+  - 参数 `{command, workdir?, timeout_ms?}`，贴近 Codex 的 shell 工具。在群 VM 里用 `bash -lc` 执行，默认工作目录 `/work`。
+  - 结果是退出码加合并的输出；过长保留头尾，全文写进 VM 里的文件。墙钟上限和 `run_code` 一样。
+  - 不能调 Max 的工具，不开 MCP 会话。调 Max 工具、并发编排、交图（`max.image`）都用 `run_code`：跑命令用 `shell`，写程序用 `run_code`。
+  - 安全上没有新东西：`run_code` 本来就能 `execSync`，VM 里本来就是 root。
+  - 小摩擦：`shell` 生成的图要看，得再调一次 `run_code` 交图。用得多再考虑在 guest 里放一个交图的命令。
 - **工具说明**：系统提示里放 Max 工具的 TypeScript 声明，带返回类型，内容固定。
 - **skill 只是文档。** `use_skill` 是普通的 Max 工具，返回说明书和相关工具的声明，和别的结果一样只往上下文后面追加。能调哪些工具由群和会话决定，一个 turn 里不变，不随 skill 加载变化。所以核心里没有"活动工具集"，Responses 的 `tool_search` 和 Chat 的元工具也都不需要。
 - **调用格式**：用最通用的 function tool，参数是 JSON。代码是原文还是转义进 JSON 字符串，取决于模型自己的工具调用格式：Claude 的字符串参数和 Qwen 3.5/3.6 的 XML 参数是原文；GPT 和 Gemini 要转义，Gemini 偶尔还会多转义一层（gemini-cli 专门写了修正代码）。aider 2024 年测过，代码包进 JSON 后，所有被测模型的通过率都下降了，幅度不一。暂不处理，见[待定事项](#待定事项)。
@@ -1169,10 +1176,10 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 
 做法：
 
-- **每次运行一个新进程**：宿主通过 vsock 上的 SSH，在群 VM 里执行 `node /run/max/runner.js`。runner 和 SDK 打进 guest 镜像，只读。stdin 传程序、参数和会话 token；stdout 的最后一行是返回值；stderr 是 `console` 输出，作为日志带回。不做常驻进程，免得运行之间共享状态。
-- **启动**：VM 按需启动，约 4.5 秒后能执行命令（Haskell 版实测），闲置两小时关机。模型输出流里一出现 `run_code` 调用就开始启动 VM，和模型写代码的时间重叠；不用工具的 turn 不启动。
-- **限制**：VM 的 CPU、内存上限和网络策略；`run_code` 一次运行的墙钟上限；drop 时杀掉命令。不要求确定性，也没有 fuel。
-- **和核心的关系**：`run_code` 在核心眼里就是一次工具调用。程序里的 Max 工具调用不是核心的输入，结果里附一份内部调用的摘要，方便排查。Max 重启时还在跑的 `run_code` 随连接断开被杀，恢复时照常补"结果未知"。
+- **每次运行一个新进程**：宿主通过 vsock 上的 SSH，在群 VM 里执行 `node /run/max/runner.js`。runner 和 SDK 打进 guest 镜像，只读。stdin 传程序、参数和会话 token；stdout 的最后一行是返回值；stderr 是 `console` 输出，作为日志带回。不做常驻进程，免得运行之间共享状态。`shell` 也是每次一个 SSH channel，直接 `bash -lc`，不经过 runner。
+- **启动**：VM 按需启动，约 4.5 秒后能执行命令（Haskell 版实测），闲置两小时关机。模型输出流里一出现 `run_code` 或 `shell` 调用就开始启动 VM，和模型写代码的时间重叠；不用工具的 turn 不启动。
+- **限制**：VM 的 CPU、内存上限和网络策略；`run_code` 和 `shell` 一次运行的墙钟上限；drop 时杀掉命令。不要求确定性，也没有 fuel。
+- **和核心的关系**：`run_code` 和 `shell` 在核心眼里都只是一次工具调用。程序里的 Max 工具调用不是核心的输入，结果里附一份内部调用的摘要，方便排查。Max 重启时还在跑的调用随连接断开被杀，恢复时照常补"结果未知"。
 - **已知风险**：VM 里的命令都以 root 运行。之前的提示注入如果在 VM 里留下了常驻进程，它可以拿到 runner 的 token 或接上它的 fd，用这一轮的工具。影响范围就是这一轮模型本来就能调的工具，新增的只是跨 turn 的持久化。接受。
 - **测试**：runner 只认 stdio 和 MCP，测试里在本机跑 node，接 fake MCP 服务，不需要 VM。
 
@@ -1206,7 +1213,7 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
 VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 runner 和后台 pi 都是它的客户端，区别只在会话权限。
 
 - **通道**：cloud-hypervisor 的 hybrid vsock 里，guest 连主机的某个端口，会落到宿主上 `<vsock socket>_<端口>` 这个 unix socket，Haskell 版的就绪通知就走这条路。Max 在每个 VM 的这个位置监听一个端口，用 axum 加 rmcp 跑 Streamable HTTP。连进来的是哪个 VM，由 socket 路径决定。guest 里把 `127.0.0.1:7777` 转发到这个 vsock 端口，客户端都配 `http://127.0.0.1:7777/mcp`。IP 层照样连不到宿主，外面也照样连不进 VM。
-- **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群、允许的工具、在途的调用。
+- **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群和 turn、允许的工具、在途的调用。
 
   | 会话 | 能用的工具 | 生命周期 |
   |---|---|---|
@@ -1367,6 +1374,26 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 - Haskell 版各群 VM 的 `/work` 迁到新版，见[导入](#导入)。
 - 切换：在 `rust` 分支上 `git merge -s ours main`，保留 main 期间的 Haskell 历史、内容全部用 Rust 的；然后 main 快进到 `rust`，不 force push。main 最后一个 Haskell 提交打 tag `haskell-final`。
 - 回滚：Haskell 版保留到 Rust 版稳定为止；Rust 版上线后产生的新数据怎么处理 **待定**。
+
+## 调研：DSH 和 qq-bridge
+
+2026-10-28 记。只是记录，不是待办。
+
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）是 DeepSeek 2026 年 8 月开源的 agent harness。QQ 上流行的是社区插件 [qq-bridge](https://github.com/Derpyu520/qq-bridge)：走 OneBot v11，每个群一个只追加的 DSH 会话，主打"AI 仿真群友"。腾讯官方的 [dsh-qqbot](https://github.com/tencent-connect/dsh-qqbot) 被 @ 才回，群聊上没有设计。
+
+**机制和 Max 相反，不借。** qq-bridge 里模型的文本只算思考，说话要调 `qq_send_message`；什么时候醒、读到哪、下次怎么叫醒，都由模型调工具自己管（`qq_wait_for_messages` 长轮询、`qq_mark_read`、`qq_set_wake_config`）。为了补模型的健忘，又加了防"永眠"的提醒和潜水前强制观察 5 分钟的闸门；每次唤醒往一个从不重新投影的会话里追加三到六千字状态。Max 由 actor 驱动核心，空闲窗口、intent 判定和重新投影做的是同一件事。它的模型太爱潜水，Max 的判定器是拿不准就不说，方向也相反。
+
+可能有用的做法，按在 Max 里的位置记：
+
+- **"没说完"去抖**（`src/v2-wait.js`）：触发消息以"但是、然后、我跟你讲、对了"这类词或"，、；："结尾，或者同一个人 15 秒内连发 3 条以上，先等 8～12 秒没人说话再回。在 Max 里是 actor 推迟核心的第一次 `CallModel`，复用 `Timer`；期间的消息照常喂进去，托腮挂着。
+- **时间感**（`src/bridge.js` 的 `buildTimeSenseLine`）：一行"现在几点、最新一条是多久前发的"，加三档规则：10 分钟内正常接；2 小时内别用"刚"这类实时口气；更久默认不回，要回先说"才看到"。起因是模型睡了几十分钟被叫醒，还把旧消息当成刚发的。在 Max 里放易变块；不能像它那样给尾巴每行加"多久前"，会破坏[前缀稳定](#前缀稳定的规则)。
+- **参与度**（`src/bridge.js` 的 `formatParticipationV2`）：确定性算出"你近 1 小时发言 N 次，群友 M 条，近 5 分钟 K 条、P 人"，附一句"这轮少说"或"别一个人撑场"。在 Max 里从 ledger 算，放易变块，也可以喂给 intent 判定器。
+- **人设文案**（`dsh/agent-presets/qq-chat-v2/agent.cordis.yml`、`roles/小鲸鱼.md`）：一份"AI 味黑名单"（"首先、其次"、"希望对你有帮助"、"你们觉得呢"、每句都加"～"）配正反例；不当主持人（不总结话题、不劝架、不挨个回应）；潜水回来别假装一直在场；同一个人反复说同一件事，之后只接情绪；刚说完别马上补一条。和 Rust 无关，可以先在 Haskell 版的提示词上试。
+- **主动插话的反馈**：intent 触发的发言之后几分钟内，有没有人回复、引用或 @ Max，按群算成功率，用来调冷却，或者喂给判定器。可以做成一个派生 worker。
+- **记忆标来源**（[dsh-qq-bot-playbook](https://github.com/rentaoyan0628-collab/dsh-qq-bot-playbook) 第 07 篇）：分"对方说的"和"模型判断的"。还要在人设里写清什么时候该记：他们跑了两天，存了 1477 条原文，经历只记下 2 条。
+- **出站拦 secret**：发出去的内容含凭据、token 就拦。在 Max 里是 actor 入账 `Said` 前按已知的 secret 值过滤，VM 里的程序拿得到 MCP token。
+
+不借的：装傻和已读乱回、好感度数值、`reply_gate` 工具（`[silence]` 已经等价）、一代按空格分句。
 
 ## 待讨论
 
