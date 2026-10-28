@@ -80,7 +80,7 @@ pub struct Database {
 
 /// Models in three layers: how to reach a provider, what each of its
 /// models is, and who uses which. See "LLM：provider、模型、选用".
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Llm {
     /// What turns use, unless a conversation chose another with `!model`.
@@ -99,7 +99,7 @@ pub struct Selection {
     pub effort: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
     pub base_url: String,

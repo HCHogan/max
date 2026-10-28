@@ -114,7 +114,7 @@ impl Conversation {
             .turn(settings.model.as_deref(), settings.effort.as_deref())
         {
             Ok(chosen) => {
-                let effort = chosen.effort.as_deref().unwrap_or("默认");
+                let effort = chosen.options.effort.as_deref().unwrap_or("默认");
                 let _ = writeln!(out, "模型：{}，推理强度 {effort}", chosen.reference());
             }
             Err(error) => {

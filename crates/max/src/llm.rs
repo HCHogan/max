@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, WrapErr};
-use max_core::item::{ModelTag, Protocol};
+use max_core::item::ModelTag;
 use max_core::run::Request;
 use max_llm::{Call, Options};
 
@@ -36,30 +36,19 @@ impl Caller for max_llm::Client {
 }
 
 pub struct Models {
-    providers: BTreeMap<String, Provider>,
-    default: config::Selection,
-    intent: config::Selection,
-}
-
-struct Provider {
-    caller: Arc<dyn Caller>,
-    protocol: Protocol,
-    retries: u32,
-    idle_window: Duration,
-    cache_breakpoints: bool,
-    models: BTreeMap<String, config::Model>,
+    llm: config::Llm,
+    callers: BTreeMap<String, Arc<dyn Caller>>,
 }
 
 /// A model and how to call it, for one turn or one classification.
 #[derive(Clone)]
 pub struct Chosen {
     pub provider: String,
-    /// The id sent to the API.
-    pub model: String,
-    pub effort: Option<String>,
+    /// The protocol, and the id sent to the API.
     pub tag: ModelTag,
     pub window: u32,
     pub max_output: Option<u32>,
+    /// The effort among them.
     pub options: Options,
     pub retries: u32,
     /// How long a core on this model waits idle before it ends.
@@ -70,7 +59,7 @@ pub struct Chosen {
 impl Chosen {
     /// `provider/model`, as `!model` takes it.
     pub fn reference(&self) -> String {
-        format!("{}/{}", self.provider, self.model)
+        format!("{}/{}", self.provider, self.tag.model)
     }
 }
 
@@ -97,45 +86,34 @@ impl Models {
         llm: &config::Llm,
         caller: impl Fn(&str, &config::Provider) -> Result<Arc<dyn Caller>>,
     ) -> Result<Self> {
-        let providers = llm
+        let callers = llm
             .providers
             .iter()
-            .map(|(name, provider)| {
-                Ok((
-                    name.clone(),
-                    Provider {
-                        caller: caller(name, provider)?,
-                        protocol: provider.protocol.into(),
-                        retries: provider.retries,
-                        idle_window: Duration::from_secs(provider.idle_window_secs),
-                        cache_breakpoints: provider.cache_breakpoints,
-                        models: provider.models.clone(),
-                    },
-                ))
-            })
+            .map(|(name, provider)| Ok((name.clone(), caller(name, provider)?)))
             .collect::<Result<_>>()?;
         Ok(Self {
-            providers,
-            default: llm.default.clone(),
-            intent: llm.intent.clone(),
+            llm: llm.clone(),
+            callers,
         })
     }
 
     /// What a turn uses: the conversation's choices where it made them,
     /// the defaults elsewhere.
     pub fn turn(&self, model: Option<&str>, effort: Option<&str>) -> Result<Chosen> {
-        let reference = model.unwrap_or(&self.default.model);
-        let effort = effort.or(self.default.effort.as_deref());
-        self.choose(reference, effort)
+        let default = &self.llm.default;
+        let reference = model.unwrap_or(&default.model);
+        self.choose(reference, effort.or(default.effort.as_deref()))
     }
 
     pub fn intent(&self) -> Result<Chosen> {
-        self.choose(&self.intent.model, self.intent.effort.as_deref())
+        let intent = &self.llm.intent;
+        self.choose(&intent.model, intent.effort.as_deref())
     }
 
     /// Every `provider/model`, for `!model` to list.
     pub fn references(&self) -> Vec<String> {
-        self.providers
+        self.llm
+            .providers
             .iter()
             .flat_map(|(name, provider)| {
                 provider
@@ -147,23 +125,11 @@ impl Models {
     }
 
     pub fn choose(&self, reference: &str, effort: Option<&str>) -> Result<Chosen> {
-        let (name, model) = reference
-            .split_once('/')
-            .ok_or_else(|| color_eyre::eyre::eyre!("{reference:?} isn't provider/model"))?;
-        let provider = self
-            .providers
-            .get(name)
-            .ok_or_else(|| color_eyre::eyre::eyre!("no provider {name:?}"))?;
-        let settings = provider
-            .models
-            .get(model)
-            .ok_or_else(|| color_eyre::eyre::eyre!("{name:?} has no model {model:?}"))?;
+        let (name, provider, model, settings) = self.llm.model(reference)?;
         Ok(Chosen {
             provider: name.to_owned(),
-            model: model.to_owned(),
-            effort: effort.map(str::to_owned),
             tag: ModelTag {
-                protocol: provider.protocol,
+                protocol: provider.protocol.into(),
                 model: model.to_owned(),
             },
             window: settings.context_window,
@@ -175,8 +141,8 @@ impl Models {
                 cache_breakpoints: provider.cache_breakpoints,
             },
             retries: provider.retries,
-            idle_window: provider.idle_window,
-            caller: Arc::clone(&provider.caller),
+            idle_window: Duration::from_secs(provider.idle_window_secs),
+            caller: Arc::clone(&self.callers[name]),
         })
     }
 }
@@ -306,6 +272,8 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+    use max_core::item::Protocol;
+
     use super::testing::{Script, models};
     use super::*;
 
@@ -314,13 +282,13 @@ mod tests {
         let models = models(&Arc::new(Script::default()));
         let chosen = models.turn(None, None).unwrap();
         assert_eq!(chosen.reference(), "test/big");
-        assert_eq!(chosen.effort.as_deref(), Some("high"));
+        assert_eq!(chosen.options.effort.as_deref(), Some("high"));
         assert_eq!((chosen.window, chosen.max_output), (100_000, Some(8000)));
         assert_eq!(chosen.tag.protocol, Protocol::Chat);
         let chosen = models.turn(Some("test/small"), Some("low")).unwrap();
         assert_eq!(chosen.reference(), "test/small");
         assert_eq!(chosen.options.effort.as_deref(), Some("low"));
-        assert_eq!(models.intent().unwrap().effort, None);
+        assert_eq!(models.intent().unwrap().options.effort, None);
         assert!(models.turn(Some("test/nope"), None).is_err());
         assert!(models.turn(Some("big"), None).is_err());
         assert_eq!(models.references(), ["test/big", "test/small"]);
