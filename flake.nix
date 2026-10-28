@@ -206,6 +206,16 @@
             };
           };
 
+          # These boot VMs inside the test machine, so they need KVM in it:
+          # a CI runner, itself a VM, can't give it that. tank can:
+          #   nix build .#nestedChecks.x86_64-linux.vm -L
+          nestedChecks = pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+            vm = import ./nix/tests/vm.nix {
+              inherit pkgs;
+              module = self.nixosModules.maxx;
+            };
+          };
+
           devShell = devenv.lib.mkShell {
             inherit inputs pkgs;
             modules = [
@@ -232,6 +242,7 @@
         };
       };
       checks = forEachSystem (system: all.${system}.checks);
+      nestedChecks = forEachSystem (system: all.${system}.nestedChecks);
       devShells = forEachSystem (system: {
         default = all.${system}.devShell;
       });

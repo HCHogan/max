@@ -1,9 +1,9 @@
 //! `max run` serves; `max check-config` checks a configuration file's
 //! structure without reading its secrets, which the NixOS module does when
-//! it builds the file.
+//! it builds the file; `max vm-check` boots a VM and runs a command in it.
 
 use std::collections::{BTreeSet, HashMap};
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,8 +11,10 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use color_eyre::config::{HookBuilder, Theme};
 use color_eyre::eyre::{Result, WrapErr, bail};
-use max_core::ids::PrincipalId;
+use max_core::ids::{ConversationId, PrincipalId};
+use max_core::item::Part;
 use max_core::message::Platform;
+use max_core::tools::Tool;
 use max_db::{PgPool, platform};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
@@ -26,6 +28,7 @@ use max::llm::Models;
 use max::qq::{listen, send};
 use max::scope::Scope;
 use max::table::{self, Me, Table};
+use max::tools;
 use max::vm::Vms;
 
 // Stopping, in order, within systemd's TimeoutStopSec of 60 seconds.
@@ -53,6 +56,14 @@ enum Command {
     Run(Args),
     /// Check a configuration file without reading the secrets it names.
     CheckConfig(Args),
+    /// Boot a VM on the last slot, run a command as the shell tool does,
+    /// and print what the model would be shown.
+    VmCheck {
+        #[command(flatten)]
+        args: Args,
+        #[arg(long, default_value = "uname -a")]
+        command: String,
+    },
 }
 
 #[derive(clap::Args)]
@@ -73,7 +84,46 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::CheckConfig(args) => Config::load(&args.config).map(drop),
         Command::Run(args) => run(&args.config),
+        Command::VmCheck { args, command } => vm_check(&args.config, command),
     }
+}
+
+/// On the last slot, which a running service takes last.
+fn vm_check(path: &Path, command: String) -> Result<()> {
+    let mut config = Config::load(path)?;
+    logging(&config);
+    let Some(mut vm) = config.vm.take() else {
+        bail!("the configuration has no [vm]");
+    };
+    vm.slots.drain(..vm.slots.len() - 1);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let out = runtime.block_on(async {
+        let mut services = Scope::new();
+        let vms = Vms::start(vm, &mut services)?;
+        let shell = Tool::Shell {
+            command,
+            workdir: None,
+            timeout_ms: None,
+        };
+        // No conversation has id 0.
+        let out = tools::run(shell, Some(&vms), ConversationId(0)).await;
+        drop(vms);
+        services.close(Duration::from_secs(5)).await;
+        Ok::<_, color_eyre::Report>(out)
+    })?;
+    runtime.shutdown_timeout(SHUTDOWN);
+    let mut stdout = std::io::stdout();
+    for part in &out.parts {
+        if let Part::Text { text } = part {
+            writeln!(stdout, "{text}")?;
+        }
+    }
+    if out.error {
+        bail!("the command didn't run");
+    }
+    Ok(())
 }
 
 fn run(path: &Path) -> Result<()> {
