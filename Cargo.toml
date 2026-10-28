@@ -69,6 +69,14 @@ tiktoken-rs = "0.12.1"
 # Errors a caller matches on are thiserror types instead.
 color-eyre = "0.6.5"
 
+# SSH to the groups' VMs, over cloud-hypervisor's hybrid vsock socket: one
+# connection per VM, one channel per command. On aws-lc-rs, which rustls
+# already brings; no RSA, no compression.
+russh = { version = "0.65", default-features = false, features = ["aws-lc-rs"] }
+# The key max logs in to a VM with, made for each boot. The version russh
+# uses.
+rand = { version = "0.10", default-features = false, features = ["thread_rng"] }
+
 # Tests only.
 insta = "1.49"
 
