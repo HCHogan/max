@@ -1,8 +1,6 @@
-//! Max, a group chat agent. `max run` serves; `max check-config` checks a
-//! configuration file's structure without reading its secrets, which the
-//! NixOS module does when it builds the file.
-
-mod config;
+//! `max run` serves; `max check-config` checks a configuration file's
+//! structure without reading its secrets, which the NixOS module does when
+//! it builds the file.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -14,7 +12,7 @@ use color_eyre::eyre::{Result, WrapErr};
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::info;
 
-use crate::config::Config;
+use max::config::{self, Config};
 
 /// How long tasks still running when Max stops get to finish.
 const SHUTDOWN: Duration = Duration::from_secs(10);
