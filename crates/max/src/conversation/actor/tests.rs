@@ -27,9 +27,21 @@ struct Harness {
 
 impl Harness {
     async fn new(pool: PgPool, idle_window_secs: u64) -> Self {
+        Self::with_owner(pool, idle_window_secs, false).await
+    }
+
+    /// With 小明 as Max's owner, if `xiaoming_owns`.
+    async fn with_owner(pool: PgPool, idle_window_secs: u64, xiaoming_owns: bool) -> Self {
         let mut conn = pool.acquire().await.unwrap();
         let place = Arc::new(group(&mut conn).await);
+        let xiaoming = platform::account(&mut conn, place.platform, "XIAOMING", "小明")
+            .await
+            .unwrap();
         drop(conn);
+        let mut owners = BTreeSet::new();
+        if xiaoming_owns {
+            owners.insert(xiaoming.principal);
+        }
         let script = Arc::new(Script::default());
         let mut llm = config();
         for provider in llm.providers.values_mut() {
@@ -50,6 +62,8 @@ impl Harness {
             context_lines: 15,
             max_run: Duration::from_secs(600),
             stop_grace: Duration::from_millis(200),
+            owners,
+            binds: Arc::default(),
         });
         let (mailbox, rx) = mpsc::unbounded_channel();
         let actor = Conversation::new(shared, place, mailbox.clone())
@@ -277,4 +291,82 @@ async fn a_judged_wake_starts_a_core(pool: PgPool) {
         .count("select count(*) from llm_usage where purpose = 'intent'")
         .await;
     assert_eq!(intent, 1);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn commands_answer_and_never_wake(pool: PgPool) {
+    let mut h = Harness::new(pool, 300).await;
+    h.send(from_xiaoming(0, vec![text("!status")]));
+    let (answer, status) = h.said().await;
+    assert!(
+        status.starts_with("模型：test/big，推理强度 high\n人设：默认\n"),
+        "{status}"
+    );
+    assert!(status.ends_with("在跑：没有"), "{status}");
+    let Content::Message { reply_to, .. } = answer.content else {
+        unreachable!()
+    };
+    assert_eq!(reply_to, Some(MessageId(answer.id.0 - 1)));
+
+    h.send(from_xiaoming(1, vec![text("!model test/small")]));
+    assert_eq!(h.said().await.1, "这个命令只有主人能用。");
+    h.send(from_xiaoming(2, vec![text("!clear --all")]));
+    assert_eq!(h.said().await.1, "这个命令只有群主、管理员能用。");
+    // 小红 is an admin.
+    h.send(from_xiaohong(3, vec![text("!clear --all")]));
+    assert_eq!(h.said().await.1, "好，之前的聊天不再进上下文。");
+    h.stop().await;
+    assert_eq!(h.script.calls(), 0);
+    assert!(h.turns().await.is_empty());
+    let cleared = h
+        .count("select cleared_upto from conversation_settings")
+        .await;
+    assert!(cleared > 0);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn an_owner_changes_settings(pool: PgPool) {
+    let mut h = Harness::with_owner(pool, 300, true).await;
+    h.send(from_xiaoming(0, vec![text("!model test/nope")]));
+    let answer = h.said().await.1;
+    assert!(answer.starts_with("没有这个模型"), "{answer}");
+    h.send(from_xiaoming(1, vec![text("!model test/small")]));
+    assert_eq!(h.said().await.1, "下一次回复起用 test/small。");
+    h.send(from_xiaoming(2, vec![text("!proactive off")]));
+    assert_eq!(h.said().await.1, "主动接话关了，只在被叫到时回。");
+    h.script.push(Answer::says("嗯"));
+    // From 小红: 小明's burst of commands would hold his @ as unfinished.
+    let mention = InNode::MentionMe {
+        display: "maxx".into(),
+    };
+    h.send(from_xiaohong(3, vec![mention, text(" 在吗")]));
+    h.said().await;
+    h.stop().await;
+    let model = h.script.requests.lock().unwrap()[0].model.model.clone();
+    assert_eq!(model, "small");
+    let proactive = h
+        .count("select count(*) from conversation_settings where not proactive")
+        .await;
+    assert_eq!(proactive, 1);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn kill_stops_the_core_quietly(pool: PgPool) {
+    let mut h = Harness::new(pool, 300).await;
+    h.script.push(Answer::Hangs);
+    h.send(at_max(0, " 写篇长文"));
+    let deadline = Instant::now() + PATIENCE;
+    while h.script.calls() == 0 {
+        assert!(Instant::now() < deadline, "no model call");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    h.send(from_xiaohong(1, vec![text("!kill")]));
+    let deadline = Instant::now() + PATIENCE;
+    while h.turns().await[0].1.is_none() {
+        assert!(Instant::now() < deadline, "the core didn't end");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(h.turns().await[0].1, Some(Outcome::Interrupted));
+    h.stop().await;
+    assert!(h.outbound.try_recv().is_err(), "!kill isn't answered");
 }

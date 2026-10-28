@@ -24,6 +24,7 @@ use tracing::{debug, info, warn};
 use super::ingest;
 use super::project::{self, First, Projection};
 use super::{Event, Place, TaskId, classify, model};
+use crate::bind::Binds;
 use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
 use crate::scope::Scope;
@@ -42,6 +43,9 @@ pub struct Shared {
     pub max_run: Duration,
     /// How long a restart waits for a model call or tool batch to end.
     pub stop_grace: Duration,
+    /// Max's owners, who may run every command.
+    pub owners: BTreeSet<PrincipalId>,
+    pub binds: Arc<Binds>,
 }
 
 /// Something Max said, committed, for the platform's sender.
@@ -90,6 +94,7 @@ struct Active {
 
 /// How a core ends.
 enum End {
+    Kill(String),
     Failed(FailReason),
     /// Idle: its window ran out, or Max is stopping.
     Idle,
@@ -244,7 +249,9 @@ impl Conversation {
         } else {
             EntryKind::Chatter
         };
-        if !committed.command {
+        if committed.command {
+            self.command(&committed).await?;
+        } else {
             let mark = committed.direct.map_or(Mark::None, |direct| direct.mark());
             self.feed(&[(committed.message.clone(), mark)]).await?;
         }
@@ -519,6 +526,7 @@ impl Conversation {
             }
         }
         let applied = match &how {
+            End::Kill(reason) => a.run.interrupt(reason.clone()),
             End::Failed(reason) => a.run.fail(reason.clone()),
             End::Idle | End::Boundary | End::Suspend => Ok(()),
         };
@@ -610,5 +618,6 @@ impl Conversation {
     }
 }
 
+mod commands;
 #[cfg(test)]
 mod tests;

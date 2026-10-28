@@ -104,7 +104,7 @@ pub async fn inbound(
         None
     };
     let text = inbound.plain_text();
-    let command = text.starts_with(['!', '！']);
+    let command = crate::command::parse(&text).is_some();
     let content = Content::Message { reply_to, nodes };
     let sender_snapshot = Sender {
         identity: sender.identity,
