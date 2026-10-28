@@ -17,9 +17,11 @@
     listen_addresses = "127.0.0.1";
     port = 5434;
     initialDatabases = [ { name = "max"; } ];
+    # A role of our own, so the URL doesn't depend on who ran initdb.
+    initialScript = "create role max login superuser;";
   };
 
   # sqlx's macros check queries against this database, and #[sqlx::test]
   # creates a scratch database per test on the same server.
-  env.DATABASE_URL = "postgresql://127.0.0.1:5434/max";
+  env.DATABASE_URL = "postgresql://max@127.0.0.1:5434/max";
 }

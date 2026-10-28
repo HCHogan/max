@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Rebuilds the dev database from max-db's migrations and regenerates
+# crates/max-db/.sqlx, the query data the Nix build compiles against
+# (SQLX_OFFLINE). Run it in the dev shell, with `devenv up` running, after
+# changing a query or a migration, and commit what it writes.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+sqlx database reset -y --source crates/max-db/migrations
+dir=crates/max-db/.sqlx
+rm -rf "$dir"
+mkdir -p "$dir"
+# The macros only write their data when they run: recompile the crate.
+touch crates/max-db/src/lib.rs
+SQLX_OFFLINE=false SQLX_OFFLINE_DIR="$PWD/$dir" \
+  cargo check --package max-db --all-targets --quiet
+echo "$(ls "$dir" | wc -l | tr -d ' ') queries in $dir"

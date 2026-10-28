@@ -42,17 +42,25 @@
           toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
           craneLib = (crane.mkLib pkgs).overrideToolchain (_: toolchain);
 
-          # Cargo's sources plus insta's snapshots, which the tests read.
+          # Cargo's sources plus what the build reads besides: insta's
+          # snapshots, max-db's migrations and its offline query data.
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
             name = "source";
-            filter = path: type: craneLib.filterCargoSources path type || pkgs.lib.hasSuffix ".snap" path;
+            filter =
+              path: type:
+              craneLib.filterCargoSources path type
+              || pkgs.lib.hasSuffix ".snap" path
+              || pkgs.lib.hasSuffix ".sql" path
+              || pkgs.lib.hasInfix "/.sqlx/" path;
           };
           commonArgs = {
             inherit src;
             # The root Cargo.toml is a workspace and has no package name.
             pname = "max";
             strictDeps = true;
+            # sqlx's macros check queries against .sqlx, not a database.
+            SQLX_OFFLINE = "true";
           };
           # Dependencies build once and are cached apart from our code.
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -106,8 +114,18 @@
               commonArgs
               // {
                 inherit cargoArtifacts;
-                # Until the first test lands; then drop it here and in AGENTS.md.
-                cargoNextestExtraArgs = "--no-tests=warn";
+                nativeBuildInputs = [ pkgs.postgresql_17 ];
+                # #[sqlx::test] makes a scratch database per test on this
+                # server. TCP only: a socket path under $TMPDIR can be too
+                # long on macOS.
+                preCheck = ''
+                  export PGDATA="$TMPDIR/postgres"
+                  initdb --username=max --auth=trust --locale=C --encoding=UTF8 >/dev/null
+                  pg_ctl start --wait --silent --log="$TMPDIR/postgres.log" \
+                    --options "-c listen_addresses=127.0.0.1 -c port=54329 -c unix_socket_directories="
+                  export DATABASE_URL=postgresql://max@127.0.0.1:54329/postgres
+                '';
+                postCheck = "pg_ctl stop --mode=fast --silent";
               }
             );
 

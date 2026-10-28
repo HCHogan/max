@@ -13,14 +13,24 @@ root:
 
 - `cargo fmt --check`
 - `cargo clippy --all-targets -- -D warnings`
-- `cargo nextest run --no-tests=warn`
+- `cargo nextest run`
 
 Do not commit if any of them fails. `nix flake check --impure` runs these
 and the rest of CI's checks: cargo-deny, cargo-audit, cargo-machete,
 max-core's dependency allow list, max-core built alone, and the package.
 
-The dev shell's Postgres (port 5434, database `max`) runs under `devenv up`;
-without a terminal, start it with `PC_TUI_ENABLED=0 devenv up`.
+The dev shell's Postgres (port 5434, database `max`, role `max`) runs under
+`devenv up`, the dev shell's own: a `devenv` installed elsewhere reads some
+other project. Without a terminal, start it with `PC_TUI_ENABLED=0 devenv up`.
+
+## Queries
+
+max-db's queries are checked at compile time: against the dev database in
+the dev shell, and against `crates/max-db/.sqlx` in the Nix build, which has
+no database. After changing a query or a migration, run
+`scripts/prepare-queries` (it resets the dev database) and commit
+`crates/max-db/.sqlx`. To build without the database running, set
+`SQLX_OFFLINE=true`.
 
 ## Public repository
 
