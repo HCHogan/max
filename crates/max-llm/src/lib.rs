@@ -7,9 +7,11 @@
 //! kept as raw JSON in an item's `opaque` and replayed as it came.
 
 pub mod chat;
+mod client;
 mod error;
 pub mod responses;
 
+pub use client::{Call, Client, Provider};
 pub use error::Error;
 
 use max_core::item::{Item, ItemKind, Part, ToolOutput, Usage};

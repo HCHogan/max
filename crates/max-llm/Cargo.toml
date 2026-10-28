@@ -10,8 +10,14 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+futures-util.workspace = true
 max-core.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
+sse-stream.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }

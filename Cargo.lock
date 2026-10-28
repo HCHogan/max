@@ -1104,10 +1104,13 @@ dependencies = [
 name = "max-llm"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "max-core",
  "reqwest",
  "serde_json",
+ "sse-stream",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
@@ -1906,6 +1909,19 @@ dependencies = [
  "thiserror",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "sse-stream"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c25ac7aff0abd1dbc474536e40416e1102c7dd9bfba0b9861c6d357f835dcfb4"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http-body",
+ "http-body-util",
+ "pin-project-lite",
 ]
 
 [[package]]
