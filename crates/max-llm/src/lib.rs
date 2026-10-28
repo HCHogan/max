@@ -25,6 +25,9 @@ pub struct Options {
     pub effort: Option<String>,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
+    /// Mark where each stable block of the context ends, for servers that
+    /// cache a prefix only where told to (NInfer). Chat only.
+    pub cache_breakpoints: bool,
 }
 
 /// What a call yields while the response streams in.

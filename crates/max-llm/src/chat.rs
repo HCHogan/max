@@ -25,7 +25,7 @@ const UNTHINK: &str = "</think>";
 pub fn body(request: &Request, options: &Options) -> Value {
     let mut messages = Vec::new();
     let mut turn: Option<Assistant> = None;
-    for item in &request.items {
+    for (index, item) in request.items.iter().enumerate() {
         let ours = item.source.as_ref() == Some(&request.model);
         let raw = item.opaque.as_ref().filter(|_| ours);
         // What a model wrote, as opposed to what Max shows it.
@@ -40,6 +40,24 @@ pub fn body(request: &Request, options: &Options) -> Value {
         match &item.kind {
             ItemKind::System { text } => {
                 messages.push(json!({ "role": "system", "content": text }))
+            }
+            // The base context's blocks are user items in a row, the most
+            // volatile last; the end of each before it is a stable prefix.
+            ItemKind::User { text }
+                if options.cache_breakpoints
+                    && matches!(
+                        request.items.get(index + 1).map(|next| &next.kind),
+                        Some(ItemKind::User { .. })
+                    ) =>
+            {
+                messages.push(json!({
+                    "role": "user",
+                    "content": [{
+                        "type": "text",
+                        "text": text,
+                        "prompt_cache_breakpoint": { "mode": "explicit" },
+                    }],
+                }));
             }
             ItemKind::User { text } => messages.push(json!({ "role": "user", "content": text })),
             ItemKind::Assistant { text } if modeled => {

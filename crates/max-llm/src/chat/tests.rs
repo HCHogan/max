@@ -147,6 +147,56 @@ fn signatures_and_inline_thinking_go_back_to_their_model() {
     assert!(body.get("tools").is_none());
 }
 
+#[test]
+fn cache_breakpoints_end_the_stable_blocks() {
+    let qwen = model("qwen3.8-27b");
+    let user = |text: &str| Item::new(ItemKind::User { text: text.into() }, 1);
+    let request = Request {
+        model: qwen.clone(),
+        items: vec![
+            Item::new(
+                ItemKind::System {
+                    text: "你是 Max。".into(),
+                },
+                1,
+            ),
+            user("摘要"),
+            user("尾巴"),
+            user("易变"),
+            from(&qwen, ItemKind::ToolCall(call("c1", "{}")), None),
+            result("c1"),
+            user("[新消息]"),
+        ],
+        tools: &[],
+        max_output: None,
+        roster: BTreeSet::new(),
+    };
+    let options = Options {
+        cache_breakpoints: true,
+        ..Options::default()
+    };
+    let marked = |text: &str| json!([{ "type": "text", "text": text, "prompt_cache_breakpoint": { "mode": "explicit" } }]);
+    let messages = body(&request, &options)["messages"].clone();
+    let contents: Vec<&Value> = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .map(|message| &message["content"])
+        .collect();
+    assert_eq!(
+        contents,
+        [
+            &marked("摘要"),
+            &marked("尾巴"),
+            &json!("易变"),
+            &json!("[新消息]")
+        ]
+    );
+    let plain = body(&request, &Options::default());
+    assert_eq!(plain["messages"][1]["content"], "摘要");
+}
+
 fn chunk(delta: Value) -> String {
     json!({ "choices": [{ "index": 0, "delta": delta, "finish_reason": null }] }).to_string()
 }
