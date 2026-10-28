@@ -20,6 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         app_id: std::env::var("QQBOT_APP_ID")?,
         secret: std::env::var("QQBOT_SECRET")?,
     };
+    tracing_subscriber::fmt::init();
     let client = Client::new(credentials)?;
     let me = client.me().await?;
     println!("connected as {} ({})", me.username, me.id);
