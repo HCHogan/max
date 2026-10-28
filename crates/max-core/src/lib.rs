@@ -8,4 +8,5 @@
 pub mod faces;
 pub mod ids;
 pub mod message;
+pub mod render;
 pub mod segment;
