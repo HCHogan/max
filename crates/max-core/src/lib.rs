@@ -11,6 +11,7 @@ pub mod intent;
 pub mod item;
 pub mod message;
 pub mod project;
+pub mod prompt;
 pub mod render;
 pub mod run;
 pub mod segment;
