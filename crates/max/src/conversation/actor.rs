@@ -39,7 +39,7 @@ pub struct Shared {
     pub intent: intent::Config,
     /// Rows of context the classifier reads before the ones it judges.
     pub context_lines: u32,
-    /// How long a restart waits for a model call or tool batch to end.
+    /// How long a core may go on when Max stops, before it is interrupted.
     pub stop_grace: Duration,
     /// Max's owners, who may run every command.
     pub owners: BTreeSet<PrincipalId>,
@@ -94,8 +94,8 @@ enum End {
     Failed(FailReason),
     /// Idle: its window ran out, or Max is stopping.
     Idle,
-    /// Max is stopping and the core isn't idle.
-    Suspend,
+    /// Max is stopping and the core wasn't done within the grace.
+    Stopped,
 }
 
 impl Conversation {
@@ -148,7 +148,7 @@ impl Conversation {
 
     fn deadline(&self) -> Option<Instant> {
         let core = self.core.as_ref().and_then(|a| {
-            if a.run.busy() {
+            if self.stopping.is_some() {
                 self.stopping
             } else if a.run.idle() {
                 Some(a.idle_since + a.chosen.idle_window)
@@ -412,13 +412,10 @@ impl Conversation {
             if a.run.busy() {
                 return Ok(());
             }
-            if self.stopping.is_some() {
-                let how = if a.run.idle() {
-                    End::Idle
-                } else {
-                    End::Suspend
-                };
-                self.end(how).await?;
+            // Stopping, a core may finish what it is doing within the grace;
+            // one with nothing to do ends now.
+            if self.stopping.is_some() && a.run.idle() {
+                self.end(End::Idle).await?;
                 continue;
             }
             // Over its limits, the core gives up; the next trigger starts a
@@ -485,8 +482,8 @@ impl Conversation {
     async fn timer(&mut self) -> Result<()> {
         let now = Instant::now();
         if let Some(a) = &self.core {
-            if a.run.busy() && self.stopping.is_some_and(|deadline| now >= deadline) {
-                self.end(End::Suspend).await?;
+            if self.stopping.is_some_and(|deadline| now >= deadline) {
+                self.end(End::Stopped).await?;
             } else if a.run.idle() && now >= a.idle_since + a.chosen.idle_window {
                 self.end(End::Idle).await?;
             }
@@ -510,33 +507,30 @@ impl Conversation {
         }
         let applied = match &how {
             End::Kill(reason) => a.run.interrupt(reason.clone()),
+            End::Stopped => a.run.interrupt("Max 在重启".into()),
             End::Failed(reason) => a.run.fail(reason.clone()),
-            End::Idle | End::Suspend => Ok(()),
+            End::Idle => Ok(()),
         };
         if let Err(rejected) = applied {
             warn!(turn = %a.turn, %rejected, "the ending didn't fit");
         }
-        let record = a.run.snapshot();
-        let now = Utc::now();
+        let outcome = a.run.outcome();
         let mut conn = self.shared.pool.acquire().await?;
-        if matches!(how, End::Suspend) {
-            turns::snapshot(&mut conn, a.turn, 1, &record, self.head, now).await?;
-            info!(turn = %a.turn, "the core is suspended");
-        } else {
-            let outcome = a.run.outcome();
-            turns::finish(&mut conn, a.turn, 1, &record, self.head, &outcome, now).await?;
-            info!(turn = %a.turn, ?outcome, rounds = a.run.round(), "the core ends");
-        }
+        turns::finish(&mut conn, a.turn, &a.run.snapshot(), &outcome, Utc::now()).await?;
+        info!(turn = %a.turn, ?outcome, rounds = a.run.round(), "the core ends");
         drop(conn);
-        if let End::Failed(reason) = how {
-            self.report_failure(&a.run, &reason).await?;
-        }
-        Ok(())
+        let why = match how {
+            End::Failed(FailReason::Model { .. }) => "出错了，这条没回上。",
+            End::Failed(FailReason::ContextExhausted) => "要读的东西太多，读不完，这条没回上。",
+            End::Stopped => "我要重启一下，这条没回上，等会儿再问一次吧。",
+            End::Kill(_) | End::Idle => return Ok(()),
+        };
+        self.report_unanswered(&a.run, why).await
     }
 
     /// A short line under the latest direct trigger the run didn't get to;
     /// a judged wake goes unanswered, as Max may stay quiet anyway.
-    async fn report_failure(&mut self, run: &Run, reason: &FailReason) -> Result<()> {
+    async fn report_unanswered(&mut self, run: &Run, why: &str) -> Result<()> {
         let trigger = run
             .unhandled()
             .into_iter()
@@ -546,13 +540,9 @@ impl Conversation {
         let Some(trigger) = trigger else {
             return Ok(());
         };
-        let text = match reason {
-            FailReason::Model { .. } => "出错了，这条没回上。",
-            FailReason::ContextExhausted => "要读的东西太多，读不完，这条没回上。",
-        };
         let draft = Draft {
             reply_to: Some(trigger),
-            nodes: vec![DraftNode::Text { text: text.into() }],
+            nodes: vec![DraftNode::Text { text: why.into() }],
         };
         self.say(draft, None, None).await?;
         Ok(())

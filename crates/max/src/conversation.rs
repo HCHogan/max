@@ -50,7 +50,7 @@ pub enum Event {
         task: TaskId,
         verdict: Option<Verdict>,
     },
-    /// Max restarts: end or suspend the core, then stop.
+    /// Max restarts: end the core, within a grace, then stop.
     Stop,
 }
 

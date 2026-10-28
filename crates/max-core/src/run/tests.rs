@@ -345,55 +345,12 @@ fn a_cut_off_call_keeps_what_was_said() {
 }
 
 #[test]
-fn resume_while_tools_run() {
-    let mut run = Run::new(spec(400_000, None), base(100), vec![Input::Wake(wake(1))]);
-    call_model(&mut run);
-    run.model_output(calls(&[("a", "shell"), ("b", "shell")]))
-        .unwrap();
-    run_tools(&mut run);
-    run.tool_result(CallId("a".into()), result(5)).unwrap();
-    let mut resumed = Run::resume(&run.snapshot()).unwrap();
-    let request = call_model(&mut resumed);
-    assert_eq!(texts(&request).last().unwrap(), "result b error=true");
-    resumed.model_output(says("好")).unwrap();
-    assert!(resumed.idle());
-    assert_replays(&resumed);
-}
-
-#[test]
-fn resume_while_the_model_runs() {
-    let mut run = Run::new(spec(400_000, None), base(100), vec![Input::Wake(wake(1))]);
-    call_model(&mut run);
-    run.input(messages(2, 5)).unwrap();
-    let mut resumed = Run::resume(&run.snapshot()).unwrap();
-    let request = call_model(&mut resumed);
-    assert_eq!(
-        texts(&request).last().unwrap(),
-        "[新消息]\n[10:00 小明 #2]: 消息2"
-    );
-    assert_eq!(resumed.round(), 2);
-    assert_replays(&resumed);
-}
-
-#[test]
-fn resume_with_tools_not_started() {
-    let mut run = Run::new(spec(400_000, None), base(100), vec![]);
-    call_model(&mut run);
-    run.model_output(calls(&[("a", "shell")])).unwrap();
-    let mut resumed = Run::resume(&run.snapshot()).unwrap();
-    assert_eq!(run_tools(&mut resumed), [CallId("a".into())]);
-    assert_replays(&resumed);
-}
-
-#[test]
-fn replay_refuses_other_versions_and_ended_runs() {
-    let mut run = Run::new(spec(400_000, None), base(100), vec![]);
+fn replay_refuses_other_versions() {
+    let run = Run::new(spec(400_000, None), base(100), vec![]);
     let mut record = run.snapshot();
     record.core_version += 1;
     assert!(matches!(
         Run::replay(&record),
         Err(ReplayError::Version { .. })
     ));
-    run.interrupt("!kill".into()).unwrap();
-    assert_eq!(Run::resume(&run.snapshot()), Err(ReplayError::Ended));
 }

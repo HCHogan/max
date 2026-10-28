@@ -16,7 +16,7 @@ use color_eyre::eyre::Result;
 use max_core::message::Platform;
 use max_core::run::Outcome;
 use max_db::platform::{self, Account, ConversationKind, Endpoint};
-use max_db::turns::{self, State};
+use max_db::turns;
 use max_db::{PgConnection, PgPool};
 use sqlx::Connection;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -53,7 +53,7 @@ impl Table {
     }
 
     /// Until every adapter has stopped sending, then until each actor has
-    /// ended or suspended its core, or `grace` runs out.
+    /// ended its core, or `grace` runs out.
     pub async fn run(mut self, mut inbound: UnboundedReceiver<Inbound>, grace: Duration) {
         while let Some(inbound) = inbound.recv().await {
             let chat = inbound.chat.native_id.clone();
@@ -181,18 +181,13 @@ impl Table {
 }
 
 /// Before any actor starts: the turns the last process left without an
-/// outcome. A suspended one expires, until resuming them comes in step 11;
-/// one that was running when it crashed is lost.
+/// outcome, which were running when it crashed, are lost.
 pub async fn close_unfinished(pool: &PgPool) -> Result<()> {
     let mut conn = pool.acquire().await?;
     let now = Utc::now();
     for turn in turns::unfinished(&mut conn).await? {
-        let outcome = match turn.state {
-            State::Suspended { .. } => Outcome::Expired,
-            State::Running => Outcome::Lost,
-        };
-        info!(turn = %turn.turn, ?outcome, "closed a turn the last run left");
-        turns::close(&mut conn, turn.turn, &outcome, now).await?;
+        info!(%turn, "a turn was running when Max crashed");
+        turns::close(&mut conn, turn, &Outcome::Lost, now).await?;
     }
     Ok(())
 }

@@ -54,7 +54,6 @@ mod tests {
                 "principals",
                 "summaries",
                 "turn_outcomes",
-                "turn_resumes",
                 "turn_snapshots",
                 "turns",
             ]

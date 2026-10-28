@@ -247,7 +247,7 @@ async fn an_idle_core_ends_on_its_own(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn stopping_mid_call_suspends(pool: PgPool) {
+async fn stopping_interrupts_a_call_that_outlasts_the_grace(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
     h.script.push(Answer::Hangs);
     h.send(at_max(0, " 在吗"));
@@ -257,11 +257,10 @@ async fn stopping_mid_call_suspends(pool: PgPool) {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     h.stop().await;
-    assert_eq!(h.turns().await[0].1, None, "suspended, not finished");
+    assert_eq!(h.turns().await[0].1, Some(Outcome::Interrupted));
     assert_eq!(h.count("select count(*) from turn_snapshots").await, 1);
-    // The next start can't resume it yet.
-    crate::table::close_unfinished(&h.pool).await.unwrap();
-    assert_eq!(h.turns().await[0].1, Some(Outcome::Expired));
+    let (_, said) = h.said().await;
+    assert_eq!(said, "我要重启一下，这条没回上，等会儿再问一次吧。");
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

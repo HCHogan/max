@@ -1,5 +1,5 @@
-//! Turn records: started, resumed, snapshot, finished. Append only; a
-//! turn's state is which of them it has.
+//! Turn records: started, then a snapshot and an outcome as it ends.
+//! Append only; a turn without an outcome is running.
 
 use chrono::{DateTime, Utc};
 use max_core::ids::{ConversationId, MessageId, TurnId};
@@ -44,65 +44,29 @@ pub async fn start(
     })
 }
 
-/// A suspended turn runs again after a restart, as attempt 2, 3 and so on.
-pub async fn resume(
-    conn: &mut PgConnection,
-    turn: TurnId,
-    attempt: i32,
-    at: DateTime<Utc>,
-) -> sqlx::Result<()> {
-    sqlx::query!(
-        "insert into turn_resumes (turn_id, attempt, resumed_at) values ($1, $2, $3)",
-        turn.0,
-        attempt,
-        at
-    )
-    .execute(conn)
-    .await?;
-    Ok(())
-}
-
-/// The core as an attempt stops: a suspend writes only this.
-pub async fn snapshot(
-    conn: &mut PgConnection,
-    turn: TurnId,
-    attempt: i32,
-    run: &RunRecord,
-    upto: MessageId,
-    at: DateTime<Utc>,
-) -> sqlx::Result<()> {
-    sqlx::query!(
-        "insert into turn_snapshots (turn_id, attempt, run, upto_id, taken_at)
-         values ($1, $2, $3, $4, $5)",
-        turn.0,
-        attempt,
-        Json(run) as _,
-        upto.0,
-        at
-    )
-    .execute(conn)
-    .await?;
-    Ok(())
-}
-
-/// A turn ends: its last snapshot and its outcome, together.
+/// A turn ends: its snapshot and its outcome, together.
 pub async fn finish(
     conn: &mut PgConnection,
     turn: TurnId,
-    attempt: i32,
     run: &RunRecord,
-    upto: MessageId,
     outcome: &Outcome,
     at: DateTime<Utc>,
 ) -> sqlx::Result<()> {
     let mut tx = conn.begin().await?;
-    snapshot(&mut tx, turn, attempt, run, upto, at).await?;
+    sqlx::query!(
+        "insert into turn_snapshots (turn_id, run, taken_at) values ($1, $2, $3)",
+        turn.0,
+        Json(run) as _,
+        at
+    )
+    .execute(&mut *tx)
+    .await?;
     close(&mut tx, turn, outcome, at).await?;
     tx.commit().await
 }
 
-/// An outcome without a snapshot, for the start of the process: a
-/// suspended turn that expired, or one that was running in a crash.
+/// An outcome without a snapshot, for the start of the process: a turn
+/// that was running in a crash.
 pub async fn close(
     conn: &mut PgConnection,
     turn: TurnId,
@@ -117,7 +81,6 @@ pub async fn close(
             FailReason::Model { error } => ("failed", Some("model"), Some(error.as_str())),
             FailReason::ContextExhausted => ("failed", Some("context_exhausted"), None),
         },
-        Outcome::Expired => ("expired", None, None),
         Outcome::Lost => ("lost", None, None),
     };
     sqlx::query!(
@@ -153,69 +116,22 @@ pub async fn outcome(conn: &mut PgConnection, turn: TurnId) -> sqlx::Result<Opti
             error: row.error.unwrap_or_default(),
         }),
         ("failed", Some("context_exhausted")) => failed(FailReason::ContextExhausted),
-        ("expired", None) => Outcome::Expired,
         ("lost", None) => Outcome::Lost,
         (outcome, _) => return Err(unknown("outcome", outcome)),
     }))
 }
 
-/// A turn without an outcome, found when the process starts.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Unfinished {
-    pub turn: TurnId,
-    pub conversation: ConversationId,
-    pub from: MessageId,
-    /// The latest attempt: 1 for the start, more after resumes.
-    pub attempt: i32,
-    pub state: State,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum State {
-    /// The latest attempt left a snapshot: suspended by a clean restart.
-    Suspended {
-        run: Box<RunRecord>,
-        upto: MessageId,
-        taken_at: DateTime<Utc>,
-    },
-    /// No snapshot: it was running when the process crashed.
-    Running,
-}
-
-pub async fn unfinished(conn: &mut PgConnection) -> sqlx::Result<Vec<Unfinished>> {
-    let rows = sqlx::query!(
-        r#"
-        select t.id, t.conversation_id, t.from_id, a.attempt as "attempt!",
-               s.run as "run?: Json<RunRecord>", s.upto_id as "upto_id?",
-               s.taken_at as "taken_at?"
-        from turns t
-        cross join lateral (
-            select coalesce(max(attempt), 1) as attempt from turn_resumes where turn_id = t.id
-        ) a
-        left join turn_snapshots s on s.turn_id = t.id and s.attempt = a.attempt
-        where not exists (select from turn_outcomes o where o.turn_id = t.id)
-        order by t.id
-        "#
+/// Turns without an outcome, found when the process starts: a clean stop
+/// ends every turn, so these were running in a crash.
+pub async fn unfinished(conn: &mut PgConnection) -> sqlx::Result<Vec<TurnId>> {
+    let ids = sqlx::query_scalar!(
+        "select id from turns t
+         where not exists (select from turn_outcomes o where o.turn_id = t.id)
+         order by id"
     )
     .fetch_all(conn)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| Unfinished {
-            turn: TurnId(row.id),
-            conversation: ConversationId(row.conversation_id),
-            from: MessageId(row.from_id),
-            attempt: row.attempt,
-            state: match (row.run, row.upto_id, row.taken_at) {
-                (Some(Json(run)), Some(upto), Some(taken_at)) => State::Suspended {
-                    run: Box::new(run),
-                    upto: MessageId(upto),
-                    taken_at,
-                },
-                _ => State::Running,
-            },
-        })
-        .collect())
+    Ok(ids.into_iter().map(TurnId).collect())
 }
 
 #[cfg(test)]

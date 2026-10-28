@@ -29,8 +29,7 @@ use max::table::{self, Me, Table};
 // Stopping, in order, within systemd's TimeoutStopSec of 60 seconds.
 /// The QQ gateway saves its session.
 const INTAKE_GRACE: Duration = Duration::from_secs(5);
-/// A conversation waits this long for a model call to end, then suspends
-/// its core;
+/// A conversation's core may go on this long, then is interrupted;
 const STOP_GRACE: Duration = Duration::from_secs(20);
 /// the table waits a little longer for every conversation.
 const CONVERSATIONS_GRACE: Duration = Duration::from_secs(25);

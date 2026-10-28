@@ -55,44 +55,14 @@ async fn ordinals_count_per_conversation(pool: PgPool) -> sqlx::Result<()> {
 }
 
 #[sqlx::test]
-async fn a_turns_state_is_the_records_it_has(pool: PgPool) -> sqlx::Result<()> {
+async fn a_turn_without_an_outcome_is_unfinished(pool: PgPool) -> sqlx::Result<()> {
     let mut conn = pool.acquire().await?;
     let (group, from) = group(&mut conn, "group:30001").await?;
     let conversation = group.conversation;
     let running = start(&mut conn, conversation, &[], from, at(1)).await?.turn;
-    let suspended = start(&mut conn, conversation, &[], from, at(2)).await?.turn;
-    let resumed = start(&mut conn, conversation, &[], from, at(3)).await?.turn;
-    let finished = start(&mut conn, conversation, &[], from, at(4)).await?.turn;
-    let run = record();
-    snapshot(&mut conn, suspended, 1, &run, from, at(5)).await?;
-    // Suspended, resumed, then crashed: the second attempt has no snapshot.
-    snapshot(&mut conn, resumed, 1, &run, from, at(5)).await?;
-    resume(&mut conn, resumed, 2, at(6)).await?;
-    finish(&mut conn, finished, 1, &run, from, &Outcome::Silent, at(7)).await?;
-
-    let found = unfinished(&mut conn).await?;
-    let states: Vec<(TurnId, i32, &State)> = found
-        .iter()
-        .map(|turn| (turn.turn, turn.attempt, &turn.state))
-        .collect();
-    let snapshot = State::Suspended {
-        run: Box::new(run),
-        upto: from,
-        taken_at: at(5),
-    };
-    assert_eq!(
-        states,
-        [
-            (running, 1, &State::Running),
-            (suspended, 1, &snapshot),
-            (resumed, 2, &State::Running),
-        ]
-    );
-    assert!(
-        found
-            .iter()
-            .all(|turn| turn.from == from && turn.conversation == conversation)
-    );
+    let finished = start(&mut conn, conversation, &[], from, at(2)).await?.turn;
+    finish(&mut conn, finished, &record(), &Outcome::Silent, at(3)).await?;
+    assert_eq!(unfinished(&mut conn).await?, [running]);
     assert_eq!(outcome(&mut conn, finished).await?, Some(Outcome::Silent));
     assert_eq!(outcome(&mut conn, running).await?, None);
     Ok(())
@@ -111,7 +81,6 @@ async fn outcomes_read_back_as_written(pool: PgPool) -> sqlx::Result<()> {
             error: "429".into(),
         }),
         failed(FailReason::ContextExhausted),
-        Outcome::Expired,
         Outcome::Lost,
     ];
     for (minute, written) in (1..).zip(&outcomes) {
@@ -132,7 +101,7 @@ async fn finishing_twice_leaves_no_second_snapshot(pool: PgPool) -> sqlx::Result
         .await?
         .turn;
     close(&mut conn, turn, &Outcome::Lost, at(2)).await?;
-    let again = finish(&mut conn, turn, 1, &record(), from, &Outcome::Silent, at(3)).await;
+    let again = finish(&mut conn, turn, &record(), &Outcome::Silent, at(3)).await;
     assert!(again.is_err());
     let snapshots = sqlx::query_scalar!(
         r#"select count(*) as "n!" from turn_snapshots where turn_id = $1"#,

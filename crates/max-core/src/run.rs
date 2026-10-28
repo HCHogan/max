@@ -124,8 +124,6 @@ pub enum Outcome {
     Failed {
         reason: FailReason,
     },
-    /// Suspended and not resumed in time.
-    Expired,
     /// Running when the process crashed.
     Lost,
 }
