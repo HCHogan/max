@@ -227,7 +227,7 @@ fn card_line(card: &Card) -> String {
     format!("[card: {}]", parts.join(" | "))
 }
 
-fn weekday(day: Weekday) -> &'static str {
+pub(crate) fn weekday(day: Weekday) -> &'static str {
     match day {
         Weekday::Mon => "周一",
         Weekday::Tue => "周二",
