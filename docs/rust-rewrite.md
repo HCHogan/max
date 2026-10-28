@@ -488,10 +488,14 @@ v1 的 ledger 已经存了原始 payload 和文本兜底；投递回执（`deliv
 2026-10-28 定，沿用 Haskell 版（见 features.md 的 Replies）。模型的文本输出由分段器（`max-core`）切成一串 `Draft`：
 
 - 空行分段，一段一条消息；代码块里的空行不切；`[split]` 强制切开，条数不限。
-- 段首的 `[↩#id]`：这一段回复那条消息；号码无效时怎么办见[解析和发送](#解析和发送)。
-- `[@#N]`：提及一个人，解析规则见[解析和发送](#解析和发送)。
-- 整个输出为空，或者只有 `[silence]`，就什么都不发；`[↩#id] [silence:表情名]` 给那条消息回一个表情。段首的引用句柄不影响判断。
-- 分段器是唯一把模型文本变成消息的地方，进度旁白也走它。Haskell 版的教训：每一个自己另写"文本转消息"的发送路径，最后都把 `[split]` 或 `[↩#id]` 原样漏进了群里。
+- 占位符只有一种写法 `[类型#id]`，后面可以带 `: 描述` 和紧跟的 `(属性)`，都只认 id（2026-10-28 改，沿用 Haskell 版 2026-08 统一后的写法）。原来的 `[↩#id]`、`[@#N]` 是符号，`[撤回了 #id]` 这类是句子，模型会照着说出来；`[unsend#id]` 不会。
+- 段首的 `[reply#id]`：这一段回复那条消息；一段里有几个时取第一个，全部去掉。号码无效时怎么办见[解析和发送](#解析和发送)。
+- `[mention#N]`：提及一个人，解析规则见[解析和发送](#解析和发送)。
+- `[face#id]` 发 QQ 小黄脸；`[sticker#id]`、`[image#id.序号]` 引用已有的表情包和图片。媒体不在 v1，分段器照样认出来，免得原样漏进群里，`lower` 先丢掉。
+- 整个输出为空，或者只有 `[silence]`，就什么都不发；`[reply#id] [silence:表情名]` 给那条消息回一个表情，不带引用就回在触发消息上。段首的引用不影响判断。一段里还有别的内容时，`[silence]` 和 `[silence:表情名]` 直接去掉。
+- 模型偶尔把工具调用写进正文，比如 `[find_stickers query="无语"]`：方括号里是英文标识符、空白，再带 `=` 或引号的，去掉。代码块里的不动。
+- 分段器是唯一把模型文本变成消息的地方，进度旁白也走它。Haskell 版的教训：每一个自己另写"文本转消息"的发送路径，最后都把 `[split]` 或 `[reply#id]` 原样漏进了群里。
+- 切分只看文本，不看流式到达的时机：同一段输出，流式和一次给出切出来的消息完全相同。Haskell 版流式时还会在长段落的句末提前放出一部分，结果取决于时机，这里不做。
 
 ### 出站
 
@@ -1059,7 +1063,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 - `canonical_content` 的 v2 nodes 转成新 `Node`；`raw` 从 QQ 的 `segments` 列取，Matrix 从 `platform_events.raw_payload` 取；`text` 重新渲染。
 - Max 自己的消息：`agent_turn_id` 加 `turn_chunk_index` 变成 turn id 和段号；它们的平台 id 写进 `deliveries`，状态 sent。否则 sender 启动时会把它们都补记成结果未知。旧 `agent_turns` 导成 `turns` 加 `turn_outcomes`，保留 `t#N`，没有快照。
 - `conversation_compartments` 只导 `active` 的；群号换成会话 id；importance 0..1 换成 1..100；单摘要时期的行只有 `summary`，放进 p1，其它层空着。句柄从 `episode:<uuid>` 换成 `summary#<id>`。
-- `principals` 和 `principal_identities` 直接搬，id 不变，旧摘要和记忆里的 `[@#N]` 因此还有效。旧表按 Max 的账号（`platform_account_id`）区分 identity，v1 每个平台一个账号，直接换成平台。`sender_name` 从旧 `messages` 的 `sender_card`、`sender_nickname` 取，群名片优先；旧库没有角色，`sender_role` 留空。`endpoint_known_identities` 不导。
+- `principals` 和 `principal_identities` 直接搬，id 不变，旧摘要和记忆里的 `[mention#N]` 因此还有效；改名之前写的 `[@#N]` 导入时改写成 `[mention#N]`。旧表按 Max 的账号（`platform_account_id`）区分 identity，v1 每个平台一个账号，直接换成平台。`sender_name` 从旧 `messages` 的 `sender_card`、`sender_nickname` 取，群名片优先；旧库没有角色，`sender_role` 留空。`endpoint_known_identities` 不导。
 - `sessions` 按[配置](#配置)里说的映射 profile 名；`memories` 只导 active 和 permanent 的当前版本。
 - 各群 VM 的 `/work` 也迁（2026-10-27 定）：按群号找到对应的会话，把这个群当前沙箱卷里的 `work` 拷到新卷，属主改成 `maxx`（见 [VM 进程](#vm-进程)）。`nix.img`（guest 里可写的 Nix store，存的是装过的包）提议不迁，用到时重新装。旧卷在 root 所有的目录下，读它要 root。
 - 自动化、贴纸、lingo、Destiny 等各自功能做到时再导。
@@ -1091,16 +1095,16 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 
 ### 模型看到的
 
-- 人的句柄是 `[@#12]`，和 `#123`、`[image#123.0]`、`summary#45`、`t#42` 同一套语法。ADR 004 推迟的带类型前缀写法这次也不做，没观察到不同命名空间的号码被混用。
-- 尾巴每行 `[HH:MM 名字 #id]`，名字用 `sender_name` 快照，所以有人改名，旧行也不变，前缀不受影响。正文里的提及渲染成 `[@#12]`。
-- **名册**在创建核心时随基础上下文一起投影，放在易变块（2026-10-27 定）。范围是上下文里出现的人：尾巴的发送者和被提及的人、渲染出的摘要里的 `[@#N]`、第一批输入的发送者。一人一行，如 `[@#12] 名字（管理员）`；名字和角色取这个人在本端点最新一条消息的快照，没发过言的取 `principals.display_name`。一次 `DISTINCT ON` 查询，走 `messages (endpoint_id, sender_identity_id, id)` 索引。
+- 人的句柄是 `[mention#12]`，和 `#123`、`[image#123.0]`、`summary#45`、`t#42` 同一套语法，见[回复的写法](#回复的写法)。ADR 004 推迟的带类型前缀写法这次也不做，没观察到不同命名空间的号码被混用。
+- 尾巴每行 `[HH:MM 名字 #id]`，名字用 `sender_name` 快照，所以有人改名，旧行也不变，前缀不受影响。正文里的提及渲染成 `[mention#12]`。
+- **名册**在创建核心时随基础上下文一起投影，放在易变块（2026-10-27 定）。范围是上下文里出现的人：尾巴的发送者和被提及的人、渲染出的摘要里的 `[mention#N]`、第一批输入的发送者。一人一行，如 `[mention#12] 名字（管理员）`；名字和角色取这个人在本端点最新一条消息的快照，没发过言的取 `principals.display_name`。一次 `DISTINCT ON` 查询，走 `messages (endpoint_id, sender_identity_id, id)` 索引。
 - 核心活着时第一次出现的人，在那一批 `[新消息]` 块里补一行名册。
 - 模型看不到平台号码。
 
 ### 解析和发送
 
-- 核心持有名册里的 principal 集合，随基础上下文存进快照。解析模型输出时，`[@#N]` 不在集合里的当普通文本，模型编出来的号码不会变成真 @。
-- 引用（2026-10-28 定）：会话 actor 入账 `Said` 时检查 `[↩#id]`：它必须是这个会话时间线上的一条消息，而且不是事件行（撤回、编辑、reaction）。不是的话，比如编出来的号码、别的会话的消息，就去掉引用，正文照发，记一条 warn；`[↩#id] [silence:表情名]` 的引用无效，就什么都不发。这一步不像提及那样在核心里查：模型可以合法地引用它用工具查到、不在上下文里的旧消息，只有数据库知道这个号码在不在这个会话里。发送时引用的消息没有平台 id（比如它自己就没发出去），`lower` 就不带引用。
+- 核心持有名册里的 principal 集合，随基础上下文存进快照，模型调用任务的分段器拿着它。`[mention#N]` 不在集合里的不变成提及，模型编出来的号码不会变成真 @：带了名字（`[mention#N: 名字]`）的发成 `@名字` 文本，没带的去掉。
+- 引用（2026-10-28 定）：会话 actor 入账 `Said` 时检查 `[reply#id]`：它必须是这个会话时间线上的一条消息，而且不是事件行（撤回、编辑、reaction）。不是的话，比如编出来的号码、别的会话的消息，就去掉引用，正文照发，记一条 warn；`[reply#id] [silence:表情名]` 的引用无效，就什么都不发。这一步不像提及那样在核心里查：模型可以合法地引用它用工具查到、不在上下文里的旧消息，只有数据库知道这个号码在不在这个会话里。发送时引用的消息没有平台 id（比如它自己就没发出去），`lower` 就不带引用。
 - 发送时，`DraftNode::Mention(principal)` 由适配器的 `lower` 解析成目标端点平台上这个人的 identity，发原生 @；有多个时取在这个端点最近发过言的那个；没有就降成 `@名字` 文本。
 - 镜像时这套规则不用改：两边都有账号的人两边都是原生 @，只有一边有账号的，另一边是文本。
 
