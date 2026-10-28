@@ -9,13 +9,18 @@
 //! results it fills in for cancelled calls, isn't logged; replay makes it
 //! again.
 
+mod record;
+
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+pub use record::{CORE_VERSION, ReplayError, RunRecord};
+
 use crate::ids::{CallId, MessageId, PrincipalId, TurnId};
 use crate::intent::Reason;
 use crate::item::{Item, ItemKind, ModelOutput, ModelTag, ToolOutput};
+use crate::segment::Segmenter;
 use crate::tools::{self, Call, TOOLS, ToolSpec};
 
 /// What a run is allowed: fixed for the turn.
@@ -188,6 +193,12 @@ pub struct Run {
     model_due: bool,
     ended: bool,
     round: u32,
+    /// The provider's count for the last request and its output, and how
+    /// much of the transcript that covers.
+    measured: Option<(u32, usize)>,
+    /// The log's length when the core last went idle: every input before
+    /// that is handled.
+    handled: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,6 +225,8 @@ impl Run {
             model_due: true,
             ended: false,
             round: 0,
+            measured: None,
+            handled: None,
         }
     }
 
@@ -255,6 +268,10 @@ impl Run {
         self.apply(Input::ModelOutput(out))
     }
 
+    pub fn partial_output(&mut self, text: String, tokens: u32) -> Result<(), Rejected> {
+        self.apply(Input::PartialOutput { text, tokens })
+    }
+
     pub fn tool_result(&mut self, call: CallId, output: ToolOutput) -> Result<(), Rejected> {
         self.apply(Input::ToolResult { call, output })
     }
@@ -266,6 +283,73 @@ impl Run {
             Input::Messages { .. } | Input::Wake(_) => self.apply(input),
             _ => Err(Rejected::NotAnInput),
         }
+    }
+
+    pub fn interrupt(&mut self, reason: String) -> Result<(), Rejected> {
+        self.apply(Input::Interrupt { reason })
+    }
+
+    pub fn fail(&mut self, reason: FailReason) -> Result<(), Rejected> {
+        self.apply(Input::Fail { reason })
+    }
+
+    /// Transcript and waiting inputs are over the limit. The actor ends the
+    /// run at the next boundary and hands [`Run::leftover`] to a new core.
+    pub fn at_limit(&self) -> bool {
+        self.size() > self.base_tokens + self.spec.limit(self.base_tokens)
+    }
+
+    /// The wakes the model hasn't finished with: seen by a model call that
+    /// didn't reach an output without tool calls, or not seen yet.
+    pub fn leftover(&self) -> Vec<Wake> {
+        let first = if self.handled.is_none() {
+            &self.first[..]
+        } else {
+            &[]
+        };
+        let since = &self.log[self.handled.unwrap_or(0)..];
+        first
+            .iter()
+            .chain(since)
+            .filter_map(|input| match input {
+                Input::Wake(wake) => Some(wake.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// For a run that has ended or is idle.
+    pub fn outcome(&self) -> Outcome {
+        for input in self.log.iter().rev() {
+            match input {
+                Input::Interrupt { .. } => return Outcome::Interrupted,
+                Input::Fail { reason } => {
+                    return Outcome::Failed {
+                        reason: reason.clone(),
+                    };
+                }
+                _ => {}
+            }
+        }
+        if self.said() {
+            Outcome::Answered
+        } else {
+            Outcome::Silent
+        }
+    }
+
+    /// The core is waiting for nothing and has nothing to do: ending it now
+    /// loses nothing.
+    pub fn idle(&self) -> bool {
+        !self.ended
+            && !self.busy()
+            && self.due.is_empty()
+            && !self.model_due
+            && !self.trigger_pending()
+    }
+
+    pub fn round(&self) -> u32 {
+        self.round
     }
 
     fn apply(&mut self, input: Input) -> Result<(), Rejected> {
@@ -309,6 +393,7 @@ impl Run {
             }
             Input::ModelOutput(out) => {
                 self.transcript.extend(out.items.iter().cloned());
+                self.measured = Some((out.usage.input + out.usage.output, self.transcript.len()));
                 self.in_flight = InFlight::Nothing;
                 for item in &out.items {
                     if let ItemKind::ToolCall(call) = &item.kind {
@@ -360,6 +445,9 @@ impl Run {
             }
         }
         self.log.push(input);
+        if self.idle() {
+            self.handled = Some(self.log.len());
+        }
     }
 
     /// Puts the waiting inputs into the transcript as one `[新消息]` block.
@@ -400,6 +488,40 @@ impl Run {
         self.pending
             .iter()
             .any(|input| matches!(input, Input::Wake(_)))
+    }
+
+    /// The provider's last count plus everything after it, waiting inputs
+    /// included; before the first call, the estimates alone.
+    fn size(&self) -> u32 {
+        let (measured, covered) = self.measured.unwrap_or((self.base_tokens, 0));
+        let after: u32 = self.transcript[covered..]
+            .iter()
+            .map(|item| item.tokens)
+            .sum();
+        let pending: u32 = self
+            .pending
+            .iter()
+            .map(|input| match input {
+                Input::Messages { item, .. } => item.tokens,
+                Input::Wake(wake) => wake.item.as_ref().map_or(0, |item| item.tokens),
+                _ => 0,
+            })
+            .sum();
+        measured + after + pending
+    }
+
+    /// Whether anything the model wrote went out: text that the segmenter
+    /// turns into a message or a reaction.
+    fn said(&self) -> bool {
+        self.transcript.iter().any(|item| match &item.kind {
+            ItemKind::Assistant { text } => {
+                let mut segmenter = Segmenter::new(self.base.roster.clone());
+                let mut segments = segmenter.push(text);
+                segments.extend(segmenter.finish());
+                !segments.is_empty()
+            }
+            _ => false,
+        })
     }
 }
 
