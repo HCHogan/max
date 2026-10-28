@@ -39,9 +39,6 @@ const DRAIN: Duration = Duration::from_secs(15);
 /// Tasks still running when the runtime shuts down.
 const SHUTDOWN: Duration = Duration::from_secs(10);
 
-/// A core running longer than this is replaced at its next boundary.
-const MAX_RUN: Duration = Duration::from_secs(30 * 60);
-
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
@@ -132,7 +129,6 @@ async fn serve(config: Config) -> Result<()> {
         offset: config.utc_offset,
         intent: config.intent.state_machine(),
         context_lines: config.intent.context_lines,
-        max_run: MAX_RUN,
         stop_grace: STOP_GRACE,
         owners,
         binds: Arc::default(),

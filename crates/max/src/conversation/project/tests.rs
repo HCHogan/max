@@ -12,7 +12,6 @@ fn direct(id: MessageId) -> Wake {
         ids: vec![id],
         reason: Reason::Direct,
         item: None,
-        handed_over: None,
     }
 }
 
@@ -85,10 +84,7 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
         now: at(5),
         offset: offset(),
     };
-    let first = First {
-        wakes: vec![direct(c)],
-        handed_over_by: None,
-    };
+    let first = [direct(c)];
     let (context, inputs) = projection.base(&mut conn, d, &first).await.unwrap();
     assert_eq!(inputs, [Input::Wake(direct(c))]);
     assert_eq!(context.roster, BTreeSet::from([max, xiaoming, xiaohong]));
@@ -125,7 +121,7 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_judged_wake_after_a_handover(pool: PgPool) {
+async fn a_judged_wake(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
     let place = group(&mut conn).await;
     let said = from_xiaoming(0, vec![text("rust 的生命周期怎么理解")]);
@@ -141,7 +137,6 @@ async fn a_judged_wake_after_a_handover(pool: PgPool) {
         ids: vec![id],
         item: judged(&reason),
         reason,
-        handed_over: Some(max_core::ids::TurnId(7)),
     };
     let projection = Projection {
         place: &place,
@@ -151,17 +146,12 @@ async fn a_judged_wake_after_a_handover(pool: PgPool) {
         now: at(1),
         offset: offset(),
     };
-    let first = First {
-        wakes: vec![wake],
-        handed_over_by: Some(41),
-    };
-    let (context, _) = projection.base(&mut conn, id, &first).await.unwrap();
+    let (context, _) = projection.base(&mut conn, id, &[wake]).await.unwrap();
     // Nothing but the trigger, so no tail.
     assert_eq!(context.items.len(), 2);
     let volatile = user_text(&context.items[1]);
     let expected = format!(
         "[新消息]\n\
-         [t#41 没做完就因为输入太多被结束了，下面是它没处理完的]\n\
          --- 2026-10-29 周四 ---\n\
          [12:00 小明 #{id}]: rust 的生命周期怎么理解\n\
          [判定 topic：在问 Rust]\n"

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 pub use record::{CORE_VERSION, ReplayError, RunRecord};
 
-use crate::ids::{CallId, MessageId, PrincipalId, TurnId};
+use crate::ids::{CallId, MessageId, PrincipalId};
 use crate::intent::Reason;
 use crate::item::{Item, ItemKind, ModelOutput, ModelTag, ToolOutput};
 use crate::segment::Segmenter;
@@ -36,8 +36,8 @@ pub struct RunSpec {
 }
 
 impl RunSpec {
-    /// How big transcript and waiting inputs may grow before the core is
-    /// replaced: the window minus output, a 5% margin and the base context,
+    /// How big transcript and waiting inputs may grow before the core gives
+    /// up: the window minus output, a 5% margin and the base context,
     /// and never more than half the window.
     pub fn limit(&self, base: u32) -> u32 {
         let c = self.window;
@@ -102,9 +102,6 @@ pub struct Wake {
     /// What the model is shown, such as `[判定 followup：…]`. None for a
     /// direct trigger, whose rows are marked already.
     pub item: Option<Item>,
-    /// The turn that hit its limit before handling this. A trigger is handed
-    /// over once at most.
-    pub handed_over: Option<TurnId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,10 +110,9 @@ pub enum FailReason {
     Model {
         error: String,
     },
-    /// A handed-over trigger hit the limit again.
+    /// The core grew past its limit, or its first inputs alone are over
+    /// it.
     ContextExhausted,
-    /// The first inputs alone are over the limit.
-    InputTooLarge,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -301,15 +297,16 @@ impl Run {
         self.apply(Input::Fail { reason })
     }
 
-    /// Transcript and waiting inputs are over the limit. The actor ends the
-    /// run at the next boundary and hands [`Run::leftover`] to a new core.
+    /// Transcript and waiting inputs are over the limit, or the first inputs
+    /// alone leave no room. The actor ends the run there.
     pub fn at_limit(&self) -> bool {
-        self.size() > self.base_tokens + self.spec.limit(self.base_tokens)
+        let limit = self.spec.limit(self.base_tokens);
+        limit == 0 || self.size() > self.base_tokens + limit
     }
 
     /// The wakes the model hasn't finished with: seen by a model call that
     /// didn't reach an output without tool calls, or not seen yet.
-    pub fn leftover(&self) -> Vec<Wake> {
+    pub fn unhandled(&self) -> Vec<Wake> {
         let first = if self.handled.is_none() {
             &self.first[..]
         } else {

@@ -22,7 +22,7 @@ use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};
 
 use super::ingest;
-use super::project::{self, First, Projection};
+use super::project::{self, Projection};
 use super::{Event, Place, TaskId, classify, model};
 use crate::bind::Binds;
 use crate::inbound::Inbound;
@@ -39,8 +39,6 @@ pub struct Shared {
     pub intent: intent::Config,
     /// Rows of context the classifier reads before the ones it judges.
     pub context_lines: u32,
-    /// A core running longer than this is replaced at its next boundary.
-    pub max_run: Duration,
     /// How long a restart waits for a model call or tool batch to end.
     pub stop_grace: Duration,
     /// Max's owners, who may run every command.
@@ -88,8 +86,6 @@ struct Active {
     last_at: Option<DateTime<Utc>>,
     idle_since: Instant,
     started: Instant,
-    /// The first inputs alone are over the limit: the core ends unstarted.
-    too_large: bool,
 }
 
 /// How a core ends.
@@ -98,9 +94,6 @@ enum End {
     Failed(FailReason),
     /// Idle: its window ran out, or Max is stopping.
     Idle,
-    /// Over its limits; the caller starts a new core with what is left
-    /// over.
-    Boundary,
     /// Max is stopping and the core isn't idle.
     Suspend,
 }
@@ -316,7 +309,6 @@ impl Conversation {
                         ids,
                         item: project::judged(&reason),
                         reason,
-                        handed_over: None,
                     };
                     match self.core.as_mut() {
                         Some(a) => {
@@ -324,13 +316,7 @@ impl Conversation {
                                 warn!(turn = %a.turn, %rejected, "a wake didn't fit the core");
                             }
                         }
-                        None => {
-                            let first = First {
-                                wakes: vec![wake],
-                                handed_over_by: None,
-                            };
-                            self.start_core(first).await?;
-                        }
+                        None => self.start_core(wake).await?,
                     }
                 }
                 Decision::Classify { batch } => {
@@ -367,7 +353,7 @@ impl Conversation {
             .spawn(move |_| classify::classify(job, task, mailbox));
     }
 
-    async fn start_core(&mut self, first: First) -> Result<()> {
+    async fn start_core(&mut self, wake: Wake) -> Result<()> {
         if self.stopping.is_some() {
             return Ok(());
         }
@@ -388,7 +374,7 @@ impl Conversation {
         };
         let from = self.head;
         let mut conn = self.shared.pool.acquire().await?;
-        let (context, inputs) = projection.base(&mut conn, from, &first).await?;
+        let (context, inputs) = projection.base(&mut conn, from, &[wake]).await?;
         let started = turns::start(&mut conn, self.place.conversation, &inputs, from, now).await?;
         drop(conn);
         let spec = RunSpec {
@@ -398,7 +384,6 @@ impl Conversation {
             max_tools: Vec::new(),
         };
         let base: u32 = context.items.iter().map(|item| item.tokens).sum();
-        let too_large = spec.limit(base) == 0;
         let roster = context.roster.clone();
         info!(conversation = %self.place.conversation, turn = %started.turn, ordinal = started.ordinal, model = %chosen.reference(), base, "a core starts");
         self.core = Some(Active {
@@ -414,7 +399,6 @@ impl Conversation {
             last_at: Some(now),
             idle_since: Instant::now(),
             started: Instant::now(),
-            too_large,
         });
         Ok(())
     }
@@ -428,10 +412,6 @@ impl Conversation {
             if a.run.busy() {
                 return Ok(());
             }
-            if a.too_large {
-                self.end(End::Failed(FailReason::InputTooLarge)).await?;
-                continue;
-            }
             if self.stopping.is_some() {
                 let how = if a.run.idle() {
                     End::Idle
@@ -441,24 +421,15 @@ impl Conversation {
                 self.end(how).await?;
                 continue;
             }
-            if a.run.at_limit() || a.started.elapsed() > self.shared.max_run {
-                let leftover = a.run.leftover();
-                if leftover.iter().any(|wake| wake.handed_over.is_some()) {
-                    self.end(End::Failed(FailReason::ContextExhausted)).await?;
-                    continue;
-                }
-                let first = First {
-                    wakes: leftover
-                        .into_iter()
-                        .map(|wake| Wake {
-                            handed_over: Some(a.turn),
-                            ..wake
-                        })
-                        .collect(),
-                    handed_over_by: Some(a.ordinal),
+            // Over its limits, the core gives up; the next trigger starts a
+            // new one from the ledger.
+            if a.run.at_limit() {
+                let how = if a.run.idle() {
+                    End::Idle
+                } else {
+                    End::Failed(FailReason::ContextExhausted)
                 };
-                self.end(End::Boundary).await?;
-                self.start_core(first).await?;
+                self.end(how).await?;
                 continue;
             }
             match a.run.next_step() {
@@ -540,7 +511,7 @@ impl Conversation {
         let applied = match &how {
             End::Kill(reason) => a.run.interrupt(reason.clone()),
             End::Failed(reason) => a.run.fail(reason.clone()),
-            End::Idle | End::Boundary | End::Suspend => Ok(()),
+            End::Idle | End::Suspend => Ok(()),
         };
         if let Err(rejected) = applied {
             warn!(turn = %a.turn, %rejected, "the ending didn't fit");
@@ -567,7 +538,7 @@ impl Conversation {
     /// a judged wake goes unanswered, as Max may stay quiet anyway.
     async fn report_failure(&mut self, run: &Run, reason: &FailReason) -> Result<()> {
         let trigger = run
-            .leftover()
+            .unhandled()
             .into_iter()
             .filter(|wake| wake.reason == Reason::Direct)
             .filter_map(|wake| wake.ids.last().copied())
@@ -578,7 +549,6 @@ impl Conversation {
         let text = match reason {
             FailReason::Model { .. } => "出错了，这条没回上。",
             FailReason::ContextExhausted => "要读的东西太多，读不完，这条没回上。",
-            FailReason::InputTooLarge => "消息太长了，我读不下，换个短点的说法吧。",
         };
         let draft = Draft {
             reply_to: Some(trigger),

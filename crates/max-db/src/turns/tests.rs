@@ -111,7 +111,6 @@ async fn outcomes_read_back_as_written(pool: PgPool) -> sqlx::Result<()> {
             error: "429".into(),
         }),
         failed(FailReason::ContextExhausted),
-        failed(FailReason::InputTooLarge),
         Outcome::Expired,
         Outcome::Lost,
     ];

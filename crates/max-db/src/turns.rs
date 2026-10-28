@@ -116,7 +116,6 @@ pub async fn close(
         Outcome::Failed { reason } => match reason {
             FailReason::Model { error } => ("failed", Some("model"), Some(error.as_str())),
             FailReason::ContextExhausted => ("failed", Some("context_exhausted"), None),
-            FailReason::InputTooLarge => ("failed", Some("input_too_large"), None),
         },
         Outcome::Expired => ("expired", None, None),
         Outcome::Lost => ("lost", None, None),
@@ -154,7 +153,6 @@ pub async fn outcome(conn: &mut PgConnection, turn: TurnId) -> sqlx::Result<Opti
             error: row.error.unwrap_or_default(),
         }),
         ("failed", Some("context_exhausted")) => failed(FailReason::ContextExhausted),
-        ("failed", Some("input_too_large")) => failed(FailReason::InputTooLarge),
         ("expired", None) => Outcome::Expired,
         ("lost", None) => Outcome::Lost,
         (outcome, _) => return Err(unknown("outcome", outcome)),

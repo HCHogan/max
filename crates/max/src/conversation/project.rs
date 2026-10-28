@@ -32,20 +32,14 @@ pub struct Projection<'a> {
     pub offset: FixedOffset,
 }
 
-/// The first inputs: what woke the core, and, after a boundary, the turn
-/// that handed them over.
-pub struct First {
-    pub wakes: Vec<Wake>,
-    pub handed_over_by: Option<i32>,
-}
-
 impl Projection<'_> {
-    /// The base context as of `from`, the first inputs rendered in it.
+    /// The base context as of `from`, the wakes that start the core
+    /// rendered in it as its first inputs.
     pub async fn base(
         &self,
         conn: &mut PgConnection,
         from: MessageId,
-        first: &First,
+        wakes: &[Wake],
     ) -> sqlx::Result<(Context, Vec<Input>)> {
         let budgets = Budgets::for_window(self.window);
         let conversation = self.place.conversation;
@@ -75,8 +69,7 @@ impl Projection<'_> {
             .collect();
         let summary_block = project::summary_block(&summaries, budgets.summaries, self.offset);
 
-        let trigger_ids: BTreeSet<MessageId> = first
-            .wakes
+        let trigger_ids: BTreeSet<MessageId> = wakes
             .iter()
             .flat_map(|wake| wake.ids.iter().copied())
             .collect();
@@ -84,17 +77,6 @@ impl Projection<'_> {
         let (triggers, tail): (Vec<Row>, Vec<Row>) = rows
             .into_iter()
             .partition(|row| trigger_ids.contains(&row.message.id));
-        // Triggers from before the cursor, such as a handed-over one the
-        // historian has since covered.
-        let mut triggers = triggers;
-        for id in &trigger_ids {
-            if !triggers.iter().any(|row| row.message.id == *id)
-                && let Some(row) = ledger::row(conn, conversation, *id).await?
-            {
-                triggers.push(row);
-            }
-        }
-        triggers.sort_by_key(|row| row.message.id);
 
         let mut quoted_ids = BTreeSet::new();
         let shown: BTreeSet<MessageId> = tail
@@ -143,14 +125,8 @@ impl Projection<'_> {
             first_lines.push((&row.message, line));
         }
         let last_shown = lines[start..].last().map(|(message, _)| message.at);
-        let mut first_text = String::new();
-        if let Some(ordinal) = first.handed_over_by {
-            first_text.push_str(&format!(
-                "[t#{ordinal} 没做完就因为输入太多被结束了，下面是它没处理完的]\n"
-            ));
-        }
-        first_text.push_str(&joined(&render, &first_lines, last_shown));
-        for wake in &first.wakes {
+        let mut first_text = joined(&render, &first_lines, last_shown);
+        for wake in wakes {
             if let Some(Item {
                 kind: ItemKind::User { text },
                 ..
@@ -185,7 +161,7 @@ impl Projection<'_> {
             roster,
             tokens::count,
         );
-        let first = first.wakes.iter().cloned().map(Input::Wake).collect();
+        let first = wakes.iter().cloned().map(Input::Wake).collect();
         Ok((context, first))
     }
 

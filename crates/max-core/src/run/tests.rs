@@ -30,7 +30,6 @@ fn wake(id: i64) -> Wake {
         ids: vec![MessageId(id)],
         reason: Reason::Direct,
         item: None,
-        handed_over: None,
     }
 }
 
@@ -152,7 +151,7 @@ fn answers_and_goes_idle() {
     run.model_output(says("好")).unwrap();
     assert_idle(&mut run);
     assert!(run.idle());
-    assert!(run.leftover().is_empty());
+    assert!(run.unhandled().is_empty());
     assert_eq!(run.outcome(), Outcome::Answered);
     assert_replays(&run);
 }
@@ -272,14 +271,17 @@ fn the_limit_counts_waiting_inputs() {
     run.input(messages(2, 2_000)).unwrap();
     run.input(Input::Wake(wake(2))).unwrap();
     assert!(run.at_limit());
-    // Neither trigger has been handled: both go to the next core.
+    // Neither trigger has been handled.
     let ids: Vec<_> = run
-        .leftover()
+        .unhandled()
         .into_iter()
         .flat_map(|wake| wake.ids)
         .collect();
     assert_eq!(ids, [MessageId(1), MessageId(2)]);
     assert_replays(&run);
+    // A base that leaves no room is at the limit from the start.
+    let full = Run::new(spec(10_000, None), base(9_000), vec![Input::Wake(wake(1))]);
+    assert!(full.at_limit());
 }
 
 #[test]
@@ -292,11 +294,11 @@ fn a_trigger_is_handled_at_the_next_output_without_tools() {
     run.tool_result(CallId("a".into()), result(5)).unwrap();
     call_model(&mut run);
     // The model has seen both but hasn't finished with them.
-    assert_eq!(run.leftover().len(), 2);
+    assert_eq!(run.unhandled().len(), 2);
     run.model_output(says("好")).unwrap();
-    assert!(run.leftover().is_empty());
+    assert!(run.unhandled().is_empty());
     run.input(Input::Wake(wake(3))).unwrap();
-    assert_eq!(run.leftover(), [wake(3)]);
+    assert_eq!(run.unhandled(), [wake(3)]);
     assert_replays(&run);
 }
 

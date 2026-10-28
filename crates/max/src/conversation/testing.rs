@@ -49,7 +49,6 @@ pub fn shared(
         offset: offset(),
         intent: intent::Config::default(),
         context_lines: 15,
-        max_run: Duration::from_secs(600),
         stop_grace: Duration::from_millis(200),
         owners,
         binds: Arc::default(),
