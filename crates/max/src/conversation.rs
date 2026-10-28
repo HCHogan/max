@@ -8,6 +8,7 @@ pub mod model;
 pub mod project;
 #[cfg(test)]
 pub(crate) mod testing;
+mod tool;
 
 use std::fmt;
 

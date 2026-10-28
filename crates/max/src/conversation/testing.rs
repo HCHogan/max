@@ -51,6 +51,7 @@ pub fn shared(
         owners,
         binds: Arc::default(),
         historian: None,
+        vms: None,
     };
     (shared, rx)
 }

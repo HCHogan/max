@@ -173,6 +173,30 @@ async fn an_at_wakes_a_core_that_answers(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_tool_result_comes_back_to_the_model(pool: PgPool) {
+    let mut h = Harness::new(pool, 300).await;
+    h.script.push(Answer::Calls(
+        "shell".into(),
+        r#"{"command": "uname -a"}"#.into(),
+    ));
+    h.script.push(Answer::says("这里没有 VM"));
+    h.send(at_max(0, " 跑一下 uname"));
+    assert_eq!(h.said().await.1, "这里没有 VM");
+    h.stop().await;
+    let second = h.script.requests.lock().unwrap()[1].items.clone();
+    let result = second
+        .iter()
+        .find_map(|item| match &item.kind {
+            ItemKind::ToolResult { output, .. } => Some(output.clone()),
+            _ => None,
+        })
+        .expect("the tool's result");
+    assert!(result.error, "{result:?}");
+    let turns = h.turns().await;
+    assert_eq!(turns[0].1, Some(Outcome::Answered));
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn chatter_alone_wakes_nobody(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
     let verdict = r#"{"trigger": false, "reason": "闲聊"}"#;

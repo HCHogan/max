@@ -26,6 +26,7 @@ use max::llm::Models;
 use max::qq::{listen, send};
 use max::scope::Scope;
 use max::table::{self, Me, Table};
+use max::vm::Vms;
 
 // Stopping, in order, within systemd's TimeoutStopSec of 60 seconds.
 /// The QQ gateway saves its session.
@@ -139,6 +140,14 @@ async fn serve(config: Config) -> Result<()> {
             None
         }
     };
+    let mut services = Scope::new();
+    let vms = match config.vm {
+        Some(vm) => Some(Vms::start(vm, &mut services)?),
+        None => {
+            info!("no VMs: the tools can't run");
+            None
+        }
+    };
     let (outbound, outbound_rx) = mpsc::unbounded_channel();
     let shared = Arc::new(Shared {
         pool: pool.clone(),
@@ -149,6 +158,7 @@ async fn serve(config: Config) -> Result<()> {
         owners,
         binds: Arc::default(),
         historian,
+        vms,
     });
     let (intake_tx, intake_rx) = mpsc::unbounded_channel();
     let mut me = HashMap::new();
@@ -209,6 +219,8 @@ async fn serve(config: Config) -> Result<()> {
     drop(shared);
     senders.close(DRAIN + Duration::from_secs(5)).await;
     historians.close(Duration::from_secs(5)).await;
+    // The VMs are killed: what still ran in them was interrupted already.
+    services.close(Duration::ZERO).await;
     pool.close().await;
     if failed.is_cancelled() {
         bail!("a platform's connection stopped for good");

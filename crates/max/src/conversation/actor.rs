@@ -10,7 +10,7 @@ use chrono::{DateTime, FixedOffset, Utc};
 use color_eyre::eyre::Result;
 use max_core::ids::{MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
-use max_core::item::{ModelOutput, ToolOutput};
+use max_core::item::ModelOutput;
 use max_core::message::{Draft, DraftNode, Message};
 use max_core::prompt;
 use max_core::render::Mark;
@@ -23,13 +23,14 @@ use tracing::{debug, info, warn};
 
 use super::ingest;
 use super::project::{self, Projection};
-use super::{Event, Place, TaskId, classify, model};
+use super::{Event, Place, TaskId, classify, model, tool};
 use crate::bind::Binds;
 use crate::historian::Notice;
 use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
 use crate::scope::Scope;
 use crate::tokens;
+use crate::vm::Vms;
 
 /// What every conversation's actor shares.
 pub struct Shared {
@@ -44,6 +45,8 @@ pub struct Shared {
     pub binds: Arc<Binds>,
     /// None when no historian's model is configured.
     pub historian: Option<UnboundedSender<Notice>>,
+    /// None when no VMs are configured: the tools say so.
+    pub vms: Option<Vms>,
 }
 
 /// Something Max said, committed, for the platform's sender.
@@ -445,14 +448,17 @@ impl Conversation {
                     a.io.spawn(move |_| model::call(chosen, request, task, mailbox));
                     return Ok(());
                 }
-                // The tools need the group's VM, which comes later.
                 Step::RunTools(calls) => {
                     for call in calls {
-                        let out = ToolOutput::text("工具还没接上，现在用不了。", true, 20);
-                        if let Err(rejected) = a.run.tool_result(call.id, out) {
-                            warn!(turn = %a.turn, %rejected, "a tool result didn't fit");
-                        }
+                        self.next_task += 1;
+                        let task = TaskId(self.next_task);
+                        a.live.insert(task);
+                        let vms = self.shared.vms.clone();
+                        let conversation = self.place.conversation;
+                        let mailbox = self.mailbox.clone();
+                        a.io.spawn(move |_| tool::call(vms, conversation, call, task, mailbox));
                     }
+                    return Ok(());
                 }
                 Step::Idle => return Ok(()),
             }

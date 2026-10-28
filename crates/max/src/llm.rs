@@ -170,6 +170,8 @@ pub mod testing {
         Says(Vec<String>),
         /// The model writes this, then the stream ends unfinished.
         Breaks(Vec<String>),
+        /// The model calls a tool: its name and arguments.
+        Calls(String, String),
         /// The call fails before anything streams.
         Fails(max_llm::Error),
         /// The response never starts.
@@ -222,6 +224,9 @@ pub mod testing {
                     Some(Answer::Breaks(pieces)) => {
                         Ok(Call::replay(model, chat_stream(&pieces, false)))
                     }
+                    Some(Answer::Calls(name, arguments)) => {
+                        Ok(Call::replay(model, tool_call_stream(&name, &arguments)))
+                    }
                     Some(Answer::Fails(error)) => Err(error),
                     Some(Answer::Hangs) => std::future::pending().await,
                     None => Err(max_llm::Error::Malformed("the script ran out".into())),
@@ -249,6 +254,25 @@ pub mod testing {
             let data = chunk(json!({}), Some("stop"), usage);
             out += &format!("data: {data}\n\ndata: [DONE]\n\n");
         }
+        out.into_bytes()
+    }
+
+    /// A Chat completion stream that calls one tool.
+    pub fn tool_call_stream(name: &str, arguments: &str) -> Vec<u8> {
+        let call = json!({"tool_calls": [{
+            "index": 0, "id": "call_1", "type": "function",
+            "function": {"name": name, "arguments": arguments},
+        }]});
+        let usage = json!({"prompt_tokens": 1000, "completion_tokens": 10});
+        let chunks = [
+            json!({"choices": [{"index": 0, "delta": call, "finish_reason": null}]}),
+            json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}], "usage": usage}),
+        ];
+        let mut out = String::new();
+        for chunk in chunks {
+            out += &format!("data: {chunk}\n\n");
+        }
+        out += "data: [DONE]\n\n";
         out.into_bytes()
     }
 
