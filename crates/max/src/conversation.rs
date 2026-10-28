@@ -46,10 +46,7 @@ pub enum Event {
         out: ToolOutput,
     },
     /// The classifier's answer; None if it failed.
-    Verdict {
-        task: TaskId,
-        verdict: Option<Verdict>,
-    },
+    Verdict(Option<Verdict>),
     /// Max restarts: end the core, within a grace, then stop.
     Stop,
 }

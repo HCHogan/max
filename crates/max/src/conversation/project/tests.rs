@@ -42,7 +42,7 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
             text: "早啊".into(),
         }],
     };
-    let (mine, _) = ingest::said(&mut conn, &place, reply, None, None, at(1), offset())
+    let mine = ingest::said(&mut conn, &place, reply, None, None, at(1), offset())
         .await
         .unwrap();
     let failed = Sent::Failed { error: "500" };

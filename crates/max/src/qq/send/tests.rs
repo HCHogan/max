@@ -78,7 +78,7 @@ impl Setup {
 
     async fn say(&self, draft: Draft) -> Outgoing {
         let mut conn = self.pool.acquire().await.unwrap();
-        let (message, _) = ingest::said(
+        let message = ingest::said(
             &mut conn,
             &self.place,
             draft,

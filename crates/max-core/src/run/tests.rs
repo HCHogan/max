@@ -9,7 +9,6 @@ fn spec(window: u32, max_output: Option<u32>) -> RunSpec {
         },
         window,
         max_output,
-        max_tools: vec![],
     }
 }
 

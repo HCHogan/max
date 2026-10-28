@@ -2,7 +2,7 @@
 //! takes them down with it, so every task has an owner that ends it; see
 //! "运行时结构" in docs/rust-rewrite.md.
 //!
-//! Each task gets a child of the scope's token. A task that has something
+//! Each task gets a token that `close` cancels. A task that has something
 //! to finish (a delivery, a close) watches it and stops at its own next
 //! await; the rest are simply aborted. Dropping a scope aborts everything
 //! in it at once, without waiting.
@@ -26,32 +26,13 @@ impl Scope {
         Self::default()
     }
 
-    /// A scope whose tasks are also cancelled when `parent` is.
-    pub fn child(parent: &CancellationToken) -> Self {
-        Self {
-            tasks: JoinSet::new(),
-            token: parent.child_token(),
-        }
-    }
-
-    /// Runs `task` with a token of its own, which is returned too, to cancel
-    /// this one task.
-    pub fn spawn<F>(&mut self, task: impl FnOnce(CancellationToken) -> F) -> CancellationToken
+    /// Runs `task` with a token that `close` cancels.
+    pub fn spawn<F>(&mut self, task: impl FnOnce(CancellationToken) -> F)
     where
         F: Future<Output = ()> + Send + 'static,
     {
         self.reap();
-        let token = self.token.child_token();
-        self.tasks.spawn(task(token.clone()));
-        token
-    }
-
-    pub fn token(&self) -> &CancellationToken {
-        &self.token
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.tasks.is_empty()
+        self.tasks.spawn(task(self.token.child_token()));
     }
 
     /// Cancels every task and gives them `grace` to stop on their own; then
@@ -164,18 +145,5 @@ mod tests {
         drop(scope);
         tokio::task::yield_now().await;
         assert_eq!(ends.dropped.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn one_task_or_a_whole_subtree() {
-        let parent = CancellationToken::new();
-        let mut scope = Scope::child(&parent);
-        let first = scope.spawn(|token| async move { token.cancelled().await });
-        let second = scope.spawn(|token| async move { token.cancelled().await });
-        first.cancel();
-        assert!(!second.is_cancelled());
-        parent.cancel();
-        assert!(second.is_cancelled());
-        scope.close(Duration::from_secs(1)).await;
     }
 }

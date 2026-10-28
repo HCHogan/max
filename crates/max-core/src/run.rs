@@ -31,8 +31,6 @@ pub struct RunSpec {
     pub window: u32,
     /// The model's output limit; reserves C / 8 when it has none.
     pub max_output: Option<u32>,
-    /// The Max tools a program may call.
-    pub max_tools: Vec<String>,
 }
 
 impl RunSpec {

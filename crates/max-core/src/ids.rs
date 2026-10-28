@@ -35,10 +35,6 @@ ids! {
     TurnId(i64);
     /// A summary the historian wrote; the model sees `summary#id`.
     SummaryId(i64);
-    /// An I/O task of one conversation actor. Increasing and never reused
-    /// within the actor, so a late event from a finished task is
-    /// recognisable.
-    TaskId(u64);
 }
 
 /// The id a provider gave a tool call; opaque to us.

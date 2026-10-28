@@ -22,7 +22,6 @@ fn record() -> RunRecord {
         },
         window: 128_000,
         max_output: None,
-        max_tools: Vec::new(),
     };
     let base = Context {
         items: vec![Item::new(

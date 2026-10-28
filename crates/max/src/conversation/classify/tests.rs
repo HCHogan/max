@@ -39,11 +39,10 @@ async fn job(pool: &PgPool, script: &Arc<Script>) -> Job {
 
 async fn verdict(job: Job) -> Option<Verdict> {
     let (tx, mut rx) = mpsc::unbounded_channel();
-    classify(job, TaskId(3), tx).await;
-    let Ok(Event::Verdict { task, verdict }) = rx.try_recv() else {
+    classify(job, tx).await;
+    let Ok(Event::Verdict(verdict)) = rx.try_recv() else {
         panic!("no Verdict");
     };
-    assert_eq!(task, TaskId(3));
     assert!(rx.try_recv().is_err());
     verdict
 }

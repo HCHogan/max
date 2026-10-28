@@ -200,8 +200,7 @@ fn words(text: &str) -> String {
 }
 
 /// What Max says: a segment of a turn's output, or a command's answer.
-/// A quote of something that isn't a message on this timeline is dropped,
-/// and the draft comes back as it will be sent.
+/// A quote of something that isn't a message on this timeline is dropped.
 pub async fn said(
     conn: &mut PgConnection,
     place: &Place,
@@ -210,7 +209,7 @@ pub async fn said(
     segment: Option<i32>,
     now: DateTime<Utc>,
     offset: FixedOffset,
-) -> sqlx::Result<(Message, Draft)> {
+) -> sqlx::Result<Message> {
     let mut tx = conn.begin().await?;
     let mut draft = draft;
     if let Some(target) = draft.reply_to {
@@ -276,7 +275,7 @@ pub async fn said(
         turn,
         raw,
     };
-    Ok((message, draft))
+    Ok(message)
 }
 
 /// A person Max mentions, by the account they last spoke from here; one

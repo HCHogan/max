@@ -20,7 +20,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::warn;
 
 use super::project::{direct_mark, people, shown_line};
-use super::{Event, Place, TaskId};
+use super::{Event, Place};
 use crate::llm::Chosen;
 
 /// Enough for the one line of JSON.
@@ -41,7 +41,6 @@ pub struct Job {
 
 /// Sends the `Verdict`, or None from `Drop` if the task never got there.
 struct Report {
-    task: TaskId,
     mailbox: UnboundedSender<Event>,
     verdict: Option<Option<Verdict>>,
 }
@@ -49,16 +48,12 @@ struct Report {
 impl Drop for Report {
     fn drop(&mut self) {
         let verdict = self.verdict.take().flatten();
-        let _ = self.mailbox.send(Event::Verdict {
-            task: self.task,
-            verdict,
-        });
+        let _ = self.mailbox.send(Event::Verdict(verdict));
     }
 }
 
-pub async fn classify(job: Job, task: TaskId, mailbox: UnboundedSender<Event>) {
+pub async fn classify(job: Job, mailbox: UnboundedSender<Event>) {
     let mut report = Report {
-        task,
         mailbox,
         verdict: None,
     };

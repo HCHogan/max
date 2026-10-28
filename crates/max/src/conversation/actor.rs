@@ -199,7 +199,7 @@ impl Conversation {
                 }
                 Ok(())
             }
-            Event::Verdict { verdict, .. } => {
+            Event::Verdict(verdict) => {
                 let decisions = self.intent.verdict(verdict, std::time::Instant::now());
                 self.decide(decisions).await
             }
@@ -340,11 +340,8 @@ impl Conversation {
             context_lines: classify::CONTEXT_LINES,
             offset: self.shared.offset,
         };
-        self.next_task += 1;
-        let task = TaskId(self.next_task);
         let mailbox = self.mailbox.clone();
-        self.side
-            .spawn(move |_| classify::classify(job, task, mailbox));
+        self.side.spawn(move |_| classify::classify(job, mailbox));
     }
 
     async fn start_core(&mut self, wake: Wake) -> Result<()> {
@@ -375,7 +372,6 @@ impl Conversation {
             model: chosen.tag.clone(),
             window: chosen.window,
             max_output: chosen.max_output,
-            max_tools: Vec::new(),
         };
         let base: u32 = context.items.iter().map(|item| item.tokens).sum();
         let roster = context.roster.clone();
@@ -552,7 +548,7 @@ impl Conversation {
         segment: Option<i32>,
     ) -> Result<Message> {
         let mut conn = self.shared.pool.acquire().await?;
-        let (message, _) = ingest::said(
+        let message = ingest::said(
             &mut conn,
             &self.place,
             draft,
