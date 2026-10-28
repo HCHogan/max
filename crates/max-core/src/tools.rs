@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::CallId;
 use crate::item::ToolCall;
 
+#[derive(Debug)]
 pub struct ToolSpec {
     pub name: &'static str,
     pub description: &'static str,
