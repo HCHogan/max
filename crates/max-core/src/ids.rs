@@ -25,6 +25,8 @@ ids! {
     /// conversation actor committed them: the timeline.
     MessageId(i64);
     ConversationId(i64);
+    /// Where a conversation lives on one platform.
+    EndpointId(i64);
     /// A person. The model addresses people, never platform accounts.
     PrincipalId(i64);
     /// A platform account. The ledger stores these; rendering maps them to

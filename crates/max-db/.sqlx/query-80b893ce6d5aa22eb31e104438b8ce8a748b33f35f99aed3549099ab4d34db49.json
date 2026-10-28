@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select display_name from principals where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "principals",
+            "name": "display_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "80b893ce6d5aa22eb31e104438b8ce8a748b33f35f99aed3549099ab4d34db49"
+}

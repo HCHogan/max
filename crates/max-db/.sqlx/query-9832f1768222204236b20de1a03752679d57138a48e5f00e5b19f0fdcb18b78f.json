@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        with principal as (\n            insert into principals (display_name) values ($3) returning id\n        )\n        insert into identities (principal_id, platform, native_user_id)\n        select id, $1, $2 from principal\n        returning id, principal_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "identities",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "principal_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "identities",
+            "name": "principal_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9832f1768222204236b20de1a03752679d57138a48e5f00e5b19f0fdcb18b78f"
+}

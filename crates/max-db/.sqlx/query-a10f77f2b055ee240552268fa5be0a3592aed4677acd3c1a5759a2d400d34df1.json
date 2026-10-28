@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select model, effort, persona, proactive, cleared_upto\n         from conversation_settings where conversation_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "conversation_settings",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "effort",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "conversation_settings",
+            "name": "effort"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "persona",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "conversation_settings",
+            "name": "persona"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "proactive",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "conversation_settings",
+            "name": "proactive"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "cleared_upto",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "conversation_settings",
+            "name": "cleared_upto"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "a10f77f2b055ee240552268fa5be0a3592aed4677acd3c1a5759a2d400d34df1"
+}

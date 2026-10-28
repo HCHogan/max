@@ -10,4 +10,9 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+chrono.workspace = true
+max-core.workspace = true
 sqlx.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros"] }

@@ -1,9 +1,22 @@
 //! Max's PostgreSQL schema: migrations, every sqlx query and the row types.
+//!
+//! Queries take a `&mut PgConnection`, so the caller decides what shares a
+//! transaction: `&mut *tx` inside one, or a connection from the pool. A
+//! query that needs several statements to agree opens its own (a
+//! savepoint when the caller already has a transaction).
+
+pub mod platform;
 
 pub use sqlx::{PgConnection, PgPool};
 
 /// The migrations in `migrations/`, embedded.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
+
+/// A column holds a value this code doesn't know: the schema's checks and
+/// the code disagree.
+fn unknown(column: &str, value: &str) -> sqlx::Error {
+    sqlx::Error::Decode(format!("unknown {column}: {value:?}").into())
+}
 
 #[cfg(test)]
 mod tests {

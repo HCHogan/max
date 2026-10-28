@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select p.id, coalesce(latest.sender_name, p.display_name) as \"name!\",\n               latest.sender_role as \"role?\"\n        from principals p\n        left join lateral (\n            select m.sender_name, m.sender_role\n            from identities i\n            join principals owner on owner.id = i.principal_id\n            cross join lateral (\n                select id, sender_name, sender_role from messages\n                where endpoint_id = $1 and sender_identity_id = i.id\n                order by id desc limit 1\n            ) m\n            where coalesce(owner.merged_into, owner.id) = p.id\n            order by m.id desc limit 1\n        ) latest on true\n        where p.id = any($2)\n        order by p.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "principals",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "role?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_role"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      true
+    ]
+  },
+  "hash": "43dd17e89c07f0f0b3bf5d10d4fad0d78d2be4f1bfd356dd6fe532a88a6584f1"
+}
