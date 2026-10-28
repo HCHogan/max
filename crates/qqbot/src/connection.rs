@@ -38,13 +38,14 @@ impl Connect for Client {
 /// resume, QQ replays what the dropped connection missed.
 ///
 /// The session stays the caller's: when it drops this future to stop, it
-/// can keep the session to resume after a restart. A dispatch being sent
-/// when the future is dropped is lost, so resume from the last dispatch
-/// received rather than [`Session::resumable`]'s sequence number.
+/// can keep the session to resume after a restart. `events` is unbounded
+/// so that a dispatch the session has counted is never waiting to be sent
+/// when the future is dropped: once the caller has read what is left in
+/// the channel, [`Session::resumable`] is exactly where to resume from.
 pub async fn run(
     connect: &impl Connect,
     session: &mut Session,
-    events: mpsc::Sender<Dispatch>,
+    events: mpsc::UnboundedSender<Dispatch>,
 ) -> Result<(), Fatal> {
     let mut backoff = Backoff::default();
     loop {
@@ -89,7 +90,7 @@ enum Failure {
 async fn connection(
     connect: &impl Connect,
     session: &mut Session,
-    events: &mpsc::Sender<Dispatch>,
+    events: &mpsc::UnboundedSender<Dispatch>,
     backoff: &mut Backoff,
 ) -> Result<Ended, Failure> {
     let url = connect.url().await?;
@@ -124,7 +125,7 @@ async fn connection(
                     continue;
                 }
                 Out::Dispatch(dispatch) => {
-                    if events.send(*dispatch).await.is_err() {
+                    if events.send(*dispatch).is_err() {
                         return Ok(Ended::Unheard);
                     }
                     continue;
@@ -237,7 +238,7 @@ mod tests {
     #[tokio::test]
     async fn resumes_after_a_drop_and_stops_when_banned() {
         let (listener, fake) = listen().await;
-        let (events, mut received) = mpsc::channel(8);
+        let (events, mut received) = mpsc::unbounded_channel();
         let server = async {
             let mut socket = accept(&listener).await;
             say(&mut socket, hello()).await;
@@ -282,7 +283,7 @@ mod tests {
     #[tokio::test]
     async fn a_saved_session_is_resumed_first() {
         let (listener, fake) = listen().await;
-        let (events, mut received) = mpsc::channel(8);
+        let (events, mut received) = mpsc::unbounded_channel();
         let server = async {
             let mut socket = accept(&listener).await;
             say(&mut socket, hello()).await;
@@ -307,7 +308,7 @@ mod tests {
     #[tokio::test]
     async fn stops_when_nobody_listens() {
         let (listener, fake) = listen().await;
-        let (events, received) = mpsc::channel(8);
+        let (events, received) = mpsc::unbounded_channel();
         drop(received);
         let server = async {
             let mut socket = accept(&listener).await;

@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new(credentials)?;
     let me = client.me().await?;
     println!("connected as {} ({})", me.username, me.id);
-    let (events, mut received) = mpsc::channel::<Dispatch>(64);
+    let (events, mut received) = mpsc::unbounded_channel::<Dispatch>();
     let print = async {
         while let Some(dispatch) = received.recv().await {
             println!("{} {}", dispatch.kind, dispatch.data);
