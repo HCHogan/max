@@ -1,0 +1,331 @@
+use std::collections::BTreeSet;
+
+use max_core::item::{Protocol, ToolOutput};
+use max_core::tools::TOOLS;
+
+use super::*;
+
+fn model(name: &str) -> ModelTag {
+    ModelTag {
+        protocol: Protocol::Chat,
+        model: name.into(),
+    }
+}
+
+fn from(model: &ModelTag, kind: ItemKind, raw: Option<Value>) -> Item {
+    Item {
+        kind,
+        source: Some(model.clone()),
+        opaque: raw,
+        tokens: 0,
+    }
+}
+
+fn call(id: &str, arguments: &str) -> ToolCall {
+    ToolCall {
+        id: CallId(id.into()),
+        name: "run_code".into(),
+        arguments: arguments.into(),
+    }
+}
+
+fn result(id: &str) -> Item {
+    Item::new(
+        ItemKind::ToolResult {
+            call: CallId(id.into()),
+            output: ToolOutput::text("1", false, 1),
+        },
+        1,
+    )
+}
+
+#[test]
+fn a_request() {
+    let deepseek = model("deepseek-pro");
+    let flash = model("gemini-3.8-flash");
+    let signed = json!({ "extra_content": { "google": { "thought_signature": "sig" } } });
+    let request = Request {
+        model: deepseek.clone(),
+        items: vec![
+            Item::new(
+                ItemKind::System {
+                    text: "你是 Max。".into(),
+                },
+                5,
+            ),
+            Item::new(
+                ItemKind::User {
+                    text: "[1] 小明：算一下".into(),
+                },
+                5,
+            ),
+            // This model's call: reasoning fields go back on the message.
+            from(
+                &deepseek,
+                ItemKind::Reasoning {
+                    text: Some("先算".into()),
+                },
+                Some(json!({ "message": { "reasoning_content": "先算" } })),
+            ),
+            from(&deepseek, ItemKind::Assistant { text: "好".into() }, None),
+            from(&deepseek, ItemKind::ToolCall(call("c1", "{}")), None),
+            result("c1"),
+            // Another model's: its reasoning and signature go.
+            from(
+                &flash,
+                ItemKind::Reasoning { text: None },
+                Some(json!({ "message": { "x": 1 } })),
+            ),
+            from(&flash, ItemKind::ToolCall(call("c2", "{}")), Some(signed)),
+            result("c2"),
+            // Cut off midway: the core's own item, no source.
+            Item::new(
+                ItemKind::Assistant {
+                    text: "结果是".into(),
+                },
+                3,
+            ),
+        ],
+        tools: &TOOLS,
+        max_output: None,
+        roster: BTreeSet::new(),
+    };
+    let options = Options {
+        effort: Some("high".into()),
+        temperature: Some(0.6),
+        ..Options::default()
+    };
+    let body = body(&request, &options);
+    let tool_call = |id: &str| json!({ "id": id, "type": "function", "function": { "name": "run_code", "arguments": "{}" } });
+    assert_eq!(
+        body["messages"],
+        json!([
+            { "role": "system", "content": "你是 Max。" },
+            { "role": "user", "content": "[1] 小明：算一下" },
+            { "role": "assistant", "content": "好", "reasoning_content": "先算", "tool_calls": [tool_call("c1")] },
+            { "role": "tool", "tool_call_id": "c1", "content": "1" },
+            { "role": "assistant", "content": "", "tool_calls": [tool_call("c2")] },
+            { "role": "tool", "tool_call_id": "c2", "content": "1" },
+            { "role": "assistant", "content": "结果是" },
+        ])
+    );
+    assert_eq!(body["stream_options"], json!({ "include_usage": true }));
+    assert_eq!(body["reasoning_effort"], "high");
+    assert_eq!(body["temperature"], 0.6);
+    assert!(body.get("max_tokens").is_none());
+    assert_eq!(body["tools"][0]["function"]["name"], "run_code");
+}
+
+#[test]
+fn signatures_and_inline_thinking_go_back_to_their_model() {
+    let flash = model("gemini-3.8-flash");
+    let signed = json!({ "extra_content": { "google": { "thought_signature": "sig" } } });
+    let request = Request {
+        model: flash.clone(),
+        items: vec![
+            from(
+                &flash,
+                ItemKind::Reasoning {
+                    text: Some("想想".into()),
+                },
+                Some(json!({ "inline": true })),
+            ),
+            from(&flash, ItemKind::ToolCall(call("c1", "{}")), Some(signed)),
+        ],
+        tools: &[],
+        max_output: Some(100),
+        roster: BTreeSet::new(),
+    };
+    let body = body(&request, &Options::default());
+    let message = &body["messages"][0];
+    assert_eq!(message["content"], "<think>\n想想\n</think>\n\n");
+    assert_eq!(
+        message["tool_calls"][0]["extra_content"]["google"]["thought_signature"],
+        "sig"
+    );
+    assert_eq!(body["max_tokens"], 100);
+    assert!(body.get("tools").is_none());
+}
+
+fn chunk(delta: Value) -> String {
+    json!({ "choices": [{ "index": 0, "delta": delta, "finish_reason": null }] }).to_string()
+}
+
+fn finish(reason: &str) -> String {
+    json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": reason }] }).to_string()
+}
+
+fn run(parser: &mut Parser, data: &[String]) -> Vec<Event> {
+    data.iter()
+        .flat_map(|data| parser.event(data).unwrap())
+        .collect()
+}
+
+#[test]
+fn reasoning_then_text() {
+    let mut parser = Parser::new(model("deepseek-pro"));
+    let usage = json!({
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 900, "completion_tokens": 50, "prompt_cache_hit_tokens": 768,
+            "completion_tokens_details": { "reasoning_tokens": 30 },
+        },
+    });
+    let events = run(
+        &mut parser,
+        &[
+            chunk(json!({ "role": "assistant", "content": null, "reasoning_content": "用户" })),
+            chunk(json!({ "reasoning_content": "打招呼" })),
+            chunk(json!({ "content": "早" })),
+            chunk(json!({ "content": "啊" })),
+            finish("stop"),
+            usage.to_string(),
+            "[DONE]".into(),
+        ],
+    );
+    assert_eq!(events, [Event::Text("早".into()), Event::Text("啊".into())]);
+    assert!(parser.finished());
+    let output = parser.finish().unwrap();
+    assert_eq!(
+        output.usage,
+        Usage {
+            input: 900,
+            cached: 768,
+            output: 50,
+            reasoning: 30
+        }
+    );
+    assert_eq!(
+        output.items[0].kind,
+        ItemKind::Reasoning {
+            text: Some("用户打招呼".into())
+        }
+    );
+    assert_eq!(
+        output.items[0].opaque,
+        Some(json!({ "message": { "reasoning_content": "用户打招呼" } }))
+    );
+    assert_eq!(
+        output.items[1].kind,
+        ItemKind::Assistant {
+            text: "早啊".into()
+        }
+    );
+    assert_eq!((output.items[0].tokens, output.items[1].tokens), (30, 20));
+}
+
+#[test]
+fn tool_calls_in_pieces() {
+    let mut parser = Parser::new(model("gemini-3.8-flash"));
+    let events = run(
+        &mut parser,
+        &[
+            chunk(json!({ "tool_calls": [{
+                "index": 0, "id": "c1", "type": "function",
+                "function": { "name": "run_code", "arguments": "{\"co" },
+                "extra_content": { "google": { "thought_signature": "sig" } },
+            }] })),
+            chunk(
+                json!({ "tool_calls": [{ "index": 0, "function": { "arguments": "de\":1}" } }] }),
+            ),
+            chunk(
+                json!({ "tool_calls": [{ "index": 1, "id": "c2", "function": { "name": "shell", "arguments": "{}" } }] }),
+            ),
+            finish("tool_calls"),
+        ],
+    );
+    assert_eq!(
+        events,
+        [
+            Event::ToolCall {
+                name: "run_code".into()
+            },
+            Event::ToolCall {
+                name: "shell".into()
+            },
+        ]
+    );
+    // No [DONE] from this provider: the stream just ends.
+    assert!(!parser.finished());
+    let output = parser.finish().unwrap();
+    assert_eq!(
+        output.items[0].kind,
+        ItemKind::ToolCall(call("c1", "{\"code\":1}"))
+    );
+    assert_eq!(
+        output.items[0].opaque,
+        Some(json!({ "extra_content": { "google": { "thought_signature": "sig" } } }))
+    );
+    assert_eq!(output.items[1].opaque, None);
+    assert_eq!(output.items.len(), 2);
+}
+
+#[test]
+fn inline_thinking_is_not_said() {
+    let mut parser = Parser::new(model("minimax-m3"));
+    let events = run(
+        &mut parser,
+        &["\n", "<thi", "nk>先想", "想</th", "ink>\n\n早", "啊"]
+            .map(|piece| chunk(json!({ "content": piece })))
+            .into_iter()
+            .chain([finish("stop"), "[DONE]".into()])
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(events, [Event::Text("早".into()), Event::Text("啊".into())]);
+    let output = parser.finish().unwrap();
+    assert_eq!(
+        output.items[0],
+        Item {
+            kind: ItemKind::Reasoning {
+                text: Some("先想想".into())
+            },
+            source: Some(model("minimax-m3")),
+            opaque: Some(json!({ "inline": true })),
+            tokens: 0,
+        }
+    );
+    assert_eq!(
+        output.items[1].kind,
+        ItemKind::Assistant {
+            text: "早啊".into()
+        }
+    );
+
+    // Text that only looks like the start of a tag is said once it isn't.
+    let mut parser = Parser::new(model("minimax-m3"));
+    let events = run(
+        &mut parser,
+        &[
+            chunk(json!({ "content": "<" })),
+            chunk(json!({ "content": "3" })),
+        ],
+    );
+    assert_eq!(events, [Event::Text("<3".into())]);
+}
+
+#[test]
+fn ends_that_are_not_complete() {
+    let mut parser = Parser::new(model("deepseek-pro"));
+    run(&mut parser, &[chunk(json!({ "content": "早" }))]);
+    assert!(matches!(parser.finish(), Err(Error::Truncated)));
+
+    let mut parser = Parser::new(model("deepseek-pro"));
+    run(
+        &mut parser,
+        &[chunk(json!({ "content": "早" })), finish("length")],
+    );
+    assert_eq!(
+        parser.finish().unwrap_err().to_string(),
+        "the response stopped early: length"
+    );
+
+    let mut parser = Parser::new(model("deepseek-pro"));
+    let overloaded = json!({ "error": { "code": "server_overloaded", "message": "busy" } });
+    assert!(
+        parser
+            .event(&overloaded.to_string())
+            .unwrap_err()
+            .retryable()
+    );
+    assert!(matches!(parser.event("data"), Err(Error::Malformed(_))));
+}

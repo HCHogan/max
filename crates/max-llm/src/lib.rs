@@ -6,6 +6,7 @@
 //! Max reads get types; everything the provider sends back for itself is
 //! kept as raw JSON in an item's `opaque` and replayed as it came.
 
+pub mod chat;
 mod error;
 pub mod responses;
 
