@@ -192,3 +192,57 @@ async fn the_roster_takes_each_persons_latest_snapshot(pool: PgPool) -> sqlx::Re
     );
     Ok(())
 }
+
+#[sqlx::test]
+async fn what_the_classifier_and_the_sender_read(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let group = group(&mut conn, "group:30001").await?;
+    let max = sender(group.max, "Max", None);
+    let xiaoming = sender(group.xiaoming, "小明", None);
+    let mut ids = Vec::new();
+    for minute in 0..5 {
+        let who = if minute == 3 { &max } else { &xiaoming };
+        ids.push(
+            commit(
+                &mut conn,
+                &group,
+                who,
+                &said(&format!("第{minute}条")),
+                minute,
+            )
+            .await?,
+        );
+    }
+    let conversation = group.endpoint.conversation;
+    let before: Vec<_> = recent(&mut conn, conversation, ids[4], 2)
+        .await?
+        .into_iter()
+        .map(|row| row.message.id)
+        .collect();
+    assert_eq!(before, [ids[2], ids[3]]);
+
+    let activity = activity(&mut conn, conversation, group.max.identity, at(5)).await?;
+    assert_eq!(
+        activity,
+        Activity {
+            max_last_hour: 1,
+            others_last_hour: 4,
+            recent: 4,
+            recent_people: 1,
+        }
+    );
+
+    let endpoint = group.endpoint.id;
+    sqlx::query!("update messages set text = sent_at::text")
+        .execute(&mut *conn)
+        .await?;
+    let said = said_by(&mut conn, endpoint, group.max.identity, 10).await?;
+    assert_eq!(said.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [ids[3]]);
+
+    let last = last_arrived(&mut conn, endpoint).await?.unwrap();
+    assert_eq!((last.id, last.native_id.as_str()), (ids[4], "n4"));
+    assert_eq!(last.received_at, at(4));
+    assert_eq!(arrived(&mut conn, ids[1]).await?.unwrap().native_id, "n1");
+    assert_eq!(arrived(&mut conn, ids[3]).await?, None);
+    Ok(())
+}

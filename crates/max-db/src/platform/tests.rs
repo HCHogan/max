@@ -152,3 +152,68 @@ async fn a_gateway_session_is_kept_per_platform(pool: PgPool) -> sqlx::Result<()
     );
     Ok(())
 }
+
+#[sqlx::test]
+async fn binding_a_group_to_an_old_conversation(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let old_max = account(&mut conn, Platform::QqLegacy, "20000", "Max").await?;
+    let group = ConversationKind::Group;
+    let old = endpoint(
+        &mut conn,
+        Platform::QqLegacy,
+        "group:30001",
+        old_max.identity,
+        group,
+        None,
+    )
+    .await?;
+    let found = conversation_of(&mut conn, Platform::QqLegacy, "group:30001").await?;
+    assert_eq!(found, Some(old.conversation));
+    assert_eq!(
+        conversation_of(&mut conn, Platform::QqLegacy, "group:1").await?,
+        None
+    );
+
+    let max = account(&mut conn, Platform::Qq, "BOT", "maxx").await?;
+    let native = "group:GROUPOPENID";
+    assert_eq!(
+        find_endpoint(&mut conn, Platform::Qq, native, max.identity).await?,
+        None
+    );
+    let new = attach(&mut conn, found, Platform::Qq, native, max.identity, group).await?;
+    assert_eq!(new.conversation, old.conversation);
+    assert_eq!(
+        find_endpoint(&mut conn, Platform::Qq, native, max.identity).await?,
+        Some(new)
+    );
+    let direct = ConversationKind::Direct;
+    let fresh = attach(
+        &mut conn,
+        None,
+        Platform::Qq,
+        "c2c:USER",
+        max.identity,
+        direct,
+    )
+    .await?;
+    assert_ne!(fresh.conversation, old.conversation);
+    assert_eq!(
+        conversation_kind(&mut conn, fresh.conversation).await?,
+        direct
+    );
+    assert_eq!(conversation_kind(&mut conn, new.conversation).await?, group);
+    Ok(())
+}
+
+#[sqlx::test]
+async fn a_merged_account_speaks_for_its_owner(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let owner = account(&mut conn, Platform::Qq, "USER_OPENID", "hank").await?;
+    let member = account(&mut conn, Platform::Qq, "MEMBER_OPENID", "hank").await?;
+    merge(&mut conn, member.principal, owner.principal).await?;
+    merge(&mut conn, owner.principal, owner.principal).await?;
+    let again = account(&mut conn, Platform::Qq, "MEMBER_OPENID", "hank").await?;
+    assert_eq!(again.principal, owner.principal);
+    assert_eq!(again.identity, member.identity);
+    Ok(())
+}

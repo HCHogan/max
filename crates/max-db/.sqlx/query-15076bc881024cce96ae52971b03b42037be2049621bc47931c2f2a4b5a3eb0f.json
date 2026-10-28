@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select conversation_id from endpoints where platform = $1 and native_id = $2 limit 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "conversation_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "endpoints",
+            "name": "conversation_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "15076bc881024cce96ae52971b03b42037be2049621bc47931c2f2a4b5a3eb0f"
+}

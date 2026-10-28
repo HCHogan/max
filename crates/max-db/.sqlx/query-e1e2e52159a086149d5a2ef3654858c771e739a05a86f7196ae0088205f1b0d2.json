@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select kind from conversations where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "conversations",
+            "name": "kind"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e1e2e52159a086149d5a2ef3654858c771e739a05a86f7196ae0088205f1b0d2"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update messages set text = sent_at::text",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "b779d803f25eaf70fff165c50d1b6f6f5d24a53f2556a02b888e154a49eed028"
+}

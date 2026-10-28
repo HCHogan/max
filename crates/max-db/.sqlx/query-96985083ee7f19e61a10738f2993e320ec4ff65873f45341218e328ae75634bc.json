@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select i.id, i.native_user_id, m.sender_name\n        from identities i\n        join principals p on p.id = i.principal_id\n        cross join lateral (\n            select id, sender_name from messages\n            where endpoint_id = $1 and sender_identity_id = i.id\n            order by id desc limit 1\n        ) m\n        where coalesce(p.merged_into, p.id) = $2\n        order by m.id desc limit 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "identities",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "native_user_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identities",
+            "name": "native_user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "sender_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "96985083ee7f19e61a10738f2993e320ec4ff65873f45341218e328ae75634bc"
+}

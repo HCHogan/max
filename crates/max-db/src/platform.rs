@@ -132,6 +132,13 @@ pub enum ConversationKind {
     Direct,
 }
 
+fn kind_name(kind: ConversationKind) -> &'static str {
+    match kind {
+        ConversationKind::Group => "group",
+        ConversationKind::Direct => "direct",
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Endpoint {
     pub id: EndpointId,
@@ -170,10 +177,7 @@ pub async fn endpoint(
     let (id, conversation) = match found {
         Some(row) => (row.id, row.conversation_id),
         None => {
-            let kind = match kind {
-                ConversationKind::Group => "group",
-                ConversationKind::Direct => "direct",
-            };
+            let kind = kind_name(kind);
             let row = sqlx::query!(
                 r#"
                 with conversation as (
@@ -199,6 +203,161 @@ pub async fn endpoint(
         id: EndpointId(id),
         conversation: ConversationId(conversation),
     })
+}
+
+/// The endpoint for a platform's group or chat as served by `me`, if
+/// there is one; unlike [`endpoint`], creates nothing.
+pub async fn find_endpoint(
+    conn: &mut PgConnection,
+    platform: Platform,
+    native_id: &str,
+    me: IdentityId,
+) -> sqlx::Result<Option<Endpoint>> {
+    let row = sqlx::query!(
+        "select id, conversation_id from endpoints
+         where platform = $1 and self_identity_id = $2 and native_id = $3",
+        platform_name(platform),
+        me.0,
+        native_id
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.map(|row| Endpoint {
+        id: EndpointId(row.id),
+        conversation: ConversationId(row.conversation_id),
+    }))
+}
+
+/// The conversation an endpoint of this platform belongs to, whoever
+/// serves it: how `!bind` finds a group's history from before.
+pub async fn conversation_of(
+    conn: &mut PgConnection,
+    platform: Platform,
+    native_id: &str,
+) -> sqlx::Result<Option<ConversationId>> {
+    let id = sqlx::query_scalar!(
+        "select conversation_id from endpoints where platform = $1 and native_id = $2 limit 1",
+        platform_name(platform),
+        native_id
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(id.map(ConversationId))
+}
+
+/// A new endpoint for an existing conversation, or for a new one when
+/// `conversation` is None.
+pub async fn attach(
+    conn: &mut PgConnection,
+    conversation: Option<ConversationId>,
+    platform: Platform,
+    native_id: &str,
+    me: IdentityId,
+    kind: ConversationKind,
+) -> sqlx::Result<Endpoint> {
+    let mut tx = conn.begin().await?;
+    let conversation = match conversation {
+        Some(conversation) => conversation.0,
+        None => {
+            sqlx::query_scalar!(
+                "insert into conversations (kind) values ($1) returning id",
+                kind_name(kind)
+            )
+            .fetch_one(&mut *tx)
+            .await?
+        }
+    };
+    let id = sqlx::query_scalar!(
+        "insert into endpoints (conversation_id, platform, native_id, self_identity_id)
+         values ($1, $2, $3, $4) returning id",
+        conversation,
+        platform_name(platform),
+        native_id,
+        me.0
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Endpoint {
+        id: EndpointId(id),
+        conversation: ConversationId(conversation),
+    })
+}
+
+pub async fn conversation_kind(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+) -> sqlx::Result<ConversationKind> {
+    let kind = sqlx::query_scalar!(
+        "select kind from conversations where id = $1",
+        conversation.0
+    )
+    .fetch_one(conn)
+    .await?;
+    match kind.as_str() {
+        "group" => Ok(ConversationKind::Group),
+        "direct" => Ok(ConversationKind::Direct),
+        other => Err(unknown("conversation kind", other)),
+    }
+}
+
+/// Records that `merged` is the same person as `into`: readers follow
+/// `merged_into` once, so `into` must not be merged itself.
+pub async fn merge(
+    conn: &mut PgConnection,
+    merged: PrincipalId,
+    into: PrincipalId,
+) -> sqlx::Result<()> {
+    if merged == into {
+        return Ok(());
+    }
+    sqlx::query!(
+        "update principals set merged_into = $2 where id = $1 and merged_into is null",
+        merged.0,
+        into.0
+    )
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// The account a person spoke from most recently in an endpoint: whom to
+/// mention there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Speaker {
+    pub identity: IdentityId,
+    pub native_user_id: String,
+    pub name: String,
+}
+
+pub async fn speaker(
+    conn: &mut PgConnection,
+    endpoint: EndpointId,
+    principal: PrincipalId,
+) -> sqlx::Result<Option<Speaker>> {
+    let row = sqlx::query!(
+        r#"
+        select i.id, i.native_user_id, m.sender_name
+        from identities i
+        join principals p on p.id = i.principal_id
+        cross join lateral (
+            select id, sender_name from messages
+            where endpoint_id = $1 and sender_identity_id = i.id
+            order by id desc limit 1
+        ) m
+        where coalesce(p.merged_into, p.id) = $2
+        order by m.id desc limit 1
+        "#,
+        endpoint.0,
+        principal.0
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.map(|row| Speaker {
+        identity: IdentityId(row.id),
+        native_user_id: row.native_user_id,
+        name: row.sender_name,
+    }))
 }
 
 /// A roster line's facts: the name and role from the person's latest

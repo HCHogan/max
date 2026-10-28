@@ -247,6 +247,155 @@ pub async fn rows(
     .collect()
 }
 
+/// Up to `limit` rows before `before`, in timeline order: the context the
+/// classifier reads.
+pub async fn recent(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    before: MessageId,
+    limit: i64,
+) -> sqlx::Result<Vec<Row>> {
+    let mut rows = sqlx::query_as!(
+        Raw,
+        r#"
+        select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,
+               m.sender_role, m.sent_at, m.kind, m.event, m.reply_to_id, m.target_id,
+               m.nodes as "nodes: Json<Vec<Node>>", m.raw, m.turn_id, d.status as "delivery?"
+        from messages m
+        left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id
+        where m.conversation_id = $1 and m.id < $2
+        order by m.id desc
+        limit $3
+        "#,
+        conversation.0,
+        before.0,
+        limit
+    )
+    .fetch_all(conn)
+    .await?
+    .into_iter()
+    .map(Raw::row)
+    .collect::<sqlx::Result<Vec<Row>>>()?;
+    rows.reverse();
+    Ok(rows)
+}
+
+/// How busy a conversation has been: what the classifier's "本群情况"
+/// line counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Activity {
+    /// In the last hour, Max's rows and everyone else's.
+    pub max_last_hour: i64,
+    pub others_last_hour: i64,
+    /// In the last five minutes, rows and how many people sent them.
+    pub recent: i64,
+    pub recent_people: i64,
+}
+
+pub async fn activity(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    me: IdentityId,
+    now: DateTime<Utc>,
+) -> sqlx::Result<Activity> {
+    let row = sqlx::query!(
+        r#"
+        select
+            count(*) filter (where sender_identity_id = $2) as "max!",
+            count(*) filter (where sender_identity_id <> $2) as "others!",
+            count(*) filter (where sent_at > $3::timestamptz - interval '5 minutes') as "recent!",
+            count(distinct sender_identity_id)
+                filter (where sent_at > $3::timestamptz - interval '5 minutes' and sender_identity_id <> $2)
+                as "people!"
+        from messages
+        where conversation_id = $1 and kind <> 'event' and sent_at > $3::timestamptz - interval '1 hour'
+        "#,
+        conversation.0,
+        me.0,
+        now
+    )
+    .fetch_one(conn)
+    .await?;
+    Ok(Activity {
+        max_last_hour: row.max,
+        others_last_hour: row.others,
+        recent: row.recent,
+        recent_people: row.people,
+    })
+}
+
+/// What an account said lately in an endpoint, newest first, by id and
+/// rendered text: where a quote of Max's message is looked for when its
+/// quote id is unknown.
+pub async fn said_by(
+    conn: &mut PgConnection,
+    endpoint: EndpointId,
+    identity: IdentityId,
+    limit: i64,
+) -> sqlx::Result<Vec<(MessageId, String)>> {
+    let rows = sqlx::query!(
+        "select id, text from messages
+         where endpoint_id = $1 and sender_identity_id = $2 and kind <> 'event'
+         order by id desc limit $3",
+        endpoint.0,
+        identity.0,
+        limit
+    )
+    .fetch_all(conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (MessageId(row.id), row.text))
+        .collect())
+}
+
+/// An inbound row's platform id and when it arrived: what a passive reply
+/// answers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Arrived {
+    pub id: MessageId,
+    pub native_id: String,
+    pub received_at: DateTime<Utc>,
+}
+
+pub async fn arrived(conn: &mut PgConnection, message: MessageId) -> sqlx::Result<Option<Arrived>> {
+    let row = sqlx::query!(
+        "select id, native_id, received_at from messages where id = $1 and native_id is not null",
+        message.0
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.and_then(|row| {
+        Some(Arrived {
+            id: MessageId(row.id),
+            native_id: row.native_id?,
+            received_at: row.received_at,
+        })
+    }))
+}
+
+/// The latest row someone else sent to an endpoint.
+pub async fn last_arrived(
+    conn: &mut PgConnection,
+    endpoint: EndpointId,
+) -> sqlx::Result<Option<Arrived>> {
+    let row = sqlx::query!(
+        r#"
+        select id, native_id as "native_id!", received_at from messages
+        where endpoint_id = $1 and native_id is not null and kind <> 'event'
+        order by id desc limit 1
+        "#,
+        endpoint.0
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.map(|row| Arrived {
+        id: MessageId(row.id),
+        native_id: row.native_id,
+        received_at: row.received_at,
+    }))
+}
+
 /// One row, if it is on this conversation's timeline.
 pub async fn row(
     conn: &mut PgConnection,
