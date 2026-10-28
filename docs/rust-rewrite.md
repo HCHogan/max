@@ -1351,7 +1351,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 ## 审阅性约束
 
 - 直接依赖集中写在 workspace 根 `Cargo.toml` 的 `[workspace.dependencies]` 里。新增依赖单独提交，并在提交里写理由。
-- 用 cargo-deny 检查许可证、安全公告和重复版本。
+- 用 cargo-deny 检查许可证、重复版本和来源；安全公告用 cargo-audit 对 flake 里钉住的 advisory-db 查，Nix 的构建沙箱里没有网。
 - 每个提交都要能单独审完（2026-10-27 定）：手写的改动不超过 400 行，`Cargo.lock`、`.sqlx`、快照和 fixture 不算；一个提交只做一件事，单独拿出来也能编译、测试通过。
 - crate 数量保持少，按需再拆。初始划分见 [crate 划分](#crate-划分)。
 - 不写 legacy 和兼容代码，要删就删干净。
@@ -1388,7 +1388,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 
 2026-10-27 定，10-28 补上 tank 那一步和重启恢复。每一步是一串小提交；前五步不碰 tank。没定的数值先用文中的提议值，做到那一步再调。
 
-1. **骨架**：workspace、钉住版本的 `rust-toolchain.toml`、crane 加 devenv（带 Postgres）、检查项（fmt、clippy、nextest、`max-core` 的依赖白名单）。
+1. **骨架**（2026-10-28 完成）：workspace、钉住版本的 `rust-toolchain.toml`、crane 加 devenv（带 Postgres）、检查项（fmt、clippy、nextest、`max-core` 的依赖白名单）。全部检查是 flake 的 `checks`，CI 只跑 `nix flake check --impure`。
 2. **`max-core`**：消息类型、渲染、分段器、核心和 intent 两个状态机、投影，全用 fake 测。两个状态机的签名在这一步定下来。
 3. **`max-db`**：第一个迁移和查询，`#[sqlx::test]`。
 4. **`onebot`**：协议类型、reverse WS、echo 配对，fixture 里用假号码。

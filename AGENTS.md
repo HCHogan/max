@@ -8,13 +8,19 @@ that needs it is being built.
 
 ## Before every commit
 
-Once the Cargo workspace exists, run from the repository root:
+In the dev shell (`nix develop --impure`, or direnv), from the repository
+root:
 
 - `cargo fmt --check`
 - `cargo clippy --all-targets -- -D warnings`
-- `cargo nextest run`
+- `cargo nextest run --no-tests=warn`
 
-Do not commit if any of them fails.
+Do not commit if any of them fails. `nix flake check --impure` runs these
+and the rest of CI's checks: cargo-deny, cargo-audit, cargo-machete,
+max-core's dependency allow list, max-core built alone, and the package.
+
+The dev shell's Postgres (port 5434, database `max`) runs under `devenv up`;
+without a terminal, start it with `PC_TUI_ENABLED=0 devenv up`.
 
 ## Public repository
 
