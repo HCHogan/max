@@ -1,0 +1,64 @@
+---
+source: crates/max-core/src/message.rs
+expression: message
+---
+{
+  "id": 7405,
+  "conversation": 3,
+  "sender": {
+    "identity": 12,
+    "name": "小明",
+    "role": "admin"
+  },
+  "at": "2026-10-28T12:30:00Z",
+  "content": {
+    "type": "message",
+    "reply_to": 7400,
+    "nodes": [
+      {
+        "type": "mention",
+        "target": {
+          "identity": 1
+        },
+        "display": "Max"
+      },
+      {
+        "type": "text",
+        "text": " 看这个"
+      },
+      {
+        "type": "emote",
+        "platform": "qq",
+        "id": "212",
+        "name": "托腮"
+      },
+      {
+        "type": "media",
+        "media": null,
+        "meta": {
+          "kind": "image",
+          "mime": "image/png",
+          "size": null,
+          "name": null,
+          "description": "一只猫"
+        }
+      },
+      {
+        "type": "card",
+        "tag": "哔哩哔哩",
+        "title": "视频标题",
+        "subtitle": null,
+        "url": "https://b23.tv/xxxx"
+      },
+      {
+        "type": "unsupported",
+        "source": "record",
+        "description": "语音消息"
+      }
+    ]
+  },
+  "turn": null,
+  "raw": {
+    "post_type": "message"
+  }
+}

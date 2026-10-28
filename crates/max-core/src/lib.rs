@@ -4,3 +4,6 @@
 //! Nothing here does I/O or reads the clock. The only dependencies allowed
 //! are serde, serde_json, thiserror and chrono without its `clock` feature;
 //! the flake's `max-core-deps` check enforces that.
+
+pub mod ids;
+pub mod message;

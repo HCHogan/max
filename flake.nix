@@ -42,7 +42,12 @@
           toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
           craneLib = (crane.mkLib pkgs).overrideToolchain (_: toolchain);
 
-          src = craneLib.cleanCargoSource ./.;
+          # Cargo's sources plus insta's snapshots, which the tests read.
+          src = pkgs.lib.cleanSourceWith {
+            src = ./.;
+            name = "source";
+            filter = path: type: craneLib.filterCargoSources path type || pkgs.lib.hasSuffix ".snap" path;
+          };
           commonArgs = {
             inherit src;
             # The root Cargo.toml is a workspace and has no package name.
