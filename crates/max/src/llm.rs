@@ -196,8 +196,12 @@ pub mod testing {
     pub enum Answer {
         /// The model writes this, in these pieces.
         Says(Vec<String>),
+        /// The model writes this, then the stream ends unfinished.
+        Breaks(Vec<String>),
         /// The call fails before anything streams.
         Fails(max_llm::Error),
+        /// The response never starts.
+        Hangs,
     }
 
     impl Answer {
@@ -240,16 +244,23 @@ pub mod testing {
             let model = request.model.clone();
             Box::pin(async move {
                 match answer {
-                    Some(Answer::Says(pieces)) => Ok(Call::replay(model, chat_stream(&pieces))),
+                    Some(Answer::Says(pieces)) => {
+                        Ok(Call::replay(model, chat_stream(&pieces, true)))
+                    }
+                    Some(Answer::Breaks(pieces)) => {
+                        Ok(Call::replay(model, chat_stream(&pieces, false)))
+                    }
                     Some(Answer::Fails(error)) => Err(error),
+                    Some(Answer::Hangs) => std::future::pending().await,
                     None => Err(max_llm::Error::Malformed("the script ran out".into())),
                 }
             })
         }
     }
 
-    /// A Chat completion stream that writes `pieces` one chunk each.
-    pub fn chat_stream(pieces: &[String]) -> Vec<u8> {
+    /// A Chat completion stream that writes `pieces` one chunk each, and
+    /// finishes if `complete`.
+    pub fn chat_stream(pieces: &[String], complete: bool) -> Vec<u8> {
         let mut out = String::new();
         let chunk = |delta: serde_json::Value, finish: Option<&str>, usage| {
             json!({
@@ -261,9 +272,11 @@ pub mod testing {
             let data = chunk(json!({"content": piece}), None, serde_json::Value::Null);
             out += &format!("data: {data}\n\n");
         }
-        let usage = json!({"prompt_tokens": 1000, "completion_tokens": 10});
-        let data = chunk(json!({}), Some("stop"), usage);
-        out += &format!("data: {data}\n\ndata: [DONE]\n\n");
+        if complete {
+            let usage = json!({"prompt_tokens": 1000, "completion_tokens": 10});
+            let data = chunk(json!({}), Some("stop"), usage);
+            out += &format!("data: {data}\n\ndata: [DONE]\n\n");
+        }
         out.into_bytes()
     }
 
