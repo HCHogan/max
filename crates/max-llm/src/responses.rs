@@ -77,11 +77,14 @@ pub fn body(request: &Request, options: &Options) -> Value {
             .tools
             .iter()
             .map(|tool| {
+                // Strict is the default here, and it would make every
+                // optional parameter required.
                 json!({
                     "type": "function",
                     "name": tool.name,
                     "description": tool.description,
                     "parameters": crate::schema(tool),
+                    "strict": false,
                 })
             })
             .collect();

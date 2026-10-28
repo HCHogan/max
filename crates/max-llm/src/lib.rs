@@ -57,7 +57,9 @@ fn tool_text(output: &ToolOutput) -> String {
 
 /// Spreads the provider's output count over the items it produced, by the
 /// length of what each holds: reasoning items share the reasoning tokens,
-/// the rest share the remainder. The totals stay exact.
+/// the rest share the remainder. An item's tokens are what it will cost
+/// when sent again, so reasoning the provider kept to itself, with no item
+/// to carry it, counts for nothing.
 fn share_tokens(items: &mut [Item], usage: &Usage) {
     let visible = usage.output.saturating_sub(usage.reasoning);
     let (reasoning, rest): (Vec<_>, Vec<_>) = items
@@ -126,5 +128,10 @@ mod tests {
         share_tokens(&mut items, &usage);
         let tokens: Vec<u32> = items.iter().map(|item| item.tokens).collect();
         assert_eq!(tokens, [100, 30, 11]);
+
+        items.remove(0);
+        share_tokens(&mut items, &usage);
+        let tokens: Vec<u32> = items.iter().map(|item| item.tokens).collect();
+        assert_eq!(tokens, [30, 11]);
     }
 }

@@ -123,6 +123,7 @@ fn a_request() {
     );
     assert_eq!(body["tools"][0]["name"], "run_code");
     assert_eq!(body["tools"][0]["parameters"]["required"], json!(["code"]));
+    assert_eq!(body["tools"][0]["strict"], false);
     assert!(body.get("temperature").is_none());
 }
 
