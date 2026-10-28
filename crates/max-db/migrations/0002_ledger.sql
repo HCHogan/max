@@ -18,14 +18,12 @@ create table messages (
     sent_at timestamptz not null,
     received_at timestamptz not null,
     kind text not null check (kind in ('chat', 'command', 'event')),
-    event text check (event in ('edit', 'unsend', 'react', 'unreact', 'poke')),
+    event text check (event in ('edit', 'unsend')),
     reply_to_id bigint references messages,
-    -- The row an edit, unsend or reaction is about.
+    -- The row an edit or unsend is about.
     target_id bigint references messages,
-    -- Who was poked.
-    target_identity_id bigint references identities,
-    -- max_core::message::Node values: the content, the new content of an
-    -- edit, or a reaction's emote.
+    -- max_core::message::Node values: the content, or the new content of an
+    -- edit.
     nodes jsonb not null,
     raw jsonb not null,
     -- Rendered text, for search.
@@ -36,18 +34,7 @@ create table messages (
     segment integer,
     unique (endpoint_id, native_id),
     check ((kind = 'event') = (event is not null)),
-    check (
-        case when event in ('edit', 'unsend', 'react', 'unreact')
-            then target_id is not null
-            else target_id is null
-        end
-    ),
-    check (
-        case when event = 'poke'
-            then target_identity_id is not null
-            else target_identity_id is null
-        end
-    ),
+    check ((event is not null) = (target_id is not null)),
     check (kind <> 'event' or reply_to_id is null)
 );
 

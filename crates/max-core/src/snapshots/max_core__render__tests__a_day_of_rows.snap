@@ -11,6 +11,3 @@ expression: "render(&people).lines(rows.iter().zip(marks), None)"
 [12:30 小明 #103]: [image: 一只猫][sticker][card: 哔哩哔哩 | 简介 | https://b23.tv/x][forward: 3 条][语音消息][emote: cat]
 [12:31 小明 #104]: [edit#103] 改了
 [12:31 小明 #105]: [unsend#103]
-[12:32 小红 #106]: [react#102: 托腮]
-[12:32 小红 #107]: [unreact#102: 表情]
-[12:33 小红 #108 戳你]: [poke#1]

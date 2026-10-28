@@ -16,9 +16,8 @@ mod parse;
 
 use std::collections::BTreeSet;
 
-pub use parse::Action;
-
 use crate::ids::PrincipalId;
+use crate::message::Draft;
 
 const SPLIT: &str = "[split]";
 
@@ -28,10 +27,10 @@ pub struct Segment {
     /// The chunk as the model wrote it. When a model call is cut off, the
     /// sources of the segments that went out are what Max said.
     pub source: String,
-    pub action: Action,
+    pub draft: Draft,
 }
 
-/// Streamed model text in, things to say or do out.
+/// Streamed model text in, messages to say out.
 #[derive(Debug)]
 pub struct Segmenter {
     chunker: Chunker,
@@ -62,8 +61,8 @@ impl Segmenter {
         chunks
             .into_iter()
             .filter_map(|source| {
-                let action = parse::parse(&source, &self.known)?;
-                Some(Segment { source, action })
+                let draft = parse::parse(&source, &self.known)?;
+                Some(Segment { source, draft })
             })
             .collect()
     }
@@ -259,7 +258,7 @@ mod tests {
     #[test]
     fn segmenter() {
         use crate::ids::MessageId;
-        use crate::message::{Draft, DraftNode};
+        use crate::message::DraftNode;
 
         let mut segmenter = Segmenter::new([PrincipalId(12)].into());
         let mut out = segmenter.push("[reply#3] 第一条\n\n[silence]\n\n[mention#12] 第二");
@@ -267,13 +266,13 @@ mod tests {
         let sources: Vec<_> = out.iter().map(|s| s.source.as_str()).collect();
         assert_eq!(sources, ["[reply#3] 第一条", "[mention#12] 第二"]);
         assert_eq!(
-            out[0].action,
-            Action::Say(Draft {
+            out[0].draft,
+            Draft {
                 reply_to: Some(MessageId(3)),
                 nodes: vec![DraftNode::Text {
                     text: "第一条".into()
                 }],
-            })
+            }
         );
     }
 

@@ -63,7 +63,6 @@ struct Columns {
     event: Option<&'static str>,
     reply_to: Option<i64>,
     target: Option<i64>,
-    target_identity: Option<i64>,
     nodes: Vec<Node>,
 }
 
@@ -73,7 +72,6 @@ fn columns(content: &Content, command: bool) -> Columns {
         event: Some(event),
         reply_to: None,
         target: target.map(|id| id.0),
-        target_identity: None,
         nodes,
     };
     match content {
@@ -82,24 +80,10 @@ fn columns(content: &Content, command: bool) -> Columns {
             event: None,
             reply_to: reply_to.map(|id| id.0),
             target: None,
-            target_identity: None,
             nodes: nodes.clone(),
         },
         Content::Edit { target, nodes } => event("edit", Some(*target), nodes.clone()),
         Content::Unsend { target } => event("unsend", Some(*target), Vec::new()),
-        Content::React {
-            target,
-            emote,
-            added,
-        } => event(
-            if *added { "react" } else { "unreact" },
-            Some(*target),
-            vec![Node::Emote(emote.clone())],
-        ),
-        Content::Poke { target } => Columns {
-            target_identity: Some(target.0),
-            ..event("poke", None, Vec::new())
-        },
     }
 }
 
@@ -107,7 +91,6 @@ fn content(
     event: Option<&str>,
     reply_to: Option<i64>,
     target: Option<i64>,
-    target_identity: Option<i64>,
     nodes: Vec<Node>,
 ) -> sqlx::Result<Content> {
     let target = || {
@@ -125,21 +108,6 @@ fn content(
             nodes,
         },
         Some("unsend") => Content::Unsend { target: target()? },
-        Some(event @ ("react" | "unreact")) => {
-            let Some(Node::Emote(emote)) = nodes.into_iter().next() else {
-                return Err(unknown("reaction", "without an emote"));
-            };
-            Content::React {
-                target: target()?,
-                emote,
-                added: event == "react",
-            }
-        }
-        Some("poke") => Content::Poke {
-            target: target_identity
-                .map(IdentityId)
-                .ok_or_else(|| unknown("poke target", "none"))?,
-        },
         Some(other) => return Err(unknown("event", other)),
     })
 }
@@ -150,9 +118,9 @@ pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Resu
         r#"
         insert into messages (
             conversation_id, endpoint_id, sender_identity_id, sender_name, sender_role,
-            native_id, sent_at, received_at, kind, event, reply_to_id, target_id,
-            target_identity_id, nodes, raw, text, turn_id, segment
-        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+            native_id, sent_at, received_at, kind, event, reply_to_id, target_id, nodes, raw,
+            text, turn_id, segment
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         returning id
         "#,
         new.conversation.0,
@@ -167,7 +135,6 @@ pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Resu
         columns.event,
         columns.reply_to,
         columns.target,
-        columns.target_identity,
         Json(&columns.nodes) as _,
         new.raw,
         new.text,
@@ -205,7 +172,6 @@ struct Raw {
     event: Option<String>,
     reply_to_id: Option<i64>,
     target_id: Option<i64>,
-    target_identity_id: Option<i64>,
     nodes: Json<Vec<Node>>,
     raw: serde_json::Value,
     turn_id: Option<i64>,
@@ -235,7 +201,6 @@ impl Raw {
                     self.event.as_deref(),
                     self.reply_to_id,
                     self.target_id,
-                    self.target_identity_id,
                     self.nodes.0,
                 )?,
                 turn: self.turn_id.map(TurnId),
@@ -260,8 +225,7 @@ pub async fn rows(
         r#"
         select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,
                m.sender_role, m.sent_at, m.kind, m.event, m.reply_to_id, m.target_id,
-               m.target_identity_id, m.nodes as "nodes: Json<Vec<Node>>", m.raw, m.turn_id,
-               d.status as "delivery?"
+               m.nodes as "nodes: Json<Vec<Node>>", m.raw, m.turn_id, d.status as "delivery?"
         from messages m
         left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id
         where m.conversation_id = $1 and m.id > $2 and m.id <= $3

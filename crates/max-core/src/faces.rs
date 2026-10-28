@@ -141,22 +141,12 @@ pub const GROUPS: &[(&str, &[(&str, u32)])] = &[
     ),
 ];
 
-/// Worn by a trigger while Max is on it.
-pub const THINKING: FaceId = FaceId(212);
-/// Replaces [`THINKING`] when the turn failed.
-pub const FAILED: FaceId = FaceId(357);
-
 fn all() -> impl Iterator<Item = (&'static str, u32)> {
     GROUPS.iter().flat_map(|(_, faces)| faces.iter().copied())
 }
 
-/// The face the model named, as in `[silence:吃瓜]`. Exact names only.
-pub fn by_name(name: &str) -> Option<FaceId> {
-    all().find(|(n, _)| *n == name).map(|(_, id)| FaceId(id))
-}
-
-/// A face's name, for showing a reaction to the model. QQ records only the
-/// QSid; ids outside the table have no name rather than a guessed one.
+/// A face's name, for showing it to the model when the platform gave none.
+/// Ids outside the table have no name rather than a guessed one.
 pub fn name(face: FaceId) -> Option<&'static str> {
     all().find(|(_, id)| *id == face.0).map(|(n, _)| n)
 }
@@ -177,10 +167,8 @@ mod tests {
 
     #[test]
     fn lookups() {
-        assert_eq!(by_name("吃瓜"), Some(FaceId(271)));
-        assert_eq!(by_name("吃瓜吧"), None);
-        assert_eq!(name(THINKING), Some("托腮"));
-        assert_eq!(name(FAILED), Some("裂开"));
+        assert_eq!(name(FaceId(271)), Some("吃瓜"));
+        assert_eq!(name(FaceId(212)), Some("托腮"));
         assert_eq!(name(FaceId(9999)), None);
     }
 }

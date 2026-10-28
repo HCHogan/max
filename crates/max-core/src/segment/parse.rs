@@ -9,23 +9,11 @@
 use std::collections::BTreeSet;
 
 use super::is_fence;
-use crate::faces;
 use crate::ids::{FaceId, MessageId, PrincipalId};
 use crate::message::{Draft, DraftNode, OutboundMedia};
 
-/// What one chunk of model output does.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Action {
-    Say(Draft),
-    /// `[silence:名字]`: no message, a reaction on `target`, or on the
-    /// trigger when there is none.
-    React {
-        target: Option<MessageId>,
-        face: FaceId,
-    },
-}
-
-pub(super) fn parse(chunk: &str, known: &BTreeSet<PrincipalId>) -> Option<Action> {
+/// The message one chunk of model output says, if any.
+pub(super) fn parse(chunk: &str, known: &BTreeSet<PrincipalId>) -> Option<Draft> {
     let mut parsed = Parsed::default();
     let mut in_fence = false;
     for (i, line) in chunk.split('\n').enumerate() {
@@ -91,7 +79,6 @@ fn without_header(line: &str) -> &str {
 struct Parsed {
     reply_to: Option<MessageId>,
     nodes: Vec<DraftNode>,
-    react: Option<String>,
 }
 
 impl Parsed {
@@ -135,9 +122,6 @@ impl Parsed {
                 media: OutboundMedia::Image { message, index },
             }),
             Token::Silence | Token::Display | Token::ToolCall => {}
-            Token::SilenceFace(name) => {
-                self.react.get_or_insert_with(|| name.to_owned());
-            }
         }
     }
 
@@ -152,7 +136,7 @@ impl Parsed {
         }
     }
 
-    fn finish(mut self) -> Option<Action> {
+    fn finish(mut self) -> Option<Draft> {
         if let Some(DraftNode::Text { text }) = self.nodes.first_mut() {
             *text = text.trim_start().to_owned();
         }
@@ -161,16 +145,9 @@ impl Parsed {
         }
         self.nodes
             .retain(|node| !matches!(node, DraftNode::Text { text } if text.is_empty()));
-        if !self.nodes.is_empty() {
-            return Some(Action::Say(Draft {
-                reply_to: self.reply_to,
-                nodes: self.nodes,
-            }));
-        }
-        let face = faces::by_name(self.react.as_deref()?)?;
-        Some(Action::React {
-            target: self.reply_to,
-            face,
+        (!self.nodes.is_empty()).then_some(Draft {
+            reply_to: self.reply_to,
+            nodes: self.nodes,
         })
     }
 }
@@ -182,8 +159,8 @@ enum Token<'a> {
     Face(FaceId),
     Sticker(i64),
     Image(MessageId, Option<u32>),
+    /// `[silence]`, or `[silence:名字]`, which used to react with a face.
     Silence,
-    SilenceFace(&'a str),
     /// A form that is only for reading.
     Display,
     /// A tool call written as text, such as `[find_stickers query="无语"]`.
@@ -197,9 +174,7 @@ fn token(s: &str) -> Option<(Token<'_>, usize)> {
     }
     if let Some(rest) = s.strip_prefix("[silence:") {
         let end = rest.find(']')?;
-        let name = rest[..end].trim();
-        return (!name.is_empty())
-            .then_some((Token::SilenceFace(name), "[silence:".len() + end + 1));
+        return Some((Token::Silence, "[silence:".len() + end + 1));
     }
     placeholder(s)
         .or_else(|| display(s).map(|len| (Token::Display, len)))
@@ -229,7 +204,8 @@ fn placeholder(s: &str) -> Option<(Token<'_>, usize)> {
     Some((token, 1 + hash + 1 + at + len))
 }
 
-/// An event placeholder or an id-less form; see `render`.
+/// An event placeholder or an id-less form; see `render`. Reactions and
+/// pokes are no longer rendered, but old summaries still show them.
 fn display(s: &str) -> Option<usize> {
     const EVENTS: &[&str] = &["edit", "unsend", "react", "unreact", "poke"];
     const BARE: &[&str] = &[
@@ -296,15 +272,12 @@ fn tool_call(s: &str) -> Option<usize> {
 mod tests {
     use super::*;
 
-    fn parsed(chunk: &str) -> Option<Action> {
+    fn parsed(chunk: &str) -> Option<Draft> {
         parse(chunk, &[PrincipalId(12)].into())
     }
 
     fn say(chunk: &str) -> Draft {
-        match parsed(chunk) {
-            Some(Action::Say(draft)) => draft,
-            other => panic!("{chunk:?} gave {other:?}"),
-        }
+        parsed(chunk).unwrap_or_else(|| panic!("{chunk:?} said nothing"))
     }
 
     fn text(s: &str) -> DraftNode {
@@ -373,21 +346,8 @@ mod tests {
     fn silence() {
         assert_eq!(parsed("[silence]"), None);
         assert_eq!(parsed("[reply#5]  [silence]"), None);
-        assert_eq!(parsed("[silence:没有这个]"), None);
-        assert_eq!(
-            parsed("[reply#5] [silence:吃瓜]"),
-            Some(Action::React {
-                target: Some(MessageId(5)),
-                face: FaceId(271)
-            })
-        );
-        assert_eq!(
-            parsed("[silence: 吃瓜 ]"),
-            Some(Action::React {
-                target: None,
-                face: FaceId(271)
-            })
-        );
+        assert_eq!(parsed("[reply#5] [silence:吃瓜]"), None);
+        assert_eq!(parsed("[silence:]"), None);
         assert_eq!(
             say("好 [silence] 的 [silence:吃瓜]").nodes,
             vec![text("好  的")]

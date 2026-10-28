@@ -26,17 +26,13 @@ async fn every_kind_of_row_reads_back_as_written(pool: PgPool) -> sqlx::Result<(
             target: first,
             nodes: text("在吗？"),
         },
-        Content::React {
-            target: first,
-            emote: Emote {
+        Content::Message {
+            reply_to: None,
+            nodes: vec![Node::Emote(Emote {
                 platform: Platform::Qq,
                 id: "76".into(),
                 name: Some("赞".into()),
-            },
-            added: false,
-        },
-        Content::Poke {
-            target: group.max.identity,
+            })],
         },
         Content::Unsend { target: first },
     ];

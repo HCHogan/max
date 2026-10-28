@@ -43,7 +43,6 @@ pub enum Mark {
     /// A trigger addressed to Max.
     MentionsYou,
     RepliesToYou,
-    PokesYou,
     /// Max said it, but the platform refused it.
     NotSent,
     /// Max said it and crashed before hearing back from the platform.
@@ -111,7 +110,6 @@ impl<P: People> Render<'_, P> {
         let note = match mark {
             Mark::MentionsYou => " @你",
             Mark::RepliesToYou => " 回复你",
-            Mark::PokesYou => " 戳你",
             _ => "",
         };
         format!("[{time} {name} #{}{note}]: ", message.id)
@@ -128,18 +126,6 @@ impl<P: People> Render<'_, P> {
             }
             Content::Edit { target, nodes } => format!("[edit#{target}] {}", self.nodes(nodes)),
             Content::Unsend { target } => format!("[unsend#{target}]"),
-            Content::React {
-                target,
-                emote,
-                added,
-            } => {
-                let verb = if *added { "react" } else { "unreact" };
-                format!("[{verb}#{target}: {}]", emote_name(emote).unwrap_or("表情"))
-            }
-            Content::Poke { target } => match self.people.principal(*target) {
-                Some(principal) => format!("[poke#{principal}]"),
-                None => "[poke]".to_owned(),
-            },
         };
         text.trim().replace("\r\n", "\n").replace('\n', " ⏎ ")
     }
@@ -163,7 +149,9 @@ impl<P: People> Render<'_, P> {
                 display,
             } => format!("@{display}"),
             Node::Emote(emote) => match (emote.platform, emote.id.parse::<u32>()) {
-                (Platform::Qq, Ok(id)) => labelled(&format!("face#{id}"), emote_name(emote)),
+                (Platform::Qq | Platform::QqLegacy, Ok(id)) => {
+                    labelled(&format!("face#{id}"), emote_name(emote))
+                }
                 _ => labelled("emote", emote_name(emote)),
             },
             Node::Media { meta, .. } => {
@@ -201,10 +189,12 @@ fn labelled(word: &str, label: Option<&str>) -> String {
     }
 }
 
-/// A QQ reaction records only the QSid; the face table names it.
+/// The face table's name for a QQ face, else what the platform called it.
 fn emote_name(emote: &Emote) -> Option<&str> {
     let curated = match emote.platform {
-        Platform::Qq => emote.id.parse().ok().and_then(|id| faces::name(FaceId(id))),
+        Platform::Qq | Platform::QqLegacy => {
+            emote.id.parse().ok().and_then(|id| faces::name(FaceId(id)))
+        }
         Platform::Matrix => None,
     };
     curated.or(emote.name.as_deref())
@@ -394,42 +384,6 @@ mod tests {
                     target: MessageId(103),
                 },
             ),
-            message(
-                106,
-                (28, 4, 32),
-                "小红",
-                Content::React {
-                    target: MessageId(102),
-                    emote: Emote {
-                        platform: Platform::Qq,
-                        id: "212".into(),
-                        name: None,
-                    },
-                    added: true,
-                },
-            ),
-            message(
-                107,
-                (28, 4, 32),
-                "小红",
-                Content::React {
-                    target: MessageId(102),
-                    emote: Emote {
-                        platform: Platform::Qq,
-                        id: "9999".into(),
-                        name: None,
-                    },
-                    added: false,
-                },
-            ),
-            message(
-                108,
-                (28, 4, 33),
-                "小红",
-                Content::Poke {
-                    target: IdentityId(1),
-                },
-            ),
         ];
         let marks = [
             Mark::None,
@@ -438,9 +392,6 @@ mod tests {
             Mark::None,
             Mark::None,
             Mark::None,
-            Mark::None,
-            Mark::None,
-            Mark::PokesYou,
         ];
         insta::assert_snapshot!(render(&people).lines(rows.iter().zip(marks), None));
     }

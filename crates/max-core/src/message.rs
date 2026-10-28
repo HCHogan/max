@@ -16,7 +16,11 @@ use crate::ids::{ConversationId, FaceId, IdentityId, MessageId, PrincipalId, Tur
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Platform {
+    /// QQ through the official bot API: users and groups are openids.
     Qq,
+    /// QQ as the Haskell version saw it through NapCat, by QQ and group
+    /// numbers. Only imported history has it; nothing sends there.
+    QqLegacy,
     Matrix,
 }
 
@@ -61,23 +65,9 @@ pub enum Content {
         nodes: Vec<Node>,
     },
     /// The new content of an earlier message.
-    Edit {
-        target: MessageId,
-        nodes: Vec<Node>,
-    },
+    Edit { target: MessageId, nodes: Vec<Node> },
     /// The earlier message was recalled or redacted.
-    Unsend {
-        target: MessageId,
-    },
-    React {
-        target: MessageId,
-        emote: Emote,
-        /// False when the reaction was taken back.
-        added: bool,
-    },
-    Poke {
-        target: IdentityId,
-    },
+    Unsend { target: MessageId },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

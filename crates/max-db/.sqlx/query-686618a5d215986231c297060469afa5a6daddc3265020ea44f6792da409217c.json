@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,\n               m.sender_role, m.sent_at, m.kind, m.event, m.reply_to_id, m.target_id,\n               m.target_identity_id, m.nodes as \"nodes: Json<Vec<Node>>\", m.raw, m.turn_id,\n               d.status as \"delivery?\"\n        from messages m\n        left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id\n        where m.conversation_id = $1 and m.id > $2 and m.id <= $3\n        order by m.id\n        ",
+  "query": "\n        select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,\n               m.sender_role, m.sent_at, m.kind, m.event, m.reply_to_id, m.target_id,\n               m.nodes as \"nodes: Json<Vec<Node>>\", m.raw, m.turn_id, d.status as \"delivery?\"\n        from messages m\n        left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id\n        where m.conversation_id = $1 and m.id > $2 and m.id <= $3\n        order by m.id\n        ",
   "describe": {
     "columns": [
       {
@@ -126,17 +126,6 @@
       },
       {
         "ordinal": 11,
-        "name": "target_identity_id",
-        "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "messages",
-            "name": "target_identity_id"
-          }
-        }
-      },
-      {
-        "ordinal": 12,
         "name": "nodes: Json<Vec<Node>>",
         "type_info": "Jsonb",
         "origin": {
@@ -147,7 +136,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 12,
         "name": "raw",
         "type_info": "Jsonb",
         "origin": {
@@ -158,7 +147,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 13,
         "name": "turn_id",
         "type_info": "Int8",
         "origin": {
@@ -169,7 +158,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 14,
         "name": "delivery?",
         "type_info": "Text",
         "origin": {
@@ -199,12 +188,11 @@
       true,
       true,
       true,
-      true,
       false,
       false,
       true,
       true
     ]
   },
-  "hash": "ee7053b56097c8033e9dff4ac97076a3383240a736f4d480570e033d7e96c443"
+  "hash": "686618a5d215986231c297060469afa5a6daddc3265020ea44f6792da409217c"
 }
