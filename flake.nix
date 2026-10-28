@@ -1,5 +1,5 @@
 {
-  description = "max — a group chat agent for QQ (OneBot 11) and Matrix";
+  description = "max — a group chat agent for QQ and Matrix";
 
   inputs = {
     # The nixpkgs revision nix-config deploys with.
@@ -155,6 +155,12 @@
             # Built on its own, max-core gets chrono without the clock that
             # the max crate turns on, so a Utc::now in the core won't compile.
             max-core-alone = cargoCheck "max-core-alone" [ ] "cargo check --package max-core";
+          }
+          // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+            module = import ./nix/tests/module.nix {
+              inherit pkgs;
+              module = self.nixosModules.maxx;
+            };
           };
 
           devShell = devenv.lib.mkShell {
@@ -170,6 +176,18 @@
     in
     {
       packages = forEachSystem (system: all.${system}.packages);
+      # One module per name; see nix/module.nix. tank runs maxx beside the
+      # Haskell max until the Rust version takes the name over.
+      nixosModules = {
+        maxx = import ./nix/module.nix {
+          name = "maxx";
+          inherit (self) packages;
+        };
+        max = import ./nix/module.nix {
+          name = "max";
+          inherit (self) packages;
+        };
+      };
       checks = forEachSystem (system: all.${system}.checks);
       devShells = forEachSystem (system: {
         default = all.${system}.devShell;
