@@ -108,7 +108,7 @@ v1 用到的：
 | 命令行、配置 | clap（derive）、toml | 4.6 / 1.1 | 只有一个来源：TOML 文件；见[配置](#配置) |
 | 数据库 | sqlx（postgres、runtime-tokio、macros、migrate、chrono、json） | 0.9.0 | 编译期检查 SQL；`.sqlx` 离线元数据入库；迁移用 sqlx 自带的。不开 TLS，库在本机 |
 | 时间 | chrono | 0.4 | sqlx 0.9 不支持 jiff |
-| LLM | 自写，reqwest 加自写的 SSE 解析 | — / 0.13 | 只在 `max-llm` 里。2026-10-29 从 async-openai 0.42.2 改：byot 模式下请求和响应类型本来就要自己写，它只剩发请求和解析 SSE；它的流每个都 `tokio::spawn` 一个不归我们管的任务，连接断在半路时流只是结束、不报错，还大约每月一个破坏性小版本 |
+| LLM | 自写，reqwest 加 sse-stream | — / 0.13 / 0.2.6 | 只在 `max-llm` 里。线上格式只给读到的十几个字段写小结构，其余存原始 JSON 透传。sse-stream 只把字节流切成事件，rmcp 3.8 用的也是 0.2.6。2026-10-29 从 async-openai 0.42.2 改：byot 模式下请求和响应类型本来就要自己写，它只剩发请求和解析 SSE；它的流每个都 `tokio::spawn` 一个不归我们管的任务，连接断在半路时流只是结束、不报错，还大约每月一个破坏性小版本 |
 | HTTP 服务 | axum | 0.8.9 | MCP 服务；以后 admin 也挂在这里 |
 | Matrix | matrix-sdk | 0.18.0 | 开着默认的 E2EE 和 sqlite store 特性，支持加密房间，见 [Matrix 加密房间](#matrix-加密房间)。0.19 和 sqlx 0.9.0 解析不到一起，见那一节的依赖约束 |
 | QQ 官方机器人 | 自写，网关用 tokio-tungstenite（rustls），REST 用 reqwest | — / 0.30 / 0.13 | 官方 SDK 只有 Go、Python、Node；见 [QQ 官方机器人](#qq-官方机器人) |
