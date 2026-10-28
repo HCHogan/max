@@ -6,6 +6,7 @@
 
 pub mod api;
 pub mod event;
+pub mod gateway;
 pub mod message;
 
 pub use api::{Chat, Client, Credentials, Error};
