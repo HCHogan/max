@@ -108,7 +108,7 @@ v1 用到的：
 | 命令行、配置 | clap（derive）、toml | 4.6 / 1.1 | 只有一个来源：TOML 文件；见[配置](#配置) |
 | 数据库 | sqlx（postgres、runtime-tokio、macros、migrate、chrono、json） | 0.9.0 | 编译期检查 SQL；`.sqlx` 离线元数据入库；迁移用 sqlx 自带的。不开 TLS，库在本机 |
 | 时间 | chrono | 0.4 | sqlx 0.9 不支持 jiff |
-| LLM | async-openai（responses、chat-completion、byot） | 0.42.2 | 只在 LLM 模块里用；破坏性小版本大约每月一个 |
+| LLM | 自写，reqwest 加自写的 SSE 解析 | — / 0.13 | 只在 `max-llm` 里。2026-10-29 从 async-openai 0.42.2 改：byot 模式下请求和响应类型本来就要自己写，它只剩发请求和解析 SSE；它的流每个都 `tokio::spawn` 一个不归我们管的任务，连接断在半路时流只是结束、不报错，还大约每月一个破坏性小版本 |
 | HTTP 服务 | axum | 0.8.9 | MCP 服务；以后 admin 也挂在这里 |
 | Matrix | matrix-sdk | 0.18.0 | 开着默认的 E2EE 和 sqlite store 特性，支持加密房间，见 [Matrix 加密房间](#matrix-加密房间)。0.19 和 sqlx 0.9.0 解析不到一起，见那一节的依赖约束 |
 | QQ 官方机器人 | 自写，网关用 tokio-tungstenite（rustls），REST 用 reqwest | — / 0.30 / 0.13 | 官方 SDK 只有 Go、Python、Node；见 [QQ 官方机器人](#qq-官方机器人) |
@@ -123,7 +123,7 @@ v1 用到的：
 | 构建 | crane | — | 依赖单独缓存 |
 | 工具链 | stable，edition 2024 | `rust-toolchain.toml` 钉具体版本 | 不用 nightly，见[工具链](#工具链) |
 
-async-openai、matrix-sdk 和 `qqbot` 都用 reqwest 0.13，不会编出两份 reqwest。
+`max-llm`、matrix-sdk 和 `qqbot` 都用 reqwest 0.13，不会编出两份 reqwest。
 
 v1 之后再加的：
 
@@ -606,7 +606,7 @@ struct ModelOutput {
 
 ### 核心
 
-自写，sans-I/O（2026-10-26 定）。2026-10 调研过 rig、yoagent、adk-rust、autoagents、swiftide-agents、aisdk、genai，以及 pi-agent（第三方的 Rust 移植，官方仓库里没有这份代码）。它们的共同问题是自带 provider 层或 session 层，和 async-openai、ledger 冲突；体量也远大于我们要用的部分：rig-core 加 rig-agent 约 13 万行，yoagent 约 3.9 万行。自写预计 1.2k–1.5k 行，包含两种协议的适配。借鉴两处：rig-agent 的 `AgentRun`，把 loop 写成 sans-I/O 状态机；pi 和 yoagent 的 steer 语义。
+自写，sans-I/O（2026-10-26 定）。2026-10 调研过 rig、yoagent、adk-rust、autoagents、swiftide-agents、aisdk、genai，以及 pi-agent（第三方的 Rust 移植，官方仓库里没有这份代码）。它们的共同问题是自带 provider 层或 session 层，和我们自己的协议适配、ledger 冲突；体量也远大于我们要用的部分：rig-core 加 rig-agent 约 13 万行，yoagent 约 3.9 万行。自写预计 1.2k–1.5k 行，包含两种协议的适配。借鉴两处：rig-agent 的 `AgentRun`，把 loop 写成 sans-I/O 状态机；pi 和 yoagent 的 steer 语义。
 
 核心是纯状态机：方法都是同步的，每次调用是一次完整的状态转移；不 `await`、不 spawn、不读时钟、不碰网络。草图，签名 **待定**：
 
@@ -681,7 +681,7 @@ impl Run {
 
 会话 actor 把核心要做的 I/O spawn 成任务，挂在这个核心的 `io` scope 里，结果作为事件回到 actor 的信箱（2026-10-28 定，见[会话 actor](#会话-actor)）。任务之间、任务和 actor 之间不共享可变状态。
 
-- **模型调用**：一次 `CallModel` 一个任务。它持有模型客户端和分段器：把请求交给协议适配层降级成线上格式，用 async-openai 发出去、读流；流式文本切出一段就发 `Said`，流结束发 `ModelDone`。可重试的错误在任务里重试，前提是还没发过 `Said`；发过就不重试，直接报错，已入账的文本由 actor 记成 `partial_output`（2026-10-28 定）。否则重试会把发过的段落从头再发一遍，晚间丢包时最容易碰上。流里一出现 `run_code` 或 `shell` 调用，就通知 VM 服务启动群 VM。
+- **模型调用**：一次 `CallModel` 一个任务。它持有模型客户端和分段器：把请求交给协议适配层降级成线上格式，发出去、读流；流式文本切出一段就发 `Said`，流结束发 `ModelDone`。可重试的错误在任务里重试，前提是还没发过 `Said`；发过就不重试，直接报错，已入账的文本由 actor 记成 `partial_output`（2026-10-28 定）。否则重试会把发过的段落从头再发一遍，晚间丢包时最容易碰上。流里一出现 `run_code` 或 `shell` 调用，就通知 VM 服务启动群 VM。
 - **`run_code`、`shell`**：一个调用一个任务，在群 VM 里跑，结束发 `ToolDone`。同一批的几个并发跑，先跑完的先喂给核心。
 - **intent 分类**：挂在 `side` 里，结束发 `Verdict`，见 [intent](#intent)。
 - **回执**：每个任务拿着一个回执（`Report`），正常结束时用它发结束事件；被 abort 或 panic 时，它在 `Drop` 里补发一条"没有结果"。所以每个任务恰好一个结束事件，和 `Said` 走同一个信箱，排在它们后面。
@@ -1401,7 +1401,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 | `qqbot` | QQ 官方机器人接口：token、网关（心跳、Resume、重连）、事件和 REST 的类型、发送和撤回，发图时再加上传。不认识 Max：没有 Node，没有会话 | 依赖方向：协议层不能长成 Max 的形状。也是唯一值得复用的一块 |
 | `max-core` | 所有纯逻辑：Node/Message/Draft/Item 类型、核心和 intent 两个状态机、请求构造、分段器、衰减曲线、historian 输出的校验、给模型看的渲染。只依赖 serde、serde_json、thiserror，以及不开 `clock` 特性的 chrono（渲染 `HH:MM`、换日、间隔标记要用） | 依赖方向：sans-I/O 靠编译器保证 |
 | `max-db` | schema、迁移、全部 sqlx 查询和行类型 | 编译时间；`.sqlx` 离线元数据集中在一处 |
-| `max-llm` | Responses 和 Chat 适配、流式解析、推理透传、多模态降级 | 隔离 async-openai（每月一个破坏性小版本），用录下来的响应单独测 |
+| `max-llm` | Responses 和 Chat 适配、流式解析、推理透传、多模态降级 | 协议细节都关在这里，用录下来的响应单独测 |
 | `max` | 二进制：配置、CLI、services、会话 actor 和 I/O 任务、平台 sender、QQ 和 Matrix 适配、投影、historian、lingo、worker 框架、VM、MCP 服务、工具、命令 | 其余都是业务，放一起 |
 | `max-import` | 二进制：旧库导入 | 旧 schema 的代码只在这里，切换后整个删掉 |
 - 依赖只能往下：`qqbot` 和 `max-core` 在底层，互不依赖；`max-db`、`max-llm` 依赖 `max-core`；`max` 依赖全部。QQ 事件到 Node 的映射在 `max` 里，不在 `qqbot`。
