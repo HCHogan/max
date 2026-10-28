@@ -1,0 +1,6 @@
+# The flake reads this file too, so crane and the dev shell build with the
+# same compiler. Bump it in a commit of its own.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt", "rust-src", "rust-analyzer"]
+profile = "minimal"

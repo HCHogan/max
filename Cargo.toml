@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Every direct dependency is declared here, once; crates refer to it with
+# `workspace = true`. Adding one is its own commit with the reason in it.
+[workspace.dependencies]
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
+unwrap_used = "warn"

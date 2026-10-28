@@ -1,0 +1,10 @@
+[package]
+name = "max"
+description = "The Max group chat agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

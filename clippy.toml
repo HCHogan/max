@@ -1,0 +1,8 @@
+allow-unwrap-in-tests = true
+
+# Tasks are created only through `Scope`, which owns and cancels them; see
+# "运行时结构" in docs/rust-rewrite.md.
+disallowed-methods = [
+    { path = "tokio::spawn", reason = "spawn through a Scope", allow-invalid = true },
+    { path = "tokio::task::spawn", reason = "spawn through a Scope", allow-invalid = true },
+]

@@ -1,0 +1,10 @@
+[package]
+name = "onebot"
+description = "OneBot v11 with NapCat's dialect: types, reverse WebSocket server, echo matching"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "max-llm"
+description = "Responses and Chat Completions adapters for Max's core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
