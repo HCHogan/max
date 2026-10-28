@@ -107,7 +107,7 @@ pub fn summary_block(summaries: &[Summary], budget: u32, offset: FixedOffset) ->
 }
 
 /// `2026-10-03 周五 14:02–16:30`, or with the end's date when it differs.
-fn span(summary: &Summary, offset: FixedOffset) -> String {
+pub(crate) fn span(summary: &Summary, offset: FixedOffset) -> String {
     let start = summary.started_at.with_timezone(&offset);
     let end = summary.ended_at.with_timezone(&offset);
     let date = start.date_naive();
