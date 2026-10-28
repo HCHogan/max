@@ -7,6 +7,8 @@
 
 pub mod faces;
 pub mod ids;
+pub mod item;
 pub mod message;
 pub mod render;
 pub mod segment;
+pub mod tools;
