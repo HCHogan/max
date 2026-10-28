@@ -37,6 +37,9 @@ sqlx = { version = "0.9.0", default-features = false, features = [
 # The async runtime: qqbot's gateway and REST calls, and running futures
 # side by side in database tests.
 tokio = "1.54"
+# CancellationToken, which every Scope hands its tasks: cancelling a task
+# without aborting it mid-await, and a whole subtree at once.
+tokio-util = "0.7.20"
 
 # HTTP for qqbot's REST calls and max-llm's model calls, streamed; matrix-sdk
 # uses it as well, so there is one copy. Its default TLS is rustls with the
