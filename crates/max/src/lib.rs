@@ -13,3 +13,4 @@ pub mod qq;
 pub mod scope;
 pub mod table;
 pub mod tokens;
+pub mod vm;
