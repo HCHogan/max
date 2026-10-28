@@ -87,6 +87,9 @@ pub struct Llm {
     pub default: Selection,
     /// The small model that judges chatter.
     pub intent: Selection,
+    /// The model that summarizes what was said. Without it, no summaries
+    /// are written, and the raw tail is cut when it grows too long.
+    pub historian: Option<Selection>,
     pub providers: BTreeMap<String, Provider>,
 }
 
@@ -215,9 +218,16 @@ impl Llm {
         for name in self.providers.keys() {
             ensure!(!name.contains('/'), "a provider's name has a /: {name:?}");
         }
-        for (role, selection) in [("default", &self.default), ("intent", &self.intent)] {
-            self.model(&selection.model)
-                .wrap_err_with(|| format!("in llm.{role}"))?;
+        let selections = [
+            ("default", Some(&self.default)),
+            ("intent", Some(&self.intent)),
+            ("historian", self.historian.as_ref()),
+        ];
+        for (role, selection) in selections {
+            if let Some(selection) = selection {
+                self.model(&selection.model)
+                    .wrap_err_with(|| format!("in llm.{role}"))?;
+            }
         }
         Ok(())
     }
@@ -283,6 +293,7 @@ mod tests {
         [llm]
         default = { model = "cliproxy/gpt-5.6-luna", effort = "xhigh" }
         intent = { model = "local/qwen3.5-4b" }
+        historian = { model = "cliproxy/gpt-5.6-luna", effort = "medium" }
 
         [llm.providers.cliproxy]
         base_url = "https://cliproxy.example/v1"
@@ -371,6 +382,23 @@ mod tests {
             LLM.replace("local/qwen3.5-4b", "qwen3.5-4b")
         );
         assert!(Config::parse(&bare).is_err());
+        let historian = format!(
+            "{database}{}",
+            LLM.replace(
+                "historian = { model = \"cliproxy/gpt-5.6-luna\"",
+                "historian = { model = \"cliproxy/gpt-9\""
+            )
+        );
+        let error = Config::parse(&historian).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("in llm.historian"),
+            "{error:#}"
+        );
+        let without = format!(
+            "{database}{}",
+            LLM.replace("historian = ", "# historian = ")
+        );
+        assert!(Config::parse(&without).unwrap().llm.historian.is_none());
     }
 
     #[test]

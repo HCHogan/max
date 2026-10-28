@@ -164,13 +164,7 @@ pub struct Volatile {
 
 impl Volatile {
     pub fn render(&self, offset: FixedOffset) -> String {
-        let now = self.now.with_timezone(&offset);
-        let date = now.date_naive();
-        let mut out = format!(
-            "[现在] {date} {} {}\n",
-            weekday(date.weekday()),
-            now.format("%H:%M")
-        );
+        let mut out = now_line(self.now, offset);
         if !self.roster.is_empty() {
             out.push_str("\n[上下文里的人]\n");
             for line in &self.roster {
@@ -185,6 +179,17 @@ impl Volatile {
         }
         out
     }
+}
+
+/// `[现在] 2026-10-29 周四 12:10`, on its own line.
+pub fn now_line(now: DateTime<Utc>, offset: FixedOffset) -> String {
+    let now = now.with_timezone(&offset);
+    let date = now.date_naive();
+    format!(
+        "[现在] {date} {} {}\n",
+        weekday(date.weekday()),
+        now.format("%H:%M")
+    )
 }
 
 /// The base context: the system prompt, then each non-empty block as its

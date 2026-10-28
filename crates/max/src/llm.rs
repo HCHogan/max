@@ -110,6 +110,12 @@ impl Models {
         self.choose(&intent.model, intent.effort.as_deref())
     }
 
+    /// The historian's model, when one is configured.
+    pub fn historian(&self) -> Option<Result<Chosen>> {
+        let historian = self.llm.historian.as_ref()?;
+        Some(self.choose(&historian.model, historian.effort.as_deref()))
+    }
+
     /// Every `provider/model`, for `!model` to list.
     pub fn references(&self) -> Vec<String> {
         self.llm
@@ -251,6 +257,7 @@ pub mod testing {
         let text = r#"
             default = { model = "test/big", effort = "high" }
             intent = { model = "test/small" }
+            historian = { model = "test/big", effort = "low" }
             [providers.test]
             base_url = "http://127.0.0.1:9/v1"
             protocol = "chat"
@@ -289,6 +296,8 @@ mod tests {
         assert_eq!(chosen.reference(), "test/small");
         assert_eq!(chosen.options.effort.as_deref(), Some("low"));
         assert_eq!(models.intent().unwrap().options.effort, None);
+        let historian = models.historian().unwrap().unwrap();
+        assert_eq!(historian.options.effort.as_deref(), Some("low"));
         assert!(models.turn(Some("test/nope"), None).is_err());
         assert!(models.turn(Some("big"), None).is_err());
         assert_eq!(models.references(), ["test/big", "test/small"]);

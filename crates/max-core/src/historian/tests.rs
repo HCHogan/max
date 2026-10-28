@@ -136,6 +136,14 @@ fn earlier_summaries_are_shown_brief() {
 }
 
 #[test]
+fn max_is_listed_as_max() {
+    let max = person(PrincipalId(3), "maxx", None, true);
+    assert_eq!(max, "[mention#3] maxx（就是 Max）");
+    let owner = person(PrincipalId(12), "小明", Some(Role::Owner), false);
+    assert_eq!(owner, "[mention#12] 小明（群主）");
+}
+
+#[test]
 fn the_input_marks_what_is_missing() {
     let text = user(
         "[现在] 2026-10-29 周四 03:10\n",

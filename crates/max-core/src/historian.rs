@@ -7,8 +7,9 @@
 use chrono::FixedOffset;
 use serde::Deserialize;
 
-use crate::ids::MessageId;
-use crate::project::{Summary, span};
+use crate::ids::{MessageId, PrincipalId};
+use crate::message::Role;
+use crate::project::{Summary, roster_line, span};
 
 /// How many of the latest summaries the model reads first.
 pub const EARLIER: usize = 4;
@@ -97,6 +98,17 @@ pub fn earlier(summaries: &[Summary], offset: FixedOffset) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+/// One line of "这段里的人". Max is marked as Max, not as "you": the
+/// historian isn't Max.
+pub fn person(principal: PrincipalId, name: &str, role: Option<Role>, is_max: bool) -> String {
+    if is_max {
+        let name = name.replace(['\n', '\r'], " ");
+        format!("[mention#{principal}] {name}（就是 Max）")
+    } else {
+        roster_line(principal, name, role, false)
+    }
 }
 
 /// One summary as the model wrote it, checked.

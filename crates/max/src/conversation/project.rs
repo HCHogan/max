@@ -5,10 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, FixedOffset, Utc};
-use max_core::ids::{IdentityId, MessageId, PrincipalId};
+use max_core::ids::{IdentityId, MessageId, PrincipalId, SummaryId};
 use max_core::intent::Reason;
 use max_core::item::{Item, ItemKind};
-use max_core::message::{Content, MentionTarget, Message, Node};
+use max_core::message::{Content, MentionTarget, Message, Node, Role};
 use max_core::project::decay::Costs;
 use max_core::project::{self, Budgets, Summary, Volatile};
 use max_core::render::{Mark, Render};
@@ -49,24 +49,7 @@ impl Projection<'_> {
             .last()
             .map(|(_, summary)| summary.last)
             .max(self.cleared_upto);
-        let summaries: Vec<Summary> = active
-            .into_iter()
-            .map(|(id, summary)| Summary {
-                id,
-                started_at: summary.started_at,
-                ended_at: summary.ended_at,
-                costs: Costs {
-                    importance: summary.importance,
-                    full: tokens::count(&summary.full),
-                    brief: summary.brief.as_deref().map(tokens::count),
-                    line: summary.line.as_deref().map(tokens::count),
-                },
-                title: summary.title,
-                full: summary.full,
-                brief: summary.brief,
-                line: summary.line,
-            })
-            .collect();
+        let summaries: Vec<Summary> = active.into_iter().map(summary).collect();
         let summary_block = project::summary_block(&summaries, budgets.summaries, self.offset);
 
         let trigger_ids: BTreeSet<MessageId> = wakes
@@ -151,7 +134,7 @@ impl Projection<'_> {
         roster.insert(self.place.me.principal);
         let volatile = Volatile {
             now: self.now,
-            roster: roster_lines(conn, self.place, &roster).await?,
+            roster: roster_lines(conn, self.place, &roster, project::roster_line).await?,
             quoted: quoted_text,
             first: first_text,
         };
@@ -223,7 +206,7 @@ pub async fn follow_up(
         .filter(|principal| !seen.contains(principal))
         .collect();
     let mut text = String::new();
-    for line in roster_lines(conn, place, &new).await? {
+    for line in roster_lines(conn, place, &new, project::roster_line).await? {
         text.push_str("[上下文里的人] ");
         text.push_str(&line);
         text.push('\n');
@@ -252,6 +235,25 @@ pub fn judged(reason: &Reason) -> Option<Item> {
     Some(Item::new(ItemKind::User { text }, tokens))
 }
 
+/// A summary as the database has it, as the projection renders it.
+pub(crate) fn summary((id, summary): (SummaryId, summaries::Summary)) -> Summary {
+    Summary {
+        id,
+        started_at: summary.started_at,
+        ended_at: summary.ended_at,
+        costs: Costs {
+            importance: summary.importance,
+            full: tokens::count(&summary.full),
+            brief: summary.brief.as_deref().map(tokens::count),
+            line: summary.line.as_deref().map(tokens::count),
+        },
+        title: summary.title,
+        full: summary.full,
+        brief: summary.brief,
+        line: summary.line,
+    }
+}
+
 /// What became of Max's row, if it didn't reach the platform.
 pub fn delivery_mark(row: &Row) -> Mark {
     match row.delivery {
@@ -261,7 +263,7 @@ pub fn delivery_mark(row: &Row) -> Mark {
     }
 }
 
-pub(super) fn shown_line<P: max_core::render::People>(
+pub(crate) fn shown_line<P: max_core::render::People>(
     render: &Render<'_, P>,
     message: &Message,
     mark: Mark,
@@ -277,7 +279,7 @@ pub(super) fn shown_line<P: max_core::render::People>(
 
 /// Lines in order, with a date line where the day changes and a gap line
 /// after a long silence, as [`Render::lines`] does.
-fn joined<P: max_core::render::People>(
+pub(crate) fn joined<P: max_core::render::People>(
     render: &Render<'_, P>,
     lines: &[(&Message, String)],
     mut after: Option<DateTime<Utc>>,
@@ -297,7 +299,7 @@ fn joined<P: max_core::render::People>(
 
 /// The person behind every account the messages show: senders and the
 /// people they mention.
-pub(super) async fn people<'m>(
+pub(crate) async fn people<'m>(
     conn: &mut PgConnection,
     messages: impl Iterator<Item = &'m Message>,
     place: &Place,
@@ -323,10 +325,13 @@ pub(super) async fn people<'m>(
     platform::principals(conn, &identities).await
 }
 
-async fn roster_lines(
+/// A line for each of `people`, written by `line(principal, name, role,
+/// is_max)`.
+pub(crate) async fn roster_lines(
     conn: &mut PgConnection,
     place: &Place,
     people: &BTreeSet<PrincipalId>,
+    line: fn(PrincipalId, &str, Option<Role>, bool) -> String,
 ) -> sqlx::Result<Vec<String>> {
     if people.is_empty() {
         return Ok(Vec::new());
@@ -337,7 +342,7 @@ async fn roster_lines(
         .iter()
         .map(|known| {
             let is_max = known.principal == place.me.principal;
-            project::roster_line(known.principal, &known.name, known.role, is_max)
+            line(known.principal, &known.name, known.role, is_max)
         })
         .collect())
 }

@@ -6,6 +6,7 @@ pub mod bind;
 pub mod command;
 pub mod config;
 pub mod conversation;
+pub mod historian;
 pub mod inbound;
 pub mod llm;
 pub mod qq;
