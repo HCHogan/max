@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into llm_usage (\n            conversation_id, turn_id, purpose, provider, model, effort,\n            input, cached, output, reasoning, cost_micros, at\n        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "953669b7d40c8f943a7f6610e563bc88ebfe1b3a358516dc87e3e7084af88b7c"
+}

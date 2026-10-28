@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into summaries (\n            conversation_id, first_message_id, last_message_id, started_at, ended_at,\n            title, kind, importance, p1, p2, p3, model, created_at\n        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)\n        returning id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "summaries",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Int2",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "39d45722a15438dfbef2c055d4fc42daffd99ebe622de637e3a240e43925fa4a"
+}

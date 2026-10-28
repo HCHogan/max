@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select purpose, input, cached, cost_micros from llm_usage",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "purpose",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "llm_usage",
+            "name": "purpose"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "input",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "llm_usage",
+            "name": "input"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "cached",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "llm_usage",
+            "name": "cached"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "cost_micros",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "llm_usage",
+            "name": "cost_micros"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "0ff8d393d42f75d8c26afcd7dd46a5eedb7a951bfe11407e359a0d4a7e58b734"
+}
