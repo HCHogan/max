@@ -43,7 +43,8 @@
           craneLib = (crane.mkLib pkgs).overrideToolchain (_: toolchain);
 
           # Cargo's sources plus what the build reads besides: insta's
-          # snapshots, max-db's migrations and its offline query data.
+          # snapshots, max-db's migrations and its offline query data,
+          # max-llm's recorded responses.
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
             name = "source";
@@ -52,6 +53,7 @@
               craneLib.filterCargoSources path type
               || pkgs.lib.hasSuffix ".snap" path
               || pkgs.lib.hasSuffix ".sql" path
+              || pkgs.lib.hasSuffix ".sse" path
               || pkgs.lib.hasInfix "/.sqlx/" path;
           };
           commonArgs = {
@@ -114,7 +116,12 @@
               commonArgs
               // {
                 inherit cargoArtifacts;
-                nativeBuildInputs = [ pkgs.postgresql_17 ];
+                # reqwest loads the system's CA certificates when a client
+                # is built, even one that only talks to a local server.
+                nativeBuildInputs = [
+                  pkgs.postgresql_17
+                  pkgs.cacert
+                ];
                 # #[sqlx::test] makes a scratch database per test on this
                 # server. TCP only: a socket path under $TMPDIR can be too
                 # long on macOS.
