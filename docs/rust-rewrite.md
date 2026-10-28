@@ -1324,14 +1324,14 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 | crate | 内容 | 拆开的理由 |
 |---|---|---|
 | `onebot` | OneBot v11 加 NapCat 方言：事件和动作的类型、消息段、reverse WS 服务端、echo 配对、超时表。不认识 Max：没有 Node，没有会话 | 依赖方向：协议层不能长成 Max 的形状。也是唯一值得复用的一块 |
-| `max-core` | 所有纯逻辑：Node/Message/Draft/Item 类型、核心状态机、请求构造、分段器、衰减曲线、historian 输出的校验、给模型看的渲染。只依赖 serde、serde_json、thiserror，以及不开 `clock` 特性的 chrono（渲染 `HH:MM`、换日、间隔标记要用） | 依赖方向：sans-I/O 靠编译器保证 |
+| `max-core` | 所有纯逻辑：Node/Message/Draft/Item 类型、核心和 intent 两个状态机、请求构造、分段器、衰减曲线、historian 输出的校验、给模型看的渲染。只依赖 serde、serde_json、thiserror，以及不开 `clock` 特性的 chrono（渲染 `HH:MM`、换日、间隔标记要用） | 依赖方向：sans-I/O 靠编译器保证 |
 | `max-db` | schema、迁移、全部 sqlx 查询和行类型 | 编译时间；`.sqlx` 离线元数据集中在一处 |
 | `max-llm` | Responses 和 Chat 适配、流式解析、推理透传、多模态降级 | 隔离 async-openai（每月一个破坏性小版本），用录下来的响应单独测 |
 | `max` | 二进制：配置、CLI、services、会话 actor 和 I/O 任务、平台 sender、QQ 和 Matrix 适配、投影、historian、lingo、worker 框架、VM、MCP 服务、工具、命令 | 其余都是业务，放一起 |
 | `max-import` | 二进制：旧库导入 | 旧 schema 的代码只在这里，切换后整个删掉 |
 - 依赖只能往下：`onebot` 和 `max-core` 在底层，互不依赖；`max-db`、`max-llm` 依赖 `max-core`；`max` 依赖全部。OneBot 到 Node 的映射在 `max` 里，不在 `onebot`。
 - `max-core` 的依赖白名单写进 CI：`cargo tree -p max-core -e normal` 里只能出现那四个库。CI 再单独跑一次 `cargo check -p max-core`：只构建这一个包时，chrono 的特性不会和 `max` 合并，核心里调 `Utc::now` 就编不过。
-- intent 是 `max` 里的一个模块。historian、lingo 这些 worker 在 `max/src/workers/` 下各一个模块，实现 `Derivation`；它们的纯逻辑（切段、范围校验、衰减）放 `max-core`，不起库就能测。
+- intent 的状态机和拼分类提示词、解析输出在 `max-core`；分类任务（读库、调小模型）是 `max` 里的 I/O 任务。historian、lingo 这些 worker 在 `max/src/workers/` 下各一个模块，实现 `Derivation`；它们的纯逻辑（切段、范围校验、衰减）放 `max-core`，不起库就能测。
 - Matrix 先不拆。matrix-sdk 编译慢，但 `max` 反正要链接它；`max` 大到难受再分平台 crate。
 - `onebot` 暂不单独 repo。workspace crate 已经有单独 repo 的全部技术好处；v1 期间协议层的形状还会动，分开只会多一套 PR 流程。要发布时 `cargo publish -p onebot` 从这个仓库发，path 依赖换成版本号就行。
 - lint 集中在 workspace 的 `[workspace.lints]`；裸 `tokio::spawn` 用 `clippy.toml` 的 `disallowed-methods` 拦。
@@ -1389,7 +1389,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 2026-10-27 定，10-28 补上 tank 那一步和重启恢复。每一步是一串小提交；前五步不碰 tank。没定的数值先用文中的提议值，做到那一步再调。
 
 1. **骨架**：workspace、钉住版本的 `rust-toolchain.toml`、crane 加 devenv（带 Postgres）、检查项（fmt、clippy、nextest、`max-core` 的依赖白名单）。
-2. **`max-core`**：消息类型、渲染、分段器、核心状态机、投影，全用 fake 测。核心的签名在这一步定下来。
+2. **`max-core`**：消息类型、渲染、分段器、核心和 intent 两个状态机、投影，全用 fake 测。两个状态机的签名在这一步定下来。
 3. **`max-db`**：第一个迁移和查询，`#[sqlx::test]`。
 4. **`onebot`**：协议类型、reverse WS、echo 配对，fixture 里用假号码。
 5. **`max-llm`**：Responses 和 Chat，用录下来的响应测。
