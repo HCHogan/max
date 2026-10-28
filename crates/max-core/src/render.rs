@@ -65,24 +65,30 @@ impl<P: People> Render<'_, P> {
     ) -> String {
         let mut out = String::new();
         for (message, mark) in rows {
-            let local = message.at.with_timezone(&self.offset);
-            match after.map(|at| at.with_timezone(&self.offset)) {
-                Some(before) if before.date_naive() == local.date_naive() => {
-                    let gap = message.at - before.to_utc();
-                    if gap >= GAP {
-                        let _ = writeln!(out, "--- 过了 {} 小时 ---", gap.num_hours());
-                    }
-                }
-                _ => {
-                    let date = local.date_naive();
-                    let _ = writeln!(out, "--- {date} {} ---", weekday(date.weekday()));
-                }
+            if let Some(separator) = self.separator(after, message.at) {
+                let _ = writeln!(out, "{separator}");
             }
             out.push_str(&self.line(message, mark));
             out.push('\n');
             after = Some(message.at);
         }
         out
+    }
+
+    /// The line before a row sent `at`: a date line when the day changes
+    /// since `after`, a gap line after a long silence, otherwise none.
+    pub fn separator(&self, after: Option<DateTime<Utc>>, at: DateTime<Utc>) -> Option<String> {
+        let local = at.with_timezone(&self.offset);
+        match after.map(|at| at.with_timezone(&self.offset)) {
+            Some(before) if before.date_naive() == local.date_naive() => {
+                let gap = at - before.to_utc();
+                (gap >= GAP).then(|| format!("--- 过了 {} 小时 ---", gap.num_hours()))
+            }
+            _ => {
+                let date = local.date_naive();
+                Some(format!("--- {date} {} ---", weekday(date.weekday())))
+            }
+        }
     }
 
     pub fn line(&self, message: &Message, mark: Mark) -> String {

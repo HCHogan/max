@@ -2,6 +2,9 @@
 //! of its core. See "会话 actor" in docs/rust-rewrite.md.
 
 pub mod ingest;
+pub mod project;
+#[cfg(test)]
+mod testing;
 
 use max_core::ids::{ConversationId, EndpointId};
 use max_core::message::Platform;
