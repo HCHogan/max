@@ -8,6 +8,9 @@
 //! not on how it arrived: streamed in any pieces, it gives the same chunks
 //! as all at once. (The Haskell version also released long paragraphs at
 //! sentence ends while streaming, which made the result depend on timing.)
+//!
+//! `<think>` spans are dropped before anything else, including everything
+//! after an unclosed one: some relays put reasoning in the text.
 
 mod parse;
 
@@ -74,6 +77,7 @@ pub struct Chunker {
     /// The complete lines of the chunk being built.
     lines: Vec<String>,
     in_fence: bool,
+    thinking: bool,
 }
 
 impl Chunker {
@@ -101,6 +105,10 @@ impl Chunker {
     }
 
     fn line(&mut self, line: &str, out: &mut Vec<String>) {
+        let Some(line) = self.unthink(line) else {
+            return;
+        };
+        let line = line.as_str();
         if is_fence(line) {
             self.in_fence = !self.in_fence;
             self.lines.push(line.to_owned());
@@ -120,6 +128,35 @@ impl Chunker {
         } else {
             self.lines.push(line.to_owned());
         }
+    }
+
+    /// The part of a line outside `<think>` spans; None for a line wholly
+    /// inside one.
+    fn unthink(&mut self, line: &str) -> Option<String> {
+        const OPEN: &str = "<think>";
+        const CLOSE: &str = "</think>";
+        if !self.thinking && !line.contains(OPEN) {
+            return Some(line.to_owned());
+        }
+        let mut visible = String::new();
+        let mut tagged = false;
+        let mut rest = line;
+        loop {
+            let tag = if self.thinking { CLOSE } else { OPEN };
+            let Some(at) = rest.find(tag) else {
+                if !self.thinking {
+                    visible.push_str(rest);
+                }
+                break;
+            };
+            if !self.thinking {
+                visible.push_str(&rest[..at]);
+            }
+            rest = &rest[at + tag.len()..];
+            self.thinking = !self.thinking;
+            tagged = true;
+        }
+        (tagged || !self.thinking).then_some(visible)
     }
 
     fn cut(&mut self, out: &mut Vec<String>) {
@@ -180,6 +217,19 @@ mod tests {
     }
 
     #[test]
+    fn think_spans_go() {
+        assert_eq!(
+            chunks("<think>嗯\n\n想想</think>好的\n\n二"),
+            ["好的", "二"]
+        );
+        assert_eq!(
+            chunks("一<think>x</think>二<think>y</think>\n三"),
+            ["一二\n三"]
+        );
+        assert_eq!(chunks("答案\n\n<think>没想完\n\n还在想"), ["答案"]);
+    }
+
+    #[test]
     fn crlf() {
         assert_eq!(chunks("一\r\n\r\n二\r\n"), ["一", "二"]);
     }
@@ -187,7 +237,8 @@ mod tests {
     /// Streaming in any two pieces gives the same chunks as all at once.
     #[test]
     fn streaming_is_invisible() {
-        let text = "开头\n\n```py\nx = 1\n\ny = 2\n```\n中间[split]后面\n\n\n结尾";
+        let text =
+            "<think>想\n\n想</think>开头\n\n```py\nx = 1\n\ny = 2\n```\n中间[split]后面\n\n\n结尾";
         let whole = chunks(text);
         for (at, _) in text.char_indices() {
             let mut chunker = Chunker::default();

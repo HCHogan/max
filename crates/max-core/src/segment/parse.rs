@@ -2,8 +2,9 @@
 //! `: description` and a `(attributes)` group glued on, the way the model
 //! sees them in history (`[image#7405.0: 一只猫](29秒)`). Only the id is
 //! trusted; the rest is consumed so that an echoed display form acts
-//! instead of leaking. Anything that doesn't parse stays text. Code fences
-//! are left alone.
+//! instead of leaking. Forms that are only for reading (`[image: 一只猫]`,
+//! `[unsend#7405]`) are dropped when echoed, and so is a copied row header.
+//! Anything else that doesn't parse stays text. Code fences are left alone.
 
 use std::collections::BTreeSet;
 
@@ -37,10 +38,53 @@ pub(super) fn parse(chunk: &str, known: &BTreeSet<PrincipalId>) -> Option<Action
         } else if in_fence {
             parsed.text(line);
         } else {
-            parsed.line(line, known);
+            let line = if i == 0 { without_header(line) } else { line };
+            parsed.line(&restore_breaks(line), known);
         }
     }
     parsed.finish()
+}
+
+/// History shows a line break inside a row as ` ⏎ `, and models copy it.
+fn restore_breaks(line: &str) -> String {
+    let pieces: Vec<&str> = line.split('⏎').collect();
+    let last = pieces.len() - 1;
+    let trimmed: Vec<&str> = pieces
+        .iter()
+        .enumerate()
+        .map(|(i, piece)| {
+            let piece = if i > 0 {
+                piece.trim_start_matches([' ', '\t'])
+            } else {
+                piece
+            };
+            if i < last {
+                piece.trim_end_matches([' ', '\t'])
+            } else {
+                piece
+            }
+        })
+        .collect();
+    trimmed.join("\n")
+}
+
+/// The line without a row header, `[HH:MM 名字 #id]: `, copied from history.
+fn without_header(line: &str) -> &str {
+    let Some(close) = line.find("]: ") else {
+        return line;
+    };
+    let header = line.as_bytes();
+    let clock = header.len() > 7
+        && header[0] == b'['
+        && header[1..3].iter().all(u8::is_ascii_digit)
+        && header[3] == b':'
+        && header[4..6].iter().all(u8::is_ascii_digit)
+        && header[6] == b' ';
+    if clock && line[..close].contains(" #") {
+        &line[close + "]: ".len()..]
+    } else {
+        line
+    }
 }
 
 #[derive(Default)]
@@ -90,7 +134,7 @@ impl Parsed {
             Token::Image(message, index) => self.nodes.push(DraftNode::Media {
                 media: OutboundMedia::Image { message, index },
             }),
-            Token::Silence | Token::ToolCall => {}
+            Token::Silence | Token::Display | Token::ToolCall => {}
             Token::SilenceFace(name) => {
                 self.react.get_or_insert_with(|| name.to_owned());
             }
@@ -140,6 +184,8 @@ enum Token<'a> {
     Image(MessageId, Option<u32>),
     Silence,
     SilenceFace(&'a str),
+    /// A form that is only for reading.
+    Display,
     /// A tool call written as text, such as `[find_stickers query="无语"]`.
     ToolCall,
 }
@@ -155,7 +201,9 @@ fn token(s: &str) -> Option<(Token<'_>, usize)> {
         return (!name.is_empty())
             .then_some((Token::SilenceFace(name), "[silence:".len() + end + 1));
     }
-    placeholder(s).or_else(|| tool_call(s).map(|len| (Token::ToolCall, len)))
+    placeholder(s)
+        .or_else(|| display(s).map(|len| (Token::Display, len)))
+        .or_else(|| tool_call(s).map(|len| (Token::ToolCall, len)))
 }
 
 fn placeholder(s: &str) -> Option<(Token<'_>, usize)> {
@@ -179,6 +227,27 @@ fn placeholder(s: &str) -> Option<(Token<'_>, usize)> {
         _ => return None,
     };
     Some((token, 1 + hash + 1 + at + len))
+}
+
+/// An event placeholder or an id-less form; see `render`.
+fn display(s: &str) -> Option<usize> {
+    const EVENTS: &[&str] = &["edit", "unsend", "react", "unreact", "poke"];
+    const BARE: &[&str] = &[
+        "image", "sticker", "video", "audio", "file", "forward", "card", "emote", "poke",
+    ];
+    let body = s.strip_prefix('[')?;
+    let word_len = body.bytes().take_while(u8::is_ascii_lowercase).count();
+    let (word, rest) = body.split_at(word_len);
+    if let Some(id) = rest.strip_prefix('#') {
+        let (_, id_len) = digits(id)?;
+        let (_, len) = closer(&id[id_len..])?;
+        EVENTS
+            .contains(&word)
+            .then_some(1 + word_len + 1 + id_len + len)
+    } else {
+        let (_, len) = closer(rest)?;
+        BARE.contains(&word).then_some(1 + word_len + len)
+    }
 }
 
 /// A run of ASCII digits and its length.
@@ -334,6 +403,26 @@ mod tests {
         assert_eq!(
             say("[look up=“x”] 数组 [a b]").nodes,
             vec![text("数组 [a b]")]
+        );
+    }
+
+    #[test]
+    fn echoes_of_history() {
+        assert_eq!(
+            say("第一行 ⏎ 第二行⏎第三行").nodes,
+            vec![text("第一行\n第二行\n第三行")]
+        );
+        let draft = say("[09:03 Max #102 回复你]: [reply#101] 在");
+        assert_eq!(
+            (draft.reply_to, draft.nodes),
+            (Some(MessageId(101)), vec![text("在")])
+        );
+        assert_eq!(say("[09:03] 说: 好").nodes, vec![text("[09:03] 说: 好")]);
+        let echoed = "看[image: 一只猫][sticker] [unsend#3][react#2: 托腮][card: a | b][poke]图";
+        assert_eq!(say(echoed).nodes, vec![text("看 图")]);
+        assert_eq!(
+            say("[edit] [video#3]").nodes,
+            vec![text("[edit] [video#3]")]
         );
     }
 
