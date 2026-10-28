@@ -1,0 +1,29 @@
+# cargo-deny: licenses, duplicate versions and where crates come from.
+# Advisories are checked by the flake's `audit` check against the pinned
+# advisory-db input, since the build sandbox has no network.
+
+[licenses]
+# Permissive licenses only. A dependency under anything else needs an entry
+# here, with the reason, in the commit that adds it.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace crates depend on each other by path.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

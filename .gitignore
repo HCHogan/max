@@ -13,3 +13,6 @@ max.toml
 # Claude Code local state — per-machine tooling, never part of the project.
 .claude/
 .agents/
+
+# devenv state (Postgres data, task database)
+.devenv/
