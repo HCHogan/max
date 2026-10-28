@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select id, native_id as \"native_id!\", received_at from messages\n        where endpoint_id = $1 and native_id is not null and kind <> 'event'\n        order by id desc limit 1\n        ",
+  "query": "\n        select id, native_id as \"native_id!\", sent_at from messages\n        where endpoint_id = $1 and native_id is not null and kind <> 'event'\n        order by id desc limit 1\n        ",
   "describe": {
     "columns": [
       {
@@ -27,12 +27,12 @@
       },
       {
         "ordinal": 2,
-        "name": "received_at",
+        "name": "sent_at",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
             "table": "messages",
-            "name": "received_at"
+            "name": "sent_at"
           }
         }
       }
@@ -48,5 +48,5 @@
       false
     ]
   },
-  "hash": "82d869204d76f4480de0b5ee0f8ce8fbb1d6f706c304f36ade10625a9edd8e5d"
+  "hash": "09bf2c4b24fcbc25f284d631b65907d2201fe269f2c4970f924f7dbd0dfe8945"
 }

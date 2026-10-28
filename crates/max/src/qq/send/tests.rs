@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chrono::DateTime;
 use max_core::ids::FaceId;
 use max_core::message::{Draft, DraftNode, Message as Row};
 use max_db::ledger::Delivery;
@@ -61,10 +62,15 @@ impl Setup {
         }
     }
 
-    /// 小明 says something, received now.
+    /// 小明 says something now.
     async fn hear(&self, n: u32) -> Row {
+        self.hear_at(n, Utc::now()).await
+    }
+
+    async fn hear_at(&self, n: u32, at: DateTime<Utc>) -> Row {
         let mut conn = self.pool.acquire().await.unwrap();
-        let inbound = from_xiaoming(n, vec![text("在吗")]);
+        let mut inbound = from_xiaoming(n, vec![text("在吗")]);
+        inbound.at = at;
         let committed = ingest::inbound(&mut conn, &self.place, &inbound, Utc::now(), offset())
             .await
             .unwrap();
@@ -226,6 +232,17 @@ async fn proactive_when_nothing_is_recent_or_after_five_replies(pool: PgPool) {
         })
         .collect();
     assert_eq!(replies, [0, 1, 2, 3, 4, 5, 0]);
+}
+
+/// QQ replays what was said while Max was down, and its reply window counts
+/// from when it was said.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn proactive_to_a_message_replayed_too_late(pool: PgPool) {
+    let s = Setup::new(pool).await;
+    s.hear_at(0, Utc::now() - chrono::TimeDelta::minutes(10))
+        .await;
+    s.send_all(vec![s.say(said("掐着表呢")).await]).await;
+    assert!(s.sent()[0].1.reply.is_none());
 }
 
 #[tokio::test(start_paused = true)]

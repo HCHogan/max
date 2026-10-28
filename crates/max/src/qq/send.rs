@@ -171,8 +171,9 @@ impl Shared {
         let Some(latest) = ledger::last_arrived(&mut conn, outgoing.place.endpoint).await? else {
             return Ok(None);
         };
-        // A margin for the time the request takes.
-        if Utc::now() - latest.received_at > window - chrono::TimeDelta::seconds(10) {
+        // QQ counts from when the message was sent, even one it replays
+        // after a restart. A margin for the time the request takes.
+        if Utc::now() - latest.sent_at > window - chrono::TimeDelta::seconds(10) {
             return Ok(None);
         }
         let mut replies = self.replies.lock().unwrap_or_else(|p| p.into_inner());

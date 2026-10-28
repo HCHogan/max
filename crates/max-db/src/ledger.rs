@@ -349,29 +349,13 @@ pub async fn said_by(
         .collect())
 }
 
-/// An inbound row's platform id and when it arrived: what a passive reply
-/// answers.
+/// An inbound row's platform id and when the platform says it was sent:
+/// what a passive reply answers, within a window that counts from then.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Arrived {
     pub id: MessageId,
     pub native_id: String,
-    pub received_at: DateTime<Utc>,
-}
-
-pub async fn arrived(conn: &mut PgConnection, message: MessageId) -> sqlx::Result<Option<Arrived>> {
-    let row = sqlx::query!(
-        "select id, native_id, received_at from messages where id = $1 and native_id is not null",
-        message.0
-    )
-    .fetch_optional(conn)
-    .await?;
-    Ok(row.and_then(|row| {
-        Some(Arrived {
-            id: MessageId(row.id),
-            native_id: row.native_id?,
-            received_at: row.received_at,
-        })
-    }))
+    pub sent_at: DateTime<Utc>,
 }
 
 /// The latest row someone else sent to an endpoint.
@@ -381,7 +365,7 @@ pub async fn last_arrived(
 ) -> sqlx::Result<Option<Arrived>> {
     let row = sqlx::query!(
         r#"
-        select id, native_id as "native_id!", received_at from messages
+        select id, native_id as "native_id!", sent_at from messages
         where endpoint_id = $1 and native_id is not null and kind <> 'event'
         order by id desc limit 1
         "#,
@@ -392,7 +376,7 @@ pub async fn last_arrived(
     Ok(row.map(|row| Arrived {
         id: MessageId(row.id),
         native_id: row.native_id,
-        received_at: row.received_at,
+        sent_at: row.sent_at,
     }))
 }
 
