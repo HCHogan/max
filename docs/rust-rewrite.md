@@ -1205,6 +1205,7 @@ enum Reason { Direct /* @、回复、私聊白名单 */, Judged { kind: Kind, no
 2026-10-28 定：QQ 改用腾讯官方的机器人接口（QQ 开放平台，个人认证，机器人叫 maxx），不再用 NapCat 和 OneBot。原来的 QQ 号当天被腾讯封了；官方接口封的是机器人，不是账号，也不用再维护 NapCat 和扫码登录。老消息照样导入，见[导入](#导入)。下面是 2026-10-28 查文档和用凭证实测的结果，标了"实测"的等适配器能收发后在测试群里验证。
 
 - **连接**：AppID 和 AppSecret 换 access token（`bots.qq.com/app/getAppAccessToken`，有效约两小时；旧 token 最后一分钟才换得到新的，旧的再多活一分钟，所以到期前 50 秒换）。REST 走 `api.bot.qq.com`（2026-08 起的新域名，老的 `api.sgroup.qq.com` 也还通），调用带 `Authorization: QQBot <token>`；有的错误回 200，所以看 body 里的 `err_code`。事件走 WebSocket 网关，Max 主动连出去，tank 不需要公网入口。网关和 Discord 是一套：Hello 给心跳间隔，Identify 带 token 和 intents，断线后用 session id 和最后的序号 Resume；每天能新建 1500 次会话。不用 Webhook：它要公网 HTTPS 入口，而且和 WebSocket 二选一。2026-10-29 实测：`qqbot` 的 `listen` 例子从 Mac 连上网关，Identify 拿到 READY，心跳正常。
+- **跨重启 Resume**（2026-10-29 定）：关机时把网关的 session id 和最后的序号存进库，启动时先拿它们 Resume，不新建会话，这样重启那几秒里群里发的消息由服务端补发。新建会话不会补发（实测丢过一条）。Resume 窗口有多长要在第 7 步实测；超出窗口就只能新建会话，那段消息丢掉。为这个拆出一个常驻的平台进程、或者加 Redis 这类队列，都不划算：拆进程能换来的只有连接不断，Resume 做到了同样的事。
 - **进哪些群**：个人主体的机器人只能由创建者拉进他当群主或管理员的群。2026-10-28 定：只进这样的群，而且群主要在群设置里打开两个开关：
   - "接收群内全部消息"：所有消息都走 `GROUP_MESSAGE_CREATE`，@ Max 的也是，是不是 @ 看 `mentions`。不开只收 @。
   - "机器人主动发言"：Max 随时能发。不开只能在消息到达后 5 分钟内被动回复，每条最多 5 次，跑得久的 turn 发不出去。
