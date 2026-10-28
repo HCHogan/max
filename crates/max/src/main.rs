@@ -2,20 +2,45 @@
 //! structure without reading its secrets, which the NixOS module does when
 //! it builds the file.
 
+use std::collections::{BTreeSet, HashMap};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use color_eyre::config::{HookBuilder, Theme};
-use color_eyre::eyre::{Result, WrapErr};
+use color_eyre::eyre::{Result, WrapErr, bail};
+use max_core::ids::PrincipalId;
+use max_core::message::Platform;
+use max_db::{PgPool, platform};
 use tokio::signal::unix::{SignalKind, signal};
-use tracing::info;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info};
 
 use max::config::{self, Config};
+use max::conversation::Shared;
+use max::llm::Models;
+use max::qq::{listen, send};
+use max::scope::Scope;
+use max::table::{self, Me, Table};
 
-/// How long tasks still running when Max stops get to finish.
+// Stopping, in order, within systemd's TimeoutStopSec of 60 seconds.
+/// The QQ gateway saves its session.
+const INTAKE_GRACE: Duration = Duration::from_secs(5);
+/// A conversation waits this long for a model call to end, then suspends
+/// its core;
+const STOP_GRACE: Duration = Duration::from_secs(20);
+/// the table waits a little longer for every conversation.
+const CONVERSATIONS_GRACE: Duration = Duration::from_secs(25);
+/// The sender sends and records what conversations said.
+const DRAIN: Duration = Duration::from_secs(15);
+/// Tasks still running when the runtime shuts down.
 const SHUTDOWN: Duration = Duration::from_secs(10);
+
+/// A core running longer than this is replaced at its next boundary.
+const MAX_RUN: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -86,8 +111,9 @@ async fn serve(config: Config) -> Result<()> {
         .as_ref()
         .map(config::Qq::credentials)
         .transpose()?;
+    let models = Arc::new(Models::new(&config.llm)?);
 
-    let pool = max_db::PgPool::connect(&config.database.url)
+    let pool = PgPool::connect(&config.database.url)
         .await
         .wrap_err("connecting to the database")?;
     max_db::MIGRATOR
@@ -95,19 +121,101 @@ async fn serve(config: Config) -> Result<()> {
         .await
         .wrap_err("migrating the database")?;
     info!("migrations applied");
+    table::close_unfinished(&pool).await?;
+    let owners = owners(&pool, &config).await?;
 
+    let (outbound, outbound_rx) = mpsc::unbounded_channel();
+    let shared = Arc::new(Shared {
+        pool: pool.clone(),
+        models,
+        outbound,
+        offset: config.utc_offset,
+        intent: config.intent.state_machine(),
+        context_lines: config.intent.context_lines,
+        max_run: MAX_RUN,
+        stop_grace: STOP_GRACE,
+        owners,
+        binds: Arc::default(),
+    });
+    let (intake_tx, intake_rx) = mpsc::unbounded_channel();
+    let mut me = HashMap::new();
+    let mut intake = Scope::new();
+    let mut senders = Scope::new();
+    // Set when an adapter stops for good: Max stops too, and fails.
+    let failed = CancellationToken::new();
     if let Some(credentials) = qq {
-        let client = qqbot::Client::new(credentials)?;
-        let me = client.me().await.wrap_err("checking the QQ credentials")?;
-        info!(bot = %me.username, "QQ credentials work");
+        let client = Arc::new(qqbot::Client::new(credentials)?);
+        let bot = client.me().await.wrap_err("checking the QQ credentials")?;
+        let mut conn = pool.acquire().await?;
+        let account = platform::account(&mut conn, Platform::Qq, &bot.id, &bot.username).await?;
+        drop(conn);
+        info!(bot = %bot.username, "QQ credentials work");
+        me.insert(
+            Platform::Qq,
+            Me {
+                account,
+                name: bot.username,
+            },
+        );
+        let unconfirmed = send::recover(&pool).await?;
+        if unconfirmed > 0 {
+            info!(unconfirmed, "messages the last run never heard back about");
+        }
+        // The only sender, while QQ is the only platform.
+        let api = Arc::clone(&client) as Arc<dyn send::Api>;
+        let sending = pool.clone();
+        senders.spawn(move |_| send::run(api, sending, outbound_rx, DRAIN));
+        let (pool, intake_tx, failed) = (pool.clone(), intake_tx.clone(), failed.clone());
+        intake.spawn(move |stop| async move {
+            if let Err(error) = listen::listen(&client, &pool, &intake_tx, stop).await {
+                error!(%error, "QQ's gateway stopped");
+                failed.cancel();
+            }
+        });
     }
+    drop(intake_tx);
+    let mut conversations = Scope::new();
+    let table = Table::new(Arc::clone(&shared), me);
+    conversations.spawn(move |_| table.run(intake_rx, CONVERSATIONS_GRACE));
+    info!("serving");
 
     let mut terminate = signal(SignalKind::terminate())?;
     tokio::select! {
         _ = terminate.recv() => {}
         interrupted = tokio::signal::ctrl_c() => interrupted?,
+        () = failed.cancelled() => {}
     }
     info!("stopping");
+    intake.close(INTAKE_GRACE).await;
+    // With intake closed, the table stops every conversation.
+    conversations
+        .close(CONVERSATIONS_GRACE + Duration::from_secs(5))
+        .await;
+    // The sender drains once every handle to it is gone.
+    drop(shared);
+    senders.close(DRAIN + Duration::from_secs(5)).await;
     pool.close().await;
+    if failed.is_cancelled() {
+        bail!("a platform's connection stopped for good");
+    }
     Ok(())
+}
+
+/// The people behind the owners file's accounts, who may run every
+/// command.
+async fn owners(pool: &PgPool, config: &Config) -> Result<BTreeSet<PrincipalId>> {
+    let mut conn = pool.acquire().await?;
+    let mut owners = BTreeSet::new();
+    for (name, native_id) in config.owners()? {
+        let platform = match name.as_str() {
+            "qq" => Platform::Qq,
+            "matrix" => Platform::Matrix,
+            other => bail!("an owner on a platform Max isn't on: {other:?}"),
+        };
+        // A name until they first write.
+        let account = platform::account(&mut conn, platform, &native_id, "主人").await?;
+        owners.insert(account.principal);
+    }
+    info!(owners = owners.len(), "owners");
+    Ok(owners)
 }

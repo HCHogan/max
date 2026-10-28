@@ -2,4 +2,5 @@
 //! in docs/rust-rewrite.md.
 
 pub mod inbound;
+pub mod listen;
 pub mod send;
