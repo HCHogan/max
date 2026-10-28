@@ -29,50 +29,31 @@ pub enum Event {
     /// `GROUP_AT_MESSAGE_CREATE`.
     Group {
         at: bool,
-        message: GroupMessage,
+        message: Message,
     },
-    Private(PrivateMessage),
-    /// The bot was added to a group, or removed from one.
-    JoinedGroup(GroupChange),
-    LeftGroup(GroupChange),
-    /// The group owner turned the bot's proactive messages off, or on.
-    GroupProactiveOff(GroupChange),
-    GroupProactiveOn(GroupChange),
-    /// Someone added the bot as a friend, or removed it.
-    FriendAdded(Friend),
-    FriendRemoved(Friend),
-    /// Someone turned the bot's proactive private messages off, or on.
-    PrivateProactiveOff(Friend),
-    PrivateProactiveOn(Friend),
-    /// A known type that didn't parse.
+    Private(Message),
+    /// A message that didn't parse.
     Malformed(String),
+    /// Everything else, such as the bot joining a group: Max only logs it.
     Other,
 }
 
 impl Event {
     pub fn parse(kind: &str, data: &Value) -> Self {
-        fn typed<T: for<'de> Deserialize<'de>>(
-            data: &Value,
-            wrap: impl FnOnce(T) -> Event,
-        ) -> Event {
-            match T::deserialize(data) {
-                Ok(value) => wrap(value),
-                Err(error) => Event::Malformed(error.to_string()),
+        let message = match kind {
+            "GROUP_AT_MESSAGE_CREATE" | "GROUP_MESSAGE_CREATE" | "C2C_MESSAGE_CREATE" => {
+                Message::deserialize(data)
             }
-        }
-        match kind {
-            "GROUP_AT_MESSAGE_CREATE" => typed(data, |message| Self::Group { at: true, message }),
-            "GROUP_MESSAGE_CREATE" => typed(data, |message| Self::Group { at: false, message }),
-            "C2C_MESSAGE_CREATE" => typed(data, Self::Private),
-            "GROUP_ADD_ROBOT" => typed(data, Self::JoinedGroup),
-            "GROUP_DEL_ROBOT" => typed(data, Self::LeftGroup),
-            "GROUP_MSG_REJECT" => typed(data, Self::GroupProactiveOff),
-            "GROUP_MSG_RECEIVE" => typed(data, Self::GroupProactiveOn),
-            "FRIEND_ADD" => typed(data, Self::FriendAdded),
-            "FRIEND_DEL" => typed(data, Self::FriendRemoved),
-            "C2C_MSG_REJECT" => typed(data, Self::PrivateProactiveOff),
-            "C2C_MSG_RECEIVE" => typed(data, Self::PrivateProactiveOn),
-            _ => Self::Other,
+            _ => return Self::Other,
+        };
+        match message {
+            Ok(message) if kind == "C2C_MESSAGE_CREATE" => Self::Private(message),
+            Ok(message) if message.group_openid.is_some() => Self::Group {
+                at: kind == "GROUP_AT_MESSAGE_CREATE",
+                message,
+            },
+            Ok(_) => Self::Malformed("a group message without group_openid".into()),
+            Err(error) => Self::Malformed(error.to_string()),
         }
     }
 }
@@ -146,11 +127,14 @@ pub struct Element {
 
 pub const QUOTED: i64 = 103;
 
+/// A message, in a group or a private chat.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub struct GroupMessage {
+pub struct Message {
     /// For passive replies and recalling it.
     pub id: String,
-    pub group_openid: String,
+    /// None in a private chat.
+    #[serde(default)]
+    pub group_openid: Option<String>,
     pub author: User,
     /// Mentions are `<@member_openid>`, everyone is `<@all>`.
     #[serde(default)]
@@ -160,6 +144,7 @@ pub struct GroupMessage {
     pub timestamp: Option<String>,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// Empty in a private chat.
     #[serde(default)]
     pub mentions: Vec<User>,
     #[serde(default)]
@@ -168,77 +153,23 @@ pub struct GroupMessage {
     pub msg_elements: Vec<Element>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub struct PrivateMessage {
-    pub id: String,
-    pub author: User,
-    #[serde(default)]
-    pub content: String,
-    #[serde(default)]
-    pub timestamp: Option<String>,
-    #[serde(default)]
-    pub attachments: Vec<Attachment>,
-    #[serde(default)]
-    pub message_scene: Scene,
-    #[serde(default)]
-    pub msg_elements: Vec<Element>,
-}
-
-/// What both kinds of message share.
-pub trait Message {
-    fn scene(&self) -> &Scene;
-    fn elements(&self) -> &[Element];
-
+impl Message {
     /// The id to quote this message by.
-    fn msg_idx(&self) -> Option<&str> {
-        self.scene().ext("msg_idx")
+    pub fn msg_idx(&self) -> Option<&str> {
+        self.message_scene.ext("msg_idx")
     }
 
     /// The `msg_idx` of the message this one quotes.
-    fn quotes(&self) -> Option<&str> {
-        self.scene().ext("ref_msg_idx")
+    pub fn quotes(&self) -> Option<&str> {
+        self.message_scene.ext("ref_msg_idx")
     }
 
     /// The quoted message, as QQ included it.
-    fn quoted(&self) -> Option<&Element> {
-        self.elements()
+    pub fn quoted(&self) -> Option<&Element> {
+        self.msg_elements
             .iter()
             .find(|element| element.message_type == Some(QUOTED))
     }
-}
-
-impl Message for GroupMessage {
-    fn scene(&self) -> &Scene {
-        &self.message_scene
-    }
-
-    fn elements(&self) -> &[Element] {
-        &self.msg_elements
-    }
-}
-
-impl Message for PrivateMessage {
-    fn scene(&self) -> &Scene {
-        &self.message_scene
-    }
-
-    fn elements(&self) -> &[Element] {
-        &self.msg_elements
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub struct GroupChange {
-    pub group_openid: String,
-    /// Who did it. Only the bot's creator can add a personal bot.
-    #[serde(default)]
-    pub op_member_openid: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub struct Friend {
-    /// The person's `user_openid`.
-    pub openid: String,
 }
 
 #[cfg(test)]
@@ -289,7 +220,7 @@ mod tests {
             panic!("not a group message");
         };
         assert!(at);
-        assert_eq!(message.group_openid, "G0A1");
+        assert_eq!(message.group_openid.as_deref(), Some("G0A1"));
         assert_eq!(message.author.member_openid.as_deref(), Some("M0A1"));
         assert_eq!(message.author.member_role.as_deref(), Some("admin"));
         assert_eq!(message.mentions[0].id.as_deref(), Some("B0T"));
@@ -342,28 +273,14 @@ mod tests {
     }
 
     #[test]
-    fn group_and_friend_changes() {
-        let data = json!({ "group_openid": "G0A1", "op_member_openid": "M0A1", "timestamp": 1_793_000_000 });
-        assert_eq!(
-            Event::parse("GROUP_ADD_ROBOT", &data),
-            Event::JoinedGroup(GroupChange {
-                group_openid: "G0A1".into(),
-                op_member_openid: Some("M0A1".into()),
-            })
-        );
-        let data = json!({ "openid": "U0A1", "timestamp": 1_793_000_000 });
-        assert_eq!(
-            Event::parse("C2C_MSG_REJECT", &data),
-            Event::PrivateProactiveOff(Friend {
-                openid: "U0A1".into()
-            })
-        );
-    }
-
-    #[test]
-    fn unknown_and_broken_events() {
+    fn other_and_broken_events() {
+        let joined = json!({ "group_openid": "G0A1", "op_member_openid": "M0A1" });
+        assert_eq!(Event::parse("GROUP_ADD_ROBOT", &joined), Event::Other);
         assert_eq!(Event::parse("INTERACTION_CREATE", &json!({})), Event::Other);
         let broken = Event::parse("GROUP_MESSAGE_CREATE", &json!({ "id": 1 }));
         assert!(matches!(broken, Event::Malformed(_)), "{broken:?}");
+        let nowhere = json!({ "id": "m", "author": { "member_openid": "M" } });
+        let nowhere = Event::parse("GROUP_MESSAGE_CREATE", &nowhere);
+        assert!(matches!(nowhere, Event::Malformed(_)), "{nowhere:?}");
     }
 }

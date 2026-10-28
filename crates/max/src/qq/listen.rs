@@ -12,7 +12,7 @@ use qqbot::gateway::{GROUP_AND_C2C, Session};
 use qqbot::{Dispatch, Event};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use super::inbound::inbound;
 use crate::inbound::Inbound;
@@ -72,11 +72,8 @@ fn forward(dispatch: &Dispatch, table: &UnboundedSender<Inbound>) {
     }
     match &dispatch.event {
         Event::Malformed(error) => {
-            warn!(kind = dispatch.kind, %error, "a QQ event that doesn't parse");
+            warn!(kind = dispatch.kind, %error, "a QQ message that doesn't parse");
         }
-        Event::Other => debug!(kind = dispatch.kind, "a QQ event Max doesn't act on"),
-        _ => {
-            info!(kind = dispatch.kind, data = %dispatch.data, "a QQ event Max doesn't act on yet")
-        }
+        _ => info!(kind = dispatch.kind, data = %dispatch.data, "a QQ event Max doesn't act on"),
     }
 }

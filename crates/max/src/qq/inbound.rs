@@ -6,64 +6,31 @@
 use chrono::{DateTime, Utc};
 use max_core::message::{Emote, MediaKind, MediaMeta, MentionTarget, Node, Platform, Role};
 use max_db::platform::ConversationKind;
-use qqbot::event::{Attachment, Message, User};
+use qqbot::event::{Attachment, User};
 use qqbot::{Dispatch, Event};
 
 use crate::inbound::{Chat, InNode, Inbound, Person, Quote};
 
-/// What a group message and a private one share.
-struct Parts<'a> {
-    chat: Chat,
-    id: &'a str,
-    author: &'a User,
-    content: &'a str,
-    attachments: &'a [Attachment],
-    mentions: &'a [User],
-    timestamp: Option<&'a str>,
-    message: &'a dyn Message,
-}
-
 /// A message someone sent Max, or None for every other event.
 pub fn inbound(dispatch: &Dispatch, now: DateTime<Utc>) -> Option<Inbound> {
-    let parts = match &dispatch.event {
-        Event::Group { message, .. } => Parts {
-            chat: Chat {
-                native_id: format!("group:{}", message.group_openid),
+    let (chat, message) = match &dispatch.event {
+        Event::Group { message, .. } => (
+            Chat {
+                native_id: format!("group:{}", message.group_openid.as_deref()?),
                 kind: ConversationKind::Group,
             },
-            id: &message.id,
-            author: &message.author,
-            content: &message.content,
-            attachments: &message.attachments,
-            mentions: &message.mentions,
-            timestamp: message.timestamp.as_deref(),
             message,
-        },
-        Event::Private(message) => Parts {
-            chat: Chat {
+        ),
+        Event::Private(message) => (
+            Chat {
                 native_id: format!("c2c:{}", message.author.user_openid.as_deref()?),
                 kind: ConversationKind::Direct,
             },
-            id: &message.id,
-            author: &message.author,
-            content: &message.content,
-            attachments: &message.attachments,
-            mentions: &[],
-            timestamp: message.timestamp.as_deref(),
             message,
-        },
+        ),
         _ => return None,
     };
-    let Parts {
-        chat,
-        id,
-        author,
-        content,
-        attachments,
-        mentions,
-        timestamp,
-        message,
-    } = parts;
+    let author = &message.author;
     let native_user_id = author
         .member_openid
         .clone()
@@ -76,19 +43,21 @@ pub fn inbound(dispatch: &Dispatch, now: DateTime<Utc>) -> Option<Inbound> {
         None if chat.kind == ConversationKind::Group => Some(Role::Member),
         None => None,
     };
-    let mut nodes = content_nodes(content, mentions);
-    nodes.extend(attachments.iter().map(attachment));
+    let mut nodes = content_nodes(&message.content, &message.mentions);
+    nodes.extend(message.attachments.iter().map(attachment));
     let quote = message.quotes().map(|quote_id| Quote {
         quote_id: Some(quote_id.to_owned()),
         text: message.quoted().and_then(|quoted| quoted.content.clone()),
     });
-    let at = timestamp
+    let at = message
+        .timestamp
+        .as_deref()
         .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
         .map_or(now, |at| at.to_utc());
     Some(Inbound {
         platform: Platform::Qq,
         chat,
-        native_id: id.to_owned(),
+        native_id: message.id.clone(),
         quote_id: message.msg_idx().map(str::to_owned),
         sender: Person {
             native_user_id,
