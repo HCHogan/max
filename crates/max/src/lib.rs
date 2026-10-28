@@ -8,5 +8,6 @@ pub mod config;
 pub mod conversation;
 pub mod inbound;
 pub mod llm;
+pub mod qq;
 pub mod scope;
 pub mod tokens;

@@ -92,6 +92,8 @@ pub struct User {
     pub union_openid: Option<String>,
     /// owner, admin or member.
     pub member_role: Option<String>,
+    /// In `mentions`: this is the bot.
+    pub is_you: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -291,6 +293,7 @@ mod tests {
         assert_eq!(message.author.member_openid.as_deref(), Some("M0A1"));
         assert_eq!(message.author.member_role.as_deref(), Some("admin"));
         assert_eq!(message.mentions[0].id.as_deref(), Some("B0T"));
+        assert!(message.mentions[0].is_you);
         assert_eq!(message.msg_idx(), Some("REFIDX_9"));
         assert_eq!(message.quotes(), Some("REFIDX_8"));
         let quoted = message.quoted().unwrap();

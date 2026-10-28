@@ -191,6 +191,7 @@ async fn an_at_wakes_a_core_that_answers(pool: PgPool) {
 async fn chatter_alone_wakes_nobody(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
     h.send(from_xiaoming(0, vec![text("今天好热")]));
+    h.send(from_xiaoming(0, vec![text("今天好热")]));
     h.send(from_xiaohong(1, vec![text("是啊")]));
     h.stop().await;
     assert_eq!(h.script.calls(), 0);

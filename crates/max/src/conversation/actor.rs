@@ -232,6 +232,13 @@ impl Conversation {
 
     async fn inbound(&mut self, inbound: Inbound) -> Result<()> {
         let mut conn = self.shared.pool.acquire().await?;
+        // A platform may say a message twice, as QQ does when it replays
+        // a resumed session.
+        let known = ledger::by_native_id(&mut conn, self.place.endpoint, &inbound.native_id);
+        if let Some(id) = known.await? {
+            debug!(%id, native_id = inbound.native_id, "dropped a message already committed");
+            return Ok(());
+        }
         let committed = ingest::inbound(
             &mut conn,
             &self.place,
