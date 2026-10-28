@@ -14,6 +14,9 @@ pub struct Dispatch {
     pub kind: String,
     /// The event's own id, for answering events that can be answered.
     pub id: Option<String>,
+    /// Its sequence number: a session resumed from here replays what
+    /// came after it.
+    pub seq: Option<u64>,
     /// The payload as it came.
     pub data: Value,
     pub event: Event,

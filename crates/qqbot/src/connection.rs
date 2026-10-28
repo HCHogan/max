@@ -36,15 +36,19 @@ impl Connect for Client {
 /// Runs the gateway until a close code says reconnecting won't help, or
 /// nobody listens to `events` any more. Events arrive in order; after a
 /// resume, QQ replays what the dropped connection missed.
+///
+/// The session stays the caller's: when it drops this future to stop, it
+/// can keep the session to resume after a restart. A dispatch being sent
+/// when the future is dropped is lost, so resume from the last dispatch
+/// received rather than [`Session::resumable`]'s sequence number.
 pub async fn run(
     connect: &impl Connect,
-    intents: u32,
+    session: &mut Session,
     events: mpsc::Sender<Dispatch>,
 ) -> Result<(), Fatal> {
-    let mut session = Session::new(intents);
     let mut backoff = Backoff::default();
     loop {
-        let code = match connection(connect, &mut session, &events, &mut backoff).await {
+        let code = match connection(connect, session, &events, &mut backoff).await {
             Ok(Ended::Unheard) => return Ok(()),
             Ok(Ended::Closed(code)) => code,
             Err(error) => {
@@ -169,7 +173,7 @@ mod tests {
     use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 
     use super::*;
-    use crate::gateway::GROUP_AND_C2C;
+    use crate::gateway::{GROUP_AND_C2C, Session};
 
     struct Fake {
         url: String,
@@ -261,13 +265,43 @@ mod tests {
             say(&mut socket, message(4)).await;
             close(&mut socket, 4915).await;
         };
-        let (ran, ()) = tokio::join!(run(&fake, GROUP_AND_C2C, events), server);
+        let mut session = Session::new(GROUP_AND_C2C);
+        let (ran, ()) = tokio::join!(run(&fake, &mut session, events), server);
         assert_eq!(ran, Err(Fatal::Bot(4915)));
+        assert_eq!(session.resumable(), Some(("S1", 4)));
         let mut ids = Vec::new();
         while let Some(dispatch) = received.recv().await {
-            ids.push(dispatch.data["id"].as_str().unwrap().to_owned());
+            ids.push((
+                dispatch.data["id"].as_str().unwrap().to_owned(),
+                dispatch.seq,
+            ));
         }
-        assert_eq!(ids, ["m2", "m4"]);
+        assert_eq!(ids, [("m2".into(), Some(2)), ("m4".into(), Some(4))]);
+    }
+
+    #[tokio::test]
+    async fn a_saved_session_is_resumed_first() {
+        let (listener, fake) = listen().await;
+        let (events, mut received) = mpsc::channel(8);
+        let server = async {
+            let mut socket = accept(&listener).await;
+            say(&mut socket, hello()).await;
+            let resume = heard(&mut socket).await;
+            assert_eq!(resume["op"], 6);
+            assert_eq!(resume["d"]["session_id"], "S0");
+            assert_eq!(resume["d"]["seq"], 41);
+            say(
+                &mut socket,
+                json!({ "op": 0, "s": 42, "t": "RESUMED", "d": "" }),
+            )
+            .await;
+            say(&mut socket, message(43)).await;
+            close(&mut socket, 4914).await;
+        };
+        let mut session = Session::resuming(GROUP_AND_C2C, "S0".into(), 41);
+        let (ran, ()) = tokio::join!(run(&fake, &mut session, events), server);
+        assert_eq!(ran, Err(Fatal::Bot(4914)));
+        assert_eq!(received.recv().await.unwrap().seq, Some(43));
     }
 
     #[tokio::test]
@@ -282,7 +316,8 @@ mod tests {
             say(&mut socket, message(1)).await;
             while let Some(Ok(_)) = socket.next().await {}
         };
-        let (ran, ()) = tokio::join!(run(&fake, GROUP_AND_C2C, events), server);
+        let mut session = Session::new(GROUP_AND_C2C);
+        let (ran, ()) = tokio::join!(run(&fake, &mut session, events), server);
         assert_eq!(ran, Ok(()));
     }
 

@@ -106,8 +106,25 @@ impl Session {
         }
     }
 
+    /// A session to pick up where an earlier process left it: the first
+    /// connection resumes it, and QQ replays what was said in between, if
+    /// the session hasn't expired.
+    pub fn resuming(intents: u32, session_id: String, seq: u64) -> Self {
+        Self {
+            session_id: Some(session_id),
+            seq: Some(seq),
+            ..Self::new(intents)
+        }
+    }
+
     pub fn intents(&self) -> u32 {
         self.intents
+    }
+
+    /// The session's id and the last sequence number seen, once there is
+    /// a session to resume.
+    pub fn resumable(&self) -> Option<(&str, u64)> {
+        Some((self.session_id.as_deref()?, self.seq?))
     }
 
     /// When [`Session::tick`] is due.
@@ -203,6 +220,7 @@ impl Session {
                 vec![Out::Dispatch(Box::new(Dispatch {
                     kind,
                     id: frame.id,
+                    seq: frame.s,
                     data: frame.d,
                     event,
                 }))]

@@ -10,7 +10,7 @@
     reason = "printing what the gateway sends is the point"
 )]
 
-use qqbot::gateway::GROUP_AND_C2C;
+use qqbot::gateway::{GROUP_AND_C2C, Session};
 use qqbot::{Client, Credentials, Dispatch};
 use tokio::sync::mpsc;
 
@@ -30,6 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{} {}", dispatch.kind, dispatch.data);
         }
     };
-    let (ran, ()) = tokio::join!(qqbot::run(&client, GROUP_AND_C2C, events), print);
+    let mut session = Session::new(GROUP_AND_C2C);
+    let (ran, ()) = tokio::join!(qqbot::run(&client, &mut session, events), print);
     Ok(ran?)
 }
