@@ -1,6 +1,6 @@
 [package]
-name = "onebot"
-description = "OneBot v11 with NapCat's dialect: types, reverse WebSocket server, echo matching"
+name = "qqbot"
+description = "QQ's official bot API: access tokens, the WebSocket gateway, events and REST calls"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
