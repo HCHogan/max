@@ -79,6 +79,10 @@ pub enum Input {
     Messages {
         ids: Vec<MessageId>,
         item: Item,
+        /// People the core hasn't seen yet; `item` carries their roster
+        /// lines. Once the model sees them, it can mention them.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        people: Vec<PrincipalId>,
     },
     Wake(Wake),
     Interrupt {
@@ -199,6 +203,8 @@ pub struct Run {
     /// The log's length when the core last went idle: every input before
     /// that is handled.
     handled: Option<usize>,
+    /// The base roster and everyone shown since.
+    roster: BTreeSet<PrincipalId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -211,6 +217,7 @@ enum InFlight {
 impl Run {
     pub fn new(spec: RunSpec, base: Context, first: Vec<Input>) -> Self {
         let base_tokens = base.items.iter().map(|item| item.tokens).sum();
+        let roster = base.roster.clone();
         Self {
             spec,
             base,
@@ -227,6 +234,7 @@ impl Run {
             round: 0,
             measured: None,
             handled: None,
+            roster,
         }
     }
 
@@ -258,7 +266,7 @@ impl Run {
                     .collect(),
                 tools: &TOOLS,
                 max_output: self.spec.max_output,
-                roster: self.base.roster.clone(),
+                roster: self.roster.clone(),
             });
         }
         Step::Idle
@@ -461,6 +469,11 @@ impl Run {
                 _ => None,
             })
             .collect();
+        for input in &self.pending {
+            if let Input::Messages { people, .. } = input {
+                self.roster.extend(people);
+            }
+        }
         if !items.is_empty() {
             let mut text = "[新消息]".to_owned();
             for item in &items {
@@ -515,7 +528,7 @@ impl Run {
     fn said(&self) -> bool {
         self.transcript.iter().any(|item| match &item.kind {
             ItemKind::Assistant { text } => {
-                let mut segmenter = Segmenter::new(self.base.roster.clone());
+                let mut segmenter = Segmenter::new(self.roster.clone());
                 let mut segments = segmenter.push(text);
                 segments.extend(segmenter.finish());
                 !segments.is_empty()

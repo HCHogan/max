@@ -39,6 +39,7 @@ fn messages(id: i64, tokens: u32) -> Input {
     Input::Messages {
         ids: vec![MessageId(id)],
         item: Item::new(ItemKind::User { text }, tokens),
+        people: Vec::new(),
     }
 }
 
@@ -153,6 +154,24 @@ fn answers_and_goes_idle() {
     assert!(run.idle());
     assert!(run.leftover().is_empty());
     assert_eq!(run.outcome(), Outcome::Answered);
+    assert_replays(&run);
+}
+
+#[test]
+fn people_shown_mid_run_can_be_mentioned() {
+    let mut run = Run::new(spec(400_000, None), base(100), vec![Input::Wake(wake(1))]);
+    assert_eq!(call_model(&mut run).roster, [PrincipalId(12)].into());
+    let Input::Messages { ids, item, .. } = messages(2, 10) else {
+        unreachable!()
+    };
+    let people = vec![PrincipalId(30)];
+    run.input(Input::Messages { ids, item, people }).unwrap();
+    run.input(Input::Wake(wake(2))).unwrap();
+    run.model_output(says("[mention#30] 你好")).unwrap();
+    assert_eq!(
+        call_model(&mut run).roster,
+        [PrincipalId(12), PrincipalId(30)].into()
+    );
     assert_replays(&run);
 }
 
