@@ -317,6 +317,15 @@ pub async fn conversation_kind(
     }
 }
 
+/// Every group conversation, oldest first: what the historian looks over
+/// when it starts.
+pub async fn groups(conn: &mut PgConnection) -> sqlx::Result<Vec<ConversationId>> {
+    let ids = sqlx::query_scalar!("select id from conversations where kind = 'group' order by id")
+        .fetch_all(conn)
+        .await?;
+    Ok(ids.into_iter().map(ConversationId).collect())
+}
+
 /// Records that `merged` is the same person as `into`: readers follow
 /// `merged_into` once, so `into` must not be merged itself.
 pub async fn merge(

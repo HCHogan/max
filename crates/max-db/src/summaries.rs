@@ -1,8 +1,8 @@
-//! The historian's summaries. It is their only writer.
+//! The historian's summaries, and its runs. It is their only writer.
 
 use chrono::{DateTime, Utc};
 use max_core::ids::{ConversationId, MessageId, SummaryId};
-use sqlx::PgConnection;
+use sqlx::{Connection, PgConnection};
 
 use crate::unknown;
 
@@ -20,6 +20,95 @@ pub struct Summary {
     pub full: String,
     pub brief: Option<String>,
     pub line: Option<String>,
+}
+
+/// Why the historian ran.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reason {
+    /// The conversation went quiet with enough left to summarize.
+    Quiet,
+    /// The tail grew past the high watermark.
+    Pressure,
+    /// `!compact`.
+    Compact,
+}
+
+impl Reason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Quiet => "quiet",
+            Self::Pressure => "pressure",
+            Self::Compact => "compact",
+        }
+    }
+}
+
+/// One model call of the historian on the stretch `first..=last`: the
+/// model's answer, and the error if nothing was published.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Run<'a> {
+    pub conversation: ConversationId,
+    pub first: MessageId,
+    pub last: MessageId,
+    pub reason: Reason,
+    pub model: &'a str,
+    pub output: Option<&'a str>,
+    pub error: Option<&'a str>,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+}
+
+/// Records a run that published nothing.
+pub async fn failed(conn: &mut PgConnection, run: &Run<'_>) -> sqlx::Result<()> {
+    record(conn, run).await
+}
+
+/// Publishes what a run wrote, with the run, in one transaction.
+pub async fn publish(
+    conn: &mut PgConnection,
+    run: &Run<'_>,
+    summaries: &[Summary],
+) -> sqlx::Result<Vec<SummaryId>> {
+    let mut tx = conn.begin().await?;
+    record(&mut tx, run).await?;
+    let mut ids = Vec::new();
+    for summary in summaries {
+        ids.push(
+            insert(
+                &mut tx,
+                run.conversation,
+                summary,
+                run.model,
+                run.finished_at,
+            )
+            .await?,
+        );
+    }
+    tx.commit().await?;
+    Ok(ids)
+}
+
+async fn record(conn: &mut PgConnection, run: &Run<'_>) -> sqlx::Result<()> {
+    sqlx::query!(
+        r#"
+        insert into summary_runs (
+            conversation_id, first_message_id, last_message_id, reason, model, output, error,
+            started_at, finished_at
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        "#,
+        run.conversation.0,
+        run.first.0,
+        run.last.0,
+        run.reason.as_str(),
+        run.model,
+        run.output,
+        run.error,
+        run.started_at,
+        run.finished_at
+    )
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 /// Adds an active summary. One that overlaps an active summary of the same

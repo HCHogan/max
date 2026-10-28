@@ -85,6 +85,7 @@ async fn an_endpoint_brings_its_conversation(pool: PgPool) -> sqlx::Result<()> {
     let direct = ConversationKind::Direct;
     let other = endpoint(&mut conn, Platform::Qq, "private:10001", me, direct, None).await?;
     assert_ne!(first.conversation, other.conversation);
+    assert_eq!(groups(&mut conn).await?, [first.conversation]);
     Ok(())
 }
 

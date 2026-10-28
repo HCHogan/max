@@ -53,6 +53,7 @@ mod tests {
                 "messages",
                 "principals",
                 "summaries",
+                "summary_runs",
                 "turn_outcomes",
                 "turn_snapshots",
                 "turns",

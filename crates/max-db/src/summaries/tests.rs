@@ -63,3 +63,44 @@ async fn active_summaries_never_overlap(pool: PgPool) -> sqlx::Result<()> {
     assert_eq!(cleared.len(), 1);
     Ok(())
 }
+
+#[sqlx::test]
+async fn a_run_publishes_all_of_its_summaries_or_none(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let group = group(&mut conn, "group:30001").await?;
+    let xiaoming = sender(group.xiaoming, "小明", None);
+    let mut ids = Vec::new();
+    for minute in 0..6 {
+        ids.push(commit(&mut conn, &group, &xiaoming, &said("聊"), minute).await?);
+    }
+    let conversation = group.endpoint.conversation;
+    let run = |first, last, output, error| Run {
+        conversation,
+        first,
+        last,
+        reason: Reason::Quiet,
+        model: "m",
+        output,
+        error,
+        started_at: at(9),
+        finished_at: at(10),
+    };
+    failed(&mut conn, &run(ids[0], ids[5], None, Some("timed out"))).await?;
+    let both = [summary(ids[0], ids[2]), summary(ids[3], ids[5])];
+    let published = publish(&mut conn, &run(ids[0], ids[5], Some("{}"), None), &both).await?;
+    assert_eq!(published.len(), 2);
+    // Overlapping what is published: the run isn't recorded either.
+    let again = publish(
+        &mut conn,
+        &run(ids[2], ids[3], Some("{}"), None),
+        &[summary(ids[2], ids[3])],
+    )
+    .await;
+    assert!(again.is_err());
+    let runs: i64 = sqlx::query_scalar("select count(*) from summary_runs")
+        .fetch_one(&mut *conn)
+        .await?;
+    assert_eq!(runs, 2);
+    assert_eq!(active(&mut conn, conversation, None).await?.len(), 2);
+    Ok(())
+}

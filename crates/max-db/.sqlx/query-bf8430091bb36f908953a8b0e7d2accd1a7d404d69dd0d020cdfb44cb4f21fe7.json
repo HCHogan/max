@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select trigger as \"trigger: Json<Vec<Input>>\" from turns t\n           where conversation_id = $1\n             and not exists (select from turn_outcomes o where o.turn_id = t.id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "trigger: Json<Vec<Input>>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "turns",
+            "name": "trigger"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bf8430091bb36f908953a8b0e7d2accd1a7d404d69dd0d020cdfb44cb4f21fe7"
+}

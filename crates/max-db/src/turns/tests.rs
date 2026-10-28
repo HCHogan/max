@@ -1,5 +1,6 @@
+use max_core::intent::Reason;
 use max_core::item::{Item, ItemKind, ModelTag, Protocol};
-use max_core::run::{Context, Run, RunSpec};
+use max_core::run::{Context, Run, RunSpec, Wake};
 use sqlx::PgPool;
 
 use super::*;
@@ -64,6 +65,29 @@ async fn a_turn_without_an_outcome_is_unfinished(pool: PgPool) -> sqlx::Result<(
     assert_eq!(unfinished(&mut conn).await?, [running]);
     assert_eq!(outcome(&mut conn, finished).await?, Some(Outcome::Silent));
     assert_eq!(outcome(&mut conn, running).await?, None);
+    Ok(())
+}
+
+#[sqlx::test]
+async fn a_running_turn_unsettles_the_conversation_from_its_trigger(
+    pool: PgPool,
+) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let (group, from) = group(&mut conn, "group:30001").await?;
+    let conversation = group.conversation;
+    assert_eq!(running_since(&mut conn, conversation).await?, None);
+    let wake = |ids: &[MessageId]| {
+        vec![Input::Wake(Wake {
+            ids: ids.to_vec(),
+            reason: Reason::Direct,
+            item: None,
+        })]
+    };
+    let later = MessageId(from.0 + 5);
+    let running = start(&mut conn, conversation, &wake(&[later, from]), from, at(1)).await?;
+    assert_eq!(running_since(&mut conn, conversation).await?, Some(from));
+    finish(&mut conn, running.turn, &record(), &Outcome::Silent, at(2)).await?;
+    assert_eq!(running_since(&mut conn, conversation).await?, None);
     Ok(())
 }
 
