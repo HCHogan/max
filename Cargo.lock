@@ -1718,6 +1718,7 @@ dependencies = [
  "max-db",
  "max-llm",
  "qqbot",
+ "rand",
  "russh",
  "serde",
  "serde_json",
