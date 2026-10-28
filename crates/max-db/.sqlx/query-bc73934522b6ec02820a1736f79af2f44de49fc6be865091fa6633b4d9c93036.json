@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into messages (\n            conversation_id, endpoint_id, sender_identity_id, sender_name, sender_role,\n            native_id, sent_at, received_at, kind, event, reply_to_id, target_id,\n            target_identity_id, nodes, raw, text, turn_id, segment\n        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)\n        returning id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Jsonb",
+        "Jsonb",
+        "Text",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bc73934522b6ec02820a1736f79af2f44de49fc6be865091fa6633b4d9c93036"
+}

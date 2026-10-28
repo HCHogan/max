@@ -5,7 +5,11 @@
 //! query that needs several statements to agree opens its own (a
 //! savepoint when the caller already has a transaction).
 
+pub mod ledger;
 pub mod platform;
+
+#[cfg(test)]
+mod testing;
 
 pub use sqlx::{PgConnection, PgPool};
 
