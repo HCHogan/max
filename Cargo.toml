@@ -11,6 +11,15 @@ publish = false
 # Every direct dependency is declared here, once; crates refer to it with
 # `workspace = true`. Adding one is its own commit with the reason in it.
 [workspace.dependencies]
+# max-core may use only these four; see the flake's max-core-deps check.
+# The clock stays off so that the core can't read the time.
+chrono = { version = "0.4", default-features = false, features = ["alloc", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# Tests only.
+insta = "1.49"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
