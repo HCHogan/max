@@ -10,4 +10,5 @@ pub mod inbound;
 pub mod llm;
 pub mod qq;
 pub mod scope;
+pub mod table;
 pub mod tokens;

@@ -180,8 +180,12 @@ async fn binding_a_group_to_an_old_conversation(pool: PgPool) -> sqlx::Result<()
         find_endpoint(&mut conn, Platform::Qq, native, max.identity).await?,
         None
     );
+    let bound = endpoint_on(&mut conn, old.conversation, Platform::Qq).await?;
+    assert_eq!(bound, None);
     let new = attach(&mut conn, found, Platform::Qq, native, max.identity, group).await?;
     assert_eq!(new.conversation, old.conversation);
+    let bound = endpoint_on(&mut conn, old.conversation, Platform::Qq).await?;
+    assert_eq!(bound.as_deref(), Some(native));
     assert_eq!(
         find_endpoint(&mut conn, Platform::Qq, native, max.identity).await?,
         Some(new)

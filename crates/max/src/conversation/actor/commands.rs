@@ -235,6 +235,17 @@ impl Conversation {
         Ok(answer.to_owned())
     }
 
+    /// The `!bind <码>` that bound this group, which the table hands over
+    /// instead of running it.
+    pub(super) async fn bound(&mut self, committed: &Committed, continued: bool) -> Result<()> {
+        let text = if continued {
+            "绑好了，这个群接着老群的记录往下聊。"
+        } else {
+            "绑好了，这个群从这里开始记。"
+        };
+        self.answer(committed, text.to_owned()).await
+    }
+
     /// In a private chat, a code to bind a QQ group with; in a group, the
     /// group is bound already, or it wouldn't have an actor.
     async fn bind(&mut self, committed: &Committed, argument: Option<&str>) -> Result<String> {
@@ -248,10 +259,14 @@ impl Conversation {
                 let mut conn = self.shared.pool.acquire().await?;
                 let found =
                     platform::conversation_of(&mut conn, Platform::QqLegacy, &native_id).await?;
-                match found {
-                    Some(conversation) => Some(conversation),
-                    None => return Ok(format!("没找到老群 {group} 的记录。")),
+                let Some(conversation) = found else {
+                    return Ok(format!("没找到老群 {group} 的记录。"));
+                };
+                let bound = platform::endpoint_on(&mut conn, conversation, Platform::Qq).await?;
+                if bound.is_some() {
+                    return Ok(format!("老群 {group} 的记录已经接到一个群上了。"));
                 }
+                Some(conversation)
             }
         };
         let pending = Pending {

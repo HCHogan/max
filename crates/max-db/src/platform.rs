@@ -245,6 +245,23 @@ pub async fn conversation_of(
     Ok(id.map(ConversationId))
 }
 
+/// The conversation's endpoint on a platform, by its native id, if it has
+/// one. A conversation has one endpoint an adapter serves, or two actors
+/// would write its timeline.
+pub async fn endpoint_on(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    platform: Platform,
+) -> sqlx::Result<Option<String>> {
+    sqlx::query_scalar!(
+        "select native_id from endpoints where conversation_id = $1 and platform = $2 limit 1",
+        conversation.0,
+        platform_name(platform)
+    )
+    .fetch_optional(conn)
+    .await
+}
+
 /// A new endpoint for an existing conversation, or for a new one when
 /// `conversation` is None.
 pub async fn attach(

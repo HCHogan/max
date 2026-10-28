@@ -27,6 +27,8 @@ use crate::inbound::Inbound;
 #[derive(Debug)]
 pub enum Event {
     Inbound(Inbound),
+    /// The `!bind <码>` that just bound this group, from the table.
+    Bound(Inbound),
     /// The model call's segmenter cut a message out of the stream.
     Said {
         task: TaskId,

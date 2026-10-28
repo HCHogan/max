@@ -259,6 +259,9 @@ async fn stopping_mid_call_suspends(pool: PgPool) {
     h.stop().await;
     assert_eq!(h.turns().await[0].1, None, "suspended, not finished");
     assert_eq!(h.count("select count(*) from turn_snapshots").await, 1);
+    // The next start can't resume it yet.
+    crate::table::close_unfinished(&h.pool).await.unwrap();
+    assert_eq!(h.turns().await[0].1, Some(Outcome::Expired));
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

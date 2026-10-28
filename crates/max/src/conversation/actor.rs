@@ -171,7 +171,8 @@ impl Conversation {
 
     async fn handle(&mut self, event: Event) -> Result<()> {
         match event {
-            Event::Inbound(inbound) => self.inbound(inbound).await,
+            Event::Inbound(inbound) => self.inbound(inbound, false).await,
+            Event::Bound(inbound) => self.inbound(inbound, true).await,
             Event::Said { task, segment } => {
                 let Some(a) = self.core.as_mut().filter(|a| a.live.contains(&task)) else {
                     debug!(%task, "dropped a stale Said");
@@ -230,7 +231,9 @@ impl Conversation {
         }
     }
 
-    async fn inbound(&mut self, inbound: Inbound) -> Result<()> {
+    async fn inbound(&mut self, inbound: Inbound, bound: bool) -> Result<()> {
+        // A group bound to an old conversation goes on from its history.
+        let continued = self.head > MessageId(0);
         let mut conn = self.shared.pool.acquire().await?;
         // A platform may say a message twice, as QQ does when it replays
         // a resumed session.
@@ -256,7 +259,9 @@ impl Conversation {
         } else {
             EntryKind::Chatter
         };
-        if committed.command {
+        if bound {
+            self.bound(&committed, continued).await?;
+        } else if committed.command {
             self.command(&committed).await?;
         } else {
             let mark = committed.direct.map_or(Mark::None, |direct| direct.mark());
