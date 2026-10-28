@@ -215,7 +215,7 @@ v1 只定义它用得到的几节：database、qq、matrix、llm、intent。其�
 
 - root scope 下有两个子 scope：
   - services：常驻任务。平台连接（QQ 的 OneBot 连接、Matrix 的 sync）、平台 sender、VM 服务、MCP 服务、派生数据 worker，以后的自动化调度器。见[三种角色](#三种角色)。
-  - conversations：会话表，和每个会话一个 actor。会话表按端点找到会话的 actor，没有就建会话、起 actor。actor 起来以后一直在，不按空闲退出。
+  - conversations：会话表，和每个会话一个 actor。会话表按端点找到会话的 actor，没有就建会话、起 actor；不在白名单上的群和房间直接丢掉，见[运行流程](#运行流程)第 1 步。actor 起来以后一直在，不按空闲退出。
 - 会话 actor 是这个会话唯一的控制线程，见[会话 actor](#会话-actor)。它的信箱是这个会话所有事件的唯一入口，它自己只 await 数据库。它下面挂三个 scope：
   - `io`：当前核心在途的模型调用和 `run_code`。每个核心一个，`!kill`、失败和强制边界时整个关掉。
   - `side`：intent 分类这类不属于核心的调用。
@@ -487,7 +487,7 @@ v1 的 ledger 已经存了原始 payload 和文本兜底；投递回执（`deliv
 2026-10-28 定，沿用 Haskell 版（见 features.md 的 Replies）。模型的文本输出由分段器（`max-core`）切成一串 `Draft`：
 
 - 空行分段，一段一条消息；代码块里的空行不切；`[split]` 强制切开，条数不限。
-- 段首的 `[↩#id]`：这一段回复那条消息。
+- 段首的 `[↩#id]`：这一段回复那条消息；号码无效时怎么办见[解析和发送](#解析和发送)。
 - `[@#N]`：提及一个人，解析规则见[解析和发送](#解析和发送)。
 - 整个输出为空，或者只有 `[silence]`，就什么都不发；`[↩#id] [silence:表情名]` 给那条消息回一个表情。段首的引用句柄不影响判断。
 - 分段器是唯一把模型文本变成消息的地方，进度旁白也走它。Haskell 版的教训：每一个自己另写"文本转消息"的发送路径，最后都把 `[split]` 或 `[↩#id]` 原样漏进了群里。
@@ -784,10 +784,11 @@ impl Conversation {
 每一步都是会话 actor 处理一个事件。
 
 1. **消息进来**：平台连接把消息或事件归一化成 `Inbound`，经会话表交给会话 actor；actor 在一个事务里把它转换成 `Message` 入账。平台连接不碰数据库。
+   - 群白名单（2026-10-28 定）在会话表这一步拦：QQ 群号不在 `groups_file` 上、Matrix 房间不在 `rooms_file` 上的，直接丢掉，不建会话、不起 actor、不入账，只记 debug 日志。名单外的群里，命令和 owner 的消息也一样丢。别的会话或工具往名单外的群发 `Post`，也在这里拒掉，带回信通道的回一个错误。私聊不过这一道，由第 2 步的私聊白名单管。
 2. **判定**：触发是 @、回复 Max、戳一戳、intent 的判定、job 结果和自动化触发；其它消息不是。触发源见[三种角色](#三种角色)。命令不是触发，由 actor 自己处理，见[会话 actor](#会话-actor)。
    - 有核心在跑：不管是不是触发，都喂给它。
    - 没有核心：是触发就进第 3 步；不是就什么都不做。
-   - 私聊（2026-10-28 定）：只有白名单上的人，私聊里的消息才算触发，等同群里的 @。不在名单上的人私聊 Max，消息照样入账、命令照样执行，但不触发，也不做 intent 分类。Max 可以主动给任何人发私聊，比如群里命令的文字输出。白名单是 `private_file`，一行一个；群白名单 `groups_file` 也一样，为空就是谁都不服务，和 Haskell 版"为空就全服务"相反。测试期间私聊白名单为空，免得和 Haskell 版对同一条私聊各回一遍；命令会被两边各回一次，可以接受。
+   - 私聊（2026-10-28 定）：只有白名单上的人，私聊里的消息才算触发，等同群里的 @。不在名单上的人私聊 Max，消息照样入账、命令照样执行，但不触发，也不做 intent 分类。Max 可以主动给任何人发私聊，比如群里命令的文字输出。白名单是 `private_file`，一行一个；群白名单 `groups_file`（第 1 步）也一样，为空就是谁都不服务，和 Haskell 版"为空就全服务"相反。测试期间私聊白名单为空，免得和 Haskell 版对同一条私聊各回一遍；命令会被两边各回一次，可以接受。
 3. **开始 turn**：快照位置 `from = head`。从 ledger（只读 `id <= from`）加上记忆和摘要，投影出基础上下文，裁到预算内，见[上下文投影](#上下文投影)；第一批输入在易变块里，只有触发，强制边界之后再加上一个核心没处理完的输入，闲聊都在尾巴里。第一批超过核心的上限（见[核心](#核心)的"轮数和 token 上限"）就不起核心，记 `Failed(InputTooLarge)`，在群里回一条简短的错误说明（2026-10-27 定）。否则写 `TurnStarted`（带 trigger 和 `from`），调 `Run::new(spec, base, first)`。
 4. **推进**：actor 每处理完一个事件，核心没有在途的 I/O，就问 `next_step`。中途不写 turn 记录：
    - `CallModel`：`seen = head`，spawn 模型调用任务。每个 `Said` 入账、交给 sender；`ModelDone` 时调 `model_output`。攒着的输入渲染成一个 `[新消息]` 块追加在请求末尾，见[后续输入](#后续输入)。
@@ -1022,7 +1023,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 |---|---|---|
 | 平台 | `conversations` | kind（group、direct）、标题 |
 | | `endpoints` | 会话、平台、`self_identity_id`（Max 用哪个账号）、`native_id`。v1 一个会话一个端点；镜像时一个会话多个。现在就分开（2026-10-27 定），免得再迁移 |
-| | `principals`、`identities` | 人，和他在各平台的账号，见[身份](#身份) |
+| | `principals`、`identities` | 人，和他在各平台的账号。多个写者：各会话 actor 入账时建，见[身份](#身份)的"写者" |
 | | `conversation_settings` | `!model`、`!effort`、`!persona`、`!proactive`、`!clear --all` 的消息 id 水位。可变 |
 | ledger | `messages` | 会话、端点、`sender_identity_id` 和发送者名字、角色的快照（见[身份](#身份)）、`native_id`、`sent_at`、`received_at`、kind（chat、command、event）、`reply_to`、`nodes`、`raw`、`text`（渲染后的文本，给搜索和全文索引）；Max 自己的消息带 `turn_id` 和段号。撤回、编辑、reaction 是 `kind = event` 的行，带 `target_id` 和文本兜底。只有会话 actor 写 |
 | | `deliveries` | 出站回执：消息、端点、平台 id 或错误、状态（sent、failed、unknown）、时间。平台 sender 是唯一的写者，只追加。镜像时一个端点一行，见[出站](#出站) |
@@ -1083,6 +1084,11 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 
 没有成员表。Haskell 版的 `endpoint_known_identities` 记谁在哪个端点出现过，这里由 ledger 推出来。名字和角色都是消息自带的快照，不向平台查，也不缓存。
 
+**写者**（2026-10-28 定）：别的表都只有一个写者（见[运行时结构](#运行时结构)的图），`principals` 和 `identities` 是例外。会话 actor 入账时遇到没见过的账号（发送者，或者被提及的人）就建 identity 和它的 principal；同一个新人同时在两个群说话，两个 actor 会一起建。启动时解析 owners、`!link` 设 `merged_into` 也写这两张表。规则：
+
+- 只插不改，`merged_into` 除外。
+- 建之前先不加锁查一次，查到就用。查不到，就在入账事务里按（平台，账号）取 `pg_advisory_xact_lock`，再查一次，还没有才建。同一个新账号因此只会建出一个 principal；见过的账号不用锁，所以平时各会话的入账互不等待。
+
 ### 模型看到的
 
 - 人的句柄是 `[@#12]`，和 `#123`、`[image#123.0]`、`summary#45`、`t#42` 同一套语法。ADR 004 推迟的带类型前缀写法这次也不做，没观察到不同命名空间的号码被混用。
@@ -1094,6 +1100,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 ### 解析和发送
 
 - 核心持有名册里的 principal 集合，随基础上下文存进快照。解析模型输出时，`[@#N]` 不在集合里的当普通文本，模型编出来的号码不会变成真 @。
+- 引用（2026-10-28 定）：会话 actor 入账 `Said` 时检查 `[↩#id]`：它必须是这个会话时间线上的一条消息，而且不是事件行（撤回、编辑、reaction）。不是的话，比如编出来的号码、别的会话的消息，就去掉引用，正文照发，记一条 warn；`[↩#id] [silence:表情名]` 的引用无效，就什么都不发。这一步不像提及那样在核心里查：模型可以合法地引用它用工具查到、不在上下文里的旧消息，只有数据库知道这个号码在不在这个会话里。发送时引用的消息没有平台 id（比如它自己就没发出去），`lower` 就不带引用。
 - 发送时，`DraftNode::Mention(principal)` 由适配器的 `lower` 解析成目标端点平台上这个人的 identity，发原生 @；有多个时取在这个端点最近发过言的那个；没有就降成 `@名字` 文本。
 - 镜像时这套规则不用改：两边都有账号的人两边都是原生 @，只有一边有账号的，另一边是文本。
 
