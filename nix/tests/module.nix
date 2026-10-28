@@ -6,7 +6,19 @@ pkgs.testers.runNixOSTest {
   name = "max-module";
   nodes.machine = {
     imports = [ module ];
-    services.maxx.enable = true;
+    services.maxx = {
+      enable = true;
+      # Never called: nothing here triggers a turn.
+      settings.llm = {
+        default.model = "local/small";
+        intent.model = "local/small";
+        providers.local = {
+          base_url = "http://127.0.0.1:9/v1";
+          protocol = "chat";
+          models.small.context_window = 32768;
+        };
+      };
+    };
     # tank's cluster, which maxx shares.
     services.postgresql.package = pkgs.postgresql_16;
   };
