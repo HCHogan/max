@@ -11,7 +11,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{ConversationId, FaceId, IdentityId, MessageId, PrincipalId, TurnId};
+use crate::ids::{ConversationId, IdentityId, MessageId, PrincipalId, TurnId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -180,26 +180,6 @@ pub enum DraftNode {
     /// sent; plain `@名字` where they have none.
     Mention {
         principal: PrincipalId,
-    },
-    Face {
-        face: FaceId,
-    },
-    Media {
-        media: OutboundMedia,
-    },
-}
-
-/// Media the model can send again by referring to it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum OutboundMedia {
-    Sticker {
-        id: i64,
-    },
-    /// The `index`th picture of a message, or all of them.
-    Image {
-        message: MessageId,
-        index: Option<u32>,
     },
 }
 

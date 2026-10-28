@@ -232,8 +232,7 @@ fn chat(native_id: &str) -> Option<Chat<'_>> {
 }
 
 /// A row of Max's as QQ Markdown, and the id to quote, if it quotes a row
-/// QQ knows. Faces can't be sent, so they become `[名字]`; media comes
-/// later.
+/// QQ knows. Max writes text and mentions; media comes later.
 async fn lower(
     conn: &mut PgConnection,
     kind: ConversationKind,
@@ -260,11 +259,11 @@ async fn lower(
                 _ => text.push_str(&format!("@{display}")),
             },
             Node::Mention { display, .. } => text.push_str(&format!("@{display}")),
-            Node::Emote(emote) => match &emote.name {
-                Some(name) => text.push_str(&format!("[{name}]")),
-                None => text.push_str(&format!("[表情{}]", emote.id)),
-            },
-            Node::Media { .. } | Node::Card(_) | Node::Forward(_) | Node::Unsupported(_) => {}
+            Node::Emote(_)
+            | Node::Media { .. }
+            | Node::Card(_)
+            | Node::Forward(_)
+            | Node::Unsupported(_) => {}
         }
     }
     Ok((text, quote))

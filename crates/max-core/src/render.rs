@@ -12,9 +12,8 @@ use std::fmt::Write;
 
 use chrono::{DateTime, Datelike, FixedOffset, TimeDelta, Utc, Weekday};
 
-use crate::faces;
-use crate::ids::{FaceId, IdentityId, PrincipalId};
-use crate::message::{Card, Content, Emote, MediaKind, MentionTarget, Message, Node, Platform};
+use crate::ids::{IdentityId, PrincipalId};
+use crate::message::{Card, Content, MediaKind, MentionTarget, Message, Node};
 
 /// A silence at least this long gets a gap line.
 const GAP: TimeDelta = TimeDelta::hours(1);
@@ -154,12 +153,8 @@ impl<P: People> Render<'_, P> {
                 target: MentionTarget::All,
                 display,
             } => format!("@{display}"),
-            Node::Emote(emote) => match (emote.platform, emote.id.parse::<u32>()) {
-                (Platform::Qq | Platform::QqLegacy, Ok(id)) => {
-                    labelled(&format!("face#{id}"), emote_name(emote))
-                }
-                _ => labelled("emote", emote_name(emote)),
-            },
+            // Max can't send faces, so the model gets no id to copy.
+            Node::Emote(emote) => labelled("face", emote.name.as_deref()),
             Node::Media { meta, .. } => {
                 let word = match meta.kind {
                     MediaKind::Image => "image",
@@ -193,17 +188,6 @@ fn labelled(word: &str, label: Option<&str>) -> String {
         Some(label) => format!("[{word}: {label}]"),
         None => format!("[{word}]"),
     }
-}
-
-/// The face table's name for a QQ face, else what the platform called it.
-fn emote_name(emote: &Emote) -> Option<&str> {
-    let curated = match emote.platform {
-        Platform::Qq | Platform::QqLegacy => {
-            emote.id.parse().ok().and_then(|id| faces::name(FaceId(id)))
-        }
-        Platform::Matrix => None,
-    };
-    curated.or(emote.name.as_deref())
 }
 
 fn card_line(card: &Card) -> String {
@@ -242,7 +226,7 @@ mod tests {
 
     use super::*;
     use crate::ids::{ConversationId, MessageId};
-    use crate::message::{ForwardRef, MediaMeta, Role, Sender, Unsupported};
+    use crate::message::{Emote, ForwardRef, MediaMeta, Platform, Role, Sender, Unsupported};
 
     fn people() -> BTreeMap<IdentityId, PrincipalId> {
         [
@@ -340,7 +324,7 @@ mod tests {
                         Node::Emote(Emote {
                             platform: Platform::Qq,
                             id: "271".into(),
-                            name: None,
+                            name: Some("吃瓜".into()),
                         }),
                     ],
                 },
@@ -365,11 +349,6 @@ mod tests {
                     Node::Unsupported(Unsupported {
                         source: "record".into(),
                         description: "语音消息".into(),
-                    }),
-                    Node::Emote(Emote {
-                        platform: Platform::Matrix,
-                        id: ":cat:".into(),
-                        name: Some("cat".into()),
                     }),
                 ]),
             ),

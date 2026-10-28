@@ -1,4 +1,4 @@
-use max_core::ids::FaceId;
+use max_core::message::Platform;
 use max_db::PgPool;
 
 use super::*;
@@ -35,12 +35,9 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
 
     let draft = Draft {
         reply_to: Some(first.message.id),
-        nodes: vec![
-            DraftNode::Text {
-                text: "在的，说吧".into(),
-            },
-            DraftNode::Face { face: FaceId(14) },
-        ],
+        nodes: vec![DraftNode::Text {
+            text: "在的，说吧".into(),
+        }],
     };
     let (mine, sent) = said(
         &mut conn,

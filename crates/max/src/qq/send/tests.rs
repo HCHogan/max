@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use chrono::DateTime;
-use max_core::ids::FaceId;
 use max_core::message::{Draft, DraftNode, Message as Row};
 use max_db::ledger::Delivery;
 
@@ -151,7 +150,6 @@ async fn a_passive_markdown_reply(pool: PgPool) {
             DraftNode::Text {
                 text: " 在，\\[x^2\\]".into(),
             },
-            DraftNode::Face { face: FaceId(14) },
         ],
     };
     let outgoing = s.say(draft).await;
@@ -163,7 +161,7 @@ async fn a_passive_markdown_reply(pool: PgPool) {
     assert_eq!(
         sent[0].1,
         Message {
-            body: Body::Markdown("<qqbot-at-user id=\"XIAOMING\" /> 在，$$x^2$$[微笑]".into()),
+            body: Body::Markdown("<qqbot-at-user id=\"XIAOMING\" /> 在，$$x^2$$".into()),
             reply: Some(Reply::Message {
                 id: "MSG0".into(),
                 seq: 1,

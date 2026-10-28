@@ -1,16 +1,17 @@
 //! What one chunk does. Every placeholder is `[word#id]`, optionally with a
 //! `: description` and a `(attributes)` group glued on, the way the model
-//! sees them in history (`[image#7405.0: 一只猫](29秒)`). Only the id is
-//! trusted; the rest is consumed so that an echoed display form acts
-//! instead of leaking. Forms that are only for reading (`[image: 一只猫]`,
-//! `[unsend#7405]`) are dropped when echoed, and so is a copied row header.
-//! Anything else that doesn't parse stays text. Code fences are left alone.
+//! sees them in history (`[mention#12: 小明]`). Only the id is trusted; the
+//! rest is consumed so that an echoed display form acts instead of leaking.
+//! Max writes quotes and mentions; forms that are only for reading
+//! (`[face: 吃瓜]`, `[unsend#7405]`, `[image#7405.0]` from old summaries)
+//! are dropped when echoed, and so is a copied row header. Anything else
+//! that doesn't parse stays text. Code fences are left alone.
 
 use std::collections::BTreeSet;
 
 use super::is_fence;
-use crate::ids::{FaceId, MessageId, PrincipalId};
-use crate::message::{Draft, DraftNode, OutboundMedia};
+use crate::ids::{MessageId, PrincipalId};
+use crate::message::{Draft, DraftNode};
 
 /// The message one chunk of model output says, if any.
 pub(super) fn parse(chunk: &str, known: &BTreeSet<PrincipalId>) -> Option<Draft> {
@@ -114,13 +115,6 @@ impl Parsed {
                     self.text(&format!("@{name}"));
                 }
             }
-            Token::Face(face) => self.nodes.push(DraftNode::Face { face }),
-            Token::Sticker(id) => self.nodes.push(DraftNode::Media {
-                media: OutboundMedia::Sticker { id },
-            }),
-            Token::Image(message, index) => self.nodes.push(DraftNode::Media {
-                media: OutboundMedia::Image { message, index },
-            }),
             Token::Silence | Token::Display | Token::ToolCall => {}
         }
     }
@@ -156,9 +150,6 @@ enum Token<'a> {
     Reply(MessageId),
     /// With the name, if the model wrote `[mention#12: 名字]`.
     Mention(PrincipalId, Option<&'a str>),
-    Face(FaceId),
-    Sticker(i64),
-    Image(MessageId, Option<u32>),
     /// `[silence]`, or `[silence:名字]`, which used to react with a face.
     Silence,
     /// A form that is only for reading.
@@ -186,19 +177,15 @@ fn placeholder(s: &str) -> Option<(Token<'_>, usize)> {
     let hash = body.find('#')?;
     let (verb, rest) = (&body[..hash], &body[hash + 1..]);
     let (id, mut at) = digits(rest)?;
-    let mut index = None;
     if verb == "image" && rest[at..].starts_with('.') {
-        let (n, len) = digits(&rest[at + 1..])?;
-        index = Some(u32::try_from(n).ok()?);
+        let (_, len) = digits(&rest[at + 1..])?;
         at += 1 + len;
     }
     let (description, len) = closer(&rest[at..])?;
     let token = match verb {
         "reply" => Token::Reply(MessageId(id)),
         "mention" => Token::Mention(PrincipalId(id), description),
-        "face" => Token::Face(FaceId(u32::try_from(id).ok()?)),
-        "sticker" => Token::Sticker(id),
-        "image" => Token::Image(MessageId(id), index),
+        "face" | "sticker" | "image" => Token::Display,
         _ => return None,
     };
     Some((token, 1 + hash + 1 + at + len))
@@ -209,7 +196,7 @@ fn placeholder(s: &str) -> Option<(Token<'_>, usize)> {
 fn display(s: &str) -> Option<usize> {
     const EVENTS: &[&str] = &["edit", "unsend", "react", "unreact", "poke"];
     const BARE: &[&str] = &[
-        "image", "sticker", "video", "audio", "file", "forward", "card", "emote", "poke",
+        "image", "sticker", "video", "audio", "file", "forward", "card", "face", "emote", "poke",
     ];
     let body = s.strip_prefix('[')?;
     let word_len = body.bytes().take_while(u8::is_ascii_lowercase).count();
@@ -317,23 +304,10 @@ mod tests {
     }
 
     #[test]
-    fn echoed_display_forms_act() {
-        let draft = say("[face#271: 吃瓜][image#7405.1: 一只猫](3秒)[sticker#42: 柴犬]");
-        assert_eq!(
-            draft.nodes,
-            vec![
-                DraftNode::Face { face: FaceId(271) },
-                DraftNode::Media {
-                    media: OutboundMedia::Image {
-                        message: MessageId(7405),
-                        index: Some(1)
-                    }
-                },
-                DraftNode::Media {
-                    media: OutboundMedia::Sticker { id: 42 }
-                },
-            ]
-        );
+    fn faces_and_media_max_cant_send_go() {
+        let draft =
+            say("好[face#271: 吃瓜][image#7405.1: 一只猫](3秒)[sticker#42: 柴犬][face: 吃瓜]");
+        assert_eq!(draft.nodes, vec![text("好")]);
     }
 
     #[test]

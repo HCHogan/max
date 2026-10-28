@@ -6,8 +6,8 @@ expression: "render(&people).lines(rows.iter().zip(marks), None)"
 [23:50 小明 #100]: 晚安
 --- 2026-10-28 周三 ---
 [09:02 小红 换行名 #101 @你]: [mention#1] 第一行 ⏎ 第二行 @路人@全体成员
-[09:03 Max #102]: [reply#101] 在[face#271: 吃瓜]（没发出去）
+[09:03 Max #102]: [reply#101] 在[face: 吃瓜]（没发出去）
 --- 过了 3 小时 ---
-[12:30 小明 #103]: [image: 一只猫][sticker][card: 哔哩哔哩 | 简介 | https://b23.tv/x][forward: 3 条][语音消息][emote: cat]
+[12:30 小明 #103]: [image: 一只猫][sticker][card: 哔哩哔哩 | 简介 | https://b23.tv/x][forward: 3 条][语音消息]
 [12:31 小明 #104]: [edit#103] 改了
 [12:31 小明 #105]: [unsend#103]

@@ -5,11 +5,8 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, FixedOffset, Utc};
-use max_core::faces;
 use max_core::ids::{IdentityId, MessageId, PrincipalId, TurnId};
-use max_core::message::{
-    Content, Draft, DraftNode, Emote, MentionTarget, Message, Node, Platform, Sender,
-};
+use max_core::message::{Content, Draft, DraftNode, MentionTarget, Message, Node, Sender};
 use max_core::render::{Mark, Render};
 use max_db::ledger::{self, NewMessage};
 use max_db::platform::{self, Account, ConversationKind};
@@ -233,13 +230,6 @@ pub async fn said(
             DraftNode::Mention { principal } => {
                 nodes.push(mentioned(&mut tx, place, *principal, &mut people).await?);
             }
-            DraftNode::Face { face } => nodes.push(Node::Emote(Emote {
-                platform: Platform::Qq,
-                id: face.0.to_string(),
-                name: faces::name(*face).map(str::to_owned),
-            })),
-            // Media comes with the VM's tools.
-            DraftNode::Media { .. } => {}
         }
     }
     let content = Content::Message {

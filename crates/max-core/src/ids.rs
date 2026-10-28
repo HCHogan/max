@@ -39,8 +39,6 @@ ids! {
     /// within the actor, so a late event from a finished task is
     /// recognisable.
     TaskId(u64);
-    /// A QQ built-in face, by its QSid. The only emote the model can write.
-    FaceId(u32);
 }
 
 /// The id a provider gave a tool call; opaque to us.

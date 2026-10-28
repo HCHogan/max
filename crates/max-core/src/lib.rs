@@ -5,7 +5,6 @@
 //! are serde, serde_json, thiserror and chrono without its `clock` feature;
 //! the flake's `max-core-deps` check enforces that.
 
-pub mod faces;
 pub mod ids;
 pub mod intent;
 pub mod item;
