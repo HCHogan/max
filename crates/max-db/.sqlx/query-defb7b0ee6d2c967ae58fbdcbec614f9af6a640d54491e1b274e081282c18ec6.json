@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select native_user_id from identities where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "native_user_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identities",
+            "name": "native_user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "defb7b0ee6d2c967ae58fbdcbec614f9af6a640d54491e1b274e081282c18ec6"
+}

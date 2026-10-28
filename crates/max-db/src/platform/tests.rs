@@ -215,5 +215,7 @@ async fn a_merged_account_speaks_for_its_owner(pool: PgPool) -> sqlx::Result<()>
     let again = account(&mut conn, Platform::Qq, "MEMBER_OPENID", "hank").await?;
     assert_eq!(again.principal, owner.principal);
     assert_eq!(again.identity, member.identity);
+    let native = native_user_id(&mut conn, member.identity).await?;
+    assert_eq!(native.as_deref(), Some("MEMBER_OPENID"));
     Ok(())
 }

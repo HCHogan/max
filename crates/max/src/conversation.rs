@@ -7,7 +7,7 @@ pub mod ingest;
 pub mod model;
 pub mod project;
 #[cfg(test)]
-mod testing;
+pub(crate) mod testing;
 
 use std::fmt;
 

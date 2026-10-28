@@ -321,6 +321,19 @@ pub async fn merge(
     Ok(())
 }
 
+/// An account's id on its platform: whom a mention of it reaches.
+pub async fn native_user_id(
+    conn: &mut PgConnection,
+    identity: IdentityId,
+) -> sqlx::Result<Option<String>> {
+    sqlx::query_scalar!(
+        "select native_user_id from identities where id = $1",
+        identity.0
+    )
+    .fetch_optional(conn)
+    .await
+}
+
 /// The account a person spoke from most recently in an endpoint: whom to
 /// mention there.
 #[derive(Clone, Debug, PartialEq, Eq)]
