@@ -15,6 +15,11 @@
       url = "github:rustsec/advisory-db";
       flake = false;
     };
+    # The groups' VMs: the guest's NixOS modules for cloud-hypervisor.
+    microvm = {
+      url = "github:microvm-nix/microvm.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -26,6 +31,7 @@
       devenv,
       systems,
       advisory-db,
+      microvm,
       ...
     }:
     let
@@ -76,6 +82,34 @@
             }
           );
 
+          # The groups' VMs boot this; nix/guest.nix. What max needs to start
+          # one is a JSON file: the kernel, the initrd and the command line,
+          # which max appends the VM's own parameters to.
+          guest =
+            let
+              guest =
+                (nixpkgs.lib.nixosSystem {
+                  inherit system;
+                  modules = [
+                    microvm.nixosModules.microvm
+                    ./nix/guest.nix
+                    # nix shell and friends in the guest resolve nixpkgs to
+                    # this pin.
+                    {
+                      nix.registry.nixpkgs.flake = nixpkgs;
+                      nix.nixPath = [ "nixpkgs=${nixpkgs}" ];
+                    }
+                  ];
+                }).config;
+            in
+            pkgs.writeText "max-guest.json" (
+              builtins.toJSON {
+                kernel = "${guest.microvm.kernel.dev}/vmlinux";
+                initrd = guest.microvm.initrdPath;
+                cmdline = "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 ${toString guest.microvm.kernelParams}";
+              }
+            );
+
           # A cargo command over the workspace that passes or fails and
           # produces nothing else.
           cargoCheck =
@@ -97,7 +131,9 @@
           packages = {
             inherit max;
             default = max;
-          };
+          }
+          # cloud-hypervisor boots vmlinux directly only on x86_64.
+          // pkgs.lib.optionalAttrs (system == "x86_64-linux") { inherit guest; };
 
           checks = {
             inherit max;
