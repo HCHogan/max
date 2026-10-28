@@ -126,8 +126,6 @@ async fn serve(config: Config) -> Result<()> {
         models,
         outbound,
         offset: config.utc_offset,
-        intent: config.intent.state_machine(),
-        context_lines: config.intent.context_lines,
         stop_grace: STOP_GRACE,
         owners,
         binds: Arc::default(),

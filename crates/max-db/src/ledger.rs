@@ -280,50 +280,6 @@ pub async fn recent(
     Ok(rows)
 }
 
-/// How busy a conversation has been: what the classifier's "本群情况"
-/// line counts.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Activity {
-    /// In the last hour, Max's rows and everyone else's.
-    pub max_last_hour: i64,
-    pub others_last_hour: i64,
-    /// In the last five minutes, rows and how many people sent them.
-    pub recent: i64,
-    pub recent_people: i64,
-}
-
-pub async fn activity(
-    conn: &mut PgConnection,
-    conversation: ConversationId,
-    me: IdentityId,
-    now: DateTime<Utc>,
-) -> sqlx::Result<Activity> {
-    let row = sqlx::query!(
-        r#"
-        select
-            count(*) filter (where sender_identity_id = $2) as "max!",
-            count(*) filter (where sender_identity_id <> $2) as "others!",
-            count(*) filter (where sent_at > $3::timestamptz - interval '5 minutes') as "recent!",
-            count(distinct sender_identity_id)
-                filter (where sent_at > $3::timestamptz - interval '5 minutes' and sender_identity_id <> $2)
-                as "people!"
-        from messages
-        where conversation_id = $1 and kind <> 'event' and sent_at > $3::timestamptz - interval '1 hour'
-        "#,
-        conversation.0,
-        me.0,
-        now
-    )
-    .fetch_one(conn)
-    .await?;
-    Ok(Activity {
-        max_last_hour: row.max,
-        others_last_hour: row.others,
-        recent: row.recent,
-        recent_people: row.people,
-    })
-}
-
 /// What an account said lately in an endpoint, newest first, by id and
 /// rendered text: where a quote of Max's message is looked for when its
 /// quote id is unknown.

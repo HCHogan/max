@@ -8,8 +8,8 @@ use std::sync::Arc;
 use chrono::{FixedOffset, Utc};
 use color_eyre::eyre::{Result, eyre};
 use max_core::ids::MessageId;
-use max_core::intent::classify::{self, Situation};
-use max_core::intent::{Status, Verdict};
+use max_core::intent::Verdict;
+use max_core::intent::classify;
 use max_core::item::{Item, ItemKind};
 use max_core::message::Message;
 use max_core::project::Budgets;
@@ -26,13 +26,15 @@ use crate::llm::Chosen;
 /// Enough for the one line of JSON.
 const MAX_OUTPUT: u32 = 300;
 
+/// Rows of context the classifier reads before the ones it judges.
+pub const CONTEXT_LINES: i64 = 15;
+
 pub struct Job {
     pub pool: PgPool,
     pub place: Arc<Place>,
     pub chosen: Chosen,
     pub persona: String,
     pub batch: Vec<MessageId>,
-    pub status: Status,
     pub context_lines: i64,
     pub offset: FixedOffset,
 }
@@ -85,8 +87,6 @@ async fn run(job: &Job) -> Result<Option<Verdict>> {
             .into_iter()
             .map(|row| (row.message, Mark::None))
             .collect();
-    let activity =
-        ledger::activity(&mut conn, place.conversation, place.me.identity, Utc::now()).await?;
     let messages = context.iter().chain(&new).map(|(message, _)| message);
     let people = people(&mut conn, messages, place).await?;
     drop(conn);
@@ -102,16 +102,8 @@ async fn run(job: &Job) -> Result<Option<Verdict>> {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let count = |n: i64| usize::try_from(n).unwrap_or(0);
-    let situation = Situation {
-        max_last_hour: count(activity.max_last_hour),
-        others_last_hour: count(activity.others_last_hour),
-        recent: count(activity.recent),
-        recent_people: count(activity.recent_people),
-        status: job.status.clone(),
-    };
     let system = classify::system(&job.persona);
-    let user = classify::user(&lines(&context), &situation, &lines(&new));
+    let user = classify::user(&lines(&context), &lines(&new));
     let request = Request {
         model: job.chosen.tag.clone(),
         items: vec![

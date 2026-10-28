@@ -169,19 +169,20 @@ async fn an_at_wakes_a_core_that_answers(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn chatter_alone_wakes_nobody(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
-    let verdict = r#"{"trigger": false, "kind": "called", "reason": "闲聊", "dismiss": false}"#;
+    let verdict = r#"{"trigger": false, "reason": "闲聊"}"#;
+    h.script.push(Answer::says(verdict));
     h.script.push(Answer::says(verdict));
     h.send(from_xiaoming(0, vec![text("今天好热")]));
     h.send(from_xiaoming(0, vec![text("今天好热")]));
     h.send(from_xiaohong(1, vec![text("是啊")]));
-    // The first chatter in a while goes to the classifier, which says no.
+    // The classifier says no to the first, then to what came meanwhile.
     let deadline = Instant::now() + PATIENCE;
-    while h.script.calls() == 0 {
-        assert!(Instant::now() < deadline, "no classifier call");
+    while h.script.calls() < 2 {
+        assert!(Instant::now() < deadline, "too few classifier calls");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     h.stop().await;
-    assert_eq!(h.script.calls(), 1);
+    assert_eq!(h.script.calls(), 2);
     assert!(h.turns().await.is_empty());
     assert_eq!(h.count("select count(*) from messages").await, 2);
 }
@@ -266,14 +267,14 @@ async fn stopping_interrupts_a_call_that_outlasts_the_grace(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_judged_wake_starts_a_core(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
-    let verdict = r#"{"trigger": true, "kind": "called", "reason": "在叫 Max", "dismiss": false}"#;
+    let verdict = r#"{"trigger": true, "reason": "在叫 Max"}"#;
     h.script.push(Answer::says(verdict));
     h.script.push(Answer::says("来了"));
     h.send(from_xiaoming(0, vec![text("max 你怎么看")]));
     assert_eq!(h.said().await.1, "来了");
     let volatile = h.request_tail(1);
     assert!(
-        volatile.ends_with("max 你怎么看\n[判定 called：在叫 Max]\n"),
+        volatile.ends_with("max 你怎么看\n[判定：在叫 Max]\n"),
         "{volatile}"
     );
     h.stop().await;

@@ -9,7 +9,7 @@ use std::time::Duration;
 use chrono::{DateTime, FixedOffset, Utc};
 use color_eyre::eyre::Result;
 use max_core::ids::{MessageId, PrincipalId, TurnId};
-use max_core::intent::{self, Decision, Entry, EntryKind, Intent, Reason};
+use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::item::{ModelOutput, ToolOutput};
 use max_core::message::{Draft, DraftNode, Message};
 use max_core::prompt;
@@ -36,9 +36,6 @@ pub struct Shared {
     pub models: Arc<Models>,
     pub outbound: UnboundedSender<Outgoing>,
     pub offset: FixedOffset,
-    pub intent: intent::Config,
-    /// Rows of context the classifier reads before the ones it judges.
-    pub context_lines: u32,
     /// How long a core may go on when Max stops, before it is interrupted.
     pub stop_grace: Duration,
     /// Max's owners, who may run every command.
@@ -109,7 +106,7 @@ impl Conversation {
             .await?
             .unwrap_or(MessageId(0));
         let settings = platform::settings(&mut conn, place.conversation).await?;
-        let mut intent = Intent::new(shared.intent.clone());
+        let mut intent = Intent::new();
         intent.set_proactive(settings.proactive);
         Ok(Self {
             shared,
@@ -319,22 +316,20 @@ impl Conversation {
                         None => self.start_core(wake).await?,
                     }
                 }
-                Decision::Classify { batch } => {
-                    let now = std::time::Instant::now();
-                    match self.shared.models.intent() {
-                        Ok(chosen) => self.classify(chosen, batch, now),
-                        Err(error) => {
-                            warn!(%error, "no model to classify with");
-                            decisions.extend(self.intent.verdict(None, now));
-                        }
+                Decision::Classify { batch } => match self.shared.models.intent() {
+                    Ok(chosen) => self.classify(chosen, batch),
+                    Err(error) => {
+                        warn!(%error, "no model to classify with");
+                        let now = std::time::Instant::now();
+                        decisions.extend(self.intent.verdict(None, now));
                     }
-                }
+                },
             }
         }
         Ok(())
     }
 
-    fn classify(&mut self, chosen: Chosen, batch: Vec<MessageId>, now: std::time::Instant) {
+    fn classify(&mut self, chosen: Chosen, batch: Vec<MessageId>) {
         let persona = self.settings.persona.as_deref().unwrap_or(prompt::PERSONA);
         let job = classify::Job {
             pool: self.shared.pool.clone(),
@@ -342,8 +337,7 @@ impl Conversation {
             chosen,
             persona: persona.to_owned(),
             batch,
-            status: self.intent.status(now),
-            context_lines: i64::from(self.shared.context_lines),
+            context_lines: classify::CONTEXT_LINES,
             offset: self.shared.offset,
         };
         self.next_task += 1;
@@ -577,15 +571,6 @@ impl Conversation {
         if self.shared.outbound.send(outgoing).is_err() {
             warn!(message = %message.id, "the sender is gone");
         }
-        let entry = Entry {
-            id: message.id,
-            sender: self.place.me.identity,
-            kind: EntryKind::Max,
-            text: String::new(),
-        };
-        let decisions = self.intent.observe(&entry, std::time::Instant::now());
-        // Max's own words never wake anyone.
-        debug_assert!(decisions.is_empty());
         Ok(message)
     }
 }

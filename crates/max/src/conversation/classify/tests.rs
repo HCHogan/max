@@ -32,7 +32,6 @@ async fn job(pool: &PgPool, script: &Arc<Script>) -> Job {
         chosen: models(script).intent().unwrap(),
         persona: "人设".into(),
         batch,
-        status: max_core::intent::Intent::new(Default::default()).status(std::time::Instant::now()),
         context_lines: 1,
         offset: offset(),
     }
@@ -52,8 +51,7 @@ async fn verdict(job: Job) -> Option<Verdict> {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn the_classifier_reads_the_context(pool: PgPool) {
     let script = Arc::new(Script::default());
-    let answer =
-        r#"好的：{"trigger": true, "kind": "followup", "reason": "在追问", "dismiss": false}"#;
+    let answer = r#"好的：{"trigger": true, "reason": "在追问"}"#;
     script.push(Answer::says(answer));
     let verdict = verdict(job(&pool, &script).await).await.unwrap();
     assert!(verdict.trigger);
@@ -63,7 +61,7 @@ async fn the_classifier_reads_the_context(pool: PgPool) {
         other => panic!("{other:?}"),
     };
     assert!(text.starts_with("[上下文]\n[12:01 小红 #"), "{text}");
-    assert!(text.contains("]: 第1句\n\n[本群情况]\n近 1 小时"), "{text}");
+    assert!(text.contains("]: 第1句\n\n[新消息]\n"), "{text}");
     assert!(text.ends_with("]: 第3句"), "{text}");
     assert!(text.contains("[新消息]\n[12:02 小明 #"), "{text}");
     let mut conn = pool.acquire().await.unwrap();

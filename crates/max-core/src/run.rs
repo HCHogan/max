@@ -99,7 +99,7 @@ pub struct Wake {
     /// The rows it is about.
     pub ids: Vec<MessageId>,
     pub reason: Reason,
-    /// What the model is shown, such as `[判定 followup：…]`. None for a
+    /// What the model is shown, such as `[判定：在追问]`. None for a
     /// direct trigger, whose rows are marked already.
     pub item: Option<Item>,
 }

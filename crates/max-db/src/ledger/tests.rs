@@ -221,17 +221,6 @@ async fn what_the_classifier_and_the_sender_read(pool: PgPool) -> sqlx::Result<(
         .collect();
     assert_eq!(before, [ids[2], ids[3]]);
 
-    let activity = activity(&mut conn, conversation, group.max.identity, at(5)).await?;
-    assert_eq!(
-        activity,
-        Activity {
-            max_last_hour: 1,
-            others_last_hour: 4,
-            recent: 4,
-            recent_people: 1,
-        }
-    );
-
     let endpoint = group.endpoint.id;
     sqlx::query!("update messages set text = sent_at::text")
         .execute(&mut *conn)

@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use chrono::FixedOffset;
 use color_eyre::eyre::{Result, WrapErr, bail, ensure, eyre};
@@ -27,8 +26,6 @@ pub struct Config {
     pub log: Log,
     pub database: Database,
     pub llm: Llm,
-    #[serde(default)]
-    pub intent: Intent,
     #[serde(default)]
     pub platforms: Platforms,
 }
@@ -165,70 +162,6 @@ pub struct Model {
     pub max_output: Option<u32>,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
-}
-
-/// How chatter is judged. The defaults are the Haskell version's.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Intent {
-    #[serde(default = "max_per_hour")]
-    pub max_per_hour: u32,
-    #[serde(default = "topic_cooldown")]
-    pub topic_cooldown_secs: u64,
-    /// Rows of context before the ones being judged.
-    #[serde(default = "context_lines")]
-    pub context_lines: u32,
-    /// A trigger that seems unfinished waits until its sender has been
-    /// quiet this long,
-    #[serde(default = "quiet")]
-    pub quiet_secs: u64,
-    /// or this long after it came.
-    #[serde(default = "hold_at_most")]
-    pub hold_at_most_secs: u64,
-}
-
-impl Default for Intent {
-    fn default() -> Self {
-        Self {
-            max_per_hour: max_per_hour(),
-            topic_cooldown_secs: topic_cooldown(),
-            context_lines: context_lines(),
-            quiet_secs: quiet(),
-            hold_at_most_secs: hold_at_most(),
-        }
-    }
-}
-
-fn max_per_hour() -> u32 {
-    8
-}
-
-fn topic_cooldown() -> u64 {
-    300
-}
-
-fn context_lines() -> u32 {
-    15
-}
-
-fn quiet() -> u64 {
-    10
-}
-
-fn hold_at_most() -> u64 {
-    20
-}
-
-impl Intent {
-    pub fn state_machine(&self) -> max_core::intent::Config {
-        max_core::intent::Config {
-            max_per_hour: self.max_per_hour,
-            topic_cooldown: Duration::from_secs(self.topic_cooldown_secs),
-            quiet: Duration::from_secs(self.quiet_secs),
-            hold_at_most: Duration::from_secs(self.hold_at_most_secs),
-            ..max_core::intent::Config::default()
-        }
-    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -386,9 +319,6 @@ mod tests {
             [database]
             url = "postgresql:///maxx?host=/run/postgresql&user=maxx"
 
-            [intent]
-            max_per_hour = 4
-
             [platforms.qq]
             app_id_file = "/run/secrets/maxx/qq-app-id"
             app_secret_file = "/run/secrets/maxx/qq-app-secret"
@@ -399,8 +329,6 @@ mod tests {
         assert_eq!(config.utc_offset.local_minus_utc(), 9 * 3600);
         let qq = config.platforms.qq.unwrap();
         assert_eq!(qq.app_id_file, Path::new("/run/secrets/maxx/qq-app-id"));
-        assert_eq!(config.intent.max_per_hour, 4);
-        assert_eq!(config.intent.context_lines, 15);
         let (provider, settings, model, _) = config.llm.model("cliproxy/gpt-5.6-luna").unwrap();
         assert_eq!((provider, model), ("cliproxy", "gpt-5.6-luna"));
         assert_eq!(settings.protocol, ProtocolName::Responses);

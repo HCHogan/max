@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, FixedOffset, Utc};
 use max_core::ids::{IdentityId, MessageId, PrincipalId};
-use max_core::intent::{Kind, Reason};
+use max_core::intent::Reason;
 use max_core::item::{Item, ItemKind};
 use max_core::message::{Content, MentionTarget, Message, Node};
 use max_core::project::decay::Costs;
@@ -244,15 +244,10 @@ pub async fn follow_up(
 
 /// The line the model is shown for a judged wake.
 pub fn judged(reason: &Reason) -> Option<Item> {
-    let Reason::Judged { kind, note } = reason else {
+    let Reason::Judged { note } = reason else {
         return None;
     };
-    let kind = match kind {
-        Kind::Called => "called",
-        Kind::Followup => "followup",
-        Kind::Topic => "topic",
-    };
-    let text = format!("[判定 {kind}：{note}]");
+    let text = format!("[判定：{note}]");
     let tokens = tokens::count(&text);
     Some(Item::new(ItemKind::User { text }, tokens))
 }

@@ -126,24 +126,8 @@ impl Conversation {
             None => "默认".to_owned(),
         };
         let _ = writeln!(out, "人设：{persona}");
-        let status = self.intent.status(std::time::Instant::now());
-        if status.proactive {
-            let _ = write!(
-                out,
-                "主动接话：开，近 1 小时叫醒 {}/{} 次",
-                status.judged_last_hour, status.cap
-            );
-            if let Some(left) = status.dismissed_for {
-                let _ = write!(
-                    out,
-                    "；有人嫌话多，还有 {} 分钟",
-                    left.as_secs().div_ceil(60)
-                );
-            }
-            out.push('\n');
-        } else {
-            out.push_str("主动接话：关\n");
-        }
+        let proactive = if settings.proactive { "开" } else { "关" };
+        let _ = writeln!(out, "主动接话：{proactive}");
         match &self.core {
             Some(a) => {
                 let minutes = a.started.elapsed().as_secs() / 60;

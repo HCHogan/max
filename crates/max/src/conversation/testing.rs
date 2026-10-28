@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use max_core::ids::PrincipalId;
-use max_core::intent;
 use max_core::message::{Node, Platform, Role};
 use max_db::PgPool;
 use max_db::platform::{self, ConversationKind};
@@ -47,8 +46,6 @@ pub fn shared(
         models: Arc::new(models),
         outbound,
         offset: offset(),
-        intent: intent::Config::default(),
-        context_lines: 15,
         stop_grace: Duration::from_millis(200),
         owners,
         binds: Arc::default(),

@@ -130,7 +130,6 @@ async fn a_judged_wake(pool: PgPool) {
         .unwrap();
     let id = said.message.id;
     let reason = Reason::Judged {
-        kind: Kind::Topic,
         note: "在问 Rust".into(),
     };
     let wake = Wake {
@@ -154,7 +153,7 @@ async fn a_judged_wake(pool: PgPool) {
         "[新消息]\n\
          --- 2026-10-29 周四 ---\n\
          [12:00 小明 #{id}]: rust 的生命周期怎么理解\n\
-         [判定 topic：在问 Rust]\n"
+         [判定：在问 Rust]\n"
     );
     assert!(volatile.ends_with(&expected), "{volatile}");
 }
