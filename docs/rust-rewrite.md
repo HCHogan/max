@@ -1417,7 +1417,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 2026-10-27 定，10-28 补上 tank 那一步和重启恢复。每一步是一串小提交；前五步不碰 tank。没定的数值先用文中的提议值，做到那一步再调。
 
 1. **骨架**（2026-10-28 完成）：workspace、钉住版本的 `rust-toolchain.toml`、crane 加 devenv（带 Postgres）、检查项（fmt、clippy、nextest、`max-core` 的依赖白名单）。全部检查是 flake 的 `checks`，CI 只跑 `nix flake check --impure`。
-2. **`max-core`**：消息类型、渲染、分段器、核心和 intent 两个状态机、投影，全用 fake 测。两个状态机的签名在这一步定下来。
+2. **`max-core`**（2026-10-28 完成）：消息类型、渲染、分段器、核心和 intent 两个状态机、投影，全用 fake 测。两个状态机的签名在这一步定下来，写的时候改动的地方已经更新到[核心](#核心)和 [intent](#intent) 两节。
 3. **`max-db`**：第一个迁移和查询，`#[sqlx::test]`。
 4. **`onebot`**：协议类型、reverse WS、echo 配对，fixture 里用假号码。
 5. **`max-llm`**：Responses 和 Chat，用录下来的响应测。
