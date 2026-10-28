@@ -372,7 +372,9 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 |---|---|---|
 | `Scope::close(grace)` | `Scope` 里一次 | 关机时防卡死 |
 | 会话 actor 的到期时间 | actor 主循环里一个 `sleep_until`，到期时间取空闲窗口和停止宽限期里早的那个 | 策略：provider 的 `idle_window_secs`、关机的宽限期。turn 没有墙钟：actor 只等数据库，模型调用和工具各有自己的上限 |
-| 工具调用上限 | 两处：`run_code`、`shell` 一次运行一个；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
+| 工具调用上限 | 两处：`run_code`、`shell` 一次运行一个（`shell` 默认 120 秒，调用最多要 600 秒；guest 里的 unit 另有晚 30 秒的 `RuntimeMaxSec`，max 这边丢了也停得掉）；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
+| VM 开机 | VM 服务里一次：60 秒内要能 SSH 进去，每 100 ms 试一次；等 virtiofsd 建 socket 5 秒；外面再套一层 70 秒 | 防卡死 |
+| VM 闲置 | VM 服务里一次：每分钟扫一遍，闲置超过 `idle_minutes`（默认 120）的关掉 | 策略 |
 | 网络客户端 | 配置里一次：LLM 的 `stream_idle_timeout_secs`（响应头和之后的每一段都要在这个时间内到，整个调用不设上限）、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`max-llm` 里写死的连接超时，`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避 | 防卡死 |
 | 先等再升级 | 按需 | 策略，比如 `close` 先给命令时间自己退出 |
 | 常驻服务里的等待表 | 每张表一次 | 防泄漏，比如 sender 里等回执的表。常驻服务外面没有取消替它兜底 |
@@ -948,7 +950,7 @@ Haskell 版的教训：原始尾巴是按 token 的滑动窗口，填满后每�
 
 - 消息行和尾巴同一种格式，触发的行标上"@你""回复你的 #123"，其它不标。第一次出现的人补一行名册。
 - job 结果是 `[job#3 完成] …`，自动化是 `[自动化 m#2 触发] …`。
-- **单条上限**（2026-10-27 定）：消息、job 结果、自动化结果共用一个上限，`min(C × 15%, 25k)` token，最低 2k；尾巴和第一批里的消息同样适用。超过的只渲染开头约 2,000 字，加一行"全文见 `#123`"，模型用读全文的工具 `context_read` 取，所以它是 v1 第一个开放的工具。它按页取，一页不超过单条上限，读一条超长消息不会一下把核心撑到上限。原文本来就在 ledger 或 job 记录里，不另存。VM 起不来时没有工具，模型只能看到摘录。`run_code` 和 `shell` 的结果也按这个上限截，全文写成 VM 里的文件，结果里给路径，下一次调用自己读。
+- **单条上限**（2026-10-27 定）：消息、job 结果、自动化结果共用一个上限，`min(C × 15%, 25k)` token，最低 2k；尾巴和第一批里的消息同样适用。超过的只渲染开头约 2,000 字，加一行"全文见 `#123`"，模型用读全文的工具 `context_read` 取，所以它是 v1 第一个开放的工具。它按页取，一页不超过单条上限，读一条超长消息不会一下把核心撑到上限。原文本来就在 ledger 或 job 记录里，不另存。VM 起不来时没有工具，模型只能看到摘录。`run_code` 和 `shell` 的结果也按这个上限截，全文写成 VM 里的文件，结果里给路径，下一次调用自己读。现在的 `shell` 先按字节截：超过 16 KiB 只留头尾各 8 KiB，全文在 `/work/.max/out/<unit>.txt`。
 - 参考（2026-10-27 查）：Claude Code 的 Bash 输出约 3 万字符、Read 每次 2.5 万 token；Codex 的工具输出 1 万 token；OpenCode 和 pi 2,000 行或 50 KiB；Gemini CLI 4 万字符；Hermes 每条 10 万字符，按窗口缩到 15%。超出时它们都把全文留着，给模型路径或句柄。用户自己发的内容基本都不截。
 - **放不下就认输**：不按条数折叠。攒着的输入连同 transcript 超过核心的上限，就在这个边界结束这次运行，记 `ContextExhausted`，见[核心](#核心)和[运行流程](#运行流程)。
 - 系统提示里说清：一批里可能有几件要回应，也可能都不用，不用就什么都不输出；回应多个人时各自 reply。
@@ -1302,10 +1304,11 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
 
 - **需要 root 的只有开机时的声明式配置**，都在 NixOS 里：
   - `maxx` 加入 `kvm` 组。
-  - systemd-networkd 预建一组 tap（数量是配置，提议 32），`User=maxx`，开多队列和 vnet header。
-  - 地址用 DHCP（2026-10-27 定）。每个 tap 是自己的 /30：宿主一端是 `.1`，这个 tap 上的 DHCP 服务只发 `.2` 一个地址。所以所有 VM 可以用同一个 MAC，不用按 MAC 配静态租约。
-  - tap 之间不桥接，VM 互相不通靠路由和 nft。nft 管出口策略和防地址伪造（tap N 只许源地址是它的 `.2`）；宿主对 VM 只开 DHCP。
-- **起 VM**：主进程选一个空闲槽位，在 `/var/lib/maxx/vm/<会话 id>/` 下准备 `work`、`nix.img`、`meta`（DNS、SSH 公钥）和会话的媒体视图 `chat`，以这个目录为工作目录，起 virtiofsd 和 cloud-hypervisor 两个子进程，`kill_on_drop`。
+  - 一个 oneshot unit `maxx-taps` 用 `ip tuntap` 预建一组 tap（数量是配置，默认 32），属主 `maxx`，开多队列和 vnet header。不用 systemd-networkd：module 不替宿主选网络栈。这个 unit 停了 tap 还在，重启它不会断开在跑的 VM。
+  - 每个 tap 是自己的 /30（默认从 `10.235.0.0/24` 里切）：宿主一端是 `.1`，guest 是 `.2`，所有 VM 用同一个 MAC。地址不用 DHCP（2026-10-29 改，原先 2026-10-27 定的是 DHCP）：主进程起 VM 时把 `max.ip`、`max.gateway`、`max.dns` 和这次开机的 SSH 公钥 `max.key` 加在 guest 的内核命令行上，guest 里一个 oneshot 在网络起来之前读出来配好。宿主上不用跑 DHCP，也不用为 DNS 和公钥另开一个共享目录。
+  - tap 之间不桥接，VM 互相不通靠路由和 nft。nft 只许 VM 用自己 tap 的 `.2` 作源地址、只许去公网地址、不许 IPv6；VM 连宿主一律拒绝，宿主只回已经建立的连接；出去的做 masquerade。
+- **起 VM**：主进程选一个空闲槽位（没有就关掉闲置最久、没在用的那个），在 `/var/lib/maxx/vm/<会话 id>/` 下准备 `work` 和 `nix.img`，起两个 virtiofsd（只读的 store、读写的 `/work`）和 cloud-hypervisor，都是 `kill_on_drop` 的子进程。然后每 100 ms 试一次 SSH，连上就算起好了，不另做就绪通知。会话的媒体视图 `chat` 等有了媒体再加。
+- **vCPU 至少 2 个**：tap 是多队列的，cloud-hypervisor 要两对队列以上才按多队列打开它，而每个 vCPU 最多配一对。
 - **每个 VM 的 tap 名不同**，而 microvm.nix 生成的 `microvm-run` 把 tap 名写死在构建时。2026-10-29 定：主进程自己拼 cloud-hypervisor 和 virtiofsd 的命令行，只借用 guest 的 kernel、initrd 和内核命令行，由 guest 的构建产出一个 JSON，路径写进配置。每个 VM 本来就有好几个参数不同（目录、tap、Landlock 规则），microvm.nix 的 runner 还会自己建盘、起 socat 转发通知，和"主进程直接管两个子进程"对不上。
 - **通道**：hybrid vsock 的 socket 就在这个目录里，主进程直接用。连 22 端口跑 russh，每个 VM 一条连接，每条命令一个 channel；在 `notify.vsock_7777` 上监听 MCP，见 [MCP 通道](#mcp-通道)。
 - **生命周期就是进程的生命周期**：闲置关机就是 drop；`maxx.service` 停止或崩溃时，systemd 按 cgroup 把 VM 一起杀掉。不需要清理孤儿、实例元数据和配置代数，下次起的 VM 用的就是当前配置。服务重启时 VM 和里面在跑的命令一起结束；VM 重启只要几秒，可以接受（2026-10-27）。
@@ -1327,7 +1330,7 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
   - cloud-hypervisor 的 Landlock 能开，要补两条规则：`/sys/devices/virtual/net` 只读（读 tap 的 flags），VM 目录读写（建 vsock 的 socket）。开了以后它没有 capability，`NoNewPrivs`，有 seccomp 过滤。
   - 从起进程到 SSH 连得上约 3.8 秒。hybrid vsock 上的 SSH 先发 `CONNECT 22\n`，systemd 的 `systemd-ssh-proxy vsock-mux/<socket>` 就能连，russh 照做即可。
   - guest 里 `systemd-run --pipe --wait` 能带回输出和退出码。它会往输出里写设终端标题的转义，要设 `SYSTEMD_ADJUST_TERMINAL_TITLE=0`。
-  - tank 的 CPU 开了嵌套 KVM，module 的 NixOS 测试里也能起 guest。
+  - tank 的 CPU 开了嵌套 KVM，module 的 NixOS 测试里也能起 guest。flake 的 `nestedChecks.x86_64-linux.vm` 就是这样：测试机里 module 建好 tap、nft 和加固过的 `maxx.service`，再用同样加固的 `maxx-vm-check` 起一个 VM，经 `shell` 的同一条路径跑 `uname -a`。2026-10-29 在 tank 上跑通，测试机里的 VM 10 秒起好。CI 的 runner 自己就是 VM，给不了测试机 KVM，所以它不在 `checks` 里，要在 tank 上手动跑。
 - 运维网络（maxops 加 tailscale）换成另一组 tap，挂在一个路由进 maxops 命名空间的网桥上。v1 不做，上线前做。
 
 ### MCP 通道
@@ -1478,7 +1481,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 6. **tank 上的 `maxx`**（2026-10-29 完成）：`nixosModules.maxx` 按名字生成用户、Postgres 角色和库、目录、slice、target 和服务，配置文件在构建时跑 `max check-config`；`nixosModules.max` 是同一个 module 换成上线后的名字。`max` 现在只做三件事：迁移数据库，用 QQ 凭据问一次自己是谁，等 SIGTERM。QQ 的 AppID 和 secret 在 sops 的 `maxx/` 下。module 有一个 VM 测试，用和 tank 一样的 Postgres 16。部署时遇到两件事：一是 sqlx 0.9 不认 `postgresql://max@/max?host=…`（有用户名就不能是空主机），改成 `postgresql:///max?host=/run/postgresql&user=max`；二是 tank 的集群建在 glibc 2.40 上，系统现在是 2.42，`template1` 的 collation 版本对不上，新建库就失败，所以刷新了 `template1` 的版本记录（它里面没有用户对象）。同一天按 owner 的意思，把 `postgres`、`luckperms`、`minecraft`、`matrix-synapse` 几个库 `REINDEX DATABASE CONCURRENTLY` 加 `REINDEX SYSTEM` 后也刷新了。
 7. **`max`**（2026-10-29 完成，测试群里实测过）：配置、会话表和会话 actor、I/O 任务、平台 sender 和 `deliveries`、QQ 适配和 `!bind`、命令、intent。做完第一次实机：测试群里纯文字对话，顺便实测 [QQ 官方机器人](#qq-官方机器人)里标了实测的几项。工具在第 9 步之前一律回错误"工具还没接上，现在用不了。"。实测结果：`!bind` 接上测试群；@ 的对话和闲聊经 intent 判定都正常；停服务 2 分钟和 10 分钟，网关都 Resume 上了，停机期间的 @ 补发过来并且回答了。10 分钟那次回答被 QQ 拒了（40034005），被动回复的窗口改成按消息的发送时间算。同一天按 owner 的意思做了一轮减法：核心撞上限就认输，不再交接（见[运行流程](#运行流程)第 4 步）；重启时给宽限期再中断，不再挂起恢复（见[重启](#重启)）；intent 只留去抖、小模型判定和每小时上限（见 [intent](#intent)）；Max 不发表情；Matrix 先不做。这一步定下的：命令输出留在同一个会话（见[出站](#出站)）、命令权限（见[权限](#权限)）、actor 测试用真实时间（见[核心和 actor 的测试](#核心和-actor-的测试)）、一段老记录只接一个群（见 [QQ 官方机器人](#qq-官方机器人)）。tank 上的主模型是经 cliproxy 的 Gemini 3.8 Flash（Chat 协议），intent 用 h610 上的 qwen3.5-4b。
 8. ~~**Matrix**，带加密房间和 `matrix-bootstrap`~~：2026-10-29 删，先不做，见 [Matrix](#matrix)。
-9. **VM、MCP、codemode runner**。[VM 进程](#vm-进程)里要先在 tank 上验证的几件事 2026-10-29 验证完了。第一个开放的工具是 `context_read`。
+9. **VM、MCP、codemode runner**。[VM 进程](#vm-进程)里要先在 tank 上验证的几件事 2026-10-29 验证完了。同一天做完第一段：VM 服务、`shell` 工具、module 里的 tap、nft 和加固，`max vm-check` 和嵌套的 NixOS 测试，测试在 tank 上通过。地址改走内核命令行，不用 DHCP。接下来是 MCP 服务、`run_code` 的 runner 和第一个开放的工具 `context_read`。
 10. **historian**（2026-10-29 做完，还没在 tank 上跑过）：capture、`summary_runs`、一分钟一圈的服务、`!compact`。上线要在配置里加 `[llm] historian`。
 11. ~~**重启恢复**~~：2026-10-29 删，重启时给宽限期再中断，见[重启](#重启)。
 
