@@ -9,7 +9,62 @@
 //! as all at once. (The Haskell version also released long paragraphs at
 //! sentence ends while streaming, which made the result depend on timing.)
 
+mod parse;
+
+use std::collections::BTreeSet;
+
+pub use parse::Action;
+
+use crate::ids::PrincipalId;
+
 const SPLIT: &str = "[split]";
+
+/// One message's worth of model output.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Segment {
+    /// The chunk as the model wrote it. When a model call is cut off, the
+    /// sources of the segments that went out are what Max said.
+    pub source: String,
+    pub action: Action,
+}
+
+/// Streamed model text in, things to say or do out.
+#[derive(Debug)]
+pub struct Segmenter {
+    chunker: Chunker,
+    /// The people in the roster the model was shown. A handle outside it is
+    /// made up and doesn't become a real mention.
+    known: BTreeSet<PrincipalId>,
+}
+
+impl Segmenter {
+    pub fn new(known: BTreeSet<PrincipalId>) -> Self {
+        Self {
+            chunker: Chunker::default(),
+            known,
+        }
+    }
+
+    pub fn push(&mut self, delta: &str) -> Vec<Segment> {
+        let chunks = self.chunker.push(delta);
+        self.parse(chunks)
+    }
+
+    pub fn finish(mut self) -> Vec<Segment> {
+        let chunks = std::mem::take(&mut self.chunker).finish();
+        self.parse(chunks)
+    }
+
+    fn parse(&self, chunks: Vec<String>) -> Vec<Segment> {
+        chunks
+            .into_iter()
+            .filter_map(|source| {
+                let action = parse::parse(&source, &self.known)?;
+                Some(Segment { source, action })
+            })
+            .collect()
+    }
+}
 
 /// Cuts streamed text into chunks.
 #[derive(Debug, Default)]
@@ -148,6 +203,27 @@ mod tests {
         }
         out.extend(chunker.finish());
         assert_eq!(out, whole, "one char at a time");
+    }
+
+    #[test]
+    fn segmenter() {
+        use crate::ids::MessageId;
+        use crate::message::{Draft, DraftNode};
+
+        let mut segmenter = Segmenter::new([PrincipalId(12)].into());
+        let mut out = segmenter.push("[reply#3] 第一条\n\n[silence]\n\n[mention#12] 第二");
+        out.extend(segmenter.finish());
+        let sources: Vec<_> = out.iter().map(|s| s.source.as_str()).collect();
+        assert_eq!(sources, ["[reply#3] 第一条", "[mention#12] 第二"]);
+        assert_eq!(
+            out[0].action,
+            Action::Say(Draft {
+                reply_to: Some(MessageId(3)),
+                nodes: vec![DraftNode::Text {
+                    text: "第一条".into()
+                }],
+            })
+        );
     }
 
     /// A chunk is released as soon as the blank line after it arrives.
