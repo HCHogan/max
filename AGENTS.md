@@ -34,5 +34,7 @@ no database. After changing a query or a migration, run
 
 ## Public repository
 
-The repository is public. Use made-up QQ numbers, group ids and chat
-handles in tests, docs and examples; real ones live only in sops.
+The repository is public. Use made-up QQ numbers, openids, group ids and
+chat handles in tests, docs and examples; real ones live only in sops.
+The QQ bot's AppID and secret are in the gitignored `.env` for local
+runs; never print or commit them.
