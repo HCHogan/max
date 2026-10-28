@@ -97,7 +97,10 @@ async fn deliveries_and_platform_ids(pool: PgPool) -> sqlx::Result<()> {
     let xiaoming = sender(group.xiaoming, "小明", None);
     let inbound = commit(&mut conn, &group, &xiaoming, &said("四"), 3).await?;
     let endpoint = group.endpoint.id;
-    let delivered = Sent::Delivered { native_id: "m1" };
+    let delivered = Sent::Delivered {
+        native_id: "m1",
+        quote_id: Some("REFIDX_1"),
+    };
     record_delivery(&mut conn, sent, endpoint, &delivered, at(0)).await?;
     let refused = Sent::Failed { error: "风控" };
     record_delivery(&mut conn, failed, endpoint, &refused, at(1)).await?;
@@ -121,6 +124,50 @@ async fn deliveries_and_platform_ids(pool: PgPool) -> sqlx::Result<()> {
         Some(inbound)
     );
     assert_eq!(by_native_id(&mut conn, endpoint, "n2").await?, None);
+    assert_eq!(
+        by_quote_id(&mut conn, endpoint, "REFIDX_1").await?,
+        Some(sent)
+    );
+    assert_eq!(
+        quote_id(&mut conn, sent).await?.as_deref(),
+        Some("REFIDX_1")
+    );
+    assert_eq!(quote_id(&mut conn, failed).await?, None);
+    Ok(())
+}
+
+#[sqlx::test]
+async fn quoting_someone_by_their_quote_id(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let group = group(&mut conn, "group:30001").await?;
+    let xiaoming = sender(group.xiaoming, "小明", None);
+    let content = said("在吗");
+    let id = insert(
+        &mut conn,
+        &NewMessage {
+            conversation: group.endpoint.conversation,
+            endpoint: group.endpoint.id,
+            sender: &xiaoming,
+            native_id: Some("ROBOT1.0_x"),
+            quote_id: Some("REFIDX_7"),
+            sent_at: at(0),
+            received_at: at(0),
+            command: false,
+            content: &content,
+            raw: &json!({}),
+            text: "在吗",
+            turn: None,
+            segment: None,
+        },
+    )
+    .await?;
+    let endpoint = group.endpoint.id;
+    assert_eq!(
+        by_quote_id(&mut conn, endpoint, "REFIDX_7").await?,
+        Some(id)
+    );
+    assert_eq!(by_quote_id(&mut conn, endpoint, "ROBOT1.0_x").await?, None);
+    assert_eq!(quote_id(&mut conn, id).await?.as_deref(), Some("REFIDX_7"));
     Ok(())
 }
 

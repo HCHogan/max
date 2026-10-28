@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "insert into deliveries (message_id, endpoint_id, status, native_id, error, at)\n         values ($1, $2, $3, $4, $5, $6)",
+  "query": "insert into deliveries (message_id, endpoint_id, status, native_id, quote_id, error, at)\n         values ($1, $2, $3, $4, $5, $6, $7)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -10,10 +10,11 @@
         "Text",
         "Text",
         "Text",
+        "Text",
         "Timestamptz"
       ]
     },
     "nullable": []
   },
-  "hash": "87b22b490e00a7cf34749943088d9b614928f069079d00b4f28854e4c762d350"
+  "hash": "0301ff0d766a2c4b7f87da7ad76373b6c1034f58aec6e25d2603a2bca71b9d31"
 }

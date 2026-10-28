@@ -25,6 +25,8 @@ pub struct NewMessage<'a> {
     pub sender: &'a Sender,
     /// The platform's id for an inbound row; None for what Max says.
     pub native_id: Option<&'a str>,
+    /// The id the platform quotes it by, where that differs: QQ's msg_idx.
+    pub quote_id: Option<&'a str>,
     pub sent_at: DateTime<Utc>,
     pub received_at: DateTime<Utc>,
     /// A command, which the actor runs; only for `Content::Message`.
@@ -118,9 +120,11 @@ pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Resu
         r#"
         insert into messages (
             conversation_id, endpoint_id, sender_identity_id, sender_name, sender_role,
-            native_id, sent_at, received_at, kind, event, reply_to_id, target_id, nodes, raw,
-            text, turn_id, segment
-        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            native_id, quote_id, sent_at, received_at, kind, event, reply_to_id, target_id,
+            nodes, raw, text, turn_id, segment
+        ) values (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+        )
         returning id
         "#,
         new.conversation.0,
@@ -129,6 +133,7 @@ pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Resu
         new.sender.name,
         new.sender.role.map(role_name),
         new.native_id,
+        new.quote_id,
         new.sent_at,
         new.received_at,
         columns.kind,
@@ -274,11 +279,55 @@ pub async fn by_native_id(
     Ok(id.map(MessageId))
 }
 
+/// The row a quote id names in this endpoint: someone's message by its
+/// own, or one Max sent by the one the platform gave back.
+pub async fn by_quote_id(
+    conn: &mut PgConnection,
+    endpoint: EndpointId,
+    quote_id: &str,
+) -> sqlx::Result<Option<MessageId>> {
+    let id = sqlx::query_scalar!(
+        r#"
+        select id as "id!" from messages where endpoint_id = $1 and quote_id = $2
+        union all
+        select message_id from deliveries where endpoint_id = $1 and quote_id = $2
+        limit 1
+        "#,
+        endpoint.0,
+        quote_id
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(id.map(MessageId))
+}
+
+/// How to quote a row in its endpoint, if the platform gave a way.
+pub async fn quote_id(conn: &mut PgConnection, message: MessageId) -> sqlx::Result<Option<String>> {
+    let id = sqlx::query_scalar!(
+        r#"
+        select coalesce(m.quote_id, d.quote_id)
+        from messages m
+        left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id
+        where m.id = $1
+        "#,
+        message.0
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(id.flatten())
+}
+
 /// What the platform said when Max sent a row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Sent<'a> {
-    Delivered { native_id: &'a str },
-    Failed { error: &'a str },
+    Delivered {
+        native_id: &'a str,
+        /// For quoting it, where the platform has a separate id.
+        quote_id: Option<&'a str>,
+    },
+    Failed {
+        error: &'a str,
+    },
 }
 
 pub async fn record_delivery(
@@ -288,17 +337,21 @@ pub async fn record_delivery(
     sent: &Sent<'_>,
     at: DateTime<Utc>,
 ) -> sqlx::Result<()> {
-    let (status, native_id, error) = match sent {
-        Sent::Delivered { native_id } => ("sent", Some(*native_id), None),
-        Sent::Failed { error } => ("failed", None, Some(*error)),
+    let (status, native_id, quote_id, error) = match sent {
+        Sent::Delivered {
+            native_id,
+            quote_id,
+        } => ("sent", Some(*native_id), *quote_id, None),
+        Sent::Failed { error } => ("failed", None, None, Some(*error)),
     };
     sqlx::query!(
-        "insert into deliveries (message_id, endpoint_id, status, native_id, error, at)
-         values ($1, $2, $3, $4, $5, $6)",
+        "insert into deliveries (message_id, endpoint_id, status, native_id, quote_id, error, at)
+         values ($1, $2, $3, $4, $5, $6, $7)",
         message.0,
         endpoint.0,
         status,
         native_id,
+        quote_id,
         error,
         at
     )

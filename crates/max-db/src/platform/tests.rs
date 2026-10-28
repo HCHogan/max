@@ -138,3 +138,17 @@ async fn settings_default_until_saved(pool: PgPool) -> sqlx::Result<()> {
     assert_eq!(settings(&mut conn, conversation).await?, changed);
     Ok(())
 }
+
+#[sqlx::test]
+async fn a_gateway_session_is_kept_per_platform(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    assert_eq!(gateway_session(&mut conn, Platform::Qq).await?, None);
+    let at = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap_or_default();
+    save_gateway_session(&mut conn, Platform::Qq, "S1", 41, at).await?;
+    save_gateway_session(&mut conn, Platform::Qq, "S2", 7, at).await?;
+    assert_eq!(
+        gateway_session(&mut conn, Platform::Qq).await?,
+        Some(("S2".to_owned(), 7))
+    );
+    Ok(())
+}

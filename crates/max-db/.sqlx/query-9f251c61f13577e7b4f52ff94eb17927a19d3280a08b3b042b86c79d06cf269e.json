@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select coalesce(m.quote_id, d.quote_id)\n        from messages m\n        left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id\n        where m.id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "coalesce",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9f251c61f13577e7b4f52ff94eb17927a19d3280a08b3b042b86c79d06cf269e"
+}

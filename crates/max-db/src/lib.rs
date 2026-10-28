@@ -47,6 +47,7 @@ mod tests {
                 "conversations",
                 "deliveries",
                 "endpoints",
+                "gateway_sessions",
                 "identities",
                 "llm_usage",
                 "messages",

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into gateway_sessions (platform, session_id, seq, saved_at)\n        values ($1, $2, $3, $4)\n        on conflict (platform) do update set\n            session_id = excluded.session_id, seq = excluded.seq, saved_at = excluded.saved_at\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4f476ee2977c5f358d5bb3b450aec5e7cf6bbe07cd5c8e9057948ae42df90579"
+}

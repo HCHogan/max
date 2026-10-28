@@ -66,6 +66,7 @@ pub async fn commit(
             endpoint: group.endpoint.id,
             sender,
             native_id: (!mine).then_some(native_id.as_str()),
+            quote_id: None,
             sent_at: at(minute),
             received_at: at(minute),
             command: false,

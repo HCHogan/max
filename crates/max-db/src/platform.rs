@@ -252,6 +252,50 @@ pub async fn roster(
         .collect()
 }
 
+/// A platform connection's session, saved as Max last stopped: its id and
+/// the last sequence number it saw.
+pub async fn gateway_session(
+    conn: &mut PgConnection,
+    platform: Platform,
+) -> sqlx::Result<Option<(String, u64)>> {
+    let row = sqlx::query!(
+        "select session_id, seq from gateway_sessions where platform = $1",
+        platform_name(platform)
+    )
+    .fetch_optional(conn)
+    .await?;
+    row.map(|row| {
+        let seq = u64::try_from(row.seq).map_err(|_| unknown("seq", &row.seq.to_string()))?;
+        Ok((row.session_id, seq))
+    })
+    .transpose()
+}
+
+pub async fn save_gateway_session(
+    conn: &mut PgConnection,
+    platform: Platform,
+    session_id: &str,
+    seq: u64,
+    at: DateTime<Utc>,
+) -> sqlx::Result<()> {
+    let seq = i64::try_from(seq).map_err(|_| unknown("seq", &seq.to_string()))?;
+    sqlx::query!(
+        r#"
+        insert into gateway_sessions (platform, session_id, seq, saved_at)
+        values ($1, $2, $3, $4)
+        on conflict (platform) do update set
+            session_id = excluded.session_id, seq = excluded.seq, saved_at = excluded.saved_at
+        "#,
+        platform_name(platform),
+        session_id,
+        seq,
+        at
+    )
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
 /// What the conversation's commands set.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
