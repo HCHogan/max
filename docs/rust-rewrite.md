@@ -1219,7 +1219,7 @@ enum Reason { Direct /* @、回复、私聊白名单 */, Judged { kind: Kind, no
   - 发送者：`username` 是 QQ 昵称，不是群名片（2026-10-29 实测），群名片拿不到。QQ 客户端里引用和 @ 显示的却是群名片，所以 Max 叫人用的名字可能和群里看到的不一样。`member_role` 是 owner、admin、member。
   - @：正文里写成 `<@member_openid>`，`mentions` 里也有，@ Max 的那一项带 `is_you: true`。开了全量消息，@ Max 的消息也走 `GROUP_MESSAGE_CREATE`（实测）。
   - 引用：这条消息的 `message_type` 是 103，被引用的消息在 `msg_elements` 里（只有原文和引用号，实测不带作者），引用号也在 `message_scene.ext` 的 `ref_msg_idx`。
-  - 媒体：图片、语音、文件在 `attachments`，带下载地址；语音还有转好的 wav 和腾讯的识别文本。实测图片带宽高和大小；文件的 `content_type` 是 `file`，带文件名，视频也按文件进来；语音是 `.amr`；这些地址都不用鉴权就能下。
+  - 媒体：图片、语音、文件在 `attachments`，带下载地址；语音还有转好的 wav 和腾讯的识别文本。实测图片带宽高和大小；文件的 `content_type` 是 `file`，带文件名，当文件发的视频也是；原生视频是 `video/mp4`，带宽高和大小，没有时长和封面；语音是 `.amr`；这些地址都不用鉴权就能下。
   - QQ 表情（实测）：正文里写成 `<faceType=1,faceId="306",ext="<base64>">`，`ext` 解开是 `{"text":"牛气冲天"}`，名字直接带着，不用查表。`faceType=3` 是超级表情；`6` 是收藏的表情包，名字为空，图在 `attachments`。
   - 合并转发（实测）：`message_type = 102`，正文是 QQ 拼好的文字记录，每条有内容和发送者昵称，没有结构化的子消息。转发里的图片也写在文字里，带文件名、尺寸、大小和下载地址。
   - 卡片（实测）：`message_type = 3`，`ark_data` 里有标题、来源和预览图，正文是文字摘要。B 站、知乎这类小程序卡片不带原链接，Max 只看得到标题。
