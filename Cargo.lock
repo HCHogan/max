@@ -1321,6 +1321,7 @@ dependencies = [
  "qqbot",
  "serde",
  "serde_json",
+ "sqlx",
  "tiktoken-rs",
  "tokio",
  "tokio-util",
