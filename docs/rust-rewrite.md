@@ -262,6 +262,8 @@ systemd 要设 `KillMode=mixed`：SIGTERM 只发给主进程，VM 这些子进�
    ```
 
    驱动器通用：tokio-util 的 `DelayQueue`、并发上限、按单元退避、自己的 `Scope`。入账通知是会话 actor 提交之后发的进程内 broadcast，不像 Haskell 版用 `message_projections` 的标志位当队列；漏掉的由扫描补。
+
+   2026-10-29：v1 只有 historian 一个 worker，这个框架先不写，等第二个 worker 来了照两个实例抽。historian 现在的做法（mpsc 通知、一分钟一圈、不扫描）见 [historian](#historian)。
 3. **触发源**：产出的不是表，是输入，全部进会话 actor 的同一个入口（[运行流程](#运行流程)第 2 步）：有核心在跑就喂给它，没有就起一个核心。差别只在源头：
    - 跟着消息来的，全部由会话 actor 里的 [intent](#intent) 判：@、回复是它的同步规则，看起来没说完的先去抖几秒；其它消息由小模型在 `side` 里异步判，判定叫醒有每小时上限，判定回到信箱，不阻塞别的消息。叫醒核心的 `Wake` 都按 `seen` 过滤。自动化的 ledger_match 是规则。
    - 外部来的：cron、HTTP webhook、外部轮询、proactive 的闲置触发。services 下一个调度器，定义在 `automations` 表，到点给对应的会话 actor 发请求。调度器的形状和派生 worker 一样（常驻、定时器、独占写 `automation_fires`、启动时扫一遍），只是 `run` 的结果是发请求。细节等做自动化时补。
@@ -976,14 +978,20 @@ Haskell 版尾巴是 W/2，26 万的窗口上约 10 万 token 原始群聊，每
 
 ### historian
 
-- **独立的 actor**（2026-10-27 定）：[派生数据 worker](#三种角色) 之一，services 下的常驻任务，和会话 actor 没有共享状态。它收两种消息：会话 actor 入账后发的"某会话来了一条消息"，带这一行的 token 估算（actor 入账时用同一个渲染函数和估算函数算）；`!compact`，带回信通道。自己管每个会话的闲置计时器（tokio-util 的 `DelayQueue`）、未覆盖部分的 token 数和在途的 capture。token 数在内存里按入账通知累加，发布后和启动扫描时从库里重算，不用每来一条就查库；capture 跑在它自己的 `Scope` 里，同时最多几个 **待定**，提议 2。`summaries` 只有它一个写者，所以不需要 cursor 表、staged 状态和 CAS。和主体共用的只有数据库、消息行的渲染函数、token 估算和 LLM 客户端；正在跑的 turn 从 `turns` 表查，不问会话 actor。模型由 `[llm] historian = {model, effort}` 选。
-- **触发**：会话闲置 10 分钟，且可压的部分（未覆盖的减去低水位的尾巴）够最小批量；尾巴超过高水位（热聊中，合并后最多一分钟一次）；`!compact`；启动时扫一遍缺口。
-- **范围**：从 cursor 往后，留出低水位的尾巴。cursor 是最新一条活跃摘要的 `last_message_id`，和 `!clear --all` 的水位取大的，水位之前的消息不进提示，也就不用再压；不含正在跑的 turn 的触发消息及其之后的。`!compact` 不留尾巴。
-- **输入**：最近 4 条摘要的 p2、现有记忆、这一段消息（带 `#id` 和时间）、本地时间。
-- **输出**：JSON，`compartments[{first, last, title, kind, importance, p1, p2, p3}]`，以及记忆提案（v1 不做）。边界由模型定，一段里可以有多个。
-- **校验**：id 在范围内、连续、不重叠、合起来覆盖整段；各层长度上限。失败重试一次。
-- **discard-last**：至少两个时丢掉最后一个，下次连着后文重读，因为它没有后文、边界不可靠。`!compact` 和压力触发不丢。
-- **发布**：一个事务写 `summaries` 和 `summary_runs`。发布不影响正在跑的 turn，它的基础上下文已经固定；下一个 turn 投影时自然读到新摘要。关机时在途的 capture 直接 drop，事务回滚，什么都不留；启动扫缺口会补上。
+- **独立的 actor**（2026-10-27 定，10-29 照实现简化）：[派生数据 worker](#三种角色) 之一，services 下的常驻任务，和会话 actor 没有共享状态。它收两种消息：群会话 actor 每入账一行就发的"这个群入账了一行"，不带 token 数；`!compact`，带回信通道。它自己一分钟看一圈，token 数在检查时从库里算：读未覆盖的行，用和投影同一个渲染函数和估算函数，不在内存里累加。capture 跑在它自己的 `Scope` 里，同时最多 2 个，`!compact` 不排队，只等同一个群在跑的那个。一次 capture 失败，这个群歇 10 分钟。`summaries` 只有它一个写者，所以不需要 cursor 表、staged 状态和 CAS。和主体共用的只有数据库、消息行的渲染函数、token 估算和 LLM 客户端；正在跑的 turn 从 `turns` 表查（未结束的 turn 的 `trigger` 里最早的消息），不问会话 actor。模型由 `[llm] historian = {model, effort}` 选；不配就不写摘要，尾巴只靠两倍高水位的硬截断。只有一个 worker，先不抽通用的派生数据框架。
+- **水位按会话的主模型算**：会话设置的模型，没设或已不在配置里就用默认模型，和投影用的窗口一样。
+- **触发**：
+  - 安静：会话 10 分钟没入账，且可压的部分（未覆盖的减去低水位的尾巴）至少是低水位的一半。一段安静只看一次，再入账才重来。
+  - 压力：入账过的会话一分钟最多查一次，未覆盖的超过高水位就压。
+  - `!compact`。
+  - 启动不扫：一个群重启后入账第一行就回到 historian 眼里，在那之前也没人读它的摘要。
+- **范围**：从 cursor 往后，留出低水位的尾巴，一次最多 24k token（至少一行），更长的分几次。cursor 是最新一条活跃摘要的 `last_message_id`，和 `!clear --all` 的水位取大的，水位之前的消息不进提示，也就不用再压；不含正在跑的 turn 的触发消息及其之后的（capture 开始时查一次，之后开始的 turn 不管）。`!compact` 不留尾巴。
+- **输入**：现在的时间；最近 4 条摘要的 p2（没有 p2 的用 p1）；这一段里的人，`[mention#N] 名字`，Max 标成"就是 Max"，因为 historian 自己不是 Max；这一段消息（和投影一样的行，带 `#id` 和时间）。记忆 v1 不做，所以没有现有记忆。
+- **输出**：JSON，`compartments[{first, last, title, kind, importance, p1, p2, p3}]`，以及记忆提案（v1 不做）。边界由模型定，一段里可以有多个。kind 沿用 Haskell 的六种（max_interaction、ambient、mixed、decision、support、social），导入的摘要不用改。
+- **校验**：按这一段的行序，一段接一段、不重叠、合起来覆盖整段；kind 在六种里；importance 1 到 100；title 40 字、p1 4000 字、p2 1500 字、p3 150 字以内，超了就算错，不截断。失败重试一次：答错了把它的答案和错在哪里一起给回去；调用本身失败就原样再调一次。
+- **discard-last**：至少两个时丢掉最后一个，下次连着后文重读，因为它没有后文、边界不可靠。只有安静触发丢，`!compact` 和压力触发不丢。
+- **发布**：一个事务写 `summaries` 和 `summary_runs`。每次模型调用都记一行 `summary_runs`，失败的也记，带错误；用量照常记在 `llm_usage`，purpose 是 historian。发布不影响正在跑的 turn，它的基础上下文已经固定；下一个 turn 投影时自然读到新摘要。关机时在途的 capture 直接 drop，事务回滚，什么都不留，下次重读。
+- **私聊不写摘要。**
 
 ### 衰减
 
@@ -1005,7 +1013,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 
 ### 命令
 
-- `!compact`：立即 capture 到当前，尾巴留 0。会话 actor 不等 historian：它把请求交出去，在 `side` 里 spawn 一个小任务等回信，拿到结果（压了哪一段、成没成）后，文字输出发回这个会话，和别的命令一样。historian 不认识私聊。
+- `!compact`（群主、管理员）：立即 capture 到当前，尾巴留 0。会话 actor 不等 historian：它把请求交出去，在 `side` 里 spawn 一个小任务等回信，拿到结果后回一句"整理成了 N 段摘要""没有要整理的"或"没整理成"，引用那条命令，和别的命令一样。一次最多 24k token，再长的要发几次。私聊里回"私聊不写摘要"。
 - `!clear --all`：只是消息 id 水位，之前的摘要和消息不进提示。
 
 ### 砍掉的
@@ -1044,7 +1052,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 | turn | `turns`、`turn_snapshots`、`turn_outcomes` | 见 [turn 记录](#turn-记录)。`t#N` 是 `turns.ordinal`，每个会话从 1 数 |
 | | `llm_usage` | turn（可空）、用途（turn、intent、historian、caption）、provider、模型、强度、token（含缓存命中数，按 provider 看命中率、调空闲窗口；还有其中的推理 token）、费用。token 用 bigint；费用 `cost_micros` 是百万分之一美元，用整数，不要 decimal，价格未知时为空 |
 | 上下文 | `summaries` | 见 [summaries 表](#summaries-表) |
-| | `summary_runs` | 每次 historian 运行：输入范围、原始输出、校验错误、用量。有保留期 |
+| | `summary_runs` | historian 的每次模型调用：范围、原因（quiet、pressure、compact）、模型、原始输出、错误。用量在 `llm_usage`。有保留期 |
 | 记忆 | `memories` | v1 不做记忆，表先定：scope（会话或 principal）、类别、内容、importance、status、来源 summary、证据消息范围 |
 
 以后随功能加：`automations`、`stickers`、`lingo_*`、`bungie_*`、`destiny_*`、embedding 表（pgvector）。
@@ -1397,7 +1405,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 | `max-import` | 二进制：旧库导入 | 旧 schema 的代码只在这里，切换后整个删掉 |
 - 依赖只能往下：`qqbot` 和 `max-core` 在底层，互不依赖；`max-db`、`max-llm` 依赖 `max-core`；`max` 依赖全部。QQ 事件到 Node 的映射在 `max` 里，不在 `qqbot`。
 - `max-core` 的依赖白名单写进 CI：`cargo tree -p max-core -e normal` 里只能出现那四个库。CI 再单独跑一次 `cargo check -p max-core`：只构建这一个包时，chrono 的特性不会和 `max` 合并，核心里调 `Utc::now` 就编不过。
-- intent 的状态机和拼分类提示词、解析输出在 `max-core`；分类任务（读库、调小模型）是 `max` 里的 I/O 任务。historian、lingo 这些 worker 在 `max/src/workers/` 下各一个模块，实现 `Derivation`；它们的纯逻辑（切段、范围校验、衰减）放 `max-core`，不起库就能测。
+- intent 的状态机和拼分类提示词、解析输出在 `max-core`；分类任务（读库、调小模型）是 `max` 里的 I/O 任务。historian 在 `max/src/historian.rs`，以后的 worker 也各一个模块；它们的纯逻辑（提示词、范围校验、衰减）放 `max-core`，不起库就能测。
 - 平台适配先不拆出 crate，`max` 大到难受再分。
 - `qqbot` 暂不单独 repo。workspace crate 已经有单独 repo 的全部技术好处；v1 期间协议层的形状还会动，分开只会多一套 PR 流程。要发布时 `cargo publish -p qqbot` 从这个仓库发，path 依赖换成版本号就行。
 - lint 集中在 workspace 的 `[workspace.lints]`；裸 `tokio::spawn` 用 `clippy.toml` 的 `disallowed-methods` 拦。
@@ -1458,7 +1466,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 7. **`max`**（2026-10-29 完成，测试群里实测过）：配置、会话表和会话 actor、I/O 任务、平台 sender 和 `deliveries`、QQ 适配和 `!bind`、命令、intent。做完第一次实机：测试群里纯文字对话，顺便实测 [QQ 官方机器人](#qq-官方机器人)里标了实测的几项。工具在第 9 步之前一律回错误"工具还没接上，现在用不了。"。实测结果：`!bind` 接上测试群；@ 的对话和闲聊经 intent 判定都正常；停服务 2 分钟和 10 分钟，网关都 Resume 上了，停机期间的 @ 补发过来并且回答了。10 分钟那次回答被 QQ 拒了（40034005），被动回复的窗口改成按消息的发送时间算。同一天按 owner 的意思做了一轮减法：核心撞上限就认输，不再交接（见[运行流程](#运行流程)第 4 步）；重启时给宽限期再中断，不再挂起恢复（见[重启](#重启)）；intent 只留去抖、小模型判定和每小时上限（见 [intent](#intent)）；Max 不发表情；Matrix 先不做。这一步定下的：命令输出留在同一个会话（见[出站](#出站)）、命令权限（见[权限](#权限)）、actor 测试用真实时间（见[核心和 actor 的测试](#核心和-actor-的测试)）、一段老记录只接一个群（见 [QQ 官方机器人](#qq-官方机器人)）。tank 上的主模型是经 cliproxy 的 Gemini 3.8 Flash（Chat 协议），intent 用 h610 上的 qwen3.5-4b。
 8. ~~**Matrix**，带加密房间和 `matrix-bootstrap`~~：2026-10-29 删，先不做，见 [Matrix](#matrix)。
 9. **VM、MCP、codemode runner**。先在 tank 上验证 [VM 进程](#vm-进程)里列的几件事。第一个开放的工具是 `context_read`。
-10. **historian**。
+10. **historian**（2026-10-29 做完，还没在 tank 上跑过）：capture、`summary_runs`、一分钟一圈的服务、`!compact`。上线要在配置里加 `[llm] historian`。
 11. ~~**重启恢复**~~：2026-10-29 删，重启时给宽限期再中断，见[重启](#重启)。
 
 ## 上线：drop-in 替换的条件
