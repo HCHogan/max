@@ -1,5 +1,6 @@
 //! How timeline rows look to the model: one line each,
-//! `[HH:MM 名字 #id]: 内容`. The tail, `[新消息]` blocks, intent and
+//! `[HH:MM 名字 #id]: 内容`, with a date line when the day changes and a gap
+//! line after a long silence. The tail, `[新消息]` blocks, intent and
 //! historian all render rows with this, so a row reads the same everywhere.
 //!
 //! Placeholders follow the one grammar the segmenter parses: `[word#id]`,
@@ -7,12 +8,20 @@
 //! for reading only; the segmenter drops them when the model echoes one.
 
 use std::collections::BTreeMap;
+use std::fmt::Write;
 
-use chrono::FixedOffset;
+use chrono::{DateTime, Datelike, FixedOffset, TimeDelta, Utc, Weekday};
 
 use crate::faces;
 use crate::ids::{FaceId, IdentityId, PrincipalId};
 use crate::message::{Card, Content, Emote, MediaKind, MentionTarget, Message, Node, Platform};
+
+/// A silence at least this long gets a gap line.
+const GAP: TimeDelta = TimeDelta::hours(1);
+
+/// Characters of an over-long row the model sees before reaching for
+/// `context_read`.
+pub const EXCERPT_CHARS: usize = 2000;
 
 /// Who is behind an account. The ledger stores accounts; the model sees
 /// people.
@@ -48,8 +57,52 @@ pub struct Render<'a, P> {
 }
 
 impl<P: People> Render<'_, P> {
+    /// Rows in order. `after` is when the row before them was sent, if one
+    /// was already shown, so a date line appears only when the day changes.
+    pub fn lines<'m>(
+        &self,
+        rows: impl IntoIterator<Item = (&'m Message, Mark)>,
+        mut after: Option<DateTime<Utc>>,
+    ) -> String {
+        let mut out = String::new();
+        for (message, mark) in rows {
+            let local = message.at.with_timezone(&self.offset);
+            match after.map(|at| at.with_timezone(&self.offset)) {
+                Some(before) if before.date_naive() == local.date_naive() => {
+                    let gap = message.at - before.to_utc();
+                    if gap >= GAP {
+                        let _ = writeln!(out, "--- 过了 {} 小时 ---", gap.num_hours());
+                    }
+                }
+                _ => {
+                    let date = local.date_naive();
+                    let _ = writeln!(out, "--- {date} {} ---", weekday(date.weekday()));
+                }
+            }
+            out.push_str(&self.line(message, mark));
+            out.push('\n');
+            after = Some(message.at);
+        }
+        out
+    }
+
     pub fn line(&self, message: &Message, mark: Mark) -> String {
         self.header(message, mark) + &self.content(&message.content) + suffix(mark)
+    }
+
+    /// The line cut to [`EXCERPT_CHARS`], pointing at the full text.
+    pub fn excerpt(&self, message: &Message, mark: Mark) -> String {
+        let content: String = self
+            .content(&message.content)
+            .chars()
+            .take(EXCERPT_CHARS)
+            .collect();
+        format!(
+            "{}{content}…（太长，全文见 #{}，用 context_read 读）{}",
+            self.header(message, mark),
+            message.id,
+            suffix(mark)
+        )
     }
 
     fn header(&self, message: &Message, mark: Mark) -> String {
@@ -174,9 +227,21 @@ fn card_line(card: &Card) -> String {
     format!("[card: {}]", parts.join(" | "))
 }
 
+fn weekday(day: Weekday) -> &'static str {
+    match day {
+        Weekday::Mon => "周一",
+        Weekday::Tue => "周二",
+        Weekday::Wed => "周三",
+        Weekday::Thu => "周四",
+        Weekday::Fri => "周五",
+        Weekday::Sat => "周六",
+        Weekday::Sun => "周日",
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
+    use chrono::TimeZone;
     use serde_json::Value;
 
     use super::*;
@@ -377,12 +442,36 @@ mod tests {
             Mark::None,
             Mark::PokesYou,
         ];
-        let render = render(&people);
-        let lines: Vec<_> = rows
-            .iter()
-            .zip(marks)
-            .map(|(row, mark)| render.line(row, mark))
-            .collect();
-        insta::assert_snapshot!(lines.join("\n"));
+        insta::assert_snapshot!(render(&people).lines(rows.iter().zip(marks), None));
+    }
+
+    #[test]
+    fn a_continued_block_repeats_no_date() {
+        let people = people();
+        let row = message(5, (28, 2, 0), "小明", said(vec![text("嗯")]));
+        let before = Utc.with_ymd_and_hms(2026, 10, 28, 1, 30, 0).unwrap();
+        assert_eq!(
+            render(&people).lines([(&row, Mark::None)], Some(before)),
+            "[10:00 小明 #5]: 嗯\n"
+        );
+    }
+
+    #[test]
+    fn excerpt() {
+        let people = people();
+        let long = "长".repeat(EXCERPT_CHARS + 10);
+        let row = message(7, (28, 2, 0), "小明", said(vec![text(&long)]));
+        let line = render(&people).excerpt(&row, Mark::RepliesToYou);
+        assert!(line.starts_with("[10:00 小明 #7 回复你]: 长长"));
+        assert!(line.ends_with("长…（太长，全文见 #7，用 context_read 读）"));
+        assert_eq!(
+            line.split('…')
+                .next()
+                .unwrap()
+                .chars()
+                .filter(|c| *c == '长')
+                .count(),
+            EXCERPT_CHARS
+        );
     }
 }
