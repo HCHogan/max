@@ -1203,7 +1203,7 @@ enum Reason { Direct /* @、回复、私聊白名单 */, Judged { kind: Kind, no
 
 2026-10-28 定：QQ 改用腾讯官方的机器人接口（QQ 开放平台，个人认证，机器人叫 maxx），不再用 NapCat 和 OneBot。原来的 QQ 号当天被腾讯封了；官方接口封的是机器人，不是账号，也不用再维护 NapCat 和扫码登录。老消息照样导入，见[导入](#导入)。下面是 2026-10-28 查文档和用凭证实测的结果，标了"实测"的等适配器能收发后在测试群里验证。
 
-- **连接**：AppID 和 AppSecret 换 access token（`bots.qq.com/app/getAppAccessToken`，有效约两小时，到期前换新）。REST 调用带 `Authorization: QQBot <token>`。事件走 WebSocket 网关，Max 主动连出去，tank 不需要公网入口。网关和 Discord 是一套：Hello 给心跳间隔，Identify 带 token 和 intents，断线后用 session id 和最后的序号 Resume；每天能新建 1500 次会话。不用 Webhook：它要公网 HTTPS 入口，而且和 WebSocket 二选一。
+- **连接**：AppID 和 AppSecret 换 access token（`bots.qq.com/app/getAppAccessToken`，有效约两小时；旧 token 最后一分钟才换得到新的，旧的再多活一分钟，所以到期前 50 秒换）。REST 走 `api.bot.qq.com`（2026-08 起的新域名，老的 `api.sgroup.qq.com` 也还通），调用带 `Authorization: QQBot <token>`；有的错误回 200，所以看 body 里的 `err_code`。事件走 WebSocket 网关，Max 主动连出去，tank 不需要公网入口。网关和 Discord 是一套：Hello 给心跳间隔，Identify 带 token 和 intents，断线后用 session id 和最后的序号 Resume；每天能新建 1500 次会话。不用 Webhook：它要公网 HTTPS 入口，而且和 WebSocket 二选一。2026-10-29 实测：`qqbot` 的 `listen` 例子从 Mac 连上网关，Identify 拿到 READY，心跳正常。
 - **进哪些群**：个人主体的机器人只能由创建者拉进他当群主或管理员的群。2026-10-28 定：只进这样的群，而且群主要在群设置里打开两个开关：
   - "接收群内全部消息"：所有消息都走 `GROUP_MESSAGE_CREATE`，@ Max 的也是，是不是 @ 看 `mentions`。不开只收 @。
   - "机器人主动发言"：Max 随时能发。不开只能在消息到达后 5 分钟内被动回复，每条最多 5 次，跑得久的 turn 发不出去。
@@ -1394,7 +1394,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 
 | crate | 内容 | 拆开的理由 |
 |---|---|---|
-| `qqbot` | QQ 官方机器人接口：token、网关（心跳、Resume、重连）、事件和 REST 的类型、发送和上传。不认识 Max：没有 Node，没有会话 | 依赖方向：协议层不能长成 Max 的形状。也是唯一值得复用的一块 |
+| `qqbot` | QQ 官方机器人接口：token、网关（心跳、Resume、重连）、事件和 REST 的类型、发送和撤回，发图时再加上传。不认识 Max：没有 Node，没有会话 | 依赖方向：协议层不能长成 Max 的形状。也是唯一值得复用的一块 |
 | `max-core` | 所有纯逻辑：Node/Message/Draft/Item 类型、核心和 intent 两个状态机、请求构造、分段器、衰减曲线、historian 输出的校验、给模型看的渲染。只依赖 serde、serde_json、thiserror，以及不开 `clock` 特性的 chrono（渲染 `HH:MM`、换日、间隔标记要用） | 依赖方向：sans-I/O 靠编译器保证 |
 | `max-db` | schema、迁移、全部 sqlx 查询和行类型 | 编译时间；`.sqlx` 离线元数据集中在一处 |
 | `max-llm` | Responses 和 Chat 适配、流式解析、推理透传、多模态降级 | 隔离 async-openai（每月一个破坏性小版本），用录下来的响应单独测 |
@@ -1458,7 +1458,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 1. **骨架**（2026-10-28 完成）：workspace、钉住版本的 `rust-toolchain.toml`、crane 加 devenv（带 Postgres）、检查项（fmt、clippy、nextest、`max-core` 的依赖白名单）。全部检查是 flake 的 `checks`，CI 只跑 `nix flake check --impure`。
 2. **`max-core`**（2026-10-28 完成）：消息类型、渲染、分段器、核心和 intent 两个状态机、投影，全用 fake 测。两个状态机的签名在这一步定下来，写的时候改动的地方已经更新到[核心](#核心)和 [intent](#intent) 两节。
 3. **`max-db`**（2026-10-28 完成）：四个迁移覆盖 v1 表里平台、ledger、turn、用量和摘要几块（媒体和记忆随功能加），以及会话 actor、sender 和恢复要用的查询，全部用 `#[sqlx::test]` 测。写的时候定下的细节已经补进 [schema](#schema)。
-4. **`qqbot`**（2026-10-28 从 `onebot` 改）：token、网关、事件和 REST 的类型、发送，fixture 里用假 openid。
+4. **`qqbot`**（2026-10-28 从 `onebot` 改，10-29 完成）：token、网关、事件和 REST 的类型、发送和撤回，fixture 里用假 openid。网关会话是不做 I/O 的状态机，断线、Resume、僵死连接和各个关闭码都在里面测；驱动用本地 WebSocket 服务测。`listen` 例子只连网关、打印事件，不发消息。
 5. **`max-llm`**：Responses 和 Chat，用录下来的响应测。
 6. **tank 上的 `maxx`**：最小的 NixOS module、库和角色、sops 里的秘密，见[测试环境](#测试环境)。
 7. **`max`**：配置、会话表和会话 actor、I/O 任务、平台 sender 和 `deliveries`、QQ 适配和 `!bind`、命令、intent。做完第一次实机：测试群里纯文字对话，顺便实测 [QQ 官方机器人](#qq-官方机器人)里标了实测的几项。
