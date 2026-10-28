@@ -42,6 +42,9 @@ tokio = "1.54"
 reqwest = { version = "0.13", features = ["json", "stream"] }
 # The gateway's WebSocket client, on the same rustls and system roots.
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+# Splits max-llm's model responses into server-sent events. Only that: the
+# wire types are max-llm's own. 0.2.6 is the one rmcp uses.
+sse-stream = "0.2.6"
 # StreamExt and SinkExt, for the WebSocket stream.
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # Logging from library crates; max sets up the subscriber.
