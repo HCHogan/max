@@ -45,6 +45,7 @@
 
 - iMessage
 - WeChat hook
+- `!uncompact`（2026-10-28 删）：摘要是自动的，手动撤回的部分迟早又被自动压回去，语义别扭。
 - Inbound message hooks：先不做（2026-10-27）。以后要做的话不能放进 VM，因为每条消息都要跑；候选是声明式规则，Rust 的 `regex` 是线性时间的，不怕不可信的正则。
 
 2026-10-26 讨论时只决定带 QQ 和 Matrix，这两个有人用。其余删除项 **待补**。
@@ -969,9 +970,9 @@ Haskell 版尾巴是 W/2，26 万的窗口上约 10 万 token 原始群聊，每
 
 ### historian
 
-- **独立的 actor**（2026-10-27 定）：[派生数据 worker](#三种角色) 之一，services 下的常驻任务，和会话 actor 没有共享状态。它收三种消息：会话 actor 入账后发的"某会话来了一条消息"、`!compact`、`!uncompact`（带回信通道）。自己管每个会话的闲置计时器（tokio-util 的 `DelayQueue`）和在途的 capture；capture 跑在它自己的 `Scope` 里，同时最多几个 **待定**，提议 2。`summaries` 只有它一个写者，所以不需要 cursor 表、staged 状态和 CAS。和主体共用的只有数据库、消息行的渲染函数、token 估算和 LLM 客户端；正在跑的 turn 从 `turns` 表查，不问会话 actor。模型由 `[llm] historian = {model, effort}` 选。
-- **触发**：会话闲置 10 分钟且未覆盖的部分超过最小批量；尾巴超过高水位（热聊中，合并后最多一分钟一次）；`!compact`；启动时扫一遍缺口。
-- **范围**：从 cursor（最新一条活跃摘要的 `last_message_id`）到高水位，留出低水位的尾巴；不含正在跑的 turn 的触发消息及其之后的。`!compact` 不留尾巴。
+- **独立的 actor**（2026-10-27 定）：[派生数据 worker](#三种角色) 之一，services 下的常驻任务，和会话 actor 没有共享状态。它收两种消息：会话 actor 入账后发的"某会话来了一条消息"，带这一行的 token 估算（actor 入账时用同一个渲染函数和估算函数算）；`!compact`，带回信通道。自己管每个会话的闲置计时器（tokio-util 的 `DelayQueue`）、未覆盖部分的 token 数和在途的 capture。token 数在内存里按入账通知累加，发布后和启动扫描时从库里重算，不用每来一条就查库；capture 跑在它自己的 `Scope` 里，同时最多几个 **待定**，提议 2。`summaries` 只有它一个写者，所以不需要 cursor 表、staged 状态和 CAS。和主体共用的只有数据库、消息行的渲染函数、token 估算和 LLM 客户端；正在跑的 turn 从 `turns` 表查，不问会话 actor。模型由 `[llm] historian = {model, effort}` 选。
+- **触发**：会话闲置 10 分钟，且可压的部分（未覆盖的减去低水位的尾巴）够最小批量；尾巴超过高水位（热聊中，合并后最多一分钟一次）；`!compact`；启动时扫一遍缺口。
+- **范围**：从 cursor 往后，留出低水位的尾巴。cursor 是最新一条活跃摘要的 `last_message_id`，和 `!clear --all` 的水位取大的，水位之前的消息不进提示，也就不用再压；不含正在跑的 turn 的触发消息及其之后的。`!compact` 不留尾巴。
 - **输入**：最近 4 条摘要的 p2、现有记忆、这一段消息（带 `#id` 和时间）、本地时间。
 - **输出**：JSON，`compartments[{first, last, title, kind, importance, p1, p2, p3}]`，以及记忆提案（v1 不做）。边界由模型定，一段里可以有多个。
 - **校验**：id 在范围内、连续、不重叠、合起来覆盖整段；各层长度上限。失败重试一次。
@@ -992,12 +993,11 @@ z < Z1 → p1；z < Z2 → p2；z < Z3 → p3；否则归档
 
 ### summaries 表
 
-id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`（取自消息）、title、kind、importance（1–100）、p1、p2、p3、模型、`created_at`、status（active、withdrawn、superseded）、`superseded_by`。活跃的范围不重叠，用排他约束。模型句柄 `summary#<id>`。
+id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`（取自消息）、title、kind、importance（1–100）、p1、p2、p3、模型、`created_at`、status（active、superseded）、`superseded_by`。活跃的范围不重叠，用排他约束。模型句柄 `summary#<id>`。
 
 ### 命令
 
-- `!compact`：立即 capture 到当前，尾巴留 0。
-- `!uncompact`：从最新往前把摘要标 withdrawn，直到尾巴回到低水位。cursor 跟着退。
+- `!compact`：立即 capture 到当前，尾巴留 0。会话 actor 不等 historian：它把请求交出去，在 `side` 里 spawn 一个小任务等回信，拿到结果（压了哪一段、成没成）后，文字输出照常用 `Post` 发到发令人的私聊。historian 不认识私聊。
 - `!clear --all`：只是消息 id 水位，之前的摘要和消息不进提示。
 
 ### 砍掉的
