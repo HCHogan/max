@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{IdentityId, MessageId};
 
+pub mod classify;
+
 /// Why the core was woken.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
