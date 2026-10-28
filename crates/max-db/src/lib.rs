@@ -27,7 +27,10 @@ fn unknown(column: &str, value: &str) -> sqlx::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use sqlx::PgPool;
+    use sqlx::postgres::PgConnectOptions;
 
     #[sqlx::test]
     async fn the_migrations_apply(pool: PgPool) -> sqlx::Result<()> {
@@ -56,5 +59,25 @@ mod tests {
             ]
         );
         Ok(())
+    }
+
+    /// The form the NixOS module writes. With the user before an empty
+    /// host, as in `postgresql://max@/max`, it isn't a URL at all.
+    #[test]
+    fn a_url_for_the_socket() {
+        let options: PgConnectOptions = "postgresql:///maxx?host=/run/postgresql&user=maxx"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            options.get_socket(),
+            Some(&PathBuf::from("/run/postgresql"))
+        );
+        assert_eq!(options.get_username(), "maxx");
+        assert_eq!(options.get_database(), Some("maxx"));
+        assert!(
+            "postgresql://maxx@/maxx?host=/run/postgresql"
+                .parse::<PgConnectOptions>()
+                .is_err()
+        );
     }
 }

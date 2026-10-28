@@ -166,7 +166,7 @@ v1 之后再加的：
 
 ```toml
 [database]
-url = "postgresql://max@/max?host=/run/postgresql"
+url = "postgresql:///max?host=/run/postgresql&user=max"
 
 [platforms.qq]
 app_id_file = "/run/secrets/max/qq-app-id"

@@ -51,7 +51,7 @@ in
 
   config = lib.mkIf cfg.enable {
     services.${name}.settings.database.url =
-      lib.mkDefault "postgresql://${name}@/${name}?host=/run/postgresql";
+      lib.mkDefault "postgresql:///${name}?host=/run/postgresql&user=${name}";
 
     services.postgresql = {
       enable = true;

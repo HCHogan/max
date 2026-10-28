@@ -54,7 +54,8 @@ impl From<Level> for LevelFilter {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Database {
-    /// For example `postgresql://max@/max?host=/run/postgresql`.
+    /// For example `postgresql:///max?host=/run/postgresql&user=max`, over
+    /// the socket. `postgresql://max@/max` isn't a URL: a user needs a host.
     pub url: String,
 }
 
@@ -115,7 +116,7 @@ mod tests {
             level = "debug"
 
             [database]
-            url = "postgresql://maxx@/maxx?host=/run/postgresql"
+            url = "postgresql:///maxx?host=/run/postgresql&user=maxx"
 
             [platforms.qq]
             app_id_file = "/run/secrets/maxx/qq-app-id"
