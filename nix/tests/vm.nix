@@ -33,6 +33,7 @@ pkgs.testers.runNixOSTest {
       };
     };
     services.postgresql.package = pkgs.postgresql_16;
+    boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
   };
   testScript = ''
     machine.wait_for_unit("maxx.service")

@@ -24,6 +24,13 @@ let
     gateway = "${cfg.vm.subnet}.${toString (4 * i + 1)}";
   }) (lib.range 0 (cfg.vm.slots - 1));
   taps = "${name}-vm*";
+  forwards =
+    key:
+    lib.elem (config.boot.kernel.sysctl.${key} or null) [
+      1
+      true
+      "1"
+    ];
 
   # max.service's, and vm-check's, which must run as max does.
   serviceConfig = {
@@ -273,12 +280,20 @@ in
     };
     # A guest reaches the internet and nothing else: not the host, not
     # another guest, not a private network, and only from its own address.
-    boot.kernel.sysctl."net.ipv4.ip_forward" = lib.mkIf vm (lib.mkDefault 1);
     networking.nftables.enable = lib.mkIf vm (lib.mkDefault true);
-    assertions = lib.optional vm {
-      assertion = config.networking.nftables.enable;
-      message = "${name}'s VMs need nftables.";
-    };
+    # Forwarding is the host's to turn on: a sysctl takes one value, and
+    # modules that need it, nat's among them, each set it at a priority
+    # of their own, so a second setter here would clash with one of them.
+    assertions = lib.optionals vm [
+      {
+        assertion = config.networking.nftables.enable;
+        message = "${name}'s VMs need nftables.";
+      }
+      {
+        assertion = forwards "net.ipv4.ip_forward" || forwards "net.ipv4.conf.all.forwarding";
+        message = "${name}'s VMs need IPv4 forwarding: set boot.kernel.sysctl.\"net.ipv4.ip_forward\" = 1.";
+      }
+    ];
     networking.firewall.extraForwardRules = lib.mkIf vm ''
       iifname "${taps}" accept
       oifname "${taps}" ct state { established, related } accept
