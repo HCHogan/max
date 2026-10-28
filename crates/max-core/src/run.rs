@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{CallId, MessageId, PrincipalId, TurnId};
 use crate::intent::Reason;
-use crate::item::{Item, ModelOutput, ModelTag, ToolOutput};
-use crate::tools::{Call, ToolSpec};
+use crate::item::{Item, ItemKind, ModelOutput, ModelTag, ToolOutput};
+use crate::tools::{self, Call, TOOLS, ToolSpec};
 
 /// What a run is allowed: fixed for the turn.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +162,245 @@ pub enum Rejected {
     UnknownCall,
     #[error("only messages and wakes come in through input()")]
     NotAnInput,
+}
+
+/// Tokens counted for a result the core writes itself. They are short, and
+/// the core has no tokenizer.
+const SYNTHESIZED_TOKENS: u32 = 50;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Run {
+    spec: RunSpec,
+    base: Context,
+    base_tokens: u32,
+    first: Vec<Input>,
+    log: Vec<Input>,
+    transcript: Vec<Item>,
+    /// Inputs since the last model call; the next one shows them.
+    pending: Vec<Input>,
+    in_flight: InFlight,
+    /// Well-formed calls from the last model output, not started yet.
+    due: Vec<Call>,
+    /// Started calls without a result.
+    outstanding: Vec<CallId>,
+    /// A model call is needed even without a trigger: at the start, after
+    /// tool results, after a cut-off call.
+    model_due: bool,
+    ended: bool,
+    round: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InFlight {
+    Nothing,
+    Model,
+    Tools,
+}
+
+impl Run {
+    pub fn new(spec: RunSpec, base: Context, first: Vec<Input>) -> Self {
+        let base_tokens = base.items.iter().map(|item| item.tokens).sum();
+        Self {
+            spec,
+            base,
+            base_tokens,
+            first,
+            log: Vec::new(),
+            transcript: Vec::new(),
+            pending: Vec::new(),
+            in_flight: InFlight::Nothing,
+            due: Vec::new(),
+            outstanding: Vec::new(),
+            model_due: true,
+            ended: false,
+            round: 0,
+        }
+    }
+
+    /// A model call or tool batch is in flight. The actor asks for the next
+    /// step only when this is false.
+    pub fn busy(&self) -> bool {
+        self.in_flight != InFlight::Nothing
+    }
+
+    pub fn next_step(&mut self) -> Step {
+        if self.ended || self.busy() {
+            return Step::Idle;
+        }
+        if !self.due.is_empty() {
+            let calls = self.due.clone();
+            self.record(Input::RanTools);
+            return Step::RunTools(calls);
+        }
+        if self.model_due || self.trigger_pending() {
+            self.record(Input::CalledModel);
+            return Step::CallModel(Request {
+                model: self.spec.model.clone(),
+                items: self
+                    .base
+                    .items
+                    .iter()
+                    .chain(&self.transcript)
+                    .cloned()
+                    .collect(),
+                tools: &TOOLS,
+                max_output: self.spec.max_output,
+                roster: self.base.roster.clone(),
+            });
+        }
+        Step::Idle
+    }
+
+    pub fn model_output(&mut self, out: ModelOutput) -> Result<(), Rejected> {
+        self.apply(Input::ModelOutput(out))
+    }
+
+    pub fn tool_result(&mut self, call: CallId, output: ToolOutput) -> Result<(), Rejected> {
+        self.apply(Input::ToolResult { call, output })
+    }
+
+    /// New rows or a wake, at any time. The core decides when they take
+    /// effect: after the tool batch in flight, before the next model call.
+    pub fn input(&mut self, input: Input) -> Result<(), Rejected> {
+        match input {
+            Input::Messages { .. } | Input::Wake(_) => self.apply(input),
+            _ => Err(Rejected::NotAnInput),
+        }
+    }
+
+    fn apply(&mut self, input: Input) -> Result<(), Rejected> {
+        self.check(&input)?;
+        self.record(input);
+        Ok(())
+    }
+
+    fn check(&self, input: &Input) -> Result<(), Rejected> {
+        if self.ended {
+            return Err(Rejected::Ended);
+        }
+        match input {
+            Input::CalledModel | Input::RanTools if self.busy() => Err(Rejected::Busy),
+            Input::CalledModel if !self.due.is_empty() => Err(Rejected::ToolsDue),
+            Input::RanTools if self.due.is_empty() => Err(Rejected::NothingDue),
+            Input::ModelOutput(_) | Input::PartialOutput { .. }
+                if self.in_flight != InFlight::Model =>
+            {
+                Err(Rejected::NoModelCall)
+            }
+            Input::ToolResult { call, .. } if !self.outstanding.contains(call) => {
+                Err(Rejected::UnknownCall)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Applies an input that fits and logs it.
+    fn record(&mut self, input: Input) {
+        match &input {
+            Input::CalledModel => {
+                self.show_pending();
+                self.model_due = false;
+                self.in_flight = InFlight::Model;
+                self.round += 1;
+            }
+            Input::RanTools => {
+                self.outstanding = self.due.drain(..).map(|call| call.id).collect();
+                self.in_flight = InFlight::Tools;
+            }
+            Input::ModelOutput(out) => {
+                self.transcript.extend(out.items.iter().cloned());
+                self.in_flight = InFlight::Nothing;
+                for item in &out.items {
+                    if let ItemKind::ToolCall(call) = &item.kind {
+                        match tools::parse(call) {
+                            Ok(call) => self.due.push(call),
+                            Err(error) => {
+                                self.synthesize(call.id.clone(), error);
+                                self.model_due = true;
+                            }
+                        }
+                    }
+                }
+            }
+            Input::PartialOutput { text, tokens } => {
+                if !text.is_empty() {
+                    let text = text.clone();
+                    self.transcript
+                        .push(Item::new(ItemKind::Assistant { text }, *tokens));
+                }
+                self.in_flight = InFlight::Nothing;
+                self.model_due = true;
+            }
+            Input::ToolResult { call, output } => {
+                self.transcript.push(Item::new(
+                    ItemKind::ToolResult {
+                        call: call.clone(),
+                        output: output.clone(),
+                    },
+                    output.tokens,
+                ));
+                self.outstanding.retain(|id| id != call);
+                if self.outstanding.is_empty() {
+                    self.in_flight = InFlight::Nothing;
+                    self.model_due = true;
+                }
+            }
+            Input::Messages { .. } | Input::Wake(_) => self.pending.push(input.clone()),
+            Input::Interrupt { .. } | Input::Fail { .. } => {
+                let open: Vec<CallId> = self
+                    .outstanding
+                    .drain(..)
+                    .chain(self.due.drain(..).map(|call| call.id))
+                    .collect();
+                for call in open {
+                    self.synthesize(call, "已取消".to_owned());
+                }
+                self.in_flight = InFlight::Nothing;
+                self.ended = true;
+            }
+        }
+        self.log.push(input);
+    }
+
+    /// Puts the waiting inputs into the transcript as one `[新消息]` block.
+    fn show_pending(&mut self) {
+        let items: Vec<&Item> = self
+            .pending
+            .iter()
+            .filter_map(|input| match input {
+                Input::Messages { item, .. } => Some(item),
+                Input::Wake(wake) => wake.item.as_ref(),
+                _ => None,
+            })
+            .collect();
+        if !items.is_empty() {
+            let mut text = "[新消息]".to_owned();
+            for item in &items {
+                if let ItemKind::User { text: line } = &item.kind {
+                    text.push('\n');
+                    text.push_str(line);
+                }
+            }
+            let tokens = items.iter().map(|item| item.tokens).sum();
+            self.transcript
+                .push(Item::new(ItemKind::User { text }, tokens));
+        }
+        self.pending.clear();
+    }
+
+    fn synthesize(&mut self, call: CallId, error: String) {
+        let output = ToolOutput::text(error, true, SYNTHESIZED_TOKENS);
+        self.transcript.push(Item::new(
+            ItemKind::ToolResult { call, output },
+            SYNTHESIZED_TOKENS,
+        ));
+    }
+
+    fn trigger_pending(&self) -> bool {
+        self.pending
+            .iter()
+            .any(|input| matches!(input, Input::Wake(_)))
+    }
 }
 
 #[cfg(test)]
