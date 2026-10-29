@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        with bodies as materialized (\n            select id, last_message_id, lower(concat_ws(E'\\n', title, p1, p2, p3)) as body\n            from summaries\n            where conversation_id = $1 and status = 'active' and last_message_id > $3\n              and ($4::timestamptz is null or ended_at >= $4)\n              and ($5::timestamptz is null or started_at < $5)\n        ), found as materialized (\n            select b.id, b.last_message_id, array(\n                select t.n::int from unnest($2::text[]) with ordinality as t(pattern, n)\n                where b.body like t.pattern\n            ) as terms\n            from bodies b\n            where b.body like any($2)\n        )\n        select id as \"id!\", terms as \"terms!\" from found\n        order by cardinality(terms) desc, last_message_id desc\n        limit $6\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "summaries",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "terms!",
+        "type_info": "Int4Array",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8",
+        "Timestamptz",
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "63fcbe3095f640aef333d8e71a16593c6b232e3b5341ac2674634c8798e12b81"
+}

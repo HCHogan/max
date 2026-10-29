@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update summaries set status = 'superseded', superseded_by = $1 where id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "26af196b12b019155723a487add732a0d1dce261afe6fc1fe78e0f50a43e378f"
+}

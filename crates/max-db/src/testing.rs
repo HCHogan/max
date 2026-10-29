@@ -1,8 +1,11 @@
 //! Fixtures for the database tests: a QQ group with Max and 小明 in it.
 
-use chrono::{DateTime, Utc};
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Offset, Utc};
 use max_core::ids::MessageId;
 use max_core::message::{Content, Node, Platform, Role, Sender};
+use max_core::render::Render;
 use serde_json::json;
 use sqlx::PgConnection;
 
@@ -48,8 +51,8 @@ pub fn said(text: &str) -> Content {
     }
 }
 
-/// Commits a row at `minute`. Someone else's comes with the platform id
-/// `n<minute>`; Max's has none.
+/// Commits a row at `minute`, with its text rendered for search. Someone
+/// else's comes with the platform id `n<minute>`; Max's has none.
 pub async fn commit(
     conn: &mut PgConnection,
     group: &Group,
@@ -59,6 +62,11 @@ pub async fn commit(
 ) -> sqlx::Result<MessageId> {
     let native_id = format!("n{minute}");
     let mine = sender.identity == group.max.identity;
+    let text = Render {
+        people: &BTreeMap::new(),
+        offset: Utc.fix(),
+    }
+    .content(content);
     ledger::insert(
         conn,
         &NewMessage {
@@ -72,7 +80,7 @@ pub async fn commit(
             command: false,
             content,
             raw: &json!({ "message_id": minute }),
-            text: "",
+            text: &text,
             turn: None,
             segment: None,
         },

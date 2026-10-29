@@ -10,6 +10,7 @@ pub mod embeddings;
 pub mod ledger;
 pub mod media;
 pub mod platform;
+pub mod recall;
 pub mod summaries;
 pub mod turns;
 pub mod usage;

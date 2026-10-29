@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "set local plan_cache_mode = force_custom_plan",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "952ccd8b0ca169e72574218956163aa386a3be18e326a6fc8e579837e267091f"
+}
