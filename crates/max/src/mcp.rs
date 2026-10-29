@@ -3,6 +3,7 @@
 
 mod context_read;
 mod service;
+mod web_search;
 
 pub use service::{Grant, Sessions, serve};
 
@@ -18,6 +19,7 @@ use sqlx::PgPool;
 use tracing::warn;
 
 use crate::conversation::Place;
+use crate::search::Search;
 
 /// Where a call comes from: the conversation whose VM the program runs in.
 pub struct Context {
@@ -26,6 +28,8 @@ pub struct Context {
     pub offset: FixedOffset,
     /// The most tokens a page of text holds: the model's cap on one item.
     pub page_tokens: u32,
+    /// None when no search is configured.
+    pub search: Option<Arc<Search>>,
 }
 
 /// A call that failed, as the program sees it.
@@ -55,6 +59,7 @@ impl From<sqlx::Error> for Failure {
 pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
     match name {
         "context_read" => context_read::run(context, args).await,
+        "web_search" => web_search::run(context, args).await,
         _ => Err(Failure::new(
             "unknown_tool",
             format!("没有 {name} 这个工具"),

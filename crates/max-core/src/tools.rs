@@ -45,16 +45,33 @@ pub struct MaxTool {
     pub output: &'static str,
     /// TypeScript, for the system prompt.
     pub declaration: &'static str,
+    /// The most calls one run may make.
+    pub per_run: Option<u32>,
 }
 
-pub const MAX_TOOLS: [MaxTool; 1] = [MaxTool {
-    name: "context_read",
-    description: "读一条消息的全文，一页一页地读。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
-    input: r#"{"type":"object","properties":{"id":{"type":"integer","description":"消息的编号，#123 就是 123"},"page":{"type":"integer","minimum":1,"description":"第几页，默认 1"}},"required":["id"],"additionalProperties":false}"#,
-    output: r#"{"type":"object","properties":{"text":{"type":"string"},"page":{"type":"integer"},"pages":{"type":"integer"}},"required":["text","page","pages"]}"#,
-    declaration: "/** 读一条消息的全文。上下文里太长的消息只有开头，后面写着“全文见 #id”。\n  一页不超过上下文里一条消息的上限，pages 是总页数。 */\n\
+pub const MAX_TOOLS: [MaxTool; 2] = [
+    MaxTool {
+        name: "context_read",
+        description: "读一条消息的全文，一页一页地读。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
+        input: r#"{"type":"object","properties":{"id":{"type":"integer","description":"消息的编号，#123 就是 123"},"page":{"type":"integer","minimum":1,"description":"第几页，默认 1"}},"required":["id"],"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"text":{"type":"string"},"page":{"type":"integer"},"pages":{"type":"integer"}},"required":["text","page","pages"]}"#,
+        declaration: "/** 读一条消息的全文。上下文里太长的消息只有开头，后面写着“全文见 #id”。\n  一页不超过上下文里一条消息的上限，pages 是总页数。 */\n\
         context_read(args: { id: number; page?: number }): Promise<{ text: string; page: number; pages: number }>;",
-}];
+        per_run: None,
+    },
+    MaxTool {
+        name: "web_search",
+        description: "搜索网页，返回前几条结果的标题、链接、摘要和发布日期。",
+        input: r#"{"type":"object","properties":{"query":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1,"maximum":10,"description":"几条，默认 5"}},"required":["query"],"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"results":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"url":{"type":"string"},"snippet":{"type":"string"},"published":{"type":"string","description":"YYYY-MM-DD"}},"required":["title","url","snippet"]}}},"required":["results"]}"#,
+        // Always shown: when the Haskell version kept it in a skill, the model
+        // answered from memory instead, and got plots and prices wrong.
+        declaration: "/** 搜索网页，返回前几条结果的标题、链接、摘要和发布日期（知道的话）。事实、价格、新闻、剧情这类拿不准或可能过时的，先搜再答，别凭记忆。\n  \
+        limit 1 到 10，默认 5。一次运行最多搜 20 次，要搜好几样就 Promise.all。要读全文，用 shell 在 VM 里抓。 */\n\
+        web_search(args: { query: string; limit?: number }): Promise<{ results: { title: string; url: string; snippet: string; published?: string }[] }>;",
+        per_run: Some(20),
+    },
+];
 
 /// A tool call that is well formed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

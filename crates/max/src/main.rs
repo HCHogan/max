@@ -33,6 +33,7 @@ use max::media::fetch;
 use max::media::store::Store;
 use max::qq::{listen, send};
 use max::scope::Scope;
+use max::search::{self, Search};
 use max::table::{self, Me, Table};
 use max::tools;
 use max::vm::Vms;
@@ -128,6 +129,7 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
                 }),
                 offset: config.utc_offset,
                 page_tokens: 2000,
+                search: None,
             })
         };
         let shell = Tool::Shell {
@@ -246,6 +248,13 @@ async fn serve(config: Config) -> Result<()> {
         }
         None => info!("no media directory: media aren't downloaded"),
     }
+    let search = match &config.search {
+        Some(search) => Some(Arc::new(Search::new(search::EXA, search.api_key()?)?)),
+        None => {
+            info!("no search: web_search says so");
+            None
+        }
+    };
     let mut services = Scope::new();
     let vms = match config.vm {
         Some(vm) => Some(Vms::start(vm, &mut services)?),
@@ -266,6 +275,7 @@ async fn serve(config: Config) -> Result<()> {
         historian,
         rows,
         vms,
+        search,
         started: tokio::time::Instant::now(),
     });
     let (intake_tx, intake_rx) = mpsc::unbounded_channel();

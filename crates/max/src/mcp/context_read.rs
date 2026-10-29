@@ -107,6 +107,7 @@ mod tests {
             place,
             offset: offset(),
             page_tokens: 2000,
+            search: None,
         };
 
         let first = run(&context, json!({ "id": id })).await.unwrap();

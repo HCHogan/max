@@ -31,6 +31,7 @@ use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
 use crate::mcp;
 use crate::scope::Scope;
+use crate::search::Search;
 use crate::tokens;
 use crate::vm::Vms;
 use crate::worker::Rows;
@@ -52,6 +53,8 @@ pub struct Shared {
     pub rows: Rows,
     /// None when no VMs are configured: the tools say so.
     pub vms: Option<Vms>,
+    /// For `web_search`; None when it isn't configured.
+    pub search: Option<Arc<Search>>,
     /// When Max started, for `/status`.
     pub started: Instant,
 }
@@ -461,6 +464,7 @@ impl Conversation {
                             place: Arc::clone(&self.place),
                             offset: self.shared.offset,
                             page_tokens: Budgets::for_window(a.chosen.window).single,
+                            search: self.shared.search.clone(),
                         };
                         let mailbox = self.mailbox.clone();
                         a.io.spawn(move |_| tool::call(vms, context, call, task, mailbox));

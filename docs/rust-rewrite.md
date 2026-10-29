@@ -1406,7 +1406,7 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
 ### 网页搜索
 
-2026-10-29 定，排在媒体第 1 小步之后（owner 选的）。
+2026-10-29 定，排在媒体第 1 小步之后（owner 选的）。`web_search` 当天做完：配置 `[search] api_key_file`，不配就回 `unavailable`；所有群合计同时最多 4 个搜索；没有单独的超时，MCP 执行器的 60 秒管着；每个 Max 工具可以声明一次运行最多调几次（`per_run`），超了回 `too_many`。
 
 - **`web_search(query, limit?)`**：Max 的工具，宿主上经 MCP 调 Exa 的 REST 接口（`type: auto`，带 highlights），key 留在宿主，sops 里沿用 Haskell 版的 `search-exa-api-key`。返回前几条的标题、链接、摘要和发布时间，`limit` 1 到 10，默认 5；标题 200 字、摘要 800 字封顶。失败回 `{code, message}`，不做 Haskell 版那套免 key 的 MCP 优先、冷却和重试。一次运行最多调 20 次。Exa 走 tank 的日本出口，中文结果一般；以后不够用，在同一个签名后面换博查或智谱，它们国内直连。
 - 工具常驻在系统提示的声明里，不藏进 skill：Haskell 版藏进 `web` skill 以后，模型不搜了，凭记忆答错剧情和价格（a51424d）。
@@ -1526,7 +1526,8 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 9. **VM、MCP、codemode runner**。[VM 进程](#vm-进程)里要先在 tank 上验证的几件事 2026-10-29 验证完了。同一天做完第一段：VM 服务、`shell` 工具、module 里的 tap、nft 和加固，`max vm-check` 和嵌套的 NixOS 测试，测试在 tank 上通过。地址改走内核命令行，不用 DHCP。部署到 tank 后在测试群里实测过：模型调 `shell`，群的 VM 3 秒多起好，结果回到模型。第一次没调成，因为系统提示里还留着第 7 步那句"工具还没接上，别调用"。同一天按 owner 的意思，提示词里改叫 maxx（以前叫 Max）。tank 上的 Haskell 版同日删掉，数据留给导入。第二段同日做完：MCP 服务、guest 里的 runner、`run_code` 和第一个开放的工具 `context_read`，做法见 [MCP 通道](#mcp-通道)。runner 的测试在本机用 Node 跑，接真的 MCP 服务；嵌套测试里 `vm-check` 跑一个程序，经 MCP 服务查到数据库。
 10. **historian**（2026-10-29 做完）：capture、`summary_runs`、`/compact`，当天挪到 worker 驱动器上。tank 上配了 `[llm] historian`，到 10-29 一次都还没跑：两个群一共一百来条消息，没到水位，也没人 `/compact`。
 11. ~~**重启恢复**~~：2026-10-29 删，重启时给宽限期再中断，见[重启](#重启)。
-12. **媒体**（2026-10-29 开始）：v1 之后第一块，分四小步，见[媒体](#媒体)。
+12. **媒体**（2026-10-29 开始）：v1 之后第一块，分四小步，见[媒体](#媒体)。第 1 小步当天做完、上了 tank，测试群里的一张图入账后半秒内下载好。
+13. **网页搜索**（2026-10-29 开始，插在媒体第 1 小步之后）：`web_search` 和 VM 里的 `webread`，见[网页搜索](#网页搜索)。
 
 ## 上线：drop-in 替换的条件
 

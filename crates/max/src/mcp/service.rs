@@ -41,6 +41,8 @@ struct Session {
     slots: Semaphore,
     /// Per tool: calls that succeeded, and that failed.
     calls: Mutex<BTreeMap<String, (u32, u32)>>,
+    /// Per tool with a cap: calls started.
+    started: Mutex<HashMap<&'static str, u32>>,
 }
 
 /// An open session. Dropping it closes the session: the token stops
@@ -64,6 +66,7 @@ impl Sessions {
             closed: CancellationToken::new(),
             slots: Semaphore::new(CALLS_AT_ONCE),
             calls: Mutex::default(),
+            started: Mutex::default(),
         });
         self.table().insert(token.clone(), Arc::clone(&session));
         Grant {
@@ -183,7 +186,9 @@ impl ServerHandler for Handler {
     ) -> Result<CallToolResponse, ErrorData> {
         let session = self.session(&request)?;
         let args = Value::Object(call.arguments.unwrap_or_default());
-        let outcome = tokio::select! {
+        let outcome = match session.start(&call.name) {
+            Err(failure) => Err(failure),
+            Ok(()) => tokio::select! {
             outcome = async {
                 let _slot = session.slots.acquire().await;
                 timeout(CALL_TIME, super::call(&call.name, &session.context, args)).await
@@ -193,6 +198,7 @@ impl ServerHandler for Handler {
             ))),
             () = session.closed.cancelled() => Err(Failure::new("closed", "这次运行已经结束了")),
             () = request.ct.cancelled() => Err(Failure::new("cancelled", "调用取消了")),
+            },
         };
         let mut calls = session.calls.lock().unwrap_or_else(PoisonError::into_inner);
         let (succeeded, failed) = calls.entry(call.name.to_string()).or_default();
@@ -207,6 +213,30 @@ impl ServerHandler for Handler {
             }
         };
         Ok(result.into())
+    }
+}
+
+impl Session {
+    /// Counts a call against its tool's cap, if it has one and the run
+    /// hasn't reached it.
+    fn start(&self, name: &str) -> Result<(), Failure> {
+        let Some((name, most)) = MAX_TOOLS
+            .iter()
+            .find(|tool| tool.name == name)
+            .and_then(|tool| tool.per_run.map(|most| (tool.name, most)))
+        else {
+            return Ok(());
+        };
+        let mut started = self.started.lock().unwrap_or_else(PoisonError::into_inner);
+        let count = started.entry(name).or_default();
+        if *count >= most {
+            return Err(Failure::new(
+                "too_many",
+                format!("一次运行最多调 {most} 次 {name}"),
+            ));
+        }
+        *count += 1;
+        Ok(())
     }
 }
 
@@ -285,6 +315,7 @@ mod tests {
             place,
             offset: offset(),
             page_tokens: 2000,
+            search: None,
         });
 
         let dir = std::env::temp_dir().join(format!("max-mcp-{}", std::process::id()));
@@ -333,6 +364,47 @@ mod tests {
         assert!(refused(
             &post(&socket, &token, "tools/list", json!({})).await
         ));
+
+        scope.close(Duration::from_secs(5)).await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[sqlx::test(migrator = "max_db::MIGRATOR")]
+    async fn a_capped_tool_stops_at_its_cap(pool: PgPool) {
+        let mut conn = pool.acquire().await.unwrap();
+        let place = Arc::new(group(&mut conn).await);
+        drop(conn);
+        let conversation = place.conversation;
+        let sessions = Sessions::default();
+        let grant = sessions.open(Context {
+            pool,
+            place,
+            offset: offset(),
+            page_tokens: 2000,
+            search: None,
+        });
+        let dir = std::env::temp_dir().join(format!("max-mcp-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("mine.sock");
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        let mut scope = Scope::new();
+        let served = sessions.clone();
+        scope.spawn(move |stop| serve(listener, conversation, served, stop));
+
+        let search = json!({ "name": "web_search", "arguments": { "query": "示波器" } });
+        let code = async || {
+            let result = post(&socket, grant.token(), "tools/call", search.clone()).await;
+            result["structuredContent"]["code"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        for _ in 0..20 {
+            assert_eq!(code().await, "unavailable", "no search here");
+        }
+        assert_eq!(code().await, "too_many");
+        assert_eq!(grant.calls()["web_search"], (0, 21));
 
         scope.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(dir);

@@ -82,6 +82,7 @@ mod tests {
         assert!(prompt.starts_with("你是测试用的人设。\n\n对话场景："));
         assert!(prompt.contains("[reply#id]"));
         assert!(system(PERSONA).contains("鲨鱼女孩"));
-        assert!(prompt.ends_with(&format!("{}\n", MAX_TOOLS[0].declaration)));
+        let last = MAX_TOOLS.last().unwrap().declaration;
+        assert!(prompt.ends_with(&format!("{last}\n")));
     }
 }

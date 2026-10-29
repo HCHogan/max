@@ -33,6 +33,21 @@ pub struct Config {
     /// Without it, media aren't downloaded and the model sees only what
     /// QQ said about them.
     pub media: Option<Media>,
+    /// Without it, `web_search` tells the program there is none.
+    pub search: Option<Search>,
+}
+
+/// Web search, through Exa; see "网页搜索".
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Search {
+    pub api_key_file: PathBuf,
+}
+
+impl Search {
+    pub fn api_key(&self) -> Result<String> {
+        secret(&self.api_key_file)
+    }
 }
 
 /// Where downloaded media go; see "媒体".
@@ -438,9 +453,17 @@ mod tests {
 
             [media]
             dir = "/var/lib/maxx/media"
+
+            [search]
+            api_key_file = "/run/secrets/maxx/exa-api-key"
             "#,
         )
         .unwrap();
+        let search = config.search.as_ref().unwrap();
+        assert_eq!(
+            search.api_key_file,
+            Path::new("/run/secrets/maxx/exa-api-key")
+        );
         assert_eq!(config.log.level, Level::Debug);
         assert_eq!(config.media.unwrap().dir, Path::new("/var/lib/maxx/media"));
         assert_eq!(config.utc_offset.local_minus_utc(), 9 * 3600);
