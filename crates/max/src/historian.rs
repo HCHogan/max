@@ -21,7 +21,9 @@ use max_core::project::{self, Budgets};
 use max_core::render::Render;
 use max_core::run::Request;
 use max_db::summaries::{self, Reason, Run};
+use max_db::vectors::Key;
 use max_db::{PgPool, ledger, platform, turns, usage};
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::{info, warn};
 
 use crate::conversation::Place;
@@ -49,6 +51,8 @@ pub struct Historian {
     /// The historian's model.
     pub chosen: Chosen,
     pub offset: FixedOffset,
+    /// Where each summary published goes next: the recall vector worker.
+    pub published: Option<UnboundedSender<Key>>,
 }
 
 /// What a capture came to.
@@ -155,8 +159,13 @@ impl Historian {
                         .into_iter()
                         .map(|compartment| written(compartment, &times))
                         .collect();
-                    summaries::publish(&mut conn, &run, &written).await?;
-                    info!(%conversation, ?reason, published = written.len(), "summarized");
+                    let ids = summaries::publish(&mut conn, &run, &written).await?;
+                    info!(%conversation, ?reason, published = ids.len(), "summarized");
+                    if let Some(next) = &self.published {
+                        for id in &ids {
+                            let _ = next.send(Key::Summary(*id));
+                        }
+                    }
                     return Ok(Captured::Published(written.len()));
                 }
                 Err(failed) => {

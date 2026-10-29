@@ -77,6 +77,7 @@ fn historian(pool: &PgPool, script: &Arc<Script>) -> Historian {
         chosen: models.historian().unwrap().unwrap(),
         models,
         offset: offset(),
+        published: None,
     }
 }
 
@@ -124,7 +125,11 @@ async fn a_quiet_group_with_little_said_is_left_alone(pool: PgPool) {
 async fn a_wrong_answer_is_shown_back_once(pool: PgPool) {
     let script = Arc::new(Script::default());
     let (place, ids) = chatter(&pool, 20).await;
-    let historian = historian(&pool, &script);
+    let (next, mut published) = tokio::sync::mpsc::unbounded_channel();
+    let historian = Historian {
+        published: Some(next),
+        ..historian(&pool, &script)
+    };
     script.push(Answer::says("算了"));
     script.push(Answer::says("还是算了"));
     assert!(historian.capture(&place, Reason::Quiet).await.is_err());
@@ -149,6 +154,9 @@ async fn a_wrong_answer_is_shown_back_once(pool: PgPool) {
     script.push(answer(&[(ids[0], middle), (after, MessageId(last))]));
     let captured = historian.capture(&place, Reason::Quiet).await.unwrap();
     assert_eq!(captured, Captured::Published(1));
+    // It goes on to the recall vector worker.
+    assert!(matches!(published.try_recv(), Ok(Key::Summary(_))));
+    assert!(published.try_recv().is_err());
     let published = active(&pool, &place).await;
     assert_eq!((published[0].first, published[0].last), (ids[0], middle));
     assert_eq!(published[0].started_at, at(0));

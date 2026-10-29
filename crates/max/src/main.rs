@@ -39,6 +39,7 @@ use max::media::store::Store;
 use max::qq::admin::Admin;
 use max::qq::avatar::Avatars;
 use max::qq::{listen, send};
+use max::recall::Vectors;
 use max::scope::Scope;
 use max::search::{self, Search};
 use max::table::{self, Me, Table};
@@ -256,25 +257,6 @@ async fn serve(config: Config) -> Result<()> {
     table::close_unfinished(&pool).await?;
     let owners = owners(&pool, &config).await?;
 
-    let mut rows = Rows::default();
-    let mut historians = Scope::new();
-    let historian = match models.historian().transpose()? {
-        Some(chosen) => {
-            let historian = Historian {
-                pool: pool.clone(),
-                models: Arc::clone(&models),
-                chosen,
-                offset: config.utc_offset,
-            };
-            let (notices, rx) = rows.subscribe();
-            historians.spawn(move |stop| historian::run(historian, rx, stop));
-            Some(notices)
-        }
-        None => {
-            info!("no historian model: nothing is summarized");
-            None
-        }
-    };
     let mut workers = Scope::new();
     let embedder = match &config.embedding {
         Some(embedding) => {
@@ -283,7 +265,40 @@ async fn serve(config: Config) -> Result<()> {
             Some(Arc::new(Embedder::new(&embedding.base_url, model, key)?))
         }
         None => {
-            info!("no embedding model: stickers aren't embedded, and find_stickers says so");
+            info!(
+                "no embedding model: find_stickers says so, and context_search matches words only"
+            );
+            None
+        }
+    };
+    // Each committed row comes to the recall vector worker, and each
+    // summary the historian publishes.
+    let mut rows = Rows::default();
+    let vectors = embedder.as_ref().map(|embedder| {
+        let worker = Vectors {
+            pool: pool.clone(),
+            embedder: Arc::clone(embedder),
+        };
+        let (tx, rx) = rows.subscribe();
+        workers.spawn(move |stop| worker.run(rx, stop));
+        tx
+    });
+    let mut historians = Scope::new();
+    let historian = match models.historian().transpose()? {
+        Some(chosen) => {
+            let historian = Historian {
+                pool: pool.clone(),
+                models: Arc::clone(&models),
+                chosen,
+                offset: config.utc_offset,
+                published: vectors.clone(),
+            };
+            let (notices, rx) = rows.subscribe();
+            historians.spawn(move |stop| historian::run(historian, rx, stop));
+            Some(notices)
+        }
+        None => {
+            info!("no historian model: nothing is summarized");
             None
         }
     };

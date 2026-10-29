@@ -20,6 +20,7 @@ pub mod llm;
 pub mod mcp;
 pub mod media;
 pub mod qq;
+pub mod recall;
 pub mod scope;
 pub mod search;
 pub mod table;
