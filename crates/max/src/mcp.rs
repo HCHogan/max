@@ -1,6 +1,7 @@
 //! Max's tools, which programs in a group's VM call through the MCP
 //! service; see "MCP 通道". max-core's `MAX_TOOLS` declares them.
 
+mod chat_file;
 mod context_read;
 mod context_search;
 mod find_stickers;

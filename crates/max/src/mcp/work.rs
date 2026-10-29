@@ -35,9 +35,9 @@ pub(super) fn beneath_work(path: &str) -> Result<PathBuf, Failure> {
     Ok(relative)
 }
 
-/// Reads `relative` under `work`, at most `most` bytes, opening one component at a time
-/// without following a symlink: the guest writes /work, and a link there
-/// would point into the host. Blocking.
+/// Reads `relative` under `work`, at most `most` bytes, opening one
+/// component at a time without following a symlink: the guest writes
+/// /work, and a link there would point into the host. Blocking.
 pub(super) fn read(work: &Path, relative: &Path, most: u64) -> Result<Vec<u8>, Failure> {
     let shown = Path::new("/work").join(relative).display().to_string();
     let failed = |errno: Errno| match errno {
@@ -82,6 +82,49 @@ pub(super) fn read(work: &Path, relative: &Path, most: u64) -> Result<Vec<u8>, F
         return Err(too_big());
     }
     Ok(bytes)
+}
+
+/// Copies the host's file `from` to `dir/name` under `work`, making `dir`
+/// if it isn't there and replacing what is at `name`. It goes to a new
+/// file first and is renamed into place, all through descriptors opened
+/// without following a symlink, so no link the guest puts in /work sends
+/// it into the host. Blocking.
+pub(super) fn put(work: &Path, dir: &str, name: &str, from: &Path) -> Result<(), Failure> {
+    let shown = format!("/work/{dir}/{name}");
+    let failed = |errno: Errno| match errno {
+        Errno::LOOP | Errno::NOTDIR | Errno::MLINK => {
+            Failure::new("bad_path", format!("/work/{dir} 不是目录，或者是符号链接"))
+        }
+        Errno::ISDIR | Errno::NOTEMPTY | Errno::EXIST => {
+            Failure::new("bad_path", format!("{shown} 是个目录"))
+        }
+        errno => Failure::new("unwritable", format!("写不了 {shown}：{errno}")),
+    };
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::DIRECTORY;
+    let work = rustix::fs::open(work, flags, Mode::empty()).map_err(failed)?;
+    match rustix::fs::mkdirat(&work, dir, Mode::from_raw_mode(0o755)) {
+        Ok(()) | Err(Errno::EXIST) => {}
+        Err(errno) => return Err(failed(errno)),
+    }
+    let dir = rustix::fs::openat(&work, dir, flags, Mode::empty()).map_err(failed)?;
+    let temporary = format!(".{:016x}.part", rand::random::<u64>());
+    let created =
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let file = rustix::fs::openat(&dir, &temporary, created, Mode::from_raw_mode(0o644))
+        .map_err(failed)?;
+    let copied =
+        File::open(from).and_then(|mut source| std::io::copy(&mut source, &mut File::from(file)));
+    let renamed = match copied {
+        Ok(_) => rustix::fs::renameat(&dir, &temporary, &dir, name).map_err(failed),
+        Err(error) => Err(Failure::new(
+            "unwritable",
+            format!("写不了 {shown}：{error}"),
+        )),
+    };
+    if renamed.is_err() {
+        let _ = rustix::fs::unlinkat(&dir, &temporary, rustix::fs::AtFlags::empty());
+    }
+    renamed
 }
 
 #[cfg(test)]

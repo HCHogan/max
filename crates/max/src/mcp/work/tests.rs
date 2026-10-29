@@ -60,3 +60,58 @@ fn symlinks_and_big_files_are_refused() {
     assert_eq!(code("big.png"), "too_big");
     assert_eq!(code("charts/b.png"), "not_found");
 }
+
+#[test]
+fn files_are_put_in_place() {
+    let scratch = Scratch::new();
+    let work = scratch.0.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let from = scratch.0.join("stored");
+    std::fs::write(&from, b"%PDF").unwrap();
+    let listed = |dir: &Path| -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+
+    // The directory is made, and the file put there again replaces it.
+    put(&work, "chat", "1.0-周报.pdf", &from).unwrap();
+    std::fs::write(&from, b"%PDF-1.4").unwrap();
+    put(&work, "chat", "1.0-周报.pdf", &from).unwrap();
+    assert_eq!(
+        std::fs::read(work.join("chat/1.0-周报.pdf")).unwrap(),
+        b"%PDF-1.4"
+    );
+    assert_eq!(listed(&work.join("chat")), ["1.0-周报.pdf"]);
+
+    // A link in its place is replaced, not followed.
+    let outside = scratch.0.join("host.txt");
+    std::fs::write(&outside, b"host").unwrap();
+    std::os::unix::fs::symlink(&outside, work.join("chat/2.0.txt")).unwrap();
+    put(&work, "chat", "2.0.txt", &from).unwrap();
+    assert_eq!(std::fs::read(&outside).unwrap(), b"host");
+    assert!(!work.join("chat/2.0.txt").is_symlink());
+
+    // The directory a link to the host: nothing is written there.
+    let host = scratch.0.join("host");
+    std::fs::create_dir_all(&host).unwrap();
+    std::os::unix::fs::symlink(&host, work.join("linked")).unwrap();
+    assert_eq!(
+        put(&work, "linked", "3.0.txt", &from).unwrap_err().code,
+        "bad_path"
+    );
+    assert!(listed(&host).is_empty());
+    // A directory where the file goes is left alone.
+    std::fs::create_dir_all(work.join("chat/4.0.txt/inside")).unwrap();
+    assert_eq!(
+        put(&work, "chat", "4.0.txt", &from).unwrap_err().code,
+        "bad_path"
+    );
+    assert_eq!(
+        listed(&work.join("chat")),
+        ["1.0-周报.pdf", "2.0.txt", "4.0.txt"]
+    );
+}

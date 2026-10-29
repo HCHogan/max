@@ -1054,7 +1054,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 
 - **节点和句柄**：入站时 QQ 附件的下载地址写进节点，`Media { media: Some(Remote(url)) }`。ledger 只追加，下载的结果记在 `message_media`（消息、序号、sha256）。序号是这条消息里第几个媒体，从 0 数；给模型的句柄是 `image#消息id.序号`，`video#`、`audio#`、`file#` 同理。Haskell 版的 `[image#id]` 指的是消息，不是哪张图，一条消息最多 20 个媒体，后来才改成两段（ADR 004）。
 - **内容库**：`/var/lib/maxx/media/objects/<sha256 前两位>/<sha256>`，只读权限，先写临时文件再 rename，已有的不再写。和 Haskell 版同一种布局，导入时直接搬。不做 GC。
-- **下载**：一个[派生数据 worker](#三种角色)，入账通知触发，同时最多 4 个下载，每个 60 秒超时，单个超过 64 MiB 的只记元数据、不下。失败重试两次（1 秒、4 秒）就放弃，只记日志，不留失败表。启动时只补最近 1 小时没下完的：QQ 的地址会过期，Haskell 版每次重启都把几百个过期链接重排一遍，刷半小时警告（9f27fa7）。图、表情包、视频、语音、文件都下，`/chat` 和以后的工具要用。
+- **下载**：一个[派生数据 worker](#三种角色)，入账通知触发，同时最多 4 个下载，每个 60 秒超时，单个超过 64 MiB 的只记元数据、不下。失败重试两次（1 秒、4 秒）就放弃，只记日志，不留失败表。启动时只补最近 1 小时没下完的：QQ 的地址会过期，Haskell 版每次重启都把几百个过期链接重排一遍，刷半小时警告（9f27fa7）。图、表情包、视频、语音、文件都下，[读文件](#读文件)和以后的工具要用。
 - **给模型的版本**：下载时做一次，`media` 里记它的 sha256。长边超过 1568 像素或者超过 1 MiB 的图，重编码成长边 1568 的 JPEG；GIF 取第一帧；其它用原图。Haskell 版一开始发多 MB 的原图，base64 纯属浪费（0a2addb）。
 - **caption**：配置 `[llm] caption`，没配就不写；这个模型要能看图。存在它自己的 `media_captions` 表里，`media` 是下载 worker 的。下载 worker 存好一张图（有给模型的版本）就交给它；启动时的扫描只补 14 天内第一次见到、还没写的。按 sha256 一张一个，表情包重发不重写（975eb59）。每次调用 2 分钟超时，同时最多 2 个，用量记成 `caption`。一到两句中文，截图说明是什么、关键文字原样摘录，存 300 字以内。失败两次就放弃，记成空 caption，不再试。视频、文件不写；语音用腾讯给的识别文本。表情包另用一个提示词（2026-10-29 加，沿用 Haskell 版）：写它是什么、适合什么时候用，比如"翻白眼的猫，表示无语"；不像表情包的（私人照片、截图）判 SKIP，不进[表情包库](#发图)。同一个 sha256 只写一次，提示词按第一次见到时的种类选。
 - **模型看到的**：
@@ -1063,7 +1063,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
   - 不支持看不了图的模型（2026-10-29 owner 定）：Max 用的模型都当作能看图，不设 `input` 配置，也不做纯文字的降级。意图分类和 historian 只读文字，不受影响。
   - 想看历史里的图，在程序里调 `max.image('image#123.0')`（还没做，现在只收 `/work` 下的文件），见[多模态结果](#多模态结果)。
 - **请求里**：条目只存引用（原则 7）。`User` 条目带一个 `images` 列表，每项是"哪条消息的第几个媒体"，不是 sha256：消息一入账就要展示，那时图通常还没下完。每次调模型前，`max` 查 `message_media` 和 `media` 找到给模型的版本，从内容库读出来，编成 base64 的 data URL 交给 `max-llm`。Responses 降成 `input_image`，Chat 降成 `image_url`，每张前面一段文字写句柄。入账不到 10 秒、还没下完的图就等它，在调模型的任务里等，不卡会话 actor；更早的、下不来的、读不出的直接不发，只记警告，句柄还在文字里。不传 QQ 的地址，它会过期，provider 也未必访问得到。
-- **`/chat`**：VM 里只读挂一个这个会话的媒体视图，`/chat/<消息id>.<序号>.<扩展名>`，硬链接到内容库，下载时建，起 VM 时补齐。
+- **`/chat`**：原打算在 VM 里只读挂一个这个会话的媒体视图，硬链接到内容库；2026-10-29 改成程序按句柄拷进 `/work/chat`，见[读文件](#读文件)。
 
 分六小步做（2026-10-29 加了第 4、5 步）：
 
@@ -1072,7 +1072,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 3. caption worker，表情包另用一个提示词；导入老的图片描述和表情包。2026-10-29 上线：模型是经 cliproxy 的 GPT-5.6 Luna，effort low；老描述在新 maxx 启动前导好（图 21,040、表情包 3,421，其中 94 个 SKIP），启动扫描补了最近 14 天漏掉的 10 张。
 4. 发图：qqbot 的上传，sender 发图和 `file_info` 缓存，分段器留下句柄、入账时解析，`send_image`。2026-10-29 上线，群里实测：回复里写句柄发出了 JPEG 和 GIF 表情包（GIF 会动），`send_image` 发出了 VM 里画的 PNG，带说明文字。
 5. 表情包库：embedding 和 `find_stickers`。2026-10-29 做完，见[发图](#发图)的 `max.find_stickers`。
-6. `/chat` 和 `max.image()`。`max.image()` 收 `/work` 下的图，2026-10-29 做完；`/chat` 和消息句柄还没做。
+6. 读记录里的媒体和 `max.image()`。`max.image()` 收 `/work` 下的图，2026-10-29 做完；`/chat` 换成了 `max.file()`，同一天做完，见[读文件](#读文件)。`max.image()` 收消息句柄还没做，先 `max.file()` 拷出来再交路径。
 
 ### 发图
 
@@ -1098,6 +1098,16 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 - **`max.send_file({ path, name? })`**：发 VM 里的文件，比如生成的文档、表格、PDF、压缩包。和 `send_image` 一样在宿主上从这个群的 `/work` 读，不跟符号链接；空文件不发；最大 64 MiB，和下载的上限一样：QQ 收到 200 MiB，但一次调用只有 60 秒，10-29 从 tank 传 32 MiB 用了 14 秒。`name` 是群里显示的文件名，默认用路径里的；去掉首尾空白，不能有 `/`、`\` 和控制字符，最长 100 字。存进内容库、写 `media`（不记 mime），经 `Post` 入账成 Max 的一条消息，节点是带名字的文件媒体（`DraftNode::File`），等 sender 回信，返回 `file#id.0`。每次运行最多 5 个。有副作用，后台 job 不开放。
 - **sender**：按名字上传成 `file_type = 4`，消息不带 `content`。
 - 记录里已有的文件还不能写句柄再发：分段器只认图和表情包的句柄。私聊里发文件没试过。
+
+### 读文件
+
+2026-10-29 加（owner 要的）。原计划是在 VM 里只读挂一个 `/chat`，硬链接到内容库。改成按需拷：不用再起一个 virtiofsd、不用改 guest；硬链接还有个坑，guest 的 root 在 virtiofs 上就是 `maxx`，挂成可写的话能 chmod、改写内容库里同一个 inode。
+
+- **`await max.file(handle)`**：SDK 函数，和 `max.image` 一样不是 Max 的工具，不算进"调了 Max 的工具"，也不限次数。runner 发 MCP 调用 `max.file`，宿主按句柄查 `message_media`。句柄写 `file#123.0`，记录里显示的 `[file#123.0: 名字]` 也认；图、表情包、视频、语音的句柄也行。只认本会话的、下载下来了的（64 MiB 以内），拷到 `/work/chat/`，返回 `{ path, name, size }`。
+  - 有文件名的叫 `<消息id>.<序号>-<文件名>`：文件名是群友起的，`/`、`\`、控制字符换成 `_`，最多留 150 字节。
+  - 别的叫 `<消息id>.<序号>.<扩展名>`，扩展名按 mime 取，`image/jpeg` 是 `jpg`，短的子类型照用，别的不加。
+- **写进 /work**：guest 能在 `/work` 里放符号链接，宿主写的时候不能跟。不跟链接地打开 `/work`，建或打开 `chat`，在里面先写临时文件，再 rename 到位。`chat` 是链接、目标是目录，都报 `bad_path`；目标位置原来是链接，换掉的是链接本身。同一个文件再拿一次就再拷一次。
+- 不清理：`/work/chat` 里是普通文件，程序自己删。
 
 ## schema
 
@@ -1397,7 +1407,7 @@ struct Verdict { trigger: bool, reason: String }
 
 程序跑在群 VM 里的 Node 上，不用进程内的 JS 引擎（Haskell 版是 wasmtime 里的 QuickJS）。好处：
 
-- 和后台 pi 共享 `/work`，交接任务只要留文件；能直接读 `/chat` 里的图片和文件。
+- 和后台 pi 共享 `/work`，交接任务只要留文件；群里的图片和文件用 `max.file()` 拷进 `/work/chat` 再读，见[读文件](#读文件)。
 - 浏览器直接写 Playwright，见[浏览器](#浏览器)。
 - Max 不用维护 JS 引擎、单步协议和 ABI。
 
@@ -1423,7 +1433,7 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
   - 一个 oneshot unit `maxx-taps` 用 `ip tuntap` 预建一组 tap（数量是配置，默认 32），属主 `maxx`，开多队列和 vnet header。不用 systemd-networkd：module 不替宿主选网络栈。这个 unit 停了 tap 还在，重启它不会断开在跑的 VM。
   - 每个 tap 是自己的 /30（默认从 `10.235.0.0/24` 里切）：宿主一端是 `.1`，guest 是 `.2`，所有 VM 用同一个 MAC。地址不用 DHCP（2026-10-29 改，原先 2026-10-27 定的是 DHCP）：主进程起 VM 时把 `max.ip`、`max.gateway`、`max.dns` 和这次开机的 SSH 公钥 `max.key` 加在 guest 的内核命令行上，guest 里一个 oneshot 在网络起来之前读出来配好。宿主上不用跑 DHCP，也不用为 DNS 和公钥另开一个共享目录。
   - tap 之间不桥接，VM 互相不通靠路由和 nft。nft 只许 VM 用自己 tap 的 `.2` 作源地址、只许去公网地址、不许 IPv6；VM 连宿主一律拒绝，宿主只回已经建立的连接；出去的做 masquerade。
-- **起 VM**：主进程选一个空闲槽位（没有就关掉闲置最久、没在用的那个），在 `/var/lib/maxx/vm/<会话 id>/` 下准备 `work` 和 `nix.img`，起两个 virtiofsd（只读的 store、读写的 `/work`）和 cloud-hypervisor，都是 `kill_on_drop` 的子进程。然后每 100 ms 试一次 SSH，连上就算起好了，不另做就绪通知。会话的媒体视图 `chat` 等有了媒体再加。
+- **起 VM**：主进程选一个空闲槽位（没有就关掉闲置最久、没在用的那个），在 `/var/lib/maxx/vm/<会话 id>/` 下准备 `work` 和 `nix.img`，起两个 virtiofsd（只读的 store、读写的 `/work`）和 cloud-hypervisor，都是 `kill_on_drop` 的子进程。然后每 100 ms 试一次 SSH，连上就算起好了，不另做就绪通知。不挂会话的媒体视图，见[读文件](#读文件)。
 - **vCPU 至少 2 个**：tap 是多队列的，cloud-hypervisor 要两对队列以上才按多队列打开它，而每个 vCPU 最多配一对。
 - **每个 VM 的 tap 名不同**，而 microvm.nix 生成的 `microvm-run` 把 tap 名写死在构建时。2026-10-29 定：主进程自己拼 cloud-hypervisor 和 virtiofsd 的命令行，只借用 guest 的 kernel、initrd 和内核命令行，由 guest 的构建产出一个 JSON，路径写进配置。每个 VM 本来就有好几个参数不同（目录、tap、Landlock 规则），microvm.nix 的 runner 还会自己建盘、起 socat 转发通知，和"主进程直接管两个子进程"对不上。
 - **通道**：hybrid vsock 的 socket 就在这个目录里，主进程直接用。连 22 端口跑 russh，每个 VM 一条连接，每条命令一个 channel；在 `notify.vsock_7777` 上监听 MCP，见 [MCP 通道](#mcp-通道)。
@@ -1473,8 +1483,8 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
 参考了 Codex、pi 和 Hermes 的做法。
 
-- **程序显式交图**，学 Codex code mode 的 `image()`：`max.image(src, {detail})`、`max.video(src, {start, end})`。`src` 是 VM 里的路径（`/work/…`、`/chat/…`）或消息句柄（`image#123.0`），不接受 http 地址。只有交了的才进上下文；截图、下载这类操作只产出文件。不需要单独的 `view_image` 工具。
-- **宿主自己取文件，不经过 MCP**：`/work` 是 virtiofs 共享，`/chat` 是内容库的硬链接，宿主都能直接读。宿主校验能否解码、按模型的上限缩放，按 hash 存进内容库，turn 记录里只存引用（原则 7）。要复制一份，是因为 `/work` 里的文件之后可能被改或被删。
+- **程序显式交图**，学 Codex code mode 的 `image()`：`max.image(src, {detail})`、`max.video(src, {start, end})`。`src` 是 VM 里的路径（`/work/…`）或消息句柄（`image#123.0`），不接受 http 地址。只有交了的才进上下文；截图、下载这类操作只产出文件。不需要单独的 `view_image` 工具。
+- **宿主自己取文件，不经过 MCP**：`/work` 是 virtiofs 共享，宿主能直接读；消息句柄的图在内容库里。宿主校验能否解码、按模型的上限缩放，按 hash 存进内容库，turn 记录里只存引用（原则 7）。要复制一份，是因为 `/work` 里的文件之后可能被改或被删。
 - **中立格式**：`ToolOutput { parts: Vec<Part>, error: bool }`，`Part` 是 `Text` 或 `Media(MediaRef)`，和消息里的 `Media` 节点共用一套渲染。
 - **在适配层降级**（原则 8）：
   - Responses：放进 `function_call_output` 的数组，`input_text` 加 `input_image`。
@@ -1490,7 +1500,7 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
 做成的（2026-10-29，先只做图）：
 
-- **SDK**：`await max.image(src)`，`src` 是 `/work` 下的路径，或者图片的 Buffer（比如 `page.screenshot()` 的返回值）。Buffer 先写进 `/work/.max/shown/`，宿主存好就删。返回原图的 `{width, height}`；读不了、不是图、超过上限都抛 `ToolError`。消息句柄、`/chat` 和视频还没做。
+- **SDK**：`await max.image(src)`，`src` 是 `/work` 下的路径，或者图片的 Buffer（比如 `page.screenshot()` 的返回值）。Buffer 先写进 `/work/.max/shown/`，宿主存好就删。返回原图的 `{width, height}`；读不了、不是图、超过上限都抛 `ToolError`。消息句柄和视频还没做。
 - **怎么交给宿主**：runner 用这次运行的 token 发一个 MCP 调用 `max.image`，只带路径；它不是 Max 的工具，不在工具列表里，也不算进"调了 Max 的工具"。宿主像 `send_image` 那样一段一段打开 `/work` 下的文件、不跟符号链接、10 MiB 封顶，用和下载一样的办法做给模型的版本（长边 1568 的 JPEG，或者原图），存进内容库，记进这次 MCP 会话。程序结束后，`run_code` 的结果在文字后面按顺序加上这些图（`Part::Media`，内容库的 sha256），每张按 1200 token 估。
 - **预算**：一次 `run_code` 最多交 4 张，同一张（hash 相同）只算一次。组装请求时只带工具结果里最新的 8 张，更早的在那个位置写"[这张图省略了，要看再 max.image]"，turn 记录不变。"同上文图 x"没做。
 - **降级**：Responses 把有图的结果写成 `input_text` 和 `input_image` 的数组，没图的仍是字符串。Chat 在 tool 消息里写"[图 n，见下]"，连着的几条 tool 消息之后跟一条 user 消息，按编号放图。

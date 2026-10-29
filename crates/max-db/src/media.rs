@@ -97,6 +97,8 @@ pub struct Stored {
     pub conversation: ConversationId,
     /// As the row's node has it.
     pub kind: MediaKind,
+    /// A file's, as the row's node has it.
+    pub name: Option<String>,
     pub sha256: String,
     pub mime: Option<String>,
     pub size: u64,
@@ -127,6 +129,7 @@ pub async fn stored(
         Some(Stored {
             conversation: ConversationId(row.conversation_id),
             kind: meta.kind,
+            name: meta.name.clone(),
             sha256: row.sha256,
             mime: row.mime,
             size: u64::try_from(row.size).unwrap_or_default(),

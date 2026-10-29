@@ -100,6 +100,7 @@ async fn what_can_be_sent_again(pool: PgPool) -> sqlx::Result<()> {
     let expected = Stored {
         conversation: group.endpoint.conversation,
         kind: MediaKind::Sticker,
+        name: None,
         sha256: "b".repeat(64),
         mime: Some("image/png".into()),
         size: 3,

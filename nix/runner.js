@@ -4,7 +4,8 @@
 // stdin is one JSON object: {code, args, token, tools}. code is an async
 // function body; tools.<name>(args) calls one of Max's tools through the
 // MCP service with the run's token, max.image() shows the model a picture
-// after the result, and max.browser() and max.page() reach the VM's
+// after the result, max.file() has the host copy a file of the chat's
+// record into /work/chat, and max.browser() and max.page() reach the VM's
 // browser (browser.js). stdout gets the program's result and nothing
 // else: its console and its own writes go to stderr. The exit status is 0
 // when the program returned, 1 when it threw.
@@ -144,9 +145,18 @@ async function main() {
     }
   };
 
+  // A file of the chat's record, by its handle, which the host copies
+  // into /work/chat.
+  const file = async handle => {
+    if (typeof handle !== "string") throw new TypeError("max.file 要记录里的句柄，比如 'file#123.0'");
+    const outcome = await request("max.file", { handle });
+    if (!outcome.ok) throw new ToolError("max.file", outcome.error);
+    return outcome.value;
+  };
+
   const tools = Object.create(null);
   for (const name of input.tools) tools[name] = args => call(name, args);
-  const max = Object.freeze({ raw, cancel, race, image, browser, page, snapshot });
+  const max = Object.freeze({ raw, cancel, race, image, file, browser, page, snapshot });
   const AsyncFunction = (async () => {}).constructor;
   const program = new AsyncFunction("tools", "max", "args", input.code);
   return program(Object.freeze(tools), max, input.args);

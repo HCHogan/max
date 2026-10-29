@@ -23,7 +23,7 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use super::{Context, Failure, show};
+use super::{Context, Failure, chat_file, show};
 
 /// One call's wall clock.
 const CALL_TIME: Duration = Duration::from_secs(60);
@@ -216,8 +216,9 @@ impl ServerHandler for Handler {
             () = request.ct.cancelled() => Err(Failure::new("cancelled", format!("调用取消了；{MAYBE_DONE}"))),
             },
         };
-        // The model sees the pictures shown themselves.
-        if call.name != show::NAME {
+        // Not Max's tools: the model sees the pictures shown themselves,
+        // and a file fetched is the program's.
+        if call.name != show::NAME && call.name != chat_file::NAME {
             let mut calls = session.calls.lock().unwrap_or_else(PoisonError::into_inner);
             let (succeeded, failed) = calls.entry(call.name.to_string()).or_default();
             *if outcome.is_ok() { succeeded } else { failed } += 1;
@@ -236,6 +237,9 @@ impl Session {
     async fn call(&self, name: &str, args: Value) -> Result<Value, Failure> {
         if name == show::NAME {
             return show::run(&self.context, &self.shown, args).await;
+        }
+        if name == chat_file::NAME {
+            return chat_file::run(&self.context, args).await;
         }
         super::call(name, &self.context, args).await
     }

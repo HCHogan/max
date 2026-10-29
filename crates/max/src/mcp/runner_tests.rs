@@ -10,7 +10,9 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
+use max_core::message::{MediaKind, MediaMeta, MediaRef, Node};
 use max_core::tools::MAX_TOOLS;
+use max_db::media::{self, Blob};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio::io::AsyncWriteExt;
@@ -19,7 +21,8 @@ use tokio::process::Command;
 
 use super::{Context, Sessions, serve};
 use crate::conversation::ingest;
-use crate::conversation::testing::{from_xiaoming, group, offset, text};
+use crate::conversation::testing::{from_xiaoming, group, group_named, offset, text};
+use crate::inbound::InNode;
 use crate::media::store::Store;
 use crate::scope::Scope;
 
@@ -284,6 +287,95 @@ async fn programs_show_the_model_pictures(pool: PgPool) {
         ran.stdout
     );
     assert_eq!(grant.shown().len(), 4);
+
+    scope.close(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn programs_fetch_the_chats_files(pool: PgPool) {
+    let dir = std::env::temp_dir().join(format!("max-fetched-{:016x}", rand::random::<u64>()));
+    let work = dir.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let store = Arc::new(Store::open(&dir.join("store")).await.unwrap());
+    let mut conn = pool.acquire().await.unwrap();
+    let place = Arc::new(group(&mut conn).await);
+    let other = group_named(&mut conn, "group:GROUP2").await;
+    // 小明 sent a file here, and one in another group; both downloaded.
+    let file = || {
+        InNode::Node(Node::Media {
+            media: Some(MediaRef::Remote("https://q.example/f".into())),
+            meta: MediaMeta {
+                kind: MediaKind::File,
+                mime: Some("file".into()),
+                size: Some(8),
+                name: Some("周报.pdf".into()),
+                description: None,
+            },
+        })
+    };
+    let mut ids = Vec::new();
+    for (n, at) in [(0, &*place), (1, &other)] {
+        let inbound = from_xiaoming(n, vec![file()]);
+        let committed = ingest::inbound(&mut conn, at, &inbound, Utc::now(), offset());
+        let row = committed.await.unwrap().message.id;
+        let blob = Blob {
+            sha256: store.put(format!("%PDF-{n}").into_bytes()).await.unwrap(),
+            mime: Some("application/pdf".into()),
+            size: 6,
+            width: None,
+            height: None,
+            model_sha256: None,
+        };
+        media::record(&mut conn, row, 0, &blob, Utc::now())
+            .await
+            .unwrap();
+        ids.push(row.0);
+    }
+    drop(conn);
+    let conversation = place.conversation;
+    let sessions = Sessions::default();
+    let grant = sessions.open(Context {
+        pool,
+        place,
+        offset: offset(),
+        page_tokens: 2000,
+        search: None,
+        work: Some(work.clone()),
+        store: Some(Arc::clone(&store)),
+        poster: None,
+        embedder: None,
+        admin: None,
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let mut scope = Scope::new();
+    let served = sessions.clone();
+    scope.spawn(move |stop| serve(listener, conversation, served, stop));
+
+    // As the record shows it; the other group's; none such; not a handle.
+    let code = "const fetched = await max.file(`[file#${args.ids[0]}.0: 周报.pdf]`); \
+         const failed = []; \
+         for (const h of [`file#${args.ids[1]}.0`, 'file#1.5', 'report.pdf']) \
+           try { await max.file(h) } catch (e) { failed.push(e.message.match(/（(\\w+)）$/)[1]) } \
+         return { fetched, failed }";
+    let input = json!({ "code": code, "args": { "ids": ids }, "token": grant.token(), "mcp": mcp, "work": work });
+    let ran = run_with(input).await;
+    let value: Value = serde_json::from_str(&ran.stdout).expect(&ran.stderr);
+    let name = format!("{}.0-周报.pdf", ids[0]);
+    assert_eq!(
+        value,
+        json!({
+            "fetched": { "path": format!("/work/chat/{name}"), "name": "周报.pdf", "size": 6 },
+            "failed": ["not_found", "not_found", "bad_handle"],
+        })
+    );
+    assert_eq!(
+        std::fs::read(work.join("chat").join(&name)).unwrap(),
+        b"%PDF-0"
+    );
+    // Not counted among Max's tools: the file is the program's.
+    assert!(grant.calls().is_empty());
 
     scope.close(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&dir);
