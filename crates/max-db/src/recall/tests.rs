@@ -8,6 +8,7 @@ use crate::ledger::{self, NewMessage};
 use crate::media::{Blob, record};
 use crate::summaries::{self, Summary};
 use crate::testing::{Group, at, commit, group, said, sender};
+use crate::vectors::{self, Key};
 
 fn picture(kind: MediaKind) -> Content {
     Content::Message {
@@ -215,5 +216,119 @@ async fn active_summaries_by_any_level(pool: PgPool) -> sqlx::Result<()> {
         ..query(conversation, &terms)
     };
     assert_eq!(summaries(&mut conn, &window).await?, [(early, vec![0, 1])]);
+    Ok(())
+}
+
+/// A made-up vector, between the first two axes.
+fn toward(x: f32, y: f32) -> Vec<f32> {
+    let mut vector = vec![0.0; 1024];
+    vector[0] = x;
+    vector[1] = y;
+    vector
+}
+
+/// The ids found, and their similarities to two places.
+fn rounded<T: Copy>(found: &[Near<T>]) -> Vec<(T, f32)> {
+    let round = |similarity: f32| (similarity * 100.0).round() / 100.0;
+    found.iter().map(|(id, near)| (*id, round(*near))).collect()
+}
+
+#[sqlx::test]
+async fn rows_and_summaries_by_meaning(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let group = group(&mut conn, "group:30001").await?;
+    let other = crate::testing::group(&mut conn, "group:30002").await?;
+    let xiaoming = sender(group.xiaoming, "小明", None);
+    let conversation = group.endpoint.conversation;
+    let mut said_at = async |group: &Group, words: &str, minute: i64| {
+        commit(&mut conn, group, &xiaoming, &said(words), minute).await
+    };
+    let same = said_at(&group, "今晚上线", 0).await?;
+    let near = said_at(&group, "部署时间", 1).await?;
+    let far = said_at(&group, "中午吃面", 2).await?;
+    let taken = said_at(&group, "上线炸了", 3).await?;
+    let stale = said_at(&group, "上线了吗", 5).await?;
+    let elsewhere = said_at(&other, "今晚上线", 6).await?;
+    commit(
+        &mut conn,
+        &group,
+        &xiaoming,
+        &Content::Unsend { target: taken },
+        4,
+    )
+    .await?;
+    let other_conversation = other.endpoint.conversation;
+    let rows = [
+        (same, conversation, toward(1.0, 0.0)),
+        (near, conversation, toward(1.0, 1.0)),
+        (far, conversation, toward(0.0, 1.0)),
+        (taken, conversation, toward(1.0, 0.0)),
+        (elsewhere, other_conversation, toward(1.0, 0.0)),
+    ]
+    .map(|(id, conversation, vector)| (Key::Message(id), conversation, vector));
+    vectors::write(&mut conn, "m3", &rows, at(9)).await?;
+    // Another model's doesn't count.
+    let old = [(Key::Message(stale), conversation, toward(1.0, 0.0))];
+    vectors::write(&mut conn, "old", &old, at(9)).await?;
+
+    let query = query(conversation, &[]);
+    let found = near_messages(&mut conn, &query, "m3", &toward(1.0, 0.0)).await?;
+    assert_eq!(rounded(&found), [(same, 1.0), (near, 0.71), (far, 0.0)]);
+    let window = Query {
+        from: Some(at(1)),
+        until: Some(at(2)),
+        ..query.clone()
+    };
+    let found = near_messages(&mut conn, &window, "m3", &toward(1.0, 0.0)).await?;
+    assert_eq!(rounded(&found), [(near, 0.71)]);
+    let one = Query {
+        limit: 1,
+        ..query.clone()
+    };
+    let found = near_messages(&mut conn, &one, "m3", &toward(0.0, 1.0)).await?;
+    assert_eq!(rounded(&found), [(far, 1.0)]);
+
+    let summary = |first: MessageId, last: MessageId, minute: i64| Summary {
+        first,
+        last,
+        started_at: at(minute),
+        ended_at: at(minute + 1),
+        title: "上线".into(),
+        kind: "mixed".into(),
+        importance: 50,
+        full: "说了上线。".into(),
+        brief: None,
+        line: None,
+    };
+    let early =
+        summaries::insert(&mut conn, conversation, &summary(same, near, 0), "m", at(9)).await?;
+    let late =
+        summaries::insert(&mut conn, conversation, &summary(far, far, 2), "m", at(9)).await?;
+    let replaced = summaries::insert(
+        &mut conn,
+        conversation,
+        &summary(stale, stale, 5),
+        "m",
+        at(9),
+    )
+    .await?;
+    sqlx::query!(
+        "update summaries set status = 'superseded', superseded_by = $1 where id = $2",
+        late.0,
+        replaced.0
+    )
+    .execute(&mut *conn)
+    .await?;
+    let written = [
+        (early, toward(0.0, 1.0)),
+        (late, toward(1.0, 0.0)),
+        (replaced, toward(1.0, 0.0)),
+    ]
+    .map(|(id, vector)| (Key::Summary(id), conversation, vector));
+    vectors::write(&mut conn, "m3", &written, at(9)).await?;
+    let found = near_summaries(&mut conn, &query, "m3", &toward(1.0, 0.0)).await?;
+    assert_eq!(rounded(&found), [(late, 1.0), (early, 0.0)]);
+    let found = near_summaries(&mut conn, &window, "m3", &toward(1.0, 0.0)).await?;
+    assert_eq!(rounded(&found), [(early, 0.0)]);
     Ok(())
 }

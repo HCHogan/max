@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select e.summary_id as \"id!\",\n               (1 - (e.embedding <=> $3::float4[]::halfvec))::float4 as \"similarity!\"\n        from summary_embeddings e join summaries s on s.id = e.summary_id\n        where e.conversation_id = $1 and e.model = $2 and s.status = 'active'\n          and ($4::timestamptz is null or s.ended_at >= $4)\n          and ($5::timestamptz is null or s.started_at < $5)\n        order by e.embedding <=> $3::float4[]::halfvec\n        limit $6\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "summary_embeddings",
+            "name": "summary_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "similarity!",
+        "type_info": "Float4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Float4Array",
+        "Timestamptz",
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "56c1d68562f7600c6d6bd1d72edf4e10c8100081cdcba384cccf27a3e91916d8"
+}

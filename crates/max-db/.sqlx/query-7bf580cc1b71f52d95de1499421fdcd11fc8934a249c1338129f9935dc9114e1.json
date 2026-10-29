@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select e.message_id as \"id!\",\n               (1 - (e.embedding <=> $3::float4[]::halfvec))::float4 as \"similarity!\"\n        from message_embeddings e join messages m on m.id = e.message_id\n        where e.conversation_id = $1 and e.model = $2 and m.kind = 'chat'\n          and ($4::timestamptz is null or m.sent_at >= $4)\n          and ($5::timestamptz is null or m.sent_at < $5)\n          and not exists (select from messages u where u.target_id = m.id and u.event = 'unsend')\n        order by e.embedding <=> $3::float4[]::halfvec\n        limit $6\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "message_embeddings",
+            "name": "message_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "similarity!",
+        "type_info": "Float4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Float4Array",
+        "Timestamptz",
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "7bf580cc1b71f52d95de1499421fdcd11fc8934a249c1338129f9935dc9114e1"
+}

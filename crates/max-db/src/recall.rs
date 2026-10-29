@@ -1,8 +1,9 @@
 //! Recall: where in a conversation the terms of a `context_search` are. A
 //! term is found as a substring of lowercased text: a row's rendered text
 //! or the captions of its pictures and stickers, a summary's title and
-//! levels. These find the candidates; ranking them is the caller's. See
-//! "召回".
+//! levels. The vectors of rows and summaries find more, near the query's
+//! by meaning. These find the candidates; ranking them is the caller's.
+//! See "召回".
 
 use chrono::{DateTime, Utc};
 use max_core::ids::{ConversationId, MessageId, SummaryId};
@@ -129,6 +130,96 @@ pub async fn summaries(
     Ok(rows
         .into_iter()
         .map(|row| (SummaryId(row.id), indexes(&row.terms)))
+        .collect())
+}
+
+/// A candidate by meaning, with the cosine similarity of its vector to the
+/// query's: 1 the same, 0 nothing in common.
+pub type Near<T> = (T, f32);
+
+/// The chat rows whose vectors by `model` are nearest `vector`, under the
+/// filters of [`messages`] but the patterns: up to `query.limit`, about
+/// the nearest first. The HNSW index alone would stop at 40 candidates,
+/// before the filters; it is told to go on until there are enough. In a
+/// small conversation the planner goes through its rows instead, so the
+/// plan is made with the conversation in hand.
+pub async fn near_messages(
+    conn: &mut PgConnection,
+    query: &Query<'_>,
+    model: &str,
+    vector: &[f32],
+) -> sqlx::Result<Vec<Near<MessageId>>> {
+    let mut tx = conn.begin().await?;
+    sqlx::query!("set local plan_cache_mode = force_custom_plan")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query!("set local hnsw.iterative_scan = relaxed_order")
+        .execute(&mut *tx)
+        .await?;
+    let rows = sqlx::query!(
+        r#"
+        select e.message_id as "id!",
+               (1 - (e.embedding <=> $3::float4[]::halfvec))::float4 as "similarity!"
+        from message_embeddings e join messages m on m.id = e.message_id
+        where e.conversation_id = $1 and e.model = $2 and m.kind = 'chat'
+          and ($4::timestamptz is null or m.sent_at >= $4)
+          and ($5::timestamptz is null or m.sent_at < $5)
+          and not exists (select from messages u where u.target_id = m.id and u.event = 'unsend')
+        order by e.embedding <=> $3::float4[]::halfvec
+        limit $6
+        "#,
+        query.conversation.0,
+        model,
+        vector as &[f32],
+        query.from,
+        query.until,
+        query.limit
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (MessageId(row.id), row.similarity))
+        .collect())
+}
+
+/// The active summaries whose vectors by `model` are nearest `vector`,
+/// under the filters of [`summaries`] but the patterns.
+pub async fn near_summaries(
+    conn: &mut PgConnection,
+    query: &Query<'_>,
+    model: &str,
+    vector: &[f32],
+) -> sqlx::Result<Vec<Near<SummaryId>>> {
+    let mut tx = conn.begin().await?;
+    sqlx::query!("set local hnsw.iterative_scan = relaxed_order")
+        .execute(&mut *tx)
+        .await?;
+    let rows = sqlx::query!(
+        r#"
+        select e.summary_id as "id!",
+               (1 - (e.embedding <=> $3::float4[]::halfvec))::float4 as "similarity!"
+        from summary_embeddings e join summaries s on s.id = e.summary_id
+        where e.conversation_id = $1 and e.model = $2 and s.status = 'active'
+          and ($4::timestamptz is null or s.ended_at >= $4)
+          and ($5::timestamptz is null or s.started_at < $5)
+        order by e.embedding <=> $3::float4[]::halfvec
+        limit $6
+        "#,
+        query.conversation.0,
+        model,
+        vector as &[f32],
+        query.from,
+        query.until,
+        query.limit
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (SummaryId(row.id), row.similarity))
         .collect())
 }
 
