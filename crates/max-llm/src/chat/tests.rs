@@ -408,6 +408,53 @@ fn inline_thinking_is_not_said() {
 }
 
 #[test]
+fn reasoning_written_as_the_answer_is_not_said() {
+    let heard = |pieces: &[&str]| {
+        let mut parser = Parser::new(model("vertex/gemini-4-argon"));
+        let mut chunks: Vec<String> = pieces
+            .iter()
+            .map(|piece| chunk(json!({ "content": piece })))
+            .collect();
+        chunks.extend([finish("stop"), "[DONE]".into()]);
+        let events = run(&mut parser, &chunks);
+        (events, parser.finish())
+    };
+    for opening in [
+        ["Thin", "king Process:\n\n1.  **Analyze", " the Input**"],
+        ["**Thought", " Process**", "\n- 先看"],
+        ["## 思考过程", "：\n1. 判", "定"],
+    ] {
+        let (events, output) = heard(&opening);
+        assert_eq!(events, [], "{opening:?}");
+        assert!(matches!(output, Err(Error::Aloud)), "{opening:?}");
+    }
+    // Text that only starts like one is said once it isn't.
+    for (pieces, said) in [
+        (&["Thin", "k twice"][..], "Think twice"),
+        (
+            &["Thinking Process: 先", "想"][..],
+            "Thinking Process: 先想",
+        ),
+        (
+            &["Thought processes\n", "都慢"][..],
+            "Thought processes\n都慢",
+        ),
+    ] {
+        let (events, output) = heard(pieces);
+        let text: String = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Text(text) => Some(text.as_str()),
+                Event::ToolCall { .. } => None,
+            })
+            .collect();
+        assert_eq!(text, said);
+        assert!(output.is_ok());
+    }
+    assert!(Error::Aloud.retryable());
+}
+
+#[test]
 fn ends_that_are_not_complete() {
     let mut parser = Parser::new(model("deepseek-pro"));
     run(&mut parser, &[chunk(json!({ "content": "早" }))]);

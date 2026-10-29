@@ -7,7 +7,9 @@
 //! calls (Gemini's signatures in `extra_content`); those are kept raw in
 //! `opaque` and merged back when the same model sees them again. Models
 //! that write their reasoning inline, as a leading `<think>` block, get it
-//! split off so it isn't said.
+//! split off so it isn't said. An answer that opens with a heading of
+//! reasoning, as Gemini's sometimes does when it skips thinking, isn't
+//! said at all: the call fails, to be made again.
 //!
 //! A tool message holds only text, and some providers take nothing else
 //! there; the pictures tool results show follow them in a user message.
@@ -23,6 +25,10 @@ use crate::{Error, Event, Options, Pictures, Piece, pieces, share_tokens, tool_p
 
 const THINK: &str = "<think>";
 const UNTHINK: &str = "</think>";
+/// Headings an answer that is reasoning written out opens with, in lower
+/// case. Seen 2026-10-29: Gemini 4 Argon, with no thinking tokens, wrote
+/// `Thinking Process:` and its numbered steps, and the group saw them.
+const ALOUD: [&str; 3] = ["thinking process", "thought process", "思考过程"];
 
 /// The request body.
 pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value {
@@ -232,9 +238,12 @@ pub struct Parser {
 /// Where the content is relative to a leading `<think>` block.
 #[derive(Debug)]
 enum Think {
-    /// Only whitespace or the start of `<think>` so far, held back.
+    /// Only whitespace, the start of `<think>` or the start of a heading
+    /// in [`ALOUD`] so far, held back.
     Undecided(String),
     Inside(String),
+    /// The answer opened with a heading in [`ALOUD`].
+    Aloud,
     /// After the block, or there was none.
     Outside {
         reasoning: Option<String>,
@@ -320,6 +329,9 @@ impl Parser {
             }
             _ => {}
         }
+        if matches!(self.think, Think::Aloud) {
+            return Err(Error::Aloud);
+        }
         let model = self.model;
         let item = |kind, opaque| Item {
             kind,
@@ -330,7 +342,7 @@ impl Parser {
         let inline = match self.think {
             Think::Inside(think) => Some(think),
             Think::Outside { reasoning } => reasoning,
-            Think::Undecided(_) => None,
+            Think::Undecided(_) | Think::Aloud => None,
         };
         let mut items = Vec::new();
         let text = ["reasoning_content", "reasoning"]
@@ -374,10 +386,11 @@ impl Parser {
     }
 
     /// Visible text from a content delta, with a leading `<think>` block
-    /// taken out.
+    /// taken out; none once the answer opened with a heading of reasoning.
     fn content(&mut self, delta: &str) -> String {
         match &mut self.think {
             Think::Outside { .. } => delta.to_owned(),
+            Think::Aloud => String::new(),
             Think::Undecided(held) => {
                 held.push_str(delta);
                 let start = held.trim_start();
@@ -388,9 +401,18 @@ impl Parser {
                 } else if THINK.starts_with(start) {
                     String::new()
                 } else {
-                    let text = std::mem::take(held);
-                    self.think = Think::Outside { reasoning: None };
-                    text
+                    match aloud(start) {
+                        None => String::new(),
+                        Some(true) => {
+                            self.think = Think::Aloud;
+                            String::new()
+                        }
+                        Some(false) => {
+                            let text = std::mem::take(held);
+                            self.think = Think::Outside { reasoning: None };
+                            text
+                        }
+                    }
                 }
             }
             Think::Inside(think) => {
@@ -434,6 +456,25 @@ impl Parser {
             name: call.name.clone(),
         })
     }
+}
+
+/// Whether the content opens with a heading in [`ALOUD`] on a line of its
+/// own, such as `Thinking Process:` or `**Thought Process**`; None while
+/// that can't be told yet.
+fn aloud(start: &str) -> Option<bool> {
+    let start = start.trim_start_matches(['*', '#', ' ']);
+    let (line, ended) = match start.split_once('\n') {
+        Some((line, _)) => (line, true),
+        None => (start, false),
+    };
+    let heading = line
+        .trim_end_matches(['*', ':', '：', ' ', '\r'])
+        .to_ascii_lowercase();
+    if ALOUD.contains(&heading.as_str()) {
+        return ended.then_some(true);
+    }
+    let started = ALOUD.iter().any(|aloud| aloud.starts_with(&heading));
+    (ended || !started).then_some(false)
 }
 
 /// A delta field into what has accumulated: strings and arrays grow,

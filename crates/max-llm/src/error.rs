@@ -25,13 +25,20 @@ pub enum Error {
     Incomplete(String),
     #[error("unexpected data from the provider: {0}")]
     Malformed(String),
+    /// The model wrote its reasoning as its answer, under a heading such
+    /// as `Thinking Process:`, instead of thinking first. Nothing of it was
+    /// said.
+    #[error("the model wrote its reasoning as its answer")]
+    Aloud,
 }
 
 impl Error {
     /// Whether the same request might succeed if sent again.
     pub fn retryable(&self) -> bool {
         match self {
-            Self::Connect(_) | Self::Idle(_) | Self::Body(_) | Self::Truncated => true,
+            Self::Connect(_) | Self::Idle(_) | Self::Body(_) | Self::Truncated | Self::Aloud => {
+                true
+            }
             Self::Status { status, .. } => matches!(status, 408 | 409 | 425 | 429 | 500..=599),
             Self::Provider { code, .. } => [
                 "server_error",

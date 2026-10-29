@@ -590,6 +590,7 @@ struct ModelOutput {
 
 - **Responses**：请求带 `store: false` 和 `include: ["reasoning.encrypted_content"]`，不依赖 provider 端的 `previous_response_id`。每个 `reasoning` 条目对应一个 `Reasoning`：`opaque` 存整个原始条目（含 `encrypted_content`），`text` 存摘要。
 - **Chat**：`reasoning_content`（或 `reasoning`）对应一个 `Reasoning`。挂在工具调用上的签名（比如经 cliproxy 转发的 Gemini）放进那个 `ToolCall` 的 `opaque`。
+- **把思考写进正文**：正文开头的 `<think>…</think>` 拆成 `Reasoning`。正文要是以"Thinking Process:""**Thought Process**""思考过程："这种独占一行的标题开头，就一个字都不说，这次调用算 `Error::Aloud` 失败，可重试，由模型调用任务重发。2026-10-29 Gemini 4 Argon 在群里连着三次这样：那三次调用 0 个思考 token，它把编号的分析步骤当回复写了出来，被分段发进群里；第一次漏出去以后，上下文里的"自己的上一条"就是这个样子，后两次跟着照写。标题后面有没有真正的回复分不出来，所以不拆，整条重来。
 - **推理只属于本 turn**：它在核心的 transcript 里，随 transcript 进快照；不进 ledger，不进以后 turn 的基础上下文，不发到群里，也不让 `context_read` 这类工具读到。
 - 流到一半被打断的推理不存，不完整的 blob 没用。
 
