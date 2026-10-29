@@ -332,7 +332,9 @@ impl Conversation {
         owner: bool,
     ) -> Result<String> {
         let how = command::how(self.place.kind, &self.place.my_name, "/link");
-        let usage = format!("用法：{how} 你的QQ号，头像对得上就把这个账号接到这个号上");
+        // None of what Max says tells how a number is checked: knowing it's
+        // the avatar would tell an impostor what to copy.
+        let usage = format!("用法：{how} 你的QQ号，验证通过就把这个账号接到这个号上");
         let Some(last) = argument.and_then(|argument| argument.split_whitespace().last()) else {
             return Ok(usage);
         };
@@ -350,7 +352,7 @@ impl Conversation {
         let mut conn = self.shared.pool.acquire().await?;
         if let Some(target) = mentioned {
             if last != "-" {
-                return Ok("拒绝：只能本人发，头像对得上才接".to_owned());
+                return Ok("拒绝：只能本人发".to_owned());
             }
             if !owner {
                 return Ok("拒绝：撤销仅限主人".to_owned());
@@ -377,7 +379,7 @@ impl Conversation {
             return Ok("跳过：主人和 Max 的账号不用 /link".to_owned());
         }
         let Some(avatars) = &self.shared.avatars else {
-            return Ok("错误：这里验证不了头像".to_owned());
+            return Ok("错误：这里验证不了".to_owned());
         };
         let Some(openid) = platform::native_user_id(&mut conn, account).await? else {
             return Ok(usage);
@@ -385,10 +387,10 @@ impl Conversation {
         drop(conn);
         match avatars.same(&openid, last).await {
             Ok(true) => {}
-            Ok(false) => return Ok("错误：头像和这个 QQ 号的对不上".to_owned()),
+            Ok(false) => return Ok("错误：验证没通过".to_owned()),
             Err(error) => {
                 warn!(%error, "fetching avatars for /link");
-                return Ok("错误：取头像失败，稍后重试".to_owned());
+                return Ok("错误：现在验证不了，稍后重试".to_owned());
             }
         }
         let mut conn = self.shared.pool.acquire().await?;

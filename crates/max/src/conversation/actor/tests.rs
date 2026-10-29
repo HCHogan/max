@@ -572,15 +572,15 @@ async fn link_takes_a_number_whose_avatar_the_account_shows(pool: PgPool) {
     let asks = [
         (
             from_xiaohong(10, vec![me(), text("/link")]),
-            "用法：@maxx /link 你的QQ号，头像对得上就把这个账号接到这个号上",
+            "用法：@maxx /link 你的QQ号，验证通过就把这个账号接到这个号上",
         ),
         (
             from_xiaohong(11, vec![me(), text("/link 20002")]),
-            "错误：头像和这个 QQ 号的对不上",
+            "错误：验证没通过",
         ),
         (
             from_xiaohong(12, vec![me(), text("/link 40004")]),
-            "错误：取头像失败，稍后重试",
+            "错误：现在验证不了，稍后重试",
         ),
         (
             from_xiaohong(13, vec![me(), text("/link 30000")]),
@@ -610,7 +610,7 @@ async fn link_takes_a_number_whose_avatar_the_account_shows(pool: PgPool) {
                 18,
                 vec![me(), text("/link "), at("XIAOHONG", "小红"), text(" 20001")],
             ),
-            "拒绝：只能本人发，头像对得上才接",
+            "拒绝：只能本人发",
         ),
         (
             from_xiaoming(19, vec![me(), text("/link 20002")]),
