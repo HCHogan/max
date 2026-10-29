@@ -2,6 +2,9 @@
 //! service; see "MCP 通道". max-core's `MAX_TOOLS` declares them.
 
 mod context_read;
+mod service;
+
+pub use service::{Grant, Sessions, serve};
 
 use std::sync::Arc;
 

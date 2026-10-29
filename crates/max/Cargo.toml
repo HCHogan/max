@@ -10,6 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+axum.workspace = true
 chrono = { workspace = true, features = ["clock"] }
 clap.workspace = true
 color-eyre.workspace = true
@@ -17,6 +18,7 @@ max-core.workspace = true
 max-db.workspace = true
 max-llm.workspace = true
 qqbot.workspace = true
+rmcp.workspace = true
 rand.workspace = true
 russh.workspace = true
 serde.workspace = true
