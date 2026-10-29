@@ -14,6 +14,7 @@ pub mod recall;
 pub mod summaries;
 pub mod turns;
 pub mod usage;
+pub mod vectors;
 
 #[cfg(test)]
 mod testing;
@@ -57,10 +58,12 @@ mod tests {
                 "llm_usage",
                 "media",
                 "media_captions",
+                "message_embeddings",
                 "message_media",
                 "messages",
                 "principals",
                 "summaries",
+                "summary_embeddings",
                 "summary_runs",
                 "turn_outcomes",
                 "turn_snapshots",

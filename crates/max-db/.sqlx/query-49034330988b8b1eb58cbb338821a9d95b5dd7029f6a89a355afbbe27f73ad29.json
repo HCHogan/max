@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into message_embeddings\n                         (message_id, conversation_id, model, embedding, created_at)\n                     values ($1, $2, $3, $4::float4[]::halfvec, $5)\n                     on conflict (message_id) do update\n                     set model = excluded.model, embedding = excluded.embedding,\n                         created_at = excluded.created_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text",
+        "Float4Array",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "49034330988b8b1eb58cbb338821a9d95b5dd7029f6a89a355afbbe27f73ad29"
+}

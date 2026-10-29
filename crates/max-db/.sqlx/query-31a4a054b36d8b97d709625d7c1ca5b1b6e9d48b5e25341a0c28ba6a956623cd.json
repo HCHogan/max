@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            select m.id, m.conversation_id, recall_text(m.text) as \"text!\"\n            from messages m\n            where m.id = any($2) and m.kind = 'chat' and char_length(recall_text(m.text)) >= 4\n              and not exists (select 1 from message_embeddings e\n                              where e.message_id = m.id and e.model = $1)\n            order by m.id desc\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "conversation_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "conversation_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "text!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "31a4a054b36d8b97d709625d7c1ca5b1b6e9d48b5e25341a0c28ba6a956623cd"
+}
