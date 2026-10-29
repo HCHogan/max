@@ -37,6 +37,8 @@ use max::media::pictures::Pictures;
 use max::media::stickers::Stickers;
 use max::media::store::Store;
 use max::qq::admin::Admin;
+use max::qq::avatar::Avatars;
+use max::qq::link::Linker;
 use max::qq::{listen, send};
 use max::recall::Vectors;
 use max::scope::Scope;
@@ -360,6 +362,15 @@ async fn serve(config: Config) -> Result<()> {
             None
         }
     };
+    // Accounts are linked to old QQ numbers by their avatars, once Max's
+    // own account is known.
+    let linking = match &qq {
+        Some(credentials) => {
+            let avatars = Arc::new(Avatars::qq(&credentials.app_id)?);
+            Some((avatars, rows.subscribe().1))
+        }
+        None => None,
+    };
     let client = match qq {
         Some(credentials) => Some(Arc::new(qqbot::Client::new(credentials)?)),
         None => None,
@@ -410,6 +421,16 @@ async fn serve(config: Config) -> Result<()> {
         let account = platform::account(&mut conn, Platform::Qq, &bot.id, &bot.username).await?;
         drop(conn);
         info!(bot = %bot.username, "QQ credentials work");
+        if let Some((avatars, rows)) = linking {
+            let mut barred = shared.owners.clone();
+            barred.insert(account.principal);
+            let linker = Linker {
+                pool: pool.clone(),
+                avatars,
+                barred,
+            };
+            workers.spawn(move |stop| linker.run(rows, stop));
+        }
         me.insert(
             Platform::Qq,
             Me {

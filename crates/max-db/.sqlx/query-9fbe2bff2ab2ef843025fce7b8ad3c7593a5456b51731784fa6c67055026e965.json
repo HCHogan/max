@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select identity_id from avatar_checks",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "identity_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "avatar_checks",
+            "name": "identity_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9fbe2bff2ab2ef843025fce7b8ad3c7593a5456b51731784fa6c67055026e965"
+}

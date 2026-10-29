@@ -13,14 +13,17 @@ use tokio::net::TcpListener;
 use super::Avatars;
 use crate::scope::Scope;
 
-/// A JPEG `side` pixels square; `seed` picks one of three gradients, each
+/// A JPEG `side` pixels square; `seed` picks one of six gradients, each
 /// far from the others.
 pub fn face(seed: u8, side: u32) -> Vec<u8> {
     let image = RgbImage::from_fn(side, side, |x, y| {
-        let t = match seed % 3 {
+        let t = match seed % 6 {
             0 => x,
             1 => y,
-            _ => side - 1 - x,
+            2 => side - 1 - x,
+            3 => side - 1 - y,
+            4 => (x + y) / 2,
+            _ => (side - 1 - x + y) / 2,
         };
         let v = u8::try_from(t * 255 / (side - 1)).unwrap();
         Rgb([v, v / 2, 255 - v])

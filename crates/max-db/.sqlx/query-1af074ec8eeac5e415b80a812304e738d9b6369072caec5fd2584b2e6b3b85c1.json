@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select c.id from conversations c\n         where c.kind = 'group'\n           and exists (select 1 from endpoints e where e.conversation_id = c.id and e.platform = 'qq')\n           and exists (\n               select 1 from endpoints e where e.conversation_id = c.id and e.platform = 'qq_legacy'\n           )\n         order by c.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "conversations",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1af074ec8eeac5e415b80a812304e738d9b6369072caec5fd2584b2e6b3b85c1"
+}

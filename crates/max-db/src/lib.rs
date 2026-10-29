@@ -8,6 +8,7 @@
 pub mod captions;
 pub mod embeddings;
 pub mod ledger;
+pub mod links;
 pub mod media;
 pub mod platform;
 pub mod recall;
@@ -48,6 +49,7 @@ mod tests {
             tables,
             [
                 "_sqlx_migrations",
+                "avatar_checks",
                 "caption_embeddings",
                 "conversation_settings",
                 "conversations",
@@ -55,6 +57,7 @@ mod tests {
                 "endpoints",
                 "gateway_sessions",
                 "identities",
+                "legacy_avatars",
                 "llm_usage",
                 "media",
                 "media_captions",

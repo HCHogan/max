@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into legacy_avatars (identity_id, print, fetched_at) values ($1, $2, $3)\n         on conflict (identity_id) do update set print = excluded.print, fetched_at = excluded.fetched_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0fdf6555845e36e373b14e1c4c0f1acd48f3f01de7081f12f147328e109372e1"
+}

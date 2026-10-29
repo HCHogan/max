@@ -1,6 +1,6 @@
-//! Whether a QQ number is the person behind an account: the avatar QQ shows
-//! the bot for the account's openid against the public one for the number.
-//! `/link` takes nothing else as proof. See "权限" in docs/rust-rewrite.md.
+//! Avatars, as QQ shows them to the bot for an account's openid and to
+//! anyone for a QQ number, and how two are compared: what links accounts to
+//! old numbers. See "按头像接上" in docs/rust-rewrite.md.
 
 use std::time::Duration;
 
@@ -41,14 +41,20 @@ impl Avatars {
         Self::new(BY_OPENID.replace("{app}", app_id), BY_NUMBER.to_owned())
     }
 
-    /// Whether the account with `openid` shows the avatar of `number`.
-    /// Two accounts without one show the same default picture, and pass.
-    pub async fn same(&self, openid: &str, number: &str) -> Result<bool> {
-        let (mine, theirs) = tokio::try_join!(
-            self.get(self.by_openid.replace("{openid}", openid)),
-            self.get(self.by_number.replace("{number}", number)),
-        )?;
-        alike(&mine, &theirs)
+    /// The print of the avatar of the account with `openid`.
+    pub async fn of_account(&self, openid: &str) -> Result<Vec<u8>> {
+        print(&self.get(self.by_openid.replace("{openid}", openid)).await?)
+    }
+
+    /// The print of the avatar of `number`.
+    pub async fn of_number(&self, number: &str) -> Result<Vec<u8>> {
+        print(&self.get(self.by_number.replace("{number}", number)).await?)
+    }
+
+    /// The print of QQ's default avatar, which an account without one
+    /// shows: what QQ shows for an openid that is no one's.
+    pub async fn default(&self) -> Result<Vec<u8>> {
+        self.of_account("0").await
     }
 
     async fn get(&self, url: String) -> Result<Vec<u8>> {
@@ -61,22 +67,28 @@ impl Avatars {
     }
 }
 
-/// Whether two pictures are one: both shrunk to 16×16 grey, their
-/// root-mean-square difference under `ALIKE` of the full range.
-pub fn alike(a: &[u8], b: &[u8]) -> Result<bool> {
-    let small = |bytes: &[u8]| -> Result<Vec<u8>> {
-        let image = image::load_from_memory(bytes)?;
-        let image = image.resize_exact(SIDE, SIDE, FilterType::Triangle);
-        Ok(image.to_luma8().into_raw())
-    };
-    let (a, b) = (small(a)?, small(b)?);
+/// What an avatar is compared by: the picture shrunk to 16×16 grey, a byte
+/// a pixel.
+pub fn print(bytes: &[u8]) -> Result<Vec<u8>> {
+    let image = image::load_from_memory(bytes)?;
+    let image = image.resize_exact(SIDE, SIDE, FilterType::Triangle);
+    Ok(image.to_luma8().into_raw())
+}
+
+/// Whether two prints are of one picture: their root-mean-square
+/// difference is under `ALIKE` of the full range. Prints of another size
+/// never are.
+pub fn alike(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
     let squares: f64 = a
         .iter()
-        .zip(&b)
+        .zip(b)
         .map(|(x, y)| (f64::from(*x) - f64::from(*y)).powi(2))
         .sum();
     let pixels = f64::from(SIDE * SIDE);
-    Ok((squares / pixels).sqrt() / 255.0 < ALIKE)
+    (squares / pixels).sqrt() / 255.0 < ALIKE
 }
 
 #[cfg(test)]

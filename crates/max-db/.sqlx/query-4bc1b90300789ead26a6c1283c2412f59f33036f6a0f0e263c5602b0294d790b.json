@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select distinct on (i.id) i.id, i.principal_id, i.native_user_id, m.sender_name\n         from messages m\n         join identities i on i.id = m.sender_identity_id\n         join principals p on p.id = i.principal_id\n         where m.conversation_id = $1 and i.platform = 'qq' and p.merged_into is null\n           and not exists (select 1 from avatar_checks c where c.identity_id = i.id)\n         order by i.id, m.id desc",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "identities",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "principal_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "identities",
+            "name": "principal_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "native_user_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identities",
+            "name": "native_user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "sender_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4bc1b90300789ead26a6c1283c2412f59f33036f6a0f0e263c5602b0294d790b"
+}
