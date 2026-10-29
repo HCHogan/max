@@ -177,7 +177,8 @@ fn placeholder(s: &str) -> Option<(Token<'_>, usize)> {
     let hash = body.find('#')?;
     let (verb, rest) = (&body[..hash], &body[hash + 1..]);
     let (id, mut at) = digits(rest)?;
-    if verb == "image" && rest[at..].starts_with('.') {
+    let medium = matches!(verb, "image" | "sticker" | "video" | "audio" | "file");
+    if medium && rest[at..].starts_with('.') {
         let (_, len) = digits(&rest[at + 1..])?;
         at += 1 + len;
     }
@@ -185,7 +186,8 @@ fn placeholder(s: &str) -> Option<(Token<'_>, usize)> {
     let token = match verb {
         "reply" => Token::Reply(MessageId(id)),
         "mention" => Token::Mention(PrincipalId(id), description),
-        "face" | "sticker" | "image" => Token::Display,
+        "face" => Token::Display,
+        _ if medium => Token::Display,
         _ => return None,
     };
     Some((token, 1 + hash + 1 + at + len))
@@ -305,8 +307,9 @@ mod tests {
 
     #[test]
     fn faces_and_media_max_cant_send_go() {
-        let draft =
-            say("好[face#271: 吃瓜][image#7405.1: 一只猫](3秒)[sticker#42: 柴犬][face: 吃瓜]");
+        let draft = say(
+            "好[face#271: 吃瓜][image#7405.1: 一只猫](3秒)[sticker#42.0: 柴犬][face: 吃瓜][video#7.2][file#7.3: a.pdf]",
+        );
         assert_eq!(draft.nodes, vec![text("好")]);
     }
 
@@ -355,8 +358,8 @@ mod tests {
         let echoed = "看[image: 一只猫][sticker] [unsend#3][react#2: 托腮][card: a | b][poke]图";
         assert_eq!(say(echoed).nodes, vec![text("看 图")]);
         assert_eq!(
-            say("[edit] [video#3]").nodes,
-            vec![text("[edit] [video#3]")]
+            say("[edit] [video#3.0] [movie#3]").nodes,
+            vec![text("[edit]  [movie#3]")]
         );
     }
 

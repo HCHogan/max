@@ -4,16 +4,19 @@
 //! historian all render rows with this, so a row reads the same everywhere.
 //!
 //! Placeholders follow the one grammar the segmenter parses: `[word#id]`,
-//! optionally `: description`. Forms without an id (`[image: 一只猫]`) are
-//! for reading only; the segmenter drops them when the model echoes one.
+//! optionally `: description`. A medium's id is its handle, the message's
+//! id and which medium of it, from 0: `[image#103.0: 一只猫]`. Forms
+//! without an id (`[face: 吃瓜]`) are for reading only, as is a medium's in
+//! the text stored for search; the segmenter drops them when the model
+//! echoes one.
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use chrono::{DateTime, Datelike, FixedOffset, TimeDelta, Utc, Weekday};
 
-use crate::ids::{IdentityId, PrincipalId};
-use crate::message::{Card, Content, MediaKind, MentionTarget, Message, Node};
+use crate::ids::{IdentityId, MessageId, PrincipalId};
+use crate::message::{Card, Content, MediaKind, MediaMeta, MentionTarget, Message, Node};
 
 /// A silence at least this long gets a gap line.
 const GAP: TimeDelta = TimeDelta::hours(1);
@@ -91,13 +94,14 @@ impl<P: People> Render<'_, P> {
     }
 
     pub fn line(&self, message: &Message, mark: Mark) -> String {
-        self.header(message, mark) + &self.content(&message.content) + suffix(mark)
+        let content = self.content_of(Some(message.id), &message.content);
+        self.header(message, mark) + &content + suffix(mark)
     }
 
     /// The line cut to [`EXCERPT_CHARS`], pointing at the full text.
     pub fn excerpt(&self, message: &Message, mark: Mark) -> String {
         let content: String = self
-            .content(&message.content)
+            .content_of(Some(message.id), &message.content)
             .chars()
             .take(EXCERPT_CHARS)
             .collect();
@@ -120,23 +124,41 @@ impl<P: People> Render<'_, P> {
         format!("[{time} {name} #{}{note}]: ", message.id)
     }
 
-    /// A row's content on one line: line breaks become ` ⏎ `.
+    /// A row's content on one line, for search: line breaks become ` ⏎ `,
+    /// and media have no handles, since the row has no id yet.
     pub fn content(&self, content: &Content) -> String {
+        self.content_of(None, content)
+    }
+
+    fn content_of(&self, id: Option<MessageId>, content: &Content) -> String {
         let text = match content {
             Content::Message { reply_to, nodes } => {
                 reply_to
                     .map(|id| format!("[reply#{id}] "))
                     .unwrap_or_default()
-                    + &self.nodes(nodes)
+                    + &self.nodes(id, nodes)
             }
-            Content::Edit { target, nodes } => format!("[edit#{target}] {}", self.nodes(nodes)),
+            Content::Edit { target, nodes } => {
+                format!("[edit#{target}] {}", self.nodes(id, nodes))
+            }
             Content::Unsend { target } => format!("[unsend#{target}]"),
         };
         text.trim().replace("\r\n", "\n").replace('\n', " ⏎ ")
     }
 
-    fn nodes(&self, nodes: &[Node]) -> String {
-        nodes.iter().map(|node| self.node(node)).collect()
+    fn nodes(&self, id: Option<MessageId>, nodes: &[Node]) -> String {
+        let mut ordinal = 0;
+        let mut out = String::new();
+        for node in nodes {
+            match node {
+                Node::Media { meta, .. } => {
+                    out += &medium(id.map(|id| (id, ordinal)), meta);
+                    ordinal += 1;
+                }
+                node => out += &self.node(node),
+            }
+        }
+        out
     }
 
     fn node(&self, node: &Node) -> String {
@@ -155,16 +177,7 @@ impl<P: People> Render<'_, P> {
             } => format!("@{display}"),
             // Max can't send faces, so the model gets no id to copy.
             Node::Emote(emote) => labelled("face", emote.name.as_deref()),
-            Node::Media { meta, .. } => {
-                let word = match meta.kind {
-                    MediaKind::Image => "image",
-                    MediaKind::Sticker => "sticker",
-                    MediaKind::Video => "video",
-                    MediaKind::Audio => "audio",
-                    MediaKind::File => "file",
-                };
-                labelled(word, meta.description.as_deref().or(meta.name.as_deref()))
-            }
+            Node::Media { meta, .. } => medium(None, meta),
             Node::Card(card) => card_line(card),
             Node::Forward(forward) => match forward.count {
                 Some(count) => format!("[forward: {count} 条]"),
@@ -181,6 +194,28 @@ fn suffix(mark: Mark) -> &'static str {
         Mark::MaybeNotSent => "（可能没发出去）",
         _ => "",
     }
+}
+
+/// A medium, with its handle when the row has an id.
+fn medium(handle: Option<(MessageId, u16)>, meta: &MediaMeta) -> String {
+    let word = match meta.kind {
+        MediaKind::Image => "image",
+        MediaKind::Sticker => "sticker",
+        MediaKind::Video => "video",
+        MediaKind::Audio => "audio",
+        MediaKind::File => "file",
+    };
+    let word = match handle {
+        Some((id, ordinal)) => format!("{word}#{id}.{ordinal}"),
+        None => word.to_owned(),
+    };
+    // A picture's or a recording's file name is a hash QQ made up; a
+    // file's is what it is.
+    let label = match meta.kind {
+        MediaKind::File => meta.description.as_deref().or(meta.name.as_deref()),
+        _ => meta.description.as_deref(),
+    };
+    labelled(&word, label)
 }
 
 fn labelled(word: &str, label: Option<&str>) -> String {
@@ -408,6 +443,36 @@ mod tests {
                 .filter(|c| *c == '长')
                 .count(),
             EXCERPT_CHARS
+        );
+    }
+
+    #[test]
+    fn media_have_handles_in_lines_but_not_in_search_text() {
+        let people = people();
+        let named = |kind, name: &str| Node::Media {
+            media: None,
+            meta: MediaMeta {
+                kind,
+                mime: None,
+                size: None,
+                name: Some(name.into()),
+                description: None,
+            },
+        };
+        let content = said(vec![
+            named(MediaKind::Image, "6D1D1FE1.jpg"),
+            text("和"),
+            named(MediaKind::File, "手册.pdf"),
+        ]);
+        let message = message(7, (28, 9, 0), "小明", content.clone());
+        let line = render(&people).line(&message, Mark::None);
+        assert!(
+            line.ends_with("[image#7.0]和[file#7.1: 手册.pdf]"),
+            "{line}"
+        );
+        assert_eq!(
+            render(&people).content(&content),
+            "[image]和[file: 手册.pdf]"
         );
     }
 }
