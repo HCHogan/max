@@ -11,7 +11,7 @@ use crate::command;
 use crate::conversation::testing::{self, from_xiaoming, offset, shared, text};
 use crate::conversation::{Outgoing, ingest};
 use crate::inbound::{Chat, InNode, Person};
-use crate::llm::testing::Script;
+use crate::llm::testing::{Answer, Script};
 
 const PATIENCE: Duration = Duration::from_secs(5);
 
@@ -21,6 +21,7 @@ struct Setup {
     outbound: UnboundedReceiver<Outgoing>,
     done: Option<oneshot::Receiver<()>>,
     owner: Account,
+    script: Arc<Script>,
     _scope: Scope,
 }
 
@@ -56,6 +57,7 @@ impl Setup {
             outbound,
             done: Some(done),
             owner,
+            script,
             _scope: scope,
         }
     }
@@ -247,6 +249,37 @@ async fn a_group_goes_on_from_an_old_one(pool: PgPool) {
     assert_eq!(s.said().await.0, "c2c:OWNER", "GROUP2 got no answer");
     let endpoints = "select count(*) from endpoints where native_id = 'group:GROUP2'";
     assert_eq!(s.count(endpoints).await, 0);
+    s.stop().await;
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_conversation_that_stopped_on_an_error_starts_again(pool: PgPool) {
+    let mut s = Setup::new(pool).await;
+    s.script.push(Answer::Hangs);
+    s.send(private(1, "在吗"));
+    let deadline = std::time::Instant::now() + PATIENCE;
+    while s.script.calls() == 0 {
+        assert!(std::time::Instant::now() < deadline, "no model call");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // Postgres refuses C2C2 alone: the actor stops on it.
+    sqlx::raw_sql(
+        "create function refuse() returns trigger language plpgsql
+           as $$ begin raise exception 'refused'; end $$;
+         create trigger refuse before insert on messages
+           for each row when (new.native_id = 'C2C2') execute function refuse();",
+    )
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    s.send(private(2, "嗯"));
+    let said = s.said().await;
+    assert_eq!(said, ("c2c:OWNER".into(), "出错了，这条没回上。".into()));
+    let lost = "select count(*) from turn_outcomes where outcome = 'lost'";
+    assert_eq!(s.count(lost).await, 1);
+    // It is gone right after; a message it took while going would be lost.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    s.code(3, "/bind").await;
     s.stop().await;
 }
 

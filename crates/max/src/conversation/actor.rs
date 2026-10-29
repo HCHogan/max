@@ -15,7 +15,7 @@ use max_core::message::{Draft, DraftNode, Message};
 use max_core::project::{Budgets, MOST_PICTURES};
 use max_core::prompt;
 use max_core::render::Mark;
-use max_core::run::{FailReason, Input, Run, RunSpec, Step, Wake};
+use max_core::run::{FailReason, Input, Outcome, Run, RunSpec, Step, Wake};
 use max_db::platform::{self, Settings};
 use max_db::{ledger, turns, usage};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -147,8 +147,17 @@ impl Conversation {
         })
     }
 
-    /// Until `Event::Stop` and the core is done with.
+    /// Until `Event::Stop` and the core is done with; or until an error,
+    /// when it gives up.
     pub async fn run(mut self, mut mailbox: UnboundedReceiver<Event>) -> Result<()> {
+        let served = self.serve(&mut mailbox).await;
+        if served.is_err() {
+            self.give_up().await;
+        }
+        served
+    }
+
+    async fn serve(&mut self, mailbox: &mut UnboundedReceiver<Event>) -> Result<()> {
         loop {
             let deadline = self.deadline();
             tokio::select! {
@@ -165,6 +174,43 @@ impl Conversation {
                 return Ok(());
             }
         }
+    }
+
+    /// After an error: the core and the jobs are stopped, and the
+    /// conversation's unfinished turns end lost, as in a crash, so they
+    /// don't look running (the historian waits on those). A line says so,
+    /// if the database lets it. The next message starts the conversation
+    /// again.
+    async fn give_up(&mut self) {
+        let core = self.core.take();
+        let jobs = self.cancel_jobs();
+        if let Err(error) = self.wind_up(core, &jobs).await {
+            let conversation = self.place.conversation;
+            warn!(%conversation, %error, "couldn't wind up after the error");
+        }
+    }
+
+    async fn wind_up(&mut self, core: Option<Active>, jobs: &[u32]) -> Result<()> {
+        let mut conn = self.shared.services.pool.acquire().await?;
+        for turn in turns::unfinished(&mut conn, Some(self.place.conversation)).await? {
+            turns::close(&mut conn, turn, &Outcome::Lost, Utc::now()).await?;
+        }
+        drop(conn);
+        if let Some(a) = core {
+            drop(a.io);
+            self.report_unanswered(&a.run, "出错了，这条没回上。")
+                .await?;
+        }
+        if !jobs.is_empty() {
+            let jobs: Vec<String> = jobs.iter().map(|job| format!("job#{job}")).collect();
+            let text = format!("出错了，后台的 {} 停了。", jobs.join("、"));
+            let draft = Draft {
+                reply_to: None,
+                nodes: vec![DraftNode::Text { text }],
+            };
+            self.say(draft, None, None, None).await?;
+        }
+        Ok(())
     }
 
     fn deadline(&self) -> Option<Instant> {

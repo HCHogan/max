@@ -70,7 +70,7 @@ async fn a_turn_without_an_outcome_is_unfinished(pool: PgPool) -> sqlx::Result<(
         at(3),
     )
     .await?;
-    assert_eq!(unfinished(&mut conn).await?, [running]);
+    assert_eq!(unfinished(&mut conn, None).await?, [running]);
     assert_eq!(outcome(&mut conn, finished).await?, Some(Outcome::Silent));
     assert_eq!(outcome(&mut conn, running).await?, None);
     Ok(())

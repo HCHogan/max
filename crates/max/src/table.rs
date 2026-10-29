@@ -18,6 +18,7 @@ use max_db::platform::{self, Account, ConversationKind, Endpoint};
 use max_db::turns;
 use max_db::{PgConnection, PgPool};
 use sqlx::Connection;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, info, warn};
 
@@ -67,15 +68,22 @@ impl Table {
         info!("every conversation has stopped");
     }
 
-    async fn route(&mut self, inbound: Inbound) -> Result<()> {
+    async fn route(&mut self, mut inbound: Inbound) -> Result<()> {
         let key = (inbound.platform, inbound.chat.native_id.clone());
         if let Some(actor) = self.actors.get(&key) {
-            if actor.send(Event::Inbound(inbound)).is_err() {
-                // It logged why; the next message starts it again.
-                warn!(chat = key.1, "lost a message: its conversation had stopped");
-                self.actors.remove(&key);
+            match actor.send(Event::Inbound(inbound)) {
+                Ok(()) => return Ok(()),
+                // It stopped on an error, and logged why: it starts again,
+                // with this message.
+                Err(SendError(event)) => {
+                    let Event::Inbound(back) = event else {
+                        unreachable!("an inbound was sent");
+                    };
+                    info!(chat = key.1, "starting a conversation that had stopped");
+                    self.actors.remove(&key);
+                    inbound = back;
+                }
             }
-            return Ok(());
         }
         let Some(me) = self.me.get(&inbound.platform).cloned() else {
             warn!(platform = ?inbound.platform, "a message from a platform Max isn't on");
@@ -184,7 +192,7 @@ impl Table {
 pub async fn close_unfinished(pool: &PgPool) -> Result<()> {
     let mut conn = pool.acquire().await?;
     let now = Utc::now();
-    for turn in turns::unfinished(&mut conn).await? {
+    for turn in turns::unfinished(&mut conn, None).await? {
         info!(%turn, "a turn was running when Max crashed");
         turns::close(&mut conn, turn, &Outcome::Lost, now).await?;
     }

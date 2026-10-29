@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id from turns t\n         where not exists (select from turn_outcomes o where o.turn_id = t.id)\n         order by id",
+  "query": "select id from turns t\n         where ($1::bigint is null or conversation_id = $1)\n           and not exists (select from turn_outcomes o where o.turn_id = t.id)\n         order by id",
   "describe": {
     "columns": [
       {
@@ -16,11 +16,13 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Int8"
+      ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "67a2fc98fe8681dfec00c4603623576fc958137a72213c1639e274bf819e6146"
+  "hash": "e4bd0c4ff9e060d4457a3df49bb3f0256afe137d70b0f0b7559f46193fd8bad4"
 }

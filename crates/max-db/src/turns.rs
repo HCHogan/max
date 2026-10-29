@@ -122,13 +122,18 @@ pub async fn outcome(conn: &mut PgConnection, turn: TurnId) -> sqlx::Result<Opti
     }))
 }
 
-/// Turns without an outcome, found when the process starts: a clean stop
-/// ends every turn, so these were running in a crash.
-pub async fn unfinished(conn: &mut PgConnection) -> sqlx::Result<Vec<TurnId>> {
+/// Turns without an outcome, in `conversation` or in any: running, or
+/// left running by an actor or a process that stopped on an error.
+pub async fn unfinished(
+    conn: &mut PgConnection,
+    conversation: Option<ConversationId>,
+) -> sqlx::Result<Vec<TurnId>> {
     let ids = sqlx::query_scalar!(
         "select id from turns t
-         where not exists (select from turn_outcomes o where o.turn_id = t.id)
-         order by id"
+         where ($1::bigint is null or conversation_id = $1)
+           and not exists (select from turn_outcomes o where o.turn_id = t.id)
+         order by id",
+        conversation.map(|conversation| conversation.0)
     )
     .fetch_all(conn)
     .await?;
