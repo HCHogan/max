@@ -19,7 +19,7 @@ use tracing::warn;
 use super::fetch::{self, fetch};
 use super::prepare::prepare;
 use super::store::Store;
-use crate::worker::{Attempt, Derivation, Policy, Row};
+use crate::worker::{Attempt, Derivation, Policy, Row, Wait};
 
 /// The most a medium may be; past it, only what QQ said of it is kept.
 const MOST: u64 = 64 << 20;
@@ -60,13 +60,13 @@ impl Derivation for Download {
     type Input = Row;
     type Unit = Medium;
 
-    fn on_input(&self, row: Row) -> Vec<Medium> {
-        match &row.message.content {
-            Content::Message { nodes, .. } | Content::Edit { nodes, .. } => {
-                remote(row.message.id, nodes)
-            }
-            Content::Unsend { .. } => Vec::new(),
-        }
+    fn on_input(&self, row: Row) -> Vec<(Medium, Wait)> {
+        let nodes = match &row.message.content {
+            Content::Message { nodes, .. } | Content::Edit { nodes, .. } => nodes,
+            Content::Unsend { .. } => return Vec::new(),
+        };
+        let remote = remote(row.message.id, nodes);
+        remote.into_iter().map(|unit| (unit, Wait::Now)).collect()
     }
 
     async fn scan(&self) -> Result<Vec<Medium>> {

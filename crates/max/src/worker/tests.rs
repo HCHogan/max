@@ -10,8 +10,8 @@ use super::*;
 
 const SECOND: Duration = Duration::from_secs(1);
 
-/// Units are numbers. A unit fails while `failing` says so, and takes
-/// `slow` (or forever, past an hour) to run.
+/// Units are numbers, from 10 in conversations of their tens. A unit fails
+/// while `failing` says so, and takes `slow` to run.
 #[derive(Default)]
 struct Counting {
     scans: Mutex<VecDeque<Vec<u32>>>,
@@ -35,11 +35,15 @@ impl Drop for Dropped<'_> {
 }
 
 impl Derivation for Counting {
-    type Input = u32;
+    type Input = (u32, Wait);
     type Unit = u32;
 
-    fn on_input(&self, input: u32) -> Vec<u32> {
+    fn on_input(&self, input: (u32, Wait)) -> Vec<(u32, Wait)> {
         vec![input]
+    }
+
+    fn conversation(&self, unit: &u32) -> Option<ConversationId> {
+        (*unit >= 10).then(|| ConversationId(i64::from(*unit / 10)))
     }
 
     async fn scan(&self) -> Result<Vec<u32>> {
@@ -80,7 +84,7 @@ const POLICY: Policy = Policy {
 async fn with<T>(
     worker: &Arc<Counting>,
     policy: Policy,
-    test: impl AsyncFnOnce(UnboundedSender<u32>) -> T,
+    test: impl AsyncFnOnce(UnboundedSender<(u32, Wait)>) -> T,
 ) -> T {
     let (inputs, rx) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
@@ -102,13 +106,14 @@ fn units(worker: &Counting) -> Vec<u32> {
 #[tokio::test(start_paused = true)]
 async fn each_unit_once_and_two_at_a_time() {
     let worker = Arc::new(Counting {
-        scans: Mutex::new(VecDeque::from([vec![1, 2]])),
+        scans: Mutex::new(VecDeque::from([vec![1, 2, 3]])),
         slow: SECOND,
         ..Counting::default()
     });
     with(&worker, POLICY, async |inputs| {
-        for unit in [2, 3, 3, 4, 5] {
-            inputs.send(unit).unwrap();
+        // 3 is waiting its turn.
+        for unit in [3, 3, 4, 5] {
+            inputs.send((unit, Wait::Now)).unwrap();
         }
         sleep(Duration::from_secs(10)).await;
     })
@@ -128,11 +133,11 @@ async fn retries_after_waiting_then_gives_up() {
         ..Counting::default()
     });
     with(&worker, POLICY, async |inputs| {
-        inputs.send(7).unwrap();
+        inputs.send((7, Wait::Now)).unwrap();
         sleep(Duration::from_secs(10)).await;
         // Given up, it is forgotten: the next row brings it back.
         worker.failing.lock().unwrap().clear();
-        inputs.send(7).unwrap();
+        inputs.send((7, Wait::Now)).unwrap();
         sleep(SECOND).await;
     })
     .await;
@@ -161,10 +166,10 @@ async fn a_try_that_runs_over_is_dropped() {
         ..POLICY
     };
     with(&worker, policy, async |inputs| {
-        inputs.send(1).unwrap();
+        inputs.send((1, Wait::Now)).unwrap();
         sleep(Duration::from_secs(6)).await;
         assert_eq!(worker.dropped.load(Ordering::SeqCst), 1, "by its timeout");
-        inputs.send(2).unwrap();
+        inputs.send((2, Wait::Now)).unwrap();
         sleep(SECOND).await;
     })
     .await;
@@ -194,4 +199,73 @@ async fn scans_again_when_told_to() {
         .map(|t| (t.0, t.2.as_secs()))
         .collect();
     assert_eq!(at, [(1, 0), (2, 120)]);
+}
+
+/// When each unit started, in seconds, in order.
+fn starts(worker: &Counting) -> Vec<(u32, u64)> {
+    let tries = worker.tries.lock().unwrap();
+    tries
+        .iter()
+        .map(|(unit, _, at)| (*unit, at.as_secs()))
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn throttled_from_the_first_input_and_debounced_from_the_last() {
+    let worker = Arc::new(Counting::default());
+    let ten = Duration::from_secs(10);
+    with(&worker, POLICY, async |inputs| {
+        // The clock starts with the first run: one at once.
+        inputs.send((1, Wait::Now)).unwrap();
+        sleep(SECOND).await;
+        for _ in 0..3 {
+            inputs.send((2, Wait::Throttle(ten))).unwrap();
+            inputs.send((3, Wait::Debounce(ten))).unwrap();
+            sleep(Duration::from_secs(4)).await;
+        }
+        sleep(Duration::from_secs(30)).await;
+    })
+    .await;
+    assert_eq!(starts(&worker), [(1, 0), (2, 11), (3, 19)]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_input_while_running_runs_it_again_after() {
+    let worker = Arc::new(Counting {
+        slow: Duration::from_secs(3),
+        ..Counting::default()
+    });
+    with(&worker, POLICY, async |inputs| {
+        inputs.send((1, Wait::Now)).unwrap();
+        sleep(SECOND).await;
+        inputs.send((1, Wait::Now)).unwrap();
+        inputs.send((1, Wait::Now)).unwrap();
+        sleep(Duration::from_secs(10)).await;
+    })
+    .await;
+    assert_eq!(starts(&worker), [(1, 0), (1, 3)], "once more, not twice");
+}
+
+#[tokio::test(start_paused = true)]
+async fn one_at_a_time_in_a_conversation_and_urgent_first() {
+    let worker = Arc::new(Counting {
+        slow: Duration::from_secs(2),
+        ..Counting::default()
+    });
+    let policy = Policy {
+        concurrent: 1,
+        ..POLICY
+    };
+    with(&worker, policy, async |inputs| {
+        // 11 and 12 share a conversation; 1 and 2 are in none.
+        for unit in [11, 12, 1, 2] {
+            inputs.send((unit, Wait::Now)).unwrap();
+        }
+        // Past the limit, but not past 11 in its conversation.
+        inputs.send((13, Wait::Urgent)).unwrap();
+        inputs.send((2, Wait::Urgent)).unwrap();
+        sleep(Duration::from_secs(20)).await;
+    })
+    .await;
+    assert_eq!(starts(&worker), [(11, 0), (2, 0), (13, 2), (12, 4), (1, 6)]);
 }

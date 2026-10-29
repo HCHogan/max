@@ -72,6 +72,7 @@ async fn downloads_each_medium_once(pool: PgPool) {
             message: Arc::new(committed.message),
         };
         let units = download.on_input(row);
+        let units: Vec<_> = units.into_iter().map(|(unit, _)| unit).collect();
         let shown: Vec<_> = units.iter().map(|unit| format!("{unit:?}")).collect();
         assert_eq!(
             shown,

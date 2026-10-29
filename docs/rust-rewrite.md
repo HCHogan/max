@@ -255,14 +255,17 @@ systemd 要设 `KillMode=mixed`：SIGTERM 只发给主进程，VM 这些子进�
    ```rust
    trait Derivation {
        type Input;                                    // 入账的一行；caption 是下载 worker 交来的 sha256
-       type Unit: Clone + Eq + Hash;                  // 也是去重的键：排着或在跑的不再加
-       fn on_input(&self, input: Self::Input) -> Vec<Self::Unit>;   // 不做 I/O
+       type Unit: Clone + Eq + Hash;                  // 也是去重的键：排着的不再加，在跑的跑完再来一次
+       fn on_input(&self, input: Self::Input) -> Vec<(Self::Unit, Wait)>; // 不做 I/O
+       fn conversation(&self, unit: &Self::Unit) -> Option<ConversationId> { None } // 同一会话的一次一个
        async fn scan(&self) -> Result<Vec<Self::Unit>>;             // 启动和定期：按自己的输出表找缺的
        async fn run(&self, unit: &Self::Unit, attempt: Attempt) -> Result<()>; // 一个事务，可重入
    }
+
+   enum Wait { Now, Urgent, Throttle(Duration), Debounce(Duration) }
    ```
 
-   驱动器通用（2026-10-29 照下载和 caption 两个实例定）：每个 worker 一个常量的 `Policy`（名字、并发数、每次尝试的超时、重试前等多久、多久重扫一次），自己的 `Scope`，按单元去重，重试用 `sleep_until` 等最早的那个。重试用完就放弃，只记日志；`Attempt` 告诉 `run` 是不是最后一次，caption 最后一次失败时写空的 caption。关机时在跑的单元直接 drop，事务回滚，下次启动由扫描补。入账通知是会话 actor 提交之后同步发的：`Shared` 里一组无界 mpsc，每个 worker 一个，不用 broadcast，它落后了会丢通知。不像 Haskell 版用 `message_projections` 的标志位当队列。不要：持久化的队列、失败表和重试次数列、租约、`LISTEN/NOTIFY`、配置里的策略旋钮。
+   驱动器通用（2026-10-29 照下载和 caption 两个实例定）：每个 worker 一个常量的 `Policy`（名字、并发数、每次尝试的超时、重试前等多久、多久重扫一次），自己的 `Scope`，按单元去重，重试用 `sleep_until` 等最早的那个。`Wait` 说单元什么时候跑：`Now` 排队；`Urgent` 插到最前、不占并发数，有人在等它，比如 `/compact`；`Throttle` 从第一个输入算起，期间的输入不改时间，比如 historian 一分钟一次的压力检查；`Debounce` 从最后一个输入算起，比如安静了才写的摘要。单元在跑的时候又来了，跑完再排一次，来几次都只一次。`conversation` 给了会话的单元，同一会话一次只跑一个：historian 是 `summaries` 唯一的写者，两次 capture 同时跑会盖同一段。重试用完就放弃，只记日志；`Attempt` 告诉 `run` 是不是最后一次，caption 最后一次失败时写空的 caption。关机时在跑的单元直接 drop，事务回滚，下次启动由扫描补。入账通知是会话 actor 提交之后同步发的：`Shared` 里一组无界 mpsc，每个 worker 一个，不用 broadcast，它落后了会丢通知。不像 Haskell 版用 `message_projections` 的标志位当队列。不要：持久化的队列、失败表和重试次数列、租约、`LISTEN/NOTIFY`、配置里的策略旋钮。
 
    historian 是第一个 worker，比这个框架早（mpsc 通知、一分钟一圈、不扫描，见 [historian](#historian)）。它先只把输入换成同一组通知，要按段去抖、按会话单飞的 lingo 来了，再照两个实例把它挪到框架上。
 3. **触发源**：产出的不是表，是输入，全部进会话 actor 的同一个入口（[运行流程](#运行流程)第 2 步）：有核心在跑就喂给它，没有就起一个核心。差别只在源头：
