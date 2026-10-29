@@ -81,6 +81,9 @@ rand = { version = "0.10", default-features = false, features = ["thread_rng"] }
 # does the protocol; axum serves it, and only that.
 rmcp = { version = "3.8", default-features = false, features = ["server", "transport-streamable-http-server"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+# The content store names media by their SHA-256. 0.11 is in the tree
+# already, through sqlx and russh.
+sha2 = "0.11"
 
 # Tests only.
 insta = "1.49"
