@@ -91,7 +91,7 @@ pub const MAX_TOOLS: [MaxTool; 8] = [
         output: r#"{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"]}"#,
         declaration: "/** 把 /work 下的一个文件发到本群，群里显示成文件，点开能下载：文档、表格、PDF、压缩包、代码都行。最大 64 MiB，不能是空的；路径上不能有符号链接。\n  \
         name 是群里显示的文件名，默认用路径里的。发出去了才返回，handle 是这个文件的句柄。一次运行最多发 5 个。\n  \
-        要大家直接看到的图用 send_image，别当文件发。 */\n\
+        要大家直接看到的图用 send_image，别当文件发。记录里已有的文件要再发，先 max.file 拷到 /work 再发。 */\n\
         send_file(args: { path: string; name?: string }): Promise<{ handle: string }>;",
         per_run: Some(5),
     },
