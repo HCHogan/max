@@ -512,17 +512,12 @@ impl Conversation {
         };
         a.said.clear();
         a.idle_since = Instant::now();
-        let call = usage::Call {
-            conversation: Some(self.place.conversation),
-            turn: Some(a.turn),
-            purpose: usage::Purpose::Turn,
-            provider: &a.chosen.provider,
-            model: &a.chosen.tag.model,
-            effort: a.chosen.options.effort.as_deref(),
-            usage: out.usage,
-            cost_micros: None,
-            at: Utc::now(),
-        };
+        let call = a.chosen.usage(
+            usage::Purpose::Turn,
+            Some(self.place.conversation),
+            Some(a.turn),
+            out.usage,
+        );
         let mut conn = self.shared.services.pool.acquire().await?;
         usage::record(&mut conn, &call).await?;
         if let Err(rejected) = a.run.model_output(out) {

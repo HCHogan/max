@@ -9,9 +9,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use color_eyre::eyre::{Result, WrapErr};
-use max_core::item::{ModelTag, Protocol};
+use chrono::Utc;
+use color_eyre::eyre::{Result, WrapErr, eyre};
+use max_core::ids::{ConversationId, TurnId};
+use max_core::item::{ItemKind, ModelTag, Protocol, Usage};
 use max_core::run::Request;
+use max_db::{PgPool, usage};
 use max_llm::{Call, Options, Pictures};
 
 use crate::config;
@@ -87,6 +90,58 @@ impl Chosen {
     /// `provider/model`, as `/model` takes it.
     pub fn reference(&self) -> String {
         format!("{}/{}", self.provider, self.tag.model)
+    }
+
+    /// A whole answer, for work outside a turn: what the model wrote, its
+    /// usage recorded as `purpose`'s. Given up after `limit`; not retried.
+    pub async fn complete(
+        &self,
+        pool: &PgPool,
+        purpose: usage::Purpose,
+        conversation: Option<ConversationId>,
+        request: &Request,
+        pictures: &Pictures,
+        limit: Duration,
+    ) -> Result<String> {
+        let out = tokio::time::timeout(limit, async {
+            let mut call = self.caller.call(request, &self.options, pictures).await?;
+            while call.next().await?.is_some() {}
+            call.finish()
+        })
+        .await
+        .map_err(|_| eyre!("no answer in {limit:?}"))??;
+        let mut conn = pool.acquire().await?;
+        let record = self.usage(purpose, conversation, None, out.usage);
+        usage::record(&mut conn, &record).await?;
+        Ok(out
+            .items
+            .iter()
+            .filter_map(|item| match &item.kind {
+                ItemKind::Assistant { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// A call of this model's, for `llm_usage`.
+    pub fn usage(
+        &self,
+        purpose: usage::Purpose,
+        conversation: Option<ConversationId>,
+        turn: Option<TurnId>,
+        usage: Usage,
+    ) -> usage::Call<'_> {
+        usage::Call {
+            conversation,
+            turn,
+            purpose,
+            provider: &self.provider,
+            model: &self.tag.model,
+            effort: self.options.effort.as_deref(),
+            usage,
+            cost_micros: None,
+            at: Utc::now(),
+        }
     }
 }
 

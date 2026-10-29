@@ -235,38 +235,18 @@ impl Historian {
             max_output: chosen.max_output,
             roster: BTreeSet::default(),
         };
-        let out = tokio::time::timeout(CALL_TIMEOUT, async {
-            let mut call = chosen
-                .caller
-                .call(&request, &chosen.options, &max_llm::Pictures::default())
-                .await?;
-            while call.next().await?.is_some() {}
-            call.finish()
-        })
-        .await
-        .map_err(|_| eyre!("no answer in {CALL_TIMEOUT:?}"))??;
-
-        let mut conn = self.pool.acquire().await?;
-        let record = usage::Call {
-            conversation: Some(conversation),
-            turn: None,
-            purpose: usage::Purpose::Historian,
-            provider: &chosen.provider,
-            model: &chosen.tag.model,
-            effort: chosen.options.effort.as_deref(),
-            usage: out.usage,
-            cost_micros: None,
-            at: Utc::now(),
-        };
-        usage::record(&mut conn, &record).await?;
-        Ok(out
-            .items
-            .iter()
-            .filter_map(|item| match &item.kind {
-                ItemKind::Assistant { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect())
+        let purpose = usage::Purpose::Historian;
+        let pictures = max_llm::Pictures::default();
+        chosen
+            .complete(
+                &self.pool,
+                purpose,
+                Some(conversation),
+                &request,
+                &pictures,
+                CALL_TIMEOUT,
+            )
+            .await
     }
 }
 

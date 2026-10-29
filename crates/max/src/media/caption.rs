@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use chrono::{TimeDelta, Utc};
-use color_eyre::eyre::{Result, bail, eyre};
+use color_eyre::eyre::{Result, bail};
 use max_core::item::{Image, Item, ItemKind};
 use max_core::run::Request;
 use max_db::captions::{self, Caption, Kind};
@@ -225,38 +225,10 @@ impl Captioner {
         if pictures.0.is_empty() {
             bail!("the picture can't be read");
         }
-        let out = tokio::time::timeout(CALL, async {
-            let mut call = chosen
-                .caller
-                .call(&request, &chosen.options, &pictures)
-                .await?;
-            while call.next().await?.is_some() {}
-            call.finish()
-        })
-        .await
-        .map_err(|_| eyre!("no answer in {CALL:?}"))??;
-
-        let mut conn = self.pool.acquire().await?;
-        let record = usage::Call {
-            conversation: None,
-            turn: None,
-            purpose: usage::Purpose::Caption,
-            provider: &chosen.provider,
-            model: &chosen.tag.model,
-            effort: chosen.options.effort.as_deref(),
-            usage: out.usage,
-            cost_micros: None,
-            at: Utc::now(),
-        };
-        usage::record(&mut conn, &record).await?;
-        let said: String = out
-            .items
-            .iter()
-            .filter_map(|item| match &item.kind {
-                ItemKind::Assistant { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
+        let purpose = usage::Purpose::Caption;
+        let said = chosen
+            .complete(&self.pool, purpose, None, &request, &pictures, CALL)
+            .await?;
         parse(&said, kind)
     }
 }

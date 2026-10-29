@@ -5,8 +5,9 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use chrono::{FixedOffset, Utc};
+use chrono::FixedOffset;
 use color_eyre::eyre::{Result, eyre};
 use max_core::ids::{MessageId, PrincipalId};
 use max_core::intent::Verdict;
@@ -26,6 +27,8 @@ use crate::llm::Chosen;
 
 /// Enough for the one line of JSON.
 const MAX_OUTPUT: u32 = 300;
+/// The longest a verdict may take; the batch waits for it.
+const CALL: Duration = Duration::from_secs(60);
 
 /// Rows of context the classifier reads before the ones it judges.
 pub const CONTEXT_LINES: i64 = 15;
@@ -124,36 +127,18 @@ async fn run(job: &Job) -> Result<Option<Verdict>> {
         max_output: Some(MAX_OUTPUT),
         roster: Default::default(),
     };
-    let chosen = &job.chosen;
-    let mut call = chosen
-        .caller
-        .call(&request, &chosen.options, &max_llm::Pictures::default())
+    let (purpose, pictures) = (usage::Purpose::Intent, max_llm::Pictures::default());
+    let text = job
+        .chosen
+        .complete(
+            &job.pool,
+            purpose,
+            Some(place.conversation),
+            &request,
+            &pictures,
+            CALL,
+        )
         .await?;
-    while call.next().await?.is_some() {}
-    let out = call.finish()?;
-
-    let mut conn = job.pool.acquire().await?;
-    let record = usage::Call {
-        conversation: Some(place.conversation),
-        turn: None,
-        purpose: usage::Purpose::Intent,
-        provider: &chosen.provider,
-        model: &chosen.tag.model,
-        effort: chosen.options.effort.as_deref(),
-        usage: out.usage,
-        cost_micros: None,
-        at: Utc::now(),
-    };
-    usage::record(&mut conn, &record).await?;
-
-    let text: String = out
-        .items
-        .iter()
-        .filter_map(|item| match &item.kind {
-            ItemKind::Assistant { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
     let verdict = classify::parse(&text);
     if verdict.is_none() {
         return Err(eyre!("the classifier answered {text:.200}"));
