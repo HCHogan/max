@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select last.message_id as \"message_id!\", last.ordinal as \"ordinal!\", near.text as \"text!\"\n        from (\n            select c.sha256, c.text, e.embedding <=> $2::float4[]::vector as distance\n            from caption_embeddings e join media_captions c on c.sha256 = e.sha256\n            where e.model = $1 and c.kind = 'sticker' and not c.skip and c.text <> ''\n        ) near\n        cross join lateral (\n            select mm.message_id, mm.ordinal\n            from message_media mm join messages m on m.id = mm.message_id\n            where mm.sha256 = near.sha256\n              and (jsonb_path_query_array(m.nodes, '$[*] ? (@.type == \"media\").meta.kind')\n                   ->> mm.ordinal::int) = 'sticker'\n            order by mm.message_id desc\n            limit 1\n        ) last\n        order by near.distance\n        limit $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "message_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "message_media",
+            "name": "message_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "ordinal!",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "message_media",
+            "name": "ordinal"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "text!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "media_captions",
+            "name": "text"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float4Array",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "52e5689ffe18c6f0f62e860fa4e05671a895c8aecc265d1c50c090bf977e42ce"
+}

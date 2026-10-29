@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select c.text from media_captions c\n         where c.sha256 = $1 and c.kind = 'sticker' and not c.skip and c.text <> ''\n           and not exists (select 1 from caption_embeddings e\n                           where e.sha256 = c.sha256 and e.model = $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "text",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "media_captions",
+            "name": "text"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c4f70ecd8462b62ec5a1520f07a97fd51a561e81759afc957ff73b95ef79d942"
+}

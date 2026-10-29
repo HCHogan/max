@@ -1,6 +1,6 @@
 # The module on a fresh machine, without any platform: Postgres comes up
-# with the role and the database, max migrates and waits, and it stops
-# cleanly when asked.
+# with the role, the database and pgvector, max migrates and waits, and it
+# stops cleanly when asked.
 { pkgs, module }:
 pkgs.testers.runNixOSTest {
   name = "max-module";
@@ -29,6 +29,12 @@ pkgs.testers.runNixOSTest {
         "runuser -u postgres -- psql -d maxx -tAc "
         + "'select count(*) > 0 from _sqlx_migrations' | grep -qx t"
     )
+    # maxx's role isn't a superuser: the module made pgvector for it.
+    machine.succeed(
+        "runuser -u postgres -- psql -d maxx -tAc "
+        + "\"select r.rolsuper from pg_roles r where r.rolname = 'maxx'\" | grep -qx f"
+    )
+    machine.succeed("runuser -u postgres -- psql -d maxx -tAc 'table caption_embeddings'")
     machine.succeed("systemctl stop maxx.service")
     machine.succeed("journalctl -u maxx.service | grep -q stopping")
     assert machine.succeed("systemctl show -P Result maxx.service").strip() == "success"

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into caption_embeddings (sha256, model, embedding, created_at)\n         values ($1, $2, $3::float4[]::vector, $4)\n         on conflict (sha256) do update\n         set model = excluded.model, embedding = excluded.embedding,\n             created_at = excluded.created_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float4Array",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fb7c16e30d30fe43760a854476b6317a65489fdc57f95e71e3c03d2ae8771856"
+}

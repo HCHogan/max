@@ -193,6 +193,8 @@ in
 
     services.postgresql = {
       enable = true;
+      # The sticker library's vectors.
+      extensions = ps: [ ps.pgvector ];
       ensureDatabases = [ name ];
       ensureUsers = [
         {
@@ -201,6 +203,14 @@ in
         }
       ];
     };
+
+    # pgvector isn't a trusted extension, so max's role can't create it
+    # and the migration that needs it would fail. The superuser creates it
+    # after the database is made; the migration's `if not exists` then does
+    # nothing. postgresql-setup runs as postgres, with psql on its path.
+    systemd.services.postgresql-setup.postStart = ''
+      psql -d ${name} -tAc 'create extension if not exists vector' >/dev/null
+    '';
 
     users.users.${name} = {
       isSystemUser = true;

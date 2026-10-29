@@ -6,6 +6,7 @@
 //! savepoint when the caller already has a transaction).
 
 pub mod captions;
+pub mod embeddings;
 pub mod ledger;
 pub mod media;
 pub mod platform;
@@ -45,6 +46,7 @@ mod tests {
             tables,
             [
                 "_sqlx_migrations",
+                "caption_embeddings",
                 "conversation_settings",
                 "conversations",
                 "deliveries",
