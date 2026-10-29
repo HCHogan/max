@@ -193,7 +193,6 @@ idle_window_secs = 300
 [llm.providers.cliproxy.models."gpt-5.6-luna"]
 context_window = 400000
 max_output = 128000
-input = ["text", "image"]
 reasoning = true
 
 [llm.providers.local]
@@ -1040,7 +1039,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 - **模型看到的**：
   - 尾巴和摘要里只有文字：`[image#123.0: caption]`，还没有 caption 就是 `[image#123.0]`。历史里的图不发图：Haskell 版的教训是它们抢注意力（0ec5752）。caption 到了，那一行就变，接受这一次缓存失效，见[前缀稳定的规则](#前缀稳定的规则)。
   - 附图：第一批输入和它们引用的消息里的图，作为真正的图片输入跟在易变块后面，每张标上句柄；后续输入里的图跟在 `[新消息]` 块后面。一次运行最多 8 张，多的只留文字。
-  - 模型配置里写了 `input = ["text", "image"]` 才发图，默认只有文字。中途 `/model` 换成看不了图的模型，渲染时照样只给文字。
+  - 不支持看不了图的模型（2026-10-29 owner 定）：Max 用的模型都当作能看图，不设 `input` 配置，也不做纯文字的降级。意图分类和 historian 只读文字，不受影响。
   - 想看历史里的图，在程序里调 `max.image('image#123.0')`，见[多模态结果](#多模态结果)。
 - **请求里**：条目只存引用（`Part::Media`，原则 7）。发请求前，`max` 读出给模型的版本，编成 base64 的 data URL 交给 `max-llm`：Responses 降成 `input_image`，Chat 降成 `image_url`。不传 QQ 的地址，它会过期，provider 也未必访问得到。
 - **`/chat`**：VM 里只读挂一个这个会话的媒体视图，`/chat/<消息id>.<序号>.<扩展名>`，硬链接到内容库，下载时建，起 VM 时补齐。
@@ -1394,8 +1393,7 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 - **在适配层降级**（原则 8）：
   - Responses：放进 `function_call_output` 的数组，`input_text` 加 `input_image`。
   - Chat：tool 消息里只放文字，带"图 1 见下"这类标记；这一轮所有 tool 消息之后跟一条 user 消息放图。有的 provider 不接受数组形式的 tool 内容，这样也避开了。
-  - 视频：模型配置的 `input` 里有 video，就用 `video_url` 扩展；否则抽帧成图。
-  - 看不了图的模型：用占位文字，不做辅助视觉模型。中途 `/model` 换成看不了图的模型，渲染时照样降级。
+  - 视频：抽帧成图。
 - **预算**：
   - 交图时就缩放到上限。
   - 每次运行最多交 N 张。
