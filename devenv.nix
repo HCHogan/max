@@ -20,6 +20,8 @@
     package = pkgs.postgresql_17;
     listen_addresses = "127.0.0.1";
     port = 5434;
+    # Vectors for the sticker library and context_search.
+    extensions = extensions: [ extensions.pgvector ];
     initialDatabases = [ { name = "max"; } ];
     # A role of our own, so the URL doesn't depend on who ran initdb.
     initialScript = "create role max login superuser;";
