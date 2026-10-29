@@ -6,6 +6,9 @@ mod service;
 
 pub use service::{Grant, Sessions, serve};
 
+#[cfg(test)]
+mod runner_tests;
+
 use std::sync::Arc;
 
 use chrono::FixedOffset;

@@ -18,7 +18,6 @@ use rmcp::transport::streamable_http_server::session::never::NeverSessionManager
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde_json::{Value, json};
-use tokio::net::UnixListener;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -105,13 +104,17 @@ impl Drop for Grant {
     }
 }
 
-/// Serves the VM of `conversation` on `listener` until `stop`.
-pub async fn serve(
-    listener: UnixListener,
+/// Serves the VM of `conversation` on `listener` until `stop`. A VM's
+/// listener is a unix socket; tests' are TCP, which Node's fetch reaches.
+pub async fn serve<L>(
+    listener: L,
     conversation: ConversationId,
     sessions: Sessions,
     stop: CancellationToken,
-) {
+) where
+    L: axum::serve::Listener,
+    L::Addr: std::fmt::Debug,
+{
     let config = StreamableHttpServerConfig::default()
         .with_cancellation_token(stop.child_token())
         .with_json_response(true);
@@ -220,7 +223,7 @@ mod tests {
     use chrono::Utc;
     use sqlx::PgPool;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::UnixStream;
+    use tokio::net::{UnixListener, UnixStream};
 
     use super::*;
     use crate::conversation::ingest;

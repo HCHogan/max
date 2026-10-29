@@ -7,6 +7,8 @@
     cargo-nextest
     sqlx-cli
     postgresql_17
+    # max's tests run the guest's runner.
+    nodejs
   ];
 
   # `devenv up` starts it. The Haskell checkout's shell uses 5433, so the two

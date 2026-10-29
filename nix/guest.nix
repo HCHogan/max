@@ -190,7 +190,24 @@ in
       done
       install -m 0600 /dev/null /run/max/authorized_keys
       echo "ssh-ed25519 $key max" > /run/max/authorized_keys
+      ln -sfn ${./runner.js} /run/max/runner.js
     '';
+  };
+
+  # run_code's programs reach Max's MCP service at 127.0.0.1:7777. It is on
+  # the host, at the hybrid vsock's port 7777: one socat per connection.
+  systemd.sockets.max-mcp = {
+    wantedBy = [ "sockets.target" ];
+    listenStreams = [ "127.0.0.1:7777" ];
+    socketConfig.Accept = true;
+  };
+  systemd.services."max-mcp@" = {
+    unitConfig.DefaultDependencies = false;
+    serviceConfig = {
+      ExecStart = "${pkgs.socat}/bin/socat STDIO VSOCK-CONNECT:2:7777";
+      StandardInput = "socket";
+      StandardError = "journal";
+    };
   };
 
   # systemd-ssh-generator puts sshd on vsock port 22. Nothing reaches the
@@ -284,6 +301,8 @@ in
     nano
     python3
     perl
+    # run_code's runner, and programs' own child processes.
+    nodejs
     jq
     ripgrep
     gnumake
