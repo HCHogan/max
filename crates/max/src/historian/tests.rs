@@ -227,3 +227,51 @@ async fn the_service_compacts_and_answers(pool: PgPool) {
         .unwrap();
     assert_eq!(compacted, Ok(Captured::Published(1)));
 }
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn what_came_before_a_clear_is_summarized_on_its_own(pool: PgPool) {
+    let script = Arc::new(Script::default());
+    let (place, ids) = chatter(&pool, 20).await;
+    let mut conn = pool.acquire().await.unwrap();
+    let cleared = Settings {
+        model: Some("test/small".into()),
+        cleared_upto: Some(ids[9]),
+        ..Settings::default()
+    };
+    platform::save_settings(&mut conn, place.conversation, &cleared, at(30))
+        .await
+        .unwrap();
+    drop(conn);
+    let historian = historian(&pool, &script);
+
+    // Before the mark fails, twice; what follows it is summarized anyway.
+    script.push(Answer::says("算了"));
+    script.push(Answer::says("还是算了"));
+    script.push(answer(&[(ids[10], ids[19])]));
+    let captured = historian.capture(&place, Reason::Compact).await.unwrap();
+    assert_eq!(captured, Captured::Published(1));
+    // The next capture fills in before the mark, and up to it only.
+    script.push(answer(&[(ids[0], ids[4]), (ids[5], ids[9])]));
+    let captured = historian.capture(&place, Reason::Compact).await.unwrap();
+    assert_eq!(captured, Captured::Published(2));
+    let spans: Vec<(MessageId, MessageId)> = active(&pool, &place)
+        .await
+        .iter()
+        .map(|summary| (summary.first, summary.last))
+        .collect();
+    assert_eq!(
+        spans,
+        [(ids[0], ids[4]), (ids[5], ids[9]), (ids[10], ids[19])]
+    );
+    let runs: Vec<(i64, i64)> = runs(&pool)
+        .await
+        .into_iter()
+        .map(|(first, last, _)| (first, last))
+        .collect();
+    let (before, after) = ((ids[0].0, ids[9].0), (ids[10].0, ids[19].0));
+    assert_eq!(runs, [before, before, after, before]);
+    // Nothing is left on either side.
+    let captured = historian.capture(&place, Reason::Compact).await.unwrap();
+    assert_eq!(captured, Captured::Nothing);
+    assert_eq!(script.calls(), 4);
+}

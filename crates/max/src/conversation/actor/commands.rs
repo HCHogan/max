@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use max_core::message::{Content, MentionTarget, Node, Platform, Role};
 use max_db::platform::ConversationKind;
-use max_db::summaries;
+use max_db::{ledger, summaries};
 use tokio::sync::oneshot;
 
 use super::*;
@@ -109,20 +109,30 @@ impl Conversation {
     }
 
     /// Takes `/clear --all` back: what came before its mark is in the
-    /// context again. If the historian has summed up rows since, the rows
-    /// the clear left unsummed stay out; `context_search` finds them.
+    /// context again. The historian summarizes up to the mark before it
+    /// summarizes past it; if that failed, the rows it left between the
+    /// summaries stay out, and `context_search` finds them.
     async fn unclear(&mut self) -> Result<String> {
         let Some(mark) = self.settings.cleared_upto.take() else {
             return Ok("跳过：没有清空过".to_owned());
         };
         self.save_settings().await?;
+        let conversation = self.place.conversation;
         let mut conn = self.shared.pool.acquire().await?;
-        let since = summaries::active(&mut conn, self.place.conversation, Some(mark)).await?;
-        Ok(if since.is_empty() {
-            "已恢复：清空前的消息回到上下文".to_owned()
-        } else {
+        let active = summaries::active(&mut conn, conversation, None).await?;
+        let (before, after): (Vec<_>, Vec<_>) = active
+            .into_iter()
+            .map(|(_, summary)| summary.last)
+            .partition(|last| *last <= mark);
+        let left_out = !after.is_empty()
+            && !ledger::rows(&mut conn, conversation, before.last().copied(), mark)
+                .await?
+                .is_empty();
+        Ok(if left_out {
             "已恢复：清空前的摘要回到上下文；清空时还没写成摘要的那段不回来，context_search 搜得到"
                 .to_owned()
+        } else {
+            "已恢复：清空前的消息回到上下文".to_owned()
         })
     }
 

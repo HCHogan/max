@@ -5,7 +5,9 @@
 //! A capture reads the rows no summary covers yet, up to the first trigger
 //! of a turn still running, and asks the historian's model to cut them
 //! into compartments and summarize each. What passes the checks is
-//! published; every call is recorded in `summary_runs`.
+//! published; every call is recorded in `summary_runs`. No summary reaches
+//! across `/clear --all`'s mark, and what came before it is summarized as
+//! well, so that `/unclear` finds the history whole.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -65,7 +67,29 @@ pub enum Captured {
 }
 
 impl Historian {
+    /// Summarizes, for `reason`, the rows after `/clear --all`'s mark; and
+    /// first what came before it and isn't summarized yet, all of it, as
+    /// `/compact` would. That failing doesn't hold up the rest.
     pub async fn capture(&self, place: &Place, reason: Reason) -> Result<Captured> {
+        let before = match self.pass(place, Reason::Compact, true).await {
+            Ok(Captured::Published(count)) => count,
+            Ok(Captured::Nothing) => 0,
+            Err(error) => {
+                let conversation = place.conversation;
+                warn!(%conversation, "summarizing what came before /clear --all failed: {error:#}");
+                0
+            }
+        };
+        Ok(match self.pass(place, reason, false).await? {
+            Captured::Published(count) => Captured::Published(before + count),
+            Captured::Nothing if before > 0 => Captured::Published(before),
+            Captured::Nothing => Captured::Nothing,
+        })
+    }
+
+    /// One capture: of the rows up to the mark when `before_mark`, else of
+    /// those after it.
+    async fn pass(&self, place: &Place, reason: Reason, before_mark: bool) -> Result<Captured> {
         let conversation = place.conversation;
         let mut conn = self.pool.acquire().await?;
         let settings = platform::settings(&mut conn, conversation).await?;
@@ -74,18 +98,29 @@ impl Historian {
         let window = turn.or_else(|_| self.models.turn(None, None))?.window;
         let budgets = Budgets::for_window(window);
 
-        let active = summaries::active(&mut conn, conversation, settings.cleared_upto).await?;
-        let cursor = active
-            .last()
-            .map(|(_, summary)| summary.last)
-            .max(settings.cleared_upto);
-        let Some(head) = ledger::head(&mut conn, conversation).await? else {
-            return Ok(Captured::Nothing);
-        };
-        // A running turn's trigger and what follows it aren't settled.
-        let upto = match turns::running_since(&mut conn, conversation).await? {
-            Some(trigger) => MessageId(trigger.0 - 1),
-            None => head,
+        let mark = settings.cleared_upto;
+        // The summaries on this pass's side of the mark.
+        let mut active = summaries::active(&mut conn, conversation, None).await?;
+        active.retain(|(_, summary)| match mark {
+            Some(mark) => (summary.last <= mark) == before_mark,
+            None => !before_mark,
+        });
+        let last = active.last().map(|(_, summary)| summary.last);
+        let (cursor, upto) = if before_mark {
+            match mark {
+                Some(mark) if last < Some(mark) => (last, mark),
+                _ => return Ok(Captured::Nothing),
+            }
+        } else {
+            let Some(head) = ledger::head(&mut conn, conversation).await? else {
+                return Ok(Captured::Nothing);
+            };
+            // A running turn's trigger and what follows it aren't settled.
+            let upto = match turns::running_since(&mut conn, conversation).await? {
+                Some(trigger) => MessageId(trigger.0 - 1),
+                None => head,
+            };
+            (last.max(mark), upto)
         };
         let rows = ledger::rows(&mut conn, conversation, cursor, upto).await?;
         let everyone = people(&mut conn, rows.iter().map(|row| &row.message), place).await?;
