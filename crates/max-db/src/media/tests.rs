@@ -24,6 +24,7 @@ fn blob(byte: char) -> Blob {
         size: 3,
         width: Some(2),
         height: Some(1),
+        model_sha256: None,
     }
 }
 

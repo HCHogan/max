@@ -2,4 +2,5 @@
 
 pub mod download;
 pub mod fetch;
+pub mod prepare;
 pub mod store;

@@ -16,6 +16,9 @@ pub struct Blob {
     pub size: u64,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// What the model is sent of a picture: these bytes, or a smaller
+    /// copy. None for what isn't a picture.
+    pub model_sha256: Option<String>,
 }
 
 /// A message with media still to download.
@@ -38,8 +41,8 @@ pub async fn record(
 ) -> sqlx::Result<()> {
     let mut tx = conn.begin().await?;
     sqlx::query!(
-        "insert into media (sha256, mime, size, width, height, first_seen_at)
-         values ($1, $2, $3, $4, $5, $6)
+        "insert into media (sha256, mime, size, width, height, model_sha256, first_seen_at)
+         values ($1, $2, $3, $4, $5, $6, $7)
          on conflict (sha256) do nothing",
         blob.sha256,
         blob.mime,
@@ -48,6 +51,7 @@ pub async fn record(
             .map(|width| i32::try_from(width).unwrap_or(i32::MAX)),
         blob.height
             .map(|height| i32::try_from(height).unwrap_or(i32::MAX)),
+        blob.model_sha256,
         at
     )
     .execute(&mut *tx)

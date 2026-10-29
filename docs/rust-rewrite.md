@@ -388,7 +388,7 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 
 前提：上限只对停在 `await` 上的 future 有效。所以：
 - async 里不阻塞；
-- `spawn_blocking` 配取消标志，因为 abort 对已经开始跑的 blocking 任务无效；
+- `spawn_blocking` 配取消标志，因为 abort 对已经开始跑的 blocking 任务无效；有上限的计算可以不配，比如算一个最多 64 MiB 的文件的哈希、在尺寸上限内解一张图；
 - `Drop` 里不阻塞。
 
 真破了这几条，还有 systemd 的 `TimeoutStopSec` 在最外层兜着。

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into media (sha256, mime, size, width, height, model_sha256, first_seen_at)\n         values ($1, $2, $3, $4, $5, $6, $7)\n         on conflict (sha256) do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8",
+        "Int4",
+        "Int4",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "65e5226768a5c87354be39c643f64b686134f082f291459ff9d43011a26bb0f6"
+}

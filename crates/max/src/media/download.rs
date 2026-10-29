@@ -13,9 +13,11 @@ use max_core::message::{Content, MediaRef, Node, media};
 use max_db::PgPool;
 use max_db::media::{Blob, downloaded, pending, record};
 use reqwest::Client;
+use tokio::task::spawn_blocking;
 use tracing::warn;
 
 use super::fetch::{self, fetch};
+use super::prepare::prepare;
 use super::store::Store;
 use crate::worker::{Attempt, Derivation, Policy, Row};
 
@@ -105,13 +107,29 @@ impl Derivation for Download {
             }
         };
         let size = u64::try_from(fetched.bytes.len())?;
-        let sha256 = self.store.put(fetched.bytes).await?;
+        let bytes = fetched.bytes;
+        let (prepared, bytes) = spawn_blocking(move || (prepare(&bytes), bytes)).await?;
+        let sha256 = self.store.put(bytes).await?;
+        let (mut width, mut height, mut model_sha256) = (None, None, None);
+        match prepared {
+            Ok(Some(prepared)) => {
+                width = Some(prepared.width);
+                height = Some(prepared.height);
+                model_sha256 = Some(match prepared.copy {
+                    Some(copy) => self.store.put(copy).await?,
+                    None => sha256.clone(),
+                });
+            }
+            Ok(None) => {}
+            Err(error) => warn!(unit = ?medium, "a picture that doesn't decode: {error}"),
+        }
         let blob = Blob {
             sha256,
             mime: fetched.mime,
             size,
-            width: None,
-            height: None,
+            width,
+            height,
+            model_sha256,
         };
         let mut conn = self.pool.acquire().await?;
         record(&mut conn, medium.message, medium.ordinal, &blob, Utc::now()).await?;
