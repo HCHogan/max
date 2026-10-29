@@ -1411,8 +1411,9 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 - **鉴权**：`Authorization: Bearer <token>`。token 所属的群必须和连进来的 VM 是同一个群。`tools/list` 只列出这个会话允许的工具。
 - **吊销是同步的**：从内存表里删掉会话，它在途调用的 future 一起 drop，所以可以放进 `Drop`。会话只存在内存里，Max 重启或崩溃后旧 token 全部失效，不需要过期时间。
 - **执行器**：所有调用都经过同一个执行器，负责 schema 校验、单次调用的超时、并发上限 64、输出大小上限，以及按会话限制有副作用的调用次数（代码里可以循环发送、撤回、禁言）。做成的：单次 60 秒，每个会话同时 64 个，多的排队；参数由每个工具自己的参数结构体校验，不另做 JSON Schema 校验。输出上限和副作用次数等有了会产生大输出或有副作用的工具再加，`context_read` 自己分页。
-- **结果**：工具声明 `outputSchema`，成功结果放在 `structuredContent` 里，`tools.x()` 拿到的就是 JSON。失败设 `isError`，`max.raw` 需要的 outcome（rejected、failed-before-effect、outcome-unknown）和 retry 分类也放进 `structuredContent`。取消用 `notifications/cancelled`。做成的：失败的 `structuredContent` 是 `{code, message}`，outcome 和 retry 分类等第一个有副作用的工具。无状态的 HTTP 里取消就是断开连接，rmcp 会取消那次调用，`max.cancel` 就是中止 fetch。
-- **工具注册表**：每个工具有名字、描述、参数类型（schemars 从参数结构体生成）、返回类型、副作用分类（只读、幂等、有副作用）和执行函数。副作用分类决定能不能重试、能不能给后台 job、中断后算不算"结果未知"。系统提示里的 TypeScript 声明也从注册表生成。做成的：工具还少，名字、描述、两个 schema 和 TypeScript 声明都手写在 max-core 的 `MAX_TOOLS` 里，和模型的两个工具一样，没上 schemars；执行函数在 max 里。副作用分类等第一个有副作用的工具。
+- **结果**：工具声明 `outputSchema`，成功结果放在 `structuredContent` 里，`tools.x()` 拿到的就是 JSON。失败设 `isError`，`structuredContent` 是 `{code, message}`。取消用 `notifications/cancelled`。无状态的 HTTP 里取消就是断开连接，rmcp 会取消那次调用，`max.cancel` 就是中止 fetch。
+- **不重试，不按副作用分类**（2026-10-29 定，owner 同意）：原打算给每个工具标只读、幂等、有副作用，失败结果里再带 outcome（rejected、failed-before-effect、outcome-unknown）和能否重试，用来决定宿主重试、后台 job 能用哪些、中断后算不算"结果未知"。都用不上：宿主一律不重试，交给模型；后台 job 的会话列一份能用的工具；会动群的操作（发消息、发图、撤回）都经会话 actor 入账，做没做成，下一轮在时间线上看得到。所以超时和取消一律说"可能已经生效，先看记录再决定要不要再来"。最坏是同一次运行里拿到超时马上再调，多发一张图，接受。
+- **工具注册表**：每个工具有名字、描述、参数类型（schemars 从参数结构体生成）、返回类型和执行函数。系统提示里的 TypeScript 声明也从注册表生成。做成的：工具还少，名字、描述、两个 schema 和 TypeScript 声明都手写在 max-core 的 `MAX_TOOLS` 里，和模型的两个工具一样，没上 schemars；执行函数在 max 里。
 
 ### 多模态结果
 

@@ -67,7 +67,8 @@ async function main() {
       });
       reply = JSON.parse(await response.text());
     } catch (error) {
-      if (error.name === "AbortError") return { ok: false, error: { code: "cancelled", message: "调用取消了" } };
+      // As the host says when it cancels a call.
+      if (error.name === "AbortError") return { ok: false, error: { code: "cancelled", message: "调用取消了；会动群的操作可能已经生效，先看记录再决定要不要再来" } };
       return { ok: false, error: { code: "unreachable", message: `连不上 Max 的 MCP 服务：${error.message}` } };
     }
     if (reply.error) return { ok: false, error: { code: "refused", message: reply.error.message } };

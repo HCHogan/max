@@ -29,6 +29,10 @@ use super::{Context, Failure};
 const CALL_TIME: Duration = Duration::from_secs(60);
 /// Calls a session runs at once; more wait their turn.
 const CALLS_AT_ONCE: usize = 64;
+/// What a call that didn't finish may still have done. Nothing is retried
+/// or classified by its effects: what acts on the group goes through the
+/// timeline, where the model sees whether it happened.
+const MAYBE_DONE: &str = "会动群的操作可能已经生效，先看记录再决定要不要再来";
 
 /// The open sessions, by token.
 #[derive(Clone, Default)]
@@ -194,10 +198,10 @@ impl ServerHandler for Handler {
                 timeout(CALL_TIME, super::call(&call.name, &session.context, args)).await
             } => outcome.unwrap_or_else(|_| Err(Failure::new(
                 "timeout",
-                format!("{} 秒内没做完", CALL_TIME.as_secs()),
+                format!("{} 秒内没做完；{MAYBE_DONE}", CALL_TIME.as_secs()),
             ))),
             () = session.closed.cancelled() => Err(Failure::new("closed", "这次运行已经结束了")),
-            () = request.ct.cancelled() => Err(Failure::new("cancelled", "调用取消了")),
+            () = request.ct.cancelled() => Err(Failure::new("cancelled", format!("调用取消了；{MAYBE_DONE}"))),
             },
         };
         let mut calls = session.calls.lock().unwrap_or_else(PoisonError::into_inner);
