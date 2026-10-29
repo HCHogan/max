@@ -1084,7 +1084,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 | | `llm_usage` | turn（可空）、用途（turn、intent、historian、caption）、provider、模型、强度、token（含缓存命中数，按 provider 看命中率、调空闲窗口；还有其中的推理 token）、费用。token 用 bigint；费用 `cost_micros` 是百万分之一美元，用整数，不要 decimal，价格未知时为空 |
 | 上下文 | `summaries` | 见 [summaries 表](#summaries-表) |
 | | `summary_runs` | historian 的每次模型调用：范围、原因（quiet、pressure、compact）、模型、原始输出、错误。用量在 `llm_usage`。有保留期 |
-| 记忆 | `memories` | v1 不做记忆，表先定：scope（会话或 principal）、类别、内容、importance、status、来源 summary、证据消息范围 |
+| 记忆 | `memories` | v1 不做记忆，表先定：会话、principal（空就是群的记忆）、类别、内容、importance、status、来源 summary、证据消息范围。个人记忆也带会话：Haskell 版的个人记忆只在来源群里用（`MemoryStore.hs:103-119`），不跨群 |
 
 以后随功能加：`automations`、`stickers`、`lingo_*`、`bungie_*`、`destiny_*`、embedding 表（pgvector）。
 
@@ -1109,23 +1109,27 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 - **全部消息都导**（2026-10-27 定），包括被 hook 忽略过的（`message_projections.context_visible = false`）。库里忠实保留群里的所有事实。
 - `canonical_content` 的 v2 nodes 转成新 `Node`；`raw` 从 QQ 的 `segments` 列取，Matrix 从 `platform_events.raw_payload` 取；`text` 重新渲染。老的 Matrix 消息导成哪个平台 **待定**：Matrix 先不做，代码里的 `Platform` 暂时没有它，库的约束还认 `matrix`。
 - 老 QQ 的账号和端点导成平台 `qq_legacy`：官方接口给的是 openid，和 QQ 号、群号不在一个命名空间，对不上。新群用 `/bind <老群号>` 接到老会话上，时间线连续，见 [QQ 官方机器人](#qq-官方机器人)。
-- 老 QQ 号的人按昵称自动接上（2026-10-29 定，原来是各算各的人、不合并）：导入时留下每个老账号在每个老群里最后用的 QQ 昵称（旧 `messages` 的 `sender_nickname`，不是群名片）；表在做导入时定。接到老会话上的群里，一个新的 `member_openid` 第一次出现时，拿它的 `username`（官方接口给的也是 QQ 昵称）去对这个老群的老成员：恰好一个老成员的昵称一样，而且他还没被别的新账号认领，就把新账号并进他的 principal，保留老 id，旧摘要和记忆里的 `[mention#N]` 都接得上。重名、封号后改过昵称的不并，只记日志，先算新人；并错了可以撤，合并只是别名。冒名的风险（有人改成别人的昵称再第一次说话）接受。拿不到全群成员，没说过话的老成员要等他们第一次说话才接上，见 [QQ 官方机器人](#qq-官方机器人)的"没有的"。
-- 老的 reaction、戳一戳事件不导。
-- Max 自己的消息：`agent_turn_id` 加 `turn_chunk_index` 变成 turn id 和段号；它们的平台 id 写进 `deliveries`，状态 sent。否则 sender 启动时会把它们都补记成结果未知。旧 `agent_turns` 导成 `turns` 加 `turn_outcomes`，保留 `t#N`，没有快照。
-- `conversation_compartments` 只导 `active` 的；群号换成会话 id；importance 0..1 换成 1..100；单摘要时期的行只有 `summary`，放进 p1，其它层空着。句柄从 `episode:<uuid>` 换成 `summary#<id>`。
-- `principals` 和 `principal_identities` 直接搬，id 不变，旧摘要和记忆里的 `[mention#N]` 因此还有效；改名之前写的 `[@#N]` 导入时改写成 `[mention#N]`。旧表按 Max 的账号（`platform_account_id`）区分 identity，每个平台一个账号，直接换成平台：QQ 的换成 `qq_legacy`。`sender_name` 从旧 `messages` 的 `sender_card`、`sender_nickname` 取，群名片优先；旧库没有角色，`sender_role` 留空。`endpoint_known_identities` 不导。
-- `sessions` 按[配置](#配置)里说的映射 profile 名；`memories` 只导 active 和 permanent 的当前版本。
+- 老 QQ 号的人用 `/link <QQ号>` 自己接上（2026-10-29 owner 定，取代原来的按昵称自动接上）。旧库按 QQ 号存人：583 个 QQ 身份，一人一个，`native_user_id` 就是 QQ 号。官方接口只给 openid，同一个人在每个群、在私聊里的 openid 都不同，`union_openid` 是空的，所以一个人在几个群就要在每个群各发一次。规则见[权限](#权限)的 `/link`。不做昵称匹配：旧数据里同群最新昵称撞名的有 4 人，45 个昵称只有一个字，自动认人总会认错。没发 `/link` 的人先算新人，发了再接上；合并是别名，之前的行渲染出来跟着变。
+- 老的 reaction、戳一戳事件不导。Max 的 `debug` 行（工具回显，4.7k 条）不导。微信、iMessage、Matrix 的行（约 2.6k 条，那些群接不到新 bot 上）不导。
+- Max 自己的消息不写 `deliveries`：sender 启动时只补记 `qq` 端点上结果未知的，`qq_legacy` 的不管。旧 `agent_turns` 不导，只有 3 段摘要引用了 `t#`；`turn_id` 留空。
+- `conversation_compartments` 只导 `active` 的（3,249 段）。它们按群号（`legacy_group_id`）挂，不是按 `conversation_id`，导入时经群号找会话。范围从 `ingest_seq` 换成首尾消息 id；importance 0..1 换成 1..100；单摘要时期的 40 段只有 `summary`，放进 p1，其它层空着。旧摘要没有标题，标题留空，渲染时不留多余的空格。句柄从 `episode:<uuid>` 换成 `summary#<id>`。
+- `principals` 和 `principal_identities` 直接搬，id 不变，旧摘要和记忆里的 `[mention#N]` 因此还有效；改名之前写的 `[@#N]` 导入时改写成 `[mention#N]`。旧表按 Max 的账号（`platform_account_id`）区分 identity，每个平台一个账号，直接换成平台：QQ 的换成 `qq_legacy`。`sender_name` 从旧 `messages` 的 `sender_card`、`sender_nickname` 取，群名片优先：2026-08-04 起 `sender_nickname` 存的就是有名片时的名片（`QQ.hs:94`）。`sender_role` 从 `platform_events` 原始 payload 的 `sender.role` 取，08-04 之前的为空。没有身份、没有消息的 611 个空 principal 不导。`endpoint_known_identities` 不导。
+- `sessions` 按[配置](#配置)里说的映射 profile 名。`memories` 等记忆功能做出来再导（2026-10-29 定）：它们也按群号挂；个人记忆只在来源群里用，表要带会话，不能只按 principal，见[表](#表)。
+- 媒体：内容库的文件和旧库在同一个 bcachefs 上，用 `cp --reflink` 拷到 `/var/lib/maxx/media`，属主改成 `maxx`。`media` 和 `message_media` 从 `message_images`、`message_videos`、`group_files` 建；旧的 `seg_index` 是第几个节点，不是第几个媒体，要按节点重算序号；给模型的版本导入时生成。caption 等第 3 小步有了 `media_captions` 再导。
+- owner 的旧私聊接到他新的 c2c 私聊上；别人的旧私聊不接。
 - 各群 VM 的 `/work` 也迁（2026-10-27 定）：按群号找到对应的会话，把这个群当前沙箱卷里的 `work` 拷到新卷，属主改成 `maxx`（见 [VM 进程](#vm-进程)）。`nix.img`（guest 里可写的 Nix store，存的是装过的包）提议不迁，用到时重新装。旧卷在 root 所有的目录下，读它要 root。
 - 自动化、贴纸、lingo、Destiny 等各自功能做到时再导。
 - 导入写了旧 id 的表，最后要把它们的 identity 序列调到最大值之后（`setval`），否则新行会撞旧 id。
-- 规模：2026-09-05 有 149,395 条消息，每天增加 2–2.5k；导入是分钟级的事。
+- 规模：2026-10-28 有 293,848 条消息、605 个有身份的人；库 3.3 GB，内容库 3.4 万个文件、26 GB。导入是分钟级的事。向量（bge-m3）不导，maxx 没有 pgvector，要用时重算。
+- maxx 自己的库（测试群的 113 条消息、3 段摘要）导入时整个重建，不留（2026-10-29 owner 定）：它的 id 和要保留的旧 id 撞。测试群导入后重新 `/bind`。
+- 工具是单独的 crate `max-import`（子命令 `check` 演练、`import` 在一个事务里导完），连旧库只读。上线跑一段时间后连同 `/link` 一起删掉，旧库和 `/var/lib/max` 等 owner 说了再删。`qq_legacy` 的行和合并是数据，留着。
 
 ## 身份
 
 2026-10-27 定。沿用 [ADR 004](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/adr/004-canonical-handles-for-the-model.md) 的三条判断：
 
 - **模型面对人，ledger 存账号。** 人是 principal，平台账号是 identity。消息的发送者和提及节点存 identity，因为平台认证的是那个账号；渲染给模型时再查到 principal。合并因此不碰 ledger。
-- **principal 只是"这几个账号是同一个人"的断言**，只能由人显式声明（以后的 `/link`，v1 只有 QQ 的 `/bind` 合并 owner 自己的账号），不从名字推断。唯一的例外是老 QQ 号按昵称接上新 openid（2026-10-29 定），见[导入](#导入)。除此之外 v1 一人一个账号；Haskell 版的 239 个 principal 也都是一人一个账号。
+- **principal 只是"这几个账号是同一个人"的断言**，只能由人显式声明：QQ 的 `/bind` 合并 owner 自己的账号，`/link <QQ号>` 把新账号接到旧库里那个 QQ 号的人上（见[导入](#导入)），不从名字推断。
 - **合并是别名，不改写。** `principals.merged_into` 指向保留的那个，被合并的行留作墓碑；读的时候用 `coalesce(merged_into, id)`，链深固定为 1，可以撤销。
 
 ### 表
@@ -1169,7 +1173,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 
 ### v1 不做、位置留好的
 
-- `/link`：设 `merged_into`，保留较小的 id，显示名由人定。QQ 的 `/bind` 已经用到合并，但只合并 owner 自己的账号。命令消息本身就在 ledger 里，算审计记录。合并后，提及这个人的旧行渲染出来的 principal 会变，前缀失效一次，可以接受。
+- `/link <QQ号>`（2026-10-29 owner 定）：把发令人在这个群的账号并进旧库里这个 QQ 号的人（设 `merged_into`，指向旧的，旧 id 保持正统），谁都能用。没法验证 QQ 号是不是本人的，所以：只在接到老会话上的群里能用；这个 QQ 号要在这个老会话里说过话；一个旧的人在一个群里只能被一个账号接上，第二个来认的就拒绝，回"有问题找管理员"；接上时 Max 在群里公开回一句"已接到旧记录里的「旧名字」"，认错了大家看得见。owner 可以 `/link @某人 <QQ号>` 替别人接、或者改接，`/link @某人 -` 撤销。命令消息本身就在 ledger 里，算审计记录。合并后，提及这个人的旧行渲染出来的 principal 会变，前缀失效一次，可以接受。
 - 跨平台的记忆和权限都跟着 `/link` 走，不单独做。
 
 ## intent
