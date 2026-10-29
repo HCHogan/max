@@ -88,6 +88,9 @@ sha2 = "0.11"
 # the original is large. Only the four formats QQ sends; no rayon, so it
 # keeps to the blocking thread it is given.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# Pictures go to the model as data URLs. 0.23 is in the tree already,
+# through reqwest and rmcp.
+base64 = "0.23"
 
 # Tests only.
 insta = "1.49"
