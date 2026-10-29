@@ -1049,8 +1049,8 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 
 1. 内容库、`media` 和 `message_media`、下载 worker；入站节点带上地址。
 2. 模型的 `input`、条目里的图、两种协议的降级、附图和句柄。
-3. caption worker，表情包另用一个提示词；导入老的图片描述和表情包。
-4. 发图：qqbot 的上传，sender 发图和 `file_info` 缓存，分段器留下句柄、入账时解析，`send_image`。
+3. caption worker，表情包另用一个提示词；导入老的图片描述和表情包。2026-10-29 上线：模型是经 cliproxy 的 GPT-5.6 Luna，effort low；老描述在新 maxx 启动前导好（图 21,040、表情包 3,421，其中 94 个 SKIP），启动扫描补了最近 14 天漏掉的 10 张。
+4. 发图：qqbot 的上传，sender 发图和 `file_info` 缓存，分段器留下句柄、入账时解析，`send_image`。2026-10-29 上线，群里实测：回复里写句柄发出了 JPEG 和 GIF 表情包（GIF 会动），`send_image` 发出了 VM 里画的 PNG，带说明文字。
 5. 表情包库：embedding 和 `find_stickers`。
 6. `/chat` 和 `max.image()`。
 
