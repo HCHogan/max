@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 
 use super::*;
 use crate::bind::Pending;
-use crate::command::{self, Command, HELP, Persona};
+use crate::command::{self, Command, Persona};
 use crate::conversation::ingest::Committed;
 use crate::historian::{Captured, Compacted};
 
@@ -40,7 +40,7 @@ impl Conversation {
             Rank::Anyone
         };
         let needs = match &command {
-            Command::Help | Command::Status => Rank::Anyone,
+            Command::Status => Rank::Anyone,
             Command::Model(None) | Command::Effort(None) | Command::Proactive(None) => Rank::Anyone,
             Command::Persona(Persona::Show) | Command::Clear { all: false } => Rank::Anyone,
             Command::Model(Some(argument)) if argument == "list" => Rank::Anyone,
@@ -62,7 +62,6 @@ impl Conversation {
                 .await;
         }
         let answer = match command {
-            Command::Help => HELP.to_owned(),
             Command::Status => self.status(),
             Command::Kill => {
                 // Nothing the model has seen wakes it again, held or not.
@@ -147,43 +146,52 @@ impl Conversation {
         Ok(())
     }
 
+    /// Markdown, which QQ renders; the plain-text fallback still reads.
     fn status(&self) -> String {
         let settings = &self.settings;
-        let mut out = String::new();
-        match self
+        let mut out = format!("**maxx** · `{}`\n\n", crate::COMMIT);
+        let model = match self
             .shared
             .models
             .turn(settings.model.as_deref(), settings.effort.as_deref())
         {
             Ok(chosen) => {
                 let effort = chosen.options.effort.as_deref().unwrap_or("默认");
-                let _ = writeln!(out, "模型：{}，推理强度 {effort}", chosen.reference());
+                format!("`{}` · 推理强度 {effort}", chosen.reference())
             }
-            Err(error) => {
-                let _ = writeln!(out, "模型：选不出来（{error}）");
-            }
-        }
+            Err(error) => format!("选不出来（{error}）"),
+        };
+        let _ = writeln!(out, "- **模型** {model}");
         let persona = match &settings.persona {
-            Some(persona) => format!("自定义，{}…", persona.chars().take(20).collect::<String>()),
+            Some(persona) => {
+                let start: String = persona
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(20)
+                    .collect();
+                format!("自定义：{start}…")
+            }
             None => "默认".to_owned(),
         };
-        let _ = writeln!(out, "人设：{persona}");
+        let _ = writeln!(out, "- **人设** {persona}");
         let proactive = if settings.proactive { "开" } else { "关" };
-        let _ = writeln!(out, "主动接话：{proactive}");
+        let _ = writeln!(out, "- **主动接话** {proactive}");
         match &self.core {
             Some(a) => {
                 let minutes = a.started.elapsed().as_secs() / 60;
                 let _ = writeln!(
                     out,
-                    "在跑：t#{}，{minutes} 分钟，{} 轮",
+                    "- **在跑** t#{} · {minutes} 分钟 · {} 轮",
                     a.ordinal,
                     a.run.round()
                 );
             }
-            None => out.push_str("在跑：没有\n"),
+            None => out.push_str("- **在跑** 没有\n"),
         }
         if let Some(mark) = settings.cleared_upto {
-            let _ = writeln!(out, "上下文从 #{mark} 之后算起");
+            let _ = writeln!(out, "- **上下文** 从 #{mark} 之后算起");
         }
         out.trim_end().to_owned()
     }

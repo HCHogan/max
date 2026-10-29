@@ -285,7 +285,7 @@ async fn serve(config: Config) -> Result<()> {
     let mut conversations = Scope::new();
     let table = Table::new(Arc::clone(&shared), me);
     conversations.spawn(move |_| table.run(intake_rx, CONVERSATIONS_GRACE));
-    info!("serving");
+    info!(commit = max::COMMIT, "serving");
 
     let mut terminate = signal(SignalKind::terminate())?;
     tokio::select! {

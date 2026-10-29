@@ -106,7 +106,7 @@ fn a_burst_of_messages_holds_the_trigger() {
     let clock = Clock(Instant::now());
     let mut intent = Intent::new();
     intent.observe(
-        &entry(1, XIAOMING, EntryKind::Command, "/help"),
+        &entry(1, XIAOMING, EntryKind::Command, "/compact"),
         clock.at(0),
     );
     intent.observe(

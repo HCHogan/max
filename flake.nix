@@ -81,6 +81,9 @@
               inherit cargoArtifacts;
               cargoExtraArgs = "--package max";
               doCheck = false; # the nextest check runs the tests
+              # /status shows it. Only this package: the dependencies and
+              # the checks don't rebuild for a new commit.
+              MAX_COMMIT = self.shortRev or self.dirtyShortRev or "dev";
             }
           );
 

@@ -344,10 +344,12 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     h.send(from_xiaoming(0, vec![text("/status")]));
     let (answer, status) = h.said().await;
     assert!(
-        status.starts_with("模型：test/big，推理强度 high\n人设：默认\n"),
+        status.starts_with(
+            "**maxx** · `dev`\n\n- **模型** `test/big` · 推理强度 high\n- **人设** 默认\n"
+        ),
         "{status}"
     );
-    assert!(status.ends_with("在跑：没有"), "{status}");
+    assert!(status.ends_with("- **在跑** 没有"), "{status}");
     let Content::Message { reply_to, .. } = answer.content else {
         unreachable!()
     };

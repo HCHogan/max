@@ -1,11 +1,11 @@
 //! Commands: a message that starts with `/` and a word from this list.
-//! Only `/`: QQ's command panel fills one in, and `!` is plain text.
+//! Only `/`: QQ's command panel fills one in, and `!` is plain text. There
+//! is no `/help`: the panel is the list.
 //! The conversation actor runs them; they never reach a core.
 
 /// A command and its argument, parsed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    Help,
     Status,
     Kill,
     /// `/model`, `/model list`, or `/model <provider/model>`.
@@ -43,7 +43,6 @@ pub fn parse(text: &str) -> Option<Command> {
     };
     let argument = (!argument.is_empty()).then(|| argument.to_owned());
     Some(match word.to_lowercase().as_str() {
-        "help" => Command::Help,
         "status" => Command::Status,
         "kill" => Command::Kill,
         "model" => Command::Model(argument),
@@ -68,25 +67,12 @@ pub fn parse(text: &str) -> Option<Command> {
     })
 }
 
-pub const HELP: &str = "命令：
-/help  这条帮助
-/status  看本会话的模型、人设、主动接话和在跑的 turn
-/kill  停下正在跑的回复（群主、管理员）
-/model  看当前模型和可选的；/model <名字> 切换（主人）
-/effort  看推理强度；/effort <级别> 或 default（主人）
-/proactive  看主动接话；on、off（主人）
-/persona  看人设；/persona <文字> 设，/persona clear 回到默认（群主、管理员）
-/clear --all  之前的聊天不再进上下文（群主、管理员）
-/compact  把到现在的聊天整理成摘要（群主、管理员）
-/bind  私聊里拿绑定码，在新群里发 /bind <码> 绑定（主人）";
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn commands_and_not() {
-        assert_eq!(parse("/help"), Some(Command::Help));
         assert_eq!(parse(" ／Status "), Some(Command::Status));
         assert_eq!(
             parse("/model test/big"),
@@ -116,7 +102,8 @@ mod tests {
             Some(Command::Bind(Some("123456".into())))
         );
         for chatter in [
-            "!help",
+            "/help",
+            "!status",
             "！status",
             "/",
             "///",
