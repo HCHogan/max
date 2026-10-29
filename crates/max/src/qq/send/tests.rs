@@ -109,6 +109,7 @@ impl Setup {
         Outgoing {
             place: Arc::clone(&self.place),
             message,
+            receipt: None,
         }
     }
 
@@ -269,10 +270,18 @@ async fn a_sticker_is_uploaded_once(pool: PgPool) {
         .lock()
         .unwrap()
         .extend([Ok(()), Err(40034028), Ok(())]);
-    let first = s.say(again()).await;
+    // The first two wait to hear how it went.
+    let mut first = s.say(again()).await;
     let message = first.message.clone();
-    let outgoing = vec![first, s.say(again()).await, s.say(again()).await];
+    let (receipt, sent) = tokio::sync::oneshot::channel();
+    first.receipt = Some(receipt);
+    let mut second = s.say(again()).await;
+    let (receipt, refused) = tokio::sync::oneshot::channel();
+    second.receipt = Some(receipt);
+    let outgoing = vec![first, second, s.say(again()).await];
     s.send_all(outgoing).await;
+    assert_eq!(sent.await.unwrap(), Ok(message.id));
+    assert!(refused.await.unwrap().unwrap_err().contains("refused"));
     let bodies: Vec<Body> = s.sent().into_iter().map(|(_, m)| m.body).collect();
     let media = |file_info: &str| Body::Media {
         file_info: file_info.into(),

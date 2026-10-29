@@ -12,12 +12,14 @@ mod tool;
 
 use std::fmt;
 
-use max_core::ids::{CallId, ConversationId, EndpointId};
+use max_core::ids::{CallId, ConversationId, EndpointId, MessageId, TurnId};
 use max_core::intent::Verdict;
 use max_core::item::{ModelOutput, ToolOutput};
-use max_core::message::Platform;
+use max_core::message::{Draft, Platform};
 use max_core::segment::Segment;
 use max_db::platform::{Account, ConversationKind};
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 
 pub use actor::{Conversation, Outgoing, Shared};
 
@@ -31,6 +33,9 @@ pub enum Event {
     Inbound(Inbound),
     /// The `/bind <码>` that just bound this group, from the table.
     Bound(Inbound),
+    /// Something to say that isn't the model's text, such as a tool's
+    /// picture.
+    Post(Post),
     /// The model call's segmenter cut a message out of the stream.
     Said {
         task: TaskId,
@@ -53,6 +58,48 @@ pub enum Event {
     Compacted(Compacted),
     /// Max restarts: end the core, within a grace, then stop.
     Stop,
+}
+
+/// What Max says that isn't the model's text: committed by the actor and
+/// sent like a segment. See "经 `Post` 发".
+#[derive(Debug)]
+pub struct Post {
+    pub draft: Draft,
+    /// The turn it comes from, if any: the row's turn.
+    pub origin: Option<TurnId>,
+    /// Told how the sending went.
+    pub receipt: Option<Receipt>,
+}
+
+/// Where the sender says how a message's sending went: the message, or
+/// why it didn't go out.
+pub type Receipt = oneshot::Sender<Result<MessageId, String>>;
+
+/// Lets a tool say something in its turn's conversation.
+#[derive(Clone, Debug)]
+pub struct Poster {
+    mailbox: UnboundedSender<Event>,
+    origin: TurnId,
+}
+
+impl Poster {
+    pub fn new(mailbox: UnboundedSender<Event>, origin: TurnId) -> Self {
+        Self { mailbox, origin }
+    }
+
+    /// Says `draft`, and waits until it is sent.
+    pub async fn post(&self, draft: Draft) -> Result<MessageId, String> {
+        let (receipt, sent) = oneshot::channel();
+        let post = Post {
+            draft,
+            origin: Some(self.origin),
+            receipt: Some(receipt),
+        };
+        self.mailbox
+            .send(Event::Post(post))
+            .map_err(|_| "这个群的会话已经停了".to_owned())?;
+        sent.await.map_err(|_| "没等到发送的结果".to_owned())?
+    }
 }
 
 /// An I/O task, numbered within its conversation and never reused: an

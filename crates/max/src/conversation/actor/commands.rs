@@ -107,7 +107,7 @@ impl Conversation {
                 text: command::answer(name, body),
             }],
         };
-        self.say(draft, None, None).await?;
+        self.say(draft, None, None, None).await?;
         Ok(())
     }
 
@@ -445,7 +445,7 @@ impl Conversation {
                 DraftNode::Text { text: text.into() },
             ],
         };
-        self.say(draft, None, None).await?;
+        self.say(draft, None, None, None).await?;
         Ok(())
     }
 }

@@ -687,3 +687,40 @@ async fn unlinked_accounts_are_reminded_when_they_talk_to_max(pool: PgPool) {
     h.stop().await;
     assert!(h.outbound.try_recv().is_err());
 }
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_post_hears_how_its_sending_went(pool: PgPool) {
+    let mut h = Harness::unprompted(pool, 300).await;
+    let post = |text: &str| {
+        let (receipt, sent) = oneshot::channel();
+        let draft = Draft {
+            reply_to: None,
+            nodes: vec![DraftNode::Text { text: text.into() }],
+        };
+        let post = Post {
+            draft,
+            origin: None,
+            receipt: Some(receipt),
+        };
+        (post, sent)
+    };
+    let (chart, sent) = post("每日活跃");
+    h.mailbox.send(Event::Post(chart)).unwrap();
+    let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let id = outgoing.message.id;
+    // What the sender does once QQ has answered.
+    outgoing.receipt.unwrap().send(Ok(id)).unwrap();
+    assert_eq!(sent.await.unwrap(), Ok(id));
+
+    // Nothing to send: told at once, and nothing goes to the sender.
+    let (empty, sent) = post("  ");
+    let mut empty = empty;
+    empty.draft.nodes.clear();
+    h.mailbox.send(Event::Post(empty)).unwrap();
+    assert!(sent.await.unwrap().is_err());
+    h.stop().await;
+    assert!(h.outbound.try_recv().is_err());
+}

@@ -24,7 +24,7 @@ use tracing::{debug, info, warn};
 
 use super::ingest;
 use super::project::{self, Projection};
-use super::{Event, Place, TaskId, classify, model, tool};
+use super::{Event, Place, Post, Receipt, TaskId, classify, model, tool};
 use crate::bind::Binds;
 use crate::historian::Notice;
 use crate::inbound::Inbound;
@@ -67,10 +67,12 @@ pub struct Shared {
 }
 
 /// Something Max said, committed, for the platform's sender.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Outgoing {
     pub place: Arc<Place>,
     pub message: Message,
+    /// Told once it is sent or failed, for a `Post` that waits.
+    pub receipt: Option<Receipt>,
 }
 
 pub struct Conversation {
@@ -188,6 +190,7 @@ impl Conversation {
         match event {
             Event::Inbound(inbound) => self.inbound(inbound, false).await,
             Event::Bound(inbound) => self.inbound(inbound, true).await,
+            Event::Post(post) => self.post(post).await,
             Event::Said { task, segment } => {
                 let Some(a) = self.core.as_mut().filter(|a| a.live.contains(&task)) else {
                     debug!(%task, "dropped a stale Said");
@@ -196,7 +199,9 @@ impl Conversation {
                 a.said.push(segment.source);
                 a.segments += 1;
                 let (turn, index) = (a.turn, a.segments);
-                let said = self.say(segment.draft, Some(turn), Some(index)).await?;
+                let said = self
+                    .say(segment.draft, Some(turn), Some(index), None)
+                    .await?;
                 if let Some(message) = said
                     && let Some(a) = self.core.as_mut()
                 {
@@ -590,7 +595,24 @@ impl Conversation {
             reply_to: Some(trigger),
             nodes: vec![DraftNode::Text { text: why.into() }],
         };
-        self.say(draft, None, None).await?;
+        self.say(draft, None, None, None).await?;
+        Ok(())
+    }
+
+    /// What a tool says. Only a running core's tools post so far, and
+    /// their programs' results tell the core what they did.
+    async fn post(&mut self, post: Post) -> Result<()> {
+        let Post {
+            draft,
+            origin,
+            receipt,
+        } = post;
+        if let Some(message) = self.say(draft, origin, None, receipt).await?
+            && let Some(a) = self.core.as_mut()
+            && Some(a.turn) == origin
+        {
+            a.last_at = Some(message.at);
+        }
         Ok(())
     }
 
@@ -602,6 +624,7 @@ impl Conversation {
         draft: Draft,
         turn: Option<TurnId>,
         segment: Option<i32>,
+        receipt: Option<Receipt>,
     ) -> Result<Option<Message>> {
         let mut conn = self.shared.pool.acquire().await?;
         let said = ingest::said(
@@ -616,12 +639,16 @@ impl Conversation {
         .await?;
         drop(conn);
         let Some(message) = said else {
+            if let Some(receipt) = receipt {
+                let _ = receipt.send(Err("没有能发的东西".to_owned()));
+            }
             return Ok(None);
         };
         self.committed(&message);
         let outgoing = Outgoing {
             place: Arc::clone(&self.place),
             message: message.clone(),
+            receipt,
         };
         if self.shared.outbound.send(outgoing).is_err() {
             warn!(message = %message.id, "the sender is gone");

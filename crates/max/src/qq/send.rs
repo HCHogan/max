@@ -114,14 +114,15 @@ pub async fn run(
 
 async fn worker(shared: Arc<Shared>, mut queue: UnboundedReceiver<Outgoing>) {
     while let Some(outgoing) = queue.recv().await {
-        if let Err(error) = shared.deliver(&outgoing).await {
-            warn!(message = %outgoing.message.id, %error, "couldn't send or record a message");
+        let id = outgoing.message.id;
+        if let Err(error) = shared.deliver(outgoing).await {
+            warn!(message = %id, %error, "couldn't send or record a message");
         }
     }
 }
 
 impl Shared {
-    async fn deliver(&self, outgoing: &Outgoing) -> sqlx::Result<()> {
+    async fn deliver(&self, outgoing: Outgoing) -> sqlx::Result<()> {
         let place = &outgoing.place;
         let message = &outgoing.message;
         // No connection is held while waiting for QQ.
@@ -164,7 +165,11 @@ impl Shared {
             &delivered,
             Utc::now(),
         )
-        .await
+        .await?;
+        if let Some(receipt) = outgoing.receipt {
+            let _ = receipt.send(result.map(|_| message.id));
+        }
+        Ok(())
     }
 
     /// Markdown, or plain text if QQ refuses that.
