@@ -57,7 +57,7 @@ const RULES: &str = "对话场景：多人群聊（也可能是私聊）。上�
   [split]       行内强制分条。
   [silence]     什么都不发。
 
-工具：run_code 和 shell 现在还没接上，调用只会得到错误，别调用。把工具名写进方括号也不会执行任何东西，也不会发出去。";
+工具：shell 在本群自己的 VM 里跑命令：NixOS，root，能上公网，/work 是本群的持久目录；缺什么用 nix shell nixpkgs#包名 -c 命令 临时装。VM 闲置两小时会关，下次调用再开，要几秒，/work 和装过的包都还在。run_code 还没接上，别调用。把工具名写进方括号不会执行任何东西，也不会发出去。";
 
 pub fn system(persona: &str) -> String {
     format!("{}\n\n{RULES}\n", persona.trim())

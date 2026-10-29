@@ -25,7 +25,9 @@ pub const TOOLS: [ToolSpec; 2] = [
     },
     ToolSpec {
         name: "shell",
-        description: "在本群的 VM 里用 bash -lc 运行一条命令，返回退出码和合并的输出。",
+        description: "在本群的 VM 里用 bash -lc 运行一条命令，返回退出码和合并的输出。\
+            默认限时 120 秒，timeout_ms 最多 600000。输出超过 16 KiB 只返回头尾各 8 KiB，\
+            全文存在结果里给出的 /work/.max/out/ 下的文件里。命令没有输入，别跑交互式程序。",
         parameters: r#"{"type":"object","properties":{"command":{"type":"string"},"workdir":{"type":"string","description":"默认 /work"},"timeout_ms":{"type":"integer","minimum":1}},"required":["command"]}"#,
     },
 ];
