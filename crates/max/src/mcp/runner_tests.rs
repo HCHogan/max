@@ -162,19 +162,19 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
 }
 
 /// The browser's SDK, as far as it goes without a browser: here the runner
-/// has no camoufox, and snapshot gets a page that only answers.
+/// has no playwright-core, and snapshot gets a page that only answers.
 #[tokio::test]
 async fn the_browser_sdk_without_a_browser() {
     let nowhere = "http://127.0.0.1:9/mcp";
-    let ran = run(nowhere, "-", "await max.browser()").await;
-    assert_eq!(ran.status, 1);
-    assert!(
-        ran.stdout.starts_with("Error: 这里没有浏览器"),
-        "{}",
-        ran.stdout
-    );
-    let ran = run(nowhere, "-", "await max.browser('https://example.com')").await;
-    assert!(ran.stdout.starts_with("TypeError"), "{}", ran.stdout);
+    for open in ["max.browser()", "max.page()"] {
+        let ran = run(nowhere, "-", &format!("await {open}")).await;
+        assert_eq!(ran.status, 1);
+        assert!(
+            ran.stdout.starts_with("Error: 这里没有浏览器"),
+            "{}",
+            ran.stdout
+        );
+    }
 
     let page = "const page = { evaluate: async (f, options) => options.selector === '#none' ? null : \
          ({ elements: [{ tag: 'button', selector: '#go', role: 'button', name: '搜索' }], truncated: false, \

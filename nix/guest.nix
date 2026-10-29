@@ -22,8 +22,12 @@ let
   # travels on the kernel command line (microvm.kernelParams stays out of the
   # toplevel), which avoids a self-reference.
   registration = pkgs.closureInfo { rootPaths = [ config.system.build.toplevel ]; };
-  # run_code's runner, with the browser its programs drive.
+  # run_code's runner, with the SDK its programs drive the browser with.
   runner = import ./runner.nix { inherit pkgs; };
+  # The browser's profile: cookies and logins outlive the VM.
+  profile = "/work/.max/chromium";
+  # Chromium's own, without "HeadlessChrome" in it.
+  userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${lib.versions.major pkgs.chromium.version}.0.0.0 Safari/537.36";
 in
 {
   system.stateVersion = "26.05";
@@ -209,6 +213,43 @@ in
       ExecStart = "${pkgs.socat}/bin/socat STDIO VSOCK-CONNECT:2:7777";
       StandardInput = "socket";
       StandardError = "journal";
+    };
+  };
+
+  # The browser run_code's programs share (browser.js): Chromium, driven
+  # over CDP at 127.0.0.1:9222. The first program that wants it starts it,
+  # and it keeps its tabs from one program to the next until the VM stops.
+  # Root, as commands are: the VM is the sandbox.
+  systemd.services.max-browser = {
+    unitConfig.RequiresMountsFor = "/work";
+    environment.TZ = "Asia/Shanghai";
+    serviceConfig = {
+      # A VM that stopped leaves the profile's locks behind.
+      ExecStartPre = "${pkgs.coreutils}/bin/rm -f ${profile}/SingletonLock ${profile}/SingletonSocket ${profile}/SingletonCookie";
+      ExecStart = lib.escapeShellArgs [
+        "${pkgs.chromium}/bin/chromium"
+        "--headless=new"
+        "--no-sandbox"
+        "--remote-debugging-address=127.0.0.1"
+        "--remote-debugging-port=9222"
+        "--user-data-dir=${profile}"
+        "--no-first-run"
+        "--no-default-browser-check"
+        "--lang=zh-CN"
+        "--accept-lang=zh-CN,zh"
+        "--window-size=1280,900"
+        "--user-agent=${userAgent}"
+      ];
+      # Started once programs can connect.
+      ExecStartPost = pkgs.writeShellScript "max-browser-ready" ''
+        for _ in $(seq 200); do
+          ${pkgs.curl}/bin/curl -sf http://127.0.0.1:9222/json/version > /dev/null && exit 0
+          sleep 0.1
+        done
+        exit 1
+      '';
+      Restart = "on-failure";
+      MemoryMax = "2G";
     };
   };
 

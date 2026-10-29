@@ -1,8 +1,8 @@
 //! `max run` serves; `max check-config` checks a configuration file's
 //! structure without reading its secrets, which the NixOS module does when
 //! it builds the file; `max vm-check` boots a VM, runs a command in it, a
-//! program that calls the MCP service and one that opens a page in the
-//! browser.
+//! program that calls the MCP service, one that opens a tab in the browser
+//! and one that finds the tab as the first left it.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{IsTerminal, Write};
@@ -157,13 +157,13 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
             args: None,
             timeout_ms: None,
         };
-        let browse = Tool::RunCode {
-            code: BROWSE.into(),
+        let browse = |code: &str| Tool::RunCode {
+            code: code.into(),
             args: None,
             timeout_ms: None,
         };
         let mut outs = Vec::new();
-        for tool in [shell, program, browse] {
+        for tool in [shell, program, browse(BROWSE), browse(BROWSE_AGAIN)] {
             outs.push(tools::run(tool, Some(&vms), context()?).await);
         }
         drop(vms);
@@ -185,22 +185,30 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
     Ok(())
 }
 
-/// vm-check's page in the browser: what the snapshot finds, a screenshot
-/// in /work, how long the browser took to start and the page to load, and
-/// the most memory the run used, browser included, in MiB.
+/// vm-check's tab in the browser: how long the browser took to start and
+/// the page to load, what the snapshot finds, a screenshot in /work, and
+/// what the browser tells the page it is.
 const BROWSE: &str = r#"const started = Date.now();
-const page = await max.browser();
-const launched = Date.now();
+const page = await (await max.browser()).newPage();
+const connected = Date.now();
 await page.goto("data:text/html;charset=utf-8," + encodeURIComponent(
   "<html lang=zh-CN><title>检查</title><h1>你好，浏览器</h1><input name=q placeholder=搜索><button id=go>搜索</button>"));
+await page.fill("input", "还在");
 const loaded = Date.now();
 await page.screenshot({ path: "/work/.max/browser-check.png" });
 const { title, elements } = await max.snapshot(page);
+const seen = await page.evaluate(() => [navigator.userAgent, navigator.webdriver, navigator.language]);
+return { title, elements: elements.map(e => e.selector), connect_ms: connected - started,
+  page_ms: loaded - connected, seen };"#;
+
+/// The next program finds the tab as the last one left it; and the most
+/// memory the browser has used, in MiB.
+const BROWSE_AGAIN: &str = r#"const page = await max.page();
+const kept = await page.inputValue("input");
+await page.close();
 const fs = await import("node:fs");
-const unit = fs.readFileSync("/proc/self/cgroup", "utf8").trim().split("::")[1];
-const peak = Number(fs.readFileSync(`/sys/fs/cgroup${unit}/memory.peak`, "utf8"));
-return { title, elements: elements.map(e => e.selector), launch_ms: launched - started,
-  page_ms: loaded - launched, peak_mib: Math.round(peak / 2 ** 20) };"#;
+const peak = Number(fs.readFileSync("/sys/fs/cgroup/system.slice/max-browser.service/memory.peak", "utf8"));
+return { kept, peak_mib: Math.round(peak / 2 ** 20) };"#;
 
 fn run(path: &Path) -> Result<()> {
     let config = Config::load(path)?;

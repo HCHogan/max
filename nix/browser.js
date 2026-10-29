@@ -1,38 +1,43 @@
-// The browser in run_code's SDK: camoufox, a Firefox, which programs drive
-// with Playwright; see "浏览器" in docs/rust-rewrite.md. A run's first
-// max.browser() starts it, headless and over a pipe; it goes with the
-// runner's process, so nothing of it outlives the run but what the program
-// saved in /work.
+// The browser in run_code's SDK: the VM's Chromium (guest.nix), which
+// programs drive with Playwright over CDP; see "浏览器" in
+// docs/rust-rewrite.md. The first program that wants it starts it. Its
+// tabs outlive the program, and its profile the VM: the next program finds
+// them as this one left them.
 "use strict";
 
-let started;
+const { execFile } = require("node:child_process");
+const { promisify } = require("node:util");
 
-// A new page in a context of its own, with options as newContext takes
-// them: a login saved by storageState, say. One browser serves the run.
-async function browser(options = {}) {
-  if (!options || typeof options !== "object" || Array.isArray(options)) {
-    throw new TypeError("max.browser 的参数要是一个对象，交给 newContext");
-  }
-  started ??= launch().catch(error => {
-    started = undefined;
+const CDP = "http://127.0.0.1:9222";
+
+let connected;
+
+// The browser's one context: its tabs, cookies and logins.
+async function browser() {
+  connected ??= connect().catch(error => {
+    connected = undefined;
     throw error;
   });
-  const context = await (await started).newContext(options);
-  return context.newPage();
+  return (await connected).contexts()[0];
 }
 
-async function launch() {
-  let camoufox;
+// The newest tab, or a new one if there is none.
+async function page() {
+  const context = await browser();
+  return context.pages().at(-1) ?? context.newPage();
+}
+
+async function connect() {
+  let chromium;
   try {
-    camoufox = await import("camoufox-js");
+    ({ chromium } = require("playwright-core"));
   } catch (error) {
-    if (error.code !== "ERR_MODULE_NOT_FOUND") throw error;
+    if (error.code !== "MODULE_NOT_FOUND") throw error;
     throw new Error("这里没有浏览器，只有群 VM 里的 runner 带着它");
   }
-  // camoufox shows pages only the fonts of the system it poses as, which
-  // have no bold Chinese; the guest's Noto CJK are let through as well.
-  const fonts = ["SC", "TC", "HK", "JP", "KR"].map(region => `Noto Sans CJK ${region}`);
-  return camoufox.Camoufox({ headless: true, fonts });
+  // Returns once the browser takes connections.
+  await promisify(execFile)("systemctl", ["start", "max-browser.service"]);
+  return chromium.connectOverCDP(CDP);
 }
 
 // The interactive elements of a page (or a frame), each with a CSS
@@ -146,4 +151,4 @@ function interactive({ selector, limit }) {
   return { elements, truncated };
 }
 
-module.exports = { browser, snapshot };
+module.exports = { browser, page, snapshot };

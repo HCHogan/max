@@ -85,7 +85,7 @@
 | Images | — | 工具结果里的图片见[多模态结果](#多模态结果)；Max 发图和表情包见[发图](#发图) |
 | Group awareness | — | 群名、人数和 maxx 在群里的身份拿得到（`info`、`bot_state`，实测）；成员列表要白名单，群主和管理员只认得出说过话的（消息里带身份），见 [QQ 官方机器人](#qq-官方机器人)的群管理 |
 | Moderation (QQ groups) | — | `recall_message` 和 `mute_member` 2026-10-29 做了，见 [QQ 官方机器人](#qq-官方机器人)的出站和群管理；禁言在测试群实测过，maxx 当管理员撤普通成员的消息没实测 |
-| Browser | — | camoufox 搬进群 VM，程序里直接写 Playwright（2026-10-29 做完），见[浏览器](#浏览器) |
+| Browser | — | 群 VM 里常驻的 Chromium，程序里经 CDP 直接写 Playwright（2026-10-29 做完），见[浏览器](#浏览器) |
 | Replies | ✓ | QQ 一律发原生 Markdown，表格和代码块不再渲染成图片，见 [QQ 官方机器人](#qq-官方机器人)；Max 不发小黄脸，表情包和图片当图片发，见[发图](#发图) |
 | Tools | 部分 | 纯 codemode 加 `shell`，见[工具和 codemode](#工具和-codemode)；v1 开放哪几个 **待定** |
 | Skills | — | skill 只是文档，加载时只往上下文后面追加，tools 数组不变，见[纯 codemode](#纯-codemode) |
@@ -130,7 +130,7 @@ v1 之后再加的：
 
 | 用途 | 选择 | 备注 |
 |---|---|---|
-| 浏览器 | camoufox 152.0.4-beta.28，camoufox-js 0.10.2，playwright-core 1.59.0 | 跑在群 VM 里，经管道连，不用 server 模式，见[浏览器](#浏览器) |
+| 浏览器 | nixpkgs 的 Chromium（现在 155），playwright-core 1.59.0 | 群 VM 里的常驻服务，程序经 CDP 连，见[浏览器](#浏览器) |
 | 向量 | pgvector 0.4.2 | 支持 sqlx < 0.10 |
 | 自动化 | croner 4 | |
 | 后台 agent | pi（`@earendil-works/pi-coding-agent`），`--mode rpc` | 跑在群 VM 里，在 Nix 里钉住版本 |
@@ -1481,20 +1481,20 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
 ### 浏览器
 
-v1 不做。2026-10-29 做完，做法见本节末尾的"做成的"。
+v1 不做。2026-10-29 先做成每次运行现起 camoufox，当天晚上改成 VM 里常驻的 Chromium（owner 定），做法见本节末尾的"做成的"。
 
-- camoufox 搬进群 VM，不再是单独的容器。它不在 nixpkgs 里，照 Haskell 版的打包方式移植（发行包加 autoPatchelf，camoufox-js 和 playwright-core 一起钉住版本）；坏了就退到 nixpkgs 的 Playwright Firefox。guest 的 store 是宿主的，镜像变大只占宿主的盘，每个 VM 不多占。2026-10-29 改：每次运行用到时现起，经管道连，运行结束连进程树一起没，不用 Playwright server 模式，VM 里不留常驻进程。
+- **为什么换**：模型看完页面、下一次 `run_code` 再点，页面得还在。各家给模型用的浏览器（Playwright MCP、chrome-devtools-mcp、agent-browser、Hermes 的 `browser_exec`）都让浏览器常驻，Hermes 和我们一样是代码模式：每次调用起新的解释器，经 CDP 连同一个 Chromium。camoufox 做不到这样：Playwright 的连接一断，服务端就关掉这个客户端开的 context（playwright-core 1.59 的 `cleanupContexts`），想跨进程留住页面，得自己写个常驻进程持有它；Firefox 又已经不支持 CDP。CDP 的状态在浏览器进程身上，断开连接不关页面，在本机用 Chrome 和 playwright-core 1.59 验证过：上一个进程开的页面和填的字，下一个进程连上来都在。
+- **代价**：反指纹不如 camoufox。自己起的 Chromium 不带 Playwright 的自动化开关，`navigator.webdriver` 是 false，User-Agent 去掉了 HeadlessChrome；但 VM 里的 WebGL 指纹、CDP 本身的痕迹还在，Cloudflare 这类检查更容易拦。真被拦得多了，再在 VM 里跑 camofox-browser 这类常驻服务。
 - 不再有 navigate、click 这类浏览器工具，程序里直接用 Playwright 连这个浏览器。SDK 附带一个快照助手，把页面上可交互的元素列成带 CSS 选择器的清单，沿用 Haskell 版 snapshot 的形状。
-- 每次运行开自己的 browser context，互不影响。登录状态（2026-10-29 定，owner 选的）：只给 Max 自己的小号用，用 Playwright 的 storageState 存到 `/work`，写明全群的程序都读得到；不做个人登录，Haskell 版那种按人加密、程序看不到 cookie 的做法要宿主侧的工具，以后再说。
-- 截图和下载直接落到 `/work`，要看就 `max.image`。
+- 登录状态（2026-10-29 定，owner 选的）：只给 Max 自己的小号用，存在本群浏览器的 profile 里，写明全群的程序都用得到；不做个人登录，Haskell 版那种按人加密、程序看不到 cookie 的做法要宿主侧的工具，以后再说。
+- 截图交给 `max.image` 看，下载存进 `/work`。
 
 做成的（2026-10-29）：
 
-- **SDK**：`await max.browser(options?)` 返回一个新 context 里的 Playwright `Page`，`options` 交给 `newContext`（比如 `storageState`）。一次运行第一次调用时起浏览器，之后的调用共用它，各开各的 context。`await max.snapshot(page, {selector?, limit?})` 返回 `{url, title, elements, truncated}`，元素是 `{tag, selector, role, name, text, bounds}`，取法沿用 Haskell 版；`text` 和 `name` 相同时省掉，选择器从最近的带 id 的祖先算起，默认最多 100 个。Haskell 版快照里的正文和 ARIA 树不带，程序要就自己用 Playwright 读。
-- **打包**：`nix/camoufox.nix` 是发行包加 autoPatchelf，带上 uBlock Origin（camoufox-js 默认要装，没有就往只读的安装目录里下载）。`nix/runner.nix` 把 runner、SDK、camoufox-js 和 playwright-core 打成一个包，传递依赖的版本也沿用 Haskell 版的 lock；guest 的 `/run/max/runner.js` 链到包里。camoufox-js 读 WebGL 指纹库用的是要编译的 better-sqlite3，改成 Node 自带的 `node:sqlite`，整个包不编译任何东西。不开 geoip，不带 GeoLite 库。
-- **字体**：camoufox 只让页面用它扮演的系统的字体，它自带的中文字体没有粗体，粗体中文全成了方框。guest 装了 Noto Sans CJK，并加进 camoufox 的字体白名单；VM 里别的程序也看得到这套字体。
-- **登录**：storageState 存成 `/work/.max/logins/<站点>.json`，提示词里写明只登录 Max 自己的小号、本群所有程序都读得到。
-- **体积**：guest 的闭包从 4.0 GiB 变成 5.5 GiB。camoufox 占 1.3 GiB，其中它自带的各系统字体 0.9 GiB。
+- **服务**：guest 里的 `max-browser.service`，nixpkgs 的 Chromium，`--headless=new`，CDP 只听 127.0.0.1:9222；root 跑、关掉 Chromium 自己的沙箱，VM 就是沙箱。profile 在 `/work/.max/chromium`，cookie 和登录跨 VM 重启都在；VM 没关干净留下的 profile 锁，启动前删掉。中文界面和 `Accept-Language`，时区 Asia/Shanghai，窗口 1280×900，内存上限 2 GiB，崩了 systemd 重启（标签页没了，profile 还在）。不开机就起：第一个要浏览器的程序 `systemctl start` 它，等 CDP 端口能连才返回。VM 闲置关机时它跟着停，常驻的浏览器不让 VM 算作在用。
+- **SDK**：`await max.browser()` 返回浏览器唯一的 BrowserContext，`await max.page()` 返回最新的标签页，没有就开一个；之后照常写 Playwright。一个程序里只连一次。程序结束只是断开连接，标签页留着，下一个程序接着用；用完的由程序自己关。`await max.snapshot(page, {selector?, limit?})` 返回 `{url, title, elements, truncated}`，元素是 `{tag, selector, role, name, text, bounds}`，取法沿用 Haskell 版；`text` 和 `name` 相同时省掉，选择器从最近的带 id 的祖先算起，默认最多 100 个。
+- **打包**：`nix/runner.nix` 把 runner、SDK 和 playwright-core 1.59.0（没有依赖，直接取 npm 的包）放在一起，guest 的 `/run/max/runner.js` 链到包里。原来 camoufox 的发行包、camoufox-js 和它的补丁都删了。
+- **字体**：guest 装了 Noto Sans CJK，Chromium 经 fontconfig 找到它。
 - **实测**（tank 上的嵌套测试，VM 2 个 vCPU、1 GiB 内存）：`vm-check` 的第三个程序起浏览器、打开一个 data: 页面、快照、截图存进 `/work`，测试检查快照里的选择器和截图。VM 10 秒起好。VM 开机后第一次起浏览器要 22 秒，多半是经 virtiofs 冷读 store，加上嵌套虚拟化；同一个 VM 里再起 4.3 秒，打开页面 0.4 秒。开着两个 context 时这次运行的匿名内存 370～410 MiB，cgroup 峰值（含页缓存）775 MiB。宿主上直接跑：加载模块 0.6 秒，起浏览器 0.5 秒，第一个页面 1.4 秒。真实网站没测，测试机不通外网。VM 默认 4 GiB 内存，不用加。
 - **提议**：Haskell 版用了 humanize（模拟鼠标轨迹）和虚拟显示（Xvfb，比 headless 难认出来），这里先只用 headless；被网站认出来再加。
 
