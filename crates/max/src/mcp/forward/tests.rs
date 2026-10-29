@@ -1,7 +1,10 @@
 use std::path::Path as FilePath;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use axum::body::{Body, Bytes};
 use axum::routing::post;
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -15,27 +18,36 @@ use crate::scope::Scope;
 /// What the provider was asked: the authorization, and the body.
 type Asked = Arc<Mutex<Vec<(Option<String>, Value)>>>;
 
-/// A provider that answers with an event stream.
+/// A provider that answers with an event stream; under /quiet, one event
+/// and then nothing.
 async fn provider(scope: &mut Scope, asked: Asked) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let app = axum::Router::new().route(
-        "/v1/chat/completions",
-        post(move |headers: axum::http::HeaderMap, body: String| {
-            let asked = Arc::clone(&asked);
-            async move {
-                let authorization = headers
-                    .get("authorization")
-                    .map(|value| value.to_str().unwrap().to_owned());
-                asked
-                    .lock()
-                    .unwrap()
-                    .push((authorization, serde_json::from_str(&body).unwrap()));
-                let answer = "data: {\"n\":1}\n\ndata: [DONE]\n\n";
-                ([("content-type", "text/event-stream")], answer)
-            }
-        }),
-    );
+    let quiet = || async {
+        let first = futures_util::stream::once(async {
+            Ok::<_, std::convert::Infallible>(Bytes::from("data: {\"n\":1}\n\n"))
+        });
+        Body::from_stream(first.chain(futures_util::stream::pending()))
+    };
+    let app = axum::Router::new()
+        .route("/quiet/chat/completions", post(quiet))
+        .route(
+            "/v1/chat/completions",
+            post(move |headers: axum::http::HeaderMap, body: String| {
+                let asked = Arc::clone(&asked);
+                async move {
+                    let authorization = headers
+                        .get("authorization")
+                        .map(|value| value.to_str().unwrap().to_owned());
+                    asked
+                        .lock()
+                        .unwrap()
+                        .push((authorization, serde_json::from_str(&body).unwrap()));
+                    let answer = "data: {\"n\":1}\n\ndata: [DONE]\n\n";
+                    ([("content-type", "text/event-stream")], answer)
+                }
+            }),
+        );
     scope.spawn(move |stop| async move {
         let _ = axum::serve(listener, app)
             .with_graceful_shutdown(stop.cancelled_owned())
@@ -61,6 +73,10 @@ async fn send(socket: &FilePath, path: &str, headers: &str, body: &str) -> (Stri
 }
 
 fn upstream(base_url: String) -> Arc<Upstream> {
+    quiet_within(base_url, Duration::from_secs(120))
+}
+
+fn quiet_within(base_url: String, idle: Duration) -> Arc<Upstream> {
     Arc::new(Upstream {
         provider: "cliproxy".into(),
         protocol: max_core::item::Protocol::Chat,
@@ -71,6 +87,7 @@ fn upstream(base_url: String) -> Arc<Upstream> {
         window: 1_000_000,
         max_output: None,
         effort: Some("high".into()),
+        idle,
     })
 }
 
@@ -96,8 +113,10 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
     let asked = Asked::default();
     let base_url = provider(&mut scope, Arc::clone(&asked)).await;
     let sessions = Sessions::default();
+    let quiet = base_url.replace("/v1", "/quiet");
     let job = sessions.open_job(context(), upstream(base_url));
     let run = sessions.open(context());
+    let stalled = sessions.open_job(context(), quiet_within(quiet, Duration::from_millis(200)));
 
     let dir = std::env::temp_dir().join(format!("max-forward-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -123,6 +142,16 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
         assert_eq!(request["messages"][0]["content"], "你好");
     }
 
+    // An answer that stops coming is broken off, before its last chunk.
+    let (path, token) = ("/llm/chat/completions", bearer(stalled.token()));
+    let broken = send(&socket, path, &token, ask);
+    let (status, body) = tokio::time::timeout(Duration::from_secs(5), broken)
+        .await
+        .expect("the quiet answer is broken off");
+    assert_eq!(status, "HTTP/1.1 200 OK");
+    assert!(body.contains("data: {\"n\":1}"), "{body}");
+    assert!(!body.ends_with("0\r\n\r\n"), "{body}");
+
     // Not the protocol's endpoint, not JSON, a run's session, a job over.
     let status = |pair: (String, String)| pair.0;
     let refused = send(&socket, "/llm/responses", &bearer(job.token()), ask).await;
@@ -143,7 +172,7 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
     assert_eq!(status(refused), "HTTP/1.1 401 Unauthorized");
     assert_eq!(asked.lock().unwrap().len(), 1);
 
-    scope.close(std::time::Duration::from_secs(5)).await;
+    scope.close(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(dir);
 }
 

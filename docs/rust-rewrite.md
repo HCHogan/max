@@ -1547,7 +1547,7 @@ v1 之后做。
 
 - 每个 job 驱动群 VM 里的一个 pi 进程，通过 stdio 上的 RPC JSONL 通信。
 - 适配器在 `crates/max/src/job.rs`（2026-10-30）：`job::pi` 是协议，`job::drive` 给任务、转 steer、到点中断、等它停下，取最后一条助手消息的文字作报告，再关 stdin。用量、工具调用经 `Watch` 报出去。没有再抽一层 `AgentBackend`：只有 pi 一个实现，等真有第二个再抽。命令用 `Vm::open` 起，stdin 一直开着。
-- **模型**（2026-10-30 定）：`[llm]` 里单独配 `job = { model, effort }`，没配就没有后台 agent。pi 不拿 provider 的 key：它的模型请求发到 VM 里的 `http://127.0.0.1:7777/llm/<端点>`，和 MCP 是同一个服务、同一个 token。宿主认出是哪个 job 的会话，把 `model` 换成配置里的，带上 provider 的 key 和头转过去，回答原样流回来。只认这个 provider 协议的端点（`chat/completions` 或 `responses`），请求最大 64 MiB；job 结束、会话吊销后 token 就没用了。没选的办法：cliproxy 的管理接口能在运行时加删 key，但改完要写回配置文件，tank 上那是 sops 渲染出来的；给 VM 一个固定的 cliproxy key，等于给了群里所有人。
+- **模型**（2026-10-30 定）：`[llm]` 里单独配 `job = { model, effort }`，没配就没有后台 agent。pi 不拿 provider 的 key：它的模型请求发到 VM 里的 `http://127.0.0.1:7777/llm/<端点>`，和 MCP 是同一个服务、同一个 token。宿主认出是哪个 job 的会话，把 `model` 换成配置里的，带上 provider 的 key 和头转过去，回答原样流回来。provider 在 `stream_idle_timeout_secs`（默认 120 秒）里没出声，不管是回答开始前还是流到一半，都和 max-llm 一样掐断：pi 当作这次调用失败，自己重试，不会干等到 job 到点（10-30 Max 自己 review 时指出的）。只认这个 provider 协议的端点（`chat/completions` 或 `responses`），请求最大 64 MiB；job 结束、会话吊销后 token 就没用了。没选的办法：cliproxy 的管理接口能在运行时加删 key，但改完要写回配置文件，tank 上那是 sops 渲染出来的；给 VM 一个固定的 cliproxy key，等于给了群里所有人。
 - 领域工具走 Max 的 MCP 服务，见 [MCP 通道](#mcp-通道)。每个 job 开一个会话，只开放只读工具，比如 `context_search`、`context_read`、`memory_list`；job 结束时吊销。pi 在 VM 里也能跑 codemode 的 runner，用 job 自己的会话批量调这些工具。
 - 会影响群的动作（发消息、发文件、撤回、禁言、建自动化）不给后台 agent。它的结果是一种唤醒（`Reason::Job`）：会话有核心在跑就喂给它，没有就起一个；由前台的模型决定怎么说。job 中途提问同样处理，人的回答再由前台用工具 steer 回去（还没做：现在 pi 的对话框一律回取消）。
 - **工具**（2026-10-30）：Max 在 `run_code` 里用四个 Max 工具管 job，都由会话 actor 回答（经 `Poster`，带回信通道），后台 agent 自己用不了：

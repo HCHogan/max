@@ -1879,6 +1879,7 @@ dependencies = [
  "chrono",
  "clap",
  "color-eyre",
+ "futures-util",
  "image",
  "max-core",
  "max-db",

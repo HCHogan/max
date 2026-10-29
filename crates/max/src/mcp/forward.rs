@@ -1,8 +1,11 @@
 //! A background agent's model calls: pi in the VM posts them to `/llm/…`
 //! with its session's token, and they go on to the provider with the
 //! provider's key, as they came but for the model id. The answer streams
-//! back as it is. See "后台 agent" in docs/rust-rewrite.md.
+//! back as it is, and is broken off if the provider keeps quiet as long
+//! as max-llm would wait: pi takes it for a failed call, and retries. See
+//! "后台 agent" in docs/rust-rewrite.md.
 
+use std::io;
 use std::time::Duration;
 
 use axum::Router;
@@ -11,9 +14,11 @@ use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use axum::routing::post;
+use futures_util::Stream;
 use max_core::ids::ConversationId;
 use max_core::item::Protocol;
 use serde_json::{Value, json};
+use tokio::time::timeout;
 
 use super::Sessions;
 
@@ -83,23 +88,46 @@ async fn call(
     for (name, value) in &upstream.headers {
         sending = sending.header(name, value);
     }
+    let idle = upstream.idle;
     let sent = tokio::select! {
-        sent = sending.send() => sent,
+        sent = timeout(idle, sending.send()) => sent,
         () = session.closed.cancelled() => {
             return refuse(StatusCode::GONE, "这个 job 已经结束了");
         }
     };
     let answer = match sent {
-        Ok(answer) => answer,
-        Err(error) => return refuse(StatusCode::BAD_GATEWAY, &format!("模型连不上：{error}")),
+        Ok(Ok(answer)) => answer,
+        Ok(Err(error)) => {
+            return refuse(StatusCode::BAD_GATEWAY, &format!("模型连不上：{error}"));
+        }
+        Err(_) => {
+            let quiet = format!("模型 {} 秒没回话", idle.as_secs());
+            return refuse(StatusCode::GATEWAY_TIMEOUT, &quiet);
+        }
     };
     let mut response = Response::builder().status(answer.status());
     if let Some(kind) = answer.headers().get(header::CONTENT_TYPE) {
         response = response.header(header::CONTENT_TYPE, kind);
     }
     response
-        .body(Body::from_stream(answer.bytes_stream()))
+        .body(Body::from_stream(chunks(answer, idle)))
         .unwrap_or_else(|_| refuse(StatusCode::BAD_GATEWAY, "模型的回答转不了"))
+}
+
+/// The answer's body, ended with an error if no chunk comes within `idle`.
+fn chunks(answer: reqwest::Response, idle: Duration) -> impl Stream<Item = io::Result<Bytes>> {
+    futures_util::stream::unfold(Some(answer), move |answer| async move {
+        let mut answer = answer?;
+        match timeout(idle, answer.chunk()).await {
+            Ok(Ok(Some(chunk))) => Some((Ok(chunk), Some(answer))),
+            Ok(Ok(None)) => None,
+            Ok(Err(error)) => Some((Err(io::Error::other(error)), None)),
+            Err(_) => {
+                let quiet = io::Error::new(io::ErrorKind::TimedOut, "the provider kept quiet");
+                Some((Err(quiet), None))
+            }
+        }
+    })
 }
 
 /// An error as OpenAI's APIs put it, which pi shows the model.

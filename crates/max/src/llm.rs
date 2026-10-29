@@ -72,6 +72,8 @@ pub struct Upstream {
     pub window: u32,
     pub max_output: Option<u32>,
     pub effort: Option<String>,
+    /// How long the provider may keep quiet, before its answer or within it.
+    pub idle: Duration,
 }
 
 impl Upstream {
@@ -170,6 +172,7 @@ impl Models {
             window: settings.context_window,
             max_output: settings.max_output,
             effort: effort.map(str::to_owned),
+            idle: Duration::from_secs(provider.stream_idle_timeout_secs),
         })
     }
 
