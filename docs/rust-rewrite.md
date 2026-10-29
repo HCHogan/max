@@ -1400,13 +1400,22 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
   Hermes 加这类预算的起因，是一个子 agent 在 15 分钟里把 5 张截图重新加载了 158 次。
 
+### 网页搜索
+
+2026-10-29 定，排在媒体第 1 小步之后（owner 选的）。
+
+- **`web_search(query, limit?)`**：Max 的工具，宿主上经 MCP 调 Exa 的 REST 接口（`type: auto`，带 highlights），key 留在宿主，sops 里沿用 Haskell 版的 `search-exa-api-key`。返回前几条的标题、链接、摘要和发布时间，`limit` 1 到 10，默认 5；标题 200 字、摘要 800 字封顶。失败回 `{code, message}`，不做 Haskell 版那套免 key 的 MCP 优先、冷却和重试。一次运行最多调 20 次。Exa 走 tank 的日本出口，中文结果一般；以后不够用，在同一个签名后面换博查或智谱，它们国内直连。
+- 工具常驻在系统提示的声明里，不藏进 skill：Haskell 版藏进 `web` skill 以后，模型不搜了，凭记忆答错剧情和价格（a51424d）。
+- **抓网页不做成宿主工具**：宿主连得到 tailnet 里的服务，做成工具就是 SSRF 的口子。VM 镜像里加一个 `webread <url>` 命令：Node 的 fetch 加正文抽取转 Markdown，PDF 用 `pdftotext`；跟 5 次跳转、20 秒、10 MB 封顶，打印开头约 1.2 万字，全文写进 `/work`。nft 本来就不让 VM 碰内网。要跑 JS 或登录的页面等[浏览器](#浏览器)。
+- 不做：答案合成、模型 API 自带的搜索（工具数组固定不变，结果程序也拿不到）、结果缓存、图片搜索。
+
 ### 浏览器
 
 v1 不做。
 
-- camoufox 搬进群 VM，不再是单独的容器，按需以 Playwright server 模式启动。VM 的内存上限要放大到装得下 Firefox；不用浏览器的群不占这份内存。
+- camoufox 搬进群 VM，不再是单独的容器。它不在 nixpkgs 里，照 Haskell 版的打包方式移植（发行包加 autoPatchelf，camoufox-js 和 playwright-core 一起钉住版本）；坏了就退到 nixpkgs 的 Playwright Firefox。guest 的 store 是宿主的，镜像变大只占宿主的盘，每个 VM 不多占。2026-10-29 改：每次运行用到时现起，经管道连，运行结束连进程树一起没，不用 Playwright server 模式，VM 里不留常驻进程。
 - 不再有 navigate、click 这类浏览器工具，程序里直接用 Playwright 连这个浏览器。SDK 附带一个快照助手，把页面上可交互的元素列成带 CSS 选择器的清单，沿用 Haskell 版 snapshot 的形状。
-- 每次运行开自己的 browser context，互不影响；要保留登录状态，用 Playwright 的 storageState 存到 `/work`。
+- 每次运行开自己的 browser context，互不影响。登录状态（2026-10-29 定，owner 选的）：只给 Max 自己的小号用，用 Playwright 的 storageState 存到 `/work`，写明全群的程序都读得到；不做个人登录，Haskell 版那种按人加密、程序看不到 cookie 的做法要宿主侧的工具，以后再说。
 - 截图和下载直接落到 `/work`，要看就 `max.image`。
 
 ### 待定事项
