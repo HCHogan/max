@@ -85,7 +85,7 @@
 | Images | — | 工具结果里的图片见[多模态结果](#多模态结果)；Max 发图和表情包见[发图](#发图) |
 | Group awareness | — | 群名、人数和 maxx 在群里的身份拿得到（`info`、`bot_state`，实测）；成员列表要白名单，群主和管理员只认得出说过话的（消息里带身份），见 [QQ 官方机器人](#qq-官方机器人)的群管理 |
 | Moderation (QQ groups) | — | `recall_message` 2026-10-29 做了，见 [QQ 官方机器人](#qq-官方机器人)的出站；禁言接口要 maxx 是群管理员，还没验证，没做，见群管理 |
-| Browser | — | camoufox 搬进群 VM，见[浏览器](#浏览器) |
+| Browser | — | camoufox 搬进群 VM，程序里直接写 Playwright（2026-10-29 做完），见[浏览器](#浏览器) |
 | Replies | ✓ | QQ 一律发原生 Markdown，表格和代码块不再渲染成图片，见 [QQ 官方机器人](#qq-官方机器人)；Max 不发小黄脸，表情包和图片当图片发，见[发图](#发图) |
 | Tools | 部分 | 纯 codemode 加 `shell`，见[工具和 codemode](#工具和-codemode)；v1 开放哪几个 **待定** |
 | Skills | — | skill 只是文档，加载时只往上下文后面追加，tools 数组不变，见[纯 codemode](#纯-codemode) |
@@ -130,7 +130,7 @@ v1 之后再加的：
 
 | 用途 | 选择 | 备注 |
 |---|---|---|
-| 浏览器 | camoufox（Playwright server 模式） | 跑在群 VM 里，见[浏览器](#浏览器) |
+| 浏览器 | camoufox 152.0.4-beta.28，camoufox-js 0.10.2，playwright-core 1.59.0 | 跑在群 VM 里，经管道连，不用 server 模式，见[浏览器](#浏览器) |
 | 向量 | pgvector 0.4.2 | 支持 sqlx < 0.10 |
 | 自动化 | croner 4 | |
 | 后台 agent | pi（`@earendil-works/pi-coding-agent`），`--mode rpc` | 跑在群 VM 里，在 Nix 里钉住版本 |
@@ -288,7 +288,7 @@ systemd 要设 `KillMode=mixed`：SIGTERM 只发给主进程，VM 这些子进�
    - pi：跑在 stdio 上，可以直接杀进程。
    - VM 命令：每条命令是 guest 里的一个 transient unit（`systemd-run --pipe --wait`，`RuntimeMaxSec` 兜底）。SSH channel 关了，guest 不会自己杀它，所以按第 3 条走，见下面的 `VmCommand`。codemode 的 runner 也是一条 VM 命令，它的 MCP 会话在 `Drop` 里同步吊销。
    - VM 本身：主进程的子进程，drop 就杀，见 [VM 进程](#vm-进程)。
-   - 浏览器：runner 被杀时，它到 Playwright server 的连接断开，它开的 browser context 跟着关掉。做浏览器时实测。
+   - 浏览器：runner 的子进程，经管道连。runner 退出时 Playwright 杀掉它；runner 被杀时它和 runner 在同一个 unit 里，一起被杀。2026-10-29 实测：同一个 VM 里接着跑的下一次运行，看不到上一次的浏览器进程。
    - 杀进程要杀整棵树，用进程组或 cgroup。只杀直接子进程的话，孙进程还活着，还开着输出管道。
 3. **对端只认 API 调用的**：`Drop` 里 `try_send` 一条停止命令给持有那条连接的常驻服务，由它去调 API。它在 services scope 里，关机时按顺序关。
 4. **崩溃时 `Drop` 不会执行**：VM 是主进程的子进程，systemd 按 cgroup 把它们和主进程一起杀掉，VM 里的命令和 pi 进程跟着消失，不需要清理孤儿。MCP 会话只存在内存里，进程没了就全部失效。
@@ -1455,17 +1455,27 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
 - **`web_search(query, limit?)`**：Max 的工具，宿主上经 MCP 调 Exa 的 REST 接口（`type: auto`，带 highlights），key 留在宿主，sops 里沿用 Haskell 版的 `search-exa-api-key`。返回前几条的标题、链接、摘要和发布时间，`limit` 1 到 10，默认 5；标题 200 字、摘要 800 字封顶。失败回 `{code, message}`，不做 Haskell 版那套免 key 的 MCP 优先、冷却和重试。一次运行最多调 20 次。Exa 走 tank 的日本出口，中文结果一般；以后不够用，在同一个签名后面换博查或智谱，它们国内直连。
 - 工具常驻在系统提示的声明里，不藏进 skill：Haskell 版藏进 `web` skill 以后，模型不搜了，凭记忆答错剧情和价格（a51424d）。
-- **抓网页不做成宿主工具**：宿主连得到 tailnet 里的服务，做成工具就是 SSRF 的口子。VM 镜像里加一个 `webread <url>` 命令：Python 加 trafilatura 抽正文、转 Markdown，PDF 用 `pdftotext`（2026-10-29 做完；原打算用 Node 的 Readability 加 turndown，trafilatura 少一套 npm 打包，也认得 GBK 这类老编码）；跟 5 次跳转、20 秒、10 MB 封顶，打印开头 1.2 万字，全文写进 `/work/.max/web/`，`--offset` 从存下的全文接着读。测试在本机用 dev shell 的 Python 跑这个脚本，接本地的 HTTP 服务。nft 本来就不让 VM 碰内网。要跑 JS 或登录的页面等[浏览器](#浏览器)。
+- **抓网页不做成宿主工具**：宿主连得到 tailnet 里的服务，做成工具就是 SSRF 的口子。VM 镜像里加一个 `webread <url>` 命令：Python 加 trafilatura 抽正文、转 Markdown，PDF 用 `pdftotext`（2026-10-29 做完；原打算用 Node 的 Readability 加 turndown，trafilatura 少一套 npm 打包，也认得 GBK 这类老编码）；跟 5 次跳转、20 秒、10 MB 封顶，打印开头 1.2 万字，全文写进 `/work/.max/web/`，`--offset` 从存下的全文接着读。测试在本机用 dev shell 的 Python 跑这个脚本，接本地的 HTTP 服务。nft 本来就不让 VM 碰内网。要跑 JS 或登录的页面用[浏览器](#浏览器)。
 - 不做：答案合成、模型 API 自带的搜索（工具数组固定不变，结果程序也拿不到）、结果缓存、图片搜索。
 
 ### 浏览器
 
-v1 不做。
+v1 不做。2026-10-29 做完，做法见本节末尾的"做成的"。
 
 - camoufox 搬进群 VM，不再是单独的容器。它不在 nixpkgs 里，照 Haskell 版的打包方式移植（发行包加 autoPatchelf，camoufox-js 和 playwright-core 一起钉住版本）；坏了就退到 nixpkgs 的 Playwright Firefox。guest 的 store 是宿主的，镜像变大只占宿主的盘，每个 VM 不多占。2026-10-29 改：每次运行用到时现起，经管道连，运行结束连进程树一起没，不用 Playwright server 模式，VM 里不留常驻进程。
 - 不再有 navigate、click 这类浏览器工具，程序里直接用 Playwright 连这个浏览器。SDK 附带一个快照助手，把页面上可交互的元素列成带 CSS 选择器的清单，沿用 Haskell 版 snapshot 的形状。
 - 每次运行开自己的 browser context，互不影响。登录状态（2026-10-29 定，owner 选的）：只给 Max 自己的小号用，用 Playwright 的 storageState 存到 `/work`，写明全群的程序都读得到；不做个人登录，Haskell 版那种按人加密、程序看不到 cookie 的做法要宿主侧的工具，以后再说。
 - 截图和下载直接落到 `/work`，要看就 `max.image`。
+
+做成的（2026-10-29）：
+
+- **SDK**：`await max.browser(options?)` 返回一个新 context 里的 Playwright `Page`，`options` 交给 `newContext`（比如 `storageState`）。一次运行第一次调用时起浏览器，之后的调用共用它，各开各的 context。`await max.snapshot(page, {selector?, limit?})` 返回 `{url, title, elements, truncated}`，元素是 `{tag, selector, role, name, text, bounds}`，取法沿用 Haskell 版；`text` 和 `name` 相同时省掉，选择器从最近的带 id 的祖先算起，默认最多 100 个。Haskell 版快照里的正文和 ARIA 树不带，程序要就自己用 Playwright 读。
+- **打包**：`nix/camoufox.nix` 是发行包加 autoPatchelf，带上 uBlock Origin（camoufox-js 默认要装，没有就往只读的安装目录里下载）。`nix/runner.nix` 把 runner、SDK、camoufox-js 和 playwright-core 打成一个包，传递依赖的版本也沿用 Haskell 版的 lock；guest 的 `/run/max/runner.js` 链到包里。camoufox-js 读 WebGL 指纹库用的是要编译的 better-sqlite3，改成 Node 自带的 `node:sqlite`，整个包不编译任何东西。不开 geoip，不带 GeoLite 库。
+- **字体**：camoufox 只让页面用它扮演的系统的字体，它自带的中文字体没有粗体，粗体中文全成了方框。guest 装了 Noto Sans CJK，并加进 camoufox 的字体白名单；VM 里别的程序也看得到这套字体。
+- **登录**：storageState 存成 `/work/.max/logins/<站点>.json`，提示词里写明只登录 Max 自己的小号、本群所有程序都读得到。
+- **体积**：guest 的闭包从 4.0 GiB 变成 5.5 GiB。camoufox 占 1.3 GiB，其中它自带的各系统字体 0.9 GiB。
+- **实测**（tank 上的嵌套测试，VM 2 个 vCPU、1 GiB 内存）：`vm-check` 的第三个程序起浏览器、打开一个 data: 页面、快照、截图存进 `/work`，测试检查快照里的选择器和截图。VM 10 秒起好。VM 开机后第一次起浏览器要 22 秒，多半是经 virtiofs 冷读 store，加上嵌套虚拟化；同一个 VM 里再起 4.3 秒，打开页面 0.4 秒。开着两个 context 时这次运行的匿名内存 370～410 MiB，cgroup 峰值（含页缓存）775 MiB。宿主上直接跑：加载模块 0.6 秒，起浏览器 0.5 秒，第一个页面 1.4 秒。真实网站没测，测试机不通外网。VM 默认 4 GiB 内存，不用加。
+- **提议**：Haskell 版用了 humanize（模拟鼠标轨迹）和虚拟显示（Xvfb，比 headless 难认出来），这里先只用 headless；被网站认出来再加。
 
 ### 待定事项
 
