@@ -170,17 +170,37 @@ impl Conversation {
         let mut lines = vec![format!("maxx {}", crate::COMMIT)];
         let mut line = |key: &str, value: String| lines.push(format!("{key:<10}{value}"));
         line("os", format!("{} · {}", os(), std::env::consts::ARCH));
+        // What the next reply uses; a running core keeps the one it began with.
+        let next = self
+            .shared
+            .models
+            .turn(settings.model.as_deref(), settings.effort.as_deref())
+            .ok()
+            .map(|chosen| model(&chosen));
+        let configured = settings.model.as_deref().unwrap_or("default");
+        line(
+            "model",
+            next.clone()
+                .unwrap_or_else(|| format!("{configured} (not configured)")),
+        );
         let proactive = if settings.proactive { "on" } else { "off" };
         line("proactive", proactive.to_owned());
         line(
             "core",
             match &self.core {
-                Some(a) => format!(
-                    "t#{} · {} · round {}",
-                    a.ordinal,
-                    span(a.started.elapsed()),
-                    a.run.round()
-                ),
+                Some(a) => {
+                    let mut core = format!(
+                        "t#{} · {} · round {}",
+                        a.ordinal,
+                        span(a.started.elapsed()),
+                        a.run.round()
+                    );
+                    let running = model(&a.chosen);
+                    if next.as_ref() != Some(&running) {
+                        let _ = write!(core, " · {running}");
+                    }
+                    core
+                }
                 None => "idle".to_owned(),
             },
         );
@@ -461,6 +481,14 @@ impl Conversation {
 }
 
 /// The two largest units: 3d 4h, 2h 13m, 5m 12s, 12s.
+/// A model as `/status` shows it: its reference, and the effort if set.
+fn model(chosen: &Chosen) -> String {
+    match &chosen.options.effort {
+        Some(effort) => format!("{} · {effort}", chosen.reference()),
+        None => chosen.reference(),
+    }
+}
+
 fn span(duration: Duration) -> String {
     let s = duration.as_secs();
     let (d, h, m, s) = (s / 86400, s / 3600 % 24, s / 60 % 60, s % 60);

@@ -359,7 +359,7 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
         "{status}"
     );
     assert!(
-        status.contains("\nproactive on\ncore      idle\nuptime    "),
+        status.contains("\nmodel     test/big · high\nproactive on\ncore      idle\nuptime    "),
         "{status}"
     );
     assert!(status.ends_with("\n```"), "{status}");
