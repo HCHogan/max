@@ -6,7 +6,7 @@
 use std::fmt::Write;
 use std::time::Duration;
 
-use max_core::message::{Platform, Role};
+use max_core::message::{Content, MentionTarget, Node, Platform, Role};
 use max_db::platform::ConversationKind;
 use tokio::sync::oneshot;
 
@@ -46,6 +46,8 @@ impl Conversation {
             Command::Model(None) | Command::Effort(None) | Command::Proactive(None) => Rank::Anyone,
             Command::Persona(Persona::Show) | Command::Clear { all: false } => Rank::Anyone,
             Command::Model(Some(argument)) if argument == "list" => Rank::Anyone,
+            // Who may link whom is its own business.
+            Command::Link(_) => Rank::Anyone,
             Command::Kill | Command::Persona(_) | Command::Clear { .. } | Command::Compact => {
                 Rank::Admin
             }
@@ -87,6 +89,10 @@ impl Conversation {
                 None => return Ok(()),
             },
             Command::Bind(argument) => self.bind(committed, argument.as_deref()).await?,
+            Command::Link(argument) => {
+                let owner = rank == Rank::Owner;
+                self.link(committed, argument.as_deref(), owner).await?
+            }
         };
         self.answer(answer).await
     }
@@ -299,6 +305,79 @@ impl Conversation {
         Ok(format!(
             "在要绑的群里发 /bind {code}，{target}。10 分钟内有效，只能用一次。"
         ))
+    }
+}
+
+impl Conversation {
+    /// `/link <QQ号>`: this account is the person with that QQ number in
+    /// the old group's records. Nothing proves the number is the sender's,
+    /// so a person is linked once per group, the answer says to whom in
+    /// front of everyone, and only an owner changes a link: someone else's,
+    /// with an @ of them, or undone with `-`. See "权限".
+    async fn link(
+        &mut self,
+        committed: &Committed,
+        argument: Option<&str>,
+        owner: bool,
+    ) -> Result<String> {
+        const USAGE: &str = "在群里发 /link 你的QQ号，把这个账号接到老群记录里的你。";
+        if self.place.kind == ConversationKind::Direct {
+            return Ok("/link 要在群里发：每个群里的账号各接各的。".to_owned());
+        }
+        let Some(last) = argument.and_then(|argument| argument.split_whitespace().last()) else {
+            return Ok(USAGE.to_owned());
+        };
+        let me = self.place.me.identity;
+        let mentioned = match &committed.message.content {
+            Content::Message { nodes, .. } => nodes.iter().find_map(|node| match node {
+                Node::Mention {
+                    target: MentionTarget::Identity(id),
+                    ..
+                } if *id != me => Some(*id),
+                _ => None,
+            }),
+            _ => None,
+        };
+        if (mentioned.is_some() || last == "-") && !owner {
+            return Ok("替别人接、撤销，只有主人能用。".to_owned());
+        }
+        let target = mentioned.unwrap_or(committed.sender.identity);
+        let mut conn = self.shared.pool.acquire().await?;
+        let Some((own, merged)) = platform::own_principal(&mut conn, target).await? else {
+            return Ok(USAGE.to_owned());
+        };
+        let current = merged.unwrap_or(own);
+        if current == self.place.me.principal || self.shared.owners.contains(&current) {
+            return Ok("主人和 Max 自己的账号不用 /link。".to_owned());
+        }
+        if last == "-" {
+            platform::relink(&mut conn, own, None).await?;
+            return Ok("好，撤销了这个账号的关联。".to_owned());
+        }
+        let qq = (5..=12).contains(&last.len()) && last.bytes().all(|b| b.is_ascii_digit());
+        if !qq {
+            return Ok(USAGE.to_owned());
+        }
+        let found = platform::legacy_speaker(&mut conn, self.place.conversation, last).await?;
+        let Some(old) = found else {
+            return Ok("老群的记录里没有这个 QQ 号说过的话。".to_owned());
+        };
+        if current == old.principal {
+            return Ok("已经接上了。".to_owned());
+        }
+        if merged.is_some() && !owner {
+            return Ok("你已经接到老群记录里的另一个人了，要改找主人。".to_owned());
+        }
+        let endpoint = self.place.endpoint;
+        if let Some(other) = platform::linked_in(&mut conn, endpoint, old.principal, target).await?
+        {
+            if !owner {
+                return Ok("这个 QQ 号在这个群里已经有人接上了，有问题找主人。".to_owned());
+            }
+            platform::relink(&mut conn, other.principal, None).await?;
+        }
+        platform::relink(&mut conn, own, Some(old.principal)).await?;
+        Ok(format!("好，接到了老群记录里的「{}」。", old.name))
     }
 }
 

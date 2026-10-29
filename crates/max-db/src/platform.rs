@@ -337,6 +337,108 @@ pub async fn merge(
     Ok(())
 }
 
+/// An account's own person, and what that person is merged into: what
+/// `/link` changes.
+pub async fn own_principal(
+    conn: &mut PgConnection,
+    identity: IdentityId,
+) -> sqlx::Result<Option<(PrincipalId, Option<PrincipalId>)>> {
+    let row = sqlx::query!(
+        "select p.id, p.merged_into from identities i join principals p on p.id = i.principal_id
+         where i.id = $1",
+        identity.0
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.map(|row| (PrincipalId(row.id), row.merged_into.map(PrincipalId))))
+}
+
+/// Sets or clears what a person is merged into, whatever it was: `/link`'s
+/// corrections. `into` must not be merged itself.
+pub async fn relink(
+    conn: &mut PgConnection,
+    principal: PrincipalId,
+    into: Option<PrincipalId>,
+) -> sqlx::Result<()> {
+    sqlx::query!(
+        "update principals set merged_into = $2 where id = $1",
+        principal.0,
+        into.map(|into| into.0)
+    )
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Someone from before the move to the official bot: the person behind an
+/// old QQ number, if it spoke in the conversation's old group, and the
+/// name it last spoke under there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Legacy {
+    pub principal: PrincipalId,
+    pub name: String,
+}
+
+pub async fn legacy_speaker(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    qq: &str,
+) -> sqlx::Result<Option<Legacy>> {
+    let row = sqlx::query!(
+        r#"
+        select coalesce(p.merged_into, p.id) as "principal!", m.sender_name
+        from endpoints e
+        join identities i on i.platform = 'qq_legacy' and i.native_user_id = $2
+        join principals p on p.id = i.principal_id
+        cross join lateral (
+            select sender_name from messages
+            where endpoint_id = e.id and sender_identity_id = i.id
+            order by id desc limit 1
+        ) m
+        where e.conversation_id = $1 and e.platform = 'qq_legacy'
+        limit 1
+        "#,
+        conversation.0,
+        qq
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.map(|row| Legacy {
+        principal: PrincipalId(row.principal),
+        name: row.sender_name,
+    }))
+}
+
+/// Another account that spoke in `endpoint` and is merged into `principal`:
+/// who has `/link`ed to that person there already.
+pub async fn linked_in(
+    conn: &mut PgConnection,
+    endpoint: EndpointId,
+    principal: PrincipalId,
+    except: IdentityId,
+) -> sqlx::Result<Option<Account>> {
+    let row = sqlx::query!(
+        r#"
+        select i.id, i.principal_id
+        from identities i join principals p on p.id = i.principal_id
+        where p.merged_into = $2 and i.id <> $3
+          and exists (
+              select 1 from messages m where m.endpoint_id = $1 and m.sender_identity_id = i.id
+          )
+        limit 1
+        "#,
+        endpoint.0,
+        principal.0,
+        except.0
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.map(|row| Account {
+        identity: IdentityId(row.id),
+        principal: PrincipalId(row.principal_id),
+    }))
+}
+
 /// An account's id on its platform: whom a mention of it reaches.
 pub async fn native_user_id(
     conn: &mut PgConnection,

@@ -444,3 +444,152 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
     h.stop().await;
     assert!(h.outbound.try_recv().is_err(), "/kill isn't answered");
 }
+
+/// The old group's records under the test group: 老红 and 老王 spoke there,
+/// by QQ numbers 20001 and 20002.
+async fn old_group(pool: &PgPool) {
+    use max_core::ids::ConversationId;
+    use max_core::message::{Platform, Role};
+    use max_db::platform::ConversationKind;
+
+    use crate::conversation::testing::{at, offset};
+    use crate::inbound::Person;
+
+    let mut conn = pool.acquire().await.unwrap();
+    let conversation: i64 = sqlx::query_scalar(
+        "select conversation_id from endpoints where native_id = 'group:GROUP1'",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .unwrap();
+    let old_me = platform::account(&mut conn, Platform::QqLegacy, "10000", "Max")
+        .await
+        .unwrap();
+    let native_id = "group:OLD1";
+    let kind = ConversationKind::Group;
+    let conversation = Some(ConversationId(conversation));
+    let endpoint = platform::attach(
+        &mut conn,
+        conversation,
+        Platform::QqLegacy,
+        native_id,
+        old_me.identity,
+        kind,
+    )
+    .await
+    .unwrap();
+    let place = Place {
+        conversation: endpoint.conversation,
+        kind,
+        endpoint: endpoint.id,
+        platform: Platform::QqLegacy,
+        native_id: native_id.into(),
+        me: old_me,
+        my_name: "Max".into(),
+    };
+    for (n, qq, name) in [(0, "20001", "老红"), (1, "20002", "老王")] {
+        let mut said = from_xiaoming(n, vec![text("从前")]);
+        said.platform = Platform::QqLegacy;
+        said.chat.native_id = native_id.into();
+        said.native_id = format!("OLD{n}");
+        said.quote_id = None;
+        said.sender = Person {
+            native_user_id: qq.into(),
+            name: name.into(),
+            role: Some(Role::Member),
+        };
+        ingest::inbound(&mut conn, &place, &said, at(n), offset())
+            .await
+            .unwrap();
+    }
+}
+
+fn from_xiaogang(n: u32, nodes: Vec<InNode>) -> Inbound {
+    let mut inbound = from_xiaoming(n, nodes);
+    inbound.sender = crate::inbound::Person {
+        native_user_id: "XIAOGANG".into(),
+        name: "小刚".into(),
+        role: Some(max_core::message::Role::Member),
+    };
+    inbound
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn link_takes_people_back_to_their_old_selves(pool: PgPool) {
+    // 小明 owns Max.
+    let mut h = Harness::with_owner(pool, 300, true).await;
+    old_group(&h.pool).await;
+    let at = |who: &str, display: &str| InNode::Mention {
+        user: who.into(),
+        display: display.into(),
+    };
+    let mut asks = vec![
+        (
+            from_xiaohong(10, vec![text("/link")]),
+            "在群里发 /link 你的QQ号，把这个账号接到老群记录里的你。",
+        ),
+        (
+            from_xiaohong(11, vec![text("/link 20001")]),
+            "好，接到了老群记录里的「老红」。",
+        ),
+        (from_xiaohong(12, vec![text("/link 20001")]), "已经接上了。"),
+        (
+            from_xiaohong(13, vec![text("/link 20002")]),
+            "你已经接到老群记录里的另一个人了，要改找主人。",
+        ),
+        (
+            from_xiaogang(14, vec![text("/link 99999")]),
+            "老群的记录里没有这个 QQ 号说过的话。",
+        ),
+        (
+            from_xiaogang(15, vec![text("/link 20001")]),
+            "这个 QQ 号在这个群里已经有人接上了，有问题找主人。",
+        ),
+        (
+            from_xiaogang(16, vec![text("/link "), at("XIAOHONG", "小红"), text(" -")]),
+            "替别人接、撤销，只有主人能用。",
+        ),
+        (
+            from_xiaoming(17, vec![text("/link 20002")]),
+            "主人和 Max 自己的账号不用 /link。",
+        ),
+    ];
+    // 小明 moves 老红 from 小红 to 小刚.
+    let moved = from_xiaoming(
+        18,
+        vec![text("/link "), at("XIAOGANG", "小刚"), text(" 20001")],
+    );
+    asks.push((moved, "好，接到了老群记录里的「老红」。"));
+    for (ask, answer) in asks {
+        h.send(ask);
+        assert_eq!(h.said().await.1, answer);
+    }
+    let pool = h.pool.clone();
+    let linked = |native: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let mut conn = pool.acquire().await.unwrap();
+            sqlx::query_scalar::<_, bool>(
+                "select p.merged_into is not distinct from
+                     (select principal_id from identities where native_user_id = '20001')
+                 from identities i join principals p on p.id = i.principal_id
+                 where i.native_user_id = $1",
+            )
+            .bind(native)
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap()
+        }
+    };
+    assert!(linked("XIAOGANG").await);
+    assert!(!linked("XIAOHONG").await);
+
+    h.send(from_xiaoming(
+        19,
+        vec![text("/link "), at("XIAOGANG", "小刚"), text(" -")],
+    ));
+    assert_eq!(h.said().await.1, "好，撤销了这个账号的关联。");
+    assert!(!linked("XIAOGANG").await);
+    h.stop().await;
+    assert_eq!(h.script.calls(), 0);
+}

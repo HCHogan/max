@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update principals set merged_into = $2 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "24e5a15695bb591791d7cd091179adfa05e8aeed4d8ec66bc187cc0bb9350fe0"
+}

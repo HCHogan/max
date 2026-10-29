@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select p.id, p.merged_into from identities i join principals p on p.id = i.principal_id\n         where i.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "principals",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "merged_into",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "principals",
+            "name": "merged_into"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "0634ff8068347d466b470494c47b6290c3da6bbce2d5111e3ef8d232fa6fe819"
+}
