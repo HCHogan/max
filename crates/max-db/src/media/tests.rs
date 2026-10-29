@@ -45,8 +45,8 @@ async fn pending_until_every_picture_is_recorded(pool: PgPool) -> sqlx::Result<(
     let id = commit(&mut conn, &group, &xiaoming, &two, 1).await?;
 
     let all = vec![
-        (0, "https://example.com/a.png".to_owned()),
-        (1, "https://example.com/b.png".to_owned()),
+        (0, MediaKind::Image, "https://example.com/a.png".to_owned()),
+        (1, MediaKind::Image, "https://example.com/b.png".to_owned()),
     ];
     let expected = vec![Pending {
         message: id,
@@ -59,7 +59,7 @@ async fn pending_until_every_picture_is_recorded(pool: PgPool) -> sqlx::Result<(
     let left = pending(&mut conn, at(0)).await?;
     assert_eq!(
         left[0].remote,
-        [(0, "https://example.com/a.png".to_owned())]
+        [(0, MediaKind::Image, "https://example.com/a.png".to_owned())]
     );
 
     // The same bytes twice: one media row, two links.

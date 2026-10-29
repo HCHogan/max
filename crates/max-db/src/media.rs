@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use max_core::ids::MessageId;
-use max_core::message::{MediaRef, Node, media};
+use max_core::message::{MediaKind, MediaRef, Node, media};
 use sqlx::types::Json;
 use sqlx::{Connection, PgConnection};
 
@@ -27,8 +27,8 @@ pub struct Blob {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pending {
     pub message: MessageId,
-    /// The ordinals and addresses not downloaded yet.
-    pub remote: Vec<(u16, String)>,
+    /// The ordinals, kinds and addresses not downloaded yet.
+    pub remote: Vec<(u16, MediaKind, String)>,
 }
 
 /// Records that the `ordinal`-th media of `message` is `blob`. The media
@@ -140,8 +140,8 @@ pub async fn pending(conn: &mut PgConnection, since: DateTime<Utc>) -> sqlx::Res
         .filter_map(|row| {
             let remote: Vec<_> = media(&row.nodes.0)
                 .filter(|(n, _, _)| !row.done.contains(&i16::try_from(*n).unwrap_or(i16::MAX)))
-                .filter_map(|(n, media, _)| match media {
-                    Some(MediaRef::Remote(url)) => Some((n, url.clone())),
+                .filter_map(|(n, media, meta)| match media {
+                    Some(MediaRef::Remote(url)) => Some((n, meta.kind, url.clone())),
                     _ => None,
                 })
                 .collect();

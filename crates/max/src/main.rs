@@ -28,6 +28,7 @@ use max::conversation::{Place, Shared};
 use max::historian::{self, Historian};
 use max::llm::Models;
 use max::mcp;
+use max::media::caption::{self, Captioner};
 use max::media::download::{self, Download};
 use max::media::fetch;
 use max::media::pictures::Pictures;
@@ -242,17 +243,35 @@ async fn serve(config: Config) -> Result<()> {
                     .await
                     .wrap_err("opening the content store")?,
             );
+            let pictures = Arc::new(Pictures {
+                pool: pool.clone(),
+                store: Arc::clone(&store),
+            });
+            let captions = match models.caption().transpose()? {
+                Some(chosen) => {
+                    let captioner = Arc::new(Captioner {
+                        pool: pool.clone(),
+                        chosen,
+                        pictures: Arc::clone(&pictures),
+                    });
+                    let (tx, rx) = mpsc::unbounded_channel();
+                    workers.spawn(move |stop| worker::drive(captioner, caption::POLICY, rx, stop));
+                    Some(tx)
+                }
+                None => {
+                    info!("no caption model: pictures aren't captioned");
+                    None
+                }
+            };
             let download = Arc::new(Download {
                 pool: pool.clone(),
                 http: fetch::client()?,
-                store: Arc::clone(&store),
+                store,
+                captions,
             });
             let (_, rows) = rows.subscribe();
             workers.spawn(move |stop| worker::drive(download, download::POLICY, rows, stop));
-            Some(Arc::new(Pictures {
-                pool: pool.clone(),
-                store,
-            }))
+            Some(pictures)
         }
         None => {
             info!("no media directory: media aren't downloaded, and models see no pictures");

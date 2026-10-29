@@ -64,6 +64,7 @@ async fn downloads_each_medium_once(pool: PgPool) {
         pool: pool.clone(),
         http: fetch::client().unwrap(),
         store: Arc::clone(&store),
+        captions: None,
     };
 
     let test = async {
@@ -104,6 +105,75 @@ async fn downloads_each_medium_once(pool: PgPool) {
         // Again, nothing changes.
         download.run(&units[0], FIRST).await.unwrap();
         assert_eq!(downloaded(&mut conn, id).await.unwrap().len(), 1);
+        stop.cancel();
+    };
+    let (served, ()) = tokio::join!(server.into_future(), test);
+    served.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn pictures_go_on_to_the_caption_worker(pool: PgPool) {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbImage::new(2, 1)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let png = png.into_inner();
+    let served = png.clone();
+    let app = Router::new()
+        .route("/p.png", get(move || async move { served }))
+        .route("/a.txt", get(|| async { "abc" }));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let stop = CancellationToken::new();
+    let server = axum::serve(listener, app).with_graceful_shutdown(stop.clone().cancelled_owned());
+
+    let dir = std::env::temp_dir().join(format!("max-download-{:016x}", rand::random::<u64>()));
+    let store = Arc::new(Store::open(&dir).await.unwrap());
+    let mut conn = pool.acquire().await.unwrap();
+    let place = Arc::new(group(&mut conn).await);
+    let nodes = ["p.png", "a.txt"].map(|path| picture(format!("{base}/{path}")));
+    let committed = ingest::inbound(
+        &mut conn,
+        &place,
+        &from_xiaoming(1, Vec::from(nodes)),
+        Utc::now(),
+        offset(),
+    )
+    .await
+    .unwrap();
+    drop(conn);
+    let id = committed.message.id;
+    let (captions, mut picked) = tokio::sync::mpsc::unbounded_channel();
+    let download = Download {
+        pool: pool.clone(),
+        http: fetch::client().unwrap(),
+        store,
+        captions: Some(captions),
+    };
+
+    let test = async {
+        let row = Row {
+            place,
+            message: Arc::new(committed.message),
+        };
+        for (unit, _) in download.on_input(row) {
+            download.run(&unit, FIRST).await.unwrap();
+        }
+        // The text isn't a picture.
+        let picture = picked.try_recv().unwrap();
+        assert!(picked.try_recv().is_err());
+        assert_eq!(
+            picture.image,
+            Image {
+                kind: MediaKind::Image,
+                message: id,
+                ordinal: 0
+            }
+        );
+        let mut conn = pool.acquire().await.unwrap();
+        let stored = downloaded(&mut conn, id).await.unwrap();
+        assert_eq!(picture.sha256, stored[0].1);
         stop.cancel();
     };
     let (served, ()) = tokio::join!(server.into_future(), test);

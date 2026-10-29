@@ -9,13 +9,17 @@ use std::time::Duration;
 use chrono::Utc;
 use color_eyre::eyre::{Result, eyre};
 use max_core::ids::MessageId;
-use max_core::message::{Content, MediaRef, Node, media};
+use max_core::item::Image;
+use max_core::message::{Content, MediaKind, MediaRef, Node, media};
 use max_db::PgPool;
+use max_db::captions::Kind;
 use max_db::media::{Blob, downloaded, pending, record};
 use reqwest::Client;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::spawn_blocking;
 use tracing::warn;
 
+use super::caption::Picture;
 use super::fetch::{self, fetch};
 use super::prepare::prepare;
 use super::store::Store;
@@ -39,6 +43,9 @@ pub struct Download {
     pub pool: PgPool,
     pub http: Client,
     pub store: Arc<Store>,
+    /// Where each picture goes on to once stored, when there is a
+    /// caption worker.
+    pub captions: Option<UnboundedSender<Picture>>,
 }
 
 /// The `ordinal`-th medium of a message. The logs show only that: QQ's
@@ -47,6 +54,7 @@ pub struct Download {
 pub struct Medium {
     pub message: MessageId,
     pub ordinal: u16,
+    pub kind: MediaKind,
     pub url: String,
 }
 
@@ -80,9 +88,10 @@ impl Derivation for Download {
                 pending
                     .remote
                     .into_iter()
-                    .map(move |(ordinal, url)| Medium {
+                    .map(move |(ordinal, kind, url)| Medium {
                         message,
                         ordinal,
+                        kind,
                         url,
                     })
             })
@@ -133,6 +142,20 @@ impl Derivation for Download {
         };
         let mut conn = self.pool.acquire().await?;
         record(&mut conn, medium.message, medium.ordinal, &blob, Utc::now()).await?;
+        if let Some(captions) = &self.captions
+            && blob.model_sha256.is_some()
+            && Kind::of(medium.kind).is_some()
+        {
+            let image = Image {
+                kind: medium.kind,
+                message: medium.message,
+                ordinal: medium.ordinal,
+            };
+            let _ = captions.send(Picture {
+                image,
+                sha256: blob.sha256,
+            });
+        }
         Ok(())
     }
 }
@@ -140,10 +163,11 @@ impl Derivation for Download {
 /// The media of a message that came with an address.
 fn remote(message: MessageId, nodes: &[Node]) -> Vec<Medium> {
     media(nodes)
-        .filter_map(|(ordinal, media, _)| match media {
+        .filter_map(|(ordinal, media, meta)| match media {
             Some(MediaRef::Remote(url)) => Some(Medium {
                 message,
                 ordinal,
+                kind: meta.kind,
                 url: url.clone(),
             }),
             _ => None,
