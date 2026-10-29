@@ -107,14 +107,6 @@ fn assert_idle(run: &mut Run) {
     assert!(matches!(run.next_step(), Step::Idle));
 }
 
-/// The live path and the replay path agree.
-fn assert_replays(run: &Run) {
-    let record = run.snapshot();
-    let json = serde_json::to_value(&record).unwrap();
-    assert_eq!(serde_json::from_value::<RunRecord>(json).unwrap(), record);
-    assert_eq!(&Run::replay(&record).unwrap(), run);
-}
-
 fn texts(request: &Request) -> Vec<String> {
     request
         .items
@@ -153,7 +145,6 @@ fn answers_and_goes_idle() {
     assert!(run.idle());
     assert!(run.unhandled().is_empty());
     assert_eq!(run.outcome(), Outcome::Answered);
-    assert_replays(&run);
 }
 
 #[test]
@@ -171,7 +162,6 @@ fn people_shown_mid_run_can_be_mentioned() {
         call_model(&mut run).roster,
         [PrincipalId(12), PrincipalId(30)].into()
     );
-    assert_replays(&run);
 }
 
 #[test]
@@ -190,7 +180,6 @@ fn chatter_waits_for_a_trigger() {
         texts(&request).last().unwrap(),
         "[新消息]\n[10:00 小明 #2]: 消息2\n[10:00 小明 #3]: 消息3"
     );
-    assert_replays(&run);
 }
 
 #[test]
@@ -228,7 +217,6 @@ fn pictures_follow_the_new_rows_they_came_with() {
     let handles: Vec<String> = images.iter().map(Image::handle).collect();
     assert_eq!(handles, ["image#2.0", "image#4.0", "sticker#4.1"]);
     assert_eq!(last.tokens, 1805);
-    assert_replays(&run);
 }
 
 #[test]
@@ -258,7 +246,6 @@ fn inputs_wait_for_the_tool_batch() {
             "[新消息]\n[10:00 小明 #2]: 消息2",
         ]
     );
-    assert_replays(&run);
 }
 
 #[test]
@@ -282,19 +269,37 @@ fn malformed_calls_get_an_error_and_never_run() {
     // Only malformed calls: straight back to the model.
     run.model_output(calls(&[("c", "nope")])).unwrap();
     call_model(&mut run);
-    assert_replays(&run);
 }
 
 #[test]
-fn inputs_that_dont_fit_are_rejected_and_not_logged() {
+fn what_doesnt_fit_is_rejected_and_changes_nothing() {
     let mut run = Run::new(spec(400_000, None), base(100), vec![]);
     assert_eq!(run.model_output(says("x")), Err(Rejected::NoModelCall));
     assert_eq!(
         run.tool_result(CallId("a".into()), result(1)),
         Err(Rejected::UnknownCall)
     );
-    assert_eq!(run.input(Input::CalledModel), Err(Rejected::NotAnInput));
-    assert!(run.snapshot().inputs.is_empty());
+    assert!(run.record().transcript.is_empty());
+    assert_eq!(texts(&call_model(&mut run)), ["人设"]);
+}
+
+#[test]
+fn the_record_is_what_the_model_saw_and_said() {
+    let mut run = Run::new(spec(400_000, None), base(100), vec![Input::Wake(wake(1))]);
+    call_model(&mut run);
+    run.model_output(calls(&[("a", "shell")])).unwrap();
+    run_tools(&mut run);
+    run.tool_result(CallId("a".into()), result(5)).unwrap();
+    run.input(messages(2, 5)).unwrap();
+    let request = call_model(&mut run);
+    let record = run.record();
+    let shown: Vec<&Item> = record.base.items.iter().chain(record.transcript).collect();
+    assert_eq!(shown, request.items.iter().collect::<Vec<_>>());
+    // The model's output is in it once.
+    run.model_output(says("好")).unwrap();
+    let json = serde_json::to_value(run.record()).unwrap();
+    assert_eq!(json["transcript"].as_array().unwrap().len(), 4);
+    assert_eq!(json["spec"]["window"], 400_000);
 }
 
 #[test]
@@ -316,7 +321,6 @@ fn the_limit_counts_waiting_inputs() {
         .flat_map(|wake| wake.ids)
         .collect();
     assert_eq!(ids, [MessageId(1), MessageId(2)]);
-    assert_replays(&run);
     // A base that leaves no room is at the limit from the start.
     let full = Run::new(spec(10_000, None), base(9_000), vec![Input::Wake(wake(1))]);
     assert!(full.at_limit());
@@ -337,7 +341,6 @@ fn a_trigger_is_handled_at_the_next_output_without_tools() {
     assert!(run.unhandled().is_empty());
     run.input(Input::Wake(wake(3))).unwrap();
     assert_eq!(run.unhandled(), [wake(3)]);
-    assert_replays(&run);
 }
 
 #[test]
@@ -348,12 +351,11 @@ fn interrupt_closes_open_calls() {
         .unwrap();
     run_tools(&mut run);
     run.tool_result(CallId("a".into()), result(5)).unwrap();
-    run.interrupt("/kill".into()).unwrap();
+    run.interrupt().unwrap();
     assert!(!run.busy());
     assert_idle(&mut run);
     assert_eq!(run.outcome(), Outcome::Interrupted);
     assert_eq!(run.input(messages(2, 5)), Err(Rejected::Ended));
-    assert_replays(&run);
     let transcript = run.transcript.iter().filter_map(|item| match &item.kind {
         ItemKind::ToolResult { call, output } => Some((call.0.as_str(), output.error)),
         _ => None,
@@ -379,16 +381,4 @@ fn a_cut_off_call_keeps_what_was_said() {
         }
     );
     assert!(run.said());
-    assert_replays(&run);
-}
-
-#[test]
-fn replay_refuses_other_versions() {
-    let run = Run::new(spec(400_000, None), base(100), vec![]);
-    let mut record = run.snapshot();
-    record.core_version += 1;
-    assert!(matches!(
-        Run::replay(&record),
-        Err(ReplayError::Version { .. })
-    ));
 }

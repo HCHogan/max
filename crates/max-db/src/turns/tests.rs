@@ -15,7 +15,8 @@ async fn group(conn: &mut PgConnection, native_id: &str) -> sqlx::Result<(Endpoi
     Ok((group.endpoint, message))
 }
 
-fn record() -> RunRecord {
+/// A run that called the model once.
+fn run() -> Run {
     let spec = RunSpec {
         model: ModelTag {
             protocol: Protocol::Chat,
@@ -35,7 +36,7 @@ fn record() -> RunRecord {
     };
     let mut run = Run::new(spec, base, Vec::new());
     run.next_step();
-    run.snapshot()
+    run
 }
 
 #[sqlx::test]
@@ -61,7 +62,14 @@ async fn a_turn_without_an_outcome_is_unfinished(pool: PgPool) -> sqlx::Result<(
     let conversation = group.conversation;
     let running = start(&mut conn, conversation, &[], from, at(1)).await?.turn;
     let finished = start(&mut conn, conversation, &[], from, at(2)).await?.turn;
-    finish(&mut conn, finished, &record(), &Outcome::Silent, at(3)).await?;
+    finish(
+        &mut conn,
+        finished,
+        &run().record(),
+        &Outcome::Silent,
+        at(3),
+    )
+    .await?;
     assert_eq!(unfinished(&mut conn).await?, [running]);
     assert_eq!(outcome(&mut conn, finished).await?, Some(Outcome::Silent));
     assert_eq!(outcome(&mut conn, running).await?, None);
@@ -86,7 +94,14 @@ async fn a_running_turn_unsettles_the_conversation_from_its_trigger(
     let later = MessageId(from.0 + 5);
     let running = start(&mut conn, conversation, &wake(&[later, from]), from, at(1)).await?;
     assert_eq!(running_since(&mut conn, conversation).await?, Some(from));
-    finish(&mut conn, running.turn, &record(), &Outcome::Silent, at(2)).await?;
+    finish(
+        &mut conn,
+        running.turn,
+        &run().record(),
+        &Outcome::Silent,
+        at(2),
+    )
+    .await?;
     assert_eq!(running_since(&mut conn, conversation).await?, None);
     Ok(())
 }
@@ -124,7 +139,7 @@ async fn finishing_twice_leaves_no_second_snapshot(pool: PgPool) -> sqlx::Result
         .await?
         .turn;
     close(&mut conn, turn, &Outcome::Lost, at(2)).await?;
-    let again = finish(&mut conn, turn, &record(), &Outcome::Silent, at(3)).await;
+    let again = finish(&mut conn, turn, &run().record(), &Outcome::Silent, at(3)).await;
     assert!(again.is_err());
     let snapshots = sqlx::query_scalar!(
         r#"select count(*) as "n!" from turn_snapshots where turn_id = $1"#,

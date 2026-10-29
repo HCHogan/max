@@ -568,8 +568,11 @@ impl Conversation {
             }
         }
         let applied = match &how {
-            End::Kill(reason) => a.run.interrupt(reason.clone()),
-            End::Stopped => a.run.interrupt("Max 在重启".into()),
+            End::Kill(reason) => {
+                info!(turn = %a.turn, reason, "killed");
+                a.run.interrupt()
+            }
+            End::Stopped => a.run.interrupt(),
             End::Failed(reason) => a.run.fail(reason.clone()),
             End::Idle => Ok(()),
         };
@@ -578,7 +581,7 @@ impl Conversation {
         }
         let outcome = a.run.outcome();
         let mut conn = self.shared.pool.acquire().await?;
-        turns::finish(&mut conn, a.turn, &a.run.snapshot(), &outcome, Utc::now()).await?;
+        turns::finish(&mut conn, a.turn, &a.run.record(), &outcome, Utc::now()).await?;
         info!(turn = %a.turn, ?outcome, rounds = a.run.round(), "the core ends");
         drop(conn);
         let why = match how {

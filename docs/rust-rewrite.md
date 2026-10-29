@@ -354,7 +354,6 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 测试分两层，都用 tokio 的 `start_paused`，结果是确定的：
 
 1. **actor**：用 fake provider、fake 工具和 fake sender 跑一段剧本，记下 actor 处理的事件序列，长 N。再跑 N 遍，第 k 遍在第 k 个事件之后插一个 `/kill`；停止也这样跑一轮。每次检查：
-   - 核心等于对自己快照的重放；
    - fake sender 收到的，正好是入过账的 Max 的消息；
    - 插入之后才到的旧事件都被丢掉了；
    - 没有泄漏的命令。
@@ -396,9 +395,9 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 
 1. **库里存事实，只追加。** ledger 和 turn 记录都没有 UPDATE，也没有可变的状态列。
 2. **状态由记录推出来，不另存。** turn 处在哪个阶段，看它有哪几种记录就知道。
-3. **存输入，不存派生结果。** 核心的序列化就是它的输入日志，transcript 这些派生状态不存。核心合成的东西（比如中断时补的"已取消"结果）也不存，重放时再合成一次。唯一的例外是结局，见 [turn 记录](#turn-记录)。
-4. **只有一条代码路径。** 核心的每个输入方法都是"构造一条输入，再 apply"，重放就是对日志逐条 apply。
-5. **核心跑的时候不碰库。** 一次运行只写两回：开始时写一个标记；结束时，把核心整个存成一份快照。崩溃时正在跑的 turn 记为 `Lost`，见[重启](#重启)。
+3. **核心存它给模型看的。** 一次运行留下的是基础上下文和 transcript：每次模型调用的请求，就是基础上下文加上到那次输出为止的 transcript。喂给核心的输入不存，也不从输入重建核心（2026-10-29 改，owner 提出：原来存输入日志、靠重放还原；重启恢复取消以后，重放只剩测试在用，模型输出却在日志和 transcript 里各存一份，推理 blob 也跟着存两份）。结局另外写下来，见 [turn 记录](#turn-记录)。
+4. **阶段写成一个带数据的枚举。** 要跑的调用、在途的调用、失败的原因都在各自的阶段里，非法的组合写不出来（2026-10-29 改，原来五个字段一起表示，合法组合靠人维护）。
+5. **核心跑的时候不碰库。** 一次运行只写两回：开始时写一个标记；结束时存一份快照，就是上面那份记录。崩溃时正在跑的 turn 记为 `Lost`，见[重启](#重启)。
 6. **上下文只在核心里变。** 基础上下文在创建核心时传入，之后不变；transcript 只追加；裁剪只作用在每次的请求上；协议适配层降级时只删不加。
 7. **别处已有的存引用，只在 turn 里有的存本体。** ledger 消息和媒体文件存引用；推理 blob、工具输出和基础上下文存本体。
 8. **中立格式，原始数据透传，只在边缘降级。** 平台消息和模型条目用同一种做法：中间是中立的类型化结构，平台或 provider 的原始数据原样带着，有损转换只发生在适配器往外发的那一步。见[消息格式](#消息格式)和[条目](#条目)。
@@ -527,19 +526,13 @@ struct TurnSnapshot { turn, run: RunRecord, taken_at }
 // 结局
 struct TurnFinished { turn, outcome: Outcome, finished_at }
 
-// 核心的序列化：只有输入。反序列化就是重放
-struct RunRecord { core_version, spec: RunSpec, base: Context, first: Vec<Input>, inputs: Vec<Input> }
+// 一次运行留下的：给模型看的和它说的。2026-10-29 之前的行是输入日志的形状（core_version、first、inputs），没有代码读
+struct RunRecord { spec: RunSpec, base: Context, transcript: Vec<Item> }
 
+// 模型输出、工具结果、打断和失败是核心各自的方法，不是输入（10-29 改，见"核心"）
 enum Input {
-    CalledModel,                                     // 核心开始一次模型调用（next_step 返回 CallModel）
-    RanTools,                                        // 核心开始上一次输出里的工具批次
-    ModelOutput(ModelOutput),                        // 见"条目"
-    PartialOutput { text: String, tokens: u32 },     // 模型流到一半被打断时，已经发出去的文本；可以为空
-    ToolResult { call: CallId, output: ToolOutput },
     Messages { ids: Vec<MessageId>, item: Item, people: Vec<PrincipalId> }, // 时间线上的新消息和事件，引用 ledger，同时存核心看到的样子；people 是第一次出现的人
     Wake(Wake),
-    Interrupt { reason: String },
-    Fail { reason: FailReason },
     // 以后：JobResult { job, item }（job 只在内存里，报告正文只有这里有）、AutomationFire { fire, item }
 }
 
@@ -564,7 +557,7 @@ enum FailReason { Model { error: String }, ContextExhausted }
 - **trigger 记在 `TurnStarted` 里**：直接触发可以从消息本身重新判断，但判定、去抖合并了哪几条、自动化触发都不行。单一核心实例之后，触发来了就立刻起核心，"接受了但没起"这个状态不存在，所以不再单独记一条。
 - **一个 turn 一份快照**：结束时和结局在同一个事务里写。核心不在运行中途写库，所以也没有"库里一份、内存里一份"的问题。
 - **状态**：有 `TurnFinished` 就是已结束；没有就是在当前进程里跑着，启动时看到这种，就是崩溃时正在跑。
-- **结局**：唯一存下来的派生结果。`Answered` 和 `Silent` 只说这次运行有没有发过话。它本来也能从输入推出来，但查"哪些 turn 没结束"要靠它，所以写下来；重放时校验它和核心算出来的一致。`Lost` 例外，它由启动流程直接写，表示崩溃时它正在跑，没有快照。
+- **结局**：唯一存下来的派生结果。`Answered` 和 `Silent` 只说这次运行有没有发过话。查"哪些 turn 没结束"要靠它，所以写下来。`Lost` 例外，它由启动流程直接写，表示崩溃时它正在跑，没有快照。
 - Max 回复的正文在 ledger 里，不在结局里。
 
 ### 条目
@@ -597,7 +590,7 @@ struct ModelOutput {
 
 - **Responses**：请求带 `store: false` 和 `include: ["reasoning.encrypted_content"]`，不依赖 provider 端的 `previous_response_id`。每个 `reasoning` 条目对应一个 `Reasoning`：`opaque` 存整个原始条目（含 `encrypted_content`），`text` 存摘要。
 - **Chat**：`reasoning_content`（或 `reasoning`）对应一个 `Reasoning`。挂在工具调用上的签名（比如经 cliproxy 转发的 Gemini）放进那个 `ToolCall` 的 `opaque`。
-- **推理只属于本 turn**：它在核心的 transcript 里，随 `ModelOutput` 进快照；不进 ledger，不进以后 turn 的基础上下文，不发到群里，也不让 `context_read` 这类工具读到。
+- **推理只属于本 turn**：它在核心的 transcript 里，随 transcript 进快照；不进 ledger，不进以后 turn 的基础上下文，不发到群里，也不让 `context_read` 这类工具读到。
 - 流到一半被打断的推理不存，不完整的 blob 没用。
 
 ### 核心
@@ -610,15 +603,13 @@ struct ModelOutput {
 struct Run {
     spec: RunSpec,            // 不变：模型档、窗口、输出上限、这个 turn 能用的 Max 工具
     base: Context,            // 不变：基础上下文的条目和名册，第一批输入在它的易变块里
-    first: Vec<Input>,        // 第一批输入；已经渲染在 base 里，留着是为了算 unhandled
-    log: Vec<Input>,          // 喂过的所有输入
     transcript: Vec<Item>,    // 本 turn 产生的条目，只追加
     pending: Vec<Input>,      // 攒下的消息和 Wake，下一次调模型时渲染成一个 [新消息] 块
     phase: Phase,             // 在哪个阶段，阶段自己的数据在阶段里，见下
     measured: Option<(u32, usize)>, // provider 报的上一次请求加输出的 token 数，以及它覆盖到 transcript 的哪里
-    handled: Option<usize>,   // 核心最近一次变空闲时 log 的长度：这之前交进来的都处理完了
+    unhandled: Vec<Wake>,     // 上次空闲以来的 Wake，第一批的也算：模型还没处理完的
     roster: BTreeSet<PrincipalId>, // base 的名册，加上之后给模型看过的新人
-    // 以及 ended、round
+    // 以及 round
 }
 
 // 2026-10-29 改：原来是 in_flight、due、outstanding、model_due、ended 五个字段一起表示阶段，
@@ -641,15 +632,14 @@ enum Step {
 
 impl Run {
     fn new(spec: RunSpec, base: Context, first: Vec<Input>) -> Self;
-    fn replay(record: &RunRecord) -> Result<Self, ReplayError>; // 核心版本不同、某条输入对不上状态，都是错误
-    fn snapshot(&self) -> RunRecord;
+    fn record(&self) -> RunRecord<'_>;              // 借着核心的数据序列化，不复制
     fn busy(&self) -> bool;                         // 有模型调用或工具在途；actor 只在它为假时问 next_step
-    fn next_step(&mut self) -> Step;                // 开始调用或批次时记一条 CalledModel 或 RanTools
+    fn next_step(&mut self) -> Step;                // 开始调用或批次，阶段跟着变
     fn model_output(&mut self, out: ModelOutput) -> Result<(), Rejected>;
     fn partial_output(&mut self, text: String, tokens: u32) -> Result<(), Rejected>;
     fn tool_result(&mut self, call: CallId, out: ToolOutput) -> Result<(), Rejected>;
     fn input(&mut self, input: Input) -> Result<(), Rejected>; // 只收 Messages 和 Wake，随时可塞，核心决定何时生效
-    fn interrupt(&mut self, reason: String) -> Result<(), Rejected>;
+    fn interrupt(&mut self) -> Result<(), Rejected>; // 谁 /kill 的记在日志里
     fn fail(&mut self, reason: FailReason) -> Result<(), Rejected>;
     fn at_limit(&self) -> bool;                     // transcript 加上攒着的输入超过上限，actor 在边界上结束核心
     fn unhandled(&self) -> Vec<Wake>;               // 没处理完的触发，失败或中断时找要回一句话的那条
@@ -658,14 +648,14 @@ impl Run {
 }
 ```
 
-- 和状态对不上的输入（没有模型调用在途时来的 `ModelOutput`、不认识的调用的结果、结束之后的任何输入）返回 `Rejected`，不应用、不进日志。
-- **开始调用也是输入**（2026-10-28 定，写核心时发现）：模型调用在途时到的消息不属于这次请求。只有输出没有"开始"的话，重放分不清哪些输入是开始之后才到的，所以 `next_step` 开始模型调用或工具批次时各记一条 `CalledModel`、`RanTools`，重放到这里做同样的事。"构造一条输入再 apply"的原则照旧。
+- 和状态对不上的（没有模型调用在途时来的 `ModelOutput`、不认识的调用的结果、结束之后的任何输入）返回 `Rejected`，什么都不改。
+- 模型调用在途时到的消息不属于这次请求，等下一次（2026-10-28 定）。原来为了重放分得清，开始调用和工具批次各记一条输入；不重放以后（10-29）就只是 `next_step` 里的阶段转移。
 
 核心负责的规则：
 
 - **构造请求**：请求由基础上下文、transcript 和固定的两个工具组成，不裁剪（2026-10-28 定）。单条输入和工具结果各有上限（见[后续输入](#后续输入)），整体大小由下面的上限控制，撞上限就结束这次运行，请求不会超出窗口。唯一的例外是图片，超出视觉预算时省略较早的，见[多模态结果](#多模态结果)。
 - **工具**：`run_code` 和 `shell`，固定不变。程序能调哪些 Max 工具由 spec 定，整个 turn 不变，加载 skill 也不改变它，见[纯 codemode](#纯-codemode)。格式不对的调用直接回错误结果，不交给 actor 执行。
-- **token 数是数据**（2026-10-28 定）：核心不估算 token。基础上下文、每条输入、每个工具结果，都带着 `max` 估算好的 token 数进来；模型输出用 provider 返回的用量。算大小时以上一次请求 provider 报的输入 token 为准，再加上之后新增的条目，估算误差只落在这段增量上。数存在输入里，换了分词器也不影响重放。
+- **token 数是数据**（2026-10-28 定）：核心不估算 token。基础上下文、每条输入、每个工具结果，都带着 `max` 估算好的 token 数进来；模型输出用 provider 返回的用量。算大小时以上一次请求 provider 报的输入 token 为准，再加上之后新增的条目，估算误差只落在这段增量上。数随条目存进快照。
 - **轮数和 token 上限**（2026-10-28 改）：
 
   ```
@@ -865,7 +855,7 @@ async fn end(&mut self, how: End) -> Result<()> {
         End::Failed(reason) => a.run.fail(reason.clone()),
         End::Idle => Ok(()),
     };
-    turns::finish(&mut conn, a.turn, &a.run.snapshot(), &a.run.outcome(), now).await?; // 快照加结局，一个事务
+    turns::finish(&mut conn, a.turn, &a.run.record(), &a.run.outcome(), now).await?; // 快照加结局，一个事务
     self.report_unanswered(&a.run, &how).await // 没处理完的直接触发回一句话，见“群里看到的”
 }
 ```
@@ -903,15 +893,14 @@ QQ 的网关跨重启 Resume：重启那段时间群里说的话由服务端补�
 ### 体积和保留期
 
 - **体积**：推理 blob 每条几 KB 到几十 KB，而且压不小；一个 turn 跑几十轮，大约几百 KB 到几 MB，核心上限给它封了顶。v1 都存在快照的 JSONB 里，交给 Postgres 的 TOAST。以后体积成问题，再把超过阈值的内容统一挪到一张按 sha256 寻址的 blob 表，工具输出和基础上下文同样适用。
-- **保留期**：turn 结束 N 天后，清掉快照里的 `opaque` 和基础上下文，保留可读文本和 token 数。之后这个 turn 还能查看，但不能再精确重放。N **待定**。
+- **保留期**：turn 结束 N 天后，清掉快照里的 `opaque` 和基础上下文，保留可读文本和 token 数。之后这个 turn 还能查看，但不能再原样重发它的请求。N **待定**。
 
 ### 核心和 actor 的测试
 
 - 核心和 intent 用同步单元测试，按剧本喂输入、检查输出，不需要 tokio 和 fake provider；intent 的时间由测试传入。intent 至少覆盖：直接触发立刻叫醒、去抖合并同一个人的几条、攒批、每小时上限和 `/proactive`。核心至少覆盖：输入的送达时机、只有闲聊不调模型、中断时补齐结果、格式不对的工具调用、轮数和 transcript 上限、失败时哪些触发算没处理完。
-- 每个核心测试结束时断言 `run == Run::replay(&run.snapshot())`，保证线上路径和重放路径一致。
 - 会话 actor 用真的数据库（`#[sqlx::test]`）、剧本模型和只记录的 sender，测取消、停止和它的宽限期、空闲窗口、撞上限、过期事件和 `seen` 对 `Wake` 的过滤；在任意两个事件之间插 `/kill` 的遍历见 [cancellation safety](#cancellation-safety)。2026-10-29 改：actor 测试用真实时间，不用 `start_paused`。actor 在等 Postgres 的时候，暂停的时钟会自动跳到下一个到期时间，空闲窗口和去抖就提前到了。所以测试里的等待都很短，而且有上限；纯时间的逻辑（intent、sender 的额度）照样用 `start_paused`。
 - 协议适配层用录下来的 Responses 和 Chat 响应做 fixture，测推理条目和不透明字段原样往返。
-- 快照就是核心的输入序列，线上任何一次 turn 都能离线精确复现。
+- 快照里是每次请求的内容，线上任何一次模型调用都能离线原样重发。
 
 ### 同一模式的其它地方
 
@@ -949,7 +938,7 @@ Haskell 版的教训：原始尾巴是按 token 的滑动窗口，填满后每�
 4. 原始尾巴：最新一条活跃摘要之后、到快照位置 `from` 为止的所有消息（第一批里的除外），`[HH:MM 名字 #id]: 文本` 一行一条；换日插日期，间隔久了插间隔标记。Max 自己的消息和别人的一样是一行，发不出去的带标记，见[出站](#出站)。
 5. 易变块：现在时间、[名册](#模型看到的)、记忆、引用的消息和转发、第一批输入（触发；闲聊不在这里，在尾巴里）、附图。
 
-基础上下文就是这五块，由会话 actor 在创建核心前投影一次（[运行流程](#运行流程)第 3 步），之后不变；transcript 接在后面。它是（摘要集合，尾巴范围，预算）的确定函数，但只在这一处算，重放读快照里存的那份，所以快照里存渲染结果，不存配方（2026-10-27 定）。
+基础上下文就是这五块，由会话 actor 在创建核心前投影一次（[运行流程](#运行流程)第 3 步），之后不变；transcript 接在后面。它是（摘要集合，尾巴范围，预算）的确定函数，但只在这一处算，快照里存渲染结果，不存配方（2026-10-27 定）。
 
 ### 后续输入
 

@@ -44,11 +44,11 @@ pub async fn start(
     })
 }
 
-/// A turn ends: its snapshot and its outcome, together.
+/// A turn ends: its record and its outcome, together.
 pub async fn finish(
     conn: &mut PgConnection,
     turn: TurnId,
-    run: &RunRecord,
+    run: &RunRecord<'_>,
     outcome: &Outcome,
     at: DateTime<Utc>,
 ) -> sqlx::Result<()> {

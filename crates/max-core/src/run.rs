@@ -2,20 +2,13 @@
 //! Every method is synchronous and one complete transition; nothing here
 //! awaits, spawns, reads the clock or touches the network.
 //!
-//! Every input method builds an [`Input`] and applies it, and the core keeps
-//! the inputs. A snapshot is that log, and replaying it rebuilds the core
-//! exactly. Starting a model call or a tool batch is logged too, so replay
-//! knows which inputs a call saw. What the core makes up itself, such as the
-//! results it fills in for cancelled calls, isn't logged; replay makes it
-//! again.
-
-mod record;
+//! It keeps what the model is shown: the base context, and the transcript
+//! after it. That is also what a run leaves behind, its [`RunRecord`]; the
+//! inputs that led there aren't kept, and nothing rebuilds a run from them.
 
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-
-pub use record::{CORE_VERSION, ReplayError, RunRecord};
 
 use crate::ids::{CallId, MessageId, PrincipalId};
 use crate::intent::Reason;
@@ -55,25 +48,12 @@ pub struct Context {
     pub roster: BTreeSet<PrincipalId>,
 }
 
+/// What comes in besides the model's output and the tools' results.
+/// Neither is a trigger by itself: they wait for the next model call.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Input {
-    /// The core started a model call.
-    CalledModel,
-    /// The core started the tool calls from the last model output.
-    RanTools,
-    ModelOutput(ModelOutput),
-    /// The model call was cut off; `text` had already been said.
-    PartialOutput {
-        text: String,
-        tokens: u32,
-    },
-    ToolResult {
-        call: CallId,
-        output: ToolOutput,
-    },
-    /// New rows on the timeline. Not a trigger: they wait for the next
-    /// model call.
+    /// New rows on the timeline.
     Messages {
         ids: Vec<MessageId>,
         item: Item,
@@ -82,13 +62,8 @@ pub enum Input {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         people: Vec<PrincipalId>,
     },
+    /// A wake makes a model call due.
     Wake(Wake),
-    Interrupt {
-        reason: String,
-    },
-    Fail {
-        reason: FailReason,
-    },
 }
 
 /// intent woke the core.
@@ -146,36 +121,36 @@ pub struct Request {
     pub roster: BTreeSet<PrincipalId>,
 }
 
-/// An input that doesn't fit the core's state. It is not applied.
+/// A call that doesn't fit the core's state. Nothing changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Rejected {
     #[error("the run has ended")]
     Ended,
-    #[error("a model call or tool batch is in flight")]
-    Busy,
-    #[error("the tool calls are due first")]
-    ToolsDue,
-    #[error("nothing of the kind is due")]
-    NothingDue,
     #[error("no model call is in flight")]
     NoModelCall,
     #[error("no such tool call is in flight")]
     UnknownCall,
-    #[error("only messages and wakes come in through input()")]
-    NotAnInput,
+}
+
+/// What a run leaves behind: what the model was shown and what it said.
+/// Each model call's request was the base and the transcript up to that
+/// call's output.
+#[derive(Debug, Serialize)]
+pub struct RunRecord<'a> {
+    pub spec: &'a RunSpec,
+    pub base: &'a Context,
+    pub transcript: &'a [Item],
 }
 
 /// Tokens counted for a result the core writes itself. They are short, and
 /// the core has no tokenizer.
 const SYNTHESIZED_TOKENS: u32 = 50;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Run {
     spec: RunSpec,
     base: Context,
     base_tokens: u32,
-    first: Vec<Input>,
-    log: Vec<Input>,
     transcript: Vec<Item>,
     /// Inputs since the last model call; the next one shows them.
     pending: Vec<Input>,
@@ -184,15 +159,15 @@ pub struct Run {
     /// The provider's count for the last request and its output, and how
     /// much of the transcript that covers.
     measured: Option<(u32, usize)>,
-    /// The log's length when the core last went idle: every input before
-    /// that is handled.
-    handled: Option<usize>,
+    /// The wakes since the run was last waiting, the first ones included:
+    /// the model hasn't finished with them.
+    unhandled: Vec<Wake>,
     /// The base roster and everyone shown since.
     roster: BTreeSet<PrincipalId>,
 }
 
 /// Where the run is. Each phase holds what only it has.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 enum Phase {
     /// A model call is next: at the start, after the tool results, after
     /// a cut-off call or a malformed tool call, and when a trigger comes.
@@ -209,21 +184,28 @@ enum Phase {
 }
 
 impl Run {
+    /// `first` is already rendered in `base`; its wakes are the run's
+    /// first to handle.
     pub fn new(spec: RunSpec, base: Context, first: Vec<Input>) -> Self {
         let base_tokens = base.items.iter().map(|item| item.tokens).sum();
         let roster = base.roster.clone();
+        let unhandled = first
+            .into_iter()
+            .filter_map(|input| match input {
+                Input::Wake(wake) => Some(wake),
+                Input::Messages { .. } => None,
+            })
+            .collect();
         Self {
             spec,
             base,
             base_tokens,
-            first,
-            log: Vec::new(),
             transcript: Vec::new(),
             pending: Vec::new(),
             phase: Phase::ModelDue,
             round: 0,
             measured: None,
-            handled: None,
+            unhandled,
             roster,
         }
     }
@@ -235,64 +217,120 @@ impl Run {
     }
 
     pub fn next_step(&mut self) -> Step {
-        match &self.phase {
+        match std::mem::replace(&mut self.phase, Phase::Waiting) {
             Phase::ToolsDue(calls) => {
-                let calls = calls.clone();
-                self.record(Input::RanTools);
+                self.phase = Phase::Running(calls.iter().map(|call| call.id.clone()).collect());
                 Step::RunTools(calls)
             }
             Phase::ModelDue => {
-                self.record(Input::CalledModel);
-                Step::CallModel(self.request())
+                self.show_pending();
+                self.round += 1;
+                self.phase = Phase::Calling;
+                Step::CallModel(Request {
+                    model: self.spec.model.clone(),
+                    items: self
+                        .base
+                        .items
+                        .iter()
+                        .chain(&self.transcript)
+                        .cloned()
+                        .collect(),
+                    tools: &TOOLS,
+                    max_output: self.spec.max_output,
+                    roster: self.roster.clone(),
+                })
             }
-            _ => Step::Idle,
+            phase => {
+                self.phase = phase;
+                Step::Idle
+            }
         }
     }
 
-    /// The model call that starts now.
-    fn request(&self) -> Request {
-        Request {
-            model: self.spec.model.clone(),
-            items: self
-                .base
-                .items
-                .iter()
-                .chain(&self.transcript)
-                .cloned()
-                .collect(),
-            tools: &TOOLS,
-            max_output: self.spec.max_output,
-            roster: self.roster.clone(),
-        }
-    }
-
+    /// The model's output joins the transcript. Its well-formed calls are
+    /// due next, and a malformed one gets an error result here.
     pub fn model_output(&mut self, out: ModelOutput) -> Result<(), Rejected> {
-        self.apply(Input::ModelOutput(out))
+        self.calling()?;
+        self.measured = Some((
+            out.usage.input + out.usage.output,
+            self.transcript.len() + out.items.len(),
+        ));
+        let mut due = Vec::new();
+        let mut errors = Vec::new();
+        for item in &out.items {
+            if let ItemKind::ToolCall(call) = &item.kind {
+                match tools::parse(call) {
+                    Ok(call) => due.push(call),
+                    Err(error) => errors.push((call.id.clone(), error)),
+                }
+            }
+        }
+        self.transcript.extend(out.items);
+        let malformed = !errors.is_empty();
+        for (call, error) in errors {
+            self.synthesize(call, error);
+        }
+        self.phase = if !due.is_empty() {
+            Phase::ToolsDue(due)
+        } else if malformed || self.trigger_pending() {
+            Phase::ModelDue
+        } else {
+            // The model is through with every wake it saw.
+            self.unhandled.clear();
+            Phase::Waiting
+        };
+        Ok(())
     }
 
+    /// The model call was cut off; `text` had already been said.
     pub fn partial_output(&mut self, text: String, tokens: u32) -> Result<(), Rejected> {
-        self.apply(Input::PartialOutput { text, tokens })
+        self.calling()?;
+        if !text.is_empty() {
+            self.transcript
+                .push(Item::new(ItemKind::Assistant { text }, tokens));
+        }
+        self.phase = Phase::ModelDue;
+        Ok(())
     }
 
     pub fn tool_result(&mut self, call: CallId, output: ToolOutput) -> Result<(), Rejected> {
-        self.apply(Input::ToolResult { call, output })
+        self.open()?;
+        let Phase::Running(open) = &mut self.phase else {
+            return Err(Rejected::UnknownCall);
+        };
+        let Some(at) = open.iter().position(|id| *id == call) else {
+            return Err(Rejected::UnknownCall);
+        };
+        open.remove(at);
+        if open.is_empty() {
+            self.phase = Phase::ModelDue;
+        }
+        let tokens = output.tokens;
+        self.transcript
+            .push(Item::new(ItemKind::ToolResult { call, output }, tokens));
+        Ok(())
     }
 
     /// New rows or a wake, at any time. The core decides when they take
     /// effect: after the tool batch in flight, before the next model call.
     pub fn input(&mut self, input: Input) -> Result<(), Rejected> {
-        match input {
-            Input::Messages { .. } | Input::Wake(_) => self.apply(input),
-            _ => Err(Rejected::NotAnInput),
+        self.open()?;
+        if let Input::Wake(wake) = &input {
+            self.unhandled.push(wake.clone());
+            if matches!(self.phase, Phase::Waiting) {
+                self.phase = Phase::ModelDue;
+            }
         }
+        self.pending.push(input);
+        Ok(())
     }
 
-    pub fn interrupt(&mut self, reason: String) -> Result<(), Rejected> {
-        self.apply(Input::Interrupt { reason })
+    pub fn interrupt(&mut self) -> Result<(), Rejected> {
+        self.end(Phase::Interrupted)
     }
 
     pub fn fail(&mut self, reason: FailReason) -> Result<(), Rejected> {
-        self.apply(Input::Fail { reason })
+        self.end(Phase::Failed(reason))
     }
 
     /// Transcript and waiting inputs are over the limit, or the first inputs
@@ -305,20 +343,7 @@ impl Run {
     /// The wakes the model hasn't finished with: seen by a model call that
     /// didn't reach an output without tool calls, or not seen yet.
     pub fn unhandled(&self) -> Vec<Wake> {
-        let first = if self.handled.is_none() {
-            &self.first[..]
-        } else {
-            &[]
-        };
-        let since = &self.log[self.handled.unwrap_or(0)..];
-        first
-            .iter()
-            .chain(since)
-            .filter_map(|input| match input {
-                Input::Wake(wake) => Some(wake.clone()),
-                _ => None,
-            })
-            .collect()
+        self.unhandled.clone()
     }
 
     /// For a run that has ended or is idle.
@@ -336,131 +361,41 @@ impl Run {
     /// The core is waiting for nothing and has nothing to do: ending it now
     /// loses nothing.
     pub fn idle(&self) -> bool {
-        self.phase == Phase::Waiting
+        matches!(self.phase, Phase::Waiting)
     }
 
     pub fn round(&self) -> u32 {
         self.round
     }
 
-    fn apply(&mut self, input: Input) -> Result<(), Rejected> {
-        self.check(&input)?;
-        self.record(input);
-        Ok(())
+    pub fn record(&self) -> RunRecord<'_> {
+        RunRecord {
+            spec: &self.spec,
+            base: &self.base,
+            transcript: &self.transcript,
+        }
     }
 
-    fn check(&self, input: &Input) -> Result<(), Rejected> {
-        use Phase::{Calling, Failed, Interrupted, ModelDue, Running, ToolsDue, Waiting};
-        match (input, &self.phase) {
-            (_, Interrupted | Failed(_)) => Err(Rejected::Ended),
-            (Input::CalledModel | Input::RanTools, Calling | Running(_)) => Err(Rejected::Busy),
-            (Input::CalledModel, ToolsDue(_)) => Err(Rejected::ToolsDue),
-            (Input::CalledModel, Waiting) | (Input::RanTools, ModelDue | Waiting) => {
-                Err(Rejected::NothingDue)
-            }
-            (Input::ModelOutput(_) | Input::PartialOutput { .. }, phase) if *phase != Calling => {
-                Err(Rejected::NoModelCall)
-            }
-            (Input::ToolResult { call, .. }, Running(open)) if open.contains(call) => Ok(()),
-            (Input::ToolResult { .. }, _) => Err(Rejected::UnknownCall),
+    /// Ok while the run hasn't ended.
+    fn open(&self) -> Result<(), Rejected> {
+        match self.phase {
+            Phase::Interrupted | Phase::Failed(_) => Err(Rejected::Ended),
             _ => Ok(()),
         }
     }
 
-    /// Applies an input that fits and logs it.
-    fn record(&mut self, input: Input) {
-        let phase = std::mem::replace(&mut self.phase, Phase::Waiting);
-        self.phase = match (&input, phase) {
-            (Input::CalledModel, _) => {
-                self.show_pending();
-                self.round += 1;
-                Phase::Calling
-            }
-            (Input::RanTools, Phase::ToolsDue(calls)) => {
-                Phase::Running(calls.into_iter().map(|call| call.id).collect())
-            }
-            (Input::ModelOutput(out), _) => self.output(out),
-            (Input::PartialOutput { text, tokens }, _) => {
-                if !text.is_empty() {
-                    let text = text.clone();
-                    self.transcript
-                        .push(Item::new(ItemKind::Assistant { text }, *tokens));
-                }
-                Phase::ModelDue
-            }
-            (Input::ToolResult { call, output }, Phase::Running(mut open)) => {
-                self.transcript.push(Item::new(
-                    ItemKind::ToolResult {
-                        call: call.clone(),
-                        output: output.clone(),
-                    },
-                    output.tokens,
-                ));
-                open.retain(|id| id != call);
-                if open.is_empty() {
-                    Phase::ModelDue
-                } else {
-                    Phase::Running(open)
-                }
-            }
-            (Input::Messages { .. }, phase) => {
-                self.pending.push(input.clone());
-                phase
-            }
-            (Input::Wake(_), phase) => {
-                self.pending.push(input.clone());
-                match phase {
-                    Phase::Waiting => Phase::ModelDue,
-                    phase => phase,
-                }
-            }
-            (Input::Interrupt { .. }, phase) => {
-                self.cancel(phase);
-                Phase::Interrupted
-            }
-            (Input::Fail { reason }, phase) => {
-                self.cancel(phase);
-                Phase::Failed(reason.clone())
-            }
-            // `check` turns the rest away.
-            (_, phase) => phase,
-        };
-        self.log.push(input);
-        if self.idle() {
-            self.handled = Some(self.log.len());
+    fn calling(&self) -> Result<(), Rejected> {
+        self.open()?;
+        match self.phase {
+            Phase::Calling => Ok(()),
+            _ => Err(Rejected::NoModelCall),
         }
     }
 
-    /// The model's output joins the transcript; its well-formed calls are
-    /// due, and a malformed one gets an error result here.
-    fn output(&mut self, out: &ModelOutput) -> Phase {
-        self.transcript.extend(out.items.iter().cloned());
-        self.measured = Some((out.usage.input + out.usage.output, self.transcript.len()));
-        let mut due = Vec::new();
-        let mut malformed = false;
-        for item in &out.items {
-            if let ItemKind::ToolCall(call) = &item.kind {
-                match tools::parse(call) {
-                    Ok(call) => due.push(call),
-                    Err(error) => {
-                        self.synthesize(call.id.clone(), error);
-                        malformed = true;
-                    }
-                }
-            }
-        }
-        if !due.is_empty() {
-            Phase::ToolsDue(due)
-        } else if malformed || self.trigger_pending() {
-            Phase::ModelDue
-        } else {
-            Phase::Waiting
-        }
-    }
-
-    /// An interrupted or failed run's open calls get a result here.
-    fn cancel(&mut self, phase: Phase) {
-        let open: Vec<CallId> = match phase {
+    /// The open calls get a result here; the run takes no more.
+    fn end(&mut self, ended: Phase) -> Result<(), Rejected> {
+        self.open()?;
+        let open: Vec<CallId> = match std::mem::replace(&mut self.phase, ended) {
             Phase::ToolsDue(calls) => calls.into_iter().map(|call| call.id).collect(),
             Phase::Running(open) => open,
             _ => Vec::new(),
@@ -468,6 +403,7 @@ impl Run {
         for call in open {
             self.synthesize(call, "已取消".to_owned());
         }
+        Ok(())
     }
 
     /// Puts the waiting inputs into the transcript as one `[新消息]` block.
@@ -478,7 +414,6 @@ impl Run {
             .filter_map(|input| match input {
                 Input::Messages { item, .. } => Some(item),
                 Input::Wake(wake) => wake.item.as_ref(),
-                _ => None,
             })
             .collect();
         for input in &self.pending {
@@ -535,7 +470,6 @@ impl Run {
             .map(|input| match input {
                 Input::Messages { item, .. } => item.tokens,
                 Input::Wake(wake) => wake.item.as_ref().map_or(0, |item| item.tokens),
-                _ => 0,
             })
             .sum();
         measured + after + pending
