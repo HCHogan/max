@@ -20,6 +20,10 @@
       url = "github:microvm-nix/microvm.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # pi, the background agents, in the guest. Its RPC has no version:
+    # job::pi's tests replay what this one (pi 1.4.0) said, so moving the
+    # pin means recording again and running them.
+    llm-agents.url = "github:numtide/llm-agents.nix/e452052b9efb54fd59f8a06cbc09978fb542a3c2";
   };
 
   outputs =
@@ -115,6 +119,7 @@
                     {
                       nix.registry.nixpkgs.flake = nixpkgs;
                       nix.nixPath = [ "nixpkgs=${nixpkgs}" ];
+                      _module.args.pi = inputs.llm-agents.packages.${system}.pi;
                     }
                   ];
                 }).config;

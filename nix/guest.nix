@@ -14,6 +14,7 @@
   config,
   lib,
   pkgs,
+  pi,
   ...
 }:
 let
@@ -350,6 +351,9 @@ in
     nodejs
     # A page's text, as Markdown; PDFs through pdftotext.
     (import ./webread.nix { inherit pkgs; })
+    # Background agents: pi, which programs can run too.
+    (import ./max-pi.nix { inherit pkgs pi; })
+    pi
     poppler-utils
     jq
     ripgrep

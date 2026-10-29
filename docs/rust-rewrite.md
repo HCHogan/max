@@ -1559,7 +1559,10 @@ pi 适配器要处理的行为（2026-10-29 用 pi 1.4.0 实测）：
 - `agent_end` 不代表结束，要等 `agent_settled`；自动重试、排队的 steer 都在它之前。
 - 助手消息的 `message_end` 带用量。pi 的 `input` 不含缓存读写，记账时把 `cacheRead`、`cacheWrite` 加回去，才是整个请求。失败的调用 `stopReason` 是 `error`，原因在 `errorMessage`；重试成功后以最后一次为准。
 - stdout 只按 LF 切行，不能用会把 U+2028 当换行的读行器。`agent_end` 带整个运行的消息，很长；超过 16 MiB 的行丢掉。
+- RPC 模式下扩展会发 `extension_ui_request`。`select`、`confirm`、`input`、`editor` 会一直等回答，后台没人能答，一律回 `cancelled`；`notify` 只记日志，比如 MCP 服务连不上时 pi 发的那条。
 - MCP 工具在 `mcp.json` 里配 `"exposure": "direct"`，直接以 `mcp__max__<工具>` 出现在工具表里。pi 的 MCP 客户端说 2025-11-25 的协议，见 [MCP 通道](#mcp-通道)。
+
+guest 里的 pi 来自 numtide 的 llm-agents.nix，flake 里钉在一个 rev 上。包装脚本 `max-pi`（`nix/max-pi.sh`）从 stdin 第一行读这个 job 的 JSON：token、模型 id、协议、窗口、输出上限、effort 和追加的系统提示。它在 unit 的 RuntimeDirectory 里写 `models.json`（provider 只有一个 `max`，`baseUrl` 是 `/llm`，`apiKey` 是 `$MAX_JOB_TOKEN`）和 `mcp.json`，再 exec `pi --mode rpc --no-approve`；会话存在 `/work/.max/jobs`。`/work` 里的 `.pi/` 是群里能写的，不信任。unit 停了目录就删，token 跟着没了。
 
 pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每天发补丁，RPC 协议没有版本字段。所以在 Nix 里钉版本，录几段真实的 JSONL 做适配器回放测试，升级前先跑这些测试。录下来的在 `crates/max/src/job/fixtures/`（去掉了流式增量、系统提示和本机路径）。
 
