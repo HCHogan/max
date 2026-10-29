@@ -76,6 +76,11 @@ russh = { version = "0.65", default-features = false, features = ["aws-lc-rs"] }
 # The key max logs in to a VM with, made for each boot. The version russh
 # uses.
 rand = { version = "0.10", default-features = false, features = ["thread_rng"] }
+# Max's MCP service, which programs in a VM call Max's tools through:
+# Streamable HTTP on a unix socket per VM, stateless, JSON replies. rmcp
+# does the protocol; axum serves it, and only that.
+rmcp = { version = "3.8", default-features = false, features = ["server", "transport-streamable-http-server"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 
 # Tests only.
 insta = "1.49"
