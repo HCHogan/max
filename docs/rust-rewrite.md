@@ -83,8 +83,8 @@
 | Streaming | ✓ | |
 | Share cards | — | |
 | Images | — | 工具结果里的图片见[多模态结果](#多模态结果)；Max 发图和表情包见[发图](#发图) |
-| Group awareness | — | |
-| Moderation (QQ groups) | — | |
+| Group awareness | — | 群名、人数和 maxx 在群里的身份拿得到（`info`、`bot_state`，实测）；成员列表要白名单，群主和管理员只认得出说过话的（消息里带身份），见 [QQ 官方机器人](#qq-官方机器人)的群管理 |
+| Moderation (QQ groups) | — | `recall_message` 2026-10-29 做了，见 [QQ 官方机器人](#qq-官方机器人)的出站；禁言接口要 maxx 是群管理员，还没验证，没做，见群管理 |
 | Browser | — | camoufox 搬进群 VM，见[浏览器](#浏览器) |
 | Replies | ✓ | QQ 一律发原生 Markdown，表格和代码块不再渲染成图片，见 [QQ 官方机器人](#qq-官方机器人)；Max 不发小黄脸，表情包和图片当图片发，见[发图](#发图) |
 | Tools | 部分 | 纯 codemode 加 `shell`，见[工具和 codemode](#工具和-codemode)；v1 开放哪几个 **待定** |
@@ -1299,7 +1299,13 @@ struct Verdict { trigger: bool, reason: String }
   - **`recall_message({ id })`**（2026-10-29 做了）：Max 的工具，按 `#id` 撤回本群的一条消息，撤不撤由 Max 判断，沿用 Haskell 版。回复的每一段本来就是一行、一条 QQ 消息，各有 `#id`，所以一个 id 只撤一条，整个回复要一段段撤，不像 Haskell 版一个 id 撤几条。QQ 一定会拒的先在宿主上拒掉、说明原因，不入账：超过 2 分钟的（Max 的按回执时间算，别人的按消息时间）、群主和管理员的（看消息里的身份快照，2 分钟里基本不会变）、私聊里别人的、Max 没发出去或不知道发没发出去的、已经撤回的。Max 是不是管理员要另问 QQ（`bot_state`，见下面的群管理），这里不问：别人的消息照样去撤，被拒就把原因告诉程序。撤回经 `Post` 入账成 Max 的一行 unsend，带 turn；sender 按入账顺序撤，所以撤 Max 刚说的话也排在那条的发送后面。成了 `deliveries` 记 sent，被拒记 failed，投影里那行是 `[unsend#id]（没发出去）`。每次运行最多 10 次。
   - 媒体要先上传拿 `file_info`，再发 `msg_type = 7`。实测可以直接传 base64，`file_info` 一天有效；`content` 是图片下面的说明文字，和图在同一条消息里。发文件（`file_type = 4`）实测回 50015014，发不了。2026-10-29 实测：GIF 能发，也会动，134 帧、1.9 MB 的也行；`content` 可以不带，不带时群里只有图，和群友发的表情包一样；上传返回的 `raw_url` 是空的，图嵌不进 Markdown。怎么用见[发图](#发图)。
   - 平台审核：内容违规会被拒（40034006），记成 `deliveries` 里的失败。机器人被封"暂不支持解封"。
-- **没有的**：reaction、戳一戳、编辑、群名片、发表情和文件；也没找到"有人撤回了消息"的事件，别人撤回的消息时间线上看不出来。禁言、群成员列表的接口 2026-08 才加，第三方反馈多数要白名单，v1 不用。实测（2026-10-29）：成员列表 `GET /v2/groups/{group_openid}/members` 和单个成员 `…/members/{member_openid}` 都回 11253（应用无接口访问权限），maxx 不在白名单上，所以拿不到不说话的人的 openid。
+- **没有的**：reaction、戳一戳、编辑、群名片、发表情和文件；也没找到"有人撤回了消息"的事件，别人撤回的消息时间线上看不出来。群管理的接口见下一条。
+- **群管理**：接口是 2026-08-10 和 09-03 加的，下面是 2026-10-29 查文档、在测试群实测（maxx 在那里是普通成员）的结果。路径都在 `/v2/groups/{group_openid}/` 下。
+  - 不用是管理员，实测能用：`info`（群名、简介、分类、标签、人数）和 `bot_state`（maxx 在这个群的 `member_openid`、入群时间、身份 owner/admin/member、开没开主动消息、收全部消息还是只收 @）。文档说这两个只给白名单，实测 maxx 都拿得到。各 30 次/分钟。
+  - 要 maxx 是群管理员：禁言 `POST restrict_chat_setting`，body 是 `members: [{op, member_openid, mute_expire_at}]`，`op` 是 add、update、del，到期时间用 RFC3339，最长 30 天，一次最多 20 人；add、update 只能对普通成员，del 传空串就立刻解除。`GET restrict_chat_setting` 查全员禁言的规则和正在禁言的人。还有入群申请的列表 `join_request_list` 和审批 `approval_join_request/{member_openid}`，申请事件 `GROUP_JOIN_REQUEST` 也只有管理员收得到；`<qqbot-at-everyone />` @全体（2026-10-26 加），每个群一天一次。实测：都不是 11253；maxx 不是管理员，回 11703"机器人不是群管理员"（err_code 40011030），查禁言、查入群申请、对一个没被禁言的普通成员 del 一次，都是这样。
+  - 白名单（文档写"内邀接入中"）：成员列表 `members`、单个成员 `members/{member_openid}`、批量踢人 `batch_remove_members`（可以顺便拉黑）、黑名单的查询和增删 `member_blacklist`。实测成员列表和单个成员回 11253"应用无接口访问权限"（err_code 40012010），maxx 不在白名单上，所以拿不到不说话的人的 openid。
+  - 事件：`GROUP_MEMBER_ADD`、`GROUP_MEMBER_REMOVE`（intent `GROUP_MEMBER_EVENT`，`1<<24`），只带 `member_openid`，没有昵称。
+  - 禁言没做（2026-10-29）：接口对 maxx 开放，但要它是管理员才能用；测试群里它不是，没法验证真的禁得了。提议：owner 在测试群把 maxx 设成管理员，实测一次 add 和 del，再做 `mute_member({ member, seconds })`：`member` 是 `[mention#N]` 的编号，按这个人在本群最近说话的账号找 `member_openid`，`seconds` 为 0 是解除，最长 30 天；和撤回一样经 actor 入账、由 sender 去调（ledger 要多一种事件），QQ 拒了照实说原因。
 
 配置在 `[platforms.qq]`：`app_id_file`、`app_secret_file`。AppID 不算秘密，但它能找到这个机器人，和群号一样不进仓库。
 
