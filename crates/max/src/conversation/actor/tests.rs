@@ -345,9 +345,7 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     let (answer, status) = h.said().await;
     assert!(status.starts_with("🦈 maxx dev  \n🌊 "), "{status}");
     assert!(
-        status.contains(
-            "🧠 test/big · 推理 high  \n🎭 人设：默认  \n💬 主动接话：开  \n💤 没有在跑的回复  \n⏱️ up "
-        ),
+        status.contains("  \n💬 proactive: on  \n💤 idle  \n⏱️ up "),
         "{status}"
     );
     let Content::Message { reply_to, .. } = answer.content else {

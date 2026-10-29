@@ -145,54 +145,28 @@ impl Conversation {
         Ok(())
     }
 
-    /// A card like the Haskell version's `!version`: a line each, an emoji
-    /// in front. A line ends in two spaces, Markdown's line break.
+    /// A card like the Haskell version's `!version`, in English: a line
+    /// each, an emoji in front. A line ends in two spaces, Markdown's line
+    /// break. `/model` and `/persona` show those.
     fn status(&self) -> String {
         let settings = &self.settings;
         let mut lines = vec![
             format!("🦈 maxx {}", crate::COMMIT),
             format!("🌊 {} · {}", os(), std::env::consts::ARCH),
         ];
-        lines.push(
-            match self
-                .shared
-                .models
-                .turn(settings.model.as_deref(), settings.effort.as_deref())
-            {
-                Ok(chosen) => {
-                    let effort = chosen.options.effort.as_deref().unwrap_or("默认");
-                    format!("🧠 {} · 推理 {effort}", chosen.reference())
-                }
-                Err(error) => format!("🧠 模型选不出来（{error}）"),
-            },
-        );
-        let persona = match &settings.persona {
-            Some(persona) => {
-                let start: String = persona
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .chars()
-                    .take(20)
-                    .collect();
-                format!("自定义：{start}…")
-            }
-            None => "默认".to_owned(),
-        };
-        lines.push(format!("🎭 人设：{persona}"));
-        let proactive = if settings.proactive { "开" } else { "关" };
-        lines.push(format!("💬 主动接话：{proactive}"));
+        let proactive = if settings.proactive { "on" } else { "off" };
+        lines.push(format!("💬 proactive: {proactive}"));
         lines.push(match &self.core {
             Some(a) => format!(
-                "⚙️ 在回复：t#{} · {} · 第 {} 轮",
+                "⚙️ replying: t#{} · {} · round {}",
                 a.ordinal,
                 span(a.started.elapsed()),
                 a.run.round()
             ),
-            None => "💤 没有在跑的回复".to_owned(),
+            None => "💤 idle".to_owned(),
         });
         if let Some(mark) = settings.cleared_upto {
-            lines.push(format!("🧹 上下文从 #{mark} 之后算起"));
+            lines.push(format!("🧹 context after #{mark}"));
         }
         let mut up = format!("⏱️ up {}", span(self.shared.started.elapsed()));
         if let Some(host) = host_uptime() {
