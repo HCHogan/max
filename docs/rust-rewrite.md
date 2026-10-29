@@ -1023,6 +1023,30 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 - `[recent turns]` 摘要、续接摘要、`context_resume` 和 turn 内的定位符压缩。turn 内也不裁旧工具输出，太大就结束这次运行，见[核心](#核心)。以后要看上一轮做了什么，加一个读 turn 快照的 `turn_read(t#N)` 工具。
 - 自动注入检索结果。记忆只注入群记忆和触发者的个人记忆，其它靠模型调 `context_search`、`context_read`。这条沿用 Haskell。
 
+## 媒体
+
+2026-10-29 定，在 v1 之后第一个做（owner 选的）。参考了 Haskell 版，它的教训写在各条后面。
+
+- **节点和句柄**：入站时 QQ 附件的下载地址写进节点，`Media { media: Some(Remote(url)) }`。ledger 只追加，下载的结果记在 `message_media`（消息、序号、sha256）。序号是这条消息里第几个媒体，从 0 数；给模型的句柄是 `image#消息id.序号`，`video#`、`audio#`、`file#` 同理。Haskell 版的 `[image#id]` 指的是消息，不是哪张图，一条消息最多 20 个媒体，后来才改成两段（ADR 004）。
+- **内容库**：`/var/lib/maxx/media/objects/<sha256 前两位>/<sha256>`，只读权限，先写临时文件再 rename，已有的不再写。和 Haskell 版同一种布局，导入时直接搬。不做 GC。
+- **下载**：一个[派生数据 worker](#三种角色)，入账通知触发，同时最多 4 个下载，每个 60 秒超时，单个超过 64 MiB 的只记元数据、不下。失败重试两次（1 秒、4 秒）就放弃，只记日志，不留失败表。启动时只补最近 1 小时没下完的：QQ 的地址会过期，Haskell 版每次重启都把几百个过期链接重排一遍，刷半小时警告（9f27fa7）。图、表情包、视频、语音、文件都下，`/chat` 和以后的工具要用。
+- **给模型的版本**：下载时做一次，`media` 里记它的 sha256。长边超过 1568 像素或者超过 1 MiB 的图，重编码成长边 1568 的 JPEG；GIF 取第一帧；其它用原图。Haskell 版一开始发多 MB 的原图，base64 纯属浪费（0a2addb）。
+- **caption**：配置 `[llm] caption`，没配就不写。只写 14 天内第一次见到的图，按 sha256 一张一个，表情包重发不重写（975eb59）。一到两句中文，截图说明是什么、关键文字原样摘录，存 300 字以内。失败两次就放弃，记成空 caption，不再试。视频、文件不写；语音用腾讯给的识别文本。
+- **模型看到的**：
+  - 尾巴和摘要里只有文字：`[image#123.0: caption]`，还没有 caption 就是 `[image#123.0]`。历史里的图不发图：Haskell 版的教训是它们抢注意力（0ec5752）。caption 到了，那一行就变，接受这一次缓存失效，见[前缀稳定的规则](#前缀稳定的规则)。
+  - 附图：第一批输入和它们引用的消息里的图，作为真正的图片输入跟在易变块后面，每张标上句柄；后续输入里的图跟在 `[新消息]` 块后面。一次运行最多 8 张，多的只留文字。
+  - 模型配置里写了 `input = ["text", "image"]` 才发图，默认只有文字。中途 `/model` 换成看不了图的模型，渲染时照样只给文字。
+  - 想看历史里的图，在程序里调 `max.image('image#123.0')`，见[多模态结果](#多模态结果)。
+- **请求里**：条目只存引用（`Part::Media`，原则 7）。发请求前，`max` 读出给模型的版本，编成 base64 的 data URL 交给 `max-llm`：Responses 降成 `input_image`，Chat 降成 `image_url`。不传 QQ 的地址，它会过期，provider 也未必访问得到。
+- **`/chat`**：VM 里只读挂一个这个会话的媒体视图，`/chat/<消息id>.<序号>.<扩展名>`，硬链接到内容库，下载时建，起 VM 时补齐。
+
+分四小步做：
+
+1. 内容库、`media` 和 `message_media`、下载 worker；入站节点带上地址。
+2. 模型的 `input`、条目里的图、两种协议的降级、附图和句柄。
+3. caption worker。
+4. `/chat` 和 `max.image()`。
+
 ## schema
 
 2026-10-27 定：不沿用 Haskell 版的 schema，重新设计，上线时用导入程序一次性迁移。Haskell 版经过 135 个迁移，留下两套会话键（`conversation_id` 和 QQ 群号 `legacy_group_id`，后者没有外键，却被约 25 个模块当主键用）、三套消息 id、四份正文、31 张没有代码读的表，和互相撤销的迁移。只能从头来。
@@ -1049,8 +1073,8 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 | | `conversation_settings` | `/model`、`/effort`、`/persona`、`/proactive`、`/clear --all` 的消息 id 水位。可变 |
 | ledger | `messages` | 会话、端点、`sender_identity_id` 和发送者名字、角色的快照（见[身份](#身份)）、`native_id`、`sent_at`、`received_at`、kind（chat、command、event）、`reply_to`、`nodes`、`raw`、`text`（渲染后的文本，给搜索和全文索引）；Max 自己的消息带 `turn_id` 和段号。撤回、编辑是 `kind = event` 的行，`event` 列说是哪种（edit、unsend），带 `target_id` 和文本兜底；编辑的新内容在 `nodes`。只有会话 actor 写 |
 | | `deliveries` | 出站回执：消息、端点、平台 id 或错误、状态（sent、failed、unknown）、时间。平台 sender 是唯一的写者，只追加。镜像时一个端点一行，见[出站](#出站) |
-| 媒体 | `media` | 按 sha256 寻址：mime、大小、路径、尺寸、时长、caption |
-| | `message_media` | 消息、序号、sha256。`nodes` 里也引用 sha256，这张表给"这个群的图"这类查询用 |
+| 媒体 | `media` | 按 sha256 寻址：种类、mime、大小、宽高、第一次见到的时间、caption 和写它的模型、给模型的版本的 sha256。见[媒体](#媒体) |
+| | `message_media` | 消息、序号、sha256。入站节点里是下载地址，下载完记在这里；程序交的图（`max.image()`）节点里直接是 sha256 |
 | turn | `turns`、`turn_snapshots`、`turn_outcomes` | 见 [turn 记录](#turn-记录)。`t#N` 是 `turns.ordinal`，每个会话从 1 数 |
 | | `llm_usage` | turn（可空）、用途（turn、intent、historian、caption）、provider、模型、强度、token（含缓存命中数，按 provider 看命中率、调空闲窗口；还有其中的推理 token）、费用。token 用 bigint；费用 `cost_micros` 是百万分之一美元，用整数，不要 decimal，价格未知时为空 |
 | 上下文 | `summaries` | 见 [summaries 表](#summaries-表) |
@@ -1487,6 +1511,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 9. **VM、MCP、codemode runner**。[VM 进程](#vm-进程)里要先在 tank 上验证的几件事 2026-10-29 验证完了。同一天做完第一段：VM 服务、`shell` 工具、module 里的 tap、nft 和加固，`max vm-check` 和嵌套的 NixOS 测试，测试在 tank 上通过。地址改走内核命令行，不用 DHCP。部署到 tank 后在测试群里实测过：模型调 `shell`，群的 VM 3 秒多起好，结果回到模型。第一次没调成，因为系统提示里还留着第 7 步那句"工具还没接上，别调用"。同一天按 owner 的意思，提示词里改叫 maxx（以前叫 Max）。tank 上的 Haskell 版同日删掉，数据留给导入。第二段同日做完：MCP 服务、guest 里的 runner、`run_code` 和第一个开放的工具 `context_read`，做法见 [MCP 通道](#mcp-通道)。runner 的测试在本机用 Node 跑，接真的 MCP 服务；嵌套测试里 `vm-check` 跑一个程序，经 MCP 服务查到数据库。
 10. **historian**（2026-10-29 做完，还没在 tank 上跑过）：capture、`summary_runs`、一分钟一圈的服务、`/compact`。上线要在配置里加 `[llm] historian`。
 11. ~~**重启恢复**~~：2026-10-29 删，重启时给宽限期再中断，见[重启](#重启)。
+12. **媒体**（2026-10-29 开始）：v1 之后第一块，分四小步，见[媒体](#媒体)。
 
 ## 上线：drop-in 替换的条件
 
