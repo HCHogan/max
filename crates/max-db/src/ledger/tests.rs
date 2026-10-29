@@ -228,8 +228,5 @@ async fn what_the_classifier_and_the_sender_read(pool: PgPool) -> sqlx::Result<(
     let said = said_by(&mut conn, endpoint, group.max.identity, 10).await?;
     assert_eq!(said.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [ids[3]]);
 
-    let last = last_arrived(&mut conn, endpoint).await?.unwrap();
-    assert_eq!((last.id, last.native_id.as_str()), (ids[4], "n4"));
-    assert_eq!(last.sent_at, at(4));
     Ok(())
 }

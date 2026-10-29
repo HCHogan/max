@@ -305,37 +305,6 @@ pub async fn said_by(
         .collect())
 }
 
-/// An inbound row's platform id and when the platform says it was sent:
-/// what a passive reply answers, within a window that counts from then.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Arrived {
-    pub id: MessageId,
-    pub native_id: String,
-    pub sent_at: DateTime<Utc>,
-}
-
-/// The latest row someone else sent to an endpoint.
-pub async fn last_arrived(
-    conn: &mut PgConnection,
-    endpoint: EndpointId,
-) -> sqlx::Result<Option<Arrived>> {
-    let row = sqlx::query!(
-        r#"
-        select id, native_id as "native_id!", sent_at from messages
-        where endpoint_id = $1 and native_id is not null and kind <> 'event'
-        order by id desc limit 1
-        "#,
-        endpoint.0
-    )
-    .fetch_optional(conn)
-    .await?;
-    Ok(row.map(|row| Arrived {
-        id: MessageId(row.id),
-        native_id: row.native_id,
-        sent_at: row.sent_at,
-    }))
-}
-
 /// One row, if it is on this conversation's timeline.
 pub async fn row(
     conn: &mut PgConnection,

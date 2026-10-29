@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use chrono::DateTime;
 use max_core::message::{Draft, DraftNode, Message as Row};
 use max_db::ledger::Delivery;
 
@@ -63,13 +62,8 @@ impl Setup {
 
     /// 小明 says something now.
     async fn hear(&self, n: u32) -> Row {
-        self.hear_at(n, Utc::now()).await
-    }
-
-    async fn hear_at(&self, n: u32, at: DateTime<Utc>) -> Row {
         let mut conn = self.pool.acquire().await.unwrap();
-        let mut inbound = from_xiaoming(n, vec![text("在吗")]);
-        inbound.at = at;
+        let inbound = from_xiaoming(n, vec![text("在吗")]);
         let committed = ingest::inbound(&mut conn, &self.place, &inbound, Utc::now(), offset())
             .await
             .unwrap();
@@ -133,7 +127,7 @@ fn said(text: &str) -> Draft {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_passive_markdown_reply(pool: PgPool) {
+async fn markdown_with_a_mention_and_a_quote(pool: PgPool) {
     let s = Setup::new(pool).await;
     let heard = s.hear(0).await;
     let mut conn = s.pool.acquire().await.unwrap();
@@ -162,10 +156,7 @@ async fn a_passive_markdown_reply(pool: PgPool) {
         sent[0].1,
         Message {
             body: Body::Markdown("<qqbot-at-user id=\"XIAOMING\" /> 在，$$x^2$$".into()),
-            reply: Some(Reply::Message {
-                id: "MSG0".into(),
-                seq: 1,
-            }),
+            reply: None,
             quote: Some("IDX0".into()),
         }
     );
@@ -178,7 +169,6 @@ async fn a_passive_markdown_reply(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn plain_text_when_markdown_is_refused(pool: PgPool) {
     let s = Setup::new(pool).await;
-    s.hear(0).await;
     s.api
         .answers
         .lock()
@@ -191,56 +181,19 @@ async fn plain_text_when_markdown_is_refused(pool: PgPool) {
     let failed = second.message.clone();
     s.send_all(vec![first, second]).await;
     let sent = s.sent();
-    let bodies: Vec<_> = sent.iter().map(|(_, m)| (&m.body, &m.reply)).collect();
-    let reply = |seq| {
-        Some(Reply::Message {
-            id: "MSG0".into(),
-            seq,
-        })
-    };
+    let bodies: Vec<_> = sent.iter().map(|(_, m)| &m.body).collect();
     assert_eq!(
         bodies,
         [
-            (&Body::Markdown("一".into()), &reply(1)),
-            (&Body::Text("一".into()), &reply(2)),
-            (&Body::Markdown("二".into()), &reply(3)),
-            (&Body::Text("二".into()), &reply(4)),
+            &Body::Markdown("一".into()),
+            &Body::Text("一".into()),
+            &Body::Markdown("二".into()),
+            &Body::Text("二".into()),
         ]
     );
+    assert!(sent.iter().all(|(_, m)| m.reply.is_none()));
     assert_eq!(s.delivery(&message).await.0, Delivery::Sent);
     assert_eq!(s.delivery(&failed).await, (Delivery::Failed, None, None));
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn proactive_when_nothing_is_recent_or_after_five_replies(pool: PgPool) {
-    let s = Setup::new(pool).await;
-    s.send_all(vec![s.say(said("没人说话")).await]).await;
-    s.hear(0).await;
-    let mut outgoing = Vec::new();
-    for n in 0..6 {
-        outgoing.push(s.say(said(&n.to_string())).await);
-    }
-    s.send_all(outgoing).await;
-    let replies: Vec<_> = s
-        .sent()
-        .into_iter()
-        .map(|(_, message)| match message.reply {
-            Some(Reply::Message { seq, .. }) => seq,
-            _ => 0,
-        })
-        .collect();
-    assert_eq!(replies, [0, 1, 2, 3, 4, 5, 0]);
-}
-
-/// QQ replays what was said while Max was down, and its reply window counts
-/// from when it was said.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn proactive_to_a_message_replayed_too_late(pool: PgPool) {
-    let s = Setup::new(pool).await;
-    s.hear_at(0, Utc::now() - chrono::TimeDelta::minutes(10))
-        .await;
-    s.send_all(vec![s.say(said("掐着表呢")).await]).await;
-    assert!(s.sent()[0].1.reply.is_none());
 }
 
 #[tokio::test(start_paused = true)]
@@ -252,7 +205,6 @@ async fn proactive_messages_wait_for_the_rate() {
         api: Arc::new(Recorder::default()),
         pool,
         sent: Mutex::default(),
-        replies: Mutex::default(),
     };
     let start = Instant::now();
     for _ in 0..CHAT_RATE {

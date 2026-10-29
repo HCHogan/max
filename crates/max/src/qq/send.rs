@@ -2,11 +2,10 @@
 //! conversation says goes out in the order it was committed, one chat at a
 //! time and chats side by side; see "出站" under "QQ 官方机器人".
 //!
-//! A message answers the chat's latest message passively while QQ allows
-//! (5 minutes and 5 replies in a group, 60 minutes and 4 in a private
-//! chat), and goes out proactively otherwise, within QQ's rates: it waits,
-//! it isn't dropped. It goes as Markdown, and once more as plain text if
-//! that fails.
+//! Every message goes out proactively, never as a passive reply: a group
+//! Max is in allows that (机器人主动发言). It keeps within QQ's rates: it
+//! waits, it isn't dropped. It goes as Markdown, and once more as plain
+//! text if that fails.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -19,7 +18,7 @@ use max_core::message::{Content, MentionTarget, Node, Platform};
 use max_db::ledger::{self, Sent as Delivered};
 use max_db::platform::{self, ConversationKind};
 use max_db::{PgConnection, PgPool};
-use qqbot::message::{Body, Outgoing as Message, Reply, Sent};
+use qqbot::message::{Body, Outgoing as Message, Sent};
 use qqbot::{Chat, api};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::time::{Instant, sleep_until};
@@ -57,8 +56,6 @@ struct Shared {
     pool: PgPool,
     /// When proactive messages went out, per chat and (None) for the bot.
     sent: Mutex<HashMap<Option<String>, VecDeque<Instant>>>,
-    /// Passive replies so far to each message, by its platform id.
-    replies: Mutex<HashMap<String, u32>>,
 }
 
 /// Before anything is said: what the last process committed and never
@@ -80,7 +77,6 @@ pub async fn run(
         api,
         pool,
         sent: Mutex::default(),
-        replies: Mutex::default(),
     });
     let mut chats = HashMap::new();
     let mut workers = Scope::new();
@@ -122,13 +118,10 @@ impl Shared {
         let mut result = Err("nothing to send".to_owned());
         if !text.trim().is_empty() {
             for body in [Body::Markdown(text.clone()), Body::Text(text.clone())] {
-                let reply = self.reply(outgoing).await?;
-                if reply.is_none() {
-                    self.proactive(&place.native_id).await;
-                }
+                self.proactive(&place.native_id).await;
                 let qq = Message {
                     body,
-                    reply,
+                    reply: None,
                     quote: quote.clone(),
                 };
                 match self.api.send(chat, &qq).await {
@@ -159,33 +152,6 @@ impl Shared {
             Utc::now(),
         )
         .await
-    }
-
-    /// A passive reply to the chat's latest message, while QQ allows one.
-    async fn reply(&self, outgoing: &Outgoing) -> sqlx::Result<Option<Reply>> {
-        let (window, most) = match outgoing.place.kind {
-            ConversationKind::Group => (chrono::TimeDelta::minutes(5), 5),
-            ConversationKind::Direct => (chrono::TimeDelta::minutes(60), 4),
-        };
-        let mut conn = self.pool.acquire().await?;
-        let Some(latest) = ledger::last_arrived(&mut conn, outgoing.place.endpoint).await? else {
-            return Ok(None);
-        };
-        // QQ counts from when the message was sent, even one it replays
-        // after a restart. A margin for the time the request takes.
-        if Utc::now() - latest.sent_at > window - chrono::TimeDelta::seconds(10) {
-            return Ok(None);
-        }
-        let mut replies = self.replies.lock().unwrap_or_else(|p| p.into_inner());
-        let count = replies.entry(latest.native_id.clone()).or_default();
-        if *count >= most {
-            return Ok(None);
-        }
-        *count += 1;
-        Ok(Some(Reply::Message {
-            id: latest.native_id,
-            seq: *count,
-        }))
     }
 
     /// Waits until a proactive message to `chat` is within QQ's rates.
