@@ -9,13 +9,24 @@ use crate::conversation::testing::{from_xiaoming, group, offset, text};
 use crate::conversation::{Place, ingest};
 use crate::inbound::InNode;
 
-/// Records what it is asked to send, and answers from a script: Ok gives
-/// the message an id and a ref_idx. Uploads always work.
+/// Records what it is asked to send or recall, and answers both from one
+/// script: Ok gives a message an id and a ref_idx. Uploads always work.
 #[derive(Default)]
 struct Recorder {
     answers: Mutex<VecDeque<Result<(), i64>>>,
     sent: Mutex<Vec<(String, Message)>>,
     uploaded: Mutex<Vec<Vec<u8>>>,
+    recalled: Mutex<Vec<(String, String)>>,
+}
+
+fn refused(code: i64) -> api::Error {
+    api::Error::Api {
+        path: "/v2/groups/GROUP1/messages".into(),
+        status: 400,
+        code,
+        message: "refused".into(),
+        trace: "t".into(),
+    }
 }
 
 impl Api for Recorder {
@@ -42,15 +53,16 @@ impl Api for Recorder {
                     id: format!("SENT{n}"),
                     ref_idx: Some(format!("REF{n}")),
                 }),
-                Err(code) => Err(api::Error::Api {
-                    path: "/v2/groups/GROUP1/messages".into(),
-                    status: 400,
-                    code,
-                    message: "refused".into(),
-                    trace: "t".into(),
-                }),
+                Err(code) => Err(refused(code)),
             }
         })
+    }
+
+    fn recall<'a>(&'a self, chat: Chat<'a>, message_id: &'a str) -> Answer<'a, ()> {
+        let mut recalled = self.recalled.lock().unwrap();
+        recalled.push((format!("{chat:?}"), message_id.to_owned()));
+        let answer = self.answers.lock().unwrap().pop_front().unwrap_or(Ok(()));
+        Box::pin(async move { answer.map_err(refused) })
     }
 }
 
@@ -109,6 +121,17 @@ impl Setup {
         Outgoing {
             place: Arc::clone(&self.place),
             message,
+            receipt: None,
+        }
+    }
+
+    /// Max takes back `target`.
+    async fn unsend(&self, target: MessageId) -> Outgoing {
+        let mut conn = self.pool.acquire().await.unwrap();
+        let unsend = ingest::unsend(&mut conn, &self.place, target, None, Utc::now(), offset());
+        Outgoing {
+            place: Arc::clone(&self.place),
+            message: unsend.await.unwrap().unwrap(),
             receipt: None,
         }
     }
@@ -290,6 +313,48 @@ async fn a_sticker_is_uploaded_once(pool: PgPool) {
     assert_eq!(bodies, [media("FI1"), media("FI1"), media("FI2")]);
     assert_eq!(*s.api.uploaded.lock().unwrap(), [bytes.clone(), bytes]);
     assert_eq!(s.delivery(&message).await.0, Delivery::Sent);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn an_unsend_recalls_what_its_message_went_out_or_came_in_as(pool: PgPool) {
+    let s = Setup::new(pool).await;
+    let heard = s.hear(0).await;
+    let first = s.say(said("一")).await;
+    let mine = first.message.id;
+    let second = s.say(said("二")).await;
+    let not_sent = second.message.id;
+    // Max takes back what it said, which goes out first; what it said
+    // that didn't go out; and 小明's, twice, which QQ refuses the second
+    // time.
+    let mut outgoing = vec![first, second];
+    for target in [mine, not_sent, heard.id, heard.id] {
+        outgoing.push(s.unsend(target).await);
+    }
+    let unsends: Vec<Row> = outgoing[2..].iter().map(|o| o.message.clone()).collect();
+    let (receipt, refusal) = tokio::sync::oneshot::channel();
+    outgoing[5].receipt = Some(receipt);
+    s.api
+        .answers
+        .lock()
+        .unwrap()
+        .extend([Ok(()), Err(1), Err(2), Ok(()), Ok(()), Err(40062003)]);
+    s.send_all(outgoing).await;
+
+    let group = || "Group(\"GROUP1\")".to_owned();
+    assert_eq!(
+        *s.api.recalled.lock().unwrap(),
+        [
+            (group(), "SENT1".to_owned()),
+            (group(), "MSG0".to_owned()),
+            (group(), "MSG0".to_owned())
+        ]
+    );
+    // Recalled: sent, with no id of its own.
+    assert_eq!(s.delivery(&unsends[0]).await, (Delivery::Sent, None, None));
+    assert_eq!(s.delivery(&unsends[1]).await.0, Delivery::Failed);
+    assert_eq!(s.delivery(&unsends[2]).await.0, Delivery::Sent);
+    assert_eq!(s.delivery(&unsends[3]).await.0, Delivery::Failed);
+    assert!(refusal.await.unwrap().unwrap_err().contains("群管理员"));
 }
 
 #[tokio::test(start_paused = true)]

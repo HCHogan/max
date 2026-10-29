@@ -6,7 +6,8 @@
 //! Max is in allows that (机器人主动发言). It keeps within QQ's rates: it
 //! waits, it isn't dropped. It goes as Markdown, and once more as plain
 //! text if that fails. A picture is uploaded to the chat first, unless it
-//! was lately, and goes with plain text under it, if any.
+//! was lately, and goes with plain text under it, if any. An unsend
+//! recalls what its row went out or came in as.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -15,8 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
-use max_core::ids::MessageId;
-use max_core::message::{Content, MediaRef, MentionTarget, Node, Platform};
+use max_core::ids::{EndpointId, MessageId};
+use max_core::message::{Content, MediaRef, MentionTarget, Message as Row, Node, Platform};
 use max_db::ledger::{self, Sent as Delivered};
 use max_db::platform::{self, ConversationKind};
 use max_db::{PgConnection, PgPool};
@@ -27,18 +28,19 @@ use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::time::{Instant, sleep_until};
 use tracing::{info, warn};
 
-use crate::conversation::Outgoing;
+use crate::conversation::{Outgoing, Place};
 use crate::media::store::Store;
 use crate::scope::Scope;
 
 /// QQ's answer, some time later.
 pub type Answer<'a, T> = Pin<Box<dyn Future<Output = Result<T, api::Error>> + Send + 'a>>;
 
-/// Sends messages and uploads pictures. QQ's client in service; a
-/// recorder in tests.
+/// Sends messages, uploads pictures and recalls messages. QQ's client in
+/// service; a recorder in tests.
 pub trait Api: Send + Sync + 'static {
     fn send<'a>(&'a self, chat: Chat<'a>, message: &'a Message) -> Answer<'a, Sent>;
     fn upload<'a>(&'a self, chat: Chat<'a>, picture: &'a [u8]) -> Answer<'a, Uploaded>;
+    fn recall<'a>(&'a self, chat: Chat<'a>, message_id: &'a str) -> Answer<'a, ()>;
 }
 
 impl Api for qqbot::Client {
@@ -48,6 +50,10 @@ impl Api for qqbot::Client {
 
     fn upload<'a>(&'a self, chat: Chat<'a>, picture: &'a [u8]) -> Answer<'a, Uploaded> {
         Box::pin(qqbot::Client::upload(self, chat, picture))
+    }
+
+    fn recall<'a>(&'a self, chat: Chat<'a>, message_id: &'a str) -> Answer<'a, ()> {
+        Box::pin(qqbot::Client::recall(self, chat, message_id))
     }
 }
 
@@ -125,36 +131,24 @@ impl Shared {
     async fn deliver(&self, outgoing: Outgoing) -> sqlx::Result<()> {
         let place = &outgoing.place;
         let message = &outgoing.message;
-        // No connection is held while waiting for QQ.
-        let mut conn = self.pool.acquire().await?;
-        let lowered = lower(&mut conn, place.kind, &message.content).await?;
-        drop(conn);
         let Some(chat) = chat(&place.native_id) else {
             warn!(endpoint = place.native_id, "not a QQ chat");
             return Ok(());
         };
-        let Lowered {
-            text,
-            quote,
-            picture,
-        } = lowered;
-        let result = match picture {
-            Some(sha256) => {
-                let caption = Some(text.trim().to_owned()).filter(|text| !text.is_empty());
-                self.picture(chat, &place.native_id, message.id, &sha256, caption, quote)
-                    .await
-            }
-            None if !text.trim().is_empty() => {
-                self.text(chat, &place.native_id, message.id, text, quote)
-                    .await
-            }
-            None => Err("nothing to send".to_owned()),
+        // None for what has no id of its own.
+        let result: Result<Option<Sent>, String> = match message.content {
+            Content::Unsend { target } => self
+                .recall(chat, place.endpoint, message.id, target)
+                .await?
+                .map(|()| None),
+            _ => self.message(chat, place.as_ref(), message).await?.map(Some),
         };
         let delivered = match &result {
-            Ok(sent) => Delivered::Delivered {
+            Ok(Some(sent)) => Delivered::Delivered {
                 native_id: &sent.id,
                 quote_id: sent.ref_idx.as_deref(),
             },
+            Ok(None) => Delivered::Done,
             Err(error) => Delivered::Failed { error },
         };
         let mut conn = self.pool.acquire().await?;
@@ -170,6 +164,55 @@ impl Shared {
             let _ = receipt.send(result.map(|_| message.id));
         }
         Ok(())
+    }
+
+    /// A row Max says, as one QQ message.
+    async fn message(
+        &self,
+        chat: Chat<'_>,
+        place: &Place,
+        message: &Row,
+    ) -> sqlx::Result<Result<Sent, String>> {
+        // No connection is held while waiting for QQ.
+        let mut conn = self.pool.acquire().await?;
+        let Lowered {
+            text,
+            quote,
+            picture,
+        } = lower(&mut conn, place.kind, &message.content).await?;
+        drop(conn);
+        Ok(match picture {
+            Some(sha256) => {
+                let caption = Some(text.trim().to_owned()).filter(|text| !text.is_empty());
+                self.picture(chat, &place.native_id, message.id, &sha256, caption, quote)
+                    .await
+            }
+            None if !text.trim().is_empty() => {
+                self.text(chat, &place.native_id, message.id, text, quote)
+                    .await
+            }
+            None => Err("nothing to send".to_owned()),
+        })
+    }
+
+    /// Recalls `target` as it went out or came in at `endpoint`.
+    async fn recall(
+        &self,
+        chat: Chat<'_>,
+        endpoint: EndpointId,
+        id: MessageId,
+        target: MessageId,
+    ) -> sqlx::Result<Result<(), String>> {
+        let mut conn = self.pool.acquire().await?;
+        let native = ledger::native(&mut conn, target, endpoint).await?;
+        drop(conn);
+        let Some((native_id, _)) = native else {
+            return Ok(Err("QQ 上没有这条消息".to_owned()));
+        };
+        Ok(self.api.recall(chat, &native_id).await.map_err(|error| {
+            warn!(message = %id, %target, %error, "QQ didn't recall a message");
+            refusal(&error)
+        }))
     }
 
     /// Markdown, or plain text if QQ refuses that.
@@ -301,6 +344,21 @@ impl Shared {
                 }
             }
         }
+    }
+}
+
+/// Why QQ didn't recall a message, for whoever asked.
+fn refusal(error: &api::Error) -> String {
+    match error {
+        api::Error::Api { code: 40062003, .. } => {
+            "QQ 说没有权限（40062003）：别人的消息要机器人是群管理员才能撤，群主和管理员的撤不了"
+                .to_owned()
+        }
+        api::Error::Api { code: 40064004, .. } => {
+            "发出超过 2 分钟了，QQ 不让撤（40064004）".to_owned()
+        }
+        api::Error::Api { code, message, .. } => format!("QQ 没撤：{code} {message}"),
+        error => format!("没收到 QQ 的回答，不知道撤没撤：{error}"),
     }
 }
 
