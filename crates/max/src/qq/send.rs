@@ -234,7 +234,6 @@ impl Shared {
             self.proactive(native_id).await;
             let qq = Message {
                 body,
-                reply: None,
                 quote: quote.clone(),
             };
             match self.api.send(chat, &qq).await {
@@ -266,7 +265,6 @@ impl Shared {
         self.proactive(native_id).await;
         let qq = Message {
             body: Body::Media { file_info, caption },
-            reply: None,
             quote,
         };
         self.api.send(chat, &qq).await.map_err(|error| {

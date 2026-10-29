@@ -208,7 +208,6 @@ async fn markdown_with_a_mention_and_a_quote(pool: PgPool) {
         sent[0].1,
         Message {
             body: Body::Markdown("<qqbot-at-user id=\"XIAOMING\" /> 在，$$x^2$$".into()),
-            reply: None,
             quote: Some("IDX0".into()),
         }
     );
@@ -243,7 +242,6 @@ async fn plain_text_when_markdown_is_refused(pool: PgPool) {
             &Body::Text("二".into()),
         ]
     );
-    assert!(sent.iter().all(|(_, m)| m.reply.is_none()));
     assert_eq!(s.delivery(&message).await.0, Delivery::Sent);
     assert_eq!(s.delivery(&failed).await, (Delivery::Failed, None, None));
 }

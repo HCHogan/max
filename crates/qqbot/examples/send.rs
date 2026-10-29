@@ -4,7 +4,7 @@
 //!
 //! ```sh
 //! export QQBOT_APP_ID=… QQBOT_SECRET=…
-//! echo 早 | cargo run -p qqbot --example send -- group <group_openid> [markdown] [picture <path> | file <path>] [reply <msg_id> <seq>] [quote <msg_idx>]
+//! echo 早 | cargo run -p qqbot --example send -- group <group_openid> [markdown] [picture <path> | file <path>] [quote <msg_idx>]
 //! cargo run -p qqbot --example send -- group <group_openid> recall <id>
 //! ```
 
@@ -13,7 +13,7 @@
 use std::io::Read;
 
 use qqbot::api::Media;
-use qqbot::{Body, Chat, Client, Credentials, Outgoing, Reply};
+use qqbot::{Body, Chat, Client, Credentials, Outgoing};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -42,7 +42,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::io::stdin().read_to_string(&mut text)?;
     let mut message = Outgoing {
         body: Body::Text(text.trim_end().to_owned()),
-        reply: None,
         quote: None,
     };
     let mut i = 0;
@@ -90,17 +89,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     file_info: uploaded.file_info,
                     caption: None,
                 };
-                i += 2;
-            }
-            "reply" => {
-                message.reply = Some(Reply::Message {
-                    id: arg(1)?.clone(),
-                    seq: arg(2)?.parse()?,
-                });
-                i += 3;
-            }
-            "event" => {
-                message.reply = Some(Reply::Event(arg(1)?.clone()));
                 i += 2;
             }
             "quote" => {

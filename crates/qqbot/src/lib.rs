@@ -13,4 +13,4 @@ pub mod message;
 pub use api::{Chat, Client, Credentials, Error};
 pub use connection::run;
 pub use event::{Dispatch, Event};
-pub use message::{Body, Outgoing, Reply, Sent};
+pub use message::{Body, Outgoing, Sent};

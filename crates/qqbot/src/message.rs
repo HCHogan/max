@@ -2,13 +2,12 @@
 
 use serde::{Deserialize, Serialize, Serializer};
 
-/// A message to send.
+/// A message to send. It goes out proactively, which the group owner
+/// has to allow; passive replies, which answer a message or an event,
+/// aren't sent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Outgoing {
     pub body: Body,
-    /// Answering a message or event makes this a passive reply. Without
-    /// it, the message is proactive, which the group owner has to allow.
-    pub reply: Option<Reply>,
     /// The `msg_idx` or `ref_idx` of a message to quote.
     pub quote: Option<String>,
 }
@@ -27,17 +26,6 @@ pub enum Body {
     },
 }
 
-/// What a passive reply answers.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Reply {
-    /// A message's `id`, within 5 minutes in a group (60 in a private
-    /// chat). `seq` counts the replies to it from 1; QQ refuses a repeat.
-    Message { id: String, seq: u32 },
-    /// The outer `id` of an event that can be answered, such as the bot
-    /// joining a group.
-    Event(String),
-}
-
 impl Serialize for Outgoing {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let (msg_type, content, markdown, media) = match &self.body {
@@ -47,19 +35,11 @@ impl Serialize for Outgoing {
                 (7, caption.as_deref(), None, Some(Media { file_info }))
             }
         };
-        let (msg_id, msg_seq, event_id) = match &self.reply {
-            Some(Reply::Message { id, seq }) => (Some(id.as_str()), Some(*seq), None),
-            Some(Reply::Event(id)) => (None, None, Some(id.as_str())),
-            None => (None, None, None),
-        };
         Wire {
             msg_type,
             content,
             markdown,
             media,
-            msg_id,
-            msg_seq,
-            event_id,
             message_reference: self.quote.as_deref().map(|id| Reference { message_id: id }),
         }
         .serialize(serializer)
@@ -75,12 +55,6 @@ struct Wire<'a> {
     markdown: Option<Markdown<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     media: Option<Media<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    msg_id: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    msg_seq: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    event_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message_reference: Option<Reference<'a>>,
 }
@@ -144,26 +118,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_passive_text_reply() {
+    fn text() {
         let message = Outgoing {
             body: Body::Text("早".into()),
-            reply: Some(Reply::Message {
-                id: "ROBOT1.0_msg".into(),
-                seq: 2,
-            }),
             quote: None,
         };
         assert_eq!(
             serde_json::to_value(&message).unwrap(),
-            json!({ "msg_type": 0, "content": "早", "msg_id": "ROBOT1.0_msg", "msg_seq": 2 })
+            json!({ "msg_type": 0, "content": "早" })
         );
     }
 
     #[test]
-    fn proactive_markdown_quoting_a_message() {
+    fn markdown_quoting_a_message() {
         let message = Outgoing {
             body: Body::Markdown("**早**".into()),
-            reply: None,
             quote: Some("REFIDX_1".into()),
         };
         assert_eq!(
@@ -174,14 +143,6 @@ mod tests {
                 "message_reference": { "message_id": "REFIDX_1" },
             })
         );
-        let event = Outgoing {
-            reply: Some(Reply::Event("GROUP_ADD_ROBOT:1".into())),
-            ..message
-        };
-        assert_eq!(
-            serde_json::to_value(&event).unwrap()["event_id"],
-            "GROUP_ADD_ROBOT:1"
-        );
     }
 
     #[test]
@@ -191,7 +152,6 @@ mod tests {
                 file_info: "FI".into(),
                 caption: None,
             },
-            reply: None,
             quote: None,
         };
         assert_eq!(
