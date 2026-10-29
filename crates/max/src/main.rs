@@ -30,7 +30,7 @@ use max::embedding::Embedder;
 use max::historian::{self, Historian};
 use max::llm::Models;
 use max::mcp;
-use max::media::caption::{self, Captioner};
+use max::media::caption::Captioner;
 use max::media::download::Download;
 use max::media::fetch;
 use max::media::pictures::Pictures;
@@ -301,14 +301,14 @@ async fn serve(config: Config) -> Result<()> {
             });
             let captions = match models.caption().transpose()? {
                 Some(chosen) => {
-                    let captioner = Arc::new(Captioner {
+                    let captioner = Captioner {
                         pool: pool.clone(),
                         chosen,
                         pictures: Arc::clone(&pictures),
                         stickers,
-                    });
+                    };
                     let (tx, rx) = mpsc::unbounded_channel();
-                    workers.spawn(move |stop| worker::drive(captioner, caption::POLICY, rx, stop));
+                    workers.spawn(move |stop| captioner.run(rx, stop));
                     Some(tx)
                 }
                 None => {

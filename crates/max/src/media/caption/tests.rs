@@ -35,15 +35,11 @@ fn png(width: u32) -> Vec<u8> {
     bytes.into_inner()
 }
 
-const FIRST: Attempt = Attempt {
-    number: 1,
-    last: false,
-};
-
-const LAST: Attempt = Attempt {
-    number: 2,
-    last: true,
-};
+/// Tries a picture as the worker does, without the wait between tries.
+async fn tries(captioner: &Captioner, picture: &Picture) -> Result<()> {
+    let slots = Semaphore::new(1);
+    captioner.tries(picture, &slots, Duration::ZERO).await
+}
 
 struct Fixture {
     captioner: Captioner,
@@ -145,11 +141,11 @@ async fn each_file_is_captioned_once(pool: PgPool) {
     let script = &fixture.script;
 
     script.push(Answer::says("“一张白底的图，\n什么都没画。”"));
-    captioner.run(&fixture.picture, FIRST).await.unwrap();
+    tries(captioner, &fixture.picture).await.unwrap();
     script.push(Answer::says("SKIP：一张聊天截图"));
-    captioner.run(&fixture.sticker, FIRST).await.unwrap();
+    tries(captioner, &fixture.sticker).await.unwrap();
     // Again: it has one, so the model isn't asked.
-    captioner.run(&fixture.picture, FIRST).await.unwrap();
+    tries(captioner, &fixture.picture).await.unwrap();
     assert_eq!(script.calls(), 2);
 
     let requests: Vec<Vec<ItemKind>> = script
@@ -207,10 +203,9 @@ async fn a_model_that_fails_twice_leaves_it_empty(pool: PgPool) {
     fixture
         .script
         .push(Answer::Fails(max_llm::Error::Truncated));
-    assert!(captioner.run(&fixture.picture, FIRST).await.is_err());
     // An empty answer is a failure too.
     fixture.script.push(Answer::says("  "));
-    captioner.run(&fixture.picture, LAST).await.unwrap();
+    tries(captioner, &fixture.picture).await.unwrap();
     assert_eq!(fixture.script.calls(), 2);
     // Not shown, not tried again.
     assert_eq!(shown(&pool, &fixture).await, [None, None]);
@@ -225,18 +220,10 @@ async fn a_model_that_fails_twice_leaves_it_empty(pool: PgPool) {
 async fn a_stickers_caption_goes_on_to_be_embedded(pool: PgPool) {
     let mut fixture = fixture(&pool).await;
     fixture.script.push(Answer::says("翻白眼的猫，表示无语"));
-    fixture
-        .captioner
-        .run(&fixture.sticker, FIRST)
-        .await
-        .unwrap();
+    tries(&fixture.captioner, &fixture.sticker).await.unwrap();
     assert_eq!(fixture.embeds.try_recv().unwrap(), fixture.sticker.sha256);
     // Once: it has its caption now.
-    fixture
-        .captioner
-        .run(&fixture.sticker, FIRST)
-        .await
-        .unwrap();
+    tries(&fixture.captioner, &fixture.sticker).await.unwrap();
     assert!(fixture.embeds.is_empty());
     let _ = std::fs::remove_dir_all(&fixture.dir);
 }
@@ -253,4 +240,39 @@ fn what_the_model_wrote() {
     let long = "猫".repeat(400);
     assert_eq!(sticker(&long).0.chars().count(), MOST);
     assert!(parse("", Kind::Image).is_err());
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn the_worker_captions_what_it_missed_and_each_file_once(pool: PgPool) {
+    let Fixture {
+        captioner,
+        script,
+        picture,
+        sticker,
+        dir,
+        ..
+    } = fixture(&pool).await;
+    script.push(Answer::says("一张白底的图"));
+    script.push(Answer::says("翻白眼的猫"));
+    let (stored, inbox) = mpsc::unbounded_channel();
+    let stop = CancellationToken::new();
+    let worker = captioner.run(inbox, stop.clone());
+    let test = async {
+        // Its scan finds both; the sticker sent again isn't asked about.
+        stored.send(sticker.clone()).unwrap();
+        stored.send(picture.clone()).unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        for _ in 0..100 {
+            if captions::exists(&mut conn, &picture.sha256).await.unwrap()
+                && captions::exists(&mut conn, &sticker.sha256).await.unwrap()
+            {
+                break;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+        stop.cancel();
+    };
+    tokio::join!(worker, test);
+    assert_eq!(script.calls(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
 }

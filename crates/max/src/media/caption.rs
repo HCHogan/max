@@ -2,10 +2,9 @@
 //! shows, once per file. Rows show it where their node came without a
 //! description, and the sticker library searches it. See "媒体".
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use chrono::{TimeDelta, Utc};
@@ -14,24 +13,23 @@ use max_core::item::{Image, Item, ItemKind};
 use max_core::run::Request;
 use max_db::captions::{self, Caption, Kind};
 use max_db::{PgPool, usage};
-use tokio::sync::mpsc::UnboundedSender;
-use tracing::warn;
+use tokio::sync::Semaphore;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, warn};
 
 use super::pictures::Pictures;
 use crate::llm::Chosen;
-use crate::worker::{Attempt, Derivation, Policy, Wait};
+use crate::scope::Scope;
 
 /// How long one call to the model may take.
 const CALL: Duration = Duration::from_secs(120);
-
-pub const POLICY: Policy = Policy {
-    name: "caption",
-    concurrent: 2,
-    timeout: CALL.saturating_add(Duration::from_secs(30)),
-    // Two tries; after the second, an empty caption, not tried again.
-    retries: &[Duration::from_secs(60)],
-    rescan: None,
-};
+/// Pictures captioned at a time.
+const AT_ONCE: usize = 2;
+/// How long to wait before the second try. After it, the picture gets an
+/// empty caption and isn't tried again.
+const RETRY: Duration = Duration::from_secs(60);
 
 /// How far back the scan at the start looks: what came in while the
 /// worker was down. Older pictures stay without.
@@ -74,25 +72,56 @@ impl PartialEq for Picture {
 
 impl Eq for Picture {}
 
-impl Hash for Picture {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.sha256.hash(state);
-    }
-}
-
 impl fmt::Debug for Picture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} {}", self.image.handle(), self.sha256)
     }
 }
 
-impl Derivation for Captioner {
-    /// A picture the download worker just stored.
-    type Input = Picture;
-    type Unit = Picture;
-
-    fn on_input(&self, picture: Picture) -> Vec<(Picture, Wait)> {
-        vec![(picture, Wait::Now)]
+impl Captioner {
+    /// Until `stop`: each picture the download worker stores, and at the
+    /// start those of the last two weeks that have no caption. Captions
+    /// still being written then are dropped; the next start's scan finds
+    /// them.
+    pub async fn run(self, mut stored: UnboundedReceiver<Picture>, stop: CancellationToken) {
+        let captioner = Arc::new(self);
+        let slots = Arc::new(Semaphore::new(AT_ONCE));
+        // The files being captioned: a sticker sent again meanwhile isn't
+        // shown to the model twice.
+        let busy = Arc::new(Mutex::new(HashSet::new()));
+        let mut captioning = Scope::new();
+        let mut start = |picture: Picture| {
+            let mut files = busy.lock().unwrap_or_else(PoisonError::into_inner);
+            if !files.insert(picture.sha256.clone()) {
+                return;
+            }
+            let (captioner, slots, busy) = (
+                Arc::clone(&captioner),
+                Arc::clone(&slots),
+                Arc::clone(&busy),
+            );
+            captioning.spawn(move |_| async move {
+                if let Err(error) = captioner.tries(&picture, &slots, RETRY).await {
+                    warn!(unit = ?picture, "couldn't caption: {error:#}");
+                }
+                let mut files = busy.lock().unwrap_or_else(PoisonError::into_inner);
+                files.remove(&picture.sha256);
+            });
+        };
+        match captioner.scan().await {
+            Ok(missed) => missed.into_iter().for_each(&mut start),
+            Err(error) => warn!("the caption scan failed: {error:#}"),
+        }
+        loop {
+            tokio::select! {
+                () = stop.cancelled() => break,
+                picture = stored.recv() => match picture {
+                    Some(picture) => start(picture),
+                    None => break,
+                },
+            }
+        }
+        captioning.close(Duration::ZERO).await;
     }
 
     async fn scan(&self) -> Result<Vec<Picture>> {
@@ -111,7 +140,10 @@ impl Derivation for Captioner {
             .collect())
     }
 
-    async fn run(&self, picture: &Picture, attempt: Attempt) -> Result<()> {
+    /// Captions `picture`'s file if it has none: the model gets two
+    /// tries, `retry` apart, and after the second failure the file gets
+    /// an empty caption. A slot is held only while the model is asked.
+    async fn tries(&self, picture: &Picture, slots: &Semaphore, retry: Duration) -> Result<()> {
         let Some(kind) = Kind::of(picture.image.kind) else {
             return Ok(());
         };
@@ -120,13 +152,23 @@ impl Derivation for Captioner {
             return Ok(());
         }
         drop(conn);
-        let (text, skip) = match self.caption(picture, kind).await {
-            Ok(said) => said,
-            Err(error) if attempt.last => {
-                warn!(worker = POLICY.name, unit = ?picture, "gave up: {error:#}");
-                (String::new(), false)
+        let mut retry = Some(retry);
+        let (text, skip) = loop {
+            let said = {
+                let _slot = slots.acquire().await?;
+                self.caption(picture, kind).await
+            };
+            match (said, retry.take()) {
+                (Ok(said), _) => break said,
+                (Err(error), Some(wait)) => {
+                    debug!(unit = ?picture, "a caption failed: {error:#}");
+                    sleep(wait).await;
+                }
+                (Err(error), None) => {
+                    warn!(unit = ?picture, "gave up a caption: {error:#}");
+                    break (String::new(), false);
+                }
             }
-            Err(error) => return Err(error),
         };
         let model = self.chosen.reference();
         let caption = Caption {
@@ -149,9 +191,7 @@ impl Derivation for Captioner {
         }
         Ok(())
     }
-}
 
-impl Captioner {
     /// What the model says the picture shows, and whether a sticker isn't
     /// one to send.
     async fn caption(&self, picture: &Picture, kind: Kind) -> Result<(String, bool)> {
