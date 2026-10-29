@@ -1,6 +1,8 @@
 //! The import of made-up old rows: tests/old_schema.sql and
 //! tests/old_rows.sql, in a schema of their own next to the new tables.
 
+use std::path::PathBuf;
+
 use serde_json::{Value, json};
 use sqlx::{Connection, PgPool};
 
@@ -17,8 +19,21 @@ fn accounts() -> Accounts {
     }
 }
 
-/// The made-up rows, imported into the test's database.
-async fn imported(pool: &PgPool) -> PgConnection {
+/// The made-up files, by the letter their SHA-256 repeats.
+fn files() -> Vec<(char, &'static [u8])> {
+    vec![
+        ('a', b"a"),
+        ('b', b"b"),
+        ('c', b"c"),
+        ('d', b"d"),
+        ('e', b"12345"),
+    ]
+}
+
+/// The made-up rows in a schema of their own, and `files` in a content
+/// store of the test's own; connections to read the one and write the
+/// other.
+async fn setup(pool: &PgPool, files: &[(char, &[u8])]) -> (PgConnection, PgConnection, PathBuf) {
     let mut tx = pool.begin().await.unwrap();
     for sql in [
         "create schema old; set local search_path = old",
@@ -28,14 +43,34 @@ async fn imported(pool: &PgPool) -> PgConnection {
         sqlx::raw_sql(sql).execute(&mut *tx).await.unwrap();
     }
     tx.commit().await.unwrap();
+    let database = pool
+        .connect_options()
+        .get_database()
+        .unwrap_or("max")
+        .to_owned();
+    let store = std::env::temp_dir().join(format!("max-import-{database}"));
+    for (letter, bytes) in files {
+        let sha256 = letter.to_string().repeat(64);
+        let dir = store.join("objects").join(&sha256[..2]);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(&sha256), bytes).unwrap();
+    }
     let from = (*pool.connect_options())
         .clone()
         .options([("search_path", "old")]);
-    let mut old = PgConnection::connect_with(&from).await.unwrap();
-    let mut new = PgConnection::connect_with(&pool.connect_options())
+    let old = PgConnection::connect_with(&from).await.unwrap();
+    let new = PgConnection::connect_with(&pool.connect_options())
         .await
         .unwrap();
-    import(&mut old, &mut new, &accounts()).await.unwrap();
+    (old, new, store)
+}
+
+/// The made-up rows, imported into the test's database.
+async fn imported(pool: &PgPool) -> PgConnection {
+    let (mut old, mut new, store) = setup(pool, &files()).await;
+    import(&mut old, &mut new, &store, &accounts())
+        .await
+        .unwrap();
     new
 }
 
@@ -231,6 +266,14 @@ async fn messages(pool: PgPool) {
             None,
             "在吗",
         ),
+        (
+            row(1021, 200, 12, "明哥", None, Some("n1021")),
+            "chat",
+            None,
+            None,
+            None,
+            "图[image][video][file: d.zip][image]",
+        ),
         // What it replied to stayed behind.
         (
             row(1022, 200, 12, "明哥", None, Some("n1022")),
@@ -384,12 +427,72 @@ async fn summaries_and_settings(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn only_into_an_empty_database(pool: PgPool) {
+async fn media(pool: PgPool) {
     let mut new = imported(&pool).await;
-    let from = (*pool.connect_options())
-        .clone()
-        .options([("search_path", "old")]);
-    let mut old = PgConnection::connect_with(&from).await.unwrap();
-    let again = import(&mut old, &mut new, &accounts()).await;
+    let media: Vec<(String, Option<String>, i64, String)> =
+        sqlx::query_as("select sha256, mime, size, first_seen_at::text from media order by sha256")
+            .fetch_all(&mut new)
+            .await
+            .unwrap();
+    let file = |letter: char, mime: &str, size, at: &str| {
+        (
+            letter.to_string().repeat(64),
+            Some(mime.to_owned()),
+            size,
+            at.to_owned(),
+        )
+    };
+    assert_eq!(
+        media,
+        [
+            file('a', "image/jpeg", 10, "2025-12-30 16:00:00+00"),
+            file('b', "video/mp4", 12, "2025-12-30 16:00:00+00"),
+            file('c', "image/jpeg", 11, "2025-12-30 16:00:00+00"),
+            file('d', "application/zip", 13, "2026-01-02 02:09:00+00"),
+            // Only its node and the store know it.
+            file('e', "image/png", 5, "2026-01-02 02:09:00+00"),
+        ]
+    );
+    let links: Vec<(i64, i16, String)> = sqlx::query_as(
+        "select message_id, ordinal, left(sha256, 1) from message_media order by 1, 2",
+    )
+    .fetch_all(&mut new)
+    .await
+    .unwrap();
+    let expected = [
+        (1011, 0, "a"),
+        (1021, 0, "c"),
+        (1021, 1, "b"),
+        (1021, 2, "d"),
+        (1021, 3, "e"),
+    ]
+    .map(|(id, ordinal, letter)| (id, ordinal, letter.to_owned()));
+    // The forwarded picture is the container's.
+    assert_eq!(links, expected);
+}
+
+#[sqlx::test]
+async fn every_file_has_to_be_in_the_store(pool: PgPool) {
+    let mut files = files();
+    files.retain(|(letter, _)| *letter != 'e');
+    let (mut old, mut new, store) = setup(&pool, &files).await;
+    let error = import(&mut old, &mut new, &store, &accounts())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("1 files aren't in the content store"),
+        "{error}"
+    );
+}
+
+#[sqlx::test]
+async fn only_into_an_empty_database(pool: PgPool) {
+    let (mut old, mut new, store) = setup(&pool, &files()).await;
+    import(&mut old, &mut new, &store, &accounts())
+        .await
+        .unwrap();
+    let again = import(&mut old, &mut new, &store, &accounts()).await;
     assert!(again.is_err());
 }

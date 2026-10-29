@@ -4,6 +4,7 @@
 //! schema's code lives only here, and goes once maxx has run on the
 //! imported data for a while.
 
+mod media;
 mod messages;
 mod nodes;
 mod people;
@@ -12,6 +13,7 @@ mod summaries;
 #[cfg(test)]
 mod tests;
 
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use clap::{Parser, Subcommand};
@@ -38,6 +40,9 @@ enum Command {
         /// The new database's URL: migrated here, and refused unless empty.
         #[arg(long)]
         to: String,
+        /// maxx's content store, which the old files were copied into.
+        #[arg(long)]
+        media: PathBuf,
         #[command(flatten)]
         accounts: Accounts,
     },
@@ -62,18 +67,28 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
     tracing_subscriber::fmt().init();
     match Cli::parse().command {
-        Command::Import { from, to, accounts } => {
+        Command::Import {
+            from,
+            to,
+            media,
+            accounts,
+        } => {
             let from = PgConnectOptions::from_str(&from)?
                 .options([("default_transaction_read_only", "on")]);
             let mut old = PgConnection::connect_with(&from).await?;
             let mut new = PgConnection::connect(&to).await?;
-            import(&mut old, &mut new, &accounts).await
+            import(&mut old, &mut new, &media, &accounts).await
         }
     }
 }
 
 /// Everything, or nothing.
-async fn import(old: &mut PgConnection, new: &mut PgConnection, accounts: &Accounts) -> Result<()> {
+async fn import(
+    old: &mut PgConnection,
+    new: &mut PgConnection,
+    store: &Path,
+    accounts: &Accounts,
+) -> Result<()> {
     MIGRATOR.run(&mut *new).await?;
     let rows: i64 = sqlx::query_scalar(
         "select (select count(*) from conversations) + (select count(*) from principals)
@@ -90,8 +105,9 @@ async fn import(old: &mut PgConnection, new: &mut PgConnection, accounts: &Accou
     let mut new = new.begin().await?;
     let people = people::import(&mut old, &mut new).await?;
     let places = places::import(&mut old, &mut new, &people).await?;
-    messages::import(&mut old, &mut new, &people, &places).await?;
+    let messages = messages::import(&mut old, &mut new, &people, &places).await?;
     people::name(&mut new).await?;
+    media::import(&mut old, &mut new, &messages, store).await?;
     summaries::import(&mut old, &mut new).await?;
     summaries::settings(&mut old, &mut new).await?;
     sequences(&mut old, &mut new).await?;

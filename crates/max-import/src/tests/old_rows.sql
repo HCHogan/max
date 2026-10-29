@@ -75,7 +75,7 @@ insert into messages (canonical_message_id, conversation_id, origin_endpoint_id,
      '{"v": 2, "nodes": [{"type": "text", "text": "看这个"}, {"type": "forward", "native_id": "F1"}]}', 11),
     (1012, 100, 200, 6, 'qq', 'message', 'chat', 'inbound', false, '', '甲某', '甲', 'forward:1',
      '2020-01-01 00:00+08', '2026-01-02 10:05+08', null,
-     '{"v": 2, "nodes": [{"type": "text", "text": "第一句"}, {"type": "media", "kind": "image", "source": "blob:aa"}]}', 12),
+     '{"v": 2, "nodes": [{"type": "text", "text": "第一句"}, {"type": "media", "kind": "image", "source": "blob:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}', 12),
     (1013, 100, 200, 6, 'qq', 'message', 'chat', 'inbound', false, '', '乙', null, 'forward:2',
      '2020-01-01 00:00+08', '2026-01-02 10:05+08', null,
      '{"v": 2, "nodes": [{"type": "forward", "native_id": "F2"}]}', 13),
@@ -97,6 +97,11 @@ insert into messages (canonical_message_id, conversation_id, origin_endpoint_id,
     (1022, 100, 200, 2, 'qq', 'message', 'chat', 'inbound', false, '', '明哥', null, 'n1022',
      '2026-01-02 10:08+08', '2026-01-02 10:08+08', 1008,
      '{"v": 2, "nodes": [{"type": "text", "text": "啥"}]}', 22),
+    -- A picture from an address, a video, a file, and a picture that names
+    -- its file; the old link for the text node stays behind.
+    (1021, 100, 200, 2, 'qq', 'message', 'chat', 'inbound', false, '', '明哥', null, 'n1021',
+     '2026-01-02 10:09+08', '2026-01-02 10:09+08', null,
+     '{"v": 2, "nodes": [{"type": "text", "text": "图"}, {"type": "media", "kind": "image", "source": "https://example.com/c.jpg"}, {"type": "media", "kind": "video"}, {"type": "media", "kind": "file", "name": "d.zip"}, {"type": "media", "kind": "image", "source": "blob:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "mime": "image/png"}]}', 21),
     -- The owner's private chat, through its other endpoint; then WeChat.
     (1019, 101, 202, 4, 'qq', 'message', 'chat', 'inbound', false, '', '主人', null, 'n1019',
      '2026-01-02 11:00+08', '2026-01-02 11:00+08', null,
@@ -140,3 +145,24 @@ insert into sessions values
     (10001, 'gpt-5.6-luna', '猫', '2026-01-04 00:00+08', '2026-01-02 10:02:30+08', false, 'xhigh'),
     (-20001, 'gpt-5.6-luna', null, '2026-01-04 00:00+08', null, null, null),
     (-20003, null, null, '2026-01-04 00:00+08', null, true, null);
+
+insert into images values
+    ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'image/jpeg', 10, '2025-12-31 00:00+08'),
+    ('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'image/jpeg', 11, '2025-12-31 00:00+08');
+
+insert into videos values
+    ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'video/mp4', 12, '2025-12-31 00:00+08');
+
+insert into group_files values
+    ('file-1', 'application/zip', 13, 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', '2026-01-02 10:09+08', 1021);
+
+-- seg_index counts every node. 1021's first names its text, and 1003
+-- stayed behind.
+insert into message_images values
+    ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 1012),
+    ('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 1, 1021),
+    ('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 0, 1021),
+    ('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 0, 1003);
+
+insert into message_videos values
+    (2, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 1021);
