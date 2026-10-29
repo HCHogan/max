@@ -77,6 +77,7 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
         work: None,
         store: None,
         poster: None,
+        embedder: None,
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());

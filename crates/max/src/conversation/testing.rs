@@ -54,6 +54,7 @@ pub fn shared(
         historian: None,
         rows: Rows::default(),
         search: None,
+        embedder: None,
         pictures: None,
         avatars: None,
         vms: None,

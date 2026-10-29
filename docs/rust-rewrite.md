@@ -1051,7 +1051,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 2. 模型的 `input`、条目里的图、两种协议的降级、附图和句柄。
 3. caption worker，表情包另用一个提示词；导入老的图片描述和表情包。2026-10-29 上线：模型是经 cliproxy 的 GPT-5.6 Luna，effort low；老描述在新 maxx 启动前导好（图 21,040、表情包 3,421，其中 94 个 SKIP），启动扫描补了最近 14 天漏掉的 10 张。
 4. 发图：qqbot 的上传，sender 发图和 `file_info` 缓存，分段器留下句柄、入账时解析，`send_image`。2026-10-29 上线，群里实测：回复里写句柄发出了 JPEG 和 GIF 表情包（GIF 会动），`send_image` 发出了 VM 里画的 PNG，带说明文字。
-5. 表情包库：embedding 和 `find_stickers`。
+5. 表情包库：embedding 和 `find_stickers`。2026-10-29 做完，见[发图](#发图)的 `max.find_stickers`。
 6. `/chat` 和 `max.image()`。
 
 ### 发图
@@ -1062,9 +1062,13 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 
 - **回复里的句柄**：模型在回复里写 `[sticker#123.0]` 或 `[image#123.0]`，发出去的就是那张图。表情包主要靠这个发：它是说话的一部分，先后要和文字对得上，也省一次工具调用。分段器把句柄单独切成一条，同一段里前后的文字各成一条，顺序照写的；照着显示形式抄来的 `: 描述` 去掉。会话 actor 入账时查 `message_media`，和查 `[reply#id]` 一样（见[解析和发送](#解析和发送)）：本会话的图和表情包都能发；别的会话的只能发表情包，图不出会话。种类按那条消息里节点的种类算。查不到的、没下载好的、不让发的，去掉，记 warn。
 - **`max.send_image({ path, caption? })`**：发 VM 里做出来的图，比如图表、截图、从网上下的图。在宿主上从这个群的 `/work` 读，不跟符号链接，出不了 `/work`。按文件头只认 PNG、JPEG、GIF，WebP 转成 PNG；最大 10 MiB。存进内容库、写 `media`，经 `Post`（带 `origin`）入账，等 sender 回信，返回新消息的句柄。`caption` 是图下面的说明文字，和图在同一条消息里。每次运行最多 5 次。有副作用，后台 job 不开放。
-- **`max.find_stickers({ query, limit? })`**：在表情包库里按意思搜，只搜不发，返回 `{ handle, description }[]`，默认 5 条，模型挑一个把句柄写进回复。库是所有会话见过的表情包（节点种类是 sticker），按 sha256 去重，句柄给最近一次出现的那条；caption 判了 SKIP 的不进库。搜描述的向量，embedding 和 `context_search` 共用；提议沿用 Haskell 版的 bge-m3（1024 维），老表情包的向量直接导。
+- **`max.find_stickers({ query, limit? })`**：在表情包库里按意思搜，只搜不发，返回 `{ stickers: { handle, description }[] }`，`limit` 1 到 10，默认 5，模型挑一个把句柄写进回复。一次运行最多 5 次。库是所有会话见过的表情包（节点种类是 sticker），按 sha256 去重，句柄给最近一次以表情包出现的那条，哪个会话的都算；caption 判了 SKIP 的、空的不进库，按图的提示词写的 caption（第一次是当图见到的）也不进。搜描述的向量，embedding 和 `context_search` 共用。2026-10-29 做完：
+  - 模型沿用 Haskell 版的 bge-m3（1024 维），线上是 h610 上的 Ollama，tank 连它（10-29 从 tank 试过，回 1024 维、归一化的向量；老库的向量和它算的一样，距离 0）。配置 `[embedding]`：`base_url`（OpenAI 兼容，`/v1` 结尾）、`model`、可选的 `api_key_file`。不配就没有 embedding worker，`find_stickers` 回 `unavailable`。维数跟着表，不是配置项：模型给的长度不是 1024 就当出错。
+  - 向量存在 `caption_embeddings`，一个文件一行，记着模型；搜的时候只比当前模型的。
+  - embedding worker：caption worker 写了表情包的 caption（不是 SKIP、不空）就交给它；启动时和之后每小时扫一遍没有当前模型向量的，所以换了模型会全部重算。一个文件一个单元，同时 2 个，每次请求 30 秒，失败重试两次（10 秒、60 秒）就放弃，等下一次扫描。tank 到 h610 晚上丢包，不做别的补救。用量不记 `llm_usage`。
+  - 查询：query 算成向量，按余弦距离取最近的，失败回 `unavailable`，不重试。不设距离门槛（Haskell 版是 0.65）：10-29 在老库的 3,328 个向量上试了十几个查询，相关和无关的距离重叠（相关的多在 0.31–0.45，"吃瓜看戏"最近的 0.45，"今天天气怎么样"最近的也有 0.44），门槛分不开，交给模型看描述挑。
 - **sender**：上传 base64 拿 `file_info`，再发 `msg_type = 7`，只有 `send_image` 带 `content`。`file_info` 按（端点、sha256）缓存在内存里，提前一小时作废，所以同一张表情包一天里再发不用重新上传；重启就丢，重新传。上传失败和别的发送失败一样记进 `deliveries`。每张图算一条主动消息，占群的额度。
-- **提示词**：表情包偶尔用，一次回答最多一张，别句句都配。
+- **提示词**：表情包偶尔用，一次回答最多一张，别句句都配；记录里没有合适的，用 `find_stickers` 找。
 
 ## schema
 

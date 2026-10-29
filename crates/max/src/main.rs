@@ -138,6 +138,7 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
                 work: None,
                 store: None,
                 poster: None,
+                embedder: None,
             })
         };
         let shell = Tool::Shell {
@@ -340,6 +341,7 @@ async fn serve(config: Config) -> Result<()> {
         rows,
         vms,
         search,
+        embedder,
         pictures,
         avatars,
         started: tokio::time::Instant::now(),

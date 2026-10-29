@@ -26,6 +26,7 @@ use super::ingest;
 use super::project::{self, Projection};
 use super::{Act, Event, Place, Post, Poster, Receipt, TaskId, classify, model, tool};
 use crate::bind::Binds;
+use crate::embedding::Embedder;
 use crate::historian::Notice;
 use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
@@ -57,6 +58,8 @@ pub struct Shared {
     pub vms: Option<Vms>,
     /// For `web_search`; None when it isn't configured.
     pub search: Option<Arc<Search>>,
+    /// For `find_stickers`; None when no embedding model is configured.
+    pub embedder: Option<Arc<Embedder>>,
     /// Where model calls find their pictures; None when no media
     /// directory is configured, and none are sent.
     pub pictures: Option<Arc<Pictures>>,
@@ -497,6 +500,7 @@ impl Conversation {
                             work: None,
                             store: self.shared.pictures.as_ref().map(|p| Arc::clone(&p.store)),
                             poster: Some(Poster::new(self.mailbox.clone(), a.turn)),
+                            embedder: self.shared.embedder.clone(),
                         };
                         let mailbox = self.mailbox.clone();
                         a.io.spawn(move |_| tool::call(vms, context, call, task, mailbox));

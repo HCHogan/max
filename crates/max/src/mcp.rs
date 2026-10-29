@@ -2,6 +2,7 @@
 //! service; see "MCP 通道". max-core's `MAX_TOOLS` declares them.
 
 mod context_read;
+mod find_stickers;
 mod recall_message;
 mod send_image;
 mod service;
@@ -22,6 +23,7 @@ use sqlx::PgPool;
 use tracing::warn;
 
 use crate::conversation::{Place, Poster};
+use crate::embedding::Embedder;
 use crate::media::store::Store;
 use crate::search::Search;
 
@@ -40,6 +42,8 @@ pub struct Context {
     pub store: Option<Arc<Store>>,
     /// Says things in the conversation for the turn that called.
     pub poster: Option<Poster>,
+    /// For `find_stickers`; None when no embedding model is configured.
+    pub embedder: Option<Arc<Embedder>>,
 }
 
 /// A call that failed, as the program sees it.
@@ -72,6 +76,7 @@ pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, F
         "web_search" => web_search::run(context, args).await,
         "send_image" => send_image::run(context, args).await,
         "recall_message" => recall_message::run(context, args).await,
+        "find_stickers" => find_stickers::run(context, args).await,
         _ => Err(Failure::new(
             "unknown_tool",
             format!("没有 {name} 这个工具"),

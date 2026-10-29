@@ -116,6 +116,7 @@ async fn a_chart_goes_out_with_its_caption(pool: PgPool) {
         work: Some(scratch.work()),
         store: Some(Arc::clone(&store)),
         poster: Some(Poster::new(mailbox, TurnId(1))),
+        embedder: None,
     };
     let work = scratch.work();
     std::fs::write(work.join("charts/daily.webp"), encoded(ImageFormat::WebP)).unwrap();
@@ -174,6 +175,7 @@ async fn a_chart_goes_out_with_its_caption(pool: PgPool) {
     assert_eq!(not_one.unwrap_err().code, "not_a_picture");
     let elsewhere = Context {
         poster: None,
+        embedder: None,
         ..context
     };
     let refused = run(&elsewhere, json!({ "path": "charts/daily.webp" })).await;

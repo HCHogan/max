@@ -49,7 +49,7 @@ pub struct MaxTool {
     pub per_run: Option<u32>,
 }
 
-pub const MAX_TOOLS: [MaxTool; 4] = [
+pub const MAX_TOOLS: [MaxTool; 5] = [
     MaxTool {
         name: "context_read",
         description: "读一条消息的全文，一页一页地读。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
@@ -92,6 +92,16 @@ pub const MAX_TOOLS: [MaxTool; 4] = [
         QQ 撤了才返回；撤不了会抛错，说明原因。记录里会多一行你的 [unsend#id]，QQ 没撤的标着（没发出去）。一次运行最多撤 10 条。 */\n\
         recall_message(args: { id: number }): Promise<{ recalled: number }>;",
         per_run: Some(10),
+    },
+    MaxTool {
+        name: "find_stickers",
+        description: "在表情包库里按意思找表情包，返回句柄和描述，只找不发。",
+        input: r#"{"type":"object","properties":{"query":{"type":"string","minLength":1,"description":"想表达什么，比如“无语”“幸灾乐祸”“翻白眼的猫”"},"limit":{"type":"integer","minimum":1,"maximum":10,"description":"几条，默认 5"}},"required":["query"],"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"stickers":{"type":"array","items":{"type":"object","properties":{"handle":{"type":"string"},"description":{"type":"string"}},"required":["handle","description"]}}},"required":["stickers"]}"#,
+        declaration: "/** 在表情包库里按意思找表情包：库里是各个群里见过的表情包，按描述和 query 的意思远近排，近的在前。\n  \
+        只找不发：挑一个合适的，把 handle 照抄进回复，写成 [sticker#…]，就发出去了；都不合适就不发。limit 1 到 10，默认 5。一次运行最多找 5 次。 */\n\
+        find_stickers(args: { query: string; limit?: number }): Promise<{ stickers: { handle: string; description: string }[] }>;",
+        per_run: Some(5),
     },
 ];
 
