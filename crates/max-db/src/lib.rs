@@ -5,6 +5,7 @@
 //! query that needs several statements to agree opens its own (a
 //! savepoint when the caller already has a transaction).
 
+pub mod captions;
 pub mod ledger;
 pub mod media;
 pub mod platform;
@@ -52,6 +53,7 @@ mod tests {
                 "identities",
                 "llm_usage",
                 "media",
+                "media_captions",
                 "message_media",
                 "messages",
                 "principals",

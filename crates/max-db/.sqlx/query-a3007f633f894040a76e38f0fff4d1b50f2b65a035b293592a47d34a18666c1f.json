@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into media_captions (sha256, kind, text, skip, model, created_at)\n         values ($1, $2, $3, $4, $5, $6)\n         on conflict (sha256) do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a3007f633f894040a76e38f0fff4d1b50f2b65a035b293592a47d34a18666c1f"
+}

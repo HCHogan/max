@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select mm.message_id, mm.ordinal, mm.sha256, m.nodes as \"nodes: Json<Vec<Node>>\"\n        from message_media mm\n        join media md on md.sha256 = mm.sha256\n        join messages m on m.id = mm.message_id\n        where md.first_seen_at >= $1 and md.model_sha256 is not null\n          and not exists (select 1 from media_captions c where c.sha256 = mm.sha256)\n        order by mm.message_id, mm.ordinal\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "message_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "message_media",
+            "name": "message_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "ordinal",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "message_media",
+            "name": "ordinal"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "sha256",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_media",
+            "name": "sha256"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "nodes: Json<Vec<Node>>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "nodes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1de4487dc6b88f23b61e8313653265634ed60581f7d7ec473b2313b620ece506"
+}

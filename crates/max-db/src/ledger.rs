@@ -6,6 +6,7 @@ use max_core::message::{Content, Message, Node, Platform, Role, Sender};
 use sqlx::PgConnection;
 use sqlx::types::Json;
 
+use crate::captions;
 use crate::platform::{platform_name, role};
 use crate::unknown;
 
@@ -225,7 +226,7 @@ pub async fn rows(
     after: Option<MessageId>,
     upto: MessageId,
 ) -> sqlx::Result<Vec<Row>> {
-    sqlx::query_as!(
+    let mut rows = sqlx::query_as!(
         Raw,
         r#"
         select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,
@@ -240,11 +241,13 @@ pub async fn rows(
         after.map_or(0, |id| id.0),
         upto.0
     )
-    .fetch_all(conn)
+    .fetch_all(&mut *conn)
     .await?
     .into_iter()
     .map(Raw::row)
-    .collect()
+    .collect::<sqlx::Result<Vec<Row>>>()?;
+    captioned(conn, &mut rows).await?;
+    Ok(rows)
 }
 
 /// Up to `limit` rows before `before`, in timeline order: the context the
@@ -271,13 +274,42 @@ pub async fn recent(
         before.0,
         limit
     )
-    .fetch_all(conn)
+    .fetch_all(&mut *conn)
     .await?
     .into_iter()
     .map(Raw::row)
     .collect::<sqlx::Result<Vec<Row>>>()?;
     rows.reverse();
+    captioned(conn, &mut rows).await?;
     Ok(rows)
+}
+
+/// Gives the media that came without a description what the caption
+/// worker wrote of them, so a row shows it wherever it's read.
+async fn captioned(conn: &mut PgConnection, rows: &mut [Row]) -> sqlx::Result<()> {
+    let ids: Vec<MessageId> = rows.iter().map(|row| row.message.id).collect();
+    let captions = captions::of_messages(conn, &ids).await?;
+    if captions.is_empty() {
+        return Ok(());
+    }
+    for row in rows {
+        let nodes = match &mut row.message.content {
+            Content::Message { nodes, .. } | Content::Edit { nodes, .. } => nodes,
+            Content::Unsend { .. } => continue,
+        };
+        let metas = nodes.iter_mut().filter_map(|node| match node {
+            Node::Media { meta, .. } => Some(meta),
+            _ => None,
+        });
+        for (ordinal, meta) in (0..).zip(metas) {
+            if meta.description.is_none()
+                && let Some(caption) = captions.get(&(row.message.id, ordinal))
+            {
+                meta.description = Some(caption.clone());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// What an account said lately in an endpoint, newest first, by id and
