@@ -7,6 +7,7 @@ use std::time::Duration;
 use max_core::item::ItemKind;
 use max_core::message::{Content, Node};
 use max_core::run::Outcome;
+use max_db::summaries;
 use tokio::sync::{mpsc, oneshot};
 
 use super::*;
@@ -379,15 +380,67 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     h.send(from_xiaohong(3, vec![me(), text("/clear --all")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("clear", "已清空：之前的消息不再进入上下文")
+        command::answer(
+            "clear",
+            "已清空：之前的消息不再进入上下文，@maxx /unclear 恢复"
+        )
+    );
+    let cleared = h
+        .count("select cleared_upto from conversation_settings")
+        .await;
+    assert!(cleared > 0);
+
+    h.send(from_xiaoming(4, vec![me(), text("/unclear")]));
+    assert_eq!(
+        h.said().await.1,
+        command::answer("unclear", "拒绝：仅限群主、管理员")
+    );
+    h.send(from_xiaohong(5, vec![me(), text("/unclear")]));
+    assert_eq!(
+        h.said().await.1,
+        command::answer("unclear", "已恢复：清空前的消息回到上下文")
+    );
+    h.send(from_xiaohong(6, vec![me(), text("/unclear")]));
+    assert_eq!(
+        h.said().await.1,
+        command::answer("unclear", "跳过：没有清空过")
+    );
+    // Cleared again, and the historian has summed up since.
+    h.send(from_xiaohong(7, vec![me(), text("/clear --all")]));
+    let (answered, _) = h.said().await;
+    let summary = summaries::Summary {
+        first: answered.id,
+        last: answered.id,
+        started_at: answered.at,
+        ended_at: answered.at,
+        title: "清空以后".into(),
+        kind: "chat".into(),
+        importance: 10,
+        full: "清空以后聊的".into(),
+        brief: None,
+        line: None,
+    };
+    let mut conn = h.pool.acquire().await.unwrap();
+    let conversation = answered.conversation;
+    summaries::insert(&mut conn, conversation, &summary, "m", Utc::now())
+        .await
+        .unwrap();
+    drop(conn);
+    h.send(from_xiaohong(8, vec![me(), text("/unclear")]));
+    assert_eq!(
+        h.said().await.1,
+        command::answer(
+            "unclear",
+            "已恢复：清空前的摘要回到上下文；清空时还没写成摘要的那段不回来，context_search 搜得到"
+        )
     );
     h.stop().await;
     assert_eq!(h.script.calls(), 0);
     assert!(h.turns().await.is_empty());
     let cleared = h
-        .count("select cleared_upto from conversation_settings")
+        .count("select count(cleared_upto) from conversation_settings")
         .await;
-    assert!(cleared > 0);
+    assert_eq!(cleared, 0);
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

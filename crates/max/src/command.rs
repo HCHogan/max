@@ -25,6 +25,8 @@ pub enum Command {
     Clear {
         all: bool,
     },
+    /// `/unclear`: takes `/clear --all` back.
+    Unclear,
     /// `/compact`: summarize what was said, up to now.
     Compact,
     /// `/bind`, `/bind <legacy group>` in a private chat, `/bind <code>` in
@@ -46,6 +48,7 @@ impl Command {
             Command::Proactive(_) => "proactive",
             Command::Persona(_) => "persona",
             Command::Clear { .. } => "clear",
+            Command::Unclear => "unclear",
             Command::Compact => "compact",
             Command::Bind(_) => "bind",
             Command::Link(_) => "link",
@@ -116,6 +119,7 @@ pub fn parse(text: &str) -> Option<Command> {
         "clear" => Command::Clear {
             all: argument.as_deref() == Some("--all"),
         },
+        "unclear" => Command::Unclear,
         "compact" => Command::Compact,
         "bind" => Command::Bind(argument),
         "link" => Command::Link(argument),
@@ -152,6 +156,7 @@ mod tests {
         );
         assert_eq!(parse("/clear"), Some(Command::Clear { all: false }));
         assert_eq!(parse("/clear --all"), Some(Command::Clear { all: true }));
+        assert_eq!(parse("/unclear"), Some(Command::Unclear));
         assert_eq!(parse("/compact"), Some(Command::Compact));
         assert_eq!(
             parse("/bind 123456"),

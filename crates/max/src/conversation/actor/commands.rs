@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use max_core::message::{Content, MentionTarget, Node, Platform, Role};
 use max_db::platform::ConversationKind;
+use max_db::summaries;
 use tokio::sync::oneshot;
 
 use super::*;
@@ -50,9 +51,11 @@ impl Conversation {
             Command::Model(Some(argument)) if argument == "list" => Rank::Anyone,
             // Who may link whom is its own business.
             Command::Link(_) => Rank::Anyone,
-            Command::Kill | Command::Persona(_) | Command::Clear { .. } | Command::Compact => {
-                Rank::Admin
-            }
+            Command::Kill
+            | Command::Persona(_)
+            | Command::Clear { .. }
+            | Command::Unclear
+            | Command::Compact => Rank::Admin,
             Command::Model(_) | Command::Effort(_) | Command::Proactive(_) | Command::Bind(_) => {
                 Rank::Owner
             }
@@ -88,8 +91,10 @@ impl Conversation {
             Command::Clear { all: true } => {
                 self.settings.cleared_upto = Some(committed.message.id);
                 self.save_settings().await?;
-                "已清空：之前的消息不再进入上下文".to_owned()
+                let how = command::how(self.place.kind, &self.place.my_name, "/unclear");
+                format!("已清空：之前的消息不再进入上下文，{how} 恢复")
             }
+            Command::Unclear => self.unclear().await?,
             Command::Compact => match self.compact() {
                 Some(answer) => answer,
                 None => return Ok(()),
@@ -101,6 +106,24 @@ impl Conversation {
             }
         };
         self.answer(name, &answer).await
+    }
+
+    /// Takes `/clear --all` back: what came before its mark is in the
+    /// context again. If the historian has summed up rows since, the rows
+    /// the clear left unsummed stay out; `context_search` finds them.
+    async fn unclear(&mut self) -> Result<String> {
+        let Some(mark) = self.settings.cleared_upto.take() else {
+            return Ok("跳过：没有清空过".to_owned());
+        };
+        self.save_settings().await?;
+        let mut conn = self.shared.pool.acquire().await?;
+        let since = summaries::active(&mut conn, self.place.conversation, Some(mark)).await?;
+        Ok(if since.is_empty() {
+            "已恢复：清空前的消息回到上下文".to_owned()
+        } else {
+            "已恢复：清空前的摘要回到上下文；清空时还没写成摘要的那段不回来，context_search 搜得到"
+                .to_owned()
+        })
     }
 
     async fn answer(&mut self, name: &str, body: &str) -> Result<()> {
