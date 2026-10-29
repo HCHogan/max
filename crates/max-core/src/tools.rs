@@ -47,6 +47,9 @@ pub struct MaxTool {
     pub declaration: &'static str,
     /// The most calls one run may make.
     pub per_run: Option<u32>,
+    /// Whether a background agent may call it: it reads, and doesn't act
+    /// on the group.
+    pub job: bool,
 }
 
 pub const MAX_TOOLS: [MaxTool; 8] = [
@@ -59,6 +62,7 @@ pub const MAX_TOOLS: [MaxTool; 8] = [
         { id } 读这一条；加上 before、after（各最多 50）就是它连同前后各几条，一行一条，和上下文里一样，太长的照样只有开头。\n  \
         { summary } 读一段摘要的全文，末尾写着它总结的是 #几 到 #几。一页不超过上下文里一条消息的上限，pages 是总页数。 */\n\
         context_read(args: { id: number; before?: number; after?: number; page?: number } | { summary: number; page?: number }): Promise<{ text: string; page: number; pages: number }>;",
+        job: true,
         per_run: None,
     },
     MaxTool {
@@ -71,6 +75,7 @@ pub const MAX_TOOLS: [MaxTool; 8] = [
         declaration: "/** 搜索网页，返回前几条结果的标题、链接、摘要和发布日期（知道的话）。事实、价格、新闻、剧情这类拿不准或可能过时的，先搜再答，别凭记忆。\n  \
         limit 1 到 10，默认 5。一次运行最多搜 20 次，要搜好几样就 Promise.all。要读全文，用 shell 跑 webread <url>。 */\n\
         web_search(args: { query: string; limit?: number }): Promise<{ results: { title: string; url: string; snippet: string; published?: string }[] }>;",
+        job: true,
         per_run: Some(20),
     },
     MaxTool {
@@ -82,6 +87,7 @@ pub const MAX_TOOLS: [MaxTool; 8] = [
         caption 是图下面的一句说明，和图在同一条消息里。发出去了才返回，handle 是这条消息里那张图的句柄。一次运行最多发 5 张。\n  \
         记录里已有的图和表情包不用这个，直接在回复里写它的句柄。 */\n\
         send_image(args: { path: string; caption?: string }): Promise<{ handle: string }>;",
+        job: false,
         per_run: Some(5),
     },
     MaxTool {
@@ -93,6 +99,7 @@ pub const MAX_TOOLS: [MaxTool; 8] = [
         name 是群里显示的文件名，默认用路径里的。发出去了才返回，handle 是这个文件的句柄。一次运行最多发 5 个。\n  \
         要大家直接看到的图用 send_image，别当文件发。记录里已有的文件要再发，先 max.file 拷到 /work 再发。 */\n\
         send_file(args: { path: string; name?: string }): Promise<{ handle: string }>;",
+        job: false,
         per_run: Some(5),
     },
     MaxTool {
@@ -104,6 +111,7 @@ pub const MAX_TOOLS: [MaxTool; 8] = [
         QQ 只让撤发出 2 分钟内的：你自己说的（一段是一条，一次回复分成几段的要一段一段撤）；你是群管理员时还有普通成员的，群主和管理员的撤不了。私聊里只能撤你自己的。\n  \
         QQ 撤了才返回；撤不了会抛错，说明原因。记录里会多一行你的 [unsend#id]，QQ 没撤的标着（没发出去）。一次运行最多撤 10 条。 */\n\
         recall_message(args: { id: number }): Promise<{ recalled: number }>;",
+        job: false,
         per_run: Some(10),
     },
     MaxTool {
@@ -115,6 +123,7 @@ pub const MAX_TOOLS: [MaxTool; 8] = [
         QQ 只让群管理员禁言普通成员：群主、管理员、你自己都禁不了，私聊里没有禁言；没在本群说过话的人也禁不了。对禁着的人再禁，是把结束时间改成从现在起 seconds 秒。\n  \
         QQ 办了才返回，until 是禁到几点，解除时是 null；办不了会抛错，说明原因。记录里不会多一行。一次运行最多 5 次。 */\n\
         mute_member(args: { member: number; seconds: number }): Promise<{ member: number; until: string | null }>;",
+        job: false,
         per_run: Some(5),
     },
     MaxTool {
@@ -125,6 +134,7 @@ pub const MAX_TOOLS: [MaxTool; 8] = [
         declaration: "/** 在表情包库里按意思找表情包：库里是各个群里见过的表情包，按描述和 query 的意思远近排，近的在前。\n  \
         只找不发：挑一个合适的，把 handle 照抄进回复，写成 [sticker#…]，就发出去了；都不合适就不发。limit 1 到 10，默认 5。一次运行最多找 5 次。 */\n\
         find_stickers(args: { query: string; limit?: number }): Promise<{ stickers: { handle: string; description: string }[] }>;",
+        job: false,
         per_run: Some(5),
     },
     MaxTool {
@@ -137,6 +147,7 @@ pub const MAX_TOOLS: [MaxTool; 8] = [
         命中的词多的、意思近的在前，一样的新的在前；消息和摘要各最多占 limit 的三分之二，另一种不够时补满。limit 默认 10，最多 30。from、to 是日期，都含当天。\n  \
         text 是命中处附近的一段；read 原样传给 context_read，读这条消息连同前后各 10 条，或者摘要全文。撤回的消息不搜；/clear --all 清掉的只是不在上下文里，照样能搜。一次运行最多搜 20 次。 */\n\
         context_search(args: { query: string; limit?: number; from?: string; to?: string }): Promise<{ results: { kind: \"message\" | \"summary\"; ref: string; time: string; text: string; read: { id: number; before: number; after: number } | { summary: number } }[] }>;",
+        job: true,
         per_run: Some(20),
     },
 ];

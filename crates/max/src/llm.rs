@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, WrapErr};
-use max_core::item::ModelTag;
+use max_core::item::{ModelTag, Protocol};
 use max_core::run::Request;
 use max_llm::{Call, Options, Pictures};
 
@@ -56,6 +56,29 @@ pub struct Chosen {
     /// How long a core on this model waits idle before it ends.
     pub idle_window: Duration,
     pub caller: Arc<dyn Caller>,
+}
+
+/// Where a background agent's model calls go. The MCP service forwards
+/// them there with the provider's key, which never enters the VM.
+#[derive(Clone, Debug)]
+pub struct Upstream {
+    pub provider: String,
+    pub protocol: Protocol,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub headers: Vec<(String, String)>,
+    /// The id sent to the API, whatever the agent asks for.
+    pub model: String,
+    pub window: u32,
+    pub max_output: Option<u32>,
+    pub effort: Option<String>,
+}
+
+impl Upstream {
+    /// `provider/model`, as the configuration names it.
+    pub fn reference(&self) -> String {
+        format!("{}/{}", self.provider, self.model)
+    }
 }
 
 impl Chosen {
@@ -122,6 +145,32 @@ impl Models {
     pub fn caption(&self) -> Option<Result<Chosen>> {
         let caption = self.llm.caption.as_ref()?;
         Some(self.choose(&caption.model, caption.effort.as_deref()))
+    }
+
+    /// Where background agents' model calls go, when a model is
+    /// configured for them. Reads the provider's key.
+    pub fn job(&self) -> Option<Result<Upstream>> {
+        let job = self.llm.job.as_ref()?;
+        Some(self.upstream(&job.model, job.effort.as_deref()))
+    }
+
+    fn upstream(&self, reference: &str, effort: Option<&str>) -> Result<Upstream> {
+        let (name, provider, model, settings) = self.llm.model(reference)?;
+        Ok(Upstream {
+            provider: name.to_owned(),
+            protocol: provider.protocol.into(),
+            base_url: provider.base_url.clone(),
+            api_key: provider.api_key()?,
+            headers: provider
+                .headers
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect(),
+            model: model.to_owned(),
+            window: settings.context_window,
+            max_output: settings.max_output,
+            effort: effort.map(str::to_owned),
+        })
     }
 
     /// Every `provider/model`, for `/model` to list.

@@ -1,6 +1,8 @@
 //! The MCP service: Streamable HTTP, stateless, on a unix socket per VM.
 //! A program authenticates with its run's token, which is good only while
-//! the run lasts and only from its own conversation's VM.
+//! the run lasts and only from its own conversation's VM. A background
+//! agent's session calls only the tools that read, and its model calls go
+//! through the same service; see [`super::forward`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -23,7 +25,8 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use super::{Context, Failure, chat_file, show};
+use super::{Context, Failure, chat_file, forward, show};
+use crate::llm::Upstream;
 
 /// One call's wall clock.
 const CALL_TIME: Duration = Duration::from_secs(60);
@@ -38,10 +41,14 @@ const MAYBE_DONE: &str = "会动群的操作可能已经生效，先看记录再
 #[derive(Clone, Default)]
 pub struct Sessions(Arc<Mutex<HashMap<String, Arc<Session>>>>);
 
-struct Session {
-    context: Context,
+pub(super) struct Session {
+    pub(super) context: Context,
+    /// A background agent's: it calls only the tools marked `job`.
+    job: bool,
+    /// Where its model calls go; a background agent's only.
+    pub(super) upstream: Option<Arc<Upstream>>,
     /// Cancelled when the session closes; its calls in flight end with it.
-    closed: CancellationToken,
+    pub(super) closed: CancellationToken,
     slots: Semaphore,
     /// Per tool: calls that succeeded, and that failed.
     calls: Mutex<BTreeMap<String, (u32, u32)>>,
@@ -62,6 +69,16 @@ pub struct Grant {
 impl Sessions {
     /// A session for programs in `context`'s conversation.
     pub fn open(&self, context: Context) -> Grant {
+        self.insert(context, None)
+    }
+
+    /// A background agent's session: the tools that read, and its model
+    /// calls forwarded to `upstream`.
+    pub fn open_job(&self, context: Context, upstream: Arc<Upstream>) -> Grant {
+        self.insert(context, Some(upstream))
+    }
+
+    fn insert(&self, context: Context, upstream: Option<Arc<Upstream>>) -> Grant {
         let token = format!(
             "{:032x}{:032x}",
             rand::random::<u128>(),
@@ -69,6 +86,8 @@ impl Sessions {
         );
         let session = Arc::new(Session {
             context,
+            job: upstream.is_some(),
+            upstream,
             closed: CancellationToken::new(),
             slots: Semaphore::new(CALLS_AT_ONCE),
             calls: Mutex::default(),
@@ -83,8 +102,21 @@ impl Sessions {
         }
     }
 
-    fn get(&self, token: &str) -> Option<Arc<Session>> {
+    pub(super) fn get(&self, token: &str) -> Option<Arc<Session>> {
         self.table().get(token).cloned()
+    }
+
+    /// The session `authorization` names, if it is open and belongs to
+    /// `conversation`'s VM.
+    pub(super) fn bearer(
+        &self,
+        authorization: Option<&str>,
+        conversation: ConversationId,
+    ) -> Option<Arc<Session>> {
+        authorization
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .and_then(|token| self.get(token))
+            .filter(|session| session.context.place.conversation == conversation)
     }
 
     fn table(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Session>>> {
@@ -142,14 +174,16 @@ pub async fn serve<L>(
         .with_json_response(true);
     let handler = Handler {
         conversation,
-        sessions,
+        sessions: sessions.clone(),
     };
     let service = StreamableHttpService::new(
         move || Ok(handler.clone()),
         Arc::new(NeverSessionManager::default()),
         config,
     );
-    let app = axum::Router::new().nest_service("/mcp", service);
+    let app = axum::Router::new()
+        .nest_service("/mcp", service)
+        .merge(forward::router(conversation, sessions));
     if let Err(error) = axum::serve(listener, app)
         .with_graceful_shutdown(stop.cancelled_owned())
         .await
@@ -168,15 +202,13 @@ impl Handler {
     /// The session whose token the request carries, if it is open and
     /// belongs to this VM's conversation.
     fn session(&self, request: &RequestContext<RoleServer>) -> Result<Arc<Session>, ErrorData> {
-        let token = request
+        let authorization = request
             .extensions
             .get::<Parts>()
             .and_then(|parts| parts.headers.get("authorization"))
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.strip_prefix("Bearer "));
-        token
-            .and_then(|token| self.sessions.get(token))
-            .filter(|session| session.context.place.conversation == self.conversation)
+            .and_then(|value| value.to_str().ok());
+        self.sessions
+            .bearer(authorization, self.conversation)
             .ok_or_else(|| ErrorData::invalid_request("token 不对，或者这次运行已经结束了", None))
     }
 }
@@ -191,9 +223,13 @@ impl ServerHandler for Handler {
         _: Option<PaginatedRequestParams>,
         request: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        self.session(&request)?;
+        let session = self.session(&request)?;
         Ok(ListToolsResult {
-            tools: MAX_TOOLS.iter().map(tool).collect(),
+            tools: MAX_TOOLS
+                .iter()
+                .filter(|spec| session.allows(spec.name))
+                .map(tool)
+                .collect(),
             ..ListToolsResult::default()
         })
     }
@@ -205,7 +241,15 @@ impl ServerHandler for Handler {
     ) -> Result<CallToolResponse, ErrorData> {
         let session = self.session(&request)?;
         let args = Value::Object(call.arguments.unwrap_or_default());
-        let outcome = match session.start(&call.name) {
+        let started = if session.allows(&call.name) {
+            session.start(&call.name)
+        } else {
+            Err(Failure::new(
+                "not_allowed",
+                format!("后台 agent 用不了 {}", call.name),
+            ))
+        };
+        let outcome = match started {
             Err(failure) => Err(failure),
             Ok(()) => tokio::select! {
             outcome = async {
@@ -237,6 +281,12 @@ impl ServerHandler for Handler {
 }
 
 impl Session {
+    /// A background agent's session calls only the tools that read; the
+    /// runner's own requests aren't for it.
+    fn allows(&self, name: &str) -> bool {
+        !self.job || MAX_TOOLS.iter().any(|tool| tool.name == name && tool.job)
+    }
+
     async fn call(&self, name: &str, args: Value) -> Result<Value, Failure> {
         if name == show::NAME {
             return show::run(&self.context, &self.shown, args).await;

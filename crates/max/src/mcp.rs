@@ -5,6 +5,7 @@ mod chat_file;
 mod context_read;
 mod context_search;
 mod find_stickers;
+mod forward;
 mod mute_member;
 mod recall_message;
 mod send_file;

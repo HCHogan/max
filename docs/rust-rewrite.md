@@ -1466,12 +1466,12 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
 - **通道**：cloud-hypervisor 的 hybrid vsock 里，guest 连主机的某个端口，会落到宿主上 `<vsock socket>_<端口>` 这个 unix socket，Haskell 版的就绪通知就走这条路。Max 在每个 VM 的这个位置监听一个端口，用 axum 加 rmcp 跑 Streamable HTTP。连进来的是哪个 VM，由 socket 路径决定。guest 里把 `127.0.0.1:7777` 转发到这个 vsock 端口，客户端都配 `http://127.0.0.1:7777/mcp`。IP 层照样连不到宿主，外面也照样连不进 VM。做成的：guest 里是 socket 激活，每个连接一个 socat 连到 vsock 的 2:7777；宿主在 VM 启动前就在 `notify.vsock_7777` 上监听，每个 VM 一个 MCP 服务，跟着 VM 起停。
 - **协议**（2026-10-29）：rmcp 3.8，协议版本 2026-07-28，无状态，回复用 JSON 不用 SSE。这个版本每个请求都要带 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name` 头，`_meta` 里也要有协议版本和客户端能力。runner 自己用 fetch 拼，不装 MCP 的 SDK。更早协议的客户端也收（2026-10-30）：pi 1.4 的是 2025-11-25，先发 `initialize`；rmcp 默认要给它建会话，而服务没有会话管理，回 500。关掉 `legacy_session_mode` 后它的每个请求各自处理。
-- **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群和 turn、允许的工具、在途的调用。现在只有 `run_code` 的会话，能用全部 Max 工具，也就是 `context_read`；会话还记着每个工具调了几次、失败几次，附在结果后面。
+- **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群和 turn、允许的工具、在途的调用。`run_code` 的会话能用全部 Max 工具；job 的会话只列、只许调标了 `job` 的工具（读的，不动群：`context_read`、`context_search`、`web_search`），别的回 `not_allowed`，另外能经 `/llm` 调它的模型，见[后台 agent](#后台-agent)。会话还记着每个工具调了几次、失败几次，附在结果后面。
 
   | 会话 | 能用的工具 | 生命周期 |
   |---|---|---|
   | `run_code` | 这个 turn 的工具，由 `RunSpec` 定 | 这一次运行 |
-  | 后台 job | 只读工具 | 这个 job |
+  | 后台 job | 标了 `job` 的工具，和 `/llm` | 这个 job |
 
 - **鉴权**：`Authorization: Bearer <token>`。token 所属的群必须和连进来的 VM 是同一个群。`tools/list` 只列出这个会话允许的工具。
 - **吊销是同步的**：从内存表里删掉会话，它在途调用的 future 一起 drop，所以可以放进 `Drop`。会话只存在内存里，Max 重启或崩溃后旧 token 全部失效，不需要过期时间。
@@ -1547,6 +1547,7 @@ v1 之后做。
 
 - 每个 job 驱动群 VM 里的一个 pi 进程，通过 stdio 上的 RPC JSONL 通信。
 - Max 定义自己的 `AgentBackend` 接口：开任务、steer、中断、事件流、结束报告。按 codex app-server 也能实现的标准设计，但只实现 pi。
+- **模型**（2026-10-30 定）：`[llm]` 里单独配 `job = { model, effort }`，没配就没有后台 agent。pi 不拿 provider 的 key：它的模型请求发到 VM 里的 `http://127.0.0.1:7777/llm/<端点>`，和 MCP 是同一个服务、同一个 token。宿主认出是哪个 job 的会话，把 `model` 换成配置里的，带上 provider 的 key 和头转过去，回答原样流回来。只认这个 provider 协议的端点（`chat/completions` 或 `responses`），请求最大 64 MiB；job 结束、会话吊销后 token 就没用了。没选的办法：cliproxy 的管理接口能在运行时加删 key，但改完要写回配置文件，tank 上那是 sops 渲染出来的；给 VM 一个固定的 cliproxy key，等于给了群里所有人。
 - 领域工具走 Max 的 MCP 服务，见 [MCP 通道](#mcp-通道)。每个 job 开一个会话，只开放只读工具，比如 `context_search`、`context_read`、`memory_list`；job 结束时吊销。pi 在 VM 里也能跑 codemode 的 runner，用 job 自己的会话批量调这些工具。
 - 会影响群的动作（发消息、发文件、撤回、禁言、建自动化）不给后台 agent。它的结果是一种输入（`JobResult`）：会话有核心在跑就喂给它，没有就作为触发起一个；由前台的模型决定怎么说。job 中途提问同样处理，人的回答再由前台用工具 steer 回去。
 
