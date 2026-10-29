@@ -5,6 +5,8 @@
 
 mod machine;
 pub mod ssh;
+#[cfg(test)]
+mod webread_tests;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

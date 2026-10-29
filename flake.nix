@@ -162,8 +162,10 @@
                 nativeBuildInputs = [
                   pkgs.postgresql_17
                   pkgs.cacert
-                  # Runs the guest's runner.
+                  # Run the guest's runner and webread.
                   pkgs.nodejs
+                  (pkgs.python3.withPackages (p: [ p.trafilatura ]))
+                  pkgs.poppler-utils
                 ];
                 # #[sqlx::test] makes a scratch database per test on this
                 # server. TCP only: a socket path under $TMPDIR can be too

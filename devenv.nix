@@ -7,8 +7,10 @@
     cargo-nextest
     sqlx-cli
     postgresql_17
-    # max's tests run the guest's runner.
+    # max's tests run the guest's runner and webread.
     nodejs
+    (python3.withPackages (p: [ p.trafilatura ]))
+    poppler-utils
   ];
 
   # `devenv up` starts it. The Haskell checkout's shell uses 5433, so the two

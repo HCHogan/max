@@ -67,7 +67,7 @@ pub const MAX_TOOLS: [MaxTool; 2] = [
         // Always shown: when the Haskell version kept it in a skill, the model
         // answered from memory instead, and got plots and prices wrong.
         declaration: "/** 搜索网页，返回前几条结果的标题、链接、摘要和发布日期（知道的话）。事实、价格、新闻、剧情这类拿不准或可能过时的，先搜再答，别凭记忆。\n  \
-        limit 1 到 10，默认 5。一次运行最多搜 20 次，要搜好几样就 Promise.all。要读全文，用 shell 在 VM 里抓。 */\n\
+        limit 1 到 10，默认 5。一次运行最多搜 20 次，要搜好几样就 Promise.all。要读全文，用 shell 跑 webread <url>。 */\n\
         web_search(args: { query: string; limit?: number }): Promise<{ results: { title: string; url: string; snippet: string; published?: string }[] }>;",
         per_run: Some(20),
     },

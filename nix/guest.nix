@@ -303,6 +303,9 @@ in
     perl
     # run_code's runner, and programs' own child processes.
     nodejs
+    # A page's text, as Markdown; PDFs through pdftotext.
+    (import ./webread.nix { inherit pkgs; })
+    poppler-utils
     jq
     ripgrep
     gnumake
