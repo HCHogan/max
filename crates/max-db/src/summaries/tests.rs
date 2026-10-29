@@ -61,6 +61,11 @@ async fn active_summaries_never_overlap(pool: PgPool) -> sqlx::Result<()> {
     // /clear --all after the earlier one leaves only the later.
     let cleared = active(&mut conn, conversation, Some(ids[2])).await?;
     assert_eq!(cleared.len(), 1);
+
+    let read = picked(&mut conn, conversation, &[later, earlier]).await?;
+    assert_eq!(read, all);
+    let other = ConversationId(conversation.0 + 1);
+    assert_eq!(picked(&mut conn, other, &[later]).await?, []);
     Ok(())
 }
 

@@ -1,0 +1,197 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,\n               m.sender_role, m.sent_at, m.kind, m.event, m.reply_to_id, m.target_id,\n               m.nodes as \"nodes: Json<Vec<Node>>\", m.raw, m.turn_id, d.status as \"delivery?\"\n        from messages m\n        left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id\n        where m.conversation_id = $1 and m.id = any($2)\n        order by m.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "conversation_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "conversation_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "endpoint_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "endpoint_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "sender_identity_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_identity_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "sender_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_name"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "sender_role",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_role"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "sent_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sent_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "event",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "event"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "reply_to_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "reply_to_id"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "target_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "target_id"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "nodes: Json<Vec<Node>>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "nodes"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "raw",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "raw"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "turn_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "turn_id"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "delivery?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deliveries",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "4ef4d210c234134924d14aeeaa82e35f9371e372c164bd7415d1cd6263585293"
+}

@@ -154,7 +154,8 @@ pub async fn active(
     conversation: ConversationId,
     after: Option<MessageId>,
 ) -> sqlx::Result<Vec<(SummaryId, Summary)>> {
-    let rows = sqlx::query!(
+    sqlx::query_as!(
+        Raw,
         r#"
         select id, first_message_id, last_message_id, started_at, ended_at, title, kind,
                importance, p1, p2, p3
@@ -166,28 +167,73 @@ pub async fn active(
         after.map_or(0, |id| id.0)
     )
     .fetch_all(conn)
-    .await?;
-    rows.into_iter()
-        .map(|row| {
-            let importance = u8::try_from(row.importance)
-                .map_err(|_| unknown("importance", &row.importance.to_string()))?;
-            Ok((
-                SummaryId(row.id),
-                Summary {
-                    first: MessageId(row.first_message_id),
-                    last: MessageId(row.last_message_id),
-                    started_at: row.started_at,
-                    ended_at: row.ended_at,
-                    title: row.title,
-                    kind: row.kind,
-                    importance,
-                    full: row.p1,
-                    brief: row.p2,
-                    line: row.p3,
-                },
-            ))
-        })
-        .collect()
+    .await?
+    .into_iter()
+    .map(Raw::summary)
+    .collect()
+}
+
+/// The conversation's summaries among `ids`, superseded or not, oldest
+/// first.
+pub async fn picked(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    ids: &[SummaryId],
+) -> sqlx::Result<Vec<(SummaryId, Summary)>> {
+    let ids: Vec<i64> = ids.iter().map(|id| id.0).collect();
+    sqlx::query_as!(
+        Raw,
+        r#"
+        select id, first_message_id, last_message_id, started_at, ended_at, title, kind,
+               importance, p1, p2, p3
+        from summaries
+        where conversation_id = $1 and id = any($2)
+        order by first_message_id
+        "#,
+        conversation.0,
+        &ids
+    )
+    .fetch_all(conn)
+    .await?
+    .into_iter()
+    .map(Raw::summary)
+    .collect()
+}
+
+struct Raw {
+    id: i64,
+    first_message_id: i64,
+    last_message_id: i64,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    title: String,
+    kind: String,
+    importance: i16,
+    p1: String,
+    p2: Option<String>,
+    p3: Option<String>,
+}
+
+impl Raw {
+    fn summary(self) -> sqlx::Result<(SummaryId, Summary)> {
+        let importance = u8::try_from(self.importance)
+            .map_err(|_| unknown("importance", &self.importance.to_string()))?;
+        Ok((
+            SummaryId(self.id),
+            Summary {
+                first: MessageId(self.first_message_id),
+                last: MessageId(self.last_message_id),
+                started_at: self.started_at,
+                ended_at: self.ended_at,
+                title: self.title,
+                kind: self.kind,
+                importance,
+                full: self.p1,
+                brief: self.p2,
+                line: self.p3,
+            },
+        ))
+    }
 }
 
 #[cfg(test)]

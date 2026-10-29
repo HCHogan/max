@@ -268,3 +268,36 @@ async fn what_the_classifier_and_the_sender_read(pool: PgPool) -> sqlx::Result<(
 
     Ok(())
 }
+
+#[sqlx::test]
+async fn the_rows_around_one(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let group = group(&mut conn, "group:30001").await?;
+    let other = crate::testing::group(&mut conn, "group:30002").await?;
+    let xiaoming = sender(group.xiaoming, "小明", None);
+    let elsewhere = sender(other.xiaoming, "小明", None);
+    let mut ids = Vec::new();
+    for minute in 0..6 {
+        ids.push(commit(&mut conn, &group, &xiaoming, &said("聊"), minute).await?);
+        // Another conversation's rows in between don't count.
+        commit(&mut conn, &other, &elsewhere, &said("聊"), minute).await?;
+    }
+    let conversation = group.endpoint.conversation;
+    assert_eq!(
+        around(&mut conn, conversation, ids[2], 1, 2).await?,
+        ids[1..=4]
+    );
+    assert_eq!(
+        around(&mut conn, conversation, ids[1], 5, 0).await?,
+        ids[0..=1]
+    );
+    // An id elsewhere is not among them.
+    let foreign = MessageId(ids[2].0 + 1);
+    let near = around(&mut conn, conversation, foreign, 1, 1).await?;
+    assert_eq!(near, ids[2..=4]);
+
+    let rows = picked(&mut conn, conversation, &[ids[3], foreign, ids[0]]).await?;
+    let read: Vec<MessageId> = rows.iter().map(|row| row.message.id).collect();
+    assert_eq!(read, [ids[0], ids[3]]);
+    Ok(())
+}

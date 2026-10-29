@@ -347,6 +347,67 @@ pub async fn row(
     Ok(rows(conn, conversation, Some(previous), id).await?.pop())
 }
 
+/// The rows of `ids` that are on this conversation's timeline, in
+/// timeline order.
+pub async fn picked(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    ids: &[MessageId],
+) -> sqlx::Result<Vec<Row>> {
+    let ids: Vec<i64> = ids.iter().map(|id| id.0).collect();
+    let mut rows = sqlx::query_as!(
+        Raw,
+        r#"
+        select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,
+               m.sender_role, m.sent_at, m.kind, m.event, m.reply_to_id, m.target_id,
+               m.nodes as "nodes: Json<Vec<Node>>", m.raw, m.turn_id, d.status as "delivery?"
+        from messages m
+        left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id
+        where m.conversation_id = $1 and m.id = any($2)
+        order by m.id
+        "#,
+        conversation.0,
+        &ids
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(Raw::row)
+    .collect::<sqlx::Result<Vec<Row>>>()?;
+    captioned(conn, &mut rows).await?;
+    Ok(rows)
+}
+
+/// The ids of up to `before` rows before `id`, `id` itself and up to
+/// `after` rows after it, in timeline order. `id` is among them only if it
+/// is on this conversation's timeline.
+pub async fn around(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    id: MessageId,
+    before: i64,
+    after: i64,
+) -> sqlx::Result<Vec<MessageId>> {
+    let ids = sqlx::query_scalar!(
+        r#"
+        select id as "id!" from (
+            (select id from messages where conversation_id = $1 and id < $2
+             order by id desc limit $3)
+            union all
+            (select id from messages where conversation_id = $1 and id >= $2
+             order by id limit $4)
+        ) near order by id
+        "#,
+        conversation.0,
+        id.0,
+        before,
+        after + 1
+    )
+    .fetch_all(conn)
+    .await?;
+    Ok(ids.into_iter().map(MessageId).collect())
+}
+
 /// The row a platform id names in this endpoint: someone's message, or
 /// one Max sent.
 pub async fn by_native_id(

@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select id as \"id!\" from (\n            (select id from messages where conversation_id = $1 and id < $2\n             order by id desc limit $3)\n            union all\n            (select id from messages where conversation_id = $1 and id >= $2\n             order by id limit $4)\n        ) near order by id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2b0abe3c843c9de74c206f57032f9006a23eed103b138a692ea9fd145e20b823"
+}
