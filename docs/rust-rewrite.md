@@ -1054,7 +1054,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
   - 尾巴和摘要里只有文字：`[image#123.0: caption]`，还没有 caption 就是 `[image#123.0]`。历史里的图不发图：Haskell 版的教训是它们抢注意力（0ec5752）。caption 到了，那一行就变，接受这一次缓存失效，见[前缀稳定的规则](#前缀稳定的规则)。
   - 附图：第一批输入和它们引用的消息里的图和表情包，作为真正的图片输入跟在易变块后面，每张标上句柄；后续输入里的图跟在 `[新消息]` 块后面。一次运行最多 8 张，多的只留文字。每张先按 1200 token 估，之后以 provider 报的用量为准。
   - 不支持看不了图的模型（2026-10-29 owner 定）：Max 用的模型都当作能看图，不设 `input` 配置，也不做纯文字的降级。意图分类和 historian 只读文字，不受影响。
-  - 想看历史里的图，在程序里调 `max.image('image#123.0')`，见[多模态结果](#多模态结果)。
+  - 想看历史里的图，在程序里调 `max.image('image#123.0')`（还没做，现在只收 `/work` 下的文件），见[多模态结果](#多模态结果)。
 - **请求里**：条目只存引用（原则 7）。`User` 条目带一个 `images` 列表，每项是"哪条消息的第几个媒体"，不是 sha256：消息一入账就要展示，那时图通常还没下完。每次调模型前，`max` 查 `message_media` 和 `media` 找到给模型的版本，从内容库读出来，编成 base64 的 data URL 交给 `max-llm`。Responses 降成 `input_image`，Chat 降成 `image_url`，每张前面一段文字写句柄。入账不到 10 秒、还没下完的图就等它，在调模型的任务里等，不卡会话 actor；更早的、下不来的、读不出的直接不发，只记警告，句柄还在文字里。不传 QQ 的地址，它会过期，provider 也未必访问得到。
 - **`/chat`**：VM 里只读挂一个这个会话的媒体视图，`/chat/<消息id>.<序号>.<扩展名>`，硬链接到内容库，下载时建，起 VM 时补齐。
 
@@ -1065,7 +1065,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 3. caption worker，表情包另用一个提示词；导入老的图片描述和表情包。2026-10-29 上线：模型是经 cliproxy 的 GPT-5.6 Luna，effort low；老描述在新 maxx 启动前导好（图 21,040、表情包 3,421，其中 94 个 SKIP），启动扫描补了最近 14 天漏掉的 10 张。
 4. 发图：qqbot 的上传，sender 发图和 `file_info` 缓存，分段器留下句柄、入账时解析，`send_image`。2026-10-29 上线，群里实测：回复里写句柄发出了 JPEG 和 GIF 表情包（GIF 会动），`send_image` 发出了 VM 里画的 PNG，带说明文字。
 5. 表情包库：embedding 和 `find_stickers`。2026-10-29 做完，见[发图](#发图)的 `max.find_stickers`。
-6. `/chat` 和 `max.image()`。
+6. `/chat` 和 `max.image()`。`max.image()` 收 `/work` 下的图，2026-10-29 做完；`/chat` 和消息句柄还没做。
 
 ### 发图
 
@@ -1463,6 +1463,13 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
   Hermes 加这类预算的起因，是一个子 agent 在 15 分钟里把 5 张截图重新加载了 158 次。
 
+做成的（2026-10-29，先只做图）：
+
+- **SDK**：`await max.image(src)`，`src` 是 `/work` 下的路径，或者图片的 Buffer（比如 `page.screenshot()` 的返回值）。Buffer 先写进 `/work/.max/shown/`，宿主存好就删。返回原图的 `{width, height}`；读不了、不是图、超过上限都抛 `ToolError`。消息句柄、`/chat` 和视频还没做。
+- **怎么交给宿主**：runner 用这次运行的 token 发一个 MCP 调用 `max.image`，只带路径；它不是 Max 的工具，不在工具列表里，也不算进"调了 Max 的工具"。宿主像 `send_image` 那样一段一段打开 `/work` 下的文件、不跟符号链接、10 MiB 封顶，用和下载一样的办法做给模型的版本（长边 1568 的 JPEG，或者原图），存进内容库，记进这次 MCP 会话。程序结束后，`run_code` 的结果在文字后面按顺序加上这些图（`Part::Media`，内容库的 sha256），每张按 1200 token 估。
+- **预算**：一次 `run_code` 最多交 4 张，同一张（hash 相同）只算一次。组装请求时只带工具结果里最新的 8 张，更早的在那个位置写"[这张图省略了，要看再 max.image]"，turn 记录不变。"同上文图 x"没做。
+- **降级**：Responses 把有图的结果写成 `input_text` 和 `input_image` 的数组，没图的仍是字符串。Chat 在 tool 消息里写"[图 n，见下]"，连着的几条 tool 消息之后跟一条 user 消息，按编号放图。
+
 ### 网页搜索
 
 2026-10-29 定，排在媒体第 1 小步之后（owner 选的）。`web_search` 当天做完：配置 `[search] api_key_file`，不配就回 `unavailable`；所有群合计同时最多 4 个搜索；没有单独的超时，MCP 执行器的 60 秒管着；每个 Max 工具可以声明一次运行最多调几次（`per_run`），超了回 `too_many`。
@@ -1588,7 +1595,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 2. **`max-core`**（2026-10-28 完成）：消息类型、渲染、分段器、核心和 intent 两个状态机、投影，全用 fake 测。两个状态机的签名在这一步定下来，写的时候改动的地方已经更新到[核心](#核心)和 [intent](#intent) 两节。
 3. **`max-db`**（2026-10-28 完成）：四个迁移覆盖 v1 表里平台、ledger、turn、用量和摘要几块（媒体和记忆随功能加），以及会话 actor 和 sender 要用的查询，全部用 `#[sqlx::test]` 测（10-29 加了第 6 个迁移，去掉恢复用的表和列）。写的时候定下的细节已经补进 [schema](#schema)。
 4. **`qqbot`**（2026-10-28 从 `onebot` 改，10-29 完成）：token、网关、事件和 REST 的类型、发送和撤回，fixture 里用假 openid。网关会话是不做 I/O 的状态机，断线、Resume、僵死连接和各个关闭码都在里面测；驱动用本地 WebSocket 服务测。`listen` 例子只连网关、打印事件，不发消息。
-5. **`max-llm`**（2026-10-29 完成）：Responses 和 Chat 两种协议的请求降级和流式解析，解析器不做 I/O。客户端一次只发一次，用 `Error::retryable` 给错误分类；重不重试由 `max` 的模型调用任务决定，因为只有它知道有没有已经说出去的文字。录了四家的真实响应做回放测试：cliproxy 的 gpt-5.6-luna 走 Responses，加密推理原样回传；cliproxy 的 Gemini、DeepSeek、taipan 上的 Qwen 走 Chat，带 `reasoning_content`。录的时候发现两件事：一是 Responses 默认把函数工具设成 strict，会把可选参数全变成必填，所以显式发 `strict: false`；二是 Gemini 会报推理 token 却不给推理内容，这部分不算进任何条目，因为条目的 token 是它下次再发时的花费。NInfer 的缓存断点做成 Chat 的选项：后面紧跟另一个 user 条目的 user 条目打断点，也就是基础上下文里易变块之前的那几块，已在 taipan 上验证。工具结果里的图片在第 9 步之前先降成"[图片省略]"。
+5. **`max-llm`**（2026-10-29 完成）：Responses 和 Chat 两种协议的请求降级和流式解析，解析器不做 I/O。客户端一次只发一次，用 `Error::retryable` 给错误分类；重不重试由 `max` 的模型调用任务决定，因为只有它知道有没有已经说出去的文字。录了四家的真实响应做回放测试：cliproxy 的 gpt-5.6-luna 走 Responses，加密推理原样回传；cliproxy 的 Gemini、DeepSeek、taipan 上的 Qwen 走 Chat，带 `reasoning_content`。录的时候发现两件事：一是 Responses 默认把函数工具设成 strict，会把可选参数全变成必填，所以显式发 `strict: false`；二是 Gemini 会报推理 token 却不给推理内容，这部分不算进任何条目，因为条目的 token 是它下次再发时的花费。NInfer 的缓存断点做成 Chat 的选项：后面紧跟另一个 user 条目的 user 条目打断点，也就是基础上下文里易变块之前的那几块，已在 taipan 上验证。工具结果里的图片 2026-10-29 随 `max.image()` 降成真正的图，见[多模态结果](#多模态结果)。
 6. **tank 上的 `maxx`**（2026-10-29 完成）：`nixosModules.maxx` 按名字生成用户、Postgres 角色和库、目录、slice、target 和服务，配置文件在构建时跑 `max check-config`；`nixosModules.max` 是同一个 module 换成上线后的名字。`max` 现在只做三件事：迁移数据库，用 QQ 凭据问一次自己是谁，等 SIGTERM。QQ 的 AppID 和 secret 在 sops 的 `maxx/` 下。module 有一个 VM 测试，用和 tank 一样的 Postgres 16。部署时遇到两件事：一是 sqlx 0.9 不认 `postgresql://max@/max?host=…`（有用户名就不能是空主机），改成 `postgresql:///max?host=/run/postgresql&user=max`；二是 tank 的集群建在 glibc 2.40 上，系统现在是 2.42，`template1` 的 collation 版本对不上，新建库就失败，所以刷新了 `template1` 的版本记录（它里面没有用户对象）。同一天按 owner 的意思，把 `postgres`、`luckperms`、`minecraft`、`matrix-synapse` 几个库 `REINDEX DATABASE CONCURRENTLY` 加 `REINDEX SYSTEM` 后也刷新了。
 7. **`max`**（2026-10-29 完成，测试群里实测过）：配置、会话表和会话 actor、I/O 任务、平台 sender 和 `deliveries`、QQ 适配和 `/bind`、命令、intent。做完第一次实机：测试群里纯文字对话，顺便实测 [QQ 官方机器人](#qq-官方机器人)里标了实测的几项。工具在第 9 步之前一律回错误"工具还没接上，现在用不了。"。实测结果：`/bind` 接上测试群；@ 的对话和闲聊经 intent 判定都正常；停服务 2 分钟和 10 分钟，网关都 Resume 上了，停机期间的 @ 补发过来并且回答了。10 分钟那次回答被 QQ 拒了（40034005），被动回复的窗口改成按消息的发送时间算。同一天按 owner 的意思做了一轮减法：核心撞上限就认输，不再交接（见[运行流程](#运行流程)第 4 步）；重启时给宽限期再中断，不再挂起恢复（见[重启](#重启)）；intent 只留去抖、小模型判定和每小时上限（见 [intent](#intent)）；Max 不发表情；Matrix 先不做。这一步定下的：命令输出留在同一个会话（见[出站](#出站)）、命令权限（见[权限](#权限)）、actor 测试用真实时间（见[核心和 actor 的测试](#核心和-actor-的测试)）、一段老记录只接一个群（见 [QQ 官方机器人](#qq-官方机器人)）。tank 上的主模型是经 cliproxy 的 Gemini 3.8 Flash（Chat 协议），intent 用 h610 上的 qwen3.5-4b。
 8. ~~**Matrix**，带加密房间和 `matrix-bootstrap`~~：2026-10-29 删，先不做，见 [Matrix](#matrix)。

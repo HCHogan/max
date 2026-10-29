@@ -7,12 +7,12 @@
 //! is said while it streams.
 
 use max_core::ids::CallId;
-use max_core::item::{Image, Item, ItemKind, ModelOutput, ModelTag, ToolCall, Usage};
+use max_core::item::{Image, Item, ItemKind, ModelOutput, ModelTag, ToolCall, ToolOutput, Usage};
 use max_core::run::Request;
 use serde_json::{Map, Value, json};
 use tracing::warn;
 
-use crate::{Error, Event, Options, Pictures, Piece, pieces, share_tokens, tool_text};
+use crate::{Error, Event, Options, Pictures, Piece, pieces, plain, share_tokens, tool_pieces};
 
 /// The request body.
 pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value {
@@ -46,7 +46,7 @@ pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value 
             ItemKind::ToolResult { call, output } => input.push(json!({
                 "type": "function_call_output",
                 "call_id": call,
-                "output": tool_text(output),
+                "output": tool_output(output, pictures),
             })),
         }
     }
@@ -100,15 +100,25 @@ pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value 
 fn user_content(text: &str, images: &[Image], pictures: &Pictures) -> Value {
     match pieces(text, images, pictures) {
         None => json!(text),
-        Some(pieces) => pieces
-            .into_iter()
-            .map(|piece| match piece {
-                Piece::Text(text) => json!({ "type": "input_text", "text": text }),
-                Piece::Picture(url) => {
-                    json!({ "type": "input_image", "image_url": url, "detail": "auto" })
-                }
-            })
-            .collect(),
+        Some(pieces) => pieces.into_iter().map(wire).collect(),
+    }
+}
+
+/// A tool result's output: its text, or with pictures, its pieces.
+fn tool_output(output: &ToolOutput, pictures: &Pictures) -> Value {
+    let pieces = tool_pieces(output, pictures);
+    match plain(&pieces) {
+        Some(text) => json!(text),
+        None => pieces.into_iter().map(wire).collect(),
+    }
+}
+
+fn wire(piece: Piece<'_>) -> Value {
+    match piece {
+        Piece::Text(text) => json!({ "type": "input_text", "text": text }),
+        Piece::Picture(url) => {
+            json!({ "type": "input_image", "image_url": url, "detail": "auto" })
+        }
     }
 }
 

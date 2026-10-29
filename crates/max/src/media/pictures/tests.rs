@@ -120,3 +120,64 @@ async fn pictures_are_read_and_new_ones_waited_for(pool: PgPool) {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn the_newest_pictures_programs_showed_are_read(pool: PgPool) {
+    let dir = std::env::temp_dir().join(format!("max-shown-{:016x}", rand::random::<u64>()));
+    let store = Arc::new(Store::open(&dir).await.unwrap());
+    let mut stored = Vec::new();
+    for width in 1..=10 {
+        let mut bytes = Cursor::new(Vec::new());
+        image::RgbImage::new(width, 1)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        stored.push(store.put(bytes.into_inner()).await.unwrap());
+    }
+    let result = |shown: &[String]| {
+        let parts = shown
+            .iter()
+            .map(|sha256| Part::Media {
+                media: MediaRef::Blob(sha256.clone()),
+            })
+            .collect();
+        let output = max_core::item::ToolOutput {
+            parts,
+            error: false,
+            tokens: 1,
+        };
+        Item::new(
+            ItemKind::ToolResult {
+                call: max_core::ids::CallId("call_1".into()),
+                output,
+            },
+            1,
+        )
+    };
+    // The first again, last: it counts where it was shown last.
+    let mut later = stored[5..].to_vec();
+    later.push(stored[0].clone());
+    let request = Request {
+        model: ModelTag {
+            protocol: Protocol::Chat,
+            model: "qwen3.8-27b".into(),
+        },
+        items: vec![result(&stored[..5]), result(&later)],
+        tools: &[],
+        max_output: None,
+        roster: BTreeSet::new(),
+    };
+    let pictures = Pictures { pool, store };
+    let read = pictures.read(&request).await;
+    let mut expected: Vec<&String> = [0, 3, 4, 5, 6, 7, 8, 9]
+        .iter()
+        .map(|&n| &stored[n])
+        .collect();
+    expected.sort();
+    assert_eq!(read.0.keys().collect::<Vec<_>>(), expected);
+    assert!(
+        read.0
+            .values()
+            .all(|url| url.starts_with("data:image/png;base64,"))
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

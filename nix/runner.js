@@ -3,12 +3,15 @@
 //
 // stdin is one JSON object: {code, args, token, tools}. code is an async
 // function body; tools.<name>(args) calls one of Max's tools through the
-// MCP service with the run's token, and max.browser() opens a page in the
-// run's browser (browser.js). stdout gets the program's result and nothing
+// MCP service with the run's token, max.image() shows the model a picture
+// after the result, and max.browser() opens a page in the run's browser
+// (browser.js). stdout gets the program's result and nothing
 // else: its console and its own writes go to stderr. The exit status is 0
 // when the program returned, 1 when it threw.
 "use strict";
 
+const { randomUUID } = require("node:crypto");
+const { mkdir, rm, writeFile } = require("node:fs/promises");
 const { format, inspect } = require("node:util");
 const { browser, snapshot } = require("./browser.js");
 
@@ -34,8 +37,9 @@ async function main() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  // Tests point the runner at their own server.
+  // Tests point the runner at their own server, and their own /work.
   const url = input.mcp ?? MCP;
+  const work = input.work ?? "/work";
 
   let nextId = 1;
   // The outcome of one call: {ok: true, value} or {ok: false, error}.
@@ -117,9 +121,32 @@ async function main() {
     )));
   };
 
+  // A picture for the model to see after the result: a file in /work, or
+  // its bytes, which go to one there for the host to read.
+  const image = async src => {
+    let path = src;
+    let written;
+    if (src instanceof Uint8Array) {
+      const name = randomUUID();
+      await mkdir(`${work}/.max/shown`, { recursive: true });
+      written = `${work}/.max/shown/${name}`;
+      await writeFile(written, src);
+      path = `/work/.max/shown/${name}`;
+    } else if (typeof src !== "string") {
+      throw new TypeError("max.image 要 /work 下图片的路径，或者图片的 Buffer");
+    }
+    try {
+      const outcome = await request("max.image", { path });
+      if (!outcome.ok) throw new ToolError("max.image", outcome.error);
+      return outcome.value;
+    } finally {
+      if (written) await rm(written, { force: true });
+    }
+  };
+
   const tools = Object.create(null);
   for (const name of input.tools) tools[name] = args => call(name, args);
-  const max = Object.freeze({ raw, cancel, race, browser, snapshot });
+  const max = Object.freeze({ raw, cancel, race, image, browser, snapshot });
   const AsyncFunction = (async () => {}).constructor;
   const program = new AsyncFunction("tools", "max", "args", input.code);
   return program(Object.freeze(tools), max, input.args);

@@ -8,6 +8,9 @@
 //! `opaque` and merged back when the same model sees them again. Models
 //! that write their reasoning inline, as a leading `<think>` block, get it
 //! split off so it isn't said.
+//!
+//! A tool message holds only text, and some providers take nothing else
+//! there; the pictures tool results show follow them in a user message.
 
 use std::collections::BTreeMap;
 
@@ -16,7 +19,7 @@ use max_core::item::{Image, Item, ItemKind, ModelOutput, ModelTag, ToolCall, Usa
 use max_core::run::Request;
 use serde_json::{Map, Value, json};
 
-use crate::{Error, Event, Options, Pictures, Piece, pieces, share_tokens, tool_text};
+use crate::{Error, Event, Options, Pictures, Piece, pieces, share_tokens, tool_pieces};
 
 const THINK: &str = "<think>";
 const UNTHINK: &str = "</think>";
@@ -25,7 +28,12 @@ const UNTHINK: &str = "</think>";
 pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value {
     let mut messages = Vec::new();
     let mut turn: Option<Assistant> = None;
+    // The pictures of the tool results so far in a row.
+    let mut shown: Vec<&str> = Vec::new();
     for (index, item) in request.items.iter().enumerate() {
+        if !matches!(item.kind, ItemKind::ToolResult { .. }) && !shown.is_empty() {
+            messages.push(pictures_shown(&std::mem::take(&mut shown)));
+        }
         let ours = item.source.as_ref() == Some(&request.model);
         let raw = item.opaque.as_ref().filter(|_| ours);
         // What a model wrote, as opposed to what Max shows it.
@@ -86,12 +94,27 @@ pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value 
                 }
                 turn.get_or_insert_default().calls.push(wire);
             }
-            ItemKind::ToolResult { call, output } => messages.push(json!({
-                "role": "tool",
-                "tool_call_id": call,
-                "content": tool_text(output),
-            })),
+            ItemKind::ToolResult { call, output } => {
+                let mut text = Vec::new();
+                for piece in tool_pieces(output, pictures) {
+                    match piece {
+                        Piece::Text(said) => text.push(said),
+                        Piece::Picture(url) => {
+                            shown.push(url);
+                            text.push(format!("[图 {}，见下]", shown.len()).into());
+                        }
+                    }
+                }
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call,
+                    "content": text.join("\n"),
+                }));
+            }
         }
+    }
+    if !shown.is_empty() {
+        messages.push(pictures_shown(&shown));
     }
     messages.extend(turn.map(Assistant::message));
 
@@ -150,6 +173,21 @@ fn user_content(text: &str, images: &[Image], pictures: &Pictures, breakpoint: b
         last["prompt_cache_breakpoint"] = json!({ "mode": "explicit" });
     }
     Value::Array(parts)
+}
+
+/// The pictures of tool results in a row, numbered as their text names
+/// them.
+fn pictures_shown(urls: &[&str]) -> Value {
+    let content: Vec<Value> = (1..)
+        .zip(urls)
+        .flat_map(|(n, url)| {
+            [
+                json!({ "type": "text", "text": format!("[图 {n}]") }),
+                json!({ "type": "image_url", "image_url": { "url": url } }),
+            ]
+        })
+        .collect();
+    json!({ "role": "user", "content": content })
 }
 
 /// One model call's items, on their way back to one message.

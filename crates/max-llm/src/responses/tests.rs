@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use max_core::ids::MessageId;
-use max_core::item::{Image, Protocol, ToolOutput};
-use max_core::message::MediaKind;
+use max_core::item::{Image, Part, Protocol, ToolOutput};
+use max_core::message::{MediaKind, MediaRef};
 use max_core::tools::TOOLS;
 
 use super::*;
@@ -291,4 +291,57 @@ fn ends_that_are_not_complete() {
     let error = json!({ "type": "error", "code": "invalid_request_error", "message": "bad" });
     assert!(!parser.event(&error.to_string()).unwrap_err().retryable());
     assert!(matches!(parser.event("{"), Err(Error::Malformed(_))));
+}
+
+/// A program's result with two pictures, of which the request carries
+/// only the first.
+fn shown(call: &str) -> Item {
+    let blob = |sha256: &str| Part::Media {
+        media: MediaRef::Blob(sha256.into()),
+    };
+    let output = ToolOutput {
+        parts: vec![
+            Part::Text {
+                text: "返回值：\n截好了".into(),
+            },
+            blob("aa"),
+            blob("bb"),
+        ],
+        error: false,
+        tokens: 1,
+    };
+    Item::new(
+        ItemKind::ToolResult {
+            call: CallId(call.into()),
+            output,
+        },
+        1,
+    )
+}
+
+#[test]
+fn a_programs_pictures_go_in_its_output() {
+    let request = Request {
+        model: luna(),
+        items: vec![shown("call_1")],
+        tools: &[],
+        max_output: None,
+        roster: BTreeSet::new(),
+    };
+    let pictures = Pictures([("aa".to_owned(), "data:image/png;base64,AA".to_owned())].into());
+    let body = body(&request, &Options::default(), &pictures);
+    assert_eq!(
+        body["input"][0]["output"],
+        json!([
+            { "type": "input_text", "text": "返回值：\n截好了" },
+            { "type": "input_image", "image_url": "data:image/png;base64,AA", "detail": "auto" },
+            { "type": "input_text", "text": "[这张图省略了，要看再 max.image]" },
+        ])
+    );
+    // Without pictures to send, the output stays text.
+    let body = super::body(&request, &Options::default(), &Pictures::default());
+    assert_eq!(
+        body["input"][0]["output"],
+        "返回值：\n截好了\n[这张图省略了，要看再 max.image]\n[这张图省略了，要看再 max.image]"
+    );
 }

@@ -1,13 +1,16 @@
 //! What the model's tool calls do; see "工具和 codemode". Both run in the
 //! group's VM: `shell` a command, `run_code` a program in the guest's
-//! runner, which calls Max's tools through the MCP service.
+//! runner, which calls Max's tools through the MCP service and shows the
+//! model pictures after its result.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
-use max_core::item::ToolOutput;
+use max_core::item::{Part, ToolOutput};
+use max_core::message::MediaRef;
+use max_core::project::PICTURE_TOKENS;
 use max_core::tools::{MAX_TOOLS, Tool};
 use serde_json::json;
 use tokio::fs;
@@ -49,6 +52,7 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
     let limit = timeout_ms
         .map_or(SHELL_TIME, Duration::from_millis)
         .clamp(Duration::from_secs(1), SHELL_TIME_MAX);
+    let mut pictures = Vec::new();
     let ran = match tool {
         Tool::RunCode { code, args, .. } => {
             let context = mcp::Context {
@@ -56,16 +60,25 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
                 ..context
             };
             let grant = vms.open(context);
-            run_code(&vm, &grant, &code, args, limit).await
+            let ran = run_code(&vm, &grant, &code, args, limit).await;
+            pictures = grant.shown();
+            ran
         }
         Tool::Shell {
             command, workdir, ..
         } => shell(&vm, &command, workdir.as_deref(), limit).await,
     };
-    match ran {
+    let mut output = match ran {
         Ok((shown, error)) => text(shown, error),
         Err(error) => text(format!("{name} 没跑成：{error:#}"), true),
+    };
+    for sha256 in pictures {
+        output.parts.push(Part::Media {
+            media: MediaRef::Blob(sha256),
+        });
+        output.tokens += PICTURE_TOKENS;
     }
+    output
 }
 
 /// The systemd-run line that runs `command` as the unit `unit`, at most

@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use max_core::ids::MessageId;
-use max_core::item::{Image, Protocol, ToolOutput};
-use max_core::message::MediaKind;
+use max_core::item::{Image, Part, Protocol, ToolOutput};
+use max_core::message::{MediaKind, MediaRef};
 use max_core::tools::TOOLS;
 
 use super::*;
@@ -432,4 +432,72 @@ fn ends_that_are_not_complete() {
             .retryable()
     );
     assert!(matches!(parser.event("data"), Err(Error::Malformed(_))));
+}
+
+/// A program's result with two pictures, of which the request carries
+/// only the first.
+fn shown(call: &str) -> Item {
+    let blob = |sha256: &str| Part::Media {
+        media: MediaRef::Blob(sha256.into()),
+    };
+    let output = ToolOutput {
+        parts: vec![
+            Part::Text {
+                text: "返回值：\n截好了".into(),
+            },
+            blob("aa"),
+            blob("bb"),
+        ],
+        error: false,
+        tokens: 1,
+    };
+    Item::new(
+        ItemKind::ToolResult {
+            call: CallId(call.into()),
+            output,
+        },
+        1,
+    )
+}
+
+#[test]
+fn programs_pictures_follow_their_results() {
+    let qwen = model("qwen3.8-27b");
+    let request = Request {
+        model: qwen.clone(),
+        items: vec![
+            from(&qwen, ItemKind::ToolCall(call("call_1", "{}")), None),
+            from(&qwen, ItemKind::ToolCall(call("call_2", "{}")), None),
+            shown("call_1"),
+            shown("call_2"),
+            Item::new(ItemKind::user("后来"), 1),
+        ],
+        tools: &[],
+        max_output: None,
+        roster: BTreeSet::new(),
+    };
+    let url = "data:image/png;base64,AA";
+    let pictures = Pictures([("aa".to_owned(), url.to_owned())].into());
+    let messages = body(&request, &Options::default(), &pictures)["messages"].clone();
+    let text = |n| format!("返回值：\n截好了\n[图 {n}，见下]\n[这张图省略了，要看再 max.image]");
+    assert_eq!(messages[1]["content"], text(1));
+    assert_eq!(messages[2]["content"], text(2));
+    assert_eq!(
+        messages[3],
+        json!({ "role": "user", "content": [
+            { "type": "text", "text": "[图 1]" },
+            { "type": "image_url", "image_url": { "url": url } },
+            { "type": "text", "text": "[图 2]" },
+            { "type": "image_url", "image_url": { "url": url } },
+        ] })
+    );
+    assert_eq!(messages[4]["content"], "后来");
+    assert_eq!(messages.as_array().unwrap().len(), 5);
+
+    // At the end of the request, too.
+    let mut request = request;
+    request.items.pop();
+    let messages = body(&request, &Options::default(), &pictures)["messages"].clone();
+    assert_eq!(messages[3]["role"], "user");
+    assert_eq!(messages.as_array().unwrap().len(), 4);
 }

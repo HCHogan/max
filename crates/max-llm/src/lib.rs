@@ -18,6 +18,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use max_core::item::{Image, Item, ItemKind, Part, ToolOutput, Usage};
+use max_core::message::MediaRef;
 use max_core::tools::ToolSpec;
 use serde_json::Value;
 
@@ -33,10 +34,10 @@ pub struct Options {
     pub cache_breakpoints: bool,
 }
 
-/// The pictures a request's items name, as data URLs by handle. `max`
-/// reads them before the call. One it couldn't read, or that isn't
-/// downloaded, is left out of the request; its handle is still in the
-/// text.
+/// The pictures a request's items name, as data URLs: a row's by handle,
+/// a tool result's by SHA-256. `max` reads them before the call. One it
+/// couldn't read, or that isn't downloaded, is left out of the request;
+/// its handle is still in the text.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Pictures(pub BTreeMap<String, String>);
 
@@ -80,18 +81,38 @@ fn schema(tool: &ToolSpec) -> Value {
     serde_json::from_str(tool.parameters).expect("max-core's tool schemas are JSON")
 }
 
-/// A tool result as text. Media parts become placeholders until images
-/// are lowered properly, with the VM's tools.
-fn tool_text(output: &ToolOutput) -> String {
+/// What a tool result says where a picture was that the request doesn't
+/// carry: an old one, past the budget, or one gone from the store.
+const LEFT_OUT: &str = "[这张图省略了，要看再 max.image]";
+
+/// A tool result's pieces: its text, and the pictures it shows.
+fn tool_pieces<'a>(output: &'a ToolOutput, pictures: &'a Pictures) -> Vec<Piece<'a>> {
     output
         .parts
         .iter()
         .map(|part| match part {
-            Part::Text { text } => text.as_str(),
-            Part::Media { .. } => "[图片省略]",
+            Part::Text { text } => Piece::Text(text.into()),
+            Part::Media {
+                media: MediaRef::Blob(sha256),
+            } => pictures
+                .0
+                .get(sha256)
+                .map_or(Piece::Text(LEFT_OUT.into()), |url| Piece::Picture(url)),
+            Part::Media { .. } => Piece::Text(LEFT_OUT.into()),
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect()
+}
+
+/// The pieces' text, if there is no picture among them.
+fn plain(pieces: &[Piece<'_>]) -> Option<String> {
+    pieces
+        .iter()
+        .map(|piece| match piece {
+            Piece::Text(text) => Some(text.as_ref()),
+            Piece::Picture(_) => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|texts| texts.join("\n"))
 }
 
 /// Spreads the provider's output count over the items it produced, by the

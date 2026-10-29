@@ -23,7 +23,7 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use super::{Context, Failure};
+use super::{Context, Failure, show};
 
 /// One call's wall clock.
 const CALL_TIME: Duration = Duration::from_secs(60);
@@ -47,6 +47,8 @@ struct Session {
     calls: Mutex<BTreeMap<String, (u32, u32)>>,
     /// Per tool with a cap: calls started.
     started: Mutex<HashMap<&'static str, u32>>,
+    /// The pictures the program has shown the model, in order.
+    shown: Mutex<Vec<String>>,
 }
 
 /// An open session. Dropping it closes the session: the token stops
@@ -71,6 +73,7 @@ impl Sessions {
             slots: Semaphore::new(CALLS_AT_ONCE),
             calls: Mutex::default(),
             started: Mutex::default(),
+            shown: Mutex::default(),
         });
         self.table().insert(token.clone(), Arc::clone(&session));
         Grant {
@@ -98,6 +101,15 @@ impl Grant {
     pub fn calls(&self) -> BTreeMap<String, (u32, u32)> {
         self.session
             .calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The pictures shown so far, by SHA-256, in order.
+    pub fn shown(&self) -> Vec<String> {
+        self.session
+            .shown
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
@@ -195,7 +207,7 @@ impl ServerHandler for Handler {
             Ok(()) => tokio::select! {
             outcome = async {
                 let _slot = session.slots.acquire().await;
-                timeout(CALL_TIME, super::call(&call.name, &session.context, args)).await
+                timeout(CALL_TIME, session.call(&call.name, args)).await
             } => outcome.unwrap_or_else(|_| Err(Failure::new(
                 "timeout",
                 format!("{} 秒内没做完；{MAYBE_DONE}", CALL_TIME.as_secs()),
@@ -204,15 +216,15 @@ impl ServerHandler for Handler {
             () = request.ct.cancelled() => Err(Failure::new("cancelled", format!("调用取消了；{MAYBE_DONE}"))),
             },
         };
-        let mut calls = session.calls.lock().unwrap_or_else(PoisonError::into_inner);
-        let (succeeded, failed) = calls.entry(call.name.to_string()).or_default();
+        // The model sees the pictures shown themselves.
+        if call.name != show::NAME {
+            let mut calls = session.calls.lock().unwrap_or_else(PoisonError::into_inner);
+            let (succeeded, failed) = calls.entry(call.name.to_string()).or_default();
+            *if outcome.is_ok() { succeeded } else { failed } += 1;
+        }
         let result = match outcome {
-            Ok(value) => {
-                *succeeded += 1;
-                CallToolResult::structured(value)
-            }
+            Ok(value) => CallToolResult::structured(value),
             Err(Failure { code, message }) => {
-                *failed += 1;
                 CallToolResult::structured_error(json!({ "code": code, "message": message }))
             }
         };
@@ -221,6 +233,13 @@ impl ServerHandler for Handler {
 }
 
 impl Session {
+    async fn call(&self, name: &str, args: Value) -> Result<Value, Failure> {
+        if name == show::NAME {
+            return show::run(&self.context, &self.shown, args).await;
+        }
+        super::call(name, &self.context, args).await
+    }
+
     /// Counts a call against its tool's cap, if it has one and the run
     /// hasn't reached it.
     fn start(&self, name: &str) -> Result<(), Failure> {

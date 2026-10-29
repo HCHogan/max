@@ -91,13 +91,13 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     Ok(json!({ "handle": format!("image#{id}.0") }))
 }
 
-fn internal() -> Failure {
+pub(super) fn internal() -> Failure {
     Failure::new("internal", "出错了，稍后再试。")
 }
 
 /// The path under /work that `path` names, from /work: absolute within
 /// it, or relative to it. No `..`.
-fn beneath_work(path: &str) -> Result<PathBuf, Failure> {
+pub(super) fn beneath_work(path: &str) -> Result<PathBuf, Failure> {
     let path = Path::new(path);
     let path = path.strip_prefix("/work").unwrap_or(path);
     let mut relative = PathBuf::new();
@@ -108,7 +108,7 @@ fn beneath_work(path: &str) -> Result<PathBuf, Failure> {
             _ => {
                 return Err(Failure::new(
                     "bad_path",
-                    "只能发 /work 下的文件，路径里不能有 ..",
+                    "只能用 /work 下的文件，路径里不能有 ..",
                 ));
             }
         }
@@ -122,7 +122,7 @@ fn beneath_work(path: &str) -> Result<PathBuf, Failure> {
 /// Reads `relative` under `work`, opening one component at a time
 /// without following a symlink: the guest writes /work, and a link there
 /// would point into the host. Blocking.
-fn read(work: &Path, relative: &Path) -> Result<Vec<u8>, Failure> {
+pub(super) fn read(work: &Path, relative: &Path) -> Result<Vec<u8>, Failure> {
     let shown = Path::new("/work").join(relative).display().to_string();
     let failed = |errno: Errno| match errno {
         Errno::NOENT => Failure::new("not_found", format!("{shown} 不存在")),

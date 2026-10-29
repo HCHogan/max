@@ -8,6 +8,7 @@ mod mute_member;
 mod recall_message;
 mod send_image;
 mod service;
+mod show;
 mod web_search;
 
 pub use service::{Grant, Sessions, serve};
