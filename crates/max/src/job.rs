@@ -45,6 +45,12 @@ pub enum Request {
 /// How long pi has to settle once aborted, and to give its last text.
 const GRACE: Duration = Duration::from_secs(15);
 
+/// How long before its deadline pi is told to stop and write its report:
+/// aborted with a tool call under way, it has none to give.
+const WARNING: Duration = Duration::from_secs(5 * 60);
+const WRAP_UP: &str =
+    "还剩 5 分钟就到点了。别再查新的，现在就把已经查到的写成报告交给 Max，没做完的写明做到哪了。";
+
 const GONE: &str = "pi 意外退出了";
 
 /// What a job's driver tells as it goes.
@@ -72,7 +78,8 @@ pub enum How {
 }
 
 /// Gives pi `task`, passes on the steers that come, and waits until pi
-/// settles, aborting it at `deadline`. `records` are the lines of pi's
+/// settles, telling it to wrap up shortly before `deadline` and aborting it
+/// then. `records` are the lines of pi's
 /// stdout, and end when pi does; `input` is its stdin, closed at the end.
 pub async fn drive(
     input: impl AsyncWrite + Unpin,
@@ -96,6 +103,10 @@ pub async fn drive(
     // The last model call's error: none once a retry got through.
     let mut error = None;
     let mut aborted: Option<Instant> = None;
+    // Only a job that has the time is told.
+    let mut wrap_up = deadline
+        .checked_sub(WARNING)
+        .filter(|at| *at > Instant::now());
     loop {
         let give_up = aborted.map(|at| at + GRACE);
         tokio::select! {
@@ -128,6 +139,12 @@ pub async fn drive(
             }
             Some(steer) = steers.recv(), if aborted.is_none() => {
                 if pi.ask(Ask::Steer(&steer)).await.is_err() {
+                    return failed(GONE);
+                }
+            }
+            () = sleep_until(wrap_up.unwrap_or(deadline)), if wrap_up.is_some() => {
+                wrap_up = None;
+                if pi.ask(Ask::Steer(WRAP_UP)).await.is_err() {
                     return failed(GONE);
                 }
             }

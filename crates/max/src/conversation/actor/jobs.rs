@@ -272,7 +272,10 @@ fn report(job: u32, title: &str, finished: &Finished, single: u32) -> Item {
             text += &format!("\n{excerpt}…（太长，只有开头）");
         }
         Some(words) => text += &format!("\n{words}"),
-        None if finished.ending.how == How::Done => text += "\n（它没留下报告）",
+        // pi's session is there too, as JSONL.
+        None if !matches!(finished.ending.how, How::Failed(_)) => {
+            text += "\n（它没留下报告；做的过程在 /work/.max/jobs 里它的会话记录）";
+        }
         None => {}
     }
     if let Some(file) = &finished.file {
@@ -328,8 +331,10 @@ mod tests {
         let silent = finished(How::Done, Some("  "), None);
         assert_eq!(
             shown(&report(3, "查票价", &silent, 2000)),
-            "[job#3 完成] 查票价\n（它没留下报告）"
+            "[job#3 完成] 查票价\n（它没留下报告；做的过程在 /work/.max/jobs 里它的会话记录）"
         );
+        let cut = finished(How::OutOfTime, None, None);
+        assert!(shown(&report(3, "查票价", &cut, 2000)).ends_with("它的会话记录）"));
     }
 
     #[test]

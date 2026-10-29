@@ -182,6 +182,22 @@ async fn a_job_out_of_time_is_aborted_and_says_how_far_it_got() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_job_is_told_to_wrap_up_before_its_time_is_up() {
+    let (ending, _) = job("查一下", TIME, vec![], |mut pi| async move {
+        pi.started().await;
+        let told = Instant::now();
+        let steer = pi.asked().await;
+        assert_eq!(steer["type"], "steer");
+        assert_eq!(steer["message"], WRAP_UP);
+        assert_eq!(told.elapsed(), TIME - WARNING);
+        pi.called(100, None);
+        pi.settle(false, Some("查到一半，先报这些")).await;
+    })
+    .await;
+    assert_eq!(ending.how, How::Done);
+}
+
 #[tokio::test]
 async fn a_failed_model_call_fails_the_job_unless_a_retry_got_through() {
     let (ending, _) = job("查一下", LONG, vec![], |mut pi| async move {

@@ -1551,12 +1551,12 @@ v1 之后做。
 - 领域工具走 Max 的 MCP 服务，见 [MCP 通道](#mcp-通道)。每个 job 开一个会话，只开放只读工具，比如 `context_search`、`context_read`、`memory_list`；job 结束时吊销。pi 在 VM 里也能跑 codemode 的 runner，用 job 自己的会话批量调这些工具。
 - 会影响群的动作（发消息、发文件、撤回、禁言、建自动化）不给后台 agent。它的结果是一种唤醒（`Reason::Job`）：会话有核心在跑就喂给它，没有就起一个；由前台的模型决定怎么说。job 中途提问同样处理，人的回答再由前台用工具 steer 回去（还没做：现在 pi 的对话框一律回取消）。
 - **工具**（2026-10-30）：Max 在 `run_code` 里用四个 Max 工具管 job，都由会话 actor 回答（经 `Poster`，带回信通道），后台 agent 自己用不了：
-  - `agent({ task, title? })` 马上返回 `{ job: "job#3" }`。job 在会话 actor 的表里，编号只在这次运行里递增，重启从 1 数。同时最多 3 个，每个 30 分钟，到点先 `clear_queue` 再 `abort`，交出做到一半的。一次运行最多起 3 个。没配 `llm.job`、没有 VM、正在重启时报错。
+  - `agent({ task, title? })` 马上返回 `{ job: "job#3" }`。job 在会话 actor 的表里，编号只在这次运行里递增，重启从 1 数。同时最多 3 个，每个 30 分钟。剩 5 分钟时 steer 一句让它停手写报告，到点先 `clear_queue` 再 `abort`，交出做到一半的。不提醒的话，到点时它多半正在调工具，最后一条助手消息没有文字，什么也交不出来（2026-10-30 job#2 就是这样）。一次运行最多起 3 个。没配 `llm.job`、没有 VM、正在重启时报错。
   - `agent_steer({ job, message })` 转给 pi 的 `steer`；`agent_cancel({ job })` 从表里删掉，scope 丢掉就停了，unit 由 VM 的 stopper 停，结果不要了；`agent_status({ job? })` 列标题、分钟、模型和工具调用次数、最近的工具。`job` 写 `job#3` 或 3。
   - `/kill` 连 job 一起停，回一句停了哪些；`/status` 每个 job 一行。
-- **结果**：pi 停下后取最后一条助手消息，存成 `/work/.max/jobs/job-<n>-<时间>.md`，再给会话 actor 一个 `JobDone`。actor 起一个 `Wake { ids: [], reason: Job { job }, item }`，`item` 是 `[job#3 完成] 标题`、`[job#3 到点停了，下面是做到一半的] 标题` 或 `[job#3 失败] 标题：原因`，下面是报告；超过单条上限只给开头 2000 字。末尾写全文的路径。和判定一样，有核心就进它的下一批，没有就起一个。已经取消的 job 的结果丢掉。这条唤醒失败了（模型出错）不补发，全文还在文件里。
+- **结果**：pi 停下后取最后一条助手消息，存成 `/work/.max/jobs/job-<n>-<时间>.md`，再给会话 actor 一个 `JobDone`。actor 起一个 `Wake { ids: [], reason: Job { job }, item }`，`item` 是 `[job#3 完成] 标题`、`[job#3 到点停了，下面是做到一半的] 标题` 或 `[job#3 失败] 标题：原因`，下面是报告；超过单条上限只给开头 2000 字。末尾写全文的路径。没有报告时（失败的除外）指给它 `/work/.max/jobs` 里 pi 的会话记录。和判定一样，有核心就进它的下一批，没有就起一个。已经取消的 job 的结果丢掉。这条唤醒失败了（模型出错）不补发，全文还在文件里。
 - **用量**：pi 每次模型调用记一行 `llm_usage`，`purpose` 是 `job`（迁移 0015），没有 turn。
-- **pi 的系统提示**：追加一段，说它是 Max 的后台 agent，看不到群聊，要聊天记录用 `mcp__max__context_search`、`context_read`，查网页用 `mcp__max__web_search` 和 `webread`；最后一条消息就是报告，先结论后要点和出处，2000 字以内；文件放 `/work`。
+- **pi 的系统提示**：追加一段，说它是 Max 的后台 agent，看不到群聊，要聊天记录用 `mcp__max__context_search`、`context_read`，查网页用 `mcp__max__web_search` 和 `webread`；最后一条消息就是报告，先结论后要点和出处，2000 字以内；文件放 `/work`；快到点时会提醒它收尾。
 
 pi 适配器要处理的行为（2026-10-29 用 pi 1.4.0 实测）：
 
