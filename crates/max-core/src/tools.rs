@@ -157,7 +157,7 @@ pub const MAX_TOOLS: [MaxTool; 12] = [
         output: r#"{"type":"object","properties":{"job":{"type":"string"}},"required":["job"]}"#,
         declaration: "/** 起一个后台 agent，去做一件要花时间的事：查一堆资料、读很多网页或文件、写代码跑实验。它在本群的 VM 里跑，和你共用 /work，自己有 shell、读写文件、context_search、context_read、web_search；不能在群里说话，也不能发图发文件、撤回、禁言。\n  \
         它看不到群里的对话，只看得到 task，所以背景、要做什么、做到什么程度、报告要写什么都写进去。title 是一句话的标题，agent_status 里显示。\n  \
-        马上返回 { job: \"job#3\" }，你接着聊。它做完了，报告作为 [job#3 完成] 出现在你的新消息里，全文另存在 /work/.max/jobs/ 下，由你决定在群里怎么说。同时最多 3 个，每个最多 30 分钟，到点停下、交出做到一半的结果。一次运行最多起 3 个。 */\n\
+        马上返回 { job: \"job#3\" }，你接着聊。它做完了，报告作为 [job#3 完成] 出现在你的新消息里，全文另存在 /work/.max/jobs/ 下，由你决定在群里怎么说。同时最多 3 个，每个最多 2 小时，到点停下、交出做到一半的结果。一次运行最多起 3 个。 */\n\
         agent(args: { task: string; title?: string }): Promise<{ job: string }>;",
         job: false,
         per_run: Some(3),

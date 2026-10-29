@@ -20,7 +20,7 @@ pub use run::{Finished, Progress, Start, run};
 /// The most jobs a conversation runs at once.
 pub const MOST: usize = 3;
 /// How long a job may take; then it is aborted, and reports how far it got.
-pub const TIME: Duration = Duration::from_secs(30 * 60);
+pub const TIME: Duration = Duration::from_secs(2 * 60 * 60);
 
 /// What a tool asks of its conversation's background agents.
 #[derive(Debug)]
