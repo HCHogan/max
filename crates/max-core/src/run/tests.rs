@@ -1,5 +1,6 @@
 use super::*;
 use crate::item::{Image, Protocol, ToolCall, Usage};
+use crate::message::MediaKind;
 
 fn spec(window: u32, max_output: Option<u32>) -> RunSpec {
     RunSpec {
@@ -194,9 +195,10 @@ fn chatter_waits_for_a_trigger() {
 
 #[test]
 fn pictures_follow_the_new_rows_they_came_with() {
-    let image = |handle: &str| Image {
-        handle: handle.into(),
-        sha256: format!("{handle:0>64}"),
+    let image = |kind, message, ordinal| Image {
+        kind,
+        message: MessageId(message),
+        ordinal,
     };
     let with = |id: i64, images: Vec<Image>| {
         let text = format!("[10:00 小明 #{id}]: [image#{id}.0]");
@@ -209,17 +211,21 @@ fn pictures_follow_the_new_rows_they_came_with() {
     let mut run = Run::new(spec(400_000, None), base(100), vec![]);
     call_model(&mut run);
     run.model_output(says("[silence]")).unwrap();
-    run.input(with(2, vec![image("image#2.0")])).unwrap();
-    run.input(messages(3, 5)).unwrap();
-    run.input(with(4, vec![image("image#4.0"), image("sticker#4.1")]))
+    run.input(with(2, vec![image(MediaKind::Image, 2, 0)]))
         .unwrap();
+    run.input(messages(3, 5)).unwrap();
+    let four = vec![
+        image(MediaKind::Image, 4, 0),
+        image(MediaKind::Sticker, 4, 1),
+    ];
+    run.input(with(4, four)).unwrap();
     run.input(Input::Wake(wake(4))).unwrap();
     let request = call_model(&mut run);
     let last = request.items.last().unwrap();
     let ItemKind::User { images, .. } = &last.kind else {
         panic!("{last:?}")
     };
-    let handles: Vec<&str> = images.iter().map(|image| image.handle.as_str()).collect();
+    let handles: Vec<String> = images.iter().map(Image::handle).collect();
     assert_eq!(handles, ["image#2.0", "image#4.0", "sticker#4.1"]);
     assert_eq!(last.tokens, 1805);
     assert_replays(&run);

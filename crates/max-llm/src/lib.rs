@@ -33,9 +33,10 @@ pub struct Options {
     pub cache_breakpoints: bool,
 }
 
-/// The pictures a request's items name, as data URLs by SHA-256. `max`
-/// reads them before the call. One it couldn't read is left out of the
-/// request; its handle is still in the text.
+/// The pictures a request's items name, as data URLs by handle. `max`
+/// reads them before the call. One it couldn't read, or that isn't
+/// downloaded, is left out of the request; its handle is still in the
+/// text.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Pictures(pub BTreeMap<String, String>);
 
@@ -56,8 +57,9 @@ fn pieces<'a>(
 ) -> Option<Vec<Piece<'a>>> {
     let mut pieces = vec![Piece::Text(text.into())];
     for image in images {
-        if let Some(url) = pictures.0.get(&image.sha256) {
-            pieces.push(Piece::Text(format!("[{}]", image.handle).into()));
+        let handle = image.handle();
+        if let Some(url) = pictures.0.get(&handle) {
+            pieces.push(Piece::Text(format!("[{handle}]").into()));
             pieces.push(Piece::Picture(url));
         }
     }

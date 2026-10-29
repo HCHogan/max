@@ -478,7 +478,7 @@ impl Run {
                 {
                     text.push('\n');
                     text.push_str(line);
-                    images.extend(more.iter().cloned());
+                    images.extend(more);
                 }
             }
             let tokens = items.iter().map(|item| item.tokens).sum();

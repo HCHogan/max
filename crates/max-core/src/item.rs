@@ -5,8 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::CallId;
-use crate::message::MediaRef;
+use crate::ids::{CallId, MessageId};
+use crate::message::{MediaKind, MediaRef};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Item {
@@ -50,15 +50,22 @@ pub enum ItemKind {
     },
 }
 
-/// A picture the model is shown, with the handle the text names it by.
-/// The item holds only the reference; `max` reads the bytes when it sends
-/// a request.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// A picture the model is shown: which medium of which row. The item
+/// holds only the reference; `max` finds the version made for the model
+/// when it sends a request, so a row's picture can still be downloading
+/// when the row is shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Image {
-    /// `image#123.0`.
-    pub handle: String,
-    /// The version made for the model.
-    pub sha256: String,
+    pub kind: MediaKind,
+    pub message: MessageId,
+    pub ordinal: u16,
+}
+
+impl Image {
+    /// What the text names it by: `image#123.0`.
+    pub fn handle(&self) -> String {
+        format!("{}#{}.{}", self.kind.word(), self.message, self.ordinal)
+    }
 }
 
 impl ItemKind {

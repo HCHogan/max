@@ -146,6 +146,19 @@ pub enum MediaKind {
     File,
 }
 
+impl MediaKind {
+    /// How a handle or placeholder names it: `image`, `sticker`, …
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Sticker => "sticker",
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::File => "file",
+        }
+    }
+}
+
 /// A share card, such as a QQ lightapp.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Card {

@@ -198,13 +198,7 @@ fn suffix(mark: Mark) -> &'static str {
 
 /// A medium, with its handle when the row has an id.
 fn medium(handle: Option<(MessageId, u16)>, meta: &MediaMeta) -> String {
-    let word = match meta.kind {
-        MediaKind::Image => "image",
-        MediaKind::Sticker => "sticker",
-        MediaKind::Video => "video",
-        MediaKind::Audio => "audio",
-        MediaKind::File => "file",
-    };
+    let word = meta.kind.word();
     let word = match handle {
         Some((id, ordinal)) => format!("{word}#{id}.{ordinal}"),
         None => word.to_owned(),

@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
+use max_core::ids::MessageId;
 use max_core::item::{Image, Protocol, ToolOutput};
+use max_core::message::MediaKind;
 use max_core::tools::TOOLS;
 
 use super::*;
@@ -32,17 +34,21 @@ fn call(id: &str) -> ToolCall {
 /// A row with two pictures, of which max could read only the first, and a
 /// block with a picture max couldn't read.
 fn with_pictures(model: ModelTag) -> (Request, Pictures) {
-    let image = |handle: &str, sha: char| Image {
-        handle: handle.into(),
-        sha256: sha.to_string().repeat(64),
+    let image = |kind, message, ordinal| Image {
+        kind,
+        message: MessageId(message),
+        ordinal,
     };
     let row = ItemKind::User {
         text: "[新消息]\n[10:00 小明 #7]: [image#7.0][sticker#7.1]".into(),
-        images: vec![image("image#7.0", 'a'), image("sticker#7.1", 'b')],
+        images: vec![
+            image(MediaKind::Image, 7, 0),
+            image(MediaKind::Sticker, 7, 1),
+        ],
     };
     let unread = ItemKind::User {
         text: "易变".into(),
-        images: vec![image("image#3.0", 'b')],
+        images: vec![image(MediaKind::Image, 3, 0)],
     };
     let request = Request {
         model,
@@ -51,7 +57,8 @@ fn with_pictures(model: ModelTag) -> (Request, Pictures) {
         max_output: None,
         roster: BTreeSet::new(),
     };
-    let pictures = Pictures([("a".repeat(64), "data:image/jpeg;base64,AAAA".to_owned())].into());
+    let url = "data:image/jpeg;base64,AAAA".to_owned();
+    let pictures = Pictures([("image#7.0".to_owned(), url)].into());
     (request, pictures)
 }
 
