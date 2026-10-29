@@ -343,17 +343,17 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
     h.send(from_xiaoming(0, vec![text("/status")]));
     let (answer, status) = h.said().await;
+    assert!(status.starts_with("🦈 maxx dev  \n🌊 "), "{status}");
     assert!(
-        status.starts_with(
-            "**maxx** · `dev`\n\n- **模型** `test/big` · 推理强度 high\n- **人设** 默认\n"
+        status.contains(
+            "🧠 test/big · 推理 high  \n🎭 人设：默认  \n💬 主动接话：开  \n💤 没有在跑的回复  \n⏱️ up "
         ),
         "{status}"
     );
-    assert!(status.ends_with("- **在跑** 没有"), "{status}");
     let Content::Message { reply_to, .. } = answer.content else {
         unreachable!()
     };
-    assert_eq!(reply_to, Some(MessageId(answer.id.0 - 1)));
+    assert_eq!(reply_to, None, "an answer doesn't quote the command");
 
     h.send(from_xiaoming(1, vec![text("/model test/small")]));
     assert_eq!(h.said().await.1, "这个命令只有主人能用。");
@@ -396,7 +396,7 @@ async fn compact_is_answered_when_the_historian_is_done(pool: PgPool) {
     let Content::Message { reply_to, .. } = answer.content else {
         unreachable!()
     };
-    assert_eq!(reply_to, Some(MessageId(answer.id.0 - 1)));
+    assert_eq!(reply_to, None);
     h.stop().await;
 }
 

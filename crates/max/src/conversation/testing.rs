@@ -52,6 +52,7 @@ pub fn shared(
         binds: Arc::default(),
         historian: None,
         vms: None,
+        started: tokio::time::Instant::now(),
     };
     (shared, rx)
 }

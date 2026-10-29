@@ -1,8 +1,10 @@
-//! Running commands. The answer is said in the same conversation, quoting
-//! the command, as a row of Max's outside any turn: QQ gives no way from a
-//! group member's id to a private chat with them.
+//! Running commands. The answer is said in the same conversation, as a row
+//! of Max's outside any turn: QQ gives no way from a group member's id to a
+//! private chat with them. It doesn't quote the command, which is right
+//! above it.
 
 use std::fmt::Write;
+use std::time::Duration;
 
 use max_core::message::{Platform, Role};
 use max_db::platform::ConversationKind;
@@ -57,9 +59,7 @@ impl Conversation {
             } else {
                 "群主、管理员"
             };
-            return self
-                .answer(committed.message.id, format!("这个命令只有{who}能用。"))
-                .await;
+            return self.answer(format!("这个命令只有{who}能用。")).await;
         }
         let answer = match command {
             Command::Status => self.status(),
@@ -82,19 +82,18 @@ impl Conversation {
                 self.save_settings().await?;
                 "好，之前的聊天不再进上下文。".to_owned()
             }
-            Command::Compact => match self.compact(committed.message.id) {
+            Command::Compact => match self.compact() {
                 Some(answer) => answer,
                 None => return Ok(()),
             },
             Command::Bind(argument) => self.bind(committed, argument.as_deref()).await?,
         };
-        self.answer(committed.message.id, answer).await
+        self.answer(answer).await
     }
 
-    /// Answers the command `to`, quoting it.
-    async fn answer(&mut self, to: MessageId, text: String) -> Result<()> {
+    async fn answer(&mut self, text: String) -> Result<()> {
         let draft = Draft {
-            reply_to: Some(to),
+            reply_to: None,
             nodes: vec![DraftNode::Text { text }],
         };
         self.say(draft, None, None).await?;
@@ -103,7 +102,7 @@ impl Conversation {
 
     /// Hands `/compact` to the historian, which answers when it is done;
     /// or the answer now, when it can't.
-    fn compact(&mut self, command: MessageId) -> Option<String> {
+    fn compact(&mut self) -> Option<String> {
         if self.place.kind == ConversationKind::Direct {
             return Some("私聊不写摘要。".to_owned());
         }
@@ -120,18 +119,18 @@ impl Conversation {
             let result = answer
                 .await
                 .unwrap_or_else(|_| Err("the historian stopped".to_owned()));
-            let _ = mailbox.send(Event::Compacted { command, result });
+            let _ = mailbox.send(Event::Compacted(result));
         });
         None
     }
 
-    pub(super) async fn compacted(&mut self, command: MessageId, result: Compacted) -> Result<()> {
+    pub(super) async fn compacted(&mut self, result: Compacted) -> Result<()> {
         let text = match result {
             Ok(Captured::Published(count)) => format!("好，整理成了 {count} 段摘要。"),
             Ok(Captured::Nothing) => "没有要整理的。".to_owned(),
             Err(_) => "这次没整理成，等会儿再试试。".to_owned(),
         };
-        self.answer(command, text).await
+        self.answer(text).await
     }
 
     async fn save_settings(&mut self) -> Result<()> {
@@ -146,22 +145,27 @@ impl Conversation {
         Ok(())
     }
 
-    /// Markdown, which QQ renders; the plain-text fallback still reads.
+    /// A card like the Haskell version's `!version`: a line each, an emoji
+    /// in front. A line ends in two spaces, Markdown's line break.
     fn status(&self) -> String {
         let settings = &self.settings;
-        let mut out = format!("**maxx** · `{}`\n\n", crate::COMMIT);
-        let model = match self
-            .shared
-            .models
-            .turn(settings.model.as_deref(), settings.effort.as_deref())
-        {
-            Ok(chosen) => {
-                let effort = chosen.options.effort.as_deref().unwrap_or("默认");
-                format!("`{}` · 推理强度 {effort}", chosen.reference())
-            }
-            Err(error) => format!("选不出来（{error}）"),
-        };
-        let _ = writeln!(out, "- **模型** {model}");
+        let mut lines = vec![
+            format!("🦈 maxx {}", crate::COMMIT),
+            format!("🌊 {} · {}", os(), std::env::consts::ARCH),
+        ];
+        lines.push(
+            match self
+                .shared
+                .models
+                .turn(settings.model.as_deref(), settings.effort.as_deref())
+            {
+                Ok(chosen) => {
+                    let effort = chosen.options.effort.as_deref().unwrap_or("默认");
+                    format!("🧠 {} · 推理 {effort}", chosen.reference())
+                }
+                Err(error) => format!("🧠 模型选不出来（{error}）"),
+            },
+        );
         let persona = match &settings.persona {
             Some(persona) => {
                 let start: String = persona
@@ -175,25 +179,27 @@ impl Conversation {
             }
             None => "默认".to_owned(),
         };
-        let _ = writeln!(out, "- **人设** {persona}");
+        lines.push(format!("🎭 人设：{persona}"));
         let proactive = if settings.proactive { "开" } else { "关" };
-        let _ = writeln!(out, "- **主动接话** {proactive}");
-        match &self.core {
-            Some(a) => {
-                let minutes = a.started.elapsed().as_secs() / 60;
-                let _ = writeln!(
-                    out,
-                    "- **在跑** t#{} · {minutes} 分钟 · {} 轮",
-                    a.ordinal,
-                    a.run.round()
-                );
-            }
-            None => out.push_str("- **在跑** 没有\n"),
-        }
+        lines.push(format!("💬 主动接话：{proactive}"));
+        lines.push(match &self.core {
+            Some(a) => format!(
+                "⚙️ 在回复：t#{} · {} · 第 {} 轮",
+                a.ordinal,
+                span(a.started.elapsed()),
+                a.run.round()
+            ),
+            None => "💤 没有在跑的回复".to_owned(),
+        });
         if let Some(mark) = settings.cleared_upto {
-            let _ = writeln!(out, "- **上下文** 从 #{mark} 之后算起");
+            lines.push(format!("🧹 上下文从 #{mark} 之后算起"));
         }
-        out.trim_end().to_owned()
+        let mut up = format!("⏱️ up {}", span(self.shared.started.elapsed()));
+        if let Some(host) = host_uptime() {
+            let _ = write!(up, " · host {}", span(host));
+        }
+        lines.push(up);
+        lines.join("  \n")
     }
 
     async fn model(&mut self, argument: Option<&str>) -> Result<String> {
@@ -271,13 +277,13 @@ impl Conversation {
 
     /// The `/bind <码>` that bound this group, which the table hands over
     /// instead of running it.
-    pub(super) async fn bound(&mut self, committed: &Committed, continued: bool) -> Result<()> {
+    pub(super) async fn bound(&mut self, continued: bool) -> Result<()> {
         let text = if continued {
             "绑好了，这个群接着老群的记录往下聊。"
         } else {
             "绑好了，这个群从这里开始记。"
         };
-        self.answer(committed.message.id, text.to_owned()).await
+        self.answer(text.to_owned()).await
     }
 
     /// In a private chat, a code to bind a QQ group with; in a group, the
@@ -316,4 +322,39 @@ impl Conversation {
             "在要绑的群里发 /bind {code}，{target}。10 分钟内有效，只能用一次。"
         ))
     }
+}
+
+/// The two largest units: 3d 4h, 2h 13m, 5m 12s, 12s.
+fn span(duration: Duration) -> String {
+    let s = duration.as_secs();
+    let (d, h, m, s) = (s / 86400, s / 3600 % 24, s / 60 % 60, s % 60);
+    if d > 0 {
+        format!("{d}d {h}h")
+    } else if h > 0 {
+        format!("{h}h {m}m")
+    } else if m > 0 {
+        format!("{m}m {s}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
+/// The distribution's name from /etc/os-release, else the OS's.
+fn os() -> String {
+    std::fs::read_to_string("/etc/os-release")
+        .ok()
+        .and_then(|release| {
+            release.lines().find_map(|line| {
+                let name = line.strip_prefix("PRETTY_NAME=")?;
+                Some(name.trim_matches('"').to_owned())
+            })
+        })
+        .unwrap_or_else(|| std::env::consts::OS.to_owned())
+}
+
+/// How long the host has been up, from /proc/uptime on Linux.
+fn host_uptime() -> Option<Duration> {
+    let uptime = std::fs::read_to_string("/proc/uptime").ok()?;
+    let seconds: f64 = uptime.split_whitespace().next()?.parse().ok()?;
+    Some(Duration::from_secs_f64(seconds))
 }

@@ -244,6 +244,7 @@ async fn serve(config: Config) -> Result<()> {
         binds: Arc::default(),
         historian,
         vms,
+        started: tokio::time::Instant::now(),
     });
     let (intake_tx, intake_rx) = mpsc::unbounded_channel();
     let mut me = HashMap::new();

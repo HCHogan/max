@@ -49,6 +49,8 @@ pub struct Shared {
     pub historian: Option<UnboundedSender<Notice>>,
     /// None when no VMs are configured: the tools say so.
     pub vms: Option<Vms>,
+    /// When Max started, for `/status`.
+    pub started: Instant,
 }
 
 /// Something Max said, committed, for the platform's sender.
@@ -211,7 +213,7 @@ impl Conversation {
                 let decisions = self.intent.verdict(verdict, std::time::Instant::now());
                 self.decide(decisions).await
             }
-            Event::Compacted { command, result } => self.compacted(command, result).await,
+            Event::Compacted(result) => self.compacted(result).await,
             Event::Stop => {
                 self.stop();
                 Ok(())
@@ -270,7 +272,7 @@ impl Conversation {
             EntryKind::Chatter
         };
         if bound {
-            self.bound(&committed, continued).await?;
+            self.bound(continued).await?;
         } else if committed.command {
             self.command(&committed).await?;
         } else {
