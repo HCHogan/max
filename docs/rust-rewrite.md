@@ -1485,14 +1485,14 @@ v1 不做。2026-10-29 先做成每次运行现起 camoufox，当天晚上改成
 
 - **为什么换**：模型看完页面、下一次 `run_code` 再点，页面得还在。各家给模型用的浏览器（Playwright MCP、chrome-devtools-mcp、agent-browser、Hermes 的 `browser_exec`）都让浏览器常驻，Hermes 和我们一样是代码模式：每次调用起新的解释器，经 CDP 连同一个 Chromium。camoufox 做不到这样：Playwright 的连接一断，服务端就关掉这个客户端开的 context（playwright-core 1.59 的 `cleanupContexts`），想跨进程留住页面，得自己写个常驻进程持有它；Firefox 又已经不支持 CDP。CDP 的状态在浏览器进程身上，断开连接不关页面，在本机用 Chrome 和 playwright-core 1.59 验证过：上一个进程开的页面和填的字，下一个进程连上来都在。
 - **代价**：反指纹不如 camoufox。自己起的 Chromium 不带 Playwright 的自动化开关，`navigator.webdriver` 是 false，User-Agent 去掉了 HeadlessChrome；但 VM 里的 WebGL 指纹、CDP 本身的痕迹还在，Cloudflare 这类检查更容易拦。真被拦得多了，再在 VM 里跑 camofox-browser 这类常驻服务。
-- 不再有 navigate、click 这类浏览器工具，程序里直接用 Playwright 连这个浏览器。SDK 附带一个快照助手，把页面上可交互的元素列成带 CSS 选择器的清单，沿用 Haskell 版 snapshot 的形状。
+- 不再有 navigate、click 这类浏览器工具，程序里直接用 Playwright 连这个浏览器。SDK 附带一个快照助手，给出带编号的可访问性树：各家给模型看的页面都收敛到这个形状（Playwright MCP 的 `[ref=e5]`、Claude 的 `ref_N`、agent-browser 的 `@e1`），Playwright 1.59 自带，不用自己写。原来沿用 Haskell 版的“可交互元素加 CSS 选择器”清单删了。
 - 登录状态（2026-10-29 定，owner 选的）：只给 Max 自己的小号用，存在本群浏览器的 profile 里，写明全群的程序都用得到；不做个人登录，Haskell 版那种按人加密、程序看不到 cookie 的做法要宿主侧的工具，以后再说。
 - 截图交给 `max.image` 看，下载存进 `/work`。
 
 做成的（2026-10-29）：
 
 - **服务**：guest 里的 `max-browser.service`，nixpkgs 的 Chromium，`--headless=new`，CDP 只听 127.0.0.1:9222；root 跑、关掉 Chromium 自己的沙箱，VM 就是沙箱。profile 在 `/work/.max/chromium`，cookie 和登录跨 VM 重启都在；VM 没关干净留下的 profile 锁，启动前删掉。中文界面和 `Accept-Language`，时区 Asia/Shanghai，窗口 1280×900，内存上限 2 GiB，崩了 systemd 重启（标签页没了，profile 还在）。不开机就起：第一个要浏览器的程序 `systemctl start` 它，等 CDP 端口能连才返回。VM 闲置关机时它跟着停，常驻的浏览器不让 VM 算作在用。
-- **SDK**：`await max.browser()` 返回浏览器唯一的 BrowserContext，`await max.page()` 返回最新的标签页，没有就开一个；之后照常写 Playwright。一个程序里只连一次。程序结束只是断开连接，标签页留着，下一个程序接着用；用完的由程序自己关。`await max.snapshot(page, {selector?, limit?})` 返回 `{url, title, elements, truncated}`，元素是 `{tag, selector, role, name, text, bounds}`，取法沿用 Haskell 版；`text` 和 `name` 相同时省掉，选择器从最近的带 id 的祖先算起，默认最多 100 个。
+- **SDK**：`await max.browser()` 返回浏览器唯一的 BrowserContext，`await max.page()` 返回最新的标签页，没有就开一个；之后照常写 Playwright。一个程序里只连一次。程序结束只是断开连接，标签页留着，下一个程序接着用；用完的由程序自己关。`await max.snapshot(page, {selector?, depth?})` 是 Playwright 的 `ariaSnapshot({mode: "ai"})`，前面加上标题和地址：每个元素带 `[ref=e5]`，iframe 里的是 `f1e2` 这样，`page.locator("aria-ref=e5")` 找得到。`selector` 只拍那个元素（取第一个），`depth` 限层数。编号存在这次连接注入页面的脚本里，下一个程序连上来要先拍一次；页面没变，编号也一样（本机用 Chrome 验证过）。
 - **打包**：`nix/runner.nix` 把 runner、SDK 和 playwright-core 1.59.0（没有依赖，直接取 npm 的包）放在一起，guest 的 `/run/max/runner.js` 链到包里。原来 camoufox 的发行包、camoufox-js 和它的补丁都删了。
 - **字体**：guest 装了 Noto Sans CJK，Chromium 经 fontconfig 找到它。
 - **实测**（tank 上的嵌套测试，VM 2 个 vCPU、1 GiB 内存）：`vm-check` 的第三个程序起浏览器、打开一个 data: 页面、快照、截图存进 `/work`，测试检查快照里的选择器和截图。VM 10 秒起好。VM 开机后第一次起浏览器要 22 秒，多半是经 virtiofs 冷读 store，加上嵌套虚拟化；同一个 VM 里再起 4.3 秒，打开页面 0.4 秒。开着两个 context 时这次运行的匿名内存 370～410 MiB，cgroup 峰值（含页缓存）775 MiB。宿主上直接跑：加载模块 0.6 秒，起浏览器 0.5 秒，第一个页面 1.4 秒。真实网站没测，测试机不通外网。VM 默认 4 GiB 内存，不用加。

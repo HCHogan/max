@@ -176,34 +176,25 @@ async fn the_browser_sdk_without_a_browser() {
         );
     }
 
-    let page = "const page = { evaluate: async (f, options) => options.selector === '#none' ? null : \
-         ({ elements: [{ tag: 'button', selector: '#go', role: 'button', name: '搜索' }], truncated: false, \
-         page: typeof f, options }), url: () => 'https://example.com/', title: async () => '例子' };";
-    let ran = run(
-        nowhere,
-        "-",
-        &format!("{page} return max.snapshot(page, {{ selector: 'form' }})"),
-    )
-    .await;
+    // Answers as Playwright would, saying what it was asked.
+    let page = "const page = { ariaSnapshot: async options => `- button \"搜索\" [ref=e2] ${JSON.stringify(options)}`, \
+         locator: selector => ({ first: () => ({ ariaSnapshot: async options => \
+         `- ${selector} [ref=e1] ${JSON.stringify(options)}` }) }), \
+         url: () => 'https://example.com/', title: async () => '例子' };";
+    let ran = run(nowhere, "-", &format!("{page} return max.snapshot(page)")).await;
     assert_eq!(
-        ran.stdout,
-        r##"{"url":"https://example.com/","title":"例子","elements":[{"tag":"button","selector":"#go","role":"button","name":"搜索"}],"truncated":false,"page":"function","options":{"selector":"form","limit":100}}"##,
+        ran.stdout, "例子\nhttps://example.com/\n- button \"搜索\" [ref=e2] {\"mode\":\"ai\"}",
         "{}",
         ran.stderr
     );
-    let ran = run(
-        nowhere,
-        "-",
-        &format!("{page} return max.snapshot(page, {{ selector: '#none' }})"),
-    )
-    .await;
-    assert_eq!(ran.status, 1);
-    assert!(
-        ran.stdout.starts_with("Error: 页面上没有 #none"),
+    let narrowed = format!("{page} return max.snapshot(page, {{ selector: 'form', depth: 2 }})");
+    let ran = run(nowhere, "-", &narrowed).await;
+    assert_eq!(
+        ran.stdout, "例子\nhttps://example.com/\n- form [ref=e1] {\"mode\":\"ai\",\"depth\":2}",
         "{}",
-        ran.stdout
+        ran.stderr
     );
-    for wrong in ["max.snapshot('page')", "max.snapshot(page, { limit: 0 })"] {
+    for wrong in ["max.snapshot('page')", "max.snapshot(page, { depth: 0 })"] {
         let ran = run(nowhere, "-", &format!("{page} return {wrong}")).await;
         assert!(
             ran.stdout.starts_with("TypeError"),

@@ -186,20 +186,20 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
 }
 
 /// vm-check's tab in the browser: how long the browser took to start and
-/// the page to load, what the snapshot finds, a screenshot in /work, and
-/// what the browser tells the page it is.
+/// the page to load, the snapshot, a field filled by its ref, a screenshot
+/// in /work, and what the browser tells the page it is.
 const BROWSE: &str = r#"const started = Date.now();
 const page = await (await max.browser()).newPage();
 const connected = Date.now();
 await page.goto("data:text/html;charset=utf-8," + encodeURIComponent(
   "<html lang=zh-CN><title>检查</title><h1>你好，浏览器</h1><input name=q placeholder=搜索><button id=go>搜索</button>"));
-await page.fill("input", "还在");
 const loaded = Date.now();
+const tree = await max.snapshot(page);
+const ref = /textbox "搜索" \[ref=(e\d+)\]/.exec(tree)[1];
+await page.locator(`aria-ref=${ref}`).fill("还在");
 await page.screenshot({ path: "/work/.max/browser-check.png" });
-const { title, elements } = await max.snapshot(page);
 const seen = await page.evaluate(() => [navigator.userAgent, navigator.webdriver, navigator.language]);
-return { title, elements: elements.map(e => e.selector), connect_ms: connected - started,
-  page_ms: loaded - connected, seen };"#;
+return { tree, connect_ms: connected - started, page_ms: loaded - connected, seen };"#;
 
 /// The next program finds the tab as the last one left it; and the most
 /// memory the browser has used, in MiB.
