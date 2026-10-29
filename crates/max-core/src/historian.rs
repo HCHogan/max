@@ -34,7 +34,7 @@ pub const LINE_CHARS: usize = 150;
 
 pub fn system() -> String {
     format!(
-        "你是多人群聊 agent「Max」的史官。给你一段群聊记录，把它切成几段，每段写一份摘要，供 Max 以后回忆。摘要写一次，以后不再改；原始消息一直留着。
+        "你是多人群聊 agent「maxx」的史官。它以前叫 Max，早先的摘要里写的 Max 就是它。给你一段群聊记录，把它切成几段，每段写一份摘要，供 maxx 以后回忆。摘要写一次，以后不再改；原始消息一直留着。
 
 切分：
 - 按话题和时间切：话题换了，或者中间隔了很久，就是新的一段。整段记录只聊了一件事，就只切一段。
@@ -43,7 +43,7 @@ pub fn system() -> String {
 
 每段写：
 - title：标题，不超过 20 字。
-- kind：max_interaction（主要是在和 Max 说话）、ambient（群友之间聊别的）、mixed（两者都有）、decision（做了决定）、support（求助和解答）、social（寒暄、玩笑、日常）。
+- kind：max_interaction（主要是在和 maxx 说话）、ambient（群友之间聊别的）、mixed（两者都有）、decision（做了决定）、support（求助和解答）、social（寒暄、玩笑、日常）。
 - importance：1 到 100，以后还值不值得想起来。日常闲聊 10～30；有信息量的讨论 40～60；决定、约定和重要的事 70 以上。
 - p1：完整经过，不超过 {FULL_CHARS} 字：谁说了什么、想做什么、定了什么、答应了什么、还有什么没解决。
 - p2：简述，不超过 {BRIEF_CHARS} 字：关键事实、决定和没解决的事，单独读也看得懂。
@@ -51,7 +51,7 @@ pub fn system() -> String {
 
 要求：
 - 用记录里的语言写；人名、日期和术语照抄。
-- 提到人用 [mention#12] 这样的写法，号码见\"这段里的人\"；Max 自己就写 Max。
+- 提到人用 [mention#12] 这样的写法，号码见\"这段里的人\"；maxx 自己就写 maxx。
 - 分清谁说的：别把玩笑、猜测或某个人的说法写成事实。
 - p2、p3 是 p1 的压缩，不加 p1 里没有的东西。
 - 昨天、下周三这类相对的时间，按记录里的日期换成具体日期。
@@ -100,12 +100,12 @@ pub fn earlier(summaries: &[Summary], offset: FixedOffset) -> String {
         .join("\n\n")
 }
 
-/// One line of "这段里的人". Max is marked as Max, not as "you": the
-/// historian isn't Max.
+/// One line of "这段里的人". maxx is marked as maxx, not as "you": the
+/// historian isn't maxx.
 pub fn person(principal: PrincipalId, name: &str, role: Option<Role>, is_max: bool) -> String {
     if is_max {
         let name = name.replace(['\n', '\r'], " ");
-        format!("[mention#{principal}] {name}（就是 Max）")
+        format!("[mention#{principal}] {name}（就是 maxx）")
     } else {
         roster_line(principal, name, role, false)
     }

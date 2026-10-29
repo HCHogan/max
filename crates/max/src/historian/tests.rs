@@ -159,7 +159,7 @@ async fn a_wrong_answer_is_shown_back_once(pool: PgPool) {
     };
     assert!(text.starts_with("[现在] "), "{text}");
     assert!(text.contains("[之前的摘要]\n（无）"), "{text}");
-    assert!(text.contains("（就是 Max）"), "{text}");
+    assert!(text.contains("（就是 maxx）"), "{text}");
     let line = format!("[12:00 小明 #{}]: 第0句", ids[0]);
     assert!(text.contains(&line), "{text}");
     let mut conn = pool.acquire().await.unwrap();
