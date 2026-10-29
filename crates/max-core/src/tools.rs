@@ -49,7 +49,7 @@ pub struct MaxTool {
     pub per_run: Option<u32>,
 }
 
-pub const MAX_TOOLS: [MaxTool; 3] = [
+pub const MAX_TOOLS: [MaxTool; 4] = [
     MaxTool {
         name: "context_read",
         description: "读一条消息的全文，一页一页地读。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
@@ -81,6 +81,17 @@ pub const MAX_TOOLS: [MaxTool; 3] = [
         记录里已有的图和表情包不用这个，直接在回复里写它的句柄。 */\n\
         send_image(args: { path: string; caption?: string }): Promise<{ handle: string }>;",
         per_run: Some(5),
+    },
+    MaxTool {
+        name: "recall_message",
+        description: "撤回本群发出 2 分钟内的一条消息：你自己的，或者你是群管理员时普通成员的。",
+        input: r#"{"type":"object","properties":{"id":{"type":"integer","description":"消息的编号，#123 就是 123"}},"required":["id"],"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"recalled":{"type":"integer"}},"required":["recalled"]}"#,
+        declaration: "/** 撤回本群的一条消息，id 是行首 #编号 里的数字。撤不撤由你判断：刷屏、广告、违规内容，或者有人请你撤、理由正当时再用，撤完简短说一声。\n  \
+        QQ 只让撤发出 2 分钟内的：你自己说的（一段是一条，一次回复分成几段的要一段一段撤）；你是群管理员时还有普通成员的，群主和管理员的撤不了。私聊里只能撤你自己的。\n  \
+        QQ 撤了才返回；撤不了会抛错，说明原因。记录里会多一行你的 [unsend#id]，QQ 没撤的标着（没发出去）。一次运行最多撤 10 条。 */\n\
+        recall_message(args: { id: number }): Promise<{ recalled: number }>;",
+        per_run: Some(10),
     },
 ];
 
