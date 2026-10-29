@@ -1,7 +1,16 @@
+use std::sync::Arc;
+
 use chrono::TimeDelta;
+use max_core::message::{MediaKind, MediaMeta, MediaRef, Node};
+use max_db::captions::{self, Caption};
+use max_db::media::{self, Blob};
+use max_db::summaries::{self as stored, Summary};
+use sqlx::{PgConnection, PgPool};
 
 use super::*;
-use crate::conversation::testing::{at, offset};
+use crate::conversation::testing::{at, from_xiaoming, group, offset, text};
+use crate::conversation::{Place, ingest};
+use crate::inbound::InNode;
 
 fn hit(kind: Kind, n: i64, score: f32, key: &str) -> Hit {
     Hit {
@@ -92,4 +101,165 @@ fn no_kind_takes_more_than_two_thirds_while_another_has_hits() {
         hit(Kind::Message, 3, 0.5, "哈哈"),
     ];
     assert_eq!(handles(&choose(hits, 10)), ["2", "3"]);
+}
+
+/// A picture from 小明, with the caption worker's words for it.
+async fn picture(conn: &mut PgConnection, place: &Place, n: u32, caption: &str) -> i64 {
+    let node = InNode::Node(Node::Media {
+        media: Some(MediaRef::Remote("https://example.com/p".into())),
+        meta: MediaMeta {
+            kind: MediaKind::Image,
+            mime: None,
+            size: None,
+            name: None,
+            description: None,
+        },
+    });
+    let inbound = from_xiaoming(n, vec![node]);
+    let row = ingest::inbound(conn, place, &inbound, at(n), offset())
+        .await
+        .unwrap()
+        .message
+        .id;
+    let sha256 = "e".repeat(64);
+    let blob = Blob {
+        sha256: sha256.clone(),
+        mime: Some("image/png".into()),
+        size: 3,
+        width: None,
+        height: None,
+        model_sha256: Some(sha256.clone()),
+    };
+    media::record(conn, row, 0, &blob, at(n)).await.unwrap();
+    let caption = Caption {
+        sha256: &sha256,
+        kind: captions::Kind::Image,
+        text: caption,
+        skip: false,
+        model: None,
+        at: at(n),
+    };
+    captions::write(conn, &caption).await.unwrap();
+    row.0
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn rows_and_summaries_with_their_read(pool: PgPool) {
+    let mut conn = pool.acquire().await.unwrap();
+    let place = Arc::new(group(&mut conn).await);
+    let mut said = async |n: u32, words: &str| {
+        let inbound = from_xiaoming(n, vec![text(words)]);
+        ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
+            .await
+            .unwrap()
+            .message
+            .id
+            .0
+    };
+    let early = said(1, "部署方案还没定").await;
+    let chat = said(2, "中午吃什么").await;
+    let again = said(3, "部署方案还没定").await;
+    let script = format!(
+        "{}GitHub 上的部署脚本{}",
+        "啊".repeat(200),
+        "吧".repeat(200)
+    );
+    let long = said(4, &script).await;
+    let screenshot = picture(&mut conn, &place, 6, "服务器报错的截图").await;
+    let summary = Summary {
+        first: MessageId(early),
+        last: MessageId(chat),
+        started_at: at(1),
+        ended_at: at(2),
+        title: "部署".into(),
+        kind: "decision".into(),
+        importance: 50,
+        full: "大家讨论了部署方案。".into(),
+        brief: None,
+        line: None,
+    };
+    let summary = stored::insert(&mut conn, place.conversation, &summary, "m", at(9))
+        .await
+        .unwrap();
+    drop(conn);
+    let context = Context {
+        pool: pool.clone(),
+        place: Arc::clone(&place),
+        offset: offset(),
+        page_tokens: 2000,
+        search: None,
+        work: None,
+        store: None,
+        poster: None,
+        embedder: None,
+        admin: None,
+    };
+
+    let found = run(&context, json!({ "query": "部署 方案" }))
+        .await
+        .unwrap();
+    let results = found["results"].as_array().unwrap();
+    // The message said twice shows once, the later; then the summary,
+    // which is newer than the first; then the script, with one term.
+    assert_eq!(
+        results[0],
+        json!({
+            "kind": "message",
+            "ref": format!("#{again}"),
+            "time": "2026-10-29 周四 12:03",
+            "text": "小明：部署方案还没定",
+            "read": { "id": again, "before": 10, "after": 10 },
+        })
+    );
+    assert_eq!(
+        results[1],
+        json!({
+            "kind": "summary",
+            "ref": format!("summary#{summary}"),
+            "time": "2026-10-29 周四 12:01–12:02",
+            "text": "部署：大家讨论了部署方案。",
+            "read": { "summary": summary.0 },
+        })
+    );
+    assert_eq!(results[2]["ref"], format!("#{long}"));
+    let text = results[2]["text"].as_str().unwrap();
+    assert!(
+        text.starts_with("小明：…啊") && text.contains("GitHub 上的部署脚本"),
+        "{text}"
+    );
+    assert_eq!(results.len(), 3);
+
+    // A picture by its caption, as the row shows it.
+    let found = run(&context, json!({ "query": "服务器" })).await.unwrap();
+    assert_eq!(
+        found["results"][0]["text"],
+        format!("小明：[image#{screenshot}.0: 服务器报错的截图]")
+    );
+    // From the day after, nothing.
+    let later = run(&context, json!({ "query": "部署", "from": "2026-10-30" })).await;
+    assert_eq!(later.unwrap()["results"], json!([]));
+    let one = run(&context, json!({ "query": "部署", "limit": 1 })).await;
+    assert_eq!(one.unwrap()["results"].as_array().unwrap().len(), 1);
+
+    // /clear --all hides what came before it.
+    let mut conn = pool.acquire().await.unwrap();
+    let mut settings = platform::settings(&mut conn, place.conversation)
+        .await
+        .unwrap();
+    settings.cleared_upto = Some(MessageId(again));
+    platform::save_settings(&mut conn, place.conversation, &settings, at(9))
+        .await
+        .unwrap();
+    drop(conn);
+    let found = run(&context, json!({ "query": "部署" })).await.unwrap();
+    let refs: Vec<&Value> = found["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|result| &result["ref"])
+        .collect();
+    assert_eq!(refs, [&json!(format!("#{long}"))]);
+
+    let empty = super::super::call("context_search", &context, json!({ "query": " " })).await;
+    assert_eq!(empty.unwrap_err().code, "bad_arguments");
 }
