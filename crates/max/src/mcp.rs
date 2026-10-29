@@ -2,6 +2,7 @@
 //! service; see "MCP 通道". max-core's `MAX_TOOLS` declares them.
 
 mod context_read;
+mod context_search;
 mod find_stickers;
 mod mute_member;
 mod recall_message;
@@ -82,6 +83,7 @@ pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, F
         "recall_message" => recall_message::run(context, args).await,
         "mute_member" => mute_member::run(context, args).await,
         "find_stickers" => find_stickers::run(context, args).await,
+        "context_search" => context_search::run(context, args).await,
         _ => Err(Failure::new(
             "unknown_tool",
             format!("没有 {name} 这个工具"),

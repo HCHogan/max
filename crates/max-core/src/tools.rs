@@ -49,7 +49,7 @@ pub struct MaxTool {
     pub per_run: Option<u32>,
 }
 
-pub const MAX_TOOLS: [MaxTool; 6] = [
+pub const MAX_TOOLS: [MaxTool; 7] = [
     MaxTool {
         name: "context_read",
         description: "读消息或摘要的全文，一页一页地读；也能读一条消息和它前后的几条。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
@@ -115,6 +115,18 @@ pub const MAX_TOOLS: [MaxTool; 6] = [
         只找不发：挑一个合适的，把 handle 照抄进回复，写成 [sticker#…]，就发出去了；都不合适就不发。limit 1 到 10，默认 5。一次运行最多找 5 次。 */\n\
         find_stickers(args: { query: string; limit?: number }): Promise<{ stickers: { handle: string; description: string }[] }>;",
         per_run: Some(5),
+    },
+    MaxTool {
+        name: "context_search",
+        description: "按关键词搜本会话的聊天记录：原始消息（连同图片的描述）和摘要。返回命中处的片段，和读原文用的 context_read 参数。",
+        input: r#"{"type":"object","properties":{"query":{"type":"string","minLength":1,"description":"空格隔开的关键词，最多 8 个"},"limit":{"type":"integer","minimum":1,"maximum":30,"description":"几条，默认 10"},"from":{"type":"string","description":"YYYY-MM-DD，从这天起"},"to":{"type":"string","description":"YYYY-MM-DD，到这天为止"}},"required":["query"],"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"results":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["message","summary"]},"ref":{"type":"string"},"time":{"type":"string"},"text":{"type":"string"},"read":{"type":"object"}},"required":["kind","ref","time","text","read"]}}},"required":["results"]}"#,
+        declaration: "/** 搜本会话的聊天记录：原始消息（连同图片的描述）和摘要。上下文里没有的旧事、谁以前说过什么，先搜再答。\n  \
+        query 是空格隔开的关键词，最多 8 个，按原文找、不分大小写，不是按意思找：中文词写短点（两三个字），换个说法要自己再搜。\n  \
+        命中的词多的在前，一样多的新的在前；消息和摘要各最多占 limit 的三分之二，另一种不够时补满。limit 默认 10，最多 30。from、to 是日期，都含当天。\n  \
+        text 是命中处附近的一段；read 原样传给 context_read，读这条消息连同前后各 10 条，或者摘要全文。撤回的消息和 /clear --all 之前的不搜。一次运行最多搜 20 次。 */\n\
+        context_search(args: { query: string; limit?: number; from?: string; to?: string }): Promise<{ results: { kind: \"message\" | \"summary\"; ref: string; time: string; text: string; read: { id: number; before: number; after: number } | { summary: number } }[] }>;",
+        per_run: Some(20),
     },
 ];
 
