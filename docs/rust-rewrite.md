@@ -77,7 +77,7 @@
 | Prompt shape and budget | 部分 | 见[上下文投影](#上下文投影) |
 | Memory | — | |
 | Group lingo | — | |
-| Unified recall and vector search | 部分 | 字面的一半做了：`context_search` 搜本会话的消息（带图的 caption）和摘要，每条结果带 `context_read` 的参数，见[召回](#召回)。向量的候选还没做；记忆 v1 不做，也就不搜；视频没有 caption |
+| Unified recall and vector search | 部分 | `context_search` 按字面和按意思搜本会话的消息（带图和表情包的 caption）和摘要，每条结果带 `context_read` 的参数，见[召回](#召回)。记忆 v1 不做，也就不搜；视频没有 caption |
 | Context operations | — | Haskell 版是 admin 面板里的上下文控制台：覆盖和延迟、重建摘要、重算向量、检索轨迹；跟 Admin JSON API 一起做。模型自己的上下文操作是 `context_search` 和 `context_read`，见[召回](#召回) |
 | LLM profiles | ✓ | |
 | Streaming | ✓ | |
@@ -249,17 +249,17 @@ systemd 要设 `KillMode=mixed`：SIGTERM 只发给主进程，VM 这些子进�
 2026-10-27 定。运行时里的任务分三种，按它产出什么分：
 
 1. **主体**：会话 actor 和它 spawn 的 I/O 任务。消费请求，产出回复。
-2. **派生数据 worker**：historian、lingo、embedding、caption、媒体下载和转发展开、记忆到期。输入是 ledger 或另一张派生表，输出是自己独占的一张表，只有它一个写者；从不碰 ledger 和 turn 记录，结果只在投影时被读。读 ledger 的 cursor 按会话记，见[时间线](#时间线)。触发三种：入账通知、定时器或水位、启动和定期的缺口扫描。一个工作单元一个事务，不留半截；重启不存队列，靠扫描补。Haskell 版 9 月的简化最后也把这几个收敛成了"本地有界队列加缺数据扫描"。
+2. **派生数据 worker**：historian、lingo、embedding、caption、召回向量、媒体下载和转发展开、记忆到期。输入是 ledger 或另一张派生表，输出是自己独占的一张表，只有它一个写者；从不碰 ledger 和 turn 记录，结果只在投影时被读。读 ledger 的 cursor 按会话记，见[时间线](#时间线)。触发三种：入账通知、定时器或水位、启动和定期的缺口扫描。一个工作单元一个事务，不留半截；重启不存队列，靠扫描补。Haskell 版 9 月的简化最后也把这几个收敛成了"本地有界队列加缺数据扫描"。
 
    共同的只有约定，不写框架（2026-10-29 owner 定：先写过一个通用驱动器，按 `Throttle`/`Debounce`/`Urgent` 排单元，结果调度策略都堆在驱动器里，完成与否也在驱动器的队列和数据库里各记一份，当天拆回各 worker）：
    - 输出表独占，只有它一个写者；从不碰 ledger 和 turn 记录，结果只在投影时被读。
    - 单元可重入：先查输出表，已经有了就不做。做没做完只看数据库，内存里不记完成状态。
-   - 输入是入账通知，或者上游 worker 交来的键（caption 收下载存好的图，embedding 收 caption 写好的表情包）；漏掉的靠扫描按输出表找缺的补：启动时，embedding 另外每小时一次。
+   - 输入是入账通知，或者上游 worker 交来的键（caption 收下载存好的图，embedding 收 caption 写好的表情包，召回向量收 historian 发布的摘要）；漏掉的靠扫描按输出表找缺的补：启动时，embedding 和召回向量另外每小时一次。
    - 并发、重试、超时、什么时候跑，是各 worker 自己的常量和自己的循环：常驻任务一个 `Scope`，一个单元一个任务，`Semaphore` 限并发，重试在单元自己的任务里 `sleep`，重试用完只记日志。caption 和 embedding 另有一个"正在做"的 sha256 集合，同一个文件在做的时候又来，不再起一个；它只防重复调模型，丢了也只是多做一次。
    - 关机时在跑的直接 drop，事务回滚，下次启动由扫描补。
    - 入账通知是会话 actor 提交之后同步发的：`Shared` 里一组无界 mpsc，每个 worker 一个（`worker::Rows`），不用 broadcast，它落后了会丢通知。邮箱的类型由 worker 定，从入账的一行转换过来：historian 的 `/compact` 也往同一个邮箱里放。
 
-   各 worker 现在的策略：下载同时 4 个、重试前等 1 秒和 4 秒，见[媒体](#媒体)；caption 同时 2 个、失败一分钟后再试一次、再失败写空 caption；embedding 同时 2 个、重试前等 10 秒和 60 秒，见[发图](#发图)；historian 自己按群排，见 [historian](#historian)。不像 Haskell 版用 `message_projections` 的标志位当队列。不要：持久化的队列、失败表和重试次数列、租约、`LISTEN/NOTIFY`、配置里的策略旋钮。lingo 来了照这几条写自己的循环。
+   各 worker 现在的策略：下载同时 4 个、重试前等 1 秒和 4 秒，见[媒体](#媒体)；caption 同时 2 个、失败一分钟后再试一次、再失败写空 caption；embedding 同时 2 个、重试前等 10 秒和 60 秒，见[发图](#发图)；召回向量一样，见[召回](#召回)；historian 自己按群排，见 [historian](#historian)。不像 Haskell 版用 `message_projections` 的标志位当队列。不要：持久化的队列、失败表和重试次数列、租约、`LISTEN/NOTIFY`、配置里的策略旋钮。lingo 来了照这几条写自己的循环。
 3. **触发源**：产出的不是表，是输入，全部进会话 actor 的同一个入口（[运行流程](#运行流程)第 2 步）：有核心在跑就喂给它，没有就起一个核心。差别只在源头：
    - 跟着消息来的，全部由会话 actor 里的 [intent](#intent) 判：@、回复是它的同步规则，看起来没说完的先去抖几秒；其它消息由小模型在 `side` 里异步判，判定叫醒有每小时上限，判定回到信箱，不阻塞别的消息。叫醒核心的 `Wake` 都按 `seen` 过滤。自动化的 ledger_match 是规则。
    - 外部来的：cron、HTTP webhook、外部轮询、proactive 的闲置触发。services 下一个调度器，定义在 `automations` 表，到点给对应的会话 actor 发请求。调度器的形状和派生 worker 一样（常驻、定时器、独占写 `automation_fires`、启动时扫一遍），只是 `run` 的结果是发请求。细节等做自动化时补。
@@ -1016,25 +1016,30 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 
 ### 召回
 
-2026-10-29 做了字面的一半：`context_search`，加上 `context_read` 的两种新读法。向量的一半还没做，位置留好了。Haskell 版也是一个入口统一召回（features.md 的 Unified recall），这里沿用，只是先没有向量和记忆。
+2026-10-29 做了：`context_search` 按字面和按意思搜，加上 `context_read` 的两种新读法。Haskell 版也是一个入口统一召回（features.md 的 Unified recall），这里沿用，只是先没有记忆。
 
 - **范围**：只搜这个会话，两种来源。
   - 消息：kind 是 chat 的行，命令和事件不搜，撤回了的不搜。词在 `messages.text`（渲染后的文本）里，或者在这条消息里图和表情包的 caption 里，都算。表情包的也搜（2026-10-29 owner 定："永远是全部能搜"；原先提议不搜，因为它写的是表情包是什么、什么时候用）。
   - 摘要：活跃的，标题和 p1、p2、p3 都搜。被取代的不搜，`context_read` 还能读。
 - **`/clear --all`**：不管它，水位之前的消息和摘要照样搜，`context_read` 也照样读（2026-10-29 owner 定，同上；和 Haskell 版一样）。`/clear --all` 只管上下文里显示什么。
-- **匹配**：query 按空白切词，最多 8 个、每个 50 字，重复的去掉，逐字转小写，和 Postgres 的 `lower` 一个字对一个字，片段的位置不会错开。每个词在小写的文本里当子串找（`lower(text) like '%词%'`，转义 `% _ \`），不分词，不按意思。有一个词就算候选。
+- **匹配**：query 按空白切词，最多 8 个、每个 50 字，重复的去掉，逐字转小写，和 Postgres 的 `lower` 一个字对一个字，片段的位置不会错开。每个词在小写的文本里当子串找（`lower(text) like '%词%'`，转义 `% _ \`），不分词。有一个词就算候选。
 - **索引**：迁移 0011 装 pg_trgm，在 `lower(messages.text)` 和 `lower(media_captions.text)` 上建 `gin_trgm_ops`。三个字以上的词走索引；一两个字的没有三元组，在这个会话里一行一行比。ctype 是 C 的库（dev shell 的就是）不给中文切三元组，中文的词都是逐行比，结果一样；tank 的 `maxx` 是 en_US.UTF-8，有。查询在事务里设 `plan_cache_mode = force_custom_plan`：sqlx 的预备语句跑几次后换成通用计划，看不到词有多长，会为两个字的词读整个索引。
-- **排序**：分数 0 到 1，字面的是有几个词除以总词数；同分的新的在前。消息按正文去重，复读只留最新的一条；摘要按句柄。每种先最多占 ⌈2·limit/3⌉ 个名额，剩下的再按分数补。`limit` 默认 10，最多 30。
+- **排序**：分数 0 到 1，字面的是有几个词除以总词数，按意思的是余弦相似度，两样都找到的取高的；同分的新的在前。消息按正文去重，复读只留最新的一条；摘要按句柄。每种先最多占 ⌈2·limit/3⌉ 个名额，剩下的再按分数补。`limit` 默认 10，最多 30。
 - **时间**：`from`、`to` 是本地日期 `YYYY-MM-DD`，两头都含。消息看 `sent_at`；摘要和这段时间有重叠就算。
 - **结果**：`{ results: [{ kind, ref, time, text, read }] }`，`read` 原样交给 `context_read`。
-  - 消息：`ref` 是 `#id`；`time` 像 `2026-10-03 周六 14:02`；`text` 是"名字：正文"，正文和尾巴里一样，图带 caption，超过 160 字就截命中处前 40 字起的一段，截掉的地方加"…"；`read` 是 `{ id, before: 10, after: 10 }`。
-  - 摘要：`ref` 是 `summary#id`；`time` 是摘要头里的时间段；`text` 是"标题：片段"，片段取有这些词的最详细的一层，词只在标题里就只有标题；`read` 是 `{ summary: id }`。
+  - 消息：`ref` 是 `#id`；`time` 像 `2026-10-03 周六 14:02`；`text` 是"名字：正文"，正文和尾巴里一样，图带 caption，超过 160 字就截命中处前 40 字起的一段（只按意思找到的从头截），截掉的地方加"…"；`read` 是 `{ id, before: 10, after: 10 }`。
+  - 摘要：`ref` 是 `summary#id`；`time` 是摘要头里的时间段；`text` 是"标题：片段"，片段取有这些词的最详细的一层；哪层都没有（词只在标题里，或者只按意思找到）就取 p1 的开头；`read` 是 `{ summary: id }`。
 - **`context_read`**：`{ id, page? }` 不变，读一条的全文。加了两种：
   - `{ id, before?, after?, page? }`：这条和它前后的行，各最多 50 行，多了按 50 算。和尾巴一样的格式：日期行，一条一行，超长的只有开头。按整行分页。
   - `{ summary, page? }`：一条摘要的 p1 全文、时间段、覆盖的 `#first` 到 `#last`，以及里面提到的人的名册行。被取代的也能读。
 - **限制**：每次运行最多搜 20 次；所有群合计同时最多 4 个搜索，短词要比一个会话的每一行。系统提示的摘要块规则里加了一句：太早的不显示，要找以前的事用 `context_search` 搜、`context_read` 读。
 - **实测**（2026-10-29）：tank 的 `maxx` 上只读跑，还没有这两个索引，所以都是逐行比。最大的会话 6.2 万行：消息 1 个词约 85 ms，2 个约 97 ms，8 个约 145 ms。摘要（848 条的会话）2 个词约 36 ms，8 个约 61 ms。走索引的情况用 tank 上旧的 Haskell 库测（29 万行，`rendered_text` 上有一样的三元组索引）：3 个字的词 19 ms，4 个字 2 ms，两个 3 字的词 13 ms；两个字的词定制计划不碰索引，逐行 182 ms，通用计划读整个索引要 496 ms。`ilike` 比 `lower() like` 慢三倍多（50 ms 对 178 ms），所以不用它。三元组索引在旧库是 88 MB。
-- **向量的一半**（还没做）：embedding 和[表情包库](#发图)共用，提议沿用 bge-m3（1024 维）；旧库里 22.5 万条消息、3.2 千条摘要有向量，按 id 能直接导。做法：`max_db::recall` 再加按 cosine 取候选的查询，分数就是相似度；`context_search` 里和字面的候选合在一起，同一个 `ref` 取高的分，之后的去重、配额、排序、结果形状都不变。embedding 失败就只剩字面的结果。到时候工具描述里"不按意思"那句要改。
+- **按意思**：整个 query 算一个向量，模型和[表情包库](#发图)共用（bge-m3，1024 维），等 5 秒；没配模型、出错、超时，就只按字面搜，不报错。`max_db::recall` 按余弦距离取最近的消息和摘要，过滤和字面的一样（chat、没撤回、时间、活跃的摘要），只比同一个模型的向量；条数和字面的一样（消息 3·limit，摘要 limit）。相似度至少 0.5 才算候选（提议，是估的，没在真数据上调过）。和字面的候选按 id 合在一起，同一个 `ref` 取高的分；之后的去重、配额、排序、结果形状都不变。
+- **向量**：一条 chat 消息一个，一段活跃的摘要一个（迁移 0013，`message_embeddings`、`summary_embeddings`）。按行不按窗口：结果本来就是一行（`#id`），上下文由 `context_read` 的前后各 10 行给；ledger 只追加，一行的向量永远不过期，窗口的会随后来的消息变；旧库的向量也是按行的，按 id 直接导。消息的文本是 `text` 去掉不带字的句柄（`[mention#3]`、`[reply#12]`、`[image]` 这类，SQL 函数 `recall_text`），剩下不到 4 个字的不算（"在吗""好的"按意思搜不出什么，字面照样搜得到；Haskell 版也是 4），只取前 2000 字。摘要的文本是标题加 p1。表情包和图的 caption 不单独算向量，字面照样搜。
+- **精度**：`halfvec(1024)`，不像表情包库用 `vector`：22.5 万条时表和 HNSW 索引一共约 1.2 GB，`vector` 要 3 GB。最近的还是那些：2 万条随机向量（彼此的距离最挤，最难分）里搜 50 次，前十都一样，49 次顺序也一样，距离最多差 0.00004。HNSW（`halfvec_cosine_ops`）之外还有 `conversation_id` 的 btree：查询在事务里设 `hnsw.iterative_scan = relaxed_order`，HNSW 先取的 40 个被会话、时间过滤掉了会接着往下找；小会话里规划器直接按会话取出来精确排序，所以和字面的一样用定制计划。
+- **召回向量 worker**（`max::recall`）：入账的每一行、historian 发布的每段摘要都交给它，没有当前模型向量的才算，同时 2 个请求，失败重试两次（10 秒、60 秒）就放弃。启动时和之后每小时扫一遍：先摘要，再消息，各自新的在前，16 条一个请求，不重试，下一次扫描就是重试；一页失败了就一条条再试一次，免得一条服务不收的文本挡住比它旧的全部，一条都不成就是服务挂了，等下一次。换了模型会全部重算。只有它写这两张表；用量不记 `llm_usage`。没配 embedding 模型就没有它。
+- **实测**（2026-10-29，dev 的 Postgres 17，Mac，`maintenance_work_mem` 64 MB，22.5 万条随机的单位向量）：在有数据的表上建 HNSW，`vector` 9 分 30 秒、索引 1.76 GB，`halfvec` 6 分钟、586 MB；迁移是在空表上建，几毫秒。往建好索引的空表里插（导入就是这样）：22.5 万条 `halfvec` 17 分钟（同时在编译，偏慢）；2 万条 `vector` 50 秒，`halfvec` 38 秒。查询（`halfvec`，limit 90）：5.6 万行的会话走 HNSW 36 ms，2,250 行的走 btree 加排序 16 ms。
+- **导入**：旧库 22.5 万条消息、3.2 千段摘要的 bge-m3 向量由 `max-import vectors` 按 id 导，见[导入](#导入)。
 
 ### 砍掉的
 
@@ -1115,6 +1120,7 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 | caption | `media_captions` | 按 sha256 一行，只写一次：用哪个提示词（图或表情包）、文字（模型放弃时为空）、`skip`（不像表情包的，不进表情包库）、哪个模型写的（导入的为空）。caption worker 是唯一的写者；读行的查询给没有描述的媒体节点填上它，所以哪里读到的行都带着 caption。见[媒体](#媒体) |
 | | `media_captions` | sha256、caption（放弃了就是空的）、写它的模型、时间。caption worker 是唯一的写者 |
 | | `caption_embeddings` | 按 sha256 一行：表情包 caption 的向量（`vector(1024)`）、哪个模型算的、时间。embedding worker 是唯一的写者；换了模型，它的扫描按新模型全部重算，搜索只比同一个模型的向量。见[发图](#发图) |
+| | `message_embeddings`、`summary_embeddings` | 按消息 id、摘要 id 一行：会话、`halfvec(1024)` 的向量、哪个模型算的、时间。召回向量 worker 是唯一的写者，换了模型全部重算。见[召回](#召回) |
 | | `message_media` | 消息、序号、sha256。入站节点里是下载地址，下载完记在这里；程序交的图（`max.image()`）节点里直接是 sha256 |
 | turn | `turns`、`turn_snapshots`、`turn_outcomes` | 见 [turn 记录](#turn-记录)。`t#N` 是 `turns.ordinal`，每个会话从 1 数 |
 | | `llm_usage` | turn（可空）、用途（turn、intent、historian、caption）、provider、模型、强度、token（含缓存命中数，按 provider 看命中率、调空闲窗口；还有其中的推理 token）、费用。token 用 bigint；费用 `cost_micros` 是百万分之一美元，用整数，不要 decimal，价格未知时为空 |
@@ -1122,7 +1128,7 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 | | `summary_runs` | historian 的每次模型调用：范围、原因（quiet、pressure、compact）、模型、原始输出、错误。用量在 `llm_usage`。有保留期 |
 | 记忆 | `memories` | v1 不做记忆，表先定：会话、principal（空就是群的记忆）、类别、内容、importance、status、来源 summary、证据消息范围。个人记忆也带会话：Haskell 版的个人记忆只在来源群里用（`MemoryStore.hs:103-119`），不跨群 |
 
-以后随功能加：`automations`、`lingo_*`、`bungie_*`、`destiny_*`；`context_search` 的消息和摘要向量照 `caption_embeddings` 的样子各一张表。
+以后随功能加：`automations`、`lingo_*`、`bungie_*`、`destiny_*`。
 
 ### 旧表的去向
 
@@ -1151,14 +1157,14 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 - `conversation_compartments` 只导 `active` 的（3,249 段）。它们按群号（`legacy_group_id`）挂，不是按 `conversation_id`，导入时经群号找会话。范围从 `ingest_seq` 换成首尾消息 id；importance 0..1 换成 1..100；单摘要时期的 40 段只有 `summary`，放进 p1，其它层空着。旧摘要没有标题，标题留空，渲染时不留多余的空格。句柄从 `episode:<uuid>` 换成 `summary#<id>`。
 - `principals` 和 `principal_identities` 直接搬，id 不变，旧摘要和记忆里的 `[mention#N]` 因此还有效；改名之前写的 `[@#N]` 导入时改写成 `[mention#N]`。旧表按 Max 的账号（`platform_account_id`）区分 identity，每个平台一个账号，直接换成平台：QQ 的换成 `qq_legacy`。`sender_name` 从旧 `messages` 的 `sender_card`、`sender_nickname` 取，群名片优先：2026-08-04 起 `sender_nickname` 存的就是有名片时的名片（`QQ.hs:94`）。`sender_role` 从 `platform_events` 原始 payload 的 `sender.role` 取，08-04 之前的为空。没有身份、没有消息的 611 个空 principal 不导。`endpoint_known_identities` 不导。
 - `sessions` 只导人设、`/proactive` 和 `/clear --all`，模型和强度不导，见[配置](#配置)。`memories` 等记忆功能做出来再导（2026-10-29 定）：它们也按群号挂；个人记忆只在来源群里用，表要带会话，不能只按 principal，见[表](#表)。
-- 媒体：内容库的文件和旧库在同一个 bcachefs 上，用 `cp --reflink` 拷到 `/var/lib/maxx/media`，属主改成 `maxx`。`media` 和 `message_media` 从 `message_images`、`message_videos`、`group_files` 建；旧的 `seg_index` 是第几个节点，不是第几个媒体，要按节点重算序号；没有表记着的，按节点里写的 blob 补上（多是 Max 发的图）。文件要先拷好，导入时每个都要在。给模型的版本和图片尺寸由 `max-import pictures` 生成，和下载时一样。caption 等第 3 小步有了 `media_captions` 再导：老库 21,519 张图的描述，和表情包库（3,397 张；3,328 张有描述和 bge-m3 向量，94 张 banned 的记成 SKIP）。由 `max-import captions` 导，maxx 照常跑着也行；它先跑迁移，所以要在带 caption worker 的 maxx 启动之前导，否则 worker 启动时的扫描会把最近 14 天导入的图重新写一遍：只导 maxx 有的文件，同一个文件表情包的描述优先，maxx 自己已经写了的不动，所以能重复跑。表情包的向量由 `max-import vectors` 导（第 5 小步）：老 `stickers` 表的 bge-m3 向量，只导老表记的文本哈希（`embedding_content_hash`，描述的 sha256）和 maxx 的 caption 文字对得上的，模型名照抄（`bge-m3`，所以 `[embedding] model` 要写成这个），已经有向量的不动，所以能重复跑、maxx 跑着也行；它也先跑迁移。10-29 在 tank 上只读地对过：maxx 有 3,334 条该有向量的表情包 caption，3,319 条能导；8 条老描述有换行或首尾空白，导 caption 时理成了一行，文字不同；7 条是 maxx 自己写的 caption，老库没有向量；这 15 条由 embedding worker 补。
+- 媒体：内容库的文件和旧库在同一个 bcachefs 上，用 `cp --reflink` 拷到 `/var/lib/maxx/media`，属主改成 `maxx`。`media` 和 `message_media` 从 `message_images`、`message_videos`、`group_files` 建；旧的 `seg_index` 是第几个节点，不是第几个媒体，要按节点重算序号；没有表记着的，按节点里写的 blob 补上（多是 Max 发的图）。文件要先拷好，导入时每个都要在。给模型的版本和图片尺寸由 `max-import pictures` 生成，和下载时一样。caption 等第 3 小步有了 `media_captions` 再导：老库 21,519 张图的描述，和表情包库（3,397 张；3,328 张有描述和 bge-m3 向量，94 张 banned 的记成 SKIP）。由 `max-import captions` 导，maxx 照常跑着也行；它先跑迁移，所以要在带 caption worker 的 maxx 启动之前导，否则 worker 启动时的扫描会把最近 14 天导入的图重新写一遍：只导 maxx 有的文件，同一个文件表情包的描述优先，maxx 自己已经写了的不动，所以能重复跑。表情包的向量由 `max-import vectors` 导（第 5 小步）：老 `stickers` 表的 bge-m3 向量，只导老表记的文本哈希（`embedding_content_hash`，描述的 sha256）和 maxx 的 caption 文字对得上的，模型名照抄（`bge-m3`，所以 `[embedding] model` 要写成这个），已经有向量的不动，所以能重复跑、maxx 跑着也行；它也先跑迁移。10-29 在 tank 上只读地对过：maxx 有 3,334 条该有向量的表情包 caption，3,319 条能导；8 条老描述有换行或首尾空白，导 caption 时理成了一行，文字不同；7 条是 maxx 自己写的 caption，老库没有向量；这 15 条由 embedding worker 补。消息和摘要的向量也由它导，按 id：maxx 的召回向量 worker 要算的（够 4 个字的 chat 消息、活跃的摘要）、还没有向量的，从旧 `messages`（`canonical_message_id`）和 `conversation_compartments` 拿 1024 维的，模型名照抄；旧向量是从旧的渲染文本算的，句柄写法不同，意思一样。2000 条一批，已经有的不动。要在带召回向量 worker 的 maxx 启动之前导，否则 worker 会先花几个小时重算。
 - 转发：旧库把转发里的每条消息存成单独的行，导入时折进转发那条消息的节点，一条一行（嵌套的缩进），和现在官方接口给的转发一样；里面的图算在那条消息上。
 - Max 是一个 principal：旧 QQ 号的 Max，加上 bot 的 openid 作 `qq` 身份，旧行渲染出来是"（你）"。Max 的旧行没有平台 id，它们本该在不导的 `deliveries` 里。
 - owner 的旧私聊接到 owner 新的 c2c 私聊上；别人的旧私聊不接。owner 的 openid 接在 owner 旧 QQ 号的 principal 上。
 - 各群 VM 的 `/work` 也迁（2026-10-27 定）：按群号找到对应的会话，把这个群当前沙箱卷里的 `work` 拷到新卷，属主改成 `maxx`（见 [VM 进程](#vm-进程)）。`nix.img`（guest 里可写的 Nix store，存的是装过的包）提议不迁，用到时重新装。旧卷在 root 所有的目录下，读它要 root。
 - 自动化、lingo、Destiny 等各自功能做到时再导；表情包随 caption 一起导。
 - 导入写了旧 id 的表，最后要把它们的 identity 序列调到最大值之后（`setval`），否则新行会撞旧 id。
-- 规模：2026-10-28 有 293,848 条消息、605 个有身份的人；库 3.3 GB，内容库 3.4 万个文件、26 GB。导入是分钟级的事。消息和摘要的向量（bge-m3）不导，`context_search` 做到时重算；表情包的向量导，见上面的媒体一条。
+- 规模：2026-10-28 有 293,848 条消息、605 个有身份的人；库 3.3 GB，内容库 3.4 万个文件、26 GB。导入是分钟级的事。向量都导，见上面的媒体一条。
 - maxx 自己的库（测试群的 113 条消息、3 段摘要）导入时整个重建，不留（2026-10-29 owner 定）：它的 id 和要保留的旧 id 撞。测试群导入后重新 `/bind`，导入前 `/link` 过的人导入后再发一次。
 - 工具是单独的 crate `max-import`：`import` 在一个事务里导进空库，连旧库只读；`pictures` 再补给模型的图，跑过的跳过。演练就是导进一个临时库。上线跑一段时间后删掉；`/link` 留着，QQ 号是一个人在各个群和私聊里唯一不变的号。旧库和 `/var/lib/max` 等 owner 说了再删。`qq_legacy` 的行和合并是数据，留着。
 - 上线步骤（2026-10-29 定）：
