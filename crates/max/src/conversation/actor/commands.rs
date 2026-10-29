@@ -1,7 +1,9 @@
 //! Running commands. The answer is said in the same conversation, as a row
 //! of Max's outside any turn: QQ gives no way from a group member's id to a
 //! private chat with them. It doesn't quote the command, which is right
-//! above it.
+//! above it, and reads like a log: terse, `/name → result`, in a code
+//! block (see `command::answer`). Like the command, it is in the next
+//! core's context as Max's own words.
 
 use std::fmt::Write;
 use std::time::Duration;
@@ -55,13 +57,14 @@ impl Conversation {
                 Rank::Owner
             }
         };
+        let name = command.name();
         if rank < needs {
             let who = if needs == Rank::Owner {
                 "主人"
             } else {
                 "群主、管理员"
             };
-            return self.answer(format!("这个命令只有{who}能用。")).await;
+            return self.answer(name, &format!("拒绝：仅限{who}")).await;
         }
         let answer = match command {
             Command::Status => self.status(),
@@ -78,11 +81,11 @@ impl Conversation {
             Command::Effort(argument) => self.effort(argument).await?,
             Command::Proactive(on) => self.proactive(on).await?,
             Command::Persona(persona) => self.persona(persona).await?,
-            Command::Clear { all: false } => "要清空上下文，发 /clear --all。".to_owned(),
+            Command::Clear { all: false } => "需要确认：发送 /clear --all 清空上下文".to_owned(),
             Command::Clear { all: true } => {
                 self.settings.cleared_upto = Some(committed.message.id);
                 self.save_settings().await?;
-                "好，之前的聊天不再进上下文。".to_owned()
+                "已清空：之前的消息不再进入上下文".to_owned()
             }
             Command::Compact => match self.compact() {
                 Some(answer) => answer,
@@ -94,13 +97,15 @@ impl Conversation {
                 self.link(committed, argument.as_deref(), owner).await?
             }
         };
-        self.answer(answer).await
+        self.answer(name, &answer).await
     }
 
-    async fn answer(&mut self, text: String) -> Result<()> {
+    async fn answer(&mut self, name: &str, body: &str) -> Result<()> {
         let draft = Draft {
             reply_to: None,
-            nodes: vec![DraftNode::Text { text }],
+            nodes: vec![DraftNode::Text {
+                text: command::answer(name, body),
+            }],
         };
         self.say(draft, None, None).await?;
         Ok(())
@@ -110,10 +115,10 @@ impl Conversation {
     /// or the answer now, when it can't.
     fn compact(&mut self) -> Option<String> {
         if self.place.kind == ConversationKind::Direct {
-            return Some("私聊不写摘要。".to_owned());
+            return Some("跳过：私聊不写摘要".to_owned());
         }
         let Some(historian) = &self.shared.historian else {
-            return Some("没有配写摘要的模型。".to_owned());
+            return Some("错误：没有配置摘要模型".to_owned());
         };
         let (reply, answer) = oneshot::channel();
         let notice = Notice::Compact(Compact {
@@ -121,7 +126,7 @@ impl Conversation {
             reply,
         });
         if historian.send(notice).is_err() {
-            return Some("写摘要的服务停了。".to_owned());
+            return Some("错误：摘要服务已停止".to_owned());
         }
         let mailbox = self.mailbox.clone();
         self.side.spawn(move |_| async move {
@@ -135,11 +140,11 @@ impl Conversation {
 
     pub(super) async fn compacted(&mut self, result: Compacted) -> Result<()> {
         let text = match result {
-            Ok(Captured::Published(count)) => format!("好，整理成了 {count} 段摘要。"),
-            Ok(Captured::Nothing) => "没有要整理的。".to_owned(),
-            Err(_) => "这次没整理成，等会儿再试试。".to_owned(),
+            Ok(Captured::Published(count)) => format!("已压缩：{count} 段摘要"),
+            Ok(Captured::Nothing) => "跳过：没有要压缩的".to_owned(),
+            Err(_) => "失败：稍后重试".to_owned(),
         };
-        self.answer(text).await
+        self.answer("compact", &text).await
     }
 
     async fn save_settings(&mut self) -> Result<()> {
@@ -154,35 +159,36 @@ impl Conversation {
         Ok(())
     }
 
-    /// A card like the Haskell version's `!version`, in English: a line
-    /// each, an emoji in front. QQ breaks lines at a bare newline; two
-    /// spaces before it, Markdown's break, made it two. `/model` and
+    /// A card like the Haskell version's `!version`, in English: maxx and
+    /// its commit, then a key and its value a line. `/model` and
     /// `/persona` show those.
     fn status(&self) -> String {
         let settings = &self.settings;
-        let mut lines = vec![
-            format!("🦈 maxx {}", crate::COMMIT),
-            format!("🌊 {} · {}", os(), std::env::consts::ARCH),
-        ];
+        let mut lines = vec![format!("maxx {}", crate::COMMIT)];
+        let mut line = |key: &str, value: String| lines.push(format!("{key:<10}{value}"));
+        line("os", format!("{} · {}", os(), std::env::consts::ARCH));
         let proactive = if settings.proactive { "on" } else { "off" };
-        lines.push(format!("💬 proactive: {proactive}"));
-        lines.push(match &self.core {
-            Some(a) => format!(
-                "⚙️ replying: t#{} · {} · round {}",
-                a.ordinal,
-                span(a.started.elapsed()),
-                a.run.round()
-            ),
-            None => "💤 idle".to_owned(),
-        });
+        line("proactive", proactive.to_owned());
+        line(
+            "core",
+            match &self.core {
+                Some(a) => format!(
+                    "t#{} · {} · round {}",
+                    a.ordinal,
+                    span(a.started.elapsed()),
+                    a.run.round()
+                ),
+                None => "idle".to_owned(),
+            },
+        );
         if let Some(mark) = settings.cleared_upto {
-            lines.push(format!("🧹 context after #{mark}"));
+            line("context", format!("after #{mark}"));
         }
-        let mut up = format!("⏱️ up {}", span(self.shared.started.elapsed()));
+        let mut up = span(self.shared.started.elapsed());
         if let Some(host) = host_uptime() {
             let _ = write!(up, " · host {}", span(host));
         }
-        lines.push(up);
+        line("uptime", up);
         lines.join("\n")
     }
 
@@ -198,11 +204,11 @@ impl Conversation {
             return Ok(format!("当前：{current}\n可选：{list}"));
         };
         if let Err(error) = models.choose(reference, None) {
-            return Ok(format!("没有这个模型（{error}）。可选：{list}"));
+            return Ok(format!("错误：没有这个模型（{error}）\n可选：{list}"));
         }
         self.settings.model = (reference != "default").then(|| reference.to_owned());
         self.save_settings().await?;
-        Ok(format!("下一次回复起用 {reference}。"))
+        Ok(format!("已切换：{reference}，下次回复生效"))
     }
 
     async fn effort(&mut self, argument: Option<String>) -> Result<String> {
@@ -213,9 +219,10 @@ impl Conversation {
             };
             return Ok(format!("推理强度：{effort}"));
         };
+        let answer = format!("已设置：{level}，下次回复生效");
         self.settings.effort = (level != "default").then_some(level);
         self.save_settings().await?;
-        Ok("下一次回复起生效。".to_owned())
+        Ok(answer)
     }
 
     async fn proactive(&mut self, on: Option<bool>) -> Result<String> {
@@ -231,9 +238,9 @@ impl Conversation {
         self.intent.set_proactive(on);
         self.save_settings().await?;
         Ok(if on {
-            "主动接话开了。"
+            "已开启主动接话"
         } else {
-            "主动接话关了，只在被叫到时回。"
+            "已关闭主动接话：只在被 @ 或回复时回答"
         }
         .to_owned())
     }
@@ -243,16 +250,16 @@ impl Conversation {
             Persona::Show => {
                 return Ok(match &self.settings.persona {
                     Some(persona) => format!("当前人设：\n{persona}"),
-                    None => "用的是默认人设。".to_owned(),
+                    None => "当前人设：默认".to_owned(),
                 });
             }
             Persona::Reset => {
                 self.settings.persona = None;
-                "回到默认人设，下一次回复起生效。"
+                "已恢复默认人设，下次回复生效"
             }
             Persona::Set(text) => {
                 self.settings.persona = Some(text);
-                "人设换了，下一次回复起生效。"
+                "已更新人设，下次回复生效"
             }
         };
         self.save_settings().await?;
@@ -263,18 +270,18 @@ impl Conversation {
     /// instead of running it.
     pub(super) async fn bound(&mut self, continued: bool) -> Result<()> {
         let text = if continued {
-            "绑好了，这个群接着老群的记录往下聊。"
+            "已绑定：接续老群的记录"
         } else {
-            "绑好了，这个群从这里开始记。"
+            "已绑定：从这里开始记录"
         };
-        self.answer(text.to_owned()).await
+        self.answer("bind", text).await
     }
 
     /// In a private chat, a code to bind a QQ group with; in a group, the
     /// group is bound already, or it wouldn't have an actor.
     async fn bind(&mut self, committed: &Committed, argument: Option<&str>) -> Result<String> {
         if self.place.kind != ConversationKind::Direct {
-            return Ok("这个群已经绑定过了，不支持改绑。".to_owned());
+            return Ok("错误：本群已绑定，不支持改绑".to_owned());
         }
         let conversation = match argument {
             None => None,
@@ -284,11 +291,11 @@ impl Conversation {
                 let found =
                     platform::conversation_of(&mut conn, Platform::QqLegacy, &native_id).await?;
                 let Some(conversation) = found else {
-                    return Ok(format!("没找到老群 {group} 的记录。"));
+                    return Ok(format!("错误：没有老群 {group} 的记录"));
                 };
                 let bound = platform::endpoint_on(&mut conn, conversation, Platform::Qq).await?;
                 if bound.is_some() {
-                    return Ok(format!("老群 {group} 的记录已经接到一个群上了。"));
+                    return Ok(format!("错误：老群 {group} 的记录已接到别的群"));
                 }
                 Some(conversation)
             }
@@ -299,11 +306,11 @@ impl Conversation {
         };
         let code = self.shared.binds.issue(pending, std::time::Instant::now());
         let target = match argument {
-            Some(group) => format!("接上老群 {group} 的记录"),
-            None => "开一段新的记录".to_owned(),
+            Some(group) => format!("接续老群 {group} 的记录"),
+            None => "开始新的记录".to_owned(),
         };
         Ok(format!(
-            "在要绑的群里发 /bind {code}，{target}。10 分钟内有效，只能用一次。"
+            "已生成绑定码：在要绑的群里发送 /bind {code}，{target}\n有效期 10 分钟，只能用一次"
         ))
     }
 }
@@ -320,9 +327,9 @@ impl Conversation {
         argument: Option<&str>,
         owner: bool,
     ) -> Result<String> {
-        const USAGE: &str = "在群里发 /link 你的QQ号，把这个账号接到老群记录里的你。";
+        const USAGE: &str = "用法：/link 你的QQ号，把这个账号接到老群记录里的你";
         if self.place.kind == ConversationKind::Direct {
-            return Ok("/link 要在群里发：每个群里的账号各接各的。".to_owned());
+            return Ok("错误：要在群里发，每个群的账号各接各的".to_owned());
         }
         let Some(last) = argument.and_then(|argument| argument.split_whitespace().last()) else {
             return Ok(USAGE.to_owned());
@@ -339,7 +346,7 @@ impl Conversation {
             _ => None,
         };
         if (mentioned.is_some() || last == "-") && !owner {
-            return Ok("替别人接、撤销，只有主人能用。".to_owned());
+            return Ok("拒绝：替别人接、撤销仅限主人".to_owned());
         }
         let target = mentioned.unwrap_or(committed.sender.identity);
         let mut conn = self.shared.pool.acquire().await?;
@@ -348,11 +355,11 @@ impl Conversation {
         };
         let current = merged.unwrap_or(own);
         if current == self.place.me.principal || self.shared.owners.contains(&current) {
-            return Ok("主人和 Max 自己的账号不用 /link。".to_owned());
+            return Ok("跳过：主人和 Max 的账号不用 /link".to_owned());
         }
         if last == "-" {
             platform::relink(&mut conn, own, None).await?;
-            return Ok("好，撤销了这个账号的关联。".to_owned());
+            return Ok("已撤销：这个账号的关联".to_owned());
         }
         let qq = (5..=12).contains(&last.len()) && last.bytes().all(|b| b.is_ascii_digit());
         if !qq {
@@ -360,24 +367,24 @@ impl Conversation {
         }
         let found = platform::legacy_speaker(&mut conn, self.place.conversation, last).await?;
         let Some(old) = found else {
-            return Ok("老群的记录里没有这个 QQ 号说过的话。".to_owned());
+            return Ok("错误：老群的记录里没有这个 QQ 号".to_owned());
         };
         if current == old.principal {
-            return Ok("已经接上了。".to_owned());
+            return Ok("跳过：已经接上了".to_owned());
         }
         if merged.is_some() && !owner {
-            return Ok("你已经接到老群记录里的另一个人了，要改找主人。".to_owned());
+            return Ok("拒绝：你已接到老群记录里的另一个人，要改找主人".to_owned());
         }
         let endpoint = self.place.endpoint;
         if let Some(other) = platform::linked_in(&mut conn, endpoint, old.principal, target).await?
         {
             if !owner {
-                return Ok("这个 QQ 号在这个群里已经有人接上了，有问题找主人。".to_owned());
+                return Ok("拒绝：这个 QQ 号在本群已有人接上，有问题找主人".to_owned());
             }
             platform::relink(&mut conn, other.principal, None).await?;
         }
         platform::relink(&mut conn, own, Some(old.principal)).await?;
-        Ok(format!("好，接到了老群记录里的「{}」。", old.name))
+        Ok(format!("已关联：老群记录里的「{}」", old.name))
     }
 
     /// Each time an account that isn't linked talks to Max, with an @ or a

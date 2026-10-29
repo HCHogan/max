@@ -1,7 +1,8 @@
 //! Commands: a message that starts with `/` and a word from this list.
 //! Only `/`: QQ's command panel fills one in, and `!` is plain text. There
 //! is no `/help`: the panel is the list.
-//! The conversation actor runs them; they never reach a core.
+//! The conversation actor runs them; they never reach a core. Their
+//! answers read like a log, in a code block: see `answer`.
 
 /// A command and its argument, parsed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +28,34 @@ pub enum Command {
     /// `/link <QQ号>`, or an owner's `/link @某人 <QQ号>` and
     /// `/link @某人 -`.
     Link(Option<String>),
+}
+
+impl Command {
+    /// The word it is run by.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Command::Status => "status",
+            Command::Kill => "kill",
+            Command::Model(_) => "model",
+            Command::Effort(_) => "effort",
+            Command::Proactive(_) => "proactive",
+            Command::Persona(_) => "persona",
+            Command::Clear { .. } => "clear",
+            Command::Compact => "compact",
+            Command::Bind(_) => "bind",
+            Command::Link(_) => "link",
+        }
+    }
+}
+
+/// A command's answer as it is said: `/name → result`, any more lines
+/// under it, in a text code block, set apart from what Max says in a
+/// turn. The fence outgrows any run of backticks inside, as a persona
+/// may have.
+pub fn answer(name: &str, body: &str) -> String {
+    let longest = body.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest.max(2) + 1);
+    format!("{fence}text\n/{name} → {body}\n{fence}")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,5 +148,15 @@ mod tests {
         ] {
             assert_eq!(parse(chatter), None, "{chatter:?}");
         }
+    }
+
+    #[test]
+    fn answers_are_code_blocks() {
+        assert_eq!(answer("clear", "已清空"), "```text\n/clear → 已清空\n```");
+        let persona = "当前人设：\n用 ```python 写代码";
+        assert_eq!(
+            answer("persona", persona),
+            format!("````text\n/persona → {persona}\n````")
+        );
     }
 }

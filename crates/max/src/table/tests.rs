@@ -7,6 +7,7 @@ use max_core::message::{Content, Node, Role};
 use tokio::sync::oneshot;
 
 use super::*;
+use crate::command;
 use crate::conversation::testing::{self, from_xiaoming, offset, shared, text};
 use crate::conversation::{Outgoing, ingest};
 use crate::inbound::{Chat, Person};
@@ -147,12 +148,15 @@ async fn a_group_is_served_once_bound(pool: PgPool) {
     s.send(owner_in_group(3, &format!("/bind {code}")));
     let bound = (
         "group:GROUP1".to_owned(),
-        "绑好了，这个群从这里开始记。".to_owned(),
+        command::answer("bind", "已绑定：从这里开始记录"),
     );
     assert_eq!(s.said().await, bound);
     // Only an owner may run /bind: the account here is the owner's now.
     s.send(owner_in_group(4, &format!("/bind {code}")));
-    assert_eq!(s.said().await.1, "这个群已经绑定过了，不支持改绑。");
+    assert_eq!(
+        s.said().await.1,
+        command::answer("bind", "错误：本群已绑定，不支持改绑")
+    );
     let mut conn = s.pool.acquire().await.unwrap();
     let member = platform::account(&mut conn, Platform::Qq, "OWNERMEMBER", "hank")
         .await
@@ -200,11 +204,17 @@ async fn a_group_goes_on_from_an_old_one(pool: PgPool) {
     drop(conn);
 
     s.send(private(1, "/bind 30002"));
-    assert_eq!(s.said().await.1, "没找到老群 30002 的记录。");
+    assert_eq!(
+        s.said().await.1,
+        command::answer("bind", "错误：没有老群 30002 的记录")
+    );
     let code = s.code(2, "/bind 30001").await;
     let again = s.code(3, "/bind 30001").await;
     s.send(owner_in_group(4, &format!("/bind {code}")));
-    assert_eq!(s.said().await.1, "绑好了，这个群接着老群的记录往下聊。");
+    assert_eq!(
+        s.said().await.1,
+        command::answer("bind", "已绑定：接续老群的记录")
+    );
     let mut conn = s.pool.acquire().await.unwrap();
     let bound = platform::endpoint_on(&mut conn, old.conversation, Platform::Qq)
         .await
@@ -219,7 +229,10 @@ async fn a_group_goes_on_from_an_old_one(pool: PgPool) {
     drop(conn);
 
     s.send(private(5, "/bind 30001"));
-    assert_eq!(s.said().await.1, "老群 30001 的记录已经接到一个群上了。");
+    assert_eq!(
+        s.said().await.1,
+        command::answer("bind", "错误：老群 30001 的记录已接到别的群")
+    );
     let mut elsewhere = owner_in_group(6, &format!("/bind {again}"));
     elsewhere.chat.native_id = "group:GROUP2".into();
     s.send(elsewhere);
