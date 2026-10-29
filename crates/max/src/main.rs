@@ -28,12 +28,15 @@ use max::conversation::{Place, Shared};
 use max::historian::{self, Historian};
 use max::llm::Models;
 use max::mcp;
+use max::media::download::{self, Download};
+use max::media::fetch;
+use max::media::store::Store;
 use max::qq::{listen, send};
 use max::scope::Scope;
 use max::table::{self, Me, Table};
 use max::tools;
 use max::vm::Vms;
-use max::worker::Rows;
+use max::worker::{self, Rows};
 
 // Stopping, in order, within systemd's TimeoutStopSec of 60 seconds.
 /// The QQ gateway saves its session.
@@ -228,6 +231,22 @@ async fn serve(config: Config) -> Result<()> {
             None
         }
     };
+    let mut workers = Scope::new();
+    match &config.media {
+        Some(media) => {
+            let store = Store::open(&media.dir)
+                .await
+                .wrap_err("opening the content store")?;
+            let download = Arc::new(Download {
+                pool: pool.clone(),
+                http: fetch::client()?,
+                store: Arc::new(store),
+            });
+            let rows = rows.subscribe();
+            workers.spawn(move |stop| worker::drive(download, download::POLICY, rows, stop));
+        }
+        None => info!("no media directory: media aren't downloaded"),
+    }
     let mut services = Scope::new();
     let vms = match config.vm {
         Some(vm) => Some(Vms::start(vm, &mut services)?),
@@ -309,6 +328,8 @@ async fn serve(config: Config) -> Result<()> {
     drop(shared);
     senders.close(DRAIN + Duration::from_secs(5)).await;
     historians.close(Duration::from_secs(5)).await;
+    // What they were doing is redone on the next start, or given up.
+    workers.close(Duration::ZERO).await;
     // The VMs are killed: what still ran in them was interrupted already.
     services.close(Duration::ZERO).await;
     pool.close().await;

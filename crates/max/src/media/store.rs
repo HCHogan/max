@@ -1,6 +1,7 @@
 //! The content store: files named by the SHA-256 of their bytes, under
 //! `objects/<first two hex digits>/`, read-only once written. The Haskell
-//! version used the same layout, so its files move over as they are.
+//! version used the same layout, so its files move over as they are. A
+//! file is written in `tmp/` first.
 
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -11,13 +12,23 @@ use tokio::fs;
 
 pub struct Store {
     objects: PathBuf,
+    tmp: PathBuf,
 }
 
 impl Store {
-    pub fn new(dir: &Path) -> Self {
-        Self {
-            objects: dir.join("objects"),
+    /// The store in `dir`. What a write left in `tmp/` when max stopped is
+    /// thrown away.
+    pub async fn open(dir: &Path) -> io::Result<Self> {
+        let tmp = dir.join("tmp");
+        match fs::remove_dir_all(&tmp).await {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
         }
+        fs::create_dir_all(&tmp).await?;
+        Ok(Self {
+            objects: dir.join("objects"),
+            tmp,
+        })
     }
 
     /// Where the file with this lowercase hex SHA-256 is, or would be.
@@ -28,17 +39,23 @@ impl Store {
     }
 
     /// Stores `bytes` and returns their SHA-256. Bytes already there are
-    /// left alone. A new file is written beside its place and renamed
-    /// into it, so no one reads half of one.
-    pub async fn put(&self, bytes: &[u8]) -> io::Result<String> {
-        let sha256 = hex(&Sha256::digest(bytes));
+    /// left alone. A new file is renamed into its place, so no one reads
+    /// half of one.
+    pub async fn put(&self, bytes: Vec<u8>) -> io::Result<String> {
+        // A video's hash takes a while: not on the runtime's threads.
+        let (sha256, bytes) =
+            tokio::task::spawn_blocking(move || (hex(&Sha256::digest(&bytes)), bytes))
+                .await
+                .map_err(io::Error::other)?;
         let path = self.path(&sha256);
         if fs::try_exists(&path).await? {
             return Ok(sha256);
         }
         let dir = path.parent().unwrap_or(&self.objects);
         fs::create_dir_all(dir).await?;
-        let partial = dir.join(format!(".{sha256}.{:016x}", rand::random::<u64>()));
+        let partial = self
+            .tmp
+            .join(format!("{sha256}.{:016x}", rand::random::<u64>()));
         let written = async {
             fs::write(&partial, bytes).await?;
             fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o444)).await?;
@@ -65,8 +82,8 @@ mod tests {
     #[tokio::test]
     async fn bytes_by_their_hash_once() {
         let dir = std::env::temp_dir().join(format!("max-store-{:016x}", rand::random::<u64>()));
-        let store = Store::new(&dir);
-        assert_eq!(store.put(b"abc").await.unwrap(), ABC);
+        let store = Store::open(&dir).await.unwrap();
+        assert_eq!(store.put(b"abc".to_vec()).await.unwrap(), ABC);
         let path = dir.join("objects/ba").join(ABC);
         assert_eq!(store.path(ABC), path);
         assert_eq!(std::fs::read(&path).unwrap(), b"abc");
@@ -74,12 +91,18 @@ mod tests {
         assert_eq!(mode & 0o777, 0o444);
 
         // Again: the file is there, read-only, and isn't written twice.
-        assert_eq!(store.put(b"abc").await.unwrap(), ABC);
+        assert_eq!(store.put(b"abc".to_vec()).await.unwrap(), ABC);
         let names: Vec<_> = std::fs::read_dir(dir.join("objects/ba"))
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
-        assert_eq!(names, [ABC], "nothing partial left");
+        assert_eq!(names, [ABC]);
+        let partial = || std::fs::read_dir(dir.join("tmp")).unwrap().count();
+        assert_eq!(partial(), 0, "nothing partial left");
+        // What a write left when max stopped is gone on the next start.
+        std::fs::write(dir.join("tmp/half"), b"a").unwrap();
+        Store::open(&dir).await.unwrap();
+        assert_eq!(partial(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
