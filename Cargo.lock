@@ -1923,6 +1923,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "max-import"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "color-eyre",
+ "max-core",
+ "max-db",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "max-llm"
 version = "0.1.0"
 dependencies = [

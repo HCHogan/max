@@ -1,0 +1,22 @@
+[package]
+name = "max-import"
+description = "Imports the Haskell version's database into maxx's, once"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+clap.workspace = true
+color-eyre.workspace = true
+max-core.workspace = true
+max-db.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
