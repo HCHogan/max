@@ -146,8 +146,9 @@ impl Conversation {
     }
 
     /// A card like the Haskell version's `!version`, in English: a line
-    /// each, an emoji in front. A line ends in two spaces, Markdown's line
-    /// break. `/model` and `/persona` show those.
+    /// each, an emoji in front. QQ breaks lines at a bare newline; two
+    /// spaces before it, Markdown's break, made it two. `/model` and
+    /// `/persona` show those.
     fn status(&self) -> String {
         let settings = &self.settings;
         let mut lines = vec![
@@ -173,7 +174,7 @@ impl Conversation {
             let _ = write!(up, " · host {}", span(host));
         }
         lines.push(up);
-        lines.join("  \n")
+        lines.join("\n")
     }
 
     async fn model(&mut self, argument: Option<&str>) -> Result<String> {

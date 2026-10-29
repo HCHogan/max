@@ -343,9 +343,9 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
     h.send(from_xiaoming(0, vec![text("/status")]));
     let (answer, status) = h.said().await;
-    assert!(status.starts_with("🦈 maxx dev  \n🌊 "), "{status}");
+    assert!(status.starts_with("🦈 maxx dev\n🌊 "), "{status}");
     assert!(
-        status.contains("  \n💬 proactive: on  \n💤 idle  \n⏱️ up "),
+        status.contains("\n💬 proactive: on\n💤 idle\n⏱️ up "),
         "{status}"
     );
     let Content::Message { reply_to, .. } = answer.content else {
