@@ -1,7 +1,8 @@
 # The groups' VMs on one machine, nested: the module makes the taps, the
 # firewall's rules and the service's sandbox, and vm-check boots the
-# flake's guest the way max does, runs a command in it, and runs a program
-# whose context_read reaches the database through the MCP service.
+# flake's guest the way max does, runs a command in it, runs a program
+# whose context_read reaches the database through the MCP service, and one
+# that opens a page in the browser and saves a screenshot to /work.
 { pkgs, module }:
 pkgs.testers.runNixOSTest {
   name = "max-vm";
@@ -43,5 +44,10 @@ pkgs.testers.runNixOSTest {
     shown = machine.succeed("journalctl -u maxx-vm-check.service -o cat")
     assert "退出码 0" in shown and "Linux max" in shown, shown
     assert '"mcp":"not_found"' in shown, shown
+    assert '"title":"检查","elements":["body > input","#go"]' in shown, shown
+    # The screenshot, among the test's outputs.
+    machine.succeed("head -c 8 /var/lib/maxx/vm/0/work/.max/browser-check.png | grep -q PNG")
+    machine.copy_from_vm("/var/lib/maxx/vm/0/work/.max/browser-check.png")
+    print(shown)
   '';
 }
