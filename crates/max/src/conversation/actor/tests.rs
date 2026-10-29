@@ -593,3 +593,35 @@ async fn link_takes_people_back_to_their_old_selves(pool: PgPool) {
     h.stop().await;
     assert_eq!(h.script.calls(), 0);
 }
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn unlinked_accounts_are_reminded_when_they_talk_to_max(pool: PgPool) {
+    let mut h = Harness::unprompted(pool, 300).await;
+    old_group(&h.pool).await;
+    let at_max = || InNode::MentionMe {
+        display: "maxx".into(),
+    };
+    h.script.push(Answer::says("嗯"));
+    h.send(from_xiaogang(10, vec![at_max(), text(" 在吗")]));
+    let (reminder, said) = h.said().await;
+    let expected = "发 /link 你的QQ号，把这个账号接到老群记录里的你；没说过就不用管。";
+    assert!(said.ends_with(expected), "{said}");
+    let Content::Message { nodes, .. } = reminder.content else {
+        unreachable!()
+    };
+    assert!(matches!(nodes[0], Node::Mention { .. }), "{nodes:?}");
+    assert_eq!(h.said().await.1, "嗯");
+    // Chatter isn't interrupted: the next thing Max says answers /status.
+    h.send(from_xiaogang(11, vec![text("又来了")]));
+    // From 小明: two quick commands from 小红 would hold her @ as a burst.
+    h.send(from_xiaoming(12, vec![text("/status")]));
+    assert!(h.said().await.1.starts_with("🦈 maxx"));
+    // Linked, 小红 is answered without one.
+    h.send(from_xiaohong(13, vec![text("/link 20001")]));
+    assert_eq!(h.said().await.1, "好，接到了老群记录里的「老红」。");
+    h.script.push(Answer::says("早"));
+    h.send(from_xiaohong(14, vec![at_max(), text(" 早")]));
+    assert_eq!(h.said().await.1, "早");
+    h.stop().await;
+    assert!(h.outbound.try_recv().is_err());
+}

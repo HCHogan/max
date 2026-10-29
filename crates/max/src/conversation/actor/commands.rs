@@ -379,6 +379,44 @@ impl Conversation {
         platform::relink(&mut conn, own, Some(old.principal)).await?;
         Ok(format!("好，接到了老群记录里的「{}」。", old.name))
     }
+
+    /// Each time an account that isn't linked talks to Max, with an @ or a
+    /// reply, in a group that goes on from an old one, tells it about
+    /// `/link` before Max answers. Chatter among others isn't interrupted.
+    pub(super) async fn remind_to_link(&mut self, committed: &Committed) -> Result<()> {
+        let person = committed.sender.principal;
+        if self.place.kind == ConversationKind::Direct
+            || committed.direct.is_none()
+            || person == self.place.me.principal
+            || self.shared.owners.contains(&person)
+        {
+            return Ok(());
+        }
+        let identity = committed.sender.identity;
+        let mut conn = self.shared.pool.acquire().await?;
+        let linked = platform::own_principal(&mut conn, identity).await?;
+        if linked.is_none_or(|(_, merged)| merged.is_some()) {
+            return Ok(());
+        }
+        let conversation = self.place.conversation;
+        if platform::endpoint_on(&mut conn, conversation, Platform::QqLegacy)
+            .await?
+            .is_none()
+        {
+            return Ok(());
+        }
+        drop(conn);
+        let text = " 如果你在老群里说过话，发 /link 你的QQ号，把这个账号接到老群记录里的你；没说过就不用管。";
+        let draft = Draft {
+            reply_to: None,
+            nodes: vec![
+                DraftNode::Mention { principal: person },
+                DraftNode::Text { text: text.into() },
+            ],
+        };
+        self.say(draft, None, None).await?;
+        Ok(())
+    }
 }
 
 /// The two largest units: 3d 4h, 2h 13m, 5m 12s, 12s.

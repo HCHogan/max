@@ -285,6 +285,7 @@ impl Conversation {
         } else {
             let mark = committed.direct.map_or(Mark::None, |direct| direct.mark());
             self.feed(&[(committed.message.clone(), mark)]).await?;
+            self.remind_to_link(&committed).await?;
         }
         let entry = Entry {
             id: committed.message.id,
