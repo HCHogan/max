@@ -97,7 +97,7 @@ fn a_group_message_with_everything() {
                 display: "全体成员".into(),
             }),
             InNode::Node(Node::Media {
-                media: None,
+                media: Some(MediaRef::Remote("https://example.com/a.png".into())),
                 meta: MediaMeta {
                     kind: MediaKind::Image,
                     mime: Some("image/png".into()),
@@ -119,7 +119,10 @@ fn a_private_voice_message() {
         "id": "ROBOT1.0_C2C1",
         "author": { "user_openid": "USER1", "username": "" },
         "content": "",
-        "attachments": [{ "content_type": "voice", "asr_refer_text": "你好" }]
+        "attachments": [{
+            "content_type": "voice", "url": "example.com/v.silk",
+            "voice_wav_url": "//example.com/v.wav", "asr_refer_text": "你好"
+        }]
     });
     let inbound = inbound(&dispatch("C2C_MESSAGE_CREATE", data), now()).unwrap();
     assert_eq!(inbound.chat.native_id, "c2c:USER1");
@@ -128,9 +131,11 @@ fn a_private_voice_message() {
     assert_eq!(inbound.sender.name, "某人");
     assert_eq!(inbound.at, now());
     assert_eq!(inbound.quote, None);
-    let [InNode::Node(Node::Media { meta, .. })] = &inbound.nodes[..] else {
+    let [InNode::Node(Node::Media { media, meta })] = &inbound.nodes[..] else {
         panic!("{:?}", inbound.nodes);
     };
+    let wav = MediaRef::Remote("https://example.com/v.wav".into());
+    assert_eq!(media.as_ref(), Some(&wav), "the WAV, with a scheme");
     assert_eq!(meta.kind, MediaKind::Audio);
     assert_eq!(meta.description.as_deref(), Some("你好"));
 }

@@ -1,10 +1,13 @@
 //! QQ's messages as `Inbound`: see "入站" under "QQ 官方机器人" in
 //! docs/rust-rewrite.md. Text with `<@openid>` mentions and
-//! `<faceType=…>` faces becomes nodes; attachments become media; the
+//! `<faceType=…>` faces becomes nodes; attachments become media, with
+//! where to download them; the
 //! quoted message is found by its `msg_idx`, or by its text.
 
 use chrono::{DateTime, Utc};
-use max_core::message::{Emote, MediaKind, MediaMeta, MentionTarget, Node, Platform, Role};
+use max_core::message::{
+    Emote, MediaKind, MediaMeta, MediaRef, MentionTarget, Node, Platform, Role,
+};
 use max_db::platform::ConversationKind;
 use qqbot::event::{Attachment, User};
 use qqbot::{Dispatch, Event};
@@ -171,8 +174,16 @@ fn attachment(attachment: &Attachment) -> InNode {
         .asr_refer_text
         .clone()
         .filter(|text| !text.trim().is_empty());
+    // A voice message is SILK or AMR; QQ's WAV of it is what can be played.
+    let url = match kind {
+        MediaKind::Audio => attachment
+            .voice_wav_url
+            .as_ref()
+            .or(attachment.url.as_ref()),
+        _ => attachment.url.as_ref(),
+    };
     InNode::Node(Node::Media {
-        media: None,
+        media: url.map(|url| MediaRef::Remote(https(url))),
         meta: MediaMeta {
             kind,
             mime,
@@ -181,6 +192,15 @@ fn attachment(attachment: &Attachment) -> InNode {
             description,
         },
     })
+}
+
+/// QQ sometimes leaves the scheme off an attachment's address.
+fn https(url: &str) -> String {
+    if url.contains("://") {
+        url.to_owned()
+    } else {
+        format!("https://{}", url.trim_start_matches('/'))
+    }
 }
 
 /// Standard base64, padded or not; None if it isn't.
