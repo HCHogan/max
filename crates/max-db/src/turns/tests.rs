@@ -132,7 +132,7 @@ async fn outcomes_read_back_as_written(pool: PgPool) -> sqlx::Result<()> {
 }
 
 #[sqlx::test]
-async fn finishing_twice_leaves_no_second_snapshot(pool: PgPool) -> sqlx::Result<()> {
+async fn a_turn_ends_once(pool: PgPool) -> sqlx::Result<()> {
     let mut conn = pool.acquire().await?;
     let (group, from) = group(&mut conn, "group:30001").await?;
     let turn = start(&mut conn, group.conversation, &[], from, at(1))
@@ -141,12 +141,12 @@ async fn finishing_twice_leaves_no_second_snapshot(pool: PgPool) -> sqlx::Result
     close(&mut conn, turn, &Outcome::Lost, at(2)).await?;
     let again = finish(&mut conn, turn, &run().record(), &Outcome::Silent, at(3)).await;
     assert!(again.is_err());
-    let snapshots = sqlx::query_scalar!(
-        r#"select count(*) as "n!" from turn_snapshots where turn_id = $1"#,
+    let runs = sqlx::query_scalar!(
+        r#"select count(run) as "n!" from turn_outcomes where turn_id = $1"#,
         turn.0
     )
     .fetch_one(&mut *conn)
     .await?;
-    assert_eq!(snapshots, 0);
+    assert_eq!(runs, 0, "the lost turn keeps no run");
     Ok(())
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select count(*) as \"n!\" from turn_snapshots where turn_id = $1",
+  "query": "select count(run) as \"n!\" from turn_outcomes where turn_id = $1",
   "describe": {
     "columns": [
       {
@@ -19,5 +19,5 @@
       null
     ]
   },
-  "hash": "ad15a4848679bc5bea6e73e081c534696fec7e5748977a1ee969240cc35e0216"
+  "hash": "fd488c9401fdf3a12f7afcfa863dea240d9e6381c45e80f9010e5b991c058e6d"
 }

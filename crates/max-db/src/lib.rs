@@ -69,7 +69,6 @@ mod tests {
                 "summary_embeddings",
                 "summary_runs",
                 "turn_outcomes",
-                "turn_snapshots",
                 "turns",
             ]
         );

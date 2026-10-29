@@ -1,11 +1,11 @@
-//! Turn records: started, then a snapshot and an outcome as it ends.
+//! Turn records: started, then an outcome with the run as it ends.
 //! Append only; a turn without an outcome is running.
 
 use chrono::{DateTime, Utc};
 use max_core::ids::{ConversationId, MessageId, TurnId};
 use max_core::run::{FailReason, Input, Outcome, RunRecord};
+use sqlx::PgConnection;
 use sqlx::types::Json;
-use sqlx::{Connection, PgConnection};
 
 use crate::unknown;
 
@@ -44,7 +44,7 @@ pub async fn start(
     })
 }
 
-/// A turn ends: its record and its outcome, together.
+/// A turn ends: its outcome, and its run.
 pub async fn finish(
     conn: &mut PgConnection,
     turn: TurnId,
@@ -52,24 +52,24 @@ pub async fn finish(
     outcome: &Outcome,
     at: DateTime<Utc>,
 ) -> sqlx::Result<()> {
-    let mut tx = conn.begin().await?;
-    sqlx::query!(
-        "insert into turn_snapshots (turn_id, run, taken_at) values ($1, $2, $3)",
-        turn.0,
-        Json(run) as _,
-        at
-    )
-    .execute(&mut *tx)
-    .await?;
-    close(&mut tx, turn, outcome, at).await?;
-    tx.commit().await
+    insert(conn, turn, Some(run), outcome, at).await
 }
 
-/// An outcome without a snapshot, for the start of the process: a turn
-/// that was running in a crash.
+/// An outcome without a run, for the start of the process: a turn that
+/// was running in a crash.
 pub async fn close(
     conn: &mut PgConnection,
     turn: TurnId,
+    outcome: &Outcome,
+    at: DateTime<Utc>,
+) -> sqlx::Result<()> {
+    insert(conn, turn, None, outcome, at).await
+}
+
+async fn insert(
+    conn: &mut PgConnection,
+    turn: TurnId,
+    run: Option<&RunRecord<'_>>,
     outcome: &Outcome,
     at: DateTime<Utc>,
 ) -> sqlx::Result<()> {
@@ -84,12 +84,13 @@ pub async fn close(
         Outcome::Lost => ("lost", None, None),
     };
     sqlx::query!(
-        "insert into turn_outcomes (turn_id, outcome, failure, error, finished_at)
-         values ($1, $2, $3, $4, $5)",
+        "insert into turn_outcomes (turn_id, outcome, failure, error, run, finished_at)
+         values ($1, $2, $3, $4, $5, $6)",
         turn.0,
         outcome,
         failure,
         error,
+        run.map(Json) as _,
         at
     )
     .execute(conn)

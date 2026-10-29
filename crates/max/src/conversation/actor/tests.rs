@@ -330,7 +330,7 @@ async fn stopping_interrupts_a_call_that_outlasts_the_grace(pool: PgPool) {
     }
     h.stop().await;
     assert_eq!(h.turns().await[0].1, Some(Outcome::Interrupted));
-    assert_eq!(h.count("select count(*) from turn_snapshots").await, 1);
+    assert_eq!(h.count("select count(run) from turn_outcomes").await, 1);
     let (_, said) = h.said().await;
     assert_eq!(said, "我要重启一下，这条没回上，等会儿再问一次吧。");
 }

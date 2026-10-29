@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into turn_outcomes (turn_id, outcome, failure, error, run, finished_at)\n         values ($1, $2, $3, $4, $5, $6)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "93f9bafbfabe093c51ea99a8b93170a87c4b4f4d0e2968e7204a9198378f6625"
+}

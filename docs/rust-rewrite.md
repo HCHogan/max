@@ -517,15 +517,13 @@ v1 的 ledger 已经存了原始 payload 和文本兜底；投递回执（`deliv
 
 ### turn 记录
 
-一次连续的运行是一个 turn：从一个触发起核心开始，到空闲窗口到期、`/kill`、失败或重启为止，中间吸收的触发都是它的输入（2026-10-27 改成单一核心实例，见[会话 actor](#会话-actor)）。turn 在库里有三种记录，全部只追加（2026-10-27 定，10-29 去掉了恢复用的 `TurnResumed`）：
+一次连续的运行是一个 turn：从一个触发起核心开始，到空闲窗口到期、`/kill`、失败或重启为止，中间吸收的触发都是它的输入（2026-10-27 改成单一核心实例，见[会话 actor](#会话-actor)）。turn 在库里有两种记录，全部只追加（2026-10-27 定，10-29 去掉了恢复用的 `TurnResumed`；10-30 把快照并进结局，原来的 `turn_snapshots` 和结局一一对应、同一个事务里写）：
 
 ```rust
 // 触发起核心时。身份、触发和首次开始合在一条里（2026-10-27 合并了原来的 TurnAccepted）
 struct TurnStarted { turn, conversation, ordinal /* t#，给模型引用 */, trigger /* intent 的 Wake，以后还有 job 结果、自动化 */, from /* 快照位置，见“时间线” */, started_at }
-// turn 结束时，把核心整个存下来
-struct TurnSnapshot { turn, run: RunRecord, taken_at }
-// 结局
-struct TurnFinished { turn, outcome: Outcome, finished_at }
+// 结局，连同核心整个存下来；崩溃时丢的 turn（Lost）没有 run
+struct TurnFinished { turn, outcome: Outcome, run: Option<RunRecord>, finished_at }
 
 // 一次运行留下的：给模型看的和它说的。2026-10-29 之前的行是输入日志的形状（core_version、first、inputs），没有代码读
 struct RunRecord { spec: RunSpec, base: Context, transcript: Vec<Item> }
@@ -552,11 +550,11 @@ enum FailReason { Model { error: String }, ContextExhausted }
 | 情况 | 写什么 |
 |---|---|
 | 触发起核心 | `TurnStarted` |
-| turn 结束，包括重启时被中断 | `TurnSnapshot` 加 `TurnFinished`，同一个事务 |
+| turn 结束，包括重启时被中断 | `TurnFinished`，带着 run |
 | 崩溃 | 什么都没写，启动时补一条 `Lost` 结局 |
 
 - **trigger 记在 `TurnStarted` 里**：直接触发可以从消息本身重新判断，但判定、去抖合并了哪几条、自动化触发都不行。单一核心实例之后，触发来了就立刻起核心，"接受了但没起"这个状态不存在，所以不再单独记一条。
-- **一个 turn 一份快照**：结束时和结局在同一个事务里写。核心不在运行中途写库，所以也没有"库里一份、内存里一份"的问题。
+- **一个 turn 一份快照**：结束时和结局写在同一行里。核心不在运行中途写库，所以也没有"库里一份、内存里一份"的问题。
 - **状态**：有 `TurnFinished` 就是已结束；没有就是在当前进程里跑着，启动时看到这种，就是崩溃时正在跑。
 - **结局**：唯一存下来的派生结果。`Answered` 和 `Silent` 只说这次运行有没有发过话。查"哪些 turn 没结束"要靠它，所以写下来。`Lost` 例外，它由启动流程直接写，表示崩溃时它正在跑，没有快照。
 - Max 回复的正文在 ledger 里，不在结局里。
@@ -1144,7 +1142,7 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 | | `caption_embeddings` | 按 sha256 一行：表情包 caption 的向量（`vector(1024)`）、哪个模型算的、时间。embedding worker 是唯一的写者；换了模型，它的扫描按新模型全部重算，搜索只比同一个模型的向量。见[发图](#发图) |
 | | `message_embeddings`、`summary_embeddings` | 按消息 id、摘要 id 一行：会话、`halfvec(1024)` 的向量、哪个模型算的、时间。召回向量 worker 是唯一的写者，换了模型全部重算。见[召回](#召回) |
 | | `message_media` | 消息、序号、sha256。入站节点里是下载地址，下载完记在这里；程序交的图（`max.image()`）节点里直接是 sha256 |
-| turn | `turns`、`turn_snapshots`、`turn_outcomes` | 见 [turn 记录](#turn-记录)。`t#N` 是 `turns.ordinal`，每个会话从 1 数 |
+| turn | `turns`、`turn_outcomes` | 见 [turn 记录](#turn-记录)。`t#N` 是 `turns.ordinal`，每个会话从 1 数 |
 | | `llm_usage` | turn（可空）、用途（turn、intent、historian、caption）、provider、模型、强度、token（含缓存命中数，按 provider 看命中率、调空闲窗口；还有其中的推理 token）、费用。token 用 bigint；费用 `cost_micros` 是百万分之一美元，用整数，不要 decimal，价格未知时为空 |
 | 上下文 | `summaries` | 见 [summaries 表](#summaries-表) |
 | | `summary_runs` | historian 的每次模型调用：范围、原因（quiet、pressure、compact）、模型、原始输出、错误。用量在 `llm_usage`。有保留期 |
