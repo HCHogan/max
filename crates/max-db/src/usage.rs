@@ -11,6 +11,8 @@ pub enum Purpose {
     Intent,
     Historian,
     Caption,
+    /// A background agent's.
+    Job,
 }
 
 #[derive(Clone, Debug)]
@@ -33,6 +35,7 @@ pub async fn record(conn: &mut PgConnection, call: &Call<'_>) -> sqlx::Result<()
         Purpose::Intent => "intent",
         Purpose::Historian => "historian",
         Purpose::Caption => "caption",
+        Purpose::Job => "job",
     };
     let usage = call.usage;
     sqlx::query!(

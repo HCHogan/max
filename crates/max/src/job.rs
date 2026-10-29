@@ -3,6 +3,7 @@
 //! agent" in docs/rust-rewrite.md.
 
 pub mod pi;
+mod run;
 
 use std::future::Future;
 use std::time::Duration;
@@ -14,6 +15,7 @@ use tokio::time::{Instant, sleep_until, timeout};
 use tracing::warn;
 
 use pi::{Ask, Record};
+pub use run::{Finished, Progress, Start, run};
 
 /// How long pi has to settle once aborted, and to give its last text.
 const GRACE: Duration = Duration::from_secs(15);
