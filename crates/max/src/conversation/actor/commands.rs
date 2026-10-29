@@ -8,7 +8,7 @@
 use std::fmt::Write;
 use std::time::Duration;
 
-use max_core::message::{Content, MentionTarget, Node, Platform, Role};
+use max_core::message::{Platform, Role};
 use max_db::platform::ConversationKind;
 use max_db::{ledger, summaries};
 use tokio::sync::oneshot;
@@ -50,7 +50,6 @@ impl Conversation {
             Command::Persona(Persona::Show) | Command::Clear { all: false } => Rank::Anyone,
             Command::Model(Some(argument)) if argument == "list" => Rank::Anyone,
             // Who may link whom is its own business.
-            Command::Link(_) => Rank::Anyone,
             Command::Kill
             | Command::Persona(_)
             | Command::Clear { .. }
@@ -100,10 +99,6 @@ impl Conversation {
                 None => return Ok(()),
             },
             Command::Bind(argument) => self.bind(committed, argument.as_deref()).await?,
-            Command::Link(argument) => {
-                let owner = rank == Rank::Owner;
-                self.link(committed, argument.as_deref(), owner).await?
-            }
         };
         self.answer(name, &answer).await
     }
@@ -372,148 +367,6 @@ impl Conversation {
     }
 }
 
-impl Conversation {
-    /// `/link <QQ号>`: this account is the person with that QQ number, in
-    /// the old records or from now on. The proof is the avatar: QQ shows
-    /// the bot the account's, and anyone the number's. A number is linked
-    /// once per conversation; an owner undoes a link with `/link @某人 -`,
-    /// and nobody links for someone else. See "权限".
-    async fn link(
-        &mut self,
-        committed: &Committed,
-        argument: Option<&str>,
-        owner: bool,
-    ) -> Result<String> {
-        let how = command::how(self.place.kind, &self.place.my_name, "/link");
-        // None of what Max says tells how a number is checked: knowing it's
-        // the avatar would tell an impostor what to copy.
-        let usage = format!("用法：{how} 你的QQ号，验证通过就把这个账号接到这个号上");
-        let Some(last) = argument.and_then(|argument| argument.split_whitespace().last()) else {
-            return Ok(usage);
-        };
-        let me = self.place.me.identity;
-        let mentioned = match &committed.message.content {
-            Content::Message { nodes, .. } => nodes.iter().find_map(|node| match node {
-                Node::Mention {
-                    target: MentionTarget::Identity(id),
-                    ..
-                } if *id != me => Some(*id),
-                _ => None,
-            }),
-            _ => None,
-        };
-        let mut conn = self.shared.pool.acquire().await?;
-        if let Some(target) = mentioned {
-            if last != "-" {
-                return Ok("拒绝：只能本人发".to_owned());
-            }
-            if !owner {
-                return Ok("拒绝：撤销仅限主人".to_owned());
-            }
-            let Some((own, merged)) = platform::own_principal(&mut conn, target).await? else {
-                return Ok(usage);
-            };
-            if merged.is_none() {
-                return Ok("跳过：这个账号没有关联".to_owned());
-            }
-            platform::relink(&mut conn, own, None).await?;
-            return Ok("已撤销：这个账号的关联".to_owned());
-        }
-        let qq = (5..=12).contains(&last.len()) && last.bytes().all(|b| b.is_ascii_digit());
-        if !qq {
-            return Ok(usage);
-        }
-        let account = committed.sender.identity;
-        let Some((own, merged)) = platform::own_principal(&mut conn, account).await? else {
-            return Ok(usage);
-        };
-        let current = merged.unwrap_or(own);
-        if current == self.place.me.principal || self.shared.owners.contains(&current) {
-            return Ok("跳过：主人和 Max 的账号不用 /link".to_owned());
-        }
-        let Some(avatars) = &self.shared.avatars else {
-            return Ok("错误：这里验证不了".to_owned());
-        };
-        let Some(openid) = platform::native_user_id(&mut conn, account).await? else {
-            return Ok(usage);
-        };
-        drop(conn);
-        match avatars.same(&openid, last).await {
-            Ok(true) => {}
-            Ok(false) => return Ok("错误：验证没通过".to_owned()),
-            Err(error) => {
-                warn!(%error, "fetching avatars for /link");
-                return Ok("错误：现在验证不了，稍后重试".to_owned());
-            }
-        }
-        let mut conn = self.shared.pool.acquire().await?;
-        let name = &committed.message.sender.name;
-        let number = platform::account(&mut conn, Platform::QqLegacy, last, name).await?;
-        // Avatars are public: one copied would make the account an owner.
-        let theirs = number.principal;
-        if theirs == self.place.me.principal || self.shared.owners.contains(&theirs) {
-            return Ok("拒绝：主人和 Max 的号不能接".to_owned());
-        }
-        if current == number.principal {
-            return Ok("跳过：已经接上了".to_owned());
-        }
-        let endpoint = self.place.endpoint;
-        let linked = platform::linked_in(&mut conn, endpoint, number.principal, account).await?;
-        if linked.is_some() {
-            return Ok("拒绝：这个 QQ 号在这里已有人接上，有问题找主人".to_owned());
-        }
-        platform::relink(&mut conn, own, Some(number.principal)).await?;
-        Ok(
-            match platform::last_name(&mut conn, number.identity).await? {
-                Some(old) => format!("已关联：老群记录里的「{old}」"),
-                None => "已关联：老群记录里没有这个号，以后按它认人".to_owned(),
-            },
-        )
-    }
-
-    /// Each time an account that isn't linked talks to Max, with an @ or a
-    /// reply, in a group that goes on from an old one, tells it about
-    /// `/link` before Max answers. Chatter among others isn't interrupted.
-    pub(super) async fn remind_to_link(&mut self, committed: &Committed) -> Result<()> {
-        let person = committed.sender.principal;
-        if self.place.kind == ConversationKind::Direct
-            || committed.direct.is_none()
-            || person == self.place.me.principal
-            || self.shared.owners.contains(&person)
-        {
-            return Ok(());
-        }
-        let identity = committed.sender.identity;
-        let mut conn = self.shared.pool.acquire().await?;
-        let linked = platform::own_principal(&mut conn, identity).await?;
-        if linked.is_none_or(|(_, merged)| merged.is_some()) {
-            return Ok(());
-        }
-        let conversation = self.place.conversation;
-        if platform::endpoint_on(&mut conn, conversation, Platform::QqLegacy)
-            .await?
-            .is_none()
-        {
-            return Ok(());
-        }
-        drop(conn);
-        let how = command::how(self.place.kind, &self.place.my_name, "/link");
-        let text = format!(
-            " 如果你在老群里说过话，发 {how} 你的QQ号，把这个账号接到老群记录里的你；没说过就不用管。"
-        );
-        let draft = Draft {
-            reply_to: None,
-            nodes: vec![
-                DraftNode::Mention { principal: person },
-                DraftNode::Text { text },
-            ],
-        };
-        self.say(draft, None, None, None).await?;
-        Ok(())
-    }
-}
-
-/// The two largest units: 3d 4h, 2h 13m, 5m 12s, 12s.
 /// A model as `/status` shows it: its reference, and the effort if set.
 fn model(chosen: &Chosen) -> String {
     match &chosen.options.effort {
@@ -522,6 +375,7 @@ fn model(chosen: &Chosen) -> String {
     }
 }
 
+/// The two largest units: 3d 4h, 2h 13m, 5m 12s, 12s.
 fn span(duration: Duration) -> String {
     let s = duration.as_secs();
     let (d, h, m, s) = (s / 86400, s / 3600 % 24, s / 60 % 60, s % 60);

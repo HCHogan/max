@@ -57,7 +57,6 @@ pub fn shared(
         embedder: None,
         admin: None,
         pictures: None,
-        avatars: None,
         vms: None,
         started: tokio::time::Instant::now(),
     };

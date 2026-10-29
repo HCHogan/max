@@ -37,7 +37,6 @@ use max::media::pictures::Pictures;
 use max::media::stickers::Stickers;
 use max::media::store::Store;
 use max::qq::admin::Admin;
-use max::qq::avatar::Avatars;
 use max::qq::{listen, send};
 use max::recall::Vectors;
 use max::scope::Scope;
@@ -361,10 +360,6 @@ async fn serve(config: Config) -> Result<()> {
             None
         }
     };
-    let avatars = match &qq {
-        Some(credentials) => Some(Arc::new(Avatars::qq(&credentials.app_id)?)),
-        None => None,
-    };
     let client = match qq {
         Some(credentials) => Some(Arc::new(qqbot::Client::new(credentials)?)),
         None => None,
@@ -401,7 +396,6 @@ async fn serve(config: Config) -> Result<()> {
         embedder,
         admin,
         pictures,
-        avatars,
         started: tokio::time::Instant::now(),
     });
     let (intake_tx, intake_rx) = mpsc::unbounded_channel();

@@ -32,9 +32,6 @@ pub enum Command {
     /// `/bind`, `/bind <legacy group>` in a private chat, `/bind <code>` in
     /// a group.
     Bind(Option<String>),
-    /// `/link <QQ号>`, or an owner's `/link @某人 <QQ号>` and
-    /// `/link @某人 -`.
-    Link(Option<String>),
 }
 
 impl Command {
@@ -51,7 +48,6 @@ impl Command {
             Command::Unclear => "unclear",
             Command::Compact => "compact",
             Command::Bind(_) => "bind",
-            Command::Link(_) => "link",
         }
     }
 }
@@ -122,7 +118,6 @@ pub fn parse(text: &str) -> Option<Command> {
         "unclear" => Command::Unclear,
         "compact" => Command::Compact,
         "bind" => Command::Bind(argument),
-        "link" => Command::Link(argument),
         _ => return None,
     })
 }

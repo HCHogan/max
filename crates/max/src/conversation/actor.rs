@@ -33,7 +33,6 @@ use crate::llm::{Chosen, Models};
 use crate::mcp;
 use crate::media::pictures::Pictures;
 use crate::qq::admin::Admin;
-use crate::qq::avatar::Avatars;
 use crate::scope::Scope;
 use crate::search::Search;
 use crate::tokens;
@@ -66,8 +65,6 @@ pub struct Shared {
     /// Where model calls find their pictures; None when no media
     /// directory is configured, and none are sent.
     pub pictures: Option<Arc<Pictures>>,
-    /// For `/link`'s proof; None without QQ.
-    pub avatars: Option<Arc<Avatars>>,
     /// When Max started, for `/status`.
     pub started: Instant,
 }
@@ -301,7 +298,6 @@ impl Conversation {
         } else {
             let mark = committed.direct.map_or(Mark::None, |direct| direct.mark());
             self.feed(&[(committed.message.clone(), mark)]).await?;
-            self.remind_to_link(&committed).await?;
         }
         let entry = Entry {
             id: committed.message.id,
