@@ -21,10 +21,25 @@ async function browser() {
   return (await connected).contexts()[0];
 }
 
-// The newest tab, or a new one if there is none.
+// The tab last opened or brought to the front (page.bringToFront()), or a
+// new one if there is none. A program that connects later gets
+// context.pages() in whatever order Chromium attaches them, so the order
+// is the browser's own list's, most recently active first.
 async function page() {
   const context = await browser();
-  return context.pages().at(-1) ?? context.newPage();
+  const pages = context.pages();
+  if (pages.length === 0) return context.newPage();
+  const ids = await Promise.all(pages.map(async page => {
+    const session = await context.newCDPSession(page);
+    try {
+      return (await session.send("Target.getTargetInfo")).targetInfo.targetId;
+    } finally {
+      await session.detach();
+    }
+  }));
+  const list = await (await fetch(`${CDP}/json/list`)).json();
+  const newest = list.find(target => target.type === "page" && ids.includes(target.id));
+  return newest ? pages[ids.indexOf(newest.id)] : pages.at(-1);
 }
 
 async function connect() {
