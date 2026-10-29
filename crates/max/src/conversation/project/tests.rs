@@ -221,3 +221,74 @@ async fn later_rows_introduce_new_people(pool: PgPool) {
     );
     assert!(item.tokens > 0);
 }
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn the_trigger_and_what_it_quotes_show_their_pictures(pool: PgPool) {
+    use max_core::item::Image;
+    use max_core::message::{MediaKind, MediaMeta, MediaRef};
+
+    let picture = || {
+        InNode::Node(Node::Media {
+            media: Some(MediaRef::Remote("https://q.example/x".into())),
+            meta: MediaMeta {
+                kind: MediaKind::Image,
+                mime: None,
+                size: None,
+                name: None,
+                description: None,
+            },
+        })
+    };
+    let mut conn = pool.acquire().await.unwrap();
+    let place = group(&mut conn).await;
+    let mut ids = Vec::new();
+    for (n, nodes) in [(0, vec![picture()]), (1, vec![text("看"), picture()])] {
+        let row = from_xiaoming(n, nodes);
+        let row = ingest::inbound(&mut conn, &place, &row, at(n), offset()).await;
+        ids.push(row.unwrap().message.id);
+    }
+    let mut ask = from_xiaohong(
+        2,
+        vec![
+            InNode::MentionMe {
+                display: "maxx".into(),
+            },
+            text("这两张呢"),
+            picture(),
+        ],
+    );
+    ask.quote = Some(Quote {
+        quote_id: Some("IDX0".into()),
+        text: None,
+    });
+    let ask = ingest::inbound(&mut conn, &place, &ask, at(2), offset())
+        .await
+        .unwrap()
+        .message
+        .id;
+    let projection = Projection {
+        place: &place,
+        system: "SYSTEM".into(),
+        window: 100_000,
+        // The first picture is cleared from the tail, so it is quoted.
+        cleared_upto: Some(ids[0]),
+        now: at(3),
+        offset: offset(),
+    };
+    let (context, _) = projection
+        .base(&mut conn, ask, &[direct(ask)])
+        .await
+        .unwrap();
+    let volatile = context.items.last().unwrap();
+    let ItemKind::User { images, .. } = &volatile.kind else {
+        panic!("{volatile:?}")
+    };
+    // Not the tail's.
+    let handles: Vec<String> = images.iter().map(Image::handle).collect();
+    assert_eq!(
+        handles,
+        [format!("image#{ask}.0"), format!("image#{}.0", ids[0])]
+    );
+    let text_only = tokens::count(user_text(volatile));
+    assert_eq!(volatile.tokens, text_only + 2 * project::PICTURE_TOKENS);
+}
