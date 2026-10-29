@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select first_seen_at from media",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "first_seen_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "media",
+            "name": "first_seen_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c55bfe6a0eccd2b2c2228ada2780c606d2d65667f5d21bf6375a0a45c0943e8e"
+}

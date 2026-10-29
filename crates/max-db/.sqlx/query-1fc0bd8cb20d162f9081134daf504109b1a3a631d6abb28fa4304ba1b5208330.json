@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select m.id, m.nodes as \"nodes: Json<Vec<Node>>\",\n               array(select ordinal from message_media where message_id = m.id) as \"done!\"\n        from messages m\n        where m.received_at >= $1\n          and jsonb_path_exists(m.nodes, '$[*] ? (@.type == \"media\" && exists(@.media.remote))')\n        order by m.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "nodes: Json<Vec<Node>>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "nodes"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "done!",
+        "type_info": "Int2Array",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "1fc0bd8cb20d162f9081134daf504109b1a3a631d6abb28fa4304ba1b5208330"
+}

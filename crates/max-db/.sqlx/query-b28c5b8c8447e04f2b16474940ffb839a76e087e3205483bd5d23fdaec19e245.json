@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into message_media (message_id, ordinal, sha256) values ($1, $2, $3)\n         on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int2",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b28c5b8c8447e04f2b16474940ffb839a76e087e3205483bd5d23fdaec19e245"
+}

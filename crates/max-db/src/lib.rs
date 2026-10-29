@@ -6,6 +6,7 @@
 //! savepoint when the caller already has a transaction).
 
 pub mod ledger;
+pub mod media;
 pub mod platform;
 pub mod summaries;
 pub mod turns;
@@ -50,6 +51,8 @@ mod tests {
                 "gateway_sessions",
                 "identities",
                 "llm_usage",
+                "media",
+                "message_media",
                 "messages",
                 "principals",
                 "summaries",

@@ -105,6 +105,18 @@ pub struct Emote {
     pub name: Option<String>,
 }
 
+/// A message's media nodes with their ordinals, from 0: `image#<id>.<n>`.
+pub fn media(nodes: &[Node]) -> impl Iterator<Item = (u16, Option<&MediaRef>, &MediaMeta)> {
+    nodes
+        .iter()
+        .filter_map(|node| match node {
+            Node::Media { media, meta } => Some((media.as_ref(), meta)),
+            _ => None,
+        })
+        .zip(0..)
+        .map(|((media, meta), n)| (n, media, meta))
+}
+
 /// Where a stored picture or file lives.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

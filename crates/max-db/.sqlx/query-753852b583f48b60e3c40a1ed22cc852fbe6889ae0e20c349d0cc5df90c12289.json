@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select ordinal, sha256 from message_media where message_id = $1 order by ordinal",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ordinal",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "message_media",
+            "name": "ordinal"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "sha256",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "message_media",
+            "name": "sha256"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "753852b583f48b60e3c40a1ed22cc852fbe6889ae0e20c349d0cc5df90c12289"
+}
