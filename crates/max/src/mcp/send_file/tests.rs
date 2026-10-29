@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use super::*;
 use crate::conversation::testing::{group, offset};
 use crate::conversation::{Act, Event, Poster, ingest};
+use crate::mcp::{Caller, Services};
 use crate::media::store::Store;
 use crate::scope::Scope;
 
@@ -69,16 +70,14 @@ async fn a_report_goes_out_under_its_name(pool: PgPool) {
         }
     });
     let context = Context {
-        pool: pool.clone(),
+        services: Arc::new(Services {
+            store: Some(Arc::clone(&store)),
+            ..Services::bare(pool.clone())
+        }),
         place: Arc::clone(&place),
-        offset: offset(),
         page_tokens: 2000,
-        search: None,
         work: Some(work.clone()),
-        store: Some(Arc::clone(&store)),
-        poster: Some(Poster::new(mailbox, TurnId(1))),
-        embedder: None,
-        admin: None,
+        caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
     };
     std::fs::write(work.join("out/report.pdf"), b"%PDF-1.4").unwrap();
     std::fs::write(work.join("empty.txt"), b"").unwrap();
@@ -133,8 +132,7 @@ async fn a_report_goes_out_under_its_name(pool: PgPool) {
     let renamed = json!({ "path": "out/report.pdf", "name": "../x" });
     assert_eq!(code(sent(renamed).await), "bad_name");
     let elsewhere = Context {
-        poster: None,
-        embedder: None,
+        caller: Caller::Check,
         ..context
     };
     let refused = run(&elsewhere, json!({ "path": "out/report.pdf" })).await;

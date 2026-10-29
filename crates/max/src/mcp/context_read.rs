@@ -72,14 +72,14 @@ fn not_found(id: i64) -> Failure {
 
 /// One row's whole line, cut evenly into pages.
 async fn row(context: &Context, id: i64) -> Result<Vec<String>, Failure> {
-    let mut conn = context.pool.acquire().await?;
+    let mut conn = context.services.pool.acquire().await?;
     let Some(row) = ledger::row(&mut conn, context.place.conversation, MessageId(id)).await? else {
         return Err(not_found(id));
     };
     let people = people(&mut conn, std::iter::once(&row.message), &context.place).await?;
     let render = Render {
         people: &people,
-        offset: context.offset,
+        offset: context.services.offset,
     };
     let line = render.line(&row.message, delivery_mark(&row));
     Ok(pages(&line, context.page_tokens))
@@ -88,7 +88,7 @@ async fn row(context: &Context, id: i64) -> Result<Vec<String>, Failure> {
 /// The row and those around it, as the tail shows them: a line each,
 /// over-long ones cut short, a date line first. Pages end between lines.
 async fn rows(context: &Context, id: i64, before: u8, after: u8) -> Result<Vec<String>, Failure> {
-    let mut conn = context.pool.acquire().await?;
+    let mut conn = context.services.pool.acquire().await?;
     let conversation = context.place.conversation;
     let ids = ledger::around(
         &mut conn,
@@ -110,7 +110,7 @@ async fn rows(context: &Context, id: i64, before: u8, after: u8) -> Result<Vec<S
     .await?;
     let render = Render {
         people: &people,
-        offset: context.offset,
+        offset: context.services.offset,
     };
     let lines: Vec<(&Message, String)> = rows
         .iter()
@@ -126,13 +126,17 @@ async fn rows(context: &Context, id: i64, before: u8, after: u8) -> Result<Vec<S
 /// A summary in full, the stretch of the timeline it covers, and who the
 /// people it mentions are.
 async fn summary(context: &Context, id: i64) -> Result<Vec<String>, Failure> {
-    let mut conn = context.pool.acquire().await?;
+    let mut conn = context.services.pool.acquire().await?;
     let conversation = context.place.conversation;
     let found = summaries::picked(&mut conn, conversation, &[SummaryId(id)]).await?;
     let Some((id, summary)) = found.into_iter().next() else {
         return Err(Failure::new("not_found", format!("这里没有 summary#{id}")));
     };
-    let span = span(summary.started_at, summary.ended_at, context.offset);
+    let span = span(
+        summary.started_at,
+        summary.ended_at,
+        context.services.offset,
+    );
     let mut text = format!("[summary#{id} {span}]");
     if !summary.title.is_empty() {
         text = format!("{text} {}", summary.title);

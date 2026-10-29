@@ -18,7 +18,7 @@ struct Args {
 
 pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let Args { query, limit } = arguments("web_search", args)?;
-    let Some(search) = &context.search else {
+    let Some(search) = &context.services.search else {
         return Err(Failure::new("unavailable", "这里没有配网页搜索。"));
     };
     let query = query.trim();

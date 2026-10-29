@@ -92,7 +92,7 @@ pub async fn run(name: &str, context: &Context, args: Value) -> Result<Value, Fa
         }
     };
     // Only a turn's programs have their conversation at hand.
-    let Some(poster) = &context.poster else {
+    let Some(poster) = context.caller.poster() else {
         return Err(Failure::new("not_here", "这里管不了后台 agent"));
     };
     poster

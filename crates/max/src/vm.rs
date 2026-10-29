@@ -24,8 +24,7 @@ use tracing::{info, warn};
 use self::machine::{BOOT, Booted, Guest, Machine};
 use self::ssh::{Command, Connection, Input};
 use crate::config;
-use crate::llm::Upstream;
-use crate::mcp::{self, Grant, Sessions};
+use crate::mcp::{self, Sessions};
 use crate::scope::Scope;
 
 /// How often idle and dead VMs are looked for.
@@ -64,16 +63,10 @@ impl Vms {
         Ok(Self { requests, sessions })
     }
 
-    /// A session of the MCP service for a run in `context`'s conversation,
-    /// open until the grant drops.
-    pub fn open(&self, context: mcp::Context) -> Grant {
-        self.sessions.open(context)
-    }
-
-    /// A background agent's session, whose model calls go to `upstream`;
-    /// see [`Sessions::open_job`].
-    pub fn open_job(&self, context: mcp::Context, upstream: Arc<Upstream>) -> Grant {
-        self.sessions.open_job(context, upstream)
+    /// The MCP service's sessions, which programs and background agents
+    /// in the VMs call through.
+    pub fn sessions(&self) -> &Sessions {
+        &self.sessions
     }
 
     /// The conversation's VM, started if it isn't running; or why there

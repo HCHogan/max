@@ -14,6 +14,7 @@ use crate::conversation::testing::{at, from_xiaoming, group, offset, text};
 use crate::conversation::{Place, ingest};
 use crate::embedding::testing::{serve, vector};
 use crate::inbound::InNode;
+use crate::mcp::{Caller, Services};
 use crate::scope::Scope;
 
 fn hit(kind: Kind, n: i64, score: f32, key: &str) -> Hit {
@@ -201,16 +202,11 @@ async fn rows_and_summaries_with_their_read(pool: PgPool) {
         .unwrap();
     drop(conn);
     let context = Context {
-        pool: pool.clone(),
+        services: Arc::new(Services::bare(pool.clone())),
         place: Arc::clone(&place),
-        offset: offset(),
         page_tokens: 2000,
-        search: None,
         work: None,
-        store: None,
-        poster: None,
-        embedder: None,
-        admin: None,
+        caller: Caller::Check,
     };
 
     let found = run(&context, json!({ "query": "部署 方案" }))
@@ -307,16 +303,14 @@ async fn by_meaning_too(pool: PgPool) {
     said(3, "上线时间定了").await;
     drop(conn);
     let context = Context {
-        pool: pool.clone(),
+        services: Arc::new(Services {
+            embedder: Some(embedder),
+            ..Services::bare(pool.clone())
+        }),
         place: Arc::clone(&place),
-        offset: offset(),
         page_tokens: 2000,
-        search: None,
         work: None,
-        store: None,
-        poster: None,
-        embedder: Some(embedder),
-        admin: None,
+        caller: Caller::Check,
     };
     let texts = async |query: &str| -> Vec<Value> {
         let found = run(&context, json!({ "query": query })).await.unwrap();

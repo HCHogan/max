@@ -26,7 +26,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::{Context, Failure, chat_file, forward, show};
-use crate::llm::Upstream;
 
 /// One call's wall clock.
 const CALL_TIME: Duration = Duration::from_secs(60);
@@ -43,10 +42,6 @@ pub struct Sessions(Arc<Mutex<HashMap<String, Arc<Session>>>>);
 
 pub(super) struct Session {
     pub(super) context: Context,
-    /// A background agent's: it calls only the tools marked `job`.
-    job: bool,
-    /// Where its model calls go; a background agent's only.
-    pub(super) upstream: Option<Arc<Upstream>>,
     /// Cancelled when the session closes; its calls in flight end with it.
     pub(super) closed: CancellationToken,
     slots: Semaphore,
@@ -67,18 +62,8 @@ pub struct Grant {
 }
 
 impl Sessions {
-    /// A session for programs in `context`'s conversation.
+    /// A session for `context`'s caller, in its conversation.
     pub fn open(&self, context: Context) -> Grant {
-        self.insert(context, None)
-    }
-
-    /// A background agent's session: the tools that read, and its model
-    /// calls forwarded to `upstream`.
-    pub fn open_job(&self, context: Context, upstream: Arc<Upstream>) -> Grant {
-        self.insert(context, Some(upstream))
-    }
-
-    fn insert(&self, context: Context, upstream: Option<Arc<Upstream>>) -> Grant {
         let token = format!(
             "{:032x}{:032x}",
             rand::random::<u128>(),
@@ -86,8 +71,6 @@ impl Sessions {
         );
         let session = Arc::new(Session {
             context,
-            job: upstream.is_some(),
-            upstream,
             closed: CancellationToken::new(),
             slots: Semaphore::new(CALLS_AT_ONCE),
             calls: Mutex::default(),
@@ -227,7 +210,7 @@ impl ServerHandler for Handler {
         Ok(ListToolsResult {
             tools: MAX_TOOLS
                 .iter()
-                .filter(|spec| session.allows(spec.name))
+                .filter(|spec| session.context.caller.allows(spec.name))
                 .map(tool)
                 .collect(),
             ..ListToolsResult::default()
@@ -241,7 +224,7 @@ impl ServerHandler for Handler {
     ) -> Result<CallToolResponse, ErrorData> {
         let session = self.session(&request)?;
         let args = Value::Object(call.arguments.unwrap_or_default());
-        let started = if session.allows(&call.name) {
+        let started = if session.context.caller.allows(&call.name) {
             session.start(&call.name)
         } else {
             Err(Failure::new(
@@ -281,12 +264,6 @@ impl ServerHandler for Handler {
 }
 
 impl Session {
-    /// A background agent's session calls only the tools that read; the
-    /// runner's own requests aren't for it.
-    fn allows(&self, name: &str) -> bool {
-        !self.job || MAX_TOOLS.iter().any(|tool| tool.name == name && tool.job)
-    }
-
     async fn call(&self, name: &str, args: Value) -> Result<Value, Failure> {
         if name == show::NAME {
             return show::run(&self.context, &self.shown, args).await;
@@ -338,6 +315,7 @@ mod tests {
     use super::*;
     use crate::conversation::ingest;
     use crate::conversation::testing::{from_xiaoming, group, offset, text};
+    use crate::mcp::{Caller, Services};
     use crate::scope::Scope;
 
     /// A JSON-RPC request as the runner sends it: the reply's `result` or
@@ -391,16 +369,11 @@ mod tests {
         let conversation = place.conversation;
         let sessions = Sessions::default();
         let grant = sessions.open(Context {
-            pool,
+            services: Arc::new(Services::bare(pool)),
             place,
-            offset: offset(),
             page_tokens: 2000,
-            search: None,
             work: None,
-            store: None,
-            poster: None,
-            embedder: None,
-            admin: None,
+            caller: Caller::Check,
         });
 
         let dir = std::env::temp_dir().join(format!("max-mcp-{}", std::process::id()));
@@ -493,16 +466,11 @@ mod tests {
         let conversation = place.conversation;
         let sessions = Sessions::default();
         let grant = sessions.open(Context {
-            pool,
+            services: Arc::new(Services::bare(pool)),
             place,
-            offset: offset(),
             page_tokens: 2000,
-            search: None,
             work: None,
-            store: None,
-            poster: None,
-            embedder: None,
-            admin: None,
+            caller: Caller::Check,
         });
         let dir = std::env::temp_dir().join(format!("max-mcp-legacy-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -538,16 +506,11 @@ mod tests {
         let conversation = place.conversation;
         let sessions = Sessions::default();
         let grant = sessions.open(Context {
-            pool,
+            services: Arc::new(Services::bare(pool)),
             place,
-            offset: offset(),
             page_tokens: 2000,
-            search: None,
             work: None,
-            store: None,
-            poster: None,
-            embedder: None,
-            admin: None,
+            caller: Caller::Check,
         });
         let dir = std::env::temp_dir().join(format!("max-mcp-cap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

@@ -30,7 +30,7 @@ struct Args {
 pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let Args { member, seconds } = arguments("mute_member", args)?;
     let place = &context.place;
-    let (Some(admin), Platform::Qq) = (&context.admin, place.platform) else {
+    let (Some(admin), Platform::Qq) = (&context.services.admin, place.platform) else {
         return Err(Failure::new("unavailable", "这里禁言不了。"));
     };
     let refused = |why: &str| Err(Failure::new("refused", why));
@@ -46,7 +46,7 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     if PrincipalId(member) == place.me.principal {
         return refused("不能禁言你自己");
     }
-    let mut conn = context.pool.acquire().await?;
+    let mut conn = context.services.pool.acquire().await?;
     let speaker = platform::speaker(&mut conn, place.endpoint, PrincipalId(member)).await?;
     drop(conn);
     let Some(speaker) = speaker else {
@@ -89,7 +89,7 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     info!(conversation = %place.conversation, member, seconds, "muted");
     let until = until.map(|until| {
         until
-            .with_timezone(&context.offset)
+            .with_timezone(&context.services.offset)
             .format("%Y-%m-%d %H:%M")
             .to_string()
     });

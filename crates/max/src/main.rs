@@ -123,8 +123,16 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
         // No conversation has id 0, so the program's context_read finds
         // nothing, from the database.
         let context = || {
-            Ok::<_, sqlx::Error>(mcp::Context {
+            let services = mcp::Services {
                 pool: PgPool::connect_lazy(&config.database.url)?,
+                offset: config.utc_offset,
+                search: None,
+                store: None,
+                embedder: None,
+                admin: None,
+            };
+            Ok::<_, sqlx::Error>(mcp::Context {
+                services: Arc::new(services),
                 place: Arc::new(Place {
                     conversation: ConversationId(0),
                     kind: ConversationKind::Group,
@@ -137,14 +145,9 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
                     },
                     my_name: "maxx".into(),
                 }),
-                offset: config.utc_offset,
                 page_tokens: 2000,
-                search: None,
                 work: None,
-                store: None,
-                poster: None,
-                embedder: None,
-                admin: None,
+                caller: mcp::Caller::Check,
             })
         };
         let shell = Tool::Shell {
@@ -391,21 +394,25 @@ async fn serve(config: Config) -> Result<()> {
     let store = pictures
         .as_ref()
         .map(|pictures| Arc::clone(&pictures.store));
+    let tools = Arc::new(mcp::Services {
+        pool: pool.clone(),
+        offset: config.utc_offset,
+        search,
+        store: store.clone(),
+        embedder,
+        admin,
+    });
     let (outbound, outbound_rx) = mpsc::unbounded_channel();
     let shared = Arc::new(Shared {
-        pool: pool.clone(),
+        services: tools,
         models,
         outbound,
-        offset: config.utc_offset,
         stop_grace: STOP_GRACE,
         owners,
         binds: Arc::default(),
         historian,
         rows,
         vms,
-        search,
-        embedder,
-        admin,
         pictures,
         started: tokio::time::Instant::now(),
     });

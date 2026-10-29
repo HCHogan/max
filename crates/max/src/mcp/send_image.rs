@@ -26,8 +26,11 @@ struct Args {
 
 pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let Args { path, caption } = arguments("send_image", args)?;
-    let (Some(work), Some(store), Some(poster)) = (&context.work, &context.store, &context.poster)
-    else {
+    let (Some(work), Some(store), Some(poster)) = (
+        &context.work,
+        &context.services.store,
+        context.caller.poster(),
+    ) else {
         return Err(Failure::new("unavailable", "这里发不了图。"));
     };
     let relative = beneath_work(&path)?;
@@ -62,7 +65,7 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
         height: Some(prepared.height),
         model_sha256: Some(model_sha256),
     };
-    let mut conn = context.pool.acquire().await?;
+    let mut conn = context.services.pool.acquire().await?;
     media::remember(&mut conn, &blob, Utc::now()).await?;
     drop(conn);
     let mut nodes = vec![DraftNode::Made {

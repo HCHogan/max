@@ -8,6 +8,7 @@ use super::*;
 use crate::conversation::Place;
 use crate::conversation::ingest;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, offset, text};
+use crate::mcp::{Caller, Services};
 use crate::qq::admin::Admin;
 use crate::qq::send::Answer;
 
@@ -90,16 +91,14 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
     drop(conn);
     let qq = Arc::new(Group::default());
     let context = Context {
-        pool: pool.clone(),
+        services: Arc::new(Services {
+            admin: Some(Arc::clone(&qq) as Arc<dyn Admin>),
+            ..Services::bare(pool.clone())
+        }),
         place: Arc::clone(&place),
-        offset: offset(),
         page_tokens: 2000,
-        search: None,
         work: None,
-        store: None,
-        poster: None,
-        embedder: None,
-        admin: Some(Arc::clone(&qq) as Arc<dyn Admin>),
+        caller: Caller::Check,
     };
     let asked = || qq.asked.lock().unwrap().clone();
 
@@ -139,6 +138,10 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
     assert_eq!(code(&context, xiaoming, -1).await, "bad_arguments");
     assert_eq!(code(&context, xiaoming, LONGEST + 1).await, "bad_arguments");
     let direct = Context {
+        services: Arc::new(Services {
+            admin: context.services.admin.clone(),
+            ..Services::bare(pool.clone())
+        }),
         place: Arc::new(Place {
             conversation: place.conversation,
             kind: ConversationKind::Direct,
@@ -148,19 +151,16 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
             me: place.me,
             my_name: "maxx".into(),
         }),
-        pool: pool.clone(),
-        offset: offset(),
         page_tokens: 2000,
-        search: None,
         work: None,
-        store: None,
-        poster: None,
-        embedder: None,
-        admin: context.admin.clone(),
+        caller: Caller::Check,
     };
     assert_eq!(code(&direct, xiaoming, 60).await, "refused");
     let elsewhere = Context {
-        admin: None,
+        services: Arc::new(Services {
+            admin: None,
+            ..(*context.services).clone()
+        }),
         ..context
     };
     assert_eq!(code(&elsewhere, xiaoming, 60).await, "unavailable");

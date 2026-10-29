@@ -20,7 +20,7 @@ use max_core::item::Protocol;
 use serde_json::{Value, json};
 use tokio::time::timeout;
 
-use super::Sessions;
+use super::{Caller, Sessions};
 
 /// A request carries the agent's whole context.
 const LARGEST: usize = 64 << 20;
@@ -65,7 +65,7 @@ async fn call(
             "token 不对，或者这个 job 已经结束了",
         );
     };
-    let Some(upstream) = session.upstream.clone() else {
+    let Caller::Job(upstream) = &session.context.caller else {
         return refuse(StatusCode::FORBIDDEN, "这个会话不能调模型");
     };
     let endpoint = match upstream.protocol {

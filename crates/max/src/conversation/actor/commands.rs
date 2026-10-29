@@ -118,7 +118,7 @@ impl Conversation {
         };
         self.save_settings().await?;
         let conversation = self.place.conversation;
-        let mut conn = self.shared.pool.acquire().await?;
+        let mut conn = self.shared.services.pool.acquire().await?;
         let active = summaries::active(&mut conn, conversation, None).await?;
         let (before, after): (Vec<_>, Vec<_>) = active
             .into_iter()
@@ -184,7 +184,7 @@ impl Conversation {
     }
 
     async fn save_settings(&mut self) -> Result<()> {
-        let mut conn = self.shared.pool.acquire().await?;
+        let mut conn = self.shared.services.pool.acquire().await?;
         platform::save_settings(
             &mut conn,
             self.place.conversation,
@@ -346,7 +346,7 @@ impl Conversation {
             None => None,
             Some(group) => {
                 let native_id = format!("group:{group}");
-                let mut conn = self.shared.pool.acquire().await?;
+                let mut conn = self.shared.services.pool.acquire().await?;
                 let found =
                     platform::conversation_of(&mut conn, Platform::QqLegacy, &native_id).await?;
                 let Some(conversation) = found else {

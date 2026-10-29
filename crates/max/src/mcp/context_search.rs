@@ -106,12 +106,12 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     } = arguments("context_search", args)?;
     let terms = terms(&query)?;
     let limit = limit.unwrap_or(DEFAULT).clamp(1, MOST);
-    let (from, until) = window(from.as_deref(), to.as_deref(), context.offset)?;
+    let (from, until) = window(from.as_deref(), to.as_deref(), context.services.offset)?;
     let patterns: Vec<String> = terms.iter().map(|term| pattern(term)).collect();
     let meaning = meaning(context, &query).await;
 
     let _slot = SLOTS.acquire().await;
-    let mut conn = context.pool.acquire().await?;
+    let mut conn = context.services.pool.acquire().await?;
     // All of the conversation: /clear --all hides rows from the context,
     // not from a search.
     let query = Query {
@@ -135,7 +135,7 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
 /// The query's vector, when there is an embedding model and it answers in
 /// time.
 async fn meaning<'a>(context: &'a Context, query: &str) -> Option<Meaning<'a>> {
-    let embedder = context.embedder.as_ref()?;
+    let embedder = context.services.embedder.as_ref()?;
     match timeout(MEANING_WAIT, embedder.one(query)).await {
         Ok(Ok(vector)) => Some(Meaning {
             model: &embedder.model,
@@ -194,7 +194,7 @@ async fn row_hits(
     let people = people(conn, rows.iter().map(|row| &row.message), &context.place).await?;
     let render = Render {
         people: &people,
-        offset: context.offset,
+        offset: context.services.offset,
     };
     let mut hits = Vec::new();
     for row in &rows {
@@ -207,7 +207,7 @@ async fn row_hits(
         hits.push(Hit {
             kind: Kind::Message,
             handle: format!("#{}", message.id),
-            time: moment(message.at, context.offset),
+            time: moment(message.at, context.services.offset),
             text: format!("{name}：{}", snippet(&body, &chosen(terms, &found.has))),
             read: json!({ "id": message.id.0, "before": AROUND, "after": AROUND }),
             score: found.score,
@@ -260,7 +260,11 @@ async fn summary_hits(
         let handle = format!("summary#{id}");
         hits.push(Hit {
             kind: Kind::Summary,
-            time: span(summary.started_at, summary.ended_at, context.offset),
+            time: span(
+                summary.started_at,
+                summary.ended_at,
+                context.services.offset,
+            ),
             text,
             read: json!({ "summary": id.0 }),
             score: found.score,

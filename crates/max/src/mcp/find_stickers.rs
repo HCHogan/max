@@ -23,7 +23,7 @@ struct Args {
 
 pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let Args { query, limit } = arguments("find_stickers", args)?;
-    let Some(embedder) = &context.embedder else {
+    let Some(embedder) = &context.services.embedder else {
         return Err(Failure::new("unavailable", "这里没有表情包库。"));
     };
     let query = query.trim();
@@ -38,7 +38,7 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
         warn!(%error, "find_stickers couldn't embed its query");
         Failure::new("unavailable", "表情包库暂时用不了，稍后再试。")
     })?;
-    let mut conn = context.pool.acquire().await?;
+    let mut conn = context.services.pool.acquire().await?;
     let found = embeddings::nearest(&mut conn, &embedder.model, &vector, limit).await?;
     let stickers: Vec<Value> = found
         .into_iter()

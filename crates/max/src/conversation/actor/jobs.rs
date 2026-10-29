@@ -101,16 +101,11 @@ impl Conversation {
             .filter(|title| !title.is_empty())
             .unwrap_or_else(|| headline(&task));
         let context = mcp::Context {
-            pool: self.shared.pool.clone(),
+            services: Arc::clone(&self.shared.services),
             place: Arc::clone(&self.place),
-            offset: self.shared.offset,
             page_tokens: Budgets::for_window(upstream.window).single,
-            search: self.shared.search.clone(),
             work: None,
-            store: None,
-            poster: None,
-            embedder: None,
-            admin: None,
+            caller: mcp::Caller::Job(Arc::clone(&upstream)),
         };
         let (steers, steered) = unbounded_channel();
         let progress = Arc::<Mutex<Progress>>::default();

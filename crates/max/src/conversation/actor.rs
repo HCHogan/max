@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, Utc};
 use color_eyre::eyre::Result;
 use max_core::ids::{MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
@@ -17,7 +17,7 @@ use max_core::prompt;
 use max_core::render::Mark;
 use max_core::run::{FailReason, Input, Run, RunSpec, Step, Wake};
 use max_db::platform::{self, Settings};
-use max_db::{PgPool, ledger, turns, usage};
+use max_db::{ledger, turns, usage};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};
@@ -26,25 +26,22 @@ use super::ingest;
 use super::project::{self, Projection};
 use super::{Act, Event, Place, Post, Poster, Receipt, TaskId, classify, model, tool};
 use crate::bind::Binds;
-use crate::embedding::Embedder;
 use crate::historian::Notice;
 use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
 use crate::mcp;
 use crate::media::pictures::Pictures;
-use crate::qq::admin::Admin;
 use crate::scope::Scope;
-use crate::search::Search;
 use crate::tokens;
 use crate::vm::Vms;
 use crate::worker::Rows;
 
 /// What every conversation's actor shares.
 pub struct Shared {
-    pub pool: PgPool,
+    /// The database, and what the tools reach.
+    pub services: Arc<mcp::Services>,
     pub models: Arc<Models>,
     pub outbound: UnboundedSender<Outgoing>,
-    pub offset: FixedOffset,
     /// How long a core may go on when Max stops, before it is interrupted.
     pub stop_grace: Duration,
     /// Max's owners, who may run every command.
@@ -56,12 +53,6 @@ pub struct Shared {
     pub rows: Rows,
     /// None when no VMs are configured: the tools say so.
     pub vms: Option<Vms>,
-    /// For `web_search`; None when it isn't configured.
-    pub search: Option<Arc<Search>>,
-    /// For `find_stickers`; None when no embedding model is configured.
-    pub embedder: Option<Arc<Embedder>>,
-    /// QQ's group admin calls, for `mute_member`; None without QQ.
-    pub admin: Option<Arc<dyn Admin>>,
     /// Where model calls find their pictures; None when no media
     /// directory is configured, and none are sent.
     pub pictures: Option<Arc<Pictures>>,
@@ -133,7 +124,7 @@ impl Conversation {
         place: Arc<Place>,
         mailbox: UnboundedSender<Event>,
     ) -> Result<Self> {
-        let mut conn = shared.pool.acquire().await?;
+        let mut conn = shared.services.pool.acquire().await?;
         let head = ledger::head(&mut conn, place.conversation)
             .await?
             .unwrap_or(MessageId(0));
@@ -274,7 +265,7 @@ impl Conversation {
     async fn inbound(&mut self, inbound: Inbound, bound: bool) -> Result<()> {
         // A group bound to an old conversation goes on from its history.
         let continued = self.head > MessageId(0);
-        let mut conn = self.shared.pool.acquire().await?;
+        let mut conn = self.shared.services.pool.acquire().await?;
         // A platform may say a message twice, as QQ does when it replays
         // a resumed session.
         let known = ledger::by_native_id(&mut conn, self.place.endpoint, &inbound.native_id);
@@ -287,7 +278,7 @@ impl Conversation {
             &self.place,
             &inbound,
             Utc::now(),
-            self.shared.offset,
+            self.shared.services.offset,
         )
         .await?;
         drop(conn);
@@ -322,7 +313,7 @@ impl Conversation {
         let Some(a) = self.core.as_mut() else {
             return Ok(());
         };
-        let mut conn = self.shared.pool.acquire().await?;
+        let mut conn = self.shared.services.pool.acquire().await?;
         let mut input = project::follow_up(
             &mut conn,
             &self.place,
@@ -330,7 +321,7 @@ impl Conversation {
             &a.roster,
             a.last_at,
             a.chosen.window,
-            self.shared.offset,
+            self.shared.services.offset,
         )
         .await?;
         if let Input::Messages { people, item, .. } = &mut input {
@@ -384,13 +375,13 @@ impl Conversation {
     fn classify(&mut self, chosen: Chosen, batch: Vec<MessageId>) {
         let persona = self.settings.persona.as_deref().unwrap_or(prompt::PERSONA);
         let job = classify::Job {
-            pool: self.shared.pool.clone(),
+            pool: self.shared.services.pool.clone(),
             place: Arc::clone(&self.place),
             chosen,
             persona: persona.to_owned(),
             batch,
             context_lines: classify::CONTEXT_LINES,
-            offset: self.shared.offset,
+            offset: self.shared.services.offset,
         };
         let mailbox = self.mailbox.clone();
         self.side.spawn(move |_| classify::classify(job, mailbox));
@@ -413,10 +404,10 @@ impl Conversation {
             window: chosen.window,
             cleared_upto: settings.cleared_upto,
             now,
-            offset: self.shared.offset,
+            offset: self.shared.services.offset,
         };
         let from = self.head;
-        let mut conn = self.shared.pool.acquire().await?;
+        let mut conn = self.shared.services.pool.acquire().await?;
         let (context, inputs) = projection.base(&mut conn, from, &[wake]).await?;
         let started = turns::start(&mut conn, self.place.conversation, &inputs, from, now).await?;
         drop(conn);
@@ -499,16 +490,11 @@ impl Conversation {
                         a.live.insert(task);
                         let vms = self.shared.vms.clone();
                         let context = mcp::Context {
-                            pool: self.shared.pool.clone(),
+                            services: Arc::clone(&self.shared.services),
                             place: Arc::clone(&self.place),
-                            offset: self.shared.offset,
                             page_tokens: Budgets::for_window(a.chosen.window).single,
-                            search: self.shared.search.clone(),
                             work: None,
-                            store: self.shared.pictures.as_ref().map(|p| Arc::clone(&p.store)),
-                            poster: Some(Poster::new(self.mailbox.clone(), a.turn)),
-                            embedder: self.shared.embedder.clone(),
-                            admin: self.shared.admin.clone(),
+                            caller: mcp::Caller::Turn(Poster::new(self.mailbox.clone(), a.turn)),
                         };
                         let mailbox = self.mailbox.clone();
                         a.io.spawn(move |_| tool::call(vms, context, call, task, mailbox));
@@ -537,7 +523,7 @@ impl Conversation {
             cost_micros: None,
             at: Utc::now(),
         };
-        let mut conn = self.shared.pool.acquire().await?;
+        let mut conn = self.shared.services.pool.acquire().await?;
         usage::record(&mut conn, &call).await?;
         if let Err(rejected) = a.run.model_output(out) {
             warn!(turn = %a.turn, %rejected, "a model output didn't fit");
@@ -584,7 +570,7 @@ impl Conversation {
             warn!(turn = %a.turn, %rejected, "the ending didn't fit");
         }
         let outcome = a.run.outcome();
-        let mut conn = self.shared.pool.acquire().await?;
+        let mut conn = self.shared.services.pool.acquire().await?;
         turns::finish(&mut conn, a.turn, &a.run.record(), &outcome, Utc::now()).await?;
         info!(turn = %a.turn, ?outcome, rounds = a.run.round(), "the core ends");
         drop(conn);
@@ -648,7 +634,7 @@ impl Conversation {
         segment: Option<i32>,
         receipt: Option<Receipt>,
     ) -> Result<Option<Message>> {
-        let mut conn = self.shared.pool.acquire().await?;
+        let mut conn = self.shared.services.pool.acquire().await?;
         let said = ingest::said(
             &mut conn,
             &self.place,
@@ -656,7 +642,7 @@ impl Conversation {
             turn,
             segment,
             Utc::now(),
-            self.shared.offset,
+            self.shared.services.offset,
         )
         .await?;
         drop(conn);
@@ -670,14 +656,14 @@ impl Conversation {
         turn: Option<TurnId>,
         receipt: Option<Receipt>,
     ) -> Result<Option<Message>> {
-        let mut conn = self.shared.pool.acquire().await?;
+        let mut conn = self.shared.services.pool.acquire().await?;
         let unsend = ingest::unsend(
             &mut conn,
             &self.place,
             target,
             turn,
             Utc::now(),
-            self.shared.offset,
+            self.shared.services.offset,
         )
         .await?;
         drop(conn);

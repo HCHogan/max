@@ -9,19 +9,15 @@ use crate::conversation::testing::{
     at, from_xiaohong, from_xiaoming, group, group_named, offset, text,
 };
 use crate::conversation::{Place, ingest};
+use crate::mcp::{Caller, Services};
 
 fn context(pool: &PgPool, place: &Arc<Place>, page_tokens: u32) -> Context {
     Context {
-        pool: pool.clone(),
+        services: Arc::new(Services::bare(pool.clone())),
         place: Arc::clone(place),
-        offset: offset(),
         page_tokens,
-        search: None,
         work: None,
-        store: None,
-        poster: None,
-        embedder: None,
-        admin: None,
+        caller: Caller::Check,
     }
 }
 

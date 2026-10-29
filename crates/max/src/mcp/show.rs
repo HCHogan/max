@@ -33,7 +33,7 @@ pub async fn run(
     args: Value,
 ) -> Result<Value, Failure> {
     let Args { path } = arguments(NAME, args)?;
-    let (Some(work), Some(store)) = (&context.work, &context.store) else {
+    let (Some(work), Some(store)) = (&context.work, &context.services.store) else {
         return Err(Failure::new("unavailable", "这里看不了图。"));
     };
     let full = || Failure::new("too_many", format!("一次 run_code 最多交 {MOST} 张图"));

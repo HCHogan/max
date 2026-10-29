@@ -12,6 +12,7 @@ use crate::conversation::ingest;
 use crate::conversation::testing::{from_xiaoming, group, offset};
 use crate::embedding::testing::{serve, vector};
 use crate::inbound::InNode;
+use crate::mcp::{Caller, Services};
 use crate::scope::Scope;
 
 fn medium(kind: MediaKind) -> InNode {
@@ -84,16 +85,14 @@ async fn the_nearest_stickers_by_handle(pool: PgPool) {
     }
     drop(conn);
     let mut context = Context {
-        pool,
+        services: Arc::new(Services {
+            embedder: Some(embedder),
+            ..Services::bare(pool)
+        }),
         place,
-        offset: offset(),
         page_tokens: 2000,
-        search: None,
         work: None,
-        store: None,
-        poster: None,
-        embedder: Some(embedder),
-        admin: None,
+        caller: Caller::Check,
     };
 
     let found = run(&context, json!({ "query": " 猫 " })).await.unwrap();
@@ -125,7 +124,10 @@ async fn the_nearest_stickers_by_handle(pool: PgPool) {
         code(&context, json!({ "query": "挂" })).await,
         "unavailable"
     );
-    context.embedder = None;
+    context.services = Arc::new(Services {
+        embedder: None,
+        ..(*context.services).clone()
+    });
     assert_eq!(
         code(&context, json!({ "query": "猫" })).await,
         "unavailable"

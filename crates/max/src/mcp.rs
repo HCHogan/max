@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::FixedOffset;
+use max_core::tools::MAX_TOOLS;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -32,29 +33,81 @@ use tracing::warn;
 
 use crate::conversation::{Place, Poster};
 use crate::embedding::Embedder;
+use crate::llm::Upstream;
 use crate::media::store::Store;
 use crate::qq::admin::Admin;
 use crate::search::Search;
 
-/// Where a call comes from: the conversation whose VM the program runs in.
-pub struct Context {
+/// What the tools reach, the same for every call, built once in main; an
+/// `Option` is None when the configuration has none of it. Whether a
+/// caller may use a tool is [`Caller`]'s business, never these.
+#[derive(Clone)]
+pub struct Services {
     pub pool: PgPool,
-    pub place: Arc<Place>,
     pub offset: FixedOffset,
-    /// The most tokens a page of text holds: the model's cap on one item.
-    pub page_tokens: u32,
-    /// None when no search is configured.
+    /// For `web_search`.
     pub search: Option<Arc<Search>>,
-    /// The host's side of the VM's /work, for a program run there.
-    pub work: Option<PathBuf>,
-    /// The content store, if there is one, for pictures and files sent.
+    /// The content store, for pictures and files sent.
     pub store: Option<Arc<Store>>,
-    /// Says things in the conversation for the turn that called.
-    pub poster: Option<Poster>,
-    /// For `find_stickers`; None when no embedding model is configured.
+    /// For `find_stickers`, and `context_search` by meaning.
     pub embedder: Option<Arc<Embedder>>,
     /// For `mute_member`; None without QQ.
     pub admin: Option<Arc<dyn Admin>>,
+}
+
+/// Where a call comes from: the conversation whose VM the program runs in,
+/// and who calls.
+pub struct Context {
+    pub services: Arc<Services>,
+    pub place: Arc<Place>,
+    /// The most tokens a page of text holds: the model's cap on one item.
+    pub page_tokens: u32,
+    /// The host's side of the VM's /work, for a program run there.
+    pub work: Option<PathBuf>,
+    pub caller: Caller,
+}
+
+/// Who calls, which decides the tools it has.
+pub enum Caller {
+    /// A turn's program: every tool, and what it says goes through the turn.
+    Turn(Poster),
+    /// A background agent: only the tools marked `job`, and its model
+    /// calls forwarded to the upstream.
+    Job(Arc<Upstream>),
+    /// `vm-check`'s program, and tests': nobody to say anything for.
+    Check,
+}
+
+impl Caller {
+    /// Says things in the conversation for the turn that called.
+    pub fn poster(&self) -> Option<&Poster> {
+        match self {
+            Caller::Turn(poster) => Some(poster),
+            Caller::Job(_) | Caller::Check => None,
+        }
+    }
+
+    /// Whether it may call the Max tool `name`; the runner's own requests
+    /// aren't Max tools.
+    pub fn allows(&self, name: &str) -> bool {
+        !matches!(self, Caller::Job(_))
+            || MAX_TOOLS.iter().any(|tool| tool.name == name && tool.job)
+    }
+}
+
+#[cfg(test)]
+impl Services {
+    /// Only the database, at UTC+8.
+    pub fn bare(pool: PgPool) -> Self {
+        Self {
+            pool,
+            offset: crate::conversation::testing::offset(),
+            search: None,
+            store: None,
+            embedder: None,
+            admin: None,
+        }
+    }
 }
 
 /// A call that failed, as the program sees it.

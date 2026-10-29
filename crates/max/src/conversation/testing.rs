@@ -17,6 +17,7 @@ use super::{Outgoing, Place, Shared};
 use crate::inbound::{Chat, InNode, Inbound, Person};
 use crate::llm::testing::{Script, config};
 use crate::llm::{Caller, Models};
+use crate::mcp::Services;
 use crate::worker::Rows;
 
 pub fn offset() -> FixedOffset {
@@ -44,18 +45,14 @@ pub fn shared(
         Models::with_callers(&llm, move |_, _| Ok(caller.clone() as Arc<dyn Caller>)).unwrap();
     let (outbound, rx) = mpsc::unbounded_channel();
     let shared = Shared {
-        pool: pool.clone(),
+        services: Arc::new(Services::bare(pool.clone())),
         models: Arc::new(models),
         outbound,
-        offset: offset(),
         stop_grace: Duration::from_millis(200),
         owners,
         binds: Arc::default(),
         historian: None,
         rows: Rows::default(),
-        search: None,
-        embedder: None,
-        admin: None,
         pictures: None,
         vms: None,
         started: tokio::time::Instant::now(),

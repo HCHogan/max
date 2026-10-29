@@ -28,12 +28,12 @@ struct Args {
 pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let Args { id } = arguments("recall_message", args)?;
     let place = &context.place;
-    let (Some(poster), Platform::Qq) = (&context.poster, place.platform) else {
+    let (Some(poster), Platform::Qq) = (context.caller.poster(), place.platform) else {
         return Err(Failure::new("unavailable", "这里撤回不了消息。"));
     };
     let target = MessageId(id);
     let refused = |why: &str| Err(Failure::new("refused", why));
-    let mut conn = context.pool.acquire().await?;
+    let mut conn = context.services.pool.acquire().await?;
     let row = ledger::row(&mut conn, place.conversation, target).await?;
     let Some(row) = row.filter(|row| matches!(row.message.content, Content::Message { .. })) else {
         return Err(Failure::new(

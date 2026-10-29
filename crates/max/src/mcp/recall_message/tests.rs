@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use super::*;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, offset, text};
 use crate::conversation::{Act, Event, Place, Poster, ingest};
+use crate::mcp::{Caller, Services};
 use crate::scope::Scope;
 
 /// What a call is told when it is refused.
@@ -78,16 +79,11 @@ async fn what_qq_would_refuse_is_refused_here(pool: PgPool) {
         }
     });
     let context = Context {
-        pool: pool.clone(),
+        services: Arc::new(Services::bare(pool.clone())),
         place: Arc::clone(&place),
-        offset: offset(),
         page_tokens: 2000,
-        search: None,
         work: None,
-        store: None,
-        poster: Some(Poster::new(mailbox, TurnId(1))),
-        embedder: None,
-        admin: None,
+        caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
     };
     let now = Utc::now();
     let long_ago = now - TimeDelta::minutes(3);
@@ -132,7 +128,7 @@ async fn what_qq_would_refuse_is_refused_here(pool: PgPool) {
         .unwrap();
     assert_eq!(code(&context, MessageId(unsend)).await, "not_found");
     let elsewhere = Context {
-        poster: None,
+        caller: Caller::Check,
         ..context
     };
     assert_eq!(code(&elsewhere, fresh).await, "unavailable");

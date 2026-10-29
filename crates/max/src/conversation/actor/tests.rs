@@ -7,7 +7,7 @@ use std::time::Duration;
 use max_core::item::ItemKind;
 use max_core::message::{Content, Node};
 use max_core::run::Outcome;
-use max_db::summaries;
+use max_db::{PgPool, summaries};
 use tokio::sync::{mpsc, oneshot};
 
 use serde_json::json;

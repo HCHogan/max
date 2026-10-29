@@ -28,8 +28,11 @@ struct Args {
 
 pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let Args { path, name } = arguments("send_file", args)?;
-    let (Some(work), Some(store), Some(poster)) = (&context.work, &context.store, &context.poster)
-    else {
+    let (Some(work), Some(store), Some(poster)) = (
+        &context.work,
+        &context.services.store,
+        context.caller.poster(),
+    ) else {
         return Err(Failure::new("unavailable", "这里发不了文件。"));
     };
     let relative = beneath_work(&path)?;
@@ -61,7 +64,7 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
         height: None,
         model_sha256: None,
     };
-    let mut conn = context.pool.acquire().await?;
+    let mut conn = context.services.pool.acquire().await?;
     media::remember(&mut conn, &blob, Utc::now()).await?;
     drop(conn);
     let draft = Draft {

@@ -25,7 +25,7 @@ struct Args {
 
 pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let Args { handle } = arguments(NAME, args)?;
-    let (Some(work), Some(store)) = (&context.work, &context.store) else {
+    let (Some(work), Some(store)) = (&context.work, &context.services.store) else {
         return Err(Failure::new("unavailable", "这里拿不了文件。"));
     };
     let Some((message, ordinal)) = parse(&handle) else {
@@ -34,7 +34,7 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
             format!("{handle} 不是句柄，要写成 file#123.0 这样"),
         ));
     };
-    let mut conn = context.pool.acquire().await?;
+    let mut conn = context.services.pool.acquire().await?;
     let stored = media::stored(&mut conn, message, ordinal).await?;
     drop(conn);
     let Some(stored) = stored.filter(|stored| stored.conversation == context.place.conversation)

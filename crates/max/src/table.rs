@@ -81,7 +81,7 @@ impl Table {
             warn!(platform = ?inbound.platform, "a message from a platform Max isn't on");
             return Ok(());
         };
-        let mut conn = self.shared.pool.acquire().await?;
+        let mut conn = self.shared.services.pool.acquire().await?;
         let (platform, chat) = (inbound.platform, &inbound.chat.native_id);
         let found = platform::find_endpoint(&mut conn, platform, chat, me.account.identity).await?;
         let (endpoint, event) = match (found, inbound.chat.kind) {

@@ -59,7 +59,7 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
                 work: Some(vm.work().to_owned()),
                 ..context
             };
-            let grant = vms.open(context);
+            let grant = vms.sessions().open(context);
             let ran = run_code(&vm, &grant, &code, args, limit).await;
             pictures = grant.shown();
             ran

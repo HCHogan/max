@@ -10,9 +10,9 @@ use sqlx::PgPool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UnixListener, UnixStream};
 
-use crate::conversation::testing::{group, offset};
+use crate::conversation::testing::group;
 use crate::llm::Upstream;
-use crate::mcp::{Context, Sessions, serve};
+use crate::mcp::{Caller, Context, Services, Sessions, serve};
 use crate::scope::Scope;
 
 /// What the provider was asked: the authorization, and the body.
@@ -97,26 +97,22 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
     let place = Arc::new(group(&mut conn).await);
     drop(conn);
     let conversation = place.conversation;
-    let context = || Context {
-        pool: pool.clone(),
+    let context = |caller| Context {
+        services: Arc::new(Services::bare(pool.clone())),
         place: Arc::clone(&place),
-        offset: offset(),
         page_tokens: 2000,
-        search: None,
         work: None,
-        store: None,
-        poster: None,
-        embedder: None,
-        admin: None,
+        caller,
     };
     let mut scope = Scope::new();
     let asked = Asked::default();
     let base_url = provider(&mut scope, Arc::clone(&asked)).await;
     let sessions = Sessions::default();
     let quiet = base_url.replace("/v1", "/quiet");
-    let job = sessions.open_job(context(), upstream(base_url));
-    let run = sessions.open(context());
-    let stalled = sessions.open_job(context(), quiet_within(quiet, Duration::from_millis(200)));
+    let job = sessions.open(context(Caller::Job(upstream(base_url))));
+    let run = sessions.open(context(Caller::Check));
+    let quiet = quiet_within(quiet, Duration::from_millis(200));
+    let stalled = sessions.open(context(Caller::Job(quiet)));
 
     let dir = std::env::temp_dir().join(format!("max-forward-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -183,21 +179,13 @@ async fn a_job_calls_only_the_tools_that_read(pool: PgPool) {
     drop(conn);
     let conversation = place.conversation;
     let sessions = Sessions::default();
-    let job = sessions.open_job(
-        Context {
-            pool,
-            place,
-            offset: offset(),
-            page_tokens: 2000,
-            search: None,
-            work: None,
-            store: None,
-            poster: None,
-            embedder: None,
-            admin: None,
-        },
-        upstream("http://127.0.0.1:9/v1".into()),
-    );
+    let job = sessions.open(Context {
+        services: Arc::new(Services::bare(pool)),
+        place,
+        page_tokens: 2000,
+        work: None,
+        caller: Caller::Job(upstream("http://127.0.0.1:9/v1".into())),
+    });
     let dir = std::env::temp_dir().join(format!("max-forward-tools-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let socket = dir.join("mine.sock");

@@ -77,14 +77,12 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
         Err(why) => return failed(why),
     };
     let mut watch = Recorder {
-        pool: start.context.pool.clone(),
+        pool: start.context.services.pool.clone(),
         conversation,
         upstream: Arc::clone(&start.upstream),
         progress: start.progress,
     };
-    let grant = start
-        .vms
-        .open_job(start.context, Arc::clone(&start.upstream));
+    let grant = start.vms.sessions().open(start.context);
     let unit = Vm::unit();
     // The unit outlives the deadline only by pi's grace, twice. A login
     // shell, as `shell`'s commands have: pi's run in the same environment.

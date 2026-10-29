@@ -19,7 +19,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::process::Command;
 
-use super::{Context, Sessions, serve};
+use super::{Caller, Context, Services, Sessions, serve};
 use crate::conversation::ingest;
 use crate::conversation::testing::{from_xiaoming, group, group_named, offset, text};
 use crate::inbound::InNode;
@@ -81,16 +81,11 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
     let conversation = place.conversation;
     let sessions = Sessions::default();
     let grant = sessions.open(Context {
-        pool,
+        services: Arc::new(Services::bare(pool)),
         place,
-        offset: offset(),
         page_tokens: 2000,
-        search: None,
         work: None,
-        store: None,
-        poster: None,
-        embedder: None,
-        admin: None,
+        caller: Caller::Check,
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());
@@ -229,16 +224,14 @@ async fn programs_show_the_model_pictures(pool: PgPool) {
     let conversation = place.conversation;
     let sessions = Sessions::default();
     let grant = sessions.open(Context {
-        pool,
+        services: Arc::new(Services {
+            store: Some(Arc::clone(&store)),
+            ..Services::bare(pool)
+        }),
         place,
-        offset: offset(),
         page_tokens: 2000,
-        search: None,
         work: Some(work.clone()),
-        store: Some(Arc::clone(&store)),
-        poster: None,
-        embedder: None,
-        admin: None,
+        caller: Caller::Check,
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());
@@ -336,16 +329,14 @@ async fn programs_fetch_the_chats_files(pool: PgPool) {
     let conversation = place.conversation;
     let sessions = Sessions::default();
     let grant = sessions.open(Context {
-        pool,
+        services: Arc::new(Services {
+            store: Some(Arc::clone(&store)),
+            ..Services::bare(pool)
+        }),
         place,
-        offset: offset(),
         page_tokens: 2000,
-        search: None,
         work: Some(work.clone()),
-        store: Some(Arc::clone(&store)),
-        poster: None,
-        embedder: None,
-        admin: None,
+        caller: Caller::Check,
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());
