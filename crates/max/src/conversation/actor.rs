@@ -12,6 +12,7 @@ use max_core::ids::{MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::item::ModelOutput;
 use max_core::message::{Draft, DraftNode, Message};
+use max_core::project::Budgets;
 use max_core::prompt;
 use max_core::render::Mark;
 use max_core::run::{FailReason, Input, Run, RunSpec, Step, Wake};
@@ -28,6 +29,7 @@ use crate::bind::Binds;
 use crate::historian::Notice;
 use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
+use crate::mcp;
 use crate::scope::Scope;
 use crate::tokens;
 use crate::vm::Vms;
@@ -454,9 +456,14 @@ impl Conversation {
                         let task = TaskId(self.next_task);
                         a.live.insert(task);
                         let vms = self.shared.vms.clone();
-                        let conversation = self.place.conversation;
+                        let context = mcp::Context {
+                            pool: self.shared.pool.clone(),
+                            place: Arc::clone(&self.place),
+                            offset: self.shared.offset,
+                            page_tokens: Budgets::for_window(a.chosen.window).single,
+                        };
                         let mailbox = self.mailbox.clone();
-                        a.io.spawn(move |_| tool::call(vms, conversation, call, task, mailbox));
+                        a.io.spawn(move |_| tool::call(vms, context, call, task, mailbox));
                     }
                     return Ok(());
                 }

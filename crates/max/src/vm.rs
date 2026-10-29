@@ -19,9 +19,10 @@ use tokio::sync::oneshot;
 use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
 use tracing::{info, warn};
 
-use self::machine::{BOOT, Guest, Machine};
+use self::machine::{BOOT, Booted, Guest, Machine};
 use self::ssh::{Command, Connection};
 use crate::config;
+use crate::mcp::{self, Grant, Sessions};
 use crate::scope::Scope;
 
 /// How often idle and dead VMs are looked for.
@@ -31,6 +32,7 @@ const SWEEP: Duration = Duration::from_secs(60);
 #[derive(Clone)]
 pub struct Vms {
     requests: UnboundedSender<Request>,
+    sessions: Sessions,
 }
 
 struct Request {
@@ -53,8 +55,16 @@ impl Vms {
         let guest = Guest::load(&config.guest)?;
         std::fs::create_dir_all(&config.dir)?;
         let (requests, rx) = mpsc::unbounded_channel();
-        scope.spawn(move |_| run(config, guest, rx));
-        Ok(Self { requests })
+        let sessions = Sessions::default();
+        let served = sessions.clone();
+        scope.spawn(move |_| run(config, guest, served, rx));
+        Ok(Self { requests, sessions })
+    }
+
+    /// A session of the MCP service for a run in `context`'s conversation,
+    /// open until the grant drops.
+    pub fn open(&self, context: mcp::Context) -> Grant {
+        self.sessions.open(context)
     }
 
     /// The conversation's VM, started if it isn't running; or why there
@@ -73,10 +83,10 @@ impl Vms {
 }
 
 impl Vm {
-    /// Starts `line` in the guest's shell; `line` must start the unit
-    /// `unit`, from `Vm::unit`.
-    pub async fn command(&self, unit: String, line: &str) -> Result<Command> {
-        Command::start(&self.connection, unit, line, self.stops.clone()).await
+    /// Starts `line` in the guest's shell with `input`; `line` must start
+    /// the unit `unit`, from `Vm::unit`.
+    pub async fn command(&self, unit: String, line: &str, input: &[u8]) -> Result<Command> {
+        Command::start(&self.connection, unit, line, input, self.stops.clone()).await
     }
 
     /// A name for a command's unit, unique while max runs. A VM doesn't
@@ -109,8 +119,9 @@ struct Running {
     machine: Machine,
     connection: Arc<Connection>,
     stops: UnboundedSender<String>,
-    /// The stopper, which stops the units of commands dropped early.
-    _stopper: Scope,
+    /// The stopper, which stops the units of commands dropped early, and
+    /// the VM's MCP service.
+    _tasks: Scope,
     work: Arc<PathBuf>,
     lent: Arc<()>,
     idle_since: Instant,
@@ -136,16 +147,20 @@ impl Running {
     }
 }
 
-type Booted = (ConversationId, Result<(Machine, Connection), String>);
-
-async fn run(config: config::Vm, guest: Guest, mut requests: UnboundedReceiver<Request>) {
+async fn run(
+    config: config::Vm,
+    guest: Guest,
+    sessions: Sessions,
+    mut requests: UnboundedReceiver<Request>,
+) {
     let config = Arc::new(config);
     let guest = Arc::new(guest);
     let idle = Duration::from_secs(config.idle_minutes * 60);
     let mut vms: HashMap<ConversationId, State> = HashMap::new();
     let mut free: Vec<usize> = (0..config.slots.len()).rev().collect();
     let mut boots = Scope::new();
-    let (booted_tx, mut booted) = mpsc::unbounded_channel::<Booted>();
+    let (booted_tx, mut booted) =
+        mpsc::unbounded_channel::<(ConversationId, Result<Booted, String>)>();
     let mut sweep = interval(SWEEP);
     sweep.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
@@ -194,18 +209,20 @@ async fn run(config: config::Vm, guest: Guest, mut requests: UnboundedReceiver<R
                     continue;
                 };
                 match result {
-                    Ok((machine, connection)) => {
+                    Ok(Booted { machine, connection, mcp }) => {
                         let connection = Arc::new(connection);
                         let (stops, units) = mpsc::unbounded_channel();
-                        let mut stopper = Scope::new();
+                        let mut tasks = Scope::new();
                         let held = Arc::clone(&connection);
-                        stopper.spawn(move |_| ssh::stopper(held, units));
+                        tasks.spawn(move |_| ssh::stopper(held, units));
+                        let sessions = sessions.clone();
+                        tasks.spawn(move |stop| mcp::serve(mcp, conversation, sessions, stop));
                         let mut running = Running {
                             slot,
                             machine,
                             connection,
                             stops,
-                            _stopper: stopper,
+                            _tasks: tasks,
                             work: Arc::new(config.dir.join(conversation.0.to_string()).join("work")),
                             lent: Arc::new(()),
                             idle_since: Instant::now(),

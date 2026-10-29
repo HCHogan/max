@@ -11,11 +11,15 @@ use color_eyre::eyre::{Result, WrapErr, bail, eyre};
 use russh::keys::{Algorithm, PrivateKey};
 use serde::Deserialize;
 use tokio::fs;
+use tokio::net::UnixListener;
 use tokio::process::{Child, Command};
 use tokio::time::{Instant, sleep};
 
 use super::ssh::{self, Connection};
 use crate::config::{self, Slot};
+
+/// The hybrid vsock port the guest reaches the MCP service on.
+const MCP_PORT: u32 = 7777;
 
 /// How long the guest has to boot and let max in.
 pub const BOOT: Duration = Duration::from_secs(60);
@@ -53,19 +57,26 @@ impl Machine {
     }
 }
 
+/// A VM that has booted: its processes, the SSH connection, and where its
+/// programs call the MCP service.
+pub struct Booted {
+    pub machine: Machine,
+    pub connection: Connection,
+    pub mcp: UnixListener,
+}
+
 /// Boots the VM whose files are in `dir`, on `slot`'s tap.
-pub async fn boot(
-    config: &config::Vm,
-    guest: &Guest,
-    dir: &Path,
-    slot: &Slot,
-) -> Result<(Machine, Connection)> {
+pub async fn boot(config: &config::Vm, guest: &Guest, dir: &Path, slot: &Slot) -> Result<Booted> {
     let work = dir.join("work");
     fs::create_dir_all(&work).await?;
     disk(config, &dir.join("nix.img")).await?;
-    for stale in ["store.sock", "work.sock", "notify.vsock"] {
+    let mcp_socket = format!("notify.vsock_{MCP_PORT}");
+    for stale in ["store.sock", "work.sock", "notify.vsock", &mcp_socket] {
         let _ = fs::remove_file(dir.join(stale)).await;
     }
+    // cloud-hypervisor connects here when the guest connects to the host's
+    // port, so it listens before the guest boots.
+    let mcp = UnixListener::bind(dir.join(&mcp_socket))?;
 
     // The guest's root is max on the host; its other users are squashed
     // to max.
@@ -160,7 +171,13 @@ pub async fn boot(
     let deadline = Instant::now() + BOOT;
     loop {
         match ssh::connect(&socket, Arc::clone(&key)).await {
-            Ok(connection) => return Ok((machine, connection)),
+            Ok(connection) => {
+                return Ok(Booted {
+                    machine,
+                    connection,
+                    mcp,
+                });
+            }
             Err(error) => {
                 if machine.exited() {
                     let log = fs::read_to_string(dir.join("cloud-hypervisor.log")).await;

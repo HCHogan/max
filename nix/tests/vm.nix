@@ -1,6 +1,7 @@
 # The groups' VMs on one machine, nested: the module makes the taps, the
 # firewall's rules and the service's sandbox, and vm-check boots the
-# flake's guest the way max does and runs a command in it.
+# flake's guest the way max does, runs a command in it, and runs a program
+# whose context_read reaches the database through the MCP service.
 { pkgs, module }:
 pkgs.testers.runNixOSTest {
   name = "max-vm";
@@ -41,5 +42,6 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl start maxx-vm-check.service")
     shown = machine.succeed("journalctl -u maxx-vm-check.service -o cat")
     assert "退出码 0" in shown and "Linux max" in shown, shown
+    assert '"mcp":"not_found"' in shown, shown
   '';
 }

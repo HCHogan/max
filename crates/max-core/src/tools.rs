@@ -19,9 +19,10 @@ pub struct ToolSpec {
 pub const TOOLS: [ToolSpec; 2] = [
     ToolSpec {
         name: "run_code",
-        description: "在本群的 VM 里运行一段 JavaScript。code 是 async 函数体，return 的值就是结果。\
-            程序里用 tools.<名字>(args) 调 Max 的工具，见系统提示里的声明。",
-        parameters: r#"{"type":"object","properties":{"code":{"type":"string","description":"async 函数体"},"args":{"description":"程序里读到的 args"}},"required":["code"]}"#,
+        description: "在本群的 VM 里用 Node 运行一段 JavaScript。code 是 async 函数体，return 的值就是结果，\
+            console 输出另外带回。程序里用 tools.<名字>(args) 调 Max 的工具，见系统提示里的声明。\
+            默认限时 120 秒，timeout_ms 最多 600000。结果和输出各自超过 16 KiB 只返回头尾，全文存在 /work/.max/out/ 下。",
+        parameters: r#"{"type":"object","properties":{"code":{"type":"string","description":"async 函数体"},"args":{"description":"程序里读到的 args"},"timeout_ms":{"type":"integer","minimum":1}},"required":["code"]}"#,
     },
     ToolSpec {
         name: "shell",
@@ -68,6 +69,7 @@ pub enum Tool {
     RunCode {
         code: String,
         args: Option<serde_json::Value>,
+        timeout_ms: Option<u64>,
     },
     Shell {
         command: String,
@@ -80,6 +82,7 @@ pub enum Tool {
 struct RunCodeArgs {
     code: String,
     args: Option<serde_json::Value>,
+    timeout_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -95,12 +98,19 @@ pub fn parse(call: &ToolCall) -> Result<Call, String> {
     let malformed = |e: serde_json::Error| format!("{} 的参数不对：{e}", call.name);
     let tool = match call.name.as_str() {
         "run_code" => {
-            let RunCodeArgs { code, args } =
-                serde_json::from_str(&call.arguments).map_err(malformed)?;
+            let RunCodeArgs {
+                code,
+                args,
+                timeout_ms,
+            } = serde_json::from_str(&call.arguments).map_err(malformed)?;
             if code.trim().is_empty() {
                 return Err("run_code 的 code 是空的".to_owned());
             }
-            Tool::RunCode { code, args }
+            Tool::RunCode {
+                code,
+                args,
+                timeout_ms,
+            }
         }
         "shell" => {
             let ShellArgs {
@@ -168,6 +178,7 @@ mod tests {
             Tool::RunCode {
                 code: "return 1".into(),
                 args: Some(serde_json::json!({"n": 2})),
+                timeout_ms: None,
             }
         );
         assert_eq!(

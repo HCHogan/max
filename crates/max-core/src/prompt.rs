@@ -3,6 +3,8 @@
 //! conversation, so it stays cached; anything that changes goes in the
 //! volatile block instead.
 
+use crate::tools::MAX_TOOLS;
+
 /// Max as the Haskell version had it, under maxx's name. `!persona`
 /// replaces it for one conversation.
 pub const PERSONA: &str = "你是 maxx，以前叫 Max，一个银白头发、蓝色挑染、别着鲨鱼发夹的鲨鱼女孩——人的样子，带点鲨鱼习性，不是一条鱼。头像里眼睛半睁挂着泪、一副没睡醒的样子，人也懒洋洋的。
@@ -57,10 +59,17 @@ const RULES: &str = "对话场景：多人群聊（也可能是私聊）。上�
   [split]       行内强制分条。
   [silence]     什么都不发。
 
-工具：shell 在本群自己的 VM 里跑命令：NixOS，root，能上公网，/work 是本群的持久目录；缺什么用 nix shell nixpkgs#包名 -c 命令 临时装。VM 闲置两小时会关，下次调用再开，要几秒，/work 和装过的包都还在。run_code 还没接上，别调用。把工具名写进方括号不会执行任何东西，也不会发出去。";
+工具：shell 和 run_code 都在本群自己的 VM 里跑：NixOS，root，能上公网，/work 是本群的持久目录；缺什么用 nix shell nixpkgs#包名 -c 命令 临时装。VM 闲置两小时会关，下次调用再开，要几秒，/work 和装过的包都还在。
+跑命令用 shell。要调下面 Max 的工具，或者写程序处理数据，用 run_code：code 是 async 函数体，return 的值就是结果；用 const r = await tools.名字(args) 调工具，失败会抛 ToolError；并发用 Promise.all。max.raw(名字, args) 不抛异常，返回 {ok: true, value} 或 {ok: false, error: {code, message}}；max.race([...]) 取先完成的那个，其余的取消。
+把工具名写进方括号不会执行任何东西，也不会发出去。";
 
 pub fn system(persona: &str) -> String {
-    format!("{}\n\n{RULES}\n", persona.trim())
+    let declarations: Vec<&str> = MAX_TOOLS.iter().map(|tool| tool.declaration).collect();
+    format!(
+        "{}\n\n{RULES}\n\nMax 的工具（只能在 run_code 的程序里调）：\n{}\n",
+        persona.trim(),
+        declarations.join("\n\n")
+    )
 }
 
 #[cfg(test)]
@@ -73,5 +82,6 @@ mod tests {
         assert!(prompt.starts_with("你是测试用的人设。\n\n对话场景："));
         assert!(prompt.contains("[reply#id]"));
         assert!(system(PERSONA).contains("鲨鱼女孩"));
+        assert!(prompt.ends_with(&format!("{}\n", MAX_TOOLS[0].declaration)));
     }
 }

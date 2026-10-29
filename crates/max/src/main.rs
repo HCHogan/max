@@ -1,6 +1,7 @@
 //! `max run` serves; `max check-config` checks a configuration file's
 //! structure without reading its secrets, which the NixOS module does when
-//! it builds the file; `max vm-check` boots a VM and runs a command in it.
+//! it builds the file; `max vm-check` boots a VM, runs a command in it and
+//! a program that calls the MCP service.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{IsTerminal, Write};
@@ -11,20 +12,22 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use color_eyre::config::{HookBuilder, Theme};
 use color_eyre::eyre::{Result, WrapErr, bail};
-use max_core::ids::{ConversationId, PrincipalId};
+use max_core::ids::{ConversationId, EndpointId, IdentityId, PrincipalId};
 use max_core::item::Part;
 use max_core::message::Platform;
 use max_core::tools::Tool;
-use max_db::{PgPool, platform};
+use max_db::PgPool;
+use max_db::platform::{self, Account, ConversationKind};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use max::config::{self, Config};
-use max::conversation::Shared;
+use max::conversation::{Place, Shared};
 use max::historian::{self, Historian};
 use max::llm::Models;
+use max::mcp;
 use max::qq::{listen, send};
 use max::scope::Scope;
 use max::table::{self, Me, Table};
@@ -99,29 +102,61 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    let out = runtime.block_on(async {
+    let outs = runtime.block_on(async {
         let mut services = Scope::new();
         let vms = Vms::start(vm, &mut services)?;
+        // No conversation has id 0, so the program's context_read finds
+        // nothing, from the database.
+        let context = || {
+            Ok::<_, sqlx::Error>(mcp::Context {
+                pool: PgPool::connect_lazy(&config.database.url)?,
+                place: Arc::new(Place {
+                    conversation: ConversationId(0),
+                    kind: ConversationKind::Group,
+                    endpoint: EndpointId(0),
+                    platform: Platform::Qq,
+                    native_id: "vm-check".into(),
+                    me: Account {
+                        identity: IdentityId(0),
+                        principal: PrincipalId(0),
+                    },
+                    my_name: "maxx".into(),
+                }),
+                offset: config.utc_offset,
+                page_tokens: 2000,
+            })
+        };
         let shell = Tool::Shell {
             command,
             workdir: None,
             timeout_ms: None,
         };
-        // No conversation has id 0.
-        let out = tools::run(shell, Some(&vms), ConversationId(0)).await;
+        let program = Tool::RunCode {
+            code: "const read = await max.raw('context_read', {id: 1});\n\
+                   return {node: process.version, mcp: read.ok ? 'ok' : read.error.code}"
+                .into(),
+            args: None,
+            timeout_ms: None,
+        };
+        let mut outs = Vec::new();
+        for tool in [shell, program] {
+            outs.push(tools::run(tool, Some(&vms), context()?).await);
+        }
         drop(vms);
         services.close(Duration::from_secs(5)).await;
-        Ok::<_, color_eyre::Report>(out)
+        Ok::<_, color_eyre::Report>(outs)
     })?;
     runtime.shutdown_timeout(SHUTDOWN);
     let mut stdout = std::io::stdout();
-    for part in &out.parts {
-        if let Part::Text { text } = part {
-            writeln!(stdout, "{text}")?;
+    for out in &outs {
+        for part in &out.parts {
+            if let Part::Text { text } = part {
+                writeln!(stdout, "{text}")?;
+            }
         }
-    }
-    if out.error {
-        bail!("the command didn't run");
+        if out.error {
+            bail!("the check didn't run");
+        }
     }
     Ok(())
 }

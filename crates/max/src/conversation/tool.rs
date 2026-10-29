@@ -1,12 +1,13 @@
 //! The tool call task: one per call in `Step::RunTools`, in the core's `io`
 //! scope. It ends with exactly one `ToolDone`.
 
-use max_core::ids::{CallId, ConversationId};
+use max_core::ids::CallId;
 use max_core::item::ToolOutput;
 use max_core::tools::Call;
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::{Event, TaskId};
+use crate::mcp;
 use crate::tools;
 use crate::vm::Vms;
 
@@ -45,7 +46,7 @@ impl Drop for Report {
 
 pub async fn call(
     vms: Option<Vms>,
-    conversation: ConversationId,
+    context: mcp::Context,
     call: Call,
     task: TaskId,
     mailbox: UnboundedSender<Event>,
@@ -56,6 +57,6 @@ pub async fn call(
         mailbox,
         sent: false,
     };
-    let out = tools::run(call.tool, vms.as_ref(), conversation).await;
+    let out = tools::run(call.tool, vms.as_ref(), context).await;
     report.done(out);
 }

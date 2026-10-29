@@ -72,12 +72,13 @@ pub struct Command {
 }
 
 impl Command {
-    /// Runs `line` in a shell as root, with no input; `line` starts the
-    /// unit `unit`.
+    /// Runs `line` in a shell as root, with `input` as its whole input;
+    /// `line` starts the unit `unit`.
     pub async fn start(
         connection: &Connection,
         unit: String,
         line: &str,
+        input: &[u8],
         stops: UnboundedSender<String>,
     ) -> Result<Self> {
         let channel = connection.channel_open_session().await?;
@@ -88,6 +89,9 @@ impl Command {
             status: None,
         };
         command.channel.exec(true, line).await?;
+        if !input.is_empty() {
+            command.channel.data(input).await?;
+        }
         command.channel.eof().await?;
         Ok(command)
     }
@@ -98,9 +102,8 @@ impl Command {
     pub async fn wait(&mut self, sink: &mut impl Sink) -> Result<Option<u32>> {
         while let Some(message) = self.channel.wait().await {
             match message {
-                ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
-                    sink.output(&data).await?;
-                }
+                ChannelMsg::Data { data } => sink.output(Stream::Out, &data).await?,
+                ChannelMsg::ExtendedData { data, .. } => sink.output(Stream::Err, &data).await?,
                 ChannelMsg::ExitStatus { exit_status } => self.status = Some(exit_status),
                 _ => {}
             }
@@ -131,7 +134,14 @@ impl Drop for Command {
 
 /// Where a command's output goes as it arrives.
 pub trait Sink {
-    fn output(&mut self, data: &[u8]) -> impl Future<Output = Result<()>> + Send;
+    fn output(&mut self, stream: Stream, data: &[u8]) -> impl Future<Output = Result<()>> + Send;
+}
+
+/// The command's stdout or stderr.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stream {
+    Out,
+    Err,
 }
 
 /// Stops each unit sent to it, until every sender is gone.
