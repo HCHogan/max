@@ -34,7 +34,7 @@ use max::media::caption::Captioner;
 use max::media::download::Download;
 use max::media::fetch;
 use max::media::pictures::Pictures;
-use max::media::stickers::{self, Stickers};
+use max::media::stickers::Stickers;
 use max::media::store::Store;
 use max::qq::admin::Admin;
 use max::qq::avatar::Avatars;
@@ -44,7 +44,7 @@ use max::search::{self, Search};
 use max::table::{self, Me, Table};
 use max::tools;
 use max::vm::Vms;
-use max::worker::{self, Rows};
+use max::worker::Rows;
 
 // Stopping, in order, within systemd's TimeoutStopSec of 60 seconds.
 /// The QQ gateway saves its session.
@@ -280,12 +280,12 @@ async fn serve(config: Config) -> Result<()> {
         }
     };
     let stickers = embedder.as_ref().map(|embedder| {
-        let worker = Arc::new(Stickers {
+        let worker = Stickers {
             pool: pool.clone(),
             embedder: Arc::clone(embedder),
-        });
+        };
         let (tx, rx) = mpsc::unbounded_channel();
-        workers.spawn(move |stop| worker::drive(worker, stickers::POLICY, rx, stop));
+        workers.spawn(move |stop| worker.run(rx, stop));
         tx
     });
     let pictures = match &config.media {
