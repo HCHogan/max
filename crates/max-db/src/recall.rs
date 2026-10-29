@@ -1,7 +1,8 @@
 //! Recall: where in a conversation the terms of a `context_search` are. A
 //! term is found as a substring of lowercased text: a row's rendered text
-//! or its pictures' captions, a summary's title and levels. These find the
-//! candidates; ranking them is the caller's. See "召回".
+//! or the captions of its pictures and stickers, a summary's title and
+//! levels. These find the candidates; ranking them is the caller's. See
+//! "召回".
 
 use chrono::{DateTime, Utc};
 use max_core::ids::{ConversationId, MessageId, SummaryId};
@@ -14,8 +15,6 @@ pub struct Query<'a> {
     /// A LIKE pattern per term, for lowercased text: `%term%`, with `%`,
     /// `_` and `\` in the term escaped.
     pub patterns: &'a [String],
-    /// Only what comes after this row: /clear --all's mark.
-    pub after: Option<MessageId>,
     /// Rows sent from `from` and before `until`; summaries that overlap.
     pub from: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
@@ -26,10 +25,10 @@ pub struct Query<'a> {
 /// A candidate, with which of the patterns it has, by index.
 pub type Found<T> = (T, Vec<usize>);
 
-/// Chat rows with any of the terms in their text or in a picture's
-/// caption: the most terms first, then the newest. Commands, events and
-/// rows taken back are left out; so are sticker captions, which say what a
-/// sticker is for rather than what was said.
+/// Chat rows with any of the terms in their text or in a caption of their
+/// pictures or stickers: the most terms first, then the newest. Commands,
+/// events and rows taken back are left out. What /clear --all hid from
+/// the context is not.
 pub async fn messages(
     conn: &mut PgConnection,
     query: &Query<'_>,
@@ -51,18 +50,18 @@ pub async fn messages(
             select mm.message_id from media_captions c
             join message_media mm on mm.sha256 = c.sha256
             join messages m on m.id = mm.message_id
-            where c.kind = 'image' and lower(c.text) like any($2) and m.conversation_id = $1
+            where lower(c.text) like any($2) and m.conversation_id = $1
         ), bodies as materialized (
             select m.id, concat_ws(E'\n', lower(m.text), (
                 select string_agg(lower(c.text), E'\n')
                 from message_media mm join media_captions c on c.sha256 = mm.sha256
-                where mm.message_id = m.id and c.kind = 'image'
+                where mm.message_id = m.id
             )) as body
             from messages m
             where m.id in (select id from hits)
-              and m.conversation_id = $1 and m.kind = 'chat' and m.id > $3
-              and ($4::timestamptz is null or m.sent_at >= $4)
-              and ($5::timestamptz is null or m.sent_at < $5)
+              and m.conversation_id = $1 and m.kind = 'chat'
+              and ($3::timestamptz is null or m.sent_at >= $3)
+              and ($4::timestamptz is null or m.sent_at < $4)
               and not exists (
                   select from messages u where u.target_id = m.id and u.event = 'unsend'
               )
@@ -75,11 +74,10 @@ pub async fn messages(
         )
         select id as "id!", terms as "terms!" from found
         order by cardinality(terms) desc, id desc
-        limit $6
+        limit $5
         "#,
         query.conversation.0,
         query.patterns,
-        query.after.map_or(0, |id| id.0),
         query.from,
         query.until,
         query.limit
@@ -105,9 +103,9 @@ pub async fn summaries(
         with bodies as materialized (
             select id, last_message_id, lower(concat_ws(E'\n', title, p1, p2, p3)) as body
             from summaries
-            where conversation_id = $1 and status = 'active' and last_message_id > $3
-              and ($4::timestamptz is null or ended_at >= $4)
-              and ($5::timestamptz is null or started_at < $5)
+            where conversation_id = $1 and status = 'active'
+              and ($3::timestamptz is null or ended_at >= $3)
+              and ($4::timestamptz is null or started_at < $4)
         ), found as materialized (
             select b.id, b.last_message_id, array(
                 select t.n::int from unnest($2::text[]) with ordinality as t(pattern, n)
@@ -118,11 +116,10 @@ pub async fn summaries(
         )
         select id as "id!", terms as "terms!" from found
         order by cardinality(terms) desc, last_message_id desc
-        limit $6
+        limit $5
         "#,
         query.conversation.0,
         query.patterns,
-        query.after.map_or(0, |id| id.0),
         query.from,
         query.until,
         query.limit

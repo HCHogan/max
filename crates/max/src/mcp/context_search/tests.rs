@@ -4,6 +4,7 @@ use chrono::TimeDelta;
 use max_core::message::{MediaKind, MediaMeta, MediaRef, Node};
 use max_db::captions::{self, Caption};
 use max_db::media::{self, Blob};
+use max_db::platform;
 use max_db::summaries::{self as stored, Summary};
 use sqlx::{PgConnection, PgPool};
 
@@ -241,7 +242,14 @@ async fn rows_and_summaries_with_their_read(pool: PgPool) {
     let one = run(&context, json!({ "query": "部署", "limit": 1 })).await;
     assert_eq!(one.unwrap()["results"].as_array().unwrap().len(), 1);
 
-    // /clear --all hides what came before it.
+    // /clear --all hides rows from the context, not from a search.
+    let refs = async || -> Vec<Value> {
+        let found = run(&context, json!({ "query": "部署" })).await.unwrap();
+        let results = found["results"].as_array().unwrap().iter();
+        results.map(|result| result["ref"].clone()).collect()
+    };
+    let before = refs().await;
+    assert_eq!(before.len(), 3);
     let mut conn = pool.acquire().await.unwrap();
     let mut settings = platform::settings(&mut conn, place.conversation)
         .await
@@ -251,14 +259,7 @@ async fn rows_and_summaries_with_their_read(pool: PgPool) {
         .await
         .unwrap();
     drop(conn);
-    let found = run(&context, json!({ "query": "部署" })).await.unwrap();
-    let refs: Vec<&Value> = found["results"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|result| &result["ref"])
-        .collect();
-    assert_eq!(refs, [&json!(format!("#{long}"))]);
+    assert_eq!(refs().await, before);
 
     let empty = super::super::call("context_search", &context, json!({ "query": " " })).await;
     assert_eq!(empty.unwrap_err().code, "bad_arguments");

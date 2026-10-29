@@ -11,7 +11,7 @@ use max_core::ids::{MessageId, SummaryId};
 use max_core::project::span;
 use max_core::render::{Render, moment};
 use max_db::recall::{self, Query};
-use max_db::{PgConnection, ledger, platform, summaries};
+use max_db::{PgConnection, ledger, summaries};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
@@ -85,12 +85,11 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
 
     let _slot = SLOTS.acquire().await;
     let mut conn = context.pool.acquire().await?;
-    let conversation = context.place.conversation;
-    let settings = platform::settings(&mut conn, conversation).await?;
+    // All of the conversation: /clear --all hides rows from the context,
+    // not from a search.
     let query = Query {
-        conversation,
+        conversation: context.place.conversation,
         patterns: &patterns,
-        after: settings.cleared_upto,
         from,
         until,
         // Room for the copies of one message that count as one.

@@ -71,7 +71,6 @@ fn query(conversation: ConversationId, patterns: &[String]) -> Query<'_> {
     Query {
         conversation,
         patterns,
-        after: None,
         from: None,
         until: None,
         limit: 10,
@@ -103,15 +102,7 @@ async fn rows_with_the_most_terms_come_first(pool: PgPool) -> sqlx::Result<()> {
         2,
     )
     .await?;
-    captioned(
-        &mut conn,
-        &group,
-        MediaKind::Sticker,
-        'b',
-        "部署成功的猫",
-        3,
-    )
-    .await?;
+    let sticker = captioned(&mut conn, &group, MediaKind::Sticker, 'b', "翻白眼的猫", 3).await?;
     let taken = commit(&mut conn, &group, &xiaoming, &said("部署炸了"), 4).await?;
     commit(
         &mut conn,
@@ -152,19 +143,15 @@ async fn rows_with_the_most_terms_come_first(pool: PgPool) -> sqlx::Result<()> {
         [(both, vec![0, 1]), (mine, vec![1]), (github, vec![0])]
     );
 
-    // ASCII without regard to case; a picture by its caption, but not a
-    // sticker.
+    // ASCII without regard to case; a picture or a sticker by its caption.
     let terms = patterns(&["github", "服务器", "猫"]);
     let found = messages(&mut conn, &query(conversation, &terms)).await?;
-    assert_eq!(found, [(error, vec![1]), (github, vec![0])]);
+    assert_eq!(
+        found,
+        [(sticker, vec![2]), (error, vec![1]), (github, vec![0])]
+    );
 
     let terms = patterns(&["部署", "方案"]);
-    let after = Query {
-        after: Some(both),
-        ..query(conversation, &terms)
-    };
-    let found = messages(&mut conn, &after).await?;
-    assert_eq!(found, [(mine, vec![1]), (github, vec![0])]);
     let window = Query {
         from: Some(at(1)),
         until: Some(at(6)),
@@ -221,11 +208,6 @@ async fn active_summaries_by_any_level(pool: PgPool) -> sqlx::Result<()> {
     let terms = patterns(&["部署", "方案"]);
     let found = summaries(&mut conn, &query(conversation, &terms)).await?;
     assert_eq!(found, [(early, vec![0, 1]), (middle, vec![0])]);
-    let after = Query {
-        after: Some(ids[1]),
-        ..query(conversation, &terms)
-    };
-    assert_eq!(summaries(&mut conn, &after).await?, [(middle, vec![0])]);
     // Overlapping the window is enough.
     let window = Query {
         from: Some(at(1)),
