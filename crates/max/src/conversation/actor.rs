@@ -26,7 +26,7 @@ use super::ingest;
 use super::project::{self, Projection};
 use super::{Event, Place, TaskId, classify, model, tool};
 use crate::bind::Binds;
-use crate::historian::Compact;
+use crate::historian::Notice;
 use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
 use crate::mcp;
@@ -47,7 +47,7 @@ pub struct Shared {
     pub owners: BTreeSet<PrincipalId>,
     pub binds: Arc<Binds>,
     /// None when no historian's model is configured.
-    pub historian: Option<UnboundedSender<Compact>>,
+    pub historian: Option<UnboundedSender<Notice>>,
     /// The derived-data workers, which hear of every committed row.
     pub rows: Rows,
     /// None when no VMs are configured: the tools say so.

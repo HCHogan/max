@@ -14,7 +14,7 @@ use super::*;
 use crate::bind::Pending;
 use crate::command::{self, Command, Persona};
 use crate::conversation::ingest::Committed;
-use crate::historian::{Captured, Compacted};
+use crate::historian::{Captured, Compact, Compacted, Notice};
 
 /// Who may run what. Commands that cost money or change how Max behaves
 /// everywhere are the owners'; those that change one conversation are
@@ -110,10 +110,10 @@ impl Conversation {
             return Some("没有配写摘要的模型。".to_owned());
         };
         let (reply, answer) = oneshot::channel();
-        let notice = Compact {
+        let notice = Notice::Compact(Compact {
             place: Arc::clone(&self.place),
             reply,
-        };
+        });
         if historian.send(notice).is_err() {
             return Some("写摘要的服务停了。".to_owned());
         }

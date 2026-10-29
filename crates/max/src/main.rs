@@ -215,16 +215,15 @@ async fn serve(config: Config) -> Result<()> {
     let mut historians = Scope::new();
     let historian = match models.historian().transpose()? {
         Some(chosen) => {
-            let historian = Arc::new(Historian {
+            let historian = Historian {
                 pool: pool.clone(),
                 models: Arc::clone(&models),
                 chosen,
                 offset: config.utc_offset,
-            });
-            let rows = rows.subscribe();
-            let (compacts, rx) = mpsc::unbounded_channel();
-            historians.spawn(move |_| historian::run(historian, rows, rx));
-            Some(compacts)
+            };
+            let (notices, rx) = rows.subscribe();
+            historians.spawn(move |stop| historian::run(historian, rx, stop));
+            Some(notices)
         }
         None => {
             info!("no historian model: nothing is summarized");
@@ -242,7 +241,7 @@ async fn serve(config: Config) -> Result<()> {
                 http: fetch::client()?,
                 store: Arc::new(store),
             });
-            let rows = rows.subscribe();
+            let (_, rows) = rows.subscribe();
             workers.spawn(move |stop| worker::drive(download, download::POLICY, rows, stop));
         }
         None => info!("no media directory: media aren't downloaded"),

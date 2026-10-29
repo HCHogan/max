@@ -1,16 +1,19 @@
-use max_core::ids::{EndpointId, IdentityId, PrincipalId};
-use max_core::message::Platform;
-use max_db::platform::{Account, ConversationKind};
+use max_core::ids::{EndpointId, IdentityId, MessageId, PrincipalId};
+use max_core::message::{Content, Message, Platform, Sender};
+use max_db::PgPool;
+use max_db::platform::Account;
 
 use super::*;
+use crate::conversation::testing::offset;
+use crate::llm::testing::{Script, models};
 
-fn place(conversation: i64) -> Arc<Place> {
+fn place(kind: ConversationKind) -> Arc<Place> {
     Arc::new(Place {
-        conversation: ConversationId(conversation),
-        kind: ConversationKind::Group,
-        endpoint: EndpointId(conversation),
+        conversation: ConversationId(1),
+        kind,
+        endpoint: EndpointId(1),
         platform: Platform::Qq,
-        native_id: format!("group:GROUP{conversation}"),
+        native_id: "group:GROUP1".into(),
         me: Account {
             identity: IdentityId(1),
             principal: PrincipalId(1),
@@ -19,74 +22,61 @@ fn place(conversation: i64) -> Arc<Place> {
     })
 }
 
-fn reasons(starts: &[Start]) -> Vec<(i64, Reason)> {
-    let mut reasons: Vec<_> = starts
-        .iter()
-        .map(|start| (start.place.conversation.0, start.reason))
-        .collect();
-    reasons.sort_by_key(|(conversation, _)| *conversation);
-    reasons
+fn row(kind: ConversationKind) -> Notice {
+    Notice::Row(Row {
+        place: place(kind),
+        message: Arc::new(Message {
+            id: MessageId(1),
+            conversation: ConversationId(1),
+            sender: Sender {
+                identity: IdentityId(1),
+                name: "小明".into(),
+                role: None,
+            },
+            at: chrono::Utc::now(),
+            content: Content::Unsend {
+                target: MessageId(0),
+            },
+            turn: None,
+            raw: serde_json::Value::Null,
+        }),
+    })
 }
 
-#[test]
-fn a_busy_group_is_checked_once_a_minute_and_summarized_when_quiet() {
-    let t0 = Instant::now();
-    let mut watch = Watch::default();
-    watch.said(place(1), t0);
-    assert_eq!(reasons(&watch.due(t0)), [(1, Reason::Pressure)]);
-    watch.done(ConversationId(1), false, t0);
-    watch.said(place(1), t0 + Duration::from_secs(10));
-    assert!(watch.due(t0 + Duration::from_secs(30)).is_empty());
-    let minute = t0 + CHECK;
-    assert_eq!(reasons(&watch.due(minute)), [(1, Reason::Pressure)]);
-    watch.done(ConversationId(1), false, minute);
-    // Quiet ten minutes after the last row, then not again until more is said.
-    let quiet = t0 + Duration::from_secs(10) + QUIET;
-    assert!(watch.due(quiet - Duration::from_secs(1)).is_empty());
-    assert_eq!(reasons(&watch.due(quiet)), [(1, Reason::Quiet)]);
-    watch.done(ConversationId(1), false, quiet);
-    assert!(watch.due(quiet + QUIET).is_empty());
+fn units(notice: Notice, service: &Service) -> Vec<(Reason, Wait)> {
+    let units = service.on_input(notice);
+    units
+        .into_iter()
+        .map(|(c, wait)| (c.reason, wait))
+        .collect()
 }
 
-#[test]
-fn captures_wait_their_turn_but_compact_doesnt() {
-    let t0 = Instant::now();
-    let mut watch = Watch::default();
-    for conversation in 1..=3 {
-        watch.said(place(conversation), t0);
-    }
-    assert_eq!(watch.due(t0).len(), CONCURRENT);
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_group_row_calls_for_a_check_and_a_quiet_summary_and_compact_goes_first(pool: PgPool) {
+    let models = Arc::new(models(&Arc::new(Script::default())));
+    let historian = Historian {
+        pool,
+        chosen: models.historian().unwrap().unwrap(),
+        models,
+        offset: offset(),
+    };
+    let service = Service {
+        historian,
+        waiting: Mutex::default(),
+    };
+    assert_eq!(
+        units(row(ConversationKind::Group), &service),
+        [
+            (Reason::Pressure, Wait::Throttle(CHECK)),
+            (Reason::Quiet, Wait::Debounce(QUIET))
+        ]
+    );
+    assert_eq!(units(row(ConversationKind::Direct), &service), []);
     let (reply, _answer) = oneshot::channel();
-    let waiting = (1..=3)
-        .find(|&c| !watch.conversations[&ConversationId(c)].running)
-        .unwrap();
-    watch.compact(place(waiting), reply, t0);
-    let starts = watch.due(t0);
-    assert_eq!(reasons(&starts), [(waiting, Reason::Compact)]);
-    assert_eq!(starts[0].replies.len(), 1);
-}
-
-#[test]
-fn a_failed_capture_rests_its_group() {
-    let t0 = Instant::now();
-    let mut watch = Watch::default();
-    watch.said(place(1), t0);
-    assert_eq!(watch.due(t0).len(), 1);
-    watch.done(ConversationId(1), true, t0);
-    watch.said(place(1), t0 + CHECK);
-    assert!(watch.due(t0 + CHECK).is_empty());
-    assert_eq!(reasons(&watch.due(t0 + REST)), [(1, Reason::Pressure)]);
-}
-
-#[test]
-fn compact_waits_for_the_capture_running_in_its_group() {
-    let t0 = Instant::now();
-    let mut watch = Watch::default();
-    watch.said(place(1), t0);
-    assert_eq!(watch.due(t0).len(), 1);
-    let (reply, _answer) = oneshot::channel();
-    watch.compact(place(1), reply, t0);
-    assert!(watch.due(t0).is_empty());
-    watch.done(ConversationId(1), false, t0);
-    assert_eq!(reasons(&watch.due(t0)), [(1, Reason::Compact)]);
+    let compact = Notice::Compact(Compact {
+        place: place(ConversationKind::Group),
+        reply,
+    });
+    assert_eq!(units(compact, &service), [(Reason::Compact, Wait::Urgent)]);
+    assert_eq!(service.waiting.lock().unwrap()[&ConversationId(1)].len(), 1);
 }

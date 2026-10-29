@@ -200,16 +200,17 @@ async fn the_service_compacts_and_answers(pool: PgPool) {
     let script = Arc::new(Script::default());
     let (place, ids) = chatter(&pool, 4).await;
     script.push(answer(&[(ids[0], ids[3])]));
-    let (rows, rows_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (compacts, rx) = tokio::sync::mpsc::unbounded_channel();
-    let service = run(Arc::new(historian(&pool, &script)), rows_rx, rx);
+    let (notices, rx) = tokio::sync::mpsc::unbounded_channel();
+    let stop = tokio_util::sync::CancellationToken::new();
+    let service = run(historian(&pool, &script), rx, stop.clone());
     let (reply, answer) = tokio::sync::oneshot::channel();
     let place = Arc::new(place);
-    compacts.send(Compact { place, reply }).unwrap();
-    // The service stops once the rows stop coming.
+    notices
+        .send(Notice::Compact(Compact { place, reply }))
+        .unwrap();
     let asking = async move {
         let compacted = answer.await.unwrap();
-        drop(rows);
+        stop.cancel();
         compacted
     };
     let both = async { tokio::join!(service, asking) };

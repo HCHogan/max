@@ -32,7 +32,7 @@ use crate::llm::{Chosen, Models};
 use crate::tokens;
 
 mod service;
-pub use service::{Compact, Compacted, run};
+pub use service::{Compact, Compacted, Notice, run};
 
 /// The most one capture reads, in tokens of rendered rows. A longer
 /// stretch takes several captures.

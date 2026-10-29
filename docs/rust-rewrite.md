@@ -267,7 +267,7 @@ systemd 要设 `KillMode=mixed`：SIGTERM 只发给主进程，VM 这些子进�
 
    驱动器通用（2026-10-29 照下载和 caption 两个实例定）：每个 worker 一个常量的 `Policy`（名字、并发数、每次尝试的超时、重试前等多久、多久重扫一次），自己的 `Scope`，按单元去重，重试用 `sleep_until` 等最早的那个。`Wait` 说单元什么时候跑：`Now` 排队；`Urgent` 插到最前、不占并发数，有人在等它，比如 `/compact`；`Throttle` 从第一个输入算起，期间的输入不改时间，比如 historian 一分钟一次的压力检查；`Debounce` 从最后一个输入算起，比如安静了才写的摘要。单元在跑的时候又来了，跑完再排一次，来几次都只一次。`conversation` 给了会话的单元，同一会话一次只跑一个：historian 是 `summaries` 唯一的写者，两次 capture 同时跑会盖同一段。重试用完就放弃，只记日志；`Attempt` 告诉 `run` 是不是最后一次，caption 最后一次失败时写空的 caption。关机时在跑的单元直接 drop，事务回滚，下次启动由扫描补。入账通知是会话 actor 提交之后同步发的：`Shared` 里一组无界 mpsc，每个 worker 一个，不用 broadcast，它落后了会丢通知。不像 Haskell 版用 `message_projections` 的标志位当队列。不要：持久化的队列、失败表和重试次数列、租约、`LISTEN/NOTIFY`、配置里的策略旋钮。
 
-   historian 是第一个 worker，比这个框架早（mpsc 通知、一分钟一圈、不扫描，见 [historian](#historian)）。它先只把输入换成同一组通知，要按段去抖、按会话单飞的 lingo 来了，再照两个实例把它挪到框架上。
+   historian 比这个框架早，10-29 挪了上来（owner 选的），见 [historian](#historian)；`/compact` 要往同一个邮箱里放，所以订阅入账通知时，邮箱的类型由 worker 定，从入账的一行转换过来。lingo 来了直接填这几个函数。
 3. **触发源**：产出的不是表，是输入，全部进会话 actor 的同一个入口（[运行流程](#运行流程)第 2 步）：有核心在跑就喂给它，没有就起一个核心。差别只在源头：
    - 跟着消息来的，全部由会话 actor 里的 [intent](#intent) 判：@、回复是它的同步规则，看起来没说完的先去抖几秒；其它消息由小模型在 `side` 里异步判，判定叫醒有每小时上限，判定回到信箱，不阻塞别的消息。叫醒核心的 `Wake` 都按 `seen` 过滤。自动化的 ledger_match 是规则。
    - 外部来的：cron、HTTP webhook、外部轮询、proactive 的闲置触发。services 下一个调度器，定义在 `automations` 表，到点给对应的会话 actor 发请求。调度器的形状和派生 worker 一样（常驻、定时器、独占写 `automation_fires`、启动时扫一遍），只是 `run` 的结果是发请求。细节等做自动化时补。
@@ -382,7 +382,7 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 | 网络客户端 | 配置里一次：LLM 的 `stream_idle_timeout_secs`（响应头和之后的每一段都要在这个时间内到，整个调用不设上限）、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`max-llm` 里写死的连接超时，`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避 | 防卡死 |
 | 先等再升级 | 按需 | 策略，比如 `close` 先给命令时间自己退出 |
 | 常驻服务里的等待表 | 每张表一次 | 防泄漏，比如 sender 里等回执的表。常驻服务外面没有取消替它兜底 |
-| 派生数据 worker | 驱动器里一处：每次尝试一个 `timeout`，重试前一个 `sleep_until`，重扫一个 interval，数值是各 worker 的常量 `Policy`（下载 60 秒、重试前等 1 秒和 4 秒）；下载的 HTTP 客户端另有 10 秒的连接超时和 60 秒的整体超时 | 防卡死；重试和重扫是策略 |
+| 派生数据 worker | 驱动器里一处：每次尝试一个 `timeout`，重试前一个 `sleep_until`，重扫一个 interval，数值是各 worker 的常量 `Policy`（下载 60 秒、重试前等 1 秒和 4 秒；historian 11 分钟、重试前等 10 分钟）；下载的 HTTP 客户端另有 10 秒的连接超时和 60 秒的整体超时 | 防卡死；重试和重扫是策略 |
 | 模型调用的重试退避 | 模型调用任务里一次：1、2、4、8 秒，只在还没说出任何话的时候重试，次数是 provider 的 `retries` | 策略 |
 | sender 等额度 | QQ sender 里一次：主动消息超了每分钟的额度就等到最早那条满一分钟 | 策略：等，不丢 |
 | 关机的各级宽限期 | `main` 里一处：接入 5 秒（存网关会话）、会话停止 20 秒（让核心做完手上的事，到期中断）、会话表 25 秒、sender 排空 15 秒、运行时 10 秒，合起来在 systemd 的 60 秒以内；派生数据 worker 不等，手上的单元下次启动由扫描补或者放弃 | 防卡死 |
@@ -985,11 +985,11 @@ Haskell 版尾巴是 W/2，26 万的窗口上约 10 万 token 原始群聊，每
 
 ### historian
 
-- **独立的 actor**（2026-10-27 定，10-29 照实现简化）：[派生数据 worker](#三种角色) 之一，services 下的常驻任务，和会话 actor 没有共享状态。它收两种消息：群会话 actor 每入账一行就发的"这个群入账了一行"，不带 token 数；`/compact`，带回信通道。它自己一分钟看一圈，token 数在检查时从库里算：读未覆盖的行，用和投影同一个渲染函数和估算函数，不在内存里累加。capture 跑在它自己的 `Scope` 里，同时最多 2 个，`/compact` 不排队，只等同一个群在跑的那个。一次 capture 失败，这个群歇 10 分钟。`summaries` 只有它一个写者，所以不需要 cursor 表、staged 状态和 CAS。和主体共用的只有数据库、消息行的渲染函数、token 估算和 LLM 客户端；正在跑的 turn 从 `turns` 表查（未结束的 turn 的 `trigger` 里最早的消息），不问会话 actor。模型由 `[llm] historian = {model, effort}` 选；不配就不写摘要，尾巴只靠两倍高水位的硬截断。只有一个 worker，先不抽通用的派生数据框架。
+- **一个[派生数据 worker](#三种角色)**（2026-10-27 定；10-29 挪到 worker 驱动器上，owner 选的）：和会话 actor 没有共享状态。它的邮箱收每一行入账（只看群）和 `/compact`（带回信通道），token 数在 capture 时从库里算：读未覆盖的行，用和投影同一个渲染函数和估算函数，不在内存里累加。单元是哪个群、为什么写：群里入账一行，排一个压力检查（`Throttle` 一分钟）和一个安静检查（`Debounce` 十分钟）；`/compact` 是 `Urgent`。同一个群一次只跑一个 capture，`/compact` 只等这个群在跑的那个。同时最多 2 个，一次最多 11 分钟（两次模型调用各 5 分钟，加读和发布）。失败了这个群的这一种检查歇 10 分钟再试一次，再失败就放弃，等下一行入账；`/compact` 失败直接回错，不再试。`summaries` 只有它一个写者，所以不需要 cursor 表、staged 状态和 CAS。和主体共用的只有数据库、消息行的渲染函数、token 估算和 LLM 客户端；正在跑的 turn 从 `turns` 表查（未结束的 turn 的 `trigger` 里最早的消息），不问会话 actor。模型由 `[llm] historian = {model, effort}` 选；不配就不写摘要，尾巴只靠两倍高水位的硬截断。
 - **水位按会话的主模型算**：会话设置的模型，没设或已不在配置里就用默认模型，和投影用的窗口一样。
 - **触发**：
   - 安静：会话 10 分钟没入账，且可压的部分（未覆盖的减去低水位的尾巴）至少是低水位的一半。一段安静只看一次，再入账才重来。
-  - 压力：入账过的会话一分钟最多查一次，未覆盖的超过高水位就压。
+  - 压力：入账后一分钟查一次，这一分钟里再入账不另排；未覆盖的超过高水位就压。
   - `/compact`。
   - 启动不扫：一个群重启后入账第一行就回到 historian 眼里，在那之前也没人读它的摘要。
 - **范围**：从 cursor 往后，留出低水位的尾巴，一次最多 24k token（至少一行），更长的分几次。cursor 是最新一条活跃摘要的 `last_message_id`，和 `/clear --all` 的水位取大的，水位之前的消息不进提示，也就不用再压；不含正在跑的 turn 的触发消息及其之后的（capture 开始时查一次，之后开始的 turn 不管）。`/compact` 不留尾巴。

@@ -27,16 +27,25 @@ pub struct Row {
     pub message: Arc<Message>,
 }
 
+type Mailbox = Box<dyn Fn(Row) + Send + Sync>;
+
 /// The workers' mailboxes. Sending never waits; a worker that stopped is
 /// skipped.
-#[derive(Debug, Default)]
-pub struct Rows(Vec<UnboundedSender<Row>>);
+#[derive(Default)]
+pub struct Rows(Vec<Mailbox>);
 
 impl Rows {
-    pub fn subscribe(&mut self) -> UnboundedReceiver<Row> {
+    /// A mailbox that gets every row, as a `T`, and takes other `T`s
+    /// from whoever holds the sender: the historian's `/compact`.
+    pub fn subscribe<T: From<Row> + Send + 'static>(
+        &mut self,
+    ) -> (UnboundedSender<T>, UnboundedReceiver<T>) {
         let (tx, rx) = mpsc::unbounded_channel();
-        self.0.push(tx);
-        rx
+        let mailbox = tx.clone();
+        self.0.push(Box::new(move |row| {
+            let _ = mailbox.send(T::from(row));
+        }));
+        (tx, rx)
     }
 
     pub fn send(&self, place: &Arc<Place>, message: &Message) {
@@ -48,7 +57,7 @@ impl Rows {
             message: Arc::new(message.clone()),
         };
         for mailbox in &self.0 {
-            let _ = mailbox.send(row.clone());
+            mailbox(row.clone());
         }
     }
 }

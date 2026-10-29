@@ -23,7 +23,7 @@ pub struct Summary {
 }
 
 /// Why the historian ran.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Reason {
     /// The conversation went quiet with enough left to summarize.
     Quiet,
