@@ -112,6 +112,7 @@ mod tests {
             store: None,
             poster: None,
             embedder: None,
+            admin: None,
         };
 
         let first = run(&context, json!({ "id": id })).await.unwrap();

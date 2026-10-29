@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select i.id, i.native_user_id, m.sender_name\n        from identities i\n        join principals p on p.id = i.principal_id\n        cross join lateral (\n            select id, sender_name from messages\n            where endpoint_id = $1 and sender_identity_id = i.id\n            order by id desc limit 1\n        ) m\n        where coalesce(p.merged_into, p.id) = $2\n        order by m.id desc limit 1\n        ",
+  "query": "\n        select i.id, i.native_user_id, m.sender_name, m.sender_role\n        from identities i\n        join principals p on p.id = i.principal_id\n        cross join lateral (\n            select id, sender_name, sender_role from messages\n            where endpoint_id = $1 and sender_identity_id = i.id\n            order by id desc limit 1\n        ) m\n        where coalesce(p.merged_into, p.id) = $2\n        order by m.id desc limit 1\n        ",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,17 @@
             "name": "sender_name"
           }
         }
+      },
+      {
+        "ordinal": 3,
+        "name": "sender_role",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_role"
+          }
+        }
       }
     ],
     "parameters": {
@@ -46,8 +57,9 @@
     "nullable": [
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "96985083ee7f19e61a10738f2993e320ec4ff65873f45341218e328ae75634bc"
+  "hash": "f0b0c4cac1c5c80dcd8f97a5afd23be409bee98504ae4ccab65d887f215f9f07"
 }

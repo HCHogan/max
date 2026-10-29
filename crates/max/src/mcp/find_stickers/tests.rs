@@ -93,6 +93,7 @@ async fn the_nearest_stickers_by_handle(pool: PgPool) {
         store: None,
         poster: None,
         embedder: Some(embedder),
+        admin: None,
     };
 
     let found = run(&context, json!({ "query": " 猫 " })).await.unwrap();

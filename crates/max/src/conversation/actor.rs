@@ -32,6 +32,7 @@ use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
 use crate::mcp;
 use crate::media::pictures::Pictures;
+use crate::qq::admin::Admin;
 use crate::qq::avatar::Avatars;
 use crate::scope::Scope;
 use crate::search::Search;
@@ -60,6 +61,8 @@ pub struct Shared {
     pub search: Option<Arc<Search>>,
     /// For `find_stickers`; None when no embedding model is configured.
     pub embedder: Option<Arc<Embedder>>,
+    /// QQ's group admin calls, for `mute_member`; None without QQ.
+    pub admin: Option<Arc<dyn Admin>>,
     /// Where model calls find their pictures; None when no media
     /// directory is configured, and none are sent.
     pub pictures: Option<Arc<Pictures>>,
@@ -501,6 +504,7 @@ impl Conversation {
                             store: self.shared.pictures.as_ref().map(|p| Arc::clone(&p.store)),
                             poster: Some(Poster::new(self.mailbox.clone(), a.turn)),
                             embedder: self.shared.embedder.clone(),
+                            admin: self.shared.admin.clone(),
                         };
                         let mailbox = self.mailbox.clone();
                         a.io.spawn(move |_| tool::call(vms, context, call, task, mailbox));

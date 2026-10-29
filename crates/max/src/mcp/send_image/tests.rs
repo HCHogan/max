@@ -117,6 +117,7 @@ async fn a_chart_goes_out_with_its_caption(pool: PgPool) {
         store: Some(Arc::clone(&store)),
         poster: Some(Poster::new(mailbox, TurnId(1))),
         embedder: None,
+        admin: None,
     };
     let work = scratch.work();
     std::fs::write(work.join("charts/daily.webp"), encoded(ImageFormat::WebP)).unwrap();

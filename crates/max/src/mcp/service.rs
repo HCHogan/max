@@ -324,6 +324,7 @@ mod tests {
             store: None,
             poster: None,
             embedder: None,
+            admin: None,
         });
 
         let dir = std::env::temp_dir().join(format!("max-mcp-{}", std::process::id()));
@@ -394,6 +395,7 @@ mod tests {
             store: None,
             poster: None,
             embedder: None,
+            admin: None,
         });
         let dir = std::env::temp_dir().join(format!("max-mcp-cap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

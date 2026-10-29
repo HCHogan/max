@@ -36,6 +36,7 @@ use max::media::fetch;
 use max::media::pictures::Pictures;
 use max::media::stickers::{self, Stickers};
 use max::media::store::Store;
+use max::qq::admin::Admin;
 use max::qq::avatar::Avatars;
 use max::qq::{listen, send};
 use max::scope::Scope;
@@ -141,6 +142,7 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
                 store: None,
                 poster: None,
                 embedder: None,
+                admin: None,
             })
         };
         let shell = Tool::Shell {
@@ -340,6 +342,14 @@ async fn serve(config: Config) -> Result<()> {
         Some(credentials) => Some(Arc::new(Avatars::qq(&credentials.app_id)?)),
         None => None,
     };
+    let client = match qq {
+        Some(credentials) => Some(Arc::new(qqbot::Client::new(credentials)?)),
+        None => None,
+    };
+    // A tool mutes through QQ's client directly; see qq::admin.
+    let admin = client
+        .as_ref()
+        .map(|client| Arc::clone(client) as Arc<dyn Admin>);
     let mut services = Scope::new();
     let vms = match config.vm {
         Some(vm) => Some(Vms::start(vm, &mut services)?),
@@ -366,6 +376,7 @@ async fn serve(config: Config) -> Result<()> {
         vms,
         search,
         embedder,
+        admin,
         pictures,
         avatars,
         started: tokio::time::Instant::now(),
@@ -376,8 +387,7 @@ async fn serve(config: Config) -> Result<()> {
     let mut senders = Scope::new();
     // Set when an adapter stops for good: Max stops too, and fails.
     let failed = CancellationToken::new();
-    if let Some(credentials) = qq {
-        let client = Arc::new(qqbot::Client::new(credentials)?);
+    if let Some(client) = client {
         let bot = client.me().await.wrap_err("checking the QQ credentials")?;
         let mut conn = pool.acquire().await?;
         let account = platform::account(&mut conn, Platform::Qq, &bot.id, &bot.username).await?;

@@ -3,6 +3,7 @@
 
 mod context_read;
 mod find_stickers;
+mod mute_member;
 mod recall_message;
 mod send_image;
 mod service;
@@ -25,6 +26,7 @@ use tracing::warn;
 use crate::conversation::{Place, Poster};
 use crate::embedding::Embedder;
 use crate::media::store::Store;
+use crate::qq::admin::Admin;
 use crate::search::Search;
 
 /// Where a call comes from: the conversation whose VM the program runs in.
@@ -44,6 +46,8 @@ pub struct Context {
     pub poster: Option<Poster>,
     /// For `find_stickers`; None when no embedding model is configured.
     pub embedder: Option<Arc<Embedder>>,
+    /// For `mute_member`; None without QQ.
+    pub admin: Option<Arc<dyn Admin>>,
 }
 
 /// A call that failed, as the program sees it.
@@ -76,6 +80,7 @@ pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, F
         "web_search" => web_search::run(context, args).await,
         "send_image" => send_image::run(context, args).await,
         "recall_message" => recall_message::run(context, args).await,
+        "mute_member" => mute_member::run(context, args).await,
         "find_stickers" => find_stickers::run(context, args).await,
         _ => Err(Failure::new(
             "unknown_tool",

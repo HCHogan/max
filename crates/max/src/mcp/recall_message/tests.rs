@@ -87,6 +87,7 @@ async fn what_qq_would_refuse_is_refused_here(pool: PgPool) {
         store: None,
         poster: Some(Poster::new(mailbox, TurnId(1))),
         embedder: None,
+        admin: None,
     };
     let now = Utc::now();
     let long_ago = now - TimeDelta::minutes(3);

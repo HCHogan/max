@@ -49,7 +49,7 @@ pub struct MaxTool {
     pub per_run: Option<u32>,
 }
 
-pub const MAX_TOOLS: [MaxTool; 5] = [
+pub const MAX_TOOLS: [MaxTool; 6] = [
     MaxTool {
         name: "context_read",
         description: "读一条消息的全文，一页一页地读。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
@@ -92,6 +92,17 @@ pub const MAX_TOOLS: [MaxTool; 5] = [
         QQ 撤了才返回；撤不了会抛错，说明原因。记录里会多一行你的 [unsend#id]，QQ 没撤的标着（没发出去）。一次运行最多撤 10 条。 */\n\
         recall_message(args: { id: number }): Promise<{ recalled: number }>;",
         per_run: Some(10),
+    },
+    MaxTool {
+        name: "mute_member",
+        description: "在本群禁言一个普通成员，或者解除禁言；要你是群管理员。",
+        input: r#"{"type":"object","properties":{"member":{"type":"integer","description":"[mention#编号] 里的数字"},"seconds":{"type":"integer","minimum":0,"maximum":2592000,"description":"禁多少秒，0 是解除，最多 30 天"}},"required":["member","seconds"],"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"member":{"type":"integer"},"until":{"type":["string","null"]}},"required":["member","until"]}"#,
+        declaration: "/** 在本群禁言一个人，或者解除。member 是 [mention#编号] 里的数字；seconds 是从现在起禁多少秒，0 是解除，最多 2592000（30 天）。禁不禁、禁多久由你判断：刷屏、广告、骂人，或者有人请你禁、理由正当时再用，禁完或解完在群里简短说一声。\n  \
+        QQ 只让群管理员禁言普通成员：群主、管理员、你自己都禁不了，私聊里没有禁言；没在本群说过话的人也禁不了。对禁着的人再禁，是把结束时间改成从现在起 seconds 秒。\n  \
+        QQ 办了才返回，until 是禁到几点，解除时是 null；办不了会抛错，说明原因。记录里不会多一行。一次运行最多 5 次。 */\n\
+        mute_member(args: { member: number; seconds: number }): Promise<{ member: number; until: string | null }>;",
+        per_run: Some(5),
     },
     MaxTool {
         name: "find_stickers",

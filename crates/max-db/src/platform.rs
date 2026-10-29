@@ -428,12 +428,13 @@ pub async fn native_user_id(
 }
 
 /// The account a person spoke from most recently in an endpoint: whom to
-/// mention there.
+/// mention there, or mute. The name and role are as of that message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Speaker {
     pub identity: IdentityId,
     pub native_user_id: String,
     pub name: String,
+    pub role: Option<Role>,
 }
 
 pub async fn speaker(
@@ -443,11 +444,11 @@ pub async fn speaker(
 ) -> sqlx::Result<Option<Speaker>> {
     let row = sqlx::query!(
         r#"
-        select i.id, i.native_user_id, m.sender_name
+        select i.id, i.native_user_id, m.sender_name, m.sender_role
         from identities i
         join principals p on p.id = i.principal_id
         cross join lateral (
-            select id, sender_name from messages
+            select id, sender_name, sender_role from messages
             where endpoint_id = $1 and sender_identity_id = i.id
             order by id desc limit 1
         ) m
@@ -459,11 +460,15 @@ pub async fn speaker(
     )
     .fetch_optional(conn)
     .await?;
-    Ok(row.map(|row| Speaker {
-        identity: IdentityId(row.id),
-        native_user_id: row.native_user_id,
-        name: row.sender_name,
-    }))
+    row.map(|row| {
+        Ok(Speaker {
+            identity: IdentityId(row.id),
+            native_user_id: row.native_user_id,
+            name: row.sender_name,
+            role: role(row.sender_role)?,
+        })
+    })
+    .transpose()
 }
 
 /// A roster line's facts: the name and role from the person's latest
