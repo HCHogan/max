@@ -25,12 +25,15 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use super::{Context, Failure, chat_file, forward, show};
+use super::{Caller, Context, Failure, chat_file, forward, show};
 
 /// One call's wall clock.
 const CALL_TIME: Duration = Duration::from_secs(60);
 /// Calls a session runs at once; more wait their turn.
 const CALLS_AT_ONCE: usize = 64;
+/// A background agent's session lasts the job, as long as many programs:
+/// its caps are a program's, this many times over.
+const JOB_RUNS: u32 = 10;
 /// What a call that didn't finish may still have done. Nothing is retried
 /// or classified by its effects: what acts on the group goes through the
 /// timeline, where the model sees whether it happened.
@@ -274,8 +277,8 @@ impl Session {
         super::call(name, &self.context, args).await
     }
 
-    /// Counts a call against its tool's cap, if it has one and the run
-    /// hasn't reached it.
+    /// Counts a call against its tool's cap, if it has one and the run, or
+    /// the job, hasn't reached it.
     fn start(&self, name: &str) -> Result<(), Failure> {
         let Some((name, most)) = MAX_TOOLS
             .iter()
@@ -284,12 +287,16 @@ impl Session {
         else {
             return Ok(());
         };
+        let (most, whose) = match self.context.caller {
+            Caller::Job(_) => (most * JOB_RUNS, "一个后台 agent"),
+            Caller::Turn(_) | Caller::Check => (most, "一次运行"),
+        };
         let mut started = self.started.lock().unwrap_or_else(PoisonError::into_inner);
         let count = started.entry(name).or_default();
         if *count >= most {
             return Err(Failure::new(
                 "too_many",
-                format!("一次运行最多调 {most} 次 {name}"),
+                format!("{whose}最多调 {most} 次 {name}"),
             ));
         }
         *count += 1;
@@ -505,13 +512,27 @@ mod tests {
         drop(conn);
         let conversation = place.conversation;
         let sessions = Sessions::default();
-        let grant = sessions.open(Context {
-            services: Arc::new(Services::bare(pool)),
-            place,
+        let context = |caller| Context {
+            services: Arc::new(Services::bare(pool.clone())),
+            place: Arc::clone(&place),
             page_tokens: 2000,
             work: None,
-            caller: Caller::Check,
-        });
+            caller,
+        };
+        let grant = sessions.open(context(Caller::Check));
+        let upstream = crate::llm::Upstream {
+            provider: "cliproxy".into(),
+            protocol: max_core::item::Protocol::Chat,
+            base_url: "http://127.0.0.1:9/v1".into(),
+            api_key: None,
+            headers: Vec::new(),
+            model: "gemini-3.8-flash-high".into(),
+            window: 1_000_000,
+            max_output: None,
+            effort: None,
+            idle: Duration::from_secs(120),
+        };
+        let job = sessions.open(context(Caller::Job(Arc::new(upstream))));
         let dir = std::env::temp_dir().join(format!("max-mcp-cap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let socket = dir.join("mine.sock");
@@ -522,7 +543,7 @@ mod tests {
         scope.spawn(move |stop| serve(listener, conversation, served, stop));
 
         let search = json!({ "name": "web_search", "arguments": { "query": "示波器" } });
-        let code = async || {
+        let code = async |grant: &Grant| {
             let result = post(&socket, grant.token(), "tools/call", search.clone()).await;
             result["structuredContent"]["code"]
                 .as_str()
@@ -530,10 +551,15 @@ mod tests {
                 .to_owned()
         };
         for _ in 0..20 {
-            assert_eq!(code().await, "unavailable", "no search here");
+            assert_eq!(code(&grant).await, "unavailable", "no search here");
         }
-        assert_eq!(code().await, "too_many");
+        assert_eq!(code(&grant).await, "too_many");
         assert_eq!(grant.calls()["web_search"], (0, 21));
+        // A job's session lasts the job: its cap is many programs'.
+        for _ in 0..20 * JOB_RUNS {
+            assert_eq!(code(&job).await, "unavailable");
+        }
+        assert_eq!(code(&job).await, "too_many");
 
         scope.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(dir);
