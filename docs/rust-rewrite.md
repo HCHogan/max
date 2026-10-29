@@ -950,7 +950,7 @@ Haskell 版的教训：原始尾巴是按 token 的滑动窗口，填满后每�
 
 - 消息行和尾巴同一种格式，触发的行标上"@你""回复你的 #123"，其它不标。第一次出现的人补一行名册。
 - job 结果是 `[job#3 完成] …`，自动化是 `[自动化 m#2 触发] …`。
-- **单条上限**（2026-10-27 定）：消息、job 结果、自动化结果共用一个上限，`min(C × 15%, 25k)` token，最低 2k；尾巴和第一批里的消息同样适用。超过的只渲染开头约 2,000 字，加一行"全文见 `#123`"，模型用读全文的工具 `context_read` 取，所以它是 v1 第一个开放的工具。它按页取，一页不超过单条上限，读一条超长消息不会一下把核心撑到上限。原文本来就在 ledger 或 job 记录里，不另存。VM 起不来时没有工具，模型只能看到摘录。`run_code` 和 `shell` 的结果也按这个上限截，全文写成 VM 里的文件，结果里给路径，下一次调用自己读。现在的 `shell` 先按字节截：超过 16 KiB 只留头尾各 8 KiB，全文在 `/work/.max/out/<unit>.txt`。
+- **单条上限**（2026-10-27 定）：消息、job 结果、自动化结果共用一个上限，`min(C × 15%, 25k)` token，最低 2k；尾巴和第一批里的消息同样适用。超过的只渲染开头约 2,000 字，加一行"全文见 `#123`"，模型用读全文的工具 `context_read` 取，所以它是 v1 第一个开放的工具。它按页取，一页不超过单条上限，读一条超长消息不会一下把核心撑到上限。原文本来就在 ledger 或 job 记录里，不另存。VM 起不来时没有工具，模型只能看到摘录。`run_code` 和 `shell` 的结果也按这个上限截，全文写成 VM 里的文件，结果里给路径，下一次调用自己读。现在两个都先按字节截：超过 16 KiB 只留头尾各 8 KiB，全文在 `/work/.max/out/<unit>.txt`；`run_code` 的 console 输出另外截，全文在 `<unit>.log`。
 - 参考（2026-10-27 查）：Claude Code 的 Bash 输出约 3 万字符、Read 每次 2.5 万 token；Codex 的工具输出 1 万 token；OpenCode 和 pi 2,000 行或 50 KiB；Gemini CLI 4 万字符；Hermes 每条 10 万字符，按窗口缩到 15%。超出时它们都把全文留着，给模型路径或句柄。用户自己发的内容基本都不截。
 - **放不下就认输**：不按条数折叠。攒着的输入连同 transcript 超过核心的上限，就在这个边界结束这次运行，记 `ContextExhausted`，见[核心](#核心)和[运行流程](#运行流程)。
 - 系统提示里说清：一批里可能有几件要回应，也可能都不用，不用就什么都不输出；回应多个人时各自 reply。
@@ -1264,8 +1264,8 @@ struct Verdict { trigger: bool, reason: String }
 
 ### 纯 codemode
 
-- **模型只有两个工具：`run_code` 和 `shell`。** tools 数组固定不变，请求前缀不会因为工具变化而失效；要守的是"固定"，不是"只有一个"。`run_code` 的参数是 `{code, args?}`：`code` 是 async 函数体，`return` 的值就是结果。同一轮可以有多个 `run_code`，各跑各的。
-- **程序里调 Max 的工具**：`tools.<名字>(args)` 返回 Promise，`Promise.all` 就是并发。沿用 Haskell 版 SDK 的形状：`max.raw` 拿完整的成败结果，`max.cancel` 和 `max.race` 取消调用，`agent()` 派后台 agent。
+- **模型只有两个工具：`run_code` 和 `shell`。** tools 数组固定不变，请求前缀不会因为工具变化而失效；要守的是"固定"，不是"只有一个"。`run_code` 的参数是 `{code, args?, timeout_ms?}`：`code` 是 async 函数体，`return` 的值就是结果；`timeout_ms` 和 `shell` 的一样。同一轮可以有多个 `run_code`，各跑各的。
+- **程序里调 Max 的工具**：`tools.<名字>(args)` 返回 Promise，`Promise.all` 就是并发。沿用 Haskell 版 SDK 的形状：`max.raw` 拿完整的成败结果，`max.cancel` 和 `max.race` 取消调用，`agent()` 派后台 agent。做成的（2026-10-29）：`tools.x()` 失败抛 `ToolError`；`max.raw` 不抛，返回 `{ok: true, value}` 或 `{ok: false, error: {code, message}}`；`max.cancel` 中止那次请求，`max.race` 取先完成的、取消其余的；没 await 就读字段会直接报错，提示先 await。`agent()` 等后台 agent 做了再加。
 - **`shell`**（2026-10-28 定）：跑终端命令不用从 JS 绕。只有 `run_code` 的话，每次都要写 `child_process`，非零退出直接抛异常，stderr 拿不到；命令套在 JS 字符串里再套进 JSON，转义多一层，模板字符串里的 `${VAR}` 还会先被 JS 吃掉。主流模型在 shell 工具上训练得最多，形状贴近它们熟悉的最好用。
   - 参数 `{command, workdir?, timeout_ms?}`，贴近 Codex 的 shell 工具。在群 VM 里用 `bash -lc` 执行，默认工作目录 `/work`。
   - 结果是退出码加合并的输出；过长保留头尾，全文写进 VM 里的文件。墙钟上限和 `run_code` 一样。
@@ -1287,7 +1287,7 @@ struct Verdict { trigger: bool, reason: String }
 
 做法：
 
-- **每次运行一个新进程**：宿主通过 vsock 上的 SSH，在群 VM 里执行 `node /run/max/runner.js`。runner 和 SDK 打进 guest 镜像，只读。stdin 传程序、参数和会话 token；stdout 的最后一行是返回值；stderr 是 `console` 输出，作为日志带回。不做常驻进程，免得运行之间共享状态。`shell` 也是每次一个 SSH channel，直接 `bash -lc`，不经过 runner。
+- **每次运行一个新进程**：宿主通过 vsock 上的 SSH，在群 VM 里执行 `node /run/max/runner.js`。runner 和 SDK 打进 guest 镜像，只读。stdin 传程序、参数、会话 token 和 Max 工具的名字；stdout 只有返回值（字符串原样，别的转成 JSON），`console` 和程序自己往 stdout 写的都改到 stderr，作为日志带回；退出码 0 是正常返回，1 是抛了异常，带上程序自己的行号。和 `shell` 一样是一个 transient unit，经 `bash -lc` 启动，程序里的子进程有登录环境。不做常驻进程，免得运行之间共享状态。`shell` 也是每次一个 SSH channel，直接 `bash -lc`，不经过 runner。
 - **启动**：VM 按需启动，约 4.5 秒后能执行命令（Haskell 版实测），闲置两小时关机。模型输出流里一出现 `run_code` 或 `shell` 调用就开始启动 VM，和模型写代码的时间重叠；不用工具的 turn 不启动。
 - **限制**：VM 的 CPU、内存上限和网络策略；`run_code` 和 `shell` 一次运行的墙钟上限；drop 时杀掉命令。不要求确定性，也没有 fuel。
 - **和核心的关系**：`run_code` 和 `shell` 在核心眼里都只是一次工具调用。程序里的 Max 工具调用不是核心的输入，结果里附一份内部调用的摘要，方便排查。Max 重启时宽限期到了还在跑的调用随连接断开被杀，核心给它补"已取消"，见[重启](#重启)。
@@ -1337,8 +1337,9 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
 
 VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 runner 和后台 pi 都是它的客户端，区别只在会话权限。
 
-- **通道**：cloud-hypervisor 的 hybrid vsock 里，guest 连主机的某个端口，会落到宿主上 `<vsock socket>_<端口>` 这个 unix socket，Haskell 版的就绪通知就走这条路。Max 在每个 VM 的这个位置监听一个端口，用 axum 加 rmcp 跑 Streamable HTTP。连进来的是哪个 VM，由 socket 路径决定。guest 里把 `127.0.0.1:7777` 转发到这个 vsock 端口，客户端都配 `http://127.0.0.1:7777/mcp`。IP 层照样连不到宿主，外面也照样连不进 VM。
-- **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群和 turn、允许的工具、在途的调用。
+- **通道**：cloud-hypervisor 的 hybrid vsock 里，guest 连主机的某个端口，会落到宿主上 `<vsock socket>_<端口>` 这个 unix socket，Haskell 版的就绪通知就走这条路。Max 在每个 VM 的这个位置监听一个端口，用 axum 加 rmcp 跑 Streamable HTTP。连进来的是哪个 VM，由 socket 路径决定。guest 里把 `127.0.0.1:7777` 转发到这个 vsock 端口，客户端都配 `http://127.0.0.1:7777/mcp`。IP 层照样连不到宿主，外面也照样连不进 VM。做成的：guest 里是 socket 激活，每个连接一个 socat 连到 vsock 的 2:7777；宿主在 VM 启动前就在 `notify.vsock_7777` 上监听，每个 VM 一个 MCP 服务，跟着 VM 起停。
+- **协议**（2026-10-29）：rmcp 3.8，协议版本 2026-07-28，无状态，回复用 JSON 不用 SSE。这个版本每个请求都要带 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name` 头，`_meta` 里也要有协议版本和客户端能力。runner 自己用 fetch 拼，不装 MCP 的 SDK。
+- **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群和 turn、允许的工具、在途的调用。现在只有 `run_code` 的会话，能用全部 Max 工具，也就是 `context_read`；会话还记着每个工具调了几次、失败几次，附在结果后面。
 
   | 会话 | 能用的工具 | 生命周期 |
   |---|---|---|
@@ -1347,9 +1348,9 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
 - **鉴权**：`Authorization: Bearer <token>`。token 所属的群必须和连进来的 VM 是同一个群。`tools/list` 只列出这个会话允许的工具。
 - **吊销是同步的**：从内存表里删掉会话，它在途调用的 future 一起 drop，所以可以放进 `Drop`。会话只存在内存里，Max 重启或崩溃后旧 token 全部失效，不需要过期时间。
-- **执行器**：所有调用都经过同一个执行器，负责 schema 校验、单次调用的超时、并发上限 64、输出大小上限，以及按会话限制有副作用的调用次数（代码里可以循环发送、撤回、禁言）。
-- **结果**：工具声明 `outputSchema`，成功结果放在 `structuredContent` 里，`tools.x()` 拿到的就是 JSON。失败设 `isError`，`max.raw` 需要的 outcome（rejected、failed-before-effect、outcome-unknown）和 retry 分类也放进 `structuredContent`。取消用 `notifications/cancelled`。
-- **工具注册表**：每个工具有名字、描述、参数类型（schemars 从参数结构体生成）、返回类型、副作用分类（只读、幂等、有副作用）和执行函数。副作用分类决定能不能重试、能不能给后台 job、中断后算不算"结果未知"。系统提示里的 TypeScript 声明也从注册表生成。
+- **执行器**：所有调用都经过同一个执行器，负责 schema 校验、单次调用的超时、并发上限 64、输出大小上限，以及按会话限制有副作用的调用次数（代码里可以循环发送、撤回、禁言）。做成的：单次 60 秒，每个会话同时 64 个，多的排队；参数由每个工具自己的参数结构体校验，不另做 JSON Schema 校验。输出上限和副作用次数等有了会产生大输出或有副作用的工具再加，`context_read` 自己分页。
+- **结果**：工具声明 `outputSchema`，成功结果放在 `structuredContent` 里，`tools.x()` 拿到的就是 JSON。失败设 `isError`，`max.raw` 需要的 outcome（rejected、failed-before-effect、outcome-unknown）和 retry 分类也放进 `structuredContent`。取消用 `notifications/cancelled`。做成的：失败的 `structuredContent` 是 `{code, message}`，outcome 和 retry 分类等第一个有副作用的工具。无状态的 HTTP 里取消就是断开连接，rmcp 会取消那次调用，`max.cancel` 就是中止 fetch。
+- **工具注册表**：每个工具有名字、描述、参数类型（schemars 从参数结构体生成）、返回类型、副作用分类（只读、幂等、有副作用）和执行函数。副作用分类决定能不能重试、能不能给后台 job、中断后算不算"结果未知"。系统提示里的 TypeScript 声明也从注册表生成。做成的：工具还少，名字、描述、两个 schema 和 TypeScript 声明都手写在 max-core 的 `MAX_TOOLS` 里，和模型的两个工具一样，没上 schemars；执行函数在 max 里。副作用分类等第一个有副作用的工具。
 
 ### 多模态结果
 
@@ -1481,7 +1482,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 6. **tank 上的 `maxx`**（2026-10-29 完成）：`nixosModules.maxx` 按名字生成用户、Postgres 角色和库、目录、slice、target 和服务，配置文件在构建时跑 `max check-config`；`nixosModules.max` 是同一个 module 换成上线后的名字。`max` 现在只做三件事：迁移数据库，用 QQ 凭据问一次自己是谁，等 SIGTERM。QQ 的 AppID 和 secret 在 sops 的 `maxx/` 下。module 有一个 VM 测试，用和 tank 一样的 Postgres 16。部署时遇到两件事：一是 sqlx 0.9 不认 `postgresql://max@/max?host=…`（有用户名就不能是空主机），改成 `postgresql:///max?host=/run/postgresql&user=max`；二是 tank 的集群建在 glibc 2.40 上，系统现在是 2.42，`template1` 的 collation 版本对不上，新建库就失败，所以刷新了 `template1` 的版本记录（它里面没有用户对象）。同一天按 owner 的意思，把 `postgres`、`luckperms`、`minecraft`、`matrix-synapse` 几个库 `REINDEX DATABASE CONCURRENTLY` 加 `REINDEX SYSTEM` 后也刷新了。
 7. **`max`**（2026-10-29 完成，测试群里实测过）：配置、会话表和会话 actor、I/O 任务、平台 sender 和 `deliveries`、QQ 适配和 `!bind`、命令、intent。做完第一次实机：测试群里纯文字对话，顺便实测 [QQ 官方机器人](#qq-官方机器人)里标了实测的几项。工具在第 9 步之前一律回错误"工具还没接上，现在用不了。"。实测结果：`!bind` 接上测试群；@ 的对话和闲聊经 intent 判定都正常；停服务 2 分钟和 10 分钟，网关都 Resume 上了，停机期间的 @ 补发过来并且回答了。10 分钟那次回答被 QQ 拒了（40034005），被动回复的窗口改成按消息的发送时间算。同一天按 owner 的意思做了一轮减法：核心撞上限就认输，不再交接（见[运行流程](#运行流程)第 4 步）；重启时给宽限期再中断，不再挂起恢复（见[重启](#重启)）；intent 只留去抖、小模型判定和每小时上限（见 [intent](#intent)）；Max 不发表情；Matrix 先不做。这一步定下的：命令输出留在同一个会话（见[出站](#出站)）、命令权限（见[权限](#权限)）、actor 测试用真实时间（见[核心和 actor 的测试](#核心和-actor-的测试)）、一段老记录只接一个群（见 [QQ 官方机器人](#qq-官方机器人)）。tank 上的主模型是经 cliproxy 的 Gemini 3.8 Flash（Chat 协议），intent 用 h610 上的 qwen3.5-4b。
 8. ~~**Matrix**，带加密房间和 `matrix-bootstrap`~~：2026-10-29 删，先不做，见 [Matrix](#matrix)。
-9. **VM、MCP、codemode runner**。[VM 进程](#vm-进程)里要先在 tank 上验证的几件事 2026-10-29 验证完了。同一天做完第一段：VM 服务、`shell` 工具、module 里的 tap、nft 和加固，`max vm-check` 和嵌套的 NixOS 测试，测试在 tank 上通过。地址改走内核命令行，不用 DHCP。部署到 tank 后在测试群里实测过：模型调 `shell`，群的 VM 3 秒多起好，结果回到模型。第一次没调成，因为系统提示里还留着第 7 步那句"工具还没接上，别调用"。同一天按 owner 的意思，提示词里改叫 maxx（以前叫 Max）。tank 上的 Haskell 版同日删掉，数据留给导入。接下来是 MCP 服务、`run_code` 的 runner 和第一个开放的工具 `context_read`。
+9. **VM、MCP、codemode runner**。[VM 进程](#vm-进程)里要先在 tank 上验证的几件事 2026-10-29 验证完了。同一天做完第一段：VM 服务、`shell` 工具、module 里的 tap、nft 和加固，`max vm-check` 和嵌套的 NixOS 测试，测试在 tank 上通过。地址改走内核命令行，不用 DHCP。部署到 tank 后在测试群里实测过：模型调 `shell`，群的 VM 3 秒多起好，结果回到模型。第一次没调成，因为系统提示里还留着第 7 步那句"工具还没接上，别调用"。同一天按 owner 的意思，提示词里改叫 maxx（以前叫 Max）。tank 上的 Haskell 版同日删掉，数据留给导入。第二段同日做完：MCP 服务、guest 里的 runner、`run_code` 和第一个开放的工具 `context_read`，做法见 [MCP 通道](#mcp-通道)。runner 的测试在本机用 Node 跑，接真的 MCP 服务；嵌套测试里 `vm-check` 跑一个程序，经 MCP 服务查到数据库。
 10. **historian**（2026-10-29 做完，还没在 tank 上跑过）：capture、`summary_runs`、一分钟一圈的服务、`!compact`。上线要在配置里加 `[llm] historian`。
 11. ~~**重启恢复**~~：2026-10-29 删，重启时给宽限期再中断，见[重启](#重启)。
 
