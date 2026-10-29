@@ -19,6 +19,7 @@ max-db.workspace = true
 max-llm.workspace = true
 qqbot.workspace = true
 rmcp.workspace = true
+rustix.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 russh.workspace = true

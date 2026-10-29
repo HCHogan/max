@@ -93,6 +93,11 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 # Pictures go to the model as data URLs. 0.23 is in the tree already,
 # through reqwest and rmcp.
 base64 = "0.23"
+# Opening a file in a group's /work on the host one component at a time
+# with openat and O_NOFOLLOW: the guest writes /work, symlinks included,
+# and must not make max read anything outside it. 1.1 is in the tree
+# already, through insta's tempfile.
+rustix = { version = "1.1", features = ["fs"] }
 
 # Tests only.
 insta = "1.49"
