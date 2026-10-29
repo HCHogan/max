@@ -49,7 +49,7 @@ pub struct MaxTool {
     pub per_run: Option<u32>,
 }
 
-pub const MAX_TOOLS: [MaxTool; 7] = [
+pub const MAX_TOOLS: [MaxTool; 8] = [
     MaxTool {
         name: "context_read",
         description: "读消息或摘要的全文，一页一页地读；也能读一条消息和它前后的几条。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
@@ -82,6 +82,17 @@ pub const MAX_TOOLS: [MaxTool; 7] = [
         caption 是图下面的一句说明，和图在同一条消息里。发出去了才返回，handle 是这条消息里那张图的句柄。一次运行最多发 5 张。\n  \
         记录里已有的图和表情包不用这个，直接在回复里写它的句柄。 */\n\
         send_image(args: { path: string; caption?: string }): Promise<{ handle: string }>;",
+        per_run: Some(5),
+    },
+    MaxTool {
+        name: "send_file",
+        description: "把 /work 下的一个文件发到本群，比如生成的文档、表格、压缩包。",
+        input: r#"{"type":"object","properties":{"path":{"type":"string","minLength":1,"description":"/work 下的路径，相对路径从 /work 算"},"name":{"type":"string","minLength":1,"description":"群里显示的文件名，默认用路径里的"}},"required":["path"],"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"]}"#,
+        declaration: "/** 把 /work 下的一个文件发到本群，群里显示成文件，点开能下载：文档、表格、PDF、压缩包、代码都行。最大 64 MiB，不能是空的；路径上不能有符号链接。\n  \
+        name 是群里显示的文件名，默认用路径里的。发出去了才返回，handle 是这个文件的句柄。一次运行最多发 5 个。\n  \
+        要大家直接看到的图用 send_image，别当文件发。 */\n\
+        send_file(args: { path: string; name?: string }): Promise<{ handle: string }>;",
         per_run: Some(5),
     },
     MaxTool {

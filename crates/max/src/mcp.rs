@@ -6,6 +6,7 @@ mod context_search;
 mod find_stickers;
 mod mute_member;
 mod recall_message;
+mod send_file;
 mod send_image;
 mod service;
 mod show;
@@ -43,7 +44,7 @@ pub struct Context {
     pub search: Option<Arc<Search>>,
     /// The host's side of the VM's /work, for a program run there.
     pub work: Option<PathBuf>,
-    /// The content store, if there is one, for pictures sent.
+    /// The content store, if there is one, for pictures and files sent.
     pub store: Option<Arc<Store>>,
     /// Says things in the conversation for the turn that called.
     pub poster: Option<Poster>,
@@ -82,6 +83,7 @@ pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, F
         "context_read" => context_read::run(context, args).await,
         "web_search" => web_search::run(context, args).await,
         "send_image" => send_image::run(context, args).await,
+        "send_file" => send_file::run(context, args).await,
         "recall_message" => recall_message::run(context, args).await,
         "mute_member" => mute_member::run(context, args).await,
         "find_stickers" => find_stickers::run(context, args).await,
