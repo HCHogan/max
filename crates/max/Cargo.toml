@@ -25,6 +25,7 @@ russh.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+image.workspace = true
 sqlx.workspace = true
 tiktoken-rs.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "signal", "macros", "time", "sync", "process", "fs", "net", "io-util"] }
