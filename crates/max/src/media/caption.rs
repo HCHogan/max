@@ -14,6 +14,7 @@ use max_core::item::{Image, Item, ItemKind};
 use max_core::run::Request;
 use max_db::captions::{self, Caption, Kind};
 use max_db::{PgPool, usage};
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::warn;
 
 use super::pictures::Pictures;
@@ -51,6 +52,9 @@ pub struct Captioner {
     pub pool: PgPool,
     pub chosen: Chosen,
     pub pictures: Arc<Pictures>,
+    /// The embedding worker, which is handed the files of the sticker
+    /// captions written; None when there is none.
+    pub stickers: Option<UnboundedSender<String>>,
 }
 
 /// A file to caption, and a row's medium that has it: what the model is
@@ -134,7 +138,15 @@ impl Derivation for Captioner {
             at: Utc::now(),
         };
         let mut conn = self.pool.acquire().await?;
-        captions::write(&mut conn, &caption).await?;
+        let written = captions::write(&mut conn, &caption).await?;
+        if let Some(stickers) = &self.stickers
+            && written
+            && kind == Kind::Sticker
+            && !skip
+            && !text.is_empty()
+        {
+            let _ = stickers.send(picture.sha256.clone());
+        }
         Ok(())
     }
 }

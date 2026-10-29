@@ -25,6 +25,7 @@ use tracing::{error, info};
 
 use max::config::{self, Config};
 use max::conversation::{Place, Shared};
+use max::embedding::Embedder;
 use max::historian::{self, Historian};
 use max::llm::Models;
 use max::mcp;
@@ -32,6 +33,7 @@ use max::media::caption::{self, Captioner};
 use max::media::download::{self, Download};
 use max::media::fetch;
 use max::media::pictures::Pictures;
+use max::media::stickers::{self, Stickers};
 use max::media::store::Store;
 use max::qq::avatar::Avatars;
 use max::qq::{listen, send};
@@ -239,6 +241,26 @@ async fn serve(config: Config) -> Result<()> {
         }
     };
     let mut workers = Scope::new();
+    let embedder = match &config.embedding {
+        Some(embedding) => {
+            let key = embedding.api_key()?;
+            let model = embedding.model.clone();
+            Some(Arc::new(Embedder::new(&embedding.base_url, model, key)?))
+        }
+        None => {
+            info!("no embedding model: stickers aren't embedded, and find_stickers says so");
+            None
+        }
+    };
+    let stickers = embedder.as_ref().map(|embedder| {
+        let worker = Arc::new(Stickers {
+            pool: pool.clone(),
+            embedder: Arc::clone(embedder),
+        });
+        let (tx, rx) = mpsc::unbounded_channel();
+        workers.spawn(move |stop| worker::drive(worker, stickers::POLICY, rx, stop));
+        tx
+    });
     let pictures = match &config.media {
         Some(media) => {
             let store = Arc::new(
@@ -256,6 +278,7 @@ async fn serve(config: Config) -> Result<()> {
                         pool: pool.clone(),
                         chosen,
                         pictures: Arc::clone(&pictures),
+                        stickers,
                     });
                     let (tx, rx) = mpsc::unbounded_channel();
                     workers.spawn(move |stop| worker::drive(captioner, caption::POLICY, rx, stop));

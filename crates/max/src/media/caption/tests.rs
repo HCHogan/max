@@ -5,6 +5,7 @@ use max_core::message::{Content, MediaKind, MediaMeta, MediaRef, Node, media};
 use max_db::ledger;
 use max_db::media::{self, Blob};
 use sqlx::PgPool;
+use tokio::sync::mpsc::{self, UnboundedReceiver};
 
 use super::*;
 use crate::conversation::ingest;
@@ -52,6 +53,8 @@ struct Fixture {
     row: MessageId,
     picture: Picture,
     sticker: Picture,
+    /// What the embedding worker is handed.
+    embeds: UnboundedReceiver<String>,
     dir: std::path::PathBuf,
 }
 
@@ -98,6 +101,7 @@ async fn fixture(pool: &PgPool) -> Fixture {
     };
     let script = Arc::new(Script::default());
     let chosen = models(&script).choose("test/big", Some("low")).unwrap();
+    let (stickers, embeds) = mpsc::unbounded_channel();
     let captioner = Captioner {
         pool: pool.clone(),
         chosen,
@@ -105,6 +109,7 @@ async fn fixture(pool: &PgPool) -> Fixture {
             pool: pool.clone(),
             store,
         }),
+        stickers: Some(stickers),
     };
     Fixture {
         captioner,
@@ -113,6 +118,7 @@ async fn fixture(pool: &PgPool) -> Fixture {
         row,
         picture: picture(MediaKind::Image, 0),
         sticker: picture(MediaKind::Sticker, 1),
+        embeds,
         dir,
     }
 }
@@ -186,6 +192,8 @@ async fn each_file_is_captioned_once(pool: PgPool) {
         .unwrap();
     assert_eq!(skips, [false, true]);
     assert!(captioner.scan().await.unwrap().is_empty());
+    // Neither a picture's nor a skipped sticker's is embedded.
+    assert!(fixture.embeds.is_empty());
     let _ = std::fs::remove_dir_all(&fixture.dir);
 }
 
@@ -210,6 +218,26 @@ async fn a_model_that_fails_twice_leaves_it_empty(pool: PgPool) {
         captioner.scan().await.unwrap(),
         std::slice::from_ref(&fixture.sticker)
     );
+    let _ = std::fs::remove_dir_all(&fixture.dir);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_stickers_caption_goes_on_to_be_embedded(pool: PgPool) {
+    let mut fixture = fixture(&pool).await;
+    fixture.script.push(Answer::says("翻白眼的猫，表示无语"));
+    fixture
+        .captioner
+        .run(&fixture.sticker, FIRST)
+        .await
+        .unwrap();
+    assert_eq!(fixture.embeds.try_recv().unwrap(), fixture.sticker.sha256);
+    // Once: it has its caption now.
+    fixture
+        .captioner
+        .run(&fixture.sticker, FIRST)
+        .await
+        .unwrap();
+    assert!(fixture.embeds.is_empty());
     let _ = std::fs::remove_dir_all(&fixture.dir);
 }
 
