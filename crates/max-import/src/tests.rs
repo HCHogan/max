@@ -282,6 +282,107 @@ async fn messages(pool: PgPool) {
     assert_eq!(next, 1023);
 }
 
+type Summary = (
+    i64,
+    i64,
+    i64,
+    i64,
+    String,
+    i16,
+    String,
+    Option<String>,
+    String,
+);
+
+type Setting = (
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    bool,
+    Option<i64>,
+);
+
+#[sqlx::test]
+async fn summaries_and_settings(pool: PgPool) {
+    let mut new = imported(&pool).await;
+    let summaries: Vec<Summary> = sqlx::query_as(
+        "select id, conversation_id, first_message_id, last_message_id, kind, importance, p1, p2,
+                model
+         from summaries order by id",
+    )
+    .fetch_all(&mut new)
+    .await
+    .unwrap();
+    let expected = [
+        (
+            1,
+            100,
+            1001,
+            1006,
+            "social",
+            51,
+            "[mention#2] 打招呼",
+            Some("打招呼"),
+            "gemini",
+        ),
+        (
+            3,
+            100,
+            1011,
+            1022,
+            "mixed",
+            100,
+            "[mention#2] 转发了聊天记录",
+            None,
+            "qwen",
+        ),
+    ]
+    .map(
+        |(id, conversation, first, last, kind, importance, p1, p2, model)| {
+            (
+                id,
+                conversation,
+                first,
+                last,
+                kind.to_owned(),
+                importance,
+                p1.to_owned(),
+                p2.map(str::to_owned),
+                model.to_owned(),
+            )
+        },
+    );
+    assert_eq!(summaries, expected);
+    let times: (String, String) =
+        sqlx::query_as("select started_at::text, created_at::text from summaries where id = 1")
+            .fetch_one(&mut new)
+            .await
+            .unwrap();
+    assert_eq!(
+        times,
+        (
+            "2026-01-02 02:00:00+00".into(),
+            "2026-01-02 16:01:00+00".into()
+        )
+    );
+
+    let settings: Vec<Setting> = sqlx::query_as(
+        "select conversation_id, model, effort, persona, proactive, cleared_upto
+             from conversation_settings order by conversation_id",
+    )
+    .fetch_all(&mut new)
+    .await
+    .unwrap();
+    assert_eq!(
+        settings,
+        [
+            (100, None, None, Some("猫".into()), false, Some(1004)),
+            (101, None, None, None, true, None),
+        ]
+    );
+}
+
 #[sqlx::test]
 async fn only_into_an_empty_database(pool: PgPool) {
     let mut new = imported(&pool).await;

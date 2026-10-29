@@ -116,3 +116,27 @@ insert into platform_events values
     (1, 1001, 'message', '{"sender": {"role": "admin", "card": "明哥"}}'),
     (2, 1001, 'reaction', '{"other": true}'),
     (3, 1015, 'redaction', '{"recalled": "n1001"}');
+
+-- Summaries hang off the group number. 2 covers only rows that stayed
+-- behind, 4 was withdrawn, and 5's group never had a QQ endpoint.
+insert into conversation_compartments (id, conversation_id, start_ingest_seq, end_ingest_seq,
+    summary_p1, summary_p2, summary_p3, summary, episode_kind, importance, state,
+    historian_profile, created_at, activated_at) values
+    (1, 10001, 1, 6, '[@#2] 打招呼', '打招呼', '招呼', '[@#2] 打招呼\n打招呼\n招呼', 'social', 0.5,
+     'active', 'gemini', '2026-01-03 00:00+08', '2026-01-03 00:01+08'),
+    (2, 10001, 7, 10, '无', null, null, '无', 'ambient', 0.1, 'active', 'gemini',
+     '2026-01-03 00:00+08', null),
+    (3, 10001, 11, 22, null, null, null, '[@#2] 转发了聊天记录', 'mixed', 1.0, 'active', 'qwen',
+     '2026-01-03 00:00+08', null),
+    (4, 10001, 1, 22, '撤回的', null, null, '撤回的', 'mixed', 0.5, 'withdrawn', 'qwen',
+     '2026-01-03 00:00+08', null),
+    (5, 30001, 1, 22, '别处', null, null, '别处', 'mixed', 0.5, 'active', 'qwen',
+     '2026-01-03 00:00+08', null);
+
+-- The group: a persona, proactive off, cleared at 10:02:30. 小明's
+-- private chat chose a model only, which stays behind; the owner's turned
+-- proactive on.
+insert into sessions values
+    (10001, 'gpt-5.6-luna', '猫', '2026-01-04 00:00+08', '2026-01-02 10:02:30+08', false, 'xhigh'),
+    (-20001, 'gpt-5.6-luna', null, '2026-01-04 00:00+08', null, null, null),
+    (-20003, null, null, '2026-01-04 00:00+08', null, true, null);

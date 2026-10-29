@@ -8,6 +8,7 @@ mod messages;
 mod nodes;
 mod people;
 mod places;
+mod summaries;
 #[cfg(test)]
 mod tests;
 
@@ -91,6 +92,8 @@ async fn import(old: &mut PgConnection, new: &mut PgConnection, accounts: &Accou
     let places = places::import(&mut old, &mut new, &people).await?;
     messages::import(&mut old, &mut new, &people, &places).await?;
     people::name(&mut new).await?;
+    summaries::import(&mut old, &mut new).await?;
+    summaries::settings(&mut old, &mut new).await?;
     sequences(&mut old, &mut new).await?;
     people::accounts(&mut new, &people, accounts).await?;
     new.commit().await?;
