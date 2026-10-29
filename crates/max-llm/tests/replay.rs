@@ -14,13 +14,12 @@ use max_core::ids::CallId;
 use max_core::item::{Item, ItemKind, ModelOutput, ModelTag, Protocol, ToolOutput};
 use max_core::run::Request;
 use max_core::tools::TOOLS;
-use max_llm::{Call, Event, Options, Pictures, chat, responses};
+use max_llm::{Call, Options, Pictures, chat, responses};
 use serde_json::Value;
 
 /// What a recorded response said as it streamed, and what it came to.
 struct Replayed {
     said: String,
-    announced: Vec<String>,
     output: ModelOutput,
 }
 
@@ -29,12 +28,8 @@ async fn replay(model: &ModelTag, name: &str) -> Replayed {
     let recorded = std::fs::read(&path).unwrap();
     let mut call = Call::replay(model.clone(), recorded);
     let mut said = String::new();
-    let mut announced = Vec::new();
-    while let Some(event) = call.next().await.unwrap() {
-        match event {
-            Event::Text(text) => said.push_str(&text),
-            Event::ToolCall { name } => announced.push(name),
-        }
+    while let Some(text) = call.next().await.unwrap() {
+        said.push_str(&text);
     }
     let output = call.finish().unwrap();
     let tokens: u32 = output.items.iter().map(|item| item.tokens).sum();
@@ -50,11 +45,7 @@ async fn replay(model: &ModelTag, name: &str) -> Replayed {
             .iter()
             .all(|item| item.source.as_ref() == Some(model))
     );
-    Replayed {
-        said,
-        announced,
-        output,
-    }
+    Replayed { said, output }
 }
 
 /// Replays both steps of an exchange and returns the first step's items
@@ -76,7 +67,6 @@ async fn exchange(model: &ModelTag, name: &str) -> (ModelOutput, Value) {
     assert_eq!(call.name, "run_code");
     let arguments: Value = serde_json::from_str(&call.arguments).unwrap();
     assert!(arguments["code"].as_str().unwrap().contains("64"));
-    assert_eq!(first.announced, ["run_code"]);
     assert_eq!(first.said, "");
 
     let second = replay(model, &format!("{name}-2")).await;
@@ -94,7 +84,6 @@ async fn exchange(model: &ModelTag, name: &str) -> (ModelOutput, Value) {
     };
     assert_eq!(second.said.trim_start(), *answer);
     assert!(answer.replace(',', "").contains("18446744073709551616"));
-    assert!(second.announced.is_empty());
 
     let mut items = vec![Item::new(
         ItemKind::user("[1] 小明：2 的 64 次方是多少？"),

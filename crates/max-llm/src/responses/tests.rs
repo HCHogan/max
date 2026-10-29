@@ -172,7 +172,7 @@ fn a_request() {
     assert!(body.get("temperature").is_none());
 }
 
-fn feed(parser: &mut Parser, events: &[Value]) -> Vec<Event> {
+fn feed(parser: &mut Parser, events: &[Value]) -> Vec<String> {
     events
         .iter()
         .flat_map(|event| parser.event(&event.to_string()).unwrap())
@@ -206,16 +206,7 @@ fn a_streamed_response() {
             json!({ "type": "response.function_call_arguments.delta", "delta": "{\"code\"" }),
         ],
     );
-    assert_eq!(
-        events,
-        [
-            Event::Text("早".into()),
-            Event::Text("啊".into()),
-            Event::ToolCall {
-                name: "run_code".into()
-            },
-        ]
-    );
+    assert_eq!(events, ["早", "啊"]);
     assert!(!parser.finished());
     let completed = json!({
         "type": "response.completed",

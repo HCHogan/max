@@ -16,7 +16,7 @@ use max_core::run::Request;
 use sse_stream::{Sse, SseStream};
 use tokio::time::{Instant, Sleep, sleep, timeout};
 
-use crate::{Error, Event, Options, Pictures, chat, responses};
+use crate::{Error, Options, Pictures, chat, responses};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How much of an error body to keep.
@@ -125,7 +125,8 @@ pub struct Call {
     events: Events,
     parser: Parser,
     idle: Duration,
-    pending: VecDeque<Event>,
+    /// Text parsed and not yet taken.
+    pending: VecDeque<String>,
 }
 
 impl Call {
@@ -149,11 +150,12 @@ impl Call {
         Self::new(model, Box::pin(events), Duration::MAX)
     }
 
-    /// The next piece of the response, or `None` once no more is coming.
-    pub async fn next(&mut self) -> Result<Option<Event>, Error> {
+    /// The next text the model wrote, to be said, or `None` once no more
+    /// is coming.
+    pub async fn next(&mut self) -> Result<Option<String>, Error> {
         loop {
-            if let Some(event) = self.pending.pop_front() {
-                return Ok(Some(event));
+            if let Some(text) = self.pending.pop_front() {
+                return Ok(Some(text));
             }
             if self.parser.finished() {
                 return Ok(None);
@@ -197,7 +199,7 @@ enum Parser {
 }
 
 impl Parser {
-    fn event(&mut self, data: &str) -> Result<Vec<Event>, Error> {
+    fn event(&mut self, data: &str) -> Result<Vec<String>, Error> {
         match self {
             Self::Responses(parser) => parser.event(data),
             Self::Chat(parser) => parser.event(data),

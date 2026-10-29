@@ -107,7 +107,7 @@ async fn a_streamed_call() {
         (events, call.finish().unwrap())
     };
     let ((events, output), ()) = tokio::join!(call, server);
-    assert_eq!(events, [Event::Text("早".into())]);
+    assert_eq!(events, ["早".to_owned()]);
     assert_eq!(
         output.items[0].kind,
         ItemKind::Assistant { text: "早".into() }
@@ -175,14 +175,14 @@ async fn silence_and_cut_offs() {
             .call(&request(), &Options::default(), &Pictures::default())
             .await
             .unwrap();
-        assert_eq!(silent.next().await.unwrap(), Some(Event::Text("早".into())));
+        assert_eq!(silent.next().await.unwrap(), Some("早".to_owned()));
         let idle = silent.next().await.unwrap_err();
 
         let mut cut = client
             .call(&request(), &Options::default(), &Pictures::default())
             .await
             .unwrap();
-        assert_eq!(cut.next().await.unwrap(), Some(Event::Text("早".into())));
+        assert_eq!(cut.next().await.unwrap(), Some("早".to_owned()));
         assert_eq!(cut.next().await.unwrap(), None);
         (idle, cut.finish().unwrap_err())
     };

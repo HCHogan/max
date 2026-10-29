@@ -259,7 +259,7 @@ fn finish(reason: &str) -> String {
     json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": reason }] }).to_string()
 }
 
-fn run(parser: &mut Parser, data: &[String]) -> Vec<Event> {
+fn run(parser: &mut Parser, data: &[String]) -> Vec<String> {
     data.iter()
         .flat_map(|data| parser.event(data).unwrap())
         .collect()
@@ -287,7 +287,7 @@ fn reasoning_then_text() {
             "[DONE]".into(),
         ],
     );
-    assert_eq!(events, [Event::Text("早".into()), Event::Text("啊".into())]);
+    assert_eq!(events, ["早", "啊"]);
     assert!(parser.finished());
     let output = parser.finish().unwrap();
     assert_eq!(
@@ -338,17 +338,7 @@ fn tool_calls_in_pieces() {
             finish("tool_calls"),
         ],
     );
-    assert_eq!(
-        events,
-        [
-            Event::ToolCall {
-                name: "run_code".into()
-            },
-            Event::ToolCall {
-                name: "shell".into()
-            },
-        ]
-    );
+    assert!(events.is_empty(), "{events:?}");
     // No [DONE] from this provider: the stream just ends.
     assert!(!parser.finished());
     let output = parser.finish().unwrap();
@@ -375,7 +365,7 @@ fn inline_thinking_is_not_said() {
             .chain([finish("stop"), "[DONE]".into()])
             .collect::<Vec<_>>(),
     );
-    assert_eq!(events, [Event::Text("早".into()), Event::Text("啊".into())]);
+    assert_eq!(events, ["早", "啊"]);
     let output = parser.finish().unwrap();
     assert_eq!(
         output.items[0],
@@ -404,7 +394,7 @@ fn inline_thinking_is_not_said() {
             chunk(json!({ "content": "3" })),
         ],
     );
-    assert_eq!(events, [Event::Text("<3".into())]);
+    assert_eq!(events, ["<3"]);
 }
 
 #[test]
@@ -425,7 +415,7 @@ fn reasoning_written_as_the_answer_is_not_said() {
         ["## 思考过程", "：\n1. 判", "定"],
     ] {
         let (events, output) = heard(&opening);
-        assert_eq!(events, [], "{opening:?}");
+        assert!(events.is_empty(), "{opening:?}");
         assert!(matches!(output, Err(Error::Aloud)), "{opening:?}");
     }
     // Text that only starts like one is said once it isn't.
@@ -441,14 +431,7 @@ fn reasoning_written_as_the_answer_is_not_said() {
         ),
     ] {
         let (events, output) = heard(pieces);
-        let text: String = events
-            .iter()
-            .filter_map(|event| match event {
-                Event::Text(text) => Some(text.as_str()),
-                Event::ToolCall { .. } => None,
-            })
-            .collect();
-        assert_eq!(text, said);
+        assert_eq!(events.concat(), said);
         assert!(output.is_ok());
     }
     assert!(Error::Aloud.retryable());

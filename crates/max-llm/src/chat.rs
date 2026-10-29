@@ -21,7 +21,7 @@ use max_core::item::{Image, Item, ItemKind, ModelOutput, ModelTag, ToolCall, Usa
 use max_core::run::Request;
 use serde_json::{Map, Value, json};
 
-use crate::{Error, Event, Options, Pictures, Piece, pieces, share_tokens, tool_pieces};
+use crate::{Error, Options, Pictures, Piece, pieces, share_tokens, tool_pieces};
 
 const THINK: &str = "<think>";
 const UNTHINK: &str = "</think>";
@@ -277,7 +277,8 @@ impl Parser {
         self.done
     }
 
-    pub fn event(&mut self, data: &str) -> Result<Vec<Event>, Error> {
+    /// One chunk: the text in it to be said.
+    pub fn event(&mut self, data: &str) -> Result<Vec<String>, Error> {
         if data.trim() == "[DONE]" {
             self.done = true;
             return Ok(Vec::new());
@@ -301,13 +302,13 @@ impl Parser {
                         let text = self.content(value.as_str().unwrap_or_default());
                         if !text.is_empty() {
                             self.text.push_str(&text);
-                            events.push(Event::Text(text));
+                            events.push(text);
                         }
                     }
                     "tool_calls" => {
                         let calls = value.as_array().map(Vec::as_slice).unwrap_or_default();
                         for (position, call) in calls.iter().enumerate() {
-                            events.extend(self.call(position, call));
+                            self.call(position, call);
                         }
                     }
                     _ => merge(&mut self.fields, field, value),
@@ -430,14 +431,16 @@ impl Parser {
         }
     }
 
-    /// A piece of a tool call; announces the call once its name is known.
-    fn call(&mut self, position: usize, delta: &Value) -> Option<Event> {
+    /// A piece of a tool call.
+    fn call(&mut self, position: usize, delta: &Value) {
         let index = delta["index"]
             .as_u64()
             .unwrap_or(u64::try_from(position).unwrap_or_default());
         let call = self.calls.entry(index).or_default();
-        let unnamed = call.name.is_empty();
-        for (field, value) in delta.as_object()? {
+        let Some(delta) = delta.as_object() else {
+            return;
+        };
+        for (field, value) in delta {
             match (field.as_str(), value) {
                 ("index" | "type", _) => {}
                 ("id", Value::String(id)) => call.id.clone_from(id),
@@ -452,9 +455,6 @@ impl Parser {
                 _ => merge(&mut call.extra, field, value),
             }
         }
-        (unnamed && !call.name.is_empty()).then(|| Event::ToolCall {
-            name: call.name.clone(),
-        })
     }
 }
 

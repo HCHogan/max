@@ -70,12 +70,8 @@ async fn once(
             let _ = mailbox.send(Event::Said { task, segment });
         }
     };
-    while let Some(event) = call.next().await? {
-        match event {
-            max_llm::Event::Text(delta) => say(segmenter.push(&delta)),
-            // Starting the group's VM comes with the tools.
-            max_llm::Event::ToolCall { .. } => {}
-        }
+    while let Some(delta) = call.next().await? {
+        say(segmenter.push(&delta));
     }
     let out = call.finish()?;
     say(segmenter.finish());

@@ -12,7 +12,7 @@ use max_core::run::Request;
 use serde_json::{Map, Value, json};
 use tracing::warn;
 
-use crate::{Error, Event, Options, Pictures, Piece, pieces, plain, share_tokens, tool_pieces};
+use crate::{Error, Options, Pictures, Piece, pieces, plain, share_tokens, tool_pieces};
 
 /// The request body.
 pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value {
@@ -142,19 +142,12 @@ impl Parser {
         self.output.is_some()
     }
 
-    pub fn event(&mut self, data: &str) -> Result<Vec<Event>, Error> {
+    /// One event: the text in it to be said.
+    pub fn event(&mut self, data: &str) -> Result<Vec<String>, Error> {
         let event: Value = serde_json::from_str(data).map_err(Error::malformed)?;
         let text = |field: &str| event[field].as_str().unwrap_or_default().to_owned();
         match event["type"].as_str().unwrap_or_default() {
-            "response.output_text.delta" => Ok(vec![Event::Text(text("delta"))]),
-            "response.output_item.added" if event["item"]["type"] == "function_call" => {
-                Ok(vec![Event::ToolCall {
-                    name: event["item"]["name"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_owned(),
-                }])
-            }
+            "response.output_text.delta" => Ok(vec![text("delta")]),
             "response.completed" => {
                 self.output = Some(self.complete(&event["response"]));
                 Ok(Vec::new())

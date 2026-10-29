@@ -67,15 +67,6 @@ fn pieces<'a>(
     (pieces.len() > 1).then_some(pieces)
 }
 
-/// What a call yields while the response streams in.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Event {
-    /// Text the model wrote, to be said.
-    Text(String),
-    /// The model began a tool call; its arguments are still coming.
-    ToolCall { name: String },
-}
-
 /// A tool's parameter schema. max-core's tests check that each parses.
 fn schema(tool: &ToolSpec) -> Value {
     serde_json::from_str(tool.parameters).expect("max-core's tool schemas are JSON")
