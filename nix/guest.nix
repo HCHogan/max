@@ -22,6 +22,8 @@ let
   # travels on the kernel command line (microvm.kernelParams stays out of the
   # toplevel), which avoids a self-reference.
   registration = pkgs.closureInfo { rootPaths = [ config.system.build.toplevel ]; };
+  # run_code's runner, with the browser its programs drive.
+  runner = import ./runner.nix { inherit pkgs; };
 in
 {
   system.stateVersion = "26.05";
@@ -190,7 +192,7 @@ in
       done
       install -m 0600 /dev/null /run/max/authorized_keys
       echo "ssh-ed25519 $key max" > /run/max/authorized_keys
-      ln -sfn ${./runner.js} /run/max/runner.js
+      ln -sfn ${runner}/lib/max-runner/runner.js /run/max/runner.js
     '';
   };
 

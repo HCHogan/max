@@ -1,0 +1,8 @@
+{
+  "name": "max-runner",
+  "private": true,
+  "dependencies": {
+    "camoufox-js": "0.10.2",
+    "playwright-core": "1.59.0"
+  }
+}
