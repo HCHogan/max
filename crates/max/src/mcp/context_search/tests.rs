@@ -6,12 +6,15 @@ use max_db::captions::{self, Caption};
 use max_db::media::{self, Blob};
 use max_db::platform;
 use max_db::summaries::{self as stored, Summary};
+use max_db::vectors::{self, Key};
 use sqlx::{PgConnection, PgPool};
 
 use super::*;
 use crate::conversation::testing::{at, from_xiaoming, group, offset, text};
 use crate::conversation::{Place, ingest};
+use crate::embedding::testing::{serve, vector};
 use crate::inbound::InNode;
+use crate::scope::Scope;
 
 fn hit(kind: Kind, n: i64, score: f32, key: &str) -> Hit {
     Hit {
@@ -102,6 +105,20 @@ fn no_kind_takes_more_than_two_thirds_while_another_has_hits() {
         hit(Kind::Message, 3, 0.5, "哈哈"),
     ];
     assert_eq!(handles(&choose(hits, 10)), ["2", "3"]);
+}
+
+#[test]
+fn found_both_ways_a_candidate_takes_the_higher_score() {
+    let terms = ["上线".to_owned(), "时间".to_owned()];
+    let words = vec![(1, vec![0]), (2, vec![0, 1])];
+    let near = vec![(1, 0.8), (2, 0.9), (3, 0.6), (4, 0.4)];
+    let found = merged(words, near, &terms);
+    let mut scores: Vec<(i32, f32)> = found.iter().map(|(id, found)| (*id, found.score)).collect();
+    scores.sort_by_key(|(id, _)| *id);
+    // 4 isn't near enough.
+    assert_eq!(scores, [(1, 0.8), (2, 1.0), (3, 0.6)]);
+    assert_eq!(found[&2].has, [0, 1]);
+    assert!(found[&3].has.is_empty());
 }
 
 /// A picture from 小明, with the caption worker's words for it.
@@ -263,4 +280,57 @@ async fn rows_and_summaries_with_their_read(pool: PgPool) {
 
     let empty = super::super::call("context_search", &context, json!({ "query": " " })).await;
     assert_eq!(empty.unwrap_err().code, "bad_arguments");
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn by_meaning_too(pool: PgPool) {
+    let mut scope = Scope::new();
+    let (embedder, _) = serve(&mut scope).await;
+    let mut conn = pool.acquire().await.unwrap();
+    let place = Arc::new(group(&mut conn).await);
+    let mut said = async |n: u32, words: &str| {
+        let inbound = from_xiaoming(n, vec![text(words)]);
+        let id = ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
+            .await
+            .unwrap()
+            .message
+            .id;
+        // The vector the worker would make of it.
+        let made = [(Key::Message(id), place.conversation, vector(words))];
+        vectors::write(&mut conn, "test-m3", &made, at(n))
+            .await
+            .unwrap();
+        id
+    };
+    said(1, "时间上线了吗").await;
+    said(2, "中午吃什么").await;
+    said(3, "上线时间定了").await;
+    drop(conn);
+    let context = Context {
+        pool: pool.clone(),
+        place: Arc::clone(&place),
+        offset: offset(),
+        page_tokens: 2000,
+        search: None,
+        work: None,
+        store: None,
+        poster: None,
+        embedder: Some(embedder),
+        admin: None,
+    };
+    let texts = async |query: &str| -> Vec<Value> {
+        let found = run(&context, json!({ "query": query })).await.unwrap();
+        let results = found["results"].as_array().unwrap().iter();
+        results.map(|result| result["text"].clone()).collect()
+    };
+
+    // The words found one; the meaning another, nearly as good, and not
+    // what has nothing to do with it.
+    assert_eq!(
+        texts("上线时间").await,
+        [json!("小明：上线时间定了"), json!("小明：时间上线了吗")]
+    );
+    // Without the query's vector, the words alone.
+    assert_eq!(texts("上线时间 挂").await, [json!("小明：上线时间定了")]);
+    scope.close(Duration::ZERO).await;
 }

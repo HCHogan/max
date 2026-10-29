@@ -1,20 +1,25 @@
 //! `context_search`: where in this conversation's history the query's
-//! terms are, among its rows (with their pictures' captions) and its
-//! summaries; each result says how `context_read` reads it. A term is
-//! found as written, ignoring case. See "召回".
+//! terms are, among its rows (with their pictures' and stickers' captions)
+//! and its summaries, and what there is near it by meaning; each result
+//! says how `context_read` reads it. A term is found as written, ignoring
+//! case. See "召回".
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
+use std::time::Duration;
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveTime, TimeZone, Utc};
 use max_core::ids::{MessageId, SummaryId};
 use max_core::project::span;
 use max_core::render::{Render, moment};
-use max_db::recall::{self, Query};
+use max_db::recall::{self, Near, Query};
 use max_db::{PgConnection, ledger, summaries};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
+use tokio::time::timeout;
+use tracing::debug;
 
 use super::{Context, Failure, arguments};
 use crate::conversation::project::people;
@@ -29,6 +34,12 @@ const AROUND: u8 = 10;
 const SNIPPET: usize = 160;
 /// Of those, how many come before the hit.
 const LEAD: usize = 40;
+/// How long the query's vector is waited for; without it, the search goes
+/// by the words alone.
+const MEANING_WAIT: Duration = Duration::from_secs(5);
+/// The least cosine similarity of what is found by meaning alone: a
+/// guess, still to be tuned on real searches.
+const NEAR: f32 = 0.5;
 
 /// Searches at once, from every conversation: one with a short term reads
 /// the whole conversation.
@@ -60,7 +71,8 @@ struct Hit {
     text: String,
     /// `context_read`'s arguments.
     read: Value,
-    /// From 0 to 1: the share of the terms it has.
+    /// From 0 to 1: the share of the terms it has, or how near it is by
+    /// meaning, whichever is higher.
     #[serde(skip)]
     score: f32,
     #[serde(skip)]
@@ -69,6 +81,20 @@ struct Hit {
     /// repeated down the chat shows once; a summary's handle.
     #[serde(skip)]
     key: String,
+}
+
+/// The query's vector, and the model whose vectors it is compared with.
+struct Meaning<'a> {
+    model: &'a str,
+    vector: Vec<f32>,
+}
+
+/// A candidate by the words, by meaning, or both: the terms it has, and
+/// the higher of its two scores.
+#[derive(Default)]
+struct Candidate {
+    has: Vec<usize>,
+    score: f32,
 }
 
 pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
@@ -82,6 +108,7 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let limit = limit.unwrap_or(DEFAULT).clamp(1, MOST);
     let (from, until) = window(from.as_deref(), to.as_deref(), context.offset)?;
     let patterns: Vec<String> = terms.iter().map(|term| pattern(term)).collect();
+    let meaning = meaning(context, &query).await;
 
     let _slot = SLOTS.acquire().await;
     let mut conn = context.pool.acquire().await?;
@@ -95,29 +122,73 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
         // Room for the copies of one message that count as one.
         limit: i64::try_from(limit * 3).unwrap_or(i64::MAX),
     };
-    let mut hits = row_hits(&mut conn, context, &query, &terms).await?;
+    let meaning = meaning.as_ref();
+    let mut hits = row_hits(&mut conn, context, &query, &terms, meaning).await?;
     let query = Query {
         limit: i64::try_from(limit).unwrap_or(i64::MAX),
         ..query
     };
-    hits.extend(summary_hits(&mut conn, context, &query, &terms).await?);
+    hits.extend(summary_hits(&mut conn, context, &query, &terms, meaning).await?);
     Ok(json!({ "results": choose(hits, limit) }))
 }
 
-/// The share of the terms a hit has.
-fn score(has: &[usize], terms: &[String]) -> f32 {
-    has.len() as f32 / terms.len().max(1) as f32
+/// The query's vector, when there is an embedding model and it answers in
+/// time.
+async fn meaning<'a>(context: &'a Context, query: &str) -> Option<Meaning<'a>> {
+    let embedder = context.embedder.as_ref()?;
+    match timeout(MEANING_WAIT, embedder.one(query)).await {
+        Ok(Ok(vector)) => Some(Meaning {
+            model: &embedder.model,
+            vector,
+        }),
+        Ok(Err(error)) => {
+            debug!("context_search goes by the words alone: {error}");
+            None
+        }
+        Err(_) => {
+            debug!("context_search goes by the words alone: no vector in time");
+            None
+        }
+    }
 }
 
-/// The rows the terms are in, as their lines show them, captions and all.
+/// The candidates by the words and by meaning as one. By the words, a
+/// candidate scores the share of the terms it has; by meaning, its
+/// similarity, if it is near enough.
+fn merged<T: Eq + Hash>(
+    words: Vec<(T, Vec<usize>)>,
+    near: Vec<Near<T>>,
+    terms: &[String],
+) -> HashMap<T, Candidate> {
+    let mut candidates = HashMap::new();
+    for (id, has) in words {
+        let score = has.len() as f32 / terms.len().max(1) as f32;
+        candidates.insert(id, Candidate { has, score });
+    }
+    for (id, similarity) in near {
+        if similarity >= NEAR {
+            let candidate = candidates.entry(id).or_insert_with(Candidate::default);
+            candidate.score = candidate.score.max(similarity);
+        }
+    }
+    candidates
+}
+
+/// The rows the terms are in, or near the query by meaning, as their lines
+/// show them, captions and all.
 async fn row_hits(
     conn: &mut PgConnection,
     context: &Context,
     query: &Query<'_>,
     terms: &[String],
+    meaning: Option<&Meaning<'_>>,
 ) -> Result<Vec<Hit>, Failure> {
-    let found: HashMap<MessageId, Vec<usize>> =
-        recall::messages(conn, query).await?.into_iter().collect();
+    let words = recall::messages(conn, query).await?;
+    let near = match meaning {
+        Some(meaning) => recall::near_messages(conn, query, meaning.model, &meaning.vector).await?,
+        None => Vec::new(),
+    };
+    let found = merged(words, near, terms);
     let ids: Vec<MessageId> = found.keys().copied().collect();
     let rows = ledger::picked(conn, query.conversation, &ids).await?;
     let people = people(conn, rows.iter().map(|row| &row.message), &context.place).await?;
@@ -128,7 +199,7 @@ async fn row_hits(
     let mut hits = Vec::new();
     for row in &rows {
         let message = &row.message;
-        let Some(has) = found.get(&message.id) else {
+        let Some(found) = found.get(&message.id) else {
             continue;
         };
         let body = render.body(message);
@@ -137,9 +208,9 @@ async fn row_hits(
             kind: Kind::Message,
             handle: format!("#{}", message.id),
             time: moment(message.at, context.offset),
-            text: format!("{name}：{}", snippet(&body, &chosen(terms, has))),
+            text: format!("{name}：{}", snippet(&body, &chosen(terms, &found.has))),
             read: json!({ "id": message.id.0, "before": AROUND, "after": AROUND }),
-            score: score(has, terms),
+            score: found.score,
             at: message.at,
             key: body,
         });
@@ -147,23 +218,31 @@ async fn row_hits(
     Ok(hits)
 }
 
-/// The summaries the terms are in: the title, and a stretch of the fullest
-/// level they are in.
+/// The summaries the terms are in, or near the query by meaning: the
+/// title, and a stretch of the fullest level the terms are in, or of the
+/// full one.
 async fn summary_hits(
     conn: &mut PgConnection,
     context: &Context,
     query: &Query<'_>,
     terms: &[String],
+    meaning: Option<&Meaning<'_>>,
 ) -> Result<Vec<Hit>, Failure> {
-    let found: HashMap<SummaryId, Vec<usize>> =
-        recall::summaries(conn, query).await?.into_iter().collect();
+    let words = recall::summaries(conn, query).await?;
+    let near = match meaning {
+        Some(meaning) => {
+            recall::near_summaries(conn, query, meaning.model, &meaning.vector).await?
+        }
+        None => Vec::new(),
+    };
+    let found = merged(words, near, terms);
     let ids: Vec<SummaryId> = found.keys().copied().collect();
     let mut hits = Vec::new();
     for (id, summary) in summaries::picked(conn, query.conversation, &ids).await? {
-        let Some(has) = found.get(&id) else {
+        let Some(found) = found.get(&id) else {
             continue;
         };
-        let words = chosen(terms, has);
+        let words = chosen(terms, &found.has);
         let levels = [
             Some(&summary.full),
             summary.brief.as_ref(),
@@ -172,12 +251,11 @@ async fn summary_hits(
         let level = levels
             .into_iter()
             .flatten()
-            .find(|level| words.iter().any(|word| find(&fold(level), word).is_some()));
-        let text = match (level, summary.title.as_str()) {
-            (Some(level), "") => snippet(level, &words),
-            (Some(level), title) => format!("{title}：{}", snippet(level, &words)),
-            (None, "") => snippet(&summary.full, &[]),
-            (None, title) => title.to_owned(),
+            .find(|level| words.iter().any(|word| find(&fold(level), word).is_some()))
+            .unwrap_or(&summary.full);
+        let text = match summary.title.as_str() {
+            "" => snippet(level, &words),
+            title => format!("{title}：{}", snippet(level, &words)),
         };
         let handle = format!("summary#{id}");
         hits.push(Hit {
@@ -185,7 +263,7 @@ async fn summary_hits(
             time: span(summary.started_at, summary.ended_at, context.offset),
             text,
             read: json!({ "summary": id.0 }),
-            score: score(has, terms),
+            score: found.score,
             at: summary.ended_at,
             key: handle.clone(),
             handle,
