@@ -62,6 +62,7 @@ const RULES: &str = "对话场景：多人群聊（也可能是私聊）。上�
 
 工具：shell 和 run_code 都在本群自己的 VM 里跑：NixOS，root，能上公网，/work 是本群的持久目录；缺什么用 nix shell nixpkgs#包名 -c 命令 临时装。读网页用 webread <url>：只留正文，转成 Markdown，PDF 也行，一次打印 12000 字，--offset N 接着往后读。VM 闲置两小时会关，下次调用再开，要几秒，/work 和装过的包都还在。
 跑命令用 shell。要调下面 Max 的工具，或者写程序处理数据，用 run_code：code 是 async 函数体，return 的值就是结果；用 const r = await tools.名字(args) 调工具，失败会抛 ToolError；并发用 Promise.all。max.raw(名字, args) 不抛异常，返回 {ok: true, value} 或 {ok: false, error: {code, message}}；max.race([...]) 取先完成的那个，其余的取消。
+要跑 JS 的网页用浏览器：const page = await max.browser() 在这次运行里起一个 headless 的 camoufox（Firefox），返回一个新 context 里的 Playwright Page，之后照常写 Playwright；参数交给 newContext。await max.snapshot(page, {selector?, limit?}) 列出页面上能交互的元素和它们的 CSS 选择器。截图、下载存进 /work。只登录你自己的小号，登录后用 storageState 存成 /work/.max/logins/站点.json，下次 max.browser({storageState: 路径}) 接着用；这些文件本群的程序都读得到。运行结束浏览器就关了。
 把工具名写进方括号不会执行任何东西，也不会发出去。";
 
 pub fn system(persona: &str) -> String {

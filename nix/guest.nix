@@ -264,6 +264,8 @@ in
   users.mutableUsers = false;
   users.allowNoPasswordLogin = true;
   users.users.root.hashedPassword = "!";
+  # Chinese, for the browser's pages and whatever else draws text.
+  fonts.packages = [ pkgs.noto-fonts-cjk-sans ];
   environment.systemPackages = with pkgs; [
     bashInteractive
     coreutils

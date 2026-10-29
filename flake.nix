@@ -50,8 +50,8 @@
 
           # Cargo's sources plus what the build reads besides: insta's
           # snapshots, max-db's migrations and its offline query data,
-          # max-llm's recorded responses, and the guest's runner, which
-          # max's tests run with Node.
+          # max-llm's recorded responses, and the guest's runner and its
+          # SDK, which max's tests run with Node.
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
             name = "source";
@@ -62,7 +62,8 @@
               || pkgs.lib.hasSuffix ".sql" path
               || pkgs.lib.hasSuffix ".sse" path
               || pkgs.lib.hasInfix "/.sqlx/" path
-              || pkgs.lib.hasSuffix "/nix/runner.js" path;
+              || pkgs.lib.hasSuffix "/nix/runner.js" path
+              || pkgs.lib.hasSuffix "/nix/browser.js" path;
           };
           commonArgs = {
             inherit src;

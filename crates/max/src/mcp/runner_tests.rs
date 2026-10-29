@@ -150,3 +150,55 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
 
     scope.close(Duration::from_secs(5)).await;
 }
+
+/// The browser's SDK, as far as it goes without a browser: here the runner
+/// has no camoufox, and snapshot gets a page that only answers.
+#[tokio::test]
+async fn the_browser_sdk_without_a_browser() {
+    let nowhere = "http://127.0.0.1:9/mcp";
+    let ran = run(nowhere, "-", "await max.browser()").await;
+    assert_eq!(ran.status, 1);
+    assert!(
+        ran.stdout.starts_with("Error: 这里没有浏览器"),
+        "{}",
+        ran.stdout
+    );
+    let ran = run(nowhere, "-", "await max.browser('https://example.com')").await;
+    assert!(ran.stdout.starts_with("TypeError"), "{}", ran.stdout);
+
+    let page = "const page = { evaluate: async (f, options) => options.selector === '#none' ? null : \
+         ({ elements: [{ tag: 'button', selector: '#go', role: 'button', name: '搜索' }], truncated: false, \
+         page: typeof f, options }), url: () => 'https://example.com/', title: async () => '例子' };";
+    let ran = run(
+        nowhere,
+        "-",
+        &format!("{page} return max.snapshot(page, {{ selector: 'form' }})"),
+    )
+    .await;
+    assert_eq!(
+        ran.stdout,
+        r##"{"url":"https://example.com/","title":"例子","elements":[{"tag":"button","selector":"#go","role":"button","name":"搜索"}],"truncated":false,"page":"function","options":{"selector":"form","limit":100}}"##,
+        "{}",
+        ran.stderr
+    );
+    let ran = run(
+        nowhere,
+        "-",
+        &format!("{page} return max.snapshot(page, {{ selector: '#none' }})"),
+    )
+    .await;
+    assert_eq!(ran.status, 1);
+    assert!(
+        ran.stdout.starts_with("Error: 页面上没有 #none"),
+        "{}",
+        ran.stdout
+    );
+    for wrong in ["max.snapshot('page')", "max.snapshot(page, { limit: 0 })"] {
+        let ran = run(nowhere, "-", &format!("{page} return {wrong}")).await;
+        assert!(
+            ran.stdout.starts_with("TypeError"),
+            "{wrong}: {}",
+            ran.stdout
+        );
+    }
+}

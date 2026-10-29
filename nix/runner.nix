@@ -1,7 +1,8 @@
-# run_code's runner, with what a browser in its SDK needs beside it:
-# camoufox-js and playwright-core, at the versions the Haskell version ran,
-# and camoufox itself. The guest links /run/max/runner.js here, and Node
-# resolves the link, so the runner finds node_modules next to it.
+# run_code's runner and its SDK (runner.js, browser.js), with what
+# max.browser() needs beside them: camoufox-js and playwright-core, at the
+# versions the Haskell version ran, and camoufox itself. The guest links
+# /run/max/runner.js here, and Node resolves the link, so the runner finds
+# browser.js and node_modules next to it.
 { pkgs }:
 let
   camoufox = import ./camoufox.nix { inherit pkgs; };
@@ -33,6 +34,7 @@ pkgs.buildNpmPackage {
     mkdir -p $out/lib/max-runner
     cp -r node_modules $out/lib/max-runner/
     cp ${./runner.js} $out/lib/max-runner/runner.js
+    cp ${./browser.js} $out/lib/max-runner/browser.js
     runHook postInstall
   '';
 }
