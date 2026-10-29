@@ -219,6 +219,13 @@ pub enum DraftNode {
         mime: String,
         size: u64,
     },
+    /// A file a tool sends, in the content store already, shown under
+    /// `name`. The model can't write it.
+    File {
+        sha256: String,
+        name: String,
+        size: u64,
+    },
 }
 
 #[cfg(test)]

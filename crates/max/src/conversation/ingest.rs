@@ -261,6 +261,18 @@ pub async fn said(
                 nodes.push(Node::Media { media, meta });
                 files.push(sha256.clone());
             }
+            DraftNode::File { sha256, name, size } => {
+                let meta = MediaMeta {
+                    kind: MediaKind::File,
+                    mime: None,
+                    size: Some(*size),
+                    name: Some(name.clone()),
+                    description: None,
+                };
+                let media = Some(MediaRef::Blob(sha256.clone()));
+                nodes.push(Node::Media { media, meta });
+                files.push(sha256.clone());
+            }
         }
     }
     if nodes.is_empty() {

@@ -1088,7 +1088,7 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
   - embedding worker：caption worker 写了表情包的 caption（不是 SKIP、不空）就交给它；启动时和之后每小时扫一遍没有当前模型向量的，所以换了模型会全部重算。一个文件一个单元，同时 2 个，每次请求 30 秒，失败重试两次（10 秒、60 秒）就放弃，等下一次扫描。tank 到 h610 晚上丢包，不做别的补救。用量不记 `llm_usage`。
   - 老表情包的向量由 `max-import vectors` 导，见[导入](#导入)。
   - 查询：query 算成向量，按余弦距离取最近的，失败回 `unavailable`，不重试。不设距离门槛（Haskell 版是 0.65）：10-29 在老库的 3,328 个向量上试了十几个查询，相关和无关的距离重叠（相关的多在 0.31–0.45，"吃瓜看戏"最近的 0.45，"今天天气怎么样"最近的也有 0.44），门槛分不开，交给模型看描述挑。
-- **sender**：上传 base64 拿 `file_info`，再发 `msg_type = 7`，只有 `send_image` 带 `content`。`file_info` 按（端点、sha256）缓存在内存里，提前一小时作废，所以同一张表情包一天里再发不用重新上传；重启就丢，重新传。上传失败和别的发送失败一样记进 `deliveries`。每张图算一条主动消息，占群的额度。
+- **sender**：上传拿 `file_info`（5 MiB 以内 base64 直传，再大分片，见 [QQ 官方机器人](#qq-官方机器人)），再发 `msg_type = 7`，只有 `send_image` 带 `content`，文件不带。`file_info` 按（端点、sha256、文件名）缓存在内存里，提前一小时作废，所以同一张表情包一天里再发不用重新上传；重启就丢，重新传。上传失败和别的发送失败一样记进 `deliveries`。每张图算一条主动消息，占群的额度。
 - **提示词**：表情包偶尔用，一次回答最多一张，别句句都配；记录里没有合适的，用 `find_stickers` 找。
 
 ## schema
@@ -1332,9 +1332,11 @@ struct Verdict { trigger: bool, reason: String }
   - 引用：`message_reference.message_id` 填被引用消息的 `msg_idx` 或 `ref_idx`，实测可行。
   - 撤回：`DELETE /v2/groups/{group_openid}/messages/{id}`，私聊是 `/v2/users/{user_openid}/messages/{id}`，成功回 200，没有 body。文档（2026-08 更新）：谁的消息发出超过 2 分钟都撤不了（40064004）；机器人是群管理员时能撤自己的和普通成员的（成员的用事件的 `id`），不是管理员只能撤自己的，否则回 40062003"无操作权限"；50065001 是稍后重试。私聊只能撤机器人自己发的。实测（2026-10-29，测试群，maxx 是普通成员）：发一条马上撤，成了；同一个 id 再撤一次也回成功；编的 id 回 40061001"请求参数无效"。超过 2 分钟的、别人的没实测。
   - **`recall_message({ id })`**（2026-10-29 做了）：Max 的工具，按 `#id` 撤回本群的一条消息，撤不撤由 Max 判断，沿用 Haskell 版。回复的每一段本来就是一行、一条 QQ 消息，各有 `#id`，所以一个 id 只撤一条，整个回复要一段段撤，不像 Haskell 版一个 id 撤几条。QQ 一定会拒的先在宿主上拒掉、说明原因，不入账：超过 2 分钟的（Max 的按回执时间算，别人的按消息时间）、群主和管理员的（看消息里的身份快照，2 分钟里基本不会变）、私聊里别人的、Max 没发出去或不知道发没发出去的、已经撤回的。Max 是不是管理员要另问 QQ（`bot_state`，见下面的群管理），这里不问：别人的消息照样去撤，被拒就把原因告诉程序。撤回经 `Post` 入账成 Max 的一行 unsend，带 turn；sender 按入账顺序撤，所以撤 Max 刚说的话也排在那条的发送后面。成了 `deliveries` 记 sent，被拒记 failed，投影里那行是 `[unsend#id]（没发出去）`。每次运行最多 10 次。
-  - 媒体要先上传拿 `file_info`，再发 `msg_type = 7`。实测可以直接传 base64，`file_info` 一天有效；`content` 是图片下面的说明文字，和图在同一条消息里。发文件（`file_type = 4`）实测回 50015014，发不了。2026-10-29 实测：GIF 能发，也会动，134 帧、1.9 MB 的也行；`content` 可以不带，不带时群里只有图，和群友发的表情包一样；上传返回的 `raw_url` 是空的，图嵌不进 Markdown。怎么用见[发图](#发图)。
+  - 媒体要先上传拿 `file_info`，再发 `msg_type = 7`。实测可以直接传 base64，`file_info` 一天有效；`content` 是图片下面的说明文字，和图在同一条消息里。2026-10-29 实测：GIF 能发，也会动，134 帧、1.9 MB 的也行；`content` 可以不带，不带时群里只有图，和群友发的表情包一样；上传返回的 `raw_url` 是空的，图嵌不进 Markdown。怎么用见[发图](#发图)。
+  - 发文件（`file_type = 4`，2026-10-29 实测）：上传要带 `file_name`，群里显示成这个名字的文件，能下载；txt、PDF 都发过。测试群起先回 50015014"系统繁忙"，`upload_prepare` 才说出原因：40093003"群文件超过上限"，那个群的群文件满了，同样的请求在别的群就能过。
+  - 大小：base64 直传 6 MiB 能过，8 MiB 回 850012，所以 sender 超过 5 MiB 就分片，图和文件都是。分片：`upload_prepare` 带 `file_type`、`file_name`、`file_size`、`md5`、`sha1`、`md5_10m`（前 10,002,432 字节的 MD5），少了摘要回 850012；回 `upload_id`、`block_size` 和每片的 `index`（从 1 数）、预签名地址、`block_size`（都是字符串）。每片 PUT 到它的地址，再 `upload_part_finish` 报上 `upload_id`、`part_index`、`block_size` 和这片的 MD5；最后对 `files` 发 `upload_id`、`file_type`、`file_name`，回 `file_info`。文件 10 MiB 一片，图整张一片；同一个文件再传不会"秒传"，照样走一遍。12 MiB 的文件、9 MiB 的 PNG 都传上了，5.5 MiB 的 txt 分片发进了群。
   - 平台审核：内容违规会被拒（40034006），记成 `deliveries` 里的失败。机器人被封"暂不支持解封"。
-- **没有的**：reaction、戳一戳、编辑、群名片、发表情和文件；也没找到"有人撤回了消息"的事件，别人撤回的消息时间线上看不出来。群管理的接口见下一条。
+- **没有的**：reaction、戳一戳、编辑、群名片、发表情；也没找到"有人撤回了消息"的事件，别人撤回的消息时间线上看不出来。群管理的接口见下一条。
 - **群管理**：接口是 2026-08-10 和 09-03 加的，下面是 2026-10-29 查文档、在测试群实测的结果；禁言是 owner 当天把 maxx 设成测试群管理员以后测的，别的是 maxx 还是普通成员时测的。路径都在 `/v2/groups/{group_openid}/` 下。
   - 不用是管理员，实测能用：`info`（群名、简介、分类、标签、人数）和 `bot_state`（maxx 在这个群的 `member_openid`、入群时间、身份 owner/admin/member、开没开主动消息、收全部消息还是只收 @）。文档说这两个只给白名单，实测 maxx 都拿得到。各 30 次/分钟。
   - 要 maxx 是群管理员：禁言 `POST restrict_chat_setting`，body 是 `members: [{op, member_openid, mute_expire_at}]`，`op` 是 add、update、del，到期时间用 RFC3339，最长 30 天，一次最多 20 人；add、update 只能对普通成员，del 传空串就立刻解除。`GET restrict_chat_setting` 查全员禁言的规则和正在禁言的人。还有入群申请的列表 `join_request_list` 和审批 `approval_join_request/{member_openid}`，申请事件 `GROUP_JOIN_REQUEST` 也只有管理员收得到；`<qqbot-at-everyone />` @全体（2026-10-26 加），每个群一天一次。实测：都不是 11253；maxx 不是管理员，回 11703"机器人不是群管理员"（err_code 40011030），查禁言、查入群申请、对一个没被禁言的普通成员 del 一次，都是这样。

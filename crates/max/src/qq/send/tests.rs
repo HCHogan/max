@@ -15,7 +15,8 @@ use crate::inbound::InNode;
 struct Recorder {
     answers: Mutex<VecDeque<Result<(), i64>>>,
     sent: Mutex<Vec<(String, Message)>>,
-    uploaded: Mutex<Vec<Vec<u8>>>,
+    /// A file's name, and the bytes.
+    uploaded: Mutex<Vec<(Option<String>, Vec<u8>)>>,
     recalled: Mutex<Vec<(String, String)>>,
 }
 
@@ -30,9 +31,12 @@ fn refused(code: i64) -> api::Error {
 }
 
 impl Api for Recorder {
-    fn upload<'a>(&'a self, _: Chat<'a>, picture: &'a [u8]) -> Answer<'a, Uploaded> {
+    fn upload<'a>(&'a self, _: Chat<'a>, media: Media<'a>) -> Answer<'a, Uploaded> {
         let mut uploaded = self.uploaded.lock().unwrap();
-        uploaded.push(picture.to_vec());
+        uploaded.push(match media {
+            Media::Picture(bytes) => (None, bytes.to_vec()),
+            Media::File { name, bytes } => (Some(name.to_owned()), bytes.to_vec()),
+        });
         let file_info = format!("FI{}", uploaded.len());
         Box::pin(async move {
             Ok(Uploaded {
@@ -311,7 +315,62 @@ async fn a_sticker_is_uploaded_once(pool: PgPool) {
         caption: None,
     };
     assert_eq!(bodies, [media("FI1"), media("FI1"), media("FI2")]);
-    assert_eq!(*s.api.uploaded.lock().unwrap(), [bytes.clone(), bytes]);
+    assert_eq!(
+        *s.api.uploaded.lock().unwrap(),
+        [(None, bytes.clone()), (None, bytes)]
+    );
+    assert_eq!(s.delivery(&message).await.0, Delivery::Sent);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_file_goes_alone_under_its_name(pool: PgPool) {
+    let s = Setup::new(pool).await;
+    let bytes = b"%PDF-1.4".to_vec();
+    let sha256 = s.store.put(bytes.clone()).await.unwrap();
+    let blob = Blob {
+        sha256: sha256.clone(),
+        mime: None,
+        size: 8,
+        width: None,
+        height: None,
+        model_sha256: None,
+    };
+    let mut conn = s.pool.acquire().await.unwrap();
+    media::remember(&mut conn, &blob, Utc::now()).await.unwrap();
+    drop(conn);
+    let file = |name: &str| Draft {
+        reply_to: None,
+        nodes: vec![
+            DraftNode::File {
+                sha256: sha256.clone(),
+                name: name.into(),
+                size: 8,
+            },
+            DraftNode::Text {
+                text: "不在文件消息里".into(),
+            },
+        ],
+    };
+    // The same bytes under another name are uploaded again.
+    let first = s.say(file("报告.pdf")).await;
+    let message = first.message.clone();
+    let outgoing = vec![
+        first,
+        s.say(file("报告.pdf")).await,
+        s.say(file("副本.pdf")).await,
+    ];
+    s.send_all(outgoing).await;
+    let bodies: Vec<Body> = s.sent().into_iter().map(|(_, m)| m.body).collect();
+    let media = |file_info: &str| Body::Media {
+        file_info: file_info.into(),
+        caption: None,
+    };
+    assert_eq!(bodies, [media("FI1"), media("FI1"), media("FI2")]);
+    let named = |name: &str| (Some(name.to_owned()), bytes.clone());
+    assert_eq!(
+        *s.api.uploaded.lock().unwrap(),
+        [named("报告.pdf"), named("副本.pdf")]
+    );
     assert_eq!(s.delivery(&message).await.0, Delivery::Sent);
 }
 

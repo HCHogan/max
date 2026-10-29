@@ -1,10 +1,10 @@
 //! Sends one message, or recalls one, for trying things against the real
 //! API. The message's text comes from stdin; with a picture, it is the
-//! text under it.
+//! text under it, and a file goes without it.
 //!
 //! ```sh
 //! export QQBOT_APP_ID=… QQBOT_SECRET=…
-//! echo 早 | cargo run -p qqbot --example send -- group <group_openid> [markdown] [picture <path>] [reply <msg_id> <seq>] [quote <msg_idx>]
+//! echo 早 | cargo run -p qqbot --example send -- group <group_openid> [markdown] [picture <path> | file <path>] [reply <msg_id> <seq>] [quote <msg_idx>]
 //! cargo run -p qqbot --example send -- group <group_openid> recall <id>
 //! ```
 
@@ -12,6 +12,7 @@
 
 use std::io::Read;
 
+use qqbot::api::Media;
 use qqbot::{Body, Chat, Client, Credentials, Outgoing, Reply};
 
 #[tokio::main(flavor = "current_thread")]
@@ -59,11 +60,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 i += 1;
             }
             "picture" => {
-                let uploaded = client.upload(chat, &std::fs::read(arg(1)?)?).await?;
+                let bytes = std::fs::read(arg(1)?)?;
+                let uploaded = client.upload(chat, Media::Picture(&bytes)).await?;
                 println!("uploaded, for {}s", uploaded.ttl);
                 message.body = Body::Media {
                     file_info: uploaded.file_info,
                     caption: Some(text.trim_end().to_owned()).filter(|text| !text.is_empty()),
+                };
+                i += 2;
+            }
+            "file" => {
+                let path = std::path::Path::new(arg(1)?);
+                let bytes = std::fs::read(path)?;
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or("no name")?;
+                let uploaded = client
+                    .upload(
+                        chat,
+                        Media::File {
+                            name,
+                            bytes: &bytes,
+                        },
+                    )
+                    .await?;
+                println!("uploaded, for {}s", uploaded.ttl);
+                message.body = Body::Media {
+                    file_info: uploaded.file_info,
+                    caption: None,
                 };
                 i += 2;
             }

@@ -5,9 +5,11 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use md5::{Digest, Md5};
 use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
+use sha1::Sha1;
 use tokio::sync::Mutex;
 
 use crate::message::{Outgoing, Sent};
@@ -25,6 +27,12 @@ const REFRESH_BEFORE: Duration = Duration::from_secs(50);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Between reads, not for the whole call.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The most uploaded in one request, base64 in the JSON; more goes in
+/// parts. Tried on 2026-10-29: 6 MiB went in one, 8 MiB didn't (850012).
+const AT_ONCE: usize = 5 << 20;
+/// How much of a file `md5_10m` is the MD5 of.
+const MD5_10M: usize = 10_002_432;
 
 #[derive(Clone)]
 pub struct Credentials {
@@ -59,6 +67,8 @@ pub enum Error {
         path: String,
         source: serde_json::Error,
     },
+    #[error("QQ's parts for an upload don't fit the file: {0}")]
+    Parts(String),
 }
 
 impl Error {
@@ -80,22 +90,48 @@ pub enum Chat<'a> {
 }
 
 impl Chat<'_> {
-    fn messages(self) -> String {
+    /// `messages`, `files`, … under the chat.
+    fn path(self, what: &str) -> String {
         match self {
-            Self::Group(group) => format!("/v2/groups/{group}/messages"),
-            Self::User(user) => format!("/v2/users/{user}/messages"),
-        }
-    }
-
-    fn files(self) -> String {
-        match self {
-            Self::Group(group) => format!("/v2/groups/{group}/files"),
-            Self::User(user) => format!("/v2/users/{user}/files"),
+            Self::Group(group) => format!("/v2/groups/{group}/{what}"),
+            Self::User(user) => format!("/v2/users/{user}/{what}"),
         }
     }
 }
 
-/// A picture uploaded to a chat: a message sends its `file_info`.
+/// What is uploaded to a chat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Media<'a> {
+    /// PNG, JPEG or GIF, which stays animated.
+    Picture(&'a [u8]),
+    /// Anything, shown and saved under its name.
+    File { name: &'a str, bytes: &'a [u8] },
+}
+
+impl<'a> Media<'a> {
+    fn file_type(self) -> u8 {
+        match self {
+            Self::Picture(_) => 1,
+            Self::File { .. } => 4,
+        }
+    }
+
+    fn bytes(self) -> &'a [u8] {
+        match self {
+            Self::Picture(bytes) | Self::File { bytes, .. } => bytes,
+        }
+    }
+
+    /// A picture's isn't shown, but the upload in parts asks for one.
+    fn name(self) -> &'a str {
+        match self {
+            Self::Picture(_) => "picture",
+            Self::File { name, .. } => name,
+        }
+    }
+}
+
+/// A picture or file uploaded to a chat: a message sends its `file_info`.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Uploaded {
     pub file_info: String,
@@ -106,11 +142,60 @@ pub struct Uploaded {
 }
 
 #[derive(Serialize)]
-struct Upload {
-    /// 1 is a picture: PNG, JPEG or GIF, which stays animated.
+struct Upload<'a> {
     file_type: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_name: Option<&'a str>,
     file_data: String,
     /// Upload only; a message sends it.
+    srv_send_msg: bool,
+}
+
+/// The upload in parts, as tried on 2026-10-29: `upload_prepare` fails
+/// without the digests.
+#[derive(Serialize)]
+struct Prepare<'a> {
+    file_type: u8,
+    file_name: &'a str,
+    file_size: u64,
+    md5: String,
+    sha1: String,
+    md5_10m: String,
+}
+
+#[derive(Deserialize)]
+struct Prepared {
+    upload_id: String,
+    /// Every part's but the last; sent as a string.
+    #[serde(deserialize_with = "number_or_string")]
+    block_size: u64,
+    parts: Vec<Part>,
+}
+
+#[derive(Deserialize)]
+struct Part {
+    /// From 1.
+    index: u64,
+    presigned_url: String,
+    #[serde(deserialize_with = "number_or_string")]
+    block_size: u64,
+}
+
+/// A part is put where it was told, then reported.
+#[derive(Serialize)]
+struct PartDone<'a> {
+    upload_id: &'a str,
+    part_index: u64,
+    block_size: u64,
+    md5: String,
+}
+
+/// Every part is in: QQ puts them together.
+#[derive(Serialize)]
+struct Merge<'a> {
+    upload_id: &'a str,
+    file_type: u8,
+    file_name: &'a str,
     srv_send_msg: bool,
 }
 
@@ -229,25 +314,84 @@ impl Client {
     }
 
     pub async fn send(&self, chat: Chat<'_>, message: &Outgoing) -> Result<Sent, Error> {
-        self.call(Method::POST, &chat.messages(), Some(message))
+        self.call(Method::POST, &chat.path("messages"), Some(message))
             .await
     }
 
-    /// Uploads a picture to send to `chat`, as many times as it likes
-    /// while it lasts.
-    pub async fn upload(&self, chat: Chat<'_>, picture: &[u8]) -> Result<Uploaded, Error> {
+    /// Uploads a picture or file to send to `chat`, as many times as it
+    /// likes while it lasts: in one request up to 5 MiB, in parts past it.
+    pub async fn upload(&self, chat: Chat<'_>, media: Media<'_>) -> Result<Uploaded, Error> {
+        if media.bytes().len() > AT_ONCE {
+            return self.upload_in_parts(chat, media).await;
+        }
         let upload = Upload {
-            file_type: 1,
-            file_data: STANDARD.encode(picture),
+            file_type: media.file_type(),
+            file_name: matches!(media, Media::File { .. }).then(|| media.name()),
+            file_data: STANDARD.encode(media.bytes()),
             srv_send_msg: false,
         };
-        self.call(Method::POST, &chat.files(), Some(&upload)).await
+        self.call(Method::POST, &chat.path("files"), Some(&upload))
+            .await
+    }
+
+    /// QQ hands out where to put each part, one after another, and puts
+    /// them together once all are reported.
+    async fn upload_in_parts(&self, chat: Chat<'_>, media: Media<'_>) -> Result<Uploaded, Error> {
+        let bytes = media.bytes();
+        let prepare = Prepare {
+            file_type: media.file_type(),
+            file_name: media.name(),
+            file_size: bytes.len() as u64,
+            md5: hex(&Md5::digest(bytes)),
+            sha1: hex(&Sha1::digest(bytes)),
+            md5_10m: hex(&Md5::digest(&bytes[..bytes.len().min(MD5_10M)])),
+        };
+        let prepared: Prepared = self
+            .call(Method::POST, &chat.path("upload_prepare"), Some(&prepare))
+            .await?;
+        for part in &prepared.parts {
+            let piece = piece(bytes, prepared.block_size, part)?;
+            let response = self
+                .http
+                .put(&part.presigned_url)
+                .header("Content-Type", "application/octet-stream")
+                .body(piece.to_vec())
+                .send()
+                .await?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(Error::Api {
+                    path: format!("part {} of an upload", part.index),
+                    status: status.as_u16(),
+                    code: 0,
+                    message: response.text().await.unwrap_or_default(),
+                    trace: String::new(),
+                });
+            }
+            let done = PartDone {
+                upload_id: &prepared.upload_id,
+                part_index: part.index,
+                block_size: part.block_size,
+                md5: hex(&Md5::digest(piece)),
+            };
+            let _: serde_json::Value = self
+                .call(Method::POST, &chat.path("upload_part_finish"), Some(&done))
+                .await?;
+        }
+        let merge = Merge {
+            upload_id: &prepared.upload_id,
+            file_type: media.file_type(),
+            file_name: media.name(),
+            srv_send_msg: false,
+        };
+        self.call(Method::POST, &chat.path("files"), Some(&merge))
+            .await
     }
 
     /// Recalls a message: the bot's own within 2 minutes, or anyone's
     /// when the bot is a group admin.
     pub async fn recall(&self, chat: Chat<'_>, message_id: &str) -> Result<(), Error> {
-        let path = format!("{}/{message_id}", chat.messages());
+        let path = format!("{}/{message_id}", chat.path("messages"));
         let _: serde_json::Value = self.call(Method::DELETE, &path, None::<&()>).await?;
         Ok(())
     }
@@ -297,6 +441,30 @@ impl Client {
         let body = response.bytes().await?;
         decode(path, status, &body)
     }
+}
+
+/// The bytes of `part`, if they are within the file.
+fn piece<'a>(bytes: &'a [u8], block_size: u64, part: &Part) -> Result<&'a [u8], Error> {
+    let start = part
+        .index
+        .checked_sub(1)
+        .and_then(|before| before.checked_mul(block_size));
+    let end = start.and_then(|start| start.checked_add(part.block_size));
+    match (start, end) {
+        (Some(start), Some(end)) if start < end && end <= bytes.len() as u64 => {
+            Ok(&bytes[start as usize..end as usize])
+        }
+        _ => Err(Error::Parts(format!(
+            "part {} of {} bytes, each {block_size}, in {}",
+            part.index,
+            part.block_size,
+            bytes.len()
+        ))),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[derive(Serialize)]
@@ -428,9 +596,8 @@ mod tests {
 
     #[test]
     fn paths() {
-        assert_eq!(Chat::Group("G1").messages(), "/v2/groups/G1/messages");
-        assert_eq!(Chat::User("U1").messages(), "/v2/users/U1/messages");
-        assert_eq!(Chat::Group("G1").files(), "/v2/groups/G1/files");
+        assert_eq!(Chat::Group("G1").path("messages"), "/v2/groups/G1/messages");
+        assert_eq!(Chat::User("U1").path("files"), "/v2/users/U1/files");
     }
 
     #[test]
@@ -445,6 +612,59 @@ mod tests {
                 ttl: 86400
             }
         );
+    }
+
+    #[test]
+    fn uploads_at_once() {
+        let picture = Upload {
+            file_type: Media::Picture(b"").file_type(),
+            file_name: None,
+            file_data: "AA==".into(),
+            srv_send_msg: false,
+        };
+        assert_eq!(
+            serde_json::to_value(&picture).unwrap(),
+            serde_json::json!({ "file_type": 1, "file_data": "AA==", "srv_send_msg": false })
+        );
+        let file = Media::File {
+            name: "报告.pdf",
+            bytes: b"",
+        };
+        assert_eq!((file.file_type(), file.name()), (4, "报告.pdf"));
+    }
+
+    #[test]
+    fn uploads_in_parts() {
+        assert_eq!(hex(&Md5::digest(b"")), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(
+            hex(&Sha1::digest(b"abc")),
+            "a9993e364706816aba3e25717850c26c9cd0d89d"
+        );
+        // As QQ answered on 2026-10-29, for a file of 12 MiB.
+        let body = br#"{"upload_id":"U1","block_size":"10485760","parts":[
+            {"index":1,"presigned_url":"https://cos/1","block_size":"10485760"},
+            {"index":2,"presigned_url":"https://cos/2","block_size":"2097152"}],
+            "upload_config":{"concurrency":1,"retry_timeout":300,"retry_delay":1}}"#;
+        let prepared: Prepared =
+            decode("/v2/groups/G1/upload_prepare", StatusCode::OK, body).unwrap();
+        let file = vec![7u8; 12 << 20];
+        let pieces: Vec<usize> = prepared
+            .parts
+            .iter()
+            .map(|part| piece(&file, prepared.block_size, part).unwrap().len())
+            .collect();
+        assert_eq!(pieces, [10 << 20, 2 << 20]);
+        let past = Part {
+            index: 3,
+            presigned_url: String::new(),
+            block_size: 1,
+        };
+        assert!(matches!(
+            piece(&file, prepared.block_size, &past),
+            Err(Error::Parts(_))
+        ));
+        let zeroth = Part { index: 0, ..past };
+        assert!(piece(&file, prepared.block_size, &zeroth).is_err());
     }
 
     #[test]

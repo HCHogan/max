@@ -2413,9 +2413,11 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "futures-util",
+ "md-5",
  "reqwest",
  "serde",
  "serde_json",
+ "sha1",
  "thiserror",
  "tokio",
  "tokio-tungstenite",
