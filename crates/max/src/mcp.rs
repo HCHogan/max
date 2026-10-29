@@ -10,6 +10,7 @@ mod send_image;
 mod service;
 mod show;
 mod web_search;
+mod work;
 
 pub use service::{Grant, Sessions, serve};
 
@@ -90,6 +91,10 @@ pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, F
             format!("没有 {name} 这个工具"),
         )),
     }
+}
+
+fn internal() -> Failure {
+    Failure::new("internal", "出错了，稍后再试。")
 }
 
 fn arguments<T: DeserializeOwned>(tool: &str, args: Value) -> Result<T, Failure> {

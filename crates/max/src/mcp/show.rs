@@ -9,13 +9,15 @@ use serde_json::{Value, json};
 use tokio::task::spawn_blocking;
 use tracing::warn;
 
-use super::send_image::{beneath_work, internal, read};
-use super::{Context, Failure, arguments};
+use super::work::{beneath_work, read};
+use super::{Context, Failure, arguments, internal};
 use crate::media::prepare::prepare;
 
 pub const NAME: &str = "max.image";
 /// The most pictures one program shows.
 pub const MOST: usize = 4;
+/// The largest picture shown, in bytes.
+const LARGEST: u64 = 10 << 20;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,7 +42,7 @@ pub async fn run(
     }
     let relative = beneath_work(&path)?;
     let work = work.clone();
-    let bytes = spawn_blocking(move || read(&work, &relative))
+    let bytes = spawn_blocking(move || read(&work, &relative, LARGEST))
         .await
         .map_err(|_| internal())??;
     let (prepared, bytes) = spawn_blocking(move || (prepare(&bytes), bytes))
