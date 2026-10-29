@@ -35,8 +35,32 @@ impl Harness {
 
     /// With 小明 as Max's owner, if `xiaoming_owns`.
     async fn with_owner(pool: PgPool, idle_window_secs: u64, xiaoming_owns: bool) -> Self {
+        Self::start(pool, idle_window_secs, xiaoming_owns, true).await
+    }
+
+    /// Without proactive replies: chatter starts no classifier call that
+    /// races the core's calls for the script's answers.
+    async fn unprompted(pool: PgPool, idle_window_secs: u64) -> Self {
+        Self::start(pool, idle_window_secs, false, false).await
+    }
+
+    async fn start(
+        pool: PgPool,
+        idle_window_secs: u64,
+        xiaoming_owns: bool,
+        proactive: bool,
+    ) -> Self {
         let mut conn = pool.acquire().await.unwrap();
         let place = Arc::new(group(&mut conn).await);
+        if !proactive {
+            let settings = Settings {
+                proactive,
+                ..Settings::default()
+            };
+            platform::save_settings(&mut conn, place.conversation, &settings, Utc::now())
+                .await
+                .unwrap();
+        }
         let xiaoming = platform::account(&mut conn, place.platform, "XIAOMING", "小明")
             .await
             .unwrap();
@@ -219,7 +243,7 @@ async fn chatter_alone_wakes_nobody(pool: PgPool) {
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn later_rows_reach_the_running_core(pool: PgPool) {
-    let mut h = Harness::new(pool, 300).await;
+    let mut h = Harness::unprompted(pool, 300).await;
     h.script.push(Answer::says("嗯"));
     h.script.push(Answer::says("看到了"));
     h.send(at_max(0, " 第一句"));
