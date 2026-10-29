@@ -1,6 +1,7 @@
 //! Max's tools, which programs in a group's VM call through the MCP
 //! service; see "MCP 通道". max-core's `MAX_TOOLS` declares them.
 
+mod agent;
 mod chat_file;
 mod context_read;
 mod context_search;
@@ -90,6 +91,7 @@ pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, F
         "mute_member" => mute_member::run(context, args).await,
         "find_stickers" => find_stickers::run(context, args).await,
         "context_search" => context_search::run(context, args).await,
+        name if agent::NAMES.contains(&name) => agent::run(name, context, args).await,
         _ => Err(Failure::new(
             "unknown_tool",
             format!("没有 {name} 这个工具"),

@@ -18,6 +18,7 @@ use max_core::item::{ModelOutput, ToolOutput};
 use max_core::message::{Draft, Platform};
 use max_core::segment::Segment;
 use max_db::platform::{Account, ConversationKind};
+use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -25,6 +26,7 @@ pub use actor::{Conversation, Outgoing, Shared};
 
 use crate::historian::Compacted;
 use crate::inbound::Inbound;
+use crate::job;
 
 /// What arrives in an actor's mailbox: everything that happens to a
 /// conversation, in the order the actor handles it.
@@ -56,6 +58,16 @@ pub enum Event {
     Verdict(Option<Verdict>),
     /// How the historian's `/compact` went, to answer the command.
     Compacted(Compacted),
+    /// A tool asks about the background agents.
+    Jobs {
+        request: job::Request,
+        reply: oneshot::Sender<Result<Value, String>>,
+    },
+    /// A background agent ended.
+    JobDone {
+        job: u32,
+        finished: job::Finished,
+    },
     /// Max restarts: end the core, within a grace, then stop.
     Stop,
 }
@@ -82,7 +94,8 @@ pub enum Act {
 /// didn't go out.
 pub type Receipt = oneshot::Sender<Result<MessageId, String>>;
 
-/// Lets a tool say something in its turn's conversation.
+/// Lets a tool act in its turn's conversation: say something, or run a
+/// background agent.
 #[derive(Clone, Debug)]
 pub struct Poster {
     mailbox: UnboundedSender<Event>,
@@ -102,6 +115,16 @@ impl Poster {
     /// Takes back `target`, and waits until the platform has.
     pub async fn unsend(&self, target: MessageId) -> Result<MessageId, String> {
         self.act(Act::Unsend(target)).await
+    }
+
+    /// Asks the conversation about its background agents: the answer, or
+    /// why not.
+    pub async fn jobs(&self, request: job::Request) -> Result<Value, String> {
+        let (reply, answer) = oneshot::channel();
+        self.mailbox
+            .send(Event::Jobs { request, reply })
+            .map_err(|_| "这个群的会话已经停了".to_owned())?;
+        answer.await.map_err(|_| "没等到回答".to_owned())?
     }
 
     async fn act(&self, act: Act) -> Result<MessageId, String> {

@@ -17,6 +17,31 @@ use tracing::warn;
 use pi::{Ask, Record};
 pub use run::{Finished, Progress, Start, run};
 
+/// The most jobs a conversation runs at once.
+pub const MOST: usize = 3;
+/// How long a job may take; then it is aborted, and reports how far it got.
+pub const TIME: Duration = Duration::from_secs(30 * 60);
+
+/// What a tool asks of its conversation's background agents.
+#[derive(Debug)]
+pub enum Request {
+    Start {
+        task: String,
+        title: Option<String>,
+    },
+    Steer {
+        job: u32,
+        message: String,
+    },
+    Cancel {
+        job: u32,
+    },
+    /// One job's, or every running one's.
+    Status {
+        job: Option<u32>,
+    },
+}
+
 /// How long pi has to settle once aborted, and to give its last text.
 const GRACE: Duration = Duration::from_secs(15);
 

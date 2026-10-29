@@ -77,7 +77,12 @@ impl Conversation {
                     let reason = format!("{} 用 /kill 停下了", committed.message.sender.name);
                     self.end(End::Kill(reason)).await?;
                 }
-                return Ok(());
+                let jobs = self.cancel_jobs();
+                if jobs.is_empty() {
+                    return Ok(());
+                }
+                let jobs: Vec<String> = jobs.iter().map(|job| format!("job#{job}")).collect();
+                format!("后台的 {} 也停了", jobs.join("、"))
             }
             Command::Model(argument) => self.model(argument.as_deref()).await?,
             Command::Effort(argument) => self.effort(argument).await?,
@@ -232,6 +237,9 @@ impl Conversation {
                 None => "idle".to_owned(),
             },
         );
+        for job in self.job_lines() {
+            line("job", job);
+        }
         if let Some(mark) = settings.cleared_upto {
             line("context", format!("after #{mark}"));
         }

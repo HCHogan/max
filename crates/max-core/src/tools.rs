@@ -52,7 +52,7 @@ pub struct MaxTool {
     pub job: bool,
 }
 
-pub const MAX_TOOLS: [MaxTool; 8] = [
+pub const MAX_TOOLS: [MaxTool; 12] = [
     MaxTool {
         name: "context_read",
         description: "读消息或摘要的全文，一页一页地读；也能读一条消息和它前后的几条。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
@@ -149,6 +149,48 @@ pub const MAX_TOOLS: [MaxTool; 8] = [
         context_search(args: { query: string; limit?: number; from?: string; to?: string }): Promise<{ results: { kind: \"message\" | \"summary\"; ref: string; time: string; text: string; read: { id: number; before: number; after: number } | { summary: number } }[] }>;",
         job: true,
         per_run: Some(20),
+    },
+    MaxTool {
+        name: "agent",
+        description: "交给一个后台 agent 去做一件要花时间的事，马上返回 job 编号；它做完了，报告作为 [job#N 完成] 回到你这里。",
+        input: r#"{"type":"object","properties":{"task":{"type":"string","minLength":1,"description":"要它做的事，连同背景，写全"},"title":{"type":"string","maxLength":40,"description":"一句话的标题"}},"required":["task"],"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"job":{"type":"string"}},"required":["job"]}"#,
+        declaration: "/** 起一个后台 agent，去做一件要花时间的事：查一堆资料、读很多网页或文件、写代码跑实验。它在本群的 VM 里跑，和你共用 /work，自己有 shell、读写文件、context_search、context_read、web_search；不能在群里说话，也不能发图发文件、撤回、禁言。\n  \
+        它看不到群里的对话，只看得到 task，所以背景、要做什么、做到什么程度、报告要写什么都写进去。title 是一句话的标题，agent_status 里显示。\n  \
+        马上返回 { job: \"job#3\" }，你接着聊。它做完了，报告作为 [job#3 完成] 出现在你的新消息里，全文另存在 /work/.max/jobs/ 下，由你决定在群里怎么说。同时最多 3 个，每个最多 30 分钟，到点停下、交出做到一半的结果。一次运行最多起 3 个。 */\n\
+        agent(args: { task: string; title?: string }): Promise<{ job: string }>;",
+        job: false,
+        per_run: Some(3),
+    },
+    MaxTool {
+        name: "agent_steer",
+        description: "给还在跑的后台 agent 补一句话：改方向、补信息、回答它。",
+        input: r#"{"type":"object","properties":{"job":{"type":["string","integer"],"description":"job#3 或 3"},"message":{"type":"string","minLength":1}},"required":["job","message"],"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"job":{"type":"string"}},"required":["job"]}"#,
+        declaration: "/** 给还在跑的后台 agent 补一句话：改方向、补充信息、转达群友的回答。它跑完手上这步工具、下一次想之前看到。job 是 \"job#3\" 或 3。 */\n\
+        agent_steer(args: { job: string | number; message: string }): Promise<{ job: string }>;",
+        job: false,
+        per_run: None,
+    },
+    MaxTool {
+        name: "agent_cancel",
+        description: "停掉一个后台 agent，不要它的结果了。",
+        input: r#"{"type":"object","properties":{"job":{"type":["string","integer"],"description":"job#3 或 3"}},"required":["job"],"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"job":{"type":"string"}},"required":["job"]}"#,
+        declaration: "/** 停掉一个后台 agent，不要它的结果了；它在 /work 里留下的东西还在。 */\n\
+        agent_cancel(args: { job: string | number }): Promise<{ job: string }>;",
+        job: false,
+        per_run: None,
+    },
+    MaxTool {
+        name: "agent_status",
+        description: "看还在跑的后台 agent：标题、跑了几分钟、调了几次模型和工具、最近用的工具。",
+        input: r#"{"type":"object","properties":{"job":{"type":["string","integer"],"description":"job#3 或 3；不填是全部"}},"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"jobs":{"type":"array","items":{"type":"object","properties":{"job":{"type":"string"},"title":{"type":"string"},"minutes":{"type":"integer"},"calls":{"type":"integer"},"tools":{"type":"integer"},"tool":{"type":["string","null"]}},"required":["job","title","minutes","calls","tools","tool"]}}},"required":["jobs"]}"#,
+        declaration: "/** 看还在跑的后台 agent：标题、跑了几分钟、调了几次模型（calls）和工具（tools）、最近用的工具。job 不填就是全部；做完的、停掉的不在里面。 */\n\
+        agent_status(args: { job?: string | number }): Promise<{ jobs: { job: string; title: string; minutes: number; calls: number; tools: number; tool: string | null }[] }>;",
+        job: false,
+        per_run: None,
     },
 ];
 

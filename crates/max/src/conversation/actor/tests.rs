@@ -10,11 +10,14 @@ use max_core::run::Outcome;
 use max_db::summaries;
 use tokio::sync::{mpsc, oneshot};
 
+use serde_json::json;
+
 use super::*;
 use crate::command;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, shared, text};
 use crate::historian::Captured;
 use crate::inbound::InNode;
+use crate::job::{Ending, Finished, How, Request};
 use crate::llm::testing::{Answer, Script};
 
 const PATIENCE: Duration = Duration::from_secs(5);
@@ -37,13 +40,24 @@ impl Harness {
 
     /// With 小明 as Max's owner, if `xiaoming_owns`.
     async fn with_owner(pool: PgPool, idle_window_secs: u64, xiaoming_owns: bool) -> Self {
-        Self::start(pool, idle_window_secs, xiaoming_owns, true).await
+        Self::start(pool, idle_window_secs, xiaoming_owns, true, |_| {}).await
     }
 
     /// Without proactive replies: chatter starts no classifier call that
     /// races the core's calls for the script's answers.
     async fn unprompted(pool: PgPool, idle_window_secs: u64) -> Self {
-        Self::start(pool, idle_window_secs, false, false).await
+        Self::start(pool, idle_window_secs, false, false, |_| {}).await
+    }
+
+    /// With job#1, titled `title`, running as far as the actor knows:
+    /// where its steers go.
+    async fn with_job(pool: PgPool, title: &str) -> (Self, UnboundedReceiver<String>) {
+        let mut steered = None;
+        let h = Self::start(pool, 300, true, false, |actor| {
+            steered = Some(actor.jobs.pretend(title));
+        })
+        .await;
+        (h, steered.unwrap())
     }
 
     async fn start(
@@ -51,6 +65,7 @@ impl Harness {
         idle_window_secs: u64,
         xiaoming_owns: bool,
         proactive: bool,
+        prepare: impl FnOnce(&mut Conversation),
     ) -> Self {
         let mut conn = pool.acquire().await.unwrap();
         let place = Arc::new(group(&mut conn).await);
@@ -77,9 +92,10 @@ impl Harness {
         shared.historian = Some(historian);
         let mut scope = Scope::new();
         let (mailbox, rx) = mpsc::unbounded_channel();
-        let actor = Conversation::new(Arc::new(shared), place, mailbox.clone())
+        let mut actor = Conversation::new(Arc::new(shared), place, mailbox.clone())
             .await
             .unwrap();
+        prepare(&mut actor);
         let (done_tx, done) = oneshot::channel();
         scope.spawn(move |_| async move {
             actor.run(rx).await.unwrap();
@@ -591,4 +607,102 @@ async fn a_post_takes_back_a_message(pool: PgPool) {
     assert!(refused.await.unwrap().is_err());
     h.stop().await;
     assert!(h.outbound.try_recv().is_err());
+}
+
+fn finished(how: How, text: &str) -> Finished {
+    Finished {
+        ending: Ending {
+            how,
+            text: Some(text.to_owned()),
+        },
+        file: Some("/work/.max/jobs/job-1.md".to_owned()),
+    }
+}
+
+async fn ask(h: &Harness, request: Request) -> Result<serde_json::Value, String> {
+    let (reply, answer) = oneshot::channel();
+    h.mailbox.send(Event::Jobs { request, reply }).unwrap();
+    tokio::time::timeout(PATIENCE, answer)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_jobs_report_wakes_max(pool: PgPool) {
+    let (mut h, _) = Harness::with_job(pool, "查票价").await;
+    // The turn that started the job had rows to start from.
+    h.send(from_xiaoming(0, vec![text("票价多少来着")]));
+    h.script.push(Answer::says("票价查到了，一百块"));
+    let finished = finished(How::Done, "一百块。");
+    h.mailbox.send(Event::JobDone { job: 1, finished }).unwrap();
+    assert_eq!(h.said().await.1, "票价查到了，一百块");
+    let volatile = h.request_tail(0);
+    assert!(
+        volatile.ends_with("[job#1 完成] 查票价\n一百块。\n（全文在 /work/.max/jobs/job-1.md）\n"),
+        "{volatile}"
+    );
+    // It ended: no more steering it.
+    let steered = ask(
+        &h,
+        Request::Steer {
+            job: 1,
+            message: "再查查".into(),
+        },
+    )
+    .await;
+    assert!(steered.unwrap_err().contains("job#1 不在跑了"));
+    h.stop().await;
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_job_is_steered_listed_and_cancelled(pool: PgPool) {
+    let (mut h, mut steered) = Harness::with_job(pool, "查票价").await;
+    let steer = Request::Steer {
+        job: 1,
+        message: "只要硬座".into(),
+    };
+    assert_eq!(ask(&h, steer).await.unwrap(), json!({ "job": "job#1" }));
+    assert_eq!(steered.recv().await.unwrap(), "只要硬座");
+    let status = ask(&h, Request::Status { job: None }).await.unwrap();
+    assert_eq!(status["jobs"][0]["job"], "job#1");
+    assert_eq!(status["jobs"][0]["title"], "查票价");
+    assert_eq!(status["jobs"][0]["calls"], 0);
+    let cancelled = ask(&h, Request::Cancel { job: 1 }).await.unwrap();
+    assert_eq!(cancelled, json!({ "job": "job#1" }));
+    // What a cancelled job says when it ends wakes nobody.
+    let finished = finished(How::Done, "一百块。");
+    h.mailbox.send(Event::JobDone { job: 1, finished }).unwrap();
+    let status = ask(&h, Request::Status { job: None }).await.unwrap();
+    assert_eq!(status, json!({ "jobs": [] }));
+    h.stop().await;
+    assert!(h.turns().await.is_empty());
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn without_a_job_model_no_job_starts(pool: PgPool) {
+    let (mut h, _) = Harness::with_job(pool, "查票价").await;
+    let start = Request::Start {
+        task: "查一下".into(),
+        title: None,
+    };
+    assert_eq!(ask(&h, start).await.unwrap_err(), "没配后台 agent 用的模型");
+    h.stop().await;
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn kill_stops_the_jobs_too(pool: PgPool) {
+    let (mut h, _) = Harness::with_job(pool, "查票价").await;
+    h.send(from_xiaoming(0, vec![me(), text(" /status")]));
+    let (_, status) = h.said().await;
+    assert!(
+        status.contains("job       job#1 · 0m · 0 calls · 查票价"),
+        "{status}"
+    );
+    h.send(from_xiaoming(1, vec![me(), text(" /kill")]));
+    let (_, killed) = h.said().await;
+    assert!(killed.contains("/kill → 后台的 job#1 也停了"), "{killed}");
+    let status = ask(&h, Request::Status { job: None }).await.unwrap();
+    assert_eq!(status, json!({ "jobs": [] }));
+    h.stop().await;
 }

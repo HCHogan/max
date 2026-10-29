@@ -92,6 +92,8 @@ pub struct Conversation {
     stopping: Option<Instant>,
     next_task: u64,
     mailbox: UnboundedSender<Event>,
+    /// The background agents running; they don't outlive the actor.
+    jobs: jobs::Jobs,
 }
 
 struct Active {
@@ -150,6 +152,7 @@ impl Conversation {
             stopping: None,
             next_task: 0,
             mailbox,
+            jobs: jobs::Jobs::default(),
         })
     }
 
@@ -239,6 +242,11 @@ impl Conversation {
                 self.decide(decisions).await
             }
             Event::Compacted(result) => self.compacted(result).await,
+            Event::Jobs { request, reply } => {
+                let _ = reply.send(self.job_request(request));
+                Ok(())
+            }
+            Event::JobDone { job, finished } => self.job_done(job, finished).await,
             Event::Stop => {
                 self.stop();
                 Ok(())
@@ -704,5 +712,6 @@ impl Conversation {
 }
 
 mod commands;
+mod jobs;
 #[cfg(test)]
 mod tests;

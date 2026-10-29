@@ -73,7 +73,7 @@
 | QQ group allowlist | ✓ | 改成 `/bind`：平台本身只让创建者拉群，没绑定的群不服务，见 [QQ 官方机器人](#qq-官方机器人) |
 | Private chats | ✓ | 改成白名单：名单上的人私聊才触发，见[运行流程](#运行流程)第 2 步。Haskell 版私聊一律回复 |
 | Agent loop | ✓ | 不再挂处理中和失败的 reaction，失败时回一句话，见[群里看到的](#群里看到的) |
-| Background agents and feedback | — | pi + MCP，见[后台 agent](#后台-agent) |
+| Background agents and feedback | 部分 | pi + MCP，见[后台 agent](#后台-agent)。2026-10-30 做了 `agent` 系列工具，job 结果唤醒 Max；job 中途提问还没有 |
 | Prompt shape and budget | 部分 | 见[上下文投影](#上下文投影) |
 | Memory | — | |
 | Group lingo | — | |
@@ -222,7 +222,7 @@ v1 只定义它用得到的几节：database、`platforms.qq`、llm，加上顶�
 - 会话 actor 是这个会话唯一的控制线程，见[会话 actor](#会话-actor)。它的信箱是这个会话所有事件的唯一入口，它自己只 await 数据库。它下面挂三个 scope：
   - `io`：当前核心在途的模型调用和工具调用（`run_code`、`shell`）。每个核心一个，核心结束时（`/kill`、失败、重启的宽限期到期）整个关掉。
   - `side`：intent 分类这类不属于核心的调用。
-  - `jobs`：后台 agent（v1 之后），能比发起它的核心活得长。
+  - `jobs`：后台 agent，能比发起它的核心活得长。每个 job 一个自己的 scope，丢掉就停了（2026-10-30）。
 - `Scope` 由 `JoinSet` 和 `CancellationToken` 组成（2026-10-27 去掉了 reaper、defer 和 Background）：
   - `spawn` 给子任务一个子令牌，同一个令牌也返回给调用方，用来单独取消这一个任务。
   - `close(grace)`：先取消，在宽限期内等子任务自己结束；到期调 `JoinSet::shutdown`，也就是 abort 全部，再等它们真正停下。
@@ -533,13 +533,13 @@ struct RunRecord { spec: RunSpec, base: Context, transcript: Vec<Item> }
 enum Input {
     Messages { ids: Vec<MessageId>, item: Item, people: Vec<PrincipalId> }, // 时间线上的新消息和事件，引用 ledger，同时存核心看到的样子；people 是第一次出现的人
     Wake(Wake),
-    // 以后：JobResult { job, item }（job 只在内存里，报告正文只有这里有）、AutomationFire { fire, item }
+    // 以后：AutomationFire { fire, item }。job 结果没有单独的输入，是一种 Wake，见下
 }
 
 struct Wake {
-    ids: Vec<MessageId>,          // 它涉及的消息，作废的 actor 已经滤掉了
-    reason: Reason,
-    item: Option<Item>,           // 给模型看的判定行；直接触发为空，消息行上已经标着
+    ids: Vec<MessageId>,          // 它涉及的消息，作废的 actor 已经滤掉了；job 结果为空
+    reason: Reason,               // Direct、Judged { note }、Job { job }（2026-10-30 加）
+    item: Option<Item>,           // 给模型看的判定行或 job 的报告；直接触发为空，消息行上已经标着
 }
 
 enum Outcome { Answered, Silent, Interrupted, Failed(FailReason), Lost }
@@ -1392,7 +1392,7 @@ struct Verdict { trigger: bool, reason: String }
 ### 纯 codemode
 
 - **模型只有两个工具：`run_code` 和 `shell`。** tools 数组固定不变，请求前缀不会因为工具变化而失效；要守的是"固定"，不是"只有一个"。`run_code` 的参数是 `{code, args?, timeout_ms?}`：`code` 是 async 函数体，`return` 的值就是结果；`timeout_ms` 和 `shell` 的一样。同一轮可以有多个 `run_code`，各跑各的。
-- **程序里调 Max 的工具**：`tools.<名字>(args)` 返回 Promise，`Promise.all` 就是并发。沿用 Haskell 版 SDK 的形状：`max.raw` 拿完整的成败结果，`max.cancel` 和 `max.race` 取消调用，`agent()` 派后台 agent。做成的（2026-10-29）：`tools.x()` 失败抛 `ToolError`；`max.raw` 不抛，返回 `{ok: true, value}` 或 `{ok: false, error: {code, message}}`；`max.cancel` 中止那次请求，`max.race` 取先完成的、取消其余的；没 await 就读字段会直接报错，提示先 await。`agent()` 等后台 agent 做了再加。
+- **程序里调 Max 的工具**：`tools.<名字>(args)` 返回 Promise，`Promise.all` 就是并发。沿用 Haskell 版 SDK 的形状：`max.raw` 拿完整的成败结果，`max.cancel` 和 `max.race` 取消调用，`tools.agent()` 派后台 agent（2026-10-30 做了，见[后台 agent](#后台-agent)）。做成的（2026-10-29）：`tools.x()` 失败抛 `ToolError`；`max.raw` 不抛，返回 `{ok: true, value}` 或 `{ok: false, error: {code, message}}`；`max.cancel` 中止那次请求，`max.race` 取先完成的、取消其余的；没 await 就读字段会直接报错，提示先 await。
 - **`shell`**（2026-10-28 定）：跑终端命令不用从 JS 绕。只有 `run_code` 的话，每次都要写 `child_process`，非零退出直接抛异常，stderr 拿不到；命令套在 JS 字符串里再套进 JSON，转义多一层，模板字符串里的 `${VAR}` 还会先被 JS 吃掉。主流模型在 shell 工具上训练得最多，形状贴近它们熟悉的最好用。
   - 参数 `{command, workdir?, timeout_ms?}`，贴近 Codex 的 shell 工具。在群 VM 里用 `bash -lc` 执行，默认工作目录 `/work`。
   - 结果是退出码加合并的输出；过长保留头尾，全文写进 VM 里的文件。墙钟上限和 `run_code` 一样。
@@ -1549,7 +1549,14 @@ v1 之后做。
 - 适配器在 `crates/max/src/job.rs`（2026-10-30）：`job::pi` 是协议，`job::drive` 给任务、转 steer、到点中断、等它停下，取最后一条助手消息的文字作报告，再关 stdin。用量、工具调用经 `Watch` 报出去。没有再抽一层 `AgentBackend`：只有 pi 一个实现，等真有第二个再抽。命令用 `Vm::open` 起，stdin 一直开着。
 - **模型**（2026-10-30 定）：`[llm]` 里单独配 `job = { model, effort }`，没配就没有后台 agent。pi 不拿 provider 的 key：它的模型请求发到 VM 里的 `http://127.0.0.1:7777/llm/<端点>`，和 MCP 是同一个服务、同一个 token。宿主认出是哪个 job 的会话，把 `model` 换成配置里的，带上 provider 的 key 和头转过去，回答原样流回来。只认这个 provider 协议的端点（`chat/completions` 或 `responses`），请求最大 64 MiB；job 结束、会话吊销后 token 就没用了。没选的办法：cliproxy 的管理接口能在运行时加删 key，但改完要写回配置文件，tank 上那是 sops 渲染出来的；给 VM 一个固定的 cliproxy key，等于给了群里所有人。
 - 领域工具走 Max 的 MCP 服务，见 [MCP 通道](#mcp-通道)。每个 job 开一个会话，只开放只读工具，比如 `context_search`、`context_read`、`memory_list`；job 结束时吊销。pi 在 VM 里也能跑 codemode 的 runner，用 job 自己的会话批量调这些工具。
-- 会影响群的动作（发消息、发文件、撤回、禁言、建自动化）不给后台 agent。它的结果是一种输入（`JobResult`）：会话有核心在跑就喂给它，没有就作为触发起一个；由前台的模型决定怎么说。job 中途提问同样处理，人的回答再由前台用工具 steer 回去。
+- 会影响群的动作（发消息、发文件、撤回、禁言、建自动化）不给后台 agent。它的结果是一种唤醒（`Reason::Job`）：会话有核心在跑就喂给它，没有就起一个；由前台的模型决定怎么说。job 中途提问同样处理，人的回答再由前台用工具 steer 回去（还没做：现在 pi 的对话框一律回取消）。
+- **工具**（2026-10-30）：Max 在 `run_code` 里用四个 Max 工具管 job，都由会话 actor 回答（经 `Poster`，带回信通道），后台 agent 自己用不了：
+  - `agent({ task, title? })` 马上返回 `{ job: "job#3" }`。job 在会话 actor 的表里，编号只在这次运行里递增，重启从 1 数。同时最多 3 个，每个 30 分钟，到点先 `clear_queue` 再 `abort`，交出做到一半的。一次运行最多起 3 个。没配 `llm.job`、没有 VM、正在重启时报错。
+  - `agent_steer({ job, message })` 转给 pi 的 `steer`；`agent_cancel({ job })` 从表里删掉，scope 丢掉就停了，unit 由 VM 的 stopper 停，结果不要了；`agent_status({ job? })` 列标题、分钟、模型和工具调用次数、最近的工具。`job` 写 `job#3` 或 3。
+  - `/kill` 连 job 一起停，回一句停了哪些；`/status` 每个 job 一行。
+- **结果**：pi 停下后取最后一条助手消息，存成 `/work/.max/jobs/job-<n>-<时间>.md`，再给会话 actor 一个 `JobDone`。actor 起一个 `Wake { ids: [], reason: Job { job }, item }`，`item` 是 `[job#3 完成] 标题`、`[job#3 到点停了，下面是做到一半的] 标题` 或 `[job#3 失败] 标题：原因`，下面是报告；超过单条上限只给开头 2000 字。末尾写全文的路径。和判定一样，有核心就进它的下一批，没有就起一个。已经取消的 job 的结果丢掉。这条唤醒失败了（模型出错）不补发，全文还在文件里。
+- **用量**：pi 每次模型调用记一行 `llm_usage`，`purpose` 是 `job`（迁移 0015），没有 turn。
+- **pi 的系统提示**：追加一段，说它是 Max 的后台 agent，看不到群聊，要聊天记录用 `mcp__max__context_search`、`context_read`，查网页用 `mcp__max__web_search` 和 `webread`；最后一条消息就是报告，先结论后要点和出处，2000 字以内；文件放 `/work`。
 
 pi 适配器要处理的行为（2026-10-29 用 pi 1.4.0 实测）：
 
