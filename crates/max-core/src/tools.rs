@@ -32,6 +32,29 @@ pub const TOOLS: [ToolSpec; 2] = [
     },
 ];
 
+/// A Max tool: what a program calls as `tools.<name>(args)`, through the
+/// MCP service. The system prompt shows each one's declaration, so the
+/// list is fixed too.
+#[derive(Debug)]
+pub struct MaxTool {
+    pub name: &'static str,
+    pub description: &'static str,
+    /// JSON Schemas.
+    pub input: &'static str,
+    pub output: &'static str,
+    /// TypeScript, for the system prompt.
+    pub declaration: &'static str,
+}
+
+pub const MAX_TOOLS: [MaxTool; 1] = [MaxTool {
+    name: "context_read",
+    description: "读一条消息的全文，一页一页地读。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
+    input: r#"{"type":"object","properties":{"id":{"type":"integer","description":"消息的编号，#123 就是 123"},"page":{"type":"integer","minimum":1,"description":"第几页，默认 1"}},"required":["id"],"additionalProperties":false}"#,
+    output: r#"{"type":"object","properties":{"text":{"type":"string"},"page":{"type":"integer"},"pages":{"type":"integer"}},"required":["text","page","pages"]}"#,
+    declaration: "/** 读一条消息的全文。上下文里太长的消息只有开头，后面写着“全文见 #id”。\n  一页不超过上下文里一条消息的上限，pages 是总页数。 */\n\
+        context_read(args: { id: number; page?: number }): Promise<{ text: string; page: number; pages: number }>;",
+}];
+
 /// A tool call that is well formed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Call {
@@ -119,6 +142,17 @@ mod tests {
         for tool in TOOLS {
             let schema: serde_json::Value = serde_json::from_str(tool.parameters).unwrap();
             assert_eq!(schema["type"], "object", "{}", tool.name);
+        }
+    }
+
+    #[test]
+    fn max_tool_schemas_are_json() {
+        for tool in MAX_TOOLS {
+            for schema in [tool.input, tool.output] {
+                let schema: serde_json::Value = serde_json::from_str(schema).unwrap();
+                assert_eq!(schema["type"], "object", "{}", tool.name);
+            }
+            assert!(tool.declaration.contains(&format!("\n{}(args", tool.name)));
         }
     }
 
