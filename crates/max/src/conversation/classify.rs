@@ -22,6 +22,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::warn;
 
 use super::project::{direct_mark, people, shown_line};
+use super::report::Report;
 use super::{Event, Place};
 use crate::llm::Chosen;
 
@@ -43,26 +44,11 @@ pub struct Job {
     pub offset: FixedOffset,
 }
 
-/// Sends the `Verdict`, or None from `Drop` if the task never got there.
-struct Report {
-    mailbox: UnboundedSender<Event>,
-    verdict: Option<Option<Verdict>>,
-}
-
-impl Drop for Report {
-    fn drop(&mut self) {
-        let verdict = self.verdict.take().flatten();
-        let _ = self.mailbox.send(Event::Verdict(verdict));
-    }
-}
-
 pub async fn classify(job: Job, mailbox: UnboundedSender<Event>) {
-    let mut report = Report {
-        mailbox,
-        verdict: None,
-    };
+    // None if the task never got there.
+    let report = Report::new(mailbox, || Event::Verdict(None));
     match run(&job).await {
-        Ok(verdict) => report.verdict = Some(verdict),
+        Ok(verdict) => report.send(Event::Verdict(verdict)),
         Err(error) => warn!(conversation = %job.place.conversation, %error, "classifying failed"),
     }
 }

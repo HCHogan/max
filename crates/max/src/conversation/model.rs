@@ -10,42 +10,13 @@ use max_core::segment::Segmenter;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::warn;
 
+use super::report::Report;
 use super::{Event, TaskId};
 use crate::llm::Chosen;
 use crate::media::pictures::Pictures;
 
 /// The longest wait before a retry.
 const MAX_BACKOFF: Duration = Duration::from_secs(8);
-
-/// Sends the task's `ModelDone`: the result when it ends, or from `Drop`
-/// when the task is aborted or panics, so the actor never waits for a call
-/// that is gone.
-struct Report {
-    task: TaskId,
-    mailbox: UnboundedSender<Event>,
-    sent: bool,
-}
-
-impl Report {
-    fn done(mut self, out: Result<max_core::item::ModelOutput, String>) {
-        self.sent = true;
-        let _ = self.mailbox.send(Event::ModelDone {
-            task: self.task,
-            out,
-        });
-    }
-}
-
-impl Drop for Report {
-    fn drop(&mut self) {
-        if !self.sent {
-            let _ = self.mailbox.send(Event::ModelDone {
-                task: self.task,
-                out: Err("the model call ended without a result".into()),
-            });
-        }
-    }
-}
 
 pub async fn call(
     chosen: Chosen,
@@ -54,11 +25,10 @@ pub async fn call(
     task: TaskId,
     mailbox: UnboundedSender<Event>,
 ) {
-    let report = Report {
+    let report = Report::new(mailbox.clone(), move || Event::ModelDone {
         task,
-        mailbox: mailbox.clone(),
-        sent: false,
-    };
+        out: Err("the model call ended without a result".into()),
+    });
     let pictures = match pictures {
         Some(pictures) => pictures.read(&request).await,
         None => max_llm::Pictures::default(),
@@ -78,7 +48,7 @@ pub async fn call(
             Err(error) => break Err(error.to_string()),
         }
     };
-    report.done(out);
+    report.send(Event::ModelDone { task, out });
 }
 
 async fn once(

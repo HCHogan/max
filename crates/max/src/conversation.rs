@@ -6,6 +6,7 @@ pub mod classify;
 pub mod ingest;
 pub mod model;
 pub mod project;
+mod report;
 #[cfg(test)]
 pub(crate) mod testing;
 mod tool;
