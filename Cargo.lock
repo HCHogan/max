@@ -1798,6 +1798,7 @@ dependencies = [
  "max-llm",
  "qqbot",
  "rand",
+ "reqwest",
  "rmcp",
  "russh",
  "serde",
