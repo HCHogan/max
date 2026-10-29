@@ -1,8 +1,8 @@
 //! Imports the Haskell version's database into maxx's, once, at go-live:
 //! everything into an empty database in one transaction, reading the old
 //! one read-only; then the model's copies of the imported pictures; and,
-//! any time after, the old captions, and then the sticker library's
-//! vectors. The mapping is "导入" in
+//! any time after, the old captions, and then the old vectors: the sticker
+//! library's, and those of rows and summaries. The mapping is "导入" in
 //! docs/rust-rewrite.md. The old schema's code lives only here, and goes
 //! once maxx has run on the imported data for a while.
 
@@ -73,10 +73,10 @@ enum Command {
         #[arg(long)]
         to: String,
     },
-    /// After the captions, while maxx serves too: the sticker library's
-    /// old vectors, so that the embedding worker needn't make them again.
-    /// It migrates the new database first, so it can run before a maxx
-    /// with the worker starts.
+    /// After the captions, while maxx serves too: the old vectors of the
+    /// sticker library, the rows and the summaries, so that the workers
+    /// needn't make them again. It migrates the new database first, so it
+    /// can run before a maxx with the workers starts.
     Vectors {
         /// The old database's URL, opened read-only.
         #[arg(long)]

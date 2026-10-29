@@ -60,7 +60,12 @@ create table messages (
     reply_to_canonical_message_id bigint,
     canonical_content jsonb not null,
     segments jsonb not null default '[]',
-    ingest_seq bigint not null
+    ingest_seq bigint not null,
+    embedding public.vector,
+    embedding_model text,
+    embedding_dimensions integer,
+    embedding_content_hash text,
+    embedding_updated_at timestamptz
 );
 
 create table platform_events (
@@ -92,7 +97,12 @@ create table conversation_compartments (
     state text not null,
     historian_profile text not null,
     created_at timestamptz not null,
-    activated_at timestamptz
+    activated_at timestamptz,
+    embedding public.vector,
+    embedding_model text,
+    embedding_dimensions integer,
+    embedding_content_hash text,
+    embedding_updated_at timestamptz
 );
 
 create table sessions (

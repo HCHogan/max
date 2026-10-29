@@ -607,3 +607,61 @@ async fn sticker_vectors_after(pool: PgPool) {
     vectors::import(&mut old, &mut new).await.unwrap();
     assert_eq!(stored(&mut new).await, expected);
 }
+
+#[sqlx::test]
+async fn row_and_summary_vectors_after(pool: PgPool) {
+    let (mut old, mut new, store) = setup(&pool, &files()).await;
+    import(&mut old, &mut new, &store, &accounts())
+        .await
+        .unwrap();
+    // Old vectors for rows that say something, 1001 and 1011, for 1002,
+    // which says too little, and for 1004, of another size; for an active
+    // summary, 1, one that stayed behind, 2, and a withdrawn one, 4.
+    let vectors = "update old.messages
+                   set embedding = array_fill($1::real, array[$2])::real[]::vector,
+                       embedding_model = 'bge-m3', embedding_dimensions = $2,
+                       embedding_updated_at = '2026-01-01 00:00+08'
+                   where canonical_message_id = any($3)";
+    let summaries = "update old.conversation_compartments
+                     set embedding = array_fill($1::real, array[1024])::real[]::vector,
+                         embedding_model = 'bge-m3', embedding_dimensions = 1024,
+                         embedding_updated_at = '2026-01-01 00:00+08'
+                     where id in (1, 2, 4)";
+    let set = async |value: f32| {
+        for (size, ids) in [(1024, vec![1001_i64, 1002, 1011]), (512, vec![1004])] {
+            sqlx::query(vectors)
+                .bind(value)
+                .bind(size)
+                .bind(ids)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query(summaries)
+            .bind(value)
+            .execute(&pool)
+            .await
+            .unwrap();
+    };
+    set(0.5).await;
+    vectors::import(&mut old, &mut new).await.unwrap();
+    let written = "select 'm', message_id, model, (embedding::real[])[1024]
+                   from message_embeddings e join messages m on m.id = e.message_id
+                   where e.conversation_id = m.conversation_id
+                   union all
+                   select 's', summary_id, e.model, (embedding::real[])[1024]
+                   from summary_embeddings e join summaries s on s.id = e.summary_id
+                   where e.conversation_id = s.conversation_id
+                   order by 1, 2";
+    let stored = async |new: &mut PgConnection| -> Vec<(String, i64, String, f32)> {
+        sqlx::query_as(written).fetch_all(new).await.unwrap()
+    };
+    let vector = |kind: &str, id| (kind.to_owned(), id, "bge-m3".to_owned(), 0.5);
+    let expected = vec![vector("m", 1001), vector("m", 1011), vector("s", 1)];
+    assert_eq!(stored(&mut new).await, expected);
+
+    // Again: what's there stays.
+    set(0.25).await;
+    vectors::import(&mut old, &mut new).await.unwrap();
+    assert_eq!(stored(&mut new).await, expected);
+}
