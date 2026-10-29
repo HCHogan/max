@@ -52,11 +52,13 @@ pub struct MaxTool {
 pub const MAX_TOOLS: [MaxTool; 6] = [
     MaxTool {
         name: "context_read",
-        description: "读一条消息的全文，一页一页地读。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
-        input: r#"{"type":"object","properties":{"id":{"type":"integer","description":"消息的编号，#123 就是 123"},"page":{"type":"integer","minimum":1,"description":"第几页，默认 1"}},"required":["id"],"additionalProperties":false}"#,
+        description: "读消息或摘要的全文，一页一页地读；也能读一条消息和它前后的几条。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
+        input: r#"{"type":"object","properties":{"id":{"type":"integer","description":"消息的编号，#123 就是 123"},"before":{"type":"integer","minimum":0,"maximum":50,"description":"连同它前面几条，默认 0"},"after":{"type":"integer","minimum":0,"maximum":50,"description":"连同它后面几条，默认 0"},"summary":{"type":"integer","description":"摘要的编号，summary#45 就是 45；和 id 二选一"},"page":{"type":"integer","minimum":1,"description":"第几页，默认 1"}},"additionalProperties":false}"#,
         output: r#"{"type":"object","properties":{"text":{"type":"string"},"page":{"type":"integer"},"pages":{"type":"integer"}},"required":["text","page","pages"]}"#,
-        declaration: "/** 读一条消息的全文。上下文里太长的消息只有开头，后面写着“全文见 #id”。\n  一页不超过上下文里一条消息的上限，pages 是总页数。 */\n\
-        context_read(args: { id: number; page?: number }): Promise<{ text: string; page: number; pages: number }>;",
+        declaration: "/** 读消息或摘要的全文。上下文里太长的消息只有开头，后面写着“全文见 #id”。\n  \
+        { id } 读这一条；加上 before、after（各最多 50）就是它连同前后各几条，一行一条，和上下文里一样，太长的照样只有开头。\n  \
+        { summary } 读一段摘要的全文，末尾写着它总结的是 #几 到 #几。一页不超过上下文里一条消息的上限，pages 是总页数。 */\n\
+        context_read(args: { id: number; before?: number; after?: number; page?: number } | { summary: number; page?: number }): Promise<{ text: string; page: number; pages: number }>;",
         per_run: None,
     },
     MaxTool {
