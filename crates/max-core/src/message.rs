@@ -212,6 +212,13 @@ pub enum DraftNode {
         message: MessageId,
         ordinal: u16,
     },
+    /// A picture a tool made, in the content store already. The model
+    /// can't write it.
+    Made {
+        sha256: String,
+        mime: String,
+        size: u64,
+    },
 }
 
 #[cfg(test)]

@@ -133,6 +133,9 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
                 offset: config.utc_offset,
                 page_tokens: 2000,
                 search: None,
+                work: None,
+                store: None,
+                poster: None,
             })
         };
         let shell = Tool::Shell {

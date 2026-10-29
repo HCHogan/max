@@ -43,6 +43,14 @@ pub async fn record(
     at: DateTime<Utc>,
 ) -> sqlx::Result<()> {
     let mut tx = conn.begin().await?;
+    remember(&mut tx, blob, at).await?;
+    link(&mut tx, message, ordinal, &blob.sha256).await?;
+    tx.commit().await
+}
+
+/// Records a file the store has, unless it is known: a message links to
+/// it later.
+pub async fn remember(conn: &mut PgConnection, blob: &Blob, at: DateTime<Utc>) -> sqlx::Result<()> {
     sqlx::query!(
         "insert into media (sha256, mime, size, width, height, model_sha256, first_seen_at)
          values ($1, $2, $3, $4, $5, $6, $7)
@@ -57,10 +65,9 @@ pub async fn record(
         blob.model_sha256,
         at
     )
-    .execute(&mut *tx)
+    .execute(conn)
     .await?;
-    link(&mut tx, message, ordinal, &blob.sha256).await?;
-    tx.commit().await
+    Ok(())
 }
 
 /// Records that the `ordinal`-th media of `message` is a file the store

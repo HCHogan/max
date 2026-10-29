@@ -24,7 +24,7 @@ use tracing::{debug, info, warn};
 
 use super::ingest;
 use super::project::{self, Projection};
-use super::{Event, Place, Post, Receipt, TaskId, classify, model, tool};
+use super::{Event, Place, Post, Poster, Receipt, TaskId, classify, model, tool};
 use crate::bind::Binds;
 use crate::historian::Notice;
 use crate::inbound::Inbound;
@@ -494,6 +494,9 @@ impl Conversation {
                             offset: self.shared.offset,
                             page_tokens: Budgets::for_window(a.chosen.window).single,
                             search: self.shared.search.clone(),
+                            work: None,
+                            store: self.shared.pictures.as_ref().map(|p| Arc::clone(&p.store)),
+                            poster: Some(Poster::new(self.mailbox.clone(), a.turn)),
                         };
                         let mailbox = self.mailbox.clone();
                         a.io.spawn(move |_| tool::call(vms, context, call, task, mailbox));

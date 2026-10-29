@@ -2,6 +2,7 @@
 //! service; see "MCP 通道". max-core's `MAX_TOOLS` declares them.
 
 mod context_read;
+mod send_image;
 mod service;
 mod web_search;
 
@@ -10,6 +11,7 @@ pub use service::{Grant, Sessions, serve};
 #[cfg(test)]
 mod runner_tests;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::FixedOffset;
@@ -18,7 +20,8 @@ use serde_json::Value;
 use sqlx::PgPool;
 use tracing::warn;
 
-use crate::conversation::Place;
+use crate::conversation::{Place, Poster};
+use crate::media::store::Store;
 use crate::search::Search;
 
 /// Where a call comes from: the conversation whose VM the program runs in.
@@ -30,6 +33,12 @@ pub struct Context {
     pub page_tokens: u32,
     /// None when no search is configured.
     pub search: Option<Arc<Search>>,
+    /// The host's side of the VM's /work, for a program run there.
+    pub work: Option<PathBuf>,
+    /// The content store, if there is one, for pictures sent.
+    pub store: Option<Arc<Store>>,
+    /// Says things in the conversation for the turn that called.
+    pub poster: Option<Poster>,
 }
 
 /// A call that failed, as the program sees it.
@@ -60,6 +69,7 @@ pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, F
     match name {
         "context_read" => context_read::run(context, args).await,
         "web_search" => web_search::run(context, args).await,
+        "send_image" => send_image::run(context, args).await,
         _ => Err(Failure::new(
             "unknown_tool",
             format!("没有 {name} 这个工具"),

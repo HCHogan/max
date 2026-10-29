@@ -64,6 +64,17 @@ pub fn prepare(bytes: &[u8]) -> ImageResult<Option<Prepared>> {
     }))
 }
 
+/// A picture as PNG, which QQ takes where it doesn't take WebP. Blocking.
+pub fn png(bytes: &[u8]) -> ImageResult<Vec<u8>> {
+    let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    reader.limits(limits());
+    let mut png = Vec::new();
+    reader
+        .decode()?
+        .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)?;
+    Ok(png)
+}
+
 /// Downloads are anyone's: a small file may say it is a huge picture.
 fn limits() -> Limits {
     let mut limits = Limits::default();

@@ -108,6 +108,9 @@ mod tests {
             offset: offset(),
             page_tokens: 2000,
             search: None,
+            work: None,
+            store: None,
+            poster: None,
         };
 
         let first = run(&context, json!({ "id": id })).await.unwrap();

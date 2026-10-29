@@ -49,7 +49,7 @@ pub struct MaxTool {
     pub per_run: Option<u32>,
 }
 
-pub const MAX_TOOLS: [MaxTool; 2] = [
+pub const MAX_TOOLS: [MaxTool; 3] = [
     MaxTool {
         name: "context_read",
         description: "读一条消息的全文，一页一页地读。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
@@ -70,6 +70,17 @@ pub const MAX_TOOLS: [MaxTool; 2] = [
         limit 1 到 10，默认 5。一次运行最多搜 20 次，要搜好几样就 Promise.all。要读全文，用 shell 跑 webread <url>。 */\n\
         web_search(args: { query: string; limit?: number }): Promise<{ results: { title: string; url: string; snippet: string; published?: string }[] }>;",
         per_run: Some(20),
+    },
+    MaxTool {
+        name: "send_image",
+        description: "把 /work 下的一张图发到本群，比如画的图表、截的图、下载的图片。",
+        input: r#"{"type":"object","properties":{"path":{"type":"string","minLength":1,"description":"/work 下的路径，相对路径从 /work 算"},"caption":{"type":"string","description":"图下面的说明，可以不写"}},"required":["path"],"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"]}"#,
+        declaration: "/** 把 /work 下的一张图发到本群：画的图表、截的图、下载的图片。PNG、JPEG、GIF、WebP，最大 10 MiB；路径上不能有符号链接。\n  \
+        caption 是图下面的一句说明，和图在同一条消息里。发出去了才返回，handle 是这条消息里那张图的句柄。一次运行最多发 5 张。\n  \
+        记录里已有的图和表情包不用这个，直接在回复里写它的句柄。 */\n\
+        send_image(args: { path: string; caption?: string }): Promise<{ handle: string }>;",
+        per_run: Some(5),
     },
 ];
 

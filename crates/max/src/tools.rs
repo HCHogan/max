@@ -51,6 +51,10 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
         .clamp(Duration::from_secs(1), SHELL_TIME_MAX);
     let ran = match tool {
         Tool::RunCode { code, args, .. } => {
+            let context = mcp::Context {
+                work: Some(vm.work().to_owned()),
+                ..context
+            };
             let grant = vms.open(context);
             run_code(&vm, &grant, &code, args, limit).await
         }
