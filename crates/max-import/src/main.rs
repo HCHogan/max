@@ -60,7 +60,9 @@ enum Command {
         media: PathBuf,
     },
     /// Any time after, while maxx serves too: the old captions of
-    /// pictures and stickers.
+    /// pictures and stickers. It migrates the new database first, so it
+    /// can also run before a maxx with the caption worker starts, which
+    /// would otherwise caption the last two weeks' pictures again.
     Captions {
         /// The old database's URL, opened read-only.
         #[arg(long)]
@@ -107,6 +109,7 @@ async fn main() -> Result<()> {
         Command::Captions { from, to } => {
             let mut old = read_only(&from).await?;
             let mut new = PgConnection::connect(&to).await?;
+            MIGRATOR.run(&mut new).await?;
             captions::import(&mut old, &mut new).await
         }
     }
