@@ -91,7 +91,7 @@ pub fn earlier(summaries: &[Summary], offset: FixedOffset) -> String {
             format!(
                 "[summary#{} {}] {}\n{}",
                 summary.id,
-                span(summary, offset),
+                span(summary.started_at, summary.ended_at, offset),
                 summary.title,
                 text.trim()
             )

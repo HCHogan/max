@@ -11,12 +11,12 @@
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
-use chrono::{DateTime, Datelike, FixedOffset, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
 
 use crate::ids::{PrincipalId, SummaryId};
 use crate::item::{Image, Item, ItemKind};
 use crate::message::{Content, MediaKind, Message, Node, Role};
-use crate::render::weekday;
+use crate::render::moment;
 use crate::run::Context;
 
 pub mod decay;
@@ -94,7 +94,8 @@ pub fn summary_block(summaries: &[Summary], budget: u32, offset: FixedOffset) ->
         } else {
             out.push('\n');
         }
-        let header = format!("[summary#{} {}]", summary.id, span(summary, offset));
+        let span = span(summary.started_at, summary.ended_at, offset);
+        let header = format!("[summary#{} {span}]", summary.id);
         let _ = match (level, &summary.brief, &summary.line) {
             (Level::Line, _, Some(line)) => writeln!(out, "{header} {}", line.trim()),
             (Level::Brief, Some(text), _) => {
@@ -106,17 +107,12 @@ pub fn summary_block(summaries: &[Summary], budget: u32, offset: FixedOffset) ->
     out
 }
 
-/// `2026-10-03 周五 14:02–16:30`, or with the end's date when it differs.
-pub(crate) fn span(summary: &Summary, offset: FixedOffset) -> String {
-    let start = summary.started_at.with_timezone(&offset);
-    let end = summary.ended_at.with_timezone(&offset);
-    let date = start.date_naive();
-    let head = format!(
-        "{date} {} {}",
-        weekday(date.weekday()),
-        start.format("%H:%M")
-    );
-    if end.date_naive() == date {
+/// `2026-10-03 周六 14:02–16:30`, or with the end's date when it differs.
+pub fn span(started_at: DateTime<Utc>, ended_at: DateTime<Utc>, offset: FixedOffset) -> String {
+    let head = moment(started_at, offset);
+    let start = started_at.with_timezone(&offset);
+    let end = ended_at.with_timezone(&offset);
+    if end.date_naive() == start.date_naive() {
         format!("{head}–{}", end.format("%H:%M"))
     } else {
         format!("{head} – {}", end.format("%m-%d %H:%M"))
@@ -183,13 +179,7 @@ impl Volatile {
 
 /// `[现在] 2026-10-29 周四 12:10`, on its own line.
 pub fn now_line(now: DateTime<Utc>, offset: FixedOffset) -> String {
-    let now = now.with_timezone(&offset);
-    let date = now.date_naive();
-    format!(
-        "[现在] {date} {} {}\n",
-        weekday(date.weekday()),
-        now.format("%H:%M")
-    )
+    format!("[现在] {}\n", moment(now, offset))
 }
 
 /// Most pictures one run is shown; past these, rows show only their text.

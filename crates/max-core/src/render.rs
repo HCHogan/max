@@ -130,6 +130,11 @@ impl<P: People> Render<'_, P> {
         self.content_of(None, content)
     }
 
+    /// A stored row's content, as its line shows it after the header.
+    pub fn body(&self, message: &Message) -> String {
+        self.content_of(Some(message.id), &message.content)
+    }
+
     fn content_of(&self, id: Option<MessageId>, content: &Content) -> String {
         let text = match content {
             Content::Message { reply_to, nodes } => {
@@ -234,6 +239,17 @@ fn card_line(card: &Card) -> String {
         }
     }
     format!("[card: {}]", parts.join(" | "))
+}
+
+/// `2026-10-03 周六 14:02`, in local time.
+pub fn moment(at: DateTime<Utc>, offset: FixedOffset) -> String {
+    let local = at.with_timezone(&offset);
+    let date = local.date_naive();
+    format!(
+        "{date} {} {}",
+        weekday(date.weekday()),
+        local.format("%H:%M")
+    )
 }
 
 pub(crate) fn weekday(day: Weekday) -> &'static str {
