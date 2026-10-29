@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select m.conversation_id, m.nodes as \"nodes: Json<Vec<Node>>\", md.sha256, md.mime, md.size\n        from messages m\n        join message_media mm on mm.message_id = m.id\n        join media md on md.sha256 = mm.sha256\n        where m.id = $1 and mm.ordinal = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "conversation_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "conversation_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "nodes: Json<Vec<Node>>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "nodes"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "sha256",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "media",
+            "name": "sha256"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "mime",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "media",
+            "name": "mime"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "size",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "media",
+            "name": "size"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "2f7e23d72ff66c046ff79e0d991f5f6d4b6e075561ef5b590cfe65060e2641ff"
+}

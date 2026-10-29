@@ -82,6 +82,7 @@ impl Setup {
             offset(),
         )
         .await
+        .unwrap()
         .unwrap();
         Outgoing {
             place: Arc::clone(&self.place),

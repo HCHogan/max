@@ -4,7 +4,8 @@
 //! leaking a raw `[split]` or `[reply#id]` into the group.
 //!
 //! Text is cut into chunks, one message each, at blank lines and at
-//! `[split]`, never inside a code fence. The cuts depend only on the text,
+//! `[split]`, never inside a code fence; a picture's handle is a chunk of
+//! its own, as QQ sends a picture on its own. The cuts depend only on the text,
 //! not on how it arrived: streamed in any pieces, it gives the same chunks
 //! as all at once. (The Haskell version also released long paragraphs at
 //! sentence ends while streaming, which made the result depend on timing.)
@@ -115,17 +116,18 @@ impl Chunker {
             self.lines.push(line.to_owned());
         } else if line.trim().is_empty() {
             self.cut(out);
-        } else if line.contains(SPLIT) {
-            let mut pieces = line.split(SPLIT);
-            if let Some(first) = pieces.next() {
-                self.lines.push(first.to_owned());
-            }
-            for piece in pieces {
-                self.cut(out);
-                self.lines.push(piece.to_owned());
-            }
         } else {
-            self.lines.push(line.to_owned());
+            let mut rest = line;
+            while let Some((at, len, picture)) = next_cut(rest) {
+                self.lines.push(rest[..at].to_owned());
+                self.cut(out);
+                if picture {
+                    self.lines.push(rest[at..at + len].to_owned());
+                    self.cut(out);
+                }
+                rest = &rest[at + len..];
+            }
+            self.lines.push(rest.to_owned());
         }
     }
 
@@ -172,6 +174,16 @@ pub(crate) fn is_fence(line: &str) -> bool {
     line.trim_start().starts_with("```")
 }
 
+/// The next cut in a line outside a fence: where, how long, and whether
+/// it is a picture's handle rather than a `[split]`.
+fn next_cut(line: &str) -> Option<(usize, usize, bool)> {
+    let split = line.find(SPLIT).map(|at| (at, SPLIT.len(), false));
+    let picture = line
+        .match_indices('[')
+        .find_map(|(at, _)| Some((at, parse::picture(&line[at..])?, true)));
+    split.into_iter().chain(picture).min()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +208,26 @@ mod tests {
     fn split_cuts_anywhere_on_a_line() {
         assert_eq!(chunks("一[split]二\n三[split]"), ["一", "二\n三"]);
         assert_eq!(chunks("[split][split]一[split]  [split]二"), ["一", "二"]);
+    }
+
+    #[test]
+    fn pictures_are_chunks_of_their_own() {
+        let text = "看这个[image#5.0: 一只猫](3秒)好笑吧\n[sticker#6.1]\n[video#7.0] 呢";
+        assert_eq!(
+            chunks(text),
+            [
+                "看这个",
+                "[image#5.0: 一只猫](3秒)",
+                "好笑吧",
+                "[sticker#6.1]",
+                "[video#7.0] 呢"
+            ]
+        );
+        assert_eq!(
+            chunks("```\n[sticker#6.1]\n```"),
+            ["```\n[sticker#6.1]\n```"]
+        );
+        assert_eq!(chunks("[image#5] [split]x"), ["[image#5]", "x"]);
     }
 
     #[test]
@@ -236,8 +268,7 @@ mod tests {
     /// Streaming in any two pieces gives the same chunks as all at once.
     #[test]
     fn streaming_is_invisible() {
-        let text =
-            "<think>想\n\n想</think>开头\n\n```py\nx = 1\n\ny = 2\n```\n中间[split]后面\n\n\n结尾";
+        let text = "<think>想\n\n想</think>开头\n\n```py\nx = 1\n\ny = 2\n```\n中间[split]后面[sticker#4.0: 狗]\n\n\n结尾";
         let whole = chunks(text);
         for (at, _) in text.char_indices() {
             let mut chunker = Chunker::default();
@@ -261,10 +292,19 @@ mod tests {
         use crate::message::DraftNode;
 
         let mut segmenter = Segmenter::new([PrincipalId(12)].into());
-        let mut out = segmenter.push("[reply#3] 第一条\n\n[silence]\n\n[mention#12] 第二");
+        let mut out =
+            segmenter.push("[reply#3] 第一条\n\n[silence]\n\n[mention#12] 第二[sticker#4.0]");
         out.extend(segmenter.finish());
         let sources: Vec<_> = out.iter().map(|s| s.source.as_str()).collect();
-        assert_eq!(sources, ["[reply#3] 第一条", "[mention#12] 第二"]);
+        assert_eq!(
+            sources,
+            ["[reply#3] 第一条", "[mention#12] 第二", "[sticker#4.0]"]
+        );
+        let picture = DraftNode::Picture {
+            message: MessageId(4),
+            ordinal: 0,
+        };
+        assert_eq!(out[2].draft.nodes, [picture]);
         assert_eq!(
             out[0].draft,
             Draft {

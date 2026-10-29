@@ -2,10 +2,11 @@
 //! `: description` and a `(attributes)` group glued on, the way the model
 //! sees them in history (`[mention#12: 小明]`). Only the id is trusted; the
 //! rest is consumed so that an echoed display form acts instead of leaking.
-//! Max writes quotes and mentions; forms that are only for reading
-//! (`[face: 吃瓜]`, `[unsend#7405]`, `[image#7405.0]` from old summaries)
-//! are dropped when echoed, and so is a copied row header. Anything else
-//! that doesn't parse stays text. Code fences are left alone.
+//! Max writes quotes, mentions and pictures (`[sticker#7405.0]`, a chunk
+//! of its own); forms that are only for reading (`[face: 吃瓜]`,
+//! `[unsend#7405]`, `[video#7405.0]`) are dropped when echoed, and so is
+//! a copied row header. Anything else that doesn't parse stays text. Code
+//! fences are left alone.
 
 use std::collections::BTreeSet;
 
@@ -59,7 +60,11 @@ fn restore_breaks(line: &str) -> String {
 
 /// The line without a row header, `[HH:MM 名字 #id]: `, copied from history.
 fn without_header(line: &str) -> &str {
-    let Some(close) = line.find("]: ") else {
+    // At the end of a chunk when a picture follows it.
+    let Some(close) = line
+        .find("]: ")
+        .or_else(|| line.strip_suffix("]:").map(str::len))
+    else {
         return line;
     };
     let header = line.as_bytes();
@@ -70,7 +75,7 @@ fn without_header(line: &str) -> &str {
         && header[4..6].iter().all(u8::is_ascii_digit)
         && header[6] == b' ';
     if clock && line[..close].contains(" #") {
-        &line[close + "]: ".len()..]
+        line[close + "]:".len()..].trim_start_matches(' ')
     } else {
         line
     }
@@ -115,6 +120,9 @@ impl Parsed {
                     self.text(&format!("@{name}"));
                 }
             }
+            Token::Picture(message, ordinal) => {
+                self.nodes.push(DraftNode::Picture { message, ordinal });
+            }
             Token::Silence | Token::Display | Token::ToolCall => {}
         }
     }
@@ -150,6 +158,8 @@ enum Token<'a> {
     Reply(MessageId),
     /// With the name, if the model wrote `[mention#12: 名字]`.
     Mention(PrincipalId, Option<&'a str>),
+    /// A picture's or a sticker's handle.
+    Picture(MessageId, u16),
     /// `[silence]`, or `[silence:名字]`, which used to react with a face.
     Silence,
     /// A form that is only for reading.
@@ -172,21 +182,32 @@ fn token(s: &str) -> Option<(Token<'_>, usize)> {
         .or_else(|| tool_call(s).map(|len| (Token::ToolCall, len)))
 }
 
+/// The length of the picture's handle `s` starts with, if it does.
+pub(super) fn picture(s: &str) -> Option<usize> {
+    match placeholder(s)? {
+        (Token::Picture(..), len) => Some(len),
+        _ => None,
+    }
+}
+
 fn placeholder(s: &str) -> Option<(Token<'_>, usize)> {
     let body = s.strip_prefix('[')?;
     let hash = body.find('#')?;
     let (verb, rest) = (&body[..hash], &body[hash + 1..]);
     let (id, mut at) = digits(rest)?;
     let medium = matches!(verb, "image" | "sticker" | "video" | "audio" | "file");
+    let mut ordinal = None;
     if medium && rest[at..].starts_with('.') {
-        let (_, len) = digits(&rest[at + 1..])?;
+        let (n, len) = digits(&rest[at + 1..])?;
+        ordinal = u16::try_from(n).ok();
         at += 1 + len;
     }
     let (description, len) = closer(&rest[at..])?;
-    let token = match verb {
-        "reply" => Token::Reply(MessageId(id)),
-        "mention" => Token::Mention(PrincipalId(id), description),
-        "face" => Token::Display,
+    let token = match (verb, ordinal) {
+        ("reply", _) => Token::Reply(MessageId(id)),
+        ("mention", _) => Token::Mention(PrincipalId(id), description),
+        ("image" | "sticker", Some(ordinal)) => Token::Picture(MessageId(id), ordinal),
+        ("face", _) => Token::Display,
         _ if medium => Token::Display,
         _ => return None,
     };
@@ -307,10 +328,23 @@ mod tests {
 
     #[test]
     fn faces_and_media_max_cant_send_go() {
-        let draft = say(
-            "好[face#271: 吃瓜][image#7405.1: 一只猫](3秒)[sticker#42.0: 柴犬][face: 吃瓜][video#7.2][file#7.3: a.pdf]",
-        );
+        let draft = say("好[face#271: 吃瓜][image#7405][face: 吃瓜][video#7.2][file#7.3: a.pdf]");
         assert_eq!(draft.nodes, vec![text("好")]);
+    }
+
+    #[test]
+    fn pictures() {
+        let node = |message, ordinal| DraftNode::Picture {
+            message: MessageId(message),
+            ordinal,
+        };
+        assert_eq!(say("[sticker#42.0: 柴犬](3秒)").nodes, vec![node(42, 0)]);
+        assert_eq!(say(" [image#7405.1] ").nodes, vec![node(7405, 1)]);
+        let handle = "[image#7405.1: 猫]";
+        assert_eq!(picture(&format!("{handle}x")), Some(handle.len()));
+        assert_eq!(picture("[image#7405: 猫]"), None);
+        assert_eq!(picture("[video#7405.0]"), None);
+        assert_eq!(picture("[image#1.99999]"), None);
     }
 
     #[test]
@@ -354,6 +388,8 @@ mod tests {
             (draft.reply_to, draft.nodes),
             (Some(MessageId(101)), vec![text("在")])
         );
+        // Cut off by the picture that followed it.
+        assert_eq!(parsed("[09:03 Max #102]:"), None);
         assert_eq!(say("[09:03] 说: 好").nodes, vec![text("[09:03] 说: 好")]);
         let echoed = "看[image: 一只猫][sticker] [unsend#3][react#2: 托腮][card: a | b][poke]图";
         assert_eq!(say(echoed).nodes, vec![text("看 图")]);

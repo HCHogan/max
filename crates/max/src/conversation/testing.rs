@@ -64,10 +64,13 @@ pub fn shared(
 
 /// A QQ group with Max in it.
 pub async fn group(conn: &mut PgConnection) -> Place {
+    group_named(conn, "group:GROUP1").await
+}
+
+pub async fn group_named(conn: &mut PgConnection, native_id: &str) -> Place {
     let me = platform::account(conn, Platform::Qq, "BOT", "maxx")
         .await
         .unwrap();
-    let native_id = "group:GROUP1";
     let kind = ConversationKind::Group;
     let endpoint = platform::endpoint(conn, Platform::Qq, native_id, me.identity, kind, None)
         .await

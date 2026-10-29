@@ -6,9 +6,12 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, FixedOffset, Utc};
 use max_core::ids::{IdentityId, MessageId, PrincipalId, TurnId};
-use max_core::message::{Content, Draft, DraftNode, MentionTarget, Message, Node, Sender};
+use max_core::message::{
+    Content, Draft, DraftNode, MediaKind, MediaMeta, MediaRef, MentionTarget, Message, Node, Sender,
+};
 use max_core::render::{Mark, Render};
 use max_db::ledger::{self, NewMessage};
+use max_db::media::{self, Stored};
 use max_db::platform::{self, Account, ConversationKind};
 use sqlx::{Connection, PgConnection};
 use tracing::warn;
@@ -200,7 +203,8 @@ fn words(text: &str) -> String {
 }
 
 /// What Max says: a segment of a turn's output, or a command's answer.
-/// A quote of something that isn't a message on this timeline is dropped.
+/// A quote of something that isn't a message on this timeline is dropped,
+/// and so is a picture Max may not send; None if nothing is left.
 pub async fn said(
     conn: &mut PgConnection,
     place: &Place,
@@ -209,7 +213,7 @@ pub async fn said(
     segment: Option<i32>,
     now: DateTime<Utc>,
     offset: FixedOffset,
-) -> sqlx::Result<Message> {
+) -> sqlx::Result<Option<Message>> {
     let mut tx = conn.begin().await?;
     let mut draft = draft;
     if let Some(target) = draft.reply_to {
@@ -223,13 +227,32 @@ pub async fn said(
     }
     let mut people = BTreeMap::new();
     let mut nodes = Vec::with_capacity(draft.nodes.len());
+    // The pictures' files, in order.
+    let mut files = Vec::new();
     for node in &draft.nodes {
         match node {
             DraftNode::Text { text } => nodes.push(Node::Text { text: text.clone() }),
             DraftNode::Mention { principal } => {
                 nodes.push(mentioned(&mut tx, place, *principal, &mut people).await?);
             }
+            DraftNode::Picture { message, ordinal } => {
+                if let Some(stored) = sendable(&mut tx, place, *message, *ordinal).await? {
+                    let meta = MediaMeta {
+                        kind: stored.kind,
+                        mime: stored.mime,
+                        size: Some(stored.size),
+                        name: None,
+                        description: None,
+                    };
+                    let media = Some(MediaRef::Blob(stored.sha256.clone()));
+                    nodes.push(Node::Media { media, meta });
+                    files.push(stored.sha256);
+                }
+            }
         }
+    }
+    if nodes.is_empty() {
+        return Ok(None);
     }
     let content = Content::Message {
         reply_to: draft.reply_to,
@@ -265,6 +288,9 @@ pub async fn said(
         },
     )
     .await?;
+    for (ordinal, sha256) in (0..).zip(&files) {
+        media::link(&mut tx, id, ordinal, sha256).await?;
+    }
     tx.commit().await?;
     let message = Message {
         id,
@@ -275,7 +301,32 @@ pub async fn said(
         turn,
         raw,
     };
-    Ok(message)
+    Ok(Some(message))
+}
+
+/// A row's picture that Max may send again: any of this conversation's,
+/// and the stickers of all of them. A picture stays in its conversation.
+async fn sendable(
+    conn: &mut PgConnection,
+    place: &Place,
+    message: MessageId,
+    ordinal: u16,
+) -> sqlx::Result<Option<Stored>> {
+    let stored = media::stored(conn, message, ordinal).await?;
+    let why = match &stored {
+        None => "not a downloaded medium",
+        Some(stored) if !matches!(stored.kind, MediaKind::Image | MediaKind::Sticker) => {
+            "not a picture"
+        }
+        Some(stored)
+            if stored.kind == MediaKind::Image && stored.conversation != place.conversation =>
+        {
+            "another conversation's picture"
+        }
+        Some(_) => return Ok(stored),
+    };
+    warn!(conversation = %place.conversation, %message, ordinal, why, "dropped a picture Max can't send");
+    Ok(None)
 }
 
 /// A person Max mentions, by the account they last spoke from here; one

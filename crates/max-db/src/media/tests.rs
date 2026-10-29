@@ -73,3 +73,40 @@ async fn pending_until_every_picture_is_recorded(pool: PgPool) -> sqlx::Result<(
     assert_eq!(seen, [at(1)]);
     Ok(())
 }
+
+#[sqlx::test]
+async fn what_can_be_sent_again(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let group = group(&mut conn, "group:30001").await?;
+    let xiaoming = sender(group.xiaoming, "小明", None);
+    let sticker = Node::Media {
+        media: Some(MediaRef::Remote("https://example.com/s.gif".into())),
+        meta: MediaMeta {
+            kind: MediaKind::Sticker,
+            mime: None,
+            size: None,
+            name: None,
+            description: None,
+        },
+    };
+    let content = Content::Message {
+        reply_to: None,
+        nodes: vec![picture("https://example.com/a.png"), sticker],
+    };
+    let id = commit(&mut conn, &group, &xiaoming, &content, 0).await?;
+    record(&mut conn, id, 1, &blob('b'), at(1)).await?;
+
+    let found = stored(&mut conn, id, 1).await?;
+    let expected = Stored {
+        conversation: group.endpoint.conversation,
+        kind: MediaKind::Sticker,
+        sha256: "b".repeat(64),
+        mime: Some("image/png".into()),
+        size: 3,
+    };
+    assert_eq!(found, Some(expected));
+    // Not downloaded, or no such medium.
+    assert_eq!(stored(&mut conn, id, 0).await?, None);
+    assert_eq!(stored(&mut conn, id, 2).await?, None);
+    Ok(())
+}

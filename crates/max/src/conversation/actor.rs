@@ -196,8 +196,10 @@ impl Conversation {
                 a.said.push(segment.source);
                 a.segments += 1;
                 let (turn, index) = (a.turn, a.segments);
-                let message = self.say(segment.draft, Some(turn), Some(index)).await?;
-                if let Some(a) = self.core.as_mut() {
+                let said = self.say(segment.draft, Some(turn), Some(index)).await?;
+                if let Some(message) = said
+                    && let Some(a) = self.core.as_mut()
+                {
                     a.last_at = Some(message.at);
                 }
                 Ok(())
@@ -600,9 +602,9 @@ impl Conversation {
         draft: Draft,
         turn: Option<TurnId>,
         segment: Option<i32>,
-    ) -> Result<Message> {
+    ) -> Result<Option<Message>> {
         let mut conn = self.shared.pool.acquire().await?;
-        let message = ingest::said(
+        let said = ingest::said(
             &mut conn,
             &self.place,
             draft,
@@ -613,6 +615,9 @@ impl Conversation {
         )
         .await?;
         drop(conn);
+        let Some(message) = said else {
+            return Ok(None);
+        };
         self.committed(&message);
         let outgoing = Outgoing {
             place: Arc::clone(&self.place),
@@ -621,7 +626,7 @@ impl Conversation {
         if self.shared.outbound.send(outgoing).is_err() {
             warn!(message = %message.id, "the sender is gone");
         }
-        Ok(message)
+        Ok(Some(message))
     }
 }
 

@@ -1,10 +1,11 @@
 //! The content store's index: what was downloaded, and for which message.
-//! The download worker is the only writer of both tables; see "媒体".
+//! The download worker records what comes in; a picture Max sends again
+//! is linked to its new row when that is committed. See "媒体".
 
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use max_core::ids::MessageId;
+use max_core::ids::{ConversationId, MessageId};
 use max_core::message::{MediaKind, MediaRef, Node, media};
 use sqlx::types::Json;
 use sqlx::{Connection, PgConnection};
@@ -58,16 +59,72 @@ pub async fn record(
     )
     .execute(&mut *tx)
     .await?;
+    link(&mut tx, message, ordinal, &blob.sha256).await?;
+    tx.commit().await
+}
+
+/// Records that the `ordinal`-th media of `message` is a file the store
+/// has.
+pub async fn link(
+    conn: &mut PgConnection,
+    message: MessageId,
+    ordinal: u16,
+    sha256: &str,
+) -> sqlx::Result<()> {
     sqlx::query!(
         "insert into message_media (message_id, ordinal, sha256) values ($1, $2, $3)
          on conflict do nothing",
         message.0,
         i16::try_from(ordinal).unwrap_or(i16::MAX),
-        blob.sha256
+        sha256
     )
-    .execute(&mut *tx)
+    .execute(conn)
     .await?;
-    tx.commit().await
+    Ok(())
+}
+
+/// A row's medium that the store has, to send again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stored {
+    /// The row's.
+    pub conversation: ConversationId,
+    /// As the row's node has it.
+    pub kind: MediaKind,
+    pub sha256: String,
+    pub mime: Option<String>,
+    pub size: u64,
+}
+
+/// The `ordinal`-th medium of `message`, in any conversation, if it was
+/// downloaded.
+pub async fn stored(
+    conn: &mut PgConnection,
+    message: MessageId,
+    ordinal: u16,
+) -> sqlx::Result<Option<Stored>> {
+    let row = sqlx::query!(
+        r#"
+        select m.conversation_id, m.nodes as "nodes: Json<Vec<Node>>", md.sha256, md.mime, md.size
+        from messages m
+        join message_media mm on mm.message_id = m.id
+        join media md on md.sha256 = mm.sha256
+        where m.id = $1 and mm.ordinal = $2
+        "#,
+        message.0,
+        i16::try_from(ordinal).unwrap_or(i16::MAX)
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.and_then(|row| {
+        let (_, _, meta) = media(&row.nodes.0).find(|(n, _, _)| *n == ordinal)?;
+        Some(Stored {
+            conversation: ConversationId(row.conversation_id),
+            kind: meta.kind,
+            sha256: row.sha256,
+            mime: row.mime,
+            size: u64::try_from(row.size).unwrap_or_default(),
+        })
+    }))
 }
 
 /// A message's downloaded media, by ordinal.

@@ -205,6 +205,13 @@ pub enum DraftNode {
     Mention {
         principal: PrincipalId,
     },
+    /// A row's picture or sticker sent again, by its handle
+    /// (`[sticker#123.0]`). Whether Max may send it is checked when it is
+    /// committed.
+    Picture {
+        message: MessageId,
+        ordinal: u16,
+    },
 }
 
 #[cfg(test)]
