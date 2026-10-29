@@ -14,8 +14,8 @@ use std::fmt::Write;
 use chrono::{DateTime, Datelike, FixedOffset, Utc};
 
 use crate::ids::{PrincipalId, SummaryId};
-use crate::item::{Item, ItemKind};
-use crate::message::Role;
+use crate::item::{Image, Item, ItemKind};
+use crate::message::{Content, MediaKind, Message, Node, Role};
 use crate::render::weekday;
 use crate::run::Context;
 
@@ -190,6 +190,51 @@ pub fn now_line(now: DateTime<Utc>, offset: FixedOffset) -> String {
         weekday(date.weekday()),
         now.format("%H:%M")
     )
+}
+
+/// Most pictures one run is shown; past these, rows show only their text.
+pub const MOST_PICTURES: usize = 8;
+
+/// What a picture is reckoned to cost until the provider says: about what
+/// Claude, Gemini and GPT charge for one 1568 pixels on its long side.
+pub const PICTURE_TOKENS: u32 = 1200;
+
+/// Shows the model the pictures and stickers among `messages`, after
+/// `item`'s text, in order, while `left` lasts. Those without a reference
+/// to download are left out.
+pub fn attach<'m>(
+    item: &mut Item,
+    messages: impl IntoIterator<Item = &'m Message>,
+    left: &mut usize,
+) {
+    let ItemKind::User { images, .. } = &mut item.kind else {
+        return;
+    };
+    for message in messages {
+        let nodes = match &message.content {
+            Content::Message { nodes, .. } | Content::Edit { nodes, .. } => nodes,
+            Content::Unsend { .. } => continue,
+        };
+        // Ordinals count every medium, as handles do.
+        let media = nodes.iter().filter_map(|node| match node {
+            Node::Media { media, meta } => Some((media.is_some(), meta.kind)),
+            _ => None,
+        });
+        for (ordinal, (stored, kind)) in (0..).zip(media) {
+            if *left == 0 {
+                return;
+            }
+            if stored && matches!(kind, MediaKind::Image | MediaKind::Sticker) {
+                images.push(Image {
+                    kind,
+                    message: message.id,
+                    ordinal,
+                });
+                item.tokens += PICTURE_TOKENS;
+                *left -= 1;
+            }
+        }
+    }
 }
 
 /// The base context: the system prompt, then each non-empty block as its

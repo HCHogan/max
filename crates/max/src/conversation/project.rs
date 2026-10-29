@@ -138,12 +138,19 @@ impl Projection<'_> {
             quoted: quoted_text,
             first: first_text,
         };
-        let context = project::context(
+        let mut context = project::context(
             self.system.clone(),
             [summary_block, tail_text, volatile.render(self.offset)],
             roster,
             tokens::count,
         );
+        // The pictures of the first inputs and of the rows they quote,
+        // after the volatile block.
+        if let Some(volatile) = context.items.last_mut() {
+            let messages = triggers.iter().chain(&quoted).map(|row| &row.message);
+            let mut left = project::MOST_PICTURES;
+            project::attach(volatile, messages, &mut left);
+        }
         let first = wakes.iter().cloned().map(Input::Wake).collect();
         Ok((context, first))
     }

@@ -146,3 +146,66 @@ fn the_base_context() {
     assert_eq!(kinds, [("system", 6), ("user", 22), ("user", 79)]);
     assert_eq!(context.roster, [PrincipalId(12)].into());
 }
+
+#[test]
+fn pictures_are_attached_in_order_until_none_are_left() {
+    use crate::ids::{ConversationId, IdentityId, MessageId};
+    use crate::message::{MediaMeta, MediaRef, Sender};
+
+    let medium = |kind, stored: bool| Node::Media {
+        media: stored.then(|| MediaRef::Remote("https://q/x".into())),
+        meta: MediaMeta {
+            kind,
+            mime: None,
+            size: None,
+            name: None,
+            description: None,
+        },
+    };
+    let message = |id, content| Message {
+        id: MessageId(id),
+        conversation: ConversationId(1),
+        sender: Sender {
+            identity: IdentityId(1),
+            name: "小明".into(),
+            role: None,
+        },
+        at: utc(10, 29, 4, 0),
+        content,
+        turn: None,
+        raw: serde_json::Value::Null,
+    };
+    let said = |nodes| Content::Message {
+        reply_to: None,
+        nodes,
+    };
+    let rows = [
+        message(
+            7,
+            said(vec![
+                medium(MediaKind::Video, true),
+                Node::Text { text: "看".into() },
+                medium(MediaKind::Image, true),
+                medium(MediaKind::Image, false),
+                medium(MediaKind::Sticker, true),
+            ]),
+        ),
+        message(
+            8,
+            Content::Unsend {
+                target: MessageId(7),
+            },
+        ),
+        message(9, said(vec![medium(MediaKind::Image, true)])),
+        message(10, said(vec![medium(MediaKind::Image, true)])),
+    ];
+    let mut item = Item::new(ItemKind::user("易变"), 100);
+    let mut left = 3;
+    attach(&mut item, &rows, &mut left);
+    let ItemKind::User { images, .. } = &item.kind else {
+        unreachable!()
+    };
+    let handles: Vec<String> = images.iter().map(Image::handle).collect();
+    assert_eq!(handles, ["image#7.1", "sticker#7.3", "image#9.0"]);
+    assert_eq!((left, item.tokens), (0, 100 + 3 * PICTURE_TOKENS));
+}
