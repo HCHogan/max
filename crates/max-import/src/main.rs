@@ -1,9 +1,11 @@
 //! Imports the Haskell version's database into maxx's, once, at go-live:
 //! everything into an empty database in one transaction, reading the old
-//! one read-only; then the model's copies of the imported pictures. The mapping is "导入" in docs/rust-rewrite.md. The old
-//! schema's code lives only here, and goes once maxx has run on the
-//! imported data for a while.
+//! one read-only; then the model's copies of the imported pictures; and,
+//! any time after, the old captions. The mapping is "导入" in
+//! docs/rust-rewrite.md. The old schema's code lives only here, and goes
+//! once maxx has run on the imported data for a while.
 
+mod captions;
 mod media;
 mod messages;
 mod nodes;
@@ -57,6 +59,16 @@ enum Command {
         #[arg(long)]
         media: PathBuf,
     },
+    /// Any time after, while maxx serves too: the old captions of
+    /// pictures and stickers.
+    Captions {
+        /// The old database's URL, opened read-only.
+        #[arg(long)]
+        from: String,
+        /// The new database's URL.
+        #[arg(long)]
+        to: String,
+    },
 }
 
 /// What the old database doesn't know: the official bot's accounts.
@@ -84,9 +96,7 @@ async fn main() -> Result<()> {
             media,
             accounts,
         } => {
-            let from = PgConnectOptions::from_str(&from)?
-                .options([("default_transaction_read_only", "on")]);
-            let mut old = PgConnection::connect_with(&from).await?;
+            let mut old = read_only(&from).await?;
             let mut new = PgConnection::connect(&to).await?;
             import(&mut old, &mut new, &media, &accounts).await
         }
@@ -94,7 +104,18 @@ async fn main() -> Result<()> {
             let mut new = PgConnection::connect(&to).await?;
             pictures::run(&mut new, &media).await
         }
+        Command::Captions { from, to } => {
+            let mut old = read_only(&from).await?;
+            let mut new = PgConnection::connect(&to).await?;
+            captions::import(&mut old, &mut new).await
+        }
     }
+}
+
+async fn read_only(url: &str) -> Result<PgConnection> {
+    let options =
+        PgConnectOptions::from_str(url)?.options([("default_transaction_read_only", "on")]);
+    Ok(PgConnection::connect_with(&options).await?)
 }
 
 /// Everything, or nothing.

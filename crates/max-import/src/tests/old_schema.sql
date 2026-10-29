@@ -106,6 +106,14 @@ create table images (
     sha256 text primary key,
     mime_type text not null,
     bytes_size bigint not null,
+    first_seen_at timestamptz not null,
+    description text
+);
+
+create table stickers (
+    sha256 text primary key,
+    description text,
+    banned boolean not null default false,
     first_seen_at timestamptz not null
 );
 

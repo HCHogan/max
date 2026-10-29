@@ -85,7 +85,7 @@ async fn people_and_places(pool: PgPool) {
             .fetch_all(&mut new)
             .await
             .unwrap();
-    // 小红 has no name but what she said something as.
+    // 小红 has no name but the one 小红's messages carry.
     let names = [(1, "maxx"), (2, "小明"), (3, "小红红"), (4, "主人")];
     assert_eq!(people, names.map(|(id, name)| (id, name.to_owned())));
 
@@ -524,4 +524,37 @@ async fn only_into_an_empty_database(pool: PgPool) {
         .unwrap();
     let again = import(&mut old, &mut new, &store, &accounts()).await;
     assert!(again.is_err());
+}
+
+#[sqlx::test]
+async fn captions_after(pool: PgPool) {
+    let (mut old, mut new, store) = setup(&pool, &files()).await;
+    import(&mut old, &mut new, &store, &accounts())
+        .await
+        .unwrap();
+    captions::import(&mut old, &mut new).await.unwrap();
+    let written = "select left(sha256, 1), kind, text, skip, model is null
+                   from media_captions order by sha256";
+    let captions: Vec<(String, String, String, bool, bool)> =
+        sqlx::query_as(written).fetch_all(&mut new).await.unwrap();
+    let caption = |letter: &str, kind: &str, text: &str, skip| {
+        (letter.into(), kind.into(), text.into(), skip, true)
+    };
+    // c's sticker caption wins; its blank picture caption is none anyway.
+    let expected = vec![
+        caption("a", "image", "一只猫 趴着", false),
+        caption("c", "sticker", "翻白眼的猫，表示无语", false),
+        caption("e", "sticker", "", true),
+    ];
+    assert_eq!(captions, expected);
+
+    // Again: what's there stays.
+    sqlx::raw_sql("update old.images set description = '两只猫'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    captions::import(&mut old, &mut new).await.unwrap();
+    let again: Vec<(String, String, String, bool, bool)> =
+        sqlx::query_as(written).fetch_all(&mut new).await.unwrap();
+    assert_eq!(again, expected);
 }

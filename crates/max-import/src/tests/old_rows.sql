@@ -147,8 +147,15 @@ insert into sessions values
     (-20003, null, null, '2026-01-04 00:00+08', null, true, null);
 
 insert into images values
-    ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'image/jpeg', 10, '2025-12-31 00:00+08'),
-    ('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'image/jpeg', 11, '2025-12-31 00:00+08');
+    ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'image/jpeg', 10, '2025-12-31 00:00+08', E'一只猫\n趴着'),
+    ('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'image/jpeg', 11, '2025-12-31 00:00+08', ' ');
+
+-- c is a sticker too, e one the captioner skipped, and f a file that
+-- stayed behind.
+insert into stickers values
+    ('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', '翻白眼的猫，表示无语', false, '2025-12-31 00:00+08'),
+    ('eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', '(skipped by captioner)', true, '2025-12-31 00:00+08'),
+    ('ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', '笑', false, '2025-12-31 00:00+08');
 
 insert into videos values
     ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'video/mp4', 12, '2025-12-31 00:00+08');
