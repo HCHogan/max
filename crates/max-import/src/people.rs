@@ -112,7 +112,8 @@ pub async fn name(new: &mut PgConnection) -> Result<()> {
     sqlx::query(
         "update principals p set display_name = coalesce(
              (select m.sender_name from messages m join identities i on i.id = m.sender_identity_id
-              where i.principal_id = p.id order by m.id desc limit 1),
+              where i.principal_id = p.id and m.sender_name <> '某人'
+              order by m.id desc limit 1),
              '某人')
          where p.display_name = ''",
     )

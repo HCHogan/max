@@ -4,6 +4,8 @@
 //! schema's code lives only here, and goes once maxx has run on the
 //! imported data for a while.
 
+mod messages;
+mod nodes;
 mod people;
 mod places;
 #[cfg(test)]
@@ -86,7 +88,8 @@ async fn import(old: &mut PgConnection, new: &mut PgConnection, accounts: &Accou
         .await?;
     let mut new = new.begin().await?;
     let people = people::import(&mut old, &mut new).await?;
-    places::import(&mut old, &mut new, &people).await?;
+    let places = places::import(&mut old, &mut new, &people).await?;
+    messages::import(&mut old, &mut new, &people, &places).await?;
     people::name(&mut new).await?;
     sequences(&mut old, &mut new).await?;
     people::accounts(&mut new, &people, accounts).await?;
