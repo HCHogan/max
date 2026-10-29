@@ -3,19 +3,20 @@
 //! small model, records the call, and answers with one `Verdict`, None if
 //! anything failed. The prompt and the parse are max-core's.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{FixedOffset, Utc};
 use color_eyre::eyre::{Result, eyre};
-use max_core::ids::MessageId;
+use max_core::ids::{MessageId, PrincipalId};
 use max_core::intent::Verdict;
 use max_core::intent::classify;
 use max_core::item::{Item, ItemKind};
 use max_core::message::Message;
-use max_core::project::Budgets;
+use max_core::project::{self, Budgets};
 use max_core::render::{Mark, Render};
 use max_core::run::Request;
-use max_db::{PgPool, ledger, usage};
+use max_db::{PgPool, ledger, platform, usage};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::warn;
 
@@ -84,7 +85,6 @@ async fn run(job: &Job) -> Result<Option<Verdict>> {
             .collect();
     let messages = context.iter().chain(&new).map(|(message, _)| message);
     let people = people(&mut conn, messages, place).await?;
-    drop(conn);
 
     let render = Render {
         people: &people,
@@ -97,8 +97,23 @@ async fn run(job: &Job) -> Result<Option<Verdict>> {
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let (context, new) = (lines(&context), lines(&new));
+    // Whom each @ is to, by name.
+    let mentioned: Vec<PrincipalId> = project::mentioned(&format!("{context}\n{new}"))
+        .into_iter()
+        .collect();
+    let known = platform::roster(&mut conn, place.endpoint, &mentioned).await?;
+    let mut names: BTreeMap<PrincipalId, String> = known
+        .into_iter()
+        .map(|known| (known.principal, known.name))
+        .collect();
+    names.insert(place.me.principal, place.my_name.clone());
+    drop(conn);
     let system = classify::system(&job.persona);
-    let user = classify::user(&lines(&context), &lines(&new));
+    let user = classify::user(
+        &classify::named(&context, &names),
+        &classify::named(&new, &names),
+    );
     let request = Request {
         model: job.chosen.tag.clone(),
         items: vec![

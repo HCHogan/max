@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 use super::*;
 use crate::conversation::ingest;
 use crate::conversation::testing::{at, from_xiaohong, from_xiaoming, group, offset, text};
+use crate::inbound::InNode;
 use crate::llm::testing::{Answer, Script, models};
 
 async fn job(pool: &PgPool, script: &Arc<Script>) -> Job {
@@ -13,11 +14,24 @@ async fn job(pool: &PgPool, script: &Arc<Script>) -> Job {
     let place = group(&mut conn).await;
     let mut batch = Vec::new();
     for n in 0..4 {
-        let said = format!("第{n}句");
+        let mut nodes = vec![text(&format!("第{n}句"))];
+        // Who is spoken to shows by name: Max, and 小红.
+        if n == 2 {
+            nodes.push(InNode::MentionMe {
+                display: "maxx".into(),
+            });
+        }
+        if n == 3 {
+            let xiaohong = InNode::Mention {
+                user: "XIAOHONG".into(),
+                display: "小红".into(),
+            };
+            nodes.insert(0, xiaohong);
+        }
         let inbound = if n % 2 == 0 {
-            from_xiaoming(n, vec![text(&said)])
+            from_xiaoming(n, nodes)
         } else {
-            from_xiaohong(n, vec![text(&said)])
+            from_xiaohong(n, nodes)
         };
         let committed = ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
             .await
@@ -61,7 +75,8 @@ async fn the_classifier_reads_the_context(pool: PgPool) {
     };
     assert!(text.starts_with("[上下文]\n[12:01 小红 #"), "{text}");
     assert!(text.contains("]: 第1句\n\n[新消息]\n"), "{text}");
-    assert!(text.ends_with("]: 第3句"), "{text}");
+    assert!(text.contains("]: 第2句@maxx\n"), "{text}");
+    assert!(text.ends_with("]: @小红第3句"), "{text}");
     assert!(text.contains("[新消息]\n[12:02 小明 #"), "{text}");
     let mut conn = pool.acquire().await.unwrap();
     let calls: i64 = sqlx::query_scalar("select count(*) from llm_usage where purpose = 'intent'")

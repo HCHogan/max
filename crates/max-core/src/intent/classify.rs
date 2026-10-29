@@ -1,9 +1,12 @@
 //! The classifier's prompt and its answer. The classify task reads the
 //! ledger and renders the lines; everything here is text in, text out.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
 use super::Verdict;
+use crate::ids::PrincipalId;
 
 /// How much of the persona the classifier sees.
 pub const PERSONA_CHARS: usize = 500;
@@ -36,6 +39,36 @@ pub fn system(persona: &str) -> String {
 只输出一行 JSON，不要其他内容：
 {{\"trigger\": true/false, \"reason\": \"不超过20字\"}}"
     )
+}
+
+/// `[mention#N]` as `@名字`: a small model reads who is spoken to from the
+/// name, where the core has a roster to look it up in. Max's name is in
+/// `names` like anyone's; someone missing is `@某人`.
+pub fn named(text: &str, names: &BTreeMap<PrincipalId, String>) -> String {
+    const TOKEN: &str = "[mention#";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(TOKEN) {
+        out += &rest[..at];
+        let after = &rest[at + TOKEN.len()..];
+        let digits = after
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(after.len());
+        let principal = after[..digits].parse().ok().map(PrincipalId);
+        match principal {
+            Some(principal) if after[digits..].starts_with(']') => {
+                let name = names.get(&principal).map_or("某人", String::as_str);
+                out += "@";
+                out += name;
+                rest = &after[digits + 1..];
+            }
+            _ => {
+                out += TOKEN;
+                rest = after;
+            }
+        }
+    }
+    out + rest
 }
 
 /// `context` and `new` are rendered lines, oldest first.
@@ -89,6 +122,20 @@ mod tests {
         assert_eq!(
             user,
             "[上下文]\n（无）\n\n[新消息]\n[10:00 小明 #7]: max 在吗"
+        );
+    }
+
+    #[test]
+    fn mentions_become_names() {
+        let names = BTreeMap::from([
+            (PrincipalId(1), "maxx".to_owned()),
+            (PrincipalId(2), "小明".to_owned()),
+        ]);
+        let line =
+            "[10:00 小红 #7]: [mention#2] 你让ai看 [mention#1] [mention#9] [mention#x] [mention#3";
+        assert_eq!(
+            named(line, &names),
+            "[10:00 小红 #7]: @小明 你让ai看 @maxx @某人 [mention#x] [mention#3"
         );
     }
 
