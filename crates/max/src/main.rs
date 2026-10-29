@@ -297,6 +297,10 @@ async fn serve(config: Config) -> Result<()> {
             None
         }
     };
+    // The pictures Max sends come from the content store.
+    let store = pictures
+        .as_ref()
+        .map(|pictures| Arc::clone(&pictures.store));
     let (outbound, outbound_rx) = mpsc::unbounded_channel();
     let shared = Arc::new(Shared {
         pool: pool.clone(),
@@ -341,7 +345,7 @@ async fn serve(config: Config) -> Result<()> {
         // The only sender, while QQ is the only platform.
         let api = Arc::clone(&client) as Arc<dyn send::Api>;
         let sending = pool.clone();
-        senders.spawn(move |_| send::run(api, sending, outbound_rx, DRAIN));
+        senders.spawn(move |_| send::run(api, sending, store, outbound_rx, DRAIN));
         let (pool, intake_tx, failed) = (pool.clone(), intake_tx.clone(), failed.clone());
         intake.spawn(move |stop| async move {
             if let Err(error) = listen::listen(&client, &pool, &intake_tx, stop).await {

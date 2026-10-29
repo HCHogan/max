@@ -1,26 +1,37 @@
 use std::sync::Arc;
 
-use max_core::message::{Draft, DraftNode, Message as Row};
+use max_core::message::{Draft, DraftNode, MediaKind, MediaMeta, Message as Row};
 use max_db::ledger::Delivery;
+use max_db::media::{self, Blob};
 
 use super::*;
 use crate::conversation::testing::{from_xiaoming, group, offset, text};
 use crate::conversation::{Place, ingest};
+use crate::inbound::InNode;
 
 /// Records what it is asked to send, and answers from a script: Ok gives
-/// the message an id and a ref_idx.
+/// the message an id and a ref_idx. Uploads always work.
 #[derive(Default)]
 struct Recorder {
     answers: Mutex<VecDeque<Result<(), i64>>>,
     sent: Mutex<Vec<(String, Message)>>,
+    uploaded: Mutex<Vec<Vec<u8>>>,
 }
 
 impl Api for Recorder {
-    fn send<'a>(
-        &'a self,
-        chat: Chat<'a>,
-        message: &'a Message,
-    ) -> Pin<Box<dyn Future<Output = Result<Sent, api::Error>> + Send + 'a>> {
+    fn upload<'a>(&'a self, _: Chat<'a>, picture: &'a [u8]) -> Answer<'a, Uploaded> {
+        let mut uploaded = self.uploaded.lock().unwrap();
+        uploaded.push(picture.to_vec());
+        let file_info = format!("FI{}", uploaded.len());
+        Box::pin(async move {
+            Ok(Uploaded {
+                file_info,
+                ttl: 86400,
+            })
+        })
+    }
+
+    fn send<'a>(&'a self, chat: Chat<'a>, message: &'a Message) -> Answer<'a, Sent> {
         let mut sent = self.sent.lock().unwrap();
         sent.push((format!("{chat:?}"), message.clone()));
         let n = sent.len();
@@ -47,16 +58,27 @@ struct Setup {
     pool: PgPool,
     place: Arc<Place>,
     api: Arc<Recorder>,
+    store: Arc<Store>,
+    dir: std::path::PathBuf,
+}
+
+impl Drop for Setup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }
 
 impl Setup {
     async fn new(pool: PgPool) -> Self {
         let mut conn = pool.acquire().await.unwrap();
         let place = Arc::new(group(&mut conn).await);
+        let dir = std::env::temp_dir().join(format!("max-send-{:016x}", rand::random::<u64>()));
         Self {
             pool,
             place,
             api: Arc::default(),
+            store: Arc::new(Store::open(&dir).await.unwrap()),
+            dir,
         }
     }
 
@@ -97,7 +119,8 @@ impl Setup {
         }
         drop(tx);
         let api = Arc::clone(&self.api) as Arc<dyn Api>;
-        run(api, self.pool.clone(), rx, Duration::from_secs(5)).await;
+        let store = Some(Arc::clone(&self.store));
+        run(api, self.pool.clone(), store, rx, Duration::from_secs(5)).await;
     }
 
     fn sent(&self) -> Vec<(String, Message)> {
@@ -197,6 +220,69 @@ async fn plain_text_when_markdown_is_refused(pool: PgPool) {
     assert_eq!(s.delivery(&failed).await, (Delivery::Failed, None, None));
 }
 
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_sticker_is_uploaded_once(pool: PgPool) {
+    let s = Setup::new(pool).await;
+    // 小明 sent a sticker, and it was downloaded.
+    let mut conn = s.pool.acquire().await.unwrap();
+    let sticker = InNode::Node(Node::Media {
+        media: Some(MediaRef::Remote("https://q.example/s".into())),
+        meta: MediaMeta {
+            kind: MediaKind::Sticker,
+            mime: None,
+            size: None,
+            name: None,
+            description: None,
+        },
+    });
+    let inbound = from_xiaoming(0, vec![sticker]);
+    let row = ingest::inbound(&mut conn, &s.place, &inbound, Utc::now(), offset())
+        .await
+        .unwrap()
+        .message
+        .id;
+    let bytes = b"GIF89a".to_vec();
+    let sha256 = s.store.put(bytes.clone()).await.unwrap();
+    let blob = Blob {
+        sha256,
+        mime: Some("image/gif".into()),
+        size: 6,
+        width: None,
+        height: None,
+        model_sha256: None,
+    };
+    media::record(&mut conn, row, 0, &blob, Utc::now())
+        .await
+        .unwrap();
+    drop(conn);
+
+    let again = || Draft {
+        reply_to: None,
+        nodes: vec![DraftNode::Picture {
+            message: row,
+            ordinal: 0,
+        }],
+    };
+    // QQ refuses the second: the third uploads it again.
+    s.api
+        .answers
+        .lock()
+        .unwrap()
+        .extend([Ok(()), Err(40034028), Ok(())]);
+    let first = s.say(again()).await;
+    let message = first.message.clone();
+    let outgoing = vec![first, s.say(again()).await, s.say(again()).await];
+    s.send_all(outgoing).await;
+    let bodies: Vec<Body> = s.sent().into_iter().map(|(_, m)| m.body).collect();
+    let media = |file_info: &str| Body::Media {
+        file_info: file_info.into(),
+        caption: None,
+    };
+    assert_eq!(bodies, [media("FI1"), media("FI1"), media("FI2")]);
+    assert_eq!(*s.api.uploaded.lock().unwrap(), [bytes.clone(), bytes]);
+    assert_eq!(s.delivery(&message).await.0, Delivery::Sent);
+}
+
 #[tokio::test(start_paused = true)]
 async fn proactive_messages_wait_for_the_rate() {
     let pool = sqlx::postgres::PgPoolOptions::new()
@@ -205,7 +291,9 @@ async fn proactive_messages_wait_for_the_rate() {
     let shared = Shared {
         api: Arc::new(Recorder::default()),
         pool,
+        store: None,
         sent: Mutex::default(),
+        uploads: Mutex::default(),
     };
     let start = Instant::now();
     for _ in 0..CHAT_RATE {
