@@ -134,8 +134,11 @@ pub async fn serve<L>(
     L: axum::serve::Listener,
     L::Addr: std::fmt::Debug,
 {
+    // Clients of the protocol before 2026-07-28, such as pi's, begin with
+    // `initialize`; with no sessions, each of their requests stands alone.
     let config = StreamableHttpServerConfig::default()
         .with_cancellation_token(stop.child_token())
+        .with_legacy_session_mode(false)
         .with_json_response(true);
     let handler = Handler {
         conversation,
@@ -396,6 +399,82 @@ mod tests {
         assert!(refused(
             &post(&socket, &token, "tools/list", json!({})).await
         ));
+
+        scope.close(Duration::from_secs(5)).await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A request as a client of the 2025-11-25 protocol sends it: no
+    /// `_meta`, and no `Mcp-Method` header.
+    async fn post_legacy(
+        socket: &std::path::Path,
+        token: &str,
+        method: &str,
+        params: Value,
+    ) -> Value {
+        let body =
+            json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
+        let version = if method == "initialize" {
+            String::new()
+        } else {
+            "MCP-Protocol-Version: 2025-11-25\r\n".to_owned()
+        };
+        let request = format!(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:7777\r\nContent-Type: application/json\r\n\
+             Accept: application/json, text/event-stream\r\n{version}\
+             Authorization: Bearer {token}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let mut stream = UnixStream::connect(socket).await.unwrap();
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut reply = String::new();
+        stream.read_to_string(&mut reply).await.unwrap();
+        let (head, body) = reply.split_once("\r\n\r\n").unwrap();
+        assert!(head.starts_with("HTTP/1.1 200"), "{reply}");
+        let reply: Value = serde_json::from_str(body).unwrap();
+        reply["result"].clone()
+    }
+
+    #[sqlx::test(migrator = "max_db::MIGRATOR")]
+    async fn a_client_of_the_older_protocol_is_served(pool: PgPool) {
+        let mut conn = pool.acquire().await.unwrap();
+        let place = Arc::new(group(&mut conn).await);
+        drop(conn);
+        let conversation = place.conversation;
+        let sessions = Sessions::default();
+        let grant = sessions.open(Context {
+            pool,
+            place,
+            offset: offset(),
+            page_tokens: 2000,
+            search: None,
+            work: None,
+            store: None,
+            poster: None,
+            embedder: None,
+            admin: None,
+        });
+        let dir = std::env::temp_dir().join(format!("max-mcp-legacy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("mine.sock");
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        let mut scope = Scope::new();
+        let served = sessions.clone();
+        scope.spawn(move |stop| serve(listener, conversation, served, stop));
+
+        let hello = json!({
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": { "name": "pi", "version": "1.4.0" },
+        });
+        let initialized = post_legacy(&socket, grant.token(), "initialize", hello).await;
+        assert_eq!(
+            initialized["protocolVersion"], "2025-11-25",
+            "{initialized}"
+        );
+        let listed = post_legacy(&socket, grant.token(), "tools/list", json!({})).await;
+        assert_eq!(listed["tools"][0]["name"], "context_read", "{listed}");
 
         scope.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(dir);
