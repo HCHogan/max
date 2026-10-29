@@ -391,6 +391,49 @@ pub async fn by_quote_id(
     Ok(id.map(MessageId))
 }
 
+/// A row's platform id in an endpoint, and since when it has been on the
+/// platform: someone's message by the id it came with, one Max sent by the
+/// id the platform gave back. None if it never got there, or not yet.
+pub async fn native(
+    conn: &mut PgConnection,
+    message: MessageId,
+    endpoint: EndpointId,
+) -> sqlx::Result<Option<(String, DateTime<Utc>)>> {
+    let found = sqlx::query!(
+        r#"
+        select native_id as "native_id!", sent_at as "at!" from messages
+        where id = $1 and endpoint_id = $2 and native_id is not null
+        union all
+        select native_id, at from deliveries
+        where message_id = $1 and endpoint_id = $2 and native_id is not null
+        limit 1
+        "#,
+        message.0,
+        endpoint.0
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(found.map(|found| (found.native_id, found.at)))
+}
+
+/// Whether a row was taken back, or is being: an unsend of it that didn't
+/// fail.
+pub async fn unsent(conn: &mut PgConnection, message: MessageId) -> sqlx::Result<bool> {
+    let unsent = sqlx::query_scalar!(
+        r#"
+        select exists (
+            select from messages m
+            left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id
+            where m.target_id = $1 and m.event = 'unsend' and d.status is distinct from 'failed'
+        ) as "unsent!"
+        "#,
+        message.0
+    )
+    .fetch_one(conn)
+    .await?;
+    Ok(unsent)
+}
+
 /// How to quote a row in its endpoint, if the platform gave a way.
 pub async fn quote_id(conn: &mut PgConnection, message: MessageId) -> sqlx::Result<Option<String>> {
     let id = sqlx::query_scalar!(
@@ -415,6 +458,8 @@ pub enum Sent<'a> {
         /// For quoting it, where the platform has a separate id.
         quote_id: Option<&'a str>,
     },
+    /// Done, such as an unsend, which has no platform id of its own.
+    Done,
     Failed {
         error: &'a str,
     },
@@ -432,6 +477,7 @@ pub async fn record_delivery(
             native_id,
             quote_id,
         } => ("sent", Some(*native_id), *quote_id, None),
+        Sent::Done => ("sent", None, None, None),
         Sent::Failed { error } => ("failed", None, None, Some(*error)),
     };
     sqlx::query!(

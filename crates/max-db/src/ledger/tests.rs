@@ -137,6 +137,44 @@ async fn deliveries_and_platform_ids(pool: PgPool) -> sqlx::Result<()> {
 }
 
 #[sqlx::test]
+async fn what_an_unsend_finds_and_leaves(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let group = group(&mut conn, "group:30001").await?;
+    let endpoint = group.endpoint.id;
+    let max = sender(group.max, "Max", None);
+    let xiaoming = sender(group.xiaoming, "小明", None);
+    let heard = commit(&mut conn, &group, &xiaoming, &said("广告"), 0).await?;
+    let mine = commit(&mut conn, &group, &max, &said("一"), 1).await?;
+    let queued = commit(&mut conn, &group, &max, &said("二"), 2).await?;
+    let delivered = Sent::Delivered {
+        native_id: "m1",
+        quote_id: None,
+    };
+    record_delivery(&mut conn, mine, endpoint, &delivered, at(3)).await?;
+    let heard_as = native(&mut conn, heard, endpoint).await?;
+    assert_eq!(heard_as, Some(("n0".into(), at(0))));
+    let mine_as = native(&mut conn, mine, endpoint).await?;
+    assert_eq!(mine_as, Some(("m1".into(), at(3))));
+    assert_eq!(native(&mut conn, queued, endpoint).await?, None);
+
+    // Max takes back its own, too late, and then 小明's: an unsend that
+    // went through is sent without an id of its own.
+    let unsend = |target| Content::Unsend { target };
+    let late = commit(&mut conn, &group, &max, &unsend(mine), 4).await?;
+    let refused = Sent::Failed { error: "40064004" };
+    record_delivery(&mut conn, late, endpoint, &refused, at(4)).await?;
+    assert!(!unsent(&mut conn, mine).await?);
+    let done = commit(&mut conn, &group, &max, &unsend(heard), 5).await?;
+    assert!(unsent(&mut conn, heard).await?, "on its way");
+    record_delivery(&mut conn, done, endpoint, &Sent::Done, at(5)).await?;
+    assert!(unsent(&mut conn, heard).await?);
+    let rows = rows(&mut conn, group.endpoint.conversation, Some(queued), done).await?;
+    let deliveries: Vec<_> = rows.iter().map(|row| row.delivery).collect();
+    assert_eq!(deliveries, [Some(Delivery::Failed), Some(Delivery::Sent)]);
+    Ok(())
+}
+
+#[sqlx::test]
 async fn quoting_someone_by_their_quote_id(pool: PgPool) -> sqlx::Result<()> {
     let mut conn = pool.acquire().await?;
     let group = group(&mut conn, "group:30001").await?;
