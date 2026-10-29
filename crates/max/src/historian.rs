@@ -99,10 +99,13 @@ impl Historian {
         let budgets = Budgets::for_window(window);
 
         let mark = settings.cleared_upto;
-        // The summaries on this pass's side of the mark.
+        // The summaries on this pass's side of the mark. One across it, as
+        // the Haskell version's clears left some, is on both: what comes
+        // before the mark is summarized up to it.
         let mut active = summaries::active(&mut conn, conversation, None).await?;
         active.retain(|(_, summary)| match mark {
-            Some(mark) => (summary.last <= mark) == before_mark,
+            Some(mark) if before_mark => summary.first <= mark,
+            Some(mark) => summary.last > mark,
             None => !before_mark,
         });
         let last = active.last().map(|(_, summary)| summary.last);

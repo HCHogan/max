@@ -275,3 +275,49 @@ async fn what_came_before_a_clear_is_summarized_on_its_own(pool: PgPool) {
     assert_eq!(captured, Captured::Nothing);
     assert_eq!(script.calls(), 4);
 }
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_summary_across_a_clear_covers_what_came_before(pool: PgPool) {
+    let script = Arc::new(Script::default());
+    let (place, ids) = chatter(&pool, 20).await;
+    let mut conn = pool.acquire().await.unwrap();
+    // Imported: summarized past where the clear came later.
+    let across = summaries::Summary {
+        first: ids[0],
+        last: ids[12],
+        started_at: at(0),
+        ended_at: at(12),
+        title: "示波器".into(),
+        kind: "support".into(),
+        importance: 40,
+        full: "聊了探头补偿。".into(),
+        brief: None,
+        line: None,
+    };
+    summaries::insert(&mut conn, place.conversation, &across, "old", at(13))
+        .await
+        .unwrap();
+    let cleared = Settings {
+        model: Some("test/small".into()),
+        cleared_upto: Some(ids[9]),
+        ..Settings::default()
+    };
+    platform::save_settings(&mut conn, place.conversation, &cleared, at(30))
+        .await
+        .unwrap();
+    drop(conn);
+    let historian = historian(&pool, &script);
+
+    // Nothing is asked of the model before the mark: only what follows
+    // the summary is.
+    script.push(answer(&[(ids[13], ids[19])]));
+    let captured = historian.capture(&place, Reason::Compact).await.unwrap();
+    assert_eq!(captured, Captured::Published(1));
+    let spans: Vec<(MessageId, MessageId)> = active(&pool, &place)
+        .await
+        .iter()
+        .map(|summary| (summary.first, summary.last))
+        .collect();
+    assert_eq!(spans, [(ids[0], ids[12]), (ids[13], ids[19])]);
+    assert_eq!(script.calls(), 1);
+}
