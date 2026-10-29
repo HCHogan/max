@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 
 use super::*;
 use crate::conversation::testing::{group, offset};
-use crate::conversation::{Event, Poster, ingest};
+use crate::conversation::{Act, Event, Poster, ingest};
 use crate::media::store::Store;
 use crate::scope::Scope;
 
@@ -93,10 +93,11 @@ async fn a_chart_goes_out_with_its_caption(pool: PgPool) {
     scope.spawn(move |_| async move {
         while let Some(event) = posts.recv().await {
             let Event::Post(post) = event else { continue };
+            let Act::Say(draft) = post.act else { continue };
             let said = ingest::said(
                 &mut conn,
                 &committing,
-                post.draft,
+                draft,
                 None,
                 None,
                 Utc::now(),

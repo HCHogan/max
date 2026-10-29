@@ -33,8 +33,8 @@ pub enum Event {
     Inbound(Inbound),
     /// The `/bind <码>` that just bound this group, from the table.
     Bound(Inbound),
-    /// Something to say that isn't the model's text, such as a tool's
-    /// picture.
+    /// Something to say or do that isn't the model's text, such as a
+    /// tool's picture or recall.
     Post(Post),
     /// The model call's segmenter cut a message out of the stream.
     Said {
@@ -60,19 +60,26 @@ pub enum Event {
     Stop,
 }
 
-/// What Max says that isn't the model's text: committed by the actor and
-/// sent like a segment. See "经 `Post` 发".
+/// What Max says or does that isn't the model's text: committed by the
+/// actor and sent like a segment. See "经 `Post` 发".
 #[derive(Debug)]
 pub struct Post {
-    pub draft: Draft,
+    pub act: Act,
     /// The turn it comes from, if any: the row's turn.
     pub origin: Option<TurnId>,
     /// Told how the sending went.
     pub receipt: Option<Receipt>,
 }
 
-/// Where the sender says how a message's sending went: the message, or
-/// why it didn't go out.
+#[derive(Debug)]
+pub enum Act {
+    Say(Draft),
+    /// Take back an earlier message of the timeline.
+    Unsend(MessageId),
+}
+
+/// Where the sender says how a row's sending went: the row, or why it
+/// didn't go out.
 pub type Receipt = oneshot::Sender<Result<MessageId, String>>;
 
 /// Lets a tool say something in its turn's conversation.
@@ -89,9 +96,18 @@ impl Poster {
 
     /// Says `draft`, and waits until it is sent.
     pub async fn post(&self, draft: Draft) -> Result<MessageId, String> {
+        self.act(Act::Say(draft)).await
+    }
+
+    /// Takes back `target`, and waits until the platform has.
+    pub async fn unsend(&self, target: MessageId) -> Result<MessageId, String> {
+        self.act(Act::Unsend(target)).await
+    }
+
+    async fn act(&self, act: Act) -> Result<MessageId, String> {
         let (receipt, sent) = oneshot::channel();
         let post = Post {
-            draft,
+            act,
             origin: Some(self.origin),
             receipt: Some(receipt),
         };

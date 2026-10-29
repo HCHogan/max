@@ -699,20 +699,16 @@ async fn unlinked_accounts_are_reminded_when_they_talk_to_max(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_post_hears_how_its_sending_went(pool: PgPool) {
     let mut h = Harness::unprompted(pool, 300).await;
-    let post = |text: &str| {
-        let (receipt, sent) = oneshot::channel();
+    let say = |nodes: Vec<DraftNode>| {
         let draft = Draft {
             reply_to: None,
-            nodes: vec![DraftNode::Text { text: text.into() }],
+            nodes,
         };
-        let post = Post {
-            draft,
-            origin: None,
-            receipt: Some(receipt),
-        };
-        (post, sent)
+        post(Act::Say(draft))
     };
-    let (chart, sent) = post("每日活跃");
+    let (chart, sent) = say(vec![DraftNode::Text {
+        text: "每日活跃".into(),
+    }]);
     h.mailbox.send(Event::Post(chart)).unwrap();
     let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
         .await
@@ -724,11 +720,54 @@ async fn a_post_hears_how_its_sending_went(pool: PgPool) {
     assert_eq!(sent.await.unwrap(), Ok(id));
 
     // Nothing to send: told at once, and nothing goes to the sender.
-    let (empty, sent) = post("  ");
-    let mut empty = empty;
-    empty.draft.nodes.clear();
+    let (empty, sent) = say(Vec::new());
     h.mailbox.send(Event::Post(empty)).unwrap();
     assert!(sent.await.unwrap().is_err());
+    h.stop().await;
+    assert!(h.outbound.try_recv().is_err());
+}
+
+/// A post that waits to hear how it went.
+fn post(act: Act) -> (Post, oneshot::Receiver<Result<MessageId, String>>) {
+    let (receipt, sent) = oneshot::channel();
+    let post = Post {
+        act,
+        origin: None,
+        receipt: Some(receipt),
+    };
+    (post, sent)
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_post_takes_back_a_message(pool: PgPool) {
+    let mut h = Harness::unprompted(pool, 300).await;
+    h.send(from_xiaoming(0, vec![text("加群领红包")]));
+    // No such message: told at once. By then 小明's is committed.
+    let (nothing, refused) = post(Act::Unsend(MessageId(i64::MAX)));
+    h.mailbox.send(Event::Post(nothing)).unwrap();
+    assert!(refused.await.unwrap().is_err());
+    let target = sqlx::query_scalar("select id from messages where native_id = 'MSG0'")
+        .fetch_one(&h.pool)
+        .await
+        .map(MessageId)
+        .unwrap();
+
+    let (unsend, sent) = post(Act::Unsend(target));
+    h.mailbox.send(Event::Post(unsend)).unwrap();
+    let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let row = outgoing.message;
+    assert_eq!(row.content, Content::Unsend { target });
+    assert_eq!(row.sender.name, "maxx");
+    outgoing.receipt.unwrap().send(Ok(row.id)).unwrap();
+    assert_eq!(sent.await.unwrap(), Ok(row.id));
+
+    // An unsend is no message to take back.
+    let (again, refused) = post(Act::Unsend(row.id));
+    h.mailbox.send(Event::Post(again)).unwrap();
+    assert!(refused.await.unwrap().is_err());
     h.stop().await;
     assert!(h.outbound.try_recv().is_err());
 }

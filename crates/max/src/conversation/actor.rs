@@ -24,7 +24,7 @@ use tracing::{debug, info, warn};
 
 use super::ingest;
 use super::project::{self, Projection};
-use super::{Event, Place, Post, Poster, Receipt, TaskId, classify, model, tool};
+use super::{Act, Event, Place, Post, Poster, Receipt, TaskId, classify, model, tool};
 use crate::bind::Binds;
 use crate::historian::Notice;
 use crate::inbound::Inbound;
@@ -602,15 +602,19 @@ impl Conversation {
         Ok(())
     }
 
-    /// What a tool says. Only a running core's tools post so far, and
-    /// their programs' results tell the core what they did.
+    /// What a tool says or does. Only a running core's tools post so far,
+    /// and their programs' results tell the core what they did.
     async fn post(&mut self, post: Post) -> Result<()> {
         let Post {
-            draft,
+            act,
             origin,
             receipt,
         } = post;
-        if let Some(message) = self.say(draft, origin, None, receipt).await?
+        let committed = match act {
+            Act::Say(draft) => self.say(draft, origin, None, receipt).await?,
+            Act::Unsend(target) => self.unsend(target, origin, receipt).await?,
+        };
+        if let Some(message) = committed
             && let Some(a) = self.core.as_mut()
             && Some(a.turn) == origin
         {
@@ -641,11 +645,43 @@ impl Conversation {
         )
         .await?;
         drop(conn);
-        let Some(message) = said else {
+        Ok(self.hand_over(said, receipt, "没有能发的东西"))
+    }
+
+    /// Takes back `target`, as `say` says something.
+    async fn unsend(
+        &mut self,
+        target: MessageId,
+        turn: Option<TurnId>,
+        receipt: Option<Receipt>,
+    ) -> Result<Option<Message>> {
+        let mut conn = self.shared.pool.acquire().await?;
+        let unsend = ingest::unsend(
+            &mut conn,
+            &self.place,
+            target,
+            turn,
+            Utc::now(),
+            self.shared.offset,
+        )
+        .await?;
+        drop(conn);
+        Ok(self.hand_over(unsend, receipt, "这里没有这条消息"))
+    }
+
+    /// A row of Max's that was committed, for the sender; if none was, the
+    /// receipt hears `why` at once.
+    fn hand_over(
+        &mut self,
+        committed: Option<Message>,
+        receipt: Option<Receipt>,
+        why: &str,
+    ) -> Option<Message> {
+        let Some(message) = committed else {
             if let Some(receipt) = receipt {
-                let _ = receipt.send(Err("没有能发的东西".to_owned()));
+                let _ = receipt.send(Err(why.to_owned()));
             }
-            return Ok(None);
+            return None;
         };
         self.committed(&message);
         let outgoing = Outgoing {
@@ -656,7 +692,7 @@ impl Conversation {
         if self.shared.outbound.send(outgoing).is_err() {
             warn!(message = %message.id, "the sender is gone");
         }
-        Ok(Some(message))
+        Some(message)
     }
 }
 

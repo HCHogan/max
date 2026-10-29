@@ -270,19 +270,62 @@ pub async fn said(
         reply_to: draft.reply_to,
         nodes,
     };
-    let sender = Sender {
-        identity: place.me.identity,
-        name: place.my_name.clone(),
-        role: None,
-    };
     let rendered = Render {
         people: &people,
         offset,
     }
     .content(&content);
+    let message = mine(&mut tx, place, content, &rendered, turn, segment, now).await?;
+    for (ordinal, sha256) in (0..).zip(&files) {
+        media::link(&mut tx, message.id, ordinal, sha256).await?;
+    }
+    tx.commit().await?;
+    Ok(Some(message))
+}
+
+/// Max takes back a message of this timeline: an unsend row. None if
+/// `target` is no message here.
+pub async fn unsend(
+    conn: &mut PgConnection,
+    place: &Place,
+    target: MessageId,
+    turn: Option<TurnId>,
+    now: DateTime<Utc>,
+    offset: FixedOffset,
+) -> sqlx::Result<Option<Message>> {
+    let row = ledger::row(conn, place.conversation, target).await?;
+    if !row.is_some_and(|row| matches!(row.message.content, Content::Message { .. })) {
+        warn!(conversation = %place.conversation, %target, "dropped an unsend of no message here");
+        return Ok(None);
+    }
+    let content = Content::Unsend { target };
+    let rendered = Render {
+        people: &BTreeMap::new(),
+        offset,
+    }
+    .content(&content);
+    let message = mine(conn, place, content, &rendered, turn, None, now).await?;
+    Ok(Some(message))
+}
+
+/// Commits a row in Max's name.
+async fn mine(
+    conn: &mut PgConnection,
+    place: &Place,
+    content: Content,
+    rendered: &str,
+    turn: Option<TurnId>,
+    segment: Option<i32>,
+    now: DateTime<Utc>,
+) -> sqlx::Result<Message> {
+    let sender = Sender {
+        identity: place.me.identity,
+        name: place.my_name.clone(),
+        role: None,
+    };
     let raw = serde_json::Value::Null;
     let id = ledger::insert(
-        &mut tx,
+        conn,
         &NewMessage {
             conversation: place.conversation,
             endpoint: place.endpoint,
@@ -294,17 +337,13 @@ pub async fn said(
             command: false,
             content: &content,
             raw: &raw,
-            text: &rendered,
+            text: rendered,
             turn,
             segment,
         },
     )
     .await?;
-    for (ordinal, sha256) in (0..).zip(&files) {
-        media::link(&mut tx, id, ordinal, sha256).await?;
-    }
-    tx.commit().await?;
-    let message = Message {
+    Ok(Message {
         id,
         conversation: place.conversation,
         sender,
@@ -312,8 +351,7 @@ pub async fn said(
         content,
         turn,
         raw,
-    };
-    Ok(Some(message))
+    })
 }
 
 /// A row's picture that Max may send again: any of this conversation's,
