@@ -1066,6 +1066,7 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
   - 模型沿用 Haskell 版的 bge-m3（1024 维），线上是 h610 上的 Ollama，tank 连它（10-29 从 tank 试过，回 1024 维、归一化的向量；老库的向量和它算的一样，距离 0）。配置 `[embedding]`：`base_url`（OpenAI 兼容，`/v1` 结尾）、`model`、可选的 `api_key_file`。不配就没有 embedding worker，`find_stickers` 回 `unavailable`。维数跟着表，不是配置项：模型给的长度不是 1024 就当出错。
   - 向量存在 `caption_embeddings`，一个文件一行，记着模型；搜的时候只比当前模型的。
   - embedding worker：caption worker 写了表情包的 caption（不是 SKIP、不空）就交给它；启动时和之后每小时扫一遍没有当前模型向量的，所以换了模型会全部重算。一个文件一个单元，同时 2 个，每次请求 30 秒，失败重试两次（10 秒、60 秒）就放弃，等下一次扫描。tank 到 h610 晚上丢包，不做别的补救。用量不记 `llm_usage`。
+  - 老表情包的向量由 `max-import vectors` 导，见[导入](#导入)。
   - 查询：query 算成向量，按余弦距离取最近的，失败回 `unavailable`，不重试。不设距离门槛（Haskell 版是 0.65）：10-29 在老库的 3,328 个向量上试了十几个查询，相关和无关的距离重叠（相关的多在 0.31–0.45，"吃瓜看戏"最近的 0.45，"今天天气怎么样"最近的也有 0.44），门槛分不开，交给模型看描述挑。
 - **sender**：上传 base64 拿 `file_info`，再发 `msg_type = 7`，只有 `send_image` 带 `content`。`file_info` 按（端点、sha256）缓存在内存里，提前一小时作废，所以同一张表情包一天里再发不用重新上传；重启就丢，重新传。上传失败和别的发送失败一样记进 `deliveries`。每张图算一条主动消息，占群的额度。
 - **提示词**：表情包偶尔用，一次回答最多一张，别句句都配；记录里没有合适的，用 `find_stickers` 找。
@@ -1137,14 +1138,14 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 - `conversation_compartments` 只导 `active` 的（3,249 段）。它们按群号（`legacy_group_id`）挂，不是按 `conversation_id`，导入时经群号找会话。范围从 `ingest_seq` 换成首尾消息 id；importance 0..1 换成 1..100；单摘要时期的 40 段只有 `summary`，放进 p1，其它层空着。旧摘要没有标题，标题留空，渲染时不留多余的空格。句柄从 `episode:<uuid>` 换成 `summary#<id>`。
 - `principals` 和 `principal_identities` 直接搬，id 不变，旧摘要和记忆里的 `[mention#N]` 因此还有效；改名之前写的 `[@#N]` 导入时改写成 `[mention#N]`。旧表按 Max 的账号（`platform_account_id`）区分 identity，每个平台一个账号，直接换成平台：QQ 的换成 `qq_legacy`。`sender_name` 从旧 `messages` 的 `sender_card`、`sender_nickname` 取，群名片优先：2026-08-04 起 `sender_nickname` 存的就是有名片时的名片（`QQ.hs:94`）。`sender_role` 从 `platform_events` 原始 payload 的 `sender.role` 取，08-04 之前的为空。没有身份、没有消息的 611 个空 principal 不导。`endpoint_known_identities` 不导。
 - `sessions` 只导人设、`/proactive` 和 `/clear --all`，模型和强度不导，见[配置](#配置)。`memories` 等记忆功能做出来再导（2026-10-29 定）：它们也按群号挂；个人记忆只在来源群里用，表要带会话，不能只按 principal，见[表](#表)。
-- 媒体：内容库的文件和旧库在同一个 bcachefs 上，用 `cp --reflink` 拷到 `/var/lib/maxx/media`，属主改成 `maxx`。`media` 和 `message_media` 从 `message_images`、`message_videos`、`group_files` 建；旧的 `seg_index` 是第几个节点，不是第几个媒体，要按节点重算序号；没有表记着的，按节点里写的 blob 补上（多是 Max 发的图）。文件要先拷好，导入时每个都要在。给模型的版本和图片尺寸由 `max-import pictures` 生成，和下载时一样。caption 等第 3 小步有了 `media_captions` 再导：老库 21,519 张图的描述，和表情包库（3,397 张；3,328 张有描述和 bge-m3 向量，94 张 banned 的记成 SKIP）。由 `max-import captions` 导，maxx 照常跑着也行；它先跑迁移，所以要在带 caption worker 的 maxx 启动之前导，否则 worker 启动时的扫描会把最近 14 天导入的图重新写一遍：只导 maxx 有的文件，同一个文件表情包的描述优先，maxx 自己已经写了的不动，所以能重复跑。表情包的向量等第 5 小步有了地方再导。
+- 媒体：内容库的文件和旧库在同一个 bcachefs 上，用 `cp --reflink` 拷到 `/var/lib/maxx/media`，属主改成 `maxx`。`media` 和 `message_media` 从 `message_images`、`message_videos`、`group_files` 建；旧的 `seg_index` 是第几个节点，不是第几个媒体，要按节点重算序号；没有表记着的，按节点里写的 blob 补上（多是 Max 发的图）。文件要先拷好，导入时每个都要在。给模型的版本和图片尺寸由 `max-import pictures` 生成，和下载时一样。caption 等第 3 小步有了 `media_captions` 再导：老库 21,519 张图的描述，和表情包库（3,397 张；3,328 张有描述和 bge-m3 向量，94 张 banned 的记成 SKIP）。由 `max-import captions` 导，maxx 照常跑着也行；它先跑迁移，所以要在带 caption worker 的 maxx 启动之前导，否则 worker 启动时的扫描会把最近 14 天导入的图重新写一遍：只导 maxx 有的文件，同一个文件表情包的描述优先，maxx 自己已经写了的不动，所以能重复跑。表情包的向量由 `max-import vectors` 导（第 5 小步）：老 `stickers` 表的 bge-m3 向量，只导老表记的文本哈希（`embedding_content_hash`，描述的 sha256）和 maxx 的 caption 文字对得上的，模型名照抄（`bge-m3`，所以 `[embedding] model` 要写成这个），已经有向量的不动，所以能重复跑、maxx 跑着也行；它也先跑迁移。10-29 在 tank 上只读地对过：maxx 有 3,334 条该有向量的表情包 caption，3,319 条能导；8 条老描述有换行或首尾空白，导 caption 时理成了一行，文字不同；7 条是 maxx 自己写的 caption，老库没有向量；这 15 条由 embedding worker 补。
 - 转发：旧库把转发里的每条消息存成单独的行，导入时折进转发那条消息的节点，一条一行（嵌套的缩进），和现在官方接口给的转发一样；里面的图算在那条消息上。
 - Max 是一个 principal：旧 QQ 号的 Max，加上 bot 的 openid 作 `qq` 身份，旧行渲染出来是"（你）"。Max 的旧行没有平台 id，它们本该在不导的 `deliveries` 里。
 - owner 的旧私聊接到 owner 新的 c2c 私聊上；别人的旧私聊不接。owner 的 openid 接在 owner 旧 QQ 号的 principal 上。
 - 各群 VM 的 `/work` 也迁（2026-10-27 定）：按群号找到对应的会话，把这个群当前沙箱卷里的 `work` 拷到新卷，属主改成 `maxx`（见 [VM 进程](#vm-进程)）。`nix.img`（guest 里可写的 Nix store，存的是装过的包）提议不迁，用到时重新装。旧卷在 root 所有的目录下，读它要 root。
 - 自动化、lingo、Destiny 等各自功能做到时再导；表情包随 caption 一起导。
 - 导入写了旧 id 的表，最后要把它们的 identity 序列调到最大值之后（`setval`），否则新行会撞旧 id。
-- 规模：2026-10-28 有 293,848 条消息、605 个有身份的人；库 3.3 GB，内容库 3.4 万个文件、26 GB。导入是分钟级的事。向量（bge-m3）不导，maxx 没有 pgvector，要用时重算。
+- 规模：2026-10-28 有 293,848 条消息、605 个有身份的人；库 3.3 GB，内容库 3.4 万个文件、26 GB。导入是分钟级的事。消息和摘要的向量（bge-m3）不导，`context_search` 做到时重算；表情包的向量导，见上面的媒体一条。
 - maxx 自己的库（测试群的 113 条消息、3 段摘要）导入时整个重建，不留（2026-10-29 owner 定）：它的 id 和要保留的旧 id 撞。测试群导入后重新 `/bind`，导入前 `/link` 过的人导入后再发一次。
 - 工具是单独的 crate `max-import`：`import` 在一个事务里导进空库，连旧库只读；`pictures` 再补给模型的图，跑过的跳过。演练就是导进一个临时库。上线跑一段时间后删掉；`/link` 留着，QQ 号是一个人在各个群和私聊里唯一不变的号。旧库和 `/var/lib/max` 等 owner 说了再删。`qq_legacy` 的行和合并是数据，留着。
 - 上线步骤（2026-10-29 定）：

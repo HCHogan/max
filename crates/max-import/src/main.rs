@@ -1,7 +1,8 @@
 //! Imports the Haskell version's database into maxx's, once, at go-live:
 //! everything into an empty database in one transaction, reading the old
 //! one read-only; then the model's copies of the imported pictures; and,
-//! any time after, the old captions. The mapping is "导入" in
+//! any time after, the old captions, and then the sticker library's
+//! vectors. The mapping is "导入" in
 //! docs/rust-rewrite.md. The old schema's code lives only here, and goes
 //! once maxx has run on the imported data for a while.
 
@@ -15,6 +16,7 @@ mod places;
 mod summaries;
 #[cfg(test)]
 mod tests;
+mod vectors;
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -71,6 +73,18 @@ enum Command {
         #[arg(long)]
         to: String,
     },
+    /// After the captions, while maxx serves too: the sticker library's
+    /// old vectors, so that the embedding worker needn't make them again.
+    /// It migrates the new database first, so it can run before a maxx
+    /// with the worker starts.
+    Vectors {
+        /// The old database's URL, opened read-only.
+        #[arg(long)]
+        from: String,
+        /// The new database's URL.
+        #[arg(long)]
+        to: String,
+    },
 }
 
 /// What the old database doesn't know: the official bot's accounts.
@@ -111,6 +125,12 @@ async fn main() -> Result<()> {
             let mut new = PgConnection::connect(&to).await?;
             MIGRATOR.run(&mut new).await?;
             captions::import(&mut old, &mut new).await
+        }
+        Command::Vectors { from, to } => {
+            let mut old = read_only(&from).await?;
+            let mut new = PgConnection::connect(&to).await?;
+            MIGRATOR.run(&mut new).await?;
+            vectors::import(&mut old, &mut new).await
         }
     }
 }

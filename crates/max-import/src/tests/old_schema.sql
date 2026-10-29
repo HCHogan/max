@@ -1,6 +1,9 @@
 -- The Haskell version's tables, with only the columns max-import reads,
 -- under their names and types. old_rows.sql fills them with made-up rows.
 
+-- Where maxx's migration finds it.
+create extension if not exists vector schema public;
+
 create table platform_accounts (
     platform_account_id bigint primary key,
     platform text not null,
@@ -114,7 +117,13 @@ create table stickers (
     sha256 text primary key,
     description text,
     banned boolean not null default false,
-    first_seen_at timestamptz not null
+    first_seen_at timestamptz not null,
+    -- bge-m3's, of the description whose SHA-256 is the hash.
+    embedding public.vector,
+    embedding_model text,
+    embedding_dimensions integer,
+    embedding_content_hash text,
+    embedding_updated_at timestamptz
 );
 
 create table videos (

@@ -558,3 +558,52 @@ async fn captions_after(pool: PgPool) {
         sqlx::query_as(written).fetch_all(&mut new).await.unwrap();
     assert_eq!(again, expected);
 }
+
+#[sqlx::test]
+async fn sticker_vectors_after(pool: PgPool) {
+    let (mut old, mut new, store) = setup(&pool, &files()).await;
+    import(&mut old, &mut new, &store, &accounts())
+        .await
+        .unwrap();
+    captions::import(&mut old, &mut new).await.unwrap();
+    // Old vectors for c, the sticker maxx has, and f, which stayed behind;
+    // c's hash isn't of its description yet.
+    let vectors = "update old.stickers
+                   set embedding = array_fill($1::real, array[1024])::real[]::vector,
+                       embedding_model = 'bge-m3', embedding_dimensions = 1024,
+                       embedding_content_hash = $2,
+                       embedding_updated_at = '2026-01-01 00:00+08'
+                   where sha256 ~ '^[cf]'";
+    let stale = "0".repeat(64);
+    sqlx::query(vectors)
+        .bind(0.5_f32)
+        .bind(&stale)
+        .execute(&pool)
+        .await
+        .unwrap();
+    vectors::import(&mut old, &mut new).await.unwrap();
+    let written = "select left(sha256, 1), model, (embedding::real[])[1024]
+                   from caption_embeddings order by sha256";
+    let stored = async |new: &mut PgConnection| -> Vec<(String, String, f32)> {
+        sqlx::query_as(written).fetch_all(new).await.unwrap()
+    };
+    assert!(stored(&mut new).await.is_empty(), "made from another text");
+
+    let fresh = "update old.stickers
+                 set embedding_content_hash = encode(sha256(convert_to(description, 'UTF8')), 'hex')";
+    sqlx::raw_sql(fresh).execute(&pool).await.unwrap();
+    vectors::import(&mut old, &mut new).await.unwrap();
+    let expected = vec![("c".to_owned(), "bge-m3".to_owned(), 0.5)];
+    assert_eq!(stored(&mut new).await, expected);
+
+    // Again: what's there stays.
+    sqlx::query(vectors)
+        .bind(0.25_f32)
+        .bind(&stale)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(fresh).execute(&pool).await.unwrap();
+    vectors::import(&mut old, &mut new).await.unwrap();
+    assert_eq!(stored(&mut new).await, expected);
+}
