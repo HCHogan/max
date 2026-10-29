@@ -22,6 +22,8 @@ thiserror = "2"
 max-core = { path = "crates/max-core" }
 max-db = { path = "crates/max-db" }
 max-llm = { path = "crates/max-llm" }
+# max-import makes the model's copies of imported pictures as max does.
+max = { path = "crates/max" }
 qqbot = { path = "crates/qqbot" }
 
 # Postgres for max-db: compile-time checked queries, migrations and

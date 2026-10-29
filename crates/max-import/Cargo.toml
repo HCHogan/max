@@ -13,6 +13,7 @@ workspace = true
 chrono.workspace = true
 clap.workspace = true
 color-eyre.workspace = true
+max.workspace = true
 max-core.workspace = true
 max-db.workspace = true
 serde_json.workspace = true

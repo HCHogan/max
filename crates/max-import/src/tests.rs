@@ -19,6 +19,9 @@ fn accounts() -> Accounts {
     }
 }
 
+/// A white pixel.
+const PNG: &[u8] = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90\x77\x53\xde\x00\x00\x00\x0c\x49\x44\x41\x54\x78\x9c\x63\xf8\xff\xff\x3f\x00\x05\xfe\x02\xfe\x0d\xef\x46\xb8\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82";
+
 /// The made-up files, by the letter their SHA-256 repeats.
 fn files() -> Vec<(char, &'static [u8])> {
     vec![
@@ -26,7 +29,7 @@ fn files() -> Vec<(char, &'static [u8])> {
         ('b', b"b"),
         ('c', b"c"),
         ('d', b"d"),
-        ('e', b"12345"),
+        ('e', PNG),
     ]
 }
 
@@ -450,7 +453,7 @@ async fn media(pool: PgPool) {
             file('c', "image/jpeg", 11, "2025-12-30 16:00:00+00"),
             file('d', "application/zip", 13, "2026-01-02 02:09:00+00"),
             // Only its node and the store know it.
-            file('e', "image/png", 5, "2026-01-02 02:09:00+00"),
+            file('e', "image/png", 69, "2026-01-02 02:09:00+00"),
         ]
     );
     let links: Vec<(i64, i16, String)> = sqlx::query_as(
@@ -469,6 +472,32 @@ async fn media(pool: PgPool) {
     .map(|(id, ordinal, letter)| (id, ordinal, letter.to_owned()));
     // The forwarded picture is the container's.
     assert_eq!(links, expected);
+}
+
+#[sqlx::test]
+async fn the_models_copies_of_pictures(pool: PgPool) {
+    let (mut old, mut new, store) = setup(&pool, &files()).await;
+    import(&mut old, &mut new, &store, &accounts())
+        .await
+        .unwrap();
+    pictures::run(&mut new, &store).await.unwrap();
+    let pictures: Vec<(String, Option<i32>, Option<String>)> = sqlx::query_as(
+        "select left(sha256, 1), width, left(model_sha256, 1) from media order by sha256",
+    )
+    .fetch_all(&mut new)
+    .await
+    .unwrap();
+    // The pixel is small enough as it is; "a" and "c" only say they are
+    // pictures, and videos and files aren't looked at.
+    let expected = [
+        ("a", None, None),
+        ("b", None, None),
+        ("c", None, None),
+        ("d", None, None),
+        ("e", Some(1), Some("e")),
+    ]
+    .map(|(sha256, width, model)| (sha256.to_owned(), width, model.map(str::to_owned)));
+    assert_eq!(pictures, expected);
 }
 
 #[sqlx::test]

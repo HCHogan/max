@@ -1,6 +1,6 @@
 //! Imports the Haskell version's database into maxx's, once, at go-live:
 //! everything into an empty database in one transaction, reading the old
-//! one read-only. The mapping is "导入" in docs/rust-rewrite.md. The old
+//! one read-only; then the model's copies of the imported pictures. The mapping is "导入" in docs/rust-rewrite.md. The old
 //! schema's code lives only here, and goes once maxx has run on the
 //! imported data for a while.
 
@@ -8,6 +8,7 @@ mod media;
 mod messages;
 mod nodes;
 mod people;
+mod pictures;
 mod places;
 mod summaries;
 #[cfg(test)]
@@ -46,6 +47,16 @@ enum Command {
         #[command(flatten)]
         accounts: Accounts,
     },
+    /// Then, before maxx starts: make the model's copies of the imported
+    /// pictures.
+    Pictures {
+        /// The new database's URL.
+        #[arg(long)]
+        to: String,
+        /// maxx's content store.
+        #[arg(long)]
+        media: PathBuf,
+    },
 }
 
 /// What the old database doesn't know: the official bot's accounts.
@@ -78,6 +89,10 @@ async fn main() -> Result<()> {
             let mut old = PgConnection::connect_with(&from).await?;
             let mut new = PgConnection::connect(&to).await?;
             import(&mut old, &mut new, &media, &accounts).await
+        }
+        Command::Pictures { to, media } => {
+            let mut new = PgConnection::connect(&to).await?;
+            pictures::run(&mut new, &media).await
         }
     }
 }
