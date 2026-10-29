@@ -206,7 +206,7 @@ context_window = 32768
 - 流式请求用空闲超时，不用总时长；重试次数放在 provider 上。Haskell 版是每次尝试最多 1800 秒，晚间网络差时再叠上重试会层层放大。
 - 不做内置模型目录。启动时对照服务端的 `/models` 检查一遍。
 - `/model` 只选 `provider/模型`，`/effort` 只调强度。不再有 `gpt-5.6-luna-medium` 这种只差强度的 profile。
-- 数据导入要做名字映射：会话选过的 profile 名、`llm_usage` 里记录的 profile，都换成"模型加强度"。比如 `gpt-5.6-luna-medium` 映射为 `cliproxy/gpt-5.6-luna` 加 `effort = "medium"`。
+- 老会话选过的模型和强度不导（2026-10-29 owner 定，原来打算把 profile 名映射成"模型加强度"）：maxx 的配置里没有那些模型，选了不认识的模型，这个会话的每个 turn 都会失败。都用默认，要换再 `/model`。`llm_usage` 不导。
 
 v1 只定义它用得到的几节：database、`platforms.qq`、llm，加上顶层的 `owners_file`、`utc_offset` 和 `log`。intent 没有配置项（2026-10-29 删了 `[intent]` 一节），见 [intent](#intent)。其它节跟着对应功能一起加。
 
@@ -1115,15 +1115,22 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 - Max 自己的消息不写 `deliveries`：sender 启动时只补记 `qq` 端点上结果未知的，`qq_legacy` 的不管。旧 `agent_turns` 不导，只有 3 段摘要引用了 `t#`；`turn_id` 留空。
 - `conversation_compartments` 只导 `active` 的（3,249 段）。它们按群号（`legacy_group_id`）挂，不是按 `conversation_id`，导入时经群号找会话。范围从 `ingest_seq` 换成首尾消息 id；importance 0..1 换成 1..100；单摘要时期的 40 段只有 `summary`，放进 p1，其它层空着。旧摘要没有标题，标题留空，渲染时不留多余的空格。句柄从 `episode:<uuid>` 换成 `summary#<id>`。
 - `principals` 和 `principal_identities` 直接搬，id 不变，旧摘要和记忆里的 `[mention#N]` 因此还有效；改名之前写的 `[@#N]` 导入时改写成 `[mention#N]`。旧表按 Max 的账号（`platform_account_id`）区分 identity，每个平台一个账号，直接换成平台：QQ 的换成 `qq_legacy`。`sender_name` 从旧 `messages` 的 `sender_card`、`sender_nickname` 取，群名片优先：2026-08-04 起 `sender_nickname` 存的就是有名片时的名片（`QQ.hs:94`）。`sender_role` 从 `platform_events` 原始 payload 的 `sender.role` 取，08-04 之前的为空。没有身份、没有消息的 611 个空 principal 不导。`endpoint_known_identities` 不导。
-- `sessions` 按[配置](#配置)里说的映射 profile 名。`memories` 等记忆功能做出来再导（2026-10-29 定）：它们也按群号挂；个人记忆只在来源群里用，表要带会话，不能只按 principal，见[表](#表)。
-- 媒体：内容库的文件和旧库在同一个 bcachefs 上，用 `cp --reflink` 拷到 `/var/lib/maxx/media`，属主改成 `maxx`。`media` 和 `message_media` 从 `message_images`、`message_videos`、`group_files` 建；旧的 `seg_index` 是第几个节点，不是第几个媒体，要按节点重算序号；给模型的版本导入时生成。caption 等第 3 小步有了 `media_captions` 再导。
-- owner 的旧私聊接到他新的 c2c 私聊上；别人的旧私聊不接。
+- `sessions` 只导人设、`/proactive` 和 `/clear --all`，模型和强度不导，见[配置](#配置)。`memories` 等记忆功能做出来再导（2026-10-29 定）：它们也按群号挂；个人记忆只在来源群里用，表要带会话，不能只按 principal，见[表](#表)。
+- 媒体：内容库的文件和旧库在同一个 bcachefs 上，用 `cp --reflink` 拷到 `/var/lib/maxx/media`，属主改成 `maxx`。`media` 和 `message_media` 从 `message_images`、`message_videos`、`group_files` 建；旧的 `seg_index` 是第几个节点，不是第几个媒体，要按节点重算序号；没有表记着的，按节点里写的 blob 补上（多是 Max 发的图）。文件要先拷好，导入时每个都要在。给模型的版本和图片尺寸由 `max-import pictures` 生成，和下载时一样。caption 等第 3 小步有了 `media_captions` 再导。
+- 转发：旧库把转发里的每条消息存成单独的行，导入时折进转发那条消息的节点，一条一行（嵌套的缩进），和现在官方接口给的转发一样；里面的图算在那条消息上。
+- Max 是一个 principal：旧 QQ 号的 Max，加上 bot 的 openid 作 `qq` 身份，旧行渲染出来是"（你）"。Max 的旧行没有平台 id，它们本该在不导的 `deliveries` 里。
+- owner 的旧私聊接到他新的 c2c 私聊上；别人的旧私聊不接。owner 的 openid 接在他旧 QQ 号的 principal 上。
 - 各群 VM 的 `/work` 也迁（2026-10-27 定）：按群号找到对应的会话，把这个群当前沙箱卷里的 `work` 拷到新卷，属主改成 `maxx`（见 [VM 进程](#vm-进程)）。`nix.img`（guest 里可写的 Nix store，存的是装过的包）提议不迁，用到时重新装。旧卷在 root 所有的目录下，读它要 root。
 - 自动化、贴纸、lingo、Destiny 等各自功能做到时再导。
 - 导入写了旧 id 的表，最后要把它们的 identity 序列调到最大值之后（`setval`），否则新行会撞旧 id。
 - 规模：2026-10-28 有 293,848 条消息、605 个有身份的人；库 3.3 GB，内容库 3.4 万个文件、26 GB。导入是分钟级的事。向量（bge-m3）不导，maxx 没有 pgvector，要用时重算。
-- maxx 自己的库（测试群的 113 条消息、3 段摘要）导入时整个重建，不留（2026-10-29 owner 定）：它的 id 和要保留的旧 id 撞。测试群导入后重新 `/bind`。
-- 工具是单独的 crate `max-import`（子命令 `check` 演练、`import` 在一个事务里导完），连旧库只读。上线跑一段时间后删掉；`/link` 留着，QQ 号是一个人在各个群和私聊里唯一不变的号。旧库和 `/var/lib/max` 等 owner 说了再删。`qq_legacy` 的行和合并是数据，留着。
+- maxx 自己的库（测试群的 113 条消息、3 段摘要）导入时整个重建，不留（2026-10-29 owner 定）：它的 id 和要保留的旧 id 撞。测试群导入后重新 `/bind`，导入前 `/link` 过的人导入后再发一次。
+- 工具是单独的 crate `max-import`：`import` 在一个事务里导进空库，连旧库只读；`pictures` 再补给模型的图，跑过的跳过。演练就是导进一个临时库。上线跑一段时间后删掉；`/link` 留着，QQ 号是一个人在各个群和私聊里唯一不变的号。旧库和 `/var/lib/max` 等 owner 说了再删。`qq_legacy` 的行和合并是数据，留着。
+- 上线步骤（2026-10-29 定）：
+  1. 记下 bot 的 openid（现在的库里 Max 端点的 `self_identity_id`），停 maxx。
+  2. root 把旧表和节点用到的文件从 `/var/lib/max/media/objects` 用 `cp --reflink` 拷进 `/var/lib/maxx/media/objects`，属主 `maxx`，只读。
+  3. 删掉 `maxx` 库，建一个空的，属主 `maxx`。以 `maxx` 用户跑 `max-import import`（旧库用 postgres 角色连，只读），再跑 `max-import pictures`。
+  4. 起 maxx。主人在私聊里给每个老群发 `/bind <老群号>`，把码发到新群；群里的人各自 `/link`。
 
 ## 身份
 

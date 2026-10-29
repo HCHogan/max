@@ -87,6 +87,17 @@
             }
           );
 
+          # The one-off import of the Haskell version's database; "导入" in
+          # docs/rust-rewrite.md.
+          max-import = craneLib.buildPackage (
+            commonArgs
+            // {
+              inherit cargoArtifacts;
+              cargoExtraArgs = "--package max-import";
+              doCheck = false;
+            }
+          );
+
           # The groups' VMs boot this; nix/guest.nix. What max needs to start
           # one is a JSON file: the kernel, the initrd and the command line,
           # which max appends the VM's own parameters to.
@@ -134,7 +145,7 @@
           inherit pkgs toolchain;
 
           packages = {
-            inherit max;
+            inherit max max-import;
             default = max;
           }
           # cloud-hypervisor boots vmlinux directly only on x86_64.
