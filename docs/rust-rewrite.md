@@ -254,16 +254,17 @@ systemd 要设 `KillMode=mixed`：SIGTERM 只发给主进程，VM 这些子进�
 
    ```rust
    trait Derivation {
-       type Unit;
-       async fn scan(&self, db: &Db) -> Vec<Self::Unit>;              // 启动和定期：找缺的
-       fn on_message(&mut self, conv: ConversationId, id: MessageId); // 入账通知：重置计时器、算水位
-       async fn run(&self, unit: Self::Unit) -> Result<()>;           // 一个事务发布
+       type Input;                                    // 入账的一行；caption 是下载 worker 交来的 sha256
+       type Unit: Clone + Eq + Hash;                  // 也是去重的键：排着或在跑的不再加
+       fn on_input(&self, input: Self::Input) -> Vec<Self::Unit>;   // 不做 I/O
+       async fn scan(&self) -> Result<Vec<Self::Unit>>;             // 启动和定期：按自己的输出表找缺的
+       async fn run(&self, unit: &Self::Unit, attempt: Attempt) -> Result<()>; // 一个事务，可重入
    }
    ```
 
-   驱动器通用：tokio-util 的 `DelayQueue`、并发上限、按单元退避、自己的 `Scope`。入账通知是会话 actor 提交之后发的进程内 broadcast，不像 Haskell 版用 `message_projections` 的标志位当队列；漏掉的由扫描补。
+   驱动器通用（2026-10-29 照下载和 caption 两个实例定）：每个 worker 一个常量的 `Policy`（名字、并发数、每次尝试的超时、重试前等多久、多久重扫一次），自己的 `Scope`，按单元去重，重试用 `sleep_until` 等最早的那个。重试用完就放弃，只记日志；`Attempt` 告诉 `run` 是不是最后一次，caption 最后一次失败时写空的 caption。关机时在跑的单元直接 drop，事务回滚，下次启动由扫描补。入账通知是会话 actor 提交之后同步发的：`Shared` 里一组无界 mpsc，每个 worker 一个，不用 broadcast，它落后了会丢通知。不像 Haskell 版用 `message_projections` 的标志位当队列。不要：持久化的队列、失败表和重试次数列、租约、`LISTEN/NOTIFY`、配置里的策略旋钮。
 
-   2026-10-29：v1 只有 historian 一个 worker，这个框架先不写，等第二个 worker 来了照两个实例抽。historian 现在的做法（mpsc 通知、一分钟一圈、不扫描）见 [historian](#historian)。
+   historian 是第一个 worker，比这个框架早（mpsc 通知、一分钟一圈、不扫描，见 [historian](#historian)）。它先只把输入换成同一组通知，要按段去抖、按会话单飞的 lingo 来了，再照两个实例把它挪到框架上。
 3. **触发源**：产出的不是表，是输入，全部进会话 actor 的同一个入口（[运行流程](#运行流程)第 2 步）：有核心在跑就喂给它，没有就起一个核心。差别只在源头：
    - 跟着消息来的，全部由会话 actor 里的 [intent](#intent) 判：@、回复是它的同步规则，看起来没说完的先去抖几秒；其它消息由小模型在 `side` 里异步判，判定叫醒有每小时上限，判定回到信箱，不阻塞别的消息。叫醒核心的 `Wake` 都按 `seen` 过滤。自动化的 ledger_match 是规则。
    - 外部来的：cron、HTTP webhook、外部轮询、proactive 的闲置触发。services 下一个调度器，定义在 `automations` 表，到点给对应的会话 actor 发请求。调度器的形状和派生 worker 一样（常驻、定时器、独占写 `automation_fires`、启动时扫一遍），只是 `run` 的结果是发请求。细节等做自动化时补。
@@ -1031,7 +1032,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 - **内容库**：`/var/lib/maxx/media/objects/<sha256 前两位>/<sha256>`，只读权限，先写临时文件再 rename，已有的不再写。和 Haskell 版同一种布局，导入时直接搬。不做 GC。
 - **下载**：一个[派生数据 worker](#三种角色)，入账通知触发，同时最多 4 个下载，每个 60 秒超时，单个超过 64 MiB 的只记元数据、不下。失败重试两次（1 秒、4 秒）就放弃，只记日志，不留失败表。启动时只补最近 1 小时没下完的：QQ 的地址会过期，Haskell 版每次重启都把几百个过期链接重排一遍，刷半小时警告（9f27fa7）。图、表情包、视频、语音、文件都下，`/chat` 和以后的工具要用。
 - **给模型的版本**：下载时做一次，`media` 里记它的 sha256。长边超过 1568 像素或者超过 1 MiB 的图，重编码成长边 1568 的 JPEG；GIF 取第一帧；其它用原图。Haskell 版一开始发多 MB 的原图，base64 纯属浪费（0a2addb）。
-- **caption**：配置 `[llm] caption`，没配就不写。只写 14 天内第一次见到的图，按 sha256 一张一个，表情包重发不重写（975eb59）。一到两句中文，截图说明是什么、关键文字原样摘录，存 300 字以内。失败两次就放弃，记成空 caption，不再试。视频、文件不写；语音用腾讯给的识别文本。
+- **caption**：配置 `[llm] caption`，没配就不写。存在它自己的 `media_captions` 表里，`media` 是下载 worker 的。只写 14 天内第一次见到的图，按 sha256 一张一个，表情包重发不重写（975eb59）。一到两句中文，截图说明是什么、关键文字原样摘录，存 300 字以内。失败两次就放弃，记成空 caption，不再试。视频、文件不写；语音用腾讯给的识别文本。
 - **模型看到的**：
   - 尾巴和摘要里只有文字：`[image#123.0: caption]`，还没有 caption 就是 `[image#123.0]`。历史里的图不发图：Haskell 版的教训是它们抢注意力（0ec5752）。caption 到了，那一行就变，接受这一次缓存失效，见[前缀稳定的规则](#前缀稳定的规则)。
   - 附图：第一批输入和它们引用的消息里的图，作为真正的图片输入跟在易变块后面，每张标上句柄；后续输入里的图跟在 `[新消息]` 块后面。一次运行最多 8 张，多的只留文字。
@@ -1073,7 +1074,8 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 | | `conversation_settings` | `/model`、`/effort`、`/persona`、`/proactive`、`/clear --all` 的消息 id 水位。可变 |
 | ledger | `messages` | 会话、端点、`sender_identity_id` 和发送者名字、角色的快照（见[身份](#身份)）、`native_id`、`sent_at`、`received_at`、kind（chat、command、event）、`reply_to`、`nodes`、`raw`、`text`（渲染后的文本，给搜索和全文索引）；Max 自己的消息带 `turn_id` 和段号。撤回、编辑是 `kind = event` 的行，`event` 列说是哪种（edit、unsend），带 `target_id` 和文本兜底；编辑的新内容在 `nodes`。只有会话 actor 写 |
 | | `deliveries` | 出站回执：消息、端点、平台 id 或错误、状态（sent、failed、unknown）、时间。平台 sender 是唯一的写者，只追加。镜像时一个端点一行，见[出站](#出站) |
-| 媒体 | `media` | 按 sha256 寻址：种类、mime、大小、宽高、第一次见到的时间、caption 和写它的模型、给模型的版本的 sha256。见[媒体](#媒体) |
+| 媒体 | `media` | 按 sha256 寻址：mime、大小、宽高、第一次见到的时间、给模型的版本的 sha256。种类在消息的节点里：同样的字节可能这条是图、那条是表情包。见[媒体](#媒体) |
+| | `media_captions` | sha256、caption（放弃了就是空的）、写它的模型、时间。caption worker 是唯一的写者 |
 | | `message_media` | 消息、序号、sha256。入站节点里是下载地址，下载完记在这里；程序交的图（`max.image()`）节点里直接是 sha256 |
 | turn | `turns`、`turn_snapshots`、`turn_outcomes` | 见 [turn 记录](#turn-记录)。`t#N` 是 `turns.ordinal`，每个会话从 1 数 |
 | | `llm_usage` | turn（可空）、用途（turn、intent、historian、caption）、provider、模型、强度、token（含缓存命中数，按 provider 看命中率、调空闲窗口；还有其中的推理 token）、费用。token 用 bigint；费用 `cost_micros` 是百万分之一美元，用整数，不要 decimal，价格未知时为空 |

@@ -9,11 +9,9 @@ create table media (
     height integer,
     first_seen_at timestamptz not null,
     -- The copy the model is sent, made once; the same sha256 when the
-    -- original is small enough.
-    model_sha256 text check (model_sha256 ~ '^[0-9a-f]{64}$'),
-    -- Null until written; empty when the caption worker gave up.
-    caption text,
-    caption_model text
+    -- original is small enough. Captions are another worker's, in a
+    -- table of their own.
+    model_sha256 text check (model_sha256 ~ '^[0-9a-f]{64}$')
 );
 
 -- The downloaded media of a message: its n-th media node, from 0.
