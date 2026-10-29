@@ -341,7 +341,7 @@ async fn a_judged_wake_starts_a_core(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn commands_answer_and_never_wake(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
-    h.send(from_xiaoming(0, vec![text("!status")]));
+    h.send(from_xiaoming(0, vec![text("/status")]));
     let (answer, status) = h.said().await;
     assert!(
         status.starts_with("模型：test/big，推理强度 high\n人设：默认\n"),
@@ -353,12 +353,12 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     };
     assert_eq!(reply_to, Some(MessageId(answer.id.0 - 1)));
 
-    h.send(from_xiaoming(1, vec![text("!model test/small")]));
+    h.send(from_xiaoming(1, vec![text("/model test/small")]));
     assert_eq!(h.said().await.1, "这个命令只有主人能用。");
-    h.send(from_xiaoming(2, vec![text("!clear --all")]));
+    h.send(from_xiaoming(2, vec![text("/clear --all")]));
     assert_eq!(h.said().await.1, "这个命令只有群主、管理员能用。");
     // 小红 is an admin.
-    h.send(from_xiaohong(3, vec![text("!clear --all")]));
+    h.send(from_xiaohong(3, vec![text("/clear --all")]));
     assert_eq!(h.said().await.1, "好，之前的聊天不再进上下文。");
     h.stop().await;
     assert_eq!(h.script.calls(), 0);
@@ -372,9 +372,9 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn compact_is_answered_when_the_historian_is_done(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
-    h.send(from_xiaoming(0, vec![text("!compact")]));
+    h.send(from_xiaoming(0, vec![text("/compact")]));
     assert_eq!(h.said().await.1, "这个命令只有群主、管理员能用。");
-    h.send(from_xiaohong(1, vec![text("!compact")]));
+    h.send(from_xiaohong(1, vec![text("/compact")]));
     let mut said = 0;
     let reply = loop {
         let notice = tokio::time::timeout(PATIENCE, h.notices.recv())
@@ -401,12 +401,12 @@ async fn compact_is_answered_when_the_historian_is_done(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn an_owner_changes_settings(pool: PgPool) {
     let mut h = Harness::with_owner(pool, 300, true).await;
-    h.send(from_xiaoming(0, vec![text("!model test/nope")]));
+    h.send(from_xiaoming(0, vec![text("/model test/nope")]));
     let answer = h.said().await.1;
     assert!(answer.starts_with("没有这个模型"), "{answer}");
-    h.send(from_xiaoming(1, vec![text("!model test/small")]));
+    h.send(from_xiaoming(1, vec![text("/model test/small")]));
     assert_eq!(h.said().await.1, "下一次回复起用 test/small。");
-    h.send(from_xiaoming(2, vec![text("!proactive off")]));
+    h.send(from_xiaoming(2, vec![text("/proactive off")]));
     assert_eq!(h.said().await.1, "主动接话关了，只在被叫到时回。");
     h.script.push(Answer::says("嗯"));
     // From 小红: 小明's burst of commands would hold his @ as unfinished.
@@ -434,7 +434,7 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
         assert!(Instant::now() < deadline, "no model call");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    h.send(from_xiaohong(1, vec![text("!kill")]));
+    h.send(from_xiaohong(1, vec![text("/kill")]));
     let deadline = Instant::now() + PATIENCE;
     while h.turns().await[0].1.is_none() {
         assert!(Instant::now() < deadline, "the core didn't end");
@@ -442,5 +442,5 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
     }
     assert_eq!(h.turns().await[0].1, Some(Outcome::Interrupted));
     h.stop().await;
-    assert!(h.outbound.try_recv().is_err(), "!kill isn't answered");
+    assert!(h.outbound.try_recv().is_err(), "/kill isn't answered");
 }

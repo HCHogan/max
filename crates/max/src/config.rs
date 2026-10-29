@@ -85,7 +85,7 @@ pub struct Database {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Llm {
-    /// What turns use, unless a conversation chose another with `!model`.
+    /// What turns use, unless a conversation chose another with `/model`.
     pub default: Selection,
     /// The small model that judges chatter.
     pub intent: Selection,

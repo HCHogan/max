@@ -58,7 +58,7 @@ async fn active_summaries_never_overlap(pool: PgPool) -> sqlx::Result<()> {
     let order: Vec<SummaryId> = all.iter().map(|(id, _)| *id).collect();
     assert_eq!(order, [earlier, later]);
     assert_eq!(all[0].1, summary(ids[0], ids[2]));
-    // !clear --all after the earlier one leaves only the later.
+    // /clear --all after the earlier one leaves only the later.
     let cleared = active(&mut conn, conversation, Some(ids[2])).await?;
     assert_eq!(cleared.len(), 1);
     Ok(())

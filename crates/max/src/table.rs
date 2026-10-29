@@ -3,8 +3,8 @@
 //! "运行时结构" and step 1 of "运行流程" in docs/rust-rewrite.md.
 //!
 //! A private chat gets a conversation the first time someone writes. A
-//! group needs `!bind`: until then its messages are dropped, all but the
-//! `!bind <码>` that binds it.
+//! group needs `/bind`: until then its messages are dropped, all but the
+//! `/bind <码>` that binds it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -130,7 +130,7 @@ impl Table {
         Ok(())
     }
 
-    /// `!bind <码>` in a group nobody bound: attaches the group to the
+    /// `/bind <码>` in a group nobody bound: attaches the group to the
     /// conversation the code was issued for, and makes the sender's account
     /// here the owner's who asked for the code. None for anything else.
     async fn bind(
@@ -144,14 +144,14 @@ impl Table {
             return Ok(None);
         };
         let Some(pending) = self.shared.binds.redeem(&code, std::time::Instant::now()) else {
-            info!(chat, "dropped a !bind with a code that isn't valid");
+            info!(chat, "dropped a /bind with a code that isn't valid");
             return Ok(None);
         };
         let mut tx = conn.begin().await?;
         if let Some(old) = pending.conversation {
             // Two codes issued for one old group: the first one used wins.
             if let Some(bound) = platform::endpoint_on(&mut tx, old, inbound.platform).await? {
-                info!(chat, bound, "dropped a !bind for history already bound");
+                info!(chat, bound, "dropped a /bind for history already bound");
                 return Ok(None);
             }
         }

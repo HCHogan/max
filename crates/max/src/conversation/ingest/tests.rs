@@ -45,7 +45,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
     assert_eq!(mine.sender.identity, place.me.identity);
 
     // Quoted by an id QQ never gave us, found by its text.
-    let mut reply = from_xiaoming(2, vec![text("!status")]);
+    let mut reply = from_xiaoming(2, vec![text("/status")]);
     reply.quote = Some(Quote {
         quote_id: Some("UNKNOWN".into()),
         text: Some("在的， 说吧[微笑]".into()),
@@ -58,7 +58,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
         Content::Message {
             reply_to: Some(mine.id),
             nodes: vec![Node::Text {
-                text: "!status".into()
+                text: "/status".into()
             }],
         }
     );

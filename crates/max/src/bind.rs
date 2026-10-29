@@ -1,4 +1,4 @@
-//! `!bind` codes. An owner asks for one in a private chat, for an old
+//! `/bind` codes. An owner asks for one in a private chat, for an old
 //! conversation or a new one, and says it in a QQ group to bind the group
 //! to it. Codes live in memory: a restart forgets them.
 

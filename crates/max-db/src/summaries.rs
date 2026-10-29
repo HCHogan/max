@@ -29,7 +29,7 @@ pub enum Reason {
     Quiet,
     /// The tail grew past the high watermark.
     Pressure,
-    /// `!compact`.
+    /// `/compact`.
     Compact,
 }
 
@@ -148,7 +148,7 @@ pub async fn insert(
 }
 
 /// The conversation's active summaries that end after `after` (the
-/// !clear --all watermark), oldest first.
+/// /clear --all watermark), oldest first.
 pub async fn active(
     conn: &mut PgConnection,
     conversation: ConversationId,

@@ -57,7 +57,7 @@ pub struct Chosen {
 }
 
 impl Chosen {
-    /// `provider/model`, as `!model` takes it.
+    /// `provider/model`, as `/model` takes it.
     pub fn reference(&self) -> String {
         format!("{}/{}", self.provider, self.tag.model)
     }
@@ -116,7 +116,7 @@ impl Models {
         Some(self.choose(&historian.model, historian.effort.as_deref()))
     }
 
-    /// Every `provider/model`, for `!model` to list.
+    /// Every `provider/model`, for `/model` to list.
     pub fn references(&self) -> Vec<String> {
         self.llm
             .providers

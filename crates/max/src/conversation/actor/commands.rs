@@ -68,7 +68,7 @@ impl Conversation {
                 // Nothing the model has seen wakes it again, held or not.
                 self.seen = self.head;
                 if self.core.is_some() {
-                    let reason = format!("{} 用 !kill 停下了", committed.message.sender.name);
+                    let reason = format!("{} 用 /kill 停下了", committed.message.sender.name);
                     self.end(End::Kill(reason)).await?;
                 }
                 return Ok(());
@@ -77,7 +77,7 @@ impl Conversation {
             Command::Effort(argument) => self.effort(argument).await?,
             Command::Proactive(on) => self.proactive(on).await?,
             Command::Persona(persona) => self.persona(persona).await?,
-            Command::Clear { all: false } => "要清空上下文，发 !clear --all。".to_owned(),
+            Command::Clear { all: false } => "要清空上下文，发 /clear --all。".to_owned(),
             Command::Clear { all: true } => {
                 self.settings.cleared_upto = Some(committed.message.id);
                 self.save_settings().await?;
@@ -102,7 +102,7 @@ impl Conversation {
         Ok(())
     }
 
-    /// Hands `!compact` to the historian, which answers when it is done;
+    /// Hands `/compact` to the historian, which answers when it is done;
     /// or the answer now, when it can't.
     fn compact(&mut self, command: MessageId) -> Option<String> {
         if self.place.kind == ConversationKind::Direct {
@@ -261,7 +261,7 @@ impl Conversation {
         Ok(answer.to_owned())
     }
 
-    /// The `!bind <码>` that bound this group, which the table hands over
+    /// The `/bind <码>` that bound this group, which the table hands over
     /// instead of running it.
     pub(super) async fn bound(&mut self, committed: &Committed, continued: bool) -> Result<()> {
         let text = if continued {
@@ -305,7 +305,7 @@ impl Conversation {
             None => "开一段新的记录".to_owned(),
         };
         Ok(format!(
-            "在要绑的群里发 !bind {code}，{target}。10 分钟内有效，只能用一次。"
+            "在要绑的群里发 /bind {code}，{target}。10 分钟内有效，只能用一次。"
         ))
     }
 }

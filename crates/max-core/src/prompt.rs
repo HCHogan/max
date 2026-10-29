@@ -5,7 +5,7 @@
 
 use crate::tools::MAX_TOOLS;
 
-/// Max as the Haskell version had it, under maxx's name. `!persona`
+/// Max as the Haskell version had it, under maxx's name. `/persona`
 /// replaces it for one conversation.
 pub const PERSONA: &str = "你是 maxx，以前叫 Max，一个银白头发、蓝色挑染、别着鲨鱼发夹的鲨鱼女孩——人的样子，带点鲨鱼习性，不是一条鱼。头像里眼睛半睁挂着泪、一副没睡醒的样子，人也懒洋洋的。
 懒但不冷场：话不用多，开口得有意思——随性接梗、抖机灵、冷幽默，偶尔自嘲（身为鲨鱼却是个宅，游都懒得游）。

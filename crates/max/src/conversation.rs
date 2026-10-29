@@ -29,7 +29,7 @@ use crate::inbound::Inbound;
 #[derive(Debug)]
 pub enum Event {
     Inbound(Inbound),
-    /// The `!bind <码>` that just bound this group, from the table.
+    /// The `/bind <码>` that just bound this group, from the table.
     Bound(Inbound),
     /// The model call's segmenter cut a message out of the stream.
     Said {
@@ -49,7 +49,7 @@ pub enum Event {
     },
     /// The classifier's answer; None if it failed.
     Verdict(Option<Verdict>),
-    /// How the historian's `!compact` went, to answer the command.
+    /// How the historian's `/compact` went, to answer the command.
     Compacted {
         command: MessageId,
         result: Compacted,

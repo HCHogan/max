@@ -142,16 +142,16 @@ fn owner_in_group(n: u32, said: &str) -> Inbound {
 async fn a_group_is_served_once_bound(pool: PgPool) {
     let mut s = Setup::new(pool).await;
     s.send(from_xiaoming(0, vec![text("有人吗")]));
-    let code = s.code(1, "!bind").await;
-    s.send(owner_in_group(2, "!bind 000000"));
-    s.send(owner_in_group(3, &format!("!bind {code}")));
+    let code = s.code(1, "/bind").await;
+    s.send(owner_in_group(2, "/bind 000000"));
+    s.send(owner_in_group(3, &format!("/bind {code}")));
     let bound = (
         "group:GROUP1".to_owned(),
         "绑好了，这个群从这里开始记。".to_owned(),
     );
     assert_eq!(s.said().await, bound);
-    // Only an owner may run !bind: the account here is the owner's now.
-    s.send(owner_in_group(4, &format!("!bind {code}")));
+    // Only an owner may run /bind: the account here is the owner's now.
+    s.send(owner_in_group(4, &format!("/bind {code}")));
     assert_eq!(s.said().await.1, "这个群已经绑定过了，不支持改绑。");
     let mut conn = s.pool.acquire().await.unwrap();
     let member = platform::account(&mut conn, Platform::Qq, "OWNERMEMBER", "hank")
@@ -160,7 +160,7 @@ async fn a_group_is_served_once_bound(pool: PgPool) {
     assert_eq!(member.principal, s.owner.principal);
     drop(conn);
     let kept = "select count(*) from messages where native_id in ('MSG0', 'MSG2', 'MSG3')";
-    assert_eq!(s.count(kept).await, 1, "only the !bind that bound");
+    assert_eq!(s.count(kept).await, 1, "only the /bind that bound");
     s.stop().await;
 }
 
@@ -199,11 +199,11 @@ async fn a_group_goes_on_from_an_old_one(pool: PgPool) {
         .unwrap();
     drop(conn);
 
-    s.send(private(1, "!bind 30002"));
+    s.send(private(1, "/bind 30002"));
     assert_eq!(s.said().await.1, "没找到老群 30002 的记录。");
-    let code = s.code(2, "!bind 30001").await;
-    let again = s.code(3, "!bind 30001").await;
-    s.send(owner_in_group(4, &format!("!bind {code}")));
+    let code = s.code(2, "/bind 30001").await;
+    let again = s.code(3, "/bind 30001").await;
+    s.send(owner_in_group(4, &format!("/bind {code}")));
     assert_eq!(s.said().await.1, "绑好了，这个群接着老群的记录往下聊。");
     let mut conn = s.pool.acquire().await.unwrap();
     let bound = platform::endpoint_on(&mut conn, old.conversation, Platform::Qq)
@@ -215,15 +215,15 @@ async fn a_group_goes_on_from_an_old_one(pool: PgPool) {
         .fetch_one(&mut *conn)
         .await
         .unwrap();
-    assert_eq!(rows, 3, "the old row, then the !bind and its answer");
+    assert_eq!(rows, 3, "the old row, then the /bind and its answer");
     drop(conn);
 
-    s.send(private(5, "!bind 30001"));
+    s.send(private(5, "/bind 30001"));
     assert_eq!(s.said().await.1, "老群 30001 的记录已经接到一个群上了。");
-    let mut elsewhere = owner_in_group(6, &format!("!bind {again}"));
+    let mut elsewhere = owner_in_group(6, &format!("/bind {again}"));
     elsewhere.chat.native_id = "group:GROUP2".into();
     s.send(elsewhere);
-    s.send(private(7, "!status"));
+    s.send(private(7, "/status"));
     assert_eq!(s.said().await.0, "c2c:OWNER", "GROUP2 got no answer");
     let endpoints = "select count(*) from endpoints where native_id = 'group:GROUP2'";
     assert_eq!(s.count(endpoints).await, 0);

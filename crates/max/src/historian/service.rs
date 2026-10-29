@@ -1,7 +1,7 @@
 //! The historian as a service. The group conversations tell it when a row
 //! is committed; it checks a conversation that said something against the
 //! high watermark at most once a minute, and summarizes one that has gone
-//! quiet. `!compact` doesn't wait its turn.
+//! quiet. `/compact` doesn't wait its turn.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,17 +25,17 @@ const CHECK: Duration = Duration::from_secs(60);
 const QUIET: Duration = Duration::from_secs(600);
 /// How long a conversation waits after a capture failed.
 const REST: Duration = Duration::from_secs(600);
-/// Captures at a time, `!compact` aside.
+/// Captures at a time, `/compact` aside.
 const CONCURRENT: usize = 2;
 
-/// How `!compact` went: what was published, or what went wrong.
+/// How `/compact` went: what was published, or what went wrong.
 pub type Compacted = Result<Captured, String>;
 
 #[derive(Debug)]
 pub enum Notice {
     /// A row was committed in this group.
     Said(Arc<Place>),
-    /// `!compact`: summarize everything settled, the tail too.
+    /// `/compact`: summarize everything settled, the tail too.
     Compact(Arc<Place>, oneshot::Sender<Compacted>),
 }
 
@@ -95,7 +95,7 @@ struct Watched {
     /// Summarized since it went quiet.
     quiet_done: bool,
     running: bool,
-    /// No capture before this, after one failed; `!compact` aside.
+    /// No capture before this, after one failed; `/compact` aside.
     resting: Option<Instant>,
     compacts: Vec<oneshot::Sender<Compacted>>,
 }

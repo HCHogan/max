@@ -228,7 +228,7 @@ pub async fn find_endpoint(
 }
 
 /// The conversation an endpoint of this platform belongs to, whoever
-/// serves it: how `!bind` finds a group's history from before.
+/// serves it: how `/bind` finds a group's history from before.
 pub async fn conversation_of(
     conn: &mut PgConnection,
     platform: Platform,

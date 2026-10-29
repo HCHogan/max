@@ -72,7 +72,7 @@ fn a_trigger_mid_sentence_waits_for_the_rest() {
     // Someone else's message neither merges nor delays it, nor does a
     // command.
     intent.observe(
-        &entry(2, XIAOHONG, EntryKind::Command, "!status"),
+        &entry(2, XIAOHONG, EntryKind::Command, "/status"),
         clock.at(2),
     );
     intent.observe(
@@ -80,7 +80,7 @@ fn a_trigger_mid_sentence_waits_for_the_rest() {
         clock.at(3),
     );
     intent.observe(
-        &entry(4, XIAOMING, EntryKind::Command, "!status"),
+        &entry(4, XIAOMING, EntryKind::Command, "/status"),
         clock.at(3),
     );
     assert!(intent.tick(clock.at(12)).is_empty());
@@ -106,11 +106,11 @@ fn a_burst_of_messages_holds_the_trigger() {
     let clock = Clock(Instant::now());
     let mut intent = Intent::new();
     intent.observe(
-        &entry(1, XIAOMING, EntryKind::Command, "!help"),
+        &entry(1, XIAOMING, EntryKind::Command, "/help"),
         clock.at(0),
     );
     intent.observe(
-        &entry(2, XIAOMING, EntryKind::Command, "!status"),
+        &entry(2, XIAOMING, EntryKind::Command, "/status"),
         clock.at(1),
     );
     let e = entry(3, XIAOMING, EntryKind::Direct, "帮我看看");

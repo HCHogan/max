@@ -222,7 +222,7 @@ impl Historian {
 
 /// How many of the uncovered rows, oldest first, a capture summarizes,
 /// given each row's tokens; none when it isn't worth a call. The newest
-/// rows up to the low watermark stay raw, except for `!compact`.
+/// rows up to the low watermark stay raw, except for `/compact`.
 fn stretch(costs: &[u32], reason: Reason, budgets: &Budgets) -> usize {
     let total: u64 = costs.iter().map(|&cost| u64::from(cost)).sum();
     let keep = match reason {

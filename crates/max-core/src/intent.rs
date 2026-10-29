@@ -195,7 +195,7 @@ impl Intent {
         self.holds.iter().map(Hold::release_at).min()
     }
 
-    /// `!proactive on` or `off`.
+    /// `/proactive on` or `off`.
     pub fn set_proactive(&mut self, on: bool) {
         self.proactive = on;
         if !on {

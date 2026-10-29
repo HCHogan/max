@@ -309,7 +309,7 @@ fn interrupt_closes_open_calls() {
         .unwrap();
     run_tools(&mut run);
     run.tool_result(CallId("a".into()), result(5)).unwrap();
-    run.interrupt("!kill".into()).unwrap();
+    run.interrupt("/kill".into()).unwrap();
     assert!(!run.busy());
     assert_idle(&mut run);
     assert_eq!(run.outcome(), Outcome::Interrupted);

@@ -67,7 +67,7 @@ pub struct Conversation {
     seen: MessageId,
     core: Option<Active>,
     intent: Intent,
-    /// The classifier, and waiting on the historian for `!compact`.
+    /// The classifier, and waiting on the historian for `/compact`.
     side: Scope,
     stopping: Option<Instant>,
     next_task: u64,

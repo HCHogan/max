@@ -26,7 +26,7 @@ pub struct Projection<'a> {
     pub place: &'a Place,
     pub system: String,
     pub window: u32,
-    /// `!clear --all`'s mark: nothing before it is shown.
+    /// `/clear --all`'s mark: nothing before it is shown.
     pub cleared_upto: Option<MessageId>,
     pub now: DateTime<Utc>,
     pub offset: FixedOffset,
