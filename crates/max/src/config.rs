@@ -118,6 +118,9 @@ pub struct Llm {
     /// The model that summarizes what was said. Without it, no summaries
     /// are written, and the raw tail is cut when it grows too long.
     pub historian: Option<Selection>,
+    /// The model that says in words what a picture or sticker shows. It
+    /// has to see pictures. Without it, nothing is captioned.
+    pub caption: Option<Selection>,
     pub providers: BTreeMap<String, Provider>,
 }
 
@@ -310,6 +313,7 @@ impl Llm {
             ("default", Some(&self.default)),
             ("intent", Some(&self.intent)),
             ("historian", self.historian.as_ref()),
+            ("caption", self.caption.as_ref()),
         ];
         for (role, selection) in selections {
             if let Some(selection) = selection {
@@ -411,6 +415,7 @@ mod tests {
         default = { model = "cliproxy/gpt-5.6-luna", effort = "xhigh" }
         intent = { model = "local/qwen3.5-4b" }
         historian = { model = "cliproxy/gpt-5.6-luna", effort = "medium" }
+        caption = { model = "cliproxy/gpt-5.6-luna", effort = "low" }
 
         [llm.providers.cliproxy]
         base_url = "https://cliproxy.example/v1"
@@ -565,6 +570,15 @@ mod tests {
             LLM.replace("historian = ", "# historian = ")
         );
         assert!(Config::parse(&without).unwrap().llm.historian.is_none());
+        let caption = format!(
+            "{database}{}",
+            LLM.replace(
+                "caption = { model = \"cliproxy/gpt-5.6-luna\"",
+                "caption = { model = \"cliproxy/gpt-9\""
+            )
+        );
+        let error = Config::parse(&caption).unwrap_err();
+        assert!(format!("{error:#}").contains("in llm.caption"), "{error:#}");
     }
 
     #[test]

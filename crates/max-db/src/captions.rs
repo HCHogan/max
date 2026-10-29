@@ -80,7 +80,8 @@ pub struct Uncaptioned {
     pub message: MessageId,
     pub ordinal: u16,
     pub sha256: String,
-    pub kind: Kind,
+    /// A picture or a sticker, as that message has it.
+    pub kind: MediaKind,
 }
 
 /// The pictures first seen since `since` that have no caption: what the
@@ -110,7 +111,8 @@ pub async fn uncaptioned(
         .filter_map(|row| {
             let ordinal = u16::try_from(row.ordinal).ok()?;
             let (_, _, meta) = media(&row.nodes.0).find(|(n, _, _)| *n == ordinal)?;
-            let kind = Kind::of(meta.kind)?;
+            let kind = meta.kind;
+            Kind::of(kind)?;
             seen.insert(row.sha256.clone()).then_some(Uncaptioned {
                 message: MessageId(row.message_id),
                 ordinal,

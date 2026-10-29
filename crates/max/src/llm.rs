@@ -118,6 +118,12 @@ impl Models {
         Some(self.choose(&historian.model, historian.effort.as_deref()))
     }
 
+    /// The caption worker's model, when one is configured.
+    pub fn caption(&self) -> Option<Result<Chosen>> {
+        let caption = self.llm.caption.as_ref()?;
+        Some(self.choose(&caption.model, caption.effort.as_deref()))
+    }
+
     /// Every `provider/model`, for `/model` to list.
     pub fn references(&self) -> Vec<String> {
         self.llm
@@ -186,11 +192,13 @@ pub mod testing {
         }
     }
 
-    /// Answers calls in order and keeps the requests it was sent.
+    /// Answers calls in order and keeps the requests it was sent, and
+    /// the handles of the pictures each came with.
     #[derive(Default)]
     pub struct Script {
         answers: Mutex<VecDeque<Answer>>,
         pub requests: Mutex<Vec<Request>>,
+        pub pictures: Mutex<Vec<Vec<String>>>,
     }
 
     impl Script {
@@ -208,8 +216,10 @@ pub mod testing {
             &'a self,
             request: &'a Request,
             _: &'a Options,
-            _: &'a Pictures,
+            pictures: &'a Pictures,
         ) -> Pin<Box<dyn Future<Output = Result<Call, max_llm::Error>> + Send + 'a>> {
+            let handles = pictures.0.keys().cloned().collect();
+            self.pictures.lock().unwrap().push(handles);
             self.requests.lock().unwrap().push(Request {
                 model: request.model.clone(),
                 items: request.items.clone(),

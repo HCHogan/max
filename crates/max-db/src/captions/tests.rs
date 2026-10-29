@@ -88,19 +88,19 @@ async fn pictures_get_one_caption_and_rows_show_it(pool: PgPool) -> sqlx::Result
             message: one,
             ordinal: 0,
             sha256: "a".repeat(64),
-            kind: Kind::Image,
+            kind: MediaKind::Image,
         },
         Uncaptioned {
             message: one,
             ordinal: 2,
             sha256: "c".repeat(64),
-            kind: Kind::Image,
+            kind: MediaKind::Image,
         },
         Uncaptioned {
             message: three,
             ordinal: 0,
             sha256: "d".repeat(64),
-            kind: Kind::Sticker,
+            kind: MediaKind::Sticker,
         },
     ];
     assert_eq!(uncaptioned(&mut conn, at(0)).await?, expected);
