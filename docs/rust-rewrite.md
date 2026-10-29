@@ -249,24 +249,17 @@ systemd 要设 `KillMode=mixed`：SIGTERM 只发给主进程，VM 这些子进�
 2026-10-27 定。运行时里的任务分三种，按它产出什么分：
 
 1. **主体**：会话 actor 和它 spawn 的 I/O 任务。消费请求，产出回复。
-2. **派生数据 worker**：historian、lingo、embedding、caption、媒体下载和转发展开、记忆到期。输入是 ledger 或另一张派生表，输出是自己独占的一张表，只有它一个写者；从不碰 ledger 和 turn 记录，结果只在投影时被读。读 ledger 的 cursor 按会话记，见[时间线](#时间线)。触发三种：入账通知、定时器或水位、启动和定期的缺口扫描。一个工作单元一个事务，失败记退避，不留半截；重启不存队列，靠扫描补。Haskell 版 9 月的简化最后也把这几个收敛成了"本地有界队列加缺数据扫描"。差别只在单元粒度：historian 和 lingo 是一段消息，embedding 一行，caption 一个文件，下载一个附件。写成一个框架，各 worker 只填三个函数：
+2. **派生数据 worker**：historian、lingo、embedding、caption、媒体下载和转发展开、记忆到期。输入是 ledger 或另一张派生表，输出是自己独占的一张表，只有它一个写者；从不碰 ledger 和 turn 记录，结果只在投影时被读。读 ledger 的 cursor 按会话记，见[时间线](#时间线)。触发三种：入账通知、定时器或水位、启动和定期的缺口扫描。一个工作单元一个事务，不留半截；重启不存队列，靠扫描补。Haskell 版 9 月的简化最后也把这几个收敛成了"本地有界队列加缺数据扫描"。
 
-   ```rust
-   trait Derivation {
-       type Input;                                    // 入账的一行；caption 是下载 worker 交来的 sha256
-       type Unit: Clone + Eq + Hash;                  // 也是去重的键：排着的不再加，在跑的跑完再来一次
-       fn on_input(&self, input: Self::Input) -> Vec<(Self::Unit, Wait)>; // 不做 I/O
-       fn conversation(&self, unit: &Self::Unit) -> Option<ConversationId> { None } // 同一会话的一次一个
-       async fn scan(&self) -> Result<Vec<Self::Unit>>;             // 启动和定期：按自己的输出表找缺的
-       async fn run(&self, unit: &Self::Unit, attempt: Attempt) -> Result<()>; // 一个事务，可重入
-   }
+   共同的只有约定，不写框架（2026-10-29 owner 定：先写过一个通用驱动器，按 `Throttle`/`Debounce`/`Urgent` 排单元，结果调度策略都堆在驱动器里，完成与否也在驱动器的队列和数据库里各记一份，当天拆回各 worker）：
+   - 输出表独占，只有它一个写者；从不碰 ledger 和 turn 记录，结果只在投影时被读。
+   - 单元可重入：先查输出表，已经有了就不做。做没做完只看数据库，内存里不记完成状态。
+   - 输入是入账通知，或者上游 worker 交来的键（caption 收下载存好的图，embedding 收 caption 写好的表情包）；漏掉的靠扫描按输出表找缺的补：启动时，embedding 另外每小时一次。
+   - 并发、重试、超时、什么时候跑，是各 worker 自己的常量和自己的循环：常驻任务一个 `Scope`，一个单元一个任务，`Semaphore` 限并发，重试在单元自己的任务里 `sleep`，重试用完只记日志。caption 和 embedding 另有一个"正在做"的 sha256 集合，同一个文件在做的时候又来，不再起一个；它只防重复调模型，丢了也只是多做一次。
+   - 关机时在跑的直接 drop，事务回滚，下次启动由扫描补。
+   - 入账通知是会话 actor 提交之后同步发的：`Shared` 里一组无界 mpsc，每个 worker 一个（`worker::Rows`），不用 broadcast，它落后了会丢通知。邮箱的类型由 worker 定，从入账的一行转换过来：historian 的 `/compact` 也往同一个邮箱里放。
 
-   enum Wait { Now, Urgent, Throttle(Duration), Debounce(Duration) }
-   ```
-
-   驱动器通用（2026-10-29 照下载和 caption 两个实例定）：每个 worker 一个常量的 `Policy`（名字、并发数、每次尝试的超时、重试前等多久、多久重扫一次），自己的 `Scope`，按单元去重，重试用 `sleep_until` 等最早的那个。`Wait` 说单元什么时候跑：`Now` 排队；`Urgent` 插到最前、不占并发数，有人在等它，比如 `/compact`；`Throttle` 从第一个输入算起，期间的输入不改时间，比如 historian 一分钟一次的压力检查；`Debounce` 从最后一个输入算起，比如安静了才写的摘要。单元在跑的时候又来了，跑完再排一次，来几次都只一次。`conversation` 给了会话的单元，同一会话一次只跑一个：historian 是 `summaries` 唯一的写者，两次 capture 同时跑会盖同一段。重试用完就放弃，只记日志；`Attempt` 告诉 `run` 是不是最后一次，caption 最后一次失败时写空的 caption。关机时在跑的单元直接 drop，事务回滚，下次启动由扫描补。入账通知是会话 actor 提交之后同步发的：`Shared` 里一组无界 mpsc，每个 worker 一个，不用 broadcast，它落后了会丢通知。不像 Haskell 版用 `message_projections` 的标志位当队列。不要：持久化的队列、失败表和重试次数列、租约、`LISTEN/NOTIFY`、配置里的策略旋钮。
-
-   historian 比这个框架早，10-29 挪了上来（owner 选的），见 [historian](#historian)；`/compact` 要往同一个邮箱里放，所以订阅入账通知时，邮箱的类型由 worker 定，从入账的一行转换过来。lingo 来了直接填这几个函数。
+   各 worker 现在的策略：下载同时 4 个、重试前等 1 秒和 4 秒，见[媒体](#媒体)；caption 同时 2 个、失败一分钟后再试一次、再失败写空 caption；embedding 同时 2 个、重试前等 10 秒和 60 秒，见[发图](#发图)；historian 自己按群排，见 [historian](#historian)。不像 Haskell 版用 `message_projections` 的标志位当队列。不要：持久化的队列、失败表和重试次数列、租约、`LISTEN/NOTIFY`、配置里的策略旋钮。lingo 来了照这几条写自己的循环。
 3. **触发源**：产出的不是表，是输入，全部进会话 actor 的同一个入口（[运行流程](#运行流程)第 2 步）：有核心在跑就喂给它，没有就起一个核心。差别只在源头：
    - 跟着消息来的，全部由会话 actor 里的 [intent](#intent) 判：@、回复是它的同步规则，看起来没说完的先去抖几秒；其它消息由小模型在 `side` 里异步判，判定叫醒有每小时上限，判定回到信箱，不阻塞别的消息。叫醒核心的 `Wake` 都按 `seen` 过滤。自动化的 ledger_match 是规则。
    - 外部来的：cron、HTTP webhook、外部轮询、proactive 的闲置触发。services 下一个调度器，定义在 `automations` 表，到点给对应的会话 actor 发请求。调度器的形状和派生 worker 一样（常驻、定时器、独占写 `automation_fires`、启动时扫一遍），只是 `run` 的结果是发请求。细节等做自动化时补。
@@ -381,7 +374,7 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 | 网络客户端 | 配置里一次：LLM 的 `stream_idle_timeout_secs`（响应头和之后的每一段都要在这个时间内到，整个调用不设上限）、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`max-llm` 里写死的连接超时，`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避 | 防卡死 |
 | 先等再升级 | 按需 | 策略，比如 `close` 先给命令时间自己退出 |
 | 常驻服务里的等待表 | 每张表一次 | 防泄漏，比如 sender 里等回执的表。常驻服务外面没有取消替它兜底 |
-| 派生数据 worker | 驱动器里一处：每次尝试一个 `timeout`，重试前一个 `sleep_until`，重扫一个 interval，数值是各 worker 的常量 `Policy`（下载 60 秒、重试前等 1 秒和 4 秒；historian 11 分钟、重试前等 10 分钟）；下载的 HTTP 客户端另有 10 秒的连接超时和 60 秒的整体超时 | 防卡死；重试和重扫是策略 |
+| 派生数据 worker | 各 worker 自己的一处，数值是它的常量：下载靠 HTTP 客户端的 10 秒连接超时和 60 秒整体超时，重试前等 1 秒和 4 秒；caption 每次调用 2 分钟；embedding 每次请求 30 秒；historian 一次 capture 11 分钟，失败歇 10 分钟 | 防卡死；重试和重扫是策略 |
 | 模型调用的重试退避 | 模型调用任务里一次：1、2、4、8 秒，只在还没说出任何话的时候重试，次数是 provider 的 `retries` | 策略 |
 | sender 等额度 | QQ sender 里一次：主动消息超了每分钟的额度就等到最早那条满一分钟 | 策略：等，不丢 |
 | 关机的各级宽限期 | `main` 里一处：接入 5 秒（存网关会话）、会话停止 20 秒（让核心做完手上的事，到期中断）、会话表 25 秒、sender 排空 15 秒、运行时 10 秒，合起来在 systemd 的 60 秒以内；派生数据 worker 不等，手上的单元下次启动由扫描补或者放弃 | 防卡死 |
@@ -985,7 +978,7 @@ Haskell 版尾巴是 W/2，26 万的窗口上约 10 万 token 原始群聊，每
 
 ### historian
 
-- **一个[派生数据 worker](#三种角色)**（2026-10-27 定；10-29 挪到 worker 驱动器上，owner 选的）：和会话 actor 没有共享状态。它的邮箱收每一行入账（只看群）和 `/compact`（带回信通道），token 数在 capture 时从库里算：读未覆盖的行，用和投影同一个渲染函数和估算函数，不在内存里累加。单元是哪个群、为什么写：群里入账一行，排一个压力检查（`Throttle` 一分钟）和一个安静检查（`Debounce` 十分钟）；`/compact` 是 `Urgent`。同一个群一次只跑一个 capture，`/compact` 只等这个群在跑的那个。同时最多 2 个，一次最多 11 分钟（两次模型调用各 5 分钟，加读和发布）。失败了这个群的这一种检查歇 10 分钟再试一次，再失败就放弃，等下一行入账；`/compact` 失败直接回错，不再试。`summaries` 只有它一个写者，所以不需要 cursor 表、staged 状态和 CAS。和主体共用的只有数据库、消息行的渲染函数、token 估算和 LLM 客户端；正在跑的 turn 从 `turns` 表查（未结束的 turn 的 `trigger` 里最早的消息），不问会话 actor。模型由 `[llm] historian = {model, effort}` 选；不配就不写摘要，尾巴只靠两倍高水位的硬截断。
+- **一个[派生数据 worker](#三种角色)**（2026-10-27 定；10-29 先挪到通用驱动器上，当天又拆回来，自己排）：和会话 actor 没有共享状态。它的邮箱收每一行入账（只看群）和 `/compact`（带回信通道），token 数在 capture 时从库里算：读未覆盖的行，用和投影同一个渲染函数和估算函数，不在内存里累加。排程是它自己的一个结构，只看收到了什么和现在几点，不做 I/O：群里入账一行，从这个群的第一行算起一分钟后做一次压力检查，期间的行不改时间；从最后一行算起十分钟后写安静摘要；`/compact` 最先，不占并发数。同一个群一次只跑一个 capture，`/compact` 只等这个群在跑的那个。检查同时最多 2 个，一次最多 11 分钟（两次模型调用各 5 分钟，加读和发布）。失败了这个群的这一种检查歇 10 分钟再试一次，再失败就放弃，等下一行入账；`/compact` 失败直接回错，不再试。`summaries` 只有它一个写者，所以不需要 cursor 表、staged 状态和 CAS。和主体共用的只有数据库、消息行的渲染函数、token 估算和 LLM 客户端；正在跑的 turn 从 `turns` 表查（未结束的 turn 的 `trigger` 里最早的消息），不问会话 actor。模型由 `[llm] historian = {model, effort}` 选；不配就不写摘要，尾巴只靠两倍高水位的硬截断。
 - **水位按会话的主模型算**：会话设置的模型，没设或已不在配置里就用默认模型，和投影用的窗口一样。
 - **触发**：
   - 安静：会话 10 分钟没入账，且可压的部分（未覆盖的减去低水位的尾巴）至少是低水位的一半。一段安静只看一次，再入账才重来。
@@ -1602,7 +1595,7 @@ stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版�
 7. **`max`**（2026-10-29 完成，测试群里实测过）：配置、会话表和会话 actor、I/O 任务、平台 sender 和 `deliveries`、QQ 适配和 `/bind`、命令、intent。做完第一次实机：测试群里纯文字对话，顺便实测 [QQ 官方机器人](#qq-官方机器人)里标了实测的几项。工具在第 9 步之前一律回错误"工具还没接上，现在用不了。"。实测结果：`/bind` 接上测试群；@ 的对话和闲聊经 intent 判定都正常；停服务 2 分钟和 10 分钟，网关都 Resume 上了，停机期间的 @ 补发过来并且回答了。10 分钟那次回答被 QQ 拒了（40034005），被动回复的窗口改成按消息的发送时间算。同一天按 owner 的意思做了一轮减法：核心撞上限就认输，不再交接（见[运行流程](#运行流程)第 4 步）；重启时给宽限期再中断，不再挂起恢复（见[重启](#重启)）；intent 只留去抖、小模型判定和每小时上限（见 [intent](#intent)）；Max 不发表情；Matrix 先不做。这一步定下的：命令输出留在同一个会话（见[出站](#出站)）、命令权限（见[权限](#权限)）、actor 测试用真实时间（见[核心和 actor 的测试](#核心和-actor-的测试)）、一段老记录只接一个群（见 [QQ 官方机器人](#qq-官方机器人)）。tank 上的主模型是经 cliproxy 的 Gemini 3.8 Flash（Chat 协议），intent 用 h610 上的 qwen3.5-4b。
 8. ~~**Matrix**，带加密房间和 `matrix-bootstrap`~~：2026-10-29 删，先不做，见 [Matrix](#matrix)。
 9. **VM、MCP、codemode runner**。[VM 进程](#vm-进程)里要先在 tank 上验证的几件事 2026-10-29 验证完了。同一天做完第一段：VM 服务、`shell` 工具、module 里的 tap、nft 和加固，`max vm-check` 和嵌套的 NixOS 测试，测试在 tank 上通过。地址改走内核命令行，不用 DHCP。部署到 tank 后在测试群里实测过：模型调 `shell`，群的 VM 3 秒多起好，结果回到模型。第一次没调成，因为系统提示里还留着第 7 步那句"工具还没接上，别调用"。同一天按 owner 的意思，提示词里改叫 maxx（以前叫 Max）。tank 上的 Haskell 版同日删掉，数据留给导入。第二段同日做完：MCP 服务、guest 里的 runner、`run_code` 和第一个开放的工具 `context_read`，做法见 [MCP 通道](#mcp-通道)。runner 的测试在本机用 Node 跑，接真的 MCP 服务；嵌套测试里 `vm-check` 跑一个程序，经 MCP 服务查到数据库。
-10. **historian**（2026-10-29 做完）：capture、`summary_runs`、`/compact`，当天挪到 worker 驱动器上。tank 上配了 `[llm] historian`，到 10-29 一次都还没跑：两个群一共一百来条消息，没到水位，也没人 `/compact`。
+10. **historian**（2026-10-29 做完）：capture、`summary_runs`、`/compact`，当天挪到通用驱动器上，又拆回自己排。tank 上配了 `[llm] historian`，到 10-29 一次都还没跑：两个群一共一百来条消息，没到水位，也没人 `/compact`。
 11. ~~**重启恢复**~~：2026-10-29 删，重启时给宽限期再中断，见[重启](#重启)。
 12. **媒体**（2026-10-29 开始）：v1 之后第一块，分六小步（10-29 加了发图和表情包库），见[媒体](#媒体)。第 1 小步当天做完、上了 tank，测试群里的一张图入账后半秒内下载好。第 2 小步当天做完：媒体句柄、条目里的图、两种协议的降级、附图；owner 定了不支持看不了图的模型。
 13. **网页搜索**（2026-10-29 做完，插在媒体第 1 小步之后）：`web_search` 和 VM 里的 `webread`，见[网页搜索](#网页搜索)。
