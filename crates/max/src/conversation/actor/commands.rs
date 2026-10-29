@@ -81,7 +81,10 @@ impl Conversation {
             Command::Effort(argument) => self.effort(argument).await?,
             Command::Proactive(on) => self.proactive(on).await?,
             Command::Persona(persona) => self.persona(persona).await?,
-            Command::Clear { all: false } => "需要确认：发送 /clear --all 清空上下文".to_owned(),
+            Command::Clear { all: false } => {
+                let how = command::how(self.place.kind, &self.place.my_name, "/clear --all");
+                format!("需要确认：发送 {how} 清空上下文")
+            }
             Command::Clear { all: true } => {
                 self.settings.cleared_upto = Some(committed.message.id);
                 self.save_settings().await?;
@@ -309,8 +312,9 @@ impl Conversation {
             Some(group) => format!("接续老群 {group} 的记录"),
             None => "开始新的记录".to_owned(),
         };
+        let how = command::how(ConversationKind::Group, &self.place.my_name, "/bind");
         Ok(format!(
-            "已生成绑定码：在要绑的群里发送 /bind {code}，{target}\n有效期 10 分钟，只能用一次"
+            "已生成绑定码：在要绑的群里发送 {how} {code}，{target}\n有效期 10 分钟，只能用一次"
         ))
     }
 }
@@ -327,9 +331,10 @@ impl Conversation {
         argument: Option<&str>,
         owner: bool,
     ) -> Result<String> {
-        const USAGE: &str = "用法：/link 你的QQ号，头像对得上就把这个账号接到这个号上";
+        let how = command::how(self.place.kind, &self.place.my_name, "/link");
+        let usage = format!("用法：{how} 你的QQ号，头像对得上就把这个账号接到这个号上");
         let Some(last) = argument.and_then(|argument| argument.split_whitespace().last()) else {
-            return Ok(USAGE.to_owned());
+            return Ok(usage);
         };
         let me = self.place.me.identity;
         let mentioned = match &committed.message.content {
@@ -351,7 +356,7 @@ impl Conversation {
                 return Ok("拒绝：撤销仅限主人".to_owned());
             }
             let Some((own, merged)) = platform::own_principal(&mut conn, target).await? else {
-                return Ok(USAGE.to_owned());
+                return Ok(usage);
             };
             if merged.is_none() {
                 return Ok("跳过：这个账号没有关联".to_owned());
@@ -361,11 +366,11 @@ impl Conversation {
         }
         let qq = (5..=12).contains(&last.len()) && last.bytes().all(|b| b.is_ascii_digit());
         if !qq {
-            return Ok(USAGE.to_owned());
+            return Ok(usage);
         }
         let account = committed.sender.identity;
         let Some((own, merged)) = platform::own_principal(&mut conn, account).await? else {
-            return Ok(USAGE.to_owned());
+            return Ok(usage);
         };
         let current = merged.unwrap_or(own);
         if current == self.place.me.principal || self.shared.owners.contains(&current) {
@@ -375,7 +380,7 @@ impl Conversation {
             return Ok("错误：这里验证不了头像".to_owned());
         };
         let Some(openid) = platform::native_user_id(&mut conn, account).await? else {
-            return Ok(USAGE.to_owned());
+            return Ok(usage);
         };
         drop(conn);
         match avatars.same(&openid, last).await {
@@ -437,12 +442,15 @@ impl Conversation {
             return Ok(());
         }
         drop(conn);
-        let text = " 如果你在老群里说过话，发 /link 你的QQ号，把这个账号接到老群记录里的你；没说过就不用管。";
+        let how = command::how(self.place.kind, &self.place.my_name, "/link");
+        let text = format!(
+            " 如果你在老群里说过话，发 {how} 你的QQ号，把这个账号接到老群记录里的你；没说过就不用管。"
+        );
         let draft = Draft {
             reply_to: None,
             nodes: vec![
                 DraftNode::Mention { principal: person },
-                DraftNode::Text { text: text.into() },
+                DraftNode::Text { text },
             ],
         };
         self.say(draft, None, None, None).await?;

@@ -4,7 +4,7 @@
 //!
 //! A private chat gets a conversation the first time someone writes. A
 //! group needs `/bind`: until then its messages are dropped, all but the
-//! `/bind <码>` that binds it.
+//! `@Max /bind <码>` that binds it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -140,7 +140,7 @@ impl Table {
         inbound: &Inbound,
     ) -> Result<Option<Endpoint>> {
         let chat = &inbound.chat.native_id;
-        let Some(Command::Bind(Some(code))) = command::parse(&inbound.plain_text()) else {
+        let Some(Command::Bind(Some(code))) = command::given(inbound) else {
             return Ok(None);
         };
         let Some(pending) = self.shared.binds.redeem(&code, std::time::Instant::now()) else {

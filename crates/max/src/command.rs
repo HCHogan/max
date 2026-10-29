@@ -1,8 +1,13 @@
-//! Commands: a message that starts with `/` and a word from this list.
-//! Only `/`: QQ's command panel fills one in, and `!` is plain text. There
-//! is no `/help`: the panel is the list.
+//! Commands: a message that starts with `/` and a word from this list,
+//! in a group only with Max @-mentioned, since other bots there take `/`
+//! commands too. Only `/`: QQ's command panel fills one in, and `!` is
+//! plain text. There is no `/help`: the panel is the list.
 //! The conversation actor runs them; they never reach a core. Their
 //! answers read like a log, in a code block: see `answer`.
+
+use max_db::platform::ConversationKind;
+
+use crate::inbound::Inbound;
 
 /// A command and its argument, parsed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +68,24 @@ pub enum Persona {
     Show,
     Reset,
     Set(String),
+}
+
+/// The command a message gives Max, if any: in a group, only one that
+/// @-mentions Max.
+pub fn given(inbound: &Inbound) -> Option<Command> {
+    if inbound.chat.kind == ConversationKind::Group && !inbound.mentions_me() {
+        return None;
+    }
+    parse(&inbound.plain_text())
+}
+
+/// How to give `command` in a conversation of `kind`: after an @ of Max,
+/// whose name there is `me`, in a group.
+pub fn how(kind: ConversationKind, me: &str, command: &str) -> String {
+    match kind {
+        ConversationKind::Group => format!("@{me} {command}"),
+        _ => command.to_owned(),
+    }
 }
 
 /// None for anything else, such as `/nix/store`, `!help` or an unknown

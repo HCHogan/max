@@ -10,7 +10,7 @@ use super::*;
 use crate::command;
 use crate::conversation::testing::{self, from_xiaoming, offset, shared, text};
 use crate::conversation::{Outgoing, ingest};
-use crate::inbound::{Chat, Person};
+use crate::inbound::{Chat, InNode, Person};
 use crate::llm::testing::Script;
 
 const PATIENCE: Duration = Duration::from_secs(5);
@@ -127,10 +127,13 @@ fn private(n: u32, said: &str) -> Inbound {
     inbound
 }
 
-/// The owner says something in the group, where QQ knows them by another
-/// openid.
+/// The owner says something to Max in the group, where QQ knows them by
+/// another openid.
 fn owner_in_group(n: u32, said: &str) -> Inbound {
-    let mut inbound = from_xiaoming(n, vec![text(said)]);
+    let me = InNode::MentionMe {
+        display: "maxx".into(),
+    };
+    let mut inbound = from_xiaoming(n, vec![me, text(said)]);
     inbound.sender = Person {
         native_user_id: "OWNERMEMBER".into(),
         name: "hank".into(),
@@ -145,6 +148,10 @@ async fn a_group_is_served_once_bound(pool: PgPool) {
     s.send(from_xiaoming(0, vec![text("有人吗")]));
     let code = s.code(1, "/bind").await;
     s.send(owner_in_group(2, "/bind 000000"));
+    // Not to Max: another bot's, perhaps.
+    let mut bare = owner_in_group(5, &format!("/bind {code}"));
+    bare.nodes.remove(0);
+    s.send(bare);
     s.send(owner_in_group(3, &format!("/bind {code}")));
     let bound = (
         "group:GROUP1".to_owned(),
@@ -163,7 +170,7 @@ async fn a_group_is_served_once_bound(pool: PgPool) {
         .unwrap();
     assert_eq!(member.principal, s.owner.principal);
     drop(conn);
-    let kept = "select count(*) from messages where native_id in ('MSG0', 'MSG2', 'MSG3')";
+    let kept = "select count(*) from messages where native_id in ('MSG0', 'MSG2', 'MSG3', 'MSG5')";
     assert_eq!(s.count(kept).await, 1, "only the /bind that bound");
     s.stop().await;
 }

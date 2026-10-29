@@ -64,7 +64,8 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
         }
     );
     assert_eq!(second.direct, Some(Direct::RepliesToMe));
-    assert!(second.command);
+    // Not a command: in a group, other bots take `/` too.
+    assert!(!second.command);
 
     // Quoted by its quote id.
     let mut again = from_xiaoming(3, vec![text("嗯")]);
@@ -80,6 +81,15 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
         panic!("{:?}", third.message.content);
     };
     assert_eq!(*reply_to, Some(first.message.id));
+
+    let me = InNode::MentionMe {
+        display: "maxx".into(),
+    };
+    let status = from_xiaoming(4, vec![me, text(" /status")]);
+    let fourth = inbound(&mut conn, &place, &status, at(4), offset())
+        .await
+        .unwrap();
+    assert!(fourth.command);
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

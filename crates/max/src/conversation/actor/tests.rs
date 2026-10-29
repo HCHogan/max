@@ -170,16 +170,15 @@ impl Harness {
     }
 }
 
+/// An @ of Max, which a command in a group needs.
+fn me() -> InNode {
+    InNode::MentionMe {
+        display: "maxx".into(),
+    }
+}
+
 fn at_max(n: u32, said: &str) -> Inbound {
-    from_xiaoming(
-        n,
-        vec![
-            InNode::MentionMe {
-                display: "maxx".into(),
-            },
-            text(said),
-        ],
-    )
+    from_xiaoming(n, vec![me(), text(said)])
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
@@ -353,7 +352,7 @@ async fn a_judged_wake_starts_a_core(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn commands_answer_and_never_wake(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
-    h.send(from_xiaoming(0, vec![text("/status")]));
+    h.send(from_xiaoming(0, vec![me(), text("/status")]));
     let (answer, status) = h.said().await;
     assert!(
         status.starts_with("```text\n/status → maxx dev\nos        "),
@@ -369,15 +368,15 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     };
     assert_eq!(reply_to, None, "an answer doesn't quote the command");
 
-    h.send(from_xiaoming(1, vec![text("/model test/small")]));
+    h.send(from_xiaoming(1, vec![me(), text("/model test/small")]));
     assert_eq!(h.said().await.1, command::answer("model", "拒绝：仅限主人"));
-    h.send(from_xiaoming(2, vec![text("/clear --all")]));
+    h.send(from_xiaoming(2, vec![me(), text("/clear --all")]));
     assert_eq!(
         h.said().await.1,
         command::answer("clear", "拒绝：仅限群主、管理员")
     );
     // 小红 is an admin.
-    h.send(from_xiaohong(3, vec![text("/clear --all")]));
+    h.send(from_xiaohong(3, vec![me(), text("/clear --all")]));
     assert_eq!(
         h.said().await.1,
         command::answer("clear", "已清空：之前的消息不再进入上下文")
@@ -394,12 +393,12 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn compact_is_answered_when_the_historian_is_done(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
-    h.send(from_xiaoming(0, vec![text("/compact")]));
+    h.send(from_xiaoming(0, vec![me(), text("/compact")]));
     assert_eq!(
         h.said().await.1,
         command::answer("compact", "拒绝：仅限群主、管理员")
     );
-    h.send(from_xiaohong(1, vec![text("/compact")]));
+    h.send(from_xiaohong(1, vec![me(), text("/compact")]));
     let mut said = 0;
     let reply = loop {
         let notice = tokio::time::timeout(PATIENCE, h.notices.recv())
@@ -426,15 +425,15 @@ async fn compact_is_answered_when_the_historian_is_done(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn an_owner_changes_settings(pool: PgPool) {
     let mut h = Harness::with_owner(pool, 300, true).await;
-    h.send(from_xiaoming(0, vec![text("/model test/nope")]));
+    h.send(from_xiaoming(0, vec![me(), text("/model test/nope")]));
     let answer = h.said().await.1;
     assert!(answer.contains("/model → 错误：没有这个模型"), "{answer}");
-    h.send(from_xiaoming(1, vec![text("/model test/small")]));
+    h.send(from_xiaoming(1, vec![me(), text("/model test/small")]));
     assert_eq!(
         h.said().await.1,
         command::answer("model", "已切换：test/small，下次回复生效")
     );
-    h.send(from_xiaoming(2, vec![text("/proactive off")]));
+    h.send(from_xiaoming(2, vec![me(), text("/proactive off")]));
     assert_eq!(
         h.said().await.1,
         command::answer("proactive", "已关闭主动接话：只在被 @ 或回复时回答")
@@ -465,7 +464,7 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
         assert!(Instant::now() < deadline, "no model call");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    h.send(from_xiaohong(1, vec![text("/kill")]));
+    h.send(from_xiaohong(1, vec![me(), text("/kill")]));
     let deadline = Instant::now() + PATIENCE;
     while h.turns().await[0].1.is_none() {
         assert!(Instant::now() < deadline, "the core didn't end");
@@ -572,58 +571,67 @@ async fn link_takes_a_number_whose_avatar_the_account_shows(pool: PgPool) {
     };
     let asks = [
         (
-            from_xiaohong(10, vec![text("/link")]),
-            "用法：/link 你的QQ号，头像对得上就把这个账号接到这个号上",
+            from_xiaohong(10, vec![me(), text("/link")]),
+            "用法：@maxx /link 你的QQ号，头像对得上就把这个账号接到这个号上",
         ),
         (
-            from_xiaohong(11, vec![text("/link 20002")]),
+            from_xiaohong(11, vec![me(), text("/link 20002")]),
             "错误：头像和这个 QQ 号的对不上",
         ),
         (
-            from_xiaohong(12, vec![text("/link 40004")]),
+            from_xiaohong(12, vec![me(), text("/link 40004")]),
             "错误：取头像失败，稍后重试",
         ),
         (
-            from_xiaohong(13, vec![text("/link 30000")]),
+            from_xiaohong(13, vec![me(), text("/link 30000")]),
             "拒绝：主人和 Max 的号不能接",
         ),
         (
-            from_xiaohong(14, vec![text("/link 20001")]),
+            from_xiaohong(14, vec![me(), text("/link 20001")]),
             "已关联：老群记录里的「老红」",
         ),
         (
-            from_xiaohong(15, vec![text("/link 20001")]),
+            from_xiaohong(15, vec![me(), text("/link 20001")]),
             "跳过：已经接上了",
         ),
         (
-            from_xiaogang(16, vec![text("/link 20001")]),
+            from_xiaogang(16, vec![me(), text("/link 20001")]),
             "拒绝：这个 QQ 号在这里已有人接上，有问题找主人",
         ),
         (
-            from_xiaogang(17, vec![text("/link "), at("XIAOHONG", "小红"), text(" -")]),
+            from_xiaogang(
+                17,
+                vec![me(), text("/link "), at("XIAOHONG", "小红"), text(" -")],
+            ),
             "拒绝：撤销仅限主人",
         ),
         (
             from_xiaogang(
                 18,
-                vec![text("/link "), at("XIAOHONG", "小红"), text(" 20001")],
+                vec![me(), text("/link "), at("XIAOHONG", "小红"), text(" 20001")],
             ),
             "拒绝：只能本人发，头像对得上才接",
         ),
         (
-            from_xiaoming(19, vec![text("/link 20002")]),
+            from_xiaoming(19, vec![me(), text("/link 20002")]),
             "跳过：主人和 Max 的账号不用 /link",
         ),
         (
-            from_xiaoming(20, vec![text("/link "), at("XIAOHONG", "小红"), text(" -")]),
+            from_xiaoming(
+                20,
+                vec![me(), text("/link "), at("XIAOHONG", "小红"), text(" -")],
+            ),
             "已撤销：这个账号的关联",
         ),
         (
-            from_xiaohong(21, vec![text("/link 30003")]),
+            from_xiaohong(21, vec![me(), text("/link 30003")]),
             "已关联：老群记录里没有这个号，以后按它认人",
         ),
         (
-            from_xiaoming(22, vec![text("/link "), at("XIAOGANG", "小刚"), text(" -")]),
+            from_xiaoming(
+                22,
+                vec![me(), text("/link "), at("XIAOGANG", "小刚"), text(" -")],
+            ),
             "跳过：这个账号没有关联",
         ),
     ];
@@ -663,7 +671,7 @@ async fn unlinked_accounts_are_reminded_when_they_talk_to_max(pool: PgPool) {
     h.script.push(Answer::says("嗯"));
     h.send(from_xiaogang(10, vec![at_max(), text(" 在吗")]));
     let (reminder, said) = h.said().await;
-    let expected = "发 /link 你的QQ号，把这个账号接到老群记录里的你；没说过就不用管。";
+    let expected = "发 @maxx /link 你的QQ号，把这个账号接到老群记录里的你；没说过就不用管。";
     assert!(said.ends_with(expected), "{said}");
     let Content::Message { nodes, .. } = reminder.content else {
         unreachable!()
@@ -673,10 +681,10 @@ async fn unlinked_accounts_are_reminded_when_they_talk_to_max(pool: PgPool) {
     // Chatter isn't interrupted: the next thing Max says answers /status.
     h.send(from_xiaogang(11, vec![text("又来了")]));
     // From 小明: two quick commands from 小红 would hold her @ as a burst.
-    h.send(from_xiaoming(12, vec![text("/status")]));
+    h.send(from_xiaoming(12, vec![me(), text("/status")]));
     assert!(h.said().await.1.contains("/status → maxx"));
     // Linked, 小红 is answered without one.
-    h.send(from_xiaohong(13, vec![text("/link 20001")]));
+    h.send(from_xiaohong(13, vec![me(), text("/link 20001")]));
     assert_eq!(
         h.said().await.1,
         command::answer("link", "已关联：老群记录里的「老红」")
