@@ -77,8 +77,8 @@
 | Prompt shape and budget | 部分 | 见[上下文投影](#上下文投影) |
 | Memory | — | |
 | Group lingo | — | |
-| Unified recall and vector search | — | |
-| Context operations | — | |
+| Unified recall and vector search | 部分 | 字面的一半做了：`context_search` 搜本会话的消息（带图的 caption）和摘要，每条结果带 `context_read` 的参数，见[召回](#召回)。向量的候选还没做；记忆 v1 不做，也就不搜；视频没有 caption |
+| Context operations | — | Haskell 版是 admin 面板里的上下文控制台：覆盖和延迟、重建摘要、重算向量、检索轨迹；跟 Admin JSON API 一起做。模型自己的上下文操作是 `context_search` 和 `context_read`，见[召回](#召回) |
 | LLM profiles | ✓ | |
 | Streaming | ✓ | |
 | Share cards | — | |
@@ -1023,6 +1023,28 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 - `/compact`（群主、管理员）：立即 capture 到当前，尾巴留 0。会话 actor 不等 historian：它把请求交出去，在 `side` 里 spawn 一个小任务等回信，拿到结果后回一句"整理成了 N 段摘要""没有要整理的"或"没整理成"，和别的命令一样不引用命令。一次最多 24k token，再长的要发几次。私聊里回"私聊不写摘要"。
 - `/clear --all`：只是消息 id 水位，之前的摘要和消息不进提示。
 
+### 召回
+
+2026-10-29 做了字面的一半：`context_search`，加上 `context_read` 的两种新读法。向量的一半还没做，位置留好了。Haskell 版也是一个入口统一召回（features.md 的 Unified recall），这里沿用，只是先没有向量和记忆。
+
+- **范围**：只搜这个会话，两种来源。
+  - 消息：kind 是 chat 的行，命令和事件不搜，撤回了的不搜。词在 `messages.text`（渲染后的文本）里，或者在这条消息里图的 caption 里，都算。表情包的 caption 不搜（提议）：它写的是这个表情包是什么、什么时候用，不是群里说了什么，搜"无语"会翻出一堆表情包。
+  - 摘要：活跃的，标题和 p1、p2、p3 都搜。被取代的不搜，`context_read` 还能读。
+- **`/clear --all`**：水位之前的消息、在水位之前结束的摘要都不搜，和投影一致（提议：Haskell 版的召回不管这个水位；照现在这样，tank 上有个群一半的历史搜不到）。`context_read` 按 id 读不管水位：引用的旧消息照样显示，它的"全文见"要读得到。
+- **匹配**：query 按空白切词，最多 8 个、每个 50 字，重复的去掉，逐字转小写，和 Postgres 的 `lower` 一个字对一个字，片段的位置不会错开。每个词在小写的文本里当子串找（`lower(text) like '%词%'`，转义 `% _ \`），不分词，不按意思。有一个词就算候选。
+- **索引**：迁移 0011 装 pg_trgm，在 `lower(messages.text)` 和 `lower(media_captions.text)` 上建 `gin_trgm_ops`。三个字以上的词走索引；一两个字的没有三元组，在这个会话里一行一行比。ctype 是 C 的库（dev shell 的就是）不给中文切三元组，中文的词都是逐行比，结果一样；tank 的 `maxx` 是 en_US.UTF-8，有。查询在事务里设 `plan_cache_mode = force_custom_plan`：sqlx 的预备语句跑几次后换成通用计划，看不到词有多长，会为两个字的词读整个索引。
+- **排序**：分数 0 到 1，字面的是有几个词除以总词数；同分的新的在前。消息按正文去重，复读只留最新的一条；摘要按句柄。每种先最多占 ⌈2·limit/3⌉ 个名额，剩下的再按分数补。`limit` 默认 10，最多 30。
+- **时间**：`from`、`to` 是本地日期 `YYYY-MM-DD`，两头都含。消息看 `sent_at`；摘要和这段时间有重叠就算。
+- **结果**：`{ results: [{ kind, ref, time, text, read }] }`，`read` 原样交给 `context_read`。
+  - 消息：`ref` 是 `#id`；`time` 像 `2026-10-03 周六 14:02`；`text` 是"名字：正文"，正文和尾巴里一样，图带 caption，超过 160 字就截命中处前 40 字起的一段，截掉的地方加"…"；`read` 是 `{ id, before: 10, after: 10 }`。
+  - 摘要：`ref` 是 `summary#id`；`time` 是摘要头里的时间段；`text` 是"标题：片段"，片段取有这些词的最详细的一层，词只在标题里就只有标题；`read` 是 `{ summary: id }`。
+- **`context_read`**：`{ id, page? }` 不变，读一条的全文。加了两种：
+  - `{ id, before?, after?, page? }`：这条和它前后的行，各最多 50 行，多了按 50 算。和尾巴一样的格式：日期行，一条一行，超长的只有开头。按整行分页。
+  - `{ summary, page? }`：一条摘要的 p1 全文、时间段、覆盖的 `#first` 到 `#last`，以及里面提到的人的名册行。被取代的也能读。
+- **限制**：每次运行最多搜 20 次；所有群合计同时最多 4 个搜索，短词要比一个会话的每一行。系统提示的摘要块规则里加了一句：太早的不显示，要找以前的事用 `context_search` 搜、`context_read` 读。
+- **实测**（2026-10-29）：tank 的 `maxx` 上只读跑，还没有这两个索引，所以都是逐行比。最大的会话 6.2 万行：消息 1 个词约 85 ms，2 个约 97 ms，8 个约 145 ms。摘要（848 条的会话）2 个词约 36 ms，8 个约 61 ms。走索引的情况用 tank 上旧的 Haskell 库测（29 万行，`rendered_text` 上有一样的三元组索引）：3 个字的词 19 ms，4 个字 2 ms，两个 3 字的词 13 ms；两个字的词定制计划不碰索引，逐行 182 ms，通用计划读整个索引要 496 ms。`ilike` 比 `lower() like` 慢三倍多（50 ms 对 178 ms），所以不用它。三元组索引在旧库是 88 MB。
+- **向量的一半**（还没做）：embedding 和[表情包库](#发图)共用，提议沿用 bge-m3（1024 维）；旧库里 22.5 万条消息、3.2 千条摘要有向量，按 id 能直接导。做法：`max_db::recall` 再加按 cosine 取候选的查询，分数就是相似度；`context_search` 里和字面的候选合在一起，同一个 `ref` 取高的分，之后的去重、配额、排序、结果形状都不变。embedding 失败就只剩字面的结果。到时候工具描述里"不按意思"那句要改。
+
 ### 砍掉的
 
 - `[recent turns]` 摘要、续接摘要、`context_resume` 和 turn 内的定位符压缩。turn 内也不裁旧工具输出，太大就结束这次运行，见[核心](#核心)。以后要看上一轮做了什么，加一个读 turn 快照的 `turn_read(t#N)` 工具。
@@ -1096,7 +1118,7 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 | | `endpoints` | 会话、平台、`self_identity_id`（Max 用哪个账号）、`native_id`。v1 一个会话一个端点；镜像时一个会话多个。现在就分开（2026-10-27 定），免得再迁移。`native_id` 是适配器自己的字符串：QQ 是 `group:<group_openid>` 或 `c2c:<user_openid>`，导入的老 QQ 端点（平台 `qq_legacy`）是 `group:<群号>` 或 `private:<QQ 号>` |
 | | `principals`、`identities` | 人，和他在各平台的账号。多个写者：各会话 actor 入账时建，见[身份](#身份)的"写者" |
 | | `conversation_settings` | `/model`、`/effort`、`/persona`、`/proactive`、`/clear --all` 的消息 id 水位。可变 |
-| ledger | `messages` | 会话、端点、`sender_identity_id` 和发送者名字、角色的快照（见[身份](#身份)）、`native_id`、`sent_at`、`received_at`、kind（chat、command、event）、`reply_to`、`nodes`、`raw`、`text`（渲染后的文本，给搜索和全文索引）；Max 自己的消息带 `turn_id` 和段号。撤回、编辑是 `kind = event` 的行，`event` 列说是哪种（edit、unsend），带 `target_id` 和文本兜底；编辑的新内容在 `nodes`。只有会话 actor 写 |
+| ledger | `messages` | 会话、端点、`sender_identity_id` 和发送者名字、角色的快照（见[身份](#身份)）、`native_id`、`sent_at`、`received_at`、kind（chat、command、event）、`reply_to`、`nodes`、`raw`、`text`（渲染后的文本，给搜索和全文索引；`lower(text)` 上有三元组索引，见[召回](#召回)）；Max 自己的消息带 `turn_id` 和段号。撤回、编辑是 `kind = event` 的行，`event` 列说是哪种（edit、unsend），带 `target_id` 和文本兜底；编辑的新内容在 `nodes`。只有会话 actor 写 |
 | | `deliveries` | 出站回执：消息、端点、平台 id 或错误、状态（sent、failed、unknown）、时间。平台 sender 是唯一的写者，只追加。镜像时一个端点一行，见[出站](#出站) |
 | 媒体 | `media` | 按 sha256 寻址：mime、大小、宽高、第一次见到的时间、给模型的版本的 sha256。种类在消息的节点里：同样的字节可能这条是图、那条是表情包。见[媒体](#媒体) |
 | caption | `media_captions` | 按 sha256 一行，只写一次：用哪个提示词（图或表情包）、文字（模型放弃时为空）、`skip`（不像表情包的，不进表情包库）、哪个模型写的（导入的为空）。caption worker 是唯一的写者；读行的查询给没有描述的媒体节点填上它，所以哪里读到的行都带着 caption。见[媒体](#媒体) |
