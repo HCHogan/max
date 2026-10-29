@@ -12,9 +12,6 @@ use max_db::PgConnection;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
 
-/// Pictures prepared side by side.
-const AT_ONCE: usize = 8;
-
 pub async fn run(new: &mut PgConnection, store: &Path) -> Result<()> {
     let store = Store::open(store).await?;
     let pending: Vec<String> = sqlx::query_scalar(
@@ -25,11 +22,13 @@ pub async fn run(new: &mut PgConnection, store: &Path) -> Result<()> {
     .fetch_all(&mut *new)
     .await?;
     info!(pictures = pending.len(), "preparing");
+    // Side by side, one a core: maxx is stopped meanwhile.
+    let at_once = std::thread::available_parallelism().map_or(8, usize::from);
     let mut pending = pending.into_iter();
     let mut running = JoinSet::new();
     let mut done = 0;
     loop {
-        while running.len() < AT_ONCE {
+        while running.len() < at_once {
             let Some(sha256) = pending.next() else { break };
             let path = store.path(&sha256);
             running.spawn(async move {
