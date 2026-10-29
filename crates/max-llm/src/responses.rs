@@ -24,7 +24,7 @@ pub fn body(request: &Request, options: &Options) -> Value {
         let raw = item.opaque.as_ref().filter(|_| ours);
         match &item.kind {
             ItemKind::System { text } => instructions.push(text.as_str()),
-            ItemKind::User { text } => input.push(json!({ "role": "user", "content": text })),
+            ItemKind::User { text, .. } => input.push(json!({ "role": "user", "content": text })),
             ItemKind::Assistant { text } => input.push(match raw {
                 Some(raw) => raw.clone(),
                 None => json!({ "role": "assistant", "content": text }),

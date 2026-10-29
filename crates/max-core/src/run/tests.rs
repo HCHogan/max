@@ -1,5 +1,5 @@
 use super::*;
-use crate::item::{Protocol, ToolCall, Usage};
+use crate::item::{Image, Protocol, ToolCall, Usage};
 
 fn spec(window: u32, max_output: Option<u32>) -> RunSpec {
     RunSpec {
@@ -36,7 +36,7 @@ fn messages(id: i64, tokens: u32) -> Input {
     let text = format!("[10:00 小明 #{id}]: 消息{id}");
     Input::Messages {
         ids: vec![MessageId(id)],
-        item: Item::new(ItemKind::User { text }, tokens),
+        item: Item::new(ItemKind::user(text), tokens),
         people: Vec::new(),
     }
 }
@@ -119,9 +119,9 @@ fn texts(request: &Request) -> Vec<String> {
         .items
         .iter()
         .map(|item| match &item.kind {
-            ItemKind::System { text } | ItemKind::User { text } | ItemKind::Assistant { text } => {
-                text.clone()
-            }
+            ItemKind::System { text }
+            | ItemKind::User { text, .. }
+            | ItemKind::Assistant { text } => text.clone(),
             ItemKind::ToolCall(call) => format!("call {}", call.id),
             ItemKind::ToolResult { call, output } => {
                 format!("result {call} error={}", output.error)
@@ -189,6 +189,39 @@ fn chatter_waits_for_a_trigger() {
         texts(&request).last().unwrap(),
         "[新消息]\n[10:00 小明 #2]: 消息2\n[10:00 小明 #3]: 消息3"
     );
+    assert_replays(&run);
+}
+
+#[test]
+fn pictures_follow_the_new_rows_they_came_with() {
+    let image = |handle: &str| Image {
+        handle: handle.into(),
+        sha256: format!("{handle:0>64}"),
+    };
+    let with = |id: i64, images: Vec<Image>| {
+        let text = format!("[10:00 小明 #{id}]: [image#{id}.0]");
+        Input::Messages {
+            ids: vec![MessageId(id)],
+            item: Item::new(ItemKind::User { text, images }, 900),
+            people: Vec::new(),
+        }
+    };
+    let mut run = Run::new(spec(400_000, None), base(100), vec![]);
+    call_model(&mut run);
+    run.model_output(says("[silence]")).unwrap();
+    run.input(with(2, vec![image("image#2.0")])).unwrap();
+    run.input(messages(3, 5)).unwrap();
+    run.input(with(4, vec![image("image#4.0"), image("sticker#4.1")]))
+        .unwrap();
+    run.input(Input::Wake(wake(4))).unwrap();
+    let request = call_model(&mut run);
+    let last = request.items.last().unwrap();
+    let ItemKind::User { images, .. } = &last.kind else {
+        panic!("{last:?}")
+    };
+    let handles: Vec<&str> = images.iter().map(|image| image.handle.as_str()).collect();
+    assert_eq!(handles, ["image#2.0", "image#4.0", "sticker#4.1"]);
+    assert_eq!(last.tokens, 1805);
     assert_replays(&run);
 }
 

@@ -28,9 +28,12 @@ pub enum ItemKind {
     System {
         text: String,
     },
-    /// What Max is shown: context blocks and new inputs.
+    /// What Max is shown: context blocks and new inputs, and the pictures
+    /// among them, after the text.
     User {
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<Image>,
     },
     /// What the model wrote.
     Assistant {
@@ -45,6 +48,27 @@ pub enum ItemKind {
         call: CallId,
         output: ToolOutput,
     },
+}
+
+/// A picture the model is shown, with the handle the text names it by.
+/// The item holds only the reference; `max` reads the bytes when it sends
+/// a request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Image {
+    /// `image#123.0`.
+    pub handle: String,
+    /// The version made for the model.
+    pub sha256: String,
+}
+
+impl ItemKind {
+    /// Text Max is shown, with no pictures.
+    pub fn user(text: impl Into<String>) -> Self {
+        Self::User {
+            text: text.into(),
+            images: Vec::new(),
+        }
+    }
 }
 
 impl Item {

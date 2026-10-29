@@ -139,7 +139,7 @@ async fn a_wrong_answer_is_shown_back_once(pool: PgPool) {
     let second = script.requests.lock().unwrap()[1].items.clone();
     assert_eq!(second.len(), 4);
     assert!(
-        matches!(&second[3].kind, ItemKind::User { text } if text.contains("no object")),
+        matches!(&second[3].kind, ItemKind::User { text, .. } if text.contains("no object")),
         "{second:?}"
     );
 
@@ -154,7 +154,7 @@ async fn a_wrong_answer_is_shown_back_once(pool: PgPool) {
     assert_eq!(published[0].started_at, at(0));
     assert_eq!(published[0].brief.as_deref(), Some("探头补偿。"));
     let text = match &script.requests.lock().unwrap()[2].items[1].kind {
-        ItemKind::User { text } => text.clone(),
+        ItemKind::User { text, .. } => text.clone(),
         other => panic!("{other:?}"),
     };
     assert!(text.starts_with("[现在] "), "{text}");

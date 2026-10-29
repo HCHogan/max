@@ -53,12 +53,7 @@ fn a_request() {
                 },
                 5,
             ),
-            Item::new(
-                ItemKind::User {
-                    text: "[1] 小明：算一下".into(),
-                },
-                5,
-            ),
+            Item::new(ItemKind::user("[1] 小明：算一下"), 5),
             // This model's call: reasoning fields go back on the message.
             from(
                 &deepseek,
@@ -150,7 +145,7 @@ fn signatures_and_inline_thinking_go_back_to_their_model() {
 #[test]
 fn cache_breakpoints_end_the_stable_blocks() {
     let qwen = model("qwen3.8-27b");
-    let user = |text: &str| Item::new(ItemKind::User { text: text.into() }, 1);
+    let user = |text: &str| Item::new(ItemKind::user(text), 1);
     let request = Request {
         model: qwen.clone(),
         items: vec![

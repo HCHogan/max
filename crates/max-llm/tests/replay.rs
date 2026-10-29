@@ -97,9 +97,7 @@ async fn exchange(model: &ModelTag, name: &str) -> (ModelOutput, Value) {
     assert!(second.announced.is_empty());
 
     let mut items = vec![Item::new(
-        ItemKind::User {
-            text: "[1] 小明：2 的 64 次方是多少？".into(),
-        },
+        ItemKind::user("[1] 小明：2 的 64 次方是多少？"),
         20,
     )];
     items.extend(first.output.items.iter().cloned());

@@ -205,7 +205,7 @@ pub fn context(
     for text in blocks {
         if !text.trim().is_empty() {
             let tokens = count(&text);
-            items.push(Item::new(ItemKind::User { text }, tokens));
+            items.push(Item::new(ItemKind::user(text), tokens));
         }
     }
     Context { items, roster }

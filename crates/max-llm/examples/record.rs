@@ -55,12 +55,7 @@ async fn main() -> Result<(), Failure> {
                 },
                 30,
             ),
-            Item::new(
-                ItemKind::User {
-                    text: "[1] 小明：2 的 64 次方是多少？".into(),
-                },
-                20,
-            ),
+            Item::new(ItemKind::user("[1] 小明：2 的 64 次方是多少？"), 20),
         ],
         tools: &TOOLS,
         max_output: Some(4000),

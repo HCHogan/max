@@ -56,12 +56,7 @@ fn a_request() {
                 },
                 2,
             ),
-            Item::new(
-                ItemKind::User {
-                    text: "[1] 小明：早".into(),
-                },
-                5,
-            ),
+            Item::new(ItemKind::user("[1] 小明：早"), 5),
             from(
                 &luna(),
                 ItemKind::Reasoning { text: None },

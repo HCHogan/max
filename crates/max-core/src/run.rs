@@ -469,15 +469,21 @@ impl Run {
         }
         if !items.is_empty() {
             let mut text = "[新消息]".to_owned();
+            let mut images = Vec::new();
             for item in &items {
-                if let ItemKind::User { text: line } = &item.kind {
+                if let ItemKind::User {
+                    text: line,
+                    images: more,
+                } = &item.kind
+                {
                     text.push('\n');
                     text.push_str(line);
+                    images.extend(more.iter().cloned());
                 }
             }
             let tokens = items.iter().map(|item| item.tokens).sum();
             self.transcript
-                .push(Item::new(ItemKind::User { text }, tokens));
+                .push(Item::new(ItemKind::User { text, images }, tokens));
         }
         self.pending.clear();
     }

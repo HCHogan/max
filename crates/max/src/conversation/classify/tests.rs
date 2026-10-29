@@ -56,7 +56,7 @@ async fn the_classifier_reads_the_context(pool: PgPool) {
     assert!(verdict.trigger);
     assert_eq!(verdict.reason, "在追问");
     let text = match &script.requests.lock().unwrap()[0].items[1].kind {
-        ItemKind::User { text } => text.clone(),
+        ItemKind::User { text, .. } => text.clone(),
         other => panic!("{other:?}"),
     };
     assert!(text.starts_with("[上下文]\n[12:01 小红 #"), "{text}");

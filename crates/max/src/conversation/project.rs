@@ -111,7 +111,7 @@ impl Projection<'_> {
         let mut first_text = joined(&render, &first_lines, last_shown);
         for wake in wakes {
             if let Some(Item {
-                kind: ItemKind::User { text },
+                kind: ItemKind::User { text, .. },
                 ..
             }) = &wake.item
             {
@@ -220,7 +220,7 @@ pub async fn follow_up(
     let tokens = tokens::count(&text);
     Ok(Input::Messages {
         ids: rows.iter().map(|(message, _)| message.id).collect(),
-        item: Item::new(ItemKind::User { text }, tokens),
+        item: Item::new(ItemKind::user(text), tokens),
         people: new.into_iter().collect(),
     })
 }
@@ -232,7 +232,7 @@ pub fn judged(reason: &Reason) -> Option<Item> {
     };
     let text = format!("[判定：{note}]");
     let tokens = tokens::count(&text);
-    Some(Item::new(ItemKind::User { text }, tokens))
+    Some(Item::new(ItemKind::user(text), tokens))
 }
 
 /// A summary as the database has it, as the projection renders it.

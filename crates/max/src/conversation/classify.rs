@@ -103,7 +103,7 @@ async fn run(job: &Job) -> Result<Option<Verdict>> {
         model: job.chosen.tag.clone(),
         items: vec![
             Item::new(ItemKind::System { text: system }, 0),
-            Item::new(ItemKind::User { text: user }, 0),
+            Item::new(ItemKind::user(user), 0),
         ],
         tools: &[],
         max_output: Some(MAX_OUTPUT),

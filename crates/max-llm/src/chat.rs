@@ -43,7 +43,7 @@ pub fn body(request: &Request, options: &Options) -> Value {
             }
             // The base context's blocks are user items in a row, the most
             // volatile last; the end of each before it is a stable prefix.
-            ItemKind::User { text }
+            ItemKind::User { text, .. }
                 if options.cache_breakpoints
                     && matches!(
                         request.items.get(index + 1).map(|next| &next.kind),
@@ -59,7 +59,9 @@ pub fn body(request: &Request, options: &Options) -> Value {
                     }],
                 }));
             }
-            ItemKind::User { text } => messages.push(json!({ "role": "user", "content": text })),
+            ItemKind::User { text, .. } => {
+                messages.push(json!({ "role": "user", "content": text }))
+            }
             ItemKind::Assistant { text } if modeled => {
                 turn.get_or_insert_default().content.push_str(text);
             }

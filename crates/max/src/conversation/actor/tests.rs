@@ -152,7 +152,7 @@ impl Harness {
     fn request_tail(&self, n: usize) -> String {
         let requests = self.script.requests.lock().unwrap();
         match &requests[n].items.last().unwrap().kind {
-            ItemKind::User { text } => text.clone(),
+            ItemKind::User { text, .. } => text.clone(),
             other => panic!("{other:?}"),
         }
     }

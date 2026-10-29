@@ -17,7 +17,7 @@ fn direct(id: MessageId) -> Wake {
 
 fn user_text(item: &Item) -> &str {
     match &item.kind {
-        ItemKind::User { text } | ItemKind::System { text } => text,
+        ItemKind::User { text, .. } | ItemKind::System { text } => text,
         other => panic!("{other:?}"),
     }
 }

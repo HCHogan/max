@@ -124,7 +124,7 @@ impl Historian {
             item(ItemKind::System {
                 text: historian::system(),
             }),
-            item(ItemKind::User { text: user }),
+            item(ItemKind::user(user)),
         ];
         let model = self.chosen.reference();
         let mut error = String::new();
@@ -167,9 +167,9 @@ impl Historian {
                     // with it; a failed call is simply made again.
                     if let Ok(text) = answer {
                         items.push(item(ItemKind::Assistant { text }));
-                        items.push(item(ItemKind::User {
-                            text: format!("这个答案不对：{failed}。请重新输出完整的 JSON。"),
-                        }));
+                        items.push(item(ItemKind::user(format!(
+                            "这个答案不对：{failed}。请重新输出完整的 JSON。"
+                        ))));
                     }
                     error = failed;
                 }
