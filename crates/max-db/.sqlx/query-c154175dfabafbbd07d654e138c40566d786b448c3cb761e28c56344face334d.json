@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select sender_name from messages where sender_identity_id = $1 order by id desc limit 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sender_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "sender_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c154175dfabafbbd07d654e138c40566d786b448c3cb761e28c56344face334d"
+}

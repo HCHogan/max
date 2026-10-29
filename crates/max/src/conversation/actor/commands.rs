@@ -316,21 +316,18 @@ impl Conversation {
 }
 
 impl Conversation {
-    /// `/link <QQ号>`: this account is the person with that QQ number in
-    /// the old group's records. Nothing proves the number is the sender's,
-    /// so a person is linked once per group, the answer says to whom in
-    /// front of everyone, and only an owner changes a link: someone else's,
-    /// with an @ of them, or undone with `-`. See "权限".
+    /// `/link <QQ号>`: this account is the person with that QQ number, in
+    /// the old records or from now on. The proof is the avatar: QQ shows
+    /// the bot the account's, and anyone the number's. A number is linked
+    /// once per conversation; an owner undoes a link with `/link @某人 -`,
+    /// and nobody links for someone else. See "权限".
     async fn link(
         &mut self,
         committed: &Committed,
         argument: Option<&str>,
         owner: bool,
     ) -> Result<String> {
-        const USAGE: &str = "用法：/link 你的QQ号，把这个账号接到老群记录里的你";
-        if self.place.kind == ConversationKind::Direct {
-            return Ok("错误：要在群里发，每个群的账号各接各的".to_owned());
-        }
+        const USAGE: &str = "用法：/link 你的QQ号，头像对得上就把这个账号接到这个号上";
         let Some(last) = argument.and_then(|argument| argument.split_whitespace().last()) else {
             return Ok(USAGE.to_owned());
         };
@@ -345,19 +342,20 @@ impl Conversation {
             }),
             _ => None,
         };
-        if (mentioned.is_some() || last == "-") && !owner {
-            return Ok("拒绝：替别人接、撤销仅限主人".to_owned());
-        }
-        let target = mentioned.unwrap_or(committed.sender.identity);
         let mut conn = self.shared.pool.acquire().await?;
-        let Some((own, merged)) = platform::own_principal(&mut conn, target).await? else {
-            return Ok(USAGE.to_owned());
-        };
-        let current = merged.unwrap_or(own);
-        if current == self.place.me.principal || self.shared.owners.contains(&current) {
-            return Ok("跳过：主人和 Max 的账号不用 /link".to_owned());
-        }
-        if last == "-" {
+        if let Some(target) = mentioned {
+            if last != "-" {
+                return Ok("拒绝：只能本人发，头像对得上才接".to_owned());
+            }
+            if !owner {
+                return Ok("拒绝：撤销仅限主人".to_owned());
+            }
+            let Some((own, merged)) = platform::own_principal(&mut conn, target).await? else {
+                return Ok(USAGE.to_owned());
+            };
+            if merged.is_none() {
+                return Ok("跳过：这个账号没有关联".to_owned());
+            }
             platform::relink(&mut conn, own, None).await?;
             return Ok("已撤销：这个账号的关联".to_owned());
         }
@@ -365,26 +363,52 @@ impl Conversation {
         if !qq {
             return Ok(USAGE.to_owned());
         }
-        let found = platform::legacy_speaker(&mut conn, self.place.conversation, last).await?;
-        let Some(old) = found else {
-            return Ok("错误：老群的记录里没有这个 QQ 号".to_owned());
+        let account = committed.sender.identity;
+        let Some((own, merged)) = platform::own_principal(&mut conn, account).await? else {
+            return Ok(USAGE.to_owned());
         };
-        if current == old.principal {
+        let current = merged.unwrap_or(own);
+        if current == self.place.me.principal || self.shared.owners.contains(&current) {
+            return Ok("跳过：主人和 Max 的账号不用 /link".to_owned());
+        }
+        let Some(avatars) = &self.shared.avatars else {
+            return Ok("错误：这里验证不了头像".to_owned());
+        };
+        let Some(openid) = platform::native_user_id(&mut conn, account).await? else {
+            return Ok(USAGE.to_owned());
+        };
+        drop(conn);
+        match avatars.same(&openid, last).await {
+            Ok(true) => {}
+            Ok(false) => return Ok("错误：头像和这个 QQ 号的对不上".to_owned()),
+            Err(error) => {
+                warn!(%error, "fetching avatars for /link");
+                return Ok("错误：取头像失败，稍后重试".to_owned());
+            }
+        }
+        let mut conn = self.shared.pool.acquire().await?;
+        let name = &committed.message.sender.name;
+        let number = platform::account(&mut conn, Platform::QqLegacy, last, name).await?;
+        // Avatars are public: one copied would make the account an owner.
+        let theirs = number.principal;
+        if theirs == self.place.me.principal || self.shared.owners.contains(&theirs) {
+            return Ok("拒绝：主人和 Max 的号不能接".to_owned());
+        }
+        if current == number.principal {
             return Ok("跳过：已经接上了".to_owned());
         }
-        if merged.is_some() && !owner {
-            return Ok("拒绝：你已接到老群记录里的另一个人，要改找主人".to_owned());
-        }
         let endpoint = self.place.endpoint;
-        if let Some(other) = platform::linked_in(&mut conn, endpoint, old.principal, target).await?
-        {
-            if !owner {
-                return Ok("拒绝：这个 QQ 号在本群已有人接上，有问题找主人".to_owned());
-            }
-            platform::relink(&mut conn, other.principal, None).await?;
+        let linked = platform::linked_in(&mut conn, endpoint, number.principal, account).await?;
+        if linked.is_some() {
+            return Ok("拒绝：这个 QQ 号在这里已有人接上，有问题找主人".to_owned());
         }
-        platform::relink(&mut conn, own, Some(old.principal)).await?;
-        Ok(format!("已关联：老群记录里的「{}」", old.name))
+        platform::relink(&mut conn, own, Some(number.principal)).await?;
+        Ok(
+            match platform::last_name(&mut conn, number.identity).await? {
+                Some(old) => format!("已关联：老群记录里的「{old}」"),
+                None => "已关联：老群记录里没有这个号，以后按它认人".to_owned(),
+            },
+        )
     }
 
     /// Each time an account that isn't linked talks to Max, with an @ or a

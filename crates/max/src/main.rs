@@ -32,6 +32,7 @@ use max::media::download::{self, Download};
 use max::media::fetch;
 use max::media::pictures::Pictures;
 use max::media::store::Store;
+use max::qq::avatar::Avatars;
 use max::qq::{listen, send};
 use max::scope::Scope;
 use max::search::{self, Search};
@@ -265,6 +266,10 @@ async fn serve(config: Config) -> Result<()> {
             None
         }
     };
+    let avatars = match &qq {
+        Some(credentials) => Some(Arc::new(Avatars::qq(&credentials.app_id)?)),
+        None => None,
+    };
     let mut services = Scope::new();
     let vms = match config.vm {
         Some(vm) => Some(Vms::start(vm, &mut services)?),
@@ -287,6 +292,7 @@ async fn serve(config: Config) -> Result<()> {
         vms,
         search,
         pictures,
+        avatars,
         started: tokio::time::Instant::now(),
     });
     let (intake_tx, intake_rx) = mpsc::unbounded_channel();

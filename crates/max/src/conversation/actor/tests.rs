@@ -15,6 +15,7 @@ use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, shared, 
 use crate::historian::Captured;
 use crate::inbound::InNode;
 use crate::llm::testing::{Answer, Script};
+use crate::qq::avatar::{self, testing::Faces, testing::face};
 
 const PATIENCE: Duration = Duration::from_secs(5);
 
@@ -36,13 +37,19 @@ impl Harness {
 
     /// With 小明 as Max's owner, if `xiaoming_owns`.
     async fn with_owner(pool: PgPool, idle_window_secs: u64, xiaoming_owns: bool) -> Self {
-        Self::start(pool, idle_window_secs, xiaoming_owns, true).await
+        Self::start(pool, idle_window_secs, xiaoming_owns, true, None).await
     }
 
     /// Without proactive replies: chatter starts no classifier call that
     /// races the core's calls for the script's answers.
     async fn unprompted(pool: PgPool, idle_window_secs: u64) -> Self {
-        Self::start(pool, idle_window_secs, false, false).await
+        Self::start(pool, idle_window_secs, false, false, None).await
+    }
+
+    /// For `/link`: 小明 owns Max, QQ shows `faces`, and nothing is
+    /// proactive.
+    async fn linking(pool: PgPool, faces: Faces) -> Self {
+        Self::start(pool, 300, true, false, Some(faces)).await
     }
 
     async fn start(
@@ -50,6 +57,7 @@ impl Harness {
         idle_window_secs: u64,
         xiaoming_owns: bool,
         proactive: bool,
+        faces: Option<Faces>,
     ) -> Self {
         let mut conn = pool.acquire().await.unwrap();
         let place = Arc::new(group(&mut conn).await);
@@ -74,12 +82,15 @@ impl Harness {
         let (mut shared, outbound) = shared(&pool, &script, idle_window_secs, owners);
         let (historian, notices) = shared.rows.subscribe();
         shared.historian = Some(historian);
+        let mut scope = Scope::new();
+        if let Some(faces) = faces {
+            shared.avatars = Some(Arc::new(avatar::testing::serve(faces, &mut scope).await));
+        }
         let (mailbox, rx) = mpsc::unbounded_channel();
         let actor = Conversation::new(Arc::new(shared), place, mailbox.clone())
             .await
             .unwrap();
         let (done_tx, done) = oneshot::channel();
-        let mut scope = Scope::new();
         scope.spawn(move |_| async move {
             actor.run(rx).await.unwrap();
             let _ = done_tx.send(());
@@ -535,97 +546,116 @@ fn from_xiaogang(n: u32, nodes: Vec<InNode>) -> Inbound {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn link_takes_people_back_to_their_old_selves(pool: PgPool) {
-    // 小明 owns Max.
-    let mut h = Harness::with_owner(pool, 300, true).await;
+async fn link_takes_a_number_whose_avatar_the_account_shows(pool: PgPool) {
+    let faces = Faces::from([
+        ("/openid/XIAOHONG".to_owned(), face(0, 640)),
+        // 小刚 put 小红's picture up as his own.
+        ("/openid/XIAOGANG".to_owned(), face(0, 640)),
+        ("/number/20001".to_owned(), face(0, 100)),
+        ("/number/20002".to_owned(), face(1, 100)),
+        ("/number/30000".to_owned(), face(0, 100)),
+        ("/number/30003".to_owned(), face(0, 100)),
+    ]);
+    let mut h = Harness::linking(pool, faces).await;
     old_group(&h.pool).await;
+    // 30000 is the owner 小明's old number.
+    sqlx::query(
+        "insert into identities (principal_id, platform, native_user_id)
+         select principal_id, 'qq_legacy', '30000' from identities where native_user_id = 'XIAOMING'",
+    )
+    .execute(&h.pool)
+    .await
+    .unwrap();
     let at = |who: &str, display: &str| InNode::Mention {
         user: who.into(),
         display: display.into(),
     };
-    let mut asks = vec![
+    let asks = [
         (
             from_xiaohong(10, vec![text("/link")]),
-            command::answer("link", "用法：/link 你的QQ号，把这个账号接到老群记录里的你"),
+            "用法：/link 你的QQ号，头像对得上就把这个账号接到这个号上",
         ),
         (
-            from_xiaohong(11, vec![text("/link 20001")]),
-            command::answer("link", "已关联：老群记录里的「老红」"),
+            from_xiaohong(11, vec![text("/link 20002")]),
+            "错误：头像和这个 QQ 号的对不上",
         ),
         (
-            from_xiaohong(12, vec![text("/link 20001")]),
-            command::answer("link", "跳过：已经接上了"),
+            from_xiaohong(12, vec![text("/link 40004")]),
+            "错误：取头像失败，稍后重试",
         ),
         (
-            from_xiaohong(13, vec![text("/link 20002")]),
-            command::answer("link", "拒绝：你已接到老群记录里的另一个人，要改找主人"),
+            from_xiaohong(13, vec![text("/link 30000")]),
+            "拒绝：主人和 Max 的号不能接",
         ),
         (
-            from_xiaogang(14, vec![text("/link 99999")]),
-            command::answer("link", "错误：老群的记录里没有这个 QQ 号"),
+            from_xiaohong(14, vec![text("/link 20001")]),
+            "已关联：老群记录里的「老红」",
         ),
         (
-            from_xiaogang(15, vec![text("/link 20001")]),
-            command::answer("link", "拒绝：这个 QQ 号在本群已有人接上，有问题找主人"),
+            from_xiaohong(15, vec![text("/link 20001")]),
+            "跳过：已经接上了",
         ),
         (
-            from_xiaogang(16, vec![text("/link "), at("XIAOHONG", "小红"), text(" -")]),
-            command::answer("link", "拒绝：替别人接、撤销仅限主人"),
+            from_xiaogang(16, vec![text("/link 20001")]),
+            "拒绝：这个 QQ 号在这里已有人接上，有问题找主人",
         ),
         (
-            from_xiaoming(17, vec![text("/link 20002")]),
-            command::answer("link", "跳过：主人和 Max 的账号不用 /link"),
+            from_xiaogang(17, vec![text("/link "), at("XIAOHONG", "小红"), text(" -")]),
+            "拒绝：撤销仅限主人",
+        ),
+        (
+            from_xiaogang(
+                18,
+                vec![text("/link "), at("XIAOHONG", "小红"), text(" 20001")],
+            ),
+            "拒绝：只能本人发，头像对得上才接",
+        ),
+        (
+            from_xiaoming(19, vec![text("/link 20002")]),
+            "跳过：主人和 Max 的账号不用 /link",
+        ),
+        (
+            from_xiaoming(20, vec![text("/link "), at("XIAOHONG", "小红"), text(" -")]),
+            "已撤销：这个账号的关联",
+        ),
+        (
+            from_xiaohong(21, vec![text("/link 30003")]),
+            "已关联：老群记录里没有这个号，以后按它认人",
+        ),
+        (
+            from_xiaoming(22, vec![text("/link "), at("XIAOGANG", "小刚"), text(" -")]),
+            "跳过：这个账号没有关联",
         ),
     ];
-    // 小明 moves 老红 from 小红 to 小刚.
-    let moved = from_xiaoming(
-        18,
-        vec![text("/link "), at("XIAOGANG", "小刚"), text(" 20001")],
-    );
-    asks.push((
-        moved,
-        command::answer("link", "已关联：老群记录里的「老红」"),
-    ));
     for (ask, answer) in asks {
         h.send(ask);
-        assert_eq!(h.said().await.1, answer);
+        assert_eq!(h.said().await.1, command::answer("link", answer));
     }
-    let pool = h.pool.clone();
-    let linked = |native: &'static str| {
-        let pool = pool.clone();
-        async move {
-            let mut conn = pool.acquire().await.unwrap();
-            sqlx::query_scalar::<_, bool>(
-                "select p.merged_into is not distinct from
-                     (select principal_id from identities where native_user_id = '20001')
-                 from identities i join principals p on p.id = i.principal_id
-                 where i.native_user_id = $1",
-            )
-            .bind(native)
-            .fetch_one(&mut *conn)
-            .await
-            .unwrap()
-        }
-    };
-    assert!(linked("XIAOGANG").await);
-    assert!(!linked("XIAOHONG").await);
-
-    h.send(from_xiaoming(
-        19,
-        vec![text("/link "), at("XIAOGANG", "小刚"), text(" -")],
-    ));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("link", "已撤销：这个账号的关联")
-    );
-    assert!(!linked("XIAOGANG").await);
+    let merged: Vec<(String, Option<String>)> = sqlx::query_as(
+        "select i.native_user_id, n.native_user_id
+         from identities i
+         join principals p on p.id = i.principal_id
+         left join identities n on n.principal_id = p.merged_into
+         where i.native_user_id in ('XIAOHONG', 'XIAOGANG')
+         order by i.native_user_id",
+    )
+    .fetch_all(&h.pool)
+    .await
+    .unwrap();
+    let expected = [("XIAOGANG", None), ("XIAOHONG", Some("30003"))];
+    let expected = expected.map(|(a, b)| (a.to_owned(), b.map(str::to_owned)));
+    assert_eq!(merged, expected);
     h.stop().await;
     assert_eq!(h.script.calls(), 0);
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn unlinked_accounts_are_reminded_when_they_talk_to_max(pool: PgPool) {
-    let mut h = Harness::unprompted(pool, 300).await;
+    let faces = Faces::from([
+        ("/openid/XIAOHONG".to_owned(), face(0, 640)),
+        ("/number/20001".to_owned(), face(0, 100)),
+    ]);
+    let mut h = Harness::linking(pool, faces).await;
     old_group(&h.pool).await;
     let at_max = || InNode::MentionMe {
         display: "maxx".into(),

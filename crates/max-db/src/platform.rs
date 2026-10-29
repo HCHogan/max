@@ -370,43 +370,18 @@ pub async fn relink(
     Ok(())
 }
 
-/// Someone from before the move to the official bot: the person behind an
-/// old QQ number, if it spoke in the conversation's old group, and the
-/// name it last spoke under there.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Legacy {
-    pub principal: PrincipalId,
-    pub name: String,
-}
-
-pub async fn legacy_speaker(
+/// The name an account last spoke under, anywhere: for an old QQ number,
+/// whom `/link` found in the old records. None if it never spoke.
+pub async fn last_name(
     conn: &mut PgConnection,
-    conversation: ConversationId,
-    qq: &str,
-) -> sqlx::Result<Option<Legacy>> {
-    let row = sqlx::query!(
-        r#"
-        select coalesce(p.merged_into, p.id) as "principal!", m.sender_name
-        from endpoints e
-        join identities i on i.platform = 'qq_legacy' and i.native_user_id = $2
-        join principals p on p.id = i.principal_id
-        cross join lateral (
-            select sender_name from messages
-            where endpoint_id = e.id and sender_identity_id = i.id
-            order by id desc limit 1
-        ) m
-        where e.conversation_id = $1 and e.platform = 'qq_legacy'
-        limit 1
-        "#,
-        conversation.0,
-        qq
+    identity: IdentityId,
+) -> sqlx::Result<Option<String>> {
+    sqlx::query_scalar!(
+        "select sender_name from messages where sender_identity_id = $1 order by id desc limit 1",
+        identity.0
     )
     .fetch_optional(conn)
-    .await?;
-    Ok(row.map(|row| Legacy {
-        principal: PrincipalId(row.principal),
-        name: row.sender_name,
-    }))
+    .await
 }
 
 /// Another account that spoke in `endpoint` and is merged into `principal`:
