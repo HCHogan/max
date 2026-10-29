@@ -35,6 +35,26 @@ pub struct Config {
     pub media: Option<Media>,
     /// Without it, `web_search` tells the program there is none.
     pub search: Option<Search>,
+    /// Without it, stickers aren't embedded, and `find_stickers` tells the
+    /// program there is no library.
+    pub embedding: Option<Embedding>,
+}
+
+/// The model that turns text into vectors for search by meaning; see
+/// "发图". Its vectors must be 1024 long, as the schema's are: bge-m3's.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Embedding {
+    /// An OpenAI-compatible API's, ending in `/v1`.
+    pub base_url: String,
+    pub model: String,
+    pub api_key_file: Option<PathBuf>,
+}
+
+impl Embedding {
+    pub fn api_key(&self) -> Result<Option<String>> {
+        self.api_key_file.as_deref().map(secret).transpose()
+    }
 }
 
 /// Web search, through Exa; see "网页搜索".
@@ -461,9 +481,16 @@ mod tests {
 
             [search]
             api_key_file = "/run/secrets/maxx/exa-api-key"
+
+            [embedding]
+            base_url = "http://ollama.example:11434/v1"
+            model = "bge-m3"
             "#,
         )
         .unwrap();
+        let embedding = config.embedding.as_ref().unwrap();
+        assert_eq!(embedding.model, "bge-m3");
+        assert_eq!(embedding.api_key().unwrap(), None);
         let search = config.search.as_ref().unwrap();
         assert_eq!(
             search.api_key_file,
@@ -486,6 +513,7 @@ mod tests {
         assert_eq!(config.log.level, Level::Info);
         assert_eq!(config.utc_offset.local_minus_utc(), 8 * 3600);
         assert!(config.platforms.qq.is_none());
+        assert!(config.embedding.is_none());
 
         let misspelt = "[database]\nurl = \"postgresql:///max\"\n[logs]\nlevel = \"debug\"";
         let error = with_llm(misspelt).unwrap_err();
