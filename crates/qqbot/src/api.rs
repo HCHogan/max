@@ -3,6 +3,8 @@
 use std::fmt;
 use std::time::{Duration, Instant};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -84,6 +86,32 @@ impl Chat<'_> {
             Self::User(user) => format!("/v2/users/{user}/messages"),
         }
     }
+
+    fn files(self) -> String {
+        match self {
+            Self::Group(group) => format!("/v2/groups/{group}/files"),
+            Self::User(user) => format!("/v2/users/{user}/files"),
+        }
+    }
+}
+
+/// A picture uploaded to a chat: a message sends its `file_info`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct Uploaded {
+    pub file_info: String,
+    /// Seconds it can still be sent for, a day when tried in 2026-10;
+    /// 0 is for good.
+    #[serde(default)]
+    pub ttl: u64,
+}
+
+#[derive(Serialize)]
+struct Upload {
+    /// 1 is a picture: PNG, JPEG or GIF, which stays animated.
+    file_type: u8,
+    file_data: String,
+    /// Upload only; a message sends it.
+    srv_send_msg: bool,
 }
 
 /// The bot itself.
@@ -176,6 +204,17 @@ impl Client {
     pub async fn send(&self, chat: Chat<'_>, message: &Outgoing) -> Result<Sent, Error> {
         self.call(Method::POST, &chat.messages(), Some(message))
             .await
+    }
+
+    /// Uploads a picture to send to `chat`, as many times as it likes
+    /// while it lasts.
+    pub async fn upload(&self, chat: Chat<'_>, picture: &[u8]) -> Result<Uploaded, Error> {
+        let upload = Upload {
+            file_type: 1,
+            file_data: STANDARD.encode(picture),
+            srv_send_msg: false,
+        };
+        self.call(Method::POST, &chat.files(), Some(&upload)).await
     }
 
     /// Recalls a message: the bot's own within 2 minutes, or anyone's
@@ -338,6 +377,21 @@ mod tests {
     fn paths() {
         assert_eq!(Chat::Group("G1").messages(), "/v2/groups/G1/messages");
         assert_eq!(Chat::User("U1").messages(), "/v2/users/U1/messages");
+        assert_eq!(Chat::Group("G1").files(), "/v2/groups/G1/files");
+    }
+
+    #[test]
+    fn an_upload() {
+        // As QQ answered on 2026-10-29.
+        let body = br#"{"file_uuid":"u","file_info":"FI","ttl":86400,"id":"","raw_url":""}"#;
+        let uploaded: Uploaded = decode("/v2/groups/G1/files", StatusCode::OK, body).unwrap();
+        assert_eq!(
+            uploaded,
+            Uploaded {
+                file_info: "FI".into(),
+                ttl: 86400
+            }
+        );
     }
 
     #[test]

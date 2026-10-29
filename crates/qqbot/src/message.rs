@@ -19,6 +19,12 @@ pub enum Body {
     /// Native Markdown, open to every bot in groups and private chats
     /// since 2026-04-23.
     Markdown(String),
+    /// A picture uploaded to the chat, with text under it in the same
+    /// bubble; without, it looks like any picture or sticker sent.
+    Media {
+        file_info: String,
+        caption: Option<String>,
+    },
 }
 
 /// What a passive reply answers.
@@ -34,9 +40,12 @@ pub enum Reply {
 
 impl Serialize for Outgoing {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let (msg_type, content, markdown) = match &self.body {
-            Body::Text(text) => (0, Some(text.as_str()), None),
-            Body::Markdown(text) => (2, None, Some(Markdown { content: text })),
+        let (msg_type, content, markdown, media) = match &self.body {
+            Body::Text(text) => (0, Some(text.as_str()), None, None),
+            Body::Markdown(text) => (2, None, Some(Markdown { content: text }), None),
+            Body::Media { file_info, caption } => {
+                (7, caption.as_deref(), None, Some(Media { file_info }))
+            }
         };
         let (msg_id, msg_seq, event_id) = match &self.reply {
             Some(Reply::Message { id, seq }) => (Some(id.as_str()), Some(*seq), None),
@@ -47,6 +56,7 @@ impl Serialize for Outgoing {
             msg_type,
             content,
             markdown,
+            media,
             msg_id,
             msg_seq,
             event_id,
@@ -64,6 +74,8 @@ struct Wire<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     markdown: Option<Markdown<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    media: Option<Media<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     msg_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     msg_seq: Option<u32>,
@@ -76,6 +88,11 @@ struct Wire<'a> {
 #[derive(Serialize)]
 struct Markdown<'a> {
     content: &'a str,
+}
+
+#[derive(Serialize)]
+struct Media<'a> {
+    file_info: &'a str,
 }
 
 #[derive(Serialize)]
@@ -164,6 +181,33 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&event).unwrap()["event_id"],
             "GROUP_ADD_ROBOT:1"
+        );
+    }
+
+    #[test]
+    fn a_picture() {
+        let message = Outgoing {
+            body: Body::Media {
+                file_info: "FI".into(),
+                caption: None,
+            },
+            reply: None,
+            quote: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&message).unwrap(),
+            json!({ "msg_type": 7, "media": { "file_info": "FI" } })
+        );
+        let captioned = Outgoing {
+            body: Body::Media {
+                file_info: "FI".into(),
+                caption: Some("每日活跃".into()),
+            },
+            ..message
+        };
+        assert_eq!(
+            serde_json::to_value(&captioned).unwrap()["content"],
+            "每日活跃"
         );
     }
 

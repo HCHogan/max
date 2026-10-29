@@ -1,9 +1,10 @@
 //! Sends one message, or recalls one, for trying things against the real
-//! API. The message's text comes from stdin.
+//! API. The message's text comes from stdin; with a picture, it is the
+//! text under it.
 //!
 //! ```sh
 //! export QQBOT_APP_ID=… QQBOT_SECRET=…
-//! echo 早 | cargo run -p qqbot --example send -- group <group_openid> [markdown] [reply <msg_id> <seq>] [quote <msg_idx>]
+//! echo 早 | cargo run -p qqbot --example send -- group <group_openid> [markdown] [picture <path>] [reply <msg_id> <seq>] [quote <msg_idx>]
 //! cargo run -p qqbot --example send -- group <group_openid> recall <id>
 //! ```
 
@@ -53,8 +54,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "markdown" => {
                 message.body = match message.body {
                     Body::Text(text) | Body::Markdown(text) => Body::Markdown(text),
+                    media => media,
                 };
                 i += 1;
+            }
+            "picture" => {
+                let uploaded = client.upload(chat, &std::fs::read(arg(1)?)?).await?;
+                println!("uploaded, for {}s", uploaded.ttl);
+                message.body = Body::Media {
+                    file_info: uploaded.file_info,
+                    caption: Some(text.trim_end().to_owned()).filter(|text| !text.is_empty()),
+                };
+                i += 2;
             }
             "reply" => {
                 message.reply = Some(Reply::Message {
