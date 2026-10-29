@@ -114,6 +114,33 @@ struct Upload {
     srv_send_msg: bool,
 }
 
+/// A change to someone's mute in a group, which only a group admin may
+/// make: add and update only for normal members.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Mute<'a> {
+    pub op: MuteOp,
+    pub member_openid: &'a str,
+    /// Until when, in RFC 3339 as QQ shows it (`+08:00`); empty for `Del`,
+    /// which lifts the mute at once.
+    pub mute_expire_at: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MuteOp {
+    Add,
+    /// A new end for a mute that runs.
+    Update,
+    Del,
+}
+
+/// Someone muted in a group now.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct Muted {
+    pub member_openid: String,
+    pub mute_expire_at: String,
+}
+
 /// The bot itself.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Me {
@@ -222,6 +249,32 @@ impl Client {
     pub async fn recall(&self, chat: Chat<'_>, message_id: &str) -> Result<(), Error> {
         let path = format!("{}/{message_id}", chat.messages());
         let _: serde_json::Value = self.call(Method::DELETE, &path, None::<&()>).await?;
+        Ok(())
+    }
+
+    /// The members muted in a group now, besides any mute of the whole
+    /// group. Only for a group admin.
+    pub async fn muted(&self, group: &str) -> Result<Vec<Muted>, Error> {
+        #[derive(Deserialize)]
+        struct Setting {
+            #[serde(default)]
+            members: Vec<Muted>,
+        }
+        let path = format!("/v2/groups/{group}/restrict_chat_setting");
+        let setting: Setting = self.call(Method::GET, &path, None::<&()>).await?;
+        Ok(setting.members)
+    }
+
+    /// Mutes someone in a group, changes until when, or lifts it; at most
+    /// 30 days. Only for a group admin.
+    pub async fn mute(&self, group: &str, mute: &Mute<'_>) -> Result<(), Error> {
+        #[derive(Serialize)]
+        struct Change<'a, 'b> {
+            members: [&'a Mute<'b>; 1],
+        }
+        let path = format!("/v2/groups/{group}/restrict_chat_setting");
+        let change = Change { members: [mute] };
+        let _: serde_json::Value = self.call(Method::POST, &path, Some(&change)).await?;
         Ok(())
     }
 
@@ -392,6 +445,30 @@ mod tests {
                 ttl: 86400
             }
         );
+    }
+
+    #[test]
+    fn mutes() {
+        let mute = Mute {
+            op: MuteOp::Add,
+            member_openid: "M1",
+            mute_expire_at: "2026-10-29T15:29:37+08:00".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&mute).unwrap(),
+            serde_json::json!({
+                "op": "add",
+                "member_openid": "M1",
+                "mute_expire_at": "2026-10-29T15:29:37+08:00",
+            })
+        );
+        // As QQ answered on 2026-10-29, with a name left out.
+        let body = br#"{"global_rule":{"mode":"none","schedule_rules":[],"recurring_rules":[]},
+            "members":[{"member_openid":"M1","mute_expire_at":"2026-10-29T15:29:36+08:00","username":"x","union_openid":""}]}"#;
+        let path = "/v2/groups/G1/restrict_chat_setting";
+        let value: serde_json::Value = decode(path, StatusCode::OK, body).unwrap();
+        let muted: Vec<Muted> = serde_json::from_value(value["members"].clone()).unwrap();
+        assert_eq!(muted[0].member_openid, "M1");
     }
 
     #[test]
