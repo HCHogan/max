@@ -1546,21 +1546,22 @@ v1 不做。2026-10-29 先做成每次运行现起 camoufox，当天晚上改成
 v1 之后做。
 
 - 每个 job 驱动群 VM 里的一个 pi 进程，通过 stdio 上的 RPC JSONL 通信。
-- Max 定义自己的 `AgentBackend` 接口：开任务、steer、中断、事件流、结束报告。按 codex app-server 也能实现的标准设计，但只实现 pi。
+- 适配器在 `crates/max/src/job.rs`（2026-10-30）：`job::pi` 是协议，`job::drive` 给任务、转 steer、到点中断、等它停下，取最后一条助手消息的文字作报告，再关 stdin。用量、工具调用经 `Watch` 报出去。没有再抽一层 `AgentBackend`：只有 pi 一个实现，等真有第二个再抽。命令用 `Vm::open` 起，stdin 一直开着。
 - **模型**（2026-10-30 定）：`[llm]` 里单独配 `job = { model, effort }`，没配就没有后台 agent。pi 不拿 provider 的 key：它的模型请求发到 VM 里的 `http://127.0.0.1:7777/llm/<端点>`，和 MCP 是同一个服务、同一个 token。宿主认出是哪个 job 的会话，把 `model` 换成配置里的，带上 provider 的 key 和头转过去，回答原样流回来。只认这个 provider 协议的端点（`chat/completions` 或 `responses`），请求最大 64 MiB；job 结束、会话吊销后 token 就没用了。没选的办法：cliproxy 的管理接口能在运行时加删 key，但改完要写回配置文件，tank 上那是 sops 渲染出来的；给 VM 一个固定的 cliproxy key，等于给了群里所有人。
 - 领域工具走 Max 的 MCP 服务，见 [MCP 通道](#mcp-通道)。每个 job 开一个会话，只开放只读工具，比如 `context_search`、`context_read`、`memory_list`；job 结束时吊销。pi 在 VM 里也能跑 codemode 的 runner，用 job 自己的会话批量调这些工具。
 - 会影响群的动作（发消息、发文件、撤回、禁言、建自动化）不给后台 agent。它的结果是一种输入（`JobResult`）：会话有核心在跑就喂给它，没有就作为触发起一个；由前台的模型决定怎么说。job 中途提问同样处理，人的回答再由前台用工具 steer 回去。
 
-pi 适配器要处理的行为：
+pi 适配器要处理的行为（2026-10-29 用 pi 1.4.0 实测）：
 
-- `steer` 不打断正在跑的工具，要等这一轮工具调用都跑完、下一次 LLM 调用之前才送达。默认是 `one-at-a-time`，要改成 `all`。
-- `abort` 不清队列。要让 pi 体面地停下（收尾路径）时，先发 `clear_queue` 再发 `abort`；取消路径直接杀进程。
-- pi 读到 stdin EOF 会不会自己退出，要实测。这决定了能不能把它的生命周期直接绑在 stdio 上。
-- `agent_end` 不代表结束，要等 `agent_settled`。
-- stdout 只按 LF 切行，不能用会把 U+2028 当换行的读行器。
-- pi 1.0 默认可能把 MCP 工具放在 codemode 后面，要配成 `direct`。这条还没在官方文档里确认。
+- `steer` 不打断正在跑的工具，要等这一轮工具调用都跑完、下一次 LLM 调用之前才送达。默认是 `one-at-a-time`，改成 `all` 后两条 steer 在同一次调用前一起送到。
+- `abort` 不清队列。到点时先发 `clear_queue` 再发 `abort`：正在跑的 `sleep 40` 立刻被杀，`agent_settled` 带 `aborted: true`，`abort` 的回答在它之后。取消路径直接停 unit。
+- stdin EOF：空闲时 pi 0.01 秒内退出；跑到一半也立刻退出，子进程跟着死。所以它的生命周期可以绑在 stdio 上。
+- `agent_end` 不代表结束，要等 `agent_settled`；自动重试、排队的 steer 都在它之前。
+- 助手消息的 `message_end` 带用量。pi 的 `input` 不含缓存读写，记账时把 `cacheRead`、`cacheWrite` 加回去，才是整个请求。失败的调用 `stopReason` 是 `error`，原因在 `errorMessage`；重试成功后以最后一次为准。
+- stdout 只按 LF 切行，不能用会把 U+2028 当换行的读行器。`agent_end` 带整个运行的消息，很长；超过 16 MiB 的行丢掉。
+- MCP 工具在 `mcp.json` 里配 `"exposure": "direct"`，直接以 `mcp__max__<工具>` 出现在工具表里。pi 的 MCP 客户端说 2025-11-25 的协议，见 [MCP 通道](#mcp-通道)。
 
-pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每天发补丁，RPC 协议没有版本字段。所以在 Nix 里钉版本，录几段真实的 JSONL 做适配器回放测试，升级前先跑这些测试。
+pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每天发补丁，RPC 协议没有版本字段。所以在 Nix 里钉版本，录几段真实的 JSONL 做适配器回放测试，升级前先跑这些测试。录下来的在 `crates/max/src/job/fixtures/`（去掉了流式增量、系统提示和本机路径）。
 
 ## crate 划分
 

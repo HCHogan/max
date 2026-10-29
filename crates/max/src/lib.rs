@@ -16,6 +16,7 @@ pub mod conversation;
 pub mod embedding;
 pub mod historian;
 pub mod inbound;
+pub mod job;
 pub mod llm;
 pub mod mcp;
 pub mod media;

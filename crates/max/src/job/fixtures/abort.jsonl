@@ -1,0 +1,25 @@
+{"id":"p1","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"system","content":""}}
+{"type":"message_end","message":{"role":"system","content":""}}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"用 bash 工具执行 `sleep 40; echo late`，然后告诉我输出。"}],"timestamp":1793278784809}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"用 bash 工具执行 `sleep 40; echo late`，然后告诉我输出。"}],"timestamp":1793278784809}}
+{"type":"message_start","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_738603","name":"bash","arguments":{"command":"sleep 40; echo late"},"partialArgs":"{\"command\": \"sleep 40; echo late\"}","streamIndex":0}],"api":"openai-completions","provider":"max","model":"gemini-3.8-flash-high","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"pending","timestamp":1793278784816,"responseId":"Q0PjapSuPPbCvr0P1IKGmQw","responseModel":"gemini-3.8-flash-n"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_738603","name":"bash","arguments":{"command":"sleep 40; echo late"}}],"api":"openai-completions","provider":"max","model":"gemini-3.8-flash-high","usage":{"input":1631,"output":119,"cacheRead":0,"cacheWrite":0,"reasoning":99,"totalTokens":1750,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"toolUse","timestamp":1793278784816,"responseId":"Q0PjapSuPPbCvr0P1IKGmQw","responseModel":"gemini-3.8-flash-n","rawStopReason":"tool_calls","durationMs":6465,"thinkingLevel":"medium"}}
+{"type":"tool_execution_start","toolCallId":"call_738603","toolName":"bash","args":{"command":"sleep 40; echo late"}}
+{"type":"queue_update","steering":["这条应该被清掉。"],"followUp":[]}
+{"id":"st1","type":"response","command":"steer","success":true,"data":{"disposition":"queued"}}
+{"type":"queue_update","steering":[],"followUp":[]}
+{"id":"c","type":"response","command":"clear_queue","success":true,"data":{"steering":["这条应该被清掉。"],"followUp":[]}}
+{"type":"tool_execution_end","toolCallId":"call_738603","toolName":"bash","result":{"content":[{"type":"text","text":"Command aborted"}],"details":{}},"isError":true,"durationMs":2010}
+{"type":"message_start","message":{"role":"toolResult","toolCallId":"call_738603","toolName":"bash","content":[{"type":"text","text":"Command aborted"}],"details":{},"isError":true,"durationMs":2010,"timestamp":1793278793298}}
+{"type":"message_end","message":{"role":"toolResult","toolCallId":"call_738603","toolName":"bash","content":[{"type":"text","text":"Command aborted"}],"details":{},"isError":true,"durationMs":2010,"timestamp":1793278793298}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_738603","name":"bash","arguments":{"command":"sleep 40; echo late"}}],"api":"openai-completions","provider":"max","model":"gemini-3.8-flash-high","usage":{"input":1631,"output":119,"cacheRead":0,"cacheWrite":0,"reasoning":99,"totalTokens":1750,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"toolUse","timestamp":1793278784816,"responseId":"Q0PjapSuPPbCvr0P1IKGmQw","responseModel":"gemini-3.8-flash-n","rawStopReason":"tool_calls","durationMs":6465,"thinkingLevel":"medium"},"toolResults":[]}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"max","model":"gemini-3.8-flash-high","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"error","errorMessage":"The operation was aborted.","timestamp":1793278793303,"durationMs":0,"thinkingLevel":"medium"}}
+{"type":"message_end","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"max","model":"gemini-3.8-flash-high","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"error","errorMessage":"The operation was aborted.","timestamp":1793278793303,"durationMs":0,"thinkingLevel":"medium"}}
+{"type":"turn_end","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"max","model":"gemini-3.8-flash-high","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"error","errorMessage":"The operation was aborted.","timestamp":1793278793303,"durationMs":0,"thinkingLevel":"medium"},"toolResults":[]}
+{"type":"agent_end","messages":[],"willRetry":false}
+{"type":"agent_settled","aborted":true}
+{"id":"a","type":"response","command":"abort","success":true}

@@ -11,7 +11,7 @@ use color_eyre::eyre::{Result, ensure};
 use russh::client::{self, Handle, Msg};
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::warn;
@@ -96,6 +96,28 @@ impl Command {
         Ok(command)
     }
 
+    /// Runs `line` like [`Command::start`], with its input left open: what
+    /// goes into the writer is the command's stdin, and shutting the
+    /// writer down ends it.
+    pub async fn open(
+        connection: &Connection,
+        unit: String,
+        line: &str,
+        stops: UnboundedSender<String>,
+    ) -> Result<(Self, Input)> {
+        let channel = connection.channel_open_session().await?;
+        let command = Self {
+            channel,
+            unit: Some(unit),
+            stops,
+            status: None,
+        };
+        command.channel.exec(true, line).await?;
+        // Boxed, as its type would keep the channel borrowed.
+        let input: Input = Box::new(command.channel.make_writer());
+        Ok((command, input))
+    }
+
     /// Hands each piece of output to `sink` until the channel closes: the
     /// exit status, if the guest sent one. Cancel-safe: what was read
     /// stays read.
@@ -131,6 +153,9 @@ impl Drop for Command {
         }
     }
 }
+
+/// A command's stdin.
+pub type Input = Box<dyn AsyncWrite + Send + Unpin>;
 
 /// Where a command's output goes as it arrives.
 pub trait Sink {

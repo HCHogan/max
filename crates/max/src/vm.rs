@@ -22,8 +22,9 @@ use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
 use tracing::{info, warn};
 
 use self::machine::{BOOT, Booted, Guest, Machine};
-use self::ssh::{Command, Connection};
+use self::ssh::{Command, Connection, Input};
 use crate::config;
+use crate::llm::Upstream;
 use crate::mcp::{self, Grant, Sessions};
 use crate::scope::Scope;
 
@@ -69,6 +70,12 @@ impl Vms {
         self.sessions.open(context)
     }
 
+    /// A background agent's session, whose model calls go to `upstream`;
+    /// see [`Sessions::open_job`].
+    pub fn open_job(&self, context: mcp::Context, upstream: Arc<Upstream>) -> Grant {
+        self.sessions.open_job(context, upstream)
+    }
+
     /// The conversation's VM, started if it isn't running; or why there
     /// isn't one.
     pub async fn get(&self, conversation: ConversationId) -> Result<Vm, String> {
@@ -89,6 +96,12 @@ impl Vm {
     /// the unit `unit`, from `Vm::unit`.
     pub async fn command(&self, unit: String, line: &str, input: &[u8]) -> Result<Command> {
         Command::start(&self.connection, unit, line, input, self.stops.clone()).await
+    }
+
+    /// Like [`Vm::command`], with the command's input left open; see
+    /// [`Command::open`].
+    pub async fn open(&self, unit: String, line: &str) -> Result<(Command, Input)> {
+        Command::open(&self.connection, unit, line, self.stops.clone()).await
     }
 
     /// A name for a command's unit, unique while max runs. A VM doesn't
