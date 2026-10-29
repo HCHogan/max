@@ -17,6 +17,7 @@ pub mod historian;
 pub mod inbound;
 pub mod llm;
 pub mod mcp;
+pub mod media;
 pub mod qq;
 pub mod scope;
 pub mod table;

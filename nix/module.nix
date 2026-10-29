@@ -179,6 +179,7 @@ in
   config = lib.mkIf cfg.enable {
     services.${name}.settings = {
       database.url = lib.mkDefault "postgresql:///${name}?host=/run/postgresql&user=${name}";
+      media.dir = lib.mkDefault "/var/lib/${name}/media";
       vm = lib.mkIf vm {
         guest = "${cfg.vm.guest}";
         cloud_hypervisor = lib.getExe pkgs.cloud-hypervisor;
