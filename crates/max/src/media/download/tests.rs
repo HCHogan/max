@@ -1,7 +1,7 @@
 use axum::Router;
 use axum::http::{StatusCode, header};
 use axum::routing::get;
-use max_core::message::{MediaKind, MediaMeta};
+use max_core::message::{MediaKind, MediaMeta, Node};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
@@ -9,6 +9,7 @@ use super::*;
 use crate::conversation::ingest;
 use crate::conversation::testing::{from_xiaoming, group, offset, text};
 use crate::inbound::InNode;
+use crate::media::fetch;
 
 fn picture(url: String) -> InNode {
     InNode::Node(Node::Media {
@@ -22,11 +23,6 @@ fn picture(url: String) -> InNode {
         },
     })
 }
-
-const FIRST: Attempt = Attempt {
-    number: 1,
-    last: false,
-};
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn downloads_each_medium_once(pool: PgPool) {
@@ -72,17 +68,16 @@ async fn downloads_each_medium_once(pool: PgPool) {
             place,
             message: Arc::new(committed.message),
         };
-        let units = download.on_input(row);
-        let units: Vec<_> = units.into_iter().map(|(unit, _)| unit).collect();
+        let units = media(&row);
         let shown: Vec<_> = units.iter().map(|unit| format!("{unit:?}")).collect();
         assert_eq!(
             shown,
             [format!("{id}.0"), format!("{id}.1"), format!("{id}.2")]
         );
         for unit in &units[..2] {
-            download.run(unit, FIRST).await.unwrap();
+            download.download(unit).await.unwrap();
         }
-        let busy = download.run(&units[2], FIRST).await.unwrap_err();
+        let busy = download.download(&units[2]).await.unwrap_err();
         assert_eq!(busy.to_string(), "HTTP 503");
 
         let mut conn = pool.acquire().await.unwrap();
@@ -103,7 +98,7 @@ async fn downloads_each_medium_once(pool: PgPool) {
             .collect();
         assert_eq!(missed, [1, 2]);
         // Again, nothing changes.
-        download.run(&units[0], FIRST).await.unwrap();
+        download.download(&units[0]).await.unwrap();
         assert_eq!(downloaded(&mut conn, id).await.unwrap().len(), 1);
         stop.cancel();
     };
@@ -157,8 +152,8 @@ async fn pictures_go_on_to_the_caption_worker(pool: PgPool) {
             place,
             message: Arc::new(committed.message),
         };
-        for (unit, _) in download.on_input(row) {
-            download.run(&unit, FIRST).await.unwrap();
+        for unit in media(&row) {
+            download.download(&unit).await.unwrap();
         }
         // The text isn't a picture.
         let picture = picked.try_recv().unwrap();
@@ -177,6 +172,88 @@ async fn pictures_go_on_to_the_caption_worker(pool: PgPool) {
         stop.cancel();
     };
     let (served, ()) = tokio::join!(server.into_future(), test);
+    served.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn the_worker_finds_what_it_missed_and_tries_again(pool: PgPool) {
+    // Busy the first time.
+    let asked = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let counted = Arc::clone(&asked);
+    let app = Router::new()
+        .route(
+            "/flaky.png",
+            get(move || async move {
+                match counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 => Err(StatusCode::SERVICE_UNAVAILABLE),
+                    _ => Ok("flaky"),
+                }
+            }),
+        )
+        .route("/a.png", get(|| async { "abc" }));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let stop = CancellationToken::new();
+    let server = axum::serve(listener, app).with_graceful_shutdown(stop.clone().cancelled_owned());
+
+    let dir = std::env::temp_dir().join(format!("max-download-{:016x}", rand::random::<u64>()));
+    let store = Arc::new(Store::open(&dir).await.unwrap());
+    let mut conn = pool.acquire().await.unwrap();
+    let place = Arc::new(group(&mut conn).await);
+    let said = |n, path: &str| {
+        let inbound = from_xiaoming(n, vec![picture(format!("{base}/{path}"))]);
+        let place = Arc::clone(&place);
+        let pool = pool.clone();
+        async move {
+            let mut conn = pool.acquire().await.unwrap();
+            ingest::inbound(&mut conn, &place, &inbound, Utc::now(), offset())
+                .await
+                .unwrap()
+                .message
+        }
+    };
+    // Before the worker starts: its scan finds it.
+    let missed = said(1, "flaky.png").await;
+    drop(conn);
+    let download = Download {
+        pool: pool.clone(),
+        http: fetch::client().unwrap(),
+        store,
+        captions: None,
+    };
+    let (rows, inbox) = tokio::sync::mpsc::unbounded_channel();
+    let working = stop.child_token();
+    let worker = download.run(inbox, working.clone());
+
+    let test = async {
+        let new = said(2, "a.png").await;
+        rows.send(Row {
+            place: Arc::clone(&place),
+            message: Arc::new(new.clone()),
+        })
+        .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        for _ in 0..100 {
+            let first = downloaded(&mut conn, missed.id).await.unwrap();
+            let second = downloaded(&mut conn, new.id).await.unwrap();
+            if !first.is_empty() && !second.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(downloaded(&mut conn, missed.id).await.unwrap().len(), 1);
+        assert_eq!(downloaded(&mut conn, new.id).await.unwrap().len(), 1);
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2);
+        working.cancel();
+    };
+    let ((), served) = tokio::join!(
+        async {
+            tokio::join!(worker, test);
+            stop.cancel()
+        },
+        server.into_future()
+    );
     served.unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }

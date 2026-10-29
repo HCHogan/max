@@ -31,7 +31,7 @@ use max::historian::{self, Historian};
 use max::llm::Models;
 use max::mcp;
 use max::media::caption::{self, Captioner};
-use max::media::download::{self, Download};
+use max::media::download::Download;
 use max::media::fetch;
 use max::media::pictures::Pictures;
 use max::media::stickers::{self, Stickers};
@@ -314,14 +314,14 @@ async fn serve(config: Config) -> Result<()> {
                     None
                 }
             };
-            let download = Arc::new(Download {
+            let download = Download {
                 pool: pool.clone(),
                 http: fetch::client()?,
                 store,
                 captions,
-            });
+            };
             let (_, rows) = rows.subscribe();
-            workers.spawn(move |stop| worker::drive(download, download::POLICY, rows, stop));
+            workers.spawn(move |stop| download.run(rows, stop));
             Some(pictures)
         }
         None => {
