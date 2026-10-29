@@ -24,3 +24,4 @@ pub mod table;
 pub mod tokens;
 pub mod tools;
 pub mod vm;
+pub mod worker;

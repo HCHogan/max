@@ -33,6 +33,7 @@ use max::scope::Scope;
 use max::table::{self, Me, Table};
 use max::tools;
 use max::vm::Vms;
+use max::worker::Rows;
 
 // Stopping, in order, within systemd's TimeoutStopSec of 60 seconds.
 /// The QQ gateway saves its session.
@@ -207,6 +208,7 @@ async fn serve(config: Config) -> Result<()> {
     table::close_unfinished(&pool).await?;
     let owners = owners(&pool, &config).await?;
 
+    let mut rows = Rows::default();
     let mut historians = Scope::new();
     let historian = match models.historian().transpose()? {
         Some(chosen) => {
@@ -216,9 +218,10 @@ async fn serve(config: Config) -> Result<()> {
                 chosen,
                 offset: config.utc_offset,
             });
-            let (notices, rx) = mpsc::unbounded_channel();
-            historians.spawn(move |_| historian::run(historian, rx));
-            Some(notices)
+            let rows = rows.subscribe();
+            let (compacts, rx) = mpsc::unbounded_channel();
+            historians.spawn(move |_| historian::run(historian, rows, rx));
+            Some(compacts)
         }
         None => {
             info!("no historian model: nothing is summarized");
@@ -243,6 +246,7 @@ async fn serve(config: Config) -> Result<()> {
         owners,
         binds: Arc::default(),
         historian,
+        rows,
         vms,
         started: tokio::time::Instant::now(),
     });

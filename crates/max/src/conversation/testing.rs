@@ -17,6 +17,7 @@ use super::{Outgoing, Place, Shared};
 use crate::inbound::{Chat, InNode, Inbound, Person};
 use crate::llm::testing::{Script, config};
 use crate::llm::{Caller, Models};
+use crate::worker::Rows;
 
 pub fn offset() -> FixedOffset {
     FixedOffset::east_opt(8 * 3600).unwrap()
@@ -51,6 +52,7 @@ pub fn shared(
         owners,
         binds: Arc::default(),
         historian: None,
+        rows: Rows::default(),
         vms: None,
         started: tokio::time::Instant::now(),
     };

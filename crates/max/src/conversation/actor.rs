@@ -16,7 +16,7 @@ use max_core::project::Budgets;
 use max_core::prompt;
 use max_core::render::Mark;
 use max_core::run::{FailReason, Input, Run, RunSpec, Step, Wake};
-use max_db::platform::{self, ConversationKind, Settings};
+use max_db::platform::{self, Settings};
 use max_db::{PgPool, ledger, turns, usage};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::{Instant, sleep_until};
@@ -26,13 +26,14 @@ use super::ingest;
 use super::project::{self, Projection};
 use super::{Event, Place, TaskId, classify, model, tool};
 use crate::bind::Binds;
-use crate::historian::Notice;
+use crate::historian::Compact;
 use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
 use crate::mcp;
 use crate::scope::Scope;
 use crate::tokens;
 use crate::vm::Vms;
+use crate::worker::Rows;
 
 /// What every conversation's actor shares.
 pub struct Shared {
@@ -46,7 +47,9 @@ pub struct Shared {
     pub owners: BTreeSet<PrincipalId>,
     pub binds: Arc<Binds>,
     /// None when no historian's model is configured.
-    pub historian: Option<UnboundedSender<Notice>>,
+    pub historian: Option<UnboundedSender<Compact>>,
+    /// The derived-data workers, which hear of every committed row.
+    pub rows: Rows,
     /// None when no VMs are configured: the tools say so.
     pub vms: Option<Vms>,
     /// When Max started, for `/status`.
@@ -221,15 +224,10 @@ impl Conversation {
         }
     }
 
-    /// A row is committed: it is the head, and in a group the historian
-    /// hears of it.
-    fn committed(&mut self, id: MessageId) {
-        self.head = id;
-        if self.place.kind == ConversationKind::Group
-            && let Some(historian) = &self.shared.historian
-        {
-            let _ = historian.send(Notice::Said(Arc::clone(&self.place)));
-        }
+    /// A row is committed: it is the head, and the workers hear of it.
+    fn committed(&mut self, message: &Message) {
+        self.head = message.id;
+        self.shared.rows.send(&self.place, message);
     }
 
     /// Whether `task` was the current core's, which no longer waits for it.
@@ -263,7 +261,7 @@ impl Conversation {
         )
         .await?;
         drop(conn);
-        self.committed(committed.message.id);
+        self.committed(&committed.message);
         let kind = if committed.command {
             EntryKind::Command
         } else if committed.direct.is_some() {
@@ -589,7 +587,7 @@ impl Conversation {
         )
         .await?;
         drop(conn);
-        self.committed(message.id);
+        self.committed(&message);
         let outgoing = Outgoing {
             place: Arc::clone(&self.place),
             message: message.clone(),

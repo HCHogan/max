@@ -1,13 +1,14 @@
-//! The historian as a service. The group conversations tell it when a row
-//! is committed; it checks a conversation that said something against the
-//! high watermark at most once a minute, and summarizes one that has gone
-//! quiet. `/compact` doesn't wait its turn.
+//! The historian as a service. It hears of every committed row; it checks a
+//! group that said something against the high watermark at most once a
+//! minute, and summarizes one that has gone quiet. `/compact` doesn't wait
+//! its turn.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use max_core::ids::ConversationId;
+use max_db::platform::ConversationKind;
 use max_db::summaries::Reason;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::sync::oneshot;
@@ -17,6 +18,7 @@ use tracing::warn;
 use super::{Captured, Historian};
 use crate::conversation::Place;
 use crate::scope::Scope;
+use crate::worker::Row;
 
 /// How often a conversation that said something is checked against the
 /// high watermark, at most.
@@ -31,17 +33,21 @@ const CONCURRENT: usize = 2;
 /// How `/compact` went: what was published, or what went wrong.
 pub type Compacted = Result<Captured, String>;
 
+/// `/compact`: summarize everything settled, the tail too.
 #[derive(Debug)]
-pub enum Notice {
-    /// A row was committed in this group.
-    Said(Arc<Place>),
-    /// `/compact`: summarize everything settled, the tail too.
-    Compact(Arc<Place>, oneshot::Sender<Compacted>),
+pub struct Compact {
+    pub place: Arc<Place>,
+    pub reply: oneshot::Sender<Compacted>,
 }
 
-/// Until every conversation's handle to it is gone. A capture still
-/// running then is dropped; its rows are read again next time.
-pub async fn run(historian: Arc<Historian>, mut notices: UnboundedReceiver<Notice>) {
+/// Until the rows stop coming, when every conversation's handle is gone.
+/// A capture still running then is dropped; its rows are read again next
+/// time.
+pub async fn run(
+    historian: Arc<Historian>,
+    mut rows: UnboundedReceiver<Row>,
+    mut compacts: UnboundedReceiver<Compact>,
+) {
     let mut watch = Watch::default();
     let mut captures = Scope::new();
     let (done_tx, mut done) = mpsc::unbounded_channel();
@@ -49,11 +55,16 @@ pub async fn run(historian: Arc<Historian>, mut notices: UnboundedReceiver<Notic
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         tokio::select! {
-            notice = notices.recv() => match notice {
-                Some(Notice::Said(place)) => watch.said(place, Instant::now()),
-                Some(Notice::Compact(place, reply)) => watch.compact(place, reply, Instant::now()),
+            row = rows.recv() => match row {
+                Some(row) if row.place.kind == ConversationKind::Group => {
+                    watch.said(row.place, Instant::now());
+                }
+                Some(_) => {}
                 None => break,
             },
+            Some(compact) = compacts.recv() => {
+                watch.compact(compact.place, compact.reply, Instant::now());
+            }
             Some((conversation, failed)) = done.recv() => {
                 watch.done(conversation, failed, Instant::now());
             }

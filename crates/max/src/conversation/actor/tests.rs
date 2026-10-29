@@ -14,6 +14,7 @@ use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, shared, 
 use crate::historian::Captured;
 use crate::inbound::InNode;
 use crate::llm::testing::{Answer, Script};
+use crate::worker::Row;
 
 const PATIENCE: Duration = Duration::from_secs(5);
 
@@ -22,8 +23,9 @@ struct Harness {
     script: Arc<Script>,
     mailbox: UnboundedSender<Event>,
     outbound: UnboundedReceiver<Outgoing>,
-    /// What the historian hears.
-    notices: UnboundedReceiver<Notice>,
+    /// What the historian hears: every row, and `/compact`.
+    rows: UnboundedReceiver<Row>,
+    compacts: UnboundedReceiver<Compact>,
     done: Option<oneshot::Receiver<()>>,
     _scope: Scope,
 }
@@ -71,7 +73,8 @@ impl Harness {
         }
         let script = Arc::new(Script::default());
         let (mut shared, outbound) = shared(&pool, &script, idle_window_secs, owners);
-        let (historian, notices) = mpsc::unbounded_channel();
+        let rows = shared.rows.subscribe();
+        let (historian, compacts) = mpsc::unbounded_channel();
         shared.historian = Some(historian);
         let (mailbox, rx) = mpsc::unbounded_channel();
         let actor = Conversation::new(Arc::new(shared), place, mailbox.clone())
@@ -88,7 +91,8 @@ impl Harness {
             script,
             mailbox,
             outbound,
-            notices,
+            rows,
+            compacts,
             done: Some(done),
             _scope: scope,
         }
@@ -375,19 +379,17 @@ async fn compact_is_answered_when_the_historian_is_done(pool: PgPool) {
     h.send(from_xiaoming(0, vec![text("/compact")]));
     assert_eq!(h.said().await.1, "这个命令只有群主、管理员能用。");
     h.send(from_xiaohong(1, vec![text("/compact")]));
-    let mut said = 0;
-    let reply = loop {
-        let notice = tokio::time::timeout(PATIENCE, h.notices.recv())
-            .await
-            .expect("the historian heard nothing")
-            .unwrap();
-        match notice {
-            Notice::Said(_) => said += 1,
-            Notice::Compact(_, reply) => break reply,
-        }
-    };
+    let compact = tokio::time::timeout(PATIENCE, h.compacts.recv())
+        .await
+        .expect("the historian heard nothing")
+        .unwrap();
+    let mut said = Vec::new();
+    while let Ok(row) = h.rows.try_recv() {
+        said.push(row.message.id);
+    }
     // 小明's command, Max's answer, 小红's command.
-    assert_eq!(said, 3);
+    assert_eq!(said.len(), 3);
+    let reply = compact.reply;
     reply.send(Ok(Captured::Published(2))).unwrap();
     let (answer, text) = h.said().await;
     assert_eq!(text, "好，整理成了 2 段摘要。");
