@@ -7,15 +7,15 @@
 //! is said while it streams.
 
 use max_core::ids::CallId;
-use max_core::item::{Item, ItemKind, ModelOutput, ModelTag, ToolCall, Usage};
+use max_core::item::{Image, Item, ItemKind, ModelOutput, ModelTag, ToolCall, Usage};
 use max_core::run::Request;
 use serde_json::{Map, Value, json};
 use tracing::warn;
 
-use crate::{Error, Event, Options, share_tokens, tool_text};
+use crate::{Error, Event, Options, Pictures, Piece, pieces, share_tokens, tool_text};
 
 /// The request body.
-pub fn body(request: &Request, options: &Options) -> Value {
+pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value {
     let mut instructions = Vec::new();
     let mut input = Vec::new();
     for item in &request.items {
@@ -24,7 +24,10 @@ pub fn body(request: &Request, options: &Options) -> Value {
         let raw = item.opaque.as_ref().filter(|_| ours);
         match &item.kind {
             ItemKind::System { text } => instructions.push(text.as_str()),
-            ItemKind::User { text, .. } => input.push(json!({ "role": "user", "content": text })),
+            ItemKind::User { text, images } => input.push(json!({
+                "role": "user",
+                "content": user_content(text, images, pictures),
+            })),
             ItemKind::Assistant { text } => input.push(match raw {
                 Some(raw) => raw.clone(),
                 None => json!({ "role": "assistant", "content": text }),
@@ -92,6 +95,21 @@ pub fn body(request: &Request, options: &Options) -> Value {
         body.insert("tool_choice".into(), json!("auto"));
     }
     Value::Object(body)
+}
+
+fn user_content(text: &str, images: &[Image], pictures: &Pictures) -> Value {
+    match pieces(text, images, pictures) {
+        None => json!(text),
+        Some(pieces) => pieces
+            .into_iter()
+            .map(|piece| match piece {
+                Piece::Text(text) => json!({ "type": "input_text", "text": text }),
+                Piece::Picture(url) => {
+                    json!({ "type": "input_image", "image_url": url, "detail": "auto" })
+                }
+            })
+            .collect(),
+    }
 }
 
 /// Reads a streamed response, one event's data at a time.

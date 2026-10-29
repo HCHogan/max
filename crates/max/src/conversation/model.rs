@@ -76,7 +76,10 @@ async fn once(
     mailbox: &UnboundedSender<Event>,
     said: &mut bool,
 ) -> Result<max_core::item::ModelOutput, max_llm::Error> {
-    let mut call = chosen.caller.call(request, &chosen.options).await?;
+    let mut call = chosen
+        .caller
+        .call(request, &chosen.options, &max_llm::Pictures::default())
+        .await?;
     let mut segmenter = Segmenter::new(request.roster.clone());
     let mut say = |segments: Vec<max_core::segment::Segment>| {
         for segment in segments {

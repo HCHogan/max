@@ -23,7 +23,7 @@ use max_core::ids::CallId;
 use max_core::item::{Item, ItemKind, ModelOutput, ModelTag, Protocol, ToolOutput};
 use max_core::run::Request;
 use max_core::tools::TOOLS;
-use max_llm::{Call, Error, Options, chat, responses};
+use max_llm::{Call, Error, Options, Pictures, chat, responses};
 
 type Failure = Box<dyn std::error::Error>;
 
@@ -92,8 +92,14 @@ async fn main() -> Result<(), Failure> {
 /// Sends one request, saves the raw stream and reads it back.
 async fn step(request: &Request, options: &Options, path: &Path) -> Result<ModelOutput, Failure> {
     let (endpoint, body) = match request.model.protocol {
-        Protocol::Responses => ("responses", responses::body(request, options)),
-        Protocol::Chat => ("chat/completions", chat::body(request, options)),
+        Protocol::Responses => (
+            "responses",
+            responses::body(request, options, &Pictures::default()),
+        ),
+        Protocol::Chat => (
+            "chat/completions",
+            chat::body(request, options, &Pictures::default()),
+        ),
     };
     let base = var("MAX_LLM_BASE_URL")?;
     let response = reqwest::Client::new()

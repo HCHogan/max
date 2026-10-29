@@ -12,7 +12,7 @@ use std::time::Duration;
 use color_eyre::eyre::{Result, WrapErr};
 use max_core::item::ModelTag;
 use max_core::run::Request;
-use max_llm::{Call, Options};
+use max_llm::{Call, Options, Pictures};
 
 use crate::config;
 
@@ -22,6 +22,7 @@ pub trait Caller: Send + Sync {
         &'a self,
         request: &'a Request,
         options: &'a Options,
+        pictures: &'a Pictures,
     ) -> Pin<Box<dyn Future<Output = Result<Call, max_llm::Error>> + Send + 'a>>;
 }
 
@@ -30,8 +31,9 @@ impl Caller for max_llm::Client {
         &'a self,
         request: &'a Request,
         options: &'a Options,
+        pictures: &'a Pictures,
     ) -> Pin<Box<dyn Future<Output = Result<Call, max_llm::Error>> + Send + 'a>> {
-        Box::pin(max_llm::Client::call(self, request, options))
+        Box::pin(max_llm::Client::call(self, request, options, pictures))
     }
 }
 
@@ -206,6 +208,7 @@ pub mod testing {
             &'a self,
             request: &'a Request,
             _: &'a Options,
+            _: &'a Pictures,
         ) -> Pin<Box<dyn Future<Output = Result<Call, max_llm::Error>> + Send + 'a>> {
             self.requests.lock().unwrap().push(Request {
                 model: request.model.clone(),

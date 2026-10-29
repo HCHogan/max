@@ -14,7 +14,10 @@ pub mod responses;
 pub use client::{Call, Client, Provider};
 pub use error::Error;
 
-use max_core::item::{Item, ItemKind, Part, ToolOutput, Usage};
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+
+use max_core::item::{Image, Item, ItemKind, Part, ToolOutput, Usage};
 use max_core::tools::ToolSpec;
 use serde_json::Value;
 
@@ -28,6 +31,37 @@ pub struct Options {
     /// Mark where each stable block of the context ends, for servers that
     /// cache a prefix only where told to (NInfer). Chat only.
     pub cache_breakpoints: bool,
+}
+
+/// The pictures a request's items name, as data URLs by SHA-256. `max`
+/// reads them before the call. One it couldn't read is left out of the
+/// request; its handle is still in the text.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Pictures(pub BTreeMap<String, String>);
+
+/// A piece of a user item's content.
+enum Piece<'a> {
+    Text(Cow<'a, str>),
+    /// A data URL.
+    Picture(&'a str),
+}
+
+/// A user item's content: its text, then each picture after its handle.
+/// None when there are no pictures to send, so the content stays a plain
+/// string, as it was before pictures.
+fn pieces<'a>(
+    text: &'a str,
+    images: &'a [Image],
+    pictures: &'a Pictures,
+) -> Option<Vec<Piece<'a>>> {
+    let mut pieces = vec![Piece::Text(text.into())];
+    for image in images {
+        if let Some(url) = pictures.0.get(&image.sha256) {
+            pieces.push(Piece::Text(format!("[{}]", image.handle).into()));
+            pieces.push(Piece::Picture(url));
+        }
+    }
+    (pieces.len() > 1).then_some(pieces)
 }
 
 /// What a call yields while the response streams in.

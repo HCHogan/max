@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use max_core::item::{Protocol, ToolOutput};
+use max_core::item::{Image, Protocol, ToolOutput};
 use max_core::tools::TOOLS;
 
 use super::*;
@@ -90,7 +90,7 @@ fn a_request() {
         temperature: Some(0.6),
         ..Options::default()
     };
-    let body = body(&request, &options);
+    let body = body(&request, &options, &Pictures::default());
     let tool_call = |id: &str| json!({ "id": id, "type": "function", "function": { "name": "run_code", "arguments": "{}" } });
     assert_eq!(
         body["messages"],
@@ -131,7 +131,7 @@ fn signatures_and_inline_thinking_go_back_to_their_model() {
         max_output: Some(100),
         roster: BTreeSet::new(),
     };
-    let body = body(&request, &Options::default());
+    let body = body(&request, &Options::default(), &Pictures::default());
     let message = &body["messages"][0];
     assert_eq!(message["content"], "<think>\n想想\n</think>\n\n");
     assert_eq!(
@@ -140,6 +140,58 @@ fn signatures_and_inline_thinking_go_back_to_their_model() {
     );
     assert_eq!(body["max_tokens"], 100);
     assert!(body.get("tools").is_none());
+}
+
+/// A row with two pictures, of which max could read only the first, and a
+/// block with a picture max couldn't read.
+fn with_pictures(model: ModelTag) -> (Request, Pictures) {
+    let image = |handle: &str, sha: char| Image {
+        handle: handle.into(),
+        sha256: sha.to_string().repeat(64),
+    };
+    let row = ItemKind::User {
+        text: "[新消息]\n[10:00 小明 #7]: [image#7.0][sticker#7.1]".into(),
+        images: vec![image("image#7.0", 'a'), image("sticker#7.1", 'b')],
+    };
+    let unread = ItemKind::User {
+        text: "易变".into(),
+        images: vec![image("image#3.0", 'b')],
+    };
+    let request = Request {
+        model,
+        items: vec![Item::new(unread, 1), Item::new(row, 1)],
+        tools: &[],
+        max_output: None,
+        roster: BTreeSet::new(),
+    };
+    let pictures = Pictures([("a".repeat(64), "data:image/jpeg;base64,AAAA".to_owned())].into());
+    (request, pictures)
+}
+
+#[test]
+fn pictures_follow_their_handles() {
+    let (request, pictures) = with_pictures(model("qwen3.8-27b"));
+    let messages = body(&request, &Options::default(), &pictures)["messages"].clone();
+    let row = json!([
+        { "type": "text", "text": "[新消息]\n[10:00 小明 #7]: [image#7.0][sticker#7.1]" },
+        { "type": "text", "text": "[image#7.0]" },
+        { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,AAAA" } },
+    ]);
+    assert_eq!(messages[0]["content"], "易变");
+    assert_eq!(messages[1]["content"], row);
+
+    // A breakpoint ends the whole block, pictures and all.
+    let mut request = request;
+    request.items.push(Item::new(ItemKind::user("后来"), 1));
+    let options = Options {
+        cache_breakpoints: true,
+        ..Options::default()
+    };
+    let messages = body(&request, &options, &pictures)["messages"].clone();
+    let mut marked = row;
+    marked[2]["prompt_cache_breakpoint"] = json!({ "mode": "explicit" });
+    assert_eq!(messages[1]["content"], marked);
+    assert_eq!(messages[2]["content"], "后来");
 }
 
 #[test]
@@ -171,7 +223,7 @@ fn cache_breakpoints_end_the_stable_blocks() {
         ..Options::default()
     };
     let marked = |text: &str| json!([{ "type": "text", "text": text, "prompt_cache_breakpoint": { "mode": "explicit" } }]);
-    let messages = body(&request, &options)["messages"].clone();
+    let messages = body(&request, &options, &Pictures::default())["messages"].clone();
     let contents: Vec<&Value> = messages
         .as_array()
         .unwrap()
@@ -188,7 +240,7 @@ fn cache_breakpoints_end_the_stable_blocks() {
             &json!("[新消息]")
         ]
     );
-    let plain = body(&request, &Options::default());
+    let plain = body(&request, &Options::default(), &Pictures::default());
     assert_eq!(plain["messages"][1]["content"], "摘要");
 }
 

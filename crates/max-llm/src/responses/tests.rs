@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use max_core::item::{Protocol, ToolOutput};
+use max_core::item::{Image, Protocol, ToolOutput};
 use max_core::tools::TOOLS;
 
 use super::*;
@@ -27,6 +27,49 @@ fn call(id: &str) -> ToolCall {
         name: "run_code".into(),
         arguments: r#"{"code":"return 1"}"#.into(),
     }
+}
+
+/// A row with two pictures, of which max could read only the first, and a
+/// block with a picture max couldn't read.
+fn with_pictures(model: ModelTag) -> (Request, Pictures) {
+    let image = |handle: &str, sha: char| Image {
+        handle: handle.into(),
+        sha256: sha.to_string().repeat(64),
+    };
+    let row = ItemKind::User {
+        text: "[新消息]\n[10:00 小明 #7]: [image#7.0][sticker#7.1]".into(),
+        images: vec![image("image#7.0", 'a'), image("sticker#7.1", 'b')],
+    };
+    let unread = ItemKind::User {
+        text: "易变".into(),
+        images: vec![image("image#3.0", 'b')],
+    };
+    let request = Request {
+        model,
+        items: vec![Item::new(unread, 1), Item::new(row, 1)],
+        tools: &[],
+        max_output: None,
+        roster: BTreeSet::new(),
+    };
+    let pictures = Pictures([("a".repeat(64), "data:image/jpeg;base64,AAAA".to_owned())].into());
+    (request, pictures)
+}
+
+#[test]
+fn pictures_follow_their_handles() {
+    let (request, pictures) = with_pictures(luna());
+    let body = body(&request, &Options::default(), &pictures);
+    assert_eq!(
+        body["input"],
+        json!([
+            { "role": "user", "content": "易变" },
+            { "role": "user", "content": [
+                { "type": "input_text", "text": "[新消息]\n[10:00 小明 #7]: [image#7.0][sticker#7.1]" },
+                { "type": "input_text", "text": "[image#7.0]" },
+                { "type": "input_image", "image_url": "data:image/jpeg;base64,AAAA", "detail": "auto" },
+            ] },
+        ])
+    );
 }
 
 #[test]
@@ -96,7 +139,7 @@ fn a_request() {
         effort: Some("xhigh".into()),
         ..Options::default()
     };
-    let body = body(&request, &options);
+    let body = body(&request, &options, &Pictures::default());
     assert_eq!(body["instructions"], "你是 Max。\n\n群规");
     assert_eq!(
         body["input"],

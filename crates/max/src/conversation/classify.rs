@@ -110,7 +110,10 @@ async fn run(job: &Job) -> Result<Option<Verdict>> {
         roster: Default::default(),
     };
     let chosen = &job.chosen;
-    let mut call = chosen.caller.call(&request, &chosen.options).await?;
+    let mut call = chosen
+        .caller
+        .call(&request, &chosen.options, &max_llm::Pictures::default())
+        .await?;
     while call.next().await?.is_some() {}
     let out = call.finish()?;
 

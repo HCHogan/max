@@ -189,7 +189,10 @@ impl Historian {
             roster: BTreeSet::default(),
         };
         let out = tokio::time::timeout(CALL_TIMEOUT, async {
-            let mut call = chosen.caller.call(&request, &chosen.options).await?;
+            let mut call = chosen
+                .caller
+                .call(&request, &chosen.options, &max_llm::Pictures::default())
+                .await?;
             while call.next().await?.is_some() {}
             call.finish()
         })

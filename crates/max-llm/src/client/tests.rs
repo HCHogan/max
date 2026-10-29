@@ -96,7 +96,10 @@ async fn a_streamed_call() {
         send(&mut socket, "data: [DONE]\n\n").await;
     };
     let call = async {
-        let mut call = client.call(&request(), &Options::default()).await.unwrap();
+        let mut call = client
+            .call(&request(), &Options::default(), &Pictures::default())
+            .await
+            .unwrap();
         let mut events = Vec::new();
         while let Some(event) = call.next().await.unwrap() {
             events.push(event);
@@ -129,8 +132,12 @@ async fn refusals_and_failures() {
         .await;
     };
     let calls = async {
-        let limited = client.call(&request(), &Options::default()).await;
-        let failed = client.call(&request(), &Options::default()).await;
+        let limited = client
+            .call(&request(), &Options::default(), &Pictures::default())
+            .await;
+        let failed = client
+            .call(&request(), &Options::default(), &Pictures::default())
+            .await;
         (limited.err().unwrap(), failed.err().unwrap())
     };
     let ((limited, failed), ()) = tokio::join!(calls, server);
@@ -164,11 +171,17 @@ async fn silence_and_cut_offs() {
         silent
     };
     let calls = async {
-        let mut silent = client.call(&request(), &Options::default()).await.unwrap();
+        let mut silent = client
+            .call(&request(), &Options::default(), &Pictures::default())
+            .await
+            .unwrap();
         assert_eq!(silent.next().await.unwrap(), Some(Event::Text("早".into())));
         let idle = silent.next().await.unwrap_err();
 
-        let mut cut = client.call(&request(), &Options::default()).await.unwrap();
+        let mut cut = client
+            .call(&request(), &Options::default(), &Pictures::default())
+            .await
+            .unwrap();
         assert_eq!(cut.next().await.unwrap(), Some(Event::Text("早".into())));
         assert_eq!(cut.next().await.unwrap(), None);
         (idle, cut.finish().unwrap_err())

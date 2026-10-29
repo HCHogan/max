@@ -16,7 +16,7 @@ use max_core::run::Request;
 use sse_stream::{Sse, SseStream};
 use tokio::time::{Instant, Sleep, sleep, timeout};
 
-use crate::{Error, Event, Options, chat, responses};
+use crate::{Error, Event, Options, Pictures, chat, responses};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How much of an error body to keep.
@@ -59,10 +59,15 @@ impl Client {
 
     /// Sends the request, in the protocol of its model, and waits for the
     /// response to start.
-    pub async fn call(&self, request: &Request, options: &Options) -> Result<Call, Error> {
+    pub async fn call(
+        &self,
+        request: &Request,
+        options: &Options,
+        pictures: &Pictures,
+    ) -> Result<Call, Error> {
         let (path, body) = match request.model.protocol {
-            Protocol::Responses => ("/responses", responses::body(request, options)),
-            Protocol::Chat => ("/chat/completions", chat::body(request, options)),
+            Protocol::Responses => ("/responses", responses::body(request, options, pictures)),
+            Protocol::Chat => ("/chat/completions", chat::body(request, options, pictures)),
         };
         let base = self.provider.base_url.trim_end_matches('/');
         let mut http = self.http.post(format!("{base}{path}")).json(&body);

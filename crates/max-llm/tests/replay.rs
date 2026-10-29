@@ -14,7 +14,7 @@ use max_core::ids::CallId;
 use max_core::item::{Item, ItemKind, ModelOutput, ModelTag, Protocol, ToolOutput};
 use max_core::run::Request;
 use max_core::tools::TOOLS;
-use max_llm::{Call, Event, Options, chat, responses};
+use max_llm::{Call, Event, Options, Pictures, chat, responses};
 use serde_json::Value;
 
 /// What a recorded response said as it streamed, and what it came to.
@@ -116,8 +116,8 @@ async fn exchange(model: &ModelTag, name: &str) -> (ModelOutput, Value) {
         roster: BTreeSet::new(),
     };
     let body = match model.protocol {
-        Protocol::Responses => responses::body(&request, &Options::default()),
-        Protocol::Chat => chat::body(&request, &Options::default()),
+        Protocol::Responses => responses::body(&request, &Options::default(), &Pictures::default()),
+        Protocol::Chat => chat::body(&request, &Options::default(), &Pictures::default()),
     };
     (first.output, body)
 }

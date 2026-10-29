@@ -12,17 +12,17 @@
 use std::collections::BTreeMap;
 
 use max_core::ids::CallId;
-use max_core::item::{Item, ItemKind, ModelOutput, ModelTag, ToolCall, Usage};
+use max_core::item::{Image, Item, ItemKind, ModelOutput, ModelTag, ToolCall, Usage};
 use max_core::run::Request;
 use serde_json::{Map, Value, json};
 
-use crate::{Error, Event, Options, share_tokens, tool_text};
+use crate::{Error, Event, Options, Pictures, Piece, pieces, share_tokens, tool_text};
 
 const THINK: &str = "<think>";
 const UNTHINK: &str = "</think>";
 
 /// The request body.
-pub fn body(request: &Request, options: &Options) -> Value {
+pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value {
     let mut messages = Vec::new();
     let mut turn: Option<Assistant> = None;
     for (index, item) in request.items.iter().enumerate() {
@@ -41,26 +41,19 @@ pub fn body(request: &Request, options: &Options) -> Value {
             ItemKind::System { text } => {
                 messages.push(json!({ "role": "system", "content": text }))
             }
-            // The base context's blocks are user items in a row, the most
-            // volatile last; the end of each before it is a stable prefix.
-            ItemKind::User { text, .. }
-                if options.cache_breakpoints
+            ItemKind::User { text, images } => {
+                // The base context's blocks are user items in a row, the
+                // most volatile last; the end of each before it is a
+                // stable prefix.
+                let breakpoint = options.cache_breakpoints
                     && matches!(
                         request.items.get(index + 1).map(|next| &next.kind),
                         Some(ItemKind::User { .. })
-                    ) =>
-            {
+                    );
                 messages.push(json!({
                     "role": "user",
-                    "content": [{
-                        "type": "text",
-                        "text": text,
-                        "prompt_cache_breakpoint": { "mode": "explicit" },
-                    }],
+                    "content": user_content(text, images, pictures, breakpoint),
                 }));
-            }
-            ItemKind::User { text, .. } => {
-                messages.push(json!({ "role": "user", "content": text }))
             }
             ItemKind::Assistant { text } if modeled => {
                 turn.get_or_insert_default().content.push_str(text);
@@ -138,6 +131,25 @@ pub fn body(request: &Request, options: &Options) -> Value {
         body.insert("tool_choice".into(), json!("auto"));
     }
     Value::Object(body)
+}
+
+fn user_content(text: &str, images: &[Image], pictures: &Pictures, breakpoint: bool) -> Value {
+    let pieces = match pieces(text, images, pictures) {
+        None if !breakpoint => return json!(text),
+        None => vec![Piece::Text(text.into())],
+        Some(pieces) => pieces,
+    };
+    let mut parts: Vec<Value> = pieces
+        .into_iter()
+        .map(|piece| match piece {
+            Piece::Text(text) => json!({ "type": "text", "text": text }),
+            Piece::Picture(url) => json!({ "type": "image_url", "image_url": { "url": url } }),
+        })
+        .collect();
+    if breakpoint && let Some(last) = parts.last_mut() {
+        last["prompt_cache_breakpoint"] = json!({ "mode": "explicit" });
+    }
+    Value::Array(parts)
 }
 
 /// One model call's items, on their way back to one message.
