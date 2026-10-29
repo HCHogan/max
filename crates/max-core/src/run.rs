@@ -155,7 +155,7 @@ pub enum Rejected {
     Busy,
     #[error("the tool calls are due first")]
     ToolsDue,
-    #[error("no tool calls are due")]
+    #[error("nothing of the kind is due")]
     NothingDue,
     #[error("no model call is in flight")]
     NoModelCall,
@@ -179,15 +179,7 @@ pub struct Run {
     transcript: Vec<Item>,
     /// Inputs since the last model call; the next one shows them.
     pending: Vec<Input>,
-    in_flight: InFlight,
-    /// Well-formed calls from the last model output, not started yet.
-    due: Vec<Call>,
-    /// Started calls without a result.
-    outstanding: Vec<CallId>,
-    /// A model call is needed even without a trigger: at the start, after
-    /// tool results, after a cut-off call.
-    model_due: bool,
-    ended: bool,
+    phase: Phase,
     round: u32,
     /// The provider's count for the last request and its output, and how
     /// much of the transcript that covers.
@@ -199,11 +191,21 @@ pub struct Run {
     roster: BTreeSet<PrincipalId>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InFlight {
-    Nothing,
-    Model,
-    Tools,
+/// Where the run is. Each phase holds what only it has.
+#[derive(Clone, Debug, PartialEq)]
+enum Phase {
+    /// A model call is next: at the start, after the tool results, after
+    /// a cut-off call or a malformed tool call, and when a trigger comes.
+    ModelDue,
+    Calling,
+    /// The well-formed calls from the last model output, not started yet.
+    ToolsDue(Vec<Call>),
+    /// A tool batch in flight: the calls without a result, never none.
+    Running(Vec<CallId>),
+    /// Nothing in flight and nothing due: ending the run now loses nothing.
+    Waiting,
+    Interrupted,
+    Failed(FailReason),
 }
 
 impl Run {
@@ -218,11 +220,7 @@ impl Run {
             log: Vec::new(),
             transcript: Vec::new(),
             pending: Vec::new(),
-            in_flight: InFlight::Nothing,
-            due: Vec::new(),
-            outstanding: Vec::new(),
-            model_due: true,
-            ended: false,
+            phase: Phase::ModelDue,
             round: 0,
             measured: None,
             handled: None,
@@ -233,35 +231,39 @@ impl Run {
     /// A model call or tool batch is in flight. The actor asks for the next
     /// step only when this is false.
     pub fn busy(&self) -> bool {
-        self.in_flight != InFlight::Nothing
+        matches!(self.phase, Phase::Calling | Phase::Running(_))
     }
 
     pub fn next_step(&mut self) -> Step {
-        if self.ended || self.busy() {
-            return Step::Idle;
+        match &self.phase {
+            Phase::ToolsDue(calls) => {
+                let calls = calls.clone();
+                self.record(Input::RanTools);
+                Step::RunTools(calls)
+            }
+            Phase::ModelDue => {
+                self.record(Input::CalledModel);
+                Step::CallModel(self.request())
+            }
+            _ => Step::Idle,
         }
-        if !self.due.is_empty() {
-            let calls = self.due.clone();
-            self.record(Input::RanTools);
-            return Step::RunTools(calls);
+    }
+
+    /// The model call that starts now.
+    fn request(&self) -> Request {
+        Request {
+            model: self.spec.model.clone(),
+            items: self
+                .base
+                .items
+                .iter()
+                .chain(&self.transcript)
+                .cloned()
+                .collect(),
+            tools: &TOOLS,
+            max_output: self.spec.max_output,
+            roster: self.roster.clone(),
         }
-        if self.model_due || self.trigger_pending() {
-            self.record(Input::CalledModel);
-            return Step::CallModel(Request {
-                model: self.spec.model.clone(),
-                items: self
-                    .base
-                    .items
-                    .iter()
-                    .chain(&self.transcript)
-                    .cloned()
-                    .collect(),
-                tools: &TOOLS,
-                max_output: self.spec.max_output,
-                roster: self.roster.clone(),
-            });
-        }
-        Step::Idle
     }
 
     pub fn model_output(&mut self, out: ModelOutput) -> Result<(), Rejected> {
@@ -321,32 +323,20 @@ impl Run {
 
     /// For a run that has ended or is idle.
     pub fn outcome(&self) -> Outcome {
-        for input in self.log.iter().rev() {
-            match input {
-                Input::Interrupt { .. } => return Outcome::Interrupted,
-                Input::Fail { reason } => {
-                    return Outcome::Failed {
-                        reason: reason.clone(),
-                    };
-                }
-                _ => {}
-            }
-        }
-        if self.said() {
-            Outcome::Answered
-        } else {
-            Outcome::Silent
+        match &self.phase {
+            Phase::Interrupted => Outcome::Interrupted,
+            Phase::Failed(reason) => Outcome::Failed {
+                reason: reason.clone(),
+            },
+            _ if self.said() => Outcome::Answered,
+            _ => Outcome::Silent,
         }
     }
 
     /// The core is waiting for nothing and has nothing to do: ending it now
     /// loses nothing.
     pub fn idle(&self) -> bool {
-        !self.ended
-            && !self.busy()
-            && self.due.is_empty()
-            && !self.model_due
-            && !self.trigger_pending()
+        self.phase == Phase::Waiting
     }
 
     pub fn round(&self) -> u32 {
@@ -360,64 +350,45 @@ impl Run {
     }
 
     fn check(&self, input: &Input) -> Result<(), Rejected> {
-        if self.ended {
-            return Err(Rejected::Ended);
-        }
-        match input {
-            Input::CalledModel | Input::RanTools if self.busy() => Err(Rejected::Busy),
-            Input::CalledModel if !self.due.is_empty() => Err(Rejected::ToolsDue),
-            Input::RanTools if self.due.is_empty() => Err(Rejected::NothingDue),
-            Input::ModelOutput(_) | Input::PartialOutput { .. }
-                if self.in_flight != InFlight::Model =>
-            {
+        use Phase::{Calling, Failed, Interrupted, ModelDue, Running, ToolsDue, Waiting};
+        match (input, &self.phase) {
+            (_, Interrupted | Failed(_)) => Err(Rejected::Ended),
+            (Input::CalledModel | Input::RanTools, Calling | Running(_)) => Err(Rejected::Busy),
+            (Input::CalledModel, ToolsDue(_)) => Err(Rejected::ToolsDue),
+            (Input::CalledModel, Waiting) | (Input::RanTools, ModelDue | Waiting) => {
+                Err(Rejected::NothingDue)
+            }
+            (Input::ModelOutput(_) | Input::PartialOutput { .. }, phase) if *phase != Calling => {
                 Err(Rejected::NoModelCall)
             }
-            Input::ToolResult { call, .. } if !self.outstanding.contains(call) => {
-                Err(Rejected::UnknownCall)
-            }
+            (Input::ToolResult { call, .. }, Running(open)) if open.contains(call) => Ok(()),
+            (Input::ToolResult { .. }, _) => Err(Rejected::UnknownCall),
             _ => Ok(()),
         }
     }
 
     /// Applies an input that fits and logs it.
     fn record(&mut self, input: Input) {
-        match &input {
-            Input::CalledModel => {
+        let phase = std::mem::replace(&mut self.phase, Phase::Waiting);
+        self.phase = match (&input, phase) {
+            (Input::CalledModel, _) => {
                 self.show_pending();
-                self.model_due = false;
-                self.in_flight = InFlight::Model;
                 self.round += 1;
+                Phase::Calling
             }
-            Input::RanTools => {
-                self.outstanding = self.due.drain(..).map(|call| call.id).collect();
-                self.in_flight = InFlight::Tools;
+            (Input::RanTools, Phase::ToolsDue(calls)) => {
+                Phase::Running(calls.into_iter().map(|call| call.id).collect())
             }
-            Input::ModelOutput(out) => {
-                self.transcript.extend(out.items.iter().cloned());
-                self.measured = Some((out.usage.input + out.usage.output, self.transcript.len()));
-                self.in_flight = InFlight::Nothing;
-                for item in &out.items {
-                    if let ItemKind::ToolCall(call) = &item.kind {
-                        match tools::parse(call) {
-                            Ok(call) => self.due.push(call),
-                            Err(error) => {
-                                self.synthesize(call.id.clone(), error);
-                                self.model_due = true;
-                            }
-                        }
-                    }
-                }
-            }
-            Input::PartialOutput { text, tokens } => {
+            (Input::ModelOutput(out), _) => self.output(out),
+            (Input::PartialOutput { text, tokens }, _) => {
                 if !text.is_empty() {
                     let text = text.clone();
                     self.transcript
                         .push(Item::new(ItemKind::Assistant { text }, *tokens));
                 }
-                self.in_flight = InFlight::Nothing;
-                self.model_due = true;
+                Phase::ModelDue
             }
-            Input::ToolResult { call, output } => {
+            (Input::ToolResult { call, output }, Phase::Running(mut open)) => {
                 self.transcript.push(Item::new(
                     ItemKind::ToolResult {
                         call: call.clone(),
@@ -425,29 +396,77 @@ impl Run {
                     },
                     output.tokens,
                 ));
-                self.outstanding.retain(|id| id != call);
-                if self.outstanding.is_empty() {
-                    self.in_flight = InFlight::Nothing;
-                    self.model_due = true;
+                open.retain(|id| id != call);
+                if open.is_empty() {
+                    Phase::ModelDue
+                } else {
+                    Phase::Running(open)
                 }
             }
-            Input::Messages { .. } | Input::Wake(_) => self.pending.push(input.clone()),
-            Input::Interrupt { .. } | Input::Fail { .. } => {
-                let open: Vec<CallId> = self
-                    .outstanding
-                    .drain(..)
-                    .chain(self.due.drain(..).map(|call| call.id))
-                    .collect();
-                for call in open {
-                    self.synthesize(call, "已取消".to_owned());
-                }
-                self.in_flight = InFlight::Nothing;
-                self.ended = true;
+            (Input::Messages { .. }, phase) => {
+                self.pending.push(input.clone());
+                phase
             }
-        }
+            (Input::Wake(_), phase) => {
+                self.pending.push(input.clone());
+                match phase {
+                    Phase::Waiting => Phase::ModelDue,
+                    phase => phase,
+                }
+            }
+            (Input::Interrupt { .. }, phase) => {
+                self.cancel(phase);
+                Phase::Interrupted
+            }
+            (Input::Fail { reason }, phase) => {
+                self.cancel(phase);
+                Phase::Failed(reason.clone())
+            }
+            // `check` turns the rest away.
+            (_, phase) => phase,
+        };
         self.log.push(input);
         if self.idle() {
             self.handled = Some(self.log.len());
+        }
+    }
+
+    /// The model's output joins the transcript; its well-formed calls are
+    /// due, and a malformed one gets an error result here.
+    fn output(&mut self, out: &ModelOutput) -> Phase {
+        self.transcript.extend(out.items.iter().cloned());
+        self.measured = Some((out.usage.input + out.usage.output, self.transcript.len()));
+        let mut due = Vec::new();
+        let mut malformed = false;
+        for item in &out.items {
+            if let ItemKind::ToolCall(call) = &item.kind {
+                match tools::parse(call) {
+                    Ok(call) => due.push(call),
+                    Err(error) => {
+                        self.synthesize(call.id.clone(), error);
+                        malformed = true;
+                    }
+                }
+            }
+        }
+        if !due.is_empty() {
+            Phase::ToolsDue(due)
+        } else if malformed || self.trigger_pending() {
+            Phase::ModelDue
+        } else {
+            Phase::Waiting
+        }
+    }
+
+    /// An interrupted or failed run's open calls get a result here.
+    fn cancel(&mut self, phase: Phase) {
+        let open: Vec<CallId> = match phase {
+            Phase::ToolsDue(calls) => calls.into_iter().map(|call| call.id).collect(),
+            Phase::Running(open) => open,
+            _ => Vec::new(),
+        };
+        for call in open {
+            self.synthesize(call, "已取消".to_owned());
         }
     }
 

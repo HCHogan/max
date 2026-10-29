@@ -614,14 +614,23 @@ struct Run {
     log: Vec<Input>,          // 喂过的所有输入
     transcript: Vec<Item>,    // 本 turn 产生的条目，只追加
     pending: Vec<Input>,      // 攒下的消息和 Wake，下一次调模型时渲染成一个 [新消息] 块
-    in_flight: InFlight,      // 模型调用、工具批次，或者都没有
-    due: Vec<Call>,           // 上一次输出里格式正确、还没开始的工具调用
-    outstanding: Vec<CallId>, // 已开始、还没回结果的
-    model_due: bool,          // 开始时、工具结果回齐后、调用被打断后，没有触发也要调模型
+    phase: Phase,             // 在哪个阶段，阶段自己的数据在阶段里，见下
     measured: Option<(u32, usize)>, // provider 报的上一次请求加输出的 token 数，以及它覆盖到 transcript 的哪里
     handled: Option<usize>,   // 核心最近一次变空闲时 log 的长度：这之前交进来的都处理完了
     roster: BTreeSet<PrincipalId>, // base 的名册，加上之后给模型看过的新人
     // 以及 ended、round
+}
+
+// 2026-10-29 改：原来是 in_flight、due、outstanding、model_due、ended 五个字段一起表示阶段，
+// 合法的组合靠人维护（owner 指出）；现在一个枚举，非法组合写不出来
+enum Phase {
+    ModelDue,                 // 下一步调模型：开始时、工具结果回齐后、调用被打断后、有格式不对的调用、来了触发
+    Calling,                  // 模型调用在途
+    ToolsDue(Vec<Call>),      // 上一次输出里格式正确、还没开始的工具调用
+    Running(Vec<CallId>),     // 工具批次在途：还没回结果的，不为空
+    Waiting,                  // 没有在途的，也没有该做的：现在结束不丢东西
+    Interrupted,
+    Failed(FailReason),
 }
 
 enum Step {
