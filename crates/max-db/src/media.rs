@@ -1,6 +1,8 @@
 //! The content store's index: what was downloaded, and for which message.
 //! The download worker is the only writer of both tables; see "媒体".
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use max_core::ids::MessageId;
 use max_core::message::{MediaRef, Node, media};
@@ -83,6 +85,38 @@ pub async fn downloaded(
         .into_iter()
         .map(|row| (u16::try_from(row.ordinal).unwrap_or_default(), row.sha256))
         .collect())
+}
+
+/// For each of `messages` there is: when it came in, and the version made
+/// for the model of each picture of it downloaded so far, by ordinal.
+pub async fn for_model(
+    conn: &mut PgConnection,
+    messages: &[MessageId],
+) -> sqlx::Result<BTreeMap<MessageId, (DateTime<Utc>, BTreeMap<u16, String>)>> {
+    let ids: Vec<i64> = messages.iter().map(|id| id.0).collect();
+    let rows = sqlx::query!(
+        r#"
+        select m.id as "id!", m.received_at as "received_at!", mm.ordinal as "ordinal?",
+               md.model_sha256 as "model_sha256?"
+        from messages m
+        left join message_media mm on mm.message_id = m.id
+        left join media md on md.sha256 = mm.sha256
+        where m.id = any($1)
+        "#,
+        &ids
+    )
+    .fetch_all(conn)
+    .await?;
+    let mut found = BTreeMap::new();
+    for row in rows {
+        let (_, pictures) = found
+            .entry(MessageId(row.id))
+            .or_insert_with(|| (row.received_at, BTreeMap::new()));
+        if let (Some(ordinal), Some(sha256)) = (row.ordinal, row.model_sha256) {
+            pictures.insert(u16::try_from(ordinal).unwrap_or_default(), sha256);
+        }
+    }
+    Ok(found)
 }
 
 /// Messages received since `since` whose remote media aren't all

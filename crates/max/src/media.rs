@@ -2,5 +2,6 @@
 
 pub mod download;
 pub mod fetch;
+pub mod pictures;
 pub mod prepare;
 pub mod store;

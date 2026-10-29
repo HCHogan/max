@@ -54,7 +54,7 @@ pub enum ItemKind {
 /// holds only the reference; `max` finds the version made for the model
 /// when it sends a request, so a row's picture can still be downloading
 /// when the row is shown.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Image {
     pub kind: MediaKind,
     pub message: MessageId,

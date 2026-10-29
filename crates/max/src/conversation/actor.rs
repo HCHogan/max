@@ -30,6 +30,7 @@ use crate::historian::Notice;
 use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
 use crate::mcp;
+use crate::media::pictures::Pictures;
 use crate::scope::Scope;
 use crate::search::Search;
 use crate::tokens;
@@ -55,6 +56,9 @@ pub struct Shared {
     pub vms: Option<Vms>,
     /// For `web_search`; None when it isn't configured.
     pub search: Option<Arc<Search>>,
+    /// Where model calls find their pictures; None when no media
+    /// directory is configured, and none are sent.
+    pub pictures: Option<Arc<Pictures>>,
     /// When Max started, for `/status`.
     pub started: Instant,
 }
@@ -463,7 +467,8 @@ impl Conversation {
                     a.live.insert(task);
                     let chosen = a.chosen.clone();
                     let mailbox = self.mailbox.clone();
-                    a.io.spawn(move |_| model::call(chosen, request, task, mailbox));
+                    let pictures = self.shared.pictures.clone();
+                    a.io.spawn(move |_| model::call(chosen, pictures, request, task, mailbox));
                     return Ok(());
                 }
                 Step::RunTools(calls) => {

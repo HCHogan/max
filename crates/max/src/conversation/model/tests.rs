@@ -21,7 +21,7 @@ fn request(chosen: &Chosen) -> Request {
 async fn run(script: &Arc<Script>) -> (Vec<String>, Result<(), String>) {
     let chosen = models(script).turn(None, None).unwrap();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    call(chosen.clone(), request(&chosen), TaskId(1), tx).await;
+    call(chosen.clone(), None, request(&chosen), TaskId(1), tx).await;
     let mut said = Vec::new();
     while let Ok(event) = rx.try_recv() {
         match event {
@@ -105,7 +105,7 @@ async fn an_aborted_call_still_ends() {
     script.push(Answer::Hangs);
     let chosen = models(&script).turn(None, None).unwrap();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let task = call(chosen.clone(), request(&chosen), TaskId(7), tx);
+    let task = call(chosen.clone(), None, request(&chosen), TaskId(7), tx);
     let cut = tokio::time::timeout(Duration::from_secs(60), task).await;
     assert!(cut.is_err());
     let Ok(Event::ModelDone { task, out }) = rx.try_recv() else {

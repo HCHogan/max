@@ -30,6 +30,7 @@ use max::llm::Models;
 use max::mcp;
 use max::media::download::{self, Download};
 use max::media::fetch;
+use max::media::pictures::Pictures;
 use max::media::store::Store;
 use max::qq::{listen, send};
 use max::scope::Scope;
@@ -233,21 +234,30 @@ async fn serve(config: Config) -> Result<()> {
         }
     };
     let mut workers = Scope::new();
-    match &config.media {
+    let pictures = match &config.media {
         Some(media) => {
-            let store = Store::open(&media.dir)
-                .await
-                .wrap_err("opening the content store")?;
+            let store = Arc::new(
+                Store::open(&media.dir)
+                    .await
+                    .wrap_err("opening the content store")?,
+            );
             let download = Arc::new(Download {
                 pool: pool.clone(),
                 http: fetch::client()?,
-                store: Arc::new(store),
+                store: Arc::clone(&store),
             });
             let (_, rows) = rows.subscribe();
             workers.spawn(move |stop| worker::drive(download, download::POLICY, rows, stop));
+            Some(Arc::new(Pictures {
+                pool: pool.clone(),
+                store,
+            }))
         }
-        None => info!("no media directory: media aren't downloaded"),
-    }
+        None => {
+            info!("no media directory: media aren't downloaded, and models see no pictures");
+            None
+        }
+    };
     let search = match &config.search {
         Some(search) => Some(Arc::new(Search::new(search::EXA, search.api_key()?)?)),
         None => {
@@ -276,6 +286,7 @@ async fn serve(config: Config) -> Result<()> {
         rows,
         vms,
         search,
+        pictures,
         started: tokio::time::Instant::now(),
     });
     let (intake_tx, intake_rx) = mpsc::unbounded_channel();
