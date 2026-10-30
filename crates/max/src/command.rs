@@ -106,7 +106,7 @@ pub fn parse(text: &str) -> Option<Command> {
         }),
         "persona" => Command::Persona(match argument {
             None => Persona::Show,
-            Some(text) if text == "clear" || text == "reset" => Persona::Reset,
+            Some(text) if ["clear", "reset", "default"].contains(&text.as_str()) => Persona::Reset,
             Some(text) => Persona::Set(text),
         }),
         "clear" => Command::Clear {
@@ -143,6 +143,10 @@ mod tests {
         );
         assert_eq!(
             parse("/persona clear"),
+            Some(Command::Persona(Persona::Reset))
+        );
+        assert_eq!(
+            parse("/persona default"),
             Some(Command::Persona(Persona::Reset))
         );
         assert_eq!(parse("/clear"), Some(Command::Clear { all: false }));
