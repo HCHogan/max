@@ -11,7 +11,7 @@ use color_eyre::eyre::{Result, eyre};
 use max_core::item::{Part, ToolOutput};
 use max_core::message::MediaRef;
 use max_core::project::PICTURE_TOKENS;
-use max_core::tools::{MAX_TOOLS, Tool};
+use max_core::tools::Tool;
 use serde_json::json;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -106,7 +106,7 @@ async fn run_code(
 ) -> Result<(String, bool)> {
     let unit = Vm::unit();
     let line = unit_line(&unit, limit, "/work", "exec node /run/max/runner.js");
-    let tools: Vec<&str> = MAX_TOOLS.iter().map(|tool| tool.name).collect();
+    let tools: Vec<&str> = mcp::tool::TOOLS.iter().map(|tool| tool.name).collect();
     let input = json!({ "code": code, "args": args, "token": grant.token(), "tools": tools });
     let mut split = Split {
         out: Output::new(vm.work(), format!("{unit}.txt")),

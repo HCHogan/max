@@ -5,27 +5,61 @@ use chrono::Utc;
 use image::ImageFormat;
 use max_core::message::{Draft, DraftNode};
 use max_db::media::{self, Blob};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 use tracing::warn;
 
+use super::tool::Tool;
 use super::work::{beneath_work, read};
-use super::{Context, Failure, arguments, internal};
+use super::{Context, Failure, internal};
 use crate::media::prepare::{png, prepare};
 
 /// The largest picture sent, in bytes.
 const MOST: u64 = 10 << 20;
+const PER_RUN: u32 = 5;
 
-#[derive(Deserialize)]
+pub struct SendImage;
+
+#[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct Args {
+pub struct Args {
+    #[schemars(length(min = 1), description = "/work 下的路径，相对路径从 /work 算")]
     path: String,
+    #[schemars(description = "图下面的说明，可以不写")]
     caption: Option<String>,
 }
 
-pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
-    let Args { path, caption } = arguments("send_image", args)?;
+#[derive(Serialize, JsonSchema)]
+pub struct Sent {
+    handle: String,
+}
+
+impl Tool for SendImage {
+    const NAME: &'static str = "send_image";
+    const DESCRIPTION: &'static str =
+        "把 /work 下的一张图发到本群，比如画的图表、截的图、下载的图片。";
+    const PER_RUN: Option<u32> = Some(PER_RUN);
+    const JOB: bool = false;
+
+    type Args = Args;
+    type Output = Sent;
+
+    fn guide() -> String {
+        format!(
+            "把 /work 下的一张图发到本群：画的图表、截的图、下载的图片。PNG、JPEG、GIF、WebP，最大 {} MiB；路径上不能有符号链接。\n  \
+            caption 是图下面的一句说明，和图在同一条消息里。发出去了才返回，handle 是这条消息里那张图的句柄。一次运行最多发 {PER_RUN} 张。\n  \
+            记录里已有的图和表情包不用这个，直接在回复里写它的句柄。",
+            MOST >> 20
+        )
+    }
+
+    async fn run(context: &Context, args: Args) -> Result<Sent, Failure> {
+        send(context, args).await
+    }
+}
+
+async fn send(context: &Context, Args { path, caption }: Args) -> Result<Sent, Failure> {
     let (Some(work), Some(store), Some(poster)) = (
         &context.work,
         &context.services.store,
@@ -86,7 +120,9 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
         .post(draft)
         .await
         .map_err(|error| Failure::new("not_sent", format!("没发出去：{error}")))?;
-    Ok(json!({ "handle": format!("image#{id}.0") }))
+    Ok(Sent {
+        handle: format!("image#{id}.0"),
+    })
 }
 
 /// The picture as QQ takes it, and its type: PNG, JPEG and GIF as they

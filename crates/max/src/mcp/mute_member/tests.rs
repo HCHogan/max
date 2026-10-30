@@ -2,15 +2,22 @@ use std::sync::{Arc, Mutex};
 
 use max_db::platform::ConversationKind;
 use qqbot::api::Muted;
+use serde_json::{Value, json};
 use sqlx::PgPool;
 
 use super::*;
 use crate::conversation::Place;
 use crate::conversation::ingest;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, offset, text};
+use crate::mcp::tool::Tool;
 use crate::mcp::{Caller, Services};
 use crate::qq::admin::Admin;
 use crate::qq::send::Answer;
+
+/// Calls the tool as a program does, its arguments checked.
+async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
+    crate::mcp::call(MuteMember::NAME, context, args).await
+}
 
 /// QQ as a group admin sees it: who is muted, each change asked for, and
 /// a refusal to give once.

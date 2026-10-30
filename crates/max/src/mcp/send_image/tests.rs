@@ -4,15 +4,22 @@ use std::sync::Arc;
 
 use max_core::ids::TurnId;
 use max_core::message::{MediaKind, MediaMeta, MediaRef, Node};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio::sync::mpsc;
 
 use super::*;
 use crate::conversation::testing::{group, offset};
 use crate::conversation::{Act, Event, Poster, ingest};
+use crate::mcp::tool::Tool;
 use crate::mcp::{Caller, Services};
 use crate::media::store::Store;
 use crate::scope::Scope;
+
+/// Calls the tool as a program does, its arguments checked.
+async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
+    crate::mcp::call(SendImage::NAME, context, args).await
+}
 
 fn encoded(format: ImageFormat) -> Vec<u8> {
     let mut bytes = Cursor::new(Vec::new());

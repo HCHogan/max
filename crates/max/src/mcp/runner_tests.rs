@@ -7,11 +7,11 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::mcp::tool::TOOLS;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
 use max_core::message::{MediaKind, MediaMeta, MediaRef, Node};
-use max_core::tools::MAX_TOOLS;
 use max_db::media::{self, Blob};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -40,7 +40,7 @@ async fn run(mcp: &str, token: &str, code: &str) -> Ran {
 
 /// Runs `input` with Max's tools.
 async fn run_with(mut input: Value) -> Ran {
-    let tools: Vec<&str> = MAX_TOOLS.iter().map(|tool| tool.name).collect();
+    let tools: Vec<&str> = TOOLS.iter().map(|tool| tool.name).collect();
     input["tools"] = json!(tools);
     let mut node = Command::new("node")
         .arg(RUNNER)

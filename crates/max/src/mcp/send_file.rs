@@ -4,13 +4,14 @@
 use chrono::Utc;
 use max_core::message::{Draft, DraftNode};
 use max_db::media::{self, Blob};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 use tracing::warn;
 
+use super::tool::Tool;
 use super::work::{beneath_work, read};
-use super::{Context, Failure, arguments, internal};
+use super::{Context, Failure, internal};
 
 /// The largest file sent, in bytes: as large as one downloaded. QQ takes
 /// up to 200 MiB, but a call has a minute, and 32 MiB took 14 seconds to
@@ -18,16 +19,49 @@ use super::{Context, Failure, arguments, internal};
 const MOST: u64 = 64 << 20;
 /// The longest name, in characters.
 const LONGEST_NAME: usize = 100;
+const PER_RUN: u32 = 5;
 
-#[derive(Deserialize)]
+pub struct SendFile;
+
+#[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct Args {
+pub struct Args {
+    #[schemars(length(min = 1), description = "/work 下的路径，相对路径从 /work 算")]
     path: String,
+    #[schemars(length(min = 1), description = "群里显示的文件名，默认用路径里的")]
     name: Option<String>,
 }
 
-pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
-    let Args { path, name } = arguments("send_file", args)?;
+#[derive(Serialize, JsonSchema)]
+pub struct Sent {
+    handle: String,
+}
+
+impl Tool for SendFile {
+    const NAME: &'static str = "send_file";
+    const DESCRIPTION: &'static str =
+        "把 /work 下的一个文件发到本群，比如生成的文档、表格、压缩包。";
+    const PER_RUN: Option<u32> = Some(PER_RUN);
+    const JOB: bool = false;
+
+    type Args = Args;
+    type Output = Sent;
+
+    fn guide() -> String {
+        format!(
+            "把 /work 下的一个文件发到本群，群里显示成文件，点开能下载：文档、表格、PDF、压缩包、代码都行。最大 {} MiB，不能是空的；路径上不能有符号链接。\n  \
+            name 是群里显示的文件名，默认用路径里的。发出去了才返回，handle 是这个文件的句柄。一次运行最多发 {PER_RUN} 个。\n  \
+            要大家直接看到的图用 send_image，别当文件发。记录里已有的文件要再发，先 max.file 拷到 /work 再发。",
+            MOST >> 20
+        )
+    }
+
+    async fn run(context: &Context, args: Args) -> Result<Sent, Failure> {
+        send(context, args).await
+    }
+}
+
+async fn send(context: &Context, Args { path, name }: Args) -> Result<Sent, Failure> {
     let (Some(work), Some(store), Some(poster)) = (
         &context.work,
         &context.services.store,
@@ -75,7 +109,9 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
         .post(draft)
         .await
         .map_err(|error| Failure::new("not_sent", format!("没发出去：{error}")))?;
-    Ok(json!({ "handle": format!("file#{id}.0") }))
+    Ok(Sent {
+        handle: format!("file#{id}.0"),
+    })
 }
 
 /// The name a file is shown and saved under: one path component, without

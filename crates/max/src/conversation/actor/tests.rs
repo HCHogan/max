@@ -11,14 +11,12 @@ use max_core::run::Outcome;
 use max_db::PgPool;
 use tokio::sync::{mpsc, oneshot};
 
-use serde_json::json;
-
 use super::*;
 use crate::command;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, shared, text};
 use crate::historian::Captured;
 use crate::inbound::InNode;
-use crate::job::{Ending, Finished, How, Request};
+use crate::job::{Ending, Finished, How, Reply, Request};
 use crate::llm::testing::{Answer, Script};
 
 const PATIENCE: Duration = Duration::from_secs(5);
@@ -678,7 +676,7 @@ fn finished(how: How, text: &str) -> Finished {
     }
 }
 
-async fn ask(h: &Harness, request: Request) -> Result<serde_json::Value, String> {
+async fn ask(h: &Harness, request: Request) -> Result<Reply, String> {
     let (reply, answer) = oneshot::channel();
     let origin = None;
     h.mailbox
@@ -728,19 +726,24 @@ async fn a_job_is_steered_listed_and_cancelled(pool: PgPool) {
         job: 1,
         message: "只要硬座".into(),
     };
-    assert_eq!(ask(&h, steer).await.unwrap(), json!({ "job": "job#1" }));
+    assert_eq!(ask(&h, steer).await.unwrap(), Reply::Job(1));
     assert_eq!(steered.recv().await.unwrap(), "只要硬座");
     let status = ask(&h, Request::Status { job: None }).await.unwrap();
-    assert_eq!(status["jobs"][0]["job"], "job#1");
-    assert_eq!(status["jobs"][0]["title"], "查票价");
-    assert_eq!(status["jobs"][0]["calls"], 0);
+    let Reply::Running(jobs) = status else {
+        panic!("{status:?}");
+    };
+    assert_eq!(
+        (jobs[0].job.as_str(), jobs[0].title.as_str()),
+        ("job#1", "查票价")
+    );
+    assert_eq!(jobs[0].calls, 0);
     let cancelled = ask(&h, Request::Cancel { job: 1 }).await.unwrap();
-    assert_eq!(cancelled, json!({ "job": "job#1" }));
+    assert_eq!(cancelled, Reply::Job(1));
     // What a cancelled job says when it ends wakes nobody.
     let finished = finished(How::Done, "一百块。");
     h.mailbox.send(Event::JobDone { job: 1, finished }).unwrap();
     let status = ask(&h, Request::Status { job: None }).await.unwrap();
-    assert_eq!(status, json!({ "jobs": [] }));
+    assert_eq!(status, Reply::Running(Vec::new()));
     h.stop().await;
     assert!(h.turns().await.is_empty());
 }
@@ -769,6 +772,6 @@ async fn kill_stops_the_jobs_too(pool: PgPool) {
     let (_, killed) = h.said().await;
     assert!(killed.contains("/kill → 后台的 job#1 也停了"), "{killed}");
     let status = ask(&h, Request::Status { job: None }).await.unwrap();
-    assert_eq!(status, json!({ "jobs": [] }));
+    assert_eq!(status, Reply::Running(Vec::new()));
     h.stop().await;
 }

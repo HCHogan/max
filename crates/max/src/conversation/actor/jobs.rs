@@ -7,11 +7,10 @@ use std::sync::{Mutex, PoisonError};
 
 use max_core::item::Item;
 use max_core::render::EXCERPT_CHARS;
-use serde_json::{Value, json};
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::*;
-use crate::job::{self, Finished, How, Progress, Request};
+use crate::job::{self, Finished, How, Progress, Reply, Request, Status, name};
 
 /// The jobs running, by number.
 #[derive(Default)]
@@ -32,35 +31,35 @@ struct Running {
 
 impl Conversation {
     /// Answers a tool's request: what the program gets, or why not.
-    pub(super) fn job_request(&mut self, request: Request) -> Result<Value, String> {
+    pub(super) fn job_request(&mut self, request: Request) -> Result<Reply, String> {
         match request {
             Request::Start { task, title } => self.start_job(task, title),
             Request::Steer { job, message } => {
                 let running = self.jobs.running.get(&job).ok_or_else(|| over(job))?;
                 running.steers.send(message).map_err(|_| over(job))?;
-                Ok(json!({ "job": name(job) }))
+                Ok(Reply::Job(job))
             }
             Request::Cancel { job } => {
                 self.jobs.running.remove(&job).ok_or_else(|| over(job))?;
                 info!(conversation = %self.place.conversation, job, "a job is cancelled");
-                Ok(json!({ "job": name(job) }))
+                Ok(Reply::Job(job))
             }
             Request::Status { job } => {
-                let jobs: Vec<Value> = self
+                let jobs: Vec<Status> = self
                     .jobs
                     .running
                     .iter()
                     .filter(|(number, _)| job.is_none_or(|job| job == **number))
                     .map(|(number, running)| {
                         let progress = running.progress();
-                        json!({
-                            "job": name(*number),
-                            "title": running.title,
-                            "minutes": running.started.elapsed().as_secs() / 60,
-                            "calls": progress.calls,
-                            "tools": progress.tools,
-                            "tool": progress.tool,
-                        })
+                        Status {
+                            job: name(*number),
+                            title: running.title.clone(),
+                            minutes: running.started.elapsed().as_secs() / 60,
+                            calls: progress.calls,
+                            tools: progress.tools,
+                            tool: progress.tool.clone(),
+                        }
                     })
                     .collect();
                 if let Some(job) = job
@@ -68,12 +67,12 @@ impl Conversation {
                 {
                     return Err(over(job));
                 }
-                Ok(json!({ "jobs": jobs }))
+                Ok(Reply::Running(jobs))
             }
         }
     }
 
-    fn start_job(&mut self, task: String, title: Option<String>) -> Result<Value, String> {
+    fn start_job(&mut self, task: String, title: Option<String>) -> Result<Reply, String> {
         if self.stopping.is_some() {
             return Err("Max 正在重启，起不了新的后台 agent".to_owned());
         }
@@ -138,7 +137,7 @@ impl Conversation {
                 _task: task,
             },
         );
-        Ok(json!({ "job": name(number) }))
+        Ok(Reply::Job(number))
     }
 
     /// A job ended: Max hears how, in the running core or a new one.
@@ -227,10 +226,6 @@ impl Running {
     fn progress(&self) -> std::sync::MutexGuard<'_, Progress> {
         self.progress.lock().unwrap_or_else(PoisonError::into_inner)
     }
-}
-
-fn name(job: u32) -> String {
-    format!("job#{job}")
 }
 
 fn over(job: u32) -> String {

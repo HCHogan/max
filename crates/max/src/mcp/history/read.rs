@@ -8,7 +8,9 @@ use max_core::ids::MessageId;
 use max_core::message::Message;
 use max_core::render::Render;
 use max_db::{PgConnection, ledger};
-use serde_json::{Value, json};
+use schemars::JsonSchema;
+use serde::Serialize;
+use serde_json::{Map, Value};
 
 use super::Filters;
 use crate::conversation::project::{delivery_mark, joined, people, shown_line};
@@ -16,12 +18,23 @@ use crate::mcp::{Context, Failure};
 use crate::tokens;
 
 /// Rows read on each side of the one asked for, unless asked otherwise.
-const AROUND: u8 = 10;
+pub(super) const AROUND: u8 = 10;
 /// The most rows read before, and after, the one asked for.
-const MOST_AROUND: u8 = 50;
+pub(super) const MOST_AROUND: u8 = 50;
 /// Rows of a stretch read at once, unless asked otherwise, and the most.
 pub(super) const DEFAULT: usize = 50;
 pub(super) const MOST: usize = 100;
+
+/// A page of what was read, and where to go on.
+#[derive(Serialize, JsonSchema)]
+pub struct Page {
+    text: String,
+    page: usize,
+    pages: usize,
+    /// `history`'s arguments that read on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<Map<String, Value>>,
+}
 
 /// Where a stretch goes on: after its last row, or before its first.
 #[derive(Debug, PartialEq, Eq)]
@@ -37,12 +50,12 @@ pub(super) async fn around(
     id: i64,
     (before, after): (Option<u8>, Option<u8>),
     page: Option<usize>,
-) -> Result<Value, Failure> {
+) -> Result<Page, Failure> {
     let (before, after) = (before.unwrap_or(AROUND), after.unwrap_or(AROUND));
     let pages = if (before, after) == (0, 0) {
         row(context, id).await?
     } else {
-        rows(context, id, before.min(MOST_AROUND), after.min(MOST_AROUND)).await?
+        rows(context, id, before, after).await?
     };
     paged(&pages, page)
 }
@@ -82,12 +95,17 @@ pub(super) async fn stretch(
 }
 
 /// The page asked for, the first by default, and how many there are.
-pub(super) fn paged(pages: &[String], page: Option<usize>) -> Result<Value, Failure> {
+pub(super) fn paged(pages: &[String], page: Option<usize>) -> Result<Page, Failure> {
     let page = page.unwrap_or(1);
     let Some(text) = page.checked_sub(1).and_then(|index| pages.get(index)) else {
         return Err(Failure::new("no_page", format!("只有 {} 页", pages.len())));
     };
-    Ok(json!({ "text": text, "page": page, "pages": pages.len() }))
+    Ok(Page {
+        text: text.clone(),
+        page,
+        pages: pages.len(),
+        next: None,
+    })
 }
 
 fn not_found(id: i64) -> Failure {

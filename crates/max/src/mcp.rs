@@ -1,5 +1,5 @@
 //! Max's tools, which programs in a group's VM call through the MCP
-//! service; see "MCP 通道". max-core's `MAX_TOOLS` declares them.
+//! service; see "MCP 通道". Each declares itself as a [`tool::Tool`].
 
 mod agent;
 mod chat_file;
@@ -12,6 +12,7 @@ mod send_file;
 mod send_image;
 mod service;
 mod show;
+pub mod tool;
 mod web_search;
 pub(crate) mod work;
 
@@ -24,7 +25,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::FixedOffset;
-use max_core::tools::MAX_TOOLS;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -89,8 +89,7 @@ impl Caller {
     /// Whether it may call the Max tool `name`; the runner's own requests
     /// aren't Max tools.
     pub fn allows(&self, name: &str) -> bool {
-        !matches!(self, Caller::Job(_))
-            || MAX_TOOLS.iter().any(|tool| tool.name == name && tool.job)
+        !matches!(self, Caller::Job(_)) || tool::find(name).is_some_and(|tool| tool.job)
     }
 }
 
@@ -134,16 +133,9 @@ impl From<sqlx::Error> for Failure {
 
 /// Runs the Max tool `name`.
 pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
-    match name {
-        "history" => history::run(context, args).await,
-        "web_search" => web_search::run(context, args).await,
-        "send_image" => send_image::run(context, args).await,
-        "send_file" => send_file::run(context, args).await,
-        "recall_message" => recall_message::run(context, args).await,
-        "mute_member" => mute_member::run(context, args).await,
-        "find_stickers" => find_stickers::run(context, args).await,
-        name if agent::NAMES.contains(&name) => agent::run(name, context, args).await,
-        _ => Err(Failure::new(
+    match tool::find(name) {
+        Some(tool) => tool.call(context, args).await,
+        None => Err(Failure::new(
             "unknown_tool",
             format!("没有 {name} 这个工具"),
         )),

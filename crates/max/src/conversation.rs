@@ -19,7 +19,6 @@ use max_core::item::{ModelOutput, ToolOutput};
 use max_core::message::{Draft, Platform};
 use max_core::segment::Segment;
 use max_db::platform::{Account, ConversationKind};
-use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -64,7 +63,7 @@ pub enum Event {
         request: job::Request,
         /// The turn it comes from, if any.
         origin: Option<TurnId>,
-        reply: oneshot::Sender<Result<Value, String>>,
+        reply: oneshot::Sender<Result<job::Reply, String>>,
     },
     /// A background agent ended.
     JobDone {
@@ -122,7 +121,7 @@ impl Poster {
 
     /// Asks the conversation about its background agents: the answer, or
     /// why not.
-    pub async fn jobs(&self, request: job::Request) -> Result<Value, String> {
+    pub async fn jobs(&self, request: job::Request) -> Result<job::Reply, String> {
         let (reply, answer) = oneshot::channel();
         self.mailbox
             .send(Event::Jobs {

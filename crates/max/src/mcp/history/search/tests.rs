@@ -6,6 +6,7 @@ use max_db::captions::{self, Caption};
 use max_db::media::{self, Blob};
 use max_db::platform;
 use max_db::vectors;
+use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
 
 use super::*;
@@ -13,16 +14,21 @@ use crate::conversation::testing::{at, from_xiaohong, from_xiaoming, group, offs
 use crate::conversation::{Place, ingest};
 use crate::embedding::testing::{serve, vector};
 use crate::inbound::InNode;
-use crate::mcp::history::run;
+use crate::mcp::tool::Tool;
 use crate::mcp::{Caller, Services};
 use crate::scope::Scope;
+
+/// Calls the tool as a program does, its arguments checked.
+async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
+    crate::mcp::call(crate::mcp::history::History::NAME, context, args).await
+}
 
 fn hit(n: i64, score: f32, key: &str) -> Hit {
     Hit {
         handle: format!("{n}"),
         time: String::new(),
         text: String::new(),
-        read: Value::Null,
+        read: Around { around: n },
         score,
         at: at(0) + TimeDelta::minutes(n),
         key: key.into(),

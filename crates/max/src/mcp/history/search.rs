@@ -14,8 +14,8 @@ use max_core::ids::MessageId;
 use max_core::render::{Render, moment};
 use max_db::recall::{self, Near, Query};
 use max_db::{PgConnection, ledger};
+use schemars::JsonSchema;
 use serde::Serialize;
-use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tracing::debug;
@@ -24,9 +24,9 @@ use super::Filters;
 use crate::conversation::project::people;
 use crate::mcp::{Context, Failure};
 
-const DEFAULT: usize = 10;
-const MOST: usize = 30;
-const MOST_TERMS: usize = 8;
+pub(super) const DEFAULT: usize = 10;
+pub(super) const MOST: usize = 30;
+pub(super) const MOST_TERMS: usize = 8;
 const TERM_CHARS: usize = 50;
 /// Characters of a result's text, around its first hit when longer.
 const SNIPPET: usize = 160;
@@ -44,14 +44,13 @@ const NEAR: f32 = 0.5;
 static SLOTS: Semaphore = Semaphore::const_new(4);
 
 /// A result, as the program gets it, and what it is ranked by.
-#[derive(Debug, Serialize)]
-struct Hit {
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct Hit {
     #[serde(rename = "ref")]
     handle: String,
     time: String,
     text: String,
-    /// `history`'s arguments for the row in context.
-    read: Value,
+    read: Around,
     /// From 0 to 1: the share of the terms it has, or how near it is by
     /// meaning, whichever is higher.
     #[serde(skip)]
@@ -62,6 +61,12 @@ struct Hit {
     /// repeated down the chat shows once.
     #[serde(skip)]
     key: String,
+}
+
+/// `history`'s arguments that read a row in context.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct Around {
+    around: i64,
 }
 
 /// The query's vector, and the model whose vectors it is compared with.
@@ -84,9 +89,9 @@ pub(super) async fn found(
     query: &str,
     filters: &Filters,
     limit: Option<usize>,
-) -> Result<Value, Failure> {
+) -> Result<Vec<Hit>, Failure> {
     let terms = terms(query)?;
-    let limit = limit.unwrap_or(DEFAULT).clamp(1, MOST);
+    let limit = limit.unwrap_or(DEFAULT).min(MOST);
     let patterns: Vec<String> = terms.iter().map(|term| pattern(term)).collect();
     let meaning = meaning(context, query).await;
 
@@ -105,7 +110,7 @@ pub(super) async fn found(
     };
     let meaning = meaning.as_ref();
     let hits = row_hits(&mut conn, context, &query, &terms, meaning).await?;
-    Ok(json!({ "results": choose(hits, limit) }))
+    Ok(choose(hits, limit))
 }
 
 /// The query's vector, when there is an embedding model and it answers in
@@ -184,7 +189,9 @@ async fn row_hits(
             handle: format!("#{}", message.id),
             time: moment(message.at, context.services.offset),
             text: format!("{name}：{}", snippet(&body, &chosen(terms, &found.has))),
-            read: json!({ "around": message.id.0 }),
+            read: Around {
+                around: message.id.0,
+            },
             score: found.score,
             at: message.at,
             key: body,

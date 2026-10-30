@@ -5,6 +5,7 @@ use chrono::Utc;
 use max_core::message::{MediaMeta, MediaRef, Node};
 use max_db::captions::{self, Caption, Kind};
 use max_db::media::{self, Blob};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 
 use super::*;
@@ -12,8 +13,14 @@ use crate::conversation::ingest;
 use crate::conversation::testing::{from_xiaoming, group, offset};
 use crate::embedding::testing::{serve, vector};
 use crate::inbound::InNode;
+use crate::mcp::tool::Tool;
 use crate::mcp::{Caller, Services};
 use crate::scope::Scope;
+
+/// Calls the tool as a program does, its arguments checked.
+async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
+    crate::mcp::call(FindStickers::NAME, context, args).await
+}
 
 fn medium(kind: MediaKind) -> InNode {
     InNode::Node(Node::Media {

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use serde_json::{Value, json};
 use sqlx::PgPool;
 
 use super::*;
@@ -8,8 +9,13 @@ use crate::conversation::testing::{
     at, from_xiaohong, from_xiaoming, group, group_named, offset, text,
 };
 use crate::conversation::{Place, ingest};
-use crate::mcp::history::run;
+use crate::mcp::tool::Tool;
 use crate::mcp::{Caller, Services};
+
+/// Calls the tool as a program does, its arguments checked.
+async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
+    crate::mcp::call(crate::mcp::history::History::NAME, context, args).await
+}
 
 fn context(pool: &PgPool, place: &Arc<Place>, page_tokens: u32) -> Context {
     Context {
@@ -137,11 +143,16 @@ async fn the_rows_around_one(pool: PgPool) {
     // five rows.
     let all = run(
         &context,
-        json!({ "around": ids[1], "before": 200, "after": 9 }),
+        json!({ "around": ids[1], "before": 50, "after": 9 }),
     )
     .await
     .unwrap();
     assert_eq!(all["text"].as_str().unwrap().lines().count(), 6);
+    let more = run(&context, json!({ "around": ids[1], "before": 51 })).await;
+    assert_eq!(
+        more.unwrap_err().message,
+        "history 的 before 要在 0 到 50 之间"
+    );
 
     let other = run(&context, json!({ "around": far.0, "after": 1 })).await;
     assert_eq!(other.unwrap_err().code, "not_found");

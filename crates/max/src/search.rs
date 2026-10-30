@@ -5,6 +5,7 @@ use std::fmt;
 use std::time::Duration;
 
 use reqwest::{Client, StatusCode};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Semaphore;
@@ -25,7 +26,7 @@ pub struct Search {
 }
 
 /// A result, as the program gets it.
-#[derive(Debug, PartialEq, Eq, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Found {
     pub title: String,
     pub url: String,

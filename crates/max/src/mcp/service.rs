@@ -10,9 +10,8 @@ use std::time::Duration;
 
 use axum::http::request::Parts;
 use max_core::ids::ConversationId;
-use max_core::tools::{MAX_TOOLS, MaxTool};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, JsonObject, ListToolsResult,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::RequestContext;
@@ -25,6 +24,7 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use super::tool::{self, Spec};
 use super::{Caller, Context, Failure, chat_file, forward, show};
 
 /// One call's wall clock.
@@ -211,10 +211,10 @@ impl ServerHandler for Handler {
     ) -> Result<ListToolsResult, ErrorData> {
         let session = self.session(&request)?;
         Ok(ListToolsResult {
-            tools: MAX_TOOLS
+            tools: tool::TOOLS
                 .iter()
                 .filter(|spec| session.context.caller.allows(spec.name))
-                .map(tool)
+                .map(listed)
                 .collect(),
             ..ListToolsResult::default()
         })
@@ -280,10 +280,8 @@ impl Session {
     /// Counts a call against its tool's cap, if it has one and the run, or
     /// the job, hasn't reached it.
     fn start(&self, name: &str) -> Result<(), Failure> {
-        let Some((name, most)) = MAX_TOOLS
-            .iter()
-            .find(|tool| tool.name == name)
-            .and_then(|tool| tool.per_run.map(|most| (tool.name, most)))
+        let Some((name, most)) =
+            tool::find(name).and_then(|tool| tool.per_run.map(|most| (tool.name, most)))
         else {
             return Ok(());
         };
@@ -304,12 +302,9 @@ impl Session {
     }
 }
 
-fn tool(spec: &MaxTool) -> Tool {
-    let schema = |text: &str| -> Arc<JsonObject> {
-        Arc::new(serde_json::from_str(text).expect("max-core's tests check the schemas"))
-    };
-    Tool::new(spec.name, spec.description, schema(spec.input))
-        .with_raw_output_schema(schema(spec.output))
+fn listed(spec: &Spec) -> Tool {
+    Tool::new(spec.name, spec.description, Arc::clone(&spec.input))
+        .with_raw_output_schema(Arc::clone(&spec.output))
 }
 
 #[cfg(test)]

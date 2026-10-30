@@ -1518,10 +1518,15 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
 - **鉴权**：`Authorization: Bearer <token>`。token 所属的群必须和连进来的 VM 是同一个群。`tools/list` 只列出这个会话允许的工具。
 - **吊销是同步的**：从内存表里删掉会话，它在途调用的 future 一起 drop，所以可以放进 `Drop`。会话只存在内存里，Max 重启或崩溃后旧 token 全部失效，不需要过期时间。
-- **执行器**：所有调用都经过同一个执行器，负责 schema 校验、单次调用的超时、并发上限 64、输出大小上限，以及按会话限制有副作用的调用次数（代码里可以循环发送、撤回、禁言）。做成的：单次 60 秒，每个会话同时 64 个，多的排队；参数由每个工具自己的参数结构体校验，不另做 JSON Schema 校验。输出上限和副作用次数等有了会产生大输出或有副作用的工具再加，`history` 自己分页。
+- **执行器**：所有调用都经过同一个执行器，负责 schema 校验、单次调用的超时、并发上限 64、输出大小上限，以及按会话限制有副作用的调用次数（代码里可以循环发送、撤回、禁言）。做成的：单次 60 秒，每个会话同时 64 个，多的排队；参数按工具契约查（见下）。输出上限和副作用次数等有了会产生大输出或有副作用的工具再加，`history` 自己分页。
 - **结果**：工具声明 `outputSchema`，成功结果放在 `structuredContent` 里，`tools.x()` 拿到的就是 JSON。失败设 `isError`，`structuredContent` 是 `{code, message}`。取消用 `notifications/cancelled`。无状态的 HTTP 里取消就是断开连接，rmcp 会取消那次调用，`max.cancel` 就是中止 fetch。
 - **不重试，不按副作用分类**（2026-10-29 定，owner 同意）：原打算给每个工具标只读、幂等、有副作用，失败结果里再带 outcome（rejected、failed-before-effect、outcome-unknown）和能否重试，用来决定宿主重试、后台 job 能用哪些、中断后算不算"结果未知"。都用不上：宿主一律不重试，交给模型；后台 job 的会话列一份能用的工具；会动群的操作（发消息、发图、撤回）都经会话 actor 入账，做没做成，下一轮在时间线上看得到。所以超时和取消一律说"可能已经生效，先看记录再决定要不要再来"。最坏是同一次运行里拿到超时马上再调，多发一张图，接受。
-- **工具注册表**：每个工具有名字、描述、参数类型（schemars 从参数结构体生成）、返回类型和执行函数。系统提示里的 TypeScript 声明也从注册表生成。做成的：工具还少，名字、描述、两个 schema 和 TypeScript 声明都手写在 max-core 的 `MAX_TOOLS` 里，和模型的两个工具一样，没上 schemars；执行函数在 max 里。
+- **工具契约**（2026-10-30 做成，review 提的：原来名字、描述、两个 schema 和 TypeScript 声明都手写在 max-core 的 `MAX_TOOLS` 里，参数结构体和执行函数在 max 里，三份各写各的，schema 里的约束有的运行时没查）：一个 Max 工具只在 max 里写一处，实现 `mcp::tool::Tool`：名字、MCP 列表里的一句描述、一次运行最多调几次、后台 job 能不能用、参数类型、返回类型、系统提示里的用法说明（`guide`）和执行函数。参数和返回值是普通的 serde 类型，派生 schemars 的 `JsonSchema`；约束写成属性（`length`、`range`），参数字段的说明写成 `description`，说明和 `guide` 里的数字直接引用代码里的常量。注册表 `mcp::tool::TOOLS` 从这些生成三样东西：
+  - MCP 列出的 `inputSchema` 和 `outputSchema`：子 schema 全部内联，去掉 title 和整数的 format；只留参数字段自己的说明，类型上的英文文档注释不进去。返回值有好几种形状时（`history`）是 `anyOf`，根上补 `type: object`，MCP 要求根是对象。
+  - 调用前的参数检查：按 schema 查字符串长度（按字符数）和数值范围，报"history 的 before 要在 0 到 50 之间"这样的错；类型、必填、多余字段在 serde 读参数时查。超出范围的直接报错，不再悄悄截断。
+  - 系统提示里的 TypeScript 声明：`/** guide */` 加从两个 schema 转出来的签名。可选字段写成 `x?: T`，必填但可以是 null 的写成 `x: T | null`。
+  
+  serde_json 开了 `preserve_order`，字段按类型里声明的顺序列出。这一步系统提示还用 max-core 里的那份声明，测试断言生成的和它逐字节相同。
 
 ### 多模态结果
 

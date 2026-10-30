@@ -5,14 +5,21 @@ use chrono::DateTime;
 use max_core::ids::TurnId;
 use max_core::message::{Draft, DraftNode};
 use max_db::ledger::Sent;
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio::sync::mpsc;
 
 use super::*;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, offset, text};
 use crate::conversation::{Act, Event, Place, Poster, ingest};
+use crate::mcp::tool::Tool;
 use crate::mcp::{Caller, Services};
 use crate::scope::Scope;
+
+/// Calls the tool as a program does, its arguments checked.
+async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
+    crate::mcp::call(RecallMessage::NAME, context, args).await
+}
 
 /// What a call is told when it is refused.
 async fn code(context: &Context, id: MessageId) -> &'static str {

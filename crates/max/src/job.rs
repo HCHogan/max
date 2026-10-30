@@ -9,6 +9,8 @@ use std::future::Future;
 use std::time::Duration;
 
 use max_core::item::Usage;
+use schemars::JsonSchema;
+use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{Instant, sleep_until, timeout};
@@ -40,6 +42,29 @@ pub enum Request {
     Status {
         job: Option<u32>,
     },
+}
+
+/// What a request gets: the job it was about, or the jobs running.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Reply {
+    Job(u32),
+    Running(Vec<Status>),
+}
+
+/// A job running, as `agent_status` shows it.
+#[derive(Debug, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct Status {
+    pub job: String,
+    pub title: String,
+    pub minutes: u64,
+    pub calls: u32,
+    pub tools: u32,
+    pub tool: Option<String>,
+}
+
+/// How a job is named to Max.
+pub fn name(job: u32) -> String {
+    format!("job#{job}")
 }
 
 /// How long pi has to settle once aborted, and to give its last text.

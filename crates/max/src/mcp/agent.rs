@@ -2,49 +2,163 @@
 //! background agents, which the conversation's actor keeps. See "后台
 //! agent" in docs/rust-rewrite.md.
 
-use serde::Deserialize;
-use serde_json::Value;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
-use super::{Context, Failure, arguments};
-use crate::job::Request;
+use super::tool::Tool;
+use super::{Context, Failure, internal};
+use crate::job::{self, Reply, Request};
 
-pub const NAMES: [&str; 4] = ["agent", "agent_steer", "agent_cancel", "agent_status"];
-
-/// A title's most characters, as the tool's schema says.
+/// A title's most characters.
 const TITLE: usize = 40;
+/// Jobs one run may start.
+const PER_RUN: u32 = 3;
 
-#[derive(Deserialize)]
+pub struct Agent;
+pub struct AgentSteer;
+pub struct AgentCancel;
+pub struct AgentStatus;
+
+#[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct Start {
+pub struct Start {
+    #[schemars(length(min = 1), description = "要它做的事，连同背景，写全")]
     task: String,
+    #[schemars(length(max = TITLE), description = "一句话的标题")]
     title: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct Steer {
+pub struct Steer {
+    #[schemars(description = "job#3 或 3")]
     job: Job,
+    #[schemars(length(min = 1))]
     message: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct Which {
+pub struct Which {
+    #[schemars(description = "job#3 或 3")]
     job: Job,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct Status {
+pub struct Status {
+    #[schemars(description = "job#3 或 3；不填是全部")]
     job: Option<Job>,
 }
 
 /// `job#3`, `3` or 3.
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 #[serde(untagged)]
 enum Job {
-    Number(u32),
     Text(String),
+    Number(u32),
+}
+
+/// The job a request was about.
+#[derive(Serialize, JsonSchema)]
+pub struct Named {
+    job: String,
+}
+
+#[derive(Serialize, JsonSchema)]
+pub struct Running {
+    jobs: Vec<job::Status>,
+}
+
+impl Tool for Agent {
+    const NAME: &'static str = "agent";
+    const DESCRIPTION: &'static str = "交给一个后台 agent 去做一件要花时间的事，马上返回 job 编号；它做完了，报告作为 [job#N 完成] 回到你这里。";
+    const PER_RUN: Option<u32> = Some(PER_RUN);
+    const JOB: bool = false;
+
+    type Args = Start;
+    type Output = Named;
+
+    fn guide() -> String {
+        format!(
+            "起一个后台 agent，去做一件要花时间的事：查一堆资料、读很多网页或文件、写代码跑实验。它在本群的 VM 里跑，和你共用 /work，自己有 shell、读写文件、history、web_search；不能在群里说话，也不能发图发文件、撤回、禁言。\n  \
+            它看不到群里的对话，只看得到 task，所以背景、要做什么、做到什么程度、报告要写什么都写进去。title 是一句话的标题，agent_status 里显示。\n  \
+            马上返回 {{ job: \"job#3\" }}，你接着聊。它做完了，报告作为 [job#3 完成] 出现在你的新消息里，全文另存在 /work/.max/jobs/ 下，由你决定在群里怎么说。同时最多 {} 个，每个最多 {} 小时，到点停下、交出做到一半的结果。一次运行最多起 {PER_RUN} 个。",
+            job::MOST,
+            job::TIME.as_secs() / 3600,
+        )
+    }
+
+    async fn run(context: &Context, Start { task, title }: Start) -> Result<Named, Failure> {
+        if task.trim().is_empty() {
+            return Err(Failure::new("bad_arguments", "task 是空的"));
+        }
+        named(context, Request::Start { task, title }).await
+    }
+}
+
+impl Tool for AgentSteer {
+    const NAME: &'static str = "agent_steer";
+    const DESCRIPTION: &'static str = "给还在跑的后台 agent 补一句话：改方向、补信息、回答它。";
+    const PER_RUN: Option<u32> = None;
+    const JOB: bool = false;
+
+    type Args = Steer;
+    type Output = Named;
+
+    fn guide() -> String {
+        "给还在跑的后台 agent 补一句话：改方向、补充信息、转达群友的回答。它跑完手上这步工具、下一次想之前看到。job 是 \"job#3\" 或 3。".into()
+    }
+
+    async fn run(context: &Context, Steer { job, message }: Steer) -> Result<Named, Failure> {
+        if message.trim().is_empty() {
+            return Err(Failure::new("bad_arguments", "message 是空的"));
+        }
+        let job = job.number()?;
+        named(context, Request::Steer { job, message }).await
+    }
+}
+
+impl Tool for AgentCancel {
+    const NAME: &'static str = "agent_cancel";
+    const DESCRIPTION: &'static str = "停掉一个后台 agent，不要它的结果了。";
+    const PER_RUN: Option<u32> = None;
+    const JOB: bool = false;
+
+    type Args = Which;
+    type Output = Named;
+
+    fn guide() -> String {
+        "停掉一个后台 agent，不要它的结果了；它在 /work 里留下的东西还在。".into()
+    }
+
+    async fn run(context: &Context, Which { job }: Which) -> Result<Named, Failure> {
+        let job = job.number()?;
+        named(context, Request::Cancel { job }).await
+    }
+}
+
+impl Tool for AgentStatus {
+    const NAME: &'static str = "agent_status";
+    const DESCRIPTION: &'static str =
+        "看还在跑的后台 agent：标题、跑了几分钟、调了几次模型和工具、最近用的工具。";
+    const PER_RUN: Option<u32> = None;
+    const JOB: bool = false;
+
+    type Args = Status;
+    type Output = Running;
+
+    fn guide() -> String {
+        "看还在跑的后台 agent：标题、跑了几分钟、调了几次模型（calls）和工具（tools）、最近用的工具。job 不填就是全部；做完的、停掉的不在里面。".into()
+    }
+
+    async fn run(context: &Context, Status { job }: Status) -> Result<Running, Failure> {
+        let job = job.map(Job::number).transpose()?;
+        match ask(context, Request::Status { job }).await? {
+            Reply::Running(jobs) => Ok(Running { jobs }),
+            Reply::Job(_) => Err(internal()),
+        }
+    }
 }
 
 impl Job {
@@ -64,30 +178,17 @@ impl Job {
     }
 }
 
-pub async fn run(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
-    let request = match name {
-        "agent" => start(args)?,
-        "agent_steer" => {
-            let Steer { job, message } = arguments(name, args)?;
-            if message.trim().is_empty() {
-                return Err(Failure::new("bad_arguments", "message 是空的"));
-            }
-            Request::Steer {
-                job: job.number()?,
-                message,
-            }
-        }
-        "agent_cancel" => {
-            let Which { job } = arguments(name, args)?;
-            Request::Cancel { job: job.number()? }
-        }
-        _ => {
-            let Status { job } = arguments(name, args)?;
-            Request::Status {
-                job: job.map(Job::number).transpose()?,
-            }
-        }
-    };
+/// The job `request` was about.
+async fn named(context: &Context, request: Request) -> Result<Named, Failure> {
+    match ask(context, request).await? {
+        Reply::Job(job) => Ok(Named {
+            job: job::name(job),
+        }),
+        Reply::Running(_) => Err(internal()),
+    }
+}
+
+async fn ask(context: &Context, request: Request) -> Result<Reply, Failure> {
     // Only a turn's programs have their conversation at hand.
     let Some(poster) = context.caller.poster() else {
         return Err(Failure::new("not_here", "这里管不了后台 agent"));
@@ -98,52 +199,18 @@ pub async fn run(name: &str, context: &Context, args: Value) -> Result<Value, Fa
         .map_err(|message| Failure::new("job", message))
 }
 
-fn start(args: Value) -> Result<Request, Failure> {
-    let Start { task, title } = arguments("agent", args)?;
-    if task.trim().is_empty() {
-        return Err(Failure::new("bad_arguments", "task 是空的"));
-    }
-    if title
-        .as_ref()
-        .is_some_and(|title| title.chars().count() > TITLE)
-    {
-        return Err(Failure::new(
-            "bad_arguments",
-            format!("title 最多 {TITLE} 个字"),
-        ));
-    }
-    Ok(Request::Start { task, title })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use serde_json::{Value, json};
 
-    #[test]
-    fn a_title_is_at_most_forty_characters() {
-        let title = |title: String| start(serde_json::json!({ "task": "查票价", "title": title }));
-        assert!(title("票".repeat(TITLE)).is_ok());
-        assert_eq!(
-            title("票".repeat(TITLE + 1)).unwrap_err().code,
-            "bad_arguments"
-        );
-        assert!(
-            max_core::tools::MAX_TOOLS
-                .iter()
-                .any(|tool| tool.name == "agent"
-                    && tool.input.contains(&format!("\"maxLength\":{TITLE}")))
-        );
-    }
+    use super::*;
 
     #[test]
     fn a_job_is_named_either_way() {
         let job = |value: Value| serde_json::from_value::<Job>(value).unwrap().number();
-        assert_eq!(job(serde_json::json!("job#3")).unwrap(), 3);
-        assert_eq!(job(serde_json::json!(" 3 ")).unwrap(), 3);
-        assert_eq!(job(serde_json::json!(3)).unwrap(), 3);
-        assert_eq!(
-            job(serde_json::json!("三")).unwrap_err().code,
-            "bad_arguments"
-        );
+        assert_eq!(job(json!("job#3")).unwrap(), 3);
+        assert_eq!(job(json!(" 3 ")).unwrap(), 3);
+        assert_eq!(job(json!(3)).unwrap(), 3);
+        assert_eq!(job(json!("三")).unwrap_err().code, "bad_arguments");
     }
 }
