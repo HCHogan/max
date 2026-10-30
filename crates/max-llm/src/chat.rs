@@ -25,6 +25,8 @@ use crate::{Error, Options, Pictures, Piece, pieces, share_tokens, tool_pieces};
 
 const THINK: &str = "<think>";
 const UNTHINK: &str = "</think>";
+/// The fields of the message that providers stream reasoning in.
+const REASONING: [&str; 2] = ["reasoning_content", "reasoning"];
 /// Headings an answer that is reasoning written out opens with, in lower
 /// case. Seen 2026-10-29: Gemini 4 Argon, with no thinking tokens, wrote
 /// `Thinking Process:` and its numbered steps, and the group saw them.
@@ -277,6 +279,21 @@ impl Parser {
         self.done
     }
 
+    /// The model has begun to answer: text, reasoning or a tool call.
+    pub fn started(&self) -> bool {
+        let reasoning = REASONING.iter().any(|field| {
+            self.fields
+                .get(*field)
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.is_empty())
+        });
+        let text = match &self.think {
+            Think::Undecided(held) => !held.trim().is_empty(),
+            Think::Inside(_) | Think::Aloud | Think::Outside { .. } => true,
+        };
+        reasoning || text || !self.calls.is_empty()
+    }
+
     /// One chunk: the text in it to be said.
     pub fn event(&mut self, data: &str) -> Result<Vec<String>, Error> {
         if data.trim() == "[DONE]" {
@@ -346,7 +363,7 @@ impl Parser {
             Think::Undecided(_) | Think::Aloud => None,
         };
         let mut items = Vec::new();
-        let text = ["reasoning_content", "reasoning"]
+        let text = REASONING
             .iter()
             .find_map(|field| self.fields.get(*field)?.as_str())
             .map(str::to_owned)

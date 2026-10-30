@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use max_core::item::{ModelOutput, Timing};
 use max_core::run::Request;
 use max_core::segment::Segmenter;
 use tokio::sync::mpsc::UnboundedSender;
@@ -58,7 +59,7 @@ async fn once(
     task: TaskId,
     mailbox: &UnboundedSender<Event>,
     said: &mut bool,
-) -> Result<max_core::item::ModelOutput, max_llm::Error> {
+) -> Result<(ModelOutput, Timing), max_llm::Error> {
     let mut call = chosen
         .caller
         .call(request, &chosen.options, pictures)
@@ -73,9 +74,10 @@ async fn once(
     while let Some(delta) = call.next().await? {
         say(segmenter.push(&delta));
     }
+    let timing = call.timing();
     let out = call.finish()?;
     say(segmenter.finish());
-    Ok(out)
+    Ok((out, timing))
 }
 
 /// 1s, 2s, 4s, then 8s.

@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use color_eyre::eyre::Result;
 use max_core::ids::{MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
-use max_core::item::{ItemKind, ModelOutput};
+use max_core::item::{ItemKind, ModelOutput, Timing};
 use max_core::message::{Draft, DraftNode, Message};
 use max_core::project::{Budgets, MEMORY_FILE, MOST_PICTURES};
 use max_core::prompt;
@@ -262,7 +262,7 @@ impl Conversation {
                     return Ok(());
                 }
                 match out {
-                    Ok(out) => self.model_output(out).await,
+                    Ok((out, timing)) => self.model_output(out, timing).await,
                     Err(error) => {
                         warn!(conversation = %self.place.conversation, %error, "the model call failed");
                         self.end(End::Failed(FailReason::Model { error })).await
@@ -600,7 +600,7 @@ impl Conversation {
         }
     }
 
-    async fn model_output(&mut self, out: ModelOutput) -> Result<()> {
+    async fn model_output(&mut self, out: ModelOutput, timing: Timing) -> Result<()> {
         let Some(a) = self.core.as_mut() else {
             return Ok(());
         };
@@ -615,6 +615,7 @@ impl Conversation {
             Some(self.place.conversation),
             Some(a.turn),
             used,
+            Some(timing),
         );
         llm::record(&self.shared.services.pool, &call).await;
         Ok(())

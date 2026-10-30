@@ -126,6 +126,7 @@ fn wire(piece: Piece<'_>) -> Value {
 #[derive(Debug)]
 pub struct Parser {
     model: ModelTag,
+    started: bool,
     output: Option<ModelOutput>,
 }
 
@@ -133,8 +134,15 @@ impl Parser {
     pub fn new(model: ModelTag) -> Self {
         Self {
             model,
+            started: false,
             output: None,
         }
+    }
+
+    /// The model has begun to answer: an output item, reasoning included,
+    /// has started.
+    pub fn started(&self) -> bool {
+        self.started
     }
 
     /// The response is complete; nothing after this matters.
@@ -146,7 +154,9 @@ impl Parser {
     pub fn event(&mut self, data: &str) -> Result<Vec<String>, Error> {
         let event: Value = serde_json::from_str(data).map_err(Error::malformed)?;
         let text = |field: &str| event[field].as_str().unwrap_or_default().to_owned();
-        match event["type"].as_str().unwrap_or_default() {
+        let kind = event["type"].as_str().unwrap_or_default();
+        self.started |= kind.starts_with("response.output_item.");
+        match kind {
             "response.output_text.delta" => Ok(vec![text("delta")]),
             "response.completed" => {
                 self.output = Some(self.complete(&event["response"]));

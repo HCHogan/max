@@ -12,7 +12,7 @@ use std::time::Duration;
 use chrono::Utc;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use max_core::ids::{ConversationId, TurnId};
-use max_core::item::{ItemKind, ModelTag, Protocol, Usage};
+use max_core::item::{ItemKind, ModelTag, Protocol, Timing, Usage};
 use max_core::run::Request;
 use max_db::{PgPool, usage};
 use max_llm::{Call, Options, Pictures};
@@ -104,14 +104,16 @@ impl Chosen {
         pictures: &Pictures,
         limit: Duration,
     ) -> Result<String> {
-        let out = tokio::time::timeout(limit, async {
+        let (out, timing) = tokio::time::timeout(limit, async {
             let mut call = self.caller.call(request, &self.options, pictures).await?;
             while call.next().await?.is_some() {}
-            call.finish()
+            let timing = call.timing();
+            Ok::<_, max_llm::Error>((call.finish()?, timing))
         })
         .await
         .map_err(|_| eyre!("no answer in {limit:?}"))??;
-        record(pool, &self.usage(purpose, conversation, None, out.usage)).await;
+        let call = self.usage(purpose, conversation, None, out.usage, Some(timing));
+        record(pool, &call).await;
         Ok(out
             .items
             .iter()
@@ -129,6 +131,7 @@ impl Chosen {
         conversation: Option<ConversationId>,
         turn: Option<TurnId>,
         usage: Usage,
+        timing: Option<Timing>,
     ) -> usage::Call<'_> {
         usage::Call {
             conversation,
@@ -139,6 +142,7 @@ impl Chosen {
             effort: self.options.effort.as_deref(),
             usage,
             cost_micros: None,
+            timing,
             at: Utc::now(),
         }
     }

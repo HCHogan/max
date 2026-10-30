@@ -3,6 +3,8 @@
 //! provider's own data carried along untouched in `opaque`; the protocol
 //! adapters only remove or reshape when they lower a request.
 
+use core::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{CallId, MessageId};
@@ -153,4 +155,18 @@ pub struct Usage {
     /// Including reasoning.
     pub output: u32,
     pub reasoning: u32,
+}
+
+/// How a model call went in time, from sending the request, as max-llm
+/// measured it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Timing {
+    /// Until the model's first output: text, reasoning or a tool call.
+    /// None when it gave none.
+    pub first: Option<Duration>,
+    /// Until the end of the answer.
+    pub took: Duration,
+    /// The longest anything took to arrive: the response's start, or the
+    /// next event after one. It is what the stream's idle timeout cuts.
+    pub quiet: Duration,
 }

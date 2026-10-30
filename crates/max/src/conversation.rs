@@ -15,7 +15,7 @@ use std::fmt;
 
 use max_core::ids::{CallId, ConversationId, EndpointId, MessageId, TurnId};
 use max_core::intent::Verdict;
-use max_core::item::{ModelOutput, ToolOutput};
+use max_core::item::{ModelOutput, Timing, ToolOutput};
 use max_core::message::{Draft, Platform};
 use max_core::segment::Segment;
 use max_db::platform::{Account, ConversationKind};
@@ -47,7 +47,7 @@ pub enum Event {
     /// retried.
     ModelDone {
         task: TaskId,
-        out: Result<ModelOutput, String>,
+        out: Result<(ModelOutput, Timing), String>,
     },
     ToolDone {
         task: TaskId,

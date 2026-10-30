@@ -319,6 +319,31 @@ fn reasoning_then_text() {
 }
 
 #[test]
+fn an_answer_starts_with_its_first_output() {
+    let started = |data: &[String]| {
+        let mut parser = Parser::new(model("deepseek-pro"));
+        run(&mut parser, data);
+        parser.started()
+    };
+    let role = chunk(json!({ "role": "assistant", "content": null }));
+    assert!(!started(&[
+        role.clone(),
+        chunk(json!({ "content": "\n " }))
+    ]));
+    assert!(started(&[
+        role.clone(),
+        chunk(json!({ "reasoning_content": "用户" }))
+    ]));
+    assert!(started(&[
+        role.clone(),
+        chunk(json!({ "content": "<thi" }))
+    ]));
+    assert!(started(&[role, chunk(json!({ "content": "早" }))]));
+    let call = json!({ "index": 0, "id": "c1", "function": { "name": "shell", "arguments": "" } });
+    assert!(started(&[chunk(json!({ "tool_calls": [call] }))]));
+}
+
+#[test]
 fn tool_calls_in_pieces() {
     let mut parser = Parser::new(model("gemini-3.8-flash"));
     let events = run(

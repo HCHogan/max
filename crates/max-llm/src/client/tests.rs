@@ -7,6 +7,10 @@ use tokio::net::{TcpListener, TcpStream};
 
 use super::*;
 
+/// How long a test's provider pauses: long against the rest of a call
+/// on localhost.
+const PAUSE: Duration = Duration::from_millis(30);
+
 fn request() -> Request {
     Request {
         model: ModelTag {
@@ -84,8 +88,9 @@ async fn a_streamed_call() {
         assert!(head.contains("x-team: max"));
         assert_eq!(body["stream"], true);
         respond(&mut socket, "200 OK", "text/event-stream").await;
-        // A keep-alive comment, then an event split across writes.
+        // A keep-alive comment, a pause, then an event split across writes.
         send(&mut socket, ": keep-alive\n\n").await;
+        tokio::time::sleep(PAUSE).await;
         let delta = json!({ "choices": [{ "index": 0, "delta": { "content": "早" } }] });
         let text = data(&delta);
         let (first, second) = text.split_at(10);
@@ -104,10 +109,18 @@ async fn a_streamed_call() {
         while let Some(event) = call.next().await.unwrap() {
             events.push(event);
         }
-        (events, call.finish().unwrap())
+        let timing = call.timing();
+        (events, timing, call.finish().unwrap())
     };
-    let ((events, output), ()) = tokio::join!(call, server);
+    let ((events, timing, output), ()) = tokio::join!(call, server);
     assert_eq!(events, ["早".to_owned()]);
+    // The keep-alive isn't output, and the pause is the longest quiet.
+    let first = timing.first.unwrap();
+    assert!(first >= PAUSE && timing.quiet >= PAUSE, "{timing:?}");
+    assert!(
+        timing.took >= first && timing.took >= timing.quiet,
+        "{timing:?}"
+    );
     assert_eq!(
         output.items[0].kind,
         ItemKind::Assistant { text: "早".into() }

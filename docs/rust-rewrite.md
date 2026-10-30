@@ -1187,7 +1187,7 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 | | `message_embeddings` | 按消息 id 一行：会话、`halfvec(1024)` 的向量、哪个模型算的、时间。召回向量 worker 是唯一的写者，换了模型全部重算。见[召回](#召回)。`summary_embeddings` 是摘要的，10-30 起不读不写 |
 | | `message_media` | 消息、序号、sha256。入站节点里是下载地址，下载完记在这里；程序交的图（`max.image()`）节点里直接是 sha256 |
 | turn | `turns`、`turn_outcomes` | 见 [turn 记录](#turn-记录)。`t#N` 是 `turns.ordinal`，每个会话从 1 数 |
-| | `llm_usage` | turn（可空）、用途（turn、intent、historian、caption、job、dreamer）、provider、模型、强度、token（含缓存命中数，按 provider 看命中率、调空闲窗口；还有其中的推理 token）、费用。token 用 bigint；费用 `cost_micros` 是百万分之一美元，用整数，不要 decimal，价格未知时为空 |
+| | `llm_usage` | turn（可空）、用途（turn、intent、historian、caption、job、dreamer）、provider、模型、强度、token（含缓存命中数，按 provider 看命中率、调空闲窗口；还有其中的推理 token）、费用。token 用 bigint；费用 `cost_micros` 是百万分之一美元，用整数，不要 decimal，价格未知时为空。还有三个毫秒数（2026-10-30 加）：`first_ms` 是发出请求到模型第一次输出（正文、推理或工具调用都算），`took_ms` 是到回答结束，`quiet_ms` 是流里最长一段什么都没到的时间，也就是 `stream_idle_timeout_secs` 掐的那个。turn 和走 `complete` 的调用（intent、historian、dreamer、caption）都记；job 的调用经 pi 转发，不记，为空。要降空闲超时，先看 `quiet_ms` 正常情况下有多长 |
 | 上下文 | `summaries` | historian 写的摘要：首尾消息 id、时间、标题、kind、importance、p1、p2、p3、status（active、superseded）。活跃的范围不重叠，用排他约束。只有开了 historian 的群读写，见[摘要](#摘要) |
 | | `summary_runs` | historian 的每次模型调用：范围、原因（quiet、pressure、compact）、模型、原始输出、错误 |
 

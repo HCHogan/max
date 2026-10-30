@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select purpose, input, cached, cost_micros from llm_usage",
+  "query": "select purpose, input, cached, cost_micros, first_ms, took_ms, quiet_ms from llm_usage",
   "describe": {
     "columns": [
       {
@@ -46,6 +46,39 @@
             "name": "cost_micros"
           }
         }
+      },
+      {
+        "ordinal": 4,
+        "name": "first_ms",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "llm_usage",
+            "name": "first_ms"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "took_ms",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "llm_usage",
+            "name": "took_ms"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "quiet_ms",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "llm_usage",
+            "name": "quiet_ms"
+          }
+        }
       }
     ],
     "parameters": {
@@ -55,8 +88,11 @@
       false,
       false,
       false,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "0ff8d393d42f75d8c26afcd7dd46a5eedb7a951bfe11407e359a0d4a7e58b734"
+  "hash": "44883b6d0ef9a0d97208f919a56b286c35f085660ea2b4bdc64b8c2de2dcbd43"
 }

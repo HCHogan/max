@@ -194,10 +194,12 @@ fn a_streamed_response() {
         "arguments": "{\"code\":\"return 1\"}", "status": "completed",
     });
     let mut parser = Parser::new(luna());
+    let created = json!({ "type": "response.created", "response": { "status": "in_progress" } });
+    feed(&mut parser, &[created]);
+    assert!(!parser.started());
     let events = feed(
         &mut parser,
         &[
-            json!({ "type": "response.created", "response": { "status": "in_progress" } }),
             json!({ "type": "response.output_item.added", "item": { "type": "reasoning" } }),
             json!({ "type": "response.reasoning_summary_text.delta", "delta": "**Gre" }),
             json!({ "type": "response.output_text.delta", "delta": "早" }),
@@ -207,7 +209,7 @@ fn a_streamed_response() {
         ],
     );
     assert_eq!(events, ["早", "啊"]);
-    assert!(!parser.finished());
+    assert!(parser.started() && !parser.finished());
     let completed = json!({
         "type": "response.completed",
         "response": {

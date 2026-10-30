@@ -11,7 +11,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures_util::{Stream, StreamExt, stream};
-use max_core::item::{ModelOutput, ModelTag, Protocol};
+use max_core::item::{ModelOutput, ModelTag, Protocol, Timing};
 use max_core::run::Request;
 use sse_stream::{Sse, SseStream};
 use tokio::time::{Instant, Sleep, sleep, timeout};
@@ -78,10 +78,12 @@ impl Client {
             http = http.header(name, value);
         }
         let idle = self.provider.idle_timeout;
+        let sent = Instant::now();
         let response = timeout(idle, http.send())
             .await
             .map_err(|_| Error::Idle(idle))?
             .map_err(Error::Connect)?;
+        let headed = Instant::now();
 
         let status = response.status();
         let json = response
@@ -114,7 +116,12 @@ impl Client {
             deadline: Box::pin(sleep(idle)),
         };
         let events = SseStream::from_bytes_stream(body);
-        Ok(Call::new(request.model.clone(), Box::pin(events), idle))
+        Ok(Call::new(
+            request.model.clone(),
+            Box::pin(events),
+            idle,
+            (sent, headed),
+        ))
     }
 }
 
@@ -127,10 +134,18 @@ pub struct Call {
     idle: Duration,
     /// Text parsed and not yet taken.
     pending: VecDeque<String>,
+    /// When the request was sent, and when something last arrived.
+    sent: Instant,
+    arrived: Instant,
+    first: Option<Duration>,
+    quiet: Duration,
 }
 
 impl Call {
-    fn new(model: ModelTag, events: Events, idle: Duration) -> Self {
+    /// `at`: when the request was sent, and when the response's headers
+    /// came.
+    fn new(model: ModelTag, events: Events, idle: Duration, at: (Instant, Instant)) -> Self {
+        let (sent, headed) = at;
         let parser = match model.protocol {
             Protocol::Responses => Parser::Responses(responses::Parser::new(model)),
             Protocol::Chat => Parser::Chat(chat::Parser::new(model)),
@@ -140,6 +155,10 @@ impl Call {
             parser,
             idle,
             pending: VecDeque::new(),
+            sent,
+            arrived: headed,
+            first: None,
+            quiet: headed - sent,
         }
     }
 
@@ -147,7 +166,8 @@ impl Call {
     pub fn replay(model: ModelTag, recorded: Vec<u8>) -> Self {
         let body = stream::iter([Ok::<_, io::Error>(VecDeque::from(recorded))]);
         let events = SseStream::from_bytes_stream(body);
-        Self::new(model, Box::pin(events), Duration::MAX)
+        let now = Instant::now();
+        Self::new(model, Box::pin(events), Duration::MAX, (now, now))
     }
 
     /// The next text the model wrote, to be said, or `None` once no more
@@ -160,15 +180,32 @@ impl Call {
             if self.parser.finished() {
                 return Ok(None);
             }
-            match self.events.next().await {
+            let event = self.events.next().await;
+            let now = Instant::now();
+            self.quiet = self.quiet.max(now - self.arrived);
+            self.arrived = now;
+            match event {
                 None => return Ok(None),
                 Some(Err(error)) => return Err(self.broken(&error)),
                 Some(Ok(sse)) => {
                     if let Some(data) = sse.data {
                         self.pending.extend(self.parser.event(&data)?);
+                        if self.first.is_none() && self.parser.started() {
+                            self.first = Some(now - self.sent);
+                        }
                     }
                 }
             }
+        }
+    }
+
+    /// How the call has gone in time; once [`Call::next`] has returned
+    /// `None`, how it went.
+    pub fn timing(&self) -> Timing {
+        Timing {
+            first: self.first,
+            took: self.arrived - self.sent,
+            quiet: self.quiet,
         }
     }
 
@@ -210,6 +247,13 @@ impl Parser {
         match self {
             Self::Responses(parser) => parser.finished(),
             Self::Chat(parser) => parser.finished(),
+        }
+    }
+
+    fn started(&self) -> bool {
+        match self {
+            Self::Responses(parser) => parser.started(),
+            Self::Chat(parser) => parser.started(),
         }
     }
 }

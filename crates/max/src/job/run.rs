@@ -251,6 +251,8 @@ impl Watch for Recorder {
             effort: self.upstream.effort.as_deref(),
             usage,
             cost_micros: None,
+            // pi's calls stream through the forwarder, unmeasured.
+            timing: None,
             at: Utc::now(),
         };
         crate::llm::record(&self.pool, &call).await;
