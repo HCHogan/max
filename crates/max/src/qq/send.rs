@@ -140,7 +140,7 @@ impl Shared {
             return Ok(());
         };
         // None for what has no id of its own.
-        let result: Result<Option<Sent>, String> = match message.content {
+        let result: Result<Option<Sent>, Unsent> = match message.content {
             Content::Unsend { target } => self
                 .recall(chat, place.endpoint, message.id, target)
                 .await?
@@ -153,7 +153,8 @@ impl Shared {
                 quote_id: sent.ref_idx.as_deref(),
             },
             Ok(None) => Delivered::Done,
-            Err(error) => Delivered::Failed { error },
+            Err(Unsent::Refused(error)) => Delivered::Failed { error },
+            Err(Unsent::Unknown(_)) => Delivered::Unknown,
         };
         let mut conn = self.pool.acquire().await?;
         ledger::record_delivery(
@@ -165,7 +166,7 @@ impl Shared {
         )
         .await?;
         if let Some(receipt) = outgoing.receipt {
-            let _ = receipt.send(result.map(|_| message.id));
+            let _ = receipt.send(result.map(|_| message.id).map_err(Unsent::told));
         }
         Ok(())
     }
@@ -176,7 +177,7 @@ impl Shared {
         chat: Chat<'_>,
         place: &Place,
         message: &Row,
-    ) -> sqlx::Result<Result<Sent, String>> {
+    ) -> sqlx::Result<Result<Sent, Unsent>> {
         // No connection is held while waiting for QQ.
         let mut conn = self.pool.acquire().await?;
         let Lowered {
@@ -196,7 +197,7 @@ impl Shared {
                 self.text(chat, &place.native_id, message.id, text, quote)
                     .await
             }
-            None => Err("nothing to send".to_owned()),
+            None => Err(Unsent::Refused("nothing to send".to_owned())),
         })
     }
 
@@ -207,20 +208,21 @@ impl Shared {
         endpoint: EndpointId,
         id: MessageId,
         target: MessageId,
-    ) -> sqlx::Result<Result<(), String>> {
+    ) -> sqlx::Result<Result<(), Unsent>> {
         let mut conn = self.pool.acquire().await?;
         let native = ledger::native(&mut conn, target, endpoint).await?;
         drop(conn);
         let Some((native_id, _)) = native else {
-            return Ok(Err("QQ 上没有这条消息".to_owned()));
+            return Ok(Err(Unsent::Refused("QQ 上没有这条消息".to_owned())));
         };
         Ok(self.api.recall(chat, &native_id).await.map_err(|error| {
             warn!(message = %id, %target, %error, "QQ didn't recall a message");
-            refusal(&error)
+            Unsent::from(&error).map(|_| refusal(&error))
         }))
     }
 
-    /// Markdown, or plain text if QQ refuses that.
+    /// Markdown, or plain text if QQ refuses that. When QQ's answer is lost,
+    /// the message may have gone out: it isn't sent again.
     async fn text(
         &self,
         chat: Chat<'_>,
@@ -228,8 +230,8 @@ impl Shared {
         id: MessageId,
         text: String,
         quote: Option<String>,
-    ) -> Result<Sent, String> {
-        let mut result = Err(String::new());
+    ) -> Result<Sent, Unsent> {
+        let mut result = Err(Unsent::Refused(String::new()));
         for body in [Body::Markdown(text.clone()), Body::Text(text)] {
             self.proactive(native_id).await;
             let qq = Message {
@@ -239,8 +241,11 @@ impl Shared {
             match self.api.send(chat, &qq).await {
                 Ok(sent) => return Ok(sent),
                 Err(error) => {
-                    warn!(message = %id, %error, "QQ refused a message");
-                    result = Err(error.to_string());
+                    warn!(message = %id, %error, "QQ didn't take a message");
+                    result = Err(Unsent::from(&error));
+                    if let Err(Unsent::Unknown(_)) = result {
+                        break;
+                    }
                 }
             }
         }
@@ -255,12 +260,12 @@ impl Shared {
         attached: Attached,
         caption: Option<String>,
         quote: Option<String>,
-    ) -> Result<Sent, String> {
+    ) -> Result<Sent, Unsent> {
         let key = (native_id.to_owned(), attached);
         let file_info = self.upload(chat, &key).await.map_err(|error| {
             let sha256 = &key.1.sha256;
             warn!(message = %id, sha256, %error, "couldn't upload a picture or file");
-            error
+            Unsent::Refused(error)
         })?;
         self.proactive(native_id).await;
         let qq = Message {
@@ -268,13 +273,13 @@ impl Shared {
             quote,
         };
         self.api.send(chat, &qq).await.map_err(|error| {
-            warn!(message = %id, %error, "QQ refused a picture or file");
+            warn!(message = %id, %error, "QQ didn't take a picture or file");
             // In case QQ forgot it early: the next one uploads it again.
             self.uploads
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .remove(&key);
-            error.to_string()
+            Unsent::from(&error)
         })
     }
 
@@ -347,6 +352,45 @@ impl Shared {
                     sleep_until(until).await;
                 }
             }
+        }
+    }
+}
+
+/// Why a row didn't go out, or may not have.
+#[derive(Debug)]
+enum Unsent {
+    /// QQ said no, or it never reached QQ.
+    Refused(String),
+    /// QQ's answer was lost or garbled: it may have gone out.
+    Unknown(String),
+}
+
+impl Unsent {
+    /// Unknown when the request may have reached QQ and its answer didn't
+    /// come back whole.
+    fn from(error: &api::Error) -> Self {
+        let text = error.to_string();
+        match error {
+            api::Error::Http(error) if !error.is_connect() && !error.is_builder() => {
+                Self::Unknown(text)
+            }
+            api::Error::Decode { .. } => Self::Unknown(text),
+            _ => Self::Refused(text),
+        }
+    }
+
+    fn map(self, f: impl FnOnce(String) -> String) -> Self {
+        match self {
+            Self::Refused(text) => Self::Refused(f(text)),
+            Self::Unknown(text) => Self::Unknown(f(text)),
+        }
+    }
+
+    /// As whoever waits on it is told.
+    fn told(self) -> String {
+        match self {
+            Self::Refused(text) => text,
+            Self::Unknown(text) => format!("没等到 QQ 的回答，不知道发没发出去：{text}"),
         }
     }
 }

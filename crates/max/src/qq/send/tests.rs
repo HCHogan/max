@@ -10,7 +10,8 @@ use crate::conversation::{Place, ingest};
 use crate::inbound::InNode;
 
 /// Records what it is asked to send or recall, and answers both from one
-/// script: Ok gives a message an id and a ref_idx. Uploads always work.
+/// script: Ok gives a message an id and a ref_idx, `Err(LOST)` an answer
+/// that didn't come back whole. Uploads always work.
 #[derive(Default)]
 struct Recorder {
     answers: Mutex<VecDeque<Result<(), i64>>>,
@@ -20,7 +21,15 @@ struct Recorder {
     recalled: Mutex<Vec<(String, String)>>,
 }
 
+const LOST: i64 = 0;
+
 fn refused(code: i64) -> api::Error {
+    if code == LOST {
+        return api::Error::Decode {
+            path: "/v2/groups/GROUP1/messages".into(),
+            source: serde_json::from_str::<()>("<html>").unwrap_err(),
+        };
+    }
     api::Error::Api {
         path: "/v2/groups/GROUP1/messages".into(),
         status: 400,
@@ -244,6 +253,26 @@ async fn plain_text_when_markdown_is_refused(pool: PgPool) {
     );
     assert_eq!(s.delivery(&message).await.0, Delivery::Sent);
     assert_eq!(s.delivery(&failed).await, (Delivery::Failed, None, None));
+}
+
+/// QQ's answer lost: the message may be in the group, so it isn't sent
+/// again as plain text, and nobody says it failed.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_lost_answer_is_neither_resent_nor_failed(pool: PgPool) {
+    let s = Setup::new(pool).await;
+    s.api.answers.lock().unwrap().push_back(Err(LOST));
+    let (receipt, told) = tokio::sync::oneshot::channel();
+    let outgoing = Outgoing {
+        receipt: Some(receipt),
+        ..s.say(said("一")).await
+    };
+    let message = outgoing.message.clone();
+    s.send_all(vec![outgoing]).await;
+    let bodies: Vec<_> = s.sent().into_iter().map(|(_, m)| m.body).collect();
+    assert_eq!(bodies, [Body::Markdown("一".into())]);
+    assert_eq!(s.delivery(&message).await, (Delivery::Unknown, None, None));
+    let told = told.await.unwrap().unwrap_err();
+    assert!(told.starts_with("没等到 QQ 的回答"), "{told}");
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

@@ -588,6 +588,8 @@ pub enum Sent<'a> {
     Failed {
         error: &'a str,
     },
+    /// Whether the platform took it isn't known: its answer was lost.
+    Unknown,
 }
 
 pub async fn record_delivery(
@@ -604,6 +606,7 @@ pub async fn record_delivery(
         } => ("sent", Some(*native_id), *quote_id, None),
         Sent::Done => ("sent", None, None, None),
         Sent::Failed { error } => ("failed", None, None, Some(*error)),
+        Sent::Unknown => ("unknown", None, None, None),
     };
     sqlx::query!(
         "insert into deliveries (message_id, endpoint_id, status, native_id, quote_id, error, at)
