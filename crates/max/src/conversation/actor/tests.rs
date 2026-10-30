@@ -16,7 +16,6 @@ use serde_json::json;
 use super::*;
 use crate::command;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, shared, text};
-use crate::historian::Captured;
 use crate::inbound::InNode;
 use crate::job::{Ending, Finished, How, Request};
 use crate::llm::testing::{Answer, Script};
@@ -28,8 +27,6 @@ struct Harness {
     script: Arc<Script>,
     mailbox: UnboundedSender<Event>,
     outbound: UnboundedReceiver<Outgoing>,
-    /// What the historian hears.
-    notices: UnboundedReceiver<Notice>,
     done: Option<oneshot::Receiver<()>>,
     _scope: Scope,
 }
@@ -95,8 +92,6 @@ impl Harness {
         }
         let script = Arc::new(Script::default());
         let (mut shared, outbound) = shared(&pool, &script, idle_window_secs, owners);
-        let (historian, notices) = shared.rows.subscribe();
-        shared.historian = Some(historian);
         shared.vm_dir = vm_dir;
         let mut scope = Scope::new();
         let (mailbox, rx) = mpsc::unbounded_channel();
@@ -114,7 +109,6 @@ impl Harness {
             script,
             mailbox,
             outbound,
-            notices,
             done: Some(done),
             _scope: scope,
         }
@@ -478,38 +472,6 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
         .count("select count(cleared_upto) from conversation_settings")
         .await;
     assert_eq!(cleared, 0);
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn compact_is_answered_when_the_historian_is_done(pool: PgPool) {
-    let mut h = Harness::new(pool, 300).await;
-    h.send(from_xiaoming(0, vec![me(), text("/compact")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("compact", "拒绝：仅限群主、管理员")
-    );
-    h.send(from_xiaohong(1, vec![me(), text("/compact")]));
-    let mut said = 0;
-    let reply = loop {
-        let notice = tokio::time::timeout(PATIENCE, h.notices.recv())
-            .await
-            .expect("the historian heard nothing")
-            .unwrap();
-        match notice {
-            Notice::Row(_) => said += 1,
-            Notice::Compact(compact) => break compact.reply,
-        }
-    };
-    // 小明's command, Max's answer, 小红's command.
-    assert_eq!(said, 3);
-    reply.send(Ok(Captured::Published(2))).unwrap();
-    let (answer, text) = h.said().await;
-    assert_eq!(text, command::answer("compact", "已压缩：2 段摘要"));
-    let Content::Message { reply_to, .. } = answer.content else {
-        unreachable!()
-    };
-    assert_eq!(reply_to, None);
-    h.stop().await;
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

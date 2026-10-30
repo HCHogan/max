@@ -9,7 +9,6 @@ use sqlx::PgConnection;
 pub enum Purpose {
     Turn,
     Intent,
-    Historian,
     Caption,
     /// A background agent's.
     Job,
@@ -33,7 +32,6 @@ pub async fn record(conn: &mut PgConnection, call: &Call<'_>) -> sqlx::Result<()
     let purpose = match call.purpose {
         Purpose::Turn => "turn",
         Purpose::Intent => "intent",
-        Purpose::Historian => "historian",
         Purpose::Caption => "caption",
         Purpose::Job => "job",
     };

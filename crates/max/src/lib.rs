@@ -14,7 +14,6 @@ pub mod command;
 pub mod config;
 pub mod conversation;
 pub mod embedding;
-pub mod historian;
 pub mod inbound;
 pub mod job;
 pub mod llm;

@@ -11,13 +11,11 @@ use std::time::Duration;
 use max_core::message::{Platform, Role};
 use max_db::platform::ConversationKind;
 use max_db::{ledger, summaries};
-use tokio::sync::oneshot;
 
 use super::*;
 use crate::bind::Pending;
 use crate::command::{self, Command, Persona};
 use crate::conversation::ingest::Committed;
-use crate::historian::{Captured, Compact, Compacted, Notice};
 
 /// Who may run what. Commands that cost money or change how Max behaves
 /// everywhere are the owners'; those that change one conversation are
@@ -50,11 +48,9 @@ impl Conversation {
             Command::Persona(Persona::Show) | Command::Clear { all: false } => Rank::Anyone,
             Command::Model(Some(argument)) if argument == "list" => Rank::Anyone,
             // Who may link whom is its own business.
-            Command::Kill
-            | Command::Persona(_)
-            | Command::Clear { .. }
-            | Command::Unclear
-            | Command::Compact => Rank::Admin,
+            Command::Kill | Command::Persona(_) | Command::Clear { .. } | Command::Unclear => {
+                Rank::Admin
+            }
             Command::Model(_) | Command::Effort(_) | Command::Proactive(_) | Command::Bind(_) => {
                 Rank::Owner
             }
@@ -99,10 +95,6 @@ impl Conversation {
                 format!("已清空：之前的消息不再进入上下文，{how} 恢复")
             }
             Command::Unclear => self.unclear().await?,
-            Command::Compact => match self.compact() {
-                Some(answer) => answer,
-                None => return Ok(()),
-            },
             Command::Bind(argument) => self.bind(committed, argument.as_deref()).await?,
         };
         self.answer(name, &answer).await
@@ -145,42 +137,6 @@ impl Conversation {
         };
         self.say(draft, None, None, None).await?;
         Ok(())
-    }
-
-    /// Hands `/compact` to the historian, which answers when it is done;
-    /// or the answer now, when it can't.
-    fn compact(&mut self) -> Option<String> {
-        if self.place.kind == ConversationKind::Direct {
-            return Some("跳过：私聊不写摘要".to_owned());
-        }
-        let Some(historian) = &self.shared.historian else {
-            return Some("错误：没有配置摘要模型".to_owned());
-        };
-        let (reply, answer) = oneshot::channel();
-        let notice = Notice::Compact(Compact {
-            place: Arc::clone(&self.place),
-            reply,
-        });
-        if historian.send(notice).is_err() {
-            return Some("错误：摘要服务已停止".to_owned());
-        }
-        let mailbox = self.mailbox.clone();
-        self.side.spawn(move |_| async move {
-            let result = answer
-                .await
-                .unwrap_or_else(|_| Err("the historian stopped".to_owned()));
-            let _ = mailbox.send(Event::Compacted(result));
-        });
-        None
-    }
-
-    pub(super) async fn compacted(&mut self, result: Compacted) -> Result<()> {
-        let text = match result {
-            Ok(Captured::Published(count)) => format!("已压缩：{count} 段摘要"),
-            Ok(Captured::Nothing) => "跳过：没有要压缩的".to_owned(),
-            Err(_) => "失败：稍后重试".to_owned(),
-        };
-        self.answer("compact", &text).await
     }
 
     async fn save_settings(&mut self) -> Result<()> {
