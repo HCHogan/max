@@ -497,6 +497,9 @@ pub struct Settings {
     pub persona: Option<String>,
     pub proactive: bool,
     pub cleared_upto: Option<MessageId>,
+    /// The historian summarizes the conversation, and its summaries are in
+    /// the context.
+    pub historian: bool,
 }
 
 impl Default for Settings {
@@ -507,6 +510,7 @@ impl Default for Settings {
             persona: None,
             proactive: true,
             cleared_upto: None,
+            historian: false,
         }
     }
 }
@@ -516,7 +520,7 @@ pub async fn settings(
     conversation: ConversationId,
 ) -> sqlx::Result<Settings> {
     let row = sqlx::query!(
-        "select model, effort, persona, proactive, cleared_upto
+        "select model, effort, persona, proactive, cleared_upto, historian
          from conversation_settings where conversation_id = $1",
         conversation.0
     )
@@ -528,6 +532,7 @@ pub async fn settings(
         persona: row.persona,
         proactive: row.proactive,
         cleared_upto: row.cleared_upto.map(MessageId),
+        historian: row.historian,
     }))
 }
 
@@ -569,12 +574,13 @@ pub async fn save_settings(
     sqlx::query!(
         r#"
         insert into conversation_settings
-            (conversation_id, model, effort, persona, proactive, cleared_upto, updated_at)
-        values ($1, $2, $3, $4, $5, $6, $7)
+            (conversation_id, model, effort, persona, proactive, cleared_upto, historian,
+             updated_at)
+        values ($1, $2, $3, $4, $5, $6, $7, $8)
         on conflict (conversation_id) do update set
             model = excluded.model, effort = excluded.effort, persona = excluded.persona,
             proactive = excluded.proactive, cleared_upto = excluded.cleared_upto,
-            updated_at = excluded.updated_at
+            historian = excluded.historian, updated_at = excluded.updated_at
         "#,
         conversation.0,
         settings.model,
@@ -582,6 +588,7 @@ pub async fn save_settings(
         settings.persona,
         settings.proactive,
         settings.cleared_upto.map(|id| id.0),
+        settings.historian,
         at
     )
     .execute(conn)

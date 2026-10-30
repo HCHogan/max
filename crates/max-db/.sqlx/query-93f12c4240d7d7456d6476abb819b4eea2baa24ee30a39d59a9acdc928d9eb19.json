@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select model, effort, persona, proactive, cleared_upto\n         from conversation_settings where conversation_id = $1",
+  "query": "select model, effort, persona, proactive, cleared_upto, historian\n         from conversation_settings where conversation_id = $1",
   "describe": {
     "columns": [
       {
@@ -57,6 +57,17 @@
             "name": "cleared_upto"
           }
         }
+      },
+      {
+        "ordinal": 5,
+        "name": "historian",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "conversation_settings",
+            "name": "historian"
+          }
+        }
       }
     ],
     "parameters": {
@@ -69,8 +80,9 @@
       true,
       true,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "a10f77f2b055ee240552268fa5be0a3592aed4677acd3c1a5759a2d400d34df1"
+  "hash": "93f12c4240d7d7456d6476abb819b4eea2baa24ee30a39d59a9acdc928d9eb19"
 }

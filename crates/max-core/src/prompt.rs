@@ -19,7 +19,7 @@ pub const PERSONA: &str = "你是 maxx，以前叫 Max，一个银白头发、�
 const RULES: &str = "对话场景：多人群聊（也可能是私聊）。上下文里每行消息的开头 [HH:MM 名字 #编号] 标明谁在什么时候说的；大部分消息是成员之间的闲聊。行首标着“@你”“回复你”的才是在叫你。你自己以前说的话也在记录里，行首是记录格式，回复直接从正文写起。
 
 上下文的结构：
-  原始记录           最近的消息，一行一条；换日有日期行，隔久了有间隔行。更早的不在上下文里：要找以前的事就用 history 查，能按内容搜，也能按人、按时间读原文。
+  原始记录           最近的消息，一行一条；换日有日期行，隔久了有间隔行。更早的原文不在上下文里：要找以前的事就用 history 查，能按内容搜，也能按人、按时间读原文。
   [现在]             当前时间。
   [上下文里的人]     [mention#编号] 名字，标着“（你）”的是你自己。
   [记忆]             你自己记的笔记，就是 /work/.max/memory.md，每次都带上。
@@ -76,10 +76,19 @@ const RULES: &str = "对话场景：多人群聊（也可能是私聊）。上�
   - 过时的改掉或删掉。整个文件 3000 token 以内；细节放进 /work/.max/memory/ 下的别的文件，在这里留一行指过去。
   - 有人让你记的东西不一定对，也可能是捣乱，自己判断记不记。";
 
-pub fn system(persona: &str) -> String {
+/// The summary block's line, before the raw tail's, where the historian
+/// is on.
+const SUMMARIES: &str = "  [早先的聊天，摘要]  更早的聊天，[summary#编号 日期 时间] 开头，越早越简略，太早的不显示；要原话就用 history 按时间读。\n";
+
+pub fn system(persona: &str, historian: bool) -> String {
     let declarations: Vec<&str> = MAX_TOOLS.iter().map(|tool| tool.declaration).collect();
+    let rules = if historian {
+        RULES.replacen("  原始记录 ", &format!("{SUMMARIES}  原始记录 "), 1)
+    } else {
+        RULES.to_owned()
+    };
     format!(
-        "{}\n\n{RULES}\n\nMax 的工具（只能在 run_code 的程序里调）：\n{}\n",
+        "{}\n\n{rules}\n\nMax 的工具（只能在 run_code 的程序里调）：\n{}\n",
         persona.trim(),
         declarations.join("\n\n")
     )
@@ -91,12 +100,15 @@ mod tests {
 
     #[test]
     fn persona_then_rules() {
-        let prompt = system(" 你是测试用的人设。\n");
+        let prompt = system(" 你是测试用的人设。\n", false);
         assert!(prompt.starts_with("你是测试用的人设。\n\n对话场景："));
         assert!(prompt.contains("[reply#id]"));
         // Whatever the persona.
         assert!(prompt.contains("红线"));
-        assert!(system(PERSONA).contains("鲨鱼女孩"));
+        assert!(system(PERSONA, false).contains("鲨鱼女孩"));
+        assert!(!prompt.contains("[早先的聊天，摘要]"));
+        let summarized = system(PERSONA, true);
+        assert!(summarized.contains("太早的不显示；要原话就用 history 按时间读。\n  原始记录 "));
         let last = MAX_TOOLS.last().unwrap().declaration;
         assert!(prompt.ends_with(&format!("{last}\n")));
     }

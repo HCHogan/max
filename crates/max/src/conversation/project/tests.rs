@@ -82,6 +82,7 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
         system: "SYSTEM".into(),
         window: 100_000,
         cleared_upto: None,
+        historian: false,
         memory: String::new(),
         now: at(5),
         offset: offset(),
@@ -147,6 +148,7 @@ async fn the_tail_is_cut_at_a_mark_that_stays(pool: PgPool) {
         system: "SYSTEM".into(),
         window: 800,
         cleared_upto: None,
+        historian: false,
         memory: String::new(),
         now: at(20),
         offset: offset(),
@@ -175,6 +177,74 @@ async fn the_tail_is_cut_at_a_mark_that_stays(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn where_the_historian_is_on_the_tail_starts_after_its_summaries(pool: PgPool) {
+    let mut conn = pool.acquire().await.unwrap();
+    let place = group(&mut conn).await;
+    let mut ids = Vec::new();
+    let mut xiaohong = None;
+    for n in 0..6 {
+        let said = if n == 0 {
+            from_xiaohong(n, vec![text("示波器探头怎么补偿")])
+        } else {
+            from_xiaoming(n, vec![text(&format!("第{n}条"))])
+        };
+        let said = ingest::inbound(&mut conn, &place, &said, at(n), offset())
+            .await
+            .unwrap();
+        xiaohong.get_or_insert(said.sender.principal);
+        ids.push(said.message.id);
+    }
+    let xiaohong = xiaohong.unwrap();
+    let summary = summaries::Summary {
+        first: ids[0],
+        last: ids[2],
+        started_at: at(0),
+        ended_at: at(2),
+        title: "探头补偿".into(),
+        kind: "support".into(),
+        importance: 40,
+        full: format!("[mention#{xiaohong}] 问探头补偿。"),
+        brief: None,
+        line: None,
+    };
+    let id = summaries::insert(&mut conn, place.conversation, &summary, "m", at(3))
+        .await
+        .unwrap();
+    let mut projection = Projection {
+        place: &place,
+        system: "SYSTEM".into(),
+        window: 100_000,
+        cleared_upto: None,
+        historian: true,
+        memory: String::new(),
+        now: at(10),
+        offset: offset(),
+    };
+    let last = *ids.last().unwrap();
+    let (context, _) = projection.base(&mut conn, last, &[]).await.unwrap();
+    let texts: Vec<&str> = context.items.iter().map(user_text).collect();
+    assert_eq!(texts.len(), 4, "{texts:?}");
+    assert_eq!(
+        texts[1],
+        format!(
+            "[早先的聊天，摘要]\n\
+             [summary#{id} 2026-10-29 周四 12:00–12:02] 探头补偿\n\
+             [mention#{xiaohong}] 问探头补偿。\n"
+        )
+    );
+    assert!(!texts[2].contains(&format!("#{}]", ids[2])), "{}", texts[2]);
+    assert!(texts[2].contains(&format!("#{}]", ids[3])), "{}", texts[2]);
+    // Named in a summary, so in the roster.
+    assert!(context.roster.contains(&xiaohong));
+
+    // Off: no summaries, and the tail from the first row.
+    projection.historian = false;
+    let (context, _) = projection.base(&mut conn, last, &[]).await.unwrap();
+    assert_eq!(context.items.len(), 3);
+    assert!(user_text(&context.items[1]).contains(&format!("#{}]", ids[0])));
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_judged_wake(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
     let place = group(&mut conn).await;
@@ -196,6 +266,7 @@ async fn a_judged_wake(pool: PgPool) {
         system: "SYSTEM".into(),
         window: 100_000,
         cleared_upto: None,
+        historian: false,
         memory: String::new(),
         now: at(1),
         offset: offset(),
@@ -327,6 +398,7 @@ async fn the_trigger_and_what_it_quotes_show_their_pictures(pool: PgPool) {
         window: 100_000,
         // The first picture is cleared from the tail, so it is quoted.
         cleared_upto: Some(ids[0]),
+        historian: false,
         memory: String::new(),
         now: at(3),
         offset: offset(),

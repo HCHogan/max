@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use max_core::message::Message;
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::conversation::Place;
 
@@ -24,13 +24,17 @@ type Mailbox = Box<dyn Fn(Row) + Send + Sync>;
 pub struct Rows(Vec<Mailbox>);
 
 impl Rows {
-    /// A mailbox that gets every row, as a `T`.
-    pub fn subscribe<T: From<Row> + Send + 'static>(&mut self) -> UnboundedReceiver<T> {
+    /// A mailbox that gets every row, as a `T`, and takes other `T`s
+    /// from whoever holds the sender: the historian's `/compact`.
+    pub fn subscribe<T: From<Row> + Send + 'static>(
+        &mut self,
+    ) -> (UnboundedSender<T>, UnboundedReceiver<T>) {
         let (tx, rx) = mpsc::unbounded_channel();
+        let mailbox = tx.clone();
         self.0.push(Box::new(move |row| {
-            let _ = tx.send(T::from(row));
+            let _ = mailbox.send(T::from(row));
         }));
-        rx
+        (tx, rx)
     }
 
     pub fn send(&self, place: &Arc<Place>, message: &Message) {

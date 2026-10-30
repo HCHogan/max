@@ -1,8 +1,8 @@
 //! How timeline rows look to the model: one line each,
 //! `[HH:MM 名字 #id]: 内容`, with a date line when the day changes and a gap
 //! line after a long silence. The tail, `[新消息]` blocks, intent and
-//! `history` all render rows with this, so a row reads the same
-//! everywhere.
+//! historian and `history` all render rows with this, so a row reads the
+//! same everywhere.
 //!
 //! Placeholders follow the one grammar the segmenter parses: `[word#id]`,
 //! optionally `: description`. A medium's id is its handle, the message's

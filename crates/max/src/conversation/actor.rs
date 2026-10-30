@@ -27,6 +27,7 @@ use super::ingest;
 use super::project::{self, Projection};
 use super::{Act, Event, Place, Post, Poster, Receipt, TaskId, classify, model, tool};
 use crate::bind::Binds;
+use crate::historian::Notice;
 use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
 use crate::mcp;
@@ -47,6 +48,8 @@ pub struct Shared {
     /// Max's owners, who may run every command.
     pub owners: BTreeSet<PrincipalId>,
     pub binds: Arc<Binds>,
+    /// None when no historian's model is configured.
+    pub historian: Option<UnboundedSender<Notice>>,
     /// The derived-data workers, which hear of every committed row.
     pub rows: Rows,
     /// None when no VMs are configured: the tools say so.
@@ -79,7 +82,7 @@ pub struct Conversation {
     seen: MessageId,
     core: Option<Active>,
     intent: Intent,
-    /// The classifier.
+    /// The classifier, and waiting on the historian for `/compact`.
     side: Scope,
     stopping: Option<Instant>,
     next_task: u64,
@@ -179,7 +182,7 @@ impl Conversation {
 
     /// After an error: the core and the jobs are stopped, and the
     /// conversation's unfinished turns end lost, as in a crash, so they
-    /// don't look running. A line says so,
+    /// don't look running (the historian waits on those). A line says so,
     /// if the database lets it. The next message starts the conversation
     /// again.
     async fn give_up(&mut self) {
@@ -279,6 +282,7 @@ impl Conversation {
                 let decisions = self.intent.verdict(verdict, std::time::Instant::now());
                 self.decide(decisions).await
             }
+            Event::Compacted(result) => self.compacted(result).await,
             Event::Jobs { request, reply } => {
                 let _ = reply.send(self.job_request(request));
                 Ok(())
@@ -480,9 +484,10 @@ impl Conversation {
         let persona = settings.persona.as_deref().unwrap_or(prompt::PERSONA);
         let projection = Projection {
             place: &self.place,
-            system: prompt::system(persona),
+            system: prompt::system(persona, settings.historian),
             window: chosen.window,
             cleared_upto: settings.cleared_upto,
+            historian: settings.historian,
             memory: self.memory().await,
             now,
             offset: self.shared.services.offset,

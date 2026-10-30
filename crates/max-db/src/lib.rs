@@ -12,6 +12,7 @@ pub mod links;
 pub mod media;
 pub mod platform;
 pub mod recall;
+pub mod summaries;
 pub mod turns;
 pub mod usage;
 pub mod vectors;

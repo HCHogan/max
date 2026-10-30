@@ -25,6 +25,7 @@ use tokio::sync::oneshot;
 
 pub use actor::{Conversation, Outgoing, Shared};
 
+use crate::historian::Compacted;
 use crate::inbound::Inbound;
 use crate::job;
 
@@ -56,6 +57,8 @@ pub enum Event {
     },
     /// The classifier's answer; None if it failed.
     Verdict(Option<Verdict>),
+    /// How the historian's `/compact` went, to answer the command.
+    Compacted(Compacted),
     /// A tool asks about the background agents.
     Jobs {
         request: job::Request,

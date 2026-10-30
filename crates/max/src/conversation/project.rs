@@ -1,20 +1,22 @@
 //! Projecting a new core's base context from the ledger, and rendering
 //! what comes in later for a running core. max-core lays the blocks out;
-//! this reads the rows they are made of, and moves the tail's mark on when
-//! the tail is cut.
+//! this reads the rows, and where the historian is on the summaries, they
+//! are made of, and moves the tail's mark on when the tail is cut.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, FixedOffset, Utc};
-use max_core::ids::{IdentityId, MessageId, PrincipalId};
+use max_core::ids::{IdentityId, MessageId, PrincipalId, SummaryId};
 use max_core::intent::Reason;
 use max_core::item::{Item, ItemKind};
 use max_core::message::{Content, MentionTarget, Message, Node, Role};
-use max_core::project::{self, Budgets, Volatile};
+use max_core::project::decay::Costs;
+use max_core::project::{self, Budgets, Summary, Volatile};
 use max_core::render::{Mark, Render};
 use max_core::run::{Context, Input, Wake};
 use max_db::ledger::{self, Delivery, Row};
 use max_db::platform::{self, ConversationKind};
+use max_db::summaries;
 use sqlx::PgConnection;
 
 use super::Place;
@@ -27,6 +29,9 @@ pub struct Projection<'a> {
     pub window: u32,
     /// `/clear --all`'s mark: nothing before it is shown.
     pub cleared_upto: Option<MessageId>,
+    /// The historian is on: its summaries are shown, and the tail starts
+    /// after the newest.
+    pub historian: bool,
     /// Max's memory file, as the core is shown it.
     pub memory: String,
     pub now: DateTime<Utc>,
@@ -46,8 +51,18 @@ impl Projection<'_> {
         let budgets = Budgets::for_window(self.window);
         let conversation = self.place.conversation;
 
+        let (summary_block, summarized) = if self.historian {
+            let active = summaries::active(conn, conversation, self.cleared_upto).await?;
+            let upto = active.last().map(|(_, summary)| summary.last);
+            let summaries: Vec<Summary> = active.into_iter().map(summary).collect();
+            let block = project::summary_block(&summaries, budgets.summaries, self.offset);
+            (block, upto)
+        } else {
+            (String::new(), None)
+        };
         let cursor = platform::tail_after(conn, conversation)
             .await?
+            .max(summarized)
             .max(self.cleared_upto);
 
         let trigger_ids: BTreeSet<MessageId> = wakes
@@ -73,7 +88,7 @@ impl Projection<'_> {
                 tokens::count(&line)
             })
             .collect();
-        let start = project::tail_start(&costs, &budgets);
+        let start = project::tail_start(&costs, &budgets, self.historian);
         if let Some(last_cut) = start.checked_sub(1).and_then(|last| tail.get(last)) {
             platform::set_tail_after(conn, conversation, last_cut.message.id).await?;
         }
@@ -146,6 +161,7 @@ impl Projection<'_> {
         let quoted_text = joined(&render, &quoted_lines, None);
 
         let mut roster: BTreeSet<PrincipalId> = people.values().copied().collect();
+        roster.extend(project::mentioned(&summary_block));
         roster.insert(self.place.me.principal);
         let volatile = Volatile {
             now: self.now,
@@ -156,7 +172,7 @@ impl Projection<'_> {
         };
         let mut context = project::context(
             self.system.clone(),
-            [tail_text, volatile.render(self.offset)],
+            [summary_block, tail_text, volatile.render(self.offset)],
             roster,
             tokens::count,
         );
@@ -256,6 +272,25 @@ pub fn judged(reason: &Reason) -> Option<Item> {
     let text = format!("[判定：{note}]");
     let tokens = tokens::count(&text);
     Some(Item::new(ItemKind::user(text), tokens))
+}
+
+/// A summary as the database has it, as the projection renders it.
+pub(crate) fn summary((id, summary): (SummaryId, summaries::Summary)) -> Summary {
+    Summary {
+        id,
+        started_at: summary.started_at,
+        ended_at: summary.ended_at,
+        costs: Costs {
+            importance: summary.importance,
+            full: tokens::count(&summary.full),
+            brief: summary.brief.as_deref().map(tokens::count),
+            line: summary.line.as_deref().map(tokens::count),
+        },
+        title: summary.title,
+        full: summary.full,
+        brief: summary.brief,
+        line: summary.line,
+    }
 }
 
 /// What became of Max's row, if it didn't reach the platform.

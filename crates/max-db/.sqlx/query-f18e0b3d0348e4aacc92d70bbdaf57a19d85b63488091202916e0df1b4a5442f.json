@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into conversation_settings\n            (conversation_id, model, effort, persona, proactive, cleared_upto, historian,\n             updated_at)\n        values ($1, $2, $3, $4, $5, $6, $7, $8)\n        on conflict (conversation_id) do update set\n            model = excluded.model, effort = excluded.effort, persona = excluded.persona,\n            proactive = excluded.proactive, cleared_upto = excluded.cleared_upto,\n            historian = excluded.historian, updated_at = excluded.updated_at\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Int8",
+        "Bool",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f18e0b3d0348e4aacc92d70bbdaf57a19d85b63488091202916e0df1b4a5442f"
+}

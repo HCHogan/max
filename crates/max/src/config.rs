@@ -135,6 +135,9 @@ pub struct Llm {
     pub default: Selection,
     /// The small model that judges chatter.
     pub intent: Selection,
+    /// The model that summarizes what was said. Without it, no summaries
+    /// are written, and the raw tail is cut when it grows too long.
+    pub historian: Option<Selection>,
     /// The model that says in words what a picture or sticker shows. It
     /// has to see pictures. Without it, nothing is captioned.
     pub caption: Option<Selection>,
@@ -336,6 +339,7 @@ impl Llm {
         let selections = [
             ("default", Some(&self.default)),
             ("intent", Some(&self.intent)),
+            ("historian", self.historian.as_ref()),
             ("caption", self.caption.as_ref()),
             ("job", self.job.as_ref()),
             ("dreamer", self.dreamer.as_ref()),
@@ -439,6 +443,7 @@ mod tests {
         [llm]
         default = { model = "cliproxy/gpt-5.6-luna", effort = "xhigh" }
         intent = { model = "local/qwen3.5-4b" }
+        historian = { model = "cliproxy/gpt-5.6-luna", effort = "medium" }
         caption = { model = "cliproxy/gpt-5.6-luna", effort = "low" }
 
         [llm.providers.cliproxy]
@@ -585,6 +590,23 @@ mod tests {
             LLM.replace("local/qwen3.5-4b", "qwen3.5-4b")
         );
         assert!(Config::parse(&bare).is_err());
+        let historian = format!(
+            "{database}{}",
+            LLM.replace(
+                "historian = { model = \"cliproxy/gpt-5.6-luna\"",
+                "historian = { model = \"cliproxy/gpt-9\""
+            )
+        );
+        let error = Config::parse(&historian).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("in llm.historian"),
+            "{error:#}"
+        );
+        let without = format!(
+            "{database}{}",
+            LLM.replace("historian = ", "# historian = ")
+        );
+        assert!(Config::parse(&without).unwrap().llm.historian.is_none());
         let caption = format!(
             "{database}{}",
             LLM.replace(

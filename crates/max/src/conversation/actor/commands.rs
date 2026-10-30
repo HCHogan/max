@@ -10,11 +10,14 @@ use std::time::Duration;
 
 use max_core::message::{Platform, Role};
 use max_db::platform::ConversationKind;
+use max_db::{ledger, summaries};
+use tokio::sync::oneshot;
 
 use super::*;
 use crate::bind::Pending;
 use crate::command::{self, Command, Persona};
 use crate::conversation::ingest::Committed;
+use crate::historian::{Captured, Compact, Compacted, Notice};
 
 /// Who may run what. Commands that cost money or change how Max behaves
 /// everywhere are the owners'; those that change one conversation are
@@ -43,16 +46,23 @@ impl Conversation {
         };
         let needs = match &command {
             Command::Status => Rank::Anyone,
-            Command::Model(None) | Command::Effort(None) | Command::Proactive(None) => Rank::Anyone,
+            Command::Model(None)
+            | Command::Effort(None)
+            | Command::Proactive(None)
+            | Command::Historian(None) => Rank::Anyone,
             Command::Persona(Persona::Show) | Command::Clear { all: false } => Rank::Anyone,
             Command::Model(Some(argument)) if argument == "list" => Rank::Anyone,
             // Who may link whom is its own business.
-            Command::Kill | Command::Persona(_) | Command::Clear { .. } | Command::Unclear => {
-                Rank::Admin
-            }
-            Command::Model(_) | Command::Effort(_) | Command::Proactive(_) | Command::Bind(_) => {
-                Rank::Owner
-            }
+            Command::Kill
+            | Command::Persona(_)
+            | Command::Clear { .. }
+            | Command::Unclear
+            | Command::Compact => Rank::Admin,
+            Command::Model(_)
+            | Command::Effort(_)
+            | Command::Proactive(_)
+            | Command::Historian(_)
+            | Command::Bind(_) => Rank::Owner,
         };
         let name = command.name();
         if rank < needs {
@@ -82,6 +92,7 @@ impl Conversation {
             Command::Model(argument) => self.model(argument.as_deref()).await?,
             Command::Effort(argument) => self.effort(argument).await?,
             Command::Proactive(on) => self.proactive(on).await?,
+            Command::Historian(on) => self.historian(on).await?,
             Command::Persona(persona) => self.persona(persona).await?,
             Command::Clear { all: false } => {
                 let how = command::how(self.place.kind, &self.place.my_name, "/clear --all");
@@ -94,19 +105,45 @@ impl Conversation {
                 format!("已清空：之前的消息不再进入上下文，{how} 恢复")
             }
             Command::Unclear => self.unclear().await?,
+            Command::Compact => match self.compact() {
+                Some(answer) => answer,
+                None => return Ok(()),
+            },
             Command::Bind(argument) => self.bind(committed, argument.as_deref()).await?,
         };
         self.answer(name, &answer).await
     }
 
     /// Takes `/clear --all` back: what came before its mark is in the
-    /// context again, as far back as the tail goes.
+    /// context again, as far back as the tail goes. Where the historian is
+    /// on, it summarizes up to the mark before it summarizes past it; if
+    /// that failed, the rows it left between the summaries stay out, and
+    /// `history` finds them.
     async fn unclear(&mut self) -> Result<String> {
-        if self.settings.cleared_upto.take().is_none() {
+        let Some(mark) = self.settings.cleared_upto.take() else {
             return Ok("跳过：没有清空过".to_owned());
-        }
+        };
         self.save_settings().await?;
-        Ok("已恢复：清空前的消息回到上下文".to_owned())
+        if !self.settings.historian {
+            return Ok("已恢复：清空前的消息回到上下文".to_owned());
+        }
+        let conversation = self.place.conversation;
+        let mut conn = self.shared.services.pool.acquire().await?;
+        let active = summaries::active(&mut conn, conversation, None).await?;
+        let (before, after): (Vec<_>, Vec<_>) = active
+            .into_iter()
+            .map(|(_, summary)| summary.last)
+            .partition(|last| *last <= mark);
+        let left_out = !after.is_empty()
+            && !ledger::rows(&mut conn, conversation, before.last().copied(), mark)
+                .await?
+                .is_empty();
+        Ok(if left_out {
+            "已恢复：清空前的摘要回到上下文；清空时还没写成摘要的那段不回来，history 查得到"
+                .to_owned()
+        } else {
+            "已恢复：清空前的消息回到上下文".to_owned()
+        })
     }
 
     async fn answer(&mut self, name: &str, body: &str) -> Result<()> {
@@ -118,6 +155,45 @@ impl Conversation {
         };
         self.say(draft, None, None, None).await?;
         Ok(())
+    }
+
+    /// Hands `/compact` to the historian, which answers when it is done;
+    /// or the answer now, when it can't.
+    fn compact(&mut self) -> Option<String> {
+        if self.place.kind == ConversationKind::Direct {
+            return Some("跳过：私聊不写摘要".to_owned());
+        }
+        if !self.settings.historian {
+            return Some("跳过：这个群没开摘要，/historian on 开".to_owned());
+        }
+        let Some(historian) = &self.shared.historian else {
+            return Some("错误：没有配置摘要模型".to_owned());
+        };
+        let (reply, answer) = oneshot::channel();
+        let notice = Notice::Compact(Compact {
+            place: Arc::clone(&self.place),
+            reply,
+        });
+        if historian.send(notice).is_err() {
+            return Some("错误：摘要服务已停止".to_owned());
+        }
+        let mailbox = self.mailbox.clone();
+        self.side.spawn(move |_| async move {
+            let result = answer
+                .await
+                .unwrap_or_else(|_| Err("the historian stopped".to_owned()));
+            let _ = mailbox.send(Event::Compacted(result));
+        });
+        None
+    }
+
+    pub(super) async fn compacted(&mut self, result: Compacted) -> Result<()> {
+        let text = match result {
+            Ok(Captured::Published(count)) => format!("已压缩：{count} 段摘要"),
+            Ok(Captured::Nothing) => "跳过：没有要压缩的".to_owned(),
+            Err(_) => "失败：稍后重试".to_owned(),
+        };
+        self.answer("compact", &text).await
     }
 
     async fn save_settings(&mut self) -> Result<()> {
@@ -155,6 +231,8 @@ impl Conversation {
         );
         let proactive = if settings.proactive { "on" } else { "off" };
         line("proactive", proactive.to_owned());
+        let historian = if settings.historian { "on" } else { "off" };
+        line("historian", historian.to_owned());
         line(
             "core",
             match &self.core {
@@ -219,6 +297,33 @@ impl Conversation {
         self.settings.effort = (level != "default").then_some(level);
         self.save_settings().await?;
         Ok(answer)
+    }
+
+    /// `/historian`: whether the historian summarizes this conversation and
+    /// its summaries are in the context, from the next core on.
+    async fn historian(&mut self, on: Option<bool>) -> Result<String> {
+        let Some(on) = on else {
+            let state = if self.settings.historian {
+                "开"
+            } else {
+                "关"
+            };
+            return Ok(format!("摘要：{state}"));
+        };
+        if on && self.place.kind == ConversationKind::Direct {
+            return Ok("跳过：私聊不写摘要".to_owned());
+        }
+        if on && self.shared.historian.is_none() {
+            return Ok("错误：没有配置摘要模型".to_owned());
+        }
+        self.settings.historian = on;
+        self.save_settings().await?;
+        Ok(if on {
+            "已开启摘要：historian 给这个群写摘要，下一次回复起上下文里带上摘要"
+        } else {
+            "已关闭摘要：上下文里只有原始记录"
+        }
+        .to_owned())
     }
 
     async fn proactive(&mut self, on: Option<bool>) -> Result<String> {

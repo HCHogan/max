@@ -28,6 +28,7 @@ use max::config::{self, Config};
 use max::conversation::{Place, Shared};
 use max::dreamer::Dreamer;
 use max::embedding::Embedder;
+use max::historian::{self, Historian};
 use max::llm::Models;
 use max::mcp;
 use max::media::caption::Captioner;
@@ -280,9 +281,27 @@ async fn serve(config: Config) -> Result<()> {
             pool: pool.clone(),
             embedder: Arc::clone(embedder),
         };
-        let rx = rows.subscribe();
+        let (_, rx) = rows.subscribe();
         workers.spawn(move |stop| worker.run(rx, stop));
     }
+    let mut historians = Scope::new();
+    let historian = match models.historian().transpose()? {
+        Some(chosen) => {
+            let historian = Historian {
+                pool: pool.clone(),
+                models: Arc::clone(&models),
+                chosen,
+                offset: config.utc_offset,
+            };
+            let (notices, rx) = rows.subscribe();
+            historians.spawn(move |stop| historian::run(historian, rx, stop));
+            Some(notices)
+        }
+        None => {
+            info!("no historian model: nothing is summarized, /historian on or not");
+            None
+        }
+    };
     let stickers = embedder.as_ref().map(|embedder| {
         let worker = Stickers {
             pool: pool.clone(),
@@ -326,7 +345,7 @@ async fn serve(config: Config) -> Result<()> {
                 store,
                 captions,
             };
-            let rows = rows.subscribe();
+            let (_, rows) = rows.subscribe();
             workers.spawn(move |stop| download.run(rows, stop));
             Some(pictures)
         }
@@ -347,7 +366,7 @@ async fn serve(config: Config) -> Result<()> {
     let linking = match &qq {
         Some(credentials) => {
             let avatars = Arc::new(Avatars::qq(&credentials.app_id)?);
-            Some((avatars, rows.subscribe()))
+            Some((avatars, rows.subscribe().1))
         }
         None => None,
     };
@@ -401,6 +420,7 @@ async fn serve(config: Config) -> Result<()> {
         stop_grace: STOP_GRACE,
         owners,
         binds: Arc::default(),
+        historian,
         rows,
         vms,
         vm_dir,
@@ -470,9 +490,11 @@ async fn serve(config: Config) -> Result<()> {
     conversations
         .close(CONVERSATIONS_GRACE + Duration::from_secs(5))
         .await;
-    // The sender drains once every handle to it is gone.
+    // The sender drains, and the historian stops, once every handle to
+    // them is gone.
     drop(shared);
     senders.close(DRAIN + Duration::from_secs(5)).await;
+    historians.close(Duration::from_secs(5)).await;
     // What they were doing is redone on the next start, or given up.
     workers.close(Duration::ZERO).await;
     // The VMs are killed: what still ran in them was interrupted already.

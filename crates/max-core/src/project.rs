@@ -4,21 +4,26 @@
 //! afterwards.
 //!
 //! Blocks go from the least to the most changeable, so a request shares
-//! the longest prefix with the one before: the system prompt, the raw
-//! tail, then the volatile block (time, roster, memory, quoted rows, the
-//! first inputs). Only a cut of the tail changes the first two. What is
-//! older than the tail, Max searches and reads with its tools.
+//! the longest prefix with the one before: the system prompt, the summary
+//! block where the historian is on, the raw tail, then the volatile block
+//! (time, roster, memory, quoted rows, the first inputs). Only a cut of
+//! the tail or a historian publish changes the first three. What is older
+//! than the tail, Max searches and reads with its tools.
 
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
 use chrono::{DateTime, FixedOffset, Utc};
 
-use crate::ids::PrincipalId;
+use crate::ids::{PrincipalId, SummaryId};
 use crate::item::{Image, Item, ItemKind};
 use crate::message::{Content, MediaKind, Message, Node, Role};
 use crate::render::moment;
 use crate::run::Context;
+
+pub mod decay;
+
+use decay::{Costs, Level};
 
 /// Token budgets for the blocks, from the model's window `C`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +32,7 @@ pub struct Budgets {
     /// little more.
     pub tail_high: u32,
     pub tail_low: u32,
+    pub summaries: u32,
     /// One message, job result or tool result; longer ones show an excerpt.
     pub single: u32,
 }
@@ -37,6 +43,7 @@ impl Budgets {
         Self {
             tail_high,
             tail_low: tail_high / 2,
+            summaries: (window / 32).min(8_000),
             single: (u64::from(window) * 15 / 100).clamp(2_000, 25_000) as u32,
         }
     }
@@ -47,9 +54,12 @@ impl Budgets {
 /// stretches are dropped at once, leaving the low watermark or a little
 /// more, and the caller moves the mark there. The cut points are counted
 /// from the mark, not from the end, so the start stays put while rows
-/// arrive, until the next stretch is due.
-pub fn tail_start(tokens: &[u32], budgets: &Budgets) -> usize {
-    let limit = u64::from(budgets.tail_high);
+/// arrive, until the next stretch is due. Where the historian is on, the
+/// mark is the newest summary's end and the historian keeps the tail in
+/// check; the tail is cut only past twice the high watermark, when the
+/// historian has been failing.
+pub fn tail_start(tokens: &[u32], budgets: &Budgets, summarized: bool) -> usize {
+    let limit = u64::from(budgets.tail_high) * if summarized { 2 } else { 1 };
     let total: u64 = tokens.iter().map(|&t| u64::from(t)).sum();
     if total <= limit {
         return 0;
@@ -66,6 +76,55 @@ pub fn tail_start(tokens: &[u32], budgets: &Budgets) -> usize {
     tokens.len()
 }
 
+/// A summary, as the historian wrote it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Summary {
+    pub id: SummaryId,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: DateTime<Utc>,
+    pub title: String,
+    pub full: String,
+    pub brief: Option<String>,
+    pub line: Option<String>,
+    pub costs: Costs,
+}
+
+/// The summary block, oldest first; empty when every summary is archived.
+pub fn summary_block(summaries: &[Summary], budget: u32, offset: FixedOffset) -> String {
+    let costs: Vec<Costs> = summaries.iter().map(|summary| summary.costs).collect();
+    let mut out = String::new();
+    for (summary, level) in summaries.iter().zip(decay::levels(&costs, budget)) {
+        let Some(level) = level else { continue };
+        if out.is_empty() {
+            out.push_str("[早先的聊天，摘要]\n");
+        } else {
+            out.push('\n');
+        }
+        let span = span(summary.started_at, summary.ended_at, offset);
+        let header = format!("[summary#{} {span}]", summary.id);
+        let _ = match (level, &summary.brief, &summary.line) {
+            (Level::Line, _, Some(line)) => writeln!(out, "{header} {}", line.trim()),
+            (Level::Brief, Some(text), _) => {
+                writeln!(out, "{header} {}\n{}", summary.title, text.trim())
+            }
+            _ => writeln!(out, "{header} {}\n{}", summary.title, summary.full.trim()),
+        };
+    }
+    out
+}
+
+/// `2026-10-03 周六 14:02–16:30`, or with the end's date when it differs.
+pub fn span(started_at: DateTime<Utc>, ended_at: DateTime<Utc>, offset: FixedOffset) -> String {
+    let head = moment(started_at, offset);
+    let start = started_at.with_timezone(&offset);
+    let end = ended_at.with_timezone(&offset);
+    if end.date_naive() == start.date_naive() {
+        format!("{head}–{}", end.format("%H:%M"))
+    } else {
+        format!("{head} – {}", end.format("%m-%d %H:%M"))
+    }
+}
+
 /// `[mention#12] 小明（管理员）`.
 pub fn roster_line(principal: PrincipalId, name: &str, role: Option<Role>, is_max: bool) -> String {
     let name = name.replace(['\n', '\r'], " ");
@@ -78,7 +137,7 @@ pub fn roster_line(principal: PrincipalId, name: &str, role: Option<Role>, is_ma
     format!("[mention#{principal}] {name}{note}")
 }
 
-/// The people a text names with `[mention#N]`, such as the intent's context.
+/// The people a text names with `[mention#N]`, such as in a summary.
 pub fn mentioned(text: &str) -> BTreeSet<PrincipalId> {
     text.match_indices("[mention#")
         .filter_map(|(at, token)| {
@@ -222,7 +281,7 @@ pub fn attach<'m>(
 /// own item, in this order. `count` is `max`'s token estimate.
 pub fn context(
     system: String,
-    blocks: [String; 2],
+    blocks: [String; 3],
     roster: BTreeSet<PrincipalId>,
     count: impl Fn(&str) -> u32,
 ) -> Context {

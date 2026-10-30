@@ -20,6 +20,9 @@ pub enum Command {
     Effort(Option<String>),
     /// `/proactive`, or on, off, default.
     Proactive(Option<bool>),
+    /// `/historian`, or on, off, default (off): whether the historian
+    /// summarizes this conversation.
+    Historian(Option<bool>),
     Persona(Persona),
     /// `/clear --all`; a bare `/clear` is answered with how.
     Clear {
@@ -27,6 +30,8 @@ pub enum Command {
     },
     /// `/unclear`: takes `/clear --all` back.
     Unclear,
+    /// `/compact`: summarize what was said, up to now.
+    Compact,
     /// `/bind`, `/bind <legacy group>` in a private chat, `/bind <code>` in
     /// a group.
     Bind(Option<String>),
@@ -41,9 +46,11 @@ impl Command {
             Command::Model(_) => "model",
             Command::Effort(_) => "effort",
             Command::Proactive(_) => "proactive",
+            Command::Historian(_) => "historian",
             Command::Persona(_) => "persona",
             Command::Clear { .. } => "clear",
             Command::Unclear => "unclear",
+            Command::Compact => "compact",
             Command::Bind(_) => "bind",
         }
     }
@@ -104,6 +111,12 @@ pub fn parse(text: &str) -> Option<Command> {
             Some("off") => Some(false),
             Some(_) => return None,
         }),
+        "historian" => Command::Historian(match argument.as_deref() {
+            None => None,
+            Some("on") => Some(true),
+            Some("off" | "default") => Some(false),
+            Some(_) => return None,
+        }),
         "persona" => Command::Persona(match argument {
             None => Persona::Show,
             Some(text) if ["clear", "reset", "default"].contains(&text.as_str()) => Persona::Reset,
@@ -113,6 +126,7 @@ pub fn parse(text: &str) -> Option<Command> {
             all: argument.as_deref() == Some("--all"),
         },
         "unclear" => Command::Unclear,
+        "compact" => Command::Compact,
         "bind" => Command::Bind(argument),
         _ => return None,
     })
@@ -135,6 +149,12 @@ mod tests {
             Some(Command::Proactive(Some(false)))
         );
         assert_eq!(parse("/proactive maybe"), None);
+        assert_eq!(parse("/historian on"), Some(Command::Historian(Some(true))));
+        assert_eq!(
+            parse("/historian default"),
+            Some(Command::Historian(Some(false)))
+        );
+        assert_eq!(parse("/historian maybe"), None);
         assert_eq!(
             parse("/persona 你是一只猫。\n说话带喵"),
             Some(Command::Persona(Persona::Set(
@@ -152,6 +172,7 @@ mod tests {
         assert_eq!(parse("/clear"), Some(Command::Clear { all: false }));
         assert_eq!(parse("/clear --all"), Some(Command::Clear { all: true }));
         assert_eq!(parse("/unclear"), Some(Command::Unclear));
+        assert_eq!(parse("/compact"), Some(Command::Compact));
         assert_eq!(
             parse("/bind 123456"),
             Some(Command::Bind(Some("123456".into())))

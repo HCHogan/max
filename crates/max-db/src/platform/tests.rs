@@ -131,6 +131,7 @@ async fn settings_default_until_saved(pool: PgPool) -> sqlx::Result<()> {
     let changed = Settings {
         model: Some("fast".into()),
         proactive: false,
+        historian: true,
         ..Settings::default()
     };
     let at = DateTime::from_timestamp(1_800_000_000, 0).unwrap_or_default();
