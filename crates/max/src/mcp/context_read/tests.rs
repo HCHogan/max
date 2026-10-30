@@ -134,11 +134,30 @@ async fn the_rows_around_one(pool: PgPool) {
 
     let other = run(&context, json!({ "id": far.0, "after": 1 })).await;
     assert_eq!(other.unwrap_err().code, "not_found");
+
+    // From a moment on: the first row then, and 50 after it by default.
+    let from = run(&context, json!({ "at": "2026-10-29 12:03", "after": 1 }))
+        .await
+        .unwrap();
+    assert_eq!(
+        from["text"],
+        format!(
+            "--- 2026-10-29 周四 ---\n[12:03 小明 #{}]: 第3句\n[12:04 小明 #{}]: 第4句",
+            ids[2], ids[3]
+        )
+    );
+    let day = run(&context, json!({ "at": "2026-10-29" })).await.unwrap();
+    assert_eq!(day["text"].as_str().unwrap().lines().count(), 6);
+    let later = run(&context, json!({ "at": "2026-10-29 12:06" })).await;
+    assert_eq!(later.unwrap_err().code, "not_found");
+
     for args in [
         json!({}),
         json!({ "id": ids[0], "summary": 1 }),
+        json!({ "id": ids[0], "at": "2026-10-29" }),
         json!({ "summary": 1, "after": 2 }),
         json!({ "id": ids[0], "after": 300 }),
+        json!({ "at": "10-29 12:00" }),
     ] {
         let wrong = run(&context, args).await;
         assert_eq!(wrong.unwrap_err().code, "bad_arguments");

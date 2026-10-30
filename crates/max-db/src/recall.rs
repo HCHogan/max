@@ -19,6 +19,9 @@ pub struct Query<'a> {
     /// Rows sent from `from` and before `until`; summaries that overlap.
     pub from: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
+    /// Rows whose sender's name, lowercased, is like this; with no
+    /// patterns, all of them. Summaries have no sender.
+    pub sender: Option<&'a str>,
     /// The most candidates.
     pub limit: i64,
 }
@@ -27,7 +30,8 @@ pub struct Query<'a> {
 pub type Found<T> = (T, Vec<usize>);
 
 /// Chat rows with any of the terms in their text or in a caption of their
-/// pictures or stickers: the most terms first, then the newest. Commands,
+/// pictures or stickers, or with no terms all the sender's: the most terms
+/// first, then the newest. Commands,
 /// events and rows taken back are left out. What /clear --all hid from
 /// the context is not.
 pub async fn messages(
@@ -52,6 +56,10 @@ pub async fn messages(
             join message_media mm on mm.sha256 = c.sha256
             join messages m on m.id = mm.message_id
             where lower(c.text) like any($2) and m.conversation_id = $1
+            union
+            select id from messages
+            where conversation_id = $1 and cardinality($2::text[]) = 0
+              and lower(sender_name) like $6
         ), bodies as materialized (
             select m.id, concat_ws(E'\n', lower(m.text), (
                 select string_agg(lower(c.text), E'\n')
@@ -63,6 +71,7 @@ pub async fn messages(
               and m.conversation_id = $1 and m.kind = 'chat'
               and ($3::timestamptz is null or m.sent_at >= $3)
               and ($4::timestamptz is null or m.sent_at < $4)
+              and ($6::text is null or lower(m.sender_name) like $6)
               and not exists (
                   select from messages u where u.target_id = m.id and u.event = 'unsend'
               )
@@ -81,7 +90,8 @@ pub async fn messages(
         query.patterns,
         query.from,
         query.until,
-        query.limit
+        query.limit,
+        query.sender
     )
     .fetch_all(&mut *tx)
     .await?;
@@ -164,6 +174,7 @@ pub async fn near_messages(
         where e.conversation_id = $1 and e.model = $2 and m.kind = 'chat'
           and ($4::timestamptz is null or m.sent_at >= $4)
           and ($5::timestamptz is null or m.sent_at < $5)
+          and ($7::text is null or lower(m.sender_name) like $7)
           and not exists (select from messages u where u.target_id = m.id and u.event = 'unsend')
         order by e.embedding <=> $3::float4[]::halfvec
         limit $6
@@ -173,7 +184,8 @@ pub async fn near_messages(
         vector as &[f32],
         query.from,
         query.until,
-        query.limit
+        query.limit,
+        query.sender
     )
     .fetch_all(&mut *tx)
     .await?;

@@ -74,6 +74,7 @@ fn query(conversation: ConversationId, patterns: &[String]) -> Query<'_> {
         patterns,
         from: None,
         until: None,
+        sender: None,
         limit: 10,
     }
 }

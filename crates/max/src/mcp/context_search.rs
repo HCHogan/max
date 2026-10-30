@@ -2,7 +2,8 @@
 //! terms are, among its rows (with their pictures' and stickers' captions)
 //! and its summaries, and what there is near it by meaning; each result
 //! says how `context_read` reads it. A term is found as written, ignoring
-//! case. See "召回".
+//! case. Given a sender, only their rows, and with no query the newest of
+//! them. See "召回".
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -48,7 +49,8 @@ static SLOTS: Semaphore = Semaphore::const_new(4);
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Args {
-    query: String,
+    query: Option<String>,
+    who: Option<String>,
     limit: Option<usize>,
     from: Option<String>,
     to: Option<String>,
@@ -100,15 +102,29 @@ struct Candidate {
 pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let Args {
         query,
+        who,
         limit,
         from,
         to,
     } = arguments("context_search", args)?;
-    let terms = terms(&query)?;
+    let terms = match (&query, &who) {
+        (Some(query), _) => terms(query)?,
+        (None, Some(_)) => Vec::new(),
+        (None, None) => {
+            return Err(Failure::new(
+                "bad_arguments",
+                "context_search 要 query 或者 who",
+            ));
+        }
+    };
+    let sender = who.as_deref().map(sender).transpose()?;
     let limit = limit.unwrap_or(DEFAULT).clamp(1, MOST);
     let (from, until) = window(from.as_deref(), to.as_deref(), context.services.offset)?;
     let patterns: Vec<String> = terms.iter().map(|term| pattern(term)).collect();
-    let meaning = meaning(context, &query).await;
+    let meaning = match &query {
+        Some(query) => meaning(context, query).await,
+        None => None,
+    };
 
     let _slot = SLOTS.acquire().await;
     let mut conn = context.services.pool.acquire().await?;
@@ -119,16 +135,19 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
         patterns: &patterns,
         from,
         until,
+        sender: sender.as_deref(),
         // Room for the copies of one message that count as one.
         limit: i64::try_from(limit * 3).unwrap_or(i64::MAX),
     };
     let meaning = meaning.as_ref();
     let mut hits = row_hits(&mut conn, context, &query, &terms, meaning).await?;
-    let query = Query {
-        limit: i64::try_from(limit).unwrap_or(i64::MAX),
-        ..query
-    };
-    hits.extend(summary_hits(&mut conn, context, &query, &terms, meaning).await?);
+    if query.sender.is_none() {
+        let query = Query {
+            limit: i64::try_from(limit).unwrap_or(i64::MAX),
+            ..query
+        };
+        hits.extend(summary_hits(&mut conn, context, &query, &terms, meaning).await?);
+    }
     Ok(json!({ "results": choose(hits, limit) }))
 }
 
@@ -305,6 +324,18 @@ fn terms(query: &str) -> Result<Vec<String>, Failure> {
         ));
     }
     Ok(terms)
+}
+
+/// The pattern for a sender's name that has `who` in it.
+fn sender(who: &str) -> Result<String, Failure> {
+    let who: String = fold(who.trim()).into_iter().collect();
+    if who.is_empty() || who.chars().count() > TERM_CHARS {
+        return Err(Failure::new(
+            "bad_arguments",
+            format!("who 是名字里的几个字，最多 {TERM_CHARS} 个"),
+        ));
+    }
+    Ok(pattern(&who))
 }
 
 /// `text` lowercased a character at a time, as Postgres's `lower` does, so

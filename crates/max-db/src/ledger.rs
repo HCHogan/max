@@ -408,6 +408,23 @@ pub async fn around(
     Ok(ids.into_iter().map(MessageId).collect())
 }
 
+/// The first row of the conversation sent at or after `at`.
+pub async fn first_since(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    at: DateTime<Utc>,
+) -> sqlx::Result<Option<MessageId>> {
+    let id = sqlx::query_scalar!(
+        "select id from messages where conversation_id = $1 and sent_at >= $2
+         order by sent_at, id limit 1",
+        conversation.0,
+        at
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(id.map(MessageId))
+}
+
 /// The row a platform id names in this endpoint: someone's message, or
 /// one Max sent.
 pub async fn by_native_id(

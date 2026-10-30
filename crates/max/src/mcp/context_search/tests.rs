@@ -10,7 +10,7 @@ use max_db::vectors::{self, Key};
 use sqlx::{PgConnection, PgPool};
 
 use super::*;
-use crate::conversation::testing::{at, from_xiaoming, group, offset, text};
+use crate::conversation::testing::{at, from_xiaohong, from_xiaoming, group, offset, text};
 use crate::conversation::{Place, ingest};
 use crate::embedding::testing::{serve, vector};
 use crate::inbound::InNode;
@@ -276,6 +276,57 @@ async fn rows_and_summaries_with_their_read(pool: PgPool) {
 
     let empty = super::super::call("context_search", &context, json!({ "query": " " })).await;
     assert_eq!(empty.unwrap_err().code, "bad_arguments");
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn by_who_said_it(pool: PgPool) {
+    let mut conn = pool.acquire().await.unwrap();
+    let place = Arc::new(group(&mut conn).await);
+    let mut ids = Vec::new();
+    for (n, red, words) in [
+        (1, true, "部署好了"),
+        (2, false, "部署呢"),
+        (3, true, "吃饭去"),
+    ] {
+        let nodes = vec![text(words)];
+        let inbound = if red {
+            from_xiaohong(n, nodes)
+        } else {
+            from_xiaoming(n, nodes)
+        };
+        let committed = ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
+            .await
+            .unwrap();
+        ids.push(committed.message.id.0);
+    }
+    drop(conn);
+    let context = Context {
+        services: Arc::new(Services::bare(pool.clone())),
+        place: Arc::clone(&place),
+        page_tokens: 2000,
+        work: None,
+        caller: Caller::Check,
+    };
+    let refs = async |args: Value| -> Vec<String> {
+        let found = run(&context, args).await.unwrap();
+        let results = found["results"].as_array().unwrap().iter();
+        results
+            .map(|result| result["ref"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    // With no query, the newest of what they said.
+    let said = refs(json!({ "who": "红" })).await;
+    assert_eq!(said, [format!("#{}", ids[2]), format!("#{}", ids[0])]);
+    let said = refs(json!({ "query": "部署", "who": "小红" })).await;
+    assert_eq!(said, [format!("#{}", ids[0])]);
+    let said = refs(json!({ "who": "小红", "from": "2026-10-30" })).await;
+    assert!(said.is_empty());
+
+    for args in [json!({}), json!({ "who": " " }), json!({ "limit": 3 })] {
+        let wrong = run(&context, args).await;
+        assert_eq!(wrong.unwrap_err().code, "bad_arguments");
+    }
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

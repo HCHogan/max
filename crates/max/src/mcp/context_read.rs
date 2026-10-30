@@ -1,9 +1,12 @@
 //! `context_read`: in full, a page at a time, what the context shows only
-//! in part: a row's whole line, the rows around one, or a summary. The
-//! context shows an over-long row's start only (see "后续输入"), and old
-//! summaries a line or nothing (see "衰减"); `context_search` points here.
+//! in part: a row's whole line, the rows around one or from a moment on,
+//! or a summary. The context shows an over-long row's start only (see
+//! "后续输入"), and old summaries a line or nothing (see "衰减");
+//! `context_search` points here.
 
 use std::collections::BTreeSet;
+
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
 use max_core::ids::{MessageId, SummaryId};
 use max_core::message::Message;
@@ -25,6 +28,7 @@ const MOST_AROUND: u8 = 50;
 struct Args {
     id: Option<i64>,
     summary: Option<i64>,
+    at: Option<String>,
     before: Option<u8>,
     after: Option<u8>,
     page: Option<usize>,
@@ -33,26 +37,33 @@ struct Args {
 pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let args: Args = arguments("context_read", args)?;
     let around = (args.before.unwrap_or(0), args.after.unwrap_or(0));
-    let (what, pages) = match (args.id, args.summary) {
-        (Some(id), None) if around == (0, 0) => (format!("#{id}"), row(context, id).await?),
-        (Some(id), None) => {
+    let (what, pages) = match (args.id, args.summary, args.at) {
+        (Some(id), None, None) if around == (0, 0) => (format!("#{id}"), row(context, id).await?),
+        (Some(id), None, None) => {
             let (before, after) = (around.0.min(MOST_AROUND), around.1.min(MOST_AROUND));
             let pages = rows(context, id, before, after).await?;
             (format!("#{id} 前后"), pages)
         }
-        (None, Some(id)) if around == (0, 0) => {
+        (None, None, Some(at)) => {
+            let id = first_since(context, &at).await?;
+            let before = around.0.min(MOST_AROUND);
+            let after = args.after.unwrap_or(MOST_AROUND).min(MOST_AROUND);
+            let pages = rows(context, id.0, before, after).await?;
+            (format!("{} 起", at.trim()), pages)
+        }
+        (None, Some(id), None) if around == (0, 0) => {
             (format!("summary#{id}"), summary(context, id).await?)
         }
-        (None, Some(_)) => {
+        (None, Some(_), None) => {
             return Err(Failure::new(
                 "bad_arguments",
-                "before、after 只能和 id 一起用",
+                "before、after 只能和 id 或者 at 一起用",
             ));
         }
         _ => {
             return Err(Failure::new(
                 "bad_arguments",
-                "context_read 要 id 或者 summary，二选一",
+                "context_read 要 id、at、summary 三选一",
             ));
         }
     };
@@ -68,6 +79,36 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
 
 fn not_found(id: i64) -> Failure {
     Failure::new("not_found", format!("这里没有 #{id} 这条消息"))
+}
+
+/// The first row sent at or after `at`, a local `YYYY-MM-DD HH:MM` or a
+/// day's midnight.
+async fn first_since(context: &Context, at: &str) -> Result<MessageId, Failure> {
+    let instant = instant(at, context.services.offset)?;
+    let mut conn = context.services.pool.acquire().await?;
+    ledger::first_since(&mut conn, context.place.conversation, instant)
+        .await?
+        .ok_or_else(|| Failure::new("not_found", format!("{} 之后没有消息", at.trim())))
+}
+
+fn instant(at: &str, offset: FixedOffset) -> Result<DateTime<Utc>, Failure> {
+    let at = at.trim();
+    let wrong = || {
+        Failure::new(
+            "bad_arguments",
+            format!("at 要写成 YYYY-MM-DD 或者 YYYY-MM-DD HH:MM，不是 {at:?}"),
+        )
+    };
+    let local = NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M")
+        .or_else(|_| {
+            NaiveDate::parse_from_str(at, "%Y-%m-%d").map(|day| day.and_time(NaiveTime::MIN))
+        })
+        .map_err(|_| wrong())?;
+    let instant = offset
+        .from_local_datetime(&local)
+        .single()
+        .ok_or_else(wrong)?;
+    Ok(instant.to_utc())
 }
 
 /// One row's whole line, cut evenly into pages.
