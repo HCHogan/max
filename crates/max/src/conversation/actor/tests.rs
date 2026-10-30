@@ -195,6 +195,25 @@ fn at_max(n: u32, said: &str) -> Inbound {
     from_xiaoming(n, vec![me(), text(said)])
 }
 
+/// The usage of a model call that can't be recorded: the turn goes on,
+/// and so does the conversation.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn an_unrecorded_usage_holds_nothing_up(pool: PgPool) {
+    sqlx::query("alter table llm_usage add constraint never check (false) not valid")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut h = Harness::new(pool, 300).await;
+    h.script.push(Answer::says("在的"));
+    h.send(at_max(0, " 在吗"));
+    assert_eq!(h.said().await.1, "在的");
+    h.script.push(Answer::says("还在"));
+    h.send(at_max(1, " 还在吗"));
+    assert_eq!(h.said().await.1, "还在");
+    h.stop().await;
+    assert_eq!(h.count("select count(*) from llm_usage").await, 0);
+}
+
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn an_at_wakes_a_core_that_answers(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;

@@ -29,7 +29,7 @@ use super::{Act, Event, Place, Post, Poster, Receipt, TaskId, classify, model, t
 use crate::bind::Binds;
 use crate::historian::Notice;
 use crate::inbound::Inbound;
-use crate::llm::{Chosen, Models};
+use crate::llm::{self, Chosen, Models};
 use crate::mcp;
 use crate::media::pictures::Pictures;
 use crate::scope::Scope;
@@ -606,17 +606,17 @@ impl Conversation {
         };
         a.said.clear();
         a.idle_since = Instant::now();
+        let used = out.usage;
+        if let Err(rejected) = a.run.model_output(out) {
+            warn!(turn = %a.turn, %rejected, "a model output didn't fit");
+        }
         let call = a.chosen.usage(
             usage::Purpose::Turn,
             Some(self.place.conversation),
             Some(a.turn),
-            out.usage,
+            used,
         );
-        let mut conn = self.shared.services.pool.acquire().await?;
-        usage::record(&mut conn, &call).await?;
-        if let Err(rejected) = a.run.model_output(out) {
-            warn!(turn = %a.turn, %rejected, "a model output didn't fit");
-        }
+        llm::record(&self.shared.services.pool, &call).await;
         Ok(())
     }
 

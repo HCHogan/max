@@ -16,6 +16,7 @@ use max_core::item::{ItemKind, ModelTag, Protocol, Usage};
 use max_core::run::Request;
 use max_db::{PgPool, usage};
 use max_llm::{Call, Options, Pictures};
+use tracing::warn;
 
 use crate::config;
 
@@ -110,9 +111,7 @@ impl Chosen {
         })
         .await
         .map_err(|_| eyre!("no answer in {limit:?}"))??;
-        let mut conn = pool.acquire().await?;
-        let record = self.usage(purpose, conversation, None, out.usage);
-        usage::record(&mut conn, &record).await?;
+        record(pool, &self.usage(purpose, conversation, None, out.usage)).await;
         Ok(out
             .items
             .iter()
@@ -271,6 +270,19 @@ impl Models {
             idle_window: Duration::from_secs(provider.idle_window_secs),
             caller: Arc::clone(&self.callers[name]),
         })
+    }
+}
+
+/// Records a model call's usage. What the call gave is used whether or
+/// not its record goes in: one that doesn't is logged and let be, for a
+/// turn, a job and work outside a turn alike.
+pub async fn record(pool: &PgPool, call: &usage::Call<'_>) {
+    let recorded = async {
+        let mut conn = pool.acquire().await?;
+        usage::record(&mut conn, call).await
+    };
+    if let Err(error) = recorded.await {
+        warn!(purpose = ?call.purpose, %error, "couldn't record a model call's usage");
     }
 }
 

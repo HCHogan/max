@@ -253,13 +253,7 @@ impl Watch for Recorder {
             cost_micros: None,
             at: Utc::now(),
         };
-        let recorded = async {
-            let mut conn = self.pool.acquire().await?;
-            usage::record(&mut conn, &call).await
-        };
-        if let Err(error) = recorded.await {
-            warn!(%error, "couldn't record a job's model call");
-        }
+        crate::llm::record(&self.pool, &call).await;
     }
 
     fn tool(&mut self, name: &str) {
