@@ -157,7 +157,8 @@ pub struct Run {
     phase: Phase,
     round: u32,
     /// The provider's count for the last request and its output, and how
-    /// much of the transcript that covers.
+    /// much of the transcript that covers. A provider that doesn't count
+    /// leaves the one before.
     measured: Option<(u32, usize)>,
     /// The wakes since the run was last waiting, the first ones included:
     /// the model hasn't finished with them.
@@ -251,10 +252,14 @@ impl Run {
     /// due next, and a malformed one gets an error result here.
     pub fn model_output(&mut self, out: ModelOutput) -> Result<(), Rejected> {
         self.calling()?;
-        self.measured = Some((
-            out.usage.input + out.usage.output,
-            self.transcript.len() + out.items.len(),
-        ));
+        // No request is empty: a count of nothing is no count, and taking it
+        // would drop everything before it from the size.
+        if out.usage.input > 0 {
+            self.measured = Some((
+                out.usage.input + out.usage.output,
+                self.transcript.len() + out.items.len(),
+            ));
+        }
         let mut due = Vec::new();
         let mut errors = Vec::new();
         for item in &out.items {

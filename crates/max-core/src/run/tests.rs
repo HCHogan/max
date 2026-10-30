@@ -327,6 +327,23 @@ fn the_limit_counts_waiting_inputs() {
 }
 
 #[test]
+fn an_output_without_usage_keeps_the_estimates() {
+    let mut run = Run::new(spec(10_000, None), base(1_000), vec![Input::Wake(wake(1))]);
+    call_model(&mut run);
+    let uncounted = ModelOutput {
+        usage: Usage::default(),
+        ..calls(&[("a", "shell")])
+    };
+    run.model_output(uncounted).unwrap();
+    run_tools(&mut run);
+    run.tool_result(CallId("a".into()), result(4_500)).unwrap();
+    assert!(!run.at_limit());
+    // The base still counts: 1,000 + 10 + 4,500 + 600 is past 6k.
+    run.input(messages(2, 600)).unwrap();
+    assert!(run.at_limit());
+}
+
+#[test]
 fn a_trigger_is_handled_at_the_next_output_without_tools() {
     let mut run = Run::new(spec(400_000, None), base(100), vec![Input::Wake(wake(1))]);
     call_model(&mut run);
