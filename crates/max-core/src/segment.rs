@@ -13,6 +13,13 @@
 //! as all at once. (The Haskell version also released long paragraphs at
 //! sentence ends while streaming, which made the result depend on timing.)
 //!
+//! Once a line is a Markdown heading, the reply has turned into a document
+//! and is sent by sections: a heading starts a message, and blank lines no
+//! longer cut, so a section goes out whole, as QQ renders it. A thematic
+//! break (`---`) cuts wherever it is and is never sent. On 10-30 a long
+//! answer went out as a heading, a table and an empty-looking `---`, each
+//! a message of its own.
+//!
 //! `<think>` spans are dropped before anything else, including everything
 //! after an unclosed one: some relays put reasoning in the text.
 
@@ -82,6 +89,8 @@ pub struct Chunker {
     lines: Vec<String>,
     in_fence: bool,
     thinking: bool,
+    /// A heading came: cut at headings, not at blank lines.
+    sections: bool,
 }
 
 impl Chunker {
@@ -118,9 +127,19 @@ impl Chunker {
             self.lines.push(line.to_owned());
         } else if self.in_fence {
             self.lines.push(line.to_owned());
-        } else if line.trim().is_empty() {
+        } else if is_break(line) {
             self.cut(out);
+        } else if line.trim().is_empty() {
+            if !self.sections {
+                self.cut(out);
+            } else if self.lines.last().is_some_and(|last| !last.is_empty()) {
+                self.lines.push(String::new());
+            }
         } else {
+            if is_heading(line) {
+                self.cut(out);
+                self.sections = true;
+            }
             let mut rest = line;
             while let Some((at, len, picture)) = next_cut(rest) {
                 self.lines.push(rest[..at].to_owned());
@@ -176,6 +195,19 @@ impl Chunker {
 
 pub(crate) fn is_fence(line: &str) -> bool {
     line.trim_start().starts_with("```")
+}
+
+/// `### 标题`: one to six `#`, a space, then something.
+fn is_heading(line: &str) -> bool {
+    let marks = line.bytes().take_while(|b| *b == b'#').count();
+    let rest = &line[marks..];
+    (1..=6).contains(&marks) && rest.starts_with([' ', '\t']) && !rest.trim().is_empty()
+}
+
+/// `---`, `***`, `___`, spaces allowed between.
+fn is_break(line: &str) -> bool {
+    let marks: Vec<char> = line.chars().filter(|c| !c.is_whitespace()).collect();
+    marks.len() >= 3 && matches!(marks[0], '-' | '*' | '_') && marks.iter().all(|c| *c == marks[0])
 }
 
 /// The inline code spans in a line, backticks included: a run of
@@ -256,6 +288,28 @@ mod tests {
     }
 
     #[test]
+    fn a_document_goes_by_sections() {
+        let text = "[reply#3] 先说结论：\n\n两样都行。\n\n---\n\n### 一、对比\n\n| 工具 | 用法 |\n| --- | --- |\n| nvd | diff |\n\n表格说明。\n\n\n### 二、列表\n1. 第一\n\n   - 细节\n2. 第二\n***\n收尾[split]另一条";
+        assert_eq!(
+            chunks(text),
+            [
+                "[reply#3] 先说结论：",
+                "两样都行。",
+                "### 一、对比\n\n| 工具 | 用法 |\n| --- | --- |\n| nvd | diff |\n\n表格说明。",
+                "### 二、列表\n1. 第一\n\n   - 细节\n2. 第二",
+                "收尾",
+                "另一条"
+            ]
+        );
+        // Not headings, or not breaks: cut at blank lines as before.
+        assert_eq!(
+            chunks("#123 呢\n\n#\n\n--\n\n- - x"),
+            ["#123 呢", "#", "--", "- - x"]
+        );
+        assert_eq!(chunks("```\n---\n# 注释\n```"), ["```\n---\n# 注释\n```"]);
+    }
+
+    #[test]
     fn split_cuts_anywhere_on_a_line() {
         assert_eq!(chunks("一[split]二\n三[split]"), ["一", "二\n三"]);
         assert_eq!(chunks("[split][split]一[split]  [split]二"), ["一", "二"]);
@@ -331,8 +385,9 @@ mod tests {
     /// Streaming in any two pieces gives the same chunks as all at once.
     #[test]
     fn streaming_is_invisible() {
-        let text = "<think>想\n\n想</think>开头\n\n```py\nx = 1\n\ny = 2\n```\n中间[split]后面[sticker#4.0: 狗]\n\n\n结尾";
+        let text = "<think>想\n\n想</think>开头\n\n```py\nx = 1\n\ny = 2\n```\n中间[split]后面[sticker#4.0: 狗]\n\n\n结尾\n---\n## 一\n\n甲\n\n### 二\n乙";
         let whole = chunks(text);
+        assert_eq!(whole.last().map(String::as_str), Some("### 二\n乙"));
         for (at, _) in text.char_indices() {
             let mut chunker = Chunker::default();
             let mut out = chunker.push(&text[..at]);
