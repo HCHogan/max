@@ -1,21 +1,20 @@
 //! Projecting a new core's base context from the ledger, and rendering
 //! what comes in later for a running core. max-core lays the blocks out;
-//! this reads the rows and summaries they are made of.
+//! this reads the rows they are made of, and moves the tail's mark on when
+//! the tail is cut.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, FixedOffset, Utc};
-use max_core::ids::{IdentityId, MessageId, PrincipalId, SummaryId};
+use max_core::ids::{IdentityId, MessageId, PrincipalId};
 use max_core::intent::Reason;
 use max_core::item::{Item, ItemKind};
 use max_core::message::{Content, MentionTarget, Message, Node, Role};
-use max_core::project::decay::Costs;
-use max_core::project::{self, Budgets, Summary, Volatile};
+use max_core::project::{self, Budgets, Volatile};
 use max_core::render::{Mark, Render};
 use max_core::run::{Context, Input, Wake};
 use max_db::ledger::{self, Delivery, Row};
 use max_db::platform::{self, ConversationKind};
-use max_db::summaries;
 use sqlx::PgConnection;
 
 use super::Place;
@@ -36,7 +35,8 @@ pub struct Projection<'a> {
 
 impl Projection<'_> {
     /// The base context as of `from`, the wakes that start the core
-    /// rendered in it as its first inputs.
+    /// rendered in it as its first inputs. When the tail has grown past
+    /// its high watermark, it is cut and its mark saved.
     pub async fn base(
         &self,
         conn: &mut PgConnection,
@@ -46,22 +46,38 @@ impl Projection<'_> {
         let budgets = Budgets::for_window(self.window);
         let conversation = self.place.conversation;
 
-        let active = summaries::active(conn, conversation, self.cleared_upto).await?;
-        let cursor = active
-            .last()
-            .map(|(_, summary)| summary.last)
+        let cursor = platform::tail_after(conn, conversation)
+            .await?
             .max(self.cleared_upto);
-        let summaries: Vec<Summary> = active.into_iter().map(summary).collect();
-        let summary_block = project::summary_block(&summaries, budgets.summaries, self.offset);
 
         let trigger_ids: BTreeSet<MessageId> = wakes
             .iter()
             .flat_map(|wake| wake.ids.iter().copied())
             .collect();
         let rows = ledger::rows(conn, conversation, cursor, from).await?;
-        let (triggers, tail): (Vec<Row>, Vec<Row>) = rows
+        let (triggers, mut tail): (Vec<Row>, Vec<Row>) = rows
             .into_iter()
             .partition(|row| trigger_ids.contains(&row.message.id));
+
+        // The tail is cut first: what it drops is not shown, its people
+        // are not in the roster, and a row that quotes it quotes it.
+        let tail_people = people(conn, tail.iter().map(|row| &row.message), self.place).await?;
+        let render = Render {
+            people: &tail_people,
+            offset: self.offset,
+        };
+        let costs: Vec<u32> = tail
+            .iter()
+            .map(|row| {
+                let line = shown_line(&render, &row.message, delivery_mark(row), budgets.single);
+                tokens::count(&line)
+            })
+            .collect();
+        let start = project::tail_start(&costs, &budgets);
+        if let Some(last_cut) = start.checked_sub(1).and_then(|last| tail.get(last)) {
+            platform::set_tail_after(conn, conversation, last_cut.message.id).await?;
+        }
+        tail.drain(..start);
 
         let mut quoted_ids = BTreeSet::new();
         let shown: BTreeSet<MessageId> = tail
@@ -99,9 +115,7 @@ impl Projection<'_> {
                 (&row.message, line)
             })
             .collect();
-        let costs: Vec<u32> = lines.iter().map(|(_, line)| tokens::count(line)).collect();
-        let start = project::tail_start(&costs, &budgets);
-        let tail_text = joined(&render, &lines[start..], None);
+        let tail_text = joined(&render, &lines, None);
 
         let mut first_lines = Vec::new();
         for row in &triggers {
@@ -109,7 +123,7 @@ impl Projection<'_> {
             let line = shown_line(&render, &row.message, mark, budgets.single);
             first_lines.push((&row.message, line));
         }
-        let last_shown = lines[start..].last().map(|(message, _)| message.at);
+        let last_shown = lines.last().map(|(message, _)| message.at);
         let mut first_text = joined(&render, &first_lines, last_shown);
         for wake in wakes {
             if let Some(Item {
@@ -132,7 +146,6 @@ impl Projection<'_> {
         let quoted_text = joined(&render, &quoted_lines, None);
 
         let mut roster: BTreeSet<PrincipalId> = people.values().copied().collect();
-        roster.extend(project::mentioned(&summary_block));
         roster.insert(self.place.me.principal);
         let volatile = Volatile {
             now: self.now,
@@ -143,7 +156,7 @@ impl Projection<'_> {
         };
         let mut context = project::context(
             self.system.clone(),
-            [summary_block, tail_text, volatile.render(self.offset)],
+            [tail_text, volatile.render(self.offset)],
             roster,
             tokens::count,
         );
@@ -243,25 +256,6 @@ pub fn judged(reason: &Reason) -> Option<Item> {
     let text = format!("[判定：{note}]");
     let tokens = tokens::count(&text);
     Some(Item::new(ItemKind::user(text), tokens))
-}
-
-/// A summary as the database has it, as the projection renders it.
-pub(crate) fn summary((id, summary): (SummaryId, summaries::Summary)) -> Summary {
-    Summary {
-        id,
-        started_at: summary.started_at,
-        ended_at: summary.ended_at,
-        costs: Costs {
-            importance: summary.importance,
-            full: tokens::count(&summary.full),
-            brief: summary.brief.as_deref().map(tokens::count),
-            line: summary.line.as_deref().map(tokens::count),
-        },
-        title: summary.title,
-        full: summary.full,
-        brief: summary.brief,
-        line: summary.line,
-    }
 }
 
 /// What became of Max's row, if it didn't reach the platform.

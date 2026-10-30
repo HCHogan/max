@@ -15,23 +15,18 @@ fn utc(month: u32, day: u32, hour: u32, minute: u32) -> DateTime<Utc> {
 fn budgets_follow_the_window() {
     let huge = Budgets::for_window(1_048_576);
     assert_eq!(
-        (huge.tail_high, huge.tail_low, huge.summaries, huge.single),
-        (128_000, 64_000, 8_000, 25_000)
+        (huge.tail_high, huge.tail_low, huge.single),
+        (128_000, 64_000, 25_000)
     );
     let big = Budgets::for_window(256_000);
     assert_eq!(
-        (big.tail_high, big.tail_low, big.summaries, big.single),
-        (32_000, 16_000, 8_000, 25_000)
+        (big.tail_high, big.tail_low, big.single),
+        (32_000, 16_000, 25_000)
     );
     let small = Budgets::for_window(32_000);
     assert_eq!(
-        (
-            small.tail_high,
-            small.tail_low,
-            small.summaries,
-            small.single
-        ),
-        (4_000, 2_000, 1_000, 4_800)
+        (small.tail_high, small.tail_low, small.single),
+        (4_000, 2_000, 4_800)
     );
     assert_eq!(Budgets::for_window(8_000).single, 2_000);
 }
@@ -41,67 +36,19 @@ fn the_tail_is_cut_in_whole_stretches() {
     let budgets = Budgets {
         tail_high: 100,
         tail_low: 50,
-        summaries: 0,
         single: 0,
     };
     let rows = |n| vec![10; n];
-    assert_eq!(tail_start(&rows(20), &budgets), 0);
-    // Over 200: drop 150, leaving the low watermark and a bit.
-    assert_eq!(tail_start(&rows(21), &budgets), 15);
+    assert_eq!(tail_start(&rows(10), &budgets), 0);
+    // Over 100: drop 50, leaving the low watermark and a bit.
+    assert_eq!(tail_start(&rows(11), &budgets), 5);
     // The start stays put as rows arrive...
-    assert_eq!(tail_start(&rows(35), &budgets), 15);
-    // ...until the tail is over 200 again.
-    assert_eq!(tail_start(&rows(36), &budgets), 30);
+    assert_eq!(tail_start(&rows(15), &budgets), 5);
+    // ...until the tail is over 100 again.
+    assert_eq!(tail_start(&rows(16), &budgets), 10);
+    // Far over, as before the first cut: the low watermark or more.
+    assert_eq!(tail_start(&rows(1_000), &budgets), 990);
     assert_eq!(tail_start(&[1_000], &budgets), 1);
-}
-
-#[test]
-fn summaries_render_at_their_level() {
-    let old = Summary {
-        id: SummaryId(1),
-        started_at: utc(10, 3, 6, 2),
-        ended_at: utc(10, 3, 8, 30),
-        title: "去重庆玩的计划".into(),
-        full: "小明和小红商量了……".into(),
-        brief: Some("定了国庆去重庆。".into()),
-        line: Some("10 月 3 日商量国庆去重庆".into()),
-        costs: Costs {
-            importance: 1,
-            full: 300,
-            brief: Some(100),
-            line: Some(20),
-        },
-    };
-    let imported = Summary {
-        id: SummaryId(2),
-        started_at: utc(10, 3, 15, 10),
-        ended_at: utc(10, 3, 17, 20),
-        title: "深夜修 bug".into(),
-        full: "  [mention#12] 修好了登录。\n".into(),
-        brief: None,
-        line: None,
-        costs: Costs {
-            importance: 50,
-            full: 40,
-            brief: None,
-            line: None,
-        },
-    };
-    let summaries = [old, imported];
-    // Tight: the old one is down to a line.
-    assert_eq!(
-        summary_block(&summaries, 34, china()),
-        "[早先的聊天，摘要]\n\
-         [summary#1 2026-10-03 周六 14:02–16:30] 10 月 3 日商量国庆去重庆\n\
-         \n\
-         [summary#2 2026-10-03 周六 23:10 – 10-04 01:20] 深夜修 bug\n\
-         [mention#12] 修好了登录。\n"
-    );
-    // Roomy: in full.
-    assert!(
-        summary_block(&summaries, 10_000, china()).contains("去重庆玩的计划\n小明和小红商量了……")
-    );
-    assert_eq!(summary_block(&[], 100, china()), "");
 }
 
 #[test]
@@ -152,7 +99,7 @@ fn the_base_context() {
     );
     let context = context(
         "你是 Max".into(),
-        [String::new(), "--- 2026-10-28 周三 ---\n".into(), volatile],
+        ["--- 2026-10-28 周三 ---\n".into(), volatile],
         [PrincipalId(12)].into(),
         |text| text.chars().count() as u32,
     );

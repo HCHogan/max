@@ -8,7 +8,7 @@ use max_core::ids::ConversationId;
 use max_core::item::ItemKind;
 use max_core::message::{Content, Node};
 use max_core::run::Outcome;
-use max_db::{PgPool, summaries};
+use max_db::PgPool;
 use tokio::sync::{mpsc, oneshot};
 
 use serde_json::json;
@@ -435,35 +435,6 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     assert_eq!(
         h.said().await.1,
         command::answer("unclear", "跳过：没有清空过")
-    );
-    // Cleared again, and the historian has summed up since.
-    h.send(from_xiaohong(7, vec![me(), text("/clear --all")]));
-    let (answered, _) = h.said().await;
-    let summary = summaries::Summary {
-        first: answered.id,
-        last: answered.id,
-        started_at: answered.at,
-        ended_at: answered.at,
-        title: "清空以后".into(),
-        kind: "chat".into(),
-        importance: 10,
-        full: "清空以后聊的".into(),
-        brief: None,
-        line: None,
-    };
-    let mut conn = h.pool.acquire().await.unwrap();
-    let conversation = answered.conversation;
-    summaries::insert(&mut conn, conversation, &summary, "m", Utc::now())
-        .await
-        .unwrap();
-    drop(conn);
-    h.send(from_xiaohong(8, vec![me(), text("/unclear")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer(
-            "unclear",
-            "已恢复：清空前的摘要回到上下文；清空时还没写成摘要的那段不回来，context_search 搜得到"
-        )
     );
     h.stop().await;
     assert_eq!(h.script.calls(), 0);

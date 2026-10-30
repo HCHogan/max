@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update conversations set tail_after = $2 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "da5829162e71da05ea0838a3d8f671f7b15023641b07414aa428cc93f8e941ac"
+}

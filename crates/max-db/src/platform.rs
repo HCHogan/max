@@ -531,6 +531,35 @@ pub async fn settings(
     }))
 }
 
+/// The row the conversation's raw tail starts after, if it was ever cut.
+pub async fn tail_after(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+) -> sqlx::Result<Option<MessageId>> {
+    let after = sqlx::query_scalar!(
+        "select tail_after from conversations where id = $1",
+        conversation.0
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(after.flatten().map(MessageId))
+}
+
+pub async fn set_tail_after(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    after: MessageId,
+) -> sqlx::Result<()> {
+    sqlx::query!(
+        "update conversations set tail_after = $2 where id = $1",
+        conversation.0,
+        after.0
+    )
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
 pub async fn save_settings(
     conn: &mut PgConnection,
     conversation: ConversationId,

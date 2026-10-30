@@ -123,6 +123,58 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn the_tail_is_cut_at_a_mark_that_stays(pool: PgPool) {
+    let mut conn = pool.acquire().await.unwrap();
+    let place = group(&mut conn).await;
+    let mut ids = Vec::new();
+    for n in 0..12 {
+        let said = format!("第{n}条：{}", "字".repeat(40));
+        // Only 小红's row is cut, and she isn't in the roster.
+        let said = if n == 0 {
+            from_xiaohong(n, vec![text(&said)])
+        } else {
+            from_xiaoming(n, vec![text(&said)])
+        };
+        let said = ingest::inbound(&mut conn, &place, &said, at(n), offset())
+            .await
+            .unwrap();
+        ids.push(said.message.id);
+    }
+    let last = *ids.last().unwrap();
+    // A tail of at most 100 tokens, cut back to 50 or a little more.
+    let projection = Projection {
+        place: &place,
+        system: "SYSTEM".into(),
+        window: 800,
+        cleared_upto: None,
+        memory: String::new(),
+        now: at(20),
+        offset: offset(),
+    };
+    let (context, _) = projection.base(&mut conn, last, &[]).await.unwrap();
+    let mark = platform::tail_after(&mut conn, place.conversation)
+        .await
+        .unwrap()
+        .expect("the tail was cut");
+    let cut = ids.iter().position(|id| *id == mark).unwrap();
+    assert!(cut < ids.len() - 1);
+    let tail = user_text(&context.items[1]).to_owned();
+    assert!(!tail.contains(&format!("#{mark}]")), "{tail}");
+    assert!(tail.contains(&format!("#{}]", ids[cut + 1])), "{tail}");
+    assert!(tail.contains(&format!("#{last}]")), "{tail}");
+    let volatile = user_text(context.items.last().unwrap());
+    assert!(!volatile.contains("小红"), "{volatile}");
+
+    // The next core starts at the mark.
+    let (context, _) = projection.base(&mut conn, last, &[]).await.unwrap();
+    assert_eq!(user_text(&context.items[1]), tail);
+    let again = platform::tail_after(&mut conn, place.conversation)
+        .await
+        .unwrap();
+    assert_eq!(again, Some(mark));
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_judged_wake(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
     let place = group(&mut conn).await;
