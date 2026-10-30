@@ -15,7 +15,7 @@ publish = false
 # The clock stays off so that the core can't read the time.
 chrono = { version = "0.4", default-features = false, features = ["alloc", "serde"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 
 # Our own crates.
@@ -83,6 +83,11 @@ rand = { version = "0.10", default-features = false, features = ["thread_rng"] }
 # does the protocol; axum serves it, and only that.
 rmcp = { version = "3.8", default-features = false, features = ["server", "transport-streamable-http-server"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+# The JSON Schemas of Max's tools, from their argument and result types,
+# so that a tool's contract is written once; serde_json keeps the fields
+# in the order they are declared, for the schemas and the TypeScript made
+# from them. 1.2 is in the tree already, through rmcp.
+schemars = { version = "1.2", default-features = false, features = ["derive", "std"] }
 # The content store names media by their SHA-256. 0.11 is in the tree
 # already, through sqlx and russh.
 sha2 = "0.11"

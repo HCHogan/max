@@ -257,7 +257,7 @@ async fn programs_show_the_model_pictures(pool: PgPool) {
     let ran = run_with(input(code, json!({ "pngs": pngs(&[2]) }))).await;
     assert_eq!(
         ran.stdout,
-        r#"[{"height":1,"width":3},{"height":1,"width":2},"max.image: /work/notes.txt 不是解得开的 PNG、JPEG、GIF、WebP（not_a_picture）","TypeError"]"#,
+        r#"[{"width":3,"height":1},{"width":2,"height":1},"max.image: /work/notes.txt 不是解得开的 PNG、JPEG、GIF、WebP（not_a_picture）","TypeError"]"#,
         "{}",
         ran.stderr
     );

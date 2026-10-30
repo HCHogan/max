@@ -409,6 +409,6 @@ mod tests {
             resume,
             json!({ "op": 6, "d": { "token": "QQBot t0", "session_id": "S1", "seq": 7 } })
         );
-        assert_eq!(heartbeat(None), r#"{"d":null,"op":1}"#);
+        assert_eq!(heartbeat(None), r#"{"op":1,"d":null}"#);
     }
 }
