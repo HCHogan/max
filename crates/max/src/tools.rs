@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
 use max_core::item::{Part, ToolOutput};
 use max_core::message::MediaRef;
 use max_core::project::PICTURE_TOKENS;
@@ -108,10 +108,9 @@ async fn run_code(
     let line = unit_line(&unit, limit, "/work", "exec node /run/max/runner.js");
     let tools: Vec<&str> = MAX_TOOLS.iter().map(|tool| tool.name).collect();
     let input = json!({ "code": code, "args": args, "token": grant.token(), "tools": tools });
-    let out = vm.work().join(".max/out");
     let mut split = Split {
-        out: Output::new(&out, format!("{unit}.txt")),
-        err: Output::new(&out, format!("{unit}.log")),
+        out: Output::new(vm.work(), format!("{unit}.txt")),
+        err: Output::new(vm.work(), format!("{unit}.log")),
     };
     let mut running = vm
         .command(unit, &line, input.to_string().as_bytes())
@@ -191,7 +190,7 @@ async fn shell(
     // systemd-run hands the unit its own output, so 2>&1 merges the
     // command's.
     let line = unit_line(&unit, limit, &workdir, command) + " 2>&1";
-    let mut output = Output::new(&vm.work().join(".max/out"), format!("{unit}.txt"));
+    let mut output = Output::new(vm.work(), format!("{unit}.txt"));
     let mut running = vm.command(unit, &line, &[]).await?;
     let waited = timeout(limit, running.wait(&mut output)).await;
     output.finish().await?;
@@ -221,11 +220,15 @@ fn with(head: String, shown: &str) -> String {
     }
 }
 
+/// Where a long output goes, under /work.
+const OUT: &str = ".max/out";
+
 /// A command's output: all of it while short; past `SHOWN`, its head and
 /// tail, and the whole in a file, `name` in the guest's /work/.max/out.
 struct Output {
     name: String,
-    path: PathBuf,
+    /// The host's side of /work.
+    work: PathBuf,
     head: Vec<u8>,
     tail: VecDeque<u8>,
     total: usize,
@@ -233,10 +236,9 @@ struct Output {
 }
 
 impl Output {
-    /// `dir` is the host's side of /work/.max/out.
-    fn new(dir: &Path, name: String) -> Self {
+    fn new(work: &Path, name: String) -> Self {
         Self {
-            path: dir.join(&name),
+            work: work.to_owned(),
             name,
             head: Vec::new(),
             tail: VecDeque::new(),
@@ -272,10 +274,11 @@ impl Sink for Output {
             file.write_all(data).await?;
             self.tail.extend(data);
         } else {
-            if let Some(dir) = self.path.parent() {
-                fs::create_dir_all(dir).await?;
-            }
-            let mut file = fs::File::create(&self.path).await?;
+            let (work, name) = (self.work.clone(), self.name.clone());
+            let file = tokio::task::spawn_blocking(move || mcp::work::create(&work, OUT, &name))
+                .await?
+                .map_err(|failure| eyre!(failure.message))?;
+            let mut file = fs::File::from_std(file);
             let mut all = std::mem::take(&mut self.head);
             all.extend_from_slice(data);
             file.write_all(&all).await?;
@@ -305,19 +308,22 @@ mod tests {
 
     #[tokio::test]
     async fn short_output_is_shown_whole() {
-        let dir = std::env::temp_dir().join(format!("max-output-{}", std::process::id()));
-        let mut output = Output::new(&dir, "short.txt".into());
+        let work = std::env::temp_dir().join(format!("max-output-{}", std::process::id()));
+        std::fs::create_dir_all(&work).unwrap();
+        let mut output = Output::new(&work, "short.txt".into());
         output.output(Stream::Out, b"hello\n").await.unwrap();
         output.output(Stream::Out, b"world").await.unwrap();
         assert_eq!(output.shown(), "hello\nworld");
-        assert!(!dir.join("short.txt").exists());
+        assert!(!work.join(".max/out/short.txt").exists());
+        let _ = std::fs::remove_dir_all(work);
     }
 
     #[tokio::test]
     async fn long_output_keeps_its_ends_and_goes_whole_to_a_file() {
-        let dir = std::env::temp_dir().join(format!("max-output-long-{}", std::process::id()));
-        let path = dir.join("max-2.txt");
-        let mut output = Output::new(&dir, "max-2.txt".into());
+        let work = std::env::temp_dir().join(format!("max-output-long-{}", std::process::id()));
+        std::fs::create_dir_all(&work).unwrap();
+        let path = work.join(".max/out/max-2.txt");
+        let mut output = Output::new(&work, "max-2.txt".into());
         let mut all = Vec::new();
         for n in 0..5000 {
             let line = format!("{n:05}\n");
@@ -331,7 +337,23 @@ mod tests {
         assert!(shown.contains("/work/.max/out/max-2.txt"), "{shown}");
         assert_eq!(output.head.len() + output.tail.len(), SHOWN);
         assert_eq!(std::fs::read(&path).unwrap(), all);
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(work);
+    }
+
+    /// The guest's link at /work/.max: a long output isn't written through
+    /// it.
+    #[tokio::test]
+    async fn long_output_follows_no_link() {
+        let scratch = std::env::temp_dir().join(format!("max-output-link-{}", std::process::id()));
+        let (work, host) = (scratch.join("work"), scratch.join("host"));
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(host.join("out")).unwrap();
+        std::os::unix::fs::symlink(&host, work.join(".max")).unwrap();
+        let mut output = Output::new(&work, "max-3.txt".into());
+        let long = vec![b'x'; SHOWN + 1];
+        assert!(output.output(Stream::Out, &long).await.is_err());
+        assert!(!host.join("out/max-3.txt").exists());
+        let _ = std::fs::remove_dir_all(scratch);
     }
 
     #[test]

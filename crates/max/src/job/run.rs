@@ -170,19 +170,18 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
 /// Saves the report under /work/.max/jobs: its path in the VM.
 async fn save(vm: &Vm, number: u32, title: &str, text: &str) -> Option<String> {
     let name = format!("job-{number}-{}.md", Utc::now().format("%Y%m%d-%H%M%S"));
-    let dir = vm.work().join(".max/jobs");
-    let saved: Result<()> = async {
-        tokio::fs::create_dir_all(&dir).await?;
-        tokio::fs::write(
-            dir.join(&name),
-            format!("# job#{number} {title}\n\n{text}\n"),
-        )
-        .await?;
-        Ok(())
-    }
+    let report = format!("# job#{number} {title}\n\n{text}\n");
+    let (work, file) = (vm.work().to_owned(), name.clone());
+    let saved = tokio::task::spawn_blocking(move || {
+        mcp::work::write(&work, ".max/jobs", &file, report.as_bytes(), None)
+    })
     .await;
     match saved {
-        Ok(()) => Some(format!("/work/.max/jobs/{name}")),
+        Ok(Ok(())) => Some(format!("/work/.max/jobs/{name}")),
+        Ok(Err(failure)) => {
+            warn!(error = failure.message, "couldn't save a job's report");
+            None
+        }
         Err(error) => {
             warn!(%error, "couldn't save a job's report");
             None

@@ -1,12 +1,16 @@
 //! A group's /work as the host sees it. The guest writes it, symlinks
 //! included, so a path in it is opened one component at a time without
-//! following them.
+//! following them. Everything the host reads or writes there goes through
+//! here: tool output and job reports too, since 10-30, when a review
+//! found a link the guest put at /work/.max/out would send them anywhere
+//! the maxx user can write.
 
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
+use rustix::fd::OwnedFd;
 use rustix::fs::{Mode, OFlags};
 use rustix::io::Errno;
 
@@ -123,6 +127,58 @@ pub(crate) fn write(
     })
 }
 
+/// A new file at `dir/name` under `work`, made as [`write`] makes `dir`,
+/// for writing as it comes. Whatever is at `name` already, a link
+/// included, is left alone and the file isn't made. Blocking.
+pub(crate) fn create(work: &Path, dir: &str, name: &str) -> Result<File, Failure> {
+    let failed = written(dir, name);
+    let dir = make_dir(work, dir).map_err(&failed)?;
+    let file = rustix::fs::openat(&dir, name, CREATED, Mode::from_raw_mode(0o644));
+    Ok(File::from(file.map_err(failed)?))
+}
+
+const CREATED: OFlags = OFlags::WRONLY
+    .union(OFlags::CREATE)
+    .union(OFlags::EXCL)
+    .union(OFlags::NOFOLLOW)
+    .union(OFlags::CLOEXEC);
+
+/// `dir` under `work`, made if it isn't there, one component at a time,
+/// none of them followed if it is a link.
+fn make_dir(work: &Path, dir: &str) -> Result<OwnedFd, Errno> {
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::DIRECTORY;
+    let mut at = rustix::fs::open(work, flags, Mode::empty())?;
+    for name in dir
+        .split('/')
+        .filter(|name| !name.is_empty() && *name != ".")
+    {
+        if name == ".." {
+            return Err(Errno::INVAL);
+        }
+        match rustix::fs::mkdirat(&at, name, Mode::from_raw_mode(0o755)) {
+            Ok(()) | Err(Errno::EXIST) => {}
+            Err(errno) => return Err(errno),
+        }
+        at = rustix::fs::openat(&at, name, flags, Mode::empty())?;
+    }
+    Ok(at)
+}
+
+/// Why `dir/name` under /work couldn't be written.
+fn written<'a>(dir: &'a str, name: &'a str) -> impl Fn(Errno) -> Failure + 'a {
+    move |errno| {
+        let shown = format!("/work/{dir}/{name}");
+        match errno {
+            Errno::LOOP | Errno::NOTDIR | Errno::MLINK | Errno::INVAL => {
+                Failure::new("bad_path", format!("/work/{dir} 不是目录，或者是符号链接"))
+            }
+            Errno::ISDIR | Errno::NOTEMPTY => Failure::new("bad_path", format!("{shown} 是个目录")),
+            Errno::EXIST => Failure::new("bad_path", format!("{shown} 已经有了")),
+            errno => Failure::new("unwritable", format!("写不了 {shown}：{errno}")),
+        }
+    }
+}
+
 /// What `fill` writes, put at `dir/name` under `work`. It goes to a new
 /// file first and is renamed into place, all through descriptors opened
 /// without following a symlink, so no link the guest puts in /work sends
@@ -134,29 +190,18 @@ fn place(
     fill: impl FnOnce(&mut File) -> std::io::Result<()>,
 ) -> Result<(), Failure> {
     let shown = format!("/work/{dir}/{name}");
-    let failed = |errno: Errno| match errno {
-        Errno::LOOP | Errno::NOTDIR | Errno::MLINK => {
-            Failure::new("bad_path", format!("/work/{dir} 不是目录，或者是符号链接"))
-        }
-        Errno::ISDIR | Errno::NOTEMPTY | Errno::EXIST => {
-            Failure::new("bad_path", format!("{shown} 是个目录"))
-        }
-        errno => Failure::new("unwritable", format!("写不了 {shown}：{errno}")),
-    };
-    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::DIRECTORY;
-    let work = rustix::fs::open(work, flags, Mode::empty()).map_err(failed)?;
-    match rustix::fs::mkdirat(&work, dir, Mode::from_raw_mode(0o755)) {
-        Ok(()) | Err(Errno::EXIST) => {}
-        Err(errno) => return Err(failed(errno)),
-    }
-    let dir = rustix::fs::openat(&work, dir, flags, Mode::empty()).map_err(failed)?;
+    let failed = written(dir, name);
+    let dir = make_dir(work, dir).map_err(&failed)?;
     let temporary = format!(".{:016x}.part", rand::random::<u64>());
-    let created =
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let file = rustix::fs::openat(&dir, &temporary, created, Mode::from_raw_mode(0o644))
-        .map_err(failed)?;
+    let file = rustix::fs::openat(&dir, &temporary, CREATED, Mode::from_raw_mode(0o644))
+        .map_err(&failed)?;
     let renamed = match fill(&mut File::from(file)) {
-        Ok(_) => rustix::fs::renameat(&dir, &temporary, &dir, name).map_err(failed),
+        // Over a directory: EISDIR, or EEXIST or ENOTEMPTY for one with
+        // something in it.
+        Ok(_) => rustix::fs::renameat(&dir, &temporary, &dir, name).map_err(|errno| match errno {
+            Errno::EXIST => failed(Errno::ISDIR),
+            errno => failed(errno),
+        }),
         Err(error) => Err(Failure::new(
             "unwritable",
             format!("写不了 {shown}：{error}"),
