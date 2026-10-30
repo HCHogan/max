@@ -36,7 +36,7 @@ pub struct Budgets {
 
 impl Budgets {
     pub fn for_window(window: u32) -> Self {
-        let tail_high = (window / 8).min(32_000);
+        let tail_high = (window / 8).min(128_000);
         Self {
             tail_high,
             tail_low: tail_high / 2,

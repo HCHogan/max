@@ -13,6 +13,11 @@ fn utc(month: u32, day: u32, hour: u32, minute: u32) -> DateTime<Utc> {
 
 #[test]
 fn budgets_follow_the_window() {
+    let huge = Budgets::for_window(1_048_576);
+    assert_eq!(
+        (huge.tail_high, huge.tail_low, huge.summaries, huge.single),
+        (128_000, 64_000, 8_000, 25_000)
+    );
     let big = Budgets::for_window(256_000);
     assert_eq!(
         (big.tail_high, big.tail_low, big.summaries, big.single),
