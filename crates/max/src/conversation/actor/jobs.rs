@@ -1,5 +1,6 @@
 //! The conversation's background agents: started by its turns' programs,
-//! outliving the core that started them, and waking Max when they end.
+//! outliving the core that started them, and waking Max when they ask
+//! something and when they end.
 //! See "后台 agent" in docs/rust-rewrite.md.
 
 use std::collections::BTreeMap;
@@ -108,6 +109,7 @@ impl Conversation {
         };
         let (steers, steered) = unbounded_channel();
         let progress = Arc::<Mutex<Progress>>::default();
+        let asking = self.mailbox.clone();
         let start = job::Start {
             number,
             title: title.clone(),
@@ -117,6 +119,12 @@ impl Conversation {
             upstream,
             deadline: Instant::now() + job::TIME,
             progress: Arc::clone(&progress),
+            ask: Box::new(move |question| {
+                let _ = asking.send(Event::JobAsks {
+                    job: number,
+                    question,
+                });
+            }),
         };
         let mailbox = self.mailbox.clone();
         let mut task = Scope::new();
@@ -140,6 +148,18 @@ impl Conversation {
         Ok(Reply::Job(number))
     }
 
+    /// A job asks Max: its question wakes Max, who answers with
+    /// `agent_steer`.
+    pub(super) async fn job_asks(&mut self, job: u32, question: String) -> Result<()> {
+        // Cancelled since.
+        let Some(running) = self.jobs.running.get(&job) else {
+            return Ok(());
+        };
+        info!(conversation = %self.place.conversation, job, "a job asks Max");
+        let item = asked(job, &running.title, &question, self.single());
+        self.wake_for(job, item).await
+    }
+
     /// A job ended: Max hears how, in the running core or a new one.
     pub(super) async fn job_done(&mut self, job: u32, finished: Finished) -> Result<()> {
         // Cancelled since.
@@ -147,15 +167,22 @@ impl Conversation {
             return Ok(());
         };
         info!(conversation = %self.place.conversation, job, how = ?finished.ending.how, "a job ends");
+        let item = report(job, &running.title, &finished, self.single());
+        self.wake_for(job, item).await
+    }
+
+    /// Wakes Max with what job `job` says: in the running core, or a new
+    /// one.
+    async fn wake_for(&mut self, job: u32, item: Item) -> Result<()> {
         let wake = Wake {
             ids: Vec::new(),
             reason: Reason::Job { job },
-            item: Some(report(job, &running.title, &finished, self.single())),
+            item: Some(item),
         };
         match self.core.as_mut() {
             Some(a) => {
                 if let Err(rejected) = a.run.input(Input::Wake(wake)) {
-                    warn!(turn = %a.turn, %rejected, "a job's report didn't fit the core");
+                    warn!(turn = %a.turn, %rejected, "what a job says didn't fit the core");
                 }
             }
             None => self.start_core(wake).await?,
@@ -257,11 +284,7 @@ fn report(job: u32, title: &str, finished: &Finished, single: u32) -> Item {
         .map(str::trim)
         .filter(|words| !words.is_empty());
     match words {
-        Some(words) if tokens::count(words) > single => {
-            let excerpt: String = words.chars().take(EXCERPT_CHARS).collect();
-            text += &format!("\n{excerpt}…（太长，只有开头）");
-        }
-        Some(words) => text += &format!("\n{words}"),
+        Some(words) => text += &format!("\n{}", fitted(words, single)),
         // pi's session is there too, as JSONL.
         None if !matches!(finished.ending.how, How::Failed(_)) => {
             text += "\n（它没留下报告；做的过程在 /work/.max/jobs 里它的会话记录）";
@@ -273,6 +296,29 @@ fn report(job: u32, title: &str, finished: &Finished, single: u32) -> Item {
     }
     let tokens = tokens::count(&text);
     Item::new(ItemKind::user(text), tokens)
+}
+
+/// What Max is shown when job `job` asks `question`, cut to an excerpt
+/// over `single` tokens.
+fn asked(job: u32, title: &str, question: &str, single: u32) -> Item {
+    let text = format!(
+        "[{} 问] {title}\n{}\n（它在等你答复：用 agent_steer 回答它，{} 分钟内没答复它就自己判断）",
+        name(job),
+        fitted(question.trim(), single),
+        job::WAIT.as_secs() / 60,
+    );
+    let tokens = tokens::count(&text);
+    Item::new(ItemKind::user(text), tokens)
+}
+
+/// `words`, or their beginning if they take over `single` tokens.
+fn fitted(words: &str, single: u32) -> String {
+    if tokens::count(words) > single {
+        let excerpt: String = words.chars().take(EXCERPT_CHARS).collect();
+        format!("{excerpt}…（太长，只有开头）")
+    } else {
+        words.to_owned()
+    }
 }
 
 #[cfg(test)]

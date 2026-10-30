@@ -26,7 +26,7 @@ use crate::vm::{Vm, Vms};
 const SYSTEM: &str = "你是 Max 的后台 agent。Max 是一个群聊里的 AI 成员，它把一件要花时间的事交给你，自己接着在群里聊天。
 - 你看不到群里的对话，只有 Max 写给你的任务。要聊天记录时用 mcp__max__history 查，能按内容搜，也能按人、按时间读原文；查网上的用 mcp__max__web_search，读网页用 webread <url>（只留正文，转成 Markdown）。
 - 你不能在群里说话。你最后一条消息就是交给 Max 的报告：先说结论，再给要点和出处，写给 Max 看，不用客套，尽量在 2000 字以内。做出来的文件放在 /work 下，报告里写路径。
-- 做的过程中 Max 可能补充要求，会出现在对话里。
+- 做的过程中 Max 可能补充要求，会出现在对话里。卡在只有 Max 或群友才知道的事上（他们的意思、偏好、没说清的要求），用 ask_max 问 Max，它会等 Max 答复；能自己查到、试出来的别问。
 - 环境：NixOS，root，能上公网，/work 是本群的持久目录，群里的程序也用；缺什么用 nix shell nixpkgs#包名 -c 命令 临时装。
 - 有时间限制，快到点时会提醒你收尾，到点会被叫停。只做交给你的事。";
 
@@ -44,7 +44,12 @@ pub struct Start {
     pub upstream: Arc<Upstream>,
     pub deadline: Instant,
     pub progress: Arc<Mutex<Progress>>,
+    /// Takes the agent's question to Max.
+    pub ask: Asker,
 }
+
+/// Where a job's questions go.
+pub type Asker = Box<dyn Fn(String) + Send + Sync>;
 
 /// How far a job has got, for `agent_status`.
 #[derive(Clone, Debug, Default)]
@@ -81,6 +86,7 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
         conversation,
         upstream: Arc::clone(&start.upstream),
         progress: start.progress,
+        ask: start.ask,
     };
     let grant = start.vms.sessions().open(start.context);
     let unit = Vm::unit();
@@ -221,12 +227,14 @@ impl Sink for Out {
     }
 }
 
-/// Records each model call's usage, and keeps the progress.
+/// Records each model call's usage, keeps the progress, and takes the
+/// questions on.
 struct Recorder {
     pool: PgPool,
     conversation: ConversationId,
     upstream: Arc<Upstream>,
     progress: Arc<Mutex<Progress>>,
+    ask: Asker,
 }
 
 impl Recorder {
@@ -262,5 +270,9 @@ impl Watch for Recorder {
         let mut progress = self.progress();
         progress.tools += 1;
         progress.tool = Some(name.to_owned());
+    }
+
+    fn asks(&mut self, question: &str) {
+        (self.ask)(question.to_owned());
     }
 }

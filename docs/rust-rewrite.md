@@ -74,7 +74,7 @@
 | QQ group allowlist | ✓ | 改成 `/bind`：平台本身只让创建者拉群，没绑定的群不服务，见 [QQ 官方机器人](#qq-官方机器人) |
 | Private chats | ✓ | 改成白名单：名单上的人私聊才触发，见[运行流程](#运行流程)第 2 步。Haskell 版私聊一律回复 |
 | Agent loop | ✓ | 不再挂处理中和失败的 reaction，失败时回一句话，见[群里看到的](#群里看到的) |
-| Background agents and feedback | 部分 | pi + MCP，见[后台 agent](#后台-agent)。2026-10-30 做了 `agent` 系列工具，job 结果唤醒 Max；job 中途提问还没有 |
+| Background agents and feedback | 部分 | pi + MCP，见[后台 agent](#后台-agent)。2026-10-30 做了 `agent` 系列工具，job 结果唤醒 Max；job 中途能用 `ask_max` 问 Max |
 | Prompt shape and budget | 部分 | 见[上下文投影](#上下文投影) |
 | Memory | 有 | 换成 Max 自己写的一个文件，每轮注入，见[记忆](#记忆)；Haskell 版的提案、版本、到期都不要了 |
 | Group lingo | — | |
@@ -1599,14 +1599,15 @@ v1 之后做。
 - 适配器在 `crates/max/src/job.rs`（2026-10-30）：`job::pi` 是协议，`job::drive` 给任务、转 steer、到点中断、等它停下，取最后一条助手消息的文字作报告，再关 stdin。用量、工具调用经 `Watch` 报出去。没有再抽一层 `AgentBackend`：只有 pi 一个实现，等真有第二个再抽。命令用 `Vm::open` 起，stdin 一直开着。
 - **模型**（2026-10-30 定）：`[llm]` 里单独配 `job = { model, effort }`，没配就没有后台 agent。pi 不拿 provider 的 key：它的模型请求发到 VM 里的 `http://127.0.0.1:7777/llm/<端点>`，和 MCP 是同一个服务、同一个 token。宿主认出是哪个 job 的会话，把 `model` 换成配置里的，带上 provider 的 key 和头转过去，回答原样流回来。provider 在 `stream_idle_timeout_secs`（默认 120 秒）里没出声，不管是回答开始前还是流到一半，都和 max-llm 一样掐断：pi 当作这次调用失败，自己重试，不会干等到 job 到点（10-30 Max 自己 review 时指出的）。只认这个 provider 协议的端点（`chat/completions` 或 `responses`），请求最大 64 MiB；job 结束、会话吊销后 token 就没用了。没选的办法：cliproxy 的管理接口能在运行时加删 key，但改完要写回配置文件，tank 上那是 sops 渲染出来的；给 VM 一个固定的 cliproxy key，等于给了群里所有人。
 - 领域工具走 Max 的 MCP 服务，见 [MCP 通道](#mcp-通道)。工具要的东西（数据库、搜索、嵌入、内容库、QQ 管理）在 main 里建一份 `mcp::Services`，所有调用共用，里面的 `None` 只表示没配置。谁在调由 `mcp::Caller` 说：`Turn` 带着这一轮的 `Poster`，`Job` 带着它的上游，`Check` 是 `vm-check`。能用哪些工具只看 `Caller` 和 `job` 标记（2026-10-30 改：原来每处手拼一份上下文，job 那份漏了嵌入，`context_search` 静默退化成只按字面搜）。每个 job 开一个会话，会话活多久 job 就多久，所以工具的次数上限按一次运行的 10 倍算（`web_search` 一次运行 20 次，一个 job 200 次）。只开放只读工具，比如 `context_search`、`context_read`、`memory_list`；job 结束时吊销。pi 在 VM 里也能跑 codemode 的 runner，用 job 自己的会话批量调这些工具。
-- 会影响群的动作（发消息、发文件、撤回、禁言、建自动化）不给后台 agent。它的结果是一种唤醒（`Reason::Job`）：会话有核心在跑就喂给它，没有就起一个；由前台的模型决定怎么说。job 中途提问同样处理，人的回答再由前台用工具 steer 回去（还没做：现在 pi 的对话框一律回取消）。
+- 会影响群的动作（发消息、发文件、撤回、禁言、建自动化）不给后台 agent。它的结果是一种唤醒（`Reason::Job`）：会话有核心在跑就喂给它，没有就起一个；由前台的模型决定怎么说。job 中途提问同样处理，见下面的**提问**。
 - **工具**（2026-10-30）：Max 在 `run_code` 里用四个 Max 工具管 job，都由会话 actor 回答（经 `Poster`，带回信通道），后台 agent 自己用不了：
   - `agent({ task, title? })` 马上返回 `{ job: "job#3" }`。job 在会话 actor 的表里，编号只在这次运行里递增，重启从 1 数。同时最多 3 个，每个 2 小时（原来 30 分钟，读一遍三万行代码都不够，10-30 改）。剩 5 分钟时 steer 一句让它停手写报告，到点先 `clear_queue` 再 `abort`，交出做到一半的。不提醒的话，到点时它多半正在调工具，最后一条助手消息没有文字，什么也交不出来（2026-10-30 job#2 就是这样）。一次运行最多起 3 个。没配 `llm.job`、没有 VM、正在重启时报错。
-  - `agent_steer({ job, message })` 转给 pi 的 `steer`；`agent_cancel({ job })` 从表里删掉，scope 丢掉就停了，unit 由 VM 的 stopper 停，结果不要了；`agent_status({ job? })` 列标题、分钟、模型和工具调用次数、最近的工具。`job` 写 `job#3` 或 3。
+  - `agent_steer({ job, message })` 转给 pi 的 `steer`；它在等 Max 答复时（见**提问**），这一句就是答复。`agent_cancel({ job })` 从表里删掉，scope 丢掉就停了，unit 由 VM 的 stopper 停，结果不要了；`agent_status({ job? })` 列标题、分钟、模型和工具调用次数、最近的工具。`job` 写 `job#3` 或 3。
   - `/kill` 连 job 一起停，回一句停了哪些；`/status` 每个 job 一行。
 - **结果**：pi 停下后取最后一条助手消息，存成 `/work/.max/jobs/job-<n>-<时间>.md`，再给会话 actor 一个 `JobDone`。actor 起一个 `Wake { ids: [], reason: Job { job }, item }`，`item` 是 `[job#3 完成] 标题`、`[job#3 到点停了，下面是做到一半的] 标题` 或 `[job#3 失败] 标题：原因`，下面是报告；超过单条上限只给开头 2000 字。末尾写全文的路径。没有报告时（失败的除外）指给它 `/work/.max/jobs` 里 pi 的会话记录。和判定一样，有核心就进它的下一批，没有就起一个。已经取消的 job 的结果丢掉。这条唤醒失败了（模型出错）不补发，全文还在文件里。
 - **用量**：pi 每次模型调用记一行 `llm_usage`，`purpose` 是 `job`（迁移 0015），没有 turn。
-- **pi 的系统提示**：追加一段，说它是 Max 的后台 agent，看不到群聊，要聊天记录用 `mcp__max__history`，查网页用 `mcp__max__web_search` 和 `webread`；最后一条消息就是报告，先结论后要点和出处，2000 字以内；文件放 `/work`；快到点时会提醒它收尾。
+- **提问**（2026-10-30）：后台 agent 卡在只有 Max 或群友才知道的事上，用 `ask_max({ question })` 问。这个工具是 guest 里的一个 pi 扩展（`nix/ask-max.ts`），调 `ctx.ui.input(问题)`：RPC 里成了一个 `input` 对话框，pi 在这个工具调用里一直等，上下文不断。`job::drive` 把它交给会话 actor（`Event::JobAsks`），actor 像报告一样唤醒 Max（`Reason::Job`），`item` 是 `[job#3 问] 标题`，下面是问题和“用 agent_steer 回答它，10 分钟内没答复它就自己判断”；已经取消的 job 的问题丢掉。问题没答复时，这个 job 的下一句 steer 就是答复，作为对话框的 `value` 回去，工具返回 `Max 答复：…`。10 分钟（`job::WAIT`）没答复，max 回 `cancelled`，工具返回“Max 这次没有答复，按你自己的判断继续，在报告里写明你做了哪些假设”；之后再来的 steer 照常是 steer。到点收尾和到点叫停前，先回掉没答复的问题：它在工具里等着，收不到 steer。`ask_max` 一次只跑一个（`executionMode: "sequential"`），同时来第二个问题或叫停后来的问题直接回 `cancelled`。没走 MCP 工具：一个等十分钟的 MCP 调用会撞上客户端的超时，而且 Max 自己的工具表里不该有它。2026-10-30 在 tank 上用 pi 1.4.0 实测过扩展：答复和 `cancelled` 两条路都对。
+- **pi 的系统提示**：追加一段，说它是 Max 的后台 agent，看不到群聊，要聊天记录用 `mcp__max__history`，查网页用 `mcp__max__web_search` 和 `webread`；卡在只有 Max 或群友才知道的事上用 `ask_max` 问，能自己查到、试出来的别问；最后一条消息就是报告，先结论后要点和出处，2000 字以内；文件放 `/work`；快到点时会提醒它收尾。
 
 pi 适配器要处理的行为（2026-10-29 用 pi 1.4.0 实测）：
 
@@ -1616,10 +1617,10 @@ pi 适配器要处理的行为（2026-10-29 用 pi 1.4.0 实测）：
 - `agent_end` 不代表结束，要等 `agent_settled`；自动重试、排队的 steer 都在它之前。
 - 助手消息的 `message_end` 带用量。pi 的 `input` 不含缓存读写，记账时把 `cacheRead`、`cacheWrite` 加回去，才是整个请求。失败的调用 `stopReason` 是 `error`，原因在 `errorMessage`；重试成功后以最后一次为准。
 - stdout 只按 LF 切行，不能用会把 U+2028 当换行的读行器。`agent_end` 带整个运行的消息，很长；超过 16 MiB 的行丢掉。
-- RPC 模式下扩展会发 `extension_ui_request`。`select`、`confirm`、`input`、`editor` 会一直等回答，后台没人能答，一律回 `cancelled`；`notify` 只记日志，比如 MCP 服务连不上时 pi 发的那条。
+- RPC 模式下扩展会发 `extension_ui_request`。`select`、`confirm`、`input`、`editor` 会一直等回答。`input` 是 `ask_max` 的问题，标题就是问题，交给 Max（见**提问**）；别的后台没人能答，一律回 `cancelled`；`notify` 只记日志，比如 MCP 服务连不上时 pi 发的那条。
 - MCP 工具在 `mcp.json` 里配 `"exposure": "direct"`，直接以 `mcp__max__<工具>` 出现在工具表里。pi 的 MCP 客户端说 2025-11-25 的协议，见 [MCP 通道](#mcp-通道)。
 
-guest 里的 pi 来自 numtide 的 llm-agents.nix，flake 里钉在一个 rev 上。包装脚本 `max-pi`（`nix/max-pi.sh`）从 stdin 第一行读这个 job 的 JSON：token、模型 id、协议、窗口、输出上限、effort 和追加的系统提示。它在 unit 的 RuntimeDirectory 里写 `models.json`（provider 只有一个 `max`，`baseUrl` 是 `/llm`，`apiKey` 是 `$MAX_JOB_TOKEN`）和 `mcp.json`，再 exec `pi --mode rpc --no-approve`；会话存在 `/work/.max/jobs`。`/work` 里的 `.pi/` 是群里能写的，不信任。unit 停了目录就删，token 跟着没了。
+guest 里的 pi 来自 numtide 的 llm-agents.nix，flake 里钉在一个 rev 上。包装脚本 `max-pi`（`nix/max-pi.sh`）从 stdin 第一行读这个 job 的 JSON：token、模型 id、协议、窗口、输出上限、effort 和追加的系统提示。它在 unit 的 RuntimeDirectory 里写 `models.json`（provider 只有一个 `max`，`baseUrl` 是 `/llm`，`apiKey` 是 `$MAX_JOB_TOKEN`）和 `mcp.json`，再 exec `pi --mode rpc --no-approve`，带上 `--extension` `ask-max.ts`（路径由 `max-pi.nix` 的 `MAX_ASK_MAX` 给）；会话存在 `/work/.max/jobs`。`/work` 里的 `.pi/` 是群里能写的，不信任。unit 停了目录就删，token 跟着没了。
 
 pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每天发补丁，RPC 协议没有版本字段。所以在 Nix 里钉版本，录几段真实的 JSONL 做适配器回放测试，升级前先跑这些测试。录下来的在 `crates/max/src/job/fixtures/`（去掉了流式增量、系统提示和本机路径）。
 

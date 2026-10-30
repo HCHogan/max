@@ -295,6 +295,7 @@ impl Conversation {
                 let _ = reply.send(answer);
                 Ok(())
             }
+            Event::JobAsks { job, question } => self.job_asks(job, question).await,
             Event::JobDone { job, finished } => self.job_done(job, finished).await,
             Event::Stop => {
                 self.stop();

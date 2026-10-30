@@ -83,7 +83,7 @@ impl Tool for Agent {
         format!(
             "起一个后台 agent，去做一件要花时间的事：查一堆资料、读很多网页或文件、写代码跑实验。它在本群的 VM 里跑，和你共用 /work，自己有 shell、读写文件、history、web_search；不能在群里说话，也不能发图发文件、撤回、禁言。\n  \
             它看不到群里的对话，只看得到 task，所以背景、要做什么、做到什么程度、报告要写什么都写进去。title 是一句话的标题，agent_status 里显示。\n  \
-            马上返回 {{ job: \"job#3\" }}，你接着聊。它做完了，报告作为 [job#3 完成] 出现在你的新消息里，全文另存在 /work/.max/jobs/ 下，由你决定在群里怎么说。同时最多 {} 个，每个最多 {} 小时，到点停下、交出做到一半的结果。一次运行最多起 {PER_RUN} 个。",
+            马上返回 {{ job: \"job#3\" }}，你接着聊。它卡在只有你或群友才知道的事上会问你：问题作为 [job#3 问] 出现，它在等，用 agent_steer 回答。它做完了，报告作为 [job#3 完成] 出现在你的新消息里，全文另存在 /work/.max/jobs/ 下，由你决定在群里怎么说。同时最多 {} 个，每个最多 {} 小时，到点停下、交出做到一半的结果。一次运行最多起 {PER_RUN} 个。",
             job::MOST,
             job::TIME.as_secs() / 3600,
         )
@@ -99,7 +99,8 @@ impl Tool for Agent {
 
 impl Tool for AgentSteer {
     const NAME: &'static str = "agent_steer";
-    const DESCRIPTION: &'static str = "给还在跑的后台 agent 补一句话：改方向、补信息、回答它。";
+    const DESCRIPTION: &'static str =
+        "给还在跑的后台 agent 补一句话：改方向、补信息，或者回答它的 [job#N 问]。";
     const PER_RUN: Option<u32> = None;
     const JOB: bool = false;
 
@@ -107,7 +108,11 @@ impl Tool for AgentSteer {
     type Output = Named;
 
     fn guide() -> String {
-        "给还在跑的后台 agent 补一句话：改方向、补充信息、转达群友的回答。它跑完手上这步工具、下一次想之前看到。job 是 \"job#3\" 或 3。".into()
+        format!(
+            "给还在跑的后台 agent 补一句话：改方向、补充信息、转达群友的回答。它跑完手上这步工具、下一次想之前看到。job 是 \"job#3\" 或 3。\n  \
+            它问了你（[job#3 问]）还没得到答复时，下一句就是答复，它马上收到。你答不了就去群里问，问到了再转给它；{} 分钟内没答复，它就自己判断着做下去，之后再说的照常当补充。",
+            job::WAIT.as_secs() / 60,
+        )
     }
 
     async fn run(context: &Context, Steer { job, message }: Steer) -> Result<Named, Failure> {

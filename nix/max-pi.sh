@@ -47,6 +47,7 @@ args=(
   --provider max
   --model "$(field .model)"
   --append-system-prompt "$dir/system.md"
+  --extension "$MAX_ASK_MAX"
 )
 effort=$(field '.effort // empty')
 if [[ -n $effort ]]; then

@@ -26,6 +26,8 @@ pub enum Ask<'a> {
     LastText,
     /// Answers the dialog with this id: nobody is there to.
     Dismiss(&'a str),
+    /// Answers the question with this id, with Max's words.
+    Answer(&'a str, &'a str),
 }
 
 impl Ask<'_> {
@@ -41,6 +43,9 @@ impl Ask<'_> {
             Ask::LastText => json!({ "id": id, "type": "get_last_assistant_text" }),
             Ask::Dismiss(dialog) => {
                 json!({ "id": dialog, "type": "extension_ui_response", "cancelled": true })
+            }
+            Ask::Answer(question, value) => {
+                json!({ "id": question, "type": "extension_ui_response", "value": value })
             }
         };
         format!("{command}\n")
@@ -69,6 +74,12 @@ pub enum Record {
     },
     /// pi asks the user, and waits for the answer.
     Dialog(String),
+    /// The agent asks Max, with `ask_max`, and waits for the answer: an
+    /// input dialog, the question its title.
+    Question {
+        id: String,
+        text: String,
+    },
     /// pi tells the user, such as that an MCP server is unreachable.
     Notice(String),
     Other,
@@ -98,7 +109,11 @@ pub fn parse(line: &[u8]) -> serde_json::Result<Record> {
             aborted: record["aborted"] == true,
         },
         Some("extension_ui_request") => match record["method"].as_str() {
-            Some("select" | "confirm" | "input" | "editor") => {
+            Some("input") => Record::Question {
+                id: text(&record["id"]).unwrap_or_default(),
+                text: text(&record["title"]).unwrap_or_default(),
+            },
+            Some("select" | "confirm" | "editor") => {
                 Record::Dialog(text(&record["id"]).unwrap_or_default())
             }
             Some("notify") => Record::Notice(text(&record["message"]).unwrap_or_default()),

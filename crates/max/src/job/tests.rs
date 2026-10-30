@@ -2,15 +2,18 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader, DuplexStream, Lines};
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::time::Instant;
 
 use super::*;
 
-/// pi's side of a job: what the driver asks, what pi says.
+/// pi's side of a job: what the driver asks, what pi says; and Max's,
+/// the questions the driver passes on and the steers that answer them.
 struct Fake {
     asked: Lines<BufReader<DuplexStream>>,
     says: UnboundedSender<Vec<u8>>,
+    questions: UnboundedReceiver<String>,
+    steering: UnboundedSender<String>,
 }
 
 impl Fake {
@@ -45,6 +48,16 @@ impl Fake {
         prompt
     }
 
+    /// ask_max's question, as pi's input dialog; once the driver has
+    /// passed it on to Max.
+    async fn question(&mut self, id: &str, question: &str) {
+        self.say(json!({
+            "type": "extension_ui_request", "id": id, "method": "input",
+            "title": question, "placeholder": "",
+        }));
+        assert_eq!(self.questions.recv().await.unwrap(), question);
+    }
+
     fn called(&self, input: u32, error: Option<&str>) {
         let stop = if error.is_some() { "error" } else { "stop" };
         self.say(json!({ "type": "message_end", "message": {
@@ -63,10 +76,10 @@ impl Fake {
     }
 }
 
-#[derive(Default)]
 struct Seen {
     calls: Vec<Usage>,
     tools: Vec<String>,
+    questions: UnboundedSender<String>,
 }
 
 impl Watch for Seen {
@@ -76,6 +89,10 @@ impl Watch for Seen {
 
     fn tool(&mut self, name: &str) {
         self.tools.push(name.to_owned());
+    }
+
+    fn asks(&mut self, question: &str) {
+        let _ = self.questions.send(question.to_owned());
     }
 }
 
@@ -95,11 +112,18 @@ where
     for steer in steers {
         steering.send(steer).unwrap();
     }
+    let (asking, questions) = unbounded_channel();
     let fake = Fake {
         asked: BufReader::new(theirs).lines(),
         says,
+        questions,
+        steering,
     };
-    let mut seen = Seen::default();
+    let mut seen = Seen {
+        calls: Vec::new(),
+        tools: Vec::new(),
+        questions: asking,
+    };
     let deadline = Instant::now() + within;
     let driven = drive(input, &mut records, &mut steered, task, deadline, &mut seen);
     let (ending, ()) = tokio::join!(driven, pi(fake));
@@ -141,6 +165,61 @@ async fn a_dialog_is_dismissed() {
         assert_eq!(answer["id"], "d-1");
         assert_eq!(answer["cancelled"], true);
         pi.settle(false, Some("好了")).await;
+    })
+    .await;
+    assert_eq!(ending.how, How::Done);
+}
+
+#[tokio::test]
+async fn a_question_goes_to_max_and_the_next_steer_answers_it() {
+    let (ending, _) = job("订餐厅", LONG, vec![], |mut pi| async move {
+        pi.started().await;
+        pi.question("q-1", "选火锅还是烧烤？").await;
+        pi.steering.send("火锅".into()).unwrap();
+        let answer = pi.asked().await;
+        assert_eq!(
+            answer,
+            json!({ "id": "q-1", "type": "extension_ui_response", "value": "火锅" })
+        );
+        // Answered: the next is a steer again.
+        pi.steering.send("要包间".into()).unwrap();
+        let steer = pi.asked().await;
+        assert_eq!(steer["type"], "steer");
+        assert_eq!(steer["message"], "要包间");
+        pi.settle(false, Some("订了火锅包间")).await;
+    })
+    .await;
+    assert_eq!(ending.how, How::Done);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_question_is_dismissed_after_a_while() {
+    let (ending, _) = job("订餐厅", TIME, vec![], |mut pi| async move {
+        pi.started().await;
+        let asked = Instant::now();
+        pi.question("q-1", "选火锅还是烧烤？").await;
+        let dismissed = pi.asked().await;
+        assert_eq!(dismissed["id"], "q-1");
+        assert_eq!(dismissed["cancelled"], true);
+        assert_eq!(asked.elapsed(), WAIT);
+        pi.settle(false, Some("自己选了火锅")).await;
+    })
+    .await;
+    assert_eq!(ending.how, How::Done);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_job_waiting_on_max_is_still_told_to_wrap_up() {
+    let within = WARNING + Duration::from_secs(60);
+    let (ending, _) = job("订餐厅", within, vec![], |mut pi| async move {
+        pi.started().await;
+        pi.question("q-1", "选火锅还是烧烤？").await;
+        let dismissed = pi.asked().await;
+        assert_eq!(dismissed["id"], "q-1");
+        assert_eq!(dismissed["cancelled"], true);
+        let steer = pi.asked().await;
+        assert_eq!(steer["message"], WRAP_UP);
+        pi.settle(false, Some("没等到，先报这些")).await;
     })
     .await;
     assert_eq!(ending.how, How::Done);

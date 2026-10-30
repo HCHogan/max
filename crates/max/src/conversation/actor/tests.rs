@@ -720,6 +720,40 @@ async fn a_jobs_report_wakes_max(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_jobs_question_wakes_max_who_answers_with_a_steer(pool: PgPool) {
+    let (mut h, mut steered) = Harness::with_job(pool, "订餐厅").await;
+    h.send(from_xiaoming(0, vec![text("帮我们订个餐厅")]));
+    h.script.push(Answer::says("我问问大家"));
+    let question = "选火锅还是烧烤？".to_owned();
+    h.mailbox.send(Event::JobAsks { job: 1, question }).unwrap();
+    assert_eq!(h.said().await.1, "我问问大家");
+    let volatile = h.request_tail(0);
+    assert!(
+        volatile.ends_with(
+            "[job#1 问] 订餐厅\n选火锅还是烧烤？\n（它在等你答复：用 agent_steer 回答它，10 分钟内没答复它就自己判断）\n"
+        ),
+        "{volatile}"
+    );
+    let steer = Request::Steer {
+        job: 1,
+        message: "火锅".into(),
+    };
+    assert_eq!(ask(&h, steer).await.unwrap(), Reply::Job(1));
+    assert_eq!(steered.recv().await.unwrap(), "火锅");
+    // A cancelled job's question wakes nobody.
+    assert_eq!(
+        ask(&h, Request::Cancel { job: 1 }).await.unwrap(),
+        Reply::Job(1)
+    );
+    let question = "那几点？".to_owned();
+    h.mailbox.send(Event::JobAsks { job: 1, question }).unwrap();
+    let status = ask(&h, Request::Status { job: None }).await.unwrap();
+    assert_eq!(status, Reply::Running(Vec::new()));
+    h.stop().await;
+    assert_eq!(h.turns().await.len(), 1);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_job_is_steered_listed_and_cancelled(pool: PgPool) {
     let (mut h, mut steered) = Harness::with_job(pool, "查票价").await;
     let steer = Request::Steer {

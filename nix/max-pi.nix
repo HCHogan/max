@@ -6,5 +6,7 @@ pkgs.writeShellApplication {
     pi
     pkgs.jq
   ];
+  # ask_max, the agent's way to ask Max; see ask-max.ts.
+  runtimeEnv.MAX_ASK_MAX = "${./ask-max.ts}";
   text = builtins.readFile ./max-pi.sh;
 }

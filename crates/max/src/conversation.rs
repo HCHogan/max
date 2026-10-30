@@ -65,6 +65,11 @@ pub enum Event {
         origin: Option<TurnId>,
         reply: oneshot::Sender<Result<job::Reply, String>>,
     },
+    /// A background agent asks Max, and waits for the answer.
+    JobAsks {
+        job: u32,
+        question: String,
+    },
     /// A background agent ended.
     JobDone {
         job: u32,

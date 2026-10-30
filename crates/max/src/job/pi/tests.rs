@@ -129,7 +129,7 @@ fn the_cache_counts_in_the_whole_request() {
 }
 
 #[test]
-fn dialogs_are_dismissed_and_notices_told() {
+fn dialogs_are_dismissed_questions_answered_and_notices_told() {
     let confirm =
         br#"{"type":"extension_ui_request","id":"d-1","method":"confirm","title":"Run it?"}"#;
     assert_eq!(parse(confirm).unwrap(), Record::Dialog("d-1".into()));
@@ -137,6 +137,20 @@ fn dialogs_are_dismissed_and_notices_told() {
     assert_eq!(
         dismissed,
         json!({ "id": "d-1", "type": "extension_ui_response", "cancelled": true })
+    );
+    // pi 1.4, ask_max's question.
+    let input = r#"{"type":"extension_ui_request","id":"q-1","method":"input","title":"今晚选哪家店？","placeholder":""}"#.as_bytes();
+    assert_eq!(
+        parse(input).unwrap(),
+        Record::Question {
+            id: "q-1".into(),
+            text: "今晚选哪家店？".into()
+        }
+    );
+    let answered: Value = serde_json::from_str(&Ask::Answer("q-1", "海底捞").line(9)).unwrap();
+    assert_eq!(
+        answered,
+        json!({ "id": "q-1", "type": "extension_ui_response", "value": "海底捞" })
     );
     // pi 1.4, its MCP server unreachable.
     let notify = br#"{"type":"extension_ui_request","id":"n-1","method":"notify","message":"MCP servers need attention:\n  max: failed","notifyType":"warning"}"#;

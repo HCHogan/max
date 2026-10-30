@@ -17,7 +17,7 @@ use tokio::time::{Instant, sleep_until, timeout};
 use tracing::warn;
 
 use pi::{Ask, Record};
-pub use run::{Finished, Progress, Start, run};
+pub use run::{Asker, Finished, Progress, Start, run};
 
 /// The most jobs a conversation runs at once.
 pub const MOST: usize = 3;
@@ -67,6 +67,10 @@ pub fn name(job: u32) -> String {
     format!("job#{job}")
 }
 
+/// How long the agent's question waits for Max's answer; then it goes on
+/// by itself.
+pub const WAIT: Duration = Duration::from_secs(10 * 60);
+
 /// How long pi has to settle once aborted, and to give its last text.
 const GRACE: Duration = Duration::from_secs(15);
 
@@ -84,6 +88,8 @@ pub trait Watch {
     fn called(&mut self, usage: Usage) -> impl Future<Output = ()> + Send;
     /// A tool call began.
     fn tool(&mut self, name: &str);
+    /// The agent asks Max `question`, and waits for the answer.
+    fn asks(&mut self, question: &str);
 }
 
 /// How a job ended, and the agent's last text: its report, or how far it
@@ -104,7 +110,9 @@ pub enum How {
 
 /// Gives pi `task`, passes on the steers that come, and waits until pi
 /// settles, telling it to wrap up shortly before `deadline` and aborting it
-/// then. `records` are the lines of pi's
+/// then. While the agent waits on a question, the next steer is its
+/// answer; none within [`WAIT`], and the question is dismissed. `records`
+/// are the lines of pi's
 /// stdout, and end when pi does; `input` is its stdin, closed at the end.
 pub async fn drive(
     input: impl AsyncWrite + Unpin,
@@ -128,12 +136,15 @@ pub async fn drive(
     // The last model call's error: none once a retry got through.
     let mut error = None;
     let mut aborted: Option<Instant> = None;
+    // The question the agent waits on, and since when.
+    let mut question: Option<(String, Instant)> = None;
     // Only a job that has the time is told.
     let mut wrap_up = deadline
         .checked_sub(WARNING)
         .filter(|at| *at > Instant::now());
     loop {
         let give_up = aborted.map(|at| at + GRACE);
+        let unanswered = question.as_ref().map(|(_, at)| *at + WAIT);
         tokio::select! {
             line = records.recv() => {
                 let Some(line) = line else {
@@ -157,25 +168,57 @@ pub async fn drive(
                             return failed(GONE);
                         }
                     }
+                    // ask_max runs one at a time; nobody answers once it's
+                    // over.
+                    Ok(Record::Question { id, .. }) if aborted.is_some() || question.is_some() => {
+                        if pi.ask(Ask::Dismiss(&id)).await.is_err() {
+                            return failed(GONE);
+                        }
+                    }
+                    Ok(Record::Question { id, text }) => {
+                        watch.asks(&text);
+                        question = Some((id, Instant::now()));
+                    }
                     Ok(Record::Notice(notice)) => warn!(%notice, "pi says"),
                     Ok(Record::Response { .. } | Record::Other) => {}
                     Err(why) => warn!(%why, "a record of pi's isn't JSON"),
                 }
             }
             Some(steer) = steers.recv(), if aborted.is_none() => {
-                if pi.ask(Ask::Steer(&steer)).await.is_err() {
+                let sent = match question.take() {
+                    Some((id, _)) => pi.ask(Ask::Answer(&id, &steer)).await,
+                    None => pi.ask(Ask::Steer(&steer)).await,
+                };
+                if sent.is_err() {
+                    return failed(GONE);
+                }
+            }
+            () = sleep_until(unanswered.unwrap_or(deadline)), if unanswered.is_some() => {
+                if let Some((id, _)) = question.take()
+                    && pi.ask(Ask::Dismiss(&id)).await.is_err()
+                {
                     return failed(GONE);
                 }
             }
             () = sleep_until(wrap_up.unwrap_or(deadline)), if wrap_up.is_some() => {
                 wrap_up = None;
-                if pi.ask(Ask::Steer(WRAP_UP)).await.is_err() {
+                // The agent waiting on Max couldn't take the steer in.
+                let told = async {
+                    if let Some((id, _)) = question.take() {
+                        pi.ask(Ask::Dismiss(&id)).await?;
+                    }
+                    pi.ask(Ask::Steer(WRAP_UP)).await
+                };
+                if told.await.is_err() {
                     return failed(GONE);
                 }
             }
             () = sleep_until(deadline), if aborted.is_none() => {
                 aborted = Some(Instant::now());
                 let stopped = async {
+                    if let Some((id, _)) = question.take() {
+                        pi.ask(Ask::Dismiss(&id)).await?;
+                    }
                     pi.ask(Ask::ClearQueue).await?;
                     pi.ask(Ask::Abort).await
                 };
