@@ -1,0 +1,53 @@
+---
+source: crates/max/src/mcp/tool/tests.rs
+expression: DECLARATIONS.as_str()
+---
+/** 查本会话的聊天记录，连同图片和表情包的描述。上下文里没有的旧事、谁以前说过什么、哪天聊了什么，先查再答。筛选可以一起用：
+  who 是发言人名字里的几个字（当时的群名片）；from、to 是 YYYY-MM-DD（整天，都含当天）、YYYY-MM-DD HH:MM 或 #编号（from 含这条，to 不含）。
+  给了 query 就是搜，返回 results：query 是空格隔开的关键词，最多 8 个，每个词按原文找，不分大小写，中文词写短点（两三个字）；整个 query 也按意思找相近的说法。命中的词多的、意思近的在前，一样的新的在前；limit 默认 10，最多 30。text 是命中处附近的一段；read 原样传回来，就是读这条连同前后各 10 条。撤回的消息不搜。
+  没给 query 就是读原文，按时间顺序一行一条，和上下文里一样，太长的只有开头：有 from 从 from 往后读，没有就读最新的（到 to 为止）；limit 默认 50，最多 100。还有更多时 next 是接着读的参数，原样传回来：从 from 读的往后接，读最新的往前接。who、from、to 至少给一个。
+  around 读这条消息连同前后各 before、after 条（默认 10，最多 50），不和别的筛选一起用；before、after 都是 0 就只读这一条，太长的也是全文。
+  读的结果按页给，一页不超过上下文里一条消息的上限，pages 是总页数，page 选第几页。/clear --all 清掉的只是不在上下文里，照样查得到。 */
+history(args: { query?: string; who?: string; from?: string; to?: string; around?: number; before?: number; after?: number; limit?: number; page?: number }): Promise<{ results: { ref: string; time: string; text: string; read: { around: number } }[] } | { text: string; page: number; pages: number; next?: object }>;
+
+/** 搜索网页，返回前几条结果的标题、链接、摘要和发布日期（知道的话）。事实、价格、新闻、剧情这类拿不准或可能过时的，先搜再答，别凭记忆。
+  limit 1 到 10，默认 5。一次运行最多搜 20 次，要搜好几样就 Promise.all。要读全文，用 shell 跑 webread <url>。 */
+web_search(args: { query: string; limit?: number }): Promise<{ results: { title: string; url: string; snippet: string; published?: string }[] }>;
+
+/** 把 /work 下的一张图发到本群：画的图表、截的图、下载的图片。PNG、JPEG、GIF、WebP，最大 10 MiB；路径上不能有符号链接。
+  caption 是图下面的一句说明，和图在同一条消息里。发出去了才返回，handle 是这条消息里那张图的句柄。一次运行最多发 5 张。
+  记录里已有的图和表情包不用这个，直接在回复里写它的句柄。 */
+send_image(args: { path: string; caption?: string }): Promise<{ handle: string }>;
+
+/** 把 /work 下的一个文件发到本群，群里显示成文件，点开能下载：文档、表格、PDF、压缩包、代码都行。最大 64 MiB，不能是空的；路径上不能有符号链接。
+  name 是群里显示的文件名，默认用路径里的。发出去了才返回，handle 是这个文件的句柄。一次运行最多发 5 个。
+  要大家直接看到的图用 send_image，别当文件发。记录里已有的文件要再发，先 max.file 拷到 /work 再发。 */
+send_file(args: { path: string; name?: string }): Promise<{ handle: string }>;
+
+/** 撤回本群的一条消息，id 是行首 #编号 里的数字。撤不撤由你判断：刷屏、广告、违规内容，或者有人请你撤、理由正当时再用，撤完简短说一声。
+  QQ 只让撤发出 2 分钟内的：你自己说的（一段是一条，一次回复分成几段的要一段一段撤）；你是群管理员时还有普通成员的，群主和管理员的撤不了。私聊里只能撤你自己的。
+  QQ 撤了才返回；撤不了会抛错，说明原因。记录里会多一行你的 [unsend#id]，QQ 没撤的标着（没发出去）。一次运行最多撤 10 条。 */
+recall_message(args: { id: number }): Promise<{ recalled: number }>;
+
+/** 在本群禁言一个人，或者解除。member 是 [mention#编号] 里的数字；seconds 是从现在起禁多少秒，0 是解除，最多 2592000（30 天）。禁不禁、禁多久由你判断：刷屏、广告、骂人，或者有人请你禁、理由正当时再用，禁完或解完在群里简短说一声。
+  QQ 只让群管理员禁言普通成员：群主、管理员、你自己都禁不了，私聊里没有禁言；没在本群说过话的人也禁不了。对禁着的人再禁，是把结束时间改成从现在起 seconds 秒。
+  QQ 办了才返回，until 是禁到几点，解除时是 null；办不了会抛错，说明原因。记录里不会多一行。一次运行最多 5 次。 */
+mute_member(args: { member: number; seconds: number }): Promise<{ member: number; until: string | null }>;
+
+/** 在表情包库里按意思找表情包：库里是各个群里见过的表情包，按描述和 query 的意思远近排，近的在前。
+  只找不发：挑一个合适的，把 handle 照抄进回复，写成 [sticker#…]，就发出去了；都不合适就不发。limit 1 到 10，默认 5。一次运行最多找 5 次。 */
+find_stickers(args: { query: string; limit?: number }): Promise<{ stickers: { handle: string; description: string }[] }>;
+
+/** 起一个后台 agent，去做一件要花时间的事：查一堆资料、读很多网页或文件、写代码跑实验。它在本群的 VM 里跑，和你共用 /work，自己有 shell、读写文件、history、web_search；不能在群里说话，也不能发图发文件、撤回、禁言。
+  它看不到群里的对话，只看得到 task，所以背景、要做什么、做到什么程度、报告要写什么都写进去。title 是一句话的标题，agent_status 里显示。
+  马上返回 { job: "job#3" }，你接着聊。它做完了，报告作为 [job#3 完成] 出现在你的新消息里，全文另存在 /work/.max/jobs/ 下，由你决定在群里怎么说。同时最多 3 个，每个最多 2 小时，到点停下、交出做到一半的结果。一次运行最多起 3 个。 */
+agent(args: { task: string; title?: string }): Promise<{ job: string }>;
+
+/** 给还在跑的后台 agent 补一句话：改方向、补充信息、转达群友的回答。它跑完手上这步工具、下一次想之前看到。job 是 "job#3" 或 3。 */
+agent_steer(args: { job: string | number; message: string }): Promise<{ job: string }>;
+
+/** 停掉一个后台 agent，不要它的结果了；它在 /work 里留下的东西还在。 */
+agent_cancel(args: { job: string | number }): Promise<{ job: string }>;
+
+/** 看还在跑的后台 agent：标题、跑了几分钟、调了几次模型（calls）和工具（tools）、最近用的工具。job 不填就是全部；做完的、停掉的不在里面。 */
+agent_status(args: { job?: string | number }): Promise<{ jobs: { job: string; title: string; minutes: number; calls: number; tools: number; tool: string | null }[] }>;

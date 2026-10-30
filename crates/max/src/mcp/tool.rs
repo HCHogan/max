@@ -84,6 +84,12 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
     ]
 });
 
+/// Their declarations, for the system prompt.
+pub static DECLARATIONS: LazyLock<String> = LazyLock::new(|| {
+    let declarations: Vec<&str> = TOOLS.iter().map(|tool| tool.declaration.as_str()).collect();
+    declarations.join("\n\n")
+});
+
 pub fn find(name: &str) -> Option<&'static Spec> {
     TOOLS.iter().find(|spec| spec.name == name)
 }

@@ -1881,6 +1881,7 @@ dependencies = [
  "color-eyre",
  "futures-util",
  "image",
+ "insta",
  "max-core",
  "max-db",
  "max-llm",

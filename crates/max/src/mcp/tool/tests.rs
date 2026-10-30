@@ -177,26 +177,8 @@ fn arguments_keep_to_their_bounds() {
     assert_eq!(title("票".repeat(41)).unwrap_err(), "title 最多 40 个字");
 }
 
+/// What the system prompt says of the tools; a change shows here.
 #[test]
-fn the_declarations_are_max_cores() {
-    let names = |names: Vec<&str>| names.join(" ");
-    assert_eq!(
-        names(TOOLS.iter().map(|tool| tool.name).collect()),
-        names(
-            max_core::tools::MAX_TOOLS
-                .iter()
-                .map(|tool| tool.name)
-                .collect()
-        )
-    );
-    for (tool, core) in TOOLS.iter().zip(max_core::tools::MAX_TOOLS.iter()) {
-        assert_eq!(tool.declaration, core.declaration);
-        assert_eq!(tool.description, core.description);
-        assert_eq!(
-            (tool.per_run, tool.job),
-            (core.per_run, core.job),
-            "{}",
-            tool.name
-        );
-    }
+fn declarations() {
+    insta::assert_snapshot!(DECLARATIONS.as_str());
 }

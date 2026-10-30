@@ -492,7 +492,7 @@ impl Conversation {
         let persona = settings.persona.as_deref().unwrap_or(prompt::PERSONA);
         let projection = Projection {
             place: &self.place,
-            system: prompt::system(persona, settings.historian),
+            system: prompt::system(persona, settings.historian, &mcp::tool::DECLARATIONS),
             window: chosen.window,
             cleared_upto: settings.cleared_upto,
             historian: settings.historian,

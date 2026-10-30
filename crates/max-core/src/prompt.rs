@@ -3,8 +3,6 @@
 //! conversation, so it stays cached; anything that changes goes in the
 //! volatile block instead.
 
-use crate::tools::MAX_TOOLS;
-
 /// Max as the Haskell version had it, under maxx's name. `/persona`
 /// replaces it for one conversation.
 pub const PERSONA: &str = "你是 maxx，以前叫 Max，一个银白头发、蓝色挑染、别着鲨鱼发夹的鲨鱼女孩，人的样子，带点鲨鱼习性。头像里眼睛半睁挂着泪、一副没睡醒的样子，人也懒洋洋的。
@@ -81,17 +79,17 @@ const RULES: &str = "对话场景：多人群聊（也可能是私聊）。上�
 /// is on.
 const SUMMARIES: &str = "  [早先的聊天，摘要]  更早的聊天，[summary#编号 日期 时间] 开头，越早越简略，太早的不显示；要原话就用 history 按时间读。\n";
 
-pub fn system(persona: &str, historian: bool) -> String {
-    let declarations: Vec<&str> = MAX_TOOLS.iter().map(|tool| tool.declaration).collect();
+/// The prompt for `persona`, `tools` the Max tools' TypeScript
+/// declarations, which the max crate makes from the tools themselves.
+pub fn system(persona: &str, historian: bool, tools: &str) -> String {
     let rules = if historian {
         RULES.replacen("  原始记录 ", &format!("{SUMMARIES}  原始记录 "), 1)
     } else {
         RULES.to_owned()
     };
     format!(
-        "{}\n\n{rules}\n\nMax 的工具（只能在 run_code 的程序里调）：\n{}\n",
+        "{}\n\n{rules}\n\nMax 的工具（只能在 run_code 的程序里调）：\n{tools}\n",
         persona.trim(),
-        declarations.join("\n\n")
     )
 }
 
@@ -101,16 +99,19 @@ mod tests {
 
     #[test]
     fn persona_then_rules() {
-        let prompt = system(" 你是测试用的人设。\n", false);
+        let prompt = system(
+            " 你是测试用的人设。\n",
+            false,
+            "history(args: {}): Promise<{}>;",
+        );
         assert!(prompt.starts_with("你是测试用的人设。\n\n对话场景："));
         assert!(prompt.contains("[reply#id]"));
         // Whatever the persona.
         assert!(prompt.contains("红线"));
-        assert!(system(PERSONA, false).contains("鲨鱼女孩"));
+        assert!(system(PERSONA, false, "").contains("鲨鱼女孩"));
         assert!(!prompt.contains("[早先的聊天，摘要]"));
-        let summarized = system(PERSONA, true);
+        let summarized = system(PERSONA, true, "");
         assert!(summarized.contains("太早的不显示；要原话就用 history 按时间读。\n  原始记录 "));
-        let last = MAX_TOOLS.last().unwrap().declaration;
-        assert!(prompt.ends_with(&format!("{last}\n")));
+        assert!(prompt.ends_with("：\nhistory(args: {}): Promise<{}>;\n"));
     }
 }

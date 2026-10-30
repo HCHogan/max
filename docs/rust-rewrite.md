@@ -1526,7 +1526,7 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
   - 调用前的参数检查：按 schema 查字符串长度（按字符数）和数值范围，报"history 的 before 要在 0 到 50 之间"这样的错；类型、必填、多余字段在 serde 读参数时查。超出范围的直接报错，不再悄悄截断。
   - 系统提示里的 TypeScript 声明：`/** guide */` 加从两个 schema 转出来的签名。可选字段写成 `x?: T`，必填但可以是 null 的写成 `x: T | null`。
   
-  serde_json 开了 `preserve_order`，字段按类型里声明的顺序列出。这一步系统提示还用 max-core 里的那份声明，测试断言生成的和它逐字节相同。
+  serde_json 开了 `preserve_order`，字段按类型里声明的顺序列出。max-core 不再有 Max 工具的清单，`prompt::system` 收现成的声明文本。换过来时生成的声明和手写的逐字节相同，提示词没变；声明的全文有 insta 快照，改了哪个工具的说明，快照的 diff 里看得到。
 
 ### 多模态结果
 
