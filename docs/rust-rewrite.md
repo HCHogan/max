@@ -1488,6 +1488,10 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
 - **卷**归 `maxx` 所有，只在显式删除时删。
 - **装包、搜包**：`maxx` 经 nix daemon 构建，gc root 放在 `/var/lib/maxx/gcroots/<会话 id>/`，guest 通过只读的 store 共享看到它们。不需要 root。
 - **资源上限**：内存和 vCPU 由 hypervisor 参数限住，总量由 `maxx.slice` 限住，单个 VM 没有自己的 cgroup。以后需要再做 cgroup 委托。
+- **store 共享的文件描述符**：guest 查过的每个 store 文件，store 的 virtiofsd 都开着一个 O_PATH 描述符，直到 guest 的内核把它忘掉；guest 内存够大，就一直不忘。2026-10-30 一个后台 agent 为了找 glibc 的 ld-linux，`find /nix/store` 扫宿主的整个 store（当时 641 万个文件），virtiofsd 用满了 `maxx.service` 的 524288 个描述符，之后这个 VM 里新查的 store 文件都报 `Too many open files in system`，直到 VM 重启。所以：
+  - `LimitNOFILE` 提到 8388608，virtiofsd 自己把软限制提到这么高，整个 store 扫一遍也够用。代价是宿主的内核内存，每个开着的文件约 1.4 KB（bcachefs 的 inode 1048 B，dentry 和 file 各 192 B），扫遍 store 约 9 GiB，guest 忘掉或 VM 关掉就还回来。
+  - Max 和后台 agent 的提示里说：要某个包里的文件，用 `nix build --no-link --print-out-paths nixpkgs#包名` 拿路径，不在 `/nix/store` 下 find、ls、用通配符。
+  - 不用 virtiofsd 的 `--inode-file-handles`（存句柄、不留描述符）：`open_by_handle_at` 要初始 user 命名空间里的 `CAP_DAC_READ_SEARCH`，有了它能按句柄打开宿主文件系统上的任何文件。
 - **安全**：VM 逃逸拿到的是 `maxx`，比 Haskell 版的 root 好，但 `maxx` 能读数据库和秘密。cloud-hypervisor 开 seccomp 和 Landlock，virtiofsd 进自己的命名空间，见下面的验证。
 - **和 Haskell 版的区别**：每个 VM 不再有自己的网络命名空间。Haskell 版用 netns 加 NAT，guest 固定是 `10.0.2.2`；guest 镜像的网络配置要跟着改。
 - **在 tank 上验证过**（2026-10-29，借 Haskell 版的 guest，以 `maxx` 身份、套着 `maxx.service` 的加固跑）：

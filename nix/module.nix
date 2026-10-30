@@ -96,6 +96,11 @@ let
     UMask = "0077";
   }
   // lib.optionalAttrs vm {
+    # The store's virtiofsd holds a descriptor for each file the guest has
+    # looked up, until the guest forgets it; a guest can walk the host's
+    # whole store, 6.4 million files on tank in 2026-10. Each costs the
+    # host about 1.4 KB of kernel memory while held.
+    LimitNOFILE = 8388608;
     # cloud-hypervisor's, in the private /dev.
     BindPaths = [
       "/dev/kvm"
