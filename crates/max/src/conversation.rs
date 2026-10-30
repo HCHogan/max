@@ -62,6 +62,8 @@ pub enum Event {
     /// A tool asks about the background agents.
     Jobs {
         request: job::Request,
+        /// The turn it comes from, if any.
+        origin: Option<TurnId>,
         reply: oneshot::Sender<Result<Value, String>>,
     },
     /// A background agent ended.
@@ -123,7 +125,11 @@ impl Poster {
     pub async fn jobs(&self, request: job::Request) -> Result<Value, String> {
         let (reply, answer) = oneshot::channel();
         self.mailbox
-            .send(Event::Jobs { request, reply })
+            .send(Event::Jobs {
+                request,
+                origin: Some(self.origin),
+                reply,
+            })
             .map_err(|_| "这个群的会话已经停了".to_owned())?;
         answer.await.map_err(|_| "没等到回答".to_owned())?
     }

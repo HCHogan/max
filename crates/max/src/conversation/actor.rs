@@ -283,8 +283,16 @@ impl Conversation {
                 self.decide(decisions).await
             }
             Event::Compacted(result) => self.compacted(result).await,
-            Event::Jobs { request, reply } => {
-                let _ = reply.send(self.job_request(request));
+            Event::Jobs {
+                request,
+                origin,
+                reply,
+            } => {
+                let answer = match self.ended(origin) {
+                    Some(refused) => Err(refused),
+                    None => self.job_request(request),
+                };
+                let _ = reply.send(answer);
                 Ok(())
             }
             Event::JobDone { job, finished } => self.job_done(job, finished).await,
@@ -684,6 +692,18 @@ impl Conversation {
         Ok(())
     }
 
+    /// Why a tool of `origin`'s can no longer act: its turn has ended, by
+    /// `/kill` or otherwise, though its call was on the way. Only the
+    /// running core's tools act so far.
+    fn ended(&self, origin: Option<TurnId>) -> Option<String> {
+        let turn = origin?;
+        if self.core.as_ref().is_some_and(|a| a.turn == turn) {
+            return None;
+        }
+        debug!(%turn, "refused a tool of a turn that has ended");
+        Some("这一轮已经结束了，没做".to_owned())
+    }
+
     /// What a tool says or does. Only a running core's tools post so far,
     /// and their programs' results tell the core what they did.
     async fn post(&mut self, post: Post) -> Result<()> {
@@ -692,6 +712,12 @@ impl Conversation {
             origin,
             receipt,
         } = post;
+        if let Some(refused) = self.ended(origin) {
+            if let Some(receipt) = receipt {
+                let _ = receipt.send(Err(refused));
+            }
+            return Ok(());
+        }
         let committed = match act {
             Act::Say(draft) => self.say(draft, origin, None, receipt).await?,
             Act::Unsend(target) => self.unsend(target, origin, receipt).await?,

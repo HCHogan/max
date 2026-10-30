@@ -537,7 +537,38 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
         assert!(Instant::now() < deadline, "the core didn't end");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(h.turns().await[0].1, Some(Outcome::Interrupted));
+    let (turn, outcome) = h.turns().await.remove(0);
+    assert_eq!(outcome, Some(Outcome::Interrupted));
+
+    // A tool of the killed turn's, its call on the way: refused.
+    let (receipt, sent) = oneshot::channel();
+    let draft = Draft {
+        reply_to: None,
+        nodes: vec![DraftNode::Text {
+            text: "迟到的".into(),
+        }],
+    };
+    let late = Post {
+        act: Act::Say(draft),
+        origin: Some(turn),
+        receipt: Some(receipt),
+    };
+    h.mailbox.send(Event::Post(late)).unwrap();
+    assert!(sent.await.unwrap().is_err());
+    let (reply, answer) = oneshot::channel();
+    let request = Request::Start {
+        task: "查票价".into(),
+        title: None,
+    };
+    let origin = Some(turn);
+    h.mailbox
+        .send(Event::Jobs {
+            request,
+            origin,
+            reply,
+        })
+        .unwrap();
+    assert!(answer.await.unwrap().is_err());
     h.stop().await;
     assert!(h.outbound.try_recv().is_err(), "/kill isn't answered");
 }
@@ -630,7 +661,14 @@ fn finished(how: How, text: &str) -> Finished {
 
 async fn ask(h: &Harness, request: Request) -> Result<serde_json::Value, String> {
     let (reply, answer) = oneshot::channel();
-    h.mailbox.send(Event::Jobs { request, reply }).unwrap();
+    let origin = None;
+    h.mailbox
+        .send(Event::Jobs {
+            request,
+            origin,
+            reply,
+        })
+        .unwrap();
     tokio::time::timeout(PATIENCE, answer)
         .await
         .unwrap()
