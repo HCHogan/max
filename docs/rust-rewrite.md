@@ -75,9 +75,9 @@
 | Agent loop | ✓ | 不再挂处理中和失败的 reaction，失败时回一句话，见[群里看到的](#群里看到的) |
 | Background agents and feedback | 部分 | pi + MCP，见[后台 agent](#后台-agent)。2026-10-30 做了 `agent` 系列工具，job 结果唤醒 Max；job 中途提问还没有 |
 | Prompt shape and budget | 部分 | 见[上下文投影](#上下文投影) |
-| Memory | — | |
+| Memory | 有 | 换成 Max 自己写的一个文件，每轮注入，见[记忆](#记忆)；Haskell 版的提案、版本、到期都不要了 |
 | Group lingo | — | |
-| Unified recall and vector search | 部分 | `context_search` 按字面和按意思搜本会话的消息（带图和表情包的 caption）和摘要，每条结果带 `context_read` 的参数，见[召回](#召回)。记忆 v1 不做，也就不搜；视频没有 caption |
+| Unified recall and vector search | 部分 | `context_search` 按字面和按意思搜本会话的消息（带图和表情包的 caption）和摘要，每条结果带 `context_read` 的参数，见[召回](#召回)。不搜记忆，它每轮都在上下文里；视频没有 caption |
 | Context operations | — | Haskell 版是 admin 面板里的上下文控制台：覆盖和延迟、重建摘要、重算向量、检索轨迹；跟 Admin JSON API 一起做。模型自己的上下文操作是 `context_search` 和 `context_read`，见[召回](#召回) |
 | LLM profiles | ✓ | |
 | Streaming | ✓ | |
@@ -249,7 +249,7 @@ systemd 要设 `KillMode=mixed`：SIGTERM 只发给主进程，VM 这些子进�
 2026-10-27 定。运行时里的任务分三种，按它产出什么分：
 
 1. **主体**：会话 actor 和它 spawn 的 I/O 任务。消费请求，产出回复。
-2. **派生数据 worker**：historian、lingo、embedding、caption、召回向量、媒体下载和转发展开、记忆到期。输入是 ledger 或另一张派生表，输出是自己独占的一张表，只有它一个写者；从不碰 ledger 和 turn 记录，结果只在投影时被读。读 ledger 的 cursor 按会话记，见[时间线](#时间线)。触发三种：入账通知、定时器或水位、启动和定期的缺口扫描。一个工作单元一个事务，不留半截；重启不存队列，靠扫描补。Haskell 版 9 月的简化最后也把这几个收敛成了"本地有界队列加缺数据扫描"。
+2. **派生数据 worker**：historian、lingo、embedding、caption、召回向量、媒体下载和转发展开。输入是 ledger 或另一张派生表，输出是自己独占的一张表，只有它一个写者；从不碰 ledger 和 turn 记录，结果只在投影时被读。读 ledger 的 cursor 按会话记，见[时间线](#时间线)。触发三种：入账通知、定时器或水位、启动和定期的缺口扫描。一个工作单元一个事务，不留半截；重启不存队列，靠扫描补。Haskell 版 9 月的简化最后也把这几个收敛成了"本地有界队列加缺数据扫描"。
 
    共同的只有约定，不写框架（2026-10-29 owner 定：先写过一个通用驱动器，按 `Throttle`/`Debounce`/`Urgent` 排单元，结果调度策略都堆在驱动器里，完成与否也在驱动器的队列和数据库里各记一份，当天拆回各 worker）：
    - 输出表独占，只有它一个写者；从不碰 ledger 和 turn 记录，结果只在投影时被读。
@@ -937,7 +937,7 @@ Haskell 版的教训：原始尾巴是按 token 的滑动窗口，填满后每�
 2. 工具：`run_code` 和 `shell`，固定不变。
 3. 摘要块：活跃摘要按时间顺序，每条按[衰减](#衰减)选一层渲染。
 4. 原始尾巴：最新一条活跃摘要之后、到快照位置 `from` 为止的所有消息（第一批里的除外），`[HH:MM 名字 #id]: 文本` 一行一条；换日插日期，间隔久了插间隔标记。Max 自己的消息和别人的一样是一行，发不出去的带标记，见[出站](#出站)。
-5. 易变块：现在时间、[名册](#模型看到的)、记忆、引用的消息和转发、第一批输入（触发；闲聊不在这里，在尾巴里）、附图。
+5. 易变块：现在时间、[名册](#模型看到的)、[记忆](#记忆)、引用的消息和转发、第一批输入（触发；闲聊不在这里，在尾巴里）、附图。
 
 基础上下文就是这五块，由会话 actor 在创建核心前投影一次（[运行流程](#运行流程)第 3 步），之后不变；transcript 接在后面。它是（摘要集合，尾巴范围，预算）的确定函数，但只在这一处算，快照里存渲染结果，不存配方（2026-10-27 定）。
 
@@ -971,7 +971,7 @@ Haskell 版的教训：原始尾巴是按 token 的滑动窗口，填满后每�
 | 尾巴高水位 | `min(C / 8, 32k)` |
 | 尾巴低水位 | 高水位的一半 |
 | 摘要块 | `min(C / 32, 8k)` |
-| 记忆块 | 2k |
+| 记忆块 | 3k，见[记忆](#记忆) |
 
 Haskell 版尾巴是 W/2，26 万的窗口上约 10 万 token 原始群聊，每轮都付。token 估算只有一个函数（tiktoken-rs，在 `max` 里），所有地方共用；核心只拿算好的数，见[核心](#核心)。
 
@@ -985,8 +985,8 @@ Haskell 版尾巴是 W/2，26 万的窗口上约 10 万 token 原始群聊，每
   - `/compact`。
   - 启动不扫：一个群重启后入账第一行就回到 historian 眼里，在那之前也没人读它的摘要。
 - **范围**：从 cursor 往后，留出低水位的尾巴，一次最多 24k token（至少一行），更长的分几次。cursor 是最新一条活跃摘要的 `last_message_id`，和 `/clear --all` 的水位取大的。摘要不跨过水位：每次 capture 先把水位之前还没写的那段写完（整段，不留尾巴，像 `/compact`；失败只记日志，不挡后面），再照常写水位之后的，所以摘要一直连着，`/unclear` 以后没有缺口（2026-10-29 加，owner 以为整段记录都有摘要；之前清空时水位前没写的尾巴就永远没摘要了）；不含正在跑的 turn 的触发消息及其之后的（capture 开始时查一次，之后开始的 turn 不管）。`/compact` 不留尾巴。
-- **输入**：现在的时间；最近 4 条摘要的 p2（没有 p2 的用 p1）；这一段里的人，`[mention#N] 名字`，Max 标成"就是 Max"，因为 historian 自己不是 Max；这一段消息（和投影一样的行，带 `#id` 和时间）。记忆 v1 不做，所以没有现有记忆。
-- **输出**：JSON，`compartments[{first, last, title, kind, importance, p1, p2, p3}]`，以及记忆提案（v1 不做）。边界由模型定，一段里可以有多个。kind 沿用 Haskell 的六种（max_interaction、ambient、mixed、decision、support、social），导入的摘要不用改。
+- **输入**：现在的时间；最近 4 条摘要的 p2（没有 p2 的用 p1）；这一段里的人，`[mention#N] 名字`，Max 标成"就是 Max"，因为 historian 自己不是 Max；这一段消息（和投影一样的行，带 `#id` 和时间）。historian 不管记忆，见[记忆](#记忆)。
+- **输出**：JSON，`compartments[{first, last, title, kind, importance, p1, p2, p3}]`。边界由模型定，一段里可以有多个。kind 沿用 Haskell 的六种（max_interaction、ambient、mixed、decision、support、social），导入的摘要不用改。
 - **校验**：按这一段的行序，一段接一段、不重叠、合起来覆盖整段；kind 在六种里；importance 1 到 100；title 40 字、p1 4000 字、p2 1500 字、p3 150 字以内，超了就算错，不截断。失败重试一次：答错了把它的答案和错在哪里一起给回去；调用本身失败就原样再调一次。
 - **discard-last**：至少两个时丢掉最后一个，下次连着后文重读，因为它没有后文、边界不可靠。只有安静触发丢，`/compact` 和压力触发不丢。
 - **发布**：一个事务写 `summaries` 和 `summary_runs`。每次模型调用都记一行 `summary_runs`，失败的也记，带错误；用量照常记在 `llm_usage`，purpose 是 historian。发布不影响正在跑的 turn，它的基础上下文已经固定；下一个 turn 投影时自然读到新摘要。关机时在途的 capture 直接 drop，事务回滚，什么都不留，下次重读。
@@ -1015,6 +1015,31 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 - `/compact`（群主、管理员）：立即 capture 到当前，尾巴留 0。会话 actor 不等 historian：它把请求交出去，在 `side` 里 spawn 一个小任务等回信，拿到结果后回一句"整理成了 N 段摘要""没有要整理的"或"没整理成"，和别的命令一样不引用命令。一次最多 24k token，再长的要发几次。私聊里回"私聊不写摘要"。
 - `/clear --all`：只是消息 id 水位，之前的摘要和消息不进提示；`context_search` 照样搜得到，见[召回](#召回)。回复里带上怎么恢复。
 - `/unclear`（2026-10-29 owner 要的，群主、管理员）：撤掉水位，之前的摘要和消息回到上下文。只有一个水位，清过几次也一次撤完；没清过回"跳过：没有清空过"。historian 先把水位之前写完才写水位之后的（见上面的范围），所以只有那一步失败过、之后又没补上时，清空时的尾巴才会夹在两段摘要中间、不回上下文；回复里说明这一点，那段 `context_search` 照样搜得到。
+
+### 记忆
+
+2026-10-30 定，owner 提出：记忆是 Max 自己写的一个文件，不是 historian 抽出来的条目。
+
+- **为什么**：
+  - Haskell 版的记忆是 historian 预先抽的条目。733 条里 85% 是自动写的；标成群规的大半是技术知识，该常驻的反而没记，比如群友对 Max 的称呼。101 条有日期的承诺里 88 条过期了没人管。注入按"最近改过的 12 条"挑，和重要不重要无关。
+  - maxx 上线时没有记忆。10-30 群友叫"小鲨鲨"，Max 不认得；被说了"不记得了"才去搜，一搜就找到了。
+  - [MemoryTax](https://arxiv.org/html/2610.29823)（2026-10）：模型够强时，留着原始记录让模型自己搜，比预先抽取的记忆（Mem0、Zep）好、也更省。原始记录和搜索我们已经有了（ledger、`context_search`）。但那篇的问题都在提示"去查"，群聊里要用记忆的时候往往没人提示，模型不知道自己忘了什么。所以还要一份每轮都带上的东西，由主模型自己判断记什么，照 Claude Code 的 auto memory 做。
+- **文件**：每个会话一个 `/work/.max/memory.md`，在会话 VM 的 `/work` 里，宿主上是 `<vm.dir>/<会话 id>/work/.max/memory.md`。Max 用 shell 改；没配 VM 就没有记忆，VM 起不来时只能读不能写。
+- **注入**：起核心投影时，宿主像 `send_image` 那样不跟符号链接地读这个文件，放进易变块的 `[记忆]`，在名册之后。不放 system，原因有三：改了不会让前面的缓存失效；群友能影响它写什么，不该当系统指令；靠后，模型更容易注意到。代价是每个 turn 多付最多 3k 不走缓存的 token。turn 里改的，下一个 turn 才看到；本 turn 改了什么，transcript 里本来就有。
+- **上限** 3000 token（`max_core::project::MEMORY`）：
+  - 到 80% 在末尾加一句，提醒整理；
+  - 超了只注入放得下的那些行，说明后面的没加载、要整理；
+  - 文件超过 256 KiB 整个不读，只说一句。
+
+  和 Claude Code 对 MEMORY.md 的做法一样：它是 200 行或 25 KB，超了截掉、提醒重写。只是它在写的时候查，我们在下一次投影时查，因为文件是在 VM 里写的，宿主看不到这一次写入。
+- **怎么写**，在系统提示里：
+  - 记长期成立、影响以后怎么说话做事的：称呼、约定和梗；某个人的身份、长期在做的事、偏好；有日期的安排，写明到哪天。被纠正、发现自己忘了、有人让记的时候当场记。
+  - 不记技术知识，也不记哪天聊了什么：那些在记录里，靠搜索。
+  - 格式：分「## 群里」「## 人」两节，人按「### 名字」分，一行一条。结尾写（日期 #消息编号），编号是能作证的原话，`context_read` 能查（owner 加的）。
+  - 细节放进 `/work/.max/memory/` 下的别的文件，这里留一行指过去。
+  - 有人让记的不一定对，Max 自己判断。
+- **没有的**：记忆表、分类、到期、historian 的记忆提案、注入时的挑选。`context_search` 不搜记忆，它每轮都在上下文里。
+- **迁移**（10-30）：旧库的记忆由一个子 agent 手工离线迁成每个群的初始文件，没用的全删。
 
 ### 召回
 
@@ -1046,7 +1071,7 @@ id、会话、`first_message_id`、`last_message_id`、`started_at`、`ended_at`
 ### 砍掉的
 
 - `[recent turns]` 摘要、续接摘要、`context_resume` 和 turn 内的定位符压缩。turn 内也不裁旧工具输出，太大就结束这次运行，见[核心](#核心)。以后要看上一轮做了什么，加一个读 turn 快照的 `turn_read(t#N)` 工具。
-- 自动注入检索结果。记忆只注入群记忆和触发者的个人记忆，其它靠模型调 `context_search`、`context_read`。这条沿用 Haskell。
+- 自动注入检索结果。每轮只带上 Max 自己的记忆文件，见[记忆](#记忆)，其它靠模型调 `context_search`、`context_read`。
 
 ## 媒体
 
@@ -1118,7 +1143,7 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 
 - **一个实体一个键。** 会话只有 `conversation_id`，QQ 群号只出现在 `endpoints.native_id`。消息只有 `id`，同一个会话里就是入账顺序（见[时间线](#时间线)），模型句柄 `#id` 用它；平台原生 id 是属性，`(endpoint_id, native_id)` 唯一，入站的在 `messages`，Max 发出的在 `deliveries`。人只有 `principal_id`，平台账号在 `identities`。
 - **JSONB 只放三种**：`nodes`、`raw`，和按设计整体存取的 blob（turn 快照、`opaque`、工具输出）。其它结构都是列。
-- ledger 和 turn 记录只追加（[原则](#原则) 1）；摘要、记忆是派生数据，允许 `status` 列。
+- ledger 和 turn 记录只追加（[原则](#原则) 1）；摘要是派生数据，允许 `status` 列。
 - 命名：PK 叫 `id`，外键 `<表>_id`，时间列用 `timestamptz`、叫 `*_at`。
 - 迁移从 1 号开始，上线前随意合并，上线后只追加。
 - 不做 source hash，不做 CAS cursor。Haskell 版的 `conversation_source_hash` 对 IR 做 sha256，IR 格式一改就要全库重打。
@@ -1147,7 +1172,6 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 | | `llm_usage` | turn（可空）、用途（turn、intent、historian、caption）、provider、模型、强度、token（含缓存命中数，按 provider 看命中率、调空闲窗口；还有其中的推理 token）、费用。token 用 bigint；费用 `cost_micros` 是百万分之一美元，用整数，不要 decimal，价格未知时为空 |
 | 上下文 | `summaries` | 见 [summaries 表](#summaries-表) |
 | | `summary_runs` | historian 的每次模型调用：范围、原因（quiet、pressure、compact）、模型、原始输出、错误。用量在 `llm_usage`。有保留期 |
-| 记忆 | `memories` | v1 不做记忆，表先定：会话、principal（空就是群的记忆）、类别、内容、importance、status、来源 summary、证据消息范围。个人记忆也带会话：Haskell 版的个人记忆只在来源群里用（`MemoryStore.hs:103-119`），不跨群 |
 
 以后随功能加：`automations`、`lingo_*`、`bungie_*`、`destiny_*`。
 
@@ -1159,8 +1183,8 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 - `execution_journal`、`llm_calls`：turn 快照里就是模型的全部输入和输出。
 - `platform_ids`：没有兼容 id。
 - `conversation_cursors`：cursor 从 `summaries` 推出来。
-- `compartment_evidence`、`episode_memory_proposals`、`episode_memory_reviews`：搜索直接搜正文；记忆提案在 `summary_runs` 的输出里。
-- `memory_versions`、`memory_mutations`、`memory_evidence`：压成 `memories` 加一张只追加的 `memory_history`。
+- `compartment_evidence`：搜索直接搜正文。
+- `memories` 和它的 `memory_*`、`episode_memory_*` 表：记忆换成文件，旧的记忆 2026-10-30 手工迁成了文件，见[记忆](#记忆)。
 - `skills`、`skill_versions`：skill 是文档，放文件。
 - `sandboxes`：VM 的生命周期在进程里。
 - `admin_timeline_revisions` 和那几个 NOTIFY 触发器：admin 以后再说。
@@ -1177,7 +1201,7 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 - Max 自己的消息不写 `deliveries`：sender 启动时只补记 `qq` 端点上结果未知的，`qq_legacy` 的不管。旧 `agent_turns` 不导，只有 3 段摘要引用了 `t#`；`turn_id` 留空。
 - `conversation_compartments` 只导 `active` 的（3,249 段）。它们按群号（`legacy_group_id`）挂，不是按 `conversation_id`，导入时经群号找会话。范围从 `ingest_seq` 换成首尾消息 id；importance 0..1 换成 1..100；单摘要时期的 40 段只有 `summary`，放进 p1，其它层空着。旧摘要没有标题，标题留空，渲染时不留多余的空格。句柄从 `episode:<uuid>` 换成 `summary#<id>`。
 - `principals` 和 `principal_identities` 直接搬，id 不变，旧摘要和记忆里的 `[mention#N]` 因此还有效；改名之前写的 `[@#N]` 导入时改写成 `[mention#N]`。旧表按 Max 的账号（`platform_account_id`）区分 identity，每个平台一个账号，直接换成平台：QQ 的换成 `qq_legacy`。`sender_name` 从旧 `messages` 的 `sender_card`、`sender_nickname` 取，群名片优先：2026-08-04 起 `sender_nickname` 存的就是有名片时的名片（`QQ.hs:94`）。`sender_role` 从 `platform_events` 原始 payload 的 `sender.role` 取，08-04 之前的为空。没有身份、没有消息的 611 个空 principal 不导。`endpoint_known_identities` 不导。
-- `sessions` 只导人设、`/proactive` 和 `/clear --all`，模型和强度不导，见[配置](#配置)。`memories` 等记忆功能做出来再导（2026-10-29 定）：它们也按群号挂；个人记忆只在来源群里用，表要带会话，不能只按 principal，见[表](#表)。
+- `sessions` 只导人设、`/proactive` 和 `/clear --all`，模型和强度不导，见[配置](#配置)。旧记忆不经过导入工具，见[记忆](#记忆)。
 - 媒体：内容库的文件和旧库在同一个 bcachefs 上，用 `cp --reflink` 拷到 `/var/lib/maxx/media`，属主改成 `maxx`。`media` 和 `message_media` 从 `message_images`、`message_videos`、`group_files` 建；旧的 `seg_index` 是第几个节点，不是第几个媒体，要按节点重算序号；没有表记着的，按节点里写的 blob 补上（多是 Max 发的图）。文件要先拷好，导入时每个都要在。给模型的版本和图片尺寸由 `max-import pictures` 生成，和下载时一样。caption 等第 3 小步有了 `media_captions` 再导：老库 21,519 张图的描述，和表情包库（3,397 张；3,328 张有描述和 bge-m3 向量，94 张 banned 的记成 SKIP）。由 `max-import captions` 导，maxx 照常跑着也行；它先跑迁移，所以要在带 caption worker 的 maxx 启动之前导，否则 worker 启动时的扫描会把最近 14 天导入的图重新写一遍：只导 maxx 有的文件，同一个文件表情包的描述优先，maxx 自己已经写了的不动，所以能重复跑。表情包的向量由 `max-import vectors` 导（第 5 小步）：老 `stickers` 表的 bge-m3 向量，只导老表记的文本哈希（`embedding_content_hash`，描述的 sha256）和 maxx 的 caption 文字对得上的，模型名照抄（`bge-m3`，所以 `[embedding] model` 要写成这个），已经有向量的不动，所以能重复跑、maxx 跑着也行；它也先跑迁移。10-29 在 tank 上只读地对过：maxx 有 3,334 条该有向量的表情包 caption，3,319 条能导；8 条老描述有换行或首尾空白，导 caption 时理成了一行，文字不同；7 条是 maxx 自己写的 caption，老库没有向量；这 15 条由 embedding worker 补。消息和摘要的向量也由它导，按 id：maxx 的召回向量 worker 要算的（够 4 个字的 chat 消息、活跃的摘要）、还没有向量的，从旧 `messages`（`canonical_message_id`）和 `conversation_compartments` 拿 1024 维的，模型名照抄；旧向量是从旧的渲染文本算的，句柄写法不同，意思一样。2000 条一批，已经有的不动。要在带召回向量 worker 的 maxx 启动之前导，否则 worker 会先花几个小时重算。
 - 转发：旧库把转发里的每条消息存成单独的行，导入时折进转发那条消息的节点，一条一行（嵌套的缩进），和现在官方接口给的转发一样；里面的图算在那条消息上。
 - Max 是一个 principal：旧 QQ 号的 Max，加上 bot 的 openid 作 `qq` 身份，旧行渲染出来是"（你）"。Max 的旧行没有平台 id，它们本该在不导的 `deliveries` 里。
@@ -1256,7 +1280,7 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 ### v1 不做、位置留好的
 
 - ~~`/link <QQ号>`~~（2026-10-29 加，同一天去掉）：凭头像验证，把发令人的账号接到老 QQ 号的人上。头像是公开的，当天就有人换上别人的头像接到了别人身上。owner 定：命令和催人接的提醒都去掉，已有的 18 条关联清掉；老群的人由 maxx 自己按头像接，见[身份](#身份)，有冲突、对不上的只记日志，有问题 owner 直接改库，不信用户自己说的。
-- 跨平台的记忆和权限都跟着 principal 的合并走，不单独做。
+- 跨平台的权限跟着 principal 的合并走，不单独做；记忆是会话的文件，换平台接上同一个会话就还在。
 
 ## intent
 

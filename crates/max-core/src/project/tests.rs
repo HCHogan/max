@@ -116,17 +116,34 @@ fn roster_lines_and_mentions() {
 }
 
 #[test]
+fn memory_near_its_cap_asks_to_be_tidied_and_past_it_is_cut() {
+    let count = |text: &str| text.chars().count() as u32;
+    let short = "# 记忆\n- 群友叫你小鲨鲨（2026-08-28 #3）\n";
+    assert_eq!(memory(short, count), short.trim_end());
+    let line = "字".repeat(99);
+    let near = vec![line.as_str(); 25].join("\n");
+    let shown = memory(&near, count);
+    assert!(shown.starts_with(&near), "{shown}");
+    assert!(shown.ends_with("约 2499/3000 token：一行一条，细节挪进 /work/.max/memory/ 下的别的文件、这里留一行指过去，过时的合并或删掉。）"));
+    let over = vec![line.as_str(); 40].join("\n");
+    let shown = memory(&over, count);
+    assert_eq!(shown.matches(line.as_str()).count(), 30);
+    assert!(shown.contains("\n（记忆超过上限，约 3999/3000 token，从这里往后没加载："));
+}
+
+#[test]
 fn the_base_context() {
     let volatile = Volatile {
         now: utc(10, 28, 6, 5),
         roster: vec!["[mention#12] 小明".into()],
+        memory: "# 记忆\n- 群友叫你小鲨鲨（2026-08-28 #3）".into(),
         quoted: String::new(),
         first: "[14:04 小明 #9 @你]: 在吗\n".into(),
     };
     let volatile = volatile.render(china());
     assert_eq!(
         volatile,
-        "[现在] 2026-10-28 周三 14:05\n\n[上下文里的人]\n[mention#12] 小明\n\n[新消息]\n[14:04 小明 #9 @你]: 在吗\n"
+        "[现在] 2026-10-28 周三 14:05\n\n[上下文里的人]\n[mention#12] 小明\n\n[记忆]\n# 记忆\n- 群友叫你小鲨鲨（2026-08-28 #3）\n\n[新消息]\n[14:04 小明 #9 @你]: 在吗\n"
     );
     let context = context(
         "你是 Max".into(),
@@ -143,7 +160,7 @@ fn the_base_context() {
             _ => ("other", item.tokens),
         })
         .collect();
-    assert_eq!(kinds, [("system", 6), ("user", 22), ("user", 79)]);
+    assert_eq!(kinds, [("system", 6), ("user", 22), ("user", 115)]);
     assert_eq!(context.roster, [PrincipalId(12)].into());
 }
 

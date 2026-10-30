@@ -14,7 +14,7 @@ mod send_image;
 mod service;
 mod show;
 mod web_search;
-mod work;
+pub(crate) mod work;
 
 pub use service::{Grant, Sessions, serve};
 

@@ -150,6 +150,8 @@ pub struct Volatile {
     pub now: DateTime<Utc>,
     /// Roster lines, one per person in the context.
     pub roster: Vec<String>,
+    /// Max's memory file, as [`memory`] shows it; empty without one.
+    pub memory: String,
     /// Rendered rows the context refers to but doesn't show, such as the
     /// target of a reply from before the tail.
     pub quoted: String,
@@ -168,13 +170,55 @@ impl Volatile {
                 out.push('\n');
             }
         }
-        for (label, text) in [("[引用的消息]", &self.quoted), ("[新消息]", &self.first)] {
+        let blocks = [
+            ("[记忆]", &self.memory),
+            ("[引用的消息]", &self.quoted),
+            ("[新消息]", &self.first),
+        ];
+        for (label, text) in blocks {
             if !text.trim().is_empty() {
                 let _ = writeln!(out, "\n{label}\n{}", text.trim_end());
             }
         }
         out
     }
+}
+
+/// Max's memory: a file in its VM that it writes itself, shown to every
+/// core. See "记忆" in docs/rust-rewrite.md.
+pub const MEMORY_FILE: &str = "/work/.max/memory.md";
+
+/// The most tokens of the memory file a core is shown.
+pub const MEMORY: u32 = 3_000;
+
+const TIDY: &str =
+    "一行一条，细节挪进 /work/.max/memory/ 下的别的文件、这里留一行指过去，过时的合并或删掉";
+
+/// The memory file as a core is shown it: whole, with a reminder to tidy
+/// it once it nears [`MEMORY`] tokens; past that, the lines that fit and a
+/// note that the rest wasn't loaded. Claude Code treats its MEMORY.md the
+/// same way.
+pub fn memory(text: &str, count: impl Fn(&str) -> u32) -> String {
+    let text = text.trim_end();
+    let total = count(text);
+    if total <= MEMORY * 4 / 5 {
+        return text.to_owned();
+    }
+    if total <= MEMORY {
+        return format!("{text}\n（记忆快到上限了，约 {total}/{MEMORY} token：{TIDY}。）");
+    }
+    let mut shown = String::new();
+    let mut used = 0;
+    for line in text.lines() {
+        let cost = count(line) + 1;
+        if used + cost > MEMORY {
+            break;
+        }
+        used += cost;
+        shown.push_str(line);
+        shown.push('\n');
+    }
+    format!("{shown}（记忆超过上限，约 {total}/{MEMORY} token，从这里往后没加载：{TIDY}。）")
 }
 
 /// `[现在] 2026-10-29 周四 12:10`, on its own line.

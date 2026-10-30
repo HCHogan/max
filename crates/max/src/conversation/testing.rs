@@ -55,6 +55,7 @@ pub fn shared(
         rows: Rows::default(),
         pictures: None,
         vms: None,
+        vm_dir: None,
         started: tokio::time::Instant::now(),
     };
     (shared, rx)

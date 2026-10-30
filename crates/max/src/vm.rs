@@ -9,7 +9,7 @@ pub mod ssh;
 mod webread_tests;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -29,6 +29,12 @@ use crate::scope::Scope;
 
 /// How often idle and dead VMs are looked for.
 const SWEEP: Duration = Duration::from_secs(60);
+
+/// Where `conversation`'s /work is on the host, under the VMs' `dir`,
+/// whether or not its VM runs.
+pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
+    dir.join(conversation.0.to_string()).join("work")
+}
 
 /// A handle to the VM service; it stops once every handle is gone.
 #[derive(Clone)]
@@ -231,7 +237,7 @@ async fn run(
                             connection,
                             stops,
                             _tasks: tasks,
-                            work: Arc::new(config.dir.join(conversation.0.to_string()).join("work")),
+                            work: Arc::new(work(&config.dir, conversation)),
                             lent: Arc::new(()),
                             idle_since: Instant::now(),
                         };

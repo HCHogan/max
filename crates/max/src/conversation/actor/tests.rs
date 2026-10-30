@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use max_core::ids::ConversationId;
 use max_core::item::ItemKind;
 use max_core::message::{Content, Node};
 use max_core::run::Outcome;
@@ -40,24 +41,29 @@ impl Harness {
 
     /// With 小明 as Max's owner, if `xiaoming_owns`.
     async fn with_owner(pool: PgPool, idle_window_secs: u64, xiaoming_owns: bool) -> Self {
-        Self::start(pool, idle_window_secs, xiaoming_owns, true, |_| {}).await
+        Self::start(pool, idle_window_secs, xiaoming_owns, true, None, |_| {}).await
     }
 
     /// Without proactive replies: chatter starts no classifier call that
     /// races the core's calls for the script's answers.
     async fn unprompted(pool: PgPool, idle_window_secs: u64) -> Self {
-        Self::start(pool, idle_window_secs, false, false, |_| {}).await
+        Self::start(pool, idle_window_secs, false, false, None, |_| {}).await
     }
 
     /// With job#1, titled `title`, running as far as the actor knows:
     /// where its steers go.
     async fn with_job(pool: PgPool, title: &str) -> (Self, UnboundedReceiver<String>) {
         let mut steered = None;
-        let h = Self::start(pool, 300, true, false, |actor| {
+        let h = Self::start(pool, 300, true, false, None, |actor| {
             steered = Some(actor.jobs.pretend(title));
         })
         .await;
         (h, steered.unwrap())
+    }
+
+    /// With the VMs' directory at `vm_dir`, where the memory file is.
+    async fn with_vm_dir(pool: PgPool, vm_dir: PathBuf) -> Self {
+        Self::start(pool, 300, false, false, Some(vm_dir), |_| {}).await
     }
 
     async fn start(
@@ -65,6 +71,7 @@ impl Harness {
         idle_window_secs: u64,
         xiaoming_owns: bool,
         proactive: bool,
+        vm_dir: Option<PathBuf>,
         prepare: impl FnOnce(&mut Conversation),
     ) -> Self {
         let mut conn = pool.acquire().await.unwrap();
@@ -90,6 +97,7 @@ impl Harness {
         let (mut shared, outbound) = shared(&pool, &script, idle_window_secs, owners);
         let (historian, notices) = shared.rows.subscribe();
         shared.historian = Some(historian);
+        shared.vm_dir = vm_dir;
         let mut scope = Scope::new();
         let (mailbox, rx) = mpsc::unbounded_channel();
         let mut actor = Conversation::new(Arc::new(shared), place, mailbox.clone())
@@ -301,6 +309,30 @@ async fn a_failed_call_says_so(pool: PgPool) {
             reason: FailReason::Model { .. }
         })
     ));
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_core_is_shown_the_memory_file(pool: PgPool) {
+    let dir = std::env::temp_dir().join(format!("max-memory-{:016x}", rand::random::<u64>()));
+    let mut h = Harness::with_vm_dir(pool, dir.clone()).await;
+    let conversation: i64 = sqlx::query_scalar("select max(id) from conversations")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    let memory = vm::work(&dir, ConversationId(conversation)).join(".max");
+    std::fs::create_dir_all(&memory).unwrap();
+    let text = "# 记忆\n\n## 群里\n- 群友叫你小鲨鲨（2026-08-28 #3）\n";
+    std::fs::write(memory.join("memory.md"), text).unwrap();
+    h.script.push(Answer::says("在"));
+    h.send(at_max(0, " 小鲨鲨？"));
+    h.said().await;
+    let volatile = h.request_tail(0);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        volatile.contains(&format!("\n[记忆]\n{text}\n[新消息]\n")),
+        "{volatile}"
+    );
+    h.stop().await;
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

@@ -3,6 +3,7 @@
 //! back as events.
 
 use std::collections::{BTreeSet, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,7 +13,7 @@ use max_core::ids::{MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::item::{ItemKind, ModelOutput};
 use max_core::message::{Draft, DraftNode, Message};
-use max_core::project::{Budgets, MOST_PICTURES};
+use max_core::project::{Budgets, MEMORY_FILE, MOST_PICTURES};
 use max_core::prompt;
 use max_core::render::Mark;
 use max_core::run::{FailReason, Input, Outcome, Run, RunSpec, Step, Wake};
@@ -33,7 +34,7 @@ use crate::mcp;
 use crate::media::pictures::Pictures;
 use crate::scope::Scope;
 use crate::tokens;
-use crate::vm::Vms;
+use crate::vm::{self, Vms};
 use crate::worker::Rows;
 
 /// What every conversation's actor shares.
@@ -53,6 +54,9 @@ pub struct Shared {
     pub rows: Rows,
     /// None when no VMs are configured: the tools say so.
     pub vms: Option<Vms>,
+    /// The VMs' directory, which holds each conversation's /work and so
+    /// its memory file; None when no VMs are configured.
+    pub vm_dir: Option<PathBuf>,
     /// Where model calls find their pictures; None when no media
     /// directory is configured, and none are sent.
     pub pictures: Option<Arc<Pictures>>,
@@ -433,6 +437,40 @@ impl Conversation {
         self.side.spawn(move |_| classify::classify(job, mailbox));
     }
 
+    /// Max's memory file, read from the host's side of /work as the guest
+    /// left it, and shown as `project::memory` says; empty without one.
+    async fn memory(&self) -> String {
+        /// Far past what is shown: a file this big isn't read at all.
+        const LARGEST: u64 = 256 << 10;
+        let Some(dir) = &self.shared.vm_dir else {
+            return String::new();
+        };
+        let work = vm::work(dir, self.place.conversation);
+        let file = Path::new(MEMORY_FILE)
+            .strip_prefix("/work")
+            .unwrap_or(Path::new(MEMORY_FILE))
+            .to_path_buf();
+        let read = tokio::task::spawn_blocking(move || mcp::work::read(&work, &file, LARGEST));
+        match read.await {
+            Ok(Ok(bytes)) => {
+                max_core::project::memory(&String::from_utf8_lossy(&bytes), tokens::count)
+            }
+            Ok(Err(failure)) if failure.code == "not_found" => String::new(),
+            Ok(Err(failure)) if failure.code == "too_big" => format!(
+                "（{MEMORY_FILE} 超过 {} KiB，整个没加载：整理一下。）",
+                LARGEST >> 10
+            ),
+            Ok(Err(failure)) => {
+                warn!(conversation = %self.place.conversation, error = failure.message, "couldn't read the memory file");
+                String::new()
+            }
+            Err(error) => {
+                warn!(conversation = %self.place.conversation, %error, "couldn't read the memory file");
+                String::new()
+            }
+        }
+    }
+
     async fn start_core(&mut self, wake: Wake) -> Result<()> {
         if self.stopping.is_some() {
             return Ok(());
@@ -449,6 +487,7 @@ impl Conversation {
             system: prompt::system(persona),
             window: chosen.window,
             cleared_upto: settings.cleared_upto,
+            memory: self.memory().await,
             now,
             offset: self.shared.services.offset,
         };

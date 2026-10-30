@@ -38,7 +38,7 @@ pub(super) fn beneath_work(path: &str) -> Result<PathBuf, Failure> {
 /// Reads `relative` under `work`, at most `most` bytes, opening one
 /// component at a time without following a symlink: the guest writes
 /// /work, and a link there would point into the host. Blocking.
-pub(super) fn read(work: &Path, relative: &Path, most: u64) -> Result<Vec<u8>, Failure> {
+pub(crate) fn read(work: &Path, relative: &Path, most: u64) -> Result<Vec<u8>, Failure> {
     let shown = Path::new("/work").join(relative).display().to_string();
     let failed = |errno: Errno| match errno {
         Errno::NOENT => Failure::new("not_found", format!("{shown} 不存在")),

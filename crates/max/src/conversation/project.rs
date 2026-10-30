@@ -28,6 +28,8 @@ pub struct Projection<'a> {
     pub window: u32,
     /// `/clear --all`'s mark: nothing before it is shown.
     pub cleared_upto: Option<MessageId>,
+    /// Max's memory file, as the core is shown it.
+    pub memory: String,
     pub now: DateTime<Utc>,
     pub offset: FixedOffset,
 }
@@ -135,6 +137,7 @@ impl Projection<'_> {
         let volatile = Volatile {
             now: self.now,
             roster: roster_lines(conn, self.place, &roster, project::roster_line).await?,
+            memory: self.memory.clone(),
             quoted: quoted_text,
             first: first_text,
         };

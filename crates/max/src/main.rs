@@ -383,6 +383,7 @@ async fn serve(config: Config) -> Result<()> {
         .as_ref()
         .map(|client| Arc::clone(client) as Arc<dyn Admin>);
     let mut services = Scope::new();
+    let vm_dir = config.vm.as_ref().map(|vm| vm.dir.clone());
     let vms = match config.vm {
         Some(vm) => Some(Vms::start(vm, &mut services)?),
         None => {
@@ -413,6 +414,7 @@ async fn serve(config: Config) -> Result<()> {
         historian,
         rows,
         vms,
+        vm_dir,
         pictures,
         started: tokio::time::Instant::now(),
     });

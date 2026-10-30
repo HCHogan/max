@@ -82,6 +82,7 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
         system: "SYSTEM".into(),
         window: 100_000,
         cleared_upto: None,
+        memory: String::new(),
         now: at(5),
         offset: offset(),
     };
@@ -143,6 +144,7 @@ async fn a_judged_wake(pool: PgPool) {
         system: "SYSTEM".into(),
         window: 100_000,
         cleared_upto: None,
+        memory: String::new(),
         now: at(1),
         offset: offset(),
     };
@@ -273,6 +275,7 @@ async fn the_trigger_and_what_it_quotes_show_their_pictures(pool: PgPool) {
         window: 100_000,
         // The first picture is cleared from the tail, so it is quoted.
         cleared_upto: Some(ids[0]),
+        memory: String::new(),
         now: at(3),
         offset: offset(),
     };
