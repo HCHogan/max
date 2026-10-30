@@ -33,8 +33,6 @@ ids! {
     /// principals.
     IdentityId(i64);
     TurnId(i64);
-    /// A summary the historian wrote; the model sees `summary#id`.
-    SummaryId(i64);
 }
 
 /// The id a provider gave a tool call; opaque to us.

@@ -226,7 +226,8 @@ fn placeholder(s: &str) -> Option<(Token<'_>, usize)> {
 }
 
 /// An event placeholder or an id-less form; see `render`. Reactions and
-/// pokes are no longer rendered, but old summaries still show them.
+/// pokes are no longer rendered, but a model may still write one, as old
+/// summaries showed them.
 fn display(s: &str) -> Option<usize> {
     const EVENTS: &[&str] = &["edit", "unsend", "react", "unreact", "poke"];
     const BARE: &[&str] = &[

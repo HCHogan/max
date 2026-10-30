@@ -6,9 +6,8 @@ use super::*;
 use crate::captions::{self, Caption, Kind};
 use crate::ledger::{self, NewMessage};
 use crate::media::{Blob, record};
-use crate::summaries::{self, Summary};
 use crate::testing::{Group, at, commit, group, said, sender};
-use crate::vectors::{self, Key};
+use crate::vectors;
 
 fn picture(kind: MediaKind) -> Content {
     Content::Message {
@@ -169,58 +168,6 @@ async fn rows_with_the_most_terms_come_first(pool: PgPool) -> sqlx::Result<()> {
     Ok(())
 }
 
-#[sqlx::test]
-async fn active_summaries_by_any_level(pool: PgPool) -> sqlx::Result<()> {
-    let mut conn = pool.acquire().await?;
-    let group = group(&mut conn, "group:30001").await?;
-    let xiaoming = sender(group.xiaoming, "小明", None);
-    let mut ids = Vec::new();
-    for minute in 0..6 {
-        ids.push(commit(&mut conn, &group, &xiaoming, &said("聊"), minute).await?);
-    }
-    let conversation = group.endpoint.conversation;
-    let summary =
-        |first: usize, last: usize, title: &str, full: &str, line: Option<&str>| Summary {
-            first: ids[first],
-            last: ids[last],
-            started_at: at(first as i64),
-            ended_at: at(last as i64),
-            title: title.into(),
-            kind: "mixed".into(),
-            importance: 50,
-            full: full.into(),
-            brief: None,
-            line: line.map(Into::into),
-        };
-    let insert = async |conn: &mut PgConnection, summary: &Summary| {
-        summaries::insert(conn, conversation, summary, "m", at(9)).await
-    };
-    let early = insert(&mut conn, &summary(0, 1, "部署", "定了方案。", None)).await?;
-    let middle = insert(&mut conn, &summary(2, 3, "", "别的。", Some("又说起部署"))).await?;
-    // Superseded, as a rebuild would leave it.
-    let old = insert(&mut conn, &summary(4, 5, "部署上线", "定了方案。", None)).await?;
-    sqlx::query!(
-        "update summaries set status = 'superseded', superseded_by = $1 where id = $2",
-        early.0,
-        old.0
-    )
-    .execute(&mut *conn)
-    .await?;
-
-    let terms = patterns(&["部署", "方案"]);
-    let found = summaries(&mut conn, &query(conversation, &terms)).await?;
-    assert_eq!(found, [(early, vec![0, 1]), (middle, vec![0])]);
-    // Overlapping the window is enough.
-    let window = Query {
-        from: Some(at(1)),
-        until: Some(at(2)),
-        ..query(conversation, &terms)
-    };
-    assert_eq!(summaries(&mut conn, &window).await?, [(early, vec![0, 1])]);
-    Ok(())
-}
-
-/// A made-up vector, between the first two axes.
 fn toward(x: f32, y: f32) -> Vec<f32> {
     let mut vector = vec![0.0; 1024];
     vector[0] = x;
@@ -235,7 +182,7 @@ fn rounded<T: Copy>(found: &[Near<T>]) -> Vec<(T, f32)> {
 }
 
 #[sqlx::test]
-async fn rows_and_summaries_by_meaning(pool: PgPool) -> sqlx::Result<()> {
+async fn rows_by_meaning(pool: PgPool) -> sqlx::Result<()> {
     let mut conn = pool.acquire().await?;
     let group = group(&mut conn, "group:30001").await?;
     let other = crate::testing::group(&mut conn, "group:30002").await?;
@@ -265,11 +212,10 @@ async fn rows_and_summaries_by_meaning(pool: PgPool) -> sqlx::Result<()> {
         (far, conversation, toward(0.0, 1.0)),
         (taken, conversation, toward(1.0, 0.0)),
         (elsewhere, other_conversation, toward(1.0, 0.0)),
-    ]
-    .map(|(id, conversation, vector)| (Key::Message(id), conversation, vector));
+    ];
     vectors::write(&mut conn, "m3", &rows, at(9)).await?;
     // Another model's doesn't count.
-    let old = [(Key::Message(stale), conversation, toward(1.0, 0.0))];
+    let old = [(stale, conversation, toward(1.0, 0.0))];
     vectors::write(&mut conn, "old", &old, at(9)).await?;
 
     let query = query(conversation, &[]);
@@ -289,47 +235,5 @@ async fn rows_and_summaries_by_meaning(pool: PgPool) -> sqlx::Result<()> {
     let found = near_messages(&mut conn, &one, "m3", &toward(0.0, 1.0)).await?;
     assert_eq!(rounded(&found), [(far, 1.0)]);
 
-    let summary = |first: MessageId, last: MessageId, minute: i64| Summary {
-        first,
-        last,
-        started_at: at(minute),
-        ended_at: at(minute + 1),
-        title: "上线".into(),
-        kind: "mixed".into(),
-        importance: 50,
-        full: "说了上线。".into(),
-        brief: None,
-        line: None,
-    };
-    let early =
-        summaries::insert(&mut conn, conversation, &summary(same, near, 0), "m", at(9)).await?;
-    let late =
-        summaries::insert(&mut conn, conversation, &summary(far, far, 2), "m", at(9)).await?;
-    let replaced = summaries::insert(
-        &mut conn,
-        conversation,
-        &summary(stale, stale, 5),
-        "m",
-        at(9),
-    )
-    .await?;
-    sqlx::query!(
-        "update summaries set status = 'superseded', superseded_by = $1 where id = $2",
-        late.0,
-        replaced.0
-    )
-    .execute(&mut *conn)
-    .await?;
-    let written = [
-        (early, toward(0.0, 1.0)),
-        (late, toward(1.0, 0.0)),
-        (replaced, toward(1.0, 0.0)),
-    ]
-    .map(|(id, vector)| (Key::Summary(id), conversation, vector));
-    vectors::write(&mut conn, "m3", &written, at(9)).await?;
-    let found = near_summaries(&mut conn, &query, "m3", &toward(1.0, 0.0)).await?;
-    assert_eq!(rounded(&found), [(late, 1.0), (early, 0.0)]);
-    let found = near_summaries(&mut conn, &window, "m3", &toward(1.0, 0.0)).await?;
-    assert_eq!(rounded(&found), [(early, 0.0)]);
     Ok(())
 }

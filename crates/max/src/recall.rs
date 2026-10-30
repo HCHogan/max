@@ -1,9 +1,8 @@
 //! The recall vector worker: a vector of each chat row that says
-//! something and of each active summary, for `context_search`'s search by
-//! meaning. Each committed row comes to it, and each summary the historian
-//! publishes; its scan, at the start and every hour, finds the rest a page
-//! at a time, summaries first, newest first, and all of them again after a
-//! change of model. See "召回".
+//! something, for `context_search`'s search by meaning. Each committed row
+//! comes to it; its scan, at the start and every hour, finds the rest a
+//! page at a time, newest first, and all of them again after a change of
+//! model. See "召回".
 
 use std::collections::HashSet;
 use std::slice;
@@ -13,8 +12,9 @@ use std::time::Duration;
 
 use chrono::Utc;
 use color_eyre::eyre::Result;
+use max_core::ids::MessageId;
 use max_db::PgPool;
-use max_db::vectors::{self, Key, Of};
+use max_db::vectors::{self, Of};
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{MissedTickBehavior, interval, sleep};
@@ -43,17 +43,17 @@ pub struct Vectors {
 }
 
 /// A committed row comes to the worker by its id.
-impl From<Row> for Key {
+impl From<Row> for MessageId {
     fn from(row: Row) -> Self {
-        Key::Message(row.message.id)
+        row.message.id
     }
 }
 
 impl Vectors {
-    /// Until `stop`: each row and summary that comes, and every hour from
+    /// Until `stop`: each row that comes, and every hour from
     /// the start a scan, one at a time. Vectors still being made then are
     /// dropped; a scan finds them.
-    pub async fn run(self, mut keys: UnboundedReceiver<Key>, stop: CancellationToken) {
+    pub async fn run(self, mut keys: UnboundedReceiver<MessageId>, stop: CancellationToken) {
         let worker = Arc::new(self);
         let slots = Arc::new(Semaphore::new(AT_ONCE));
         // What is being embedded: a row that a scan finds meanwhile is
@@ -100,7 +100,7 @@ impl Vectors {
 
     /// Embeds what of `key` has no vector, again after each failure, and
     /// gives up after the last retry until a scan finds it.
-    async fn tries(&self, key: Key, slots: &Semaphore) {
+    async fn tries(&self, key: MessageId, slots: &Semaphore) {
         let mut retries = RETRIES.iter();
         loop {
             let Err(error) = self.once(slice::from_ref(&key), slots).await else {
@@ -151,13 +151,13 @@ impl Vectors {
     }
 
     /// One try, holding a slot.
-    async fn once(&self, keys: &[Key], slots: &Semaphore) -> Result<()> {
+    async fn once(&self, keys: &[MessageId], slots: &Semaphore) -> Result<()> {
         let _slot = slots.acquire().await?;
         self.embed(keys).await
     }
 
     /// One try at the vectors of what of `keys` has none from this model.
-    async fn embed(&self, keys: &[Key]) -> Result<()> {
+    async fn embed(&self, keys: &[MessageId]) -> Result<()> {
         let model = &self.embedder.model;
         let mut conn = self.pool.acquire().await?;
         let texts = vectors::to_embed(&mut conn, model, keys).await?;

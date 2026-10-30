@@ -55,14 +55,14 @@ pub struct MaxTool {
 pub const MAX_TOOLS: [MaxTool; 12] = [
     MaxTool {
         name: "context_read",
-        description: "读消息或摘要的全文，一页一页地读；也能读一条消息和它前后的几条，或者从某个时候起的聊天记录。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
-        input: r#"{"type":"object","properties":{"id":{"type":"integer","description":"消息的编号，#123 就是 123"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM 或者 YYYY-MM-DD，从这时候起读；和 id 二选一"},"before":{"type":"integer","minimum":0,"maximum":50,"description":"连同它前面几条，默认 0"},"after":{"type":"integer","minimum":0,"maximum":50,"description":"连同它后面几条；有 id 时默认 0，有 at 时默认 50"},"summary":{"type":"integer","description":"摘要的编号，summary#45 就是 45；和 id 二选一"},"page":{"type":"integer","minimum":1,"description":"第几页，默认 1"}},"additionalProperties":false}"#,
+        description: "读消息的全文，一页一页地读；也能读一条消息和它前后的几条，或者从某个时候起的聊天记录。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
+        input: r#"{"type":"object","properties":{"id":{"type":"integer","description":"消息的编号，#123 就是 123"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM 或者 YYYY-MM-DD，从这时候起读；和 id 二选一"},"before":{"type":"integer","minimum":0,"maximum":50,"description":"连同它前面几条，默认 0"},"after":{"type":"integer","minimum":0,"maximum":50,"description":"连同它后面几条；有 id 时默认 0，有 at 时默认 50"},"page":{"type":"integer","minimum":1,"description":"第几页，默认 1"}},"additionalProperties":false}"#,
         output: r#"{"type":"object","properties":{"text":{"type":"string"},"page":{"type":"integer"},"pages":{"type":"integer"}},"required":["text","page","pages"]}"#,
-        declaration: "/** 读消息或摘要的全文。上下文里太长的消息只有开头，后面写着“全文见 #id”。\n  \
+        declaration: "/** 读消息的全文，或者上下文里没有的聊天记录。上下文里太长的消息只有开头，后面写着“全文见 #id”。\n  \
         { id } 读这一条；加上 before、after（各最多 50）就是它连同前后各几条，一行一条，和上下文里一样，太长的照样只有开头。\n  \
         { at } 读从这时候起的聊天：那时或之后的第一条，连同它后面 after 条（默认 50）。比上下文早的事，先搜；想知道哪天大概聊了什么，就从那天读起，接着读就用最后一条的 id 和 after。\n  \
-        { summary } 读一段摘要的全文，末尾写着它总结的是 #几 到 #几。一页不超过上下文里一条消息的上限，pages 是总页数。 */\n\
-        context_read(args: { id: number; before?: number; after?: number; page?: number } | { at: string; before?: number; after?: number; page?: number } | { summary: number; page?: number }): Promise<{ text: string; page: number; pages: number }>;",
+        一页不超过上下文里一条消息的上限，pages 是总页数。 */\n\
+        context_read(args: { id: number; before?: number; after?: number; page?: number } | { at: string; before?: number; after?: number; page?: number }): Promise<{ text: string; page: number; pages: number }>;",
         job: true,
         per_run: None,
     },
@@ -140,15 +140,15 @@ pub const MAX_TOOLS: [MaxTool; 12] = [
     },
     MaxTool {
         name: "context_search",
-        description: "按关键词和意思搜本会话的聊天记录：原始消息（连同图片和表情包的描述）和摘要。返回命中处的片段，和读原文用的 context_read 参数。",
+        description: "按关键词、意思或发言人搜本会话的聊天记录（连同图片和表情包的描述）。返回命中处的片段，和读原文用的 context_read 参数。",
         input: r#"{"type":"object","properties":{"query":{"type":"string","minLength":1,"description":"空格隔开的关键词，最多 8 个"},"who":{"type":"string","minLength":1,"description":"只搜这个人说的：名字里的几个字"},"limit":{"type":"integer","minimum":1,"maximum":30,"description":"几条，默认 10"},"from":{"type":"string","description":"YYYY-MM-DD，从这天起"},"to":{"type":"string","description":"YYYY-MM-DD，到这天为止"}},"additionalProperties":false}"#,
-        output: r#"{"type":"object","properties":{"results":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["message","summary"]},"ref":{"type":"string"},"time":{"type":"string"},"text":{"type":"string"},"read":{"type":"object"}},"required":["kind","ref","time","text","read"]}}},"required":["results"]}"#,
-        declaration: "/** 搜本会话的聊天记录：原始消息（连同图片和表情包的描述）和摘要。上下文里没有的旧事、谁以前说过什么，先搜再答。\n  \
+        output: r#"{"type":"object","properties":{"results":{"type":"array","items":{"type":"object","properties":{"ref":{"type":"string"},"time":{"type":"string"},"text":{"type":"string"},"read":{"type":"object"}},"required":["ref","time","text","read"]}}},"required":["results"]}"#,
+        declaration: "/** 搜本会话的聊天记录，连同图片和表情包的描述。上下文里没有的旧事、谁以前说过什么，先搜再答。\n  \
         query 是空格隔开的关键词，最多 8 个。两样一起找：每个词按原文找，不分大小写，中文词写短点（两三个字）；整个 query 也按意思找相近的说法。\n  \
-        命中的词多的、意思近的在前，一样的新的在前；消息和摘要各最多占 limit 的三分之二，另一种不够时补满。limit 默认 10，最多 30。from、to 是日期，都含当天。\n  \
-        who 是发言人名字里的几个字（当时的群名片），只搜这个人说的、不搜摘要；只给 who 不给 query，就是这个人最近说的话。query 和 who 至少给一个。\n  \
-        text 是命中处附近的一段；read 原样传给 context_read，读这条消息连同前后各 10 条，或者摘要全文。撤回的消息不搜；/clear --all 清掉的只是不在上下文里，照样能搜。一次运行最多搜 20 次。 */\n\
-        context_search(args: { query?: string; who?: string; limit?: number; from?: string; to?: string }): Promise<{ results: { kind: \"message\" | \"summary\"; ref: string; time: string; text: string; read: { id: number; before: number; after: number } | { summary: number } }[] }>;",
+        命中的词多的、意思近的在前，一样的新的在前。limit 默认 10，最多 30。from、to 是日期，都含当天。\n  \
+        who 是发言人名字里的几个字（当时的群名片），只搜这个人说的；只给 who 不给 query，就是这个人最近说的话。query 和 who 至少给一个。\n  \
+        text 是命中处附近的一段；read 原样传给 context_read，读这条消息连同前后各 10 条。撤回的消息不搜；/clear --all 清掉的只是不在上下文里，照样能搜。一次运行最多搜 20 次。 */\n\
+        context_search(args: { query?: string; who?: string; limit?: number; from?: string; to?: string }): Promise<{ results: { ref: string; time: string; text: string; read: { id: number; before: number; after: number } }[] }>;",
         job: true,
         per_run: Some(20),
     },

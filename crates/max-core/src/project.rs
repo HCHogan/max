@@ -66,18 +66,6 @@ pub fn tail_start(tokens: &[u32], budgets: &Budgets) -> usize {
     tokens.len()
 }
 
-/// `2026-10-03 周六 14:02–16:30`, or with the end's date when it differs.
-pub fn span(started_at: DateTime<Utc>, ended_at: DateTime<Utc>, offset: FixedOffset) -> String {
-    let head = moment(started_at, offset);
-    let start = started_at.with_timezone(&offset);
-    let end = ended_at.with_timezone(&offset);
-    if end.date_naive() == start.date_naive() {
-        format!("{head}–{}", end.format("%H:%M"))
-    } else {
-        format!("{head} – {}", end.format("%m-%d %H:%M"))
-    }
-}
-
 /// `[mention#12] 小明（管理员）`.
 pub fn roster_line(principal: PrincipalId, name: &str, role: Option<Role>, is_max: bool) -> String {
     let name = name.replace(['\n', '\r'], " ");
@@ -90,7 +78,7 @@ pub fn roster_line(principal: PrincipalId, name: &str, role: Option<Role>, is_ma
     format!("[mention#{principal}] {name}{note}")
 }
 
-/// The people a text names with `[mention#N]`, such as in a summary.
+/// The people a text names with `[mention#N]`, such as the intent's context.
 pub fn mentioned(text: &str) -> BTreeSet<PrincipalId> {
     text.match_indices("[mention#")
         .filter_map(|(at, token)| {

@@ -1,7 +1,7 @@
 //! `context_search`: where in this conversation's history the query's
-//! terms are, among its rows (with their pictures' and stickers' captions)
-//! and its summaries, and what there is near it by meaning; each result
-//! says how `context_read` reads it. A term is found as written, ignoring
+//! terms are, among its rows (with their pictures' and stickers'
+//! captions), and what there is near it by meaning; each result says how
+//! `context_read` reads it. A term is found as written, ignoring
 //! case. Given a sender, only their rows, and with no query the newest of
 //! them. See "召回".
 
@@ -11,11 +11,10 @@ use std::hash::Hash;
 use std::time::Duration;
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveTime, TimeZone, Utc};
-use max_core::ids::{MessageId, SummaryId};
-use max_core::project::span;
+use max_core::ids::MessageId;
 use max_core::render::{Render, moment};
 use max_db::recall::{self, Near, Query};
-use max_db::{PgConnection, ledger, summaries};
+use max_db::{PgConnection, ledger};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
@@ -56,17 +55,9 @@ struct Args {
     to: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Kind {
-    Message,
-    Summary,
-}
-
 /// A result, as the program gets it, and what it is ranked by.
 #[derive(Debug, Serialize)]
 struct Hit {
-    kind: Kind,
     #[serde(rename = "ref")]
     handle: String,
     time: String,
@@ -80,7 +71,7 @@ struct Hit {
     #[serde(skip)]
     at: DateTime<Utc>,
     /// Hits with the same key are one: a row's content, so a message
-    /// repeated down the chat shows once; a summary's handle.
+    /// repeated down the chat shows once.
     #[serde(skip)]
     key: String,
 }
@@ -140,14 +131,7 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
         limit: i64::try_from(limit * 3).unwrap_or(i64::MAX),
     };
     let meaning = meaning.as_ref();
-    let mut hits = row_hits(&mut conn, context, &query, &terms, meaning).await?;
-    if query.sender.is_none() {
-        let query = Query {
-            limit: i64::try_from(limit).unwrap_or(i64::MAX),
-            ..query
-        };
-        hits.extend(summary_hits(&mut conn, context, &query, &terms, meaning).await?);
-    }
+    let hits = row_hits(&mut conn, context, &query, &terms, meaning).await?;
     Ok(json!({ "results": choose(hits, limit) }))
 }
 
@@ -224,7 +208,6 @@ async fn row_hits(
         let body = render.body(message);
         let name = message.sender.name.replace(['\n', '\r'], " ");
         hits.push(Hit {
-            kind: Kind::Message,
             handle: format!("#{}", message.id),
             time: moment(message.at, context.services.offset),
             text: format!("{name}：{}", snippet(&body, &chosen(terms, &found.has))),
@@ -232,64 +215,6 @@ async fn row_hits(
             score: found.score,
             at: message.at,
             key: body,
-        });
-    }
-    Ok(hits)
-}
-
-/// The summaries the terms are in, or near the query by meaning: the
-/// title, and a stretch of the fullest level the terms are in, or of the
-/// full one.
-async fn summary_hits(
-    conn: &mut PgConnection,
-    context: &Context,
-    query: &Query<'_>,
-    terms: &[String],
-    meaning: Option<&Meaning<'_>>,
-) -> Result<Vec<Hit>, Failure> {
-    let words = recall::summaries(conn, query).await?;
-    let near = match meaning {
-        Some(meaning) => {
-            recall::near_summaries(conn, query, meaning.model, &meaning.vector).await?
-        }
-        None => Vec::new(),
-    };
-    let found = merged(words, near, terms);
-    let ids: Vec<SummaryId> = found.keys().copied().collect();
-    let mut hits = Vec::new();
-    for (id, summary) in summaries::picked(conn, query.conversation, &ids).await? {
-        let Some(found) = found.get(&id) else {
-            continue;
-        };
-        let words = chosen(terms, &found.has);
-        let levels = [
-            Some(&summary.full),
-            summary.brief.as_ref(),
-            summary.line.as_ref(),
-        ];
-        let level = levels
-            .into_iter()
-            .flatten()
-            .find(|level| words.iter().any(|word| find(&fold(level), word).is_some()))
-            .unwrap_or(&summary.full);
-        let text = match summary.title.as_str() {
-            "" => snippet(level, &words),
-            title => format!("{title}：{}", snippet(level, &words)),
-        };
-        let handle = format!("summary#{id}");
-        hits.push(Hit {
-            kind: Kind::Summary,
-            time: span(
-                summary.started_at,
-                summary.ended_at,
-                context.services.offset,
-            ),
-            text,
-            read: json!({ "summary": id.0 }),
-            score: found.score,
-            at: summary.ended_at,
-            key: handle.clone(),
-            handle,
         });
     }
     Ok(hits)
@@ -441,29 +366,13 @@ fn rank(a: &Hit, b: &Hit) -> Ordering {
     b.score.total_cmp(&a.score).then(b.at.cmp(&a.at))
 }
 
-/// The best `limit` hits, one for each key. No kind takes more than two
-/// thirds of them while another has hits left; then the rest by rank.
+/// The best `limit` hits, one for each key.
 fn choose(mut hits: Vec<Hit>, limit: usize) -> Vec<Hit> {
     hits.sort_by(rank);
     let mut keys = HashSet::new();
     hits.retain(|hit| keys.insert(hit.key.clone()));
-    let quota = (limit * 2).div_ceil(3);
-    let mut taken: HashMap<Kind, usize> = HashMap::new();
-    let mut chosen = Vec::new();
-    let mut rest = Vec::new();
-    for hit in hits {
-        let count = taken.entry(hit.kind).or_default();
-        if chosen.len() < limit && *count < quota {
-            *count += 1;
-            chosen.push(hit);
-        } else {
-            rest.push(hit);
-        }
-    }
-    let room = limit - chosen.len();
-    chosen.extend(rest.into_iter().take(room));
-    chosen.sort_by(rank);
-    chosen
+    hits.truncate(limit);
+    hits
 }
 
 #[cfg(test)]

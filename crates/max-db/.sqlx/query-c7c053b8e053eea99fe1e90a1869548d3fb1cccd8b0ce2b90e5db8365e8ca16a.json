@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select m.id from messages m\n             where m.id < $2 and m.kind = 'chat' and char_length(recall_text(m.text)) >= 4\n               and not exists (select 1 from message_embeddings e\n                               where e.message_id = m.id and e.model = $1)\n             order by m.id desc\n             limit $3",
+  "query": "select m.id from messages m\n         where m.id < $2 and m.kind = 'chat' and char_length(recall_text(m.text)) >= 4\n           and not exists (select 1 from message_embeddings e\n                           where e.message_id = m.id and e.model = $1)\n         order by m.id desc\n         limit $3",
   "describe": {
     "columns": [
       {
@@ -26,5 +26,5 @@
       false
     ]
   },
-  "hash": "a22daf331ab9307d4f65fc4276e18d7b2f67755560788e1df26bd481c2a119e4"
+  "hash": "c7c053b8e053eea99fe1e90a1869548d3fb1cccd8b0ce2b90e5db8365e8ca16a"
 }

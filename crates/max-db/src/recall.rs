@@ -1,12 +1,12 @@
 //! Recall: where in a conversation the terms of a `context_search` are. A
 //! term is found as a substring of lowercased text: a row's rendered text
-//! or the captions of its pictures and stickers, a summary's title and
-//! levels. The vectors of rows and summaries find more, near the query's
-//! by meaning. These find the candidates; ranking them is the caller's.
+//! or the captions of its pictures and stickers. The rows' vectors find
+//! more, near the query's by meaning. These find the candidates; ranking
+//! them is the caller's.
 //! See "召回".
 
 use chrono::{DateTime, Utc};
-use max_core::ids::{ConversationId, MessageId, SummaryId};
+use max_core::ids::{ConversationId, MessageId};
 use sqlx::{Connection, PgConnection};
 
 /// What to look for, and where.
@@ -16,11 +16,11 @@ pub struct Query<'a> {
     /// A LIKE pattern per term, for lowercased text: `%term%`, with `%`,
     /// `_` and `\` in the term escaped.
     pub patterns: &'a [String],
-    /// Rows sent from `from` and before `until`; summaries that overlap.
+    /// Rows sent from `from` and before `until`.
     pub from: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
     /// Rows whose sender's name, lowercased, is like this; with no
-    /// patterns, all of them. Summaries have no sender.
+    /// patterns, all of them.
     pub sender: Option<&'a str>,
     /// The most candidates.
     pub limit: i64,
@@ -102,47 +102,6 @@ pub async fn messages(
         .collect())
 }
 
-/// Active summaries with any of the terms in their title or levels: the
-/// most terms first, then the newest.
-pub async fn summaries(
-    conn: &mut PgConnection,
-    query: &Query<'_>,
-) -> sqlx::Result<Vec<Found<SummaryId>>> {
-    // Each summary is lowercased once: the whole of it, from the title down.
-    let rows = sqlx::query!(
-        r#"
-        with bodies as materialized (
-            select id, last_message_id, lower(concat_ws(E'\n', title, p1, p2, p3)) as body
-            from summaries
-            where conversation_id = $1 and status = 'active'
-              and ($3::timestamptz is null or ended_at >= $3)
-              and ($4::timestamptz is null or started_at < $4)
-        ), found as materialized (
-            select b.id, b.last_message_id, array(
-                select t.n::int from unnest($2::text[]) with ordinality as t(pattern, n)
-                where b.body like t.pattern
-            ) as terms
-            from bodies b
-            where b.body like any($2)
-        )
-        select id as "id!", terms as "terms!" from found
-        order by cardinality(terms) desc, last_message_id desc
-        limit $5
-        "#,
-        query.conversation.0,
-        query.patterns,
-        query.from,
-        query.until,
-        query.limit
-    )
-    .fetch_all(conn)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| (SummaryId(row.id), indexes(&row.terms)))
-        .collect())
-}
-
 /// A candidate by meaning, with the cosine similarity of its vector to the
 /// query's: 1 the same, 0 nothing in common.
 pub type Near<T> = (T, f32);
@@ -193,45 +152,6 @@ pub async fn near_messages(
     Ok(rows
         .into_iter()
         .map(|row| (MessageId(row.id), row.similarity))
-        .collect())
-}
-
-/// The active summaries whose vectors by `model` are nearest `vector`,
-/// under the filters of [`summaries`] but the patterns.
-pub async fn near_summaries(
-    conn: &mut PgConnection,
-    query: &Query<'_>,
-    model: &str,
-    vector: &[f32],
-) -> sqlx::Result<Vec<Near<SummaryId>>> {
-    let mut tx = conn.begin().await?;
-    sqlx::query!("set local hnsw.iterative_scan = relaxed_order")
-        .execute(&mut *tx)
-        .await?;
-    let rows = sqlx::query!(
-        r#"
-        select e.summary_id as "id!",
-               (1 - (e.embedding <=> $3::float4[]::halfvec))::float4 as "similarity!"
-        from summary_embeddings e join summaries s on s.id = e.summary_id
-        where e.conversation_id = $1 and e.model = $2 and s.status = 'active'
-          and ($4::timestamptz is null or s.ended_at >= $4)
-          and ($5::timestamptz is null or s.started_at < $5)
-        order by e.embedding <=> $3::float4[]::halfvec
-        limit $6
-        "#,
-        query.conversation.0,
-        model,
-        vector as &[f32],
-        query.from,
-        query.until,
-        query.limit
-    )
-    .fetch_all(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| (SummaryId(row.id), row.similarity))
         .collect())
 }
 

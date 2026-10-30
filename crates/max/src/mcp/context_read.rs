@@ -1,23 +1,20 @@
 //! `context_read`: in full, a page at a time, what the context shows only
-//! in part: a row's whole line, the rows around one or from a moment on,
-//! or a summary. The context shows an over-long row's start only (see
-//! "后续输入"), and old summaries a line or nothing (see "衰减");
-//! `context_search` points here.
-
-use std::collections::BTreeSet;
+//! in part or not at all: a row's whole line, the rows around one or from
+//! a moment on. The context shows an over-long row's start only (see
+//! "后续输入"), and no rows older than the tail; `context_search` points
+//! here.
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
-use max_core::ids::{MessageId, SummaryId};
+use max_core::ids::MessageId;
 use max_core::message::Message;
-use max_core::project::{self, span};
 use max_core::render::Render;
-use max_db::{ledger, summaries};
+use max_db::ledger;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{Context, Failure, arguments};
-use crate::conversation::project::{delivery_mark, joined, people, roster_lines, shown_line};
+use crate::conversation::project::{delivery_mark, joined, people, shown_line};
 use crate::tokens;
 
 /// The most rows read before, and after, the one asked for.
@@ -27,7 +24,6 @@ const MOST_AROUND: u8 = 50;
 #[serde(deny_unknown_fields)]
 struct Args {
     id: Option<i64>,
-    summary: Option<i64>,
     at: Option<String>,
     before: Option<u8>,
     after: Option<u8>,
@@ -37,33 +33,24 @@ struct Args {
 pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let args: Args = arguments("context_read", args)?;
     let around = (args.before.unwrap_or(0), args.after.unwrap_or(0));
-    let (what, pages) = match (args.id, args.summary, args.at) {
-        (Some(id), None, None) if around == (0, 0) => (format!("#{id}"), row(context, id).await?),
-        (Some(id), None, None) => {
+    let (what, pages) = match (args.id, args.at) {
+        (Some(id), None) if around == (0, 0) => (format!("#{id}"), row(context, id).await?),
+        (Some(id), None) => {
             let (before, after) = (around.0.min(MOST_AROUND), around.1.min(MOST_AROUND));
             let pages = rows(context, id, before, after).await?;
             (format!("#{id} 前后"), pages)
         }
-        (None, None, Some(at)) => {
+        (None, Some(at)) => {
             let id = first_since(context, &at).await?;
             let before = around.0.min(MOST_AROUND);
             let after = args.after.unwrap_or(MOST_AROUND).min(MOST_AROUND);
             let pages = rows(context, id.0, before, after).await?;
             (format!("{} 起", at.trim()), pages)
         }
-        (None, Some(id), None) if around == (0, 0) => {
-            (format!("summary#{id}"), summary(context, id).await?)
-        }
-        (None, Some(_), None) => {
-            return Err(Failure::new(
-                "bad_arguments",
-                "before、after 只能和 id 或者 at 一起用",
-            ));
-        }
         _ => {
             return Err(Failure::new(
                 "bad_arguments",
-                "context_read 要 id、at、summary 三选一",
+                "context_read 要 id 或者 at，二选一",
             ));
         }
     };
@@ -162,38 +149,6 @@ async fn rows(context: &Context, id: i64, before: u8, after: u8) -> Result<Vec<S
         })
         .collect();
     Ok(packed(&joined(&render, &lines, None), context.page_tokens))
-}
-
-/// A summary in full, the stretch of the timeline it covers, and who the
-/// people it mentions are.
-async fn summary(context: &Context, id: i64) -> Result<Vec<String>, Failure> {
-    let mut conn = context.services.pool.acquire().await?;
-    let conversation = context.place.conversation;
-    let found = summaries::picked(&mut conn, conversation, &[SummaryId(id)]).await?;
-    let Some((id, summary)) = found.into_iter().next() else {
-        return Err(Failure::new("not_found", format!("这里没有 summary#{id}")));
-    };
-    let span = span(
-        summary.started_at,
-        summary.ended_at,
-        context.services.offset,
-    );
-    let mut text = format!("[summary#{id} {span}]");
-    if !summary.title.is_empty() {
-        text = format!("{text} {}", summary.title);
-    }
-    text = format!(
-        "{text}\n{}\n（总结的是 #{} 到 #{}）",
-        summary.full.trim(),
-        summary.first,
-        summary.last
-    );
-    let named: BTreeSet<_> = project::mentioned(&text);
-    let roster = roster_lines(&mut conn, &context.place, &named, project::roster_line).await?;
-    if !roster.is_empty() {
-        text = format!("{text}\n\n[上下文里的人]\n{}", roster.join("\n"));
-    }
-    Ok(pages(&text, context.page_tokens))
 }
 
 /// `text` in pages of at most `most` tokens, cut evenly by characters.

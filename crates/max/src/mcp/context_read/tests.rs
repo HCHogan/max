@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use max_db::summaries::{self as stored, Summary};
 use sqlx::PgPool;
 
 use super::*;
@@ -153,58 +152,12 @@ async fn the_rows_around_one(pool: PgPool) {
 
     for args in [
         json!({}),
-        json!({ "id": ids[0], "summary": 1 }),
         json!({ "id": ids[0], "at": "2026-10-29" }),
-        json!({ "summary": 1, "after": 2 }),
+        json!({ "summary": 1 }),
         json!({ "id": ids[0], "after": 300 }),
         json!({ "at": "10-29 12:00" }),
     ] {
         let wrong = run(&context, args).await;
         assert_eq!(wrong.unwrap_err().code, "bad_arguments");
     }
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_summary_in_full(pool: PgPool) {
-    let mut conn = pool.acquire().await.unwrap();
-    let place = Arc::new(group(&mut conn).await);
-    let mut committed = Vec::new();
-    for n in 1..=3 {
-        let inbound = from_xiaoming(n, vec![text("聊部署")]);
-        committed.push(
-            ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
-                .await
-                .unwrap(),
-        );
-    }
-    let xiaoming = committed[0].sender.principal;
-    let summary = Summary {
-        first: committed[0].message.id,
-        last: committed[2].message.id,
-        started_at: at(1),
-        ended_at: at(3),
-        title: "部署方案".into(),
-        kind: "decision".into(),
-        importance: 60,
-        full: format!("[mention#{xiaoming}] 定了用蓝绿部署。"),
-        brief: None,
-        line: None,
-    };
-    let id = stored::insert(&mut conn, place.conversation, &summary, "m", at(9))
-        .await
-        .unwrap();
-    drop(conn);
-    let context = context(&pool, &place, 2000);
-
-    let read = run(&context, json!({ "summary": id.0 })).await.unwrap();
-    assert_eq!(
-        read["text"],
-        format!(
-            "[summary#{id} 2026-10-29 周四 12:01–12:03] 部署方案\n[mention#{xiaoming}] 定了用蓝绿部署。\n\
-             （总结的是 #{} 到 #{}）\n\n[上下文里的人]\n[mention#{xiaoming}] 小明",
-            committed[0].message.id, committed[2].message.id
-        )
-    );
-    let missing = run(&context, json!({ "summary": id.0 + 1 })).await;
-    assert_eq!(missing.unwrap_err().code, "not_found");
 }
