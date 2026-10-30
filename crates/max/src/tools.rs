@@ -338,12 +338,12 @@ mod tests {
     fn calls_are_summed_up_per_tool() {
         assert_eq!(called(&BTreeMap::new()), "");
         let calls = BTreeMap::from([
-            ("context_read".to_owned(), (3, 1)),
+            ("history".to_owned(), (3, 1)),
             ("memory_list".to_owned(), (1, 0)),
         ]);
         assert_eq!(
             called(&calls),
-            "\n调了 Max 的工具：context_read 4 次（失败 1 次），memory_list 1 次"
+            "\n调了 Max 的工具：history 4 次（失败 1 次），memory_list 1 次"
         );
     }
 }

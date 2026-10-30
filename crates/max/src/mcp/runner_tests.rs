@@ -112,7 +112,9 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
     assert_eq!(ran.stdout, r#"{"ok":true}"#);
     assert_eq!(ran.stderr, "hi { a: 1 }\nx\n");
 
-    let read = format!("const r = await tools.context_read({{id: {id}}}); return r.text");
+    let read = format!(
+        "const r = await tools.history({{around: {id}, before: 0, after: 0}}); return r.text"
+    );
     let ran = run(&mcp, token, &read).await;
     assert_eq!(
         ran.stdout,
@@ -121,29 +123,29 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
         ran.stderr
     );
 
-    let missing = format!("await tools.context_read({{id: {}}})", id + 1);
+    let missing = format!("await tools.history({{around: {}}})", id + 1);
     let ran = run(&mcp, token, &missing).await;
     assert_eq!(ran.status, 1);
     assert!(
-        ran.stdout.starts_with("ToolError: context_read: 这里没有"),
+        ran.stdout.starts_with("ToolError: history: 这里没有"),
         "{}",
         ran.stdout
     );
     assert!(ran.stdout.contains("at 程序第 1 行"), "{}", ran.stdout);
 
     let raw = format!(
-        "const [a, b] = await Promise.all([max.raw('context_read', {{id: {id}}}), \
-         max.raw('context_read', {{id: {}}})]); return [a.ok, b.ok, b.error.code]",
+        "const [a, b] = await Promise.all([max.raw('history', {{around: {id}}}), \
+         max.raw('history', {{around: {}}})]); return [a.ok, b.ok, b.error.code]",
         id + 1
     );
     let ran = run(&mcp, token, &raw).await;
     assert_eq!(ran.stdout, r#"[true,false,"not_found"]"#, "{}", ran.stderr);
-    assert_eq!(grant.calls()["context_read"], (2, 2));
+    assert_eq!(grant.calls()["history"], (2, 2));
 
     let ran = run(
         &mcp,
         token,
-        &format!("return tools.context_read({{id: {id}}}).text"),
+        &format!("return tools.history({{around: {id}}}).text"),
     )
     .await;
     assert_eq!(ran.status, 1);

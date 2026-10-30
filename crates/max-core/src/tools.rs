@@ -52,19 +52,21 @@ pub struct MaxTool {
     pub job: bool,
 }
 
-pub const MAX_TOOLS: [MaxTool; 12] = [
+pub const MAX_TOOLS: [MaxTool; 11] = [
     MaxTool {
-        name: "context_read",
-        description: "读消息的全文，一页一页地读；也能读一条消息和它前后的几条，或者从某个时候起的聊天记录。上下文里太长的消息只有开头，后面写着“全文见 #id”。",
-        input: r#"{"type":"object","properties":{"id":{"type":"integer","description":"消息的编号，#123 就是 123"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM 或者 YYYY-MM-DD，从这时候起读；和 id 二选一"},"before":{"type":"integer","minimum":0,"maximum":50,"description":"连同它前面几条，默认 0"},"after":{"type":"integer","minimum":0,"maximum":50,"description":"连同它后面几条；有 id 时默认 0，有 at 时默认 50"},"page":{"type":"integer","minimum":1,"description":"第几页，默认 1"}},"additionalProperties":false}"#,
-        output: r#"{"type":"object","properties":{"text":{"type":"string"},"page":{"type":"integer"},"pages":{"type":"integer"}},"required":["text","page","pages"]}"#,
-        declaration: "/** 读消息的全文，或者上下文里没有的聊天记录。上下文里太长的消息只有开头，后面写着“全文见 #id”。\n  \
-        { id } 读这一条；加上 before、after（各最多 50）就是它连同前后各几条，一行一条，和上下文里一样，太长的照样只有开头。\n  \
-        { at } 读从这时候起的聊天：那时或之后的第一条，连同它后面 after 条（默认 50）。比上下文早的事，先搜；想知道哪天大概聊了什么，就从那天读起，接着读就用最后一条的 id 和 after。\n  \
-        一页不超过上下文里一条消息的上限，pages 是总页数。 */\n\
-        context_read(args: { id: number; before?: number; after?: number; page?: number } | { at: string; before?: number; after?: number; page?: number }): Promise<{ text: string; page: number; pages: number }>;",
+        name: "history",
+        description: "查本会话的聊天记录（连同图片和表情包的描述）：按内容、发言人、时间筛，或者看某条消息前后。给了 query 返回命中的片段，没给就按时间顺序返回原文。",
+        input: r#"{"type":"object","properties":{"query":{"type":"string","minLength":1,"description":"空格隔开的关键词，最多 8 个；给了就是搜"},"who":{"type":"string","minLength":1,"description":"发言人名字里的几个字"},"from":{"type":"string","description":"YYYY-MM-DD、YYYY-MM-DD HH:MM 或 #编号，从这里起"},"to":{"type":"string","description":"YYYY-MM-DD、YYYY-MM-DD HH:MM 或 #编号，到这里为止"},"around":{"type":"integer","description":"读这条消息前后，#123 就是 123"},"before":{"type":"integer","minimum":0,"maximum":50,"description":"around 前面几条，默认 10"},"after":{"type":"integer","minimum":0,"maximum":50,"description":"around 后面几条，默认 10"},"limit":{"type":"integer","minimum":1,"maximum":100,"description":"搜的默认 10 条、最多 30；读的默认 50 条、最多 100"},"page":{"type":"integer","minimum":1,"description":"读的第几页，默认 1"}},"additionalProperties":false}"#,
+        output: r#"{"type":"object","properties":{"results":{"type":"array","items":{"type":"object","properties":{"ref":{"type":"string"},"time":{"type":"string"},"text":{"type":"string"},"read":{"type":"object"}},"required":["ref","time","text","read"]}},"text":{"type":"string"},"page":{"type":"integer"},"pages":{"type":"integer"},"next":{"type":"object"}}}"#,
+        declaration: "/** 查本会话的聊天记录，连同图片和表情包的描述。上下文里没有的旧事、谁以前说过什么、哪天聊了什么，先查再答。筛选可以一起用：\n  \
+        who 是发言人名字里的几个字（当时的群名片）；from、to 是 YYYY-MM-DD（整天，都含当天）、YYYY-MM-DD HH:MM 或 #编号（from 含这条，to 不含）。\n  \
+        给了 query 就是搜，返回 results：query 是空格隔开的关键词，最多 8 个，每个词按原文找，不分大小写，中文词写短点（两三个字）；整个 query 也按意思找相近的说法。命中的词多的、意思近的在前，一样的新的在前；limit 默认 10，最多 30。text 是命中处附近的一段；read 原样传回来，就是读这条连同前后各 10 条。撤回的消息不搜。\n  \
+        没给 query 就是读原文，按时间顺序一行一条，和上下文里一样，太长的只有开头：有 from 从 from 往后读，没有就读最新的（到 to 为止）；limit 默认 50，最多 100。还有更多时 next 是接着读的参数，原样传回来：从 from 读的往后接，读最新的往前接。who、from、to 至少给一个。\n  \
+        around 读这条消息连同前后各 before、after 条（默认 10，最多 50），不和别的筛选一起用；before、after 都是 0 就只读这一条，太长的也是全文。\n  \
+        读的结果按页给，一页不超过上下文里一条消息的上限，pages 是总页数，page 选第几页。/clear --all 清掉的只是不在上下文里，照样查得到。 */\n\
+        history(args: { query?: string; who?: string; from?: string; to?: string; around?: number; before?: number; after?: number; limit?: number; page?: number }): Promise<{ results: { ref: string; time: string; text: string; read: { around: number } }[] } | { text: string; page: number; pages: number; next?: object }>;",
         job: true,
-        per_run: None,
+        per_run: Some(60),
     },
     MaxTool {
         name: "web_search",
@@ -139,25 +141,11 @@ pub const MAX_TOOLS: [MaxTool; 12] = [
         per_run: Some(5),
     },
     MaxTool {
-        name: "context_search",
-        description: "按关键词、意思或发言人搜本会话的聊天记录（连同图片和表情包的描述）。返回命中处的片段，和读原文用的 context_read 参数。",
-        input: r#"{"type":"object","properties":{"query":{"type":"string","minLength":1,"description":"空格隔开的关键词，最多 8 个"},"who":{"type":"string","minLength":1,"description":"只搜这个人说的：名字里的几个字"},"limit":{"type":"integer","minimum":1,"maximum":30,"description":"几条，默认 10"},"from":{"type":"string","description":"YYYY-MM-DD，从这天起"},"to":{"type":"string","description":"YYYY-MM-DD，到这天为止"}},"additionalProperties":false}"#,
-        output: r#"{"type":"object","properties":{"results":{"type":"array","items":{"type":"object","properties":{"ref":{"type":"string"},"time":{"type":"string"},"text":{"type":"string"},"read":{"type":"object"}},"required":["ref","time","text","read"]}}},"required":["results"]}"#,
-        declaration: "/** 搜本会话的聊天记录，连同图片和表情包的描述。上下文里没有的旧事、谁以前说过什么，先搜再答。\n  \
-        query 是空格隔开的关键词，最多 8 个。两样一起找：每个词按原文找，不分大小写，中文词写短点（两三个字）；整个 query 也按意思找相近的说法。\n  \
-        命中的词多的、意思近的在前，一样的新的在前。limit 默认 10，最多 30。from、to 是日期，都含当天。\n  \
-        who 是发言人名字里的几个字（当时的群名片），只搜这个人说的；只给 who 不给 query，就是这个人最近说的话。query 和 who 至少给一个。\n  \
-        text 是命中处附近的一段；read 原样传给 context_read，读这条消息连同前后各 10 条。撤回的消息不搜；/clear --all 清掉的只是不在上下文里，照样能搜。一次运行最多搜 20 次。 */\n\
-        context_search(args: { query?: string; who?: string; limit?: number; from?: string; to?: string }): Promise<{ results: { ref: string; time: string; text: string; read: { id: number; before: number; after: number } }[] }>;",
-        job: true,
-        per_run: Some(20),
-    },
-    MaxTool {
         name: "agent",
         description: "交给一个后台 agent 去做一件要花时间的事，马上返回 job 编号；它做完了，报告作为 [job#N 完成] 回到你这里。",
         input: r#"{"type":"object","properties":{"task":{"type":"string","minLength":1,"description":"要它做的事，连同背景，写全"},"title":{"type":"string","maxLength":40,"description":"一句话的标题"}},"required":["task"],"additionalProperties":false}"#,
         output: r#"{"type":"object","properties":{"job":{"type":"string"}},"required":["job"]}"#,
-        declaration: "/** 起一个后台 agent，去做一件要花时间的事：查一堆资料、读很多网页或文件、写代码跑实验。它在本群的 VM 里跑，和你共用 /work，自己有 shell、读写文件、context_search、context_read、web_search；不能在群里说话，也不能发图发文件、撤回、禁言。\n  \
+        declaration: "/** 起一个后台 agent，去做一件要花时间的事：查一堆资料、读很多网页或文件、写代码跑实验。它在本群的 VM 里跑，和你共用 /work，自己有 shell、读写文件、history、web_search；不能在群里说话，也不能发图发文件、撤回、禁言。\n  \
         它看不到群里的对话，只看得到 task，所以背景、要做什么、做到什么程度、报告要写什么都写进去。title 是一句话的标题，agent_status 里显示。\n  \
         马上返回 { job: \"job#3\" }，你接着聊。它做完了，报告作为 [job#3 完成] 出现在你的新消息里，全文另存在 /work/.max/jobs/ 下，由你决定在群里怎么说。同时最多 3 个，每个最多 2 小时，到点停下、交出做到一半的结果。一次运行最多起 3 个。 */\n\
         agent(args: { task: string; title?: string }): Promise<{ job: string }>;",

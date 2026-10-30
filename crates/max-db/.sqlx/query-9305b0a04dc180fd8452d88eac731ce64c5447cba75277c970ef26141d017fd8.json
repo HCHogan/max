@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        with hits as materialized (\n            select id from messages where conversation_id = $1 and lower(text) like any($2)\n            union\n            select mm.message_id from media_captions c\n            join message_media mm on mm.sha256 = c.sha256\n            join messages m on m.id = mm.message_id\n            where lower(c.text) like any($2) and m.conversation_id = $1\n            union\n            select id from messages\n            where conversation_id = $1 and cardinality($2::text[]) = 0\n              and lower(sender_name) like $6\n              and ($3::bigint is null or id >= $3) and ($4::bigint is null or id < $4)\n        ), bodies as materialized (\n            select m.id, concat_ws(E'\\n', lower(m.text), (\n                select string_agg(lower(c.text), E'\\n')\n                from message_media mm join media_captions c on c.sha256 = mm.sha256\n                where mm.message_id = m.id\n            )) as body\n            from messages m\n            where m.id in (select id from hits)\n              and m.conversation_id = $1 and m.kind = 'chat'\n              and ($3::bigint is null or m.id >= $3)\n              and ($4::bigint is null or m.id < $4)\n              and ($6::text is null or lower(m.sender_name) like $6)\n              and not exists (\n                  select from messages u where u.target_id = m.id and u.event = 'unsend'\n              )\n        ), found as materialized (\n            select id, array(\n                select t.n::int from unnest($2::text[]) with ordinality as t(pattern, n)\n                where body like t.pattern\n            ) as terms\n            from bodies\n        )\n        select id as \"id!\", terms as \"terms!\" from found\n        order by cardinality(terms) desc, id desc\n        limit $5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "terms!",
+        "type_info": "Int4Array",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "9305b0a04dc180fd8452d88eac731ce64c5447cba75277c970ef26141d017fd8"
+}

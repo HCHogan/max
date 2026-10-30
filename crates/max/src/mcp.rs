@@ -3,10 +3,9 @@
 
 mod agent;
 mod chat_file;
-mod context_read;
-mod context_search;
 mod find_stickers;
 mod forward;
+mod history;
 mod mute_member;
 mod recall_message;
 mod send_file;
@@ -49,7 +48,7 @@ pub struct Services {
     pub search: Option<Arc<Search>>,
     /// The content store, for pictures and files sent.
     pub store: Option<Arc<Store>>,
-    /// For `find_stickers`, and `context_search` by meaning.
+    /// For `find_stickers`, and `history` by meaning.
     pub embedder: Option<Arc<Embedder>>,
     /// For `mute_member`; None without QQ.
     pub admin: Option<Arc<dyn Admin>>,
@@ -136,14 +135,13 @@ impl From<sqlx::Error> for Failure {
 /// Runs the Max tool `name`.
 pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
     match name {
-        "context_read" => context_read::run(context, args).await,
+        "history" => history::run(context, args).await,
         "web_search" => web_search::run(context, args).await,
         "send_image" => send_image::run(context, args).await,
         "send_file" => send_file::run(context, args).await,
         "recall_message" => recall_message::run(context, args).await,
         "mute_member" => mute_member::run(context, args).await,
         "find_stickers" => find_stickers::run(context, args).await,
-        "context_search" => context_search::run(context, args).await,
         name if agent::NAMES.contains(&name) => agent::run(name, context, args).await,
         _ => Err(Failure::new(
             "unknown_tool",

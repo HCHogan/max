@@ -119,8 +119,8 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
     let outs = runtime.block_on(async {
         let mut services = Scope::new();
         let vms = Vms::start(vm, &mut services)?;
-        // No conversation has id 0, so the program's context_read finds
-        // nothing, from the database.
+        // No conversation has id 0, so the program's history finds nothing,
+        // from the database.
         let context = || {
             let services = mcp::Services {
                 pool: PgPool::connect_lazy(&config.database.url)?,
@@ -155,7 +155,7 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
             timeout_ms: None,
         };
         let program = Tool::RunCode {
-            code: "const read = await max.raw('context_read', {id: 1});\n\
+            code: "const read = await max.raw('history', {around: 1});\n\
                    return {node: process.version, mcp: read.ok ? 'ok' : read.error.code}"
                 .into(),
             args: None,
@@ -268,9 +268,7 @@ async fn serve(config: Config) -> Result<()> {
             Some(Arc::new(Embedder::new(&embedding.base_url, model, key)?))
         }
         None => {
-            info!(
-                "no embedding model: find_stickers says so, and context_search matches words only"
-            );
+            info!("no embedding model: find_stickers says so, and history matches words only");
             None
         }
     };

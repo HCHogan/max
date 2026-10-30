@@ -399,22 +399,23 @@ mod tests {
         }
 
         let listed = post(&socket, grant.token(), "tools/list", json!({})).await;
-        assert_eq!(listed["tools"][0]["name"], "context_read", "{listed}");
+        assert_eq!(listed["tools"][0]["name"], "history", "{listed}");
         assert_eq!(listed["tools"][0]["outputSchema"]["type"], "object");
 
         let id = hello.message.id.0;
-        let read = json!({ "name": "context_read", "arguments": { "id": id } });
+        let one = json!({ "around": id, "before": 0, "after": 0 });
+        let read = json!({ "name": "history", "arguments": one });
         let result = post(&socket, grant.token(), "tools/call", read.clone()).await;
         assert_eq!(result["isError"], false, "{result}");
         assert_eq!(
             result["structuredContent"]["text"],
             format!("[12:01 小明 #{id}]: 你好")
         );
-        let missing = json!({ "name": "context_read", "arguments": { "id": id + 1 } });
+        let missing = json!({ "name": "history", "arguments": { "around": id + 1 } });
         let result = post(&socket, grant.token(), "tools/call", missing).await;
         assert_eq!(result["isError"], true, "{result}");
         assert_eq!(result["structuredContent"]["code"], "not_found");
-        assert_eq!(grant.calls()["context_read"], (1, 1));
+        assert_eq!(grant.calls()["history"], (1, 1));
 
         // Another conversation's VM, a wrong token, a run that ended.
         let refused = |reply: &Value| reply["message"].as_str().unwrap().contains("token");
@@ -499,7 +500,7 @@ mod tests {
             "{initialized}"
         );
         let listed = post_legacy(&socket, grant.token(), "tools/list", json!({})).await;
-        assert_eq!(listed["tools"][0]["name"], "context_read", "{listed}");
+        assert_eq!(listed["tools"][0]["name"], "history", "{listed}");
 
         scope.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(dir);

@@ -425,6 +425,53 @@ pub async fn first_since(
     Ok(id.map(MessageId))
 }
 
+/// Up to `limit` ids of the conversation's rows from `from` and before
+/// `until`, and if `sender` is given, those whose sender's name,
+/// lowercased, is like it: the first of them, or with `newest` the last,
+/// newest first.
+pub async fn stretch(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    (from, until): (Option<MessageId>, Option<MessageId>),
+    sender: Option<&str>,
+    newest: bool,
+    limit: i64,
+) -> sqlx::Result<Vec<MessageId>> {
+    let (from, until) = (from.map(|id| id.0), until.map(|id| id.0));
+    let ids = if newest {
+        sqlx::query_scalar!(
+            "select id from messages
+             where conversation_id = $1 and ($2::bigint is null or id >= $2)
+               and ($3::bigint is null or id < $3)
+               and ($4::text is null or lower(sender_name) like $4)
+             order by id desc limit $5",
+            conversation.0,
+            from,
+            until,
+            sender,
+            limit
+        )
+        .fetch_all(conn)
+        .await?
+    } else {
+        sqlx::query_scalar!(
+            "select id from messages
+             where conversation_id = $1 and ($2::bigint is null or id >= $2)
+               and ($3::bigint is null or id < $3)
+               and ($4::text is null or lower(sender_name) like $4)
+             order by id limit $5",
+            conversation.0,
+            from,
+            until,
+            sender,
+            limit
+        )
+        .fetch_all(conn)
+        .await?
+    };
+    Ok(ids.into_iter().map(MessageId).collect())
+}
+
 /// The row a platform id names in this endpoint: someone's message, or
 /// one Max sent.
 pub async fn by_native_id(

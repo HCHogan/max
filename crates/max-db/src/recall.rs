@@ -1,11 +1,10 @@
-//! Recall: where in a conversation the terms of a `context_search` are. A
+//! Recall: where in a conversation the terms of a `history` search are. A
 //! term is found as a substring of lowercased text: a row's rendered text
 //! or the captions of its pictures and stickers. The rows' vectors find
 //! more, near the query's by meaning. These find the candidates; ranking
 //! them is the caller's.
 //! See "召回".
 
-use chrono::{DateTime, Utc};
 use max_core::ids::{ConversationId, MessageId};
 use sqlx::{Connection, PgConnection};
 
@@ -16,9 +15,10 @@ pub struct Query<'a> {
     /// A LIKE pattern per term, for lowercased text: `%term%`, with `%`,
     /// `_` and `\` in the term escaped.
     pub patterns: &'a [String],
-    /// Rows sent from `from` and before `until`.
-    pub from: Option<DateTime<Utc>>,
-    pub until: Option<DateTime<Utc>>,
+    /// Rows from `from` and before `until`, by id: a stretch of the
+    /// timeline, as `history` works out from days, moments or rows.
+    pub from: Option<MessageId>,
+    pub until: Option<MessageId>,
     /// Rows whose sender's name, lowercased, is like this; with no
     /// patterns, all of them.
     pub sender: Option<&'a str>,
@@ -60,6 +60,7 @@ pub async fn messages(
             select id from messages
             where conversation_id = $1 and cardinality($2::text[]) = 0
               and lower(sender_name) like $6
+              and ($3::bigint is null or id >= $3) and ($4::bigint is null or id < $4)
         ), bodies as materialized (
             select m.id, concat_ws(E'\n', lower(m.text), (
                 select string_agg(lower(c.text), E'\n')
@@ -69,8 +70,8 @@ pub async fn messages(
             from messages m
             where m.id in (select id from hits)
               and m.conversation_id = $1 and m.kind = 'chat'
-              and ($3::timestamptz is null or m.sent_at >= $3)
-              and ($4::timestamptz is null or m.sent_at < $4)
+              and ($3::bigint is null or m.id >= $3)
+              and ($4::bigint is null or m.id < $4)
               and ($6::text is null or lower(m.sender_name) like $6)
               and not exists (
                   select from messages u where u.target_id = m.id and u.event = 'unsend'
@@ -88,8 +89,8 @@ pub async fn messages(
         "#,
         query.conversation.0,
         query.patterns,
-        query.from,
-        query.until,
+        query.from.map(|id| id.0),
+        query.until.map(|id| id.0),
         query.limit,
         query.sender
     )
@@ -131,8 +132,8 @@ pub async fn near_messages(
                (1 - (e.embedding <=> $3::float4[]::halfvec))::float4 as "similarity!"
         from message_embeddings e join messages m on m.id = e.message_id
         where e.conversation_id = $1 and e.model = $2 and m.kind = 'chat'
-          and ($4::timestamptz is null or m.sent_at >= $4)
-          and ($5::timestamptz is null or m.sent_at < $5)
+          and ($4::bigint is null or m.id >= $4)
+          and ($5::bigint is null or m.id < $5)
           and ($7::text is null or lower(m.sender_name) like $7)
           and not exists (select from messages u where u.target_id = m.id and u.event = 'unsend')
         order by e.embedding <=> $3::float4[]::halfvec
@@ -141,8 +142,8 @@ pub async fn near_messages(
         query.conversation.0,
         model,
         vector as &[f32],
-        query.from,
-        query.until,
+        query.from.map(|id| id.0),
+        query.until.map(|id| id.0),
         query.limit,
         query.sender
     )

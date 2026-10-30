@@ -1,7 +1,7 @@
 //! How timeline rows look to the model: one line each,
 //! `[HH:MM 名字 #id]: 内容`, with a date line when the day changes and a gap
 //! line after a long silence. The tail, `[新消息]` blocks, intent and
-//! `context_read` all render rows with this, so a row reads the same
+//! `history` all render rows with this, so a row reads the same
 //! everywhere.
 //!
 //! Placeholders follow the one grammar the segmenter parses: `[word#id]`,
@@ -23,7 +23,7 @@ use crate::message::{Card, Content, MediaKind, MediaMeta, MentionTarget, Message
 const GAP: TimeDelta = TimeDelta::hours(1);
 
 /// Characters of an over-long row the model sees before reaching for
-/// `context_read`.
+/// `history`.
 pub const EXCERPT_CHARS: usize = 2000;
 
 /// Who is behind an account. The ledger stores accounts; the model sees
@@ -107,7 +107,7 @@ impl<P: People> Render<'_, P> {
             .take(EXCERPT_CHARS)
             .collect();
         format!(
-            "{}{content}…（太长，全文见 #{}，用 context_read 读）{}",
+            "{}{content}…（太长，全文见 #{}，用 history 读）{}",
             self.header(message, mark),
             message.id,
             suffix(mark)
@@ -445,7 +445,7 @@ mod tests {
         let row = message(7, (28, 2, 0), "小明", said(vec![text(&long)]));
         let line = render(&people).excerpt(&row, Mark::RepliesToYou);
         assert!(line.starts_with("[10:00 小明 #7 回复你]: 长长"));
-        assert!(line.ends_with("长…（太长，全文见 #7，用 context_read 读）"));
+        assert!(line.ends_with("长…（太长，全文见 #7，用 history 读）"));
         assert_eq!(
             line.split('…')
                 .next()

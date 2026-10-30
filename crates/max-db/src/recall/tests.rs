@@ -154,8 +154,8 @@ async fn rows_with_the_most_terms_come_first(pool: PgPool) -> sqlx::Result<()> {
 
     let terms = patterns(&["部署", "方案"]);
     let window = Query {
-        from: Some(at(1)),
-        until: Some(at(6)),
+        from: Some(github),
+        until: Some(mine),
         ..query(conversation, &terms)
     };
     let found = messages(&mut conn, &window).await?;
@@ -222,8 +222,8 @@ async fn rows_by_meaning(pool: PgPool) -> sqlx::Result<()> {
     let found = near_messages(&mut conn, &query, "m3", &toward(1.0, 0.0)).await?;
     assert_eq!(rounded(&found), [(same, 1.0), (near, 0.71), (far, 0.0)]);
     let window = Query {
-        from: Some(at(1)),
-        until: Some(at(2)),
+        from: Some(near),
+        until: Some(far),
         ..query.clone()
     };
     let found = near_messages(&mut conn, &window, "m3", &toward(1.0, 0.0)).await?;

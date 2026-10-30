@@ -219,7 +219,7 @@ async fn a_job_calls_only_the_tools_that_read(pool: PgPool) {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["context_read", "web_search", "context_search"]);
+    assert_eq!(names, ["history", "web_search"]);
 
     let call = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
         "name": "send_image", "arguments": { "path": "a.png" }, "_meta": meta,

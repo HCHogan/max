@@ -1,4 +1,4 @@
-//! Vectors of what rows say, for `context_search`'s search by meaning:
+//! Vectors of what rows say, for `history`'s search by meaning:
 //! one for each chat row that says something. The recall vector worker
 //! writes them; `recall` reads them. As with the stickers', each keeps the
 //! model that made it, and another model's don't count. See "召回".

@@ -1,35 +1,33 @@
-//! `context_search`: where in this conversation's history the query's
-//! terms are, among its rows (with their pictures' and stickers'
-//! captions), and what there is near it by meaning; each result says how
-//! `context_read` reads it. A term is found as written, ignoring
-//! case. Given a sender, only their rows, and with no query the newest of
-//! them. See "召回".
+//! `history` with a query: where in this conversation's history its terms
+//! are, among its rows (with their pictures' and stickers' captions), and
+//! what there is near it by meaning, under the read's filters; each result
+//! says how `history` reads it in context. A term is found as written,
+//! ignoring case. See "召回".
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::time::Duration;
 
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use max_core::ids::MessageId;
 use max_core::render::{Render, moment};
 use max_db::recall::{self, Near, Query};
 use max_db::{PgConnection, ledger};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tracing::debug;
 
-use super::{Context, Failure, arguments};
+use super::Filters;
 use crate::conversation::project::people;
+use crate::mcp::{Context, Failure};
 
 const DEFAULT: usize = 10;
 const MOST: usize = 30;
 const MOST_TERMS: usize = 8;
 const TERM_CHARS: usize = 50;
-/// Rows a message's result reads on each side of it.
-const AROUND: u8 = 10;
 /// Characters of a result's text, around its first hit when longer.
 const SNIPPET: usize = 160;
 /// Of those, how many come before the hit.
@@ -45,16 +43,6 @@ const NEAR: f32 = 0.5;
 /// the whole conversation.
 static SLOTS: Semaphore = Semaphore::const_new(4);
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Args {
-    query: Option<String>,
-    who: Option<String>,
-    limit: Option<usize>,
-    from: Option<String>,
-    to: Option<String>,
-}
-
 /// A result, as the program gets it, and what it is ranked by.
 #[derive(Debug, Serialize)]
 struct Hit {
@@ -62,7 +50,7 @@ struct Hit {
     handle: String,
     time: String,
     text: String,
-    /// `context_read`'s arguments.
+    /// `history`'s arguments for the row in context.
     read: Value,
     /// From 0 to 1: the share of the terms it has, or how near it is by
     /// meaning, whichever is higher.
@@ -90,32 +78,17 @@ struct Candidate {
     score: f32,
 }
 
-pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
-    let Args {
-        query,
-        who,
-        limit,
-        from,
-        to,
-    } = arguments("context_search", args)?;
-    let terms = match (&query, &who) {
-        (Some(query), _) => terms(query)?,
-        (None, Some(_)) => Vec::new(),
-        (None, None) => {
-            return Err(Failure::new(
-                "bad_arguments",
-                "context_search 要 query 或者 who",
-            ));
-        }
-    };
-    let sender = who.as_deref().map(sender).transpose()?;
+/// The best `limit` results for `query`, ten by default.
+pub(super) async fn found(
+    context: &Context,
+    query: &str,
+    filters: &Filters,
+    limit: Option<usize>,
+) -> Result<Value, Failure> {
+    let terms = terms(query)?;
     let limit = limit.unwrap_or(DEFAULT).clamp(1, MOST);
-    let (from, until) = window(from.as_deref(), to.as_deref(), context.services.offset)?;
     let patterns: Vec<String> = terms.iter().map(|term| pattern(term)).collect();
-    let meaning = match &query {
-        Some(query) => meaning(context, query).await,
-        None => None,
-    };
+    let meaning = meaning(context, query).await;
 
     let _slot = SLOTS.acquire().await;
     let mut conn = context.services.pool.acquire().await?;
@@ -124,9 +97,9 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let query = Query {
         conversation: context.place.conversation,
         patterns: &patterns,
-        from,
-        until,
-        sender: sender.as_deref(),
+        from: filters.from,
+        until: filters.until,
+        sender: filters.sender.as_deref(),
         // Room for the copies of one message that count as one.
         limit: i64::try_from(limit * 3).unwrap_or(i64::MAX),
     };
@@ -145,11 +118,11 @@ async fn meaning<'a>(context: &'a Context, query: &str) -> Option<Meaning<'a>> {
             vector,
         }),
         Ok(Err(error)) => {
-            debug!("context_search goes by the words alone: {error}");
+            debug!("history searches by the words alone: {error}");
             None
         }
         Err(_) => {
-            debug!("context_search goes by the words alone: no vector in time");
+            debug!("history searches by the words alone: no vector in time");
             None
         }
     }
@@ -211,7 +184,7 @@ async fn row_hits(
             handle: format!("#{}", message.id),
             time: moment(message.at, context.services.offset),
             text: format!("{name}：{}", snippet(&body, &chosen(terms, &found.has))),
-            read: json!({ "id": message.id.0, "before": AROUND, "after": AROUND }),
+            read: json!({ "around": message.id.0 }),
             score: found.score,
             at: message.at,
             key: body,
@@ -237,10 +210,7 @@ fn terms(query: &str) -> Result<Vec<String>, Failure> {
         }
     }
     if terms.is_empty() {
-        return Err(Failure::new(
-            "bad_arguments",
-            "context_search 的 query 是空的",
-        ));
+        return Err(Failure::new("bad_arguments", "history 的 query 是空的"));
     }
     if terms.len() > MOST_TERMS {
         return Err(Failure::new(
@@ -252,7 +222,7 @@ fn terms(query: &str) -> Result<Vec<String>, Failure> {
 }
 
 /// The pattern for a sender's name that has `who` in it.
-fn sender(who: &str) -> Result<String, Failure> {
+pub(super) fn sender(who: &str) -> Result<String, Failure> {
     let who: String = fold(who.trim()).into_iter().collect();
     if who.is_empty() || who.chars().count() > TERM_CHARS {
         return Err(Failure::new(
@@ -326,39 +296,6 @@ fn snippet(text: &str, words: &[&str]) -> String {
         out.push('…');
     }
     out
-}
-
-/// From when, and until when, either open.
-type Span = (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
-
-/// The days `from` to `to`, local and both whole, as instants: from the
-/// first's midnight to the midnight after the last.
-fn window(from: Option<&str>, to: Option<&str>, offset: FixedOffset) -> Result<Span, Failure> {
-    let day = |text: &str| {
-        NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d").map_err(|_| {
-            Failure::new(
-                "bad_arguments",
-                format!("日期要写成 YYYY-MM-DD，不是 {text:?}"),
-            )
-        })
-    };
-    let midnight = |date: NaiveDate| {
-        offset
-            .from_local_datetime(&date.and_time(NaiveTime::MIN))
-            .single()
-            .map(|at| at.to_utc())
-    };
-    let from = from.map(day).transpose()?;
-    let to = to.map(day).transpose()?;
-    if let (Some(from), Some(to)) = (from, to)
-        && from > to
-    {
-        return Err(Failure::new("bad_arguments", "from 在 to 之后"));
-    }
-    Ok((
-        from.and_then(midnight),
-        to.and_then(|to| to.succ_opt()).and_then(midnight),
-    ))
 }
 
 /// Best first: the larger share of the terms, then the newer.

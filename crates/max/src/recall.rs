@@ -1,5 +1,5 @@
 //! The recall vector worker: a vector of each chat row that says
-//! something, for `context_search`'s search by meaning. Each committed row
+//! something, for `history`'s search by meaning. Each committed row
 //! comes to it; its scan, at the start and every hour, finds the rest a
 //! page at a time, newest first, and all of them again after a change of
 //! model. See "召回".

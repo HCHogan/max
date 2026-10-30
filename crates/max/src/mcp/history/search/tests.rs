@@ -13,6 +13,7 @@ use crate::conversation::testing::{at, from_xiaohong, from_xiaoming, group, offs
 use crate::conversation::{Place, ingest};
 use crate::embedding::testing::{serve, vector};
 use crate::inbound::InNode;
+use crate::mcp::history::run;
 use crate::mcp::{Caller, Services};
 use crate::scope::Scope;
 
@@ -66,23 +67,6 @@ fn snippets_center_on_the_first_hit() {
     let last = format!("{}末尾", "前".repeat(300));
     let end = snippet(&last, &["末尾"]);
     assert!(end.starts_with('…') && end.ends_with("末尾"), "{end}");
-}
-
-#[test]
-fn dates_are_whole_local_days() {
-    let (from, until) = window(Some("2026-10-03"), Some("2026-10-04"), offset()).unwrap();
-    assert_eq!(from.unwrap().to_rfc3339(), "2026-10-02T16:00:00+00:00");
-    assert_eq!(until.unwrap().to_rfc3339(), "2026-10-04T16:00:00+00:00");
-    assert_eq!(window(None, None, offset()).unwrap(), (None, None));
-    for (from, to) in [
-        (Some("10-03"), None),
-        (Some("2026-10-05"), Some("2026-10-04")),
-    ] {
-        assert_eq!(
-            window(from, to, offset()).unwrap_err().code,
-            "bad_arguments"
-        );
-    }
 }
 
 #[test]
@@ -197,7 +181,7 @@ async fn rows_with_their_read(pool: PgPool) {
             "ref": format!("#{again}"),
             "time": "2026-10-29 周四 12:03",
             "text": "小明：部署方案还没定",
-            "read": { "id": again, "before": 10, "after": 10 },
+            "read": { "around": again },
         })
     );
     assert_eq!(results[1]["ref"], format!("#{long}"));
@@ -239,7 +223,7 @@ async fn rows_with_their_read(pool: PgPool) {
     drop(conn);
     assert_eq!(refs().await, before);
 
-    let empty = super::super::call("context_search", &context, json!({ "query": " " })).await;
+    let empty = crate::mcp::call("history", &context, json!({ "query": " " })).await;
     assert_eq!(empty.unwrap_err().code, "bad_arguments");
 }
 
@@ -280,15 +264,19 @@ async fn by_who_said_it(pool: PgPool) {
             .collect()
     };
 
-    // With no query, the newest of what they said.
-    let said = refs(json!({ "who": "红" })).await;
-    assert_eq!(said, [format!("#{}", ids[2]), format!("#{}", ids[0])]);
     let said = refs(json!({ "query": "部署", "who": "小红" })).await;
     assert_eq!(said, [format!("#{}", ids[0])]);
-    let said = refs(json!({ "who": "小红", "from": "2026-10-30" })).await;
+    let said = refs(json!({ "query": "部署", "who": "小红", "from": "2026-10-30" })).await;
     assert!(said.is_empty());
+    // Up to a row, not with it.
+    let upto = format!("#{}", ids[1]);
+    let said = refs(json!({ "query": "部署", "to": upto })).await;
+    assert_eq!(said, [format!("#{}", ids[0])]);
 
-    for args in [json!({}), json!({ "who": " " }), json!({ "limit": 3 })] {
+    for args in [
+        json!({ "query": "部署", "who": " " }),
+        json!({ "query": "部署", "page": 2 }),
+    ] {
         let wrong = run(&context, args).await;
         assert_eq!(wrong.unwrap_err().code, "bad_arguments");
     }

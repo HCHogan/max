@@ -1,7 +1,7 @@
 # The groups' VMs on one machine, nested: the module makes the taps, the
 # firewall's rules and the service's sandbox, and vm-check boots the
 # flake's guest the way max does, runs a command in it, runs a program
-# whose context_read reaches the database through the MCP service, and one
+# whose history reaches the database through the MCP service, and one
 # that opens a page in the browser and saves a screenshot to /work.
 { pkgs, module }:
 pkgs.testers.runNixOSTest {
