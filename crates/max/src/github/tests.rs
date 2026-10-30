@@ -404,3 +404,34 @@ fn a_bundles_header_is_read() {
     assert!(branch_name("max/fix-readme") && !branch_name("a..b") && !branch_name("x.lock"));
     assert!(repo_name("octo/hello.rs") && !repo_name("octo/..") && !repo_name("octo"));
 }
+
+#[test]
+fn paths_and_names_are_checked() {
+    assert!(path_ok("/repos/octo/hello/pulls"));
+    assert!(path_ok("/repos/octo/hello?per_page=30&state=open"));
+    assert!(!path_ok("repos/octo/hello"));
+    assert!(!path_ok("/repos/octo/hello/../other"));
+    assert!(!path_ok("/repos//octo/hello"));
+    assert!(!path_ok("/repos/octo/hello#tag"));
+    assert!(!path_ok("/repos/octo/hello with spaces"));
+
+    assert!(repo_name("octo/hello.rs"));
+    assert!(repo_name("octo-org/hello_world-1"));
+    assert!(!repo_name("octo"));
+    assert!(!repo_name("octo/.."));
+    assert!(!repo_name("octo/."));
+    assert!(!repo_name("octo/"));
+    assert!(!repo_name("/hello"));
+    assert!(!repo_name("octo/hello/extra"));
+
+    assert!(branch_name("max/fix-readme"));
+    assert!(branch_name("feature/branch-1_2.3"));
+    assert!(!branch_name("a..b"));
+    assert!(!branch_name("x.lock"));
+    assert!(!branch_name("fix/"));
+    assert!(!branch_name("/fix"));
+    assert!(!branch_name("-fix"));
+    assert!(!branch_name(".fix"));
+    assert!(!branch_name("fix/.git"));
+    assert!(!branch_name("fix//branch"));
+}
