@@ -10,6 +10,9 @@ use crate::job::Request;
 
 pub const NAMES: [&str; 4] = ["agent", "agent_steer", "agent_cancel", "agent_status"];
 
+/// A title's most characters, as the tool's schema says.
+const TITLE: usize = 40;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Start {
@@ -63,13 +66,7 @@ impl Job {
 
 pub async fn run(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
     let request = match name {
-        "agent" => {
-            let Start { task, title } = arguments(name, args)?;
-            if task.trim().is_empty() {
-                return Err(Failure::new("bad_arguments", "task 是空的"));
-            }
-            Request::Start { task, title }
-        }
+        "agent" => start(args)?,
         "agent_steer" => {
             let Steer { job, message } = arguments(name, args)?;
             if message.trim().is_empty() {
@@ -101,9 +98,42 @@ pub async fn run(name: &str, context: &Context, args: Value) -> Result<Value, Fa
         .map_err(|message| Failure::new("job", message))
 }
 
+fn start(args: Value) -> Result<Request, Failure> {
+    let Start { task, title } = arguments("agent", args)?;
+    if task.trim().is_empty() {
+        return Err(Failure::new("bad_arguments", "task 是空的"));
+    }
+    if title
+        .as_ref()
+        .is_some_and(|title| title.chars().count() > TITLE)
+    {
+        return Err(Failure::new(
+            "bad_arguments",
+            format!("title 最多 {TITLE} 个字"),
+        ));
+    }
+    Ok(Request::Start { task, title })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_title_is_at_most_forty_characters() {
+        let title = |title: String| start(serde_json::json!({ "task": "查票价", "title": title }));
+        assert!(title("票".repeat(TITLE)).is_ok());
+        assert_eq!(
+            title("票".repeat(TITLE + 1)).unwrap_err().code,
+            "bad_arguments"
+        );
+        assert!(
+            max_core::tools::MAX_TOOLS
+                .iter()
+                .any(|tool| tool.name == "agent"
+                    && tool.input.contains(&format!("\"maxLength\":{TITLE}")))
+        );
+    }
 
     #[test]
     fn a_job_is_named_either_way() {
