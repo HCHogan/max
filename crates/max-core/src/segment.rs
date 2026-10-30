@@ -4,7 +4,10 @@
 //! leaking a raw `[split]` or `[reply#id]` into the group.
 //!
 //! Text is cut into chunks, one message each, at blank lines and at
-//! `[split]`, never inside a code fence; a picture's handle is a chunk of
+//! `[split]`, never inside a code fence or an inline code span (Max writes
+//! a placeholder there to show it, as on 10-30 `[mention#830]`, which went
+//! out as a real @ and showed QQ's tag with the openid in it); a picture's
+//! handle is a chunk of
 //! its own, as QQ sends a picture on its own. The cuts depend only on the text,
 //! not on how it arrived: streamed in any pieces, it gives the same chunks
 //! as all at once. (The Haskell version also released long paragraphs at
@@ -16,6 +19,7 @@
 mod parse;
 
 use std::collections::BTreeSet;
+use std::ops::Range;
 
 use crate::ids::PrincipalId;
 use crate::message::Draft;
@@ -174,13 +178,60 @@ pub(crate) fn is_fence(line: &str) -> bool {
     line.trim_start().starts_with("```")
 }
 
-/// The next cut in a line outside a fence: where, how long, and whether
-/// it is a picture's handle rather than a `[split]`.
+/// The inline code spans in a line, backticks included: a run of
+/// backticks up to the next run of as many, as in CommonMark. What is in
+/// one is shown as written.
+pub(crate) fn code_spans(line: &str) -> Vec<Range<usize>> {
+    let bytes = line.as_bytes();
+    let run = |at: usize| bytes[at..].iter().take_while(|b| **b == b'`').count();
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'`' {
+            i += 1;
+            continue;
+        }
+        let ticks = run(i);
+        let mut j = i + ticks;
+        let mut end = None;
+        while j < bytes.len() {
+            if bytes[j] != b'`' {
+                j += 1;
+                continue;
+            }
+            let closing = run(j);
+            if closing == ticks {
+                end = Some(j + closing);
+                break;
+            }
+            j += closing;
+        }
+        match end {
+            Some(end) => {
+                spans.push(i..end);
+                i = end;
+            }
+            None => i += ticks,
+        }
+    }
+    spans
+}
+
+/// The next cut in a line outside a fence and its code spans: where, how
+/// long, and whether it is a picture's handle rather than a `[split]`.
 fn next_cut(line: &str) -> Option<(usize, usize, bool)> {
-    let split = line.find(SPLIT).map(|at| (at, SPLIT.len(), false));
+    let spans = code_spans(line);
+    let outside = |at: &usize| !spans.iter().any(|span| span.contains(at));
+    let split = line
+        .match_indices(SPLIT)
+        .map(|(at, _)| at)
+        .find(outside)
+        .map(|at| (at, SPLIT.len(), false));
     let picture = line
         .match_indices('[')
-        .find_map(|(at, _)| Some((at, parse::picture(&line[at..])?, true)));
+        .map(|(at, _)| at)
+        .filter(outside)
+        .find_map(|at| Some((at, parse::picture(&line[at..])?, true)));
     split.into_iter().chain(picture).min()
 }
 
@@ -240,6 +291,18 @@ mod tests {
                 "完"
             ]
         );
+    }
+
+    #[test]
+    fn code_spans_are_not_cut() {
+        let text = "写 `[split]` 才分条，`[sticker#4.0]` 是表情包[split]完";
+        assert_eq!(
+            chunks(text),
+            ["写 `[split]` 才分条，`[sticker#4.0]` 是表情包", "完"]
+        );
+        // Unclosed, or closed by a longer run: plain backticks.
+        assert_eq!(chunks("`a``[split]b"), ["`a``", "b"]);
+        assert_eq!(code_spans("``a`b`` `c`"), [0..7, 8..11]);
     }
 
     #[test]

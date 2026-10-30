@@ -6,11 +6,12 @@
 //! of its own); forms that are only for reading (`[face: 吃瓜]`,
 //! `[unsend#7405]`, `[video#7405.0]`) are dropped when echoed, and so is
 //! a copied row header. Anything else that doesn't parse stays text. Code
-//! fences are left alone.
+//! fences and inline code spans are left alone: a placeholder there is
+//! Max showing what one looks like.
 
 use std::collections::BTreeSet;
 
-use super::is_fence;
+use super::{code_spans, is_fence};
 use crate::ids::{MessageId, PrincipalId};
 use crate::message::{Draft, DraftNode};
 
@@ -89,6 +90,16 @@ struct Parsed {
 
 impl Parsed {
     fn line(&mut self, line: &str, known: &BTreeSet<PrincipalId>) {
+        let mut at = 0;
+        for span in code_spans(line) {
+            self.placeholders(&line[at..span.start], known);
+            self.text(&line[span.clone()]);
+            at = span.end;
+        }
+        self.placeholders(&line[at..], known);
+    }
+
+    fn placeholders(&mut self, line: &str, known: &BTreeSet<PrincipalId>) {
         let mut rest = line;
         while let Some(open) = rest.find('[') {
             self.text(&rest[..open]);
@@ -323,6 +334,28 @@ mod tests {
                 },
                 text(" 你看 @小红 和")
             ]
+        );
+    }
+
+    #[test]
+    fn placeholders_in_code_are_shown() {
+        let draft = say("写成 `[mention#12]` 就是 @，``[reply#3]`` 是引用 [mention#12]");
+        assert_eq!(draft.reply_to, None);
+        assert_eq!(
+            draft.nodes,
+            vec![
+                text("写成 `[mention#12]` 就是 @，``[reply#3]`` 是引用 "),
+                DraftNode::Mention {
+                    principal: PrincipalId(12)
+                },
+            ]
+        );
+        let unclosed = say("`[mention#12] 你看");
+        assert_eq!(
+            unclosed.nodes[1],
+            DraftNode::Mention {
+                principal: PrincipalId(12)
+            }
         );
     }
 
