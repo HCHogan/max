@@ -13,6 +13,7 @@ pub mod bind;
 pub mod command;
 pub mod config;
 pub mod conversation;
+pub mod dreamer;
 pub mod embedding;
 pub mod inbound;
 pub mod job;

@@ -26,6 +26,7 @@ use tracing::{error, info};
 
 use max::config::{self, Config};
 use max::conversation::{Place, Shared};
+use max::dreamer::Dreamer;
 use max::embedding::Embedder;
 use max::llm::Models;
 use max::mcp;
@@ -360,6 +361,19 @@ async fn serve(config: Config) -> Result<()> {
         .map(|client| Arc::clone(client) as Arc<dyn Admin>);
     let mut services = Scope::new();
     let vm_dir = config.vm.as_ref().map(|vm| vm.dir.clone());
+    match (&vm_dir, models.dreamer().transpose()?) {
+        (Some(dir), Some(chosen)) => {
+            let dreamer = Dreamer {
+                pool: pool.clone(),
+                chosen,
+                dir: dir.clone(),
+                offset: config.utc_offset,
+            };
+            workers.spawn(move |stop| dreamer.run(stop));
+        }
+        (Some(_), None) => info!("no dreamer model: memory files aren't tidied"),
+        (None, _) => {}
+    }
     let vms = match config.vm {
         Some(vm) => Some(Vms::start(vm, &mut services)?),
         None => {

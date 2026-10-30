@@ -3,8 +3,9 @@
 //! following them.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::SystemTime;
 
 use rustix::fs::{Mode, OFlags};
 use rustix::io::Errno;
@@ -39,6 +40,15 @@ pub(super) fn beneath_work(path: &str) -> Result<PathBuf, Failure> {
 /// component at a time without following a symlink: the guest writes
 /// /work, and a link there would point into the host. Blocking.
 pub(crate) fn read(work: &Path, relative: &Path, most: u64) -> Result<Vec<u8>, Failure> {
+    read_stamped(work, relative, most).map(|(bytes, _)| bytes)
+}
+
+/// What [`read`] reads, and when the file was last written.
+pub(crate) fn read_stamped(
+    work: &Path,
+    relative: &Path,
+    most: u64,
+) -> Result<(Vec<u8>, SystemTime), Failure> {
     let shown = Path::new("/work").join(relative).display().to_string();
     let failed = |errno: Errno| match errno {
         Errno::NOENT => Failure::new("not_found", format!("{shown} 不存在")),
@@ -81,15 +91,48 @@ pub(crate) fn read(work: &Path, relative: &Path, most: u64) -> Result<Vec<u8>, F
     if bytes.len() as u64 > most {
         return Err(too_big());
     }
-    Ok(bytes)
+    let modified = metadata.modified().map_err(unreadable)?;
+    Ok((bytes, modified))
 }
 
-/// Copies the host's file `from` to `dir/name` under `work`, making `dir`
-/// if it isn't there and replacing what is at `name`. It goes to a new
+/// Copies the host's file `from` to `dir/name` under `work`, as [`write`]
+/// does. Blocking.
+pub(super) fn put(work: &Path, dir: &str, name: &str, from: &Path) -> Result<(), Failure> {
+    place(work, dir, name, |file| {
+        File::open(from).and_then(|mut source| std::io::copy(&mut source, file))?;
+        Ok(())
+    })
+}
+
+/// Writes `bytes` to `dir/name` under `work`, making `dir` if it isn't
+/// there and replacing what is at `name`; dated `modified`, if given.
+/// Blocking.
+pub(crate) fn write(
+    work: &Path,
+    dir: &str,
+    name: &str,
+    bytes: &[u8],
+    modified: Option<SystemTime>,
+) -> Result<(), Failure> {
+    place(work, dir, name, |file| {
+        file.write_all(bytes)?;
+        match modified {
+            Some(modified) => file.set_modified(modified),
+            None => Ok(()),
+        }
+    })
+}
+
+/// What `fill` writes, put at `dir/name` under `work`. It goes to a new
 /// file first and is renamed into place, all through descriptors opened
 /// without following a symlink, so no link the guest puts in /work sends
-/// it into the host. Blocking.
-pub(super) fn put(work: &Path, dir: &str, name: &str, from: &Path) -> Result<(), Failure> {
+/// it into the host.
+fn place(
+    work: &Path,
+    dir: &str,
+    name: &str,
+    fill: impl FnOnce(&mut File) -> std::io::Result<()>,
+) -> Result<(), Failure> {
     let shown = format!("/work/{dir}/{name}");
     let failed = |errno: Errno| match errno {
         Errno::LOOP | Errno::NOTDIR | Errno::MLINK => {
@@ -112,9 +155,7 @@ pub(super) fn put(work: &Path, dir: &str, name: &str, from: &Path) -> Result<(),
         OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let file = rustix::fs::openat(&dir, &temporary, created, Mode::from_raw_mode(0o644))
         .map_err(failed)?;
-    let copied =
-        File::open(from).and_then(|mut source| std::io::copy(&mut source, &mut File::from(file)));
-    let renamed = match copied {
+    let renamed = match fill(&mut File::from(file)) {
         Ok(_) => rustix::fs::renameat(&dir, &temporary, &dir, name).map_err(failed),
         Err(error) => Err(Failure::new(
             "unwritable",

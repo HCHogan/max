@@ -142,6 +142,9 @@ pub struct Llm {
     /// reaches it through the VM's MCP service. Without it, there are no
     /// background agents.
     pub job: Option<Selection>,
+    /// The model that tidies Max's memory files at night. Without it,
+    /// they aren't tidied.
+    pub dreamer: Option<Selection>,
     pub providers: BTreeMap<String, Provider>,
 }
 
@@ -335,6 +338,7 @@ impl Llm {
             ("intent", Some(&self.intent)),
             ("caption", self.caption.as_ref()),
             ("job", self.job.as_ref()),
+            ("dreamer", self.dreamer.as_ref()),
         ];
         for (role, selection) in selections {
             if let Some(selection) = selection {

@@ -198,6 +198,12 @@ impl Models {
         Some(self.choose(&caption.model, caption.effort.as_deref()))
     }
 
+    /// The dreamer's model, when one is configured.
+    pub fn dreamer(&self) -> Option<Result<Chosen>> {
+        let dreamer = self.llm.dreamer.as_ref()?;
+        Some(self.choose(&dreamer.model, dreamer.effort.as_deref()))
+    }
+
     /// Where background agents' model calls go, when a model is
     /// configured for them. Reads the provider's key.
     pub fn job(&self) -> Option<Result<Upstream>> {
