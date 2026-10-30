@@ -9,7 +9,8 @@
 #
 # What differs between groups' VMs comes on the kernel command line, which
 # max appends to: the address (max.ip, max.gateway), the resolvers
-# (max.dns) and the key max logs in with (max.key).
+# (max.dns), the key max logs in with (max.key), and who commits are by
+# (max.git).
 {
   config,
   lib,
@@ -186,6 +187,7 @@ in
           max.gateway=*) gateway=''${word#max.gateway=} ;;
           max.dns=*) dns=''${word#max.dns=} ;;
           max.key=*) key=''${word#max.key=} ;;
+          max.git=*) git=''${word#max.git=} ;;
         esac
       done
       ip address replace "$address" dev eth0
@@ -198,6 +200,10 @@ in
       install -m 0600 /dev/null /run/max/authorized_keys
       echo "ssh-ed25519 $key max" > /run/max/authorized_keys
       ln -sfn ${runner}/lib/max-runner/runner.js /run/max/runner.js
+      # Commits are by Max's GitHub account, when max has one: name,email.
+      if [ -n "''${git:-}" ]; then
+        printf '[user]\n\tname = %s\n\temail = %s\n' "''${git%%,*}" "''${git#*,}" > /etc/gitconfig
+      fi
     '';
   };
 

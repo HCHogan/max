@@ -245,6 +245,8 @@ in
       ++ lib.optional vm "${name}-taps.service";
       wants = [ "network-online.target" ] ++ lib.optional vm "${name}-taps.service";
       requires = [ "postgresql.target" ];
+      # github_push takes the guest's commits in, and pushes them, with git.
+      path = [ pkgs.git ];
 
       serviceConfig = serviceConfig // {
         ExecStart = "${max} run --config ${configFile}";

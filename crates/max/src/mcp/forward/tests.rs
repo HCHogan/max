@@ -173,7 +173,7 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_job_calls_only_the_tools_that_read(pool: PgPool) {
+async fn a_job_calls_only_the_tools_that_dont_act_in_the_group(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
     let place = Arc::new(group(&mut conn).await);
     drop(conn);
@@ -219,7 +219,7 @@ async fn a_job_calls_only_the_tools_that_read(pool: PgPool) {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["history", "web_search"]);
+    assert_eq!(names, ["history", "web_search", "github_push", "github"]);
 
     let call = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
         "name": "send_image", "arguments": { "path": "a.png" }, "_meta": meta,

@@ -28,6 +28,7 @@ use max::config::{self, Config};
 use max::conversation::{Place, Shared};
 use max::dreamer::Dreamer;
 use max::embedding::Embedder;
+use max::github::{self, GitHub};
 use max::historian::{self, Historian};
 use max::llm::Models;
 use max::mcp;
@@ -131,6 +132,7 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
                 store: None,
                 embedder: None,
                 admin: None,
+                github: None,
             };
             Ok::<_, sqlx::Error>(mcp::Context {
                 services: Arc::new(services),
@@ -361,6 +363,18 @@ async fn serve(config: Config) -> Result<()> {
             None
         }
     };
+    let github = match &config.github {
+        Some(account) => Some(Arc::new(GitHub::new(
+            github::API,
+            github::GIT,
+            account.login.clone(),
+            account.token()?,
+        )?)),
+        None => {
+            info!("no GitHub account: github and github_push say so");
+            None
+        }
+    };
     // Accounts are linked to old QQ numbers by their avatars, once Max's
     // own account is known.
     let linking = match &qq {
@@ -411,6 +425,7 @@ async fn serve(config: Config) -> Result<()> {
         store: store.clone(),
         embedder,
         admin,
+        github,
     });
     let (outbound, outbound_rx) = mpsc::unbounded_channel();
     let shared = Arc::new(Shared {

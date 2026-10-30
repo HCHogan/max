@@ -179,6 +179,8 @@
                 nativeBuildInputs = [
                   (pkgs.postgresql_17.withPackages (p: [ p.pgvector ]))
                   pkgs.cacert
+                  # github's tests make repositories and push between them.
+                  pkgs.git
                   # Run the guest's runner and webread.
                   pkgs.nodejs
                   (pkgs.python3.withPackages (p: [ p.trafilatura ]))

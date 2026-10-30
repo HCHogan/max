@@ -5,6 +5,7 @@ mod agent;
 mod chat_file;
 mod find_stickers;
 mod forward;
+mod github;
 mod history;
 mod mute_member;
 mod recall_message;
@@ -32,6 +33,7 @@ use tracing::warn;
 
 use crate::conversation::{Place, Poster};
 use crate::embedding::Embedder;
+use crate::github::GitHub;
 use crate::llm::Upstream;
 use crate::media::store::Store;
 use crate::qq::admin::Admin;
@@ -52,6 +54,8 @@ pub struct Services {
     pub embedder: Option<Arc<Embedder>>,
     /// For `mute_member`; None without QQ.
     pub admin: Option<Arc<dyn Admin>>,
+    /// For `github` and `github_push`.
+    pub github: Option<Arc<GitHub>>,
 }
 
 /// Where a call comes from: the conversation whose VM the program runs in,
@@ -104,6 +108,7 @@ impl Services {
             store: None,
             embedder: None,
             admin: None,
+            github: None,
         }
     }
 }

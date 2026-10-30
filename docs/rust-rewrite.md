@@ -1516,7 +1516,7 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
 - **通道**：cloud-hypervisor 的 hybrid vsock 里，guest 连主机的某个端口，会落到宿主上 `<vsock socket>_<端口>` 这个 unix socket，Haskell 版的就绪通知就走这条路。Max 在每个 VM 的这个位置监听一个端口，用 axum 加 rmcp 跑 Streamable HTTP。连进来的是哪个 VM，由 socket 路径决定。guest 里把 `127.0.0.1:7777` 转发到这个 vsock 端口，客户端都配 `http://127.0.0.1:7777/mcp`。IP 层照样连不到宿主，外面也照样连不进 VM。做成的：guest 里是 socket 激活，每个连接一个 socat 连到 vsock 的 2:7777；宿主在 VM 启动前就在 `notify.vsock_7777` 上监听，每个 VM 一个 MCP 服务，跟着 VM 起停。
 - **协议**（2026-10-29）：rmcp 3.8，协议版本 2026-07-28，无状态，回复用 JSON 不用 SSE。这个版本每个请求都要带 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name` 头，`_meta` 里也要有协议版本和客户端能力。runner 自己用 fetch 拼，不装 MCP 的 SDK。更早协议的客户端也收（2026-10-30）：pi 1.4 的是 2025-11-25，先发 `initialize`；rmcp 默认要给它建会话，而服务没有会话管理，回 500。关掉 `legacy_session_mode` 后它的每个请求各自处理。
-- **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群和 turn、允许的工具、在途的调用。`run_code` 的会话能用全部 Max 工具；job 的会话只列、只许调标了 `job` 的工具（读的，不动群：`history`、`web_search`），别的回 `not_allowed`，另外能经 `/llm` 调它的模型，见[后台 agent](#后台-agent)。会话还记着每个工具调了几次、失败几次，附在结果后面。
+- **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群和 turn、允许的工具、在途的调用。`run_code` 的会话能用全部 Max 工具；job 的会话只列、只许调标了 `job` 的工具（不在群里说话做事的：`history`、`web_search`、`github_push`、`github`），别的回 `not_allowed`，另外能经 `/llm` 调它的模型，见[后台 agent](#后台-agent)。会话还记着每个工具调了几次、失败几次，附在结果后面。
 
   | 会话 | 能用的工具 | 生命周期 |
   |---|---|---|
@@ -1589,6 +1589,21 @@ v1 不做。2026-10-29 先做成每次运行现起 camoufox，当天晚上改成
 - **实测**（tank 上的嵌套测试，VM 2 个 vCPU、1 GiB 内存）：`vm-check` 的第三个程序起浏览器、打开一个 data: 页面、快照、截图存进 `/work`，测试检查快照里的选择器和截图。VM 10 秒起好。VM 开机后第一次起浏览器要 22 秒，多半是经 virtiofs 冷读 store，加上嵌套虚拟化；同一个 VM 里再起 4.3 秒，打开页面 0.4 秒。开着两个 context 时这次运行的匿名内存 370～410 MiB，cgroup 峰值（含页缓存）775 MiB。宿主上直接跑：加载模块 0.6 秒，起浏览器 0.5 秒，第一个页面 1.4 秒。真实网站没测，测试机不通外网。VM 默认 4 GiB 内存，不用加。
 - **提议**：Haskell 版用了 humanize（模拟鼠标轨迹）和虚拟显示（Xvfb，比 headless 难认出来），这里先只用 headless；被网站认出来再加。
 
+### GitHub
+
+2026-10-31 加（owner 要的）：有人让 Max 开 PR，它用自己的 GitHub 账号开，之后自己改、关、回评论。账号是 owner 建的机器账号（GitHub 要求由一个人建、为它负责），注册邮箱是 owner 的转发地址，Max 不碰邮箱。
+
+- **token 留在宿主**：群友能让 Max 在 VM 里跑任何命令，放进 VM 的东西（环境变量、`~/.config/gh`、浏览器里登录的 GitHub）都能被读出来。所以和 Exa 的 key 一样，宿主上的工具替它调。token 是 classic 的、只有 `public_repo`：fine-grained 的开不了往别人仓库的 PR（从 fork 开也不行，社区里的报告，GitHub 文档没写）。账号没别的东西，范围宽一点代价小。配置 `[github] login, user_id, token_file`，sops 里是 `maxx/github-token`。
+- **两个工具，不按动作拆**（owner 定的：改、关、评论各做一个工具会越做越多）。缝在 git 和 REST 之间：
+  - `github_push({repo, branch, bundle})`：把 `/work` 里一个仓库的新提交推到 Max 的 fork（没有就先 fork、等它出现，再把 fork 的默认分支同步到上游），返回 `{repo, head}`。分支整个替换（`--force`），所以同一个分支再推，它的 PR 就更新了。仓库是 Max 自己的就直接推，但不能推默认分支。
+  - `github({method, path, body?})`：用 Max 的 token 调 REST API，返回 `{status, body}`；body 超过 3 万字给截短的文本。开 PR、改标题描述、关、重开、评论、回 review、看 CI 都是它。
+- **宿主管写什么**：读随便读。写只能写 Max 自己的：路径在 `/repos/<Max>/` 下的（它的仓库和 fork）；`/repos/o/r/(issues|pulls)/N/...`，N 是 Max 开的（先 GET 那个 issue 看作者）；`/repos/o/r/(issues|pulls)/comments/ID/...`，评论是 Max 写的；再加开 PR，`POST /repos/o/r/pulls`，head 得是 Max 的分支。别的写一律拒绝：开 issue、在别人的 PR 下评论、点星、改账号设置。路径只许字母数字和 `/-_.~`，不能有 `..`。
+- **开 PR 的限制**：所有群加起来 24 小时内最多 10 个新 PR，用搜索 API 数 Max 开过的（GitHub 就是账本，不另建表）；描述末尾加一行英文的脚注，说明是 AI 在群友要求下开的，Max 改描述时也补上。推送和开 PR 一次一个，数和开之间不会插进别的。GitHub 会封看着像刷屏的账号。
+- **提交怎么到宿主**：宿主不在 guest 写过的仓库里跑 git，仓库的配置能执行命令（`core.fsmonitor`、hooks），`objects/info/alternates` 还能指到宿主的别处。guest 打一个 bundle（`git bundle create x.bundle HEAD --not --remotes`，只含上游没有的提交），宿主照 `/work` 的规矩不跟符号链接地读出来，在自己的临时目录里建一个空的 bare 仓库：按 bundle 头里写的前置提交，从上游 `--depth=1` 地取，再 `fetch.fsckObjects` 地收下 bundle，最后推到 fork。git 不读系统和用户的配置，token 经 `http.extraHeader` 走环境变量，不进命令行。本机测过：前置提交浅取以后 bundle 收得下，推到有完整历史的 fork 也行。
+- **提交人**：配了 `[github]`，VM 的内核命令行多一个 `max.git=<login>,<id>+<login>@users.noreply.github.com`，guest 开机写进 `/etc/gitconfig`，Max 的提交就算在账号名下，注册邮箱不出现。
+- 后台 agent 也能用这两个工具：`job` 标记的意思从"只读"改成"不在群里说话做事"。
+- 不做：开 issue、在别人的讨论里说话、review 别人的 PR、私有仓库、Max 自己收邮件注册别的网站。
+
 ### 待定事项
 
 - v1 开放哪几个 Max 工具。
@@ -1603,7 +1618,7 @@ v1 之后做。
 - 每个 job 驱动群 VM 里的一个 pi 进程，通过 stdio 上的 RPC JSONL 通信。
 - 适配器在 `crates/max/src/job.rs`（2026-10-30）：`job::pi` 是协议，`job::drive` 给任务、转 steer、到点中断、等它停下，取最后一条助手消息的文字作报告，再关 stdin。用量、工具调用经 `Watch` 报出去。没有再抽一层 `AgentBackend`：只有 pi 一个实现，等真有第二个再抽。命令用 `Vm::open` 起，stdin 一直开着。
 - **模型**（2026-10-30 定）：`[llm]` 里单独配 `job = { model, effort }`，没配就没有后台 agent。pi 不拿 provider 的 key：它的模型请求发到 VM 里的 `http://127.0.0.1:7777/llm/<端点>`，和 MCP 是同一个服务、同一个 token。宿主认出是哪个 job 的会话，把 `model` 换成配置里的，带上 provider 的 key 和头转过去，回答原样流回来。provider 在 `stream_idle_timeout_secs`（默认 120 秒）里没出声，不管是回答开始前还是流到一半，都和 max-llm 一样掐断：pi 当作这次调用失败，自己重试，不会干等到 job 到点（10-30 Max 自己 review 时指出的）。只认这个 provider 协议的端点（`chat/completions` 或 `responses`），请求最大 64 MiB；job 结束、会话吊销后 token 就没用了。没选的办法：cliproxy 的管理接口能在运行时加删 key，但改完要写回配置文件，tank 上那是 sops 渲染出来的；给 VM 一个固定的 cliproxy key，等于给了群里所有人。
-- 领域工具走 Max 的 MCP 服务，见 [MCP 通道](#mcp-通道)。工具要的东西（数据库、搜索、嵌入、内容库、QQ 管理）在 main 里建一份 `mcp::Services`，所有调用共用，里面的 `None` 只表示没配置。谁在调由 `mcp::Caller` 说：`Turn` 带着这一轮的 `Poster`，`Job` 带着它的上游，`Check` 是 `vm-check`。能用哪些工具只看 `Caller` 和 `job` 标记（2026-10-30 改：原来每处手拼一份上下文，job 那份漏了嵌入，`context_search` 静默退化成只按字面搜）。每个 job 开一个会话，会话活多久 job 就多久，所以工具的次数上限按一次运行的 10 倍算（`web_search` 一次运行 20 次，一个 job 200 次）。只开放只读工具，比如 `context_search`、`context_read`、`memory_list`；job 结束时吊销。pi 在 VM 里也能跑 codemode 的 runner，用 job 自己的会话批量调这些工具。
+- 领域工具走 Max 的 MCP 服务，见 [MCP 通道](#mcp-通道)。工具要的东西（数据库、搜索、嵌入、内容库、QQ 管理）在 main 里建一份 `mcp::Services`，所有调用共用，里面的 `None` 只表示没配置。谁在调由 `mcp::Caller` 说：`Turn` 带着这一轮的 `Poster`，`Job` 带着它的上游，`Check` 是 `vm-check`。能用哪些工具只看 `Caller` 和 `job` 标记（2026-10-30 改：原来每处手拼一份上下文，job 那份漏了嵌入，`context_search` 静默退化成只按字面搜）。每个 job 开一个会话，会话活多久 job 就多久，所以工具的次数上限按一次运行的 10 倍算（`web_search` 一次运行 20 次，一个 job 200 次）。只开放不在群里说话做事的工具：读的，和 GitHub 的两个（2026-10-31 加，见 [GitHub](#github)）；job 结束时吊销。pi 在 VM 里也能跑 codemode 的 runner，用 job 自己的会话批量调这些工具。
 - 会影响群的动作（发消息、发文件、撤回、禁言、建自动化）不给后台 agent。它的结果是一种唤醒（`Reason::Job`）：会话有核心在跑就喂给它，没有就起一个；由前台的模型决定怎么说。job 中途提问同样处理，见下面的**提问**。
 - **工具**（2026-10-30）：Max 在 `run_code` 里用四个 Max 工具管 job，都由会话 actor 回答（经 `Poster`，带回信通道），后台 agent 自己用不了：
   - `agent({ task, title? })` 马上返回 `{ job: "job#3" }`。job 在会话 actor 的表里，编号只在这次运行里递增，重启从 1 数。同时最多 3 个，每个 2 小时（原来 30 分钟，读一遍三万行代码都不够，10-30 改）。剩 5 分钟时 steer 一句让它停手写报告，到点先 `clear_queue` 再 `abort`，交出做到一半的。不提醒的话，到点时它多半正在调工具，最后一条助手消息没有文字，什么也交不出来（2026-10-30 job#2 就是这样）。一次运行最多起 3 个。没配 `llm.job`、没有 VM、正在重启时报错。

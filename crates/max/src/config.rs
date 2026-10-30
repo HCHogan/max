@@ -38,6 +38,9 @@ pub struct Config {
     /// Without it, stickers aren't embedded, and `find_stickers` tells the
     /// program there is no library.
     pub embedding: Option<Embedding>,
+    /// Max's GitHub account. Without it, `github_pr` tells the program
+    /// there is none, and the guests' commits have no author set.
+    pub github: Option<GitHub>,
 }
 
 /// The model that turns text into vectors for search by meaning; see
@@ -68,6 +71,53 @@ impl Search {
     pub fn api_key(&self) -> Result<String> {
         secret(&self.api_key_file)
     }
+}
+
+/// Max's GitHub account, for `github_pr`; see "GitHub".
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitHub {
+    pub login: String,
+    /// The account's number, for its commits' noreply address.
+    pub user_id: u64,
+    /// A classic token with `public_repo`: a fine-grained one can't open a
+    /// pull request on a repository the account doesn't own.
+    pub token_file: PathBuf,
+}
+
+impl GitHub {
+    pub fn token(&self) -> Result<String> {
+        secret(&self.token_file)
+    }
+
+    /// Who the guests' commits are by: the account, at its noreply address.
+    fn author(&self) -> Author {
+        Author {
+            name: self.login.clone(),
+            email: format!("{}+{}@users.noreply.github.com", self.user_id, self.login),
+        }
+    }
+
+    fn check(&self) -> Result<()> {
+        // It goes on the guests' command line, which splits at spaces.
+        ensure!(
+            !self.login.is_empty()
+                && self
+                    .login
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+            "{:?} isn't a GitHub login",
+            self.login
+        );
+        Ok(())
+    }
+}
+
+/// Who a guest's commits are by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Author {
+    pub name: String,
+    pub email: String,
 }
 
 /// Where downloaded media go; see "媒体".
@@ -267,6 +317,10 @@ pub struct Vm {
     /// A VM stops after this long without a command.
     #[serde(default = "vm_idle")]
     pub idle_minutes: u64,
+    /// Who the guests' commits are by: Max's GitHub account, from
+    /// `[github]`.
+    #[serde(skip)]
+    pub author: Option<Author>,
 }
 
 fn cpus() -> u32 {
@@ -305,10 +359,16 @@ impl Config {
     }
 
     fn parse(text: &str) -> Result<Self> {
-        let config: Self = toml::from_str(text)?;
+        let mut config: Self = toml::from_str(text)?;
         config.llm.check()?;
         if let Some(vm) = &config.vm {
             vm.check().wrap_err("in vm")?;
+        }
+        if let Some(github) = &config.github {
+            github.check().wrap_err("in github")?;
+        }
+        if let (Some(vm), Some(github)) = (&mut config.vm, &config.github) {
+            vm.author = Some(github.author());
         }
         Ok(config)
     }
@@ -559,6 +619,19 @@ mod tests {
         let config = with_llm(vm).unwrap().vm.unwrap();
         assert_eq!((config.cpus, config.memory_mib), (2, 8192));
         assert_eq!(config.slots[0].tap, "maxx-vm0");
+        assert_eq!(config.author, None);
+        let github =
+            "[github]\nlogin = \"maxxbot\"\nuser_id = 42\ntoken_file = \"/run/secrets/github\"\n";
+        let config = with_llm(&format!("{vm}{github}")).unwrap().vm.unwrap();
+        assert_eq!(
+            config.author,
+            Some(Author {
+                name: "maxxbot".into(),
+                email: "42+maxxbot@users.noreply.github.com".into(),
+            })
+        );
+        let spaced = github.replace("maxxbot", "maxx bot");
+        assert!(with_llm(&format!("{vm}{spaced}")).is_err());
 
         let twice = vm.replace(
             "[[vm.slots]]",

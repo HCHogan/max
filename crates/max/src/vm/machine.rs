@@ -110,13 +110,16 @@ pub async fn boot(config: &config::Vm, guest: &Guest, dir: &Path, slot: &Slot) -
         .split(' ')
         .nth(1)
         .ok_or_else(|| eyre!("an OpenSSH public key without its blob"))?;
-    let cmdline = format!(
+    let mut cmdline = format!(
         "{} max.ip={} max.gateway={} max.dns={} max.key={blob}",
         guest.cmdline,
         slot.address,
         slot.gateway,
         config.dns.join(","),
     );
+    if let Some(author) = &config.author {
+        cmdline.push_str(&format!(" max.git={},{}", author.name, author.email));
+    }
     let path = |name: &str| dir.join(name).display().to_string();
     let hypervisor = spawn(
         Command::new(&config.cloud_hypervisor)

@@ -18,6 +18,7 @@ use tracing::warn;
 
 use super::agent::{Agent, AgentCancel, AgentStatus, AgentSteer};
 use super::find_stickers::FindStickers;
+use super::github::{GitHubApi, GitHubPush};
 use super::history::History;
 use super::mute_member::MuteMember;
 use super::recall_message::RecallMessage;
@@ -34,8 +35,8 @@ pub trait Tool: 'static {
     const DESCRIPTION: &'static str;
     /// The most calls one run may make.
     const PER_RUN: Option<u32>;
-    /// Whether a background agent may call it: it reads, and doesn't act
-    /// on the group.
+    /// Whether a background agent may call it: it doesn't speak or act in
+    /// the group.
     const JOB: bool;
 
     type Args: DeserializeOwned + JsonSchema;
@@ -77,6 +78,8 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec::<RecallMessage>(),
         spec::<MuteMember>(),
         spec::<FindStickers>(),
+        spec::<GitHubPush>(),
+        spec::<GitHubApi>(),
         spec::<Agent>(),
         spec::<AgentSteer>(),
         spec::<AgentCancel>(),
@@ -232,7 +235,10 @@ fn object(schema: &Map<String, Value>) -> String {
     let fields: Vec<String> = properties
         .iter()
         .map(|(name, property)| {
-            let types = property.as_object().map(members).unwrap_or_default();
+            // A schema that is `true` takes any JSON.
+            let types = property
+                .as_object()
+                .map_or_else(|| vec!["unknown".to_owned()], members);
             if required.is_some_and(|required| required.iter().any(|field| field == name)) {
                 format!("{name}: {}", types.join(" | "))
             } else {
