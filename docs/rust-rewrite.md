@@ -1492,7 +1492,7 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
 - **生命周期就是进程的生命周期**：闲置关机就是 drop；`maxx.service` 停止或崩溃时，systemd 按 cgroup 把 VM 一起杀掉。不需要清理孤儿、实例元数据和配置代数，下次起的 VM 用的就是当前配置。服务重启时 VM 和里面在跑的命令一起结束；VM 重启只要几秒，可以接受（2026-10-27）。
 - **卷**归 `maxx` 所有，只在显式删除时删。
 - **装包、搜包**：`maxx` 经 nix daemon 构建，gc root 放在 `/var/lib/maxx/gcroots/<会话 id>/`，guest 通过只读的 store 共享看到它们。不需要 root。
-- **资源上限**：内存和 vCPU 由 hypervisor 参数限住，总量由 `maxx.slice` 限住，单个 VM 没有自己的 cgroup。以后需要再做 cgroup 委托。
+- **资源上限**：内存和 vCPU 由 hypervisor 参数限住（tank 上每个 8 个 vCPU、16 GiB），单个 VM 没有自己的 cgroup，所有 VM 加起来也没有上限：`maxx.slice` 没设内存上限，设了会连 maxx 本身一起限、到线就杀进程。内存是用到才分配的，guest 释放的页经 balloon 的 free page reporting 还给宿主；guest 的页缓存不算空闲，留到 VM 闲置关机（2026-10-30 定，owner 选的：平时一个 VM 用 1–2 GiB，几个群同时大编译才会挤，到时候在 guest 里闲置后清页缓存）。以后需要再做 cgroup 委托。
 - **store 共享的文件描述符**：guest 查过的每个 store 文件，store 的 virtiofsd 都开着一个 O_PATH 描述符，直到 guest 的内核把它忘掉；guest 内存够大，就一直不忘。2026-10-30 一个后台 agent 为了找 glibc 的 ld-linux，`find /nix/store` 扫宿主的整个 store（当时 641 万个文件），virtiofsd 用满了 `maxx.service` 的 524288 个描述符，之后这个 VM 里新查的 store 文件都报 `Too many open files in system`，直到 VM 重启。所以：
   - `LimitNOFILE` 提到 8388608，virtiofsd 自己把软限制提到这么高，整个 store 扫一遍也够用。代价是宿主的内核内存，每个开着的文件约 1.4 KB（bcachefs 的 inode 1048 B，dentry 和 file 各 192 B），扫遍 store 约 9 GiB，guest 忘掉或 VM 关掉就还回来。
   - Max 和后台 agent 的提示里说：要某个包里的文件，用 `nix build --no-link --print-out-paths nixpkgs#包名` 拿路径，不在 `/nix/store` 下 find、ls、用通配符。
