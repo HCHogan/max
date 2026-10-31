@@ -30,8 +30,14 @@ renderFrontendInputsObserved _ [] = ""
 renderFrontendInputsObserved seen inputs =
   "[前台收件箱：按接收顺序排列的用户输入；来源标签不替代语义判断]\n"
     <> T.intercalate "\n" (map render inputs)
-    <> "\n这些是对当前工作的明确反馈。按发送者和回复对象理解，不改变本轮权限。"
+    <> "\n"
+    <> guidance
   where
+    -- Requests that queued behind this one are answered here, not as feedback.
+    guidance
+      | any ((`elem` ["request", "overheard"]) . (.kind)) inputs =
+          "kind 为 reply/steering 的是对当前工作的明确反馈。request 是你排队时有人直接找你的新请求，overheard 是没人 @ 你、意图识别觉得你可能想接的话；它们已并入本轮，和触发消息一样逐条判断：要回的各自用 [reply#message_id] 引用着回，overheard 不想接就不理。都按发送者和回复对象理解，不改变本轮权限。"
+      | otherwise = "这些是对当前工作的明确反馈。按发送者和回复对象理解，不改变本轮权限。"
     render input =
       TE.decodeUtf8 . LBS.toStrict . encode $
         object $

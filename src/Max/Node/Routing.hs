@@ -5,6 +5,8 @@ module Max.Node.Routing
   ( Input (..),
     FrontendInput (..),
     FrontendOwner (..),
+    FrontendRoute (..),
+    joinLimit,
     DeliveryKind (..),
     DeliveryRoute (..),
     route,
@@ -28,7 +30,7 @@ import Max.Task.FrontendInput (FrontendInputView (..))
 -- The result type keeps each adapter's actions exhaustive without admitting
 -- impossible combinations such as merging a frontend reply into a monitor.
 data Input result where
-  Frontend :: (Eq owner) => FrontendInput owner -> [FrontendOwner owner] -> Input (Maybe owner)
+  Frontend :: (Eq owner) => FrontendInput owner -> [FrontendOwner owner] -> Input (Maybe (FrontendRoute owner))
   Delivery :: DeliveryKind folded -> Bool -> Input (DeliveryRoute folded)
   Occurrence :: OverlapPolicy -> Int -> Int64 -> OccurrenceBuffer -> Input OccurrenceRoute
 
@@ -36,7 +38,9 @@ data FrontendInput owner = FrontendInput
   { sender :: !PrincipalId,
     ingestOrder :: !(Maybe Int64),
     replyOwner :: !(Maybe owner),
-    feedback :: !(Maybe FrontendInputView)
+    feedback :: !(Maybe FrontendInputView),
+    -- | An ordinary request, which may wait inside another queued request.
+    joinable :: !Bool
   }
 
 data FrontendOwner owner = FrontendOwner
@@ -46,8 +50,20 @@ data FrontendOwner owner = FrontendOwner
     sourceOrder :: !(Maybe Int64),
     sourceMessage :: !(Maybe Int64),
     open :: !Bool,
-    started :: !Bool
+    started :: !Bool,
+    -- | An ordinary request, which can take in requests queued behind it.
+    request :: !Bool,
+    -- | Requests it has taken in so far.
+    joined :: !Int
   }
+
+-- | Feedback addresses an owner's own work. A joined request is answered by a
+-- queued owner's first poll, next to that owner's trigger.
+data FrontendRoute owner = Addressed !owner | Joined !owner deriving stock (Eq, Show)
+
+-- | Requests one queued owner takes in before later ones queue on their own.
+joinLimit :: Int
+joinLimit = 8
 
 data DeliveryKind folded = Completion | Message !Bool !folded
 
@@ -62,17 +78,24 @@ data OverflowReason = QueueFull | ConsumerFrozen | AggregateFull deriving stock 
 data OccurrenceRoute = BufferOccurrence | MergeInto !MonitorFireId | RecordOverflow !OverflowReason deriving stock (Eq, Show)
 
 route :: Input result -> result
-route (Frontend input owners) = (.recipient) <$> find accepts (sortOn (Down . (.order)) owners)
+route (Frontend input owners) = case input.feedback of
+  Nothing -> Nothing
+  Just note -> case find (addressed note) candidates of
+    Just owner -> Just (Addressed owner.recipient)
+    Nothing
+      | input.joinable -> Joined . (.recipient) <$> find waiting candidates
+      | otherwise -> Nothing
   where
-    accepts owner =
-      owner.open && newer owner && case input.feedback of
-        Nothing -> False
-        Just note -> case note.replyTo of
-          -- Quoted input can reach a queued owner before its first segment.
-          Just message -> case input.replyOwner of
-            Just target -> owner.recipient == target
-            Nothing -> owner.sourceMessage == Just message
-          Nothing -> owner.started && note.kind == "steering" && input.sender == owner.principal
+    candidates = filter (\owner -> owner.open && newer owner) (sortOn (Down . (.order)) owners)
+    addressed note owner = case note.replyTo of
+      -- Quoted input can reach a queued owner before its first segment.
+      Just message -> case input.replyOwner of
+        Just target -> owner.recipient == target
+        Nothing -> owner.sourceMessage == Just message
+      Nothing -> owner.started && note.kind == "steering" && input.sender == owner.principal
+    -- A request still waiting for its first segment answers the requests that
+    -- queue behind it in the same poll, instead of each paying a model call.
+    waiting owner = owner.request && not owner.started && owner.joined < joinLimit
     newer owner = case (owner.sourceOrder, input.ingestOrder) of
       (Just previous, Just incoming) -> incoming > previous
       _ -> False

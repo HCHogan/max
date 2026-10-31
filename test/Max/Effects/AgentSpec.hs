@@ -263,7 +263,7 @@ spec = describe "Agent full loop" $ do
     ran <- newIORef (0 :: Int)
     inputs <- newIORef []
     published <- newIORef []
-    let request n = Conversation.TurnInput (GroupId 7777) (AgentTurnId n) (PrincipalId 2001) (Just n) (Just n) Nothing Nothing False (NodeLog.Said (Just (CanonicalMessageId n)))
+    let request n = Conversation.TurnInput (GroupId 7777) (AgentTurnId n) (PrincipalId 2001) (Just n) (Just n) Nothing Nothing False (NodeLog.Said (Just (CanonicalMessageId n))) Nothing
         slow = legacyTool "echo" "slow read" (object ["type" .= ("object" :: Text)]) $ \args -> do
           liftIO (modifyIORef' ran (+ 1) >> putMVar entered () >> takeMVar release)
           pure (Right args)

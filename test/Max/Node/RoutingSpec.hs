@@ -12,20 +12,20 @@ spec :: Spec
 spec = describe "node routing policy" $ do
   let note = FrontendInputView 100 "steering" 7 Nothing (UTCTime (fromGregorian 2026 9 26) 0) Nothing "correction"
       incoming :: FrontendInput Int
-      incoming = FrontendInput (PrincipalId 7) (Just 100) Nothing (Just note)
+      incoming = FrontendInput (PrincipalId 7) (Just 100) Nothing (Just note) False
       owner :: Int -> FrontendOwner Int
-      owner n = FrontendOwner n (fromIntegral n) (PrincipalId 7) (Just (fromIntegral n)) (Just (fromIntegral n)) True True
+      owner n = FrontendOwner n (fromIntegral n) (PrincipalId 7) (Just (fromIntegral n)) (Just (fromIntegral n)) True True False 0
   it "routes unquoted steering to the newest started open owner of the same principal" $ do
     let peers = [owner 1, (owner 5) {started = False}, (owner 4) {open = False}, (owner 3) {principal = PrincipalId 8}, owner 2]
-    route (Frontend incoming peers) `shouldBe` Just 2
+    route (Frontend incoming peers) `shouldBe` Just (Addressed 2)
     route (Frontend incoming {feedback = Nothing} peers) `shouldBe` Nothing
     route (Frontend incoming {feedback = Just note {kind = "reply"}} peers) `shouldBe` Nothing
 
   it "targets quoted triggers and published outputs before an owner's first segment" $ do
     let quoted = incoming {sender = PrincipalId 8, feedback = Just note {replyTo = Just 1}}
         peers = [(owner 1) {started = False}, owner 2]
-    route (Frontend quoted peers) `shouldBe` Just 1
-    route (Frontend quoted {replyOwner = Just 2} peers) `shouldBe` Just 2
+    route (Frontend quoted peers) `shouldBe` Just (Addressed 1)
+    route (Frontend quoted {replyOwner = Just 2} peers) `shouldBe` Just (Addressed 2)
     route (Frontend quoted {replyOwner = Just 99} peers) `shouldBe` Nothing
     route (Frontend quoted {feedback = Just note {replyTo = Just 99}} peers) `shouldBe` Nothing
 
@@ -33,6 +33,24 @@ spec = describe "node routing policy" $ do
     route (Frontend incoming {ingestOrder = Nothing} [owner 1]) `shouldBe` Nothing
     route (Frontend incoming {ingestOrder = Just 1} [owner 1]) `shouldBe` Nothing
     route (Frontend incoming {feedback = Just note {replyTo = Just 1}} [(owner 1) {open = False}, owner 2]) `shouldBe` Nothing
+
+  it "joins an ordinary request to the newest request still waiting for its first segment" $ do
+    let asking = incoming {sender = PrincipalId 8, feedback = Just note {kind = "reply"}, joinable = True}
+        waiting n = (owner n) {started = False, request = True}
+    route (Frontend asking [owner 1, waiting 2, waiting 3]) `shouldBe` Just (Joined 3)
+    route (Frontend asking [owner 1, waiting 2, (waiting 3) {joined = joinLimit}]) `shouldBe` Just (Joined 2)
+    route (Frontend asking [owner 1, (waiting 2) {request = False}]) `shouldBe` Nothing
+    route (Frontend asking [(owner 1) {request = True}]) `shouldBe` Nothing
+    route (Frontend asking [(waiting 2) {open = False}]) `shouldBe` Nothing
+    route (Frontend asking {ingestOrder = Just 2} [waiting 2]) `shouldBe` Nothing
+    route (Frontend asking {joinable = False} [waiting 2]) `shouldBe` Nothing
+    route (Frontend asking {feedback = Nothing} [waiting 2]) `shouldBe` Nothing
+
+  it "delivers addressed input to its owner rather than joining a waiting request" $ do
+    let quoted = incoming {sender = PrincipalId 8, feedback = Just note {kind = "reply", replyTo = Just 1}, joinable = True}
+        waiting = (owner 2) {started = False, request = True}
+    route (Frontend quoted [owner 1, waiting]) `shouldBe` Just (Addressed 1)
+    route (Frontend quoted {feedback = Just note {kind = "reply", replyTo = Just 99}} [owner 1, waiting]) `shouldBe` Just (Joined 2)
 
   it "buffers owned completions while open and relays after closure, folding only normal tells" $ do
     map (\kind -> route (Delivery kind True)) [Completion, Message True (), Message False ()]

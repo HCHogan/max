@@ -60,6 +60,7 @@ import Max.Intent (IntentState)
 import Max.Jobs qualified as Jobs
 import Max.ModelCatalog (ModelCatalog)
 import Max.Node.Router qualified as Router
+import Max.Node.Routing qualified as Routing
 import Max.Platform.Store.Conversation
   ( conversationAdvertisedCaps,
   )
@@ -68,7 +69,7 @@ import Max.Platform.Types
     CanonicalMessageId (CanonicalMessageId, unCanonicalMessageId),
     PrincipalId (PrincipalId),
   )
-import Max.Prompt (TriggerOrigin (OriginDirect))
+import Max.Prompt (TriggerOrigin (OriginDirect, OriginProactive))
 import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Task.FrontendInput (FrontendInputView (..))
 import Max.Task.State qualified as JobState
@@ -95,7 +96,7 @@ import Max.Turn.Types
   ( AgentTurnId (unAgentTurnId),
     AgentTurnRef (atrTurnId),
   )
-import Max.Util (catchSync)
+import Max.Util (catchSync, tshow)
 import OneBot.Types (GroupId (GroupId), UserId (UserId))
 
 dispatchLLM ::
@@ -273,7 +274,14 @@ forkDispatch start origin gm work = do
               replyTurn,
               feedback = if allowInput then feedback else Nothing,
               notice,
-              trigger = Start.startTrigger start (if gm.canonicalId.unCanonicalMessageId == 0 then Nothing else Just gm.canonicalId)
+              trigger = Start.startTrigger start (if gm.canonicalId.unCanonicalMessageId == 0 then Nothing else Just gm.canonicalId),
+              -- Requests queued behind a waiting request are answered in its
+              -- first poll; an overheard one may still end in silence.
+              joinKind = case origin of
+                _ | not allowInput || notice || isNothing feedback -> Nothing
+                OriginDirect -> Just "request"
+                OriginProactive -> Just "overheard"
+                _ -> Nothing
             }
 
     launchTurn env outputCaps ident gidRaw restore turn turnRef nodeTask =
@@ -312,7 +320,7 @@ forkDispatch start origin gm work = do
                           bound <- bindTurnEvents env.beTasks turnRef.atrTurnId events
                           unless bound (STM.throwSTM TaskCancelled)
                       work outputCaps turn turnRef
-                    else finishAgentTurn turnRef TurnAborted 0 (Just "feedback routed to the active conversation task")
+                    else finishAgentTurn turnRef TurnAborted 0 (Just (routedReason (nodeTask >>= Conversation.routeOf)))
               )
         )
           `finally` do
@@ -331,6 +339,10 @@ forkDispatch start origin gm work = do
         `catchSync` \e ->
           logAttention "turn terminal cleanup failed" $
             object ["turn_id" .= ref.atrTurnId.unAgentTurnId, "reason" .= reason, "error" .= T.pack (show (e :: SomeException))]
+
+    routedReason = \case
+      Just (Routing.Joined owner) -> "request joined queued turn " <> tshow owner.unAgentTurnId
+      _ -> "feedback routed to the active conversation task"
 
     -- The root executor is already released. Retained native calls finish
     -- before their browser scope is torn down or shutdown's slot is released.

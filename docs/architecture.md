@@ -493,6 +493,14 @@ There are at most 256 tickets per conversation and 1,024 across the process.
 Waiting turns retain their original dispatch context; they are not reclassified.
 Only explicit feedback from the active initiator enters its inbox, in canonical
 ingestion order. Unread feedback becomes an independent turn when the owner exits.
+An ordinary request, direct or intent-triggered, that arrives while another
+request is still waiting for its first segment joins that request instead of
+queueing a turn of its own. The waiting turn answers up to eight joined requests
+in its first poll (inbox kinds `request` and `overheard`) and shows them as
+processing. Each joined turn is recorded as `aborted` and names the turn it
+joined. A turn that took in another sender's request cannot arm message or
+webhook automations. If that turn is cancelled before it runs, its joined
+requests go with it.
 Queued foreground requests precede queued task notices. Commands remain responsive.
 
 `!kill` revokes process-local publication authority before signalling the worker.

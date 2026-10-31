@@ -13,6 +13,7 @@ import Max.Node.Events qualified as Events
 import Max.Node.Executor qualified as Node
 import Max.Node.Log qualified as NodeLog
 import Max.Node.Render (renderEvents)
+import Max.Node.Routing (FrontendRoute (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Task.FrontendInput (FrontendInputView (..))
 import Max.Turn.Types (AgentTurnId (..))
@@ -107,6 +108,48 @@ spec = describe "Max.Conversation" $ do
     reply <- admit queue (replying 3 2 Nothing)
     awaitTurn reply `shouldReturn` False
     observeFrontend queue (AgentTurnId 2) >>= (`shouldSatisfy` T.isInfixOf "correction")
+
+  it "lets requests queued behind a waiting request join it, up to a bound" $ do
+    queue <- newConversations
+    first <- admit queue (asking 1)
+    waiting <- admit queue (asking 2)
+    joiners <- mapM (\n -> admit queue ((asking n) {principal = PrincipalId 99})) [3 .. 10]
+    forM_ joiners $ \joiner -> awaitTurn joiner `shouldReturn` False
+    map routeOf joiners `shouldBe` replicate 8 (Just (Joined (AgentTurnId 2)))
+    STM.atomically (joinedRequests queue (AgentTurnId 2)) `shouldReturn` [JoinedRequest (PrincipalId 99) (CanonicalMessageId n) True | n <- [3 .. 10]]
+    overflow <- admit queue (asking 11)
+    later <- admit queue ((asking 12) {joinKind = Just "overheard"})
+    routeOf overflow `shouldBe` Nothing
+    routeOf later `shouldBe` Just (Joined (AgentTurnId 11))
+    observeFrontend queue (AgentTurnId 1) `shouldReturn` ""
+    release queue first
+    awaitTurn waiting `shouldReturn` True
+    text <- observeFrontend queue (AgentTurnId 2)
+    T.count "\"kind\":\"request\"" text `shouldBe` 8
+    text `shouldSatisfy` T.isInfixOf "已并入本轮"
+    release queue waiting
+    awaitTurn overflow `shouldReturn` True
+    observeFrontend queue (AgentTurnId 11) >>= (`shouldSatisfy` T.isInfixOf "\"kind\":\"overheard\"")
+
+  it "takes requests only into a waiting request, never into a running one or a side question" $ do
+    queue <- newConversations
+    first <- admit queue (asking 1)
+    behind <- admit queue (asking 2)
+    routeOf behind `shouldBe` Nothing
+    STM.atomically (joinedRequests queue (AgentTurnId 1)) `shouldReturn` []
+    side <- admit queue ((asking 3) {feedback = Nothing, joinKind = Nothing})
+    routeOf side `shouldBe` Nothing
+    notice <- admit queue ((request 4) {notice = True, sourceMessage = Nothing})
+    routeOf notice `shouldBe` Nothing
+    joined <- admit queue (asking 5)
+    routeOf joined `shouldBe` Just (Joined (AgentTurnId 2))
+    reply <- admit queue (replying 6 2 Nothing)
+    routeOf reply `shouldBe` Just (Addressed (AgentTurnId 2))
+    release queue first
+    awaitTurn behind `shouldReturn` True
+    text <- observeFrontend queue (AgentTurnId 2)
+    forM_ ["\"message_id\":5", "\"kind\":\"request\"", "\"message_id\":6", "\"kind\":\"reply\""] $ \field ->
+      text `shouldSatisfy` T.isInfixOf field
 
   it "serializes independent inputs and lets other conversations run" $ do
     queue <- newConversations
@@ -226,7 +269,11 @@ admit :: Conversations -> TurnInput -> IO TaskHandle
 admit queue input = enqueue queue input >>= maybe (expectationFailure "queue full" >> fail "queue full") pure
 
 request :: Int64 -> TurnInput
-request n = TurnInput (GroupId 1) (AgentTurnId n) (PrincipalId 7) (Just n) (Just n) Nothing Nothing False (NodeLog.Said (Just (CanonicalMessageId n)))
+request n = TurnInput (GroupId 1) (AgentTurnId n) (PrincipalId 7) (Just n) (Just n) Nothing Nothing False (NodeLog.Said (Just (CanonicalMessageId n))) Nothing
+
+-- | An ordinary request as dispatch admits it: its own input view, and joinable.
+asking :: Int64 -> TurnInput
+asking n = (steering n) {feedback = fmap (\note -> note {kind = "reply"}) (steering n).feedback, joinKind = Just "request"}
 
 steering :: Int64 -> TurnInput
 steering n = (request n) {feedback = Just (FrontendInputView n "steering" 7 (Just "Alice") (UTCTime (fromGregorian 2026 9 19) 0) Nothing "correction")}
