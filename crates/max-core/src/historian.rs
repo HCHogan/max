@@ -130,18 +130,10 @@ pub enum Invalid {
     Shape(String),
     #[error("no compartments")]
     Empty,
-    #[error("compartment {index} starts at #{first}, not at #{expected}")]
-    Start {
-        index: usize,
-        first: i64,
-        expected: i64,
-    },
-    #[error(
-        "compartment {index} ends at #{last}, which isn't a row of the stretch at or after its start"
-    )]
-    End { index: usize, last: i64 },
-    #[error("the compartments stop at #{last}, short of #{expected}")]
-    Short { last: i64, expected: i64 },
+    #[error("compartment {index} ends at #{last}, before #{start}, where it starts")]
+    End { index: usize, last: i64, start: i64 },
+    #[error("compartment {index} starts past the stretch's last row")]
+    Extra { index: usize },
     #[error("compartment {index}: kind {kind:?} isn't one of the kinds")]
     Kind { index: usize, kind: String },
     #[error("compartment {index}: importance {importance} isn't 1 to 100")]
@@ -160,8 +152,9 @@ struct Answer {
 }
 
 #[derive(Deserialize)]
+/// The model also writes each compartment's `first`, which helps it cut;
+/// where a compartment starts follows from the one before.
 struct Raw {
-    first: i64,
     last: i64,
     title: String,
     kind: String,
@@ -171,10 +164,17 @@ struct Raw {
     p3: String,
 }
 
-/// The answer for the stretch `ids`, oldest first: compartments that
-/// follow each other with no gap and cover it all. The first `{` through
+/// The answer for the stretch `ids`, oldest first. The first `{` through
 /// the last `}` is read, so fences and prose around the object don't
 /// matter.
+///
+/// Compartments follow each other with no gap: each starts at the row
+/// after the one before it ends, whatever its `first` says, and ends at
+/// its `last`, or at the stretch's last row before that number when it
+/// isn't one. Rows after the last compartment are left for the next
+/// capture. The model copies a number off by one now and then, or cites
+/// one that is another conversation's (ids are shared); held to the
+/// exact ids, a stretch of thirty compartments failed for a day.
 pub fn parse(text: &str, ids: &[MessageId]) -> Result<Vec<Compartment>, Invalid> {
     let object = text
         .find('{')
@@ -189,24 +189,18 @@ pub fn parse(text: &str, ids: &[MessageId]) -> Result<Vec<Compartment>, Invalid>
     let mut next = 0;
     let mut out = Vec::new();
     for (index, raw) in answer.compartments.into_iter().enumerate() {
-        let expected = ids.get(next).ok_or(Invalid::End {
-            index,
-            last: raw.last,
-        })?;
-        if raw.first != expected.0 {
-            return Err(Invalid::Start {
-                index,
-                first: raw.first,
-                expected: expected.0,
-            });
-        }
-        let end = ids[next..]
+        let rest = &ids[next..];
+        let start = *rest.first().ok_or(Invalid::Extra { index })?;
+        let end = rest
             .iter()
             .position(|id| id.0 == raw.last)
+            .or_else(|| rest.iter().rposition(|id| id.0 < raw.last))
             .ok_or(Invalid::End {
                 index,
                 last: raw.last,
+                start: start.0,
             })?;
+        let last = rest[end];
         next += end + 1;
         if !KINDS.contains(&raw.kind.as_str()) {
             return Err(Invalid::Kind {
@@ -233,23 +227,14 @@ pub fn parse(text: &str, ids: &[MessageId]) -> Result<Vec<Compartment>, Invalid>
             Ok(text)
         };
         out.push(Compartment {
-            first: MessageId(raw.first),
-            last: MessageId(raw.last),
+            first: start,
+            last,
             title: field(raw.title, "title", TITLE_CHARS)?,
             kind: raw.kind,
             importance,
             full: field(raw.p1, "p1", FULL_CHARS)?,
             brief: field(raw.p2, "p2", BRIEF_CHARS)?,
             line: field(raw.p3.replace(['\n', '\r'], " "), "p3", LINE_CHARS)?,
-        });
-    }
-    if let Some(expected) = ids.last()
-        && next < ids.len()
-    {
-        let last = out.last().map_or(0, |compartment| compartment.last.0);
-        return Err(Invalid::Short {
-            last,
-            expected: expected.0,
         });
     }
     Ok(out)

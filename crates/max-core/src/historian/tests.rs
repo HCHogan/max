@@ -37,27 +37,56 @@ fn compartments_cover_the_stretch_in_order() {
 }
 
 #[test]
-fn gaps_overlaps_and_short_answers_are_refused() {
+fn a_compartment_starts_where_the_one_before_ends() {
+    // Conversation 12's answers, 2026-10-30: a start one row late, one a
+    // row early, an end that is no row of the stretch.
     let stretch = ids(&[10, 12, 17, 18, 30]);
-    let gap = parse(&answer(&[(10, 12), (18, 30)]), &stretch);
-    assert!(
-        matches!(gap, Err(Invalid::Start { index: 1, .. })),
-        "{gap:?}"
+    let spans = |text: &str| -> Vec<(i64, i64)> {
+        parse(text, &stretch)
+            .unwrap()
+            .iter()
+            .map(|compartment| (compartment.first.0, compartment.last.0))
+            .collect()
+    };
+    let late = spans(&answer(&[(10, 12), (18, 30)]));
+    assert_eq!(late, [(10, 12), (17, 30)], "the row skipped joins the next");
+    let early = spans(&answer(&[(10, 17), (17, 30)]));
+    assert_eq!(early, [(10, 17), (18, 30)]);
+    let between = spans(&answer(&[(10, 15), (16, 30)]));
+    assert_eq!(
+        between,
+        [(10, 12), (17, 30)],
+        "#15 is no row: #12 is before it"
     );
-    let overlap = parse(&answer(&[(10, 17), (17, 30)]), &stretch);
-    assert!(matches!(overlap, Err(Invalid::Start { .. })), "{overlap:?}");
-    let short = parse(&answer(&[(10, 17)]), &stretch);
-    assert!(matches!(short, Err(Invalid::Short { .. })), "{short:?}");
+    let past = spans(&answer(&[(10, 31)]));
+    assert_eq!(past, [(10, 30)]);
+    let short = spans(&answer(&[(10, 17)]));
+    assert_eq!(short, [(10, 17)], "#18 and #30 wait for the next capture");
     let backwards = parse(&answer(&[(12, 10)]), &ids(&[12, 10]));
     assert!(
         backwards.is_ok(),
         "the stretch's order counts, not the numbers"
     );
-    let past = parse(&answer(&[(10, 31)]), &stretch);
-    assert!(matches!(past, Err(Invalid::End { .. })), "{past:?}");
+}
+
+#[test]
+fn compartments_that_cant_be_placed_are_refused() {
+    let stretch = ids(&[10, 12, 17, 18, 30]);
+    let before = parse(&answer(&[(10, 17), (12, 12)]), &stretch);
+    assert!(
+        matches!(
+            before,
+            Err(Invalid::End {
+                index: 1,
+                last: 12,
+                start: 18
+            })
+        ),
+        "{before:?}"
+    );
     let extra = parse(&answer(&[(10, 30), (31, 32)]), &stretch);
     assert!(
-        matches!(extra, Err(Invalid::End { index: 1, .. })),
+        matches!(extra, Err(Invalid::Extra { index: 1 })),
         "{extra:?}"
     );
     assert_eq!(
