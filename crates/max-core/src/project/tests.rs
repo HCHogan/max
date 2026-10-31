@@ -160,7 +160,12 @@ fn the_base_context() {
     );
     let context = context(
         "你是 Max".into(),
-        [String::new(), "--- 2026-10-28 周三 ---\n".into(), volatile],
+        [
+            String::new(),
+            "--- 2026-10-28 周三 ---\n".into(),
+            "[09:00 小明 #8]: 早\n".into(),
+            volatile,
+        ],
         [PrincipalId(12)].into(),
         |text| text.chars().count() as u32,
     );
@@ -173,7 +178,10 @@ fn the_base_context() {
             _ => ("other", item.tokens),
         })
         .collect();
-    assert_eq!(kinds, [("system", 6), ("user", 22), ("user", 115)]);
+    assert_eq!(
+        kinds,
+        [("system", 6), ("user", 22), ("user", 17), ("user", 115)]
+    );
     assert_eq!(context.roster, [PrincipalId(12)].into());
 }
 

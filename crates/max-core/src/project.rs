@@ -278,10 +278,11 @@ pub fn attach<'m>(
 }
 
 /// The base context: the system prompt, then each non-empty block as its
-/// own item, in this order. `count` is `max`'s token estimate.
+/// own item, in this order: the summaries, the tail's pieces (see
+/// [`pieces`]) and the volatile block. `count` is `max`'s token estimate.
 pub fn context(
     system: String,
-    blocks: [String; 3],
+    blocks: impl IntoIterator<Item = String>,
     roster: BTreeSet<PrincipalId>,
     count: impl Fn(&str) -> u32,
 ) -> Context {

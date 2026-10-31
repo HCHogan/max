@@ -17,6 +17,7 @@ use max_core::run::{Context, Input, Wake};
 use max_db::ledger::{self, Delivery, Row};
 use max_db::platform::{self, ConversationKind};
 use max_db::summaries;
+use max_db::turns::{self, TailEnd};
 use sqlx::PgConnection;
 
 use super::Place;
@@ -130,7 +131,8 @@ impl Projection<'_> {
                 (&row.message, line)
             })
             .collect();
-        let tail_text = joined(&render, &lines, None);
+        let ends = turns::tail_ends(conn, conversation, cursor, from).await?;
+        let pieces = pieces(&render, &lines, &ends);
 
         let mut first_lines = Vec::new();
         for row in &triggers {
@@ -170,12 +172,10 @@ impl Projection<'_> {
             quoted: quoted_text,
             first: first_text,
         };
-        let mut context = project::context(
-            self.system.clone(),
-            [summary_block, tail_text, volatile.render(self.offset)],
-            roster,
-            tokens::count,
-        );
+        let blocks = std::iter::once(summary_block)
+            .chain(pieces)
+            .chain([volatile.render(self.offset)]);
+        let mut context = project::context(self.system.clone(), blocks, roster, tokens::count);
         // The pictures of the first inputs and of the rows they quote,
         // after the volatile block.
         if let Some(volatile) = context.items.last_mut() {
@@ -314,6 +314,43 @@ pub(crate) fn shown_line<P: max_core::render::People>(
     } else {
         line
     }
+}
+
+/// The tail as messages of their own, split where the tails of earlier
+/// turns ended, so that a turn's first call starts with the first call of
+/// the turn before, all of it but the volatile block. Gemini keeps that
+/// much of a call for later calls, as whole messages; a tail that grows
+/// inside one message isn't reused once a few minutes have passed, and a
+/// new turn comes at least an idle window after the last call. See
+/// "前缀稳定的规则" in docs/rust-rewrite.md.
+fn pieces<P: max_core::render::People>(
+    render: &Render<'_, P>,
+    lines: &[(&Message, String)],
+    ends: &[TailEnd],
+) -> Vec<String> {
+    // A turn's tail held the rows up to its snapshot but those it woke
+    // for, which its volatile block showed: the rows before the first of
+    // them, when they were the newest, as they mostly are.
+    let cuts: BTreeSet<usize> = ends
+        .iter()
+        .map(|end| {
+            lines
+                .iter()
+                .take_while(|(message, _)| {
+                    message.id <= end.from && end.woken.is_none_or(|woken| message.id < woken)
+                })
+                .count()
+        })
+        .filter(|&cut| 0 < cut && cut < lines.len())
+        .collect();
+    let mut pieces = Vec::new();
+    let mut start: usize = 0;
+    for end in cuts.into_iter().chain([lines.len()]) {
+        let after = start.checked_sub(1).map(|last| lines[last].0.at);
+        pieces.push(joined(render, &lines[start..end], after));
+        start = end;
+    }
+    pieces
 }
 
 /// Lines in order, with a date line where the day changes and a gap line

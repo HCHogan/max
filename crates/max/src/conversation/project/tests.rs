@@ -420,3 +420,83 @@ async fn the_trigger_and_what_it_quotes_show_their_pictures(pool: PgPool) {
     let text_only = tokens::count(user_text(volatile));
     assert_eq!(volatile.tokens, text_only + 2 * project::PICTURE_TOKENS);
 }
+
+/// A turn starts, as the actor starts one, and its base context's texts.
+async fn turn(
+    conn: &mut PgConnection,
+    projection: &Projection<'_>,
+    from: MessageId,
+    woke: MessageId,
+) -> Vec<String> {
+    let conversation = projection.place.conversation;
+    turns::start(
+        conn,
+        conversation,
+        &[Input::Wake(direct(woke))],
+        from,
+        at(30),
+    )
+    .await
+    .unwrap();
+    let (context, _) = projection.base(conn, from, &[direct(woke)]).await.unwrap();
+    context
+        .items
+        .iter()
+        .map(|item| user_text(item).to_owned())
+        .collect()
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_turn_starts_with_the_first_call_of_the_turn_before(pool: PgPool) {
+    let mut conn = pool.acquire().await.unwrap();
+    let place = group(&mut conn).await;
+    let mut said = Vec::new();
+    let words = [
+        "早",
+        "吃了吗",
+        "在吗",
+        "刚才那个",
+        "还有这个",
+        "再看看",
+        "看下",
+        "顺便",
+    ];
+    for (n, words) in (0..).zip(words) {
+        let inbound = from_xiaoming(n, vec![text(words)]);
+        let row = ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
+            .await
+            .unwrap();
+        said.push(row.message.id);
+    }
+    let projection = Projection {
+        place: &place,
+        system: "SYSTEM".into(),
+        window: 100_000,
+        cleared_upto: None,
+        historian: false,
+        memory: String::new(),
+        now: at(30),
+        offset: offset(),
+    };
+    let all_but_volatile = |texts: &[String]| texts[..texts.len() - 1].to_vec();
+
+    let first = turn(&mut conn, &projection, said[2], said[2]).await;
+    assert_eq!(first.len(), 3, "{first:?}");
+    let second = turn(&mut conn, &projection, said[5], said[5]).await;
+    assert!(second.starts_with(&all_but_volatile(&first)), "{second:?}");
+    assert_eq!(
+        second[2],
+        format!(
+            "[12:02 小明 #{}]: 在吗\n[12:03 小明 #{}]: 刚才那个\n[12:04 小明 #{}]: 还有这个\n",
+            said[2], said[3], said[4]
+        ),
+        "the second piece starts where the first turn's tail ended, with no date line"
+    );
+    // Woken by a row that someone talked after: its tail ends before that
+    // row and goes on after it, so the turn after this one won't start
+    // with its first call, and the cache misses once.
+    let third = turn(&mut conn, &projection, said[7], said[6]).await;
+    assert!(third.starts_with(&all_but_volatile(&second)), "{third:?}");
+    assert_eq!(third.len(), 6, "{third:?}");
+    assert_eq!(third[4], format!("[12:07 小明 #{}]: 顺便\n", said[7]));
+}

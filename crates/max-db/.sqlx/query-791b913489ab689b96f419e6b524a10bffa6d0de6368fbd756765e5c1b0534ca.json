@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select from_id, trigger as \"trigger: Json<Vec<Input>>\" from turns\n           where conversation_id = $1 and from_id > $2 and from_id <= $3\n           order by id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "from_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "turns",
+            "name": "from_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "trigger: Json<Vec<Input>>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "turns",
+            "name": "trigger"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "791b913489ab689b96f419e6b524a10bffa6d0de6368fbd756765e5c1b0534ca"
+}

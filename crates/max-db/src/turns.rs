@@ -140,6 +140,49 @@ pub async fn unfinished(
     Ok(ids.into_iter().map(TurnId).collect())
 }
 
+/// Where a turn's tail ended: its snapshot position, and the first row it
+/// woke for. Its base showed the rows it woke for apart from the tail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TailEnd {
+    pub from: MessageId,
+    pub woken: Option<MessageId>,
+}
+
+/// The tail ends of the conversation's turns whose snapshots are after
+/// `after` and up to `upto`, oldest first.
+pub async fn tail_ends(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    after: Option<MessageId>,
+    upto: MessageId,
+) -> sqlx::Result<Vec<TailEnd>> {
+    let rows = sqlx::query!(
+        r#"select from_id, trigger as "trigger: Json<Vec<Input>>" from turns
+           where conversation_id = $1 and from_id > $2 and from_id <= $3
+           order by id"#,
+        conversation.0,
+        after.map_or(0, |id| id.0),
+        upto.0
+    )
+    .fetch_all(conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| TailEnd {
+            from: MessageId(row.from_id),
+            woken: row
+                .trigger
+                .0
+                .iter()
+                .filter_map(|input| match input {
+                    Input::Wake(wake) => wake.ids.iter().min().copied(),
+                    _ => None,
+                })
+                .min(),
+        })
+        .collect())
+}
+
 /// The earliest message that woke a turn still running in the
 /// conversation: from there on, the conversation isn't settled.
 pub async fn running_since(
