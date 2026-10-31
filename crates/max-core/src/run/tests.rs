@@ -399,3 +399,70 @@ fn a_cut_off_call_keeps_what_was_said() {
     );
     assert!(run.said());
 }
+
+/// The reminders in the request's tool results, each with the call it
+/// follows.
+fn reminders(request: &Request) -> Vec<(String, String)> {
+    request
+        .items
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::ToolResult { call, output } => Some((call, output)),
+            _ => None,
+        })
+        .flat_map(|(call, output)| {
+            output.parts.iter().filter_map(move |part| match part {
+                Part::Text { text } if text.starts_with("[maxx 提醒]") => {
+                    Some((call.0.clone(), text.clone()))
+                }
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+/// One model output and its tool batch, every call answered.
+fn batch(run: &mut Run, out: ModelOutput) {
+    call_model(run);
+    run.model_output(out).unwrap();
+    for id in run_tools(run) {
+        run.tool_result(id, result(10)).unwrap();
+    }
+}
+
+#[test]
+fn a_long_quiet_stretch_of_tools_is_reminded_that_people_wait() {
+    let mut run = Run::new(spec(1_000_000, None), base(100), vec![Input::Wake(wake(1))]);
+    for n in 1..QUIET_CALLS - 2 {
+        batch(&mut run, calls(&[(&format!("c{n}"), "shell")]));
+    }
+    assert_eq!(reminders(&call_model(&mut run)), []);
+    run.model_output(calls(&[("a", "shell"), ("b", "shell"), ("c", "run_code")]))
+        .unwrap();
+    for id in run_tools(&mut run) {
+        run.tool_result(id, result(10)).unwrap();
+    }
+    let reminded = reminders(&call_model(&mut run));
+    assert_eq!(reminded.len(), 1, "{reminded:?}");
+    assert_eq!(reminded[0].0, "c", "after the batch's last result");
+    assert!(reminded[0].1.contains("连着调了 12 次工具"), "{reminded:?}");
+
+    // Saying something starts the count again.
+    let mut both = says("在弄了，稍等");
+    both.items.extend(calls(&[("d", "shell")]).items);
+    run.model_output(both).unwrap();
+    for id in run_tools(&mut run) {
+        run.tool_result(id, result(10)).unwrap();
+    }
+    for n in 1..QUIET_CALLS - 1 {
+        batch(&mut run, calls(&[(&format!("e{n}"), "shell")]));
+    }
+    assert_eq!(reminders(&call_model(&mut run)).len(), 1);
+    run.model_output(says("[silence]")).unwrap();
+    assert_idle(&mut run);
+    run.input(Input::Wake(wake(2))).unwrap();
+    batch(&mut run, calls(&[("f", "shell")]));
+    let reminded = reminders(&call_model(&mut run));
+    assert_eq!(reminded.len(), 2, "{reminded:?}");
+    assert_eq!(reminded[1].0, "f", "silence isn't a word");
+}

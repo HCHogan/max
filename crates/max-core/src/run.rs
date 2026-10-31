@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{CallId, MessageId, PrincipalId};
 use crate::intent::Reason;
-use crate::item::{Item, ItemKind, ModelOutput, ModelTag, ToolOutput};
+use crate::item::{Item, ItemKind, ModelOutput, ModelTag, Part, ToolOutput};
 use crate::segment::Segmenter;
 use crate::tools::{self, Call, TOOLS, ToolSpec};
 
@@ -146,6 +146,22 @@ pub struct RunRecord<'a> {
 /// the core has no tokenizer.
 const SYNTHESIZED_TOKENS: u32 = 50;
 
+/// Tool calls in a row, with nothing said to the group, after which the
+/// model is reminded that people are waiting; then again after as many
+/// more. On 2026-10-31 a turn made 49 calls over 41 minutes before its
+/// first word, while two more people asked it something.
+pub const QUIET_CALLS: u32 = 12;
+
+/// The reminder, after the last result of the batch that reaches
+/// [`QUIET_CALLS`].
+fn reminder(calls: u32) -> String {
+    format!(
+        "[maxx 提醒] 你已经连着调了 {calls} 次工具，群里还没听到你说一句话。还要做一阵的话，先在群里说一句在做什么、大概还要多久，再接着做；有人在等你回答的，能先答就先答。"
+    )
+}
+
+const REMINDER_TOKENS: u32 = 80;
+
 #[derive(Clone, Debug)]
 pub struct Run {
     spec: RunSpec,
@@ -165,6 +181,9 @@ pub struct Run {
     unhandled: Vec<Wake>,
     /// The base roster and everyone shown since.
     roster: BTreeSet<PrincipalId>,
+    /// Tool calls since the model last said something to the group, or
+    /// since the last reminder.
+    quiet: u32,
 }
 
 /// Where the run is. Each phase holds what only it has.
@@ -208,6 +227,7 @@ impl Run {
             measured: None,
             unhandled,
             roster,
+            quiet: 0,
         }
     }
 
@@ -270,6 +290,13 @@ impl Run {
                 }
             }
         }
+        let spoke = out.items.iter().any(|item| match &item.kind {
+            ItemKind::Assistant { text } => self.speaks(text),
+            _ => false,
+        });
+        if spoke {
+            self.quiet = 0;
+        }
         self.transcript.extend(out.items);
         let malformed = !errors.is_empty();
         for (call, error) in errors {
@@ -290,6 +317,9 @@ impl Run {
     /// The model call was cut off; `text` had already been said.
     pub fn partial_output(&mut self, text: String, tokens: u32) -> Result<(), Rejected> {
         self.calling()?;
+        if self.speaks(&text) {
+            self.quiet = 0;
+        }
         if !text.is_empty() {
             self.transcript
                 .push(Item::new(ItemKind::Assistant { text }, tokens));
@@ -298,7 +328,9 @@ impl Run {
         Ok(())
     }
 
-    pub fn tool_result(&mut self, call: CallId, output: ToolOutput) -> Result<(), Rejected> {
+    /// A tool's result. The batch's last one carries a reminder when the
+    /// model has gone [`QUIET_CALLS`] calls without a word to the group.
+    pub fn tool_result(&mut self, call: CallId, mut output: ToolOutput) -> Result<(), Rejected> {
         self.open()?;
         let Phase::Running(open) = &mut self.phase else {
             return Err(Rejected::UnknownCall);
@@ -307,8 +339,17 @@ impl Run {
             return Err(Rejected::UnknownCall);
         };
         open.remove(at);
-        if open.is_empty() {
+        let done = open.is_empty();
+        if done {
             self.phase = Phase::ModelDue;
+        }
+        self.quiet += 1;
+        if done && self.quiet >= QUIET_CALLS {
+            output.parts.push(Part::Text {
+                text: reminder(self.quiet),
+            });
+            output.tokens += REMINDER_TOKENS;
+            self.quiet = 0;
         }
         let tokens = output.tokens;
         self.transcript
@@ -480,18 +521,21 @@ impl Run {
         measured + after + pending
     }
 
-    /// Whether anything the model wrote went out: text that the segmenter
-    /// turns into a message or a reaction.
+    /// Whether anything the model wrote went out.
     fn said(&self) -> bool {
         self.transcript.iter().any(|item| match &item.kind {
-            ItemKind::Assistant { text } => {
-                let mut segmenter = Segmenter::new(self.roster.clone());
-                let mut segments = segmenter.push(text);
-                segments.extend(segmenter.finish());
-                !segments.is_empty()
-            }
+            ItemKind::Assistant { text } => self.speaks(text),
             _ => false,
         })
+    }
+
+    /// Whether `text` from the model goes out: the segmenter turns it into
+    /// a message or a reaction.
+    fn speaks(&self, text: &str) -> bool {
+        let mut segmenter = Segmenter::new(self.roster.clone());
+        let mut segments = segmenter.push(text);
+        segments.extend(segmenter.finish());
+        !segments.is_empty()
     }
 }
 
