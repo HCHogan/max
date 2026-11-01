@@ -304,16 +304,17 @@ fn the_record_is_what_the_model_saw_and_said() {
 
 #[test]
 fn the_limit_counts_waiting_inputs() {
-    // Window 10k: the core may grow 5k past its 1k base.
+    // Window 10k: the core may grow 5k past its 1k base, and is near the
+    // limit past 4.5k.
     let mut run = Run::new(spec(10_000, None), base(1_000), vec![Input::Wake(wake(1))]);
     call_model(&mut run);
     run.model_output(calls(&[("a", "shell")])).unwrap(); // measured: 1,010
     run_tools(&mut run);
     run.tool_result(CallId("a".into()), result(3_000)).unwrap();
-    assert!(!run.at_limit());
+    assert!(!run.near_limit());
     run.input(messages(2, 2_000)).unwrap();
     run.input(Input::Wake(wake(2))).unwrap();
-    assert!(run.at_limit());
+    assert!(run.near_limit());
     // Neither trigger has been handled.
     let ids: Vec<_> = run
         .unhandled()
@@ -336,11 +337,106 @@ fn an_output_without_usage_keeps_the_estimates() {
     };
     run.model_output(uncounted).unwrap();
     run_tools(&mut run);
-    run.tool_result(CallId("a".into()), result(4_500)).unwrap();
-    assert!(!run.at_limit());
-    // The base still counts: 1,000 + 10 + 4,500 + 600 is past 6k.
+    run.tool_result(CallId("a".into()), result(4_000)).unwrap();
+    assert!(!run.near_limit());
+    // The base still counts: 1,000 + 10 + 4,000 + 600 is past 5.5k.
     run.input(messages(2, 600)).unwrap();
+    assert!(run.near_limit());
+}
+
+/// The warnings in the request, as the model is shown them.
+fn warnings(request: &Request) -> usize {
+    texts(request)
+        .iter()
+        .filter(|text| text.starts_with("[maxx 提醒] 这一轮的上下文快用完了"))
+        .count()
+}
+
+/// A model output whose request the provider counted as `input` tokens.
+fn counted(input: u32, out: ModelOutput) -> ModelOutput {
+    ModelOutput {
+        usage: usage(input),
+        ..out
+    }
+}
+
+#[test]
+fn near_the_limit_the_model_is_warned_once() {
+    // Window 10k, base 1k: near the limit past 5.5k, over it past 6k.
+    let mut run = Run::new(spec(10_000, None), base(1_000), vec![Input::Wake(wake(1))]);
+    call_model(&mut run);
+    run.model_output(calls(&[("a", "shell")])).unwrap(); // measured: 1,010
+    run_tools(&mut run);
+    run.tool_result(CallId("a".into()), result(4_600)).unwrap();
+    assert!(run.near_limit() && !run.at_limit());
+    let request = call_model(&mut run);
+    assert_eq!(warnings(&request), 1);
+    assert!(
+        texts(&request).last().unwrap().contains("[maxx 提醒]"),
+        "the last thing before the call"
+    );
+    assert!(run.warned());
+
+    // Still under the limit: the run goes on, and isn't warned again.
+    run.model_output(counted(5_700, calls(&[("b", "shell")])))
+        .unwrap();
+    run_tools(&mut run);
+    run.tool_result(CallId("b".into()), result(10)).unwrap();
+    assert!(!run.at_limit());
+    assert_eq!(warnings(&call_model(&mut run)), 1);
+
+    // Over it, warned, the run is at its limit.
+    run.model_output(counted(5_800, calls(&[("c", "shell")])))
+        .unwrap();
+    run_tools(&mut run);
+    run.tool_result(CallId("c".into()), result(500)).unwrap();
     assert!(run.at_limit());
+}
+
+#[test]
+fn a_run_over_its_limit_unwarned_gets_the_call_that_warns_it() {
+    let mut run = Run::new(spec(10_000, None), base(1_000), vec![Input::Wake(wake(1))]);
+    call_model(&mut run);
+    run.model_output(calls(&[("a", "shell")])).unwrap();
+    run_tools(&mut run);
+    // From well under the line to past the limit in one result.
+    run.tool_result(CallId("a".into()), result(5_500)).unwrap();
+    assert!(!run.at_limit());
+    assert_eq!(warnings(&call_model(&mut run)), 1);
+    assert!(run.at_limit());
+    run.model_output(counted(6_700, says("查到一半：……剩下的下次再说")))
+        .unwrap();
+    assert_idle(&mut run);
+    assert_eq!(run.outcome(), Outcome::Answered);
+}
+
+#[test]
+fn a_warned_model_that_speaks_has_answered_what_it_saw() {
+    let mut run = Run::new(spec(10_000, None), base(1_000), vec![Input::Wake(wake(1))]);
+    call_model(&mut run);
+    run.model_output(calls(&[("a", "shell")])).unwrap();
+    run_tools(&mut run);
+    run.tool_result(CallId("a".into()), result(4_600)).unwrap();
+    call_model(&mut run);
+    run.input(Input::Wake(wake(2))).unwrap();
+    // It says how far it got and hands the rest to an agent.
+    let mut both = says("做到这里了，剩下的交给后台");
+    both.items.extend(calls(&[("b", "run_code")]).items);
+    run.model_output(counted(5_700, both)).unwrap();
+    assert_eq!(
+        run.unhandled(),
+        [wake(2)],
+        "the wake it hasn't seen is owed"
+    );
+
+    // Unwarned, the same output leaves both owed.
+    let mut run = Run::new(spec(400_000, None), base(100), vec![Input::Wake(wake(1))]);
+    call_model(&mut run);
+    run.input(Input::Wake(wake(2))).unwrap();
+    let mut both = says("在弄了");
+    both.items.extend(calls(&[("b", "run_code")]).items);
+    run.model_output(both).unwrap();
+    assert_eq!(run.unhandled().len(), 2);
 }
 
 #[test]

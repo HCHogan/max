@@ -162,6 +162,14 @@ fn reminder(calls: u32) -> String {
 
 const REMINDER_TOKENS: u32 = 80;
 
+/// What the model is shown before its next call once the run is near its
+/// limit. Without it, a run over the limit ended with a line saying it
+/// couldn't read it all, and what its tools had found was lost: the next
+/// core sees only what was said in the group.
+const WARNING: &str = "[maxx 提醒] 这一轮的上下文快用完了，再调几次工具就会被强行停下，什么都来不及说。现在就收尾：在群里说清楚做到哪了、查到了什么、还剩什么没做；下一轮看不到这一轮的工具结果，只看得到群里说过的话。剩下的活要接着做，就交给后台 agent，把已经知道的写进任务里；除此之外别再调工具。";
+
+const WARNING_TOKENS: u32 = 150;
+
 #[derive(Clone, Debug)]
 pub struct Run {
     spec: RunSpec,
@@ -184,6 +192,9 @@ pub struct Run {
     /// Tool calls since the model last said something to the group, or
     /// since the last reminder.
     quiet: u32,
+    /// The model has been shown [`WARNING`]. Until then, a run over its
+    /// limit isn't at it: it gets the call that shows the warning.
+    warned: bool,
 }
 
 /// Where the run is. Each phase holds what only it has.
@@ -228,6 +239,7 @@ impl Run {
             unhandled,
             roster,
             quiet: 0,
+            warned: false,
         }
     }
 
@@ -245,6 +257,11 @@ impl Run {
             }
             Phase::ModelDue => {
                 self.show_pending();
+                if !self.warned && self.near_limit() {
+                    self.warned = true;
+                    self.transcript
+                        .push(Item::new(ItemKind::user(WARNING), WARNING_TOKENS));
+                }
                 self.round += 1;
                 self.phase = Phase::Calling;
                 Step::CallModel(Request {
@@ -296,6 +313,17 @@ impl Run {
         });
         if spoke {
             self.quiet = 0;
+            // Warned, the model has wound up: the wakes it has seen are
+            // answered as far as this run goes, though it may still hand
+            // the rest to a tool.
+            if self.warned {
+                let pending = &self.pending;
+                self.unhandled.retain(|wake| {
+                    pending
+                        .iter()
+                        .any(|input| matches!(input, Input::Wake(waiting) if waiting == wake))
+                });
+            }
         }
         self.transcript.extend(out.items);
         let malformed = !errors.is_empty();
@@ -379,11 +407,25 @@ impl Run {
         self.end(Phase::Failed(reason))
     }
 
-    /// Transcript and waiting inputs are over the limit, or the first inputs
-    /// alone leave no room. The actor ends the run there.
+    /// Transcript and waiting inputs are over the limit and the model has
+    /// been warned, or the first inputs alone leave no room. The actor ends
+    /// the run there.
     pub fn at_limit(&self) -> bool {
         let limit = self.spec.limit(self.base_tokens);
-        limit == 0 || self.size() > self.base_tokens + limit
+        limit == 0 || (self.warned && self.size() > self.base_tokens + limit)
+    }
+
+    /// Transcript and waiting inputs are past nine tenths of the limit: the
+    /// model is warned at its next call, and the actor ends a run that has
+    /// nothing to do, so that the next trigger starts afresh.
+    pub fn near_limit(&self) -> bool {
+        let limit = self.spec.limit(self.base_tokens);
+        self.size() > self.base_tokens + limit / 10 * 9
+    }
+
+    /// Whether the model has been warned that the run is near its limit.
+    pub fn warned(&self) -> bool {
+        self.warned
     }
 
     /// The wakes the model hasn't finished with: seen by a model call that

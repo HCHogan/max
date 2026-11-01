@@ -555,9 +555,10 @@ impl Conversation {
                 self.end(End::Idle).await?;
                 continue;
             }
-            // Over its limits, the core gives up; the next trigger starts a
-            // new one from the ledger.
-            if a.run.at_limit() {
+            // Over its limits, the core gives up, and near them with
+            // nothing to do, it ends; the next trigger starts a new one from
+            // the ledger.
+            if a.run.at_limit() || (a.run.idle() && a.run.near_limit()) {
                 let how = if a.run.idle() {
                     End::Idle
                 } else {
@@ -663,7 +664,7 @@ impl Conversation {
         let outcome = a.run.outcome();
         let mut conn = self.shared.services.pool.acquire().await?;
         turns::finish(&mut conn, a.turn, &a.run.record(), &outcome, Utc::now()).await?;
-        info!(turn = %a.turn, ?outcome, rounds = a.run.round(), "the core ends");
+        info!(turn = %a.turn, ?outcome, rounds = a.run.round(), warned = a.run.warned(), "the core ends");
         drop(conn);
         let why = match how {
             End::Failed(FailReason::Model { .. }) => "出错了，这条没回上。",
