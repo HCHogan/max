@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 
+use max_core::item::ItemKind;
 use max_core::message::{Content, Node, Role};
 use tokio::sync::oneshot;
 
@@ -18,6 +19,7 @@ const PATIENCE: Duration = Duration::from_secs(5);
 struct Setup {
     pool: PgPool,
     inbound: Option<UnboundedSender<Inbound>>,
+    signals: UnboundedSender<Signal>,
     outbound: UnboundedReceiver<Outgoing>,
     done: Option<oneshot::Receiver<()>>,
     owner: Account,
@@ -45,15 +47,17 @@ impl Setup {
         };
         let table = Table::new(Arc::new(shared), HashMap::from([(Platform::Qq, me)]));
         let (inbound, rx) = mpsc::unbounded_channel();
+        let (signals, signals_rx) = mpsc::unbounded_channel();
         let (done_tx, done) = oneshot::channel();
         let mut scope = Scope::new();
         scope.spawn(move |_| async move {
-            table.run(rx, Duration::from_secs(2)).await;
+            table.run(rx, signals_rx, Duration::from_secs(2)).await;
             let _ = done_tx.send(());
         });
         Self {
             pool,
             inbound: Some(inbound),
+            signals,
             outbound,
             done: Some(done),
             owner,
@@ -102,6 +106,15 @@ impl Setup {
             .await
             .expect("the table didn't stop")
             .unwrap();
+    }
+
+    /// The last item of the n-th request: what was new to the model.
+    fn request_tail(&self, n: usize) -> String {
+        let requests = self.script.requests.lock().unwrap();
+        match &requests[n].items.last().unwrap().kind {
+            ItemKind::User { text, .. } => text.clone(),
+            other => panic!("{other:?}"),
+        }
     }
 
     async fn count(&self, query: &'static str) -> i64 {
@@ -280,6 +293,46 @@ async fn a_conversation_that_stopped_on_an_error_starts_again(pool: PgPool) {
     // It is gone right after; a message it took while going would be lost.
     tokio::time::sleep(Duration::from_millis(200)).await;
     s.code(3, "/bind").await;
+    s.stop().await;
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_program_in_the_vm_wakes_a_group_nobody_has_written_in(pool: PgPool) {
+    let mut s = Setup::new(pool).await;
+    // The group was bound, and talked in, before max started.
+    let mut conn = s.pool.acquire().await.unwrap();
+    let place = testing::group(&mut conn).await;
+    let said = from_xiaoming(0, vec![text("CI 跑完叫我")]);
+    ingest::inbound(&mut conn, &place, &said, Utc::now(), offset())
+        .await
+        .unwrap();
+    drop(conn);
+    s.script.push(Answer::says("CI 挂了两个"));
+    let (reply, answered) = oneshot::channel();
+    let wake = Signal::Wake {
+        conversation: place.conversation,
+        text: "CI 跑完了：2 failed".into(),
+        reply,
+    };
+    s.signals.send(wake).unwrap();
+    let answered = tokio::time::timeout(PATIENCE, answered).await.unwrap();
+    assert_eq!(answered.unwrap(), Ok("叫醒了 Max".into()));
+    assert_eq!(
+        s.said().await,
+        ("group:GROUP1".into(), "CI 挂了两个".into())
+    );
+    let shown = s.request_tail(0);
+    assert!(shown.contains("[max-wake] CI 跑完了：2 failed"), "{shown}");
+    // To the actor the wake started.
+    let notice = Signal::Notice {
+        conversation: place.conversation,
+        text: "VM 没开起来".into(),
+    };
+    s.script.push(Answer::says("VM 出问题了，我去看看"));
+    s.signals.send(notice).unwrap();
+    assert_eq!(s.said().await.1, "VM 出问题了，我去看看");
+    let shown = s.request_tail(1);
+    assert!(shown.contains("[VM] VM 没开起来"), "{shown}");
     s.stop().await;
 }
 

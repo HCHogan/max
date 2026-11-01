@@ -27,6 +27,9 @@ pub enum Reason {
     /// A background agent ended, or asks Max: its report or its question
     /// is the wake's item.
     Job { job: u32 },
+    /// A program in the group's VM ran `max-wake`, or the VM service has
+    /// something to say about the VM: the wake's item says what.
+    Program,
 }
 
 /// Judged wakes in an hour at most: a fuse against a classifier gone

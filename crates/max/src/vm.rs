@@ -1,14 +1,16 @@
 //! The groups' VMs: one per conversation, started when a tool first needs
-//! it and stopped once it has gone unused for a while. The VM service owns
-//! them all; a tool call borrows a VM's SSH connection. See "VM 进程" in
+//! it and stopped once it has gone unused for a while, unless the group
+//! keeps units of Max's in it. The VM service owns them all; a tool call
+//! borrows a VM's SSH connection. See "VM 进程" and "常驻程序" in
 //! docs/rust-rewrite.md.
 
+mod host;
 mod machine;
 pub mod ssh;
 #[cfg(test)]
 mod webread_tests;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -27,13 +29,46 @@ use crate::config;
 use crate::mcp::{self, Sessions};
 use crate::scope::Scope;
 
-/// How often idle and dead VMs are looked for.
+/// How often idle and dead VMs are looked for, and kept ones that are
+/// down are started.
 const SWEEP: Duration = Duration::from_secs(60);
+/// A VM that failed to boot, or stopped by itself, twice within this long
+/// boots once without Max's units: one of them may be what stops it.
+const FAILING: Duration = Duration::from_secs(30 * 60);
+/// The files max-units installs.
+const UNIT_KINDS: [&str; 5] = ["service", "socket", "timer", "path", "target"];
 
 /// Where `conversation`'s /work is on the host, under the VMs' `dir`,
 /// whether or not its VM runs.
 pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
     dir.join(conversation.0.to_string()).join("work")
+}
+
+/// What the VM service has for a conversation's actor.
+#[derive(Debug)]
+pub enum Signal {
+    /// A program in the VM ran `max-wake`: its text, and where to say
+    /// whether Max was woken.
+    Wake {
+        conversation: ConversationId,
+        text: String,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
+    /// Something about the VM Max should hear.
+    Notice {
+        conversation: ConversationId,
+        text: String,
+    },
+}
+
+/// What a VM's port asks of the service.
+enum Internal {
+    /// max-units ran: the group has `count` units.
+    Units {
+        conversation: ConversationId,
+        count: u32,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
 }
 
 /// A handle to the VM service; it stops once every handle is gone.
@@ -58,14 +93,19 @@ pub struct Vm {
 }
 
 impl Vms {
-    /// Starts the service in `scope`.
-    pub fn start(config: config::Vm, scope: &mut Scope) -> Result<Self> {
+    /// Starts the service in `scope`; what programs in the VMs say to Max
+    /// goes to `signals`.
+    pub fn start(
+        config: config::Vm,
+        scope: &mut Scope,
+        signals: UnboundedSender<Signal>,
+    ) -> Result<Self> {
         let guest = Guest::load(&config.guest)?;
         std::fs::create_dir_all(&config.dir)?;
         let (requests, rx) = mpsc::unbounded_channel();
         let sessions = Sessions::default();
         let served = sessions.clone();
-        scope.spawn(move |_| run(config, guest, served, rx));
+        scope.spawn(move |_| run(config, guest, served, signals, rx));
         Ok(Self { requests, sessions })
     }
 
@@ -136,6 +176,8 @@ enum State {
     Booting {
         slot: usize,
         waiting: Vec<oneshot::Sender<Result<Vm, String>>>,
+        /// With Max's units.
+        units: bool,
     },
     Running(Box<Running>),
 }
@@ -145,8 +187,8 @@ struct Running {
     machine: Machine,
     connection: Arc<Connection>,
     stops: UnboundedSender<String>,
-    /// The stopper, which stops the units of commands dropped early, and
-    /// the VM's MCP service.
+    /// The stopper, which stops the units of commands dropped early, the
+    /// VM's MCP service and its port to the VM service.
     _tasks: Scope,
     work: Arc<PathBuf>,
     lent: Arc<()>,
@@ -173,132 +215,376 @@ impl Running {
     }
 }
 
+type Waiting = Vec<oneshot::Sender<Result<Vm, String>>>;
+
+struct Service {
+    config: Arc<config::Vm>,
+    guest: Arc<Guest>,
+    sessions: Sessions,
+    signals: UnboundedSender<Signal>,
+    idle: Duration,
+    vms: HashMap<ConversationId, State>,
+    free: Vec<usize>,
+    boots: Scope,
+    booted: UnboundedSender<(ConversationId, Result<Booted, String>)>,
+    internal: UnboundedSender<Internal>,
+    /// The groups whose VMs stay on, for the units Max keeps in them.
+    kept: BTreeSet<ConversationId>,
+    /// When each VM failed to boot or stopped by itself, lately.
+    failed: HashMap<ConversationId, Vec<Instant>>,
+}
+
 async fn run(
     config: config::Vm,
     guest: Guest,
     sessions: Sessions,
+    signals: UnboundedSender<Signal>,
     mut requests: UnboundedReceiver<Request>,
 ) {
-    let config = Arc::new(config);
-    let guest = Arc::new(guest);
-    let idle = Duration::from_secs(config.idle_minutes * 60);
-    let mut vms: HashMap<ConversationId, State> = HashMap::new();
-    let mut free: Vec<usize> = (0..config.slots.len()).rev().collect();
-    let mut boots = Scope::new();
-    let (booted_tx, mut booted) =
-        mpsc::unbounded_channel::<(ConversationId, Result<Booted, String>)>();
+    let (booted, mut booted_rx) = mpsc::unbounded_channel();
+    let (internal, mut internal_rx) = mpsc::unbounded_channel();
+    let dir = config.dir.clone();
+    let mut service = Service {
+        idle: Duration::from_secs(config.idle_minutes * 60),
+        free: (0..config.slots.len()).rev().collect(),
+        config: Arc::new(config),
+        guest: Arc::new(guest),
+        sessions,
+        signals,
+        vms: HashMap::new(),
+        boots: Scope::new(),
+        booted,
+        internal,
+        kept: BTreeSet::new(),
+        failed: HashMap::new(),
+    };
+    // The groups that had units when max stopped are back on.
+    let had = tokio::task::spawn_blocking(move || with_units(&dir))
+        .await
+        .unwrap_or_default();
+    for conversation in had.into_iter().take(service.config.kept) {
+        service.kept.insert(conversation);
+        service.start(conversation, Vec::new());
+    }
     let mut sweep = interval(SWEEP);
     sweep.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             request = requests.recv() => {
                 let Some(Request { conversation, reply }) = request else { break };
-                match vms.get_mut(&conversation) {
-                    Some(State::Running(running)) => {
-                        if !running.dead() {
-                            let _ = reply.send(Ok(running.lend()));
-                            continue;
-                        }
-                        warn!(%conversation, "a VM had stopped by itself");
-                        free.push(running.slot);
-                        vms.remove(&conversation);
-                    }
-                    Some(State::Booting { waiting, .. }) => {
-                        waiting.push(reply);
-                        continue;
-                    }
-                    None => {}
-                }
-                let Some(slot) = free.pop().or_else(|| evict(&mut vms)) else {
-                    let _ = reply.send(Err("同时开着的 VM 太多了，过一会儿再试。".into()));
-                    continue;
-                };
-                vms.insert(conversation, State::Booting { slot, waiting: vec![reply] });
-                let dir = config.dir.join(conversation.0.to_string());
-                let (config, guest, booted) = (Arc::clone(&config), Arc::clone(&guest), booted_tx.clone());
-                boots.spawn(move |_| async move {
-                    let started = Instant::now();
-                    let slot = &config.slots[slot];
-                    let result = match timeout(BOOT + Duration::from_secs(10), machine::boot(&config, &guest, &dir, slot)).await {
-                        Ok(result) => result.map_err(|error| format!("{error:#}")),
-                        Err(_) => Err(format!("the VM didn't boot within {BOOT:?}")),
-                    };
-                    match &result {
-                        Ok(_) => info!(%conversation, tap = %slot.tap, took = ?started.elapsed(), "a VM booted"),
-                        Err(error) => warn!(%conversation, %error, "a VM didn't boot"),
-                    }
-                    let _ = booted.send((conversation, result));
-                });
+                service.get(conversation, reply);
             }
-            Some((conversation, result)) = booted.recv() => {
-                let Some(State::Booting { slot, waiting }) = vms.remove(&conversation) else {
-                    continue;
-                };
-                match result {
-                    Ok(Booted { machine, connection, mcp }) => {
-                        let connection = Arc::new(connection);
-                        let (stops, units) = mpsc::unbounded_channel();
-                        let mut tasks = Scope::new();
-                        let held = Arc::clone(&connection);
-                        tasks.spawn(move |_| ssh::stopper(held, units));
-                        let sessions = sessions.clone();
-                        tasks.spawn(move |stop| mcp::serve(mcp, conversation, sessions, stop));
-                        let mut running = Running {
-                            slot,
-                            machine,
-                            connection,
-                            stops,
-                            _tasks: tasks,
-                            work: Arc::new(work(&config.dir, conversation)),
-                            lent: Arc::new(()),
-                            idle_since: Instant::now(),
-                        };
-                        for reply in waiting {
-                            let _ = reply.send(Ok(running.lend()));
-                        }
-                        vms.insert(conversation, State::Running(Box::new(running)));
-                    }
-                    Err(error) => {
-                        free.push(slot);
-                        for reply in waiting {
-                            let _ = reply.send(Err(format!("VM 没起来：{error}")));
-                        }
-                    }
-                }
+            Some((conversation, result)) = booted_rx.recv() => service.booted(conversation, result),
+            Some(Internal::Units { conversation, count, reply }) = internal_rx.recv() => {
+                let _ = reply.send(Ok(service.units(conversation, count)));
             }
-            _ = sweep.tick() => {
-                let now = Instant::now();
-                vms.retain(|conversation, state| {
-                    let State::Running(running) = state else { return true };
-                    let keep = if running.dead() {
-                        warn!(%conversation, "a VM had stopped by itself");
-                        false
-                    } else if running.lent() {
-                        running.idle_since = now;
-                        true
-                    } else if now >= running.idle_since + idle {
-                        info!(%conversation, "stopped an idle VM");
-                        false
-                    } else {
-                        true
-                    };
-                    if !keep {
-                        free.push(running.slot);
-                    }
-                    keep
-                });
-            }
+            _ = sweep.tick() => service.sweep(),
         }
     }
     // Dropping the VMs kills them.
-    boots.close(Duration::ZERO).await;
+    service.boots.close(Duration::ZERO).await;
 }
 
-/// Stops the VM that has gone unused longest, if one isn't lent, for its
-/// slot.
-fn evict(vms: &mut HashMap<ConversationId, State>) -> Option<usize> {
+impl Service {
+    fn get(&mut self, conversation: ConversationId, reply: oneshot::Sender<Result<Vm, String>>) {
+        match self.vms.get_mut(&conversation) {
+            Some(State::Running(running)) => {
+                if !running.dead() {
+                    let _ = reply.send(Ok(running.lend()));
+                    return;
+                }
+                let slot = running.slot;
+                self.vms.remove(&conversation);
+                self.died(conversation, slot);
+            }
+            Some(State::Booting { waiting, .. }) => {
+                waiting.push(reply);
+                return;
+            }
+            None => {}
+        }
+        self.start(conversation, vec![reply]);
+    }
+
+    /// Boots the conversation's VM for `waiting`: without Max's units if
+    /// it has been failing.
+    fn start(&mut self, conversation: ConversationId, waiting: Waiting) {
+        let Some(slot) = self.free.pop().or_else(|| evict(&mut self.vms, &self.kept)) else {
+            for reply in waiting {
+                let _ = reply.send(Err("同时开着的 VM 太多了，过一会儿再试。".into()));
+            }
+            return;
+        };
+        let units = !self.failing(conversation);
+        if !units {
+            warn!(%conversation, "booting a VM without Max's units: it failed twice lately");
+            self.failed.remove(&conversation);
+        }
+        self.vms.insert(
+            conversation,
+            State::Booting {
+                slot,
+                waiting,
+                units,
+            },
+        );
+        let dir = self.config.dir.join(conversation.0.to_string());
+        let (config, guest, booted) = (
+            Arc::clone(&self.config),
+            Arc::clone(&self.guest),
+            self.booted.clone(),
+        );
+        self.boots.spawn(move |_| async move {
+            let started = Instant::now();
+            let slot = &config.slots[slot];
+            let booting = machine::boot(&config, &guest, &dir, slot, units);
+            let result = match timeout(BOOT + Duration::from_secs(10), booting).await {
+                Ok(result) => result.map_err(|error| format!("{error:#}")),
+                Err(_) => Err(format!("the VM didn't boot within {BOOT:?}")),
+            };
+            match &result {
+                Ok(_) => {
+                    info!(%conversation, tap = %slot.tap, took = ?started.elapsed(), "a VM booted")
+                }
+                Err(error) => warn!(%conversation, %error, "a VM didn't boot"),
+            }
+            let _ = booted.send((conversation, result));
+        });
+    }
+
+    fn booted(&mut self, conversation: ConversationId, result: Result<Booted, String>) {
+        let Some(State::Booting {
+            slot,
+            waiting,
+            units,
+        }) = self.vms.remove(&conversation)
+        else {
+            return;
+        };
+        let Booted {
+            machine,
+            connection,
+            mcp,
+            host,
+        } = match result {
+            Ok(booted) => booted,
+            Err(error) => {
+                self.free.push(slot);
+                self.fail(conversation);
+                if !units {
+                    // Not the units, then: the VM waits for a tool to need
+                    // it, instead of booting again every sweep.
+                    self.kept.remove(&conversation);
+                }
+                for reply in waiting {
+                    let _ = reply.send(Err(format!("VM 没起来：{error}")));
+                }
+                return;
+            }
+        };
+        let connection = Arc::new(connection);
+        let (stops, stopped) = mpsc::unbounded_channel();
+        let mut tasks = Scope::new();
+        let held = Arc::clone(&connection);
+        tasks.spawn(move |_| ssh::stopper(held, stopped));
+        let sessions = self.sessions.clone();
+        tasks.spawn(move |stop| mcp::serve(mcp, conversation, sessions, stop));
+        let (signals, internal) = (self.signals.clone(), self.internal.clone());
+        tasks.spawn(move |stop| host::serve(host, conversation, signals, internal, stop));
+        let mut running = Running {
+            slot,
+            machine,
+            connection,
+            stops,
+            _tasks: tasks,
+            work: Arc::new(work(&self.config.dir, conversation)),
+            lent: Arc::new(()),
+            idle_since: Instant::now(),
+        };
+        for reply in waiting {
+            let _ = reply.send(Ok(running.lend()));
+        }
+        self.vms
+            .insert(conversation, State::Running(Box::new(running)));
+        if !units {
+            // Kept on again once Max runs max-units.
+            self.kept.remove(&conversation);
+            let text = "这个群的 VM 最近两次没开起来，或者开着开着自己停了，这次开机就没装 /work/.max/systemd 里的 unit，VM 也不再常开。多半是哪个 unit 的问题：用 systemctl、journalctl 查清楚、改好，再跑 max-units。".to_owned();
+            let _ = self.signals.send(Signal::Notice { conversation, text });
+        }
+    }
+
+    /// Stops idle VMs, but kept ones; finds dead ones; starts kept ones
+    /// that are down.
+    fn sweep(&mut self) {
+        let now = Instant::now();
+        let mut died = Vec::new();
+        self.vms.retain(|conversation, state| {
+            let State::Running(running) = state else {
+                return true;
+            };
+            let keep = if running.dead() {
+                died.push((*conversation, running.slot));
+                return false;
+            } else if running.lent() {
+                running.idle_since = now;
+                true
+            } else if self.kept.contains(conversation) {
+                true
+            } else if now >= running.idle_since + self.idle {
+                info!(%conversation, "stopped an idle VM");
+                false
+            } else {
+                true
+            };
+            if !keep {
+                self.free.push(running.slot);
+            }
+            keep
+        });
+        for (conversation, slot) in died {
+            self.died(conversation, slot);
+        }
+        let down: Vec<ConversationId> = self
+            .kept
+            .iter()
+            .filter(|conversation| !self.vms.contains_key(conversation))
+            .copied()
+            .collect();
+        for conversation in down {
+            self.start(conversation, Vec::new());
+        }
+    }
+
+    /// The VM on `slot` had stopped by itself; it is gone already.
+    fn died(&mut self, conversation: ConversationId, slot: usize) {
+        warn!(%conversation, "a VM had stopped by itself");
+        self.free.push(slot);
+        self.fail(conversation);
+    }
+
+    fn fail(&mut self, conversation: ConversationId) {
+        self.failed
+            .entry(conversation)
+            .or_default()
+            .push(Instant::now());
+    }
+
+    /// Failed twice within `FAILING`.
+    fn failing(&mut self, conversation: ConversationId) -> bool {
+        let Some(times) = self.failed.get_mut(&conversation) else {
+            return false;
+        };
+        times.retain(|at| at.elapsed() < FAILING);
+        times.len() >= 2
+    }
+
+    /// max-units says the group has `count` units: what becomes of its VM,
+    /// for max-units to show. Failures stay counted: max-units runs at
+    /// every boot, before a unit has had the time to fail.
+    fn units(&mut self, conversation: ConversationId, count: u32) -> String {
+        let idle = span(self.idle);
+        match keep(&mut self.kept, self.config.kept, conversation, count) {
+            Kept::On => {
+                info!(%conversation, count, "a VM is kept on for its units");
+                "这个群的 VM 会一直开着，unit 一直跑；重启、部署之后也会自己开起来。".to_owned()
+            }
+            Kept::Full => format!(
+                "常开的群满了（{} 个）：这个群的 VM 闲 {idle}还是会关，unit 跟着停，下次开机再起。",
+                self.config.kept
+            ),
+            Kept::Off => format!("没有 unit 了：VM 闲 {idle}会关。"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Kept {
+    On,
+    /// Has units, but `most` groups are kept on already.
+    Full,
+    /// Has none.
+    Off,
+}
+
+/// Whether a group with `count` units is kept on: while it has any, if
+/// it is already, or fewer than `most` are.
+fn keep(
+    kept: &mut BTreeSet<ConversationId>,
+    most: usize,
+    conversation: ConversationId,
+    count: u32,
+) -> Kept {
+    if count == 0 {
+        kept.remove(&conversation);
+        Kept::Off
+    } else if kept.contains(&conversation) || kept.len() < most {
+        kept.insert(conversation);
+        Kept::On
+    } else {
+        Kept::Full
+    }
+}
+
+/// `两小时`, or `90 分钟`.
+fn span(idle: Duration) -> String {
+    let minutes = idle.as_secs() / 60;
+    match minutes {
+        120 => "两小时".to_owned(),
+        _ if minutes.is_multiple_of(60) => format!("{} 小时", minutes / 60),
+        _ => format!("{minutes} 分钟"),
+    }
+}
+
+/// The conversations whose /work, under `dir`, has units of Max's, in
+/// order; not vm-check's, conversation 0, which keeps one of its own.
+fn with_units(dir: &Path) -> Vec<ConversationId> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<ConversationId> = entries
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<i64>().ok())
+        .filter(|&id| id != 0)
+        .map(ConversationId)
+        .filter(|&conversation| has_units(&work(dir, conversation)))
+        .collect();
+    found.sort();
+    found
+}
+
+fn has_units(work: &Path) -> bool {
+    !units(work).is_empty()
+}
+
+/// The units Max keeps in a group's /work, by name, in order: the files
+/// max-units installs.
+pub fn units(work: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(work.join(".max/systemd")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        // Not a link: it could point anywhere on the host.
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| {
+            name.rsplit_once('.')
+                .is_some_and(|(_, kind)| UNIT_KINDS.contains(&kind))
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// Stops the VM that has gone unused longest, if one isn't lent or kept,
+/// for its slot.
+fn evict(
+    vms: &mut HashMap<ConversationId, State>,
+    kept: &BTreeSet<ConversationId>,
+) -> Option<usize> {
     let (&conversation, _) = vms
         .iter()
+        .filter(|(conversation, _)| !kept.contains(conversation))
         .filter_map(|(conversation, state)| match state {
             State::Running(running) if !running.lent() => Some((conversation, running.idle_since)),
             _ => None,
@@ -309,4 +595,47 @@ fn evict(vms: &mut HashMap<ConversationId, State>) -> Option<usize> {
     };
     info!(%conversation, "stopped a VM to make room");
     Some(running.slot)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_group_is_kept_on_while_it_has_units_and_there_is_room() {
+        let mut kept = BTreeSet::new();
+        let (a, b, c) = (ConversationId(4), ConversationId(8), ConversationId(9));
+        assert_eq!(keep(&mut kept, 2, a, 1), Kept::On);
+        assert_eq!(keep(&mut kept, 2, b, 3), Kept::On);
+        assert_eq!(keep(&mut kept, 2, c, 1), Kept::Full);
+        // Already on, it stays on.
+        assert_eq!(keep(&mut kept, 2, a, 2), Kept::On);
+        assert_eq!(keep(&mut kept, 2, a, 0), Kept::Off);
+        assert_eq!(keep(&mut kept, 2, c, 1), Kept::On);
+        assert_eq!(kept, BTreeSet::from([b, c]));
+    }
+
+    #[test]
+    fn the_groups_with_units_are_found_on_disk() {
+        let dir = std::env::temp_dir().join(format!("max-kept-{}", std::process::id()));
+        let units = |id: i64| work(&dir, ConversationId(id)).join(".max/systemd");
+        for id in [0, 9, 12, 4] {
+            std::fs::create_dir_all(units(id)).unwrap();
+        }
+        std::fs::write(units(0).join("boot-note.service"), "").unwrap();
+        std::fs::write(units(12).join("ci.timer"), "").unwrap();
+        std::fs::write(units(4).join("ci.service"), "").unwrap();
+        // Not a unit, and an empty group.
+        std::fs::write(units(9).join("notes.txt"), "").unwrap();
+        std::fs::create_dir_all(dir.join("not-a-group")).unwrap();
+        assert_eq!(with_units(&dir), [ConversationId(4), ConversationId(12)]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_idle_span_reads_as_hours_or_minutes() {
+        assert_eq!(span(Duration::from_secs(7200)), "两小时");
+        assert_eq!(span(Duration::from_secs(3 * 3600)), "3 小时");
+        assert_eq!(span(Duration::from_secs(90 * 60)), "90 分钟");
+    }
 }

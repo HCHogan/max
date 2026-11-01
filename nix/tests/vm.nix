@@ -3,7 +3,8 @@
 # flake's guest the way max does, runs a command in it, runs a program
 # whose history reaches the database through the MCP service, one that
 # opens a page in the browser and saves a screenshot to /work, and keeps a
-# unit in /work/.max/systemd, which the next boot starts again.
+# unit in /work/.max/systemd, which the next boot starts again, and wakes
+# Max with max-wake.
 { pkgs, module }:
 pkgs.testers.runNixOSTest {
   name = "max-vm";
@@ -53,6 +54,10 @@ pkgs.testers.runNixOSTest {
     # system's commands on its PATH.
     assert "boot-note.service：active" in shown, shown
     assert "开机时：inactive" in shown and "记下了 1 次开机" in shown, shown
+    # max-units tells the VM service, which keeps the VM on; max-wake
+    # reaches vm-check, standing in for the group's actor.
+    assert "这个群的 VM 会一直开着" in shown, shown
+    assert "vm-check 收到了" in shown and "叫醒：vm-check 叫醒了自己" in shown, shown
     # The next boot starts it before vm-check runs max-units.
     machine.succeed("systemctl start maxx-vm-check.service")
     again = machine.succeed("journalctl -u maxx-vm-check.service -o cat")

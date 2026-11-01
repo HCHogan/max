@@ -75,6 +75,14 @@ pub enum Event {
         job: u32,
         finished: job::Finished,
     },
+    /// A program in the group's VM runs `max-wake`, and waits to hear
+    /// whether Max was woken.
+    Woken {
+        text: String,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
+    /// The VM service has something to say about the group's VM.
+    VmNotice(String),
     /// Max restarts: end the core, within a grace, then stop.
     Stop,
 }

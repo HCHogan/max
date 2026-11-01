@@ -314,9 +314,13 @@ pub struct Vm {
     /// The disk that holds what the guest adds to the store.
     #[serde(default = "disk")]
     pub disk_gib: u32,
-    /// A VM stops after this long without a command.
+    /// A VM stops after this long without a command, unless it is kept on.
     #[serde(default = "vm_idle")]
     pub idle_minutes: u64,
+    /// At most this many groups' VMs are kept on for the units Max keeps
+    /// in them; see "常驻程序".
+    #[serde(default = "kept")]
+    pub kept: usize,
     /// Who the guests' commits are by: Max's GitHub account, from
     /// `[github]`.
     #[serde(skip)]
@@ -337,6 +341,10 @@ fn disk() -> u32 {
 
 fn vm_idle() -> u64 {
     120
+}
+
+fn kept() -> usize {
+    4
 }
 
 /// A tap made for max, and the guest's address behind it.

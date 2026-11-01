@@ -5,6 +5,10 @@
 //! A private chat gets a conversation the first time someone writes. A
 //! group needs `/bind`: until then its messages are dropped, all but the
 //! `@Max /bind <码>` that binds it.
+//!
+//! What the VM service has for a conversation, such as a `max-wake` from
+//! a program in its VM, goes to its actor too, started if it isn't
+//! running.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,6 +16,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use color_eyre::eyre::Result;
+use max_core::ids::ConversationId;
 use max_core::message::Platform;
 use max_core::run::Outcome;
 use max_db::platform::{self, Account, ConversationKind, Endpoint};
@@ -26,6 +31,7 @@ use crate::command::{self, Command};
 use crate::conversation::{Conversation, Event, Place, Shared};
 use crate::inbound::Inbound;
 use crate::scope::Scope;
+use crate::vm::Signal;
 
 /// Max's account on a platform.
 #[derive(Clone, Debug)]
@@ -39,6 +45,8 @@ pub struct Table {
     me: HashMap<Platform, Me>,
     /// Mailboxes by platform and chat.
     actors: HashMap<(Platform, String), UnboundedSender<Event>>,
+    /// The platform and chat of each conversation an actor was started for.
+    chats: HashMap<ConversationId, (Platform, String)>,
     scope: Scope,
 }
 
@@ -48,17 +56,33 @@ impl Table {
             shared,
             me,
             actors: HashMap::new(),
+            chats: HashMap::new(),
             scope: Scope::new(),
         }
     }
 
     /// Until every adapter has stopped sending, then until each actor has
     /// ended its core, or `grace` runs out.
-    pub async fn run(mut self, mut inbound: UnboundedReceiver<Inbound>, grace: Duration) {
-        while let Some(inbound) = inbound.recv().await {
-            let chat = inbound.chat.native_id.clone();
-            if let Err(error) = self.route(inbound).await {
-                error!(chat, %error, "lost a message: couldn't find its conversation");
+    pub async fn run(
+        mut self,
+        mut inbound: UnboundedReceiver<Inbound>,
+        mut signals: UnboundedReceiver<Signal>,
+        grace: Duration,
+    ) {
+        loop {
+            tokio::select! {
+                inbound = inbound.recv() => {
+                    let Some(inbound) = inbound else { break };
+                    let chat = inbound.chat.native_id.clone();
+                    if let Err(error) = self.route(inbound).await {
+                        error!(chat, %error, "lost a message: couldn't find its conversation");
+                    }
+                }
+                Some(signal) = signals.recv() => {
+                    if let Err(error) = self.signal(signal).await {
+                        error!(%error, "lost what the VM service had for a conversation");
+                    }
+                }
             }
         }
         for actor in self.actors.values() {
@@ -114,13 +138,28 @@ impl Table {
                 }
             },
         };
+        drop(conn);
+        let mailbox = self.start(key, endpoint, me).await?;
+        let _ = mailbox.send(event);
+        Ok(())
+    }
+
+    /// The conversation's actor, started for `endpoint` on the platform and
+    /// chat of `key`.
+    async fn start(
+        &mut self,
+        key: (Platform, String),
+        endpoint: Endpoint,
+        me: Me,
+    ) -> Result<UnboundedSender<Event>> {
+        let mut conn = self.shared.services.pool.acquire().await?;
         let kind = platform::conversation_kind(&mut conn, endpoint.conversation).await?;
         drop(conn);
         let place = Arc::new(Place {
             conversation: endpoint.conversation,
             kind,
             endpoint: endpoint.id,
-            platform,
+            platform: key.0,
             native_id: key.1.clone(),
             me: me.account,
             my_name: me.name,
@@ -133,8 +172,49 @@ impl Table {
                 error!(%conversation, %error, "a conversation stopped on an error");
             }
         });
+        self.chats.insert(conversation, key.clone());
+        self.actors.insert(key, mailbox.clone());
+        Ok(mailbox)
+    }
+
+    /// To the conversation's actor, started if it isn't running.
+    async fn signal(&mut self, signal: Signal) -> Result<()> {
+        let (conversation, event) = match signal {
+            Signal::Wake {
+                conversation,
+                text,
+                reply,
+            } => (conversation, Event::Woken { text, reply }),
+            Signal::Notice { conversation, text } => (conversation, Event::VmNotice(text)),
+        };
+        if let Some(key) = self.chats.get(&conversation)
+            && let Some(actor) = self.actors.get(key)
+            && !actor.is_closed()
+        {
+            let _ = actor.send(event);
+            return Ok(());
+        }
+        let mut conn = self.shared.services.pool.acquire().await?;
+        let mut found = None;
+        for (&platform, me) in &self.me {
+            let Some(chat) = platform::endpoint_on(&mut conn, conversation, platform).await? else {
+                continue;
+            };
+            if let Some(endpoint) =
+                platform::find_endpoint(&mut conn, platform, &chat, me.account.identity).await?
+            {
+                found = Some(((platform, chat), endpoint, me.clone()));
+                break;
+            }
+        }
+        drop(conn);
+        let Some((key, endpoint, me)) = found else {
+            warn!(%conversation, "what the VM service had for a conversation Max isn't in");
+            return Ok(());
+        };
+        info!(%conversation, "starting a conversation for its VM");
+        let mailbox = self.start(key, endpoint, me).await?;
         let _ = mailbox.send(event);
-        self.actors.insert(key, mailbox);
         Ok(())
     }
 

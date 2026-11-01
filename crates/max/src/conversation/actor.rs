@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use color_eyre::eyre::Result;
 use max_core::ids::{MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
-use max_core::item::{ItemKind, ModelOutput, Timing};
+use max_core::item::{Item, ItemKind, ModelOutput, Timing};
 use max_core::message::{Draft, DraftNode, Message};
 use max_core::project::{Budgets, MEMORY_FILE, MOST_PICTURES};
 use max_core::prompt;
@@ -89,6 +89,8 @@ pub struct Conversation {
     mailbox: UnboundedSender<Event>,
     /// The background agents running; they don't outlive the actor.
     jobs: jobs::Jobs,
+    /// The wakes from the group's programs lately, and the held ones.
+    woken: woken::Woken,
 }
 
 struct Active {
@@ -148,6 +150,7 @@ impl Conversation {
             next_task: 0,
             mailbox,
             jobs: jobs::Jobs::default(),
+            woken: woken::Woken::default(),
         })
     }
 
@@ -227,10 +230,15 @@ impl Conversation {
                 None
             }
         });
-        [core, self.intent.deadline().map(Instant::from_std)]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            core,
+            self.intent.deadline().map(Instant::from_std),
+            // Held ones are dropped in a restart.
+            self.woken.due().filter(|_| self.stopping.is_none()),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     async fn handle(&mut self, event: Event) -> Result<()> {
@@ -297,6 +305,8 @@ impl Conversation {
             }
             Event::JobAsks { job, question } => self.job_asks(job, question).await,
             Event::JobDone { job, finished } => self.job_done(job, finished).await,
+            Event::Woken { text, reply } => self.woken(text, reply).await,
+            Event::VmNotice(text) => self.vm_notice(text).await,
             Event::Stop => {
                 self.stop();
                 Ok(())
@@ -632,8 +642,27 @@ impl Conversation {
                 self.end(End::Idle).await?;
             }
         }
+        self.release_woken().await?;
         let decisions = self.intent.tick(now.into_std());
         self.decide(decisions).await
+    }
+
+    /// Wakes Max with `item`: in the running core, or a new one.
+    async fn wake_with(&mut self, reason: Reason, item: Item) -> Result<()> {
+        let wake = Wake {
+            ids: Vec::new(),
+            reason,
+            item: Some(item),
+        };
+        match self.core.as_mut() {
+            Some(a) => {
+                if let Err(rejected) = a.run.input(Input::Wake(wake)) {
+                    warn!(turn = %a.turn, %rejected, "a wake didn't fit the core");
+                }
+            }
+            None => self.start_core(wake).await?,
+        }
+        Ok(())
     }
 
     async fn end(&mut self, how: End) -> Result<()> {
@@ -811,3 +840,4 @@ mod commands;
 mod jobs;
 #[cfg(test)]
 mod tests;
+mod woken;

@@ -369,7 +369,7 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 | 会话 actor 的到期时间 | actor 主循环里一个 `sleep_until`，到期时间取空闲窗口和停止宽限期里早的那个 | 策略：provider 的 `idle_window_secs`、关机的宽限期。turn 没有墙钟：actor 只等数据库，模型调用和工具各有自己的上限 |
 | 工具调用上限 | 两处：`run_code`、`shell` 一次运行一个（`shell` 默认 120 秒，调用最多要 600 秒，后台跑的默认 30 分钟、最多 2 小时，见[后台命令](#后台命令)；guest 里的 unit 另有晚 30 秒的 `RuntimeMaxSec`，max 这边丢了也停得掉）；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
 | VM 开机 | VM 服务里一次：60 秒内要能 SSH 进去，每 100 ms 试一次；等 virtiofsd 建 socket 5 秒；外面再套一层 70 秒 | 防卡死 |
-| VM 闲置 | VM 服务里一次：每分钟扫一遍，闲置超过 `idle_minutes`（默认 120）的关掉 | 策略 |
+| VM 闲置 | VM 服务里一次：每分钟扫一遍，闲置超过 `idle_minutes`（默认 120）的关掉，常开的除外（见[常驻程序](#常驻程序)） | 策略 |
 | 网络客户端 | 配置里一次：LLM 的 `stream_idle_timeout_secs`（响应头和之后的每一段都要在这个时间内到，整个调用不设上限）、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`max-llm` 里写死的连接超时，`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避 | 防卡死 |
 | 先等再升级 | 按需 | 策略，比如 `close` 先给命令时间自己退出 |
 | 常驻服务里的等待表 | 每张表一次 | 防泄漏，比如 sender 里等回执的表。常驻服务外面没有取消替它兜底 |
@@ -1491,7 +1491,7 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
   - 一个 oneshot unit `maxx-taps` 用 `ip tuntap` 预建一组 tap（数量是配置，默认 32），属主 `maxx`，开多队列和 vnet header。不用 systemd-networkd：module 不替宿主选网络栈。这个 unit 停了 tap 还在，重启它不会断开在跑的 VM。
   - 每个 tap 是自己的 /30（默认从 `10.235.0.0/24` 里切）：宿主一端是 `.1`，guest 是 `.2`，所有 VM 用同一个 MAC。地址不用 DHCP（2026-10-29 改，原先 2026-10-27 定的是 DHCP）：主进程起 VM 时把 `max.ip`、`max.gateway`、`max.dns` 和这次开机的 SSH 公钥 `max.key` 加在 guest 的内核命令行上，guest 里一个 oneshot 在网络起来之前读出来配好。宿主上不用跑 DHCP，也不用为 DNS 和公钥另开一个共享目录。
   - tap 之间不桥接，VM 互相不通靠路由和 nft。nft 只许 VM 用自己 tap 的 `.2` 作源地址、只许去公网地址、不许 IPv6；VM 连宿主一律拒绝，宿主只回已经建立的连接；出去的做 masquerade。
-- **起 VM**：主进程选一个空闲槽位（没有就关掉闲置最久、没在用的那个），在 `/var/lib/maxx/vm/<会话 id>/` 下准备 `work` 和 `nix.img`，起两个 virtiofsd（只读的 store、读写的 `/work`）和 cloud-hypervisor，都是 `kill_on_drop` 的子进程。然后每 100 ms 试一次 SSH，连上就算起好了，不另做就绪通知。不挂会话的媒体视图，见[读文件](#读文件)。
+- **起 VM**：主进程选一个空闲槽位（没有就关掉闲置最久、没在用、不常开的那个），在 `/var/lib/maxx/vm/<会话 id>/` 下准备 `work` 和 `nix.img`，起两个 virtiofsd（只读的 store、读写的 `/work`）和 cloud-hypervisor，都是 `kill_on_drop` 的子进程。然后每 100 ms 试一次 SSH，连上就算起好了，不另做就绪通知。不挂会话的媒体视图，见[读文件](#读文件)。
 - **vCPU 至少 2 个**：tap 是多队列的，cloud-hypervisor 要两对队列以上才按多队列打开它，而每个 vCPU 最多配一对。
 - **每个 VM 的 tap 名不同**，而 microvm.nix 生成的 `microvm-run` 把 tap 名写死在构建时。2026-10-29 定：主进程自己拼 cloud-hypervisor 和 virtiofsd 的命令行，只借用 guest 的 kernel、initrd 和内核命令行，由 guest 的构建产出一个 JSON，路径写进配置。每个 VM 本来就有好几个参数不同（目录、tap、Landlock 规则），microvm.nix 的 runner 还会自己建盘、起 socat 转发通知，和"主进程直接管两个子进程"对不上。
 - **通道**：hybrid vsock 的 socket 就在这个目录里，主进程直接用。连 22 端口跑 russh，每个 VM 一条连接，每条命令一个 channel；在 `notify.vsock_7777` 上监听 MCP，见 [MCP 通道](#mcp-通道)。
@@ -1679,14 +1679,18 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
   - **救命开关**：内核命令行带 `max.units=off`，开机就不装。坏掉的 unit（停了 sshd、关机、吃光内存）每次开机都会回来，这是唯一的出路；什么时候带上由宿主定，见第二步。
   - 能活下来的只有 `/work` 和 Nix store：unit 要跑的东西放 `/work` 里，或者用 store 路径、`nix run`；`/root` 也是 tmpfs。每次部署程序都会重启，状态要写文件。
   - **测试**：`vm-check` 在 `/work/.max/systemd` 放一个记下开机 id 的 unit，跑 `max-units`。嵌套测试跑两次 `vm-check`：第一次 `max-units` 起了它；第二次开机时它已经起了（`max-units` 跑之前就是 active），两次开机都记下了。
-  - 提示词还没提：VM 照旧会停，现在跟 Max 说"常驻"不对，等第二步一起加。
-- **第二步（待做）：宿主那边。**
-  - 常开：宿主直接读 `<vm.dir>/<会话>/work/.max/systemd/`，有 unit 的群 VM 不因闲置停、不被挤掉，maxx 启动时就开起来。常开的群有上限，提议 4 个（tank 62 GiB；正在跑的三个 VM 占 0.8、2.2、4.6 GiB，page cache 会让它慢慢往 16 GiB 涨）。会话 0 是 `vm-check` 的，不算。
-  - 叫醒：VM 里一个 `max-wake "……"`，经第二个 vsock 端口到宿主；每个 VM 在宿主上有自己的 socket，所以连上来的是哪个群不用 token。到 Max 那里是 `[自动化 m#2 触发] …`，长度按单条上限截。
-  - 限流：每次叫醒都是一个 turn。有核心在跑就当输入喂进去；空闲时每个群每小时最多约 6 次，多出来的并进下一次，带上条数。
-  - 开不起来：带 unit 的 VM 连着两次起不来，就带 `max.units=off` 再开一次，并告诉 Max。
-  - 提示词：常驻的东西写成 `/work/.max/systemd/` 里的 unit，改完跑 `max-units`；状态写文件；用 `max-wake` 叫醒自己。
-  - 以后：webhook 由宿主收，经同一个 socket 交给群里的程序。
+  - 提示词在第二步加：只有第一步时 VM 照旧会停，跟 Max 说"常驻"不对。
+- **第二步（做了，11-01）：宿主那边。**
+  - **宿主的端口**：每个 VM 第二个 hybrid vsock 端口 7778，宿主上是 `<VM 目录>/notify.vsock_7778`，和 MCP 的 7777 一样开机前就 listen（`vm/host.rs`）。一次连接一行 JSON，最长 64 KiB、10 秒：`{"wake": "……"}` 或 `{"units": 2}`，回 `{"ok": true, "said": "……"}`。每个 VM 有自己的 socket，连上来的是哪个群不用 token。一次接一个，都很短，能堵住它的只有本群自己的程序。
+  - **常开**：`[vm] kept`，默认 4 个群（tank 62 GiB；11-01 在跑的三个 VM 占 0.8、2.2、4.6 GiB，page cache 会让它慢慢往 16 GiB 涨）。常开的 VM 不因闲置关、不被挤掉，扫的时候没在跑就开起来。哪些群常开：
+    - maxx 启动时读 `<vm.dir>/<会话>/work/.max/systemd/`，有 unit 文件的（和 `max-units` 认的后缀一样，链接不算）按会话 id 取前 4 个，马上开。会话 0 是 `vm-check` 的，不算。
+    - 之后听 `max-units`：它每次跑完（开机那次和 Max 手动的）把 unit 个数报给宿主，有就常开（满了就不，回话里说），0 个就不再常开。回话 `max-units` 原样打出来，Max 看得到这个群的 VM 会不会一直开着。
+  - **叫醒**：`max-wake '……'`（`nix/max-wake.sh`，参数或标准输入）。VM 服务把它作为 `Signal::Wake` 交给会话表，会话表找这个会话的 actor，没在跑就起一个（按 Max 在的平台查 `endpoint_on`、`find_endpoint`，和收到消息时起的一样），送 `Event::Woken`。actor 里原因是 `Reason::Program`，给模型看的是 `[max-wake] ……`，按单条上限截；有核心在跑就当输入，没有就起一个。程序收到"叫醒了 Max"。没用原计划的 `[自动化 m#2 触发]`：没有登记表，也就没有编号。
+  - **限流**（`actor/woken.rs`）：每个群每小时最多叫醒 6 次，有没有核心在跑都算，每次都是一次模型调用。超了就攒着（文字最多留 20 条，再多的只计数），程序收到"这一小时已经叫醒过 6 次了，这条先攒着，HH:MM 和攒下的一起叫醒"；到点一次叫醒，`[max-wake] 这一小时叫醒满了，攒下了 N 条：` 后面一条一行。攒着的在重启时丢掉。`/status` 多两行：`units` 列出 unit 文件，`woken` 是这一小时叫醒了几次、攒着几条。
+  - **开不起来**：每个群的 VM 起不来、或者开着开着自己停了，都记一次（常不常开都算）；30 分钟内两次，下次开机就带 `max.units=off`，这个群不再常开，并用 `Signal::Notice` 告诉 Max（`[VM] ……`，同一条路，不限流）。Max 修好、跑 `max-units`，就又常开了。不带 unit 也起不来，说明不是 unit 的事：也不再常开，等工具要用再开，不每分钟重试。`max-units` 开机那次的报告不清这个计数：那时 unit 还没来得及出问题。
+  - **提示词**：VM 闲置会关那句加上"有常驻程序的群除外"；后台命令后面加一段：要一直跑、到点跑、盯着什么的，写成 `/work/.max/systemd/` 里的 unit，跑 `max-units`；`.timer`、`.path`、`Restart=on-failure`；ExecStart 写绝对路径；状态写进 `/work`；用 `systemctl status`、`journalctl -u` 查；`max-wake` 叫醒自己，一小时 6 次，只在真有新情况时叫。
+  - **测试**：`vm-check` 自己接 `Signal`，回"vm-check 收到了"。嵌套测试看 `max-units` 说这个 VM 会一直开着，`max-wake` 到了 `vm-check`。会话表的测试：一个没人说过话、actor 没在跑的群被 `max-wake` 叫醒，Max 回话，`[VM]` 送到同一个 actor。限流、常开名额、启动时的扫描各有纯测试。
+  - 以后：webhook 由宿主收，经同一个端口交给群里的程序。
 
 ## crate 划分
 

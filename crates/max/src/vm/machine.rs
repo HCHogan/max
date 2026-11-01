@@ -20,6 +20,9 @@ use crate::config::{self, Slot};
 
 /// The hybrid vsock port the guest reaches the MCP service on.
 const MCP_PORT: u32 = 7777;
+/// And the one max-wake and max-units reach the VM service on; see
+/// `host`.
+const HOST_PORT: u32 = 7778;
 
 /// How long the guest has to boot and let max in.
 pub const BOOT: Duration = Duration::from_secs(60);
@@ -57,26 +60,42 @@ impl Machine {
     }
 }
 
-/// A VM that has booted: its processes, the SSH connection, and where its
-/// programs call the MCP service.
+/// A VM that has booted: its processes, the SSH connection, where its
+/// programs call the MCP service, and where they call the VM service.
 pub struct Booted {
     pub machine: Machine,
     pub connection: Connection,
     pub mcp: UnixListener,
+    pub host: UnixListener,
 }
 
-/// Boots the VM whose files are in `dir`, on `slot`'s tap.
-pub async fn boot(config: &config::Vm, guest: &Guest, dir: &Path, slot: &Slot) -> Result<Booted> {
+/// Boots the VM whose files are in `dir`, on `slot`'s tap; without the
+/// units Max keeps in its /work unless `units`.
+pub async fn boot(
+    config: &config::Vm,
+    guest: &Guest,
+    dir: &Path,
+    slot: &Slot,
+    units: bool,
+) -> Result<Booted> {
     let work = dir.join("work");
     fs::create_dir_all(&work).await?;
     disk(config, &dir.join("nix.img")).await?;
     let mcp_socket = format!("notify.vsock_{MCP_PORT}");
-    for stale in ["store.sock", "work.sock", "notify.vsock", &mcp_socket] {
+    let host_socket = format!("notify.vsock_{HOST_PORT}");
+    for stale in [
+        "store.sock",
+        "work.sock",
+        "notify.vsock",
+        &mcp_socket,
+        &host_socket,
+    ] {
         let _ = fs::remove_file(dir.join(stale)).await;
     }
     // cloud-hypervisor connects here when the guest connects to the host's
-    // port, so it listens before the guest boots.
+    // port, so they listen before the guest boots.
     let mcp = UnixListener::bind(dir.join(&mcp_socket))?;
+    let host = UnixListener::bind(dir.join(&host_socket))?;
 
     // The guest's root is max on the host; its other users are squashed
     // to max.
@@ -119,6 +138,9 @@ pub async fn boot(config: &config::Vm, guest: &Guest, dir: &Path, slot: &Slot) -
     );
     if let Some(author) = &config.author {
         cmdline.push_str(&format!(" max.git={},{}", author.name, author.email));
+    }
+    if !units {
+        cmdline.push_str(" max.units=off");
     }
     let path = |name: &str| dir.join(name).display().to_string();
     let hypervisor = spawn(
@@ -179,6 +201,7 @@ pub async fn boot(config: &config::Vm, guest: &Guest, dir: &Path, slot: &Slot) -
                     machine,
                     connection,
                     mcp,
+                    host,
                 });
             }
             Err(error) => {

@@ -34,6 +34,7 @@ let
     inherit pkgs;
     systemd = config.systemd.package;
   };
+  wake = import ./max-wake.nix { inherit pkgs; };
 in
 {
   system.stateVersion = "26.05";
@@ -395,8 +396,10 @@ in
     # Background agents: pi, which programs can run too.
     (import ./max-pi.nix { inherit pkgs pi; })
     pi
-    # Max's own units; see max-units above.
+    # Max's own units, and how their programs wake Max; see max-units
+    # above.
     units
+    wake
     poppler-utils
     jq
     ripgrep

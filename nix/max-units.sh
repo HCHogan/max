@@ -7,7 +7,9 @@
 # drop-in that puts them in max-units.slice; those with an [Install]
 # section are enabled for this boot and started, and changed ones that
 # were running are restarted. Files that are gone are stopped and removed.
-# A name a system unit has is skipped: the system's would win anyway.
+# A name a system unit has is skipped: the system's would win anyway. Last,
+# the VM service hears how many there are: it keeps the VM on while there
+# are any, if it can, and says whether it does.
 
 dir=/work/.max/systemd
 run=/run/systemd/system
@@ -95,4 +97,7 @@ for name in "${wanted[@]}"; do
     journalctl -u "$name" -n 10 --no-pager -o cat || true
   fi
 done
+if answer=$(jq -cn --argjson units "${#wanted[@]}" '{units: $units}' | socat -t 15 - VSOCK-CONNECT:2:7778 2> /dev/null); then
+  jq -r '.said // empty' <<< "$answer"
+fi
 exit "$failed"

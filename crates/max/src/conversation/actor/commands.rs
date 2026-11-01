@@ -255,6 +255,15 @@ impl Conversation {
         for job in self.job_lines() {
             line("job", job);
         }
+        if let Some(dir) = &self.shared.vm_dir {
+            let units = vm::units(&vm::work(dir, self.place.conversation));
+            if !units.is_empty() {
+                line("units", units.join(", "));
+            }
+        }
+        if let Some(woken) = self.woken.summary(Instant::now()) {
+            line("woken", woken);
+        }
         if let Some(mark) = settings.cleared_upto {
             line("context", format!("after #{mark}"));
         }

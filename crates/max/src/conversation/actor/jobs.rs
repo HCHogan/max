@@ -225,20 +225,7 @@ impl Conversation {
     /// Wakes Max with what job `job` says: in the running core, or a new
     /// one.
     async fn wake_for(&mut self, job: u32, item: Item) -> Result<()> {
-        let wake = Wake {
-            ids: Vec::new(),
-            reason: Reason::Job { job },
-            item: Some(item),
-        };
-        match self.core.as_mut() {
-            Some(a) => {
-                if let Err(rejected) = a.run.input(Input::Wake(wake)) {
-                    warn!(turn = %a.turn, %rejected, "what a job says didn't fit the core");
-                }
-            }
-            None => self.start_core(wake).await?,
-        }
-        Ok(())
+        self.wake_with(Reason::Job { job }, item).await
     }
 
     /// Stops every job, for `/kill`: their numbers.
@@ -269,7 +256,7 @@ impl Conversation {
 
     /// The most tokens one item may take: the running core's, or the
     /// next one's.
-    fn single(&self) -> u32 {
+    pub(super) fn single(&self) -> u32 {
         let settings = &self.settings;
         let window = match &self.core {
             Some(a) => Some(a.chosen.window),
@@ -389,7 +376,7 @@ fn asked(job: u32, title: &str, question: &str, single: u32) -> Item {
 }
 
 /// `words`, or their beginning if they take over `single` tokens.
-fn fitted(words: &str, single: u32) -> String {
+pub(super) fn fitted(words: &str, single: u32) -> String {
     if tokens::count(words) > single {
         let excerpt: String = words.chars().take(EXCERPT_CHARS).collect();
         format!("{excerpt}…（太长，只有开头）")

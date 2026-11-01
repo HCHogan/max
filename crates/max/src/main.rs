@@ -3,12 +3,13 @@
 //! it builds the file; `max vm-check` boots a VM, runs a command in it, a
 //! program that calls the MCP service, one that opens a tab in the browser
 //! and one that finds the tab as the first left it, keeps a unit of its own
-//! in /work/.max/systemd and runs a background command.
+//! in /work/.max/systemd and wakes Max with max-wake, and runs a
+//! background command.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
@@ -49,7 +50,7 @@ use max::scope::Scope;
 use max::search::{self, Search};
 use max::table::{self, Me, Table};
 use max::tools;
-use max::vm::{Vm, Vms};
+use max::vm::{Signal, Vm, Vms};
 use max::worker::Rows;
 
 // Stopping, in order, within systemd's TimeoutStopSec of 60 seconds.
@@ -123,7 +124,27 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
         .build()?;
     let outs = runtime.block_on(async {
         let mut services = Scope::new();
-        let vms = Vms::start(vm, &mut services)?;
+        let (signals, mut heard) = mpsc::unbounded_channel();
+        let vms = Vms::start(vm, &mut services, signals)?;
+        // What max-wake would wake Max with, answered here.
+        let woken = Arc::new(Mutex::new(Vec::new()));
+        let noted = Arc::clone(&woken);
+        services.spawn(move |_| async move {
+            while let Some(signal) = heard.recv().await {
+                let (text, reply) = match signal {
+                    Signal::Wake { text, reply, .. } => (text, Some(reply)),
+                    Signal::Notice { text, .. } => (text, None),
+                };
+                // Noted before max-wake hears back, and vm-check goes on.
+                noted
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(text);
+                if let Some(reply) = reply {
+                    let _ = reply.send(Ok("vm-check 收到了".to_owned()));
+                }
+            }
+        });
         // No conversation has id 0, so the program's history finds nothing,
         // from the database.
         let context = || {
@@ -201,6 +222,15 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
         );
         let done = finished.ending.how == job::How::Done;
         outs.push(ToolOutput::text(text, !done, 0));
+        let woken = woken
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .join("\n");
+        outs.push(ToolOutput::text(
+            format!("叫醒：{woken}"),
+            woken.is_empty(),
+            0,
+        ));
         drop(vms);
         services.close(Duration::from_secs(5)).await;
         Ok::<_, color_eyre::Report>(outs)
@@ -223,7 +253,8 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
 /// A unit of vm-check's own in /work/.max/systemd, which notes each boot
 /// it starts in: max-units starts it now, or the boot already has. The
 /// nested test runs vm-check twice: the second boot starts it before
-/// max-units is run, and both boots are noted.
+/// max-units is run, and both boots are noted. Then max-wake, which
+/// vm-check answers.
 const UNITS: &str = r#"before=$(systemctl is-active boot-note.service || true)
 mkdir -p /work/.max/systemd
 cat > /work/.max/systemd/boot-note.service <<'EOF'
@@ -236,7 +267,8 @@ WantedBy=multi-user.target
 EOF
 max-units
 echo "开机时：$before"
-echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机""#;
+echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机"
+max-wake "vm-check 叫醒了自己""#;
 
 /// vm-check's tab in the browser: how long the browser took to start and
 /// the page to load, the snapshot, a field filled by its ref, a screenshot
@@ -452,8 +484,10 @@ async fn serve(config: Config) -> Result<()> {
         (Some(_), None) => info!("no dreamer model: memory files aren't tidied"),
         (None, _) => {}
     }
+    // What the VMs have for the conversations, such as max-wake.
+    let (signals, signals_rx) = mpsc::unbounded_channel();
     let vms = match config.vm {
-        Some(vm) => Some(Vms::start(vm, &mut services)?),
+        Some(vm) => Some(Vms::start(vm, &mut services, signals)?),
         None => {
             info!("no VMs: the tools can't run");
             None
@@ -535,7 +569,7 @@ async fn serve(config: Config) -> Result<()> {
     drop(intake_tx);
     let mut conversations = Scope::new();
     let table = Table::new(Arc::clone(&shared), me);
-    conversations.spawn(move |_| table.run(intake_rx, CONVERSATIONS_GRACE));
+    conversations.spawn(move |_| table.run(intake_rx, signals_rx, CONVERSATIONS_GRACE));
     info!(commit = max::COMMIT, "serving");
 
     let mut terminate = signal(SignalKind::terminate())?;

@@ -6,6 +6,8 @@ pkgs.writeShellApplication {
     pkgs.coreutils
     pkgs.diffutils
     pkgs.gnugrep
+    pkgs.jq
+    pkgs.socat
     pkgs.util-linux
     systemd
   ];
