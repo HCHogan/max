@@ -1,7 +1,7 @@
-//! The conversation's background agents: started by its turns' programs,
-//! outliving the core that started them, and waking Max when they ask
-//! something and when they end.
-//! See "后台 agent" in docs/rust-rewrite.md.
+//! The conversation's background jobs, agents and `shell` commands:
+//! started by its turns, outliving the core that started them, and waking
+//! Max when they end, and agents when they ask something.
+//! See "后台 agent" and "后台命令" in docs/rust-rewrite.md.
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
@@ -12,6 +12,7 @@ use tokio::sync::mpsc::unbounded_channel;
 
 use super::*;
 use crate::job::{self, Finished, How, Progress, Reply, Request, Status, name};
+use crate::tools::{self, Background};
 
 /// The jobs running, by number.
 #[derive(Default)]
@@ -24,10 +25,15 @@ pub(super) struct Jobs {
 struct Running {
     title: String,
     started: Instant,
+    /// None for a background command.
+    agent: Option<Agent>,
+    /// Dropping it stops the job: pi, or the command's unit.
+    _task: Scope,
+}
+
+struct Agent {
     steers: UnboundedSender<String>,
     progress: Arc<Mutex<Progress>>,
-    /// Dropping it stops the job, and pi with it.
-    _task: Scope,
 }
 
 impl Conversation {
@@ -35,9 +41,14 @@ impl Conversation {
     pub(super) fn job_request(&mut self, request: Request) -> Result<Reply, String> {
         match request {
             Request::Start { task, title } => self.start_job(task, title),
+            Request::Shell(shell) => self.start_command(shell),
             Request::Steer { job, message } => {
                 let running = self.jobs.running.get(&job).ok_or_else(|| over(job))?;
-                running.steers.send(message).map_err(|_| over(job))?;
+                let agent = running
+                    .agent
+                    .as_ref()
+                    .ok_or_else(|| format!("{} 是后台命令，补不了话", name(job)))?;
+                agent.steers.send(message).map_err(|_| over(job))?;
                 Ok(Reply::Job(job))
             }
             Request::Cancel { job } => {
@@ -140,8 +151,48 @@ impl Conversation {
             Running {
                 title,
                 started: Instant::now(),
-                steers,
-                progress,
+                agent: Some(Agent { steers, progress }),
+                _task: task,
+            },
+        );
+        Ok(Reply::Job(number))
+    }
+
+    /// Runs a `shell` command in the background, as a job of its own.
+    fn start_command(&mut self, shell: Background) -> Result<Reply, String> {
+        if self.stopping.is_some() {
+            return Err("Max 正在重启，起不了后台命令".to_owned());
+        }
+        let Some(vms) = self.shared.vms.clone() else {
+            return Err("这里没有配 VM，shell 用不了。".to_owned());
+        };
+        let commands = self.jobs.running.values();
+        if commands.filter(|running| running.agent.is_none()).count() >= job::COMMANDS {
+            return Err(format!(
+                "已经有 {} 个后台命令在跑了，等一个跑完，或者用 agent_cancel 停掉一个",
+                job::COMMANDS
+            ));
+        }
+        self.jobs.last += 1;
+        let number = self.jobs.last;
+        let title = format!("$ {}", headline(&shell.command));
+        let conversation = self.place.conversation;
+        let mailbox = self.mailbox.clone();
+        let mut task = Scope::new();
+        task.spawn(move |_| async move {
+            let finished = tools::background(vms, conversation, shell).await;
+            let _ = mailbox.send(Event::JobDone {
+                job: number,
+                finished,
+            });
+        });
+        info!(conversation = %conversation, job = number, "a background command starts");
+        self.jobs.running.insert(
+            number,
+            Running {
+                title,
+                started: Instant::now(),
+                agent: None,
                 _task: task,
             },
         );
@@ -202,12 +253,14 @@ impl Conversation {
             .running
             .iter()
             .map(|(number, running)| {
-                let progress = running.progress();
+                let what = match &running.agent {
+                    Some(_) => format!("{} calls", running.progress().calls),
+                    None => "shell".to_owned(),
+                };
                 format!(
-                    "{} · {}m · {} calls · {}",
+                    "{} · {}m · {what} · {}",
                     name(*number),
                     running.started.elapsed().as_secs() / 60,
-                    progress.calls,
                     running.title
                 )
             })
@@ -240,8 +293,10 @@ impl Jobs {
         let running = Running {
             title: title.to_owned(),
             started: Instant::now(),
-            steers,
-            progress: Arc::default(),
+            agent: Some(Agent {
+                steers,
+                progress: Arc::default(),
+            }),
             _task: Scope::new(),
         };
         self.running.insert(self.last, running);
@@ -249,9 +304,31 @@ impl Jobs {
     }
 }
 
+#[cfg(test)]
+impl Jobs {
+    /// A background command as if started, with nothing behind it.
+    pub(super) fn pretend_command(&mut self, title: &str) {
+        self.last += 1;
+        let running = Running {
+            title: title.to_owned(),
+            started: Instant::now(),
+            agent: None,
+            _task: Scope::new(),
+        };
+        self.running.insert(self.last, running);
+    }
+}
+
 impl Running {
-    fn progress(&self) -> std::sync::MutexGuard<'_, Progress> {
-        self.progress.lock().unwrap_or_else(PoisonError::into_inner)
+    /// An agent's progress; a background command has none to count.
+    fn progress(&self) -> Progress {
+        self.agent.as_ref().map_or_else(Progress::default, |agent| {
+            agent
+                .progress
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        })
     }
 }
 

@@ -57,8 +57,8 @@ agent(args: { task: string; title?: string }): Promise<{ job: string }>;
   它问了你（[job#3 问]）还没得到答复时，下一句就是答复，它马上收到。你答不了就去群里问，问到了再转给它；10 分钟内没答复，它就自己判断着做下去，之后再说的照常当补充。 */
 agent_steer(args: { job: string | number; message: string }): Promise<{ job: string }>;
 
-/** 停掉一个后台 agent，不要它的结果了；它在 /work 里留下的东西还在。 */
+/** 停掉一个后台 agent 或者 shell 的后台命令，不要它的结果了；它在 /work 里留下的东西还在。 */
 agent_cancel(args: { job: string | number }): Promise<{ job: string }>;
 
-/** 看还在跑的后台 agent：标题、跑了几分钟、调了几次模型（calls）和工具（tools）、最近用的工具。job 不填就是全部；做完的、停掉的不在里面。 */
+/** 看还在跑的后台 agent 和后台命令：标题、跑了几分钟、调了几次模型（calls）和工具（tools）、最近用的工具；后台命令的标题是 $ 加命令，次数都是 0。job 不填就是全部；做完的、停掉的不在里面。 */
 agent_status(args: { job?: string | number }): Promise<{ jobs: { job: string; title: string; minutes: number; calls: number; tools: number; tool: string | null }[] }>;

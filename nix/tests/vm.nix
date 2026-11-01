@@ -44,7 +44,10 @@ pkgs.testers.runNixOSTest {
     shown = machine.succeed("journalctl -u maxx-vm-check.service -o cat")
     assert "退出码 0" in shown and "Linux max" in shown, shown
     assert '"mcp":"not_found"' in shown, shown
-    assert '"title":"检查","elements":["body > input","#go"]' in shown, shown
+    # The page's accessibility tree, with refs.
+    assert '"tree":"检查\\n' in shown and 'button \\"搜索\\" [ref=e4]' in shown, shown
+    # A background command's output is in its file while it runs.
+    assert "后台命令：Done\n退出码 0，跑了" in shown and "后台起了\n1" in shown, shown
     # The screenshot, among the test's outputs.
     machine.succeed("head -c 8 /var/lib/maxx/vm/0/work/.max/browser-check.png | grep -q PNG")
     machine.copy_from_vm("/var/lib/maxx/vm/0/work/.max/browser-check.png")

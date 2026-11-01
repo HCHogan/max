@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
+use max_core::ids::ConversationId;
 use max_core::item::{Part, ToolOutput};
 use max_core::message::MediaRef;
 use max_core::project::PICTURE_TOKENS;
@@ -15,8 +16,9 @@ use max_core::tools::Tool;
 use serde_json::json;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout};
 
+use crate::job::{self, Ending, Finished, How, Reply, Request};
 use crate::mcp::{self, Grant};
 use crate::tokens;
 use crate::vm::ssh::{Sink, Stream, quote};
@@ -26,6 +28,10 @@ use crate::vm::{Vm, Vms};
 const SHELL_TIME: Duration = Duration::from_secs(120);
 /// The most a call may ask for.
 const SHELL_TIME_MAX: Duration = Duration::from_secs(600);
+/// A background command's, unless the call asks for another...
+const BACKGROUND_TIME: Duration = Duration::from_secs(30 * 60);
+/// ...and the most it may ask for: as long as a background agent.
+const BACKGROUND_TIME_MAX: Duration = job::TIME;
 /// The guest stops the unit itself a little after max would have.
 const GUEST_MARGIN: Duration = Duration::from_secs(30);
 /// Output past this many bytes is cut to its head and tail, each half of
@@ -42,6 +48,19 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
         Tool::RunCode { timeout_ms, .. } => ("run_code", *timeout_ms),
         Tool::Shell { timeout_ms, .. } => ("shell", *timeout_ms),
     };
+    if let Tool::Shell {
+        command,
+        workdir,
+        background: true,
+        ..
+    } = tool
+    {
+        let limit = timeout_ms
+            .map_or(BACKGROUND_TIME, Duration::from_millis)
+            .clamp(Duration::from_secs(1), BACKGROUND_TIME_MAX);
+        let (shown, error) = started(&context, command, workdir, limit).await;
+        return text(shown, error);
+    }
     let Some(vms) = vms else {
         return text(format!("这里没有配 VM，{name} 用不了。"), true);
     };
@@ -181,34 +200,170 @@ async fn shell(
     workdir: Option<&str>,
     limit: Duration,
 ) -> Result<(String, bool)> {
+    let unit = Vm::unit();
+    let mut output = Output::new(vm.work(), format!("{unit}.txt"));
+    let ran = command_in(vm, unit, command, workdir, limit, &mut output).await?;
+    let shown = output.shown();
+    Ok(match ran {
+        Ran::Exited(status) => (with(exited(status), &shown), false),
+        Ran::OutOfTime => {
+            let head = format!("{} 秒内没跑完，已经停了", limit.as_secs());
+            (with(head, &shown), true)
+        }
+    })
+}
+
+/// How a command in the guest ended.
+enum Ran {
+    /// With its exit status, if the guest sent one.
+    Exited(Option<u32>),
+    /// Stopped at its limit.
+    OutOfTime,
+}
+
+/// Runs `command` as the unit `unit`, its output into `output`, for at
+/// most `limit`.
+async fn command_in(
+    vm: &Vm,
+    unit: String,
+    command: &str,
+    workdir: Option<&str>,
+    limit: Duration,
+    output: &mut Output,
+) -> Result<Ran> {
     let workdir = match workdir {
         Some(dir) if dir.starts_with('/') => dir.to_owned(),
         Some(dir) => format!("/work/{dir}"),
         None => "/work".to_owned(),
     };
-    let unit = Vm::unit();
     // systemd-run hands the unit its own output, so 2>&1 merges the
     // command's.
     let line = unit_line(&unit, limit, &workdir, command) + " 2>&1";
-    let mut output = Output::new(vm.work(), format!("{unit}.txt"));
     let mut running = vm.command(unit, &line, &[]).await?;
-    let waited = timeout(limit, running.wait(&mut output)).await;
+    let waited = timeout(limit, running.wait(output)).await;
     output.finish().await?;
-    let shown = output.shown();
     match waited {
-        Ok(status) => {
-            let status = status?;
-            let head = match status {
-                Some(code) => format!("退出码 {code}"),
-                None => "没有退出码，命令可能被杀了".to_owned(),
-            };
-            Ok((with(head, &shown), false))
-        }
+        Ok(status) => Ok(Ran::Exited(status?)),
         Err(_) => {
             running.stop(vm.connection()).await?;
-            let head = format!("{} 秒内没跑完，已经停了", limit.as_secs());
-            Ok((with(head, &shown), true))
+            Ok(Ran::OutOfTime)
         }
+    }
+}
+
+fn exited(status: Option<u32>) -> String {
+    match status {
+        Some(code) => format!("退出码 {code}"),
+        None => "没有退出码，命令可能被杀了".to_owned(),
+    }
+}
+
+/// A `shell` call to run in the background, as its conversation's actor
+/// gets it: the actor runs it with [`background`] and wakes Max when it
+/// ends. See "后台命令" in docs/rust-rewrite.md.
+#[derive(Debug)]
+pub struct Background {
+    pub command: String,
+    pub workdir: Option<String>,
+    pub limit: Duration,
+    /// Its unit in the guest, and so its output file's name.
+    pub unit: String,
+}
+
+/// Has the conversation start `command` as a background job: what the
+/// model is shown, and whether it couldn't.
+async fn started(
+    context: &mcp::Context,
+    command: String,
+    workdir: Option<String>,
+    limit: Duration,
+) -> (String, bool) {
+    let Some(poster) = context.caller.poster() else {
+        return ("这里不能在后台跑命令。".to_owned(), true);
+    };
+    let unit = Vm::unit();
+    let file = format!("/work/{OUT}/{unit}.txt");
+    let request = Request::Shell(Background {
+        command,
+        workdir,
+        limit,
+        unit,
+    });
+    match poster.jobs(request).await {
+        Ok(Reply::Job(number)) => {
+            let job = job::name(number);
+            let shown = format!(
+                "在后台跑了，是 {job}，限时 {} 分钟。跑完了，退出码和输出作为 [{job} 完成] 回到你这里：别 sleep 等它，也别反复查。\
+                 输出一边跑一边写进 {file}，要看进度就读它的末尾；不要了用 agent_cancel 停掉。",
+                limit.as_secs().div_ceil(60),
+            );
+            (shown, false)
+        }
+        Ok(Reply::Running(_)) => ("后台命令没起来。".to_owned(), true),
+        Err(why) => (why, true),
+    }
+}
+
+/// Runs a background command in `conversation`'s VM until it ends or
+/// runs out of time: how it went, its exit status and its output.
+pub async fn background(vms: Vms, conversation: ConversationId, shell: Background) -> Finished {
+    let begun = Instant::now();
+    let failed = |why: String| Finished {
+        ending: Ending {
+            how: How::Failed(why),
+            text: None,
+        },
+        file: None,
+    };
+    // Held until the command ends, the VM isn't idle meanwhile.
+    let vm = match vms.get(conversation).await {
+        Ok(vm) => vm,
+        Err(why) => return failed(why),
+    };
+    let mut output = Output::new(vm.work(), format!("{}.txt", shell.unit));
+    // Whole from the start, for the model to follow along.
+    if let Err(error) = output.create().await {
+        return failed(format!("{error:#}"));
+    }
+    let ran = command_in(
+        &vm,
+        shell.unit,
+        &shell.command,
+        shell.workdir.as_deref(),
+        shell.limit,
+        &mut output,
+    )
+    .await;
+    let shown = output.shown();
+    let (how, head) = match ran {
+        Err(error) => return failed(format!("{error:#}")),
+        Ok(Ran::Exited(status)) => (
+            How::Done,
+            format!("{}，跑了 {}", exited(status), took(begun.elapsed())),
+        ),
+        Ok(Ran::OutOfTime) => (
+            How::OutOfTime,
+            format!(
+                "{} 分钟内没跑完，已经停了",
+                shell.limit.as_secs().div_ceil(60)
+            ),
+        ),
+    };
+    Finished {
+        ending: Ending {
+            how,
+            text: Some(with(head, &shown)),
+        },
+        file: None,
+    }
+}
+
+/// A command's run time, as the model is told it.
+fn took(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    match seconds {
+        0..60 => format!("{seconds} 秒"),
+        _ => format!("{} 分 {} 秒", seconds / 60, seconds % 60),
     }
 }
 
@@ -224,7 +379,8 @@ fn with(head: String, shown: &str) -> String {
 const OUT: &str = ".max/out";
 
 /// A command's output: all of it while short; past `SHOWN`, its head and
-/// tail, and the whole in a file, `name` in the guest's /work/.max/out.
+/// tail, and the whole in a file, `name` in the guest's /work/.max/out,
+/// or from the start once [`Output::create`] makes it.
 struct Output {
     name: String,
     /// The host's side of /work.
@@ -249,7 +405,7 @@ impl Output {
 
     fn shown(&self) -> String {
         let head = String::from_utf8_lossy(&self.head);
-        if self.file.is_none() {
+        if self.total <= SHOWN {
             return head.into_owned();
         }
         let tail: Vec<u8> = self.tail.iter().copied().collect();
@@ -265,34 +421,48 @@ impl Output {
 
 impl Sink for Output {
     async fn output(&mut self, _: Stream, data: &[u8]) -> Result<()> {
+        let before = self.total;
         self.total += data.len();
-        if self.file.is_none() && self.total <= SHOWN {
-            self.head.extend_from_slice(data);
-            return Ok(());
+        if self.file.is_none() && self.total > SHOWN {
+            self.create().await?;
         }
         if let Some(file) = &mut self.file {
+            // Read while the command runs, for a background one.
             file.write_all(data).await?;
-            self.tail.extend(data);
-        } else {
-            let (work, name) = (self.work.clone(), self.name.clone());
-            let file = tokio::task::spawn_blocking(move || mcp::work::create(&work, OUT, &name))
-                .await?
-                .map_err(|failure| eyre!(failure.message))?;
-            let mut file = fs::File::from_std(file);
+            file.flush().await?;
+        }
+        if self.total <= SHOWN {
+            self.head.extend_from_slice(data);
+        } else if before <= SHOWN {
+            // Long with this piece: only its ends are kept.
             let mut all = std::mem::take(&mut self.head);
             all.extend_from_slice(data);
-            file.write_all(&all).await?;
-            self.file = Some(file);
             self.head = all[..SHOWN / 2].to_vec();
             self.tail = all[all.len() - SHOWN / 2..].iter().copied().collect();
+        } else {
+            self.tail.extend(data);
+            let over = self.tail.len().saturating_sub(SHOWN / 2);
+            self.tail.drain(..over);
         }
-        let over = self.tail.len().saturating_sub(SHOWN / 2);
-        self.tail.drain(..over);
         Ok(())
     }
 }
 
 impl Output {
+    /// Makes the file now, with the output so far: all of it, since that
+    /// is short.
+    async fn create(&mut self) -> Result<()> {
+        let (work, name) = (self.work.clone(), self.name.clone());
+        let file = tokio::task::spawn_blocking(move || mcp::work::create(&work, OUT, &name))
+            .await?
+            .map_err(|failure| eyre!(failure.message))?;
+        let mut file = fs::File::from_std(file);
+        file.write_all(&self.head).await?;
+        file.flush().await?;
+        self.file = Some(file);
+        Ok(())
+    }
+
     /// Writes out what the file has yet to get.
     async fn finish(&mut self) -> Result<()> {
         if let Some(file) = &mut self.file {
@@ -354,6 +524,34 @@ mod tests {
         assert!(output.output(Stream::Out, &long).await.is_err());
         assert!(!host.join("out/max-3.txt").exists());
         let _ = std::fs::remove_dir_all(scratch);
+    }
+
+    /// A background command's: the model reads it while the command runs.
+    #[tokio::test]
+    async fn a_created_file_has_the_output_from_the_start() {
+        let work = std::env::temp_dir().join(format!("max-output-kept-{}", std::process::id()));
+        std::fs::create_dir_all(&work).unwrap();
+        let path = work.join(".max/out/max-4.txt");
+        let mut output = Output::new(&work, "max-4.txt".into());
+        output.create().await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"");
+        output.output(Stream::Out, b"building\n").await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"building\n");
+        output.output(Stream::Out, b"done").await.unwrap();
+        assert_eq!(output.shown(), "building\ndone");
+        let long = vec![b'x'; SHOWN];
+        output.output(Stream::Out, &long).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap().len(), SHOWN + 13);
+        let shown = output.shown();
+        assert!(shown.starts_with("building\ndonex"), "{shown}");
+        assert!(shown.contains("/work/.max/out/max-4.txt"), "{shown}");
+        let _ = std::fs::remove_dir_all(work);
+    }
+
+    #[test]
+    fn a_run_time_is_in_seconds_or_minutes() {
+        assert_eq!(took(Duration::from_millis(5400)), "5 秒");
+        assert_eq!(took(Duration::from_secs(192)), "3 分 12 秒");
     }
 
     #[test]

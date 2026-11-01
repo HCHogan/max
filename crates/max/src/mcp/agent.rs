@@ -126,7 +126,7 @@ impl Tool for AgentSteer {
 
 impl Tool for AgentCancel {
     const NAME: &'static str = "agent_cancel";
-    const DESCRIPTION: &'static str = "停掉一个后台 agent，不要它的结果了。";
+    const DESCRIPTION: &'static str = "停掉一个后台 agent 或后台命令，不要它的结果了。";
     const PER_RUN: Option<u32> = None;
     const JOB: bool = false;
 
@@ -134,7 +134,8 @@ impl Tool for AgentCancel {
     type Output = Named;
 
     fn guide() -> String {
-        "停掉一个后台 agent，不要它的结果了；它在 /work 里留下的东西还在。".into()
+        "停掉一个后台 agent 或者 shell 的后台命令，不要它的结果了；它在 /work 里留下的东西还在。"
+            .into()
     }
 
     async fn run(context: &Context, Which { job }: Which) -> Result<Named, Failure> {
@@ -146,7 +147,7 @@ impl Tool for AgentCancel {
 impl Tool for AgentStatus {
     const NAME: &'static str = "agent_status";
     const DESCRIPTION: &'static str =
-        "看还在跑的后台 agent：标题、跑了几分钟、调了几次模型和工具、最近用的工具。";
+        "看还在跑的后台 agent 和后台命令：标题、跑了几分钟、调了几次模型和工具、最近用的工具。";
     const PER_RUN: Option<u32> = None;
     const JOB: bool = false;
 
@@ -154,7 +155,7 @@ impl Tool for AgentStatus {
     type Output = Running;
 
     fn guide() -> String {
-        "看还在跑的后台 agent：标题、跑了几分钟、调了几次模型（calls）和工具（tools）、最近用的工具。job 不填就是全部；做完的、停掉的不在里面。".into()
+        "看还在跑的后台 agent 和后台命令：标题、跑了几分钟、调了几次模型（calls）和工具（tools）、最近用的工具；后台命令的标题是 $ 加命令，次数都是 0。job 不填就是全部；做完的、停掉的不在里面。".into()
     }
 
     async fn run(context: &Context, Status { job }: Status) -> Result<Running, Failure> {

@@ -367,7 +367,7 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 |---|---|---|
 | `Scope::close(grace)` | `Scope` 里一次 | 关机时防卡死 |
 | 会话 actor 的到期时间 | actor 主循环里一个 `sleep_until`，到期时间取空闲窗口和停止宽限期里早的那个 | 策略：provider 的 `idle_window_secs`、关机的宽限期。turn 没有墙钟：actor 只等数据库，模型调用和工具各有自己的上限 |
-| 工具调用上限 | 两处：`run_code`、`shell` 一次运行一个（`shell` 默认 120 秒，调用最多要 600 秒；guest 里的 unit 另有晚 30 秒的 `RuntimeMaxSec`，max 这边丢了也停得掉）；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
+| 工具调用上限 | 两处：`run_code`、`shell` 一次运行一个（`shell` 默认 120 秒，调用最多要 600 秒，后台跑的默认 30 分钟、最多 2 小时，见[后台命令](#后台命令)；guest 里的 unit 另有晚 30 秒的 `RuntimeMaxSec`，max 这边丢了也停得掉）；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
 | VM 开机 | VM 服务里一次：60 秒内要能 SSH 进去，每 100 ms 试一次；等 virtiofsd 建 socket 5 秒；外面再套一层 70 秒 | 防卡死 |
 | VM 闲置 | VM 服务里一次：每分钟扫一遍，闲置超过 `idle_minutes`（默认 120）的关掉 | 策略 |
 | 网络客户端 | 配置里一次：LLM 的 `stream_idle_timeout_secs`（响应头和之后的每一段都要在这个时间内到，整个调用不设上限）、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`max-llm` 里写死的连接超时，`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避 | 防卡死 |
@@ -1650,6 +1650,17 @@ pi 适配器要处理的行为（2026-10-29 用 pi 1.4.0 实测）：
 guest 里的 pi 来自 numtide 的 llm-agents.nix，flake 里钉在一个 rev 上。包装脚本 `max-pi`（`nix/max-pi.sh`）从 stdin 第一行读这个 job 的 JSON：token、模型 id、协议、窗口、输出上限、effort 和追加的系统提示。它在 unit 的 RuntimeDirectory 里写 `models.json`（provider 只有一个 `max`，`baseUrl` 是 `/llm`，`apiKey` 是 `$MAX_JOB_TOKEN`）和 `mcp.json`，再 exec `pi --mode rpc --no-approve`，带上 `--extension` `ask-max.ts`（路径由 `max-pi.nix` 的 `MAX_ASK_MAX` 给）；会话存在 `/work/.max/jobs`。`/work` 里的 `.pi/` 是群里能写的，不信任。unit 停了目录就删，token 跟着没了。
 
 pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每天发补丁，RPC 协议没有版本字段。所以在 Nix 里钉版本，录几段真实的 JSONL 做适配器回放测试，升级前先跑这些测试。录下来的在 `crates/max/src/job/fixtures/`（去掉了流式增量、系统提示和本机路径）。
+
+## 后台命令
+
+2026-11-01 加。一条要跑好几分钟的命令（构建、跑测试、下载）用不着另一个模型，后台 agent 太重；在 turn 里跑又让群里干等。所以 `shell` 多一个参数 `background`，为 true 时马上返回一个 job 编号，命令在后台跑，跑完了叫醒 Max。只做 `shell`：后台的 `run_code` 在 turn 结束后还能调 `send_message`、禁言这类工具，动作就没有 turn 可挂了。
+
+- **和后台 agent 共用 job 表**：编号一起数（`job#N`），`agent_status` 列出来（标题是 `$ 命令的第一行`，次数都是 0），`agent_cancel` 停掉，`/status` 一行（`job#2 · 3m · shell · $ make`），`/kill`、出错收尾和重启都一起停。`agent_steer` 补不了话。同时最多 3 个，不算 agent 的。
+- **怎么起**：`tools::run` 见到 `background`，经这一轮的 `Poster` 给会话 actor 发 `Request::Shell`（和 `agent` 走同一条路，turn 已经结束就拒绝），actor 在 job 表里起一个任务跑它，马上回编号。返回给模型的是编号、限时、输出文件的路径，和"别 sleep 等它，也别反复查"。
+- **怎么跑**：和前台的 `shell` 一样是 VM 里的一个 systemd unit，只是限时默认 30 分钟、`timeout_ms` 最多 2 小时（和 agent 一样）。输出从一开始就写进 `/work/.max/out/<unit>.txt`，每段都 flush，Max 想看进度就读它的末尾。任务拿着 `Vm`，命令没跑完 VM 不算闲置；任务被丢掉（取消、`/kill`、重启）时 `Command` 的 drop 让 VM 的 stopper 停掉 unit。
+- **跑完**：`JobDone` 叫醒 Max，和 agent 的报告一样：`[job#2 完成] $ make`，下面是退出码和跑了多久，再是输出（超过 16 KiB 只有头尾，中间写明全文在哪）。到点停了是 `[job#2 到点停了，下面是做到一半的]`；VM 起不来这类是 `[job#2 失败]`。Max 自己用 `systemctl stop` 停掉也会叫醒它一次。
+- **提示词**：工具段说，一条命令要跑好几分钟就用 `background`，同一次输出里先在群里说一声，然后就停，等 `[job#N 完成]`。
+- **测试**：`vm-check` 在后台跑一条命令，命令自己 grep 它的输出文件，证明输出在跑的时候就写进去了；tank 上的嵌套测试检查这一段。
 
 ## crate 划分
 

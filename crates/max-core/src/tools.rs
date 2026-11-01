@@ -28,8 +28,10 @@ pub const TOOLS: [ToolSpec; 2] = [
         name: "shell",
         description: "在本群的 VM 里用 bash -lc 运行一条命令，返回退出码和合并的输出。\
             默认限时 120 秒，timeout_ms 最多 600000。输出超过 16 KiB 只返回头尾各 8 KiB，\
-            全文存在结果里给出的 /work/.max/out/ 下的文件里。命令没有输入，别跑交互式程序。",
-        parameters: r#"{"type":"object","properties":{"command":{"type":"string"},"workdir":{"type":"string","description":"默认 /work"},"timeout_ms":{"type":"integer","minimum":1}},"required":["command"]}"#,
+            全文存在结果里给出的 /work/.max/out/ 下的文件里。命令没有输入，别跑交互式程序。\
+            background 为 true 时命令在后台跑，马上返回一个 job 编号；默认限时 30 分钟，timeout_ms 最多 7200000；\
+            跑完了，退出码和输出作为 [job#N 完成] 回到你这里。",
+        parameters: r#"{"type":"object","properties":{"command":{"type":"string"},"workdir":{"type":"string","description":"默认 /work"},"timeout_ms":{"type":"integer","minimum":1},"background":{"type":"boolean","description":"在后台跑，跑完再告诉你；默认 false"}},"required":["command"]}"#,
     },
 ];
 
@@ -52,6 +54,9 @@ pub enum Tool {
         command: String,
         workdir: Option<String>,
         timeout_ms: Option<u64>,
+        /// Runs on after the call returns; its end wakes Max.
+        #[serde(default)]
+        background: bool,
     },
 }
 
@@ -67,6 +72,8 @@ struct ShellArgs {
     command: String,
     workdir: Option<String>,
     timeout_ms: Option<u64>,
+    #[serde(default)]
+    background: bool,
 }
 
 /// The call, or what to tell the model about its mistake. A malformed call
@@ -94,6 +101,7 @@ pub fn parse(call: &ToolCall) -> Result<Call, String> {
                 command,
                 workdir,
                 timeout_ms,
+                background,
             } = serde_json::from_str(&call.arguments).map_err(malformed)?;
             if command.trim().is_empty() {
                 return Err("shell 的 command 是空的".to_owned());
@@ -102,6 +110,7 @@ pub fn parse(call: &ToolCall) -> Result<Call, String> {
                 command,
                 workdir,
                 timeout_ms,
+                background,
             }
         }
         other => return Err(format!("没有 {other} 这个工具，只有 run_code 和 shell")),
@@ -155,8 +164,36 @@ mod tests {
                 command: "ls".into(),
                 workdir: None,
                 timeout_ms: Some(500),
+                background: false,
             }
         );
+        assert_eq!(
+            parse(&call("shell", r#"{"command": "make", "background": true}"#))
+                .unwrap()
+                .tool,
+            Tool::Shell {
+                command: "make".into(),
+                workdir: None,
+                timeout_ms: None,
+                background: true,
+            }
+        );
+    }
+
+    /// Calls recorded before `background` came read as they ran.
+    #[test]
+    fn a_recorded_shell_call_runs_in_the_foreground() {
+        let tool: Tool = serde_json::from_str(
+            r#"{"type": "shell", "command": "ls", "workdir": null, "timeout_ms": null}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            tool,
+            Tool::Shell {
+                background: false,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -166,6 +203,7 @@ mod tests {
             ("run_code", r#"{"source": "x"}"#),
             ("run_code", r#"{"code": "  "}"#),
             ("shell", r#"{"command": "ls", "timeout_ms": -1}"#),
+            ("shell", r#"{"command": "ls", "background": "yes"}"#),
             ("shell", r#"["ls"]"#),
             ("send_message", "{}"),
         ] {

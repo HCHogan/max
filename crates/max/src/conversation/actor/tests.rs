@@ -18,6 +18,7 @@ use crate::historian::Captured;
 use crate::inbound::InNode;
 use crate::job::{Ending, Finished, How, Reply, Request};
 use crate::llm::testing::{Answer, Script};
+use crate::tools::Background;
 
 const PATIENCE: Duration = Duration::from_secs(5);
 
@@ -780,6 +781,60 @@ async fn a_job_is_steered_listed_and_cancelled(pool: PgPool) {
     assert_eq!(status, Reply::Running(Vec::new()));
     h.stop().await;
     assert!(h.turns().await.is_empty());
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_background_command_is_a_job_that_wakes_max_when_it_ends(pool: PgPool) {
+    let mut h = Harness::start(pool, 300, true, false, None, |actor| {
+        actor.jobs.pretend_command("$ make");
+    })
+    .await;
+    let steer = Request::Steer {
+        job: 1,
+        message: "快点".into(),
+    };
+    assert_eq!(
+        ask(&h, steer).await.unwrap_err(),
+        "job#1 是后台命令，补不了话"
+    );
+    h.send(from_xiaoming(0, vec![me(), text(" /status")]));
+    let (_, status) = h.said().await;
+    assert!(
+        status.contains("job       job#1 · 0m · shell · $ make"),
+        "{status}"
+    );
+    h.script.push(Answer::says("编好了"));
+    let finished = Finished {
+        ending: Ending {
+            how: How::Done,
+            text: Some("退出码 0，跑了 3 分 12 秒\nok".to_owned()),
+        },
+        file: None,
+    };
+    h.mailbox.send(Event::JobDone { job: 1, finished }).unwrap();
+    assert_eq!(h.said().await.1, "编好了");
+    let volatile = h.request_tail(0);
+    assert!(
+        volatile.ends_with("[job#1 完成] $ make\n退出码 0，跑了 3 分 12 秒\nok\n"),
+        "{volatile}"
+    );
+    h.stop().await;
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn without_vms_no_background_command_starts(pool: PgPool) {
+    let (mut h, _) = Harness::with_job(pool, "查票价").await;
+    let shell = Request::Shell(Background {
+        command: "make".into(),
+        workdir: None,
+        limit: Duration::from_secs(60),
+        unit: "max-1".into(),
+    });
+    assert_eq!(
+        ask(&h, shell).await.unwrap_err(),
+        "这里没有配 VM，shell 用不了。"
+    );
+    h.stop().await;
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

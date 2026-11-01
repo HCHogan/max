@@ -14,7 +14,7 @@ use clap::{Parser, Subcommand};
 use color_eyre::config::{HookBuilder, Theme};
 use color_eyre::eyre::{Result, WrapErr, bail};
 use max_core::ids::{ConversationId, EndpointId, IdentityId, PrincipalId};
-use max_core::item::Part;
+use max_core::item::{Part, ToolOutput};
 use max_core::message::Platform;
 use max_core::tools::Tool;
 use max_db::PgPool;
@@ -30,6 +30,7 @@ use max::dreamer::Dreamer;
 use max::embedding::Embedder;
 use max::github::{self, GitHub};
 use max::historian::{self, Historian};
+use max::job;
 use max::llm::Models;
 use max::mcp;
 use max::media::caption::Captioner;
@@ -47,7 +48,7 @@ use max::scope::Scope;
 use max::search::{self, Search};
 use max::table::{self, Me, Table};
 use max::tools;
-use max::vm::Vms;
+use max::vm::{Vm, Vms};
 use max::worker::Rows;
 
 // Stopping, in order, within systemd's TimeoutStopSec of 60 seconds.
@@ -157,6 +158,7 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
             command,
             workdir: None,
             timeout_ms: None,
+            background: false,
         };
         let program = Tool::RunCode {
             code: "const read = await max.raw('history', {around: 1});\n\
@@ -174,6 +176,24 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
         for tool in [shell, program, browse(BROWSE), browse(BROWSE_AGAIN)] {
             outs.push(tools::run(tool, Some(&vms), context()?).await);
         }
+        // A background command, as a conversation's actor runs one; its
+        // output is in its file before it ends.
+        let unit = Vm::unit();
+        let file = format!("/work/.max/out/{unit}.txt");
+        let shell = tools::Background {
+            command: format!("echo 后台起了; sleep 1; grep -c 后台起了 {file}"),
+            workdir: None,
+            limit: Duration::from_secs(60),
+            unit,
+        };
+        let finished = tools::background(vms.clone(), ConversationId(0), shell).await;
+        let text = format!(
+            "后台命令：{:?}\n{}",
+            finished.ending.how,
+            finished.ending.text.unwrap_or_default()
+        );
+        let done = finished.ending.how == job::How::Done;
+        outs.push(ToolOutput::text(text, !done, 0));
         drop(vms);
         services.close(Duration::from_secs(5)).await;
         Ok::<_, color_eyre::Report>(outs)

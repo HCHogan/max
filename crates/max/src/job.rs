@@ -19,18 +19,22 @@ use tracing::warn;
 use pi::{Ask, Record};
 pub use run::{Asker, Finished, Progress, Start, run};
 
-/// The most jobs a conversation runs at once.
+/// The most agents a conversation runs at once...
 pub const MOST: usize = 3;
+/// ...and background commands, besides.
+pub const COMMANDS: usize = 3;
 /// How long a job may take; then it is aborted, and reports how far it got.
 pub const TIME: Duration = Duration::from_secs(2 * 60 * 60);
 
-/// What a tool asks of its conversation's background agents.
+/// What a tool asks of its conversation's background jobs: its agents,
+/// and its `shell` commands run in the background.
 #[derive(Debug)]
 pub enum Request {
     Start {
         task: String,
         title: Option<String>,
     },
+    Shell(crate::tools::Background),
     Steer {
         job: u32,
         message: String,
