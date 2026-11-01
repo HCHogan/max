@@ -10,9 +10,9 @@ mod webread_tests;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, LazyLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::Result;
 use max_core::ids::ConversationId;
@@ -103,11 +103,23 @@ impl Vm {
         Command::open(&self.connection, unit, line, self.stops.clone()).await
     }
 
-    /// A name for a command's unit, unique while max runs. A VM doesn't
-    /// outlive max.
+    /// A name for a command's unit. A VM doesn't outlive max, but the
+    /// command's output files in /work are named after the unit, and they
+    /// do; so the name says which start of max it is from, and a file of
+    /// an earlier one isn't in the way. A count alone began again at every
+    /// restart, and a long output then failed: its file was already there.
     pub fn unit() -> String {
         static NEXT: AtomicU64 = AtomicU64::new(1);
-        format!("max-{}", NEXT.fetch_add(1, Ordering::Relaxed))
+        static STARTED: LazyLock<u64> = LazyLock::new(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |since| since.as_secs())
+        });
+        format!(
+            "max-{:x}-{}",
+            *STARTED,
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )
     }
 
     pub fn connection(&self) -> &Connection {

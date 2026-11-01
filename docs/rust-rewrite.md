@@ -1662,7 +1662,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 
 - **和后台 agent 共用 job 表**：编号一起数（`job#N`），`agent_status` 列出来（标题是 `$ 命令的第一行`，次数都是 0），`agent_cancel` 停掉，`/status` 一行（`job#2 · 3m · shell · $ make`），`/kill`、出错收尾和重启都一起停。`agent_steer` 补不了话。同时最多 3 个，不算 agent 的。
 - **怎么起**：`tools::run` 见到 `background`，经这一轮的 `Poster` 给会话 actor 发 `Request::Shell`（和 `agent` 走同一条路，turn 已经结束就拒绝），actor 在 job 表里起一个任务跑它，马上回编号。返回给模型的是编号、限时、输出文件的路径，和"别 sleep 等它，也别反复查"。
-- **怎么跑**：和前台的 `shell` 一样是 VM 里的一个 systemd unit，只是限时默认 30 分钟、`timeout_ms` 最多 2 小时（和 agent 一样）。输出从一开始就写进 `/work/.max/out/<unit>.txt`，每段都 flush，Max 想看进度就读它的末尾。任务拿着 `Vm`，命令没跑完 VM 不算闲置；任务被丢掉（取消、`/kill`、重启）时 `Command` 的 drop 让 VM 的 stopper 停掉 unit。
+- **怎么跑**：和前台的 `shell` 一样是 VM 里的一个 systemd unit，只是限时默认 30 分钟、`timeout_ms` 最多 2 小时（和 agent 一样）。输出从一开始就写进 `/work/.max/out/<unit>.txt`，每段都 flush，Max 想看进度就读它的末尾。unit 名是 `max-<max 这次启动的时间，十六进制秒>-<序号>`（11-01 改）：输出文件在 `/work` 里比 max 活得久，原来只用序号，每次重启又从 1 数起，撞上以前的文件就失败（文件不覆盖），10-30 起前台的长输出撞过 4 次；后台命令一开始就建文件，嵌套测试第二次开机时撞上了。任务拿着 `Vm`，命令没跑完 VM 不算闲置；任务被丢掉（取消、`/kill`、重启）时 `Command` 的 drop 让 VM 的 stopper 停掉 unit。
 - **跑完**：`JobDone` 叫醒 Max，和 agent 的报告一样：`[job#2 完成] $ make`，下面是退出码和跑了多久，再是输出（超过 16 KiB 只有头尾，中间写明全文在哪）。到点停了是 `[job#2 到点停了，下面是做到一半的]`；VM 起不来这类是 `[job#2 失败]`。Max 自己用 `systemctl stop` 停掉也会叫醒它一次。
 - **提示词**：工具段说，一条命令要跑好几分钟就用 `background`，同一次输出里先在群里说一声，然后就停，等 `[job#N 完成]`。
 - **测试**：`vm-check` 在后台跑一条命令，命令自己 grep 它的输出文件，证明输出在跑的时候就写进去了；tank 上的嵌套测试检查这一段。
