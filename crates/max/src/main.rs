@@ -2,7 +2,8 @@
 //! structure without reading its secrets, which the NixOS module does when
 //! it builds the file; `max vm-check` boots a VM, runs a command in it, a
 //! program that calls the MCP service, one that opens a tab in the browser
-//! and one that finds the tab as the first left it.
+//! and one that finds the tab as the first left it, keeps a unit of its own
+//! in /work/.max/systemd and runs a background command.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{IsTerminal, Write};
@@ -172,8 +173,14 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
             args: None,
             timeout_ms: None,
         };
+        let units = Tool::Shell {
+            command: UNITS.into(),
+            workdir: None,
+            timeout_ms: None,
+            background: false,
+        };
         let mut outs = Vec::new();
-        for tool in [shell, program, browse(BROWSE), browse(BROWSE_AGAIN)] {
+        for tool in [shell, program, browse(BROWSE), browse(BROWSE_AGAIN), units] {
             outs.push(tools::run(tool, Some(&vms), context()?).await);
         }
         // A background command, as a conversation's actor runs one; its
@@ -212,6 +219,24 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
     }
     Ok(())
 }
+
+/// A unit of vm-check's own in /work/.max/systemd, which notes each boot
+/// it starts in: max-units starts it now, or the boot already has. The
+/// nested test runs vm-check twice: the second boot starts it before
+/// max-units is run, and both boots are noted.
+const UNITS: &str = r#"before=$(systemctl is-active boot-note.service || true)
+mkdir -p /work/.max/systemd
+cat > /work/.max/systemd/boot-note.service <<'EOF'
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/bin/sh -c 'cat /proc/sys/kernel/random/boot_id >> /work/.max/boot-notes'
+[Install]
+WantedBy=multi-user.target
+EOF
+max-units
+echo "开机时：$before"
+echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机""#;
 
 /// vm-check's tab in the browser: how long the browser took to start and
 /// the page to load, the snapshot, a field filled by its ref, a screenshot

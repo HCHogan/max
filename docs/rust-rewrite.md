@@ -1667,6 +1667,27 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 - **提示词**：工具段说，一条命令要跑好几分钟就用 `background`，同一次输出里先在群里说一声，然后就停，等 `[job#N 完成]`。
 - **测试**：`vm-check` 在后台跑一条命令，命令自己 grep 它的输出文件，证明输出在跑的时候就写进去了；tank 上的嵌套测试检查这一段。
 
+## 常驻程序
+
+2026-11-01 定，owner 提出。Max 自己要一直跑着的东西（定时提醒、每隔几分钟查一次 CI 或网页、一直连着的监听）不按来源一种一种地做（Haskell 版的 monitor 有 cron、消息匹配、外部轮询、HTTP 四种），给它一个通用的办法：在群 VM 里写普通的 systemd unit，用沙箱里已有的东西自己组合。`.timer` 就是 cron，`.path` 盯文件，`Restart=` 管崩溃。
+
+- **第一步（做了）：unit 跟着 `/work` 走。** VM 的 `/` 和 `/etc` 的可写层是 tmpfs，每次开机从 NixOS 配置重建；VM 闲 120 分钟、被挤掉、每次部署都会停。所以 unit 文件放在 `/work/.max/systemd/`，和记忆一样，这个目录就是登记表，不用表、不用工具。
+  - `max-units`（`nix/max-units.sh`）让这个目录成为在跑的那些：新的、改了的复制到 `/run/systemd/system`，service 加一个 drop-in 放进 `max-units.slice`；有 `[Install]` 的按这次开机启用并启动（`enable --runtime --now`）；改了且在跑的重启；目录里没了的停掉、删掉。和系统 unit 重名的不装（`/etc` 里的优先，装了也不生效）。最后列出每个的状态，失败的带上最后 10 行日志，有失败就非零退出。加锁，开机那次和 Max 手动那次不会撞上。
+  - 开机时 `max-units.service` 在 `/work` 挂好、网络和 nix-daemon 起来之后跑一次；Max 改了目录自己再跑 `max-units`。启动都不阻塞（`--no-block`），最多等 5 秒再报状态。
+  - `max-units.slice`：`CPUWeight=20`、`IOWeight=20`，给命令让路；`MemoryMax=50%`，吃不光内存。
+  - 手写的 unit 没有 PATH：NixOS 的 unit 各自设了，systemd 自带的默认值里没有 `/run/current-system/sw/bin`。所以 manager 的 `DefaultEnvironment` 设成系统的 PATH；unit 自己写的 `Environment=PATH=` 照样优先。
+  - **救命开关**：内核命令行带 `max.units=off`，开机就不装。坏掉的 unit（停了 sshd、关机、吃光内存）每次开机都会回来，这是唯一的出路；什么时候带上由宿主定，见第二步。
+  - 能活下来的只有 `/work` 和 Nix store：unit 要跑的东西放 `/work` 里，或者用 store 路径、`nix run`；`/root` 也是 tmpfs。每次部署程序都会重启，状态要写文件。
+  - **测试**：`vm-check` 在 `/work/.max/systemd` 放一个记下开机 id 的 unit，跑 `max-units`。嵌套测试跑两次 `vm-check`：第一次 `max-units` 起了它；第二次开机时它已经起了（`max-units` 跑之前就是 active），两次开机都记下了。
+  - 提示词还没提：VM 照旧会停，现在跟 Max 说"常驻"不对，等第二步一起加。
+- **第二步（待做）：宿主那边。**
+  - 常开：宿主直接读 `<vm.dir>/<会话>/work/.max/systemd/`，有 unit 的群 VM 不因闲置停、不被挤掉，maxx 启动时就开起来。常开的群有上限，提议 4 个（tank 62 GiB；正在跑的三个 VM 占 0.8、2.2、4.6 GiB，page cache 会让它慢慢往 16 GiB 涨）。会话 0 是 `vm-check` 的，不算。
+  - 叫醒：VM 里一个 `max-wake "……"`，经第二个 vsock 端口到宿主；每个 VM 在宿主上有自己的 socket，所以连上来的是哪个群不用 token。到 Max 那里是 `[自动化 m#2 触发] …`，长度按单条上限截。
+  - 限流：每次叫醒都是一个 turn。有核心在跑就当输入喂进去；空闲时每个群每小时最多约 6 次，多出来的并进下一次，带上条数。
+  - 开不起来：带 unit 的 VM 连着两次起不来，就带 `max.units=off` 再开一次，并告诉 Max。
+  - 提示词：常驻的东西写成 `/work/.max/systemd/` 里的 unit，改完跑 `max-units`；状态写文件；用 `max-wake` 叫醒自己。
+  - 以后：webhook 由宿主收，经同一个 socket 交给群里的程序。
+
 ## crate 划分
 
 2026-10-27 定。拆 crate 只认三个理由：强制依赖方向（编译器替你挡住违规 import）、隔离重依赖的编译时间、单独复用或发布。"这是一个功能"不算：lingo、embedder、召回向量都要用库、LLM 客户端和消息渲染，各拆一个只会多出一堆 Cargo.toml 和一张互相依赖的网，什么都没挡住。

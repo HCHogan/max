@@ -1,8 +1,9 @@
 # The groups' VMs on one machine, nested: the module makes the taps, the
 # firewall's rules and the service's sandbox, and vm-check boots the
 # flake's guest the way max does, runs a command in it, runs a program
-# whose history reaches the database through the MCP service, and one
-# that opens a page in the browser and saves a screenshot to /work.
+# whose history reaches the database through the MCP service, one that
+# opens a page in the browser and saves a screenshot to /work, and keeps a
+# unit in /work/.max/systemd, which the next boot starts again.
 { pkgs, module }:
 pkgs.testers.runNixOSTest {
   name = "max-vm";
@@ -48,6 +49,14 @@ pkgs.testers.runNixOSTest {
     assert '"tree":"检查\\n' in shown and 'button \\"搜索\\" [ref=e4]' in shown, shown
     # A background command's output is in its file while it runs.
     assert "后台命令：Done\n退出码 0，跑了" in shown and "后台起了\n1" in shown, shown
+    # A unit in /work/.max/systemd, started by max-units, with the
+    # system's commands on its PATH.
+    assert "boot-note.service：active" in shown, shown
+    assert "开机时：inactive" in shown and "记下了 1 次开机" in shown, shown
+    # The next boot starts it before vm-check runs max-units.
+    machine.succeed("systemctl start maxx-vm-check.service")
+    again = machine.succeed("journalctl -u maxx-vm-check.service -o cat")
+    assert "开机时：active" in again and "记下了 2 次开机" in again, again
     # The screenshot, among the test's outputs.
     machine.succeed("head -c 8 /var/lib/maxx/vm/0/work/.max/browser-check.png | grep -q PNG")
     machine.copy_from_vm("/var/lib/maxx/vm/0/work/.max/browser-check.png")

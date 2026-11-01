@@ -30,6 +30,10 @@ let
   profile = "/work/.max/chromium";
   # Chromium's own, without "HeadlessChrome" in it.
   userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${lib.versions.major pkgs.chromium.version}.0.0.0 Safari/537.36";
+  units = import ./max-units.nix {
+    inherit pkgs;
+    systemd = config.systemd.package;
+  };
 in
 {
   system.stateVersion = "26.05";
@@ -260,6 +264,37 @@ in
     };
   };
 
+  # Max's own units, in /work/.max/systemd: installed at every boot, and by
+  # max-units when Max changes them. They run in max-units.slice, which
+  # yields to commands and can't take all the memory. max.units=off on the
+  # command line leaves them out, for a VM they keep from coming up. See
+  # "常驻程序" in docs/rust-rewrite.md.
+  systemd.services.max-units = {
+    wantedBy = [ "multi-user.target" ];
+    after = [
+      "max-guest.service"
+      "network.target"
+      "nix-daemon.socket"
+    ];
+    unitConfig = {
+      RequiresMountsFor = "/work";
+      ConditionKernelCommandLine = "!max.units=off";
+    };
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = "${units}/bin/max-units";
+    };
+  };
+  systemd.slices.max-units.sliceConfig = {
+    CPUWeight = 20;
+    IOWeight = 20;
+    MemoryMax = "50%";
+  };
+  # Units without a PATH of their own, as Max's are, find the system's
+  # commands; NixOS's own units each set one.
+  systemd.settings.Manager.DefaultEnvironment = "PATH=/run/wrappers/bin:/run/current-system/sw/bin";
+
   # systemd-ssh-generator puts sshd on vsock port 22. Nothing reaches the
   # TCP listener, which therefore does not start.
   services.openssh = {
@@ -360,6 +395,8 @@ in
     # Background agents: pi, which programs can run too.
     (import ./max-pi.nix { inherit pkgs pi; })
     pi
+    # Max's own units; see max-units above.
+    units
     poppler-utils
     jq
     ripgrep

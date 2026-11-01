@@ -262,7 +262,8 @@ in
 
     # `systemctl start ${name}-vm-check` boots a VM on the last slot, runs
     # `uname -a` in it, a program that calls the MCP service and one that
-    # opens a page in the browser, and logs what the model would be shown.
+    # opens a page in the browser, keeps a unit in /work/.max/systemd and
+    # runs a background command, and logs what the model would be shown.
     systemd.services."${name}-vm-check" = lib.mkIf vm {
       description = "Boot one of max's VMs and run a command in it (${name})";
       wants = [ "${name}-taps.service" ];
