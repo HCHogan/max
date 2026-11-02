@@ -569,6 +569,7 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
     let late = Post {
         act: Act::Say(draft),
         origin: Some(turn),
+        program: false,
         receipt: Some(receipt),
     };
     h.mailbox.send(Event::Post(late)).unwrap();
@@ -628,6 +629,7 @@ fn post(act: Act) -> (Post, oneshot::Receiver<Result<MessageId, String>>) {
     let post = Post {
         act,
         origin: None,
+        program: false,
         receipt: Some(receipt),
     };
     (post, sent)
@@ -665,6 +667,56 @@ async fn a_post_takes_back_a_message(pool: PgPool) {
     assert!(refused.await.unwrap().is_err());
     h.stop().await;
     assert!(h.outbound.try_recv().is_err());
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_program_says_things_marked_as_its_own(pool: PgPool) {
+    let mut h = Harness::new(pool, 300).await;
+    let (reply, result) = oneshot::channel();
+    let call = Event::Call {
+        tool: "say".into(),
+        args: serde_json::json!({ "text": "早[split]CI 全绿" }),
+        reply,
+    };
+    h.mailbox.send(call).unwrap();
+    let mut ids = Vec::new();
+    for said in ["早", "CI 全绿"] {
+        let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let row = outgoing.message;
+        assert_eq!(
+            row.content,
+            Content::Message {
+                reply_to: None,
+                nodes: vec![Node::Text { text: said.into() }],
+            }
+        );
+        assert_eq!(row.turn, None);
+        outgoing.receipt.unwrap().send(Ok(row.id)).unwrap();
+        ids.push(row.id.0);
+    }
+    let result = tokio::time::timeout(PATIENCE, result).await.unwrap();
+    assert_eq!(result.unwrap(), Ok(serde_json::json!({ "messages": ids })));
+    let marked = "select count(*) from messages where raw->>'said_by' = 'program'";
+    assert_eq!(h.count(marked).await, 2);
+
+    // Max sees them as a program's.
+    h.script.push(Answer::says("嗯"));
+    h.send(from_xiaoming(0, vec![me(), text(" 刚才谁说的")]));
+    h.said().await;
+    let shown: String = h.script.requests.lock().unwrap()[0]
+        .items
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let line = format!(" #{} 程序发的]: 早", ids[0]);
+    assert!(shown.contains(&line), "{shown}");
+    h.stop().await;
 }
 
 fn finished(how: How, text: &str) -> Finished {

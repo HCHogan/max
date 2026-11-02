@@ -20,7 +20,7 @@ use max_db::summaries;
 use max_db::turns::{self, TailEnd};
 use sqlx::PgConnection;
 
-use super::Place;
+use super::{Place, ingest};
 use crate::tokens;
 
 /// What a projection reads besides the ledger.
@@ -85,7 +85,7 @@ impl Projection<'_> {
         let costs: Vec<u32> = tail
             .iter()
             .map(|row| {
-                let line = shown_line(&render, &row.message, delivery_mark(row), budgets.single);
+                let line = shown_line(&render, &row.message, own_mark(row), budgets.single);
                 tokens::count(&line)
             })
             .collect();
@@ -127,7 +127,7 @@ impl Projection<'_> {
         let lines: Vec<(&Message, String)> = tail
             .iter()
             .map(|row| {
-                let line = shown_line(&render, &row.message, delivery_mark(row), budgets.single);
+                let line = shown_line(&render, &row.message, own_mark(row), budgets.single);
                 (&row.message, line)
             })
             .collect();
@@ -293,11 +293,13 @@ pub(crate) fn summary((id, summary): (SummaryId, summaries::Summary)) -> Summary
     }
 }
 
-/// What became of Max's row, if it didn't reach the platform.
-pub fn delivery_mark(row: &Row) -> Mark {
+/// What became of Max's row, if it didn't reach the platform; else
+/// whether a program of Max's said it.
+pub fn own_mark(row: &Row) -> Mark {
     match row.delivery {
         Some(Delivery::Failed) => Mark::NotSent,
         Some(Delivery::Unknown) => Mark::MaybeNotSent,
+        Some(Delivery::Sent) | None if ingest::by_program(&row.message) => Mark::Program,
         Some(Delivery::Sent) | None => Mark::None,
     }
 }

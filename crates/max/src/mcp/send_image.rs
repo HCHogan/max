@@ -41,6 +41,7 @@ impl Tool for SendImage {
         "把 /work 下的一张图发到本群，比如画的图表、截的图、下载的图片。";
     const PER_RUN: Option<u32> = Some(PER_RUN);
     const JOB: bool = false;
+    const PROGRAM: bool = true;
 
     type Args = Args;
     type Output = Sent;

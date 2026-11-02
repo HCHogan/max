@@ -50,6 +50,8 @@ pub enum Mark {
     NotSent,
     /// Max said it and crashed before hearing back from the platform.
     MaybeNotSent,
+    /// A program Max keeps in the group's VM said it, outside any turn.
+    Program,
 }
 
 pub struct Render<'a, P> {
@@ -120,6 +122,7 @@ impl<P: People> Render<'_, P> {
         let note = match mark {
             Mark::MentionsYou => " @你",
             Mark::RepliesToYou => " 回复你",
+            Mark::Program => " 程序发的",
             _ => "",
         };
         format!("[{time} {name} #{}{note}]: ", message.id)

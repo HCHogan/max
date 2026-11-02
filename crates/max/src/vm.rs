@@ -47,12 +47,13 @@ pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
 /// What the VM service has for a conversation's actor.
 #[derive(Debug)]
 pub enum Signal {
-    /// A program in the VM ran `max-wake`: its text, and where to say
-    /// whether Max was woken.
-    Wake {
+    /// A program Max keeps in the VM calls a tool, outside any turn: the
+    /// conversation's actor runs it, and says how it went.
+    Call {
         conversation: ConversationId,
-        text: String,
-        reply: oneshot::Sender<Result<String, String>>,
+        tool: String,
+        args: serde_json::Value,
+        reply: oneshot::Sender<Result<serde_json::Value, mcp::Failure>>,
     },
     /// Something about the VM Max should hear.
     Notice {
@@ -61,7 +62,7 @@ pub enum Signal {
     },
 }
 
-/// What a VM's port asks of the service.
+/// What a VM's own route asks of the service.
 enum Internal {
     /// max-units ran: the group has `count` units.
     Units {
@@ -103,7 +104,7 @@ impl Vms {
         let guest = Guest::load(&config.guest)?;
         std::fs::create_dir_all(&config.dir)?;
         let (requests, rx) = mpsc::unbounded_channel();
-        let sessions = Sessions::default();
+        let sessions = Sessions::with_programs(signals.clone());
         let served = sessions.clone();
         scope.spawn(move |_| run(config, guest, served, signals, rx));
         Ok(Self { requests, sessions })
@@ -365,7 +366,6 @@ impl Service {
             machine,
             connection,
             mcp,
-            host,
         } = match result {
             Ok(booted) => booted,
             Err(error) => {
@@ -388,9 +388,8 @@ impl Service {
         let held = Arc::clone(&connection);
         tasks.spawn(move |_| ssh::stopper(held, stopped));
         let sessions = self.sessions.clone();
-        tasks.spawn(move |stop| mcp::serve(mcp, conversation, sessions, stop));
-        let (signals, internal) = (self.signals.clone(), self.internal.clone());
-        tasks.spawn(move |stop| host::serve(host, conversation, signals, internal, stop));
+        let host = host::router(conversation, self.internal.clone());
+        tasks.spawn(move |stop| mcp::serve_with(mcp, conversation, sessions, host, stop));
         let mut running = Running {
             slot,
             machine,

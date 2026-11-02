@@ -4,10 +4,10 @@ pkgs.writeShellApplication {
   name = "max-units";
   runtimeInputs = [
     pkgs.coreutils
+    pkgs.curl
     pkgs.diffutils
     pkgs.gnugrep
     pkgs.jq
-    pkgs.socat
     pkgs.util-linux
     systemd
   ];

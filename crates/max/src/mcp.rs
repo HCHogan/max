@@ -8,6 +8,7 @@ mod forward;
 mod github;
 mod history;
 mod mute_member;
+mod program;
 mod recall_message;
 mod send_file;
 mod send_image;
@@ -17,7 +18,7 @@ pub mod tool;
 mod web_search;
 pub(crate) mod work;
 
-pub use service::{Grant, Sessions, serve};
+pub use service::{Grant, Sessions, serve, serve_with};
 
 #[cfg(test)]
 mod runner_tests;
@@ -72,28 +73,39 @@ pub struct Context {
 
 /// Who calls, which decides the tools it has.
 pub enum Caller {
-    /// A turn's program: every tool, and what it says goes through the turn.
+    /// A turn's program or command: the tools marked `turn`, and what it
+    /// says goes through the turn; and the programs' own, which run as a
+    /// program's.
     Turn(Poster),
     /// A background agent: only the tools marked `job`, and its model
     /// calls forwarded to the upstream.
     Job(Arc<Upstream>),
+    /// A program Max keeps in the group's VM, outside any turn: only the
+    /// tools marked `program`, and what it says is the program's.
+    Program(Poster),
     /// `vm-check`'s program, and tests': nobody to say anything for.
     Check,
 }
 
 impl Caller {
-    /// Says things in the conversation for the turn that called.
+    /// Says things in the conversation for the turn, or the program, that
+    /// called.
     pub fn poster(&self) -> Option<&Poster> {
         match self {
-            Caller::Turn(poster) => Some(poster),
+            Caller::Turn(poster) | Caller::Program(poster) => Some(poster),
             Caller::Job(_) | Caller::Check => None,
         }
     }
 
-    /// Whether it may call the Max tool `name`; the runner's own requests
-    /// aren't Max tools.
+    /// Whether it may call the Max tool `name`. The runner's own requests
+    /// aren't Max tools: a turn's and a program's may make them.
     pub fn allows(&self, name: &str) -> bool {
-        !matches!(self, Caller::Job(_)) || tool::find(name).is_some_and(|tool| tool.job)
+        let tool = tool::find(name);
+        match self {
+            Caller::Turn(_) | Caller::Check => tool.is_none_or(|tool| tool.turn || tool.program),
+            Caller::Job(_) => tool.is_some_and(|tool| tool.job),
+            Caller::Program(_) => tool.map_or(name == chat_file::NAME, |tool| tool.program),
+        }
     }
 }
 
@@ -121,7 +133,7 @@ pub struct Failure {
 }
 
 impl Failure {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -134,6 +146,21 @@ impl From<sqlx::Error> for Failure {
         warn!(%error, "a Max tool's query failed");
         Self::new("internal", "数据库出错了，稍后再试。")
     }
+}
+
+/// Runs `name` for a program Max keeps in the group's VM, outside any
+/// turn: a tool marked `program`, or the runner's max.file.
+pub async fn program_call(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
+    if !context.caller.allows(name) {
+        return Err(Failure::new(
+            "not_allowed",
+            format!("常驻程序用不了 {name}"),
+        ));
+    }
+    if name == chat_file::NAME {
+        return chat_file::run(context, args).await;
+    }
+    call(name, context, args).await
 }
 
 /// Runs the Max tool `name`.

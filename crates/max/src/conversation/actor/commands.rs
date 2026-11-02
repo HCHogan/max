@@ -153,7 +153,7 @@ impl Conversation {
                 text: command::answer(name, body),
             }],
         };
-        self.say(draft, None, None, None).await?;
+        self.say(draft, None, None, false, None).await?;
         Ok(())
     }
 

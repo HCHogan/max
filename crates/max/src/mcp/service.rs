@@ -2,7 +2,10 @@
 //! A program authenticates with its run's token, which is good only while
 //! the run lasts and only from its own conversation's VM. A background
 //! agent's session calls only the tools that read, and its model calls go
-//! through the same service; see [`super::forward`].
+//! through the same service; see [`super::forward`]. A call with no token
+//! is from a program Max keeps in the VM, outside any turn: the VM says
+//! which group it is, and the group's actor runs it; see "常驻程序" in
+//! docs/rust-rewrite.md.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -19,13 +22,15 @@ use rmcp::transport::streamable_http_server::session::never::NeverSessionManager
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde_json::{Value, json};
-use tokio::sync::Semaphore;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::{Semaphore, oneshot};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::tool::{self, Spec};
 use super::{Caller, Context, Failure, chat_file, forward, show};
+use crate::vm::Signal;
 
 /// One call's wall clock.
 const CALL_TIME: Duration = Duration::from_secs(60);
@@ -39,9 +44,14 @@ const JOB_RUNS: u32 = 10;
 /// timeline, where the model sees whether it happened.
 const MAYBE_DONE: &str = "会动群的操作可能已经生效，先看记录再决定要不要再来";
 
-/// The open sessions, by token.
+/// The open sessions, by token, and where calls without one go.
 #[derive(Clone, Default)]
-pub struct Sessions(Arc<Mutex<HashMap<String, Arc<Session>>>>);
+pub struct Sessions {
+    table: Arc<Mutex<HashMap<String, Arc<Session>>>>,
+    /// To the conversations' actors, for the programs Max keeps in the
+    /// VMs; None where there are none, as in most tests.
+    programs: Option<UnboundedSender<Signal>>,
+}
 
 pub(super) struct Session {
     pub(super) context: Context,
@@ -65,6 +75,15 @@ pub struct Grant {
 }
 
 impl Sessions {
+    /// Sessions whose VMs' programs call through `programs` without a
+    /// token.
+    pub fn with_programs(programs: UnboundedSender<Signal>) -> Self {
+        Self {
+            programs: Some(programs),
+            ..Self::default()
+        }
+    }
+
     /// A session for `context`'s caller, in its conversation.
     pub fn open(&self, context: Context) -> Grant {
         let token = format!(
@@ -106,7 +125,32 @@ impl Sessions {
     }
 
     fn table(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Session>>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.table.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Has `conversation`'s actor run a program's call: its result.
+    async fn program(
+        &self,
+        conversation: ConversationId,
+        tool: String,
+        args: Value,
+    ) -> Result<Value, Failure> {
+        let Some(programs) = &self.programs else {
+            return Err(Failure::new("unavailable", "这里没有常驻程序的通道"));
+        };
+        let (reply, result) = oneshot::channel();
+        let call = Signal::Call {
+            conversation,
+            tool,
+            args,
+            reply,
+        };
+        programs
+            .send(call)
+            .map_err(|_| Failure::new("closed", "Max 正在停"))?;
+        result
+            .await
+            .unwrap_or_else(|_| Err(Failure::new("closed", "Max 没做完就停了")))
     }
 }
 
@@ -152,6 +196,20 @@ pub async fn serve<L>(
     L: axum::serve::Listener,
     L::Addr: std::fmt::Debug,
 {
+    serve_with(listener, conversation, sessions, axum::Router::new(), stop).await;
+}
+
+/// As `serve`, with the VM service's own routes, `host`.
+pub async fn serve_with<L>(
+    listener: L,
+    conversation: ConversationId,
+    sessions: Sessions,
+    host: axum::Router,
+    stop: CancellationToken,
+) where
+    L: axum::serve::Listener,
+    L::Addr: std::fmt::Debug,
+{
     // Clients of the protocol before 2026-07-28, such as pi's, begin with
     // `initialize`; with no sessions, each of their requests stands alone.
     let config = StreamableHttpServerConfig::default()
@@ -169,7 +227,8 @@ pub async fn serve<L>(
     );
     let app = axum::Router::new()
         .nest_service("/mcp", service)
-        .merge(forward::router(conversation, sessions));
+        .merge(forward::router(conversation, sessions))
+        .merge(host);
     if let Err(error) = axum::serve(listener, app)
         .with_graceful_shutdown(stop.cancelled_owned())
         .await
@@ -186,16 +245,50 @@ struct Handler {
 
 impl Handler {
     /// The session whose token the request carries, if it is open and
-    /// belongs to this VM's conversation.
-    fn session(&self, request: &RequestContext<RoleServer>) -> Result<Arc<Session>, ErrorData> {
+    /// belongs to this VM's conversation; None for a request with no
+    /// token, a program's outside any turn.
+    fn session(
+        &self,
+        request: &RequestContext<RoleServer>,
+    ) -> Result<Option<Arc<Session>>, ErrorData> {
         let authorization = request
             .extensions
             .get::<Parts>()
-            .and_then(|parts| parts.headers.get("authorization"))
-            .and_then(|value| value.to_str().ok());
+            .and_then(|parts| parts.headers.get("authorization"));
+        let Some(authorization) = authorization else {
+            return Ok(None);
+        };
         self.sessions
-            .bearer(authorization, self.conversation)
+            .bearer(authorization.to_str().ok(), self.conversation)
+            .map(Some)
             .ok_or_else(|| ErrorData::invalid_request("token 不对，或者这次运行已经结束了", None))
+    }
+
+    /// A program's call outside any turn, which the group's actor runs.
+    async fn program(
+        &self,
+        call: CallToolRequestParams,
+        request: RequestContext<RoleServer>,
+    ) -> Result<Value, Failure> {
+        let allowed =
+            tool::find(&call.name).map_or(call.name == chat_file::NAME, |spec| spec.program);
+        if !allowed {
+            return Err(Failure::new(
+                "not_allowed",
+                format!("常驻程序用不了 {}", call.name),
+            ));
+        }
+        let args = Value::Object(call.arguments.unwrap_or_default());
+        let called = self
+            .sessions
+            .program(self.conversation, call.name.to_string(), args);
+        tokio::select! {
+            result = timeout(CALL_TIME, called) => result.unwrap_or_else(|_| Err(Failure::new(
+                "timeout",
+                format!("{} 秒内没做完；{MAYBE_DONE}", CALL_TIME.as_secs()),
+            ))),
+            () = request.ct.cancelled() => Err(Failure::new("cancelled", format!("调用取消了；{MAYBE_DONE}"))),
+        }
     }
 }
 
@@ -210,12 +303,12 @@ impl ServerHandler for Handler {
         request: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let session = self.session(&request)?;
+        let allows = |spec: &&Spec| match &session {
+            Some(session) => session.context.caller.allows(spec.name),
+            None => spec.program,
+        };
         Ok(ListToolsResult {
-            tools: tool::TOOLS
-                .iter()
-                .filter(|spec| session.context.caller.allows(spec.name))
-                .map(listed)
-                .collect(),
+            tools: tool::TOOLS.iter().filter(allows).map(listed).collect(),
             ..ListToolsResult::default()
         })
     }
@@ -226,13 +319,34 @@ impl ServerHandler for Handler {
         request: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let session = self.session(&request)?;
+        // What only programs call runs as a program's, from a turn's
+        // command too: so Max can try out the program it writes.
+        let program_only = tool::find(&call.name).is_some_and(|spec| spec.program && !spec.turn);
+        let session = match session {
+            Some(session) if !program_only || matches!(session.context.caller, Caller::Job(_)) => {
+                session
+            }
+            _ => {
+                let result = match self.program(call, request).await {
+                    Ok(value) => CallToolResult::structured(value),
+                    Err(Failure { code, message }) => CallToolResult::structured_error(
+                        json!({ "code": code, "message": message }),
+                    ),
+                };
+                return Ok(result.into());
+            }
+        };
         let args = Value::Object(call.arguments.unwrap_or_default());
         let started = if session.context.caller.allows(&call.name) {
             session.start(&call.name)
         } else {
+            let whose = match session.context.caller {
+                Caller::Job(_) => "后台 agent",
+                _ => "这一轮",
+            };
             Err(Failure::new(
                 "not_allowed",
-                format!("后台 agent 用不了 {}", call.name),
+                format!("{whose}用不了 {}", call.name),
             ))
         };
         let outcome = match started {
@@ -287,7 +401,7 @@ impl Session {
         };
         let (most, whose) = match self.context.caller {
             Caller::Job(_) => (most * JOB_RUNS, "一个后台 agent"),
-            Caller::Turn(_) | Caller::Check => (most, "一次运行"),
+            Caller::Turn(_) | Caller::Program(_) | Caller::Check => (most, "一次运行"),
         };
         let mut started = self.started.lock().unwrap_or_else(PoisonError::into_inner);
         let count = started.entry(name).or_default();

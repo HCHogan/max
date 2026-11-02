@@ -309,14 +309,18 @@ async fn a_program_in_the_vm_wakes_a_group_nobody_has_written_in(pool: PgPool) {
     drop(conn);
     s.script.push(Answer::says("CI 挂了两个"));
     let (reply, answered) = oneshot::channel();
-    let wake = Signal::Wake {
+    let wake = Signal::Call {
         conversation: place.conversation,
-        text: "CI 跑完了：2 failed".into(),
+        tool: "wake".into(),
+        args: serde_json::json!({ "text": "CI 跑完了：2 failed" }),
         reply,
     };
     s.signals.send(wake).unwrap();
     let answered = tokio::time::timeout(PATIENCE, answered).await.unwrap();
-    assert_eq!(answered.unwrap(), Ok("叫醒了 Max".into()));
+    assert_eq!(
+        answered.unwrap(),
+        Ok(serde_json::json!({ "said": "叫醒了 Max" }))
+    );
     assert_eq!(
         s.said().await,
         ("group:GROUP1".into(), "CI 挂了两个".into())

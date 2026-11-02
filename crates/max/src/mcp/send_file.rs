@@ -43,6 +43,7 @@ impl Tool for SendFile {
         "把 /work 下的一个文件发到本群，比如生成的文档、表格、压缩包。";
     const PER_RUN: Option<u32> = Some(PER_RUN);
     const JOB: bool = false;
+    const PROGRAM: bool = true;
 
     type Args = Args;
     type Output = Sent;

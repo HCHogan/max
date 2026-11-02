@@ -25,6 +25,7 @@ use crate::conversation::testing::{from_xiaoming, group, group_named, offset, te
 use crate::inbound::InNode;
 use crate::media::store::Store;
 use crate::scope::Scope;
+use crate::vm::Signal;
 
 const RUNNER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../nix/runner.js");
 const MAXX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../nix/maxx.js");
@@ -41,7 +42,11 @@ async fn run(mcp: &str, token: &str, code: &str) -> Ran {
 
 /// Runs `input` with Max's tools.
 async fn run_with(mut input: Value) -> Ran {
-    let tools: Vec<&str> = TOOLS.iter().map(|tool| tool.name).collect();
+    let tools: Vec<&str> = TOOLS
+        .iter()
+        .filter(|tool| tool.turn)
+        .map(|tool| tool.name)
+        .collect();
     input["tools"] = json!(tools);
     let mut node = Command::new("node")
         .arg(RUNNER)
@@ -426,7 +431,10 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     .unwrap();
     drop(conn);
     let conversation = place.conversation;
-    let sessions = Sessions::default();
+    // A program's calls, which the group's actor would run, are answered
+    // with what was called.
+    let (programs, mut called) = tokio::sync::mpsc::unbounded_channel();
+    let sessions = Sessions::with_programs(programs);
     let grant = sessions.open(Context {
         services: Arc::new(Services {
             store: Some(Arc::clone(&store)),
@@ -442,6 +450,18 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     let mut scope = Scope::new();
     let served = sessions.clone();
     scope.spawn(move |stop| serve(listener, conversation, served, stop));
+    scope.spawn(move |_| async move {
+        while let Some(Signal::Call {
+            conversation: to,
+            tool,
+            args,
+            reply,
+        }) = called.recv().await
+        {
+            assert_eq!(to, conversation);
+            let _ = reply.send(Ok(json!({ "tool": tool, "args": args })));
+        }
+    });
     let token = Some(grant.token());
     let id = hello.message.id.0;
     let read = format!("[12:01 小明 #{id}]: 你好");
@@ -513,10 +533,47 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     );
     assert_eq!(grant.shown().len(), 1);
 
-    // Outside a run, and in one that ended.
-    let outside = maxx(&mcp, None, &["history"], "").await;
-    assert_eq!(outside.status, 2);
-    assert!(outside.stderr.contains("MAXX_TOKEN"), "{}", outside.stderr);
+    // What only programs call runs as a program's, from a run too.
+    let woken = maxx(&mcp, token, &["wake", "到点了"], "").await;
+    let woken: Value = serde_json::from_str(&woken.stdout).unwrap();
+    assert_eq!(
+        woken,
+        json!({ "tool": "wake", "args": { "text": "到点了" } })
+    );
+
+    // Outside a run, as a program Max keeps in the VM: fewer tools, and
+    // each call the group's.
+    let listed = maxx(&mcp, None, &[], "").await;
+    assert_eq!(listed.status, 0, "{}", listed.stderr);
+    for (name, listed_too) in [
+        ("history", true),
+        ("say", true),
+        ("file", true),
+        ("show", false),
+        ("mute_member", false),
+        ("agent", false),
+    ] {
+        let line = format!("\n  {name}  ");
+        assert_eq!(
+            listed.stdout.contains(&line),
+            listed_too,
+            "{name}: {}",
+            listed.stdout
+        );
+    }
+    let said = maxx(&mcp, None, &["say", "[reply#1] 好"], "").await;
+    let said: Value = serde_json::from_str(&said.stdout).unwrap();
+    assert_eq!(
+        said,
+        json!({ "tool": "say", "args": { "text": "[reply#1] 好" } })
+    );
+    let muted = maxx(&mcp, None, &["mute-member", "1"], "").await;
+    assert_eq!(muted.status, 2);
+    assert!(
+        muted.stderr.contains("没有 mute-member 这个工具"),
+        "{}",
+        muted.stderr
+    );
     let token = grant.token().to_owned();
     drop(grant);
     let ended = maxx(&mcp, Some(&token), &["history"], "").await;

@@ -1,11 +1,12 @@
 // maxx: Max's tools on the command line, for shell commands and programs
 // in any language in a group's VM. It calls the MCP service as the run
 // it is part of, by the token in MAXX_TOKEN, which shell commands and
-// run_code's programs have. Its options come from the tools' schemas, as
-// the service lists them: nothing here is about one tool. See "maxx" in
-// docs/rust-rewrite.md.
+// run_code's programs have; without one, as a program Max keeps in the
+// VM, such as a unit's, with fewer tools. Its options come from the
+// tools' schemas, as the service lists them: nothing here is about one
+// tool. See "maxx" in docs/rust-rewrite.md.
 //
-//   maxx                                   the tools this run may call
+//   maxx                                   the tools this caller may call
 //   maxx history --help                    one tool's arguments
 //   maxx history --who 小明 --limit 5       a call: its result as JSON
 //   maxx history 示波器                     the same, by position
@@ -17,36 +18,37 @@
 
 const { MCP, connect } = require("./client.js");
 
-// The runner's own calls, which tools/list leaves out.
+// The runner's own calls, which tools/list leaves out; show only a run's.
 const OWN = {
-  show: { tool: "max.image", argument: "path", description: "把 /work 下的一张图给你自己看，跟在这次 shell 或 run_code 的结果后面：maxx show 路径" },
+  show: { tool: "max.image", argument: "path", run: true, description: "把 /work 下的一张图给你自己看，跟在这次 shell 或 run_code 的结果后面：maxx show 路径" },
   file: { tool: "max.file", argument: "handle", description: "把本群记录里的一个文件拷进 /work/chat，返回 {path, name, size}：maxx file file#123.0" },
 };
 
 class Usage extends Error {}
 
 async function main(argv) {
-  const token = process.env.MAXX_TOKEN;
-  if (!token) throw new Usage("maxx 只能在 Max 这一轮的 shell 或 run_code 里用：别处没有 MAXX_TOKEN");
+  const token = process.env.MAXX_TOKEN || undefined;
   const client = connect({ url: process.env.MAXX_MCP ?? MCP, token });
+  const own = Object.fromEntries(Object.entries(OWN).filter(([, call]) => token || !call.run));
   const [first, ...rest] = argv;
   if (first === undefined || first === "help" || first === "--help" || first === "-h") {
-    return [listing(await tools(client)), 0];
+    return [listing(await tools(client), own), 0];
   }
   const name = first.replaceAll("-", "_");
-  const own = OWN[name];
+  const called = own[name];
   let tool;
-  if (own) {
-    tool = { name: own.tool, description: own.description, inputSchema: { type: "object", properties: { [own.argument]: { type: "string" } }, required: [own.argument] } };
+  if (called) {
+    tool = { name: called.tool, description: called.description, inputSchema: { type: "object", properties: { [called.argument]: { type: "string" } }, required: [called.argument] } };
   } else {
     const listed = await tools(client);
     tool = listed.find(tool => tool.name === name);
-    if (!tool) throw new Usage(`没有 ${first} 这个工具；能用的：${[...listed.map(tool => tool.name), ...Object.keys(OWN)].join("、")}`);
+    if (!tool) throw new Usage(`没有 ${first} 这个工具；能用的：${[...listed.map(tool => tool.name), ...Object.keys(own)].join("、")}`);
   }
-  if (rest.includes("--help") || rest.includes("-h")) return [help(own ? name : tool.name, tool), 0];
+  const shown = called ? name : tool.name;
+  if (rest.includes("--help") || rest.includes("-h")) return [help(shown, tool), 0];
   const args = await parse(rest, tool.inputSchema);
   const outcome = await client.request(tool.name, args);
-  if (!outcome.ok) return [`${own ? name : tool.name}: ${outcome.error.message}（${outcome.error.code}）`, 1];
+  if (!outcome.ok) return [`${shown}: ${outcome.error.message}（${outcome.error.code}）`, 1];
   const value = outcome.value;
   return [typeof value === "string" ? value : JSON.stringify(value, null, 2), 0];
 }
@@ -59,15 +61,15 @@ async function tools(client) {
 
 class Failed extends Error {}
 
-function listing(tools) {
-  const width = Math.max(...[...tools.map(tool => tool.name), ...Object.keys(OWN)].map(name => name.length));
+function listing(tools, own) {
+  const width = Math.max(...[...tools.map(tool => tool.name), ...Object.keys(own)].map(name => name.length));
   const line = (name, description) => `  ${name.padEnd(width)}  ${description}`;
   return [
     "用法：maxx 工具名 --参数 值 ...，或者 maxx 工具名 '{\"参数\": 值}'，或者 maxx 工具名 - 从标准输入读 JSON。",
     "结果是 JSON，打印到标准输出；失败时原因打印到标准错误，退出码 1。maxx 工具名 --help 看参数。",
     "工具：",
     ...tools.map(tool => line(tool.name, tool.description)),
-    ...Object.entries(OWN).map(([name, own]) => line(name, own.description)),
+    ...Object.entries(own).map(([name, call]) => line(name, call.description)),
   ].join("\n");
 }
 

@@ -133,7 +133,11 @@ async fn run_code(
     let unit = Vm::unit();
     // The runner has the token from its input.
     let line = unit_line(&unit, limit, "/work", "exec node /run/max/runner.js", None);
-    let tools: Vec<&str> = mcp::tool::TOOLS.iter().map(|tool| tool.name).collect();
+    let tools: Vec<&str> = mcp::tool::TOOLS
+        .iter()
+        .filter(|tool| tool.turn)
+        .map(|tool| tool.name)
+        .collect();
     let input = json!({ "code": code, "args": args, "token": grant.token(), "tools": tools });
     let mut split = Split {
         out: Output::new(vm.work(), format!("{unit}.txt")),

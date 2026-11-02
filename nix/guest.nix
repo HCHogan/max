@@ -34,7 +34,7 @@ let
     inherit pkgs;
     systemd = config.systemd.package;
   };
-  wake = import ./max-wake.nix { inherit pkgs; };
+  wake = import ./max-wake.nix { inherit pkgs runner; };
 in
 {
   system.stateVersion = "26.05";
@@ -212,8 +212,9 @@ in
     '';
   };
 
-  # run_code's programs reach Max's MCP service at 127.0.0.1:7777. It is on
-  # the host, at the hybrid vsock's port 7777: one socat per connection.
+  # run_code's programs, maxx, and max-units reach Max's MCP service at
+  # 127.0.0.1:7777. It is on the host, at the hybrid vsock's port 7777: one
+  # socat per connection.
   systemd.sockets.max-mcp = {
     wantedBy = [ "sockets.target" ];
     listenStreams = [ "127.0.0.1:7777" ];
@@ -272,8 +273,10 @@ in
   # "常驻程序" in docs/rust-rewrite.md.
   systemd.services.max-units = {
     wantedBy = [ "multi-user.target" ];
+    # It tells Max's service how many there are, through max-mcp.
     after = [
       "max-guest.service"
+      "max-mcp.socket"
       "network.target"
       "nix-daemon.socket"
     ];

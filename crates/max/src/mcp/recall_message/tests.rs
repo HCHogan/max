@@ -46,7 +46,7 @@ async fn said(pool: &PgPool, place: &Place, sent: &Sent<'_>, at: DateTime<Utc>) 
         nodes: vec![DraftNode::Text { text: "一".into() }],
     };
     let mut conn = pool.acquire().await.unwrap();
-    let said = ingest::said(&mut conn, place, draft, None, None, at, offset());
+    let said = ingest::said(&mut conn, place, draft, None, None, false, at, offset());
     let id = said.await.unwrap().unwrap().id;
     ledger::record_delivery(&mut conn, id, place.endpoint, sent, at)
         .await

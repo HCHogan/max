@@ -71,6 +71,7 @@ async fn a_chart_goes_out_with_its_caption(pool: PgPool) {
                 draft,
                 None,
                 None,
+                false,
                 Utc::now(),
                 offset(),
             );

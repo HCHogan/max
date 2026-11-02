@@ -1,6 +1,7 @@
 // The client of Max's MCP service that run_code's runner and the maxx
 // command share: a call is one POST, the outcome {ok: true, value} or
-// {ok: false, error: {code, message}}. See "MCP 通道" in
+// {ok: false, error: {code, message}}. Without a token it calls as a
+// program Max keeps in the VM, outside any turn. See "MCP 通道" in
 // docs/rust-rewrite.md.
 "use strict";
 
@@ -15,7 +16,7 @@ class ToolError extends Error {
   }
 }
 
-// A client for the run whose token it is, at url.
+// A client for the run whose token it is, if any, at url.
 function connect({ url = MCP, token }) {
   let nextId = 1;
 
@@ -31,7 +32,7 @@ function connect({ url = MCP, token }) {
           "mcp-protocol-version": VERSION,
           "mcp-method": method,
           ...(params.name ? { "mcp-name": params.name } : {}),
-          authorization: `Bearer ${token}`,
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
@@ -65,7 +66,7 @@ function connect({ url = MCP, token }) {
     return { ok: true, value: structuredContent };
   }
 
-  // The tools this run may call, with their schemas.
+  // The tools this run, or program, may call, with their schemas.
   async function list() {
     const outcome = await post("tools/list", {});
     return outcome.ok ? { ok: true, value: outcome.value.tools } : outcome;

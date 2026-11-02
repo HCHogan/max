@@ -32,6 +32,7 @@ impl Tool for WebSearch {
     const DESCRIPTION: &'static str = "搜索网页，返回前几条结果的标题、链接、摘要和发布日期。";
     const PER_RUN: Option<u32> = Some(PER_RUN);
     const JOB: bool = true;
+    const PROGRAM: bool = true;
 
     type Args = Args;
     type Output = Results;

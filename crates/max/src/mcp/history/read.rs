@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::Filters;
-use crate::conversation::project::{delivery_mark, joined, people, shown_line};
+use crate::conversation::project::{joined, own_mark, people, shown_line};
 use crate::mcp::{Context, Failure};
 use crate::tokens;
 
@@ -123,7 +123,7 @@ async fn row(context: &Context, id: i64) -> Result<Vec<String>, Failure> {
         people: &people,
         offset: context.services.offset,
     };
-    let line = render.line(&row.message, delivery_mark(&row));
+    let line = render.line(&row.message, own_mark(&row));
     Ok(pages(&line, context.page_tokens))
 }
 
@@ -160,7 +160,7 @@ async fn lines(
     let lines: Vec<(&Message, String)> = rows
         .iter()
         .map(|row| {
-            let mark = delivery_mark(row);
+            let mark = own_mark(row);
             let line = shown_line(&render, &row.message, mark, context.page_tokens);
             (&row.message, line)
         })

@@ -69,6 +69,7 @@ async fn a_report_goes_out_under_its_name(pool: PgPool) {
                 draft,
                 None,
                 None,
+                false,
                 Utc::now(),
                 offset(),
             );

@@ -39,7 +39,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
             text: "在的，说吧".into(),
         }],
     };
-    let mine = said(&mut conn, &place, draft, None, None, at(1), offset())
+    let mine = said(&mut conn, &place, draft, None, None, false, at(1), offset())
         .await
         .unwrap()
         .unwrap();
@@ -114,7 +114,7 @@ async fn what_max_says_is_checked(pool: PgPool) {
             },
         ],
     };
-    let mine = said(&mut conn, &place, draft, None, None, at(1), offset())
+    let mine = said(&mut conn, &place, draft, None, None, false, at(1), offset())
         .await
         .unwrap()
         .unwrap();
@@ -234,6 +234,7 @@ async fn pictures_max_sends_again(pool: PgPool) {
             picture(ordinal),
             None,
             None,
+            false,
             at(1),
             offset(),
         )

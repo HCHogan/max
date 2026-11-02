@@ -1461,7 +1461,7 @@ struct Verdict { trigger: bool, reason: String }
   - **用法**：`maxx 工具名 --参数 值`、`--参数=值`、单独的 `--参数` 是 true、`--no-参数` 是 false；或者给一个 JSON 对象，`-` 从标准输入读；没写名字的词按顺序填必填参数，再填其余的。参数按 `tools/list` 列出的 schema 转类型；数组参数重复写就是多项。`maxx` 列出工具，`maxx 工具名 --help` 看参数和说明。runner 自己的两个调用不在 `tools/list` 里，`maxx` 单独认：`maxx show 路径`（`max.image`）、`maxx file 句柄`（`max.file`）。
   - **结果**：成功打印 JSON 到标准输出；工具失败把"工具: 原因（code）"写到标准错误，退出码 1；命令行写错退出码 2。
   - **会话**：前台的 `shell` 和 `run_code` 一样开 MCP 会话，token 经 `systemd-run --setenv` 放进命令的环境变量 `MAXX_TOKEN`；runner 也把自己的 token 放进 `process.env`，程序起的子进程能用 `maxx`。所以命令里调的工具也计入"调了 Max 的工具"那一行，`maxx show` 的图跟在 `shell` 的结果后面。后台命令比这一轮活得久，没有 token。
-  - **以后**：没有 token 的调用（常驻程序、后台命令）按群算，只开放一部分工具，`maxx say`、`maxx wake`、`maxx events` 也走这里，见[常驻程序](#常驻程序)。
+  - **没有 token**（常驻程序、后台命令，11-02 做）：按群算，只开放一部分工具，`maxx say`、`maxx wake` 也在这里，见[常驻程序](#常驻程序)的第三步。
 - **工具说明**：系统提示里放 Max 工具的 TypeScript 声明，带返回类型，内容固定。
 - **skill 只是文档。** `use_skill` 是普通的 Max 工具，返回说明书和相关工具的声明，和别的结果一样只往上下文后面追加。能调哪些工具由群和会话决定，一个 turn 里不变，不随 skill 加载变化。所以核心里没有"活动工具集"，Responses 的 `tool_search` 和 Chat 的元工具也都不需要。
 - **调用格式**：用最通用的 function tool，参数是 JSON。代码是原文还是转义进 JSON 字符串，取决于模型自己的工具调用格式：Claude 的字符串参数和 Qwen 3.5/3.6 的 XML 参数是原文；GPT 和 Gemini 要转义，Gemini 偶尔还会多转义一层（gemini-cli 专门写了修正代码）。aider 2024 年测过，代码包进 JSON 后，所有被测模型的通过率都下降了，幅度不一。暂不处理，见[待定事项](#待定事项)。
@@ -1687,7 +1687,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
   - **测试**：`vm-check` 在 `/work/.max/systemd` 放一个记下开机 id 的 unit，跑 `max-units`。嵌套测试跑两次 `vm-check`：第一次 `max-units` 起了它；第二次开机时它已经起了（`max-units` 跑之前就是 active），两次开机都记下了。
   - 提示词在第二步加：只有第一步时 VM 照旧会停，跟 Max 说"常驻"不对。
 - **第二步（做了，11-01）：宿主那边。**
-  - **宿主的端口**：每个 VM 第二个 hybrid vsock 端口 7778，宿主上是 `<VM 目录>/notify.vsock_7778`，和 MCP 的 7777 一样开机前就 listen（`vm/host.rs`）。一次连接一行 JSON，最长 64 KiB、10 秒：`{"wake": "……"}` 或 `{"units": 2}`，回 `{"ok": true, "said": "……"}`。每个 VM 有自己的 socket，连上来的是哪个群不用 token。一次接一个，都很短，能堵住它的只有本群自己的程序。
+  - ~~**宿主的端口**~~（11-02 去掉，见第三步）：每个 VM 第二个 hybrid vsock 端口 7778，一次连接一行 JSON：`{"wake": "……"}` 或 `{"units": 2}`，回 `{"ok": true, "said": "……"}`。每个 VM 有自己的 socket，连上来的是哪个群不用 token。
   - **常开**：`[vm] kept`，默认 4 个群（tank 62 GiB；11-01 在跑的三个 VM 占 0.8、2.2、4.6 GiB，page cache 会让它慢慢往 16 GiB 涨）。常开的 VM 不因闲置关、不被挤掉，扫的时候没在跑就开起来。哪些群常开：
     - maxx 启动时读 `<vm.dir>/<会话>/work/.max/systemd/`，有 unit 文件的（和 `max-units` 认的后缀一样，链接不算）按会话 id 取前 4 个，马上开。会话 0 是 `vm-check` 的，不算。
     - 之后听 `max-units`：它每次跑完（开机那次和 Max 手动的）把 unit 个数报给宿主，有就常开（满了就不，回话里说），0 个就不再常开。回话 `max-units` 原样打出来，Max 看得到这个群的 VM 会不会一直开着。
@@ -1697,6 +1697,18 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
   - **提示词**：VM 闲置会关那句加上"有常驻程序的群除外"；后台命令后面加一段：要一直跑、到点跑、盯着什么的，写成 `/work/.max/systemd/` 里的 unit，跑 `max-units`；`.timer`、`.path`、`Restart=on-failure`；ExecStart 写绝对路径；状态写进 `/work`；用 `systemctl status`、`journalctl -u` 查；`max-wake` 叫醒自己，一小时 6 次，只在真有新情况时叫。
   - **测试**：`vm-check` 自己接 `Signal`，回"vm-check 收到了"。嵌套测试看 `max-units` 说这个 VM 会一直开着，`max-wake` 到了 `vm-check`。会话表的测试：一个没人说过话、actor 没在跑的群被 `max-wake` 叫醒，Max 回话，`[VM]` 送到同一个 actor。限流、常开名额、启动时的扫描各有纯测试。
   - 以后：webhook 由宿主收，经同一个端口交给群里的程序。
+- **第三步（做了，11-02）：程序用 `maxx` 调工具。** owner 提的：程序不光叫醒 Max，也能自己在群里说话、读记录，和 Max 用同一套工具，见 [`maxx`](#纯-codemode)。
+  - **没有 token 的调用**：MCP 服务收到不带 `authorization` 的请求，就当成这个 VM 里常驻程序的。哪个群还是由 VM 自己的 socket 定。`tools/list` 只列标了 `program` 的工具；`tools/call` 作为 `Signal::Call` 经会话表交给这个群的 actor（没在跑就起一个，和叫醒一样），actor 用 `Caller::Program` 的上下文在 `side` 里跑，不进核心、不算哪一轮。60 秒超时，和别的调用一样。
+  - **能用的**：`history`、`find_stickers`、`web_search`、`send_image`、`send_file`、`max.file`（`maxx file`），加上只给程序的 `say` 和 `wake`（`mcp/program.rs`）。不给：`mute_member`、`recall_message`（不经 Max 判断就动群里的人）、`agent` 一类（没人看着花钱）、`github_*`、`max.image`（给模型看图，程序没有模型）。
+  - **`say`**：参数是一段 Max 回话写法的文字，过同一个分段器：`[reply#id]`、`[mention#id]`、`[sticker#id.n]`、`[image#id.n]`、`[split]`、空行分条；`[mention#id]` 的人要是这个群认得的（`platform::roster`），和模型的输出一样。不做结构化的参数：一种写法，Max 本来就会。一条一条发，等平台回执，返回 `{messages: [id, …]}`；中间失败的，原因里写已经发了哪几条。
+  - **`wake`**：原来的 `max-wake`，经 `Poster::wake` 送 `Event::Woken`，限流照旧。`max-wake` 留着，成了 `maxx wake` 外面一层（参数或标准输入，打印 `said`）：Max 11-01 以来写的 unit 都在用它，在各群的 `/work` 里，不能替它们改。
+  - **限流**：程序发的消息每个群每小时最多 30 条（`actor/program.rs`），`say` 分出的每条、每张图、每个文件都算一条，超了这条不发，回"这一小时程序已经发了 30 条"。QQ 的配额是每群每分钟 20 条、每天 1000 条，30 条是给程序留的，不让它挤掉 Max 自己的话。
+  - **记录里的标记**：程序发的行 `raw` 是 `{"said_by": "program"}`（Max 别的行是 null），不加列，不用迁移。渲染时头部多一个 ` 程序发的`（`Mark::Program`）：`[12:00 maxx #45 程序发的]: ……`，`history` 和尾巴都一样，Max 分得清哪些是自己说的、哪些是程序说的。跑着的核心看不到它们（和命令的回答一样），下一个核心的尾巴里有。
+  - **这一轮里也能试**：只给程序的工具（`say`、`wake`），带 token 调也当成程序的，经同一条路去 actor：Max 写好的脚本在 `shell` 里先跑一遍，`say` 不会被拒，发出去的也标着程序发的。后台 agent 带 token 调还是拒。
+  - **7778 去掉**：`max-units` 改用 `curl` POST `http://127.0.0.1:7777/units`（`{"units": 2}`，回话不变），走 MCP 的 socat，和 `/mcp`、`/llm` 同一个服务（`vm/host.rs` 现在是这个路由）；叫醒走 `maxx wake`。每个 VM 少一个 socket 和一个任务。`max-units.service` 排在 `max-mcp.socket` 后面。
+  - **提示词**：`max-wake` 换成 `maxx wake`；加一段：不用 Max 判断的话程序自己用 `maxx say` 说，写法和回话一样，一小时 30 条，标着"程序发的"；发图发文件用 `maxx send-image`、`send-file`；unit 和后台命令里只能用的那几个工具。
+  - **测试**：runner 测试里不带 token 的 `maxx` 只列出程序的工具（有 `say`、`file`，没有 `show`、`mute_member`、`agent`），调用作为 `Signal::Call` 送出；带 token 的 `maxx wake` 也走这条路。actor 测试：`say` 分两条发，回执给了才返回编号，`raw` 带标记，下一个核心看到 `程序发的`。`vm-check` 的后台命令跑 `max-wake`（没有 token），`vm-check` 接 `Signal::Call` 回"vm-check 收到了"；`max-units` 经 `/units` 报 unit 数。
+  - 以后：`maxx events`，群里的消息作为流给程序（第三阶段）。
 
 ## crate 划分
 

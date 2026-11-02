@@ -27,6 +27,7 @@ pub use actor::{Conversation, Outgoing, Shared};
 use crate::historian::Compacted;
 use crate::inbound::Inbound;
 use crate::job;
+use crate::mcp;
 
 /// What arrives in an actor's mailbox: everything that happens to a
 /// conversation, in the order the actor handles it.
@@ -83,6 +84,13 @@ pub enum Event {
     },
     /// The VM service has something to say about the group's VM.
     VmNotice(String),
+    /// A program Max keeps in the group's VM calls a tool, outside any
+    /// turn, and waits for the result.
+    Call {
+        tool: String,
+        args: serde_json::Value,
+        reply: oneshot::Sender<Result<serde_json::Value, mcp::Failure>>,
+    },
     /// Max restarts: end the core, within a grace, then stop.
     Stop,
 }
@@ -94,6 +102,8 @@ pub struct Post {
     pub act: Act,
     /// The turn it comes from, if any: the row's turn.
     pub origin: Option<TurnId>,
+    /// From a program Max keeps in the group's VM, outside any turn.
+    pub program: bool,
     /// Told how the sending went.
     pub receipt: Option<Receipt>,
 }
@@ -109,17 +119,40 @@ pub enum Act {
 /// didn't go out.
 pub type Receipt = oneshot::Sender<Result<MessageId, String>>;
 
-/// Lets a tool act in its turn's conversation: say something, or run a
-/// background agent.
+/// Lets a tool act in its conversation: say something, or run a
+/// background agent, for its turn, or for a program Max keeps in the
+/// group's VM.
 #[derive(Clone, Debug)]
 pub struct Poster {
     mailbox: UnboundedSender<Event>,
-    origin: TurnId,
+    /// None for a program's.
+    origin: Option<TurnId>,
 }
 
 impl Poster {
     pub fn new(mailbox: UnboundedSender<Event>, origin: TurnId) -> Self {
-        Self { mailbox, origin }
+        Self {
+            mailbox,
+            origin: Some(origin),
+        }
+    }
+
+    /// For a program Max keeps in the group's VM.
+    pub fn program(mailbox: UnboundedSender<Event>) -> Self {
+        Self {
+            mailbox,
+            origin: None,
+        }
+    }
+
+    /// Wakes Max with a program's `text`: what the program is told, or
+    /// why not.
+    pub async fn wake(&self, text: String) -> Result<String, String> {
+        let (reply, answer) = oneshot::channel();
+        self.mailbox
+            .send(Event::Woken { text, reply })
+            .map_err(|_| "这个群的会话已经停了".to_owned())?;
+        answer.await.map_err(|_| "没等到回答".to_owned())?
     }
 
     /// Says `draft`, and waits until it is sent.
@@ -139,7 +172,7 @@ impl Poster {
         self.mailbox
             .send(Event::Jobs {
                 request,
-                origin: Some(self.origin),
+                origin: self.origin,
                 reply,
             })
             .map_err(|_| "这个群的会话已经停了".to_owned())?;
@@ -150,7 +183,8 @@ impl Poster {
         let (receipt, sent) = oneshot::channel();
         let post = Post {
             act,
-            origin: Some(self.origin),
+            origin: self.origin,
+            program: self.origin.is_none(),
             receipt: Some(receipt),
         };
         self.mailbox

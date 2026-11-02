@@ -27,9 +27,7 @@ use max_db::{PgPool, ledger, platform, turns, usage};
 use tracing::{info, warn};
 
 use crate::conversation::Place;
-use crate::conversation::project::{
-    delivery_mark, joined, people, roster_lines, shown_line, summary,
-};
+use crate::conversation::project::{joined, own_mark, people, roster_lines, shown_line, summary};
 use crate::llm::{Chosen, Models};
 use crate::tokens;
 
@@ -139,7 +137,7 @@ impl Historian {
         let lines: Vec<(&Message, String)> = rows
             .iter()
             .map(|row| {
-                let line = shown_line(&render, &row.message, delivery_mark(row), budgets.single);
+                let line = shown_line(&render, &row.message, own_mark(row), budgets.single);
                 (&row.message, line)
             })
             .collect();

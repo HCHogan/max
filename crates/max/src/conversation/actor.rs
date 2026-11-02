@@ -91,6 +91,8 @@ pub struct Conversation {
     jobs: jobs::Jobs,
     /// The wakes from the group's programs lately, and the held ones.
     woken: woken::Woken,
+    /// What the group's programs said lately.
+    program_said: program::Said,
 }
 
 struct Active {
@@ -151,6 +153,7 @@ impl Conversation {
             mailbox,
             jobs: jobs::Jobs::default(),
             woken: woken::Woken::default(),
+            program_said: program::Said::default(),
         })
     }
 
@@ -215,7 +218,7 @@ impl Conversation {
                 reply_to: None,
                 nodes: vec![DraftNode::Text { text }],
             };
-            self.say(draft, None, None, None).await?;
+            self.say(draft, None, None, false, None).await?;
         }
         Ok(())
     }
@@ -255,7 +258,7 @@ impl Conversation {
                 a.segments += 1;
                 let (turn, index) = (a.turn, a.segments);
                 let said = self
-                    .say(segment.draft, Some(turn), Some(index), None)
+                    .say(segment.draft, Some(turn), Some(index), false, None)
                     .await?;
                 if let Some(message) = said
                     && let Some(a) = self.core.as_mut()
@@ -307,6 +310,10 @@ impl Conversation {
             Event::JobDone { job, finished } => self.job_done(job, finished).await,
             Event::Woken { text, reply } => self.woken(text, reply).await,
             Event::VmNotice(text) => self.vm_notice(text).await,
+            Event::Call { tool, args, reply } => {
+                self.program_call(tool, args, reply);
+                Ok(())
+            }
             Event::Stop => {
                 self.stop();
                 Ok(())
@@ -720,7 +727,7 @@ impl Conversation {
             reply_to: Some(trigger),
             nodes: vec![DraftNode::Text { text: why.into() }],
         };
-        self.say(draft, None, None, None).await?;
+        self.say(draft, None, None, false, None).await?;
         Ok(())
     }
 
@@ -736,22 +743,28 @@ impl Conversation {
         Some("这一轮已经结束了，没做".to_owned())
     }
 
-    /// What a tool says or does. Only a running core's tools post so far,
-    /// and their programs' results tell the core what they did.
+    /// What a tool says or does: a running core's, whose programs' results
+    /// tell the core what they did, or a program's Max keeps in the VM.
     async fn post(&mut self, post: Post) -> Result<()> {
         let Post {
             act,
             origin,
+            program,
             receipt,
         } = post;
-        if let Some(refused) = self.ended(origin) {
+        let refused = if program {
+            self.program_says()
+        } else {
+            self.ended(origin)
+        };
+        if let Some(refused) = refused {
             if let Some(receipt) = receipt {
                 let _ = receipt.send(Err(refused));
             }
             return Ok(());
         }
         let committed = match act {
-            Act::Say(draft) => self.say(draft, origin, None, receipt).await?,
+            Act::Say(draft) => self.say(draft, origin, None, program, receipt).await?,
             Act::Unsend(target) => self.unsend(target, origin, receipt).await?,
         };
         if let Some(message) = committed
@@ -771,6 +784,7 @@ impl Conversation {
         draft: Draft,
         turn: Option<TurnId>,
         segment: Option<i32>,
+        program: bool,
         receipt: Option<Receipt>,
     ) -> Result<Option<Message>> {
         let mut conn = self.shared.services.pool.acquire().await?;
@@ -780,6 +794,7 @@ impl Conversation {
             draft,
             turn,
             segment,
+            program,
             Utc::now(),
             self.shared.services.offset,
         )
@@ -838,6 +853,7 @@ impl Conversation {
 
 mod commands;
 mod jobs;
+mod program;
 #[cfg(test)]
 mod tests;
 mod woken;

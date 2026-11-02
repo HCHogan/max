@@ -46,6 +46,7 @@ impl Tool for FindStickers {
     const DESCRIPTION: &'static str = "在表情包库里按意思找表情包，返回句柄和描述，只找不发。";
     const PER_RUN: Option<u32> = Some(PER_RUN);
     const JOB: bool = false;
+    const PROGRAM: bool = true;
 
     type Args = Args;
     type Output = Found;

@@ -97,7 +97,8 @@ for name in "${wanted[@]}"; do
     journalctl -u "$name" -n 10 --no-pager -o cat || true
   fi
 done
-if answer=$(jq -cn --argjson units "${#wanted[@]}" '{units: $units}' | socat -t 15 - VSOCK-CONNECT:2:7778 2> /dev/null); then
+report=$(jq -cn --argjson units "${#wanted[@]}" '{units: $units}')
+if answer=$(curl -sf --max-time 15 -H 'content-type: application/json' -d "$report" http://127.0.0.1:7777/units 2> /dev/null); then
   jq -r '.said // empty' <<< "$answer"
 fi
 exit "$failed"

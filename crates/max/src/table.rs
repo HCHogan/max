@@ -180,11 +180,12 @@ impl Table {
     /// To the conversation's actor, started if it isn't running.
     async fn signal(&mut self, signal: Signal) -> Result<()> {
         let (conversation, event) = match signal {
-            Signal::Wake {
+            Signal::Call {
                 conversation,
-                text,
+                tool,
+                args,
                 reply,
-            } => (conversation, Event::Woken { text, reply }),
+            } => (conversation, Event::Call { tool, args, reply }),
             Signal::Notice { conversation, text } => (conversation, Event::VmNotice(text)),
         };
         if let Some(key) = self.chats.get(&conversation)

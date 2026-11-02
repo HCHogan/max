@@ -126,22 +126,34 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
         let mut services = Scope::new();
         let (signals, mut heard) = mpsc::unbounded_channel();
         let vms = Vms::start(vm, &mut services, signals)?;
-        // What max-wake would wake Max with, answered here.
+        // What maxx wake would wake Max with, answered here; the other
+        // calls of programs aren't.
         let woken = Arc::new(Mutex::new(Vec::new()));
         let noted = Arc::clone(&woken);
         services.spawn(move |_| async move {
             while let Some(signal) = heard.recv().await {
                 let (text, reply) = match signal {
-                    Signal::Wake { text, reply, .. } => (text, Some(reply)),
+                    Signal::Call {
+                        tool, args, reply, ..
+                    } if tool == "wake" => {
+                        let text = args["text"].as_str().unwrap_or_default().to_owned();
+                        (text, Some(reply))
+                    }
+                    Signal::Call { tool, reply, .. } => {
+                        let refused =
+                            mcp::Failure::new("unavailable", format!("vm-check 不答 {tool}"));
+                        let _ = reply.send(Err(refused));
+                        continue;
+                    }
                     Signal::Notice { text, .. } => (text, None),
                 };
-                // Noted before max-wake hears back, and vm-check goes on.
+                // Noted before maxx wake hears back, and vm-check goes on.
                 noted
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .push(text);
                 if let Some(reply) = reply {
-                    let _ = reply.send(Ok("vm-check 收到了".to_owned()));
+                    let _ = reply.send(Ok(serde_json::json!({ "said": "vm-check 收到了" })));
                 }
             }
         });
@@ -213,11 +225,14 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
             outs.push(tools::run(tool, Some(&vms), context()?).await);
         }
         // A background command, as a conversation's actor runs one; its
-        // output is in its file before it ends.
+        // output is in its file before it ends. It has no run's token, as
+        // a unit hasn't: maxx calls as a program's.
         let unit = Vm::unit();
         let file = format!("/work/.max/out/{unit}.txt");
         let shell = tools::Background {
-            command: format!("echo 后台起了; sleep 1; grep -c 后台起了 {file}"),
+            command: format!(
+                "echo 后台起了; sleep 1; grep -c 后台起了 {file}; max-wake 'vm-check 叫醒了自己'"
+            ),
             workdir: None,
             limit: Duration::from_secs(60),
             unit,
@@ -259,15 +274,14 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
 }
 
 /// maxx from a command: a call the history refuses, as the program's was,
-/// and the browser's screenshot shown to the model.
+/// and the tools it lists.
 const MAXX: &str = r#"maxx history --around 1; echo "maxx 退出码 $?"
-maxx show /work/.max/browser-check.png"#;
+maxx | grep -c '^  history  '"#;
 
 /// A unit of vm-check's own in /work/.max/systemd, which notes each boot
 /// it starts in: max-units starts it now, or the boot already has. The
 /// nested test runs vm-check twice: the second boot starts it before
-/// max-units is run, and both boots are noted. Then max-wake, which
-/// vm-check answers.
+/// max-units is run, and both boots are noted.
 const UNITS: &str = r#"before=$(systemctl is-active boot-note.service || true)
 mkdir -p /work/.max/systemd
 cat > /work/.max/systemd/boot-note.service <<'EOF'
@@ -280,8 +294,7 @@ WantedBy=multi-user.target
 EOF
 max-units
 echo "开机时：$before"
-echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机"
-max-wake "vm-check 叫醒了自己""#;
+echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机""#;
 
 /// vm-check's tab in the browser: how long the browser took to start and
 /// the page to load, the snapshot, a field filled by its ref, a screenshot

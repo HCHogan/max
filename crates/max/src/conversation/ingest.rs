@@ -202,15 +202,28 @@ fn words(text: &str) -> String {
     out
 }
 
-/// What Max says: a segment of a turn's output, or a command's answer.
-/// A quote of something that isn't a message on this timeline is dropped,
-/// and so is a picture Max may not send; None if nothing is left.
+/// The key in the raw payload of what a program Max keeps in the group's
+/// VM says, whose value is [`PROGRAM`]. Max's other rows have none.
+pub const SAID_BY: &str = "said_by";
+pub const PROGRAM: &str = "program";
+
+/// Whether a program Max keeps in the group's VM said `message`.
+pub fn by_program(message: &Message) -> bool {
+    message.raw.get(SAID_BY).and_then(|by| by.as_str()) == Some(PROGRAM)
+}
+
+/// What Max says: a segment of a turn's output, a command's answer, or,
+/// if `program`, what a program Max keeps in the group's VM says. A quote
+/// of something that isn't a message on this timeline is dropped, and so
+/// is a picture Max may not send; None if nothing is left.
+#[allow(clippy::too_many_arguments)]
 pub async fn said(
     conn: &mut PgConnection,
     place: &Place,
     draft: Draft,
     turn: Option<TurnId>,
     segment: Option<i32>,
+    program: bool,
     now: DateTime<Utc>,
     offset: FixedOffset,
 ) -> sqlx::Result<Option<Message>> {
@@ -287,7 +300,12 @@ pub async fn said(
         offset,
     }
     .content(&content);
-    let message = mine(&mut tx, place, content, &rendered, turn, segment, now).await?;
+    let raw = if program {
+        serde_json::json!({ SAID_BY: PROGRAM })
+    } else {
+        serde_json::Value::Null
+    };
+    let message = mine(&mut tx, place, content, &rendered, raw, turn, segment, now).await?;
     for (ordinal, sha256) in (0..).zip(&files) {
         media::link(&mut tx, message.id, ordinal, sha256).await?;
     }
@@ -316,16 +334,19 @@ pub async fn unsend(
         offset,
     }
     .content(&content);
-    let message = mine(conn, place, content, &rendered, turn, None, now).await?;
+    let raw = serde_json::Value::Null;
+    let message = mine(conn, place, content, &rendered, raw, turn, None, now).await?;
     Ok(Some(message))
 }
 
 /// Commits a row in Max's name.
+#[allow(clippy::too_many_arguments)]
 async fn mine(
     conn: &mut PgConnection,
     place: &Place,
     content: Content,
     rendered: &str,
+    raw: serde_json::Value,
     turn: Option<TurnId>,
     segment: Option<i32>,
     now: DateTime<Utc>,
@@ -335,7 +356,6 @@ async fn mine(
         name: place.my_name.clone(),
         role: None,
     };
-    let raw = serde_json::Value::Null;
     let id = ledger::insert(
         conn,
         &NewMessage {

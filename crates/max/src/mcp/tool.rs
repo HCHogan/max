@@ -21,6 +21,7 @@ use super::find_stickers::FindStickers;
 use super::github::{GitHubApi, GitHubPush};
 use super::history::History;
 use super::mute_member::MuteMember;
+use super::program::{Say, Wake};
 use super::recall_message::RecallMessage;
 use super::send_file::SendFile;
 use super::send_image::SendImage;
@@ -38,6 +39,14 @@ pub trait Tool: 'static {
     /// Whether a background agent may call it: it doesn't speak or act in
     /// the group.
     const JOB: bool;
+    /// Whether a turn's programs and commands may: the system prompt
+    /// declares only these.
+    const TURN: bool = true;
+    /// Whether the programs Max keeps in the group's VM may, outside any
+    /// turn: nothing that acts without Max's judgement, such as muting
+    /// someone, or spends unwatched, such as a background agent. See
+    /// "常驻程序" in docs/rust-rewrite.md.
+    const PROGRAM: bool = false;
 
     type Args: DeserializeOwned + JsonSchema;
     type Output: Serialize + JsonSchema;
@@ -59,6 +68,8 @@ pub struct Spec {
     pub description: &'static str,
     pub per_run: Option<u32>,
     pub job: bool,
+    pub turn: bool,
+    pub program: bool,
     /// JSON Schemas.
     pub input: Arc<Map<String, Value>>,
     pub output: Arc<Map<String, Value>>,
@@ -67,8 +78,9 @@ pub struct Spec {
     run: for<'a> fn(&'a Context, Value) -> BoxFuture<'a, Result<Value, Failure>>,
 }
 
-/// Every Max tool, as the system prompt declares them. The prompt is the
-/// same for every request, so that it stays cached: the list is fixed.
+/// Every Max tool, the system prompt's in the order it declares them. The
+/// prompt is the same for every request, so that it stays cached: the
+/// list is fixed.
 pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
     vec![
         spec::<History>(),
@@ -84,12 +96,18 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec::<AgentSteer>(),
         spec::<AgentCancel>(),
         spec::<AgentStatus>(),
+        spec::<Say>(),
+        spec::<Wake>(),
     ]
 });
 
-/// Their declarations, for the system prompt.
+/// The declarations of a turn's tools, for the system prompt.
 pub static DECLARATIONS: LazyLock<String> = LazyLock::new(|| {
-    let declarations: Vec<&str> = TOOLS.iter().map(|tool| tool.declaration.as_str()).collect();
+    let declarations: Vec<&str> = TOOLS
+        .iter()
+        .filter(|tool| tool.turn)
+        .map(|tool| tool.declaration.as_str())
+        .collect();
     declarations.join("\n\n")
 });
 
@@ -120,6 +138,8 @@ fn spec<T: Tool>() -> Spec {
         description: T::DESCRIPTION,
         per_run: T::PER_RUN,
         job: T::JOB,
+        turn: T::TURN,
+        program: T::PROGRAM,
         input: Arc::new(input),
         output: Arc::new(output),
         declaration,
