@@ -7,6 +7,12 @@
 
 const MCP = "http://127.0.0.1:7777/mcp";
 const VERSION = "2026-07-28";
+// A stream of the timeline with nothing on it this long, not even the
+// heartbeat the host sends every 30 seconds, is opened again.
+const QUIET = 90_000;
+// How long to wait before opening it again, at first and at most.
+const RETRY = 1_000;
+const MOST_RETRY = 30_000;
 
 class ToolError extends Error {
   constructor(tool, error) {
@@ -75,4 +81,66 @@ function connect({ url = MCP, token }) {
   return { request, list };
 }
 
-module.exports = { MCP, ToolError, connect };
+// The group's rows after the one numbered `after`, or from now, as the
+// host's /events sends them, an object each; `told` hears why a stream
+// broke and when it opens again. A stream that ends or goes quiet is
+// opened again after the last row, so this never ends. See "常驻程序" in
+// docs/rust-rewrite.md.
+async function* events({ url = new URL("/events", MCP).href, after, told = () => {} } = {}) {
+  let last = after;
+  let wait = RETRY;
+  for (;;) {
+    const quiet = new AbortController();
+    let timer;
+    const listen = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => quiet.abort(), QUIET);
+    };
+    let why;
+    try {
+      listen();
+      const response = await fetch(last === undefined ? url : `${url}?after=${last}`, { signal: quiet.signal });
+      if (!response.ok) throw new Error(await refused(response));
+      const head = response.headers.get("max-head");
+      if (last === undefined && head !== null) last = Number(head);
+      wait = RETRY;
+      const decoder = new TextDecoder();
+      let read = "";
+      for await (const chunk of response.body) {
+        // The program may take its time with a row.
+        clearTimeout(timer);
+        read += decoder.decode(chunk, { stream: true });
+        let end;
+        while ((end = read.indexOf("\n")) >= 0) {
+          const line = read.slice(0, end);
+          read = read.slice(end + 1);
+          if (line === "") continue;
+          const row = JSON.parse(line);
+          last = row.id;
+          yield row;
+        }
+        listen();
+      }
+      why = "断了";
+    } catch (error) {
+      why = quiet.signal.aborted ? `${QUIET / 1000} 秒没有动静` : error.message;
+    } finally {
+      clearTimeout(timer);
+    }
+    told(why, wait);
+    await new Promise(resolve => setTimeout(resolve, wait));
+    wait = Math.min(wait * 2, MOST_RETRY);
+  }
+}
+
+// Why the host refused a stream.
+async function refused(response) {
+  const text = await response.text();
+  try {
+    return JSON.parse(text).error.message;
+  } catch {
+    return `HTTP ${response.status}：${text}`;
+  }
+}
+
+module.exports = { MCP, ToolError, connect, events };

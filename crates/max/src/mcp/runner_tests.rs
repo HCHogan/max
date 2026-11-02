@@ -549,6 +549,7 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
         ("history", true),
         ("say", true),
         ("file", true),
+        ("events", true),
         ("show", false),
         ("mute_member", false),
         ("agent", false),

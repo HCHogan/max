@@ -187,6 +187,10 @@ impl Table {
                 reply,
             } => (conversation, Event::Call { tool, args, reply }),
             Signal::Notice { conversation, text } => (conversation, Event::VmNotice(text)),
+            Signal::Subscribe {
+                conversation,
+                reply,
+            } => (conversation, Event::Subscribe(reply)),
         };
         if let Some(key) = self.chats.get(&conversation)
             && let Some(actor) = self.actors.get(key)

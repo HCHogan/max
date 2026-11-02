@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 
+use max_core::ids::MessageId;
 use max_core::item::ItemKind;
 use max_core::message::{Content, Node, Role};
 use tokio::sync::oneshot;
@@ -337,6 +338,19 @@ async fn a_program_in_the_vm_wakes_a_group_nobody_has_written_in(pool: PgPool) {
     assert_eq!(s.said().await.1, "VM 出问题了，我去看看");
     let shown = s.request_tail(1);
     assert!(shown.contains("[VM] VM 没开起来"), "{shown}");
+    // And a program following the timeline, from what was said last.
+    let head: i64 = sqlx::query_scalar("select max(id) from messages")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    let (reply, subscribed) = oneshot::channel();
+    let subscribe = Signal::Subscribe {
+        conversation: place.conversation,
+        reply,
+    };
+    s.signals.send(subscribe).unwrap();
+    let subscription = tokio::time::timeout(PATIENCE, subscribed).await.unwrap();
+    assert_eq!(subscription.unwrap().head, MessageId(head));
     s.stop().await;
 }
 

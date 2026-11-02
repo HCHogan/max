@@ -11,12 +11,15 @@
 //   maxx history --who 小明 --limit 5       a call: its result as JSON
 //   maxx history 示波器                     the same, by position
 //   maxx history '{"query": "示波器"}'      or as JSON; - reads it from stdin
+//   maxx events --after 123                the group's rows after #123 as
+//                                          they come, a JSON line each
 //
 // The result goes to stdout; a failure's reason to stderr, with exit
 // status 1. A wrong command line exits with 2.
 "use strict";
 
-const { MCP, connect } = require("./client.js");
+const { once } = require("node:events");
+const { MCP, connect, events } = require("./client.js");
 
 // The runner's own calls, which tools/list leaves out; show only a run's.
 const OWN = {
@@ -24,16 +27,21 @@ const OWN = {
   file: { tool: "max.file", argument: "handle", description: "把本群记录里的一个文件拷进 /work/chat，返回 {path, name, size}：maxx file file#123.0" },
 };
 
+// Not a call: the timeline, from the host's /events.
+const EVENTS = "群里的新消息，一条一行 JSON，一直跑下去：maxx events [--after 编号]";
+
 class Usage extends Error {}
 
 async function main(argv) {
   const token = process.env.MAXX_TOKEN || undefined;
-  const client = connect({ url: process.env.MAXX_MCP ?? MCP, token });
+  const mcp = process.env.MAXX_MCP ?? MCP;
+  const client = connect({ url: mcp, token });
   const own = Object.fromEntries(Object.entries(OWN).filter(([, call]) => token || !call.run));
   const [first, ...rest] = argv;
   if (first === undefined || first === "help" || first === "--help" || first === "-h") {
     return [listing(await tools(client), own), 0];
   }
+  if (first === "events") return [await follow(new URL("/events", mcp).href, rest), 0];
   const name = first.replaceAll("-", "_");
   const called = own[name];
   let tool;
@@ -62,7 +70,7 @@ async function tools(client) {
 class Failed extends Error {}
 
 function listing(tools, own) {
-  const width = Math.max(...[...tools.map(tool => tool.name), ...Object.keys(own)].map(name => name.length));
+  const width = Math.max(...[...tools.map(tool => tool.name), ...Object.keys(own), "events"].map(name => name.length));
   const line = (name, description) => `  ${name.padEnd(width)}  ${description}`;
   return [
     "用法：maxx 工具名 --参数 值 ...，或者 maxx 工具名 '{\"参数\": 值}'，或者 maxx 工具名 - 从标准输入读 JSON。",
@@ -70,8 +78,38 @@ function listing(tools, own) {
     "工具：",
     ...tools.map(tool => line(tool.name, tool.description)),
     ...Object.entries(own).map(([name, call]) => line(name, call.description)),
+    line("events", EVENTS),
   ].join("\n");
 }
+
+// maxx events: the rows, a JSON line each, until whoever reads them stops.
+async function follow(url, words) {
+  if (words.includes("--help") || words.includes("-h")) return EVENTS_HELP;
+  let after;
+  for (let i = 0; i < words.length; i++) {
+    const [flag, inline] = words[i].startsWith("--") ? split(words[i].slice(2)) : [undefined];
+    if (flag !== "after") throw new Usage(`events 只认 --after 编号，不认 ${words[i]}`);
+    const text = inline ?? words[++i];
+    if (text === undefined || !/^#?\d+$/.test(text)) throw new Usage("--after 要一条消息的编号");
+    after = Number(text.replace("#", ""));
+  }
+  // Whoever read the rows is gone.
+  process.stdout.on("error", () => process.exit(0));
+  const told = (why, wait) => process.stderr.write(`maxx events: ${why}，${wait / 1000} 秒后重连\n`);
+  for await (const row of events({ url, after, told })) {
+    if (!process.stdout.write(`${JSON.stringify(row)}\n`)) await once(process.stdout, "drain");
+  }
+}
+
+const EVENTS_HELP = [
+  `events：${EVENTS}`,
+  "每来一条消息打印一行 JSON：{id, at, sender, person, by, reply_to, text}。",
+  "  text 和 history 里的写法一样；person 是发的人的编号，[mention#person] @他；",
+  "  by 是 max 或 program 的是 Max 自己或程序发的，没有 by 的是群友发的；reply_to 是回复的那条。",
+  "断了自己重连，从断前的最后一条接着给。",
+  "参数：",
+  "  --after 编号  从这条之后的给起，最多补最近 1000 条；不写就从现在起。",
+].join("\n");
 
 function help(name, tool) {
   const properties = Object.entries(tool.inputSchema?.properties ?? {});

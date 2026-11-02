@@ -675,6 +675,33 @@ async fn a_program_says_things_marked_as_its_own(pool: PgPool) {
     h.stop().await;
 }
 
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_program_follows_the_rows_as_they_are_committed(pool: PgPool) {
+    let mut h = Harness::new(pool, 300).await;
+    h.script.push(Answer::says("早"));
+    h.send(from_xiaoming(0, vec![me(), text(" 在吗")]));
+    let (said, _) = h.said().await;
+    let (reply, subscribed) = oneshot::channel();
+    h.mailbox.send(Event::Subscribe(reply)).unwrap();
+    let mut subscription = tokio::time::timeout(PATIENCE, subscribed)
+        .await
+        .unwrap()
+        .unwrap();
+    // The rows up to the head are in the database; those after come.
+    assert_eq!(subscription.head, said.id);
+    h.script.push(Answer::says("在"));
+    h.send(from_xiaoming(1, vec![me(), text(" 真在吗")]));
+    let (answer, _) = h.said().await;
+    let asked = subscription.rows.recv().await.unwrap();
+    assert_eq!(asked.sender.name, "小明");
+    let answered = subscription.rows.recv().await.unwrap();
+    assert_eq!(answered.id, answer.id);
+    assert!(asked.id > said.id && asked.id < answer.id);
+    // The actor stopped: the stream ends.
+    h.stop().await;
+    assert!(subscription.rows.recv().await.is_err());
+}
+
 fn finished(how: How, text: &str) -> Finished {
     Finished {
         ending: Ending {

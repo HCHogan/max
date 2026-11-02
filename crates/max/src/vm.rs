@@ -4,6 +4,7 @@
 //! borrows a VM's SSH connection. See "VM 进程" and "常驻程序" in
 //! docs/rust-rewrite.md.
 
+mod events;
 mod host;
 mod machine;
 pub mod ssh;
@@ -26,6 +27,7 @@ use tracing::{info, warn};
 use self::machine::{BOOT, Booted, Guest, Machine};
 use self::ssh::{Command, Connection, Input};
 use crate::config;
+use crate::conversation::Subscription;
 use crate::mcp::api::{self, Apis};
 use crate::mcp::{self, Sessions};
 use crate::scope::Scope;
@@ -60,6 +62,11 @@ pub enum Signal {
     Notice {
         conversation: ConversationId,
         text: String,
+    },
+    /// A program in the VM follows the conversation's timeline.
+    Subscribe {
+        conversation: ConversationId,
+        reply: oneshot::Sender<Subscription>,
     },
 }
 
@@ -406,7 +413,12 @@ impl Service {
         let sessions = self.sessions.clone();
         let host = host::router(conversation, self.internal.clone())
             .merge(api::router(conversation, Arc::clone(&self.apis)));
-        tasks.spawn(move |stop| mcp::serve_with(mcp, conversation, sessions, host, stop));
+        let signals = self.signals.clone();
+        tasks.spawn(move |stop| {
+            // The timeline's streams end with the service, which waits for them.
+            let host = host.merge(events::router(conversation, signals, stop.clone()));
+            mcp::serve_with(mcp, conversation, sessions, host, stop)
+        });
         let mut running = Running {
             slot,
             machine,

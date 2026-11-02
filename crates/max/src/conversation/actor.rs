@@ -19,13 +19,16 @@ use max_core::render::Mark;
 use max_core::run::{FailReason, Input, Outcome, Run, RunSpec, Step, Wake};
 use max_db::platform::{self, Settings};
 use max_db::{ledger, turns, usage};
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};
 
 use super::ingest;
 use super::project::{self, Projection};
-use super::{Act, Event, Place, Post, Poster, Receipt, TaskId, classify, model, tool};
+use super::{
+    Act, Event, Place, Post, Poster, Receipt, Subscription, TaskId, classify, model, tool,
+};
 use crate::bind::Binds;
 use crate::inbound::Inbound;
 use crate::llm::{self, Chosen, Models};
@@ -35,6 +38,10 @@ use crate::scope::Scope;
 use crate::tokens;
 use crate::vm::{self, Vms};
 use crate::worker::Rows;
+
+/// How many rows a program following the timeline may fall behind by;
+/// further behind, it starts again from the database.
+const SUBSCRIBED_ROWS: usize = 256;
 
 /// What every conversation's actor shares.
 pub struct Shared {
@@ -90,6 +97,8 @@ pub struct Conversation {
     woken: woken::Woken,
     /// What the group's programs said lately.
     program_said: program::Said,
+    /// Every row committed, for the programs following the timeline.
+    subscribers: broadcast::Sender<Arc<Message>>,
 }
 
 struct Active {
@@ -151,6 +160,7 @@ impl Conversation {
             jobs: jobs::Jobs::default(),
             woken: woken::Woken::default(),
             program_said: program::Said::default(),
+            subscribers: broadcast::Sender::new(SUBSCRIBED_ROWS),
         })
     }
 
@@ -310,6 +320,16 @@ impl Conversation {
                 self.program_call(tool, args, reply);
                 Ok(())
             }
+            Event::Subscribe(reply) => {
+                let subscription = Subscription {
+                    place: Arc::clone(&self.place),
+                    head: self.head,
+                    rows: self.subscribers.subscribe(),
+                    services: Arc::clone(&self.shared.services),
+                };
+                let _ = reply.send(subscription);
+                Ok(())
+            }
             Event::Stop => {
                 self.stop();
                 Ok(())
@@ -317,10 +337,14 @@ impl Conversation {
         }
     }
 
-    /// A row is committed: it is the head, and the workers hear of it.
+    /// A row is committed: it is the head, and the workers and the
+    /// programs following the timeline hear of it.
     fn committed(&mut self, message: &Message) {
         self.head = message.id;
         self.shared.rows.send(&self.place, message);
+        if self.subscribers.receiver_count() > 0 {
+            let _ = self.subscribers.send(Arc::new(message.clone()));
+        }
     }
 
     /// Whether `task` was the current core's, which no longer waits for it.

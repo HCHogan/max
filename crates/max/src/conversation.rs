@@ -12,15 +12,16 @@ pub(crate) mod testing;
 mod tool;
 
 use std::fmt;
+use std::sync::Arc;
 
 use max_core::ids::{CallId, ConversationId, EndpointId, MessageId, TurnId};
 use max_core::intent::Verdict;
 use max_core::item::{ModelOutput, Timing, ToolOutput};
-use max_core::message::{Draft, Platform};
+use max_core::message::{Draft, Message, Platform};
 use max_core::segment::Segment;
 use max_db::platform::{Account, ConversationKind};
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 
 pub use actor::{Conversation, Outgoing, Shared};
 
@@ -88,8 +89,29 @@ pub enum Event {
         args: serde_json::Value,
         reply: oneshot::Sender<Result<serde_json::Value, mcp::Failure>>,
     },
+    /// A program in the group's VM follows the timeline: `maxx events`.
+    Subscribe(oneshot::Sender<Subscription>),
     /// Max restarts: end the core, within a grace, then stop.
     Stop,
+}
+
+/// The timeline from `head` on, for a program in the group's VM: every
+/// row committed after it comes to `rows`, until the actor stops. The rows
+/// up to `head` are in the database.
+pub struct Subscription {
+    pub place: Arc<Place>,
+    pub head: MessageId,
+    pub rows: broadcast::Receiver<Arc<Message>>,
+    pub services: Arc<mcp::Services>,
+}
+
+impl fmt::Debug for Subscription {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Subscription")
+            .field("conversation", &self.place.conversation)
+            .field("head", &self.head)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What Max says or does that isn't the model's text: committed by the

@@ -370,7 +370,7 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 | 工具调用上限 | 两处：`run_code`、`shell` 一次运行一个（`shell` 默认 120 秒，调用最多要 600 秒，后台跑的默认 30 分钟、最多 2 小时，见[后台命令](#后台命令)；guest 里的 unit 另有晚 30 秒的 `RuntimeMaxSec`，max 这边丢了也停得掉）；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
 | VM 开机 | VM 服务里一次：60 秒内要能 SSH 进去，每 100 ms 试一次；等 virtiofsd 建 socket 5 秒；外面再套一层 70 秒 | 防卡死 |
 | VM 闲置 | VM 服务里一次：每分钟扫一遍，闲置超过 `idle_minutes`（默认 120）的关掉，常开的除外（见[常驻程序](#常驻程序)） | 策略 |
-| 网络客户端 | 配置里一次：LLM 的 `stream_idle_timeout_secs`（响应头和之后的每一段都要在这个时间内到，整个调用不设上限）、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`max-llm` 里写死的连接超时，`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避；[宿主带 key 的 API](#宿主带-key-的-api) 写死的连接 10 秒、每一段 60 秒 | 防卡死 |
+| 网络客户端 | 配置里一次：LLM 的 `stream_idle_timeout_secs`（响应头和之后的每一段都要在这个时间内到，整个调用不设上限）、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`max-llm` 里写死的连接超时，`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避；[宿主带 key 的 API](#宿主带-key-的-api) 写死的连接 10 秒、每一段 60 秒；`maxx events` 90 秒没动静（宿主 30 秒一个心跳）就重连，退避 1 秒到 30 秒，见[常驻程序](#常驻程序)的第四步 | 防卡死 |
 | 先等再升级 | 按需 | 策略，比如 `close` 先给命令时间自己退出 |
 | 常驻服务里的等待表 | 每张表一次 | 防泄漏，比如 sender 里等回执的表。常驻服务外面没有取消替它兜底 |
 | 派生数据 worker | 各 worker 自己的一处，数值是它的常量：下载靠 HTTP 客户端的 10 秒连接超时和 60 秒整体超时，重试前等 1 秒和 4 秒；caption 每次调用 2 分钟；embedding 每次请求 30 秒 | 防卡死；重试和重扫是策略 |
@@ -1425,7 +1425,7 @@ struct Verdict { trigger: bool, reason: String }
 - **`maxx`**（2026-11-02 做，owner 提的："语言无关的 codemode"）：VM 里的一个命令，`shell` 的命令和任何语言写的程序都用它调 Max 的工具。
   - **工具只有一个来源**：工具还是只在宿主上写一处（`mcp::tool::TOOLS`，见下面的"工具契约"）。runner 的 `tools.<名字>` 和 `maxx` 都只是 MCP 服务的通用客户端，按名字调，没有哪个工具单独的代码；新工具两边自动都有。
   - **一个客户端**：调用的代码从 `runner.js` 抽成 `nix/client.js`，runner 和 `maxx`（`nix/maxx.js`，Node 写的）共用。没反过来让 SDK 包 `maxx`：那样每个 `tools.x` 都起一个进程，`Promise.all` 二十个查询就是二十个进程，错误和图都要经退出码和 stdout 转一道。代价是每次 `maxx` 都启动一次 Node，几十毫秒；一百次的循环该用 `run_code`。
-  - **用法**：`maxx 工具名 --参数 值`、`--参数=值`、单独的 `--参数` 是 true、`--no-参数` 是 false；或者给一个 JSON 对象，`-` 从标准输入读；没写名字的词按顺序填必填参数，再填其余的。参数按 `tools/list` 列出的 schema 转类型；数组参数重复写就是多项。`maxx` 列出工具，`maxx 工具名 --help` 看参数和说明。runner 自己的两个调用不在 `tools/list` 里，`maxx` 单独认：`maxx show 路径`（`max.image`）、`maxx file 句柄`（`max.file`）。
+  - **用法**：`maxx 工具名 --参数 值`、`--参数=值`、单独的 `--参数` 是 true、`--no-参数` 是 false；或者给一个 JSON 对象，`-` 从标准输入读；没写名字的词按顺序填必填参数，再填其余的。参数按 `tools/list` 列出的 schema 转类型；数组参数重复写就是多项。`maxx` 列出工具，`maxx 工具名 --help` 看参数和说明。runner 自己的两个调用不在 `tools/list` 里，`maxx` 单独认：`maxx show 路径`（`max.image`）、`maxx file 句柄`（`max.file`）。`maxx events` 不是调用，是群里消息的流，见[常驻程序](#常驻程序)的第四步。
   - **结果**：成功打印 JSON 到标准输出；工具失败把"工具: 原因（code）"写到标准错误，退出码 1；命令行写错退出码 2。
   - **会话**：前台的 `shell` 和 `run_code` 一样开 MCP 会话，token 经 `systemd-run --setenv` 放进命令的环境变量 `MAXX_TOKEN`；runner 也把自己的 token 放进 `process.env`，程序起的子进程能用 `maxx`。所以命令里调的工具也计入"调了 Max 的工具"那一行，`maxx show` 的图跟在 `shell` 的结果后面。后台命令比这一轮活得久，没有 token。
   - **没有 token**（常驻程序、后台命令，11-02 做）：按群算，只开放一部分工具，`maxx say`、`maxx wake` 也在这里，见[常驻程序](#常驻程序)的第三步。
@@ -1707,7 +1707,15 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
   - **7778 去掉**：`max-units` 改用 `curl` POST `http://127.0.0.1:7777/units`（`{"units": 2}`，回话不变），走 MCP 的 socat，和 `/mcp`、`/llm` 同一个服务（`vm/host.rs` 现在是这个路由）；叫醒走 `maxx wake`。每个 VM 少一个 socket 和一个任务。`max-units.service` 排在 `max-mcp.socket` 后面。
   - **提示词**：`max-wake` 换成 `maxx wake`；加一段：不用 Max 判断的话程序自己用 `maxx say` 说，写法和回话一样，一小时 30 条，标着"程序发的"；发图发文件用 `maxx send-image`、`send-file`；unit 和后台命令里只能用的那几个工具。
   - **测试**：runner 测试里不带 token 的 `maxx` 只列出程序的工具（有 `say`、`file`，没有 `show`、`mute_member`、`agent`），调用作为 `Signal::Call` 送出；带 token 的 `maxx wake` 也走这条路。actor 测试：`say` 分两条发，回执给了才返回编号，`raw` 带标记，下一个核心看到 `程序发的`。`vm-check` 的后台命令跑 `max-wake`（没有 token），`vm-check` 接 `Signal::Call` 回"vm-check 收到了"；`max-units` 经 `/units` 报 unit 数。
-  - 以后：`maxx events`，群里的消息作为流给程序（第三阶段）。
+- **第四步（做了，11-02）：`maxx events`。** owner 定的。第三步以后程序要对群里的消息做反应，只能轮询 `history`：11-02 Max 在 9 群写的 ping-responder 每 2 秒查一次，一分钟约 19 次 MCP 调用，每次都经会话 actor 查库，rmcp 每次记 3 行 info；还要用正则拆渲染出来的行，格式一改就坏，没有报错。
+  - **会话 actor 发**：每一行入账后（`committed`，和派生数据 worker 同一处）有人订阅就送进一个 `broadcast`（256 行）。订阅是 `Signal::Subscribe` 经会话表交给这个群的 actor（没在跑就起一个，和程序调工具一样），actor 回 `Subscription`：place、当时的 `head`、接收端。actor 一次只处理一个事件，所以 `head` 之前的都在库里，之后的都会来，不重不漏。actor 停了（出错、重启）流就结束。
+  - **路由**：每个 VM 的 MCP 服务上 `GET /events`（`vm/events.rs`），和 `/units`、`/api` 一样不要 token，哪个群由 VM 自己的 socket 定。回 `application/x-ndjson`，头 `max-head` 是订阅时的 `head`。`?after=编号` 先从库里补那条之后到 `head` 的，最多最近 1000 条，一次读 100 条；再接着送新的，`after` 以前的不送。30 秒没有新行发一个空行当心跳。落后超过 256 行、actor 停了、VM 的服务停了，流都结束：程序从最后一条重新要，补的从库里来。
+  - **一行**：`{id, at, sender, person, by, reply_to, text}`。`at` 是本地时间的 RFC 3339；`person` 是发的人的编号，`[mention#person]` 能 @ 他；`by` 是 `max`（Max 的账号发的）或 `program`（程序发的），群友的没有；`reply_to` 是回复的那条；`text` 和 `history` 里一行冒号后面的一样（`Render::body`），超长的也不截。不分 kind：命令、编辑（`[edit#…]`）、撤回（`[unsend#…]`）也在里面，和 `history` 一样。
+  - **`maxx events [--after 编号]`**（`nix/client.js` 的 `events()`）：每行原样打印一行 JSON，一直跑。断了、出错、90 秒连心跳都没有，就过 1 秒重连，之后翻倍到 30 秒，从打印过的最后一条接着要；一条都还没打印就从 `max-head` 接着要，所以中间来的也不丢。重连的原因写到标准错误。读的一方走了（EPIPE）就退出。`--after` 认 `123` 和 `#123`。
+  - **日志**：rmcp 的 target 只记 warn 以上，不再每个请求记 3 行。
+  - **提示词**：常驻程序那段加上：对群里的新消息做反应用 `maxx events`，别拿 `history` 轮询；每行的字段、`by` 别回自己、断了自己重连、`--after` 和把 id 写进 `/work` 接上。unit 和后台命令里能用的后面加上 events。
+  - **测试**：actor 测试：订阅时的 `head` 是最后入账的那行，之后群友的话和 Max 的回答按顺序来，actor 停了流就结束。会话表的测试：`Signal::Subscribe` 到了 `max-wake` 起的那个 actor。`vm/events.rs` 的测试：从 `after` 补库里的行（`by`、`reply_to`、`person`、`at`），再收新的，`after` 以前的不重发，心跳，actor 停了流结束；不带 `after` 只要新的；别的查询 400；会话不回 503；服务停的时候流结束，不拖住关机。`maxx events` 用 Node 对着这个路由跑：打印补的和新来的，流断了以后从打印过的最后一条重连，中间来的那条补上，标准错误里写着重连。
+  - 9 群那个轮询的 ping-responder 不替它改：它在群的 `/work` 里，是 Max 的；部署后让 Max 自己换成 `maxx events`。
 
 ## crate 划分
 
