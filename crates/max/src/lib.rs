@@ -15,7 +15,6 @@ pub mod config;
 pub mod conversation;
 pub mod dreamer;
 pub mod embedding;
-pub mod github;
 pub mod inbound;
 pub mod job;
 pub mod llm;

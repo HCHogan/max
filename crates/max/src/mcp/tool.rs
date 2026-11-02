@@ -18,7 +18,6 @@ use tracing::warn;
 
 use super::agent::{Agent, AgentCancel, AgentStatus, AgentSteer};
 use super::find_stickers::FindStickers;
-use super::github::{GitHubApi, GitHubPush};
 use super::history::History;
 use super::mute_member::MuteMember;
 use super::program::{Say, Wake};
@@ -90,8 +89,6 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec::<RecallMessage>(),
         spec::<MuteMember>(),
         spec::<FindStickers>(),
-        spec::<GitHubPush>(),
-        spec::<GitHubApi>(),
         spec::<Agent>(),
         spec::<AgentSteer>(),
         spec::<AgentCancel>(),

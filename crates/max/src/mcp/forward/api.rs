@@ -30,9 +30,10 @@ use crate::config::{self, Rule};
 const IDLE: Duration = Duration::from_secs(60);
 const HOUR: Duration = Duration::from_secs(3600);
 
-/// A program's headers that don't go on: its connection's, and its own
-/// key, which may be its run's token.
-const DROPPED: [HeaderName; 10] = [
+/// A program's headers that don't go on: its connection's, `Expect`
+/// among them, which the host's own server answers (curl sends one with a
+/// large body); and its own key, which may be its run's token.
+const DROPPED: [HeaderName; 11] = [
     header::HOST,
     header::AUTHORIZATION,
     header::PROXY_AUTHORIZATION,
@@ -42,6 +43,7 @@ const DROPPED: [HeaderName; 10] = [
     header::TRANSFER_ENCODING,
     header::UPGRADE,
     header::CONTENT_LENGTH,
+    header::EXPECT,
     header::ACCEPT_ENCODING,
 ];
 /// The answer's headers that don't come back: the connection's.

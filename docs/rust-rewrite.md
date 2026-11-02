@@ -1500,7 +1500,7 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
 - **通道**：cloud-hypervisor 的 hybrid vsock 里，guest 连主机的某个端口，会落到宿主上 `<vsock socket>_<端口>` 这个 unix socket，Haskell 版的就绪通知就走这条路。Max 在每个 VM 的这个位置监听一个端口，用 axum 加 rmcp 跑 Streamable HTTP。连进来的是哪个 VM，由 socket 路径决定。guest 里把 `127.0.0.1:7777` 转发到这个 vsock 端口，客户端都配 `http://127.0.0.1:7777/mcp`。IP 层照样连不到宿主，外面也照样连不进 VM。做成的：guest 里是 socket 激活，每个连接一个 socat 连到 vsock 的 2:7777；宿主在 VM 启动前就在 `notify.vsock_7777` 上监听，每个 VM 一个 MCP 服务，跟着 VM 起停。
 - **协议**（2026-10-29）：rmcp 3.8，协议版本 2026-07-28，无状态，回复用 JSON 不用 SSE。这个版本每个请求都要带 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name` 头，`_meta` 里也要有协议版本和客户端能力。runner 自己用 fetch 拼，不装 MCP 的 SDK。更早协议的客户端也收（2026-10-30）：pi 1.4 的是 2025-11-25，先发 `initialize`；rmcp 默认要给它建会话，而服务没有会话管理，回 500。关掉 `legacy_session_mode` 后它的每个请求各自处理。
-- **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群和 turn、允许的工具、在途的调用。`run_code` 的会话能用全部 Max 工具；job 的会话只列、只许调标了 `job` 的工具（不在群里说话做事的：`history`、`web_search`、`github_push`、`github`），别的回 `not_allowed`，另外能经 `/llm` 调它的模型，见[后台 agent](#后台-agent)。会话还记着每个工具调了几次、失败几次，附在结果后面。
+- **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群和 turn、允许的工具、在途的调用。`run_code` 的会话能用全部 Max 工具；job 的会话只列、只许调标了 `job` 的工具（不在群里说话做事的：`history`、`web_search`），别的回 `not_allowed`，另外能经 `/llm` 调它的模型，见[后台 agent](#后台-agent)。会话还记着每个工具调了几次、失败几次，附在结果后面。
 
   | 会话 | 能用的工具 | 生命周期 |
   |---|---|---|
@@ -1586,16 +1586,16 @@ opencli（2026-11-03 加，owner 要试的）：常见网站用 [opencli](https:
 
 2026-10-31 加（owner 要的）：有人让 Max 开 PR，它用自己的 GitHub 账号开，之后自己改、关、回评论。账号是 owner 建的机器账号（GitHub 要求由一个人建、为它负责），注册邮箱是 owner 的转发地址，Max 不碰邮箱。
 
-- **token 留在宿主**：群友能让 Max 在 VM 里跑任何命令，放进 VM 的东西（环境变量、`~/.config/gh`、浏览器里登录的 GitHub）都能被读出来。所以和 Exa 的 key 一样，宿主上的工具替它调。token 是 classic 的、只有 `public_repo`：fine-grained 的开不了往别人仓库的 PR（从 fork 开也不行，社区里的报告，GitHub 文档没写）。账号没别的东西，范围宽一点代价小。配置 `[github] login, user_id, token_file`，sops 里是 `maxx/github-token`。
-- **两个工具，不按动作拆**（owner 定的：改、关、评论各做一个工具会越做越多）。缝在 git 和 REST 之间：
-  - `github_push({repo, branch, bundle})`：把 `/work` 里一个仓库的新提交推到 Max 的 fork（没有就先 fork、等它出现，再把 fork 的默认分支同步到上游），返回 `{repo, head}`。分支整个替换（`--force`），所以同一个分支再推，它的 PR 就更新了。仓库是 Max 自己的就直接推，但不能推默认分支。
-  - `github({method, path, body?})`：用 Max 的 token 调 REST API，返回 `{status, body}`；body 超过 3 万字给截短的文本。开 PR、改标题描述、关、重开、评论、回 review、看 CI 都是它。
-- **宿主管写什么**：读随便读。写只能写 Max 自己的：路径在 `/repos/<Max>/` 下的（它的仓库和 fork）；`/repos/o/r/(issues|pulls)/N/...`，N 是 Max 开的（先 GET 那个 issue 看作者）；`/repos/o/r/(issues|pulls)/comments/ID/...`，评论是 Max 写的；再加开 PR，`POST /repos/o/r/pulls`，head 得是 Max 的分支。别的写一律拒绝：开 issue、在别人的 PR 下评论、点星、改账号设置。路径只许字母数字和 `/-_.~`，不能有 `..`。
-- **开 PR 的限制**：所有群加起来 24 小时内最多 10 个新 PR，用搜索 API 数 Max 开过的（GitHub 就是账本，不另建表）；描述末尾加一行英文的脚注，说明是 AI 在群友要求下开的，Max 改描述时也补上。推送和开 PR 一次一个，数和开之间不会插进别的。GitHub 会封看着像刷屏的账号。
-- **提交怎么到宿主**：宿主不在 guest 写过的仓库里跑 git，仓库的配置能执行命令（`core.fsmonitor`、hooks），`objects/info/alternates` 还能指到宿主的别处。guest 打一个 bundle（`git bundle create x.bundle HEAD --not --remotes`，只含上游没有的提交），宿主照 `/work` 的规矩不跟符号链接地读出来，在自己的临时目录里建一个空的 bare 仓库：按 bundle 头里写的前置提交，从上游 `--depth=1` 地取，再 `fetch.fsckObjects` 地收下 bundle，最后推到 fork。git 不读系统和用户的配置，token 经 `http.extraHeader` 走环境变量，不进命令行。本机测过：前置提交浅取以后 bundle 收得下，推到有完整历史的 fork 也行。
-- **提交人**：配了 `[github]`，VM 的内核命令行多一个 `max.git=<login>,<id>+<login>@users.noreply.github.com`，guest 开机写进 `/etc/gitconfig`，Max 的提交就算在账号名下，注册邮箱不出现。
-- 后台 agent 也能用这两个工具：`job` 标记的意思从"只读"改成"不在群里说话做事"。
-- 不做：开 issue、在别人的讨论里说话、review 别人的 PR、私有仓库、Max 自己收邮件注册别的网站。
+2026-11-03 改（owner 定）：去掉宿主上的两个工具和它们的规矩，GitHub 走[宿主带 key 的 API](#宿主带-key-的-api)。fork、clone、推送、开 PR 都由 Max 自己用 git 和 REST API 做，什么该做由它自己判断：群都小，不太会有人滥用；这套流程每个模型都熟；规矩的代码比它防的事多。
+
+- **token 留在宿主**：群友能让 Max 在 VM 里跑任何命令，放进 VM 的东西（环境变量、`~/.config/gh`、浏览器里登录的 GitHub）都能被读出来。token 是 classic 的、只有 `public_repo`：fine-grained 的开不了往别人仓库的 PR（从 fork 开也不行，社区里的报告，GitHub 文档没写）。它删不了仓库（那要 `delete_repo`），也碰不到私有仓库。
+- **两个 API**（tank 的配置在 nix-config）：
+  - `github`：`https://api.github.com`，头是 `Authorization: Bearer {secret}`，加上 `Accept`、`X-GitHub-Api-Version` 和 `User-Agent`（GitHub 不收没有 User-Agent 的请求）。
+  - `github-git`：`https://github.com`，git 的 HTTPS。git 只认 basic auth（2026-11-03 在 tank 上试过，`Bearer` 和 `token` 都是 401），所以 secret 是 `base64("x-access-token:<token>")`，sops 里的 `maxx/github-git-auth`；和 `maxx/github-token` 是同一个 token，换的时候两个一起换。推送用 `git push http://127.0.0.1:7777/api/github-git/<Max>/<仓库>.git <分支>`；clone 公开仓库直接从 github.com。
+  - 都不写 `allow` 和 `per_hour`。`about` 里提醒两句：PR 只在群友要时开，描述末尾用一行英文说明是 AI 应群友要求开的；GitHub 会封看着像刷屏的账号。宿主不管。
+  - 转发器把请求体整个读进来，最多 64 MiB，一次推送的 pack 也不能超过这个；响应头要在 60 秒内到，推得太大、GitHub 处理太久会断。程序的 `Expect` 头不转：宿主自己的服务答它。
+- **提交人**：配了 `[github]`（现在只有 `login`、`user_id`），VM 的内核命令行多一个 `max.git=<login>,<id>+<login>@users.noreply.github.com`，guest 开机写进 `/etc/gitconfig`，Max 的提交就算在账号名下，注册邮箱不出现。
+- **去掉的**（10-31 到 11-03）：`github_push` 让 guest 打一个 bundle，宿主建空的 bare 仓库、浅取前置提交、`fetch.fsckObjects` 地收下再推，宿主不在 guest 写过的仓库里跑 git；`github` 调 REST，返回 `{status, body}`，超过 3 万字截短。宿主的规矩：写只能写 Max 自己的仓库、它开的 PR 和 issue、它的评论；所有群加起来 24 小时最多 10 个新 PR；PR 描述末尾由宿主加 AI 的脚注。三天里 `github` 调了 66 次（26 轮），`github_push` 9 次（8 轮），没出过错。
 
 ### 宿主带 key 的 API
 
@@ -1626,7 +1626,7 @@ opencli（2026-11-03 加，owner 要试的）：常见网站用 [opencli](https:
   - 连不上时，给程序的错误去掉 URL：key 可能在 query 里。
   - 每次调用、每次拒绝都记日志：群、API、方法、路径、状态码，不记正文。
   - 连接 10 秒超时；响应头和之后的每一段要在 60 秒内到。
-- **管不了的**：key 防得住泄露，防不住滥用。能让 Max 在 VM 里跑命令的人，就能让它调这些 API，所以只适合 `allow` 和 `per_hour` 圈得住的 key。要看内容才能判断的（比如邮件只许发给哪些地址，GitHub 开 PR 的限额和脚注），还是写成宿主上的工具。
+- **管不了的**：key 防得住泄露，防不住滥用。能让 Max 在 VM 里跑命令的人，就能让它调这些 API，所以只适合 `allow` 和 `per_hour` 圈得住的 key，或者 owner 愿意交给 Max 自己判断的（GitHub，见 [GitHub](#github)）。要看内容才能判断、又非管不可的（比如邮件只许发给哪些地址），还是写成宿主上的工具。
 - 代码：`config::Api`、`config::Rule`，`mcp/forward/api.rs`；VM 服务把 `/api` 并进每个 VM 的路由（`vm.rs`）。
 
 ### 待定事项

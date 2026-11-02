@@ -38,8 +38,8 @@ pub struct Config {
     /// Without it, stickers aren't embedded, and `find_stickers` tells the
     /// program there is no library.
     pub embedding: Option<Embedding>,
-    /// Max's GitHub account. Without it, `github_pr` tells the program
-    /// there is none, and the guests' commits have no author set.
+    /// Max's GitHub account, which the guests' commits are by. Without
+    /// it, they have no author set.
     pub github: Option<GitHub>,
     /// The HTTP APIs the VMs call through the host, which adds their keys,
     /// by the name in `/api/<name>/…`.
@@ -77,23 +77,17 @@ impl Search {
     }
 }
 
-/// Max's GitHub account, for `github_pr`; see "GitHub".
+/// Max's GitHub account, which the guests' commits are by; its token
+/// is an API's, `[api.github]`. See "GitHub".
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GitHub {
     pub login: String,
     /// The account's number, for its commits' noreply address.
     pub user_id: u64,
-    /// A classic token with `public_repo`: a fine-grained one can't open a
-    /// pull request on a repository the account doesn't own.
-    pub token_file: PathBuf,
 }
 
 impl GitHub {
-    pub fn token(&self) -> Result<String> {
-        secret(&self.token_file)
-    }
-
     /// Who the guests' commits are by: the account, at its noreply address.
     fn author(&self) -> Author {
         Author {
@@ -770,8 +764,7 @@ mod tests {
         assert_eq!((config.cpus, config.memory_mib), (2, 8192));
         assert_eq!(config.slots[0].tap, "maxx-vm0");
         assert_eq!(config.author, None);
-        let github =
-            "[github]\nlogin = \"maxxbot\"\nuser_id = 42\ntoken_file = \"/run/secrets/github\"\n";
+        let github = "[github]\nlogin = \"maxxbot\"\nuser_id = 42\n";
         let config = with_llm(&format!("{vm}{github}")).unwrap().vm.unwrap();
         assert_eq!(
             config.author,

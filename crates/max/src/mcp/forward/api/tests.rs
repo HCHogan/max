@@ -109,6 +109,7 @@ async fn a_call_goes_on_with_the_key_and_comes_back_as_it_is() {
         .bearer_auth("the-runs-token")
         .header("idempotency-key", "k_1")
         .header("content-type", "application/json")
+        .header("expect", "100-continue")
         .body("{\"to\":\"someone@example.com\"}")
         .send()
         .await
@@ -122,6 +123,7 @@ async fn a_call_goes_on_with_the_key_and_comes_back_as_it_is() {
         assert_eq!((method, path.as_str()), (&Method::POST, "/v1/emails"));
         assert_eq!(headers["authorization"], "Bearer s3cret");
         assert_eq!(headers["idempotency-key"], "k_1");
+        assert!(!headers.contains_key("expect"));
         assert_eq!(body, "{\"to\":\"someone@example.com\"}");
     }
 
