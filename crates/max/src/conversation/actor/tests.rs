@@ -513,10 +513,10 @@ async fn an_owner_changes_settings(pool: PgPool) {
     h.send(from_xiaoming(0, vec![me(), text("/model test/nope")]));
     let answer = h.said().await.1;
     assert!(answer.contains("/model → 错误：没有这个模型"), "{answer}");
-    h.send(from_xiaoming(1, vec![me(), text("/model test/small")]));
+    h.send(from_xiaoming(1, vec![me(), text("/model test/wide")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("model", "已切换：test/small，下次回复生效")
+        command::answer("model", "已切换：test/wide，下次回复生效")
     );
     h.send(from_xiaoming(2, vec![me(), text("/proactive off")]));
     assert_eq!(
@@ -532,7 +532,7 @@ async fn an_owner_changes_settings(pool: PgPool) {
     h.said().await;
     h.stop().await;
     let model = h.script.requests.lock().unwrap()[0].model.model.clone();
-    assert_eq!(model, "small");
+    assert_eq!(model, "wide");
     let proactive = h
         .count("select count(*) from conversation_settings where not proactive")
         .await;

@@ -391,6 +391,8 @@ in
     perl
     # run_code's runner, and programs' own child processes.
     nodejs
+    # maxx: Max's tools from shell commands, and programs in any language.
+    runner
     # A page's text, as Markdown; PDFs through pdftotext.
     (import ./webread.nix { inherit pkgs; })
     # Background agents: pi, which programs can run too.

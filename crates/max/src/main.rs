@@ -2,9 +2,9 @@
 //! structure without reading its secrets, which the NixOS module does when
 //! it builds the file; `max vm-check` boots a VM, runs a command in it, a
 //! program that calls the MCP service, one that opens a tab in the browser
-//! and one that finds the tab as the first left it, keeps a unit of its own
-//! in /work/.max/systemd and wakes Max with max-wake, and runs a
-//! background command.
+//! and one that finds the tab as the first left it, calls the MCP service
+//! with maxx from a command, keeps a unit of its own in /work/.max/systemd
+//! and wakes Max with max-wake, and runs a background command.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{IsTerminal, Write};
@@ -194,14 +194,22 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
             args: None,
             timeout_ms: None,
         };
-        let units = Tool::Shell {
-            command: UNITS.into(),
+        let command = |command: &str| Tool::Shell {
+            command: command.into(),
             workdir: None,
             timeout_ms: None,
             background: false,
         };
+        let steps = [
+            shell,
+            program,
+            browse(BROWSE),
+            browse(BROWSE_AGAIN),
+            command(MAXX),
+            command(UNITS),
+        ];
         let mut outs = Vec::new();
-        for tool in [shell, program, browse(BROWSE), browse(BROWSE_AGAIN), units] {
+        for tool in steps {
             outs.push(tools::run(tool, Some(&vms), context()?).await);
         }
         // A background command, as a conversation's actor runs one; its
@@ -249,6 +257,11 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
     }
     Ok(())
 }
+
+/// maxx from a command: a call the history refuses, as the program's was,
+/// and the browser's screenshot shown to the model.
+const MAXX: &str = r#"maxx history --around 1; echo "maxx 退出码 $?"
+maxx show /work/.max/browser-check.png"#;
 
 /// A unit of vm-check's own in /work/.max/systemd, which notes each boot
 /// it starts in: max-units starts it now, or the boot already has. The

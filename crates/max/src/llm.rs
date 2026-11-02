@@ -433,6 +433,9 @@ pub mod testing {
             max_output = 8000
             [providers.test.models.small]
             context_window = 8000
+            # Another the turns may switch to, with room for the prompt.
+            [providers.test.models.wide]
+            context_window = 200000
         "#;
         toml::from_str(text).unwrap()
     }
@@ -466,6 +469,6 @@ mod tests {
         assert_eq!(historian.options.effort.as_deref(), Some("low"));
         assert!(models.turn(Some("test/nope"), None).is_err());
         assert!(models.turn(Some("big"), None).is_err());
-        assert_eq!(models.references(), ["test/big", "test/small"]);
+        assert_eq!(models.references(), ["test/big", "test/small", "test/wide"]);
     }
 }

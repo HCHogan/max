@@ -1,7 +1,8 @@
 //! What the model's tool calls do; see "工具和 codemode". Both run in the
 //! group's VM: `shell` a command, `run_code` a program in the guest's
-//! runner, which calls Max's tools through the MCP service and shows the
-//! model pictures after its result.
+//! runner. Both call Max's tools through the MCP service as the run, and
+//! can show the model pictures after their result: the runner's SDK, and
+//! `maxx` from a command, with the token in MAXX_TOKEN.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -71,22 +72,18 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
     let limit = timeout_ms
         .map_or(SHELL_TIME, Duration::from_millis)
         .clamp(Duration::from_secs(1), SHELL_TIME_MAX);
-    let mut pictures = Vec::new();
+    let context = mcp::Context {
+        work: Some(vm.work().to_owned()),
+        ..context
+    };
+    let grant = vms.sessions().open(context);
     let ran = match tool {
-        Tool::RunCode { code, args, .. } => {
-            let context = mcp::Context {
-                work: Some(vm.work().to_owned()),
-                ..context
-            };
-            let grant = vms.sessions().open(context);
-            let ran = run_code(&vm, &grant, &code, args, limit).await;
-            pictures = grant.shown();
-            ran
-        }
+        Tool::RunCode { code, args, .. } => run_code(&vm, &grant, &code, args, limit).await,
         Tool::Shell {
             command, workdir, ..
-        } => shell(&vm, &command, workdir.as_deref(), limit).await,
+        } => shell(&vm, &grant, &command, workdir.as_deref(), limit).await,
     };
+    let pictures = grant.shown();
     let mut output = match ran {
         Ok((shown, error)) => text(shown, error),
         Err(error) => text(format!("{name} 没跑成：{error:#}"), true),
@@ -101,12 +98,22 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
 }
 
 /// The systemd-run line that runs `command` as the unit `unit`, at most
-/// `limit`; the guest stops it itself a little after max would have.
-/// systemd-run would also set the terminal's title.
-fn unit_line(unit: &str, limit: Duration, workdir: &str, command: &str) -> String {
+/// `limit`, with the run's `token` for maxx; the guest stops it itself a
+/// little after max would have. systemd-run would also set the terminal's
+/// title.
+fn unit_line(
+    unit: &str,
+    limit: Duration,
+    workdir: &str,
+    command: &str,
+    token: Option<&str>,
+) -> String {
+    let token = token
+        .map(|token| format!(" --setenv=MAXX_TOKEN={}", quote(token)))
+        .unwrap_or_default();
     format!(
         "SYSTEMD_ADJUST_TERMINAL_TITLE=0 exec systemd-run --quiet --pipe --wait --collect \
-         --unit={unit} --property=RuntimeMaxSec={} --working-directory={} \
+         --unit={unit} --property=RuntimeMaxSec={} --working-directory={}{token} \
          -- bash -lc {}",
         (limit + GUEST_MARGIN).as_secs(),
         quote(workdir),
@@ -124,7 +131,8 @@ async fn run_code(
     limit: Duration,
 ) -> Result<(String, bool)> {
     let unit = Vm::unit();
-    let line = unit_line(&unit, limit, "/work", "exec node /run/max/runner.js");
+    // The runner has the token from its input.
+    let line = unit_line(&unit, limit, "/work", "exec node /run/max/runner.js", None);
     let tools: Vec<&str> = mcp::tool::TOOLS.iter().map(|tool| tool.name).collect();
     let input = json!({ "code": code, "args": args, "token": grant.token(), "tools": tools });
     let mut split = Split {
@@ -196,21 +204,25 @@ impl Sink for Split {
 /// What the model is shown, and whether the command failed to finish.
 async fn shell(
     vm: &Vm,
+    grant: &Grant,
     command: &str,
     workdir: Option<&str>,
     limit: Duration,
 ) -> Result<(String, bool)> {
     let unit = Vm::unit();
     let mut output = Output::new(vm.work(), format!("{unit}.txt"));
-    let ran = command_in(vm, unit, command, workdir, limit, &mut output).await?;
+    let token = Some(grant.token());
+    let ran = command_in(vm, unit, command, workdir, token, limit, &mut output).await?;
     let shown = output.shown();
-    Ok(match ran {
+    let (mut shown, error) = match ran {
         Ran::Exited(status) => (with(exited(status), &shown), false),
         Ran::OutOfTime => {
             let head = format!("{} 秒内没跑完，已经停了", limit.as_secs());
             (with(head, &shown), true)
         }
-    })
+    };
+    shown.push_str(&called(&grant.calls()));
+    Ok((shown, error))
 }
 
 /// How a command in the guest ended.
@@ -222,12 +234,13 @@ enum Ran {
 }
 
 /// Runs `command` as the unit `unit`, its output into `output`, for at
-/// most `limit`.
+/// most `limit`; maxx calls as the run whose `token` it has.
 async fn command_in(
     vm: &Vm,
     unit: String,
     command: &str,
     workdir: Option<&str>,
+    token: Option<&str>,
     limit: Duration,
     output: &mut Output,
 ) -> Result<Ran> {
@@ -238,7 +251,7 @@ async fn command_in(
     };
     // systemd-run hands the unit its own output, so 2>&1 merges the
     // command's.
-    let line = unit_line(&unit, limit, &workdir, command) + " 2>&1";
+    let line = unit_line(&unit, limit, &workdir, command, token) + " 2>&1";
     let mut running = vm.command(unit, &line, &[]).await?;
     let waited = timeout(limit, running.wait(output)).await;
     output.finish().await?;
@@ -325,11 +338,13 @@ pub async fn background(vms: Vms, conversation: ConversationId, shell: Backgroun
     if let Err(error) = output.create().await {
         return failed(format!("{error:#}"));
     }
+    // It outlives the turn, and so any run's token.
     let ran = command_in(
         &vm,
         shell.unit,
         &shell.command,
         shell.workdir.as_deref(),
+        None,
         shell.limit,
         &mut output,
     )

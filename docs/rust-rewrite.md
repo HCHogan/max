@@ -1453,9 +1453,15 @@ struct Verdict { trigger: bool, reason: String }
 - **`shell`**（2026-10-28 定）：跑终端命令不用从 JS 绕。只有 `run_code` 的话，每次都要写 `child_process`，非零退出直接抛异常，stderr 拿不到；命令套在 JS 字符串里再套进 JSON，转义多一层，模板字符串里的 `${VAR}` 还会先被 JS 吃掉。主流模型在 shell 工具上训练得最多，形状贴近它们熟悉的最好用。
   - 参数 `{command, workdir?, timeout_ms?}`，贴近 Codex 的 shell 工具。在群 VM 里用 `bash -lc` 执行，默认工作目录 `/work`。
   - 结果是退出码加合并的输出；过长保留头尾，全文写进 VM 里的文件。墙钟上限和 `run_code` 一样。
-  - 不能调 Max 的工具，不开 MCP 会话。调 Max 工具、并发编排、交图（`max.image`）都用 `run_code`：跑命令用 `shell`，写程序用 `run_code`。
+  - 原来不能调 Max 的工具、不开 MCP 会话，交图也得再调一次 `run_code`。11-02 起和 `run_code` 一样开会话，命令里用 `maxx` 调，见下一条。
   - 安全上没有新东西：`run_code` 本来就能 `execSync`，VM 里本来就是 root。
-  - 小摩擦：`shell` 生成的图要看，得再调一次 `run_code` 交图。用得多再考虑在 guest 里放一个交图的命令。
+- **`maxx`**（2026-11-02 做，owner 提的："语言无关的 codemode"）：VM 里的一个命令，`shell` 的命令和任何语言写的程序都用它调 Max 的工具。
+  - **工具只有一个来源**：工具还是只在宿主上写一处（`mcp::tool::TOOLS`，见下面的"工具契约"）。runner 的 `tools.<名字>` 和 `maxx` 都只是 MCP 服务的通用客户端，按名字调，没有哪个工具单独的代码；新工具两边自动都有。
+  - **一个客户端**：调用的代码从 `runner.js` 抽成 `nix/client.js`，runner 和 `maxx`（`nix/maxx.js`，Node 写的）共用。没反过来让 SDK 包 `maxx`：那样每个 `tools.x` 都起一个进程，`Promise.all` 二十个查询就是二十个进程，错误和图都要经退出码和 stdout 转一道。代价是每次 `maxx` 都启动一次 Node，几十毫秒；一百次的循环该用 `run_code`。
+  - **用法**：`maxx 工具名 --参数 值`、`--参数=值`、单独的 `--参数` 是 true、`--no-参数` 是 false；或者给一个 JSON 对象，`-` 从标准输入读；没写名字的词按顺序填必填参数，再填其余的。参数按 `tools/list` 列出的 schema 转类型；数组参数重复写就是多项。`maxx` 列出工具，`maxx 工具名 --help` 看参数和说明。runner 自己的两个调用不在 `tools/list` 里，`maxx` 单独认：`maxx show 路径`（`max.image`）、`maxx file 句柄`（`max.file`）。
+  - **结果**：成功打印 JSON 到标准输出；工具失败把"工具: 原因（code）"写到标准错误，退出码 1；命令行写错退出码 2。
+  - **会话**：前台的 `shell` 和 `run_code` 一样开 MCP 会话，token 经 `systemd-run --setenv` 放进命令的环境变量 `MAXX_TOKEN`；runner 也把自己的 token 放进 `process.env`，程序起的子进程能用 `maxx`。所以命令里调的工具也计入"调了 Max 的工具"那一行，`maxx show` 的图跟在 `shell` 的结果后面。后台命令比这一轮活得久，没有 token。
+  - **以后**：没有 token 的调用（常驻程序、后台命令）按群算，只开放一部分工具，`maxx say`、`maxx wake`、`maxx events` 也走这里，见[常驻程序](#常驻程序)。
 - **工具说明**：系统提示里放 Max 工具的 TypeScript 声明，带返回类型，内容固定。
 - **skill 只是文档。** `use_skill` 是普通的 Max 工具，返回说明书和相关工具的声明，和别的结果一样只往上下文后面追加。能调哪些工具由群和会话决定，一个 turn 里不变，不随 skill 加载变化。所以核心里没有"活动工具集"，Responses 的 `tool_search` 和 Chat 的元工具也都不需要。
 - **调用格式**：用最通用的 function tool，参数是 JSON。代码是原文还是转义进 JSON 字符串，取决于模型自己的工具调用格式：Claude 的字符串参数和 Qwen 3.5/3.6 的 XML 参数是原文；GPT 和 Gemini 要转义，Gemini 偶尔还会多转义一层（gemini-cli 专门写了修正代码）。aider 2024 年测过，代码包进 JSON 后，所有被测模型的通过率都下降了，幅度不一。暂不处理，见[待定事项](#待定事项)。

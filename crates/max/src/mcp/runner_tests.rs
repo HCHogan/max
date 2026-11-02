@@ -1,6 +1,6 @@
-//! The guest's runner, run here with Node against the MCP service on TCP:
-//! it needs nothing of the VM but `/work`, which tests point at a
-//! directory of their own.
+//! The guest's runner and maxx, run here with Node against the MCP
+//! service on TCP: they need nothing of the VM but `/work`, which tests
+//! point at a directory of their own.
 
 use std::io::Cursor;
 use std::process::Stdio;
@@ -27,6 +27,7 @@ use crate::media::store::Store;
 use crate::scope::Scope;
 
 const RUNNER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../nix/runner.js");
+const MAXX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../nix/maxx.js");
 
 struct Ran {
     status: i32,
@@ -369,6 +370,158 @@ async fn programs_fetch_the_chats_files(pool: PgPool) {
     );
     // Not counted among Max's tools: the file is the program's.
     assert!(grant.calls().is_empty());
+
+    scope.close(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `maxx` with `words`, as the run whose `token` it has, if any; `input`
+/// on its stdin.
+async fn maxx(mcp: &str, token: Option<&str>, words: &[&str], input: &str) -> Ran {
+    let mut command = Command::new("node");
+    command
+        .arg(MAXX)
+        .args(words)
+        .env("MAXX_MCP", mcp)
+        .env_remove("MAXX_TOKEN")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(token) = token {
+        command.env("MAXX_TOKEN", token);
+    }
+    let mut node = command.spawn().expect("node runs maxx");
+    let mut stdin = node.stdin.take().unwrap();
+    stdin.write_all(input.as_bytes()).await.unwrap();
+    drop(stdin);
+    let out = tokio::time::timeout(Duration::from_secs(20), node.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap();
+    Ran {
+        status: out.status.code().unwrap(),
+        stdout: String::from_utf8(out.stdout).unwrap(),
+        stderr: String::from_utf8(out.stderr).unwrap(),
+    }
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn commands_call_max_tools_with_maxx(pool: PgPool) {
+    let dir = std::env::temp_dir().join(format!("max-maxx-{:016x}", rand::random::<u64>()));
+    let work = dir.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(work.join("shot.png"), png(3)).unwrap();
+    let store = Arc::new(Store::open(&dir.join("store")).await.unwrap());
+    let mut conn = pool.acquire().await.unwrap();
+    let place = Arc::new(group(&mut conn).await);
+    let hello = ingest::inbound(
+        &mut conn,
+        &place,
+        &from_xiaoming(1, vec![text("你好")]),
+        Utc::now(),
+        offset(),
+    )
+    .await
+    .unwrap();
+    drop(conn);
+    let conversation = place.conversation;
+    let sessions = Sessions::default();
+    let grant = sessions.open(Context {
+        services: Arc::new(Services {
+            store: Some(Arc::clone(&store)),
+            ..Services::bare(pool)
+        }),
+        place,
+        page_tokens: 2000,
+        work: Some(work.clone()),
+        caller: Caller::Check,
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let mut scope = Scope::new();
+    let served = sessions.clone();
+    scope.spawn(move |stop| serve(listener, conversation, served, stop));
+    let token = Some(grant.token());
+    let id = hello.message.id.0;
+    let read = format!("[12:01 小明 #{id}]: 你好");
+
+    // The tools, and one tool's arguments.
+    let listed = maxx(&mcp, token, &[], "").await;
+    assert_eq!(listed.status, 0, "{}", listed.stderr);
+    assert!(listed.stdout.contains("\n  history  "), "{}", listed.stdout);
+    assert!(listed.stdout.contains("\n  show  "), "{}", listed.stdout);
+    let help = maxx(&mcp, token, &["history", "--help"], "").await;
+    assert!(
+        help.stdout
+            .contains("\n  --around（整数）：读这条消息前后，#123 就是 123\n"),
+        "{}",
+        help.stdout
+    );
+
+    // By flags, as JSON, from stdin: the result as JSON.
+    let around = id.to_string();
+    let by_flags = ["history", "--around", &around, "--before=0", "--after", "0"];
+    let one = json!({ "around": id, "before": 0, "after": 0 }).to_string();
+    for (words, input) in [
+        (&by_flags[..], ""),
+        (&["history", &one][..], ""),
+        (&["history", "-"][..], one.as_str()),
+    ] {
+        let ran = maxx(&mcp, token, words, input).await;
+        assert_eq!(ran.status, 0, "{words:?}: {}", ran.stderr);
+        let value: Value = serde_json::from_str(&ran.stdout).unwrap();
+        assert_eq!(value["text"], read, "{words:?}");
+    }
+
+    // A tool's failure, a word by position, and a wrong command line.
+    let after = (id + 1).to_string();
+    let missing = maxx(&mcp, token, &["history", "--around", &after], "").await;
+    assert_eq!(missing.status, 1);
+    assert!(
+        missing.stderr.starts_with("history: 这里没有")
+            && missing.stderr.ends_with("（not_found）\n"),
+        "{}",
+        missing.stderr
+    );
+    let search = maxx(&mcp, token, &["web-search", "示波器"], "").await;
+    assert_eq!(search.status, 1);
+    assert!(
+        search.stderr.ends_with("（unavailable）\n"),
+        "{}",
+        search.stderr
+    );
+    for (words, said) in [
+        (&["history", "--nope", "1"][..], "没有 --nope 这个参数"),
+        (&["history", "--before", "x"][..], "--before 要一个数"),
+        (&["nosuch"][..], "没有 nosuch 这个工具"),
+        (&["history", "{"][..], "参数不是 JSON"),
+    ] {
+        let ran = maxx(&mcp, token, words, "").await;
+        assert_eq!(ran.status, 2, "{words:?}");
+        assert!(ran.stderr.contains(said), "{words:?}: {}", ran.stderr);
+    }
+    assert_eq!(grant.calls()["history"], (3, 1));
+    assert_eq!(grant.calls()["web_search"], (0, 1));
+
+    // A picture for the model, from a command.
+    let shown = maxx(&mcp, token, &["show", "shot.png"], "").await;
+    assert_eq!(
+        shown.stdout, "{\n  \"width\": 3,\n  \"height\": 1\n}\n",
+        "{}",
+        shown.stderr
+    );
+    assert_eq!(grant.shown().len(), 1);
+
+    // Outside a run, and in one that ended.
+    let outside = maxx(&mcp, None, &["history"], "").await;
+    assert_eq!(outside.status, 2);
+    assert!(outside.stderr.contains("MAXX_TOKEN"), "{}", outside.stderr);
+    let token = grant.token().to_owned();
+    drop(grant);
+    let ended = maxx(&mcp, Some(&token), &["history"], "").await;
+    assert_eq!(ended.status, 1);
+    assert!(ended.stderr.contains("token 不对"), "{}", ended.stderr);
 
     scope.close(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&dir);

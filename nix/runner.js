@@ -3,35 +3,25 @@
 //
 // stdin is one JSON object: {code, args, token, tools}. code is an async
 // function body; tools.<name>(args) calls one of Max's tools through the
-// MCP service with the run's token, max.image() shows the model a picture
-// after the result, max.file() has the host copy a file of the chat's
-// record into /work/chat, and max.browser() and max.page() reach the VM's
-// browser (browser.js). stdout gets the program's result and nothing
-// else: its console and its own writes go to stderr. The exit status is 0
-// when the program returned, 1 when it threw.
+// MCP service with the run's token (client.js), max.image() shows the
+// model a picture after the result, max.file() has the host copy a file
+// of the chat's record into /work/chat, and max.browser() and max.page()
+// reach the VM's browser (browser.js). stdout gets the program's result
+// and nothing else: its console and its own writes go to stderr. The exit
+// status is 0 when the program returned, 1 when it threw.
 "use strict";
 
 const { randomUUID } = require("node:crypto");
 const { mkdir, rm, writeFile } = require("node:fs/promises");
 const { format, inspect } = require("node:util");
 const { browser, page, snapshot } = require("./browser.js");
-
-const MCP = "http://127.0.0.1:7777/mcp";
-const VERSION = "2026-07-28";
+const { MCP, ToolError, connect } = require("./client.js");
 
 const result = process.stdout.write.bind(process.stdout);
 const log = text => process.stderr.write(text);
 process.stdout.write = process.stderr.write.bind(process.stderr);
 for (const level of ["log", "info", "warn", "error", "debug"]) {
   console[level] = (...values) => log(format(...values) + "\n");
-}
-
-class ToolError extends Error {
-  constructor(tool, error) {
-    super(`${tool}: ${error.message}（${error.code}）`);
-    this.name = "ToolError";
-    this.code = error.code;
-  }
 }
 
 async function main() {
@@ -42,47 +32,10 @@ async function main() {
   const url = input.mcp ?? MCP;
   const work = input.work ?? "/work";
 
-  let nextId = 1;
-  // The outcome of one call: {ok: true, value} or {ok: false, error}.
-  async function request(tool, args, signal) {
-    let reply;
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        signal,
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json, text/event-stream",
-          "mcp-protocol-version": VERSION,
-          "mcp-method": "tools/call",
-          "mcp-name": tool,
-          authorization: `Bearer ${input.token}`,
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: nextId++,
-          method: "tools/call",
-          params: {
-            name: tool,
-            arguments: args,
-            _meta: {
-              "io.modelcontextprotocol/protocolVersion": VERSION,
-              "io.modelcontextprotocol/clientCapabilities": {},
-            },
-          },
-        }),
-      });
-      reply = JSON.parse(await response.text());
-    } catch (error) {
-      // As the host says when it cancels a call.
-      if (error.name === "AbortError") return { ok: false, error: { code: "cancelled", message: "调用取消了；会动群的操作可能已经生效，先看记录再决定要不要再来" } };
-      return { ok: false, error: { code: "unreachable", message: `连不上 Max 的 MCP 服务：${error.message}` } };
-    }
-    if (reply.error) return { ok: false, error: { code: "refused", message: reply.error.message } };
-    const { isError, structuredContent } = reply.result;
-    if (isError) return { ok: false, error: structuredContent };
-    return { ok: true, value: structuredContent };
-  }
+  // Programs' own child processes, such as maxx, call as the run too.
+  process.env.MAXX_TOKEN = input.token;
+  process.env.MAXX_MCP = url;
+  const { request } = connect({ url, token: input.token });
 
   // A call's promise, and what cancels it. Using one without await reads
   // a field of a Promise; say so instead of quietly giving undefined.

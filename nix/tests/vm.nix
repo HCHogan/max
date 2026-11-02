@@ -2,9 +2,10 @@
 # firewall's rules and the service's sandbox, and vm-check boots the
 # flake's guest the way max does, runs a command in it, runs a program
 # whose history reaches the database through the MCP service, one that
-# opens a page in the browser and saves a screenshot to /work, and keeps a
-# unit in /work/.max/systemd, which the next boot starts again, and wakes
-# Max with max-wake.
+# opens a page in the browser and saves a screenshot to /work, calls the
+# MCP service with maxx from a command, and keeps a unit in
+# /work/.max/systemd, which the next boot starts again, and wakes Max with
+# max-wake.
 { pkgs, module }:
 pkgs.testers.runNixOSTest {
   name = "max-vm";
@@ -48,6 +49,8 @@ pkgs.testers.runNixOSTest {
     assert '"mcp":"not_found"' in shown, shown
     # The page's accessibility tree, with refs.
     assert '"tree":"检查\\n' in shown and 'button \\"搜索\\" [ref=e4]' in shown, shown
+    # maxx calls the MCP service from a command, as the program did.
+    assert "（not_found）\nmaxx 退出码 1" in shown and '"width": ' in shown, shown
     # A background command's output is in its file while it runs.
     assert "后台命令：Done\n退出码 0，跑了" in shown and "后台起了\n1" in shown, shown
     # A unit in /work/.max/systemd, started by max-units, with the
