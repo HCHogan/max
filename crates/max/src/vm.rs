@@ -26,6 +26,7 @@ use tracing::{info, warn};
 use self::machine::{BOOT, Booted, Guest, Machine};
 use self::ssh::{Command, Connection, Input};
 use crate::config;
+use crate::mcp::api::{self, Apis};
 use crate::mcp::{self, Sessions};
 use crate::scope::Scope;
 
@@ -77,6 +78,7 @@ enum Internal {
 pub struct Vms {
     requests: UnboundedSender<Request>,
     sessions: Sessions,
+    apis: Arc<Apis>,
 }
 
 struct Request {
@@ -95,25 +97,36 @@ pub struct Vm {
 
 impl Vms {
     /// Starts the service in `scope`; what programs in the VMs say to Max
-    /// goes to `signals`.
+    /// goes to `signals`, and the `apis` are theirs to call.
     pub fn start(
         config: config::Vm,
         scope: &mut Scope,
         signals: UnboundedSender<Signal>,
+        apis: Arc<Apis>,
     ) -> Result<Self> {
         let guest = Guest::load(&config.guest)?;
         std::fs::create_dir_all(&config.dir)?;
         let (requests, rx) = mpsc::unbounded_channel();
         let sessions = Sessions::with_programs(signals.clone());
         let served = sessions.clone();
-        scope.spawn(move |_| run(config, guest, served, signals, rx));
-        Ok(Self { requests, sessions })
+        let called = Arc::clone(&apis);
+        scope.spawn(move |_| run(config, guest, served, called, signals, rx));
+        Ok(Self {
+            requests,
+            sessions,
+            apis,
+        })
     }
 
     /// The MCP service's sessions, which programs and background agents
     /// in the VMs call through.
     pub fn sessions(&self) -> &Sessions {
         &self.sessions
+    }
+
+    /// The HTTP APIs the VMs call through the host.
+    pub fn apis(&self) -> &Apis {
+        &self.apis
     }
 
     /// The conversation's VM, started if it isn't running; or why there
@@ -222,6 +235,7 @@ struct Service {
     config: Arc<config::Vm>,
     guest: Arc<Guest>,
     sessions: Sessions,
+    apis: Arc<Apis>,
     signals: UnboundedSender<Signal>,
     idle: Duration,
     vms: HashMap<ConversationId, State>,
@@ -239,6 +253,7 @@ async fn run(
     config: config::Vm,
     guest: Guest,
     sessions: Sessions,
+    apis: Arc<Apis>,
     signals: UnboundedSender<Signal>,
     mut requests: UnboundedReceiver<Request>,
 ) {
@@ -251,6 +266,7 @@ async fn run(
         config: Arc::new(config),
         guest: Arc::new(guest),
         sessions,
+        apis,
         signals,
         vms: HashMap::new(),
         boots: Scope::new(),
@@ -388,7 +404,8 @@ impl Service {
         let held = Arc::clone(&connection);
         tasks.spawn(move |_| ssh::stopper(held, stopped));
         let sessions = self.sessions.clone();
-        let host = host::router(conversation, self.internal.clone());
+        let host = host::router(conversation, self.internal.clone())
+            .merge(api::router(conversation, Arc::clone(&self.apis)));
         tasks.spawn(move |stop| mcp::serve_with(mcp, conversation, sessions, host, stop));
         let mut running = Running {
             slot,

@@ -504,9 +504,14 @@ impl Conversation {
             .turn(settings.model.as_deref(), settings.effort.as_deref())?;
         let now = Utc::now();
         let persona = settings.persona.as_deref().unwrap_or(prompt::PERSONA);
+        let apis = self
+            .shared
+            .vms
+            .as_ref()
+            .map_or("", |vms| vms.apis().prompt());
         let projection = Projection {
             place: &self.place,
-            system: prompt::system(persona, &mcp::tool::DECLARATIONS),
+            system: prompt::system(persona, &mcp::tool::DECLARATIONS, apis),
             window: chosen.window,
             cleared_upto: settings.cleared_upto,
             memory: self.memory().await,

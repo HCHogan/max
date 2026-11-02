@@ -22,6 +22,8 @@ use tokio::time::timeout;
 
 use super::{Caller, Sessions};
 
+pub mod api;
+
 /// A request carries the agent's whole context.
 const LARGEST: usize = 64 << 20;
 const CONNECT: Duration = Duration::from_secs(10);

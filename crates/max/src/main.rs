@@ -124,7 +124,7 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
     let outs = runtime.block_on(async {
         let mut services = Scope::new();
         let (signals, mut heard) = mpsc::unbounded_channel();
-        let vms = Vms::start(vm, &mut services, signals)?;
+        let vms = Vms::start(vm, &mut services, signals, Arc::default())?;
         // What maxx wake would wake Max with, answered here; the other
         // calls of programs aren't.
         let woken = Arc::new(Mutex::new(Vec::new()));
@@ -493,8 +493,10 @@ async fn serve(config: Config) -> Result<()> {
     }
     // What the VMs have for the conversations, such as max-wake.
     let (signals, signals_rx) = mpsc::unbounded_channel();
+    // Their secrets are read now, so a missing one stops max here.
+    let apis = Arc::new(mcp::api::Apis::load(&config.api)?);
     let vms = match config.vm {
-        Some(vm) => Some(Vms::start(vm, &mut services, signals)?),
+        Some(vm) => Some(Vms::start(vm, &mut services, signals, apis)?),
         None => {
             info!("no VMs: the tools can't run");
             None

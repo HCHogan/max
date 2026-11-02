@@ -370,7 +370,7 @@ async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
 | 工具调用上限 | 两处：`run_code`、`shell` 一次运行一个（`shell` 默认 120 秒，调用最多要 600 秒，后台跑的默认 30 分钟、最多 2 小时，见[后台命令](#后台命令)；guest 里的 unit 另有晚 30 秒的 `RuntimeMaxSec`，max 这边丢了也停得掉）；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
 | VM 开机 | VM 服务里一次：60 秒内要能 SSH 进去，每 100 ms 试一次；等 virtiofsd 建 socket 5 秒；外面再套一层 70 秒 | 防卡死 |
 | VM 闲置 | VM 服务里一次：每分钟扫一遍，闲置超过 `idle_minutes`（默认 120）的关掉，常开的除外（见[常驻程序](#常驻程序)） | 策略 |
-| 网络客户端 | 配置里一次：LLM 的 `stream_idle_timeout_secs`（响应头和之后的每一段都要在这个时间内到，整个调用不设上限）、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`max-llm` 里写死的连接超时，`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避 | 防卡死 |
+| 网络客户端 | 配置里一次：LLM 的 `stream_idle_timeout_secs`（响应头和之后的每一段都要在这个时间内到，整个调用不设上限）、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`max-llm` 里写死的连接超时，`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避；[宿主带 key 的 API](#宿主带-key-的-api) 写死的连接 10 秒、每一段 60 秒 | 防卡死 |
 | 先等再升级 | 按需 | 策略，比如 `close` 先给命令时间自己退出 |
 | 常驻服务里的等待表 | 每张表一次 | 防泄漏，比如 sender 里等回执的表。常驻服务外面没有取消替它兜底 |
 | 派生数据 worker | 各 worker 自己的一处，数值是它的常量：下载靠 HTTP 客户端的 10 秒连接超时和 60 秒整体超时，重试前等 1 秒和 4 秒；caption 每次调用 2 分钟；embedding 每次请求 30 秒 | 防卡死；重试和重扫是策略 |
@@ -1587,6 +1587,38 @@ v1 不做。2026-10-29 先做成每次运行现起 camoufox，当天晚上改成
 - **提交人**：配了 `[github]`，VM 的内核命令行多一个 `max.git=<login>,<id>+<login>@users.noreply.github.com`，guest 开机写进 `/etc/gitconfig`，Max 的提交就算在账号名下，注册邮箱不出现。
 - 后台 agent 也能用这两个工具：`job` 标记的意思从"只读"改成"不在群里说话做事"。
 - 不做：开 issue、在别人的讨论里说话、review 别人的 PR、私有仓库、Max 自己收邮件注册别的网站。
+
+### 宿主带 key 的 API
+
+2026-11-02 加（owner 要的，起因是想让 Max 发邮件）：每接一个要 key 的服务就在宿主上写一个工具（像 [GitHub](#github)、[网页搜索](#网页搜索)）太重。通用的做法是宿主替 VM 转发 HTTP 请求、路上加 key，和后台 agent 的 `/llm` 一样（见[后台 agent](#后台-agent)），key 不进 VM。
+
+- **调研**（2026-11-02）：现成的有两类。一类在出口解开 HTTPS，把 VM 里的占位符换成真的 key：[iron-proxy](https://github.com/ironsh/iron-proxy)（Go，Apache-2.0，没列出的域名一律拒绝），Docker Sandboxes、Deno Sandbox 里也有同样的功能。好处是 git、gh、SDK 都不用改；代价是 guest 要信任一个 CA，流量要绕一个代理，而 Max 的 VM 要能上整个公网（浏览器、`webread`）。另一类是显式代理：Fly.io 的 [tokenizer](https://github.com/superfly/tokenizer)，客户端把它当 HTTP 代理用，它加上 key、用 HTTPS 发出去，每个 secret 绑着许可的主机。VM 到宿主已经有 MCP 服务这条通道，就照 tokenizer 的模型在 `forward.rs` 旁边写了一个，不多跑一个服务。
+- **用法**：VM 里请求 `http://127.0.0.1:7777/api/<名字>/<路径>`，宿主把路径接在配置的 `base_url` 后面，换上 key 转过去，回答原样流回来（状态码、头、正文）。curl、fetch 都行；用 SDK 就把 base URL 设成 `http://127.0.0.1:7777/api/<名字>`，key 随便填。不用 token：unit、后台命令、后台 agent 都能调。和不带 token 的 `maxx` 一样，宿主分不出 VM 里是谁在调（见[常驻程序](#常驻程序)）。
+- **配置**：
+
+  ```toml
+  [api.resend]
+  base_url = "https://api.resend.com"
+  secret_file = "/run/secrets/maxx/resend-api-key"
+  headers = { Authorization = "Bearer {secret}" }
+  allow = ["POST /emails", "GET /emails/*"]
+  per_hour = 20
+  about = "发邮件，发件人写 max@example.com。文档 https://resend.com/docs/api-reference 。"
+  ```
+
+  - `headers`、`query` 里的 `{secret}` 换成 key，至少要有一处。不带 key 的固定头（API 版本之类）也写在 `headers` 里。basic auth 就把 `base64(用户:密码)` 存成 secret，写 `Authorization = "Basic {secret}"`。
+  - `allow` 是一条条 `方法 路径`，方法可以写 `*`；路径里的 `*` 段匹配任意一段，末尾的 `**` 匹配下面所有的。不写 `allow` 就都许。`per_hour` 是所有群加起来的次数，记在内存里，重启清零。
+  - `about` 连同地址、`allow`、`per_hour` 放进系统提示，一个 API 一行（`prompt::system` 的第三个参数）。没配 VM 就不放。
+  - 名字只能有小写字母、数字和 `-`。这些在建系统时由 `check-config` 查（它不读 secret）；secret 在 max 启动时读，读不到就起不来。
+- **宿主守的**：
+  - 路径归一化以后必须还在 `base_url` 下面、同一个 origin。路径里有 `%2f`、`%5c`、`%2e` 的一律拒绝，免得 API 那边解码出别的路径，绕过 `allow`。
+  - 程序带的 `Authorization`（可能是它这一轮的 token）、连接相关的头和 `Accept-Encoding` 不转；配置里的头盖掉同名的。
+  - 不跟重定向，3xx 原样回给程序。跟了的话，key 所在的头会带到 API 指的任何地方：reqwest 只在换主机时去掉 `Authorization`，别的头照带。
+  - 连不上时，给程序的错误去掉 URL：key 可能在 query 里。
+  - 每次调用、每次拒绝都记日志：群、API、方法、路径、状态码，不记正文。
+  - 连接 10 秒超时；响应头和之后的每一段要在 60 秒内到。
+- **管不了的**：key 防得住泄露，防不住滥用。能让 Max 在 VM 里跑命令的人，就能让它调这些 API，所以只适合 `allow` 和 `per_hour` 圈得住的 key。要看内容才能判断的（比如邮件只许发给哪些地址，GitHub 开 PR 的限额和脚注），还是写成宿主上的工具。
+- 代码：`config::Api`、`config::Rule`，`mcp/forward/api.rs`；VM 服务把 `/api` 并进每个 VM 的路由（`vm.rs`）。
 
 ### 待定事项
 

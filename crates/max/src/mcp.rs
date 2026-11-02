@@ -18,6 +18,7 @@ pub mod tool;
 mod web_search;
 pub(crate) mod work;
 
+pub use forward::api;
 pub use service::{Grant, Sessions, serve, serve_with};
 
 #[cfg(test)]

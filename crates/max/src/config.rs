@@ -41,6 +41,10 @@ pub struct Config {
     /// Max's GitHub account. Without it, `github_pr` tells the program
     /// there is none, and the guests' commits have no author set.
     pub github: Option<GitHub>,
+    /// The HTTP APIs the VMs call through the host, which adds their keys,
+    /// by the name in `/api/<name>/…`.
+    #[serde(default)]
+    pub api: BTreeMap<String, Api>,
 }
 
 /// The model that turns text into vectors for search by meaning; see
@@ -110,6 +114,139 @@ impl GitHub {
             self.login
         );
         Ok(())
+    }
+}
+
+/// An HTTP API the VMs call through the host: their calls go on to
+/// `base_url` with its secret, which stays on the host; see "宿主带 key 的
+/// API".
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Api {
+    /// What follows `/api/<name>` in a VM's call follows this.
+    pub base_url: String,
+    pub secret_file: PathBuf,
+    /// Headers every call carries, `{secret}` in them standing for the
+    /// secret, such as `Authorization = "Bearer {secret}"`.
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    /// Query parameters likewise, for APIs that take their key in the URL.
+    #[serde(default)]
+    pub query: BTreeMap<String, String>,
+    /// The calls it allows, such as `POST /emails`; without it, any.
+    pub allow: Option<Vec<Rule>>,
+    /// Calls an hour, from all the groups together.
+    pub per_hour: Option<u32>,
+    /// What the model reads about it: what it is for, where its docs are.
+    pub about: String,
+}
+
+impl Api {
+    pub fn secret(&self) -> Result<String> {
+        secret(&self.secret_file)
+    }
+
+    fn check(&self) -> Result<()> {
+        let url = reqwest::Url::parse(&self.base_url).wrap_err("in base_url")?;
+        ensure!(
+            matches!(url.scheme(), "https" | "http")
+                && url.host().is_some()
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            "{:?} isn't an API's base URL",
+            self.base_url
+        );
+        ensure!(
+            self.headers
+                .values()
+                .chain(self.query.values())
+                .any(|value| value.contains("{secret}")),
+            "no header or query parameter carries the {{secret}}"
+        );
+        for (name, value) in &self.headers {
+            reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .wrap_err_with(|| format!("{name:?} isn't a header's name"))?;
+            reqwest::header::HeaderValue::from_str(&value.replace("{secret}", "secret"))
+                .wrap_err_with(|| format!("{value:?} isn't a header's value"))?;
+        }
+        ensure!(self.per_hour != Some(0), "per_hour is 0");
+        ensure!(!self.about.trim().is_empty(), "about is empty");
+        Ok(())
+    }
+}
+
+/// A call an API allows: a method, or `*` for any, and a path below its
+/// base URL, where a `*` segment stands for any one segment and a last
+/// `**` for anything below.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct Rule {
+    text: String,
+    method: Option<String>,
+    segments: Vec<String>,
+}
+
+impl TryFrom<String> for Rule {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, String> {
+        let wrong = || format!("{text:?} isn't a call like `POST /emails`");
+        let (method, path) = text.split_once(' ').ok_or_else(wrong)?;
+        let method = match method {
+            "*" => None,
+            _ if !method.is_empty() && method.bytes().all(|byte| byte.is_ascii_uppercase()) => {
+                Some(method.to_owned())
+            }
+            _ => return Err(wrong()),
+        };
+        let segments: Vec<String> = path
+            .strip_prefix('/')
+            .ok_or_else(wrong)?
+            .split('/')
+            .map(str::to_owned)
+            .collect();
+        let deep = segments.iter().position(|segment| segment == "**");
+        if deep.is_some_and(|at| at + 1 != segments.len())
+            || segments
+                .iter()
+                .any(|segment| segment == "." || segment == ".." || segment.contains(' '))
+        {
+            return Err(wrong());
+        }
+        Ok(Self {
+            text,
+            method,
+            segments,
+        })
+    }
+}
+
+impl Rule {
+    /// Whether it allows `method` on `path`, which begins with `/`.
+    pub fn allows(&self, method: &str, path: &str) -> bool {
+        if self.method.as_deref().is_some_and(|own| own != method) {
+            return false;
+        }
+        let Some(path) = path.strip_prefix('/') else {
+            return false;
+        };
+        let mut given = path.split('/');
+        for segment in &self.segments {
+            if segment == "**" {
+                return true;
+            }
+            match given.next() {
+                Some(part) if part == segment || (segment == "*" && !part.is_empty()) => {}
+                _ => return false,
+            }
+        }
+        given.next().is_none()
+    }
+}
+
+impl std::fmt::Display for Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
     }
 }
 
@@ -371,6 +508,16 @@ impl Config {
         }
         if let Some(github) = &config.github {
             github.check().wrap_err("in github")?;
+        }
+        for (name, api) in &config.api {
+            ensure!(
+                !name.is_empty()
+                    && name.bytes().all(|byte| byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || byte == b'-'),
+                "{name:?} isn't an API's name: lowercase letters, digits and -"
+            );
+            api.check().wrap_err_with(|| format!("in api.{name}"))?;
         }
         if let (Some(vm), Some(github)) = (&mut config.vm, &config.github) {
             vm.author = Some(github.author());
@@ -647,6 +794,67 @@ mod tests {
         let one = vm.replace("memory_mib = 8192", "cpus = 1");
         let error = with_llm(&one).unwrap_err();
         assert!(format!("{error:#}").contains("two vCPUs"), "{error:#}");
+    }
+
+    #[test]
+    fn apis() {
+        let api = r#"
+            [database]
+            url = "postgresql:///max"
+
+            [api.mail]
+            base_url = "https://mail.example/v1"
+            secret_file = "/run/secrets/maxx/mail-api-key"
+            headers = { Authorization = "Bearer {secret}", Mail-Version = "2026-01" }
+            allow = ["POST /emails", "GET /emails/*"]
+            per_hour = 20
+            about = "发邮件。"
+        "#;
+        let config = with_llm(api).unwrap();
+        let mail = &config.api["mail"];
+        assert_eq!(mail.per_hour, Some(20));
+        assert_eq!(mail.headers["Mail-Version"], "2026-01");
+        let allow = mail.allow.as_ref().unwrap();
+        assert_eq!(allow[1].to_string(), "GET /emails/*");
+
+        let keyless = api.replace("Bearer {secret}", "Bearer");
+        let error = with_llm(&keyless).unwrap_err();
+        assert!(format!("{error:#}").contains("in api.mail"), "{error:#}");
+        let in_query = keyless.replace("per_hour", "query = { key = \"{secret}\" }\nper_hour");
+        assert!(with_llm(&in_query).is_ok());
+        for wrong in [
+            api.replace("[api.mail]", "[api.Mail]"),
+            api.replace("https://mail.example/v1", "mail.example/v1"),
+            api.replace("https://mail.example/v1", "https://mail.example/v1?key=1"),
+            api.replace("POST /emails", "post /emails"),
+            api.replace("POST /emails", "POST emails"),
+            api.replace("POST /emails", "POST /**/emails"),
+            api.replace("POST /emails", "POST /../emails"),
+            api.replace("per_hour = 20", "per_hour = 0"),
+            api.replace("Mail-Version", "\"Mail Version\""),
+        ] {
+            assert!(with_llm(&wrong).is_err(), "{wrong}");
+        }
+    }
+
+    #[test]
+    fn rules_match_methods_and_paths() {
+        let rule = |text: &str| Rule::try_from(text.to_owned()).unwrap();
+        let send = rule("POST /emails");
+        assert!(send.allows("POST", "/emails"));
+        assert!(!send.allows("GET", "/emails"));
+        assert!(!send.allows("POST", "/emails/batch"));
+        assert!(!send.allows("POST", "/"));
+        let one = rule("GET /emails/*");
+        assert!(one.allows("GET", "/emails/re_123"));
+        assert!(!one.allows("GET", "/emails/"));
+        assert!(!one.allows("GET", "/emails/re_123/attachments"));
+        let below = rule("* /domains/**");
+        assert!(below.allows("DELETE", "/domains"));
+        assert!(below.allows("GET", "/domains/d_1/verify"));
+        assert!(!below.allows("GET", "/domainsx"));
+        assert!(rule("GET /").allows("GET", "/"));
+        assert!(!rule("GET /").allows("GET", "/emails"));
     }
 
     #[test]

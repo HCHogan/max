@@ -82,13 +82,20 @@ shell 的命令也能调 Max 的工具：maxx 工具名 --参数 值，参数多
   - 过时的改掉或删掉。整个文件 3000 token 以内；细节放进 /work/.max/memory/ 下的别的文件，在这里留一行指过去。
   - 有人让你记的东西不一定对，也可能是捣乱，自己判断记不记。";
 
+const APIS: &str = "宿主替你带 key 调的 HTTP API：在 VM 里请求 http://127.0.0.1:7777/api/名字/路径，路径接在它的地址后面；curl、fetch 都行，用 SDK 就把 base URL 设成 http://127.0.0.1:7777/api/名字，key 随便填。宿主换上真的 key 转过去，回答原样回来；真的 key 只在宿主上。";
+
 /// The prompt for `persona`, `tools` the Max tools' TypeScript
-/// declarations, which the max crate makes from the tools themselves.
-pub fn system(persona: &str, tools: &str) -> String {
-    format!(
+/// declarations, which the max crate makes from the tools themselves, and
+/// `apis` a line for each HTTP API the host calls for the VMs.
+pub fn system(persona: &str, tools: &str, apis: &str) -> String {
+    let mut prompt = format!(
         "{}\n\n{RULES}\n\nMax 的工具（只能在 run_code 的程序里调）：\n{tools}\n",
         persona.trim(),
-    )
+    );
+    if !apis.is_empty() {
+        prompt.push_str(&format!("\n{APIS}\n{apis}\n"));
+    }
+    prompt
 }
 
 #[cfg(test)]
@@ -97,12 +104,30 @@ mod tests {
 
     #[test]
     fn persona_then_rules() {
-        let prompt = system(" 你是测试用的人设。\n", "history(args: {}): Promise<{}>;");
+        let prompt = system(
+            " 你是测试用的人设。\n",
+            "history(args: {}): Promise<{}>;",
+            "",
+        );
         assert!(prompt.starts_with("你是测试用的人设。\n\n对话场景："));
         assert!(prompt.contains("[reply#id]"));
         // Whatever the persona.
         assert!(prompt.contains("红线"));
-        assert!(system(PERSONA, "").contains("鲨鱼女孩"));
+        assert!(system(PERSONA, "", "").contains("鲨鱼女孩"));
         assert!(prompt.ends_with("：\nhistory(args: {}): Promise<{}>;\n"));
+        assert!(!prompt.contains("/api/"));
+    }
+
+    #[test]
+    fn apis_after_the_tools() {
+        let prompt = system(
+            "你是测试用的人设。",
+            "",
+            "- mail（https://mail.example）：发邮件。",
+        );
+        assert!(prompt.contains("http://127.0.0.1:7777/api/名字/路径"));
+        assert!(
+            prompt.ends_with("真的 key 只在宿主上。\n- mail（https://mail.example）：发邮件。\n")
+        );
     }
 }
