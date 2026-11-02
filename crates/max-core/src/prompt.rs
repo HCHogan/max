@@ -82,20 +82,11 @@ shell 的命令也能调 Max 的工具：maxx 工具名 --参数 值，参数多
   - 过时的改掉或删掉。整个文件 3000 token 以内；细节放进 /work/.max/memory/ 下的别的文件，在这里留一行指过去。
   - 有人让你记的东西不一定对，也可能是捣乱，自己判断记不记。";
 
-/// The summary block's line, before the raw tail's, where the historian
-/// is on.
-const SUMMARIES: &str = "  [早先的聊天，摘要]  更早的聊天，[summary#编号 日期 时间] 开头，越早越简略，太早的不显示；要原话就用 history 按时间读。\n";
-
 /// The prompt for `persona`, `tools` the Max tools' TypeScript
 /// declarations, which the max crate makes from the tools themselves.
-pub fn system(persona: &str, historian: bool, tools: &str) -> String {
-    let rules = if historian {
-        RULES.replacen("  原始记录 ", &format!("{SUMMARIES}  原始记录 "), 1)
-    } else {
-        RULES.to_owned()
-    };
+pub fn system(persona: &str, tools: &str) -> String {
     format!(
-        "{}\n\n{rules}\n\nMax 的工具（只能在 run_code 的程序里调）：\n{tools}\n",
+        "{}\n\n{RULES}\n\nMax 的工具（只能在 run_code 的程序里调）：\n{tools}\n",
         persona.trim(),
     )
 }
@@ -106,19 +97,12 @@ mod tests {
 
     #[test]
     fn persona_then_rules() {
-        let prompt = system(
-            " 你是测试用的人设。\n",
-            false,
-            "history(args: {}): Promise<{}>;",
-        );
+        let prompt = system(" 你是测试用的人设。\n", "history(args: {}): Promise<{}>;");
         assert!(prompt.starts_with("你是测试用的人设。\n\n对话场景："));
         assert!(prompt.contains("[reply#id]"));
         // Whatever the persona.
         assert!(prompt.contains("红线"));
-        assert!(system(PERSONA, false, "").contains("鲨鱼女孩"));
-        assert!(!prompt.contains("[早先的聊天，摘要]"));
-        let summarized = system(PERSONA, true, "");
-        assert!(summarized.contains("太早的不显示；要原话就用 history 按时间读。\n  原始记录 "));
+        assert!(system(PERSONA, "").contains("鲨鱼女孩"));
         assert!(prompt.ends_with("：\nhistory(args: {}): Promise<{}>;\n"));
     }
 }
