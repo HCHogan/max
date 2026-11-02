@@ -2,8 +2,9 @@
 # firewall's rules and the service's sandbox, and vm-check boots the
 # flake's guest the way max does, runs a command in it, runs a program
 # whose history reaches the database through the MCP service, one that
-# opens a page in the browser and saves a screenshot to /work, calls the
-# MCP service with maxx from a command, and keeps a unit in
+# opens a page in the browser and saves a screenshot to /work, runs
+# opencli in a tab of its own, calls the MCP service with maxx from a
+# command, and keeps a unit in
 # /work/.max/systemd, which the next boot starts again, and wakes Max with
 # max-wake.
 { pkgs, module }:
@@ -41,6 +42,8 @@ pkgs.testers.runNixOSTest {
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
   };
   testScript = ''
+    import re
+
     machine.wait_for_unit("maxx.service")
     machine.wait_until_succeeds("ip -br address show maxx-vm1 | grep -q 10.235.0.5/30")
     machine.succeed("systemctl start maxx-vm-check.service")
@@ -49,6 +52,14 @@ pkgs.testers.runNixOSTest {
     assert '"mcp":"not_found"' in shown, shown
     # The page's accessibility tree, with refs.
     assert '"tree":"检查\\n' in shown and 'button \\"搜索\\" [ref=e4]' in shown, shown
+    # opencli finds its commands without starting the browser, then reads
+    # a page in a tab of its own and closes it; the next program finds
+    # its tab as it left it.
+    listed = re.search(r"opencli 的 B 站命令：(\d+)\n浏览器：inactive\n", shown)
+    assert listed and int(listed[1]) >= 20, shown
+    assert "你好，opencli" in shown, shown
+    assert re.search(r"opencli 退出码 0，标签页 (\d+) → \1\n", shown), shown
+    assert '"kept":"还在"' in shown, shown
     # maxx calls the MCP service from a command, as the program did, and
     # lists the tools.
     assert "（not_found）\nmaxx 退出码 1\n1\n" in shown, shown

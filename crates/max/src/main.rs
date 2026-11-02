@@ -219,7 +219,9 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
         let steps = [
             shell,
             program,
+            command(OPENCLI_LIST),
             browse(BROWSE),
+            command(OPENCLI),
             browse(BROWSE_AGAIN),
             command(MAXX),
             command(UNITS),
@@ -299,6 +301,19 @@ EOF
 max-units
 echo "开机时：$before"
 echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机""#;
+
+/// opencli's commands for a site, which it finds without starting the
+/// browser, the way the prompt tells Max to.
+const OPENCLI_LIST: &str = r#"echo "opencli 的 B 站命令：$(opencli list --site bilibili --limit 100 | jq .data.total)"
+echo "浏览器：$(systemctl is-active max-browser.service)""#;
+
+/// opencli reads a page in a tab of its own, which it closes: the browser
+/// has as many tabs after as before, and the next program finds
+/// vm-check's tab as it left it.
+const OPENCLI: &str = r#"tabs() { curl -s http://127.0.0.1:9222/json/list | jq '[.[] | select(.type == "page")] | length'; }
+before=$(tabs)
+opencli web read --url 'data:text/html;charset=utf-8,<title>opencli</title><article><h1>你好，opencli</h1><p>它在自己的标签页里读。</p></article>' --stdout true --wait 0 --download-images false
+echo "opencli 退出码 $?，标签页 $before → $(tabs)""#;
 
 /// vm-check's tab in the browser: how long the browser took to start and
 /// the page to load, the snapshot, a field filled by its ref, a screenshot

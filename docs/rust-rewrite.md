@@ -131,7 +131,7 @@ v1 之后再加的：
 
 | 用途 | 选择 | 备注 |
 |---|---|---|
-| 浏览器 | nixpkgs 的 Chromium（现在 155），playwright-core 1.59.0 | 群 VM 里的常驻服务，程序经 CDP 连，见[浏览器](#浏览器) |
+| 浏览器 | nixpkgs 的 Chromium（现在 155），playwright-core 1.59.0，opencli 2.0.2 | 群 VM 里的常驻服务，程序经 CDP 连，见[浏览器](#浏览器) |
 | 向量 | pgvector 0.4.2 | 支持 sqlx < 0.10 |
 | 自动化 | croner 4 | |
 | 后台 agent | pi（`@earendil-works/pi-coding-agent`），`--mode rpc` | 跑在群 VM 里，在 Nix 里钉住版本 |
@@ -1572,6 +1572,15 @@ v1 不做。2026-10-29 先做成每次运行现起 camoufox，当天晚上改成
 - **字体**：guest 装了 Noto Sans CJK，Chromium 经 fontconfig 找到它。
 - **实测**（tank 上的嵌套测试，VM 2 个 vCPU、1 GiB 内存）：`vm-check` 的第三个程序起浏览器、打开一个 data: 页面、快照、截图存进 `/work`，测试检查快照里的选择器和截图。VM 10 秒起好。VM 开机后第一次起浏览器要 22 秒，多半是经 virtiofs 冷读 store，加上嵌套虚拟化；同一个 VM 里再起 4.3 秒，打开页面 0.4 秒。开着两个 context 时这次运行的匿名内存 370～410 MiB，cgroup 峰值（含页缓存）775 MiB。宿主上直接跑：加载模块 0.6 秒，起浏览器 0.5 秒，第一个页面 1.4 秒。真实网站没测，测试机不通外网。VM 默认 4 GiB 内存，不用加。
 - **提议**：Haskell 版用了 humanize（模拟鼠标轨迹）和虚拟显示（Xvfb，比 headless 难认出来），这里先只用 headless；被网站认出来再加。
+
+opencli（2026-11-03 加，owner 要试的）：常见网站用 [opencli](https://github.com/jackwener/opencli) 的命令，Playwright 照旧。
+
+- **是什么**：Apache-2.0，2026-03 开始，钉在 2.0.2。它把 150 来个网站做成 1223 条命令，786 条拿浏览器的 cookie 调站点自己的接口，各站的门道（B 站的 wbi 签名、知乎的接口、小红书结果卡片在页面哪里、登录墙和风控页怎么认）都写好了；288 条调公开接口，不用浏览器。结果是 JSON。它平常经 Chrome 扩展连桌面的 Chrome，也能用 `OPENCLI_CDP_ENDPOINT` 直接连 CDP：这里连群 VM 里的 Chromium，登录状态是同一份。
+- **为什么加**：10-29 到 11-02 线上用过 `run_code` 的 274 轮里，19 轮用了浏览器，约一半在它有命令的站点上（B 站 3 轮，知乎、Reddit、GitHub）。读一个 UP 主的动态，Max 用了 8 次浏览器调用（带 cookie 调接口、读 DOM、拦响应、读全文）；读一条知乎回答用了 6 次。opencli 各是一条命令。它不管登录：登录还是 Max 用 Playwright 做（B 站扫码那次用了 17 次调用），之后 profile 里的登录它也用。Playwright 不换：通用的页面它代替不了，它自己的 `browser` 命令（open、click、带编号的快照）和 `max.snapshot` 重复。
+- **一条命令一个标签页**：CDP 模式下它挑一个已有的标签页（有标题的优先，没有就报错）连上去，导航到它要的站点。几个客户端同时连一个标签页没问题，它断开也不关页面，Playwright 照样能用；问题是页面换了：比如等人扫码的登录页（Max 就跨几次调用等过），`Promise.all` 一起跑的几条 opencli 也会抢同一个标签页。所以 guest 的 `opencli` 是一层包装（`nix/opencli.js`）：`OPENCLI_CDP_ENDPOINT` 指向包装自己在 127.0.0.1 上起的 HTTP 服务，opencli 第一次要 `/json` 时，包装才 `systemctl start max-browser`、用 `PUT /json/new` 开一个空白标签页，只把它列出来；命令结束就关掉。不用浏览器的命令不开标签页，也不起浏览器。包装被 SIGKILL 时标签页会留下。
+- **打包**：`nix/opencli.nix` 取 npm 上的包（带编好的 `dist/` 和 `clis/`），17 个运行时依赖。npm 的包里没有 lock：`nix/opencli-lock.json` 是从它去掉 devDependencies 和 scripts 的 package.json 生成的，构建时同样去掉（安装脚本只写 shell 补全和 `~/.opencli`）。`CI=1` 关掉它每天查新版本和退出时的升级提示。适配器跟着网站改版坏得快（它自带一个修适配器的 skill），坏了先升版本：换版本和 hash，重新生成 lock 和 `npmDepsHash`，跑嵌套测试。`~/.opencli`（Max 自己写的适配器也在这）在 tmpfs 上，VM 关了就没。
+- **写操作**：评论、点赞、关注、发帖、删除这类命令也有，用的是 Max 的小号，被封的是它。提示词写明群友明确要才用，没在包装里拦。
+- **测试**：嵌套测试里 vm-check 先跑 `opencli list --site bilibili`（浏览器不起），再在它自己的标签页开着时让 `opencli web read` 读一个 data: 页面，查读到了正文、标签页数前后一样、下一个程序拿到的还是自己的标签页、填的字还在。真实网站要上线后在测试群试。
 
 ### GitHub
 

@@ -398,6 +398,8 @@ in
     runner
     # A page's text, as Markdown; PDFs through pdftotext.
     (import ./webread.nix { inherit pkgs; })
+    # Commands for common sites, in a tab of the browser's own.
+    (import ./opencli.nix { inherit pkgs; })
     # Background agents: pi, which programs can run too.
     (import ./max-pi.nix { inherit pkgs pi; })
     pi
