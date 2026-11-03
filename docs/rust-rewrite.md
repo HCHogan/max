@@ -1448,7 +1448,8 @@ struct Verdict { trigger: bool, reason: String }
 - **每次运行一个新进程**：宿主通过 vsock 上的 SSH，在群 VM 里执行 `node /run/max/runner.js`。runner 和 SDK 打进 guest 镜像，只读。stdin 传程序、参数、会话 token 和 Max 工具的名字；stdout 只有返回值（字符串原样，别的转成 JSON），`console` 和程序自己往 stdout 写的都改到 stderr，作为日志带回；退出码 0 是正常返回，1 是抛了异常，带上程序自己的行号。和 `shell` 一样是一个 transient unit，经 `bash -lc` 启动，程序里的子进程有登录环境。不做常驻进程，免得运行之间共享状态。`shell` 也是每次一个 SSH channel，直接 `bash -lc`，不经过 runner。
 - **启动**：VM 按需启动，约 4.5 秒后能执行命令（Haskell 版实测），闲置两小时关机。模型输出流里一出现 `run_code` 或 `shell` 调用就开始启动 VM，和模型写代码的时间重叠；不用工具的 turn 不启动。
 - **限制**：VM 的 CPU、内存上限和网络策略；`run_code` 和 `shell` 一次运行的墙钟上限；drop 时杀掉命令。不要求确定性，也没有 fuel。
-- **和核心的关系**：`run_code` 和 `shell` 在核心眼里都只是一次工具调用。程序里的 Max 工具调用不是核心的输入，结果里附一份内部调用的摘要，方便排查。Max 重启时宽限期到了还在跑的调用随连接断开被杀，核心给它补"已取消"，见[重启](#重启)。
+- **和核心的关系**：`run_code` 和 `shell` 在核心眼里都只是一次工具调用。程序里的 Max 工具调用不是核心的输入，结果里附一份内部调用的摘要，方便排查。
+- **每次调用记一行日志**（2026-11-03 owner 要的）：`a tool call ends`，带会话、工具（`run_code`、`shell`、`background`）、程序有没有用浏览器（代码里有 `max.page(`、`max.browser(`、`max.snapshot(` 就算）、耗时、是否出错、结果的 token 数和程序调过的 Max 工具。不记代码和输出：浏览器的程序常带着替人填的账号密码。起因：私聊里 gemini-3.8-flash 在 Google Cloud 控制台里点了 126 步，库里只有每次模型调用的 token 和耗时，看不出哪几步白点了。Max 重启时宽限期到了还在跑的调用随连接断开被杀，核心给它补"已取消"，见[重启](#重启)。
 - **已知风险**：VM 里的命令都以 root 运行。之前的提示注入如果在 VM 里留下了常驻进程，它可以拿到 runner 的 token 或接上它的 fd，用这一轮的工具。影响范围就是这一轮模型本来就能调的工具，新增的只是跨 turn 的持久化。接受。
 - **测试**：runner 只认 stdio 和 MCP，测试里在本机跑 node，接 fake MCP 服务，不需要 VM。
 
@@ -1473,6 +1474,7 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
 - **卷**归 `maxx` 所有，只在显式删除时删。
 - **装包、搜包**：`maxx` 经 nix daemon 构建，gc root 放在 `/var/lib/maxx/gcroots/<会话 id>/`，guest 通过只读的 store 共享看到它们。不需要 root。
 - **资源上限**：内存和 vCPU 由 hypervisor 参数限住（tank 上每个 8 个 vCPU、16 GiB），单个 VM 没有自己的 cgroup，所有 VM 加起来也没有上限：`maxx.slice` 没设内存上限，设了会连 maxx 本身一起限、到线就杀进程。内存是用到才分配的，guest 释放的页经 balloon 的 free page reporting 还给宿主；guest 的页缓存不算空闲，留到 VM 闲置关机（2026-10-30 定，owner 选的：平时一个 VM 用 1–2 GiB，几个群同时大编译才会挤，到时候在 guest 里闲置后清页缓存）。以后需要再做 cgroup 委托。
+- **闲置的 VM 清缓存**（2026-11-03 定）：VM 10 分钟没被工具用，宿主经 SSH 让 guest `sync`、`drop_caches=3`、`compact_memory`，之后每闲 10 分钟再来一次。页缓存放掉，记着的 dentry 和 inode 也放掉（virtiofsd 跟着关掉对应的描述符），整理出的大块空闲页由 free page reporting 还给宿主：cloud-hypervisor v52 对共享内存（`shared=on`，memfd）先 `fallocate` 打洞再 `MADV_DONTNEED`（看过源码）。常开的 VM 也清。不用 balloon 调大小、virtio-mem 热插拔内存或热插拔 vCPU：vCPU 闲着不占宿主，内存用到才分配，缩 VM 的上限只是逼 guest 丢缓存，直接丢更简单，也不用给 cloud-hypervisor 开 API socket。当天 tank 的数据：一周里最多同时 7 个 VM，平常 1–4 个；在跑的 7 个占 0.8–5.7 GiB，virtiofsd 另占 4.3 GiB，其中一个私聊的 store virtiofsd 开着 167 万个描述符（又有人扫了 store）；宿主 CPU 和内存压力都接近 0。所以 VM 的规格（8 vCPU、16 GiB、64 GiB 盘）、闲置关机的两小时、32 个槽位都不改。
 - **store 共享的文件描述符**：guest 查过的每个 store 文件，store 的 virtiofsd 都开着一个 O_PATH 描述符，直到 guest 的内核把它忘掉；guest 内存够大，就一直不忘。2026-10-30 一个后台 agent 为了找 glibc 的 ld-linux，`find /nix/store` 扫宿主的整个 store（当时 641 万个文件），virtiofsd 用满了 `maxx.service` 的 524288 个描述符，之后这个 VM 里新查的 store 文件都报 `Too many open files in system`，直到 VM 重启。所以：
   - `LimitNOFILE` 提到 8388608，virtiofsd 自己把软限制提到这么高，整个 store 扫一遍也够用。代价是宿主的内核内存，每个开着的文件约 1.4 KB（bcachefs 的 inode 1048 B，dentry 和 file 各 192 B），扫遍 store 约 9 GiB，guest 忘掉或 VM 关掉就还回来。
   - Max 和后台 agent 的提示里说：要某个包里的文件，用 `nix build --no-link --print-out-paths nixpkgs#包名` 拿路径，不在 `/nix/store` 下 find、ls、用通配符。
@@ -1704,7 +1706,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
   - 提示词在第二步加：只有第一步时 VM 照旧会停，跟 Max 说"常驻"不对。
 - **第二步（做了，11-01）：宿主那边。**
   - ~~**宿主的端口**~~（11-02 去掉，见第三步）：每个 VM 第二个 hybrid vsock 端口 7778，一次连接一行 JSON：`{"wake": "……"}` 或 `{"units": 2}`，回 `{"ok": true, "said": "……"}`。每个 VM 有自己的 socket，连上来的是哪个群不用 token。
-  - **常开**：`[vm] kept`，默认 4 个群（tank 62 GiB；11-01 在跑的三个 VM 占 0.8、2.2、4.6 GiB，page cache 会让它慢慢往 16 GiB 涨）。常开的 VM 不因闲置关、不被挤掉，扫的时候没在跑就开起来。哪些群常开：
+  - **常开**：`[vm] kept`，默认 4 个群（tank 62 GiB；11-01 在跑的三个 VM 占 0.8、2.2、4.6 GiB，page cache 会让它慢慢往 16 GiB 涨）。tank 上 2026-11-03 起是 12 个：当时 4 个名额已经满了（三个群、一个私聊），owner 要请几个朋友在私聊里把 Max 当个人 agent 用；闲置清缓存以后一个常开、闲着的 VM 不再一直涨。提示词里不写名额，满了 `max-units` 会说。常开的 VM 不因闲置关、不被挤掉，扫的时候没在跑就开起来。哪些群常开：
     - maxx 启动时读 `<vm.dir>/<会话>/work/.max/systemd/`，有 unit 文件的（和 `max-units` 认的后缀一样，链接不算）按会话 id 取前 4 个，马上开。会话 0 是 `vm-check` 的，不算。
     - 之后听 `max-units`：它每次跑完（开机那次和 Max 手动的）把 unit 个数报给宿主，有就常开（满了就不，回话里说），0 个就不再常开。回话 `max-units` 原样打出来，Max 看得到这个群的 VM 会不会一直开着。
   - **叫醒**：`max-wake '……'`（`nix/max-wake.sh`，参数或标准输入）。VM 服务把它作为 `Signal::Wake` 交给会话表，会话表找这个会话的 actor，没在跑就起一个（按 Max 在的平台查 `endpoint_on`、`find_endpoint`，和收到消息时起的一样），送 `Event::Woken`。actor 里原因是 `Reason::Program`，给模型看的是 `[max-wake] ……`，按单条上限截；有核心在跑就当输入，没有就起一个。程序收到"叫醒了 Max"。没用原计划的 `[自动化 m#2 触发]`：没有登记表，也就没有编号。

@@ -17,6 +17,7 @@ use serde_json::json;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::time::{Instant, timeout};
+use tracing::info;
 
 use crate::job::{self, Ending, Finished, How, Reply, Request};
 use crate::mcp::{self, Grant};
@@ -38,8 +39,58 @@ const GUEST_MARGIN: Duration = Duration::from_secs(30);
 /// it; the whole goes to a file in /work.
 const SHOWN: usize = 16 * 1024;
 
-/// Runs `tool` for a call from `context`'s conversation.
+/// Runs `tool` for a call from `context`'s conversation, and logs how it
+/// went: what a task took in steps, and how many failed.
 pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOutput {
+    let conversation = context.place.conversation;
+    let (name, browser) = match &tool {
+        Tool::RunCode { code, .. } => ("run_code", browses(code)),
+        Tool::Shell {
+            background: true, ..
+        } => ("background", false),
+        Tool::Shell { .. } => ("shell", false),
+    };
+    let started = Instant::now();
+    let (output, calls) = call(tool, vms, context).await;
+    info!(
+        %conversation,
+        tool = name,
+        browser,
+        took_ms = started.elapsed().as_millis() as u64,
+        error = output.error,
+        tokens = output.tokens,
+        calls = tally(&calls),
+        "a tool call ends"
+    );
+    output
+}
+
+/// Whether a program drives the VM's browser, as far as its code says.
+fn browses(code: &str) -> bool {
+    ["max.browser(", "max.page(", "max.snapshot("]
+        .iter()
+        .any(|call| code.contains(call))
+}
+
+/// The Max tools a program called, for the log: `history 2, send 1/1`
+/// with the failures after the slash.
+fn tally(calls: &BTreeMap<String, (u32, u32)>) -> String {
+    let each: Vec<String> = calls
+        .iter()
+        .map(|(tool, (succeeded, failed))| match failed {
+            0 => format!("{tool} {succeeded}"),
+            _ => format!("{tool} {succeeded}/{failed}"),
+        })
+        .collect();
+    each.join(", ")
+}
+
+/// Runs `tool`: what the model is shown, and the Max tools it called.
+async fn call(
+    tool: Tool,
+    vms: Option<&Vms>,
+    context: mcp::Context,
+) -> (ToolOutput, BTreeMap<String, (u32, u32)>) {
     let text = |text: String, error| {
         let tokens = tokens::count(&text);
         ToolOutput::text(text, error, tokens)
@@ -59,14 +110,15 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
             .map_or(BACKGROUND_TIME, Duration::from_millis)
             .clamp(Duration::from_secs(1), BACKGROUND_TIME_MAX);
         let (shown, error) = started(&context, command, workdir, limit).await;
-        return text(shown, error);
+        return (text(shown, error), BTreeMap::new());
     }
     let Some(vms) = vms else {
-        return text(format!("这里没有配 VM，{name} 用不了。"), true);
+        let shown = text(format!("这里没有配 VM，{name} 用不了。"), true);
+        return (shown, BTreeMap::new());
     };
     let vm = match vms.get(context.place.conversation).await {
         Ok(vm) => vm,
-        Err(error) => return text(error, true),
+        Err(error) => return (text(error, true), BTreeMap::new()),
     };
     let limit = timeout_ms
         .map_or(SHELL_TIME, Duration::from_millis)
@@ -93,7 +145,7 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
         };
         output.parts.push(part);
     }
-    output
+    (output, grant.calls())
 }
 
 /// The systemd-run line that runs `command` as the unit `unit`, at most
@@ -583,5 +635,15 @@ mod tests {
             called(&calls),
             "\n调了 Max 的工具：history 4 次（失败 1 次），memory_list 1 次"
         );
+        assert_eq!(tally(&calls), "history 3/1, memory_list 1");
+    }
+
+    #[test]
+    fn a_program_browses_if_it_asks_for_the_browser() {
+        assert!(browses(
+            "const page = await max.page();\nawait page.click('a');"
+        ));
+        assert!(browses("return await max.snapshot(await max.page())"));
+        assert!(!browses("return fs.readdirSync('/work')"));
     }
 }

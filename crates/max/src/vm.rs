@@ -35,6 +35,12 @@ use crate::scope::Scope;
 /// How often idle and dead VMs are looked for, and kept ones that are
 /// down are started.
 const SWEEP: Duration = Duration::from_secs(60);
+/// A VM unused this long has its guest drop its caches, and again each time
+/// it stays unused as long again. A guest's page cache, and the files it
+/// remembers looking up, which virtiofsd keeps open, are otherwise never
+/// freed while it runs; what it frees goes back to the host through the
+/// balloon's free page reporting.
+const TRIM: Duration = Duration::from_secs(10 * 60);
 /// A VM that failed to boot, or stopped by itself, twice within this long
 /// boots once without Max's units: one of them may be what stops it.
 const FAILING: Duration = Duration::from_secs(30 * 60);
@@ -209,11 +215,13 @@ struct Running {
     connection: Arc<Connection>,
     stops: UnboundedSender<String>,
     /// The stopper, which stops the units of commands dropped early, the
-    /// VM's MCP service and its port to the VM service.
-    _tasks: Scope,
+    /// VM's MCP service and its port to the VM service; and trims.
+    tasks: Scope,
     work: Arc<PathBuf>,
     lent: Arc<()>,
     idle_since: Instant,
+    /// When the guest last dropped its caches, or booted.
+    trimmed: Instant,
 }
 
 impl Running {
@@ -233,6 +241,21 @@ impl Running {
 
     fn dead(&mut self) -> bool {
         self.machine.exited() || self.connection.is_closed()
+    }
+
+    /// Has the guest drop its caches if it has gone unused for `TRIM`
+    /// since it was last used or trimmed.
+    fn trim(&mut self, conversation: ConversationId, now: Instant) {
+        if now < self.idle_since.max(self.trimmed) + TRIM {
+            return;
+        }
+        self.trimmed = now;
+        let connection = Arc::clone(&self.connection);
+        self.tasks.spawn(move |_| async move {
+            if let Err(error) = ssh::trim(&connection).await {
+                warn!(%conversation, error = format!("{error:#}"), "couldn't trim an idle VM");
+            }
+        });
     }
 }
 
@@ -424,10 +447,11 @@ impl Service {
             machine,
             connection,
             stops,
-            _tasks: tasks,
+            tasks,
             work: Arc::new(work(&self.config.dir, conversation)),
             lent: Arc::new(()),
             idle_since: Instant::now(),
+            trimmed: Instant::now(),
         };
         for reply in waiting {
             let _ = reply.send(Ok(running.lend()));
@@ -442,8 +466,8 @@ impl Service {
         }
     }
 
-    /// Stops idle VMs, but kept ones; finds dead ones; starts kept ones
-    /// that are down.
+    /// Stops idle VMs, but kept ones, and trims the rest that are unused;
+    /// finds dead ones; starts kept ones that are down.
     fn sweep(&mut self) {
         let now = Instant::now();
         let mut died = Vec::new();
@@ -457,12 +481,11 @@ impl Service {
             } else if running.lent() {
                 running.idle_since = now;
                 true
-            } else if self.kept.contains(conversation) {
-                true
-            } else if now >= running.idle_since + self.idle {
+            } else if !self.kept.contains(conversation) && now >= running.idle_since + self.idle {
                 info!(%conversation, "stopped an idle VM");
                 false
             } else {
+                running.trim(*conversation, now);
                 true
             };
             if !keep {

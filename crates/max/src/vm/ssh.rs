@@ -179,10 +179,24 @@ pub async fn stopper(connection: Arc<Connection>, mut units: UnboundedReceiver<S
 }
 
 async fn stop(connection: &Connection, unit: &str) -> Result<()> {
+    exec(connection, &format!("systemctl stop {}", quote(unit))).await
+}
+
+/// Has the guest write out and drop its page cache and the files it
+/// remembers, and gather what is free into blocks large enough for free
+/// page reporting to give back.
+pub async fn trim(connection: &Connection) -> Result<()> {
+    exec(
+        connection,
+        "sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory",
+    )
+    .await
+}
+
+/// Runs `line` as root and waits for it to end.
+async fn exec(connection: &Connection, line: &str) -> Result<()> {
     let mut channel = connection.channel_open_session().await?;
-    channel
-        .exec(true, format!("systemctl stop {}", quote(unit)))
-        .await?;
+    channel.exec(true, line).await?;
     channel.eof().await?;
     while channel.wait().await.is_some() {}
     Ok(())
