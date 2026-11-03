@@ -3,8 +3,8 @@
 # flake's guest the way max does, runs a command in it, runs a program
 # whose history reaches the database through the MCP service, one that
 # opens a page in the browser and saves a screenshot to /work, runs
-# opencli in a tab of its own, calls the MCP service with maxx from a
-# command, and keeps a unit in
+# opencli in a tab of its own, shows the model a video ffmpeg made, calls
+# the MCP service with maxx from a command, and keeps a unit in
 # /work/.max/systemd, which the next boot starts again, and wakes Max with
 # max-wake.
 { pkgs, module }:
@@ -60,6 +60,9 @@ pkgs.testers.runNixOSTest {
     assert "你好，opencli" in shown, shown
     assert re.search(r"opencli 退出码 0，标签页 (\d+) → \1\n", shown), shown
     assert '"kept":"还在"' in shown, shown
+    # The guest's ffmpeg made a clip and the model's copy of it, whose
+    # length the host read.
+    assert '{"seconds":3}' in shown, shown
     # maxx calls the MCP service from a command, as the program did, and
     # lists the tools.
     assert "（not_found）\nmaxx 退出码 1\n1\n" in shown, shown

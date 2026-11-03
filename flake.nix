@@ -183,6 +183,7 @@
                   pkgs.nodejs
                   (pkgs.python3.withPackages (p: [ p.trafilatura ]))
                   pkgs.poppler-utils
+                  pkgs.ffmpeg-headless
                 ];
                 # #[sqlx::test] makes a scratch database per test on this
                 # server. TCP only: a socket path under $TMPDIR can be too

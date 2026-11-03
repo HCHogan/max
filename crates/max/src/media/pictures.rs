@@ -1,7 +1,7 @@
 //! The pictures a model call is sent: the versions made for the model,
 //! read from the content store as data URLs. An item names a row's
-//! medium, and this finds it; a tool result names the file itself. See
-//! "媒体" and "多模态结果".
+//! medium, and this finds it; a tool result names the file itself, and
+//! names videos too. See "媒体" and "多模态结果".
 
 use std::collections::{BTreeMap, HashSet};
 use std::io;
@@ -30,6 +30,9 @@ const POLL: Duration = Duration::from_millis(250);
 /// The most pictures of tool results a call is sent: the newest. Older
 /// ones are named in their results instead.
 const MOST_SHOWN: usize = 8;
+/// The most seconds of video of tool results a call is sent: the newest
+/// videos'. Older ones are named in their results instead.
+const MOST_VIDEO_SECONDS: u32 = 600;
 
 pub struct Pictures {
     pub pool: PgPool,
@@ -38,8 +41,9 @@ pub struct Pictures {
 
 impl Pictures {
     /// The pictures `request` names: rows' by handle, tool results' by
-    /// SHA-256. Those that are gone, or can't be read, are left out with a
-    /// warning; the model still has their handles.
+    /// SHA-256; and its tool results' videos, by SHA-256. Those that are
+    /// gone, or can't be read, are left out with a warning; the model
+    /// still has their handles.
     pub async fn read(&self, request: &Request) -> max_llm::Pictures {
         let mut pictures = BTreeMap::new();
         for sha256 in shown(request) {
@@ -48,6 +52,15 @@ impl Pictures {
                     pictures.insert(sha256.to_owned(), url);
                 }
                 Err(error) => warn!(%sha256, %error, "reading a tool's picture for a model call"),
+            }
+        }
+        for sha256 in videos(request) {
+            match fs::read(self.store.path(sha256)).await {
+                Ok(bytes) => {
+                    let url = format!("data:video/mp4;base64,{}", STANDARD.encode(&bytes));
+                    pictures.insert(sha256.to_owned(), url);
+                }
+                Err(error) => warn!(%sha256, %error, "reading a tool's video for a model call"),
             }
         }
         let wanted: HashSet<Image> = request
@@ -124,18 +137,22 @@ impl Pictures {
     }
 }
 
-/// The pictures tool results in `request` show, newest first, each once,
-/// at most [`MOST_SHOWN`].
-fn shown(request: &Request) -> Vec<&str> {
-    let mut shown = Vec::new();
-    let parts = request.items.iter().rev().flat_map(|item| {
+/// The parts of `request`'s tool results, newest first.
+fn parts(request: &Request) -> impl Iterator<Item = &Part> {
+    request.items.iter().rev().flat_map(|item| {
         let parts = match &item.kind {
             ItemKind::ToolResult { output, .. } => output.parts.as_slice(),
             _ => &[],
         };
         parts.iter().rev()
-    });
-    for part in parts {
+    })
+}
+
+/// The pictures tool results in `request` show, newest first, each once,
+/// at most [`MOST_SHOWN`].
+fn shown(request: &Request) -> Vec<&str> {
+    let mut shown = Vec::new();
+    for part in parts(request) {
         if let Part::Media {
             media: MediaRef::Blob(sha256),
         } = part
@@ -146,6 +163,28 @@ fn shown(request: &Request) -> Vec<&str> {
     }
     shown.truncate(MOST_SHOWN);
     shown
+}
+
+/// The videos tool results in `request` show, newest first, each once,
+/// as long as they come to at most [`MOST_VIDEO_SECONDS`].
+fn videos(request: &Request) -> Vec<&str> {
+    let mut videos = Vec::new();
+    let mut left = MOST_VIDEO_SECONDS;
+    for part in parts(request) {
+        if let Part::Video {
+            media: MediaRef::Blob(sha256),
+            seconds,
+        } = part
+            && !videos.contains(&sha256.as_str())
+        {
+            let Some(after) = left.checked_sub(*seconds) else {
+                break;
+            };
+            left = after;
+            videos.push(sha256.as_str());
+        }
+    }
+    videos
 }
 
 #[cfg(test)]

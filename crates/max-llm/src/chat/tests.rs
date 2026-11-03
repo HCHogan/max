@@ -556,3 +556,72 @@ fn programs_pictures_follow_their_results() {
     assert_eq!(messages[3]["role"], "user");
     assert_eq!(messages.as_array().unwrap().len(), 4);
 }
+
+/// A result that shows a picture and then two videos, the second one not
+/// in the request.
+fn watched(call: &str) -> Item {
+    let video = |sha256: &str| Part::Video {
+        media: MediaRef::Blob(sha256.into()),
+        seconds: 3,
+    };
+    let output = ToolOutput {
+        parts: vec![
+            Part::Text {
+                text: "返回值：\n看了".into(),
+            },
+            Part::Media {
+                media: MediaRef::Blob("aa".into()),
+            },
+            video("vv"),
+            video("ww"),
+        ],
+        error: false,
+        tokens: 1,
+    };
+    Item::new(
+        ItemKind::ToolResult {
+            call: CallId(call.into()),
+            output,
+        },
+        1,
+    )
+}
+
+#[test]
+fn programs_videos_follow_their_results() {
+    let gemini = model("gemini-3.8-flash-high");
+    let request = Request {
+        model: gemini.clone(),
+        items: vec![
+            from(&gemini, ItemKind::ToolCall(call("call_1", "{}")), None),
+            watched("call_1"),
+            Item::new(ItemKind::user("后来"), 1),
+        ],
+        tools: &[],
+        max_output: None,
+        roster: BTreeSet::new(),
+    };
+    let (picture, video) = ("data:image/png;base64,AA", "data:video/mp4;base64,AAAA");
+    let pictures = Pictures(
+        [
+            ("aa".to_owned(), picture.to_owned()),
+            ("vv".to_owned(), video.to_owned()),
+        ]
+        .into(),
+    );
+    let messages = body(&request, &Options::default(), &pictures)["messages"].clone();
+    assert_eq!(
+        messages[1]["content"],
+        "返回值：\n看了\n[图 1，见下]\n[视频 2，见下]\n[这段视频省略了，要看再 max.video]"
+    );
+    assert_eq!(
+        messages[2],
+        json!({ "role": "user", "content": [
+            { "type": "text", "text": "[图 1]" },
+            { "type": "image_url", "image_url": { "url": picture } },
+            { "type": "text", "text": "[视频 2]" },
+            { "type": "video_url", "video_url": { "url": video } },
+        ] })
+    );
+    assert_eq!(messages[3]["content"], "后来");
+}

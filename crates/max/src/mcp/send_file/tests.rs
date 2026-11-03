@@ -84,6 +84,7 @@ async fn a_report_goes_out_under_its_name(pool: PgPool) {
         }),
         place: Arc::clone(&place),
         page_tokens: 2000,
+        video: false,
         work: Some(work.clone()),
         caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
     };

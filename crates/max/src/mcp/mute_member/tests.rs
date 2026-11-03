@@ -104,6 +104,7 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
         }),
         place: Arc::clone(&place),
         page_tokens: 2000,
+        video: false,
         work: None,
         caller: Caller::Check,
     };
@@ -159,6 +160,7 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
             my_name: "maxx".into(),
         }),
         page_tokens: 2000,
+        video: false,
         work: None,
         caller: Caller::Check,
     };

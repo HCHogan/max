@@ -338,3 +338,43 @@ fn a_programs_pictures_go_in_its_output() {
         "返回值：\n截好了\n[这张图省略了，要看再 max.image]\n[这张图省略了，要看再 max.image]"
     );
 }
+
+#[test]
+fn a_video_is_named_in_its_output() {
+    let output = ToolOutput {
+        parts: vec![
+            Part::Text {
+                text: "返回值：\n看了".into(),
+            },
+            Part::Video {
+                media: MediaRef::Blob("vv".into()),
+                seconds: 3,
+            },
+        ],
+        error: false,
+        tokens: 1,
+    };
+    let request = Request {
+        model: luna(),
+        items: vec![Item::new(
+            ItemKind::ToolResult {
+                call: CallId("call_1".into()),
+                output,
+            },
+            1,
+        )],
+        tools: &[],
+        max_output: None,
+        roster: BTreeSet::new(),
+    };
+    // Responses takes no video: a note in its place.
+    let pictures = Pictures([("vv".to_owned(), "data:video/mp4;base64,AAAA".to_owned())].into());
+    let body = body(&request, &Options::default(), &pictures);
+    assert_eq!(
+        body["input"][0]["output"],
+        json!([
+            { "type": "input_text", "text": "返回值：\n看了" },
+            { "type": "input_text", "text": "[这里有一段视频，这个模型看不了]" },
+        ])
+    );
+}

@@ -98,6 +98,7 @@ async fn the_nearest_stickers_by_handle(pool: PgPool) {
         }),
         place,
         page_tokens: 2000,
+        video: false,
         work: None,
         caller: Caller::Check,
     };

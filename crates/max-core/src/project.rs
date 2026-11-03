@@ -180,6 +180,11 @@ pub const MOST_PICTURES: usize = 8;
 /// Claude, Gemini and GPT charge for one 1568 pixels on its long side.
 pub const PICTURE_TOKENS: u32 = 1200;
 
+/// What a second of video is reckoned to cost until the provider says:
+/// Gemini through cliproxy counted 87 for a frame a second with its sound
+/// (2026-11-03).
+pub const VIDEO_TOKENS_PER_SECOND: u32 = 100;
+
 /// Shows the model the pictures and stickers among `messages`, after
 /// `item`'s text, in order, while `left` lasts. Those without a reference
 /// to download are left out.

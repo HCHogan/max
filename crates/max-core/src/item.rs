@@ -122,8 +122,17 @@ impl ToolOutput {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Part {
-    Text { text: String },
-    Media { media: MediaRef },
+    Text {
+        text: String,
+    },
+    Media {
+        media: MediaRef,
+    },
+    /// An MP4 the model watches, sound and all; `seconds` long.
+    Video {
+        media: MediaRef,
+        seconds: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

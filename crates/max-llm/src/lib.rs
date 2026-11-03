@@ -35,9 +35,10 @@ pub struct Options {
 }
 
 /// The pictures a request's items name, as data URLs: a row's by handle,
-/// a tool result's by SHA-256. `max` reads them before the call. One it
-/// couldn't read, or that isn't downloaded, is left out of the request;
-/// its handle is still in the text.
+/// a tool result's by SHA-256; and the videos tool results show, by
+/// SHA-256. `max` reads them before the call. One it couldn't read, or
+/// that isn't downloaded, is left out of the request; its handle is still
+/// in the text.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Pictures(pub BTreeMap<String, String>);
 
@@ -46,6 +47,8 @@ enum Piece<'a> {
     Text(Cow<'a, str>),
     /// A data URL.
     Picture(&'a str),
+    /// A data URL, of an MP4.
+    Video(&'a str),
 }
 
 /// A user item's content: its text, then each picture after its handle.
@@ -75,8 +78,10 @@ fn schema(tool: &ToolSpec) -> Value {
 /// What a tool result says where a picture was that the request doesn't
 /// carry: an old one, past the budget, or one gone from the store.
 const LEFT_OUT: &str = "[这张图省略了，要看再 max.image]";
+/// And where a video was.
+const VIDEO_LEFT_OUT: &str = "[这段视频省略了，要看再 max.video]";
 
-/// A tool result's pieces: its text, and the pictures it shows.
+/// A tool result's pieces: its text, and the pictures and videos it shows.
 fn tool_pieces<'a>(output: &'a ToolOutput, pictures: &'a Pictures) -> Vec<Piece<'a>> {
     output
         .parts
@@ -90,17 +95,25 @@ fn tool_pieces<'a>(output: &'a ToolOutput, pictures: &'a Pictures) -> Vec<Piece<
                 .get(sha256)
                 .map_or(Piece::Text(LEFT_OUT.into()), |url| Piece::Picture(url)),
             Part::Media { .. } => Piece::Text(LEFT_OUT.into()),
+            Part::Video {
+                media: MediaRef::Blob(sha256),
+                ..
+            } => pictures
+                .0
+                .get(sha256)
+                .map_or(Piece::Text(VIDEO_LEFT_OUT.into()), |url| Piece::Video(url)),
+            Part::Video { .. } => Piece::Text(VIDEO_LEFT_OUT.into()),
         })
         .collect()
 }
 
-/// The pieces' text, if there is no picture among them.
+/// The pieces' text, if there is no picture or video among them.
 fn plain(pieces: &[Piece<'_>]) -> Option<String> {
     pieces
         .iter()
         .map(|piece| match piece {
             Piece::Text(text) => Some(text.as_ref()),
-            Piece::Picture(_) => None,
+            Piece::Picture(_) | Piece::Video(_) => None,
         })
         .collect::<Option<Vec<_>>>()
         .map(|texts| texts.join("\n"))

@@ -4,9 +4,10 @@
 // stdin is one JSON object: {code, args, token, tools}. code is an async
 // function body; tools.<name>(args) calls one of Max's tools through the
 // MCP service with the run's token (client.js), max.image() shows the
-// model a picture after the result, max.file() has the host copy a file
-// of the chat's record into /work/chat, and max.browser() and max.page()
-// reach the VM's browser (browser.js). stdout gets the program's result
+// model a picture after the result, max.video() a video (video.js),
+// max.file() has the host copy a file of the chat's record into
+// /work/chat, and max.browser() and max.page() reach the VM's browser
+// (browser.js). stdout gets the program's result
 // and nothing else: its console and its own writes go to stderr. The exit
 // status is 0 when the program returned, 1 when it threw.
 "use strict";
@@ -16,6 +17,7 @@ const { mkdir, rm, writeFile } = require("node:fs/promises");
 const { format, inspect } = require("node:util");
 const { browser, page, snapshot } = require("./browser.js");
 const { MCP, ToolError, connect } = require("./client.js");
+const { watch } = require("./video.js");
 
 const result = process.stdout.write.bind(process.stdout);
 const log = text => process.stderr.write(text);
@@ -98,6 +100,16 @@ async function main() {
     }
   };
 
+  // A video for the model to watch after the result, or a part of it: a
+  // file in the VM, under /work unless the path says otherwise.
+  const video = async (path, options = {}) => {
+    if (typeof path !== "string") throw new TypeError("max.video 要视频的路径，比如 /work/chat/a.mp4");
+    if (!options || typeof options !== "object") throw new TypeError("max.video 的第二个参数是 {start, end}");
+    const outcome = await watch(request, work, path, options);
+    if (!outcome.ok) throw new ToolError("max.video", outcome.error);
+    return outcome.value;
+  };
+
   // A file of the chat's record, by its handle, which the host copies
   // into /work/chat.
   const file = async handle => {
@@ -109,7 +121,7 @@ async function main() {
 
   const tools = Object.create(null);
   for (const name of input.tools) tools[name] = args => call(name, args);
-  const max = Object.freeze({ raw, cancel, race, image, file, browser, page, snapshot });
+  const max = Object.freeze({ raw, cancel, race, image, video, file, browser, page, snapshot });
   const AsyncFunction = (async () => {}).constructor;
   const program = new AsyncFunction("tools", "max", "args", input.code);
   return program(Object.freeze(tools), max, input.args);

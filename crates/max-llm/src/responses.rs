@@ -14,6 +14,9 @@ use tracing::warn;
 
 use crate::{Error, Options, Pictures, Piece, pieces, plain, share_tokens, tool_pieces};
 
+/// What a tool result says where a video was: Responses takes none.
+const NO_VIDEO: &str = "[这里有一段视频，这个模型看不了]";
+
 /// The request body.
 pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value {
     let mut instructions = Vec::new();
@@ -119,6 +122,8 @@ fn wire(piece: Piece<'_>) -> Value {
         Piece::Picture(url) => {
             json!({ "type": "input_image", "image_url": url, "detail": "auto" })
         }
+        // max.video refuses on a model that doesn't watch videos.
+        Piece::Video(_) => json!({ "type": "input_text", "text": NO_VIDEO }),
     }
 }
 

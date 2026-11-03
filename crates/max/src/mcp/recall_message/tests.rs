@@ -89,6 +89,7 @@ async fn what_qq_would_refuse_is_refused_here(pool: PgPool) {
         services: Arc::new(Services::bare(pool.clone())),
         place: Arc::clone(&place),
         page_tokens: 2000,
+        video: false,
         work: None,
         caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
     };

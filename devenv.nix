@@ -11,6 +11,7 @@
     nodejs
     (python3.withPackages (p: [ p.trafilatura ]))
     poppler-utils
+    ffmpeg-headless
   ];
 
   # `devenv up` starts it. The Haskell checkout's shell uses 5433, so the two

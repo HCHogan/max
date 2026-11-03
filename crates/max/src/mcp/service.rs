@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::tool::{self, Spec};
-use super::{Caller, Context, Failure, chat_file, forward, show};
+use super::{Caller, Context, Failure, chat_file, forward, show, video};
 use crate::vm::Signal;
 
 /// One call's wall clock.
@@ -64,6 +64,8 @@ pub(super) struct Session {
     started: Mutex<HashMap<&'static str, u32>>,
     /// The pictures the program has shown the model, in order.
     shown: Mutex<Vec<String>>,
+    /// And the videos, with their lengths in seconds.
+    videos: Mutex<Vec<(String, u32)>>,
 }
 
 /// An open session. Dropping it closes the session: the token stops
@@ -98,6 +100,7 @@ impl Sessions {
             calls: Mutex::default(),
             started: Mutex::default(),
             shown: Mutex::default(),
+            videos: Mutex::default(),
         });
         self.table().insert(token.clone(), Arc::clone(&session));
         Grant {
@@ -172,6 +175,15 @@ impl Grant {
     pub fn shown(&self) -> Vec<String> {
         self.session
             .shown
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The videos shown so far, by SHA-256, with their lengths in seconds.
+    pub fn videos(&self) -> Vec<(String, u32)> {
+        self.session
+            .videos
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
@@ -363,9 +375,9 @@ impl ServerHandler for Handler {
             () = request.ct.cancelled() => Err(Failure::new("cancelled", format!("调用取消了；{MAYBE_DONE}"))),
             },
         };
-        // Not Max's tools: the model sees the pictures shown themselves,
-        // and a file fetched is the program's.
-        if call.name != show::NAME && call.name != chat_file::NAME {
+        // Not Max's tools: the model sees the pictures and videos shown
+        // themselves, and a file fetched is the program's.
+        if ![show::NAME, video::NAME, chat_file::NAME].contains(&call.name.as_ref()) {
             let mut calls = session.calls.lock().unwrap_or_else(PoisonError::into_inner);
             let (succeeded, failed) = calls.entry(call.name.to_string()).or_default();
             *if outcome.is_ok() { succeeded } else { failed } += 1;
@@ -384,6 +396,9 @@ impl Session {
     async fn call(&self, name: &str, args: Value) -> Result<Value, Failure> {
         if name == show::NAME {
             return show::run(&self.context, &self.shown, args).await;
+        }
+        if name == video::NAME {
+            return video::run(&self.context, &self.videos, args).await;
         }
         if name == chat_file::NAME {
             return chat_file::run(&self.context, args).await;
@@ -488,6 +503,7 @@ mod tests {
             services: Arc::new(Services::bare(pool)),
             place,
             page_tokens: 2000,
+            video: false,
             work: None,
             caller: Caller::Check,
         });
@@ -586,6 +602,7 @@ mod tests {
             services: Arc::new(Services::bare(pool)),
             place,
             page_tokens: 2000,
+            video: false,
             work: None,
             caller: Caller::Check,
         });
@@ -626,6 +643,7 @@ mod tests {
             services: Arc::new(Services::bare(pool.clone())),
             place: Arc::clone(&place),
             page_tokens: 2000,
+            video: false,
             work: None,
             caller,
         };

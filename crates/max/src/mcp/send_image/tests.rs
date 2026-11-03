@@ -86,6 +86,7 @@ async fn a_chart_goes_out_with_its_caption(pool: PgPool) {
         }),
         place: Arc::clone(&place),
         page_tokens: 2000,
+        video: false,
         work: Some(scratch.work()),
         caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
     };

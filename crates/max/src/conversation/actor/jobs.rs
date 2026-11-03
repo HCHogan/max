@@ -115,6 +115,7 @@ impl Conversation {
             services: Arc::clone(&self.shared.services),
             place: Arc::clone(&self.place),
             page_tokens: Budgets::for_window(upstream.window).single,
+            video: false,
             work: None,
             caller: mcp::Caller::Job(Arc::clone(&upstream)),
         };

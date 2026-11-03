@@ -630,6 +630,7 @@ impl Conversation {
                             services: Arc::clone(&self.shared.services),
                             place: Arc::clone(&self.place),
                             page_tokens: Budgets::for_window(a.chosen.window).single,
+                            video: a.chosen.video,
                             work: None,
                             caller: mcp::Caller::Turn(Poster::new(self.mailbox.clone(), a.turn)),
                         };

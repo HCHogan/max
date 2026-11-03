@@ -14,6 +14,7 @@ mod send_image;
 mod service;
 mod show;
 pub mod tool;
+mod video;
 mod web_search;
 pub(crate) mod work;
 
@@ -63,6 +64,8 @@ pub struct Context {
     pub place: Arc<Place>,
     /// The most tokens a page of text holds: the model's cap on one item.
     pub page_tokens: u32,
+    /// Whether the turn's model watches videos, which max.video needs.
+    pub video: bool,
     /// The host's side of the VM's /work, for a program run there.
     pub work: Option<PathBuf>,
     pub caller: Caller,

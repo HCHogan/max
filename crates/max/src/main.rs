@@ -160,6 +160,9 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
                 }
             }
         });
+        // A store of vm-check's own, for what programs show the model.
+        let stored = std::env::temp_dir().join(format!("maxx-vm-check-{}", std::process::id()));
+        let store = Arc::new(Store::open(&stored).await?);
         // No conversation has id 0, so the program's history finds nothing,
         // from the database.
         let context = || {
@@ -167,7 +170,7 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
                 pool: PgPool::connect_lazy(&config.database.url)?,
                 offset: config.utc_offset,
                 search: None,
-                store: None,
+                store: Some(Arc::clone(&store)),
                 embedder: None,
                 admin: None,
             };
@@ -186,6 +189,7 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
                     my_name: "maxx".into(),
                 }),
                 page_tokens: 2000,
+                video: true,
                 work: None,
                 caller: mcp::Caller::Check,
             })
@@ -221,6 +225,7 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
             browse(BROWSE),
             command(OPENCLI),
             browse(BROWSE_AGAIN),
+            command(VIDEO),
             command(MAXX),
             command(UNITS),
         ];
@@ -260,6 +265,7 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
         ));
         drop(vms);
         services.close(Duration::from_secs(5)).await;
+        let _ = std::fs::remove_dir_all(&stored);
         Ok::<_, color_eyre::Report>(outs)
     })?;
     runtime.shutdown_timeout(SHUTDOWN);
@@ -299,6 +305,11 @@ EOF
 max-units
 echo "开机时：$before"
 echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机""#;
+
+/// A video for the model, from a command: ffmpeg in the VM makes a clip
+/// and the copy for the model, and the host reads the copy's length.
+const VIDEO: &str = r#"ffmpeg -v error -y -f lavfi -i testsrc2=s=1280x720:r=30:d=3 -f lavfi -i sine=d=3 -shortest /work/.max/check.mkv
+maxx video /work/.max/check.mkv | jq -c ."#;
 
 /// opencli's commands for a site, which it finds without starting the
 /// browser, the way the prompt tells Max to.

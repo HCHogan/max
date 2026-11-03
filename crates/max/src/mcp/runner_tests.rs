@@ -3,6 +3,7 @@
 //! point at a directory of their own.
 
 use std::io::Cursor;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -90,6 +91,7 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
         services: Arc::new(Services::bare(pool)),
         place,
         page_tokens: 2000,
+        video: false,
         work: None,
         caller: Caller::Check,
     });
@@ -238,6 +240,7 @@ async fn programs_show_the_model_pictures(pool: PgPool) {
         }),
         place,
         page_tokens: 2000,
+        video: false,
         work: Some(work.clone()),
         caller: Caller::Check,
     });
@@ -293,6 +296,160 @@ async fn programs_show_the_model_pictures(pool: PgPool) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A video of ffmpeg's test pattern at `path`, `seconds` long: a phone's
+/// size and rate, with a tone, in Matroska; or, `small`, a 16-pixel one at
+/// a frame a second, silent, in MP4.
+async fn clip(path: &Path, seconds: u32, small: bool) {
+    let source = if small {
+        format!("color=black:s=16x16:r=1:d={seconds}")
+    } else {
+        format!("testsrc2=s=1280x720:r=30:d={seconds}")
+    };
+    let mut command = Command::new("ffmpeg");
+    command.args(["-v", "error", "-f", "lavfi", "-i", &source]);
+    if !small {
+        let tone = format!("sine=f=500:d={seconds}");
+        command.args(["-f", "lavfi", "-i", &tone, "-c:a", "aac"]);
+    }
+    let made = command
+        .args(["-c:v", "libx264", "-preset", "ultrafast"])
+        .arg(path)
+        .status()
+        .await
+        .expect("ffmpeg runs");
+    assert!(made.success());
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn programs_show_the_model_videos(pool: PgPool) {
+    let dir = std::env::temp_dir().join(format!("max-videos-{:016x}", rand::random::<u64>()));
+    let work = dir.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    clip(&work.join("clip.mkv"), 3, false).await;
+    clip(&work.join("long.mp4"), 601, true).await;
+    clip(&work.join("half.mp4"), 300, true).await;
+    std::fs::write(work.join("notes.bin"), "不是视频").unwrap();
+    let store = Arc::new(Store::open(&dir.join("store")).await.unwrap());
+    let mut conn = pool.acquire().await.unwrap();
+    let place = Arc::new(group(&mut conn).await);
+    drop(conn);
+    let conversation = place.conversation;
+    let sessions = Sessions::default();
+    let context = |video| Context {
+        services: Arc::new(Services {
+            store: Some(Arc::clone(&store)),
+            ..Services::bare(pool.clone())
+        }),
+        place: Arc::clone(&place),
+        page_tokens: 2000,
+        video,
+        work: Some(work.clone()),
+        caller: Caller::Check,
+    };
+    let grant = sessions.open(context(true));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let mut scope = Scope::new();
+    let served = sessions.clone();
+    scope.spawn(move |stop| serve(listener, conversation, served, stop));
+    let input = |token: &str, code: &str| json!({ "code": code, "args": {}, "token": token, "mcp": mcp, "work": work });
+
+    // The whole clip, a second of it, the clip again; a file that isn't
+    // one, ten minutes and a second, a time that isn't one, no path.
+    let code = "const a = await max.video('/work/clip.mkv'); \
+         const b = await max.video('clip.mkv', {start: 1, end: '0:02'}); \
+         await max.video('clip.mkv'); \
+         const failed = []; \
+         for (const [path, options] of [['notes.bin'], ['long.mp4'], ['clip.mkv', {start: 'soon'}]]) { \
+           try { await max.video(path, options) } catch (e) { failed.push(e.message) } } \
+         let wrong; try { await max.video(42) } catch (e) { wrong = e.name } \
+         return [a, b, failed, wrong]";
+    let ran = run_with(input(grant.token(), code)).await;
+    let ran: Value = serde_json::from_str(&ran.stdout)
+        .unwrap_or_else(|_| panic!("{}{}", ran.stdout, ran.stderr));
+    assert_eq!(
+        ran,
+        json!([
+            { "seconds": 3 },
+            { "seconds": 1 },
+            [
+                "max.video: notes.bin 读不出来：Invalid data found when processing input（not_a_video）",
+                "max.video: 这段 601 秒，一次最多看 10 分钟；用 start、end 截一段（too_long）",
+                "max.video: start、end 要秒数，或者 \"1:30\"、\"1:02:03.5\" 这样的时间（bad_time）",
+            ],
+            "TypeError",
+        ])
+    );
+    let videos = grant.videos();
+    let lengths: Vec<u32> = videos.iter().map(|(_, seconds)| *seconds).collect();
+    assert_eq!(lengths, [3, 1]);
+    // The model's copy: an MP4, smaller than what it was made from.
+    let copy = std::fs::read(store.path(&videos[0].0)).unwrap();
+    assert_eq!(&copy[4..8], b"ftyp");
+    assert!(copy.len() < std::fs::metadata(work.join("clip.mkv")).unwrap().len() as usize);
+    // The copies' files are gone once the host has them.
+    let left: Vec<_> = std::fs::read_dir(work.join(".max/shown"))
+        .unwrap()
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+    assert!(grant.calls().is_empty());
+
+    // From a command, as part of the same run: five minutes more fit in
+    // its ten, and the next five don't.
+    let token = Some(grant.token());
+    let watched = maxx_in(
+        Some(&work),
+        &mcp,
+        token,
+        &["video", "half.mp4", "--end", "300"],
+        "",
+    )
+    .await;
+    assert_eq!(
+        watched.stdout, "{\n  \"seconds\": 300\n}\n",
+        "{}",
+        watched.stderr
+    );
+    let again = maxx_in(
+        Some(&work),
+        &mcp,
+        token,
+        &["video", "clip.mkv", "--start", "1:00"],
+        "",
+    )
+    .await;
+    assert_eq!(again.status, 1);
+    assert!(
+        again.stderr.contains("start 过了结尾：clip.mkv 只有 3 秒"),
+        "{}",
+        again.stderr
+    );
+    let over = "await max.video('half.mp4', {start: 1})";
+    let ran = run_with(input(grant.token(), over)).await;
+    assert!(
+        ran.stdout.starts_with(
+            "ToolError: max.video: 一次 run_code 最多交 10 分钟视频，这段 299 秒，之前交了 304 秒"
+        ),
+        "{}{}",
+        ran.stdout,
+        ran.stderr
+    );
+    assert_eq!(grant.videos().len(), 3);
+
+    // A model that doesn't watch videos.
+    let blind = sessions.open(context(false));
+    let ran = run_with(input(blind.token(), "await max.video('clip.mkv')")).await;
+    assert!(
+        ran.stdout
+            .starts_with("ToolError: max.video: 这个模型看不了视频。（unavailable）"),
+        "{}",
+        ran.stdout
+    );
+
+    scope.close(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn programs_fetch_the_chats_files(pool: PgPool) {
     let dir = std::env::temp_dir().join(format!("max-fetched-{:016x}", rand::random::<u64>()));
@@ -343,6 +500,7 @@ async fn programs_fetch_the_chats_files(pool: PgPool) {
         }),
         place,
         page_tokens: 2000,
+        video: false,
         work: Some(work.clone()),
         caller: Caller::Check,
     });
@@ -383,7 +541,22 @@ async fn programs_fetch_the_chats_files(pool: PgPool) {
 /// `maxx` with `words`, as the run whose `token` it has, if any; `input`
 /// on its stdin.
 async fn maxx(mcp: &str, token: Option<&str>, words: &[&str], input: &str) -> Ran {
+    maxx_in(None, mcp, token, words, input).await
+}
+
+/// The same, with `work` for /work, which maxx video reads and writes
+/// itself.
+async fn maxx_in(
+    work: Option<&Path>,
+    mcp: &str,
+    token: Option<&str>,
+    words: &[&str],
+    input: &str,
+) -> Ran {
     let mut command = Command::new("node");
+    if let Some(work) = work {
+        command.env("MAXX_WORK", work);
+    }
     command
         .arg(MAXX)
         .args(words)
@@ -442,6 +615,7 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
         }),
         place,
         page_tokens: 2000,
+        video: false,
         work: Some(work.clone()),
         caller: Caller::Check,
     });
@@ -551,6 +725,7 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
         ("file", true),
         ("events", true),
         ("show", false),
+        ("video", false),
         ("mute_member", false),
         ("agent", false),
     ] {

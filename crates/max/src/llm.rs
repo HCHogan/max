@@ -54,6 +54,8 @@ pub struct Chosen {
     pub tag: ModelTag,
     pub window: u32,
     pub max_output: Option<u32>,
+    /// Whether it watches videos.
+    pub video: bool,
     /// The effort among them.
     pub options: Options,
     pub retries: u32,
@@ -258,6 +260,7 @@ impl Models {
             },
             window: settings.context_window,
             max_output: settings.max_output,
+            video: settings.video,
             options: Options {
                 effort: effort.map(str::to_owned),
                 temperature: settings.temperature,

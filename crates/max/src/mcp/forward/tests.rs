@@ -101,6 +101,7 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
         services: Arc::new(Services::bare(pool.clone())),
         place: Arc::clone(&place),
         page_tokens: 2000,
+        video: false,
         work: None,
         caller,
     };
@@ -183,6 +184,7 @@ async fn a_job_calls_only_the_tools_that_dont_act_in_the_group(pool: PgPool) {
         services: Arc::new(Services::bare(pool)),
         place,
         page_tokens: 2000,
+        video: false,
         work: None,
         caller: Caller::Job(upstream("http://127.0.0.1:9/v1".into())),
     });

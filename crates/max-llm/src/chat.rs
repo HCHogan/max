@@ -12,7 +12,8 @@
 //! said at all: the call fails, to be made again.
 //!
 //! A tool message holds only text, and some providers take nothing else
-//! there; the pictures tool results show follow them in a user message.
+//! there; the pictures and videos tool results show follow them in a user
+//! message. A video is a `video_url` part, as cliproxy takes it for Gemini.
 
 use std::collections::BTreeMap;
 
@@ -36,8 +37,8 @@ const ALOUD: [&str; 3] = ["thinking process", "thought process", "思考过程"]
 pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value {
     let mut messages = Vec::new();
     let mut turn: Option<Assistant> = None;
-    // The pictures of the tool results so far in a row.
-    let mut shown: Vec<&str> = Vec::new();
+    // The pictures and videos of the tool results so far in a row.
+    let mut shown: Vec<Piece<'_>> = Vec::new();
     for (index, item) in request.items.iter().enumerate() {
         if !matches!(item.kind, ItemKind::ToolResult { .. }) && !shown.is_empty() {
             messages.push(pictures_shown(&std::mem::take(&mut shown)));
@@ -107,9 +108,13 @@ pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value 
                 for piece in tool_pieces(output, pictures) {
                     match piece {
                         Piece::Text(said) => text.push(said),
-                        Piece::Picture(url) => {
-                            shown.push(url);
+                        Piece::Picture(_) => {
+                            shown.push(piece);
                             text.push(format!("[图 {}，见下]", shown.len()).into());
+                        }
+                        Piece::Video(_) => {
+                            shown.push(piece);
+                            text.push(format!("[视频 {}，见下]", shown.len()).into());
                         }
                     }
                 }
@@ -174,7 +179,7 @@ fn user_content(text: &str, images: &[Image], pictures: &Pictures, breakpoint: b
         .into_iter()
         .map(|piece| match piece {
             Piece::Text(text) => json!({ "type": "text", "text": text }),
-            Piece::Picture(url) => json!({ "type": "image_url", "image_url": { "url": url } }),
+            piece => medium(&piece),
         })
         .collect();
     if breakpoint && let Some(last) = parts.last_mut() {
@@ -183,19 +188,29 @@ fn user_content(text: &str, images: &[Image], pictures: &Pictures, breakpoint: b
     Value::Array(parts)
 }
 
-/// The pictures of tool results in a row, numbered as their text names
-/// them.
-fn pictures_shown(urls: &[&str]) -> Value {
+/// The pictures and videos of tool results in a row, numbered as their
+/// text names them.
+fn pictures_shown(shown: &[Piece<'_>]) -> Value {
     let content: Vec<Value> = (1..)
-        .zip(urls)
-        .flat_map(|(n, url)| {
-            [
-                json!({ "type": "text", "text": format!("[图 {n}]") }),
-                json!({ "type": "image_url", "image_url": { "url": url } }),
-            ]
+        .zip(shown)
+        .flat_map(|(n, piece)| {
+            let label = match piece {
+                Piece::Video(_) => format!("[视频 {n}]"),
+                _ => format!("[图 {n}]"),
+            };
+            [json!({ "type": "text", "text": label }), medium(piece)]
         })
         .collect();
     json!({ "role": "user", "content": content })
+}
+
+/// A picture's or a video's part.
+fn medium(piece: &Piece<'_>) -> Value {
+    match piece {
+        Piece::Text(text) => json!({ "type": "text", "text": text }),
+        Piece::Picture(url) => json!({ "type": "image_url", "image_url": { "url": url } }),
+        Piece::Video(url) => json!({ "type": "video_url", "video_url": { "url": url } }),
+    }
 }
 
 /// One model call's items, on their way back to one message.

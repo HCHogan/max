@@ -20,10 +20,24 @@
 
 const { once } = require("node:events");
 const { MCP, connect, events } = require("./client.js");
+const { watch } = require("./video.js");
+
+// Where /work is: tests have their own.
+const WORK = process.env.MAXX_WORK ?? "/work";
+const TIME = { type: ["number", "string"] };
 
 // The runner's own calls, which tools/list leaves out; show only a run's.
+// One with a call of its own makes it, in place of the host's.
 const OWN = {
   show: { tool: "max.image", argument: "path", run: true, description: "把 /work 下的一张图给你自己看，跟在这次 shell 或 run_code 的结果后面：maxx show 路径" },
+  video: {
+    tool: "max.video",
+    argument: "path",
+    run: true,
+    options: { start: { ...TIME, description: '从哪儿看起：秒数，或者 "1:30"' }, end: { ...TIME, description: "看到哪儿" } },
+    call: (client, { path, start, end }) => watch(client.request, WORK, path, { start, end }),
+    description: "把一段视频给你自己看，跟在这次 shell 或 run_code 的结果后面，一次最多 10 分钟：maxx video 路径 [--start 1:30] [--end 2:00]",
+  },
   file: { tool: "max.file", argument: "handle", description: "把本群记录里的一个文件拷进 /work/chat，返回 {path, name, size}：maxx file file#123.0" },
 };
 
@@ -46,7 +60,8 @@ async function main(argv) {
   const called = own[name];
   let tool;
   if (called) {
-    tool = { name: called.tool, description: called.description, inputSchema: { type: "object", properties: { [called.argument]: { type: "string" } }, required: [called.argument] } };
+    const properties = { [called.argument]: { type: "string" }, ...called.options };
+    tool = { name: called.tool, description: called.description, inputSchema: { type: "object", properties, required: [called.argument] } };
   } else {
     const listed = await tools(client);
     tool = listed.find(tool => tool.name === name);
@@ -55,7 +70,7 @@ async function main(argv) {
   const shown = called ? name : tool.name;
   if (rest.includes("--help") || rest.includes("-h")) return [help(shown, tool), 0];
   const args = await parse(rest, tool.inputSchema);
-  const outcome = await client.request(tool.name, args);
+  const outcome = await (called?.call ? called.call(client, args) : client.request(tool.name, args));
   if (!outcome.ok) return [`${shown}: ${outcome.error.message}（${outcome.error.code}）`, 1];
   const value = outcome.value;
   return [typeof value === "string" ? value : JSON.stringify(value, null, 2), 0];

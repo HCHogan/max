@@ -171,6 +171,7 @@ async fn rows_with_their_read(pool: PgPool) {
         services: Arc::new(Services::bare(pool.clone())),
         place: Arc::clone(&place),
         page_tokens: 2000,
+        video: false,
         work: None,
         caller: Caller::Check,
     };
@@ -259,6 +260,7 @@ async fn by_who_said_it(pool: PgPool) {
         services: Arc::new(Services::bare(pool.clone())),
         place: Arc::clone(&place),
         page_tokens: 2000,
+        video: false,
         work: None,
         caller: Caller::Check,
     };
@@ -319,6 +321,7 @@ async fn by_meaning_too(pool: PgPool) {
         }),
         place: Arc::clone(&place),
         page_tokens: 2000,
+        video: false,
         work: None,
         caller: Caller::Check,
     };

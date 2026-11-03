@@ -407,6 +407,8 @@ in
     # above.
     units
     wake
+    # max.video's copies for the model, and programs' own.
+    ffmpeg-headless
     poppler-utils
     jq
     ripgrep

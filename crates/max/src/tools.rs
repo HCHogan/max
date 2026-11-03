@@ -1,8 +1,8 @@
 //! What the model's tool calls do; see "工具和 codemode". Both run in the
 //! group's VM: `shell` a command, `run_code` a program in the guest's
 //! runner. Both call Max's tools through the MCP service as the run, and
-//! can show the model pictures after their result: the runner's SDK, and
-//! `maxx` from a command, with the token in MAXX_TOKEN.
+//! can show the model pictures and videos after their result: the runner's
+//! SDK, and `maxx` from a command, with the token in MAXX_TOKEN.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use color_eyre::eyre::{Result, eyre};
 use max_core::ids::ConversationId;
 use max_core::item::{Part, ToolOutput};
 use max_core::message::MediaRef;
-use max_core::project::PICTURE_TOKENS;
+use max_core::project::{PICTURE_TOKENS, VIDEO_TOKENS_PER_SECOND};
 use max_core::tools::Tool;
 use serde_json::json;
 use tokio::fs;
@@ -84,6 +84,7 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
         } => shell(&vm, &grant, &command, workdir.as_deref(), limit).await,
     };
     let pictures = grant.shown();
+    let videos = grant.videos();
     let mut output = match ran {
         Ok((shown, error)) => text(shown, error),
         Err(error) => text(format!("{name} 没跑成：{error:#}"), true),
@@ -93,6 +94,13 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
             media: MediaRef::Blob(sha256),
         });
         output.tokens += PICTURE_TOKENS;
+    }
+    for (sha256, seconds) in videos {
+        output.parts.push(Part::Video {
+            media: MediaRef::Blob(sha256),
+            seconds,
+        });
+        output.tokens += seconds * VIDEO_TOKENS_PER_SECOND;
     }
     output
 }

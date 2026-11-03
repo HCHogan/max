@@ -181,3 +181,56 @@ async fn the_newest_pictures_programs_showed_are_read(pool: PgPool) {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn the_newest_videos_programs_showed_are_read(pool: PgPool) {
+    let dir = std::env::temp_dir().join(format!("max-videos-{:016x}", rand::random::<u64>()));
+    let store = Arc::new(Store::open(&dir).await.unwrap());
+    let mut stored = Vec::new();
+    for n in 0..4u8 {
+        stored.push(store.put(vec![n; 8]).await.unwrap());
+    }
+    let result = |shown: &[(usize, u32)]| {
+        let parts = shown
+            .iter()
+            .map(|&(n, seconds)| Part::Video {
+                media: MediaRef::Blob(stored[n].clone()),
+                seconds,
+            })
+            .collect();
+        let output = max_core::item::ToolOutput {
+            parts,
+            error: false,
+            tokens: 1,
+        };
+        Item::new(
+            ItemKind::ToolResult {
+                call: max_core::ids::CallId("call_1".into()),
+                output,
+            },
+            1,
+        )
+    };
+    // Newest first: 100 and 250 seconds, the 100 again, then 200; the
+    // oldest, 300 more, would come to past ten minutes.
+    let request = Request {
+        model: ModelTag {
+            protocol: Protocol::Chat,
+            model: "gemini-3.8-flash-high".into(),
+        },
+        items: vec![
+            result(&[(0, 300), (1, 200)]),
+            result(&[(3, 100), (2, 250), (3, 100)]),
+        ],
+        tools: &[],
+        max_output: None,
+        roster: BTreeSet::new(),
+    };
+    let pictures = Pictures { pool, store };
+    let read = pictures.read(&request).await;
+    let mut expected: Vec<&String> = stored[1..].iter().collect();
+    expected.sort();
+    assert_eq!(read.0.keys().collect::<Vec<_>>(), expected);
+    assert_eq!(read.0[&stored[3]], "data:video/mp4;base64,AwMDAwMDAwM=");
+    let _ = std::fs::remove_dir_all(&dir);
+}

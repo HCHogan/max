@@ -1,0 +1,81 @@
+// max.video's half in the VM, which the runner and maxx share: the copy
+// of a video the model watches, made here with ffmpeg so that the host
+// never decodes one. A frame a second, as Gemini samples them, at most
+// 640 pixels a side, the sound in mono: ten minutes come to a few MiB,
+// which every model call left in the turn sends again. The host stores
+// the copy and reads its length. See "多模态结果" in docs/rust-rewrite.md.
+"use strict";
+
+const { execFile } = require("node:child_process");
+const { randomUUID } = require("node:crypto");
+const { mkdir, rm } = require("node:fs/promises");
+const { promisify } = require("node:util");
+
+const run = promisify(execFile);
+// The most seconds one call shows; the host holds a run's videos to it
+// together.
+const MOST = 600;
+const SCALE = "scale='min(640,iw)':'min(640,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2";
+
+// Shows the model the video at path from start to end, through request,
+// the run's client's; work is where /work is. Its outcome, as a call's:
+// {ok: true, value: {seconds}} or {ok: false, error: {code, message}}.
+async function watch(request, work, path, { start, end } = {}) {
+  const failed = (code, message) => ({ ok: false, error: { code, message } });
+  const from = time(start);
+  const to = time(end);
+  if (from === null || to === null) return failed("bad_time", 'start、end 要秒数，或者 "1:30"、"1:02:03.5" 这样的时间');
+  // As the host reads paths: relative ones are under /work.
+  const local = path.startsWith("/") ? path.replace(/^\/work(?=\/|$)/, work) : `${work}/${path}`;
+  let length;
+  try {
+    const { stdout } = await run("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", local]);
+    length = Number(stdout.trim());
+  } catch (error) {
+    return failed("not_a_video", `${path} 读不出来：${said(error, local)}`);
+  }
+  const begin = from ?? 0;
+  const stop = to ?? length;
+  if (Number.isFinite(length) && begin >= length) return failed("bad_time", `start 过了结尾：${path} 只有 ${Math.round(length)} 秒`);
+  if (stop <= begin) return failed("bad_time", "end 要在 start 之后");
+  if (stop - begin > MOST) {
+    return failed("too_long", `这段 ${Math.round(stop - begin)} 秒，一次最多看 ${MOST / 60} 分钟；用 start、end 截一段`);
+  }
+  await mkdir(`${work}/.max/shown`, { recursive: true });
+  const name = `${randomUUID()}.mp4`;
+  const written = `${work}/.max/shown/${name}`;
+  try {
+    const cut = ["-ss", String(begin), ...(to === undefined ? [] : ["-t", String(stop - begin)])];
+    try {
+      await run("ffmpeg", [
+        "-nostdin", "-v", "error", ...cut, "-i", local,
+        "-map", "0:v:0", "-map", "0:a:0?", "-vf", `fps=1,${SCALE}`,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-ac", "1", "-b:a", "32k", "-movflags", "+faststart", written,
+      ]);
+    } catch (error) {
+      return failed("not_a_video", `${path} 转不了：${said(error, local)}`);
+    }
+    return await request("max.video", { path: `/work/.max/shown/${name}` });
+  } finally {
+    await rm(written, { force: true });
+  }
+}
+
+// Seconds, from a number or "1:30", "1:02:03.5"; undefined when not
+// given, null when not a time.
+function time(value) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "number") return Number.isFinite(value) && value >= 0 ? value : null;
+  if (typeof value !== "string" || !/^\d+(:\d{1,2}){0,2}(\.\d+)?$/.test(value)) return null;
+  return value.split(":").reduce((total, part) => total * 60 + Number(part), 0);
+}
+
+// What ffmpeg said last, without the file's name before it.
+function said(error, file) {
+  const lines = String(error.stderr ?? "").trim().split("\n").filter(Boolean);
+  const last = lines.at(-1) ?? error.message;
+  return last.startsWith(`${file}: `) ? last.slice(file.length + 2) : last;
+}
+
+module.exports = { watch };

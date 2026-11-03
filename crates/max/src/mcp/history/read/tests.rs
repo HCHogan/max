@@ -22,6 +22,7 @@ fn context(pool: &PgPool, place: &Arc<Place>, page_tokens: u32) -> Context {
         services: Arc::new(Services::bare(pool.clone())),
         place: Arc::clone(place),
         page_tokens,
+        video: false,
         work: None,
         caller: Caller::Check,
     }

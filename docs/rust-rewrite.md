@@ -205,6 +205,7 @@ context_window = 32768
 
 - 流式请求用空闲超时，不用总时长；重试次数放在 provider 上。Haskell 版是每次尝试最多 1800 秒，晚间网络差时再叠上重试会层层放大。
 - 不做内置模型目录。启动时对照服务端的 `/models` 检查一遍。
+- 模型的 `video = true` 表示它看视频（Gemini 的），`max.video` 只在这样的模型上能用，见[多模态结果](#多模态结果)。
 - `/model` 只选 `provider/模型`，`/effort` 只调强度。不再有 `gpt-5.6-luna-medium` 这种只差强度的 profile。
 - 老会话选过的模型和强度不导（2026-10-29 owner 定，原来打算把 profile 名映射成"模型加强度"）：maxx 的配置里没有那些模型，选了不认识的模型，这个会话的每个 turn 都会失败。都用默认，要换再 `/model`。`llm_usage` 不导。
 
@@ -1529,7 +1530,7 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 - **在适配层降级**（原则 8）：
   - Responses：放进 `function_call_output` 的数组，`input_text` 加 `input_image`。
   - Chat：tool 消息里只放文字，带"图 1 见下"这类标记；这一轮所有 tool 消息之后跟一条 user 消息放图。有的 provider 不接受数组形式的 tool 内容，这样也避开了。
-  - 视频：抽帧成图。
+  - 视频：抽帧成图。（2026-11-03 改了：原样交给看得了视频的模型，见下面的"视频"。）
 - **预算**：
   - 交图时就缩放到上限。
   - 每次运行最多交 N 张。
@@ -1540,10 +1541,21 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 
 做成的（2026-10-29，先只做图）：
 
-- **SDK**：`await max.image(src)`，`src` 是 `/work` 下的路径，或者图片的 Buffer（比如 `page.screenshot()` 的返回值）。Buffer 先写进 `/work/.max/shown/`，宿主存好就删。返回原图的 `{width, height}`；读不了、不是图、超过上限都抛 `ToolError`。消息句柄和视频还没做。
+- **SDK**：`await max.image(src)`，`src` 是 `/work` 下的路径，或者图片的 Buffer（比如 `page.screenshot()` 的返回值）。Buffer 先写进 `/work/.max/shown/`，宿主存好就删。返回原图的 `{width, height}`；读不了、不是图、超过上限都抛 `ToolError`。消息句柄没做，群里的图先 `max.file` 拷出来。
 - **怎么交给宿主**：runner 用这次运行的 token 发一个 MCP 调用 `max.image`，只带路径；它不是 Max 的工具，不在工具列表里，也不算进"调了 Max 的工具"。宿主像 `send_image` 那样一段一段打开 `/work` 下的文件、不跟符号链接、10 MiB 封顶，用和下载一样的办法做给模型的版本（长边 1568 的 JPEG，或者原图），存进内容库，记进这次 MCP 会话。程序结束后，`run_code` 的结果在文字后面按顺序加上这些图（`Part::Media`，内容库的 sha256），每张按 1200 token 估。
 - **预算**：一次 `run_code` 最多交 4 张，同一张（hash 相同）只算一次。组装请求时只带工具结果里最新的 8 张，更早的在那个位置写"[这张图省略了，要看再 max.image]"，turn 记录不变。"同上文图 x"没做。
 - **降级**：Responses 把有图的结果写成 `input_text` 和 `input_image` 的数组，没图的仍是字符串。Chat 在 tool 消息里写"[图 n，见下]"，连着的几条 tool 消息之后跟一条 user 消息，按编号放图。
+
+视频（2026-11-03 做的，owner 要的）：模型直接看视频，画面和声音都有，不抽帧。
+
+- **为什么能做**：当天在 tank 上试过。cliproxy 把 Chat 里 `video_url` 的 data URL 转成 Gemini 的 `inlineData`（Antigravity 和 AI Studio 两条路都转），`gemini-3.8-flash-high` 说对了 6 秒测试片里三种颜色的先后、时长，哪段有声音、哪段音高。按时长计费，约 87 token 一秒（一秒一帧加声音）；按字节算的是时间：14、28、54 MiB 的视频都收，54 MiB 那次 77 秒才回。
+- **SDK**：`await max.video(path, {start, end})`，`path` 是 VM 里的文件，相对路径在 `/work` 下；`start`、`end` 是秒数或者 `"1:30"`。群里的视频先 `max.file` 拷出来，网上的 Max 自己下（owner 定，不另装 yt-dlp）。返回 `{seconds}`。shell 里是 `maxx video 路径 --start --end`。
+- **先在 VM 里转小**（`nix/video.js`，runner 和 maxx 共用）：一个 turn 里之后每次模型调用都要再发一遍，所以用 VM 里的 ffmpeg 转成一秒一帧（Gemini 本来就一秒取一帧）、边长不超过 640、单声道 32k 的 MP4，`+faststart`。两分钟的噪点测试片 3.8 MB，普通的 1.2 MB，转一次一秒左右。ffprobe 先看时长，超了不转。宿主不解码视频：群里的视频是不可信的文件，ffmpeg 的解析器常出 CVE，留在 VM 里。
+- **宿主**（`mcp/video.rs`）：像 `max.image` 一样读 `/work` 下的文件，32 MiB 封顶；只读 MP4 的 `ftyp` 和 `moov/mvhd`，拿时长（四舍五入到秒，至少 1 秒），不是 MP4 就拒；存进内容库，记进这次 MCP 会话。结果后面加 `Part::Video { media, seconds }`，每秒按 100 token 估。
+- **模型**：模型配置的 `video = true` 表示它看视频；MCP 的 `Context` 带着这个 turn 的模型的这一项，不看视频的模型调 `max.video` 回"这个模型看不了视频"（`unavailable`）。tank 上给 Gemini 的几个开。
+- **预算**：一次 `run_code` 交的视频合计最多 10 分钟，同一段（hash 相同）只算一次；组装请求时只带工具结果里最新的、合计不超过 10 分钟的几段，更早的写"[这段视频省略了，要看再 max.video]"。
+- **降级**：Chat 和图一样跟在 tool 消息后面那条 user 消息里，`[视频 n]` 加 `video_url`，tool 消息里写"[视频 n，见下]"。Responses 不收视频，写"[这里有一段视频，这个模型看不了]"；`max.video` 本来就不让这种模型用。
+- **测试**：`mcp/runner_tests.rs` 在本机用 dev shell 的 ffmpeg 做 Matroska 测试片，走 runner 和 maxx 两条路，查转出来的 MP4、时长、一次 10 分钟的上限、不看视频的模型；`max-llm` 查两种降级；嵌套 VM 测试里 vm-check 用 VM 自己的 ffmpeg 做片子再 `maxx video`，宿主读出 3 秒。
 
 ### 网页搜索
 

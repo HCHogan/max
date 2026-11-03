@@ -54,6 +54,7 @@ impl Conversation {
             services: Arc::clone(&self.shared.services),
             place: Arc::clone(&self.place),
             page_tokens: self.single(),
+            video: false,
             work,
             caller: mcp::Caller::Program(Poster::program(self.mailbox.clone())),
         };
