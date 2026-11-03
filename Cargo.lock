@@ -2413,6 +2413,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 [[package]]
 name = "qqbot"
 version = "0.1.0"
+source = "git+https://github.com/HCHogan/qqbot?rev=9a8356fef0d3722b57551f08fd33f85fd43380c2#9a8356fef0d3722b57551f08fd33f85fd43380c2"
 dependencies = [
  "base64 0.23.1",
  "futures-util",
@@ -2425,7 +2426,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

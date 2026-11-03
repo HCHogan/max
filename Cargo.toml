@@ -24,7 +24,9 @@ max-db = { path = "crates/max-db" }
 max-llm = { path = "crates/max-llm" }
 # max-import makes the model's copies of imported pictures as max does.
 max = { path = "crates/max" }
-qqbot = { path = "crates/qqbot" }
+# QQ's official bot API, in a repository of its own since 2026-11-03;
+# a new commit there is taken by changing rev here.
+qqbot = { git = "https://github.com/HCHogan/qqbot", rev = "9a8356fef0d3722b57551f08fd33f85fd43380c2" }
 
 # Postgres for max-db: compile-time checked queries, migrations and
 # #[sqlx::test]. Only the features we use; no TLS, the database is local.
@@ -37,18 +39,16 @@ sqlx = { version = "0.9.0", default-features = false, features = [
   "json",
 ] }
 
-# The async runtime: qqbot's gateway and REST calls, and running futures
-# side by side in database tests.
+# The async runtime: QQ's gateway and REST calls, and running futures side
+# by side in database tests.
 tokio = "1.54"
 # CancellationToken, which every Scope hands its tasks: cancelling a task
 # without aborting it mid-await, and a whole subtree at once.
 tokio-util = "0.7.20"
 
-# HTTP for qqbot's REST calls and max-llm's model calls, streamed. Its
+# HTTP for max-llm's model calls, streamed, and the rest of max's. Its
 # default TLS is rustls with the system's roots.
 reqwest = { version = "0.13", features = ["json", "stream"] }
-# The gateway's WebSocket client, on the same rustls and system roots.
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 # Splits max-llm's model responses into server-sent events. Only that: the
 # wire types are max-llm's own. 0.2.6 is the one rmcp uses.
 sse-stream = "0.2.6"
@@ -56,8 +56,7 @@ sse-stream = "0.2.6"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # Logging from library crates; max sets up the subscriber.
 tracing = "0.1"
-# The subscriber: max's logs, and qqbot's listen example, which shows
-# sessions starting and reconnecting.
+# The subscriber: max's logs.
 tracing-subscriber = "0.3"
 
 # max's command line: subcommands and --config, nothing else.
@@ -98,11 +97,6 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 # Pictures go to the model as data URLs. 0.23 is in the tree already,
 # through reqwest and rmcp.
 base64 = "0.23"
-# QQ's upload in parts asks for a file's MD5 and SHA-1, and each part's
-# MD5. 0.11 of both is in the tree already: md-5 through sqlx, sha1
-# through russh and tungstenite.
-md5 = { package = "md-5", version = "0.11" }
-sha1 = "0.11"
 # Opening a file in a group's /work on the host one component at a time
 # with openat and O_NOFOLLOW: the guest writes /work, symlinks included,
 # and must not make max read anything outside it. 1.1 is in the tree

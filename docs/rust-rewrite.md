@@ -1738,7 +1738,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 
 | crate | 内容 | 拆开的理由 |
 |---|---|---|
-| `qqbot` | QQ 官方机器人接口：token、网关（心跳、Resume、重连）、事件和 REST 的类型、发送和撤回，发图时再加上传。不认识 Max：没有 Node，没有会话 | 依赖方向：协议层不能长成 Max 的形状。也是唯一值得复用的一块 |
+| `qqbot` | QQ 官方机器人接口：token、网关（心跳、Resume、重连）、事件和 REST 的类型、发送和撤回，发图时再加上传。不认识 Max：没有 Node，没有会话。2026-11-03 起在自己的仓库 [HCHogan/qqbot](https://github.com/HCHogan/qqbot) | 依赖方向：协议层不能长成 Max 的形状。也是唯一值得复用的一块 |
 | `max-core` | 所有纯逻辑：Node/Message/Draft/Item 类型、核心和 intent 两个状态机、请求构造、分段器、给模型看的渲染。只依赖 serde、serde_json、thiserror，以及不开 `clock` 特性的 chrono（渲染 `HH:MM`、换日、间隔标记要用） | 依赖方向：sans-I/O 靠编译器保证 |
 | `max-db` | schema、迁移、全部 sqlx 查询和行类型 | 编译时间；`.sqlx` 离线元数据集中在一处 |
 | `max-llm` | Responses 和 Chat 适配、流式解析、推理透传、多模态降级 | 协议细节都关在这里，用录下来的响应单独测 |
@@ -1748,7 +1748,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 - `max-core` 的依赖白名单写进 CI：`cargo tree -p max-core -e normal` 里只能出现那四个库。CI 再单独跑一次 `cargo check -p max-core`：只构建这一个包时，chrono 的特性不会和 `max` 合并，核心里调 `Utc::now` 就编不过。
 - intent 的状态机和拼分类提示词、解析输出在 `max-core`；分类任务（读库、调小模型）是 `max` 里的 I/O 任务。派生数据 worker 各一个模块，比如 `max/src/recall.rs`；它们的纯逻辑（提示词、校验）放 `max-core`，不起库就能测。
 - 平台适配先不拆出 crate，`max` 大到难受再分。
-- `qqbot` 暂不单独 repo。workspace crate 已经有单独 repo 的全部技术好处；v1 期间协议层的形状还会动，分开只会多一套 PR 流程。要发布时 `cargo publish -p qqbot` 从这个仓库发，path 依赖换成版本号就行。
+- `qqbot` 原来不单独 repo（v1 期间协议层的形状还会动）。2026-11-03 owner 让拆出去：`git subtree split` 带着它的 17 个提交建了 [HCHogan/qqbot](https://github.com/HCHogan/qqbot)，公开、MIT，有自己的 Cargo.toml（workspace 的依赖、lint、包字段都写开）、工具链、clippy.toml 和跑 fmt、clippy、测试的 CI。max 按提交依赖它：`Cargo.toml` 里 `git` 加 `rev`，换版本改 `rev`；cargo-deny 的 `allow-git` 只放这一个仓库；crane 照 `Cargo.lock` 取，不用另给 hash。不用 git submodule。只有它用的 md-5、sha1、tokio-tungstenite 从 workspace 的依赖里删了。
 - lint 集中在 workspace 的 `[workspace.lints]`；裸 `tokio::spawn` 用 `clippy.toml` 的 `disallowed-methods` 拦。
 
 ### 工具链
