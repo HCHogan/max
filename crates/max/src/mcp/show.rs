@@ -1,23 +1,36 @@
-//! `max.image`: a picture a program has in /work, shown to the model after
-//! the program's result. Not one of Max's tools: the runner's SDK calls it
-//! by this name, and the model sees the picture, not a value. See "多模态结果".
+//! What a program shows the model after its result: `max.image`'s
+//! pictures and `max.video`'s videos, files it has in /work. Not Max's
+//! tools: the runner's SDK calls them by these names, and the model sees
+//! the picture or the video, not a value. The host never decodes a video:
+//! the VM's ffmpeg made it small (video.js), the host reads its movie
+//! header for the length, and the provider gets the bytes. See "多模态结果".
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
+use max_core::item::Part;
+use max_core::message::MediaRef;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::task::spawn_blocking;
 use tracing::warn;
 
 use super::work::{beneath_work, read};
-use super::{Context, Failure, arguments, internal};
+use super::{Context, Failure, arguments, internal, lock};
+use crate::media::mp4;
 use crate::media::prepare::prepare;
+use crate::media::store::Store;
 
-pub const NAME: &str = "max.image";
+pub const IMAGE: &str = "max.image";
+pub const VIDEO: &str = "max.video";
 /// The most pictures one program shows.
-pub const MOST: usize = 4;
+pub const MOST_PICTURES: usize = 4;
+/// The most seconds of video one program shows.
+pub const MOST_SECONDS: u32 = 600;
 /// The largest picture shown, in bytes.
-const LARGEST: u64 = 10 << 20;
+const LARGEST_PICTURE: u64 = 10 << 20;
+/// The largest video shown, in bytes: video.js made two minutes of a
+/// noisy one 3.8 MB, and an ordinary one 1.2 MB.
+const LARGEST_VIDEO: u64 = 32 << 20;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,26 +38,29 @@ struct Args {
     path: String,
 }
 
-/// Stores the model's copy of the picture at `path`, and adds it to
-/// `shown`, the program's pictures so far, unless it is there already.
-pub async fn run(
+/// The model's copy of the picture at `path`, added to `shown`, the
+/// program's pictures and videos so far.
+pub async fn image(
     context: &Context,
-    shown: &Mutex<Vec<String>>,
+    shown: &Mutex<Vec<Part>>,
     args: Value,
 ) -> Result<Value, Failure> {
-    let Args { path } = arguments(NAME, args)?;
-    let (Some(work), Some(store)) = (&context.work, &context.services.store) else {
-        return Err(Failure::new("unavailable", "这里看不了图。"));
+    let Args { path } = arguments(IMAGE, args)?;
+    let room = |shown: &[Part]| {
+        let pictures = shown
+            .iter()
+            .filter(|part| matches!(part, Part::Media { .. }))
+            .count();
+        if pictures >= MOST_PICTURES {
+            return Err(Failure::new(
+                "too_many",
+                format!("一次 run_code 最多交 {MOST_PICTURES} 张图"),
+            ));
+        }
+        Ok(())
     };
-    let full = || Failure::new("too_many", format!("一次 run_code 最多交 {MOST} 张图"));
-    if lock(shown).len() >= MOST {
-        return Err(full());
-    }
-    let relative = beneath_work(&path)?;
-    let work = work.clone();
-    let bytes = spawn_blocking(move || read(&work, &relative, LARGEST))
-        .await
-        .map_err(|_| internal())??;
+    room(&lock(shown))?;
+    let (store, bytes) = read_work(context, &path, LARGEST_PICTURE, "图").await?;
     let (prepared, bytes) = spawn_blocking(move || (prepare(&bytes), bytes))
         .await
         .map_err(|_| internal())?;
@@ -54,23 +70,102 @@ pub async fn run(
             format!("{path} 不是解得开的 PNG、JPEG、GIF、WebP"),
         ));
     };
-    let sha256 = store
-        .put(prepared.copy.unwrap_or(bytes))
-        .await
-        .map_err(|error| {
-            warn!(%error, "couldn't store a picture to show");
-            internal()
-        })?;
-    let mut shown = lock(shown);
-    if !shown.contains(&sha256) {
-        if shown.len() >= MOST {
-            return Err(full());
-        }
-        shown.push(sha256);
-    }
+    let picture = |sha256| Part::Media {
+        media: MediaRef::Blob(sha256),
+    };
+    let copy = prepared.copy.unwrap_or(bytes);
+    keep(&store, copy, shown, picture, room).await?;
     Ok(json!({ "width": prepared.width, "height": prepared.height }))
 }
 
-fn lock(shown: &Mutex<Vec<String>>) -> std::sync::MutexGuard<'_, Vec<String>> {
-    shown.lock().unwrap_or_else(PoisonError::into_inner)
+/// The MP4 at `path`, which video.js made for the model, added to `shown`.
+pub async fn video(
+    context: &Context,
+    shown: &Mutex<Vec<Part>>,
+    args: Value,
+) -> Result<Value, Failure> {
+    let Args { path } = arguments(VIDEO, args)?;
+    if !context.video {
+        return Err(Failure::new("unavailable", "这个模型看不了视频。"));
+    }
+    let (store, bytes) = read_work(context, &path, LARGEST_VIDEO, "视频").await?;
+    let Some(length) = mp4::length(&bytes) else {
+        return Err(Failure::new(
+            "not_a_video",
+            format!("{path} 不是解得开的 MP4"),
+        ));
+    };
+    // Whole seconds, at least one: the sound runs a little past the last
+    // frame. The header is the program's word, so a length past any real
+    // video's is just too long.
+    let seconds = u32::try_from(length.round() as u64)
+        .unwrap_or(u32::MAX)
+        .max(1);
+    let room = |shown: &[Part]| {
+        let so_far: u32 = shown
+            .iter()
+            .map(|part| match part {
+                Part::Video { seconds, .. } => *seconds,
+                _ => 0,
+            })
+            .sum();
+        if so_far.saturating_add(seconds) > MOST_SECONDS {
+            return Err(Failure::new(
+                "too_long",
+                format!(
+                    "一次 run_code 最多交 {} 分钟视频，这段 {seconds} 秒，之前交了 {so_far} 秒；用 start、end 截一段",
+                    MOST_SECONDS / 60
+                ),
+            ));
+        }
+        Ok(())
+    };
+    room(&lock(shown))?;
+    let video = |sha256| Part::Video {
+        media: MediaRef::Blob(sha256),
+        seconds,
+    };
+    keep(&store, bytes, shown, video, room).await?;
+    Ok(json!({ "seconds": seconds }))
+}
+
+/// The file at `path` in the program's /work, at most `largest` bytes,
+/// and the store to keep what is shown of it, a `what`.
+async fn read_work(
+    context: &Context,
+    path: &str,
+    largest: u64,
+    what: &str,
+) -> Result<(Arc<Store>, Vec<u8>), Failure> {
+    let (Some(work), Some(store)) = (&context.work, &context.services.store) else {
+        return Err(Failure::new("unavailable", format!("这里看不了{what}。")));
+    };
+    let relative = beneath_work(path)?;
+    let work = work.clone();
+    let bytes = spawn_blocking(move || read(&work, &relative, largest))
+        .await
+        .map_err(|_| internal())??;
+    Ok((Arc::clone(store), bytes))
+}
+
+/// Stores `bytes`, and adds what `part` makes of their SHA-256 to `shown`
+/// unless it is there already, if `room` finds room for it.
+async fn keep(
+    store: &Store,
+    bytes: Vec<u8>,
+    shown: &Mutex<Vec<Part>>,
+    part: impl FnOnce(String) -> Part,
+    room: impl Fn(&[Part]) -> Result<(), Failure>,
+) -> Result<(), Failure> {
+    let sha256 = store.put(bytes).await.map_err(|error| {
+        warn!(%error, "couldn't store what a program showed");
+        internal()
+    })?;
+    let part = part(sha256);
+    let mut shown = lock(shown);
+    if !shown.contains(&part) {
+        room(&shown)?;
+        shown.push(part);
+    }
+    Ok(())
 }

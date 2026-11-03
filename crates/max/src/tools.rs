@@ -11,7 +11,6 @@ use std::time::Duration;
 use color_eyre::eyre::{Result, eyre};
 use max_core::ids::ConversationId;
 use max_core::item::{Part, ToolOutput};
-use max_core::message::MediaRef;
 use max_core::project::{PICTURE_TOKENS, VIDEO_TOKENS_PER_SECOND};
 use max_core::tools::Tool;
 use serde_json::json;
@@ -83,24 +82,16 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
             command, workdir, ..
         } => shell(&vm, &grant, &command, workdir.as_deref(), limit).await,
     };
-    let pictures = grant.shown();
-    let videos = grant.videos();
     let mut output = match ran {
         Ok((shown, error)) => text(shown, error),
         Err(error) => text(format!("{name} 没跑成：{error:#}"), true),
     };
-    for sha256 in pictures {
-        output.parts.push(Part::Media {
-            media: MediaRef::Blob(sha256),
-        });
-        output.tokens += PICTURE_TOKENS;
-    }
-    for (sha256, seconds) in videos {
-        output.parts.push(Part::Video {
-            media: MediaRef::Blob(sha256),
-            seconds,
-        });
-        output.tokens += seconds * VIDEO_TOKENS_PER_SECOND;
+    for part in grant.shown() {
+        output.tokens += match part {
+            Part::Video { seconds, .. } => seconds * VIDEO_TOKENS_PER_SECOND,
+            _ => PICTURE_TOKENS,
+        };
+        output.parts.push(part);
     }
     output
 }

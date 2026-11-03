@@ -78,15 +78,15 @@ async fn a_report_goes_out_under_its_name(pool: PgPool) {
         }
     });
     let context = Context {
-        services: Arc::new(Services {
-            store: Some(Arc::clone(&store)),
-            ..Services::bare(pool.clone())
-        }),
-        place: Arc::clone(&place),
-        page_tokens: 2000,
-        video: false,
         work: Some(work.clone()),
         caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
+        ..Context::check(
+            Services {
+                store: Some(Arc::clone(&store)),
+                ..Services::bare(pool.clone())
+            },
+            Arc::clone(&place),
+        )
     };
     std::fs::write(work.join("out/report.pdf"), b"%PDF-1.4").unwrap();
     std::fs::write(work.join("empty.txt"), b"").unwrap();

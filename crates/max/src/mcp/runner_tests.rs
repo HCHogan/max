@@ -12,6 +12,8 @@ use crate::mcp::tool::TOOLS;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
+use max_core::ids::ConversationId;
+use max_core::item::Part;
 use max_core::message::{MediaKind, MediaMeta, MediaRef, Node};
 use max_db::media::{self, Blob};
 use serde_json::{Value, json};
@@ -20,7 +22,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::process::Command;
 
-use super::{Caller, Context, Services, Sessions, serve};
+use super::{Context, Services, Sessions, serve};
 use crate::conversation::ingest;
 use crate::conversation::testing::{from_xiaoming, group, group_named, offset, text};
 use crate::inbound::InNode;
@@ -35,6 +37,39 @@ struct Ran {
     status: i32,
     stdout: String,
     stderr: String,
+}
+
+/// The MCP service for `conversation`'s VM on a port of its own: its URL,
+/// and the scope it runs in.
+async fn served(sessions: &Sessions, conversation: ConversationId) -> (String, Scope) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let mut scope = Scope::new();
+    let sessions = sessions.clone();
+    scope.spawn(move |stop| serve(listener, conversation, sessions, stop));
+    (mcp, scope)
+}
+
+/// Only the database, and `store`.
+fn stored(pool: PgPool, store: &Arc<Store>) -> Services {
+    Services {
+        store: Some(Arc::clone(store)),
+        ..Services::bare(pool)
+    }
+}
+
+/// The content store's name for what a program showed.
+fn sha256(part: &Part) -> &str {
+    match part {
+        Part::Media {
+            media: MediaRef::Blob(sha256),
+        }
+        | Part::Video {
+            media: MediaRef::Blob(sha256),
+            ..
+        } => sha256,
+        _ => panic!("not what a program shows: {part:?}"),
+    }
 }
 
 async fn run(mcp: &str, token: &str, code: &str) -> Ran {
@@ -87,19 +122,8 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
     drop(conn);
     let conversation = place.conversation;
     let sessions = Sessions::default();
-    let grant = sessions.open(Context {
-        services: Arc::new(Services::bare(pool)),
-        place,
-        page_tokens: 2000,
-        video: false,
-        work: None,
-        caller: Caller::Check,
-    });
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());
-    let mut scope = Scope::new();
-    let served = sessions.clone();
-    scope.spawn(move |stop| serve(listener, conversation, served, stop));
+    let grant = sessions.open(Context::check(Services::bare(pool), place));
+    let (mcp, scope) = served(&sessions, conversation).await;
     let token = grant.token();
     let id = hello.message.id.0;
 
@@ -234,21 +258,10 @@ async fn programs_show_the_model_pictures(pool: PgPool) {
     let conversation = place.conversation;
     let sessions = Sessions::default();
     let grant = sessions.open(Context {
-        services: Arc::new(Services {
-            store: Some(Arc::clone(&store)),
-            ..Services::bare(pool)
-        }),
-        place,
-        page_tokens: 2000,
-        video: false,
         work: Some(work.clone()),
-        caller: Caller::Check,
+        ..Context::check(stored(pool, &store), place)
     });
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());
-    let mut scope = Scope::new();
-    let served = sessions.clone();
-    scope.spawn(move |stop| serve(listener, conversation, served, stop));
+    let (mcp, scope) = served(&sessions, conversation).await;
     let pngs = |widths: &[u32]| -> Vec<String> {
         widths
             .iter()
@@ -272,7 +285,10 @@ async fn programs_show_the_model_pictures(pool: PgPool) {
     );
     let shown = grant.shown();
     assert_eq!(shown.len(), 2);
-    assert_eq!(std::fs::read(store.path(&shown[0])).unwrap(), png(3));
+    assert_eq!(
+        std::fs::read(store.path(sha256(&shown[0]))).unwrap(),
+        png(3)
+    );
     // The bytes' file is gone once the host has its copy.
     let left: Vec<_> = std::fs::read_dir(work.join(".max/shown"))
         .unwrap()
@@ -336,22 +352,12 @@ async fn programs_show_the_model_videos(pool: PgPool) {
     let conversation = place.conversation;
     let sessions = Sessions::default();
     let context = |video| Context {
-        services: Arc::new(Services {
-            store: Some(Arc::clone(&store)),
-            ..Services::bare(pool.clone())
-        }),
-        place: Arc::clone(&place),
-        page_tokens: 2000,
         video,
         work: Some(work.clone()),
-        caller: Caller::Check,
+        ..Context::check(stored(pool.clone(), &store), Arc::clone(&place))
     };
     let grant = sessions.open(context(true));
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());
-    let mut scope = Scope::new();
-    let served = sessions.clone();
-    scope.spawn(move |stop| serve(listener, conversation, served, stop));
+    let (mcp, scope) = served(&sessions, conversation).await;
     let input = |token: &str, code: &str| json!({ "code": code, "args": {}, "token": token, "mcp": mcp, "work": work });
 
     // The whole clip, a second of it, the clip again; a file that isn't
@@ -380,11 +386,17 @@ async fn programs_show_the_model_videos(pool: PgPool) {
             "TypeError",
         ])
     );
-    let videos = grant.videos();
-    let lengths: Vec<u32> = videos.iter().map(|(_, seconds)| *seconds).collect();
-    assert_eq!(lengths, [3, 1]);
+    let shown = grant.shown();
+    let lengths: Vec<_> = shown
+        .iter()
+        .map(|part| match part {
+            Part::Video { seconds, .. } => Some(*seconds),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lengths, [Some(3), Some(1)]);
     // The model's copy: an MP4, smaller than what it was made from.
-    let copy = std::fs::read(store.path(&videos[0].0)).unwrap();
+    let copy = std::fs::read(store.path(sha256(&shown[0]))).unwrap();
     assert_eq!(&copy[4..8], b"ftyp");
     assert!(copy.len() < std::fs::metadata(work.join("clip.mkv")).unwrap().len() as usize);
     // The copies' files are gone once the host has them.
@@ -434,7 +446,7 @@ async fn programs_show_the_model_videos(pool: PgPool) {
         ran.stdout,
         ran.stderr
     );
-    assert_eq!(grant.videos().len(), 3);
+    assert_eq!(grant.shown().len(), 3);
 
     // A model that doesn't watch videos.
     let blind = sessions.open(context(false));
@@ -494,21 +506,10 @@ async fn programs_fetch_the_chats_files(pool: PgPool) {
     let conversation = place.conversation;
     let sessions = Sessions::default();
     let grant = sessions.open(Context {
-        services: Arc::new(Services {
-            store: Some(Arc::clone(&store)),
-            ..Services::bare(pool)
-        }),
-        place,
-        page_tokens: 2000,
-        video: false,
         work: Some(work.clone()),
-        caller: Caller::Check,
+        ..Context::check(stored(pool, &store), place)
     });
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());
-    let mut scope = Scope::new();
-    let served = sessions.clone();
-    scope.spawn(move |stop| serve(listener, conversation, served, stop));
+    let (mcp, scope) = served(&sessions, conversation).await;
 
     // As the record shows it; the other group's; none such; not a handle.
     let code = "const fetched = await max.file(`[file#${args.ids[0]}.0: 周报.pdf]`); \
@@ -609,21 +610,10 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     let (programs, mut called) = tokio::sync::mpsc::unbounded_channel();
     let sessions = Sessions::with_programs(programs);
     let grant = sessions.open(Context {
-        services: Arc::new(Services {
-            store: Some(Arc::clone(&store)),
-            ..Services::bare(pool)
-        }),
-        place,
-        page_tokens: 2000,
-        video: false,
         work: Some(work.clone()),
-        caller: Caller::Check,
+        ..Context::check(stored(pool, &store), place)
     });
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mcp = format!("http://{}/mcp", listener.local_addr().unwrap());
-    let mut scope = Scope::new();
-    let served = sessions.clone();
-    scope.spawn(move |stop| serve(listener, conversation, served, stop));
+    let (mcp, mut scope) = served(&sessions, conversation).await;
     scope.spawn(move |_| async move {
         while let Some(Signal::Call {
             conversation: to,

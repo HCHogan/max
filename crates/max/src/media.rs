@@ -3,6 +3,7 @@
 pub mod caption;
 pub mod download;
 pub mod fetch;
+pub mod mp4;
 pub mod pictures;
 pub mod prepare;
 pub mod stickers;

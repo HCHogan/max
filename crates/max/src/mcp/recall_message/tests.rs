@@ -86,12 +86,8 @@ async fn what_qq_would_refuse_is_refused_here(pool: PgPool) {
         }
     });
     let context = Context {
-        services: Arc::new(Services::bare(pool.clone())),
-        place: Arc::clone(&place),
-        page_tokens: 2000,
-        video: false,
-        work: None,
         caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
+        ..Context::check(Services::bare(pool.clone()), Arc::clone(&place))
     };
     let now = Utc::now();
     let long_ago = now - TimeDelta::minutes(3);

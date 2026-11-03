@@ -50,7 +50,7 @@ tokio-util = "0.7.20"
 # default TLS is rustls with the system's roots.
 reqwest = { version = "0.13", features = ["json", "stream"] }
 # Splits max-llm's model responses into server-sent events. Only that: the
-# wire types are max-llm's own. 0.2.6 is the one rmcp uses.
+# wire types are max-llm's own.
 sse-stream = "0.2.6"
 # StreamExt and SinkExt, for the WebSocket stream.
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
@@ -78,14 +78,13 @@ russh = { version = "0.65", default-features = false, features = ["aws-lc-rs"] }
 # uses.
 rand = { version = "0.10", default-features = false, features = ["thread_rng"] }
 # Max's MCP service, which programs in a VM call Max's tools through:
-# Streamable HTTP on a unix socket per VM, stateless, JSON replies. rmcp
-# does the protocol; axum serves it, and only that.
-rmcp = { version = "3.8", default-features = false, features = ["server", "transport-streamable-http-server"] }
+# JSON-RPC posted over HTTP on a unix socket per VM, stateless, JSON
+# replies; the protocol is ours, a page of it. Also the VM's other routes.
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 # The JSON Schemas of Max's tools, from their argument and result types,
 # so that a tool's contract is written once; serde_json keeps the fields
 # in the order they are declared, for the schemas and the TypeScript made
-# from them. 1.2 is in the tree already, through rmcp.
+# from them.
 schemars = { version = "1.2", default-features = false, features = ["derive", "std"] }
 # The content store names media by their SHA-256. 0.11 is in the tree
 # already, through sqlx and russh.
@@ -95,7 +94,7 @@ sha2 = "0.11"
 # keeps to the blocking thread it is given.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # Pictures go to the model as data URLs. 0.23 is in the tree already,
-# through reqwest and rmcp.
+# through reqwest.
 base64 = "0.23"
 # Opening a file in a group's /work on the host one component at a time
 # with openat and O_NOFOLLOW: the guest writes /work, symlinks included,

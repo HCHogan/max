@@ -6,7 +6,7 @@
 //! docs/rust-rewrite.md.
 
 use std::future::Future;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
@@ -70,8 +70,8 @@ pub struct Spec {
     pub turn: bool,
     pub program: bool,
     /// JSON Schemas.
-    pub input: Arc<Map<String, Value>>,
-    pub output: Arc<Map<String, Value>>,
+    pub input: Map<String, Value>,
+    pub output: Map<String, Value>,
     /// TypeScript, for the system prompt.
     pub declaration: String,
     run: for<'a> fn(&'a Context, Value) -> BoxFuture<'a, Result<Value, Failure>>,
@@ -137,8 +137,8 @@ fn spec<T: Tool>() -> Spec {
         job: T::JOB,
         turn: T::TURN,
         program: T::PROGRAM,
-        input: Arc::new(input),
-        output: Arc::new(output),
+        input,
+        output,
         declaration,
         run: run::<T>,
     }

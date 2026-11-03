@@ -25,9 +25,6 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
-use tracing_subscriber::filter::{LevelFilter, Targets};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 
 use max::config::{self, Config};
 use max::conversation::{Place, Shared};
@@ -375,16 +372,11 @@ fn logging(config: &Config) {
     let logs = tracing_subscriber::fmt()
         .with_max_level(config.log.level)
         .with_ansi(std::io::stdout().is_terminal());
-    // rmcp logs each request it serves, and the programs in the VMs make
-    // many.
-    let quieter = Targets::new()
-        .with_default(config.log.level)
-        .with_target("rmcp", LevelFilter::WARN);
     // journald stamps each line itself.
     if journal {
-        logs.without_time().finish().with(quieter).init();
+        logs.without_time().init();
     } else {
-        logs.finish().with(quieter).init();
+        logs.init();
     }
 }
 

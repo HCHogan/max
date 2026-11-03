@@ -13,8 +13,8 @@ use crate::conversation::ingest;
 use crate::conversation::testing::{from_xiaoming, group, offset};
 use crate::embedding::testing::{serve, vector};
 use crate::inbound::InNode;
+use crate::mcp::Services;
 use crate::mcp::tool::Tool;
-use crate::mcp::{Caller, Services};
 use crate::scope::Scope;
 
 /// Calls the tool as a program does, its arguments checked.
@@ -91,17 +91,13 @@ async fn the_nearest_stickers_by_handle(pool: PgPool) {
             .unwrap();
     }
     drop(conn);
-    let mut context = Context {
-        services: Arc::new(Services {
+    let mut context = Context::check(
+        Services {
             embedder: Some(embedder),
             ..Services::bare(pool)
-        }),
+        },
         place,
-        page_tokens: 2000,
-        video: false,
-        work: None,
-        caller: Caller::Check,
-    };
+    );
 
     let found = run(&context, json!({ "query": " 猫 " })).await.unwrap();
     assert_eq!(

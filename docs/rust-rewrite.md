@@ -111,12 +111,12 @@ v1 用到的：
 | 命令行、配置 | clap（derive）、toml | 4.6 / 1.1 | 只有一个来源：TOML 文件；见[配置](#配置) |
 | 数据库 | sqlx（postgres、runtime-tokio、macros、migrate、chrono、json） | 0.9.0 | 编译期检查 SQL；`.sqlx` 离线元数据入库；迁移用 sqlx 自带的。不开 TLS，库在本机 |
 | 时间 | chrono | 0.4 | sqlx 0.9 不支持 jiff |
-| LLM | 自写，reqwest 加 sse-stream | — / 0.13 / 0.2.6 | 只在 `max-llm` 里。线上格式只给读到的十几个字段写小结构，其余存原始 JSON 透传。sse-stream 只把字节流切成事件，rmcp 3.8 用的也是 0.2.6。2026-10-29 从 async-openai 0.42.2 改：byot 模式下请求和响应类型本来就要自己写，它只剩发请求和解析 SSE；它的流每个都 `tokio::spawn` 一个不归我们管的任务，连接断在半路时流只是结束、不报错，还大约每月一个破坏性小版本 |
+| LLM | 自写，reqwest 加 sse-stream | — / 0.13 / 0.2.6 | 只在 `max-llm` 里。线上格式只给读到的十几个字段写小结构，其余存原始 JSON 透传。sse-stream 只把字节流切成事件。2026-10-29 从 async-openai 0.42.2 改：byot 模式下请求和响应类型本来就要自己写，它只剩发请求和解析 SSE；它的流每个都 `tokio::spawn` 一个不归我们管的任务，连接断在半路时流只是结束、不报错，还大约每月一个破坏性小版本 |
 | HTTP 服务 | axum | 0.8.9 | MCP 服务；以后 admin 也挂在这里 |
 | QQ 官方机器人 | 自写，网关用 tokio-tungstenite（rustls），REST 用 reqwest | — / 0.30 / 0.13 | 官方 SDK 只有 Go、Python、Node；见 [QQ 官方机器人](#qq-官方机器人) |
 | agent loop | 自写，sans-I/O | — | 调研结论见[核心](#核心) |
-| MCP | rmcp | 3.x | Max 的 MCP 服务，VM 里的程序通过它调 Max 的工具，见 [MCP 通道](#mcp-通道) |
-| 工具参数 schema | schemars | 1.2 | rmcp 本来就依赖它 |
+| MCP | 自写，axum | — / 0.8 | Max 的 MCP 服务，VM 里的程序通过它调 Max 的工具，只做用到的那一页协议，见 [MCP 通道](#mcp-通道)。2026-11-03 从 rmcp 3.8 改 |
+| 工具参数 schema | schemars | 1.2 | 工具契约的 JSON Schema 从参数和返回值的类型生成 |
 | codemode 运行时 | Node 和官方 MCP TypeScript SDK | — | 打进群 VM 的 guest 镜像，版本跟着钉住的 nixpkgs；runner 和 SDK 自写 |
 | VM | microvm.nix、cloud-hypervisor、NixOS guest，命令走 vsock 上的 SSH | — | 沿用 Haskell 版的 guest；不要 broker，VM 是主进程的子进程，运行时不需要 root，见 [VM 进程](#vm-进程) |
 | SSH | russh | 0.65.0 | 调 VM：每个 VM 一条连接，每条命令一个 channel，直接连在 hybrid vsock 的 socket 上 |
@@ -1499,8 +1499,10 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
 
 VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 runner 和后台 pi 都是它的客户端，区别只在会话权限。
 
-- **通道**：cloud-hypervisor 的 hybrid vsock 里，guest 连主机的某个端口，会落到宿主上 `<vsock socket>_<端口>` 这个 unix socket，Haskell 版的就绪通知就走这条路。Max 在每个 VM 的这个位置监听一个端口，用 axum 加 rmcp 跑 Streamable HTTP。连进来的是哪个 VM，由 socket 路径决定。guest 里把 `127.0.0.1:7777` 转发到这个 vsock 端口，客户端都配 `http://127.0.0.1:7777/mcp`。IP 层照样连不到宿主，外面也照样连不进 VM。做成的：guest 里是 socket 激活，每个连接一个 socat 连到 vsock 的 2:7777；宿主在 VM 启动前就在 `notify.vsock_7777` 上监听，每个 VM 一个 MCP 服务，跟着 VM 起停。
-- **协议**（2026-10-29）：rmcp 3.8，协议版本 2026-07-28，无状态，回复用 JSON 不用 SSE。这个版本每个请求都要带 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name` 头，`_meta` 里也要有协议版本和客户端能力。runner 自己用 fetch 拼，不装 MCP 的 SDK。更早协议的客户端也收（2026-10-30）：pi 1.4 的是 2025-11-25，先发 `initialize`；rmcp 默认要给它建会话，而服务没有会话管理，回 500。关掉 `legacy_session_mode` 后它的每个请求各自处理。
+- **通道**：cloud-hypervisor 的 hybrid vsock 里，guest 连主机的某个端口，会落到宿主上 `<vsock socket>_<端口>` 这个 unix socket，Haskell 版的就绪通知就走这条路。Max 在每个 VM 的这个位置监听一个端口，用 axum 跑 MCP 的 Streamable HTTP（只有 POST 和 JSON 回复的那部分，自己写的）。连进来的是哪个 VM，由 socket 路径决定。guest 里把 `127.0.0.1:7777` 转发到这个 vsock 端口，客户端都配 `http://127.0.0.1:7777/mcp`。IP 层照样连不到宿主，外面也照样连不进 VM。做成的：guest 里是 socket 激活，每个连接一个 socat 连到 vsock 的 2:7777；宿主在 VM 启动前就在 `notify.vsock_7777` 上监听，每个 VM 一个 MCP 服务，跟着 VM 起停。
+- **协议**（2026-10-29）：协议版本 2026-07-28，无状态，回复用 JSON 不用 SSE。这个版本每个请求都要带 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name` 头，`_meta` 里也要有协议版本和客户端能力。runner 自己用 fetch 拼，不装 MCP 的 SDK。更早协议的客户端也收（2026-10-30）：pi 1.4 的是 2025-11-25，先发 `initialize`；当时用的 rmcp 默认要给它建会话，而服务没有会话管理，回 500，关掉 `legacy_session_mode` 后它的每个请求各自处理。
+- **不用 rmcp**（2026-11-03，owner 提的，说它是纯负资产）：我们只用到无状态、JSON 回复的一小块，rmcp 的会话管理、SSE、传输抽象都用不上，反倒要为它配 `legacy_session_mode`、`NeverSessionManager`，在 `ServerHandler` 里从 extensions 取 HTTP 头，日志还得压。换成 `mcp/service.rs` 里自己写的一页：`POST /mcp` 收一条 JSON-RPC；`initialize` 回 tools 能力和协议版本（客户端要的版本认识就照给，不认识给最新的）；`ping` 回 `{}`；`tools/list`、`tools/call` 照旧；没有 id 的通知回 202；不认识的方法回 -32601，不是 JSON 回 400 和 -32700，token 不对仍是 -32600。GET、DELETE 回 405：没有会话可结束，也没有流可开。pi 1.4 的 MCP 客户端是它自己写的（看过它打包的代码）：通知收到 2xx 就算数，之后发 GET 要推送流，见了 405 就不要了；回复认 `application/json`；我们不发 `Mcp-Session-Id`，它关的时候也就不发 DELETE。`MCP-Protocol-Version` 这些头不查。结果照 rmcp 的样子：`structuredContent` 之外 `content` 里放同一个值的 JSON 文本，pi 给模型看的是这个。去掉了 rmcp 和它带来的 async-trait、pastey、uuid。测试用原始 HTTP 走一遍 pi 的握手：`initialize`、`notifications/initialized`、GET、`tools/list`、`tools/call` 读文本。
+- **调用表**（同一天，去重）：程序按名字要的东西是 `mcp::Call`：Max 的工具，或 runner 自己的三个请求 `max.image`、`max.video`、`max.file`。谁能调什么（`Caller::allows`）、会话里怎么分派、哪些算进工具调用次数（只有 Max 的工具），都看这一个枚举，不再在 `service.rs` 和 `mcp.rs` 里各比一遍名字。`max.image` 和 `max.video` 合进 `mcp/show.rs`，共用从 `/work` 读、存进内容库、记进会话的步骤；会话记的直接是 `Part`，`run_code` 的结果按程序交的顺序接上，不再图一份、视频一份。MP4 读时长的代码挪到 `media/mp4.rs`。
 - **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群和 turn、允许的工具、在途的调用。`run_code` 的会话能用全部 Max 工具；job 的会话只列、只许调标了 `job` 的工具（不在群里说话做事的：`history`、`web_search`），别的回 `not_allowed`，另外能经 `/llm` 调它的模型，见[后台 agent](#后台-agent)。会话还记着每个工具调了几次、失败几次，附在结果后面。
 
   | 会话 | 能用的工具 | 生命周期 |
@@ -1511,7 +1513,7 @@ VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 r
 - **鉴权**：`Authorization: Bearer <token>`。token 所属的群必须和连进来的 VM 是同一个群。`tools/list` 只列出这个会话允许的工具。
 - **吊销是同步的**：从内存表里删掉会话，它在途调用的 future 一起 drop，所以可以放进 `Drop`。会话只存在内存里，Max 重启或崩溃后旧 token 全部失效，不需要过期时间。
 - **执行器**：所有调用都经过同一个执行器，负责 schema 校验、单次调用的超时、并发上限 64、输出大小上限，以及按会话限制有副作用的调用次数（代码里可以循环发送、撤回、禁言）。做成的：单次 60 秒，每个会话同时 64 个，多的排队；参数按工具契约查（见下）。输出上限和副作用次数等有了会产生大输出或有副作用的工具再加，`history` 自己分页。
-- **结果**：工具声明 `outputSchema`，成功结果放在 `structuredContent` 里，`tools.x()` 拿到的就是 JSON。失败设 `isError`，`structuredContent` 是 `{code, message}`。取消用 `notifications/cancelled`。无状态的 HTTP 里取消就是断开连接，rmcp 会取消那次调用，`max.cancel` 就是中止 fetch。
+- **结果**：工具声明 `outputSchema`，成功结果放在 `structuredContent` 里，`tools.x()` 拿到的就是 JSON。失败设 `isError`，`structuredContent` 是 `{code, message}`。无状态的 HTTP 里取消就是断开连接：hyper 看到连接断了就丢掉那次调用的 future，`max.cancel` 就是中止 fetch。`notifications/cancelled` 收下不管。
 - **不重试，不按副作用分类**（2026-10-29 定，owner 同意）：原打算给每个工具标只读、幂等、有副作用，失败结果里再带 outcome（rejected、failed-before-effect、outcome-unknown）和能否重试，用来决定宿主重试、后台 job 能用哪些、中断后算不算"结果未知"。都用不上：宿主一律不重试，交给模型；后台 job 的会话列一份能用的工具；会动群的操作（发消息、发图、撤回）都经会话 actor 入账，做没做成，下一轮在时间线上看得到。所以超时和取消一律说"可能已经生效，先看记录再决定要不要再来"。最坏是同一次运行里拿到超时马上再调，多发一张图，接受。
 - **工具契约**（2026-10-30 做成，review 提的：原来名字、描述、两个 schema 和 TypeScript 声明都手写在 max-core 的 `MAX_TOOLS` 里，参数结构体和执行函数在 max 里，三份各写各的，schema 里的约束有的运行时没查）：一个 Max 工具只在 max 里写一处，实现 `mcp::tool::Tool`：名字、MCP 列表里的一句描述、一次运行最多调几次、后台 job 能不能用、参数类型、返回类型、系统提示里的用法说明（`guide`）和执行函数。参数和返回值是普通的 serde 类型，派生 schemars 的 `JsonSchema`；约束写成属性（`length`、`range`），参数字段的说明写成 `description`，说明和 `guide` 里的数字直接引用代码里的常量。注册表 `mcp::tool::TOOLS` 从这些生成三样东西：
   - MCP 列出的 `inputSchema` 和 `outputSchema`：子 schema 全部内联，去掉 title 和整数的 format；只留参数字段自己的说明，类型上的英文文档注释不进去。返回值有好几种形状时（`history`）是 `anyOf`，根上补 `type: object`，MCP 要求根是对象。
@@ -1727,7 +1729,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
   - **路由**：每个 VM 的 MCP 服务上 `GET /events`（`vm/events.rs`），和 `/units`、`/api` 一样不要 token，哪个群由 VM 自己的 socket 定。回 `application/x-ndjson`，头 `max-head` 是订阅时的 `head`。`?after=编号` 先从库里补那条之后到 `head` 的，最多最近 1000 条，一次读 100 条；再接着送新的，`after` 以前的不送。30 秒没有新行发一个空行当心跳。落后超过 256 行、actor 停了、VM 的服务停了，流都结束：程序从最后一条重新要，补的从库里来。
   - **一行**：`{id, at, sender, person, by, reply_to, text}`。`at` 是本地时间的 RFC 3339；`person` 是发的人的编号，`[mention#person]` 能 @ 他；`by` 是 `max`（Max 的账号发的）或 `program`（程序发的），群友的没有；`reply_to` 是回复的那条；`text` 和 `history` 里一行冒号后面的一样（`Render::body`），超长的也不截。不分 kind：命令、编辑（`[edit#…]`）、撤回（`[unsend#…]`）也在里面，和 `history` 一样。
   - **`maxx events [--after 编号]`**（`nix/client.js` 的 `events()`）：每行原样打印一行 JSON，一直跑。断了、出错、90 秒连心跳都没有，就过 1 秒重连，之后翻倍到 30 秒，从打印过的最后一条接着要；一条都还没打印就从 `max-head` 接着要，所以中间来的也不丢。重连的原因写到标准错误。读的一方走了（EPIPE）就退出。`--after` 认 `123` 和 `#123`。
-  - **日志**：rmcp 的 target 只记 warn 以上，不再每个请求记 3 行。
+  - **日志**：rmcp 的 target 只记 warn 以上，不再每个请求记 3 行（11-03 去掉 rmcp 后就没有这些日志了）。
   - **提示词**：常驻程序那段加上：对群里的新消息做反应用 `maxx events`，别拿 `history` 轮询；每行的字段、`by` 别回自己、断了自己重连、`--after` 和把 id 写进 `/work` 接上。unit 和后台命令里能用的后面加上 events。
   - **测试**：actor 测试：订阅时的 `head` 是最后入账的那行，之后群友的话和 Max 的回答按顺序来，actor 停了流就结束。会话表的测试：`Signal::Subscribe` 到了 `max-wake` 起的那个 actor。`vm/events.rs` 的测试：从 `after` 补库里的行（`by`、`reply_to`、`person`、`at`），再收新的，`after` 以前的不重发，心跳，actor 停了流结束；不带 `after` 只要新的；别的查询 400；会话不回 503；服务停的时候流结束，不拖住关机。`maxx events` 用 Node 对着这个路由跑：打印补的和新来的，流断了以后从打印过的最后一条重连，中间来的那条补上，标准错误里写着重连。
   - 9 群那个轮询的 ping-responder 不替它改：它在群的 `/work` 里，是 Max 的；部署后让 Max 自己换成 `maxx events`。

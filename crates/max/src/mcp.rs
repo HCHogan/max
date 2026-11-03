@@ -14,7 +14,6 @@ mod send_image;
 mod service;
 mod show;
 pub mod tool;
-mod video;
 mod web_search;
 pub(crate) mod work;
 
@@ -25,7 +24,7 @@ pub use service::{Grant, Sessions, serve, serve_with};
 mod runner_tests;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use chrono::FixedOffset;
 use serde::de::DeserializeOwned;
@@ -97,14 +96,51 @@ impl Caller {
         }
     }
 
-    /// Whether it may call the Max tool `name`. The runner's own requests
-    /// aren't Max tools: a turn's and a program's may make them.
-    pub fn allows(&self, name: &str) -> bool {
-        let tool = tool::find(name);
+    /// Whether it may make `call`.
+    pub fn allows(&self, call: Call) -> bool {
+        match (self, call) {
+            (Caller::Turn(_) | Caller::Check, Call::Tool(tool)) => tool.turn || tool.program,
+            (Caller::Turn(_) | Caller::Check, _) => true,
+            (Caller::Job(_), Call::Tool(tool)) => tool.job,
+            (Caller::Program(_), Call::Tool(tool)) => tool.program,
+            // A program kept in the VM reads the chat's files, but has no
+            // model to show anything to.
+            (Caller::Program(_), Call::File) => true,
+            (Caller::Job(_) | Caller::Program(_), _) => false,
+        }
+    }
+}
+
+/// What a program asks Max for by name: one of Max's tools, or one of the
+/// runner's own requests. Those aren't tools: they aren't listed or
+/// counted, and the model sees what they show, not a value.
+#[derive(Clone, Copy)]
+pub enum Call {
+    Tool(&'static tool::Spec),
+    /// max.image
+    Image,
+    /// max.video
+    Video,
+    /// max.file
+    File,
+}
+
+impl Call {
+    pub fn find(name: &str) -> Option<Self> {
+        match name {
+            show::IMAGE => Some(Self::Image),
+            show::VIDEO => Some(Self::Video),
+            chat_file::NAME => Some(Self::File),
+            _ => tool::find(name).map(Self::Tool),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
         match self {
-            Caller::Turn(_) | Caller::Check => tool.is_none_or(|tool| tool.turn || tool.program),
-            Caller::Job(_) => tool.is_some_and(|tool| tool.job),
-            Caller::Program(_) => tool.map_or(name == chat_file::NAME, |tool| tool.program),
+            Self::Tool(tool) => tool.name,
+            Self::Image => show::IMAGE,
+            Self::Video => show::VIDEO,
+            Self::File => chat_file::NAME,
         }
     }
 }
@@ -120,6 +156,21 @@ impl Services {
             store: None,
             embedder: None,
             admin: None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Context {
+    /// A check's in `place`: pages of 2000 tokens, no videos, no /work.
+    pub fn check(services: Services, place: Arc<Place>) -> Self {
+        Self {
+            services: Arc::new(services),
+            place,
+            page_tokens: 2000,
+            video: false,
+            work: None,
+            caller: Caller::Check,
         }
     }
 }
@@ -150,19 +201,18 @@ impl From<sqlx::Error> for Failure {
 /// Runs `name` for a program Max keeps in the group's VM, outside any
 /// turn: a tool marked `program`, or the runner's max.file.
 pub async fn program_call(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
-    if !context.caller.allows(name) {
-        return Err(Failure::new(
+    match Call::find(name).filter(|call| context.caller.allows(*call)) {
+        Some(Call::Tool(tool)) => tool.call(context, args).await,
+        Some(Call::File) => chat_file::run(context, args).await,
+        _ => Err(Failure::new(
             "not_allowed",
             format!("常驻程序用不了 {name}"),
-        ));
+        )),
     }
-    if name == chat_file::NAME {
-        return chat_file::run(context, args).await;
-    }
-    call(name, context, args).await
 }
 
-/// Runs the Max tool `name`.
+/// Runs the Max tool `name`, as its tests do.
+#[cfg(test)]
 pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
     match tool::find(name) {
         Some(tool) => tool.call(context, args).await,
@@ -171,6 +221,12 @@ pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, F
             format!("没有 {name} 这个工具"),
         )),
     }
+}
+
+/// What `mutex` guards, even after a panic while it was held: nothing
+/// here leaves it half-changed.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn internal() -> Failure {

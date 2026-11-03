@@ -98,12 +98,8 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
     drop(conn);
     let conversation = place.conversation;
     let context = |caller| Context {
-        services: Arc::new(Services::bare(pool.clone())),
-        place: Arc::clone(&place),
-        page_tokens: 2000,
-        video: false,
-        work: None,
         caller,
+        ..Context::check(Services::bare(pool.clone()), Arc::clone(&place))
     };
     let mut scope = Scope::new();
     let asked = Asked::default();
@@ -181,12 +177,8 @@ async fn a_job_calls_only_the_tools_that_dont_act_in_the_group(pool: PgPool) {
     let conversation = place.conversation;
     let sessions = Sessions::default();
     let job = sessions.open(Context {
-        services: Arc::new(Services::bare(pool)),
-        place,
-        page_tokens: 2000,
-        video: false,
-        work: None,
         caller: Caller::Job(upstream("http://127.0.0.1:9/v1".into())),
+        ..Context::check(Services::bare(pool), place)
     });
     let dir = std::env::temp_dir().join(format!("max-forward-tools-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

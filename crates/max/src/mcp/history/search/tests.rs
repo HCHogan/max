@@ -14,8 +14,8 @@ use crate::conversation::testing::{at, from_xiaohong, from_xiaoming, group, offs
 use crate::conversation::{Place, ingest};
 use crate::embedding::testing::{serve, vector};
 use crate::inbound::InNode;
+use crate::mcp::Services;
 use crate::mcp::tool::Tool;
-use crate::mcp::{Caller, Services};
 use crate::scope::Scope;
 
 /// Calls the tool as a program does, its arguments checked.
@@ -167,14 +167,7 @@ async fn rows_with_their_read(pool: PgPool) {
     let long = said(4, &script).await;
     let screenshot = picture(&mut conn, &place, 6, "服务器报错的截图").await;
     drop(conn);
-    let context = Context {
-        services: Arc::new(Services::bare(pool.clone())),
-        place: Arc::clone(&place),
-        page_tokens: 2000,
-        video: false,
-        work: None,
-        caller: Caller::Check,
-    };
+    let context = Context::check(Services::bare(pool.clone()), Arc::clone(&place));
 
     let found = run(&context, json!({ "query": "部署 方案" }))
         .await
@@ -256,14 +249,7 @@ async fn by_who_said_it(pool: PgPool) {
         ids.push(committed.message.id.0);
     }
     drop(conn);
-    let context = Context {
-        services: Arc::new(Services::bare(pool.clone())),
-        place: Arc::clone(&place),
-        page_tokens: 2000,
-        video: false,
-        work: None,
-        caller: Caller::Check,
-    };
+    let context = Context::check(Services::bare(pool.clone()), Arc::clone(&place));
     let refs = async |args: Value| -> Vec<String> {
         let found = run(&context, args).await.unwrap();
         let results = found["results"].as_array().unwrap().iter();
@@ -314,17 +300,13 @@ async fn by_meaning_too(pool: PgPool) {
     said(2, "中午吃什么").await;
     said(3, "上线时间定了").await;
     drop(conn);
-    let context = Context {
-        services: Arc::new(Services {
+    let context = Context::check(
+        Services {
             embedder: Some(embedder),
             ..Services::bare(pool.clone())
-        }),
-        place: Arc::clone(&place),
-        page_tokens: 2000,
-        video: false,
-        work: None,
-        caller: Caller::Check,
-    };
+        },
+        Arc::clone(&place),
+    );
     let texts = async |query: &str| -> Vec<Value> {
         let found = run(&context, json!({ "query": query })).await.unwrap();
         let results = found["results"].as_array().unwrap().iter();

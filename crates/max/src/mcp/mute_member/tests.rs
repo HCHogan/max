@@ -9,8 +9,8 @@ use super::*;
 use crate::conversation::Place;
 use crate::conversation::ingest;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, offset, text};
+use crate::mcp::Services;
 use crate::mcp::tool::Tool;
-use crate::mcp::{Caller, Services};
 use crate::qq::admin::Admin;
 use crate::qq::send::Answer;
 
@@ -97,17 +97,13 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
     let stranger = person("STRANGER", "路人").await;
     drop(conn);
     let qq = Arc::new(Group::default());
-    let context = Context {
-        services: Arc::new(Services {
+    let context = Context::check(
+        Services {
             admin: Some(Arc::clone(&qq) as Arc<dyn Admin>),
             ..Services::bare(pool.clone())
-        }),
-        place: Arc::clone(&place),
-        page_tokens: 2000,
-        video: false,
-        work: None,
-        caller: Caller::Check,
-    };
+        },
+        Arc::clone(&place),
+    );
     let asked = || qq.asked.lock().unwrap().clone();
 
     // Muted for ten minutes, until a time in QQ's zone; then once more,
@@ -145,12 +141,12 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
     assert_eq!(code(&context, stranger, 60).await, "not_found");
     assert_eq!(code(&context, xiaoming, -1).await, "bad_arguments");
     assert_eq!(code(&context, xiaoming, LONGEST + 1).await, "bad_arguments");
-    let direct = Context {
-        services: Arc::new(Services {
+    let direct = Context::check(
+        Services {
             admin: context.services.admin.clone(),
             ..Services::bare(pool.clone())
-        }),
-        place: Arc::new(Place {
+        },
+        Arc::new(Place {
             conversation: place.conversation,
             kind: ConversationKind::Direct,
             endpoint: place.endpoint,
@@ -159,11 +155,7 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
             me: place.me,
             my_name: "maxx".into(),
         }),
-        page_tokens: 2000,
-        video: false,
-        work: None,
-        caller: Caller::Check,
-    };
+    );
     assert_eq!(code(&direct, xiaoming, 60).await, "refused");
     let elsewhere = Context {
         services: Arc::new(Services {

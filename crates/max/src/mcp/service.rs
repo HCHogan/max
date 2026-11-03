@@ -1,27 +1,28 @@
-//! The MCP service: Streamable HTTP, stateless, on a unix socket per VM.
-//! A program authenticates with its run's token, which is good only while
-//! the run lasts and only from its own conversation's VM. A background
-//! agent's session calls only the tools that read, and its model calls go
-//! through the same service; see [`super::forward`]. A call with no token
-//! is from a program Max keeps in the VM, outside any turn: the VM says
-//! which group it is, and the group's actor runs it; see "常驻程序" in
-//! docs/rust-rewrite.md.
+//! The MCP service: JSON-RPC posted over HTTP, stateless, answered with
+//! JSON, on a unix socket per VM. Only what the runner's client and pi's
+//! MCP adapter use: `initialize`, `ping`, `tools/list` and `tools/call`;
+//! notifications are taken and dropped, and a call is cancelled by
+//! closing its connection, which drops it. A program authenticates with
+//! its run's token, which is good only while the run lasts and only from
+//! its own conversation's VM. A background agent's session calls only
+//! the tools that read, and its model calls go through the same service;
+//! see [`super::forward`]. A call with no token is from a program Max
+//! keeps in the VM, outside any turn: the VM says which group it is, and
+//! the group's actor runs it; see "常驻程序" in docs/rust-rewrite.md.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::http::request::Parts;
+use axum::body::Bytes;
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::post;
 use max_core::ids::ConversationId;
-use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
-};
-use rmcp::service::RequestContext;
-use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
-use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
-use rmcp::{ErrorData, RoleServer, ServerHandler};
-use serde_json::{Value, json};
+use max_core::item::Part;
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{Semaphore, oneshot};
 use tokio::time::timeout;
@@ -29,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::tool::{self, Spec};
-use super::{Caller, Context, Failure, chat_file, forward, show, video};
+use super::{Call, Caller, Context, Failure, chat_file, forward, lock, show};
 use crate::vm::Signal;
 
 /// One call's wall clock.
@@ -43,6 +44,15 @@ const JOB_RUNS: u32 = 10;
 /// or classified by its effects: what acts on the group goes through the
 /// timeline, where the model sees whether it happened.
 const MAYBE_DONE: &str = "会动群的操作可能已经生效，先看记录再决定要不要再来";
+/// The protocol versions `initialize` agrees to, newest first: a client
+/// gets its own if it is here, else the newest. The runner's client
+/// speaks 2026-07-28, which needs no `initialize`; pi's 2025-11-25.
+const VERSIONS: [&str; 4] = ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"];
+/// JSON-RPC's codes for a request Max doesn't answer.
+const PARSE_ERROR: i32 = -32700;
+const INVALID_REQUEST: i32 = -32600;
+const METHOD_NOT_FOUND: i32 = -32601;
+const INVALID_PARAMS: i32 = -32602;
 
 /// The open sessions, by token, and where calls without one go.
 #[derive(Clone, Default)]
@@ -62,10 +72,8 @@ pub(super) struct Session {
     calls: Mutex<BTreeMap<String, (u32, u32)>>,
     /// Per tool with a cap: calls started.
     started: Mutex<HashMap<&'static str, u32>>,
-    /// The pictures the program has shown the model, in order.
-    shown: Mutex<Vec<String>>,
-    /// And the videos, with their lengths in seconds.
-    videos: Mutex<Vec<(String, u32)>>,
+    /// The pictures and videos the program has shown the model, in order.
+    shown: Mutex<Vec<Part>>,
 }
 
 /// An open session. Dropping it closes the session: the token stops
@@ -100,9 +108,8 @@ impl Sessions {
             calls: Mutex::default(),
             started: Mutex::default(),
             shown: Mutex::default(),
-            videos: Mutex::default(),
         });
-        self.table().insert(token.clone(), Arc::clone(&session));
+        lock(&self.table).insert(token.clone(), Arc::clone(&session));
         Grant {
             sessions: self.clone(),
             token,
@@ -111,7 +118,7 @@ impl Sessions {
     }
 
     pub(super) fn get(&self, token: &str) -> Option<Arc<Session>> {
-        self.table().get(token).cloned()
+        lock(&self.table).get(token).cloned()
     }
 
     /// The session `authorization` names, if it is open and belongs to
@@ -127,15 +134,11 @@ impl Sessions {
             .filter(|session| session.context.place.conversation == conversation)
     }
 
-    fn table(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Session>>> {
-        self.table.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
     /// Has `conversation`'s actor run a program's call: its result.
     async fn program(
         &self,
         conversation: ConversationId,
-        tool: String,
+        tool: &str,
         args: Value,
     ) -> Result<Value, Failure> {
         let Some(programs) = &self.programs else {
@@ -144,16 +147,19 @@ impl Sessions {
         let (reply, result) = oneshot::channel();
         let call = Signal::Call {
             conversation,
-            tool,
+            tool: tool.to_owned(),
             args,
             reply,
         };
         programs
             .send(call)
             .map_err(|_| Failure::new("closed", "Max 正在停"))?;
-        result
-            .await
-            .unwrap_or_else(|_| Err(Failure::new("closed", "Max 没做完就停了")))
+        match timeout(CALL_TIME, result).await {
+            Ok(result) => {
+                result.unwrap_or_else(|_| Err(Failure::new("closed", "Max 没做完就停了")))
+            }
+            Err(_) => Err(late()),
+        }
     }
 }
 
@@ -164,35 +170,18 @@ impl Grant {
 
     /// Per tool called so far: how many calls succeeded, and failed.
     pub fn calls(&self) -> BTreeMap<String, (u32, u32)> {
-        self.session
-            .calls
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        lock(&self.session.calls).clone()
     }
 
-    /// The pictures shown so far, by SHA-256, in order.
-    pub fn shown(&self) -> Vec<String> {
-        self.session
-            .shown
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    /// The videos shown so far, by SHA-256, with their lengths in seconds.
-    pub fn videos(&self) -> Vec<(String, u32)> {
-        self.session
-            .videos
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+    /// The pictures and videos shown so far, in order.
+    pub fn shown(&self) -> Vec<Part> {
+        lock(&self.session.shown).clone()
     }
 }
 
 impl Drop for Grant {
     fn drop(&mut self) {
-        self.sessions.table().remove(&self.token);
+        lock(&self.sessions.table).remove(&self.token);
         self.session.closed.cancel();
     }
 }
@@ -222,23 +211,15 @@ pub async fn serve_with<L>(
     L: axum::serve::Listener,
     L::Addr: std::fmt::Debug,
 {
-    // Clients of the protocol before 2026-07-28, such as pi's, begin with
-    // `initialize`; with no sessions, each of their requests stands alone.
-    let config = StreamableHttpServerConfig::default()
-        .with_cancellation_token(stop.child_token())
-        .with_legacy_session_mode(false)
-        .with_json_response(true);
     let handler = Handler {
         conversation,
         sessions: sessions.clone(),
     };
-    let service = StreamableHttpService::new(
-        move || Ok(handler.clone()),
-        Arc::new(NeverSessionManager::default()),
-        config,
-    );
+    // Only POST: with no sessions there is nothing to stream or end, so a
+    // GET or a DELETE gets 405, which clients take for that.
     let app = axum::Router::new()
-        .nest_service("/mcp", service)
+        .route("/mcp", post(rpc))
+        .with_state(handler)
         .merge(forward::router(conversation, sessions))
         .merge(host);
     if let Err(error) = axum::serve(listener, app)
@@ -255,170 +236,206 @@ struct Handler {
     sessions: Sessions,
 }
 
+/// A JSON-RPC request, or with no id a notification.
+#[derive(Deserialize)]
+struct Request {
+    #[serde(default)]
+    id: Option<Value>,
+    method: String,
+    #[serde(default)]
+    params: Value,
+}
+
+/// `tools/call`'s parameters.
+#[derive(Deserialize)]
+struct Called {
+    name: String,
+    #[serde(default)]
+    arguments: Option<Map<String, Value>>,
+}
+
+/// A request answered with a JSON-RPC error: not a call that failed,
+/// which is a result.
+struct Refusal {
+    code: i32,
+    message: String,
+}
+
+impl Refusal {
+    fn new(code: i32, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+async fn rpc(State(handler): State<Handler>, headers: HeaderMap, body: Bytes) -> Response {
+    let Ok(request) = serde_json::from_slice::<Request>(&body) else {
+        let error = json!({ "code": PARSE_ERROR, "message": "不是 JSON-RPC 请求" });
+        return reply(
+            StatusCode::BAD_REQUEST,
+            json!({ "jsonrpc": "2.0", "id": null, "error": error }),
+        );
+    };
+    // Such as initialized, and cancelled: closing the connection is what
+    // cancels a call here.
+    let Some(id) = request.id else {
+        return StatusCode::ACCEPTED.into_response();
+    };
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .map(|value| value.to_str().unwrap_or_default());
+    let answer = match handler
+        .answer(&request.method, request.params, authorization)
+        .await
+    {
+        Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+        Err(Refusal { code, message }) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": code, "message": message },
+        }),
+    };
+    reply(StatusCode::OK, answer)
+}
+
+fn reply(status: StatusCode, body: Value) -> Response {
+    let json = [(header::CONTENT_TYPE, "application/json")];
+    (status, json, body.to_string()).into_response()
+}
+
 impl Handler {
+    async fn answer(
+        &self,
+        method: &str,
+        params: Value,
+        authorization: Option<&str>,
+    ) -> Result<Value, Refusal> {
+        match method {
+            "initialize" => Ok(initialized(&params)),
+            "ping" => Ok(json!({})),
+            "tools/list" => {
+                let session = self.session(authorization)?;
+                let allows = |spec: &&'static Spec| match &session {
+                    Some(session) => session.context.caller.allows(Call::Tool(spec)),
+                    None => spec.program,
+                };
+                let tools: Vec<Value> = tool::TOOLS.iter().filter(allows).map(listed).collect();
+                Ok(json!({ "tools": tools }))
+            }
+            "tools/call" => {
+                let session = self.session(authorization)?;
+                let Called { name, arguments } =
+                    serde_json::from_value(params).map_err(|error| {
+                        Refusal::new(INVALID_PARAMS, format!("tools/call 的参数不对：{error}"))
+                    })?;
+                let args = Value::Object(arguments.unwrap_or_default());
+                Ok(called(self.call(session, &name, args).await))
+            }
+            _ => Err(Refusal::new(
+                METHOD_NOT_FOUND,
+                format!("没有 {method} 这个方法"),
+            )),
+        }
+    }
+
     /// The session whose token the request carries, if it is open and
     /// belongs to this VM's conversation; None for a request with no
     /// token, a program's outside any turn.
-    fn session(
-        &self,
-        request: &RequestContext<RoleServer>,
-    ) -> Result<Option<Arc<Session>>, ErrorData> {
-        let authorization = request
-            .extensions
-            .get::<Parts>()
-            .and_then(|parts| parts.headers.get("authorization"));
+    fn session(&self, authorization: Option<&str>) -> Result<Option<Arc<Session>>, Refusal> {
         let Some(authorization) = authorization else {
             return Ok(None);
         };
         self.sessions
-            .bearer(authorization.to_str().ok(), self.conversation)
+            .bearer(Some(authorization), self.conversation)
             .map(Some)
-            .ok_or_else(|| ErrorData::invalid_request("token 不对，或者这次运行已经结束了", None))
+            .ok_or_else(|| Refusal::new(INVALID_REQUEST, "token 不对，或者这次运行已经结束了"))
     }
 
-    /// A program's call outside any turn, which the group's actor runs.
-    async fn program(
+    /// Runs `name` in its session, or as a program's call outside any turn
+    /// with no session, or when only programs make it: so Max can try out
+    /// from a turn's command the program it writes.
+    async fn call(
         &self,
-        call: CallToolRequestParams,
-        request: RequestContext<RoleServer>,
+        session: Option<Arc<Session>>,
+        name: &str,
+        args: Value,
     ) -> Result<Value, Failure> {
-        let allowed =
-            tool::find(&call.name).map_or(call.name == chat_file::NAME, |spec| spec.program);
-        if !allowed {
+        let Some(call) = Call::find(name) else {
             return Err(Failure::new(
-                "not_allowed",
-                format!("常驻程序用不了 {}", call.name),
+                "unknown_tool",
+                format!("没有 {name} 这个工具"),
             ));
-        }
-        let args = Value::Object(call.arguments.unwrap_or_default());
-        let called = self
-            .sessions
-            .program(self.conversation, call.name.to_string(), args);
-        tokio::select! {
-            result = timeout(CALL_TIME, called) => result.unwrap_or_else(|_| Err(Failure::new(
-                "timeout",
-                format!("{} 秒内没做完；{MAYBE_DONE}", CALL_TIME.as_secs()),
-            ))),
-            () = request.ct.cancelled() => Err(Failure::new("cancelled", format!("调用取消了；{MAYBE_DONE}"))),
-        }
-    }
-}
-
-impl ServerHandler for Handler {
-    fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-    }
-
-    async fn list_tools(
-        &self,
-        _: Option<PaginatedRequestParams>,
-        request: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, ErrorData> {
-        let session = self.session(&request)?;
-        let allows = |spec: &&Spec| match &session {
-            Some(session) => session.context.caller.allows(spec.name),
-            None => spec.program,
         };
-        Ok(ListToolsResult {
-            tools: tool::TOOLS.iter().filter(allows).map(listed).collect(),
-            ..ListToolsResult::default()
-        })
-    }
-
-    async fn call_tool(
-        &self,
-        call: CallToolRequestParams,
-        request: RequestContext<RoleServer>,
-    ) -> Result<CallToolResponse, ErrorData> {
-        let session = self.session(&request)?;
-        // What only programs call runs as a program's, from a turn's
-        // command too: so Max can try out the program it writes.
-        let program_only = tool::find(&call.name).is_some_and(|spec| spec.program && !spec.turn);
-        let session = match session {
+        let program_only = matches!(call, Call::Tool(spec) if spec.program && !spec.turn);
+        match session {
             Some(session) if !program_only || matches!(session.context.caller, Caller::Job(_)) => {
-                session
+                session.run(call, args).await
             }
-            _ => {
-                let result = match self.program(call, request).await {
-                    Ok(value) => CallToolResult::structured(value),
-                    Err(Failure { code, message }) => CallToolResult::structured_error(
-                        json!({ "code": code, "message": message }),
-                    ),
-                };
-                return Ok(result.into());
-            }
-        };
-        let args = Value::Object(call.arguments.unwrap_or_default());
-        let started = if session.context.caller.allows(&call.name) {
-            session.start(&call.name)
-        } else {
-            let whose = match session.context.caller {
-                Caller::Job(_) => "后台 agent",
-                _ => "这一轮",
-            };
-            Err(Failure::new(
-                "not_allowed",
-                format!("{whose}用不了 {}", call.name),
-            ))
-        };
-        let outcome = match started {
-            Err(failure) => Err(failure),
-            Ok(()) => tokio::select! {
-            outcome = async {
-                let _slot = session.slots.acquire().await;
-                timeout(CALL_TIME, session.call(&call.name, args)).await
-            } => outcome.unwrap_or_else(|_| Err(Failure::new(
-                "timeout",
-                format!("{} 秒内没做完；{MAYBE_DONE}", CALL_TIME.as_secs()),
-            ))),
-            () = session.closed.cancelled() => Err(Failure::new("closed", "这次运行已经结束了")),
-            () = request.ct.cancelled() => Err(Failure::new("cancelled", format!("调用取消了；{MAYBE_DONE}"))),
-            },
-        };
-        // Not Max's tools: the model sees the pictures and videos shown
-        // themselves, and a file fetched is the program's.
-        if ![show::NAME, video::NAME, chat_file::NAME].contains(&call.name.as_ref()) {
-            let mut calls = session.calls.lock().unwrap_or_else(PoisonError::into_inner);
-            let (succeeded, failed) = calls.entry(call.name.to_string()).or_default();
-            *if outcome.is_ok() { succeeded } else { failed } += 1;
+            _ => self.sessions.program(self.conversation, name, args).await,
         }
-        let result = match outcome {
-            Ok(value) => CallToolResult::structured(value),
-            Err(Failure { code, message }) => {
-                CallToolResult::structured_error(json!({ "code": code, "message": message }))
-            }
-        };
-        Ok(result.into())
     }
 }
 
 impl Session {
-    async fn call(&self, name: &str, args: Value) -> Result<Value, Failure> {
-        if name == show::NAME {
-            return show::run(&self.context, &self.shown, args).await;
+    /// Runs `call` if the caller may make it, and counts it if it is one
+    /// of Max's tools: the model sees the pictures and videos shown
+    /// themselves, and a file fetched is the program's.
+    async fn run(&self, call: Call, args: Value) -> Result<Value, Failure> {
+        let outcome = match self.start(call) {
+            Err(failure) => Err(failure),
+            Ok(()) => tokio::select! {
+                outcome = async {
+                    let _slot = self.slots.acquire().await;
+                    timeout(CALL_TIME, self.dispatch(call, args)).await
+                } => outcome.unwrap_or_else(|_| Err(late())),
+                () = self.closed.cancelled() => Err(Failure::new("closed", "这次运行已经结束了")),
+            },
+        };
+        if let Call::Tool(spec) = call {
+            let mut calls = lock(&self.calls);
+            let (succeeded, failed) = calls.entry(spec.name.to_owned()).or_default();
+            *if outcome.is_ok() { succeeded } else { failed } += 1;
         }
-        if name == video::NAME {
-            return video::run(&self.context, &self.videos, args).await;
-        }
-        if name == chat_file::NAME {
-            return chat_file::run(&self.context, args).await;
-        }
-        super::call(name, &self.context, args).await
+        outcome
     }
 
-    /// Counts a call against its tool's cap, if it has one and the run, or
-    /// the job, hasn't reached it.
-    fn start(&self, name: &str) -> Result<(), Failure> {
-        let Some((name, most)) =
-            tool::find(name).and_then(|tool| tool.per_run.map(|most| (tool.name, most)))
+    async fn dispatch(&self, call: Call, args: Value) -> Result<Value, Failure> {
+        match call {
+            Call::Tool(spec) => spec.call(&self.context, args).await,
+            Call::Image => show::image(&self.context, &self.shown, args).await,
+            Call::Video => show::video(&self.context, &self.shown, args).await,
+            Call::File => chat_file::run(&self.context, args).await,
+        }
+    }
+
+    /// Whether the caller may make `call`, counted against its tool's cap,
+    /// if it has one and the run, or the job, hasn't reached it.
+    fn start(&self, call: Call) -> Result<(), Failure> {
+        if !self.context.caller.allows(call) {
+            let whose = match self.context.caller {
+                Caller::Job(_) => "后台 agent",
+                _ => "这一轮",
+            };
+            return Err(Failure::new(
+                "not_allowed",
+                format!("{whose}用不了 {}", call.name()),
+            ));
+        }
+        let Call::Tool(Spec {
+            name,
+            per_run: Some(most),
+            ..
+        }) = call
         else {
             return Ok(());
         };
         let (most, whose) = match self.context.caller {
             Caller::Job(_) => (most * JOB_RUNS, "一个后台 agent"),
-            Caller::Turn(_) | Caller::Program(_) | Caller::Check => (most, "一次运行"),
+            Caller::Turn(_) | Caller::Program(_) | Caller::Check => (*most, "一次运行"),
         };
-        let mut started = self.started.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut started = lock(&self.started);
         let count = started.entry(name).or_default();
         if *count >= most {
             return Err(Failure::new(
@@ -431,13 +448,55 @@ impl Session {
     }
 }
 
-fn listed(spec: &Spec) -> Tool {
-    Tool::new(spec.name, spec.description, Arc::clone(&spec.input))
-        .with_raw_output_schema(Arc::clone(&spec.output))
+fn late() -> Failure {
+    Failure::new(
+        "timeout",
+        format!("{} 秒内没做完；{MAYBE_DONE}", CALL_TIME.as_secs()),
+    )
+}
+
+/// The answer to `initialize`, from a client of an older protocol than
+/// the runner's: tools, at the client's version if Max knows it.
+fn initialized(params: &Value) -> Value {
+    let asked = params["protocolVersion"].as_str();
+    let version = VERSIONS
+        .into_iter()
+        .find(|version| Some(*version) == asked)
+        .unwrap_or(VERSIONS[0]);
+    json!({
+        "protocolVersion": version,
+        "capabilities": { "tools": {} },
+        "serverInfo": { "name": "max", "version": env!("CARGO_PKG_VERSION") },
+    })
+}
+
+fn listed(spec: &Spec) -> Value {
+    json!({
+        "name": spec.name,
+        "description": spec.description,
+        "inputSchema": spec.input,
+        "outputSchema": spec.output,
+    })
+}
+
+/// A call's outcome as MCP's tool result: the value, or `{code, message}`
+/// with `isError`, structured and as JSON text.
+fn called(outcome: Result<Value, Failure>) -> Value {
+    let (value, error) = match outcome {
+        Ok(value) => (value, false),
+        Err(Failure { code, message }) => (json!({ "code": code, "message": message }), true),
+    };
+    json!({
+        "content": [{ "type": "text", "text": value.to_string() }],
+        "structuredContent": value,
+        "isError": error,
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use chrono::Utc;
     use sqlx::PgPool;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -446,27 +505,35 @@ mod tests {
     use super::*;
     use crate::conversation::ingest;
     use crate::conversation::testing::{from_xiaoming, group, offset, text};
-    use crate::mcp::{Caller, Services};
+    use crate::mcp::Services;
     use crate::scope::Scope;
 
-    /// A JSON-RPC request as the runner sends it: the reply's `result` or
-    /// `error`.
-    async fn post(socket: &std::path::Path, token: &str, method: &str, params: Value) -> Value {
-        let name = params["name"].as_str().map(str::to_owned);
-        let mut params = params;
-        params["_meta"] = json!({
-            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-            "io.modelcontextprotocol/clientCapabilities": {},
-        });
-        let body =
-            json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
-        let name = name
-            .map(|name| format!("Mcp-Name: {name}\r\n"))
-            .unwrap_or_default();
+    /// A directory of the test's own for its sockets.
+    fn sockets(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("max-mcp-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Serves `conversation`'s VM on the unix socket `socket`, in `scope`.
+    fn serve_at(
+        scope: &mut Scope,
+        socket: &Path,
+        conversation: ConversationId,
+        sessions: &Sessions,
+    ) {
+        let _ = std::fs::remove_file(socket);
+        let listener = UnixListener::bind(socket).unwrap();
+        let sessions = sessions.clone();
+        scope.spawn(move |stop| serve(listener, conversation, sessions, stop));
+    }
+
+    /// Sends `body` to /mcp at `socket` with `method` and `headers`, each a
+    /// line ending in CRLF: the reply's status line, and its body.
+    async fn exchange(socket: &Path, method: &str, headers: &str, body: &str) -> (String, String) {
         let request = format!(
-            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:7777\r\nContent-Type: application/json\r\n\
-             Accept: application/json, text/event-stream\r\nMCP-Protocol-Version: 2026-07-28\r\n\
-             Mcp-Method: {method}\r\n{name}Authorization: Bearer {token}\r\n\
+            "{method} /mcp HTTP/1.1\r\nHost: 127.0.0.1:7777\r\nContent-Type: application/json\r\n\
+             Accept: application/json, text/event-stream\r\n{headers}\
              Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
@@ -474,8 +541,29 @@ mod tests {
         stream.write_all(request.as_bytes()).await.unwrap();
         let mut reply = String::new();
         stream.read_to_string(&mut reply).await.unwrap();
-        let (_, body) = reply.split_once("\r\n\r\n").unwrap();
-        let reply: Value = serde_json::from_str(body).unwrap();
+        let (head, body) = reply.split_once("\r\n\r\n").unwrap();
+        (head.lines().next().unwrap().to_owned(), body.to_owned())
+    }
+
+    /// A JSON-RPC request as the runner sends it: the reply's `result` or
+    /// `error`.
+    async fn post(socket: &Path, token: &str, method: &str, params: Value) -> Value {
+        let mut params = params;
+        let name = params["name"]
+            .as_str()
+            .map(|name| format!("Mcp-Name: {name}\r\n"))
+            .unwrap_or_default();
+        params["_meta"] = json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+        });
+        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
+        let headers = format!(
+            "MCP-Protocol-Version: 2026-07-28\r\nMcp-Method: {method}\r\n{name}\
+             Authorization: Bearer {token}\r\n"
+        );
+        let (_, reply) = exchange(socket, "POST", &headers, &body.to_string()).await;
+        let reply: Value = serde_json::from_str(&reply).unwrap();
         reply
             .get("result")
             .or_else(|| reply.get("error"))
@@ -499,29 +587,14 @@ mod tests {
         drop(conn);
         let conversation = place.conversation;
         let sessions = Sessions::default();
-        let grant = sessions.open(Context {
-            services: Arc::new(Services::bare(pool)),
-            place,
-            page_tokens: 2000,
-            video: false,
-            work: None,
-            caller: Caller::Check,
-        });
+        let grant = sessions.open(Context::check(Services::bare(pool), place));
 
-        let dir = std::env::temp_dir().join(format!("max-mcp-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let socket = dir.join("mine.sock");
-        let other = dir.join("other.sock");
+        let dir = sockets("token");
+        let (socket, other) = (dir.join("mine.sock"), dir.join("other.sock"));
         let mut scope = Scope::new();
-        for (path, conversation) in [
-            (&socket, conversation),
-            (&other, ConversationId(conversation.0 + 1)),
-        ] {
-            let _ = std::fs::remove_file(path);
-            let listener = UnixListener::bind(path).unwrap();
-            let sessions = sessions.clone();
-            scope.spawn(move |stop| serve(listener, conversation, sessions, stop));
-        }
+        serve_at(&mut scope, &socket, conversation, &sessions);
+        let elsewhere = ConversationId(conversation.0 + 1);
+        serve_at(&mut scope, &other, elsewhere, &sessions);
 
         let listed = post(&socket, grant.token(), "tools/list", json!({})).await;
         assert_eq!(listed["tools"][0]["name"], "history", "{listed}");
@@ -541,6 +614,9 @@ mod tests {
         assert_eq!(result["isError"], true, "{result}");
         assert_eq!(result["structuredContent"]["code"], "not_found");
         assert_eq!(grant.calls()["history"], (1, 1));
+        let typo = json!({ "name": "histroy", "arguments": {} });
+        let result = post(&socket, grant.token(), "tools/call", typo).await;
+        assert_eq!(result["structuredContent"]["code"], "unknown_tool");
 
         // Another conversation's VM, a wrong token, a run that ended.
         let refused = |reply: &Value| reply["message"].as_str().unwrap().contains("token");
@@ -560,37 +636,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// A request as a client of the 2025-11-25 protocol sends it: no
-    /// `_meta`, and no `Mcp-Method` header.
-    async fn post_legacy(
-        socket: &std::path::Path,
-        token: &str,
-        method: &str,
-        params: Value,
-    ) -> Value {
-        let body =
-            json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string();
-        let version = if method == "initialize" {
-            String::new()
-        } else {
-            "MCP-Protocol-Version: 2025-11-25\r\n".to_owned()
-        };
-        let request = format!(
-            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:7777\r\nContent-Type: application/json\r\n\
-             Accept: application/json, text/event-stream\r\n{version}\
-             Authorization: Bearer {token}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let mut stream = UnixStream::connect(socket).await.unwrap();
-        stream.write_all(request.as_bytes()).await.unwrap();
-        let mut reply = String::new();
-        stream.read_to_string(&mut reply).await.unwrap();
-        let (head, body) = reply.split_once("\r\n\r\n").unwrap();
-        assert!(head.starts_with("HTTP/1.1 200"), "{reply}");
-        let reply: Value = serde_json::from_str(body).unwrap();
-        reply["result"].clone()
-    }
-
+    /// A client of the 2025-11-25 protocol, as pi's MCP adapter is: it
+    /// begins with `initialize`, says it is initialized, asks with a GET
+    /// for a stream of the server's own messages and does without, and
+    /// reads a result's text.
     #[sqlx::test(migrator = "max_db::MIGRATOR")]
     async fn a_client_of_the_older_protocol_is_served(pool: PgPool) {
         let mut conn = pool.acquire().await.unwrap();
@@ -598,35 +647,67 @@ mod tests {
         drop(conn);
         let conversation = place.conversation;
         let sessions = Sessions::default();
-        let grant = sessions.open(Context {
-            services: Arc::new(Services::bare(pool)),
-            place,
-            page_tokens: 2000,
-            video: false,
-            work: None,
-            caller: Caller::Check,
-        });
-        let dir = std::env::temp_dir().join(format!("max-mcp-legacy-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let grant = sessions.open(Context::check(Services::bare(pool), place));
+        let dir = sockets("legacy");
         let socket = dir.join("mine.sock");
-        let _ = std::fs::remove_file(&socket);
-        let listener = UnixListener::bind(&socket).unwrap();
         let mut scope = Scope::new();
-        let served = sessions.clone();
-        scope.spawn(move |stop| serve(listener, conversation, served, stop));
+        serve_at(&mut scope, &socket, conversation, &sessions);
+        let first = format!("Authorization: Bearer {}\r\n", grant.token());
+        let then = format!("MCP-Protocol-Version: 2025-11-25\r\n{first}");
+        let rpc = async |headers: &str, body: Value| {
+            let (status, body) = exchange(&socket, "POST", headers, &body.to_string()).await;
+            assert_eq!(status, "HTTP/1.1 200 OK", "{body}");
+            serde_json::from_str::<Value>(&body).unwrap()
+        };
 
         let hello = json!({
             "protocolVersion": "2025-11-25",
             "capabilities": {},
             "clientInfo": { "name": "pi", "version": "1.4.0" },
         });
-        let initialized = post_legacy(&socket, grant.token(), "initialize", hello).await;
+        let initialize =
+            json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": hello });
+        let initialized = rpc(&first, initialize).await;
         assert_eq!(
-            initialized["protocolVersion"], "2025-11-25",
+            initialized["result"]["protocolVersion"], "2025-11-25",
             "{initialized}"
         );
-        let listed = post_legacy(&socket, grant.token(), "tools/list", json!({})).await;
-        assert_eq!(listed["tools"][0]["name"], "history", "{listed}");
+        assert_eq!(
+            initialized["result"]["capabilities"],
+            json!({ "tools": {} })
+        );
+        let note = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        let (status, body) = exchange(&socket, "POST", &then, &note.to_string()).await;
+        assert_eq!(
+            (status.as_str(), body.as_str()),
+            ("HTTP/1.1 202 Accepted", "")
+        );
+        let (status, _) = exchange(&socket, "GET", &then, "").await;
+        assert_eq!(status, "HTTP/1.1 405 Method Not Allowed");
+
+        let list = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+        let listed = rpc(&then, list).await;
+        assert_eq!(listed["result"]["tools"][0]["name"], "history", "{listed}");
+        let call = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": { "name": "history", "arguments": { "around": 1 } },
+        });
+        let result = rpc(&then, call).await["result"].clone();
+        assert_eq!(result["isError"], true, "{result}");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(text).unwrap(),
+            result["structuredContent"]
+        );
+
+        let ping = json!({ "jsonrpc": "2.0", "id": 3, "method": "ping" });
+        assert_eq!(rpc(&then, ping).await["result"], json!({}));
+        let unknown = json!({ "jsonrpc": "2.0", "id": 4, "method": "resources/list" });
+        assert_eq!(rpc(&then, unknown).await["error"]["code"], METHOD_NOT_FOUND);
+        let (status, body) = exchange(&socket, "POST", &then, "{").await;
+        assert_eq!(status, "HTTP/1.1 400 Bad Request", "{body}");
 
         scope.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(dir);
@@ -640,12 +721,8 @@ mod tests {
         let conversation = place.conversation;
         let sessions = Sessions::default();
         let context = |caller| Context {
-            services: Arc::new(Services::bare(pool.clone())),
-            place: Arc::clone(&place),
-            page_tokens: 2000,
-            video: false,
-            work: None,
             caller,
+            ..Context::check(Services::bare(pool.clone()), Arc::clone(&place))
         };
         let grant = sessions.open(context(Caller::Check));
         let upstream = crate::llm::Upstream {
@@ -661,14 +738,10 @@ mod tests {
             idle: Duration::from_secs(120),
         };
         let job = sessions.open(context(Caller::Job(Arc::new(upstream))));
-        let dir = std::env::temp_dir().join(format!("max-mcp-cap-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = sockets("cap");
         let socket = dir.join("mine.sock");
-        let _ = std::fs::remove_file(&socket);
-        let listener = UnixListener::bind(&socket).unwrap();
         let mut scope = Scope::new();
-        let served = sessions.clone();
-        scope.spawn(move |stop| serve(listener, conversation, served, stop));
+        serve_at(&mut scope, &socket, conversation, &sessions);
 
         let search = json!({ "name": "web_search", "arguments": { "query": "示波器" } });
         let code = async |grant: &Grant| {

@@ -9,8 +9,8 @@ use crate::conversation::testing::{
     at, from_xiaohong, from_xiaoming, group, group_named, offset, text,
 };
 use crate::conversation::{Place, ingest};
+use crate::mcp::Services;
 use crate::mcp::tool::Tool;
-use crate::mcp::{Caller, Services};
 
 /// Calls the tool as a program does, its arguments checked.
 async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
@@ -19,12 +19,8 @@ async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
 
 fn context(pool: &PgPool, place: &Arc<Place>, page_tokens: u32) -> Context {
     Context {
-        services: Arc::new(Services::bare(pool.clone())),
-        place: Arc::clone(place),
         page_tokens,
-        video: false,
-        work: None,
-        caller: Caller::Check,
+        ..Context::check(Services::bare(pool.clone()), Arc::clone(place))
     }
 }
 
