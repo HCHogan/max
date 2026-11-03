@@ -28,6 +28,9 @@ let
   runner = import ./runner.nix { inherit pkgs; };
   # The browser's profile: cookies and logins outlive the VM.
   profile = "/work/.max/chromium";
+  # Max's own flags for the browser, a line each, after ours: extensions,
+  # say. Read at every start.
+  flags = "/work/.max/chromium-flags";
   # Chromium's own, without "HeadlessChrome" in it.
   userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${lib.versions.major pkgs.chromium.version}.0.0.0 Safari/537.36";
   units = import ./max-units.nix {
@@ -232,27 +235,40 @@ in
   # The browser run_code's programs share (browser.js): Chromium, driven
   # over CDP at 127.0.0.1:9222. The first program that wants it starts it,
   # and it keeps its tabs from one program to the next until the VM stops.
-  # Root, as commands are: the VM is the sandbox.
+  # Root, as commands are: the VM is the sandbox. Max adds flags of its
+  # own in ${flags}, such as --load-extension: Chromium, not Google
+  # Chrome, still takes that one.
   systemd.services.max-browser = {
     unitConfig.RequiresMountsFor = "/work";
     environment.TZ = "Asia/Shanghai";
     serviceConfig = {
       # A VM that stopped leaves the profile's locks behind.
       ExecStartPre = "${pkgs.coreutils}/bin/rm -f ${profile}/SingletonLock ${profile}/SingletonSocket ${profile}/SingletonCookie";
-      ExecStart = lib.escapeShellArgs [
-        "${pkgs.chromium}/bin/chromium"
-        "--headless=new"
-        "--no-sandbox"
-        "--remote-debugging-address=127.0.0.1"
-        "--remote-debugging-port=9222"
-        "--user-data-dir=${profile}"
-        "--no-first-run"
-        "--no-default-browser-check"
-        "--lang=zh-CN"
-        "--accept-lang=zh-CN,zh"
-        "--window-size=1280,900"
-        "--user-agent=${userAgent}"
-      ];
+      ExecStart = pkgs.writeShellScript "max-browser" ''
+        own=()
+        if [ -f ${flags} ]; then
+          while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in "" | "#"*) continue ;; esac
+            own+=("$line")
+          done < ${flags}
+        fi
+        exec ${
+          lib.escapeShellArgs [
+            "${pkgs.chromium}/bin/chromium"
+            "--headless=new"
+            "--no-sandbox"
+            "--remote-debugging-address=127.0.0.1"
+            "--remote-debugging-port=9222"
+            "--user-data-dir=${profile}"
+            "--no-first-run"
+            "--no-default-browser-check"
+            "--lang=zh-CN"
+            "--accept-lang=zh-CN,zh"
+            "--window-size=1280,900"
+            "--user-agent=${userAgent}"
+          ]
+        } "''${own[@]}"
+      '';
       # Started once programs can connect.
       ExecStartPost = pkgs.writeShellScript "max-browser-ready" ''
         for _ in $(seq 200); do

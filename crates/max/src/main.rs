@@ -223,6 +223,8 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
             program,
             browse(BROWSE),
             browse(BROWSE_AGAIN),
+            command(EXTENSION),
+            browse(EXTENSION_PAGE),
             command(VIDEO),
             command(MAXX),
             command(UNITS),
@@ -303,6 +305,27 @@ EOF
 max-units
 echo "开机时：$before"
 echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机""#;
+
+/// An extension of vm-check's own, which the browser loads by Max's flags
+/// once it starts again: its script marks each page it runs on.
+const EXTENSION: &str = r#"mkdir -p /work/.max/ext/hello
+cat > /work/.max/ext/hello/manifest.json <<'EOF'
+{"manifest_version": 3, "name": "hello", "version": "1",
+ "content_scripts": [{"matches": ["<all_urls>"], "js": ["hello.js"]}]}
+EOF
+echo 'document.documentElement.dataset.hello = "扩展在";' > /work/.max/ext/hello/hello.js
+echo '--load-extension=/work/.max/ext/hello' > /work/.max/chromium-flags
+systemctl restart max-browser.service && echo "浏览器重启了""#;
+
+/// A page the extension's script ran on: one Playwright makes up, as the
+/// VM has no site of its own.
+const EXTENSION_PAGE: &str = r#"const page = await (await max.browser()).newPage();
+await page.route("http://hello.test/", route => route.fulfill({ contentType: "text/html", body: "<title>扩展</title><p>你好</p>" }));
+await page.goto("http://hello.test/");
+await page.waitForFunction(() => document.documentElement.dataset.hello, null, { timeout: 10000 });
+const hello = await page.evaluate(() => document.documentElement.dataset.hello);
+await page.close();
+return { hello };"#;
 
 /// A video for the model, from a command: ffmpeg in the VM makes a clip
 /// and the copy for the model, and the host reads the copy's length.

@@ -1583,6 +1583,7 @@ v1 不做。2026-10-29 先做成每次运行现起 camoufox，当天晚上改成
 - **打包**：`nix/runner.nix` 把 runner、SDK 和 playwright-core 1.59.0（没有依赖，直接取 npm 的包）放在一起，guest 的 `/run/max/runner.js` 链到包里。原来 camoufox 的发行包、camoufox-js 和它的补丁都删了。
 - **字体**：guest 装了 Noto Sans CJK，Chromium 经 fontconfig 找到它。
 - **实测**（tank 上的嵌套测试，VM 2 个 vCPU、1 GiB 内存）：`vm-check` 的第三个程序起浏览器、打开一个 data: 页面、快照、截图存进 `/work`，测试检查快照里的选择器和截图。VM 10 秒起好。VM 开机后第一次起浏览器要 22 秒，多半是经 virtiofs 冷读 store，加上嵌套虚拟化；同一个 VM 里再起 4.3 秒，打开页面 0.4 秒。开着两个 context 时这次运行的匿名内存 370～410 MiB，cgroup 峰值（含页缓存）775 MiB。宿主上直接跑：加载模块 0.6 秒，起浏览器 0.5 秒，第一个页面 1.4 秒。真实网站没测，测试机不通外网。VM 默认 4 GiB 内存，不用加。
+- **启动参数是 Max 的**（2026-11-03，owner 指出 Max 没法给我们起的 Chromium 装扩展）：`max-browser` 在我们的参数后面加上 `/work/.max/chromium-flags` 里的行（一行一个，空行和 `#` 开头的跳过），每次启动都读。Max 写好再 `systemctl restart max-browser`，开着的标签页会关掉。装扩展用 `--load-extension=目录`：Google Chrome 137 起不认这个参数了，nixpkgs 的是 Chromium，还认；`--headless=new` 也跑扩展。嵌套测试里 vm-check 写一个 MV3 扩展（内容脚本给页面打个标记），写进这个文件、重启浏览器，再用 Playwright 编一个页面，查标记在。
 - **提议**：Haskell 版用了 humanize（模拟鼠标轨迹）和虚拟显示（Xvfb，比 headless 难认出来），这里先只用 headless；被网站认出来再加。
 
 opencli（2026-11-03 加，同一天去掉）：[opencli](https://github.com/jackwener/opencli) 把 150 来个网站做成命令，带着各站接口的门道。先打包进了 guest（npm 的包、自己做的 lock、一个让每条命令开自己标签页的包装，嵌套测试也过了），当天 owner 改了主意：这种只图方便、不提供原语的第三方工具，让 Max 要用时自己装，不由我们钉版本、跟着它更新；照经验，它对各站的适配很快就过期。去掉了包、包装和测试，提示词只留一句：常见网站有现成的命令行工具，比如 npm 上的 `@jackwener/opencli`，设 `OPENCLI_CDP_ENDPOINT=http://127.0.0.1:9222` 就用本群浏览器的登录状态，它会把一个标签页导航走。VM 能上公网，有 Node 和 npm。

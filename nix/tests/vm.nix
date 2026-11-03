@@ -2,9 +2,10 @@
 # firewall's rules and the service's sandbox, and vm-check boots the
 # flake's guest the way max does, runs a command in it, runs a program
 # whose history reaches the database through the MCP service, one that
-# opens a page in the browser and saves a screenshot to /work, shows the
-# model a video ffmpeg made, calls the MCP service with maxx from a
-# command, and keeps a unit in
+# opens a page in the browser and saves a screenshot to /work, loads an
+# extension into the browser by Max's flags, shows the model a video
+# ffmpeg made, calls the MCP service with maxx from a command, and keeps a
+# unit in
 # /work/.max/systemd, which the next boot starts again, and wakes Max with
 # max-wake.
 { pkgs, module }:
@@ -52,6 +53,8 @@ pkgs.testers.runNixOSTest {
     assert '"tree":"检查\\n' in shown and 'button \\"搜索\\" [ref=e4]' in shown, shown
     # The next program finds its tab as it left it.
     assert '"kept":"还在"' in shown, shown
+    # The browser loads an extension by Max's own flags.
+    assert "浏览器重启了" in shown and '"hello":"扩展在"' in shown, shown
     # The guest's ffmpeg made a clip and the model's copy of it, whose
     # length the host read.
     assert '{"seconds":3}' in shown, shown
