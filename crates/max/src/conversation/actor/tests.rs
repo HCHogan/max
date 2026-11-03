@@ -9,11 +9,14 @@ use max_core::item::ItemKind;
 use max_core::message::{Content, Node};
 use max_core::run::Outcome;
 use max_db::PgPool;
+use max_db::platform::ConversationKind::{self, Direct, Group};
 use tokio::sync::{mpsc, oneshot};
 
 use super::*;
 use crate::command;
-use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, shared, text};
+use crate::conversation::testing::{
+    from_xiaohong, from_xiaoming, group, private, privately, shared, text,
+};
 use crate::inbound::InNode;
 use crate::job::{Ending, Finished, How, Reply, Request};
 use crate::llm::testing::{Answer, Script};
@@ -37,33 +40,48 @@ impl Harness {
 
     /// With 小明 as Max's owner, if `xiaoming_owns`.
     async fn with_owner(pool: PgPool, idle_window_secs: u64, xiaoming_owns: bool) -> Self {
-        Self::start(pool, idle_window_secs, xiaoming_owns, true, None, |_| {}).await
+        Self::start(
+            pool,
+            Group,
+            idle_window_secs,
+            xiaoming_owns,
+            true,
+            None,
+            |_| {},
+        )
+        .await
     }
 
     /// Without proactive replies: chatter starts no classifier call that
     /// races the core's calls for the script's answers.
     async fn unprompted(pool: PgPool, idle_window_secs: u64) -> Self {
-        Self::start(pool, idle_window_secs, false, false, None, |_| {}).await
+        Self::start(pool, Group, idle_window_secs, false, false, None, |_| {}).await
     }
 
     /// With job#1, titled `title`, running as far as the actor knows:
     /// where its steers go.
     async fn with_job(pool: PgPool, title: &str) -> (Self, UnboundedReceiver<String>) {
         let mut steered = None;
-        let h = Self::start(pool, 300, true, false, None, |actor| {
+        let h = Self::start(pool, Group, 300, true, false, None, |actor| {
             steered = Some(actor.jobs.pretend(title));
         })
         .await;
         (h, steered.unwrap())
     }
 
+    /// In 小明's private chat with Max.
+    async fn private(pool: PgPool) -> Self {
+        Self::start(pool, Direct, 300, false, true, None, |_| {}).await
+    }
+
     /// With the VMs' directory at `vm_dir`, where the memory file is.
     async fn with_vm_dir(pool: PgPool, vm_dir: PathBuf) -> Self {
-        Self::start(pool, 300, false, false, Some(vm_dir), |_| {}).await
+        Self::start(pool, Group, 300, false, false, Some(vm_dir), |_| {}).await
     }
 
     async fn start(
         pool: PgPool,
+        kind: ConversationKind,
         idle_window_secs: u64,
         xiaoming_owns: bool,
         proactive: bool,
@@ -71,7 +89,10 @@ impl Harness {
         prepare: impl FnOnce(&mut Conversation),
     ) -> Self {
         let mut conn = pool.acquire().await.unwrap();
-        let place = Arc::new(group(&mut conn).await);
+        let place = Arc::new(match kind {
+            Group => group(&mut conn).await,
+            Direct => private(&mut conn).await,
+        });
         if !proactive {
             let settings = Settings {
                 proactive,
@@ -496,6 +517,24 @@ async fn an_owner_changes_settings(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_private_chat_is_its_persons_to_command(pool: PgPool) {
+    let mut h = Harness::private(pool).await;
+    h.send(privately(from_xiaoming(0, vec![text("/model test/wide")])));
+    assert_eq!(
+        h.said().await.1,
+        command::answer("model", "已切换：test/wide，下次回复生效")
+    );
+    h.send(privately(from_xiaoming(1, vec![text("/clear --all")])));
+    let cleared = h.said().await.1;
+    assert!(cleared.contains("/clear → 已清空"), "{cleared}");
+    // Binding a group is the owners' alone.
+    h.send(privately(from_xiaoming(2, vec![text("/bind")])));
+    assert_eq!(h.said().await.1, command::answer("bind", "拒绝：仅限主人"));
+    h.stop().await;
+    assert_eq!(h.script.calls(), 0);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn kill_stops_the_core_quietly(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
     h.script.push(Answer::Hangs);
@@ -820,7 +859,7 @@ async fn a_job_is_steered_listed_and_cancelled(pool: PgPool) {
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_background_command_is_a_job_that_wakes_max_when_it_ends(pool: PgPool) {
-    let mut h = Harness::start(pool, 300, true, false, None, |actor| {
+    let mut h = Harness::start(pool, Group, 300, true, false, None, |actor| {
         actor.jobs.pretend_command("$ make");
     })
     .await;

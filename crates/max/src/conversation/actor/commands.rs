@@ -16,13 +16,16 @@ use crate::bind::Pending;
 use crate::command::{self, Command, Persona};
 use crate::conversation::ingest::Committed;
 
-/// Who may run what. Commands that cost money or change how Max behaves
-/// everywhere are the owners'; those that change one conversation are
-/// also its group's owner's and admins'.
+/// Who may run what. Commands that change one conversation are also its
+/// group's owner's and admins'; those that cost money are also the other
+/// person's in a private chat, which is theirs; binding a group is only
+/// for Max's owners.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Rank {
     Anyone,
     Admin,
+    /// The other person in a private chat.
+    ChatOwner,
     Owner,
 }
 
@@ -33,6 +36,8 @@ impl Conversation {
         };
         let rank = if self.shared.owners.contains(&committed.sender.principal) {
             Rank::Owner
+        } else if self.place.kind == ConversationKind::Direct {
+            Rank::ChatOwner
         } else if matches!(
             committed.message.sender.role,
             Some(Role::Owner | Role::Admin)
@@ -50,13 +55,12 @@ impl Conversation {
             Command::Kill | Command::Persona(_) | Command::Clear { .. } | Command::Unclear => {
                 Rank::Admin
             }
-            Command::Model(_) | Command::Effort(_) | Command::Proactive(_) | Command::Bind(_) => {
-                Rank::Owner
-            }
+            Command::Model(_) | Command::Effort(_) | Command::Proactive(_) => Rank::ChatOwner,
+            Command::Bind(_) => Rank::Owner,
         };
         let name = command.name();
         if rank < needs {
-            let who = if needs == Rank::Owner {
+            let who = if needs >= Rank::ChatOwner {
                 "主人"
             } else {
                 "群主、管理员"

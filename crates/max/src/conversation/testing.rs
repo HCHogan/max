@@ -65,10 +65,18 @@ pub async fn group(conn: &mut PgConnection) -> Place {
 }
 
 pub async fn group_named(conn: &mut PgConnection, native_id: &str) -> Place {
+    place(conn, native_id, ConversationKind::Group).await
+}
+
+/// 小明's private chat with Max.
+pub async fn private(conn: &mut PgConnection) -> Place {
+    place(conn, "c2c:XIAOMING", ConversationKind::Direct).await
+}
+
+async fn place(conn: &mut PgConnection, native_id: &str, kind: ConversationKind) -> Place {
     let me = platform::account(conn, Platform::Qq, "BOT", "maxx")
         .await
         .unwrap();
-    let kind = ConversationKind::Group;
     let endpoint = platform::endpoint(conn, Platform::Qq, native_id, me.identity, kind, None)
         .await
         .unwrap();
@@ -107,6 +115,21 @@ pub fn from_xiaoming(n: u32, nodes: Vec<InNode>) -> Inbound {
 
 pub fn text(text: &str) -> InNode {
     InNode::Node(Node::Text { text: text.into() })
+}
+
+/// What 小明 said, said to Max in their private chat instead.
+pub fn privately(inbound: Inbound) -> Inbound {
+    Inbound {
+        chat: Chat {
+            native_id: "c2c:XIAOMING".into(),
+            kind: ConversationKind::Direct,
+        },
+        sender: Person {
+            role: None,
+            ..inbound.sender
+        },
+        ..inbound
+    }
 }
 
 /// 小红 says something in the group.
