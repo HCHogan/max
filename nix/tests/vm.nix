@@ -77,8 +77,8 @@ pkgs.testers.runNixOSTest {
     again = machine.succeed("journalctl -u maxx-vm-check.service -o cat")
     assert "开机时：active" in again and "记下了 2 次开机" in again, again
     # The screenshot, among the test's outputs.
-    machine.succeed("head -c 8 /var/lib/maxx/vm/0/work/.max/browser-check.png | grep -q PNG")
-    machine.copy_from_vm("/var/lib/maxx/vm/0/work/.max/browser-check.png")
+    machine.succeed("head -c 8 /var/lib/maxx/vm/check/0/work/.max/browser-check.png | grep -q PNG")
+    machine.copy_from_vm("/var/lib/maxx/vm/check/0/work/.max/browser-check.png")
     print(shown)
   '';
 }

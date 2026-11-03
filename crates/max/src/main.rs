@@ -117,6 +117,10 @@ fn vm_check(path: &Path, command: String) -> Result<()> {
         bail!("the configuration has no [vm]");
     };
     vm.slots.drain(..vm.slots.len() - 1);
+    // A directory of its own. The VM service boots again the VMs it finds
+    // there with units, and a second boot of a VM maxx runs would take
+    // that VM's sockets from it (2026-11-03).
+    vm.dir = vm.dir.join("check");
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;

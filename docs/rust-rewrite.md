@@ -1707,7 +1707,8 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 - **第二步（做了，11-01）：宿主那边。**
   - ~~**宿主的端口**~~（11-02 去掉，见第三步）：每个 VM 第二个 hybrid vsock 端口 7778，一次连接一行 JSON：`{"wake": "……"}` 或 `{"units": 2}`，回 `{"ok": true, "said": "……"}`。每个 VM 有自己的 socket，连上来的是哪个群不用 token。
   - **常开**：`[vm] kept`，默认 4 个群（tank 62 GiB；11-01 在跑的三个 VM 占 0.8、2.2、4.6 GiB，page cache 会让它慢慢往 16 GiB 涨）。tank 上 2026-11-03 起是 12 个：当时 4 个名额已经满了（三个群、一个私聊），owner 要请几个朋友在私聊里把 Max 当个人 agent 用；闲置清缓存以后一个常开、闲着的 VM 不再一直涨。提示词里不写名额，满了 `max-units` 会说。常开的 VM 不因闲置关、不被挤掉，扫的时候没在跑就开起来。哪些群常开：
-    - maxx 启动时读 `<vm.dir>/<会话>/work/.max/systemd/`，有 unit 文件的（和 `max-units` 认的后缀一样，链接不算）按会话 id 取前 4 个，马上开。会话 0 是 `vm-check` 的，不算。
+    - maxx 启动时读 `<vm.dir>/<会话>/work/.max/systemd/`，有 unit 文件的（和 `max-units` 认的后缀一样，链接不算）按会话 id 取前 `kept` 个，马上开。会话 0 是 `vm-check` 的，不算。
+    - `vm-check` 用自己的目录 `<vm.dir>/check`（2026-11-03）：它起的 VM 服务启动时也会把目录里有 unit 的会话开起来，原来和 maxx 共用目录，就会在最后一个槽位上把 maxx 正开着的某个群的 VM 再起一次。第二次起先删掉"残留"的 socket（`store.sock`、`work.sock`、`notify.vsock` 和 MCP 的 `notify.vsock_7777`）再绑自己的：virtiofsd 因为 pid 文件锁起不来，cloud-hypervisor 也没起，但正在跑的那个 VM 的 socket 文件已经被换掉，guest 连不上宿主的 MCP，maxx 也连不进新的 SSH。当天在 tank 上手动跑 `vm-check` 时碰上的，那个 VM 重启就好了。
     - 之后听 `max-units`：它每次跑完（开机那次和 Max 手动的）把 unit 个数报给宿主，有就常开（满了就不，回话里说），0 个就不再常开。回话 `max-units` 原样打出来，Max 看得到这个群的 VM 会不会一直开着。
   - **叫醒**：`max-wake '……'`（`nix/max-wake.sh`，参数或标准输入）。VM 服务把它作为 `Signal::Wake` 交给会话表，会话表找这个会话的 actor，没在跑就起一个（按 Max 在的平台查 `endpoint_on`、`find_endpoint`，和收到消息时起的一样），送 `Event::Woken`。actor 里原因是 `Reason::Program`，给模型看的是 `[max-wake] ……`，按单条上限截；有核心在跑就当输入，没有就起一个。程序收到"叫醒了 Max"。没用原计划的 `[自动化 m#2 触发]`：没有登记表，也就没有编号。
   - **限流**（`actor/woken.rs`）：每个群每小时最多叫醒 6 次，有没有核心在跑都算，每次都是一次模型调用。超了就攒着（文字最多留 20 条，再多的只计数），程序收到"这一小时已经叫醒过 6 次了，这条先攒着，HH:MM 和攒下的一起叫醒"；到点一次叫醒，`[max-wake] 这一小时叫醒满了，攒下了 N 条：` 后面一条一行。攒着的在重启时丢掉。`/status` 多两行：`units` 列出 unit 文件，`woken` 是这一小时叫醒了几次、攒着几条。
