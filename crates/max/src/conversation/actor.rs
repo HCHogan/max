@@ -2,17 +2,17 @@
 //! database; model calls run as tasks in the core's `io` scope and come
 //! back as events.
 
-use std::collections::{BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::Result;
-use max_core::ids::{MessageId, PrincipalId, TurnId};
+use max_core::ids::{IdentityId, MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::item::{Item, ItemKind, ModelOutput, Timing};
-use max_core::message::{Draft, DraftNode, Message};
+use max_core::message::{Content, Draft, DraftNode, Message, Node};
 use max_core::project::{Budgets, MEMORY_FILE};
 use max_core::prompt;
 use max_core::render::Mark;
@@ -21,6 +21,7 @@ use max_db::platform::{self, Settings};
 use max_db::{ledger, turns, usage};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::task::AbortHandle;
 use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};
 
@@ -42,6 +43,12 @@ use crate::worker::Rows;
 /// How many rows a program following the timeline may fall behind by;
 /// further behind, it starts again from the database.
 const SUBSCRIBED_ROWS: usize = 256;
+/// How long after someone addresses Max their next message may finish
+/// what they meant, and start over the model call in flight. People
+/// added to an @ 3 to 38 seconds later (2026-11-04).
+const FOLLOW_UP: Duration = Duration::from_secs(60);
+/// The most times a model call starts over before one finishes.
+const MOST_RESTARTS: u32 = 3;
 
 /// What every conversation's actor shares.
 pub struct Shared {
@@ -91,6 +98,8 @@ pub struct Conversation {
     stopping: Option<Instant>,
     next_task: u64,
     mailbox: UnboundedSender<Event>,
+    /// Who addressed Max in the last [`FOLLOW_UP`], and when they last did.
+    addressed: HashMap<IdentityId, Instant>,
     /// The background agents running; they don't outlive the actor.
     jobs: jobs::Jobs,
     /// The wakes from the group's programs lately, and the held ones.
@@ -111,6 +120,12 @@ struct Active {
     /// What the model call in flight has said, segment by segment.
     said: Vec<String>,
     segments: i32,
+    /// The model call in flight, if one is.
+    calling: Option<Calling>,
+    /// How many times the model call has started over since one finished.
+    restarts: u32,
+    /// When the core last said something.
+    said_at: Option<Instant>,
     /// The people the model has been shown.
     roster: BTreeSet<PrincipalId>,
     /// When the last row the core saw was sent, for date lines; at first,
@@ -118,6 +133,14 @@ struct Active {
     last_at: Option<DateTime<Utc>>,
     idle_since: Instant,
     started: Instant,
+}
+
+/// A model call in flight.
+struct Calling {
+    task: TaskId,
+    abort: AbortHandle,
+    /// How many segments the core had said when it started.
+    segments: i32,
 }
 
 /// How a core ends.
@@ -155,6 +178,7 @@ impl Conversation {
             stopping: None,
             next_task: 0,
             mailbox,
+            addressed: HashMap::new(),
             jobs: jobs::Jobs::default(),
             woken: woken::Woken::default(),
             program_said: program::Said::default(),
@@ -261,6 +285,7 @@ impl Conversation {
                 };
                 a.said.push(segment.source);
                 a.segments += 1;
+                a.said_at = Some(Instant::now());
                 let (turn, index) = (a.turn, a.segments);
                 let said = self
                     .say(segment.draft, Some(turn), Some(index), false, None)
@@ -276,6 +301,10 @@ impl Conversation {
                 if !self.finished(task) {
                     debug!(%task, "dropped a stale ModelDone");
                     return Ok(());
+                }
+                if let Some(a) = self.core.as_mut() {
+                    a.calling = None;
+                    a.restarts = 0;
                 }
                 match out {
                     Ok((out, timing)) => self.model_output(out, timing).await,
@@ -391,6 +420,7 @@ impl Conversation {
         } else {
             let mark = committed.direct.map_or(Mark::None, |direct| direct.mark());
             self.feed(&[(committed.message.clone(), mark)]).await?;
+            self.follow_up(&committed).await?;
         }
         let entry = Entry {
             id: committed.message.id,
@@ -428,6 +458,82 @@ impl Conversation {
             warn!(turn = %a.turn, %rejected, "rows didn't fit the core");
         }
         Ok(())
+    }
+
+    /// Starts the model call in flight over when `committed` looks like
+    /// the rest of what its sender meant: they addressed Max in the last
+    /// [`FOLLOW_UP`], haven't been answered since, and aren't talking to
+    /// someone else now. Nothing is lost: the call hasn't said anything,
+    /// tools run only after it, and the next one is the same request with
+    /// the row added, which the provider has cached. Other wakes, a job's
+    /// or the classifier's, wait for the next call: they don't change the
+    /// answer someone is waiting for.
+    async fn follow_up(&mut self, committed: &ingest::Committed) -> Result<()> {
+        let now = Instant::now();
+        let sender = committed.sender.identity;
+        self.addressed.retain(|_, at| now < *at + FOLLOW_UP);
+        let since = self.addressed.get(&sender).copied();
+        if committed.direct.is_some() {
+            self.addressed.insert(sender, now);
+        }
+        let Some(since) = since else {
+            return Ok(());
+        };
+        let Some(a) = &self.core else {
+            return Ok(());
+        };
+        let fresh = a
+            .calling
+            .as_ref()
+            .is_some_and(|calling| a.segments == calling.segments);
+        if !fresh
+            || a.restarts >= MOST_RESTARTS
+            || a.said_at.is_some_and(|said| said > since)
+            || (committed.direct.is_none() && !self.own_words(committed).await?)
+        {
+            return Ok(());
+        }
+        self.start_over();
+        Ok(())
+    }
+
+    /// Whether a row that isn't to Max isn't to anyone else either: it
+    /// mentions nobody, and quotes nobody but its sender.
+    async fn own_words(&self, committed: &ingest::Committed) -> Result<bool> {
+        let Content::Message { reply_to, nodes } = &committed.message.content else {
+            return Ok(false);
+        };
+        if nodes
+            .iter()
+            .any(|node| matches!(node, Node::Mention { .. }))
+        {
+            return Ok(false);
+        }
+        let Some(target) = reply_to else {
+            return Ok(true);
+        };
+        let mut conn = self.shared.services.pool.acquire().await?;
+        let row = ledger::row(&mut conn, self.place.conversation, *target).await?;
+        Ok(row.is_some_and(|row| row.message.sender.identity == committed.sender.identity))
+    }
+
+    /// Takes back the model call in flight; the next step makes it again.
+    fn start_over(&mut self) {
+        let Some(a) = self.core.as_mut() else {
+            return;
+        };
+        let Some(calling) = a.calling.take() else {
+            return;
+        };
+        if let Err(rejected) = a.run.retract() {
+            warn!(turn = %a.turn, %rejected, "couldn't take back a model call");
+            a.calling = Some(calling);
+            return;
+        }
+        calling.abort.abort();
+        a.live.remove(&calling.task);
+        a.restarts += 1;
+        info!(conversation = %self.place.conversation, turn = %a.turn, restarts = a.restarts, "a model call starts over");
     }
 
     async fn decide(&mut self, decisions: Vec<Decision>) -> Result<()> {
@@ -562,6 +668,9 @@ impl Conversation {
             live: HashSet::new(),
             said: Vec::new(),
             segments: 0,
+            calling: None,
+            restarts: 0,
+            said_at: None,
             roster,
             last_at: Some(now),
             idle_since: Instant::now(),
@@ -606,7 +715,13 @@ impl Conversation {
                     let chosen = a.chosen.clone();
                     let mailbox = self.mailbox.clone();
                     let pictures = self.shared.pictures.clone();
-                    a.io.spawn(move |_| model::call(chosen, pictures, request, task, mailbox));
+                    let abort =
+                        a.io.spawn(move |_| model::call(chosen, pictures, request, task, mailbox));
+                    a.calling = Some(Calling {
+                        task,
+                        abort,
+                        segments: a.segments,
+                    });
                     return Ok(());
                 }
                 Step::RunTools(calls) => {

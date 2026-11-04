@@ -319,6 +319,73 @@ async fn later_rows_reach_the_running_core(pool: PgPool) {
     assert_eq!(h.turns().await.len(), 1, "one core took both");
 }
 
+/// Until the model has been called `n` times.
+async fn calls_reach(h: &Harness, n: usize) {
+    let deadline = Instant::now() + PATIENCE;
+    while h.script.calls() < n {
+        assert!(
+            Instant::now() < deadline,
+            "{} model calls",
+            h.script.calls()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Someone who @s Max and finishes the sentence in the next message gets
+/// one answer to both: the call that hasn't said anything starts over.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn the_rest_of_a_sentence_starts_the_call_over(pool: PgPool) {
+    let mut h = Harness::unprompted(pool, 300).await;
+    h.script.push(Answer::Hangs);
+    h.script.push(Answer::says("给 nix 用就选这个"));
+    h.send(at_max(0, " 推荐用哪个？"));
+    calls_reach(&h, 1).await;
+    // Other people's rows, and his to someone else, wait for the next call.
+    h.send(from_xiaohong(1, vec![text("插一句")]));
+    let mention = InNode::Mention {
+        user: "XIAOHONG".into(),
+        display: "小红".into(),
+    };
+    h.send(from_xiaoming(2, vec![mention, text(" 你也看看")]));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(h.script.calls(), 1);
+    h.send(from_xiaoming(3, vec![text("如果我要给nix用的话")]));
+    assert_eq!(h.said().await.1, "给 nix 用就选这个");
+    let tail = h.request_tail(1);
+    assert!(tail.starts_with("[新消息]\n"), "{tail}");
+    assert!(tail.contains("插一句"), "{tail}");
+    assert!(tail.ends_with("如果我要给nix用的话"), "{tail}");
+    h.stop().await;
+    assert_eq!(h.turns().await.len(), 1);
+}
+
+/// A call starts over at most three times before one finishes, and not for
+/// someone who has been answered since.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_call_starts_over_only_so_often(pool: PgPool) {
+    let mut h = Harness::unprompted(pool, 300).await;
+    h.script.push(Answer::says("先说一句"));
+    h.script.push(Answer::Hangs);
+    for _ in 0..4 {
+        h.script.push(Answer::Hangs);
+    }
+    h.send(at_max(0, " 在吗"));
+    assert_eq!(h.said().await.1, "先说一句");
+    h.send(from_xiaohong(1, vec![me(), text(" 再问一个")]));
+    calls_reach(&h, 2).await;
+    // 小明 has been answered: his next words start nothing over.
+    h.send(from_xiaoming(2, vec![text("好")]));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(h.script.calls(), 2);
+    for n in 0..4 {
+        h.send(from_xiaohong(3 + n, vec![text("还有")]));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert_eq!(h.script.calls(), 5, "one call and three over");
+    h.stop().await;
+}
+
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_failed_call_says_so(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;

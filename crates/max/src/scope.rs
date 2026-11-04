@@ -10,7 +10,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use tokio::task::JoinSet;
+use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -26,13 +26,14 @@ impl Scope {
         Self::default()
     }
 
-    /// Runs `task` with a token that `close` cancels.
-    pub fn spawn<F>(&mut self, task: impl FnOnce(CancellationToken) -> F)
+    /// Runs `task` with a token that `close` cancels; the handle aborts it
+    /// alone.
+    pub fn spawn<F>(&mut self, task: impl FnOnce(CancellationToken) -> F) -> AbortHandle
     where
         F: Future<Output = ()> + Send + 'static,
     {
         self.reap();
-        self.tasks.spawn(task(self.token.child_token()));
+        self.tasks.spawn(task(self.token.child_token()))
     }
 
     /// Cancels every task and gives them `grace` to stop on their own; then

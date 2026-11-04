@@ -342,6 +342,15 @@ impl Run {
         Ok(())
     }
 
+    /// Takes back the model call in flight, which hasn't said anything: the
+    /// next step calls the model again, with what came since shown too.
+    pub fn retract(&mut self) -> Result<(), Rejected> {
+        self.calling()?;
+        self.round -= 1;
+        self.phase = Phase::ModelDue;
+        Ok(())
+    }
+
     /// The model call was cut off; `text` had already been said.
     pub fn partial_output(&mut self, text: String, tokens: u32) -> Result<(), Rejected> {
         self.calling()?;

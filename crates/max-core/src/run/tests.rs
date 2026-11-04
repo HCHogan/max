@@ -165,6 +165,24 @@ fn people_shown_mid_run_can_be_mentioned() {
 }
 
 #[test]
+fn a_call_taken_back_is_made_again_with_what_came_since() {
+    let mut run = Run::new(spec(400_000, None), base(100), vec![Input::Wake(wake(1))]);
+    let first = texts(&call_model(&mut run));
+    // Chatter alone: a finished call would leave it waiting.
+    run.input(messages(2, 5)).unwrap();
+    run.retract().unwrap();
+    assert!(!run.busy());
+    let again = texts(&call_model(&mut run));
+    assert_eq!(again[..first.len()], first[..]);
+    assert_eq!(again[first.len()..], ["[新消息]\n[10:00 小明 #2]: 消息2"]);
+    assert_eq!(run.round(), 1);
+    run.model_output(says("好")).unwrap();
+    assert_eq!(run.retract(), Err(Rejected::NoModelCall));
+    assert!(run.unhandled().is_empty());
+    assert_eq!(run.outcome(), Outcome::Answered);
+}
+
+#[test]
 fn chatter_waits_for_a_trigger() {
     let mut run = Run::new(spec(400_000, None), base(100), vec![]);
     call_model(&mut run);
