@@ -202,20 +202,36 @@ fn words(text: &str) -> String {
     out
 }
 
-/// The key in the raw payload of what a program Max keeps in the group's
-/// VM says, whose value is [`PROGRAM`]. Max's other rows have none.
+/// The key in the raw payload of a row of Max's account that Max didn't
+/// say: [`PROGRAM`] or [`HOST`]. Max's own rows have none.
 pub const SAID_BY: &str = "said_by";
 pub const PROGRAM: &str = "program";
+pub const HOST: &str = "host";
 
-/// Whether a program Max keeps in the group's VM said `message`.
-pub fn by_program(message: &Message) -> bool {
-    message.raw.get(SAID_BY).and_then(|by| by.as_str()) == Some(PROGRAM)
+/// Who says a row of Max's account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum By {
+    /// Max: a segment of a turn's output, or a tool's.
+    Max,
+    /// A program Max keeps in the group's VM.
+    Program,
+    /// maxx itself: a command's answer, or a notice that a trigger went
+    /// unanswered. Max didn't write it, and mustn't take it for its own.
+    Host,
 }
 
-/// What Max says: a segment of a turn's output, a command's answer, or,
-/// if `program`, what a program Max keeps in the group's VM says. A quote
-/// of something that isn't a message on this timeline is dropped, and so
-/// is a picture Max may not send; None if nothing is left.
+/// Who said `message`, a row of Max's account.
+pub fn by(message: &Message) -> By {
+    match message.raw.get(SAID_BY).and_then(|by| by.as_str()) {
+        Some(PROGRAM) => By::Program,
+        Some(HOST) => By::Host,
+        _ => By::Max,
+    }
+}
+
+/// What Max's account says, `by` whom. A quote of something that isn't a
+/// message on this timeline is dropped, and so is a picture Max may not
+/// send; None if nothing is left.
 #[allow(clippy::too_many_arguments)]
 pub async fn said(
     conn: &mut PgConnection,
@@ -223,7 +239,7 @@ pub async fn said(
     draft: Draft,
     turn: Option<TurnId>,
     segment: Option<i32>,
-    program: bool,
+    by: By,
     now: DateTime<Utc>,
     offset: FixedOffset,
 ) -> sqlx::Result<Option<Message>> {
@@ -300,10 +316,10 @@ pub async fn said(
         offset,
     }
     .content(&content);
-    let raw = if program {
-        serde_json::json!({ SAID_BY: PROGRAM })
-    } else {
-        serde_json::Value::Null
+    let raw = match by {
+        By::Max => serde_json::Value::Null,
+        By::Program => serde_json::json!({ SAID_BY: PROGRAM }),
+        By::Host => serde_json::json!({ SAID_BY: HOST }),
     };
     let message = mine(&mut tx, place, content, &rendered, raw, turn, segment, now).await?;
     for (ordinal, sha256) in (0..).zip(&files) {

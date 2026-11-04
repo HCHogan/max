@@ -136,7 +136,12 @@ async fn max_says(
         nodes: vec![DraftNode::Text { text: text.into() }],
     };
     let now = Utc::now();
-    let said = ingest::said(&mut conn, place, draft, None, None, program, now, offset());
+    let by = if program {
+        ingest::By::Program
+    } else {
+        ingest::By::Max
+    };
+    let said = ingest::said(&mut conn, place, draft, None, None, by, now, offset());
     said.await.unwrap().unwrap().id
 }
 

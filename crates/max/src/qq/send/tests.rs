@@ -125,7 +125,7 @@ impl Setup {
             draft,
             None,
             None,
-            false,
+            ingest::By::Max,
             Utc::now(),
             offset(),
         )

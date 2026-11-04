@@ -52,6 +52,9 @@ pub enum Mark {
     MaybeNotSent,
     /// A program Max keeps in the group's VM said it, outside any turn.
     Program,
+    /// maxx said it on Max's account: a command's answer, or a notice
+    /// that a trigger went unanswered.
+    Host,
 }
 
 pub struct Render<'a, P> {
@@ -123,6 +126,7 @@ impl<P: People> Render<'_, P> {
             Mark::MentionsYou => " @你",
             Mark::RepliesToYou => " 回复你",
             Mark::Program => " 程序发的",
+            Mark::Host => " 系统发的",
             _ => "",
         };
         format!("[{time} {name} #{}{note}]: ", message.id)

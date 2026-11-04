@@ -236,7 +236,7 @@ impl Following {
         };
         let mut out = Vec::new();
         for message in messages {
-            let by = if ingest::by_program(message) {
+            let by = if ingest::by(message) == ingest::By::Program {
                 Some("program")
             } else if message.sender.identity == place.me.identity {
                 Some("max")

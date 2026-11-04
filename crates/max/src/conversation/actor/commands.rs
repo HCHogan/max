@@ -120,7 +120,7 @@ impl Conversation {
                 text: command::answer(name, body),
             }],
         };
-        self.say(draft, None, None, false, None).await?;
+        self.say(draft, None, None, By::Host, None).await?;
         Ok(())
     }
 
@@ -217,7 +217,7 @@ impl Conversation {
         }
         self.settings.model = (reference != "default").then(|| reference.to_owned());
         self.save_settings().await?;
-        Ok(format!("已切换：{reference}，下次回复生效"))
+        Ok(format!("已切换：{reference}，{}", self.takes_effect()))
     }
 
     async fn effort(&mut self, argument: Option<String>) -> Result<String> {
@@ -228,7 +228,7 @@ impl Conversation {
             };
             return Ok(format!("推理强度：{effort}"));
         };
-        let answer = format!("已设置：{level}，下次回复生效");
+        let answer = format!("已设置：{level}，{}", self.takes_effect());
         self.settings.effort = (level != "default").then_some(level);
         self.save_settings().await?;
         Ok(answer)
@@ -264,15 +264,31 @@ impl Conversation {
             }
             Persona::Reset => {
                 self.settings.persona = None;
-                "已恢复默认人设，下次回复生效"
+                "已恢复默认人设"
             }
             Persona::Set(text) => {
                 self.settings.persona = Some(text);
-                "已更新人设，下次回复生效"
+                "已更新人设"
             }
         };
         self.save_settings().await?;
-        Ok(answer.to_owned())
+        Ok(format!("{answer}，{}", self.takes_effect()))
+    }
+
+    /// When a change of model, effort or persona shows: a running core
+    /// keeps what it started with until it ends, which is mostly when it
+    /// has been idle for its window.
+    fn takes_effect(&self) -> String {
+        let Some(a) = &self.core else {
+            return "下次回复生效".to_owned();
+        };
+        let idle = a.chosen.idle_window.as_secs();
+        let idle = if idle % 60 == 0 {
+            format!("{} 分钟", idle / 60)
+        } else {
+            format!("{idle} 秒")
+        };
+        format!("这一轮对话结束后生效（闲下来 {idle}后）")
     }
 
     /// The `/bind <码>` that bound this group, which the table hands over

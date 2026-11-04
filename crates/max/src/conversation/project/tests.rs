@@ -42,10 +42,19 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
             text: "早啊".into(),
         }],
     };
-    let mine = ingest::said(&mut conn, &place, reply, None, None, false, at(1), offset())
-        .await
-        .unwrap()
-        .unwrap();
+    let mine = ingest::said(
+        &mut conn,
+        &place,
+        reply,
+        None,
+        None,
+        ingest::By::Max,
+        at(1),
+        offset(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let failed = Sent::Failed { error: "500" };
     ledger::record_delivery(&mut conn, mine.id, place.endpoint, &failed, at(1))
         .await

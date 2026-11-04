@@ -69,7 +69,7 @@ async fn a_report_goes_out_under_its_name(pool: PgPool) {
                 draft,
                 None,
                 None,
-                false,
+                ingest::By::Max,
                 Utc::now(),
                 offset(),
             );

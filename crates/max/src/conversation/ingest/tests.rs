@@ -39,10 +39,19 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
             text: "在的，说吧".into(),
         }],
     };
-    let mine = said(&mut conn, &place, draft, None, None, false, at(1), offset())
-        .await
-        .unwrap()
-        .unwrap();
+    let mine = said(
+        &mut conn,
+        &place,
+        draft,
+        None,
+        None,
+        By::Max,
+        at(1),
+        offset(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(mine.sender.identity, place.me.identity);
 
     // Quoted by an id QQ never gave us, found by its text.
@@ -114,10 +123,19 @@ async fn what_max_says_is_checked(pool: PgPool) {
             },
         ],
     };
-    let mine = said(&mut conn, &place, draft, None, None, false, at(1), offset())
-        .await
-        .unwrap()
-        .unwrap();
+    let mine = said(
+        &mut conn,
+        &place,
+        draft,
+        None,
+        None,
+        By::Max,
+        at(1),
+        offset(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(
         mine.content,
         Content::Message {
@@ -234,7 +252,7 @@ async fn pictures_max_sends_again(pool: PgPool) {
             picture(ordinal),
             None,
             None,
-            false,
+            By::Max,
             at(1),
             offset(),
         )

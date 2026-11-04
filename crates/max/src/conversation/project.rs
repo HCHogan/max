@@ -18,7 +18,8 @@ use max_db::platform::{self, ConversationKind};
 use max_db::turns::{self, TailEnd};
 use sqlx::PgConnection;
 
-use super::{Place, ingest};
+use super::Place;
+use super::ingest::{self, By};
 use crate::tokens;
 
 /// What a projection reads besides the ledger.
@@ -255,14 +256,17 @@ pub fn judged(reason: &Reason) -> Option<Item> {
     Some(Item::new(ItemKind::user(text), tokens))
 }
 
-/// What became of Max's row, if it didn't reach the platform; else
-/// whether a program of Max's said it.
+/// What became of Max's row, if it didn't reach the platform; else who
+/// said it, if not Max.
 pub fn own_mark(row: &Row) -> Mark {
     match row.delivery {
         Some(Delivery::Failed) => Mark::NotSent,
         Some(Delivery::Unknown) => Mark::MaybeNotSent,
-        Some(Delivery::Sent) | None if ingest::by_program(&row.message) => Mark::Program,
-        Some(Delivery::Sent) | None => Mark::None,
+        Some(Delivery::Sent) | None => match ingest::by(&row.message) {
+            By::Max => Mark::None,
+            By::Program => Mark::Program,
+            By::Host => Mark::Host,
+        },
     }
 }
 

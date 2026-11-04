@@ -401,6 +401,7 @@ async fn a_failed_call_says_so(pool: PgPool) {
     };
     assert!(reply_to.is_some());
     assert_eq!(message.turn, None);
+    assert_eq!(ingest::by(&message), ingest::By::Host);
     h.stop().await;
     let turns = h.turns().await;
     assert!(matches!(
@@ -574,13 +575,32 @@ async fn an_owner_changes_settings(pool: PgPool) {
     };
     h.send(from_xiaohong(3, vec![mention, text(" 在吗")]));
     h.said().await;
+    // The turn that answered goes on as it started.
+    h.send(from_xiaoming(4, vec![me(), text("/effort high")]));
+    assert_eq!(
+        h.said().await.1,
+        command::answer(
+            "effort",
+            "已设置：high，这一轮对话结束后生效（闲下来 5 分钟后）"
+        )
+    );
     h.stop().await;
-    let model = h.script.requests.lock().unwrap()[0].model.model.clone();
-    assert_eq!(model, "wide");
     let proactive = h
         .count("select count(*) from conversation_settings where not proactive")
         .await;
     assert_eq!(proactive, 1);
+    let requests = h.script.requests.lock().unwrap();
+    assert_eq!(requests[0].model.model, "wide");
+    // Max sees the answers as the host's, not its own words.
+    let shown: String = requests[0]
+        .items
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown.matches(" 系统发的]: ").count(), 3, "{shown}");
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

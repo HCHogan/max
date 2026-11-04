@@ -25,7 +25,7 @@ use tokio::task::AbortHandle;
 use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};
 
-use super::ingest;
+use super::ingest::{self, By};
 use super::project::{self, Projection};
 use super::{
     Act, Event, Place, Post, Poster, Receipt, Subscription, TaskId, classify, model, tool,
@@ -247,7 +247,7 @@ impl Conversation {
                 reply_to: None,
                 nodes: vec![DraftNode::Text { text }],
             };
-            self.say(draft, None, None, false, None).await?;
+            self.say(draft, None, None, By::Host, None).await?;
         }
         Ok(())
     }
@@ -288,7 +288,7 @@ impl Conversation {
                 a.said_at = Some(Instant::now());
                 let (turn, index) = (a.turn, a.segments);
                 let said = self
-                    .say(segment.draft, Some(turn), Some(index), false, None)
+                    .say(segment.draft, Some(turn), Some(index), By::Max, None)
                     .await?;
                 if let Some(message) = said
                     && let Some(a) = self.core.as_mut()
@@ -856,7 +856,7 @@ impl Conversation {
             reply_to: Some(trigger),
             nodes: vec![DraftNode::Text { text: why.into() }],
         };
-        self.say(draft, None, None, false, None).await?;
+        self.say(draft, None, None, By::Host, None).await?;
         Ok(())
     }
 
@@ -893,7 +893,10 @@ impl Conversation {
             return Ok(());
         }
         let committed = match act {
-            Act::Say(draft) => self.say(draft, origin, None, program, receipt).await?,
+            Act::Say(draft) => {
+                let by = if program { By::Program } else { By::Max };
+                self.say(draft, origin, None, by, receipt).await?
+            }
             Act::Unsend(target) => self.unsend(target, origin, receipt).await?,
         };
         if let Some(message) = committed
@@ -905,15 +908,16 @@ impl Conversation {
         Ok(())
     }
 
-    /// Commits what Max says and hands it to the sender. The running core
-    /// isn't fed it: its own words are in its transcript, and words from
-    /// outside it, such as a command's answer, are in the next core's tail.
+    /// Commits what Max's account says, `by` whom, and hands it to the
+    /// sender. The running core isn't fed it: its own words are in its
+    /// transcript, and words from outside it, such as a command's answer,
+    /// are in the next core's tail.
     async fn say(
         &mut self,
         draft: Draft,
         turn: Option<TurnId>,
         segment: Option<i32>,
-        program: bool,
+        by: By,
         receipt: Option<Receipt>,
     ) -> Result<Option<Message>> {
         let mut conn = self.shared.services.pool.acquire().await?;
@@ -923,7 +927,7 @@ impl Conversation {
             draft,
             turn,
             segment,
-            program,
+            by,
             Utc::now(),
             self.shared.services.offset,
         )
