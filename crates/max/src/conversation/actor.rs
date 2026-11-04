@@ -13,7 +13,7 @@ use max_core::ids::{MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::item::{Item, ItemKind, ModelOutput, Timing};
 use max_core::message::{Draft, DraftNode, Message};
-use max_core::project::{Budgets, MEMORY_FILE, MOST_PICTURES};
+use max_core::project::{Budgets, MEMORY_FILE};
 use max_core::prompt;
 use max_core::render::Mark;
 use max_core::run::{FailReason, Input, Outcome, Run, RunSpec, Step, Wake};
@@ -113,8 +113,6 @@ struct Active {
     segments: i32,
     /// The people the model has been shown.
     roster: BTreeSet<PrincipalId>,
-    /// How many more pictures it may be shown.
-    pictures: usize,
     /// When the last row the core saw was sent, for date lines; at first,
     /// when the core started.
     last_at: Option<DateTime<Utc>>,
@@ -423,7 +421,7 @@ impl Conversation {
         if let Input::Messages { people, item, .. } = &mut input {
             a.roster.extend(people.iter());
             let messages = rows.iter().map(|(message, _)| message);
-            max_core::project::attach(item, messages, &mut a.pictures);
+            max_core::project::attach(item, messages);
         }
         a.last_at = rows.last().map(|(message, _)| message.at).or(a.last_at);
         if let Err(rejected) = a.run.input(input) {
@@ -554,14 +552,6 @@ impl Conversation {
         };
         let base: u32 = context.items.iter().map(|item| item.tokens).sum();
         let roster = context.roster.clone();
-        let shown: usize = context
-            .items
-            .iter()
-            .map(|item| match &item.kind {
-                ItemKind::User { images, .. } => images.len(),
-                _ => 0,
-            })
-            .sum();
         info!(conversation = %self.place.conversation, turn = %started.turn, ordinal = started.ordinal, model = %chosen.reference(), base, "a core starts");
         self.core = Some(Active {
             turn: started.turn,
@@ -573,7 +563,6 @@ impl Conversation {
             said: Vec::new(),
             segments: 0,
             roster,
-            pictures: MOST_PICTURES.saturating_sub(shown),
             last_at: Some(now),
             idle_since: Instant::now(),
             started: Instant::now(),

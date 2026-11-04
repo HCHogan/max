@@ -125,7 +125,7 @@ fn the_base_context() {
 }
 
 #[test]
-fn pictures_are_attached_in_order_until_none_are_left() {
+fn pictures_are_attached_in_order() {
     use crate::ids::{ConversationId, IdentityId, MessageId};
     use crate::message::{MediaMeta, MediaRef, Sender};
 
@@ -177,12 +177,14 @@ fn pictures_are_attached_in_order_until_none_are_left() {
         message(10, said(vec![medium(MediaKind::Image, true)])),
     ];
     let mut item = Item::new(ItemKind::user("易变"), 100);
-    let mut left = 3;
-    attach(&mut item, &rows, &mut left);
+    attach(&mut item, &rows);
     let ItemKind::User { images, .. } = &item.kind else {
         unreachable!()
     };
     let handles: Vec<String> = images.iter().map(Image::handle).collect();
-    assert_eq!(handles, ["image#7.1", "sticker#7.3", "image#9.0"]);
-    assert_eq!((left, item.tokens), (0, 100 + 3 * PICTURE_TOKENS));
+    assert_eq!(
+        handles,
+        ["image#7.1", "sticker#7.3", "image#9.0", "image#10.0"]
+    );
+    assert_eq!(item.tokens, 100 + 4 * PICTURE_TOKENS);
 }

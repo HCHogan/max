@@ -158,12 +158,11 @@ impl Projection<'_> {
         };
         let blocks = pieces.into_iter().chain([volatile.render(self.offset)]);
         let mut context = project::context(self.system.clone(), blocks, roster, tokens::count);
-        // The pictures of the first inputs and of the rows they quote,
-        // after the volatile block.
+        // The pictures of the first inputs and of the rows they quote, in
+        // the volatile block, each after its row.
         if let Some(volatile) = context.items.last_mut() {
             let messages = triggers.iter().chain(&quoted).map(|row| &row.message);
-            let mut left = project::MOST_PICTURES;
-            project::attach(volatile, messages, &mut left);
+            project::attach(volatile, messages);
         }
         let first = wakes.iter().cloned().map(Input::Wake).collect();
         Ok((context, first))

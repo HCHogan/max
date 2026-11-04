@@ -122,7 +122,7 @@ async fn pictures_are_read_and_new_ones_waited_for(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn the_newest_pictures_programs_showed_are_read(pool: PgPool) {
+async fn every_picture_programs_showed_is_read(pool: PgPool) {
     let dir = std::env::temp_dir().join(format!("max-shown-{:016x}", rand::random::<u64>()));
     let store = Arc::new(Store::open(&dir).await.unwrap());
     let mut stored = Vec::new();
@@ -153,7 +153,7 @@ async fn the_newest_pictures_programs_showed_are_read(pool: PgPool) {
             1,
         )
     };
-    // The first again, last: it counts where it was shown last.
+    // The first again, last: it is read once.
     let mut later = stored[5..].to_vec();
     later.push(stored[0].clone());
     let request = Request {
@@ -168,10 +168,7 @@ async fn the_newest_pictures_programs_showed_are_read(pool: PgPool) {
     };
     let pictures = Pictures { pool, store };
     let read = pictures.read(&request).await;
-    let mut expected: Vec<&String> = [0, 3, 4, 5, 6, 7, 8, 9]
-        .iter()
-        .map(|&n| &stored[n])
-        .collect();
+    let mut expected: Vec<&String> = stored.iter().collect();
     expected.sort();
     assert_eq!(read.0.keys().collect::<Vec<_>>(), expected);
     assert!(

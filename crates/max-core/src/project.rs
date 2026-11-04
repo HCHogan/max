@@ -173,9 +173,6 @@ pub fn now_line(now: DateTime<Utc>, offset: FixedOffset) -> String {
     format!("[现在] {}\n", moment(now, offset))
 }
 
-/// Most pictures one run is shown; past these, rows show only their text.
-pub const MOST_PICTURES: usize = 8;
-
 /// What a picture is reckoned to cost until the provider says: about what
 /// Claude, Gemini and GPT charge for one 1568 pixels on its long side.
 pub const PICTURE_TOKENS: u32 = 1200;
@@ -185,14 +182,12 @@ pub const PICTURE_TOKENS: u32 = 1200;
 /// (2026-11-03).
 pub const VIDEO_TOKENS_PER_SECOND: u32 = 100;
 
-/// Shows the model the pictures and stickers among `messages`, after
-/// `item`'s text, in order, while `left` lasts. Those without a reference
-/// to download are left out.
-pub fn attach<'m>(
-    item: &mut Item,
-    messages: impl IntoIterator<Item = &'m Message>,
-    left: &mut usize,
-) {
+/// Shows the model the pictures and stickers among `messages` with
+/// `item`, each after the line of its row. Those without a reference to
+/// download are left out. A turn keeps every picture it was shown, so its
+/// requests only grow and stay cached; the next turn's tail has their
+/// captions instead.
+pub fn attach<'m>(item: &mut Item, messages: impl IntoIterator<Item = &'m Message>) {
     let ItemKind::User { images, .. } = &mut item.kind else {
         return;
     };
@@ -207,9 +202,6 @@ pub fn attach<'m>(
             _ => None,
         });
         for (ordinal, (stored, kind)) in (0..).zip(media) {
-            if *left == 0 {
-                return;
-            }
             if stored && matches!(kind, MediaKind::Image | MediaKind::Sticker) {
                 images.push(Image {
                     kind,
@@ -217,7 +209,6 @@ pub fn attach<'m>(
                     ordinal,
                 });
                 item.tokens += PICTURE_TOKENS;
-                *left -= 1;
             }
         }
     }

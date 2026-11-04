@@ -51,7 +51,10 @@ enum Piece<'a> {
     Video(&'a str),
 }
 
-/// A user item's content: its text, then each picture after its handle.
+/// A user item's content: its text, with each picture after its handle
+/// right after the line of its row, so that it is next to who sent it; at
+/// the end if no line names it. All went at the end until 2026-11-04,
+/// where the model had to match handles to rows to tell whose was whose.
 /// None when there are no pictures to send, so the content stays a plain
 /// string, as it was before pictures.
 fn pieces<'a>(
@@ -59,15 +62,44 @@ fn pieces<'a>(
     images: &'a [Image],
     pictures: &'a Pictures,
 ) -> Option<Vec<Piece<'a>>> {
-    let mut pieces = vec![Piece::Text(text.into())];
-    for image in images {
-        let handle = image.handle();
-        if let Some(url) = pictures.0.get(&handle) {
-            pieces.push(Piece::Text(format!("[{handle}]").into()));
-            pieces.push(Piece::Picture(url));
-        }
+    let mut placed: Vec<(usize, String, &str)> = images
+        .iter()
+        .filter_map(|image| {
+            let handle = image.handle();
+            let url = pictures.0.get(&handle)?;
+            let at = after_line(text, &handle).unwrap_or(text.len());
+            Some((at, handle, url.as_str()))
+        })
+        .collect();
+    if placed.is_empty() {
+        return None;
     }
-    (pieces.len() > 1).then_some(pieces)
+    placed.sort_by_key(|(at, ..)| *at);
+    let mut pieces = Vec::new();
+    let mut from = 0;
+    for (at, handle, url) in placed {
+        if at > from {
+            pieces.push(Piece::Text(text[from..at].into()));
+            from = at;
+        }
+        pieces.push(Piece::Text(format!("[{handle}]").into()));
+        pieces.push(Piece::Picture(url));
+    }
+    if from < text.len() {
+        pieces.push(Piece::Text(text[from..].into()));
+    }
+    Some(pieces)
+}
+
+/// Where the last line naming `handle` ends, after its newline: rows come
+/// after the memory, which could name one too.
+fn after_line(text: &str, handle: &str) -> Option<usize> {
+    let named = format!("[{handle}");
+    let at = text
+        .rmatch_indices(&named)
+        .map(|(at, _)| at)
+        .find(|at| text[at + named.len()..].starts_with([']', ':']))?;
+    Some(text[at..].find('\n').map_or(text.len(), |end| at + end + 1))
 }
 
 /// A tool's parameter schema. max-core's tests check that each parses.

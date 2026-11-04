@@ -27,11 +27,9 @@ use super::store::Store;
 const WAIT: Duration = Duration::from_secs(10);
 /// Between looks while waiting.
 const POLL: Duration = Duration::from_millis(250);
-/// The most pictures of tool results a call is sent: the newest. Older
-/// ones are named in their results instead.
-const MOST_SHOWN: usize = 8;
 /// The most seconds of video of tool results a call is sent: the newest
-/// videos'. Older ones are named in their results instead.
+/// videos'. Older ones are named in their results instead. Pictures have
+/// no such limit: a turn keeps all it was shown, see [`shown`].
 const MOST_VIDEO_SECONDS: u32 = 600;
 
 pub struct Pictures {
@@ -148,8 +146,10 @@ fn parts(request: &Request) -> impl Iterator<Item = &Part> {
     })
 }
 
-/// The pictures tool results in `request` show, newest first, each once,
-/// at most [`MOST_SHOWN`].
+/// The pictures tool results in `request` show, each once: all of them.
+/// Leaving out older ones changed a result the provider had cached with
+/// each new picture past the limit, and everything after it; the next
+/// turn has none of them anyway.
 fn shown(request: &Request) -> Vec<&str> {
     let mut shown = Vec::new();
     for part in parts(request) {
@@ -161,7 +161,6 @@ fn shown(request: &Request) -> Vec<&str> {
             shown.push(sha256.as_str());
         }
     }
-    shown.truncate(MOST_SHOWN);
     shown
 }
 

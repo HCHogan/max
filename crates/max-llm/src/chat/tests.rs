@@ -202,6 +202,57 @@ fn pictures_follow_their_handles() {
 }
 
 #[test]
+fn pictures_sit_after_their_rows() {
+    let image = |kind, message, ordinal| Image {
+        kind,
+        message: MessageId(message),
+        ordinal,
+    };
+    let text = "[记忆]\n- [image#7.0] 是猫\n\n[新消息]\n[10:00 小明 #7]: 看[image#7.0: 猫]\n[10:01 小红 #8]: [sticker#8.0]\n[10:02 小刚 #9]: 呢\n";
+    let block = ItemKind::User {
+        text: text.into(),
+        images: vec![
+            image(MediaKind::Sticker, 8, 0),
+            image(MediaKind::Image, 7, 0),
+            image(MediaKind::Image, 3, 0),
+        ],
+    };
+    let request = Request {
+        model: model("qwen3.8-27b"),
+        items: vec![Item::new(block, 1)],
+        tools: &[],
+        max_output: None,
+        roster: BTreeSet::new(),
+    };
+    let url = |n: u8| format!("data:image/jpeg;base64,{n}");
+    let pictures = Pictures(
+        [
+            ("image#7.0".to_owned(), url(1)),
+            ("sticker#8.0".to_owned(), url(2)),
+            ("image#3.0".to_owned(), url(3)),
+        ]
+        .into(),
+    );
+    let messages = body(&request, &Options::default(), &pictures)["messages"].clone();
+    let text = |text: &str| json!({ "type": "text", "text": text });
+    let picture = |n| json!({ "type": "image_url", "image_url": { "url": url(n) } });
+    assert_eq!(
+        messages[0]["content"],
+        json!([
+            text("[记忆]\n- [image#7.0] 是猫\n\n[新消息]\n[10:00 小明 #7]: 看[image#7.0: 猫]\n"),
+            text("[image#7.0]"),
+            picture(1),
+            text("[10:01 小红 #8]: [sticker#8.0]\n"),
+            text("[sticker#8.0]"),
+            picture(2),
+            text("[10:02 小刚 #9]: 呢\n"),
+            text("[image#3.0]"),
+            picture(3),
+        ])
+    );
+}
+
+#[test]
 fn cache_breakpoints_end_the_stable_blocks() {
     let qwen = model("qwen3.8-27b");
     let user = |text: &str| Item::new(ItemKind::user(text), 1);
