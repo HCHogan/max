@@ -193,6 +193,11 @@ fn token(s: &str) -> Option<(Token<'_>, usize)> {
         .or_else(|| tool_call(s).map(|len| (Token::ToolCall, len)))
 }
 
+/// Whether `s` starts with a quote, `[reply#id]`.
+pub(super) fn quote(s: &str) -> bool {
+    matches!(placeholder(s), Some((Token::Reply(_), _)))
+}
+
 /// The length of the picture's handle `s` starts with, if it does.
 pub(super) fn picture(s: &str) -> Option<usize> {
     match placeholder(s)? {

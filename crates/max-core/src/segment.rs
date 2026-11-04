@@ -18,7 +18,11 @@
 //! longer cut, so a section goes out whole, as QQ renders it. A thematic
 //! break (`---`) cuts wherever it is and is never sent. On 10-30 a long
 //! answer went out as a heading, a table and an empty-looking `---`, each
-//! a message of its own.
+//! a message of its own. A line that starts with a quote, `[reply#id]`,
+//! starts a message, and ends the document: Max is back to chatting. From
+//! 11-02 to 11-04, three times a jab at someone written after a document's
+//! last section went out inside that section, and so the whole section as
+//! a reply to them.
 //!
 //! `<think>` spans are dropped before anything else, including everything
 //! after an unclosed one: some relays put reasoning in the text.
@@ -139,6 +143,9 @@ impl Chunker {
             if is_heading(line) {
                 self.cut(out);
                 self.sections = true;
+            } else if parse::quote(line.trim_start()) {
+                self.cut(out);
+                self.sections = false;
             }
             let mut rest = line;
             while let Some((at, len, picture)) = next_cut(rest) {
@@ -310,6 +317,36 @@ mod tests {
     }
 
     #[test]
+    fn a_quote_starts_a_message_and_ends_the_document() {
+        let text = "### 总结\n两样都行。\n\n[reply#7] 至于你，先去睡觉。\n\n别熬夜了。\n\n## 附录\n甲\n\n乙\n  [reply#8] 丙";
+        assert_eq!(
+            chunks(text),
+            [
+                "### 总结\n两样都行。",
+                "[reply#7] 至于你，先去睡觉。",
+                "别熬夜了。",
+                "## 附录\n甲\n\n乙",
+                "[reply#8] 丙"
+            ]
+        );
+        // Without a document, a quote still starts a message, but only at
+        // the start of a line, and only a real one.
+        assert_eq!(chunks("一\n[reply#3] 二"), ["一", "[reply#3] 二"]);
+        assert_eq!(chunks("一\n好[reply#3] 二"), ["一\n好[reply#3] 二"]);
+        assert_eq!(chunks("一\n[reply#] 二"), ["一\n[reply#] 二"]);
+        assert_eq!(
+            chunks("```\n一\n[reply#3]\n```"),
+            ["```\n一\n[reply#3]\n```"]
+        );
+
+        let mut segmenter = Segmenter::new(BTreeSet::new());
+        let mut out = segmenter.push("### 总结\n两样都行。\n\n[reply#7] 至于你");
+        out.extend(segmenter.finish());
+        let quoted: Vec<_> = out.iter().map(|s| s.draft.reply_to).collect();
+        assert_eq!(quoted, [None, Some(crate::ids::MessageId(7))]);
+    }
+
+    #[test]
     fn split_cuts_anywhere_on_a_line() {
         assert_eq!(chunks("一[split]二\n三[split]"), ["一", "二\n三"]);
         assert_eq!(chunks("[split][split]一[split]  [split]二"), ["一", "二"]);
@@ -385,9 +422,12 @@ mod tests {
     /// Streaming in any two pieces gives the same chunks as all at once.
     #[test]
     fn streaming_is_invisible() {
-        let text = "<think>想\n\n想</think>开头\n\n```py\nx = 1\n\ny = 2\n```\n中间[split]后面[sticker#4.0: 狗]\n\n\n结尾\n---\n## 一\n\n甲\n\n### 二\n乙";
+        let text = "<think>想\n\n想</think>开头\n\n```py\nx = 1\n\ny = 2\n```\n中间[split]后面[sticker#4.0: 狗]\n\n\n结尾\n---\n## 一\n\n甲\n\n### 二\n乙\n\n[reply#9] 回来\n\n聊天";
         let whole = chunks(text);
-        assert_eq!(whole.last().map(String::as_str), Some("### 二\n乙"));
+        assert_eq!(
+            whole[whole.len() - 3..],
+            ["### 二\n乙", "[reply#9] 回来", "聊天"]
+        );
         for (at, _) in text.char_indices() {
             let mut chunker = Chunker::default();
             let mut out = chunker.push(&text[..at]);
