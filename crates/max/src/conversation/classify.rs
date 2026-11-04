@@ -26,8 +26,10 @@ use super::report::Report;
 use super::{Event, Place};
 use crate::llm::Chosen;
 
-/// Enough for the one line of JSON.
-const MAX_OUTPUT: u32 = 300;
+/// Enough for the one line of JSON, and for a model that reasons a
+/// little first: deepseek-v4.1-flash at low effort thinks up to ~280
+/// tokens, and stopped at 300 one call in eight (2026-11-04).
+const MAX_OUTPUT: u32 = 1000;
 /// The longest a verdict may take; the batch waits for it.
 const CALL: Duration = Duration::from_secs(60);
 

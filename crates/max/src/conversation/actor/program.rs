@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 use super::*;
 
 /// The group's programs say at most this many messages in an hour.
-pub(super) const SAID_PER_HOUR: usize = 30;
+pub(super) const SAID_PER_HOUR: usize = 200;
 const HOUR: Duration = Duration::from_secs(3600);
 
 /// When the group's programs said something, in the last hour.
@@ -77,10 +77,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn thirty_an_hour() {
+    fn so_many_an_hour() {
         let start = Instant::now();
         let mut said = Said::default();
-        for second in 0..30 {
+        for second in 0..SAID_PER_HOUR as u64 {
             assert!(said.take(start + Duration::from_secs(second)));
         }
         assert!(!said.take(start + Duration::from_secs(60)));

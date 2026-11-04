@@ -1335,6 +1335,7 @@ struct Verdict { trigger: bool, reason: String }
 - **输入和输出**：人设的前 500 字、最近 15 条消息作上下文（和尾巴同一种行格式）、待判的消息。行里的 `[mention#N]` 换成 `@名字`，@ Max 的是 `@maxx`：小模型没有核心那样的名单，从名字看出话是对谁说的（2026-10-29 改：之前它看不出 @ 的是谁，把 @ 别人的话当成在 @ Max）。输出一行 JSON：`trigger` 和不超过 20 字的 `reason`。提示词里写了该接话的两种情形（没打 @ 的点名、它能给出具体有用东西的话题）和不该接的（成员之间的对话，包括 @ 别人、回复别人；叫别人去用 AI；只是提到 Max；嫌 Max 烦；别的机器人和贴进来的代码、通知），拿不准就不接。原来还有一种"Max 参与的对话有了后续"，2026-10-29 删掉：4B 的小模型只要看到 Max 刚说过话，后面谁说什么都判成后续，判定叫醒连成一串；对 Max 的回应本来就是回复或 @，直接叫醒。分类任务自己读库拼输入；拼提示词和解析输出都是 `max-core` 里的纯函数。
 - **`Wake` 的去处**：判定回到信箱，actor 交给 `intent.verdict`。同时只有一个在途，intent 记着这一批，所以不用带任务 id；分类任务失败或 panic 也要回一个 `None`，否则这个会话再也不分类。要接话的变成 `Wake { reason: Judged }`，ids 是这一批的消息。所有 `Wake`，包括去抖到期的直接触发，都过同一条规则：涉及的消息都不超过 `seen` 就作废。这些消息已经在某次模型请求里，模型自己决定过了；`/kill` 之前的也都这样作废。其余的作为一个输入（`Input::Wake`）进核心：没有核心就起一个，trigger 记成这个 `Wake`；有核心就喂给它。所以核心空闲、闲聊还没进过请求时，判定会叫醒核心；核心因为空闲窗口结束了，判定会起一个新核心。判定在 `[新消息]` 块里是一行，如 `[判定：在追问你刚才的回答]`；直接触发不加行，消息行上本来就标着"@你""回复你的 #123"。`seen` 见[时间线](#时间线)。
 - **上限**：判定叫醒每个会话每小时最多 8 次，是防小模型失控的保险，直接触发不算。超了的判定直接丢掉。每个会话用 `/proactive` 开关，`/status` 看得到开没开。
+- **输出上限**：1000 token（`classify.rs` 的 `MAX_OUTPUT`）。原来是 300，够一行 JSON；2026-11-04 intent 换成 `deepseek-v4.1-flash`（low）以后，它先想 100 来个 token，最多到 280，当天八次里有一次被 300 截断（`length`），按失败算就是没叫醒。
 - **失败**：不重试，记日志后丢掉。intent 只是建议，消息都在 ledger 里；瞬时错误由 provider 自己的重试兜住，不再叠一层。Haskell 版在 provider 重试之外又重试最多 3 次。
 - **模型**：`[llm] intent` 选一个小模型。判定之后起的 turn 用会话自己的模型，和 @ 触发的一样，不按触发类型换模型或推理强度。
 - 每次分类记一条 `llm_usage`，用途是 intent。
@@ -1725,11 +1726,11 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
   - **能用的**：`history`、`find_stickers`、`web_search`、`send_image`、`send_file`、`max.file`（`maxx file`），加上只给程序的 `say` 和 `wake`（`mcp/program.rs`）。不给：`mute_member`、`recall_message`（不经 Max 判断就动群里的人）、`agent` 一类（没人看着花钱）、`github_*`、`max.image`（给模型看图，程序没有模型）。
   - **`say`**：参数是一段 Max 回话写法的文字，过同一个分段器：`[reply#id]`、`[mention#id]`、`[sticker#id.n]`、`[image#id.n]`、`[split]`、空行分条；`[mention#id]` 的人要是这个群认得的（`platform::roster`），和模型的输出一样。不做结构化的参数：一种写法，Max 本来就会。一条一条发，等平台回执，返回 `{messages: [id, …]}`；中间失败的，原因里写已经发了哪几条。
   - **`wake`**：原来的 `max-wake`，经 `Poster::wake` 送 `Event::Woken`，限流照旧。`max-wake` 留着，成了 `maxx wake` 外面一层（参数或标准输入，打印 `said`）：Max 11-01 以来写的 unit 都在用它，在各群的 `/work` 里，不能替它们改。
-  - **限流**：程序发的消息每个群每小时最多 30 条（`actor/program.rs`），`say` 分出的每条、每张图、每个文件都算一条，超了这条不发，回"这一小时程序已经发了 30 条"。QQ 的配额是每群每分钟 20 条、每天 1000 条，30 条是给程序留的，不让它挤掉 Max 自己的话。
+  - **限流**：程序发的消息每个群每小时最多 200 条（`actor/program.rs`），`say` 分出的每条、每张图、每个文件都算一条，超了这条不发，回"这一小时程序已经发了 200 条"。原来是 30 条，给 QQ 每群每分钟 20 条、每天 1000 条的配额留余地，不让程序挤掉 Max 自己的话；2026-11-04 Max 在群里写了个五子棋程序，一步一张棋盘图，一盘没下完就用完了 30 条，owner 把它提到 200。程序一直发满的话，五个小时就能把一天的配额用完。
   - **记录里的标记**：程序发的行 `raw` 是 `{"said_by": "program"}`（Max 别的行是 null），不加列，不用迁移。渲染时头部多一个 ` 程序发的`（`Mark::Program`）：`[12:00 maxx #45 程序发的]: ……`，`history` 和尾巴都一样，Max 分得清哪些是自己说的、哪些是程序说的。跑着的核心看不到它们（和命令的回答一样），下一个核心的尾巴里有。
   - **这一轮里也能试**：只给程序的工具（`say`、`wake`），带 token 调也当成程序的，经同一条路去 actor：Max 写好的脚本在 `shell` 里先跑一遍，`say` 不会被拒，发出去的也标着程序发的。后台 agent 带 token 调还是拒。
   - **7778 去掉**：`max-units` 改用 `curl` POST `http://127.0.0.1:7777/units`（`{"units": 2}`，回话不变），走 MCP 的 socat，和 `/mcp`、`/llm` 同一个服务（`vm/host.rs` 现在是这个路由）；叫醒走 `maxx wake`。每个 VM 少一个 socket 和一个任务。`max-units.service` 排在 `max-mcp.socket` 后面。
-  - **提示词**：`max-wake` 换成 `maxx wake`；加一段：不用 Max 判断的话程序自己用 `maxx say` 说，写法和回话一样，一小时 30 条，标着"程序发的"；发图发文件用 `maxx send-image`、`send-file`；unit 和后台命令里只能用的那几个工具。
+  - **提示词**：`max-wake` 换成 `maxx wake`；加一段：不用 Max 判断的话程序自己用 `maxx say` 说，写法和回话一样，一小时 200 条（原来 30），标着"程序发的"；发图发文件用 `maxx send-image`、`send-file`；unit 和后台命令里只能用的那几个工具。
   - **测试**：runner 测试里不带 token 的 `maxx` 只列出程序的工具（有 `say`、`file`，没有 `show`、`mute_member`、`agent`），调用作为 `Signal::Call` 送出；带 token 的 `maxx wake` 也走这条路。actor 测试：`say` 分两条发，回执给了才返回编号，`raw` 带标记，下一个核心看到 `程序发的`。`vm-check` 的后台命令跑 `max-wake`（没有 token），`vm-check` 接 `Signal::Call` 回"vm-check 收到了"；`max-units` 经 `/units` 报 unit 数。
 - **第四步（做了，11-02）：`maxx events`。** owner 定的。第三步以后程序要对群里的消息做反应，只能轮询 `history`：11-02 Max 在 9 群写的 ping-responder 每 2 秒查一次，一分钟约 19 次 MCP 调用，每次都经会话 actor 查库，rmcp 每次记 3 行 info；还要用正则拆渲染出来的行，格式一改就坏，没有报错。
   - **会话 actor 发**：每一行入账后（`committed`，和派生数据 worker 同一处）有人订阅就送进一个 `broadcast`（256 行）。订阅是 `Signal::Subscribe` 经会话表交给这个群的 actor（没在跑就起一个，和程序调工具一样），actor 回 `Subscription`：place、当时的 `head`、接收端。actor 一次只处理一个事件，所以 `head` 之前的都在库里，之后的都会来，不重不漏。actor 停了（出错、重启）流就结束。
