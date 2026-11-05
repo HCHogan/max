@@ -5,7 +5,7 @@
 //! ignoring case. See "召回".
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::time::Duration;
 
@@ -310,13 +310,21 @@ fn rank(a: &Hit, b: &Hit) -> Ordering {
     b.score.total_cmp(&a.score).then(b.at.cmp(&a.at))
 }
 
-/// The best `limit` hits, one for each key.
+/// The best `limit` hits, one for each key. There are a few dozen at
+/// most, so the ones kept are looked through rather than keyed by copies
+/// of their text.
 fn choose(mut hits: Vec<Hit>, limit: usize) -> Vec<Hit> {
     hits.sort_by(rank);
-    let mut keys = HashSet::new();
-    hits.retain(|hit| keys.insert(hit.key.clone()));
-    hits.truncate(limit);
-    hits
+    let mut chosen: Vec<Hit> = Vec::with_capacity(limit.min(hits.len()));
+    for hit in hits {
+        if chosen.len() == limit {
+            break;
+        }
+        if chosen.iter().all(|kept| kept.key != hit.key) {
+            chosen.push(hit);
+        }
+    }
+    chosen
 }
 
 #[cfg(test)]

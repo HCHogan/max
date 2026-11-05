@@ -139,7 +139,7 @@ async fn history(context: &Context, args: Args) -> Result<Found, Failure> {
             let limit = args.limit.unwrap_or(read::DEFAULT);
             let newest = args.from.is_none();
             let (pages, next) = read::stretch(context, &filters, newest, limit).await?;
-            let mut read = read::paged(&pages, args.page)?;
+            let mut read = read::paged(pages, args.page)?;
             read.next = next.map(|next| next_args(&args, &next));
             Ok(Found::Read(read))
         }

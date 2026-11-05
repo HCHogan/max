@@ -57,7 +57,7 @@ pub(super) async fn around(
     } else {
         rows(context, id, before, after).await?
     };
-    paged(&pages, page)
+    paged(pages, page)
 }
 
 /// Up to `limit` rows of the stretch: its first, or with `newest` its
@@ -95,15 +95,16 @@ pub(super) async fn stretch(
 }
 
 /// The page asked for, the first by default, and how many there are.
-pub(super) fn paged(pages: &[String], page: Option<usize>) -> Result<Page, Failure> {
+pub(super) fn paged(mut pages: Vec<String>, page: Option<usize>) -> Result<Page, Failure> {
     let page = page.unwrap_or(1);
-    let Some(text) = page.checked_sub(1).and_then(|index| pages.get(index)) else {
-        return Err(Failure::new("no_page", format!("只有 {} 页", pages.len())));
+    let count = pages.len();
+    let Some(index) = page.checked_sub(1).filter(|index| *index < count) else {
+        return Err(Failure::new("no_page", format!("只有 {count} 页")));
     };
     Ok(Page {
-        text: text.clone(),
+        text: pages.swap_remove(index),
         page,
-        pages: pages.len(),
+        pages: count,
         next: None,
     })
 }
@@ -195,15 +196,20 @@ fn packed(text: &str, most: u32) -> Vec<String> {
     for line in text.lines() {
         let cost = tokens::count(line) + 1;
         if !page.is_empty() && size + cost > most {
-            pages.push(std::mem::take(&mut page).trim_end().to_owned());
+            pages.push(trimmed(std::mem::take(&mut page)));
             size = 0;
         }
         page.push_str(line);
         page.push('\n');
         size += cost;
     }
-    pages.push(page.trim_end().to_owned());
+    pages.push(trimmed(page));
     pages
+}
+
+fn trimmed(mut page: String) -> String {
+    page.truncate(page.trim_end().len());
+    page
 }
 
 #[cfg(test)]
