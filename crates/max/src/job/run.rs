@@ -213,7 +213,7 @@ impl Sink for Out {
             Stream::Out => {
                 if let Some(records) = records {
                     lines.push(data, |line| {
-                        let _ = records.send(line.to_vec());
+                        let _ = records.send(line);
                     });
                 }
             }

@@ -178,7 +178,7 @@ fn commands_are_a_line_each() {
 fn lines_are_cut_only_at_lf() {
     let mut lines = Lines::default();
     let mut seen = Vec::new();
-    let mut push = |data: &[u8]| lines.push(data, |line| seen.push(line.to_vec()));
+    let mut push = |data: &[u8]| lines.push(data, |line| seen.push(line));
     push(b"{\"a\":\"x\xe2\x80\xa8y\"}\r\n{\"b\"");
     push(b":1}\n\n");
     assert_eq!(
@@ -202,4 +202,12 @@ fn a_line_too_long_is_dropped() {
     once.extend_from_slice(b"y\nok\n");
     lines.push(&once, |line| seen.push(line.len()));
     assert_eq!(seen, [5, 2]);
+}
+
+#[test]
+fn a_record_of_no_interest_is_skipped_but_must_be_json() {
+    let update = r#"{"type":"message_update","message":{"role":"assistant","content":[{"type":"text","text":"你"}]}}"#;
+    assert_eq!(parse(update.as_bytes()).unwrap(), Record::Other);
+    assert_eq!(parse(b"[1]").ok(), None);
+    assert_eq!(parse(br#"{"type":"message_update","message":{"#).ok(), None);
 }

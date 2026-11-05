@@ -2,7 +2,11 @@
 //! a line on pi's stdin, a record a line on its stdout, each a JSON
 //! object, split only on LF. See "后台 agent" in docs/rust-rewrite.md.
 
+use std::borrow::Cow;
+use std::mem;
+
 use max_core::item::Usage;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::warn;
 
@@ -85,15 +89,36 @@ pub enum Record {
     Other,
 }
 
+/// A record's type, read before the rest of it.
+#[derive(Deserialize)]
+struct Head<'a> {
+    #[serde(borrow, rename = "type")]
+    kind: Option<Cow<'a, str>>,
+}
+
+/// The types of record [`parse`] reads. The others, a streamed message's
+/// every update among them, are skipped over without being built.
+const READ: [&str; 5] = [
+    "response",
+    "message_end",
+    "tool_execution_start",
+    "agent_settled",
+    "extension_ui_request",
+];
+
 pub fn parse(line: &[u8]) -> serde_json::Result<Record> {
-    let record: Value = serde_json::from_slice(line)?;
+    let head: Head = serde_json::from_slice(line)?;
+    if !head.kind.is_some_and(|kind| READ.contains(&&*kind)) {
+        return Ok(Record::Other);
+    }
+    let mut record: Value = serde_json::from_slice(line)?;
     let text = |value: &Value| value.as_str().map(str::to_owned);
     Ok(match record["type"].as_str() {
         Some("response") => Record::Response {
             id: record["id"].as_str().and_then(|id| id.parse().ok()),
             error: (record["success"] != true)
                 .then(|| text(&record["error"]).unwrap_or_else(|| "pi 没说为什么".to_owned())),
-            data: record["data"].clone(),
+            data: record["data"].take(),
         },
         Some("message_end") if record["message"]["role"] == "assistant" => {
             let message = &record["message"];
@@ -152,15 +177,25 @@ pub struct Lines {
 
 impl Lines {
     /// Hands each line `data` completes to `line`, without its LF or CR.
-    pub fn push(&mut self, mut data: &[u8], mut line: impl FnMut(&[u8])) {
+    /// A line that came whole is copied once, out of `data`; one that came
+    /// in pieces is the buffer they were gathered in.
+    pub fn push(&mut self, mut data: &[u8], mut line: impl FnMut(Vec<u8>)) {
         while let Some(end) = data.iter().position(|&byte| byte == b'\n') {
             let (head, rest) = data.split_at(end);
             if self.dropping {
             } else if self.partial.len() + head.len() > LONGEST {
                 warn!("dropped a record of pi's longer than {LONGEST} bytes");
             } else {
-                self.partial.extend_from_slice(head);
-                line(self.partial.strip_suffix(b"\r").unwrap_or(&self.partial));
+                let mut whole = if self.partial.is_empty() {
+                    head.to_vec()
+                } else {
+                    self.partial.extend_from_slice(head);
+                    mem::take(&mut self.partial)
+                };
+                if whole.last() == Some(&b'\r') {
+                    whole.pop();
+                }
+                line(whole);
             }
             self.partial.clear();
             self.dropping = false;
