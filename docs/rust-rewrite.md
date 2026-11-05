@@ -1212,7 +1212,7 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 - 导入写了旧 id 的表，最后要把它们的 identity 序列调到最大值之后（`setval`），否则新行会撞旧 id。
 - 规模：2026-10-28 有 293,848 条消息、605 个有身份的人；库 3.3 GB，内容库 3.4 万个文件、26 GB。导入是分钟级的事。向量都导，见上面的媒体一条。
 - maxx 自己的库（测试群的 113 条消息、3 段摘要）导入时整个重建，不留（2026-10-29 owner 定）：它的 id 和要保留的旧 id 撞。测试群导入后重新 `/bind`，导入前 `/link` 过的人导入后再发一次。
-- 工具是单独的 crate `max-import`：`import` 在一个事务里导进空库，连旧库只读；`pictures` 再补给模型的图，跑过的跳过。演练就是导进一个临时库。上线跑一段时间后删掉。旧库和 `/var/lib/max` 等 owner 说了再删。`qq_legacy` 的行和合并是数据，留着。
+- 工具是单独的 crate `max-import`：`import` 在一个事务里导进空库，连旧库只读；`pictures` 再补给模型的图，跑过的跳过。演练就是导进一个临时库。上线跑一段时间后删掉：2026-11-05 删了，`import`、`pictures`、`captions`、`vectors` 都跑过了，按头像接人不用它；要看它，在 `7b5d83d8` 及以前的提交里。以后导自动化、lingo、Destiny 时另写。旧库和 `/var/lib/max` 等 owner 说了再删。`qq_legacy` 的行和合并是数据，留着。
 - 上线步骤（2026-10-29 定）：
   1. 记下 bot 的 openid（现在的库里 Max 端点的 `self_identity_id`），停 maxx。
   2. root 把旧表和节点用到的文件从 `/var/lib/max/media/objects` 用 `cp --reflink` 拷进 `/var/lib/maxx/media/objects`，属主 `maxx`，只读。
@@ -1755,7 +1755,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 | `max-db` | schema、迁移、全部 sqlx 查询和行类型 | 编译时间；`.sqlx` 离线元数据集中在一处 |
 | `max-llm` | Responses 和 Chat 适配、流式解析、推理透传、多模态降级 | 协议细节都关在这里，用录下来的响应单独测 |
 | `max` | 二进制：配置、CLI、services、会话 actor 和 I/O 任务、平台 sender、QQ 适配、投影、lingo、worker 框架、VM、MCP 服务、工具、命令 | 其余都是业务，放一起 |
-| `max-import` | 二进制：旧库导入 | 旧 schema 的代码只在这里，切换后整个删掉 |
+| ~~`max-import`~~ | 二进制：旧库导入 | 旧 schema 的代码只在这里；2026-11-05 删掉，见[导入](#导入) |
 - 依赖只能往下：`qqbot` 和 `max-core` 在底层，互不依赖；`max-db`、`max-llm` 依赖 `max-core`；`max` 依赖全部。QQ 事件到 Node 的映射在 `max` 里，不在 `qqbot`。
 - `max-core` 的依赖白名单写进 CI：`cargo tree -p max-core -e normal` 里只能出现那四个库。CI 再单独跑一次 `cargo check -p max-core`：只构建这一个包时，chrono 的特性不会和 `max` 合并，核心里调 `Utc::now` 就编不过。
 - intent 的状态机和拼分类提示词、解析输出在 `max-core`；分类任务（读库、调小模型）是 `max` 里的 I/O 任务。派生数据 worker 各一个模块，比如 `max/src/recall.rs`；它们的纯逻辑（提示词、校验）放 `max-core`，不起库就能测。

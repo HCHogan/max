@@ -22,8 +22,6 @@ thiserror = "2"
 max-core = { path = "crates/max-core" }
 max-db = { path = "crates/max-db" }
 max-llm = { path = "crates/max-llm" }
-# max-import makes the model's copies of imported pictures as max does.
-max = { path = "crates/max" }
 # QQ's official bot API, in a repository of its own since 2026-11-03;
 # a new commit there is taken by changing rev here.
 qqbot = { git = "https://github.com/HCHogan/qqbot", rev = "9a8356fef0d3722b57551f08fd33f85fd43380c2" }
