@@ -148,7 +148,9 @@ pub async fn inbound(
             at: inbound.at,
             content,
             turn: None,
-            raw: inbound.raw,
+            // Only rows of Max's account say who said them; the payload
+            // stays in the ledger, as a read gives it.
+            raw: serde_json::Value::Null,
         }),
         sender,
         command,
@@ -206,9 +208,9 @@ fn words(text: &str) -> String {
     out
 }
 
-/// The key in the raw payload of a row of Max's account that Max didn't
-/// say: [`PROGRAM`] or [`HOST`]. Max's own rows have none.
-pub const SAID_BY: &str = "said_by";
+/// Who said a row of Max's account that Max didn't, under
+/// [`SAID_BY`](ledger::SAID_BY): [`PROGRAM`] or [`HOST`]. Max's own rows
+/// have none.
 pub const PROGRAM: &str = "program";
 pub const HOST: &str = "host";
 
@@ -226,7 +228,7 @@ pub enum By {
 
 /// Who said `message`, a row of Max's account.
 pub fn by(message: &Message) -> By {
-    match message.raw.get(SAID_BY).and_then(|by| by.as_str()) {
+    match message.raw.get(ledger::SAID_BY).and_then(|by| by.as_str()) {
         Some(PROGRAM) => By::Program,
         Some(HOST) => By::Host,
         _ => By::Max,
@@ -325,8 +327,8 @@ pub async fn said(
     .content(&content);
     let raw = match by {
         By::Max => serde_json::Value::Null,
-        By::Program => serde_json::json!({ SAID_BY: PROGRAM }),
-        By::Host => serde_json::json!({ SAID_BY: HOST }),
+        By::Program => serde_json::json!({ ledger::SAID_BY: PROGRAM }),
+        By::Host => serde_json::json!({ ledger::SAID_BY: HOST }),
     };
     let message = mine(&mut tx, place, content, &rendered, raw, turn, segment, now).await?;
     for (ordinal, sha256) in (0..).zip(&files) {

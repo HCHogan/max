@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,\n               m.sender_role, m.sent_at, m.kind, m.event, m.reply_to_id, m.target_id,\n               m.nodes as \"nodes: Json<Vec<Node>>\", m.raw, m.turn_id, d.status as \"delivery?\"\n        from messages m\n        left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id\n        where m.conversation_id = $1 and m.id > $2 and m.id <= $3\n        order by m.id\n        ",
+  "query": "\n        select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,\n               m.sender_role, m.sent_at, m.kind, m.event, m.reply_to_id, m.target_id,\n               m.nodes as \"nodes: Json<Vec<Node>>\", m.raw ->> 'said_by' as said_by, m.turn_id,\n               d.status as \"delivery?\"\n        from messages m\n        left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id\n        where m.conversation_id = $1 and m.id < $2\n        order by m.id desc\n        limit $3\n        ",
   "describe": {
     "columns": [
       {
@@ -137,14 +137,9 @@
       },
       {
         "ordinal": 12,
-        "name": "raw",
-        "type_info": "Jsonb",
-        "origin": {
-          "Table": {
-            "table": "messages",
-            "name": "raw"
-          }
-        }
+        "name": "said_by",
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 13,
@@ -189,10 +184,10 @@
       true,
       true,
       false,
-      false,
+      null,
       true,
-      true
+      false
     ]
   },
-  "hash": "686618a5d215986231c297060469afa5a6daddc3265020ea44f6792da409217c"
+  "hash": "1ba2377c84ccde25449c31763240e8631ed65d14ca37578d456df97c18c62a43"
 }

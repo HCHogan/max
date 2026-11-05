@@ -60,6 +60,11 @@ pub enum Delivery {
     Unknown,
 }
 
+/// The key in a row's `raw` that says who said a row of Max's account
+/// that Max didn't. It is all that's read back of `raw`: the rest is the
+/// platform's payload, kept for the record.
+pub const SAID_BY: &str = "said_by";
+
 /// The columns a `Content` spreads over.
 struct Columns<'a> {
     kind: &'static str,
@@ -189,7 +194,7 @@ struct Raw {
     reply_to_id: Option<i64>,
     target_id: Option<i64>,
     nodes: Json<Vec<Node>>,
-    raw: serde_json::Value,
+    said_by: Option<String>,
     turn_id: Option<i64>,
     delivery: Option<String>,
 }
@@ -220,7 +225,10 @@ impl Raw {
                     self.nodes.0,
                 )?,
                 turn: self.turn_id.map(TurnId),
-                raw: self.raw,
+                raw: self.said_by.map_or(
+                    serde_json::Value::Null,
+                    |by| serde_json::json!({ SAID_BY: by }),
+                ),
             },
             endpoint: EndpointId(self.endpoint_id),
             command: self.kind == "command",
@@ -241,7 +249,8 @@ pub async fn rows(
         r#"
         select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,
                m.sender_role, m.sent_at, m.kind, m.event, m.reply_to_id, m.target_id,
-               m.nodes as "nodes: Json<Vec<Node>>", m.raw, m.turn_id, d.status as "delivery?"
+               m.nodes as "nodes: Json<Vec<Node>>", m.raw ->> 'said_by' as said_by, m.turn_id,
+               d.status as "delivery?"
         from messages m
         left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id
         where m.conversation_id = $1 and m.id > $2 and m.id <= $3
@@ -273,7 +282,8 @@ pub async fn recent(
         r#"
         select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,
                m.sender_role, m.sent_at, m.kind, m.event, m.reply_to_id, m.target_id,
-               m.nodes as "nodes: Json<Vec<Node>>", m.raw, m.turn_id, d.status as "delivery?"
+               m.nodes as "nodes: Json<Vec<Node>>", m.raw ->> 'said_by' as said_by, m.turn_id,
+               d.status as "delivery?"
         from messages m
         left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id
         where m.conversation_id = $1 and m.id < $2
@@ -377,7 +387,8 @@ pub async fn picked(
         r#"
         select m.id, m.conversation_id, m.endpoint_id, m.sender_identity_id, m.sender_name,
                m.sender_role, m.sent_at, m.kind, m.event, m.reply_to_id, m.target_id,
-               m.nodes as "nodes: Json<Vec<Node>>", m.raw, m.turn_id, d.status as "delivery?"
+               m.nodes as "nodes: Json<Vec<Node>>", m.raw ->> 'said_by' as said_by, m.turn_id,
+               d.status as "delivery?"
         from messages m
         left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id
         where m.conversation_id = $1 and m.id = any($2)

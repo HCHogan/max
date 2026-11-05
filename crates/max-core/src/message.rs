@@ -33,6 +33,9 @@ pub struct Message {
     pub content: Content,
     /// For what Max said: the turn that said it.
     pub turn: Option<TurnId>,
+    /// What is read of the platform's payload, the ledger's `raw`: who
+    /// said a row of Max's account that Max didn't, else null. The rest
+    /// stays in the ledger.
     pub raw: serde_json::Value,
 }
 

@@ -46,7 +46,8 @@ async fn every_kind_of_row_reads_back_as_written(pool: PgPool) -> sqlx::Result<(
     assert_eq!(read, contents.iter().collect::<Vec<_>>());
     let row = &rows[0];
     assert_eq!(row.message.sender, xiaoming);
-    assert_eq!(row.message.raw, json!({ "message_id": 1 }));
+    // Of the payload, only who said a row of Max's account is read back.
+    assert_eq!(row.message.raw, serde_json::Value::Null);
     assert_eq!(
         (row.message.at, row.command, row.delivery),
         (at(1), false, None)
