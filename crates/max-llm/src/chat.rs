@@ -549,25 +549,29 @@ impl Parser {
             Think::Undecided(_) | Think::Aloud => None,
         };
         let mut items = Vec::new();
+        let inlined = inline.is_some();
         let text = REASONING
             .iter()
             .find_map(|field| self.fields.get(*field)?.as_str())
             .map(str::to_owned)
-            .or(inline.clone())
-            .map(|text| text.trim().to_owned())
+            .or(inline)
+            .map(|mut text| {
+                text.truncate(text.trim_end().len());
+                trim_start(text)
+            })
             .filter(|text| !text.is_empty());
         if text.is_some() || !self.fields.is_empty() {
             let mut raw = Map::new();
             if !self.fields.is_empty() {
                 raw.insert("message".into(), Value::Object(self.fields));
             }
-            if inline.is_some() {
+            if inlined {
                 raw.insert("inline".into(), json!(true));
             }
             items.push(item(ItemKind::Reasoning { text }, Some(Value::Object(raw))));
         }
         if !self.text.is_empty() {
-            let text = self.text.trim_start().to_owned();
+            let text = trim_start(self.text);
             items.push(item(ItemKind::Assistant { text }, None));
         }
         for (index, call) in self.calls {
@@ -678,6 +682,12 @@ fn aloud(start: &str) -> Option<bool> {
     }
     let started = ALOUD.iter().any(|aloud| aloud.starts_with(&heading));
     (ended || !started).then_some(false)
+}
+
+/// `text` without its leading whitespace, in place.
+fn trim_start(mut text: String) -> String {
+    text.drain(..text.len() - text.trim_start().len());
+    text
 }
 
 /// A delta field into what has accumulated: strings and arrays grow,

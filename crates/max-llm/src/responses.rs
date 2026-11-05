@@ -241,14 +241,14 @@ impl Parser {
 
     /// One event: the text in it to be said.
     pub fn event(&mut self, data: &str) -> Result<Vec<String>, Error> {
-        let event: Value = serde_json::from_str(data).map_err(Error::malformed)?;
+        let mut event: Value = serde_json::from_str(data).map_err(Error::malformed)?;
         let text = |field: &str| event[field].as_str().unwrap_or_default().to_owned();
         let kind = event["type"].as_str().unwrap_or_default();
         self.started |= kind.starts_with("response.output_item.");
         match kind {
             "response.output_text.delta" => Ok(vec![text("delta")]),
             "response.completed" => {
-                self.output = Some(self.complete(&event["response"]));
+                self.output = Some(self.complete(event["response"].take()));
                 Ok(Vec::new())
             }
             "response.incomplete" => {
@@ -268,19 +268,20 @@ impl Parser {
         self.output.ok_or(Error::Truncated)
     }
 
-    fn complete(&self, response: &Value) -> ModelOutput {
+    fn complete(&self, mut response: Value) -> ModelOutput {
         let usage = usage(&response["usage"]);
-        let mut items: Vec<Item> = response["output"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-            .iter()
+        let output = match response["output"].take() {
+            Value::Array(output) => output,
+            _ => Vec::new(),
+        };
+        let mut items: Vec<Item> = output
+            .into_iter()
             .filter_map(|raw| {
-                let kind = kind(raw)?;
+                let kind = kind(&raw)?;
                 Some(Item {
                     kind,
                     source: Some(self.model.clone()),
-                    opaque: Some(raw.clone()),
+                    opaque: Some(raw),
                     tokens: 0,
                 })
             })
