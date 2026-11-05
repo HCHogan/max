@@ -5,7 +5,7 @@
 use max_core::item::Item;
 use tokio::sync::oneshot;
 
-use super::jobs::fitted;
+use super::jobs::excerpt;
 use super::*;
 use max_core::limits::HOUR;
 
@@ -40,7 +40,11 @@ fn shown(text: &str, count: usize, single: u32) -> Item {
         0 | 1 => format!("[max-wake] {}", text.trim()),
         _ => format!("[max-wake] （这一小时第 {count} 次）{}", text.trim()),
     };
-    let text = fitted(&text, single);
+    let tokens = tokens::count(&text);
+    if tokens <= single {
+        return Item::new(ItemKind::user(text), tokens);
+    }
+    let text = excerpt(&text);
     let tokens = tokens::count(&text);
     Item::new(ItemKind::user(text), tokens)
 }

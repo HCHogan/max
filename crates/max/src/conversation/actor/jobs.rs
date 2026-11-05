@@ -3,7 +3,9 @@
 //! Max when they end, and agents when they ask something.
 //! See "后台 agent" and "后台命令" in docs/rust-rewrite.md.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt::Write;
 use std::sync::{Mutex, PoisonError};
 
 use max_core::item::Item;
@@ -350,7 +352,10 @@ fn report(job: u32, title: &str, finished: &Finished, single: u32) -> Item {
         .map(str::trim)
         .filter(|words| !words.is_empty());
     match words {
-        Some(words) => text += &format!("\n{}", fitted(words, single)),
+        Some(words) => {
+            text.push('\n');
+            text.push_str(&fitted(words, single));
+        }
         // pi's session is there too, as JSONL.
         None if !matches!(finished.ending.how, How::Failed(_)) => {
             text += "\n（它没留下报告；做的过程在 /work/.max/jobs 里它的会话记录）";
@@ -358,7 +363,7 @@ fn report(job: u32, title: &str, finished: &Finished, single: u32) -> Item {
         None => {}
     }
     if let Some(file) = &finished.file {
-        text += &format!("\n（全文在 {file}）");
+        let _ = write!(text, "\n（全文在 {file}）");
     }
     let tokens = tokens::count(&text);
     Item::new(ItemKind::user(text), tokens)
@@ -378,13 +383,21 @@ fn asked(job: u32, title: &str, question: &str, single: u32) -> Item {
 }
 
 /// `words`, or their beginning if they take over `single` tokens.
-pub(super) fn fitted(words: &str, single: u32) -> String {
+pub(super) fn fitted(words: &str, single: u32) -> Cow<'_, str> {
     if tokens::count(words) > single {
-        let excerpt: String = words.chars().take(EXCERPT_CHARS).collect();
-        format!("{excerpt}…（太长，只有开头）")
+        excerpt(words).into()
     } else {
-        words.to_owned()
+        words.into()
     }
+}
+
+/// The beginning of `words`, saying so.
+pub(super) fn excerpt(words: &str) -> String {
+    let end = words
+        .char_indices()
+        .nth(EXCERPT_CHARS)
+        .map_or(words.len(), |(at, _)| at);
+    format!("{}…（太长，只有开头）", &words[..end])
 }
 
 #[cfg(test)]
