@@ -2,6 +2,7 @@ use max_core::intent::Reason;
 use max_core::item::{Item, ItemKind, ModelTag, Protocol};
 use max_core::run::{Context, Run, RunSpec, Wake};
 use sqlx::PgPool;
+use std::sync::Arc;
 
 use super::*;
 use crate::platform::Endpoint;
@@ -26,12 +27,14 @@ fn run() -> Run {
         max_output: None,
     };
     let base = Context {
-        items: vec![Item::new(
+        items: [Item::new(
             ItemKind::System {
                 text: "人设".into(),
             },
             10,
-        )],
+        )]
+        .map(Arc::new)
+        .into(),
         roster: Default::default(),
     };
     let mut run = Run::new(spec, base, Vec::new());

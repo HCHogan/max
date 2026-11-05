@@ -18,6 +18,7 @@
 use std::collections::BTreeSet;
 use std::env::var;
 use std::path::Path;
+use std::sync::Arc;
 
 use max_core::ids::CallId;
 use max_core::item::{Item, ItemKind, ModelOutput, ModelTag, Protocol, ToolOutput};
@@ -48,7 +49,7 @@ async fn main() -> Result<(), Failure> {
     };
     let mut request = Request {
         model,
-        items: vec![
+        items: [
             Item::new(
                 ItemKind::System {
                     text: "你是 Max，群聊里的助手。要算数时用 run_code 工具，不要心算。".into(),
@@ -56,7 +57,9 @@ async fn main() -> Result<(), Failure> {
                 30,
             ),
             Item::new(ItemKind::user("[1] 小明：2 的 64 次方是多少？"), 20),
-        ],
+        ]
+        .map(Arc::new)
+        .into(),
         tools: &*TOOLS,
         max_output: Some(4000),
         roster: BTreeSet::new(),
@@ -68,16 +71,18 @@ async fn main() -> Result<(), Failure> {
         &Path::new(dir).join(format!("{name}-1.sse")),
     )
     .await?;
-    request.items.extend(first.items.iter().cloned());
+    request
+        .items
+        .extend(first.items.iter().cloned().map(Arc::new));
     for item in &first.items {
         if let ItemKind::ToolCall(call) = &item.kind {
-            request.items.push(Item::new(
+            request.items.push(Arc::new(Item::new(
                 ItemKind::ToolResult {
                     call: CallId(call.id.0.clone()),
                     output: ToolOutput::text("18446744073709551616", false, 8),
                 },
                 8,
-            ));
+            )));
         }
     }
     step(

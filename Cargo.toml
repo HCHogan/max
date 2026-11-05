@@ -14,7 +14,7 @@ publish = false
 # max-core may use only these four; see the flake's max-core-deps check.
 # The clock stays off so that the core can't read the time.
 chrono = { version = "0.4", default-features = false, features = ["alloc", "serde"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 

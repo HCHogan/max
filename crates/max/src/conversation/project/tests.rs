@@ -99,7 +99,7 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
     let (context, inputs) = projection.base(&mut conn, d, &first).await.unwrap();
     assert_eq!(inputs, [Input::Wake(direct(c))]);
     assert_eq!(context.roster, BTreeSet::from([max, xiaoming, xiaohong]));
-    let texts: Vec<&str> = context.items.iter().map(user_text).collect();
+    let texts: Vec<&str> = context.items.iter().map(|item| user_text(item)).collect();
     assert_eq!(
         texts,
         [

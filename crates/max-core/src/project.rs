@@ -11,6 +11,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt::Write;
+use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset, Utc};
 
@@ -222,11 +223,14 @@ pub fn context(
     count: impl Fn(&str) -> u32,
 ) -> Context {
     let tokens = count(&system);
-    let mut items = vec![Item::new(ItemKind::System { text: system }, tokens)];
+    let mut items = vec![Arc::new(Item::new(
+        ItemKind::System { text: system },
+        tokens,
+    ))];
     for text in blocks {
         if !text.trim().is_empty() {
             let tokens = count(&text);
-            items.push(Item::new(ItemKind::user(text), tokens));
+            items.push(Arc::new(Item::new(ItemKind::user(text), tokens)));
         }
     }
     Context { items, roster }

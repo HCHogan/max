@@ -1,6 +1,7 @@
 use super::*;
 use crate::item::{Image, Protocol, ToolCall, Usage};
 use crate::message::MediaKind;
+use std::sync::Arc;
 
 fn spec(window: u32, max_output: Option<u32>) -> RunSpec {
     RunSpec {
@@ -15,12 +16,14 @@ fn spec(window: u32, max_output: Option<u32>) -> RunSpec {
 
 fn base(tokens: u32) -> Context {
     Context {
-        items: vec![Item::new(
+        items: [Item::new(
             ItemKind::System {
                 text: "人设".into(),
             },
             tokens,
-        )],
+        )]
+        .map(Arc::new)
+        .into(),
         roster: [PrincipalId(12)].into(),
     }
 }
@@ -311,7 +314,7 @@ fn the_record_is_what_the_model_saw_and_said() {
     run.input(messages(2, 5)).unwrap();
     let request = call_model(&mut run);
     let record = run.record();
-    let shown: Vec<&Item> = record.base.items.iter().chain(record.transcript).collect();
+    let shown: Vec<&Arc<Item>> = record.base.items.iter().chain(record.transcript).collect();
     assert_eq!(shown, request.items.iter().collect::<Vec<_>>());
     // The model's output is in it once.
     run.model_output(says("好")).unwrap();

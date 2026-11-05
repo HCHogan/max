@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use max_core::ids::MessageId;
 use max_core::item::{Image, Part, Protocol, ToolOutput};
@@ -48,7 +49,7 @@ fn a_request() {
     let signed = json!({ "extra_content": { "google": { "thought_signature": "sig" } } });
     let request = Request {
         model: deepseek.clone(),
-        items: vec![
+        items: [
             Item::new(
                 ItemKind::System {
                     text: "你是 Max。".into(),
@@ -82,7 +83,9 @@ fn a_request() {
                 },
                 3,
             ),
-        ],
+        ]
+        .map(Arc::new)
+        .into(),
         tools: &*TOOLS,
         max_output: None,
         roster: BTreeSet::new(),
@@ -119,7 +122,7 @@ fn signatures_and_inline_thinking_go_back_to_their_model() {
     let signed = json!({ "extra_content": { "google": { "thought_signature": "sig" } } });
     let request = Request {
         model: flash.clone(),
-        items: vec![
+        items: [
             from(
                 &flash,
                 ItemKind::Reasoning {
@@ -128,7 +131,9 @@ fn signatures_and_inline_thinking_go_back_to_their_model() {
                 Some(json!({ "inline": true })),
             ),
             from(&flash, ItemKind::ToolCall(call("c1", "{}")), Some(signed)),
-        ],
+        ]
+        .map(Arc::new)
+        .into(),
         tools: &[],
         max_output: Some(100),
         roster: BTreeSet::new(),
@@ -165,7 +170,9 @@ fn with_pictures(model: ModelTag) -> (Request, Pictures) {
     };
     let request = Request {
         model,
-        items: vec![Item::new(unread, 1), Item::new(row, 1)],
+        items: [Item::new(unread, 1), Item::new(row, 1)]
+            .map(Arc::new)
+            .into(),
         tools: &[],
         max_output: None,
         roster: BTreeSet::new(),
@@ -189,7 +196,9 @@ fn pictures_follow_their_handles() {
 
     // A breakpoint ends the whole block, pictures and all.
     let mut request = request;
-    request.items.push(Item::new(ItemKind::user("后来"), 1));
+    request
+        .items
+        .push(Item::new(ItemKind::user("后来"), 1).into());
     let options = Options {
         cache_breakpoints: true,
         ..Options::default()
@@ -219,7 +228,7 @@ fn pictures_sit_after_their_rows() {
     };
     let request = Request {
         model: model("qwen3.8-27b"),
-        items: vec![Item::new(block, 1)],
+        items: [Item::new(block, 1)].map(Arc::new).into(),
         tools: &[],
         max_output: None,
         roster: BTreeSet::new(),
@@ -258,7 +267,7 @@ fn cache_breakpoints_end_the_stable_blocks() {
     let user = |text: &str| Item::new(ItemKind::user(text), 1);
     let request = Request {
         model: qwen.clone(),
-        items: vec![
+        items: [
             Item::new(
                 ItemKind::System {
                     text: "你是 Max。".into(),
@@ -271,7 +280,9 @@ fn cache_breakpoints_end_the_stable_blocks() {
             from(&qwen, ItemKind::ToolCall(call("c1", "{}")), None),
             result("c1"),
             user("[新消息]"),
-        ],
+        ]
+        .map(Arc::new)
+        .into(),
         tools: &[],
         max_output: None,
         roster: BTreeSet::new(),
@@ -571,13 +582,15 @@ fn programs_pictures_follow_their_results() {
     let qwen = model("qwen3.8-27b");
     let request = Request {
         model: qwen.clone(),
-        items: vec![
+        items: [
             from(&qwen, ItemKind::ToolCall(call("call_1", "{}")), None),
             from(&qwen, ItemKind::ToolCall(call("call_2", "{}")), None),
             shown("call_1"),
             shown("call_2"),
             Item::new(ItemKind::user("后来"), 1),
-        ],
+        ]
+        .map(Arc::new)
+        .into(),
         tools: &[],
         max_output: None,
         roster: BTreeSet::new(),
@@ -643,11 +656,13 @@ fn programs_videos_follow_their_results() {
     let gemini = model("gemini-3.8-flash-high");
     let request = Request {
         model: gemini.clone(),
-        items: vec![
+        items: [
             from(&gemini, ItemKind::ToolCall(call("call_1", "{}")), None),
             watched("call_1"),
             Item::new(ItemKind::user("后来"), 1),
-        ],
+        ]
+        .map(Arc::new)
+        .into(),
         tools: &[],
         max_output: None,
         roster: BTreeSet::new(),

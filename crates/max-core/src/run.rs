@@ -7,6 +7,7 @@
 //! inputs that led there aren't kept, and nothing rebuilds a run from them.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -40,10 +41,11 @@ impl RunSpec {
 }
 
 /// Projected once before the core starts, then fixed. The first inputs are
-/// already rendered in it.
+/// already rendered in it. Its items are shared, as the transcript's are,
+/// with every request that shows them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Context {
-    pub items: Vec<Item>,
+    pub items: Vec<Arc<Item>>,
     /// The people its roster shows; see [`Segmenter`].
     pub roster: BTreeSet<PrincipalId>,
 }
@@ -114,7 +116,7 @@ pub enum Step {
 #[derive(Debug)]
 pub struct Request {
     pub model: ModelTag,
-    pub items: Vec<Item>,
+    pub items: Vec<Arc<Item>>,
     pub tools: &'static [ToolSpec],
     pub max_output: Option<u32>,
     /// For the segmenter in the model call.
@@ -139,7 +141,7 @@ pub enum Rejected {
 pub struct RunRecord<'a> {
     pub spec: &'a RunSpec,
     pub base: &'a Context,
-    pub transcript: &'a [Item],
+    pub transcript: &'a [Arc<Item>],
 }
 
 /// Tokens counted for a result the core writes itself. They are short, and
@@ -175,7 +177,7 @@ pub struct Run {
     spec: RunSpec,
     base: Context,
     base_tokens: u32,
-    transcript: Vec<Item>,
+    transcript: Vec<Arc<Item>>,
     /// Inputs since the last model call; the next one shows them.
     pending: Vec<Input>,
     phase: Phase,
@@ -259,13 +261,13 @@ impl Run {
                 self.show_pending();
                 if !self.warned && self.near_limit() {
                     self.warned = true;
-                    self.transcript
-                        .push(Item::new(ItemKind::user(WARNING), WARNING_TOKENS));
+                    self.push(Item::new(ItemKind::user(WARNING), WARNING_TOKENS));
                 }
                 self.round += 1;
                 self.phase = Phase::Calling;
                 Step::CallModel(Request {
                     model: self.spec.model.clone(),
+                    // Shared: each call copies pointers, not the context.
                     items: self
                         .base
                         .items
@@ -325,7 +327,7 @@ impl Run {
                 });
             }
         }
-        self.transcript.extend(out.items);
+        self.transcript.extend(out.items.into_iter().map(Arc::new));
         let malformed = !errors.is_empty();
         for (call, error) in errors {
             self.synthesize(call, error);
@@ -358,8 +360,7 @@ impl Run {
             self.quiet = 0;
         }
         if !text.is_empty() {
-            self.transcript
-                .push(Item::new(ItemKind::Assistant { text }, tokens));
+            self.push(Item::new(ItemKind::Assistant { text }, tokens));
         }
         self.phase = Phase::ModelDue;
         Ok(())
@@ -389,8 +390,7 @@ impl Run {
             self.quiet = 0;
         }
         let tokens = output.tokens;
-        self.transcript
-            .push(Item::new(ItemKind::ToolResult { call, output }, tokens));
+        self.push(Item::new(ItemKind::ToolResult { call, output }, tokens));
         Ok(())
     }
 
@@ -533,18 +533,21 @@ impl Run {
                 }
             }
             let tokens = items.iter().map(|item| item.tokens).sum();
-            self.transcript
-                .push(Item::new(ItemKind::User { text, images }, tokens));
+            self.push(Item::new(ItemKind::User { text, images }, tokens));
         }
         self.pending.clear();
     }
 
     fn synthesize(&mut self, call: CallId, error: String) {
         let output = ToolOutput::text(error, true, SYNTHESIZED_TOKENS);
-        self.transcript.push(Item::new(
+        self.push(Item::new(
             ItemKind::ToolResult { call, output },
             SYNTHESIZED_TOKENS,
         ));
+    }
+
+    fn push(&mut self, item: Item) {
+        self.transcript.push(Arc::new(item));
     }
 
     fn trigger_pending(&self) -> bool {

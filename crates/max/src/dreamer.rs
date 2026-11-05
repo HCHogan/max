@@ -4,6 +4,7 @@
 //! keeps the file under its cap. See "记忆" in docs/rust-rewrite.md.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, FixedOffset, NaiveTime, TimeDelta, TimeZone, Utc};
@@ -98,7 +99,7 @@ impl Dreamer {
         let text = format!("{}\n{old}", now_line(Utc::now(), self.offset));
         let request = Request {
             model: self.chosen.tag.clone(),
-            items: vec![
+            items: [
                 Item::new(ItemKind::System { text: tidy() }, 0),
                 Item::new(
                     ItemKind::User {
@@ -107,7 +108,9 @@ impl Dreamer {
                     },
                     0,
                 ),
-            ],
+            ]
+            .map(Arc::new)
+            .into(),
             tools: &[],
             max_output: self.chosen.max_output,
             roster: Default::default(),

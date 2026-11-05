@@ -4,6 +4,7 @@
 //! when the tail is cut.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset, Utc};
 use max_core::ids::{IdentityId, MessageId, PrincipalId};
@@ -163,7 +164,8 @@ impl Projection<'_> {
         // the volatile block, each after its row.
         if let Some(volatile) = context.items.last_mut() {
             let messages = triggers.iter().chain(&quoted).map(|row| &row.message);
-            project::attach(volatile, messages);
+            // Not shared yet, so this doesn't copy it.
+            project::attach(Arc::make_mut(volatile), messages);
         }
         let first = wakes.iter().cloned().map(Input::Wake).collect();
         Ok((context, first))

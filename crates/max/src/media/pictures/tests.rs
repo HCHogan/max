@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::io::Cursor;
+use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::TimeDelta;
@@ -83,13 +84,15 @@ async fn pictures_are_read_and_new_ones_waited_for(pool: PgPool) {
             protocol: Protocol::Responses,
             model: "gpt-5.6-luna".into(),
         },
-        items: vec![Item::new(
+        items: [Item::new(
             ItemKind::User {
                 text: "看".into(),
                 images,
             },
             1,
-        )],
+        )]
+        .map(Arc::new)
+        .into(),
         tools: &[],
         max_output: None,
         roster: BTreeSet::new(),
@@ -161,7 +164,7 @@ async fn every_picture_programs_showed_is_read(pool: PgPool) {
             protocol: Protocol::Chat,
             model: "qwen3.8-27b".into(),
         },
-        items: vec![result(&stored[..5]), result(&later)],
+        items: [result(&stored[..5]), result(&later)].map(Arc::new).into(),
         tools: &[],
         max_output: None,
         roster: BTreeSet::new(),
@@ -215,10 +218,12 @@ async fn the_newest_videos_programs_showed_are_read(pool: PgPool) {
             protocol: Protocol::Chat,
             model: "gemini-3.8-flash-high".into(),
         },
-        items: vec![
+        items: [
             result(&[(0, 300), (1, 200)]),
             result(&[(3, 100), (2, 250), (3, 100)]),
-        ],
+        ]
+        .map(Arc::new)
+        .into(),
         tools: &[],
         max_output: None,
         roster: BTreeSet::new(),

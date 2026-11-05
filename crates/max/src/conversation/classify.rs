@@ -107,10 +107,12 @@ async fn run(job: &Job) -> Result<Option<Verdict>> {
     );
     let request = Request {
         model: job.chosen.tag.clone(),
-        items: vec![
+        items: [
             Item::new(ItemKind::System { text: system }, 0),
             Item::new(ItemKind::user(user), 0),
-        ],
+        ]
+        .map(Arc::new)
+        .into(),
         tools: &[],
         max_output: Some(MAX_OUTPUT),
         roster: Default::default(),

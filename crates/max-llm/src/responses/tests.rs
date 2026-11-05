@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use max_core::ids::MessageId;
 use max_core::item::{Image, Part, Protocol, ToolOutput};
@@ -52,7 +53,9 @@ fn with_pictures(model: ModelTag) -> (Request, Pictures) {
     };
     let request = Request {
         model,
-        items: vec![Item::new(unread, 1), Item::new(row, 1)],
+        items: [Item::new(unread, 1), Item::new(row, 1)]
+            .map(Arc::new)
+            .into(),
         tools: &[],
         max_output: None,
         roster: BTreeSet::new(),
@@ -93,7 +96,7 @@ fn a_request() {
     });
     let request = Request {
         model: luna(),
-        items: vec![
+        items: [
             Item::new(
                 ItemKind::System {
                     text: "你是 Max。".into(),
@@ -137,7 +140,9 @@ fn a_request() {
                 },
                 1,
             ),
-        ],
+        ]
+        .map(Arc::new)
+        .into(),
         tools: &*TOOLS,
         max_output: Some(8000),
         roster: BTreeSet::new(),
@@ -316,7 +321,7 @@ fn shown(call: &str) -> Item {
 fn a_programs_pictures_go_in_its_output() {
     let request = Request {
         model: luna(),
-        items: vec![shown("call_1")],
+        items: [shown("call_1")].map(Arc::new).into(),
         tools: &[],
         max_output: None,
         roster: BTreeSet::new(),
@@ -356,13 +361,15 @@ fn a_video_is_named_in_its_output() {
     };
     let request = Request {
         model: luna(),
-        items: vec![Item::new(
+        items: [Item::new(
             ItemKind::ToolResult {
                 call: CallId("call_1".into()),
                 output,
             },
             1,
-        )],
+        )]
+        .map(Arc::new)
+        .into(),
         tools: &[],
         max_output: None,
         roster: BTreeSet::new(),

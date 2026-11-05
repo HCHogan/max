@@ -9,6 +9,7 @@
 )]
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use max_core::ids::CallId;
 use max_core::item::{Item, ItemKind, ModelOutput, ModelTag, Protocol, ToolOutput};
@@ -99,7 +100,7 @@ async fn exchange(model: &ModelTag, name: &str) -> (ModelOutput, Value) {
     ));
     let request = Request {
         model: model.clone(),
-        items,
+        items: items.into_iter().map(Arc::new).collect(),
         tools: &*TOOLS,
         max_output: None,
         roster: BTreeSet::new(),

@@ -202,7 +202,7 @@ impl Captioner {
         let chosen = &self.chosen;
         let request = Request {
             model: chosen.tag.clone(),
-            items: vec![
+            items: [
                 Item::new(
                     ItemKind::System {
                         text: system.into(),
@@ -216,7 +216,9 @@ impl Captioner {
                     },
                     0,
                 ),
-            ],
+            ]
+            .map(Arc::new)
+            .into(),
             tools: &[],
             max_output: chosen.max_output,
             roster: BTreeSet::default(),
