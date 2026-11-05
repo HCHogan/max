@@ -77,7 +77,9 @@ impl Inbound {
                 InNode::Node(_) | InNode::MentionMe { .. } => {}
             }
         }
-        text.trim().to_owned()
+        text.truncate(text.trim_end().len());
+        text.drain(..text.len() - text.trim_start().len());
+        text
     }
 
     pub fn mentions_me(&self) -> bool {

@@ -75,6 +75,15 @@ pub fn given(inbound: &Inbound) -> Option<Command> {
     parse(&inbound.plain_text())
 }
 
+/// The same, from what was read of the message already: whether it
+/// @-mentions Max, and its plain text.
+pub fn in_text(kind: ConversationKind, mentions_me: bool, text: &str) -> Option<Command> {
+    if kind == ConversationKind::Group && !mentions_me {
+        return None;
+    }
+    parse(text)
+}
+
 /// How to give `command` in a conversation of `kind`: after an @ of Max,
 /// whose name there is `me`, in a group.
 pub fn how(kind: ConversationKind, me: &str, command: &str) -> String {

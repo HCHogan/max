@@ -26,7 +26,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
         .unwrap();
     assert_eq!(first.direct, Some(Direct::MentionsMe));
     assert_eq!(first.text, "在吗 @小红");
-    assert!(!first.command);
+    assert!(first.command.is_none());
     let row = ledger::row(&mut conn, place.conversation, first.message.id)
         .await
         .unwrap()
@@ -74,7 +74,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
     );
     assert_eq!(second.direct, Some(Direct::RepliesToMe));
     // Not a command: in a group, other bots take `/` too.
-    assert!(!second.command);
+    assert!(second.command.is_none());
 
     // Quoted by its quote id.
     let mut again = from_xiaoming(3, vec![text("嗯")]);
@@ -98,7 +98,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
     let fourth = inbound(&mut conn, &place, status, at(4), offset())
         .await
         .unwrap();
-    assert!(fourth.command);
+    assert!(fourth.command.is_some());
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

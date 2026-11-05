@@ -18,6 +18,7 @@ use sqlx::{Connection, PgConnection};
 use tracing::warn;
 
 use super::Place;
+use crate::command::{self, Command};
 use crate::inbound::{InNode, Inbound, Quote};
 
 /// Why a row is addressed to Max.
@@ -44,7 +45,7 @@ impl Direct {
 pub struct Committed {
     pub message: Arc<Message>,
     pub sender: Account,
-    pub command: bool,
+    pub command: Option<Command>,
     pub direct: Option<Direct>,
     /// What the sender wrote, without the @ of Max.
     pub text: String,
@@ -63,7 +64,7 @@ pub async fn inbound(
     // Before its nodes go into the row.
     let text = inbound.plain_text();
     let mentions_me = inbound.mentions_me();
-    let command = crate::command::given(&inbound).is_some();
+    let command = command::in_text(inbound.chat.kind, mentions_me, &text);
     let mut tx = conn.begin().await?;
     let person = inbound.sender;
     let sender = platform::account(
@@ -129,7 +130,7 @@ pub async fn inbound(
             quote_id: inbound.quote_id.as_deref(),
             sent_at: inbound.at,
             received_at: now,
-            command,
+            command: command.is_some(),
             content: &content,
             raw: &inbound.raw,
             text: &rendered,

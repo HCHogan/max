@@ -390,7 +390,7 @@ impl Conversation {
             debug!(%id, native_id = inbound.native_id, "dropped a message already committed");
             return Ok(());
         }
-        let committed = ingest::inbound(
+        let mut committed = ingest::inbound(
             &mut conn,
             &self.place,
             inbound,
@@ -400,7 +400,8 @@ impl Conversation {
         .await?;
         drop(conn);
         self.committed(&committed.message);
-        let kind = if committed.command {
+        let command = committed.command.take();
+        let kind = if command.is_some() {
             EntryKind::Command
         } else if committed.direct.is_some() {
             EntryKind::Direct
@@ -409,8 +410,8 @@ impl Conversation {
         };
         if bound {
             self.bound(continued).await?;
-        } else if committed.command {
-            self.command(&committed).await?;
+        } else if let Some(command) = command {
+            self.command(&committed, command).await?;
         } else {
             let mark = committed.direct.map_or(Mark::None, |direct| direct.mark());
             self.feed(&[(&committed.message, mark)]).await?;
@@ -420,7 +421,7 @@ impl Conversation {
             id: committed.message.id,
             sender: committed.sender.identity,
             kind,
-            text: committed.text.clone(),
+            text: committed.text,
         };
         let decisions = self.intent.observe(&entry, std::time::Instant::now());
         self.decide(decisions).await

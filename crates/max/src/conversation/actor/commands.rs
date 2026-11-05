@@ -30,10 +30,7 @@ enum Rank {
 }
 
 impl Conversation {
-    pub(super) async fn command(&mut self, committed: &Committed) -> Result<()> {
-        let Some(command) = command::parse(&committed.text) else {
-            return Ok(());
-        };
+    pub(super) async fn command(&mut self, committed: &Committed, command: Command) -> Result<()> {
         let rank = if self.shared.owners.contains(&committed.sender.principal) {
             Rank::Owner
         } else if self.place.kind == ConversationKind::Direct {
