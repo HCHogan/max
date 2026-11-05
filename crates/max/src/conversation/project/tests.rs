@@ -96,7 +96,11 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
         offset: offset(),
     };
     let first = [direct(c)];
-    let (context, inputs) = projection.base(&mut conn, d, &first).await.unwrap();
+    let (context, inputs) = projection
+        .clone()
+        .base(&mut conn, d, first.to_vec())
+        .await
+        .unwrap();
     assert_eq!(inputs, [Input::Wake(direct(c))]);
     assert_eq!(context.roster, BTreeSet::from([max, xiaoming, xiaohong]));
     let texts: Vec<&str> = context.items.iter().map(|item| user_text(item)).collect();
@@ -124,7 +128,7 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
 
     // Cleared up to the first row: it is quoted, not in the tail.
     projection.cleared_upto = Some(a);
-    let (context, _) = projection.base(&mut conn, d, &first).await.unwrap();
+    let (context, _) = projection.base(&mut conn, d, first.to_vec()).await.unwrap();
     let volatile = user_text(context.items.last().unwrap());
     let quoted = format!("[引用的消息]\n--- 2026-10-29 周四 ---\n[12:00 小明 #{a}]: 早\n");
     assert!(volatile.contains(&quoted), "{volatile}");
@@ -160,7 +164,11 @@ async fn the_tail_is_cut_at_a_mark_that_stays(pool: PgPool) {
         now: at(20),
         offset: offset(),
     };
-    let (context, _) = projection.base(&mut conn, last, &[]).await.unwrap();
+    let (context, _) = projection
+        .clone()
+        .base(&mut conn, last, Vec::new())
+        .await
+        .unwrap();
     let mark = platform::tail_after(&mut conn, place.conversation)
         .await
         .unwrap()
@@ -175,7 +183,7 @@ async fn the_tail_is_cut_at_a_mark_that_stays(pool: PgPool) {
     assert!(!volatile.contains("小红"), "{volatile}");
 
     // The next core starts at the mark.
-    let (context, _) = projection.base(&mut conn, last, &[]).await.unwrap();
+    let (context, _) = projection.base(&mut conn, last, Vec::new()).await.unwrap();
     assert_eq!(user_text(&context.items[1]), tail);
     let again = platform::tail_after(&mut conn, place.conversation)
         .await
@@ -209,7 +217,7 @@ async fn a_judged_wake(pool: PgPool) {
         now: at(1),
         offset: offset(),
     };
-    let (context, _) = projection.base(&mut conn, id, &[wake]).await.unwrap();
+    let (context, _) = projection.base(&mut conn, id, vec![wake]).await.unwrap();
     // Nothing but the trigger, so no tail.
     assert_eq!(context.items.len(), 2);
     let volatile = user_text(&context.items[1]);
@@ -341,7 +349,7 @@ async fn the_trigger_and_what_it_quotes_show_their_pictures(pool: PgPool) {
         offset: offset(),
     };
     let (context, _) = projection
-        .base(&mut conn, ask, &[direct(ask)])
+        .base(&mut conn, ask, vec![direct(ask)])
         .await
         .unwrap();
     let volatile = context.items.last().unwrap();
@@ -375,7 +383,11 @@ async fn turn(
     )
     .await
     .unwrap();
-    let (context, _) = projection.base(conn, from, &[direct(woke)]).await.unwrap();
+    let (context, _) = projection
+        .clone()
+        .base(conn, from, vec![direct(woke)])
+        .await
+        .unwrap();
     context
         .items
         .iter()

@@ -24,6 +24,7 @@ use super::ingest::{self, By};
 use crate::tokens;
 
 /// What a projection reads besides the ledger.
+#[derive(Clone)]
 pub struct Projection<'a> {
     pub place: &'a Place,
     pub system: String,
@@ -39,12 +40,13 @@ pub struct Projection<'a> {
 impl Projection<'_> {
     /// The base context as of `from`, the wakes that start the core
     /// rendered in it as its first inputs. When the tail has grown past
-    /// its high watermark, it is cut and its mark saved.
+    /// its high watermark, it is cut and its mark saved. The system
+    /// prompt and the memory go into the context as they are.
     pub async fn base(
-        &self,
+        self,
         conn: &mut PgConnection,
         from: MessageId,
-        wakes: &[Wake],
+        wakes: Vec<Wake>,
     ) -> sqlx::Result<(Context, Vec<Input>)> {
         let budgets = Budgets::for_window(self.window);
         let conversation = self.place.conversation;
@@ -128,7 +130,7 @@ impl Projection<'_> {
         }
         let last_shown = lines.last().map(|(message, _)| message.at);
         let mut first_text = joined(&render, &first_lines, last_shown);
-        for wake in wakes {
+        for wake in &wakes {
             if let Some(Item {
                 kind: ItemKind::User { text, .. },
                 ..
@@ -153,12 +155,12 @@ impl Projection<'_> {
         let volatile = Volatile {
             now: self.now,
             roster: roster_lines(conn, self.place, &roster, project::roster_line).await?,
-            memory: self.memory.clone(),
+            memory: self.memory,
             quoted: quoted_text,
             first: first_text,
         };
         let blocks = pieces.into_iter().chain([volatile.render(self.offset)]);
-        let mut context = project::context(self.system.clone(), blocks, roster, tokens::count);
+        let mut context = project::context(self.system, blocks, roster, tokens::count);
         // The pictures of the first inputs and of the rows they quote, in
         // the volatile block, each after its row.
         if let Some(volatile) = context.items.last_mut() {
@@ -166,7 +168,7 @@ impl Projection<'_> {
             // Not shared yet, so this doesn't copy it.
             project::attach(Arc::make_mut(volatile), messages);
         }
-        let first = wakes.iter().cloned().map(Input::Wake).collect();
+        let first = wakes.into_iter().map(Input::Wake).collect();
         Ok((context, first))
     }
 

@@ -645,7 +645,7 @@ impl Conversation {
         };
         let from = self.head;
         let mut conn = self.shared.services.pool.acquire().await?;
-        let (context, inputs) = projection.base(&mut conn, from, &[wake]).await?;
+        let (context, inputs) = projection.base(&mut conn, from, vec![wake]).await?;
         let started = turns::start(&mut conn, self.place.conversation, &inputs, from, now).await?;
         drop(conn);
         let spec = RunSpec {
