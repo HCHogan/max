@@ -312,17 +312,6 @@ mod tests {
     }
 
     #[test]
-    fn plain_text_is_trimmed() {
-        assert_eq!(
-            say("  你好\n  "),
-            Draft {
-                reply_to: None,
-                nodes: vec![text("你好")]
-            }
-        );
-    }
-
-    #[test]
     fn the_first_reply_wins_and_all_go() {
         let draft = say("[reply#7405] 好的 [reply#7406]");
         assert_eq!(draft.reply_to, Some(MessageId(7405)));

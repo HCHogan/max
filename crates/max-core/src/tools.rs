@@ -5,7 +5,7 @@
 
 use std::sync::LazyLock;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::ids::CallId;
 use crate::item::ToolCall;
@@ -52,14 +52,13 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
 });
 
 /// A tool call that is well formed.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Call {
     pub id: CallId,
     pub tool: Tool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Tool {
     RunCode {
         code: String,
@@ -71,7 +70,6 @@ pub enum Tool {
         workdir: Option<String>,
         timeout_ms: Option<u64>,
         /// Runs on after the call returns; its end wakes Max.
-        #[serde(default)]
         background: bool,
     },
 }
@@ -194,22 +192,6 @@ mod tests {
                 background: true,
             }
         );
-    }
-
-    /// Calls recorded before `background` came read as they ran.
-    #[test]
-    fn a_recorded_shell_call_runs_in_the_foreground() {
-        let tool: Tool = serde_json::from_str(
-            r#"{"type": "shell", "command": "ls", "workdir": null, "timeout_ms": null}"#,
-        )
-        .unwrap();
-        assert!(matches!(
-            tool,
-            Tool::Shell {
-                background: false,
-                ..
-            }
-        ));
     }
 
     #[test]
