@@ -16,7 +16,7 @@ use crate::mcp::{Caller, Context, Services, Sessions, serve};
 use crate::scope::Scope;
 
 /// What the provider was asked: the authorization, and the body.
-type Asked = Arc<Mutex<Vec<(Option<String>, Value)>>>;
+type Asked = Arc<Mutex<Vec<(Option<String>, String)>>>;
 
 /// A provider that answers with an event stream; under /quiet, one event
 /// and then nothing.
@@ -39,10 +39,7 @@ async fn provider(scope: &mut Scope, asked: Asked) -> String {
                     let authorization = headers
                         .get("authorization")
                         .map(|value| value.to_str().unwrap().to_owned());
-                    asked
-                        .lock()
-                        .unwrap()
-                        .push((authorization, serde_json::from_str(&body).unwrap()));
+                    asked.lock().unwrap().push((authorization, body));
                     let answer = "data: {\"n\":1}\n\ndata: [DONE]\n\n";
                     ([("content-type", "text/event-stream")], answer)
                 }
@@ -120,7 +117,8 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
     scope.spawn(move |stop| serve(listener, conversation, served, stop));
 
     let bearer = |token: &str| format!("Authorization: Bearer {token}\r\n");
-    let ask = r#"{"model":"anything","stream":true,"messages":[{"role":"user","content":"你好"}]}"#;
+    let ask =
+        r#"{"model":"anything","stream":true,"messages":[ {"role":"user", "content":"你好"} ]}"#;
     let (status, body) = send(&socket, "/llm/chat/completions", &bearer(job.token()), ask).await;
     assert_eq!(status, "HTTP/1.1 200 OK", "{body}");
     assert!(
@@ -131,8 +129,9 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
         let asked = asked.lock().unwrap();
         let (authorization, request) = &asked[0];
         assert_eq!(authorization.as_deref(), Some("Bearer the-providers-key"));
-        assert_eq!(request["model"], "gemini-3.8-flash-high");
-        assert_eq!(request["messages"][0]["content"], "你好");
+        // The model in its place, the rest as pi wrote it.
+        let forwarded = r#"{"model":"gemini-3.8-flash-high","stream":true,"messages":[ {"role":"user", "content":"你好"} ]}"#;
+        assert_eq!(request, forwarded);
     }
 
     // An answer that stops coming is broken off, before its last chunk.

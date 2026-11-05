@@ -1,12 +1,13 @@
 //! A background agent's model calls: pi in the VM posts them to `/llm/…`
 //! with its session's token, and they go on to the provider with the
-//! provider's key, as they came but for the model id. The answer streams
+//! provider's key, as they came but for the model id: the other fields
+//! are passed on as pi wrote them, not parsed. The answer streams
 //! back as it is, and is broken off if the provider keeps quiet as long
 //! as max-llm would wait: pi takes it for a failed call, and retries. See
 //! "后台 agent" in docs/rust-rewrite.md.
 
-use std::io;
 use std::time::Duration;
+use std::{fmt, io};
 
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -17,7 +18,11 @@ use axum::routing::post;
 use futures_util::Stream;
 use max_core::ids::ConversationId;
 use max_core::item::Protocol;
-use serde_json::{Value, json};
+use serde::de::{MapAccess, Visitor};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::json;
+use serde_json::value::RawValue;
 use tokio::time::timeout;
 
 use super::{Caller, Sessions};
@@ -77,13 +82,16 @@ async fn call(
     if path != endpoint {
         return refuse(StatusCode::NOT_FOUND, &format!("只有 /llm/{endpoint}"));
     }
-    let mut request = match serde_json::from_slice::<Value>(&body) {
-        Ok(request @ Value::Object(_)) => request,
-        _ => return refuse(StatusCode::BAD_REQUEST, "请求不是 JSON 对象"),
+    let Ok(Fields(mut fields)) = serde_json::from_slice::<Fields<'_>>(&body) else {
+        return refuse(StatusCode::BAD_REQUEST, "请求不是 JSON 对象");
     };
-    request["model"] = Value::String(upstream.model.clone());
+    let model = serde_json::value::to_raw_value(&upstream.model).expect("a string is JSON");
+    match fields.iter_mut().find(|(name, _)| name == "model") {
+        Some(field) => field.1 = &model,
+        None => fields.push(("model".to_owned(), &model)),
+    }
     let url = format!("{}/{endpoint}", upstream.base_url.trim_end_matches('/'));
-    let mut sending = forward.client.post(url).json(&request);
+    let mut sending = forward.client.post(url).json(&Fields(fields));
     if let Some(key) = &upstream.api_key {
         sending = sending.bearer_auth(key);
     }
@@ -114,6 +122,43 @@ async fn call(
     response
         .body(Body::from_stream(chunks(answer, idle)))
         .unwrap_or_else(|_| refuse(StatusCode::BAD_GATEWAY, "模型的回答转不了"))
+}
+
+/// A JSON object's fields in order, their values as they were written.
+struct Fields<'a>(Vec<(String, &'a RawValue)>);
+
+impl<'de> Deserialize<'de> for Fields<'de> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Object;
+
+        impl<'de> Visitor<'de> for Object {
+            type Value = Fields<'de>;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a JSON object")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Fields<'de>, A::Error> {
+                let mut fields = Vec::new();
+                while let Some(field) = map.next_entry()? {
+                    fields.push(field);
+                }
+                Ok(Fields(fields))
+            }
+        }
+
+        deserializer.deserialize_map(Object)
+    }
+}
+
+impl Serialize for Fields<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (name, value) in &self.0 {
+            map.serialize_entry(name, value)?;
+        }
+        map.end()
+    }
 }
 
 /// The answer's body, ended with an error if no chunk comes within `idle`.
