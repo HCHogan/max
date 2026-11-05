@@ -165,11 +165,10 @@ impl Vectors {
         if texts.is_empty() {
             return Ok(());
         }
-        let cut: Vec<String> = texts
+        let inputs: Vec<&str> = texts
             .iter()
-            .map(|(_, _, text)| text.chars().take(MOST_CHARS).collect())
+            .map(|(_, _, text)| prefix(text, MOST_CHARS))
             .collect();
-        let inputs: Vec<&str> = cut.iter().map(String::as_str).collect();
         let embedded = self.embedder.embed(&inputs).await?;
         let written: Vec<Of<Vec<f32>>> = texts
             .into_iter()
@@ -180,6 +179,13 @@ impl Vectors {
         vectors::write(&mut conn, model, &written, Utc::now()).await?;
         Ok(())
     }
+}
+
+/// The first `chars` characters of `text`.
+fn prefix(text: &str, chars: usize) -> &str {
+    text.char_indices()
+        .nth(chars)
+        .map_or(text, |(end, _)| &text[..end])
 }
 
 #[cfg(test)]

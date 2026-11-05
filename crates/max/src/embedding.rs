@@ -7,8 +7,7 @@ use std::time::Duration;
 
 use max_db::embeddings::DIMENSIONS;
 use reqwest::Client;
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
 
 /// For one request, answer included: the vectors are small.
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -52,6 +51,13 @@ struct Datum {
     embedding: Vec<f32>,
 }
 
+/// What the endpoint is asked: the texts are written as they are.
+#[derive(Serialize)]
+struct Ask<'a> {
+    model: &'a str,
+    input: &'a [&'a str],
+}
+
 impl Embedder {
     /// Embeds with `model` at `base_url`, which ends in `/v1`.
     pub fn new(base_url: &str, model: String, key: Option<String>) -> reqwest::Result<Self> {
@@ -69,7 +75,10 @@ impl Embedder {
 
     /// A vector of [`DIMENSIONS`] numbers for each text, in order.
     pub async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, Error> {
-        let body = json!({ "model": self.model, "input": texts });
+        let body = Ask {
+            model: &self.model,
+            input: texts,
+        };
         let mut request = self.http.post(&self.url).json(&body);
         if let Some(key) = &self.key {
             request = request.bearer_auth(key);

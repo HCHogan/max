@@ -148,3 +148,9 @@ async fn a_text_turned_down_holds_up_nothing(pool: PgPool) {
     assert_eq!(missing, [down]);
     scope.close(Duration::ZERO).await;
 }
+
+#[test]
+fn a_text_is_cut_by_characters() {
+    assert_eq!(prefix("笑猫狗", 2), "笑猫");
+    assert_eq!(prefix("猫", 2), "猫");
+}
