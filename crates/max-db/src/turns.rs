@@ -156,10 +156,17 @@ pub async fn tail_ends(
     after: Option<MessageId>,
     upto: MessageId,
 ) -> sqlx::Result<Vec<TailEnd>> {
+    // The earliest id any of a turn's wakes is about, read in place: the
+    // trigger's rendered inputs aren't needed for it.
     let rows = sqlx::query!(
-        r#"select from_id, trigger as "trigger: Json<Vec<Input>>" from turns
-           where conversation_id = $1 and from_id > $2 and from_id <= $3
-           order by id"#,
+        r#"select t.from_id,
+                  (select min(woke.id::bigint)
+                     from jsonb_array_elements(t.trigger) as input(value),
+                          jsonb_array_elements_text(input.value -> 'ids') as woke(id)
+                    where input.value ->> 'type' = 'wake') as woken
+           from turns t
+           where t.conversation_id = $1 and t.from_id > $2 and t.from_id <= $3
+           order by t.id"#,
         conversation.0,
         after.map_or(0, |id| id.0),
         upto.0
@@ -170,15 +177,7 @@ pub async fn tail_ends(
         .into_iter()
         .map(|row| TailEnd {
             from: MessageId(row.from_id),
-            woken: row
-                .trigger
-                .0
-                .iter()
-                .filter_map(|input| match input {
-                    Input::Wake(wake) => wake.ids.iter().min().copied(),
-                    Input::Messages { .. } => None,
-                })
-                .min(),
+            woken: row.woken.map(MessageId),
         })
         .collect())
 }

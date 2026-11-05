@@ -1,0 +1,37 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select t.from_id,\n                  (select min(woke.id::bigint)\n                     from jsonb_array_elements(t.trigger) as input(value),\n                          jsonb_array_elements_text(input.value -> 'ids') as woke(id)\n                    where input.value ->> 'type' = 'wake') as woken\n           from turns t\n           where t.conversation_id = $1 and t.from_id > $2 and t.from_id <= $3\n           order by t.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "from_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "turns",
+            "name": "from_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "woken",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "306347a525a4cd03f65f87309442fdf37c2eced6e48debde2aaf0dab45739f22"
+}

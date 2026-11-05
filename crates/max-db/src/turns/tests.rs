@@ -153,3 +153,42 @@ async fn a_turn_ends_once(pool: PgPool) -> sqlx::Result<()> {
     assert_eq!(runs, 0, "the lost turn keeps no run");
     Ok(())
 }
+
+#[sqlx::test]
+async fn a_tail_end_is_the_first_row_a_turn_woke_for(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let group = testing::group(&mut conn, "group:30001").await?;
+    let conversation = group.endpoint.conversation;
+    let max = testing::sender(group.max, "Max", None);
+    let mut ids = Vec::new();
+    for n in 0..4 {
+        ids.push(testing::commit(&mut conn, &group, &max, &testing::said("早"), n).await?);
+    }
+    let wake = |woke: &[MessageId]| {
+        Input::Wake(Wake {
+            ids: woke.to_vec(),
+            reason: Reason::Direct,
+            item: None,
+        })
+    };
+    let rows = Input::Messages {
+        ids: vec![ids[0]],
+        item: Item::new(ItemKind::user("[新消息]"), 1),
+        people: Vec::new(),
+    };
+    start(
+        &mut conn,
+        conversation,
+        std::slice::from_ref(&rows),
+        ids[1],
+        at(1),
+    )
+    .await?;
+    let woke = [wake(&[ids[3], ids[2]]), rows, wake(&[ids[3]])];
+    start(&mut conn, conversation, &woke, ids[2], at(2)).await?;
+    start(&mut conn, conversation, &[], ids[3], at(3)).await?;
+    let ends = tail_ends(&mut conn, conversation, Some(ids[0]), ids[2]).await?;
+    let end = |from, woken| TailEnd { from, woken };
+    assert_eq!(ends, [end(ids[1], None), end(ids[2], Some(ids[2]))]);
+    Ok(())
+}
