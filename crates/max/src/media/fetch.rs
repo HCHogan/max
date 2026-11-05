@@ -3,7 +3,8 @@
 use std::fmt;
 use std::time::Duration;
 
-use reqwest::{Client, header};
+use axum::body::Bytes;
+use reqwest::{Client, Response, header};
 
 /// What a download may take, from connecting to the last byte.
 pub const TIMEOUT: Duration = Duration::from_secs(60);
@@ -16,11 +17,11 @@ pub fn client() -> reqwest::Result<Client> {
         .build()
 }
 
-/// The bytes, and what the server said they are.
-#[derive(Debug)]
-pub struct Fetched {
-    pub bytes: Vec<u8>,
-    pub mime: Option<String>,
+/// A download's body, read as it comes, up to a limit.
+pub struct Body {
+    response: Response,
+    most: u64,
+    read: u64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -55,10 +56,10 @@ impl fmt::Display for Error {
     }
 }
 
-/// Downloads `url`, giving up past `most` bytes.
-pub async fn fetch(http: &Client, url: &str, most: u64) -> Result<Fetched, Error> {
-    let failed = |error: reqwest::Error| Error::Failed(error.to_string());
-    let mut response = http.get(url).send().await.map_err(failed)?;
+/// Starts downloading `url`, and says what the server said it is. One
+/// the server says is over `most` bytes is refused.
+pub async fn open(http: &Client, url: &str, most: u64) -> Result<(Body, Option<String>), Error> {
+    let response = http.get(url).send().await.map_err(failed)?;
     let status = response.status();
     if !status.is_success() {
         return Err(Error::Status(status.as_u16()));
@@ -76,14 +77,46 @@ pub async fn fetch(http: &Client, url: &str, most: u64) -> Result<Fetched, Error
         .and_then(|value| value.split(';').next())
         .map(|mime| mime.trim().to_ascii_lowercase())
         .filter(|mime| !mime.is_empty());
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(failed)? {
-        if u64::try_from(bytes.len() + chunk.len()).unwrap_or(u64::MAX) > most {
+    let body = Body {
+        response,
+        most,
+        read: 0,
+    };
+    Ok((body, mime))
+}
+
+impl Body {
+    /// The next piece, None at the end. Past the limit, the download is
+    /// too large.
+    pub async fn chunk(&mut self) -> Result<Option<Bytes>, Error> {
+        let Some(chunk) = self.response.chunk().await.map_err(failed)? else {
+            return Ok(None);
+        };
+        self.read = self.read.saturating_add(chunk.len() as u64);
+        if self.read > self.most {
             return Err(Error::TooLarge);
         }
-        bytes.extend_from_slice(&chunk);
+        Ok(Some(chunk))
     }
-    Ok(Fetched { bytes, mime })
+
+    /// The whole body: `head`, what was read of it already, and the rest.
+    pub async fn rest(mut self, mut head: Vec<u8>) -> Result<Vec<u8>, Error> {
+        // As long as the server says, which is within the limit.
+        let length = self.response.content_length().unwrap_or(0);
+        head.reserve(
+            usize::try_from(length)
+                .unwrap_or(0)
+                .saturating_sub(head.len()),
+        );
+        while let Some(chunk) = self.chunk().await? {
+            head.extend_from_slice(&chunk);
+        }
+        Ok(head)
+    }
+}
+
+fn failed(error: reqwest::Error) -> Error {
+    Error::Failed(error.to_string())
 }
 
 #[cfg(test)]
@@ -111,18 +144,22 @@ mod tests {
         let stopped = stop.clone();
         let server = axum::serve(listener, app).with_graceful_shutdown(stopped.cancelled_owned());
         let http = client().unwrap();
+        let fetch = async |url: &str, most| {
+            let (body, mime) = open(&http, url, most).await?;
+            Ok::<_, Error>((body.rest(Vec::new()).await?, mime))
+        };
         let test = async {
-            let fetched = fetch(&http, &format!("{base}/a.png"), 3).await.unwrap();
-            assert_eq!(fetched.bytes, b"abc");
-            assert_eq!(fetched.mime.as_deref(), Some("image/png"));
-            let large = fetch(&http, &format!("{base}/a.png"), 2).await.unwrap_err();
+            let (bytes, mime) = fetch(&format!("{base}/a.png"), 3).await.unwrap();
+            assert_eq!(bytes, b"abc");
+            assert_eq!(mime.as_deref(), Some("image/png"));
+            let large = fetch(&format!("{base}/a.png"), 2).await.unwrap_err();
             assert_eq!(large, Error::TooLarge);
-            let gone = fetch(&http, &format!("{base}/gone"), 3).await.unwrap_err();
+            let gone = fetch(&format!("{base}/gone"), 3).await.unwrap_err();
             assert_eq!(gone, Error::Status(404));
             assert!(!gone.retryable() && !large.retryable());
-            let busy = fetch(&http, &format!("{base}/busy"), 3).await.unwrap_err();
+            let busy = fetch(&format!("{base}/busy"), 3).await.unwrap_err();
             assert!(busy.retryable());
-            let refused = fetch(&http, "http://127.0.0.1:9/x", 3).await.unwrap_err();
+            let refused = fetch("http://127.0.0.1:9/x", 3).await.unwrap_err();
             assert!(refused.retryable(), "{refused}");
             stop.cancel();
         };

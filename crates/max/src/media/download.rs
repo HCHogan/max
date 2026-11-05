@@ -23,8 +23,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::caption::Picture;
-use super::fetch::fetch;
-use super::prepare::prepare;
+use super::fetch;
+use super::prepare::{SNIFF, is_picture, prepare};
 use super::store::Store;
 use crate::scope::Scope;
 use crate::worker::Row;
@@ -39,6 +39,31 @@ const AT_ONCE: usize = 4;
 /// How long to wait before each retry of a download that may go through
 /// next time; the HTTP client's own timeout limits each try.
 const RETRIES: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(4)];
+
+/// What a download got: a picture whole, or anything else stored.
+enum Got {
+    Picture(Vec<u8>),
+    Stored { sha256: String, size: u64 },
+}
+
+/// Why a try at a download failed: the download, which may not go better
+/// next time, or the store.
+enum Failed {
+    Fetch(fetch::Error),
+    Store(std::io::Error),
+}
+
+impl From<fetch::Error> for Failed {
+    fn from(error: fetch::Error) -> Self {
+        Self::Fetch(error)
+    }
+}
+
+impl From<std::io::Error> for Failed {
+    fn from(error: std::io::Error) -> Self {
+        Self::Store(error)
+    }
+}
 
 pub struct Download {
     pub pool: PgPool,
@@ -119,6 +144,30 @@ impl Download {
         }
     }
 
+    /// Downloads `url`. Its first bytes tell a picture, which is read
+    /// whole to be prepared; anything else, a video or a file of up to
+    /// 64 MiB, goes into the store as it comes.
+    async fn receive(&self, url: &str) -> Result<(Got, Option<String>), Failed> {
+        let (mut body, mime) = fetch::open(&self.http, url, FILE_BYTES).await?;
+        let mut head = Vec::new();
+        while head.len() < SNIFF {
+            let Some(chunk) = body.chunk().await? else {
+                break;
+            };
+            head.extend_from_slice(&chunk);
+        }
+        if is_picture(&head) {
+            return Ok((Got::Picture(body.rest(head).await?), mime));
+        }
+        let mut partial = self.store.partial().await?;
+        partial.write(&head).await?;
+        while let Some(chunk) = body.chunk().await? {
+            partial.write(&chunk).await?;
+        }
+        let (sha256, size) = partial.finish().await?;
+        Ok((Got::Stored { sha256, size }, mime))
+    }
+
     async fn scan(&self) -> Result<Vec<Medium>> {
         let since = Utc::now() - SCAN;
         let mut conn = self.pool.acquire().await?;
@@ -149,23 +198,28 @@ impl Download {
         if done.iter().any(|(ordinal, _)| *ordinal == medium.ordinal) {
             return Ok(());
         }
-        let fetched = match fetch(&self.http, &medium.url, FILE_BYTES).await {
-            Ok(fetched) => fetched,
-            Err(error) if error.retryable() => return Err(eyre!("{error}")),
+        let (got, mime) = match self.receive(&medium.url).await {
+            Ok(received) => received,
+            Err(Failed::Fetch(error)) if error.retryable() => return Err(eyre!("{error}")),
             // An address that expired, or a file too large: another try
             // won't do better.
-            Err(error) => {
+            Err(Failed::Fetch(error)) => {
                 warn!(unit = ?medium, "gave up a download: {error}");
                 return Ok(());
             }
+            Err(Failed::Store(error)) => return Err(error.into()),
         };
-        let size = u64::try_from(fetched.bytes.len())?;
-        let bytes = fetched.bytes;
-        let (prepared, bytes) = spawn_blocking(move || (prepare(&bytes), bytes)).await?;
-        let sha256 = self.store.put(bytes).await?;
+        let (sha256, size, prepared) = match got {
+            Got::Picture(bytes) => {
+                let size = u64::try_from(bytes.len())?;
+                let (prepared, bytes) = spawn_blocking(move || (prepare(&bytes), bytes)).await?;
+                (self.store.put(bytes).await?, size, Some(prepared))
+            }
+            Got::Stored { sha256, size } => (sha256, size, None),
+        };
         let (mut width, mut height, mut model_sha256) = (None, None, None);
         match prepared {
-            Ok(Some(prepared)) => {
+            Some(Ok(Some(prepared))) => {
                 width = Some(prepared.width);
                 height = Some(prepared.height);
                 model_sha256 = Some(match prepared.copy {
@@ -173,12 +227,12 @@ impl Download {
                     None => sha256.clone(),
                 });
             }
-            Ok(None) => {}
-            Err(error) => warn!(unit = ?medium, "a picture that doesn't decode: {error}"),
+            Some(Ok(None)) | None => {}
+            Some(Err(error)) => warn!(unit = ?medium, "a picture that doesn't decode: {error}"),
         }
         let blob = Blob {
             sha256,
-            mime: fetched.mime,
+            mime,
             size,
             width,
             height,

@@ -23,19 +23,31 @@ pub struct Prepared {
     pub copy: Option<Vec<u8>>,
 }
 
+/// Enough of a file's beginning to tell whether it's a picture.
+pub const SNIFF: usize = 16;
+
+/// Whether `bytes`, a file's first [`SNIFF`] bytes or all of a shorter
+/// one, begin a picture [`prepare`] reads.
+pub fn is_picture(bytes: &[u8]) -> bool {
+    format(bytes).is_some()
+}
+
+fn format(bytes: &[u8]) -> Option<ImageFormat> {
+    image::guess_format(bytes).ok().filter(|format| {
+        matches!(
+            format,
+            ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP
+        )
+    })
+}
+
 /// None when the bytes aren't PNG, JPEG, GIF or WebP; an error when they
 /// say they are and don't decode. Blocking: a large picture takes a
 /// while, bounded by the limits.
 pub fn prepare(bytes: &[u8]) -> ImageResult<Option<Prepared>> {
-    let Ok(format) = image::guess_format(bytes) else {
+    let Some(format) = format(bytes) else {
         return Ok(None);
     };
-    if !matches!(
-        format,
-        ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP
-    ) {
-        return Ok(None);
-    }
     let reader = || {
         let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
         reader.limits(limits());
