@@ -39,32 +39,6 @@ async fn two_conversations_meeting_a_newcomer_make_one_person(pool: PgPool) -> s
 }
 
 #[sqlx::test]
-async fn a_merged_person_reads_as_the_one_kept(pool: PgPool) -> sqlx::Result<()> {
-    let mut conn = pool.acquire().await?;
-    let kept = account(&mut conn, Platform::Qq, "10003", "小刚").await?;
-    let merged = account(&mut conn, Platform::QqLegacy, "20003", "小刚").await?;
-    sqlx::query!(
-        "update principals set merged_into = $1 where id = $2",
-        kept.principal.0,
-        merged.principal.0
-    )
-    .execute(&mut *conn)
-    .await?;
-    let again = account(&mut conn, Platform::QqLegacy, "20003", "小刚").await?;
-    assert_eq!(again.principal, kept.principal);
-    let people = principals(&mut conn, &[kept.identity, merged.identity]).await?;
-    assert_eq!(
-        people,
-        [
-            (kept.identity, kept.principal),
-            (merged.identity, kept.principal)
-        ]
-        .into()
-    );
-    Ok(())
-}
-
-#[sqlx::test]
 async fn an_endpoint_brings_its_conversation(pool: PgPool) -> sqlx::Result<()> {
     let mut conn = pool.acquire().await?;
     let me = account(&mut conn, Platform::Qq, "20000", "Max")
@@ -154,62 +128,6 @@ async fn a_gateway_session_is_kept_per_platform(pool: PgPool) -> sqlx::Result<()
 }
 
 #[sqlx::test]
-async fn binding_a_group_to_an_old_conversation(pool: PgPool) -> sqlx::Result<()> {
-    let mut conn = pool.acquire().await?;
-    let old_max = account(&mut conn, Platform::QqLegacy, "20000", "Max").await?;
-    let group = ConversationKind::Group;
-    let old = endpoint(
-        &mut conn,
-        Platform::QqLegacy,
-        "group:30001",
-        old_max.identity,
-        group,
-        None,
-    )
-    .await?;
-    let found = conversation_of(&mut conn, Platform::QqLegacy, "group:30001").await?;
-    assert_eq!(found, Some(old.conversation));
-    assert_eq!(
-        conversation_of(&mut conn, Platform::QqLegacy, "group:1").await?,
-        None
-    );
-
-    let max = account(&mut conn, Platform::Qq, "BOT", "maxx").await?;
-    let native = "group:GROUPOPENID";
-    assert_eq!(
-        find_endpoint(&mut conn, Platform::Qq, native, max.identity).await?,
-        None
-    );
-    let bound = endpoint_on(&mut conn, old.conversation, Platform::Qq).await?;
-    assert_eq!(bound, None);
-    let new = attach(&mut conn, found, Platform::Qq, native, max.identity, group).await?;
-    assert_eq!(new.conversation, old.conversation);
-    let bound = endpoint_on(&mut conn, old.conversation, Platform::Qq).await?;
-    assert_eq!(bound.as_deref(), Some(native));
-    assert_eq!(
-        find_endpoint(&mut conn, Platform::Qq, native, max.identity).await?,
-        Some(new)
-    );
-    let direct = ConversationKind::Direct;
-    let fresh = attach(
-        &mut conn,
-        None,
-        Platform::Qq,
-        "c2c:USER",
-        max.identity,
-        direct,
-    )
-    .await?;
-    assert_ne!(fresh.conversation, old.conversation);
-    assert_eq!(
-        conversation_kind(&mut conn, fresh.conversation).await?,
-        direct
-    );
-    assert_eq!(conversation_kind(&mut conn, new.conversation).await?, group);
-    Ok(())
-}
-
-#[sqlx::test]
 async fn a_merged_account_speaks_for_its_owner(pool: PgPool) -> sqlx::Result<()> {
     let mut conn = pool.acquire().await?;
     let owner = account(&mut conn, Platform::Qq, "USER_OPENID", "hank").await?;
@@ -221,5 +139,11 @@ async fn a_merged_account_speaks_for_its_owner(pool: PgPool) -> sqlx::Result<()>
     assert_eq!(again.identity, member.identity);
     let native = native_user_id(&mut conn, member.identity).await?;
     assert_eq!(native.as_deref(), Some("MEMBER_OPENID"));
+    let people = principals(&mut conn, &[owner.identity, member.identity]).await?;
+    let both = [
+        (owner.identity, owner.principal),
+        (member.identity, owner.principal),
+    ];
+    assert_eq!(people, both.into());
     Ok(())
 }

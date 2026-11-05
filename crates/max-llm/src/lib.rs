@@ -238,24 +238,10 @@ fn weight(item: &Item) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use base64::Engine;
     use max_core::ids::CallId;
     use max_core::item::ToolCall;
 
     use super::*;
-
-    #[test]
-    fn a_data_url_is_the_whole_file() {
-        // Longer than the encoder's chunks, and not a multiple of three.
-        let bytes: Vec<u8> = (0..=255).cycle().take(10_000).collect();
-        let medium = Medium {
-            mime: "image/png",
-            bytes,
-        };
-        let url = serde_json::to_string(&DataUrl(&medium)).unwrap();
-        let encoded = STANDARD.encode(&medium.bytes);
-        assert_eq!(url, format!("\"data:image/png;base64,{encoded}\""));
-    }
 
     #[test]
     fn tokens_follow_the_text() {

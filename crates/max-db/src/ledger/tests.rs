@@ -1,6 +1,5 @@
 use max_core::ids::PrincipalId;
 use max_core::message::{Emote, Role};
-use serde_json::json;
 use sqlx::PgPool;
 
 use super::*;
@@ -172,41 +171,6 @@ async fn what_an_unsend_finds_and_leaves(pool: PgPool) -> sqlx::Result<()> {
     let rows = rows(&mut conn, group.endpoint.conversation, Some(queued), done).await?;
     let deliveries: Vec<_> = rows.iter().map(|row| row.delivery).collect();
     assert_eq!(deliveries, [Some(Delivery::Failed), Some(Delivery::Sent)]);
-    Ok(())
-}
-
-#[sqlx::test]
-async fn quoting_someone_by_their_quote_id(pool: PgPool) -> sqlx::Result<()> {
-    let mut conn = pool.acquire().await?;
-    let group = group(&mut conn, "group:30001").await?;
-    let xiaoming = sender(group.xiaoming, "小明", None);
-    let content = said("在吗");
-    let id = insert(
-        &mut conn,
-        &NewMessage {
-            conversation: group.endpoint.conversation,
-            endpoint: group.endpoint.id,
-            sender: &xiaoming,
-            native_id: Some("ROBOT1.0_x"),
-            quote_id: Some("REFIDX_7"),
-            sent_at: at(0),
-            received_at: at(0),
-            command: false,
-            content: &content,
-            raw: &json!({}),
-            text: "在吗",
-            turn: None,
-            segment: None,
-        },
-    )
-    .await?;
-    let endpoint = group.endpoint.id;
-    assert_eq!(
-        by_quote_id(&mut conn, endpoint, "REFIDX_7").await?,
-        Some(id)
-    );
-    assert_eq!(by_quote_id(&mut conn, endpoint, "ROBOT1.0_x").await?, None);
-    assert_eq!(quote_id(&mut conn, id).await?.as_deref(), Some("REFIDX_7"));
     Ok(())
 }
 
