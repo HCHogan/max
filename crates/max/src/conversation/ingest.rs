@@ -264,14 +264,14 @@ pub async fn said(
     let mut nodes = Vec::with_capacity(draft.nodes.len());
     // The pictures' files, in order.
     let mut files = Vec::new();
-    for node in &draft.nodes {
+    for node in draft.nodes {
         match node {
-            DraftNode::Text { text } => nodes.push(Node::Text { text: text.clone() }),
+            DraftNode::Text { text } => nodes.push(Node::Text { text }),
             DraftNode::Mention { principal } => {
-                nodes.push(mentioned(&mut tx, place, *principal, &mut people).await?);
+                nodes.push(mentioned(&mut tx, place, principal, &mut people).await?);
             }
             DraftNode::Picture { message, ordinal } => {
-                if let Some(stored) = sendable(&mut tx, place, *message, *ordinal).await? {
+                if let Some(stored) = sendable(&mut tx, place, message, ordinal).await? {
                     let meta = MediaMeta {
                         kind: stored.kind,
                         mime: stored.mime,
@@ -287,26 +287,26 @@ pub async fn said(
             DraftNode::Made { sha256, mime, size } => {
                 let meta = MediaMeta {
                     kind: MediaKind::Image,
-                    mime: Some(mime.clone()),
-                    size: Some(*size),
+                    mime: Some(mime),
+                    size: Some(size),
                     name: None,
                     description: None,
                 };
                 let media = Some(MediaRef::Blob(sha256.clone()));
                 nodes.push(Node::Media { media, meta });
-                files.push(sha256.clone());
+                files.push(sha256);
             }
             DraftNode::File { sha256, name, size } => {
                 let meta = MediaMeta {
                     kind: MediaKind::File,
                     mime: None,
-                    size: Some(*size),
-                    name: Some(name.clone()),
+                    size: Some(size),
+                    name: Some(name),
                     description: None,
                 };
                 let media = Some(MediaRef::Blob(sha256.clone()));
                 nodes.push(Node::Media { media, meta });
-                files.push(sha256.clone());
+                files.push(sha256);
             }
         }
     }

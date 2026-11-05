@@ -477,3 +477,10 @@ async fn proactive_messages_wait_for_the_rate() {
     shared.proactive("group:A").await;
     assert_eq!(start.elapsed(), MINUTE, "a chat's rate");
 }
+
+#[test]
+fn latex_brackets_become_dollars() {
+    let mut out = String::from("前：");
+    push_markdown(&mut out, r"\[x\] 和 \\[y 和 \ 和 末尾\");
+    assert_eq!(out, r"前：$$x$$ 和 \$$y 和 \ 和 末尾\");
+}

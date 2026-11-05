@@ -11,6 +11,7 @@
 //! as.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Write;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -231,25 +232,24 @@ impl Shared {
         text: String,
         quote: Option<String>,
     ) -> Result<Sent, Unsent> {
-        let mut result = Err(Unsent::Refused(String::new()));
-        for body in [Body::Markdown(text.clone()), Body::Text(text)] {
+        let mut body = Body::Markdown(text);
+        loop {
             self.proactive(native_id).await;
             let qq = Message {
                 body,
                 quote: quote.clone(),
             };
-            match self.api.send(chat, &qq).await {
+            let error = match self.api.send(chat, &qq).await {
                 Ok(sent) => return Ok(sent),
-                Err(error) => {
-                    warn!(message = %id, %error, "QQ didn't take a message");
-                    result = Err(Unsent::from(&error));
-                    if let Err(Unsent::Unknown(_)) = result {
-                        break;
-                    }
-                }
-            }
+                Err(error) => error,
+            };
+            warn!(message = %id, %error, "QQ didn't take a message");
+            // The text goes again, as plain text, unless it may be out.
+            body = match (qq.body, Unsent::from(&error)) {
+                (Body::Markdown(text), Unsent::Refused(_)) => Body::Text(text),
+                (_, unsent) => return Err(unsent),
+            };
         }
-        result
     }
 
     async fn attached(
@@ -453,17 +453,21 @@ async fn lower(
     let mut attached = None;
     for node in nodes {
         match node {
-            Node::Text { text: piece } => text.push_str(&markdown(piece)),
+            Node::Text { text: piece } => push_markdown(&mut text, piece),
             Node::Mention {
                 target: MentionTarget::Identity(identity),
                 display,
             } => match platform::native_user_id(conn, *identity).await? {
                 Some(openid) if kind == ConversationKind::Group => {
-                    text.push_str(&format!("<qqbot-at-user id=\"{openid}\" />"));
+                    let _ = write!(text, "<qqbot-at-user id=\"{openid}\" />");
                 }
-                _ => text.push_str(&format!("@{display}")),
+                _ => {
+                    let _ = write!(text, "@{display}");
+                }
             },
-            Node::Mention { display, .. } => text.push_str(&format!("@{display}")),
+            Node::Mention { display, .. } => {
+                let _ = write!(text, "@{display}");
+            }
             Node::Media {
                 media: Some(MediaRef::Blob(sha256)),
                 meta,
@@ -490,8 +494,16 @@ async fn lower(
 }
 
 /// QQ renders `$$…$$` but not `\[…\]`.
-fn markdown(text: &str) -> String {
-    text.replace("\\[", "$$").replace("\\]", "$$")
+fn push_markdown(out: &mut String, text: &str) {
+    let mut from = 0;
+    for (at, _) in text.match_indices('\\') {
+        if matches!(text.as_bytes().get(at + 1), Some(b'[' | b']')) {
+            out.push_str(&text[from..at]);
+            out.push_str("$$");
+            from = at + 2;
+        }
+    }
+    out.push_str(&text[from..]);
 }
 
 #[cfg(test)]
