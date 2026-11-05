@@ -21,7 +21,6 @@ use super::{Context, Failure};
 /// QQ's longest mute: 30 days.
 const LONGEST: i64 = 30 * DAY;
 const DAY: i64 = 24 * 3600;
-const PER_RUN: u32 = 5;
 
 pub struct MuteMember;
 
@@ -47,7 +46,6 @@ pub struct Muted {
 impl Tool for MuteMember {
     const NAME: &'static str = "mute_member";
     const DESCRIPTION: &'static str = "在本群禁言一个普通成员，或者解除禁言；要你是群管理员。";
-    const PER_RUN: Option<u32> = Some(PER_RUN);
     const JOB: bool = false;
 
     type Args = Args;
@@ -57,7 +55,7 @@ impl Tool for MuteMember {
         format!(
             "在本群禁言一个人，或者解除。member 是 [mention#编号] 里的数字；seconds 是从现在起禁多少秒，0 是解除，最多 {LONGEST}（{} 天）。禁不禁、禁多久由你判断：刷屏、广告、骂人，或者有人请你禁、理由正当时再用，禁完或解完在群里简短说一声。\n  \
             QQ 只让群管理员禁言普通成员：群主、管理员、你自己都禁不了，私聊里没有禁言；没在本群说过话的人也禁不了。对禁着的人再禁，是把结束时间改成从现在起 seconds 秒。\n  \
-            QQ 办了才返回，until 是禁到几点，解除时是 null；办不了会抛错，说明原因。记录里不会多一行。一次运行最多 {PER_RUN} 次。",
+            QQ 办了才返回，until 是禁到几点，解除时是 null；办不了会抛错，说明原因。记录里不会多一行。",
             LONGEST / DAY
         )
     }

@@ -14,7 +14,6 @@ use super::{Context, Failure};
 
 const DEFAULT: u8 = 5;
 const MOST: u8 = 10;
-const PER_RUN: u32 = 5;
 
 pub struct FindStickers;
 
@@ -44,9 +43,7 @@ pub struct Sticker {
 impl Tool for FindStickers {
     const NAME: &'static str = "find_stickers";
     const DESCRIPTION: &'static str = "在表情包库里按意思找表情包，返回句柄和描述，只找不发。";
-    const PER_RUN: Option<u32> = Some(PER_RUN);
     const JOB: bool = false;
-    const PROGRAM: bool = true;
 
     type Args = Args;
     type Output = Found;
@@ -54,7 +51,7 @@ impl Tool for FindStickers {
     fn guide() -> String {
         format!(
             "在表情包库里按意思找表情包：库里是各个群里见过的表情包，按描述和 query 的意思远近排，近的在前。\n  \
-            只找不发：挑一个合适的，把 handle 照抄进回复，写成 [sticker#…]，就发出去了；都不合适就不发。limit 1 到 {MOST}，默认 {DEFAULT}。一次运行最多找 {PER_RUN} 次。"
+            只找不发：挑一个合适的，把 handle 照抄进回复，写成 [sticker#…]，就发出去了；都不合适就不发。limit 1 到 {MOST}，默认 {DEFAULT}。"
         )
     }
 

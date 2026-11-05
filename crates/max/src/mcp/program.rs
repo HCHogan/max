@@ -38,10 +38,8 @@ impl Tool for Say {
     const NAME: &'static str = "say";
     const DESCRIPTION: &'static str =
         "以 Max 的身份在本群说话，写法和 Max 回话一样；返回发出去的消息编号。";
-    const PER_RUN: Option<u32> = None;
     const JOB: bool = false;
     const TURN: bool = false;
-    const PROGRAM: bool = true;
 
     type Args = SayArgs;
     type Output = Said;
@@ -99,17 +97,15 @@ pub struct WakeArgs {
 
 #[derive(Serialize, JsonSchema)]
 pub struct Woken {
-    /// Whether Max was woken now, or when it will be.
+    /// That Max was woken.
     said: String,
 }
 
 impl Tool for Wake {
     const NAME: &'static str = "wake";
-    const DESCRIPTION: &'static str = "叫醒 Max，给它看一段话；一小时最多 6 次，多的攒着一起叫醒。";
-    const PER_RUN: Option<u32> = None;
+    const DESCRIPTION: &'static str = "叫醒 Max，给它看一段话；每次都是 Max 的一轮。";
     const JOB: bool = false;
     const TURN: bool = false;
-    const PROGRAM: bool = true;
 
     type Args = WakeArgs;
     type Output = Woken;

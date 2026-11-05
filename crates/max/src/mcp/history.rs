@@ -20,8 +20,6 @@ use super::{Context, Failure};
 use read::{AROUND, MOST_AROUND, Next, Page};
 use search::{Hit, MOST_TERMS};
 
-const PER_RUN: u32 = 60;
-
 pub struct History;
 
 #[derive(Deserialize, JsonSchema)]
@@ -91,9 +89,7 @@ enum Bound {
 impl Tool for History {
     const NAME: &'static str = "history";
     const DESCRIPTION: &'static str = "查本会话的聊天记录（连同图片和表情包的描述）：按内容、发言人、时间筛，或者看某条消息前后。给了 query 返回命中的片段，没给就按时间顺序返回原文。";
-    const PER_RUN: Option<u32> = Some(PER_RUN);
     const JOB: bool = true;
-    const PROGRAM: bool = true;
 
     type Args = Args;
     type Output = Found;

@@ -33,19 +33,14 @@ pub trait Tool: 'static {
     /// One line for the MCP listing, which is what a background agent's
     /// model reads of it, with its arguments' descriptions.
     const DESCRIPTION: &'static str;
-    /// The most calls one run may make.
-    const PER_RUN: Option<u32>;
     /// Whether a background agent may call it: it doesn't speak or act in
     /// the group.
     const JOB: bool;
-    /// Whether a turn's programs and commands may: the system prompt
-    /// declares only these.
+    /// Whether the system prompt declares it. Those it doesn't, `say` and
+    /// `wake`, are for the programs Max keeps in the group's VM, and a
+    /// turn's programs that call them call as those. See "常驻程序" in
+    /// docs/rust-rewrite.md.
     const TURN: bool = true;
-    /// Whether the programs Max keeps in the group's VM may, outside any
-    /// turn: nothing that acts without Max's judgement, such as muting
-    /// someone, or spends unwatched, such as a background agent. See
-    /// "常驻程序" in docs/rust-rewrite.md.
-    const PROGRAM: bool = false;
 
     type Args: DeserializeOwned + JsonSchema;
     type Output: Serialize + JsonSchema;
@@ -65,10 +60,8 @@ pub trait Tool: 'static {
 pub struct Spec {
     pub name: &'static str,
     pub description: &'static str,
-    pub per_run: Option<u32>,
     pub job: bool,
     pub turn: bool,
-    pub program: bool,
     /// JSON Schemas.
     pub input: Map<String, Value>,
     pub output: Map<String, Value>,
@@ -133,10 +126,8 @@ fn spec<T: Tool>() -> Spec {
     Spec {
         name: T::NAME,
         description: T::DESCRIPTION,
-        per_run: T::PER_RUN,
         job: T::JOB,
         turn: T::TURN,
-        program: T::PROGRAM,
         input,
         output,
         declaration,

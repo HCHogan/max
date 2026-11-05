@@ -19,7 +19,6 @@ use super::{Context, Failure};
 
 /// How long QQ lets any message be recalled.
 const WINDOW: TimeDelta = TimeDelta::minutes(2);
-const PER_RUN: u32 = 10;
 
 pub struct RecallMessage;
 
@@ -39,7 +38,6 @@ impl Tool for RecallMessage {
     const NAME: &'static str = "recall_message";
     const DESCRIPTION: &'static str =
         "撤回本群发出 2 分钟内的一条消息：你自己的，或者你是群管理员时普通成员的。";
-    const PER_RUN: Option<u32> = Some(PER_RUN);
     const JOB: bool = false;
 
     type Args = Args;
@@ -49,7 +47,7 @@ impl Tool for RecallMessage {
         format!(
             "撤回本群的一条消息，id 是行首 #编号 里的数字。撤不撤由你判断：刷屏、广告、违规内容，或者有人请你撤、理由正当时再用，撤完简短说一声。\n  \
             QQ 只让撤发出 {} 分钟内的：你自己说的（一段是一条，一次回复分成几段的要一段一段撤）；你是群管理员时还有普通成员的，群主和管理员的撤不了。私聊里只能撤你自己的。\n  \
-            QQ 撤了才返回；撤不了会抛错，说明原因。记录里会多一行你的 [unsend#id]，QQ 没撤的标着（没发出去）。一次运行最多撤 {PER_RUN} 条。",
+            QQ 撤了才返回；撤不了会抛错，说明原因。记录里会多一行你的 [unsend#id]，QQ 没撤的标着（没发出去）。",
             WINDOW.num_minutes()
         )
     }

@@ -96,13 +96,14 @@ impl Caller {
         }
     }
 
-    /// Whether it may make `call`.
+    /// Whether it may make `call`. A program Max keeps in the VM may use
+    /// all of Max's tools, as the turn that wrote it could: Max decides
+    /// what its programs do (2026-11-05).
     pub fn allows(&self, call: Call) -> bool {
         match (self, call) {
-            (Caller::Turn(_) | Caller::Check, Call::Tool(tool)) => tool.turn || tool.program,
-            (Caller::Turn(_) | Caller::Check, _) => true,
             (Caller::Job(_), Call::Tool(tool)) => tool.job,
-            (Caller::Program(_), Call::Tool(tool)) => tool.program,
+            (_, Call::Tool(_)) => true,
+            (Caller::Turn(_) | Caller::Check, _) => true,
             // A program kept in the VM reads the chat's files, but has no
             // model to show anything to.
             (Caller::Program(_), Call::File) => true,
@@ -199,7 +200,7 @@ impl From<sqlx::Error> for Failure {
 }
 
 /// Runs `name` for a program Max keeps in the group's VM, outside any
-/// turn: a tool marked `program`, or the runner's max.file.
+/// turn: one of Max's tools, or the runner's max.file.
 pub async fn program_call(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
     match Call::find(name).filter(|call| context.caller.allows(*call)) {
         Some(Call::Tool(tool)) => tool.call(context, args).await,

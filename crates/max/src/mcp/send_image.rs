@@ -17,7 +17,6 @@ use crate::media::prepare::{png, prepare};
 
 /// The largest picture sent, in bytes.
 const MOST: u64 = 10 << 20;
-const PER_RUN: u32 = 5;
 
 pub struct SendImage;
 
@@ -39,9 +38,7 @@ impl Tool for SendImage {
     const NAME: &'static str = "send_image";
     const DESCRIPTION: &'static str =
         "把 /work 下的一张图发到本群，比如画的图表、截的图、下载的图片。";
-    const PER_RUN: Option<u32> = Some(PER_RUN);
     const JOB: bool = false;
-    const PROGRAM: bool = true;
 
     type Args = Args;
     type Output = Sent;
@@ -49,7 +46,7 @@ impl Tool for SendImage {
     fn guide() -> String {
         format!(
             "把 /work 下的一张图发到本群：画的图表、截的图、下载的图片。PNG、JPEG、GIF、WebP，最大 {} MiB；路径上不能有符号链接。\n  \
-            caption 是图下面的一句说明，和图在同一条消息里。发出去了才返回，handle 是这条消息里那张图的句柄。一次运行最多发 {PER_RUN} 张。\n  \
+            caption 是图下面的一句说明，和图在同一条消息里。发出去了才返回，handle 是这条消息里那张图的句柄。\n  \
             记录里已有的图和表情包不用这个，直接在回复里写它的句柄。",
             MOST >> 20
         )

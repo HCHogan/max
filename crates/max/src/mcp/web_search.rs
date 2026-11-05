@@ -9,7 +9,6 @@ use crate::search::{Error, Found};
 
 const DEFAULT: u8 = 5;
 const MOST: u8 = 10;
-const PER_RUN: u32 = 20;
 
 pub struct WebSearch;
 
@@ -30,9 +29,7 @@ pub struct Results {
 impl Tool for WebSearch {
     const NAME: &'static str = "web_search";
     const DESCRIPTION: &'static str = "搜索网页，返回前几条结果的标题、链接、摘要和发布日期。";
-    const PER_RUN: Option<u32> = Some(PER_RUN);
     const JOB: bool = true;
-    const PROGRAM: bool = true;
 
     type Args = Args;
     type Output = Results;
@@ -42,7 +39,7 @@ impl Tool for WebSearch {
     fn guide() -> String {
         format!(
             "搜索网页，返回前几条结果的标题、链接、摘要和发布日期（知道的话）。事实、价格、新闻、剧情这类拿不准或可能过时的，先搜再答，别凭记忆。\n  \
-            limit 1 到 {MOST}，默认 {DEFAULT}。一次运行最多搜 {PER_RUN} 次，要搜好几样就 Promise.all。要读全文，用 shell 跑 webread <url>。"
+            limit 1 到 {MOST}，默认 {DEFAULT}。要搜好几样就 Promise.all。要读全文，用 shell 跑 webread <url>。"
         )
     }
 

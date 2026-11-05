@@ -105,7 +105,6 @@ pub struct Conversation {
     /// The wakes from the group's programs lately, and the held ones.
     woken: woken::Woken,
     /// What the group's programs said lately.
-    program_said: program::Said,
     /// Every row committed, for the programs following the timeline.
     subscribers: broadcast::Sender<Arc<Message>>,
 }
@@ -181,7 +180,6 @@ impl Conversation {
             addressed: HashMap::new(),
             jobs: jobs::Jobs::default(),
             woken: woken::Woken::default(),
-            program_said: program::Said::default(),
             subscribers: broadcast::Sender::new(SUBSCRIBED_ROWS),
         })
     }
@@ -262,15 +260,10 @@ impl Conversation {
                 None
             }
         });
-        [
-            core,
-            self.intent.deadline().map(Instant::from_std),
-            // Held ones are dropped in a restart.
-            self.woken.due().filter(|_| self.stopping.is_none()),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
+        [core, self.intent.deadline().map(Instant::from_std)]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     async fn handle(&mut self, event: Event) -> Result<()> {
@@ -778,7 +771,6 @@ impl Conversation {
                 self.end(End::Idle).await?;
             }
         }
-        self.release_woken().await?;
         let decisions = self.intent.tick(now.into_std());
         self.decide(decisions).await
     }
@@ -881,11 +873,7 @@ impl Conversation {
             program,
             receipt,
         } = post;
-        let refused = if program {
-            self.program_says()
-        } else {
-            self.ended(origin)
-        };
+        let refused = if program { None } else { self.ended(origin) };
         if let Some(refused) = refused {
             if let Some(receipt) = receipt {
                 let _ = receipt.send(Err(refused));

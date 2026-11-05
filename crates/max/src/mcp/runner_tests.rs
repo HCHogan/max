@@ -705,8 +705,8 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
         json!({ "tool": "wake", "args": { "text": "到点了" } })
     );
 
-    // Outside a run, as a program Max keeps in the VM: fewer tools, and
-    // each call the group's.
+    // Outside a run, as a program Max keeps in the VM: all of Max's
+    // tools, but nothing to show a model, and each call the group's.
     let listed = maxx(&mcp, None, &[], "").await;
     assert_eq!(listed.status, 0, "{}", listed.stderr);
     for (name, listed_too) in [
@@ -714,10 +714,10 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
         ("say", true),
         ("file", true),
         ("events", true),
+        ("mute_member", true),
+        ("agent", true),
         ("show", false),
         ("video", false),
-        ("mute_member", false),
-        ("agent", false),
     ] {
         let line = format!("\n  {name}  ");
         assert_eq!(
@@ -733,13 +733,11 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
         said,
         json!({ "tool": "say", "args": { "text": "[reply#1] 好" } })
     );
+    // What a turn may do, a program may.
     let muted = maxx(&mcp, None, &["mute-member", "1"], "").await;
-    assert_eq!(muted.status, 2);
-    assert!(
-        muted.stderr.contains("没有 mute-member 这个工具"),
-        "{}",
-        muted.stderr
-    );
+    assert_eq!(muted.status, 0, "{}", muted.stderr);
+    let muted: Value = serde_json::from_str(&muted.stdout).unwrap();
+    assert_eq!(muted["tool"], "mute_member", "{muted}");
     let token = grant.token().to_owned();
     drop(grant);
     let ended = maxx(&mcp, Some(&token), &["history"], "").await;

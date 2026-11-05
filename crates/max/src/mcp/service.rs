@@ -37,9 +37,6 @@ use crate::vm::Signal;
 const CALL_TIME: Duration = Duration::from_secs(60);
 /// Calls a session runs at once; more wait their turn.
 const CALLS_AT_ONCE: usize = 64;
-/// A background agent's session lasts the job, as long as many programs:
-/// its caps are a program's, this many times over.
-const JOB_RUNS: u32 = 10;
 /// What a call that didn't finish may still have done. Nothing is retried
 /// or classified by its effects: what acts on the group goes through the
 /// timeline, where the model sees whether it happened.
@@ -70,8 +67,6 @@ pub(super) struct Session {
     slots: Semaphore,
     /// Per tool: calls that succeeded, and that failed.
     calls: Mutex<BTreeMap<String, (u32, u32)>>,
-    /// Per tool with a cap: calls started.
-    started: Mutex<HashMap<&'static str, u32>>,
     /// The pictures and videos the program has shown the model, in order.
     shown: Mutex<Vec<Part>>,
 }
@@ -106,7 +101,6 @@ impl Sessions {
             closed: CancellationToken::new(),
             slots: Semaphore::new(CALLS_AT_ONCE),
             calls: Mutex::default(),
-            started: Mutex::default(),
             shown: Mutex::default(),
         });
         lock(&self.table).insert(token.clone(), Arc::clone(&session));
@@ -319,7 +313,7 @@ impl Handler {
                 let session = self.session(authorization)?;
                 let allows = |spec: &&'static Spec| match &session {
                     Some(session) => session.context.caller.allows(Call::Tool(spec)),
-                    None => spec.program,
+                    None => true,
                 };
                 let tools: Vec<Value> = tool::TOOLS.iter().filter(allows).map(listed).collect();
                 Ok(json!({ "tools": tools }))
@@ -368,7 +362,7 @@ impl Handler {
                 format!("没有 {name} 这个工具"),
             ));
         };
-        let program_only = matches!(call, Call::Tool(spec) if spec.program && !spec.turn);
+        let program_only = matches!(call, Call::Tool(spec) if !spec.turn);
         match session {
             Some(session) if !program_only || matches!(session.context.caller, Caller::Job(_)) => {
                 session.run(call, args).await
@@ -410,41 +404,19 @@ impl Session {
         }
     }
 
-    /// Whether the caller may make `call`, counted against its tool's cap,
-    /// if it has one and the run, or the job, hasn't reached it.
+    /// Whether the caller may make `call`.
     fn start(&self, call: Call) -> Result<(), Failure> {
-        if !self.context.caller.allows(call) {
-            let whose = match self.context.caller {
-                Caller::Job(_) => "后台 agent",
-                _ => "这一轮",
-            };
-            return Err(Failure::new(
-                "not_allowed",
-                format!("{whose}用不了 {}", call.name()),
-            ));
-        }
-        let Call::Tool(Spec {
-            name,
-            per_run: Some(most),
-            ..
-        }) = call
-        else {
+        if self.context.caller.allows(call) {
             return Ok(());
-        };
-        let (most, whose) = match self.context.caller {
-            Caller::Job(_) => (most * JOB_RUNS, "一个后台 agent"),
-            Caller::Turn(_) | Caller::Program(_) | Caller::Check => (*most, "一次运行"),
-        };
-        let mut started = lock(&self.started);
-        let count = started.entry(name).or_default();
-        if *count >= most {
-            return Err(Failure::new(
-                "too_many",
-                format!("{whose}最多调 {most} 次 {name}"),
-            ));
         }
-        *count += 1;
-        Ok(())
+        let whose = match self.context.caller {
+            Caller::Job(_) => "后台 agent",
+            _ => "这一轮",
+        };
+        Err(Failure::new(
+            "not_allowed",
+            format!("{whose}用不了 {}", call.name()),
+        ))
     }
 }
 
@@ -708,59 +680,6 @@ mod tests {
         assert_eq!(rpc(&then, unknown).await["error"]["code"], METHOD_NOT_FOUND);
         let (status, body) = exchange(&socket, "POST", &then, "{").await;
         assert_eq!(status, "HTTP/1.1 400 Bad Request", "{body}");
-
-        scope.close(Duration::from_secs(5)).await;
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[sqlx::test(migrator = "max_db::MIGRATOR")]
-    async fn a_capped_tool_stops_at_its_cap(pool: PgPool) {
-        let mut conn = pool.acquire().await.unwrap();
-        let place = Arc::new(group(&mut conn).await);
-        drop(conn);
-        let conversation = place.conversation;
-        let sessions = Sessions::default();
-        let context = |caller| Context {
-            caller,
-            ..Context::check(Services::bare(pool.clone()), Arc::clone(&place))
-        };
-        let grant = sessions.open(context(Caller::Check));
-        let upstream = crate::llm::Upstream {
-            provider: "cliproxy".into(),
-            protocol: max_core::item::Protocol::Chat,
-            base_url: "http://127.0.0.1:9/v1".into(),
-            api_key: None,
-            headers: Vec::new(),
-            model: "gemini-3.8-flash-high".into(),
-            window: 1_000_000,
-            max_output: None,
-            effort: None,
-            idle: Duration::from_secs(120),
-        };
-        let job = sessions.open(context(Caller::Job(Arc::new(upstream))));
-        let dir = sockets("cap");
-        let socket = dir.join("mine.sock");
-        let mut scope = Scope::new();
-        serve_at(&mut scope, &socket, conversation, &sessions);
-
-        let search = json!({ "name": "web_search", "arguments": { "query": "示波器" } });
-        let code = async |grant: &Grant| {
-            let result = post(&socket, grant.token(), "tools/call", search.clone()).await;
-            result["structuredContent"]["code"]
-                .as_str()
-                .unwrap()
-                .to_owned()
-        };
-        for _ in 0..20 {
-            assert_eq!(code(&grant).await, "unavailable", "no search here");
-        }
-        assert_eq!(code(&grant).await, "too_many");
-        assert_eq!(grant.calls()["web_search"], (0, 21));
-        // A job's session lasts the job: its cap is many programs'.
-        for _ in 0..20 * JOB_RUNS {
-            assert_eq!(code(&job).await, "unavailable");
-        }
-        assert_eq!(code(&job).await, "too_many");
 
         scope.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(dir);
