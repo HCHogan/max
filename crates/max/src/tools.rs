@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
@@ -13,7 +14,7 @@ use max_core::ids::ConversationId;
 use max_core::item::{Part, ToolOutput};
 use max_core::project::{PICTURE_TOKENS, VIDEO_TOKENS_PER_SECOND};
 use max_core::tools::Tool;
-use serde_json::json;
+use serde::Serialize;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::time::{Instant, timeout};
@@ -162,6 +163,25 @@ fn unit_line(
     )
 }
 
+/// What the runner reads on its stdin: the program, its arguments, the
+/// token it calls Max's tools with, and their names.
+#[derive(Serialize)]
+struct RunnerInput<'a> {
+    code: &'a str,
+    args: Option<serde_json::Value>,
+    token: &'a str,
+    tools: &'static [&'static str],
+}
+
+/// The tools a program in a turn may call.
+static TURN_TOOLS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+    mcp::tool::TOOLS
+        .iter()
+        .filter(|tool| tool.turn)
+        .map(|tool| tool.name)
+        .collect()
+});
+
 /// What the model is shown, and whether the program failed. The result
 /// and the console are cut as `shell`'s output is.
 async fn run_code(
@@ -174,19 +194,18 @@ async fn run_code(
     let unit = Vm::unit();
     // The runner has the token from its input.
     let line = unit_line(&unit, limit, "/work", "exec node /run/max/runner.js", None);
-    let tools: Vec<&str> = mcp::tool::TOOLS
-        .iter()
-        .filter(|tool| tool.turn)
-        .map(|tool| tool.name)
-        .collect();
-    let input = json!({ "code": code, "args": args, "token": grant.token(), "tools": tools });
+    let input = RunnerInput {
+        code,
+        args,
+        token: grant.token(),
+        tools: &TURN_TOOLS,
+    };
+    let input = serde_json::to_vec(&input).expect("the runner's input is JSON");
     let mut split = Split {
         out: Output::new(vm.work(), format!("{unit}.txt")),
         err: Output::new(vm.work(), format!("{unit}.log")),
     };
-    let mut running = vm
-        .command(unit, &line, input.to_string().as_bytes())
-        .await?;
+    let mut running = vm.command(unit, &line, &input).await?;
     let waited = timeout(limit, running.wait(&mut split)).await;
     split.out.finish().await?;
     split.err.finish().await?;
