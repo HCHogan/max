@@ -1,21 +1,20 @@
 //! The pictures a model call is sent: the versions made for the model,
-//! read from the content store as data URLs. An item names a row's
-//! medium, and this finds it; a tool result names the file itself, and
-//! names videos too. See "媒体" and "多模态结果".
+//! read from the content store. An item names a row's medium, and this
+//! finds it; a tool result names the file itself, and names videos too.
+//! See "媒体" and "多模态结果".
 
 use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
 use max_core::ids::MessageId;
 use max_core::item::{Image, ItemKind, Part};
 use max_core::message::MediaRef;
 use max_core::run::Request;
 use max_db::media;
+use max_llm::Medium;
 use sqlx::PgPool;
 use tokio::fs;
 use tracing::warn;
@@ -42,9 +41,9 @@ impl Pictures {
     pub async fn read(&self, request: &Request) -> max_llm::Pictures {
         let mut pictures = BTreeMap::new();
         for sha256 in shown(request) {
-            match self.data_url(sha256).await {
-                Ok(url) => {
-                    pictures.insert(sha256.to_owned(), url);
+            match self.picture(sha256).await {
+                Ok(picture) => {
+                    pictures.insert(sha256.to_owned(), picture);
                 }
                 Err(error) => warn!(%sha256, %error, "reading a tool's picture for a model call"),
             }
@@ -52,8 +51,8 @@ impl Pictures {
         for sha256 in videos(request) {
             match fs::read(self.store.path(sha256)).await {
                 Ok(bytes) => {
-                    let url = format!("data:video/mp4;base64,{}", STANDARD.encode(&bytes));
-                    pictures.insert(sha256.to_owned(), url);
+                    let mime = "video/mp4";
+                    pictures.insert(sha256.to_owned(), Medium { mime, bytes });
                 }
                 Err(error) => warn!(%sha256, %error, "reading a tool's video for a model call"),
             }
@@ -79,9 +78,9 @@ impl Pictures {
         };
         for (image, sha256) in found {
             let handle = image.handle();
-            match self.data_url(&sha256).await {
-                Ok(url) => {
-                    pictures.insert(handle, url);
+            match self.picture(&sha256).await {
+                Ok(picture) => {
+                    pictures.insert(handle, picture);
                 }
                 Err(error) => warn!(%handle, %error, "reading a picture for a model call"),
             }
@@ -121,14 +120,13 @@ impl Pictures {
         }
     }
 
-    async fn data_url(&self, sha256: &str) -> io::Result<String> {
+    async fn picture(&self, sha256: &str) -> io::Result<Medium> {
         let bytes = fs::read(self.store.path(sha256)).await?;
         let format = image::guess_format(&bytes).map_err(io::Error::other)?;
-        Ok(format!(
-            "data:{};base64,{}",
-            format.to_mime_type(),
-            STANDARD.encode(&bytes)
-        ))
+        Ok(Medium {
+            mime: format.to_mime_type(),
+            bytes,
+        })
     }
 }
 

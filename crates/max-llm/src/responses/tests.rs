@@ -9,6 +9,7 @@ use max_core::tools::TOOLS;
 use serde_json::json;
 
 use super::*;
+use crate::Medium;
 
 /// The body as the provider reads it.
 fn sent(request: &Request, options: &Options, pictures: &Pictures) -> Value {
@@ -67,8 +68,11 @@ fn with_pictures(model: ModelTag) -> (Request, Pictures) {
         max_output: None,
         roster: BTreeSet::new(),
     };
-    let url = "data:image/jpeg;base64,AAAA".to_owned();
-    let pictures = Pictures([("image#7.0".to_owned(), url)].into());
+    let jpeg = Medium {
+        mime: "image/jpeg",
+        bytes: vec![0; 3],
+    };
+    let pictures = Pictures([("image#7.0".to_owned(), jpeg)].into());
     (request, pictures)
 }
 
@@ -333,13 +337,17 @@ fn a_programs_pictures_go_in_its_output() {
         max_output: None,
         roster: BTreeSet::new(),
     };
-    let pictures = Pictures([("aa".to_owned(), "data:image/png;base64,AA".to_owned())].into());
+    let png = Medium {
+        mime: "image/png",
+        bytes: vec![0],
+    };
+    let pictures = Pictures([("aa".to_owned(), png)].into());
     let body = sent(&request, &Options::default(), &pictures);
     assert_eq!(
         body["input"][0]["output"],
         json!([
             { "type": "input_text", "text": "返回值：\n截好了" },
-            { "type": "input_image", "image_url": "data:image/png;base64,AA", "detail": "auto" },
+            { "type": "input_image", "image_url": "data:image/png;base64,AA==", "detail": "auto" },
             { "type": "input_text", "text": "[这张图省略了，要看再 max.image]" },
         ])
     );
@@ -382,7 +390,11 @@ fn a_video_is_named_in_its_output() {
         roster: BTreeSet::new(),
     };
     // Responses takes no video: a note in its place.
-    let pictures = Pictures([("vv".to_owned(), "data:video/mp4;base64,AAAA".to_owned())].into());
+    let mp4 = Medium {
+        mime: "video/mp4",
+        bytes: vec![0; 3],
+    };
+    let pictures = Pictures([("vv".to_owned(), mp4)].into());
     let body = sent(&request, &Options::default(), &pictures);
     assert_eq!(
         body["input"][0]["output"],

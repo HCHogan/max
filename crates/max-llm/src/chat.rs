@@ -27,7 +27,9 @@ use serde::{Serialize, Serializer};
 use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
 
-use crate::{Error, Joined, Options, Pictures, Piece, pieces, schema, share_tokens, tool_pieces};
+use crate::{
+    DataUrl, Error, Joined, Options, Pictures, Piece, pieces, schema, share_tokens, tool_pieces,
+};
 
 const THINK: &str = "<think>";
 const UNTHINK: &str = "</think>";
@@ -105,7 +107,7 @@ enum PartKind<'a> {
 
 #[derive(Serialize)]
 struct Url<'a> {
-    url: &'a str,
+    url: DataUrl<'a>,
 }
 
 #[derive(Serialize)]
@@ -289,11 +291,15 @@ fn pictures_shown(shown: Vec<Piece<'_>>) -> Message<'_> {
 fn part(piece: Piece<'_>) -> Part<'_> {
     let kind = match piece {
         Piece::Text(text) => PartKind::Text { text },
-        Piece::Picture(url) => PartKind::ImageUrl {
-            image_url: Url { url },
+        Piece::Picture(medium) => PartKind::ImageUrl {
+            image_url: Url {
+                url: DataUrl(medium),
+            },
         },
-        Piece::Video(url) => PartKind::VideoUrl {
-            video_url: Url { url },
+        Piece::Video(medium) => PartKind::VideoUrl {
+            video_url: Url {
+                url: DataUrl(medium),
+            },
         },
     };
     Part {

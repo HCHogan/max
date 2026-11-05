@@ -119,7 +119,7 @@ async fn pictures_are_read_and_new_ones_waited_for(pool: PgPool) {
     assert!(
         read.0
             .values()
-            .all(|url| url.starts_with("data:image/png;base64,iVBOR"))
+            .all(|picture| picture.mime == "image/png" && picture.bytes.starts_with(b"\x89PNG"))
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -174,11 +174,7 @@ async fn every_picture_programs_showed_is_read(pool: PgPool) {
     let mut expected: Vec<&String> = stored.iter().collect();
     expected.sort();
     assert_eq!(read.0.keys().collect::<Vec<_>>(), expected);
-    assert!(
-        read.0
-            .values()
-            .all(|url| url.starts_with("data:image/png;base64,"))
-    );
+    assert!(read.0.values().all(|picture| picture.mime == "image/png"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -233,6 +229,10 @@ async fn the_newest_videos_programs_showed_are_read(pool: PgPool) {
     let mut expected: Vec<&String> = stored[1..].iter().collect();
     expected.sort();
     assert_eq!(read.0.keys().collect::<Vec<_>>(), expected);
-    assert_eq!(read.0[&stored[3]], "data:video/mp4;base64,AwMDAwMDAwM=");
+    let video = &read.0[&stored[3]];
+    assert_eq!(
+        (video.mime, video.bytes.as_slice()),
+        ("video/mp4", &[3; 8][..])
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

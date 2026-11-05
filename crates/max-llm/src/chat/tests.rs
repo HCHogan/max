@@ -7,6 +7,10 @@ use max_core::message::{MediaKind, MediaRef};
 use max_core::tools::TOOLS;
 
 use super::*;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+
+use crate::Medium;
 
 /// The body as the provider reads it.
 fn sent(request: &Request, options: &Options, pictures: &Pictures) -> Value {
@@ -182,8 +186,11 @@ fn with_pictures(model: ModelTag) -> (Request, Pictures) {
         max_output: None,
         roster: BTreeSet::new(),
     };
-    let url = "data:image/jpeg;base64,AAAA".to_owned();
-    let pictures = Pictures([("image#7.0".to_owned(), url)].into());
+    let jpeg = Medium {
+        mime: "image/jpeg",
+        bytes: vec![0; 3],
+    };
+    let pictures = Pictures([("image#7.0".to_owned(), jpeg)].into());
     (request, pictures)
 }
 
@@ -238,12 +245,16 @@ fn pictures_sit_after_their_rows() {
         max_output: None,
         roster: BTreeSet::new(),
     };
-    let url = |n: u8| format!("data:image/jpeg;base64,{n}");
+    let jpeg = |n: u8| Medium {
+        mime: "image/jpeg",
+        bytes: vec![n],
+    };
+    let url = |n: u8| format!("data:image/jpeg;base64,{}", STANDARD.encode([n]));
     let pictures = Pictures(
         [
-            ("image#7.0".to_owned(), url(1)),
-            ("sticker#8.0".to_owned(), url(2)),
-            ("image#3.0".to_owned(), url(3)),
+            ("image#7.0".to_owned(), jpeg(1)),
+            ("sticker#8.0".to_owned(), jpeg(2)),
+            ("image#3.0".to_owned(), jpeg(3)),
         ]
         .into(),
     );
@@ -600,8 +611,12 @@ fn programs_pictures_follow_their_results() {
         max_output: None,
         roster: BTreeSet::new(),
     };
-    let url = "data:image/png;base64,AA";
-    let pictures = Pictures([("aa".to_owned(), url.to_owned())].into());
+    let url = "data:image/png;base64,AA==";
+    let png = Medium {
+        mime: "image/png",
+        bytes: vec![0],
+    };
+    let pictures = Pictures([("aa".to_owned(), png)].into());
     let messages = sent(&request, &Options::default(), &pictures)["messages"].clone();
     let text = |n| format!("返回值：\n截好了\n[图 {n}，见下]\n[这张图省略了，要看再 max.image]");
     assert_eq!(messages[1]["content"], text(1));
@@ -672,14 +687,16 @@ fn programs_videos_follow_their_results() {
         max_output: None,
         roster: BTreeSet::new(),
     };
-    let (picture, video) = ("data:image/png;base64,AA", "data:video/mp4;base64,AAAA");
-    let pictures = Pictures(
-        [
-            ("aa".to_owned(), picture.to_owned()),
-            ("vv".to_owned(), video.to_owned()),
-        ]
-        .into(),
-    );
+    let (picture, video) = ("data:image/png;base64,AA==", "data:video/mp4;base64,AAAA");
+    let png = Medium {
+        mime: "image/png",
+        bytes: vec![0],
+    };
+    let mp4 = Medium {
+        mime: "video/mp4",
+        bytes: vec![0; 3],
+    };
+    let pictures = Pictures([("aa".to_owned(), png), ("vv".to_owned(), mp4)].into());
     let messages = sent(&request, &Options::default(), &pictures)["messages"].clone();
     assert_eq!(
         messages[1]["content"],

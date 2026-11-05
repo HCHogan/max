@@ -17,7 +17,8 @@ use serde_json::value::RawValue;
 use tracing::warn;
 
 use crate::{
-    Error, Joined, Options, Pictures, Piece, pieces, plain, schema, share_tokens, tool_pieces,
+    DataUrl, Error, Joined, Options, Pictures, Piece, pieces, plain, schema, share_tokens,
+    tool_pieces,
 };
 
 /// What a tool result says where a video was: Responses takes none.
@@ -89,7 +90,7 @@ enum Part<'a> {
         text: Cow<'a, str>,
     },
     InputImage {
-        image_url: &'a str,
+        image_url: DataUrl<'a>,
         detail: &'static str,
     },
 }
@@ -199,8 +200,8 @@ fn tool_output<'a>(output: &'a ToolOutput, pictures: &'a Pictures) -> Content<'a
 fn wire(piece: Piece<'_>) -> Part<'_> {
     match piece {
         Piece::Text(text) => Part::InputText { text },
-        Piece::Picture(url) => Part::InputImage {
-            image_url: url,
+        Piece::Picture(medium) => Part::InputImage {
+            image_url: DataUrl(medium),
             detail: "auto",
         },
         // max.video refuses on a model that doesn't watch videos.

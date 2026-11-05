@@ -18,6 +18,8 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 
+use base64::display::Base64Display;
+use base64::engine::general_purpose::STANDARD;
 use max_core::item::{Image, Item, ItemKind, Part, ToolOutput, Usage};
 use max_core::message::MediaRef;
 use max_core::tools::ToolSpec;
@@ -36,21 +38,39 @@ pub struct Options {
     pub cache_breakpoints: bool,
 }
 
-/// The pictures a request's items name, as data URLs: a row's by handle,
-/// a tool result's by SHA-256; and the videos tool results show, by
-/// SHA-256. `max` reads them before the call. One it couldn't read, or
-/// that isn't downloaded, is left out of the request; its handle is still
-/// in the text.
+/// The pictures a request's items name: a row's by handle, a tool
+/// result's by SHA-256; and the videos tool results show, by SHA-256.
+/// `max` reads them before the call. One it couldn't read, or that isn't
+/// downloaded, is left out of the request; its handle is still in the
+/// text.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Pictures(pub BTreeMap<String, String>);
+pub struct Pictures(pub BTreeMap<String, Medium>);
+
+/// A picture's or a video's file. It goes out as a data URL, base64'd as
+/// the body is written: no copy of it is made for the request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Medium {
+    pub mime: &'static str,
+    pub bytes: Vec<u8>,
+}
 
 /// A piece of a user item's content.
 enum Piece<'a> {
     Text(Cow<'a, str>),
-    /// A data URL.
-    Picture(&'a str),
-    /// A data URL, of an MP4.
-    Video(&'a str),
+    Picture(&'a Medium),
+    /// An MP4.
+    Video(&'a Medium),
+}
+
+/// A medium as its data URL.
+struct DataUrl<'a>(&'a Medium);
+
+impl Serialize for DataUrl<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let Medium { mime, bytes } = self.0;
+        let base64 = Base64Display::new(bytes, &STANDARD);
+        serializer.collect_str(&format_args!("data:{mime};base64,{base64}"))
+    }
 }
 
 /// Texts joined as they are written, not into a string first.
@@ -85,13 +105,13 @@ fn pieces<'a>(
     images: &'a [Image],
     pictures: &'a Pictures,
 ) -> Option<Vec<Piece<'a>>> {
-    let mut placed: Vec<(usize, String, &str)> = images
+    let mut placed: Vec<(usize, String, &Medium)> = images
         .iter()
         .filter_map(|image| {
             let handle = image.handle();
-            let url = pictures.0.get(&handle)?;
+            let medium = pictures.0.get(&handle)?;
             let at = after_line(text, &handle).unwrap_or(text.len());
-            Some((at, handle, url.as_str()))
+            Some((at, handle, medium))
         })
         .collect();
     if placed.is_empty() {
@@ -100,13 +120,13 @@ fn pieces<'a>(
     placed.sort_by_key(|(at, ..)| *at);
     let mut pieces = Vec::new();
     let mut from = 0;
-    for (at, handle, url) in placed {
+    for (at, handle, medium) in placed {
         if at > from {
             pieces.push(Piece::Text(text[from..at].into()));
             from = at;
         }
         pieces.push(Piece::Text(format!("[{handle}]").into()));
-        pieces.push(Piece::Picture(url));
+        pieces.push(Piece::Picture(medium));
     }
     if from < text.len() {
         pieces.push(Piece::Text(text[from..].into()));
@@ -149,7 +169,7 @@ fn tool_pieces<'a>(output: &'a ToolOutput, pictures: &'a Pictures) -> Vec<Piece<
             } => pictures
                 .0
                 .get(sha256)
-                .map_or(Piece::Text(LEFT_OUT.into()), |url| Piece::Picture(url)),
+                .map_or(Piece::Text(LEFT_OUT.into()), Piece::Picture),
             Part::Media { .. } => Piece::Text(LEFT_OUT.into()),
             Part::Video {
                 media: MediaRef::Blob(sha256),
@@ -157,7 +177,7 @@ fn tool_pieces<'a>(output: &'a ToolOutput, pictures: &'a Pictures) -> Vec<Piece<
             } => pictures
                 .0
                 .get(sha256)
-                .map_or(Piece::Text(VIDEO_LEFT_OUT.into()), |url| Piece::Video(url)),
+                .map_or(Piece::Text(VIDEO_LEFT_OUT.into()), Piece::Video),
             Part::Video { .. } => Piece::Text(VIDEO_LEFT_OUT.into()),
         })
         .collect()
@@ -218,10 +238,24 @@ fn weight(item: &Item) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
     use max_core::ids::CallId;
     use max_core::item::ToolCall;
 
     use super::*;
+
+    #[test]
+    fn a_data_url_is_the_whole_file() {
+        // Longer than the encoder's chunks, and not a multiple of three.
+        let bytes: Vec<u8> = (0..=255).cycle().take(10_000).collect();
+        let medium = Medium {
+            mime: "image/png",
+            bytes,
+        };
+        let url = serde_json::to_string(&DataUrl(&medium)).unwrap();
+        let encoded = STANDARD.encode(&medium.bytes);
+        assert_eq!(url, format!("\"data:image/png;base64,{encoded}\""));
+    }
 
     #[test]
     fn tokens_follow_the_text() {
