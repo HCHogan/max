@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::Filters;
-use crate::conversation::project::{joined, own_mark, people, shown_line};
+use crate::conversation::project::{own_mark, people, shown_line};
 use crate::mcp::{Context, Failure};
 use crate::tokens;
 
@@ -166,7 +166,7 @@ async fn lines(
             (&row.message, line)
         })
         .collect();
-    Ok(packed(&joined(&render, &lines, None), context.page_tokens))
+    Ok(packed(&render.joined(&lines, None), context.page_tokens))
 }
 
 /// `text` in pages of at most `most` tokens, cut evenly by characters.

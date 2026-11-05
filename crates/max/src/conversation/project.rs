@@ -129,7 +129,7 @@ impl Projection<'_> {
             first_lines.push((&row.message, line));
         }
         let last_shown = lines.last().map(|(message, _)| message.at);
-        let mut first_text = joined(&render, &first_lines, last_shown);
+        let mut first_text = render.joined(&first_lines, last_shown);
         for wake in &wakes {
             if let Some(Item {
                 kind: ItemKind::User { text, .. },
@@ -148,7 +148,7 @@ impl Projection<'_> {
                 (&row.message, line)
             })
             .collect();
-        let quoted_text = joined(&render, &quoted_lines, None);
+        let quoted_text = render.joined(&quoted_lines, None);
 
         let mut roster: BTreeSet<PrincipalId> = people.values().copied().collect();
         roster.insert(self.place.me.principal);
@@ -239,7 +239,7 @@ pub async fn follow_up(
         .iter()
         .map(|(message, mark)| (*message, shown_line(&render, message, *mark, single)))
         .collect();
-    text.push_str(&joined(&render, &lines, after));
+    text.push_str(&render.joined(&lines, after));
     let text = text.trim_end().to_owned();
     let tokens = tokens::count(&text);
     Ok(Input::Messages {
@@ -331,30 +331,10 @@ fn pieces<P: max_core::render::People>(
     let mut start: usize = 0;
     for end in cuts.into_iter().chain([lines.len()]) {
         let after = start.checked_sub(1).map(|last| lines[last].0.at);
-        pieces.push(joined(render, &lines[start..end], after));
+        pieces.push(render.joined(&lines[start..end], after));
         start = end;
     }
     pieces
-}
-
-/// Lines in order, with a date line where the day changes and a gap line
-/// after a long silence, as [`Render::lines`] does.
-pub(crate) fn joined<P: max_core::render::People>(
-    render: &Render<'_, P>,
-    lines: &[(&Message, String)],
-    mut after: Option<DateTime<Utc>>,
-) -> String {
-    let mut out = String::new();
-    for (message, line) in lines {
-        if let Some(separator) = render.separator(after, message.at) {
-            out.push_str(&separator);
-            out.push('\n');
-        }
-        out.push_str(line);
-        out.push('\n');
-        after = Some(message.at);
-    }
-    out
 }
 
 /// The person behind every account the messages show: senders and the

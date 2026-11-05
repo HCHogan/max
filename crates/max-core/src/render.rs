@@ -12,7 +12,6 @@
 //! echoes one.
 
 use std::collections::BTreeMap;
-use std::fmt::Write;
 use std::time::Duration;
 
 use chrono::{DateTime, Datelike, FixedOffset, TimeDelta, Utc, Weekday};
@@ -65,19 +64,18 @@ pub struct Render<'a, P> {
 }
 
 impl<P: People> Render<'_, P> {
-    /// Rows in order. `after` is when the row before them was sent, if one
-    /// was already shown, so a date line appears only when the day changes.
-    pub fn lines<'m>(
-        &self,
-        rows: impl IntoIterator<Item = (&'m Message, Mark)>,
-        mut after: Option<DateTime<Utc>>,
-    ) -> String {
+    /// Rows' lines, already rendered, in order. `after` is when the row
+    /// before them was sent, if one was already shown, so a date line
+    /// appears only when the day changes; a gap line follows a long
+    /// silence.
+    pub fn joined(&self, lines: &[(&Message, String)], mut after: Option<DateTime<Utc>>) -> String {
         let mut out = String::new();
-        for (message, mark) in rows {
+        for (message, line) in lines {
             if let Some(separator) = self.separator(after, message.at) {
-                let _ = writeln!(out, "{separator}");
+                out.push_str(&separator);
+                out.push('\n');
             }
-            out.push_str(&self.line(message, mark));
+            out.push_str(line);
             out.push('\n');
             after = Some(message.at);
         }
@@ -450,7 +448,13 @@ mod tests {
             Mark::None,
             Mark::None,
         ];
-        insta::assert_snapshot!(render(&people).lines(rows.iter().zip(marks), None));
+        let render = render(&people);
+        let lines: Vec<_> = rows
+            .iter()
+            .zip(marks)
+            .map(|(row, mark)| (row, render.line(row, mark)))
+            .collect();
+        insta::assert_snapshot!(render.joined(&lines, None));
     }
 
     #[test]
@@ -458,10 +462,9 @@ mod tests {
         let people = people();
         let row = message(5, (28, 2, 0), "小明", said(vec![text("嗯")]));
         let before = Utc.with_ymd_and_hms(2026, 10, 28, 1, 30, 0).unwrap();
-        assert_eq!(
-            render(&people).lines([(&row, Mark::None)], Some(before)),
-            "[10:00 小明 #5]: 嗯\n"
-        );
+        let render = render(&people);
+        let lines = [(&row, render.line(&row, Mark::None))];
+        assert_eq!(render.joined(&lines, Some(before)), "[10:00 小明 #5]: 嗯\n");
     }
 
     #[test]
