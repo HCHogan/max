@@ -90,6 +90,11 @@ pub async fn video(
     // Whole seconds, at least one: the sound runs a little past the last
     // frame. The header is the program's word, so a length past any real
     // video's is just too long.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "`as` saturates, and a header's length is never negative"
+    )]
     let seconds = u32::try_from(length.round() as u64)
         .unwrap_or(u32::MAX)
         .max(1);

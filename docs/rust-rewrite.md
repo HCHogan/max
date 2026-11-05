@@ -1761,7 +1761,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 - intent 的状态机和拼分类提示词、解析输出在 `max-core`；分类任务（读库、调小模型）是 `max` 里的 I/O 任务。派生数据 worker 各一个模块，比如 `max/src/recall.rs`；它们的纯逻辑（提示词、校验）放 `max-core`，不起库就能测。
 - 平台适配先不拆出 crate，`max` 大到难受再分。
 - `qqbot` 原来不单独 repo（v1 期间协议层的形状还会动）。2026-11-03 owner 让拆出去：`git subtree split` 带着它的 17 个提交建了 [HCHogan/qqbot](https://github.com/HCHogan/qqbot)，公开、MIT，有自己的 Cargo.toml（workspace 的依赖、lint、包字段都写开）、工具链、clippy.toml 和跑 fmt、clippy、测试的 CI。max 按提交依赖它：`Cargo.toml` 里 `git` 加 `rev`，换版本改 `rev`；cargo-deny 的 `allow-git` 只放这一个仓库；crane 照 `Cargo.lock` 取，不用另给 hash。不用 git submodule。只有它用的 md-5、sha1、tokio-tungstenite 从 workspace 的依赖里删了。
-- lint 集中在 workspace 的 `[workspace.lints]`；裸 `tokio::spawn` 用 `clippy.toml` 的 `disallowed-methods` 拦。
+- lint 集中在 workspace 的 `[workspace.lints]`；裸 `tokio::spawn` 用 `clippy.toml` 的 `disallowed-methods` 拦。2026-11-05 加了几条 pedantic 的：可能截断、变号、溢出的 `as`（改用 `try_from`，确实要截的写 `#[expect]` 和理由），单个变体的 `_` 分支（加了变体不会悄悄落进去），`#[allow]` 一律换成带理由的 `#[expect]`，多余的 clone，大 future。没开 `cast_precision_loss`（这里转 f64 的都是小数目）和 `expect_used`（`unwrap_used` 已经逼着写带理由的 `expect`，再拦就是同一句话写两遍）。
 - **限制集中在 `max_core::limits`**（2026-11-05）。原来散在十几个文件里，有的同一个数写了两三遍（64 MiB 在下载、send_file、chat_file 的报错里各一份；视频 600 秒在 show 和投影里各一份；记忆文件 256 KiB 在 actor 和 dreamer 里各一份），提示词、工具说明里的数字又是手写的。现在模型会被告知的、或者不止一处在用的限制都在这一个模块；系统提示的规则、run_code 和 shell 的说明、后台 agent 的说明、整理记忆的提示词都用 `format!` 从这里写出来，改一个数，模型读到的跟着变。VM 闲置多久关机来自配置 `vm.idle_minutes`，经 `Vms::idle` 传给 `prompt::system`。guest 里 `webread` 的默认字数是 Python 写的，有个测试对着常量查。留在原处的：工具参数的范围（跟着各自的 schema）、QQ 自己的限制（两分钟撤回、禁言 30 天）、算法的调参（intent 的批大小、等待）、只为管道不卡死的超时和重试。
 
 ### 工具链

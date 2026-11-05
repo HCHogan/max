@@ -176,7 +176,7 @@ pub async fn tail_ends(
                 .iter()
                 .filter_map(|input| match input {
                     Input::Wake(wake) => wake.ids.iter().min().copied(),
-                    _ => None,
+                    Input::Messages { .. } => None,
                 })
                 .min(),
         })
@@ -202,7 +202,7 @@ pub async fn running_since(
         .flat_map(|Json(inputs)| inputs)
         .filter_map(|input| match input {
             Input::Wake(wake) => wake.ids.iter().min().copied(),
-            _ => None,
+            Input::Messages { .. } => None,
         })
         .min())
 }

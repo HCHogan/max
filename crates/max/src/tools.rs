@@ -46,7 +46,7 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
         %conversation,
         tool = name,
         browser,
-        took_ms = started.elapsed().as_millis() as u64,
+        took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         error = output.error,
         tokens = output.tokens,
         calls = tally(&calls),

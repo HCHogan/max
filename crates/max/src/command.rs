@@ -80,7 +80,7 @@ pub fn given(inbound: &Inbound) -> Option<Command> {
 pub fn how(kind: ConversationKind, me: &str, command: &str) -> String {
     match kind {
         ConversationKind::Group => format!("@{me} {command}"),
-        _ => command.to_owned(),
+        ConversationKind::Direct => command.to_owned(),
     }
 }
 

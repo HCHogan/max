@@ -93,8 +93,8 @@ fn a_hold_ends_after_twenty_seconds_however_much_follows() {
     let clock = Clock(Instant::now());
     let mut intent = Intent::new();
     intent.observe(&entry(1, XIAOMING, EntryKind::Direct, ""), clock.at(0));
-    for (i, secs) in [5, 10, 15].into_iter().enumerate() {
-        let e = entry(2 + i as i64, XIAOMING, EntryKind::Chatter, "还有");
+    for (id, secs) in (2..).zip([5, 10, 15]) {
+        let e = entry(id, XIAOMING, EntryKind::Chatter, "还有");
         intent.observe(&e, clock.at(secs));
     }
     assert_eq!(intent.deadline(), Some(clock.at(20)));
@@ -155,7 +155,7 @@ fn judged_wakes_are_capped() {
     let mut woken = 0;
     for i in 0..10 {
         let at = clock.at(i * 60);
-        intent.observe(&chat(i as i64), at);
+        intent.observe(&chat(i.try_into().unwrap()), at);
         woken += intent.verdict(verdict(true), at).len();
     }
     assert_eq!(woken, JUDGED_WAKES_PER_HOUR);

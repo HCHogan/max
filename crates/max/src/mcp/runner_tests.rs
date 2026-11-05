@@ -398,7 +398,10 @@ async fn programs_show_the_model_videos(pool: PgPool) {
     // The model's copy: an MP4, smaller than what it was made from.
     let copy = std::fs::read(store.path(sha256(&shown[0]))).unwrap();
     assert_eq!(&copy[4..8], b"ftyp");
-    assert!(copy.len() < std::fs::metadata(work.join("clip.mkv")).unwrap().len() as usize);
+    assert!(
+        u64::try_from(copy.len()).unwrap()
+            < std::fs::metadata(work.join("clip.mkv")).unwrap().len()
+    );
     // The copies' files are gone once the host has them.
     let left: Vec<_> = std::fs::read_dir(work.join(".max/shown"))
         .unwrap()

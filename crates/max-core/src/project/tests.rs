@@ -69,7 +69,7 @@ fn roster_lines_and_mentions() {
 
 #[test]
 fn memory_near_its_cap_asks_to_be_tidied_and_past_it_is_cut() {
-    let count = |text: &str| text.chars().count() as u32;
+    let count = |text: &str| u32::try_from(text.chars().count()).unwrap();
     let short = "# 记忆\n- 群友叫你小鲨鲨（2026-08-28 #3）\n";
     assert_eq!(memory(short, count), short.trim_end());
     let line = "字".repeat(99);
@@ -106,7 +106,7 @@ fn the_base_context() {
             volatile,
         ],
         [PrincipalId(12)].into(),
-        |text| text.chars().count() as u32,
+        |text| u32::try_from(text.chars().count()).unwrap(),
     );
     let kinds: Vec<(&str, u32)> = context
         .items

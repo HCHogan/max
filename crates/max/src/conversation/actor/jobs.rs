@@ -71,7 +71,7 @@ impl Conversation {
                             minutes: running.started.elapsed().as_secs() / 60,
                             calls: progress.calls,
                             tools: progress.tools,
-                            tool: progress.tool.clone(),
+                            tool: progress.tool,
                         }
                     })
                     .collect();

@@ -232,7 +232,10 @@ pub fn by(message: &Message) -> By {
 /// What Max's account says, `by` whom. A quote of something that isn't a
 /// message on this timeline is dropped, and so is a picture Max may not
 /// send; None if nothing is left.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the row's parts, each from the caller"
+)]
 pub async fn said(
     conn: &mut PgConnection,
     place: &Place,
@@ -356,7 +359,7 @@ pub async fn unsend(
 }
 
 /// Commits a row in Max's name.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "each is a column of the row")]
 async fn mine(
     conn: &mut PgConnection,
     place: &Place,
