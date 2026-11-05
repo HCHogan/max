@@ -69,18 +69,17 @@ impl Projection<'_> {
             people: &tail_people,
             offset: self.offset,
         };
-        let costs: Vec<u32> = tail
+        let mut tail_lines: Vec<(String, u32)> = tail
             .iter()
-            .map(|row| {
-                let line = shown_line(&render, &row.message, own_mark(row), budgets.single);
-                tokens::count(&line)
-            })
+            .map(|row| counted_line(&render, &row.message, own_mark(row), budgets.single))
             .collect();
+        let costs: Vec<u32> = tail_lines.iter().map(|(_, tokens)| *tokens).collect();
         let start = project::tail_start(&costs, &budgets);
         if let Some(last_cut) = start.checked_sub(1).and_then(|last| tail.get(last)) {
             platform::set_tail_after(conn, conversation, last_cut.message.id).await?;
         }
         tail.drain(..start);
+        tail_lines.drain(..start);
 
         let mut quoted_ids = BTreeSet::new();
         let shown: BTreeSet<MessageId> = tail
@@ -111,12 +110,12 @@ impl Projection<'_> {
             offset: self.offset,
         };
 
+        // The tail's lines as they were rendered to cut it: a line names
+        // only the people of its row, who are in both maps.
         let lines: Vec<(&Message, String)> = tail
             .iter()
-            .map(|row| {
-                let line = shown_line(&render, &row.message, own_mark(row), budgets.single);
-                (&row.message, line)
-            })
+            .zip(tail_lines)
+            .map(|(row, (line, _))| (&row.message, line))
             .collect();
         let ends = turns::tail_ends(conn, conversation, cursor, from).await?;
         let pieces = pieces(&render, &lines, &ends);
@@ -278,11 +277,24 @@ pub(crate) fn shown_line<P: max_core::render::People>(
     mark: Mark,
     single: u32,
 ) -> String {
+    counted_line(render, message, mark, single).0
+}
+
+/// [`shown_line`], and its tokens.
+fn counted_line<P: max_core::render::People>(
+    render: &Render<'_, P>,
+    message: &Message,
+    mark: Mark,
+    single: u32,
+) -> (String, u32) {
     let line = render.line(message, mark);
-    if tokens::count(&line) > single {
-        render.excerpt(message, mark)
+    let tokens = tokens::count(&line);
+    if tokens > single {
+        let excerpt = render.excerpt(message, mark);
+        let tokens = tokens::count(&excerpt);
+        (excerpt, tokens)
     } else {
-        line
+        (line, tokens)
     }
 }
 
