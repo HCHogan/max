@@ -1510,7 +1510,8 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
 - **做法**：tank 上一个网络命名空间 `maxx-ops`，里面跑一个专用的 tailscaled，是 tailnet 里的节点 `maxops`（Headscale 用户 `max@imdomestic.com`）。配置里列出的群（`vm.operations.conversations`，按会话 id，公开仓库里不写群号），它们的 VM 用另一组 tap（`maxx-ops0…`，10.236.0.0/24），宿主按源地址把这些 tap 的流量全部路由进命名空间（`ip rule from 10.236.0.0/24 lookup 236`）。命名空间里，tailnet 和它广播的子网走 tailscale0，别的从 uplink 回到宿主出公网，两条路都伪装成命名空间自己的地址。
 - **登录不用密钥**：fleet 的机器开着 Tailscale SSH，Headscale 的 SSH 策略按 tailnet 身份放行 `group:imdomestic`（`max@` 在里面）。机器上有个 `max` 用户，免密 sudo（nix-config 的 `system/modules/max-operator.nix`）。VM 里没有 key，也拿不到 tailscaled 的 socket 和节点状态。
 - **guest**：VM 的内核命令行多一个 `max.domain=<tailnet 的域名>`，DNS 前面加上 `100.100.100.100`（MagicDNS 只答 tailnet 的名字，别的 SERVFAIL，glibc 接着问下一个）。`max-guest` 据此写 `/run/max/ssh_config`：短名字补上域名，`User max`、`BatchMode`、`StrictHostKeyChecking accept-new`；known_hosts 在 `/work/.ssh`（root 的家是 /work）。guest 的 ssh_config 一律 `Include` 它，别的 VM 没有这个文件，ssh 忽略。
-- **宿主守的**：运维 tap 的流量只能进命名空间（`oifname != maxx-uplink` 就拒），命名空间没起来时也不会落到宿主自己的 tailnet 节点上；命名空间出来的只能上公网，不能去局域网、别的 VM、宿主的 tailnet 和宿主的服务。命名空间里不接 VM 发来的新连接。
+- **宿主守的**：运维 tap 的流量只能进命名空间（`oifname != maxx-uplink` 就拒），命名空间没起来时也不会落到宿主自己的 tailnet 节点上；命名空间出来的只能上公网，不能去局域网、别的 VM、宿主的 tailnet 和宿主的服务。命名空间里不接 VM 发来的新连接。tank 自己 ssh 不上：它的 tailnet 地址在宿主上是本机地址，VM 的包先按本地投递进了宿主的 input，被拒；跑着 maxx 和所有 VM 的机器，本来也不该让一个群拿到 root。
+- **guest 的 ssh**：要关掉 `programs.ssh.systemd-ssh-proxy`。它的 Include 是 store 里的文件，virtiofs 上看着不归 root，ssh 因此拒绝整份配置（"Bad owner or permissions"），什么都连不了。Haskell 版也关了它。2026-11-05 部署后在 tank 上用 `vm-check --operations` 实测：`ssh h610 hostname`、`ssh h610 sudo -n whoami`（root）都通，host key 记进了 `/work/.ssh/known_hosts`。
 - **提示词**：这些群的系统提示末尾多一段"运维网络"：怎么 ssh、免密 sudo、改东西之前先说清楚、长任务放远端的 systemd-run 或 tmux。
 - **权限**：和 Haskell 版一样，群里谁都能让 Max 在 fleet 上做事，等于 root。只给信得过的群开。
 - **槽位**：运维的群只用运维的 tap（默认 4 个），普通群只用普通的；满了各自按闲置时间挤掉自己那一类的 VM。改了名单，正在跑的 VM 要等下次开机才换 tap。

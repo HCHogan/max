@@ -334,6 +334,11 @@ in
   # What max-guest writes on the operations network; ssh ignores an
   # Include that matches nothing, as on every other VM.
   programs.ssh.extraConfig = "Include /run/max/ssh_config";
+  # Its Include is a file in the store, which virtiofs shows as no
+  # one's, and ssh refuses a configuration it includes for that ("Bad
+  # owner or permissions"): with it, the guest's ssh ran nothing. Nothing
+  # here connects to a vsock or a socket by ssh.
+  programs.ssh.systemd-ssh-proxy.enable = false;
 
   services.openssh = {
     enable = true;
