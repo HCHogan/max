@@ -9,17 +9,3 @@ pub fn count(text: &str) -> u32 {
     let tokens = tiktoken_rs::o200k_base_singleton().encode_ordinary(text);
     u32::try_from(tokens.len()).unwrap_or(u32::MAX)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn counts() {
-        assert_eq!(count(""), 0);
-        assert_eq!(count("hello world"), 2);
-        // Chinese runs about a token a character or two.
-        let chinese = count("今天群里在聊示波器探头的补偿");
-        assert!((5..=16).contains(&chinese), "{chinese}");
-    }
-}

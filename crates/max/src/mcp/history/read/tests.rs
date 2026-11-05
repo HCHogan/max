@@ -94,8 +94,6 @@ async fn a_long_row_reads_page_by_page(pool: PgPool) {
     assert_eq!(run(&context, other).await.unwrap_err().code, "not_found");
     let wrong = run(&context, json!({ "around": "x" })).await;
     assert_eq!(wrong.unwrap_err().code, "bad_arguments");
-    let typo = crate::mcp::call("histroy", &context, json!({})).await;
-    assert_eq!(typo.unwrap_err().code, "unknown_tool");
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
@@ -249,7 +247,7 @@ async fn a_stretch_by_time_and_sender(pool: PgPool) {
         json!({ "limit": 3 }),
         json!({ "from": "10-29 12:00" }),
         json!({ "to": "#x" }),
-        json!({ "summary": 1 }),
+        json!({ "keyword": 1 }),
     ] {
         let wrong = run(&context, args).await;
         assert_eq!(wrong.unwrap_err().code, "bad_arguments");

@@ -17,6 +17,11 @@ async fn a_vector_for_each_text_in_order() {
     let (key, body) = asked.lock().unwrap()[0].clone();
     assert_eq!(key, None, "no key, no header");
     assert_eq!(body, json!({ "model": "test-m3", "input": ["笑猫", "狗"] }));
+    let url = embedder.url.trim_end_matches("/embeddings").to_owned();
+    let keyed = Embedder::new(&url, "test-m3".into(), Some("KEY".into())).unwrap();
+    keyed.one("猫").await.unwrap();
+    let key = asked.lock().unwrap().last().unwrap().0.clone();
+    assert_eq!(key.as_deref(), Some("Bearer KEY"));
 
     let down = embedder.one("挂了").await.unwrap_err();
     assert_eq!(down, Error::Unavailable("HTTP 502: down".into()));
@@ -44,16 +49,5 @@ async fn wrong_answers_are_errors() {
     let nobody = Embedder::new("http://127.0.0.1:9/v1", "bge-m3".into(), None).unwrap();
     let error = nobody.one("猫").await.unwrap_err();
     assert!(matches!(error, Error::Unavailable(_)), "{error}");
-    scope.close(Duration::ZERO).await;
-}
-
-#[tokio::test]
-async fn the_key_goes_as_a_bearer() {
-    let mut scope = Scope::new();
-    let (embedder, asked) = serve(&mut scope).await;
-    let url = embedder.url.trim_end_matches("/embeddings").to_owned();
-    let keyed = Embedder::new(&url, "test-m3".into(), Some("KEY".into())).unwrap();
-    keyed.one("猫").await.unwrap();
-    assert_eq!(asked.lock().unwrap()[0].0.as_deref(), Some("Bearer KEY"));
     scope.close(Duration::ZERO).await;
 }
