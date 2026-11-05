@@ -2,8 +2,6 @@
 //! in docs/rust-rewrite.md.
 
 pub mod admin;
-pub mod avatar;
 pub mod inbound;
-pub mod link;
 pub mod listen;
 pub mod send;
