@@ -154,7 +154,7 @@ impl Harness {
                 other => format!("{other:?}"),
             })
             .collect();
-        (outgoing.message, text)
+        (Arc::unwrap_or_clone(outgoing.message), text)
     }
 
     async fn stop(&mut self) {

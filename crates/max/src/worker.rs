@@ -33,13 +33,13 @@ impl Rows {
         rx
     }
 
-    pub fn send(&self, place: &Arc<Place>, message: &Message) {
+    pub fn send(&self, place: &Arc<Place>, message: &Arc<Message>) {
         if self.0.is_empty() {
             return;
         }
         let row = Row {
             place: Arc::clone(place),
-            message: Arc::new(message.clone()),
+            message: Arc::clone(message),
         };
         for mailbox in &self.0 {
             mailbox(row.clone());

@@ -83,7 +83,7 @@ async fn from_xiaoming_says(pool: &PgPool, place: &Place, n: u32, said: &str) ->
     let mut conn = pool.acquire().await.unwrap();
     let inbound = from_xiaoming(n, vec![text(said)]);
     let committed = ingest::inbound(&mut conn, place, &inbound, Utc::now(), offset());
-    committed.await.unwrap().message
+    Arc::unwrap_or_clone(committed.await.unwrap().message)
 }
 
 /// A streamed answer, a line at a time.

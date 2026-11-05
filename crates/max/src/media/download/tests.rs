@@ -66,7 +66,7 @@ async fn downloads_each_medium_once(pool: PgPool) {
     let test = async {
         let row = Row {
             place,
-            message: Arc::new(committed.message),
+            message: committed.message,
         };
         let units = media(&row);
         let shown: Vec<_> = units.iter().map(|unit| format!("{unit:?}")).collect();
@@ -150,7 +150,7 @@ async fn pictures_go_on_to_the_caption_worker(pool: PgPool) {
     let test = async {
         let row = Row {
             place,
-            message: Arc::new(committed.message),
+            message: committed.message,
         };
         for unit in media(&row) {
             download.download(&unit).await.unwrap();
@@ -230,7 +230,7 @@ async fn the_worker_finds_what_it_missed_and_tries_again(pool: PgPool) {
         let new = said(2, "a.png").await;
         rows.send(Row {
             place: Arc::clone(&place),
-            message: Arc::new(new.clone()),
+            message: Arc::clone(&new),
         })
         .unwrap();
         let mut conn = pool.acquire().await.unwrap();

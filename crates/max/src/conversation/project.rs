@@ -211,14 +211,14 @@ pub async fn direct_mark(
 pub async fn follow_up(
     conn: &mut PgConnection,
     place: &Place,
-    rows: &[(Message, Mark)],
+    rows: &[(&Message, Mark)],
     seen: &BTreeSet<PrincipalId>,
     after: Option<DateTime<Utc>>,
     window: u32,
     offset: FixedOffset,
 ) -> sqlx::Result<Input> {
     let single = Budgets::for_window(window).single;
-    let people = people(conn, rows.iter().map(|(message, _)| message), place).await?;
+    let people = people(conn, rows.iter().map(|(message, _)| *message), place).await?;
     let render = Render {
         people: &people,
         offset,
@@ -236,7 +236,7 @@ pub async fn follow_up(
     }
     let lines: Vec<(&Message, String)> = rows
         .iter()
-        .map(|(message, mark)| (message, shown_line(&render, message, *mark, single)))
+        .map(|(message, mark)| (*message, shown_line(&render, message, *mark, single)))
         .collect();
     text.push_str(&joined(&render, &lines, after));
     let text = text.trim_end().to_owned();

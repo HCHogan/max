@@ -3,6 +3,7 @@
 //! way in; the actor moves its head only once a row is committed.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset, Utc};
 use max_core::ids::{IdentityId, MessageId, PrincipalId, TurnId};
@@ -41,7 +42,7 @@ impl Direct {
 /// A row someone sent, as committed, with what the actor routes on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Committed {
-    pub message: Message,
+    pub message: Arc<Message>,
     pub sender: Account,
     pub command: bool,
     pub direct: Option<Direct>,
@@ -137,7 +138,7 @@ pub async fn inbound(
     .await?;
     tx.commit().await?;
     Ok(Committed {
-        message: Message {
+        message: Arc::new(Message {
             id,
             conversation: place.conversation,
             sender: sender_snapshot,
@@ -145,7 +146,7 @@ pub async fn inbound(
             content,
             turn: None,
             raw: inbound.raw.clone(),
-        },
+        }),
         sender,
         command,
         direct,

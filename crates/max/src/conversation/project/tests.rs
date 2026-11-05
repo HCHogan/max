@@ -254,8 +254,8 @@ async fn later_rows_introduce_new_people(pool: PgPool) {
     .unwrap();
     let seen = BTreeSet::from([place.me.principal, first.sender.principal]);
     let rows = [
-        (first.message.clone(), Mark::None),
-        (second.message.clone(), Mark::MentionsYou),
+        (&*first.message, Mark::None),
+        (&*second.message, Mark::MentionsYou),
     ];
     let input = follow_up(
         &mut conn,

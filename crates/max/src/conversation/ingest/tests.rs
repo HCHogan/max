@@ -31,7 +31,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(row.message, first.message);
+    assert_eq!(row.message, *first.message);
 
     let draft = Draft {
         reply_to: Some(first.message.id),

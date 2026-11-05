@@ -28,7 +28,7 @@ async fn says(pool: &PgPool, place: &Place, n: u32, who: &str, name: &str) -> Ro
         .unwrap();
     Row {
         place: Arc::new(place.clone()),
-        message: Arc::new(committed.message),
+        message: committed.message,
     }
 }
 

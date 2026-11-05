@@ -114,7 +114,7 @@ impl Setup {
         let committed = ingest::inbound(&mut conn, &self.place, &inbound, Utc::now(), offset())
             .await
             .unwrap();
-        committed.message
+        Arc::unwrap_or_clone(committed.message)
     }
 
     async fn say(&self, draft: Draft) -> Outgoing {
@@ -134,7 +134,7 @@ impl Setup {
         .unwrap();
         Outgoing {
             place: Arc::clone(&self.place),
-            message,
+            message: Arc::new(message),
             receipt: None,
         }
     }
@@ -145,7 +145,7 @@ impl Setup {
         let unsend = ingest::unsend(&mut conn, &self.place, target, None, Utc::now(), offset());
         Outgoing {
             place: Arc::clone(&self.place),
-            message: unsend.await.unwrap().unwrap(),
+            message: Arc::new(unsend.await.unwrap().unwrap()),
             receipt: None,
         }
     }
@@ -417,7 +417,7 @@ async fn an_unsend_recalls_what_its_message_went_out_or_came_in_as(pool: PgPool)
     for target in [mine, not_sent, heard.id, heard.id] {
         outgoing.push(s.unsend(target).await);
     }
-    let unsends: Vec<Row> = outgoing[2..].iter().map(|o| o.message.clone()).collect();
+    let unsends: Vec<Row> = outgoing[2..].iter().map(|o| (*o.message).clone()).collect();
     let (receipt, refusal) = tokio::sync::oneshot::channel();
     outgoing[5].receipt = Some(receipt);
     s.api

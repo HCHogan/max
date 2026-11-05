@@ -80,7 +80,7 @@ pub struct Shared {
 #[derive(Debug)]
 pub struct Outgoing {
     pub place: Arc<Place>,
-    pub message: Message,
+    pub message: Arc<Message>,
     /// Told once it is sent or failed, for a `Post` that waits.
     pub receipt: Option<Receipt>,
 }
@@ -284,10 +284,10 @@ impl Conversation {
                 let said = self
                     .say(segment.draft, Some(turn), Some(index), By::Max, None)
                     .await?;
-                if let Some(message) = said
+                if let Some(at) = said
                     && let Some(a) = self.core.as_mut()
                 {
-                    a.last_at = Some(message.at);
+                    a.last_at = Some(at);
                 }
                 Ok(())
             }
@@ -360,11 +360,11 @@ impl Conversation {
 
     /// A row is committed: it is the head, and the workers and the
     /// programs following the timeline hear of it.
-    fn committed(&mut self, message: &Message) {
+    fn committed(&mut self, message: &Arc<Message>) {
         self.head = message.id;
         self.shared.rows.send(&self.place, message);
         if self.subscribers.receiver_count() > 0 {
-            let _ = self.subscribers.send(Arc::new(message.clone()));
+            let _ = self.subscribers.send(Arc::clone(message));
         }
     }
 
@@ -413,7 +413,7 @@ impl Conversation {
             self.command(&committed).await?;
         } else {
             let mark = committed.direct.map_or(Mark::None, |direct| direct.mark());
-            self.feed(&[(committed.message.clone(), mark)]).await?;
+            self.feed(&[(&committed.message, mark)]).await?;
             self.follow_up(&committed).await?;
         }
         let entry = Entry {
@@ -427,7 +427,7 @@ impl Conversation {
     }
 
     /// Rows from the timeline for a running core.
-    async fn feed(&mut self, rows: &[(Message, Mark)]) -> Result<()> {
+    async fn feed(&mut self, rows: &[(&Message, Mark)]) -> Result<()> {
         let Some(a) = self.core.as_mut() else {
             return Ok(());
         };
@@ -444,7 +444,7 @@ impl Conversation {
         .await?;
         if let Input::Messages { people, item, .. } = &mut input {
             a.roster.extend(people.iter());
-            let messages = rows.iter().map(|(message, _)| message);
+            let messages = rows.iter().map(|(message, _)| *message);
             max_core::project::attach(item, messages);
         }
         a.last_at = rows.last().map(|(message, _)| message.at).or(a.last_at);
@@ -890,17 +890,17 @@ impl Conversation {
             }
             Act::Unsend(target) => self.unsend(target, origin, receipt).await?,
         };
-        if let Some(message) = committed
+        if let Some(at) = committed
             && let Some(a) = self.core.as_mut()
             && Some(a.turn) == origin
         {
-            a.last_at = Some(message.at);
+            a.last_at = Some(at);
         }
         Ok(())
     }
 
     /// Commits what Max's account says, `by` whom, and hands it to the
-    /// sender. The running core isn't fed it: its own words are in its
+    /// sender; when it was committed, if it was. The running core isn't fed it: its own words are in its
     /// transcript, and words from outside it, such as a command's answer,
     /// are in the next core's tail.
     async fn say(
@@ -910,7 +910,7 @@ impl Conversation {
         segment: Option<i32>,
         by: By,
         receipt: Option<Receipt>,
-    ) -> Result<Option<Message>> {
+    ) -> Result<Option<DateTime<Utc>>> {
         let mut conn = self.shared.services.pool.acquire().await?;
         let said = ingest::said(
             &mut conn,
@@ -933,7 +933,7 @@ impl Conversation {
         target: MessageId,
         turn: Option<TurnId>,
         receipt: Option<Receipt>,
-    ) -> Result<Option<Message>> {
+    ) -> Result<Option<DateTime<Utc>>> {
         let mut conn = self.shared.services.pool.acquire().await?;
         let unsend = ingest::unsend(
             &mut conn,
@@ -948,30 +948,32 @@ impl Conversation {
         Ok(self.hand_over(unsend, receipt, "这里没有这条消息"))
     }
 
-    /// A row of Max's that was committed, for the sender; if none was, the
-    /// receipt hears `why` at once.
+    /// A row of Max's that was committed, for the sender, and when it
+    /// was; if none was, the receipt hears `why` at once.
     fn hand_over(
         &mut self,
         committed: Option<Message>,
         receipt: Option<Receipt>,
         why: &str,
-    ) -> Option<Message> {
+    ) -> Option<DateTime<Utc>> {
         let Some(message) = committed else {
             if let Some(receipt) = receipt {
                 let _ = receipt.send(Err(why.to_owned()));
             }
             return None;
         };
+        let (id, at) = (message.id, message.at);
+        let message = Arc::new(message);
         self.committed(&message);
         let outgoing = Outgoing {
             place: Arc::clone(&self.place),
-            message: message.clone(),
+            message,
             receipt,
         };
         if self.shared.outbound.send(outgoing).is_err() {
-            warn!(message = %message.id, "the sender is gone");
+            warn!(message = %id, "the sender is gone");
         }
-        Some(message)
+        Some(at)
     }
 }
 
