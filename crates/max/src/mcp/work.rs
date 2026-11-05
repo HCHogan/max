@@ -87,7 +87,8 @@ pub(crate) fn read_stamped(
     if metadata.len() > most {
         return Err(too_big());
     }
-    let mut bytes = Vec::new();
+    // As large as the file says: through Take, the read wouldn't know.
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
     (&mut file)
         .take(most + 1)
         .read_to_end(&mut bytes)
