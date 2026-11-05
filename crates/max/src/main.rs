@@ -292,20 +292,23 @@ maxx | grep -c '^  history  '"#;
 /// A unit of vm-check's own in /work/.max/systemd, which notes each boot
 /// it starts in: max-units starts it now, or the boot already has. The
 /// nested test runs vm-check twice: the second boot starts it before
-/// max-units is run, and both boots are noted.
+/// max-units is run, and both boots are noted. The unit and the command
+/// both have /work for a home.
 const UNITS: &str = r#"before=$(systemctl is-active boot-note.service || true)
 mkdir -p /work/.max/systemd
 cat > /work/.max/systemd/boot-note.service <<'EOF'
 [Service]
 Type=oneshot
 RemainAfterExit=true
-ExecStart=/bin/sh -c 'cat /proc/sys/kernel/random/boot_id >> /work/.max/boot-notes'
+ExecStart=/bin/sh -c 'cat /proc/sys/kernel/random/boot_id >> /work/.max/boot-notes; echo "$$HOME" > /work/.max/unit-home'
 [Install]
 WantedBy=multi-user.target
 EOF
 max-units
 echo "开机时：$before"
-echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机""#;
+echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机"
+echo "家：$HOME，unit 的家：$(cat /work/.max/unit-home)"
+case ":$PATH:" in *:/work/.nix-profile/bin:*) echo "PATH 里有家里的 profile" ;; esac"#;
 
 /// An extension of vm-check's own, which the browser loads by Max's flags
 /// once it starts again: its script marks each page it runs on.

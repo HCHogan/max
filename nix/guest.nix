@@ -312,8 +312,12 @@ in
     MemoryMax = "50%";
   };
   # Units without a PATH of their own, as Max's are, find the system's
-  # commands; NixOS's own units each set one.
-  systemd.settings.Manager.DefaultEnvironment = "PATH=/run/wrappers/bin:/run/current-system/sw/bin";
+  # commands; NixOS's own units each set one. Nor does systemd give a unit
+  # without User= a HOME, so the commands' login shells built PATH out of
+  # /.nix-profile/bin and the like (2026-11-05). Home is /work, so what Max
+  # keeps in ~ outlives the VM.
+  systemd.settings.Manager.DefaultEnvironment = "PATH=/run/wrappers/bin:/run/current-system/sw/bin HOME=/work";
+  users.users.root.home = lib.mkForce "/work";
 
   # systemd-ssh-generator puts sshd on vsock port 22. Nothing reaches the
   # TCP listener, which therefore does not start.

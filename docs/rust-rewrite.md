@@ -1706,7 +1706,8 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
   - `max-units.slice`：`CPUWeight=20`、`IOWeight=20`，给命令让路；`MemoryMax=50%`，吃不光内存。
   - 手写的 unit 没有 PATH：NixOS 的 unit 各自设了，systemd 自带的默认值里没有 `/run/current-system/sw/bin`。所以 manager 的 `DefaultEnvironment` 设成系统的 PATH；unit 自己写的 `Environment=PATH=` 照样优先。
   - **救命开关**：内核命令行带 `max.units=off`，开机就不装。坏掉的 unit（停了 sshd、关机、吃光内存）每次开机都会回来，这是唯一的出路；什么时候带上由宿主定，见第二步。
-  - 能活下来的只有 `/work` 和 Nix store：unit 要跑的东西放 `/work` 里，或者用 store 路径、`nix run`；`/root` 也是 tmpfs。每次部署程序都会重启，状态要写文件。
+  - 能活下来的只有 `/work` 和 Nix store：unit 要跑的东西放 `/work` 里，或者用 store 路径、`nix run`。每次部署程序都会重启，状态要写文件。
+  - **家目录是 `/work`**（2026-11-05 owner 定）：`DefaultEnvironment` 里加 `HOME=/work`，root 在 passwd 里的家也改成 `/work`。之前 systemd 不给没写 `User=` 的 unit 设 `HOME`，`shell`、`run_code` 的 `bash -lc` 进来时没有 `$HOME`，`/etc/profile` 把 PATH 拼成了 `/.nix-profile/bin`、`/.local/state/nix/profile/bin` 这种挂在 `/` 下的路径；家要是 `/root`，又是 tmpfs，`~/.profile`、`~/.gitconfig`、`gh auth` 这些每次开机都没了。没另外持久化一个 `/root`：宿主只读 `/work`（记忆、`send_image`、`send_file`、`max.file`、完整输出、unit 登记），两个持久目录 Max 得记着哪个宿主看得见；挂载点改名又会让 Max 写死 `/work` 的脚本和 unit 全坏。Max 本来就把 `/work` 当家用（9 号群的 `/work` 里有 `.pnpm-store`），tank 的盘还剩 11T，缓存留着无妨，下次开机还热。`nix profile add` 装的包在 `/nix/var/nix/profiles/default`，本来就持久、在 PATH 里；PATH 和环境变量写 `~/.profile`，`bash -lc` 每次都读，写坏了 `shell` 和 `run_code` 都跑不了，只能在宿主上删掉那个文件，提示词里说了。unit 不读 `~/.profile`，提示词让它写 `Environment=`。改的时候已经有 `/work/.ssh`、`.config`、`.local` 的群，这些从此生效。
   - **测试**：`vm-check` 在 `/work/.max/systemd` 放一个记下开机 id 的 unit，跑 `max-units`。嵌套测试跑两次 `vm-check`：第一次 `max-units` 起了它；第二次开机时它已经起了（`max-units` 跑之前就是 active），两次开机都记下了。
   - 提示词在第二步加：只有第一步时 VM 照旧会停，跟 Max 说"常驻"不对。
 - **第二步（做了，11-01）：宿主那边。**

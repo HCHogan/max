@@ -67,6 +67,9 @@ pkgs.testers.runNixOSTest {
     # system's commands on its PATH.
     assert "boot-note.service：active" in shown, shown
     assert "开机时：inactive" in shown and "记下了 1 次开机" in shown, shown
+    # Commands and units have /work for a home, and the login shell's PATH
+    # is built from it.
+    assert "家：/work，unit 的家：/work" in shown and "PATH 里有家里的 profile" in shown, shown
     # max-units tells the VM service, which keeps the VM on; max-wake, from
     # the background command, calls as a program and reaches vm-check,
     # standing in for the group's actor.
