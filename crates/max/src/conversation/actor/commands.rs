@@ -48,7 +48,6 @@ impl Conversation {
             Command::Model(None) | Command::Effort(None) | Command::Proactive(None) => Rank::Anyone,
             Command::Persona(Persona::Show) | Command::Clear { all: false } => Rank::Anyone,
             Command::Model(Some(argument)) if argument == "list" => Rank::Anyone,
-            // Who may link whom is its own business.
             Command::Kill | Command::Persona(_) | Command::Clear { .. } | Command::Unclear => {
                 Rank::Admin
             }

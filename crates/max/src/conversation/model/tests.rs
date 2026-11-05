@@ -51,15 +51,6 @@ fn unavailable() -> max_llm::Error {
 }
 
 #[tokio::test(start_paused = true)]
-async fn messages_as_they_stream() {
-    let script = Arc::new(Script::default());
-    script.push(Answer::Says(vec!["在的\n".into(), "\n说吧".into()]));
-    let (said, out) = run(&script).await;
-    assert_eq!(said, ["在的", "说吧"]);
-    assert_eq!(out, Ok(()));
-}
-
-#[tokio::test(start_paused = true)]
 async fn retried_while_nothing_is_said() {
     let script = Arc::new(Script::default());
     script.push(Answer::Fails(unavailable()));

@@ -1,8 +1,7 @@
-use max_core::message::Platform;
 use max_db::PgPool;
 
 use super::*;
-use crate::conversation::testing::{at, from_xiaoming, group, group_named, offset, text};
+use crate::conversation::testing::{at, from_xiaoming, group, group_named, offset, private, text};
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn mentions_quotes_and_commands(pool: PgPool) {
@@ -165,22 +164,7 @@ async fn what_max_says_is_checked(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn everything_in_a_private_chat_is_for_max(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
-    let me = platform::account(&mut conn, Platform::Qq, "BOT", "maxx")
-        .await
-        .unwrap();
-    let kind = ConversationKind::Direct;
-    let endpoint = platform::endpoint(&mut conn, Platform::Qq, "c2c:U", me.identity, kind, None)
-        .await
-        .unwrap();
-    let place = Place {
-        conversation: endpoint.conversation,
-        kind,
-        endpoint: endpoint.id,
-        platform: Platform::Qq,
-        native_id: "c2c:U".into(),
-        me,
-        my_name: "maxx".into(),
-    };
+    let place = private(&mut conn).await;
     let committed = inbound(
         &mut conn,
         &place,

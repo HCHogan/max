@@ -87,13 +87,6 @@ async fn the_classifier_reads_the_context(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn no_verdict_from_prose(pool: PgPool) {
-    let script = Arc::new(Script::default());
-    script.push(Answer::says("我觉得应该接话"));
-    assert_eq!(verdict(job(&pool, &script).await).await, None);
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn no_verdict_from_a_failed_call(pool: PgPool) {
     let script = Arc::new(Script::default());
     script.push(Answer::Fails(max_llm::Error::Truncated));

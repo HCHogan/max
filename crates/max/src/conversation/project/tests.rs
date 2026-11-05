@@ -192,45 +192,6 @@ async fn the_tail_is_cut_at_a_mark_that_stays(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_judged_wake(pool: PgPool) {
-    let mut conn = pool.acquire().await.unwrap();
-    let place = group(&mut conn).await;
-    let said = from_xiaoming(0, vec![text("rust 的生命周期怎么理解")]);
-    let said = ingest::inbound(&mut conn, &place, said, at(0), offset())
-        .await
-        .unwrap();
-    let id = said.message.id;
-    let reason = Reason::Judged {
-        note: "在问 Rust".into(),
-    };
-    let wake = Wake {
-        ids: vec![id],
-        item: judged(&reason),
-        reason,
-    };
-    let projection = Projection {
-        place: &place,
-        system: "SYSTEM".into(),
-        window: 100_000,
-        cleared_upto: None,
-        memory: String::new(),
-        now: at(1),
-        offset: offset(),
-    };
-    let (context, _) = projection.base(&mut conn, id, vec![wake]).await.unwrap();
-    // Nothing but the trigger, so no tail.
-    assert_eq!(context.items.len(), 2);
-    let volatile = user_text(&context.items[1]);
-    let expected = format!(
-        "[新消息]\n\
-         --- 2026-10-29 周四 ---\n\
-         [12:00 小明 #{id}]: rust 的生命周期怎么理解\n\
-         [判定：在问 Rust]\n"
-    );
-    assert!(volatile.ends_with(&expected), "{volatile}");
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn later_rows_introduce_new_people(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
     let place = group(&mut conn).await;

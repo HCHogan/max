@@ -982,9 +982,10 @@ async fn a_background_command_is_a_job_that_wakes_max_when_it_ends(pool: PgPool)
     h.stop().await;
 }
 
+/// No VMs: no background command; no job model: no job.
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn without_vms_no_background_command_starts(pool: PgPool) {
-    let (mut h, _) = Harness::with_job(pool, "查票价").await;
+async fn nothing_starts_without_its_config(pool: PgPool) {
+    let mut h = Harness::new(pool, 300).await;
     let shell = Request::Shell(Background {
         command: "make".into(),
         workdir: None,
@@ -995,12 +996,6 @@ async fn without_vms_no_background_command_starts(pool: PgPool) {
         ask(&h, shell).await.unwrap_err(),
         "这里没有配 VM，shell 用不了。"
     );
-    h.stop().await;
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn without_a_job_model_no_job_starts(pool: PgPool) {
-    let (mut h, _) = Harness::with_job(pool, "查票价").await;
     let start = Request::Start {
         task: "查一下".into(),
         title: None,
