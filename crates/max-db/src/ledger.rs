@@ -90,6 +90,16 @@ fn columns(content: &Content, command: bool) -> Columns<'_> {
     }
 }
 
+/// Whether `content` has a medium that came without a description.
+fn undescribed(content: &Content) -> bool {
+    match content {
+        Content::Message { nodes, .. } | Content::Edit { nodes, .. } => nodes
+            .iter()
+            .any(|node| matches!(node, Node::Media { meta, .. } if meta.description.is_none())),
+        Content::Unsend { .. } => false,
+    }
+}
+
 fn content(
     event: Option<&str>,
     reply_to: Option<i64>,
@@ -285,10 +295,18 @@ pub async fn recent(
 }
 
 /// Gives the media that came without a description what the caption
-/// worker wrote of them, so a row shows it wherever it's read.
+/// worker wrote of them, so a row shows it wherever it's read. Rows
+/// without such media, most of them, don't ask.
 async fn captioned(conn: &mut PgConnection, rows: &mut [Row]) -> sqlx::Result<()> {
-    let ids: Vec<MessageId> = rows.iter().map(|row| row.message.id).collect();
-    let captions = captions::of_messages(conn, &ids).await?;
+    let ids: Vec<MessageId> = rows
+        .iter()
+        .filter(|row| undescribed(&row.message.content))
+        .map(|row| row.message.id)
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut captions = captions::of_messages(conn, &ids).await?;
     if captions.is_empty() {
         return Ok(());
     }
@@ -302,10 +320,9 @@ async fn captioned(conn: &mut PgConnection, rows: &mut [Row]) -> sqlx::Result<()
             _ => None,
         });
         for (ordinal, meta) in (0..).zip(metas) {
-            if meta.description.is_none()
-                && let Some(caption) = captions.get(&(row.message.id, ordinal))
-            {
-                meta.description = Some(caption.clone());
+            if meta.description.is_none() {
+                // Each row is here once, so each caption is wanted once.
+                meta.description = captions.remove(&(row.message.id, ordinal));
             }
         }
     }
