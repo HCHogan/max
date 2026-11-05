@@ -273,7 +273,7 @@ impl Run {
                         .chain(&self.transcript)
                         .cloned()
                         .collect(),
-                    tools: &TOOLS,
+                    tools: &*TOOLS,
                     max_output: self.spec.max_output,
                     roster: self.roster.clone(),
                 })

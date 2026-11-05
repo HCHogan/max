@@ -6,6 +6,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::time::Instant;
 
 use super::*;
+use max_core::limits::JOB_TIME;
 
 /// pi's side of a job: what the driver asks, what pi says; and Max's,
 /// the questions the driver passes on and the steers that answer them.
@@ -194,14 +195,14 @@ async fn a_question_goes_to_max_and_the_next_steer_answers_it() {
 
 #[tokio::test(start_paused = true)]
 async fn an_unanswered_question_is_dismissed_after_a_while() {
-    let (ending, _) = job("订餐厅", TIME, vec![], |mut pi| async move {
+    let (ending, _) = job("订餐厅", JOB_TIME, vec![], |mut pi| async move {
         pi.started().await;
         let asked = Instant::now();
         pi.question("q-1", "选火锅还是烧烤？").await;
         let dismissed = pi.asked().await;
         assert_eq!(dismissed["id"], "q-1");
         assert_eq!(dismissed["cancelled"], true);
-        assert_eq!(asked.elapsed(), WAIT);
+        assert_eq!(asked.elapsed(), QUESTION_WAIT);
         pi.settle(false, Some("自己选了火锅")).await;
     })
     .await;
@@ -218,7 +219,7 @@ async fn a_job_waiting_on_max_is_still_told_to_wrap_up() {
         assert_eq!(dismissed["id"], "q-1");
         assert_eq!(dismissed["cancelled"], true);
         let steer = pi.asked().await;
-        assert_eq!(steer["message"], WRAP_UP);
+        assert_eq!(steer["message"], wrap_up_message());
         pi.settle(false, Some("没等到，先报这些")).await;
     })
     .await;
@@ -263,13 +264,13 @@ async fn a_job_out_of_time_is_aborted_and_says_how_far_it_got() {
 
 #[tokio::test(start_paused = true)]
 async fn a_job_is_told_to_wrap_up_before_its_time_is_up() {
-    let (ending, _) = job("查一下", TIME, vec![], |mut pi| async move {
+    let (ending, _) = job("查一下", JOB_TIME, vec![], |mut pi| async move {
         pi.started().await;
         let told = Instant::now();
         let steer = pi.asked().await;
         assert_eq!(steer["type"], "steer");
-        assert_eq!(steer["message"], WRAP_UP);
-        assert_eq!(told.elapsed(), TIME - WARNING);
+        assert_eq!(steer["message"], wrap_up_message());
+        assert_eq!(told.elapsed(), JOB_TIME - WARNING);
         pi.called(100, None);
         pi.settle(false, Some("查到一半，先报这些")).await;
     })

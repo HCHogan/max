@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{IdentityId, MessageId};
+use crate::limits::{HOUR, JUDGED_WAKES_PER_HOUR};
 
 pub mod classify;
 
@@ -32,9 +33,6 @@ pub enum Reason {
     Program,
 }
 
-/// Judged wakes in an hour at most: a fuse against a classifier gone
-/// wrong.
-pub const MAX_PER_HOUR: usize = 8;
 /// The most messages one classification looks at.
 const BATCH: usize = 30;
 /// A held trigger wakes once its sender has been quiet this long...
@@ -44,7 +42,6 @@ const HOLD_AT_MOST: Duration = Duration::from_secs(20);
 /// Three messages from one sender this close together look like a
 /// sentence typed in pieces.
 const BURST: Duration = Duration::from_secs(5);
-const HOUR: Duration = Duration::from_secs(3600);
 
 /// A committed row, as intent sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,7 +165,7 @@ impl Intent {
         if let Some(verdict) = verdict
             && verdict.trigger
             && self.proactive
-            && self.judged.len() < MAX_PER_HOUR
+            && self.judged.len() < JUDGED_WAKES_PER_HOUR
         {
             self.judged.push_back(now);
             decisions.push(Decision::Wake {

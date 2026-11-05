@@ -138,7 +138,7 @@ fn a_request() {
                 1,
             ),
         ],
-        tools: &TOOLS,
+        tools: &*TOOLS,
         max_output: Some(8000),
         roster: BTreeSet::new(),
     };

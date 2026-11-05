@@ -3,37 +3,53 @@
 //! Max's tools, `shell` runs a command. Both run in the group's VM. Which
 //! Max tools a program may call is up to the run's spec, not the tool list.
 
+use std::sync::LazyLock;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ids::CallId;
 use crate::item::ToolCall;
+use crate::limits::{BACKGROUND_TIME, BACKGROUND_TIME_MAX, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES};
 
 #[derive(Debug)]
 pub struct ToolSpec {
     pub name: &'static str,
-    pub description: &'static str,
+    /// Written from [`limits`](crate::limits), once.
+    pub description: String,
     /// JSON Schema.
     pub parameters: &'static str,
 }
 
-pub const TOOLS: [ToolSpec; 2] = [
-    ToolSpec {
-        name: "run_code",
-        description: "在本群的 VM 里用 Node 运行一段 JavaScript。code 是 async 函数体，return 的值就是结果，\
-            console 输出另外带回。程序里用 tools.<名字>(args) 调 Max 的工具，见系统提示里的声明。\
-            默认限时 120 秒，timeout_ms 最多 600000。结果和输出各自超过 16 KiB 只返回头尾，全文存在 /work/.max/out/ 下。",
-        parameters: r#"{"type":"object","properties":{"code":{"type":"string","description":"async 函数体"},"args":{"description":"程序里读到的 args"},"timeout_ms":{"type":"integer","minimum":1}},"required":["code"]}"#,
-    },
-    ToolSpec {
-        name: "shell",
-        description: "在本群的 VM 里用 bash -lc 运行一条命令，返回退出码和合并的输出。\
-            默认限时 120 秒，timeout_ms 最多 600000。输出超过 16 KiB 只返回头尾各 8 KiB，\
-            全文存在结果里给出的 /work/.max/out/ 下的文件里。命令没有输入，别跑交互式程序。\
-            background 为 true 时命令在后台跑，马上返回一个 job 编号；默认限时 30 分钟，timeout_ms 最多 7200000；\
-            跑完了，退出码和输出作为 [job#N 完成] 回到你这里。",
-        parameters: r#"{"type":"object","properties":{"command":{"type":"string"},"workdir":{"type":"string","description":"默认 /work"},"timeout_ms":{"type":"integer","minimum":1},"background":{"type":"boolean","description":"在后台跑，跑完再告诉你；默认 false"}},"required":["command"]}"#,
-    },
-];
+pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
+    let run = RUN_TIME.as_secs();
+    let run_max = RUN_TIME_MAX.as_millis();
+    let shown = SHOWN_BYTES >> 10;
+    let half = shown / 2;
+    let background = BACKGROUND_TIME.as_secs() / 60;
+    let background_max = BACKGROUND_TIME_MAX.as_millis();
+    [
+        ToolSpec {
+            name: "run_code",
+            description: format!(
+                "在本群的 VM 里用 Node 运行一段 JavaScript。code 是 async 函数体，return 的值就是结果，\
+                console 输出另外带回。程序里用 tools.<名字>(args) 调 Max 的工具，见系统提示里的声明。\
+                默认限时 {run} 秒，timeout_ms 最多 {run_max}。结果和输出各自超过 {shown} KiB 只返回头尾，全文存在 /work/.max/out/ 下。"
+            ),
+            parameters: r#"{"type":"object","properties":{"code":{"type":"string","description":"async 函数体"},"args":{"description":"程序里读到的 args"},"timeout_ms":{"type":"integer","minimum":1}},"required":["code"]}"#,
+        },
+        ToolSpec {
+            name: "shell",
+            description: format!(
+                "在本群的 VM 里用 bash -lc 运行一条命令，返回退出码和合并的输出。\
+                默认限时 {run} 秒，timeout_ms 最多 {run_max}。输出超过 {shown} KiB 只返回头尾各 {half} KiB，\
+                全文存在结果里给出的 /work/.max/out/ 下的文件里。命令没有输入，别跑交互式程序。\
+                background 为 true 时命令在后台跑，马上返回一个 job 编号；默认限时 {background} 分钟，timeout_ms 最多 {background_max}；\
+                跑完了，退出码和输出作为 [job#N 完成] 回到你这里。"
+            ),
+            parameters: r#"{"type":"object","properties":{"command":{"type":"string"},"workdir":{"type":"string","description":"默认 /work"},"timeout_ms":{"type":"integer","minimum":1},"background":{"type":"boolean","description":"在后台跑，跑完再告诉你；默认 false"}},"required":["command"]}"#,
+        },
+    ]
+});
 
 /// A tool call that is well formed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,7 +151,7 @@ mod tests {
 
     #[test]
     fn schemas_are_json() {
-        for tool in TOOLS {
+        for tool in TOOLS.iter() {
             let schema: serde_json::Value = serde_json::from_str(tool.parameters).unwrap();
             assert_eq!(schema["type"], "object", "{}", tool.name);
         }

@@ -14,9 +14,7 @@ use super::tool::Tool;
 use super::work::{beneath_work, read};
 use super::{Context, Failure, internal};
 use crate::media::prepare::{png, prepare};
-
-/// The largest picture sent, in bytes.
-const MOST: u64 = 10 << 20;
+use max_core::limits::PICTURE_BYTES;
 
 pub struct SendImage;
 
@@ -48,7 +46,7 @@ impl Tool for SendImage {
             "把 /work 下的一张图发到本群：画的图表、截的图、下载的图片。PNG、JPEG、GIF、WebP，最大 {} MiB；路径上不能有符号链接。\n  \
             caption 是图下面的一句说明，和图在同一条消息里。发出去了才返回，handle 是这条消息里那张图的句柄。\n  \
             记录里已有的图和表情包不用这个，直接在回复里写它的句柄。",
-            MOST >> 20
+            PICTURE_BYTES >> 20
         )
     }
 
@@ -67,7 +65,7 @@ async fn send(context: &Context, Args { path, caption }: Args) -> Result<Sent, F
     };
     let relative = beneath_work(&path)?;
     let work = work.clone();
-    let read = spawn_blocking(move || read(&work, &relative, MOST));
+    let read = spawn_blocking(move || read(&work, &relative, PICTURE_BYTES));
     let bytes = read.await.map_err(|_| internal())??;
     let (bytes, mime) = picture(bytes).await?;
     let (prepared, bytes) = spawn_blocking(move || (prepare(&bytes), bytes))

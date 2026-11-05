@@ -24,11 +24,11 @@ use tracing::info;
 
 use super::{CONNECT, LARGEST, chunks, refuse};
 use crate::config::{self, Rule};
+use max_core::limits::HOUR;
 
 /// The response's headers and every piece after them must arrive within
 /// this; a call as a whole has no limit.
 const IDLE: Duration = Duration::from_secs(60);
-const HOUR: Duration = Duration::from_secs(3600);
 
 /// A program's headers that don't go on: its connection's, `Expect`
 /// among them, which the host's own server answers (curl sends one with a

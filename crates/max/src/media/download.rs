@@ -28,9 +28,8 @@ use super::prepare::prepare;
 use super::store::Store;
 use crate::scope::Scope;
 use crate::worker::Row;
+use max_core::limits::FILE_BYTES;
 
-/// The most a medium may be; past it, only what QQ said of it is kept.
-const MOST: u64 = 64 << 20;
 /// How far back a scan looks. QQ's addresses expire: the Haskell version
 /// tried hundreds of dead ones again on every restart (9f27fa7).
 const SCAN: Duration = Duration::from_secs(3600);
@@ -150,7 +149,7 @@ impl Download {
         if done.iter().any(|(ordinal, _)| *ordinal == medium.ordinal) {
             return Ok(());
         }
-        let fetched = match fetch(&self.http, &medium.url, MOST).await {
+        let fetched = match fetch(&self.http, &medium.url, FILE_BYTES).await {
             Ok(fetched) => fetched,
             Err(error) if error.retryable() => return Err(eyre!("{error}")),
             // An address that expired, or a file too large: another try

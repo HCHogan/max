@@ -24,20 +24,10 @@ use crate::mcp::{self, Grant};
 use crate::tokens;
 use crate::vm::ssh::{Sink, Stream, quote};
 use crate::vm::{Vm, Vms};
+use max_core::limits::{BACKGROUND_TIME, BACKGROUND_TIME_MAX, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES};
 
-/// A run's wall clock, unless the call asks for another.
-const SHELL_TIME: Duration = Duration::from_secs(120);
-/// The most a call may ask for.
-const SHELL_TIME_MAX: Duration = Duration::from_secs(600);
-/// A background command's, unless the call asks for another...
-const BACKGROUND_TIME: Duration = Duration::from_secs(30 * 60);
-/// ...and the most it may ask for: as long as a background agent.
-const BACKGROUND_TIME_MAX: Duration = job::TIME;
 /// The guest stops the unit itself a little after max would have.
 const GUEST_MARGIN: Duration = Duration::from_secs(30);
-/// Output past this many bytes is cut to its head and tail, each half of
-/// it; the whole goes to a file in /work.
-const SHOWN: usize = 16 * 1024;
 
 /// Runs `tool` for a call from `context`'s conversation, and logs how it
 /// went: what a task took in steps, and how many failed.
@@ -121,8 +111,8 @@ async fn call(
         Err(error) => return (text(error, true), BTreeMap::new()),
     };
     let limit = timeout_ms
-        .map_or(SHELL_TIME, Duration::from_millis)
-        .clamp(Duration::from_secs(1), SHELL_TIME_MAX);
+        .map_or(RUN_TIME, Duration::from_millis)
+        .clamp(Duration::from_secs(1), RUN_TIME_MAX);
     let context = mcp::Context {
         work: Some(vm.work().to_owned()),
         ..context
@@ -448,7 +438,7 @@ fn with(head: String, shown: &str) -> String {
 /// Where a long output goes, under /work.
 const OUT: &str = ".max/out";
 
-/// A command's output: all of it while short; past `SHOWN`, its head and
+/// A command's output: all of it while short; past `SHOWN_BYTES`, its head and
 /// tail, and the whole in a file, `name` in the guest's /work/.max/out,
 /// or from the start once [`Output::create`] makes it.
 struct Output {
@@ -475,7 +465,7 @@ impl Output {
 
     fn shown(&self) -> String {
         let head = String::from_utf8_lossy(&self.head);
-        if self.total <= SHOWN {
+        if self.total <= SHOWN_BYTES {
             return head.into_owned();
         }
         let tail: Vec<u8> = self.tail.iter().copied().collect();
@@ -493,7 +483,7 @@ impl Sink for Output {
     async fn output(&mut self, _: Stream, data: &[u8]) -> Result<()> {
         let before = self.total;
         self.total += data.len();
-        if self.file.is_none() && self.total > SHOWN {
+        if self.file.is_none() && self.total > SHOWN_BYTES {
             self.create().await?;
         }
         if let Some(file) = &mut self.file {
@@ -501,17 +491,17 @@ impl Sink for Output {
             file.write_all(data).await?;
             file.flush().await?;
         }
-        if self.total <= SHOWN {
+        if self.total <= SHOWN_BYTES {
             self.head.extend_from_slice(data);
-        } else if before <= SHOWN {
+        } else if before <= SHOWN_BYTES {
             // Long with this piece: only its ends are kept.
             let mut all = std::mem::take(&mut self.head);
             all.extend_from_slice(data);
-            self.head = all[..SHOWN / 2].to_vec();
-            self.tail = all[all.len() - SHOWN / 2..].iter().copied().collect();
+            self.head = all[..SHOWN_BYTES / 2].to_vec();
+            self.tail = all[all.len() - SHOWN_BYTES / 2..].iter().copied().collect();
         } else {
             self.tail.extend(data);
-            let over = self.tail.len().saturating_sub(SHOWN / 2);
+            let over = self.tail.len().saturating_sub(SHOWN_BYTES / 2);
             self.tail.drain(..over);
         }
         Ok(())
@@ -575,7 +565,7 @@ mod tests {
         assert!(shown.starts_with("00000\n"), "{shown}");
         assert!(shown.ends_with("04999\n"), "{shown}");
         assert!(shown.contains("/work/.max/out/max-2.txt"), "{shown}");
-        assert_eq!(output.head.len() + output.tail.len(), SHOWN);
+        assert_eq!(output.head.len() + output.tail.len(), SHOWN_BYTES);
         assert_eq!(std::fs::read(&path).unwrap(), all);
         let _ = std::fs::remove_dir_all(work);
     }
@@ -590,7 +580,7 @@ mod tests {
         std::fs::create_dir_all(host.join("out")).unwrap();
         std::os::unix::fs::symlink(&host, work.join(".max")).unwrap();
         let mut output = Output::new(&work, "max-3.txt".into());
-        let long = vec![b'x'; SHOWN + 1];
+        let long = vec![b'x'; SHOWN_BYTES + 1];
         assert!(output.output(Stream::Out, &long).await.is_err());
         assert!(!host.join("out/max-3.txt").exists());
         let _ = std::fs::remove_dir_all(scratch);
@@ -609,9 +599,9 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"building\n");
         output.output(Stream::Out, b"done").await.unwrap();
         assert_eq!(output.shown(), "building\ndone");
-        let long = vec![b'x'; SHOWN];
+        let long = vec![b'x'; SHOWN_BYTES];
         output.output(Stream::Out, &long).await.unwrap();
-        assert_eq!(std::fs::read(&path).unwrap().len(), SHOWN + 13);
+        assert_eq!(std::fs::read(&path).unwrap().len(), SHOWN_BYTES + 13);
         let shown = output.shown();
         assert!(shown.starts_with("building\ndonex"), "{shown}");
         assert!(shown.contains("/work/.max/out/max-4.txt"), "{shown}");

@@ -1016,7 +1016,7 @@ Haskell 版尾巴是 W/2，26 万的窗口上约 10 万 token 原始群聊，每
   - [MemoryTax](https://arxiv.org/html/2610.29823)（2026-10）：模型够强时，留着原始记录让模型自己搜，比预先抽取的记忆（Mem0、Zep）好、也更省。原始记录和搜索我们已经有了（ledger、`history`）。但那篇的问题都在提示"去查"，群聊里要用记忆的时候往往没人提示，模型不知道自己忘了什么。所以还要一份每轮都带上的东西，由主模型自己判断记什么，照 Claude Code 的 auto memory 做。
 - **文件**：每个会话一个 `/work/.max/memory.md`，在会话 VM 的 `/work` 里，宿主上是 `<vm.dir>/<会话 id>/work/.max/memory.md`。Max 用 shell 改；没配 VM 就没有记忆，VM 起不来时只能读不能写。
 - **注入**：起核心投影时，宿主像 `send_image` 那样不跟符号链接地读这个文件，放进易变块的 `[记忆]`，在名册之后。不放 system，原因有三：改了不会让前面的缓存失效；群友能影响它写什么，不该当系统指令；靠后，模型更容易注意到。代价是每个 turn 多付最多 3k 不走缓存的 token。turn 里改的，下一个 turn 才看到；本 turn 改了什么，transcript 里本来就有。
-- **上限** 3000 token（`max_core::project::MEMORY`）：
+- **上限** 3000 token（`max_core::limits::MEMORY_TOKENS`）：
   - 到 80% 在末尾加一句，提醒整理；
   - 超了只注入放得下的那些行，说明后面的没加载、要整理；
   - 文件超过 256 KiB 整个不读，只说一句。
@@ -1762,6 +1762,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 - 平台适配先不拆出 crate，`max` 大到难受再分。
 - `qqbot` 原来不单独 repo（v1 期间协议层的形状还会动）。2026-11-03 owner 让拆出去：`git subtree split` 带着它的 17 个提交建了 [HCHogan/qqbot](https://github.com/HCHogan/qqbot)，公开、MIT，有自己的 Cargo.toml（workspace 的依赖、lint、包字段都写开）、工具链、clippy.toml 和跑 fmt、clippy、测试的 CI。max 按提交依赖它：`Cargo.toml` 里 `git` 加 `rev`，换版本改 `rev`；cargo-deny 的 `allow-git` 只放这一个仓库；crane 照 `Cargo.lock` 取，不用另给 hash。不用 git submodule。只有它用的 md-5、sha1、tokio-tungstenite 从 workspace 的依赖里删了。
 - lint 集中在 workspace 的 `[workspace.lints]`；裸 `tokio::spawn` 用 `clippy.toml` 的 `disallowed-methods` 拦。
+- **限制集中在 `max_core::limits`**（2026-11-05）。原来散在十几个文件里，有的同一个数写了两三遍（64 MiB 在下载、send_file、chat_file 的报错里各一份；视频 600 秒在 show 和投影里各一份；记忆文件 256 KiB 在 actor 和 dreamer 里各一份），提示词、工具说明里的数字又是手写的。现在模型会被告知的、或者不止一处在用的限制都在这一个模块；系统提示的规则、run_code 和 shell 的说明、后台 agent 的说明、整理记忆的提示词都用 `format!` 从这里写出来，改一个数，模型读到的跟着变。VM 闲置多久关机来自配置 `vm.idle_minutes`，经 `Vms::idle` 传给 `prompt::system`。guest 里 `webread` 的默认字数是 Python 写的，有个测试对着常量查。留在原处的：工具参数的范围（跟着各自的 schema）、QQ 自己的限制（两分钟撤回、禁言 30 天）、算法的调参（intent 的批大小、等待）、只为管道不卡死的超时和重试。
 
 ### 工具链
 

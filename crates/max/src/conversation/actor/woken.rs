@@ -7,8 +7,7 @@ use tokio::sync::oneshot;
 
 use super::jobs::fitted;
 use super::*;
-
-const HOUR: Duration = Duration::from_secs(3600);
+use max_core::limits::HOUR;
 
 /// When the group's programs woke Max, in the last hour. Not a cap: Max
 /// is shown the count with each wake, so a program that wakes it too

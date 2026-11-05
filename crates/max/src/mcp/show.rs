@@ -19,18 +19,10 @@ use super::{Context, Failure, arguments, internal, lock};
 use crate::media::mp4;
 use crate::media::prepare::prepare;
 use crate::media::store::Store;
+use max_core::limits::{PICTURE_BYTES, PICTURES_PER_RUN, VIDEO_BYTES, VIDEO_SECONDS};
 
 pub const IMAGE: &str = "max.image";
 pub const VIDEO: &str = "max.video";
-/// The most pictures one program shows.
-pub const MOST_PICTURES: usize = 4;
-/// The most seconds of video one program shows.
-pub const MOST_SECONDS: u32 = 600;
-/// The largest picture shown, in bytes.
-const LARGEST_PICTURE: u64 = 10 << 20;
-/// The largest video shown, in bytes: video.js made two minutes of a
-/// noisy one 3.8 MB, and an ordinary one 1.2 MB.
-const LARGEST_VIDEO: u64 = 32 << 20;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,16 +43,16 @@ pub async fn image(
             .iter()
             .filter(|part| matches!(part, Part::Media { .. }))
             .count();
-        if pictures >= MOST_PICTURES {
+        if pictures >= PICTURES_PER_RUN {
             return Err(Failure::new(
                 "too_many",
-                format!("一次 run_code 最多交 {MOST_PICTURES} 张图"),
+                format!("一次 run_code 最多交 {PICTURES_PER_RUN} 张图"),
             ));
         }
         Ok(())
     };
     room(&lock(shown))?;
-    let (store, bytes) = read_work(context, &path, LARGEST_PICTURE, "图").await?;
+    let (store, bytes) = read_work(context, &path, PICTURE_BYTES, "图").await?;
     let (prepared, bytes) = spawn_blocking(move || (prepare(&bytes), bytes))
         .await
         .map_err(|_| internal())?;
@@ -88,7 +80,7 @@ pub async fn video(
     if !context.video {
         return Err(Failure::new("unavailable", "这个模型看不了视频。"));
     }
-    let (store, bytes) = read_work(context, &path, LARGEST_VIDEO, "视频").await?;
+    let (store, bytes) = read_work(context, &path, VIDEO_BYTES, "视频").await?;
     let Some(length) = mp4::length(&bytes) else {
         return Err(Failure::new(
             "not_a_video",
@@ -109,12 +101,12 @@ pub async fn video(
                 _ => 0,
             })
             .sum();
-        if so_far.saturating_add(seconds) > MOST_SECONDS {
+        if so_far.saturating_add(seconds) > VIDEO_SECONDS {
             return Err(Failure::new(
                 "too_long",
                 format!(
                     "一次 run_code 最多交 {} 分钟视频，这段 {seconds} 秒，之前交了 {so_far} 秒；用 start、end 截一段",
-                    MOST_SECONDS / 60
+                    VIDEO_SECONDS / 60
                 ),
             ));
         }

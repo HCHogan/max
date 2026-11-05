@@ -158,7 +158,7 @@ fn judged_wakes_are_capped() {
         intent.observe(&chat(i as i64), at);
         woken += intent.verdict(verdict(true), at).len();
     }
-    assert_eq!(woken, MAX_PER_HOUR);
+    assert_eq!(woken, JUDGED_WAKES_PER_HOUR);
     // An hour after the first, there is room again.
     intent.observe(&chat(20), clock.at(3600));
     assert_eq!(intent.verdict(verdict(true), clock.at(3600)).len(), 1);

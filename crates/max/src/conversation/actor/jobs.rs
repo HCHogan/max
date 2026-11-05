@@ -13,6 +13,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use super::*;
 use crate::job::{self, Finished, How, Progress, Reply, Request, Status, name};
 use crate::tools::{self, Background};
+use max_core::limits;
 
 /// The jobs running, by number.
 #[derive(Default)]
@@ -99,10 +100,10 @@ impl Conversation {
         let Some(vms) = self.shared.vms.clone() else {
             return Err("这里没有 VM，后台 agent 没地方跑".to_owned());
         };
-        if self.jobs.running.len() >= job::MOST {
+        if self.jobs.running.len() >= limits::JOBS_AT_ONCE {
             return Err(format!(
                 "已经有 {} 个后台 agent 在跑了，等一个做完，或者停掉一个",
-                job::MOST
+                limits::JOBS_AT_ONCE
             ));
         }
         self.jobs.last += 1;
@@ -129,7 +130,7 @@ impl Conversation {
             vms,
             context,
             upstream,
-            deadline: Instant::now() + job::TIME,
+            deadline: Instant::now() + limits::JOB_TIME,
             progress: Arc::clone(&progress),
             ask: Box::new(move |question| {
                 let _ = asking.send(Event::JobAsks {
@@ -168,10 +169,10 @@ impl Conversation {
             return Err("这里没有配 VM，shell 用不了。".to_owned());
         };
         let commands = self.jobs.running.values();
-        if commands.filter(|running| running.agent.is_none()).count() >= job::COMMANDS {
+        if commands.filter(|running| running.agent.is_none()).count() >= limits::COMMANDS_AT_ONCE {
             return Err(format!(
                 "已经有 {} 个后台命令在跑了，等一个跑完，或者用 agent_cancel 停掉一个",
-                job::COMMANDS
+                limits::COMMANDS_AT_ONCE
             ));
         }
         self.jobs.last += 1;
@@ -370,7 +371,7 @@ fn asked(job: u32, title: &str, question: &str, single: u32) -> Item {
         "[{} 问] {title}\n{}\n（它在等你答复：用 agent_steer 回答它，{} 分钟内没答复它就自己判断）",
         name(job),
         fitted(question.trim(), single),
-        job::WAIT.as_secs() / 60,
+        limits::QUESTION_WAIT.as_secs() / 60,
     );
     let tokens = tokens::count(&text);
     Item::new(ItemKind::user(text), tokens)

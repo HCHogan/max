@@ -100,7 +100,7 @@ async fn exchange(model: &ModelTag, name: &str) -> (ModelOutput, Value) {
     let request = Request {
         model: model.clone(),
         items,
-        tools: &TOOLS,
+        tools: &*TOOLS,
         max_output: None,
         roster: BTreeSet::new(),
     };

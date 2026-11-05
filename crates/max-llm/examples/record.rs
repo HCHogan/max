@@ -57,7 +57,7 @@ async fn main() -> Result<(), Failure> {
             ),
             Item::new(ItemKind::user("[1] 小明：2 的 64 次方是多少？"), 20),
         ],
-        tools: &TOOLS,
+        tools: &*TOOLS,
         max_output: Some(4000),
         roster: BTreeSet::new(),
     };

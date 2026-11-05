@@ -10,6 +10,7 @@ use tokio::task::spawn_blocking;
 
 use super::work::put;
 use super::{Context, Failure, arguments, internal};
+use max_core::limits::FILE_BYTES;
 
 pub const NAME: &str = "max.file";
 /// Where in /work the files go.
@@ -42,7 +43,8 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
         return Err(Failure::new(
             "not_found",
             format!(
-                "本群的记录里没有存下来的 {handle}：句柄不对，或者没下载下来（超过 64 MiB，或者下载失败）"
+                "本群的记录里没有存下来的 {handle}：句柄不对，或者没下载下来（超过 {} MiB，或者下载失败）",
+                FILE_BYTES >> 20
             ),
         ));
     };

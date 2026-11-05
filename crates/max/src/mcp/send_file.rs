@@ -12,11 +12,8 @@ use tracing::warn;
 use super::tool::Tool;
 use super::work::{beneath_work, read};
 use super::{Context, Failure, internal};
+use max_core::limits::FILE_BYTES;
 
-/// The largest file sent, in bytes: as large as one downloaded. QQ takes
-/// up to 200 MiB, but a call has a minute, and 32 MiB took 14 seconds to
-/// upload from tank on 2026-10-29.
-const MOST: u64 = 64 << 20;
 /// The longest name, in characters.
 const LONGEST_NAME: usize = 100;
 
@@ -50,7 +47,7 @@ impl Tool for SendFile {
             "把 /work 下的一个文件发到本群，群里显示成文件，点开能下载：文档、表格、PDF、压缩包、代码都行。最大 {} MiB，不能是空的；路径上不能有符号链接。\n  \
             name 是群里显示的文件名，默认用路径里的。发出去了才返回，handle 是这个文件的句柄。\n  \
             要大家直接看到的图用 send_image，别当文件发。记录里已有的文件要再发，先 max.file 拷到 /work 再发。",
-            MOST >> 20
+            FILE_BYTES >> 20
         )
     }
 
@@ -77,7 +74,7 @@ async fn send(context: &Context, Args { path, name }: Args) -> Result<Sent, Fail
     };
     let name = named(&name)?;
     let work = work.clone();
-    let bytes = spawn_blocking(move || read(&work, &relative, MOST))
+    let bytes = spawn_blocking(move || read(&work, &relative, FILE_BYTES))
         .await
         .map_err(|_| internal())??;
     if bytes.is_empty() {

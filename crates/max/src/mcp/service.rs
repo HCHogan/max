@@ -12,7 +12,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -32,11 +31,8 @@ use tracing::warn;
 use super::tool::{self, Spec};
 use super::{Call, Caller, Context, Failure, chat_file, forward, lock, show};
 use crate::vm::Signal;
+use max_core::limits::{CALL_TIME, CALLS_AT_ONCE};
 
-/// One call's wall clock.
-const CALL_TIME: Duration = Duration::from_secs(60);
-/// Calls a session runs at once; more wait their turn.
-const CALLS_AT_ONCE: usize = 64;
 /// What a call that didn't finish may still have done. Nothing is retried
 /// or classified by its effects: what acts on the group goes through the
 /// timeline, where the model sees whether it happened.
@@ -468,6 +464,7 @@ fn called(outcome: Result<Value, Failure>) -> Value {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use chrono::Utc;
     use sqlx::PgPool;

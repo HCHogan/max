@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
+use std::time::Duration;
 
 use chrono::{DateTime, Datelike, FixedOffset, TimeDelta, Utc, Weekday};
 
@@ -272,6 +273,17 @@ pub(crate) fn weekday(day: Weekday) -> &'static str {
     }
 }
 
+/// A span of time, as the prompt and the notices say it: `两小时`, or
+/// `90 分钟`.
+pub fn span(time: Duration) -> String {
+    let minutes = time.as_secs() / 60;
+    match minutes {
+        120 => "两小时".to_owned(),
+        _ if minutes > 0 && minutes.is_multiple_of(60) => format!("{} 小时", minutes / 60),
+        _ => format!("{minutes} 分钟"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
@@ -280,6 +292,13 @@ mod tests {
     use super::*;
     use crate::ids::{ConversationId, MessageId};
     use crate::message::{Emote, ForwardRef, MediaMeta, Platform, Role, Sender, Unsupported};
+
+    #[test]
+    fn a_span_reads_as_hours_or_minutes() {
+        assert_eq!(span(Duration::from_secs(7200)), "两小时");
+        assert_eq!(span(Duration::from_secs(3 * 3600)), "3 小时");
+        assert_eq!(span(Duration::from_secs(90 * 60)), "90 分钟");
+    }
 
     fn people() -> BTreeMap<IdentityId, PrincipalId> {
         [

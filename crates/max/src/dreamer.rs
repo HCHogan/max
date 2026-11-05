@@ -21,6 +21,7 @@ use tracing::{info, warn};
 use crate::llm::Chosen;
 use crate::mcp::work;
 use crate::vm;
+use max_core::limits::{MEMORY_FILE_BYTES, MEMORY_TOKENS};
 
 /// When, local time.
 const NIGHT: NaiveTime = NaiveTime::from_hms_opt(5, 0, 0).expect("a time");
@@ -28,18 +29,21 @@ const NIGHT: NaiveTime = NaiveTime::from_hms_opt(5, 0, 0).expect("a time");
 /// tidied it.
 const SINCE: TimeDelta = TimeDelta::days(1);
 const CALL: Duration = Duration::from_secs(300);
-/// Far past the cap; the actor doesn't load one this big either.
-const LARGEST: u64 = 256 << 10;
 /// What the file was before its last tidy, next to it.
 const BEFORE: &str = "memory.prev.md";
 
-const TIDY: &str = "你在整理一个群聊 AI（Max）给自己记的笔记 memory.md。它每次说话前都会读这份笔记，平时只往里加，不整理。把整份文件整理一遍，只输出整理后的完整文件，不加别的话，也不放进代码块。
+/// What the tidying model is told.
+fn tidy() -> String {
+    format!(
+        "你在整理一个群聊 AI（Max）给自己记的笔记 memory.md。它每次说话前都会读这份笔记，平时只往里加，不整理。把整份文件整理一遍，只输出整理后的完整文件，不加别的话，也不放进代码块。
 - 格式照旧：「## 群里」「## 人」两节，人按「### 名字」分，一行一条，结尾是（日期 #消息编号）。别的标题，和指向 /work/.max/memory/ 下别的文件的行，原样留着。
 - Max 白天把新的一条直接追加在文件末尾，开头可能写着「名字：」。把这些归进该去的节：说某个人的放到那个人的「### 名字」下面，去掉开头的名字。
 - 说同一件事的几条合成一条：留最新的说法，日期取最新的，编号合在一起，最多三个。前后矛盾的留日期新的。同一个人分在几处的并到一处。
 - 写明了到哪天为止、已经过了的删掉，日期看 [现在]。
 - 只挪位置、合并、删重复和过期的；不改写意思，不新增内容，拿不准的留着。
-- 整个文件不超过 3000 token，超了删最不要紧的。";
+- 整个文件不超过 {MEMORY_TOKENS} token，超了删最不要紧的。"
+    )
+}
 
 pub struct Dreamer {
     pub pool: PgPool,
@@ -95,7 +99,7 @@ impl Dreamer {
         let request = Request {
             model: self.chosen.tag.clone(),
             items: vec![
-                Item::new(ItemKind::System { text: TIDY.into() }, 0),
+                Item::new(ItemKind::System { text: tidy() }, 0),
                 Item::new(
                     ItemKind::User {
                         text,
@@ -160,7 +164,8 @@ async fn read(work: &Path) -> Result<Option<(String, SystemTime)>> {
         .strip_prefix("/work")
         .unwrap_or(Path::new(MEMORY_FILE))
         .to_path_buf();
-    let read = tokio::task::spawn_blocking(move || work::read_stamped(&work, &file, LARGEST));
+    let read =
+        tokio::task::spawn_blocking(move || work::read_stamped(&work, &file, MEMORY_FILE_BYTES));
     match read.await? {
         Ok((bytes, modified)) => Ok(Some((String::from_utf8_lossy(&bytes).into(), modified))),
         Err(failure) if failure.code == "not_found" => Ok(None),

@@ -21,16 +21,13 @@ use tokio::fs;
 use tracing::warn;
 
 use super::store::Store;
+use max_core::limits::VIDEO_SECONDS;
 
 /// How long after a row came in its pictures are waited for, while they
 /// download. One not there by then is left out.
 const WAIT: Duration = Duration::from_secs(10);
 /// Between looks while waiting.
 const POLL: Duration = Duration::from_millis(250);
-/// The most seconds of video of tool results a call is sent: the newest
-/// videos'. Older ones are named in their results instead. Pictures have
-/// no such limit: a turn keeps all it was shown, see [`shown`].
-const MOST_VIDEO_SECONDS: u32 = 600;
 
 pub struct Pictures {
     pub pool: PgPool,
@@ -165,10 +162,10 @@ fn shown(request: &Request) -> Vec<&str> {
 }
 
 /// The videos tool results in `request` show, newest first, each once,
-/// as long as they come to at most [`MOST_VIDEO_SECONDS`].
+/// as long as they come to at most [`VIDEO_SECONDS`].
 fn videos(request: &Request) -> Vec<&str> {
     let mut videos = Vec::new();
-    let mut left = MOST_VIDEO_SECONDS;
+    let mut left = VIDEO_SECONDS;
     for part in parts(request) {
         if let Part::Video {
             media: MediaRef::Blob(sha256),

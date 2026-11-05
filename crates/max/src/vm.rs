@@ -19,6 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::Result;
 use max_core::ids::ConversationId;
+use max_core::render::span;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
@@ -86,12 +87,18 @@ enum Internal {
     },
 }
 
+/// How long a VM may idle, by the configuration.
+fn idle(config: &config::Vm) -> Duration {
+    Duration::from_secs(config.idle_minutes * 60)
+}
+
 /// A handle to the VM service; it stops once every handle is gone.
 #[derive(Clone)]
 pub struct Vms {
     requests: UnboundedSender<Request>,
     sessions: Sessions,
     apis: Arc<Apis>,
+    idle: Duration,
 }
 
 struct Request {
@@ -119,6 +126,7 @@ impl Vms {
     ) -> Result<Self> {
         let guest = Guest::load(&config.guest)?;
         std::fs::create_dir_all(&config.dir)?;
+        let idle = idle(&config);
         let (requests, rx) = mpsc::unbounded_channel();
         let sessions = Sessions::with_programs(signals.clone());
         let served = sessions.clone();
@@ -128,7 +136,14 @@ impl Vms {
             requests,
             sessions,
             apis,
+            idle,
         })
+    }
+
+    /// How long a VM may go without a command before it is stopped,
+    /// unless it is kept on.
+    pub fn idle(&self) -> Duration {
+        self.idle
     }
 
     /// The MCP service's sessions, which programs and background agents
@@ -291,7 +306,7 @@ async fn run(
     let (internal, mut internal_rx) = mpsc::unbounded_channel();
     let dir = config.dir.clone();
     let mut service = Service {
-        idle: Duration::from_secs(config.idle_minutes * 60),
+        idle: idle(&config),
         free: (0..config.slots.len()).rev().collect(),
         config: Arc::new(config),
         guest: Arc::new(guest),
@@ -577,16 +592,6 @@ fn keep(
     }
 }
 
-/// `两小时`, or `90 分钟`.
-fn span(idle: Duration) -> String {
-    let minutes = idle.as_secs() / 60;
-    match minutes {
-        120 => "两小时".to_owned(),
-        _ if minutes.is_multiple_of(60) => format!("{} 小时", minutes / 60),
-        _ => format!("{minutes} 分钟"),
-    }
-}
-
 /// The conversations whose /work, under `dir`, has units of Max's, in
 /// order; not vm-check's, conversation 0, which keeps one of its own.
 fn with_units(dir: &Path) -> Vec<ConversationId> {
@@ -681,12 +686,5 @@ mod tests {
         std::fs::create_dir_all(dir.join("not-a-group")).unwrap();
         assert_eq!(with_units(&dir), [ConversationId(4), ConversationId(12)]);
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn an_idle_span_reads_as_hours_or_minutes() {
-        assert_eq!(span(Duration::from_secs(7200)), "两小时");
-        assert_eq!(span(Duration::from_secs(3 * 3600)), "3 小时");
-        assert_eq!(span(Duration::from_secs(90 * 60)), "90 分钟");
     }
 }

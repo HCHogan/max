@@ -1,7 +1,7 @@
 //! `/events` on each group's MCP service: the group's timeline as it is
 //! committed, a JSON line a row, for the programs Max keeps in the VM,
 //! which read it with `maxx events`. `?after=<id>` first sends the rows
-//! after that one, the latest [`CAUGHT_UP`] of them, from the database. A
+//! after that one, the latest [`EVENTS_CAUGHT_UP`] of them, from the database. A
 //! line with nothing on it is the heartbeat. Which group it is is the VM's
 //! own socket's to say, as for the programs' calls. See "常驻程序" in
 //! docs/rust-rewrite.md.
@@ -34,14 +34,13 @@ use tracing::warn;
 
 use super::Signal;
 use crate::conversation::{Subscription, ingest, project};
+use max_core::limits::EVENTS_CAUGHT_UP;
 
 /// A stream with no row for this long sends the heartbeat, so that the
 /// program knows it is still there.
 const HEARTBEAT: Duration = Duration::from_secs(30);
 /// How long the group's conversation has to answer.
 const WAIT: Duration = Duration::from_secs(10);
-/// The most rows sent from before the request.
-const CAUGHT_UP: i64 = 1000;
 /// The rows read from the database at once.
 const PAGE: usize = 100;
 /// The response's header with the last row before the stream: where a
@@ -156,7 +155,7 @@ fn after(query: Option<&str>) -> Option<Option<i64>> {
     }
 }
 
-/// The rows after `after` up to the head, the latest [`CAUGHT_UP`].
+/// The rows after `after` up to the head, the latest [`EVENTS_CAUGHT_UP`].
 async fn backlog(subscription: &Subscription, after: i64) -> sqlx::Result<VecDeque<MessageId>> {
     let mut conn = subscription.services.pool.acquire().await?;
     let between = (
@@ -164,7 +163,15 @@ async fn backlog(subscription: &Subscription, after: i64) -> sqlx::Result<VecDeq
         Some(MessageId(subscription.head.0 + 1)),
     );
     let conversation = subscription.place.conversation;
-    let mut ids = ledger::stretch(&mut conn, conversation, between, None, true, CAUGHT_UP).await?;
+    let mut ids = ledger::stretch(
+        &mut conn,
+        conversation,
+        between,
+        None,
+        true,
+        EVENTS_CAUGHT_UP,
+    )
+    .await?;
     ids.reverse();
     Ok(ids.into())
 }

@@ -16,15 +16,9 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{Instant, sleep_until, timeout};
 use tracing::warn;
 
+use max_core::limits::QUESTION_WAIT;
 use pi::{Ask, Record};
 pub use run::{Asker, Finished, Progress, Start, run};
-
-/// The most agents a conversation runs at once...
-pub const MOST: usize = 3;
-/// ...and background commands, besides.
-pub const COMMANDS: usize = 3;
-/// How long a job may take; then it is aborted, and reports how far it got.
-pub const TIME: Duration = Duration::from_secs(2 * 60 * 60);
 
 /// What a tool asks of its conversation's background jobs: its agents,
 /// and its `shell` commands run in the background.
@@ -71,18 +65,19 @@ pub fn name(job: u32) -> String {
     format!("job#{job}")
 }
 
-/// How long the agent's question waits for Max's answer; then it goes on
-/// by itself.
-pub const WAIT: Duration = Duration::from_secs(10 * 60);
-
 /// How long pi has to settle once aborted, and to give its last text.
 const GRACE: Duration = Duration::from_secs(15);
 
 /// How long before its deadline pi is told to stop and write its report:
 /// aborted with a tool call under way, it has none to give.
 const WARNING: Duration = Duration::from_secs(5 * 60);
-const WRAP_UP: &str =
-    "还剩 5 分钟就到点了。别再查新的，现在就把已经查到的写成报告交给 Max，没做完的写明做到哪了。";
+/// What pi is told at [`WARNING`].
+fn wrap_up_message() -> String {
+    format!(
+        "还剩 {} 分钟就到点了。别再查新的，现在就把已经查到的写成报告交给 Max，没做完的写明做到哪了。",
+        WARNING.as_secs() / 60
+    )
+}
 
 const GONE: &str = "pi 意外退出了";
 
@@ -115,7 +110,7 @@ pub enum How {
 /// Gives pi `task`, passes on the steers that come, and waits until pi
 /// settles, telling it to wrap up shortly before `deadline` and aborting it
 /// then. While the agent waits on a question, the next steer is its
-/// answer; none within [`WAIT`], and the question is dismissed. `records`
+/// answer; none within [`QUESTION_WAIT`], and the question is dismissed. `records`
 /// are the lines of pi's
 /// stdout, and end when pi does; `input` is its stdin, closed at the end.
 pub async fn drive(
@@ -148,7 +143,7 @@ pub async fn drive(
         .filter(|at| *at > Instant::now());
     loop {
         let give_up = aborted.map(|at| at + GRACE);
-        let unanswered = question.as_ref().map(|(_, at)| *at + WAIT);
+        let unanswered = question.as_ref().map(|(_, at)| *at + QUESTION_WAIT);
         tokio::select! {
             line = records.recv() => {
                 let Some(line) = line else {
@@ -211,7 +206,7 @@ pub async fn drive(
                     if let Some((id, _)) = question.take() {
                         pi.ask(Ask::Dismiss(&id)).await?;
                     }
-                    pi.ask(Ask::Steer(WRAP_UP)).await
+                    pi.ask(Ask::Steer(&wrap_up_message())).await
                 };
                 if told.await.is_err() {
                     return failed(GONE);

@@ -16,6 +16,7 @@ use chrono::{DateTime, FixedOffset, Utc};
 
 use crate::ids::PrincipalId;
 use crate::item::{Image, Item, ItemKind};
+use crate::limits::MEMORY_TOKENS;
 use crate::message::{Content, MediaKind, Message, Node, Role};
 use crate::render::moment;
 use crate::run::Context;
@@ -135,37 +136,34 @@ impl Volatile {
 /// core. See "记忆" in docs/rust-rewrite.md.
 pub const MEMORY_FILE: &str = "/work/.max/memory.md";
 
-/// The most tokens of the memory file a core is shown.
-pub const MEMORY: u32 = 3_000;
-
 const TIDY: &str =
     "一行一条，细节挪进 /work/.max/memory/ 下的别的文件、这里留一行指过去，过时的合并或删掉";
 
 /// The memory file as a core is shown it: whole, with a reminder to tidy
-/// it once it nears [`MEMORY`] tokens; past that, the lines that fit and a
+/// it once it nears [`MEMORY_TOKENS`] tokens; past that, the lines that fit and a
 /// note that the rest wasn't loaded. Claude Code treats its MEMORY.md the
 /// same way.
 pub fn memory(text: &str, count: impl Fn(&str) -> u32) -> String {
     let text = text.trim_end();
     let total = count(text);
-    if total <= MEMORY * 4 / 5 {
+    if total <= MEMORY_TOKENS * 4 / 5 {
         return text.to_owned();
     }
-    if total <= MEMORY {
-        return format!("{text}\n（记忆快到上限了，约 {total}/{MEMORY} token：{TIDY}。）");
+    if total <= MEMORY_TOKENS {
+        return format!("{text}\n（记忆快到上限了，约 {total}/{MEMORY_TOKENS} token：{TIDY}。）");
     }
     let mut shown = String::new();
     let mut used = 0;
     for line in text.lines() {
         let cost = count(line) + 1;
-        if used + cost > MEMORY {
+        if used + cost > MEMORY_TOKENS {
             break;
         }
         used += cost;
         shown.push_str(line);
         shown.push('\n');
     }
-    format!("{shown}（记忆超过上限，约 {total}/{MEMORY} token，从这里往后没加载：{TIDY}。）")
+    format!("{shown}（记忆超过上限，约 {total}/{MEMORY_TOKENS} token，从这里往后没加载：{TIDY}。）")
 }
 
 /// `[现在] 2026-10-29 周四 12:10`, on its own line.
