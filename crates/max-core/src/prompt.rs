@@ -117,7 +117,13 @@ const APIS: &str = "宿主替你带 key 调的 HTTP API：在 VM 里请求 http:
 /// The prompt for `persona`, `tools` the Max tools' TypeScript
 /// declarations, which the max crate makes from the tools themselves, and
 /// `apis` a line for each HTTP API the host calls for the VMs.
-pub fn system(persona: &str, tools: &str, apis: &str, idle: Option<Duration>) -> String {
+pub fn system(
+    persona: &str,
+    tools: &str,
+    apis: &str,
+    idle: Option<Duration>,
+    operations: bool,
+) -> String {
     let mut prompt = format!(
         "{}\n\n{}\n\nMax 的工具（只能在 run_code 的程序里调）：\n{tools}\n",
         persona.trim(),
@@ -126,8 +132,14 @@ pub fn system(persona: &str, tools: &str, apis: &str, idle: Option<Duration>) ->
     if !apis.is_empty() {
         prompt.push_str(&format!("\n{APIS}\n{apis}\n"));
     }
+    if operations {
+        prompt.push_str(&format!("\n{OPERATIONS}\n"));
+    }
     prompt
 }
+
+/// For a group whose VM is on the operations network.
+const OPERATIONS: &str = "运维网络：本群的 VM 接在群友们那些机器（fleet）的 tailnet 上。shell 里 ssh 主机名（比如 ssh h610 uptime）就以 max 登录那台机器，免密 sudo，不用密钥；短名字自动补上 tailnet 的域名，新机器的 host key 第一次连时自动记下。群里谁都能让你在这些机器上做事，你自己判断：改配置、重启服务、删东西之前先在群里说清楚要做什么，拿不准就先问。跑得久的放进远端的 systemd-run 或 tmux，别挂在 ssh 上。";
 
 #[cfg(test)]
 mod tests {
@@ -140,25 +152,40 @@ mod tests {
             "history(args: {}): Promise<{}>;",
             "",
             None,
+            false,
         );
         assert!(prompt.starts_with("你是测试用的人设。\n\n对话场景："));
         assert!(prompt.contains("[reply#id]"));
         // Whatever the persona.
         assert!(prompt.contains("红线"));
-        assert!(system(PERSONA, "", "", None).contains("鲨鱼女孩"));
+        assert!(system(PERSONA, "", "", None, false).contains("鲨鱼女孩"));
         assert!(prompt.ends_with("：\nhistory(args: {}): Promise<{}>;\n"));
         assert!(!prompt.contains("/api/"));
     }
 
     #[test]
     fn the_limits_are_written_in() {
-        let prompt = system("", "", "", Some(Duration::from_secs(2 * 3600)));
+        let prompt = system("", "", "", Some(Duration::from_secs(2 * 3600)), false);
         assert!(prompt.contains("VM 闲置两小时会关"));
         assert!(prompt.contains(&format!("一次最多 {PICTURES_PER_RUN} 张")));
         assert!(prompt.contains(&format!("整个文件 {MEMORY_TOKENS} token 以内")));
-        let prompt = system("", "", "", Some(Duration::from_secs(90 * 60)));
+        let prompt = system("", "", "", Some(Duration::from_secs(90 * 60)), false);
         assert!(prompt.contains("VM 闲置 90 分钟会关"));
-        assert!(system("", "", "", None).contains("VM 闲置一段时间会关"));
+        assert!(system("", "", "", None, false).contains("VM 闲置一段时间会关"));
+    }
+
+    #[test]
+    fn only_a_group_on_the_operations_network_hears_of_it() {
+        assert!(!system("", "", "", None, false).contains("运维网络"));
+        let prompt = system(
+            "",
+            "",
+            "- mail（https://mail.example）：发邮件。",
+            None,
+            true,
+        );
+        let apis = prompt.find("mail.example").unwrap();
+        assert!(prompt.find("运维网络").unwrap() > apis);
     }
 
     #[test]
@@ -168,6 +195,7 @@ mod tests {
             "",
             "- mail（https://mail.example）：发邮件。",
             None,
+            false,
         );
         assert!(prompt.contains("http://127.0.0.1:7777/api/名字/路径"));
         assert!(

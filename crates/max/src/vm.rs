@@ -99,6 +99,8 @@ pub struct Vms {
     sessions: Sessions,
     apis: Arc<Apis>,
     idle: Duration,
+    /// The groups on the operations network.
+    operating: Arc<BTreeSet<ConversationId>>,
 }
 
 struct Request {
@@ -127,6 +129,14 @@ impl Vms {
         let guest = Guest::load(&config.guest)?;
         std::fs::create_dir_all(&config.dir)?;
         let idle = idle(&config);
+        let operating = Arc::new(
+            config
+                .operations
+                .iter()
+                .flat_map(|ops| &ops.conversations)
+                .map(|&id| ConversationId(id))
+                .collect(),
+        );
         let (requests, rx) = mpsc::unbounded_channel();
         let sessions = Sessions::with_programs(signals.clone());
         let served = sessions.clone();
@@ -137,7 +147,13 @@ impl Vms {
             sessions,
             apis,
             idle,
+            operating,
         })
+    }
+
+    /// Whether the conversation's VM is on the operations network.
+    pub fn operates(&self, conversation: ConversationId) -> bool {
+        self.operating.contains(&conversation)
     }
 
     /// How long a VM may go without a command before it is stopped,
@@ -284,7 +300,7 @@ struct Service {
     signals: UnboundedSender<Signal>,
     idle: Duration,
     vms: HashMap<ConversationId, State>,
-    free: Vec<usize>,
+    free: Free,
     boots: Scope,
     booted: UnboundedSender<(ConversationId, Result<Booted, String>)>,
     internal: UnboundedSender<Internal>,
@@ -307,7 +323,7 @@ async fn run(
     let dir = config.dir.clone();
     let mut service = Service {
         idle: idle(&config),
-        free: (0..config.slots.len()).rev().collect(),
+        free: Free::new(&config),
         config: Arc::new(config),
         guest: Arc::new(guest),
         sessions,
@@ -371,7 +387,13 @@ impl Service {
     /// Boots the conversation's VM for `waiting`: without Max's units if
     /// it has been failing.
     fn start(&mut self, conversation: ConversationId, waiting: Waiting) {
-        let Some(slot) = self.free.pop().or_else(|| evict(&mut self.vms, &self.kept)) else {
+        let operates = self.config.operates(conversation.0);
+        let pool = self.config.operations_slots();
+        let Some(slot) = self.free.take(operates).or_else(|| {
+            evict(&mut self.vms, &self.kept, |slot| {
+                pool.contains(&slot) == operates
+            })
+        }) else {
             for reply in waiting {
                 let _ = reply.send(Err("同时开着的 VM 太多了，过一会儿再试。".into()));
             }
@@ -398,8 +420,13 @@ impl Service {
         );
         self.boots.spawn(move |_| async move {
             let started = Instant::now();
-            let slot = &config.slots[slot];
-            let booting = machine::boot(&config, &guest, &dir, slot, units);
+            let operations = if operates {
+                config.operations.as_ref()
+            } else {
+                None
+            };
+            let slot = config.slot(slot);
+            let booting = machine::boot(&config, &guest, &dir, slot, operations, units);
             let result = match timeout(BOOT + Duration::from_secs(10), booting).await {
                 Ok(result) => result.map_err(|error| format!("{error:#}")),
                 Err(_) => Err(format!("the VM didn't boot within {BOOT:?}")),
@@ -430,7 +457,7 @@ impl Service {
         } = match result {
             Ok(booted) => booted,
             Err(error) => {
-                self.free.push(slot);
+                self.free.release(slot);
                 self.fail(conversation);
                 if !units {
                     // Not the units, then: the VM waits for a tool to need
@@ -504,7 +531,7 @@ impl Service {
                 true
             };
             if !keep {
-                self.free.push(running.slot);
+                self.free.release(running.slot);
             }
             keep
         });
@@ -525,7 +552,7 @@ impl Service {
     /// The VM on `slot` had stopped by itself; it is gone already.
     fn died(&mut self, conversation: ConversationId, slot: usize) {
         warn!(%conversation, "a VM had stopped by itself");
-        self.free.push(slot);
+        self.free.release(slot);
         self.fail(conversation);
     }
 
@@ -632,17 +659,56 @@ pub fn units(work: &Path) -> Vec<String> {
     names
 }
 
-/// Stops the VM that has gone unused longest, if one isn't lent or kept,
-/// for its slot.
+/// The slots no VM has: the ordinary ones and the operations network's
+/// apart, since a group's VM takes only its own kind.
+struct Free {
+    ordinary: Vec<usize>,
+    operations: Vec<usize>,
+    /// The first of the operations network's.
+    first: usize,
+}
+
+impl Free {
+    fn new(config: &config::Vm) -> Self {
+        let pool = config.operations_slots();
+        Self {
+            ordinary: (0..pool.start).rev().collect(),
+            first: pool.start,
+            operations: pool.rev().collect(),
+        }
+    }
+
+    fn take(&mut self, operations: bool) -> Option<usize> {
+        if operations {
+            self.operations.pop()
+        } else {
+            self.ordinary.pop()
+        }
+    }
+
+    fn release(&mut self, slot: usize) {
+        if slot >= self.first {
+            self.operations.push(slot);
+        } else {
+            self.ordinary.push(slot);
+        }
+    }
+}
+
+/// Stops the VM that has gone unused longest, if one isn't lent or kept
+/// and its slot is one `fits`, for that slot.
 fn evict(
     vms: &mut HashMap<ConversationId, State>,
     kept: &BTreeSet<ConversationId>,
+    fits: impl Fn(usize) -> bool,
 ) -> Option<usize> {
     let (&conversation, _) = vms
         .iter()
         .filter(|(conversation, _)| !kept.contains(conversation))
         .filter_map(|(conversation, state)| match state {
-            State::Running(running) if !running.lent() => Some((conversation, running.idle_since)),
+            State::Running(running) if !running.lent() && fits(running.slot) => {
+                Some((conversation, running.idle_since))
+            }
             _ => None,
         })
         .min_by_key(|(_, idle_since)| *idle_since)?;
@@ -656,6 +722,25 @@ fn evict(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_kind_of_group_takes_its_own_slots() {
+        let mut free = Free {
+            ordinary: vec![1, 0],
+            operations: vec![3, 2],
+            first: 2,
+        };
+        assert_eq!(free.take(false), Some(0));
+        assert_eq!(free.take(true), Some(2));
+        assert_eq!(free.take(true), Some(3));
+        assert_eq!(free.take(true), None);
+        free.release(2);
+        free.release(0);
+        assert_eq!(
+            (free.ordinary.as_slice(), free.operations.as_slice()),
+            (&[1, 0][..], &[2][..])
+        );
+    }
 
     #[test]
     fn a_group_is_kept_on_while_it_has_units_and_there_is_room() {

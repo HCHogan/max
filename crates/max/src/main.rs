@@ -84,6 +84,11 @@ enum Command {
         args: Args,
         #[arg(long, default_value = "uname -a")]
         command: String,
+        /// On the operations network's last slot instead, as a group of
+        /// `vm.operations` would be: `--command "ssh <host> hostname"`
+        /// checks the way to the fleet.
+        #[arg(long)]
+        operations: bool,
     },
 }
 
@@ -105,18 +110,33 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::CheckConfig(args) => Config::load(&args.config).map(drop),
         Command::Run(args) => run(&args.config),
-        Command::VmCheck { args, command } => vm_check(&args.config, command),
+        Command::VmCheck {
+            args,
+            command,
+            operations,
+        } => vm_check(&args.config, command, operations),
     }
 }
 
-/// On the last slot, which a running service takes last.
-fn vm_check(path: &Path, command: String) -> Result<()> {
+/// On the last slot, which a running service takes last; or the
+/// operations network's last.
+fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
     let mut config = Config::load(path)?;
     logging(&config);
     let Some(mut vm) = config.vm.take() else {
         bail!("the configuration has no [vm]");
     };
     vm.slots.drain(..vm.slots.len() - 1);
+    match vm.operations.as_mut() {
+        // vm-check's conversation, 0, is one of its groups.
+        Some(ops) if operations => {
+            ops.slots.drain(..ops.slots.len() - 1);
+            ops.conversations = vec![0];
+        }
+        Some(ops) => ops.conversations.clear(),
+        None if operations => bail!("the configuration has no [vm.operations]"),
+        None => {}
+    }
     // A directory of its own. The VM service boots again the VMs it finds
     // there with units, and a second boot of a VM maxx runs would take
     // that VM's sockets from it (2026-11-03).

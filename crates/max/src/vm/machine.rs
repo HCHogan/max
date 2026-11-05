@@ -73,6 +73,7 @@ pub async fn boot(
     guest: &Guest,
     dir: &Path,
     slot: &Slot,
+    operations: Option<&config::Operations>,
     units: bool,
 ) -> Result<Booted> {
     let work = dir.join("work");
@@ -118,13 +119,24 @@ pub async fn boot(
         .split(' ')
         .nth(1)
         .ok_or_else(|| eyre!("an OpenSSH public key without its blob"))?;
+    // On the operations network, the tailnet's resolvers come first, and
+    // the guest's ssh takes a short host name as one under its domain.
+    let dns: Vec<&str> = operations
+        .into_iter()
+        .flat_map(|ops| &ops.dns)
+        .chain(&config.dns)
+        .map(String::as_str)
+        .collect();
     let mut cmdline = format!(
         "{} max.ip={} max.gateway={} max.dns={} max.key={blob}",
         guest.cmdline,
         slot.address,
         slot.gateway,
-        config.dns.join(","),
+        dns.join(","),
     );
+    if let Some(ops) = operations {
+        cmdline.push_str(&format!(" max.domain={}", ops.domain));
+    }
     if let Some(author) = &config.author {
         cmdline.push_str(&format!(" max.git={},{}", author.name, author.email));
     }

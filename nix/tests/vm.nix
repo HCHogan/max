@@ -7,7 +7,8 @@
 # ffmpeg made, calls the MCP service with maxx from a command, and keeps a
 # unit in
 # /work/.max/systemd, which the next boot starts again, and wakes Max with
-# max-wake.
+# max-wake. Then a VM on the operations network reaches a stand-in for the
+# tailnet through its namespace, where an ordinary VM can't.
 { pkgs, module }:
 pkgs.testers.runNixOSTest {
   name = "max-vm";
@@ -20,6 +21,14 @@ pkgs.testers.runNixOSTest {
       vm = {
         enable = true;
         slots = 2;
+        # No tailnet here: its client fails to log in, and the test puts a
+        # stand-in where the tailnet would be.
+        operations = {
+          enable = true;
+          slots = 1;
+          loginServer = "http://127.0.0.1:9";
+          domain = "tail.example";
+        };
       };
       settings = {
         vm = {
@@ -83,5 +92,37 @@ pkgs.testers.runNixOSTest {
     machine.succeed("head -c 8 /var/lib/maxx/vm/check/0/work/.max/browser-check.png | grep -q PNG")
     machine.copy_from_vm("/var/lib/maxx/vm/check/0/work/.max/browser-check.png")
     print(shown)
+
+    # The operations network. The tailnet's stand-in: a namespace behind a
+    # veth from maxx-ops, where tailscale0 would be.
+    machine.wait_for_unit("maxx-ops-network.service")
+    machine.succeed("systemctl stop maxx-ops-tailscaled.service")
+    machine.succeed(
+        "ip netns add fleet",
+        "ip -n maxx-ops link add fleet0 type veth peer name eth0 netns fleet",
+        "ip -n maxx-ops address add 100.64.0.1/24 dev fleet0",
+        "ip -n maxx-ops link set fleet0 up",
+        "ip -n maxx-ops route add 100.64.0.0/10 dev fleet0",
+        "ip -n fleet address add 100.64.0.2/24 dev eth0",
+        "ip -n fleet link set eth0 up",
+        "ip -n fleet link set lo up",
+    )
+    machine.succeed("ip rule | grep -q 'from 10.236.0.0/24 lookup 236'")
+    check = (
+        "systemd-run --wait --collect --pipe -p User=maxx -p Group=maxx -p SupplementaryGroups=kvm "
+        + "$(systemctl show -P ExecStart maxx-vm-check.service | grep -o '/nix/store/[^ ;]*/bin/max vm-check --config [^ ;]*') "
+    )
+    reached = machine.succeed(
+        check + "--operations --command 'cat /run/max/ssh_config; head -n 1 /etc/resolv.conf; ping -c 1 -W 5 100.64.0.2' 2>&1"
+    )
+    assert "HostName %h.tail.example" in reached and "User max" in reached, reached
+    assert "nameserver 100.100.100.100" in reached, reached
+    assert "1 received" in reached, reached
+    # An ordinary VM can't, nor has the ssh_config.
+    refused = machine.succeed(
+        check + "--command 'ls /run/max/ssh_config; ping -c 1 -W 5 100.64.0.2' 2>&1"
+    )
+    assert "No such file" in refused and "0 received" in refused, refused
+    print(reached)
   '';
 }

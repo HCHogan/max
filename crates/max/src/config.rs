@@ -453,10 +453,30 @@ pub struct Vm {
     /// in them; see "常驻程序".
     #[serde(default = "kept")]
     pub kept: usize,
+    /// The groups whose VMs are on the operations network.
+    #[serde(default)]
+    pub operations: Option<Operations>,
     /// Who the guests' commits are by: Max's GitHub account, from
     /// `[github]`.
     #[serde(skip)]
     pub author: Option<Author>,
+}
+
+/// The operations network: a dedicated Tailscale client in a network
+/// namespace of its own, which these groups' VMs reach the fleet through
+/// with `ssh <host>`. See "运维网络" in docs/rust-rewrite.md.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Operations {
+    /// The groups, by conversation; everyone in them may operate.
+    pub conversations: Vec<i64>,
+    /// Their VMs' taps, routed into the namespace: one per VM of theirs
+    /// that can run at a time.
+    pub slots: Vec<Slot>,
+    /// The resolvers their guests try first, the tailnet's, before `dns`.
+    pub dns: Vec<String>,
+    /// The tailnet's domain: a short host name is one under it.
+    pub domain: String,
 }
 
 fn cpus() -> u32 {
@@ -580,25 +600,63 @@ impl Llm {
 }
 
 impl Vm {
+    /// Whether the conversation's VM is on the operations network.
+    pub fn operates(&self, conversation: i64) -> bool {
+        self.operations
+            .as_ref()
+            .is_some_and(|ops| ops.conversations.contains(&conversation))
+    }
+
+    /// The slot `index` names: the ordinary ones first, then the
+    /// operations network's.
+    pub fn slot(&self, index: usize) -> &Slot {
+        match index.checked_sub(self.slots.len()) {
+            None => &self.slots[index],
+            Some(ops) => &self.operations.as_ref().expect("an operations slot").slots[ops],
+        }
+    }
+
+    /// The indexes of the operations network's slots.
+    pub fn operations_slots(&self) -> std::ops::Range<usize> {
+        let ops = self.operations.as_ref().map_or(0, |ops| ops.slots.len());
+        self.slots.len()..self.slots.len() + ops
+    }
+
     fn check(&self) -> Result<()> {
         ensure!(!self.slots.is_empty(), "no slots");
-        let mut taps: Vec<&str> = self.slots.iter().map(|slot| slot.tap.as_str()).collect();
+        let operations = self.operations.as_ref();
+        let slots: Vec<&Slot> = self
+            .slots
+            .iter()
+            .chain(operations.into_iter().flat_map(|ops| &ops.slots))
+            .collect();
+        let mut taps: Vec<&str> = slots.iter().map(|slot| slot.tap.as_str()).collect();
         taps.sort_unstable();
         taps.dedup();
-        ensure!(
-            taps.len() == self.slots.len(),
-            "two slots have the same tap"
-        );
+        ensure!(taps.len() == slots.len(), "two slots have the same tap");
+        if let Some(ops) = operations {
+            ensure!(!ops.slots.is_empty(), "the operations network has no slots");
+            ensure!(
+                !ops.domain.is_empty()
+                    && ops
+                        .domain
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b".-".contains(&byte)),
+                "{:?} isn't a domain",
+                ops.domain
+            );
+        }
         // The taps are multi-queue, which cloud-hypervisor opens as such
         // only with two queue pairs or more, and it allows a pair per vCPU.
         ensure!(self.cpus >= 2, "a VM needs two vCPUs at least");
         ensure!(self.memory_mib >= 512, "too small a VM");
         // They go on the guest's command line, which splits at spaces.
-        for word in self.dns.iter().chain(
-            self.slots
-                .iter()
-                .flat_map(|slot| [&slot.address, &slot.gateway]),
-        ) {
+        for word in self
+            .dns
+            .iter()
+            .chain(operations.into_iter().flat_map(|ops| &ops.dns))
+            .chain(slots.iter().flat_map(|slot| [&slot.address, &slot.gateway]))
+        {
             ensure!(
                 !word.is_empty() && !word.contains([' ', ',']),
                 "{word:?} isn't an address"
@@ -791,6 +849,31 @@ mod tests {
         let one = vm.replace("memory_mib = 8192", "cpus = 1");
         let error = with_llm(&one).unwrap_err();
         assert!(format!("{error:#}").contains("two vCPUs"), "{error:#}");
+
+        // The operations network's slots come after the ordinary ones.
+        let ops = format!(
+            "{vm}
+            [vm.operations]
+            conversations = [8, 13]
+            dns = [\"100.100.100.100\"]
+            domain = \"tail.example.com\"
+
+            [[vm.operations.slots]]
+            tap = \"maxx-ops0\"
+            address = \"10.236.0.2/30\"
+            gateway = \"10.236.0.1\"
+            "
+        );
+        let config = with_llm(&ops).unwrap().vm.unwrap();
+        assert!(config.operates(13) && !config.operates(9));
+        assert_eq!(config.operations_slots(), 1..2);
+        assert_eq!(config.slot(0).tap, "maxx-vm0");
+        assert_eq!(config.slot(1).tap, "maxx-ops0");
+        let clash = ops.replace("maxx-ops0", "maxx-vm0");
+        let error = with_llm(&clash).unwrap_err();
+        assert!(format!("{error:#}").contains("same tap"), "{error:#}");
+        assert!(with_llm(&ops.replace("tail.example.com", "tail example")).is_err());
+        assert!(with_llm(&ops.replace("100.100.100.100", "100.100.100.100 x")).is_err());
     }
 
     #[test]

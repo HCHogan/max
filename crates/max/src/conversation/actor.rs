@@ -629,7 +629,13 @@ impl Conversation {
         let apis = vms.map_or("", |vms| vms.apis().prompt());
         let projection = Projection {
             place: &self.place,
-            system: prompt::system(persona, &mcp::tool::DECLARATIONS, apis, vms.map(Vms::idle)),
+            system: prompt::system(
+                persona,
+                &mcp::tool::DECLARATIONS,
+                apis,
+                vms.map(Vms::idle),
+                vms.is_some_and(|vms| vms.operates(self.place.conversation)),
+            ),
             window: chosen.window,
             cleared_upto: settings.cleared_upto,
             memory: self.memory().await,

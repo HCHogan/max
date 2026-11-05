@@ -90,9 +90,9 @@
 | Replies | ✓ | QQ 一律发原生 Markdown，表格和代码块不再渲染成图片，见 [QQ 官方机器人](#qq-官方机器人)；Max 不发小黄脸，表情包和图片当图片发，见[发图](#发图) |
 | Tools | 部分 | 纯 codemode 加 `shell`，见[工具和 codemode](#工具和-codemode)；v1 开放哪几个 **待定** |
 | Skills | — | skill 只是文档，加载时只往上下文后面追加，tools 数组不变，见[纯 codemode](#纯-codemode) |
-| Destiny 2 (opt-in) | — | |
+| Destiny 2 (opt-in) | 部分 | 2026-11-05：只读的公开数据经[宿主带 key 的 API](#宿主带-key-的-api)（`[api.bungie]`，配置在 nix-config），Max 自己写脚本、缓存 manifest。要玩家登录的（背包、移动和装备物品）没做：要每人的 OAuth，转发器只有一把固定的 key，也分不出 VM 里是谁在调。Haskell 版只有 3 个人登录过 |
 | Commands | 部分 | `/kill` 等运行时命令；由会话 actor 处理，不进核心 |
-| SSH fleet operations | — | |
+| SSH fleet operations | ✓ | 2026-11-05，见[运维网络](#运维网络) |
 | Admin JSON API | — | |
 | Token accounting | 部分 | |
 | Estimated cost | — | |
@@ -1501,7 +1501,22 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
   - guest 里 `systemd-run --pipe --wait` 能带回输出和退出码。它会往输出里写设终端标题的转义，要设 `SYSTEMD_ADJUST_TERMINAL_TITLE=0`。
   - tank 的 CPU 开了嵌套 KVM，module 的 NixOS 测试里也能起 guest。flake 的 `nestedChecks.x86_64-linux.vm` 就是这样：测试机里 module 建好 tap、nft 和加固过的 `maxx.service`，再用同样加固的 `maxx-vm-check` 起一个 VM，经 `shell` 的同一条路径跑 `uname -a`。2026-10-29 在 tank 上跑通，测试机里的 VM 10 秒起好。CI 的 runner 自己就是 VM，给不了测试机 KVM，所以它不在 `checks` 里，要在 tank 上手动跑。
   - **aarch64 也能部署**（2026-11-05 owner 要的）：flake 的 `guest` 和 `nestedChecks` 对 aarch64-linux 也有。cloud-hypervisor 在 x86_64 上直接引导 ELF 的 `vmlinux`，在 aarch64 上引导 `Image`，串口是 PL011，所以内核和 console 按架构选（`ttyS0`、`ttyAMA0`），和 microvm.nix 自己的 runner 一样；x86_64 的 guest 一个字节没变。aarch64 没有 `earlyprintk` 那样的早期输出，`quiet` 下 `serial.log` 平时是空的。验证：在 Mac 的 Linux builder（Virtualization.framework，开了嵌套虚拟化）的一个副本里，以普通用户跑 `max vm-check`，guest 起来了，`uname -m` 是 aarch64，程序经 MCP 调得到工具；同一份 guest 里的 Chromium 和 ffmpeg 在 builder 里直接跑都正常。但 guest 在那里隔了两层虚拟化，比 tank 慢十倍以上（开机 50 秒，Chromium 启动要两分钟 CPU），浏览器的几项检查都超时，所以浏览器在 aarch64 的 VM 里还没整个验过。Mac 上跑不了 `nestedChecks`：Apple 给的虚拟 EL2 没有 VHE，builder 的 KVM 只能是 nVHE，内核不认 `kvm-arm.mode=nested`，测试机里就没有 KVM；macOS 上 QEMU 11.1 用 HVF 给 EL2，测试机能开 KVM，但时钟乱跳、卡在 initrd。要在一台 KVM 能嵌套的 aarch64 机器上跑。
-- 运维网络（maxops 加 tailscale）换成另一组 tap，挂在一个路由进 maxops 命名空间的网桥上。v1 不做，上线前做。
+- 运维网络：2026-11-05 做了，见[运维网络](#运维网络)。
+
+### 运维网络
+
+2026-11-05 做（owner 要的），照搬 Haskell 版的做法（`haskell-base` 的 `nix/operations.nix`），只是 VM 换成了 cloud-hypervisor 的 tap。
+
+- **做法**：tank 上一个网络命名空间 `maxx-ops`，里面跑一个专用的 tailscaled，是 tailnet 里的节点 `maxops`（Headscale 用户 `max@imdomestic.com`）。配置里列出的群（`vm.operations.conversations`，按会话 id，公开仓库里不写群号），它们的 VM 用另一组 tap（`maxx-ops0…`，10.236.0.0/24），宿主按源地址把这些 tap 的流量全部路由进命名空间（`ip rule from 10.236.0.0/24 lookup 236`）。命名空间里，tailnet 和它广播的子网走 tailscale0，别的从 uplink 回到宿主出公网，两条路都伪装成命名空间自己的地址。
+- **登录不用密钥**：fleet 的机器开着 Tailscale SSH，Headscale 的 SSH 策略按 tailnet 身份放行 `group:imdomestic`（`max@` 在里面）。机器上有个 `max` 用户，免密 sudo（nix-config 的 `system/modules/max-operator.nix`）。VM 里没有 key，也拿不到 tailscaled 的 socket 和节点状态。
+- **guest**：VM 的内核命令行多一个 `max.domain=<tailnet 的域名>`，DNS 前面加上 `100.100.100.100`（MagicDNS 只答 tailnet 的名字，别的 SERVFAIL，glibc 接着问下一个）。`max-guest` 据此写 `/run/max/ssh_config`：短名字补上域名，`User max`、`BatchMode`、`StrictHostKeyChecking accept-new`；known_hosts 在 `/work/.ssh`（root 的家是 /work）。guest 的 ssh_config 一律 `Include` 它，别的 VM 没有这个文件，ssh 忽略。
+- **宿主守的**：运维 tap 的流量只能进命名空间（`oifname != maxx-uplink` 就拒），命名空间没起来时也不会落到宿主自己的 tailnet 节点上；命名空间出来的只能上公网，不能去局域网、别的 VM、宿主的 tailnet 和宿主的服务。命名空间里不接 VM 发来的新连接。
+- **提示词**：这些群的系统提示末尾多一段"运维网络"：怎么 ssh、免密 sudo、改东西之前先说清楚、长任务放远端的 systemd-run 或 tmux。
+- **权限**：和 Haskell 版一样，群里谁都能让 Max 在 fleet 上做事，等于 root。只给信得过的群开。
+- **槽位**：运维的群只用运维的 tap（默认 4 个），普通群只用普通的；满了各自按闲置时间挤掉自己那一类的 VM。改了名单，正在跑的 VM 要等下次开机才换 tap。
+- **状态**：节点身份是 Haskell 版 `maxops` 的，2026-11-05 从 tank 的 `/var/lib/max/tailscale` 拷到 `/var/lib/maxx-ops-tailscale`，不用新的 preauthkey；`vm.operations.authKeyFile` 留着给从头登录用。
+- **检查**：`max vm-check --operations --command "ssh h610 hostname"` 在运维网络最后一个 tap 上开 VM 跑命令。嵌套的 NixOS 测试用一个假的"tailnet"（`maxx-ops` 里一条 veth 连到另一个命名空间的 100.64.0.2）：运维的 VM ping 得通，普通的不通，也没有 ssh_config。
+- 代码：`config::Operations`，`vm.rs` 的 `Free`，`vm/machine.rs` 的命令行，`nix/guest.nix` 的 `max-guest`，`nix/module.nix` 的 `vm.operations`。
 
 ### MCP 通道
 

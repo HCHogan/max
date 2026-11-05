@@ -9,8 +9,9 @@
 #
 # What differs between groups' VMs comes on the kernel command line, which
 # max appends to: the address (max.ip, max.gateway), the resolvers
-# (max.dns), the key max logs in with (max.key), and who commits are by
-# (max.git).
+# (max.dns), the key max logs in with (max.key), who commits are by
+# (max.git), and on the operations network the tailnet's domain
+# (max.domain).
 {
   config,
   lib,
@@ -196,6 +197,7 @@ in
           max.dns=*) dns=''${word#max.dns=} ;;
           max.key=*) key=''${word#max.key=} ;;
           max.git=*) git=''${word#max.git=} ;;
+          max.domain=*) domain=''${word#max.domain=} ;;
         esac
       done
       ip address replace "$address" dev eth0
@@ -211,6 +213,14 @@ in
       # Commits are by Max's GitHub account, when max has one: name,email.
       if [ -n "''${git:-}" ]; then
         printf '[user]\n\tname = %s\n\temail = %s\n' "''${git%%,*}" "''${git#*,}" > /etc/gitconfig
+      fi
+      # On the operations network: ssh <host> reaches the fleet's host as
+      # max, a short name being one under the tailnet's domain. Tailscale
+      # SSH lets max in by the network's node, so there is no key, and
+      # host keys are learned on first use into /work/.ssh/known_hosts
+      # (root's home is /work).
+      if [ -n "''${domain:-}" ]; then
+        printf 'Host * !*.*\n  HostName %%h.%s\nHost *\n  User max\n  BatchMode yes\n  ConnectTimeout 15\n  StrictHostKeyChecking accept-new\n' "$domain" > /run/max/ssh_config
       fi
     '';
   };
@@ -321,6 +331,10 @@ in
 
   # systemd-ssh-generator puts sshd on vsock port 22. Nothing reaches the
   # TCP listener, which therefore does not start.
+  # What max-guest writes on the operations network; ssh ignores an
+  # Include that matches nothing, as on every other VM.
+  programs.ssh.extraConfig = "Include /run/max/ssh_config";
+
   services.openssh = {
     enable = true;
     openFirewall = false;
