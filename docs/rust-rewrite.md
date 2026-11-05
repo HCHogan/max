@@ -1500,6 +1500,7 @@ Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410
   - 从起进程到 SSH 连得上约 3.8 秒。hybrid vsock 上的 SSH 先发 `CONNECT 22\n`，systemd 的 `systemd-ssh-proxy vsock-mux/<socket>` 就能连，russh 照做即可。
   - guest 里 `systemd-run --pipe --wait` 能带回输出和退出码。它会往输出里写设终端标题的转义，要设 `SYSTEMD_ADJUST_TERMINAL_TITLE=0`。
   - tank 的 CPU 开了嵌套 KVM，module 的 NixOS 测试里也能起 guest。flake 的 `nestedChecks.x86_64-linux.vm` 就是这样：测试机里 module 建好 tap、nft 和加固过的 `maxx.service`，再用同样加固的 `maxx-vm-check` 起一个 VM，经 `shell` 的同一条路径跑 `uname -a`。2026-10-29 在 tank 上跑通，测试机里的 VM 10 秒起好。CI 的 runner 自己就是 VM，给不了测试机 KVM，所以它不在 `checks` 里，要在 tank 上手动跑。
+  - **aarch64 也能部署**（2026-11-05 owner 要的）：flake 的 `guest` 和 `nestedChecks` 对 aarch64-linux 也有。cloud-hypervisor 在 x86_64 上直接引导 ELF 的 `vmlinux`，在 aarch64 上引导 `Image`，串口是 PL011，所以内核和 console 按架构选（`ttyS0`、`ttyAMA0`），和 microvm.nix 自己的 runner 一样；x86_64 的 guest 一个字节没变。aarch64 没有 `earlyprintk` 那样的早期输出，`quiet` 下 `serial.log` 平时是空的。验证：在 Mac 的 Linux builder（Virtualization.framework，开了嵌套虚拟化）的一个副本里，以普通用户跑 `max vm-check`，guest 起来了，`uname -m` 是 aarch64，程序经 MCP 调得到工具；同一份 guest 里的 Chromium 和 ffmpeg 在 builder 里直接跑都正常。但 guest 在那里隔了两层虚拟化，比 tank 慢十倍以上（开机 50 秒，Chromium 启动要两分钟 CPU），浏览器的几项检查都超时，所以浏览器在 aarch64 的 VM 里还没整个验过。Mac 上跑不了 `nestedChecks`：Apple 给的虚拟 EL2 没有 VHE，builder 的 KVM 只能是 nVHE，内核不认 `kvm-arm.mode=nested`，测试机里就没有 KVM；macOS 上 QEMU 11.1 用 HVF 给 EL2，测试机能开 KVM，但时钟乱跳、卡在 initrd。要在一台 KVM 能嵌套的 aarch64 机器上跑。
 - 运维网络（maxops 加 tailscale）换成另一组 tap，挂在一个路由进 maxops 命名空间的网桥上。v1 不做，上线前做。
 
 ### MCP 通道

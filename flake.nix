@@ -125,12 +125,22 @@
                     }
                   ];
                 }).config;
+              # cloud-hypervisor boots the ELF vmlinux on x86_64 and the Image
+              # on aarch64, whose serial port is a PL011, as microvm.nix's own
+              # runner has it.
+              x86 = pkgs.stdenv.hostPlatform.isx86_64;
             in
             pkgs.writeText "max-guest.json" (
               builtins.toJSON {
-                kernel = "${guest.microvm.kernel.dev}/vmlinux";
+                kernel =
+                  if x86 then
+                    "${guest.microvm.kernel.dev}/vmlinux"
+                  else
+                    "${guest.microvm.kernel.out}/${pkgs.stdenv.hostPlatform.linux-kernel.target}";
                 initrd = guest.microvm.initrdPath;
-                cmdline = "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 ${toString guest.microvm.kernelParams}";
+                cmdline = "${
+                  if x86 then "earlyprintk=ttyS0 console=ttyS0" else "console=ttyAMA0"
+                } reboot=t panic=-1 ${toString guest.microvm.kernelParams}";
               }
             );
 
@@ -156,8 +166,7 @@
             inherit max max-import;
             default = max;
           }
-          # cloud-hypervisor boots vmlinux directly only on x86_64.
-          // pkgs.lib.optionalAttrs (system == "x86_64-linux") { inherit guest; };
+          // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux { inherit guest; };
 
           checks = {
             inherit max;
@@ -238,7 +247,9 @@
           # These boot VMs inside the test machine, so they need KVM in it:
           # a CI runner, itself a VM, can't give it that. tank can:
           #   nix build .#nestedChecks.x86_64-linux.vm -L
-          nestedChecks = pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          # aarch64-linux has one too, for a host whose KVM nests; a Mac's
+          # Linux builder's doesn't.
+          nestedChecks = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
             vm = import ./nix/tests/vm.nix {
               inherit pkgs;
               module = self.nixosModules.maxx;
