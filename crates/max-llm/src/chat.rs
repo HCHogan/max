@@ -15,14 +15,19 @@
 //! there; the pictures and videos tool results show follow them in a user
 //! message. A video is a `video_url` part, as cliproxy takes it for Gemini.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt;
 
 use max_core::ids::CallId;
 use max_core::item::{Image, Item, ItemKind, ModelOutput, ModelTag, ToolCall, Usage};
 use max_core::run::Request;
+use serde::ser::SerializeMap;
+use serde::{Serialize, Serializer};
+use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
 
-use crate::{Error, Options, Pictures, Piece, pieces, share_tokens, tool_pieces};
+use crate::{Error, Joined, Options, Pictures, Piece, pieces, schema, share_tokens, tool_pieces};
 
 const THINK: &str = "<think>";
 const UNTHINK: &str = "</think>";
@@ -33,15 +38,104 @@ const REASONING: [&str; 2] = ["reasoning_content", "reasoning"];
 /// `Thinking Process:` and its numbered steps, and the group saw them.
 const ALOUD: [&str; 3] = ["thinking process", "thought process", "思考过程"];
 
+/// A request body. It borrows the request and its pictures, and is
+/// written straight from them.
+#[derive(Serialize)]
+pub struct Body<'a> {
+    model: &'a str,
+    messages: Vec<Message<'a>>,
+    stream: bool,
+    stream_options: StreamOptions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<Tool<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct StreamOptions {
+    include_usage: bool,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Message<'a> {
+    Plain {
+        role: &'static str,
+        content: Content<'a>,
+    },
+    Tool {
+        role: &'static str,
+        tool_call_id: &'a CallId,
+        content: Joined<Cow<'a, str>>,
+    },
+    Assistant(Assistant<'a>),
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Content<'a> {
+    Text(&'a str),
+    Parts(Vec<Part<'a>>),
+}
+
+#[derive(Serialize)]
+struct Part<'a> {
+    #[serde(flatten)]
+    kind: PartKind<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_breakpoint: Option<Breakpoint>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PartKind<'a> {
+    Text { text: Cow<'a, str> },
+    ImageUrl { image_url: Url<'a> },
+    VideoUrl { video_url: Url<'a> },
+}
+
+#[derive(Serialize)]
+struct Url<'a> {
+    url: &'a str,
+}
+
+#[derive(Serialize)]
+struct Breakpoint {
+    mode: &'static str,
+}
+
+#[derive(Serialize)]
+struct Tool<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    function: Function<'a>,
+}
+
+#[derive(Serialize)]
+struct Function<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: &'static RawValue,
+}
+
 /// The request body.
-pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value {
+pub fn body<'a>(request: &'a Request, options: &'a Options, pictures: &'a Pictures) -> Body<'a> {
     let mut messages = Vec::new();
-    let mut turn: Option<Assistant> = None;
+    let mut turn: Option<Assistant<'a>> = None;
     // The pictures and videos of the tool results so far in a row.
-    let mut shown: Vec<Piece<'_>> = Vec::new();
+    let mut shown: Vec<Piece<'a>> = Vec::new();
     for (index, item) in request.items.iter().enumerate() {
         if !matches!(item.kind, ItemKind::ToolResult { .. }) && !shown.is_empty() {
-            messages.push(pictures_shown(&std::mem::take(&mut shown)));
+            messages.push(pictures_shown(std::mem::take(&mut shown)));
         }
         let ours = item.source.as_ref() == Some(&request.model);
         let raw = item.opaque.as_ref().filter(|_| ours);
@@ -52,12 +146,13 @@ pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value 
                 ItemKind::Assistant { .. } | ItemKind::Reasoning { .. } | ItemKind::ToolCall(_)
             );
         if !modeled {
-            messages.extend(turn.take().map(Assistant::message));
+            messages.extend(turn.take().map(Message::Assistant));
         }
         match &item.kind {
-            ItemKind::System { text } => {
-                messages.push(json!({ "role": "system", "content": text }))
-            }
+            ItemKind::System { text } => messages.push(Message::Plain {
+                role: "system",
+                content: Content::Text(text),
+            }),
             ItemKind::User { text, images } => {
                 // The base context's blocks are user items in a row, the
                 // most volatile last; the end of each before it is a
@@ -67,41 +162,35 @@ pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value 
                         request.items.get(index + 1).map(|next| &next.kind),
                         Some(ItemKind::User { .. })
                     );
-                messages.push(json!({
-                    "role": "user",
-                    "content": user_content(text, images, pictures, breakpoint),
-                }));
+                messages.push(Message::Plain {
+                    role: "user",
+                    content: user_content(text, images, pictures, breakpoint),
+                });
             }
             ItemKind::Assistant { text } if modeled => {
-                turn.get_or_insert_default().content.push_str(text);
+                turn.get_or_insert_default().content.push(text);
             }
-            ItemKind::Assistant { text } => {
-                messages.push(json!({ "role": "assistant", "content": text }));
-            }
+            ItemKind::Assistant { text } => messages.push(Message::Plain {
+                role: "assistant",
+                content: Content::Text(text),
+            }),
             ItemKind::Reasoning { text } => {
                 // Another model's reasoning means nothing to this one.
                 if let Some(raw) = raw {
                     let turn = turn.get_or_insert_default();
                     if let Some(fields) = raw["message"].as_object() {
-                        turn.fields.extend(fields.clone());
+                        turn.fields.push(fields);
                     }
                     if raw["inline"] == true {
-                        turn.think = text.clone();
+                        turn.think = text.as_deref();
                     }
                 }
             }
             ItemKind::ToolCall(call) => {
-                let mut wire = json!({
-                    "id": call.id,
-                    "type": "function",
-                    "function": { "name": call.name, "arguments": call.arguments },
-                });
-                if let (Some(extra), Some(wire)) =
-                    (raw.and_then(Value::as_object), wire.as_object_mut())
-                {
-                    wire.extend(extra.clone());
-                }
-                turn.get_or_insert_default().calls.push(wire);
+                let extra = raw.and_then(Value::as_object);
+                turn.get_or_insert_default()
+                    .calls
+                    .push(WireCall { call, extra });
             }
             ItemKind::ToolResult { call, output } => {
                 let mut text = Vec::new();
@@ -118,123 +207,199 @@ pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value 
                         }
                     }
                 }
-                messages.push(json!({
-                    "role": "tool",
-                    "tool_call_id": call,
-                    "content": text.join("\n"),
-                }));
+                messages.push(Message::Tool {
+                    role: "tool",
+                    tool_call_id: call,
+                    content: Joined(text, "\n"),
+                });
             }
         }
     }
     if !shown.is_empty() {
-        messages.push(pictures_shown(&shown));
+        messages.push(pictures_shown(shown));
     }
-    messages.extend(turn.map(Assistant::message));
+    messages.extend(turn.map(Message::Assistant));
 
-    let mut body = Map::new();
-    body.insert("model".into(), json!(request.model.model));
-    body.insert("messages".into(), Value::Array(messages));
-    body.insert("stream".into(), json!(true));
-    body.insert("stream_options".into(), json!({ "include_usage": true }));
-    if let Some(max) = request.max_output {
-        body.insert("max_tokens".into(), json!(max));
+    let tools: Vec<Tool<'_>> = request
+        .tools
+        .iter()
+        .map(|tool| Tool {
+            kind: "function",
+            function: Function {
+                name: tool.name,
+                description: &tool.description,
+                parameters: schema(tool),
+            },
+        })
+        .collect();
+    Body {
+        model: &request.model.model,
+        messages,
+        stream: true,
+        stream_options: StreamOptions {
+            include_usage: true,
+        },
+        max_tokens: request.max_output,
+        reasoning_effort: options.effort.as_deref(),
+        temperature: options.temperature,
+        top_p: options.top_p,
+        tool_choice: (!tools.is_empty()).then_some("auto"),
+        tools,
     }
-    if let Some(effort) = &options.effort {
-        body.insert("reasoning_effort".into(), json!(effort));
-    }
-    if let Some(temperature) = options.temperature {
-        body.insert("temperature".into(), json!(temperature));
-    }
-    if let Some(top_p) = options.top_p {
-        body.insert("top_p".into(), json!(top_p));
-    }
-    if !request.tools.is_empty() {
-        let tools: Vec<Value> = request
-            .tools
-            .iter()
-            .map(|tool| {
-                json!({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": crate::schema(tool),
-                    },
-                })
-            })
-            .collect();
-        body.insert("tools".into(), Value::Array(tools));
-        body.insert("tool_choice".into(), json!("auto"));
-    }
-    Value::Object(body)
 }
 
-fn user_content(text: &str, images: &[Image], pictures: &Pictures, breakpoint: bool) -> Value {
+fn user_content<'a>(
+    text: &'a str,
+    images: &'a [Image],
+    pictures: &'a Pictures,
+    breakpoint: bool,
+) -> Content<'a> {
     let pieces = match pieces(text, images, pictures) {
-        None if !breakpoint => return json!(text),
+        None if !breakpoint => return Content::Text(text),
         None => vec![Piece::Text(text.into())],
         Some(pieces) => pieces,
     };
-    let mut parts: Vec<Value> = pieces
-        .into_iter()
-        .map(|piece| match piece {
-            Piece::Text(text) => json!({ "type": "text", "text": text }),
-            piece => medium(&piece),
-        })
-        .collect();
+    let mut parts: Vec<Part<'_>> = pieces.into_iter().map(part).collect();
     if breakpoint && let Some(last) = parts.last_mut() {
-        last["prompt_cache_breakpoint"] = json!({ "mode": "explicit" });
+        last.prompt_cache_breakpoint = Some(Breakpoint { mode: "explicit" });
     }
-    Value::Array(parts)
+    Content::Parts(parts)
 }
 
 /// The pictures and videos of tool results in a row, numbered as their
 /// text names them.
-fn pictures_shown(shown: &[Piece<'_>]) -> Value {
-    let content: Vec<Value> = (1..)
+fn pictures_shown(shown: Vec<Piece<'_>>) -> Message<'_> {
+    let content = (1..)
         .zip(shown)
         .flat_map(|(n, piece)| {
             let label = match piece {
                 Piece::Video(_) => format!("[视频 {n}]"),
                 _ => format!("[图 {n}]"),
             };
-            [json!({ "type": "text", "text": label }), medium(piece)]
+            [part(Piece::Text(label.into())), part(piece)]
         })
         .collect();
-    json!({ "role": "user", "content": content })
+    Message::Plain {
+        role: "user",
+        content: Content::Parts(content),
+    }
 }
 
-/// A picture's or a video's part.
-fn medium(piece: &Piece<'_>) -> Value {
-    match piece {
-        Piece::Text(text) => json!({ "type": "text", "text": text }),
-        Piece::Picture(url) => json!({ "type": "image_url", "image_url": { "url": url } }),
-        Piece::Video(url) => json!({ "type": "video_url", "video_url": { "url": url } }),
+/// A piece's part: text, or a picture's or a video's URL.
+fn part(piece: Piece<'_>) -> Part<'_> {
+    let kind = match piece {
+        Piece::Text(text) => PartKind::Text { text },
+        Piece::Picture(url) => PartKind::ImageUrl {
+            image_url: Url { url },
+        },
+        Piece::Video(url) => PartKind::VideoUrl {
+            video_url: Url { url },
+        },
+    };
+    Part {
+        kind,
+        prompt_cache_breakpoint: None,
     }
 }
 
 /// One model call's items, on their way back to one message.
 #[derive(Default)]
-struct Assistant {
-    content: String,
-    think: Option<String>,
-    fields: Map<String, Value>,
-    calls: Vec<Value>,
+struct Assistant<'a> {
+    content: Vec<&'a str>,
+    think: Option<&'a str>,
+    /// The provider's own fields, from each reasoning item's `message`.
+    fields: Vec<&'a Map<String, Value>>,
+    calls: Vec<WireCall<'a>>,
 }
 
-impl Assistant {
-    fn message(self) -> Value {
-        let content = match self.think {
-            Some(think) => format!("{THINK}\n{think}\n{UNTHINK}\n\n{}", self.content),
-            None => self.content,
-        };
-        let mut message = self.fields;
-        message.insert("role".into(), json!("assistant"));
-        message.insert("content".into(), json!(content));
-        if !self.calls.is_empty() {
-            message.insert("tool_calls".into(), Value::Array(self.calls));
+impl Serialize for Assistant<'_> {
+    /// The provider's fields, a later item's over an earlier one's, then
+    /// the message's own.
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut fields: Vec<(&str, &Value)> = Vec::new();
+        for (name, value) in self.fields.iter().copied().flatten() {
+            if ["role", "content", "tool_calls"].contains(&name.as_str()) {
+                continue;
+            }
+            match fields.iter_mut().find(|(have, _)| *have == name) {
+                Some(field) => field.1 = value,
+                None => fields.push((name, value)),
+            }
         }
-        Value::Object(message)
+        let mut map = serializer.serialize_map(None)?;
+        for (name, value) in fields {
+            map.serialize_entry(name, value)?;
+        }
+        map.serialize_entry("role", "assistant")?;
+        map.serialize_entry("content", &Said(self))?;
+        if !self.calls.is_empty() {
+            map.serialize_entry("tool_calls", &self.calls)?;
+        }
+        map.end()
+    }
+}
+
+/// What the assistant message says: its inline reasoning back in its
+/// `<think>` block, and its text.
+struct Said<'a>(&'a Assistant<'a>);
+
+impl fmt::Display for Said<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(think) = self.0.think {
+            write!(f, "{THINK}\n{think}\n{UNTHINK}\n\n")?;
+        }
+        self.0.content.iter().try_for_each(|text| f.write_str(text))
+    }
+}
+
+impl Serialize for Said<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+/// A tool call, with the fields its provider added: one of those with
+/// the name of a field of the call's own takes its place.
+struct WireCall<'a> {
+    call: &'a ToolCall,
+    extra: Option<&'a Map<String, Value>>,
+}
+
+#[derive(Serialize)]
+struct Called<'a> {
+    name: &'a str,
+    arguments: &'a str,
+}
+
+impl Serialize for WireCall<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        const OWN: [&str; 3] = ["id", "type", "function"];
+        let extra = |name: &str| self.extra.and_then(|extra| extra.get(name));
+        let mut map = serializer.serialize_map(None)?;
+        match extra("id") {
+            Some(value) => map.serialize_entry("id", value)?,
+            None => map.serialize_entry("id", &self.call.id)?,
+        }
+        match extra("type") {
+            Some(value) => map.serialize_entry("type", value)?,
+            None => map.serialize_entry("type", "function")?,
+        }
+        match extra("function") {
+            Some(value) => map.serialize_entry("function", value)?,
+            None => map.serialize_entry(
+                "function",
+                &Called {
+                    name: &self.call.name,
+                    arguments: &self.call.arguments,
+                },
+            )?,
+        }
+        for (name, value) in self.extra.into_iter().flatten() {
+            if !OWN.contains(&name.as_str()) {
+                map.serialize_entry(name, value)?;
+            }
+        }
+        map.end()
     }
 }
 

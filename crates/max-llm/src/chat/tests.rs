@@ -8,6 +8,11 @@ use max_core::tools::TOOLS;
 
 use super::*;
 
+/// The body as the provider reads it.
+fn sent(request: &Request, options: &Options, pictures: &Pictures) -> Value {
+    serde_json::to_value(body(request, options, pictures)).unwrap()
+}
+
 fn model(name: &str) -> ModelTag {
     ModelTag {
         protocol: Protocol::Chat,
@@ -95,7 +100,7 @@ fn a_request() {
         temperature: Some(0.6),
         ..Options::default()
     };
-    let body = body(&request, &options, &Pictures::default());
+    let body = sent(&request, &options, &Pictures::default());
     let tool_call = |id: &str| json!({ "id": id, "type": "function", "function": { "name": "run_code", "arguments": "{}" } });
     assert_eq!(
         body["messages"],
@@ -138,7 +143,7 @@ fn signatures_and_inline_thinking_go_back_to_their_model() {
         max_output: Some(100),
         roster: BTreeSet::new(),
     };
-    let body = body(&request, &Options::default(), &Pictures::default());
+    let body = sent(&request, &Options::default(), &Pictures::default());
     let message = &body["messages"][0];
     assert_eq!(message["content"], "<think>\n想想\n</think>\n\n");
     assert_eq!(
@@ -185,7 +190,7 @@ fn with_pictures(model: ModelTag) -> (Request, Pictures) {
 #[test]
 fn pictures_follow_their_handles() {
     let (request, pictures) = with_pictures(model("qwen3.8-27b"));
-    let messages = body(&request, &Options::default(), &pictures)["messages"].clone();
+    let messages = sent(&request, &Options::default(), &pictures)["messages"].clone();
     let row = json!([
         { "type": "text", "text": "[新消息]\n[10:00 小明 #7]: [image#7.0][sticker#7.1]" },
         { "type": "text", "text": "[image#7.0]" },
@@ -203,7 +208,7 @@ fn pictures_follow_their_handles() {
         cache_breakpoints: true,
         ..Options::default()
     };
-    let messages = body(&request, &options, &pictures)["messages"].clone();
+    let messages = sent(&request, &options, &pictures)["messages"].clone();
     let mut marked = row;
     marked[2]["prompt_cache_breakpoint"] = json!({ "mode": "explicit" });
     assert_eq!(messages[1]["content"], marked);
@@ -242,7 +247,7 @@ fn pictures_sit_after_their_rows() {
         ]
         .into(),
     );
-    let messages = body(&request, &Options::default(), &pictures)["messages"].clone();
+    let messages = sent(&request, &Options::default(), &pictures)["messages"].clone();
     let text = |text: &str| json!({ "type": "text", "text": text });
     let picture = |n| json!({ "type": "image_url", "image_url": { "url": url(n) } });
     assert_eq!(
@@ -292,7 +297,7 @@ fn cache_breakpoints_end_the_stable_blocks() {
         ..Options::default()
     };
     let marked = |text: &str| json!([{ "type": "text", "text": text, "prompt_cache_breakpoint": { "mode": "explicit" } }]);
-    let messages = body(&request, &options, &Pictures::default())["messages"].clone();
+    let messages = sent(&request, &options, &Pictures::default())["messages"].clone();
     let contents: Vec<&Value> = messages
         .as_array()
         .unwrap()
@@ -309,7 +314,7 @@ fn cache_breakpoints_end_the_stable_blocks() {
             &json!("[新消息]")
         ]
     );
-    let plain = body(&request, &Options::default(), &Pictures::default());
+    let plain = sent(&request, &Options::default(), &Pictures::default());
     assert_eq!(plain["messages"][1]["content"], "摘要");
 }
 
@@ -597,7 +602,7 @@ fn programs_pictures_follow_their_results() {
     };
     let url = "data:image/png;base64,AA";
     let pictures = Pictures([("aa".to_owned(), url.to_owned())].into());
-    let messages = body(&request, &Options::default(), &pictures)["messages"].clone();
+    let messages = sent(&request, &Options::default(), &pictures)["messages"].clone();
     let text = |n| format!("返回值：\n截好了\n[图 {n}，见下]\n[这张图省略了，要看再 max.image]");
     assert_eq!(messages[1]["content"], text(1));
     assert_eq!(messages[2]["content"], text(2));
@@ -616,7 +621,7 @@ fn programs_pictures_follow_their_results() {
     // At the end of the request, too.
     let mut request = request;
     request.items.pop();
-    let messages = body(&request, &Options::default(), &pictures)["messages"].clone();
+    let messages = sent(&request, &Options::default(), &pictures)["messages"].clone();
     assert_eq!(messages[3]["role"], "user");
     assert_eq!(messages.as_array().unwrap().len(), 4);
 }
@@ -675,7 +680,7 @@ fn programs_videos_follow_their_results() {
         ]
         .into(),
     );
-    let messages = body(&request, &Options::default(), &pictures)["messages"].clone();
+    let messages = sent(&request, &Options::default(), &pictures)["messages"].clone();
     assert_eq!(
         messages[1]["content"],
         "返回值：\n看了\n[图 1，见下]\n[视频 2，见下]\n[这段视频省略了，要看再 max.video]"
