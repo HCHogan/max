@@ -15,7 +15,7 @@ use qqbot::{Dispatch, Event};
 use crate::inbound::{Chat, InNode, Inbound, Person, Quote};
 
 /// A message someone sent Max, or None for every other event.
-pub fn inbound(dispatch: &Dispatch, now: DateTime<Utc>) -> Option<Inbound> {
+pub fn inbound(dispatch: &mut Dispatch, now: DateTime<Utc>) -> Option<Inbound> {
     let (chat, message) = match &dispatch.event {
         Event::Group { message, .. } => (
             Chat {
@@ -76,7 +76,8 @@ pub fn inbound(dispatch: &Dispatch, now: DateTime<Utc>) -> Option<Inbound> {
         at,
         quote,
         nodes,
-        raw: dispatch.data.clone(),
+        // The payload goes with the message, taken: nothing else reads it.
+        raw: dispatch.data.take(),
     })
 }
 

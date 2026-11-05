@@ -56,12 +56,16 @@ const QUOTE_SEARCH: i64 = 50;
 pub async fn inbound(
     conn: &mut PgConnection,
     place: &Place,
-    inbound: &Inbound,
+    inbound: Inbound,
     now: DateTime<Utc>,
     offset: FixedOffset,
 ) -> sqlx::Result<Committed> {
+    // Before its nodes go into the row.
+    let text = inbound.plain_text();
+    let mentions_me = inbound.mentions_me();
+    let command = crate::command::given(&inbound).is_some();
     let mut tx = conn.begin().await?;
-    let person = &inbound.sender;
+    let person = inbound.sender;
     let sender = platform::account(
         &mut tx,
         place.platform,
@@ -74,11 +78,11 @@ pub async fn inbound(
         (place.me.identity, place.me.principal),
     ]);
     let mut nodes = Vec::with_capacity(inbound.nodes.len());
-    for node in &inbound.nodes {
+    for node in inbound.nodes {
         nodes.push(match node {
-            InNode::Node(node) => node.clone(),
+            InNode::Node(node) => node,
             InNode::Mention { user, display } => {
-                let account = platform::account(&mut tx, place.platform, user, display).await?;
+                let account = platform::account(&mut tx, place.platform, &user, &display).await?;
                 people.insert(account.identity, account.principal);
                 mention(account.identity, display)
             }
@@ -97,19 +101,17 @@ pub async fn inbound(
     };
     let direct = if place.kind == ConversationKind::Direct {
         Some(Direct::Private)
-    } else if inbound.mentions_me() {
+    } else if mentions_me {
         Some(Direct::MentionsMe)
     } else if replies_to_me {
         Some(Direct::RepliesToMe)
     } else {
         None
     };
-    let text = inbound.plain_text();
-    let command = crate::command::given(inbound).is_some();
     let content = Content::Message { reply_to, nodes };
     let sender_snapshot = Sender {
         identity: sender.identity,
-        name: person.name.clone(),
+        name: person.name,
         role: person.role,
     };
     let rendered = Render {
@@ -145,7 +147,7 @@ pub async fn inbound(
             at: inbound.at,
             content,
             turn: None,
-            raw: inbound.raw.clone(),
+            raw: inbound.raw,
         }),
         sender,
         command,
@@ -154,10 +156,10 @@ pub async fn inbound(
     })
 }
 
-fn mention(identity: IdentityId, display: &str) -> Node {
+fn mention(identity: IdentityId, display: String) -> Node {
     Node::Mention {
         target: MentionTarget::Identity(identity),
-        display: display.to_owned(),
+        display,
     }
 }
 
@@ -441,7 +443,7 @@ async fn mentioned(
 ) -> sqlx::Result<Node> {
     if let Some(speaker) = platform::speaker(conn, place.endpoint, principal).await? {
         people.insert(speaker.identity, principal);
-        return Ok(mention(speaker.identity, &speaker.name));
+        return Ok(mention(speaker.identity, speaker.name));
     }
     let known = platform::roster(conn, place.endpoint, &[principal]).await?;
     let name = known.first().map_or("某人", |known| known.name.as_str());

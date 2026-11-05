@@ -45,7 +45,7 @@ fn a_group_message_with_everything() {
             { "msg_idx": "IDX8", "message_type": 103, "content": "早" }
         ]
     });
-    let inbound = inbound(&dispatch("GROUP_MESSAGE_CREATE", data.clone()), now()).unwrap();
+    let inbound = inbound(&mut dispatch("GROUP_MESSAGE_CREATE", data.clone()), now()).unwrap();
     assert_eq!(
         inbound.chat,
         Chat {
@@ -124,7 +124,7 @@ fn a_private_voice_message() {
             "voice_wav_url": "//example.com/v.wav", "asr_refer_text": "你好"
         }]
     });
-    let inbound = inbound(&dispatch("C2C_MESSAGE_CREATE", data), now()).unwrap();
+    let inbound = inbound(&mut dispatch("C2C_MESSAGE_CREATE", data), now()).unwrap();
     assert_eq!(inbound.chat.native_id, "c2c:USER1");
     assert_eq!(inbound.chat.kind, ConversationKind::Direct);
     assert_eq!(inbound.sender.role, None);
@@ -143,7 +143,7 @@ fn a_private_voice_message() {
 #[test]
 fn other_events_are_not_messages() {
     let data = json!({ "group_openid": "GROUP1", "op_member_openid": "XIAOMING" });
-    assert_eq!(inbound(&dispatch("GROUP_ADD_ROBOT", data), now()), None);
+    assert_eq!(inbound(&mut dispatch("GROUP_ADD_ROBOT", data), now()), None);
 }
 
 #[test]

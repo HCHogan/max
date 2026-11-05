@@ -23,7 +23,7 @@ async fn says(pool: &PgPool, place: &Place, n: u32, who: &str, name: &str) -> Ro
         role: Some(Role::Member),
     };
     let mut conn = pool.acquire().await.unwrap();
-    let committed = ingest::inbound(&mut conn, place, &said, at(n), offset())
+    let committed = ingest::inbound(&mut conn, place, said, at(n), offset())
         .await
         .unwrap();
     Row {

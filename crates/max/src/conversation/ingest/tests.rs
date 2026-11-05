@@ -21,7 +21,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
             },
         ],
     );
-    let first = inbound(&mut conn, &place, &hello, at(0), offset())
+    let first = inbound(&mut conn, &place, hello, at(0), offset())
         .await
         .unwrap();
     assert_eq!(first.direct, Some(Direct::MentionsMe));
@@ -60,7 +60,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
         quote_id: Some("UNKNOWN".into()),
         text: Some("在的， 说吧[微笑]".into()),
     });
-    let second = inbound(&mut conn, &place, &reply, at(2), offset())
+    let second = inbound(&mut conn, &place, reply, at(2), offset())
         .await
         .unwrap();
     assert_eq!(
@@ -82,7 +82,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
         quote_id: Some("IDX0".into()),
         text: None,
     });
-    let third = inbound(&mut conn, &place, &again, at(3), offset())
+    let third = inbound(&mut conn, &place, again, at(3), offset())
         .await
         .unwrap();
     assert_eq!(third.direct, None);
@@ -95,7 +95,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
         display: "maxx".into(),
     };
     let status = from_xiaoming(4, vec![me, text(" /status")]);
-    let fourth = inbound(&mut conn, &place, &status, at(4), offset())
+    let fourth = inbound(&mut conn, &place, status, at(4), offset())
         .await
         .unwrap();
     assert!(fourth.command);
@@ -106,7 +106,7 @@ async fn what_max_says_is_checked(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
     let place = group(&mut conn).await;
     let hello = from_xiaoming(0, vec![text("hi")]);
-    let first = inbound(&mut conn, &place, &hello, at(0), offset())
+    let first = inbound(&mut conn, &place, hello, at(0), offset())
         .await
         .unwrap();
     let xiaoming = first.sender.principal;
@@ -184,7 +184,7 @@ async fn everything_in_a_private_chat_is_for_max(pool: PgPool) {
     let committed = inbound(
         &mut conn,
         &place,
-        &from_xiaoming(0, vec![text("hi")]),
+        from_xiaoming(0, vec![text("hi")]),
         at(0),
         offset(),
     )
@@ -219,7 +219,7 @@ async fn pictures_max_sends_again(pool: PgPool) {
         medium(MediaKind::File),
         medium(MediaKind::Image),
     ];
-    let row = inbound(&mut conn, &place, &from_xiaoming(0, nodes), at(0), offset())
+    let row = inbound(&mut conn, &place, from_xiaoming(0, nodes), at(0), offset())
         .await
         .unwrap()
         .message

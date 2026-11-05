@@ -35,7 +35,7 @@ async fn heard(pool: &PgPool, place: &Place, admin: bool, n: u32, at: DateTime<U
     };
     inbound.at = at;
     let mut conn = pool.acquire().await.unwrap();
-    let committed = ingest::inbound(&mut conn, place, &inbound, Utc::now(), offset());
+    let committed = ingest::inbound(&mut conn, place, inbound, Utc::now(), offset());
     committed.await.unwrap().message.id
 }
 

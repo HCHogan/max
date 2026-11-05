@@ -221,7 +221,7 @@ async fn a_group_goes_on_from_an_old_one(pool: PgPool) {
     let mut said_before = from_xiaoming(0, vec![text("老群里的话")]);
     said_before.platform = Platform::QqLegacy;
     said_before.native_id = "OLD0".into();
-    ingest::inbound(&mut conn, &old_place, &said_before, Utc::now(), offset())
+    ingest::inbound(&mut conn, &old_place, said_before, Utc::now(), offset())
         .await
         .unwrap();
     drop(conn);
@@ -304,7 +304,7 @@ async fn a_program_in_the_vm_wakes_a_group_nobody_has_written_in(pool: PgPool) {
     let mut conn = s.pool.acquire().await.unwrap();
     let place = testing::group(&mut conn).await;
     let said = from_xiaoming(0, vec![text("CI 跑完叫我")]);
-    ingest::inbound(&mut conn, &place, &said, Utc::now(), offset())
+    ingest::inbound(&mut conn, &place, said, Utc::now(), offset())
         .await
         .unwrap();
     drop(conn);
@@ -359,7 +359,7 @@ async fn a_turn_running_in_a_crash_is_lost(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
     let place = testing::group(&mut conn).await;
     let said = from_xiaoming(0, vec![text("在吗")]);
-    let committed = ingest::inbound(&mut conn, &place, &said, Utc::now(), offset())
+    let committed = ingest::inbound(&mut conn, &place, said, Utc::now(), offset())
         .await
         .unwrap();
     let from = committed.message.id;

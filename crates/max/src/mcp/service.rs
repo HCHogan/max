@@ -547,7 +547,7 @@ mod tests {
         let hello = ingest::inbound(
             &mut conn,
             &place,
-            &from_xiaoming(1, vec![text("你好")]),
+            from_xiaoming(1, vec![text("你好")]),
             Utc::now(),
             offset(),
         )

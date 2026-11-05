@@ -55,7 +55,7 @@ async fn pictures_are_read_and_new_ones_waited_for(pool: PgPool) {
     let old = ingest::inbound(
         &mut conn,
         &place,
-        &old,
+        old,
         now - TimeDelta::minutes(1),
         offset(),
     )
@@ -66,7 +66,7 @@ async fn pictures_are_read_and_new_ones_waited_for(pool: PgPool) {
     media::record(&mut conn, old, 0, &blob, now).await.unwrap();
     // A row just in, its picture still downloading.
     let new = from_xiaoming(2, vec![picture()]);
-    let new = ingest::inbound(&mut conn, &place, &new, now, offset())
+    let new = ingest::inbound(&mut conn, &place, new, now, offset())
         .await
         .unwrap()
         .message

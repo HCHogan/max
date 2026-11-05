@@ -82,7 +82,7 @@ async fn follow(
 async fn from_xiaoming_says(pool: &PgPool, place: &Place, n: u32, said: &str) -> Message {
     let mut conn = pool.acquire().await.unwrap();
     let inbound = from_xiaoming(n, vec![text(said)]);
-    let committed = ingest::inbound(&mut conn, place, &inbound, Utc::now(), offset());
+    let committed = ingest::inbound(&mut conn, place, inbound, Utc::now(), offset());
     Arc::unwrap_or_clone(committed.await.unwrap().message)
 }
 

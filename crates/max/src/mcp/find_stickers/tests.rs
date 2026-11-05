@@ -49,7 +49,7 @@ async fn the_nearest_stickers_by_handle(pool: PgPool) {
     let row = ingest::inbound(
         &mut conn,
         &place,
-        &from_xiaoming(1, nodes),
+        from_xiaoming(1, nodes),
         Utc::now(),
         offset(),
     )

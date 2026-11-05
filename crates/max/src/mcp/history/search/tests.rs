@@ -116,7 +116,7 @@ async fn picture(conn: &mut PgConnection, place: &Place, n: u32, caption: &str) 
         },
     });
     let inbound = from_xiaoming(n, vec![node]);
-    let row = ingest::inbound(conn, place, &inbound, at(n), offset())
+    let row = ingest::inbound(conn, place, inbound, at(n), offset())
         .await
         .unwrap()
         .message
@@ -149,7 +149,7 @@ async fn rows_with_their_read(pool: PgPool) {
     let place = Arc::new(group(&mut conn).await);
     let mut said = async |n: u32, words: &str| {
         let inbound = from_xiaoming(n, vec![text(words)]);
-        ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
+        ingest::inbound(&mut conn, &place, inbound, at(n), offset())
             .await
             .unwrap()
             .message
@@ -243,7 +243,7 @@ async fn by_who_said_it(pool: PgPool) {
         } else {
             from_xiaoming(n, nodes)
         };
-        let committed = ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
+        let committed = ingest::inbound(&mut conn, &place, inbound, at(n), offset())
             .await
             .unwrap();
         ids.push(committed.message.id.0);
@@ -284,7 +284,7 @@ async fn by_meaning_too(pool: PgPool) {
     let place = Arc::new(group(&mut conn).await);
     let mut said = async |n: u32, words: &str| {
         let inbound = from_xiaoming(n, vec![text(words)]);
-        let id = ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
+        let id = ingest::inbound(&mut conn, &place, inbound, at(n), offset())
             .await
             .unwrap()
             .message

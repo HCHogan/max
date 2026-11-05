@@ -113,7 +113,7 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
     let hello = ingest::inbound(
         &mut conn,
         &place,
-        &from_xiaoming(1, vec![text("你好")]),
+        from_xiaoming(1, vec![text("你好")]),
         Utc::now(),
         offset(),
     )
@@ -490,7 +490,7 @@ async fn programs_fetch_the_chats_files(pool: PgPool) {
     let mut ids = Vec::new();
     for (n, at) in [(0, &*place), (1, &other)] {
         let inbound = from_xiaoming(n, vec![file()]);
-        let committed = ingest::inbound(&mut conn, at, &inbound, Utc::now(), offset());
+        let committed = ingest::inbound(&mut conn, at, inbound, Utc::now(), offset());
         let row = committed.await.unwrap().message.id;
         let blob = Blob {
             sha256: store.put(format!("%PDF-{n}").into_bytes()).await.unwrap(),
@@ -600,7 +600,7 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     let hello = ingest::inbound(
         &mut conn,
         &place,
-        &from_xiaoming(1, vec![text("你好")]),
+        from_xiaoming(1, vec![text("你好")]),
         Utc::now(),
         offset(),
     )

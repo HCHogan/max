@@ -48,7 +48,7 @@ async fn downloads_each_medium_once(pool: PgPool) {
     let committed = ingest::inbound(
         &mut conn,
         &place,
-        &from_xiaoming(1, nodes),
+        from_xiaoming(1, nodes),
         Utc::now(),
         offset(),
     )
@@ -131,7 +131,7 @@ async fn pictures_go_on_to_the_caption_worker(pool: PgPool) {
     let committed = ingest::inbound(
         &mut conn,
         &place,
-        &from_xiaoming(1, Vec::from(nodes)),
+        from_xiaoming(1, Vec::from(nodes)),
         Utc::now(),
         offset(),
     )
@@ -207,7 +207,7 @@ async fn the_worker_finds_what_it_missed_and_tries_again(pool: PgPool) {
         let pool = pool.clone();
         async move {
             let mut conn = pool.acquire().await.unwrap();
-            ingest::inbound(&mut conn, &place, &inbound, Utc::now(), offset())
+            ingest::inbound(&mut conn, &place, inbound, Utc::now(), offset())
                 .await
                 .unwrap()
                 .message

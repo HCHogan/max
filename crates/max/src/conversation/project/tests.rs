@@ -29,7 +29,7 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
     let morning = ingest::inbound(
         &mut conn,
         &place,
-        &from_xiaoming(0, vec![text("早")]),
+        from_xiaoming(0, vec![text("早")]),
         at(0),
         offset(),
     )
@@ -72,11 +72,11 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
         quote_id: Some("IDX0".into()),
         text: None,
     });
-    let ask = ingest::inbound(&mut conn, &place, &ask, at(2), offset())
+    let ask = ingest::inbound(&mut conn, &place, ask, at(2), offset())
         .await
         .unwrap();
     let later = from_xiaoming(3, vec![text("我也想知道")]);
-    let later = ingest::inbound(&mut conn, &place, &later, at(3), offset())
+    let later = ingest::inbound(&mut conn, &place, later, at(3), offset())
         .await
         .unwrap();
 
@@ -144,7 +144,7 @@ async fn the_tail_is_cut_at_a_mark_that_stays(pool: PgPool) {
         } else {
             from_xiaoming(n, vec![text(&said)])
         };
-        let said = ingest::inbound(&mut conn, &place, &said, at(n), offset())
+        let said = ingest::inbound(&mut conn, &place, said, at(n), offset())
             .await
             .unwrap();
         ids.push(said.message.id);
@@ -188,7 +188,7 @@ async fn a_judged_wake(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
     let place = group(&mut conn).await;
     let said = from_xiaoming(0, vec![text("rust 的生命周期怎么理解")]);
-    let said = ingest::inbound(&mut conn, &place, &said, at(0), offset())
+    let said = ingest::inbound(&mut conn, &place, said, at(0), offset())
         .await
         .unwrap();
     let id = said.message.id;
@@ -229,7 +229,7 @@ async fn later_rows_introduce_new_people(pool: PgPool) {
     let first = ingest::inbound(
         &mut conn,
         &place,
-        &from_xiaoming(0, vec![text("a")]),
+        from_xiaoming(0, vec![text("a")]),
         at(0),
         offset(),
     )
@@ -238,7 +238,7 @@ async fn later_rows_introduce_new_people(pool: PgPool) {
     let second = ingest::inbound(
         &mut conn,
         &place,
-        &from_xiaohong(
+        from_xiaohong(
             1,
             vec![
                 InNode::MentionMe {
@@ -308,7 +308,7 @@ async fn the_trigger_and_what_it_quotes_show_their_pictures(pool: PgPool) {
     let mut ids = Vec::new();
     for (n, nodes) in [(0, vec![picture()]), (1, vec![text("看"), picture()])] {
         let row = from_xiaoming(n, nodes);
-        let row = ingest::inbound(&mut conn, &place, &row, at(n), offset()).await;
+        let row = ingest::inbound(&mut conn, &place, row, at(n), offset()).await;
         ids.push(row.unwrap().message.id);
     }
     let mut ask = from_xiaohong(
@@ -325,7 +325,7 @@ async fn the_trigger_and_what_it_quotes_show_their_pictures(pool: PgPool) {
         quote_id: Some("IDX0".into()),
         text: None,
     });
-    let ask = ingest::inbound(&mut conn, &place, &ask, at(2), offset())
+    let ask = ingest::inbound(&mut conn, &place, ask, at(2), offset())
         .await
         .unwrap()
         .message
@@ -400,7 +400,7 @@ async fn a_turn_starts_with_the_first_call_of_the_turn_before(pool: PgPool) {
     ];
     for (n, words) in (0..).zip(words) {
         let inbound = from_xiaoming(n, vec![text(words)]);
-        let row = ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
+        let row = ingest::inbound(&mut conn, &place, inbound, at(n), offset())
             .await
             .unwrap();
         said.push(row.message.id);

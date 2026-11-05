@@ -56,7 +56,7 @@ async fn a_long_row_reads_page_by_page(pool: PgPool) {
     let committed = ingest::inbound(
         &mut conn,
         &place,
-        &from_xiaoming(1, vec![text(&long)]),
+        from_xiaoming(1, vec![text(&long)]),
         Utc::now(),
         offset(),
     )
@@ -107,14 +107,14 @@ async fn the_rows_around_one(pool: PgPool) {
     for n in 1..=5 {
         let said = format!("第{n}句");
         let inbound = from_xiaoming(n, vec![text(&said)]);
-        let committed = ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
+        let committed = ingest::inbound(&mut conn, &place, inbound, at(n), offset())
             .await
             .unwrap();
         ids.push(committed.message.id.0);
     }
     let mut far = from_xiaohong(9, vec![text("别的群")]);
     far.chat.native_id = "group:GROUP2".into();
-    let far = ingest::inbound(&mut conn, &elsewhere, &far, at(9), offset())
+    let far = ingest::inbound(&mut conn, &elsewhere, far, at(9), offset())
         .await
         .unwrap()
         .message
@@ -181,7 +181,7 @@ async fn a_stretch_by_time_and_sender(pool: PgPool) {
         } else {
             from_xiaoming(n, vec![text(&said)])
         };
-        let committed = ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
+        let committed = ingest::inbound(&mut conn, &place, inbound, at(n), offset())
             .await
             .unwrap();
         ids.push(committed.message.id.0);

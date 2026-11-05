@@ -393,7 +393,7 @@ impl Conversation {
         let committed = ingest::inbound(
             &mut conn,
             &self.place,
-            &inbound,
+            inbound,
             Utc::now(),
             self.shared.services.offset,
         )

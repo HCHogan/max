@@ -44,14 +44,14 @@ pub async fn listen(
         loop {
             tokio::select! {
                 ended = &mut gateway => break Some(ended),
-                Some(dispatch) = received.recv() => forward(&dispatch, table),
+                Some(mut dispatch) = received.recv() => forward(&mut dispatch, table),
                 () = stop.cancelled() => break None,
             }
         }
     };
     // What the dropped connection received is in the channel still.
-    while let Ok(dispatch) = received.try_recv() {
-        forward(&dispatch, table);
+    while let Ok(mut dispatch) = received.try_recv() {
+        forward(&mut dispatch, table);
     }
     if let Some((session_id, seq)) = session.resumable() {
         let mut conn = pool.acquire().await?;
@@ -65,7 +65,7 @@ pub async fn listen(
     }
 }
 
-fn forward(dispatch: &Dispatch, table: &UnboundedSender<Inbound>) {
+fn forward(dispatch: &mut Dispatch, table: &UnboundedSender<Inbound>) {
     if let Some(inbound) = inbound(dispatch, Utc::now()) {
         let _ = table.send(inbound);
         return;

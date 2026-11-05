@@ -81,7 +81,7 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
         from_xiaoming(0, vec![text("加群领红包")]),
         from_xiaohong(1, vec![text("别发了")]),
     ] {
-        let committed = ingest::inbound(&mut conn, &place, &inbound, Utc::now(), offset());
+        let committed = ingest::inbound(&mut conn, &place, inbound, Utc::now(), offset());
         committed.await.unwrap();
     }
     let person = |native: &'static str, name: &'static str| {

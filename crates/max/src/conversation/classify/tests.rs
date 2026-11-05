@@ -33,7 +33,7 @@ async fn job(pool: &PgPool, script: &Arc<Script>) -> Job {
         } else {
             from_xiaohong(n, nodes)
         };
-        let committed = ingest::inbound(&mut conn, &place, &inbound, at(n), offset())
+        let committed = ingest::inbound(&mut conn, &place, inbound, at(n), offset())
             .await
             .unwrap();
         if n >= 2 {

@@ -10,7 +10,7 @@ use crate::embedding::testing::{Asked, serve, vector};
 async fn said(pool: &PgPool, place: &Place, n: u32, words: &str) -> MessageId {
     let mut conn = pool.acquire().await.unwrap();
     let inbound = from_xiaoming(n, vec![text(words)]);
-    ingest::inbound(&mut conn, place, &inbound, at(n), offset())
+    ingest::inbound(&mut conn, place, inbound, at(n), offset())
         .await
         .unwrap()
         .message

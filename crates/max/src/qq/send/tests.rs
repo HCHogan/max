@@ -111,7 +111,7 @@ impl Setup {
     async fn hear(&self, n: u32) -> Row {
         let mut conn = self.pool.acquire().await.unwrap();
         let inbound = from_xiaoming(n, vec![text("在吗")]);
-        let committed = ingest::inbound(&mut conn, &self.place, &inbound, Utc::now(), offset())
+        let committed = ingest::inbound(&mut conn, &self.place, inbound, Utc::now(), offset())
             .await
             .unwrap();
         Arc::unwrap_or_clone(committed.message)
@@ -292,7 +292,7 @@ async fn a_sticker_is_uploaded_once(pool: PgPool) {
         },
     });
     let inbound = from_xiaoming(0, vec![sticker]);
-    let row = ingest::inbound(&mut conn, &s.place, &inbound, Utc::now(), offset())
+    let row = ingest::inbound(&mut conn, &s.place, inbound, Utc::now(), offset())
         .await
         .unwrap()
         .message
