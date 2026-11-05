@@ -105,10 +105,12 @@ async fn exchange(model: &ModelTag, name: &str) -> (ModelOutput, Value) {
         max_output: None,
         roster: BTreeSet::new(),
     };
+    let (options, pictures) = (Options::default(), Pictures::default());
     let body = match model.protocol {
-        Protocol::Responses => responses::body(&request, &Options::default(), &Pictures::default()),
-        Protocol::Chat => chat::body(&request, &Options::default(), &Pictures::default()),
-    };
+        Protocol::Responses => serde_json::to_value(responses::body(&request, &options, &pictures)),
+        Protocol::Chat => Ok(chat::body(&request, &options, &pictures)),
+    }
+    .unwrap();
     (first.output, body)
 }
 

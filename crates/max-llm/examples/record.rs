@@ -96,21 +96,23 @@ async fn main() -> Result<(), Failure> {
 
 /// Sends one request, saves the raw stream and reads it back.
 async fn step(request: &Request, options: &Options, path: &Path) -> Result<ModelOutput, Failure> {
+    let pictures = Pictures::default();
     let (endpoint, body) = match request.model.protocol {
         Protocol::Responses => (
             "responses",
-            responses::body(request, options, &Pictures::default()),
+            serde_json::to_vec(&responses::body(request, options, &pictures))?,
         ),
         Protocol::Chat => (
             "chat/completions",
-            chat::body(request, options, &Pictures::default()),
+            serde_json::to_vec(&chat::body(request, options, &pictures))?,
         ),
     };
     let base = var("MAX_LLM_BASE_URL")?;
     let response = reqwest::Client::new()
         .post(format!("{}/{endpoint}", base.trim_end_matches('/')))
         .bearer_auth(var("MAX_LLM_API_KEY")?)
-        .json(&body)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body)
         .send()
         .await?;
     let status = response.status();

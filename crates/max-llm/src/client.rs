@@ -65,12 +65,17 @@ impl Client {
         options: &Options,
         pictures: &Pictures,
     ) -> Result<Call, Error> {
-        let (path, body) = match request.model.protocol {
-            Protocol::Responses => ("/responses", responses::body(request, options, pictures)),
-            Protocol::Chat => ("/chat/completions", chat::body(request, options, pictures)),
-        };
         let base = self.provider.base_url.trim_end_matches('/');
-        let mut http = self.http.post(format!("{base}{path}")).json(&body);
+        let mut http = match request.model.protocol {
+            Protocol::Responses => self
+                .http
+                .post(format!("{base}/responses"))
+                .json(&responses::body(request, options, pictures)),
+            Protocol::Chat => self
+                .http
+                .post(format!("{base}/chat/completions"))
+                .json(&chat::body(request, options, pictures)),
+        };
         if let Some(key) = &self.provider.api_key {
             http = http.bearer_auth(key);
         }

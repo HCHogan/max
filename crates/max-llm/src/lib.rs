@@ -16,11 +16,13 @@ pub use error::Error;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt;
 
 use max_core::item::{Image, Item, ItemKind, Part, ToolOutput, Usage};
 use max_core::message::MediaRef;
 use max_core::tools::ToolSpec;
-use serde_json::Value;
+use serde::{Serialize, Serializer};
+use serde_json::value::RawValue;
 
 /// Per-call settings the core's request doesn't carry.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -49,6 +51,27 @@ enum Piece<'a> {
     Picture(&'a str),
     /// A data URL, of an MP4.
     Video(&'a str),
+}
+
+/// Texts joined as they are written, not into a string first.
+struct Joined<T>(Vec<T>, &'static str);
+
+impl<T: AsRef<str>> fmt::Display for Joined<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (n, text) in self.0.iter().enumerate() {
+            if n > 0 {
+                f.write_str(self.1)?;
+            }
+            f.write_str(text.as_ref())?;
+        }
+        Ok(())
+    }
+}
+
+impl<T: AsRef<str>> Serialize for Joined<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
 }
 
 /// A user item's content: its text, with each picture after its handle
@@ -102,8 +125,9 @@ fn after_line(text: &str, handle: &str) -> Option<usize> {
     Some(text[at..].find('\n').map_or(text.len(), |end| at + end + 1))
 }
 
-/// A tool's parameter schema. max-core's tests check that each parses.
-fn schema(tool: &ToolSpec) -> Value {
+/// A tool's parameter schema, as max-core writes it. max-core's tests
+/// check that each parses.
+fn schema(tool: &ToolSpec) -> &'static RawValue {
     serde_json::from_str(tool.parameters).expect("max-core's tool schemas are JSON")
 }
 
@@ -139,16 +163,19 @@ fn tool_pieces<'a>(output: &'a ToolOutput, pictures: &'a Pictures) -> Vec<Piece<
         .collect()
 }
 
-/// The pieces' text, if there is no picture or video among them.
-fn plain(pieces: &[Piece<'_>]) -> Option<String> {
-    pieces
-        .iter()
-        .map(|piece| match piece {
-            Piece::Text(text) => Some(text.as_ref()),
+/// The pieces' texts, if there is no picture or video among them; else
+/// the pieces.
+fn plain(pieces: Vec<Piece<'_>>) -> Result<Vec<Cow<'_, str>>, Vec<Piece<'_>>> {
+    if !pieces.iter().all(|piece| matches!(piece, Piece::Text(_))) {
+        return Err(pieces);
+    }
+    Ok(pieces
+        .into_iter()
+        .filter_map(|piece| match piece {
+            Piece::Text(text) => Some(text),
             Piece::Picture(_) | Piece::Video(_) => None,
         })
-        .collect::<Option<Vec<_>>>()
-        .map(|texts| texts.join("\n"))
+        .collect())
 }
 
 /// Spreads the provider's output count over the items it produced, by the

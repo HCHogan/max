@@ -6,7 +6,14 @@ use max_core::item::{Image, Part, Protocol, ToolOutput};
 use max_core::message::{MediaKind, MediaRef};
 use max_core::tools::TOOLS;
 
+use serde_json::json;
+
 use super::*;
+
+/// The body as the provider reads it.
+fn sent(request: &Request, options: &Options, pictures: &Pictures) -> Value {
+    serde_json::to_value(body(request, options, pictures)).unwrap()
+}
 
 fn luna() -> ModelTag {
     ModelTag {
@@ -68,7 +75,7 @@ fn with_pictures(model: ModelTag) -> (Request, Pictures) {
 #[test]
 fn pictures_follow_their_handles() {
     let (request, pictures) = with_pictures(luna());
-    let body = body(&request, &Options::default(), &pictures);
+    let body = sent(&request, &Options::default(), &pictures);
     assert_eq!(
         body["input"],
         json!([
@@ -151,7 +158,7 @@ fn a_request() {
         effort: Some("xhigh".into()),
         ..Options::default()
     };
-    let body = body(&request, &options, &Pictures::default());
+    let body = sent(&request, &options, &Pictures::default());
     assert_eq!(body["instructions"], "你是 Max。\n\n群规");
     assert_eq!(
         body["input"],
@@ -327,7 +334,7 @@ fn a_programs_pictures_go_in_its_output() {
         roster: BTreeSet::new(),
     };
     let pictures = Pictures([("aa".to_owned(), "data:image/png;base64,AA".to_owned())].into());
-    let body = body(&request, &Options::default(), &pictures);
+    let body = sent(&request, &Options::default(), &pictures);
     assert_eq!(
         body["input"][0]["output"],
         json!([
@@ -337,7 +344,7 @@ fn a_programs_pictures_go_in_its_output() {
         ])
     );
     // Without pictures to send, the output stays text.
-    let body = super::body(&request, &Options::default(), &Pictures::default());
+    let body = sent(&request, &Options::default(), &Pictures::default());
     assert_eq!(
         body["input"][0]["output"],
         "返回值：\n截好了\n[这张图省略了，要看再 max.image]\n[这张图省略了，要看再 max.image]"
@@ -376,7 +383,7 @@ fn a_video_is_named_in_its_output() {
     };
     // Responses takes no video: a note in its place.
     let pictures = Pictures([("vv".to_owned(), "data:video/mp4;base64,AAAA".to_owned())].into());
-    let body = body(&request, &Options::default(), &pictures);
+    let body = sent(&request, &Options::default(), &pictures);
     assert_eq!(
         body["input"][0]["output"],
         json!([

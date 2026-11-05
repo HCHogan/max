@@ -13,6 +13,7 @@ workspace = true
 futures-util.workspace = true
 max-core.workspace = true
 reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sse-stream.workspace = true
 thiserror.workspace = true

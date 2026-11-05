@@ -6,19 +6,112 @@
 //! byte what the provider produced; the deltas before it only feed what
 //! is said while it streams.
 
+use std::borrow::Cow;
+
 use max_core::ids::CallId;
 use max_core::item::{Image, Item, ItemKind, ModelOutput, ModelTag, ToolCall, ToolOutput, Usage};
 use max_core::run::Request;
-use serde_json::{Map, Value, json};
+use serde::Serialize;
+use serde_json::Value;
+use serde_json::value::RawValue;
 use tracing::warn;
 
-use crate::{Error, Options, Pictures, Piece, pieces, plain, share_tokens, tool_pieces};
+use crate::{
+    Error, Joined, Options, Pictures, Piece, pieces, plain, schema, share_tokens, tool_pieces,
+};
 
 /// What a tool result says where a video was: Responses takes none.
 const NO_VIDEO: &str = "[这里有一段视频，这个模型看不了]";
 
+/// A request body. It borrows the request and its pictures, and is
+/// written straight from them.
+#[derive(Serialize)]
+pub struct Body<'a> {
+    model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<Joined<&'a str>>,
+    input: Vec<Input<'a>>,
+    stream: bool,
+    store: bool,
+    include: [&'static str; 1],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<Reasoning<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<Tool<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Input<'a> {
+    /// As the provider sent it.
+    Raw(&'a Value),
+    Message {
+        role: &'static str,
+        content: Content<'a>,
+    },
+    Typed(Typed<'a>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Typed<'a> {
+    FunctionCall {
+        call_id: &'a CallId,
+        name: &'a str,
+        arguments: &'a str,
+    },
+    FunctionCallOutput {
+        call_id: &'a CallId,
+        output: Content<'a>,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Content<'a> {
+    Text(&'a str),
+    Lines(Joined<Cow<'a, str>>),
+    Parts(Vec<Part<'a>>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Part<'a> {
+    InputText {
+        text: Cow<'a, str>,
+    },
+    InputImage {
+        image_url: &'a str,
+        detail: &'static str,
+    },
+}
+
+#[derive(Serialize)]
+struct Reasoning<'a> {
+    effort: &'a str,
+    summary: &'static str,
+}
+
+#[derive(Serialize)]
+struct Tool<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    name: &'a str,
+    description: &'a str,
+    parameters: &'static RawValue,
+    strict: bool,
+}
+
 /// The request body.
-pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value {
+pub fn body<'a>(request: &'a Request, options: &'a Options, pictures: &'a Pictures) -> Body<'a> {
     let mut instructions = Vec::new();
     let mut input = Vec::new();
     for item in &request.items {
@@ -27,103 +120,93 @@ pub fn body(request: &Request, options: &Options, pictures: &Pictures) -> Value 
         let raw = item.opaque.as_ref().filter(|_| ours);
         match &item.kind {
             ItemKind::System { text } => instructions.push(text.as_str()),
-            ItemKind::User { text, images } => input.push(json!({
-                "role": "user",
-                "content": user_content(text, images, pictures),
-            })),
+            ItemKind::User { text, images } => input.push(Input::Message {
+                role: "user",
+                content: user_content(text, images, pictures),
+            }),
             ItemKind::Assistant { text } => input.push(match raw {
-                Some(raw) => raw.clone(),
-                None => json!({ "role": "assistant", "content": text }),
+                Some(raw) => Input::Raw(raw),
+                None => Input::Message {
+                    role: "assistant",
+                    content: Content::Text(text),
+                },
             }),
             // Without its encrypted content, reasoning can't be replayed.
-            ItemKind::Reasoning { .. } => input.extend(raw.cloned()),
+            ItemKind::Reasoning { .. } => input.extend(raw.map(Input::Raw)),
             ItemKind::ToolCall(call) => input.push(match raw {
-                Some(raw) => raw.clone(),
-                None => json!({
-                    "type": "function_call",
-                    "call_id": call.id,
-                    "name": call.name,
-                    "arguments": call.arguments,
+                Some(raw) => Input::Raw(raw),
+                None => Input::Typed(Typed::FunctionCall {
+                    call_id: &call.id,
+                    name: &call.name,
+                    arguments: &call.arguments,
                 }),
             }),
-            ItemKind::ToolResult { call, output } => input.push(json!({
-                "type": "function_call_output",
-                "call_id": call,
-                "output": tool_output(output, pictures),
-            })),
+            ItemKind::ToolResult { call, output } => {
+                input.push(Input::Typed(Typed::FunctionCallOutput {
+                    call_id: call,
+                    output: tool_output(output, pictures),
+                }));
+            }
         }
     }
-
-    let mut body = Map::new();
-    body.insert("model".into(), json!(request.model.model));
-    if !instructions.is_empty() {
-        body.insert("instructions".into(), json!(instructions.join("\n\n")));
+    // Strict is the default here, and it would make every optional
+    // parameter required.
+    let tools: Vec<Tool<'_>> = request
+        .tools
+        .iter()
+        .map(|tool| Tool {
+            kind: "function",
+            name: tool.name,
+            description: &tool.description,
+            parameters: schema(tool),
+            strict: false,
+        })
+        .collect();
+    Body {
+        model: &request.model.model,
+        instructions: (!instructions.is_empty()).then_some(Joined(instructions, "\n\n")),
+        input,
+        stream: true,
+        store: false,
+        include: ["reasoning.encrypted_content"],
+        max_output_tokens: request.max_output,
+        reasoning: options.effort.as_deref().map(|effort| Reasoning {
+            effort,
+            summary: "auto",
+        }),
+        temperature: options.temperature,
+        top_p: options.top_p,
+        tool_choice: (!tools.is_empty()).then_some("auto"),
+        tools,
     }
-    body.insert("input".into(), Value::Array(input));
-    body.insert("stream".into(), json!(true));
-    body.insert("store".into(), json!(false));
-    body.insert("include".into(), json!(["reasoning.encrypted_content"]));
-    if let Some(max) = request.max_output {
-        body.insert("max_output_tokens".into(), json!(max));
-    }
-    if let Some(effort) = &options.effort {
-        body.insert(
-            "reasoning".into(),
-            json!({ "effort": effort, "summary": "auto" }),
-        );
-    }
-    if let Some(temperature) = options.temperature {
-        body.insert("temperature".into(), json!(temperature));
-    }
-    if let Some(top_p) = options.top_p {
-        body.insert("top_p".into(), json!(top_p));
-    }
-    if !request.tools.is_empty() {
-        let tools: Vec<Value> = request
-            .tools
-            .iter()
-            .map(|tool| {
-                // Strict is the default here, and it would make every
-                // optional parameter required.
-                json!({
-                    "type": "function",
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": crate::schema(tool),
-                    "strict": false,
-                })
-            })
-            .collect();
-        body.insert("tools".into(), Value::Array(tools));
-        body.insert("tool_choice".into(), json!("auto"));
-    }
-    Value::Object(body)
 }
 
-fn user_content(text: &str, images: &[Image], pictures: &Pictures) -> Value {
+fn user_content<'a>(text: &'a str, images: &'a [Image], pictures: &'a Pictures) -> Content<'a> {
     match pieces(text, images, pictures) {
-        None => json!(text),
-        Some(pieces) => pieces.into_iter().map(wire).collect(),
+        None => Content::Text(text),
+        Some(pieces) => Content::Parts(pieces.into_iter().map(wire).collect()),
     }
 }
 
 /// A tool result's output: its text, or with pictures, its pieces.
-fn tool_output(output: &ToolOutput, pictures: &Pictures) -> Value {
-    let pieces = tool_pieces(output, pictures);
-    match plain(&pieces) {
-        Some(text) => json!(text),
-        None => pieces.into_iter().map(wire).collect(),
+fn tool_output<'a>(output: &'a ToolOutput, pictures: &'a Pictures) -> Content<'a> {
+    match plain(tool_pieces(output, pictures)) {
+        Ok(texts) => Content::Lines(Joined(texts, "\n")),
+        Err(pieces) => Content::Parts(pieces.into_iter().map(wire).collect()),
     }
 }
 
-fn wire(piece: Piece<'_>) -> Value {
+fn wire(piece: Piece<'_>) -> Part<'_> {
     match piece {
-        Piece::Text(text) => json!({ "type": "input_text", "text": text }),
-        Piece::Picture(url) => {
-            json!({ "type": "input_image", "image_url": url, "detail": "auto" })
-        }
+        Piece::Text(text) => Part::InputText { text },
+        Piece::Picture(url) => Part::InputImage {
+            image_url: url,
+            detail: "auto",
+        },
         // max.video refuses on a model that doesn't watch videos.
-        Piece::Video(_) => json!({ "type": "input_text", "text": NO_VIDEO }),
+        Piece::Video(_) => Part::InputText {
+            text: NO_VIDEO.into(),
+        },
     }
 }
 
