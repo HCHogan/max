@@ -61,15 +61,15 @@ pub enum Delivery {
 }
 
 /// The columns a `Content` spreads over.
-struct Columns {
+struct Columns<'a> {
     kind: &'static str,
     event: Option<&'static str>,
     reply_to: Option<i64>,
     target: Option<i64>,
-    nodes: Vec<Node>,
+    nodes: &'a [Node],
 }
 
-fn columns(content: &Content, command: bool) -> Columns {
+fn columns(content: &Content, command: bool) -> Columns<'_> {
     let event = |event, target: Option<MessageId>, nodes| Columns {
         kind: "event",
         event: Some(event),
@@ -83,10 +83,10 @@ fn columns(content: &Content, command: bool) -> Columns {
             event: None,
             reply_to: reply_to.map(|id| id.0),
             target: None,
-            nodes: nodes.clone(),
+            nodes,
         },
-        Content::Edit { target, nodes } => event("edit", Some(*target), nodes.clone()),
-        Content::Unsend { target } => event("unsend", Some(*target), Vec::new()),
+        Content::Edit { target, nodes } => event("edit", Some(*target), nodes),
+        Content::Unsend { target } => event("unsend", Some(*target), &[]),
     }
 }
 
@@ -141,7 +141,7 @@ pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Resu
         columns.event,
         columns.reply_to,
         columns.target,
-        Json(&columns.nodes) as _,
+        Json(columns.nodes) as _,
         new.raw,
         new.text,
         new.turn.map(|turn| turn.0),
