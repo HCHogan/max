@@ -20,7 +20,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use max_core::ids::ConversationId;
 use max_core::item::Part;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{Semaphore, oneshot};
@@ -246,6 +246,7 @@ struct Called {
 
 /// A request answered with a JSON-RPC error: not a call that failed,
 /// which is a result.
+#[derive(Serialize)]
 struct Refusal {
     code: i32,
     message: String,
@@ -260,13 +261,40 @@ impl Refusal {
     }
 }
 
+/// A JSON-RPC answer, written with its result as the result is.
+#[derive(Serialize)]
+struct Envelope {
+    jsonrpc: &'static str,
+    id: Value,
+    #[serde(flatten)]
+    outcome: Outcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Outcome {
+    Result(Answer),
+    Error(Refusal),
+}
+
+/// What a request is answered with.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Answer {
+    Value(Value),
+    Tools { tools: Vec<Listed> },
+    Called(ToolResult),
+}
+
 async fn rpc(State(handler): State<Handler>, headers: HeaderMap, body: Bytes) -> Response {
     let Ok(request) = serde_json::from_slice::<Request>(&body) else {
-        let error = json!({ "code": PARSE_ERROR, "message": "不是 JSON-RPC 请求" });
-        return reply(
-            StatusCode::BAD_REQUEST,
-            json!({ "jsonrpc": "2.0", "id": null, "error": error }),
-        );
+        let error = Refusal::new(PARSE_ERROR, "不是 JSON-RPC 请求");
+        let answer = Envelope {
+            jsonrpc: "2.0",
+            id: Value::Null,
+            outcome: Outcome::Error(error),
+        };
+        return reply(StatusCode::BAD_REQUEST, &answer);
     };
     // Such as initialized, and cancelled: closing the connection is what
     // cancels a call here.
@@ -276,23 +304,25 @@ async fn rpc(State(handler): State<Handler>, headers: HeaderMap, body: Bytes) ->
     let authorization = headers
         .get(header::AUTHORIZATION)
         .map(|value| value.to_str().unwrap_or_default());
-    let answer = match handler
+    let outcome = match handler
         .answer(&request.method, request.params, authorization)
         .await
     {
-        Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-        Err(Refusal { code, message }) => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": { "code": code, "message": message },
-        }),
+        Ok(result) => Outcome::Result(result),
+        Err(refusal) => Outcome::Error(refusal),
     };
-    reply(StatusCode::OK, answer)
+    let answer = Envelope {
+        jsonrpc: "2.0",
+        id,
+        outcome,
+    };
+    reply(StatusCode::OK, &answer)
 }
 
-fn reply(status: StatusCode, body: Value) -> Response {
+fn reply(status: StatusCode, body: &Envelope) -> Response {
     let json = [(header::CONTENT_TYPE, "application/json")];
-    (status, json, body.to_string()).into_response()
+    let body = serde_json::to_vec(body).expect("an answer is JSON");
+    (status, json, body).into_response()
 }
 
 impl Handler {
@@ -301,18 +331,18 @@ impl Handler {
         method: &str,
         params: Value,
         authorization: Option<&str>,
-    ) -> Result<Value, Refusal> {
+    ) -> Result<Answer, Refusal> {
         match method {
-            "initialize" => Ok(initialized(&params)),
-            "ping" => Ok(json!({})),
+            "initialize" => Ok(Answer::Value(initialized(&params))),
+            "ping" => Ok(Answer::Value(json!({}))),
             "tools/list" => {
                 let session = self.session(authorization)?;
                 let allows = |spec: &&'static Spec| match &session {
                     Some(session) => session.context.caller.allows(Call::Tool(spec)),
                     None => true,
                 };
-                let tools: Vec<Value> = tool::TOOLS.iter().filter(allows).map(listed).collect();
-                Ok(json!({ "tools": tools }))
+                let tools = tool::TOOLS.iter().filter(allows).map(listed).collect();
+                Ok(Answer::Tools { tools })
             }
             "tools/call" => {
                 let session = self.session(authorization)?;
@@ -321,7 +351,9 @@ impl Handler {
                         Refusal::new(INVALID_PARAMS, format!("tools/call 的参数不对：{error}"))
                     })?;
                 let args = Value::Object(arguments.unwrap_or_default());
-                Ok(called(self.call(session, &name, args).await))
+                Ok(Answer::Called(called(
+                    self.call(session, &name, args).await,
+                )))
             }
             _ => Err(Refusal::new(
                 METHOD_NOT_FOUND,
@@ -438,27 +470,55 @@ fn initialized(params: &Value) -> Value {
     })
 }
 
-fn listed(spec: &Spec) -> Value {
-    json!({
-        "name": spec.name,
-        "description": spec.description,
-        "inputSchema": spec.input,
-        "outputSchema": spec.output,
-    })
+/// A tool as `tools/list` shows it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Listed {
+    name: &'static str,
+    description: &'static str,
+    input_schema: &'static Map<String, Value>,
+    output_schema: &'static Map<String, Value>,
+}
+
+fn listed(spec: &'static Spec) -> Listed {
+    Listed {
+        name: spec.name,
+        description: spec.description,
+        input_schema: &spec.input,
+        output_schema: &spec.output,
+    }
 }
 
 /// A call's outcome as MCP's tool result: the value, or `{code, message}`
 /// with `isError`, structured and as JSON text.
-fn called(outcome: Result<Value, Failure>) -> Value {
-    let (value, error) = match outcome {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolResult {
+    content: [Text; 1],
+    structured_content: Value,
+    is_error: bool,
+}
+
+#[derive(Serialize)]
+struct Text {
+    r#type: &'static str,
+    text: String,
+}
+
+fn called(outcome: Result<Value, Failure>) -> ToolResult {
+    let (value, is_error) = match outcome {
         Ok(value) => (value, false),
         Err(Failure { code, message }) => (json!({ "code": code, "message": message }), true),
     };
-    json!({
-        "content": [{ "type": "text", "text": value.to_string() }],
-        "structuredContent": value,
-        "isError": error,
-    })
+    let text = value.to_string();
+    ToolResult {
+        content: [Text {
+            r#type: "text",
+            text,
+        }],
+        structured_content: value,
+        is_error,
+    }
 }
 
 #[cfg(test)]
