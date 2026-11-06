@@ -2298,8 +2298,137 @@ def segment.chunk.next_cut
        then ok (some (split, 7#usize, false))
        else ok none
 
+/-- [max_core::segment::chunk::fence_line]:
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 468:0-477:1 -/
+def segment.chunk.fence_line
+  (first : Bool) (line : Slice Std.U8) : Result Bool := do
+  let text ←
+    if first
+    then
+      do
+      let «at» ← segment.chunk.skip_space line 0#usize
+      let o ← segment.chunk.quote line «at»
+      match o with
+      | none => ok 0#usize
+      | some len => let i ← «at» + len
+                    segment.chunk.skip_space line i
+    else ok 0#usize
+  let s ←
+    core.slice.index.Slice.index
+      (core.slice.index.SliceIndexRangeFromUsizeSlice Std.U8) line
+      { start := text }
+  segment.chunk.is_fence s
+
+/-- [max_core::segment::chunk::closes_fences]: loop body 0:
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 485:4-493:5 -/
+@[rust_loop_body]
+def segment.chunk.closes_fences_loop.body
+  (chunk : Slice Std.U8) («open» : Bool) (start : Std.Usize) (i : Std.Usize)
+  :
+  Result (ControlFlow (Bool × Std.Usize × Std.Usize) (Bool × Std.Usize))
+  := do
+  let i1 := Slice.len chunk
+  if i < i1
+  then
+    let i2 ← Slice.index_usize chunk i
+    let (open1, start1) ←
+      if i2 = 10#u8
+      then
+        do
+        let s ←
+          core.slice.index.Slice.index
+            (core.slice.index.SliceIndexRangeUsizeSlice Std.U8) chunk
+            { start, «end» := i }
+        let b ← segment.chunk.fence_line (start = 0#usize) s
+        let open2 ← if b
+                      then ok (¬ «open»)
+                      else ok «open»
+        let start2 ← i + 1#usize
+        ok (open2, start2)
+      else ok («open», start)
+    let i3 ← i + 1#usize
+    ok (cont (open1, start1, i3))
+  else ok (done («open», start))
+
+/-- [max_core::segment::chunk::closes_fences]: loop 0:
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 485:4-493:5 -/
+@[rust_loop]
+def segment.chunk.closes_fences_loop
+  (chunk : Slice Std.U8) («open» : Bool) (start : Std.Usize) (i : Std.Usize)
+  :
+  Result (Bool × Std.Usize)
+  := do
+  loop
+    (fun (open1, start1, i1) => segment.chunk.closes_fences_loop.body chunk
+      open1 start1 i1)
+    («open», start, i)
+
+/-- [max_core::segment::chunk::closes_fences]:
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 481:0-498:1 -/
+def segment.chunk.closes_fences (chunk : Slice Std.U8) : Result Bool := do
+  let («open», start) ←
+    segment.chunk.closes_fences_loop chunk false 0#usize 0#usize
+  let s ←
+    core.slice.index.Slice.index
+      (core.slice.index.SliceIndexRangeFromUsizeSlice Std.U8) chunk { start }
+  let b ← segment.chunk.fence_line (start = 0#usize) s
+  let open1 ← if b
+                then ok (¬ «open»)
+                else ok «open»
+  ok (¬ open1)
+
+/-- [max_core::segment::chunk::chunk_text]: loop body 0:
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 504:4-510:5 -/
+@[rust_loop_body]
+def segment.chunk.chunk_text_loop.body
+  (lines : Slice (alloc.vec.Vec Std.U8)) (text : alloc.vec.Vec Std.U8)
+  (i : Std.Usize) :
+  Result (ControlFlow ((alloc.vec.Vec Std.U8) × Std.Usize) (alloc.vec.Vec
+    Std.U8))
+  := do
+  let i1 := Slice.len lines
+  if i < i1
+  then
+    let text1 ←
+      if i > 0#usize
+      then alloc.vec.Vec.push text 10#u8
+      else ok text
+    let v ← Slice.index_usize lines i
+    let s := alloc.vec.Vec.deref v
+    let text2 ← alloc.vec.Vec.extend_from_slice core.clone.CloneU8 text1 s
+    let i2 ← i + 1#usize
+    ok (cont (text2, i2))
+  else ok (done text)
+
+/-- [max_core::segment::chunk::chunk_text]: loop 0:
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 504:4-510:5 -/
+@[rust_loop]
+def segment.chunk.chunk_text_loop
+  (lines : Slice (alloc.vec.Vec Std.U8)) (text : alloc.vec.Vec Std.U8)
+  (i : Std.Usize) :
+  Result (alloc.vec.Vec Std.U8)
+  := do
+  loop
+    (fun (text1, i1) => segment.chunk.chunk_text_loop.body lines text1 i1)
+    (text, i)
+
+/-- [max_core::segment::chunk::chunk_text]:
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 501:0-515:1 -/
+def segment.chunk.chunk_text
+  (lines : Slice (alloc.vec.Vec Std.U8)) : Result (alloc.vec.Vec Std.U8) := do
+  let text ←
+    segment.chunk.chunk_text_loop lines (alloc.vec.Vec.new Std.U8) 0#usize
+  let s := alloc.vec.Vec.deref text
+  let i := alloc.vec.Vec.len text
+  let (a, b) ← segment.chunk.trim s 0#usize i
+  let s1 ←
+    alloc.vec.Vec.index (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)
+      text { start := a, «end» := b }
+  alloc.vec.Vec.extend_from_slice core.clone.CloneU8 (alloc.vec.Vec.new Std.U8)
+    s1
+
 /-- [max_core::segment::chunk::{impl core::fmt::Debug for max_core::segment::chunk::Chunker}::fmt]:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 466:9-466:14
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 518:9-518:14
     Visibility: public -/
 def segment.chunk.Chunker.Insts.CoreFmtDebug.fmt
   (self : segment.chunk.Chunker) (f : core.fmt.Formatter) :
@@ -2317,7 +2446,7 @@ def segment.chunk.Chunker.Insts.CoreFmtDebug.fmt
     "thinking") dyn3 (toStr "sections") dyn4
 
 /-- Trait implementation: [max_core::segment::chunk::{impl core::fmt::Debug for max_core::segment::chunk::Chunker}]
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 466:9-466:14 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 518:9-518:14 -/
 @[reducible]
 def segment.chunk.Chunker.Insts.CoreFmtDebug : core.fmt.Debug
   segment.chunk.Chunker := {
@@ -2325,7 +2454,7 @@ def segment.chunk.Chunker.Insts.CoreFmtDebug : core.fmt.Debug
 }
 
 /-- [max_core::segment::chunk::{impl core::default::Default for max_core::segment::chunk::Chunker}::default]:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 479:4-487:5
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 532:4-540:5
     Visibility: public -/
 def segment.chunk.Chunker.Insts.CoreDefaultDefault.default
   : Result segment.chunk.Chunker := do
@@ -2339,7 +2468,7 @@ def segment.chunk.Chunker.Insts.CoreDefaultDefault.default
     }
 
 /-- Trait implementation: [max_core::segment::chunk::{impl core::default::Default for max_core::segment::chunk::Chunker}]
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 478:0-488:1 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 531:0-541:1 -/
 @[reducible]
 def segment.chunk.Chunker.Insts.CoreDefaultDefault : core.default.Default
   segment.chunk.Chunker := {
@@ -2347,7 +2476,7 @@ def segment.chunk.Chunker.Insts.CoreDefaultDefault : core.default.Default
 }
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::unthink]: loop body 0:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 625:8-647:9 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 675:8-697:9 -/
 @[rust_loop_body]
 def segment.chunk.Chunker.unthink_loop0.body
   (line : Slice Std.U8) (b : Bool) (visible : alloc.vec.Vec Std.U8)
@@ -2406,7 +2535,7 @@ def segment.chunk.Chunker.unthink_loop0.body
       ok (cont (¬ b, visible1, true, at1, done1))
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::unthink]: loop 0:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 625:8-647:9 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 675:8-697:9 -/
 @[rust_loop]
 def segment.chunk.Chunker.unthink_loop0
   (b : Bool) (line : Slice Std.U8) (visible : alloc.vec.Vec Std.U8)
@@ -2420,7 +2549,7 @@ def segment.chunk.Chunker.unthink_loop0
     (b, visible, tagged, «at», done1)
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::unthink]: loop body 1:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 625:8-647:9 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 675:8-697:9 -/
 @[rust_loop_body]
 def segment.chunk.Chunker.unthink_loop1.body
   (line : Slice Std.U8) (b : Bool) (visible : alloc.vec.Vec Std.U8)
@@ -2479,7 +2608,7 @@ def segment.chunk.Chunker.unthink_loop1.body
       ok (cont (¬ b, visible1, true, at1, done1))
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::unthink]: loop 1:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 625:8-647:9 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 675:8-697:9 -/
 @[rust_loop]
 def segment.chunk.Chunker.unthink_loop1
   (b : Bool) (line : Slice Std.U8) (visible : alloc.vec.Vec Std.U8)
@@ -2493,7 +2622,7 @@ def segment.chunk.Chunker.unthink_loop1
     (b, visible, tagged, «at», done1)
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::unthink]:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 616:4-653:5 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 666:4-703:5 -/
 def segment.chunk.Chunker.unthink
   (self : segment.chunk.Chunker) (line : Slice Std.U8) :
   Result ((Option (alloc.vec.Vec Std.U8)) × segment.chunk.Chunker)
@@ -2535,96 +2664,65 @@ def segment.chunk.Chunker.unthink
         else ok (some visible, self)
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::push_line]:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 660:4-664:5 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 711:4-718:5 -/
 def segment.chunk.Chunker.push_line
   (self : segment.chunk.Chunker) (line : Slice Std.U8) :
   Result segment.chunk.Chunker
   := do
+  let b ← alloc.vec.Vec.is_empty self.lines
+  let b1 ← segment.chunk.fence_line b line
+  let b2 ← if b1
+             then ok (¬ self.in_fence)
+             else ok self.in_fence
   let copy ←
     alloc.vec.Vec.extend_from_slice core.clone.CloneU8 (alloc.vec.Vec.new
       Std.U8) line
   let v ← alloc.vec.Vec.push self.lines copy
-  ok { self with lines := v }
+  ok { self with lines := v, in_fence := b2 }
 
-/-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::cut]: loop body 0:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 669:8-675:9 -/
-@[rust_loop_body]
-def segment.chunk.Chunker.cut_loop.body
-  (self : segment.chunk.Chunker) (text : alloc.vec.Vec Std.U8) (i : Std.Usize)
-  :
-  Result (ControlFlow ((alloc.vec.Vec Std.U8) × Std.Usize) ((alloc.vec.Vec
-    Std.U8) × Bool × Bool × Bool × (alloc.vec.Vec Std.U8)))
+/-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::end]:
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 733:4-739:5 -/
+def segment.chunk.Chunker.end
+  (self : segment.chunk.Chunker) (chunk : alloc.vec.Vec Std.U8)
+  (out : alloc.vec.Vec (alloc.vec.Vec Std.U8)) :
+  Result (segment.chunk.Chunker × (alloc.vec.Vec (alloc.vec.Vec Std.U8)))
   := do
-  let i1 := alloc.vec.Vec.len self.lines
-  if i < i1
+  let b ← alloc.vec.Vec.is_empty chunk
+  if b
   then
-    let text1 ←
-      if i > 0#usize
-      then alloc.vec.Vec.push text 10#u8
-      else ok text
-    let v ←
-      alloc.vec.Vec.index (core.slice.index.SliceIndexUsizeSlice (alloc.vec.Vec
-        Std.U8)) self.lines i
-    let s := alloc.vec.Vec.deref v
-    let text2 ← alloc.vec.Vec.extend_from_slice core.clone.CloneU8 text1 s
-    let i2 ← i + 1#usize
-    ok (cont (text2, i2))
+    ok
+      ({
+         self
+           with
+           lines := (alloc.vec.Vec.new (alloc.vec.Vec Std.U8)),
+           in_fence := false
+       }, out)
   else
-    ok (done (self.partial, self.in_fence, self.thinking, self.sections, text))
-
-/-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::cut]: loop 0:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 669:8-675:9 -/
-@[rust_loop]
-def segment.chunk.Chunker.cut_loop
-  (self : segment.chunk.Chunker) (text : alloc.vec.Vec Std.U8) (i : Std.Usize)
-  :
-  Result ((alloc.vec.Vec Std.U8) × Bool × Bool × Bool × (alloc.vec.Vec
-    Std.U8))
-  := do
-  loop
-    (fun (text1, i1) => segment.chunk.Chunker.cut_loop.body self text1 i1)
-    (text, i)
+    let out1 ← alloc.vec.Vec.push out chunk
+    ok
+      ({
+         self
+           with
+           lines := (alloc.vec.Vec.new (alloc.vec.Vec Std.U8)),
+           in_fence := false
+       }, out1)
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::cut]:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 666:4-683:5 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 725:4-730:5 -/
 def segment.chunk.Chunker.cut
   (self : segment.chunk.Chunker) (out : alloc.vec.Vec (alloc.vec.Vec Std.U8)) :
   Result (segment.chunk.Chunker × (alloc.vec.Vec (alloc.vec.Vec Std.U8)))
   := do
-  let (v, b, b1, b2, text) ←
-    segment.chunk.Chunker.cut_loop self (alloc.vec.Vec.new Std.U8) 0#usize
-  let s := alloc.vec.Vec.deref text
-  let i := alloc.vec.Vec.len text
-  let (a, b3) ← segment.chunk.trim s 0#usize i
-  if a < b3
-  then
-    let s1 ←
-      alloc.vec.Vec.index (core.slice.index.SliceIndexRangeUsizeSlice Std.U8)
-        text { start := a, «end» := b3 }
-    let chunk ←
-      alloc.vec.Vec.extend_from_slice core.clone.CloneU8 (alloc.vec.Vec.new
-        Std.U8) s1
-    let out1 ← alloc.vec.Vec.push out chunk
-    ok
-      ({
-         «partial» := v,
-         lines := (alloc.vec.Vec.new (alloc.vec.Vec Std.U8)),
-         in_fence := b,
-         thinking := b1,
-         sections := b2
-       }, out1)
-  else
-    ok
-      ({
-         «partial» := v,
-         lines := (alloc.vec.Vec.new (alloc.vec.Vec Std.U8)),
-         in_fence := b,
-         thinking := b1,
-         sections := b2
-       }, out)
+  let s := alloc.vec.Vec.deref self.lines
+  let chunk ← segment.chunk.chunk_text s
+  let s1 := alloc.vec.Vec.deref chunk
+  let b ← segment.chunk.closes_fences s1
+  if b
+  then segment.chunk.Chunker.end self chunk out
+  else ok (self, out)
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::last_nonempty]:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 655:4-658:5 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 705:4-708:5 -/
 def segment.chunk.Chunker.last_nonempty
   (self : segment.chunk.Chunker) : Result Bool := do
   let n := alloc.vec.Vec.len self.lines
@@ -2639,7 +2737,7 @@ def segment.chunk.Chunker.last_nonempty
   else ok false
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::message_line]:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 565:4-612:5 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 616:4-662:5 -/
 def segment.chunk.Chunker.message_line
   (self : segment.chunk.Chunker) (line : Slice Std.U8)
   (out : alloc.vec.Vec (alloc.vec.Vec Std.U8)) :
@@ -2664,8 +2762,7 @@ def segment.chunk.Chunker.message_line
   let b ← segment.chunk.is_fence text
   if b
   then
-    let self2 ←
-      segment.chunk.Chunker.push_line { self1 with in_fence := true } line
+    let self2 ← segment.chunk.Chunker.push_line self1 line
     ok (none, self2, out1)
   else
     let b1 ← segment.chunk.is_break text
@@ -2683,8 +2780,9 @@ def segment.chunk.Chunker.message_line
           let b3 ← segment.chunk.Chunker.last_nonempty self1
           if b3
           then
-            let v ← alloc.vec.Vec.push self1.lines (alloc.vec.Vec.new Std.U8)
-            ok (none, { self1 with lines := v }, out1)
+            let s := alloc.vec.Vec.deref (alloc.vec.Vec.new Std.U8)
+            let self2 ← segment.chunk.Chunker.push_line self1 s
+            ok (none, self2, out1)
           else ok (none, self1, out1)
         else
           let (self2, out2) ← segment.chunk.Chunker.cut self1 out1
@@ -2727,7 +2825,7 @@ def segment.chunk.Chunker.message_line
           ok (some i1, self5, out4)
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::classify]: loop body 0:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 552:12-557:13 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 603:12-608:13 -/
 @[rust_loop_body]
 def segment.chunk.Chunker.classify_loop.body
   (line : Slice Std.U8) (self : segment.chunk.Chunker)
@@ -2752,7 +2850,7 @@ def segment.chunk.Chunker.classify_loop.body
       ok (cont (self1, out1, start1, done1))
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::classify]: loop 0:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 552:12-557:13 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 603:12-608:13 -/
 @[rust_loop]
 def segment.chunk.Chunker.classify_loop
   (self : segment.chunk.Chunker) (line : Slice Std.U8)
@@ -2766,25 +2864,19 @@ def segment.chunk.Chunker.classify_loop
     (self, out, start, done1)
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::classify]:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 543:4-559:5 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 597:4-610:5 -/
 def segment.chunk.Chunker.classify
   (self : segment.chunk.Chunker) (line : Slice Std.U8)
   (out : alloc.vec.Vec (alloc.vec.Vec Std.U8)) :
   Result (segment.chunk.Chunker × (alloc.vec.Vec (alloc.vec.Vec Std.U8)))
   := do
   if self.in_fence
-  then
-    let b ← segment.chunk.is_fence line
-    let b1 ← if b
-               then ok false
-               else ok self.in_fence
-    let self1 ←
-      segment.chunk.Chunker.push_line { self with in_fence := b1 } line
-    ok (self1, out)
+  then let self1 ← segment.chunk.Chunker.push_line self line
+       ok (self1, out)
   else segment.chunk.Chunker.classify_loop self line out 0#usize false
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::line]:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 535:4-541:5 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 589:4-595:5 -/
 def segment.chunk.Chunker.line
   (self : segment.chunk.Chunker) (raw : Slice Std.U8) :
   Result ((alloc.vec.Vec (alloc.vec.Vec Std.U8)) × segment.chunk.Chunker)
@@ -2800,7 +2892,7 @@ def segment.chunk.Chunker.line
     ok (out, self2)
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::take_line]: loop body 0:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 522:8-524:9 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 576:8-578:9 -/
 @[rust_loop_body]
 def segment.chunk.Chunker.take_line_loop.body
   (v : alloc.vec.Vec Std.U8) («end» : Std.Usize) :
@@ -2817,7 +2909,7 @@ def segment.chunk.Chunker.take_line_loop.body
   else ok (done «end»)
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::take_line]: loop 0:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 522:8-524:9 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 576:8-578:9 -/
 @[rust_loop]
 def segment.chunk.Chunker.take_line_loop
   (v : alloc.vec.Vec Std.U8) («end» : Std.Usize) : Result Std.Usize := do
@@ -2826,7 +2918,7 @@ def segment.chunk.Chunker.take_line_loop
     «end»
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::take_line]:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 520:4-529:5 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 574:4-583:5 -/
 def segment.chunk.Chunker.take_line
   (self : segment.chunk.Chunker) :
   Result ((alloc.vec.Vec Std.U8) × segment.chunk.Chunker)
@@ -2842,7 +2934,7 @@ def segment.chunk.Chunker.take_line
   ok (line, { self with «partial» := (alloc.vec.Vec.new Std.U8) })
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::push]: loop body 0:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 494:8-502:9 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 547:8-555:9 -/
 @[rust_loop_body]
 def segment.chunk.Chunker.push_loop.body
   (delta : Slice Std.U8) (self : segment.chunk.Chunker)
@@ -2876,7 +2968,7 @@ def segment.chunk.Chunker.push_loop.body
   else ok (done (self, out))
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::push]: loop 0:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 494:8-502:9 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 547:8-555:9 -/
 @[rust_loop]
 def segment.chunk.Chunker.push_loop
   (self : segment.chunk.Chunker) (delta : Slice Std.U8)
@@ -2889,7 +2981,7 @@ def segment.chunk.Chunker.push_loop
     (self, out, i)
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::push]:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 492:4-503:5 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 545:4-556:5 -/
 @[reducible]
 def segment.chunk.Chunker.push
   (self : segment.chunk.Chunker) (delta : Slice Std.U8)
@@ -2899,7 +2991,7 @@ def segment.chunk.Chunker.push
   segment.chunk.Chunker.push_loop self delta out 0#usize
 
 /-- [max_core::segment::chunk::{max_core::segment::chunk::Chunker}::finish]:
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 507:4-517:5 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 560:4-571:5 -/
 def segment.chunk.Chunker.finish
   (self : segment.chunk.Chunker) (out : alloc.vec.Vec (alloc.vec.Vec Std.U8)) :
   Result (segment.chunk.Chunker × (alloc.vec.Vec (alloc.vec.Vec Std.U8)))
@@ -2919,11 +3011,13 @@ def segment.chunk.Chunker.finish
         segment.chunk.Chunker.line
           { self with «partial» := (alloc.vec.Vec.new Std.U8) } s1
       ok (self2, chunks1)
-  let (self2, chunks1) ← segment.chunk.Chunker.cut self1 chunks
-  let s := alloc.vec.Vec.deref chunks1
+  let s := alloc.vec.Vec.deref self1.lines
+  let last ← segment.chunk.chunk_text s
+  let (self2, chunks1) ← segment.chunk.Chunker.end self1 last chunks
+  let s1 := alloc.vec.Vec.deref chunks1
   let out1 ←
     alloc.vec.Vec.extend_from_slice (core.clone.CloneallocvecVec
-      core.clone.CloneU8) out s
+      core.clone.CloneU8) out s1
   ok (self2, out1)
 
 end max_core

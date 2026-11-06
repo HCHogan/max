@@ -164,6 +164,8 @@ theorem finish_appends (c : Chunker) : Appends (fun out => Chunker.finish c out)
   intro ⟨c₁, chunks⟩
   simp only [uncurry_apply_pair]
   apply appends_prefix
+  intro last
+  apply appends_prefix
   intro ⟨c₂, chunks₁⟩
   simp only [uncurry_apply_pair]
   exact appends_extend c₂ chunks₁

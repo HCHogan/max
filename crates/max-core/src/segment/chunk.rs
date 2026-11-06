@@ -462,6 +462,58 @@ fn next_cut(line: &[u8]) -> Option<(usize, usize, bool)> {
     }
 }
 
+/// Whether a line is a fence, as the first line of a chunk or a later one.
+/// QQ shows a quote that starts a chunk as a reply, and what follows it as
+/// the start of the text, so a chunk's first line is judged after its quote.
+fn fence_line(first: bool, line: &[u8]) -> bool {
+    let mut text = 0;
+    if first {
+        let at = skip_space(line, 0);
+        if let Some(len) = quote(line, at) {
+            text = skip_space(line, at + len);
+        }
+    }
+    is_fence(&line[text..])
+}
+
+/// Whether a chunk closes the fences it opens: an even number of its lines
+/// are fences.
+fn closes_fences(chunk: &[u8]) -> bool {
+    let mut open = false;
+    let mut start = 0;
+    let mut i = 0;
+    while i < chunk.len() {
+        if chunk[i] == b'\n' {
+            if fence_line(start == 0, &chunk[start..i]) {
+                open = !open;
+            }
+            start = i + 1;
+        }
+        i += 1;
+    }
+    if fence_line(start == 0, &chunk[start..]) {
+        open = !open;
+    }
+    !open
+}
+
+/// The chunk that `lines` make: joined, and trimmed.
+fn chunk_text(lines: &[Vec<u8>]) -> Vec<u8> {
+    let mut text = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if i > 0 {
+            text.push(b'\n');
+        }
+        text.extend_from_slice(&lines[i]);
+        i += 1;
+    }
+    let (a, b) = trim(&text, 0, text.len());
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(&text[a..b]);
+    chunk
+}
+
 /// Cuts streamed text into chunks.
 #[derive(Debug)]
 pub(super) struct Chunker {
@@ -469,6 +521,7 @@ pub(super) struct Chunker {
     partial: Vec<u8>,
     /// The complete lines of the chunk being built.
     lines: Vec<Vec<u8>>,
+    /// Whether the lines leave a fence open, so that the next line is code.
     in_fence: bool,
     thinking: bool,
     /// A heading came: cut at headings, not at blank lines.
@@ -512,7 +565,8 @@ impl Chunker {
             self.partial = Vec::new();
             chunks = self.line(&rest);
         }
-        self.cut(&mut chunks);
+        let last = chunk_text(&self.lines);
+        self.end(last, &mut chunks);
         out.extend_from_slice(&chunks);
     }
 
@@ -542,9 +596,6 @@ impl Chunker {
 
     fn classify(&mut self, line: &[u8], out: &mut Vec<Vec<u8>>) {
         if self.in_fence {
-            if is_fence(line) {
-                self.in_fence = false;
-            }
             self.push_line(line);
         } else {
             let mut start = 0;
@@ -575,7 +626,6 @@ impl Chunker {
         }
         let text = &line[shown..];
         if is_fence(text) {
-            self.in_fence = true;
             self.push_line(line);
             None
         } else if is_break(text) {
@@ -585,7 +635,7 @@ impl Chunker {
             if !self.sections {
                 self.cut(out);
             } else if self.last_nonempty() {
-                self.lines.push(Vec::new());
+                self.push_line(&Vec::new());
             }
             None
         } else {
@@ -657,27 +707,33 @@ impl Chunker {
         n > 0 && !self.lines[n - 1].is_empty()
     }
 
+    /// Adds a line to the chunk being built. A fence opens one or closes it.
     fn push_line(&mut self, line: &[u8]) {
+        if fence_line(self.lines.is_empty(), line) {
+            self.in_fence = !self.in_fence;
+        }
         let mut copy = Vec::new();
         copy.extend_from_slice(line);
         self.lines.push(copy);
     }
 
+    /// Ends the chunk being built, if it closes its fences. Outside a fence
+    /// it does: `push_line` keeps `in_fence` to what the lines are, and
+    /// trimming them changes no fence. But the chunk is judged by itself,
+    /// so that `verify/` proves that no chunk but the last goes out with a
+    /// fence open without having to prove that.
     fn cut(&mut self, out: &mut Vec<Vec<u8>>) {
-        let mut text = Vec::new();
-        let mut i = 0;
-        while i < self.lines.len() {
-            if i > 0 {
-                text.push(b'\n');
-            }
-            text.extend_from_slice(&self.lines[i]);
-            i += 1;
+        let chunk = chunk_text(&self.lines);
+        if closes_fences(&chunk) {
+            self.end(chunk, out);
         }
+    }
+
+    /// Sends the chunk built, unless it is blank, and starts a new one.
+    fn end(&mut self, chunk: Vec<u8>, out: &mut Vec<Vec<u8>>) {
         self.lines = Vec::new();
-        let (a, b) = trim(&text, 0, text.len());
-        if a < b {
-            let mut chunk = Vec::new();
-            chunk.extend_from_slice(&text[a..b]);
+        self.in_fence = false;
+        if !chunk.is_empty() {
             out.push(chunk);
         }
     }
@@ -718,5 +774,73 @@ mod tests {
         assert_eq!(picture("[image#7405: 猫]".as_bytes(), 0), None);
         assert_eq!(picture(b"[video#7405.0]", 0), None);
         assert_eq!(picture(b"[image#1.65536]", 0), None);
+    }
+
+    /// `cut` sends a chunk only if it closes its fences, which `verify/`
+    /// proves. That it never holds one back outside a fence is this: after
+    /// every line, `in_fence` is what the chunk being built says.
+    #[test]
+    fn in_fence_is_what_the_chunk_says() {
+        const TOKENS: &[&str] = &[
+            "\n",
+            "\n",
+            "\n",
+            "\r\n",
+            " ",
+            "\u{3000}",
+            "\u{a0}",
+            "好",
+            "x",
+            "`",
+            "``",
+            "```",
+            "```py",
+            "  ```",
+            "[split]",
+            "[spl",
+            "it]",
+            "<think>",
+            "</think>",
+            "# ",
+            "## ",
+            "#",
+            "---",
+            "***",
+            "[reply#3]",
+            "[reply#3: 小明]",
+            "[reply#3](x)",
+            "[reply#",
+            "[sticker#4.0]",
+            "[image#5.0: 猫](3秒)",
+            "[image#5.0](",
+            "[mention#12]",
+            "[",
+            "]",
+            "(",
+            ")",
+            ":",
+            "> ",
+        ];
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = |n: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            usize::try_from(state % u64::try_from(n).unwrap()).unwrap()
+        };
+        for _ in 0..20_000 {
+            let len = 1 + next(60);
+            let text: String = (0..len).map(|_| TOKENS[next(TOKENS.len())]).collect();
+            let mut chunker = Chunker::default();
+            let mut out = Vec::new();
+            for line in text.split_inclusive('\n') {
+                chunker.push(line.as_bytes(), &mut out);
+                assert_eq!(
+                    chunker.in_fence,
+                    !closes_fences(&chunk_text(&chunker.lines)),
+                    "{text:?}"
+                );
+            }
+        }
     }
 }
