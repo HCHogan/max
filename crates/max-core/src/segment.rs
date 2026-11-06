@@ -26,16 +26,18 @@
 //!
 //! `<think>` spans are dropped before anything else, including everything
 //! after an unclosed one: some relays put reasoning in the text.
+//!
+//! The chunker and the placeholders it looks for are in `chunk`, written
+//! so that Aeneas can translate them to Lean, where `verify/` proves what
+//! they do.
 
+mod chunk;
 mod parse;
 
 use std::collections::BTreeSet;
-use std::ops::Range;
 
 use crate::ids::PrincipalId;
 use crate::message::Draft;
-
-const SPLIT: &str = "[split]";
 
 /// One message's worth of model output.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,194 +86,36 @@ impl Segmenter {
     }
 }
 
-/// Cuts streamed text into chunks.
+/// Cuts streamed text into chunks: `chunk::Chunker`, over `str`.
 #[derive(Debug, Default)]
-pub struct Chunker {
-    /// Text after the last newline.
-    partial: String,
-    /// The complete lines of the chunk being built.
-    lines: Vec<String>,
-    in_fence: bool,
-    thinking: bool,
-    /// A heading came: cut at headings, not at blank lines.
-    sections: bool,
-}
+pub struct Chunker(chunk::Chunker);
 
 impl Chunker {
     /// Feeds more text; returns the chunks it completed.
     pub fn push(&mut self, delta: &str) -> Vec<String> {
         let mut out = Vec::new();
-        self.partial.push_str(delta);
-        while let Some(end) = self.partial.find('\n') {
-            let line: String = self.partial.drain(..=end).collect();
-            self.line(line.trim_end_matches(['\n', '\r']), &mut out);
-        }
-        out
+        self.0.push(delta.as_bytes(), &mut out);
+        texts(out)
     }
 
     /// The end of the text; returns the remaining chunks. An unclosed fence
     /// runs to the end, so it comes out as one chunk.
     pub fn finish(mut self) -> Vec<String> {
         let mut out = Vec::new();
-        let rest = std::mem::take(&mut self.partial);
-        if !rest.is_empty() {
-            self.line(&rest, &mut out);
-        }
-        self.cut(&mut out);
-        out
-    }
-
-    fn line(&mut self, line: &str, out: &mut Vec<String>) {
-        let Some(line) = self.unthink(line) else {
-            return;
-        };
-        let line = line.as_str();
-        if is_fence(line) {
-            self.in_fence = !self.in_fence;
-            self.lines.push(line.to_owned());
-        } else if self.in_fence {
-            self.lines.push(line.to_owned());
-        } else if is_break(line) {
-            self.cut(out);
-        } else if line.trim().is_empty() {
-            if !self.sections {
-                self.cut(out);
-            } else if self.lines.last().is_some_and(|last| !last.is_empty()) {
-                self.lines.push(String::new());
-            }
-        } else {
-            if is_heading(line) {
-                self.cut(out);
-                self.sections = true;
-            } else if parse::quote(line.trim_start()) {
-                self.cut(out);
-                self.sections = false;
-            }
-            let mut rest = line;
-            while let Some((at, len, picture)) = next_cut(rest) {
-                self.lines.push(rest[..at].to_owned());
-                self.cut(out);
-                if picture {
-                    self.lines.push(rest[at..at + len].to_owned());
-                    self.cut(out);
-                }
-                rest = &rest[at + len..];
-            }
-            self.lines.push(rest.to_owned());
-        }
-    }
-
-    /// The part of a line outside `<think>` spans; None for a line wholly
-    /// inside one.
-    fn unthink(&mut self, line: &str) -> Option<String> {
-        const OPEN: &str = "<think>";
-        const CLOSE: &str = "</think>";
-        if !self.thinking && !line.contains(OPEN) {
-            return Some(line.to_owned());
-        }
-        let mut visible = String::new();
-        let mut tagged = false;
-        let mut rest = line;
-        loop {
-            let tag = if self.thinking { CLOSE } else { OPEN };
-            let Some(at) = rest.find(tag) else {
-                if !self.thinking {
-                    visible.push_str(rest);
-                }
-                break;
-            };
-            if !self.thinking {
-                visible.push_str(&rest[..at]);
-            }
-            rest = &rest[at + tag.len()..];
-            self.thinking = !self.thinking;
-            tagged = true;
-        }
-        (tagged || !self.thinking).then_some(visible)
-    }
-
-    fn cut(&mut self, out: &mut Vec<String>) {
-        let text = self.lines.join("\n");
-        self.lines.clear();
-        let text = text.trim();
-        if !text.is_empty() {
-            out.push(text.to_owned());
-        }
+        self.0.finish(&mut out);
+        texts(out)
     }
 }
 
-pub(crate) fn is_fence(line: &str) -> bool {
-    line.trim_start().starts_with("```")
-}
-
-/// `### 标题`: one to six `#`, a space, then something.
-fn is_heading(line: &str) -> bool {
-    let marks = line.bytes().take_while(|b| *b == b'#').count();
-    let rest = &line[marks..];
-    (1..=6).contains(&marks) && rest.starts_with([' ', '\t']) && !rest.trim().is_empty()
-}
-
-/// `---`, `***`, `___`, spaces allowed between.
-fn is_break(line: &str) -> bool {
-    let marks: Vec<char> = line.chars().filter(|c| !c.is_whitespace()).collect();
-    marks.len() >= 3 && matches!(marks[0], '-' | '*' | '_') && marks.iter().all(|c| *c == marks[0])
-}
-
-/// The inline code spans in a line, backticks included: a run of
-/// backticks up to the next run of as many, as in CommonMark. What is in
-/// one is shown as written.
-pub(crate) fn code_spans(line: &str) -> Vec<Range<usize>> {
-    let bytes = line.as_bytes();
-    let run = |at: usize| bytes[at..].iter().take_while(|b| **b == b'`').count();
-    let mut spans = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'`' {
-            i += 1;
-            continue;
-        }
-        let ticks = run(i);
-        let mut j = i + ticks;
-        let mut end = None;
-        while j < bytes.len() {
-            if bytes[j] != b'`' {
-                j += 1;
-                continue;
-            }
-            let closing = run(j);
-            if closing == ticks {
-                end = Some(j + closing);
-                break;
-            }
-            j += closing;
-        }
-        match end {
-            Some(end) => {
-                spans.push(i..end);
-                i = end;
-            }
-            None => i += ticks,
-        }
-    }
-    spans
-}
-
-/// The next cut in a line outside a fence and its code spans: where, how
-/// long, and whether it is a picture's handle rather than a `[split]`.
-fn next_cut(line: &str) -> Option<(usize, usize, bool)> {
-    let spans = code_spans(line);
-    let outside = |at: &usize| !spans.iter().any(|span| span.contains(at));
-    let split = line
-        .match_indices(SPLIT)
-        .map(|(at, _)| at)
-        .find(outside)
-        .map(|at| (at, SPLIT.len(), false));
-    let picture = line
-        .match_indices('[')
-        .map(|(at, _)| at)
-        .filter(outside)
-        .find_map(|at| Some((at, parse::picture(&line[at..])?, true)));
-    split.into_iter().chain(picture).min()
+/// Chunks of UTF-8 are UTF-8: see `chunk`.
+fn texts(chunks: Vec<Vec<u8>>) -> Vec<String> {
+    chunks
+        .into_iter()
+        .map(|chunk| {
+            String::from_utf8(chunk)
+                .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -393,7 +237,7 @@ mod tests {
         );
         // Unclosed, or closed by a longer run: plain backticks.
         assert_eq!(chunks("`a``[split]b"), ["`a``", "b"]);
-        assert_eq!(code_spans("``a`b`` `c`"), [0..7, 8..11]);
+        assert_eq!(chunk::code_spans(b"``a`b`` `c`"), [(0, 7), (8, 11)]);
     }
 
     #[test]

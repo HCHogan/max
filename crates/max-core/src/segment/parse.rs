@@ -11,7 +11,7 @@
 
 use std::collections::BTreeSet;
 
-use super::{code_spans, is_fence};
+use super::chunk::{self, Kind};
 use crate::ids::{MessageId, PrincipalId};
 use crate::message::{Draft, DraftNode};
 
@@ -23,7 +23,7 @@ pub(super) fn parse(chunk: &str, known: &BTreeSet<PrincipalId>) -> Option<Draft>
         if i > 0 {
             parsed.text("\n");
         }
-        if is_fence(line) {
+        if chunk::is_fence(line.as_bytes()) {
             in_fence = !in_fence;
             parsed.text(line);
         } else if in_fence {
@@ -91,10 +91,10 @@ struct Parsed {
 impl Parsed {
     fn line(&mut self, line: &str, known: &BTreeSet<PrincipalId>) {
         let mut at = 0;
-        for span in code_spans(line) {
-            self.placeholders(&line[at..span.start], known);
-            self.text(&line[span.clone()]);
-            at = span.end;
+        for (start, end) in chunk::code_spans(line.as_bytes()) {
+            self.placeholders(&line[at..start], known);
+            self.text(&line[start..end]);
+            at = end;
         }
         self.placeholders(&line[at..], known);
     }
@@ -193,41 +193,22 @@ fn token(s: &str) -> Option<(Token<'_>, usize)> {
         .or_else(|| tool_call(s).map(|len| (Token::ToolCall, len)))
 }
 
-/// Whether `s` starts with a quote, `[reply#id]`.
-pub(super) fn quote(s: &str) -> bool {
-    matches!(placeholder(s), Some((Token::Reply(_), _)))
-}
-
-/// The length of the picture's handle `s` starts with, if it does.
-pub(super) fn picture(s: &str) -> Option<usize> {
-    match placeholder(s)? {
-        (Token::Picture(..), len) => Some(len),
-        _ => None,
-    }
-}
-
 fn placeholder(s: &str) -> Option<(Token<'_>, usize)> {
-    let body = s.strip_prefix('[')?;
-    let hash = body.find('#')?;
-    let (verb, rest) = (&body[..hash], &body[hash + 1..]);
-    let (id, mut at) = digits(rest)?;
-    let medium = matches!(verb, "image" | "sticker" | "video" | "audio" | "file");
-    let mut ordinal = None;
-    if medium && rest[at..].starts_with('.') {
-        let (n, len) = digits(&rest[at + 1..])?;
-        ordinal = u16::try_from(n).ok();
-        at += 1 + len;
-    }
-    let (description, len) = closer(&rest[at..])?;
-    let token = match (verb, ordinal) {
-        ("reply", _) => Token::Reply(MessageId(id)),
-        ("mention", _) => Token::Mention(PrincipalId(id), description),
-        ("image" | "sticker", Some(ordinal)) => Token::Picture(MessageId(id), ordinal),
-        ("face", _) => Token::Display,
-        _ if medium => Token::Display,
-        _ => return None,
+    let p = chunk::placeholder(s.as_bytes(), 0)?;
+    let token = match p.kind {
+        Kind::Reply => Token::Reply(MessageId(p.id)),
+        Kind::Mention => {
+            let (from, to) = p.description;
+            let description = s[from..to].trim();
+            Token::Mention(
+                PrincipalId(p.id),
+                (!description.is_empty()).then_some(description),
+            )
+        }
+        Kind::Picture => Token::Picture(MessageId(p.id), p.ordinal),
+        Kind::Display => Token::Display,
     };
-    Some((token, 1 + hash + 1 + at + len))
+    Some((token, p.len))
 }
 
 /// An event placeholder or an id-less form; see `render`. Reactions and
@@ -238,46 +219,19 @@ fn display(s: &str) -> Option<usize> {
     const BARE: &[&str] = &[
         "image", "sticker", "video", "audio", "file", "forward", "card", "face", "emote", "poke",
     ];
+    let bytes = s.as_bytes();
     let body = s.strip_prefix('[')?;
     let word_len = body.bytes().take_while(u8::is_ascii_lowercase).count();
-    let (word, rest) = body.split_at(word_len);
-    if let Some(id) = rest.strip_prefix('#') {
-        let (_, id_len) = digits(id)?;
-        let (_, len) = closer(&id[id_len..])?;
-        EVENTS
-            .contains(&word)
-            .then_some(1 + word_len + 1 + id_len + len)
+    let word = &body[..word_len];
+    let at = 1 + word_len;
+    if bytes.get(at) == Some(&b'#') {
+        let (_, id_len) = chunk::digits(bytes, at + 1)?;
+        let (_, end) = chunk::closer(bytes, at + 1 + id_len)?;
+        EVENTS.contains(&word).then_some(end)
     } else {
-        let (_, len) = closer(rest)?;
-        BARE.contains(&word).then_some(1 + word_len + len)
+        let (_, end) = chunk::closer(bytes, at)?;
+        BARE.contains(&word).then_some(end)
     }
-}
-
-/// A run of ASCII digits and its length.
-fn digits(s: &str) -> Option<(i64, usize)> {
-    let len = s.bytes().take_while(u8::is_ascii_digit).count();
-    Some((s[..len].parse().ok()?, len))
-}
-
-/// `]` or `: description]`, then an optional `(attributes)` group.
-fn closer(s: &str) -> Option<(Option<&str>, usize)> {
-    let (description, mut len) = if s.starts_with(']') {
-        (None, 1)
-    } else {
-        let rest = s.strip_prefix(':')?;
-        let end = rest.find(']')?;
-        let description = rest[..end].trim();
-        (
-            (!description.is_empty()).then_some(description),
-            1 + end + 1,
-        )
-    };
-    if s[len..].starts_with('(')
-        && let Some(end) = s[len..].find(')')
-    {
-        len += end + 1;
-    }
-    Some((description, len))
 }
 
 /// `[identifier<space>…]` with a `=` or a quote inside: no placeholder or
@@ -368,11 +322,6 @@ mod tests {
         };
         assert_eq!(say("[sticker#42.0: 柴犬](3秒)").nodes, vec![node(42, 0)]);
         assert_eq!(say(" [image#7405.1] ").nodes, vec![node(7405, 1)]);
-        let handle = "[image#7405.1: 猫]";
-        assert_eq!(picture(&format!("{handle}x")), Some(handle.len()));
-        assert_eq!(picture("[image#7405: 猫]"), None);
-        assert_eq!(picture("[video#7405.0]"), None);
-        assert_eq!(picture("[image#1.99999]"), None);
     }
 
     #[test]
