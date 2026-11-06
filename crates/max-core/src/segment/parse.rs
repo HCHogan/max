@@ -23,6 +23,9 @@ pub(super) fn parse(chunk: &str, known: &BTreeSet<PrincipalId>) -> Option<Draft>
         if i > 0 {
             parsed.text("\n");
         }
+        // QQ shows a quote that starts the chunk as a reply, and what
+        // follows it as the start of the text: a fence there opens.
+        let line = if i == 0 { parsed.quote(line) } else { line };
         if chunk::is_fence(line.as_bytes()) {
             in_fence = !in_fence;
             parsed.text(line);
@@ -97,6 +100,19 @@ impl Parsed {
             at = end;
         }
         self.placeholders(&line[at..], known);
+    }
+
+    /// The line without the quote it starts with, if any, which the
+    /// message replies to.
+    fn quote<'a>(&mut self, line: &'a str) -> &'a str {
+        let at = line.len() - line.trim_start().len();
+        match chunk::placeholder(line.as_bytes(), at) {
+            Some(p) if p.kind == Kind::Reply => {
+                self.reply_to.get_or_insert(MessageId(p.id));
+                &line[at + p.len..]
+            }
+            _ => line,
+        }
     }
 
     fn placeholders(&mut self, line: &str, known: &BTreeSet<PrincipalId>) {
@@ -385,6 +401,14 @@ mod tests {
                 reply_to: None,
                 nodes: vec![text(chunk)]
             }
+        );
+        let quoted = say("[reply#3] ```\nlet a = v[reply#4];\n```");
+        assert_eq!(
+            (quoted.reply_to, quoted.nodes),
+            (
+                Some(MessageId(3)),
+                vec![text("```\nlet a = v[reply#4];\n```")]
+            )
         );
     }
 }

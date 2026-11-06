@@ -130,10 +130,11 @@ def placeholder (s : Text) : Option (Token × Nat) := do
     else none
   pure (token, 1 + hash + 1 + pos + len)
 
-def quote (s : Text) : Bool :=
+/-- The length of the quote `s` starts with, if any. -/
+def quote (s : Text) : Option Nat :=
   match placeholder s with
-  | some (.reply, _) => true
-  | _ => false
+  | some (.reply, len) => some len
+  | _ => none
 
 def picture (s : Text) : Option Nat :=
   match placeholder s with
@@ -256,43 +257,55 @@ def State.cut (st : State) : State × List Text :=
   let text := trim (List.intercalate ['\n'] st.lines)
   ({ st with lines := [] }, if text.isEmpty then [] else [text])
 
-/-- The `while let Some(..) = next_cut(rest)` loop at the end of `line`. -/
-def State.pieces (st : State) (rest : Text) : State × List Text :=
-  if rest = [] then (st.push rest, [])  -- `next_cut("")` is `None`.
+/-- `message_line`: a line outside a fence, up to the first cut in it, and
+the rest of it after the cut, if there is one. -/
+def State.messageLine (st : State) (line : Text) : State × List Text × Option Text :=
+  let (st, o1, shown) :=
+    match quote (trimStart line) with
+    | some len =>
+      let (st, o) := st.cut
+      ({ st with sections := false }, o, trimStart ((trimStart line).drop len))
+    | none => (st, [], line)
+  if isFence shown then ({ st.push line with inFence := true }, o1, none)
+  else if isBreak shown then
+    let (st, o) := st.cut
+    (st, o1 ++ o, none)
+  else if (trim line).isEmpty then
+    if !st.sections then
+      let (st, o) := st.cut
+      (st, o1 ++ o, none)
+    else if st.lines.getLast?.any (fun l => !l.isEmpty) then (st.push [], o1, none)
+    else (st, o1, none)
   else
-    match nextCut rest with
-    | none => (st.push rest, [])
+    let (st, o2) :=
+      if isHeading shown then
+        let (st, o) := st.cut
+        ({ st with sections := true }, o)
+      else (st, [])
+    match nextCut line with
+    | none => (st.push line, o1 ++ o2, none)
     | some (p, len, pic) =>
-      let (st, o1) := (st.push (rest.take p)).cut
-      let (st, o2) := if pic then (st.push ((rest.drop p).take len)).cut else (st, [])
-      let (st, o3) := st.pieces (rest.drop (max (p + len) 1))
-      (st, o1 ++ o2 ++ o3)
-termination_by rest.length
-decreasing_by
-  simp only [List.length_drop]
-  have : rest.length ≠ 0 := by simpa using ‹¬rest = []›
-  omega
+      let (st, o3) := (st.push (line.take p)).cut
+      let (st, o4) := if pic then (st.push ((line.drop p).take len)).cut else (st, [])
+      (st, o1 ++ o2 ++ o3 ++ o4, some (line.drop (p + len)))
+
+/-- The `while` loop in `classify`: a line, then the rest of it after each
+cut, as lines of their own. The `else` never happens: a cut is never
+empty. -/
+def State.messageLines (st : State) (line : Text) : State × List Text :=
+  match st.messageLine line with
+  | (st, o, none) => (st, o)
+  | (st, o, some rest) =>
+    if rest.length < line.length then
+      let (st, o') := st.messageLines rest
+      (st, o ++ o')
+    else (st, o)
+termination_by line.length
 
 /-- `line`, after `unthink`. -/
 def State.classify (st : State) (line : Text) : State × List Text :=
-  if isFence line then ({ st.push line with inFence := !st.inFence }, [])
-  else if st.inFence then (st.push line, [])
-  else if isBreak line then st.cut
-  else if (trim line).isEmpty then
-    if !st.sections then st.cut
-    else if st.lines.getLast?.any (fun l => !l.isEmpty) then (st.push [], [])
-    else (st, [])
-  else
-    let (st, o1) :=
-      if isHeading line then
-        let (st, o) := st.cut
-        ({ st with sections := true }, o)
-      else if quote (trimStart line) then
-        let (st, o) := st.cut
-        ({ st with sections := false }, o)
-      else (st, [])
-    let (st, o2) := st.pieces line
-    (st, o1 ++ o2)
+  if st.inFence then ({ st.push line with inFence := !isFence line }, [])
+  else st.messageLines line
 
 /-- `line`: one complete line. -/
 def State.line (st : State) (raw : Text) : State × List Text :=

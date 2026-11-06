@@ -8,16 +8,17 @@ and headings inside it are code. So every chunk but the last should have as
 many fence lines as it closes; the last may hold an unclosed one, which runs
 to the end. `FencesWhole` says that.
 
-It doesn't hold today. The chunker sees a fence only at the start of a line,
-but a message can start in the middle of one: after `[split]`, after a
-picture's handle, and after a quote that starts a line, which QQ shows as a
-reply rather than as text. A fence there opens a code block in QQ, and the
-chunker takes it for text. Then the code's blank lines cut it, a `# comment`
-in it is a heading, and its closing fence is taken for an opening one, so
-that everything after it goes out as one message.
+A message can start in the middle of a line: after `[split]`, after a
+picture's handle, and after a quote that starts a line, which QQ shows as
+a reply rather than as text. A fence there opens a code block in QQ. The
+chunker used to judge a line only from its start, and took such a fence
+for text: the code's blank lines cut it, a `# comment` in it was a
+heading, and its closing fence was taken for an opening one, so that
+everything after it went out as one message. The three texts below showed
+it; their fences are whole now.
 
-The counterexamples are checked by evaluation (`native_decide`), which
-trusts Lean's compiler as well as its kernel.
+The examples are checked by evaluation (`native_decide`), which trusts
+Lean's compiler as well as its kernel.
 -/
 
 namespace MaxVerify.Chunker
@@ -60,22 +61,22 @@ def afterQuote : Text := "[reply#3] ```py\nx = 1\n\ny = 2\n```\n\n好了\n\n还�
 
 theorem afterSplit_chunks :
     (chunks [afterSplit]).map String.ofList =
-      ["看代码：", "```bash", "# 安装\nnix build\n\nnix run\n```\n\n好了\n\n还有一条"] := by
+      ["看代码：", "```bash\n# 安装\nnix build\n\nnix run\n```", "好了", "还有一条"] := by
   native_decide
 
 theorem afterPicture_chunks :
     (chunks [afterPicture]).map String.ofList =
-      ["[sticker#4.0]", "```py\nx = 1", "y = 2\n```\n\n好了\n\n还有一条"] := by
+      ["[sticker#4.0]", "```py\nx = 1\n\ny = 2\n```", "好了", "还有一条"] := by
   native_decide
 
 theorem afterQuote_chunks :
     (chunks [afterQuote]).map String.ofList =
-      ["[reply#3] ```py\nx = 1", "y = 2\n```\n\n好了\n\n还有一条"] := by
+      ["[reply#3] ```py\nx = 1\n\ny = 2\n```", "好了", "还有一条"] := by
   native_decide
 
-theorem fences_split :
-    ¬ FencesWhole (chunks [afterSplit]) ∧ ¬ FencesWhole (chunks [afterPicture])
-      ∧ ¬ FencesWhole (chunks [afterQuote]) := by
+theorem fences_whole_examples :
+    FencesWhole (chunks [afterSplit]) ∧ FencesWhole (chunks [afterPicture])
+      ∧ FencesWhole (chunks [afterQuote]) := by
   native_decide
 
 end MaxVerify.Chunker

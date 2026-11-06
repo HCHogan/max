@@ -292,15 +292,16 @@ pub(super) fn placeholder(s: &[u8], at: usize) -> Option<Placeholder> {
     })
 }
 
-/// Whether a quote, `[reply#id]`, is at `at`.
-fn quote(s: &[u8], at: usize) -> bool {
-    matches!(
-        placeholder(s, at),
+/// The length of the quote, `[reply#id]`, at `at`, if one is there.
+fn quote(s: &[u8], at: usize) -> Option<usize> {
+    match placeholder(s, at) {
         Some(Placeholder {
             kind: Kind::Reply,
+            len,
             ..
-        })
-    )
+        }) => Some(len),
+        _ => None,
+    }
 }
 
 /// The length of the picture's handle at `at`, if one is there.
@@ -540,50 +541,71 @@ impl Chunker {
     }
 
     fn classify(&mut self, line: &[u8], out: &mut Vec<Vec<u8>>) {
-        if is_fence(line) {
-            self.in_fence = !self.in_fence;
+        if self.in_fence {
+            if is_fence(line) {
+                self.in_fence = false;
+            }
             self.push_line(line);
-        } else if self.in_fence {
-            self.push_line(line);
-        } else if is_break(line) {
+        } else {
+            let mut start = 0;
+            let mut done = false;
+            while !done {
+                match self.message_line(&line[start..], out) {
+                    Some(end) => start += end,
+                    None => done = true,
+                }
+            }
+        }
+    }
+
+    /// A line outside a fence, up to the first `[split]` or picture's
+    /// handle in it. Either starts a message, and QQ shows what follows it
+    /// as the start of one, so that is judged as a line of its own: where
+    /// it starts, if there is one.
+    fn message_line(&mut self, line: &[u8], out: &mut Vec<Vec<u8>>) -> Option<usize> {
+        // A quote that starts a line starts a message too. QQ shows it as a
+        // reply and what follows it as the start of the text, which is
+        // what is a fence, a heading or a break.
+        let at = skip_space(line, 0);
+        let mut shown = 0;
+        if let Some(len) = quote(line, at) {
             self.cut(out);
+            self.sections = false;
+            shown = skip_space(line, at + len);
+        }
+        let text = &line[shown..];
+        if is_fence(text) {
+            self.in_fence = true;
+            self.push_line(line);
+            None
+        } else if is_break(text) {
+            self.cut(out);
+            None
         } else if is_blank(line, 0, line.len()) {
             if !self.sections {
                 self.cut(out);
             } else if self.last_nonempty() {
                 self.lines.push(Vec::new());
             }
+            None
         } else {
-            if is_heading(line) {
+            if is_heading(text) {
                 self.cut(out);
                 self.sections = true;
-            } else if quote(line, skip_space(line, 0)) {
-                self.cut(out);
-                self.sections = false;
             }
-            self.pieces(line, out);
-        }
-    }
-
-    /// Cuts a line at its `[split]`s and pictures.
-    fn pieces(&mut self, line: &[u8], out: &mut Vec<Vec<u8>>) {
-        let mut start = 0;
-        let mut done = false;
-        while !done {
-            let rest = &line[start..];
-            match next_cut(rest) {
+            match next_cut(line) {
                 None => {
-                    self.push_line(rest);
-                    done = true;
+                    self.push_line(line);
+                    None
                 }
                 Some((at, len, pic)) => {
-                    self.push_line(&rest[..at]);
+                    self.push_line(&line[..at]);
                     self.cut(out);
                     if pic {
-                        self.push_line(&rest[at..at + len]);
+                        self.push_line(&line[at..at + len]);
                         self.cut(out);
                     }
-                    start = start + at + len;
+                    Some(at + len)
                 }
             }
         }

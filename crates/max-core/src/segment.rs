@@ -24,6 +24,13 @@
 //! last section went out inside that section, and so the whole section as
 //! a reply to them.
 //!
+//! A message can start in the middle of a line: after `[split]` or a
+//! picture's handle, what follows is judged as a line of its own, and on a
+//! line that starts with a quote, which QQ shows as a reply, what follows
+//! the quote is what is a fence, a heading or a break. Judged only at the
+//! start of the line, a fence there was taken for text: the code was cut
+//! at its blank lines, and its closing fence taken for an opening one.
+//!
 //! `<think>` spans are dropped before anything else, including everything
 //! after an unclosed one: some relays put reasoning in the text.
 //!
@@ -188,6 +195,30 @@ mod tests {
         out.extend(segmenter.finish());
         let quoted: Vec<_> = out.iter().map(|s| s.draft.reply_to).collect();
         assert_eq!(quoted, [None, Some(crate::ids::MessageId(7))]);
+    }
+
+    #[test]
+    fn a_message_can_start_mid_line() {
+        assert_eq!(
+            chunks("看：[split]```sh\n# 装\nnix build\n\nnix run\n```\n\n好了"),
+            ["看：", "```sh\n# 装\nnix build\n\nnix run\n```", "好了"]
+        );
+        assert_eq!(
+            chunks("[sticker#4.0]```py\nx = 1\n\ny = 2\n```\n\n好了"),
+            ["[sticker#4.0]", "```py\nx = 1\n\ny = 2\n```", "好了"]
+        );
+        assert_eq!(
+            chunks("[reply#3] ```py\nx = 1\n\ny = 2\n```\n\n好了"),
+            ["[reply#3] ```py\nx = 1\n\ny = 2\n```", "好了"]
+        );
+        assert_eq!(
+            chunks("一[split]## 二\n甲\n\n乙[split]---\n丙"),
+            ["一", "## 二\n甲\n\n乙", "丙"]
+        );
+        assert_eq!(
+            chunks("[reply#3] ## 总结\n甲\n\n乙"),
+            ["[reply#3] ## 总结\n甲\n\n乙"]
+        );
     }
 
     #[test]
