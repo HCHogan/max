@@ -232,7 +232,6 @@ theorem is_wide_space_spec (b c d : Std.U8) :
 
 /-- What `space_at` finds: nothing, or a character's first byte and its
 length. -/
-@[step]
 theorem space_at_spec (s : Slice Std.U8) (i : Std.Usize) :
     space_at s i ⦃ n => n.val = 0 ∨ (i.val + n.val ≤ s.length ∧
       ∃ h : i.val < s.length, Lead s.val[i.val].val n.val) ⦄ := by
@@ -244,7 +243,6 @@ theorem space_at_spec (s : Slice Std.U8) (i : Std.Usize) :
 
 /-- What `space_before` finds: nothing, or something that starts a
 character. -/
-@[step]
 theorem space_before_spec (s : Slice Std.U8) (j : Std.Usize) :
     space_before s j ⦃ n => n.val = 0 ∨ (n.val ≤ j.val ∧ j.val ≤ s.length ∧
       ∃ h : j.val - n.val < s.length, ¬Cont s.val[j.val - n.val].val) ⦄ := by

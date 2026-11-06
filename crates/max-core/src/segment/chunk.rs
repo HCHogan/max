@@ -340,7 +340,8 @@ fn is_heading(line: &[u8]) -> bool {
 /// `---`, `***`, `___`, spaces allowed between.
 fn is_break(line: &[u8]) -> bool {
     let mut i = 0;
-    let mut count = 0;
+    // A `usize`, as `i32` would overflow on a long enough line.
+    let mut count: usize = 0;
     let mut first = 0;
     let mut same = true;
     while i < line.len() {
