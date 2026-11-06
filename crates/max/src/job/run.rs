@@ -16,7 +16,7 @@ use tokio::time::{Instant, timeout};
 use tracing::{info, warn};
 
 use super::pi::Lines;
-use super::{Called, Ending, GONE, GRACE, How, Watch, drive};
+use super::{Called, Ending, GONE, GRACE, How, Question, Watch, drive};
 use crate::llm::Upstream;
 use crate::mcp;
 use crate::vm::ssh::{Sink, Stream};
@@ -45,6 +45,8 @@ pub struct Start {
     /// How its model calls went, from the forwarder; open while its
     /// session is.
     pub calls: UnboundedReceiver<Called>,
+    /// The agent's questions, from `/job/ask`; open while its session is.
+    pub questions: UnboundedReceiver<Question>,
     pub deadline: Instant,
     pub progress: Arc<Mutex<Progress>>,
     /// Takes the agent's question to Max.
@@ -91,6 +93,7 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
         progress: start.progress,
     };
     let mut calls = start.calls;
+    let mut questions = start.questions;
     let mut watch = Asks(start.ask);
     let grant = start.vms.sessions().open(start.context);
     let unit = Vm::unit();
@@ -154,6 +157,7 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
             input,
             &mut records,
             &mut steers,
+            &mut questions,
             &start.task,
             start.deadline,
             &mut watch,

@@ -2,7 +2,8 @@
 // command share: a call is one POST, the outcome {ok: true, value} or
 // {ok: false, error: {code, message}}. Without a token it calls as a
 // program Max keeps in the VM, outside any turn. See "MCP 通道" in
-// docs/rust-rewrite.md.
+// docs/rust-rewrite.md. A background agent's harness asks Max with job();
+// see "和 harness 脱钩" there.
 "use strict";
 
 const MCP = "http://127.0.0.1:7777/mcp";
@@ -81,6 +82,34 @@ function connect({ url = MCP, token }) {
   return { request, list };
 }
 
+// What only a background job does, by its token. ask(question) waits
+// until Max answers, as long as that takes: the outcome's value is the
+// answer, or null if none came.
+function job({ url = MCP, token }) {
+  async function ask(question, signal) {
+    let text;
+    try {
+      const response = await fetch(new URL("/job/ask", url), {
+        method: "POST",
+        signal,
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ question }),
+      });
+      if (!response.ok) return { ok: false, error: { code: "refused", message: await refused(response) } };
+      // Lines with nothing on them keep the wait alive; the answer's ends it.
+      text = await response.text();
+    } catch (error) {
+      if (error.name === "AbortError") return { ok: false, error: { code: "cancelled", message: "问题撤回了" } };
+      return { ok: false, error: { code: "unreachable", message: `连不上 Max 的 MCP 服务：${error.message}` } };
+    }
+    const line = text.split("\n").find(line => line.trim() !== "");
+    if (line === undefined) return { ok: false, error: { code: "unreachable", message: "Max 的 MCP 服务没给答复就断了" } };
+    return { ok: true, value: JSON.parse(line).answer ?? null };
+  }
+
+  return { ask };
+}
+
 // The group's rows after the one numbered `after`, or from now, as the
 // host's /events sends them, an object each; `told` hears why a stream
 // broke and when it opens again. A stream that ends or goes quiet is
@@ -143,4 +172,4 @@ async function refused(response) {
   }
 }
 
-module.exports = { MCP, ToolError, connect, events };
+module.exports = { MCP, ToolError, connect, events, job };

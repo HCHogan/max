@@ -5,6 +5,7 @@ mod agent;
 mod chat_file;
 mod find_stickers;
 mod forward;
+mod harness;
 mod history;
 mod mute_member;
 mod program;

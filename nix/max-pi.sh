@@ -37,7 +37,9 @@ jq -n '{ mcpServers: { max: {
 field .system >"$dir/system.md"
 
 MAX_JOB_TOKEN=$(field .token)
-export MAX_JOB_TOKEN PI_CODING_AGENT_DIR=$dir PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
+# The job's, for ask_max and for maxx in pi's shell: it calls as the job.
+MAXX_TOKEN=$MAX_JOB_TOKEN
+export MAX_JOB_TOKEN MAXX_TOKEN PI_CODING_AGENT_DIR=$dir PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
 
 args=(
   --mode rpc

@@ -13,6 +13,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
 use tokio::time::{Instant, sleep_until, timeout};
 use tracing::warn;
 
@@ -21,12 +22,43 @@ use max_core::limits::QUESTION_WAIT;
 use pi::{Ask, Record};
 pub use run::{Asker, Finished, Progress, Start, run};
 
-/// What a job's session knows of it: the model its calls go to, and who
-/// hears how each went.
+/// What a job's session knows of it: the model its calls go to, who
+/// hears how each went, and where its questions go.
 #[derive(Debug)]
 pub struct Link {
     pub upstream: Arc<Upstream>,
     pub called: UnboundedSender<Called>,
+    pub asks: UnboundedSender<Question>,
+}
+
+/// The agent's question to Max, from `ask_max` through `/job/ask`, and
+/// where the answer goes: None if there is none.
+#[derive(Debug)]
+pub struct Question {
+    pub text: String,
+    pub answer: oneshot::Sender<Option<String>>,
+}
+
+/// The question the agent waits on, and since when.
+struct Waiting {
+    answer: oneshot::Sender<Option<String>>,
+    since: Instant,
+}
+
+/// The question the agent still waits on, taken: one whose `ask_max`
+/// call is gone waits no more.
+fn waiting(question: &mut Option<Waiting>) -> Option<Waiting> {
+    question
+        .take()
+        .filter(|waiting| !waiting.answer.is_closed())
+}
+
+/// Tells the agent waiting on `question`, if any, that no answer is
+/// coming.
+fn unanswered(question: &mut Option<Waiting>) {
+    if let Some(waiting) = question.take() {
+        let _ = waiting.answer.send(None);
+    }
 }
 
 /// One of the agent's model calls, as the forwarder read it on its way
@@ -125,14 +157,15 @@ pub enum How {
 
 /// Gives pi `task`, passes on the steers that come, and waits until pi
 /// settles, telling it to wrap up shortly before `deadline` and aborting it
-/// then. While the agent waits on a question, the next steer is its
-/// answer; none within [`QUESTION_WAIT`], and the question is dismissed. `records`
-/// are the lines of pi's
-/// stdout, and end when pi does; `input` is its stdin, closed at the end.
+/// then. While the agent waits on one of its `questions`, the next steer
+/// is its answer; none within [`QUESTION_WAIT`], and it is told none is
+/// coming. `records` are the lines of pi's stdout, and end when pi does;
+/// `input` is its stdin, closed at the end.
 pub async fn drive(
     input: impl AsyncWrite + Unpin,
     records: &mut UnboundedReceiver<Vec<u8>>,
     steers: &mut UnboundedReceiver<String>,
+    questions: &mut UnboundedReceiver<Question>,
     task: &str,
     deadline: Instant,
     watch: &mut impl Watch,
@@ -151,15 +184,16 @@ pub async fn drive(
     // The last model call's error: none once a retry got through.
     let mut error = None;
     let mut aborted: Option<Instant> = None;
-    // The question the agent waits on, and since when.
-    let mut question: Option<(String, Instant)> = None;
+    let mut question: Option<Waiting> = None;
     // Only a job that has the time is told.
     let mut wrap_up = deadline
         .checked_sub(WARNING)
         .filter(|at| *at > Instant::now());
     loop {
         let give_up = aborted.map(|at| at + GRACE);
-        let unanswered = question.as_ref().map(|(_, at)| *at + QUESTION_WAIT);
+        let given_up_on = question
+            .as_ref()
+            .map(|waiting| waiting.since + QUESTION_WAIT);
         tokio::select! {
             line = records.recv() => {
                 let Some(line) = line else {
@@ -179,57 +213,48 @@ pub async fn drive(
                             return failed(GONE);
                         }
                     }
-                    // ask_max runs one at a time; nobody answers once it's
-                    // over.
-                    Ok(Record::Question { id, .. }) if aborted.is_some() || question.is_some() => {
-                        if pi.ask(Ask::Dismiss(&id)).await.is_err() {
-                            return failed(GONE);
-                        }
-                    }
-                    Ok(Record::Question { id, text }) => {
-                        watch.asks(&text);
-                        question = Some((id, Instant::now()));
-                    }
                     Ok(Record::Notice(notice)) => warn!(%notice, "pi says"),
                     Ok(Record::Response { .. } | Record::Other) => {}
                     Err(why) => warn!(%why, "a record of pi's isn't JSON"),
                 }
             }
-            Some(steer) = steers.recv(), if aborted.is_none() => {
-                let sent = match question.take() {
-                    Some((id, _)) => pi.ask(Ask::Answer(&id, &steer)).await,
-                    None => pi.ask(Ask::Steer(&steer)).await,
-                };
-                if sent.is_err() {
-                    return failed(GONE);
+            Some(asked) = questions.recv() => {
+                // ask_max runs one at a time; nobody answers once it's over.
+                let open = question.as_ref().is_some_and(|waiting| !waiting.answer.is_closed());
+                if aborted.is_some() || open {
+                    let _ = asked.answer.send(None);
+                } else {
+                    watch.asks(&asked.text);
+                    question = Some(Waiting { answer: asked.answer, since: Instant::now() });
                 }
             }
-            () = sleep_until(unanswered.unwrap_or(deadline)), if unanswered.is_some() => {
-                if let Some((id, _)) = question.take()
-                    && pi.ask(Ask::Dismiss(&id)).await.is_err()
+            Some(steer) = steers.recv(), if aborted.is_none() => {
+                // An answer whose question went in the meantime is a steer.
+                let steer = match waiting(&mut question) {
+                    Some(waiting) => waiting.answer.send(Some(steer)).err().flatten(),
+                    None => Some(steer),
+                };
+                if let Some(steer) = steer
+                    && pi.ask(Ask::Steer(&steer)).await.is_err()
                 {
                     return failed(GONE);
                 }
             }
+            () = sleep_until(given_up_on.unwrap_or(deadline)), if given_up_on.is_some() => {
+                unanswered(&mut question);
+            }
             () = sleep_until(wrap_up.unwrap_or(deadline)), if wrap_up.is_some() => {
                 wrap_up = None;
                 // The agent waiting on Max couldn't take the steer in.
-                let told = async {
-                    if let Some((id, _)) = question.take() {
-                        pi.ask(Ask::Dismiss(&id)).await?;
-                    }
-                    pi.ask(Ask::Steer(&wrap_up_message())).await
-                };
-                if told.await.is_err() {
+                unanswered(&mut question);
+                if pi.ask(Ask::Steer(&wrap_up_message())).await.is_err() {
                     return failed(GONE);
                 }
             }
             () = sleep_until(deadline), if aborted.is_none() => {
                 aborted = Some(Instant::now());
+                unanswered(&mut question);
                 let stopped = async {
-                    if let Some((id, _)) = question.take() {
-                        pi.ask(Ask::Dismiss(&id)).await?;
-                    }
                     pi.ask(Ask::ClearQueue).await?;
                     pi.ask(Ask::Abort).await
                 };

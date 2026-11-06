@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::tool::{self, Spec};
-use super::{Call, Caller, Context, Failure, chat_file, forward, lock, show};
+use super::{Call, Caller, Context, Failure, chat_file, forward, harness, lock, show};
 use crate::vm::Signal;
 use max_core::limits::{CALL_TIME, CALLS_AT_ONCE};
 
@@ -210,7 +210,8 @@ pub async fn serve_with<L>(
     let app = axum::Router::new()
         .route("/mcp", post(rpc))
         .with_state(handler)
-        .merge(forward::router(conversation, sessions))
+        .merge(forward::router(conversation, sessions.clone()))
+        .merge(harness::router(conversation, sessions))
         .merge(host);
     if let Err(error) = axum::serve(listener, app)
         .with_graceful_shutdown(stop.cancelled_owned())

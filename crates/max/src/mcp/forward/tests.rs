@@ -101,6 +101,7 @@ fn linked(upstream: Upstream) -> (Caller, UnboundedReceiver<Called>) {
     let link = Link {
         upstream: Arc::new(upstream),
         called,
+        asks: unbounded_channel().0,
     };
     (Caller::Job(Arc::new(link)), calls)
 }

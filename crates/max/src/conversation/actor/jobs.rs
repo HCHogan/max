@@ -115,6 +115,7 @@ impl Conversation {
             .filter(|title| !title.is_empty())
             .unwrap_or_else(|| headline(&task));
         let (called, calls) = unbounded_channel();
+        let (asks, questions) = unbounded_channel();
         let context = mcp::Context {
             services: Arc::clone(&self.shared.services),
             place: Arc::clone(&self.place),
@@ -124,6 +125,7 @@ impl Conversation {
             caller: mcp::Caller::Job(Arc::new(job::Link {
                 upstream: Arc::clone(&upstream),
                 called,
+                asks,
             })),
         };
         let (steers, steered) = unbounded_channel();
@@ -137,6 +139,7 @@ impl Conversation {
             context,
             upstream,
             calls,
+            questions,
             deadline: Instant::now() + limits::JOB_TIME,
             progress: Arc::clone(&progress),
             ask: Box::new(move |question| {
