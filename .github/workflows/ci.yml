@@ -1,6 +1,7 @@
 # One job: the flake's checks, which are the same ones developers run with
 # `nix flake check --impure` (fmt, clippy, nextest, deny, audit, machete,
 # max-core's dependency allow list, max-core built alone, the package).
+# verify.yml checks the proofs in verify/.
 name: CI
 
 on:

@@ -17,5 +17,9 @@ The theorems are properties, not a second chunker to compare with, so
 nothing here is kept in step with the Rust by hand but the proofs: a change
 to `chunk.rs` that breaks one needs it fixed, or the property is gone.
 
+CI checks both, in `.github/workflows/verify.yml`: that `MaxCore/` is what
+`./extract` writes, and that `lake build` passes. It runs only when
+`chunk.rs` or `verify/` changes.
+
 `lake build` builds it all. The first build fetches Mathlib, about 7 GB;
 `lake exe cache get` downloads it built.

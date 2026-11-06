@@ -32,6 +32,13 @@ no database. After changing a query or a migration, run
 `crates/max-db/.sqlx`. To build without the database running, set
 `SQLX_OFFLINE=true`.
 
+## The chunker's proofs
+
+`crates/max-core/src/segment/chunk.rs` is written in the part of Rust that
+Aeneas translates, and `verify/` proves things of the translation. After
+changing it, run `verify/extract` and commit `verify/MaxCore/`, then
+`lake build` in `verify/`; see `verify/README.md`. CI checks both.
+
 ## Public repository
 
 The repository is public. Use made-up QQ numbers, openids, group ids and
