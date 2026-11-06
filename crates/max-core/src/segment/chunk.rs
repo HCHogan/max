@@ -473,6 +473,23 @@ fn next_cut(line: &[u8]) -> Option<(usize, usize, bool)> {
     }
 }
 
+/// Where the next `<think>` in a line from `at` opens a span: not in an
+/// inline code span of the line from there, where Max shows the tag.
+fn think_tag(line: &[u8], at: usize) -> Option<usize> {
+    let rest = &line[at..];
+    let spans = code_spans(rest);
+    let mut i = 0;
+    let mut found = false;
+    while !found && i < rest.len() {
+        if starts_at(rest, i, b"<think>") && outside(&spans, i) {
+            found = true;
+        } else {
+            i += 1;
+        }
+    }
+    if found { Some(at + i) } else { None }
+}
+
 /// Whether a line is a fence, as the first line of a chunk or a later one.
 /// QQ shows a quote that starts a chunk as a reply, and what follows it as
 /// the start of the text, so a chunk's first line is judged after its quote.
@@ -681,10 +698,12 @@ impl Chunker {
     }
 
     /// The part of a line outside `<think>` spans; None for a line wholly
-    /// inside one.
+    /// inside one. A `<think>` in a fence opens none: Max shows the tag
+    /// there. In a span a fence is reasoning like the rest, and the span
+    /// runs to the first `</think>`.
     fn unthink(&mut self, line: &[u8]) -> Option<Vec<u8>> {
         let mut visible = Vec::new();
-        if !self.thinking && find(line, 0, b"<think>").is_none() {
+        if !self.thinking && (self.in_fence || think_tag(line, 0).is_none()) {
             visible.extend_from_slice(line);
             return Some(visible);
         }
@@ -694,8 +713,10 @@ impl Chunker {
         while !done {
             let found = if self.thinking {
                 find(line, at, b"</think>")
+            } else if self.in_fence {
+                None
             } else {
-                find(line, at, b"<think>")
+                think_tag(line, at)
             };
             match found {
                 None => {

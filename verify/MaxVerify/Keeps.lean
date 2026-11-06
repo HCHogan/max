@@ -20,6 +20,8 @@ A quote before a break stays, and goes out with the next message.
   with them, and drops the ones it cuts at.
 * A `[split]` may go wherever it is; the chunker cuts only at one outside
   code.
+* A `<think>` may open a span wherever it is, or stay; the chunker opens one
+  only outside code.
 -/
 
 namespace MaxVerify
@@ -46,13 +48,14 @@ inductive Dels : List Std.U8 → List Std.U8 → Prop
 
 /-- `t` is what is left of `s` outside `<think>` spans, `th` saying whether
 `s` starts in one, and `th'` whether it ends in one. A span runs from a
-`<think>` to the first `</think>` after it, or to the end. A newline in one
+`<think>` to the first `</think>` after it, or to the end; a `<think>` need
+not open one, as one in code doesn't. A newline in one
 may stay, as one does where a span crosses lines: the line it starts on
 stays a line. The `\r`s that end a line may go. -/
 inductive Unthink : Bool → List Std.U8 → List Std.U8 → Bool → Prop
   | nil (th : Bool) : Unthink th [] [] th
   | keep {b : Std.U8} {s t : List Std.U8} {th : Bool} :
-      ¬THINK <+: b :: s → Unthink false s t th → Unthink false (b :: s) (b :: t) th
+      Unthink false s t th → Unthink false (b :: s) (b :: t) th
   | crs {rs s t : List Std.U8} {th : Bool} : (∀ r ∈ rs, r = 13#u8) →
       Unthink false s t th → Unthink false (rs ++ 10#u8 :: s) (10#u8 :: t) th
   | enter {s t : List Std.U8} {th : Bool} :
@@ -1031,17 +1034,13 @@ theorem tag_local {pat l tail : List Std.U8} (hpat : ∀ b ∈ pat, b ≠ 10#u8 
     · exact hmem.1 h1
     · exact hmem.2 h1
 
-theorem think_ok : ∀ b ∈ THINK, b ≠ 10#u8 ∧ b ≠ 13#u8 := by decide
 theorem think_end_ok : ∀ b ∈ THINK_END, b ≠ 10#u8 ∧ b ≠ 13#u8 := by decide
 
-theorem keeps_all {seg rest t : List Std.U8} {th₂ : Bool}
-    (h : ∀ k < seg.length, ¬THINK <+: (seg ++ rest).drop k) (hr : Unthink false rest t th₂) :
+theorem keeps_all {seg rest t : List Std.U8} {th₂ : Bool} (hr : Unthink false rest t th₂) :
     Unthink false (seg ++ rest) (seg ++ t) th₂ := by
   induction seg with
   | nil => exact hr
-  | cons b seg ih =>
-    refine Unthink.keep (h 0 (by simp)) (ih fun k hk => ?_)
-    simpa using h (k + 1) (by simp; omega)
+  | cons b seg ih => exact Unthink.keep ih
 
 theorem skips_all {seg rest t : List Std.U8} {th₂ : Bool}
     (h : ∀ k < seg.length, ¬THINK_END <+: (seg ++ rest).drop k) (hr : Unthink true rest t th₂) :
@@ -1070,22 +1069,14 @@ theorem drop_seg {l tail rest : List Std.U8} {a p k : Nat} (hap : a ≤ p) (hk :
   rw [← hrest, ← List.append_assoc, slice_drop_eq hap,
     List.drop_append_of_le_length (by simp; omega), List.drop_drop]
 
-/-- Kept, up to a `<think>`: the first from `a`. -/
+/-- Kept, up to a `<think>`. -/
 theorem step_keep {l tail t : List Std.U8} {th₂ : Bool} {a p : Nat} (hap : a ≤ p)
-    (hpre : THINK <+: l.drop p) (hfirst : ∀ j, a ≤ j → j < p → ¬THINK <+: l.drop j)
-    (htail : EndsLine tail) (h : Unthink true (l.drop (p + 7) ++ tail) t th₂) :
+    (hpre : THINK <+: l.drop p) (h : Unthink true (l.drop (p + 7) ++ tail) t th₂) :
     Unthink false (l.drop a ++ tail) (l.slice a p ++ t) th₂ := by
-  have hlen := hpre.length_le
-  simp only [List.length_drop] at hlen
-  have hd := prefix_drop hpre
   have e : l.drop a ++ tail = l.slice a p ++ (THINK ++ (l.drop (p + 7) ++ tail)) := by
-    rw [← slice_drop_eq hap, hd, List.append_assoc]; rfl
+    rw [← slice_drop_eq hap, prefix_drop hpre, List.append_assoc]; rfl
   rw [e]
-  refine keeps_all (fun k hk => ?_) (Unthink.enter h)
-  have hk' : k < p - a := by rw [List.slice_length] at hk; omega
-  rw [drop_seg hap hk' (by have : THINK.length = 7 := rfl; omega)
-    (by rw [hd, List.append_assoc]; rfl)]
-  exact tag_local think_ok htail (hfirst (a + k) (by omega) (by omega))
+  exact keeps_all (Unthink.enter h)
 
 /-- Skipped, up to a `</think>`: the first from `a`. -/
 theorem step_skip {l tail t : List Std.U8} {th₂ : Bool} {a p : Nat} (hap : a ≤ p)
@@ -1104,13 +1095,10 @@ theorem step_skip {l tail t : List Std.U8} {th₂ : Bool} {a p : Nat} (hap : a �
     (by rw [hd, List.append_assoc]; rfl)]
   exact tag_local think_end_ok htail (hfirst (a + k) (by omega) (by omega))
 
-/-- Kept, to the end of the line: no `<think>` from `a`. -/
+/-- Kept, to the end of the line. -/
 theorem rest_keep {l tail t : List Std.U8} {th₂ : Bool} {a : Nat}
-    (hnone : ∀ j, a ≤ j → ¬THINK <+: l.drop j) (htail : EndsLine tail)
-    (h : Unthink false tail t th₂) : Unthink false (l.drop a ++ tail) (l.drop a ++ t) th₂ := by
-  refine keeps_all (fun k hk => ?_) h
-  rw [List.drop_append_of_le_length (by omega), List.drop_drop]
-  exact tag_local think_ok htail (hnone (a + k) (by omega))
+    (h : Unthink false tail t th₂) : Unthink false (l.drop a ++ tail) (l.drop a ++ t) th₂ :=
+  keeps_all h
 
 /-- Skipped, to the end of the line: no `</think>` from `a`. -/
 theorem rest_skip {l tail t : List Std.U8} {th₂ : Bool} {a : Nat}
@@ -1138,10 +1126,10 @@ def UPost (l : List Std.U8) (th₀ : Bool) (y : Bool × alloc.vec.Vec Std.U8 × 
   ∀ tail t th₂, EndsLine tail → Unthink y.1 tail t th₂ → Unthink th₀ (l ++ tail) (y.2.1.val ++ t) th₂
 
 /-- The two loops of `unthink`, which are the same. -/
-theorem unthink_body_keeps (line : Slice Std.U8) (hl : 10#u8 ∉ line.val) (th₀ b : Bool)
-    (visible : alloc.vec.Vec Std.U8) (tagged : Bool) (a : Usize) (done : Bool)
+theorem unthink_body_keeps (f : Bool) (line : Slice Std.U8) (hl : 10#u8 ∉ line.val)
+    (th₀ b : Bool) (visible : alloc.vec.Vec Std.U8) (tagged : Bool) (a : Usize) (done : Bool)
     (h : UInv line.val th₀ (b, visible, tagged, a, done)) :
-    Ok (Chunker.unthink_loop0.body line b visible tagged a done) (fun r => match r with
+    Ok (Chunker.unthink_loop0.body f line b visible tagged a done) (fun r => match r with
       | .cont x => UInv line.val th₀ x
       | .done y => UPost line.val th₀ y) := by
   obtain ⟨ha, hv, ht, hk⟩ := h
@@ -1181,13 +1169,9 @@ theorem unthink_body_keeps (line : Slice Std.U8) (hl : 10#u8 ∉ line.val) (th�
       rwa [ha1, hi] at h
   | false =>
     refine Ok.bind (q := fun found : Option Usize =>
-      (∀ p ∈ found, a.val ≤ p.val ∧ THINK <+: line.val.drop p.val ∧
-        ∀ j, a.val ≤ j → j < p.val → ¬THINK <+: line.val.drop j) ∧
-      (found = none → ∀ j, a.val ≤ j → ¬THINK <+: line.val.drop j)) ?_ fun found hf => ?_
+      ∀ p ∈ found, a.val ≤ p.val ∧ THINK <+: line.val.drop p.val) ?_ fun found hf => ?_
     · refine Ok.ite (fun hb => absurd hb (by simp)) (fun _ => ?_)
-      refine Ok.bind (lit_ok _ _ _) fun t ht' => ?_
-      refine Ok.mono (find_first _ _ _ (by rw [ht']; simp)) fun r hr => ?_
-      rwa [ht'] at hr
+      exact Ok.ite (fun _ => Ok.ret (by simp)) (fun _ => think_tag_ok _ _)
     ok_cases
     · refine Ok.ite (fun hb => absurd hb (by simp)) (fun _ => ?_)
       refine Ok.bind (range_from_ok _ _) fun s ⟨hs, _⟩ => ?_
@@ -1200,9 +1184,9 @@ theorem unthink_body_keeps (line : Slice Std.U8) (hl : 10#u8 ∉ line.val) (th�
         exact ⟨rfl, fun h => by simp at h⟩
       · intro tail t th₂ htl h
         rw [hv1, hs, List.append_assoc]
-        exact hk tail _ th₂ htl (rest_keep (hf.2 rfl) htl (by simpa using h))
+        exact hk tail _ th₂ htl (rest_keep (by simpa using h))
     · rename_i p
-      obtain ⟨hap, hpre, hfirst⟩ := hf.1 p rfl
+      obtain ⟨hap, hpre⟩ := hf p rfl
       have hlen := hpre.length_le
       simp only [List.length_drop] at hlen
       have h7 : THINK.length = 7 := rfl
@@ -1221,28 +1205,28 @@ theorem unthink_body_keeps (line : Slice Std.U8) (hl : 10#u8 ∉ line.val) (th�
       · simp only [decide_not, decide_false, Bool.not_false, Bool.false_eq_true, ↓reduceIte] at h
         rw [ha1, hi] at h
         rw [hv1, List.append_assoc]
-        exact hk tail _ th₂ htl (step_keep hap hpre hfirst htl h)
+        exact hk tail _ th₂ htl (step_keep hap hpre h)
 
-theorem unthink_loop0_keeps (line : Slice Std.U8) (hl : 10#u8 ∉ line.val) (th₀ b : Bool)
-    (visible : alloc.vec.Vec Std.U8) (tagged : Bool) (a : Usize) (done : Bool)
+theorem unthink_loop0_keeps (f : Bool) (line : Slice Std.U8) (hl : 10#u8 ∉ line.val)
+    (th₀ b : Bool) (visible : alloc.vec.Vec Std.U8) (tagged : Bool) (a : Usize) (done : Bool)
     (h : UInv line.val th₀ (b, visible, tagged, a, done)) :
-    Ok (Chunker.unthink_loop0 b line visible tagged a done) (UPost line.val th₀) := by
+    Ok (Chunker.unthink_loop0 f b line visible tagged a done) (UPost line.val th₀) := by
   unfold Chunker.unthink_loop0
   refine Ok.loop _ (UInv line.val th₀) _ ?_ _ h
   rintro ⟨b, visible, tagged, a, done⟩ h
   dsimp only
-  refine Ok.mono (unthink_body_keeps line hl th₀ b visible tagged a done h) fun r hr => ?_
+  refine Ok.mono (unthink_body_keeps f line hl th₀ b visible tagged a done h) fun r hr => ?_
   cases r <;> exact hr
 
-theorem unthink_loop1_keeps (line : Slice Std.U8) (hl : 10#u8 ∉ line.val) (th₀ b : Bool)
-    (visible : alloc.vec.Vec Std.U8) (tagged : Bool) (a : Usize) (done : Bool)
+theorem unthink_loop1_keeps (f : Bool) (line : Slice Std.U8) (hl : 10#u8 ∉ line.val)
+    (th₀ b : Bool) (visible : alloc.vec.Vec Std.U8) (tagged : Bool) (a : Usize) (done : Bool)
     (h : UInv line.val th₀ (b, visible, tagged, a, done)) :
-    Ok (Chunker.unthink_loop1 b line visible tagged a done) (UPost line.val th₀) := by
+    Ok (Chunker.unthink_loop1 f b line visible tagged a done) (UPost line.val th₀) := by
   unfold Chunker.unthink_loop1
   refine Ok.loop _ (UInv line.val th₀) _ ?_ _ h
   rintro ⟨b, visible, tagged, a, done⟩ h
   dsimp only
-  refine Ok.mono (unthink_body_keeps line hl th₀ b visible tagged a done h) fun r hr => ?_
+  refine Ok.mono (unthink_body_keeps f line hl th₀ b visible tagged a done h) fun r hr => ?_
   cases r <;> exact hr
 
 /-- What `unthink` leaves of a line `l`, `o`: none if the line is wholly in a
@@ -1261,7 +1245,7 @@ theorem unthink_keeps (c : Chunker) (line : Slice Std.U8) (hl : 10#u8 ∉ line.v
       UL c.thinking line.val (r.1.map (·.val)) r.2.thinking) := by
   unfold Chunker.unthink
   refine Ok.ite (fun hth => ?_) (fun hth => ?_)
-  · refine Ok.bind (unthink_loop0_keeps _ hl c.thinking _ _ _ _ _ (uinv_start _ _))
+  · refine Ok.bind (unthink_loop0_keeps _ _ hl c.thinking _ _ _ _ _ (uinv_start _ _))
       fun ⟨b, v, t⟩ ⟨hv, ht, hk⟩ => ?_
     refine Ok.uncurry_mk (Ok.uncurry_mk ?_)
     refine Ok.ite (fun _ => Ok.ret ⟨rfl, rfl, fun h => by simp at h, by simpa using hv,
@@ -1272,22 +1256,11 @@ theorem unthink_keeps (c : Chunker) (line : Slice Std.U8) (hl : 10#u8 ∉ line.v
       fun tail t th₂ htl h => hk tail t th₂ htl h⟩)
     have := hk tail t th₂ htl (by rw [hb]; exact h)
     rwa [hv0 hth] at this
-  · refine Ok.bind (lit_ok _ _ _) fun pat hpat => ?_
-    refine Ok.bind (find_first _ _ _ (by rw [hpat]; simp)) fun o ho => ?_
-    simp only [Bool.not_eq_true] at hth
-    refine Ok.ite (fun hn => ?_) (fun hn => ?_)
-    · have hn' : o = none := by simpa [core.option.Option.is_none] using hn
-      refine Ok.bind (bytes_extend_ok _ _) fun v hv => Ok.ret ⟨rfl, rfl, fun h => by simp at h,
-        ?_, fun tail t th₂ htl h => ?_⟩
-      · simp only [Option.map_some, Option.mem_def, Option.some.injEq, forall_eq']
-        simpa [hv, alloc.vec.Vec.new] using hl
-      · have hv' : v.val = line.val := by simpa [alloc.vec.Vec.new] using hv
-        have := rest_keep (l := line.val) (a := 0)
-          (fun j _ => by have := ho.2 hn' j (by simp); rwa [hpat] at this) htl
-          (by rw [← hth]; exact h)
-        rw [hth]
-        simpa [hv'] using this
-    · refine Ok.bind (unthink_loop1_keeps _ hl c.thinking _ _ _ _ _ (uinv_start _ _))
+  · simp only [Bool.not_eq_true] at hth
+    refine Ok.ite (fun _ => ?whole) (fun _ => Ok.then_ fun o _ =>
+      Ok.ite (fun _ => ?whole') (fun _ => ?loop))
+    case loop =>
+      refine Ok.bind (unthink_loop1_keeps _ _ hl c.thinking _ _ _ _ _ (uinv_start _ _))
         fun ⟨b, v, t⟩ ⟨hv, ht, hk⟩ => ?_
       refine Ok.uncurry_mk (Ok.uncurry_mk ?_)
       refine Ok.ite (fun _ => Ok.ret ⟨rfl, rfl, fun h => by simp at h, by simpa using hv,
@@ -1298,6 +1271,15 @@ theorem unthink_keeps (c : Chunker) (line : Slice Std.U8) (hl : 10#u8 ∉ line.v
           by simpa using hv, fun tail t th₂ htl h => hk tail t th₂ htl (by rw [hb]; exact h)⟩)
       · have hb2 : b = c.thinking := hb
         exact absurd (hb2.symm.trans hb') (by simp [hth])
+    all_goals
+      refine Ok.bind (bytes_extend_ok _ _) fun v hv => Ok.ret ⟨rfl, rfl, fun h => by simp at h,
+        ?_, fun tail t th₂ htl h => ?_⟩
+      · simp only [Option.map_some, Option.mem_def, Option.some.injEq, forall_eq']
+        simpa [hv, alloc.vec.Vec.new] using hl
+      · have hv' : v.val = line.val := by simpa [alloc.vec.Vec.new] using hv
+        have := rest_keep (l := line.val) (a := 0) (by rw [← hth]; exact h)
+        rw [hth]
+        simpa [hv'] using this
 
 /-! ## The stream -/
 

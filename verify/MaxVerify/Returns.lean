@@ -391,6 +391,27 @@ theorem next_cut_spec (line : Slice Std.U8) :
   pstep
 
 @[step]
+theorem think_tag_loop_spec (rest : Slice Std.U8) (spans : alloc.vec.Vec (Usize × Usize))
+    (i : Usize) (found : Bool) (h : found = true → i.val + 7 ≤ rest.length) :
+    think_tag_loop rest spans i found ⦃ r => r.2 = true → r.1.val + 7 ≤ rest.length ⦄ := by
+  unfold think_tag_loop
+  apply loop.spec_decr_nat (fun x : Usize × Bool => 2 * (rest.length - x.1.val) + (!x.2).toNat)
+    (fun x : Usize × Bool => x.2 = true → x.1.val + 7 ≤ rest.length)
+  · rintro ⟨i, found⟩ h
+    unfold think_tag_loop.body
+    pstep
+  · exact h
+
+@[step]
+theorem think_tag_spec (line : Slice Std.U8) (a : Usize) (h : a.val ≤ line.length) :
+    think_tag line a ⦃ r => ∀ p ∈ r, a.val ≤ p.val ∧ p.val + 7 ≤ line.length ⦄ := by
+  unfold think_tag
+  pstep
+  simp only [Option.mem_def, Option.some.injEq, forall_eq'] at *
+  have := i_post (by assumption)
+  scalar_tac
+
+@[step]
 theorem fence_line_spec (first : Bool) (line : Slice Std.U8) :
     fence_line first line ⦃ _ => True ⦄ := by
   unfold fence_line
@@ -598,9 +619,10 @@ def UnthinkInv (line : Slice Std.U8) (x : Bool × alloc.vec.Vec Std.U8 × Bool �
   x.2.2.2.1.val ≤ line.length ∧ x.2.1.length ≤ line.length ∧
     (x.2.2.2.2 = false → x.2.1.length ≤ x.2.2.2.1.val)
 
-theorem unthink_body_spec (line : Slice Std.U8) (b : Bool) (visible : alloc.vec.Vec Std.U8)
-    (tagged : Bool) (a : Usize) (done : Bool) (h : UnthinkInv line (b, visible, tagged, a, done)) :
-    Chunker.unthink_loop0.body line b visible tagged a done ⦃ r => match r with
+theorem unthink_body_spec (f : Bool) (line : Slice Std.U8) (b : Bool)
+    (visible : alloc.vec.Vec Std.U8) (tagged : Bool) (a : Usize) (done : Bool)
+    (h : UnthinkInv line (b, visible, tagged, a, done)) :
+    Chunker.unthink_loop0.body f line b visible tagged a done ⦃ r => match r with
       | .done y => y.2.1.length ≤ line.length
       | .cont x => UnthinkInv line x ∧
           line.length + 1 - x.2.2.2.1.val + (!x.2.2.2.2).toNat <
@@ -622,27 +644,27 @@ theorem unthink_body_spec (line : Slice Std.U8) (b : Bool) (visible : alloc.vec.
   · pstep
 
 @[step]
-theorem unthink_loop0_spec (b : Bool) (line : Slice Std.U8) (v : alloc.vec.Vec Std.U8)
+theorem unthink_loop0_spec (f b : Bool) (line : Slice Std.U8) (v : alloc.vec.Vec Std.U8)
     (tagged : Bool) (a : Usize) (done : Bool) (h : UnthinkInv line (b, v, tagged, a, done)) :
-    Chunker.unthink_loop0 b line v tagged a done ⦃ r => r.2.1.length ≤ line.length ⦄ := by
+    Chunker.unthink_loop0 f b line v tagged a done ⦃ r => r.2.1.length ≤ line.length ⦄ := by
   unfold Chunker.unthink_loop0
   apply loop.spec_decr_nat (fun x : Bool × alloc.vec.Vec Std.U8 × Bool × Usize × Bool =>
     line.length + 1 - x.2.2.2.1.val + (!x.2.2.2.2).toNat) (UnthinkInv line) _ _ _ ?_ h
   rintro ⟨b, v, tagged, a, done⟩ h
   dsimp only
-  refine WP.spec_mono (unthink_body_spec line b v tagged a done h) fun r hr => ?_
+  refine WP.spec_mono (unthink_body_spec f line b v tagged a done h) fun r hr => ?_
   cases r <;> exact hr
 
 @[step]
-theorem unthink_loop1_spec (b : Bool) (line : Slice Std.U8) (v : alloc.vec.Vec Std.U8)
+theorem unthink_loop1_spec (f b : Bool) (line : Slice Std.U8) (v : alloc.vec.Vec Std.U8)
     (tagged : Bool) (a : Usize) (done : Bool) (h : UnthinkInv line (b, v, tagged, a, done)) :
-    Chunker.unthink_loop1 b line v tagged a done ⦃ r => r.2.1.length ≤ line.length ⦄ := by
+    Chunker.unthink_loop1 f b line v tagged a done ⦃ r => r.2.1.length ≤ line.length ⦄ := by
   unfold Chunker.unthink_loop1
   apply loop.spec_decr_nat (fun x : Bool × alloc.vec.Vec Std.U8 × Bool × Usize × Bool =>
     line.length + 1 - x.2.2.2.1.val + (!x.2.2.2.2).toNat) (UnthinkInv line) _ _ _ ?_ h
   rintro ⟨b, v, tagged, a, done⟩ h
   dsimp only
-  refine WP.spec_mono (unthink_body_spec line b v tagged a done h) fun r hr => ?_
+  refine WP.spec_mono (unthink_body_spec f line b v tagged a done h) fun r hr => ?_
   cases r <;> exact hr
 
 @[step]

@@ -36,7 +36,9 @@
 //! at its blank lines, and its closing fence taken for an opening one.
 //!
 //! `<think>` spans are dropped before anything else, including everything
-//! after an unclosed one: some relays put reasoning in the text.
+//! after an unclosed one: some relays put reasoning in the text. A
+//! `<think>` in a fence or an inline code span is Max showing the tag, and
+//! stays; until 11-07 it opened a span, and the rest of the reply went.
 //!
 //! The chunker and the placeholders it looks for are in `chunk`, written
 //! so that Aeneas can translate them to Lean, where `verify/` proves what
@@ -339,6 +341,28 @@ mod tests {
             ["一二\n三"]
         );
         assert_eq!(chunks("答案\n\n<think>没想完\n\n还在想"), ["答案"]);
+    }
+
+    #[test]
+    fn a_think_tag_in_code_is_shown() {
+        assert_eq!(
+            chunks("模型会写 `<think>` 标签\n\n后面的话"),
+            ["模型会写 `<think>` 标签", "后面的话"]
+        );
+        assert_eq!(
+            chunks("```\n<think>\n```\n后面的话"),
+            ["```\n<think>\n```\n后面的话"]
+        );
+        assert_eq!(
+            chunks("<think>想</think>写 `<think>` 就行<think>再想</think>"),
+            ["写 `<think>` 就行"]
+        );
+        assert_eq!(
+            chunks("```\nx\n```\n<think>想</think>好"),
+            ["```\nx\n```\n好"]
+        );
+        // In a span a fence is reasoning, and opens nothing.
+        assert_eq!(chunks("<think>\n```\n</think>好的\n\n二"), ["好的", "二"]);
     }
 
     #[test]

@@ -988,6 +988,42 @@ theorem classify_utf8 (c : Chunker) (line : Slice Std.U8) (out : Out) (hc : Held
 abbrev THINK : List Std.U8 := [60#u8, 116#u8, 104#u8, 105#u8, 110#u8, 107#u8, 62#u8]
 abbrev THINK_END : List Std.U8 := [60#u8, 47#u8, 116#u8, 104#u8, 105#u8, 110#u8, 107#u8, 62#u8]
 
+theorem think_tag_loop_ok (rest : Slice Std.U8) (spans : alloc.vec.Vec (Usize × Usize))
+    (i : Usize) (found : Bool) (h : found = true → THINK <+: rest.val.drop i.val) :
+    Ok (think_tag_loop rest spans i found)
+      (fun r => r.2 = true → THINK <+: rest.val.drop r.1.val) := by
+  unfold think_tag_loop
+  refine Ok.loop _ (fun x : Usize × Bool => x.2 = true → THINK <+: rest.val.drop x.1.val) _ ?_ _ h
+  rintro ⟨i, found⟩ hinv
+  try dsimp only at hinv ⊢
+  unfold think_tag_loop.body
+  ostep
+  all_goals refine Ok.ret ?_
+  all_goals simp_all
+
+/-- What `think_tag` finds is a `<think>`. -/
+theorem think_tag_ok (line : Slice Std.U8) (a : Usize) :
+    Ok (think_tag line a) (fun r => ∀ p ∈ r, a.val ≤ p.val ∧ THINK <+: line.val.drop p.val) := by
+  unfold think_tag
+  refine Ok.bind (range_from_ok _ _) fun rest ⟨hrest, _⟩ => ?_
+  refine Ok.then_ fun spans _ => ?_
+  refine Ok.bind (think_tag_loop_ok _ _ _ _ (by simp)) fun ⟨i, found⟩ hf => ?_
+  simp only [uncurry_eq] at hf ⊢
+  refine Ok.ite (fun hfound => ?_) (fun _ => Ok.ret (by simp))
+  refine Ok.bind (add_ok _ _) fun p hp => Ok.ret fun q hq => ?_
+  simp only [Option.mem_def, Option.some.injEq] at hq
+  subst hq
+  refine ⟨by omega, ?_⟩
+  have := hf hfound
+  rwa [hrest, List.drop_drop, show a.val + i.val = p.val by omega] at this
+
+/-- Where a tag is, a character starts, and another after it. -/
+theorem bd_tag_at {line : Slice Std.U8} {tag : List Std.U8} {p : Nat}
+    (hl : Utf8 line.val) (hne : tag ≠ []) (ha : ∀ b ∈ tag, b.val < 0x80)
+    (hpre : tag <+: line.val.drop p) : Bd line.val p ∧ Bd line.val (p + tag.length) := by
+  obtain ⟨⟨hp, hp'⟩, hend⟩ := cut_of_prefix hpre hne ha
+  exact ⟨bd_not_cont hp (not_cont_ascii hp'), bd_afterAscii hl hend⟩
+
 /-- Where `find` finds a tag, a character starts, and another after it. -/
 theorem bd_tag {line : Slice Std.U8} {t : Slice Std.U8} {tag : List Std.U8} {a p : Usize}
     (hl : Utf8 line.val) (ht : t.val = tag) (hne : tag ≠ []) (ha : ∀ b ∈ tag, b.val < 0x80)
@@ -995,14 +1031,13 @@ theorem bd_tag {line : Slice Std.U8} {t : Slice Std.U8} {tag : List Std.U8} {a p
     a.val ≤ p.val ∧ Bd line.val p.val ∧ Bd line.val (p.val + tag.length) := by
   obtain ⟨hap, hpre⟩ := hf p rfl
   rw [ht] at hpre
-  obtain ⟨⟨hp, hp'⟩, hend⟩ := cut_of_prefix hpre hne ha
-  exact ⟨hap, bd_not_cont hp (not_cont_ascii hp'), bd_afterAscii hl hend⟩
+  exact ⟨hap, bd_tag_at hl hne ha hpre⟩
 
 /-- The two loops of `unthink`, which are the same. -/
-theorem unthink_body_utf8 (line : Slice Std.U8) (hl : Utf8 line.val) (b : Bool)
+theorem unthink_body_utf8 (f : Bool) (line : Slice Std.U8) (hl : Utf8 line.val) (b : Bool)
     (visible : alloc.vec.Vec Std.U8) (tagged : Bool) (a : Usize) (done : Bool)
     (hv : Utf8 visible.val) (ha : Bd line.val a.val) :
-    Ok (Chunker.unthink_loop0.body line b visible tagged a done)
+    Ok (Chunker.unthink_loop0.body f line b visible tagged a done)
       (fun r => match r with
         | .cont x => Bd line.val x.2.2.2.1.val ∧ Utf8 x.2.1.val
         | .done y => Utf8 y.2.1.val) := by
@@ -1014,9 +1049,10 @@ theorem unthink_body_utf8 (line : Slice Std.U8) (hl : Utf8 line.val) (b : Bool)
     · refine Ok.bind (lit_ok _ _ _) fun t ht => Ok.mono (find_ok _ _ _) fun r hr p hp => ?_
       subst hp
       simpa [hb] using bd_tag (tag := THINK_END) hl ht (by simp) (by decide) hr
-    · refine Ok.bind (lit_ok _ _ _) fun t ht => Ok.mono (find_ok _ _ _) fun r hr p hp => ?_
-      subst hp
-      simpa [hb] using bd_tag (tag := THINK) hl ht (by simp) (by decide) hr
+    · refine Ok.ite (fun _ => Ok.ret (by simp)) (fun _ => ?_)
+      refine Ok.mono (think_tag_ok _ _) fun r hr p hp => ?_
+      obtain ⟨hap, hpre⟩ := hr p hp
+      simpa [hb, hap] using bd_tag_at (tag := THINK) hl (by simp) (by decide) hpre
   ok_cases
   · refine Ok.ite (fun _ => Ok.ret ⟨ha, hv⟩) (fun _ => ?_)
     refine Ok.bind (range_from_ok _ _) fun t ⟨ht, _⟩ => ?_
@@ -1035,28 +1071,28 @@ theorem unthink_body_utf8 (line : Slice Std.U8) (hl : Utf8 line.val) (b : Bool)
     dsimp only
     rw [ha1, hi]; exact hp'
 
-theorem unthink_loop0_utf8 (b : Bool) (line : Slice Std.U8) (hl : Utf8 line.val)
+theorem unthink_loop0_utf8 (f b : Bool) (line : Slice Std.U8) (hl : Utf8 line.val)
     (visible : alloc.vec.Vec Std.U8) (tagged : Bool) (a : Usize) (done : Bool)
     (hv : Utf8 visible.val) (ha : Bd line.val a.val) :
-    Ok (Chunker.unthink_loop0 b line visible tagged a done) (fun r => Utf8 r.2.1.val) := by
+    Ok (Chunker.unthink_loop0 f b line visible tagged a done) (fun r => Utf8 r.2.1.val) := by
   unfold Chunker.unthink_loop0
   refine Ok.loop _ (fun x : Bool × alloc.vec.Vec Std.U8 × Bool × Usize × Bool =>
     Bd line.val x.2.2.2.1.val ∧ Utf8 x.2.1.val) _ ?_ _ ⟨ha, hv⟩
   rintro ⟨b, visible, tagged, a, done⟩ ⟨ha, hv⟩
   dsimp only
-  refine Ok.mono (unthink_body_utf8 line hl b visible tagged a done hv ha) fun r hr => ?_
+  refine Ok.mono (unthink_body_utf8 f line hl b visible tagged a done hv ha) fun r hr => ?_
   cases r <;> exact hr
 
-theorem unthink_loop1_utf8 (b : Bool) (line : Slice Std.U8) (hl : Utf8 line.val)
+theorem unthink_loop1_utf8 (f b : Bool) (line : Slice Std.U8) (hl : Utf8 line.val)
     (visible : alloc.vec.Vec Std.U8) (tagged : Bool) (a : Usize) (done : Bool)
     (hv : Utf8 visible.val) (ha : Bd line.val a.val) :
-    Ok (Chunker.unthink_loop1 b line visible tagged a done) (fun r => Utf8 r.2.1.val) := by
+    Ok (Chunker.unthink_loop1 f b line visible tagged a done) (fun r => Utf8 r.2.1.val) := by
   unfold Chunker.unthink_loop1
   refine Ok.loop _ (fun x : Bool × alloc.vec.Vec Std.U8 × Bool × Usize × Bool =>
     Bd line.val x.2.2.2.1.val ∧ Utf8 x.2.1.val) _ ?_ _ ⟨ha, hv⟩
   rintro ⟨b, visible, tagged, a, done⟩ ⟨ha, hv⟩
   dsimp only
-  refine Ok.mono (unthink_body_utf8 line hl b visible tagged a done hv ha) fun r hr => ?_
+  refine Ok.mono (unthink_body_utf8 f line hl b visible tagged a done hv ha) fun r hr => ?_
   cases r <;> exact hr
 
 theorem unthink_utf8 (c : Chunker) (line : Slice Std.U8) (hc : Held c) (hl : Utf8 line.val) :
@@ -1064,20 +1100,26 @@ theorem unthink_utf8 (c : Chunker) (line : Slice Std.U8) (hc : Held c) (hl : Utf
   unfold Chunker.unthink
   have hv0 : Utf8 (alloc.vec.Vec.new Std.U8).val := by simpa using utf8_nil
   refine Ok.ite (fun _ => ?_) (fun _ => ?_)
-  · refine Ok.bind (unthink_loop0_utf8 _ _ hl _ _ _ _ hv0 (bd_zero hl)) fun ⟨b, v, t⟩ hv => ?_
+  · refine Ok.bind (unthink_loop0_utf8 _ _ _ hl _ _ _ _ hv0 (bd_zero hl)) fun ⟨b, v, t⟩ hv => ?_
     refine Ok.uncurry_mk (Ok.uncurry_mk ?_)
     repeat' (refine Ok.ite (fun _ => ?_) (fun _ => ?_))
     all_goals refine Ok.ret ⟨fun x hx => ?_, hc⟩
     all_goals first
       | (simp at hx; done)
       | (simp only [Option.mem_def, Option.some.injEq] at hx; subst hx; exact hv)
-  · refine Ok.bind (lit_ok _ _ _) fun _ _ => Ok.then_ fun o _ => ?_
-    refine Ok.ite (fun _ => ?_) (fun _ => ?_)
-    · refine Ok.bind (bytes_extend_ok _ _) fun v hv => Ok.ret ⟨fun x hx => ?_, hc⟩
+  · have whole : Ok (do
+        let visible ← alloc.vec.Vec.extend_from_slice core.clone.CloneU8
+          (alloc.vec.Vec.new Std.U8) line
+        ok (some visible, c))
+        (fun r => (∀ v ∈ r.1, Utf8 v.val) ∧ Held r.2) := by
+      refine Ok.bind (bytes_extend_ok _ _) fun v hv => Ok.ret ⟨fun x hx => ?_, hc⟩
       simp only [Option.mem_def, Option.some.injEq] at hx
       subst hx
       simpa [hv] using hl
-    · refine Ok.bind (unthink_loop1_utf8 _ _ hl _ _ _ _ hv0 (bd_zero hl)) fun ⟨b, v, t⟩ hv => ?_
+    refine Ok.ite (fun _ => whole) (fun _ => ?_)
+    refine Ok.then_ fun o _ => ?_
+    refine Ok.ite (fun _ => whole) (fun _ => ?_)
+    · refine Ok.bind (unthink_loop1_utf8 _ _ _ hl _ _ _ _ hv0 (bd_zero hl)) fun ⟨b, v, t⟩ hv => ?_
       refine Ok.uncurry_mk (Ok.uncurry_mk ?_)
       repeat' (refine Ok.ite (fun _ => ?_) (fun _ => ?_))
       all_goals refine Ok.ret ⟨fun x hx => ?_, hc⟩
