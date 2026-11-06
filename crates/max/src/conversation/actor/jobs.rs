@@ -114,13 +114,17 @@ impl Conversation {
             .map(|title| title.trim().to_owned())
             .filter(|title| !title.is_empty())
             .unwrap_or_else(|| headline(&task));
+        let (called, calls) = unbounded_channel();
         let context = mcp::Context {
             services: Arc::clone(&self.shared.services),
             place: Arc::clone(&self.place),
             page_tokens: Budgets::for_window(upstream.window).single,
             video: false,
             work: None,
-            caller: mcp::Caller::Job(Arc::clone(&upstream)),
+            caller: mcp::Caller::Job(Arc::new(job::Link {
+                upstream: Arc::clone(&upstream),
+                called,
+            })),
         };
         let (steers, steered) = unbounded_channel();
         let progress = Arc::<Mutex<Progress>>::default();
@@ -132,6 +136,7 @@ impl Conversation {
             vms,
             context,
             upstream,
+            calls,
             deadline: Instant::now() + limits::JOB_TIME,
             progress: Arc::clone(&progress),
             ask: Box::new(move |question| {

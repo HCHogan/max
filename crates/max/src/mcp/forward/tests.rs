@@ -10,13 +10,21 @@ use sqlx::PgPool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UnixListener, UnixStream};
 
+use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+
 use crate::conversation::testing::group;
+use crate::job::{Called, Link};
 use crate::llm::Upstream;
 use crate::mcp::{Caller, Context, Services, Sessions, serve};
 use crate::scope::Scope;
 
 /// What the provider was asked: the authorization, and the body.
 type Asked = Arc<Mutex<Vec<(Option<String>, String)>>>;
+
+/// What the provider answers: a call of `bash`, and what it used.
+const ANSWER: &str = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"bash\",\"arguments\":\"{}\"}}]}}]}\n\n\
+     data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":30,\"prompt_tokens_details\":{\"cached_tokens\":1000}}}\n\n\
+     data: [DONE]\n\n";
 
 /// A provider that answers with an event stream; under /quiet, one event
 /// and then nothing.
@@ -40,8 +48,7 @@ async fn provider(scope: &mut Scope, asked: Asked) -> String {
                         .get("authorization")
                         .map(|value| value.to_str().unwrap().to_owned());
                     asked.lock().unwrap().push((authorization, body));
-                    let answer = "data: {\"n\":1}\n\ndata: [DONE]\n\n";
-                    ([("content-type", "text/event-stream")], answer)
+                    ([("content-type", "text/event-stream")], ANSWER)
                 }
             }),
         );
@@ -69,12 +76,12 @@ async fn send(socket: &FilePath, path: &str, headers: &str, body: &str) -> (Stri
     (head.lines().next().unwrap().to_owned(), body.to_owned())
 }
 
-fn upstream(base_url: String) -> Arc<Upstream> {
+fn upstream(base_url: String) -> Upstream {
     quiet_within(base_url, Duration::from_secs(120))
 }
 
-fn quiet_within(base_url: String, idle: Duration) -> Arc<Upstream> {
-    Arc::new(Upstream {
+fn quiet_within(base_url: String, idle: Duration) -> Upstream {
+    Upstream {
         provider: "cliproxy".into(),
         protocol: max_core::item::Protocol::Chat,
         base_url,
@@ -85,7 +92,17 @@ fn quiet_within(base_url: String, idle: Duration) -> Arc<Upstream> {
         max_output: None,
         effort: Some("high".into()),
         idle,
-    })
+    }
+}
+
+/// A job's caller with `upstream`, and what it is told of its calls.
+fn linked(upstream: Upstream) -> (Caller, UnboundedReceiver<Called>) {
+    let (called, calls) = unbounded_channel();
+    let link = Link {
+        upstream: Arc::new(upstream),
+        called,
+    };
+    (Caller::Job(Arc::new(link)), calls)
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
@@ -103,10 +120,11 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
     let base_url = provider(&mut scope, Arc::clone(&asked)).await;
     let sessions = Sessions::default();
     let quiet = base_url.replace("/v1", "/quiet");
-    let job = sessions.open(context(Caller::Job(upstream(base_url))));
+    let (caller, mut calls) = linked(upstream(base_url));
+    let job = sessions.open(context(caller));
     let run = sessions.open(context(Caller::Check));
-    let quiet = quiet_within(quiet, Duration::from_millis(200));
-    let stalled = sessions.open(context(Caller::Job(quiet)));
+    let (caller, mut stalled_calls) = linked(quiet_within(quiet, Duration::from_millis(200)));
+    let stalled = sessions.open(context(caller));
 
     let dir = std::env::temp_dir().join(format!("max-forward-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -122,9 +140,22 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
     let (status, body) = send(&socket, "/llm/chat/completions", &bearer(job.token()), ask).await;
     assert_eq!(status, "HTTP/1.1 200 OK", "{body}");
     assert!(
-        body.contains("data: {\"n\":1}") && body.contains("data: [DONE]"),
+        body.contains("\"name\":\"bash\"") && body.contains("data: [DONE]"),
         "{body}"
     );
+    // What it used and called, read on the way.
+    let called = calls.recv().await.unwrap();
+    let cached = max_core::item::Usage {
+        input: 1200,
+        cached: 1000,
+        output: 30,
+        reasoning: 0,
+    };
+    assert_eq!(
+        (called.usage, called.tools),
+        (cached, vec!["bash".to_owned()])
+    );
+    assert!(called.timing.first.is_some());
     {
         let asked = asked.lock().unwrap();
         let (authorization, request) = &asked[0];
@@ -143,6 +174,10 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
     assert_eq!(status, "HTTP/1.1 200 OK");
     assert!(body.contains("data: {\"n\":1}"), "{body}");
     assert!(!body.ends_with("0\r\n\r\n"), "{body}");
+    // A call all the same, which used nothing the provider counted.
+    let called = stalled_calls.recv().await.unwrap();
+    assert_eq!(called.usage, max_core::item::Usage::default());
+    assert!(called.tools.is_empty());
 
     // Not the protocol's endpoint, not JSON, a run's session, a job over.
     let status = |pair: (String, String)| pair.0;
@@ -163,6 +198,8 @@ async fn a_jobs_model_calls_go_on_with_the_providers_key(pool: PgPool) {
     let refused = send(&socket, "/llm/chat/completions", &bearer(&token), ask).await;
     assert_eq!(status(refused), "HTTP/1.1 401 Unauthorized");
     assert_eq!(asked.lock().unwrap().len(), 1);
+    // Refused before it went on: no call.
+    assert!(calls.try_recv().is_err());
 
     scope.close(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(dir);
@@ -175,8 +212,9 @@ async fn a_job_calls_only_the_tools_that_dont_act_in_the_group(pool: PgPool) {
     drop(conn);
     let conversation = place.conversation;
     let sessions = Sessions::default();
+    let (caller, _calls) = linked(upstream("http://127.0.0.1:9/v1".into()));
     let job = sessions.open(Context {
-        caller: Caller::Job(upstream("http://127.0.0.1:9/v1".into())),
+        caller,
         ..Context::check(Services::bare(pool), place)
     });
     let dir = std::env::temp_dir().join(format!("max-forward-tools-{}", std::process::id()));

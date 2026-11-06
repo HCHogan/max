@@ -329,7 +329,7 @@ fn kind(raw: &Value) -> Option<ItemKind> {
     }
 }
 
-fn usage(usage: &Value) -> Usage {
+pub(crate) fn usage(usage: &Value) -> Usage {
     let count = |value: &Value| u32::try_from(value.as_u64().unwrap_or(0)).unwrap_or(u32::MAX);
     Usage {
         input: count(&usage["input_tokens"]),

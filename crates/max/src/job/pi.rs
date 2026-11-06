@@ -5,7 +5,6 @@
 use std::borrow::Cow;
 use std::mem;
 
-use max_core::item::Usage;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::warn;
@@ -65,13 +64,11 @@ pub enum Record {
         error: Option<String>,
         data: Value,
     },
-    /// A model call ended; `error` if it failed.
+    /// A model call ended; `error` if it failed. What it used the
+    /// forwarder tells.
     Called {
-        usage: Usage,
         error: Option<String>,
     },
-    /// A tool call began.
-    Tool(String),
     /// pi won't go on by itself: no retry, no queued message.
     Settled {
         aborted: bool,
@@ -98,10 +95,9 @@ struct Head<'a> {
 
 /// The types of record [`parse`] reads. The others, a streamed message's
 /// every update among them, are skipped over without being built.
-const READ: [&str; 5] = [
+const READ: [&str; 4] = [
     "response",
     "message_end",
-    "tool_execution_start",
     "agent_settled",
     "extension_ui_request",
 ];
@@ -123,13 +119,11 @@ pub fn parse(line: &[u8]) -> serde_json::Result<Record> {
         Some("message_end") if record["message"]["role"] == "assistant" => {
             let message = &record["message"];
             Record::Called {
-                usage: usage(&message["usage"]),
                 error: (message["stopReason"] == "error").then(|| {
                     text(&message["errorMessage"]).unwrap_or_else(|| "模型调用失败".to_owned())
                 }),
             }
         }
-        Some("tool_execution_start") => Record::Tool(text(&record["toolName"]).unwrap_or_default()),
         Some("agent_settled") => Record::Settled {
             aborted: record["aborted"] == true,
         },
@@ -146,25 +140,6 @@ pub fn parse(line: &[u8]) -> serde_json::Result<Record> {
         },
         _ => Record::Other,
     })
-}
-
-/// pi counts what the cache read or wrote apart from `input`; max's
-/// `input` is the whole request.
-fn usage(usage: &Value) -> Usage {
-    let count = |key: &str| {
-        usage[key]
-            .as_u64()
-            .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX))
-    };
-    let cached = count("cacheRead");
-    Usage {
-        input: count("input")
-            .saturating_add(cached)
-            .saturating_add(count("cacheWrite")),
-        cached,
-        output: count("output"),
-        reasoning: count("reasoning"),
-    }
 }
 
 /// Cuts pi's stdout into lines as it arrives. A line longer than

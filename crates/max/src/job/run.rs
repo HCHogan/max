@@ -1,6 +1,6 @@
 //! A job in the group's VM: max-pi in a unit of its own, its session of
-//! the MCP service, its model calls on the record, and its report saved
-//! in /work.
+//! the MCP service, its model calls on the record as the forwarder tells
+//! them, and its report saved in /work.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -16,7 +16,7 @@ use tokio::time::{Instant, timeout};
 use tracing::{info, warn};
 
 use super::pi::Lines;
-use super::{Ending, GONE, GRACE, How, Watch, drive};
+use super::{Called, Ending, GONE, GRACE, How, Watch, drive};
 use crate::llm::Upstream;
 use crate::mcp;
 use crate::vm::ssh::{Sink, Stream};
@@ -42,6 +42,9 @@ pub struct Start {
     /// The job's own, for its session of the MCP service.
     pub context: mcp::Context,
     pub upstream: Arc<Upstream>,
+    /// How its model calls went, from the forwarder; open while its
+    /// session is.
+    pub calls: UnboundedReceiver<Called>,
     pub deadline: Instant,
     pub progress: Arc<Mutex<Progress>>,
     /// Takes the agent's question to Max.
@@ -81,13 +84,14 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
         Ok(vm) => vm,
         Err(why) => return failed(why),
     };
-    let mut watch = Recorder {
+    let ledger = Ledger {
         pool: start.context.services.pool.clone(),
         conversation,
         upstream: Arc::clone(&start.upstream),
         progress: start.progress,
-        ask: start.ask,
     };
+    let mut calls = start.calls;
+    let mut watch = Asks(start.ask);
     let grant = start.vms.sessions().open(start.context);
     let unit = Vm::unit();
     // The unit outlives the deadline only by pi's grace, twice. A login
@@ -131,6 +135,13 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
         records: Some(records_tx),
         err: Vec::new(),
     };
+    let recording = async {
+        while let Some(called) = calls.recv().await {
+            ledger.record(called).await;
+        }
+    };
+    tokio::pin!(recording);
+    let mut recorded = false;
     let ending = {
         let reading = async {
             if let Err(error) = command.wait(&mut out).await {
@@ -153,6 +164,7 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
             tokio::select! {
                 ending = &mut driving => break ending,
                 () = &mut reading, if !read => read = true,
+                () = &mut recording, if !recorded => recorded = true,
             }
         };
         // pi exits once its stdin is closed; if it doesn't, the command's
@@ -162,6 +174,12 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
         }
         ending
     };
+    // Once the session is closed and pi's calls are over, none is left to
+    // tell: record what came.
+    drop(grant);
+    if !recorded {
+        let _ = timeout(GRACE, recording).await;
+    }
     if let How::Failed(why) = &ending.how {
         let err = String::from_utf8_lossy(&out.err);
         warn!(%conversation, job = start.number, %why, stderr = %err.trim(), "a job failed");
@@ -227,27 +245,26 @@ impl Sink for Out {
     }
 }
 
-/// Records each model call's usage, keeps the progress, and takes the
-/// questions on.
-struct Recorder {
+/// Records each model call's usage, and keeps the progress.
+struct Ledger {
     pool: PgPool,
     conversation: ConversationId,
     upstream: Arc<Upstream>,
     progress: Arc<Mutex<Progress>>,
-    ask: Asker,
 }
 
-impl Recorder {
-    fn progress(&self) -> std::sync::MutexGuard<'_, Progress> {
-        self.progress.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl Watch for Recorder {
-    async fn called(&mut self, usage: Usage) {
-        self.progress().calls += 1;
+impl Ledger {
+    async fn record(&self, called: Called) {
+        {
+            let mut progress = self.progress.lock().unwrap_or_else(PoisonError::into_inner);
+            progress.calls += 1;
+            progress.tools += u32::try_from(called.tools.len()).unwrap_or(u32::MAX);
+            if let Some(tool) = called.tools.last() {
+                progress.tool = Some(tool.clone());
+            }
+        }
         // A call that failed before the provider counted anything.
-        if usage == Usage::default() {
+        if called.usage == Usage::default() {
             return;
         }
         let call = usage::Call {
@@ -257,22 +274,20 @@ impl Watch for Recorder {
             provider: &self.upstream.provider,
             model: &self.upstream.model,
             effort: self.upstream.effort.as_deref(),
-            usage,
+            usage: called.usage,
             cost_micros: None,
-            // pi's calls stream through the forwarder, unmeasured.
-            timing: None,
+            timing: Some(called.timing),
             at: Utc::now(),
         };
         crate::llm::record(&self.pool, &call).await;
     }
+}
 
-    fn tool(&mut self, name: &str) {
-        let mut progress = self.progress();
-        progress.tools += 1;
-        progress.tool = Some(name.to_owned());
-    }
+/// Takes the agent's questions on to Max.
+struct Asks(Asker);
 
+impl Watch for Asks {
     fn asks(&mut self, question: &str) {
-        (self.ask)(question.to_owned());
+        (self.0)(question.to_owned());
     }
 }

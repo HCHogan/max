@@ -59,11 +59,10 @@ impl Fake {
         assert_eq!(self.questions.recv().await.unwrap(), question);
     }
 
-    fn called(&self, input: u32, error: Option<&str>) {
+    fn called(&self, error: Option<&str>) {
         let stop = if error.is_some() { "error" } else { "stop" };
         self.say(json!({ "type": "message_end", "message": {
             "role": "assistant", "content": [], "stopReason": stop, "errorMessage": error,
-            "usage": { "input": input, "output": 10, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0 },
         }}));
     }
 
@@ -77,28 +76,19 @@ impl Fake {
     }
 }
 
+/// Max's side: the questions the driver passes on.
 struct Seen {
-    calls: Vec<Usage>,
-    tools: Vec<String>,
     questions: UnboundedSender<String>,
 }
 
 impl Watch for Seen {
-    async fn called(&mut self, usage: Usage) {
-        self.calls.push(usage);
-    }
-
-    fn tool(&mut self, name: &str) {
-        self.tools.push(name.to_owned());
-    }
-
     fn asks(&mut self, question: &str) {
         let _ = self.questions.send(question.to_owned());
     }
 }
 
 /// A job of `task` against the fake that `pi` plays.
-async fn job<F>(task: &str, within: Duration, pi: impl FnOnce(Fake) -> F) -> (Ending, Seen)
+async fn job<F>(task: &str, within: Duration, pi: impl FnOnce(Fake) -> F) -> Ending
 where
     F: Future<Output = ()>,
 {
@@ -112,27 +102,22 @@ where
         questions,
         steering,
     };
-    let mut seen = Seen {
-        calls: Vec::new(),
-        tools: Vec::new(),
-        questions: asking,
-    };
+    let mut seen = Seen { questions: asking };
     let deadline = Instant::now() + within;
     let driven = drive(input, &mut records, &mut steered, task, deadline, &mut seen);
     let (ending, ()) = tokio::join!(driven, pi(fake));
-    (ending, seen)
+    ending
 }
 
 const LONG: Duration = Duration::from_secs(60);
 
 #[tokio::test]
 async fn a_job_reports_its_last_text() {
-    let (ending, seen) = job("查一下", LONG, |mut pi| async move {
+    let ending = job("查一下", LONG, |mut pi| async move {
         let prompt = pi.started().await;
         assert_eq!(prompt["message"], "查一下");
-        pi.called(100, None);
-        pi.say(json!({ "type": "tool_execution_start", "toolName": "bash", "args": {} }));
-        pi.called(200, None);
+        pi.called(None);
+        pi.called(None);
         pi.settle(false, Some("查到了")).await;
     })
     .await;
@@ -143,14 +128,11 @@ async fn a_job_reports_its_last_text() {
             text: Some("查到了".into())
         }
     );
-    let inputs: Vec<u32> = seen.calls.iter().map(|usage| usage.input).collect();
-    assert_eq!(inputs, [100, 200]);
-    assert_eq!(seen.tools, ["bash"]);
 }
 
 #[tokio::test]
 async fn a_dialog_is_dismissed() {
-    let (ending, _) = job("查一下", LONG, |mut pi| async move {
+    let ending = job("查一下", LONG, |mut pi| async move {
         pi.started().await;
         pi.say(json!({ "type": "extension_ui_request", "id": "d-1", "method": "confirm" }));
         let answer = pi.asked().await;
@@ -165,7 +147,7 @@ async fn a_dialog_is_dismissed() {
 
 #[tokio::test]
 async fn a_question_goes_to_max_and_the_next_steer_answers_it() {
-    let (ending, _) = job("订餐厅", LONG, |mut pi| async move {
+    let ending = job("订餐厅", LONG, |mut pi| async move {
         pi.started().await;
         pi.question("q-1", "选火锅还是烧烤？").await;
         pi.steering.send("火锅".into()).unwrap();
@@ -187,7 +169,7 @@ async fn a_question_goes_to_max_and_the_next_steer_answers_it() {
 
 #[tokio::test(start_paused = true)]
 async fn an_unanswered_question_is_dismissed_after_a_while() {
-    let (ending, _) = job("订餐厅", JOB_TIME, |mut pi| async move {
+    let ending = job("订餐厅", JOB_TIME, |mut pi| async move {
         pi.started().await;
         let asked = Instant::now();
         pi.question("q-1", "选火锅还是烧烤？").await;
@@ -204,7 +186,7 @@ async fn an_unanswered_question_is_dismissed_after_a_while() {
 #[tokio::test(start_paused = true)]
 async fn a_job_waiting_on_max_is_still_told_to_wrap_up() {
     let within = WARNING + Duration::from_secs(60);
-    let (ending, _) = job("订餐厅", within, |mut pi| async move {
+    let ending = job("订餐厅", within, |mut pi| async move {
         pi.started().await;
         pi.question("q-1", "选火锅还是烧烤？").await;
         let dismissed = pi.asked().await;
@@ -221,7 +203,7 @@ async fn a_job_waiting_on_max_is_still_told_to_wrap_up() {
 #[tokio::test]
 async fn a_job_out_of_time_is_aborted_and_says_how_far_it_got() {
     let within = Duration::from_millis(100);
-    let (ending, _) = job("查一下", within, |mut pi| async move {
+    let ending = job("查一下", within, |mut pi| async move {
         pi.started().await;
         let clear = pi.asked().await;
         assert_eq!(clear["type"], "clear_queue");
@@ -241,14 +223,14 @@ async fn a_job_out_of_time_is_aborted_and_says_how_far_it_got() {
 
 #[tokio::test(start_paused = true)]
 async fn a_job_is_told_to_wrap_up_before_its_time_is_up() {
-    let (ending, _) = job("查一下", JOB_TIME, |mut pi| async move {
+    let ending = job("查一下", JOB_TIME, |mut pi| async move {
         pi.started().await;
         let told = Instant::now();
         let steer = pi.asked().await;
         assert_eq!(steer["type"], "steer");
         assert_eq!(steer["message"], wrap_up_message());
         assert_eq!(told.elapsed(), JOB_TIME - WARNING);
-        pi.called(100, None);
+        pi.called(None);
         pi.settle(false, Some("查到一半，先报这些")).await;
     })
     .await;
@@ -257,9 +239,9 @@ async fn a_job_is_told_to_wrap_up_before_its_time_is_up() {
 
 #[tokio::test]
 async fn a_failed_model_call_fails_the_job_unless_a_retry_got_through() {
-    let (ending, _) = job("查一下", LONG, |mut pi| async move {
+    let ending = job("查一下", LONG, |mut pi| async move {
         pi.started().await;
-        pi.called(0, Some("429 Resource exhausted"));
+        pi.called(Some("429 Resource exhausted"));
         pi.settle(false, None).await;
     })
     .await;
@@ -271,10 +253,10 @@ async fn a_failed_model_call_fails_the_job_unless_a_retry_got_through() {
         }
     );
 
-    let (ending, _) = job("查一下", LONG, |mut pi| async move {
+    let ending = job("查一下", LONG, |mut pi| async move {
         pi.started().await;
-        pi.called(0, Some("429 Resource exhausted"));
-        pi.called(100, None);
+        pi.called(Some("429 Resource exhausted"));
+        pi.called(None);
         pi.settle(false, Some("好了")).await;
     })
     .await;
@@ -283,7 +265,7 @@ async fn a_failed_model_call_fails_the_job_unless_a_retry_got_through() {
 
 #[tokio::test]
 async fn a_refused_prompt_fails_the_job() {
-    let (ending, _) = job("查一下", LONG, |mut pi| async move {
+    let ending = job("查一下", LONG, |mut pi| async move {
         let mode = pi.asked().await;
         pi.answer(&mode, Value::Null);
         let prompt = pi.asked().await;
@@ -298,7 +280,7 @@ async fn a_refused_prompt_fails_the_job() {
 
 #[tokio::test]
 async fn pi_gone_fails_the_job() {
-    let (ending, _) = job("查一下", LONG, |mut pi| async move {
+    let ending = job("查一下", LONG, |mut pi| async move {
         pi.started().await;
         drop(pi);
     })

@@ -9,10 +9,12 @@
 pub mod chat;
 mod client;
 mod error;
+mod meter;
 pub mod responses;
 
 pub use client::{Call, Client, Provider};
 pub use error::Error;
+pub use meter::Meter;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

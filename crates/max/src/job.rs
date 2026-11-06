@@ -5,20 +5,39 @@
 pub mod pi;
 mod run;
 
-use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
-use max_core::item::Usage;
+use max_core::item::{Timing, Usage};
 use schemars::JsonSchema;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::{Instant, sleep_until, timeout};
 use tracing::warn;
 
+use crate::llm::Upstream;
 use max_core::limits::QUESTION_WAIT;
 use pi::{Ask, Record};
 pub use run::{Asker, Finished, Progress, Start, run};
+
+/// What a job's session knows of it: the model its calls go to, and who
+/// hears how each went.
+#[derive(Debug)]
+pub struct Link {
+    pub upstream: Arc<Upstream>,
+    pub called: UnboundedSender<Called>,
+}
+
+/// One of the agent's model calls, as the forwarder read it on its way
+/// back; told however the call ended.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Called {
+    pub usage: Usage,
+    pub timing: Timing,
+    /// The tools the model called, in order.
+    pub tools: Vec<String>,
+}
 
 /// What a tool asks of its conversation's background jobs: its agents,
 /// and its `shell` commands run in the background.
@@ -81,12 +100,9 @@ fn wrap_up_message() -> String {
 
 const GONE: &str = "pi 意外退出了";
 
-/// What a job's driver tells as it goes.
+/// What a job's driver tells as it goes. Its model calls and their tools
+/// the forwarder tells, as [`Called`].
 pub trait Watch {
-    /// A model call ended.
-    fn called(&mut self, usage: Usage) -> impl Future<Output = ()> + Send;
-    /// A tool call began.
-    fn tool(&mut self, name: &str);
     /// The agent asks Max `question`, and waits for the answer.
     fn asks(&mut self, question: &str);
 }
@@ -156,11 +172,7 @@ pub async fn drive(
                         }
                         warn!(%why, "pi refused a command");
                     }
-                    Ok(Record::Called { usage, error: why }) => {
-                        watch.called(usage).await;
-                        error = why;
-                    }
-                    Ok(Record::Tool(name)) => watch.tool(&name),
+                    Ok(Record::Called { error: why }) => error = why,
                     Ok(Record::Settled { .. }) => break,
                     Ok(Record::Dialog(dialog)) => {
                         if pi.ask(Ask::Dismiss(&dialog)).await.is_err() {

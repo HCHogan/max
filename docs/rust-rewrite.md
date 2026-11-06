@@ -1175,7 +1175,7 @@ Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息
 | | `message_embeddings` | 按消息 id 一行：会话、`halfvec(1024)` 的向量、哪个模型算的、时间。召回向量 worker 是唯一的写者，换了模型全部重算。见[召回](#召回)。`summary_embeddings` 是摘要的，10-30 起不读不写 |
 | | `message_media` | 消息、序号、sha256。入站节点里是下载地址，下载完记在这里；程序交的图（`max.image()`）节点里直接是 sha256 |
 | turn | `turns`、`turn_outcomes` | 见 [turn 记录](#turn-记录)。`t#N` 是 `turns.ordinal`，每个会话从 1 数 |
-| | `llm_usage` | turn（可空）、用途（turn、intent、caption、job、dreamer；historian 只在 11-02 之前的行里）、provider、模型、强度、token（含缓存命中数，按 provider 看命中率、调空闲窗口；还有其中的推理 token）、费用。token 用 bigint；费用 `cost_micros` 是百万分之一美元，用整数，不要 decimal，价格未知时为空。还有三个毫秒数（2026-10-30 加）：`first_ms` 是发出请求到模型第一次输出（正文、推理或工具调用都算），`took_ms` 是到回答结束，`quiet_ms` 是流里最长一段什么都没到的时间，也就是 `stream_idle_timeout_secs` 掐的那个。turn 和走 `complete` 的调用（intent、historian、dreamer、caption）都记；job 的调用经 pi 转发，不记，为空。要降空闲超时，先看 `quiet_ms` 正常情况下有多长 |
+| | `llm_usage` | turn（可空）、用途（turn、intent、caption、job、dreamer；historian 只在 11-02 之前的行里）、provider、模型、强度、token（含缓存命中数，按 provider 看命中率、调空闲窗口；还有其中的推理 token）、费用。token 用 bigint；费用 `cost_micros` 是百万分之一美元，用整数，不要 decimal，价格未知时为空。还有三个毫秒数（2026-10-30 加）：`first_ms` 是发出请求到模型第一次输出（正文、推理或工具调用都算），`took_ms` 是到回答结束，`quiet_ms` 是流里最长一段什么都没到的时间，也就是 `stream_idle_timeout_secs` 掐的那个。turn 和走 `complete` 的调用（intent、historian、dreamer、caption）都记；job 的调用原来为空，2026-11-07 起由 `/llm` 的转发器量（见[后台 agent](#后台-agent)的**用量**）。要降空闲超时，先看 `quiet_ms` 正常情况下有多长 |
 | 上下文 | `summaries` | historian 写的摘要：首尾消息 id、时间、标题、kind、importance、p1、p2、p3、status（active、superseded）。活跃的范围不重叠，用排他约束。11-02 起不读不写，数据留着，见[摘要](#摘要) |
 | | `summary_runs` | historian 的每次模型调用：范围、原因（quiet、pressure、compact）、模型、原始输出、错误。11-02 起不写 |
 
@@ -1680,9 +1680,9 @@ opencli（2026-11-03 加，同一天去掉）：[opencli](https://github.com/jac
 v1 之后做。
 
 - 每个 job 驱动群 VM 里的一个 pi 进程，通过 stdio 上的 RPC JSONL 通信。
-- 适配器在 `crates/max/src/job.rs`（2026-10-30）：`job::pi` 是协议，`job::drive` 给任务、转 steer、到点中断、等它停下，取最后一条助手消息的文字作报告，再关 stdin。用量、工具调用经 `Watch` 报出去。没有再抽一层 `AgentBackend`：只有 pi 一个实现，等真有第二个再抽。命令用 `Vm::open` 起，stdin 一直开着。
+- 适配器在 `crates/max/src/job.rs`（2026-10-30）：`job::pi` 是协议，`job::drive` 给任务、转 steer、到点中断、等它停下，取最后一条助手消息的文字作报告，再关 stdin。用量、工具调用由 `/llm` 的转发器读出来报（2026-11-07 改），`Watch` 只剩提问。没有再抽一层 `AgentBackend`：只有 pi 一个实现，等真有第二个再抽；2026-11-07 改成宿主定约定、harness 在 guest 里接，见[和 harness 脱钩](#和-harness-脱钩)。命令用 `Vm::open` 起，stdin 一直开着。
 - **模型**（2026-10-30 定）：`[llm]` 里单独配 `job = { model, effort }`，没配就没有后台 agent。pi 不拿 provider 的 key：它的模型请求发到 VM 里的 `http://127.0.0.1:7777/llm/<端点>`，和 MCP 是同一个服务、同一个 token。宿主认出是哪个 job 的会话，把 `model` 换成配置里的，带上 provider 的 key 和头转过去，回答原样流回来。provider 在 `stream_idle_timeout_secs`（默认 120 秒）里没出声，不管是回答开始前还是流到一半，都和 max-llm 一样掐断：pi 当作这次调用失败，自己重试，不会干等到 job 到点（10-30 Max 自己 review 时指出的）。只认这个 provider 协议的端点（`chat/completions` 或 `responses`），请求最大 64 MiB；job 结束、会话吊销后 token 就没用了。没选的办法：cliproxy 的管理接口能在运行时加删 key，但改完要写回配置文件，tank 上那是 sops 渲染出来的；给 VM 一个固定的 cliproxy key，等于给了群里所有人。
-- 领域工具走 Max 的 MCP 服务，见 [MCP 通道](#mcp-通道)。工具要的东西（数据库、搜索、嵌入、内容库、QQ 管理）在 main 里建一份 `mcp::Services`，所有调用共用，里面的 `None` 只表示没配置。谁在调由 `mcp::Caller` 说：`Turn` 带着这一轮的 `Poster`，`Job` 带着它的上游，`Check` 是 `vm-check`。能用哪些工具只看 `Caller` 和 `job` 标记（2026-10-30 改：原来每处手拼一份上下文，job 那份漏了嵌入，`context_search` 静默退化成只按字面搜）。每个 job 开一个会话，会话活多久 job 就多久，所以工具的次数上限按一次运行的 10 倍算（`web_search` 一次运行 20 次，一个 job 200 次）。只开放不在群里说话做事的工具：读的，和 GitHub 的两个（2026-10-31 加，见 [GitHub](#github)）；job 结束时吊销。pi 在 VM 里也能跑 codemode 的 runner，用 job 自己的会话批量调这些工具。
+- 领域工具走 Max 的 MCP 服务，见 [MCP 通道](#mcp-通道)。工具要的东西（数据库、搜索、嵌入、内容库、QQ 管理）在 main 里建一份 `mcp::Services`，所有调用共用，里面的 `None` 只表示没配置。谁在调由 `mcp::Caller` 说：`Turn` 带着这一轮的 `Poster`，`Job` 带着 `job::Link`（它的上游，和听它模型调用的通道），`Check` 是 `vm-check`。能用哪些工具只看 `Caller` 和 `job` 标记（2026-10-30 改：原来每处手拼一份上下文，job 那份漏了嵌入，`context_search` 静默退化成只按字面搜）。每个 job 开一个会话，会话活多久 job 就多久，所以工具的次数上限按一次运行的 10 倍算（`web_search` 一次运行 20 次，一个 job 200 次）。只开放不在群里说话做事的工具：读的，和 GitHub 的两个（2026-10-31 加，见 [GitHub](#github)）；job 结束时吊销。pi 在 VM 里也能跑 codemode 的 runner，用 job 自己的会话批量调这些工具。
 - 会影响群的动作（发消息、发文件、撤回、禁言、建自动化）不给后台 agent。它的结果是一种唤醒（`Reason::Job`）：会话有核心在跑就喂给它，没有就起一个；由前台的模型决定怎么说。job 中途提问同样处理，见下面的**提问**。
 - **工具**（2026-10-30）：Max 在 `run_code` 里用四个 Max 工具管 job，都由会话 actor 回答（经 `Poster`，带回信通道），后台 agent 自己用不了：
   - `agent({ task, title? })` 马上返回 `{ job: "job#3" }`。job 在会话 actor 的表里，编号只在这次运行里递增，重启从 1 数。同时最多 3 个，每个 2 小时（原来 30 分钟，读一遍三万行代码都不够，10-30 改）。剩 5 分钟时 steer 一句让它停手写报告，到点先 `clear_queue` 再 `abort`，交出做到一半的。不提醒的话，到点时它多半正在调工具，最后一条助手消息没有文字，什么也交不出来（2026-10-30 job#2 就是这样）。一次运行最多起 3 个。没配 `llm.job`、没有 VM、正在重启时报错。
@@ -1690,7 +1690,7 @@ v1 之后做。
   - `/kill` 连 job 一起停，回一句停了哪些；`/status` 每个 job 一行。
 - **什么时候交出去**（2026-10-31）：系统提示的工具段说，要很多步的活交给后台 agent，别在 turn 里自己做：看一整个仓库的代码、审代码、改代码、装依赖、构建、跑测试、提 PR，读一大堆网页或文件。同一次输出里先回一句接了、大概要多久，再起 agent；几步就能答的自己做。起因：会话 9 里有人要它看代码、改代码，它总是在 turn 里自己做，10-31 那次 49 次工具、41 分钟才说第一句。[埋头太久的提醒](#核心)也提一句，剩下的活还多就交出去。
 - **结果**：pi 停下后取最后一条助手消息，存成 `/work/.max/jobs/job-<n>-<时间>.md`，再给会话 actor 一个 `JobDone`。actor 起一个 `Wake { ids: [], reason: Job { job }, item }`，`item` 是 `[job#3 完成] 标题`、`[job#3 到点停了，下面是做到一半的] 标题` 或 `[job#3 失败] 标题：原因`，下面是报告；超过单条上限只给开头 2000 字。末尾写全文的路径。没有报告时（失败的除外）指给它 `/work/.max/jobs` 里 pi 的会话记录。和判定一样，有核心就进它的下一批，没有就起一个。已经取消的 job 的结果丢掉。这条唤醒失败了（模型出错）不补发，全文还在文件里。
-- **用量**：pi 每次模型调用记一行 `llm_usage`，`purpose` 是 `job`（迁移 0015），没有 turn。
+- **用量**：每次模型调用记一行 `llm_usage`，`purpose` 是 `job`（迁移 0015），没有 turn。2026-11-07 起由转发器记（`mcp/forward.rs`），不再读 pi 的 `message_end`：回答流回 pi 的路上喂给 `max_llm::Meter`，用量按 max-llm 读 Max 自己调用的同一套换算（chat 的 `usage` 块要 `stream_options.include_usage`，pi 自己会带）；模型调了哪些工具按名字记，回答没完整的不算（工具不会跑）；还有 `first_ms`、`took_ms`、`quiet_ms`，原来 job 的这三个为空。调用结束（读完、断了、pi 不读了）时经 `job::Link` 告诉 job 的 `Ledger`：调用次数加一，工具次数和最近的工具跟着改，用量不为零就记一行。provider 还没回话就失败的（连不上、没出声）也算一次调用；转发器自己拒掉的（token、端点、不是 JSON）不算。`Meter` 的测试拿 max-llm 录下的 8 段回答对过：用量、工具和 max-llm 自己读出来的一样。
 - **提问**（2026-10-30）：后台 agent 卡在只有 Max 或群友才知道的事上，用 `ask_max({ question })` 问。这个工具是 guest 里的一个 pi 扩展（`nix/ask-max.ts`），调 `ctx.ui.input(问题)`：RPC 里成了一个 `input` 对话框，pi 在这个工具调用里一直等，上下文不断。`job::drive` 把它交给会话 actor（`Event::JobAsks`），actor 像报告一样唤醒 Max（`Reason::Job`），`item` 是 `[job#3 问] 标题`，下面是问题和“用 agent_steer 回答它，10 分钟内没答复它就自己判断”；已经取消的 job 的问题丢掉。问题没答复时，这个 job 的下一句 steer 就是答复，作为对话框的 `value` 回去，工具返回 `Max 答复：…`。10 分钟（`job::WAIT`）没答复，max 回 `cancelled`，工具返回“Max 这次没有答复，按你自己的判断继续，在报告里写明你做了哪些假设”；之后再来的 steer 照常是 steer。到点收尾和到点叫停前，先回掉没答复的问题：它在工具里等着，收不到 steer。`ask_max` 一次只跑一个（`executionMode: "sequential"`），同时来第二个问题或叫停后来的问题直接回 `cancelled`。没走 MCP 工具：一个等十分钟的 MCP 调用会撞上客户端的超时，而且 Max 自己的工具表里不该有它。2026-10-30 在 tank 上用 pi 1.4.0 实测过扩展：答复和 `cancelled` 两条路都对。
 - **pi 的系统提示**：追加一段，说它是 Max 的后台 agent，看不到群聊，要聊天记录用 `mcp__max__history`，查网页用 `mcp__max__web_search` 和 `webread`；卡在只有 Max 或群友才知道的事上用 `ask_max` 问，能自己查到、试出来的别问；最后一条消息就是报告，先结论后要点和出处，2000 字以内；文件放 `/work`；快到点时会提醒它收尾。
 
@@ -1700,7 +1700,7 @@ pi 适配器要处理的行为（2026-10-29 用 pi 1.4.0 实测）：
 - `abort` 不清队列。到点时先发 `clear_queue` 再发 `abort`：正在跑的 `sleep 40` 立刻被杀，`agent_settled` 带 `aborted: true`，`abort` 的回答在它之后。取消路径直接停 unit。
 - stdin EOF：空闲时 pi 0.01 秒内退出；跑到一半也立刻退出，子进程跟着死。所以它的生命周期可以绑在 stdio 上。
 - `agent_end` 不代表结束，要等 `agent_settled`；自动重试、排队的 steer 都在它之前。
-- 助手消息的 `message_end` 带用量。pi 的 `input` 不含缓存读写，记账时把 `cacheRead`、`cacheWrite` 加回去，才是整个请求。失败的调用 `stopReason` 是 `error`，原因在 `errorMessage`；重试成功后以最后一次为准。
+- 助手消息的 `message_end` 带用量。pi 的 `input` 不含缓存读写，记账时把 `cacheRead`、`cacheWrite` 加回去，才是整个请求（2026-11-07 起用量改由转发器读，这里只看失败）。失败的调用 `stopReason` 是 `error`，原因在 `errorMessage`；重试成功后以最后一次为准。
 - stdout 只按 LF 切行，不能用会把 U+2028 当换行的读行器。`agent_end` 带整个运行的消息，很长；超过 16 MiB 的行丢掉。
 - RPC 模式下扩展会发 `extension_ui_request`。`select`、`confirm`、`input`、`editor` 会一直等回答。`input` 是 `ask_max` 的问题，标题就是问题，交给 Max（见**提问**）；别的后台没人能答，一律回 `cancelled`；`notify` 只记日志，比如 MCP 服务连不上时 pi 发的那条。
 - MCP 工具在 `mcp.json` 里配 `"exposure": "direct"`，直接以 `mcp__max__<工具>` 出现在工具表里。pi 的 MCP 客户端说 2025-11-25 的协议，见 [MCP 通道](#mcp-通道)。
@@ -1708,6 +1708,50 @@ pi 适配器要处理的行为（2026-10-29 用 pi 1.4.0 实测）：
 guest 里的 pi 来自 numtide 的 llm-agents.nix，flake 里钉在一个 rev 上。包装脚本 `max-pi`（`nix/max-pi.sh`）从 stdin 第一行读这个 job 的 JSON：token、模型 id、协议、窗口、输出上限、effort 和追加的系统提示。它在 unit 的 RuntimeDirectory 里写 `models.json`（provider 只有一个 `max`，`baseUrl` 是 `/llm`，`apiKey` 是 `$MAX_JOB_TOKEN`）和 `mcp.json`，再 exec `pi --mode rpc --no-approve`，带上 `--extension` `ask-max.ts`（路径由 `max-pi.nix` 的 `MAX_ASK_MAX` 给）；会话存在 `/work/.max/jobs`。`/work` 里的 `.pi/` 是群里能写的，不信任。unit 停了目录就删，token 跟着没了。
 
 pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每天发补丁，RPC 协议没有版本字段。所以在 Nix 里钉版本，录几段真实的 JSONL 做适配器回放测试，升级前先跑这些测试。录下来的在 `crates/max/src/job/fixtures/`（去掉了流式增量、系统提示和本机路径）。
+
+### 和 harness 脱钩
+
+2026-11-07 定，owner 提的：宿主不再说 pi 的 RPC，改成宿主定一份 job 的约定，每种 agent harness 在 guest 里用自己的插件（或一个小 shim）去接，pi 是第一个。宿主上 job 的代码就不跟着 pi 的版本走，换 harness 也不改宿主。这和上面"等有第二个实现再抽 `AgentBackend`"不冲突：不是在 Rust 里加一层 trait，是线上的约定；前两步不管有没有第二个 harness 都值得做。
+
+**约定**（`contract: 1`；pi 的 RPC 没有版本字段，吃过亏）：
+
+- **起**：照旧，宿主在 unit 里起 harness 的包装脚本，stdin 第一行是 job 的 JSON：`contract`、`token`、`task`、`system`、`model`、`api`、`window`、`max_output`、`effort`。包装脚本把 token 导出成 `MAXX_TOKEN`。下面的调用都打到 VM 里的 `127.0.0.1:7777`，带 `Authorization: Bearer <token>`，job 结束后 401。
+- **`/llm/<端点>`、`/mcp`**：已有的。用量、调用次数、工具次数和最近的工具由转发器从回答里读（第一步，做了，见**用量**）。
+- **`POST /job/turn`**：harness 在每一轮的边界上调：一次模型调用和它的工具都跑完、下一次调用之前。回 `{"steers": [...], "stop": false}`，是上次以来排着的 steer，按先后，从此算送到了。
+- **`GET /job/stop`**：整个 job 开着一条，NDJSON：头马上回，每 30 秒一个空行，要停时一行 `{"stop": true}`。断了重连，已经要停的马上再给。
+- **`POST /job/ask`** `{"question"}`：`ask_max` 用。和 stop 一样先回头、发心跳，最后一行 `{"answer": "…"}` 或 `{"answer": null}`。要心跳是因为 Node 的 fetch（undici）头和正文 300 秒没动静就放弃，问题要等 10 分钟（`QUESTION_WAIT`）；它也不走 MCP，不受调用 60 秒（`CALL_TIME`）的限制。
+- **`POST /job/report`** `{"text", "error"}`：agent 停下后调一次，job 就结束。
+- **没报告就退出**：退出码 0 就把 stdout 当报告，否则算失败，带上 stderr 的末尾。没有插件的 harness（`x -p "$task"`）也能当 job 跑，只是没有 steer、提问和做到一半的报告。
+
+**规矩留在宿主**，和现在的 `job::drive` 一样，只换了 I/O：
+
+- 有问题在等时来的 steer 就是答复，不进队列。一次一个问题，第二个和叫停后来的马上回 `null`。
+- 剩 5 分钟：先把在等的问题回 `null`，再排上收尾的 steer。到点：在等的问题回 `null`，排着的 steer 丢掉，发 stop。到点后过 `GRACE` 还没报告：算到点停了、没有文字，停 unit。
+- 怎么结束的：发过 stop 是到点停了；否则 `error` 有值是失败；否则是完成。
+- 报告来时还排着的 steer 没送到，宿主知道，`JobDone` 里可以告诉 Max；原来这种悄悄丢了。
+- 取消照旧，停 unit。
+
+**steer 拉，stop 推**：steer 留在宿主上等 harness 来拉，harness 里就没有队列，叫停前不用先清队列（pi 扩展的 `ctx` 只有 `abort`、`isIdle`、`hasPendingMessages`、`shutdown`，没有清队列）；宿主也知道哪些送到了；别的 harness 的 hook（比如工具调用后跑的那种）也是在边界上拉。送达不比现在晚：pi 本来也只在两轮之间收 steer。stop 要打断正在跑的长工具或模型调用，只能推。
+
+**pi 那边**：`nix/max-job.ts` 代替 `ask-max.ts`，约 80 行；`client.js` 加一个 `job({ token })`，有 `turn()`、`ask(question, signal)`、`stops()`（像 `events()` 一样自己重连）、`report({ text, error })`，用 JS 写的插件都能用。
+
+- **steer**：`pi.on("turn_end")` 里 `await job.turn()`，每条 `pi.sendUserMessage(steer, { deliverAs: "steer" })`。看 pi 1.4 打包的代码，循环等 `turn_end` 的处理跑完才取 steer 队列，session 也等扩展的处理，所以会进下一次调用；要实测。包装脚本在 `settings.json` 写 `"steeringMode": "all"`，几条一起进（现在是 RPC 的 `set_steering_mode`）。
+- **stop**：记下 `agent_start`、`turn_start` 给的 `ctx`，收到 stop 就置 `stopping`、`ctx.abort()`，之后 `turn_end` 不再拉。请求过 abort 后再起的 run，pi 自己会再 abort；pi 里没有排着的 steer，不会接着做。
+- **报告**：用 `message_end` 记最后一条有文字的助手消息，`agent_settled`（pi 会等它的处理）时 `job.report({ text, error })`，`stopReason` 是 `error` 时 `error` 是它的 `errorMessage`。print 模式在最后一条是失败或中断时什么也不打，所以要插件自己报。
+- **`ask_max`**：工具照旧，`execute` 调 `job.ask(question, signal)`，不再用 `ctx.ui.input`；`null` 回原来"没有答复"那句。abort 经 `signal` 取消请求，宿主当问题撤回了。
+- **`max-pi.sh`**：`--mode rpc` 换成 `--print "$task"`，扩展换成 `max-job.ts`，导出 `MAXX_TOKEN`，`client.js` 的路径放环境变量，写 `settings.json`。`models.json`、`mcp.json`、系统提示和会话目录不变。
+
+**换之前在 tank 上试**：上面 `turn_end` 的顺序；print 模式在 `agent_settled` 之后才退出，报告发得出去；`/` 开头的任务在 print 模式里不会被当成命令；最后一个 `turn_end`（模型已经给了最终回答）拉到 steer，pi 会接着做。
+
+**风险**：token 在 agent 的环境里，它的 shell 也能调 `/job/*`，比如报一个假的报告。现在 `/mcp` 也是这样，报告本来就不可信；只是别往 `/job/*` 后面放更大的权限。
+
+**分三步**，每步单独有用：
+
+1. 用量和进度从转发器来（2026-11-07 做了，见**用量**）：`job::pi` 不再读用量和 `tool_execution_start`。
+2. `ask_max` 走 `/job/ask`，不再走对话框：`Question`、`Dialog`、`Answer`、`Dismiss` 去掉，宿主上 pi 专用的只剩 prompt、steer、清队列、abort、最后的文字和 `agent_settled`。
+3. `/job/turn`、`/job/stop`、`/job/report`，pi 改用 print 模式：`job::pi` 和 `job/fixtures/` 整个去掉，`drive` 成为通用的状态机，驱动挂在 job 会话上的状态（steer 队列、在等的问题、stop、报告），测试不再要 pi。
+
+再接一个 harness 要的：一个包装脚本，让它的模型请求走 `/llm`（现在只说 chat/completions 和 responses）、工具走 `/mcp`，追加 `system`；再在它接得上的地方接上面四个调用：边界上 `/job/turn`，`/job/stop` 接它的中断，停下时 `/job/report`，`ask_max` 调 `/job/ask`。一个都接不上，就是退回 stdout 的那种。
 
 ## 后台命令
 

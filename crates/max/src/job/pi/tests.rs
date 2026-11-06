@@ -4,7 +4,6 @@ use super::*;
 /// updates, no system prompt, no messages at `agent_end`.
 const STEER: &str = include_str!("../fixtures/steer.jsonl");
 const ABORT: &str = include_str!("../fixtures/abort.jsonl");
-const MCP: &str = include_str!("../fixtures/mcp.jsonl");
 
 fn records(fixture: &str) -> Vec<Record> {
     fixture
@@ -13,35 +12,13 @@ fn records(fixture: &str) -> Vec<Record> {
         .collect()
 }
 
-fn calls(records: &[Record]) -> Vec<Usage> {
-    records
-        .iter()
-        .filter_map(|record| match record {
-            Record::Called { usage, error: None } => Some(*usage),
-            _ => None,
-        })
-        .collect()
-}
-
 #[test]
 fn a_run_with_steers_is_read() {
     let records = records(STEER);
-    let calls = calls(&records);
-    assert_eq!(calls.len(), 4);
-    assert_eq!(
-        calls[0],
-        Usage {
-            input: 1644,
-            cached: 0,
-            output: 71,
-            reasoning: 52
-        }
-    );
-    let tools: Vec<&Record> = records
+    let calls = records
         .iter()
-        .filter(|record| matches!(record, Record::Tool(_)))
-        .collect();
-    assert_eq!(tools, [&Record::Tool("bash".into()); 3]);
+        .filter(|record| **record == Record::Called { error: None });
+    assert_eq!(calls.count(), 4);
     // The spike's ids weren't numbers.
     assert_eq!(
         records.last(),
@@ -67,13 +44,6 @@ fn an_aborted_run_settles_aborted() {
         _ => None,
     });
     assert_eq!(abort, Some((None, None)));
-}
-
-#[test]
-fn a_run_with_max_tools_is_read() {
-    let records = records(MCP);
-    assert!(records.contains(&Record::Tool("mcp__max__context_search".into())));
-    assert_eq!(calls(&records).len(), 2);
 }
 
 #[test]
@@ -105,25 +75,7 @@ fn a_failed_call_says_why() {
     assert_eq!(
         parse(failed).unwrap(),
         Record::Called {
-            usage: Usage::default(),
             error: Some("429 Resource exhausted".into()),
-        }
-    );
-}
-
-#[test]
-fn the_cache_counts_in_the_whole_request() {
-    let cached = br#"{"type":"message_end","message":{"role":"assistant","stopReason":"stop","usage":{"input":100,"output":20,"cacheRead":900,"cacheWrite":50,"reasoning":5}}}"#;
-    assert_eq!(
-        parse(cached).unwrap(),
-        Record::Called {
-            usage: Usage {
-                input: 1050,
-                cached: 900,
-                output: 20,
-                reasoning: 5
-            },
-            error: None,
         }
     );
 }

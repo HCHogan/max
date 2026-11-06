@@ -3,8 +3,10 @@
 //! provider's key, as they came but for the model id: the other fields
 //! are passed on as pi wrote them, not parsed. The answer streams
 //! back as it is, and is broken off if the provider keeps quiet as long
-//! as max-llm would wait: pi takes it for a failed call, and retries. See
-//! "后台 agent" in docs/rust-rewrite.md.
+//! as max-llm would wait: pi takes it for a failed call, and retries.
+//! On the way back it is read for what the call used, the tools it
+//! called and how long it took, which the job hears once the call is
+//! over. See "后台 agent" in docs/rust-rewrite.md.
 
 use std::time::Duration;
 use std::{fmt, io};
@@ -15,17 +17,20 @@ use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use axum::routing::post;
-use futures_util::Stream;
+use futures_util::{Stream, StreamExt};
 use max_core::ids::ConversationId;
-use max_core::item::Protocol;
+use max_core::item::{Protocol, Timing};
+use max_llm::Meter;
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::json;
 use serde_json::value::RawValue;
-use tokio::time::timeout;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::time::{Instant, timeout};
 
 use super::{Caller, Sessions};
+use crate::job::Called;
 
 pub mod api;
 
@@ -72,9 +77,10 @@ async fn call(
             "token 不对，或者这个 job 已经结束了",
         );
     };
-    let Caller::Job(upstream) = &session.context.caller else {
+    let Caller::Job(job) = &session.context.caller else {
         return refuse(StatusCode::FORBIDDEN, "这个会话不能调模型");
     };
+    let upstream = &job.upstream;
     let endpoint = match upstream.protocol {
         Protocol::Chat => "chat/completions",
         Protocol::Responses => "responses",
@@ -99,12 +105,15 @@ async fn call(
         sending = sending.header(name, value);
     }
     let idle = upstream.idle;
+    // Told when dropped: here if no answer comes, or with the answer's body.
+    let mut metering = Metering::new(upstream.protocol, job.called.clone());
     let sent = tokio::select! {
         sent = timeout(idle, sending.send()) => sent,
         () = session.closed.cancelled() => {
             return refuse(StatusCode::GONE, "这个 job 已经结束了");
         }
     };
+    metering.arrived();
     let answer = match sent {
         Ok(Ok(answer)) => answer,
         Ok(Err(error)) => {
@@ -120,7 +129,13 @@ async fn call(
         response = response.header(header::CONTENT_TYPE, kind);
     }
     response
-        .body(Body::from_stream(chunks(answer, idle)))
+        .body(Body::from_stream(chunks(answer, idle).map(move |chunk| {
+            metering.arrived();
+            if let Ok(chunk) = &chunk {
+                metering.read(chunk);
+            }
+            chunk
+        })))
         .unwrap_or_else(|_| refuse(StatusCode::BAD_GATEWAY, "模型的回答转不了"))
 }
 
@@ -175,6 +190,63 @@ fn chunks(answer: reqwest::Response, idle: Duration) -> impl Stream<Item = io::R
             }
         }
     })
+}
+
+/// A model call as it goes: what it says read by a [`Meter`], and its
+/// times, as max-llm keeps them for Max's own calls. Dropped, it tells
+/// the job: the answer ended, broke off, or pi stopped reading it.
+struct Metering {
+    meter: Meter,
+    sent: Instant,
+    arrived: Instant,
+    first: Option<Duration>,
+    quiet: Duration,
+    called: UnboundedSender<Called>,
+}
+
+impl Metering {
+    /// Starts the clock.
+    fn new(protocol: Protocol, called: UnboundedSender<Called>) -> Self {
+        let now = Instant::now();
+        Self {
+            meter: Meter::new(protocol),
+            sent: now,
+            arrived: now,
+            first: None,
+            quiet: Duration::ZERO,
+            called,
+        }
+    }
+
+    /// Something came: the answer's head, a chunk, or an error.
+    fn arrived(&mut self) {
+        let now = Instant::now();
+        self.quiet = self.quiet.max(now - self.arrived);
+        self.arrived = now;
+    }
+
+    fn read(&mut self, chunk: &[u8]) {
+        self.meter.push(chunk);
+        if self.first.is_none() && self.meter.started() {
+            self.first = Some(self.arrived - self.sent);
+        }
+    }
+}
+
+impl Drop for Metering {
+    fn drop(&mut self) {
+        let called = Called {
+            usage: self.meter.usage(),
+            timing: Timing {
+                first: self.first,
+                took: self.arrived - self.sent,
+                quiet: self.quiet,
+            },
+            tools: self.meter.tools(),
+        };
+        // The job is over: nobody is counting.
+        let _ = self.called.send(called);
+    }
 }
 
 /// An error as OpenAI's APIs put it, which pi shows the model.

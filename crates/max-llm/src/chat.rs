@@ -34,7 +34,7 @@ use crate::{
 const THINK: &str = "<think>";
 const UNTHINK: &str = "</think>";
 /// The fields of the message that providers stream reasoning in.
-const REASONING: [&str; 2] = ["reasoning_content", "reasoning"];
+pub(crate) const REASONING: [&str; 2] = ["reasoning_content", "reasoning"];
 /// Headings an answer that is reasoning written out opens with, in lower
 /// case. Seen 2026-10-29: Gemini 4 Argon, with no thinking tokens, wrote
 /// `Thinking Process:` and its numbered steps, and the group saw them.
@@ -703,7 +703,7 @@ fn merge(fields: &mut Map<String, Value>, field: &str, value: &Value) {
     }
 }
 
-fn usage(usage: &Value) -> Usage {
+pub(crate) fn usage(usage: &Value) -> Usage {
     let count = |value: &Value| u32::try_from(value.as_u64().unwrap_or(0)).unwrap_or(u32::MAX);
     let cached = &usage["prompt_tokens_details"]["cached_tokens"];
     Usage {

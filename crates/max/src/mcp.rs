@@ -34,7 +34,7 @@ use tracing::warn;
 
 use crate::conversation::{Place, Poster};
 use crate::embedding::Embedder;
-use crate::llm::Upstream;
+use crate::job::Link;
 use crate::media::store::Store;
 use crate::qq::admin::Admin;
 use crate::search::Search;
@@ -77,8 +77,8 @@ pub enum Caller {
     /// program's.
     Turn(Poster),
     /// A background agent: only the tools marked `job`, and its model
-    /// calls forwarded to the upstream.
-    Job(Arc<Upstream>),
+    /// calls forwarded to its upstream.
+    Job(Arc<Link>),
     /// A program Max keeps in the group's VM, outside any turn: only the
     /// tools marked `program`, and what it says is the program's.
     Program(Poster),
