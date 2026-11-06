@@ -1,0 +1,23 @@
+name = "max-verify"
+defaultTargets = ["MaxCore", "MaxVerify", "chunker"]
+
+# The revision ./extract takes Charon and Aeneas from, too.
+[[require]]
+name = "aeneas"
+git = "https://github.com/AeneasVerif/aeneas.git"
+rev = "4acbb6d73abe9082e45cf49ba6d6229a2c7d5836"
+subDir = "backends/lean"
+
+# max-core's chunker, as ./extract translates it.
+[[lean_lib]]
+name = "MaxCore"
+globs = ["MaxCore.+"]
+
+[[lean_lib]]
+name = "MaxVerify"
+
+# Reads texts as hex lines on stdin and prints the model's chunks, for
+# comparing it with the Rust; see diff/.
+[[lean_exe]]
+name = "chunker"
+root = "Main"

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Translates max-core's chunker, crates/max-core/src/segment/chunk.rs, to
+# Lean in MaxCore/, with the Charon and Aeneas of the Aeneas revision that
+# lakefile.toml pins for the Lean library. Run it after changing the
+# chunker and commit what it writes; it fails if Aeneas can't translate
+# all of it.
+set -euo pipefail
+
+verify=$(cd "$(dirname "$0")" && pwd)
+root=$(dirname "$verify")
+rev=$(sed -n 's/^rev = "\([0-9a-f]*\)"$/\1/p' "$verify/lakefile.toml")
+charon=$(nix build --no-link --print-out-paths "github:aeneasverif/aeneas/$rev#charon")
+aeneas=$(nix build --no-link --print-out-paths "github:aeneasverif/aeneas/$rev#aeneas")
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+(cd "$root/crates/max-core" &&
+  CARGO_TARGET_DIR="$root/target/charon" "$charon/bin/charon" cargo --preset=aeneas \
+    --start-from max_core::segment::chunk --dest-file "$work/max_core.llbc") >"$work/charon.log" 2>&1 ||
+  { cat "$work/charon.log"; exit 1; }
+"$aeneas/bin/aeneas" -backend lean -split-files -dest "$work/lean" "$work/max_core.llbc" >"$work/aeneas.log" 2>&1 ||
+  { cat "$work/aeneas.log"; exit 1; }
+
+# What Aeneas can't translate it reports as an error, leaves as `sorry` or
+# assumes as an axiom in a template for FunsExternal.lean.
+if grep -q '\[Error\]' "$work/aeneas.log" || grep -qw sorry "$work"/lean/*.lean ||
+  [ "$(ls "$work/lean")" != "$(printf 'Funs.lean\nTypes.lean')" ]; then
+  cat "$work/aeneas.log"
+  ls "$work/lean"
+  exit 1
+fi
+mkdir -p "$verify/MaxCore"
+cp "$work/lean/Types.lean" "$work/lean/Funs.lean" "$verify/MaxCore/"

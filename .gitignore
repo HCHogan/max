@@ -1,5 +1,9 @@
 # Rust
 /target/
+/verify/diff/target/
+
+# Lean
+/verify/.lake/
 
 # Nix
 .direnv/
