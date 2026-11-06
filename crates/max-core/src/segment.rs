@@ -114,7 +114,8 @@ impl Chunker {
     }
 }
 
-/// Chunks of UTF-8 are UTF-8: see `chunk`.
+/// Chunks of UTF-8 are UTF-8, which `verify/` proves, so the lossy
+/// conversion loses nothing: it is there instead of a panic.
 fn texts(chunks: Vec<Vec<u8>>) -> Vec<String> {
     chunks
         .into_iter()

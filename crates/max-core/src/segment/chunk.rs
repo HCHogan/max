@@ -6,7 +6,8 @@
 //! or derived `Default`, which Aeneas leaves as axioms.
 //!
 //! Every position it cuts at is next to an ASCII marker or a whole
-//! whitespace character, so the pieces of UTF-8 it cuts are UTF-8.
+//! whitespace character, so the pieces of UTF-8 it cuts are UTF-8, which
+//! `verify/` proves.
 
 #![expect(
     clippy::question_mark,
@@ -73,10 +74,10 @@ fn space_at(s: &[u8], i: usize) -> usize {
     if is_ascii_space(b) {
         return 1;
     }
-    if b == 0xc2 && i + 1 < s.len() && (s[i + 1] == 0x85 || s[i + 1] == 0xa0) {
+    if b == 0xc2 && s.len() - i > 1 && (s[i + 1] == 0x85 || s[i + 1] == 0xa0) {
         return 2;
     }
-    if i + 2 < s.len() && is_wide_space(b, s[i + 1], s[i + 2]) {
+    if s.len() - i > 2 && is_wide_space(b, s[i + 1], s[i + 2]) {
         return 3;
     }
     0
@@ -115,12 +116,13 @@ fn skip_space(s: &[u8], from: usize) -> usize {
     a
 }
 
-/// `s[from..to].trim()`, as positions in `s`.
+/// `s[from..to].trim()`, as positions in `s`. It looks only at
+/// `s[from..to]`, so `a <= b` even if a character crosses `from` or `to`.
 fn trim(s: &[u8], from: usize, to: usize) -> (usize, usize) {
     let mut a = from;
     let mut moving = true;
     while moving && a < to {
-        let n = space_at(s, a);
+        let n = space_at(&s[..to], a);
         if n == 0 {
             moving = false;
         } else {
@@ -130,7 +132,7 @@ fn trim(s: &[u8], from: usize, to: usize) -> (usize, usize) {
     let mut b = to;
     moving = true;
     while moving && b > a {
-        let n = space_before(s, b);
+        let n = space_before(&s[a..], b - a);
         if n == 0 {
             moving = false;
         } else {
@@ -755,6 +757,15 @@ mod tests {
                 "{c:?}"
             );
         }
+    }
+
+    #[test]
+    fn trim_looks_only_between() {
+        let wide = "\u{3000}".as_bytes();
+        assert_eq!(trim(wide, 0, 3), (3, 3));
+        assert_eq!(trim(wide, 1, 3), (1, 3));
+        assert_eq!(trim(wide, 0, 2), (0, 2));
+        assert_eq!(trim(" x\u{3000}".as_bytes(), 0, 3), (1, 3));
     }
 
     #[test]

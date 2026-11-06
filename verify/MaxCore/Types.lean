@@ -21,7 +21,7 @@ set_option maxRecDepth 2048
 namespace max_core
 
 /-- [max_core::segment::chunk::Kind]
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 153:0-160:1 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 155:0-162:1 -/
 @[discriminant isize]
 inductive segment.chunk.Kind where
 | Reply : segment.chunk.Kind
@@ -30,7 +30,7 @@ inductive segment.chunk.Kind where
 | Display : segment.chunk.Kind
 
 /-- [max_core::segment::chunk::Placeholder]
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 164:0-172:1 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 166:0-174:1 -/
 structure segment.chunk.Placeholder where
   kind : segment.chunk.Kind
   id : Std.I64
@@ -39,7 +39,7 @@ structure segment.chunk.Placeholder where
   len : Std.Usize
 
 /-- [max_core::segment::chunk::Chunker]
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 519:0-529:1 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 521:0-531:1 -/
 structure segment.chunk.Chunker where
   «partial» : alloc.vec.Vec Std.U8
   lines : alloc.vec.Vec (alloc.vec.Vec Std.U8)

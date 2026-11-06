@@ -12,6 +12,7 @@ in Lean, on the chunker itself as Aeneas translates it.
   - `Appends.lean`: the chunker only appends to `out`, so that holds for
     the way `segment.rs` drives it too.
   - `Fences.lean`: every chunk but the last closes its fences.
+  - `Utf8.lean`: chunks of UTF-8 are UTF-8, however the text is streamed.
 
 The theorems are properties, not a second chunker to compare with, so
 nothing here is kept in step with the Rust by hand but the proofs: a change
