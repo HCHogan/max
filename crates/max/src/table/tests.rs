@@ -288,7 +288,15 @@ async fn a_conversation_that_stopped_on_an_error_starts_again(pool: PgPool) {
     .unwrap();
     s.send(private(2, "嗯"));
     let said = s.said().await;
-    assert_eq!(said, ("c2c:OWNER".into(), "出错了，这条没回上。".into()));
+    let failed = "```text\nerror: the conversation failed: error returned from database: refused";
+    assert_eq!(said.0, "c2c:OWNER");
+    assert!(said.1.starts_with(failed), "{}", said.1);
+    assert_eq!(
+        said.1.matches("refused").count(),
+        1,
+        "the cause once: {}",
+        said.1
+    );
     let lost = "select count(*) from turn_outcomes where outcome = 'lost'";
     assert_eq!(s.count(lost).await, 1);
     // It is gone right after; a message it took while going would be lost.

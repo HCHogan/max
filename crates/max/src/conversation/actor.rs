@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Report, Result};
 use max_core::ids::{IdentityId, MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::item::{Item, ItemKind, ModelOutput, Timing};
@@ -31,6 +31,7 @@ use super::{
     Act, Event, Place, Post, Poster, Receipt, Subscription, TaskId, classify, model, tool,
 };
 use crate::bind::Binds;
+use crate::command;
 use crate::inbound::Inbound;
 use crate::llm::{self, Chosen, Models};
 use crate::mcp;
@@ -50,6 +51,9 @@ const SUBSCRIBED_ROWS: usize = 256;
 const FOLLOW_UP: Duration = Duration::from_secs(60);
 /// The most times a model call starts over before one finishes.
 const MOST_RESTARTS: u32 = 3;
+/// The most of a reason a failure line shows: a provider's error page
+/// runs to kilobytes.
+const REASON_CHARS: usize = 300;
 
 /// What every conversation's actor shares.
 pub struct Shared {
@@ -189,8 +193,8 @@ impl Conversation {
     /// when it gives up.
     pub async fn run(mut self, mut mailbox: UnboundedReceiver<Event>) -> Result<()> {
         let served = self.serve(&mut mailbox).await;
-        if served.is_err() {
-            self.give_up().await;
+        if let Err(error) = &served {
+            self.give_up(error).await;
         }
         served
     }
@@ -216,19 +220,19 @@ impl Conversation {
 
     /// After an error: the core and the jobs are stopped, and the
     /// conversation's unfinished turns end lost, as in a crash, so they
-    /// don't look running. A line says so,
-    /// if the database lets it. The next message starts the conversation
-    /// again.
-    async fn give_up(&mut self) {
+    /// don't look running. A line says so, with the error, if the database
+    /// lets it. The next message starts the conversation again.
+    async fn give_up(&mut self, error: &Report) {
         let core = self.core.take();
         let jobs = self.cancel_jobs();
-        if let Err(error) = self.wind_up(core, &jobs).await {
+        let why = chain(error);
+        if let Err(error) = self.wind_up(core, &jobs, &why).await {
             let conversation = self.place.conversation;
             warn!(%conversation, %error, "couldn't wind up after the error");
         }
     }
 
-    async fn wind_up(&mut self, core: Option<Active>, jobs: &[u32]) -> Result<()> {
+    async fn wind_up(&mut self, core: Option<Active>, jobs: &[u32], why: &str) -> Result<()> {
         let mut conn = self.shared.services.pool.acquire().await?;
         for turn in turns::unfinished(&mut conn, Some(self.place.conversation)).await? {
             turns::close(&mut conn, turn, &Outcome::Lost, Utc::now()).await?;
@@ -236,12 +240,11 @@ impl Conversation {
         drop(conn);
         if let Some(a) = core {
             drop(a.io);
-            self.report_unanswered(&a.run, "出错了，这条没回上。")
-                .await?;
+            let text = failure("the conversation failed", why, &[]);
+            self.report_unanswered(&a.run, &text).await?;
         }
         if !jobs.is_empty() {
-            let jobs: Vec<String> = jobs.iter().map(|job| format!("job#{job}")).collect();
-            let text = format!("出错了，后台的 {} 停了。", jobs.join("、"));
+            let text = failure("the conversation failed", why, jobs);
             let draft = Draft {
                 reply_to: None,
                 nodes: vec![DraftNode::Text { text }],
@@ -828,12 +831,23 @@ impl Conversation {
         info!(turn = %a.turn, ?outcome, rounds = a.run.round(), warned = a.run.warned(), "the core ends");
         drop(conn);
         let why = match how {
-            End::Failed(FailReason::Model { .. }) => "出错了，这条没回上。",
-            End::Failed(FailReason::ContextExhausted) => "要读的东西太多，读不完，这条没回上。",
-            End::Stopped => "我要重启一下，这条没回上，等会儿再问一次吧。",
+            End::Failed(FailReason::Model { error }) => {
+                failure("the model call failed", &error, &[])
+            }
+            End::Failed(FailReason::ContextExhausted) => {
+                let (tokens, limit) = a.run.context_tokens();
+                let reason = format!("{tokens} tokens, limit {limit}");
+                failure("the context is full", &reason, &[])
+            }
+            End::Stopped => {
+                let grace = self.shared.stop_grace;
+                let reason =
+                    format!("Max is shutting down, and the turn outlasted the {grace:?} grace");
+                failure("interrupted", &reason, &[])
+            }
             End::Kill(_) | End::Idle => return Ok(()),
         };
-        self.report_unanswered(&a.run, why).await
+        self.report_unanswered(&a.run, &why).await
     }
 
     /// A short line under the latest direct trigger the run didn't get to;
@@ -976,6 +990,39 @@ impl Conversation {
         }
         Some(at)
     }
+}
+
+/// `error` and its causes, `: ` between them, as `{:#}` has them; a
+/// cause its error already ends with is left out, as sqlx's database
+/// error ends with its source.
+fn chain(error: &Report) -> String {
+    let mut line = error.to_string();
+    for cause in error.chain().skip(1) {
+        let cause = cause.to_string();
+        if !line.ends_with(&cause) {
+            line.push_str(": ");
+            line.push_str(&cause);
+        }
+    }
+    line
+}
+
+/// What the host says when something fails, like a log, in a text code
+/// block: `error: what: reason`, the reason as it came on one line, cut
+/// when long; then the jobs stopped with it, if any.
+fn failure(what: &str, reason: &str, stopped: &[u32]) -> String {
+    let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut line = format!("error: {what}: ");
+    line.extend(reason.chars().take(REASON_CHARS));
+    if reason.chars().count() > REASON_CHARS {
+        line.push('…');
+    }
+    if !stopped.is_empty() {
+        let jobs: Vec<String> = stopped.iter().map(|job| format!("job#{job}")).collect();
+        line.push_str("\nstopped: ");
+        line.push_str(&jobs.join(", "));
+    }
+    command::fenced("text", &line)
 }
 
 mod commands;

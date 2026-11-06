@@ -432,6 +432,13 @@ impl Run {
         self.size() > self.base_tokens + limit / 10 * 9
     }
 
+    /// The context's tokens, and how many it may grow to: what
+    /// `at_limit` compares.
+    pub fn context_tokens(&self) -> (u32, u32) {
+        let limit = self.spec.limit(self.base_tokens);
+        (self.size(), self.base_tokens + limit)
+    }
+
     /// Whether the model has been warned that the run is near its limit.
     pub fn warned(&self) -> bool {
         self.warned

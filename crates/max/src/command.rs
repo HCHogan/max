@@ -51,12 +51,17 @@ impl Command {
 
 /// A command's answer as it is said: `/name → result`, any more lines
 /// under it, in a text code block, set apart from what Max says in a
-/// turn. The fence outgrows any run of backticks inside, as a persona
-/// may have.
+/// turn.
 pub fn answer(name: &str, body: &str) -> String {
+    fenced("text", &format!("/{name} → {body}"))
+}
+
+/// `body` in a code block of `language`. The fence outgrows any run of
+/// backticks inside, as a persona may have.
+pub fn fenced(language: &str, body: &str) -> String {
     let longest = body.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let fence = "`".repeat(longest.max(2) + 1);
-    format!("{fence}text\n/{name} → {body}\n{fence}")
+    format!("{fence}{language}\n{body}\n{fence}")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

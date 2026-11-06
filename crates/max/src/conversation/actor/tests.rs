@@ -395,7 +395,10 @@ async fn a_failed_call_says_so(pool: PgPool) {
     }));
     h.send(at_max(0, " 在吗"));
     let (message, text) = h.said().await;
-    assert_eq!(text, "出错了，这条没回上。");
+    assert_eq!(
+        text,
+        "```text\nerror: the model call failed: the provider answered 400: nope\n```"
+    );
     let Content::Message { reply_to, .. } = message.content else {
         unreachable!()
     };
@@ -465,7 +468,10 @@ async fn stopping_interrupts_a_call_that_outlasts_the_grace(pool: PgPool) {
     assert_eq!(h.turns().await[0].1, Some(Outcome::Interrupted));
     assert_eq!(h.count("select count(run) from turn_outcomes").await, 1);
     let (_, said) = h.said().await;
-    assert_eq!(said, "我要重启一下，这条没回上，等会儿再问一次吧。");
+    assert_eq!(
+        said,
+        "```text\nerror: interrupted: Max is shutting down, and the turn outlasted the 200ms grace\n```"
+    );
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
