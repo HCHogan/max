@@ -603,6 +603,19 @@ theorem picture_ok (s : Slice Std.U8) (p : Usize) :
     subst hlen
     exact ho P rfl
 
+/-- A quote ends after an ASCII byte. -/
+theorem quote_ends (s : Slice Std.U8) (p : Usize) :
+    Ok (quote s p) (fun r => ∀ len ∈ r, AfterAscii s.val (p.val + len.val)) := by
+  unfold quote
+  refine Ok.bind (placeholder_ok _ _) fun o ho => ?_
+  ok_cases
+  · exact Ok.ret (by simp)
+  · rename_i P
+    split <;> refine Ok.ret fun len hlen => ?_ <;> simp only [Option.mem_def,
+      reduceCtorEq, Option.some.injEq] at hlen
+    subst hlen
+    exact ho P rfl
+
 /-! ## Where a line is cut -/
 
 /-- A cut at `a`, of `len` bytes: from an ASCII byte to just after one. -/
@@ -847,6 +860,18 @@ theorem cut_utf8 (c : Chunker) (out : Out) (hc : Held c) (hout : AllUtf8 out) :
   refine Ok.bind (chunk_text_ok _ (by simpa [alloc.vec.Vec.deref] using hc.2)) fun chunk hch => ?_
   refine Ok.then_ fun _ _ => ?_
   split
+  · refine Ok.then_ fun _ _ => ?_
+    split
+    · exact Ok.ret ⟨hc, hout⟩
+    · exact end_utf8 _ _ _ hc hch hout
+  · exact Ok.ret ⟨hc, hout⟩
+
+theorem cut_for_quote_utf8 (c : Chunker) (out : Out) (hc : Held c) (hout : AllUtf8 out) :
+    Ok (Chunker.cut_for_quote c out) (fun r => Held r.1 ∧ AllUtf8 r.2) := by
+  unfold Chunker.cut_for_quote
+  refine Ok.bind (chunk_text_ok _ (by simpa [alloc.vec.Vec.deref] using hc.2)) fun chunk hch => ?_
+  refine Ok.then_ fun _ _ => ?_
+  split
   · exact end_utf8 _ _ _ hc hch hout
   · exact Ok.ret ⟨hc, hout⟩
 
@@ -860,20 +885,29 @@ theorem message_line_utf8 (c : Chunker) (line : Slice Std.U8) (out : Out) (hc : 
     Ok (Chunker.message_line c line out)
       (fun r => (∀ e ∈ r.1, Bd line.val e.val) ∧ Held r.2.1 ∧ AllUtf8 r.2.2) := by
   unfold Chunker.message_line
-  refine Ok.then_ fun _ _ => Ok.then_ fun o _ => ?_
-  refine Ok.bind (q := fun r : Chunker × Out × Usize => Held r.1 ∧ AllUtf8 r.2.1) ?_
-    fun ⟨c1, out1, shown⟩ ⟨hc1, hout1⟩ => ?_
+  refine Ok.then_ fun _ _ => Ok.bind (quote_ends _ _) fun o ho => ?_
+  refine Ok.bind (q := fun r : Chunker × Out × Usize × Usize => Held r.1 ∧ AllUtf8 r.2.1 ∧
+      (0 < r.2.2.1.val → Bd line.val r.2.2.1.val)) ?_
+    fun ⟨c1, out1, quoted, shown⟩ ⟨hc1, hout1, hq⟩ => ?_
   · ok_cases
-    · exact Ok.ret ⟨hc, hout⟩
-    · refine Ok.bind (cut_utf8 c out hc hout) fun ⟨c2, out2⟩ ⟨hc2, hout2⟩ => ?_
+    · exact Ok.ret ⟨hc, hout, fun h => absurd h (by simp)⟩
+    · rename_i len
+      refine Ok.bind (cut_for_quote_utf8 c out hc hout) fun ⟨c2, out2⟩ ⟨hc2, hout2⟩ => ?_
       refine Ok.uncurry_mk ?_
-      exact Ok.then_ fun _ _ => Ok.then_ fun _ _ => Ok.ret ⟨hc2, hout2⟩
-  refine Ok.uncurry_mk (Ok.uncurry_mk ?_)
+      refine Ok.bind (add_ok _ _) fun q hq => Ok.then_ fun _ _ => Ok.ret ⟨hc2, hout2, fun _ => ?_⟩
+      dsimp only
+      rw [hq]; exact bd_afterAscii hl (ho len rfl)
+  refine Ok.uncurry_mk (Ok.uncurry_mk (Ok.uncurry_mk ?_))
   refine Ok.then_ fun text _ => Ok.then_ fun b _ => Ok.ite (fun _ => ?_) (fun _ => ?_)
   · exact Ok.bind (push_line_utf8 _ _ hc1 hl) fun c2 hc2 => Ok.ret (by exact ⟨by simp, hc2, hout1⟩)
   refine Ok.then_ fun b1 _ => Ok.ite (fun _ => ?_) (fun _ => ?_)
-  · exact Ok.bind (cut_utf8 _ _ hc1 hout1) fun ⟨c2, out2⟩ ⟨hc2, hout2⟩ =>
-      Ok.uncurry_mk (Ok.ret (by exact ⟨by simp, hc2, hout2⟩))
+  · refine Ok.ite (fun hq0 => ?_) (fun _ => ?_)
+    · refine Ok.bind (range_to_ok _ _) fun s ⟨hs, _⟩ => ?_
+      exact Ok.bind (push_line_utf8 _ _ hc1
+        (by rw [hs]; exact (utf8_take_drop hl (hq (by scalar_tac))).1))
+        fun c2 hc2 => Ok.ret (by exact ⟨by simp, hc2, hout1⟩)
+    · exact Ok.bind (cut_utf8 _ _ hc1 hout1) fun ⟨c2, out2⟩ ⟨hc2, hout2⟩ =>
+        Ok.uncurry_mk (Ok.ret (by exact ⟨by simp, hc2, hout2⟩))
   refine Ok.then_ fun b2 _ => Ok.ite (fun _ => ?_) (fun _ => ?_)
   · refine Ok.ite (fun _ => ?_) (fun _ => ?_)
     · refine Ok.then_ fun b3 _ => Ok.ite (fun _ => ?_)

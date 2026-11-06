@@ -157,6 +157,19 @@ theorem cut_ok (c : Chunker) (out : Out) (hout : AllClose out) :
   refine Ok.then_ fun b hb => ?_
   split
   · rename_i h; subst h
+    refine Ok.then_ fun _ _ => ?_
+    split
+    · exact Ok.ret hout
+    · exact end_ok c chunk out hout hb
+  · exact Ok.ret hout
+
+theorem cut_for_quote_ok (c : Chunker) (out : Out) (hout : AllClose out) :
+    Ok (Chunker.cut_for_quote c out) (fun r => AllClose r.2) := by
+  unfold Chunker.cut_for_quote
+  refine Ok.then_ fun chunk _ => ?_
+  refine Ok.then_ fun b hb => ?_
+  split
+  · rename_i h; subst h
     exact end_ok c chunk out hout hb
   · exact Ok.ret hout
 
@@ -167,6 +180,7 @@ proven after it. -/
 macro "keep1" : tactic => `(tactic| (first
   | ((with_reducible apply Ok.ret); assumption)
   | ((with_reducible refine cut_ok _ _ ?_); assumption)
+  | ((with_reducible refine cut_for_quote_ok _ _ ?_); assumption)
   | ((with_reducible refine message_line_ok _ _ _ ?_); assumption)
   | ((with_reducible refine classify_loop_ok _ _ _ _ _ ?_); assumption)
   | ((with_reducible refine classify_ok _ _ _ ?_); assumption)
@@ -174,7 +188,8 @@ macro "keep1" : tactic => `(tactic| (first
   | with_reducible
       (refine Ok.bind (q := fun r : Chunker × Out => AllClose r.2) ?_ fun _ _ => ?_)
   | with_reducible
-      (refine Ok.bind (q := fun r : Chunker × Out × Usize => AllClose r.2.1) ?_ fun _ _ => ?_)
+      (refine Ok.bind (q := fun r : Chunker × Out × Usize × Usize => AllClose r.2.1) ?_
+        fun _ _ => ?_)
   | with_reducible
       (refine Ok.bind (q := fun r : Option Usize × Chunker × Out => AllClose r.2.2) ?_
         fun _ _ => ?_)

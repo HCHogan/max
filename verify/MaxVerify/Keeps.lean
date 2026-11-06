@@ -7,11 +7,12 @@ open max_core segment.chunk
 # Nothing is dropped
 
 `keeps` proves that the chunker, as `segment.rs` drives it, drops nothing of
-a text but `<think>` spans, then whitespace, `[split]`s and break lines:
-however the text is streamed, the chunks hold, newlines aside, its lines
-outside `<think>` spans, each cut at its `[split]`s and around its pictures'
-handles, with the break lines among the pieces gone and whitespace taken out
-of the rest. `Keeps` says it, and is all that a reader needs to read.
+a text but `<think>` spans, then whitespace, `[split]`s and breaks: however
+the text is streamed, the chunks hold, newlines aside, its lines outside
+`<think>` spans, each cut at its `[split]`s and around its pictures'
+handles, with breaks gone and whitespace taken out of the rest, in order.
+A quote before a break stays, and goes out with the next message.
+`Keeps` says it, and is all that a reader needs to read.
 
 `Keeps` allows a little more than the chunker does, so that it reads simply:
 
@@ -19,9 +20,6 @@ of the rest. `Keeps` says it, and is all that a reader needs to read.
   with them, and drops the ones it cuts at.
 * A `[split]` may go wherever it is; the chunker cuts only at one outside
   code.
-
-And a break line goes with what comes before it on the line, whitespace and
-a quote, `[reply#id]`: the line `[reply#3] ---` sends nothing.
 -/
 
 namespace MaxVerify
@@ -71,19 +69,17 @@ def Picture (l : List Std.U8) (a n : Nat) : Prop :=
   ∃ (s : Slice Std.U8) (a' n' : Usize), s.val = l ∧ a'.val = a ∧ n'.val = n ∧
     picture s a' = ok (some n')
 
-/-- A break line: `---`, `***` or `___`, spaces allowed between, as
-`is_break` judges it, after a quote it may start with, which goes with it. -/
-def Break (m : List Std.U8) : Prop :=
-  ∃ (s t : Slice Std.U8) (k : Nat), s.val = m ∧ t.val = m.drop k ∧ is_break t = ok true ∧
-    (k = 0 ∨ ∃ a n : Usize, Spaces (m.take a.val) ∧ quote s a = ok (some n) ∧
-      a.val + n.val ≤ k ∧ Spaces (m.slice (a.val + n.val) k))
+/-- A break: `---`, `***` or `___`, spaces allowed between, as `is_break`
+judges it. -/
+def Break (b : List Std.U8) : Prop := ∃ t : Slice Std.U8, t.val = b ∧ is_break t = ok true
 
 /-- A line, or what follows a cut in one, and the pieces kept of it: it is
 cut at its `[split]`s, which go, and around its pictures' handles, which
-are messages of their own; a break line goes. -/
+are messages of their own; a break goes, with the whitespace before it, but
+not what comes before that, as a quote. -/
 inductive Msg : List Std.U8 → List (List Std.U8) → Prop
   | whole (m : List Std.U8) : Msg m [m]
-  | brk {m : List Std.U8} : Break m → Msg m []
+  | brk (p : List Std.U8) {w b : List Std.U8} : Spaces w → Break b → Msg (p ++ w ++ b) [p]
   | split {p m : List Std.U8} {ps : List (List Std.U8)} :
       Msg m ps → Msg (p ++ SPLIT ++ m) (p :: ps)
   | pic {p q m : List Std.U8} {ps : List (List Std.U8)} :
@@ -634,6 +630,19 @@ theorem cut_keeps (c : Chunker) (out : Out) (pre ps : List (List Std.U8))
   refine Ok.bind (chunk_text_keeps _) fun chunk hch => ?_
   refine Ok.then_ fun _ _ => ?_
   split
+  · refine Ok.then_ fun _ _ => ?_
+    split
+    · exact Ok.ret ⟨h, Same.rfl' c⟩
+    · exact end_keeps _ _ _ _ _ h (by simpa [alloc.vec.Vec.deref] using hch)
+  · exact Ok.ret ⟨h, Same.rfl' c⟩
+
+theorem cut_for_quote_keeps (c : Chunker) (out : Out) (pre ps : List (List Std.U8))
+    (h : Inv c (pre ++ vals out) ps) :
+    Ok (Chunker.cut_for_quote c out) (fun r => Inv r.1 (pre ++ vals r.2) ps ∧ Same c r.1) := by
+  unfold Chunker.cut_for_quote
+  refine Ok.bind (chunk_text_keeps _) fun chunk hch => ?_
+  refine Ok.then_ fun _ _ => ?_
+  split
   · exact end_keeps _ _ _ _ _ h (by simpa [alloc.vec.Vec.deref] using hch)
   · exact Ok.ret ⟨h, Same.rfl' c⟩
 
@@ -711,6 +720,12 @@ theorem prefix_split {t l : List Std.U8} {a : Nat} (h : t <+: l.drop a) :
     rw [← List.drop_drop, ← hu, List.drop_left]
   rw [← hu', List.append_assoc, hu, List.take_append_drop]
 
+theorem take_slice_drop {l : List Std.U8} {a b : Nat} (h : a ≤ b) :
+    l.take a ++ l.slice a b ++ l.drop b = l := by
+  rw [List.append_assoc, List.slice,
+    show l.drop b = (l.drop a).drop (b - a) by rw [List.drop_drop]; congr 1; omega,
+    List.take_append_drop, List.take_append_drop]
+
 theorem mem_of_mem_slice {l : List Std.U8} {a b : Nat} {x : Std.U8} (h : x ∈ l.slice a b) : x ∈ l :=
   List.mem_of_mem_drop (List.mem_of_mem_take h)
 
@@ -743,36 +758,39 @@ theorem message_line_keeps (c : Chunker) (line : Slice Std.U8) (out : Out)
       | none => Msg line.val k
       | some e => ∀ qs, Msg (line.val.drop e.val) qs → Msg line.val (k ++ qs)) := by
   unfold Chunker.message_line
-  refine Ok.bind (skip_space_keeps _ _) fun at0 ⟨_, hat⟩ => ?_
-  refine Ok.then_ fun o ho => ?_
-  refine Ok.bind (q := fun r : Chunker × Out × Usize => Same c r.1 ∧
-      Inv r.1 (pre ++ vals r.2.1) ps ∧ (r.2.2.val = 0 ∨ ∃ len : Usize, o = some len ∧
-        at0.val + len.val ≤ r.2.2.val ∧ Spaces (line.val.slice (at0.val + len.val) r.2.2.val)))
-    ?_ fun ⟨c1, out1, shown⟩ ⟨hs1, hc1, hshown⟩ => ?_
+  refine Ok.then_ fun at0 _ => Ok.then_ fun o _ => ?_
+  -- Where the quote ends, and whitespace from there to what QQ shows.
+  refine Ok.bind (q := fun r : Chunker × Out × Usize × Usize => Same c r.1 ∧
+      Inv r.1 (pre ++ vals r.2.1) ps ∧ r.2.2.1.val ≤ r.2.2.2.val ∧
+      Spaces (line.val.slice r.2.2.1.val r.2.2.2.val))
+    ?_ fun ⟨c1, out1, quoted, shown⟩ ⟨hs1, hc1, hqs, hshown⟩ => ?_
   · ok_cases
-    · exact Ok.ret ⟨Same.rfl' c, h, Or.inl rfl⟩
-    · rename_i len
-      refine Ok.bind (cut_keeps c out pre ps h) fun ⟨c2, out2⟩ ⟨hc2, hs2⟩ => ?_
+    · exact Ok.ret ⟨Same.rfl' c, h, le_rfl, by rw [slice_self]; exact Spaces.nil⟩
+    · refine Ok.bind (cut_for_quote_keeps c out pre ps h) fun ⟨c2, out2⟩ ⟨hc2, hs2⟩ => ?_
       refine Ok.uncurry_mk ?_
-      refine Ok.bind (add_ok _ _) fun i hi => ?_
-      refine Ok.bind (skip_space_keeps _ _) fun shown1 ⟨hsh1, hsh2⟩ =>
-        Ok.ret ⟨hs2, hc2, Or.inr ⟨len, rfl, ?_, ?_⟩⟩
-      · scalar_tac
-      · rw [← hi]; exact hsh2
-  refine Ok.uncurry_mk (Ok.uncurry_mk ?_)
+      refine Ok.bind (add_ok _ _) fun i _ => ?_
+      exact Ok.bind (skip_space_keeps _ _) fun shown1 ⟨hsh1, hsh2⟩ =>
+        Ok.ret ⟨hs2, hc2, hsh1, hsh2⟩
+  refine Ok.uncurry_mk (Ok.uncurry_mk (Ok.uncurry_mk ?_))
   refine Ok.bind (range_from_ok _ _) fun text ⟨htext, _⟩ => ?_
   refine Ok.then_ fun b _ => Ok.ite (fun _ => ?_) (fun _ => ?_)
   · -- a fence: the whole line
     exact Ok.bind (push_line_keeps _ _ _ _ line.val hc1 hl (HeldL.own _ HeldL.nil))
       fun c2 ⟨hc2, hs2⟩ => Ok.ret ⟨hs1.trans hs2, [line.val], hc2, Msg.whole _⟩
   refine Ok.then_ fun b1 hb1 => Ok.ite (fun hb1' => ?_) (fun _ => ?_)
-  · -- a break, which goes
-    refine Ok.bind (cut_keeps _ _ _ _ hc1) fun ⟨c2, out2⟩ ⟨hc2, hs2⟩ =>
-      Ok.uncurry_mk (Ok.ret ⟨hs1.trans hs2, [], by simpa using hc2, Msg.brk ?_⟩)
-    refine ⟨line, text, shown.val, rfl, htext, by rw [hb1, hb1'], ?_⟩
-    rcases hshown with h0 | ⟨len, rfl, hle, hsp⟩
-    · exact Or.inl h0
-    · exact Or.inr ⟨at0, len, by simpa using hat, ho, hle, hsp⟩
+  · -- a break, which goes, but not a quote before it
+    have hbrk : Break (line.val.drop shown.val) := ⟨text, htext, by rw [hb1, hb1']⟩
+    have hmsg := Msg.brk (line.val.take quoted.val) hshown hbrk
+    rw [take_slice_drop hqs] at hmsg
+    refine Ok.ite (fun hq => ?_) (fun hq => ?_)
+    · refine Ok.bind (range_to_ok _ _) fun s ⟨hs, _⟩ => ?_
+      refine Ok.bind (push_line_keeps _ _ _ _ s.val hc1 ?_ (HeldL.own _ HeldL.nil))
+        fun c2 ⟨hc2, hs2⟩ => Ok.ret ⟨hs1.trans hs2, [s.val], hc2, by rw [hs]; exact hmsg⟩
+      rw [hs]; exact fun h => hl (List.mem_of_mem_take h)
+    · have h0 : quoted.val = 0 := by scalar_tac
+      rw [h0, List.take_zero] at hmsg
+      exact Ok.bind (cut_keeps _ _ _ _ hc1) fun ⟨c2, out2⟩ ⟨hc2, hs2⟩ =>
+        Ok.uncurry_mk (Ok.ret ⟨hs1.trans hs2, [[]], hc2.blank Spaces.nil, hmsg⟩)
   refine Ok.bind (is_blank_keeps _ _ _ (by simp)) fun b2 hb2 =>
     Ok.ite (fun hb2' => ?_) (fun _ => ?_)
   · -- blank: whitespace, which goes

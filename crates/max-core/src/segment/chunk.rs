@@ -306,6 +306,14 @@ fn quote(s: &[u8], at: usize) -> Option<usize> {
     }
 }
 
+/// Whether a chunk is a quote and nothing else.
+fn is_quote(chunk: &[u8]) -> bool {
+    match quote(chunk, 0) {
+        Some(len) => len == chunk.len(),
+        None => false,
+    }
+}
+
 /// The length of the picture's handle at `at`, if one is there.
 fn picture(s: &[u8], at: usize) -> Option<usize> {
     match placeholder(s, at) {
@@ -621,18 +629,26 @@ impl Chunker {
         // reply and what follows it as the start of the text, which is
         // what is a fence, a heading or a break.
         let at = skip_space(line, 0);
+        // Where the quote ends, and the text QQ shows starts.
+        let mut quoted = 0;
         let mut shown = 0;
         if let Some(len) = quote(line, at) {
-            self.cut(out);
+            self.cut_for_quote(out);
             self.sections = false;
-            shown = skip_space(line, at + len);
+            quoted = at + len;
+            shown = skip_space(line, quoted);
         }
         let text = &line[shown..];
         if is_fence(text) {
             self.push_line(line);
             None
         } else if is_break(text) {
-            self.cut(out);
+            if quoted > 0 {
+                // The quote before it quotes what follows: `cut` keeps it.
+                self.push_line(&line[..quoted]);
+            } else {
+                self.cut(out);
+            }
             None
         } else if is_blank(line, 0, line.len()) {
             if !self.sections {
@@ -720,12 +736,26 @@ impl Chunker {
         self.lines.push(copy);
     }
 
-    /// Ends the chunk being built, if it closes its fences. Outside a fence
-    /// it does: `push_line` keeps `in_fence` to what the lines are, and
-    /// trimming them changes no fence. But the chunk is judged by itself,
-    /// so that `verify/` proves that no chunk but the last goes out with a
-    /// fence open without having to prove that.
+    /// Ends the chunk being built, if it closes its fences, unless all it
+    /// holds is a quote: a quote with nothing after it in its message, as
+    /// on a line of its own or before a break, quotes the next message.
+    ///
+    /// Outside a fence the chunk closes its fences: `push_line` keeps
+    /// `in_fence` to what the lines are, and trimming them changes no
+    /// fence. But the chunk is judged by itself, so that `verify/` proves
+    /// that no chunk but the last goes out with a fence open without having
+    /// to prove that.
     fn cut(&mut self, out: &mut Vec<Vec<u8>>) {
+        let chunk = chunk_text(&self.lines);
+        if closes_fences(&chunk) && !is_quote(&chunk) {
+            self.end(chunk, out);
+        }
+    }
+
+    /// Ends the chunk being built where a quote starts a message, even if
+    /// all it holds is a quote: the new one replaces it. A chunk that only
+    /// quotes says nothing, and `parse` makes no message of it.
+    fn cut_for_quote(&mut self, out: &mut Vec<Vec<u8>>) {
         let chunk = chunk_text(&self.lines);
         if closes_fences(&chunk) {
             self.end(chunk, out);

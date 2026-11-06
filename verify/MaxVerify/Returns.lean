@@ -541,9 +541,23 @@ theorem end_spec (c : Chunker) (chunk : alloc.vec.Vec Std.U8) (out : Out)
     try omega
 
 @[step]
+theorem is_quote_spec (s : Slice Std.U8) : is_quote s ⦃ _ => True ⦄ := by
+  unfold is_quote
+  pstep
+
+@[step]
 theorem cut_spec (c : Chunker) (out : Out) (h : room c out ≤ Usize.max) :
     Chunker.cut c out ⦃ r => room r.1 r.2 ≤ room c out ∧ r.1.partial = c.partial ⦄ := by
   unfold Chunker.cut
+  pstep
+  all_goals
+    simp only [room, deref_val] at *
+    try omega
+
+@[step]
+theorem cut_for_quote_spec (c : Chunker) (out : Out) (h : room c out ≤ Usize.max) :
+    Chunker.cut_for_quote c out ⦃ r => room r.1 r.2 ≤ room c out ∧ r.1.partial = c.partial ⦄ := by
+  unfold Chunker.cut_for_quote
   pstep
   all_goals
     simp only [room, deref_val] at *

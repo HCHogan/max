@@ -22,7 +22,11 @@
 //! starts a message, and ends the document: Max is back to chatting. From
 //! 11-02 to 11-04, three times a jab at someone written after a document's
 //! last section went out inside that section, and so the whole section as
-//! a reply to them.
+//! a reply to them. A quote with nothing after it in its message, as on a
+//! line of its own or before a break, quotes the next message, unless that
+//! starts with a quote of its own; with no next message, it goes. Until
+//! 11-07 it went out alone, as a message `parse` makes nothing of, and the
+//! next message quoted nothing.
 //!
 //! A message can start in the middle of a line: after `[split]` or a
 //! picture's handle, what follows is judged as a line of its own, and on a
@@ -129,6 +133,7 @@ fn texts(chunks: Vec<Vec<u8>>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::DraftNode;
 
     fn chunks(text: &str) -> Vec<String> {
         let mut chunker = Chunker::default();
@@ -196,6 +201,52 @@ mod tests {
         out.extend(segmenter.finish());
         let quoted: Vec<_> = out.iter().map(|s| s.draft.reply_to).collect();
         assert_eq!(quoted, [None, Some(crate::ids::MessageId(7))]);
+    }
+
+    #[test]
+    fn a_quote_with_nothing_after_it_quotes_the_next_message() {
+        // Before a break or on a line of its own, across blank lines and
+        // breaks.
+        assert_eq!(
+            chunks("一\n\n[reply#3] ---\n\n二\n\n三"),
+            ["一", "[reply#3]\n二", "三"]
+        );
+        assert_eq!(chunks("[reply#3]\n\n---\n\n  \n二"), ["[reply#3]\n二"]);
+        assert_eq!(
+            chunks("### 总结\n甲\n\n[reply#3] ***\n## 附录\n乙\n\n丙"),
+            ["### 总结\n甲", "[reply#3]\n## 附录\n乙\n\n丙"]
+        );
+
+        let drafts = |text: &str| {
+            let mut segmenter = Segmenter::new(BTreeSet::new());
+            let mut out = segmenter.push(text);
+            out.extend(segmenter.finish());
+            out.into_iter()
+                .map(|s| (s.draft.reply_to.map(|id| id.0), s.draft.nodes))
+                .collect::<Vec<_>>()
+        };
+        let text = |s: &str| DraftNode::Text { text: s.to_owned() };
+        let sticker = DraftNode::Picture {
+            message: crate::ids::MessageId(4),
+            ordinal: 0,
+        };
+        assert_eq!(drafts("[reply#3] ---\n\n二"), [(Some(3), vec![text("二")])]);
+        // A picture can quote too, as QQ sends a quote with one.
+        assert_eq!(
+            drafts("[reply#3] [sticker#4.0] 二"),
+            [(Some(3), vec![sticker.clone()]), (None, vec![text("二")])]
+        );
+        assert_eq!(
+            drafts("[reply#3] ---\n[sticker#4.0]"),
+            [(Some(3), vec![sticker])]
+        );
+        // A quote that starts the next message replaces it.
+        assert_eq!(
+            drafts("[reply#3] ---\n[reply#5] 二"),
+            [(Some(5), vec![text("二")])]
+        );
+        // With nothing after it, it goes.
+        assert_eq!(drafts("一\n\n[reply#3] ---"), [(None, vec![text("一")])]);
     }
 
     #[test]
@@ -323,7 +374,6 @@ mod tests {
     #[test]
     fn segmenter() {
         use crate::ids::MessageId;
-        use crate::message::DraftNode;
 
         let mut segmenter = Segmenter::new([PrincipalId(12)].into());
         let mut out =

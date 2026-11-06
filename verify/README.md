@@ -16,7 +16,7 @@ in Lean, on the chunker itself as Aeneas translates it.
   - `Returns.lean`: the chunker returns, neither panicking nor looping, for
     any text shorter than about half of `usize::MAX` bytes.
   - `Keeps.lean`: nothing of a text is dropped but `<think>` spans,
-    whitespace, `[split]`s and break lines, however it is streamed.
+    whitespace, `[split]`s and breaks, however it is streamed.
 
 The theorems are properties, not a second chunker to compare with, so
 nothing here is kept in step with the Rust by hand but the proofs: a change

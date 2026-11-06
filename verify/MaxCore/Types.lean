@@ -39,7 +39,7 @@ structure segment.chunk.Placeholder where
   len : Std.Usize
 
 /-- [max_core::segment::chunk::Chunker]
-    Source: 'crates/max-core/src/segment/chunk.rs', lines 522:0-532:1 -/
+    Source: 'crates/max-core/src/segment/chunk.rs', lines 530:0-540:1 -/
 structure segment.chunk.Chunker where
   «partial» : alloc.vec.Vec Std.U8
   lines : alloc.vec.Vec (alloc.vec.Vec Std.U8)
