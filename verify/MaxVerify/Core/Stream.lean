@@ -11,9 +11,9 @@ down to how it fails, if it does.
 
 The proof doesn't look inside `Chunker.line`: `push` is a loop over the
 bytes that hands each line to it as its newline comes, so the pieces don't
-matter. The theorem is about one `out` that every push appends to. The
-`&str` wrapper in `segment.rs` gives each push an empty one, which comes to
-the same as long as the chunker only appends to `out`.
+matter. The theorem is about one `out` that every push appends to; the
+`&str` wrapper in `segment.rs` gives each push a new one, which
+`Appends.lean` proves comes to the same.
 -/
 
 open Aeneas Aeneas.Std Result ControlFlow
@@ -23,11 +23,18 @@ namespace MaxVerify.Core
 
 abbrev Out := alloc.vec.Vec (alloc.vec.Vec Std.U8)
 
+/-- `out.extend_from_slice(&chunks)`. -/
+abbrev extend (out chunks : Out) : Result Out :=
+  alloc.vec.Vec.extend_from_slice (core.clone.CloneallocvecVec core.clone.CloneU8) out
+    (alloc.vec.Vec.deref chunks)
+
 /-- One byte: a newline completes the line. -/
 def step (c : Chunker) (out : Out) (b : Std.U8) : Result (Chunker × Out) :=
   if b = 10#u8 then do
     let (line, c) ← Chunker.take_line c
-    Chunker.line c (alloc.vec.Vec.deref line) out
+    let (chunks, c) ← Chunker.line c (alloc.vec.Vec.deref line)
+    let out ← extend out chunks
+    ok (c, out)
   else do
     let v ← alloc.vec.Vec.push c.partial b
     ok ({ c with «partial» := v }, out)

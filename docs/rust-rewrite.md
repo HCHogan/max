@@ -913,7 +913,7 @@ QQ 的网关跨重启 Resume：重启那段时间群里说的话由服务端补�
 - 会话 actor 用真的数据库（`#[sqlx::test]`）、剧本模型和只记录的 sender，测取消、停止和它的宽限期、空闲窗口、撞上限、过期事件和 `seen` 对 `Wake` 的过滤；在任意两个事件之间插 `/kill` 的遍历见 [cancellation safety](#cancellation-safety)。2026-10-29 改：actor 测试用真实时间，不用 `start_paused`。actor 在等 Postgres 的时候，暂停的时钟会自动跳到下一个到期时间，空闲窗口和去抖就提前到了。所以测试里的等待都很短，而且有上限；纯时间的逻辑（intent、sender 的额度）照样用 `start_paused`。
 - 协议适配层用录下来的 Responses 和 Chat 响应做 fixture，测推理条目和不透明字段原样往返。
 - 快照里是每次请求的内容，线上任何一次模型调用都能离线原样重发。
-- 分段器的切分（`segment/chunk.rs`）用 Aeneas 能翻译的 Rust 子集来写（2026-11-06 定）：`verify/extract` 用 Charon 和 Aeneas 把它翻成 Lean，翻出来的代码提交在 `verify/MaxCore/`，`verify/` 在它上面证明性质。实现还是只有 Rust 这一份。目前证明了文本分几次推进去，和一次推完是同一个计算。CI 还不检查翻出来的代码是不是最新的，见 `verify/README.md`。
+- 分段器的切分（`segment/chunk.rs`）用 Aeneas 能翻译的 Rust 子集来写（2026-11-06 定）：`verify/extract` 用 Charon 和 Aeneas 把它翻成 Lean，翻出来的代码提交在 `verify/MaxCore/`，`verify/` 在它上面证明性质。实现还是只有 Rust 这一份。目前证明了文本分几次推进去，和一次推完是同一个计算；按 `segment.rs` 的用法（每次 push 给一个新的 `out`），切出来的段也一样。CI 还不检查翻出来的代码是不是最新的，见 `verify/README.md`。
 
 ### 同一模式的其它地方
 

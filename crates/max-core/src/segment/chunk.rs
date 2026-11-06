@@ -493,7 +493,7 @@ impl Chunker {
         while i < delta.len() {
             if delta[i] == b'\n' {
                 let line = self.take_line();
-                self.line(&line, out);
+                out.extend_from_slice(&self.line(&line));
             } else {
                 self.partial.push(delta[i]);
             }
@@ -504,13 +504,15 @@ impl Chunker {
     /// The end of the text; the remaining chunks go to `out`. An unclosed
     /// fence runs to the end, so it comes out as one chunk.
     pub(super) fn finish(&mut self, out: &mut Vec<Vec<u8>>) {
+        let mut chunks = Vec::new();
         if !self.partial.is_empty() {
             let mut rest = Vec::new();
             rest.extend_from_slice(&self.partial);
             self.partial = Vec::new();
-            self.line(&rest, out);
+            chunks = self.line(&rest);
         }
-        self.cut(out);
+        self.cut(&mut chunks);
+        out.extend_from_slice(&chunks);
     }
 
     /// The line in `partial`, without the `\r`s it ends with.
@@ -525,10 +527,16 @@ impl Chunker {
         line
     }
 
-    fn line(&mut self, raw: &[u8], out: &mut Vec<Vec<u8>>) {
+    /// The chunks a line completes. `push` and `finish` copy them into the
+    /// caller's `out`, which nothing else touches, so `verify/` can prove
+    /// that the chunker only appends to it. They copy, as Aeneas doesn't
+    /// know `Vec::append`.
+    fn line(&mut self, raw: &[u8]) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
         if let Some(line) = self.unthink(raw) {
-            self.classify(&line, out);
+            self.classify(&line, &mut out);
         }
+        out
     }
 
     fn classify(&mut self, line: &[u8], out: &mut Vec<Vec<u8>>) {
