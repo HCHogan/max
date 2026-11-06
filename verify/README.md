@@ -1,18 +1,21 @@
 # verify
 
 Proofs about max-core's chunker, `crates/max-core/src/segment/chunk.rs`,
-in Lean.
+in Lean, on the chunker itself as Aeneas translates it.
 
-- `MaxCore/` is the chunker as Aeneas translates it. `./extract` writes
-  it; run it after changing `chunk.rs` and commit what it writes. It needs
-  Nix and builds Charon and Aeneas at the revision `lakefile.toml` pins.
-- `MaxVerify/Core/` proves things of `MaxCore`: that streaming is
-  invisible, for the way `segment.rs` drives the chunker too, and that
-  every chunk but the last closes its fences.
-- `MaxVerify/Chunker/` is a model of the chunker written by hand, over
-  characters, with its own proof of streaming and the counterexamples
-  that show fences split. `diff/` checks it against the Rust on random
-  texts: `lake build`, then `cargo run --release` in `diff/`.
+- `MaxCore/` is the translation. `./extract` writes it; run it after
+  changing `chunk.rs` and commit what it writes. It needs Nix and builds
+  Charon and Aeneas at the revision `lakefile.toml` pins.
+- `MaxVerify/` proves things of `MaxCore`:
+  - `Stream.lean`: a text streamed in pieces gives the chunks it gives
+    all at once.
+  - `Appends.lean`: the chunker only appends to `out`, so that holds for
+    the way `segment.rs` drives it too.
+  - `Fences.lean`: every chunk but the last closes its fences.
+
+The theorems are properties, not a second chunker to compare with, so
+nothing here is kept in step with the Rust by hand but the proofs: a change
+to `chunk.rs` that breaks one needs it fixed, or the property is gone.
 
 `lake build` builds it all. The first build fetches Mathlib, about 7 GB;
 `lake exe cache get` downloads it built.

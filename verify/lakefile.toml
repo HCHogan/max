@@ -1,5 +1,5 @@
 name = "max-verify"
-defaultTargets = ["MaxCore", "MaxVerify", "chunker"]
+defaultTargets = ["MaxCore", "MaxVerify"]
 
 # The revision ./extract takes Charon and Aeneas from, too.
 [[require]]
@@ -16,8 +16,3 @@ globs = ["MaxCore.+"]
 [[lean_lib]]
 name = "MaxVerify"
 
-# Reads texts as hex lines on stdin and prints the model's chunks, for
-# comparing it with the Rust; see diff/.
-[[lean_exe]]
-name = "chunker"
-root = "Main"

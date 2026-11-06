@@ -1,4 +1,4 @@
-import MaxVerify.Core.Appends
+import MaxVerify.Appends
 
 open Aeneas Aeneas.Std Result ControlFlow
 open Aeneas.Data.Coinductive
@@ -19,7 +19,7 @@ chunker's state, as it is the check in `cut` that keeps fences whole. That
 the check never holds a chunk back outside a fence is a test in `chunk.rs`.
 -/
 
-namespace MaxVerify.Core
+namespace MaxVerify
 
 /-! ## If it returns
 
@@ -285,4 +285,4 @@ theorem fences_whole (c : Chunker) (pieces : List (Slice Std.U8))
     ∀ x ∈ L.dropLast, Closes x :=
   (wrapper_closes c pieces).result h
 
-end MaxVerify.Core
+end MaxVerify

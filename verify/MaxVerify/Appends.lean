@@ -1,4 +1,4 @@
-import MaxVerify.Core.Stream
+import MaxVerify.Stream
 
 /-!
 # The chunker only appends to `out`
@@ -16,7 +16,7 @@ with another, the chunks of all of them one after another.
 open Aeneas Aeneas.Std Result ControlFlow
 open max_core segment.chunk
 
-namespace MaxVerify.Core
+namespace MaxVerify
 
 abbrev empty : Out := alloc.vec.Vec.new _
 
@@ -239,5 +239,5 @@ theorem wrapper_streaming (pieces : List (Slice Std.U8)) (text : Slice Std.U8)
   rw [whole_wrapper]
   simp
 
-end MaxVerify.Core
+end MaxVerify
 

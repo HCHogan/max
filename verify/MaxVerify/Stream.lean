@@ -1,7 +1,7 @@
 import MaxCore.Funs
 
 /-!
-# Streaming is invisible, in the Rust
+# Streaming is invisible
 
 `segment.rs` says: "The cuts depend only on the text, not on how it
 arrived: streamed in any pieces, it gives the same chunks as all at once."
@@ -19,7 +19,7 @@ matter. The theorem is about one `out` that every push appends to; the
 open Aeneas Aeneas.Std Result ControlFlow
 open max_core segment.chunk
 
-namespace MaxVerify.Core
+namespace MaxVerify
 
 abbrev Out := alloc.vec.Vec (alloc.vec.Vec Std.U8)
 
@@ -147,4 +147,4 @@ theorem chunks_streaming (pieces : List (Slice Std.U8)) (text : Slice Std.U8)
     rfl
   simp only [chunks, streaming pieces text h, one]
 
-end MaxVerify.Core
+end MaxVerify
