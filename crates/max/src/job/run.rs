@@ -1,6 +1,7 @@
-//! A job in the group's VM: max-pi in a unit of its own, its session of
-//! the MCP service, its model calls on the record as the forwarder tells
-//! them, and its report saved in /work.
+//! A job in the group's VM: its harness's wrapper, max-pi, in a unit of
+//! its own, given the job on the first line of stdin; its session of the
+//! MCP service, which its plugin calls; its model calls on the record as
+//! the forwarder tells them; and its report saved in /work.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -11,12 +12,13 @@ use max_core::item::{Protocol, Usage};
 use max_db::{PgPool, usage};
 use serde_json::json;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::oneshot;
 use tokio::time::{Instant, timeout};
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use super::pi::Lines;
-use super::{Called, Ending, GONE, GRACE, How, Question, Watch, drive};
+use super::{Called, Ending, Exit, GRACE, Hook, How, Watch, drive};
 use crate::llm::Upstream;
 use crate::mcp;
 use crate::vm::ssh::{Sink, Stream};
@@ -30,8 +32,14 @@ const SYSTEM: &str = "你是 Max 的后台 agent。Max 是一个群聊里的 AI 
 - 环境：NixOS，root，能上公网，/work 是本群的持久目录，也是家目录（~），群里的程序也用；缺什么用 nix shell nixpkgs#包名 -c 命令 临时装。/nix/store 是宿主的整个 store，几百万个文件：要某个包里的文件，用 nix build --no-link --print-out-paths nixpkgs#包名 拿到它的路径再进去找，不在 /nix/store 下 find、ls 或用通配符。
 - 有时间限制，快到点时会提醒你收尾，到点会被叫停。只做交给你的事。";
 
-/// What stderr keeps, for the log when pi fails.
+/// The version of the contract with the harness; see "和 harness 脱钩" in
+/// docs/rust-rewrite.md.
+const CONTRACT: u32 = 1;
+
+/// What stderr keeps, for the log when the agent fails.
 const ERR_KEPT: usize = 4096;
+/// What stdout keeps, the end: the report of a harness with no plugin.
+const OUT_KEPT: usize = 256 << 10;
 
 /// What a job is given.
 pub struct Start {
@@ -45,8 +53,10 @@ pub struct Start {
     /// How its model calls went, from the forwarder; open while its
     /// session is.
     pub calls: UnboundedReceiver<Called>,
-    /// The agent's questions, from `/job/ask`; open while its session is.
-    pub questions: UnboundedReceiver<Question>,
+    /// Its harness's calls; open while its session is.
+    pub hooks: UnboundedReceiver<Hook>,
+    /// Its session's [`super::Link::stop`].
+    pub stop: CancellationToken,
     pub deadline: Instant,
     pub progress: Arc<Mutex<Progress>>,
     /// Takes the agent's question to Max.
@@ -72,13 +82,15 @@ pub struct Finished {
     pub file: Option<String>,
 }
 
-/// Runs the job until pi settles, fails, or runs out of time.
+/// Runs the job until the agent reports, its harness ends, or it runs
+/// out of time.
 pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finished {
     let conversation = start.context.place.conversation;
     let failed = |why: String| Finished {
         ending: Ending {
             how: How::Failed(why),
             text: None,
+            unsent: 0,
         },
         file: None,
     };
@@ -93,12 +105,13 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
         progress: start.progress,
     };
     let mut calls = start.calls;
-    let mut questions = start.questions;
+    let mut hooks = start.hooks;
     let mut watch = Asks(start.ask);
     let grant = start.vms.sessions().open(start.context);
     let unit = Vm::unit();
-    // The unit outlives the deadline only by pi's grace, twice. A login
-    // shell, as `shell`'s commands have: pi's run in the same environment.
+    // The unit outlives the deadline only by the agent's grace, twice. A
+    // login shell, as `shell`'s commands have: the agent's run in the same
+    // environment.
     let limit = start.deadline.saturating_duration_since(Instant::now()) + 2 * GRACE;
     let line = format!(
         "SYSTEMD_ADJUST_TERMINAL_TITLE=0 exec systemd-run --quiet --pipe --wait --collect \
@@ -109,7 +122,7 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
     info!(%conversation, job = start.number, %unit, model = start.upstream.reference(), "a job starts");
     let (mut command, mut input) = match vm.open(unit, &line).await {
         Ok(opened) => opened,
-        Err(error) => return failed(format!("pi 没起来：{error}")),
+        Err(error) => return failed(format!("agent 没起来：{error}")),
     };
     let upstream = &start.upstream;
     let api = match upstream.protocol {
@@ -117,7 +130,9 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
         Protocol::Responses => "openai-responses",
     };
     let job = json!({
+        "contract": CONTRACT,
         "token": grant.token(),
+        "task": start.task,
         "model": upstream.model,
         "api": api,
         "window": upstream.window,
@@ -125,19 +140,16 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
         "effort": upstream.effort,
         "system": SYSTEM,
     });
-    if input
-        .write_all(format!("{job}\n").as_bytes())
-        .await
-        .is_err()
-    {
-        return failed(GONE.to_owned());
-    }
-    let (records_tx, mut records) = unbounded_channel();
-    let mut out = Out {
-        lines: Lines::default(),
-        records: Some(records_tx),
-        err: Vec::new(),
+    // The job is all the harness reads.
+    let given = async {
+        input.write_all(format!("{job}\n").as_bytes()).await?;
+        input.shutdown().await
     };
+    if let Err(error) = given.await {
+        return failed(format!("agent 没起来：{error}"));
+    }
+    let mut out = Out::default();
+    let (exit, mut exited) = oneshot::channel();
     let recording = async {
         while let Some(called) = calls.recv().await {
             ledger.record(called).await;
@@ -147,18 +159,21 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
     let mut recorded = false;
     let ending = {
         let reading = async {
-            if let Err(error) = command.wait(&mut out).await {
+            let status = command.wait(&mut out).await.unwrap_or_else(|error| {
                 warn!(%error, "lost a job's output");
-            }
-            // pi's records end with it.
-            out.records = None;
+                None
+            });
+            let _ = exit.send(Exit {
+                status,
+                out: String::from_utf8_lossy(&out.out).into_owned(),
+                err: String::from_utf8_lossy(&out.err).into_owned(),
+            });
         };
         let driving = drive(
-            input,
-            &mut records,
+            &mut hooks,
             &mut steers,
-            &mut questions,
-            &start.task,
+            &mut exited,
+            &start.stop,
             start.deadline,
             &mut watch,
         );
@@ -171,15 +186,15 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
                 () = &mut recording, if !recorded => recorded = true,
             }
         };
-        // pi exits once its stdin is closed; if it doesn't, the command's
-        // drop stops its unit.
+        // The harness exits once its agent has reported; if it doesn't,
+        // the command's drop stops its unit.
         if !read {
             let _ = timeout(GRACE, reading).await;
         }
         ending
     };
-    // Once the session is closed and pi's calls are over, none is left to
-    // tell: record what came.
+    // Once the session is closed and the agent's calls are over, none is
+    // left to tell: record what came.
     drop(grant);
     if !recorded {
         let _ = timeout(GRACE, recording).await;
@@ -217,34 +232,22 @@ async fn save(vm: &Vm, number: u32, title: &str, text: &str) -> Option<String> {
     }
 }
 
-/// pi's stdout, as records' lines; the end of its stderr.
+/// The ends of the harness's stdout and stderr.
+#[derive(Default)]
 struct Out {
-    lines: Lines,
-    records: Option<UnboundedSender<Vec<u8>>>,
+    out: Vec<u8>,
     err: Vec<u8>,
 }
 
 impl Sink for Out {
     async fn output(&mut self, stream: Stream, data: &[u8]) -> Result<()> {
-        let Out {
-            lines,
-            records,
-            err,
-        } = self;
-        match stream {
-            Stream::Out => {
-                if let Some(records) = records {
-                    lines.push(data, |line| {
-                        let _ = records.send(line);
-                    });
-                }
-            }
-            Stream::Err => {
-                err.extend_from_slice(data);
-                let over = err.len().saturating_sub(ERR_KEPT);
-                err.drain(..over);
-            }
-        }
+        let (kept, most) = match stream {
+            Stream::Out => (&mut self.out, OUT_KEPT),
+            Stream::Err => (&mut self.err, ERR_KEPT),
+        };
+        kept.extend_from_slice(data);
+        let over = kept.len().saturating_sub(most);
+        kept.drain(..over);
         Ok(())
     }
 }

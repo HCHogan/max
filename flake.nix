@@ -20,9 +20,10 @@
       url = "github:microvm-nix/microvm.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # pi, the background agents, in the guest. Its RPC has no version:
-    # job::pi's tests replay what this one (pi 1.4.0) said, so moving the
-    # pin means recording again and running them.
+    # pi, the background agents, in the guest. nix/max-job.ts holds to
+    # this one's (pi 1.4.0's) extension API, which has no version: moving
+    # the pin means running a job with it again (see "和 harness 脱钩" in
+    # docs/rust-rewrite.md).
     llm-agents.url = "github:numtide/llm-agents.nix/e452052b9efb54fd59f8a06cbc09978fb542a3c2";
   };
 
@@ -54,8 +55,8 @@
 
           # Cargo's sources plus what the build reads besides: insta's
           # snapshots, max-db's migrations and its offline query data,
-          # max-llm's recorded responses, pi's recorded sessions, and the
-          # guest's scripts, which max's tests run with Node and Python.
+          # max-llm's recorded responses, and the guest's scripts, which
+          # max's tests run with Node and Python.
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
             name = "source";
@@ -66,7 +67,6 @@
               || pkgs.lib.hasSuffix ".sql" path
               || pkgs.lib.hasSuffix ".sse" path
               || pkgs.lib.hasInfix "/.sqlx/" path
-              || pkgs.lib.hasSuffix ".jsonl" path
               || (
                 pkgs.lib.hasInfix "/nix/" path && (pkgs.lib.hasSuffix ".js" path || pkgs.lib.hasSuffix ".py" path)
               );

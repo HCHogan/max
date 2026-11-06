@@ -389,6 +389,7 @@ pub async fn background(vms: Vms, conversation: ConversationId, shell: Backgroun
         ending: Ending {
             how: How::Failed(why),
             text: None,
+            unsent: 0,
         },
         file: None,
     };
@@ -432,6 +433,7 @@ pub async fn background(vms: Vms, conversation: ConversationId, shell: Backgroun
         ending: Ending {
             how,
             text: Some(with(head, &shown)),
+            unsent: 0,
         },
         file: None,
     }

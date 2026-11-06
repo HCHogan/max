@@ -839,6 +839,7 @@ fn finished(how: How, text: &str) -> Finished {
         ending: Ending {
             how,
             text: Some(text.to_owned()),
+            unsent: 0,
         },
         file: Some("/work/.max/jobs/job-1.md".to_owned()),
     }
@@ -975,6 +976,7 @@ async fn a_background_command_is_a_job_that_wakes_max_when_it_ends(pool: PgPool)
         ending: Ending {
             how: How::Done,
             text: Some("退出码 0，跑了 3 分 12 秒\nok".to_owned()),
+            unsent: 0,
         },
         file: None,
     };

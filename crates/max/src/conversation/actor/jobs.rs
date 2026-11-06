@@ -11,6 +11,7 @@ use std::sync::{Mutex, PoisonError};
 use max_core::item::Item;
 use max_core::render::EXCERPT_CHARS;
 use tokio::sync::mpsc::unbounded_channel;
+use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::job::{self, Finished, How, Progress, Reply, Request, Status, name};
@@ -30,7 +31,7 @@ struct Running {
     started: Instant,
     /// None for a background command.
     agent: Option<Agent>,
-    /// Dropping it stops the job: pi, or the command's unit.
+    /// Dropping it stops the job: the agent's unit, or the command's.
     _task: Scope,
 }
 
@@ -115,7 +116,8 @@ impl Conversation {
             .filter(|title| !title.is_empty())
             .unwrap_or_else(|| headline(&task));
         let (called, calls) = unbounded_channel();
-        let (asks, questions) = unbounded_channel();
+        let (hooks, hooked) = unbounded_channel();
+        let stop = CancellationToken::new();
         let context = mcp::Context {
             services: Arc::clone(&self.shared.services),
             place: Arc::clone(&self.place),
@@ -125,7 +127,8 @@ impl Conversation {
             caller: mcp::Caller::Job(Arc::new(job::Link {
                 upstream: Arc::clone(&upstream),
                 called,
-                asks,
+                hooks,
+                stop: stop.clone(),
             })),
         };
         let (steers, steered) = unbounded_channel();
@@ -139,7 +142,8 @@ impl Conversation {
             context,
             upstream,
             calls,
-            questions,
+            hooks: hooked,
+            stop,
             deadline: Instant::now() + limits::JOB_TIME,
             progress: Arc::clone(&progress),
             ask: Box::new(move |question| {
@@ -373,6 +377,13 @@ fn report(job: u32, title: &str, finished: &Finished, single: u32) -> Item {
     if let Some(file) = &finished.file {
         let _ = write!(text, "\n（全文在 {file}）");
     }
+    match finished.ending.unsent {
+        0 => {}
+        1 => text += "\n（你最后补充的那条它没收到）",
+        unsent => {
+            let _ = write!(text, "\n（你最后补充的 {unsent} 条它没收到）");
+        }
+    }
     let tokens = tokens::count(&text);
     Item::new(ItemKind::user(text), tokens)
 }
@@ -418,6 +429,7 @@ mod tests {
             ending: Ending {
                 how,
                 text: text.map(str::to_owned),
+                unsent: 0,
             },
             file: file.map(str::to_owned),
         }
@@ -458,6 +470,12 @@ mod tests {
         );
         let cut = finished(How::OutOfTime, None, None);
         assert!(shown(&report(3, "查票价", &cut, 2000)).ends_with("它的会话记录）"));
+        let mut late = finished(How::Done, Some("好了"), None);
+        late.ending.unsent = 2;
+        assert_eq!(
+            shown(&report(3, "查票价", &late, 2000)),
+            "[job#3 完成] 查票价\n好了\n（你最后补充的 2 条它没收到）"
+        );
     }
 
     #[test]

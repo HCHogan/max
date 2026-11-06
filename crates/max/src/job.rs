@@ -1,34 +1,66 @@
-//! Background agents: pi in the group's VM, given a task by Max, working
-//! while the group talks on, and reporting when it's done. See "后台
-//! agent" in docs/rust-rewrite.md.
+//! Background agents: an agent harness in the group's VM, pi so far,
+//! given a task by Max, working while the group talks on, and reporting
+//! when it's done. The host holds a contract with the harness's plugin,
+//! not with the harness: see "后台 agent" and "和 harness 脱钩" in
+//! docs/rust-rewrite.md.
 
-pub mod pi;
 mod run;
 
+use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
 use max_core::item::{Timing, Usage};
 use schemars::JsonSchema;
-use serde::Serialize;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
-use tokio::time::{Instant, sleep_until, timeout};
-use tracing::warn;
+use tokio::time::{Instant, sleep_until};
+use tokio_util::sync::CancellationToken;
 
 use crate::llm::Upstream;
 use max_core::limits::QUESTION_WAIT;
-use pi::{Ask, Record};
 pub use run::{Asker, Finished, Progress, Start, run};
 
 /// What a job's session knows of it: the model its calls go to, who
-/// hears how each went, and where its questions go.
+/// hears how each went, where its harness's calls go, and when it is to
+/// stop.
 #[derive(Debug)]
 pub struct Link {
     pub upstream: Arc<Upstream>,
     pub called: UnboundedSender<Called>,
-    pub asks: UnboundedSender<Question>,
+    /// `/job/turn`'s, `/job/ask`'s and `/job/report`'s.
+    pub hooks: UnboundedSender<Hook>,
+    /// Cancelled at the deadline, for `/job/stop`.
+    pub stop: CancellationToken,
+}
+
+/// What the harness calls for, at one of its hooks.
+#[derive(Debug)]
+pub enum Hook {
+    /// A turn has ended: the steers since the last, and whether to stop.
+    /// Dropped unanswered, it took none of them.
+    Turn(oneshot::Sender<Turn>),
+    Ask(Question),
+    /// The agent has settled: the job ends.
+    Report(Report),
+}
+
+/// What a turn's end is told.
+#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Turn {
+    pub steers: Vec<String>,
+    pub stop: bool,
+}
+
+/// What the agent settled with: its last text, and its last model
+/// call's error.
+#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct Report {
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// The agent's question to Max, from `ask_max` through `/job/ask`, and
@@ -37,6 +69,16 @@ pub struct Link {
 pub struct Question {
     pub text: String,
     pub answer: oneshot::Sender<Option<String>>,
+}
+
+/// How the harness's process ended: its exit status, if the guest sent
+/// one; what it wrote, for one with no plugin to report; and the end of
+/// its stderr.
+#[derive(Debug, Default)]
+pub struct Exit {
+    pub status: Option<u32>,
+    pub out: String,
+    pub err: String,
 }
 
 /// The question the agent waits on, and since when.
@@ -116,13 +158,13 @@ pub fn name(job: u32) -> String {
     format!("job#{job}")
 }
 
-/// How long pi has to settle once aborted, and to give its last text.
+/// How long the agent has to settle and report once told to stop.
 const GRACE: Duration = Duration::from_secs(15);
 
-/// How long before its deadline pi is told to stop and write its report:
-/// aborted with a tool call under way, it has none to give.
+/// How long before its deadline the agent is told to stop and write its
+/// report: stopped with a tool call under way, it has none to give.
 const WARNING: Duration = Duration::from_secs(5 * 60);
-/// What pi is told at [`WARNING`].
+/// What the agent is told at [`WARNING`].
 fn wrap_up_message() -> String {
     format!(
         "还剩 {} 分钟就到点了。别再查新的，现在就把已经查到的写成报告交给 Max，没做完的写明做到哪了。",
@@ -130,7 +172,8 @@ fn wrap_up_message() -> String {
     )
 }
 
-const GONE: &str = "pi 意外退出了";
+/// How much of stderr's end a failure's reason carries.
+const WHY_KEPT: usize = 300;
 
 /// What a job's driver tells as it goes. Its model calls and their tools
 /// the forwarder tells, as [`Called`].
@@ -139,106 +182,102 @@ pub trait Watch {
     fn asks(&mut self, question: &str);
 }
 
-/// How a job ended, and the agent's last text: its report, or how far it
-/// got.
-#[derive(Debug, PartialEq, Eq)]
+/// How a job ended, the agent's last text, its report or how far it got,
+/// and how many of Max's steers it never took in.
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct Ending {
     pub how: How,
     pub text: Option<String>,
+    pub unsent: usize,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub enum How {
+    #[default]
     Done,
-    /// Aborted at its deadline.
+    /// Stopped at its deadline.
     OutOfTime,
     Failed(String),
 }
 
-/// Gives pi `task`, passes on the steers that come, and waits until pi
-/// settles, telling it to wrap up shortly before `deadline` and aborting it
-/// then. While the agent waits on one of its `questions`, the next steer
-/// is its answer; none within [`QUESTION_WAIT`], and it is told none is
-/// coming. `records` are the lines of pi's stdout, and end when pi does;
-/// `input` is its stdin, closed at the end.
+/// Keeps the job's side of the contract with its harness until the agent
+/// reports, or its process ends: holds Max's `steers` until the next
+/// turn's end takes them, tells the agent to wrap up shortly before
+/// `deadline`, and cancels `stop` then. While the agent waits on a
+/// question, the next steer is its answer; none within
+/// [`QUESTION_WAIT`], and it is told none is coming. A harness with no
+/// plugin only ends: `exited` tells how, and its output is the report.
 pub async fn drive(
-    input: impl AsyncWrite + Unpin,
-    records: &mut UnboundedReceiver<Vec<u8>>,
+    hooks: &mut UnboundedReceiver<Hook>,
     steers: &mut UnboundedReceiver<String>,
-    questions: &mut UnboundedReceiver<Question>,
-    task: &str,
+    exited: &mut oneshot::Receiver<Exit>,
+    stop: &CancellationToken,
     deadline: Instant,
     watch: &mut impl Watch,
 ) -> Ending {
-    let failed = |why: &str| Ending {
-        how: How::Failed(why.to_owned()),
-        text: None,
-    };
-    let mut pi = Pi { input, next: 0 };
-    if pi.ask(Ask::SteerAll).await.is_err() {
-        return failed(GONE);
-    }
-    let Ok(prompt) = pi.ask(Ask::Prompt(task)).await else {
-        return failed(GONE);
-    };
-    // The last model call's error: none once a retry got through.
-    let mut error = None;
-    let mut aborted: Option<Instant> = None;
+    // The steers not yet taken in, and Max's dropped at the deadline;
+    // whether the queue holds the wrap-up, which isn't Max's.
+    let mut queue = Vec::new();
+    let mut dropped = 0;
+    let mut wrapping = false;
+    let mut stopped: Option<Instant> = None;
     let mut question: Option<Waiting> = None;
     // Only a job that has the time is told.
     let mut wrap_up = deadline
         .checked_sub(WARNING)
         .filter(|at| *at > Instant::now());
-    loop {
-        let give_up = aborted.map(|at| at + GRACE);
+    let (how, text) = loop {
+        let give_up = stopped.map(|at| at + GRACE);
         let given_up_on = question
             .as_ref()
             .map(|waiting| waiting.since + QUESTION_WAIT);
         tokio::select! {
-            line = records.recv() => {
-                let Some(line) = line else {
-                    return failed(GONE);
-                };
-                match pi::parse(&line) {
-                    Ok(Record::Response { id, error: Some(why), .. }) => {
-                        if id == Some(prompt) {
-                            return failed(&why);
-                        }
-                        warn!(%why, "pi refused a command");
+            // The report comes before the process ends.
+            biased;
+            Some(hook) = hooks.recv() => match hook {
+                Hook::Turn(reply) => {
+                    // Every steer sent before the turn ended.
+                    while stopped.is_none() && let Ok(steer) = steers.try_recv() {
+                        take(steer, &mut question, &mut queue);
                     }
-                    Ok(Record::Called { error: why }) => error = why,
-                    Ok(Record::Settled { .. }) => break,
-                    Ok(Record::Dialog(dialog)) => {
-                        if pi.ask(Ask::Dismiss(&dialog)).await.is_err() {
-                            return failed(GONE);
-                        }
+                    let turn = Turn { steers: mem::take(&mut queue), stop: stopped.is_some() };
+                    let took = mem::take(&mut wrapping);
+                    if let Err(turn) = reply.send(turn) {
+                        queue = turn.steers;
+                        wrapping = took;
                     }
-                    Ok(Record::Notice(notice)) => warn!(%notice, "pi says"),
-                    Ok(Record::Response { .. } | Record::Other) => {}
-                    Err(why) => warn!(%why, "a record of pi's isn't JSON"),
                 }
-            }
-            Some(asked) = questions.recv() => {
-                // ask_max runs one at a time; nobody answers once it's over.
-                let open = question.as_ref().is_some_and(|waiting| !waiting.answer.is_closed());
-                if aborted.is_some() || open {
-                    let _ = asked.answer.send(None);
-                } else {
-                    watch.asks(&asked.text);
-                    question = Some(Waiting { answer: asked.answer, since: Instant::now() });
+                Hook::Ask(asked) => {
+                    // ask_max runs one at a time; nobody answers once it's over.
+                    let open = question.as_ref().is_some_and(|waiting| !waiting.answer.is_closed());
+                    if stopped.is_some() || open {
+                        let _ = asked.answer.send(None);
+                    } else {
+                        watch.asks(&asked.text);
+                        question = Some(Waiting { answer: asked.answer, since: Instant::now() });
+                    }
                 }
-            }
-            Some(steer) = steers.recv(), if aborted.is_none() => {
-                // An answer whose question went in the meantime is a steer.
-                let steer = match waiting(&mut question) {
-                    Some(waiting) => waiting.answer.send(Some(steer)).err().flatten(),
-                    None => Some(steer),
+                Hook::Report(Report { text, error }) => {
+                    let how = match (stopped, error) {
+                        (Some(_), _) => How::OutOfTime,
+                        (None, Some(why)) => How::Failed(why),
+                        (None, None) => How::Done,
+                    };
+                    break (how, text);
+                }
+            },
+            exit = &mut *exited => {
+                let Exit { status, out, err } = exit.unwrap_or_default();
+                let text = Some(out.trim().to_owned()).filter(|out| !out.is_empty());
+                let how = match status {
+                    _ if stopped.is_some() => How::OutOfTime,
+                    Some(0) => How::Done,
+                    status => How::Failed(failure(status, &err)),
                 };
-                if let Some(steer) = steer
-                    && pi.ask(Ask::Steer(&steer)).await.is_err()
-                {
-                    return failed(GONE);
-                }
+                break (how, text);
+            }
+            Some(steer) = steers.recv(), if stopped.is_none() => {
+                take(steer, &mut question, &mut queue);
             }
             () = sleep_until(given_up_on.unwrap_or(deadline)), if given_up_on.is_some() => {
                 unanswered(&mut question);
@@ -247,71 +286,59 @@ pub async fn drive(
                 wrap_up = None;
                 // The agent waiting on Max couldn't take the steer in.
                 unanswered(&mut question);
-                if pi.ask(Ask::Steer(&wrap_up_message())).await.is_err() {
-                    return failed(GONE);
-                }
+                queue.push(wrap_up_message());
+                wrapping = true;
             }
-            () = sleep_until(deadline), if aborted.is_none() => {
-                aborted = Some(Instant::now());
+            () = sleep_until(deadline), if stopped.is_none() => {
+                stopped = Some(Instant::now());
                 unanswered(&mut question);
-                let stopped = async {
-                    pi.ask(Ask::ClearQueue).await?;
-                    pi.ask(Ask::Abort).await
-                };
-                if stopped.await.is_err() {
-                    return failed(GONE);
-                }
+                dropped += mem::take(&mut queue).len() - usize::from(mem::take(&mut wrapping));
+                stop.cancel();
             }
             () = sleep_until(give_up.unwrap_or(deadline)), if give_up.is_some() => {
-                return Ending { how: How::OutOfTime, text: None };
+                break (How::OutOfTime, None);
             }
         }
-    }
-    let text = pi.last_text(records).await;
-    let _ = pi.input.shutdown().await;
-    let how = match (aborted, error) {
-        (Some(_), _) => How::OutOfTime,
-        (None, Some(why)) => How::Failed(why),
-        (None, None) => How::Done,
     };
-    Ending { how, text }
+    // Those that came after the deadline too.
+    let mut unsent = dropped + queue.len() - usize::from(wrapping);
+    while steers.try_recv().is_ok() {
+        unsent += 1;
+    }
+    Ending { how, text, unsent }
 }
 
-/// pi's stdin, and the next command's id.
-struct Pi<W> {
-    input: W,
-    next: u64,
+/// Takes in Max's `steer`: the answer to the question the agent waits
+/// on, if any, else the next turn's end's.
+fn take(steer: String, question: &mut Option<Waiting>, queue: &mut Vec<String>) {
+    // An answer whose question went in the meantime is a steer.
+    let steer = match waiting(question) {
+        Some(waiting) => waiting.answer.send(Some(steer)).err().flatten(),
+        None => Some(steer),
+    };
+    queue.extend(steer);
 }
 
-impl<W: AsyncWrite + Unpin> Pi<W> {
-    /// Sends `ask`: its id.
-    async fn ask(&mut self, ask: Ask<'_>) -> std::io::Result<u64> {
-        self.next += 1;
-        self.input.write_all(ask.line(self.next).as_bytes()).await?;
-        self.input.flush().await?;
-        Ok(self.next)
+/// Why a harness that ended with `status` and didn't report failed: the
+/// end of what it wrote on stderr says.
+fn failure(status: Option<u32>, err: &str) -> String {
+    let mut why = match status {
+        Some(code) => format!("agent 退出了，退出码 {code}"),
+        None => "agent 意外退出了".to_owned(),
+    };
+    let last = err
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty());
+    if let Some(last) = last {
+        let cut = last
+            .char_indices()
+            .nth(WHY_KEPT)
+            .map_or(last.len(), |(at, _)| at);
+        why = format!("{why}：{}", &last[..cut]);
     }
-
-    /// The text of pi's last assistant message, if it has one and says so
-    /// in time.
-    async fn last_text(&mut self, records: &mut UnboundedReceiver<Vec<u8>>) -> Option<String> {
-        let id = self.ask(Ask::LastText).await.ok()?;
-        let answer = async {
-            while let Some(line) = records.recv().await {
-                if let Ok(Record::Response {
-                    id: Some(answered),
-                    data,
-                    ..
-                }) = pi::parse(&line)
-                    && answered == id
-                {
-                    return data["text"].as_str().map(str::to_owned);
-                }
-            }
-            None
-        };
-        timeout(GRACE, answer).await.ok().flatten()
-    }
+    why
 }
 
 #[cfg(test)]

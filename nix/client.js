@@ -82,32 +82,94 @@ function connect({ url = MCP, token }) {
   return { request, list };
 }
 
-// What only a background job does, by its token. ask(question) waits
-// until Max answers, as long as that takes: the outcome's value is the
-// answer, or null if none came.
+// What only a background job does, by its token; see "和 harness 脱钩" in
+// docs/rust-rewrite.md. Each but stopped() gives an outcome, as a call does.
+//   turn()          at the end of a turn: {steers, stop}, the steers Max
+//                   sent since the last, and whether to stop now
+//   ask(question)   waits until Max answers, as long as that takes: the
+//                   answer, or null if none came
+//   stopped(signal) waits until the host says stop, opening the stream
+//                   again if it breaks or goes quiet: true then, false
+//                   once the job is over or `signal` ends the wait
+//   report({text, error})  once the agent has settled: ends the job
 function job({ url = MCP, token }) {
-  async function ask(question, signal) {
-    let text;
+  const headers = { "content-type": "application/json", authorization: `Bearer ${token}` };
+  const at = path => new URL(path, url);
+
+  // A POST; the answer's text.
+  async function post(path, body, signal) {
     try {
-      const response = await fetch(new URL("/job/ask", url), {
-        method: "POST",
-        signal,
-        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-        body: JSON.stringify({ question }),
-      });
+      const response = await fetch(at(path), { method: "POST", signal, headers, body: JSON.stringify(body) });
       if (!response.ok) return { ok: false, error: { code: "refused", message: await refused(response) } };
-      // Lines with nothing on them keep the wait alive; the answer's ends it.
-      text = await response.text();
+      return { ok: true, value: await response.text() };
     } catch (error) {
-      if (error.name === "AbortError") return { ok: false, error: { code: "cancelled", message: "问题撤回了" } };
+      if (error.name === "AbortError") return { ok: false, error: { code: "cancelled", message: "撤回了" } };
       return { ok: false, error: { code: "unreachable", message: `连不上 Max 的 MCP 服务：${error.message}` } };
     }
-    const line = text.split("\n").find(line => line.trim() !== "");
+  }
+
+  // The first line with something on it: lines with nothing keep a wait
+  // alive.
+  const first = text => text.split("\n").find(line => line.trim() !== "");
+
+  async function turn() {
+    const outcome = await post("/job/turn", {});
+    return outcome.ok ? { ok: true, value: JSON.parse(outcome.value) } : outcome;
+  }
+
+  async function ask(question, signal) {
+    const outcome = await post("/job/ask", { question }, signal);
+    if (!outcome.ok) return outcome;
+    const line = first(outcome.value);
     if (line === undefined) return { ok: false, error: { code: "unreachable", message: "Max 的 MCP 服务没给答复就断了" } };
     return { ok: true, value: JSON.parse(line).answer ?? null };
   }
 
-  return { ask };
+  async function stopped(signal) {
+    let wait = RETRY;
+    while (!signal?.aborted) {
+      // A stream quiet for longer than its heartbeat is broken.
+      const quiet = new AbortController();
+      let timer;
+      const listen = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => quiet.abort(), QUIET);
+      };
+      try {
+        listen();
+        const either = signal ? AbortSignal.any([signal, quiet.signal]) : quiet.signal;
+        const response = await fetch(at("/job/stop"), { headers, signal: either });
+        // Not a job's, or not any more.
+        if (!response.ok && response.status < 500) return false;
+        if (response.ok) {
+          wait = RETRY;
+          const decoder = new TextDecoder();
+          for await (const chunk of response.body) {
+            if (decoder.decode(chunk, { stream: true }).trim() !== "") return true;
+            listen();
+          }
+        }
+      } catch {
+        // Broken, or quiet: opened again.
+      } finally {
+        clearTimeout(timer);
+      }
+      // pi exits only once nothing is left to wait for.
+      await new Promise(resolve => {
+        const timer = setTimeout(resolve, wait);
+        signal?.addEventListener("abort", () => (clearTimeout(timer), resolve()), { once: true });
+      });
+      wait = Math.min(wait * 2, MOST_RETRY);
+    }
+    return false;
+  }
+
+  async function report({ text = null, error = null }) {
+    const outcome = await post("/job/report", { text, error });
+    return outcome.ok ? { ok: true, value: null } : outcome;
+  }
+
+  return { turn, ask, stopped, report };
 }
 
 // The group's rows after the one numbered `after`, or from now, as the
