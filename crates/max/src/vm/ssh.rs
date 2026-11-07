@@ -6,15 +6,25 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
-use color_eyre::eyre::{Result, ensure};
+use color_eyre::eyre::{Result, bail, ensure};
 use russh::client::{self, Handle, Msg};
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::time::timeout;
 use tracing::warn;
+
+/// How long a command stopped by [`Command::stop`] has to end: past the
+/// 90 seconds systemd gives a unit from SIGTERM to SIGKILL, so a guest
+/// that answers has ended it by then. One that doesn't answer leaves it
+/// to the stopper, and the turn goes on.
+const STOP_WAIT: Duration = Duration::from_secs(120);
+/// The most of a control command's stderr its error keeps.
+const STDERR_KEPT: usize = 1024;
 
 pub struct Client;
 
@@ -135,12 +145,25 @@ impl Command {
         Ok(self.status)
     }
 
-    /// Stops the unit now and waits for the channel to close.
+    /// Stops the unit now and waits for the channel to close, at most
+    /// `STOP_WAIT`. If it fails, the unit goes to the stopper as the
+    /// command is dropped.
     pub async fn stop(mut self, connection: &Connection) -> Result<()> {
-        if let Some(unit) = &self.unit {
-            stop(connection, unit).await?;
-        }
-        while self.channel.wait().await.is_some() {}
+        let stopped = timeout(STOP_WAIT, async {
+            if let Some(unit) = &self.unit {
+                stop(connection, unit).await?;
+            }
+            while self.channel.wait().await.is_some() {}
+            Result::<()>::Ok(())
+        })
+        .await;
+        let Ok(stopped) = stopped else {
+            bail!(
+                "still running {} seconds after it was stopped",
+                STOP_WAIT.as_secs()
+            );
+        };
+        stopped?;
         self.unit = None;
         Ok(())
     }
@@ -179,7 +202,13 @@ pub async fn stopper(connection: Arc<Connection>, mut units: UnboundedReceiver<S
 }
 
 async fn stop(connection: &Connection, unit: &str) -> Result<()> {
-    exec(connection, &format!("systemctl stop {}", quote(unit))).await
+    // 5: no such unit, as when it has just ended: --collect unloads it.
+    exec(
+        connection,
+        &format!("systemctl stop {}", quote(unit)),
+        &[0, 5],
+    )
+    .await
 }
 
 /// Has the guest write out and drop its page cache and the files it
@@ -189,17 +218,37 @@ pub async fn trim(connection: &Connection) -> Result<()> {
     exec(
         connection,
         "sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory",
+        &[0],
     )
     .await
 }
 
-/// Runs `line` as root and waits for it to end.
-async fn exec(connection: &Connection, line: &str) -> Result<()> {
+/// Runs `line` as root and waits for it to end. Fails unless it exits
+/// with a status in `fine`, saying how it did end and what it wrote to
+/// stderr, the start of it.
+async fn exec(connection: &Connection, line: &str, fine: &[u32]) -> Result<()> {
     let mut channel = connection.channel_open_session().await?;
     channel.exec(true, line).await?;
     channel.eof().await?;
-    while channel.wait().await.is_some() {}
-    Ok(())
+    let mut status = None;
+    let mut stderr = Vec::new();
+    while let Some(message) = channel.wait().await {
+        match message {
+            ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+            ChannelMsg::ExtendedData { data, .. } => {
+                let room = STDERR_KEPT.saturating_sub(stderr.len());
+                stderr.extend_from_slice(&data[..data.len().min(room)]);
+            }
+            _ => {}
+        }
+    }
+    let said = String::from_utf8_lossy(&stderr);
+    let said = said.trim();
+    match status {
+        Some(status) if fine.contains(&status) => Ok(()),
+        Some(status) => bail!("`{line}` exited with {status}: {said}"),
+        None => bail!("`{line}` ended with no exit status: {said}"),
+    }
 }
 
 /// `text` as one word for the guest's shell.
