@@ -1695,7 +1695,7 @@ v1 之后做。
 - **提问**（2026-10-30；2026-11-07 改走 `/job/ask`）：后台 agent 卡在只有 Max 或群友才知道的事上，用 `ask_max({ question })` 问。这个工具在 guest 里的 pi 插件 `nix/max-job.ts` 里（原来是单独的 `ask-max.ts`），用 maxx 的客户端（`client.js` 的 `job({ url, token }).ask()`，路径由 `max-pi.nix` 的 `MAX_CLIENT` 给）带 job 的 token（`MAXX_TOKEN`）`POST /job/ask`，在这个工具调用里一直等，上下文不断。宿主的路由在 `mcp/harness.rs`：经 `job::Link` 把问题交给 `job::drive`，`drive` 交给会话 actor（`Event::JobAsks`），actor 像报告一样唤醒 Max（`Reason::Job`），`item` 是 `[job#3 问] 标题`，下面是问题和“用 agent_steer 回答它，10 分钟内没答复它就自己判断”；已经取消的 job 的问题丢掉。问题没答复时，这个 job 的下一句 steer 就是答复，工具返回 `Max 答复：…`。10 分钟（`QUESTION_WAIT`）没答复，答复是 null，工具返回“Max 这次没有答复，按你自己的判断继续，在报告里写明你做了哪些假设”；之后再来的 steer 照常是 steer。到点收尾和到点叫停前，先把没答复的问题回成 null：它在工具里等着，收不到 steer。`ask_max` 一次只跑一个（`executionMode: "sequential"`），同时来第二个问题或叫停后来的问题直接回 null。pi abort 时请求跟着断，问题就撤回了，之后 Max 的话是 steer。回答是 NDJSON：头马上回，每 30 秒一个空行，最后一行 `{"answer": …}`；不发心跳的话 Node 的 fetch 300 秒就放弃。没走 MCP 工具：MCP 调用 60 秒（`CALL_TIME`）就超时，而且 Max 自己的工具表里不该有它。原来（10-30 起）是 `ctx.ui.input`，RPC 里成了一个 `input` 对话框，答复作为对话框的 `value` 回去；换掉是为了不靠 pi 的 RPC，见[和 harness 脱钩](#和-harness-脱钩)。11-07 在 Mac 上用钉住的 pi 1.4.0 跑过（假的 `/llm` 和 `/job/ask`）：答复和没答复两条路，模型看到的工具结果都对；`scripts/check-pi-job` 里有答复这条。
 - **pi 的系统提示**：追加一段，说它是 Max 的后台 agent，看不到群聊，要聊天记录用 `mcp__max__history`，查网页用 `mcp__max__web_search` 和 `webread`；卡在只有 Max 或群友才知道的事上用 `ask_max` 问，能自己查到、试出来的别问；最后一条消息就是报告，先结论后要点和出处，2000 字以内；文件放 `/work`；快到点时会提醒它收尾。
 
-pi 插件靠的行为（2026-10-29 用 RPC 实测，11-07 用 print 模式和插件重测，都是 pi 1.4.0）：
+pi 插件靠的行为（2026-10-29 用 RPC 实测，11-07 用 print 模式和插件重测，都是 pi 1.4.0；同一天钉子挪到 1.5.0，`scripts/check-pi-job` 照样过）：
 
 - steer 不打断正在跑的工具。插件在 `turn_end` 的处理里 `pi.sendUserMessage(steer, { deliverAs: "steer" })`：pi 等 `turn_end` 的处理跑完才取 steer 队列，所以进的是下一次模型调用。默认是 `one-at-a-time`，`settings.json` 里 `"steeringMode": "all"` 后两条一起送到。最后一个 `turn_end`（模型已经给了最终回答）取到 steer，pi 会再跑一轮。
 - `ctx.abort()` 立刻杀掉正在跑的工具（`sleep 30`），pi 停下。RPC 的 `abort` 不清队列，原来要先 `clear_queue`；现在 pi 里没有排着的 steer，不用清。
@@ -1704,6 +1704,7 @@ pi 插件靠的行为（2026-10-29 用 RPC 实测，11-07 用 print 模式和插
 - print 模式跑完不调 `process.exit`，等事件循环空了才退出：插件报告之后什么也不能留着等。stop 的流在 `agent_settled` 和 `session_shutdown` 时中止，重连前的等待也能中止。
 - 任务从 stdin 进：写成参数的话，开头的 `@` 会被当成要读的文件（`@小明 帮我查一下` 报 File not found）。stdin 读完整个、去掉首尾空白，和 RPC 的 `prompt` 一样走 `session.prompt`，`/` 开头的照旧。
 - print 模式没有 UI，宿主不再见到对话框；原来 RPC 里的 `extension_ui_request` 一律回 `cancelled`。
+- `--append-system-prompt` 给的文字接在 pi 自己的系统提示后面（包在 `<addendum>` 里）。agent 目录里的 `SYSTEM.md` 会顶替 pi 自己的提示：包装脚本原来把 job 的系统提示写成 `system.md`，在不分大小写的 Mac 上它就是 `SYSTEM.md`，pi 自己的提示没了、job 的出现两次（11-07 发现，guest 的 `/run` 分大小写，没中招）。现在叫 `job-system.md`，`scripts/check-pi-job` 查这一条。
 - MCP 工具在 `mcp.json` 里配 `"exposure": "direct"`，直接以 `mcp__max__<工具>` 出现在工具表里。pi 的 MCP 客户端说 2025-11-25 的协议，见 [MCP 通道](#mcp-通道)。
 
 guest 里的 pi 来自 numtide 的 llm-agents.nix，flake 里钉在一个 rev 上。包装脚本 `max-pi`（`nix/max-pi.sh`）从 stdin 第一行读这个 job 的 JSON（见下面的约定），`contract` 不是 1 就以退出码 2 退出。它在 unit 的 RuntimeDirectory 里写 `models.json`（provider 只有一个 `max`，`baseUrl` 是 `/llm`，`apiKey` 是 `$MAX_JOB_TOKEN`）、`mcp.json`、`settings.json`、系统提示和任务，再 exec `pi --print --no-approve`，带上 `--extension` `max-job.ts`（路径由 `max-pi.nix` 的 `MAX_JOB` 给，它用的 `client.js` 由 `MAX_CLIENT` 给），任务从 stdin 进；会话存在 `/work/.max/jobs`。`/work` 里的 `.pi/` 是群里能写的，不信任。unit 停了目录就删，token 跟着没了。宿主写完 job 那一行就关掉 stdin。
@@ -1742,7 +1743,7 @@ pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每
 - **`ask_max`**：工具照旧，`execute` 调 `job.ask(question, signal)`，不再用 `ctx.ui.input`；`null` 回原来"没有答复"那句。abort 经 `signal` 取消请求，宿主当问题撤回了。
 - **`max-pi.sh`**：`--mode rpc` 换成 `--print`，任务从 stdin 进（见上面 pi 插件靠的行为），扩展换成 `max-job.ts`，导出 `MAXX_TOKEN`，`client.js` 的路径放环境变量，写 `settings.json`，先查 `contract`。`models.json`、`mcp.json`、系统提示和会话目录不变。
 
-**试过的**（11-07，Mac 上钉住的 pi 1.4.0，假的宿主，就是 `scripts/check-pi-job`）：`turn_end` 的顺序对；print 模式等 `agent_settled` 的处理跑完才退出，报告发得出去；任务里的 `@` 和换行原样到模型；最后一个 `turn_end` 取到 steer，pi 接着做；叫停打断正在跑的 `sleep 30`，两秒内报告、退出。宿主这边（路由、`drive`、`client.js`）有 max 的测试。还没在 tank 上跑过真的 job。
+**试过的**（11-07，Mac 上钉住的 pi 1.4.0 和后来的 1.5.0，假的宿主，就是 `scripts/check-pi-job`）：`turn_end` 的顺序对；job 的系统提示接在 pi 自己的后面；print 模式等 `agent_settled` 的处理跑完才退出，报告发得出去；任务里的 `@` 和换行原样到模型；最后一个 `turn_end` 取到 steer，pi 接着做；叫停打断正在跑的 `sleep 30`，两秒内报告、退出。宿主这边（路由、`drive`、`client.js`）有 max 的测试。还没在 tank 上跑过真的 job。
 
 **风险**：token 在 agent 的环境里，它的 shell 也能调 `/job/*`，比如报一个假的报告。现在 `/mcp` 也是这样，报告本来就不可信；只是别往 `/job/*` 后面放更大的权限。
 

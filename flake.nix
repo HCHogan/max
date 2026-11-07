@@ -21,10 +21,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # pi, the background agents, in the guest. nix/max-job.ts holds to
-    # this one's (pi 1.4.0's) extension API, which has no version: moving
+    # this one's (pi 1.5.0's) extension API, which has no version: moving
     # the pin means running a job with it again (see "和 harness 脱钩" in
     # docs/rust-rewrite.md).
-    llm-agents.url = "github:numtide/llm-agents.nix/e452052b9efb54fd59f8a06cbc09978fb542a3c2";
+    llm-agents.url = "github:numtide/llm-agents.nix/2add2fd83bf01a23357d401ba24155e35d9d93d2";
   };
 
   outputs =
