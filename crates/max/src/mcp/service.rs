@@ -123,34 +123,6 @@ impl Sessions {
             .and_then(|token| self.get(token))
             .filter(|session| session.context.place.conversation == conversation)
     }
-
-    /// Has `conversation`'s actor run a program's call: its result.
-    async fn program(
-        &self,
-        conversation: ConversationId,
-        tool: &str,
-        args: Value,
-    ) -> Result<Value, Failure> {
-        let Some(programs) = &self.programs else {
-            return Err(Failure::new("unavailable", "这里没有常驻程序的通道"));
-        };
-        let (reply, result) = oneshot::channel();
-        let call = Signal::Call {
-            conversation,
-            tool: tool.to_owned(),
-            args,
-            reply,
-        };
-        programs
-            .send(call)
-            .map_err(|_| Failure::new("closed", "Max 正在停"))?;
-        match timeout(CALL_TIME, result).await {
-            Ok(result) => {
-                result.unwrap_or_else(|_| Err(Failure::new("closed", "Max 没做完就停了")))
-            }
-            Err(_) => Err(late()),
-        }
-    }
 }
 
 impl Grant {
@@ -204,6 +176,7 @@ pub async fn serve_with<L>(
     let handler = Handler {
         conversation,
         sessions: sessions.clone(),
+        programs: Arc::new(Semaphore::new(CALLS_AT_ONCE)),
     };
     // Only POST: with no sessions there is nothing to stream or end, so a
     // GET or a DELETE gets 405, which clients take for that.
@@ -225,6 +198,9 @@ pub async fn serve_with<L>(
 struct Handler {
     conversation: ConversationId,
     sessions: Sessions,
+    /// The calls the VM's programs make outside any turn, together, as a
+    /// session's slots.
+    programs: Arc<Semaphore>,
 }
 
 /// A JSON-RPC request, or with no id a notification.
@@ -396,8 +372,35 @@ impl Handler {
             Some(session) if !program_only || matches!(session.context.caller, Caller::Job(_)) => {
                 session.run(call, args).await
             }
-            _ => self.sessions.program(self.conversation, name, args).await,
+            _ => self.program(name, args).await,
         }
+    }
+
+    /// Has the conversation's actor run a program's call: its result. The
+    /// actor stops it when this stops waiting.
+    async fn program(&self, tool: &str, args: Value) -> Result<Value, Failure> {
+        let Some(programs) = &self.sessions.programs else {
+            return Err(Failure::new("unavailable", "这里没有常驻程序的通道"));
+        };
+        let call = async {
+            let _slot = self.programs.acquire().await;
+            let (reply, result) = oneshot::channel();
+            let call = Signal::Call {
+                conversation: self.conversation,
+                tool: tool.to_owned(),
+                args,
+                reply,
+            };
+            programs
+                .send(call)
+                .map_err(|_| Failure::new("closed", "Max 正在停"))?;
+            result
+                .await
+                .unwrap_or_else(|_| Err(Failure::new("closed", "Max 没做完就停了")))
+        };
+        timeout(CALL_TIME, call)
+            .await
+            .unwrap_or_else(|_| Err(late()))
     }
 }
 

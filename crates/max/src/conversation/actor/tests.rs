@@ -757,6 +757,32 @@ async fn a_post_takes_back_a_message(pool: PgPool) {
     assert!(h.outbound.try_recv().is_err());
 }
 
+/// A program's call ends once nobody waits for its result, as when the MCP
+/// service has given up on it: here a `say` waiting to hear how its
+/// sending went.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_program_call_nobody_waits_for_ends(pool: PgPool) {
+    let mut h = Harness::new(pool, 300).await;
+    let (reply, result) = oneshot::channel();
+    let call = Event::Call {
+        tool: "say".into(),
+        args: serde_json::json!({ "text": "早" }),
+        reply,
+    };
+    h.mailbox.send(call).unwrap();
+    let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut receipt = outgoing.receipt.unwrap();
+    drop(result);
+    // The `say` no longer waits for the receipt.
+    tokio::time::timeout(PATIENCE, receipt.closed())
+        .await
+        .expect("the call went on");
+    h.stop().await;
+}
+
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_program_says_things_marked_as_its_own(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;

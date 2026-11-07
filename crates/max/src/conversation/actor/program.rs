@@ -8,12 +8,15 @@ use tokio::sync::oneshot;
 use super::*;
 
 impl Conversation {
-    /// A program's call of `tool`; the result goes to `reply`.
+    /// A program's call of `tool`; the result goes to `reply`. The call
+    /// ends once nobody waits for it: the MCP service gives up at
+    /// `CALL_TIME`, or the program closes its connection, as a turn's
+    /// call ends then.
     pub(super) fn program_call(
         &mut self,
         tool: String,
         args: Value,
-        reply: oneshot::Sender<Result<Value, mcp::Failure>>,
+        mut reply: oneshot::Sender<Result<Value, mcp::Failure>>,
     ) {
         if self.stopping.is_some() {
             let _ = reply.send(Err(mcp::Failure::new("closed", "Max 正在重启，没做")));
@@ -33,7 +36,11 @@ impl Conversation {
             caller: mcp::Caller::Program(Poster::program(self.mailbox.clone())),
         };
         self.side.spawn(move |_| async move {
-            let _ = reply.send(mcp::program_call(&tool, &context, args).await);
+            let outcome = tokio::select! {
+                outcome = mcp::program_call(&tool, &context, args) => outcome,
+                () = reply.closed() => return,
+            };
+            let _ = reply.send(outcome);
         });
     }
 }

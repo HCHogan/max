@@ -29,7 +29,8 @@ pub const SHOWN_BYTES: usize = 16 * 1024;
 /// A call of one of Max's tools, from a program or a command: its wall
 /// clock...
 pub const CALL_TIME: Duration = Duration::from_secs(60);
-/// ...and how many one run makes at once; more wait their turn.
+/// ...and how many one run makes at once, or a VM's programs outside any
+/// turn together; more wait their turn.
 pub const CALLS_AT_ONCE: usize = 64;
 
 // What a program shows the model.
