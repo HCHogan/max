@@ -92,6 +92,12 @@ impl Conversation {
         if self.stopping.is_some() {
             return Err("Max 正在重启，起不了新的后台 agent".to_owned());
         }
+        if self.jobs.agents() >= limits::JOBS_AT_ONCE {
+            return Err(format!(
+                "已经有 {} 个后台 agent 在跑了，等一个做完，或者停掉一个",
+                limits::JOBS_AT_ONCE
+            ));
+        }
         let upstream = match self.shared.models.job() {
             None => return Err("没配后台 agent 用的模型".to_owned()),
             Some(Err(error)) => {
@@ -103,12 +109,6 @@ impl Conversation {
         let Some(vms) = self.shared.vms.clone() else {
             return Err("这里没有 VM，后台 agent 没地方跑".to_owned());
         };
-        if self.jobs.running.len() >= limits::JOBS_AT_ONCE {
-            return Err(format!(
-                "已经有 {} 个后台 agent 在跑了，等一个做完，或者停掉一个",
-                limits::JOBS_AT_ONCE
-            ));
-        }
         self.jobs.last += 1;
         let number = self.jobs.last;
         let title = title
@@ -179,16 +179,15 @@ impl Conversation {
         if self.stopping.is_some() {
             return Err("Max 正在重启，起不了后台命令".to_owned());
         }
-        let Some(vms) = self.shared.vms.clone() else {
-            return Err("这里没有配 VM，shell 用不了。".to_owned());
-        };
-        let commands = self.jobs.running.values();
-        if commands.filter(|running| running.agent.is_none()).count() >= limits::COMMANDS_AT_ONCE {
+        if self.jobs.commands() >= limits::COMMANDS_AT_ONCE {
             return Err(format!(
                 "已经有 {} 个后台命令在跑了，等一个跑完，或者用 agent_cancel 停掉一个",
                 limits::COMMANDS_AT_ONCE
             ));
         }
+        let Some(vms) = self.shared.vms.clone() else {
+            return Err("这里没有配 VM，shell 用不了。".to_owned());
+        };
         self.jobs.last += 1;
         let number = self.jobs.last;
         let title = format!("$ {}", headline(&shell.command));
@@ -319,6 +318,20 @@ impl Jobs {
             _task: Scope::new(),
         };
         self.running.insert(self.last, running);
+    }
+}
+
+impl Jobs {
+    /// The agents running. They and the background commands have a limit
+    /// each.
+    fn agents(&self) -> usize {
+        let agents = self.running.values();
+        agents.filter(|running| running.agent.is_some()).count()
+    }
+
+    /// The background commands running.
+    fn commands(&self) -> usize {
+        self.running.len() - self.agents()
     }
 }
 

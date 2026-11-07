@@ -1012,6 +1012,37 @@ async fn nothing_starts_without_its_config(pool: PgPool) {
     h.stop().await;
 }
 
+/// Background commands have a limit of their own: with as many running as
+/// it allows, another is refused, but an agent still starts while there
+/// is room for one. It is refused only for the config the harness
+/// doesn't have, which comes after the limits.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn commands_dont_count_against_agents(pool: PgPool) {
+    let mut h = Harness::start(pool, Group, 300, false, false, None, |actor| {
+        for _ in 0..max_core::limits::COMMANDS_AT_ONCE {
+            actor.jobs.pretend_command("$ make");
+        }
+        for _ in 1..max_core::limits::JOBS_AT_ONCE {
+            actor.jobs.pretend("查票价");
+        }
+    })
+    .await;
+    let shell = Request::Shell(Background {
+        command: "make".into(),
+        workdir: None,
+        limit: Duration::from_secs(60),
+        unit: "max-9".into(),
+    });
+    let refused = ask(&h, shell).await.unwrap_err();
+    assert!(refused.starts_with("已经有 3 个后台命令"), "{refused}");
+    let start = Request::Start {
+        task: "查一下".into(),
+        title: None,
+    };
+    assert_eq!(ask(&h, start).await.unwrap_err(), "没配后台 agent 用的模型");
+    h.stop().await;
+}
+
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn kill_stops_the_jobs_too(pool: PgPool) {
     let (mut h, _) = Harness::with_job(pool, "查票价").await;
