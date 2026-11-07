@@ -219,7 +219,7 @@ async fn run_code(
             None => (with("runner 没有退出码，可能被杀了".into(), &result), true),
         },
         Err(_) => {
-            running.stop(vm.connection()).await?;
+            running.stop(vm.connection()).await;
             let head = format!("{} 秒内没跑完，已经停了", limit.as_secs());
             (with(head, &result), true)
         }
@@ -322,7 +322,7 @@ async fn command_in(
     match waited {
         Ok(status) => Ok(Ran::Exited(status?)),
         Err(_) => {
-            running.stop(vm.connection()).await?;
+            running.stop(vm.connection()).await;
             Ok(Ran::OutOfTime)
         }
     }

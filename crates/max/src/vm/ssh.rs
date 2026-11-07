@@ -146,9 +146,10 @@ impl Command {
     }
 
     /// Stops the unit now and waits for the channel to close, at most
-    /// `STOP_WAIT`. If it fails, the unit goes to the stopper as the
-    /// command is dropped.
-    pub async fn stop(mut self, connection: &Connection) -> Result<()> {
+    /// `STOP_WAIT`. If that fails, it says so in the log, and the unit
+    /// goes to the stopper as the command is dropped: the run that stopped
+    /// it still reports what it got.
+    pub async fn stop(mut self, connection: &Connection) {
         let stopped = timeout(STOP_WAIT, async {
             if let Some(unit) = &self.unit {
                 stop(connection, unit).await?;
@@ -157,15 +158,16 @@ impl Command {
             Result::<()>::Ok(())
         })
         .await;
-        let Ok(stopped) = stopped else {
-            bail!(
-                "still running {} seconds after it was stopped",
-                STOP_WAIT.as_secs()
-            );
+        let error = match stopped {
+            Ok(Ok(())) => {
+                self.unit = None;
+                return;
+            }
+            Ok(Err(error)) => format!("{error:#}"),
+            Err(_) => format!("still running {} seconds after", STOP_WAIT.as_secs()),
         };
-        stopped?;
-        self.unit = None;
-        Ok(())
+        let unit = self.unit.as_deref().unwrap_or_default();
+        warn!(%unit, %error, "couldn't stop a command in a VM; the stopper tries again");
     }
 }
 
