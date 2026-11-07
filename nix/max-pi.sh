@@ -45,7 +45,9 @@ jq -n '{ mcpServers: { max: {
 # not one a call.
 jq -n '{ steeringMode: "all" }' >"$dir/settings.json"
 
-field .system >"$dir/system.md"
+# Not system.md: where case doesn't count, as on the Mac, that is pi's
+# SYSTEM.md, which takes the place of pi's own prompt.
+field .system >"$dir/job-system.md"
 # The task goes in on stdin: as an argument, an @ at its start would name
 # a file to read.
 jq -j .task <<<"$job" >"$dir/task.md"
@@ -63,7 +65,7 @@ args=(
   --session-dir /work/.max/jobs
   --provider max
   --model "$(field .model)"
-  --append-system-prompt "$dir/system.md"
+  --append-system-prompt "$dir/job-system.md"
   --extension "$MAX_JOB"
 )
 effort=$(field '.effort // empty')

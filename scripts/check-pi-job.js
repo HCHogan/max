@@ -2,7 +2,8 @@
 // and checks that pi keeps the job's contract: steers taken at a turn's
 // end go in before the next model call, a stop aborts a tool under way,
 // ask_max's answer reaches the model, the task arrives as written, and
-// the report goes out before pi exits. See scripts/check-pi-job.
+// the job's system text is appended to pi's, and the report goes out
+// before pi exits. See scripts/check-pi-job.
 "use strict";
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -14,6 +15,7 @@ const { spawn } = require("node:child_process");
 const [pi] = process.argv.slice(2);
 const repo = path.resolve(__dirname, "..");
 const TASK = "@小明 帮我查一下\n第二行";
+const SYSTEM = "你是测试用的后台 agent。";
 
 // What the model says at call `n` of `scenario`: content, and a tool call.
 const SCRIPT = {
@@ -37,7 +39,7 @@ function since(messages) {
 }
 
 function host(scenario) {
-  const seen = { calls: [], turns: 0, asks: [], reports: [], stops: 0, strangers: [] };
+  const seen = { systems: [], calls: [], turns: 0, asks: [], reports: [], stops: 0, strangers: [] };
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", chunk => (body += chunk));
@@ -46,6 +48,7 @@ function host(scenario) {
       if (ours && req.headers.authorization !== "Bearer the-job-token") seen.strangers.push(req.url);
       if (req.url === "/llm/chat/completions") {
         const request = JSON.parse(body);
+        seen.systems.push(request.messages.filter(m => m.role === "system" || m.role === "developer").map(m => m.content).join("\n"));
         seen.calls.push(since(request.messages));
         const { content, tool } = SCRIPT[scenario](seen.calls.length);
         const delta = { role: "assistant", content };
@@ -95,7 +98,7 @@ async function job(scenario) {
   const { server, seen } = await host(scenario);
   const port = server.address().port;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-job-${scenario}-`));
-  for (const sub of ["runtime", "sessions", "work"]) fs.mkdirSync(path.join(dir, sub));
+  for (const sub of ["home", "runtime", "sessions", "work"]) fs.mkdirSync(path.join(dir, sub));
   const wrapper = fs
     .readFileSync(path.join(repo, "nix/max-pi.sh"), "utf8")
     .replaceAll("127.0.0.1:7777", `127.0.0.1:${port}`)
@@ -103,13 +106,15 @@ async function job(scenario) {
   fs.writeFileSync(path.join(dir, "max-pi.sh"), wrapper);
   const line = JSON.stringify({
     contract: 1, token: "the-job-token", task: TASK, model: "m", api: "openai-completions",
-    window: 100000, max_output: null, effort: null, system: "你是测试用的后台 agent。",
+    window: 100000, max_output: null, effort: null, system: SYSTEM,
   });
   const started = Date.now();
   const child = spawn("bash", ["-euo", "pipefail", path.join(dir, "max-pi.sh")], {
     cwd: path.join(dir, "work"),
     env: {
       ...process.env,
+      // Not this machine's skills and settings.
+      HOME: path.join(dir, "home"),
       PATH: `${path.dirname(pi)}:${process.env.PATH}`,
       RUNTIME_DIRECTORY: path.join(dir, "runtime"),
       MAX_JOB: path.join(repo, "nix/max-job.ts"),
@@ -162,6 +167,9 @@ const checks = {
     const ran = await job(scenario);
     try {
       assert.deepEqual(ran.seen.calls[0].slice(-1), [`user: ${TASK}`], "the task as written");
+      const system = ran.seen.systems[0];
+      const at = system.indexOf(SYSTEM);
+      assert.ok(at > 0 && system.indexOf(SYSTEM, at + 1) < 0, "the job's system text, once, after pi's");
       assert.deepEqual(ran.seen.strangers, [], "calls without the job's token");
       assert.equal(ran.seen.stops, 1);
       // pi exits only once nothing is left to wait for, the stop stream
