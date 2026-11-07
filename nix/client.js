@@ -15,6 +15,21 @@ const QUIET = 90_000;
 const RETRY = 1_000;
 const MOST_RETRY = 30_000;
 
+// Waits ms, or until signal aborts, and leaves nothing behind: a listener
+// left on a job's signal at every retry piled up.
+function sleep(ms, signal) {
+  return new Promise(resolve => {
+    if (signal?.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
 class ToolError extends Error {
   constructor(tool, error) {
     super(`${tool}: ${error.message}（${error.code}）`);
@@ -156,10 +171,7 @@ function job({ url = MCP, token }) {
         clearTimeout(timer);
       }
       // pi exits only once nothing is left to wait for.
-      await new Promise(resolve => {
-        const timer = setTimeout(resolve, wait);
-        signal?.addEventListener("abort", () => (clearTimeout(timer), resolve()), { once: true });
-      });
+      await sleep(wait, signal);
       wait = Math.min(wait * 2, MOST_RETRY);
     }
     return false;
@@ -220,7 +232,7 @@ async function* events({ url = new URL("/events", MCP).href, after, told = () =>
       clearTimeout(timer);
     }
     told(why, wait);
-    await new Promise(resolve => setTimeout(resolve, wait));
+    await sleep(wait);
     wait = Math.min(wait * 2, MOST_RETRY);
   }
 }
