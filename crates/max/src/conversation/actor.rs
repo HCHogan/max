@@ -19,8 +19,8 @@ use max_core::render::Mark;
 use max_core::run::{FailReason, Input, Outcome, Run, RunSpec, Step, Wake};
 use max_db::platform::{self, Settings};
 use max_db::{ledger, turns, usage};
-use tokio::sync::broadcast;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{broadcast, watch};
 use tokio::task::AbortHandle;
 use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};
@@ -132,6 +132,9 @@ struct Active {
     said_at: Option<Instant>,
     /// The people the model has been shown.
     roster: BTreeSet<PrincipalId>,
+    /// Whether someone waits on the run, as [`Run::waited_on`] says, for
+    /// its commands: one they wait on moves to the background.
+    waiting: watch::Sender<bool>,
     /// When the last row the core saw was sent, for date lines; at first,
     /// when the core started.
     last_at: Option<DateTime<Utc>>,
@@ -332,6 +335,18 @@ impl Conversation {
                 let answer = match self.ended(origin) {
                     Some(refused) => Err(refused),
                     None => self.job_request(request),
+                };
+                let _ = reply.send(answer);
+                Ok(())
+            }
+            Event::Move {
+                moved,
+                origin,
+                reply,
+            } => {
+                let answer = match self.ended(origin) {
+                    Some(refused) => Err((refused, moved)),
+                    None => self.adopt(moved),
                 };
                 let _ = reply.send(answer);
                 Ok(())
@@ -672,6 +687,7 @@ impl Conversation {
             restarts: 0,
             said_at: None,
             roster,
+            waiting: watch::Sender::new(false),
             last_at: Some(now),
             idle_since: Instant::now(),
             started: Instant::now(),
@@ -685,6 +701,9 @@ impl Conversation {
             let Some(a) = self.core.as_mut() else {
                 return Ok(());
             };
+            let waited_on = a.run.waited_on();
+            a.waiting
+                .send_if_modified(|was| std::mem::replace(was, waited_on) != waited_on);
             if a.run.busy() {
                 return Ok(());
             }
@@ -739,7 +758,8 @@ impl Conversation {
                             caller: mcp::Caller::Turn(Poster::new(self.mailbox.clone(), a.turn)),
                         };
                         let mailbox = self.mailbox.clone();
-                        a.io.spawn(move |_| tool::call(vms, context, call, task, mailbox));
+                        let waiting = a.waiting.subscribe();
+                        a.io.spawn(move |_| tool::call(vms, context, call, task, mailbox, waiting));
                     }
                     return Ok(());
                 }

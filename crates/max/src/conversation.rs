@@ -28,6 +28,7 @@ pub use actor::{Conversation, Outgoing, Shared};
 use crate::inbound::Inbound;
 use crate::job;
 use crate::mcp;
+use crate::tools::Moved;
 
 /// What arrives in an actor's mailbox: everything that happens to a
 /// conversation, in the order the actor handles it.
@@ -63,6 +64,13 @@ pub enum Event {
         /// The turn it comes from, if any.
         origin: Option<TurnId>,
         reply: oneshot::Sender<Result<job::Reply, String>>,
+    },
+    /// A turn's command someone waits on moves to the background: the
+    /// actor takes it as a job, its number, or gives it back with why not.
+    Move {
+        moved: Box<Moved>,
+        origin: Option<TurnId>,
+        reply: oneshot::Sender<Result<u32, (String, Box<Moved>)>>,
     },
     /// A background agent asks Max, and waits for the answer.
     JobAsks {
@@ -211,6 +219,26 @@ impl Poster {
             })
             .map_err(|_| "这个群的会话已经停了".to_owned())?;
         answer.await.map_err(|_| "没等到回答".to_owned())?
+    }
+
+    /// Hands a turn's command to the conversation as a background job:
+    /// its number; or why not, with the command back, unless the
+    /// conversation is gone with it.
+    pub async fn adopt(&self, moved: Box<Moved>) -> Result<u32, (String, Option<Box<Moved>>)> {
+        let (reply, answer) = oneshot::channel();
+        let gone = || ("这个群的会话已经停了".to_owned(), None);
+        self.mailbox
+            .send(Event::Move {
+                moved,
+                origin: self.origin,
+                reply,
+            })
+            .map_err(|_| gone())?;
+        match answer.await {
+            Ok(Ok(job)) => Ok(job),
+            Ok(Err((why, moved))) => Err((why, Some(moved))),
+            Err(_) => Err(gone()),
+        }
     }
 
     fn act(&self, act: Act) -> Result<Sending, String> {

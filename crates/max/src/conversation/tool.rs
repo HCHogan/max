@@ -8,7 +8,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use super::report::Report;
 use super::{Event, TaskId};
 use crate::mcp;
-use crate::tools;
+use crate::tools::{self, Waiting};
 use crate::vm::Vms;
 
 pub async fn call(
@@ -17,6 +17,7 @@ pub async fn call(
     call: Call,
     task: TaskId,
     mailbox: UnboundedSender<Event>,
+    waiting: Waiting,
 ) {
     let id = call.id.clone();
     let report = Report::new(mailbox, move || Event::ToolDone {
@@ -24,7 +25,7 @@ pub async fn call(
         call: id,
         out: ToolOutput::text("工具调用中途断了，没有结果。", true, 20),
     });
-    let out = tools::run(call.tool, vms.as_ref(), context).await;
+    let out = tools::run(call.tool, vms.as_ref(), context, Some(waiting)).await;
     report.send(Event::ToolDone {
         task,
         call: call.id,

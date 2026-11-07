@@ -3,8 +3,12 @@
 //! runner. Both call Max's tools through the MCP service as the run, and
 //! can show the model pictures and videos after their result: the runner's
 //! SDK, and `maxx` from a command, with the token in MAXX_TOKEN.
+//!
+//! A turn's command that someone waits on moves to the background; see
+//! "Background commands" in docs/rust-rewrite.md.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -17,22 +21,38 @@ use max_core::tools::Tool;
 use serde::Serialize;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::time::{Instant, timeout};
+use tokio::sync::watch;
+use tokio::time::error::Elapsed;
+use tokio::time::{Instant, sleep_until, timeout, timeout_at};
 use tracing::info;
 
+use crate::conversation::Poster;
 use crate::job::{self, Ending, Finished, How, Reply, Request};
 use crate::mcp::{self, Grant};
 use crate::tokens;
-use crate::vm::ssh::{Sink, Stream, quote};
+use crate::vm::ssh::{Command, Sink, Stream, quote};
 use crate::vm::{Vm, Vms};
-use max_core::limits::{BACKGROUND_TIME, BACKGROUND_TIME_MAX, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES};
+use max_core::limits::{
+    BACKGROUND_TIME, BACKGROUND_TIME_MAX, MOVE_AFTER, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES,
+};
 
 /// The guest stops the unit itself a little after max would have.
 const GUEST_MARGIN: Duration = Duration::from_secs(30);
 
+/// Whether someone waits on the turn a tool call is in: they addressed
+/// Max since its last model call. A command they wait on moves to the
+/// background.
+pub type Waiting = watch::Receiver<bool>;
+
 /// Runs `tool` for a call from `context`'s conversation, and logs how it
-/// went: what a task took in steps, and how many failed.
-pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOutput {
+/// went: what a task took in steps, and how many failed. A turn's call
+/// has `waiting`.
+pub async fn run(
+    tool: Tool,
+    vms: Option<&Vms>,
+    context: mcp::Context,
+    waiting: Option<Waiting>,
+) -> ToolOutput {
     let conversation = context.place.conversation;
     let (name, browser) = match &tool {
         Tool::RunCode { code, .. } => ("run_code", browses(code)),
@@ -42,7 +62,7 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
         Tool::Shell { .. } => ("shell", false),
     };
     let started = Instant::now();
-    let (output, calls) = call(tool, vms, context).await;
+    let (output, calls) = call(tool, vms, context, waiting).await;
     info!(
         %conversation,
         tool = name,
@@ -81,6 +101,7 @@ async fn call(
     tool: Tool,
     vms: Option<&Vms>,
     context: mcp::Context,
+    waiting: Option<Waiting>,
 ) -> (ToolOutput, BTreeMap<String, (u32, u32)>) {
     let text = |text: String, error| {
         let tokens = tokens::count(&text);
@@ -114,6 +135,9 @@ async fn call(
     let limit = timeout_ms
         .map_or(RUN_TIME, Duration::from_millis)
         .clamp(Duration::from_secs(1), RUN_TIME_MAX);
+    let movable = waiting
+        .zip(context.caller.poster().cloned())
+        .map(|(waiting, poster)| Movable { waiting, poster });
     let context = mcp::Context {
         work: Some(vm.work().to_owned()),
         ..context
@@ -123,7 +147,10 @@ async fn call(
         Tool::RunCode { code, args, .. } => run_code(&vm, &grant, &code, args, limit).await,
         Tool::Shell {
             command, workdir, ..
-        } => shell(&vm, &grant, &command, workdir.as_deref(), limit).await,
+        } => {
+            let workdir = workdir.as_deref();
+            shell(&vm, &grant, &command, workdir, limit, movable).await
+        }
     };
     let mut output = match ran {
         Ok((shown, error)) => text(shown, error),
@@ -265,18 +292,41 @@ impl Sink for Split {
     }
 }
 
-/// What the model is shown, and whether the command failed to finish.
+/// What the model is shown, and whether the command failed to finish. A
+/// turn's command, `movable`, may move to the background instead.
 async fn shell(
     vm: &Vm,
     grant: &Grant,
     command: &str,
     workdir: Option<&str>,
     limit: Duration,
+    movable: Option<Movable>,
 ) -> Result<(String, bool)> {
     let unit = Vm::unit();
     let mut output = Output::new(vm.work(), format!("{unit}.txt"));
     let token = Some(grant.token());
-    let ran = command_in(vm, unit, command, workdir, token, limit, &mut output).await?;
+    let running = start_in(vm, unit, command, workdir, token, limit).await?;
+    let (begun, deadline) = (Instant::now(), Instant::now() + limit);
+    let ran = match movable {
+        None => wait_until(vm, running, &mut output, deadline).await?,
+        Some(movable) => {
+            let started = Started {
+                running,
+                begun,
+                deadline,
+            };
+            match wait_or_move(vm, started, output, command, movable).await? {
+                Kept::Here(ran, kept) => {
+                    output = *kept;
+                    ran
+                }
+                Kept::Moved(mut shown) => {
+                    shown.push_str(&called(&grant.calls()));
+                    return Ok((shown, false));
+                }
+            }
+        }
+    };
     let shown = output.shown();
     let (mut shown, error) = match ran {
         Ran::Exited(status) => (with(exited(status), &shown), false),
@@ -297,17 +347,16 @@ enum Ran {
     OutOfTime,
 }
 
-/// Runs `command` as the unit `unit`, its output into `output`, for at
-/// most `limit`; maxx calls as the run whose `token` it has.
-async fn command_in(
+/// Starts `command` as the unit `unit`, for at most `limit`, which the
+/// guest enforces too; maxx calls as the run whose `token` it has.
+async fn start_in(
     vm: &Vm,
     unit: String,
     command: &str,
     workdir: Option<&str>,
     token: Option<&str>,
     limit: Duration,
-    output: &mut Output,
-) -> Result<Ran> {
+) -> Result<Command> {
     let workdir = match workdir {
         Some(dir) if dir.starts_with('/') => dir.to_owned(),
         Some(dir) => format!("/work/{dir}"),
@@ -316,8 +365,29 @@ async fn command_in(
     // systemd-run hands the unit its own output, so 2>&1 merges the
     // command's.
     let line = unit_line(&unit, limit, &workdir, command, token) + " 2>&1";
-    let mut running = vm.command(unit, &line, &[]).await?;
-    let waited = timeout(limit, running.wait(output)).await;
+    vm.command(unit, &line, &[]).await
+}
+
+/// Waits for `running` until `deadline`, its output into `output`; then
+/// it is stopped.
+async fn wait_until(
+    vm: &Vm,
+    mut running: Command,
+    output: &mut Output,
+    deadline: Instant,
+) -> Result<Ran> {
+    let waited = timeout_at(deadline, running.wait(output)).await;
+    ended(vm, running, output, waited).await
+}
+
+/// How a command waited for ended, as `waited` says: stopped, if its time
+/// ran out.
+async fn ended(
+    vm: &Vm,
+    running: Command,
+    output: &mut Output,
+    waited: Result<Result<Option<u32>>, Elapsed>,
+) -> Result<Ran> {
     output.finish().await?;
     match waited {
         Ok(status) => Ok(Ran::Exited(status?)),
@@ -326,6 +396,160 @@ async fn command_in(
             Ok(Ran::OutOfTime)
         }
     }
+}
+
+/// What lets a turn's command move to the background: whether someone
+/// waits on the turn, and its conversation, which takes the command.
+struct Movable {
+    waiting: Waiting,
+    poster: Poster,
+}
+
+/// A command that has started, and when it must end.
+struct Started {
+    running: Command,
+    begun: Instant,
+    deadline: Instant,
+}
+
+/// Where a command that could move ended up.
+enum Kept {
+    /// Here, as it ran, with its output.
+    Here(Ran, Box<Output>),
+    /// In the background: what the model is shown.
+    Moved(String),
+}
+
+/// Waits for the command as [`wait_until`] does; but once someone waits
+/// on the turn and it has run [`MOVE_AFTER`], it goes to the conversation
+/// as a background job, if the conversation takes it.
+async fn wait_or_move(
+    vm: &Vm,
+    started: Started,
+    mut output: Output,
+    command: &str,
+    movable: Movable,
+) -> Result<Kept> {
+    let Started {
+        mut running,
+        begun,
+        deadline,
+    } = started;
+    tokio::select! {
+        waited = timeout_at(deadline, running.wait(&mut output)) => {
+            let ran = ended(vm, running, &mut output, waited).await?;
+            return Ok(Kept::Here(ran, Box::new(output)));
+        }
+        () = due(movable.waiting, begun) => {}
+    }
+    let shown = output.shown();
+    let file = format!("/work/{OUT}/{}", output.name);
+    let (ran, left) = (
+        begun.elapsed(),
+        deadline.saturating_duration_since(Instant::now()),
+    );
+    let moved = Box::new(Moved {
+        vm: vm.clone(),
+        running,
+        output,
+        deadline,
+        begun,
+        command: command.to_owned(),
+    });
+    match movable.poster.adopt(moved).await {
+        Ok(job) => Ok(Kept::Moved(moved_away(job, ran, left, &file, &shown))),
+        Err((why, Some(moved))) => {
+            info!(why, "a command someone waits on stays in the foreground");
+            let Moved {
+                running,
+                mut output,
+                ..
+            } = *moved;
+            let ran = wait_until(vm, running, &mut output, deadline).await?;
+            Ok(Kept::Here(ran, Box::new(output)))
+        }
+        // Dropped with the conversation, it went to the stopper.
+        Err((why, None)) => Err(eyre!(why)),
+    }
+}
+
+/// Once someone waits on the turn and the command begun at `begun` has
+/// run [`MOVE_AFTER`]; never, if the turn ends first.
+async fn due(mut waiting: Waiting, begun: Instant) {
+    if waiting.wait_for(|waiting| *waiting).await.is_err() {
+        std::future::pending::<()>().await;
+    }
+    sleep_until(begun + MOVE_AFTER).await;
+}
+
+/// What the model is shown of a command that moved to the background as
+/// job `job`: it had run `ran`, has `left`, and printed `shown` so far.
+fn moved_away(job: u32, ran: Duration, left: Duration, file: &str, shown: &str) -> String {
+    let job = job::name(job);
+    let mut text = format!(
+        "有人在等你回话：这条命令跑了 {} 秒还没完，转到后台接着跑了，是 {job}，还剩 {} 秒。{}",
+        ran.as_secs(),
+        left.as_secs(),
+        follow(&job, file),
+    );
+    if shown.is_empty() {
+        text.push_str("到现在还没有输出。");
+    } else {
+        text.push_str("到现在的输出：\n");
+        text.push_str(shown);
+    }
+    text
+}
+
+/// How the model hears of a background command, `job`, writing to `file`.
+fn follow(job: &str, file: &str) -> String {
+    format!(
+        "跑完了，退出码和输出作为 [{job} 完成] 回到你这里：别 sleep 等它，也别反复查。\
+         输出一边跑一边写进 {file}，要看进度就读它的末尾；不要了用 agent_cancel 停掉。"
+    )
+}
+
+/// A turn's command handed to its conversation as a background job, as
+/// someone addressed Max while it ran. It keeps its unit, its output and
+/// its deadline, and loses the run's token once the call returns.
+pub struct Moved {
+    vm: Vm,
+    running: Command,
+    output: Output,
+    deadline: Instant,
+    /// When it started, for the job's age...
+    pub begun: Instant,
+    /// ...and what it is, for its title.
+    pub command: String,
+}
+
+impl fmt::Debug for Moved {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Moved")
+            .field("command", &self.command)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Runs a moved command on until it ends or its time is up: how it went,
+/// as for [`background`].
+pub async fn moved(moved: Box<Moved>) -> Finished {
+    let Moved {
+        vm,
+        running,
+        mut output,
+        deadline,
+        begun,
+        ..
+    } = *moved;
+    // Whole from now on, for the model to follow along.
+    if output.file.is_none()
+        && let Err(error) = output.create().await
+    {
+        return failed(format!("{error:#}"));
+    }
+    let ran = wait_until(&vm, running, &mut output, deadline).await;
+    finished(ran, &output, begun, deadline - begun)
 }
 
 fn exited(status: Option<u32>) -> String {
@@ -370,9 +594,9 @@ async fn started(
         Ok(Reply::Job(number)) => {
             let job = job::name(number);
             let shown = format!(
-                "在后台跑了，是 {job}，限时 {} 分钟。跑完了，退出码和输出作为 [{job} 完成] 回到你这里：别 sleep 等它，也别反复查。\
-                 输出一边跑一边写进 {file}，要看进度就读它的末尾；不要了用 agent_cancel 停掉。",
+                "在后台跑了，是 {job}，限时 {} 分钟。{}",
                 limit.as_secs().div_ceil(60),
+                follow(&job, &file),
             );
             (shown, false)
         }
@@ -385,14 +609,6 @@ async fn started(
 /// runs out of time: how it went, its exit status and its output.
 pub async fn background(vms: Vms, conversation: ConversationId, shell: Background) -> Finished {
     let begun = Instant::now();
-    let failed = |why: String| Finished {
-        ending: Ending {
-            how: How::Failed(why),
-            text: None,
-            unsent: 0,
-        },
-        file: None,
-    };
     // Held until the command ends, the VM isn't idle meanwhile.
     let vm = match vms.get(conversation).await {
         Ok(vm) => vm,
@@ -404,17 +620,21 @@ pub async fn background(vms: Vms, conversation: ConversationId, shell: Backgroun
         return failed(format!("{error:#}"));
     }
     // It outlives the turn, and so any run's token.
-    let ran = command_in(
-        &vm,
-        shell.unit,
-        &shell.command,
-        shell.workdir.as_deref(),
-        None,
-        shell.limit,
-        &mut output,
-    )
-    .await;
-    let shown = output.shown();
+    let workdir = shell.workdir.as_deref();
+    let started = start_in(&vm, shell.unit, &shell.command, workdir, None, shell.limit).await;
+    let ran = match started {
+        Ok(running) => {
+            let deadline = Instant::now() + shell.limit;
+            wait_until(&vm, running, &mut output, deadline).await
+        }
+        Err(error) => Err(error),
+    };
+    finished(ran, &output, begun, shell.limit)
+}
+
+/// A background command's end, as `ran` says: it began at `begun`, had
+/// `limit`, and printed `output`.
+fn finished(ran: Result<Ran>, output: &Output, begun: Instant, limit: Duration) -> Finished {
     let (how, head) = match ran {
         Err(error) => return failed(format!("{error:#}")),
         Ok(Ran::Exited(status)) => (
@@ -423,16 +643,25 @@ pub async fn background(vms: Vms, conversation: ConversationId, shell: Backgroun
         ),
         Ok(Ran::OutOfTime) => (
             How::OutOfTime,
-            format!(
-                "{} 分钟内没跑完，已经停了",
-                shell.limit.as_secs().div_ceil(60)
-            ),
+            format!("{} 分钟内没跑完，已经停了", limit.as_secs().div_ceil(60)),
         ),
     };
     Finished {
         ending: Ending {
             how,
-            text: Some(with(head, &shown)),
+            text: Some(with(head, &output.shown())),
+            unsent: 0,
+        },
+        file: None,
+    }
+}
+
+/// A background command that couldn't run, and `why`.
+fn failed(why: String) -> Finished {
+    Finished {
+        ending: Ending {
+            how: How::Failed(why),
+            text: None,
             unsent: 0,
         },
         file: None,
@@ -555,7 +784,53 @@ impl Output {
 
 #[cfg(test)]
 mod tests {
+    use std::pin::pin;
+
     use super::*;
+
+    /// A command moves once someone waits and it has run `MOVE_AFTER`:
+    /// never while nobody waits, nor once the turn has ended.
+    #[tokio::test(start_paused = true)]
+    async fn a_command_moves_once_someone_waits_and_it_has_run_a_while() {
+        let begun = Instant::now();
+        let (someone, waiting) = watch::channel(false);
+        let mut moves = pin!(due(waiting, begun));
+        assert!(timeout(MOVE_AFTER * 2, &mut moves).await.is_err());
+        someone.send_replace(true);
+        assert!(timeout(Duration::ZERO, &mut moves).await.is_ok(), "at once");
+
+        let begun = Instant::now();
+        let (someone, waiting) = watch::channel(false);
+        let mut moves = pin!(due(waiting, begun));
+        let early = Duration::from_secs(3);
+        assert!(timeout(early, &mut moves).await.is_err());
+        someone.send_replace(true);
+        moves.await;
+        assert_eq!(begun.elapsed(), MOVE_AFTER, "not before its time");
+
+        let (someone, waiting) = watch::channel(false);
+        drop(someone);
+        let ended = due(waiting, Instant::now());
+        assert!(timeout(MOVE_AFTER * 2, ended).await.is_err());
+    }
+
+    #[test]
+    fn a_moved_command_says_where_it_went() {
+        let (ran, left) = (Duration::from_secs(15), Duration::from_secs(105));
+        let file = "/work/.max/out/max-1.txt";
+        let text = moved_away(4, ran, left, file, "编译中\n");
+        assert!(
+            text.starts_with(
+                "有人在等你回话：这条命令跑了 15 秒还没完，转到后台接着跑了，是 job#4，还剩 105 秒。\
+                 跑完了，退出码和输出作为 [job#4 完成] 回到你这里"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("写进 /work/.max/out/max-1.txt，"), "{text}");
+        assert!(text.ends_with("停掉。到现在的输出：\n编译中\n"), "{text}");
+        let quiet = moved_away(4, ran, left, file, "");
+        assert!(quiet.ends_with("停掉。到现在还没有输出。"), "{quiet}");
+    }
 
     #[tokio::test]
     async fn short_output_is_shown_whole() {

@@ -83,6 +83,10 @@ pkgs.testers.runNixOSTest {
     assert "（not_found）\nmaxx 退出码 1\n1\n" in shown, shown
     # A background command's output is in its file while it runs.
     assert "后台命令：Done\n退出码 0，跑了" in shown, shown
+    # A command someone waits on moves to the background once it has run
+    # a while, and its job's output has what it printed before and after.
+    assert "转到后台接着跑了，是 job#1，" in shown and "到现在的输出：\n前台起了\n" in shown, shown
+    assert "转到后台的命令：退出码 0，跑了" in shown and "前台起了\n后台跑完了" in shown, shown
     # A unit in /work/.max/systemd, started by max-units, with the
     # system's commands on its PATH.
     assert "boot-note.service：active" in shown, shown

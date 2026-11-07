@@ -450,6 +450,14 @@ impl Run {
         self.unhandled.clone()
     }
 
+    /// Someone has addressed Max since the last model call: they wait for
+    /// whatever is in flight, the tool batch above all, to end.
+    pub fn waited_on(&self) -> bool {
+        self.pending
+            .iter()
+            .any(|input| matches!(input, Input::Wake(wake) if wake.reason == Reason::Direct))
+    }
+
     /// For a run that has ended or is idle.
     pub fn outcome(&self) -> Outcome {
         match &self.phase {

@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::job::{self, Finished, How, Progress, Reply, Request, Status, name};
-use crate::tools::{self, Background};
+use crate::tools::{self, Background, Moved};
 use max_core::limits;
 
 /// The jobs running, by number.
@@ -176,6 +176,32 @@ impl Conversation {
 
     /// Runs a `shell` command in the background, as a job of its own.
     fn start_command(&mut self, shell: Background) -> Result<Reply, String> {
+        self.room_for_command()?;
+        let Some(vms) = self.shared.vms.clone() else {
+            return Err("这里没有配 VM，shell 用不了。".to_owned());
+        };
+        let conversation = self.place.conversation;
+        let command = shell.command.clone();
+        let work = tools::background(vms, conversation, shell);
+        let number = self.command_job(&command, Instant::now(), work);
+        info!(conversation = %conversation, job = number, "a background command starts");
+        Ok(Reply::Job(number))
+    }
+
+    /// Takes a turn's command someone waits on as a background job of its
+    /// own: its number; or, without room for it, gives it back.
+    pub(super) fn adopt(&mut self, moved: Box<Moved>) -> Result<u32, (String, Box<Moved>)> {
+        if let Err(why) = self.room_for_command() {
+            return Err((why, moved));
+        }
+        let (command, begun) = (moved.command.clone(), moved.begun);
+        let number = self.command_job(&command, begun, tools::moved(moved));
+        info!(conversation = %self.place.conversation, job = number, "a command someone waits on moves to the background");
+        Ok(number)
+    }
+
+    /// Whether another background command may run now.
+    fn room_for_command(&self) -> Result<(), String> {
         if self.stopping.is_some() {
             return Err("Max 正在重启，起不了后台命令".to_owned());
         }
@@ -185,33 +211,35 @@ impl Conversation {
                 limits::COMMANDS_AT_ONCE
             ));
         }
-        let Some(vms) = self.shared.vms.clone() else {
-            return Err("这里没有配 VM，shell 用不了。".to_owned());
-        };
+        Ok(())
+    }
+
+    /// Runs `work`, `command` begun at `started`, as a job: its number.
+    fn command_job(
+        &mut self,
+        command: &str,
+        started: Instant,
+        work: impl Future<Output = Finished> + Send + 'static,
+    ) -> u32 {
         self.jobs.last += 1;
         let number = self.jobs.last;
-        let title = format!("$ {}", headline(&shell.command));
-        let conversation = self.place.conversation;
         let mailbox = self.mailbox.clone();
         let mut task = Scope::new();
         task.spawn(move |_| async move {
-            let finished = tools::background(vms, conversation, shell).await;
+            let finished = work.await;
             let _ = mailbox.send(Event::JobDone {
                 job: number,
                 finished,
             });
         });
-        info!(conversation = %conversation, job = number, "a background command starts");
-        self.jobs.running.insert(
-            number,
-            Running {
-                title,
-                started: Instant::now(),
-                agent: None,
-                _task: task,
-            },
-        );
-        Ok(Reply::Job(number))
+        let running = Running {
+            title: format!("$ {}", headline(command)),
+            started,
+            agent: None,
+            _task: task,
+        };
+        self.jobs.running.insert(number, running);
+        number
     }
 
     /// A job asks Max: its question wakes Max, who answers with

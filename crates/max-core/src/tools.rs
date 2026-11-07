@@ -9,7 +9,9 @@ use serde::Deserialize;
 
 use crate::ids::CallId;
 use crate::item::ToolCall;
-use crate::limits::{BACKGROUND_TIME, BACKGROUND_TIME_MAX, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES};
+use crate::limits::{
+    BACKGROUND_TIME, BACKGROUND_TIME_MAX, MOVE_AFTER, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES,
+};
 
 #[derive(Debug)]
 pub struct ToolSpec {
@@ -27,6 +29,7 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
     let half = shown / 2;
     let background = BACKGROUND_TIME.as_secs() / 60;
     let background_max = BACKGROUND_TIME_MAX.as_millis();
+    let move_after = MOVE_AFTER.as_secs();
     [
         ToolSpec {
             name: "run_code",
@@ -44,7 +47,8 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
                 默认限时 {run} 秒，timeout_ms 最多 {run_max}。输出超过 {shown} KiB 只返回头尾各 {half} KiB，\
                 全文存在结果里给出的 /work/.max/out/ 下的文件里。命令没有输入，别跑交互式程序。\
                 background 为 true 时命令在后台跑，马上返回一个 job 编号；默认限时 {background} 分钟，timeout_ms 最多 {background_max}；\
-                跑完了，退出码和输出作为 [job#N 完成] 回到你这里。"
+                跑完了，退出码和输出作为 [job#N 完成] 回到你这里。\
+                前台命令跑着的时候有人找你，跑过 {move_after} 秒的会转到后台接着跑，限时不变，结果里给 job 编号。"
             ),
             parameters: r#"{"type":"object","properties":{"command":{"type":"string"},"workdir":{"type":"string","description":"默认 /work"},"timeout_ms":{"type":"integer","minimum":1},"background":{"type":"boolean","description":"在后台跑，跑完再告诉你；默认 false"}},"required":["command"]}"#,
         },

@@ -23,6 +23,9 @@ pub const RUN_TIME_MAX: Duration = Duration::from_secs(600);
 pub const BACKGROUND_TIME: Duration = Duration::from_secs(30 * 60);
 /// ...and the most it may ask for: as long as a background agent.
 pub const BACKGROUND_TIME_MAX: Duration = JOB_TIME;
+/// How long a command runs before it moves to the background, once
+/// someone addresses Max while it runs: a shorter one finishes first.
+pub const MOVE_AFTER: Duration = Duration::from_secs(15);
 /// Output past this many bytes is cut to its head and tail, each half of
 /// it; the whole goes to a file in /work.
 pub const SHOWN_BYTES: usize = 16 * 1024;

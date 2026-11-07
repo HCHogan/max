@@ -15,19 +15,19 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use color_eyre::config::{HookBuilder, Theme};
 use color_eyre::eyre::{Result, WrapErr, bail};
-use max_core::ids::{ConversationId, EndpointId, IdentityId, PrincipalId};
+use max_core::ids::{ConversationId, EndpointId, IdentityId, PrincipalId, TurnId};
 use max_core::item::{Part, ToolOutput};
 use max_core::message::Platform;
 use max_core::tools::Tool;
 use max_db::PgPool;
 use max_db::platform::{self, Account, ConversationKind};
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use max::config::{self, Config};
-use max::conversation::{Place, Shared};
+use max::conversation::{Event, Place, Poster, Shared};
 use max::dreamer::Dreamer;
 use max::embedding::Embedder;
 use max::job;
@@ -118,6 +118,47 @@ fn main() -> Result<()> {
 
 /// On the last slot, which a running service takes last; or the
 /// operations network's last.
+/// A turn's command that someone waits on: past `MOVE_AFTER` it moves to
+/// the background, to a conversation of vm-check's own that runs it on,
+/// and its output there has what it printed before and after.
+async fn moving(vms: &Vms, context: mcp::Context) -> [ToolOutput; 2] {
+    let (mailbox, mut events) = mpsc::unbounded_channel();
+    let (done, finished) = oneshot::channel();
+    let mut conversation = Scope::new();
+    conversation.spawn(move |_| async move {
+        while let Some(event) = events.recv().await {
+            if let Event::Move { moved, reply, .. } = event {
+                let _ = reply.send(Ok(1));
+                let _ = done.send(tools::moved(moved).await);
+                return;
+            }
+        }
+    });
+    let context = mcp::Context {
+        caller: mcp::Caller::Turn(Poster::new(mailbox, TurnId(0))),
+        ..context
+    };
+    let (_someone, waiting) = watch::channel(true);
+    let after = max_core::limits::MOVE_AFTER.as_secs() + 3;
+    let shell = Tool::Shell {
+        command: format!("echo 前台起了; sleep {after}; echo 后台跑完了"),
+        workdir: None,
+        timeout_ms: None,
+        background: false,
+    };
+    let out = tools::run(shell, Some(vms), context, Some(waiting)).await;
+    let ran = match tokio::time::timeout(Duration::from_secs(60), finished).await {
+        Ok(Ok(finished)) => {
+            let text = finished.ending.text.unwrap_or_default();
+            let whole = text.contains("前台起了") && text.contains("后台跑完了");
+            let done = finished.ending.how == job::How::Done && whole;
+            ToolOutput::text(format!("转到后台的命令：{text}"), !done, 0)
+        }
+        _ => ToolOutput::text("命令没转到后台".to_owned(), true, 0),
+    };
+    [out, ran]
+}
+
 fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
     let mut config = Config::load(path)?;
     logging(&config);
@@ -250,7 +291,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         ];
         let mut outs = Vec::new();
         for tool in steps {
-            outs.push(tools::run(tool, Some(&vms), context()?).await);
+            outs.push(tools::run(tool, Some(&vms), context()?, None).await);
         }
         // A background command, as a conversation's actor runs one; its
         // output is in its file before it ends. It has no run's token, as
@@ -273,6 +314,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         );
         let done = finished.ending.how == job::How::Done;
         outs.push(ToolOutput::text(text, !done, 0));
+        outs.extend(moving(&vms, context()?).await);
         let woken = woken
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

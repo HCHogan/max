@@ -241,6 +241,32 @@ fn pictures_follow_the_new_rows_they_came_with() {
 }
 
 #[test]
+fn someone_who_addresses_max_waits_until_a_call_sees_it() {
+    let mut run = Run::new(spec(400_000, None), base(100), vec![]);
+    call_model(&mut run);
+    run.model_output(calls(&[("a", "shell")])).unwrap();
+    run_tools(&mut run);
+    assert!(!run.waited_on());
+    run.input(messages(2, 5)).unwrap();
+    let job = Wake {
+        ids: Vec::new(),
+        reason: Reason::Job { job: 1 },
+        item: None,
+    };
+    run.input(Input::Wake(job)).unwrap();
+    assert!(
+        !run.waited_on(),
+        "chatter and a job's report wait for nobody"
+    );
+    run.input(Input::Wake(wake(3))).unwrap();
+    assert!(run.waited_on());
+    run.tool_result(CallId("a".into()), result(5)).unwrap();
+    assert!(run.waited_on());
+    call_model(&mut run);
+    assert!(!run.waited_on(), "the call sees it");
+}
+
+#[test]
 fn inputs_wait_for_the_tool_batch() {
     let mut run = Run::new(spec(400_000, None), base(100), vec![]);
     call_model(&mut run);
