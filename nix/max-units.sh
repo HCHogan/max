@@ -7,7 +7,9 @@
 # drop-in that puts them in max-units.slice; those with an [Install]
 # section are enabled for this boot and started, and changed ones that
 # were running are restarted. Files that are gone are stopped and removed.
-# A name a system unit has is skipped: the system's would win anyway. Last,
+# A name a system unit has is skipped: the system's would win anyway. So
+# is a link: max, when it starts, boots the VMs with units to keep, and
+# counts only files, since on the host a link could point anywhere. Last,
 # the VM service hears how many there are: it keeps the VM on while there
 # are any, if it can, and says whether it does.
 
@@ -23,12 +25,16 @@ flock 9
 wanted=()
 declare -A keep=()
 for file in "$dir"/*; do
-  [ -f "$file" ] || continue
   name=${file##*/}
   case "$name" in
     *.service | *.socket | *.timer | *.path | *.target) ;;
     *) continue ;;
   esac
+  if [ -L "$file" ]; then
+    echo "$name：是链接，没装，把文件本身放进来"
+    continue
+  fi
+  [ -f "$file" ] || continue
   if [ -e "/etc/systemd/system/$name" ]; then
     echo "$name：和系统的 unit 重名，没装，换个名字"
     continue
