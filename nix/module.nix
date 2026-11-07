@@ -45,6 +45,31 @@ let
   peer = "${ops.uplink}.2";
   # The routing table the operations network's VMs use on the host.
   table = "236";
+  # The host's rule that sends them to it. systemd-networkd removes the ip
+  # rules none of its .network files names whenever it configures a link
+  # (ManageForeignRoutingPolicyRules, on by default): on tank, five
+  # seconds after boot (2026-11-06), and the VMs were cut off. So where it
+  # does, a .network must name this one, and the namespace's service adds
+  # it as networkd would, proto static: networkd keeps a rule its files
+  # name only if the protocol is the same, whoever added it.
+  opsRule = "from ${ops.subnet}.0/24 lookup ${table}";
+  managesForeignRules =
+    config.systemd.network.config.networkConfig.ManageForeignRoutingPolicyRules or true;
+  dropsForeignRules =
+    config.systemd.network.enable
+    && !(lib.elem managesForeignRules [
+      false
+      "no"
+    ]);
+  namesOpsRule = lib.any (
+    network:
+    lib.any (
+      rule:
+      (rule.From or null) == "${ops.subnet}.0/24"
+      && toString (rule.Table or "") == table
+      && toString (rule.Priority or "") == table
+    ) (network.routingPolicyRules or [ ])
+  ) (lib.attrValues config.systemd.network.networks);
   socket = "/run/${name}-ops-tailscale/tailscaled.sock";
   tailscale = "${pkgs.tailscale}/bin/tailscale --socket=${socket}";
   resolver = pkgs.writeText "${name}-ops-resolv.conf" (
@@ -432,8 +457,9 @@ in
         ip netns exec ${netns} sysctl -qw net.ipv4.ip_forward=1
         ip netns exec ${netns} sysctl -qw net.ipv4.conf.all.send_redirects=0
         ip route replace default via ${peer} dev ${uplink} table ${table}
-        ip rule del from ${ops.subnet}.0/24 lookup ${table} 2>/dev/null || true
-        ip rule add from ${ops.subnet}.0/24 lookup ${table} priority ${table}
+        # Every copy, networkd's among them, else the add finds it there.
+        while ip rule del ${opsRule} 2>/dev/null; do :; done
+        ip rule add ${opsRule} priority ${table} protocol static
         # In the namespace: the VMs come in by the uplink and go out by
         # the tailnet or the uplink again, as the namespace; nothing in it
         # takes a connection from them.
@@ -458,7 +484,7 @@ in
         EOF
       '';
       preStop = ''
-        ip rule del from ${ops.subnet}.0/24 lookup ${table} 2>/dev/null || true
+        while ip rule del ${opsRule} 2>/dev/null; do :; done
         ip route flush table ${table} 2>/dev/null || true
         ip link del ${uplink} 2>/dev/null || true
         ip netns del ${netns} 2>/dev/null || true
@@ -521,6 +547,13 @@ in
       {
         assertion = !ops.enable || ops.authKeyFile == null || !(lib.hasPrefix "/nix/store/" ops.authKeyFile);
         message = "${name}'s operations network's authKeyFile must be outside the Nix store.";
+      }
+      {
+        assertion = !operations || !dropsForeignRules || namesOpsRule;
+        message = ''
+          ${name}'s operations network needs systemd-networkd to keep its ip rule: name it in the .network of a link networkd manages, as
+            routingPolicyRules = [ { From = "${ops.subnet}.0/24"; Table = ${table}; Priority = ${table}; } ];
+        '';
       }
       {
         assertion = forwards "net.ipv4.ip_forward" || forwards "net.ipv4.conf.all.forwarding";

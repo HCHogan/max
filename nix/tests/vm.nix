@@ -8,7 +8,8 @@
 # unit in
 # /work/.max/systemd, which the next boot starts again, and wakes Max with
 # max-wake. Then a VM on the operations network reaches a stand-in for the
-# tailnet through its namespace, where an ordinary VM can't.
+# tailnet through its namespace, where an ordinary VM can't, its ip rule
+# having outlived networkd.
 { pkgs, module }:
 pkgs.testers.runNixOSTest {
   name = "max-vm";
@@ -50,6 +51,16 @@ pkgs.testers.runNixOSTest {
     };
     services.postgresql.package = pkgs.postgresql_16;
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
+    # As on tank: networkd, which removes the ip rules its .network files
+    # don't name, and eth1's names the operations network's.
+    networking.useNetworkd = true;
+    systemd.network.networks."40-eth1".routingPolicyRules = [
+      {
+        From = "10.236.0.0/24";
+        Table = 236;
+        Priority = 236;
+      }
+    ];
   };
   testScript = ''
     machine.wait_for_unit("maxx.service")
@@ -97,6 +108,17 @@ pkgs.testers.runNixOSTest {
     # veth from maxx-ops, where tailscale0 would be.
     machine.wait_for_unit("maxx-ops-network.service")
     machine.succeed("systemctl stop maxx-ops-tailscaled.service")
+    # The rule that sends the VMs into the namespace outlives networkd
+    # configuring a link, when it removes rules no .network names (a
+    # stranger's goes), and the namespace's service adding it again.
+    rules = "ip rule | grep -c 'from 10.236.0.0/24 lookup 236 proto static'"
+    for again in ["", "systemctl restart maxx-ops-network.service"]:
+        if again:
+            machine.succeed(again)
+        machine.succeed("ip rule add from 192.0.2.0/24 lookup 237 priority 237")
+        machine.succeed("networkctl reconfigure eth1")
+        machine.wait_until_fails("ip rule | grep -q 'lookup 237'")
+        assert machine.succeed(rules) == "1\n", machine.succeed("ip rule")
     machine.succeed(
         "ip netns add fleet",
         "ip -n maxx-ops link add fleet0 type veth peer name eth0 netns fleet",
