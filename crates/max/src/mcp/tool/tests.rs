@@ -177,6 +177,129 @@ fn arguments_keep_to_their_bounds() {
     assert_eq!(title("票".repeat(41)).unwrap_err(), "title 最多 40 个字");
 }
 
+/// The keywords a tool's arguments' schema may use: those something
+/// checks, serde as it reads the arguments or `bounded`, and those that
+/// only tell. Another one would be shown to the model and checked by
+/// nothing: `pattern`, `maxItems`, `oneOf`.
+const CHECKED: [&str; 13] = [
+    // serde
+    "type",
+    "properties",
+    "required",
+    "additionalProperties",
+    "items",
+    "anyOf",
+    "enum",
+    // bounded
+    "minLength",
+    "maxLength",
+    "minimum",
+    "maximum",
+    // telling
+    "description",
+    "default",
+];
+
+#[test]
+fn arguments_use_only_what_is_checked() {
+    for spec in TOOLS.iter() {
+        assert_eq!(
+            checked(&spec.input, &format!("{}(args)", spec.name)),
+            Ok(())
+        );
+    }
+}
+
+/// Whether `schema` uses only what is checked, or what at `path` doesn't.
+fn checked(schema: &Map<String, Value>, path: &str) -> Result<(), String> {
+    for (key, value) in schema {
+        if !CHECKED.contains(&key.as_str()) {
+            return Err(format!("{path} has {key}"));
+        }
+        let nested: Vec<(String, &Value)> = match (key.as_str(), value) {
+            ("properties", Value::Object(fields)) => fields
+                .iter()
+                .map(|(name, field)| (format!("{path}.{name}"), field))
+                .collect(),
+            ("items", item) => vec![(format!("{path}[]"), item)],
+            ("anyOf", Value::Array(variants)) => variants
+                .iter()
+                .map(|variant| (path.to_owned(), variant))
+                .collect(),
+            // A map's values, whose bounds `bounded` doesn't look into.
+            ("additionalProperties", other) if !other.is_boolean() => {
+                return Err(format!("{path} is a map"));
+            }
+            _ => Vec::new(),
+        };
+        for (path, nested) in nested {
+            if let Value::Object(nested) = nested {
+                checked(nested, &path)?;
+            }
+        }
+    }
+    // `bounded` checks a value against the first variant of its type: of
+    // two of the same, as two objects, the second's bounds go unchecked.
+    if let Some(Value::Array(variants)) = schema.get("anyOf") {
+        let mut seen = Vec::new();
+        for variant in variants {
+            let types =
+                types(variant).ok_or_else(|| format!("{path} has a variant of any type"))?;
+            for name in types {
+                if seen.contains(&name) {
+                    return Err(format!("{path} has two variants of {name}"));
+                }
+                seen.push(name);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The JSON types `schema` admits, as `admits` tells them, an integer a
+/// number; None for any.
+fn types(schema: &Value) -> Option<Vec<&str>> {
+    if let Some(Value::Array(variants)) = schema.get("anyOf") {
+        let each: Option<Vec<Vec<&str>>> = variants.iter().map(types).collect();
+        return each.map(|each| each.concat());
+    }
+    fn number(name: &str) -> &str {
+        if name == "integer" { "number" } else { name }
+    }
+    match schema.get("type")? {
+        Value::Array(names) => Some(names.iter().filter_map(Value::as_str).map(number).collect()),
+        Value::String(name) => Some(vec![number(name)]),
+        _ => None,
+    }
+}
+
+#[test]
+fn what_isnt_checked_is_caught() {
+    let checked = |schema: Value| {
+        let Value::Object(schema) = schema else {
+            unreachable!("a schema is an object")
+        };
+        checked(&schema, "t(args)")
+    };
+    // An optional one of two, as `agent_status` has.
+    let job = json!({ "anyOf": [{ "type": "string" }, { "type": "integer", "minimum": 0 }] });
+    let job = json!({ "anyOf": [job, { "type": "null" }] });
+    assert_eq!(checked(json!({ "properties": { "job": job } })), Ok(()));
+    let code = json!({ "type": "string", "pattern": "^\\d+$" });
+    assert_eq!(
+        checked(json!({ "properties": { "code": code } })),
+        Err("t(args).code has pattern".to_owned())
+    );
+    let to = json!({ "anyOf": [
+        { "type": "object", "properties": { "id": { "type": "integer" } } },
+        { "type": "object", "properties": { "name": { "type": "string", "maxLength": 8 } } },
+    ] });
+    assert_eq!(
+        checked(json!({ "properties": { "to": to } })),
+        Err("t(args).to has two variants of object".to_owned())
+    );
+}
+
 /// What the system prompt says of the tools; a change shows here.
 #[test]
 fn declarations() {
